@@ -16,13 +16,13 @@ direction spikes.
 | Plan | Title | Priority | Effort | Depends on | Issue | Status |
 |------|-------|----------|--------|------------|-------|--------|
 | 001 | Extract pure agenda logic + stand up Vitest | P1 | M | — | [#12](https://github.com/abustamam/tm-scheduler/issues/12) | DONE — merged to main |
-| 002 | Integration tests: claim race + guards | P1 | M | 001 | [#3](https://github.com/abustamam/tm-scheduler/issues/3) (pre-existing) | IN PROGRESS |
-| 003 | Meeting times in club timezone (bug fix) | P1 | L | 001 | [#13](https://github.com/abustamam/tm-scheduler/issues/13) | IN PROGRESS |
+| 002 | Integration tests: claim race + guards | P1 | M | 001 | [#3](https://github.com/abustamam/tm-scheduler/issues/3) (pre-existing) | DONE — merged to main (1 revision: skip without DB) |
+| 003 | Meeting times in club timezone (bug fix) | P1 | L | 001 | [#13](https://github.com/abustamam/tm-scheduler/issues/13) | DONE — merged to main |
 | 004 | Remove dead scaffold code | P2 | S | — | [#14](https://github.com/abustamam/tm-scheduler/issues/14) | DONE — merged to main |
-| 005 | CI workflow (lint/typecheck/test) | P2 | S | 011 | [#15](https://github.com/abustamam/tm-scheduler/issues/15) | TODO (unblocked — 011 merged) |
+| 005 | CI workflow (lint/typecheck/test) | P2 | S | 011 | [#15](https://github.com/abustamam/tm-scheduler/issues/15) | IN PROGRESS |
 | 006 | Enable auth rate limiting | P2 | S | — | _withheld (security, public repo)_ | TODO (not in this execution run) |
 | 007 | Add `.env.example` | P3 | S | — | [#16](https://github.com/abustamam/tm-scheduler/issues/16) | DONE — merged to main |
-| 009 | Build `claimed → confirmed` lifecycle | P2 | M | 002 | [#17](https://github.com/abustamam/tm-scheduler/issues/17) | TODO (needs 002 on main) |
+| 009 | Build `claimed → confirmed` lifecycle | P2 | M | 002 | [#17](https://github.com/abustamam/tm-scheduler/issues/17) | IN PROGRESS |
 | 011 | Fix the Biome gate (`bun run check`) | P2 | S | 004 | [#18](https://github.com/abustamam/tm-scheduler/issues/18) | DONE — merged to main |
 | 008 | Spike: VP Education dashboard | P3 | M | — | [#8](https://github.com/abustamam/tm-scheduler/issues/8) (pre-existing) | TODO |
 | 010 | Spike: reminders / notifications | P3 | M | — | [#7](https://github.com/abustamam/tm-scheduler/issues/7) (pre-existing) | TODO |
