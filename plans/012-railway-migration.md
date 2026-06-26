@@ -54,7 +54,7 @@ vars — with migrations applied on deploy.
 
 ## Steps
 
-### Step 1 (agent, in a PR): Dockerfile + `railway.json` — DONE (PR #25)
+### Step 1 (agent, in a PR): Dockerfile + `railway.json` — DONE (PR #26)
 
 **Gotcha solved:** Railway's auto-detector (Railpack) mistook this Nitro SSR app
 for a static Vite SPA — it set up Caddy to serve `/app/dist`, which doesn't exist
