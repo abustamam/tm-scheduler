@@ -8,7 +8,12 @@ import {
 	roleSlots,
 	speakerDetails,
 } from "#/db/schema";
-import { getMembership, requireMembership, requireUser } from "./guards";
+import {
+	getMembership,
+	requireClubRole,
+	requireMembership,
+	requireUser,
+} from "./guards";
 
 const speakerDetailsSchema = z.object({
 	speechTitle: z.string().trim().min(1, "A speech title is required."),
@@ -124,4 +129,95 @@ export const releaseSlot = createServerFn({ method: "POST" })
 				.where(eq(roleSlots.id, slot.id));
 			return { ok: true as const };
 		});
+	});
+
+/** Confirm a claimed slot. Only club admins/VPEs may do this. */
+export const confirmSlot = createServerFn({ method: "POST" })
+	.validator((input: unknown) =>
+		z.object({ slotId: z.string().uuid() }).parse(input),
+	)
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+
+		const [slot] = await db
+			.select({
+				id: roleSlots.id,
+				status: roleSlots.status,
+				assignedUserId: roleSlots.assignedUserId,
+				clubId: meetings.clubId,
+			})
+			.from(roleSlots)
+			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+			.where(eq(roleSlots.id, data.slotId))
+			.limit(1);
+
+		if (!slot) {
+			throw new Error("Role not found.");
+		}
+
+		await requireClubRole(currentUser.id, slot.clubId, ["admin", "vpe"]);
+
+		if (slot.status !== "claimed") {
+			throw new Error("Only a claimed role can be confirmed.");
+		}
+
+		// Conditional UPDATE: only flips 'claimed' → 'confirmed'; a concurrent
+		// release that races us back to 'open' will produce zero rows.
+		const updated = await db
+			.update(roleSlots)
+			.set({ status: "confirmed" })
+			.where(
+				and(eq(roleSlots.id, data.slotId), eq(roleSlots.status, "claimed")),
+			)
+			.returning({ id: roleSlots.id });
+
+		if (updated.length === 0) {
+			throw new Error(
+				"Slot was no longer claimed — it may have been released concurrently.",
+			);
+		}
+
+		return { ok: true as const };
+	});
+
+/** Un-confirm a slot back to claimed. Only club admins/VPEs may do this. */
+export const unconfirmSlot = createServerFn({ method: "POST" })
+	.validator((input: unknown) =>
+		z.object({ slotId: z.string().uuid() }).parse(input),
+	)
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+
+		const [slot] = await db
+			.select({
+				id: roleSlots.id,
+				status: roleSlots.status,
+				assignedUserId: roleSlots.assignedUserId,
+				clubId: meetings.clubId,
+			})
+			.from(roleSlots)
+			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+			.where(eq(roleSlots.id, data.slotId))
+			.limit(1);
+
+		if (!slot) {
+			throw new Error("Role not found.");
+		}
+
+		await requireClubRole(currentUser.id, slot.clubId, ["admin", "vpe"]);
+
+		// Conditional UPDATE: only flips 'confirmed' → 'claimed'.
+		const updated = await db
+			.update(roleSlots)
+			.set({ status: "claimed" })
+			.where(
+				and(eq(roleSlots.id, data.slotId), eq(roleSlots.status, "confirmed")),
+			)
+			.returning({ id: roleSlots.id });
+
+		if (updated.length === 0) {
+			throw new Error("Slot was not confirmed.");
+		}
+
+		return { ok: true as const };
 	});

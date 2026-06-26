@@ -18,7 +18,12 @@ import {
 import { buildRoleCounts, slotLabel } from "#/lib/agenda";
 import { formatMeetingDate, formatMeetingTime } from "#/lib/format";
 import { getMeeting } from "#/server/meetings";
-import { claimSlot, releaseSlot } from "#/server/slots";
+import {
+	claimSlot,
+	confirmSlot,
+	releaseSlot,
+	unconfirmSlot,
+} from "#/server/slots";
 
 export const Route = createFileRoute("/_authed/meetings/$id")({
 	loader: ({ params }) => getMeeting({ data: params.id }),
@@ -76,6 +81,32 @@ function MeetingDetail() {
 		try {
 			await releaseSlot({ data: { slotId: slot.id } });
 			toast.success("Role released.");
+			await router.invalidate();
+		} catch (err) {
+			toast.error(errMessage(err));
+		} finally {
+			setBusySlotId(null);
+		}
+	}
+
+	async function doConfirm(slot: Slot) {
+		setBusySlotId(slot.id);
+		try {
+			await confirmSlot({ data: { slotId: slot.id } });
+			toast.success("Role confirmed.");
+			await router.invalidate();
+		} catch (err) {
+			toast.error(errMessage(err));
+		} finally {
+			setBusySlotId(null);
+		}
+	}
+
+	async function doUnconfirm(slot: Slot) {
+		setBusySlotId(slot.id);
+		try {
+			await unconfirmSlot({ data: { slotId: slot.id } });
+			toast.success("Role unconfirmed.");
 			await router.invalidate();
 		} catch (err) {
 			toast.error(errMessage(err));
@@ -175,7 +206,7 @@ function MeetingDetail() {
 												) : null}
 											</div>
 
-											<div className="shrink-0">
+											<div className="flex shrink-0 flex-col gap-2">
 												{slot.status === "open" ? (
 													<Button
 														size="sm"
@@ -189,18 +220,47 @@ function MeetingDetail() {
 														)}
 													</Button>
 												) : isMine || canManage ? (
-													<Button
-														size="sm"
-														variant="outline"
-														onClick={() => doRelease(slot)}
-														disabled={busy}
-													>
-														{busy ? (
-															<Loader2 className="size-4 animate-spin" />
-														) : (
-															"Release"
-														)}
-													</Button>
+													<>
+														<Button
+															size="sm"
+															variant="outline"
+															onClick={() => doRelease(slot)}
+															disabled={busy}
+														>
+															{busy ? (
+																<Loader2 className="size-4 animate-spin" />
+															) : (
+																"Release"
+															)}
+														</Button>
+														{canManage && slot.status === "claimed" ? (
+															<Button
+																size="sm"
+																onClick={() => doConfirm(slot)}
+																disabled={busy}
+															>
+																{busy ? (
+																	<Loader2 className="size-4 animate-spin" />
+																) : (
+																	"Confirm"
+																)}
+															</Button>
+														) : null}
+														{canManage && slot.status === "confirmed" ? (
+															<Button
+																size="sm"
+																variant="secondary"
+																onClick={() => doUnconfirm(slot)}
+																disabled={busy}
+															>
+																{busy ? (
+																	<Loader2 className="size-4 animate-spin" />
+																) : (
+																	"Unconfirm"
+																)}
+															</Button>
+														) : null}
+													</>
 												) : (
 													<Badge variant="secondary">Filled</Badge>
 												)}
