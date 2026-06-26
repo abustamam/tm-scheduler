@@ -18,6 +18,3 @@ export function formatMeetingTime(value: Date | string) {
 	return timeFmt.format(d);
 }
 
-export function formatMeetingDateTime(value: Date | string) {
-	return `${formatMeetingDate(value)} · ${formatMeetingTime(value)}`;
-}
