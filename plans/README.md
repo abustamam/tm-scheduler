@@ -26,7 +26,9 @@ exit 0, `bun run test` → 15 passed | 13 skipped (no DB) / **28 passed with a D
 - **006** (auth rate limiting) shipped as its own focused PR — deliberately NOT
   filed as a public issue (security finding). Enables Better-Auth rate limiting
   (`enabled: true` + a tightened `max: 5/60s` rule on the magic-link path).
-- Spikes **008** / **010** remain design-only (not part of this execution run).
+- Spikes **008** / **010** are now complete — design docs in `docs/design/`
+  (`vpe-dashboard.md`, `reminders.md`), merged via PR #23. Issues #7/#8/#9
+  enriched with the findings. The *build* work those issues track remains.
 
 ## Execution order & status
 
@@ -41,8 +43,8 @@ exit 0, `bun run test` → 15 passed | 13 skipped (no DB) / **28 passed with a D
 | 007 | Add `.env.example` | P3 | S | — | [#16](https://github.com/abustamam/tm-scheduler/issues/16) | DONE — merged to main |
 | 009 | Build `claimed → confirmed` lifecycle | P2 | M | 002 | [#17](https://github.com/abustamam/tm-scheduler/issues/17) | DONE — merged to main |
 | 011 | Fix the Biome gate (`bun run check`) | P2 | S | 004 | [#18](https://github.com/abustamam/tm-scheduler/issues/18) | DONE — merged to main |
-| 008 | Spike: VP Education dashboard | P3 | M | — | [#8](https://github.com/abustamam/tm-scheduler/issues/8) (pre-existing) | TODO |
-| 010 | Spike: reminders / notifications | P3 | M | — | [#7](https://github.com/abustamam/tm-scheduler/issues/7) (pre-existing) | TODO |
+| 008 | Spike: VP Education dashboard | P3 | M | — | [#8](https://github.com/abustamam/tm-scheduler/issues/8) (+[#9](https://github.com/abustamam/tm-scheduler/issues/9)) | DONE — `docs/design/vpe-dashboard.md` (PR #23) |
+| 010 | Spike: reminders / notifications | P3 | M | — | [#7](https://github.com/abustamam/tm-scheduler/issues/7) | DONE — `docs/design/reminders.md` (PR #23) |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | REJECTED (one-line rationale)
 
