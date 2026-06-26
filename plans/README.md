@@ -11,6 +11,22 @@ the leverage is in **verification (there were zero tests)**, one real
 **timezone correctness bug**, and a few quick cleanups, plus three grounded
 direction spikes.
 
+## Execution run — 2026-06-26
+
+All 8 ready-for-agent plans were executed by dispatched subagents in isolated
+worktrees and **merged to `main`** (001, 002, 003, 004, 005, 007, 009, 011).
+Final `main`: `bun run check` exit 0, `bunx tsc --noEmit` exit 0, `bun run build`
+exit 0, `bun run test` → 15 passed | 13 skipped (no DB) / **28 passed with a DB**.
+
+- **011** was discovered *during* execution: `bun run check` was already red on a
+  clean tree (24 Biome errors) — the recon pass had not run `check`. Fixed and
+  landed before CI (005).
+- **002** needed one revision round: its integration suite must *skip* (not
+  crash) when `TEST_DATABASE_URL` is unset, so a plain `bun run test` stays green.
+- **006** (auth rate limiting) was NOT executed — withheld from the public
+  tracker as a security finding; apply it via the plan/PR.
+- Spikes **008** / **010** remain design-only (not part of this execution run).
+
 ## Execution order & status
 
 | Plan | Title | Priority | Effort | Depends on | Issue | Status |
@@ -19,10 +35,10 @@ direction spikes.
 | 002 | Integration tests: claim race + guards | P1 | M | 001 | [#3](https://github.com/abustamam/tm-scheduler/issues/3) (pre-existing) | DONE — merged to main (1 revision: skip without DB) |
 | 003 | Meeting times in club timezone (bug fix) | P1 | L | 001 | [#13](https://github.com/abustamam/tm-scheduler/issues/13) | DONE — merged to main |
 | 004 | Remove dead scaffold code | P2 | S | — | [#14](https://github.com/abustamam/tm-scheduler/issues/14) | DONE — merged to main |
-| 005 | CI workflow (lint/typecheck/test) | P2 | S | 011 | [#15](https://github.com/abustamam/tm-scheduler/issues/15) | IN PROGRESS |
+| 005 | CI workflow (lint/typecheck/test) | P2 | S | 011 | [#15](https://github.com/abustamam/tm-scheduler/issues/15) | DONE — merged to main (with Postgres service) |
 | 006 | Enable auth rate limiting | P2 | S | — | _withheld (security, public repo)_ | TODO (not in this execution run) |
 | 007 | Add `.env.example` | P3 | S | — | [#16](https://github.com/abustamam/tm-scheduler/issues/16) | DONE — merged to main |
-| 009 | Build `claimed → confirmed` lifecycle | P2 | M | 002 | [#17](https://github.com/abustamam/tm-scheduler/issues/17) | IN PROGRESS |
+| 009 | Build `claimed → confirmed` lifecycle | P2 | M | 002 | [#17](https://github.com/abustamam/tm-scheduler/issues/17) | DONE — merged to main |
 | 011 | Fix the Biome gate (`bun run check`) | P2 | S | 004 | [#18](https://github.com/abustamam/tm-scheduler/issues/18) | DONE — merged to main |
 | 008 | Spike: VP Education dashboard | P3 | M | — | [#8](https://github.com/abustamam/tm-scheduler/issues/8) (pre-existing) | TODO |
 | 010 | Spike: reminders / notifications | P3 | M | — | [#7](https://github.com/abustamam/tm-scheduler/issues/7) (pre-existing) | TODO |
