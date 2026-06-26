@@ -3,8 +3,8 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { magicLink } from "better-auth/plugins";
 import { tanstackStartCookies } from "better-auth/tanstack-start";
 import { db } from "#/db";
-import { sendEmail } from "./email";
-import { buildMagicLinkEmail } from "./magic-link-email";
+import { sendEmail } from "#/lib/email";
+import { buildMagicLinkEmail } from "#/lib/magic-link-email";
 
 export const auth = betterAuth({
 	database: drizzleAdapter(db, { provider: "pg" }),
