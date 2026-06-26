@@ -15,9 +15,15 @@ import {
 	SheetHeader,
 	SheetTitle,
 } from "#/components/ui/sheet";
+import { buildRoleCounts, slotLabel } from "#/lib/agenda";
 import { formatMeetingDate, formatMeetingTime } from "#/lib/format";
 import { getMeeting } from "#/server/meetings";
-import { claimSlot, releaseSlot } from "#/server/slots";
+import {
+	claimSlot,
+	confirmSlot,
+	releaseSlot,
+	unconfirmSlot,
+} from "#/server/slots";
 
 export const Route = createFileRoute("/_authed/meetings/$id")({
 	loader: ({ params }) => getMeeting({ data: params.id }),
@@ -38,22 +44,14 @@ function errMessage(err: unknown) {
 }
 
 function MeetingDetail() {
-	const { meeting, slots, canManage } = Route.useLoaderData();
+	const { meeting, slots, canManage, timezone } = Route.useLoaderData();
 	const { authUser } = Route.useRouteContext();
 	const router = useRouter();
 	const [busySlotId, setBusySlotId] = useState<string | null>(null);
 	const [speakerSlot, setSpeakerSlot] = useState<Slot | null>(null);
 
 	// Number repeated roles ("Speaker 1", "Speaker 2", …).
-	const roleCounts = slots.reduce<Record<string, number>>((acc, s) => {
-		acc[s.roleName] = (acc[s.roleName] ?? 0) + 1;
-		return acc;
-	}, {});
-	function slotLabel(s: Slot) {
-		return roleCounts[s.roleName] > 1
-			? `${s.roleName} ${s.slotIndex + 1}`
-			: s.roleName;
-	}
+	const roleCounts = buildRoleCounts(slots);
 
 	// Preserve category order as it appears (slots arrive pre-sorted).
 	const categories: string[] = [];
@@ -91,6 +89,32 @@ function MeetingDetail() {
 		}
 	}
 
+	async function doConfirm(slot: Slot) {
+		setBusySlotId(slot.id);
+		try {
+			await confirmSlot({ data: { slotId: slot.id } });
+			toast.success("Role confirmed.");
+			await router.invalidate();
+		} catch (err) {
+			toast.error(errMessage(err));
+		} finally {
+			setBusySlotId(null);
+		}
+	}
+
+	async function doUnconfirm(slot: Slot) {
+		setBusySlotId(slot.id);
+		try {
+			await unconfirmSlot({ data: { slotId: slot.id } });
+			toast.success("Role unconfirmed.");
+			await router.invalidate();
+		} catch (err) {
+			toast.error(errMessage(err));
+		} finally {
+			setBusySlotId(null);
+		}
+	}
+
 	return (
 		<div className="space-y-5">
 			<header className="space-y-2">
@@ -100,8 +124,8 @@ function MeetingDetail() {
 				<div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
 					<span className="flex items-center gap-1.5">
 						<CalendarDays className="size-4" aria-hidden />
-						{formatMeetingDate(meeting.scheduledAt)} ·{" "}
-						{formatMeetingTime(meeting.scheduledAt)}
+						{formatMeetingDate(meeting.scheduledAt, timezone)} ·{" "}
+						{formatMeetingTime(meeting.scheduledAt, timezone)}
 					</span>
 					{meeting.location ? (
 						<span className="flex items-center gap-1.5">
@@ -137,7 +161,9 @@ function MeetingDetail() {
 									>
 										<div className="flex items-start justify-between gap-3">
 											<div className="min-w-0 flex-1">
-												<p className="font-medium">{slotLabel(slot)}</p>
+												<p className="font-medium">
+													{slotLabel(slot, roleCounts)}
+												</p>
 
 												{slot.assigneeId ? (
 													<p className="text-sm text-muted-foreground">
@@ -180,7 +206,7 @@ function MeetingDetail() {
 												) : null}
 											</div>
 
-											<div className="shrink-0">
+											<div className="flex shrink-0 flex-col gap-2">
 												{slot.status === "open" ? (
 													<Button
 														size="sm"
@@ -194,18 +220,47 @@ function MeetingDetail() {
 														)}
 													</Button>
 												) : isMine || canManage ? (
-													<Button
-														size="sm"
-														variant="outline"
-														onClick={() => doRelease(slot)}
-														disabled={busy}
-													>
-														{busy ? (
-															<Loader2 className="size-4 animate-spin" />
-														) : (
-															"Release"
-														)}
-													</Button>
+													<>
+														<Button
+															size="sm"
+															variant="outline"
+															onClick={() => doRelease(slot)}
+															disabled={busy}
+														>
+															{busy ? (
+																<Loader2 className="size-4 animate-spin" />
+															) : (
+																"Release"
+															)}
+														</Button>
+														{canManage && slot.status === "claimed" ? (
+															<Button
+																size="sm"
+																onClick={() => doConfirm(slot)}
+																disabled={busy}
+															>
+																{busy ? (
+																	<Loader2 className="size-4 animate-spin" />
+																) : (
+																	"Confirm"
+																)}
+															</Button>
+														) : null}
+														{canManage && slot.status === "confirmed" ? (
+															<Button
+																size="sm"
+																variant="secondary"
+																onClick={() => doUnconfirm(slot)}
+																disabled={busy}
+															>
+																{busy ? (
+																	<Loader2 className="size-4 animate-spin" />
+																) : (
+																	"Unconfirm"
+																)}
+															</Button>
+														) : null}
+													</>
 												) : (
 													<Badge variant="secondary">Filled</Badge>
 												)}

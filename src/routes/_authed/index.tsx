@@ -41,10 +41,10 @@ function Schedule() {
 								</div>
 								<div className="min-w-0 flex-1">
 									<p className="font-semibold">
-										{formatMeetingDate(m.scheduledAt)}
+										{formatMeetingDate(m.scheduledAt, m.timezone)}
 										<span className="font-normal text-muted-foreground">
 											{" · "}
-											{formatMeetingTime(m.scheduledAt)}
+											{formatMeetingTime(m.scheduledAt, m.timezone)}
 										</span>
 									</p>
 									<p className="truncate text-sm text-muted-foreground">

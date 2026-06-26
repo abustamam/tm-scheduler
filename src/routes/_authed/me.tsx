@@ -69,8 +69,8 @@ function MyCommitments() {
 										className="mt-1 flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
 									>
 										<CalendarDays className="size-4" aria-hidden />
-										{formatMeetingDate(c.scheduledAt)} ·{" "}
-										{formatMeetingTime(c.scheduledAt)}
+										{formatMeetingDate(c.scheduledAt, c.timezone)} ·{" "}
+										{formatMeetingTime(c.scheduledAt, c.timezone)}
 										{c.theme ? (
 											<span className="truncate"> · {c.theme}</span>
 										) : null}

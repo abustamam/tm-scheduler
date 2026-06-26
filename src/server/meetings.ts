@@ -11,6 +11,8 @@ import {
 	speakerDetails,
 	user,
 } from "#/db/schema";
+import { generateSlotRows, resolveEvaluatorLinks } from "#/lib/agenda";
+import { zonedWallTimeToUtc } from "#/lib/datetime";
 import { requireClubRole, requireMembership, requireUser } from "./guards";
 
 const uuid = z.string().uuid();
@@ -29,10 +31,12 @@ export const listUpcomingMeetings = createServerFn({ method: "GET" })
 				theme: meetings.theme,
 				location: meetings.location,
 				status: meetings.status,
+				timezone: clubs.timezone,
 				openSlots: sql<number>`count(*) filter (where ${roleSlots.status} = 'open')::int`,
 				totalSlots: sql<number>`count(${roleSlots.id})::int`,
 			})
 			.from(meetings)
+			.innerJoin(clubs, eq(clubs.id, meetings.clubId))
 			.leftJoin(roleSlots, eq(roleSlots.meetingId, meetings.id))
 			.where(
 				and(
@@ -41,7 +45,7 @@ export const listUpcomingMeetings = createServerFn({ method: "GET" })
 					ne(meetings.status, "cancelled"),
 				),
 			)
-			.groupBy(meetings.id)
+			.groupBy(meetings.id, clubs.timezone)
 			.orderBy(asc(meetings.scheduledAt));
 	});
 
@@ -93,24 +97,14 @@ export const getMeeting = createServerFn({ method: "GET" })
 			.orderBy(asc(roleDefinitions.sortOrder), asc(roleSlots.slotIndex));
 
 		// Resolve which speaker each evaluator slot evaluates.
-		const bySlotId = new Map(rows.map((r) => [r.id, r]));
-		const slots = rows.map((r) => {
-			const target = r.evaluatesSlotId
-				? bySlotId.get(r.evaluatesSlotId)
-				: undefined;
-			return {
-				...r,
-				evaluates: target
-					? {
-							slotId: target.id,
-							speakerName: target.assigneeName,
-							speechTitle: target.speechTitle,
-						}
-					: null,
-			};
+		const slots = resolveEvaluatorLinks(rows);
+
+		const club = await db.query.clubs.findFirst({
+			where: eq(clubs.id, meeting.clubId),
+			columns: { timezone: true },
 		});
 
-		return { meeting, slots, canManage };
+		return { meeting, slots, canManage, timezone: club?.timezone ?? "UTC" };
 	});
 
 /** The current user's upcoming claimed roles across every club they belong to. */
@@ -126,6 +120,7 @@ export const listMyCommitments = createServerFn({ method: "GET" }).handler(
 				theme: meetings.theme,
 				location: meetings.location,
 				clubName: clubs.name,
+				timezone: clubs.timezone,
 				roleName: roleDefinitions.name,
 				isSpeakerRole: roleDefinitions.isSpeakerRole,
 				speechTitle: speakerDetails.speechTitle,
@@ -151,7 +146,7 @@ export const listMyCommitments = createServerFn({ method: "GET" }).handler(
 
 const createMeetingSchema = z.object({
 	clubId: uuid,
-	// HTML datetime-local value, interpreted in the server's local zone.
+	// HTML datetime-local value, interpreted in the club's timezone.
 	scheduledAt: z.string().min(1),
 	location: z.string().trim().optional(),
 	theme: z.string().trim().optional(),
@@ -166,10 +161,11 @@ export const createMeeting = createServerFn({ method: "POST" })
 		const currentUser = await requireUser();
 		await requireClubRole(currentUser.id, data.clubId, ["admin", "vpe"]);
 
-		const scheduledAt = new Date(data.scheduledAt);
-		if (Number.isNaN(scheduledAt.getTime())) {
-			throw new Error("Invalid meeting date/time.");
-		}
+		const club = await db.query.clubs.findFirst({
+			where: eq(clubs.id, data.clubId),
+		});
+		if (!club) throw new Error("Club not found.");
+		const scheduledAt = zonedWallTimeToUtc(data.scheduledAt, club.timezone);
 
 		const defs = await db
 			.select()
@@ -190,13 +186,7 @@ export const createMeeting = createServerFn({ method: "POST" })
 				})
 				.returning({ id: meetings.id });
 
-			const slotRows = defs.flatMap((def) =>
-				Array.from({ length: def.defaultCount }, (_, i) => ({
-					meetingId: meeting.id,
-					roleDefinitionId: def.id,
-					slotIndex: i,
-				})),
-			);
+			const slotRows = generateSlotRows(defs, meeting.id);
 			if (slotRows.length > 0) {
 				await tx.insert(roleSlots).values(slotRows);
 			}

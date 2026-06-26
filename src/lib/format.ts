@@ -1,23 +1,18 @@
-const dateFmt = new Intl.DateTimeFormat(undefined, {
-	weekday: "short",
-	month: "short",
-	day: "numeric",
-});
-const timeFmt = new Intl.DateTimeFormat(undefined, {
-	hour: "numeric",
-	minute: "2-digit",
-});
-
-export function formatMeetingDate(value: Date | string) {
+export function formatMeetingDate(value: Date | string, timeZone?: string) {
 	const d = typeof value === "string" ? new Date(value) : value;
-	return dateFmt.format(d);
+	return new Intl.DateTimeFormat(undefined, {
+		weekday: "short",
+		month: "short",
+		day: "numeric",
+		timeZone,
+	}).format(d);
 }
 
-export function formatMeetingTime(value: Date | string) {
+export function formatMeetingTime(value: Date | string, timeZone?: string) {
 	const d = typeof value === "string" ? new Date(value) : value;
-	return timeFmt.format(d);
-}
-
-export function formatMeetingDateTime(value: Date | string) {
-	return `${formatMeetingDate(value)} · ${formatMeetingTime(value)}`;
+	return new Intl.DateTimeFormat(undefined, {
+		hour: "numeric",
+		minute: "2-digit",
+		timeZone,
+	}).format(d);
 }
