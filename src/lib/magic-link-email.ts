@@ -1,3 +1,4 @@
+// Keep in sync with the magicLink `expiresIn` in src/lib/auth.ts (60 * 5 = 5 min).
 const EXPIRY_MINUTES = 5;
 
 export interface MagicLinkEmail {
@@ -22,6 +23,9 @@ export function buildMagicLinkEmail(url: string): MagicLinkEmail {
 
 	const html = `<!doctype html>
 <html lang="en">
+  <head>
+    <meta charset="utf-8" />
+  </head>
   <body style="margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
     <div style="max-width:480px;margin:0 auto;padding:32px 24px;">
       <h1 style="font-size:20px;color:#18181b;margin:0 0 16px;">Sign in to GavelUp</h1>
