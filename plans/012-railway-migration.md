@@ -75,6 +75,13 @@ for a static Vite SPA — it set up Caddy to serve `/app/dist`, which doesn't ex
 Validated: `docker build` succeeds and the container logs
 `➜ Listening on: http://localhost:8080/` and serves `/signin`.
 
+**Healthcheck (PR #27):** the first deploy passed Build + Deploy but failed the
+**Network → Healthcheck** because the configured path `/` is behind the `_authed`
+guard and `307`-redirects to `/signin` (Railway needs a `2xx`). Fixed by adding a
+dedicated liveness route `src/routes/api/health.ts` → `200 "ok"` (no auth, no DB)
+and pointing `railway.json`'s `healthcheckPath` at `/api/health`. Verified
+locally: `GET /api/health → 200`, while `/` and `/signin` → `307`.
+
 **Migrations are NOT run in the container** (the slim Node runtime has no Bun /
 `drizzle-kit` / source). For the first deploy, run them once from your machine via
 the Railway CLI (it injects the service env): `railway run bun run db:migrate`.

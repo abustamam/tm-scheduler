@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as SigninRouteImport } from './routes/signin'
 import { Route as AuthedRouteImport } from './routes/_authed'
 import { Route as AuthedIndexRouteImport } from './routes/_authed/index'
+import { Route as ApiHealthRouteImport } from './routes/api/health'
 import { Route as AuthedMeRouteImport } from './routes/_authed/me'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as AuthedMeetingsIdRouteImport } from './routes/_authed/meetings.$id'
@@ -30,6 +31,11 @@ const AuthedIndexRoute = AuthedIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => AuthedRoute,
+} as any)
+const ApiHealthRoute = ApiHealthRouteImport.update({
+  id: '/api/health',
+  path: '/api/health',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const AuthedMeRoute = AuthedMeRouteImport.update({
   id: '/me',
@@ -56,6 +62,7 @@ export interface FileRoutesByFullPath {
   '/': typeof AuthedIndexRoute
   '/signin': typeof SigninRoute
   '/me': typeof AuthedMeRoute
+  '/api/health': typeof ApiHealthRoute
   '/meetings/$id': typeof AuthedMeetingsIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/admin/meetings/new': typeof AuthedAdminMeetingsNewRoute
@@ -63,6 +70,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/signin': typeof SigninRoute
   '/me': typeof AuthedMeRoute
+  '/api/health': typeof ApiHealthRoute
   '/': typeof AuthedIndexRoute
   '/meetings/$id': typeof AuthedMeetingsIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -73,6 +81,7 @@ export interface FileRoutesById {
   '/_authed': typeof AuthedRouteWithChildren
   '/signin': typeof SigninRoute
   '/_authed/me': typeof AuthedMeRoute
+  '/api/health': typeof ApiHealthRoute
   '/_authed/': typeof AuthedIndexRoute
   '/_authed/meetings/$id': typeof AuthedMeetingsIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -84,6 +93,7 @@ export interface FileRouteTypes {
     | '/'
     | '/signin'
     | '/me'
+    | '/api/health'
     | '/meetings/$id'
     | '/api/auth/$'
     | '/admin/meetings/new'
@@ -91,6 +101,7 @@ export interface FileRouteTypes {
   to:
     | '/signin'
     | '/me'
+    | '/api/health'
     | '/'
     | '/meetings/$id'
     | '/api/auth/$'
@@ -100,6 +111,7 @@ export interface FileRouteTypes {
     | '/_authed'
     | '/signin'
     | '/_authed/me'
+    | '/api/health'
     | '/_authed/'
     | '/_authed/meetings/$id'
     | '/api/auth/$'
@@ -109,6 +121,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   AuthedRoute: typeof AuthedRouteWithChildren
   SigninRoute: typeof SigninRoute
+  ApiHealthRoute: typeof ApiHealthRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
 }
 
@@ -134,6 +147,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/'
       preLoaderRoute: typeof AuthedIndexRouteImport
       parentRoute: typeof AuthedRoute
+    }
+    '/api/health': {
+      id: '/api/health'
+      path: '/api/health'
+      fullPath: '/api/health'
+      preLoaderRoute: typeof ApiHealthRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/_authed/me': {
       id: '/_authed/me'
@@ -186,6 +206,7 @@ const AuthedRouteWithChildren =
 const rootRouteChildren: RootRouteChildren = {
   AuthedRoute: AuthedRouteWithChildren,
   SigninRoute: SigninRoute,
+  ApiHealthRoute: ApiHealthRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
 }
 export const routeTree = rootRouteImport
