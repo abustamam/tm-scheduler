@@ -23,8 +23,9 @@ exit 0, `bun run test` → 15 passed | 13 skipped (no DB) / **28 passed with a D
   landed before CI (005).
 - **002** needed one revision round: its integration suite must *skip* (not
   crash) when `TEST_DATABASE_URL` is unset, so a plain `bun run test` stays green.
-- **006** (auth rate limiting) was NOT executed — withheld from the public
-  tracker as a security finding; apply it via the plan/PR.
+- **006** (auth rate limiting) shipped as its own focused PR — deliberately NOT
+  filed as a public issue (security finding). Enables Better-Auth rate limiting
+  (`enabled: true` + a tightened `max: 5/60s` rule on the magic-link path).
 - Spikes **008** / **010** remain design-only (not part of this execution run).
 
 ## Execution order & status
@@ -36,7 +37,7 @@ exit 0, `bun run test` → 15 passed | 13 skipped (no DB) / **28 passed with a D
 | 003 | Meeting times in club timezone (bug fix) | P1 | L | 001 | [#13](https://github.com/abustamam/tm-scheduler/issues/13) | DONE — merged to main |
 | 004 | Remove dead scaffold code | P2 | S | — | [#14](https://github.com/abustamam/tm-scheduler/issues/14) | DONE — merged to main |
 | 005 | CI workflow (lint/typecheck/test) | P2 | S | 011 | [#15](https://github.com/abustamam/tm-scheduler/issues/15) | DONE — merged to main (with Postgres service) |
-| 006 | Enable auth rate limiting | P2 | S | — | _withheld (security, public repo)_ | TODO (not in this execution run) |
+| 006 | Enable auth rate limiting | P2 | S | — | _no public issue (security)_ | DONE — separate PR |
 | 007 | Add `.env.example` | P3 | S | — | [#16](https://github.com/abustamam/tm-scheduler/issues/16) | DONE — merged to main |
 | 009 | Build `claimed → confirmed` lifecycle | P2 | M | 002 | [#17](https://github.com/abustamam/tm-scheduler/issues/17) | DONE — merged to main |
 | 011 | Fix the Biome gate (`bun run check`) | P2 | S | 004 | [#18](https://github.com/abustamam/tm-scheduler/issues/18) | DONE — merged to main |
