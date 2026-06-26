@@ -15,6 +15,7 @@ import {
 	SheetHeader,
 	SheetTitle,
 } from "#/components/ui/sheet";
+import { buildRoleCounts, slotLabel } from "#/lib/agenda";
 import { formatMeetingDate, formatMeetingTime } from "#/lib/format";
 import { getMeeting } from "#/server/meetings";
 import { claimSlot, releaseSlot } from "#/server/slots";
@@ -45,15 +46,7 @@ function MeetingDetail() {
 	const [speakerSlot, setSpeakerSlot] = useState<Slot | null>(null);
 
 	// Number repeated roles ("Speaker 1", "Speaker 2", …).
-	const roleCounts = slots.reduce<Record<string, number>>((acc, s) => {
-		acc[s.roleName] = (acc[s.roleName] ?? 0) + 1;
-		return acc;
-	}, {});
-	function slotLabel(s: Slot) {
-		return roleCounts[s.roleName] > 1
-			? `${s.roleName} ${s.slotIndex + 1}`
-			: s.roleName;
-	}
+	const roleCounts = buildRoleCounts(slots);
 
 	// Preserve category order as it appears (slots arrive pre-sorted).
 	const categories: string[] = [];
@@ -137,7 +130,9 @@ function MeetingDetail() {
 									>
 										<div className="flex items-start justify-between gap-3">
 											<div className="min-w-0 flex-1">
-												<p className="font-medium">{slotLabel(slot)}</p>
+												<p className="font-medium">
+													{slotLabel(slot, roleCounts)}
+												</p>
 
 												{slot.assigneeId ? (
 													<p className="text-sm text-muted-foreground">
