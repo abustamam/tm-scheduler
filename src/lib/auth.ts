@@ -3,6 +3,8 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { magicLink } from "better-auth/plugins";
 import { tanstackStartCookies } from "better-auth/tanstack-start";
 import { db } from "#/db";
+import { sendEmail } from "./email";
+import { buildMagicLinkEmail } from "./magic-link-email";
 
 export const auth = betterAuth({
 	database: drizzleAdapter(db, { provider: "pg" }),
@@ -18,10 +20,12 @@ export const auth = betterAuth({
 	},
 	plugins: [
 		magicLink({
+			// Magic links are the only way in — keep the window short. Pinned so
+			// the email copy ("expires in 5 minutes") cannot drift from the TTL.
+			expiresIn: 60 * 5,
 			sendMagicLink: async ({ email, url }) => {
-				// TODO: wire a real email provider (e.g. Resend / SES) before
-				// production. For local dev we just log the link so you can copy it.
-				console.log(`\n[magic-link] sign-in link for ${email}:\n${url}\n`);
+				const { subject, html, text } = buildMagicLinkEmail(url);
+				await sendEmail({ to: email, subject, html, text });
 			},
 		}),
 		tanstackStartCookies(),
