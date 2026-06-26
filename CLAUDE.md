@@ -1,106 +1,47 @@
+Guidance for Claude Code working in this repository. This file describes the ACTUAL
+stack — follow it over any generic defaults.
 
-Default to using Bun instead of Node.js.
+## Stack
 
-- Use `bun <file>` instead of `node <file>` or `ts-node <file>`
-- Use `bun test` instead of `jest` or `vitest`
-- Use `bun build <file.html|file.ts|file.css>` instead of `webpack` or `esbuild`
-- Use `bun install` instead of `npm install` or `yarn install` or `pnpm install`
-- Use `bun run <script>` instead of `npm run <script>` or `yarn run <script>` or `pnpm run <script>`
-- Bun automatically loads .env, so don't use dotenv.
+- **TanStack Start** (React 19, SSR via Nitro), file-based routing under `src/routes/`.
+- **Vite** is the bundler/dev server. Use it. Do NOT replace it with Bun.serve or HTML imports.
+- **Drizzle ORM** on **PostgreSQL** via `drizzle-orm/node-postgres` (the `pg` driver).
+  The db client is exported from `src/db/index.ts`; schema lives in `src/db/schema.ts`.
+  Keep using `pg` / node-postgres — do NOT switch to Bun.sql or postgres.js.
+- **Better-Auth** for authentication, mounted at `src/routes/api/auth/$.ts`. Magic-link only.
+- **TanStack Query** for client data, SSR-integrated (`src/integrations/tanstack-query/`,
+  wired as router context in `src/router.tsx`).
+- **shadcn/ui** + **Tailwind CSS v4** (config-less, via `@tailwindcss/vite`; styles in
+  `src/styles.css`). Add components with `bunx shadcn@latest add <name>` → `src/components/ui`.
+  Icons from `lucide-react`.
+- **Biome** for lint/format. **Vitest** for tests. **TypeScript strict.**
 
-## APIs
+## Commands
 
-- `Bun.serve()` supports WebSockets, HTTPS, and routes. Don't use `express`.
-- `bun:sqlite` for SQLite. Don't use `better-sqlite3`.
-- `Bun.redis` for Redis. Don't use `ioredis`.
-- `Bun.sql` for Postgres. Don't use `pg` or `postgres.js`.
-- `WebSocket` is built-in. Don't use `ws`.
-- Prefer `Bun.file` over `node:fs`'s readFile/writeFile
-- Bun.$`ls` instead of execa.
+Package manager is **Bun** (use `bun install`, `bun run <script>`).
 
-## Testing
+- `bun run dev` — dev server on port 3000.
+- `bun run check` — Biome lint + format gate. (`bun run lint` / `bun run format` individually.)
+- `bun run test` — Vitest (uses Vitest, NOT `bun test`).
+- `bun run db:generate` — generate Drizzle migrations from `src/db/schema.ts`.
+- `bun run db:migrate` — apply migrations. `db:push` for dev sync, `db:studio` to inspect.
+- `bun run generate-routes` — regenerate `src/routeTree.gen.ts` (also runs during dev/build).
+- `bun run build` — Vite build (Node server output via Nitro).
 
-Use `bun test` to run tests.
+## Environment
 
-```ts#index.test.ts
-import { test, expect } from "bun:test";
+Local env goes in `.env.local` (loaded by `drizzle.config.ts` via dotenv and by the dev script).
+Required: `DATABASE_URL` (Postgres connection string), `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`.
 
-test("hello world", () => {
-  expect(1).toBe(1);
-});
-```
+## Conventions
 
-## Frontend
+- **Import alias:** `#/*` maps to `src/*` (e.g. `import { db } from "#/db"`).
+- `src/routeTree.gen.ts` is generated — never edit by hand.
+- `src/routes/__root.tsx` is the app shell (providers, devtools).
+- API routes use the `server.handlers` pattern (see `src/routes/api/auth/$.ts`).
+- Strict TS includes no-unused-locals/params — unused symbols fail the build.
 
-Use HTML imports with `Bun.serve()`. Don't use `vite`. HTML imports fully support React, CSS, Tailwind.
+## Deployment target
 
-Server:
-
-```ts#index.ts
-import index from "./index.html"
-
-Bun.serve({
-  routes: {
-    "/": index,
-    "/api/users/:id": {
-      GET: (req) => {
-        return new Response(JSON.stringify({ id: req.params.id }));
-      },
-    },
-  },
-  // optional websocket support
-  websocket: {
-    open: (ws) => {
-      ws.send("Hello, world!");
-    },
-    message: (ws, message) => {
-      ws.send(message);
-    },
-    close: (ws) => {
-      // handle close
-    }
-  },
-  development: {
-    hmr: true,
-    console: true,
-  }
-})
-```
-
-HTML files can import .tsx, .jsx or .js files directly and Bun's bundler will transpile & bundle automatically. `<link>` tags can point to stylesheets and Bun's CSS bundler will bundle.
-
-```html#index.html
-<html>
-  <body>
-    <h1>Hello, world!</h1>
-    <script type="module" src="./frontend.tsx"></script>
-  </body>
-</html>
-```
-
-With the following `frontend.tsx`:
-
-```tsx#frontend.tsx
-import React from "react";
-
-// import .css files directly and it works
-import './index.css';
-
-import { createRoot } from "react-dom/client";
-
-const root = createRoot(document.body);
-
-export default function Frontend() {
-  return <h1>Hello, world!</h1>;
-}
-
-root.render(<Frontend />);
-```
-
-Then, run index.ts
-
-```sh
-bun --hot ./index.ts
-```
-
-For more information, read the Bun API docs in `node_modules/bun-types/docs/**.md`.
+Single Node server on a Hetzner VPS with Postgres on the same box. Do NOT add Cloudflare
+Workers / wrangler, edge adapters, or Convex.
