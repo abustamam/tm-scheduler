@@ -54,34 +54,33 @@ vars — with migrations applied on deploy.
 
 ## Steps
 
-### Step 1 (agent, in a PR): add `railway.json` config-as-code
+### Step 1 (agent, in a PR): Dockerfile + `railway.json` — DONE (PR #25)
 
-Create `railway.json` at the repo root so build/start/migrate are reproducible
-rather than hand-set in the dashboard. **Verify field names against current
-Railway docs** (config schema evolves):
+**Gotcha solved:** Railway's auto-detector (Railpack) mistook this Nitro SSR app
+for a static Vite SPA — it set up Caddy to serve `/app/dist`, which doesn't exist
+(Nitro outputs to `.output/`), so the build failed with `"/app/dist": not found`.
 
-```json
-{
-  "$schema": "https://railway.com/railway.schema.json",
-  "build": {
-    "builder": "NIXPACKS",
-    "buildCommand": "bun run build"
-  },
-  "deploy": {
-    "startCommand": "node .output/server/index.mjs",
-    "preDeployCommand": "bun run db:migrate",
-    "healthcheckPath": "/",
-    "restartPolicyType": "ON_FAILURE"
-  }
-}
-```
+**Two findings, both fixed and validated locally with `docker build` + a boot test:**
 
-`preDeployCommand` runs `db:migrate` against the injected `DATABASE_URL` before
-the new release goes live. **Verify locally first**: `bun run build` then
-`PORT=3000 node .output/server/index.mjs` boots and serves. (If `preDeployCommand`
-is not a current Railway field, fall back to a release-phase migration per their
-docs, or run migrate at container start before the server — STOP and confirm the
-approach rather than guessing.)
+1. **A `Dockerfile` makes the build deterministic** (build with Bun → run the Node
+   server), so Railway runs the server instead of guessing a static deploy. A
+   `railway.json` pins `"builder": "DOCKERFILE"` + healthcheck + restart policy.
+2. **Building under Bun targets the *Bun* runtime** (`Bun.serve`), which `node`
+   can't run (`ReferenceError: Bun is not defined`). Fixed by pinning the Nitro
+   preset in the `build` script: `"build": "NITRO_PRESET=node-server vite build"`,
+   so `.output` is genuinely Node-runnable (`nitro.json` → `"preset":
+   "node-server"`). The Dockerfile's runtime stage is `node:22-slim` running
+   `node .output/server/index.mjs`.
+
+Validated: `docker build` succeeds and the container logs
+`➜ Listening on: http://localhost:8080/` and serves `/signin`.
+
+**Migrations are NOT run in the container** (the slim Node runtime has no Bun /
+`drizzle-kit` / source). For the first deploy, run them once from your machine via
+the Railway CLI (it injects the service env): `railway run bun run db:migrate`.
+A fully-automated path (a `drizzle-orm/...migrator` script as `db:migrate:deploy`,
+runnable in the runtime image, wired to a Railway pre-deploy command) is a
+recommended follow-up — see Maintenance notes.
 
 ### Step 2 (human, Railway dashboard): provision
 
