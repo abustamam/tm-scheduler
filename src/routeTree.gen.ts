@@ -9,54 +9,138 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as IndexRouteImport } from './routes/index'
+import { Route as SigninRouteImport } from './routes/signin'
+import { Route as AuthedRouteImport } from './routes/_authed'
+import { Route as AuthedIndexRouteImport } from './routes/_authed/index'
+import { Route as AuthedMeRouteImport } from './routes/_authed/me'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
+import { Route as AuthedMeetingsIdRouteImport } from './routes/_authed/meetings.$id'
+import { Route as AuthedAdminMeetingsNewRouteImport } from './routes/_authed/admin/meetings.new'
 
-const IndexRoute = IndexRouteImport.update({
+const SigninRoute = SigninRouteImport.update({
+  id: '/signin',
+  path: '/signin',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AuthedRoute = AuthedRouteImport.update({
+  id: '/_authed',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AuthedIndexRoute = AuthedIndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => rootRouteImport,
+  getParentRoute: () => AuthedRoute,
+} as any)
+const AuthedMeRoute = AuthedMeRouteImport.update({
+  id: '/me',
+  path: '/me',
+  getParentRoute: () => AuthedRoute,
 } as any)
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   id: '/api/auth/$',
   path: '/api/auth/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AuthedMeetingsIdRoute = AuthedMeetingsIdRouteImport.update({
+  id: '/meetings/$id',
+  path: '/meetings/$id',
+  getParentRoute: () => AuthedRoute,
+} as any)
+const AuthedAdminMeetingsNewRoute = AuthedAdminMeetingsNewRouteImport.update({
+  id: '/admin/meetings/new',
+  path: '/admin/meetings/new',
+  getParentRoute: () => AuthedRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
-  '/': typeof IndexRoute
+  '/': typeof AuthedIndexRoute
+  '/signin': typeof SigninRoute
+  '/me': typeof AuthedMeRoute
+  '/meetings/$id': typeof AuthedMeetingsIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/admin/meetings/new': typeof AuthedAdminMeetingsNewRoute
 }
 export interface FileRoutesByTo {
-  '/': typeof IndexRoute
+  '/signin': typeof SigninRoute
+  '/me': typeof AuthedMeRoute
+  '/': typeof AuthedIndexRoute
+  '/meetings/$id': typeof AuthedMeetingsIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/admin/meetings/new': typeof AuthedAdminMeetingsNewRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
-  '/': typeof IndexRoute
+  '/_authed': typeof AuthedRouteWithChildren
+  '/signin': typeof SigninRoute
+  '/_authed/me': typeof AuthedMeRoute
+  '/_authed/': typeof AuthedIndexRoute
+  '/_authed/meetings/$id': typeof AuthedMeetingsIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/_authed/admin/meetings/new': typeof AuthedAdminMeetingsNewRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/api/auth/$'
+  fullPaths:
+    | '/'
+    | '/signin'
+    | '/me'
+    | '/meetings/$id'
+    | '/api/auth/$'
+    | '/admin/meetings/new'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/api/auth/$'
-  id: '__root__' | '/' | '/api/auth/$'
+  to:
+    | '/signin'
+    | '/me'
+    | '/'
+    | '/meetings/$id'
+    | '/api/auth/$'
+    | '/admin/meetings/new'
+  id:
+    | '__root__'
+    | '/_authed'
+    | '/signin'
+    | '/_authed/me'
+    | '/_authed/'
+    | '/_authed/meetings/$id'
+    | '/api/auth/$'
+    | '/_authed/admin/meetings/new'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
-  IndexRoute: typeof IndexRoute
+  AuthedRoute: typeof AuthedRouteWithChildren
+  SigninRoute: typeof SigninRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/': {
-      id: '/'
+    '/signin': {
+      id: '/signin'
+      path: '/signin'
+      fullPath: '/signin'
+      preLoaderRoute: typeof SigninRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/_authed': {
+      id: '/_authed'
+      path: ''
+      fullPath: '/'
+      preLoaderRoute: typeof AuthedRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/_authed/': {
+      id: '/_authed/'
       path: '/'
       fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
-      parentRoute: typeof rootRouteImport
+      preLoaderRoute: typeof AuthedIndexRouteImport
+      parentRoute: typeof AuthedRoute
+    }
+    '/_authed/me': {
+      id: '/_authed/me'
+      path: '/me'
+      fullPath: '/me'
+      preLoaderRoute: typeof AuthedMeRouteImport
+      parentRoute: typeof AuthedRoute
     }
     '/api/auth/$': {
       id: '/api/auth/$'
@@ -65,11 +149,43 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAuthSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_authed/meetings/$id': {
+      id: '/_authed/meetings/$id'
+      path: '/meetings/$id'
+      fullPath: '/meetings/$id'
+      preLoaderRoute: typeof AuthedMeetingsIdRouteImport
+      parentRoute: typeof AuthedRoute
+    }
+    '/_authed/admin/meetings/new': {
+      id: '/_authed/admin/meetings/new'
+      path: '/admin/meetings/new'
+      fullPath: '/admin/meetings/new'
+      preLoaderRoute: typeof AuthedAdminMeetingsNewRouteImport
+      parentRoute: typeof AuthedRoute
+    }
   }
 }
 
+interface AuthedRouteChildren {
+  AuthedMeRoute: typeof AuthedMeRoute
+  AuthedIndexRoute: typeof AuthedIndexRoute
+  AuthedMeetingsIdRoute: typeof AuthedMeetingsIdRoute
+  AuthedAdminMeetingsNewRoute: typeof AuthedAdminMeetingsNewRoute
+}
+
+const AuthedRouteChildren: AuthedRouteChildren = {
+  AuthedMeRoute: AuthedMeRoute,
+  AuthedIndexRoute: AuthedIndexRoute,
+  AuthedMeetingsIdRoute: AuthedMeetingsIdRoute,
+  AuthedAdminMeetingsNewRoute: AuthedAdminMeetingsNewRoute,
+}
+
+const AuthedRouteWithChildren =
+  AuthedRoute._addFileChildren(AuthedRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
-  IndexRoute: IndexRoute,
+  AuthedRoute: AuthedRouteWithChildren,
+  SigninRoute: SigninRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
 }
 export const routeTree = rootRouteImport
