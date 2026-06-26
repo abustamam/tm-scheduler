@@ -6,6 +6,16 @@ import { db } from "#/db";
 
 export const auth = betterAuth({
 	database: drizzleAdapter(db, { provider: "pg" }),
+	rateLimit: {
+		enabled: true,
+		// Global default: 20 requests per 60 s (covers all auth endpoints).
+		window: 60,
+		max: 20,
+		// Tighter rule for the magic-link sign-in path to prevent email-bomb / account-enumeration.
+		customRules: {
+			"/sign-in/magic-link": { window: 60, max: 5 },
+		},
+	},
 	plugins: [
 		magicLink({
 			sendMagicLink: async ({ email, url }) => {
