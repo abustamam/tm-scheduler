@@ -58,6 +58,7 @@ export const slotStatusEnum = pgEnum("slot_status", [
 export const clubs = pgTable("clubs", {
 	id: uuid("id").defaultRandom().primaryKey(),
 	name: text("name").notNull(),
+	timezone: text("timezone").notNull().default("America/Chicago"),
 	createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
