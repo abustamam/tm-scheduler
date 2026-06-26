@@ -15,7 +15,7 @@
 - **Depends on**: plans/004-remove-dead-scaffold-code.md (deletes `header-user.tsx`, one of the offending files — avoid fixing a file that's about to be removed)
 - **Category**: dx
 - **Planned at**: commit `0e33f82`, 2026-06-26 (finding discovered during execution of Wave 1)
-- **Issue**: (not yet filed)
+- **Issue**: https://github.com/abustamam/tm-scheduler/issues/18
 
 ## Why this matters
 

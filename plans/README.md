@@ -23,7 +23,7 @@ direction spikes.
 | 006 | Enable auth rate limiting | P2 | S | — | _withheld (security, public repo)_ | TODO |
 | 007 | Add `.env.example` | P3 | S | — | [#16](https://github.com/abustamam/tm-scheduler/issues/16) | APPROVED — branch `advisor/007-env-example`, awaiting merge |
 | 009 | Build `claimed → confirmed` lifecycle | P2 | M | 002 | [#17](https://github.com/abustamam/tm-scheduler/issues/17) | TODO (needs 002 on main) |
-| 011 | Fix the Biome gate (`bun run check`) | P2 | S | 004 | _(not filed)_ | TODO (discovered during execution) |
+| 011 | Fix the Biome gate (`bun run check`) | P2 | S | 004 | [#18](https://github.com/abustamam/tm-scheduler/issues/18) | TODO (discovered during execution) |
 | 008 | Spike: VP Education dashboard | P3 | M | — | [#8](https://github.com/abustamam/tm-scheduler/issues/8) (pre-existing) | TODO |
 | 010 | Spike: reminders / notifications | P3 | M | — | [#7](https://github.com/abustamam/tm-scheduler/issues/7) (pre-existing) | TODO |
 
