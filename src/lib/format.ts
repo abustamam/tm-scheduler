@@ -17,4 +17,3 @@ export function formatMeetingTime(value: Date | string) {
 	const d = typeof value === "string" ? new Date(value) : value;
 	return timeFmt.format(d);
 }
-
