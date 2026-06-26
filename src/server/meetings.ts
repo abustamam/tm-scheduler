@@ -11,6 +11,7 @@ import {
 	speakerDetails,
 	user,
 } from "#/db/schema";
+import { generateSlotRows, resolveEvaluatorLinks } from "#/lib/agenda";
 import { requireClubRole, requireMembership, requireUser } from "./guards";
 
 const uuid = z.string().uuid();
@@ -93,22 +94,7 @@ export const getMeeting = createServerFn({ method: "GET" })
 			.orderBy(asc(roleDefinitions.sortOrder), asc(roleSlots.slotIndex));
 
 		// Resolve which speaker each evaluator slot evaluates.
-		const bySlotId = new Map(rows.map((r) => [r.id, r]));
-		const slots = rows.map((r) => {
-			const target = r.evaluatesSlotId
-				? bySlotId.get(r.evaluatesSlotId)
-				: undefined;
-			return {
-				...r,
-				evaluates: target
-					? {
-							slotId: target.id,
-							speakerName: target.assigneeName,
-							speechTitle: target.speechTitle,
-						}
-					: null,
-			};
-		});
+		const slots = resolveEvaluatorLinks(rows);
 
 		return { meeting, slots, canManage };
 	});
@@ -190,13 +176,7 @@ export const createMeeting = createServerFn({ method: "POST" })
 				})
 				.returning({ id: meetings.id });
 
-			const slotRows = defs.flatMap((def) =>
-				Array.from({ length: def.defaultCount }, (_, i) => ({
-					meetingId: meeting.id,
-					roleDefinitionId: def.id,
-					slotIndex: i,
-				})),
-			);
+			const slotRows = generateSlotRows(defs, meeting.id);
 			if (slotRows.length > 0) {
 				await tx.insert(roleSlots).values(slotRows);
 			}
