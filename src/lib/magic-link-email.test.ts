@@ -19,5 +19,6 @@ describe("buildMagicLinkEmail", () => {
 		expect(built.text).toContain("expires in 5 minutes");
 		expect(built.text.toLowerCase()).toContain("ignore");
 		expect(built.html).toContain("expires in 5 minutes");
+		expect(built.html.toLowerCase()).toContain("ignore");
 	});
 });
