@@ -64,9 +64,11 @@ function SignIn() {
 								<span className="font-medium text-foreground">{email}</span>.
 								Open it on this device to finish signing in.
 							</p>
-							<p className="text-muted-foreground">
-								(Dev: the link is printed in the server console.)
-							</p>
+							{import.meta.env.DEV ? (
+								<p className="text-muted-foreground">
+									(Dev: the link is printed in the server console.)
+								</p>
+							) : null}
 						</div>
 					) : (
 						<form onSubmit={onSubmit} className="space-y-4">
