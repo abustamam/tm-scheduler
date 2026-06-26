@@ -65,8 +65,14 @@ Migrations are generated to `./drizzle` (`drizzle.config.ts`); edit the schema, 
 
 ## Deployment target
 
-Single Node server on a Hetzner VPS with Postgres on the same box. Do NOT add Cloudflare
-Workers / wrangler, edge adapters, or Convex.
+**Railway** (managed container PaaS) — see `docs/adr/0007-railway-managed-paas.md` (supersedes
+ADR-0003). Push to `main` auto-deploys; env vars are set in the Railway dashboard; Postgres is
+Railway's managed plugin (provides `DATABASE_URL`). This keeps the **single Node-server model**:
+the Nitro `node-server` build (`.output/server/index.mjs`) and the `node-postgres` pool in
+`src/db/index.ts` are unchanged. Migrations run on deploy via `bun run db:migrate`.
+Do NOT adopt edge/serverless adapters (Cloudflare Workers / Convex) — the persistent process is
+required for the `pg` pool and the planned in-process reminder poller (#7). The Workers + Neon
+path stays a deferred future option only.
 
 ## Agent skills
 

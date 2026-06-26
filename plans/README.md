@@ -45,6 +45,7 @@ exit 0, `bun run test` → 15 passed | 13 skipped (no DB) / **28 passed with a D
 | 011 | Fix the Biome gate (`bun run check`) | P2 | S | 004 | [#18](https://github.com/abustamam/tm-scheduler/issues/18) | DONE — merged to main |
 | 008 | Spike: VP Education dashboard | P3 | M | — | [#8](https://github.com/abustamam/tm-scheduler/issues/8) (+[#9](https://github.com/abustamam/tm-scheduler/issues/9)) | DONE — `docs/design/vpe-dashboard.md` (PR #23) |
 | 010 | Spike: reminders / notifications | P3 | M | — | [#7](https://github.com/abustamam/tm-scheduler/issues/7) | DONE — `docs/design/reminders.md` (PR #23) |
+| 012 | Migrate hosting to Railway (push-to-deploy) | P2 | M | — | [#11](https://github.com/abustamam/tm-scheduler/issues/11) | TODO — runbook ready; ADR-0007 supersedes 0003 |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | REJECTED (one-line rationale)
 
