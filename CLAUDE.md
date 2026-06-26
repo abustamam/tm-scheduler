@@ -5,6 +5,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Guidance for Claude Code working in this repository. This file describes the ACTUAL
 stack — follow it over any generic defaults.
 
+## Git worktree isolation (required)
+
+We run many issues in parallel. NEVER edit or commit directly in the main
+checkout (on `main` or a local branch) — parallel sessions sharing one
+checkout corrupt each other's work. Before any file edit or commit, create
+and enter a dedicated git worktree (`git worktree add`). Exceptions:
+read-only/inspection tasks, or when the human explicitly says to edit in place.
+
 ## Stack
 
 - **TanStack Start** (React 19, SSR via Nitro), file-based routing under `src/routes/`.
