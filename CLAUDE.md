@@ -1,3 +1,7 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 Guidance for Claude Code working in this repository. This file describes the ACTUAL
 stack — follow it over any generic defaults.
 
@@ -8,7 +12,13 @@ stack — follow it over any generic defaults.
 - **Drizzle ORM** on **PostgreSQL** via `drizzle-orm/node-postgres` (the `pg` driver).
   The db client is exported from `src/db/index.ts`; schema lives in `src/db/schema.ts`.
   Keep using `pg` / node-postgres — do NOT switch to Bun.sql or postgres.js.
-- **Better-Auth** for authentication, mounted at `src/routes/api/auth/$.ts`. Magic-link only.
+- **Better-Auth** for authentication (`src/lib/auth.ts`), mounted at `src/routes/api/auth/$.ts`
+  via the `server.handlers` pattern. **Magic-link is the goal** — that's the intended (and only)
+  sign-in method. The scaffold currently still has email+password enabled in `src/lib/auth.ts`
+  with the `tanstackStartCookies` plugin; migrate it to the Better-Auth magic-link plugin and
+  remove email+password. No Drizzle adapter is wired into Better-Auth yet — add one (with the
+  magic-link plugin) before relying on persisted users. The React client is `src/lib/auth-client.ts`
+  (`authClient.useSession()` / `signOut()`, see `src/integrations/better-auth/header-user.tsx`).
 - **TanStack Query** for client data, SSR-integrated (`src/integrations/tanstack-query/`,
   wired as router context in `src/router.tsx`).
 - **shadcn/ui** + **Tailwind CSS v4** (config-less, via `@tailwindcss/vite`; styles in
@@ -27,6 +37,8 @@ Package manager is **Bun** (use `bun install`, `bun run <script>`).
 - `bun run db:migrate` — apply migrations. `db:push` for dev sync, `db:studio` to inspect.
 - `bun run generate-routes` — regenerate `src/routeTree.gen.ts` (also runs during dev/build).
 - `bun run build` — Vite build (Node server output via Nitro).
+- There is no dedicated typecheck script — `bun run build` (or `bunx tsc --noEmit`) surfaces type errors.
+- Run a single test with `bunx vitest run <path>` (or `bunx vitest <path>` to watch).
 
 ## Environment
 
@@ -35,11 +47,20 @@ Required: `DATABASE_URL` (Postgres connection string), `BETTER_AUTH_SECRET`, `BE
 
 ## Conventions
 
-- **Import alias:** `#/*` maps to `src/*` (e.g. `import { db } from "#/db"`).
-- `src/routeTree.gen.ts` is generated — never edit by hand.
-- `src/routes/__root.tsx` is the app shell (providers, devtools).
+- **Import alias:** prefer `#/*` → `src/*` (e.g. `import { db } from "#/db"`). `@/*` also maps to
+  `src/*` (used by shadcn's `components.json`), but `#/*` is the one declared in `package.json` imports.
+- `src/routeTree.gen.ts` and `src/styles.css` are excluded from Biome — never hand-edit the route tree.
+- `src/routes/__root.tsx` is the app shell (providers, devtools, `<head>`).
 - API routes use the `server.handlers` pattern (see `src/routes/api/auth/$.ts`).
 - Strict TS includes no-unused-locals/params — unused symbols fail the build.
+- Biome formats with **tabs** and **double quotes**, with import organization on.
+
+## Data layer
+
+Schema is `src/db/schema.ts` (a single `todos` table so far — this is an early scaffold).
+The `db` client (`src/db/index.ts`) is `drizzle(process.env.DATABASE_URL!, { schema })`.
+Migrations are generated to `./drizzle` (`drizzle.config.ts`); edit the schema, then
+`bun run db:generate` + `bun run db:migrate` (or `db:push` for quick dev sync).
 
 ## Deployment target
 
