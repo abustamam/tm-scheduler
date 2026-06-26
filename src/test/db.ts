@@ -17,16 +17,20 @@ import {
 	user,
 } from "#/db/schema";
 
-const testDatabaseUrl = process.env.TEST_DATABASE_URL;
-if (!testDatabaseUrl) {
-	throw new Error(
-		"TEST_DATABASE_URL is not set. " +
-			"Start a throwaway Postgres and pass the URL:\n" +
-			"  TEST_DATABASE_URL=postgresql://test:test@localhost:5433/tm_test bunx vitest run <test>",
-	);
-}
+/**
+ * True only when a test database URL is configured. Integration suites gate on
+ * this (`describe.skipIf(!hasTestDb)`) so a plain `vitest run` with no DB skips
+ * them instead of failing. NEVER fall back to the production `DATABASE_URL`.
+ */
+export const hasTestDb = Boolean(process.env.TEST_DATABASE_URL);
 
-export const testDb = drizzle(testDatabaseUrl, { schema });
+// Build the client without throwing at module load so importing this file never
+// fails when TEST_DATABASE_URL is unset. The placeholder URL is never connected
+// to: gated suites run no queries when `hasTestDb` is false.
+export const testDb = drizzle(
+	process.env.TEST_DATABASE_URL ?? "postgresql://invalid",
+	{ schema },
+);
 
 export interface SeededClub {
 	clubId: string;
