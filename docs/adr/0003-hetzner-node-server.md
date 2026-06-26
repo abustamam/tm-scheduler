@@ -1,6 +1,12 @@
 # ADR-0003: Single Node server on a Hetzner VPS for the MVP
 
-Status: Accepted
+Status: Superseded by [ADR-0007](0007-railway-managed-paas.md)
+
+> **Superseded (see ADR-0007).** Hosting moved to Railway (managed PaaS) for
+> push-to-deploy and low maintenance. The *single Node-server model* this ADR
+> established is retained — only the host changed (Railway container instead of a
+> self-managed Hetzner VPS). The Cloudflare Workers + Neon/Hyperdrive path noted
+> below remains a deferred future option.
 
 ## Context
 

@@ -82,11 +82,17 @@ CONTEXT.md     domain overview + glossary
 
 ## Deployment
 
-`bun run build` produces a self-contained Node server. The target is a single Node host with
-Postgres alongside it (a Hetzner VPS — see `docs/adr/0003-hetzner-node-server.md`). Pin the
-same Postgres major in dev and prod.
+`bun run build` produces a self-contained Nitro Node server at `.output/server/index.mjs`.
+
+Hosting is **Railway** (managed PaaS) — see `docs/adr/0007-railway-managed-paas.md`. Pushing to
+`main` auto-deploys; environment variables (`DATABASE_URL` from the Postgres plugin,
+`BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`) are set in the Railway dashboard; migrations run on
+deploy via `bun run db:migrate`. The migration runbook is `plans/012-railway-migration.md`.
+Pin the same Postgres major in dev (Docker) and on Railway.
+
+To run the production build locally:
 
 ```bash
 bun run build
-node dist/server/index.mjs
+node .output/server/index.mjs
 ```
