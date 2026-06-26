@@ -13,12 +13,13 @@ stack — follow it over any generic defaults.
   The db client is exported from `src/db/index.ts`; schema lives in `src/db/schema.ts`.
   Keep using `pg` / node-postgres — do NOT switch to Bun.sql or postgres.js.
 - **Better-Auth** for authentication (`src/lib/auth.ts`), mounted at `src/routes/api/auth/$.ts`
-  via the `server.handlers` pattern. **Magic-link is the goal** — that's the intended (and only)
-  sign-in method. The scaffold currently still has email+password enabled in `src/lib/auth.ts`
-  with the `tanstackStartCookies` plugin; migrate it to the Better-Auth magic-link plugin and
-  remove email+password. No Drizzle adapter is wired into Better-Auth yet — add one (with the
-  magic-link plugin) before relying on persisted users. The React client is `src/lib/auth-client.ts`
-  (`authClient.useSession()` / `signOut()`, see `src/integrations/better-auth/header-user.tsx`).
+  via the `server.handlers` pattern. **Magic-link is the only** sign-in method: `src/lib/auth.ts`
+  uses the Better-Auth `magicLink` plugin with the Drizzle adapter (`drizzleAdapter(db, { provider: "pg" })`)
+  and the `tanstackStartCookies` plugin — no email+password, no OAuth. Magic-link delivery is
+  still stubbed: `sendMagicLink` only `console.log`s the URL, so a real email provider (Resend/SES)
+  must be wired before production (tracked as a pre-launch issue). The React client is
+  `src/lib/auth-client.ts` (`authClient.useSession()` / `signOut()`, see
+  `src/integrations/better-auth/header-user.tsx`).
 - **TanStack Query** for client data, SSR-integrated (`src/integrations/tanstack-query/`,
   wired as router context in `src/router.tsx`).
 - **shadcn/ui** + **Tailwind CSS v4** (config-less, via `@tailwindcss/vite`; styles in
