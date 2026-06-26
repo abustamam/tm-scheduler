@@ -39,7 +39,7 @@ function errMessage(err: unknown) {
 }
 
 function MeetingDetail() {
-	const { meeting, slots, canManage } = Route.useLoaderData();
+	const { meeting, slots, canManage, timezone } = Route.useLoaderData();
 	const { authUser } = Route.useRouteContext();
 	const router = useRouter();
 	const [busySlotId, setBusySlotId] = useState<string | null>(null);
@@ -93,8 +93,8 @@ function MeetingDetail() {
 				<div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
 					<span className="flex items-center gap-1.5">
 						<CalendarDays className="size-4" aria-hidden />
-						{formatMeetingDate(meeting.scheduledAt)} ·{" "}
-						{formatMeetingTime(meeting.scheduledAt)}
+						{formatMeetingDate(meeting.scheduledAt, timezone)} ·{" "}
+						{formatMeetingTime(meeting.scheduledAt, timezone)}
 					</span>
 					{meeting.location ? (
 						<span className="flex items-center gap-1.5">

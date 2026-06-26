@@ -12,6 +12,7 @@ import {
 	user,
 } from "#/db/schema";
 import { generateSlotRows, resolveEvaluatorLinks } from "#/lib/agenda";
+import { zonedWallTimeToUtc } from "#/lib/datetime";
 import { requireClubRole, requireMembership, requireUser } from "./guards";
 
 const uuid = z.string().uuid();
@@ -30,10 +31,12 @@ export const listUpcomingMeetings = createServerFn({ method: "GET" })
 				theme: meetings.theme,
 				location: meetings.location,
 				status: meetings.status,
+				timezone: clubs.timezone,
 				openSlots: sql<number>`count(*) filter (where ${roleSlots.status} = 'open')::int`,
 				totalSlots: sql<number>`count(${roleSlots.id})::int`,
 			})
 			.from(meetings)
+			.innerJoin(clubs, eq(clubs.id, meetings.clubId))
 			.leftJoin(roleSlots, eq(roleSlots.meetingId, meetings.id))
 			.where(
 				and(
@@ -42,7 +45,7 @@ export const listUpcomingMeetings = createServerFn({ method: "GET" })
 					ne(meetings.status, "cancelled"),
 				),
 			)
-			.groupBy(meetings.id)
+			.groupBy(meetings.id, clubs.timezone)
 			.orderBy(asc(meetings.scheduledAt));
 	});
 
@@ -96,7 +99,12 @@ export const getMeeting = createServerFn({ method: "GET" })
 		// Resolve which speaker each evaluator slot evaluates.
 		const slots = resolveEvaluatorLinks(rows);
 
-		return { meeting, slots, canManage };
+		const club = await db.query.clubs.findFirst({
+			where: eq(clubs.id, meeting.clubId),
+			columns: { timezone: true },
+		});
+
+		return { meeting, slots, canManage, timezone: club?.timezone ?? "UTC" };
 	});
 
 /** The current user's upcoming claimed roles across every club they belong to. */
@@ -112,6 +120,7 @@ export const listMyCommitments = createServerFn({ method: "GET" }).handler(
 				theme: meetings.theme,
 				location: meetings.location,
 				clubName: clubs.name,
+				timezone: clubs.timezone,
 				roleName: roleDefinitions.name,
 				isSpeakerRole: roleDefinitions.isSpeakerRole,
 				speechTitle: speakerDetails.speechTitle,
@@ -137,7 +146,7 @@ export const listMyCommitments = createServerFn({ method: "GET" }).handler(
 
 const createMeetingSchema = z.object({
 	clubId: uuid,
-	// HTML datetime-local value, interpreted in the server's local zone.
+	// HTML datetime-local value, interpreted in the club's timezone.
 	scheduledAt: z.string().min(1),
 	location: z.string().trim().optional(),
 	theme: z.string().trim().optional(),
@@ -152,10 +161,11 @@ export const createMeeting = createServerFn({ method: "POST" })
 		const currentUser = await requireUser();
 		await requireClubRole(currentUser.id, data.clubId, ["admin", "vpe"]);
 
-		const scheduledAt = new Date(data.scheduledAt);
-		if (Number.isNaN(scheduledAt.getTime())) {
-			throw new Error("Invalid meeting date/time.");
-		}
+		const club = await db.query.clubs.findFirst({
+			where: eq(clubs.id, data.clubId),
+		});
+		if (!club) throw new Error("Club not found.");
+		const scheduledAt = zonedWallTimeToUtc(data.scheduledAt, club.timezone);
 
 		const defs = await db
 			.select()
