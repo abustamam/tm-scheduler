@@ -85,4 +85,14 @@ describe("sendEmail", () => {
 			sendEmail({ to: "a@b.com", subject: "S", html: "<p></p>", text: "t" }),
 		).rejects.toThrow("Failed to send email.");
 	});
+
+	it("throws when fetch itself rejects (network error)", async () => {
+		vi.stubEnv("RESEND_API_KEY", "re_test");
+		vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("ECONNREFUSED"));
+		vi.spyOn(console, "error").mockImplementation(() => {});
+
+		await expect(
+			sendEmail({ to: "a@b.com", subject: "S", html: "<p></p>", text: "t" }),
+		).rejects.toThrow("Failed to send email.");
+	});
 });
