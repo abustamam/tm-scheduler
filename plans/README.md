@@ -15,14 +15,15 @@ direction spikes.
 
 | Plan | Title | Priority | Effort | Depends on | Issue | Status |
 |------|-------|----------|--------|------------|-------|--------|
-| 001 | Extract pure agenda logic + stand up Vitest | P1 | M | — | [#12](https://github.com/abustamam/tm-scheduler/issues/12) | TODO |
-| 002 | Integration tests: claim race + guards | P1 | M | 001 | [#3](https://github.com/abustamam/tm-scheduler/issues/3) (pre-existing) | TODO |
-| 003 | Meeting times in club timezone (bug fix) | P1 | L | 001 | [#13](https://github.com/abustamam/tm-scheduler/issues/13) | TODO |
-| 004 | Remove dead scaffold code | P2 | S | — | [#14](https://github.com/abustamam/tm-scheduler/issues/14) | TODO |
-| 005 | CI workflow (lint/typecheck/test) | P2 | S | — (better after 001/002) | [#15](https://github.com/abustamam/tm-scheduler/issues/15) | TODO |
+| 001 | Extract pure agenda logic + stand up Vitest | P1 | M | — | [#12](https://github.com/abustamam/tm-scheduler/issues/12) | APPROVED — branch `advisor/001-extract-agenda-logic`, awaiting merge |
+| 002 | Integration tests: claim race + guards | P1 | M | 001 | [#3](https://github.com/abustamam/tm-scheduler/issues/3) (pre-existing) | TODO (needs 001 on main) |
+| 003 | Meeting times in club timezone (bug fix) | P1 | L | 001 | [#13](https://github.com/abustamam/tm-scheduler/issues/13) | TODO (needs 001+004 on main) |
+| 004 | Remove dead scaffold code | P2 | S | — | [#14](https://github.com/abustamam/tm-scheduler/issues/14) | APPROVED — branch `advisor/004-remove-dead-scaffold`, awaiting merge |
+| 005 | CI workflow (lint/typecheck/test) | P2 | S | 011 | [#15](https://github.com/abustamam/tm-scheduler/issues/15) | BLOCKED — `bun run check` red on main; needs 011 first |
 | 006 | Enable auth rate limiting | P2 | S | — | _withheld (security, public repo)_ | TODO |
-| 007 | Add `.env.example` | P3 | S | — | [#16](https://github.com/abustamam/tm-scheduler/issues/16) | TODO |
-| 009 | Build `claimed → confirmed` lifecycle | P2 | M | — (test needs 002) | [#17](https://github.com/abustamam/tm-scheduler/issues/17) | TODO |
+| 007 | Add `.env.example` | P3 | S | — | [#16](https://github.com/abustamam/tm-scheduler/issues/16) | APPROVED — branch `advisor/007-env-example`, awaiting merge |
+| 009 | Build `claimed → confirmed` lifecycle | P2 | M | 002 | [#17](https://github.com/abustamam/tm-scheduler/issues/17) | TODO (needs 002 on main) |
+| 011 | Fix the Biome gate (`bun run check`) | P2 | S | 004 | _(not filed)_ | TODO (discovered during execution) |
 | 008 | Spike: VP Education dashboard | P3 | M | — | [#8](https://github.com/abustamam/tm-scheduler/issues/8) (pre-existing) | TODO |
 | 010 | Spike: reminders / notifications | P3 | M | — | [#7](https://github.com/abustamam/tm-scheduler/issues/7) (pre-existing) | TODO |
 
