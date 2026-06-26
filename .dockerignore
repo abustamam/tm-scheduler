@@ -1,0 +1,18 @@
+# Keep the build context small and avoid copying local/host-only artifacts.
+node_modules
+.output
+.nitro
+.tanstack
+dist
+.git
+.github
+.env
+.env.*
+!.env.example
+.claude
+.gstack
+.vscode
+*.local
+plans
+docs
+README.md
