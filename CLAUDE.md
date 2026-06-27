@@ -15,9 +15,8 @@ stack — follow it over any generic defaults.
 - **Better-Auth** for authentication (`src/lib/auth.ts`), mounted at `src/routes/api/auth/$.ts`
   via the `server.handlers` pattern. **Magic-link is the only** sign-in method: `src/lib/auth.ts`
   uses the Better-Auth `magicLink` plugin with the Drizzle adapter (`drizzleAdapter(db, { provider: "pg" })`)
-  and the `tanstackStartCookies` plugin — no email+password, no OAuth. Magic-link delivery is
-  still stubbed: `sendMagicLink` only `console.log`s the URL, so a real email provider (Resend/SES)
-  must be wired before production (tracked as a pre-launch issue). The React client is
+  and the `tanstackStartCookies` plugin — no email+password, no OAuth.
+  Magic-link delivery goes through **Resend** (`src/lib/email.ts`, `src/lib/magic-link-email.ts`) when `RESEND_API_KEY` is set; with no key it falls back to logging the URL to the server console (dev). The React client is
   `src/lib/auth-client.ts` (`authClient.useSession()` / `signOut()`, see
   `src/integrations/better-auth/header-user.tsx`).
 - **TanStack Query** for client data, SSR-integrated (`src/integrations/tanstack-query/`,
@@ -45,6 +44,8 @@ Package manager is **Bun** (use `bun install`, `bun run <script>`).
 
 Local env goes in `.env.local` (loaded by `drizzle.config.ts` via dotenv and by the dev script).
 Required: `DATABASE_URL` (Postgres connection string), `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`.
+
+Optional (magic-link email delivery): `RESEND_API_KEY` and `EMAIL_FROM` (default `"GavelUp <noreply@gavelup.app>"`). Unset → magic-link URLs print to the server console (dev); set both in production to send via Resend.
 
 ## Conventions
 
