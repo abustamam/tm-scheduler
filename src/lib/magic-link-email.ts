@@ -1,5 +1,8 @@
-// Keep in sync with the magicLink `expiresIn` in src/lib/auth.ts (60 * 5 = 5 min).
-const EXPIRY_MINUTES = 5;
+// Single source of truth for the magic-link TTL: src/lib/auth.ts imports this
+// for the magicLink `expiresIn`, and the email copy below derives its wording
+// from it, so the displayed duration can never drift from the actual TTL.
+export const MAGIC_LINK_EXPIRY_SECONDS = 60 * 5;
+const EXPIRY_MINUTES = MAGIC_LINK_EXPIRY_SECONDS / 60;
 
 export interface MagicLinkEmail {
 	subject: string;

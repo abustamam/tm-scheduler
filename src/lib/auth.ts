@@ -4,7 +4,10 @@ import { magicLink } from "better-auth/plugins";
 import { tanstackStartCookies } from "better-auth/tanstack-start";
 import { db } from "#/db";
 import { sendEmail } from "#/lib/email";
-import { buildMagicLinkEmail } from "#/lib/magic-link-email";
+import {
+	buildMagicLinkEmail,
+	MAGIC_LINK_EXPIRY_SECONDS,
+} from "#/lib/magic-link-email";
 
 export const auth = betterAuth({
 	database: drizzleAdapter(db, { provider: "pg" }),
@@ -20,9 +23,9 @@ export const auth = betterAuth({
 	},
 	plugins: [
 		magicLink({
-			// Magic links are the only way in — keep the window short. Pinned so
-			// the email copy ("expires in 5 minutes") cannot drift from the TTL.
-			expiresIn: 60 * 5,
+			// Magic links are the only way in — keep the window short. Shares one
+			// constant with the email copy so the displayed duration can't drift.
+			expiresIn: MAGIC_LINK_EXPIRY_SECONDS,
 			sendMagicLink: async ({ email, url }) => {
 				const { subject, html, text } = buildMagicLinkEmail(url);
 				await sendEmail({ to: email, subject, html, text });
