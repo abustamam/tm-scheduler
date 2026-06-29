@@ -19,6 +19,7 @@ import { Route as AuthedResourcesRouteImport } from './routes/_authed/resources'
 import { Route as AuthedMeRouteImport } from './routes/_authed/me'
 import { Route as AuthedDashboardRouteImport } from './routes/_authed/dashboard'
 import { Route as AuthedAgendaRouteImport } from './routes/_authed/agenda'
+import { Route as ClubClubIdIndexRouteImport } from './routes/club.$clubId.index'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as AuthedMembersIdRouteImport } from './routes/_authed/members.$id'
 import { Route as AuthedMeetingsIdRouteImport } from './routes/_authed/meetings.$id'
@@ -73,6 +74,11 @@ const AuthedAgendaRoute = AuthedAgendaRouteImport.update({
   path: '/agenda',
   getParentRoute: () => AuthedRoute,
 } as any)
+const ClubClubIdIndexRoute = ClubClubIdIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => ClubClubIdRoute,
+} as any)
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   id: '/api/auth/$',
   path: '/api/auth/$',
@@ -103,10 +109,11 @@ export interface FileRoutesByFullPath {
   '/resources': typeof AuthedResourcesRoute
   '/schedule': typeof AuthedScheduleRoute
   '/api/health': typeof ApiHealthRoute
-  '/club/$clubId': typeof ClubClubIdRoute
+  '/club/$clubId': typeof ClubClubIdRouteWithChildren
   '/meetings/$id': typeof AuthedMeetingsIdRoute
   '/members/$id': typeof AuthedMembersIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/club/$clubId/': typeof ClubClubIdIndexRoute
   '/admin/meetings/new': typeof AuthedAdminMeetingsNewRoute
 }
 export interface FileRoutesByTo {
@@ -117,11 +124,11 @@ export interface FileRoutesByTo {
   '/resources': typeof AuthedResourcesRoute
   '/schedule': typeof AuthedScheduleRoute
   '/api/health': typeof ApiHealthRoute
-  '/club/$clubId': typeof ClubClubIdRoute
   '/': typeof AuthedIndexRoute
   '/meetings/$id': typeof AuthedMeetingsIdRoute
   '/members/$id': typeof AuthedMembersIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/club/$clubId': typeof ClubClubIdIndexRoute
   '/admin/meetings/new': typeof AuthedAdminMeetingsNewRoute
 }
 export interface FileRoutesById {
@@ -134,11 +141,12 @@ export interface FileRoutesById {
   '/_authed/resources': typeof AuthedResourcesRoute
   '/_authed/schedule': typeof AuthedScheduleRoute
   '/api/health': typeof ApiHealthRoute
-  '/club/$clubId': typeof ClubClubIdRoute
+  '/club/$clubId': typeof ClubClubIdRouteWithChildren
   '/_authed/': typeof AuthedIndexRoute
   '/_authed/meetings/$id': typeof AuthedMeetingsIdRoute
   '/_authed/members/$id': typeof AuthedMembersIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/club/$clubId/': typeof ClubClubIdIndexRoute
   '/_authed/admin/meetings/new': typeof AuthedAdminMeetingsNewRoute
 }
 export interface FileRouteTypes {
@@ -156,6 +164,7 @@ export interface FileRouteTypes {
     | '/meetings/$id'
     | '/members/$id'
     | '/api/auth/$'
+    | '/club/$clubId/'
     | '/admin/meetings/new'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -166,11 +175,11 @@ export interface FileRouteTypes {
     | '/resources'
     | '/schedule'
     | '/api/health'
-    | '/club/$clubId'
     | '/'
     | '/meetings/$id'
     | '/members/$id'
     | '/api/auth/$'
+    | '/club/$clubId'
     | '/admin/meetings/new'
   id:
     | '__root__'
@@ -187,6 +196,7 @@ export interface FileRouteTypes {
     | '/_authed/meetings/$id'
     | '/_authed/members/$id'
     | '/api/auth/$'
+    | '/club/$clubId/'
     | '/_authed/admin/meetings/new'
   fileRoutesById: FileRoutesById
 }
@@ -194,7 +204,7 @@ export interface RootRouteChildren {
   AuthedRoute: typeof AuthedRouteWithChildren
   SigninRoute: typeof SigninRoute
   ApiHealthRoute: typeof ApiHealthRoute
-  ClubClubIdRoute: typeof ClubClubIdRoute
+  ClubClubIdRoute: typeof ClubClubIdRouteWithChildren
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
 }
 
@@ -270,6 +280,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedAgendaRouteImport
       parentRoute: typeof AuthedRoute
     }
+    '/club/$clubId/': {
+      id: '/club/$clubId/'
+      path: '/'
+      fullPath: '/club/$clubId/'
+      preLoaderRoute: typeof ClubClubIdIndexRouteImport
+      parentRoute: typeof ClubClubIdRoute
+    }
     '/api/auth/$': {
       id: '/api/auth/$'
       path: '/api/auth/$'
@@ -328,13 +345,34 @@ const AuthedRouteChildren: AuthedRouteChildren = {
 const AuthedRouteWithChildren =
   AuthedRoute._addFileChildren(AuthedRouteChildren)
 
+interface ClubClubIdRouteChildren {
+  ClubClubIdIndexRoute: typeof ClubClubIdIndexRoute
+}
+
+const ClubClubIdRouteChildren: ClubClubIdRouteChildren = {
+  ClubClubIdIndexRoute: ClubClubIdIndexRoute,
+}
+
+const ClubClubIdRouteWithChildren = ClubClubIdRoute._addFileChildren(
+  ClubClubIdRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   AuthedRoute: AuthedRouteWithChildren,
   SigninRoute: SigninRoute,
   ApiHealthRoute: ApiHealthRoute,
-  ClubClubIdRoute: ClubClubIdRoute,
+  ClubClubIdRoute: ClubClubIdRouteWithChildren,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
+
+import type { getRouter } from './router.tsx'
+import type { createStart } from '@tanstack/react-start'
+declare module '@tanstack/react-start' {
+  interface Register {
+    ssr: true
+    router: Awaited<ReturnType<typeof getRouter>>
+  }
+}
