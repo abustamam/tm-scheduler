@@ -83,6 +83,29 @@ export const clubMemberships = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// Roster members (self-serve MVP — auth-decoupled identities)
+// ---------------------------------------------------------------------------
+
+export const members = pgTable(
+	"members",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		clubId: uuid("club_id")
+			.notNull()
+			.references(() => clubs.id, { onDelete: "cascade" }),
+		name: text("name").notNull(),
+		email: text("email"),
+		phone: text("phone"),
+		office: text("office"),
+		// Links a roster member to the Better-Auth account of the one signed-in
+		// admin/VPE. NULL for ordinary members (who never sign in).
+		userId: text("user_id").references(() => user.id, { onDelete: "set null" }),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+	},
+	(t) => [index("members_club_idx").on(t.clubId)],
+);
+
+// ---------------------------------------------------------------------------
 // Meetings
 // ---------------------------------------------------------------------------
 
@@ -195,10 +218,16 @@ export const notifications = pgTable("notifications", {
 // Relations
 // ---------------------------------------------------------------------------
 
+export const membersRelations = relations(members, ({ one }) => ({
+	club: one(clubs, { fields: [members.clubId], references: [clubs.id] }),
+	user: one(user, { fields: [members.userId], references: [user.id] }),
+}));
+
 export const clubsRelations = relations(clubs, ({ many }) => ({
 	memberships: many(clubMemberships),
 	meetings: many(meetings),
 	roleDefinitions: many(roleDefinitions),
+	members: many(members),
 }));
 
 export const clubMembershipsRelations = relations(
