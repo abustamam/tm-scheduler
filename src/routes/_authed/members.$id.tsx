@@ -1,8 +1,26 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import {
+	createFileRoute,
+	Link,
+	useNavigate,
+	useRouter,
+} from "@tanstack/react-router";
 import { Award as AwardIcon, ChevronLeft } from "lucide-react";
+import { useState } from "react";
+import { toast } from "sonner";
 import { MemberAvatar } from "#/components/club/member-avatar";
 import { StatusPill } from "#/components/club/status-pill";
 import { Button } from "#/components/ui/button";
+import {
+	Dialog,
+	DialogClose,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "#/components/ui/dialog";
+import { Input } from "#/components/ui/input";
+import { Label } from "#/components/ui/label";
 import {
 	type LevelStep,
 	levelSteps,
@@ -13,6 +31,7 @@ import { initialsOf, toneFromSeed } from "#/lib/avatar";
 import { formatTenure, isNewMember } from "#/lib/members";
 import { cn } from "#/lib/utils";
 import { getMemberProfile } from "#/server/club";
+import { editMember, removeMember } from "#/server/members";
 
 export const Route = createFileRoute("/_authed/members/$id")({
 	loader: async ({ params, context }) => {
@@ -44,6 +63,8 @@ function dayMon(value: Date | string) {
 
 function MemberDetail() {
 	const { member, speechLog, rolesServed, speeches } = Route.useLoaderData();
+	const { clubs, currentMemberId } = Route.useRouteContext();
+	const clubId = clubs[0]?.clubId;
 
 	if (!member) {
 		return (
@@ -89,13 +110,17 @@ function MemberDetail() {
 						<StatusPill status={status} long />
 					</div>
 				</div>
-				<div className="flex gap-[9px]">
-					<Button variant="outline" size="sm">
-						Message
-					</Button>
+				<div className="flex flex-wrap gap-[9px]">
 					<Button asChild size="sm">
 						<Link to="/agenda">Assign a role</Link>
 					</Button>
+					{clubId ? (
+						<MemberActions
+							member={member}
+							clubId={clubId}
+							currentMemberId={currentMemberId}
+						/>
+					) : null}
 				</div>
 			</div>
 
@@ -235,6 +260,189 @@ function MemberDetail() {
 				</div>
 			</div>
 		</div>
+	);
+}
+
+type ProfileMember = {
+	id: string;
+	name: string;
+	email: string | null;
+	phone: string | null;
+	office: string | null;
+	userId: string | null;
+};
+
+function MemberActions({
+	member,
+	clubId,
+	currentMemberId,
+}: {
+	member: ProfileMember;
+	clubId: string;
+	currentMemberId: string | null;
+}) {
+	const router = useRouter();
+	const navigate = useNavigate();
+	const [editOpen, setEditOpen] = useState(false);
+	const [removeOpen, setRemoveOpen] = useState(false);
+	const [busy, setBusy] = useState(false);
+	const isLinkedAccount = Boolean(member.userId);
+
+	async function onEditSubmit(e: React.FormEvent<HTMLFormElement>) {
+		e.preventDefault();
+		const form = new FormData(e.currentTarget);
+		const name = String(form.get("name") ?? "").trim();
+		if (!name) {
+			toast.error("Name is required.");
+			return;
+		}
+		setBusy(true);
+		try {
+			await editMember({
+				data: {
+					clubId,
+					memberId: member.id,
+					actorMemberId: currentMemberId,
+					name,
+					email: String(form.get("email") ?? "").trim() || null,
+					phone: String(form.get("phone") ?? "").trim() || null,
+					office: String(form.get("office") ?? "").trim() || null,
+				},
+			});
+			toast.success("Member updated.");
+			setEditOpen(false);
+			await router.invalidate();
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	async function onRemove() {
+		setBusy(true);
+		try {
+			await removeMember({
+				data: { clubId, memberId: member.id, actorMemberId: currentMemberId },
+			});
+			toast.success(`${member.name} removed from the roster.`);
+			setRemoveOpen(false);
+			await navigate({ to: "/" });
+			await router.invalidate();
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	return (
+		<>
+			<Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
+				Edit
+			</Button>
+			{!isLinkedAccount ? (
+				<Button
+					variant="outline"
+					size="sm"
+					className="border-[var(--line)] text-[var(--danger,#b4232a)] hover:bg-[rgba(180,35,42,.08)]"
+					onClick={() => setRemoveOpen(true)}
+				>
+					Remove
+				</Button>
+			) : null}
+
+			{/* Edit dialog */}
+			<Dialog open={editOpen} onOpenChange={setEditOpen}>
+				<DialogContent>
+					<DialogHeader>
+						<DialogTitle>Edit member</DialogTitle>
+						<DialogDescription>
+							Update {member.name}'s name and contact details.
+						</DialogDescription>
+					</DialogHeader>
+					<form onSubmit={onEditSubmit} className="space-y-4">
+						<div className="space-y-2">
+							<Label htmlFor="edit-name">Name</Label>
+							<Input
+								id="edit-name"
+								name="name"
+								required
+								defaultValue={member.name}
+								autoFocus
+							/>
+						</div>
+						<div className="space-y-2">
+							<Label htmlFor="edit-email">Email</Label>
+							<Input
+								id="edit-email"
+								name="email"
+								type="email"
+								defaultValue={member.email ?? ""}
+								placeholder="name@example.com"
+							/>
+						</div>
+						<div className="grid grid-cols-2 gap-3">
+							<div className="space-y-2">
+								<Label htmlFor="edit-phone">Phone</Label>
+								<Input
+									id="edit-phone"
+									name="phone"
+									type="tel"
+									defaultValue={member.phone ?? ""}
+								/>
+							</div>
+							<div className="space-y-2">
+								<Label htmlFor="edit-office">Office</Label>
+								<Input
+									id="edit-office"
+									name="office"
+									defaultValue={member.office ?? ""}
+									placeholder="e.g. VP Education"
+								/>
+							</div>
+						</div>
+						<DialogFooter>
+							<DialogClose asChild>
+								<Button type="button" variant="outline" disabled={busy}>
+									Cancel
+								</Button>
+							</DialogClose>
+							<Button type="submit" disabled={busy}>
+								{busy ? "Saving…" : "Save changes"}
+							</Button>
+						</DialogFooter>
+					</form>
+				</DialogContent>
+			</Dialog>
+
+			{/* Remove confirm dialog */}
+			<Dialog open={removeOpen} onOpenChange={setRemoveOpen}>
+				<DialogContent>
+					<DialogHeader>
+						<DialogTitle>Remove {member.name}?</DialogTitle>
+						<DialogDescription>
+							Their upcoming roles will be released. This can't be undone.
+						</DialogDescription>
+					</DialogHeader>
+					<DialogFooter>
+						<DialogClose asChild>
+							<Button type="button" variant="outline" disabled={busy}>
+								Cancel
+							</Button>
+						</DialogClose>
+						<Button
+							type="button"
+							variant="destructive"
+							disabled={busy}
+							onClick={onRemove}
+						>
+							{busy ? "Removing…" : "Remove member"}
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
+		</>
 	);
 }
 
