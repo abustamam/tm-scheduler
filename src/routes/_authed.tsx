@@ -6,7 +6,14 @@ import {
 	useRouter,
 	useRouterState,
 } from "@tanstack/react-router";
-import { BookOpen, CalendarDays, LayoutGrid, List, LogOut } from "lucide-react";
+import {
+	BookOpen,
+	CalendarDays,
+	LayoutGrid,
+	List,
+	LogOut,
+	ScrollText,
+} from "lucide-react";
 import type { ComponentType } from "react";
 import { MemberAvatar } from "#/components/club/member-avatar";
 import { ThemeToggle } from "#/components/club/theme-toggle";
@@ -44,6 +51,7 @@ const CLUB_ROLE_LABELS: Record<string, string> = {
 function crumbFor(pathname: string): string {
 	if (pathname === "/") return "Manage · Roster";
 	if (pathname.startsWith("/agenda")) return "Manage · Agenda & roles";
+	if (pathname.startsWith("/activity")) return "Manage · Activity";
 	if (pathname.startsWith("/dashboard")) return "Me · My dashboard";
 	if (pathname.startsWith("/resources")) return "Me · Resources";
 	if (pathname.startsWith("/members")) return "Roster · Member profile";
@@ -91,6 +99,7 @@ function WorkspaceLayout() {
 				<NavGroup label="Manage">
 					<NavItem to="/" exact icon={List} label="Roster" />
 					<NavItem to="/agenda" icon={CalendarDays} label="Agenda & roles" />
+					<NavItem to="/activity" icon={ScrollText} label="Activity" />
 				</NavGroup>
 
 				<NavGroup label="Me">
