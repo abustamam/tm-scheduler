@@ -2,7 +2,13 @@ import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { activityLog } from "#/db/schema";
 import { logActivity } from "#/server/activity";
-import { cleanup, hasTestDb, type SeededClub, seedClub, testDb } from "#/test/db";
+import {
+	cleanup,
+	hasTestDb,
+	type SeededClub,
+	seedClub,
+	testDb,
+} from "#/test/db";
 
 describe.skipIf(!hasTestDb)("logActivity", () => {
 	let seed: SeededClub;
