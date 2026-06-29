@@ -19,6 +19,7 @@ import { Route as AuthedResourcesRouteImport } from './routes/_authed/resources'
 import { Route as AuthedMeRouteImport } from './routes/_authed/me'
 import { Route as AuthedDashboardRouteImport } from './routes/_authed/dashboard'
 import { Route as AuthedAgendaRouteImport } from './routes/_authed/agenda'
+import { Route as AuthedActivityRouteImport } from './routes/_authed/activity'
 import { Route as ClubClubIdIndexRouteImport } from './routes/club.$clubId.index'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as AuthedMembersIdRouteImport } from './routes/_authed/members.$id'
@@ -75,6 +76,11 @@ const AuthedAgendaRoute = AuthedAgendaRouteImport.update({
   path: '/agenda',
   getParentRoute: () => AuthedRoute,
 } as any)
+const AuthedActivityRoute = AuthedActivityRouteImport.update({
+  id: '/activity',
+  path: '/activity',
+  getParentRoute: () => AuthedRoute,
+} as any)
 const ClubClubIdIndexRoute = ClubClubIdIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -110,6 +116,7 @@ const AuthedAdminMeetingsNewRoute = AuthedAdminMeetingsNewRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof AuthedIndexRoute
   '/signin': typeof SigninRoute
+  '/activity': typeof AuthedActivityRoute
   '/agenda': typeof AuthedAgendaRoute
   '/dashboard': typeof AuthedDashboardRoute
   '/me': typeof AuthedMeRoute
@@ -126,6 +133,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/signin': typeof SigninRoute
+  '/activity': typeof AuthedActivityRoute
   '/agenda': typeof AuthedAgendaRoute
   '/dashboard': typeof AuthedDashboardRoute
   '/me': typeof AuthedMeRoute
@@ -144,6 +152,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_authed': typeof AuthedRouteWithChildren
   '/signin': typeof SigninRoute
+  '/_authed/activity': typeof AuthedActivityRoute
   '/_authed/agenda': typeof AuthedAgendaRoute
   '/_authed/dashboard': typeof AuthedDashboardRoute
   '/_authed/me': typeof AuthedMeRoute
@@ -164,6 +173,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/signin'
+    | '/activity'
     | '/agenda'
     | '/dashboard'
     | '/me'
@@ -180,6 +190,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/signin'
+    | '/activity'
     | '/agenda'
     | '/dashboard'
     | '/me'
@@ -197,6 +208,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/_authed'
     | '/signin'
+    | '/_authed/activity'
     | '/_authed/agenda'
     | '/_authed/dashboard'
     | '/_authed/me'
@@ -293,6 +305,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedAgendaRouteImport
       parentRoute: typeof AuthedRoute
     }
+    '/_authed/activity': {
+      id: '/_authed/activity'
+      path: '/activity'
+      fullPath: '/activity'
+      preLoaderRoute: typeof AuthedActivityRouteImport
+      parentRoute: typeof AuthedRoute
+    }
     '/club/$clubId/': {
       id: '/club/$clubId/'
       path: '/'
@@ -339,6 +358,7 @@ declare module '@tanstack/react-router' {
 }
 
 interface AuthedRouteChildren {
+  AuthedActivityRoute: typeof AuthedActivityRoute
   AuthedAgendaRoute: typeof AuthedAgendaRoute
   AuthedDashboardRoute: typeof AuthedDashboardRoute
   AuthedMeRoute: typeof AuthedMeRoute
@@ -351,6 +371,7 @@ interface AuthedRouteChildren {
 }
 
 const AuthedRouteChildren: AuthedRouteChildren = {
+  AuthedActivityRoute: AuthedActivityRoute,
   AuthedAgendaRoute: AuthedAgendaRoute,
   AuthedDashboardRoute: AuthedDashboardRoute,
   AuthedMeRoute: AuthedMeRoute,
