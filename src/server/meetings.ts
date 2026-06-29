@@ -13,17 +13,21 @@ import {
 } from "#/db/schema";
 import { generateSlotRows, resolveEvaluatorLinks } from "#/lib/agenda";
 import { zonedWallTimeToUtc } from "#/lib/datetime";
-import { requireClubRole, requireMembership, requireUser } from "./guards";
+import {
+	getMembership,
+	getSessionUser,
+	requireClubRole,
+	requireMembership,
+	requireUser,
+} from "./guards";
 
 const uuid = z.string().uuid();
 
-/** Upcoming, non-cancelled meetings for a club, each with an open-slot count. */
+/** Upcoming, non-cancelled meetings for a club, each with an open-slot count.
+ *  PUBLIC — no session required. */
 export const listUpcomingMeetings = createServerFn({ method: "GET" })
 	.validator((clubId: unknown) => uuid.parse(clubId))
 	.handler(async ({ data: clubId }) => {
-		const currentUser = await requireUser();
-		await requireMembership(currentUser.id, clubId);
-
 		return db
 			.select({
 				id: meetings.id,
@@ -51,18 +55,29 @@ export const listUpcomingMeetings = createServerFn({ method: "GET" })
 
 /**
  * Load a meeting plus its ordered slots, assignees, speaker details, and
- * evaluator→speaker links. Shared by `getMeeting` and `getNextMeeting`.
+ * evaluator→speaker links. Shared by `getMeeting` (public) and `getNextMeeting` (authed).
+ *
+ * `currentUserId` is optional: when null/undefined, canManage is false.
+ * When set, the user's membership is checked for admin/vpe status.
  */
-async function loadMeetingDetail(meetingId: string, currentUserId: string) {
+async function loadMeetingDetail(
+	meetingId: string,
+	currentUserId?: string | null,
+) {
 	const meeting = await db.query.meetings.findFirst({
 		where: eq(meetings.id, meetingId),
 	});
 	if (!meeting) {
 		throw new Error("Meeting not found.");
 	}
-	const membership = await requireMembership(currentUserId, meeting.clubId);
-	const canManage =
-		membership.clubRole === "admin" || membership.clubRole === "vpe";
+
+	// canManage: only resolve when a session user is present; else false.
+	let canManage = false;
+	if (currentUserId) {
+		const membership = await getMembership(currentUserId, meeting.clubId);
+		canManage =
+			membership?.clubRole === "admin" || membership?.clubRole === "vpe";
+	}
 
 	const assignee = alias(members, "assignee");
 	const rows = await db
@@ -106,17 +121,20 @@ async function loadMeetingDetail(meetingId: string, currentUserId: string) {
 	return { meeting, slots, canManage, timezone: club?.timezone ?? "UTC" };
 }
 
-/** A meeting plus its ordered slots, assignees, speaker details, and evaluator→speaker links. */
+/** A meeting plus its ordered slots, assignees, speaker details, and evaluator→speaker links.
+ *  PUBLIC — uses an optional session only to resolve canManage. */
 export const getMeeting = createServerFn({ method: "GET" })
 	.validator((meetingId: unknown) => uuid.parse(meetingId))
 	.handler(async ({ data: meetingId }) => {
-		const currentUser = await requireUser();
-		return loadMeetingDetail(meetingId, currentUser.id);
+		// Optional session: may be null (no-session callers get canManage=false).
+		const sessionUser = await getSessionUser();
+		return loadMeetingDetail(meetingId, sessionUser?.id ?? null);
 	});
 
 /**
  * The club's soonest upcoming (non-cancelled) meeting with its full agenda, or
  * `{ meeting: null }` when none is scheduled. Backs the Agenda sign-up board.
+ * AUTHED — VPE workspace only.
  */
 export const getNextMeeting = createServerFn({ method: "GET" })
 	.validator((clubId: unknown) => uuid.parse(clubId))
@@ -148,7 +166,8 @@ export const getNextMeeting = createServerFn({ method: "GET" })
 		return loadMeetingDetail(next.id, currentUser.id);
 	});
 
-/** The current user's upcoming claimed roles across every club they belong to. */
+/** The current user's upcoming claimed roles across every club they belong to.
+ *  AUTHED — VPE dashboard only. */
 export const listMyCommitments = createServerFn({ method: "GET" }).handler(
 	async () => {
 		const currentUser = await requireUser();
@@ -199,6 +218,43 @@ export const listMyCommitments = createServerFn({ method: "GET" }).handler(
 	},
 );
 
+/** A member's upcoming claimed roles by memberId. PUBLIC — no session required.
+ *  Mirrors `listMyCommitments` but keyed to the member param instead of the session. */
+export const listMemberCommitments = createServerFn({ method: "GET" })
+	.validator((memberId: unknown) => uuid.parse(memberId))
+	.handler(async ({ data: memberId }) => {
+		return db
+			.select({
+				slotId: roleSlots.id,
+				status: roleSlots.status,
+				meetingId: meetings.id,
+				scheduledAt: meetings.scheduledAt,
+				theme: meetings.theme,
+				location: meetings.location,
+				clubName: clubs.name,
+				timezone: clubs.timezone,
+				roleName: roleDefinitions.name,
+				isSpeakerRole: roleDefinitions.isSpeakerRole,
+				speechTitle: speakerDetails.speechTitle,
+			})
+			.from(roleSlots)
+			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+			.innerJoin(clubs, eq(clubs.id, meetings.clubId))
+			.innerJoin(
+				roleDefinitions,
+				eq(roleDefinitions.id, roleSlots.roleDefinitionId),
+			)
+			.leftJoin(speakerDetails, eq(speakerDetails.slotId, roleSlots.id))
+			.where(
+				and(
+					eq(roleSlots.assignedMemberId, memberId),
+					gte(meetings.scheduledAt, new Date()),
+					ne(meetings.status, "cancelled"),
+				),
+			)
+			.orderBy(asc(meetings.scheduledAt));
+	});
+
 const createMeetingSchema = z.object({
 	clubId: uuid,
 	// HTML datetime-local value, interpreted in the club's timezone.
@@ -209,7 +265,8 @@ const createMeetingSchema = z.object({
 	notes: z.string().trim().optional(),
 });
 
-/** Admin/VPE only: create a meeting and auto-generate its slots from the club's template. */
+/** Admin/VPE only: create a meeting and auto-generate its slots from the club's template.
+ *  AUTHED — requires admin/vpe club role. */
 export const createMeeting = createServerFn({ method: "POST" })
 	.validator((input: unknown) => createMeetingSchema.parse(input))
 	.handler(async ({ data }) => {

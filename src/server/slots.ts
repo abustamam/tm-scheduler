@@ -9,13 +9,7 @@ import {
 	speakerDetails,
 } from "#/db/schema";
 import { logActivity } from "./activity";
-import {
-	getMembership,
-	requireClubRole,
-	requireMemberInClub,
-	requireMembership,
-	requireUser,
-} from "./guards";
+import { requireClubRole, requireMemberInClub, requireUser } from "./guards";
 
 const speakerDetailsSchema = z.object({
 	speechTitle: z.string().trim().min(1, "A speech title is required."),
@@ -33,12 +27,11 @@ const claimSchema = z.object({
 	speakerDetails: speakerDetailsSchema.optional(),
 });
 
-/** Claim an open slot for the given member. Speaker roles require speaker details. */
+/** Claim an open slot for the given member. Speaker roles require speaker details.
+ *  PUBLIC — no session required; trust guard via requireMemberInClub. */
 export const claimSlot = createServerFn({ method: "POST" })
 	.validator((input: unknown) => claimSchema.parse(input))
 	.handler(async ({ data }) => {
-		const currentUser = await requireUser();
-
 		const [slot] = await db
 			.select({
 				id: roleSlots.id,
@@ -58,7 +51,7 @@ export const claimSlot = createServerFn({ method: "POST" })
 		if (!slot) {
 			throw new Error("Role not found.");
 		}
-		await requireMembership(currentUser.id, slot.clubId);
+		// Trust guard: memberId must be a roster member of this club.
 		await requireMemberInClub(data.memberId, slot.clubId);
 
 		if (slot.isSpeakerRole && !data.speakerDetails) {
@@ -109,16 +102,14 @@ const releaseSchema = z.object({
 	actorMemberId: z.string().uuid(),
 });
 
-/** Release a slot back to open. Only the assignee or a club admin/VPE may do this. */
+/** Release a slot back to open. Only the assignee may do this (trust-based).
+ *  PUBLIC — no session required; trust guard via requireMemberInClub. */
 export const releaseSlot = createServerFn({ method: "POST" })
 	.validator((input: unknown) => releaseSchema.parse(input))
 	.handler(async ({ data }) => {
-		const currentUser = await requireUser();
-
 		const [slot] = await db
 			.select({
 				id: roleSlots.id,
-				assignedMemberId: roleSlots.assignedMemberId,
 				clubId: meetings.clubId,
 			})
 			.from(roleSlots)
@@ -130,13 +121,10 @@ export const releaseSlot = createServerFn({ method: "POST" })
 			throw new Error("Role not found.");
 		}
 
-		const membership = await getMembership(currentUser.id, slot.clubId);
-		const isAdmin =
-			membership?.clubRole === "admin" || membership?.clubRole === "vpe";
-		const isAssignee = slot.assignedMemberId === data.actorMemberId;
-		if (!isAssignee && !isAdmin) {
-			throw new Error("You can only release a role you've claimed.");
-		}
+		// Trust guard: actorMemberId must be a roster member of this club.
+		// Sheet-parity model — any club member may release/clear any slot; the
+		// activity log records who did it (mirrors reassignSlot).
+		await requireMemberInClub(data.actorMemberId, slot.clubId);
 
 		return db.transaction(async (tx) => {
 			await tx.delete(speakerDetails).where(eq(speakerDetails.slotId, slot.id));
@@ -162,7 +150,8 @@ const confirmSchema = z.object({
 	actorMemberId: z.string().uuid(),
 });
 
-/** Confirm a claimed slot. Only club admins/VPEs may do this. */
+/** Confirm a claimed slot. Only club admins/VPEs may do this.
+ *  AUTHED — requires VPE/admin session. */
 export const confirmSlot = createServerFn({ method: "POST" })
 	.validator((input: unknown) => confirmSchema.parse(input))
 	.handler(async ({ data }) => {
@@ -225,7 +214,8 @@ const unconfirmSchema = z.object({
 	actorMemberId: z.string().uuid(),
 });
 
-/** Un-confirm a slot back to claimed. Only club admins/VPEs may do this. */
+/** Un-confirm a slot back to claimed. Only club admins/VPEs may do this.
+ *  AUTHED — requires VPE/admin session. */
 export const unconfirmSlot = createServerFn({ method: "POST" })
 	.validator((input: unknown) => unconfirmSchema.parse(input))
 	.handler(async ({ data }) => {
@@ -282,12 +272,11 @@ const reassignSchema = z.object({
 	actorMemberId: z.string().uuid(),
 });
 
-/** Reassign a claimed slot to a different member. Only club admins/VPEs may do this. */
+/** Reassign a claimed slot to a different member (trust-based).
+ *  PUBLIC — no session required; trust guard via requireMemberInClub for both members. */
 export const reassignSlot = createServerFn({ method: "POST" })
 	.validator((input: unknown) => reassignSchema.parse(input))
 	.handler(async ({ data }) => {
-		const currentUser = await requireUser();
-
 		const [slot] = await db
 			.select({
 				id: roleSlots.id,
@@ -304,7 +293,8 @@ export const reassignSlot = createServerFn({ method: "POST" })
 			throw new Error("Role not found.");
 		}
 
-		await requireClubRole(currentUser.id, slot.clubId, ["admin", "vpe"]);
+		// Trust guards: both the actor and the target must be club roster members.
+		await requireMemberInClub(data.actorMemberId, slot.clubId);
 		await requireMemberInClub(data.memberId, slot.clubId);
 
 		return db.transaction(async (tx) => {
