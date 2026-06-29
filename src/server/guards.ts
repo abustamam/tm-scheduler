@@ -12,11 +12,18 @@ import { auth } from "#/lib/auth";
 
 export type ClubRole = "admin" | "vpe" | "member";
 
-/** Raw session user (or null) for the current request. Server-only. */
+/** Raw session user (or null) for the current request. Server-only.
+ *  Returns null when called outside a request context (e.g. integration tests
+ *  or public server fns invoked without a session). */
 export async function getSessionUser() {
-	const request = getRequest();
-	const session = await auth.api.getSession({ headers: request.headers });
-	return session?.user ?? null;
+	try {
+		const request = getRequest();
+		const session = await auth.api.getSession({ headers: request.headers });
+		return session?.user ?? null;
+	} catch {
+		// No request context (test env, direct call) — treat as unauthenticated.
+		return null;
+	}
 }
 
 /** Like getSessionUser but throws — use inside mutating server fns. */
