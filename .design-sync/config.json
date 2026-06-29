@@ -7,6 +7,7 @@
 	"tsconfig": "tsconfig.json",
 	"cssEntry": ".design-sync/compiled-styles.css",
 	"readmeHeader": ".design-sync/conventions.md",
+	"guidelinesGlob": [],
 	"overrides": {
 		"Dialog": { "cardMode": "single", "viewport": "680x440" },
 		"Sheet": { "cardMode": "single", "viewport": "680x460" }

@@ -25,7 +25,8 @@ Project: **GavelUp — Toastmasters Scheduler** → https://claude.ai/design/p/3
 
 - `srcDir: "src/components/ui"` is required — without it synth-entry scans **all** of `src/` and pulls route/server/db code into a browser bundle (breaks).
 - **Do NOT add a non-null `componentSrcMap` entry** (e.g. pinning Toaster's src). A non-null entry makes the `.d.ts` export set non-empty, which **skips** the src-derivation fallback that discovers the components — you'll get only the pinned one. The `null` exclusions for compound sub-parts (CardHeader, DialogContent, etc.) are fine; they're applied to the derived list and keep those parts in the bundle while removing their standalone cards.
-- `tsconfig`/`docs`/`guidelinesGlob` print "resolves outside the workspace root — skipped". Harmless here: `#/` resolves natively, there are no per-component docs, and the workspace-root bound is the main checkout (we run from a worktree). Not worth chasing.
+- `tsconfig`/`docs` print "resolves outside the workspace root — skipped" when run from a **worktree** (bound is the main checkout). Harmless: `#/` resolves natively, no per-component docs. **Run from the main checkout** and that bound no longer skips them.
+- `guidelinesGlob` is pinned to `[]` on purpose. The default (`docs/*.md`) matches `docs/persistence-todo.md` (an internal eng action-items doc, NOT a design guideline) once you run from the main checkout, and would ship it as a guideline. The DS has no real design-guideline docs, so we ship none. If genuine design guidelines are added later, point `guidelinesGlob` at them specifically.
 
 ## Known render warns (triaged-legitimate; a warn NOT here is new)
 
