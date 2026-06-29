@@ -27,11 +27,15 @@ import {
 // Helpers — replicate the core Drizzle operations from slots.ts
 // ---------------------------------------------------------------------------
 
-/** Set a slot to 'claimed' (prerequisite for confirmSlot) */
-async function setSlotClaimed(slotId: string, userId: string) {
+/** Set a slot to 'claimed' (prerequisite for confirmSlot) — keyed to memberId */
+async function setSlotClaimed(slotId: string, memberId: string) {
 	await testDb
 		.update(roleSlots)
-		.set({ assignedUserId: userId, status: "claimed", claimedAt: new Date() })
+		.set({
+			assignedMemberId: memberId,
+			status: "claimed",
+			claimedAt: new Date(),
+		})
 		.where(eq(roleSlots.id, slotId));
 }
 
@@ -74,7 +78,7 @@ describe.skipIf(!hasTestDb)("confirmSlot + unconfirmSlot integration", () => {
 	// -------------------------------------------------------------------------
 
 	it("claimed slot confirmed by admin becomes confirmed", async () => {
-		await setSlotClaimed(seed.slotId, seed.memberUserId);
+		await setSlotClaimed(seed.slotId, seed.memberId);
 
 		const result = await confirmSlotTx(seed.slotId);
 		expect(result).toHaveLength(1);
@@ -113,7 +117,7 @@ describe.skipIf(!hasTestDb)("confirmSlot + unconfirmSlot integration", () => {
 	// -------------------------------------------------------------------------
 
 	it("confirmed slot can be unconfirmed back to claimed", async () => {
-		await setSlotClaimed(seed.slotId, seed.memberUserId);
+		await setSlotClaimed(seed.slotId, seed.memberId);
 		await confirmSlotTx(seed.slotId);
 
 		const result = await unconfirmSlotTx(seed.slotId);
@@ -135,10 +139,10 @@ describe.skipIf(!hasTestDb)("confirmSlot + unconfirmSlot integration", () => {
 
 	it("race: confirm after release returns 0 rows (conditional guard)", async () => {
 		// Claim, then release back to open.
-		await setSlotClaimed(seed.slotId, seed.memberUserId);
+		await setSlotClaimed(seed.slotId, seed.memberId);
 		await testDb
 			.update(roleSlots)
-			.set({ assignedUserId: null, status: "open", claimedAt: null })
+			.set({ assignedMemberId: null, status: "open", claimedAt: null })
 			.where(eq(roleSlots.id, seed.slotId));
 
 		// Attempt to confirm a now-open slot: WHERE status='claimed' is false.
