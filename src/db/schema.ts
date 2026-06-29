@@ -4,6 +4,7 @@ import {
 	boolean,
 	index,
 	integer,
+	jsonb,
 	pgEnum,
 	pgTable,
 	text,
@@ -50,6 +51,20 @@ export const slotStatusEnum = pgEnum("slot_status", [
 	"open",
 	"claimed",
 	"confirmed",
+]);
+
+export const activityActionEnum = pgEnum("activity_action", [
+	"claim",
+	"release",
+	"reassign",
+	"availability_set",
+	"availability_clear",
+	"member_add",
+	"member_edit",
+	"member_merge",
+	"member_remove",
+	"meeting_create",
+	"meeting_edit",
 ]);
 
 // ---------------------------------------------------------------------------
@@ -221,6 +236,30 @@ export const speakerDetails = pgTable("speaker_details", {
 	minMinutes: integer("min_minutes"),
 	maxMinutes: integer("max_minutes"),
 });
+
+// ---------------------------------------------------------------------------
+// Activity log
+// ---------------------------------------------------------------------------
+
+export const activityLog = pgTable(
+	"activity_log",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		clubId: uuid("club_id")
+			.notNull()
+			.references(() => clubs.id, { onDelete: "cascade" }),
+		// The self-asserted member who acted (NULL = system/unknown).
+		actorMemberId: uuid("actor_member_id").references(() => members.id, {
+			onDelete: "set null",
+		}),
+		action: activityActionEnum("action").notNull(),
+		targetType: text("target_type").notNull(), // 'slot' | 'meeting' | 'member'
+		targetId: text("target_id"),
+		detail: jsonb("detail"), // { before?, after?, ... }
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+	},
+	(t) => [index("activity_log_club_created_idx").on(t.clubId, t.createdAt)],
+);
 
 // ---------------------------------------------------------------------------
 // Notifications — table only; sending logic is out of scope for the MVP.
