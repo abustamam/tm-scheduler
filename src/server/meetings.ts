@@ -89,6 +89,7 @@ async function loadMeetingDetail(
 			evaluatesSlotId: roleSlots.evaluatesSlotId,
 			roleName: roleDefinitions.name,
 			category: roleDefinitions.category,
+			description: roleDefinitions.description,
 			sortOrder: roleDefinitions.sortOrder,
 			isSpeakerRole: roleDefinitions.isSpeakerRole,
 			assigneeId: assignee.id,
