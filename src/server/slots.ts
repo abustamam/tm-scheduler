@@ -110,6 +110,7 @@ export const releaseSlot = createServerFn({ method: "POST" })
 		const [slot] = await db
 			.select({
 				id: roleSlots.id,
+				assignedMemberId: roleSlots.assignedMemberId,
 				clubId: meetings.clubId,
 			})
 			.from(roleSlots)
@@ -139,6 +140,7 @@ export const releaseSlot = createServerFn({ method: "POST" })
 				action: "release",
 				targetType: "slot",
 				targetId: data.slotId,
+				detail: { fromMemberId: slot.assignedMemberId },
 			});
 
 			return { ok: true as const };
@@ -309,7 +311,7 @@ export const reassignSlot = createServerFn({ method: "POST" })
 				action: "reassign",
 				targetType: "slot",
 				targetId: data.slotId,
-				detail: { memberId: data.memberId },
+				detail: { fromMemberId: slot.assignedMemberId, memberId: data.memberId },
 			});
 
 			return { ok: true as const };
