@@ -5,6 +5,7 @@ import {
 	clubMemberships,
 	clubs,
 	meetings,
+	members,
 	roleDefinitions,
 	roleSlots,
 	speakerDetails,
@@ -23,6 +24,7 @@ type RoleSeed = {
 	defaultCount: number;
 	sortOrder: number;
 	isSpeakerRole: boolean;
+	description: string;
 };
 
 const ROLE_TEMPLATE: RoleSeed[] = [
@@ -32,6 +34,8 @@ const ROLE_TEMPLATE: RoleSeed[] = [
 		defaultCount: 1,
 		sortOrder: 10,
 		isSpeakerRole: false,
+		description:
+			"Hosts the meeting: sets the theme, introduces each speaker and segment, and keeps energy and timing on track. Prep: review the agenda beforehand.",
 	},
 	{
 		name: "Table Topics Master",
@@ -39,6 +43,8 @@ const ROLE_TEMPLATE: RoleSeed[] = [
 		defaultCount: 1,
 		sortOrder: 20,
 		isSpeakerRole: false,
+		description:
+			"Leads the impromptu speaking segment by preparing 8–10 questions or scenarios and calling on members or guests to respond on the spot.",
 	},
 	{
 		name: "Speaker",
@@ -46,6 +52,8 @@ const ROLE_TEMPLATE: RoleSeed[] = [
 		defaultCount: 3,
 		sortOrder: 30,
 		isSpeakerRole: true,
+		description:
+			"Delivers a prepared speech from your Pathways project; coordinate with your evaluator on the project objectives and time target before the meeting.",
 	},
 	{
 		name: "Evaluator",
@@ -53,6 +61,8 @@ const ROLE_TEMPLATE: RoleSeed[] = [
 		defaultCount: 3,
 		sortOrder: 40,
 		isSpeakerRole: false,
+		description:
+			"Provides structured written and verbal feedback on your assigned speaker's delivery, language, and achievement of their project goals.",
 	},
 	{
 		name: "General Evaluator",
@@ -60,6 +70,8 @@ const ROLE_TEMPLATE: RoleSeed[] = [
 		defaultCount: 1,
 		sortOrder: 50,
 		isSpeakerRole: false,
+		description:
+			"Oversees meeting quality by evaluating all roles (except speakers) and summarizing feedback from the Timer, Ah-Counter, and Grammarian.",
 	},
 	{
 		name: "Timer",
@@ -67,6 +79,8 @@ const ROLE_TEMPLATE: RoleSeed[] = [
 		defaultCount: 1,
 		sortOrder: 60,
 		isSpeakerRole: false,
+		description:
+			"Tracks and displays time signals for every speaker and evaluator, then reports any overtime violations to the General Evaluator at the end of the meeting.",
 	},
 	{
 		name: "Ah-Counter",
@@ -74,6 +88,8 @@ const ROLE_TEMPLATE: RoleSeed[] = [
 		defaultCount: 1,
 		sortOrder: 70,
 		isSpeakerRole: false,
+		description:
+			"Tallies filler words (um, ah, so, you know, like) for each speaker during the meeting and reports the counts in the evaluation segment.",
 	},
 	{
 		name: "Grammarian",
@@ -81,6 +97,8 @@ const ROLE_TEMPLATE: RoleSeed[] = [
 		defaultCount: 1,
 		sortOrder: 80,
 		isSpeakerRole: false,
+		description:
+			"Introduces a Word of the Day, monitors language use throughout the meeting, and commends creative phrasing while noting grammatical slips in the evaluation segment.",
 	},
 ];
 
@@ -129,6 +147,26 @@ async function main() {
 		{ userId: alexId, clubId: club.id, clubRole: "member" },
 		{ userId: samId, clubId: club.id, clubRole: "member" },
 	]);
+
+	// Seed a roster of members (idempotent — guard with count check).
+	const existingMembers = await db
+		.select({ id: members.id })
+		.from(members)
+		.where(eq(members.clubId, club.id));
+	if (existingMembers.length === 0) {
+		await db.insert(members).values([
+			{
+				clubId: club.id,
+				name: "Rasheed Bustamam",
+				email: ADMIN_EMAIL,
+				office: "VP Education",
+				userId: adminId,
+			},
+			{ clubId: club.id, name: "Alex Rivera", email: "alex@example.com" },
+			{ clubId: club.id, name: "Sam Chen", email: "sam@example.com" },
+			{ clubId: club.id, name: "Jordan Patel", email: "jordan@example.com" },
+		]);
+	}
 
 	const defs = await db
 		.insert(roleDefinitions)
