@@ -143,6 +143,8 @@ export const roleDefinitions = pgTable(
 		defaultCount: integer("default_count").notNull().default(1),
 		sortOrder: integer("sort_order").notNull().default(0),
 		isSpeakerRole: boolean("is_speaker_role").notNull().default(false),
+		// Human-readable responsibilities, shown before claiming + on the shared link.
+		description: text("description"),
 	},
 	(t) => [index("role_definitions_club_idx").on(t.clubId)],
 );
