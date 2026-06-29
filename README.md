@@ -44,12 +44,26 @@ bun run db:seed
 bun run dev          # http://localhost:3000
 ```
 
-### Signing in (dev)
+### Signing in
 
-Auth is **magic-link only**. There's no email provider wired in development — when you
-request a sign-in link, the URL is **printed to the server console**. Copy it from the
-terminal running `bun run dev` and open it. (Wiring a real provider for production is a
-tracked pre-launch task; see `docs/adr/0004-magic-link-auth.md`.)
+Auth is **magic-link only** (ADR-0004).
+
+**In development**, no email provider is configured — when you request a sign-in
+link the URL is **printed to the server console**. Copy it from the terminal
+running `bun run dev` and open it.
+
+**In production**, magic links are delivered by **Resend**. Set these env vars
+(in the Railway dashboard, per ADR-0007):
+
+| Var | Purpose |
+| --- | --- |
+| `RESEND_API_KEY` | Resend API key. Its presence switches on real sending. |
+| `EMAIL_FROM` | Sender identity. Defaults to `GavelUp <noreply@gavelup.app>`. |
+
+The sending domain (`gavelup.app`) must be verified in Resend (SPF/DKIM DNS
+records) before delivery works. Before the domain is verified you can smoke-test
+by setting `EMAIL_FROM="onboarding@resend.dev"` (Resend then only delivers to
+your own account email).
 
 ## Scripts
 

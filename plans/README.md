@@ -46,6 +46,7 @@ exit 0, `bun run test` → 15 passed | 13 skipped (no DB) / **28 passed with a D
 | 008 | Spike: VP Education dashboard | P3 | M | — | [#8](https://github.com/abustamam/tm-scheduler/issues/8) (+[#9](https://github.com/abustamam/tm-scheduler/issues/9)) | DONE — `docs/design/vpe-dashboard.md` (PR #23) |
 | 010 | Spike: reminders / notifications | P3 | M | — | [#7](https://github.com/abustamam/tm-scheduler/issues/7) | DONE — `docs/design/reminders.md` (PR #23) |
 | 012 | Migrate hosting to Railway (push-to-deploy) | P2 | M | — | [#11](https://github.com/abustamam/tm-scheduler/issues/11) | TODO — runbook ready; ADR-0007 supersedes 0003 |
+| 013 | Wire real email delivery (magic-link via Resend) | P1 | M | — | [#1](https://github.com/abustamam/tm-scheduler/issues/1) | DONE — on branch feat/magic-link-email |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | REJECTED (one-line rationale)
 
