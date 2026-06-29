@@ -4,11 +4,16 @@ import {
 	Outlet,
 	redirect,
 	useRouter,
+	useRouterState,
 } from "@tanstack/react-router";
-import { CalendarDays, ClipboardList, LogOut, PlusCircle } from "lucide-react";
+import { BookOpen, CalendarDays, LayoutGrid, List, LogOut } from "lucide-react";
+import type { ComponentType } from "react";
+import { MemberAvatar } from "#/components/club/member-avatar";
+import { ThemeToggle } from "#/components/club/theme-toggle";
+import { Input } from "#/components/ui/input";
 import { Toaster } from "#/components/ui/sonner";
 import { authClient } from "#/lib/auth-client";
-import { cn } from "#/lib/utils";
+import { initialsOf } from "#/lib/avatar";
 import { getAuthContext } from "#/server/auth-context";
 
 export const Route = createFileRoute("/_authed")({
@@ -22,15 +27,39 @@ export const Route = createFileRoute("/_authed")({
 		}
 		return { authUser: ctx.user, clubs: ctx.clubs };
 	},
-	component: AuthedLayout,
+	component: WorkspaceLayout,
 });
 
-function AuthedLayout() {
+const CLUB_ROLE_LABELS: Record<string, string> = {
+	admin: "Officer",
+	vpe: "VP Education",
+	president: "President",
+	member: "Member",
+};
+
+function crumbFor(pathname: string): string {
+	if (pathname === "/") return "Manage · Roster";
+	if (pathname.startsWith("/agenda")) return "Manage · Agenda & roles";
+	if (pathname.startsWith("/dashboard")) return "Me · My dashboard";
+	if (pathname.startsWith("/resources")) return "Me · Resources";
+	if (pathname.startsWith("/members")) return "Roster · Member profile";
+	if (pathname.startsWith("/me")) return "Me · My roles";
+	if (pathname.startsWith("/meetings")) return "Manage · Meeting";
+	if (pathname.startsWith("/admin")) return "Manage · Admin";
+	return "Workspace";
+}
+
+function WorkspaceLayout() {
 	const { authUser, clubs } = Route.useRouteContext();
 	const router = useRouter();
-	const isAdmin = clubs.some(
-		(c) => c.clubRole === "admin" || c.clubRole === "vpe",
-	);
+	const pathname = useRouterState({ select: (s) => s.location.pathname });
+
+	const clubName = clubs[0]?.name ?? "Toastmasters";
+	const roleLabel = clubs[0]?.clubRole
+		? (CLUB_ROLE_LABELS[clubs[0].clubRole] ?? "Member")
+		: "Member";
+	const displayName = authUser.name || authUser.email;
+	const initials = initialsOf(displayName);
 
 	async function handleSignOut() {
 		await authClient.signOut();
@@ -38,74 +67,160 @@ function AuthedLayout() {
 	}
 
 	return (
-		<div className="flex min-h-svh flex-col bg-background">
-			<header className="sticky top-0 z-10 flex items-center justify-between border-b bg-background/95 px-4 py-3 backdrop-blur">
-				<div className="min-w-0">
-					<p className="text-xs text-muted-foreground">
-						{clubs[0]?.name ?? "Toastmasters"}
-					</p>
-					<p className="truncate text-sm font-medium">
-						{authUser.name || authUser.email}
-					</p>
+		<div className="flex min-h-svh w-full font-sans text-[var(--sea-ink)]">
+			<aside className="sticky top-0 flex h-svh w-[248px] shrink-0 flex-col gap-1.5 border-r border-[var(--line)] bg-[linear-gradient(180deg,var(--surface-strong),var(--surface))] px-3.5 py-[18px] backdrop-blur-[6px]">
+				{/* Brand */}
+				<div className="flex items-center gap-[11px] px-2 pt-1.5 pb-4">
+					<span className="flex size-[38px] shrink-0 items-center justify-center rounded-[11px] bg-[linear-gradient(150deg,var(--lagoon),var(--lagoon-deep))] shadow-[0_4px_12px_rgba(50,143,151,.35),0_1px_0_rgba(255,255,255,.4)_inset]">
+						<GavelGlyph />
+					</span>
+					<div className="leading-[1.05]">
+						<div className="font-display text-[19px] font-semibold tracking-[-0.01em]">
+							GavelUp
+						</div>
+						<div className="mt-0.5 truncate text-[11px] font-semibold tracking-[0.04em] text-[var(--sea-ink-soft)] uppercase">
+							{clubName} · Club 1492
+						</div>
+					</div>
 				</div>
-				<button
-					type="button"
-					onClick={handleSignOut}
-					className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:text-foreground"
-				>
-					<LogOut className="size-4" aria-hidden />
-					<span>Sign out</span>
-				</button>
-			</header>
 
-			<main className="mx-auto w-full max-w-2xl flex-1 px-4 pb-24 pt-4">
-				<Outlet />
+				<NavGroup label="Manage">
+					<NavItem to="/" exact icon={List} label="Roster" />
+					<NavItem to="/agenda" icon={CalendarDays} label="Agenda & roles" />
+				</NavGroup>
+
+				<NavGroup label="Me">
+					<NavItem to="/dashboard" icon={LayoutGrid} label="My dashboard" />
+					<NavItem to="/resources" icon={BookOpen} label="Resources" />
+				</NavGroup>
+
+				{/* Footer mini-profile */}
+				<div className="mt-auto flex items-center gap-2.5 rounded-xl border border-[var(--line)] bg-[var(--foam)] p-2.5">
+					<MemberAvatar tone="palm" initials={initials} size={34} />
+					<div className="min-w-0 leading-tight">
+						<div className="truncate text-[13px] font-bold">{displayName}</div>
+						<div className="text-[11px] text-[var(--sea-ink-soft)]">
+							{roleLabel}
+						</div>
+					</div>
+					<button
+						type="button"
+						onClick={handleSignOut}
+						title="Sign out"
+						className="ml-auto flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--sea-ink-soft)] transition-colors hover:bg-[var(--surface-strong)] hover:text-[var(--sea-ink)]"
+					>
+						<LogOut className="size-4" aria-hidden />
+						<span className="sr-only">Sign out</span>
+					</button>
+				</div>
+			</aside>
+
+			<main className="flex min-w-0 flex-1 flex-col">
+				<header className="sticky top-0 z-10 flex items-center gap-3.5 border-b border-[var(--line)] bg-[var(--surface)] px-7 py-4 backdrop-blur-[6px]">
+					<div className="text-[12.5px] font-semibold tracking-[0.01em] text-[var(--sea-ink-soft)]">
+						{crumbFor(pathname)}
+					</div>
+					<div className="flex-1" />
+					<div className="w-[248px] max-w-[34vw]">
+						<Input
+							type="search"
+							placeholder="Search members, roles…"
+							className="h-9 rounded-[10px] border-[var(--line)] bg-[var(--surface-strong)]"
+						/>
+					</div>
+					<ThemeToggle />
+					<MemberAvatar tone="palm" initials={initials} size={36} />
+				</header>
+
+				<section className="min-w-0 flex-1 overflow-x-hidden">
+					<Outlet />
+				</section>
 			</main>
-
-			<nav
-				aria-label="Primary"
-				className="fixed inset-x-0 bottom-0 z-10 border-t bg-background/95 backdrop-blur"
-			>
-				<div className="mx-auto flex max-w-2xl items-stretch justify-around">
-					<NavTab to="/" label="Schedule" icon={CalendarDays} />
-					<NavTab to="/me" label="My roles" icon={ClipboardList} />
-					{isAdmin ? (
-						<NavTab to="/admin/meetings/new" label="New" icon={PlusCircle} />
-					) : null}
-				</div>
-			</nav>
 			<Toaster position="top-center" />
 		</div>
 	);
 }
 
-function NavTab({
+function NavGroup({
+	label,
+	children,
+}: {
+	label: string;
+	children: React.ReactNode;
+}) {
+	return (
+		<>
+			<div className="px-2.5 pt-3.5 pb-0.5 text-[10.5px] font-extrabold tracking-[0.12em] text-[var(--sea-ink-soft)] uppercase opacity-70 first:pt-1">
+				{label}
+			</div>
+			{children}
+		</>
+	);
+}
+
+function NavItem({
 	to,
 	label,
 	icon: Icon,
+	exact = false,
 }: {
 	to: string;
 	label: string;
-	icon: typeof CalendarDays;
+	icon: ComponentType<{ className?: string }>;
+	exact?: boolean;
 }) {
 	return (
 		<Link
 			to={to}
-			activeOptions={{ exact: to === "/" }}
-			className="flex flex-1 flex-col items-center gap-1 py-2.5 text-xs text-muted-foreground"
-			activeProps={{ "data-active": "true" }}
+			activeOptions={{ exact }}
+			className="flex w-full items-center gap-[11px] rounded-[10px] px-3 py-[9px] text-left text-[13.5px] tracking-[0.01em] transition-colors"
+			activeProps={{
+				className:
+					"bg-[var(--sand)] font-bold text-[var(--sea-ink)] [&_svg]:opacity-100",
+			}}
+			inactiveProps={{
+				className:
+					"font-medium text-[var(--sea-ink-soft)] hover:bg-[var(--foam)] [&_svg]:opacity-70",
+			}}
 		>
-			{({ isActive }) => (
-				<span
-					className={cn(
-						"flex flex-col items-center gap-1",
-						isActive && "text-primary",
-					)}
-				>
-					<Icon className="size-5" aria-hidden />
-					<span className="font-medium">{label}</span>
-				</span>
-			)}
+			<Icon className="size-[17px]" />
+			{label}
 		</Link>
+	);
+}
+
+function GavelGlyph() {
+	return (
+		<svg
+			width="20"
+			height="20"
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke="#fff"
+			strokeWidth="2.1"
+			strokeLinecap="round"
+			strokeLinejoin="round"
+			aria-hidden
+		>
+			<title>GavelUp</title>
+			<path d="M3 21h9" />
+			<path d="m13.5 6.5-7 7" />
+			<rect
+				x="11.5"
+				y="2.6"
+				width="6"
+				height="3.4"
+				rx="1.2"
+				transform="rotate(45 14.5 4.3)"
+			/>
+			<rect
+				x="16.2"
+				y="7.3"
+				width="6"
+				height="3.4"
+				rx="1.2"
+				transform="rotate(45 19.2 9)"
+			/>
+		</svg>
 	);
 }

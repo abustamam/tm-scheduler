@@ -13,8 +13,13 @@ import { Route as SigninRouteImport } from './routes/signin'
 import { Route as AuthedRouteImport } from './routes/_authed'
 import { Route as AuthedIndexRouteImport } from './routes/_authed/index'
 import { Route as ApiHealthRouteImport } from './routes/api/health'
+import { Route as AuthedScheduleRouteImport } from './routes/_authed/schedule'
+import { Route as AuthedResourcesRouteImport } from './routes/_authed/resources'
 import { Route as AuthedMeRouteImport } from './routes/_authed/me'
+import { Route as AuthedDashboardRouteImport } from './routes/_authed/dashboard'
+import { Route as AuthedAgendaRouteImport } from './routes/_authed/agenda'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
+import { Route as AuthedMembersIdRouteImport } from './routes/_authed/members.$id'
 import { Route as AuthedMeetingsIdRouteImport } from './routes/_authed/meetings.$id'
 import { Route as AuthedAdminMeetingsNewRouteImport } from './routes/_authed/admin/meetings.new'
 
@@ -37,15 +42,40 @@ const ApiHealthRoute = ApiHealthRouteImport.update({
   path: '/api/health',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AuthedScheduleRoute = AuthedScheduleRouteImport.update({
+  id: '/schedule',
+  path: '/schedule',
+  getParentRoute: () => AuthedRoute,
+} as any)
+const AuthedResourcesRoute = AuthedResourcesRouteImport.update({
+  id: '/resources',
+  path: '/resources',
+  getParentRoute: () => AuthedRoute,
+} as any)
 const AuthedMeRoute = AuthedMeRouteImport.update({
   id: '/me',
   path: '/me',
+  getParentRoute: () => AuthedRoute,
+} as any)
+const AuthedDashboardRoute = AuthedDashboardRouteImport.update({
+  id: '/dashboard',
+  path: '/dashboard',
+  getParentRoute: () => AuthedRoute,
+} as any)
+const AuthedAgendaRoute = AuthedAgendaRouteImport.update({
+  id: '/agenda',
+  path: '/agenda',
   getParentRoute: () => AuthedRoute,
 } as any)
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   id: '/api/auth/$',
   path: '/api/auth/$',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AuthedMembersIdRoute = AuthedMembersIdRouteImport.update({
+  id: '/members/$id',
+  path: '/members/$id',
+  getParentRoute: () => AuthedRoute,
 } as any)
 const AuthedMeetingsIdRoute = AuthedMeetingsIdRouteImport.update({
   id: '/meetings/$id',
@@ -61,18 +91,28 @@ const AuthedAdminMeetingsNewRoute = AuthedAdminMeetingsNewRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof AuthedIndexRoute
   '/signin': typeof SigninRoute
+  '/agenda': typeof AuthedAgendaRoute
+  '/dashboard': typeof AuthedDashboardRoute
   '/me': typeof AuthedMeRoute
+  '/resources': typeof AuthedResourcesRoute
+  '/schedule': typeof AuthedScheduleRoute
   '/api/health': typeof ApiHealthRoute
   '/meetings/$id': typeof AuthedMeetingsIdRoute
+  '/members/$id': typeof AuthedMembersIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/admin/meetings/new': typeof AuthedAdminMeetingsNewRoute
 }
 export interface FileRoutesByTo {
   '/signin': typeof SigninRoute
+  '/agenda': typeof AuthedAgendaRoute
+  '/dashboard': typeof AuthedDashboardRoute
   '/me': typeof AuthedMeRoute
+  '/resources': typeof AuthedResourcesRoute
+  '/schedule': typeof AuthedScheduleRoute
   '/api/health': typeof ApiHealthRoute
   '/': typeof AuthedIndexRoute
   '/meetings/$id': typeof AuthedMeetingsIdRoute
+  '/members/$id': typeof AuthedMembersIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/admin/meetings/new': typeof AuthedAdminMeetingsNewRoute
 }
@@ -80,10 +120,15 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_authed': typeof AuthedRouteWithChildren
   '/signin': typeof SigninRoute
+  '/_authed/agenda': typeof AuthedAgendaRoute
+  '/_authed/dashboard': typeof AuthedDashboardRoute
   '/_authed/me': typeof AuthedMeRoute
+  '/_authed/resources': typeof AuthedResourcesRoute
+  '/_authed/schedule': typeof AuthedScheduleRoute
   '/api/health': typeof ApiHealthRoute
   '/_authed/': typeof AuthedIndexRoute
   '/_authed/meetings/$id': typeof AuthedMeetingsIdRoute
+  '/_authed/members/$id': typeof AuthedMembersIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/_authed/admin/meetings/new': typeof AuthedAdminMeetingsNewRoute
 }
@@ -92,28 +137,43 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/signin'
+    | '/agenda'
+    | '/dashboard'
     | '/me'
+    | '/resources'
+    | '/schedule'
     | '/api/health'
     | '/meetings/$id'
+    | '/members/$id'
     | '/api/auth/$'
     | '/admin/meetings/new'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/signin'
+    | '/agenda'
+    | '/dashboard'
     | '/me'
+    | '/resources'
+    | '/schedule'
     | '/api/health'
     | '/'
     | '/meetings/$id'
+    | '/members/$id'
     | '/api/auth/$'
     | '/admin/meetings/new'
   id:
     | '__root__'
     | '/_authed'
     | '/signin'
+    | '/_authed/agenda'
+    | '/_authed/dashboard'
     | '/_authed/me'
+    | '/_authed/resources'
+    | '/_authed/schedule'
     | '/api/health'
     | '/_authed/'
     | '/_authed/meetings/$id'
+    | '/_authed/members/$id'
     | '/api/auth/$'
     | '/_authed/admin/meetings/new'
   fileRoutesById: FileRoutesById
@@ -155,11 +215,39 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiHealthRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_authed/schedule': {
+      id: '/_authed/schedule'
+      path: '/schedule'
+      fullPath: '/schedule'
+      preLoaderRoute: typeof AuthedScheduleRouteImport
+      parentRoute: typeof AuthedRoute
+    }
+    '/_authed/resources': {
+      id: '/_authed/resources'
+      path: '/resources'
+      fullPath: '/resources'
+      preLoaderRoute: typeof AuthedResourcesRouteImport
+      parentRoute: typeof AuthedRoute
+    }
     '/_authed/me': {
       id: '/_authed/me'
       path: '/me'
       fullPath: '/me'
       preLoaderRoute: typeof AuthedMeRouteImport
+      parentRoute: typeof AuthedRoute
+    }
+    '/_authed/dashboard': {
+      id: '/_authed/dashboard'
+      path: '/dashboard'
+      fullPath: '/dashboard'
+      preLoaderRoute: typeof AuthedDashboardRouteImport
+      parentRoute: typeof AuthedRoute
+    }
+    '/_authed/agenda': {
+      id: '/_authed/agenda'
+      path: '/agenda'
+      fullPath: '/agenda'
+      preLoaderRoute: typeof AuthedAgendaRouteImport
       parentRoute: typeof AuthedRoute
     }
     '/api/auth/$': {
@@ -168,6 +256,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/api/auth/$'
       preLoaderRoute: typeof ApiAuthSplatRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/_authed/members/$id': {
+      id: '/_authed/members/$id'
+      path: '/members/$id'
+      fullPath: '/members/$id'
+      preLoaderRoute: typeof AuthedMembersIdRouteImport
+      parentRoute: typeof AuthedRoute
     }
     '/_authed/meetings/$id': {
       id: '/_authed/meetings/$id'
@@ -187,16 +282,26 @@ declare module '@tanstack/react-router' {
 }
 
 interface AuthedRouteChildren {
+  AuthedAgendaRoute: typeof AuthedAgendaRoute
+  AuthedDashboardRoute: typeof AuthedDashboardRoute
   AuthedMeRoute: typeof AuthedMeRoute
+  AuthedResourcesRoute: typeof AuthedResourcesRoute
+  AuthedScheduleRoute: typeof AuthedScheduleRoute
   AuthedIndexRoute: typeof AuthedIndexRoute
   AuthedMeetingsIdRoute: typeof AuthedMeetingsIdRoute
+  AuthedMembersIdRoute: typeof AuthedMembersIdRoute
   AuthedAdminMeetingsNewRoute: typeof AuthedAdminMeetingsNewRoute
 }
 
 const AuthedRouteChildren: AuthedRouteChildren = {
+  AuthedAgendaRoute: AuthedAgendaRoute,
+  AuthedDashboardRoute: AuthedDashboardRoute,
   AuthedMeRoute: AuthedMeRoute,
+  AuthedResourcesRoute: AuthedResourcesRoute,
+  AuthedScheduleRoute: AuthedScheduleRoute,
   AuthedIndexRoute: AuthedIndexRoute,
   AuthedMeetingsIdRoute: AuthedMeetingsIdRoute,
+  AuthedMembersIdRoute: AuthedMembersIdRoute,
   AuthedAdminMeetingsNewRoute: AuthedAdminMeetingsNewRoute,
 }
 

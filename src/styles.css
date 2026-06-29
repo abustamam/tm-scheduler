@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Manrope:wght@400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Manrope:wght@400;500;600;700;800&display=swap');
 @import 'tailwindcss';
 @plugin '@tailwindcss/typography';
 
@@ -18,6 +18,10 @@
   --surface-strong: rgba(255, 255, 255, 0.9);
   --line: rgba(23, 58, 64, 0.14);
   --inset-glint: rgba(255, 255, 255, 0.82);
+  /* Attention / warning accent — "behind on goals" + open role slots. */
+  --warning: #d99a2e;
+  --warning-foreground: #a8761a;
+  --warning-strong: #c2851a;
   --kicker: rgba(47, 106, 74, 0.9);
   --bg-base: #e7f3ec;
   --header-bg: rgba(251, 255, 248, 0.84);
@@ -74,6 +78,9 @@
   --surface-strong: rgba(15, 27, 31, 0.92);
   --line: rgba(141, 229, 219, 0.18);
   --inset-glint: rgba(194, 247, 238, 0.14);
+  --warning: #e0b357;
+  --warning-foreground: #e6c98a;
+  --warning-strong: #e0b357;
   --kicker: #b8efe5;
   --bg-base: #0a1418;
   --header-bg: rgba(10, 20, 24, 0.8);
@@ -119,6 +126,9 @@
 
 @theme inline {
   --font-sans: 'Manrope', ui-sans-serif, system-ui, sans-serif;
+  --font-display: 'Fraunces', Georgia, serif;
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);

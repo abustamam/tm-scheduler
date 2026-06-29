@@ -24,7 +24,7 @@ export const Route = createRootRouteWithContext<MyRouterContext>()({
 				content: "width=device-width, initial-scale=1",
 			},
 			{
-				title: "Toastmasters Scheduler",
+				title: "GavelUp",
 			},
 		],
 		links: [
@@ -41,6 +41,13 @@ function RootDocument({ children }: { children: React.ReactNode }) {
 	return (
 		<html lang="en">
 			<head>
+				{/* Apply the saved theme before paint to avoid a flash of the wrong mode. */}
+				<script
+					// biome-ignore lint/security/noDangerouslySetInnerHtml: tiny, static, no user input
+					dangerouslySetInnerHTML={{
+						__html: `(function(){try{var t=localStorage.getItem('gavelup-theme');var d=t?t==='dark':window.matchMedia('(prefers-color-scheme: dark)').matches;if(d)document.documentElement.classList.add('dark');}catch(e){}})();`,
+					}}
+				/>
 				<HeadContent />
 			</head>
 			<body>
