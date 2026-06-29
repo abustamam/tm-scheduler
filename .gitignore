@@ -13,3 +13,11 @@ __unconfig*
 todos.json
 .gstack/
 .claude/
+
+# design-sync (claude.ai/design) build artifacts — durable inputs live in .design-sync/ and ARE committed
+.ds-sync/
+ds-bundle/
+.design-sync/.cache/
+.design-sync/learnings/
+.design-sync/node_modules
+.design-sync/compiled-styles.css
