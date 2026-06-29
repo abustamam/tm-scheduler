@@ -110,7 +110,6 @@ export const releaseSlot = createServerFn({ method: "POST" })
 		const [slot] = await db
 			.select({
 				id: roleSlots.id,
-				assignedMemberId: roleSlots.assignedMemberId,
 				clubId: meetings.clubId,
 			})
 			.from(roleSlots)
@@ -123,12 +122,9 @@ export const releaseSlot = createServerFn({ method: "POST" })
 		}
 
 		// Trust guard: actorMemberId must be a roster member of this club.
+		// Sheet-parity model — any club member may release/clear any slot; the
+		// activity log records who did it (mirrors reassignSlot).
 		await requireMemberInClub(data.actorMemberId, slot.clubId);
-
-		const isAssignee = slot.assignedMemberId === data.actorMemberId;
-		if (!isAssignee) {
-			throw new Error("You can only release a role you've claimed.");
-		}
 
 		return db.transaction(async (tx) => {
 			await tx.delete(speakerDetails).where(eq(speakerDetails.slotId, slot.id));

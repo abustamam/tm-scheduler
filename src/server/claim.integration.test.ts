@@ -326,22 +326,16 @@ describe.skipIf(!hasTestDb)("claim + guards integration", () => {
 			});
 		}
 
-		/** Mirror of releaseSlot without requireUser; only assignee check + requireMemberInClub. */
+		/** Mirror of releaseSlot without requireUser; only requireMemberInClub
+		 *  (sheet-parity — any club member may release/clear any slot). */
 		async function releaseSlotPublic(slotId: string, actorMemberId: string) {
 			const [slot] = await testDb
-				.select({
-					id: roleSlots.id,
-					assignedMemberId: roleSlots.assignedMemberId,
-				})
+				.select({ id: roleSlots.id })
 				.from(roleSlots)
 				.where(eq(roleSlots.id, slotId))
 				.limit(1);
 
 			if (!slot) throw new Error("Role not found.");
-
-			const isAssignee = slot.assignedMemberId === actorMemberId;
-			if (!isAssignee)
-				throw new Error("You can only release a role you've claimed.");
 
 			const [member] = await testDb
 				.select({ clubId: members.clubId })
@@ -461,7 +455,7 @@ describe.skipIf(!hasTestDb)("claim + guards integration", () => {
 			).rejects.toThrow("Member not found in this club.");
 		});
 
-		it("releaseSlot works without a session (assignee releases their own slot)", async () => {
+		it("releaseSlot works without a session (member releases the slot they hold)", async () => {
 			// First claim it
 			await claimSlotTx(seed.slotId, seed.memberId);
 
@@ -481,11 +475,11 @@ describe.skipIf(!hasTestDb)("claim + guards integration", () => {
 			expect(row?.assignedMemberId).toBeNull();
 		});
 
-		it("releaseSlot rejects when actorMemberId is not the assignee", async () => {
-			// Claim with seed.memberId; try to release with a different memberId
+		it("releaseSlot is sheet-parity: a non-assignee club member can release a claimed slot, and the actor is logged", async () => {
+			// seed.memberId claims the slot
 			await claimSlotTx(seed.slotId, seed.memberId);
 
-			// Insert a second roster member in the same club
+			// A DIFFERENT club member releases it (trust-based, no assignee check)
 			const [otherMember] = await testDb
 				.insert(members)
 				.values({ clubId: seed.clubId, name: "Other Member" })
@@ -493,9 +487,33 @@ describe.skipIf(!hasTestDb)("claim + guards integration", () => {
 
 			if (!otherMember) throw new Error("Failed to insert other member");
 
-			await expect(
-				releaseSlotPublic(seed.slotId, otherMember.id),
-			).rejects.toThrow("You can only release a role you've claimed.");
+			const result = await releaseSlotPublic(seed.slotId, otherMember.id);
+			expect(result).toEqual({ ok: true });
+
+			// Slot reset to open
+			const [row] = await testDb
+				.select({
+					status: roleSlots.status,
+					assignedMemberId: roleSlots.assignedMemberId,
+				})
+				.from(roleSlots)
+				.where(eq(roleSlots.id, seed.slotId))
+				.limit(1);
+
+			expect(row?.status).toBe("open");
+			expect(row?.assignedMemberId).toBeNull();
+
+			// Activity log records who actually did the release (the non-assignee)
+			const log = await testDb
+				.select()
+				.from(activityLog)
+				.where(
+					and(
+						eq(activityLog.targetId, seed.slotId),
+						eq(activityLog.action, "release"),
+					),
+				);
+			expect(log.some((r) => r.actorMemberId === otherMember.id)).toBe(true);
 		});
 
 		it("reassignSlot works without a session (trust-based)", async () => {
