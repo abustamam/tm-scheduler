@@ -311,7 +311,10 @@ export const reassignSlot = createServerFn({ method: "POST" })
 				action: "reassign",
 				targetType: "slot",
 				targetId: data.slotId,
-				detail: { fromMemberId: slot.assignedMemberId, memberId: data.memberId },
+				detail: {
+					fromMemberId: slot.assignedMemberId,
+					memberId: data.memberId,
+				},
 			});
 
 			return { ok: true as const };
