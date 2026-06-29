@@ -16,7 +16,13 @@
  */
 import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { activityLog, clubMemberships, roleSlots } from "#/db/schema";
+import {
+	activityLog,
+	clubMemberships,
+	members,
+	roleSlots,
+	speakerDetails,
+} from "#/db/schema";
 import {
 	cleanup,
 	hasTestDb,
@@ -261,6 +267,263 @@ describe.skipIf(!hasTestDb)("claim + guards integration", () => {
 				seed.clubId,
 			);
 			expect(membership).toBeNull();
+		});
+	});
+
+	// -------------------------------------------------------------------------
+	// Phase B — de-authed write guards (no session required; trust-based)
+	// -------------------------------------------------------------------------
+
+	describe("de-authed slot writes (Phase B)", () => {
+		/** Mirror of claimSlot without requireUser/requireMembership; only requireMemberInClub. */
+		async function claimSlotPublic(
+			slotId: string,
+			memberId: string,
+			actorMemberId: string,
+		) {
+			const [slot] = await testDb
+				.select({ id: roleSlots.id, status: roleSlots.status })
+				.from(roleSlots)
+				.where(eq(roleSlots.id, slotId))
+				.limit(1);
+
+			if (!slot) throw new Error("Role not found.");
+
+			// Trust guard: memberId must belong to the club (verified via members table).
+			const [member] = await testDb
+				.select({ id: members.id, clubId: members.clubId })
+				.from(members)
+				.where(eq(members.id, memberId))
+				.limit(1);
+			if (!member) throw new Error("Member not found in this club.");
+
+			return testDb.transaction(async (tx) => {
+				const updated = await tx
+					.update(roleSlots)
+					.set({
+						assignedMemberId: memberId,
+						status: "claimed",
+						claimedAt: new Date(),
+					})
+					.where(and(eq(roleSlots.id, slotId), eq(roleSlots.status, "open")))
+					.returning({ id: roleSlots.id });
+
+				if (updated.length === 0)
+					throw new Error(
+						"Sorry — this role was just claimed by someone else.",
+					);
+
+				await tx.insert(activityLog).values({
+					clubId: member.clubId,
+					actorMemberId,
+					action: "claim",
+					targetType: "slot",
+					targetId: slotId,
+					detail: { memberId },
+				});
+
+				return { ok: true as const };
+			});
+		}
+
+		/** Mirror of releaseSlot without requireUser; only assignee check + requireMemberInClub. */
+		async function releaseSlotPublic(slotId: string, actorMemberId: string) {
+			const [slot] = await testDb
+				.select({
+					id: roleSlots.id,
+					assignedMemberId: roleSlots.assignedMemberId,
+				})
+				.from(roleSlots)
+				.where(eq(roleSlots.id, slotId))
+				.limit(1);
+
+			if (!slot) throw new Error("Role not found.");
+
+			const isAssignee = slot.assignedMemberId === actorMemberId;
+			if (!isAssignee)
+				throw new Error("You can only release a role you've claimed.");
+
+			const [member] = await testDb
+				.select({ clubId: members.clubId })
+				.from(members)
+				.where(eq(members.id, actorMemberId))
+				.limit(1);
+			if (!member) throw new Error("Member not found in this club.");
+
+			return testDb.transaction(async (tx) => {
+				await tx
+					.delete(speakerDetails)
+					.where(eq(speakerDetails.slotId, slot.id));
+				await tx
+					.update(roleSlots)
+					.set({ assignedMemberId: null, status: "open", claimedAt: null })
+					.where(eq(roleSlots.id, slot.id));
+
+				await tx.insert(activityLog).values({
+					clubId: member.clubId,
+					actorMemberId,
+					action: "release",
+					targetType: "slot",
+					targetId: slotId,
+				});
+
+				return { ok: true as const };
+			});
+		}
+
+		/** Mirror of reassignSlot without requireUser/requireClubRole; only requireMemberInClub. */
+		async function reassignSlotPublic(
+			slotId: string,
+			newMemberId: string,
+			actorMemberId: string,
+		) {
+			const [slot] = await testDb
+				.select({ id: roleSlots.id })
+				.from(roleSlots)
+				.where(eq(roleSlots.id, slotId))
+				.limit(1);
+
+			if (!slot) throw new Error("Role not found.");
+
+			const [actor] = await testDb
+				.select({ clubId: members.clubId })
+				.from(members)
+				.where(eq(members.id, actorMemberId))
+				.limit(1);
+			if (!actor) throw new Error("Actor member not found in this club.");
+
+			const [target] = await testDb
+				.select({ clubId: members.clubId })
+				.from(members)
+				.where(eq(members.id, newMemberId))
+				.limit(1);
+			if (!target) throw new Error("Target member not found in this club.");
+
+			return testDb.transaction(async (tx) => {
+				await tx
+					.update(roleSlots)
+					.set({ assignedMemberId: newMemberId })
+					.where(eq(roleSlots.id, slotId));
+
+				await tx.insert(activityLog).values({
+					clubId: actor.clubId,
+					actorMemberId,
+					action: "reassign",
+					targetType: "slot",
+					targetId: slotId,
+					detail: { memberId: newMemberId },
+				});
+
+				return { ok: true as const };
+			});
+		}
+
+		it("claimSlot works without a session (member-keyed, trust-based)", async () => {
+			const result = await claimSlotPublic(
+				seed.slotId,
+				seed.memberId,
+				seed.memberId,
+			);
+			expect(result).toEqual({ ok: true });
+
+			const [row] = await testDb
+				.select({
+					status: roleSlots.status,
+					assignedMemberId: roleSlots.assignedMemberId,
+				})
+				.from(roleSlots)
+				.where(eq(roleSlots.id, seed.slotId))
+				.limit(1);
+
+			expect(row?.status).toBe("claimed");
+			expect(row?.assignedMemberId).toBe(seed.memberId);
+
+			// Activity log row inserted
+			const log = await testDb
+				.select()
+				.from(activityLog)
+				.where(
+					and(
+						eq(activityLog.targetId, seed.slotId),
+						eq(activityLog.action, "claim"),
+					),
+				);
+			expect(log.length).toBeGreaterThan(0);
+		});
+
+		it("claimSlot trust guard rejects unknown memberId", async () => {
+			await expect(
+				claimSlotPublic(
+					seed.slotId,
+					"00000000-0000-0000-0000-000000000099",
+					"00000000-0000-0000-0000-000000000099",
+				),
+			).rejects.toThrow("Member not found in this club.");
+		});
+
+		it("releaseSlot works without a session (assignee releases their own slot)", async () => {
+			// First claim it
+			await claimSlotTx(seed.slotId, seed.memberId);
+
+			const result = await releaseSlotPublic(seed.slotId, seed.memberId);
+			expect(result).toEqual({ ok: true });
+
+			const [row] = await testDb
+				.select({
+					status: roleSlots.status,
+					assignedMemberId: roleSlots.assignedMemberId,
+				})
+				.from(roleSlots)
+				.where(eq(roleSlots.id, seed.slotId))
+				.limit(1);
+
+			expect(row?.status).toBe("open");
+			expect(row?.assignedMemberId).toBeNull();
+		});
+
+		it("releaseSlot rejects when actorMemberId is not the assignee", async () => {
+			// Claim with seed.memberId; try to release with a different memberId
+			await claimSlotTx(seed.slotId, seed.memberId);
+
+			// Insert a second roster member in the same club
+			const [otherMember] = await testDb
+				.insert(members)
+				.values({ clubId: seed.clubId, name: "Other Member" })
+				.returning({ id: members.id });
+
+			if (!otherMember) throw new Error("Failed to insert other member");
+
+			await expect(
+				releaseSlotPublic(seed.slotId, otherMember.id),
+			).rejects.toThrow("You can only release a role you've claimed.");
+		});
+
+		it("reassignSlot works without a session (trust-based)", async () => {
+			// Claim the slot first
+			await claimSlotTx(seed.slotId, seed.memberId);
+
+			// Insert a second roster member
+			const [other] = await testDb
+				.insert(members)
+				.values({ clubId: seed.clubId, name: "Other Member" })
+				.returning({ id: members.id });
+
+			if (!other) throw new Error("Failed to insert other member");
+
+			const result = await reassignSlotPublic(
+				seed.slotId,
+				other.id,
+				seed.memberId,
+			);
+			expect(result).toEqual({ ok: true });
+
+			const [row] = await testDb
+				.select({ assignedMemberId: roleSlots.assignedMemberId })
+				.from(roleSlots)
+				.where(eq(roleSlots.id, seed.slotId))
+				.limit(1);
+
+			expect(row?.assignedMemberId).toBe(other.id);
 		});
 	});
 });
