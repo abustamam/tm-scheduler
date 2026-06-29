@@ -15,13 +15,18 @@ export const Route = createFileRoute("/_authed/me")({
 
 function MyCommitments() {
 	const commitments = Route.useLoaderData();
+	const { currentMemberId } = Route.useRouteContext();
 	const router = useRouter();
 	const [busySlotId, setBusySlotId] = useState<string | null>(null);
 
 	async function doRelease(slotId: string) {
+		if (!currentMemberId) {
+			toast.error("Your account isn't linked to a club member yet.");
+			return;
+		}
 		setBusySlotId(slotId);
 		try {
-			await releaseSlot({ data: { slotId } });
+			await releaseSlot({ data: { slotId, actorMemberId: currentMemberId } });
 			toast.success("Role released.");
 			await router.invalidate();
 		} catch (err) {

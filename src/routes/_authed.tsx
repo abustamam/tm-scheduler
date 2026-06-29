@@ -25,7 +25,11 @@ export const Route = createFileRoute("/_authed")({
 				search: { redirect: location.href },
 			});
 		}
-		return { authUser: ctx.user, clubs: ctx.clubs };
+		return {
+			authUser: ctx.user,
+			clubs: ctx.clubs,
+			currentMemberId: ctx.currentMemberId,
+		};
 	},
 	component: WorkspaceLayout,
 });
