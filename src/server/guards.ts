@@ -1,7 +1,7 @@
 import { getRequest } from "@tanstack/react-start/server";
 import { and, eq } from "drizzle-orm";
 import { db } from "#/db";
-import { clubMemberships } from "#/db/schema";
+import { clubMemberships, members } from "#/db/schema";
 import { auth } from "#/lib/auth";
 
 // IMPORTANT: this module touches `db`/`pg` and must never be imported by a
@@ -62,4 +62,23 @@ export async function requireClubRole(
 		throw new Error("You don't have permission to do that.");
 	}
 	return membership;
+}
+
+/** Fetch a roster member by id (server-only, no auth check). */
+export async function getMember(memberId: string) {
+	const [member] = await db
+		.select()
+		.from(members)
+		.where(eq(members.id, memberId))
+		.limit(1);
+	return member ?? null;
+}
+
+/** Validate that a memberId exists and belongs to the given clubId. Throws otherwise. */
+export async function requireMemberInClub(memberId: string, clubId: string) {
+	const member = await getMember(memberId);
+	if (!member || member.clubId !== clubId) {
+		throw new Error("Member not found in this club.");
+	}
+	return member;
 }
