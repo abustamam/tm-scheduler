@@ -36,6 +36,15 @@ export function formatActivity(entry: ActivityEntry): FormattedActivity {
 		case "member_add":
 			summary = `added member "${entry.subjectName ?? "someone"}"`;
 			break;
+		case "member_edit":
+			summary = "updated a member's details";
+			break;
+		case "member_merge":
+			summary = "merged a duplicate member";
+			break;
+		case "member_remove":
+			summary = "removed a member";
+			break;
 		default:
 			summary = entry.action;
 	}
