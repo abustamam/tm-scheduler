@@ -1,4 +1,9 @@
-import { createFileRoute, useRouter } from "@tanstack/react-router";
+import {
+	createFileRoute,
+	Link,
+	notFound,
+	useRouter,
+} from "@tanstack/react-router";
 import { CalendarDays, Loader2, MapPin, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -32,9 +37,33 @@ import { getMeeting } from "#/server/meetings";
 import { claimSlot, reassignSlot, releaseSlot } from "#/server/slots";
 
 export const Route = createFileRoute("/club/$clubId/meeting/$meetingId")({
-	loader: ({ params }) => getMeeting({ data: params.meetingId }),
+	loader: async ({ params }) => {
+		const data = await getMeeting({ data: params.meetingId });
+		// Guard against a meetingId that belongs to a different club than the URL
+		// (e.g. a stale/mistyped link) rendering one club's agenda under another's.
+		if (data.meeting.clubId !== params.clubId) throw notFound();
+		return data;
+	},
 	component: MeetingView,
+	notFoundComponent: MeetingNotFound,
 });
+
+function MeetingNotFound() {
+	const { clubId } = Route.useParams();
+	return (
+		<div className="flex min-h-svh flex-col items-center justify-center gap-4 p-6 text-center">
+			<p className="font-semibold text-lg">Meeting not found</p>
+			<p className="text-muted-foreground text-sm">
+				This meeting doesn't exist for this club, or the link is out of date.
+			</p>
+			<Button asChild variant="outline">
+				<Link to="/club/$clubId" params={{ clubId }}>
+					Back to meetings
+				</Link>
+			</Button>
+		</div>
+	);
+}
 
 const CATEGORY_LABELS: Record<string, string> = {
 	leadership: "Leadership",
