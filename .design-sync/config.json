@@ -1,0 +1,38 @@
+{
+	"projectId": "324a58bf-e4a0-4b13-ad91-43ca07ceb72f",
+	"shape": "package",
+	"pkg": "tm-scheduler",
+	"globalName": "GavelUp",
+	"srcDir": "src/components/ui",
+	"tsconfig": "tsconfig.json",
+	"cssEntry": ".design-sync/compiled-styles.css",
+	"readmeHeader": ".design-sync/conventions.md",
+	"overrides": {
+		"Dialog": { "cardMode": "single", "viewport": "680x440" },
+		"Sheet": { "cardMode": "single", "viewport": "680x460" }
+	},
+	"componentSrcMap": {
+		"CardHeader": null,
+		"CardTitle": null,
+		"CardDescription": null,
+		"CardAction": null,
+		"CardContent": null,
+		"CardFooter": null,
+		"DialogClose": null,
+		"DialogContent": null,
+		"DialogDescription": null,
+		"DialogFooter": null,
+		"DialogHeader": null,
+		"DialogOverlay": null,
+		"DialogPortal": null,
+		"DialogTitle": null,
+		"DialogTrigger": null,
+		"SheetTrigger": null,
+		"SheetClose": null,
+		"SheetContent": null,
+		"SheetHeader": null,
+		"SheetFooter": null,
+		"SheetTitle": null,
+		"SheetDescription": null
+	}
+}
