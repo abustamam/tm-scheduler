@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { createFileRoute, useRouter } from "@tanstack/react-router";
+import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { CalendarDays, Loader2, Mic } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -100,8 +100,9 @@ function ClubHome() {
 												&ldquo;{c.speechTitle}&rdquo;
 											</p>
 										) : null}
-										<a
-											href={`/club/${clubId}/meeting/${c.meetingId}`}
+										<Link
+											to="/club/$clubId/meeting/$meetingId"
+											params={{ clubId, meetingId: c.meetingId }}
 											className="mt-1 flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
 										>
 											<CalendarDays className="size-4" aria-hidden />
@@ -110,7 +111,7 @@ function ClubHome() {
 											{c.theme ? (
 												<span className="truncate"> &middot; {c.theme}</span>
 											) : null}
-										</a>
+										</Link>
 									</div>
 									<div className="flex shrink-0 flex-col items-end gap-2">
 										<Badge
@@ -151,8 +152,9 @@ function ClubHome() {
 					<ul className="space-y-2">
 						{meetingsWithOpenings.map((m) => (
 							<li key={m.id}>
-								<a
-									href={`/club/${clubId}/meeting/${m.id}`}
+								<Link
+									to="/club/$clubId/meeting/$meetingId"
+									params={{ clubId, meetingId: m.id }}
 									className="flex items-center justify-between rounded-xl border bg-card p-4 shadow-sm hover:bg-accent transition-colors"
 								>
 									<div className="min-w-0">
@@ -168,7 +170,7 @@ function ClubHome() {
 									<Badge variant="secondary" className="ml-3 shrink-0">
 										{m.openSlots} open
 									</Badge>
-								</a>
+								</Link>
 							</li>
 						))}
 					</ul>
@@ -186,8 +188,9 @@ function ClubHome() {
 					<ul className="space-y-2">
 						{upcomingMeetings.map((m) => (
 							<li key={m.id}>
-								<a
-									href={`/club/${clubId}/meeting/${m.id}`}
+								<Link
+									to="/club/$clubId/meeting/$meetingId"
+									params={{ clubId, meetingId: m.id }}
 									className="flex items-center justify-between rounded-xl border bg-card p-4 shadow-sm hover:bg-accent transition-colors"
 								>
 									<div className="min-w-0">
@@ -203,7 +206,7 @@ function ClubHome() {
 									<span className="ml-3 shrink-0 text-sm text-muted-foreground">
 										{m.totalSlots - m.openSlots}/{m.totalSlots} filled
 									</span>
-								</a>
+								</Link>
 							</li>
 						))}
 					</ul>
