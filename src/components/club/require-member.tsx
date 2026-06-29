@@ -1,5 +1,6 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
+import { toast } from "sonner";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
@@ -29,9 +30,12 @@ export function RequireMember({
 
 	if (!mounted) {
 		return (
-			<div className="flex min-h-svh items-center justify-center text-muted-foreground">
-				…
-			</div>
+			<output
+				className="flex min-h-svh items-center justify-center text-muted-foreground"
+				aria-label="Loading"
+			>
+				<span aria-hidden>…</span>
+			</output>
 		);
 	}
 
@@ -68,8 +72,14 @@ function PickNameScreen({
 	async function handleAdd() {
 		const name = newName.trim();
 		if (!name || addMutation.isPending) return;
-		const result = await addMutation.mutateAsync(name);
-		onPicked({ id: result.id, name });
+		try {
+			const result = await addMutation.mutateAsync(name);
+			onPicked({ id: result.id, name });
+		} catch (err) {
+			toast.error(
+				err instanceof Error ? err.message : "Couldn't add you — try again.",
+			);
+		}
 	}
 
 	return (

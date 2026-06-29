@@ -39,7 +39,7 @@ export const Route = createFileRoute("/club/$clubId/meeting/$meetingId")({
 const CATEGORY_LABELS: Record<string, string> = {
 	leadership: "Leadership",
 	speaker: "Speakers",
-	evaluator: "Evaluators",
+	evaluator: "Evaluation",
 	functionary: "Functionaries",
 };
 
