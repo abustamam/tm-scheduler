@@ -4,10 +4,12 @@ import {
 	boolean,
 	index,
 	integer,
+	jsonb,
 	pgEnum,
 	pgTable,
 	text,
 	timestamp,
+	uniqueIndex,
 	uuid,
 } from "drizzle-orm/pg-core";
 
@@ -51,6 +53,20 @@ export const slotStatusEnum = pgEnum("slot_status", [
 	"confirmed",
 ]);
 
+export const activityActionEnum = pgEnum("activity_action", [
+	"claim",
+	"release",
+	"reassign",
+	"availability_set",
+	"availability_clear",
+	"member_add",
+	"member_edit",
+	"member_merge",
+	"member_remove",
+	"meeting_create",
+	"meeting_edit",
+]);
+
 // ---------------------------------------------------------------------------
 // Clubs & memberships
 // ---------------------------------------------------------------------------
@@ -80,6 +96,29 @@ export const clubMemberships = pgTable(
 		index("club_memberships_user_idx").on(t.userId),
 		index("club_memberships_club_idx").on(t.clubId),
 	],
+);
+
+// ---------------------------------------------------------------------------
+// Roster members (self-serve MVP — auth-decoupled identities)
+// ---------------------------------------------------------------------------
+
+export const members = pgTable(
+	"members",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		clubId: uuid("club_id")
+			.notNull()
+			.references(() => clubs.id, { onDelete: "cascade" }),
+		name: text("name").notNull(),
+		email: text("email"),
+		phone: text("phone"),
+		office: text("office"),
+		// Links a roster member to the Better-Auth account of the one signed-in
+		// admin/VPE. NULL for ordinary members (who never sign in).
+		userId: text("user_id").references(() => user.id, { onDelete: "set null" }),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+	},
+	(t) => [index("members_club_idx").on(t.clubId)],
 );
 
 // ---------------------------------------------------------------------------
@@ -120,6 +159,8 @@ export const roleDefinitions = pgTable(
 		defaultCount: integer("default_count").notNull().default(1),
 		sortOrder: integer("sort_order").notNull().default(0),
 		isSpeakerRole: boolean("is_speaker_role").notNull().default(false),
+		// Human-readable responsibilities, shown before claiming + on the shared link.
+		description: text("description"),
 	},
 	(t) => [index("role_definitions_club_idx").on(t.clubId)],
 );
@@ -158,6 +199,29 @@ export const roleSlots = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// Member availability (presence = "Not Available" for that meeting)
+// ---------------------------------------------------------------------------
+
+export const memberAvailability = pgTable(
+	"member_availability",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		memberId: uuid("member_id")
+			.notNull()
+			.references(() => members.id, { onDelete: "cascade" }),
+		meetingId: uuid("meeting_id")
+			.notNull()
+			.references(() => meetings.id, { onDelete: "cascade" }),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+	},
+	(t) => [
+		// Presence of a row = "Not Available" for that meeting. One per pair.
+		uniqueIndex("member_availability_unique").on(t.memberId, t.meetingId),
+		index("member_availability_meeting_idx").on(t.meetingId),
+	],
+);
+
+// ---------------------------------------------------------------------------
 // Speaker details (1:1 with a claimed speaker slot)
 // ---------------------------------------------------------------------------
 
@@ -172,6 +236,30 @@ export const speakerDetails = pgTable("speaker_details", {
 	minMinutes: integer("min_minutes"),
 	maxMinutes: integer("max_minutes"),
 });
+
+// ---------------------------------------------------------------------------
+// Activity log
+// ---------------------------------------------------------------------------
+
+export const activityLog = pgTable(
+	"activity_log",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		clubId: uuid("club_id")
+			.notNull()
+			.references(() => clubs.id, { onDelete: "cascade" }),
+		// The self-asserted member who acted (NULL = system/unknown).
+		actorMemberId: uuid("actor_member_id").references(() => members.id, {
+			onDelete: "set null",
+		}),
+		action: activityActionEnum("action").notNull(),
+		targetType: text("target_type").notNull(), // 'slot' | 'meeting' | 'member'
+		targetId: text("target_id"),
+		detail: jsonb("detail"), // { before?, after?, ... }
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+	},
+	(t) => [index("activity_log_club_created_idx").on(t.clubId, t.createdAt)],
+);
 
 // ---------------------------------------------------------------------------
 // Notifications — table only; sending logic is out of scope for the MVP.
@@ -195,10 +283,16 @@ export const notifications = pgTable("notifications", {
 // Relations
 // ---------------------------------------------------------------------------
 
+export const membersRelations = relations(members, ({ one }) => ({
+	club: one(clubs, { fields: [members.clubId], references: [clubs.id] }),
+	user: one(user, { fields: [members.userId], references: [user.id] }),
+}));
+
 export const clubsRelations = relations(clubs, ({ many }) => ({
 	memberships: many(clubMemberships),
 	meetings: many(meetings),
 	roleDefinitions: many(roleDefinitions),
+	members: many(members),
 }));
 
 export const clubMembershipsRelations = relations(
