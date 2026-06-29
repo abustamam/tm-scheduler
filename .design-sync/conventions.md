@@ -20,6 +20,7 @@ The shipped stylesheet is a **static, pre-compiled Tailwind subset**: it contain
 
 - **Semantic (shadcn):** `--background` / `--foreground`, `--card` / `--card-foreground`, `--popover` / `--popover-foreground`, `--primary` / `--primary-foreground`, `--secondary` / `--secondary-foreground`, `--muted` / `--muted-foreground`, `--accent` / `--accent-foreground`, `--destructive` / `--destructive-foreground`, `--border`, `--input`, `--ring`, `--radius` (`0.625rem`).
 - **Brand (Toastmasters palette):** `--lagoon`, `--lagoon-deep`, `--sea-ink`, `--sea-ink-soft`, `--palm`, `--sand`, `--foam`, `--surface`, `--surface-strong`. Components default to the shadcn semantic tokens; use the brand vars for accents/marketing surfaces.
+- **Warning accent:** `--warning` / `--warning-foreground` — the amber "needs attention" accent (e.g. behind-on-goals status, open/unfilled slots). Use sparingly; both flip under `.dark`.
 - **Type:** body font is **Manrope** (`var(--font-sans)`); **Fraunces** is the serif display face (`fontFamily: "'Fraunces', Georgia, serif"`). Both load from a remote font host already referenced by the stylesheet.
 
 ## Components
