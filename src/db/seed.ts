@@ -153,20 +153,37 @@ async function main() {
 		.select({ id: members.id })
 		.from(members)
 		.where(eq(members.clubId, club.id));
+
+	// Build a name→memberId map. Insert fresh if this is the first run.
+	let memberByName: Map<string, string>;
 	if (existingMembers.length === 0) {
-		await db.insert(members).values([
-			{
-				clubId: club.id,
-				name: "Rasheed Bustamam",
-				email: ADMIN_EMAIL,
-				office: "VP Education",
-				userId: adminId,
-			},
-			{ clubId: club.id, name: "Alex Rivera", email: "alex@example.com" },
-			{ clubId: club.id, name: "Sam Chen", email: "sam@example.com" },
-			{ clubId: club.id, name: "Jordan Patel", email: "jordan@example.com" },
-		]);
+		const inserted = await db
+			.insert(members)
+			.values([
+				{
+					clubId: club.id,
+					name: "Rasheed Bustamam",
+					email: ADMIN_EMAIL,
+					office: "VP Education",
+					userId: adminId,
+				},
+				{ clubId: club.id, name: "Alex Rivera", email: "alex@example.com" },
+				{ clubId: club.id, name: "Sam Chen", email: "sam@example.com" },
+				{ clubId: club.id, name: "Jordan Patel", email: "jordan@example.com" },
+			])
+			.returning({ id: members.id, name: members.name });
+		memberByName = new Map(inserted.map((m) => [m.name, m.id]));
+	} else {
+		const all = await db
+			.select({ id: members.id, name: members.name })
+			.from(members)
+			.where(eq(members.clubId, club.id));
+		memberByName = new Map(all.map((m) => [m.name, m.id]));
 	}
+
+	const alexMemberId = memberByName.get("Alex Rivera")!;
+	const samMemberId = memberByName.get("Sam Chen")!;
+	const jordanMemberId = memberByName.get("Jordan Patel")!;
 
 	const defs = await db
 		.insert(roleDefinitions)
@@ -229,17 +246,29 @@ async function main() {
 	// Claim TMOD + Timer.
 	await db
 		.update(roleSlots)
-		.set({ assignedUserId: jordanId, status: "claimed", claimedAt: new Date() })
+		.set({
+			assignedMemberId: jordanMemberId,
+			status: "claimed",
+			claimedAt: new Date(),
+		})
 		.where(eq(roleSlots.id, tmodSlot.id));
 	await db
 		.update(roleSlots)
-		.set({ assignedUserId: alexId, status: "claimed", claimedAt: new Date() })
+		.set({
+			assignedMemberId: alexMemberId,
+			status: "claimed",
+			claimedAt: new Date(),
+		})
 		.where(eq(roleSlots.id, timerSlot.id));
 
 	// Claim two speaker slots with details.
 	await db
 		.update(roleSlots)
-		.set({ assignedUserId: alexId, status: "claimed", claimedAt: new Date() })
+		.set({
+			assignedMemberId: alexMemberId,
+			status: "claimed",
+			claimedAt: new Date(),
+		})
 		.where(eq(roleSlots.id, speakerSlots[0].id));
 	await db.insert(speakerDetails).values({
 		slotId: speakerSlots[0].id,
@@ -253,7 +282,11 @@ async function main() {
 
 	await db
 		.update(roleSlots)
-		.set({ assignedUserId: samId, status: "claimed", claimedAt: new Date() })
+		.set({
+			assignedMemberId: samMemberId,
+			status: "claimed",
+			claimedAt: new Date(),
+		})
 		.where(eq(roleSlots.id, speakerSlots[1].id));
 	await db.insert(speakerDetails).values({
 		slotId: speakerSlots[1].id,
@@ -281,7 +314,11 @@ async function main() {
 	// Also claim the first evaluator so the speaker→evaluator pairing is visible.
 	await db
 		.update(roleSlots)
-		.set({ assignedUserId: jordanId, status: "claimed", claimedAt: new Date() })
+		.set({
+			assignedMemberId: jordanMemberId,
+			status: "claimed",
+			claimedAt: new Date(),
+		})
 		.where(eq(roleSlots.id, evaluatorSlots[0].id));
 
 	// Meeting 2 — wide open, two weeks out.
