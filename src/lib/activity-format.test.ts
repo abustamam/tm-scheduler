@@ -87,4 +87,20 @@ describe("formatActivity", () => {
 		} as ActivityEntry;
 		expect(formatActivity(e).actor).toBe("Someone");
 	});
+
+	it("member_edit / member_merge / member_remove read sensibly", () => {
+		const mk = (action: string) =>
+			({
+				...base,
+				action,
+				targetType: "member",
+				roleName: null,
+				actorName: "Rasheed",
+			}) as ActivityEntry;
+		expect(formatActivity(mk("member_edit")).summary).toMatch(
+			/updated.*details/i,
+		);
+		expect(formatActivity(mk("member_merge")).summary).toMatch(/merged/i);
+		expect(formatActivity(mk("member_remove")).summary).toMatch(/removed/i);
+	});
 });
