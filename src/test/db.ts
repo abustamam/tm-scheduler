@@ -12,6 +12,7 @@ import {
 	clubMemberships,
 	clubs,
 	meetings,
+	members,
 	roleDefinitions,
 	roleSlots,
 	user,
@@ -36,6 +37,7 @@ export interface SeededClub {
 	clubId: string;
 	adminUserId: string;
 	memberUserId: string;
+	memberId: string; // roster member linked to memberUserId
 	roleDefinitionId: string;
 	meetingId: string;
 	slotId: string;
@@ -85,6 +87,21 @@ export async function seedClub(): Promise<SeededClub> {
 		},
 	]);
 
+	// roster member linked to memberUserId
+	const [memberRow] = await testDb
+		.insert(members)
+		.values({
+			clubId,
+			name: "Member User",
+			email: `member-${memberUserId}@test.example`,
+			userId: memberUserId,
+		})
+		.returning({ id: members.id });
+
+	if (!memberRow) {
+		throw new Error("Failed to insert member");
+	}
+
 	// role definition (non-speaker, e.g. Timer)
 	const [roleDef] = await testDb
 		.insert(roleDefinitions)
@@ -132,6 +149,7 @@ export async function seedClub(): Promise<SeededClub> {
 		clubId,
 		adminUserId,
 		memberUserId,
+		memberId: memberRow.id,
 		roleDefinitionId: roleDef.id,
 		meetingId: meeting.id,
 		slotId: slot.id,
@@ -140,14 +158,14 @@ export async function seedClub(): Promise<SeededClub> {
 
 /**
  * Delete all rows created by `seedClub` for the given club.
- * The club cascade handles meetings, slots, role defs, and memberships.
+ * The club cascade handles meetings, slots, role defs, memberships, and members.
  * Users must be deleted separately because they are referenced across clubs.
  */
 export async function cleanup(
 	clubId: string,
 	userIds: string[],
 ): Promise<void> {
-	// club cascade removes meetings, role_slots, role_definitions, club_memberships
+	// club cascade removes meetings, role_slots, role_definitions, club_memberships, members
 	await testDb.delete(clubs).where(eq(clubs.id, clubId));
 	// delete test users
 	if (userIds.length > 0) {

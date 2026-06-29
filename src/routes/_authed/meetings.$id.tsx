@@ -45,7 +45,7 @@ function errMessage(err: unknown) {
 
 function MeetingDetail() {
 	const { meeting, slots, canManage, timezone } = Route.useLoaderData();
-	const { authUser } = Route.useRouteContext();
+	const { currentMemberId } = Route.useRouteContext();
 	const router = useRouter();
 	const [busySlotId, setBusySlotId] = useState<string | null>(null);
 	const [speakerSlot, setSpeakerSlot] = useState<Slot | null>(null);
@@ -60,13 +60,23 @@ function MeetingDetail() {
 	}
 
 	async function doClaim(slot: Slot) {
+		if (!currentMemberId) {
+			toast.error("Your account isn't linked to a club member yet.");
+			return;
+		}
 		if (slot.isSpeakerRole) {
 			setSpeakerSlot(slot);
 			return;
 		}
 		setBusySlotId(slot.id);
 		try {
-			await claimSlot({ data: { slotId: slot.id } });
+			await claimSlot({
+				data: {
+					slotId: slot.id,
+					memberId: currentMemberId,
+					actorMemberId: currentMemberId,
+				},
+			});
 			toast.success(`You're on as ${slot.roleName}.`);
 			await router.invalidate();
 		} catch (err) {
@@ -77,9 +87,15 @@ function MeetingDetail() {
 	}
 
 	async function doRelease(slot: Slot) {
+		if (!currentMemberId) {
+			toast.error("Your account isn't linked to a club member yet.");
+			return;
+		}
 		setBusySlotId(slot.id);
 		try {
-			await releaseSlot({ data: { slotId: slot.id } });
+			await releaseSlot({
+				data: { slotId: slot.id, actorMemberId: currentMemberId },
+			});
 			toast.success("Role released.");
 			await router.invalidate();
 		} catch (err) {
@@ -90,9 +106,15 @@ function MeetingDetail() {
 	}
 
 	async function doConfirm(slot: Slot) {
+		if (!currentMemberId) {
+			toast.error("Your account isn't linked to a club member yet.");
+			return;
+		}
 		setBusySlotId(slot.id);
 		try {
-			await confirmSlot({ data: { slotId: slot.id } });
+			await confirmSlot({
+				data: { slotId: slot.id, actorMemberId: currentMemberId },
+			});
 			toast.success("Role confirmed.");
 			await router.invalidate();
 		} catch (err) {
@@ -103,9 +125,15 @@ function MeetingDetail() {
 	}
 
 	async function doUnconfirm(slot: Slot) {
+		if (!currentMemberId) {
+			toast.error("Your account isn't linked to a club member yet.");
+			return;
+		}
 		setBusySlotId(slot.id);
 		try {
-			await unconfirmSlot({ data: { slotId: slot.id } });
+			await unconfirmSlot({
+				data: { slotId: slot.id, actorMemberId: currentMemberId },
+			});
 			toast.success("Role unconfirmed.");
 			await router.invalidate();
 		} catch (err) {
@@ -152,7 +180,7 @@ function MeetingDetail() {
 						{slots
 							.filter((s) => s.category === category)
 							.map((slot) => {
-								const isMine = slot.assigneeId === authUser.id;
+								const isMine = slot.assigneeId === currentMemberId;
 								const busy = busySlotId === slot.id;
 								return (
 									<li
@@ -275,6 +303,7 @@ function MeetingDetail() {
 
 			<ClaimSpeakerSheet
 				slot={speakerSlot}
+				currentMemberId={currentMemberId}
 				onOpenChange={(open) => {
 					if (!open) setSpeakerSlot(null);
 				}}
@@ -289,10 +318,12 @@ function MeetingDetail() {
 
 function ClaimSpeakerSheet({
 	slot,
+	currentMemberId,
 	onOpenChange,
 	onClaimed,
 }: {
 	slot: Slot | null;
+	currentMemberId: string | null;
 	onOpenChange: (open: boolean) => void;
 	onClaimed: () => void | Promise<void>;
 }) {
@@ -301,6 +332,10 @@ function ClaimSpeakerSheet({
 	async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
 		e.preventDefault();
 		if (!slot) return;
+		if (!currentMemberId) {
+			toast.error("Your account isn't linked to a club member yet.");
+			return;
+		}
 		const form = new FormData(e.currentTarget);
 		const speechTitle = String(form.get("speechTitle") ?? "").trim();
 		if (!speechTitle) {
@@ -314,6 +349,8 @@ function ClaimSpeakerSheet({
 			await claimSlot({
 				data: {
 					slotId: slot.id,
+					memberId: currentMemberId,
+					actorMemberId: currentMemberId,
 					speakerDetails: {
 						speechTitle,
 						pathwayPath:

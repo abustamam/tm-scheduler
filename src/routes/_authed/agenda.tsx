@@ -45,7 +45,7 @@ function errMessage(err: unknown) {
 
 function Agenda() {
 	const { meeting, slots, canManage, timezone } = Route.useLoaderData();
-	const { authUser } = Route.useRouteContext();
+	const { currentMemberId } = Route.useRouteContext();
 	const router = useRouter();
 	const [busySlotId, setBusySlotId] = useState<string | null>(null);
 	const [speakerSlot, setSpeakerSlot] = useState<Slot | null>(null);
@@ -100,13 +100,23 @@ function Agenda() {
 	];
 
 	async function doClaim(slot: Slot) {
+		if (!currentMemberId) {
+			toast.error("Your account isn't linked to a club member yet.");
+			return;
+		}
 		if (slot.isSpeakerRole) {
 			setSpeakerSlot(slot);
 			return;
 		}
 		setBusySlotId(slot.id);
 		try {
-			await claimSlot({ data: { slotId: slot.id } });
+			await claimSlot({
+				data: {
+					slotId: slot.id,
+					memberId: currentMemberId,
+					actorMemberId: currentMemberId,
+				},
+			});
 			toast.success(`You're on as ${slot.roleName}.`);
 			await router.invalidate();
 		} catch (err) {
@@ -117,9 +127,15 @@ function Agenda() {
 	}
 
 	async function doRelease(slot: Slot) {
+		if (!currentMemberId) {
+			toast.error("Your account isn't linked to a club member yet.");
+			return;
+		}
 		setBusySlotId(slot.id);
 		try {
-			await releaseSlot({ data: { slotId: slot.id } });
+			await releaseSlot({
+				data: { slotId: slot.id, actorMemberId: currentMemberId },
+			});
 			toast.success("Role released.");
 			await router.invalidate();
 		} catch (err) {
@@ -188,7 +204,7 @@ function Agenda() {
 					</div>
 
 					{slots.map((slot, i) => {
-						const isMine = slot.assigneeId === authUser.id;
+						const isMine = slot.assigneeId === currentMemberId;
 						const busy = busySlotId === slot.id;
 						const sub = subline(slot);
 						return (
@@ -317,6 +333,7 @@ function Agenda() {
 
 			<ClaimSpeakerSheet
 				slot={speakerSlot}
+				currentMemberId={currentMemberId}
 				onOpenChange={(o) => {
 					if (!o) setSpeakerSlot(null);
 				}}
@@ -331,10 +348,12 @@ function Agenda() {
 
 function ClaimSpeakerSheet({
 	slot,
+	currentMemberId,
 	onOpenChange,
 	onClaimed,
 }: {
 	slot: Slot | null;
+	currentMemberId: string | null;
 	onOpenChange: (open: boolean) => void;
 	onClaimed: () => void | Promise<void>;
 }) {
@@ -343,6 +362,10 @@ function ClaimSpeakerSheet({
 	async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
 		e.preventDefault();
 		if (!slot) return;
+		if (!currentMemberId) {
+			toast.error("Your account isn't linked to a club member yet.");
+			return;
+		}
 		const form = new FormData(e.currentTarget);
 		const speechTitle = String(form.get("speechTitle") ?? "").trim();
 		if (!speechTitle) {
@@ -356,6 +379,8 @@ function ClaimSpeakerSheet({
 			await claimSlot({
 				data: {
 					slotId: slot.id,
+					memberId: currentMemberId,
+					actorMemberId: currentMemberId,
 					speakerDetails: {
 						speechTitle,
 						pathwayPath:

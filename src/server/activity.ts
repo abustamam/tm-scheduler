@@ -1,4 +1,4 @@
-import type { db as Db } from "#/db";
+import type { db } from "#/db";
 import { activityLog } from "#/db/schema";
 
 type ActivityAction =
@@ -23,12 +23,18 @@ export interface ActivityInput {
 	detail?: unknown;
 }
 
+// Accepts either the main db client or a drizzle transaction so callers can
+// pass `tx` when logging inside a transaction for atomic commit.
+type DbOrTx =
+	| typeof db
+	| Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
+
 /**
  * Append one row to the activity log. Pass a transaction (`tx`) when logging
  * inside the same transaction as the state change so the two commit together.
  */
 export async function logActivity(
-	conn: typeof Db,
+	conn: DbOrTx,
 	input: ActivityInput,
 ): Promise<void> {
 	await conn.insert(activityLog).values({

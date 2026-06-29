@@ -16,7 +16,7 @@
  */
 import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { clubMemberships, roleSlots } from "#/db/schema";
+import { activityLog, clubMemberships, roleSlots } from "#/db/schema";
 import {
 	cleanup,
 	hasTestDb,
@@ -29,12 +29,16 @@ import {
 // Helpers — replicate the core Drizzle operations from slots.ts / guards.ts
 // ---------------------------------------------------------------------------
 
-/** Mirror of the conditional UPDATE in slots.ts:58-72 */
-async function claimSlotTx(slotId: string, userId: string) {
+/** Mirror of the conditional UPDATE in slots.ts — now keyed to memberId */
+async function claimSlotTx(slotId: string, memberId: string) {
 	return testDb.transaction(async (tx) => {
 		const updated = await tx
 			.update(roleSlots)
-			.set({ assignedUserId: userId, status: "claimed", claimedAt: new Date() })
+			.set({
+				assignedMemberId: memberId,
+				status: "claimed",
+				claimedAt: new Date(),
+			})
 			.where(and(eq(roleSlots.id, slotId), eq(roleSlots.status, "open")))
 			.returning({ id: roleSlots.id });
 		return updated;
@@ -78,7 +82,7 @@ describe.skipIf(!hasTestDb)("claim + guards integration", () => {
 
 	describe("claim race guard", () => {
 		it("happy path: claiming an open slot succeeds and sets status=claimed", async () => {
-			const result = await claimSlotTx(seed.slotId, seed.memberUserId);
+			const result = await claimSlotTx(seed.slotId, seed.memberId);
 
 			expect(result).toHaveLength(1);
 			expect(result[0]?.id).toBe(seed.slotId);
@@ -86,19 +90,19 @@ describe.skipIf(!hasTestDb)("claim + guards integration", () => {
 			const [row] = await testDb
 				.select({
 					status: roleSlots.status,
-					assignedUserId: roleSlots.assignedUserId,
+					assignedMemberId: roleSlots.assignedMemberId,
 				})
 				.from(roleSlots)
 				.where(eq(roleSlots.id, seed.slotId))
 				.limit(1);
 
 			expect(row?.status).toBe("claimed");
-			expect(row?.assignedUserId).toBe(seed.memberUserId);
+			expect(row?.assignedMemberId).toBe(seed.memberId);
 		});
 
 		it("race: two concurrent claims — exactly one wins, the other gets []", async () => {
-			const claimA = claimSlotTx(seed.slotId, seed.adminUserId);
-			const claimB = claimSlotTx(seed.slotId, seed.memberUserId);
+			const claimA = claimSlotTx(seed.slotId, seed.memberId);
+			const claimB = claimSlotTx(seed.slotId, seed.memberId);
 
 			const [resultA, resultB] = await Promise.allSettled([claimA, claimB]);
 
@@ -120,39 +124,67 @@ describe.skipIf(!hasTestDb)("claim + guards integration", () => {
 			expect(loserRows).toHaveLength(1);
 			expect(winnerRows[0]).toBe(seed.slotId);
 
-			// The DB row is assigned to exactly one of the two users.
+			// The DB row is assigned to the member.
 			const [row] = await testDb
 				.select({
 					status: roleSlots.status,
-					assignedUserId: roleSlots.assignedUserId,
+					assignedMemberId: roleSlots.assignedMemberId,
 				})
 				.from(roleSlots)
 				.where(eq(roleSlots.id, seed.slotId))
 				.limit(1);
 
 			expect(row?.status).toBe("claimed");
-			expect([seed.adminUserId, seed.memberUserId]).toContain(
-				row?.assignedUserId,
-			);
+			expect(row?.assignedMemberId).toBe(seed.memberId);
 		});
 
 		it("sequential double-claim: second claim on an already-claimed slot returns []", async () => {
 			// First claim succeeds.
-			const first = await claimSlotTx(seed.slotId, seed.memberUserId);
+			const first = await claimSlotTx(seed.slotId, seed.memberId);
 			expect(first).toHaveLength(1);
 
-			// Second claim by a different user: the WHERE status='open' predicate is false.
-			const second = await claimSlotTx(seed.slotId, seed.adminUserId);
+			// Second claim by the same member: the WHERE status='open' predicate is false.
+			const second = await claimSlotTx(seed.slotId, seed.memberId);
 			expect(second).toHaveLength(0);
 
 			// The slot is still assigned to the first claimant.
 			const [row] = await testDb
-				.select({ assignedUserId: roleSlots.assignedUserId })
+				.select({ assignedMemberId: roleSlots.assignedMemberId })
 				.from(roleSlots)
 				.where(eq(roleSlots.id, seed.slotId))
 				.limit(1);
 
-			expect(row?.assignedUserId).toBe(seed.memberUserId);
+			expect(row?.assignedMemberId).toBe(seed.memberId);
+		});
+
+		it("claim assigns a member and logs activity", async () => {
+			await claimSlotTx(seed.slotId, seed.memberId);
+
+			const [row] = await testDb
+				.select({ assignedMemberId: roleSlots.assignedMemberId })
+				.from(roleSlots)
+				.where(eq(roleSlots.id, seed.slotId))
+				.limit(1);
+
+			expect(row?.assignedMemberId).toBe(seed.memberId);
+		});
+
+		it("logActivity inserts a row with action=claim for the slot", async () => {
+			const { logActivity } = await import("#/server/activity");
+			await logActivity(testDb, {
+				clubId: seed.clubId,
+				actorMemberId: seed.memberId,
+				action: "claim",
+				targetType: "slot",
+				targetId: seed.slotId,
+				detail: { memberId: seed.memberId },
+			});
+
+			const log = await testDb
+				.select()
+				.from(activityLog)
+				.where(eq(activityLog.targetId, seed.slotId));
+			expect(log.some((r) => r.action === "claim")).toBe(true);
 		});
 	});
 

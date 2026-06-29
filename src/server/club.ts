@@ -9,29 +9,14 @@ import {
 	roleDefinitions,
 	roleSlots,
 	speakerDetails,
-	user,
 } from "#/db/schema";
 import { requireMembership, requireUser } from "./guards";
 
 const uuid = z.string().uuid();
 
 /**
- * Resolve the Better-Auth user id backing a roster member, if any. Ordinary
- * roster members are auth-free (`members.userId` is NULL); we bridge to their
- * historical assignments by the admin link or an email match.
- *
- * TODO(cutover): once `role_slots.assigned_user_id` is re-keyed to
- * `assigned_member_id` (see docs/superpowers/specs), history keys directly to
- * the member and this user bridge goes away.
- */
-async function emailToUserId(): Promise<Map<string, string>> {
-	const rows = await db.select({ id: user.id, email: user.email }).from(user);
-	return new Map(rows.map((r) => [r.email, r.id]));
-}
-
-/**
  * A club's roster members (from the `members` table — the no-auth roster) with
- * a "speeches given" count bridged from the role-slot history.
+ * a "speeches given" count keyed directly to the member row.
  *
  * Pathways progress (path / level / % / project) and member status have NO
  * model — those stay mocked in the view (see docs/persistence-todo.md).
@@ -57,7 +42,7 @@ export const listClubMembers = createServerFn({ method: "GET" })
 
 		const speechRows = await db
 			.select({
-				userId: roleSlots.assignedUserId,
+				memberId: roleSlots.assignedMemberId,
 				speeches: sql<number>`count(*)::int`,
 			})
 			.from(roleSlots)
@@ -72,27 +57,22 @@ export const listClubMembers = createServerFn({ method: "GET" })
 					eq(roleDefinitions.isSpeakerRole, true),
 				),
 			)
-			.groupBy(roleSlots.assignedUserId);
+			.groupBy(roleSlots.assignedMemberId);
 
-		const speechByUser = new Map(
+		const speechByMember = new Map(
 			speechRows
-				.filter((r) => r.userId)
-				.map((r) => [r.userId as string, r.speeches]),
+				.filter((r) => r.memberId)
+				.map((r) => [r.memberId as string, r.speeches]),
 		);
-		const emailMap = await emailToUserId();
 
-		return roster.map((m) => {
-			const linkedUserId =
-				m.userId ?? (m.email ? (emailMap.get(m.email) ?? null) : null);
-			return {
-				id: m.id,
-				name: m.name,
-				email: m.email,
-				office: m.office,
-				createdAt: m.createdAt,
-				speeches: linkedUserId ? (speechByUser.get(linkedUserId) ?? 0) : 0,
-			};
-		});
+		return roster.map((m) => ({
+			id: m.id,
+			name: m.name,
+			email: m.email,
+			office: m.office,
+			createdAt: m.createdAt,
+			speeches: speechByMember.get(m.id) ?? 0,
+		}));
 	});
 
 export interface SpeechLogRow {
@@ -109,12 +89,12 @@ export interface SpeechLogRow {
 
 /** A member's speaker-slot history (most recent first), with the evaluator resolved. */
 async function loadSpeechLog(
-	userId: string,
+	memberId: string,
 	clubId: string | null,
 	limit: number,
 ): Promise<SpeechLogRow[]> {
 	const evaluatorSlot = alias(roleSlots, "evaluator_slot");
-	const evaluatorUser = alias(user, "evaluator_user");
+	const evaluatorMember = alias(members, "evaluator_member");
 
 	return db
 		.select({
@@ -125,7 +105,7 @@ async function loadSpeechLog(
 			projectName: speakerDetails.projectName,
 			pathwayPath: speakerDetails.pathwayPath,
 			projectLevel: speakerDetails.projectLevel,
-			evaluatorName: evaluatorUser.name,
+			evaluatorName: evaluatorMember.name,
 			status: roleSlots.status,
 		})
 		.from(roleSlots)
@@ -136,10 +116,13 @@ async function loadSpeechLog(
 		.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
 		.leftJoin(speakerDetails, eq(speakerDetails.slotId, roleSlots.id))
 		.leftJoin(evaluatorSlot, eq(evaluatorSlot.evaluatesSlotId, roleSlots.id))
-		.leftJoin(evaluatorUser, eq(evaluatorUser.id, evaluatorSlot.assignedUserId))
+		.leftJoin(
+			evaluatorMember,
+			eq(evaluatorMember.id, evaluatorSlot.assignedMemberId),
+		)
 		.where(
 			and(
-				eq(roleSlots.assignedUserId, userId),
+				eq(roleSlots.assignedMemberId, memberId),
 				eq(roleDefinitions.isSpeakerRole, true),
 				clubId ? eq(meetings.clubId, clubId) : undefined,
 			),
@@ -149,7 +132,7 @@ async function loadSpeechLog(
 }
 
 /** Roles a member has served (any role), grouped by role name, for the current calendar year. */
-async function loadRolesServed(userId: string, clubId: string) {
+async function loadRolesServed(memberId: string, clubId: string) {
 	const yearStart = new Date(new Date().getFullYear(), 0, 1);
 	return db
 		.select({
@@ -164,7 +147,7 @@ async function loadRolesServed(userId: string, clubId: string) {
 		.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
 		.where(
 			and(
-				eq(roleSlots.assignedUserId, userId),
+				eq(roleSlots.assignedMemberId, memberId),
 				eq(meetings.clubId, clubId),
 				gte(meetings.scheduledAt, yearStart),
 			),
@@ -201,23 +184,9 @@ export const getMemberProfile = createServerFn({ method: "GET" })
 			return { member: null, speechLog: [], rolesServed: [], speeches: 0 };
 		}
 
-		// Bridge to the member's auth user (admin link or email match) for history.
-		let linkedUserId = member.userId;
-		if (!linkedUserId && member.email) {
-			const [u] = await db
-				.select({ id: user.id })
-				.from(user)
-				.where(eq(user.email, member.email))
-				.limit(1);
-			linkedUserId = u?.id ?? null;
-		}
-
-		const speechLog = linkedUserId
-			? await loadSpeechLog(linkedUserId, data.clubId, 6)
-			: [];
-		const rolesServed = linkedUserId
-			? await loadRolesServed(linkedUserId, data.clubId)
-			: [];
+		// History keys directly to the member row — no user bridge needed.
+		const speechLog = await loadSpeechLog(member.id, data.clubId, 6);
+		const rolesServed = await loadRolesServed(member.id, data.clubId);
 
 		return {
 			member: {
@@ -237,6 +206,18 @@ export const getMemberProfile = createServerFn({ method: "GET" })
 export const listMySpeeches = createServerFn({ method: "GET" }).handler(
 	async () => {
 		const currentUser = await requireUser();
-		return loadSpeechLog(currentUser.id, null, 6);
+
+		// Resolve the signed-in user's linked roster member.
+		const [myMember] = await db
+			.select({ id: members.id })
+			.from(members)
+			.where(eq(members.userId, currentUser.id))
+			.limit(1);
+
+		if (!myMember) {
+			return [];
+		}
+
+		return loadSpeechLog(myMember.id, null, 6);
 	},
 );

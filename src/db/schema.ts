@@ -25,6 +25,7 @@ export {
 	verification,
 } from "./auth-schema";
 
+// user is re-exported above for Better-Auth; imported here for clubMemberships and members foreign keys
 import { user } from "./auth-schema";
 
 // ---------------------------------------------------------------------------
@@ -181,7 +182,7 @@ export const roleSlots = pgTable(
 			.notNull()
 			.references(() => roleDefinitions.id, { onDelete: "restrict" }),
 		slotIndex: integer("slot_index").notNull().default(0),
-		assignedUserId: text("assigned_user_id").references(() => user.id, {
+		assignedMemberId: uuid("assigned_member_id").references(() => members.id, {
 			onDelete: "set null",
 		}),
 		status: slotStatusEnum("status").notNull().default("open"),
@@ -194,7 +195,7 @@ export const roleSlots = pgTable(
 	},
 	(t) => [
 		index("role_slots_meeting_idx").on(t.meetingId),
-		index("role_slots_assigned_user_idx").on(t.assignedUserId),
+		index("role_slots_assigned_member_idx").on(t.assignedMemberId),
 	],
 );
 
@@ -337,9 +338,9 @@ export const roleSlotsRelations = relations(roleSlots, ({ one }) => ({
 		fields: [roleSlots.roleDefinitionId],
 		references: [roleDefinitions.id],
 	}),
-	assignedUser: one(user, {
-		fields: [roleSlots.assignedUserId],
-		references: [user.id],
+	assignedMember: one(members, {
+		fields: [roleSlots.assignedMemberId],
+		references: [members.id],
 	}),
 	evaluatesSlot: one(roleSlots, {
 		fields: [roleSlots.evaluatesSlotId],
