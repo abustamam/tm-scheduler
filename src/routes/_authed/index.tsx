@@ -11,7 +11,7 @@ import {
 	rosterSegments,
 } from "#/data/club";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
-import { clubRoleLabel, formatTenure, isNewMember } from "#/lib/members";
+import { formatTenure, isNewMember } from "#/lib/members";
 import { cn } from "#/lib/utils";
 import { listClubMembers } from "#/server/club";
 import { listUpcomingMeetings } from "#/server/meetings";
@@ -54,22 +54,20 @@ function Roster() {
 	// Identity + speeches are real; Pathway/level/% + status are mocked.
 	const rows: RosterRow[] = members.map((m) => {
 		const p = mockPathway(m.id);
-		const role = clubRoleLabel(m.clubRole);
 		return {
 			id: m.id,
 			name: m.name,
 			initials: initialsOf(m.name),
 			tone: toneFromSeed(m.id),
-			tenure:
-				m.clubRole === "member"
-					? formatTenure(m.joinedAt)
-					: `${formatTenure(m.joinedAt)} · ${role}`,
+			tenure: m.office
+				? `${formatTenure(m.createdAt)} · ${m.office}`
+				: formatTenure(m.createdAt),
 			path: p.path,
 			project: p.project,
 			level: p.level,
 			pct: p.pct,
 			speeches: m.speeches,
-			status: isNewMember(m.joinedAt) ? "new" : p.status,
+			status: isNewMember(m.createdAt) ? "new" : p.status,
 		};
 	});
 

@@ -1,15 +1,3 @@
-/** Human label for a club role (the enum is admin | vpe | member). */
-export function clubRoleLabel(role: string | null | undefined): string {
-	switch (role) {
-		case "admin":
-			return "Officer";
-		case "vpe":
-			return "VP Education";
-		default:
-			return "Member";
-	}
-}
-
 /** Short tenure string from a join date, e.g. "3 yrs" / "8 mo" / "6 wks". */
 export function formatTenure(joinedAt: Date | string): string {
 	const j = typeof joinedAt === "string" ? new Date(joinedAt) : joinedAt;

@@ -10,7 +10,7 @@ import {
 	mockPathway,
 } from "#/data/club";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
-import { clubRoleLabel, formatTenure, isNewMember } from "#/lib/members";
+import { formatTenure, isNewMember } from "#/lib/members";
 import { cn } from "#/lib/utils";
 import { getMemberProfile } from "#/server/club";
 
@@ -20,7 +20,7 @@ export const Route = createFileRoute("/_authed/members/$id")({
 		if (!clubId) {
 			return { member: null, speechLog: [], rolesServed: [], speeches: 0 };
 		}
-		return getMemberProfile({ data: { clubId, userId: params.id } });
+		return getMemberProfile({ data: { clubId, memberId: params.id } });
 	},
 	component: MemberDetail,
 });
@@ -58,14 +58,12 @@ function MemberDetail() {
 
 	// Identity, speech log and roles served are real; Pathway/level + awards are mocked.
 	const pathway = mockPathway(member.id);
-	const status = isNewMember(member.joinedAt) ? "new" : pathway.status;
+	const status = isNewMember(member.createdAt) ? "new" : pathway.status;
 	const levels = levelSteps(pathway.level, pathway.pct);
 	const awards = mockAwards(pathway.level, status);
-	const role = clubRoleLabel(member.clubRole);
-	const tenure =
-		member.clubRole === "member"
-			? formatTenure(member.joinedAt)
-			: `${formatTenure(member.joinedAt)} · ${role}`;
+	const tenure = member.office
+		? `${formatTenure(member.createdAt)} · ${member.office}`
+		: formatTenure(member.createdAt);
 
 	return (
 		<div className="max-w-[1180px] px-7 pt-[22px] pb-10">
@@ -85,7 +83,7 @@ function MemberDetail() {
 					</h1>
 					<div className="mt-1.5 flex flex-wrap items-center gap-2.5">
 						<span className="text-[13.5px] text-[var(--sea-ink-soft)]">
-							{tenure} · joined {joinedLabel(member.joinedAt)}
+							{tenure} · joined {joinedLabel(member.createdAt)}
 						</span>
 						<span className="size-1 rounded-full bg-[var(--sea-ink-soft)]" />
 						<StatusPill status={status} long />

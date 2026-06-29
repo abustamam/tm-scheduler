@@ -4,8 +4,8 @@ import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { db } from "#/db";
 import {
-	clubMemberships,
 	meetings,
+	members,
 	roleDefinitions,
 	roleSlots,
 	speakerDetails,
@@ -16,11 +16,25 @@ import { requireMembership, requireUser } from "./guards";
 const uuid = z.string().uuid();
 
 /**
- * A club's active members with a real "speeches given" count derived from the
- * role-slot history (count of speaker-role slots assigned to each member).
+ * Resolve the Better-Auth user id backing a roster member, if any. Ordinary
+ * roster members are auth-free (`members.userId` is NULL); we bridge to their
+ * historical assignments by the admin link or an email match.
  *
- * Pathways progress (path / level / % / project) and member status are NOT in
- * the schema — those stay mocked in the view (see docs/persistence-todo.md).
+ * TODO(cutover): once `role_slots.assigned_user_id` is re-keyed to
+ * `assigned_member_id` (see docs/superpowers/specs), history keys directly to
+ * the member and this user bridge goes away.
+ */
+async function emailToUserId(): Promise<Map<string, string>> {
+	const rows = await db.select({ id: user.id, email: user.email }).from(user);
+	return new Map(rows.map((r) => [r.email, r.id]));
+}
+
+/**
+ * A club's roster members (from the `members` table — the no-auth roster) with
+ * a "speeches given" count bridged from the role-slot history.
+ *
+ * Pathways progress (path / level / % / project) and member status have NO
+ * model — those stay mocked in the view (see docs/persistence-todo.md).
  */
 export const listClubMembers = createServerFn({ method: "GET" })
 	.validator((clubId: unknown) => uuid.parse(clubId))
@@ -28,23 +42,18 @@ export const listClubMembers = createServerFn({ method: "GET" })
 		const currentUser = await requireUser();
 		await requireMembership(currentUser.id, clubId);
 
-		const members = await db
+		const roster = await db
 			.select({
-				id: user.id,
-				name: user.name,
-				email: user.email,
-				clubRole: clubMemberships.clubRole,
-				joinedAt: clubMemberships.joinedAt,
+				id: members.id,
+				name: members.name,
+				email: members.email,
+				office: members.office,
+				userId: members.userId,
+				createdAt: members.createdAt,
 			})
-			.from(clubMemberships)
-			.innerJoin(user, eq(user.id, clubMemberships.userId))
-			.where(
-				and(
-					eq(clubMemberships.clubId, clubId),
-					eq(clubMemberships.status, "active"),
-				),
-			)
-			.orderBy(asc(user.name));
+			.from(members)
+			.where(eq(members.clubId, clubId))
+			.orderBy(asc(members.name));
 
 		const speechRows = await db
 			.select({
@@ -70,11 +79,20 @@ export const listClubMembers = createServerFn({ method: "GET" })
 				.filter((r) => r.userId)
 				.map((r) => [r.userId as string, r.speeches]),
 		);
+		const emailMap = await emailToUserId();
 
-		return members.map((m) => ({
-			...m,
-			speeches: speechByUser.get(m.id) ?? 0,
-		}));
+		return roster.map((m) => {
+			const linkedUserId =
+				m.userId ?? (m.email ? (emailMap.get(m.email) ?? null) : null);
+			return {
+				id: m.id,
+				name: m.name,
+				email: m.email,
+				office: m.office,
+				createdAt: m.createdAt,
+				speeches: linkedUserId ? (speechByUser.get(linkedUserId) ?? 0) : 0,
+			};
+		});
 	});
 
 export interface SpeechLogRow {
@@ -98,7 +116,7 @@ async function loadSpeechLog(
 	const evaluatorSlot = alias(roleSlots, "evaluator_slot");
 	const evaluatorUser = alias(user, "evaluator_user");
 
-	const rows = await db
+	return db
 		.select({
 			slotId: roleSlots.id,
 			scheduledAt: meetings.scheduledAt,
@@ -128,8 +146,6 @@ async function loadSpeechLog(
 		)
 		.orderBy(desc(meetings.scheduledAt))
 		.limit(limit);
-
-	return rows;
 }
 
 /** Roles a member has served (any role), grouped by role name, for the current calendar year. */
@@ -157,10 +173,10 @@ async function loadRolesServed(userId: string, clubId: string) {
 		.orderBy(desc(sql`count(*)`));
 }
 
-/** A member's profile: real identity + speech log + roles served. Pathways/awards stay mocked. */
+/** A roster member's profile: real identity + speech log + roles served. Pathways/awards stay mocked. */
 export const getMemberProfile = createServerFn({ method: "GET" })
 	.validator((input: unknown) =>
-		z.object({ clubId: uuid, userId: z.string().min(1) }).parse(input),
+		z.object({ clubId: uuid, memberId: uuid }).parse(input),
 	)
 	.handler(async ({ data }) => {
 		const currentUser = await requireUser();
@@ -168,19 +184,16 @@ export const getMemberProfile = createServerFn({ method: "GET" })
 
 		const [member] = await db
 			.select({
-				id: user.id,
-				name: user.name,
-				email: user.email,
-				clubRole: clubMemberships.clubRole,
-				joinedAt: clubMemberships.joinedAt,
+				id: members.id,
+				name: members.name,
+				email: members.email,
+				office: members.office,
+				userId: members.userId,
+				createdAt: members.createdAt,
 			})
-			.from(clubMemberships)
-			.innerJoin(user, eq(user.id, clubMemberships.userId))
+			.from(members)
 			.where(
-				and(
-					eq(clubMemberships.clubId, data.clubId),
-					eq(clubMemberships.userId, data.userId),
-				),
+				and(eq(members.id, data.memberId), eq(members.clubId, data.clubId)),
 			)
 			.limit(1);
 
@@ -188,11 +201,36 @@ export const getMemberProfile = createServerFn({ method: "GET" })
 			return { member: null, speechLog: [], rolesServed: [], speeches: 0 };
 		}
 
-		const speechLog = await loadSpeechLog(data.userId, data.clubId, 6);
-		const rolesServed = await loadRolesServed(data.userId, data.clubId);
-		const speeches = speechLog.length;
+		// Bridge to the member's auth user (admin link or email match) for history.
+		let linkedUserId = member.userId;
+		if (!linkedUserId && member.email) {
+			const [u] = await db
+				.select({ id: user.id })
+				.from(user)
+				.where(eq(user.email, member.email))
+				.limit(1);
+			linkedUserId = u?.id ?? null;
+		}
 
-		return { member, speechLog, rolesServed, speeches };
+		const speechLog = linkedUserId
+			? await loadSpeechLog(linkedUserId, data.clubId, 6)
+			: [];
+		const rolesServed = linkedUserId
+			? await loadRolesServed(linkedUserId, data.clubId)
+			: [];
+
+		return {
+			member: {
+				id: member.id,
+				name: member.name,
+				email: member.email,
+				office: member.office,
+				createdAt: member.createdAt,
+			},
+			speechLog,
+			rolesServed,
+			speeches: speechLog.length,
+		};
 	});
 
 /** The current user's recent speech history (across their clubs). Backs the dashboard speech log. */

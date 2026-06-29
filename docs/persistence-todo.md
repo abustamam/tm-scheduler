@@ -17,6 +17,19 @@ UI. Each notes where the placeholder lives so it can be swapped for real data.
 - **My dashboard** (`/dashboard`) — greeting, speech log, upcoming roles
   (`listMyCommitments`, `listMySpeeches`).
 
+## Roster cutover (post-PR #39)
+
+The roster now reads from the **`members`** table (the no-auth roster). But
+`role_slots.assigned_user_id` still keys to a Better-Auth **user**, so member
+history (speeches / speech log / roles served) is bridged member→user by
+`members.userId` (admin link) or an email match — see the `TODO(cutover)` in
+`src/server/club.ts`.
+
+- **To finish the cutover:** re-key `role_slots.assigned_user_id` →
+  `assigned_member_id` (FK → `members`), then drop the user bridge and key
+  history directly to the member. Members with no linked user currently show 0
+  history until then.
+
 ## Needs a model (mocked today)
 
 ### 1. Pathways enrollment + progress  ← highest value
