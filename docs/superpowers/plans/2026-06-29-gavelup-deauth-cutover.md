@@ -25,7 +25,7 @@ Re-key (`assignedUserId` → `assignedMemberId`) + log, KEEPING auth guards:
 - `src/server/club.ts`: `listClubMembers` speech bridge (`:60,:75,:82`), `getMemberProfile` (`:139,:142,:167` + bridge), `listMySpeeches` (`:239`); **delete `emailToUserId` (`:27`)**.
 - `src/db/seed.ts`: 5 `assignedUserId` sets (`:232,:236,:242,:256,:284`).
 
-Scope guard — **NOT in this plan:** removing any `requireUser`/`requireMembership` (that's Phase B), any route/UI, the VPE roster-merge tooling.
+Scope guard — **IN scope (decision A):** the minimal *view glue* needed so the re-key doesn't break the workspace — `src/server/auth-context.ts` + the claim/`isMine` call sites in `agenda.tsx` / `meetings.$id.tsx` / `me.tsx` (Task 7b). **NOT in this plan:** removing any `requireUser`/`requireMembership` (Phase B), broader UI changes (a member-picker to "claim for someone else"), the VPE roster-merge tooling.
 
 ## Commands
 Typecheck `bunx tsc --noEmit` · lint `bun run check` · migration `bun run db:generate` · tests (no DB) `bunx vitest run` · tests (DB) `TEST_DATABASE_URL=postgresql://test:test@localhost:5433/tm_test bunx vitest run`. (Local DB per `src/server/claim.integration.test.ts`.)
@@ -34,9 +34,7 @@ Typecheck `bunx tsc --noEmit` · lint `bun run check` · migration `bun run db:g
 
 ### Task 0: Confirm the claim contract (read-only, do first)
 
-- [ ] **Step 1:** `grep -rn "claimSlot\|releaseSlot" src/routes/_authed/agenda.tsx src/routes/_authed/meetings.\$id.tsx` and read how the agenda view calls them today. Determine whether it can pass a `memberId`/`actorMemberId`.
-  - If the view already has the acting member's id (it sources the roster from `members`), proceed.
-  - If it claims purely "as the current user" with no member in hand, **STOP and report** — the payload change needs to land with a one-line view change, which is UI (out of this plan's scope); coordinate first.
+**RESOLVED (decision A, 2026-06-29):** The views call `claimSlot({ data: { slotId } })` (claim *as current user*, no member id) and compute `isMine = slot.assigneeId === authUser.id` (e.g. `agenda.tsx:191`). Both break under the re-key (`assigneeId` becomes a member id). So the **view glue is now IN scope — see Task 7b.** Proceed to Task 1.
 
 ---
 
@@ -127,6 +125,47 @@ const claimSchema = z.object({
 **Files:** Modify `src/db/seed.ts`
 
 - [ ] The foundation seed already inserts `members` (Rasheed/Alex/Sam/Jordan). Change that insert to `.returning()` and build a name→memberId map. Replace the 5 `assignedUserId: <userId>` sets with `assignedMemberId: <memberId>`. Verify the seed runs against a test DB and a claimed slot has a non-null `assigned_member_id`. `tsc`/`check` → 0. Commit `feat(seed)!: assign seeded slots to members`.
+
+### Task 7b: View glue (decision A) — keep the workspace working
+
+**Files:** Modify `src/server/auth-context.ts`, `src/routes/_authed/agenda.tsx`, `src/routes/_authed/meetings.$id.tsx`, `src/routes/_authed/me.tsx`
+
+Goal: preserve today's exact UX (you claim/release *your own* slot) under the re-key. No member-picker, no new UI — just thread the signed-in user's linked member id.
+
+- [ ] **Step 1: Expose `currentMemberId` from the route context.** In `src/server/auth-context.ts` (`getAuthContext`), after resolving the signed-in user, look up their roster member and include its id:
+
+```ts
+import { members } from "#/db/schema";
+// ...after the user/clubs are resolved (for the user's club):
+const [memberRow] = await db
+	.select({ id: members.id })
+	.from(members)
+	.where(and(eq(members.userId, user.id), eq(members.clubId, /* the user's clubId */)))
+	.limit(1);
+// add to the returned object:
+//   currentMemberId: memberRow?.id ?? null,
+```
+
+(If `getAuthContext` returns multiple clubs, resolve the member for `clubs[0]` — matching how the workspace already picks the active club. `currentMemberId` is `string | null`.)
+
+- [ ] **Step 2: Pass member ids at the claim/release/confirm call sites.** In `agenda.tsx`, `meetings.$id.tsx`, `me.tsx`, read `currentMemberId` from `Route.useRouteContext()` and pass it:
+
+```ts
+await claimSlot({ data: { slotId: slot.id, memberId: currentMemberId, actorMemberId: currentMemberId } });
+await releaseSlot({ data: { slotId: slot.id, actorMemberId: currentMemberId } });
+await confirmSlot({ data: { slotId: slot.id, actorMemberId: currentMemberId } });   // if confirm/unconfirm gained actorMemberId in Task 3
+```
+
+- [ ] **Step 3: Fix ownership checks.** Replace every `slot.assigneeId === authUser.id` with `slot.assigneeId === currentMemberId` (e.g. `agenda.tsx:191`, and the equivalent in `meetings.$id.tsx`/`me.tsx`).
+
+- [ ] **Step 4: Guard the null case.** A signed-in user with no linked roster member has `currentMemberId === null`. In the claim/release handlers, if `!currentMemberId`, `toast.error("Your account isn't linked to a club member yet.")` and return early (don't call the server fn — the Zod `uuid` would reject `null`). (The seeded admin IS linked, so the happy path works; this is the safety net.)
+
+- [ ] **Step 5: Verify.** `bunx tsc --noEmit` → 0 (the route-context type now carries `currentMemberId`; all consumers compile). `bun run build` → 0. Commit:
+
+```bash
+git add src/server/auth-context.ts src/routes/_authed/agenda.tsx src/routes/_authed/meetings.\$id.tsx src/routes/_authed/me.tsx
+git commit -m "feat(workspace): thread currentMemberId for member-keyed claim/isMine"
+```
 
 ### Task 8: Full green + straggler grep
 
