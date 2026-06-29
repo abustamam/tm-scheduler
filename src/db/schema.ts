@@ -8,6 +8,7 @@ import {
 	pgTable,
 	text,
 	timestamp,
+	uniqueIndex,
 	uuid,
 } from "drizzle-orm/pg-core";
 
@@ -179,6 +180,29 @@ export const roleSlots = pgTable(
 	(t) => [
 		index("role_slots_meeting_idx").on(t.meetingId),
 		index("role_slots_assigned_user_idx").on(t.assignedUserId),
+	],
+);
+
+// ---------------------------------------------------------------------------
+// Member availability (presence = "Not Available" for that meeting)
+// ---------------------------------------------------------------------------
+
+export const memberAvailability = pgTable(
+	"member_availability",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		memberId: uuid("member_id")
+			.notNull()
+			.references(() => members.id, { onDelete: "cascade" }),
+		meetingId: uuid("meeting_id")
+			.notNull()
+			.references(() => meetings.id, { onDelete: "cascade" }),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+	},
+	(t) => [
+		// Presence of a row = "Not Available" for that meeting. One per pair.
+		uniqueIndex("member_availability_unique").on(t.memberId, t.meetingId),
+		index("member_availability_meeting_idx").on(t.meetingId),
 	],
 );
 
