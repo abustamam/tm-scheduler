@@ -6,6 +6,7 @@ import { db } from "#/db";
 import {
 	clubs,
 	meetings,
+	memberAvailability,
 	members,
 	roleDefinitions,
 	roleSlots,
@@ -89,6 +90,7 @@ async function loadMeetingDetail(
 			evaluatesSlotId: roleSlots.evaluatesSlotId,
 			roleName: roleDefinitions.name,
 			category: roleDefinitions.category,
+			description: roleDefinitions.description,
 			sortOrder: roleDefinitions.sortOrder,
 			isSpeakerRole: roleDefinitions.isSpeakerRole,
 			assigneeId: assignee.id,
@@ -118,7 +120,18 @@ async function loadMeetingDetail(
 		columns: { timezone: true },
 	});
 
-	return { meeting, slots, canManage, timezone: club?.timezone ?? "UTC" };
+	const unavail = await db
+		.select({ memberId: memberAvailability.memberId })
+		.from(memberAvailability)
+		.where(eq(memberAvailability.meetingId, meetingId));
+
+	return {
+		meeting,
+		slots,
+		canManage,
+		timezone: club?.timezone ?? "UTC",
+		unavailableMemberIds: unavail.map((u) => u.memberId),
+	};
 }
 
 /** A meeting plus its ordered slots, assignees, speaker details, and evaluator→speaker links.
