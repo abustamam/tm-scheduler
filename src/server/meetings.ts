@@ -6,10 +6,10 @@ import { db } from "#/db";
 import {
 	clubs,
 	meetings,
+	members,
 	roleDefinitions,
 	roleSlots,
 	speakerDetails,
-	user,
 } from "#/db/schema";
 import { generateSlotRows, resolveEvaluatorLinks } from "#/lib/agenda";
 import { zonedWallTimeToUtc } from "#/lib/datetime";
@@ -64,7 +64,7 @@ async function loadMeetingDetail(meetingId: string, currentUserId: string) {
 	const canManage =
 		membership.clubRole === "admin" || membership.clubRole === "vpe";
 
-	const assignee = alias(user, "assignee");
+	const assignee = alias(members, "assignee");
 	const rows = await db
 		.select({
 			id: roleSlots.id,
@@ -90,7 +90,7 @@ async function loadMeetingDetail(meetingId: string, currentUserId: string) {
 			roleDefinitions,
 			eq(roleDefinitions.id, roleSlots.roleDefinitionId),
 		)
-		.leftJoin(assignee, eq(assignee.id, roleSlots.assignedUserId))
+		.leftJoin(assignee, eq(assignee.id, roleSlots.assignedMemberId))
 		.leftJoin(speakerDetails, eq(speakerDetails.slotId, roleSlots.id))
 		.where(eq(roleSlots.meetingId, meetingId))
 		.orderBy(asc(roleDefinitions.sortOrder), asc(roleSlots.slotIndex));
@@ -152,6 +152,20 @@ export const getNextMeeting = createServerFn({ method: "GET" })
 export const listMyCommitments = createServerFn({ method: "GET" }).handler(
 	async () => {
 		const currentUser = await requireUser();
+
+		// Resolve the signed-in user's linked roster member(s).
+		const myMembers = await db
+			.select({ id: members.id })
+			.from(members)
+			.where(eq(members.userId, currentUser.id));
+
+		if (myMembers.length === 0) {
+			return [];
+		}
+
+		// Use the first linked member (typical: one user = one member).
+		const memberId = myMembers[0].id;
+
 		return db
 			.select({
 				slotId: roleSlots.id,
@@ -176,7 +190,7 @@ export const listMyCommitments = createServerFn({ method: "GET" }).handler(
 			.leftJoin(speakerDetails, eq(speakerDetails.slotId, roleSlots.id))
 			.where(
 				and(
-					eq(roleSlots.assignedUserId, currentUser.id),
+					eq(roleSlots.assignedMemberId, memberId),
 					gte(meetings.scheduledAt, new Date()),
 					ne(meetings.status, "cancelled"),
 				),
