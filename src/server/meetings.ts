@@ -49,62 +49,103 @@ export const listUpcomingMeetings = createServerFn({ method: "GET" })
 			.orderBy(asc(meetings.scheduledAt));
 	});
 
+/**
+ * Load a meeting plus its ordered slots, assignees, speaker details, and
+ * evaluator→speaker links. Shared by `getMeeting` and `getNextMeeting`.
+ */
+async function loadMeetingDetail(meetingId: string, currentUserId: string) {
+	const meeting = await db.query.meetings.findFirst({
+		where: eq(meetings.id, meetingId),
+	});
+	if (!meeting) {
+		throw new Error("Meeting not found.");
+	}
+	const membership = await requireMembership(currentUserId, meeting.clubId);
+	const canManage =
+		membership.clubRole === "admin" || membership.clubRole === "vpe";
+
+	const assignee = alias(user, "assignee");
+	const rows = await db
+		.select({
+			id: roleSlots.id,
+			status: roleSlots.status,
+			slotIndex: roleSlots.slotIndex,
+			claimedAt: roleSlots.claimedAt,
+			evaluatesSlotId: roleSlots.evaluatesSlotId,
+			roleName: roleDefinitions.name,
+			category: roleDefinitions.category,
+			sortOrder: roleDefinitions.sortOrder,
+			isSpeakerRole: roleDefinitions.isSpeakerRole,
+			assigneeId: assignee.id,
+			assigneeName: assignee.name,
+			speechTitle: speakerDetails.speechTitle,
+			pathwayPath: speakerDetails.pathwayPath,
+			projectName: speakerDetails.projectName,
+			projectLevel: speakerDetails.projectLevel,
+			minMinutes: speakerDetails.minMinutes,
+			maxMinutes: speakerDetails.maxMinutes,
+		})
+		.from(roleSlots)
+		.innerJoin(
+			roleDefinitions,
+			eq(roleDefinitions.id, roleSlots.roleDefinitionId),
+		)
+		.leftJoin(assignee, eq(assignee.id, roleSlots.assignedUserId))
+		.leftJoin(speakerDetails, eq(speakerDetails.slotId, roleSlots.id))
+		.where(eq(roleSlots.meetingId, meetingId))
+		.orderBy(asc(roleDefinitions.sortOrder), asc(roleSlots.slotIndex));
+
+	// Resolve which speaker each evaluator slot evaluates.
+	const slots = resolveEvaluatorLinks(rows);
+
+	const club = await db.query.clubs.findFirst({
+		where: eq(clubs.id, meeting.clubId),
+		columns: { timezone: true },
+	});
+
+	return { meeting, slots, canManage, timezone: club?.timezone ?? "UTC" };
+}
+
 /** A meeting plus its ordered slots, assignees, speaker details, and evaluator→speaker links. */
 export const getMeeting = createServerFn({ method: "GET" })
 	.validator((meetingId: unknown) => uuid.parse(meetingId))
 	.handler(async ({ data: meetingId }) => {
 		const currentUser = await requireUser();
+		return loadMeetingDetail(meetingId, currentUser.id);
+	});
 
-		const meeting = await db.query.meetings.findFirst({
-			where: eq(meetings.id, meetingId),
-		});
-		if (!meeting) {
-			throw new Error("Meeting not found.");
-		}
-		const membership = await requireMembership(currentUser.id, meeting.clubId);
-		const canManage =
-			membership.clubRole === "admin" || membership.clubRole === "vpe";
+/**
+ * The club's soonest upcoming (non-cancelled) meeting with its full agenda, or
+ * `{ meeting: null }` when none is scheduled. Backs the Agenda sign-up board.
+ */
+export const getNextMeeting = createServerFn({ method: "GET" })
+	.validator((clubId: unknown) => uuid.parse(clubId))
+	.handler(async ({ data: clubId }) => {
+		const currentUser = await requireUser();
+		await requireMembership(currentUser.id, clubId);
 
-		const assignee = alias(user, "assignee");
-		const rows = await db
-			.select({
-				id: roleSlots.id,
-				status: roleSlots.status,
-				slotIndex: roleSlots.slotIndex,
-				claimedAt: roleSlots.claimedAt,
-				evaluatesSlotId: roleSlots.evaluatesSlotId,
-				roleName: roleDefinitions.name,
-				category: roleDefinitions.category,
-				sortOrder: roleDefinitions.sortOrder,
-				isSpeakerRole: roleDefinitions.isSpeakerRole,
-				assigneeId: assignee.id,
-				assigneeName: assignee.name,
-				speechTitle: speakerDetails.speechTitle,
-				pathwayPath: speakerDetails.pathwayPath,
-				projectName: speakerDetails.projectName,
-				projectLevel: speakerDetails.projectLevel,
-				minMinutes: speakerDetails.minMinutes,
-				maxMinutes: speakerDetails.maxMinutes,
-			})
-			.from(roleSlots)
-			.innerJoin(
-				roleDefinitions,
-				eq(roleDefinitions.id, roleSlots.roleDefinitionId),
+		const [next] = await db
+			.select({ id: meetings.id })
+			.from(meetings)
+			.where(
+				and(
+					eq(meetings.clubId, clubId),
+					gte(meetings.scheduledAt, new Date()),
+					ne(meetings.status, "cancelled"),
+				),
 			)
-			.leftJoin(assignee, eq(assignee.id, roleSlots.assignedUserId))
-			.leftJoin(speakerDetails, eq(speakerDetails.slotId, roleSlots.id))
-			.where(eq(roleSlots.meetingId, meetingId))
-			.orderBy(asc(roleDefinitions.sortOrder), asc(roleSlots.slotIndex));
+			.orderBy(asc(meetings.scheduledAt))
+			.limit(1);
 
-		// Resolve which speaker each evaluator slot evaluates.
-		const slots = resolveEvaluatorLinks(rows);
-
-		const club = await db.query.clubs.findFirst({
-			where: eq(clubs.id, meeting.clubId),
-			columns: { timezone: true },
-		});
-
-		return { meeting, slots, canManage, timezone: club?.timezone ?? "UTC" };
+		if (!next) {
+			return {
+				meeting: null,
+				slots: [] as Awaited<ReturnType<typeof loadMeetingDetail>>["slots"],
+				canManage: false,
+				timezone: "UTC",
+			};
+		}
+		return loadMeetingDetail(next.id, currentUser.id);
 	});
 
 /** The current user's upcoming claimed roles across every club they belong to. */
