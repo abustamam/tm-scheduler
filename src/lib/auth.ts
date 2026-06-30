@@ -3,6 +3,7 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { magicLink } from "better-auth/plugins";
 import { tanstackStartCookies } from "better-auth/tanstack-start";
 import { db } from "#/db";
+import { captureDevMagicLink, isDevLoginEnabled } from "#/lib/dev-login";
 import { sendEmail } from "#/lib/email";
 import {
 	buildMagicLinkEmail,
@@ -27,6 +28,11 @@ export const auth = betterAuth({
 			// constant with the email copy so the displayed duration can't drift.
 			expiresIn: MAGIC_LINK_EXPIRY_SECONDS,
 			sendMagicLink: async ({ email, url }) => {
+				// Dev-login (local e2e) completes sign-in without an inbox by
+				// redirecting to this same verify URL — stash it. Inert in prod.
+				if (isDevLoginEnabled()) {
+					captureDevMagicLink(email, url);
+				}
 				const { subject, html, text } = buildMagicLinkEmail(url);
 				await sendEmail({ to: email, subject, html, text });
 			},
