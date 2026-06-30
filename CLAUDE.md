@@ -72,7 +72,19 @@ Optional (magic-link email delivery): `RESEND_API_KEY` and `EMAIL_FROM` (default
 Schema is `src/db/schema.ts` (a single `todos` table so far — this is an early scaffold).
 The `db` client (`src/db/index.ts`) is `drizzle(process.env.DATABASE_URL!, { schema })`.
 Migrations are generated to `./drizzle` (`drizzle.config.ts`); edit the schema, then
-`bun run db:generate` + `bun run db:migrate` (or `db:push` for quick dev sync).
+`bun run db:generate` + `bun run db:migrate` (or `db:push` for quick dev sync). CI fails if
+`schema.ts` drifts from the committed migrations (a generate that produces a diff) and applies
+migrations (not `push`) so the migration files are exercised the same way prod runs them.
+
+**Server modules must keep `pg` out of the client bundle.** A `src/server/*.ts` module that
+defines a `createServerFn` gets imported by client route files; the Start compiler strips the
+server-fn *handlers* (and their `#/db` imports) from the client bundle, but a plain top-level
+db-touching export sitting in that same module is NOT stripped and drags `#/db` → `pg` →
+`Buffer` into the browser (`ReferenceError: Buffer is not defined`, which white-screens the
+page). So: **server-fn modules export only `createServerFn`s and types.** Put the directly
+testable db logic in a sibling `*-logic.ts` (see `members-logic.ts`, `activity-feed-logic.ts`)
+that client code never imports; the wrapper's handler calls it and gets stripped. The
+`server-modules.guard.test.ts` unit test enforces this — it would have caught both regressions.
 
 ## Deployment target
 
@@ -80,7 +92,13 @@ Migrations are generated to `./drizzle` (`drizzle.config.ts`); edit the schema, 
 ADR-0003). Push to `main` auto-deploys; env vars are set in the Railway dashboard; Postgres is
 Railway's managed plugin (provides `DATABASE_URL`). This keeps the **single Node-server model**:
 the Nitro `node-server` build (`.output/server/index.mjs`) and the `node-postgres` pool in
-`src/db/index.ts` are unchanged. Migrations run on deploy via `bun run db:migrate`.
+`src/db/index.ts` are unchanged. **Migrations apply at container startup**: `bun run build`
+bundles a standalone runner (`scripts/migrate.ts` → `.output/migrate.mjs`, drizzle-orm + pg
+inlined), the `drizzle/` SQL is copied into the runtime image, and the Dockerfile `CMD` runs
+`node .output/migrate.mjs && node .output/server/index.mjs` so pending migrations apply before
+the server serves traffic (drizzle tracks applied migrations, so reruns are no-ops; a migration
+failure exits non-zero and the deploy fails closed). The runtime image is `node:22-slim` with no
+Bun/drizzle-kit, which is why the runner is bundled rather than invoked via `drizzle-kit migrate`.
 Do NOT adopt edge/serverless adapters (Cloudflare Workers / Convex) — the persistent process is
 required for the `pg` pool and the planned in-process reminder poller (#7). The Workers + Neon
 path stays a deferred future option only.
