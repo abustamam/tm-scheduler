@@ -9,6 +9,7 @@ import {
 import {
 	BookOpen,
 	CalendarDays,
+	Grid3x3,
 	LayoutGrid,
 	List,
 	LogOut,
@@ -50,6 +51,7 @@ const CLUB_ROLE_LABELS: Record<string, string> = {
 
 function crumbFor(pathname: string): string {
 	if (pathname === "/") return "Manage · Roster";
+	if (pathname.startsWith("/schedule")) return "Manage · Season grid";
 	if (pathname.startsWith("/agenda")) return "Manage · Agenda & roles";
 	if (pathname.startsWith("/activity")) return "Manage · Activity";
 	if (pathname.startsWith("/dashboard")) return "Me · My dashboard";
@@ -97,6 +99,7 @@ function WorkspaceLayout() {
 				</div>
 
 				<NavGroup label="Manage">
+					<NavItem to="/schedule" icon={Grid3x3} label="Season grid" />
 					<NavItem to="/" exact icon={List} label="Roster" />
 					<NavItem to="/agenda" icon={CalendarDays} label="Agenda & roles" />
 					<NavItem to="/activity" icon={ScrollText} label="Activity" />
