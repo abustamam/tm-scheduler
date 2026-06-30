@@ -120,17 +120,22 @@ async function loadMeetingDetail(
 		columns: { timezone: true },
 	});
 
-	const unavail = await db
-		.select({ memberId: memberAvailability.memberId })
+	// Members who've marked themselves Not Available for this meeting (with
+	// names, so the VPE can see who NOT to chase when filling open roles).
+	const unavailableMembers = await db
+		.select({ id: members.id, name: members.name })
 		.from(memberAvailability)
-		.where(eq(memberAvailability.meetingId, meetingId));
+		.innerJoin(members, eq(members.id, memberAvailability.memberId))
+		.where(eq(memberAvailability.meetingId, meetingId))
+		.orderBy(asc(members.name));
 
 	return {
 		meeting,
 		slots,
 		canManage,
 		timezone: club?.timezone ?? "UTC",
-		unavailableMemberIds: unavail.map((u) => u.memberId),
+		unavailableMembers,
+		unavailableMemberIds: unavailableMembers.map((m) => m.id),
 	};
 }
 

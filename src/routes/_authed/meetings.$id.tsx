@@ -1,5 +1,11 @@
 import { createFileRoute, useRouter } from "@tanstack/react-router";
-import { CalendarDays, Loader2, MapPin, Sparkles } from "lucide-react";
+import {
+	CalendarDays,
+	CalendarOff,
+	Loader2,
+	MapPin,
+	Sparkles,
+} from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { ShareLinkButton } from "#/components/share-link-button";
@@ -45,7 +51,8 @@ function errMessage(err: unknown) {
 }
 
 function MeetingDetail() {
-	const { meeting, slots, canManage, timezone } = Route.useLoaderData();
+	const { meeting, slots, canManage, timezone, unavailableMembers } =
+		Route.useLoaderData();
 	const { currentMemberId } = Route.useRouteContext();
 	const router = useRouter();
 	const [busySlotId, setBusySlotId] = useState<string | null>(null);
@@ -176,6 +183,25 @@ function MeetingDetail() {
 					className="mt-1"
 				/>
 			</header>
+
+			{unavailableMembers.length > 0 ? (
+				<section className="rounded-xl border border-dashed bg-muted/40 p-4">
+					<h2 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+						<CalendarOff className="size-4" aria-hidden />
+						Not available this week
+					</h2>
+					<p className="mt-1 text-xs text-muted-foreground">
+						Marked themselves out — skip them when filling open roles.
+					</p>
+					<div className="mt-2 flex flex-wrap gap-1.5">
+						{unavailableMembers.map((m) => (
+							<Badge key={m.id} variant="secondary">
+								{m.name}
+							</Badge>
+						))}
+					</div>
+				</section>
+			) : null}
 
 			{categories.map((category) => (
 				<section key={category} className="space-y-2">
