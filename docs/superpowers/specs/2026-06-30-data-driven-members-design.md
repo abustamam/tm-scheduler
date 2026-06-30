@@ -40,15 +40,19 @@ Add two nullable columns:
   (default file `ref/Club-Membership20260630.csv`). Add a `package.json` script.
   Bun auto-loads `.env.local` for `DATABASE_URL`.
 - Minimal quote-aware CSV parser (no new dependency).
+- **Row filter:** import only rows where `Status (*)` == `PaidMember` AND
+  `Pathways Enrolled` == `Yes`. Skip unpaid and not-enrolled members. (This leaves
+  exactly the 13 active enrolled members.)
 - **Upsert by email** (lowercased) within the target club: update existing rows,
   insert missing ones.
 - Field mapping:
   - `name` ← Name
   - `email` ← Email
-  - `phone` ← Mobile Phone || Home Phone || Additional Phone
-  - `office` ← Current Position
+  - `phone` ← Mobile Phone (only; Home/Additional ignored)
   - `joinedAt` ← Member of Club Since (M/D/YYYY)
   - `originalJoinDate` ← Original Join Date (M/D/YYYY)
+  - **`office` is NOT touched** — officer positions will be modeled properly in a
+    separate issue; the importer leaves existing `office` values untouched.
 - Idempotent; prints inserted/updated counts.
 - The directly-testable parse + map logic lives in a sibling `*-logic` style module (or
   exported pure functions in the script) so the CSV parser and date/field mapping are
@@ -89,6 +93,8 @@ selects so views can read the real dates.
   Overview" screenshots as the target data). Restores the progress UI properly.
 - **CSV member-import upload feature** — VPE-facing repeatable upload of the TM
   membership export, building on the one-off seed script.
+- **Officer position modeling** — replace the free-text `members.office` with a proper
+  model for club officer roles (sourced from the CSV "Current Position").
 
 ## Verification
 
@@ -102,5 +108,6 @@ selects so views can read the real dates.
 
 - Real Pathways progress persistence (its own issue).
 - CSV upload UI (its own issue).
+- Officer position modeling — `members.office` left as-is (its own issue).
 - Credential / highest-achievement / completed-paths / last-speech persistence.
 - Paid-vs-unpaid membership status modeling.
