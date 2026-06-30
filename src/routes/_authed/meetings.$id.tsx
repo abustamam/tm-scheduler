@@ -2,6 +2,7 @@ import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { CalendarDays, Loader2, MapPin, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { ShareLinkButton } from "#/components/share-link-button";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
@@ -169,6 +170,11 @@ function MeetingDetail() {
 						<span className="font-medium">{meeting.wordOfTheDay}</span>
 					</p>
 				) : null}
+				<ShareLinkButton
+					path={`/club/${meeting.clubId}/meeting/${meeting.id}`}
+					label="Copy member link"
+					className="mt-1"
+				/>
 			</header>
 
 			{categories.map((category) => (
