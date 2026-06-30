@@ -6,10 +6,12 @@ import { members } from "#/db/schema";
 import { logActivity } from "./activity";
 import { requireClubRole, requireUser } from "./guards";
 import {
+	applyBulkImport,
 	applyMemberEdit,
 	applyMemberMerge,
 	applyMemberRemove,
 	applySetMemberStatus,
+	bulkImportSchema,
 	editSchema,
 	mergeSchema,
 	removeSchema,
@@ -91,4 +93,12 @@ export const setMemberStatus = createServerFn({ method: "POST" })
 		const user = await requireUser();
 		await requireClubRole(user.id, data.clubId, ["admin", "vpe"]);
 		return applySetMemberStatus(data);
+	});
+
+export const bulkImportMembers = createServerFn({ method: "POST" })
+	.validator((i: unknown) => bulkImportSchema.parse(i))
+	.handler(async ({ data }) => {
+		const user = await requireUser();
+		await requireClubRole(user.id, data.clubId, ["admin", "vpe"]);
+		return applyBulkImport(data);
 	});

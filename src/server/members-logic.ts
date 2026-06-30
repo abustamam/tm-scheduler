@@ -18,6 +18,7 @@ import {
 	roleSlots,
 	speakerDetails,
 } from "#/db/schema";
+import { buildImportPreview } from "#/lib/roster-import";
 import { logActivity } from "./activity";
 
 export const editSchema = z.object({
@@ -292,4 +293,84 @@ export async function applyMemberRemove(input: RemoveInput) {
 		});
 	});
 	return { ok: true as const };
+}
+
+export const bulkImportSchema = z.object({
+	clubId: z.string().uuid(),
+	actorMemberId: z.string().uuid().nullable().optional(),
+	// Rows are parsed client-side (see #/lib/roster-import). The server
+	// re-validates and dedupes against the live roster — never trust the client.
+	rows: z
+		.array(
+			z.object({
+				name: z.string(),
+				email: z.string(),
+				phone: z.string(),
+				office: z.string(),
+			}),
+		)
+		.min(1),
+});
+type BulkImportInput = z.infer<typeof bulkImportSchema>;
+
+export interface BulkImportResult {
+	insertedIds: string[];
+	inserted: number;
+	skipped: number;
+}
+
+/**
+ * Insert the valid pasted rows into `members`, skipping blank names, malformed
+ * emails, and duplicates (against the live roster + within the batch — same
+ * rules as the client preview). Logs one `member_add` per inserted member
+ * (mirrors `addMember`'s action/targetType/detail shape). Phone is stored as the
+ * raw digit string the user pasted (no reformatting — the wa.me nudge wants it).
+ */
+export async function applyBulkImport(
+	input: BulkImportInput,
+): Promise<BulkImportResult> {
+	const existing = await db
+		.select({ name: members.name, email: members.email })
+		.from(members)
+		.where(eq(members.clubId, input.clubId));
+
+	const preview = buildImportPreview(input.rows, existing);
+	const toInsert = preview.filter((r) => r.willImport);
+	if (toInsert.length === 0) {
+		return { insertedIds: [], inserted: 0, skipped: preview.length };
+	}
+
+	const insertedIds = await db.transaction(async (tx) => {
+		const ids: string[] = [];
+		for (const row of toInsert) {
+			const name = row.name.trim();
+			const [m] = await tx
+				.insert(members)
+				.values({
+					clubId: input.clubId,
+					name,
+					email: row.email.trim() || null,
+					phone: row.phone.trim() || null,
+					office: row.office.trim() || null,
+				})
+				.returning({ id: members.id });
+			if (!m) throw new Error("Failed to insert member.");
+			ids.push(m.id);
+			await logActivity(tx, {
+				clubId: input.clubId,
+				actorMemberId: input.actorMemberId ?? null,
+				action: "member_add",
+				targetType: "member",
+				targetId: m.id,
+				detail: { name },
+			});
+		}
+		return ids;
+	});
+
+	return {
+		insertedIds,
+		inserted: insertedIds.length,
+		skipped: preview.length - insertedIds.length,
+	};
 }
