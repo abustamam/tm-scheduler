@@ -133,8 +133,12 @@ redirects `#/db` → `tm_test`). No `-logic.ts` split — match the rest of `src
   - `export async function loadSeasonGrid(input: { clubId: string; count: 4 | 8 | "all" })` —
     plain, db-using, directly testable.
   - `export const getSeasonGrid = createServerFn({ method: "GET" })…` — validates input (`zod`),
-    calls `loadSeasonGrid`. Read-only; **public read acceptable** (assignment data is already
-    public via the self-serve member browse), UI gated under `_authed`.
+    then **requires a VPE/admin session** (`requireUser` + `requireClubRole(user.id, clubId,
+    ["admin","vpe"])`, matching `createMeeting`/`confirmSlot`) before calling `loadSeasonGrid`.
+    Read-only. (Revised from the original "public read acceptable" note after review: the payload
+    also exposes the availability map, so the endpoint is gated even though the UI already lives
+    under `_authed`. `loadSeasonGrid` stays an unguarded plain fn so integration tests call it
+    directly.)
 - **Returned shape** (normalized so both projections are pure client-side transforms):
   - `meetings: { id, date, openCount, totalSlots, isPast, isAnchor }[]` — the windowed columns
     (≤2 past + upcoming), date-ordered.
