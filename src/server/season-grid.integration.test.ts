@@ -38,7 +38,7 @@ describe.skipIf(!hasTestDb)("loadSeasonGrid", () => {
 	});
 
 	it("windows past lookback + upcoming, expands multi-count rows, counts open", async () => {
-		const { loadSeasonGrid } = await import("#/server/season-grid");
+		const { loadSeasonGrid } = await import("#/server/season-grid-logic");
 
 		// seedClub gives: a Timer role def, one upcoming meeting (pinned future
 		// in beforeEach), one open Timer slot. Add a past meeting + a 3-count
@@ -127,7 +127,7 @@ describe.skipIf(!hasTestDb)("loadSeasonGrid", () => {
 	});
 
 	it("count: 4 limits upcoming meetings", async () => {
-		const { loadSeasonGrid } = await import("#/server/season-grid");
+		const { loadSeasonGrid } = await import("#/server/season-grid-logic");
 		// seedClub already inserted 1 upcoming meeting; add 5 more upcoming.
 		for (let i = 0; i < 5; i++) {
 			await testDb.insert(meetings).values({
@@ -142,7 +142,7 @@ describe.skipIf(!hasTestDb)("loadSeasonGrid", () => {
 	});
 
 	it("count: 'all' returns every upcoming meeting", async () => {
-		const { loadSeasonGrid } = await import("#/server/season-grid");
+		const { loadSeasonGrid } = await import("#/server/season-grid-logic");
 		// seedClub already inserted 1 upcoming meeting; add 2 more (3 total).
 		for (let i = 0; i < 2; i++) {
 			await testDb.insert(meetings).values({
