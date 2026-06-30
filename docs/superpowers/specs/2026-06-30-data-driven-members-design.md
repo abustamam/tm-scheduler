@@ -40,9 +40,9 @@ Add two nullable columns:
   (default file `ref/Club-Membership20260630.csv`). Add a `package.json` script.
   Bun auto-loads `.env.local` for `DATABASE_URL`.
 - Minimal quote-aware CSV parser (no new dependency).
-- **Row filter:** import only rows where `Status (*)` == `PaidMember` AND
-  `Pathways Enrolled` == `Yes`. Skip unpaid and not-enrolled members. (This leaves
-  exactly the 13 active enrolled members.)
+- **Row filter:** import only rows where `Status (*)` == `PaidMember`. Skip unpaid
+  members (Jamal, Gulnaz, Nancy). Not-yet-enrolled paid members (e.g. Farhanaaz) ARE
+  imported. (This leaves the 14 paid members.)
 - **Upsert by email** (lowercased) within the target club: update existing rows,
   insert missing ones.
 - Field mapping:
