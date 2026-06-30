@@ -180,6 +180,9 @@ describe("roleAbbrev", () => {
 		expect(roleAbbrev("Timer")).toBe("Time");
 		expect(roleAbbrev("Grammarian")).toBe("Gram");
 	});
+	it("falls back to ? for an empty name", () => {
+		expect(roleAbbrev("")).toBe("?");
+	});
 });
 
 describe("buildShortCodes", () => {
@@ -201,5 +204,8 @@ describe("buildShortCodes", () => {
 		]);
 		expect(codes.get("a:0")).toBe("TT");
 		expect(codes.get("b:0")).toBe("TT#2");
+	});
+	it("returns an empty Map for no rows", () => {
+		expect(buildShortCodes([]).size).toBe(0);
 	});
 });

@@ -99,8 +99,14 @@ export type ShortCodeInput = {
  * Build unique short codes keyed `${roleDefinitionId}:${slotIndex}`.
  * Repeated roles get a 1-based number; different names that collapse to the
  * same base get a `#2`, `#3` … suffix in input order.
+ *
+ * Rows sharing the same human-readable `name` intentionally share a code; the
+ * caller must ensure role names are unique per club. The disambiguation only
+ * triggers for *different* names colliding on the same base code.
  */
 export function buildShortCodes(rows: ShortCodeInput[]): Map<string, string> {
+	// Counts slots per definition id (reusing buildRoleCounts; `roleName` here
+	// = `roleDefinitionId`).
 	const countByDef = buildRoleCounts(
 		rows.map((r) => ({ roleName: r.roleDefinitionId })),
 	);
