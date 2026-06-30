@@ -69,28 +69,55 @@ it("reassign logs the displaced assignee (fromMemberId)", async () => {
 
 **Files:** Create `src/server/activity-feed.ts`; Test: `src/server/activity-feed.integration.test.ts`
 
-- [ ] **Step 1 (failing test):** seed a club; perform a claim + an availability_set + a member_add; assert `listActivity({ clubId })` (as the admin user) returns rows newest-first with resolved `actorName`, and that a `claim` row has `roleName` + `meetingId` + `subjectName` (the claimer's name) set. Add a filter case: `listActivity({ clubId, meetingId })` excludes the `member_add` row (no meeting) and includes the slot/availability rows for that meeting. Add an auth case: calling with no session **rejects** (VPE-only).
+- [ ] **Step 1 (failing test):** Authed fns **cannot** obtain a valid session in this integration setup (no HTTP request → `getSessionUser()` returns null → `requireUser()` throws). So stub the auth guards with `vi.mock` and exercise the **real DB enrichment/filtering** (the valuable part). Seed a club; perform a claim + an availability_set + a member_add **via the real public server fns**; then assert the enriched feed:
 
 ```ts
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, hasTestDb, seedClub, type SeededClub } from "#/test/db";
+
+// Stub auth so the VPE-only gate passes; the real DB queries still run.
+vi.mock("#/server/guards", () => ({
+	requireUser: vi.fn().mockResolvedValue({ id: "admin-test" }),
+	requireClubRole: vi.fn().mockResolvedValue({ clubRole: "admin" }),
+}));
+
 describe.skipIf(!hasTestDb)("listActivity", () => {
-	// seed + perform actions via the real server fns, then:
-	it("returns enriched rows newest-first for a VPE", async () => {
+	let seed: SeededClub;
+	beforeEach(async () => { seed = await seedClub(); });
+	afterEach(async () => { await cleanup(seed.clubId, [seed.adminUserId, /* memberUserId */]); });
+
+	it("returns enriched rows newest-first with resolved names + role + meeting", async () => {
+		const { claimSlot } = await import("#/server/slots");
+		const { setAvailability } = await import("#/server/availability");
+		const { addMember } = await import("#/server/members");
+		await claimSlot({ data: { slotId: seed.slotId, memberId: seed.memberId, actorMemberId: seed.memberId } });
+		await setAvailability({ data: { memberId: seed.memberId, meetingId: seed.meetingId, clubId: seed.clubId } });
+		await addMember({ data: { clubId: seed.clubId, name: "Mike" } });
+
 		const { listActivity } = await import("#/server/activity-feed");
-		const rows = await withAdminSession(seed.adminUserId, () => listActivity({ data: { clubId: seed.clubId } }));
-		expect(rows.length).toBeGreaterThan(0);
-		expect(rows[0].createdAt >= rows[rows.length - 1].createdAt).toBe(true);
+		const rows = await listActivity({ data: { clubId: seed.clubId } });
+		expect(rows.length).toBeGreaterThanOrEqual(3);
+		expect(rows[0].createdAt.getTime()).toBeGreaterThanOrEqual(rows[rows.length - 1].createdAt.getTime());
 		const claim = rows.find((r) => r.action === "claim");
 		expect(claim?.roleName).toBeTruthy();
+		expect(claim?.meetingId).toBe(seed.meetingId);
 		expect(claim?.subjectName).toBeTruthy();
 	});
-	it("rejects without a session", async () => {
+
+	it("meeting filter excludes member_add (no meeting), keeps slot/availability rows", async () => {
+		const { addMember } = await import("#/server/members");
+		const { setAvailability } = await import("#/server/availability");
+		await addMember({ data: { clubId: seed.clubId, name: "Mike" } });
+		await setAvailability({ data: { memberId: seed.memberId, meetingId: seed.meetingId, clubId: seed.clubId } });
 		const { listActivity } = await import("#/server/activity-feed");
-		await expect(listActivity({ data: { clubId: seed.clubId } })).rejects.toThrow();
+		const rows = await listActivity({ data: { clubId: seed.clubId, meetingId: seed.meetingId } });
+		expect(rows.some((r) => r.action === "member_add")).toBe(false);
+		expect(rows.some((r) => r.action === "availability_set")).toBe(true);
 	});
 });
 ```
 
-(Use the same session-injection pattern the existing authed integration tests use — read `claim.integration.test.ts` / any `requireUser`-based test for how a session is provided; mirror it. If there's no existing helper for "run as admin", follow how the authed reads are tested in the repo. If authed fns can't be exercised in integration tests at all, STOP and report — don't invent a mocking scheme.)
+Check the exact `SeededClub` field names (`slotId`, `meetingId`, `memberId`, `adminUserId`, the memberUserId for `cleanup`) in `src/test/db.ts` and match them. **VPE-only gate is verified separately** by Task 5's grep (the `requireClubRole(admin|vpe)` call is identical to `confirmSlot`'s, already boundary-tested in Phase B's `public-reads.integration.test.ts`) — no need for a rejection test here, which would require unmocked guards in the same file.
 
 - [ ] **Step 2:** Run with DB → fail (module missing). **Step 3:** Implement:
 
@@ -283,7 +310,7 @@ describe("formatActivity", () => {
 - **Type consistency:** `ActivityEntry` defined in Task 2 is the exact shape consumed by Task 3's formatter and Task 4's UI. `detail` shapes (`{ memberId, fromMemberId, name }`) match the Task-1 writes and the confirmed existing writes.
 
 ## STOP conditions
-- If authed server fns can't be exercised in the repo's integration-test setup (no session-injection pattern exists), STOP and report — don't fabricate a mock.
+- (Resolved) Authed fns can't get a real session in integration tests — Task 2 uses `vi.mock("#/server/guards")` to stub auth and exercise the real DB enrichment. If that mock somehow doesn't isolate (e.g. the real guard still runs), STOP and report.
 - If `requireClubRole`'s real signature differs from the assumed `(userId, clubId, roles[])`, adapt to the real one (match `confirmSlot`) — if it can't express "admin or vpe", STOP and report.
 - If obtaining `clubId` in an `_authed` route requires a mechanism that doesn't exist in sibling routes, STOP and report rather than inventing one.
 
