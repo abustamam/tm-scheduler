@@ -59,7 +59,9 @@ export function SeasonGrid({
 							search={(prev) => ({ count: c, view: prev.view ?? "members" })}
 							className={cn(
 								"px-3 py-1.5 text-xs font-semibold",
-								count === c ? "bg-accent" : "text-muted-foreground",
+								count === c
+									? "bg-accent text-accent-foreground"
+									: "text-muted-foreground",
 							)}
 						>
 							{c === "all" ? "All" : c}
@@ -72,14 +74,14 @@ export function SeasonGrid({
 				<table className="border-separate border-spacing-1">
 					<thead>
 						<tr>
-							<th className="sticky left-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold">
+							<th className="sticky top-0 left-0 z-20 bg-card px-3 py-2 text-left text-xs font-semibold">
 								{labelHead}
 							</th>
 							{data.meetings.map((m) => (
 								<th
 									key={m.id}
 									className={cn(
-										"min-w-[3.5rem] bg-card px-2 py-2 text-center text-xs font-semibold",
+										"sticky top-0 min-w-[3.5rem] bg-card px-2 py-2 text-center text-xs font-semibold",
 										m.isPast && "opacity-45",
 										m.isAnchor && "rounded-md ring-2 ring-primary",
 									)}
