@@ -33,6 +33,7 @@ const data: SeasonGridData = {
 	members: [
 		{ id: "a", name: "Amir" },
 		{ id: "b", name: "Bea" },
+		{ id: "c", name: "Carlos" },
 	],
 	cells: [
 		{
@@ -60,16 +61,6 @@ describe("projectGrid – roles orientation", () => {
 		expect(rows[0]!.cells[0]).toMatchObject({ kind: "assigned", text: "Amir" });
 		expect(rows[1]!.cells[0]).toMatchObject({ kind: "open", text: "OPEN" });
 	});
-});
-
-describe("projectGrid – members orientation", () => {
-	it("shows role short code, NA, and free", () => {
-		const rows = projectGrid(data, "members");
-		const amir = rows.find((r) => r.id === "a")!;
-		const bea = rows.find((r) => r.id === "b")!;
-		expect(amir.cells[0]).toMatchObject({ kind: "assigned", text: "Toas" });
-		expect(bea.cells[0]).toMatchObject({ kind: "na", text: "NA" });
-	});
 
 	it("blank when the meeting lacks a slot for a roles-view row", () => {
 		const sparse: SeasonGridData = {
@@ -89,6 +80,18 @@ describe("projectGrid – members orientation", () => {
 		};
 		const rows = projectGrid(sparse, "roles");
 		expect(rows[0]!.cells[1]).toMatchObject({ kind: "blank" });
+	});
+});
+
+describe("projectGrid – members orientation", () => {
+	it("shows role short code, NA, and free", () => {
+		const rows = projectGrid(data, "members");
+		const amir = rows.find((r) => r.id === "a")!;
+		const bea = rows.find((r) => r.id === "b")!;
+		const carlos = rows.find((r) => r.id === "c")!;
+		expect(amir.cells[0]).toMatchObject({ kind: "assigned", text: "Toas" });
+		expect(bea.cells[0]).toMatchObject({ kind: "na", text: "NA" });
+		expect(carlos.cells[0]).toMatchObject({ kind: "free", text: "·" });
 	});
 
 	it("collapses multiple roles in one meeting to first + +N", () => {
