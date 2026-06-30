@@ -61,6 +61,8 @@ interface RosterRow {
 	pct: number;
 	speeches: number;
 	status: MemberStatus;
+	/** Roster membership status (renewal) — distinct from the mocked pathway status. */
+	membershipStatus: "active" | "inactive";
 }
 
 function Roster() {
@@ -90,15 +92,27 @@ function Roster() {
 			pct: p.pct,
 			speeches: m.speeches,
 			status: isNewMember(m.createdAt) ? "new" : p.status,
+			membershipStatus: m.status,
 		};
 	});
 
-	const visible = seg === "all" ? rows : rows.filter((r) => r.status === seg);
+	// Active members first; inactive (unrenewed) sink to the bottom, greyed.
+	const sorted = [...rows].sort((a, b) => {
+		const ai = a.membershipStatus === "inactive" ? 1 : 0;
+		const bi = b.membershipStatus === "inactive" ? 1 : 0;
+		return ai - bi;
+	});
+	const visible =
+		seg === "all" ? sorted : sorted.filter((r) => r.status === seg);
 	const countFor = (key: RosterSegment["key"]) =>
 		key === "all" ? rows.length : rows.filter((r) => r.status === key).length;
 
 	const stats = [
-		{ label: "Active members", value: String(rows.length), note: "this term" },
+		{
+			label: "Active members",
+			value: String(rows.filter((r) => r.membershipStatus === "active").length),
+			note: "this term",
+		},
 		{
 			label: "Speeches given",
 			value: String(rows.reduce((n, r) => n + r.speeches, 0)),
@@ -205,14 +219,24 @@ function Roster() {
 							key={m.id}
 							to="/members/$id"
 							params={{ id: m.id }}
-							className="group grid cursor-pointer items-center gap-3.5 border-b border-[var(--line)] px-5 py-[13px] transition-colors last:border-b-0 hover:bg-[var(--foam)]"
+							className={cn(
+								"group grid cursor-pointer items-center gap-3.5 border-b border-[var(--line)] px-5 py-[13px] transition-colors last:border-b-0 hover:bg-[var(--foam)]",
+								m.membershipStatus === "inactive" && "opacity-55",
+							)}
 							style={{ gridTemplateColumns: TABLE_COLS }}
 						>
 							{/* Member */}
 							<div className="flex min-w-0 items-center gap-[11px]">
 								<MemberAvatar tone={m.tone} initials={m.initials} size={38} />
 								<div className="min-w-0 leading-[1.25]">
-									<div className="truncate text-sm font-bold">{m.name}</div>
+									<div className="flex items-center gap-2">
+										<span className="truncate text-sm font-bold">{m.name}</span>
+										{m.membershipStatus === "inactive" ? (
+											<span className="shrink-0 rounded-full border border-[var(--line)] bg-[var(--sand)] px-2 py-0.5 text-[10px] font-bold tracking-[0.03em] text-[var(--sea-ink-soft)] uppercase">
+												Inactive
+											</span>
+										) : null}
+									</div>
 									<div className="text-[11.5px] text-[var(--sea-ink-soft)]">
 										{m.tenure}
 									</div>

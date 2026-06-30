@@ -34,6 +34,7 @@ export const listClubMembers = createServerFn({ method: "GET" })
 				email: members.email,
 				office: members.office,
 				userId: members.userId,
+				status: members.status,
 				createdAt: members.createdAt,
 			})
 			.from(members)
@@ -71,6 +72,7 @@ export const listClubMembers = createServerFn({ method: "GET" })
 			email: m.email,
 			office: m.office,
 			userId: m.userId,
+			status: m.status,
 			createdAt: m.createdAt,
 			speeches: speechByMember.get(m.id) ?? 0,
 		}));
@@ -174,6 +176,7 @@ export const getMemberProfile = createServerFn({ method: "GET" })
 				phone: members.phone,
 				office: members.office,
 				userId: members.userId,
+				status: members.status,
 				createdAt: members.createdAt,
 			})
 			.from(members)
@@ -198,6 +201,7 @@ export const getMemberProfile = createServerFn({ method: "GET" })
 				phone: member.phone,
 				office: member.office,
 				userId: member.userId,
+				status: member.status,
 				createdAt: member.createdAt,
 			},
 			speechLog,

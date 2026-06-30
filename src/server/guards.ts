@@ -81,11 +81,16 @@ export async function getMember(memberId: string) {
 	return member ?? null;
 }
 
-/** Validate that a memberId exists and belongs to the given clubId. Throws otherwise. */
+/** Validate that a memberId exists, belongs to the given clubId, and is active.
+ *  Throws otherwise. Gates claiming / reassignment / availability so inactive
+ *  (unrenewed) members can't claim or be assigned new roles. */
 export async function requireMemberInClub(memberId: string, clubId: string) {
 	const member = await getMember(memberId);
 	if (!member || member.clubId !== clubId) {
 		throw new Error("Member not found in this club.");
+	}
+	if (member.status === "inactive") {
+		throw new Error("That member is inactive — reactivate them first.");
 	}
 	return member;
 }

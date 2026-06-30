@@ -24,7 +24,10 @@ export function projectGrid(
 	data: SeasonGridData,
 	orientation: Orientation,
 ): ViewRow[] {
-	const memberName = new Map(data.members.map((m) => [m.id, m.name]));
+	// Cell names resolve from the COMPLETE lookup (covers inactive members who
+	// held a role in a past meeting); the members-orientation axis below still
+	// derives its rows from the active-only `data.members`.
+	const memberName = new Map(data.memberNames.map((m) => [m.id, m.name]));
 	const rowByKey = new Map(
 		data.rows.map((r) => [`${r.roleDefinitionId}:${r.slotIndex}`, r]),
 	);

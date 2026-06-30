@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq, ne } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import { members } from "#/db/schema";
@@ -10,20 +10,24 @@ import {
 	applyMemberEdit,
 	applyMemberMerge,
 	applyMemberRemove,
+	applySetMemberStatus,
 	bulkImportSchema,
 	editSchema,
 	mergeSchema,
 	removeSchema,
+	setStatusSchema,
 } from "./members-logic";
 
-/** List all roster members for a club. PUBLIC — no session required. */
+/** List all ACTIVE roster members for a club (member-facing picker). Inactive
+ *  members are hidden here; the VPE roster manager loads them separately.
+ *  PUBLIC — no session required. */
 export const listMembers = createServerFn({ method: "GET" })
 	.validator((clubId: unknown) => z.string().uuid().parse(clubId))
 	.handler(async ({ data: clubId }) =>
 		db
 			.select({ id: members.id, name: members.name, office: members.office })
 			.from(members)
-			.where(eq(members.clubId, clubId))
+			.where(and(eq(members.clubId, clubId), ne(members.status, "inactive")))
 			.orderBy(asc(members.name)),
 	);
 
@@ -80,6 +84,15 @@ export const removeMember = createServerFn({ method: "POST" })
 		const user = await requireUser();
 		await requireClubRole(user.id, data.clubId, ["admin", "vpe"]);
 		return applyMemberRemove(data);
+	});
+
+/** Toggle a roster member active/inactive (NOT deletion — see removeMember). */
+export const setMemberStatus = createServerFn({ method: "POST" })
+	.validator((i: unknown) => setStatusSchema.parse(i))
+	.handler(async ({ data }) => {
+		const user = await requireUser();
+		await requireClubRole(user.id, data.clubId, ["admin", "vpe"]);
+		return applySetMemberStatus(data);
 	});
 
 export const bulkImportMembers = createServerFn({ method: "POST" })

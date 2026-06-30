@@ -69,6 +69,81 @@ export async function applyMemberEdit(input: EditInput) {
 	return { ok: true as const };
 }
 
+export const setStatusSchema = z.object({
+	clubId: z.string().uuid(),
+	memberId: z.string().uuid(),
+	status: z.enum(["active", "inactive"]),
+	actorMemberId: z.string().uuid().nullable().optional(),
+});
+type SetStatusInput = z.infer<typeof setStatusSchema>;
+
+/** Toggle a roster member active/inactive. Inactive members are hidden from
+ *  sign-up / roster / season / picker views and can't claim or be assigned new
+ *  roles, but their past role history is preserved (never deleted) and
+ *  reactivating restores them everywhere. Logs member_edit with the status
+ *  before/after. On an active→inactive transition their UPCOMING, non-cancelled
+ *  role slots are released (mirrors applyMemberRemove); past slots are left
+ *  untouched. */
+export async function applySetMemberStatus(input: SetStatusInput) {
+	const [current] = await db
+		.select()
+		.from(members)
+		.where(
+			and(eq(members.id, input.memberId), eq(members.clubId, input.clubId)),
+		);
+	if (!current) throw new Error("Member not found.");
+	const deactivating =
+		current.status === "active" && input.status === "inactive";
+	await db.transaction(async (tx) => {
+		await tx
+			.update(members)
+			.set({ status: input.status })
+			.where(eq(members.id, input.memberId));
+		// Free up their upcoming roles so the VPE can re-fill them; past slots
+		// stay assigned (history preserved).
+		if (deactivating) {
+			const upcoming = await tx
+				.select({ id: roleSlots.id })
+				.from(roleSlots)
+				.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+				.where(
+					and(
+						eq(roleSlots.assignedMemberId, input.memberId),
+						gte(meetings.scheduledAt, new Date()),
+						ne(meetings.status, "cancelled"),
+					),
+				);
+			for (const s of upcoming) {
+				await tx.delete(speakerDetails).where(eq(speakerDetails.slotId, s.id));
+				await tx
+					.update(roleSlots)
+					.set({ assignedMemberId: null, status: "open", claimedAt: null })
+					.where(eq(roleSlots.id, s.id));
+				await logActivity(tx, {
+					clubId: input.clubId,
+					actorMemberId: input.actorMemberId ?? null,
+					action: "release",
+					targetType: "slot",
+					targetId: s.id,
+					detail: { fromMemberId: input.memberId },
+				});
+			}
+		}
+		await logActivity(tx, {
+			clubId: input.clubId,
+			actorMemberId: input.actorMemberId ?? null,
+			action: "member_edit",
+			targetType: "member",
+			targetId: input.memberId,
+			detail: {
+				before: { status: current.status },
+				after: { status: input.status },
+			},
+		});
+	});
+	return { ok: true as const, status: input.status };
+}
+
 export const mergeSchema = z.object({
 	clubId: z.string().uuid(),
 	keeperId: z.string().uuid(),
