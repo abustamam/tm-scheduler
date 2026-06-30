@@ -22,10 +22,15 @@ import {
 } from "#/data/club";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
 import { formatTenure, isNewMember } from "#/lib/members";
+import {
+	buildImportPreview,
+	type PreviewRow,
+	parseRosterText,
+} from "#/lib/roster-import";
 import { cn } from "#/lib/utils";
 import { listClubMembers } from "#/server/club";
 import { listUpcomingMeetings } from "#/server/meetings";
-import { mergeMembers } from "#/server/members";
+import { bulkImportMembers, mergeMembers } from "#/server/members";
 
 export const Route = createFileRoute("/_authed/")({
 	loader: async ({ context }) => {
@@ -62,8 +67,11 @@ function Roster() {
 	const { members, openRoles } = Route.useLoaderData();
 	const { clubs, currentMemberId } = Route.useRouteContext();
 	const clubId = clubs[0]?.clubId;
+	const clubRole = clubs[0]?.clubRole;
+	const canManage = clubRole === "admin" || clubRole === "vpe";
 	const [seg, setSeg] = useState<RosterSegment["key"]>("all");
 	const [mergeOpen, setMergeOpen] = useState(false);
+	const [importOpen, setImportOpen] = useState(false);
 
 	// Identity + speeches are real; Pathway/level/% + status are mocked.
 	const rows: RosterRow[] = members.map((m) => {
@@ -138,6 +146,15 @@ function Roster() {
 							onClick={() => setMergeOpen(true)}
 						>
 							Merge duplicates
+						</Button>
+					) : null}
+					{clubId && canManage ? (
+						<Button
+							variant="outline"
+							size="sm"
+							onClick={() => setImportOpen(true)}
+						>
+							Bulk import
 						</Button>
 					) : null}
 					<Button size="sm">+ Add member</Button>
@@ -272,7 +289,199 @@ function Roster() {
 					currentMemberId={currentMemberId}
 				/>
 			) : null}
+
+			{clubId && canManage ? (
+				<BulkImportDialog
+					open={importOpen}
+					onOpenChange={setImportOpen}
+					existing={members}
+					clubId={clubId}
+					currentMemberId={currentMemberId}
+				/>
+			) : null}
 		</div>
+	);
+}
+
+const ISSUE_LABELS: Record<PreviewRow["issues"][number], string> = {
+	"blank-name": "Blank name",
+	"invalid-email": "Bad email",
+	duplicate: "Duplicate",
+};
+
+function BulkImportDialog({
+	open,
+	onOpenChange,
+	existing,
+	clubId,
+	currentMemberId,
+}: {
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+	existing: { name: string; email: string | null }[];
+	clubId: string;
+	currentMemberId: string | null;
+}) {
+	const router = useRouter();
+	const [text, setText] = useState("");
+	const [busy, setBusy] = useState(false);
+
+	const preview = text.trim()
+		? buildImportPreview(parseRosterText(text), existing)
+		: [];
+	const importable = preview.filter((r) => r.willImport);
+	const skipped = preview.length - importable.length;
+	const canSubmit = importable.length > 0 && !busy;
+
+	function reset() {
+		setText("");
+	}
+
+	async function onCommit() {
+		if (importable.length === 0) return;
+		setBusy(true);
+		try {
+			const result = await bulkImportMembers({
+				data: {
+					clubId,
+					actorMemberId: currentMemberId,
+					rows: importable.map((r) => ({
+						name: r.name,
+						email: r.email,
+						phone: r.phone,
+						office: r.office,
+					})),
+				},
+			});
+			toast.success(
+				`Imported ${result.inserted} member${result.inserted === 1 ? "" : "s"}.` +
+					(result.skipped > 0 ? ` Skipped ${result.skipped}.` : ""),
+			);
+			onOpenChange(false);
+			reset();
+			await router.invalidate();
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	return (
+		<Dialog open={open} onOpenChange={onOpenChange}>
+			<DialogContent className="sm:max-w-[640px]">
+				<DialogHeader>
+					<DialogTitle>Bulk import members</DialogTitle>
+					<DialogDescription>
+						Paste rows as{" "}
+						<span className="font-semibold">name, email, phone</span> (office
+						optional) — one per line. Comma-separated or copy straight from a
+						spreadsheet (tab-separated). Review the preview, then import.
+					</DialogDescription>
+				</DialogHeader>
+
+				<div className="space-y-3">
+					<textarea
+						value={text}
+						onChange={(e) => setText(e.target.value)}
+						rows={5}
+						placeholder={
+							"Jane Doe, jane@club.org, 19165551234, President\nJohn Smith, john@club.org, 19165555678"
+						}
+						className="w-full rounded-[10px] border border-[var(--line)] bg-[var(--surface-strong)] px-3 py-2 font-mono text-[12.5px] text-[var(--sea-ink)] transition-colors hover:border-[var(--lagoon-deep)] focus:outline-none"
+					/>
+
+					{preview.length > 0 ? (
+						<>
+							<div className="text-[13px] text-[var(--sea-ink-soft)]">
+								<span className="font-bold text-[var(--sea-ink)]">
+									{importable.length}
+								</span>{" "}
+								to import
+								{skipped > 0 ? (
+									<>
+										{" · "}
+										<span className="font-bold text-[var(--warning-strong)]">
+											{skipped}
+										</span>{" "}
+										skipped
+									</>
+								) : null}
+							</div>
+
+							<div className="max-h-[260px] overflow-auto rounded-[10px] border border-[var(--line)]">
+								<table className="w-full text-[12.5px]">
+									<thead className="sticky top-0 bg-[var(--foam)] text-[10.5px] font-extrabold tracking-[0.06em] text-[var(--sea-ink-soft)] uppercase">
+										<tr>
+											<th className="px-3 py-2 text-left">Name</th>
+											<th className="px-3 py-2 text-left">Email</th>
+											<th className="px-3 py-2 text-left">Phone</th>
+											<th className="px-3 py-2 text-left">Office</th>
+											<th className="px-3 py-2 text-left">Status</th>
+										</tr>
+									</thead>
+									<tbody>
+										{preview.map((row, i) => (
+											<tr
+												// biome-ignore lint/suspicious/noArrayIndexKey: preview rows have no stable id
+												key={i}
+												className={cn(
+													"border-t border-[var(--line)]",
+													!row.willImport && "bg-[var(--warning-soft,#fdf3e7)]",
+												)}
+											>
+												<td className="px-3 py-1.5 font-medium">
+													{row.name || (
+														<span className="text-[var(--sea-ink-soft)] italic">
+															(blank)
+														</span>
+													)}
+												</td>
+												<td className="px-3 py-1.5 text-[var(--sea-ink-soft)]">
+													{row.email || "—"}
+												</td>
+												<td className="px-3 py-1.5 text-[var(--sea-ink-soft)]">
+													{row.phone || "—"}
+												</td>
+												<td className="px-3 py-1.5 text-[var(--sea-ink-soft)]">
+													{row.office || "—"}
+												</td>
+												<td className="px-3 py-1.5">
+													{row.willImport ? (
+														<span className="font-semibold text-[var(--lagoon-deep)]">
+															OK
+														</span>
+													) : (
+														<span className="font-semibold text-[var(--warning-strong)]">
+															{row.issues
+																.map((issue) => ISSUE_LABELS[issue])
+																.join(", ")}
+														</span>
+													)}
+												</td>
+											</tr>
+										))}
+									</tbody>
+								</table>
+							</div>
+						</>
+					) : null}
+				</div>
+
+				<DialogFooter>
+					<DialogClose asChild>
+						<Button type="button" variant="outline" disabled={busy}>
+							Cancel
+						</Button>
+					</DialogClose>
+					<Button type="button" disabled={!canSubmit} onClick={onCommit}>
+						{busy
+							? "Importing…"
+							: `Import ${importable.length} member${importable.length === 1 ? "" : "s"}`}
+					</Button>
+				</DialogFooter>
+			</DialogContent>
+		</Dialog>
 	);
 }
 
