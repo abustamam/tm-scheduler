@@ -19,11 +19,17 @@ RUN bun run build
 
 # ---- runtime stage ----
 # Nitro's node-server output is self-contained (deps are bundled into .output),
-# so the runtime image only needs Node + the .output directory.
+# so the runtime image only needs Node + the .output directory. We also copy the
+# `drizzle/` migration files: `bun run build` bundles a standalone migrate runner
+# (drizzle-orm + pg inlined) to `.output/migrate.mjs`, and the CMD runs it before
+# the server so pending migrations apply on every deploy. Drizzle tracks applied
+# migrations, so reruns are no-ops; a migration failure exits non-zero and the
+# deploy fails closed instead of serving a stale schema.
 FROM node:22-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 # Railway injects PORT; Nitro's node-server binds to it on 0.0.0.0.
 COPY --from=build /app/.output ./.output
+COPY --from=build /app/drizzle ./drizzle
 EXPOSE 3000
-CMD ["node", ".output/server/index.mjs"]
+CMD ["sh", "-c", "node .output/migrate.mjs && node .output/server/index.mjs"]

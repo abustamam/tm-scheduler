@@ -8,7 +8,9 @@
   "scripts": {
     "dev": "vite dev --port 3000",
     "generate-routes": "tsr generate",
-    "build": "NITRO_PRESET=node-server vite build",
+    "build": "NITRO_PRESET=node-server vite build && bun run build:migrate",
+    "build:migrate": "bun build scripts/migrate.ts --target node --outfile .output/migrate.mjs",
+    "start": "node .output/migrate.mjs && node .output/server/index.mjs",
     "preview": "vite preview",
     "test": "vitest run",
     "format": "biome format",
