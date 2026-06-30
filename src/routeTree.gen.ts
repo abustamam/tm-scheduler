@@ -14,6 +14,7 @@ import { Route as AuthedRouteImport } from './routes/_authed'
 import { Route as AuthedIndexRouteImport } from './routes/_authed/index'
 import { Route as ClubClubIdRouteImport } from './routes/club.$clubId'
 import { Route as ApiHealthRouteImport } from './routes/api/health'
+import { Route as ApiDevLoginRouteImport } from './routes/api/dev-login'
 import { Route as AuthedScheduleRouteImport } from './routes/_authed/schedule'
 import { Route as AuthedResourcesRouteImport } from './routes/_authed/resources'
 import { Route as AuthedMeRouteImport } from './routes/_authed/me'
@@ -49,6 +50,11 @@ const ClubClubIdRoute = ClubClubIdRouteImport.update({
 const ApiHealthRoute = ApiHealthRouteImport.update({
   id: '/api/health',
   path: '/api/health',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiDevLoginRoute = ApiDevLoginRouteImport.update({
+  id: '/api/dev-login',
+  path: '/api/dev-login',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AuthedScheduleRoute = AuthedScheduleRouteImport.update({
@@ -122,6 +128,7 @@ export interface FileRoutesByFullPath {
   '/me': typeof AuthedMeRoute
   '/resources': typeof AuthedResourcesRoute
   '/schedule': typeof AuthedScheduleRoute
+  '/api/dev-login': typeof ApiDevLoginRoute
   '/api/health': typeof ApiHealthRoute
   '/club/$clubId': typeof ClubClubIdRouteWithChildren
   '/meetings/$id': typeof AuthedMeetingsIdRoute
@@ -139,6 +146,7 @@ export interface FileRoutesByTo {
   '/me': typeof AuthedMeRoute
   '/resources': typeof AuthedResourcesRoute
   '/schedule': typeof AuthedScheduleRoute
+  '/api/dev-login': typeof ApiDevLoginRoute
   '/api/health': typeof ApiHealthRoute
   '/': typeof AuthedIndexRoute
   '/meetings/$id': typeof AuthedMeetingsIdRoute
@@ -158,6 +166,7 @@ export interface FileRoutesById {
   '/_authed/me': typeof AuthedMeRoute
   '/_authed/resources': typeof AuthedResourcesRoute
   '/_authed/schedule': typeof AuthedScheduleRoute
+  '/api/dev-login': typeof ApiDevLoginRoute
   '/api/health': typeof ApiHealthRoute
   '/club/$clubId': typeof ClubClubIdRouteWithChildren
   '/_authed/': typeof AuthedIndexRoute
@@ -179,6 +188,7 @@ export interface FileRouteTypes {
     | '/me'
     | '/resources'
     | '/schedule'
+    | '/api/dev-login'
     | '/api/health'
     | '/club/$clubId'
     | '/meetings/$id'
@@ -196,6 +206,7 @@ export interface FileRouteTypes {
     | '/me'
     | '/resources'
     | '/schedule'
+    | '/api/dev-login'
     | '/api/health'
     | '/'
     | '/meetings/$id'
@@ -214,6 +225,7 @@ export interface FileRouteTypes {
     | '/_authed/me'
     | '/_authed/resources'
     | '/_authed/schedule'
+    | '/api/dev-login'
     | '/api/health'
     | '/club/$clubId'
     | '/_authed/'
@@ -228,6 +240,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   AuthedRoute: typeof AuthedRouteWithChildren
   SigninRoute: typeof SigninRoute
+  ApiDevLoginRoute: typeof ApiDevLoginRoute
   ApiHealthRoute: typeof ApiHealthRoute
   ClubClubIdRoute: typeof ClubClubIdRouteWithChildren
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
@@ -268,6 +281,13 @@ declare module '@tanstack/react-router' {
       path: '/api/health'
       fullPath: '/api/health'
       preLoaderRoute: typeof ApiHealthRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/dev-login': {
+      id: '/api/dev-login'
+      path: '/api/dev-login'
+      fullPath: '/api/dev-login'
+      preLoaderRoute: typeof ApiDevLoginRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_authed/schedule': {
@@ -403,6 +423,7 @@ const ClubClubIdRouteWithChildren = ClubClubIdRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   AuthedRoute: AuthedRouteWithChildren,
   SigninRoute: SigninRoute,
+  ApiDevLoginRoute: ApiDevLoginRoute,
   ApiHealthRoute: ApiHealthRoute,
   ClubClubIdRoute: ClubClubIdRouteWithChildren,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
