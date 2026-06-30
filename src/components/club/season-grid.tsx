@@ -1,4 +1,5 @@
 import { Link } from "@tanstack/react-router";
+import { useEffect, useRef } from "react";
 import { formatMeetingDate } from "#/lib/format";
 import { type Orientation, projectGrid } from "#/lib/season-grid-view";
 import { cn } from "#/lib/utils";
@@ -22,11 +23,24 @@ export function SeasonGrid({
 }) {
 	const rows = projectGrid(data, orientation);
 	const labelHead = orientation === "roles" ? "Role" : "Member";
+	const anchorRef = useRef<HTMLTableCellElement>(null);
+
+	useEffect(() => {
+		anchorRef.current?.scrollIntoView({ inline: "center", block: "nearest" });
+	}, []);
 
 	if (data.meetings.length === 0) {
 		return (
 			<p className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
 				No upcoming meetings yet. Create meetings to start planning the season.
+			</p>
+		);
+	}
+
+	if (orientation === "members" && data.members.length === 0) {
+		return (
+			<p className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
+				No members yet. Add members from the Roster view.
 			</p>
 		);
 	}
@@ -80,20 +94,27 @@ export function SeasonGrid({
 							{data.meetings.map((m) => (
 								<th
 									key={m.id}
+									ref={m.isAnchor ? anchorRef : undefined}
 									className={cn(
 										"sticky top-0 min-w-[3.5rem] bg-card px-2 py-2 text-center text-xs font-semibold",
 										m.isPast && "opacity-45",
 										m.isAnchor && "rounded-md ring-2 ring-primary",
 									)}
 								>
-									<div>{formatMeetingDate(m.scheduledAt, m.timezone)}</div>
-									<div className="text-[10px] font-medium text-amber-600">
-										{m.isPast
-											? "done"
-											: m.openCount === 0
-												? "full"
-												: `${m.openCount} open`}
-									</div>
+									<Link
+										to="/meetings/$id"
+										params={{ id: m.id }}
+										className="block"
+									>
+										<div>{formatMeetingDate(m.scheduledAt, m.timezone)}</div>
+										<div className="text-[10px] font-medium text-amber-600">
+											{m.isPast
+												? "done"
+												: m.openCount === 0
+													? "full"
+													: `${m.openCount} open`}
+										</div>
+									</Link>
 								</th>
 							))}
 						</tr>
