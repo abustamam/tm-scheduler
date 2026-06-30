@@ -68,6 +68,47 @@ export async function applyMemberEdit(input: EditInput) {
 	return { ok: true as const };
 }
 
+export const setStatusSchema = z.object({
+	clubId: z.string().uuid(),
+	memberId: z.string().uuid(),
+	status: z.enum(["active", "inactive"]),
+	actorMemberId: z.string().uuid().nullable().optional(),
+});
+type SetStatusInput = z.infer<typeof setStatusSchema>;
+
+/** Toggle a roster member active/inactive. Inactive members are hidden from
+ *  sign-up / roster / season / picker views and can't claim or be assigned new
+ *  roles, but their past role history is preserved (never deleted) and
+ *  reactivating restores them everywhere. Logs member_edit with the status
+ *  before/after. No-op (still logs) if already in the requested state. */
+export async function applySetMemberStatus(input: SetStatusInput) {
+	const [current] = await db
+		.select()
+		.from(members)
+		.where(
+			and(eq(members.id, input.memberId), eq(members.clubId, input.clubId)),
+		);
+	if (!current) throw new Error("Member not found.");
+	await db.transaction(async (tx) => {
+		await tx
+			.update(members)
+			.set({ status: input.status })
+			.where(eq(members.id, input.memberId));
+		await logActivity(tx, {
+			clubId: input.clubId,
+			actorMemberId: input.actorMemberId ?? null,
+			action: "member_edit",
+			targetType: "member",
+			targetId: input.memberId,
+			detail: {
+				before: { status: current.status },
+				after: { status: input.status },
+			},
+		});
+	});
+	return { ok: true as const, status: input.status };
+}
+
 export const mergeSchema = z.object({
 	clubId: z.string().uuid(),
 	keeperId: z.string().uuid(),

@@ -190,11 +190,14 @@ export async function loadSeasonGrid(input: {
 		isAnchor: m.id === anchorId,
 	}));
 
-	// 5. Members + availability.
+	// 5. Members + availability. Inactive members are excluded from the grid
+	//    (their past assignments still render via cells, which key off member id).
 	const memberRows = await db
 		.select({ id: members.id, name: members.name })
 		.from(members)
-		.where(eq(members.clubId, input.clubId))
+		.where(
+			and(eq(members.clubId, input.clubId), ne(members.status, "inactive")),
+		)
 		.orderBy(asc(members.name));
 
 	const unavailable = meetingIds.length

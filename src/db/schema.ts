@@ -114,6 +114,10 @@ export const members = pgTable(
 		email: text("email"),
 		phone: text("phone"),
 		office: text("office"),
+		// Roster membership status. "inactive" = didn't renew this season: hidden
+		// from sign-up / roster / season / picker views, but their past role
+		// history is preserved (never deleted). Reactivating restores them.
+		status: membershipStatusEnum("status").notNull().default("active"),
 		// Links a roster member to the Better-Auth account of the one signed-in
 		// admin/VPE. NULL for ordinary members (who never sign in).
 		userId: text("user_id").references(() => user.id, { onDelete: "set null" }),

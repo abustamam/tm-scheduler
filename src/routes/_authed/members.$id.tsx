@@ -31,7 +31,7 @@ import { initialsOf, toneFromSeed } from "#/lib/avatar";
 import { formatTenure, isNewMember } from "#/lib/members";
 import { cn } from "#/lib/utils";
 import { getMemberProfile } from "#/server/club";
-import { editMember, removeMember } from "#/server/members";
+import { editMember, removeMember, setMemberStatus } from "#/server/members";
 
 export const Route = createFileRoute("/_authed/members/$id")({
 	loader: async ({ params, context }) => {
@@ -108,6 +108,11 @@ function MemberDetail() {
 						</span>
 						<span className="size-1 rounded-full bg-[var(--sea-ink-soft)]" />
 						<StatusPill status={status} long />
+						{member.status === "inactive" ? (
+							<span className="inline-flex items-center rounded-full border border-[var(--line)] bg-[var(--sand)] px-2.5 py-0.5 text-[11px] font-bold tracking-[0.03em] text-[var(--sea-ink-soft)] uppercase">
+								Inactive
+							</span>
+						) : null}
 					</div>
 				</div>
 				<div className="flex flex-wrap gap-[9px]">
@@ -270,6 +275,7 @@ type ProfileMember = {
 	phone: string | null;
 	office: string | null;
 	userId: string | null;
+	status: "active" | "inactive";
 };
 
 function MemberActions({
@@ -287,6 +293,32 @@ function MemberActions({
 	const [removeOpen, setRemoveOpen] = useState(false);
 	const [busy, setBusy] = useState(false);
 	const isLinkedAccount = Boolean(member.userId);
+	const isInactive = member.status === "inactive";
+
+	async function onToggleStatus() {
+		const next = isInactive ? "active" : "inactive";
+		setBusy(true);
+		try {
+			await setMemberStatus({
+				data: {
+					clubId,
+					memberId: member.id,
+					status: next,
+					actorMemberId: currentMemberId,
+				},
+			});
+			toast.success(
+				next === "inactive"
+					? `${member.name} marked inactive.`
+					: `${member.name} reactivated.`,
+			);
+			await router.invalidate();
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+		} finally {
+			setBusy(false);
+		}
+	}
 
 	async function onEditSubmit(e: React.FormEvent<HTMLFormElement>) {
 		e.preventDefault();
@@ -341,6 +373,16 @@ function MemberActions({
 			<Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
 				Edit
 			</Button>
+			{!isLinkedAccount ? (
+				<Button
+					variant="outline"
+					size="sm"
+					disabled={busy}
+					onClick={onToggleStatus}
+				>
+					{isInactive ? "Reactivate" : "Mark inactive"}
+				</Button>
+			) : null}
 			{!isLinkedAccount ? (
 				<Button
 					variant="outline"
