@@ -9,11 +9,13 @@ import {
 	members,
 	roleDefinitions,
 	roleSlots,
+	type slotStatusEnum,
 } from "#/db/schema";
 import { buildRoleCounts, buildShortCodes, slotLabel } from "#/lib/agenda";
+import { requireClubRole, requireUser } from "./guards";
 
 export type SeasonGridCount = 4 | 8 | "all";
-export type SlotStatus = "open" | "claimed" | "confirmed";
+export type SlotStatus = (typeof slotStatusEnum.enumValues)[number];
 
 export interface SeasonGridMeeting {
 	id: string;
@@ -139,7 +141,10 @@ export async function loadSeasonGrid(input: {
 			});
 	}
 	const rowDefs = [...rowMap.values()].sort(
-		(a, b) => a.sortOrder - b.sortOrder || a.slotIndex - b.slotIndex,
+		(a, b) =>
+			a.sortOrder - b.sortOrder ||
+			a.roleDefinitionId.localeCompare(b.roleDefinitionId) ||
+			a.slotIndex - b.slotIndex,
 	);
 	const roleCounts = buildRoleCounts(
 		rowDefs.map((r) => ({ roleName: r.roleName })),
@@ -168,7 +173,7 @@ export async function loadSeasonGrid(input: {
 		roleDefinitionId: s.roleDefinitionId,
 		slotIndex: s.slotIndex,
 		memberId: s.assignedMemberId,
-		status: s.status as SlotStatus,
+		status: s.status,
 	}));
 	const openByMeeting = new Map<string, number>();
 	const totalByMeeting = new Map<string, number>();
@@ -223,4 +228,8 @@ export const getSeasonGrid = createServerFn({ method: "GET" })
 			})
 			.parse(input),
 	)
-	.handler(({ data }) => loadSeasonGrid(data));
+	.handler(async ({ data }) => {
+		const user = await requireUser();
+		await requireClubRole(user.id, data.clubId, ["admin", "vpe"]);
+		return loadSeasonGrid(data);
+	});

@@ -3,11 +3,11 @@
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test \
  *     bunx vitest run src/server/season-grid.integration.test.ts
  */
+import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	meetings,
 	memberAvailability,
-	members,
 	roleDefinitions,
 	roleSlots,
 } from "#/db/schema";
@@ -25,6 +25,13 @@ describe.skipIf(!hasTestDb)("loadSeasonGrid", () => {
 	let seed: SeededClub;
 	beforeEach(async () => {
 		seed = await seedClub();
+		// Pin the seeded meeting to a clearly-future date so it stays
+		// "upcoming"/anchor regardless of when the suite runs.
+		const future = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+		await testDb
+			.update(meetings)
+			.set({ scheduledAt: future })
+			.where(eq(meetings.id, seed.meetingId));
 	});
 	afterEach(async () => {
 		await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
@@ -33,8 +40,9 @@ describe.skipIf(!hasTestDb)("loadSeasonGrid", () => {
 	it("windows past lookback + upcoming, expands multi-count rows, counts open", async () => {
 		const { loadSeasonGrid } = await import("#/server/season-grid");
 
-		// seedClub gives: a Timer role def, one upcoming meeting (2026-07-01),
-		// one open Timer slot. Add a past meeting + a 3-count Speaker role.
+		// seedClub gives: a Timer role def, one upcoming meeting (pinned future
+		// in beforeEach), one open Timer slot. Add a past meeting + a 3-count
+		// Speaker role.
 		const [speaker] = await testDb
 			.insert(roleDefinitions)
 			.values({
@@ -124,12 +132,27 @@ describe.skipIf(!hasTestDb)("loadSeasonGrid", () => {
 		for (let i = 0; i < 5; i++) {
 			await testDb.insert(meetings).values({
 				clubId: seed.clubId,
-				scheduledAt: new Date(`2026-08-0${i + 1}T19:00:00Z`),
+				scheduledAt: new Date(Date.now() + (i + 2) * 7 * 24 * 60 * 60 * 1000),
 				status: "scheduled",
 			});
 		}
 		const data = await loadSeasonGrid({ clubId: seed.clubId, count: 4 });
 		const upcomingCols = data.meetings.filter((m) => !m.isPast);
 		expect(upcomingCols).toHaveLength(4);
+	});
+
+	it("count: 'all' returns every upcoming meeting", async () => {
+		const { loadSeasonGrid } = await import("#/server/season-grid");
+		// seedClub already inserted 1 upcoming meeting; add 2 more (3 total).
+		for (let i = 0; i < 2; i++) {
+			await testDb.insert(meetings).values({
+				clubId: seed.clubId,
+				scheduledAt: new Date(Date.now() + (i + 2) * 7 * 24 * 60 * 60 * 1000),
+				status: "scheduled",
+			});
+		}
+		const data = await loadSeasonGrid({ clubId: seed.clubId, count: "all" });
+		const upcomingCols = data.meetings.filter((m) => !m.isPast);
+		expect(upcomingCols).toHaveLength(3);
 	});
 });
