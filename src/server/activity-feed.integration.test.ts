@@ -73,7 +73,7 @@ describe.skipIf(!hasTestDb)("loadActivity", () => {
 
 	it("returns enriched rows newest-first with names/role/meeting resolved", async () => {
 		await seedActivity();
-		const { loadActivity } = await import("#/server/activity-feed");
+		const { loadActivity } = await import("#/server/activity-feed-logic");
 		const rows = await loadActivity({ clubId: seed.clubId });
 		expect(rows.length).toBe(4);
 		for (let i = 1; i < rows.length; i++) {
@@ -94,7 +94,7 @@ describe.skipIf(!hasTestDb)("loadActivity", () => {
 
 	it("meeting filter excludes member_add, keeps slot + availability rows", async () => {
 		await seedActivity();
-		const { loadActivity } = await import("#/server/activity-feed");
+		const { loadActivity } = await import("#/server/activity-feed-logic");
 		const rows = await loadActivity({
 			clubId: seed.clubId,
 			meetingId: seed.meetingId,
@@ -106,7 +106,7 @@ describe.skipIf(!hasTestDb)("loadActivity", () => {
 
 	it("actor filter returns only that member's actions", async () => {
 		await seedActivity();
-		const { loadActivity } = await import("#/server/activity-feed");
+		const { loadActivity } = await import("#/server/activity-feed-logic");
 		const rows = await loadActivity({
 			clubId: seed.clubId,
 			actorMemberId: seed.memberId,

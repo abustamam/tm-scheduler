@@ -7,6 +7,7 @@ import {
 import { CalendarDays, Loader2, MapPin, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { ShareLinkButton } from "#/components/share-link-button";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import {
@@ -219,6 +220,10 @@ function MeetingView() {
 						"I can't make this one"
 					)}
 				</Button>
+				<ShareLinkButton
+					path={`/club/${meeting.clubId}/meeting/${meeting.id}`}
+					className="mt-1 ml-2"
+				/>
 			</header>
 
 			{categories.map((category) => (

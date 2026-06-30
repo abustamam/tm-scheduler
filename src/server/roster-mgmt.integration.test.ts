@@ -44,7 +44,7 @@ describe.skipIf(!hasTestDb)("roster management", () => {
 	});
 
 	it("editMember updates fields + logs member_edit", async () => {
-		const { applyMemberEdit } = await import("#/server/members");
+		const { applyMemberEdit } = await import("#/server/members-logic");
 		await applyMemberEdit({
 			clubId: seed.clubId,
 			actorMemberId: seed.memberId,
@@ -74,7 +74,7 @@ describe.skipIf(!hasTestDb)("roster management", () => {
 	});
 
 	it("mergeMembers re-points slots, availability, and history then deletes B", async () => {
-		const { applyMemberMerge } = await import("#/server/members");
+		const { applyMemberMerge } = await import("#/server/members-logic");
 		const keeper = seed.memberId;
 		const absorbed = await addMemberRow(seed.clubId, "Dupe");
 		// B holds the slot, has availability, and has activity history.
@@ -152,7 +152,7 @@ describe.skipIf(!hasTestDb)("roster management", () => {
 	});
 
 	it("mergeMembers rejects absorbing a signed-in (user-linked) member", async () => {
-		const { applyMemberMerge } = await import("#/server/members");
+		const { applyMemberMerge } = await import("#/server/members-logic");
 		const absorbed = await addMemberRow(seed.clubId, "Linked");
 		await testDb
 			.update(members)
@@ -169,7 +169,7 @@ describe.skipIf(!hasTestDb)("roster management", () => {
 	});
 
 	it("mergeMembers rejects keeper === absorbed", async () => {
-		const { applyMemberMerge } = await import("#/server/members");
+		const { applyMemberMerge } = await import("#/server/members-logic");
 		await expect(
 			applyMemberMerge({
 				clubId: seed.clubId,
@@ -180,7 +180,7 @@ describe.skipIf(!hasTestDb)("roster management", () => {
 	});
 
 	it("removeMember releases upcoming roles then deletes the member", async () => {
-		const { applyMemberRemove } = await import("#/server/members");
+		const { applyMemberRemove } = await import("#/server/members-logic");
 		const victim = await addMemberRow(seed.clubId, "Leaving");
 		await testDb
 			.update(roleSlots)
@@ -232,7 +232,7 @@ describe.skipIf(!hasTestDb)("roster management", () => {
 	});
 
 	it("removeMember rejects a signed-in (user-linked) member", async () => {
-		const { applyMemberRemove } = await import("#/server/members");
+		const { applyMemberRemove } = await import("#/server/members-logic");
 		await testDb
 			.update(members)
 			.set({ userId: seed.adminUserId })

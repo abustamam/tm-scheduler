@@ -19,6 +19,8 @@ import {
 	clubMemberships,
 	clubs,
 	meetings,
+	memberAvailability,
+	members,
 	roleDefinitions,
 	roleSlots,
 	speakerDetails,
@@ -56,7 +58,21 @@ async function getMeetingPublic(meetingId: string) {
 		.from(roleSlots)
 		.where(eq(roleSlots.meetingId, meetingId));
 
-	return { meeting, slots, canManage, timezone: club?.timezone ?? "UTC" };
+	const unavailableMembers = await testDb
+		.select({ id: members.id, name: members.name })
+		.from(memberAvailability)
+		.innerJoin(members, eq(members.id, memberAvailability.memberId))
+		.where(eq(memberAvailability.meetingId, meetingId))
+		.orderBy(asc(members.name));
+
+	return {
+		meeting,
+		slots,
+		canManage,
+		timezone: club?.timezone ?? "UTC",
+		unavailableMembers,
+		unavailableMemberIds: unavailableMembers.map((m) => m.id),
+	};
 }
 
 /** Mirror of listUpcomingMeetings with no session. */
@@ -162,6 +178,24 @@ describe.skipIf(!hasTestDb)("public reads (no session)", () => {
 	it("getMeeting returns null for unknown meetingId", async () => {
 		const res = await getMeetingPublic("00000000-0000-0000-0000-000000000000");
 		expect(res).toBeNull();
+	});
+
+	it("getMeeting reports Not-Available members with their names", async () => {
+		// No availability rows seeded by default.
+		let res = await getMeetingPublic(seed.meetingId);
+		expect(res?.unavailableMembers).toEqual([]);
+		expect(res?.unavailableMemberIds).toEqual([]);
+
+		// Member marks themselves Not Available for this meeting.
+		await testDb
+			.insert(memberAvailability)
+			.values({ memberId: seed.memberId, meetingId: seed.meetingId });
+
+		res = await getMeetingPublic(seed.meetingId);
+		expect(res?.unavailableMembers).toEqual([
+			{ id: seed.memberId, name: "Member User" },
+		]);
+		expect(res?.unavailableMemberIds).toEqual([seed.memberId]);
 	});
 
 	// -------------------------------------------------------------------------

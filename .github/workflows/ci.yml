@@ -31,7 +31,24 @@ jobs:
         run: bun run check
       - name: Typecheck
         run: bunx tsc --noEmit
-      - name: Push schema
-        run: DATABASE_URL=$TEST_DATABASE_URL bunx drizzle-kit push
+      # Fail if schema.ts has changes not captured in a committed migration.
+      # `drizzle-kit generate` writes a new migration only when the schema has
+      # drifted from the snapshots; a non-empty git diff means someone edited
+      # schema.ts without running `bun run db:generate`.
+      - name: Migrations in sync with schema
+        run: |
+          bunx drizzle-kit generate
+          if [ -n "$(git status --porcelain drizzle)" ]; then
+            echo "::error::schema.ts has changes with no migration. Run 'bun run db:generate' and commit the result."
+            git --no-pager diff drizzle
+            exit 1
+          fi
+      # Apply the committed migrations (not `drizzle-kit push`) so CI exercises
+      # the same migration files prod runs at deploy — catches a migration that
+      # fails to apply, and keeps the test schema honest to the migration history.
+      - name: Apply migrations
+        run: DATABASE_URL=$TEST_DATABASE_URL bun run db:migrate
       - name: Test
         run: bun run test
+      - name: Build (client bundle + migrate runner)
+        run: bun run build
