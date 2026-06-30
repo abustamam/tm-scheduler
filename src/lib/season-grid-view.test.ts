@@ -35,6 +35,11 @@ const data: SeasonGridData = {
 		{ id: "b", name: "Bea" },
 		{ id: "c", name: "Carlos" },
 	],
+	memberNames: [
+		{ id: "a", name: "Amir" },
+		{ id: "b", name: "Bea" },
+		{ id: "c", name: "Carlos" },
+	],
 	cells: [
 		{
 			meetingId: "m1",
@@ -60,6 +65,30 @@ describe("projectGrid – roles orientation", () => {
 		expect(rows.map((r) => r.label)).toEqual(["Toastmaster", "Timer"]);
 		expect(rows[0]!.cells[0]).toMatchObject({ kind: "assigned", text: "Amir" });
 		expect(rows[1]!.cells[0]).toMatchObject({ kind: "open", text: "OPEN" });
+	});
+
+	it("renders an inactive member's name in a past cell (not '—')", () => {
+		// "z" is referenced by a cell + present in memberNames, but absent from the
+		// active `members` axis — their name must still resolve in roles view.
+		const withInactive: SeasonGridData = {
+			...data,
+			memberNames: [...data.memberNames, { id: "z", name: "Zoe Lapsed" }],
+			cells: [
+				{
+					meetingId: "m1",
+					roleDefinitionId: "tm",
+					slotIndex: 0,
+					memberId: "z",
+					status: "claimed",
+				},
+				data.cells[1]!,
+			],
+		};
+		const rows = projectGrid(withInactive, "roles");
+		expect(rows[0]!.cells[0]).toMatchObject({
+			kind: "assigned",
+			text: "Zoe Lapsed",
+		});
 	});
 
 	it("blank when the meeting lacks a slot for a roles-view row", () => {
@@ -92,6 +121,26 @@ describe("projectGrid – members orientation", () => {
 		expect(amir.cells[0]).toMatchObject({ kind: "assigned", text: "Toas" });
 		expect(bea.cells[0]).toMatchObject({ kind: "na", text: "NA" });
 		expect(carlos.cells[0]).toMatchObject({ kind: "free", text: "·" });
+	});
+
+	it("does not give an inactive member their own member row", () => {
+		// "z" held a role (cell below) but is NOT in the active `members` axis.
+		const withInactive: SeasonGridData = {
+			...data,
+			memberNames: [...data.memberNames, { id: "z", name: "Zoe Lapsed" }],
+			cells: [
+				...data.cells,
+				{
+					meetingId: "m1",
+					roleDefinitionId: "tm",
+					slotIndex: 0,
+					memberId: "z",
+					status: "claimed",
+				},
+			],
+		};
+		const rows = projectGrid(withInactive, "members");
+		expect(rows.some((r) => r.id === "z")).toBe(false);
 	});
 
 	it("collapses multiple roles in one meeting to first + +N", () => {

@@ -44,7 +44,12 @@ export interface SeasonGridCell {
 export interface SeasonGridData {
 	meetings: SeasonGridMeeting[];
 	rows: SeasonGridRow[];
+	/** Member-orientation AXIS — active members only (inactive members get no row). */
 	members: SeasonGridMember[];
+	/** Complete id→name lookup covering EVERY member referenced by `cells`,
+	 *  including inactive members who held a role in a past-lookback meeting, so
+	 *  the roles orientation still renders their name (history preserved). */
+	memberNames: SeasonGridMember[];
 	cells: SeasonGridCell[];
 	unavailable: { memberId: string; meetingId: string }[];
 }
@@ -190,15 +195,22 @@ export async function loadSeasonGrid(input: {
 		isAnchor: m.id === anchorId,
 	}));
 
-	// 5. Members + availability. Inactive members are excluded from the grid
-	//    (their past assignments still render via cells, which key off member id).
-	const memberRows = await db
-		.select({ id: members.id, name: members.name })
+	// 5. Members + availability. The member-orientation AXIS is active-only, but
+	//    the name lookup (`memberNames`) covers every member — including inactive
+	//    ones who held a role in the past-lookback window — so the roles
+	//    orientation still resolves their name (history preserved).
+	const allMemberRows = await db
+		.select({ id: members.id, name: members.name, status: members.status })
 		.from(members)
-		.where(
-			and(eq(members.clubId, input.clubId), ne(members.status, "inactive")),
-		)
+		.where(eq(members.clubId, input.clubId))
 		.orderBy(asc(members.name));
+	const memberRows: SeasonGridMember[] = allMemberRows
+		.filter((m) => m.status !== "inactive")
+		.map((m) => ({ id: m.id, name: m.name }));
+	const memberNames: SeasonGridMember[] = allMemberRows.map((m) => ({
+		id: m.id,
+		name: m.name,
+	}));
 
 	const unavailable = meetingIds.length
 		? await db
@@ -214,6 +226,7 @@ export async function loadSeasonGrid(input: {
 		meetings: gridMeetings,
 		rows,
 		members: memberRows,
+		memberNames,
 		cells,
 		unavailable,
 	};

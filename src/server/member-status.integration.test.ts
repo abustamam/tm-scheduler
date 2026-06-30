@@ -130,6 +130,86 @@ describe.skipIf(!hasTestDb)("member active/inactive status", () => {
 		expect(ids).not.toContain(inactive);
 	});
 
+	it("deactivating releases the member's UPCOMING slots but leaves PAST ones", async () => {
+		const { applySetMemberStatus } = await import("#/server/members-logic");
+		const holder = await addMemberRow(seed.clubId, "Holder Holly");
+
+		// Past meeting + slot (history — must stay assigned).
+		const [pastMeeting] = await testDb
+			.insert(meetings)
+			.values({
+				clubId: seed.clubId,
+				scheduledAt: new Date("2020-03-03T19:00:00Z"),
+				status: "scheduled",
+			})
+			.returning({ id: meetings.id });
+		const [pastSlot] = await testDb
+			.insert(roleSlots)
+			.values({
+				meetingId: pastMeeting!.id,
+				roleDefinitionId: seed.roleDefinitionId,
+				status: "claimed",
+				assignedMemberId: holder,
+			})
+			.returning({ id: roleSlots.id });
+
+		// Future meeting + slot (should be released on deactivate).
+		const [futureMeeting] = await testDb
+			.insert(meetings)
+			.values({
+				clubId: seed.clubId,
+				scheduledAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+				status: "scheduled",
+			})
+			.returning({ id: meetings.id });
+		const [futureSlot] = await testDb
+			.insert(roleSlots)
+			.values({
+				meetingId: futureMeeting!.id,
+				roleDefinitionId: seed.roleDefinitionId,
+				status: "claimed",
+				assignedMemberId: holder,
+			})
+			.returning({ id: roleSlots.id });
+
+		await applySetMemberStatus({
+			clubId: seed.clubId,
+			memberId: holder,
+			status: "inactive",
+			actorMemberId: seed.memberId,
+		});
+
+		// Future slot freed.
+		const [future] = await testDb
+			.select()
+			.from(roleSlots)
+			.where(eq(roleSlots.id, futureSlot!.id));
+		expect(future.assignedMemberId).toBeNull();
+		expect(future.status).toBe("open");
+
+		// release logged for the freed slot, displacing the holder.
+		const [rel] = await testDb
+			.select()
+			.from(activityLog)
+			.where(
+				and(
+					eq(activityLog.action, "release"),
+					eq(activityLog.targetId, futureSlot!.id),
+				),
+			)
+			.orderBy(desc(activityLog.createdAt))
+			.limit(1);
+		expect((rel.detail as { fromMemberId?: string }).fromMemberId).toBe(holder);
+
+		// Past slot untouched (history preserved).
+		const [past] = await testDb
+			.select()
+			.from(roleSlots)
+			.where(eq(roleSlots.id, pastSlot!.id));
+		expect(past.assignedMemberId).toBe(holder);
+		expect(past.status).toBe("claimed");
+	});
+
 	it("season grid excludes inactive members but their PAST assignment still resolves", async () => {
 		const { applySetMemberStatus } = await import("#/server/members-logic");
 		const { loadSeasonGrid } = await import("#/server/season-grid-logic");
