@@ -69,3 +69,63 @@ export function resolveEvaluatorLinks<T extends EvaluatorRow>(
 		};
 	});
 }
+
+const STOPWORDS = new Set(["of", "the", "and", "a", "an", "to"]);
+
+/** Deterministic base abbreviation for a role name. */
+export function roleAbbrev(name: string): string {
+	const words = name
+		.split(/[^A-Za-z]+/)
+		.filter((w) => w.length > 0 && !STOPWORDS.has(w.toLowerCase()));
+	if (words.length === 0) return name.slice(0, 4) || "?";
+	if (words.length >= 2) {
+		return words
+			.map((w) => (w[0] ?? "").toUpperCase())
+			.join("")
+			.slice(0, 4);
+	}
+	const w = words[0];
+	if (!w) return "?";
+	return (w[0] ?? "").toUpperCase() + w.slice(1, 4).toLowerCase();
+}
+
+export type ShortCodeInput = {
+	roleDefinitionId: string;
+	slotIndex: number;
+	name: string;
+};
+
+/**
+ * Build unique short codes keyed `${roleDefinitionId}:${slotIndex}`.
+ * Repeated roles get a 1-based number; different names that collapse to the
+ * same base get a `#2`, `#3` … suffix in input order.
+ */
+export function buildShortCodes(rows: ShortCodeInput[]): Map<string, string> {
+	const countByDef = buildRoleCounts(
+		rows.map((r) => ({ roleName: r.roleDefinitionId })),
+	);
+	const baseByName = new Map<string, string>();
+	const seenBases = new Map<string, string>(); // base -> first roleDefinitionId
+	const result = new Map<string, string>();
+
+	for (const r of rows) {
+		let base = baseByName.get(r.name);
+		if (base === undefined) {
+			base = roleAbbrev(r.name);
+			const owner = seenBases.get(base);
+			if (owner !== undefined && owner !== r.roleDefinitionId) {
+				let n = 2;
+				while (seenBases.has(`${base}#${n}`)) n += 1;
+				base = `${base}#${n}`;
+			}
+			seenBases.set(base, r.roleDefinitionId);
+			baseByName.set(r.name, base);
+		}
+		const repeated = (countByDef[r.roleDefinitionId] ?? 0) > 1;
+		result.set(
+			`${r.roleDefinitionId}:${r.slotIndex}`,
+			repeated ? `${base}${r.slotIndex + 1}` : base,
+		);
+	}
+	return result;
+}

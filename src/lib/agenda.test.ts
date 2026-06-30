@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
 	buildRoleCounts,
+	buildShortCodes,
 	generateSlotRows,
 	resolveEvaluatorLinks,
+	roleAbbrev,
 	slotLabel,
 } from "./agenda";
 
@@ -162,5 +164,42 @@ describe("resolveEvaluatorLinks", () => {
 		];
 		const result = resolveEvaluatorLinks(rows);
 		expect(result[0].extraField).toBe("preserved");
+	});
+});
+
+describe("roleAbbrev", () => {
+	it("uses initials for multi-word names", () => {
+		expect(roleAbbrev("General Evaluator")).toBe("GE");
+		expect(roleAbbrev("Table Topics Master")).toBe("TTM");
+	});
+	it("drops stopwords", () => {
+		expect(roleAbbrev("Toastmaster of the Day")).toBe("TD");
+	});
+	it("uses first four letters for single-word names", () => {
+		expect(roleAbbrev("Speaker")).toBe("Spea");
+		expect(roleAbbrev("Timer")).toBe("Time");
+		expect(roleAbbrev("Grammarian")).toBe("Gram");
+	});
+});
+
+describe("buildShortCodes", () => {
+	it("numbers repeated roles and keeps singletons unnumbered", () => {
+		const codes = buildShortCodes([
+			{ roleDefinitionId: "s", slotIndex: 0, name: "Speaker" },
+			{ roleDefinitionId: "s", slotIndex: 1, name: "Speaker" },
+			{ roleDefinitionId: "s", slotIndex: 2, name: "Speaker" },
+			{ roleDefinitionId: "t", slotIndex: 0, name: "Timer" },
+		]);
+		expect(codes.get("s:0")).toBe("Spea1");
+		expect(codes.get("s:2")).toBe("Spea3");
+		expect(codes.get("t:0")).toBe("Time");
+	});
+	it("disambiguates two different names that share a base code", () => {
+		const codes = buildShortCodes([
+			{ roleDefinitionId: "a", slotIndex: 0, name: "Tall Tales" },
+			{ roleDefinitionId: "b", slotIndex: 0, name: "Topic Time" },
+		]);
+		expect(codes.get("a:0")).toBe("TT");
+		expect(codes.get("b:0")).toBe("TT#2");
 	});
 });
