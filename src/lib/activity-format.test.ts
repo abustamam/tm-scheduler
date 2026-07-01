@@ -72,10 +72,10 @@ describe("formatActivity", () => {
 	it("falls back to the raw action for unknown verbs", () => {
 		const e = {
 			...base,
-			action: "meeting_edit",
+			action: "some_future_action",
 			actorName: "Rasheed",
 		} as ActivityEntry;
-		expect(formatActivity(e).summary).toBe("meeting_edit");
+		expect(formatActivity(e).summary).toBe("some_future_action");
 		expect(formatActivity(e).actor).toBe("Rasheed");
 	});
 
@@ -102,5 +102,33 @@ describe("formatActivity", () => {
 		);
 		expect(formatActivity(mk("member_merge")).summary).toMatch(/merged/i);
 		expect(formatActivity(mk("member_remove")).summary).toMatch(/removed/i);
+	});
+
+	it("formats meeting_edit variants from detail.change", () => {
+		const meetingBase = {
+			id: "1",
+			action: "meeting_edit",
+			createdAt: new Date(),
+			actorName: "Rasheed",
+			targetType: "meeting" as const,
+			roleName: null,
+			meetingId: "m",
+			meetingScheduledAt: null,
+			subjectName: null,
+			fromName: null,
+			change: null,
+		} satisfies ActivityEntry;
+		expect(
+			formatActivity({ ...meetingBase, change: "speaker_added" }).summary,
+		).toBe("added a speaker");
+		expect(
+			formatActivity({ ...meetingBase, change: "speaker_removed" }).summary,
+		).toBe("removed a speaker");
+		expect(
+			formatActivity({ ...meetingBase, change: "speaker_reordered" }).summary,
+		).toBe("reordered speakers");
+		expect(formatActivity({ ...meetingBase, change: null }).summary).toBe(
+			"updated the meeting",
+		);
 	});
 });
