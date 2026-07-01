@@ -10,6 +10,28 @@ export function zonedWallTimeToUtc(wall: string, timeZone: string): Date {
 	return new Date(asUtc - offset);
 }
 
+/**
+ * Inverse of `zonedWallTimeToUtc`: render a UTC instant as a
+ * `YYYY-MM-DDTHH:mm` wall-clock string in `timeZone`, suitable for a
+ * `datetime-local` input value.
+ */
+export function utcToZonedWallTime(instant: Date, timeZone: string): string {
+	const dtf = new Intl.DateTimeFormat("en-US", {
+		timeZone,
+		hour12: false,
+		year: "numeric",
+		month: "2-digit",
+		day: "2-digit",
+		hour: "2-digit",
+		minute: "2-digit",
+	});
+	const p = Object.fromEntries(
+		dtf.formatToParts(instant).map((x) => [x.type, x.value]),
+	);
+	const hour = p.hour === "24" ? "00" : p.hour;
+	return `${p.year}-${p.month}-${p.day}T${hour}:${p.minute}`;
+}
+
 /** Offset (ms) of `timeZone` at the given instant: localWall - utc. */
 function zoneOffsetMs(utcMs: number, timeZone: string): number {
 	const dtf = new Intl.DateTimeFormat("en-US", {
