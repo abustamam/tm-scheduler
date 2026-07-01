@@ -45,6 +45,24 @@ export function formatActivity(entry: ActivityEntry): FormattedActivity {
 		case "member_remove":
 			summary = "removed a member";
 			break;
+		case "meeting_create":
+			summary = "created the meeting";
+			break;
+		case "meeting_edit":
+			switch (entry.change) {
+				case "speaker_added":
+					summary = "added a speaker";
+					break;
+				case "speaker_removed":
+					summary = "removed a speaker";
+					break;
+				case "speaker_reordered":
+					summary = "reordered speakers";
+					break;
+				default:
+					summary = "updated the meeting";
+			}
+			break;
 		default:
 			summary = entry.action;
 	}

@@ -11,6 +11,14 @@ import { toast } from "sonner";
 import { ShareLinkButton } from "#/components/share-link-button";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
+import {
+	Dialog,
+	DialogClose,
+	DialogContent,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "#/components/ui/dialog";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import {
@@ -23,12 +31,16 @@ import {
 	SheetTitle,
 } from "#/components/ui/sheet";
 import { buildRoleCounts, slotLabel } from "#/lib/agenda";
+import { utcToZonedWallTime } from "#/lib/datetime";
 import { formatMeetingDate, formatMeetingTime } from "#/lib/format";
-import { getMeeting } from "#/server/meetings";
+import { getMeeting, updateMeeting } from "#/server/meetings";
 import {
+	addSpeakerSlot,
 	claimSlot,
 	confirmSlot,
+	moveSpeakerSlot,
 	releaseSlot,
+	removeSpeakerSlot,
 	unconfirmSlot,
 } from "#/server/slots";
 
@@ -57,6 +69,7 @@ function MeetingDetail() {
 	const router = useRouter();
 	const [busySlotId, setBusySlotId] = useState<string | null>(null);
 	const [speakerSlot, setSpeakerSlot] = useState<Slot | null>(null);
+	const [editOpen, setEditOpen] = useState(false);
 
 	// Number repeated roles ("Speaker 1", "Speaker 2", …).
 	const roleCounts = buildRoleCounts(slots);
@@ -151,6 +164,56 @@ function MeetingDetail() {
 		}
 	}
 
+	const speakerSlots = slots.filter((s) => s.isSpeakerRole);
+
+	async function doAddSpeaker() {
+		setBusySlotId("add-speaker");
+		try {
+			await addSpeakerSlot({
+				data: { meetingId: meeting.id, actorMemberId: currentMemberId },
+			});
+			await router.invalidate();
+		} catch (err) {
+			toast.error(errMessage(err));
+		} finally {
+			setBusySlotId(null);
+		}
+	}
+
+	async function doRemoveSpeaker() {
+		if (speakerSlots.length <= 1) {
+			const ok = window.confirm(
+				"This meeting will have no speakers. Continue?",
+			);
+			if (!ok) return;
+		}
+		setBusySlotId("remove-speaker");
+		try {
+			await removeSpeakerSlot({
+				data: { meetingId: meeting.id, actorMemberId: currentMemberId },
+			});
+			await router.invalidate();
+		} catch (err) {
+			toast.error(errMessage(err));
+		} finally {
+			setBusySlotId(null);
+		}
+	}
+
+	async function doMoveSpeaker(slot: Slot, direction: "up" | "down") {
+		setBusySlotId(slot.id);
+		try {
+			await moveSpeakerSlot({
+				data: { slotId: slot.id, direction, actorMemberId: currentMemberId },
+			});
+			await router.invalidate();
+		} catch (err) {
+			toast.error(errMessage(err));
+		} finally {
+			setBusySlotId(null);
+		}
+	}
+
 	return (
 		<div className="space-y-5">
 			<header className="space-y-2">
@@ -182,6 +245,16 @@ function MeetingDetail() {
 					label="Copy member link"
 					className="mt-1"
 				/>
+				{canManage ? (
+					<Button
+						size="sm"
+						variant="outline"
+						className="mt-1 ml-2"
+						onClick={() => setEditOpen(true)}
+					>
+						Edit meeting
+					</Button>
+				) : null}
 			</header>
 
 			{unavailableMembers.length > 0 ? (
@@ -267,6 +340,32 @@ function MeetingDetail() {
 											</div>
 
 											<div className="flex shrink-0 flex-col gap-2">
+												{canManage && slot.isSpeakerRole ? (
+													<div className="flex gap-1">
+														<Button
+															size="sm"
+															variant="ghost"
+															aria-label="Move speaker up"
+															disabled={busy || speakerSlots[0]?.id === slot.id}
+															onClick={() => doMoveSpeaker(slot, "up")}
+														>
+															↑
+														</Button>
+														<Button
+															size="sm"
+															variant="ghost"
+															aria-label="Move speaker down"
+															disabled={
+																busy ||
+																speakerSlots[speakerSlots.length - 1]?.id ===
+																	slot.id
+															}
+															onClick={() => doMoveSpeaker(slot, "down")}
+														>
+															↓
+														</Button>
+													</div>
+												) : null}
 												{slot.status === "open" ? (
 													<Button
 														size="sm"
@@ -330,9 +429,60 @@ function MeetingDetail() {
 								);
 							})}
 					</ul>
+					{canManage && category === "speaker" ? (
+						<div className="flex gap-2">
+							<Button
+								size="sm"
+								variant="outline"
+								disabled={busySlotId === "add-speaker"}
+								onClick={doAddSpeaker}
+							>
+								+ Add speaker
+							</Button>
+							{speakerSlots.length > 0 ? (
+								<Button
+									size="sm"
+									variant="outline"
+									disabled={busySlotId === "remove-speaker"}
+									onClick={doRemoveSpeaker}
+								>
+									− Remove speaker
+								</Button>
+							) : null}
+						</div>
+					) : null}
 				</section>
 			))}
 
+			{canManage && speakerSlots.length === 0 ? (
+				<section className="space-y-2">
+					<h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+						{CATEGORY_LABELS.speaker}
+					</h2>
+					<Button
+						size="sm"
+						variant="outline"
+						onClick={doAddSpeaker}
+						disabled={busySlotId === "add-speaker"}
+					>
+						+ Add speaker
+					</Button>
+				</section>
+			) : null}
+
+			{canManage ? (
+				<EditMeetingDialog
+					open={editOpen}
+					onOpenChange={setEditOpen}
+					meeting={meeting}
+					timezone={timezone}
+					actorMemberId={currentMemberId}
+					onSaved={async () => {
+						setEditOpen(false);
+						await router.invalidate();
+					}}
+				/>
+			) : null}
 			<ClaimSpeakerSheet
 				slot={speakerSlot}
 				currentMemberId={currentMemberId}
@@ -345,6 +495,118 @@ function MeetingDetail() {
 				}}
 			/>
 		</div>
+	);
+}
+
+function EditMeetingDialog({
+	open,
+	onOpenChange,
+	meeting,
+	timezone,
+	actorMemberId,
+	onSaved,
+}: {
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+	meeting: Awaited<ReturnType<typeof getMeeting>>["meeting"];
+	timezone: string;
+	actorMemberId: string | null;
+	onSaved: () => void | Promise<void>;
+}) {
+	const [submitting, setSubmitting] = useState(false);
+
+	async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
+		e.preventDefault();
+		const form = new FormData(e.currentTarget);
+		const scheduledAt = String(form.get("scheduledAt") ?? "");
+		if (!scheduledAt) {
+			toast.error("Date & time is required.");
+			return;
+		}
+		setSubmitting(true);
+		try {
+			await updateMeeting({
+				data: {
+					meetingId: meeting.id,
+					actorMemberId,
+					scheduledAt,
+					theme: String(form.get("theme") ?? "").trim() || undefined,
+					location: String(form.get("location") ?? "").trim() || undefined,
+					wordOfTheDay:
+						String(form.get("wordOfTheDay") ?? "").trim() || undefined,
+					notes: String(form.get("notes") ?? "").trim() || undefined,
+				},
+			});
+			toast.success("Meeting updated.");
+			await onSaved();
+		} catch (err) {
+			toast.error(errMessage(err));
+		} finally {
+			setSubmitting(false);
+		}
+	}
+
+	return (
+		<Dialog open={open} onOpenChange={onOpenChange}>
+			<DialogContent>
+				<DialogHeader>
+					<DialogTitle>Edit meeting</DialogTitle>
+				</DialogHeader>
+				<form onSubmit={onSubmit} className="space-y-4">
+					<div className="space-y-2">
+						<Label htmlFor="scheduledAt">Date &amp; time</Label>
+						<Input
+							id="scheduledAt"
+							name="scheduledAt"
+							type="datetime-local"
+							required
+							defaultValue={utcToZonedWallTime(
+								new Date(meeting.scheduledAt),
+								timezone,
+							)}
+						/>
+					</div>
+					<div className="space-y-2">
+						<Label htmlFor="theme">Theme</Label>
+						<Input id="theme" name="theme" defaultValue={meeting.theme ?? ""} />
+					</div>
+					<div className="space-y-2">
+						<Label htmlFor="location">Location</Label>
+						<Input
+							id="location"
+							name="location"
+							defaultValue={meeting.location ?? ""}
+						/>
+					</div>
+					<div className="space-y-2">
+						<Label htmlFor="wordOfTheDay">Word of the day</Label>
+						<Input
+							id="wordOfTheDay"
+							name="wordOfTheDay"
+							defaultValue={meeting.wordOfTheDay ?? ""}
+						/>
+					</div>
+					<div className="space-y-2">
+						<Label htmlFor="notes">Notes</Label>
+						<Input id="notes" name="notes" defaultValue={meeting.notes ?? ""} />
+					</div>
+					<DialogFooter>
+						<DialogClose asChild>
+							<Button type="button" variant="outline" disabled={submitting}>
+								Cancel
+							</Button>
+						</DialogClose>
+						<Button type="submit" disabled={submitting}>
+							{submitting ? (
+								<Loader2 className="size-4 animate-spin" />
+							) : (
+								"Save changes"
+							)}
+						</Button>
+					</DialogFooter>
+				</form>
+			</DialogContent>
+		</Dialog>
 	);
 }
 

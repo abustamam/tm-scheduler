@@ -36,9 +36,16 @@ export interface ActivityEntry {
 	subjectName: string | null;
 	/** reassign/release → displaced assignee (see slots.ts detail.fromMemberId) */
 	fromName: string | null;
+	/** meeting_edit → agenda-structure change (speaker_added | speaker_removed | speaker_reordered) */
+	change: string | null;
 }
 
-type LogDetail = { memberId?: string; fromMemberId?: string; name?: string };
+type LogDetail = {
+	memberId?: string;
+	fromMemberId?: string;
+	name?: string;
+	change?: string;
+};
 
 /**
  * Read + enrich the activity log for a club (newest first), optionally filtered
@@ -143,6 +150,7 @@ export async function loadActivity(
 			fromName: d.fromMemberId
 				? (memberName.get(d.fromMemberId) ?? null)
 				: null,
+			change: d.change ?? null,
 		};
 	});
 }

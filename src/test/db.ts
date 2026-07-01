@@ -122,7 +122,9 @@ export async function seedClub(): Promise<SeededClub> {
 		.insert(meetings)
 		.values({
 			clubId,
-			scheduledAt: new Date("2026-07-01T19:00:00Z"),
+			// Always in the future so "upcoming meeting" queries include it
+			// regardless of when the suite runs (avoids a wall-clock time bomb).
+			scheduledAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
 			status: "scheduled",
 		})
 		.returning({ id: meetings.id });
