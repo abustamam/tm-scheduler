@@ -43,17 +43,30 @@ Add two nullable columns:
 - **Row filter:** import only rows where `Status (*)` == `PaidMember`. Skip unpaid
   members (Jamal, Gulnaz, Nancy). Not-yet-enrolled paid members (e.g. Farhanaaz) ARE
   imported. (This leaves the 14 paid members.)
-- **Upsert by email** (lowercased) within the target club: update existing rows,
-  insert missing ones.
+- **Two-pass matching, scoped to the club** (dup-safe — a mismatched email must not
+  silently duplicate a member):
+  1. exact **email** match (lowercased);
+  2. else exact **normalized name** match (trim + case-fold);
+  3. else **insert**.
+  If a name matches **more than one** existing member, **skip and warn** (never guess).
+- **Overwrite policy on a match:**
+  - `joinedAt` / `originalJoinDate`: **always** written (currently empty/wrong).
+  - `name` / `email` / `phone`: **fill-only** — written only when the stored value is
+    null/empty; never overwrite a non-empty value (protects in-app edits; e.g. the DB's
+    "Rasheed Bustamam" is NOT replaced by the CSV's "Abdul-Rasheed Bustamam").
 - Field mapping:
-  - `name` ← Name
-  - `email` ← Email
-  - `phone` ← Mobile Phone (only; Home/Additional ignored)
-  - `joinedAt` ← Member of Club Since (M/D/YYYY)
-  - `originalJoinDate` ← Original Join Date (M/D/YYYY)
-  - **`office` is NOT touched** — officer positions will be modeled properly in a
-    separate issue; the importer leaves existing `office` values untouched.
-- Idempotent; prints inserted/updated counts.
+  - `name` ← Name (fill-only)
+  - `email` ← Email (fill-only)
+  - `phone` ← Mobile Phone only; Home/Additional ignored (fill-only)
+  - `joinedAt` ← Member of Club Since (M/D/YYYY, parsed as y/m-1/d)
+  - `originalJoinDate` ← Original Join Date (M/D/YYYY) — **stored, no UI** (feeds #64)
+  - **`office` is NOT touched** — officer positions modeled in #63.
+  - **No `customerId`** — the CSV's `PN-…` ID is not persisted this pass.
+- Idempotent; logs each row's outcome (`inserted` / `updated-by-email` /
+  `updated-by-name` / `skipped-ambiguous` / `skipped-unpaid`) + a summary count.
+- **Known limitation:** unpaid members already present in the DB are skipped, so they
+  retain their `createdAt`-based (wrong) tenure until a later pass includes them. (Not
+  present in local dev; prod may vary.)
 - The directly-testable parse + map logic lives in a sibling `*-logic` style module (or
   exported pure functions in the script) so the CSV parser and date/field mapping are
   unit-tested without a DB. The DB-writing portion stays in the script.
@@ -69,32 +82,39 @@ selects so views can read the real dates.
   - Remove the **Pathway** column and the **Level progress** column (and the progress
     bar).
   - Remove the **Level completions** and **Needs attention** stat cards.
-  - Status reduces to the one real signal: a **"New"** pill derived from join date.
-  - Segments trim to **All members** / **New members**.
+  - **Remove the Status column and the segment filters entirely** — with real join
+    dates ~nobody is "new" (earliest is 2026-04-01, just outside the 90-day window), so
+    a status pill / New segment would be dead UI. Roster columns become Member · tenure ·
+    Speeches · chevron.
   - Keep Member, tenure, Speeches, Open roles, merge dialog, Add member.
   - Update `RosterRow` and `TABLE_COLS` accordingly.
 - **`src/routes/_authed/members.$id.tsx`:**
   - Remove the **Current Pathway + level stepper** card and the **Awards earned** card.
   - Keep header (real tenure + joined date), Speech log, Roles served.
-  - Status pill → "New" only.
+  - **Remove the header status pill** (no real status signal).
 - **`src/routes/_authed/dashboard.tsx`:**
   - Remove the hero **ProgressRing / "My Pathway"** card and the **"Next up"** project
     card.
   - Keep greeting, My speech log, My upcoming roles, Quick actions.
 - **`src/data/club.ts`:** delete `mockPathway`, `hash`, `PATHS`, `PROJECTS`,
-  `levelSteps`, `mockAwards`, and now-unused types (`MockPathway`, `LevelStep`,
-  `LevelState`, `Award`). Keep `avatarGradient`, `statusMeta`, `MemberStatus`, and a
-  trimmed `rosterSegments`.
-- **`src/components/club/progress-ring.tsx`:** now unused → remove.
+  `levelSteps`, `mockAwards`, `rosterSegments`/`RosterSegment` (segments removed), and
+  now-unused types (`MockPathway`, `LevelStep`, `LevelState`, `Award`). Keep
+  `avatarGradient`, `statusMeta`, `MemberStatus`, `StatusMeta` as exports for the future
+  progress issue (#61) even though nothing renders them now (unused exports don't fail
+  strict TS/Biome).
+- **`src/components/club/progress-ring.tsx`** (dashboard-only) and
+  **`src/components/club/status-pill.tsx`** (roster/detail-only) are now unused → remove
+  both. Grep-confirm no other importers before deleting.
 
-### 5. GitHub issues (`abustamam/tm-scheduler`)
-- **Data-driven Pathways progress model** — real persisted level/percent/path/awards
-  sourced from Base Camp exports (attach the "Paths Currently in Progress" + "Member
-  Overview" screenshots as the target data). Restores the progress UI properly.
-- **CSV member-import upload feature** — VPE-facing repeatable upload of the TM
-  membership export, building on the one-off seed script.
-- **Officer position modeling** — replace the free-text `members.office` with a proper
-  model for club officer roles (sourced from the CSV "Current Position").
+### 5. GitHub issues (`abustamam/tm-scheduler`) — CREATED
+- **#61** Data-driven Pathways progress model (`ready-for-agent`) — real persisted
+  level/percent/path/awards from Base Camp exports; restores the removed progress UI.
+- **#62** CSV member-import upload feature (`ready-for-agent`) — VPE-facing repeatable
+  upload, reusing this script's parse/match/overwrite logic.
+- **#63** Model club officer positions (`needs-triage`) — replace free-text
+  `members.office`.
+- **#64** Model multi-club membership (`needs-triage`) — person identity vs per-club
+  membership; home for `originalJoinDate`; CSV `Customer ID` (`PN-…`) as person key.
 
 ## Verification
 
@@ -108,6 +128,7 @@ selects so views can read the real dates.
 
 - Real Pathways progress persistence (its own issue).
 - CSV upload UI (its own issue).
-- Officer position modeling — `members.office` left as-is (its own issue).
+- Officer position modeling — `members.office` left as-is (#63).
+- Multi-club person model / persisting the CSV `Customer ID` (`PN-…`) (#64).
 - Credential / highest-achievement / completed-paths / last-speech persistence.
 - Paid-vs-unpaid membership status modeling.
