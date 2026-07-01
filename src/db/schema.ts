@@ -118,6 +118,11 @@ export const members = pgTable(
 		// from sign-up / roster / season / picker views, but their past role
 		// history is preserved (never deleted). Reactivating restores them.
 		status: membershipStatusEnum("status").notNull().default("active"),
+		// Real join dates from the Toastmasters membership export (seeded by
+		// scripts/import-members.ts). joinedAt = "Member of Club Since";
+		// originalJoinDate = first-ever Toastmasters join (stored for #64, no UI yet).
+		joinedAt: timestamp("joined_at"),
+		originalJoinDate: timestamp("original_join_date"),
 		// Links a roster member to the Better-Auth account of the one signed-in
 		// admin/VPE. NULL for ordinary members (who never sign in).
 		userId: text("user_id").references(() => user.id, { onDelete: "set null" }),

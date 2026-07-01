@@ -4,11 +4,10 @@ import {
 	useNavigate,
 	useRouter,
 } from "@tanstack/react-router";
-import { Award as AwardIcon, ChevronLeft } from "lucide-react";
+import { ChevronLeft } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { MemberAvatar } from "#/components/club/member-avatar";
-import { StatusPill } from "#/components/club/status-pill";
 import { Button } from "#/components/ui/button";
 import {
 	Dialog,
@@ -21,15 +20,8 @@ import {
 } from "#/components/ui/dialog";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
-import {
-	type LevelStep,
-	levelSteps,
-	mockAwards,
-	mockPathway,
-} from "#/data/club";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
-import { formatTenure, isNewMember } from "#/lib/members";
-import { cn } from "#/lib/utils";
+import { formatTenure } from "#/lib/members";
 import { getMemberProfile } from "#/server/club";
 import { editMember, removeMember, setMemberStatus } from "#/server/members";
 
@@ -62,7 +54,7 @@ function dayMon(value: Date | string) {
 }
 
 function MemberDetail() {
-	const { member, speechLog, rolesServed, speeches } = Route.useLoaderData();
+	const { member, speechLog, rolesServed } = Route.useLoaderData();
 	const { clubs, currentMemberId } = Route.useRouteContext();
 	const clubId = clubs[0]?.clubId;
 
@@ -77,14 +69,11 @@ function MemberDetail() {
 		);
 	}
 
-	// Identity, speech log and roles served are real; Pathway/level + awards are mocked.
-	const pathway = mockPathway(member.id);
-	const status = isNewMember(member.createdAt) ? "new" : pathway.status;
-	const levels = levelSteps(pathway.level, pathway.pct);
-	const awards = mockAwards(pathway.level, status);
+	// Identity, speech log and roles served are real; Pathways progress is not modeled (#61).
+	const joined = member.joinedAt ?? member.createdAt;
 	const tenure = member.office
-		? `${formatTenure(member.createdAt)} · ${member.office}`
-		: formatTenure(member.createdAt);
+		? `${formatTenure(joined)} · ${member.office}`
+		: formatTenure(joined);
 
 	return (
 		<div className="max-w-[1180px] px-7 pt-[22px] pb-10">
@@ -104,14 +93,15 @@ function MemberDetail() {
 					</h1>
 					<div className="mt-1.5 flex flex-wrap items-center gap-2.5">
 						<span className="text-[13.5px] text-[var(--sea-ink-soft)]">
-							{tenure} · joined {joinedLabel(member.createdAt)}
+							{tenure} · joined {joinedLabel(joined)}
 						</span>
-						<span className="size-1 rounded-full bg-[var(--sea-ink-soft)]" />
-						<StatusPill status={status} long />
 						{member.status === "inactive" ? (
-							<span className="inline-flex items-center rounded-full border border-[var(--line)] bg-[var(--sand)] px-2.5 py-0.5 text-[11px] font-bold tracking-[0.03em] text-[var(--sea-ink-soft)] uppercase">
-								Inactive
-							</span>
+							<>
+								<span className="size-1 rounded-full bg-[var(--sea-ink-soft)]" />
+								<span className="inline-flex items-center rounded-full border border-[var(--line)] bg-[var(--sand)] px-2.5 py-0.5 text-[11px] font-bold tracking-[0.03em] text-[var(--sea-ink-soft)] uppercase">
+									Inactive
+								</span>
+							</>
 						) : null}
 					</div>
 				</div>
@@ -126,34 +116,6 @@ function MemberDetail() {
 							currentMemberId={currentMemberId}
 						/>
 					) : null}
-				</div>
-			</div>
-
-			{/* Pathway + level stepper (mock) */}
-			<div className="mb-[18px] rounded-[18px] border border-[var(--line)] bg-[linear-gradient(150deg,var(--surface-strong),var(--surface))] px-6 py-[22px] shadow-[0_1px_0_var(--inset-glint)_inset,0_12px_26px_rgba(23,58,64,.06)]">
-				<div className="mb-[18px] flex flex-wrap items-baseline justify-between gap-2">
-					<div>
-						<div className="text-[11.5px] font-extrabold tracking-[0.08em] text-[var(--lagoon-deep)] uppercase">
-							Current Pathway
-						</div>
-						<div className="mt-[3px] font-display text-[21px] font-semibold">
-							{pathway.path}
-						</div>
-					</div>
-					<div className="text-right">
-						<div className="font-display text-[26px] leading-none font-semibold">
-							{speeches}
-						</div>
-						<div className="text-[11.5px] font-semibold text-[var(--sea-ink-soft)]">
-							speeches given
-						</div>
-					</div>
-				</div>
-
-				<div className="flex items-start">
-					{levels.map((lv) => (
-						<LevelNode key={lv.n} step={lv} />
-					))}
 				</div>
 			</div>
 
@@ -219,25 +181,6 @@ function MemberDetail() {
 
 				{/* Side cards */}
 				<div className="flex min-w-0 flex-col gap-[18px]">
-					<div className="rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] px-5 py-[18px] shadow-[0_1px_0_var(--inset-glint)_inset,0_10px_24px_rgba(23,58,64,.05)]">
-						<h2 className="mb-3 text-[15px] font-bold">Awards earned</h2>
-						<div className="flex flex-col gap-[9px]">
-							{awards.map((a) => (
-								<div key={a.title} className="flex items-center gap-[11px]">
-									<span className="flex size-[34px] shrink-0 items-center justify-center rounded-[10px] bg-[linear-gradient(150deg,var(--lagoon),var(--lagoon-deep))] text-white">
-										<AwardIcon className="size-[17px]" aria-hidden />
-									</span>
-									<div className="leading-[1.25]">
-										<div className="text-[13px] font-bold">{a.title}</div>
-										<div className="text-[11px] text-[var(--sea-ink-soft)]">
-											{a.date}
-										</div>
-									</div>
-								</div>
-							))}
-						</div>
-					</div>
-
 					<div className="rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] px-5 py-[18px] shadow-[0_1px_0_var(--inset-glint)_inset,0_10px_24px_rgba(23,58,64,.05)]">
 						<h2 className="mb-3 text-[15px] font-bold">
 							Roles served this year
@@ -500,48 +443,5 @@ function BackLink() {
 			/>
 			Back to roster
 		</Link>
-	);
-}
-
-function LevelNode({ step }: { step: LevelStep }) {
-	return (
-		<div className="relative flex flex-1 flex-col items-center text-center">
-			{step.n !== 1 ? (
-				<span
-					className={cn(
-						"absolute top-[17px] left-[-50%] h-[3px] w-full",
-						step.connectorReached
-							? "bg-[var(--lagoon-deep)]"
-							: "bg-[var(--line)]",
-					)}
-				/>
-			) : null}
-			<span
-				className={cn(
-					"relative z-[1] flex size-9 items-center justify-center rounded-full text-[13px] font-bold",
-					step.state === "done" &&
-						"bg-[linear-gradient(150deg,var(--lagoon),var(--lagoon-deep))] text-white",
-					step.state === "current" &&
-						"border-[3px] border-[var(--lagoon-deep)] bg-[var(--surface-strong)] text-[var(--lagoon-deep)]",
-					step.state === "locked" &&
-						"bg-[var(--sand)] text-[var(--sea-ink-soft)]",
-				)}
-			>
-				{step.mark}
-			</span>
-			<div
-				className={cn(
-					"mt-[9px] text-xs font-bold whitespace-nowrap",
-					step.state === "locked"
-						? "text-[var(--sea-ink-soft)]"
-						: "text-[var(--sea-ink)]",
-				)}
-			>
-				{step.label}
-			</div>
-			<div className="mt-[3px] text-[10.5px] whitespace-nowrap text-[var(--sea-ink-soft)]">
-				{step.sub}
-			</div>
-		</div>
 	);
 }

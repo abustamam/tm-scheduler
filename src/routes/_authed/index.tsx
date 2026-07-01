@@ -3,7 +3,6 @@ import { ChevronRight } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { MemberAvatar } from "#/components/club/member-avatar";
-import { StatusPill } from "#/components/club/status-pill";
 import { Button } from "#/components/ui/button";
 import {
 	Dialog,
@@ -14,14 +13,8 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "#/components/ui/dialog";
-import {
-	type MemberStatus,
-	mockPathway,
-	type RosterSegment,
-	rosterSegments,
-} from "#/data/club";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
-import { formatTenure, isNewMember } from "#/lib/members";
+import { formatTenure } from "#/lib/members";
 import {
 	buildImportPreview,
 	type PreviewRow,
@@ -47,7 +40,14 @@ export const Route = createFileRoute("/_authed/")({
 	component: Roster,
 });
 
-const TABLE_COLS = "2.1fr 1.5fr 1.6fr 1fr 1.1fr 34px";
+const TABLE_COLS = "1fr 150px 34px";
+
+type SegKey = "all" | "active" | "inactive";
+const ROSTER_SEGMENTS: { key: SegKey; label: string }[] = [
+	{ key: "all", label: "All members" },
+	{ key: "active", label: "Active" },
+	{ key: "inactive", label: "Inactive" },
+];
 
 interface RosterRow {
 	id: string;
@@ -55,13 +55,8 @@ interface RosterRow {
 	initials: string;
 	tone: ReturnType<typeof toneFromSeed>;
 	tenure: string;
-	path: string;
-	project: string;
-	level: number;
-	pct: number;
 	speeches: number;
-	status: MemberStatus;
-	/** Roster membership status (renewal) — distinct from the mocked pathway status. */
+	/** Roster membership status (renewal): active vs unrenewed/inactive. */
 	membershipStatus: "active" | "inactive";
 }
 
@@ -71,27 +66,23 @@ function Roster() {
 	const clubId = clubs[0]?.clubId;
 	const clubRole = clubs[0]?.clubRole;
 	const canManage = clubRole === "admin" || clubRole === "vpe";
-	const [seg, setSeg] = useState<RosterSegment["key"]>("all");
+	const [seg, setSeg] = useState<SegKey>("all");
 	const [mergeOpen, setMergeOpen] = useState(false);
 	const [importOpen, setImportOpen] = useState(false);
 
-	// Identity + speeches are real; Pathway/level/% + status are mocked.
+	// Identity, tenure, speeches and membership status are real; Pathways progress
+	// is not modeled (#61).
 	const rows: RosterRow[] = members.map((m) => {
-		const p = mockPathway(m.id);
+		const joined = m.joinedAt ?? m.createdAt;
 		return {
 			id: m.id,
 			name: m.name,
 			initials: initialsOf(m.name),
 			tone: toneFromSeed(m.id),
 			tenure: m.office
-				? `${formatTenure(m.createdAt)} · ${m.office}`
-				: formatTenure(m.createdAt),
-			path: p.path,
-			project: p.project,
-			level: p.level,
-			pct: p.pct,
+				? `${formatTenure(joined)} · ${m.office}`
+				: formatTenure(joined),
 			speeches: m.speeches,
-			status: isNewMember(m.createdAt) ? "new" : p.status,
 			membershipStatus: m.status,
 		};
 	});
@@ -103,9 +94,11 @@ function Roster() {
 		return ai - bi;
 	});
 	const visible =
-		seg === "all" ? sorted : sorted.filter((r) => r.status === seg);
-	const countFor = (key: RosterSegment["key"]) =>
-		key === "all" ? rows.length : rows.filter((r) => r.status === key).length;
+		seg === "all" ? sorted : sorted.filter((r) => r.membershipStatus === seg);
+	const countFor = (key: SegKey) =>
+		key === "all"
+			? rows.length
+			: rows.filter((r) => r.membershipStatus === key).length;
 
 	const stats = [
 		{
@@ -117,17 +110,6 @@ function Roster() {
 			label: "Speeches given",
 			value: String(rows.reduce((n, r) => n + r.speeches, 0)),
 			note: "all time",
-		},
-		{
-			label: "Level completions",
-			value: String(rows.reduce((n, r) => n + (r.level - 1), 0)),
-			note: "this term",
-		},
-		{
-			label: "Needs attention",
-			value: String(rows.filter((r) => r.status === "behind").length),
-			note: "behind on goals",
-			amber: true,
 		},
 		{
 			label: "Open roles",
@@ -146,7 +128,7 @@ function Roster() {
 						Club roster
 					</h1>
 					<p className="mt-[5px] text-sm text-[var(--sea-ink-soft)]">
-						Where every member sits in their Pathways journey · Spring 2026 term
+						Every member of your club at a glance · Spring 2026 term
 					</p>
 				</div>
 				<div className="flex gap-[9px]">
@@ -182,9 +164,9 @@ function Roster() {
 				))}
 			</div>
 
-			{/* Segment filters */}
+			{/* Segment filters (membership status) */}
 			<div className="mb-4 flex flex-wrap gap-2">
-				{rosterSegments.map((s) => (
+				{ROSTER_SEGMENTS.map((s) => (
 					<SegmentChip
 						key={s.key}
 						segment={s}
@@ -202,10 +184,7 @@ function Roster() {
 					style={{ gridTemplateColumns: TABLE_COLS }}
 				>
 					<div>Member</div>
-					<div>Pathway</div>
-					<div>Level progress</div>
 					<div>Speeches</div>
-					<div>Status</div>
 					<div />
 				</div>
 
@@ -243,41 +222,6 @@ function Roster() {
 								</div>
 							</div>
 
-							{/* Pathway */}
-							<div className="min-w-0">
-								<div className="truncate text-[13px] font-semibold">
-									{m.path}
-								</div>
-								<div className="truncate text-[11.5px] text-[var(--sea-ink-soft)]">
-									{m.project}
-								</div>
-							</div>
-
-							{/* Level progress */}
-							<div>
-								<div className="mb-[5px] flex items-center gap-2">
-									<span className="text-[11px] font-bold tracking-[0.03em] text-[var(--sea-ink-soft)]">
-										LV {m.level}
-									</span>
-									<span className="text-[11.5px] text-[var(--sea-ink-soft)]">
-										·
-									</span>
-									<span className="text-[11.5px] font-bold text-[var(--sea-ink)]">
-										{m.pct}%
-									</span>
-								</div>
-								<div className="h-[7px] overflow-hidden rounded-full bg-[var(--sand)]">
-									<div
-										className="h-full rounded-full"
-										style={{
-											width: `${m.pct}%`,
-											background:
-												"linear-gradient(90deg, var(--lagoon), var(--lagoon-deep))",
-										}}
-									/>
-								</div>
-							</div>
-
 							{/* Speeches */}
 							<div className="text-sm font-bold text-[var(--sea-ink)]">
 								{m.speeches}
@@ -286,9 +230,6 @@ function Roster() {
 									given
 								</span>
 							</div>
-
-							{/* Status */}
-							<StatusPill status={m.status} />
 
 							{/* Chevron */}
 							<div className="justify-self-end text-[var(--sea-ink-soft)] opacity-45 transition-all group-hover:translate-x-[3px] group-hover:opacity-100">
@@ -300,8 +241,8 @@ function Roster() {
 			</div>
 
 			<p className="mt-3.5 px-0.5 text-xs text-[var(--sea-ink-soft)]">
-				Tip: click any member to open their full journey, speech log and award
-				track.
+				Tip: click any member to open their profile, speech log and roles
+				served.
 			</p>
 
 			{clubId ? (
@@ -700,7 +641,7 @@ function SegmentChip({
 	active,
 	onSelect,
 }: {
-	segment: RosterSegment;
+	segment: { key: SegKey; label: string };
 	count: number;
 	active: boolean;
 	onSelect: () => void;
