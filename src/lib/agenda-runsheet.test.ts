@@ -80,7 +80,7 @@ describe("expandRunSheet", () => {
 
 	it("event beats always render even with no slots", () => {
 		const rows = expandRunSheet([]);
-		// 6 event beats in the template render regardless of assignees.
+		// 7 event beats in the template render regardless of assignees.
 		expect(rows.filter((r) => r.who === "Timer").length).toBe(3);
 	});
 
