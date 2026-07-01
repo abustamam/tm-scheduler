@@ -28,6 +28,19 @@ function arg(flag: string): string | undefined {
 	return i >= 0 ? process.argv[i + 1] : undefined;
 }
 
+/** host:port + db name from DATABASE_URL, password never included. */
+function dbTarget(): string {
+	const raw = process.env.DATABASE_URL;
+	if (!raw) return "(DATABASE_URL unset)";
+	try {
+		const u = new URL(raw);
+		const port = u.port ? `:${u.port}` : "";
+		return `host=${u.hostname}${port} db=${u.pathname.replace(/^\//, "")}`;
+	} catch {
+		return "(unparseable DATABASE_URL)";
+	}
+}
+
 async function main() {
 	const clubId = arg("--club");
 	const file = arg("--file") ?? "ref/Club-Membership20260630.csv";
@@ -39,6 +52,13 @@ async function main() {
 	const rows = parseCsv(readFileSync(file, "utf8"));
 	const paid = rows.filter(isPaid);
 	const skippedUnpaid = rows.length - paid.length;
+
+	// Show the target DB before any write — eyeball host=localhost vs a prod
+	// proxy host, and Ctrl-C if it's the wrong database.
+	console.log(
+		`Importing into ${dbTarget()} — ${paid.length} paid rows ` +
+			`(${skippedUnpaid} unpaid skipped)\n`,
+	);
 
 	const existing = await db
 		.select({
