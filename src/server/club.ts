@@ -35,6 +35,8 @@ export const listClubMembers = createServerFn({ method: "GET" })
 				office: members.office,
 				userId: members.userId,
 				createdAt: members.createdAt,
+				joinedAt: members.joinedAt,
+				originalJoinDate: members.originalJoinDate,
 			})
 			.from(members)
 			.where(eq(members.clubId, clubId))
@@ -72,6 +74,8 @@ export const listClubMembers = createServerFn({ method: "GET" })
 			office: m.office,
 			userId: m.userId,
 			createdAt: m.createdAt,
+			joinedAt: m.joinedAt,
+			originalJoinDate: m.originalJoinDate,
 			speeches: speechByMember.get(m.id) ?? 0,
 		}));
 	});
@@ -175,6 +179,8 @@ export const getMemberProfile = createServerFn({ method: "GET" })
 				office: members.office,
 				userId: members.userId,
 				createdAt: members.createdAt,
+				joinedAt: members.joinedAt,
+				originalJoinDate: members.originalJoinDate,
 			})
 			.from(members)
 			.where(
@@ -199,6 +205,8 @@ export const getMemberProfile = createServerFn({ method: "GET" })
 				office: member.office,
 				userId: member.userId,
 				createdAt: member.createdAt,
+				joinedAt: member.joinedAt,
+				originalJoinDate: member.originalJoinDate,
 			},
 			speechLog,
 			rolesServed,
