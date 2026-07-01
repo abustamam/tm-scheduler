@@ -21,6 +21,7 @@ import {
 	requireMembership,
 	requireUser,
 } from "./guards";
+import { applyMeetingUpdate } from "./meetings-logic";
 
 const uuid = z.string().uuid();
 
@@ -321,5 +322,31 @@ export const createMeeting = createServerFn({ method: "POST" })
 				await tx.insert(roleSlots).values(slotRows);
 			}
 			return { meetingId: meeting.id };
+		});
+	});
+
+const updateMeetingSchema = z.object({
+	meetingId: uuid,
+	actorMemberId: uuid.nullable().optional(),
+	scheduledAt: z.string().min(1),
+	location: z.string().trim().optional(),
+	theme: z.string().trim().optional(),
+	wordOfTheDay: z.string().trim().optional(),
+	notes: z.string().trim().optional(),
+});
+
+/** Admin/VPE only: edit a meeting's meta (incl. reschedule). AUTHED. */
+export const updateMeeting = createServerFn({ method: "POST" })
+	.validator((input: unknown) => updateMeetingSchema.parse(input))
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		const meeting = await db.query.meetings.findFirst({
+			where: eq(meetings.id, data.meetingId),
+		});
+		if (!meeting) throw new Error("Meeting not found.");
+		await requireClubRole(currentUser.id, meeting.clubId, ["admin", "vpe"]);
+		return applyMeetingUpdate({
+			...data,
+			actorMemberId: data.actorMemberId ?? null,
 		});
 	});

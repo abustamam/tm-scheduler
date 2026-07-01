@@ -10,6 +10,11 @@ import {
 } from "#/db/schema";
 import { logActivity } from "./activity";
 import { requireClubRole, requireMemberInClub, requireUser } from "./guards";
+import {
+	applyAddSpeakerSlot,
+	applyMoveSpeakerSlot,
+	applyRemoveSpeakerSlot,
+} from "./slots-logic";
 
 const speakerDetailsSchema = z.object({
 	speechTitle: z.string().trim().min(1, "A speech title is required."),
@@ -318,5 +323,69 @@ export const reassignSlot = createServerFn({ method: "POST" })
 			});
 
 			return { ok: true as const };
+		});
+	});
+
+const speakerSlotSchema = z.object({
+	meetingId: z.string().uuid(),
+	actorMemberId: z.string().uuid().nullable().optional(),
+});
+
+async function requireMeetingManager(meetingId: string) {
+	const currentUser = await requireUser();
+	const [row] = await db
+		.select({ clubId: meetings.clubId })
+		.from(meetings)
+		.where(eq(meetings.id, meetingId))
+		.limit(1);
+	if (!row) throw new Error("Meeting not found.");
+	await requireClubRole(currentUser.id, row.clubId, ["admin", "vpe"]);
+}
+
+/** Admin/VPE: add a speaker slot (+ paired evaluator). AUTHED. */
+export const addSpeakerSlot = createServerFn({ method: "POST" })
+	.validator((input: unknown) => speakerSlotSchema.parse(input))
+	.handler(async ({ data }) => {
+		await requireMeetingManager(data.meetingId);
+		return applyAddSpeakerSlot({
+			meetingId: data.meetingId,
+			actorMemberId: data.actorMemberId ?? null,
+		});
+	});
+
+/** Admin/VPE: remove an unclaimed speaker slot (+ unclaimed evaluator). AUTHED. */
+export const removeSpeakerSlot = createServerFn({ method: "POST" })
+	.validator((input: unknown) => speakerSlotSchema.parse(input))
+	.handler(async ({ data }) => {
+		await requireMeetingManager(data.meetingId);
+		return applyRemoveSpeakerSlot({
+			meetingId: data.meetingId,
+			actorMemberId: data.actorMemberId ?? null,
+		});
+	});
+
+const moveSpeakerSchema = z.object({
+	slotId: z.string().uuid(),
+	direction: z.enum(["up", "down"]),
+	actorMemberId: z.string().uuid().nullable().optional(),
+});
+
+/** Admin/VPE: reorder a speaker slot up/down (swaps slotIndex). AUTHED. */
+export const moveSpeakerSlot = createServerFn({ method: "POST" })
+	.validator((input: unknown) => moveSpeakerSchema.parse(input))
+	.handler(async ({ data }) => {
+		const [row] = await db
+			.select({ clubId: meetings.clubId })
+			.from(roleSlots)
+			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+			.where(eq(roleSlots.id, data.slotId))
+			.limit(1);
+		if (!row) throw new Error("Speaker slot not found.");
+		const currentUser = await requireUser();
+		await requireClubRole(currentUser.id, row.clubId, ["admin", "vpe"]);
+		return applyMoveSpeakerSlot({
+			slotId: data.slotId,
+			direction: data.direction,
+			actorMemberId: data.actorMemberId ?? null,
 		});
 	});
