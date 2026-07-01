@@ -18,12 +18,16 @@ describe("parseCsv", () => {
 
 	it("keeps empty fields as empty strings", () => {
 		const text = "Name,Email,Phone\nBob,,+1555\n";
-		expect(parseCsv(text)).toEqual([{ Name: "Bob", Email: "", Phone: "+1555" }]);
+		expect(parseCsv(text)).toEqual([
+			{ Name: "Bob", Email: "", Phone: "+1555" },
+		]);
 	});
 
 	it("handles quoted fields containing commas", () => {
 		const text = 'Name,City\n"Khan, Mois","Folsom, CA"\n';
-		expect(parseCsv(text)).toEqual([{ Name: "Khan, Mois", City: "Folsom, CA" }]);
+		expect(parseCsv(text)).toEqual([
+			{ Name: "Khan, Mois", City: "Folsom, CA" },
+		]);
 	});
 
 	it("ignores a trailing blank line", () => {
