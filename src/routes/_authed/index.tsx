@@ -15,10 +15,15 @@ import {
 } from "#/components/ui/dialog";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
 import { formatTenure } from "#/lib/members";
+import {
+	buildImportPreview,
+	type PreviewRow,
+	parseRosterText,
+} from "#/lib/roster-import";
 import { cn } from "#/lib/utils";
 import { listClubMembers } from "#/server/club";
 import { listUpcomingMeetings } from "#/server/meetings";
-import { mergeMembers } from "#/server/members";
+import { bulkImportMembers, mergeMembers } from "#/server/members";
 
 export const Route = createFileRoute("/_authed/")({
 	loader: async ({ context }) => {
@@ -37,6 +42,13 @@ export const Route = createFileRoute("/_authed/")({
 
 const TABLE_COLS = "1fr 150px 34px";
 
+type SegKey = "all" | "active" | "inactive";
+const ROSTER_SEGMENTS: { key: SegKey; label: string }[] = [
+	{ key: "all", label: "All members" },
+	{ key: "active", label: "Active" },
+	{ key: "inactive", label: "Inactive" },
+];
+
 interface RosterRow {
 	id: string;
 	name: string;
@@ -44,15 +56,22 @@ interface RosterRow {
 	tone: ReturnType<typeof toneFromSeed>;
 	tenure: string;
 	speeches: number;
+	/** Roster membership status (renewal): active vs unrenewed/inactive. */
+	membershipStatus: "active" | "inactive";
 }
 
 function Roster() {
 	const { members, openRoles } = Route.useLoaderData();
 	const { clubs, currentMemberId } = Route.useRouteContext();
 	const clubId = clubs[0]?.clubId;
+	const clubRole = clubs[0]?.clubRole;
+	const canManage = clubRole === "admin" || clubRole === "vpe";
+	const [seg, setSeg] = useState<SegKey>("all");
 	const [mergeOpen, setMergeOpen] = useState(false);
+	const [importOpen, setImportOpen] = useState(false);
 
-	// Identity, tenure and speeches are real; Pathways progress is not modeled (#61).
+	// Identity, tenure, speeches and membership status are real; Pathways progress
+	// is not modeled (#61).
 	const rows: RosterRow[] = members.map((m) => {
 		const joined = m.joinedAt ?? m.createdAt;
 		return {
@@ -64,11 +83,29 @@ function Roster() {
 				? `${formatTenure(joined)} · ${m.office}`
 				: formatTenure(joined),
 			speeches: m.speeches,
+			membershipStatus: m.status,
 		};
 	});
 
+	// Active members first; inactive (unrenewed) sink to the bottom, greyed.
+	const sorted = [...rows].sort((a, b) => {
+		const ai = a.membershipStatus === "inactive" ? 1 : 0;
+		const bi = b.membershipStatus === "inactive" ? 1 : 0;
+		return ai - bi;
+	});
+	const visible =
+		seg === "all" ? sorted : sorted.filter((r) => r.membershipStatus === seg);
+	const countFor = (key: SegKey) =>
+		key === "all"
+			? rows.length
+			: rows.filter((r) => r.membershipStatus === key).length;
+
 	const stats = [
-		{ label: "Active members", value: String(rows.length), note: "this term" },
+		{
+			label: "Active members",
+			value: String(rows.filter((r) => r.membershipStatus === "active").length),
+			note: "this term",
+		},
 		{
 			label: "Speeches given",
 			value: String(rows.reduce((n, r) => n + r.speeches, 0)),
@@ -107,6 +144,15 @@ function Roster() {
 							Merge duplicates
 						</Button>
 					) : null}
+					{clubId && canManage ? (
+						<Button
+							variant="outline"
+							size="sm"
+							onClick={() => setImportOpen(true)}
+						>
+							Bulk import
+						</Button>
+					) : null}
 					<Button size="sm">+ Add member</Button>
 				</div>
 			</div>
@@ -115,6 +161,19 @@ function Roster() {
 			<div className="mb-6 grid grid-cols-[repeat(auto-fit,minmax(168px,1fr))] gap-[13px]">
 				{stats.map((s) => (
 					<StatCard key={s.label} stat={s} />
+				))}
+			</div>
+
+			{/* Segment filters (membership status) */}
+			<div className="mb-4 flex flex-wrap gap-2">
+				{ROSTER_SEGMENTS.map((s) => (
+					<SegmentChip
+						key={s.key}
+						segment={s}
+						count={countFor(s.key)}
+						active={seg === s.key}
+						onSelect={() => setSeg(s.key)}
+					/>
 				))}
 			</div>
 
@@ -129,24 +188,34 @@ function Roster() {
 					<div />
 				</div>
 
-				{rows.length === 0 ? (
+				{visible.length === 0 ? (
 					<p className="px-5 py-10 text-center text-sm text-[var(--sea-ink-soft)]">
 						No members to show.
 					</p>
 				) : (
-					rows.map((m) => (
+					visible.map((m) => (
 						<Link
 							key={m.id}
 							to="/members/$id"
 							params={{ id: m.id }}
-							className="group grid cursor-pointer items-center gap-3.5 border-b border-[var(--line)] px-5 py-[13px] transition-colors last:border-b-0 hover:bg-[var(--foam)]"
+							className={cn(
+								"group grid cursor-pointer items-center gap-3.5 border-b border-[var(--line)] px-5 py-[13px] transition-colors last:border-b-0 hover:bg-[var(--foam)]",
+								m.membershipStatus === "inactive" && "opacity-55",
+							)}
 							style={{ gridTemplateColumns: TABLE_COLS }}
 						>
 							{/* Member */}
 							<div className="flex min-w-0 items-center gap-[11px]">
 								<MemberAvatar tone={m.tone} initials={m.initials} size={38} />
 								<div className="min-w-0 leading-[1.25]">
-									<div className="truncate text-sm font-bold">{m.name}</div>
+									<div className="flex items-center gap-2">
+										<span className="truncate text-sm font-bold">{m.name}</span>
+										{m.membershipStatus === "inactive" ? (
+											<span className="shrink-0 rounded-full border border-[var(--line)] bg-[var(--sand)] px-2 py-0.5 text-[10px] font-bold tracking-[0.03em] text-[var(--sea-ink-soft)] uppercase">
+												Inactive
+											</span>
+										) : null}
+									</div>
 									<div className="text-[11.5px] text-[var(--sea-ink-soft)]">
 										{m.tenure}
 									</div>
@@ -185,7 +254,199 @@ function Roster() {
 					currentMemberId={currentMemberId}
 				/>
 			) : null}
+
+			{clubId && canManage ? (
+				<BulkImportDialog
+					open={importOpen}
+					onOpenChange={setImportOpen}
+					existing={members}
+					clubId={clubId}
+					currentMemberId={currentMemberId}
+				/>
+			) : null}
 		</div>
+	);
+}
+
+const ISSUE_LABELS: Record<PreviewRow["issues"][number], string> = {
+	"blank-name": "Blank name",
+	"invalid-email": "Bad email",
+	duplicate: "Duplicate",
+};
+
+function BulkImportDialog({
+	open,
+	onOpenChange,
+	existing,
+	clubId,
+	currentMemberId,
+}: {
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+	existing: { name: string; email: string | null }[];
+	clubId: string;
+	currentMemberId: string | null;
+}) {
+	const router = useRouter();
+	const [text, setText] = useState("");
+	const [busy, setBusy] = useState(false);
+
+	const preview = text.trim()
+		? buildImportPreview(parseRosterText(text), existing)
+		: [];
+	const importable = preview.filter((r) => r.willImport);
+	const skipped = preview.length - importable.length;
+	const canSubmit = importable.length > 0 && !busy;
+
+	function reset() {
+		setText("");
+	}
+
+	async function onCommit() {
+		if (importable.length === 0) return;
+		setBusy(true);
+		try {
+			const result = await bulkImportMembers({
+				data: {
+					clubId,
+					actorMemberId: currentMemberId,
+					rows: importable.map((r) => ({
+						name: r.name,
+						email: r.email,
+						phone: r.phone,
+						office: r.office,
+					})),
+				},
+			});
+			toast.success(
+				`Imported ${result.inserted} member${result.inserted === 1 ? "" : "s"}.` +
+					(result.skipped > 0 ? ` Skipped ${result.skipped}.` : ""),
+			);
+			onOpenChange(false);
+			reset();
+			await router.invalidate();
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	return (
+		<Dialog open={open} onOpenChange={onOpenChange}>
+			<DialogContent className="sm:max-w-[640px]">
+				<DialogHeader>
+					<DialogTitle>Bulk import members</DialogTitle>
+					<DialogDescription>
+						Paste rows as{" "}
+						<span className="font-semibold">name, email, phone</span> (office
+						optional) — one per line. Comma-separated or copy straight from a
+						spreadsheet (tab-separated). Review the preview, then import.
+					</DialogDescription>
+				</DialogHeader>
+
+				<div className="space-y-3">
+					<textarea
+						value={text}
+						onChange={(e) => setText(e.target.value)}
+						rows={5}
+						placeholder={
+							"Jane Doe, jane@club.org, 19165551234, President\nJohn Smith, john@club.org, 19165555678"
+						}
+						className="w-full rounded-[10px] border border-[var(--line)] bg-[var(--surface-strong)] px-3 py-2 font-mono text-[12.5px] text-[var(--sea-ink)] transition-colors hover:border-[var(--lagoon-deep)] focus:outline-none"
+					/>
+
+					{preview.length > 0 ? (
+						<>
+							<div className="text-[13px] text-[var(--sea-ink-soft)]">
+								<span className="font-bold text-[var(--sea-ink)]">
+									{importable.length}
+								</span>{" "}
+								to import
+								{skipped > 0 ? (
+									<>
+										{" · "}
+										<span className="font-bold text-[var(--warning-strong)]">
+											{skipped}
+										</span>{" "}
+										skipped
+									</>
+								) : null}
+							</div>
+
+							<div className="max-h-[260px] overflow-auto rounded-[10px] border border-[var(--line)]">
+								<table className="w-full text-[12.5px]">
+									<thead className="sticky top-0 bg-[var(--foam)] text-[10.5px] font-extrabold tracking-[0.06em] text-[var(--sea-ink-soft)] uppercase">
+										<tr>
+											<th className="px-3 py-2 text-left">Name</th>
+											<th className="px-3 py-2 text-left">Email</th>
+											<th className="px-3 py-2 text-left">Phone</th>
+											<th className="px-3 py-2 text-left">Office</th>
+											<th className="px-3 py-2 text-left">Status</th>
+										</tr>
+									</thead>
+									<tbody>
+										{preview.map((row, i) => (
+											<tr
+												// biome-ignore lint/suspicious/noArrayIndexKey: preview rows have no stable id
+												key={i}
+												className={cn(
+													"border-t border-[var(--line)]",
+													!row.willImport && "bg-[var(--warning-soft,#fdf3e7)]",
+												)}
+											>
+												<td className="px-3 py-1.5 font-medium">
+													{row.name || (
+														<span className="text-[var(--sea-ink-soft)] italic">
+															(blank)
+														</span>
+													)}
+												</td>
+												<td className="px-3 py-1.5 text-[var(--sea-ink-soft)]">
+													{row.email || "—"}
+												</td>
+												<td className="px-3 py-1.5 text-[var(--sea-ink-soft)]">
+													{row.phone || "—"}
+												</td>
+												<td className="px-3 py-1.5 text-[var(--sea-ink-soft)]">
+													{row.office || "—"}
+												</td>
+												<td className="px-3 py-1.5">
+													{row.willImport ? (
+														<span className="font-semibold text-[var(--lagoon-deep)]">
+															OK
+														</span>
+													) : (
+														<span className="font-semibold text-[var(--warning-strong)]">
+															{row.issues
+																.map((issue) => ISSUE_LABELS[issue])
+																.join(", ")}
+														</span>
+													)}
+												</td>
+											</tr>
+										))}
+									</tbody>
+								</table>
+							</div>
+						</>
+					) : null}
+				</div>
+
+				<DialogFooter>
+					<DialogClose asChild>
+						<Button type="button" variant="outline" disabled={busy}>
+							Cancel
+						</Button>
+					</DialogClose>
+					<Button type="button" disabled={!canSubmit} onClick={onCommit}>
+						{busy
+							? "Importing…"
+							: `Import ${importable.length} member${importable.length === 1 ? "" : "s"}`}
+					</Button>
+				</DialogFooter>
+			</DialogContent>
+		</Dialog>
 	);
 }
 
@@ -372,4 +633,41 @@ function StatCard({
 		);
 	}
 	return <div className={className}>{inner}</div>;
+}
+
+function SegmentChip({
+	segment,
+	count,
+	active,
+	onSelect,
+}: {
+	segment: { key: SegKey; label: string };
+	count: number;
+	active: boolean;
+	onSelect: () => void;
+}) {
+	return (
+		<button
+			type="button"
+			onClick={onSelect}
+			className={cn(
+				"inline-flex items-center gap-2 rounded-full border px-[13px] py-[7px] text-[13px] font-semibold transition-transform active:scale-[0.97]",
+				active
+					? "border-[var(--sea-ink)] bg-[var(--sea-ink)] text-[var(--background)]"
+					: "border-[var(--line)] bg-[var(--surface-strong)] text-[var(--sea-ink-soft)]",
+			)}
+		>
+			{segment.label}
+			<span
+				className={cn(
+					"inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-[5px] text-[11px] font-bold",
+					active
+						? "bg-white/20 text-current"
+						: "bg-[var(--sand)] text-[var(--sea-ink-soft)]",
+				)}
+			>
+				{count}
+			</span>
+		</button>
+	);
 }

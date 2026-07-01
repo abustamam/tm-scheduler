@@ -114,6 +114,10 @@ export const members = pgTable(
 		email: text("email"),
 		phone: text("phone"),
 		office: text("office"),
+		// Roster membership status. "inactive" = didn't renew this season: hidden
+		// from sign-up / roster / season / picker views, but their past role
+		// history is preserved (never deleted). Reactivating restores them.
+		status: membershipStatusEnum("status").notNull().default("active"),
 		// Real join dates from the Toastmasters membership export (seeded by
 		// scripts/import-members.ts). joinedAt = "Member of Club Since";
 		// originalJoinDate = first-ever Toastmasters join (stored for #64, no UI yet).

@@ -1,6 +1,6 @@
 {
-  "id": "43678b8e-47e2-4b08-8356-3d9ce4d96d33",
-  "prevId": "dc942b51-cee8-4e14-92ca-30a62a3845b3",
+  "id": "44ac5e06-65e1-4037-b330-79504fd07426",
+  "prevId": "43678b8e-47e2-4b08-8356-3d9ce4d96d33",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -650,6 +650,18 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'active'"
+        },
+        "joined_at": {
+          "name": "joined_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "original_join_date": {
+          "name": "original_join_date",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
         },
         "user_id": {
           "name": "user_id",
