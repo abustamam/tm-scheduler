@@ -87,7 +87,9 @@ describe.skipIf(!hasTestDb)("meeting management", () => {
 		speakerRoleId = roles.speakerRoleId;
 		evaluatorRoleId = roles.evaluatorRoleId;
 	});
-	afterEach(cleanup);
+	afterEach(async () => {
+		await cleanup(club.clubId, [club.adminUserId, club.memberUserId]);
+	});
 
 	it("updateMeeting writes fields + logs meeting_edit", async () => {
 		await applyMeetingUpdate({

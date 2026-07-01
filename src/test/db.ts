@@ -43,9 +43,6 @@ export interface SeededClub {
 	slotId: string;
 }
 
-/** Internal registry — populated by seedClub(), drained by zero-arg cleanup(). */
-const _seededClubs: SeededClub[] = [];
-
 /** Insert a minimal club fixture and return the ids. */
 export async function seedClub(): Promise<SeededClub> {
 	const clubId = randomUUID();
@@ -125,7 +122,9 @@ export async function seedClub(): Promise<SeededClub> {
 		.insert(meetings)
 		.values({
 			clubId,
-			scheduledAt: new Date("2026-07-01T19:00:00Z"),
+			// Always in the future so "upcoming meeting" queries include it
+			// regardless of when the suite runs (avoids a wall-clock time bomb).
+			scheduledAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
 			status: "scheduled",
 		})
 		.returning({ id: meetings.id });
@@ -148,7 +147,7 @@ export async function seedClub(): Promise<SeededClub> {
 		throw new Error("Failed to insert role slot");
 	}
 
-	const result: SeededClub = {
+	return {
 		clubId,
 		adminUserId,
 		memberUserId,
@@ -157,40 +156,20 @@ export async function seedClub(): Promise<SeededClub> {
 		meetingId: meeting.id,
 		slotId: slot.id,
 	};
-	_seededClubs.push(result);
-	return result;
 }
 
 /**
  * Delete all rows created by `seedClub` for the given club.
  * The club cascade handles meetings, slots, role defs, memberships, and members.
  * Users must be deleted separately because they are referenced across clubs.
- *
- * Call with no arguments (afterEach(cleanup)) to clean up all clubs seeded via
- * seedClub() in the current test. Call with explicit ids to target a specific club.
  */
-export async function cleanup(): Promise<void>;
-export async function cleanup(clubId: string, userIds: string[]): Promise<void>;
-// Use default values so the compiled fn has .length === 0 — Vitest injects
-// a done-callback into afterEach callbacks whose .length > 0 (legacy compat).
 export async function cleanup(
-	clubId = "",
-	userIds: string[] = [],
+	clubId: string,
+	userIds: string[],
 ): Promise<void> {
-	if (typeof clubId !== "string" || !clubId) {
-		// Zero-arg form: drain the internal registry
-		const toClean = _seededClubs.splice(0);
-		for (const c of toClean) {
-			await testDb.delete(clubs).where(eq(clubs.id, c.clubId));
-		}
-		const allUserIds = toClean.flatMap((c) => [c.adminUserId, c.memberUserId]);
-		if (allUserIds.length > 0) {
-			await testDb.delete(user).where(inArray(user.id, allUserIds));
-		}
-		return;
-	}
-	// Explicit form: clean up a specific club
+	// club cascade removes meetings, role_slots, role_definitions, club_memberships, members
 	await testDb.delete(clubs).where(eq(clubs.id, clubId));
+	// delete test users
 	if (userIds.length > 0) {
 		await testDb.delete(user).where(inArray(user.id, userIds));
 	}

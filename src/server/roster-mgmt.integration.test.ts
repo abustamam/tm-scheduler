@@ -137,7 +137,12 @@ describe.skipIf(!hasTestDb)("roster management", () => {
 		const [reassign] = await testDb
 			.select()
 			.from(activityLog)
-			.where(eq(activityLog.action, "reassign"))
+			.where(
+				and(
+					eq(activityLog.action, "reassign"),
+					eq(activityLog.clubId, seed.clubId),
+				),
+			)
 			.orderBy(desc(activityLog.createdAt))
 			.limit(1);
 		expect((reassign.detail as { fromMemberId?: string }).fromMemberId).toBe(
