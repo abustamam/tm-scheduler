@@ -22,6 +22,7 @@ function startMinutesInZone(date: Date, timeZone: string): number {
 function formatClock(totalMinutes: number): string {
 	const h24 = Math.floor(totalMinutes / 60) % 24;
 	const m = totalMinutes % 60;
+	// Bias by 11 so that 0 (midnight) and 12 (noon) both land on 12 in mod-12 space.
 	const h12 = ((h24 + 11) % 12) + 1;
 	return `${h12}:${String(m).padStart(2, "0")}`;
 }
