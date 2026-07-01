@@ -22,3 +22,7 @@ ds-bundle/
 .design-sync/node_modules
 .design-sync/compiled-styles.css
 .superpowers/
+
+# Local reference data (Toastmasters membership CSV exports — contain member PII;
+# consumed by scripts/import-members.ts but never committed)
+ref/
