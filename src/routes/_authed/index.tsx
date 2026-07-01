@@ -91,7 +91,7 @@ function Roster() {
 						Club roster
 					</h1>
 					<p className="mt-[5px] text-sm text-[var(--sea-ink-soft)]">
-						Where every member sits in their Pathways journey · Spring 2026 term
+						Every member of your club at a glance · Spring 2026 term
 					</p>
 				</div>
 				<div className="flex gap-[9px]">
@@ -172,8 +172,8 @@ function Roster() {
 			</div>
 
 			<p className="mt-3.5 px-0.5 text-xs text-[var(--sea-ink-soft)]">
-				Tip: click any member to open their full journey, speech log and award
-				track.
+				Tip: click any member to open their profile, speech log and roles
+				served.
 			</p>
 
 			{clubId ? (
