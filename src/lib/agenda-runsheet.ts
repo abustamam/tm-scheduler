@@ -53,6 +53,13 @@ export const OPEN_LABEL = "— open —";
  * tunable constants approximating templates/meeting-agenda/MeetingAgenda.dc.html.
  * Per-club configurable templates are a deferred issue.
  */
+/** Functionary-category roles for the header legend (Timer, Ah-Counter, Grammarian…). */
+export function buildLegend(slots: AgendaSlot[]): LegendEntry[] {
+	return slots
+		.filter((s) => s.category === "functionary")
+		.map((s) => ({ role: s.roleName, name: s.assigneeName ?? OPEN_LABEL }));
+}
+
 export const RUN_OF_SHOW: Beat[] = [
 	{ kind: "event", who: "Sergeant-at-Arms", detail: "Call to Order · phones silent, exits noted", minutes: 1 },
 	{ kind: "event", who: "President", detail: "Opening remarks; welcomes guests", minutes: 1 },
