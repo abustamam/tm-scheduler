@@ -35,9 +35,12 @@ import { utcToZonedWallTime } from "#/lib/datetime";
 import { formatMeetingDate, formatMeetingTime } from "#/lib/format";
 import { getMeeting, updateMeeting } from "#/server/meetings";
 import {
+	addSpeakerSlot,
 	claimSlot,
 	confirmSlot,
+	moveSpeakerSlot,
 	releaseSlot,
+	removeSpeakerSlot,
 	unconfirmSlot,
 } from "#/server/slots";
 
@@ -153,6 +156,56 @@ function MeetingDetail() {
 				data: { slotId: slot.id, actorMemberId: currentMemberId },
 			});
 			toast.success("Role unconfirmed.");
+			await router.invalidate();
+		} catch (err) {
+			toast.error(errMessage(err));
+		} finally {
+			setBusySlotId(null);
+		}
+	}
+
+	const speakerSlots = slots.filter((s) => s.isSpeakerRole);
+
+	async function doAddSpeaker() {
+		setBusySlotId("add-speaker");
+		try {
+			await addSpeakerSlot({
+				data: { meetingId: meeting.id, actorMemberId: currentMemberId },
+			});
+			await router.invalidate();
+		} catch (err) {
+			toast.error(errMessage(err));
+		} finally {
+			setBusySlotId(null);
+		}
+	}
+
+	async function doRemoveSpeaker() {
+		if (speakerSlots.length <= 1) {
+			const ok = window.confirm(
+				"This meeting will have no speakers. Continue?",
+			);
+			if (!ok) return;
+		}
+		setBusySlotId("remove-speaker");
+		try {
+			await removeSpeakerSlot({
+				data: { meetingId: meeting.id, actorMemberId: currentMemberId },
+			});
+			await router.invalidate();
+		} catch (err) {
+			toast.error(errMessage(err));
+		} finally {
+			setBusySlotId(null);
+		}
+	}
+
+	async function doMoveSpeaker(slot: Slot, direction: "up" | "down") {
+		setBusySlotId(slot.id);
+		try {
+			await moveSpeakerSlot({
+				data: { slotId: slot.id, direction, actorMemberId: currentMemberId },
+			});
 			await router.invalidate();
 		} catch (err) {
 			toast.error(errMessage(err));
@@ -287,6 +340,32 @@ function MeetingDetail() {
 											</div>
 
 											<div className="flex shrink-0 flex-col gap-2">
+												{canManage && slot.isSpeakerRole ? (
+													<div className="flex gap-1">
+														<Button
+															size="sm"
+															variant="ghost"
+															aria-label="Move speaker up"
+															disabled={busy || speakerSlots[0]?.id === slot.id}
+															onClick={() => doMoveSpeaker(slot, "up")}
+														>
+															↑
+														</Button>
+														<Button
+															size="sm"
+															variant="ghost"
+															aria-label="Move speaker down"
+															disabled={
+																busy ||
+																speakerSlots[speakerSlots.length - 1]?.id ===
+																	slot.id
+															}
+															onClick={() => doMoveSpeaker(slot, "down")}
+														>
+															↓
+														</Button>
+													</div>
+												) : null}
 												{slot.status === "open" ? (
 													<Button
 														size="sm"
@@ -350,8 +429,46 @@ function MeetingDetail() {
 								);
 							})}
 					</ul>
+					{canManage && category === "speaker" ? (
+						<div className="flex gap-2">
+							<Button
+								size="sm"
+								variant="outline"
+								disabled={busySlotId === "add-speaker"}
+								onClick={doAddSpeaker}
+							>
+								+ Add speaker
+							</Button>
+							{speakerSlots.length > 0 ? (
+								<Button
+									size="sm"
+									variant="outline"
+									disabled={busySlotId === "remove-speaker"}
+									onClick={doRemoveSpeaker}
+								>
+									− Remove speaker
+								</Button>
+							) : null}
+						</div>
+					) : null}
 				</section>
 			))}
+
+			{canManage && speakerSlots.length === 0 ? (
+				<section className="space-y-2">
+					<h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+						{CATEGORY_LABELS.speaker}
+					</h2>
+					<Button
+						size="sm"
+						variant="outline"
+						onClick={doAddSpeaker}
+						disabled={busySlotId === "add-speaker"}
+					>
+						+ Add speaker
+					</Button>
+				</section>
+			) : null}
 
 			{canManage ? (
 				<EditMeetingDialog
