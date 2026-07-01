@@ -1,8 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { BookOpen, CalendarDays } from "lucide-react";
-import { ProgressRing } from "#/components/club/progress-ring";
-import { Button } from "#/components/ui/button";
-import { mockPathway } from "#/data/club";
 import { formatMeetingDate } from "#/lib/format";
 import { listMySpeeches } from "#/server/club";
 import { listMyCommitments } from "#/server/meetings";
@@ -42,9 +39,6 @@ function Dashboard() {
 	const { authUser } = Route.useRouteContext();
 	const { commitments, speeches } = Route.useLoaderData();
 
-	// Ring / Pathway / "next up" are mocked (no Pathways model); roles + speeches are real.
-	const pathway = mockPathway(authUser.id);
-
 	return (
 		<div className="max-w-[1180px] px-7 pt-[26px] pb-10">
 			<div className="mb-[22px]">
@@ -59,28 +53,6 @@ function Dashboard() {
 			<div className="grid grid-cols-1 items-start gap-[18px] lg:grid-cols-[1.55fr_1fr]">
 				{/* Left column */}
 				<div className="flex min-w-0 flex-col gap-[18px]">
-					{/* Hero (mock Pathway) */}
-					<div className="flex flex-wrap items-center gap-6 rounded-[18px] border border-[var(--line)] bg-[linear-gradient(150deg,var(--surface-strong),var(--surface))] p-6 shadow-[0_1px_0_var(--inset-glint)_inset,0_14px_30px_rgba(23,58,64,.07)]">
-						<ProgressRing pct={pathway.pct} label={`LEVEL ${pathway.level}`} />
-						<div className="min-w-[200px] flex-1">
-							<div className="text-[11.5px] font-extrabold tracking-[0.08em] text-[var(--lagoon-deep)] uppercase">
-								My Pathway
-							</div>
-							<div className="mt-[3px] mb-0.5 font-display text-2xl font-semibold">
-								{pathway.path}
-							</div>
-							<div className="mb-3.5 text-[13.5px] text-[var(--sea-ink-soft)]">
-								Level {pathway.level} of 5 · {speeches.length} recent speeches
-							</div>
-							<div className="flex flex-wrap gap-[9px]">
-								<Button size="sm">Open current project</Button>
-								<Button asChild variant="outline" size="sm">
-									<Link to="/resources">Browse Pathway</Link>
-								</Button>
-							</div>
-						</div>
-					</div>
-
 					{/* Speech log (real) */}
 					<div className="overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] shadow-[0_1px_0_var(--inset-glint)_inset,0_10px_24px_rgba(23,58,64,.05)]">
 						<div className="flex items-center justify-between px-5 pt-4 pb-2.5">
@@ -132,31 +104,6 @@ function Dashboard() {
 
 				{/* Right column */}
 				<div className="flex min-w-0 flex-col gap-[18px]">
-					{/* Next up (mock) */}
-					<div className="rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] p-5 shadow-[0_1px_0_var(--inset-glint)_inset,0_10px_24px_rgba(23,58,64,.05)]">
-						<div className="mb-2 text-[11.5px] font-extrabold tracking-[0.08em] text-[var(--sea-ink-soft)] uppercase">
-							Next up
-						</div>
-						<div className="font-display text-[19px] leading-tight font-semibold">
-							{pathway.project}
-						</div>
-						<p className="mt-2 mb-3.5 text-[13px] leading-relaxed text-[var(--sea-ink-soft)]">
-							Your next recommended project on the {pathway.path} path. Schedule
-							it for an upcoming meeting.
-						</p>
-						<div className="mb-3.5 flex flex-wrap gap-2">
-							<span className="rounded-full bg-[var(--sand)] px-2.5 py-1 text-[11.5px] font-semibold">
-								⏱ 5–7 min
-							</span>
-							<span className="rounded-full bg-[var(--sand)] px-2.5 py-1 text-[11.5px] font-semibold">
-								Level {pathway.level}
-							</span>
-						</div>
-						<Button asChild className="w-full">
-							<Link to="/agenda">Schedule this speech</Link>
-						</Button>
-					</div>
-
 					{/* Upcoming roles (real) */}
 					<div className="overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] shadow-[0_1px_0_var(--inset-glint)_inset,0_10px_24px_rgba(23,58,64,.05)]">
 						<div className="px-[18px] pt-4 pb-2.5">
