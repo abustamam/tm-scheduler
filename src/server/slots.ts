@@ -14,10 +14,11 @@ import {
 	applyAddSpeakerSlot,
 	applyMoveSpeakerSlot,
 	applyRemoveSpeakerSlot,
+	normalizeSpeakerDetails,
 } from "./slots-logic";
 
 const speakerDetailsSchema = z.object({
-	speechTitle: z.string().trim().min(1, "A speech title is required."),
+	speechTitle: z.string().trim().optional(),
 	pathwayPath: z.string().trim().optional(),
 	projectName: z.string().trim().optional(),
 	projectLevel: z.string().trim().optional(),
@@ -32,7 +33,8 @@ const claimSchema = z.object({
 	speakerDetails: speakerDetailsSchema.optional(),
 });
 
-/** Claim an open slot for the given member. Speaker roles require speaker details.
+/** Claim an open slot for the given member. Speaker details are optional; a
+ *  blank/missing speech title defaults to "TBA".
  *  PUBLIC — no session required; trust guard via requireMemberInClub. */
 export const claimSlot = createServerFn({ method: "POST" })
 	.validator((input: unknown) => claimSchema.parse(input))
@@ -59,10 +61,6 @@ export const claimSlot = createServerFn({ method: "POST" })
 		// Trust guard: memberId must be a roster member of this club.
 		await requireMemberInClub(data.memberId, slot.clubId);
 
-		if (slot.isSpeakerRole && !data.speakerDetails) {
-			throw new Error("Speaker roles require speech details before claiming.");
-		}
-
 		return db.transaction(async (tx) => {
 			// Conditional UPDATE is the race guard: only one claim can flip 'open'.
 			const updated = await tx
@@ -79,13 +77,14 @@ export const claimSlot = createServerFn({ method: "POST" })
 				throw new Error("Sorry — this role was just claimed by someone else.");
 			}
 
-			if (slot.isSpeakerRole && data.speakerDetails) {
+			if (slot.isSpeakerRole) {
+				const details = normalizeSpeakerDetails(data.speakerDetails);
 				await tx
 					.insert(speakerDetails)
-					.values({ slotId: data.slotId, ...data.speakerDetails })
+					.values({ slotId: data.slotId, ...details })
 					.onConflictDoUpdate({
 						target: speakerDetails.slotId,
-						set: data.speakerDetails,
+						set: details,
 					});
 			}
 

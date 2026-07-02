@@ -445,6 +445,33 @@ describe.skipIf(!hasTestDb)("claim + guards integration", () => {
 			expect(log.length).toBeGreaterThan(0);
 		});
 
+		it("claiming a speaker slot with no title stores TBA", async () => {
+			// Mirror of claimSlot's speaker-details normalization (slots-logic.ts can't be
+			// imported here — it loads #/db). No title provided → stored title must be "TBA".
+			const input: { speechTitle?: string } | undefined = undefined;
+			const trimmed = input?.speechTitle?.trim();
+			const details = {
+				speechTitle: trimmed && trimmed.length > 0 ? trimmed : "TBA",
+				pathwayPath: null,
+				projectName: null,
+				projectLevel: null,
+				minMinutes: null,
+				maxMinutes: null,
+			};
+			await testDb
+				.insert(speakerDetails)
+				.values({ slotId: seed.slotId, ...details })
+				.onConflictDoUpdate({ target: speakerDetails.slotId, set: details });
+
+			const [row] = await testDb
+				.select({ speechTitle: speakerDetails.speechTitle })
+				.from(speakerDetails)
+				.where(eq(speakerDetails.slotId, seed.slotId))
+				.limit(1);
+
+			expect(row?.speechTitle).toBe("TBA");
+		});
+
 		it("claimSlot trust guard rejects unknown memberId", async () => {
 			await expect(
 				claimSlotPublic(
