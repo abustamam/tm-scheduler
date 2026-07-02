@@ -2,6 +2,7 @@ import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
 import { Loader2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { PageContainer } from "#/components/page-container";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
@@ -55,7 +56,7 @@ function NewMeeting() {
 	}
 
 	return (
-		<div className="max-w-[1180px] space-y-4 px-7 pt-[26px] pb-10">
+		<PageContainer className="space-y-4">
 			<div>
 				<h1 className="font-display text-[30px] font-semibold tracking-[-0.02em]">
 					New meeting
@@ -113,6 +114,6 @@ function NewMeeting() {
 					)}
 				</Button>
 			</form>
-		</div>
+		</PageContainer>
 	);
 }

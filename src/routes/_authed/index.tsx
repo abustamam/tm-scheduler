@@ -3,6 +3,7 @@ import { ChevronRight } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { MemberAvatar } from "#/components/club/member-avatar";
+import { PageContainer } from "#/components/page-container";
 import { Button } from "#/components/ui/button";
 import {
 	Dialog,
@@ -120,7 +121,7 @@ function Roster() {
 	];
 
 	return (
-		<div className="max-w-[1180px] px-7 pt-[26px] pb-10">
+		<PageContainer>
 			{/* Header */}
 			<div className="mb-[22px] flex flex-wrap items-end gap-[18px]">
 				<div className="min-w-[240px] flex-1">
@@ -264,7 +265,7 @@ function Roster() {
 					currentMemberId={currentMemberId}
 				/>
 			) : null}
-		</div>
+		</PageContainer>
 	);
 }
 

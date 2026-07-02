@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { SeasonGrid } from "#/components/club/season-grid";
+import { PageContainer } from "#/components/page-container";
 import type { Orientation } from "#/lib/season-grid-view";
 import { getSeasonGrid, type SeasonGridCount } from "#/server/season-grid";
 
@@ -31,7 +32,7 @@ function SeasonGridPage() {
 	const { view, count } = Route.useSearch();
 
 	return (
-		<div className="max-w-[1180px] space-y-4 px-7 pt-[26px] pb-10">
+		<PageContainer className="space-y-4">
 			<h1 className="font-display text-[30px] font-semibold tracking-[-0.02em]">
 				Season grid
 			</h1>
@@ -42,6 +43,6 @@ function SeasonGridPage() {
 					No club found.
 				</p>
 			)}
-		</div>
+		</PageContainer>
 	);
 }

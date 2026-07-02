@@ -8,6 +8,7 @@ import { ChevronLeft } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { MemberAvatar } from "#/components/club/member-avatar";
+import { PageContainer } from "#/components/page-container";
 import { Button } from "#/components/ui/button";
 import {
 	Dialog,
@@ -60,12 +61,12 @@ function MemberDetail() {
 
 	if (!member) {
 		return (
-			<div className="max-w-[1180px] px-7 pt-[22px] pb-10">
+			<PageContainer>
 				<BackLink />
 				<h1 className="mt-5 font-display text-[28px] font-semibold">
 					Member not found
 				</h1>
-			</div>
+			</PageContainer>
 		);
 	}
 
@@ -76,7 +77,7 @@ function MemberDetail() {
 		: formatTenure(joined);
 
 	return (
-		<div className="max-w-[1180px] px-7 pt-[22px] pb-10">
+		<PageContainer>
 			<BackLink />
 
 			{/* Header */}
@@ -207,7 +208,7 @@ function MemberDetail() {
 					</div>
 				</div>
 			</div>
-		</div>
+		</PageContainer>
 	);
 }
 

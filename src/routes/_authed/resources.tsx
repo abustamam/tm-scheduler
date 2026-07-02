@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import type { ComponentType } from "react";
 import { useState } from "react";
+import { PageContainer } from "#/components/page-container";
 import {
 	type Resource,
 	type ResourceIcon,
@@ -37,7 +38,7 @@ function Resources() {
 		cat === "all" ? resources : resources.filter((r) => r.cat === cat);
 
 	return (
-		<div className="max-w-[1180px] px-7 pt-[26px] pb-10">
+		<PageContainer>
 			<div className="mb-5">
 				<h1 className="font-display text-[30px] font-semibold tracking-[-0.02em]">
 					Resources
@@ -73,7 +74,7 @@ function Resources() {
 					<ResourceCard key={r.title} resource={r} />
 				))}
 			</div>
-		</div>
+		</PageContainer>
 	);
 }
 
