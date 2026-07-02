@@ -1,5 +1,5 @@
 // src/routes/club.$clubId_.meeting.$meetingId.print.tsx
-import { createFileRoute, notFound } from "@tanstack/react-router";
+import { createFileRoute, notFound, redirect } from "@tanstack/react-router";
 import {
 	type AgendaLayout,
 	MeetingAgendaPrint,
@@ -7,6 +7,7 @@ import {
 import { buildLegend, expandRunSheet } from "#/lib/agenda-runsheet";
 import { buildTimeline } from "#/lib/agenda-timing";
 import { formatMeetingDate } from "#/lib/format";
+import { getClubByIdentifier } from "#/server/clubs";
 import { getMeeting } from "#/server/meetings";
 
 const LAYOUTS: AgendaLayout[] = ["timing", "spacious", "editorial", "grid"];
@@ -23,9 +24,17 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/print")(
 					: "timing",
 			};
 		},
-		loader: async ({ params }) => {
+		loader: async ({ params, location }) => {
+			const club = await getClubByIdentifier({ data: params.clubId });
+			if (params.clubId !== club.slug) {
+				throw redirect({
+					href:
+						location.pathname.replace(/^\/club\/[^/]+/, `/club/${club.slug}`) +
+						location.searchStr,
+				});
+			}
 			const data = await getMeeting({ data: params.meetingId });
-			if (data.meeting.clubId !== params.clubId) throw notFound();
+			if (data.meeting.clubId !== club.id) throw notFound();
 			return data;
 		},
 		component: PrintAgenda,
