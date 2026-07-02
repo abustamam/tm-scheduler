@@ -46,7 +46,11 @@ describe("buildMeetingNavItems", () => {
 		);
 
 		expect(items).toHaveLength(1);
-		expect(items[0]).toMatchObject({ meetingId: "a", isCurrent: true, hasOpenRoles: true });
+		expect(items[0]).toMatchObject({
+			meetingId: "a",
+			isCurrent: true,
+			hasOpenRoles: true,
+		});
 	});
 
 	it("returns just the current meeting when upcoming is empty", () => {
@@ -56,7 +60,12 @@ describe("buildMeetingNavItems", () => {
 			TZ,
 		);
 		expect(items).toEqual([
-			{ meetingId: "only", label: "Jul 9", isCurrent: true, hasOpenRoles: false },
+			{
+				meetingId: "only",
+				label: "Jul 9",
+				isCurrent: true,
+				hasOpenRoles: false,
+			},
 		]);
 	});
 });
