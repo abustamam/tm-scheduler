@@ -7,7 +7,11 @@ export type MeetingNavItem = {
 	hasOpenRoles: boolean;
 };
 
-type CurrentMeeting = { id: string; scheduledAt: Date | string };
+type CurrentMeeting = {
+	id: string;
+	scheduledAt: Date | string;
+	openSlots: number;
+};
 type UpcomingMeeting = {
 	id: string;
 	scheduledAt: Date | string;
@@ -22,8 +26,11 @@ function toMillis(value: Date | string): number {
  * Build the sorted, labeled nav items for the member meeting strip.
  *
  * `listUpcomingMeetings` filters `scheduledAt >= now`, so a meeting being
- * viewed after it has started is absent from `upcoming`. We union `current` in
- * (deduped by id) so the strip always shows and highlights the viewed meeting.
+ * viewed after it has started is absent from `upcoming`. We set `current` into
+ * the map (deduped by id) so the strip always shows and highlights the viewed
+ * meeting — and always with its own authoritative `openSlots` (derived from the
+ * loaded agenda), which both covers the absent-from-`upcoming` case and keeps
+ * the current tab's dot consistent with the roles shown on the page.
  */
 export function buildMeetingNavItems(
 	current: CurrentMeeting,
@@ -32,13 +39,11 @@ export function buildMeetingNavItems(
 ): MeetingNavItem[] {
 	const byId = new Map<string, UpcomingMeeting>();
 	for (const m of upcoming) byId.set(m.id, m);
-	if (!byId.has(current.id)) {
-		byId.set(current.id, {
-			id: current.id,
-			scheduledAt: current.scheduledAt,
-			openSlots: 0,
-		});
-	}
+	byId.set(current.id, {
+		id: current.id,
+		scheduledAt: current.scheduledAt,
+		openSlots: current.openSlots,
+	});
 
 	return [...byId.values()]
 		.sort((a, b) => toMillis(a.scheduledAt) - toMillis(b.scheduledAt))
