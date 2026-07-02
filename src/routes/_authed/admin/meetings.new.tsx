@@ -55,15 +55,17 @@ function NewMeeting() {
 	}
 
 	return (
-		<div className="space-y-4">
+		<div className="max-w-[1180px] space-y-4 px-7 pt-[26px] pb-10">
 			<div>
-				<h1 className="text-2xl font-bold tracking-tight">New meeting</h1>
+				<h1 className="font-display text-[30px] font-semibold tracking-[-0.02em]">
+					New meeting
+				</h1>
 				<p className="text-sm text-muted-foreground">
 					Roles are generated automatically from {adminClub.name}'s template.
 				</p>
 			</div>
 
-			<form onSubmit={onSubmit} className="space-y-4">
+			<form onSubmit={onSubmit} className="max-w-xl space-y-4">
 				<div className="space-y-2">
 					<Label htmlFor="scheduledAt">Date &amp; time</Label>
 					<Input

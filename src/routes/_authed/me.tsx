@@ -37,8 +37,10 @@ function MyCommitments() {
 	}
 
 	return (
-		<div className="space-y-4">
-			<h1 className="text-2xl font-bold tracking-tight">My roles</h1>
+		<div className="max-w-[1180px] space-y-4 px-7 pt-[26px] pb-10">
+			<h1 className="font-display text-[30px] font-semibold tracking-[-0.02em]">
+				My roles
+			</h1>
 
 			{commitments.length === 0 ? (
 				<p className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">

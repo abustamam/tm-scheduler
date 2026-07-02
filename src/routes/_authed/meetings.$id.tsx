@@ -215,9 +215,9 @@ function MeetingDetail() {
 	}
 
 	return (
-		<div className="space-y-5">
+		<div className="max-w-[1180px] space-y-5 px-7 pt-[26px] pb-10">
 			<header className="space-y-2">
-				<h1 className="text-2xl font-bold tracking-tight">
+				<h1 className="font-display text-[30px] font-semibold tracking-[-0.02em]">
 					{meeting.theme ?? "Meeting"}
 				</h1>
 				<div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
