@@ -181,6 +181,7 @@ export const getNextMeeting = createServerFn({ method: "GET" })
 				slots: [] as Awaited<ReturnType<typeof loadMeetingDetail>>["slots"],
 				canManage: false,
 				timezone: "UTC",
+				clubName: "",
 			};
 		}
 		return loadMeetingDetail(next.id, currentUser.id);

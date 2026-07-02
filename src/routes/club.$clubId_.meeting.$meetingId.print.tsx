@@ -1,4 +1,4 @@
-// src/routes/club.$clubId.meeting.$meetingId.print.tsx
+// src/routes/club.$clubId_.meeting.$meetingId.print.tsx
 import { createFileRoute, notFound } from "@tanstack/react-router";
 import {
 	type AgendaLayout,
@@ -11,24 +11,26 @@ import { getMeeting } from "#/server/meetings";
 
 const LAYOUTS: AgendaLayout[] = ["timing", "spacious", "editorial", "grid"];
 
-export const Route = createFileRoute("/club/$clubId/meeting/$meetingId/print")({
-	validateSearch: (
-		search: Record<string, unknown>,
-	): { layout: AgendaLayout } => {
-		const l = search.layout;
-		return {
-			layout: LAYOUTS.includes(l as AgendaLayout)
-				? (l as AgendaLayout)
-				: "timing",
-		};
+export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/print")(
+	{
+		validateSearch: (
+			search: Record<string, unknown>,
+		): { layout: AgendaLayout } => {
+			const l = search.layout;
+			return {
+				layout: LAYOUTS.includes(l as AgendaLayout)
+					? (l as AgendaLayout)
+					: "timing",
+			};
+		},
+		loader: async ({ params }) => {
+			const data = await getMeeting({ data: params.meetingId });
+			if (data.meeting.clubId !== params.clubId) throw notFound();
+			return data;
+		},
+		component: PrintAgenda,
 	},
-	loader: async ({ params }) => {
-		const data = await getMeeting({ data: params.meetingId });
-		if (data.meeting.clubId !== params.clubId) throw notFound();
-		return data;
-	},
-	component: PrintAgenda,
-});
+);
 
 function PrintAgenda() {
 	const { layout } = Route.useSearch();
