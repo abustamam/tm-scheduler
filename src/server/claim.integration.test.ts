@@ -396,7 +396,7 @@ describe.skipIf(!hasTestDb)("claim + guards integration", () => {
 			return testDb.transaction(async (tx) => {
 				await tx
 					.update(roleSlots)
-					.set({ assignedMemberId: newMemberId })
+					.set({ assignedMemberId: newMemberId, status: "claimed" })
 					.where(eq(roleSlots.id, slotId));
 
 				await tx.insert(activityLog).values({
@@ -547,6 +547,12 @@ describe.skipIf(!hasTestDb)("claim + guards integration", () => {
 			// Claim the slot first
 			await claimSlotTx(seed.slotId, seed.memberId);
 
+			// Bump to "confirmed" so the assertion below proves a real status reset.
+			await testDb
+				.update(roleSlots)
+				.set({ status: "confirmed" })
+				.where(eq(roleSlots.id, seed.slotId));
+
 			// Insert a second roster member
 			const [other] = await testDb
 				.insert(members)
@@ -563,12 +569,17 @@ describe.skipIf(!hasTestDb)("claim + guards integration", () => {
 			expect(result).toEqual({ ok: true });
 
 			const [row] = await testDb
-				.select({ assignedMemberId: roleSlots.assignedMemberId })
+				.select({
+					assignedMemberId: roleSlots.assignedMemberId,
+					status: roleSlots.status,
+				})
 				.from(roleSlots)
 				.where(eq(roleSlots.id, seed.slotId))
 				.limit(1);
 
 			expect(row?.assignedMemberId).toBe(other.id);
+			// Status must be reset from "confirmed" back to "claimed" — new holder is unconfirmed.
+			expect(row?.status).toBe("claimed");
 		});
 	});
 });

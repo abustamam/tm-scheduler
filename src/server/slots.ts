@@ -288,9 +288,14 @@ export const reassignSlot = createServerFn({ method: "POST" })
 				id: roleSlots.id,
 				status: roleSlots.status,
 				assignedMemberId: roleSlots.assignedMemberId,
+				isSpeakerRole: roleDefinitions.isSpeakerRole,
 				clubId: meetings.clubId,
 			})
 			.from(roleSlots)
+			.innerJoin(
+				roleDefinitions,
+				eq(roleDefinitions.id, roleSlots.roleDefinitionId),
+			)
 			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
 			.where(eq(roleSlots.id, data.slotId))
 			.limit(1);
@@ -304,10 +309,23 @@ export const reassignSlot = createServerFn({ method: "POST" })
 		await requireMemberInClub(data.memberId, slot.clubId);
 
 		return db.transaction(async (tx) => {
+			// New holder hasn't been confirmed → back to "claimed".
 			await tx
 				.update(roleSlots)
-				.set({ assignedMemberId: data.memberId })
+				.set({ assignedMemberId: data.memberId, status: "claimed" })
 				.where(eq(roleSlots.id, data.slotId));
+
+			// The previous speaker's speech no longer applies — reset to TBA.
+			if (slot.isSpeakerRole) {
+				const details = normalizeSpeakerDetails(undefined);
+				await tx
+					.insert(speakerDetails)
+					.values({ slotId: data.slotId, ...details })
+					.onConflictDoUpdate({
+						target: speakerDetails.slotId,
+						set: details,
+					});
+			}
 
 			await logActivity(tx, {
 				clubId: slot.clubId,
