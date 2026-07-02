@@ -16,3 +16,12 @@ export function formatMeetingTime(value: Date | string, timeZone?: string) {
 		timeZone,
 	}).format(d);
 }
+
+export function formatShortDate(value: Date | string, timeZone?: string) {
+	const d = typeof value === "string" ? new Date(value) : value;
+	return new Intl.DateTimeFormat(undefined, {
+		month: "short",
+		day: "numeric",
+		timeZone,
+	}).format(d);
+}
