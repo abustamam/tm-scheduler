@@ -448,8 +448,8 @@ describe.skipIf(!hasTestDb)("claim + guards integration", () => {
 		it("claiming a speaker slot with no title stores TBA", async () => {
 			// Mirror of claimSlot's speaker-details normalization (slots-logic.ts can't be
 			// imported here — it loads #/db). No title provided → stored title must be "TBA".
-			const input: { speechTitle?: string } | undefined = undefined;
-			const trimmed = input?.speechTitle?.trim();
+			const input: { speechTitle?: string } = {}; // no title provided
+			const trimmed = input.speechTitle?.trim();
 			const details = {
 				speechTitle: trimmed && trimmed.length > 0 ? trimmed : "TBA",
 				pathwayPath: null,
