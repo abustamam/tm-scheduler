@@ -57,8 +57,8 @@ function crumbFor(pathname: string): string {
 	if (pathname.startsWith("/dashboard")) return "Me · My dashboard";
 	if (pathname.startsWith("/resources")) return "Me · Resources";
 	if (pathname.startsWith("/members")) return "Roster · Member profile";
-	if (pathname.startsWith("/me")) return "Me · My roles";
 	if (pathname.startsWith("/meetings")) return "Manage · Meeting";
+	if (pathname === "/me") return "Me · My roles";
 	if (pathname.startsWith("/admin")) return "Manage · Admin";
 	return "Workspace";
 }
