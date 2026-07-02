@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
+import { PageContainer } from "#/components/page-container";
 import { formatActivity } from "#/lib/activity-format";
 import { formatMeetingDate, formatMeetingTime } from "#/lib/format";
 import { listActivity } from "#/server/activity-feed";
@@ -70,7 +71,7 @@ function ActivityLog() {
 		"h-9 min-w-[180px] rounded-[10px] border border-[var(--line)] bg-[var(--surface-strong)] px-3 text-[13px] font-medium text-[var(--sea-ink)] transition-colors hover:border-[var(--lagoon-deep)]";
 
 	return (
-		<div className="max-w-[1180px] px-7 pt-[26px] pb-10">
+		<PageContainer>
 			{/* Header */}
 			<div className="mb-[22px]">
 				<h1 className="font-display text-[30px] font-semibold tracking-[-0.02em]">
@@ -171,6 +172,6 @@ function ActivityLog() {
 					))
 				)}
 			</div>
-		</div>
+		</PageContainer>
 	);
 }

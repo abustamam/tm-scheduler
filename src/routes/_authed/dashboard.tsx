@@ -1,5 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { BookOpen, CalendarDays } from "lucide-react";
+import { PageContainer } from "#/components/page-container";
 import { formatMeetingDate } from "#/lib/format";
 import { listMySpeeches } from "#/server/club";
 import { listMyCommitments } from "#/server/meetings";
@@ -40,7 +41,7 @@ function Dashboard() {
 	const { commitments, speeches } = Route.useLoaderData();
 
 	return (
-		<div className="max-w-[1180px] px-7 pt-[26px] pb-10">
+		<PageContainer>
 			<div className="mb-[22px]">
 				<h1 className="font-display text-[30px] font-semibold tracking-[-0.02em]">
 					{greeting(authUser.name || authUser.email)}
@@ -165,7 +166,7 @@ function Dashboard() {
 					</div>
 				</div>
 			</div>
-		</div>
+		</PageContainer>
 	);
 }
 

@@ -2,6 +2,7 @@ import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { CalendarDays, Loader2, Mic } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { PageContainer } from "#/components/page-container";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import { formatMeetingDate, formatMeetingTime } from "#/lib/format";
@@ -37,7 +38,7 @@ function MyCommitments() {
 	}
 
 	return (
-		<div className="max-w-[1180px] space-y-4 px-7 pt-[26px] pb-10">
+		<PageContainer className="space-y-4">
 			<h1 className="font-display text-[30px] font-semibold tracking-[-0.02em]">
 				My roles
 			</h1>
@@ -107,6 +108,6 @@ function MyCommitments() {
 					))}
 				</ul>
 			)}
-		</div>
+		</PageContainer>
 	);
 }

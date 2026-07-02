@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { PageContainer } from "#/components/page-container";
 import { ShareLinkButton } from "#/components/share-link-button";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
@@ -215,7 +216,7 @@ function MeetingDetail() {
 	}
 
 	return (
-		<div className="max-w-[1180px] space-y-5 px-7 pt-[26px] pb-10">
+		<PageContainer className="space-y-5">
 			<header className="space-y-2">
 				<h1 className="font-display text-[30px] font-semibold tracking-[-0.02em]">
 					{meeting.theme ?? "Meeting"}
@@ -494,7 +495,7 @@ function MeetingDetail() {
 					await router.invalidate();
 				}}
 			/>
-		</div>
+		</PageContainer>
 	);
 }
 

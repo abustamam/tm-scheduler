@@ -3,6 +3,7 @@ import { CalendarPlus, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { MemberAvatar } from "#/components/club/member-avatar";
+import { PageContainer } from "#/components/page-container";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
@@ -52,7 +53,7 @@ function Agenda() {
 
 	if (!meeting) {
 		return (
-			<div className="max-w-[1180px] px-7 pt-[26px] pb-10">
+			<PageContainer>
 				<h1 className="font-display text-[30px] font-semibold tracking-[-0.02em]">
 					Next meeting agenda
 				</h1>
@@ -69,7 +70,7 @@ function Agenda() {
 						</Button>
 					) : null}
 				</div>
-			</div>
+			</PageContainer>
 		);
 	}
 
@@ -165,7 +166,7 @@ function Agenda() {
 	}
 
 	return (
-		<div className="max-w-[1180px] px-7 pt-[26px] pb-10">
+		<PageContainer>
 			{/* Header */}
 			<div className="mb-[22px] flex flex-wrap items-end gap-[18px]">
 				<div className="min-w-[240px] flex-1">
@@ -342,7 +343,7 @@ function Agenda() {
 					await router.invalidate();
 				}}
 			/>
-		</div>
+		</PageContainer>
 	);
 }
 
