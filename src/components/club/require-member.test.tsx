@@ -17,7 +17,7 @@ function renderGate() {
 	const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	return render(
 		<QueryClientProvider client={qc}>
-			<RequireMember clubId="club-1">
+			<RequireMember clubUuid="club-uuid-1" clubSlug="club-1">
 				<div data-testid="protected">protected content</div>
 			</RequireMember>
 		</QueryClientProvider>,
