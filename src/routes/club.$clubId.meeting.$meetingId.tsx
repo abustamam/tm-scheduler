@@ -4,7 +4,7 @@ import {
 	notFound,
 	useRouter,
 } from "@tanstack/react-router";
-import { CalendarDays, Loader2, MapPin, Sparkles } from "lucide-react";
+import { CalendarDays, Loader2, MapPin, Printer, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { ShareLinkButton } from "#/components/share-link-button";
@@ -224,6 +224,18 @@ function MeetingView() {
 					path={`/club/${meeting.clubId}/meeting/${meeting.id}`}
 					className="mt-1 ml-2"
 				/>
+				<Button asChild variant="outline" size="sm">
+					<Link
+						to="/club/$clubId/meeting/$meetingId/print"
+						params={{ clubId, meetingId }}
+						search={{ layout: "timing" }}
+						target="_blank"
+						rel="noopener noreferrer"
+					>
+						<Printer />
+						Print agenda
+					</Link>
+				</Button>
 			</header>
 
 			{categories.map((category) => (

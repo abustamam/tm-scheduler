@@ -27,6 +27,7 @@ import { Route as AuthedMembersIdRouteImport } from './routes/_authed/members.$i
 import { Route as AuthedMeetingsIdRouteImport } from './routes/_authed/meetings.$id'
 import { Route as ClubClubIdMeetingMeetingIdRouteImport } from './routes/club.$clubId.meeting.$meetingId'
 import { Route as AuthedAdminMeetingsNewRouteImport } from './routes/_authed/admin/meetings.new'
+import { Route as ClubClubIdMeetingMeetingIdPrintRouteImport } from './routes/club.$clubId_.meeting.$meetingId.print'
 
 const SigninRoute = SigninRouteImport.update({
   id: '/signin',
@@ -118,6 +119,12 @@ const AuthedAdminMeetingsNewRoute = AuthedAdminMeetingsNewRouteImport.update({
   path: '/admin/meetings/new',
   getParentRoute: () => AuthedRoute,
 } as any)
+const ClubClubIdMeetingMeetingIdPrintRoute =
+  ClubClubIdMeetingMeetingIdPrintRouteImport.update({
+    id: '/club/$clubId_/meeting/$meetingId/print',
+    path: '/club/$clubId/meeting/$meetingId/print',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof AuthedIndexRoute
@@ -137,6 +144,7 @@ export interface FileRoutesByFullPath {
   '/club/$clubId/': typeof ClubClubIdIndexRoute
   '/admin/meetings/new': typeof AuthedAdminMeetingsNewRoute
   '/club/$clubId/meeting/$meetingId': typeof ClubClubIdMeetingMeetingIdRoute
+  '/club/$clubId/meeting/$meetingId/print': typeof ClubClubIdMeetingMeetingIdPrintRoute
 }
 export interface FileRoutesByTo {
   '/signin': typeof SigninRoute
@@ -155,6 +163,7 @@ export interface FileRoutesByTo {
   '/club/$clubId': typeof ClubClubIdIndexRoute
   '/admin/meetings/new': typeof AuthedAdminMeetingsNewRoute
   '/club/$clubId/meeting/$meetingId': typeof ClubClubIdMeetingMeetingIdRoute
+  '/club/$clubId/meeting/$meetingId/print': typeof ClubClubIdMeetingMeetingIdPrintRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -176,6 +185,7 @@ export interface FileRoutesById {
   '/club/$clubId/': typeof ClubClubIdIndexRoute
   '/_authed/admin/meetings/new': typeof AuthedAdminMeetingsNewRoute
   '/club/$clubId/meeting/$meetingId': typeof ClubClubIdMeetingMeetingIdRoute
+  '/club/$clubId_/meeting/$meetingId/print': typeof ClubClubIdMeetingMeetingIdPrintRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -197,6 +207,7 @@ export interface FileRouteTypes {
     | '/club/$clubId/'
     | '/admin/meetings/new'
     | '/club/$clubId/meeting/$meetingId'
+    | '/club/$clubId/meeting/$meetingId/print'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/signin'
@@ -215,6 +226,7 @@ export interface FileRouteTypes {
     | '/club/$clubId'
     | '/admin/meetings/new'
     | '/club/$clubId/meeting/$meetingId'
+    | '/club/$clubId/meeting/$meetingId/print'
   id:
     | '__root__'
     | '/_authed'
@@ -235,6 +247,7 @@ export interface FileRouteTypes {
     | '/club/$clubId/'
     | '/_authed/admin/meetings/new'
     | '/club/$clubId/meeting/$meetingId'
+    | '/club/$clubId_/meeting/$meetingId/print'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -244,6 +257,7 @@ export interface RootRouteChildren {
   ApiHealthRoute: typeof ApiHealthRoute
   ClubClubIdRoute: typeof ClubClubIdRouteWithChildren
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
+  ClubClubIdMeetingMeetingIdPrintRoute: typeof ClubClubIdMeetingMeetingIdPrintRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -374,6 +388,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedAdminMeetingsNewRouteImport
       parentRoute: typeof AuthedRoute
     }
+    '/club/$clubId_/meeting/$meetingId/print': {
+      id: '/club/$clubId_/meeting/$meetingId/print'
+      path: '/club/$clubId/meeting/$meetingId/print'
+      fullPath: '/club/$clubId/meeting/$meetingId/print'
+      preLoaderRoute: typeof ClubClubIdMeetingMeetingIdPrintRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -427,6 +448,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiHealthRoute: ApiHealthRoute,
   ClubClubIdRoute: ClubClubIdRouteWithChildren,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
+  ClubClubIdMeetingMeetingIdPrintRoute: ClubClubIdMeetingMeetingIdPrintRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
