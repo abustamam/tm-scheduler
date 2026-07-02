@@ -27,7 +27,7 @@ export interface SeasonGridRow {
 	roleDefinitionId: string;
 	slotIndex: number;
 	label: string; // "Speaker 2" (hover)
-	shortCode: string; // "Spea2"
+	shortCode: string; // "SP2"
 	sortOrder: number;
 }
 export interface SeasonGridMember {

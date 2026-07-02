@@ -175,10 +175,15 @@ describe("roleAbbrev", () => {
 	it("drops stopwords", () => {
 		expect(roleAbbrev("Toastmaster of the Day")).toBe("TD");
 	});
-	it("uses first four letters for single-word names", () => {
-		expect(roleAbbrev("Speaker")).toBe("Spea");
-		expect(roleAbbrev("Timer")).toBe("Time");
-		expect(roleAbbrev("Grammarian")).toBe("Gram");
+	it("uses clean consonant-based codes for single-word names", () => {
+		expect(roleAbbrev("Speaker")).toBe("SP");
+		expect(roleAbbrev("Timer")).toBe("TMR");
+		expect(roleAbbrev("Evaluator")).toBe("EV");
+		expect(roleAbbrev("Grammarian")).toBe("GRM");
+	});
+	it("derives consonant codes for uncommon single-word names", () => {
+		expect(roleAbbrev("Wordmaster")).toBe("WRD");
+		expect(roleAbbrev("Inspiration")).toBe("INS");
 	});
 	it("falls back to ? for an empty name", () => {
 		expect(roleAbbrev("")).toBe("?");
@@ -193,9 +198,9 @@ describe("buildShortCodes", () => {
 			{ roleDefinitionId: "s", slotIndex: 2, name: "Speaker" },
 			{ roleDefinitionId: "t", slotIndex: 0, name: "Timer" },
 		]);
-		expect(codes.get("s:0")).toBe("Spea1");
-		expect(codes.get("s:2")).toBe("Spea3");
-		expect(codes.get("t:0")).toBe("Time");
+		expect(codes.get("s:0")).toBe("SP1");
+		expect(codes.get("s:2")).toBe("SP3");
+		expect(codes.get("t:0")).toBe("TMR");
 	});
 	it("disambiguates two different names that share a base code", () => {
 		const codes = buildShortCodes([
