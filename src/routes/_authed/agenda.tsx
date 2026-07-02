@@ -31,6 +31,7 @@ export const Route = createFileRoute("/_authed/agenda")({
 				slots: [] as Slot[],
 				canManage: false,
 				timezone: "UTC",
+				clubSlug: "",
 			};
 		}
 		return getNextMeeting({ data: clubId });
@@ -45,7 +46,8 @@ function errMessage(err: unknown) {
 }
 
 function Agenda() {
-	const { meeting, slots, canManage, timezone } = Route.useLoaderData();
+	const { meeting, slots, canManage, timezone, clubSlug } =
+		Route.useLoaderData();
 	const { currentMemberId } = Route.useRouteContext();
 	const router = useRouter();
 	const [busySlotId, setBusySlotId] = useState<string | null>(null);
@@ -178,8 +180,16 @@ function Agenda() {
 					</p>
 				</div>
 				<div className="flex gap-[9px]">
-					<Button variant="outline" size="sm" onClick={() => window.print()}>
-						Print agenda
+					<Button asChild variant="outline" size="sm">
+						<Link
+							to="/club/$clubId/meeting/$meetingId/print"
+							params={{ clubId: clubSlug, meetingId: meeting.id }}
+							search={{ layout: "timing" }}
+							target="_blank"
+							rel="noopener noreferrer"
+						>
+							Print agenda
+						</Link>
 					</Button>
 					{canManage ? (
 						<Button

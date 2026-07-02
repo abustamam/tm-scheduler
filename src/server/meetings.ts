@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
-import { and, asc, eq, gte, ne, sql } from "drizzle-orm";
+import { and, asc, eq, gte, isNotNull, ne, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { db } from "#/db";
@@ -14,6 +14,7 @@ import {
 } from "#/db/schema";
 import { generateSlotRows, resolveEvaluatorLinks } from "#/lib/agenda";
 import { zonedWallTimeToUtc } from "#/lib/datetime";
+import { officerRank } from "#/lib/officers";
 import {
 	getMembership,
 	getSessionUser,
@@ -118,8 +119,25 @@ async function loadMeetingDetail(
 
 	const club = await db.query.clubs.findFirst({
 		where: eq(clubs.id, meeting.clubId),
-		columns: { timezone: true, name: true, slug: true },
+		columns: { timezone: true, name: true, slug: true, clubNumber: true },
 	});
+
+	// Officers (active members with an office set) for the printable agenda's
+	// officer grid, ordered President → Sergeant-at-Arms then by name.
+	const officerRows = await db
+		.select({ office: members.office, name: members.name })
+		.from(members)
+		.where(
+			and(
+				eq(members.clubId, meeting.clubId),
+				isNotNull(members.office),
+				ne(members.status, "inactive"),
+			),
+		)
+		.orderBy(asc(members.name));
+	const officers = officerRows
+		.filter((o): o is { office: string; name: string } => o.office != null)
+		.sort((a, b) => officerRank(a.office) - officerRank(b.office));
 
 	// Members who've marked themselves Not Available for this meeting (with
 	// names, so the VPE can see who NOT to chase when filling open roles).
@@ -136,7 +154,9 @@ async function loadMeetingDetail(
 		canManage,
 		timezone: club?.timezone ?? "UTC",
 		clubName: club?.name ?? "",
+		clubNumber: club?.clubNumber ?? null,
 		clubSlug: club?.slug ?? "",
+		officers,
 		unavailableMembers,
 		unavailableMemberIds: unavailableMembers.map((m) => m.id),
 	};
@@ -183,6 +203,7 @@ export const getNextMeeting = createServerFn({ method: "GET" })
 				canManage: false,
 				timezone: "UTC",
 				clubName: "",
+				clubSlug: "",
 			};
 		}
 		return loadMeetingDetail(next.id, currentUser.id);
