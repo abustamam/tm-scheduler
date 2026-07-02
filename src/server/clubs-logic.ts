@@ -18,12 +18,12 @@ export type ResolvedClub = {
 
 /**
  * Resolve a URL segment to a club by slug (case-insensitive), then club number,
- * then UUID. Throws if nothing matches. Slug is tried first, so a slug that
- * happens to equal a club number still wins as a slug.
+ * then UUID. Returns null if nothing matches. Slug is tried first, so a slug
+ * that happens to equal a club number still wins as a slug.
  */
 export async function resolveClubByIdentifier(
 	identifier: string,
-): Promise<ResolvedClub> {
+): Promise<ResolvedClub | null> {
 	const seg = identifier.trim();
 	const lower = seg.toLowerCase();
 
@@ -43,7 +43,7 @@ export async function resolveClubByIdentifier(
 		.from(clubs)
 		.where(or(...conds));
 
-	if (rows.length === 0) throw new Error("Club not found.");
+	if (rows.length === 0) return null;
 	// Precedence: slug > club number > id.
 	return (
 		rows.find((r) => r.slug === lower) ??

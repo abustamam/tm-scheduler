@@ -43,21 +43,21 @@ describe.skipIf(!hasTestDb)("resolveClubByIdentifier", () => {
 
 	it("resolves by slug", async () => {
 		const club = await resolveClubByIdentifier(`mcf-${seed.clubId}`);
-		expect(club.id).toBe(seed.clubId);
+		expect(club?.id).toBe(seed.clubId);
 	});
 	it("resolves by club number", async () => {
 		const club = await resolveClubByIdentifier(`num-${seed.clubId}`);
-		expect(club.id).toBe(seed.clubId);
+		expect(club?.id).toBe(seed.clubId);
 	});
 	it("resolves by UUID", async () => {
 		const club = await resolveClubByIdentifier(seed.clubId);
-		expect(club.slug).toBe(`mcf-${seed.clubId}`);
+		expect(club?.slug).toBe(`mcf-${seed.clubId}`);
 	});
 	it("matches slug case-insensitively", async () => {
 		const club = await resolveClubByIdentifier(
 			`MCF-${seed.clubId}`.toUpperCase(),
 		);
-		expect(club.id).toBe(seed.clubId);
+		expect(club?.id).toBe(seed.clubId);
 	});
 	it("prefers the slug owner when another club's number collides", async () => {
 		// Club B's club_number equals club A's (seed's) slug. Resolving that
@@ -73,11 +73,11 @@ describe.skipIf(!hasTestDb)("resolveClubByIdentifier", () => {
 		});
 
 		const club = await resolveClubByIdentifier(collide);
-		expect(club.id).toBe(seed.clubId);
+		expect(club?.id).toBe(seed.clubId);
 	});
-	it("throws for an unknown identifier", async () => {
+	it("returns null for an unknown identifier", async () => {
 		await expect(
 			resolveClubByIdentifier("nope-does-not-exist"),
-		).rejects.toThrow("Club not found");
+		).resolves.toBeNull();
 	});
 });

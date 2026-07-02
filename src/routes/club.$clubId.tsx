@@ -1,25 +1,12 @@
-import {
-	createFileRoute,
-	Link,
-	Outlet,
-	redirect,
-} from "@tanstack/react-router";
+import { createFileRoute, Link, Outlet } from "@tanstack/react-router";
 import { RequireMember } from "#/components/club/require-member";
 import { Button } from "#/components/ui/button";
 import { Toaster } from "#/components/ui/sonner";
-import { getClubByIdentifier } from "#/server/clubs";
+import { resolveClubOrRedirect } from "#/lib/club-route";
 
 export const Route = createFileRoute("/club/$clubId")({
 	beforeLoad: async ({ params, location }) => {
-		const club = await getClubByIdentifier({ data: params.clubId });
-		// Canonicalize: number/UUID (or wrong-case slug) → the slug URL.
-		if (params.clubId !== club.slug) {
-			throw redirect({
-				href:
-					location.pathname.replace(/^\/club\/[^/]+/, `/club/${club.slug}`) +
-					location.searchStr,
-			});
-		}
+		const club = await resolveClubOrRedirect(params.clubId, location);
 		return { clubUuid: club.id, clubSlug: club.slug };
 	},
 	component: ClubShell,
