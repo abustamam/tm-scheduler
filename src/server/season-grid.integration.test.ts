@@ -109,7 +109,7 @@ describe.skipIf(!hasTestDb)("loadSeasonGrid", () => {
 			"Speaker 2",
 			"Speaker 3",
 		]);
-		expect(speakerRows[1]!.shortCode).toBe("Spea2");
+		expect(speakerRows[1]!.shortCode).toBe("SP2");
 
 		// open count on the upcoming meeting: 1 Timer + 2 unassigned speakers = 3
 		const upcoming = data.meetings.find((m) => m.id === seed.meetingId)!;
