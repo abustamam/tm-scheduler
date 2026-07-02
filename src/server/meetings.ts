@@ -119,7 +119,15 @@ async function loadMeetingDetail(
 
 	const club = await db.query.clubs.findFirst({
 		where: eq(clubs.id, meeting.clubId),
-		columns: { timezone: true, name: true, slug: true, clubNumber: true },
+		columns: {
+			timezone: true,
+			name: true,
+			slug: true,
+			clubNumber: true,
+			district: true,
+			mission: true,
+			meetingSchedule: true,
+		},
 	});
 
 	// Officers (active members with an office set) for the printable agenda's
@@ -156,6 +164,9 @@ async function loadMeetingDetail(
 		clubName: club?.name ?? "",
 		clubNumber: club?.clubNumber ?? null,
 		clubSlug: club?.slug ?? "",
+		clubDistrict: club?.district ?? null,
+		clubMission: club?.mission ?? null,
+		clubMeetingSchedule: club?.meetingSchedule ?? null,
 		officers,
 		unavailableMembers,
 		unavailableMemberIds: unavailableMembers.map((m) => m.id),

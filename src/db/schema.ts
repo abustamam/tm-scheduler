@@ -78,6 +78,13 @@ export const clubs = pgTable("clubs", {
 	slug: text("slug").notNull().unique(),
 	clubNumber: text("club_number").unique(),
 	timezone: text("timezone").notNull().default("America/Chicago"),
+	// Free-text club profile fields shown on the printable agenda. All nullable —
+	// empty/unset is valid and the agenda falls back gracefully (no empty labels).
+	// district: display label only (e.g. "District 39"); mission: free text, may be
+	// multi-line; meetingSchedule: human-readable (e.g. "2nd & 4th Thursday, 6:45–7:45 PM").
+	district: text("district"),
+	mission: text("mission"),
+	meetingSchedule: text("meeting_schedule"),
 	createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

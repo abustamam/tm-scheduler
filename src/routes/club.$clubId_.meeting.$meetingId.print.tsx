@@ -63,8 +63,17 @@ function timeRange(startsAt: Date, endsAt: Date, timeZone: string): string {
 function PrintAgenda() {
 	const { layout } = Route.useSearch();
 	const { clubId: clubIdParam, meetingId } = Route.useParams();
-	const { meeting, slots, timezone, clubName, clubNumber, officers } =
-		Route.useLoaderData();
+	const {
+		meeting,
+		slots,
+		timezone,
+		clubName,
+		clubNumber,
+		clubDistrict,
+		clubMission,
+		clubMeetingSchedule,
+		officers,
+	} = Route.useLoaderData();
 
 	const runRows = expandRunSheet(slots);
 	const rows = buildTimeline(runRows, meeting.scheduledAt, timezone);
@@ -111,6 +120,9 @@ function PrintAgenda() {
 	const header = {
 		clubName,
 		clubNumber,
+		district: clubDistrict,
+		mission: clubMission,
+		meetingSchedule: clubMeetingSchedule,
 		dateLong,
 		dateShort,
 		timeRange: timeRange(startsAt, endsAt, timezone),

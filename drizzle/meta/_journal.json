@@ -50,6 +50,13 @@
       "when": 1783020804715,
       "tag": "0006_damp_nightcrawler",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1783031428240,
+      "tag": "0007_new_vapor",
+      "breakpoints": true
     }
   ]
 }
