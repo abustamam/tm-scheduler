@@ -8,6 +8,8 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { AssignSlotSheet } from "#/components/club/assign-slot-sheet";
+import { EditSpeechSheet } from "#/components/club/edit-speech-sheet";
 import { PageContainer } from "#/components/page-container";
 import { ShareLinkButton } from "#/components/share-link-button";
 import { Badge } from "#/components/ui/badge";
@@ -64,16 +66,31 @@ function errMessage(err: unknown) {
 }
 
 function MeetingDetail() {
-	const { meeting, slots, canManage, timezone, unavailableMembers, clubSlug } =
-		Route.useLoaderData();
+	const {
+		meeting,
+		slots,
+		canManage,
+		timezone,
+		unavailableMembers,
+		clubSlug,
+		roster,
+	} = Route.useLoaderData();
 	const { currentMemberId } = Route.useRouteContext();
 	const router = useRouter();
 	const [busySlotId, setBusySlotId] = useState<string | null>(null);
 	const [speakerSlot, setSpeakerSlot] = useState<Slot | null>(null);
 	const [editOpen, setEditOpen] = useState(false);
+	const [assignSlot, setAssignSlot] = useState<Slot | null>(null);
+	const [editSpeechSlot, setEditSpeechSlot] = useState<Slot | null>(null);
 
 	// Number repeated roles ("Speaker 1", "Speaker 2", …).
 	const roleCounts = buildRoleCounts(slots);
+
+	// memberId → their current role label this meeting (for picker flags).
+	const roleByMemberId: Record<string, string> = {};
+	for (const s of slots) {
+		if (s.assigneeId) roleByMemberId[s.assigneeId] = slotLabel(s, roleCounts);
+	}
 
 	// Preserve category order as it appears (slots arrive pre-sorted).
 	const categories: string[] = [];
@@ -367,6 +384,26 @@ function MeetingDetail() {
 														</Button>
 													</div>
 												) : null}
+												{canManage ? (
+													<div className="flex flex-wrap items-center gap-2">
+														<Button
+															size="sm"
+															variant="outline"
+															onClick={() => setAssignSlot(slot)}
+														>
+															{slot.status === "open" ? "Assign…" : "Reassign…"}
+														</Button>
+														{slot.isSpeakerRole && slot.status !== "open" ? (
+															<Button
+																size="sm"
+																variant="ghost"
+																onClick={() => setEditSpeechSlot(slot)}
+															>
+																Edit speech
+															</Button>
+														) : null}
+													</div>
+												) : null}
 												{slot.status === "open" ? (
 													<Button
 														size="sm"
@@ -492,6 +529,53 @@ function MeetingDetail() {
 				}}
 				onClaimed={async () => {
 					setSpeakerSlot(null);
+					await router.invalidate();
+				}}
+			/>
+			<AssignSlotSheet
+				slot={
+					assignSlot
+						? {
+								id: assignSlot.id,
+								status: assignSlot.status,
+								isSpeakerRole: assignSlot.isSpeakerRole,
+								label: slotLabel(assignSlot, roleCounts),
+							}
+						: null
+				}
+				roster={roster}
+				roleByMemberId={roleByMemberId}
+				unavailableIds={unavailableMembers.map((m) => m.id)}
+				actorMemberId={currentMemberId}
+				onOpenChange={(open) => {
+					if (!open) setAssignSlot(null);
+				}}
+				onAssigned={async () => {
+					setAssignSlot(null);
+					await router.invalidate();
+				}}
+			/>
+			<EditSpeechSheet
+				slot={
+					editSpeechSlot
+						? {
+								id: editSpeechSlot.id,
+								label: slotLabel(editSpeechSlot, roleCounts),
+								speechTitle: editSpeechSlot.speechTitle,
+								pathwayPath: editSpeechSlot.pathwayPath,
+								projectName: editSpeechSlot.projectName,
+								projectLevel: editSpeechSlot.projectLevel,
+								minMinutes: editSpeechSlot.minMinutes,
+								maxMinutes: editSpeechSlot.maxMinutes,
+							}
+						: null
+				}
+				actorMemberId={currentMemberId}
+				onOpenChange={(open) => {
+					if (!open) setEditSpeechSlot(null);
+				}}
+				onSaved={async () => {
+					setEditSpeechSlot(null);
 					await router.invalidate();
 				}}
 			/>
