@@ -105,6 +105,7 @@ function errMessage(err: unknown) {
 
 function MeetingView() {
 	const { clubId, meetingId } = Route.useParams();
+	const { clubUuid } = Route.useRouteContext();
 	const { meeting, slots, timezone, unavailableMemberIds, navItems } =
 		Route.useLoaderData();
 	const { member } = useCurrentMember(clubId);
@@ -136,12 +137,12 @@ function MeetingView() {
 		try {
 			if (isUnavailable) {
 				await clearAvailability({
-					data: { memberId: member.id, meetingId, clubId },
+					data: { memberId: member.id, meetingId, clubId: clubUuid },
 				});
 				toast.success("You're marked as available again.");
 			} else {
 				await setAvailability({
-					data: { memberId: member.id, meetingId, clubId },
+					data: { memberId: member.id, meetingId, clubId: clubUuid },
 				});
 				toast.success("Got it — you can't make this one.");
 			}
