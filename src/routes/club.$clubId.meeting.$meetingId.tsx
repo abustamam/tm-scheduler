@@ -7,6 +7,7 @@ import {
 import { CalendarDays, Loader2, MapPin, Printer, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { MeetingNavStrip } from "#/components/club/meeting-nav-strip";
 import { ShareLinkButton } from "#/components/share-link-button";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
@@ -32,18 +33,33 @@ import {
 } from "#/components/ui/sheet";
 import { buildRoleCounts, slotLabel } from "#/lib/agenda";
 import { formatMeetingDate, formatMeetingTime } from "#/lib/format";
+import { buildMeetingNavItems } from "#/lib/meeting-nav";
 import { useCurrentMember } from "#/lib/member-identity";
 import { clearAvailability, setAvailability } from "#/server/availability";
-import { getMeeting } from "#/server/meetings";
+import { getMeeting, listUpcomingMeetings } from "#/server/meetings";
 import { claimSlot, reassignSlot, releaseSlot } from "#/server/slots";
 
 export const Route = createFileRoute("/club/$clubId/meeting/$meetingId")({
 	loader: async ({ params }) => {
-		const data = await getMeeting({ data: params.meetingId });
+		// Fire both in parallel. getMeeting stays fatal (the agenda is the page);
+		// the upcoming list is non-fatal — a failure degrades to no strip.
+		const meetingPromise = getMeeting({ data: params.meetingId });
+		const upcomingPromise = listUpcomingMeetings({
+			data: params.clubId,
+		}).catch(() => [] as Awaited<ReturnType<typeof listUpcomingMeetings>>);
+
+		const data = await meetingPromise;
 		// Guard against a meetingId that belongs to a different club than the URL
 		// (e.g. a stale/mistyped link) rendering one club's agenda under another's.
 		if (data.meeting.clubId !== params.clubId) throw notFound();
-		return data;
+
+		const upcoming = await upcomingPromise;
+		const navItems = buildMeetingNavItems(
+			{ id: data.meeting.id, scheduledAt: data.meeting.scheduledAt },
+			upcoming,
+			data.timezone,
+		);
+		return { ...data, navItems };
 	},
 	component: MeetingView,
 	notFoundComponent: MeetingNotFound,
@@ -81,7 +97,7 @@ function errMessage(err: unknown) {
 
 function MeetingView() {
 	const { clubId, meetingId } = Route.useParams();
-	const { meeting, slots, timezone, unavailableMemberIds } =
+	const { meeting, slots, timezone, unavailableMemberIds, navItems } =
 		Route.useLoaderData();
 	const { member } = useCurrentMember(clubId);
 	const router = useRouter();
@@ -197,6 +213,7 @@ function MeetingView() {
 						</span>
 					) : null}
 				</div>
+				<MeetingNavStrip clubId={clubId} items={navItems} />
 				{meeting.wordOfTheDay ? (
 					<p className="flex items-center gap-1.5 text-sm">
 						<Sparkles className="size-4 text-primary" aria-hidden />
