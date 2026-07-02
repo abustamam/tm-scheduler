@@ -54,8 +54,17 @@ export const Route = createFileRoute("/club/$clubId/meeting/$meetingId")({
 		if (data.meeting.clubId !== params.clubId) throw notFound();
 
 		const upcoming = await upcomingPromise;
+		// The current meeting's open-role count comes from its own loaded agenda
+		// (authoritative + present even when it's absent from `upcoming`).
+		const currentOpenSlots = data.slots.filter(
+			(s) => s.status === "open",
+		).length;
 		const navItems = buildMeetingNavItems(
-			{ id: data.meeting.id, scheduledAt: data.meeting.scheduledAt },
+			{
+				id: data.meeting.id,
+				scheduledAt: data.meeting.scheduledAt,
+				openSlots: currentOpenSlots,
+			},
 			upcoming,
 			data.timezone,
 		);
