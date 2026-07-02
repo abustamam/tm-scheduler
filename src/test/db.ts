@@ -53,6 +53,7 @@ export async function seedClub(): Promise<SeededClub> {
 	await testDb.insert(clubs).values({
 		id: clubId,
 		name: "Test Club",
+		slug: `test-club-${clubId}`,
 	});
 
 	// users
