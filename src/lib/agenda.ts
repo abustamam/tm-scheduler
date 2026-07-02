@@ -72,6 +72,32 @@ export function resolveEvaluatorLinks<T extends EvaluatorRow>(
 
 const STOPWORDS = new Set(["of", "the", "and", "a", "an", "to"]);
 
+/**
+ * Clean short codes for common single-word Toastmasters roles. These read as
+ * intentional abbreviations rather than mid-word truncations. Roles not listed
+ * fall back to the general consonant rule in `singleWordAbbrev`.
+ */
+const SINGLE_WORD_CODES = new Map<string, string>([
+	["speaker", "SP"],
+	["timer", "TMR"],
+	["evaluator", "EV"],
+	["grammarian", "GRM"],
+]);
+
+/**
+ * Short code for a single word: an uppercase initial followed by its next
+ * consonants (vowels dropped), capped at 3 chars. Yields readable codes like
+ * "Timer" → TMR, "Grammarian" → GRM, "Wordmaster" → WRD. A small set of common
+ * roles (see `SINGLE_WORD_CODES`) is special-cased for the cleanest result.
+ */
+function singleWordAbbrev(w: string): string {
+	const special = SINGLE_WORD_CODES.get(w.toLowerCase());
+	if (special) return special;
+	const upper = w.toUpperCase();
+	const consonants = upper.slice(1).replace(/[AEIOU]/g, "");
+	return (upper[0] + consonants).slice(0, 3);
+}
+
 /** Deterministic base abbreviation for a role name. */
 export function roleAbbrev(name: string): string {
 	const words = name
@@ -86,7 +112,7 @@ export function roleAbbrev(name: string): string {
 	}
 	const w = words[0];
 	if (!w) return "?";
-	return (w[0] ?? "").toUpperCase() + w.slice(1, 4).toLowerCase();
+	return singleWordAbbrev(w);
 }
 
 export type ShortCodeInput = {
