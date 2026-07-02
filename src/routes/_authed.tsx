@@ -16,6 +16,7 @@ import {
 	ScrollText,
 } from "lucide-react";
 import type { ComponentType } from "react";
+import { BrandMark } from "#/components/brand-mark";
 import { MemberAvatar } from "#/components/club/member-avatar";
 import { ThemeToggle } from "#/components/club/theme-toggle";
 import { Input } from "#/components/ui/input";
@@ -84,18 +85,8 @@ function WorkspaceLayout() {
 		<div className="flex min-h-svh w-full font-sans text-[var(--sea-ink)]">
 			<aside className="sticky top-0 flex h-svh w-[248px] shrink-0 flex-col gap-1.5 border-r border-[var(--line)] bg-[linear-gradient(180deg,var(--surface-strong),var(--surface))] px-3.5 py-[18px] backdrop-blur-[6px]">
 				{/* Brand */}
-				<div className="flex items-center gap-[11px] px-2 pt-1.5 pb-4">
-					<span className="flex size-[38px] shrink-0 items-center justify-center rounded-[11px] bg-[linear-gradient(150deg,var(--lagoon),var(--lagoon-deep))] shadow-[0_4px_12px_rgba(50,143,151,.35),0_1px_0_rgba(255,255,255,.4)_inset]">
-						<GavelGlyph />
-					</span>
-					<div className="leading-[1.05]">
-						<div className="font-display text-[19px] font-semibold tracking-[-0.01em]">
-							GavelUp
-						</div>
-						<div className="mt-0.5 truncate text-[11px] font-semibold tracking-[0.04em] text-[var(--sea-ink-soft)] uppercase">
-							{clubName} · Club 1492
-						</div>
-					</div>
+				<div className="px-2 pt-1.5 pb-4">
+					<BrandMark size="md" subtitle={`${clubName} · Club 1492`} />
 				</div>
 
 				<NavGroup label="Manage">
@@ -202,41 +193,5 @@ function NavItem({
 			<Icon className="size-[17px]" />
 			{label}
 		</Link>
-	);
-}
-
-function GavelGlyph() {
-	return (
-		<svg
-			width="20"
-			height="20"
-			viewBox="0 0 24 24"
-			fill="none"
-			stroke="#fff"
-			strokeWidth="2.1"
-			strokeLinecap="round"
-			strokeLinejoin="round"
-			aria-hidden
-		>
-			<title>GavelUp</title>
-			<path d="M3 21h9" />
-			<path d="m13.5 6.5-7 7" />
-			<rect
-				x="11.5"
-				y="2.6"
-				width="6"
-				height="3.4"
-				rx="1.2"
-				transform="rotate(45 14.5 4.3)"
-			/>
-			<rect
-				x="16.2"
-				y="7.3"
-				width="6"
-				height="3.4"
-				rx="1.2"
-				transform="rotate(45 19.2 9)"
-			/>
-		</svg>
 	);
 }
