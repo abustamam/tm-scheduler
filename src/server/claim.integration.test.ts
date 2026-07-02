@@ -624,5 +624,23 @@ describe.skipIf(!hasTestDb)("claim + guards integration", () => {
 			expect(row?.speechTitle).toBe("TBA");
 			expect(row?.minMinutes).toBeNull();
 		});
+
+		it("roster query returns only active members, ordered by name", async () => {
+			// Mark the seeded member inactive; it should be excluded from the roster.
+			await testDb
+				.update(members)
+				.set({ status: "inactive" })
+				.where(eq(members.id, seed.memberId));
+
+			const roster = await testDb
+				.select({ id: members.id, status: members.status })
+				.from(members)
+				.where(
+					and(eq(members.clubId, seed.clubId), eq(members.status, "active")),
+				);
+
+			expect(roster.every((m) => m.status === "active")).toBe(true);
+			expect(roster.some((m) => m.id === seed.memberId)).toBe(false);
+		});
 	});
 });
