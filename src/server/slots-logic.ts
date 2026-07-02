@@ -198,3 +198,37 @@ export async function applyMoveSpeakerSlot(input: {
 	});
 	return { clubId: target.clubId };
 }
+
+export type SpeakerDetailsInput = {
+	speechTitle?: string;
+	pathwayPath?: string;
+	projectName?: string;
+	projectLevel?: string;
+	minMinutes?: number;
+	maxMinutes?: number;
+};
+
+export type NormalizedSpeakerDetails = {
+	speechTitle: string;
+	pathwayPath: string | null;
+	projectName: string | null;
+	projectLevel: string | null;
+	minMinutes: number | null;
+	maxMinutes: number | null;
+};
+
+/** Normalize speaker details for persistence: blank/missing title → "TBA",
+ *  blank optional strings → null, missing numbers → null. */
+export function normalizeSpeakerDetails(
+	input?: SpeakerDetailsInput,
+): NormalizedSpeakerDetails {
+	const title = input?.speechTitle?.trim();
+	return {
+		speechTitle: title && title.length > 0 ? title : "TBA",
+		pathwayPath: input?.pathwayPath?.trim() || null,
+		projectName: input?.projectName?.trim() || null,
+		projectLevel: input?.projectLevel?.trim() || null,
+		minMinutes: input?.minMinutes ?? null,
+		maxMinutes: input?.maxMinutes ?? null,
+	};
+}
