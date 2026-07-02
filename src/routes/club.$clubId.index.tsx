@@ -11,7 +11,7 @@ import { listMemberCommitments, listUpcomingMeetings } from "#/server/meetings";
 import { releaseSlot } from "#/server/slots";
 
 export const Route = createFileRoute("/club/$clubId/")({
-	loader: ({ params }) => listUpcomingMeetings({ data: params.clubId }),
+	loader: ({ context }) => listUpcomingMeetings({ data: context.clubUuid }),
 	component: ClubHome,
 });
 

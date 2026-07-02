@@ -64,7 +64,7 @@ function errMessage(err: unknown) {
 }
 
 function MeetingDetail() {
-	const { meeting, slots, canManage, timezone, unavailableMembers } =
+	const { meeting, slots, canManage, timezone, unavailableMembers, clubSlug } =
 		Route.useLoaderData();
 	const { currentMemberId } = Route.useRouteContext();
 	const router = useRouter();
@@ -242,7 +242,7 @@ function MeetingDetail() {
 					</p>
 				) : null}
 				<ShareLinkButton
-					path={`/club/${meeting.clubId}/meeting/${meeting.id}`}
+					path={`/club/${clubSlug}/meeting/${meeting.id}`}
 					label="Copy member link"
 					className="mt-1"
 				/>

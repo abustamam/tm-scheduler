@@ -6,6 +6,7 @@ import {
 } from "#/components/agenda/meeting-agenda-print";
 import { buildLegend, expandRunSheet } from "#/lib/agenda-runsheet";
 import { buildTimeline } from "#/lib/agenda-timing";
+import { resolveClubOrRedirect } from "#/lib/club-route";
 import { formatMeetingDate } from "#/lib/format";
 import { getMeeting } from "#/server/meetings";
 
@@ -23,9 +24,10 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/print")(
 					: "timing",
 			};
 		},
-		loader: async ({ params }) => {
+		loader: async ({ params, location }) => {
+			const club = await resolveClubOrRedirect(params.clubId, location);
 			const data = await getMeeting({ data: params.meetingId });
-			if (data.meeting.clubId !== params.clubId) throw notFound();
+			if (data.meeting.clubId !== club.id) throw notFound();
 			return data;
 		},
 		component: PrintAgenda,

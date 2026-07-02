@@ -75,6 +75,8 @@ export const activityActionEnum = pgEnum("activity_action", [
 export const clubs = pgTable("clubs", {
 	id: uuid("id").defaultRandom().primaryKey(),
 	name: text("name").notNull(),
+	slug: text("slug").notNull().unique(),
+	clubNumber: text("club_number").unique(),
 	timezone: text("timezone").notNull().default("America/Chicago"),
 	createdAt: timestamp("created_at").defaultNow().notNull(),
 });

@@ -40,18 +40,17 @@ import { getMeeting, listUpcomingMeetings } from "#/server/meetings";
 import { claimSlot, reassignSlot, releaseSlot } from "#/server/slots";
 
 export const Route = createFileRoute("/club/$clubId/meeting/$meetingId")({
-	loader: async ({ params }) => {
+	loader: async ({ params, context }) => {
 		// Fire both in parallel. getMeeting stays fatal (the agenda is the page);
 		// the upcoming list is non-fatal — a failure degrades to no strip.
 		const meetingPromise = getMeeting({ data: params.meetingId });
 		const upcomingPromise = listUpcomingMeetings({
-			data: params.clubId,
+			data: context.clubUuid,
 		}).catch(() => [] as Awaited<ReturnType<typeof listUpcomingMeetings>>);
 
 		const data = await meetingPromise;
-		// Guard against a meetingId that belongs to a different club than the URL
-		// (e.g. a stale/mistyped link) rendering one club's agenda under another's.
-		if (data.meeting.clubId !== params.clubId) throw notFound();
+		// Guard against a meetingId that belongs to a different club than the URL.
+		if (data.meeting.clubId !== context.clubUuid) throw notFound();
 
 		const upcoming = await upcomingPromise;
 		// The current meeting's open-role count comes from its own loaded agenda
@@ -106,6 +105,7 @@ function errMessage(err: unknown) {
 
 function MeetingView() {
 	const { clubId, meetingId } = Route.useParams();
+	const { clubUuid } = Route.useRouteContext();
 	const { meeting, slots, timezone, unavailableMemberIds, navItems } =
 		Route.useLoaderData();
 	const { member } = useCurrentMember(clubId);
@@ -137,12 +137,12 @@ function MeetingView() {
 		try {
 			if (isUnavailable) {
 				await clearAvailability({
-					data: { memberId: member.id, meetingId, clubId },
+					data: { memberId: member.id, meetingId, clubId: clubUuid },
 				});
 				toast.success("You're marked as available again.");
 			} else {
 				await setAvailability({
-					data: { memberId: member.id, meetingId, clubId },
+					data: { memberId: member.id, meetingId, clubId: clubUuid },
 				});
 				toast.success("Got it — you can't make this one.");
 			}
@@ -247,7 +247,7 @@ function MeetingView() {
 					)}
 				</Button>
 				<ShareLinkButton
-					path={`/club/${meeting.clubId}/meeting/${meeting.id}`}
+					path={`/club/${clubId}/meeting/${meeting.id}`}
 					className="mt-1 ml-2"
 				/>
 				<Button asChild variant="outline" size="sm">

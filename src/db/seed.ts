@@ -138,7 +138,7 @@ async function main() {
 
 	const [club] = await db
 		.insert(clubs)
-		.values({ name: "MCF" })
+		.values({ name: "MCF", slug: "mcf-toastmasters", clubNumber: "28677176" })
 		.returning({ id: clubs.id });
 
 	await db.insert(clubMemberships).values([

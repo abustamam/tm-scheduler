@@ -14,17 +14,19 @@ import { MemberAvatar } from "./member-avatar";
  * from localStorage (via {@link useCurrentMember}); until a member is picked it
  * shows the roster pick-name screen, then renders `children`.
  *
- * Router-independent on purpose — `clubId` is passed in by the route layout, so
- * this can be rendered (and tested) without a router.
+ * Router-independent on purpose — `clubUuid` and `clubSlug` are passed in by
+ * the route layout, so this can be rendered (and tested) without a router.
  */
 export function RequireMember({
-	clubId,
+	clubUuid,
+	clubSlug,
 	children,
 }: {
-	clubId: string;
+	clubUuid: string;
+	clubSlug: string;
 	children: React.ReactNode;
 }) {
-	const { member, setMember } = useCurrentMember(clubId);
+	const { member, setMember } = useCurrentMember(clubSlug);
 	const [mounted, setMounted] = useState(false);
 	useEffect(() => setMounted(true), []);
 
@@ -40,29 +42,30 @@ export function RequireMember({
 	}
 
 	if (!member) {
-		return <PickNameScreen clubId={clubId} onPicked={setMember} />;
+		return <PickNameScreen clubUuid={clubUuid} onPicked={setMember} />;
 	}
 
 	return <>{children}</>;
 }
 
 function PickNameScreen({
-	clubId,
+	clubUuid,
 	onPicked,
 }: {
-	clubId: string;
+	clubUuid: string;
 	onPicked: (m: StoredMember) => void;
 }) {
 	const [query, setQuery] = useState("");
 	const [newName, setNewName] = useState("");
 
 	const { data: members = [] } = useQuery({
-		queryKey: ["members", clubId],
-		queryFn: () => listMembers({ data: clubId }),
+		queryKey: ["members", clubUuid],
+		queryFn: () => listMembers({ data: clubUuid }),
 	});
 
 	const addMutation = useMutation({
-		mutationFn: (name: string) => addMember({ data: { clubId, name } }),
+		mutationFn: (name: string) =>
+			addMember({ data: { clubId: clubUuid, name } }),
 	});
 
 	const filtered = members.filter((m) =>

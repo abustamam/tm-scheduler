@@ -118,7 +118,7 @@ async function loadMeetingDetail(
 
 	const club = await db.query.clubs.findFirst({
 		where: eq(clubs.id, meeting.clubId),
-		columns: { timezone: true, name: true },
+		columns: { timezone: true, name: true, slug: true },
 	});
 
 	// Members who've marked themselves Not Available for this meeting (with
@@ -136,6 +136,7 @@ async function loadMeetingDetail(
 		canManage,
 		timezone: club?.timezone ?? "UTC",
 		clubName: club?.name ?? "",
+		clubSlug: club?.slug ?? "",
 		unavailableMembers,
 		unavailableMemberIds: unavailableMembers.map((m) => m.id),
 	};
