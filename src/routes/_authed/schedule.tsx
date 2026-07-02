@@ -31,8 +31,10 @@ function SeasonGridPage() {
 	const { view, count } = Route.useSearch();
 
 	return (
-		<div className="space-y-4 p-7">
-			<h1 className="text-2xl font-bold tracking-tight">Season grid</h1>
+		<div className="max-w-[1180px] space-y-4 px-7 pt-[26px] pb-10">
+			<h1 className="font-display text-[30px] font-semibold tracking-[-0.02em]">
+				Season grid
+			</h1>
 			{data ? (
 				<SeasonGrid data={data} orientation={view} count={count} />
 			) : (
