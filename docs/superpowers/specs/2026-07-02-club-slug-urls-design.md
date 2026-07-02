@@ -7,7 +7,7 @@
 
 Every public URL is `/club/<uuid>` — unreadable and untrustworthy in a share
 message. Members should get `/club/mcf-toastmasters`. Toastmasters club numbers
-are also globally unique and stable, so `/club/1492` should work too.
+are also globally unique and stable, so `/club/28677176` should work too.
 
 ## Approved decisions
 
@@ -23,20 +23,25 @@ are also globally unique and stable, so `/club/1492` should work too.
 Add two columns:
 
 - `slug` — `text`, `NOT NULL`, `UNIQUE`. One canonical slug per club.
-- `clubNumber` — `integer`, nullable, `UNIQUE`. Toastmasters number; optional.
+- `clubNumber` — `text`, nullable, `UNIQUE`. Toastmasters number stored as an
+  opaque identifier string (never used for arithmetic; avoids int size/leading-
+  zero concerns and lets the resolver match the raw URL segment directly).
 
 The generated Drizzle migration must be **hand-edited** so it backfills before
 enforcing constraints (a plain `ADD COLUMN slug text NOT NULL` fails on the
-existing MCF row):
+existing MCF row). It also sets MCF's real launch values directly, so a Railway
+deploy is self-completing (the manual seed script does not run in prod):
 
 1. `ALTER TABLE clubs ADD COLUMN slug text;` (nullable first)
-2. `ALTER TABLE clubs ADD COLUMN club_number integer;`
-3. Backfill: `UPDATE clubs SET slug = <slugify(name)> WHERE slug IS NULL;`
-   (done in SQL for the backfill; the app-side `slugify` is the source of truth
-   for new/edited values — the migration SQL mirrors its rules for existing rows.)
-4. `ALTER TABLE clubs ALTER COLUMN slug SET NOT NULL;`
-5. `CREATE UNIQUE INDEX clubs_slug_unique ON clubs (slug);`
-6. `CREATE UNIQUE INDEX clubs_club_number_unique ON clubs (club_number);`
+2. `ALTER TABLE clubs ADD COLUMN club_number text;`
+3. Generic backfill so every existing row satisfies the NOT NULL/unique
+   constraint, mirroring `slugify` in SQL:
+   `UPDATE clubs SET slug = trim(both '-' from regexp_replace(lower(name), '[^a-z0-9]+', '-', 'g')) WHERE slug IS NULL;`
+4. Set MCF's real launch values (one-time data backfill for the launch club):
+   `UPDATE clubs SET slug = 'mcf-toastmasters', club_number = '28677176' WHERE name = 'MCF';`
+5. `ALTER TABLE clubs ALTER COLUMN slug SET NOT NULL;`
+6. `CREATE UNIQUE INDEX clubs_slug_unique ON clubs (slug);`
+7. `CREATE UNIQUE INDEX clubs_club_number_unique ON clubs (club_number);`
 
 CI runs migrations (not `push`), so the hand-edited migration is exercised.
 
@@ -57,15 +62,17 @@ collisions). Unit-tested.
 
 ### `getClubByIdentifier` (public server fn, GET)
 
-Input: the raw URL segment (string). Resolution precedence:
+Input: the raw URL segment (string). Because `club_number` is `text`, no
+"is this all digits?" branch is needed — match the segment directly, in
+precedence order:
 
-1. exact **slug** match → canonical (serve as-is);
-2. else if the segment is all digits → **club_number** match;
-3. else if the segment is a valid UUID → **id** match;
+1. exact **slug** match (segment lowercased) → canonical (serve as-is);
+2. else exact **club_number** match → redirect;
+3. else, if the segment is a valid UUID, exact **id** match → redirect;
 4. else → `notFound`.
 
-Slug is tried first, so a (hypothetical) all-digit slug still wins over a
-club-number interpretation. Returns `{ id, slug, name, timezone, clubNumber }`.
+Slug is tried first, so a (hypothetical) slug that equals a club number still
+wins as a slug. Returns `{ id, slug, name, timezone, clubNumber }`.
 
 Per the repo's client-bundle rule, the server fn stays thin and the query/logic
 lives in a sibling `club-resolve-logic.ts` (integration-tested against the test
@@ -81,9 +88,10 @@ for its nested children (index + meeting):
 
 - `beforeLoad`: call `getClubByIdentifier(params.clubId)`.
   - On `notFound`, render the existing not-found UX.
-  - If `params.clubId !== club.slug`, **`throw redirect(...)`** to the same
-    pathname with the identifier segment replaced by `club.slug`
-    (`/club/1492/meeting/x` → `/club/mcf-toastmasters/meeting/x`). Use the raw
+  - If `params.clubId !== club.slug`, **`throw redirect(...)`** (temporary — the
+    slug is mutable, so no permanent/cacheable redirect) to the same pathname
+    with the identifier segment replaced by `club.slug`
+    (`/club/28677176/meeting/x` → `/club/mcf-toastmasters/meeting/x`). Use the raw
     `href` form so the child subpath is preserved verbatim.
   - Otherwise return `{ clubId: club.id, clubSlug: club.slug }` into route
     context.
@@ -130,10 +138,11 @@ not mitigated.
 
 ## Seed / setup
 
-After the migration backfills `slug='mcf'`, the operator sets the real values.
-Fold into the existing seed/import path (`scripts/`) so onboarding stays one
-place. For MCF: `slug='mcf-toastmasters'`, `club_number=1492`. A one-off SQL
-`UPDATE` is acceptable and will be documented in the plan.
+MCF's real values (`slug='mcf-toastmasters'`, `club_number='28677176'`) are set
+by the migration itself (step 4 above), so deploy is self-completing — no manual
+prod step. For **future** clubs, setting slug + club number stays part of the
+manual onboarding (seed/DB), same as roster import; a club-settings UI is out of
+scope (below).
 
 ## Edge cases
 
