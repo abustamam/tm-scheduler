@@ -2,6 +2,7 @@
 // (`clubs.ts`, client-imported) so its `db` import is never bundled into the
 // client. See the header of `members-logic.ts`.
 import { eq, or, type SQL } from "drizzle-orm";
+import { z } from "zod";
 import { db } from "#/db";
 import { clubs } from "#/db/schema";
 
@@ -50,4 +51,65 @@ export async function resolveClubByIdentifier(
 		rows.find((r) => r.clubNumber === seg) ??
 		rows[0]
 	);
+}
+
+// ---------------------------------------------------------------------------
+// Club profile (district / mission / meeting schedule) — printable-agenda fields.
+// ---------------------------------------------------------------------------
+
+export type ClubProfile = {
+	name: string;
+	district: string | null;
+	mission: string | null;
+	meetingSchedule: string | null;
+};
+
+/** The free-text profile fields for the club-settings form. Null if unset. */
+export async function getClubProfile(
+	clubId: string,
+): Promise<ClubProfile | null> {
+	const [row] = await db
+		.select({
+			name: clubs.name,
+			district: clubs.district,
+			mission: clubs.mission,
+			meetingSchedule: clubs.meetingSchedule,
+		})
+		.from(clubs)
+		.where(eq(clubs.id, clubId))
+		.limit(1);
+	return row ?? null;
+}
+
+// Empty strings collapse to null so cleared fields disappear from the agenda
+// (no empty labels/artifacts) rather than persisting a blank value.
+const emptyToNull = z
+	.string()
+	.trim()
+	.transform((s) => (s.length === 0 ? null : s))
+	.nullable()
+	.optional();
+
+export const clubProfileSchema = z.object({
+	clubId: z.string().uuid(),
+	district: emptyToNull,
+	mission: emptyToNull,
+	meetingSchedule: emptyToNull,
+});
+export type ClubProfileInput = z.infer<typeof clubProfileSchema>;
+
+/** Set/clear the club's district, mission, and meeting schedule. Caller is
+ *  responsible for the admin/VPE authorization check (see `updateClubProfile`). */
+export async function applyClubProfileUpdate(input: ClubProfileInput) {
+	const [updated] = await db
+		.update(clubs)
+		.set({
+			district: input.district ?? null,
+			mission: input.mission ?? null,
+			meetingSchedule: input.meetingSchedule ?? null,
+		})
+		.where(eq(clubs.id, input.clubId))
+		.returning({ id: clubs.id });
+	if (!updated) throw new Error("Club not found.");
+	return { ok: true as const };
 }

@@ -14,6 +14,7 @@ import {
 	List,
 	LogOut,
 	ScrollText,
+	Settings,
 } from "lucide-react";
 import type { ComponentType } from "react";
 import { MemberAvatar } from "#/components/club/member-avatar";
@@ -59,6 +60,8 @@ function crumbFor(pathname: string): string {
 	if (pathname.startsWith("/members")) return "Roster · Member profile";
 	if (pathname.startsWith("/meetings")) return "Manage · Meeting";
 	if (pathname === "/me") return "Me · My roles";
+	if (pathname.startsWith("/admin/club-settings"))
+		return "Manage · Club settings";
 	if (pathname.startsWith("/admin")) return "Manage · Admin";
 	return "Workspace";
 }
@@ -69,6 +72,9 @@ function WorkspaceLayout() {
 	const pathname = useRouterState({ select: (s) => s.location.pathname });
 
 	const clubName = clubs[0]?.name ?? "Toastmasters";
+	const isOfficer = clubs.some(
+		(c) => c.clubRole === "admin" || c.clubRole === "vpe",
+	);
 	const roleLabel = clubs[0]?.clubRole
 		? (CLUB_ROLE_LABELS[clubs[0].clubRole] ?? "Member")
 		: "Member";
@@ -103,6 +109,13 @@ function WorkspaceLayout() {
 					<NavItem to="/" exact icon={List} label="Roster" />
 					<NavItem to="/agenda" icon={CalendarDays} label="Agenda & roles" />
 					<NavItem to="/activity" icon={ScrollText} label="Activity" />
+					{isOfficer ? (
+						<NavItem
+							to="/admin/club-settings"
+							icon={Settings}
+							label="Club settings"
+						/>
+					) : null}
 				</NavGroup>
 
 				<NavGroup label="Me">

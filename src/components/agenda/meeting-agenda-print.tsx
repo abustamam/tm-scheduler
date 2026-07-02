@@ -3,9 +3,10 @@
 // Faithful React port of the four designed layouts in
 // templates/meeting-agenda/MeetingAgenda.dc.html (editorial + grid = one page,
 // spacious + timing = two pages). Everything is data-driven from the meeting's
-// slots, officers, and run-of-show; the design's hardcoded club extras that
-// have no DB source (district, mission, meets schedule, logo) are omitted and
-// tracked as follow-up issues.
+// slots, officers, and run-of-show. The club's district, mission, and
+// meeting-schedule are optional free-text profile fields: each renders in its
+// designated slot when set and is omitted gracefully (no empty label) when not.
+// Logo upload remains a tracked follow-up (#83).
 import type { TimelineRow } from "#/lib/agenda-timing";
 
 export type AgendaLayout = "timing" | "spacious" | "editorial" | "grid";
@@ -13,6 +14,9 @@ export type AgendaLayout = "timing" | "spacious" | "editorial" | "grid";
 export type AgendaHeader = {
 	clubName: string;
 	clubNumber: string | null;
+	district: string | null; // "District 39"
+	mission: string | null; // free text, may be multi-line
+	meetingSchedule: string | null; // "2nd & 4th Thursday, 6:45–7:45 PM"
 	dateLong: string; // "Thursday, June 25, 2026"
 	dateShort: string; // "Thu · Jun 25, 2026"
 	timeRange: string; // "6:45 – 7:45 PM"
@@ -20,6 +24,13 @@ export type AgendaHeader = {
 	wordOfTheDay: string | null;
 	location: string | null;
 };
+
+/** "Club #NNN  ·  District 39" — either half optional; "" when both unset. */
+function clubLine(clubNumber: string | null, district: string | null): string {
+	return [clubNumber ? `Club #${clubNumber}` : null, district]
+		.filter(Boolean)
+		.join("  ·  ");
+}
 
 /** One row of the "Meeting Roles" roster (name null → open/unfilled). */
 export type AgendaRoleEntry = { label: string; name: string | null };
@@ -304,10 +315,7 @@ function RunNarrative({
 }
 
 function HeaderBand({ header }: { header: AgendaHeader }) {
-	const meta = [
-		header.clubNumber ? `Club #${header.clubNumber}` : null,
-		header.dateLong,
-	]
+	const meta = [clubLine(header.clubNumber, header.district), header.dateLong]
 		.filter(Boolean)
 		.join("  ·  ");
 	return (
@@ -498,7 +506,7 @@ function EditorialLayout({
 							</div>
 						</>
 					) : null}
-					{header.location ? (
+					{header.meetingSchedule || header.location ? (
 						<div
 							style={{
 								background: MINT,
@@ -508,11 +516,53 @@ function EditorialLayout({
 								marginTop: 14,
 							}}
 						>
-							<Kick style={{ marginBottom: 3 }}>Location</Kick>
-							<div style={{ fontSize: 10.5, lineHeight: 1.35, color: INK }}>
-								{header.location}
-							</div>
+							{header.meetingSchedule ? (
+								<>
+									<Kick style={{ marginBottom: 3 }}>Meets</Kick>
+									<div
+										style={{
+											fontSize: 10.5,
+											fontWeight: 600,
+											lineHeight: 1.35,
+											color: INK,
+											whiteSpace: "pre-line",
+										}}
+									>
+										{header.meetingSchedule}
+									</div>
+								</>
+							) : null}
+							{header.location ? (
+								<>
+									<Kick
+										style={{
+											marginBottom: 3,
+											...(header.meetingSchedule && { marginTop: 9 }),
+										}}
+									>
+										Location
+									</Kick>
+									<div style={{ fontSize: 10.5, lineHeight: 1.35, color: INK }}>
+										{header.location}
+									</div>
+								</>
+							) : null}
 						</div>
+					) : null}
+					{header.mission ? (
+						<>
+							<Kick style={{ margin: "14px 0 4px" }}>Club Mission</Kick>
+							<div
+								style={{
+									fontSize: 9.5,
+									lineHeight: 1.45,
+									color: MUTED,
+									whiteSpace: "pre-line",
+								}}
+							>
+								{header.mission}
+							</div>
+						</>
 					) : null}
 				</div>
 
@@ -567,7 +617,7 @@ function GridLayout({
 					>
 						{header.clubName}
 					</div>
-					{header.clubNumber ? (
+					{clubLine(header.clubNumber, header.district) ? (
 						<div
 							style={{
 								fontSize: 10.5,
@@ -576,7 +626,7 @@ function GridLayout({
 								fontWeight: 600,
 							}}
 						>
-							Club #{header.clubNumber}
+							{clubLine(header.clubNumber, header.district)}
 						</div>
 					) : null}
 				</div>
@@ -662,8 +712,8 @@ function GridLayout({
 					))}
 				</div>
 
-				{/* officer footer */}
-				{officers.length > 0 ? (
+				{/* officer footer (also carries the club's meets schedule + mission) */}
+				{officers.length > 0 || header.meetingSchedule || header.mission ? (
 					<div
 						style={{
 							marginTop: "auto",
@@ -673,20 +723,73 @@ function GridLayout({
 							color: "#fff",
 						}}
 					>
-						<div style={{ marginBottom: 8 }}>
-							<span
+						{officers.length > 0 || header.meetingSchedule ? (
+							<div
 								style={{
-									textTransform: "uppercase",
-									letterSpacing: ".09em",
-									fontSize: 9,
-									fontWeight: 800,
-									color: SEAFOAM,
+									display: "flex",
+									justifyContent: "space-between",
+									alignItems: "baseline",
+									gap: 16,
+									marginBottom: officers.length > 0 ? 8 : 0,
 								}}
 							>
-								Club Officers
-							</span>
-						</div>
-						<OfficerGrid officers={officers} onDark />
+								{officers.length > 0 ? (
+									<span
+										style={{
+											textTransform: "uppercase",
+											letterSpacing: ".09em",
+											fontSize: 9,
+											fontWeight: 800,
+											color: SEAFOAM,
+										}}
+									>
+										Club Officers
+									</span>
+								) : (
+									<span />
+								)}
+								{header.meetingSchedule ? (
+									<span
+										style={{
+											fontSize: 9.5,
+											color: "rgba(255,255,255,.7)",
+											textAlign: "right",
+										}}
+									>
+										Meets {header.meetingSchedule}
+									</span>
+								) : null}
+							</div>
+						) : null}
+						{officers.length > 0 ? (
+							<OfficerGrid officers={officers} onDark />
+						) : null}
+						{header.mission ? (
+							<div
+								style={{
+									fontSize: 9,
+									fontWeight: 500,
+									color: "rgba(255,255,255,.8)",
+									lineHeight: 1.3,
+									marginTop: officers.length > 0 ? 10 : 0,
+									whiteSpace: "pre-line",
+								}}
+							>
+								<span
+									style={{
+										textTransform: "uppercase",
+										letterSpacing: ".04em",
+										fontSize: 8,
+										fontWeight: 700,
+										color: SEAFOAM,
+										marginRight: 6,
+									}}
+								>
+									Mission
+								</span>
+								{header.mission}
+							</div>
+						) : null}
 					</div>
 				) : null}
 			</div>
@@ -776,7 +879,7 @@ function SpaciousLayout({
 							>
 								{header.clubName}
 							</div>
-							{header.clubNumber ? (
+							{clubLine(header.clubNumber, header.district) ? (
 								<div
 									style={{
 										fontSize: 12.5,
@@ -785,7 +888,7 @@ function SpaciousLayout({
 										letterSpacing: ".02em",
 									}}
 								>
-									Club #{header.clubNumber}
+									{clubLine(header.clubNumber, header.district)}
 								</div>
 							) : null}
 						</div>
@@ -836,6 +939,25 @@ function SpaciousLayout({
 						<RolesRoster roles={roles} variant="large" />
 					</div>
 
+					{header.mission ? (
+						<>
+							<Kick style={{ fontSize: 11, marginBottom: 12 }}>
+								Club Mission
+							</Kick>
+							<div
+								style={{
+									font: `400 15px/1.6 ${SERIF}`,
+									color: "#2b4d52",
+									maxWidth: 640,
+									whiteSpace: "pre-line",
+									marginBottom: 26,
+								}}
+							>
+								{header.mission}
+							</div>
+						</>
+					) : null}
+
 					{header.location ? (
 						<>
 							<Kick style={{ fontSize: 11, marginBottom: 12 }}>
@@ -854,7 +976,7 @@ function SpaciousLayout({
 					) : null}
 				</div>
 
-				{officers.length > 0 ? (
+				{officers.length > 0 || header.meetingSchedule ? (
 					<div
 						style={{
 							marginTop: "auto",
@@ -863,10 +985,36 @@ function SpaciousLayout({
 							color: "#fff",
 						}}
 					>
-						<Kick style={{ color: SEAFOAM, fontSize: 9.5, marginBottom: 9 }}>
-							Club Officers
-						</Kick>
-						<OfficerGrid officers={officers} onDark />
+						{officers.length > 0 ? (
+							<>
+								<Kick
+									style={{ color: SEAFOAM, fontSize: 9.5, marginBottom: 9 }}
+								>
+									Club Officers
+								</Kick>
+								<OfficerGrid officers={officers} onDark />
+							</>
+						) : null}
+						{header.meetingSchedule ? (
+							<div style={{ marginTop: officers.length > 0 ? 12 : 0 }}>
+								<Kick
+									style={{ color: SEAFOAM, fontSize: 9.5, marginBottom: 3 }}
+								>
+									Meets
+								</Kick>
+								<div
+									style={{
+										fontSize: 11,
+										fontWeight: 500,
+										color: "rgba(255,255,255,.85)",
+										lineHeight: 1.3,
+										whiteSpace: "pre-line",
+									}}
+								>
+									{header.meetingSchedule}
+								</div>
+							</div>
+						) : null}
 					</div>
 				) : null}
 			</div>
@@ -979,7 +1127,7 @@ function TimingLayout({
 						>
 							{header.clubName}
 						</div>
-						{header.clubNumber ? (
+						{clubLine(header.clubNumber, header.district) ? (
 							<div
 								style={{
 									fontSize: 11,
@@ -988,7 +1136,7 @@ function TimingLayout({
 									fontWeight: 600,
 								}}
 							>
-								Club #{header.clubNumber}
+								{clubLine(header.clubNumber, header.district)}
 							</div>
 						) : null}
 					</div>
@@ -1075,6 +1223,40 @@ function TimingLayout({
 								<OfficerGrid officers={officers} />
 							</div>
 						</>
+					) : null}
+
+					{header.meetingSchedule || header.mission ? (
+						<div style={{ display: "flex", gap: 22, marginBottom: 16 }}>
+							{header.meetingSchedule ? (
+								<div style={{ flex: "none", maxWidth: 220 }}>
+									<Kick style={{ marginBottom: 3 }}>Meets</Kick>
+									<div
+										style={{
+											font: `600 12px ${SERIF}`,
+											color: INK,
+											lineHeight: 1.35,
+											whiteSpace: "pre-line",
+										}}
+									>
+										{header.meetingSchedule}
+									</div>
+								</div>
+							) : null}
+							{header.mission ? (
+								<div style={{ flex: 1, minWidth: 0 }}>
+									<Kick style={{ marginBottom: 3 }}>Club Mission</Kick>
+									<div
+										style={{
+											font: `400 12px/1.5 ${SERIF}`,
+											color: "#2b4d52",
+											whiteSpace: "pre-line",
+										}}
+									>
+										{header.mission}
+									</div>
+								</div>
+							) : null}
+						</div>
 					) : null}
 
 					{explainers.length > 0 ? (
