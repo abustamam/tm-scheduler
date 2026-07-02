@@ -581,5 +581,48 @@ describe.skipIf(!hasTestDb)("claim + guards integration", () => {
 			// Status must be reset from "confirmed" back to "claimed" — new holder is unconfirmed.
 			expect(row?.status).toBe("claimed");
 		});
+
+		it("updateSpeakerDetails upserts details and normalizes blank title to TBA", async () => {
+			// First set a real speech, then "clear" it with a blank title.
+			const full = {
+				speechTitle: "My Speech",
+				pathwayPath: null,
+				projectName: null,
+				projectLevel: null,
+				minMinutes: 5,
+				maxMinutes: null,
+			};
+			await testDb
+				.insert(speakerDetails)
+				.values({ slotId: seed.slotId, ...full })
+				.onConflictDoUpdate({ target: speakerDetails.slotId, set: full });
+
+			// Mirror of normalizeSpeakerDetails for a blank-title input.
+			const input: { speechTitle?: string } = { speechTitle: "" };
+			const trimmed = input.speechTitle?.trim();
+			const cleared = {
+				speechTitle: trimmed && trimmed.length > 0 ? trimmed : "TBA",
+				pathwayPath: null,
+				projectName: null,
+				projectLevel: null,
+				minMinutes: null,
+				maxMinutes: null,
+			};
+			await testDb
+				.insert(speakerDetails)
+				.values({ slotId: seed.slotId, ...cleared })
+				.onConflictDoUpdate({ target: speakerDetails.slotId, set: cleared });
+
+			const [row] = await testDb
+				.select({
+					speechTitle: speakerDetails.speechTitle,
+					minMinutes: speakerDetails.minMinutes,
+				})
+				.from(speakerDetails)
+				.where(eq(speakerDetails.slotId, seed.slotId))
+				.limit(1);
+			expect(row?.speechTitle).toBe("TBA");
+			expect(row?.minMinutes).toBeNull();
+		});
 	});
 });

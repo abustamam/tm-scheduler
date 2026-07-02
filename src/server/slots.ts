@@ -343,6 +343,49 @@ export const reassignSlot = createServerFn({ method: "POST" })
 		});
 	});
 
+const updateSpeakerDetailsSchema = z.object({
+	slotId: z.string().uuid(),
+	actorMemberId: z.string().uuid(),
+	speakerDetails: speakerDetailsSchema,
+});
+
+/** Edit a speaker slot's speech details (trust-based). Blank title → "TBA".
+ *  PUBLIC — no session required; trust guard via requireMemberInClub. */
+export const updateSpeakerDetails = createServerFn({ method: "POST" })
+	.validator((input: unknown) => updateSpeakerDetailsSchema.parse(input))
+	.handler(async ({ data }) => {
+		const [slot] = await db
+			.select({
+				id: roleSlots.id,
+				isSpeakerRole: roleDefinitions.isSpeakerRole,
+				clubId: meetings.clubId,
+			})
+			.from(roleSlots)
+			.innerJoin(
+				roleDefinitions,
+				eq(roleDefinitions.id, roleSlots.roleDefinitionId),
+			)
+			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+			.where(eq(roleSlots.id, data.slotId))
+			.limit(1);
+
+		if (!slot) {
+			throw new Error("Role not found.");
+		}
+		if (!slot.isSpeakerRole) {
+			throw new Error("Only speaker roles have speech details.");
+		}
+		await requireMemberInClub(data.actorMemberId, slot.clubId);
+
+		const details = normalizeSpeakerDetails(data.speakerDetails);
+		await db
+			.insert(speakerDetails)
+			.values({ slotId: data.slotId, ...details })
+			.onConflictDoUpdate({ target: speakerDetails.slotId, set: details });
+
+		return { ok: true as const };
+	});
+
 const speakerSlotSchema = z.object({
 	meetingId: z.string().uuid(),
 	actorMemberId: z.string().uuid().nullable().optional(),
