@@ -33,7 +33,7 @@ export function RequireMember({
 	if (!mounted) {
 		return (
 			<output
-				className="flex min-h-svh items-center justify-center text-muted-foreground"
+				className="flex flex-1 items-center justify-center text-muted-foreground"
 				aria-label="Loading"
 			>
 				<span aria-hidden>…</span>
@@ -86,7 +86,7 @@ function PickNameScreen({
 	}
 
 	return (
-		<div className="flex min-h-svh flex-col gap-6 px-5 py-8">
+		<div className="flex flex-1 flex-col gap-6 px-5 py-8">
 			<header className="space-y-1">
 				<h1 className="font-display text-2xl font-semibold text-foreground">
 					Who are you?
