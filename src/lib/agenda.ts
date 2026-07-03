@@ -161,3 +161,45 @@ export function buildShortCodes(rows: ShortCodeInput[]): Map<string, string> {
 	}
 	return result;
 }
+
+/** Which server fn an assign action maps to for a given slot. */
+export function resolveAssignAction(slot: {
+	status: "open" | "claimed" | "confirmed";
+	isSpeakerRole: boolean;
+}): { kind: "claim" | "reassign"; speakerTba: boolean } {
+	if (slot.status === "open") {
+		return { kind: "claim", speakerTba: slot.isSpeakerRole };
+	}
+	return { kind: "reassign", speakerTba: false };
+}
+
+export type PickerRow = {
+	id: string;
+	name: string;
+	unavailable: boolean;
+	currentRole: string | null;
+};
+
+/** Build member-picker rows. Members flagged unavailable-for-this-meeting or
+ *  already holding a role this meeting sort after unflagged members (then by
+ *  name); all remain selectable. */
+export function buildPickerRows(
+	roster: { id: string; name: string }[],
+	roleByMemberId: Record<string, string>,
+	unavailableIds: string[],
+): PickerRow[] {
+	const unavailable = new Set(unavailableIds);
+	return roster
+		.map((m) => ({
+			id: m.id,
+			name: m.name,
+			unavailable: unavailable.has(m.id),
+			currentRole: roleByMemberId[m.id] ?? null,
+		}))
+		.sort((a, b) => {
+			const aFlag = a.unavailable || a.currentRole !== null;
+			const bFlag = b.unavailable || b.currentRole !== null;
+			if (aFlag !== bFlag) return aFlag ? 1 : -1;
+			return a.name.localeCompare(b.name);
+		});
+}

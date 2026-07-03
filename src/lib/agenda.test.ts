@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+	buildPickerRows,
 	buildRoleCounts,
 	buildShortCodes,
 	generateSlotRows,
+	resolveAssignAction,
 	resolveEvaluatorLinks,
 	roleAbbrev,
 	slotLabel,
@@ -212,5 +214,47 @@ describe("buildShortCodes", () => {
 	});
 	it("returns an empty Map for no rows", () => {
 		expect(buildShortCodes([]).size).toBe(0);
+	});
+});
+
+describe("resolveAssignAction", () => {
+	it("open slot claims; speaker flags TBA", () => {
+		expect(
+			resolveAssignAction({ status: "open", isSpeakerRole: false }),
+		).toEqual({ kind: "claim", speakerTba: false });
+		expect(
+			resolveAssignAction({ status: "open", isSpeakerRole: true }),
+		).toEqual({ kind: "claim", speakerTba: true });
+	});
+
+	it("filled slot reassigns", () => {
+		expect(
+			resolveAssignAction({ status: "claimed", isSpeakerRole: true }),
+		).toEqual({ kind: "reassign", speakerTba: false });
+		expect(
+			resolveAssignAction({ status: "confirmed", isSpeakerRole: false }),
+		).toEqual({ kind: "reassign", speakerTba: false });
+	});
+});
+
+describe("buildPickerRows", () => {
+	const roster = [
+		{ id: "c", name: "Cara" },
+		{ id: "a", name: "Ana" },
+		{ id: "b", name: "Ben" },
+	];
+
+	it("flags unavailable and already-assigned members, sorting them last", () => {
+		const rows = buildPickerRows(roster, { b: "Timer" }, ["a"]);
+		// Clean member (Cara) first, then flagged sorted by name (Ana, Ben).
+		expect(rows.map((r) => r.id)).toEqual(["c", "a", "b"]);
+		expect(rows.find((r) => r.id === "a")).toMatchObject({
+			unavailable: true,
+			currentRole: null,
+		});
+		expect(rows.find((r) => r.id === "b")).toMatchObject({
+			unavailable: false,
+			currentRole: "Timer",
+		});
 	});
 });

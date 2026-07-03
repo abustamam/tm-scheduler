@@ -20,6 +20,7 @@ import {
 	activityLog,
 	clubMemberships,
 	members,
+	roleDefinitions,
 	roleSlots,
 	speakerDetails,
 } from "#/db/schema";
@@ -365,15 +366,24 @@ describe.skipIf(!hasTestDb)("claim + guards integration", () => {
 			});
 		}
 
-		/** Mirror of reassignSlot without requireUser/requireClubRole; only requireMemberInClub. */
+		/** Mirror of reassignSlot without requireUser/requireClubRole; only requireMemberInClub.
+		 *  Mirrors the real fn's speaker branch: if the slot is a speaker role, resets
+		 *  speakerDetails to TBA after reassignment. */
 		async function reassignSlotPublic(
 			slotId: string,
 			newMemberId: string,
 			actorMemberId: string,
 		) {
 			const [slot] = await testDb
-				.select({ id: roleSlots.id })
+				.select({
+					id: roleSlots.id,
+					isSpeakerRole: roleDefinitions.isSpeakerRole,
+				})
 				.from(roleSlots)
+				.innerJoin(
+					roleDefinitions,
+					eq(roleDefinitions.id, roleSlots.roleDefinitionId),
+				)
 				.where(eq(roleSlots.id, slotId))
 				.limit(1);
 
@@ -396,8 +406,27 @@ describe.skipIf(!hasTestDb)("claim + guards integration", () => {
 			return testDb.transaction(async (tx) => {
 				await tx
 					.update(roleSlots)
-					.set({ assignedMemberId: newMemberId })
+					.set({ assignedMemberId: newMemberId, status: "claimed" })
 					.where(eq(roleSlots.id, slotId));
+
+				// Mirror reassignSlot: previous speaker's speech no longer applies — reset to TBA.
+				if (slot.isSpeakerRole) {
+					const details = {
+						speechTitle: "TBA",
+						pathwayPath: null,
+						projectName: null,
+						projectLevel: null,
+						minMinutes: null,
+						maxMinutes: null,
+					};
+					await tx
+						.insert(speakerDetails)
+						.values({ slotId: slot.id, ...details })
+						.onConflictDoUpdate({
+							target: speakerDetails.slotId,
+							set: details,
+						});
+				}
 
 				await tx.insert(activityLog).values({
 					clubId: actor.clubId,
@@ -443,6 +472,33 @@ describe.skipIf(!hasTestDb)("claim + guards integration", () => {
 					),
 				);
 			expect(log.length).toBeGreaterThan(0);
+		});
+
+		it("claiming a speaker slot with no title stores TBA", async () => {
+			// Mirror of claimSlot's speaker-details normalization (slots-logic.ts can't be
+			// imported here — it loads #/db). No title provided → stored title must be "TBA".
+			const input: { speechTitle?: string } = {}; // no title provided
+			const trimmed = input.speechTitle?.trim();
+			const details = {
+				speechTitle: trimmed && trimmed.length > 0 ? trimmed : "TBA",
+				pathwayPath: null,
+				projectName: null,
+				projectLevel: null,
+				minMinutes: null,
+				maxMinutes: null,
+			};
+			await testDb
+				.insert(speakerDetails)
+				.values({ slotId: seed.slotId, ...details })
+				.onConflictDoUpdate({ target: speakerDetails.slotId, set: details });
+
+			const [row] = await testDb
+				.select({ speechTitle: speakerDetails.speechTitle })
+				.from(speakerDetails)
+				.where(eq(speakerDetails.slotId, seed.slotId))
+				.limit(1);
+
+			expect(row?.speechTitle).toBe("TBA");
 		});
 
 		it("claimSlot trust guard rejects unknown memberId", async () => {
@@ -520,6 +576,12 @@ describe.skipIf(!hasTestDb)("claim + guards integration", () => {
 			// Claim the slot first
 			await claimSlotTx(seed.slotId, seed.memberId);
 
+			// Bump to "confirmed" so the assertion below proves a real status reset.
+			await testDb
+				.update(roleSlots)
+				.set({ status: "confirmed" })
+				.where(eq(roleSlots.id, seed.slotId));
+
 			// Insert a second roster member
 			const [other] = await testDb
 				.insert(members)
@@ -536,12 +598,142 @@ describe.skipIf(!hasTestDb)("claim + guards integration", () => {
 			expect(result).toEqual({ ok: true });
 
 			const [row] = await testDb
-				.select({ assignedMemberId: roleSlots.assignedMemberId })
+				.select({
+					assignedMemberId: roleSlots.assignedMemberId,
+					status: roleSlots.status,
+				})
 				.from(roleSlots)
 				.where(eq(roleSlots.id, seed.slotId))
 				.limit(1);
 
 			expect(row?.assignedMemberId).toBe(other.id);
+			// Status must be reset from "confirmed" back to "claimed" — new holder is unconfirmed.
+			expect(row?.status).toBe("claimed");
+		});
+
+		it("reassignSlot resets speaker details to TBA when reassigning a speaker slot", async () => {
+			// Create a speaker role definition in the seed club.
+			const [speakerRoleDef] = await testDb
+				.insert(roleDefinitions)
+				.values({
+					clubId: seed.clubId,
+					name: "Speaker",
+					category: "speaker",
+					isSpeakerRole: true,
+				})
+				.returning({ id: roleDefinitions.id });
+			if (!speakerRoleDef)
+				throw new Error("Failed to insert speaker role definition");
+
+			// Create a claimed slot for that role in the existing meeting.
+			const [speakerSlot] = await testDb
+				.insert(roleSlots)
+				.values({
+					meetingId: seed.meetingId,
+					roleDefinitionId: speakerRoleDef.id,
+					status: "claimed",
+					assignedMemberId: seed.memberId,
+				})
+				.returning({ id: roleSlots.id });
+			if (!speakerSlot) throw new Error("Failed to insert speaker slot");
+
+			// Seed real speech details before reassignment — proves they get overwritten.
+			const initial = {
+				speechTitle: "Old Speech",
+				pathwayPath: null,
+				projectName: null,
+				projectLevel: null,
+				minMinutes: null,
+				maxMinutes: null,
+			};
+			await testDb
+				.insert(speakerDetails)
+				.values({ slotId: speakerSlot.id, ...initial })
+				.onConflictDoUpdate({ target: speakerDetails.slotId, set: initial });
+
+			// Insert a second roster member to receive the reassignment.
+			const [other] = await testDb
+				.insert(members)
+				.values({ clubId: seed.clubId, name: "New Speaker" })
+				.returning({ id: members.id });
+			if (!other) throw new Error("Failed to insert other member");
+
+			// Reassign — mirrors the real reassignSlot speaker-details TBA reset.
+			const result = await reassignSlotPublic(
+				speakerSlot.id,
+				other.id,
+				seed.memberId,
+			);
+			expect(result).toEqual({ ok: true });
+
+			// Previous real speech title must be overwritten with "TBA".
+			const [row] = await testDb
+				.select({ speechTitle: speakerDetails.speechTitle })
+				.from(speakerDetails)
+				.where(eq(speakerDetails.slotId, speakerSlot.id))
+				.limit(1);
+			expect(row?.speechTitle).toBe("TBA");
+		});
+
+		it("updateSpeakerDetails upserts details and normalizes blank title to TBA", async () => {
+			// First set a real speech, then "clear" it with a blank title.
+			const full = {
+				speechTitle: "My Speech",
+				pathwayPath: null,
+				projectName: null,
+				projectLevel: null,
+				minMinutes: 5,
+				maxMinutes: null,
+			};
+			await testDb
+				.insert(speakerDetails)
+				.values({ slotId: seed.slotId, ...full })
+				.onConflictDoUpdate({ target: speakerDetails.slotId, set: full });
+
+			// Mirror of normalizeSpeakerDetails for a blank-title input.
+			const input: { speechTitle?: string } = { speechTitle: "" };
+			const trimmed = input.speechTitle?.trim();
+			const cleared = {
+				speechTitle: trimmed && trimmed.length > 0 ? trimmed : "TBA",
+				pathwayPath: null,
+				projectName: null,
+				projectLevel: null,
+				minMinutes: null,
+				maxMinutes: null,
+			};
+			await testDb
+				.insert(speakerDetails)
+				.values({ slotId: seed.slotId, ...cleared })
+				.onConflictDoUpdate({ target: speakerDetails.slotId, set: cleared });
+
+			const [row] = await testDb
+				.select({
+					speechTitle: speakerDetails.speechTitle,
+					minMinutes: speakerDetails.minMinutes,
+				})
+				.from(speakerDetails)
+				.where(eq(speakerDetails.slotId, seed.slotId))
+				.limit(1);
+			expect(row?.speechTitle).toBe("TBA");
+			expect(row?.minMinutes).toBeNull();
+		});
+
+		it("roster query returns only active members, ordered by name", async () => {
+			// Mark the seeded member inactive; it should be excluded from the roster.
+			await testDb
+				.update(members)
+				.set({ status: "inactive" })
+				.where(eq(members.id, seed.memberId));
+
+			const roster = await testDb
+				.select({ id: members.id, status: members.status })
+				.from(members)
+				.where(
+					and(eq(members.clubId, seed.clubId), eq(members.status, "active")),
+				);
+
+			expect(roster.every((m) => m.status === "active")).toBe(true);
+			expect(roster.some((m) => m.id === seed.memberId)).toBe(false);
 		});
 	});
 });

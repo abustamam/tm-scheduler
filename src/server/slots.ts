@@ -14,10 +14,11 @@ import {
 	applyAddSpeakerSlot,
 	applyMoveSpeakerSlot,
 	applyRemoveSpeakerSlot,
+	normalizeSpeakerDetails,
 } from "./slots-logic";
 
 const speakerDetailsSchema = z.object({
-	speechTitle: z.string().trim().min(1, "A speech title is required."),
+	speechTitle: z.string().trim().optional(),
 	pathwayPath: z.string().trim().optional(),
 	projectName: z.string().trim().optional(),
 	projectLevel: z.string().trim().optional(),
@@ -32,7 +33,8 @@ const claimSchema = z.object({
 	speakerDetails: speakerDetailsSchema.optional(),
 });
 
-/** Claim an open slot for the given member. Speaker roles require speaker details.
+/** Claim an open slot for the given member. Speaker details are optional; a
+ *  blank/missing speech title defaults to "TBA".
  *  PUBLIC — no session required; trust guard via requireMemberInClub. */
 export const claimSlot = createServerFn({ method: "POST" })
 	.validator((input: unknown) => claimSchema.parse(input))
@@ -59,10 +61,6 @@ export const claimSlot = createServerFn({ method: "POST" })
 		// Trust guard: memberId must be a roster member of this club.
 		await requireMemberInClub(data.memberId, slot.clubId);
 
-		if (slot.isSpeakerRole && !data.speakerDetails) {
-			throw new Error("Speaker roles require speech details before claiming.");
-		}
-
 		return db.transaction(async (tx) => {
 			// Conditional UPDATE is the race guard: only one claim can flip 'open'.
 			const updated = await tx
@@ -79,13 +77,14 @@ export const claimSlot = createServerFn({ method: "POST" })
 				throw new Error("Sorry — this role was just claimed by someone else.");
 			}
 
-			if (slot.isSpeakerRole && data.speakerDetails) {
+			if (slot.isSpeakerRole) {
+				const details = normalizeSpeakerDetails(data.speakerDetails);
 				await tx
 					.insert(speakerDetails)
-					.values({ slotId: data.slotId, ...data.speakerDetails })
+					.values({ slotId: data.slotId, ...details })
 					.onConflictDoUpdate({
 						target: speakerDetails.slotId,
-						set: data.speakerDetails,
+						set: details,
 					});
 			}
 
@@ -289,9 +288,14 @@ export const reassignSlot = createServerFn({ method: "POST" })
 				id: roleSlots.id,
 				status: roleSlots.status,
 				assignedMemberId: roleSlots.assignedMemberId,
+				isSpeakerRole: roleDefinitions.isSpeakerRole,
 				clubId: meetings.clubId,
 			})
 			.from(roleSlots)
+			.innerJoin(
+				roleDefinitions,
+				eq(roleDefinitions.id, roleSlots.roleDefinitionId),
+			)
 			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
 			.where(eq(roleSlots.id, data.slotId))
 			.limit(1);
@@ -305,10 +309,23 @@ export const reassignSlot = createServerFn({ method: "POST" })
 		await requireMemberInClub(data.memberId, slot.clubId);
 
 		return db.transaction(async (tx) => {
+			// New holder hasn't been confirmed → back to "claimed".
 			await tx
 				.update(roleSlots)
-				.set({ assignedMemberId: data.memberId })
+				.set({ assignedMemberId: data.memberId, status: "claimed" })
 				.where(eq(roleSlots.id, data.slotId));
+
+			// The previous speaker's speech no longer applies — reset to TBA.
+			if (slot.isSpeakerRole) {
+				const details = normalizeSpeakerDetails(undefined);
+				await tx
+					.insert(speakerDetails)
+					.values({ slotId: data.slotId, ...details })
+					.onConflictDoUpdate({
+						target: speakerDetails.slotId,
+						set: details,
+					});
+			}
 
 			await logActivity(tx, {
 				clubId: slot.clubId,
@@ -324,6 +341,49 @@ export const reassignSlot = createServerFn({ method: "POST" })
 
 			return { ok: true as const };
 		});
+	});
+
+const updateSpeakerDetailsSchema = z.object({
+	slotId: z.string().uuid(),
+	actorMemberId: z.string().uuid(),
+	speakerDetails: speakerDetailsSchema,
+});
+
+/** Edit a speaker slot's speech details (trust-based). Blank title → "TBA".
+ *  PUBLIC — no session required; trust guard via requireMemberInClub. */
+export const updateSpeakerDetails = createServerFn({ method: "POST" })
+	.validator((input: unknown) => updateSpeakerDetailsSchema.parse(input))
+	.handler(async ({ data }) => {
+		const [slot] = await db
+			.select({
+				id: roleSlots.id,
+				isSpeakerRole: roleDefinitions.isSpeakerRole,
+				clubId: meetings.clubId,
+			})
+			.from(roleSlots)
+			.innerJoin(
+				roleDefinitions,
+				eq(roleDefinitions.id, roleSlots.roleDefinitionId),
+			)
+			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+			.where(eq(roleSlots.id, data.slotId))
+			.limit(1);
+
+		if (!slot) {
+			throw new Error("Role not found.");
+		}
+		if (!slot.isSpeakerRole) {
+			throw new Error("Only speaker roles have speech details.");
+		}
+		await requireMemberInClub(data.actorMemberId, slot.clubId);
+
+		const details = normalizeSpeakerDetails(data.speakerDetails);
+		await db
+			.insert(speakerDetails)
+			.values({ slotId: data.slotId, ...details })
+			.onConflictDoUpdate({ target: speakerDetails.slotId, set: details });
+
+		return { ok: true as const };
 	});
 
 const speakerSlotSchema = z.object({

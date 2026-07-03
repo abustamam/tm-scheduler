@@ -7,6 +7,7 @@ import {
 import { CalendarDays, Loader2, MapPin, Printer, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { EditSpeechSheet } from "#/components/club/edit-speech-sheet";
 import { MeetingNavStrip } from "#/components/club/meeting-nav-strip";
 import { ShareLinkButton } from "#/components/share-link-button";
 import { Badge } from "#/components/ui/badge";
@@ -113,6 +114,7 @@ function MeetingView() {
 
 	const [claimSlotState, setClaimSlotState] = useState<Slot | null>(null);
 	const [takeoverSlot, setTakeoverSlot] = useState<Slot | null>(null);
+	const [editSpeechSlot, setEditSpeechSlot] = useState<Slot | null>(null);
 	const [busySlotId, setBusySlotId] = useState<string | null>(null);
 	const [availBusy, setAvailBusy] = useState(false);
 
@@ -344,18 +346,29 @@ function MeetingView() {
 														Claim
 													</Button>
 												) : isMine ? (
-													<Button
-														size="sm"
-														variant="outline"
-														onClick={() => doRelease(slot)}
-														disabled={busy}
-													>
-														{busy ? (
-															<Loader2 className="size-4 animate-spin" />
-														) : (
-															"Release"
-														)}
-													</Button>
+													<>
+														<Button
+															size="sm"
+															variant="outline"
+															onClick={() => doRelease(slot)}
+															disabled={busy}
+														>
+															{busy ? (
+																<Loader2 className="size-4 animate-spin" />
+															) : (
+																"Release"
+															)}
+														</Button>
+														{slot.isSpeakerRole ? (
+															<button
+																type="button"
+																onClick={() => setEditSpeechSlot(slot)}
+																className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+															>
+																Edit speech
+															</button>
+														) : null}
+													</>
 												) : (
 													<>
 														<Badge variant="secondary">Filled</Badge>
@@ -386,6 +399,31 @@ function MeetingView() {
 				}}
 				onClaimed={async () => {
 					setClaimSlotState(null);
+					await router.invalidate();
+				}}
+			/>
+
+			<EditSpeechSheet
+				slot={
+					editSpeechSlot
+						? {
+								id: editSpeechSlot.id,
+								label: slotLabel(editSpeechSlot, roleCounts),
+								speechTitle: editSpeechSlot.speechTitle,
+								pathwayPath: editSpeechSlot.pathwayPath,
+								projectName: editSpeechSlot.projectName,
+								projectLevel: editSpeechSlot.projectLevel,
+								minMinutes: editSpeechSlot.minMinutes,
+								maxMinutes: editSpeechSlot.maxMinutes,
+							}
+						: null
+				}
+				actorMemberId={myId}
+				onOpenChange={(open) => {
+					if (!open) setEditSpeechSlot(null);
+				}}
+				onSaved={async () => {
+					setEditSpeechSlot(null);
 					await router.invalidate();
 				}}
 			/>
@@ -476,10 +514,6 @@ function ClaimSheet({
 		}
 		const form = new FormData(e.currentTarget);
 		const speechTitle = String(form.get("speechTitle") ?? "").trim();
-		if (!speechTitle) {
-			toast.error("A speech title is required.");
-			return;
-		}
 		const minRaw = form.get("minMinutes");
 		const maxRaw = form.get("maxMinutes");
 		setSubmitting(true);
@@ -490,7 +524,7 @@ function ClaimSheet({
 					memberId,
 					actorMemberId: memberId,
 					speakerDetails: {
-						speechTitle,
+						speechTitle: speechTitle || undefined,
 						pathwayPath:
 							String(form.get("pathwayPath") ?? "").trim() || undefined,
 						projectName:
@@ -528,7 +562,12 @@ function ClaimSheet({
 					<form onSubmit={claimSpeaker} className="space-y-4 px-4">
 						<div className="space-y-2">
 							<Label htmlFor="speechTitle">Speech title</Label>
-							<Input id="speechTitle" name="speechTitle" required autoFocus />
+							<Input
+								id="speechTitle"
+								name="speechTitle"
+								placeholder="TBA if not decided yet"
+								autoFocus
+							/>
 						</div>
 						<div className="space-y-2">
 							<Label htmlFor="pathwayPath">Pathways path</Label>

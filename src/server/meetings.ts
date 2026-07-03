@@ -156,6 +156,18 @@ async function loadMeetingDetail(
 		.where(eq(memberAvailability.meetingId, meetingId))
 		.orderBy(asc(members.name));
 
+	// Roster for the VPE assign picker — active members only. Kept out of the
+	// public/unauthenticated payload: only populated when the caller can manage.
+	const roster = canManage
+		? await db
+				.select({ id: members.id, name: members.name })
+				.from(members)
+				.where(
+					and(eq(members.clubId, meeting.clubId), eq(members.status, "active")),
+				)
+				.orderBy(asc(members.name))
+		: [];
+
 	return {
 		meeting,
 		slots,
@@ -170,6 +182,7 @@ async function loadMeetingDetail(
 		officers,
 		unavailableMembers,
 		unavailableMemberIds: unavailableMembers.map((m) => m.id),
+		roster,
 	};
 }
 
