@@ -12,6 +12,7 @@ import {
 	Grid3x3,
 	LayoutGrid,
 	List,
+	ListChecks,
 	LogOut,
 	ScrollText,
 	Settings,
@@ -61,6 +62,7 @@ function crumbFor(pathname: string): string {
 	if (pathname.startsWith("/members")) return "Roster · Member profile";
 	if (pathname.startsWith("/meetings")) return "Manage · Meeting";
 	if (pathname === "/me") return "Me · My roles";
+	if (pathname.startsWith("/admin/roles")) return "Manage · Meeting roles";
 	if (pathname.startsWith("/admin/club-settings"))
 		return "Manage · Club settings";
 	if (pathname.startsWith("/admin")) return "Manage · Admin";
@@ -107,11 +109,18 @@ function WorkspaceLayout() {
 					<NavItem to="/agenda" icon={CalendarDays} label="Agenda & roles" />
 					<NavItem to="/activity" icon={ScrollText} label="Activity" />
 					{isOfficer ? (
-						<NavItem
-							to="/admin/club-settings"
-							icon={Settings}
-							label="Club settings"
-						/>
+						<>
+							<NavItem
+								to="/admin/roles"
+								icon={ListChecks}
+								label="Meeting roles"
+							/>
+							<NavItem
+								to="/admin/club-settings"
+								icon={Settings}
+								label="Club settings"
+							/>
+						</>
 					) : null}
 				</NavGroup>
 
