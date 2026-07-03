@@ -76,7 +76,7 @@ export const Route = createFileRoute("/club/$clubId/meeting/$meetingId")({
 function MeetingNotFound() {
 	const { clubId } = Route.useParams();
 	return (
-		<div className="flex min-h-svh flex-col items-center justify-center gap-4 p-6 text-center">
+		<div className="flex flex-1 flex-col items-center justify-center gap-4 p-6 text-center">
 			<p className="font-semibold text-lg">Meeting not found</p>
 			<p className="text-muted-foreground text-sm">
 				This meeting doesn't exist for this club, or the link is out of date.
@@ -206,7 +206,7 @@ function MeetingView() {
 	return (
 		<div className="space-y-5 p-4 pb-8">
 			<header className="space-y-2 pt-2">
-				<h1 className="text-2xl font-bold tracking-tight">
+				<h1 className="font-display text-2xl font-semibold tracking-tight">
 					{meeting.theme ?? "Meeting"}
 				</h1>
 				<div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
