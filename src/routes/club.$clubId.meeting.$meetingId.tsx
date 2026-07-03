@@ -33,7 +33,7 @@ import {
 	SheetTitle,
 } from "#/components/ui/sheet";
 import { buildRoleCounts, slotLabel } from "#/lib/agenda";
-import { formatMeetingDate, formatMeetingTime } from "#/lib/format";
+import { formatMeetingDate, formatMeetingTimeRange } from "#/lib/format";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import { buildMeetingNavItems } from "#/lib/meeting-nav";
 import { useCurrentMember } from "#/lib/member-identity";
@@ -224,7 +224,11 @@ function MeetingView() {
 					<span className="flex items-center gap-1.5">
 						<CalendarDays className="size-4" aria-hidden />
 						{formatMeetingDate(meeting.scheduledAt, timezone)} ·{" "}
-						{formatMeetingTime(meeting.scheduledAt, timezone)}
+						{formatMeetingTimeRange(
+							meeting.scheduledAt,
+							meeting.lengthMinutes,
+							timezone,
+						)}
 					</span>
 					{meeting.location ? (
 						<span className="flex items-center gap-1.5">

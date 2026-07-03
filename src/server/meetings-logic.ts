@@ -1,17 +1,71 @@
 // Meeting-management DB logic, split out from the createServerFn wrappers in
 // `meetings.ts` (which the server-modules guard test forbids from exporting
 // db-touching functions). Directly integration-testable by mocking `#/db`.
-import { eq } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import { db } from "#/db";
-import { clubs, meetings } from "#/db/schema";
+import { clubs, meetings, roleDefinitions, roleSlots } from "#/db/schema";
+import { generateSlotRows } from "#/lib/agenda";
 import { zonedWallTimeToUtc } from "#/lib/datetime";
 import { logActivity } from "./activity";
+
+export interface MeetingCreateInput {
+	clubId: string;
+	/** HTML datetime-local value, interpreted in the club timezone. */
+	scheduledAt: string;
+	theme?: string | null;
+	location?: string | null;
+	wordOfTheDay?: string | null;
+	notes?: string | null;
+}
+
+/**
+ * Create a meeting and auto-generate its slots from the club's role template.
+ * The meeting's length is copied from the club's `defaultMeetingMinutes` at
+ * insert (copy-at-insert) so a later club-default change never moves this
+ * meeting's end time.
+ */
+export async function applyCreateMeeting(input: MeetingCreateInput) {
+	const club = await db.query.clubs.findFirst({
+		where: eq(clubs.id, input.clubId),
+	});
+	if (!club) throw new Error("Club not found.");
+	const scheduledAt = zonedWallTimeToUtc(input.scheduledAt, club.timezone);
+
+	const defs = await db
+		.select()
+		.from(roleDefinitions)
+		.where(eq(roleDefinitions.clubId, input.clubId))
+		.orderBy(asc(roleDefinitions.sortOrder));
+
+	return db.transaction(async (tx) => {
+		const [meeting] = await tx
+			.insert(meetings)
+			.values({
+				clubId: input.clubId,
+				scheduledAt,
+				lengthMinutes: club.defaultMeetingMinutes,
+				location: input.location?.trim() || null,
+				theme: input.theme?.trim() || null,
+				wordOfTheDay: input.wordOfTheDay?.trim() || null,
+				notes: input.notes?.trim() || null,
+			})
+			.returning({ id: meetings.id });
+
+		const slotRows = generateSlotRows(defs, meeting.id);
+		if (slotRows.length > 0) {
+			await tx.insert(roleSlots).values(slotRows);
+		}
+		return { meetingId: meeting.id };
+	});
+}
 
 export interface MeetingUpdateInput {
 	meetingId: string;
 	actorMemberId: string | null;
 	/** HTML datetime-local value, interpreted in the club timezone. */
 	scheduledAt: string;
+	/** Meeting length in minutes. Omit to leave the current length unchanged. */
+	lengthMinutes?: number | null;
 	theme?: string | null;
 	location?: string | null;
 	wordOfTheDay?: string | null;
@@ -31,6 +85,9 @@ export async function applyMeetingUpdate(input: MeetingUpdateInput) {
 
 	const next = {
 		scheduledAt: zonedWallTimeToUtc(input.scheduledAt, club.timezone),
+		// Keep the current length when the caller omits it (null/undefined).
+		lengthMinutes:
+			input.lengthMinutes != null ? input.lengthMinutes : meeting.lengthMinutes,
 		theme: input.theme?.trim() || null,
 		location: input.location?.trim() || null,
 		wordOfTheDay: input.wordOfTheDay?.trim() || null,
@@ -52,6 +109,7 @@ export async function applyMeetingUpdate(input: MeetingUpdateInput) {
 					location: meeting.location,
 					notes: meeting.notes,
 					scheduledAt: meeting.scheduledAt,
+					lengthMinutes: meeting.lengthMinutes,
 				},
 				after: next,
 			},

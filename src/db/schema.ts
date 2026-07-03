@@ -85,6 +85,13 @@ export const clubs = pgTable("clubs", {
 	district: text("district"),
 	mission: text("mission"),
 	meetingSchedule: text("meeting_schedule"),
+	// Default meeting length in minutes. New meetings inherit this at insert
+	// (copied onto the meeting row) so a later change here never silently moves
+	// the end time of meetings already scheduled. Non-null with a sensible
+	// default (90) — most clubs run 60- or 90-minute meetings.
+	defaultMeetingMinutes: integer("default_meeting_minutes")
+		.notNull()
+		.default(90),
 	createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -152,6 +159,11 @@ export const meetings = pgTable(
 			.notNull()
 			.references(() => clubs.id, { onDelete: "cascade" }),
 		scheduledAt: timestamp("scheduled_at", { withTimezone: true }).notNull(),
+		// Meeting length in minutes. Copied from the club's defaultMeetingMinutes
+		// at insert (copy-at-insert) so historical end times stay stable when the
+		// club default changes; editable per-meeting via the edit dialog. Non-null
+		// default (90) backfills meetings created before this column existed.
+		lengthMinutes: integer("length_minutes").notNull().default(90),
 		location: text("location"),
 		theme: text("theme"),
 		wordOfTheDay: text("word_of_the_day"),

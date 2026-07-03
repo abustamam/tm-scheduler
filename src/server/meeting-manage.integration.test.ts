@@ -8,7 +8,13 @@
  */
 import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { activityLog, roleDefinitions, roleSlots } from "#/db/schema";
+import {
+	activityLog,
+	clubs,
+	meetings,
+	roleDefinitions,
+	roleSlots,
+} from "#/db/schema";
 import {
 	cleanup,
 	hasTestDb,
@@ -21,7 +27,20 @@ vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
 const { applyAddSpeakerSlot, applyMoveSpeakerSlot, applyRemoveSpeakerSlot } =
 	await import("./slots-logic");
-const { applyMeetingUpdate } = await import("./meetings-logic");
+const { applyMeetingUpdate, applyCreateMeeting } = await import(
+	"./meetings-logic"
+);
+
+async function meetingRow(meetingId: string) {
+	const [m] = await testDb
+		.select({
+			id: meetings.id,
+			lengthMinutes: meetings.lengthMinutes,
+		})
+		.from(meetings)
+		.where(eq(meetings.id, meetingId));
+	return m;
+}
 
 /** Add a speaker + evaluator role def to the seeded club; return their ids. */
 async function addSpeakerAndEvaluatorRoles(clubId: string) {
@@ -104,6 +123,51 @@ describe.skipIf(!hasTestDb)("meeting management", () => {
 			.from(activityLog)
 			.where(eq(activityLog.action, "meeting_edit"));
 		expect(m).toBeTruthy();
+	});
+
+	it("createMeeting copies the club default length onto the meeting", async () => {
+		// Set a non-default club length to prove it's copied (not hardcoded 90).
+		await testDb
+			.update(clubs)
+			.set({ defaultMeetingMinutes: 60 })
+			.where(eq(clubs.id, club.clubId));
+
+		const { meetingId } = await applyCreateMeeting({
+			clubId: club.clubId,
+			scheduledAt: "2026-09-01T18:30",
+		});
+
+		expect((await meetingRow(meetingId)).lengthMinutes).toBe(60);
+
+		// Changing the club default later must NOT move the existing meeting.
+		await testDb
+			.update(clubs)
+			.set({ defaultMeetingMinutes: 120 })
+			.where(eq(clubs.id, club.clubId));
+		expect((await meetingRow(meetingId)).lengthMinutes).toBe(60);
+	});
+
+	it("updateMeeting persists a per-meeting length override", async () => {
+		await applyMeetingUpdate({
+			meetingId: club.meetingId,
+			actorMemberId: club.memberId,
+			scheduledAt: "2026-08-01T18:30",
+			lengthMinutes: 75,
+		});
+		expect((await meetingRow(club.meetingId)).lengthMinutes).toBe(75);
+	});
+
+	it("updateMeeting leaves length unchanged when omitted", async () => {
+		await testDb
+			.update(meetings)
+			.set({ lengthMinutes: 45 })
+			.where(eq(meetings.id, club.meetingId));
+		await applyMeetingUpdate({
+			meetingId: club.meetingId,
+			actorMemberId: club.memberId,
+			scheduledAt: "2026-08-01T18:30",
+		});
+		expect((await meetingRow(club.meetingId)).lengthMinutes).toBe(45);
 	});
 
 	it("addSpeakerSlot adds a paired speaker + evaluator", async () => {
