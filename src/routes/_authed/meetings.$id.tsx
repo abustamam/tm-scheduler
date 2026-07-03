@@ -35,7 +35,7 @@ import {
 } from "#/components/ui/sheet";
 import { buildRoleCounts, slotLabel } from "#/lib/agenda";
 import { utcToZonedWallTime } from "#/lib/datetime";
-import { formatMeetingDate, formatMeetingTime } from "#/lib/format";
+import { formatMeetingDate, formatMeetingTimeRange } from "#/lib/format";
 import { getMeeting, updateMeeting } from "#/server/meetings";
 import {
 	addSpeakerSlot,
@@ -242,7 +242,11 @@ function MeetingDetail() {
 					<span className="flex items-center gap-1.5">
 						<CalendarDays className="size-4" aria-hidden />
 						{formatMeetingDate(meeting.scheduledAt, timezone)} ·{" "}
-						{formatMeetingTime(meeting.scheduledAt, timezone)}
+						{formatMeetingTimeRange(
+							meeting.scheduledAt,
+							meeting.lengthMinutes,
+							timezone,
+						)}
 					</span>
 					{meeting.location ? (
 						<span className="flex items-center gap-1.5">
@@ -610,11 +614,13 @@ function EditMeetingDialog({
 		}
 		setSubmitting(true);
 		try {
+			const lengthRaw = String(form.get("lengthMinutes") ?? "").trim();
 			await updateMeeting({
 				data: {
 					meetingId: meeting.id,
 					actorMemberId,
 					scheduledAt,
+					lengthMinutes: lengthRaw ? Number(lengthRaw) : undefined,
 					theme: String(form.get("theme") ?? "").trim() || undefined,
 					location: String(form.get("location") ?? "").trim() || undefined,
 					wordOfTheDay:
@@ -649,6 +655,17 @@ function EditMeetingDialog({
 								new Date(meeting.scheduledAt),
 								timezone,
 							)}
+						/>
+					</div>
+					<div className="space-y-2">
+						<Label htmlFor="lengthMinutes">Length (minutes)</Label>
+						<Input
+							id="lengthMinutes"
+							name="lengthMinutes"
+							type="number"
+							min={1}
+							step={1}
+							defaultValue={meeting.lengthMinutes}
 						/>
 					</div>
 					<div className="space-y-2">

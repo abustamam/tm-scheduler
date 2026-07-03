@@ -57,6 +57,13 @@
       "when": 1783031428240,
       "tag": "0007_new_vapor",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1783046342908,
+      "tag": "0008_dry_owl",
+      "breakpoints": true
     }
   ]
 }

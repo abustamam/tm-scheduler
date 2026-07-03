@@ -12,8 +12,7 @@ import {
 	roleSlots,
 	speakerDetails,
 } from "#/db/schema";
-import { generateSlotRows, resolveEvaluatorLinks } from "#/lib/agenda";
-import { zonedWallTimeToUtc } from "#/lib/datetime";
+import { resolveEvaluatorLinks } from "#/lib/agenda";
 import { officerRank } from "#/lib/officers";
 import {
 	getMembership,
@@ -22,7 +21,7 @@ import {
 	requireMembership,
 	requireUser,
 } from "./guards";
-import { applyMeetingUpdate } from "./meetings-logic";
+import { applyCreateMeeting, applyMeetingUpdate } from "./meetings-logic";
 
 const uuid = z.string().uuid();
 
@@ -339,44 +338,14 @@ export const createMeeting = createServerFn({ method: "POST" })
 	.handler(async ({ data }) => {
 		const currentUser = await requireUser();
 		await requireClubRole(currentUser.id, data.clubId, ["admin", "vpe"]);
-
-		const club = await db.query.clubs.findFirst({
-			where: eq(clubs.id, data.clubId),
-		});
-		if (!club) throw new Error("Club not found.");
-		const scheduledAt = zonedWallTimeToUtc(data.scheduledAt, club.timezone);
-
-		const defs = await db
-			.select()
-			.from(roleDefinitions)
-			.where(eq(roleDefinitions.clubId, data.clubId))
-			.orderBy(asc(roleDefinitions.sortOrder));
-
-		return db.transaction(async (tx) => {
-			const [meeting] = await tx
-				.insert(meetings)
-				.values({
-					clubId: data.clubId,
-					scheduledAt,
-					location: data.location || null,
-					theme: data.theme || null,
-					wordOfTheDay: data.wordOfTheDay || null,
-					notes: data.notes || null,
-				})
-				.returning({ id: meetings.id });
-
-			const slotRows = generateSlotRows(defs, meeting.id);
-			if (slotRows.length > 0) {
-				await tx.insert(roleSlots).values(slotRows);
-			}
-			return { meetingId: meeting.id };
-		});
+		return applyCreateMeeting(data);
 	});
 
 const updateMeetingSchema = z.object({
 	meetingId: uuid,
 	actorMemberId: uuid.nullable().optional(),
 	scheduledAt: z.string().min(1),
+	lengthMinutes: z.number().int().positive().optional(),
 	location: z.string().trim().optional(),
 	theme: z.string().trim().optional(),
 	wordOfTheDay: z.string().trim().optional(),
