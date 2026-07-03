@@ -88,7 +88,9 @@ function PickNameScreen({
 	return (
 		<div className="flex min-h-svh flex-col gap-6 px-5 py-8">
 			<header className="space-y-1">
-				<h1 className="font-bold text-2xl text-foreground">Who are you?</h1>
+				<h1 className="font-display text-2xl font-semibold text-foreground">
+					Who are you?
+				</h1>
 				<p className="text-muted-foreground text-sm">
 					Pick your name to continue.
 				</p>

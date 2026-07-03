@@ -52,7 +52,7 @@ function ClubHome() {
 		<div className="space-y-6 p-4 pb-8">
 			{/* Header */}
 			<div className="flex items-center justify-between pt-2">
-				<h1 className="text-2xl font-bold tracking-tight">
+				<h1 className="font-display text-2xl font-semibold tracking-tight">
 					Hi {member?.name ?? "there"} 👋
 				</h1>
 				{member ? (

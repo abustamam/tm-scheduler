@@ -206,7 +206,7 @@ function MeetingView() {
 	return (
 		<div className="space-y-5 p-4 pb-8">
 			<header className="space-y-2 pt-2">
-				<h1 className="text-2xl font-bold tracking-tight">
+				<h1 className="font-display text-2xl font-semibold tracking-tight">
 					{meeting.theme ?? "Meeting"}
 				</h1>
 				<div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
