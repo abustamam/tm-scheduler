@@ -5,7 +5,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
-import { formatMeetingDate, formatMeetingTime } from "#/lib/format";
+import { formatMeetingDate, formatMeetingTimeRange } from "#/lib/format";
 import { useCurrentMember } from "#/lib/member-identity";
 import { listMemberCommitments, listUpcomingMeetings } from "#/server/meetings";
 import { releaseSlot } from "#/server/slots";
@@ -107,7 +107,11 @@ function ClubHome() {
 										>
 											<CalendarDays className="size-4" aria-hidden />
 											{formatMeetingDate(c.scheduledAt, c.timezone)} &middot;{" "}
-											{formatMeetingTime(c.scheduledAt, c.timezone)}
+											{formatMeetingTimeRange(
+												c.scheduledAt,
+												c.lengthMinutes,
+												c.timezone,
+											)}
 											{c.theme ? (
 												<span className="truncate"> &middot; {c.theme}</span>
 											) : null}
