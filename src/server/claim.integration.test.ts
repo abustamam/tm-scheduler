@@ -20,6 +20,7 @@ import {
 	activityLog,
 	clubMemberships,
 	members,
+	roleDefinitions,
 	roleSlots,
 	speakerDetails,
 } from "#/db/schema";
@@ -365,15 +366,24 @@ describe.skipIf(!hasTestDb)("claim + guards integration", () => {
 			});
 		}
 
-		/** Mirror of reassignSlot without requireUser/requireClubRole; only requireMemberInClub. */
+		/** Mirror of reassignSlot without requireUser/requireClubRole; only requireMemberInClub.
+		 *  Mirrors the real fn's speaker branch: if the slot is a speaker role, resets
+		 *  speakerDetails to TBA after reassignment. */
 		async function reassignSlotPublic(
 			slotId: string,
 			newMemberId: string,
 			actorMemberId: string,
 		) {
 			const [slot] = await testDb
-				.select({ id: roleSlots.id })
+				.select({
+					id: roleSlots.id,
+					isSpeakerRole: roleDefinitions.isSpeakerRole,
+				})
 				.from(roleSlots)
+				.innerJoin(
+					roleDefinitions,
+					eq(roleDefinitions.id, roleSlots.roleDefinitionId),
+				)
 				.where(eq(roleSlots.id, slotId))
 				.limit(1);
 
@@ -398,6 +408,25 @@ describe.skipIf(!hasTestDb)("claim + guards integration", () => {
 					.update(roleSlots)
 					.set({ assignedMemberId: newMemberId, status: "claimed" })
 					.where(eq(roleSlots.id, slotId));
+
+				// Mirror reassignSlot: previous speaker's speech no longer applies — reset to TBA.
+				if (slot.isSpeakerRole) {
+					const details = {
+						speechTitle: "TBA",
+						pathwayPath: null,
+						projectName: null,
+						projectLevel: null,
+						minMinutes: null,
+						maxMinutes: null,
+					};
+					await tx
+						.insert(speakerDetails)
+						.values({ slotId: slot.id, ...details })
+						.onConflictDoUpdate({
+							target: speakerDetails.slotId,
+							set: details,
+						});
+				}
 
 				await tx.insert(activityLog).values({
 					clubId: actor.clubId,
@@ -580,6 +609,70 @@ describe.skipIf(!hasTestDb)("claim + guards integration", () => {
 			expect(row?.assignedMemberId).toBe(other.id);
 			// Status must be reset from "confirmed" back to "claimed" — new holder is unconfirmed.
 			expect(row?.status).toBe("claimed");
+		});
+
+		it("reassignSlot resets speaker details to TBA when reassigning a speaker slot", async () => {
+			// Create a speaker role definition in the seed club.
+			const [speakerRoleDef] = await testDb
+				.insert(roleDefinitions)
+				.values({
+					clubId: seed.clubId,
+					name: "Speaker",
+					category: "speaker",
+					isSpeakerRole: true,
+				})
+				.returning({ id: roleDefinitions.id });
+			if (!speakerRoleDef)
+				throw new Error("Failed to insert speaker role definition");
+
+			// Create a claimed slot for that role in the existing meeting.
+			const [speakerSlot] = await testDb
+				.insert(roleSlots)
+				.values({
+					meetingId: seed.meetingId,
+					roleDefinitionId: speakerRoleDef.id,
+					status: "claimed",
+					assignedMemberId: seed.memberId,
+				})
+				.returning({ id: roleSlots.id });
+			if (!speakerSlot) throw new Error("Failed to insert speaker slot");
+
+			// Seed real speech details before reassignment — proves they get overwritten.
+			const initial = {
+				speechTitle: "Old Speech",
+				pathwayPath: null,
+				projectName: null,
+				projectLevel: null,
+				minMinutes: null,
+				maxMinutes: null,
+			};
+			await testDb
+				.insert(speakerDetails)
+				.values({ slotId: speakerSlot.id, ...initial })
+				.onConflictDoUpdate({ target: speakerDetails.slotId, set: initial });
+
+			// Insert a second roster member to receive the reassignment.
+			const [other] = await testDb
+				.insert(members)
+				.values({ clubId: seed.clubId, name: "New Speaker" })
+				.returning({ id: members.id });
+			if (!other) throw new Error("Failed to insert other member");
+
+			// Reassign — mirrors the real reassignSlot speaker-details TBA reset.
+			const result = await reassignSlotPublic(
+				speakerSlot.id,
+				other.id,
+				seed.memberId,
+			);
+			expect(result).toEqual({ ok: true });
+
+			// Previous real speech title must be overwritten with "TBA".
+			const [row] = await testDb
+				.select({ speechTitle: speakerDetails.speechTitle })
+				.from(speakerDetails)
+				.where(eq(speakerDetails.slotId, speakerSlot.id))
+				.limit(1);
+			expect(row?.speechTitle).toBe("TBA");
 		});
 
 		it("updateSpeakerDetails upserts details and normalizes blank title to TBA", async () => {

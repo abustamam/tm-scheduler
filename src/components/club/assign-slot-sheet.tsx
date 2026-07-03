@@ -17,7 +17,7 @@ import {
 	SheetHeader,
 	SheetTitle,
 } from "#/components/ui/sheet";
-import { buildPickerRows } from "#/lib/agenda";
+import { buildPickerRows, resolveAssignAction } from "#/lib/agenda";
 import { claimSlot, reassignSlot } from "#/server/slots";
 
 type AssignSlot = {
@@ -46,7 +46,8 @@ export function AssignSlotSheet({
 }) {
 	const [busy, setBusy] = useState(false);
 	const rows = buildPickerRows(roster, roleByMemberId, unavailableIds);
-	const isReassign = slot !== null && slot.status !== "open";
+	const isReassign =
+		slot !== null && resolveAssignAction(slot).kind === "reassign";
 
 	async function pick(memberId: string) {
 		if (!slot || !actorMemberId) {
@@ -55,13 +56,14 @@ export function AssignSlotSheet({
 		}
 		setBusy(true);
 		try {
-			if (slot.status === "open") {
+			const action = resolveAssignAction(slot);
+			if (action.kind === "claim") {
 				await claimSlot({
 					data: {
 						slotId: slot.id,
 						memberId,
 						actorMemberId,
-						speakerDetails: slot.isSpeakerRole
+						speakerDetails: action.speakerTba
 							? { speechTitle: "TBA" }
 							: undefined,
 					},
