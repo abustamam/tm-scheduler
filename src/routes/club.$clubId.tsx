@@ -26,7 +26,7 @@ function ClubShell() {
 		<div className="mx-auto flex min-h-svh w-full max-w-md flex-col bg-background">
 			<header className="flex items-center justify-between gap-3 border-b border-[var(--line)] px-4 py-3">
 				<BrandMark size="sm" />
-				<span className="truncate text-right text-[11px] font-semibold tracking-[0.04em] text-muted-foreground uppercase">
+				<span className="min-w-0 flex-1 truncate text-right text-[11px] font-semibold tracking-[0.04em] text-muted-foreground uppercase">
 					{clubNumber ? `${clubName} · Club ${clubNumber}` : clubName}
 				</span>
 			</header>
