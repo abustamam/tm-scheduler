@@ -34,6 +34,7 @@ import {
 } from "#/components/ui/sheet";
 import { buildRoleCounts, slotLabel } from "#/lib/agenda";
 import { formatMeetingDate, formatMeetingTime } from "#/lib/format";
+import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import { buildMeetingNavItems } from "#/lib/meeting-nav";
 import { useCurrentMember } from "#/lib/member-identity";
 import { clearAvailability, setAvailability } from "#/server/availability";
@@ -42,9 +43,17 @@ import { claimSlot, reassignSlot, releaseSlot } from "#/server/slots";
 
 export const Route = createFileRoute("/club/$clubId/meeting/$meetingId")({
 	loader: async ({ params, context }) => {
-		// Fire both in parallel. getMeeting stays fatal (the agenda is the page);
-		// the upcoming list is non-fatal — a failure degrades to no strip.
-		const meetingPromise = getMeeting({ data: params.meetingId });
+		// Fire both in parallel. getMeeting stays fatal (the agenda is the page)
+		// EXCEPT when the meeting row is simply absent (stale/expired link) —
+		// that translates to notFound() so notFoundComponent renders instead of
+		// the generic error boundary. Other failures (DB errors, etc.) stay fatal.
+		// The upcoming list is non-fatal — a failure degrades to no strip.
+		const meetingPromise = getMeeting({ data: params.meetingId }).catch(
+			(err) => {
+				if (isMeetingNotFoundError(err)) throw notFound();
+				throw err;
+			},
+		);
 		const upcomingPromise = listUpcomingMeetings({
 			data: context.clubUuid,
 		}).catch(() => [] as Awaited<ReturnType<typeof listUpcomingMeetings>>);
