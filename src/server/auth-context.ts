@@ -23,6 +23,7 @@ export const getAuthContext = createServerFn({ method: "GET" }).handler(
 			.select({
 				clubId: clubs.id,
 				name: clubs.name,
+				clubNumber: clubs.clubNumber,
 				clubRole: clubMemberships.clubRole,
 			})
 			.from(clubMemberships)

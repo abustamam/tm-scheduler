@@ -73,6 +73,7 @@ function WorkspaceLayout() {
 	const pathname = useRouterState({ select: (s) => s.location.pathname });
 
 	const clubName = clubs[0]?.name ?? "Toastmasters";
+	const clubNumber = clubs[0]?.clubNumber ?? null;
 	const isOfficer = clubs.some(
 		(c) => c.clubRole === "admin" || c.clubRole === "vpe",
 	);
@@ -92,7 +93,12 @@ function WorkspaceLayout() {
 			<aside className="sticky top-0 flex h-svh w-[248px] shrink-0 flex-col gap-1.5 border-r border-[var(--line)] bg-[linear-gradient(180deg,var(--surface-strong),var(--surface))] px-3.5 py-[18px] backdrop-blur-[6px]">
 				{/* Brand */}
 				<div className="px-2 pt-1.5 pb-4">
-					<BrandMark size="md" subtitle={`${clubName} · Club 1492`} />
+					<BrandMark
+						size="md"
+						subtitle={
+							clubNumber ? `${clubName} · Club ${clubNumber}` : clubName
+						}
+					/>
 				</div>
 
 				<NavGroup label="Manage">
