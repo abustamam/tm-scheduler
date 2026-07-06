@@ -9,6 +9,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { MemberAvatar } from "#/components/club/member-avatar";
 import { PageContainer } from "#/components/page-container";
+import { PathwaysProgress } from "#/components/pathways/pathways-progress";
 import { Button } from "#/components/ui/button";
 import {
 	Dialog,
@@ -30,14 +31,25 @@ import {
 } from "#/lib/officers";
 import { getMemberProfile } from "#/server/club";
 import { editMember, removeMember, setMemberStatus } from "#/server/members";
+import { getMemberPathways } from "#/server/pathways-read";
 
 export const Route = createFileRoute("/_authed/members/$id")({
 	loader: async ({ params, context }) => {
 		const clubId = context.clubs[0]?.clubId;
 		if (!clubId) {
-			return { member: null, speechLog: [], rolesServed: [], speeches: 0 };
+			return {
+				member: null,
+				speechLog: [],
+				rolesServed: [],
+				speeches: 0,
+				pathways: [],
+			};
 		}
-		return getMemberProfile({ data: { clubId, memberId: params.id } });
+		const [profile, pathways] = await Promise.all([
+			getMemberProfile({ data: { clubId, memberId: params.id } }),
+			getMemberPathways({ data: { clubId, memberId: params.id } }),
+		]);
+		return { ...profile, pathways };
 	},
 	component: MemberDetail,
 });
@@ -60,7 +72,7 @@ function dayMon(value: Date | string) {
 }
 
 function MemberDetail() {
-	const { member, speechLog, rolesServed } = Route.useLoaderData();
+	const { member, speechLog, rolesServed, pathways } = Route.useLoaderData();
 	const { clubs, currentMemberId } = Route.useRouteContext();
 	const clubId = clubs[0]?.clubId;
 
@@ -75,7 +87,7 @@ function MemberDetail() {
 		);
 	}
 
-	// Identity, speech log and roles served are real; Pathways progress is not modeled (#61).
+	// Identity, speech log, roles served and Pathways progress are all real.
 	const joined = member.joinedAt ?? member.createdAt;
 	const tenure = member.officerPositions.length
 		? `${formatTenure(joined)} · ${member.officerPositions
@@ -214,6 +226,12 @@ function MemberDetail() {
 						)}
 					</div>
 				</div>
+			</div>
+
+			{/* Pathways progress (real, synced from Base Camp) */}
+			<div className="mt-[18px]">
+				<h2 className="mb-3 text-[15px] font-bold">Pathways</h2>
+				<PathwaysProgress paths={pathways} />
 			</div>
 		</PageContainer>
 	);
