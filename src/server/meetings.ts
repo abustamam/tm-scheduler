@@ -18,6 +18,7 @@ import {
 	getMembership,
 	getSessionUser,
 	requireClubRole,
+	requireMeetingAgendaEditor,
 	requireMembership,
 	requireUser,
 } from "./guards";
@@ -346,6 +347,8 @@ export const createMeeting = createServerFn({ method: "POST" })
 const updateMeetingSchema = z.object({
 	meetingId: uuid,
 	actorMemberId: uuid.nullable().optional(),
+	/** Self-asserted TMOD member id (public page). Null for authed admin/vpe. */
+	selfMemberId: uuid.nullable().optional(),
 	scheduledAt: z.string().min(1),
 	lengthMinutes: z.number().int().positive().optional(),
 	location: z.string().trim().optional(),
@@ -354,18 +357,18 @@ const updateMeetingSchema = z.object({
 	notes: z.string().trim().optional(),
 });
 
-/** Admin/VPE only: edit a meeting's meta (incl. reschedule). AUTHED. */
+/** Edit a meeting's meta. Admin/VPE (may also reschedule) OR the meeting's
+ *  self-asserted TMOD (meta only — reschedule rejected). AUTHED or self-assert. */
 export const updateMeeting = createServerFn({ method: "POST" })
 	.validator((input: unknown) => updateMeetingSchema.parse(input))
 	.handler(async ({ data }) => {
-		const currentUser = await requireUser();
-		const meeting = await db.query.meetings.findFirst({
-			where: eq(meetings.id, data.meetingId),
+		const authz = await requireMeetingAgendaEditor({
+			meetingId: data.meetingId,
+			selfMemberId: data.selfMemberId ?? null,
 		});
-		if (!meeting) throw new Error("Meeting not found.");
-		await requireClubRole(currentUser.id, meeting.clubId, ["admin", "vpe"]);
 		return applyMeetingUpdate({
 			...data,
 			actorMemberId: data.actorMemberId ?? null,
+			canReschedule: authz.via === "admin-vpe",
 		});
 	});

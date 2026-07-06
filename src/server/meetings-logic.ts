@@ -70,6 +70,13 @@ export interface MeetingUpdateInput {
 	location?: string | null;
 	wordOfTheDay?: string | null;
 	notes?: string | null;
+	/**
+	 * Whether the caller may reschedule (change `scheduledAt`/`lengthMinutes`).
+	 * Defaults to true (admin/vpe). A self-serve TMOD passes false: an attempt to
+	 * move the date/time or length is rejected — reschedule stays admin/vpe-only
+	 * (ADR-0010).
+	 */
+	canReschedule?: boolean;
 }
 
 /** Update a meeting's meta (incl. reschedule) and log a `meeting_edit`. */
@@ -93,6 +100,24 @@ export async function applyMeetingUpdate(input: MeetingUpdateInput) {
 		wordOfTheDay: input.wordOfTheDay?.trim() || null,
 		notes: input.notes?.trim() || null,
 	};
+
+	// Reschedule (date/time or length change) is an admin/vpe-only decision. A
+	// self-serve TMOD (canReschedule=false) may edit meta but must re-submit the
+	// meeting's current time unchanged; any actual move is rejected (ADR-0010).
+	const canReschedule = input.canReschedule ?? true;
+	if (!canReschedule) {
+		// datetime-local input is minute-precision, so compare to the minute:
+		// re-submitting the current time (rounded) is a no-op, not a reschedule.
+		const toMinute = (d: Date) => Math.floor(d.getTime() / 60000);
+		const timeChanged =
+			toMinute(next.scheduledAt) !== toMinute(meeting.scheduledAt);
+		const lengthChanged = next.lengthMinutes !== meeting.lengthMinutes;
+		if (timeChanged || lengthChanged) {
+			throw new Error(
+				"Only an admin or VP Education can reschedule this meeting.",
+			);
+		}
+	}
 
 	await db.transaction(async (tx) => {
 		await tx.update(meetings).set(next).where(eq(meetings.id, input.meetingId));

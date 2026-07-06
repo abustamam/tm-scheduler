@@ -3,6 +3,10 @@ import { and, eq } from "drizzle-orm";
 import { db } from "#/db";
 import { clubMemberships, members } from "#/db/schema";
 import { auth } from "#/lib/auth";
+import {
+	type MeetingAgendaAuthz,
+	resolveMeetingAgendaAuthz,
+} from "./meeting-authz-logic";
 
 // IMPORTANT: this module touches `db`/`pg` and must never be imported by a
 // client component directly. Only server-function modules import it; the
@@ -69,6 +73,29 @@ export async function requireClubRole(
 		throw new Error("You don't have permission to do that.");
 	}
 	return membership;
+}
+
+/**
+ * Gate a per-meeting agenda write (meta edit + slot management). Allowed when
+ * the current session is a club `admin`/`vpe` OR the self-asserted `selfMemberId`
+ * holds the meeting's TMOD slot (ADR-0010). Throws when neither path applies.
+ * Returns the resolved authz so callers can keep reschedule/cancel/status
+ * admin-only (`via === "admin-vpe"`).
+ */
+export async function requireMeetingAgendaEditor(input: {
+	meetingId: string;
+	selfMemberId?: string | null;
+}): Promise<MeetingAgendaAuthz> {
+	const user = await getSessionUser();
+	const authz = await resolveMeetingAgendaAuthz({
+		meetingId: input.meetingId,
+		sessionUserId: user?.id ?? null,
+		selfMemberId: input.selfMemberId ?? null,
+	});
+	if (!authz.allowed) {
+		throw new Error("You don't have permission to edit this meeting.");
+	}
+	return authz;
 }
 
 /** Fetch a roster member by id (server-only, no auth check). */

@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/react-query";
 import {
 	createFileRoute,
 	Link,
@@ -7,6 +8,7 @@ import {
 import { CalendarDays, Loader2, MapPin, Printer, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { AssignSlotSheet } from "#/components/club/assign-slot-sheet";
 import { EditSpeechSheet } from "#/components/club/edit-speech-sheet";
 import { MeetingNavStrip } from "#/components/club/meeting-nav-strip";
 import { ShareLinkButton } from "#/components/share-link-button";
@@ -33,13 +35,26 @@ import {
 	SheetTitle,
 } from "#/components/ui/sheet";
 import { buildRoleCounts, slotLabel } from "#/lib/agenda";
+import { utcToZonedWallTime } from "#/lib/datetime";
 import { formatMeetingDate, formatMeetingTimeRange } from "#/lib/format";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import { buildMeetingNavItems } from "#/lib/meeting-nav";
+import { isTmodRoleName } from "#/lib/meeting-roles";
 import { useCurrentMember } from "#/lib/member-identity";
 import { clearAvailability, setAvailability } from "#/server/availability";
-import { getMeeting, listUpcomingMeetings } from "#/server/meetings";
-import { claimSlot, reassignSlot, releaseSlot } from "#/server/slots";
+import {
+	getMeeting,
+	listUpcomingMeetings,
+	updateMeeting,
+} from "#/server/meetings";
+import { listMembers } from "#/server/members";
+import {
+	addSpeakerSlot,
+	claimSlot,
+	reassignSlot,
+	releaseSlot,
+	removeSpeakerSlot,
+} from "#/server/slots";
 
 export const Route = createFileRoute("/club/$clubId/meeting/$meetingId")({
 	loader: async ({ params, context }) => {
@@ -126,6 +141,8 @@ function MeetingView() {
 	const [editSpeechSlot, setEditSpeechSlot] = useState<Slot | null>(null);
 	const [busySlotId, setBusySlotId] = useState<string | null>(null);
 	const [availBusy, setAvailBusy] = useState(false);
+	const [editMetaOpen, setEditMetaOpen] = useState(false);
+	const [assignSlot, setAssignSlot] = useState<Slot | null>(null);
 
 	const myId = member?.id ?? null;
 	const isUnavailable = myId ? unavailableMemberIds.includes(myId) : false;
@@ -133,10 +150,70 @@ function MeetingView() {
 	// Number repeated roles ("Speaker 1", "Speaker 2", …).
 	const roleCounts = buildRoleCounts(slots);
 
+	// The meeting's TMOD (Toastmaster of the Day) slot assignee, if any. When the
+	// self-asserted member holds it, they get self-serve agenda editing (ADR-0010).
+	const tmodMemberId =
+		slots.find((s) => isTmodRoleName(s.roleName))?.assigneeId ?? null;
+	const isTmod = myId !== null && myId === tmodMemberId;
+
+	// Roster for the TMOD assign picker — only fetched when self-serve editing is
+	// unlocked (kept off the payload for ordinary viewers).
+	const { data: roster = [] } = useQuery({
+		queryKey: ["members", clubUuid],
+		queryFn: () => listMembers({ data: clubUuid }),
+		enabled: isTmod,
+	});
+
+	// memberId → their current role label this meeting (for the assign picker).
+	const roleByMemberId: Record<string, string> = {};
+	for (const s of slots) {
+		if (s.assigneeId) roleByMemberId[s.assigneeId] = slotLabel(s, roleCounts);
+	}
+
+	const speakerSlots = slots.filter((s) => s.isSpeakerRole);
+
 	// Preserve category order as it appears (slots arrive pre-sorted).
 	const categories: string[] = [];
 	for (const s of slots) {
 		if (!categories.includes(s.category)) categories.push(s.category);
+	}
+
+	async function doAddSpeaker() {
+		if (!myId) return;
+		setBusySlotId("add-speaker");
+		try {
+			await addSpeakerSlot({
+				data: { meetingId, actorMemberId: myId, selfMemberId: myId },
+			});
+			toast.success("Speaker added.");
+			await router.invalidate();
+		} catch (err) {
+			toast.error(errMessage(err));
+		} finally {
+			setBusySlotId(null);
+		}
+	}
+
+	async function doRemoveSpeaker() {
+		if (!myId) return;
+		if (speakerSlots.length <= 1) {
+			const ok = window.confirm(
+				"This meeting will have no speakers. Continue?",
+			);
+			if (!ok) return;
+		}
+		setBusySlotId("remove-speaker");
+		try {
+			await removeSpeakerSlot({
+				data: { meetingId, actorMemberId: myId, selfMemberId: myId },
+			});
+			toast.success("Speaker removed.");
+			await router.invalidate();
+		} catch (err) {
+			toast.error(errMessage(err));
+		} finally {
+			setBusySlotId(null);
+		}
 	}
 
 	async function toggleAvailability() {
@@ -277,6 +354,17 @@ function MeetingView() {
 						Print agenda
 					</Link>
 				</Button>
+				{isTmod ? (
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						className="mt-1 ml-2"
+						onClick={() => setEditMetaOpen(true)}
+					>
+						Edit meeting
+					</Button>
+				) : null}
 			</header>
 
 			{categories.map((category) => (
@@ -351,6 +439,15 @@ function MeetingView() {
 											</button>
 
 											<div className="flex shrink-0 flex-col items-end gap-2">
+												{isTmod ? (
+													<Button
+														size="sm"
+														variant="outline"
+														onClick={() => setAssignSlot(slot)}
+													>
+														{isOpen ? "Assign…" : "Reassign…"}
+													</Button>
+												) : null}
 												{isOpen ? (
 													<Button
 														size="sm"
@@ -400,8 +497,46 @@ function MeetingView() {
 								);
 							})}
 					</ul>
+					{isTmod && category === "speaker" ? (
+						<div className="flex gap-2">
+							<Button
+								size="sm"
+								variant="outline"
+								disabled={busySlotId === "add-speaker"}
+								onClick={doAddSpeaker}
+							>
+								+ Add speaker
+							</Button>
+							{speakerSlots.length > 0 ? (
+								<Button
+									size="sm"
+									variant="outline"
+									disabled={busySlotId === "remove-speaker"}
+									onClick={doRemoveSpeaker}
+								>
+									− Remove speaker
+								</Button>
+							) : null}
+						</div>
+					) : null}
 				</section>
 			))}
+
+			{isTmod && speakerSlots.length === 0 ? (
+				<section className="space-y-2">
+					<h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+						{CATEGORY_LABELS.speaker}
+					</h2>
+					<Button
+						size="sm"
+						variant="outline"
+						onClick={doAddSpeaker}
+						disabled={busySlotId === "add-speaker"}
+					>
+						+ Add speaker
+					</Button>
+				</section>
+			) : null}
 
 			<ClaimSheet
 				slot={claimSlotState}
@@ -475,7 +610,157 @@ function MeetingView() {
 					</DialogFooter>
 				</DialogContent>
 			</Dialog>
+
+			{isTmod ? (
+				<EditMeetingMetaDialog
+					open={editMetaOpen}
+					onOpenChange={setEditMetaOpen}
+					meeting={meeting}
+					timezone={timezone}
+					actorMemberId={myId}
+					selfMemberId={myId}
+					onSaved={async () => {
+						setEditMetaOpen(false);
+						await router.invalidate();
+					}}
+				/>
+			) : null}
+
+			<AssignSlotSheet
+				slot={
+					assignSlot
+						? {
+								id: assignSlot.id,
+								status: assignSlot.status,
+								isSpeakerRole: assignSlot.isSpeakerRole,
+								label: slotLabel(assignSlot, roleCounts),
+							}
+						: null
+				}
+				roster={roster}
+				roleByMemberId={roleByMemberId}
+				unavailableIds={unavailableMemberIds}
+				actorMemberId={myId}
+				onOpenChange={(open) => {
+					if (!open) setAssignSlot(null);
+				}}
+				onAssigned={async () => {
+					setAssignSlot(null);
+					await router.invalidate();
+				}}
+			/>
 		</div>
+	);
+}
+
+/**
+ * TMOD meta editor — theme, Word of the Day, location, notes only. Date/time and
+ * length are intentionally absent: reschedule stays admin/vpe-only (ADR-0010).
+ * We re-submit the meeting's current wall time unchanged so the server's
+ * meta-only path accepts it.
+ */
+function EditMeetingMetaDialog({
+	open,
+	onOpenChange,
+	meeting,
+	timezone,
+	actorMemberId,
+	selfMemberId,
+	onSaved,
+}: {
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+	meeting: Awaited<ReturnType<typeof getMeeting>>["meeting"];
+	timezone: string;
+	actorMemberId: string | null;
+	selfMemberId: string | null;
+	onSaved: () => void | Promise<void>;
+}) {
+	const [submitting, setSubmitting] = useState(false);
+
+	async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
+		e.preventDefault();
+		const form = new FormData(e.currentTarget);
+		setSubmitting(true);
+		try {
+			await updateMeeting({
+				data: {
+					meetingId: meeting.id,
+					actorMemberId,
+					selfMemberId,
+					// Current time, unchanged — TMOD can't reschedule.
+					scheduledAt: utcToZonedWallTime(
+						new Date(meeting.scheduledAt),
+						timezone,
+					),
+					theme: String(form.get("theme") ?? "").trim() || undefined,
+					location: String(form.get("location") ?? "").trim() || undefined,
+					wordOfTheDay:
+						String(form.get("wordOfTheDay") ?? "").trim() || undefined,
+					notes: String(form.get("notes") ?? "").trim() || undefined,
+				},
+			});
+			toast.success("Meeting updated.");
+			await onSaved();
+		} catch (err) {
+			toast.error(errMessage(err));
+		} finally {
+			setSubmitting(false);
+		}
+	}
+
+	return (
+		<Dialog open={open} onOpenChange={onOpenChange}>
+			<DialogContent>
+				<DialogHeader>
+					<DialogTitle>Edit meeting</DialogTitle>
+					<DialogDescription>
+						As Toastmaster you can edit the theme and details. Ask a VP
+						Education to change the date or time.
+					</DialogDescription>
+				</DialogHeader>
+				<form onSubmit={onSubmit} className="space-y-4">
+					<div className="space-y-2">
+						<Label htmlFor="theme">Theme</Label>
+						<Input id="theme" name="theme" defaultValue={meeting.theme ?? ""} />
+					</div>
+					<div className="space-y-2">
+						<Label htmlFor="location">Location</Label>
+						<Input
+							id="location"
+							name="location"
+							defaultValue={meeting.location ?? ""}
+						/>
+					</div>
+					<div className="space-y-2">
+						<Label htmlFor="wordOfTheDay">Word of the day</Label>
+						<Input
+							id="wordOfTheDay"
+							name="wordOfTheDay"
+							defaultValue={meeting.wordOfTheDay ?? ""}
+						/>
+					</div>
+					<div className="space-y-2">
+						<Label htmlFor="notes">Notes</Label>
+						<Input id="notes" name="notes" defaultValue={meeting.notes ?? ""} />
+					</div>
+					<DialogFooter>
+						<DialogClose asChild>
+							<Button type="button" variant="outline" disabled={submitting}>
+								Cancel
+							</Button>
+						</DialogClose>
+						<Button type="submit" disabled={submitting}>
+							{submitting ? (
+								<Loader2 className="size-4 animate-spin" />
+							) : (
+								"Save changes"
+							)}
+						</Button>
+					</DialogFooter>
+				</form>
+			</DialogContent>
+		</Dialog>
 	);
 }
 
