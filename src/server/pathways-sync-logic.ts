@@ -31,17 +31,23 @@ async function resolvePersonId(row: ParsedMemberPath): Promise<string | null> {
 
 	if (!row.email) return null;
 	const byEmail = await db
-		.select({ id: people.id })
+		.select({ id: people.id, basecampUserId: people.basecampUserId })
 		.from(people)
 		.where(sql`lower(${people.email}) = ${row.email}`);
 	if (byEmail.length !== 1) return null; // 0 or ambiguous → unmatched
 
-	// First match: persist the durable Base Camp id.
-	await db
-		.update(people)
-		.set({ basecampUserId: row.basecampUserId })
-		.where(eq(people.id, byEmail[0].id));
-	return byEmail[0].id;
+	const person = byEmail[0];
+	if (person.basecampUserId === null) {
+		// First match: persist the durable Base Camp id (write-once).
+		await db
+			.update(people)
+			.set({ basecampUserId: row.basecampUserId })
+			.where(eq(people.id, person.id));
+		return person.id;
+	}
+	// Email matches a person who already has a DIFFERENT basecamp id (byBc would
+	// have matched otherwise) → identity anomaly; report as unmatched, don't clobber.
+	return null;
 }
 
 async function upsertPath(row: ParsedMemberPath): Promise<string> {
@@ -53,6 +59,7 @@ async function upsertPath(row: ParsedMemberPath): Promise<string> {
 			set: { name: row.pathName },
 		})
 		.returning({ id: pathwaysPaths.id });
+	if (!p) throw new Error("Failed to upsert path.");
 	return p.id;
 }
 
@@ -68,6 +75,7 @@ async function upsertEnrollment(
 			set: { lastSyncedAt: new Date() },
 		})
 		.returning({ id: pathEnrollments.id });
+	if (!e) throw new Error("Failed to upsert enrollment.");
 	return e.id;
 }
 

@@ -163,6 +163,24 @@ describe.skipIf(!hasTestDb)("syncClubProgress", () => {
 		expect(await testDb.select().from(people)).toHaveLength(before);
 	});
 
+	it("reports an identity anomaly as unmatched and never clobbers a stored basecampUserId", async () => {
+		const personId = await makePerson({
+			email: "e@example.com",
+			basecampUserId: "111",
+		});
+		const res = await syncClubProgress([
+			mp({ email: "e@example.com", basecampUserId: "222" }),
+		]);
+		expect(res.matched).toBe(0);
+		expect(res.unmatched).toHaveLength(1);
+
+		const [p] = await testDb
+			.select({ bc: people.basecampUserId })
+			.from(people)
+			.where(eq(people.id, personId));
+		expect(p.bc).toBe("111");
+	});
+
 	it("reports an email shared by 2+ people as unmatched (ambiguous)", async () => {
 		await makePerson({ email: "shared@example.com" });
 		await makePerson({ email: "shared@example.com" });
