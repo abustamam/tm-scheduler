@@ -1,8 +1,24 @@
 import { describe, expect, it } from "vitest";
 import {
+	isTmodRoleName,
 	pickSpeakerAndEvaluatorRoles,
 	type RoleDefLite,
 } from "./meeting-roles";
+
+describe("isTmodRoleName", () => {
+	it("matches the standard TMOD role names (case/space-insensitive)", () => {
+		expect(isTmodRoleName("Toastmaster of the Day")).toBe(true);
+		expect(isTmodRoleName("Toastmaster")).toBe(true);
+		expect(isTmodRoleName("  toastmaster of the day  ")).toBe(true);
+	});
+
+	it("does not match other roles that merely contain 'master'", () => {
+		expect(isTmodRoleName("Table Topics Master")).toBe(false);
+		expect(isTmodRoleName("Toastmasters")).toBe(false); // plural, no boundary
+		expect(isTmodRoleName("General Evaluator")).toBe(false);
+		expect(isTmodRoleName("Timer")).toBe(false);
+	});
+});
 
 const def = (over: Partial<RoleDefLite>): RoleDefLite => ({
 	id: "x",

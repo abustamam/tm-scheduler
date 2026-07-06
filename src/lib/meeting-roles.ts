@@ -1,3 +1,14 @@
+/**
+ * True when a role-definition name is the Toastmaster of the Day (TMOD) role.
+ * Matches the standard-template name ("Toastmaster of the Day") and the bare
+ * "Toastmaster", case-insensitively — but NOT "Table Topics Master" (different
+ * prefix) or the plural "Toastmasters" (no word boundary). This is how the app
+ * identifies the meeting's TMOD slot for self-serve editing (ADR-0010).
+ */
+export function isTmodRoleName(name: string): boolean {
+	return /^toastmaster\b/.test(name.trim().toLowerCase());
+}
+
 /** Minimal role-definition shape needed to choose speaker/evaluator roles. */
 export interface RoleDefLite {
 	id: string;

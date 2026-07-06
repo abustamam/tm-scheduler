@@ -9,7 +9,12 @@ import {
 	speakerDetails,
 } from "#/db/schema";
 import { logActivity } from "./activity";
-import { requireClubRole, requireMemberInClub, requireUser } from "./guards";
+import {
+	requireClubRole,
+	requireMeetingAgendaEditor,
+	requireMemberInClub,
+	requireUser,
+} from "./guards";
 import {
 	applyAddSpeakerSlot,
 	applyMoveSpeakerSlot,
@@ -389,35 +394,34 @@ export const updateSpeakerDetails = createServerFn({ method: "POST" })
 const speakerSlotSchema = z.object({
 	meetingId: z.string().uuid(),
 	actorMemberId: z.string().uuid().nullable().optional(),
+	/** Self-asserted TMOD member id (public page). Null for authed admin/vpe. */
+	selfMemberId: z.string().uuid().nullable().optional(),
 });
 
-async function requireMeetingManager(meetingId: string) {
-	const currentUser = await requireUser();
-	const [row] = await db
-		.select({ clubId: meetings.clubId })
-		.from(meetings)
-		.where(eq(meetings.id, meetingId))
-		.limit(1);
-	if (!row) throw new Error("Meeting not found.");
-	await requireClubRole(currentUser.id, row.clubId, ["admin", "vpe"]);
-}
-
-/** Admin/VPE: add a speaker slot (+ paired evaluator). AUTHED. */
+/** Admin/VPE OR the meeting's self-asserted TMOD: add a speaker slot
+ *  (+ paired evaluator). AUTHED or self-assert (ADR-0010). */
 export const addSpeakerSlot = createServerFn({ method: "POST" })
 	.validator((input: unknown) => speakerSlotSchema.parse(input))
 	.handler(async ({ data }) => {
-		await requireMeetingManager(data.meetingId);
+		await requireMeetingAgendaEditor({
+			meetingId: data.meetingId,
+			selfMemberId: data.selfMemberId ?? null,
+		});
 		return applyAddSpeakerSlot({
 			meetingId: data.meetingId,
 			actorMemberId: data.actorMemberId ?? null,
 		});
 	});
 
-/** Admin/VPE: remove an unclaimed speaker slot (+ unclaimed evaluator). AUTHED. */
+/** Admin/VPE OR the meeting's self-asserted TMOD: remove an unclaimed speaker
+ *  slot (+ unclaimed evaluator). AUTHED or self-assert (ADR-0010). */
 export const removeSpeakerSlot = createServerFn({ method: "POST" })
 	.validator((input: unknown) => speakerSlotSchema.parse(input))
 	.handler(async ({ data }) => {
-		await requireMeetingManager(data.meetingId);
+		await requireMeetingAgendaEditor({
+			meetingId: data.meetingId,
+			selfMemberId: data.selfMemberId ?? null,
+		});
 		return applyRemoveSpeakerSlot({
 			meetingId: data.meetingId,
 			actorMemberId: data.actorMemberId ?? null,
@@ -428,21 +432,25 @@ const moveSpeakerSchema = z.object({
 	slotId: z.string().uuid(),
 	direction: z.enum(["up", "down"]),
 	actorMemberId: z.string().uuid().nullable().optional(),
+	/** Self-asserted TMOD member id (public page). Null for authed admin/vpe. */
+	selfMemberId: z.string().uuid().nullable().optional(),
 });
 
-/** Admin/VPE: reorder a speaker slot up/down (swaps slotIndex). AUTHED. */
+/** Admin/VPE OR the meeting's self-asserted TMOD: reorder a speaker slot up/down
+ *  (swaps slotIndex). AUTHED or self-assert (ADR-0010). */
 export const moveSpeakerSlot = createServerFn({ method: "POST" })
 	.validator((input: unknown) => moveSpeakerSchema.parse(input))
 	.handler(async ({ data }) => {
 		const [row] = await db
-			.select({ clubId: meetings.clubId })
+			.select({ meetingId: roleSlots.meetingId })
 			.from(roleSlots)
-			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
 			.where(eq(roleSlots.id, data.slotId))
 			.limit(1);
 		if (!row) throw new Error("Speaker slot not found.");
-		const currentUser = await requireUser();
-		await requireClubRole(currentUser.id, row.clubId, ["admin", "vpe"]);
+		await requireMeetingAgendaEditor({
+			meetingId: row.meetingId,
+			selfMemberId: data.selfMemberId ?? null,
+		});
 		return applyMoveSpeakerSlot({
 			slotId: data.slotId,
 			direction: data.direction,
