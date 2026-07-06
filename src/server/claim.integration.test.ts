@@ -29,6 +29,7 @@ import {
 	hasTestDb,
 	type SeededClub,
 	seedClub,
+	seedPerson,
 	testDb,
 } from "#/test/db";
 
@@ -538,7 +539,11 @@ describe.skipIf(!hasTestDb)("claim + guards integration", () => {
 			// A DIFFERENT club member releases it (trust-based, no assignee check)
 			const [otherMember] = await testDb
 				.insert(members)
-				.values({ clubId: seed.clubId, name: "Other Member" })
+				.values({
+					clubId: seed.clubId,
+					personId: await seedPerson({ name: "Other Member" }),
+					name: "Other Member",
+				})
 				.returning({ id: members.id });
 
 			if (!otherMember) throw new Error("Failed to insert other member");
@@ -585,7 +590,11 @@ describe.skipIf(!hasTestDb)("claim + guards integration", () => {
 			// Insert a second roster member
 			const [other] = await testDb
 				.insert(members)
-				.values({ clubId: seed.clubId, name: "Other Member" })
+				.values({
+					clubId: seed.clubId,
+					personId: await seedPerson({ name: "Other Member" }),
+					name: "Other Member",
+				})
 				.returning({ id: members.id });
 
 			if (!other) throw new Error("Failed to insert other member");
@@ -654,7 +663,11 @@ describe.skipIf(!hasTestDb)("claim + guards integration", () => {
 			// Insert a second roster member to receive the reassignment.
 			const [other] = await testDb
 				.insert(members)
-				.values({ clubId: seed.clubId, name: "New Speaker" })
+				.values({
+					clubId: seed.clubId,
+					personId: await seedPerson({ name: "New Speaker" }),
+					name: "New Speaker",
+				})
 				.returning({ id: members.id });
 			if (!other) throw new Error("Failed to insert other member");
 

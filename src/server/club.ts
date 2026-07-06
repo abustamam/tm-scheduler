@@ -6,6 +6,7 @@ import { db } from "#/db";
 import {
 	meetings,
 	members,
+	people,
 	roleDefinitions,
 	roleSlots,
 	speakerDetails,
@@ -37,9 +38,11 @@ export const listClubMembers = createServerFn({ method: "GET" })
 				status: members.status,
 				createdAt: members.createdAt,
 				joinedAt: members.joinedAt,
-				originalJoinDate: members.originalJoinDate,
+				// Person-level fact (ADR-0008): read off the joined `people` row.
+				originalJoinDate: people.originalJoinDate,
 			})
 			.from(members)
+			.innerJoin(people, eq(people.id, members.personId))
 			.where(eq(members.clubId, clubId))
 			.orderBy(asc(members.name));
 
@@ -183,9 +186,11 @@ export const getMemberProfile = createServerFn({ method: "GET" })
 				status: members.status,
 				createdAt: members.createdAt,
 				joinedAt: members.joinedAt,
-				originalJoinDate: members.originalJoinDate,
+				// Person-level fact (ADR-0008): read off the joined `people` row.
+				originalJoinDate: people.originalJoinDate,
 			})
 			.from(members)
+			.innerJoin(people, eq(people.id, members.personId))
 			.where(
 				and(eq(members.id, data.memberId), eq(members.clubId, data.clubId)),
 			)

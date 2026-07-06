@@ -16,6 +16,7 @@ import {
 	hasTestDb,
 	type SeededClub,
 	seedClub,
+	seedPerson,
 	testDb,
 } from "#/test/db";
 
@@ -29,7 +30,11 @@ describe.skipIf(!hasTestDb)("loadActivity", () => {
 		seed = await seedClub();
 		const [m2] = await testDb
 			.insert(members)
-			.values({ clubId: seed.clubId, name: "Member Two" })
+			.values({
+				clubId: seed.clubId,
+				personId: await seedPerson({ name: "Member Two" }),
+				name: "Member Two",
+			})
 			.returning({ id: members.id });
 		member2Id = m2.id;
 	});

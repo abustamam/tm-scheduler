@@ -15,6 +15,7 @@ import {
 	meetings,
 	memberAvailability,
 	members,
+	people,
 	roleSlots,
 	speakerDetails,
 } from "#/db/schema";
@@ -344,13 +345,23 @@ export async function applyBulkImport(
 		const ids: string[] = [];
 		for (const row of toInsert) {
 			const name = row.name.trim();
+			const email = row.email.trim() || null;
+			const phone = row.phone.trim() || null;
+			// Each pasted row is a new person (ADR-0008); cross-club dedupe is the
+			// CSV importer's job, and buildImportPreview already drops in-club dupes.
+			const [person] = await tx
+				.insert(people)
+				.values({ name, email, phone })
+				.returning({ id: people.id });
+			if (!person) throw new Error("Failed to insert person.");
 			const [m] = await tx
 				.insert(members)
 				.values({
 					clubId: input.clubId,
+					personId: person.id,
 					name,
-					email: row.email.trim() || null,
-					phone: row.phone.trim() || null,
+					email,
+					phone,
 					office: row.office.trim() || null,
 				})
 				.returning({ id: members.id });

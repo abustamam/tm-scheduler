@@ -13,6 +13,7 @@ import {
 	hasTestDb,
 	type SeededClub,
 	seedClub,
+	seedPerson,
 	testDb,
 } from "#/test/db";
 
@@ -29,9 +30,10 @@ async function listMembersPublic(clubId: string) {
 }
 
 async function addMemberPublic(clubId: string, name: string) {
+	const personId = await seedPerson({ name });
 	const [m] = await testDb
 		.insert(members)
-		.values({ clubId, name })
+		.values({ clubId, personId, name })
 		.returning({ id: members.id });
 	if (!m) throw new Error("Failed to insert member");
 

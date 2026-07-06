@@ -116,7 +116,35 @@ export const clubMemberships = pgTable(
 );
 
 // ---------------------------------------------------------------------------
-// Roster members (self-serve MVP — auth-decoupled identities)
+// People — one row per human, above per-club membership (ADR-0008 / #64).
+// Holds the facts identical across every club a person belongs to. Keyed by
+// Toastmasters Customer ID (PN-…) when known, unique-when-present (nullable);
+// email is the fallback dedupe key. Pathways paths are Person-level too but are
+// NOT modeled here (out of scope).
+// ---------------------------------------------------------------------------
+
+export const people = pgTable("people", {
+	id: uuid("id").defaultRandom().primaryKey(),
+	// Toastmasters Customer ID (PN-…). Nullable; Postgres treats NULLs as
+	// distinct, so the unique constraint is "unique-when-present".
+	customerId: text("customer_id").unique(),
+	name: text("name").notNull(),
+	email: text("email"),
+	phone: text("phone"),
+	// First-ever Toastmasters join date — a person-level fact (identical across
+	// every club), moved off the per-club members row (ADR-0008).
+	originalJoinDate: timestamp("original_join_date"),
+	// Optional link to a Better-Auth sign-in account (one login spans all their
+	// clubs). Phase A only carries it up; the auth path still resolves role via
+	// club_memberships (Phase B, #99).
+	userId: text("user_id").references(() => user.id, { onDelete: "set null" }),
+	createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+// ---------------------------------------------------------------------------
+// Roster members (self-serve MVP — auth-decoupled identities).
+// The Membership: a Person's participation in one Club (one row per person per
+// club). Person-level facts live on `people`; this row holds the per-club facts.
 // ---------------------------------------------------------------------------
 
 export const members = pgTable(
@@ -126,6 +154,12 @@ export const members = pgTable(
 		clubId: uuid("club_id")
 			.notNull()
 			.references(() => clubs.id, { onDelete: "cascade" }),
+		// The Person this membership belongs to (ADR-0008 / #64). Every roster row
+		// belongs to exactly one person; person-level facts (original join date,
+		// canonical name/contact) live on `people`.
+		personId: uuid("person_id")
+			.notNull()
+			.references(() => people.id, { onDelete: "cascade" }),
 		name: text("name").notNull(),
 		email: text("email"),
 		phone: text("phone"),
@@ -134,17 +168,19 @@ export const members = pgTable(
 		// from sign-up / roster / season / picker views, but their past role
 		// history is preserved (never deleted). Reactivating restores them.
 		status: membershipStatusEnum("status").notNull().default("active"),
-		// Real join dates from the Toastmasters membership export (seeded by
-		// scripts/import-members.ts). joinedAt = "Member of Club Since";
-		// originalJoinDate = first-ever Toastmasters join (stored for #64, no UI yet).
+		// Real join date from the Toastmasters membership export (seeded by
+		// scripts/import-members.ts). joinedAt = "Member of *this* Club Since"
+		// (per-club). First-ever TM join lives on people.originalJoinDate.
 		joinedAt: timestamp("joined_at"),
-		originalJoinDate: timestamp("original_join_date"),
 		// Links a roster member to the Better-Auth account of the one signed-in
 		// admin/VPE. NULL for ordinary members (who never sign in).
 		userId: text("user_id").references(() => user.id, { onDelete: "set null" }),
 		createdAt: timestamp("created_at").defaultNow().notNull(),
 	},
-	(t) => [index("members_club_idx").on(t.clubId)],
+	(t) => [
+		index("members_club_idx").on(t.clubId),
+		index("members_person_idx").on(t.personId),
+	],
 );
 
 // ---------------------------------------------------------------------------
@@ -314,8 +350,17 @@ export const notifications = pgTable("notifications", {
 // Relations
 // ---------------------------------------------------------------------------
 
+export const peopleRelations = relations(people, ({ one, many }) => ({
+	user: one(user, { fields: [people.userId], references: [user.id] }),
+	memberships: many(members),
+}));
+
 export const membersRelations = relations(members, ({ one }) => ({
 	club: one(clubs, { fields: [members.clubId], references: [clubs.id] }),
+	person: one(people, {
+		fields: [members.personId],
+		references: [people.id],
+	}),
 	user: one(user, { fields: [members.userId], references: [user.id] }),
 }));
 

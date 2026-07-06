@@ -6,6 +6,7 @@ import {
 	clubs,
 	meetings,
 	members,
+	people,
 	roleDefinitions,
 	roleSlots,
 	speakerDetails,
@@ -157,20 +158,42 @@ async function main() {
 	// Build a name→memberId map. Insert fresh if this is the first run.
 	let memberByName: Map<string, string>;
 	if (existingMembers.length === 0) {
+		// Each roster member belongs to a person (ADR-0008). Create the people
+		// first, then the memberships pointing at them.
+		const roster = [
+			{
+				name: "Rasheed Bustamam",
+				email: ADMIN_EMAIL,
+				office: "VP Education",
+				userId: adminId as string | undefined,
+			},
+			{ name: "Alex Rivera", email: "alex@example.com" },
+			{ name: "Sam Chen", email: "sam@example.com" },
+			{ name: "Jordan Patel", email: "jordan@example.com" },
+		];
+		const insertedPeople = await db
+			.insert(people)
+			.values(
+				roster.map((r) => ({
+					name: r.name,
+					email: r.email,
+					userId: r.userId,
+				})),
+			)
+			.returning({ id: people.id, name: people.name });
+		const personByName = new Map(insertedPeople.map((p) => [p.name, p.id]));
 		const inserted = await db
 			.insert(members)
-			.values([
-				{
+			.values(
+				roster.map((r) => ({
 					clubId: club.id,
-					name: "Rasheed Bustamam",
-					email: ADMIN_EMAIL,
-					office: "VP Education",
-					userId: adminId,
-				},
-				{ clubId: club.id, name: "Alex Rivera", email: "alex@example.com" },
-				{ clubId: club.id, name: "Sam Chen", email: "sam@example.com" },
-				{ clubId: club.id, name: "Jordan Patel", email: "jordan@example.com" },
-			])
+					personId: personByName.get(r.name)!,
+					name: r.name,
+					email: r.email,
+					office: r.office,
+					userId: r.userId,
+				})),
+			)
 			.returning({ id: members.id, name: members.name });
 		memberByName = new Map(inserted.map((m) => [m.name, m.id]));
 	} else {

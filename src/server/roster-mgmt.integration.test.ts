@@ -21,15 +21,17 @@ import {
 	hasTestDb,
 	type SeededClub,
 	seedClub,
+	seedPerson,
 	testDb,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
 async function addMemberRow(clubId: string, name: string) {
+	const personId = await seedPerson({ name });
 	const [m] = await testDb
 		.insert(members)
-		.values({ clubId, name })
+		.values({ clubId, personId, name })
 		.returning({ id: members.id });
 	return m.id;
 }
