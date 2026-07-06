@@ -45,8 +45,9 @@ describe.skipIf(!hasTestDb)("roster management", () => {
 		await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
 	});
 
-	it("editMember updates fields + logs member_edit", async () => {
+	it("editMember updates fields + reconciles offices + logs member_edit", async () => {
 		const { applyMemberEdit } = await import("#/server/members-logic");
+		const { currentOfficersFor } = await import("#/server/officer-terms-logic");
 		await applyMemberEdit({
 			clubId: seed.clubId,
 			actorMemberId: seed.memberId,
@@ -54,14 +55,14 @@ describe.skipIf(!hasTestDb)("roster management", () => {
 			name: "Renamed",
 			email: "a@b.co",
 			phone: null,
-			officerPosition: "vp_education",
+			officerPositions: ["vp_education"],
 		});
 		const [m] = await testDb
 			.select()
 			.from(members)
 			.where(eq(members.id, seed.memberId));
 		expect(m.name).toBe("Renamed");
-		expect(m.officerPosition).toBe("vp_education");
+		expect(await currentOfficersFor(seed.memberId)).toEqual(["vp_education"]);
 		const [log] = await testDb
 			.select()
 			.from(activityLog)

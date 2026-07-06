@@ -7,6 +7,7 @@ import {
 	clubs,
 	meetings,
 	members,
+	officerTerms,
 	people,
 	roleDefinitions,
 	roleSlots,
@@ -196,12 +197,24 @@ async function main() {
 					personId: personByName.get(r.name)!,
 					name: r.name,
 					email: r.email,
-					officerPosition: r.officerPosition,
 					userId: r.userId,
 				})),
 			)
 			.returning({ id: members.id, name: members.name });
 		memberByName = new Map(inserted.map((m) => [m.name, m.id]));
+
+		// Office(s) live in officer_terms now (#100), not on the member row: open a
+		// current term (term_end null) for each seeded office.
+		const officerTermRows = roster
+			.filter((r) => r.officerPosition)
+			.map((r) => ({
+				membershipId: memberByName.get(r.name)!,
+				position: r.officerPosition!,
+				termStart: new Date(),
+			}));
+		if (officerTermRows.length > 0) {
+			await db.insert(officerTerms).values(officerTermRows);
+		}
 	} else {
 		const all = await db
 			.select({ id: members.id, name: members.name })

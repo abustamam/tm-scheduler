@@ -81,8 +81,10 @@ function Roster() {
 			name: m.name,
 			initials: initialsOf(m.name),
 			tone: toneFromSeed(m.id),
-			tenure: m.officerPosition
-				? `${formatTenure(joined)} · ${officerPositionLabel(m.officerPosition)}`
+			tenure: m.officerPositions.length
+				? `${formatTenure(joined)} · ${m.officerPositions
+						.map(officerPositionLabel)
+						.join(", ")}`
 				: formatTenure(joined),
 			speeches: m.speeches,
 			membershipStatus: m.status,

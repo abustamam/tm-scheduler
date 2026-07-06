@@ -33,8 +33,8 @@ import { user } from "./auth-schema";
 // ---------------------------------------------------------------------------
 
 export const clubRoleEnum = pgEnum("club_role", ["admin", "vpe", "member"]);
-// Standard Toastmasters club officers (#63). Replaces the old free-text
-// `office`. Nullable on the membership (null = no office). Keep in lockstep with
+// Standard Toastmasters club officers (#63). The vocabulary for an officer term
+// (#100): each `officer_terms` row carries one of these. Keep in lockstep with
 // OFFICER_POSITIONS in src/lib/officers.ts.
 export const officerPositionEnum = pgEnum("officer_position", [
 	"president",
@@ -176,10 +176,9 @@ export const members = pgTable(
 		name: text("name").notNull(),
 		email: text("email"),
 		phone: text("phone"),
-		// Current elected club officer position (#63); null = no office. Structured
-		// enum replacing the old free-text `office`. In-app editing is authoritative;
-		// the CSV import only fills this when it's null (never overwrites).
-		officerPosition: officerPositionEnum("officer_position"),
+		// Current elected office(s) are NOT stored here (#100). They are derived
+		// from open `officer_terms` rows (term_end IS NULL) — a membership may hold
+		// several concurrently (e.g. Secretary + Treasurer) and past terms are kept.
 		// Roster membership status. "inactive" = didn't renew this season: hidden
 		// from sign-up / roster / season / picker views, but their past role
 		// history is preserved (never deleted). Reactivating restores them.
@@ -196,6 +195,40 @@ export const members = pgTable(
 	(t) => [
 		index("members_club_idx").on(t.clubId),
 		index("members_person_idx").on(t.personId),
+	],
+);
+
+// ---------------------------------------------------------------------------
+// Officer terms — a membership holding an office over a span of time (#100).
+// The SOURCE OF TRUTH for who holds which office: current office(s) are DERIVED
+// as the open terms (termEnd IS NULL), never stored back on the membership. A
+// membership may hold several offices concurrently (e.g. Secretary + Treasurer)
+// — one open row each. Closing a term (setting termEnd) retains it as history
+// (officer recognition / term reporting). `termStart` is nullable (unknown for
+// migrated legacy offices). The office vocabulary is the shared enum (#63).
+// ---------------------------------------------------------------------------
+
+export const officerTerms = pgTable(
+	"officer_terms",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		membershipId: uuid("membership_id")
+			.notNull()
+			.references(() => members.id, { onDelete: "cascade" }),
+		position: officerPositionEnum("position").notNull(),
+		// When the office began. Nullable: legacy offices migrated from the old
+		// members.officer_position column have no recorded start.
+		termStart: timestamp("term_start"),
+		// When the office ended. NULL = still held (current). A non-null value is
+		// retained history — the row is never deleted on removal.
+		termEnd: timestamp("term_end"),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+		updatedAt: timestamp("updated_at").defaultNow().notNull(),
+	},
+	(t) => [
+		index("officer_terms_membership_idx").on(t.membershipId),
+		// Fast lookup of the current officers (open terms) for a membership.
+		index("officer_terms_open_idx").on(t.membershipId, t.termEnd),
 	],
 );
 
@@ -371,13 +404,21 @@ export const peopleRelations = relations(people, ({ one, many }) => ({
 	memberships: many(members),
 }));
 
-export const membersRelations = relations(members, ({ one }) => ({
+export const membersRelations = relations(members, ({ one, many }) => ({
 	club: one(clubs, { fields: [members.clubId], references: [clubs.id] }),
 	person: one(people, {
 		fields: [members.personId],
 		references: [people.id],
 	}),
 	user: one(user, { fields: [members.userId], references: [user.id] }),
+	officerTerms: many(officerTerms),
+}));
+
+export const officerTermsRelations = relations(officerTerms, ({ one }) => ({
+	membership: one(members, {
+		fields: [officerTerms.membershipId],
+		references: [members.id],
+	}),
 }));
 
 export const clubsRelations = relations(clubs, ({ many }) => ({

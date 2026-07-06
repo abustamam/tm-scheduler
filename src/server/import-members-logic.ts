@@ -18,6 +18,10 @@ import {
 	type MappedMember,
 	resolvePerson,
 } from "#/lib/members-csv";
+import {
+	currentOfficersFor,
+	openOfficerTermIfAbsent,
+} from "./officer-terms-logic";
 
 export interface ImportStats {
 	peopleCreated: number;
@@ -161,12 +165,12 @@ export async function importPeopleAndMembers(
 				name: members.name,
 				email: members.email,
 				phone: members.phone,
-				officerPosition: members.officerPosition,
 			})
 			.from(members)
 			.where(and(eq(members.clubId, clubId), eq(members.personId, personId)))
 			.limit(1);
 
+		let membershipId: string;
 		if (existingMember) {
 			await db
 				.update(members)
@@ -175,24 +179,41 @@ export async function importPeopleAndMembers(
 					email: fillOnly(existingMember.email, row.email),
 					phone: fillOnly(existingMember.phone, row.phone),
 					joinedAt: row.joinedAt,
-					// Fill-only: never overwrite an in-app office assignment (the source
-					// of truth). Only set when the membership currently has none.
-					officerPosition:
-						existingMember.officerPosition ?? row.officerPosition,
 				})
 				.where(eq(members.id, existingMember.id));
+			membershipId = existingMember.id;
 			stats.membersUpdated++;
 		} else {
-			await db.insert(members).values({
-				clubId,
-				personId,
-				name: row.name,
-				email: row.email,
-				phone: row.phone,
-				joinedAt: row.joinedAt,
-				officerPosition: row.officerPosition,
-			});
+			const [created] = await db
+				.insert(members)
+				.values({
+					clubId,
+					personId,
+					name: row.name,
+					email: row.email,
+					phone: row.phone,
+					joinedAt: row.joinedAt,
+				})
+				.returning({ id: members.id });
+			if (!created) throw new Error("Failed to insert member");
+			membershipId = created.id;
 			stats.membersCreated++;
+		}
+
+		// Officer term (#100): the CSV's current position opens a term ONLY when
+		// the membership currently holds NO office — never overwriting or adding to
+		// an in-app assignment (the source of truth). termStart is unknown from the
+		// export (null). Idempotent across reruns.
+		if (row.officerPosition) {
+			const open = await currentOfficersFor(membershipId);
+			if (open.length === 0) {
+				await openOfficerTermIfAbsent(
+					db,
+					membershipId,
+					row.officerPosition,
+					null,
+				);
+			}
 		}
 	}
 

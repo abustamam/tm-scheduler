@@ -22,6 +22,11 @@ import {
 import { OFFICER_POSITIONS, parseOfficerPosition } from "#/lib/officers";
 import { buildImportPreview } from "#/lib/roster-import";
 import { logActivity } from "./activity";
+import {
+	currentOfficersFor,
+	openOfficerTermIfAbsent,
+	reconcileOfficerTerms,
+} from "./officer-terms-logic";
 
 export const editSchema = z.object({
 	clubId: z.string().uuid(),
@@ -30,12 +35,16 @@ export const editSchema = z.object({
 	name: z.string().trim().min(1),
 	email: z.string().trim().email().nullable().optional(),
 	phone: z.string().trim().nullable().optional(),
-	// Structured officer position (#63); null = no office / cleared.
-	officerPosition: z.enum(OFFICER_POSITIONS).nullable().optional(),
+	// The full set of offices this membership should currently hold (#100). The
+	// membership's open officer terms are reconciled to exactly this set: offices
+	// added here open a term, offices dropped close their open term (history is
+	// kept). Omitted = leave officer terms untouched (edits to name/contact only).
+	officerPositions: z.array(z.enum(OFFICER_POSITIONS)).optional(),
 });
 type EditInput = z.infer<typeof editSchema>;
 
-/** Update a roster member's name/contact/officer position; logs member_edit. */
+/** Update a roster member's name/contact and reconcile their office set (#100);
+ *  logs member_edit with the office change. */
 export async function applyMemberEdit(input: EditInput) {
 	const [current] = await db
 		.select()
@@ -48,10 +57,22 @@ export async function applyMemberEdit(input: EditInput) {
 		name: input.name,
 		email: input.email ?? null,
 		phone: input.phone ?? null,
-		officerPosition: input.officerPosition ?? null,
 	};
+	// Current offices before the edit — derived from open terms, for the log.
+	const beforeOffices = await currentOfficersFor(input.memberId);
 	await db.transaction(async (tx) => {
 		await tx.update(members).set(next).where(eq(members.id, input.memberId));
+		// Reconcile the office set only when the caller sent one (undefined = leave
+		// terms alone). Dedupe first so a repeated office can't open two terms.
+		if (input.officerPositions !== undefined) {
+			await reconcileOfficerTerms(tx, input.memberId, [
+				...new Set(input.officerPositions),
+			]);
+		}
+		const afterOffices =
+			input.officerPositions !== undefined
+				? [...new Set(input.officerPositions)]
+				: beforeOffices;
 		await logActivity(tx, {
 			clubId: input.clubId,
 			actorMemberId: input.actorMemberId ?? null,
@@ -63,9 +84,9 @@ export async function applyMemberEdit(input: EditInput) {
 					name: current.name,
 					email: current.email,
 					phone: current.phone,
-					officerPosition: current.officerPosition,
+					officerPositions: beforeOffices,
 				},
-				after: next,
+				after: { ...next, officerPositions: afterOffices },
 			},
 		});
 	});
@@ -364,12 +385,16 @@ export async function applyBulkImport(
 					name,
 					email,
 					phone,
-					// Pasted office is free text; parse to the enum (unparseable → null).
-					officerPosition: parseOfficerPosition(row.office),
 				})
 				.returning({ id: members.id });
 			if (!m) throw new Error("Failed to insert member.");
 			ids.push(m.id);
+			// Pasted office is free text; parse to the enum (unparseable → null) and
+			// open a current term for it (#100).
+			const office = parseOfficerPosition(row.office);
+			if (office) {
+				await openOfficerTermIfAbsent(tx, m.id, office, new Date());
+			}
 			await logActivity(tx, {
 				clubId: input.clubId,
 				actorMemberId: input.actorMemberId ?? null,

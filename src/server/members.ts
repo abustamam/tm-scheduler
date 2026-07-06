@@ -17,23 +17,27 @@ import {
 	removeSchema,
 	setStatusSchema,
 } from "./members-logic";
+import { currentOfficersByMember } from "./officer-terms-logic";
 
 /** List all ACTIVE roster members for a club (member-facing picker). Inactive
- *  members are hidden here; the VPE roster manager loads them separately.
+ *  members are hidden here; the VPE roster manager loads them separately. Each
+ *  row carries its current office(s) derived from open officer terms (#100).
  *  PUBLIC — no session required. */
 export const listMembers = createServerFn({ method: "GET" })
 	.validator((clubId: unknown) => z.string().uuid().parse(clubId))
-	.handler(async ({ data: clubId }) =>
-		db
-			.select({
-				id: members.id,
-				name: members.name,
-				officerPosition: members.officerPosition,
-			})
+	.handler(async ({ data: clubId }) => {
+		const roster = await db
+			.select({ id: members.id, name: members.name })
 			.from(members)
 			.where(and(eq(members.clubId, clubId), ne(members.status, "inactive")))
-			.orderBy(asc(members.name)),
-	);
+			.orderBy(asc(members.name));
+		const officers = await currentOfficersByMember(roster.map((m) => m.id));
+		return roster.map((m) => ({
+			id: m.id,
+			name: m.name,
+			officerPositions: officers.get(m.id) ?? [],
+		}));
+	});
 
 const addMemberSchema = z.object({
 	clubId: z.string().uuid(),
