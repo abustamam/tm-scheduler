@@ -10,7 +10,7 @@ import {
 	members,
 	roleDefinitions,
 	roleSlots,
-	speakerDetails,
+	speeches,
 } from "#/db/schema";
 import { resolveEvaluatorLinks } from "#/lib/agenda";
 import { officerPositionLabel } from "#/lib/officers";
@@ -98,12 +98,12 @@ async function loadMeetingDetail(
 			isSpeakerRole: roleDefinitions.isSpeakerRole,
 			assigneeId: assignee.id,
 			assigneeName: assignee.name,
-			speechTitle: speakerDetails.speechTitle,
-			pathwayPath: speakerDetails.pathwayPath,
-			projectName: speakerDetails.projectName,
-			projectLevel: speakerDetails.projectLevel,
-			minMinutes: speakerDetails.minMinutes,
-			maxMinutes: speakerDetails.maxMinutes,
+			speechTitle: speeches.title,
+			pathwayPath: speeches.pathwayPath,
+			projectName: speeches.projectName,
+			projectLevel: speeches.projectLevel,
+			minMinutes: speeches.minMinutes,
+			maxMinutes: speeches.maxMinutes,
 		})
 		.from(roleSlots)
 		.innerJoin(
@@ -111,7 +111,7 @@ async function loadMeetingDetail(
 			eq(roleDefinitions.id, roleSlots.roleDefinitionId),
 		)
 		.leftJoin(assignee, eq(assignee.id, roleSlots.assignedMemberId))
-		.leftJoin(speakerDetails, eq(speakerDetails.slotId, roleSlots.id))
+		.leftJoin(speeches, eq(speeches.id, roleSlots.speechId))
 		.where(eq(roleSlots.meetingId, meetingId))
 		.orderBy(asc(roleDefinitions.sortOrder), asc(roleSlots.slotIndex));
 
@@ -259,7 +259,7 @@ export const listMyCommitments = createServerFn({ method: "GET" }).handler(
 				timezone: clubs.timezone,
 				roleName: roleDefinitions.name,
 				isSpeakerRole: roleDefinitions.isSpeakerRole,
-				speechTitle: speakerDetails.speechTitle,
+				speechTitle: speeches.title,
 			})
 			.from(roleSlots)
 			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
@@ -268,7 +268,7 @@ export const listMyCommitments = createServerFn({ method: "GET" }).handler(
 				roleDefinitions,
 				eq(roleDefinitions.id, roleSlots.roleDefinitionId),
 			)
-			.leftJoin(speakerDetails, eq(speakerDetails.slotId, roleSlots.id))
+			.leftJoin(speeches, eq(speeches.id, roleSlots.speechId))
 			.where(
 				and(
 					eq(roleSlots.assignedMemberId, memberId),
@@ -298,7 +298,7 @@ export const listMemberCommitments = createServerFn({ method: "GET" })
 				timezone: clubs.timezone,
 				roleName: roleDefinitions.name,
 				isSpeakerRole: roleDefinitions.isSpeakerRole,
-				speechTitle: speakerDetails.speechTitle,
+				speechTitle: speeches.title,
 			})
 			.from(roleSlots)
 			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
@@ -307,7 +307,7 @@ export const listMemberCommitments = createServerFn({ method: "GET" })
 				roleDefinitions,
 				eq(roleDefinitions.id, roleSlots.roleDefinitionId),
 			)
-			.leftJoin(speakerDetails, eq(speakerDetails.slotId, roleSlots.id))
+			.leftJoin(speeches, eq(speeches.id, roleSlots.speechId))
 			.where(
 				and(
 					eq(roleSlots.assignedMemberId, memberId),

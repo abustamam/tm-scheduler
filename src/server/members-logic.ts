@@ -17,7 +17,6 @@ import {
 	members,
 	people,
 	roleSlots,
-	speakerDetails,
 } from "#/db/schema";
 import { OFFICER_POSITIONS, parseOfficerPosition } from "#/lib/officers";
 import { buildImportPreview } from "#/lib/roster-import";
@@ -138,10 +137,16 @@ export async function applySetMemberStatus(input: SetStatusInput) {
 					),
 				);
 			for (const s of upcoming) {
-				await tx.delete(speakerDetails).where(eq(speakerDetails.slotId, s.id));
+				// Unlink any speech (speech_id → NULL); the speech persists
+				// Person-owned and unscheduled (ADR-0009 — never destroyed).
 				await tx
 					.update(roleSlots)
-					.set({ assignedMemberId: null, status: "open", claimedAt: null })
+					.set({
+						assignedMemberId: null,
+						status: "open",
+						claimedAt: null,
+						speechId: null,
+					})
 					.where(eq(roleSlots.id, s.id));
 				await logActivity(tx, {
 					clubId: input.clubId,
@@ -292,10 +297,16 @@ export async function applyMemberRemove(input: RemoveInput) {
 				),
 			);
 		for (const s of upcoming) {
-			await tx.delete(speakerDetails).where(eq(speakerDetails.slotId, s.id));
+			// Unlink any speech (speech_id → NULL); the speech persists
+			// Person-owned and unscheduled (ADR-0009 — never destroyed).
 			await tx
 				.update(roleSlots)
-				.set({ assignedMemberId: null, status: "open", claimedAt: null })
+				.set({
+					assignedMemberId: null,
+					status: "open",
+					claimedAt: null,
+					speechId: null,
+				})
 				.where(eq(roleSlots.id, s.id));
 			await logActivity(tx, {
 				clubId: input.clubId,

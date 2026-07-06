@@ -9,7 +9,7 @@ import {
 	people,
 	roleDefinitions,
 	roleSlots,
-	speakerDetails,
+	speeches,
 } from "#/db/schema";
 import { requireMembership, requireUser } from "./guards";
 import {
@@ -117,10 +117,10 @@ async function loadSpeechLog(
 			slotId: roleSlots.id,
 			scheduledAt: meetings.scheduledAt,
 			roleName: roleDefinitions.name,
-			speechTitle: speakerDetails.speechTitle,
-			projectName: speakerDetails.projectName,
-			pathwayPath: speakerDetails.pathwayPath,
-			projectLevel: speakerDetails.projectLevel,
+			speechTitle: speeches.title,
+			projectName: speeches.projectName,
+			pathwayPath: speeches.pathwayPath,
+			projectLevel: speeches.projectLevel,
 			evaluatorName: evaluatorMember.name,
 			status: roleSlots.status,
 		})
@@ -130,7 +130,7 @@ async function loadSpeechLog(
 			eq(roleDefinitions.id, roleSlots.roleDefinitionId),
 		)
 		.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
-		.leftJoin(speakerDetails, eq(speakerDetails.slotId, roleSlots.id))
+		.leftJoin(speeches, eq(speeches.id, roleSlots.speechId))
 		.leftJoin(evaluatorSlot, eq(evaluatorSlot.evaluatesSlotId, roleSlots.id))
 		.leftJoin(
 			evaluatorMember,

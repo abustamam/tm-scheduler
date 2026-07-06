@@ -11,7 +11,7 @@ import {
 	people,
 	roleDefinitions,
 	roleSlots,
-	speakerDetails,
+	speeches,
 	user,
 } from "./schema.ts";
 
@@ -303,7 +303,18 @@ async function main() {
 		})
 		.where(eq(roleSlots.id, timerSlot.id));
 
-	// Claim two speaker slots with details.
+	// Claim two speaker slots, each with a Person-owned speech (ADR-0009). The
+	// slot points at the speech via speech_id; the speech is owned by the
+	// assignee's Person, resolved from the member row.
+	const personOfMember = async (memberId: string) => {
+		const [row] = await db
+			.select({ personId: members.personId })
+			.from(members)
+			.where(eq(members.id, memberId))
+			.limit(1);
+		return row!.personId;
+	};
+
 	await db
 		.update(roleSlots)
 		.set({
@@ -312,15 +323,22 @@ async function main() {
 			claimedAt: new Date(),
 		})
 		.where(eq(roleSlots.id, speakerSlots[0].id));
-	await db.insert(speakerDetails).values({
-		slotId: speakerSlots[0].id,
-		speechTitle: "Finding My Voice",
-		pathwayPath: "Dynamic Leadership",
-		projectName: "Ice Breaker",
-		projectLevel: "Level 1",
-		minMinutes: 4,
-		maxMinutes: 6,
-	});
+	const [alexSpeech] = await db
+		.insert(speeches)
+		.values({
+			personId: await personOfMember(alexMemberId),
+			title: "Finding My Voice",
+			pathwayPath: "Dynamic Leadership",
+			projectName: "Ice Breaker",
+			projectLevel: "Level 1",
+			minMinutes: 4,
+			maxMinutes: 6,
+		})
+		.returning({ id: speeches.id });
+	await db
+		.update(roleSlots)
+		.set({ speechId: alexSpeech!.id })
+		.where(eq(roleSlots.id, speakerSlots[0].id));
 
 	await db
 		.update(roleSlots)
@@ -330,15 +348,22 @@ async function main() {
 			claimedAt: new Date(),
 		})
 		.where(eq(roleSlots.id, speakerSlots[1].id));
-	await db.insert(speakerDetails).values({
-		slotId: speakerSlots[1].id,
-		speechTitle: "Lessons From the Trail",
-		pathwayPath: "Presentation Mastery",
-		projectName: "Researching and Presenting",
-		projectLevel: "Level 2",
-		minMinutes: 5,
-		maxMinutes: 7,
-	});
+	const [samSpeech] = await db
+		.insert(speeches)
+		.values({
+			personId: await personOfMember(samMemberId),
+			title: "Lessons From the Trail",
+			pathwayPath: "Presentation Mastery",
+			projectName: "Researching and Presenting",
+			projectLevel: "Level 2",
+			minMinutes: 5,
+			maxMinutes: 7,
+		})
+		.returning({ id: speeches.id });
+	await db
+		.update(roleSlots)
+		.set({ speechId: samSpeech!.id })
+		.where(eq(roleSlots.id, speakerSlots[1].id));
 
 	// Link evaluator slots to the speakers they evaluate.
 	await db

@@ -3,9 +3,15 @@
 // Integration-testable by mocking `#/db`.
 import { and, eq } from "drizzle-orm";
 import { db } from "#/db";
-import { meetings, roleDefinitions, roleSlots } from "#/db/schema";
+import { meetings, roleDefinitions, roleSlots, speeches } from "#/db/schema";
 import { pickSpeakerAndEvaluatorRoles } from "#/lib/meeting-roles";
 import { logActivity } from "./activity";
+
+// Either the main db client or a drizzle transaction — so speech helpers can run
+// inside a caller's transaction and commit atomically with the slot change.
+type DbOrTx =
+	| typeof db
+	| Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
 
 async function clubRoles(clubId: string) {
 	const defs = await db
@@ -199,8 +205,17 @@ export async function applyMoveSpeakerSlot(input: {
 	return { clubId: target.clubId };
 }
 
-export type SpeakerDetailsInput = {
+// ---------------------------------------------------------------------------
+// Speeches — first-class, Person-owned content (ADR-0009 / #79). A speaker slot
+// references a speech via `role_slots.speech_id`; these helpers create/edit/
+// unlink that pointer without ever destroying the speech itself.
+// ---------------------------------------------------------------------------
+
+// Field names mirror the legacy speaker-details form input, so existing callers
+// pass the same shape; `speechTitle` maps to `speeches.title`.
+export type SpeechInput = {
 	speechTitle?: string;
+	introduction?: string;
 	pathwayPath?: string;
 	projectName?: string;
 	projectLevel?: string;
@@ -208,8 +223,9 @@ export type SpeakerDetailsInput = {
 	maxMinutes?: number;
 };
 
-export type NormalizedSpeakerDetails = {
-	speechTitle: string;
+export type SpeechContent = {
+	title: string;
+	introduction: string | null;
 	pathwayPath: string | null;
 	projectName: string | null;
 	projectLevel: string | null;
@@ -217,18 +233,136 @@ export type NormalizedSpeakerDetails = {
 	maxMinutes: number | null;
 };
 
-/** Normalize speaker details for persistence: blank/missing title → "TBA",
- *  blank optional strings → null, missing numbers → null. */
-export function normalizeSpeakerDetails(
-	input?: SpeakerDetailsInput,
-): NormalizedSpeakerDetails {
-	const title = input?.speechTitle?.trim();
+/**
+ * Normalize raw speech form input to persistable content plus a `hasContent`
+ * flag. `hasContent` is false for a pure-TBA / empty input (blank or "TBA" title
+ * and no other field set) — the caller then leaves the slot's `speech_id` NULL
+ * instead of creating a blank speech (mirrors the migration's empty-placeholder
+ * rule and keeps "TBA" a derived, unstored state).
+ */
+export function normalizeSpeech(input?: SpeechInput): {
+	content: SpeechContent;
+	hasContent: boolean;
+} {
+	const title = input?.speechTitle?.trim() ?? "";
+	const introduction = input?.introduction?.trim() || null;
+	const pathwayPath = input?.pathwayPath?.trim() || null;
+	const projectName = input?.projectName?.trim() || null;
+	const projectLevel = input?.projectLevel?.trim() || null;
+	const minMinutes = input?.minMinutes ?? null;
+	const maxMinutes = input?.maxMinutes ?? null;
+	const hasOtherContent =
+		introduction !== null ||
+		pathwayPath !== null ||
+		projectName !== null ||
+		projectLevel !== null ||
+		minMinutes !== null ||
+		maxMinutes !== null;
+	const hasRealTitle = title.length > 0 && title !== "TBA";
 	return {
-		speechTitle: title && title.length > 0 ? title : "TBA",
-		pathwayPath: input?.pathwayPath?.trim() || null,
-		projectName: input?.projectName?.trim() || null,
-		projectLevel: input?.projectLevel?.trim() || null,
-		minMinutes: input?.minMinutes ?? null,
-		maxMinutes: input?.maxMinutes ?? null,
+		content: {
+			title: title.length > 0 ? title : "TBA",
+			introduction,
+			pathwayPath,
+			projectName,
+			projectLevel,
+			minMinutes,
+			maxMinutes,
+		},
+		hasContent: hasRealTitle || hasOtherContent,
 	};
+}
+
+/**
+ * Attach a new Person-owned Speech to a freshly-claimed speaker slot and point
+ * the slot at it. Pure-TBA / empty input creates nothing (slot stays TBA,
+ * `speech_id` NULL). Returns the new speech id, or null when nothing was created.
+ * Assumes the slot has no speech yet (a just-claimed slot).
+ */
+export async function attachSpeechToSlot(
+	conn: DbOrTx,
+	args: { slotId: string; personId: string; input?: SpeechInput },
+): Promise<string | null> {
+	const { content, hasContent } = normalizeSpeech(args.input);
+	if (!hasContent) return null;
+	const [row] = await conn
+		.insert(speeches)
+		.values({ personId: args.personId, ...content })
+		.returning({ id: speeches.id });
+	if (!row) throw new Error("Failed to create speech.");
+	await conn
+		.update(roleSlots)
+		.set({ speechId: row.id })
+		.where(eq(roleSlots.id, args.slotId));
+	return row.id;
+}
+
+/**
+ * Unlink a slot's speech (set `speech_id` NULL). The speech row is NOT deleted —
+ * it persists Person-owned and unscheduled (ADR-0009 pointer lifecycle). Safe to
+ * call when the slot has no speech.
+ */
+export async function unlinkSlotSpeech(
+	conn: DbOrTx,
+	slotId: string,
+): Promise<void> {
+	await conn
+		.update(roleSlots)
+		.set({ speechId: null })
+		.where(eq(roleSlots.id, slotId));
+}
+
+/**
+ * Apply the reassign pointer rule (ADR-0009): when a speaker slot moves to a
+ * *different* Person, unlink the speech (it persists Person-owned and
+ * unscheduled); moving within the same Person keeps the speech attached. Returns
+ * whether the speech was unlinked. Call after repointing the slot's assignee.
+ */
+export async function reassignSlotSpeech(
+	conn: DbOrTx,
+	args: {
+		slotId: string;
+		fromPersonId: string | null;
+		toPersonId: string | null;
+	},
+): Promise<boolean> {
+	if (args.fromPersonId === args.toPersonId) return false;
+	await unlinkSlotSpeech(conn, args.slotId);
+	return true;
+}
+
+/**
+ * Edit the speech attached to a speaker slot (the "Edit speech" flow):
+ *  - real content + slot already has a speech → update that speech in place.
+ *  - real content + no speech yet → create one owned by `personId` and link it.
+ *  - blank/TBA input + slot has a speech → unlink it (the speech persists).
+ *  - blank/TBA input + no speech → no-op.
+ * `personId` is the current assignee's Person (required to own a new speech).
+ */
+export async function editSlotSpeech(
+	conn: DbOrTx,
+	args: {
+		slotId: string;
+		personId: string;
+		currentSpeechId: string | null;
+		input?: SpeechInput;
+	},
+): Promise<void> {
+	const { content, hasContent } = normalizeSpeech(args.input);
+	if (!hasContent) {
+		if (args.currentSpeechId) await unlinkSlotSpeech(conn, args.slotId);
+		return;
+	}
+	if (args.currentSpeechId) {
+		await conn
+			.update(speeches)
+			.set({ ...content, updatedAt: new Date() })
+			.where(eq(speeches.id, args.currentSpeechId));
+		return;
+	}
+	await attachSpeechToSlot(conn, {
+		slotId: args.slotId,
+		personId: args.personId,
+		input: args.input,
+	});
 }
