@@ -95,14 +95,16 @@ completion; `is_required` is display emphasis only.
 ### Synced progress (authoritative, from Base Camp)
 
 ```
+people.basecamp_user_id  (new column)   -- durable Base Camp join key, unique-when-present
 path_enrollments    { id, person_id → people, path_id → pathways_paths,
-                      basecamp_user_id, last_synced_at, archived_at? }
+                      last_synced_at, archived_at? }
 path_level_progress { id, enrollment_id → path_enrollments, level int (1–5),
                       completed int, total int, approved boolean }
 ```
 
 One `path_enrollments` row per (person, path); `path_level_progress` mirrors the `progression`
-object. `basecamp_user_id` is stored on first match and becomes the durable join key.
+object. `people.basecamp_user_id` is stored on first email match and becomes the durable join
+key thereafter (a person-level fact, so it lives on `people`, not the per-path enrollment).
 
 ### Named wins (specific, from our own data — Phase 2)
 
@@ -145,15 +147,20 @@ doesn't expose a per-club chooser; out of scope for v1).
 
 Dependencies are now split, enabling a leaner first ship:
 
-- **Phase 1 — Sync + count-based celebration (needs #64 `people` only).**
-  `pathways_paths` seed (course codes) + manual JSON ingest + identity match + the member view
-  in count form (ring, level bars, `approved` celebration, "N of M"), member-detail Pathways tab,
-  roster Pathway/level column, and dashboard tile. Fully honest and shippable without speeches.
-- **Phase 2 — Named specificity (needs #79 `speeches` + closes #101).**
+- **Phase 1 — Sync + count-based celebration. `#64 (people) is CLOSED — unblocked, buildable now.**
+  Split into two plans: **1a (backend)** — `pathways_paths` + `people.basecamp_user_id` +
+  `path_enrollments`/`path_level_progress` schema, catalog seed (course codes), the pure JSON
+  parser, and the ingest/upsert + identity-match logic behind an admin server-fn; **1b (UI)** —
+  the manual ingest paste screen + the count-form member view (ring, level bars, `approved`
+  celebration, "N of M"), member-detail Pathways tab, roster column, dashboard tile. 1a produces
+  working, testable software on its own (ingest real JSON → query progress) with no UI.
+- **Phase 2 — Named specificity. Blocked on #79 (`speeches`), still OPEN; closes #101.**
   `pathways_projects` name seed + `speeches.project_id` FK + free-text migration → "Your wins"
   and named "Up next." This is the specificity layer of the locked visual.
 
-(#64 and #79 are Accepted-but-unbuilt ADRs; both OPEN. Phase 1 unblocks the moment #64 lands.)
+(Status as of 2026-07-06: **#64 CLOSED** — `people`/`members.person_id` exist in `schema.ts`;
+**#79 OPEN** — speeches are still free-text `speaker_details`. So Phase 1 builds now; Phase 2
+waits on #79.)
 
 ## Testing
 
