@@ -306,11 +306,22 @@ export const roleSlots = pgTable(
 			(): AnyPgColumn => roleSlots.id,
 			{ onDelete: "set null" },
 		),
+		// The Person-owned Speech delivered in this speaker slot (ADR-0009 / #79).
+		// Null = TBA (assigned member, no speech attached yet). Replaces the old
+		// slot-bound `speaker_details`. The pointer moves on reschedule and clears
+		// on reassign-to-a-different-person; the speech itself is never destroyed by
+		// slot changes (speech deleted → set null). A speech is referenced by at
+		// most one slot at a time — enforced by the unique index below (Postgres
+		// treats NULLs as distinct, so many TBA slots coexist).
+		speechId: uuid("speech_id").references(() => speeches.id, {
+			onDelete: "set null",
+		}),
 		claimedAt: timestamp("claimed_at"),
 	},
 	(t) => [
 		index("role_slots_meeting_idx").on(t.meetingId),
 		index("role_slots_assigned_member_idx").on(t.assignedMemberId),
+		uniqueIndex("role_slots_speech_unique").on(t.speechId),
 	],
 );
 
@@ -338,20 +349,35 @@ export const memberAvailability = pgTable(
 );
 
 // ---------------------------------------------------------------------------
-// Speaker details (1:1 with a claimed speaker slot)
+// Speeches — first-class, Person-owned content (ADR-0009 / #79).
+//
+// A speech is durable and independent of the schedule: it belongs to a Person
+// (not a club, not a slot), so reassigning or rescheduling a speaker slot never
+// destroys it. A speaker slot *references* a speech via `role_slots.speech_id`.
+// No `club_id` (a delivery's club comes from the slot → meeting), no stored
+// `status` (scheduling state is derived from slot linkage + meeting date).
+// pathway/project/level stay free text (spike #101). Replaces `speaker_details`.
 // ---------------------------------------------------------------------------
 
-export const speakerDetails = pgTable("speaker_details", {
-	slotId: uuid("slot_id")
-		.primaryKey()
-		.references(() => roleSlots.id, { onDelete: "cascade" }),
-	speechTitle: text("speech_title"),
-	pathwayPath: text("pathway_path"),
-	projectName: text("project_name"),
-	projectLevel: text("project_level"),
-	minMinutes: integer("min_minutes"),
-	maxMinutes: integer("max_minutes"),
-});
+export const speeches = pgTable(
+	"speeches",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		personId: uuid("person_id")
+			.notNull()
+			.references(() => people.id, { onDelete: "cascade" }),
+		title: text("title").notNull(),
+		introduction: text("introduction"),
+		pathwayPath: text("pathway_path"),
+		projectName: text("project_name"),
+		projectLevel: text("project_level"),
+		minMinutes: integer("min_minutes"),
+		maxMinutes: integer("max_minutes"),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+		updatedAt: timestamp("updated_at").defaultNow().notNull(),
+	},
+	(t) => [index("speeches_person_idx").on(t.personId)],
+);
 
 // ---------------------------------------------------------------------------
 // Activity log
@@ -402,6 +428,7 @@ export const notifications = pgTable("notifications", {
 export const peopleRelations = relations(people, ({ one, many }) => ({
 	user: one(user, { fields: [people.userId], references: [user.id] }),
 	memberships: many(members),
+	speeches: many(speeches),
 }));
 
 export const membersRelations = relations(members, ({ one, many }) => ({
@@ -479,17 +506,18 @@ export const roleSlotsRelations = relations(roleSlots, ({ one }) => ({
 		references: [roleSlots.id],
 		relationName: "evaluatesSlot",
 	}),
-	speakerDetails: one(speakerDetails, {
-		fields: [roleSlots.id],
-		references: [speakerDetails.slotId],
+	speech: one(speeches, {
+		fields: [roleSlots.speechId],
+		references: [speeches.id],
 	}),
 }));
 
-export const speakerDetailsRelations = relations(speakerDetails, ({ one }) => ({
-	slot: one(roleSlots, {
-		fields: [speakerDetails.slotId],
-		references: [roleSlots.id],
+export const speechesRelations = relations(speeches, ({ one, many }) => ({
+	person: one(people, {
+		fields: [speeches.personId],
+		references: [people.id],
 	}),
+	slots: many(roleSlots),
 }));
 
 export const notificationsRelations = relations(notifications, ({ one }) => ({

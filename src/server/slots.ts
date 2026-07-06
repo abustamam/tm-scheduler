@@ -2,12 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
-import {
-	meetings,
-	roleDefinitions,
-	roleSlots,
-	speakerDetails,
-} from "#/db/schema";
+import { meetings, members, roleDefinitions, roleSlots } from "#/db/schema";
 import { logActivity } from "./activity";
 import {
 	requireClubRole,
@@ -19,11 +14,14 @@ import {
 	applyAddSpeakerSlot,
 	applyMoveSpeakerSlot,
 	applyRemoveSpeakerSlot,
-	normalizeSpeakerDetails,
+	attachSpeechToSlot,
+	editSlotSpeech,
+	reassignSlotSpeech,
 } from "./slots-logic";
 
 const speakerDetailsSchema = z.object({
 	speechTitle: z.string().trim().optional(),
+	introduction: z.string().trim().optional(),
 	pathwayPath: z.string().trim().optional(),
 	projectName: z.string().trim().optional(),
 	projectLevel: z.string().trim().optional(),
@@ -83,14 +81,20 @@ export const claimSlot = createServerFn({ method: "POST" })
 			}
 
 			if (slot.isSpeakerRole) {
-				const details = normalizeSpeakerDetails(data.speakerDetails);
-				await tx
-					.insert(speakerDetails)
-					.values({ slotId: data.slotId, ...details })
-					.onConflictDoUpdate({
-						target: speakerDetails.slotId,
-						set: details,
-					});
+				// Claiming a speaker slot captures a Speech owned by the claimant's
+				// Person (ADR-0009). Pure-TBA/empty input creates none — the slot
+				// stays TBA (speech_id NULL) until a speech is attached later.
+				const [claimant] = await tx
+					.select({ personId: members.personId })
+					.from(members)
+					.where(eq(members.id, data.memberId))
+					.limit(1);
+				if (!claimant) throw new Error("Claiming member not found.");
+				await attachSpeechToSlot(tx, {
+					slotId: data.slotId,
+					personId: claimant.personId,
+					input: data.speakerDetails,
+				});
 			}
 
 			await logActivity(tx, {
@@ -137,10 +141,16 @@ export const releaseSlot = createServerFn({ method: "POST" })
 		await requireMemberInClub(data.actorMemberId, slot.clubId);
 
 		return db.transaction(async (tx) => {
-			await tx.delete(speakerDetails).where(eq(speakerDetails.slotId, slot.id));
+			// Release unlinks the speech (speech_id → NULL) but never deletes it:
+			// the speech persists Person-owned and unscheduled (ADR-0009).
 			await tx
 				.update(roleSlots)
-				.set({ assignedMemberId: null, status: "open", claimedAt: null })
+				.set({
+					assignedMemberId: null,
+					status: "open",
+					claimedAt: null,
+					speechId: null,
+				})
 				.where(eq(roleSlots.id, slot.id));
 
 			await logActivity(tx, {
@@ -313,6 +323,24 @@ export const reassignSlot = createServerFn({ method: "POST" })
 		await requireMemberInClub(data.actorMemberId, slot.clubId);
 		await requireMemberInClub(data.memberId, slot.clubId);
 
+		// Reassigning a speaker slot to a *different* Person unlinks the speech;
+		// the old speech persists Person-owned and unscheduled (ADR-0009 — no
+		// longer destructive). Reassigning within the same Person keeps it.
+		const personOf = async (memberId: string | null) =>
+			memberId
+				? ((
+						await db
+							.select({ personId: members.personId })
+							.from(members)
+							.where(eq(members.id, memberId))
+							.limit(1)
+					)[0]?.personId ?? null)
+				: null;
+		const fromPerson = slot.isSpeakerRole
+			? await personOf(slot.assignedMemberId)
+			: null;
+		const toPerson = slot.isSpeakerRole ? await personOf(data.memberId) : null;
+
 		return db.transaction(async (tx) => {
 			// New holder hasn't been confirmed → back to "claimed".
 			await tx
@@ -320,16 +348,13 @@ export const reassignSlot = createServerFn({ method: "POST" })
 				.set({ assignedMemberId: data.memberId, status: "claimed" })
 				.where(eq(roleSlots.id, data.slotId));
 
-			// The previous speaker's speech no longer applies — reset to TBA.
+			// Unlink the speech only when the Person actually changed.
 			if (slot.isSpeakerRole) {
-				const details = normalizeSpeakerDetails(undefined);
-				await tx
-					.insert(speakerDetails)
-					.values({ slotId: data.slotId, ...details })
-					.onConflictDoUpdate({
-						target: speakerDetails.slotId,
-						set: details,
-					});
+				await reassignSlotSpeech(tx, {
+					slotId: data.slotId,
+					fromPersonId: fromPerson,
+					toPersonId: toPerson,
+				});
 			}
 
 			await logActivity(tx, {
@@ -364,6 +389,9 @@ export const updateSpeakerDetails = createServerFn({ method: "POST" })
 				id: roleSlots.id,
 				isSpeakerRole: roleDefinitions.isSpeakerRole,
 				clubId: meetings.clubId,
+				speechId: roleSlots.speechId,
+				assignedMemberId: roleSlots.assignedMemberId,
+				personId: members.personId,
 			})
 			.from(roleSlots)
 			.innerJoin(
@@ -371,6 +399,7 @@ export const updateSpeakerDetails = createServerFn({ method: "POST" })
 				eq(roleDefinitions.id, roleSlots.roleDefinitionId),
 			)
 			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+			.leftJoin(members, eq(members.id, roleSlots.assignedMemberId))
 			.where(eq(roleSlots.id, data.slotId))
 			.limit(1);
 
@@ -380,13 +409,20 @@ export const updateSpeakerDetails = createServerFn({ method: "POST" })
 		if (!slot.isSpeakerRole) {
 			throw new Error("Only speaker roles have speech details.");
 		}
+		// A speech is Person-owned, so it needs an assignee to own it.
+		if (!slot.assignedMemberId || !slot.personId) {
+			throw new Error("Assign a member before adding speech details.");
+		}
 		await requireMemberInClub(data.actorMemberId, slot.clubId);
 
-		const details = normalizeSpeakerDetails(data.speakerDetails);
-		await db
-			.insert(speakerDetails)
-			.values({ slotId: data.slotId, ...details })
-			.onConflictDoUpdate({ target: speakerDetails.slotId, set: details });
+		await db.transaction(async (tx) => {
+			await editSlotSpeech(tx, {
+				slotId: data.slotId,
+				personId: slot.personId as string,
+				currentSpeechId: slot.speechId,
+				input: data.speakerDetails,
+			});
+		});
 
 		return { ok: true as const };
 	});

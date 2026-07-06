@@ -23,7 +23,7 @@ import {
 	members,
 	roleDefinitions,
 	roleSlots,
-	speakerDetails,
+	speeches,
 } from "#/db/schema";
 import {
 	cleanup,
@@ -115,7 +115,7 @@ async function listMemberCommitmentsPublic(memberId: string) {
 			timezone: clubs.timezone,
 			roleName: roleDefinitions.name,
 			isSpeakerRole: roleDefinitions.isSpeakerRole,
-			speechTitle: speakerDetails.speechTitle,
+			speechTitle: speeches.title,
 		})
 		.from(roleSlots)
 		.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
@@ -124,7 +124,7 @@ async function listMemberCommitmentsPublic(memberId: string) {
 			roleDefinitions,
 			eq(roleDefinitions.id, roleSlots.roleDefinitionId),
 		)
-		.leftJoin(speakerDetails, eq(speakerDetails.slotId, roleSlots.id))
+		.leftJoin(speeches, eq(speeches.id, roleSlots.speechId))
 		.where(
 			and(
 				eq(roleSlots.assignedMemberId, memberId),
