@@ -1,165 +1,177 @@
 # Pathways progression model — design
 
 Date: 2026-07-06
-Issues: closes #101 (catalog modeling) and #61 (data-driven progress UI).
+Issues: closes #61 (data-driven progress UI); closes #101 (speech→project modeling, Phase 2);
+follow-up #107 (browser-extension auto-sync).
 ADRs referenced: ADR-0008 (person identity), ADR-0009 (speeches first-class). Extends CONTEXT.md "Pathways".
 
-## Summary
+## North star
 
-Model the Toastmasters Pathways curriculum as first-class reference data (the 11 paths, their
-5 levels, and the projects in each), let a **Person** enrol in one or more paths, track
-per-project completion (derived from delivered speeches **plus** manual ticks for non-speech
-projects), and surface a visual "here's what you need to do to reach your next level" view for
-members — plus VPE-facing editing, a roster glance, and a dashboard tile.
+**Base Camp is the system of record for Pathways education. This app is a scheduling app with a
+nice UI that celebrates wins and drives members back to Base Camp.** We never present ourselves
+as the authority on education progress — we mirror Base Camp and nudge. A member's only real
+inputs here remain: entering their speech (to claim a speaker slot) and confirming roles.
 
-The canonical catalog is the "progression path" backbone; the member view is the visual
-next-level tracker.
+## What Base Camp actually gives us (verified from real data)
 
-## ⚠️ Prerequisites (hard dependencies)
+The Base Camp Manager dashboard calls a JSON endpoint (captured in `samples/_api_bcm_progress_*`):
 
-This feature **cannot be implemented** until both of these land — enrolment is Person-level and
-completion derives from Person-owned speeches:
+```
+GET https://basecamp.toastmasters.org/api/bcm/progress/?club=<club-guid>&page=N   (paginated)
+```
 
-- **#64 — `people` table** (ADR-0008). Nothing to hang an enrolment on until Person identity exists.
-- **#79 — `speeches` table** (ADR-0009). Today speech data is free-text `speaker_details` bound
-  1:1 to a slot; there is no `person_id` and no durable speech to derive completion from.
+Per member, per path:
+```json
+{ "user": { "id": 122747, "name": "...", "email": "...", "username": "<guid>" },
+  "path_name": "Presentation Mastery",
+  "course_id": "course-v1:Toastmasters+8701+8_15_2023",
+  "progression": {
+    "Level 1": { "completed": 5, "total": 5, "approved": true },
+    "Level 4": { "completed": 2, "total": 3, "approved": false },
+    "Path Completion": { "completed": 0, "total": 1 } } }
+```
 
-The design below assumes `people` and `speeches` exist as ADR-0008/0009 describe. The dependency
-chain is: **#64 → #79 → this feature**.
+Decisive facts this establishes:
 
-## Decisions locked during brainstorming
+- **Granularity is per-*level* counts, not per-*project*.** Base Camp tells us "Level 4: 2 of 3,"
+  never *which* two. So project *identity* can never come from Base Camp.
+- **`approved` per level is the authoritative award signal** — free, no manual award flow needed.
+- **`course_id` carries a stable path code** (8701 = Presentation Mastery, 8700 = Motivational
+  Strategies, 8711 = Engaging Humor, 8705 = Strategic Relationships, 8706 = Dynamic Leadership,
+  8702 = Leadership Development, …). This is the durable catalog key — not the display name.
+- **Identity keys are `email` + Base Camp `user.id`/`username` GUID. There is no `PN-` Customer ID.**
+- **Multi-path** = the same `user.id` appears on multiple path rows.
+- **Data quirks to handle:** `completed` can **exceed** `total` (e.g. `Level 3: 7 of 3` — extra/
+  repeated electives); per-level `total` **varies by path**; treat **`approved`**, not
+  `completed == total`, as the real "level done" signal; the endpoint is **paginated** and
+  **per-club**.
 
-- **Catalog depth:** full project catalog — every path → level → named project, including
-  required-vs-elective and the per-level "pick N electives" rule.
-- **Completion source:** derived from speeches **+** manual. A delivered speech linked to a
-  catalog project auto-completes it; non-speech projects (Base Camp activities, surveys,
-  evaluations) are ticked manually.
-- **Enrolment:** in-app pick (member/VPE selects a path from the catalog) **and** import
-  backfill from the Base Camp "Paths Currently in Progress" export.
-- **Multi-path in the UI:** tabs / switcher (one path block at a time; no switcher shown when a
-  person has a single path).
-- **Member view layout:** Option B — a glanceable progress ring for the whole path **plus** a
-  focused "Next up → Level N" card that spells out exactly what remains. Contrast: all colors map
-  to the app's shadcn/Tailwind design tokens (`primary`, `muted-foreground`, `border`, …), which
-  are contrast-tuned for light and dark; no grey-on-grey, no meaning carried by opacity. Targets:
-  body/label text ≥ 4.5:1, pills/ring/track ≥ 3:1, verified in both themes.
-- **Club-credit:** minimal-but-present (see §Club-credit).
-- **Surfaces:** all four — member "my progress" view, member-detail Pathways tab, roster column,
-  dashboard hero tile.
+⚠️ **Security/PII:** the captured `.har` files contain live session tokens — must not be
+committed. `samples/` stays gitignored (or scrubbed). No Base Camp session token is ever
+persisted by this app.
+
+## Core model decision: count-based mirror, names layered on top
+
+Progress is modeled as **Base Camp's per-level counts + `approved`**, synced authoritatively.
+Project **names** (for celebration and next-step specificity) come from two honest sources —
+the static **catalog** and the member's **own speeches** — never from a guess about Base Camp.
+The count and the names coexist on screen without being forced to reconcile, so the UI never
+implies we've lost track of anything.
+
+## Member view (locked visual)
+
+Ring (path %) + level chips showing `approved`, and for the current level:
+
+- **"Level N · X of Y complete"** — a plain progress bar straight from Base Camp's count.
+- **"Your wins"** 🏆 — the specific projects we *can* name, from the member's delivered speeches
+  linked to catalog projects. Pure celebration; only shows what we genuinely know.
+- **"Up next — choose your next project"** — specific catalog project names in the current level
+  that aren't already a named win, presented as choices (electives are a real choice), with
+  "do it in Base Camp — it'll sync here."
+- Celebration line on `approved` (e.g. "🎉 Level 3 approved — you're 1 project from Level 5!").
+
+No apologetic "1 more in Base Camp — which was it?" row. No member "mark complete" checkboxes.
+No "add a project" button (v1). Multi-path = a tab switcher (hidden when a member has one path).
+Contrast: all colors map to the app's shadcn/Tailwind tokens; verified in light and dark
+(text ≥ 4.5:1, pills/ring/bars ≥ 3:1).
 
 ## Data model
 
-### Catalog (static reference data — three tables)
-
-The "pick N electives" rule and award-in-order are *level* concepts, so a `levels` row owns them
-and `projects` stays a clean leaf.
+### Catalog (static reference data)
 
 ```
-pathways_paths     { id, slug, name, status: 'current' | 'legacy', sort_order }
-pathways_levels    { id, path_id → pathways_paths, level int (1–5), title,
-                     electives_required int }        -- how many electives this level needs
-pathways_projects  { id, level_id → pathways_levels, name,
-                     is_required boolean, sort_order }
+pathways_paths     { id, course_code (from course_id, e.g. "8701"), name,
+                     status: 'current' | 'legacy', sort_order }     -- keyed by course_code
+pathways_projects  { id, path_id → pathways_paths, level int (1–5), name,
+                     is_required boolean, sort_order }              -- names for wins / up-next
 ```
 
-`is_required = false` projects are electives; the owning level's `electives_required` says how
-many of them a member must complete.
+`pathways_paths` is needed from Phase 1 (to resolve `course_id` → a path). `pathways_projects`
+(project *names*) is a Phase 2 need (celebration/up-next specificity). Per-level `total` counts
+come from the **sync**, not the seed. Hand-seeded once from the community catalog PDF; changes
+rarely. No `electives_required` rule as hard logic — Base Camp's count/`approved` drives level
+completion; `is_required` is display emphasis only.
 
-### Per-member state
+### Synced progress (authoritative, from Base Camp)
 
 ```
 path_enrollments    { id, person_id → people, path_id → pathways_paths,
-                      enrolled_at, archived_at? }     -- Person-level, club-independent
-project_completions { id, enrollment_id → path_enrollments, project_id → pathways_projects,
-                      completed_at, source: 'speech' | 'manual', speech_id → speeches? (nullable) }
-level_completions   { id, enrollment_id → path_enrollments, level int (1–5),
-                      completed_at, credited_club_id → clubs }
+                      basecamp_user_id, last_synced_at, archived_at? }
+path_level_progress { id, enrollment_id → path_enrollments, level int (1–5),
+                      completed int, total int, approved boolean }
 ```
 
-### Speech link (this is #101's payload)
+One `path_enrollments` row per (person, path); `path_level_progress` mirrors the `progression`
+object. `basecamp_user_id` is stored on first match and becomes the durable join key.
+
+### Named wins (specific, from our own data — Phase 2)
 
 ```
-speeches.project_id → pathways_projects   -- nullable FK; replaces free-text pathway_path/project_name/project_level
+speeches.project_id → pathways_projects   -- nullable FK (this is #101's payload)
 ```
 
-Migration off the free-text fields: on the #79 speeches migration (or a follow-up), attempt to
-resolve existing `pathway_path`/`project_name`/`project_level` to a catalog project by name;
-unmatched values are left null and logged for manual cleanup. The free-text columns are dropped
-once the FK is in place.
+"Your wins" = the person's **delivered** speeches whose `project_id` is in the path. This needs
+`speeches` (#79) and the FK migration off today's free-text `pathway_path`/`project_name`.
 
-## Completion logic (all derived — no stored progress status)
+**Dropped from the earlier draft** (superseded by the real data): `project_completions`,
+`level_completions`, member manual project-ticking, manual VPE award UI, `electives_required`
+logic, and `credited_club_id` (club-credit — Base Camp owns level approval/credit and the API
+doesn't expose a per-club chooser; out of scope for v1).
 
-Consistent with ADR-0009's "derive, don't store" philosophy:
+## Ingest / sync
 
-- A project is **complete** iff a `project_completions` row exists for it under the enrolment.
-  - `source = 'speech'`: auto-created when a speech with a non-null `project_id` is **delivered**
-    (a past slot references it). Removing/reassigning the speech link removes the derived row.
-  - `source = 'manual'`: created by a VPE or the member ticking a non-speech project.
-- A level is **completable** when all its `is_required` projects are complete **and**
-  `electives_required` electives are complete.
-- A level is **awardable** only when every lower level is already awarded (Toastmasters' rule:
-  levels award in order even if projects are finished out of order). Awarding writes a
-  `level_completions` row (which also captures club credit).
-- **"Next up"** for the current level = remaining required projects **+**
-  `max(0, electives_required − electives completed)`. Future levels render locked.
-- **Path percent** (the ring) = completed projects ÷ total projects in the path (simple, honest;
-  refine later if needed).
+- **v1 — manual JSON ingest.** An admin/VPE screen with a **paste-or-upload box** that accepts the
+  raw `/api/bcm/progress` JSON (all pages). The screen shows **clear step-by-step instructions**:
+  which Base Camp Manager page to open, how to capture the JSON for each page, and that it's
+  per-club. Parsing upserts `pathways_paths` (by `course_code`), `path_enrollments`, and
+  `path_level_progress` for matched members.
+- **Identity match:** email (case-insensitive) on first sync per ADR-0008's email-fallback; on
+  match, persist the Base Camp `user.id`/GUID on the person and match on it thereafter (survives
+  email changes). **Unmatched rows are skipped and surfaced in an "unmatched — N rows" report** —
+  never auto-create people (avoids roster pollution).
+- **Fast-follow — browser extension (#107):** automates the *same* server ingest endpoint using
+  the VPE's Base Camp session. No new server contract; the manual box stays as fallback.
 
-## Enrolment
+## Derived display logic (no stored progress status beyond the synced mirror)
 
-- **In-app pick:** member or VPE picks a path from the catalog; creates a `path_enrollments` row.
-  A member may hold multiple active enrolments (multi-path).
-- **Import backfill:** a Base Camp "Paths Currently in Progress" export bulk-creates enrolments,
-  seeds completed levels (`level_completions`) and per-level project counts for existing members,
-  mirroring `scripts/import-members.ts`. Person resolution follows ADR-0008 dedupe precedence
-  (Customer ID, then email).
+- **Level done** = `approved` (not `completed == total`).
+- **Ring %** = Σ min(completed, total) ÷ Σ total across levels, capped at 100% (handles
+  `completed > total`).
+- **Your wins** = delivered speeches with `project_id` in the path (Phase 2).
+- **Up next** = current level's catalog projects not already a named win, shown as choices.
+- **Current level** = lowest level not `approved`.
 
-## Club-credit (the one club-scoped Pathways concept)
+## Prerequisites & phasing
 
-Per CONTEXT.md, a completed **level** is credited to exactly one of the person's clubs. We capture
-it minimally: `level_completions.credited_club_id`, defaulting to the current club. A club chooser
-is surfaced **only** when the person belongs to 2+ clubs; otherwise it is invisible and auto-set.
+Dependencies are now split, enabling a leaner first ship:
 
-## Catalog seeding
+- **Phase 1 — Sync + count-based celebration (needs #64 `people` only).**
+  `pathways_paths` seed (course codes) + manual JSON ingest + identity match + the member view
+  in count form (ring, level bars, `approved` celebration, "N of M"), member-detail Pathways tab,
+  roster Pathway/level column, and dashboard tile. Fully honest and shippable without speeches.
+- **Phase 2 — Named specificity (needs #79 `speeches` + closes #101).**
+  `pathways_projects` name seed + `speeches.project_id` FK + free-text migration → "Your wins"
+  and named "Up next." This is the specificity layer of the locked visual.
 
-No Toastmasters API or machine-readable catalog exists; the official page is HTML-only and the
-complete project-by-level breakdowns live in community PDFs. So the catalog is **hand-curated
-once**: a checked-in reference file (TS/JSON) of paths → levels → projects, applied by a
-`scripts/seed-pathways.ts` runner (idempotent upsert by slug/name). It changes only when
-Toastmasters revises Pathways (rare). Source: the community "Pathways Paths and Projects Catalog"
-PDF, transcribed and reviewed.
-
-## Surfaces & phasing
-
-Delivered in order, all off the same data:
-
-- **Phase 1 — foundation (closes the modeling half of #101):** catalog tables + seed +
-  `speeches.project_id` FK + free-text migration + completion derivation logic. Testable without UI.
-- **Phase 2 — core UI (the heart of #61):** enrolment (in-app pick + importer) + the member
-  "my progress" view (Option B, with the multi-path tab switcher) + the member-detail Pathways tab
-  (level stepper + per-project checkboxes; VPE ticks manual projects, sees the whole path).
-- **Phase 3 — glances:** roster Pathway + level-progress column, and the dashboard hero tile
-  (ring + "Next up"). Thin reads off Phase 2 data.
+(#64 and #79 are Accepted-but-unbuilt ADRs; both OPEN. Phase 1 unblocks the moment #64 lands.)
 
 ## Testing
 
-- **Catalog + completion logic** is plain, DB-touching, and lives in a `*-logic.ts` sibling
-  (never imported by client code) so it is unit/integration-testable with the `tm_test` DB — per
-  the server-modules bundle-leak guard (`server-modules.guard.test.ts`). Cover: level
-  completable/awardable rules, award-in-order enforcement, "next up" computation, electives
-  counting, speech-derived vs. manual completion, and the free-text→FK migration resolver.
-- **Importer** tested against sample Base Camp export fixtures with the ADR-0008 dedupe rules.
+- Ingest parser + identity match + upsert: unit/integration-tested against the real
+  `samples/_api_bcm_progress_*` fixtures (scrubbed) using the `tm_test` DB — logic lives in a
+  `*-logic.ts` sibling, never imported by client code (server-modules bundle-leak guard).
+  Cover: pagination concat, `course_id`→`course_code` parse, `completed > total`, per-path total
+  variance, `approved` levels, email→GUID match precedence, unmatched-row reporting.
+- Ring/level/up-next derivation and the Phase 2 speech→project migration resolver.
 
 ## Out of scope
 
-- Reminders/nudges toward the next project.
-- Editing the catalog in-app (it's seeded/committed data).
-- Cross-club Pathways analytics.
-- Automated Base Camp sync (no API exists; import stays a manual export upload).
+- Reminders/nudges scheduling; catalog editing in-app; cross-club analytics; club-credit
+  attribution; scraping speech-level data from Base Camp (it isn't exposed); the browser
+  extension (#107).
 
 ## What this closes
 
-- **#101** — resolved by Phase 1: paths/projects become first-class, a speech links by FK, the
-  free-text fields are migrated and dropped. The spike becomes a build.
-- **#61** — resolved by Phases 2–3: a real data-driven progress model with the progress UI restored.
-- Both gated behind **#64** and **#79**.
+- **#61** — data-driven progress model + restored, celebratory progress UI (Phases 1–2).
+- **#101** — paths/projects first-class + speech→project FK + free-text migration (Phase 2).
+- **#107** — filed as the extension fast-follow.
