@@ -27,11 +27,11 @@ export const getClubProfileSettings = createServerFn({ method: "GET" })
 	});
 
 /** Set/clear the club's district, mission, and meeting schedule.
- *  AUTHED — requires admin/vpe club role. */
+ *  AUTHED — requires admin club role. */
 export const updateClubProfile = createServerFn({ method: "POST" })
 	.validator((input: unknown) => clubProfileSchema.parse(input))
 	.handler(async ({ data }) => {
 		const currentUser = await requireUser();
-		await requireClubRole(currentUser.id, data.clubId, ["admin", "vpe"]);
+		await requireClubRole(currentUser.id, data.clubId, ["admin"]);
 		return applyClubProfileUpdate(data);
 	});

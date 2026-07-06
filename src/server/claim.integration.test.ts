@@ -16,7 +16,7 @@
  */
 import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { activityLog, clubMemberships, members, roleSlots } from "#/db/schema";
+import { activityLog, members, people, roleSlots } from "#/db/schema";
 import {
 	cleanup,
 	hasTestDb,
@@ -46,17 +46,19 @@ async function claimSlotTx(slotId: string, memberId: string) {
 	});
 }
 
-/** Mirror of getMembership in guards.ts:31-43 (using testDb) */
+/** Mirror of getMembership in guards.ts (using testDb): user → Person
+ *  (people.user_id) → the members row for that person in this club. */
 async function getMembershipFromTestDb(userId: string, clubId: string) {
 	const [membership] = await testDb
-		.select()
-		.from(clubMemberships)
-		.where(
-			and(
-				eq(clubMemberships.userId, userId),
-				eq(clubMemberships.clubId, clubId),
-			),
-		)
+		.select({
+			id: members.id,
+			clubId: members.clubId,
+			clubRole: members.clubRole,
+			status: members.status,
+		})
+		.from(members)
+		.innerJoin(people, eq(people.id, members.personId))
+		.where(and(eq(people.userId, userId), eq(members.clubId, clubId)))
 		.limit(1);
 	return membership ?? null;
 }
@@ -206,30 +208,25 @@ describe.skipIf(!hasTestDb)("claim + guards integration", () => {
 		});
 
 		it("inactive membership: treated as not-a-member (requireMembership would throw)", async () => {
-			// Mark the member's membership inactive.
+			// Mark the member's membership inactive (on the members row now).
 			await testDb
-				.update(clubMemberships)
+				.update(members)
 				.set({ status: "inactive" })
-				.where(
-					and(
-						eq(clubMemberships.userId, seed.memberUserId),
-						eq(clubMemberships.clubId, seed.clubId),
-					),
-				);
+				.where(eq(members.id, seed.memberId));
 
 			const membership = await getMembershipFromTestDb(
 				seed.memberUserId,
 				seed.clubId,
 			);
 
-			// The row exists but status is inactive — requireMembership (guards.ts:48)
-			// checks `membership.status !== 'active'` and throws.
+			// The row exists but status is inactive — requireMembership checks
+			// `membership.status !== 'active'` and throws.
 			expect(membership?.status).toBe("inactive");
 			const wouldBeRejected = !membership || membership.status !== "active";
 			expect(wouldBeRejected).toBe(true);
 		});
 
-		it("member role is rejected by ['admin','vpe'] check; admin passes", async () => {
+		it("member role is rejected by ['admin'] check; admin passes", async () => {
 			const memberMembership = await getMembershipFromTestDb(
 				seed.memberUserId,
 				seed.clubId,
@@ -239,20 +236,20 @@ describe.skipIf(!hasTestDb)("claim + guards integration", () => {
 				seed.clubId,
 			);
 
-			const allowedRoles: Array<"admin" | "vpe"> = ["admin", "vpe"];
+			const allowedRoles: Array<"admin" | "member"> = ["admin"];
 
 			// member should be rejected
-			expect(memberMembership?.clubRole).toBeDefined();
+			expect(memberMembership?.clubRole).toBe("member");
 			const memberPasses =
 				memberMembership != null &&
-				allowedRoles.includes(memberMembership.clubRole as "admin" | "vpe");
+				allowedRoles.includes(memberMembership.clubRole);
 			expect(memberPasses).toBe(false);
 
 			// admin should pass
-			expect(adminMembership?.clubRole).toBeDefined();
+			expect(adminMembership?.clubRole).toBe("admin");
 			const adminPasses =
 				adminMembership != null &&
-				allowedRoles.includes(adminMembership.clubRole as "admin" | "vpe");
+				allowedRoles.includes(adminMembership.clubRole);
 			expect(adminPasses).toBe(true);
 		});
 

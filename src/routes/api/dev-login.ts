@@ -11,7 +11,7 @@ import { isDevLoginEnabled, takeDevMagicLink } from "#/lib/dev-login";
  *     endpoint, which sets the session cookie and then redirects to `redirect`.
  *
  * Use a seeded user, e.g. rasheed.bustamam@gmail.com (admin) or
- * jordan@example.com (vpe).
+ * jordan@example.com (President/admin).
  */
 export const Route = createFileRoute("/api/dev-login")({
 	server: {

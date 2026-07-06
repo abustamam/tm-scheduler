@@ -10,9 +10,7 @@ import { createMeeting } from "#/server/meetings";
 
 export const Route = createFileRoute("/_authed/admin/meetings/new")({
 	beforeLoad: ({ context }) => {
-		const adminClub = context.clubs.find(
-			(c) => c.clubRole === "admin" || c.clubRole === "vpe",
-		);
+		const adminClub = context.clubs.find((c) => c.clubRole === "admin");
 		if (!adminClub) {
 			throw redirect({ to: "/" });
 		}

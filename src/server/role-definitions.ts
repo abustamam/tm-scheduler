@@ -26,40 +26,40 @@ export const listClubRoles = createServerFn({ method: "GET" })
 		return listRoleDefinitions(clubId);
 	});
 
-/** Add a custom role to the club template. AUTHED — requires admin/vpe. */
+/** Add a custom role to the club template. AUTHED — requires admin. */
 export const createClubRole = createServerFn({ method: "POST" })
 	.validator((input: unknown) => createRoleSchema.parse(input))
 	.handler(async ({ data }) => {
 		const currentUser = await requireUser();
-		await requireClubRole(currentUser.id, data.clubId, ["admin", "vpe"]);
+		await requireClubRole(currentUser.id, data.clubId, ["admin"]);
 		return applyRoleDefinitionCreate(data);
 	});
 
 /** Edit an existing role's fields (name/category/count/speaker flag/description).
- *  AUTHED — requires admin/vpe. */
+ *  AUTHED — requires admin. */
 export const updateClubRole = createServerFn({ method: "POST" })
 	.validator((input: unknown) => updateRoleSchema.parse(input))
 	.handler(async ({ data }) => {
 		const currentUser = await requireUser();
-		await requireClubRole(currentUser.id, data.clubId, ["admin", "vpe"]);
+		await requireClubRole(currentUser.id, data.clubId, ["admin"]);
 		return applyRoleDefinitionUpdate(data);
 	});
 
-/** Persist a new ordering of the club's roles. AUTHED — requires admin/vpe. */
+/** Persist a new ordering of the club's roles. AUTHED — requires admin. */
 export const reorderClubRoles = createServerFn({ method: "POST" })
 	.validator((input: unknown) => reorderRolesSchema.parse(input))
 	.handler(async ({ data }) => {
 		const currentUser = await requireUser();
-		await requireClubRole(currentUser.id, data.clubId, ["admin", "vpe"]);
+		await requireClubRole(currentUser.id, data.clubId, ["admin"]);
 		return applyRoleDefinitionReorder(data);
 	});
 
 /** Delete a custom role (blocked if referenced by existing meetings).
- *  AUTHED — requires admin/vpe. */
+ *  AUTHED — requires admin. */
 export const deleteClubRole = createServerFn({ method: "POST" })
 	.validator((input: unknown) => deleteRoleSchema.parse(input))
 	.handler(async ({ data }) => {
 		const currentUser = await requireUser();
-		await requireClubRole(currentUser.id, data.clubId, ["admin", "vpe"]);
+		await requireClubRole(currentUser.id, data.clubId, ["admin"]);
 		return applyRoleDefinitionDelete(data);
 	});

@@ -5,8 +5,9 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "#/db";
 import {
-	clubMemberships,
 	meetings,
+	members,
+	people,
 	roleDefinitions,
 	roleSlots,
 } from "#/db/schema";
@@ -14,7 +15,7 @@ import { isTmodRoleName } from "#/lib/meeting-roles";
 
 export interface MeetingAgendaAuthzInput {
 	meetingId: string;
-	/** Signed-in user id (admin/vpe path), or null for public callers. */
+	/** Signed-in user id (admin path), or null for public callers. */
 	sessionUserId?: string | null;
 	/** Self-asserted roster member id (TMOD path), or null. */
 	selfMemberId?: string | null;
@@ -26,16 +27,16 @@ export interface MeetingAgendaAuthz {
 	/** Which path granted access (null when denied). Callers use this to keep
 	 *  reschedule/cancel/status admin-only: a `tmod-self-assert` grant must not
 	 *  ride the club-decision boundary. */
-	via: "admin-vpe" | "tmod-self-assert" | null;
+	via: "admin" | "tmod-self-assert" | null;
 	/** The meeting's TMOD slot assignee, or null when unassigned/absent. */
 	tmodMemberId: string | null;
 }
 
 /**
  * Decide whether a caller may edit a meeting's agenda content (meta + slots).
- * Allowed when the caller is a club `admin`/`vpe` (via a live session) OR the
+ * Allowed when the caller is a club `admin` (via a live session) OR the
  * self-asserted `memberId` equals the meeting's TMOD slot assignee. If the TMOD
- * slot is unassigned there is no self-serve editor — only admin/vpe pass.
+ * slot is unassigned there is no self-serve editor — only admin passes.
  * Throws when the meeting does not exist.
  */
 export async function resolveMeetingAgendaAuthz(
@@ -63,27 +64,26 @@ export async function resolveMeetingAgendaAuthz(
 	const tmodSlot = slotRows.find((r) => isTmodRoleName(r.name));
 	const tmodMemberId = tmodSlot?.assignedMemberId ?? null;
 
-	// Admin/vpe path: a live session whose membership is active admin/vpe.
+	// Admin path: a live session that resolves (via Person) to an active admin
+	// membership in this club (ADR-0008 Phase B).
 	if (input.sessionUserId) {
 		const [membership] = await db
 			.select({
-				clubRole: clubMemberships.clubRole,
-				status: clubMemberships.status,
+				clubRole: members.clubRole,
+				status: members.status,
 			})
-			.from(clubMemberships)
+			.from(members)
+			.innerJoin(people, eq(people.id, members.personId))
 			.where(
-				and(
-					eq(clubMemberships.userId, input.sessionUserId),
-					eq(clubMemberships.clubId, clubId),
-				),
+				and(eq(people.userId, input.sessionUserId), eq(members.clubId, clubId)),
 			)
 			.limit(1);
 		if (
 			membership &&
 			membership.status === "active" &&
-			(membership.clubRole === "admin" || membership.clubRole === "vpe")
+			membership.clubRole === "admin"
 		) {
-			return { clubId, allowed: true, via: "admin-vpe", tmodMemberId };
+			return { clubId, allowed: true, via: "admin", tmodMemberId };
 		}
 	}
 

@@ -16,11 +16,11 @@
 import { and, asc, eq, gte, ne, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-	clubMemberships,
 	clubs,
 	meetings,
 	memberAvailability,
 	members,
+	people,
 	roleDefinitions,
 	roleSlots,
 	speeches,
@@ -250,23 +250,24 @@ describe.skipIf(!hasTestDb)("public reads (no session)", () => {
 		);
 	});
 
-	it("requireClubRole logic: member role is rejected by admin/vpe gate (createMeeting guard)", async () => {
-		// Mirror the requireClubRole predicate — same check as in guards.ts
+	it("requireClubRole logic: member role is rejected by admin gate (createMeeting guard)", async () => {
+		// Mirror the requireClubRole predicate — user → Person → members row.
 		const [membership] = await testDb
-			.select()
-			.from(clubMemberships)
+			.select({ clubRole: members.clubRole })
+			.from(members)
+			.innerJoin(people, eq(people.id, members.personId))
 			.where(
 				and(
-					eq(clubMemberships.userId, seed.memberUserId),
-					eq(clubMemberships.clubId, seed.clubId),
+					eq(people.userId, seed.memberUserId),
+					eq(members.clubId, seed.clubId),
 				),
 			)
 			.limit(1);
 
-		const allowedRoles: Array<"admin" | "vpe"> = ["admin", "vpe"];
+		const allowedRoles: Array<"admin" | "member"> = ["admin"];
 		const passes =
-			membership != null &&
-			allowedRoles.includes(membership.clubRole as "admin" | "vpe");
+			membership != null && allowedRoles.includes(membership.clubRole);
+		expect(membership?.clubRole).toBe("member");
 		expect(passes).toBe(false); // member cannot createMeeting / confirmSlot
 	});
 

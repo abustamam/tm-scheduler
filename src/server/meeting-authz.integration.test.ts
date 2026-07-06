@@ -1,7 +1,7 @@
 /**
  * DB-backed tests for the per-meeting agenda-write authorization (ADR-0010):
- * admin/vpe OR the meeting's self-asserted TMOD may edit; reschedule stays
- * admin/vpe-only. Tests the plain logic fns directly (`#/db` → test database).
+ * a club admin OR the meeting's self-asserted TMOD may edit; reschedule stays
+ * admin-only. Tests the plain logic fns directly (`#/db` → test database).
  *
  * Run with:
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test \
@@ -9,12 +9,7 @@
  */
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-	clubMemberships,
-	members,
-	roleDefinitions,
-	roleSlots,
-} from "#/db/schema";
+import { members, roleDefinitions, roleSlots } from "#/db/schema";
 import { utcToZonedWallTime } from "#/lib/datetime";
 import {
 	cleanup,
@@ -79,28 +74,28 @@ describe.skipIf(!hasTestDb)("meeting agenda authorization", () => {
 		await cleanup(club.clubId, [club.adminUserId, club.memberUserId]);
 	});
 
-	it("allows a club admin (session) — via admin-vpe", async () => {
+	it("allows a club admin (session) — via admin", async () => {
 		await addTmodSlot(club, null);
 		const authz = await resolveMeetingAgendaAuthz({
 			meetingId: club.meetingId,
 			sessionUserId: club.adminUserId,
 		});
 		expect(authz.allowed).toBe(true);
-		expect(authz.via).toBe("admin-vpe");
+		expect(authz.via).toBe("admin");
 	});
 
-	it("allows a club vpe (session) — via admin-vpe", async () => {
-		// Promote the member's membership to vpe.
+	it("allows a member promoted to admin (session) — via admin", async () => {
+		// Promote the member's membership row to admin (resolved via their Person).
 		await testDb
-			.update(clubMemberships)
-			.set({ clubRole: "vpe" })
-			.where(eq(clubMemberships.userId, club.memberUserId));
+			.update(members)
+			.set({ clubRole: "admin" })
+			.where(eq(members.id, club.memberId));
 		const authz = await resolveMeetingAgendaAuthz({
 			meetingId: club.meetingId,
 			sessionUserId: club.memberUserId,
 		});
 		expect(authz.allowed).toBe(true);
-		expect(authz.via).toBe("admin-vpe");
+		expect(authz.via).toBe("admin");
 	});
 
 	it("allows the meeting's TMOD self-assert — via tmod-self-assert", async () => {

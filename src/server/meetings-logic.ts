@@ -72,8 +72,8 @@ export interface MeetingUpdateInput {
 	notes?: string | null;
 	/**
 	 * Whether the caller may reschedule (change `scheduledAt`/`lengthMinutes`).
-	 * Defaults to true (admin/vpe). A self-serve TMOD passes false: an attempt to
-	 * move the date/time or length is rejected — reschedule stays admin/vpe-only
+	 * Defaults to true (admin). A self-serve TMOD passes false: an attempt to
+	 * move the date/time or length is rejected — reschedule stays admin-only
 	 * (ADR-0010).
 	 */
 	canReschedule?: boolean;
@@ -101,7 +101,7 @@ export async function applyMeetingUpdate(input: MeetingUpdateInput) {
 		notes: input.notes?.trim() || null,
 	};
 
-	// Reschedule (date/time or length change) is an admin/vpe-only decision. A
+	// Reschedule (date/time or length change) is an admin-only decision. A
 	// self-serve TMOD (canReschedule=false) may edit meta but must re-submit the
 	// meeting's current time unchanged; any actual move is rejected (ADR-0010).
 	const canReschedule = input.canReschedule ?? true;

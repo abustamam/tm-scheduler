@@ -18,7 +18,11 @@ import {
 	people,
 	roleSlots,
 } from "#/db/schema";
-import { OFFICER_POSITIONS, parseOfficerPosition } from "#/lib/officers";
+import {
+	defaultClubRoleForOffices,
+	OFFICER_POSITIONS,
+	parseOfficerPosition,
+} from "#/lib/officers";
 import { buildImportPreview } from "#/lib/roster-import";
 import { logActivity } from "./activity";
 import {
@@ -26,6 +30,20 @@ import {
 	openOfficerTermIfAbsent,
 	reconcileOfficerTerms,
 } from "./officer-terms-logic";
+
+/**
+ * Whether a Person is linked to a sign-in account (people.user_id). Gates the
+ * merge/remove guards that must not destroy a member who can sign in (ADR-0008
+ * Phase B — the auth link moved off the membership row onto the Person).
+ */
+async function personHasAccount(personId: string): Promise<boolean> {
+	const [row] = await db
+		.select({ userId: people.userId })
+		.from(people)
+		.where(eq(people.id, personId))
+		.limit(1);
+	return Boolean(row?.userId);
+}
 
 export const editSchema = z.object({
 	clubId: z.string().uuid(),
@@ -201,7 +219,9 @@ export async function applyMemberMerge(input: MergeInput) {
 	const keeper = rows.find((m) => m.id === keeperId);
 	const absorbed = rows.find((m) => m.id === absorbedId);
 	if (!keeper || !absorbed) throw new Error("Member not found in this club.");
-	if (absorbed.userId) {
+	// "Signed-in account?" is a Person-level fact now (ADR-0008 Phase B): the auth
+	// link lives on people.user_id. Don't absorb a member whose person can sign in.
+	if (await personHasAccount(absorbed.personId)) {
 		throw new Error(
 			"That member is a signed-in account — merge the other direction (keep it).",
 		);
@@ -280,7 +300,8 @@ export async function applyMemberRemove(input: RemoveInput) {
 			and(eq(members.id, input.memberId), eq(members.clubId, input.clubId)),
 		);
 	if (!member) throw new Error("Member not found.");
-	if (member.userId) {
+	// A member whose Person can sign in (people.user_id) can't be removed.
+	if (await personHasAccount(member.personId)) {
 		throw new Error("That member is a signed-in account and can't be removed.");
 	}
 
@@ -388,6 +409,11 @@ export async function applyBulkImport(
 				.values({ name, email, phone })
 				.returning({ id: people.id });
 			if (!person) throw new Error("Failed to insert person.");
+			// Pasted office is free text; parse to the enum (unparseable → null).
+			const office = parseOfficerPosition(row.office);
+			// Default the membership's role from its office (President / VP Education
+			// ⇒ admin), stored explicitly (ADR-0008 Phase B / #99).
+			const clubRole = defaultClubRoleForOffices(office ? [office] : []);
 			const [m] = await tx
 				.insert(members)
 				.values({
@@ -396,13 +422,12 @@ export async function applyBulkImport(
 					name,
 					email,
 					phone,
+					clubRole,
 				})
 				.returning({ id: members.id });
 			if (!m) throw new Error("Failed to insert member.");
 			ids.push(m.id);
-			// Pasted office is free text; parse to the enum (unparseable → null) and
-			// open a current term for it (#100).
-			const office = parseOfficerPosition(row.office);
+			// Open a current officer term for the parsed office (#100).
 			if (office) {
 				await openOfficerTermIfAbsent(tx, m.id, office, new Date());
 			}

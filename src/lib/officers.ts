@@ -62,6 +62,25 @@ export function officerRank(position: OfficerPosition): number {
 }
 
 /**
+ * Offices that default a membership's `club_role` to `admin` (ADR-0008 Phase B /
+ * #99). President and VP Education run the club's education program and manage
+ * the schedule, so a membership holding either is an admin by default.
+ */
+const ADMIN_OFFICES: readonly OfficerPosition[] = ["president", "vp_education"];
+
+/**
+ * Default `club_role` for a membership given its current open offices. Returns
+ * `"admin"` when the membership holds President or VP Education, else `"member"`.
+ * This is the DEFAULT applied where an account/membership is created or linked;
+ * the stored `club_role` is authoritative thereafter (not re-derived on read).
+ */
+export function defaultClubRoleForOffices(
+	positions: readonly OfficerPosition[],
+): "admin" | "member" {
+	return positions.some((p) => ADMIN_OFFICES.includes(p)) ? "admin" : "member";
+}
+
+/**
  * Parse a free-text office string (CSV "Current Position", a pasted roster
  * column, or the old free-text `office`) into an officer-position enum value, or
  * `null` when blank or unrecognized. Case-insensitive and tolerant of the
