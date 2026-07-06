@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
 	type BcmProgressPage,
 	normalizePages,
+	type ParsedMemberPath,
 	parseProgressPages,
 } from "#/lib/basecamp-progress";
 import { requireClubRole, requireUser } from "./guards";
@@ -27,9 +28,17 @@ export const ingestPathwaysProgress = createServerFn({ method: "POST" })
 		} catch {
 			throw new Error("Pasted content is not valid JSON.");
 		}
-		const pages = normalizePages(
-			parsedJson as BcmProgressPage | BcmProgressPage[],
-		);
-		const rows = parseProgressPages(pages);
+		let rows: ParsedMemberPath[];
+		try {
+			const pages = normalizePages(
+				parsedJson as BcmProgressPage | BcmProgressPage[],
+			);
+			rows = parseProgressPages(pages);
+		} catch {
+			throw new Error(
+				"Pasted content doesn't look like a Base Camp progress payload (expected the /api/bcm/progress JSON).",
+			);
+		}
+
 		return syncClubProgress(rows);
 	});
