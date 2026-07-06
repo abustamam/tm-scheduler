@@ -13,6 +13,7 @@ import {
 	clubs,
 	meetings,
 	members,
+	people,
 	roleDefinitions,
 	roleSlots,
 	user,
@@ -37,10 +38,34 @@ export interface SeededClub {
 	clubId: string;
 	adminUserId: string;
 	memberUserId: string;
+	personId: string; // person the seeded roster member belongs to
 	memberId: string; // roster member linked to memberUserId
 	roleDefinitionId: string;
 	meetingId: string;
 	slotId: string;
+}
+
+/**
+ * Insert a Person and return its id. Every roster member belongs to a person
+ * (ADR-0008 / #64); tests that insert extra members need a person first.
+ */
+export async function seedPerson(overrides?: {
+	name?: string;
+	email?: string | null;
+	customerId?: string | null;
+	userId?: string | null;
+}): Promise<string> {
+	const [row] = await testDb
+		.insert(people)
+		.values({
+			name: overrides?.name ?? "Test Person",
+			email: overrides?.email ?? null,
+			customerId: overrides?.customerId ?? null,
+			userId: overrides?.userId ?? null,
+		})
+		.returning({ id: people.id });
+	if (!row) throw new Error("Failed to insert person");
+	return row.id;
 }
 
 /** Insert a minimal club fixture and return the ids. */
@@ -88,11 +113,26 @@ export async function seedClub(): Promise<SeededClub> {
 		},
 	]);
 
+	// person for the roster member (ADR-0008: every membership has a person)
+	const [personRow] = await testDb
+		.insert(people)
+		.values({
+			name: "Member User",
+			email: `member-${memberUserId}@test.example`,
+			userId: memberUserId,
+		})
+		.returning({ id: people.id });
+
+	if (!personRow) {
+		throw new Error("Failed to insert person");
+	}
+
 	// roster member linked to memberUserId
 	const [memberRow] = await testDb
 		.insert(members)
 		.values({
 			clubId,
+			personId: personRow.id,
 			name: "Member User",
 			email: `member-${memberUserId}@test.example`,
 			userId: memberUserId,
@@ -152,6 +192,7 @@ export async function seedClub(): Promise<SeededClub> {
 		clubId,
 		adminUserId,
 		memberUserId,
+		personId: personRow.id,
 		memberId: memberRow.id,
 		roleDefinitionId: roleDef.id,
 		meetingId: meeting.id,
@@ -162,14 +203,27 @@ export async function seedClub(): Promise<SeededClub> {
 /**
  * Delete all rows created by `seedClub` for the given club.
  * The club cascade handles meetings, slots, role defs, memberships, and members.
- * Users must be deleted separately because they are referenced across clubs.
+ * People are club-less (ADR-0008), so the club cascade does NOT remove them —
+ * collect the person ids from this club's members first, then delete them after
+ * the cascade. Users must be deleted separately (referenced across clubs).
  */
 export async function cleanup(
 	clubId: string,
 	userIds: string[],
 ): Promise<void> {
+	// person ids to remove — captured before the cascade deletes the members.
+	const memberPeople = await testDb
+		.select({ personId: members.personId })
+		.from(members)
+		.where(eq(members.clubId, clubId));
+	const personIds = [...new Set(memberPeople.map((m) => m.personId))];
+
 	// club cascade removes meetings, role_slots, role_definitions, club_memberships, members
 	await testDb.delete(clubs).where(eq(clubs.id, clubId));
+	// people are club-less; delete the ones this club's members belonged to
+	if (personIds.length > 0) {
+		await testDb.delete(people).where(inArray(people.id, personIds));
+	}
 	// delete test users
 	if (userIds.length > 0) {
 		await testDb.delete(user).where(inArray(user.id, userIds));

@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+	batchSharedEmails,
 	chooseMatch,
+	type ExistingPerson,
 	fillOnly,
 	isPaid,
 	mapRow,
 	parseCsv,
 	parseMDY,
+	resolvePerson,
 } from "./members-csv";
 
 describe("parseCsv", () => {
@@ -58,8 +61,9 @@ describe("parseMDY", () => {
 });
 
 describe("mapRow", () => {
-	it("maps name/email/phone(mobile)/dates; empties become null", () => {
+	it("maps customerId/name/email/phone(mobile)/dates; empties become null", () => {
 		const row = {
+			"Customer ID": "PN-67716945",
 			Name: "Faisal Ali",
 			Email: "ifaisalali@me.com",
 			"Home Phone": "+1510",
@@ -68,18 +72,26 @@ describe("mapRow", () => {
 			"Original Join Date": "10/1/2012",
 		};
 		const m = mapRow(row);
+		expect(m.customerId).toBe("PN-67716945");
 		expect(m.name).toBe("Faisal Ali");
 		expect(m.email).toBe("ifaisalali@me.com");
 		expect(m.phone).toBe("+15103666802"); // mobile only
 		expect(m.joinedAt?.getFullYear()).toBe(2024);
 		expect(m.originalJoinDate?.getFullYear()).toBe(2012);
 	});
-	it("nulls missing email/phone/dates", () => {
+	it("nulls missing customerId/email/phone/dates", () => {
 		const m = mapRow({ Name: "Mahbuba Khan" });
+		expect(m.customerId).toBeNull();
 		expect(m.email).toBeNull();
 		expect(m.phone).toBeNull();
 		expect(m.joinedAt).toBeNull();
 		expect(m.originalJoinDate).toBeNull();
+	});
+	it("reads Customer ID from a BOM-prefixed header via parseCsv", () => {
+		// The Toastmasters export starts with a UTF-8 BOM before "Customer ID".
+		const text = "﻿Customer ID,Name\nPN-1,Ada\n";
+		const [row] = parseCsv(text);
+		expect(mapRow(row).customerId).toBe("PN-1");
 	});
 });
 
@@ -121,5 +133,84 @@ describe("fillOnly", () => {
 	it("uses the incoming value when existing is null/empty", () => {
 		expect(fillOnly(null, "new@x.io")).toBe("new@x.io");
 		expect(fillOnly("  ", "+1555")).toBe("+1555");
+	});
+});
+
+describe("batchSharedEmails", () => {
+	it("flags an email used by 2+ distinct names (case-insensitive)", () => {
+		const shared = batchSharedEmails([
+			{ name: "Pat", email: "family@x.io" },
+			{ name: "Sam", email: "FAMILY@x.io" },
+			{ name: "Ada", email: "ada@x.io" },
+		]);
+		expect(shared.has("family@x.io")).toBe(true);
+		expect(shared.has("ada@x.io")).toBe(false);
+	});
+	it("does not flag the same person listed twice (same name)", () => {
+		const shared = batchSharedEmails([
+			{ name: "Ada Lovelace", email: "ada@x.io" },
+			{ name: "ada lovelace", email: "ada@x.io" },
+		]);
+		expect(shared.size).toBe(0);
+	});
+	it("ignores blank emails", () => {
+		const shared = batchSharedEmails([
+			{ name: "A", email: null },
+			{ name: "B", email: "" },
+		]);
+		expect(shared.size).toBe(0);
+	});
+});
+
+describe("resolvePerson", () => {
+	const people: ExistingPerson[] = [
+		{ id: "p1", customerId: "PN-1", email: "ada@x.io" },
+		{ id: "p2", customerId: null, email: "bob@x.io" },
+		// Shared family email, two distinct people (both Customer-ID-less).
+		{ id: "p3", customerId: null, email: "family@x.io" },
+		{ id: "p4", customerId: null, email: "family@x.io" },
+	];
+
+	it("matches by Customer ID first (even when email differs)", () => {
+		expect(
+			resolvePerson({ customerId: "PN-1", email: "moved@x.io" }, people),
+		).toEqual({ kind: "customerId", id: "p1" });
+	});
+
+	it("matches by unambiguous non-blank email (case-insensitive)", () => {
+		expect(
+			resolvePerson({ customerId: null, email: "BOB@x.io" }, people),
+		).toEqual({ kind: "email", id: "p2" });
+	});
+
+	it("is ambiguous when an email is shared by 2+ people (never merges)", () => {
+		expect(
+			resolvePerson({ customerId: null, email: "family@x.io" }, people),
+		).toEqual({ kind: "ambiguous" });
+	});
+
+	it("inserts when email is blank (no name fallback)", () => {
+		expect(resolvePerson({ customerId: null, email: null }, people)).toEqual({
+			kind: "insert",
+		});
+	});
+
+	it("inserts when nothing matches", () => {
+		expect(
+			resolvePerson({ customerId: "PN-999", email: "zed@x.io" }, people),
+		).toEqual({ kind: "insert" });
+	});
+
+	it("does not email-merge into a person with a different Customer ID", () => {
+		// Incoming has PN-2 (unknown), same email as PN-1's person → distinct human.
+		expect(
+			resolvePerson({ customerId: "PN-2", email: "ada@x.io" }, people),
+		).toEqual({ kind: "insert" });
+	});
+
+	it("email-merges into a Customer-ID-less person, upgrading later", () => {
+		expect(
+			resolvePerson({ customerId: "PN-77", email: "bob@x.io" }, people),
+		).toEqual({ kind: "email", id: "p2" });
 	});
 });

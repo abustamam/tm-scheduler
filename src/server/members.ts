@@ -2,7 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { and, asc, eq, ne } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
-import { members } from "#/db/schema";
+import { members, people } from "#/db/schema";
 import { logActivity } from "./activity";
 import { requireClubRole, requireUser } from "./guards";
 import {
@@ -40,9 +40,16 @@ const addMemberSchema = z.object({
 export const addMember = createServerFn({ method: "POST" })
 	.validator((i: unknown) => addMemberSchema.parse(i))
 	.handler(async ({ data }) => {
+		// Every membership belongs to a person (ADR-0008). A self-add is a new
+		// person; dedupe/merge is a later, deliberate action.
+		const [person] = await db
+			.insert(people)
+			.values({ name: data.name })
+			.returning({ id: people.id });
+		if (!person) throw new Error("Failed to insert person.");
 		const [m] = await db
 			.insert(members)
-			.values({ clubId: data.clubId, name: data.name })
+			.values({ clubId: data.clubId, personId: person.id, name: data.name })
 			.returning({ id: members.id });
 		if (!m) throw new Error("Failed to insert member.");
 		await logActivity(db, {
