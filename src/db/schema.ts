@@ -66,6 +66,10 @@ export const slotStatusEnum = pgEnum("slot_status", [
 	"claimed",
 	"confirmed",
 ]);
+export const pathwayStatusEnum = pgEnum("pathway_status", [
+	"current",
+	"legacy",
+]);
 
 export const activityActionEnum = pgEnum("activity_action", [
 	"claim",
@@ -141,6 +145,10 @@ export const people = pgTable("people", {
 	// Toastmasters Customer ID (PN-…). Nullable; Postgres treats NULLs as
 	// distinct, so the unique constraint is "unique-when-present".
 	customerId: text("customer_id").unique(),
+	// Durable Base Camp/edX user id (from /api/bcm/progress `user.id`), captured on
+	// first email match and used as the join key for Pathways sync thereafter.
+	// Nullable + unique-when-present (Postgres treats NULLs as distinct).
+	basecampUserId: text("basecamp_user_id").unique(),
 	name: text("name").notNull(),
 	email: text("email"),
 	phone: text("phone"),
@@ -377,6 +385,63 @@ export const speeches = pgTable(
 		updatedAt: timestamp("updated_at").defaultNow().notNull(),
 	},
 	(t) => [index("speeches_person_idx").on(t.personId)],
+);
+
+// ---------------------------------------------------------------------------
+// Pathways progress (count-based mirror of Base Camp — spec 2026-07-06).
+// Paths are upserted from sync data (course_code + name); per-person per-level
+// counts + `approved` mirror Base Camp's /api/bcm/progress. Base Camp is the
+// system of record; this is a mirror. Project NAMES are a Phase 2 concern.
+// ---------------------------------------------------------------------------
+
+export const pathwaysPaths = pgTable("pathways_paths", {
+	id: uuid("id").defaultRandom().primaryKey(),
+	// Stable path code parsed from course_id (e.g. "8701" = Presentation Mastery).
+	// The durable catalog key — not the display name.
+	courseCode: text("course_code").notNull().unique(),
+	name: text("name").notNull(),
+	status: pathwayStatusEnum("status").notNull().default("current"),
+	sortOrder: integer("sort_order").notNull().default(0),
+});
+
+export const pathEnrollments = pgTable(
+	"path_enrollments",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		personId: uuid("person_id")
+			.notNull()
+			.references(() => people.id, { onDelete: "cascade" }),
+		pathId: uuid("path_id")
+			.notNull()
+			.references(() => pathwaysPaths.id, { onDelete: "cascade" }),
+		lastSyncedAt: timestamp("last_synced_at").defaultNow().notNull(),
+		archivedAt: timestamp("archived_at"),
+	},
+	(t) => [
+		uniqueIndex("path_enrollments_person_path_idx").on(t.personId, t.pathId),
+	],
+);
+
+export const pathLevelProgress = pgTable(
+	"path_level_progress",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		enrollmentId: uuid("enrollment_id")
+			.notNull()
+			.references(() => pathEnrollments.id, { onDelete: "cascade" }),
+		level: integer("level").notNull(),
+		// Raw Base Camp counts — `completed` MAY exceed `total` (extra/repeated
+		// electives); store as-is. `approved` is the authoritative "level done".
+		completed: integer("completed").notNull(),
+		total: integer("total").notNull(),
+		approved: boolean("approved").notNull(),
+	},
+	(t) => [
+		uniqueIndex("path_level_progress_enrollment_level_idx").on(
+			t.enrollmentId,
+			t.level,
+		),
+	],
 );
 
 // ---------------------------------------------------------------------------
