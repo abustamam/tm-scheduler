@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { requireUser } from "./guards";
+import { requireMembership, requireUser } from "./guards";
 import {
 	type PathViewModel,
 	pathwaysByMember,
@@ -41,6 +41,11 @@ const clubSchema = z.object({
 export const listClubMemberPathways = createServerFn({ method: "GET" })
 	.validator((i: unknown) => clubSchema.parse(i))
 	.handler(async ({ data }): Promise<Record<string, PathViewModel[]>> => {
+		// A whole-club dump needs a real gate (unlike the single-member read, which
+		// is scoped to a matched (clubId, memberId) pair): only a member of the
+		// club may read every member's progress — mirrors `listClubMembers`.
+		const user = await requireUser();
+		await requireMembership(user.id, data.clubId);
 		const map = await pathwaysByMember(data.clubId);
 		return Object.fromEntries(map);
 	});
