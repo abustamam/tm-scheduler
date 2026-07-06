@@ -23,6 +23,11 @@ import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
 import { formatTenure } from "#/lib/members";
+import {
+	OFFICER_POSITIONS,
+	type OfficerPosition,
+	officerPositionLabel,
+} from "#/lib/officers";
 import { getMemberProfile } from "#/server/club";
 import { editMember, removeMember, setMemberStatus } from "#/server/members";
 
@@ -72,8 +77,8 @@ function MemberDetail() {
 
 	// Identity, speech log and roles served are real; Pathways progress is not modeled (#61).
 	const joined = member.joinedAt ?? member.createdAt;
-	const tenure = member.office
-		? `${formatTenure(joined)} · ${member.office}`
+	const tenure = member.officerPosition
+		? `${formatTenure(joined)} · ${officerPositionLabel(member.officerPosition)}`
 		: formatTenure(joined);
 
 	return (
@@ -217,7 +222,7 @@ type ProfileMember = {
 	name: string;
 	email: string | null;
 	phone: string | null;
-	office: string | null;
+	officerPosition: OfficerPosition | null;
 	userId: string | null;
 	status: "active" | "inactive";
 };
@@ -282,7 +287,8 @@ function MemberActions({
 					name,
 					email: String(form.get("email") ?? "").trim() || null,
 					phone: String(form.get("phone") ?? "").trim() || null,
-					office: String(form.get("office") ?? "").trim() || null,
+					officerPosition: (String(form.get("officerPosition") ?? "").trim() ||
+						null) as OfficerPosition | null,
 				},
 			});
 			toast.success("Member updated.");
@@ -379,13 +385,20 @@ function MemberActions({
 								/>
 							</div>
 							<div className="space-y-2">
-								<Label htmlFor="edit-office">Office</Label>
-								<Input
-									id="edit-office"
-									name="office"
-									defaultValue={member.office ?? ""}
-									placeholder="e.g. VP Education"
-								/>
+								<Label htmlFor="edit-officer-position">Officer position</Label>
+								<select
+									id="edit-officer-position"
+									name="officerPosition"
+									defaultValue={member.officerPosition ?? ""}
+									className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+								>
+									<option value="">None</option>
+									{OFFICER_POSITIONS.map((pos) => (
+										<option key={pos} value={pos}>
+											{officerPositionLabel(pos)}
+										</option>
+									))}
+								</select>
 							</div>
 						</div>
 						<DialogFooter>

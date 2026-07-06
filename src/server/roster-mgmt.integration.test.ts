@@ -54,14 +54,14 @@ describe.skipIf(!hasTestDb)("roster management", () => {
 			name: "Renamed",
 			email: "a@b.co",
 			phone: null,
-			office: "VP Education",
+			officerPosition: "vp_education",
 		});
 		const [m] = await testDb
 			.select()
 			.from(members)
 			.where(eq(members.id, seed.memberId));
 		expect(m.name).toBe("Renamed");
-		expect(m.office).toBe("VP Education");
+		expect(m.officerPosition).toBe("vp_education");
 		const [log] = await testDb
 			.select()
 			.from(activityLog)

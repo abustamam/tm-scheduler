@@ -6,6 +6,7 @@ import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
 import { type StoredMember, useCurrentMember } from "#/lib/member-identity";
+import { officerPositionLabel } from "#/lib/officers";
 import { addMember, listMembers } from "#/server/members";
 import { MemberAvatar } from "./member-avatar";
 
@@ -125,9 +126,9 @@ function PickNameScreen({
 								<span className="truncate font-medium text-foreground">
 									{m.name}
 								</span>
-								{m.office ? (
+								{m.officerPosition ? (
 									<span className="truncate text-muted-foreground text-xs">
-										{m.office}
+										{officerPositionLabel(m.officerPosition)}
 									</span>
 								) : null}
 							</span>

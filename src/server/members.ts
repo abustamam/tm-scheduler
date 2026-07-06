@@ -25,7 +25,11 @@ export const listMembers = createServerFn({ method: "GET" })
 	.validator((clubId: unknown) => z.string().uuid().parse(clubId))
 	.handler(async ({ data: clubId }) =>
 		db
-			.select({ id: members.id, name: members.name, office: members.office })
+			.select({
+				id: members.id,
+				name: members.name,
+				officerPosition: members.officerPosition,
+			})
 			.from(members)
 			.where(and(eq(members.clubId, clubId), ne(members.status, "inactive")))
 			.orderBy(asc(members.name)),

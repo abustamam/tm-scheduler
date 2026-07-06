@@ -13,7 +13,7 @@ import {
 	speakerDetails,
 } from "#/db/schema";
 import { resolveEvaluatorLinks } from "#/lib/agenda";
-import { officerRank } from "#/lib/officers";
+import { officerPositionLabel, officerRank } from "#/lib/officers";
 import {
 	getMembership,
 	getSessionUser,
@@ -130,22 +130,33 @@ async function loadMeetingDetail(
 		},
 	});
 
-	// Officers (active members with an office set) for the printable agenda's
-	// officer grid, ordered President → Sergeant-at-Arms then by name.
+	// Officers (active members with an officer position set) for the printable
+	// agenda's officer grid, ordered President → Immediate Past President then by
+	// name. The grid shows human labels; the stored value is the enum.
 	const officerRows = await db
-		.select({ office: members.office, name: members.name })
+		.select({
+			officerPosition: members.officerPosition,
+			name: members.name,
+		})
 		.from(members)
 		.where(
 			and(
 				eq(members.clubId, meeting.clubId),
-				isNotNull(members.office),
+				isNotNull(members.officerPosition),
 				ne(members.status, "inactive"),
 			),
 		)
 		.orderBy(asc(members.name));
 	const officers = officerRows
-		.filter((o): o is { office: string; name: string } => o.office != null)
-		.sort((a, b) => officerRank(a.office) - officerRank(b.office));
+		.filter((o) => o.officerPosition != null)
+		.sort(
+			(a, b) =>
+				officerRank(a.officerPosition!) - officerRank(b.officerPosition!),
+		)
+		.map((o) => ({
+			office: officerPositionLabel(o.officerPosition!),
+			name: o.name,
+		}));
 
 	// Members who've marked themselves Not Available for this meeting (with
 	// names, so the VPE can see who NOT to chase when filling open roles).

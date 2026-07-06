@@ -1,30 +1,99 @@
 /**
- * Canonical Toastmasters club-officer ordering for display (President first,
- * down to Sergeant-at-Arms). `office` is a free-text field, so matching is
- * case-insensitive and tolerant of common abbreviations ("VPE", "VP Education").
- * Unrecognized offices sort last, alphabetically, after the known ones.
+ * Officer position — a Person's elected club job on a Membership (#63). A fixed
+ * enum of the standard Toastmasters club officers, replacing the old free-text
+ * `office`. Nullable everywhere (null = no office). This module is the single
+ * source of truth for the enum values, their display labels, their canonical
+ * ordering (President first, down to Immediate Past President), and the tolerant
+ * free-text → enum parser used by the CSV import and the VPE bulk-paste import.
+ *
+ * No `#/db` import here — pure and safe in the client bundle.
  */
-const OFFICER_ORDER: { rank: number; test: RegExp }[] = [
-	{ rank: 0, test: /president/i }, // note: "VP …" is caught below first
-	{ rank: 1, test: /^vp\b.*edu|vice.?president.*edu|^vpe$/i },
-	{ rank: 2, test: /^vp\b.*mem|vice.?president.*mem|^vpm$/i },
-	{ rank: 3, test: /^vp\b.*(pub|pr)|vice.?president.*(pub|rel)|^vppr$/i },
-	{ rank: 4, test: /secretary/i },
-	{ rank: 5, test: /treasurer/i },
-	{ rank: 6, test: /sergeant|sgt|arms|saa/i },
-];
 
-/** Lower rank sorts earlier. VP roles must be tested before the bare
- *  "president" rule, so we check the VP patterns first. */
-export function officerRank(office: string): number {
-	const o = office.trim();
-	// VP roles first (so "VP Education" doesn't match the plain /president/ rule).
-	for (const { rank, test } of OFFICER_ORDER) {
-		if (rank >= 1 && rank <= 3 && test.test(o)) return rank;
+/**
+ * Canonical Toastmasters club-officer line-up, in display order. This array's
+ * order IS the sort order (President first). Kept in lockstep with the
+ * `officer_position` pg enum in `src/db/schema.ts`.
+ */
+export const OFFICER_POSITIONS = [
+	"president",
+	"vp_education",
+	"vp_membership",
+	"vp_public_relations",
+	"secretary",
+	"treasurer",
+	"sergeant_at_arms",
+	"immediate_past_president",
+] as const;
+
+export type OfficerPosition = (typeof OFFICER_POSITIONS)[number];
+
+/** Human-readable labels for each officer position. */
+export const OFFICER_POSITION_LABELS: Record<OfficerPosition, string> = {
+	president: "President",
+	vp_education: "VP Education",
+	vp_membership: "VP Membership",
+	vp_public_relations: "VP Public Relations",
+	secretary: "Secretary",
+	treasurer: "Treasurer",
+	sergeant_at_arms: "Sergeant at Arms",
+	immediate_past_president: "Immediate Past President",
+};
+
+/** Type guard: is this string one of the officer-position enum values? */
+export function isOfficerPosition(value: unknown): value is OfficerPosition {
+	return (
+		typeof value === "string" &&
+		(OFFICER_POSITIONS as readonly string[]).includes(value)
+	);
+}
+
+/** Display label for an officer position (or a stored enum value). */
+export function officerPositionLabel(position: OfficerPosition): string {
+	return OFFICER_POSITION_LABELS[position];
+}
+
+/**
+ * Sort key for an officer position — its index in the canonical line-up. Lower
+ * sorts earlier (President = 0). Used to order the printable agenda's officer
+ * grid President → Immediate Past President.
+ */
+export function officerRank(position: OfficerPosition): number {
+	return OFFICER_POSITIONS.indexOf(position);
+}
+
+/**
+ * Parse a free-text office string (CSV "Current Position", a pasted roster
+ * column, or the old free-text `office`) into an officer-position enum value, or
+ * `null` when blank or unrecognized. Case-insensitive and tolerant of the
+ * Toastmasters export's "Club …" prefixes and common abbreviations
+ * ("VPE", "VP PR", "SAA"). VP roles and Immediate Past President are matched
+ * before the bare "President" rule so they aren't swallowed by it.
+ *
+ * A non-blank string that matches nothing returns `null` — callers treat that as
+ * "unparseable" and log a warning (mirrors the import's ambiguous-name skip).
+ */
+export function parseOfficerPosition(
+	value: string | null | undefined,
+): OfficerPosition | null {
+	const o = (value ?? "").trim().toLowerCase();
+	if (o === "") return null;
+
+	// Immediate Past President before the plain "president" rule.
+	if (/past.?president|\bipp\b/.test(o)) return "immediate_past_president";
+
+	// VP roles before the plain "president" rule (a VP is not the President).
+	if (/vp.*edu|vice.?president.*edu|\bvpe\b/.test(o)) return "vp_education";
+	if (/vp.*mem|vice.?president.*mem|\bvpm\b/.test(o)) return "vp_membership";
+	if (/vp.*(pub|pr)|vice.?president.*(pub|rel)|\bvppr\b/.test(o)) {
+		return "vp_public_relations";
 	}
-	if (/president/i.test(o) && !/vice|vp\b/i.test(o)) return 0;
-	for (const { rank, test } of OFFICER_ORDER) {
-		if (rank >= 4 && test.test(o)) return rank;
-	}
-	return 100; // unknown offices sort last
+
+	// Plain President — only when it's not a VP / past-president variant.
+	if (/president/.test(o) && !/vice|vp\b/.test(o)) return "president";
+
+	if (/secretar/.test(o)) return "secretary";
+	if (/treasur/.test(o)) return "treasurer";
+	if (/sergeant|sgt|\barms\b|\bsaa\b/.test(o)) return "sergeant_at_arms";
+
+	return null;
 }

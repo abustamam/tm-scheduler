@@ -7,8 +7,8 @@ import { RequireMember } from "./require-member";
 
 vi.mock("#/server/members", () => ({
 	listMembers: vi.fn().mockResolvedValue([
-		{ id: "m1", name: "Faisal", office: null },
-		{ id: "m2", name: "Mahbuba", office: "President" },
+		{ id: "m1", name: "Faisal", officerPosition: null },
+		{ id: "m2", name: "Mahbuba", officerPosition: "president" },
 	]),
 	addMember: vi.fn().mockResolvedValue({ id: "new-1" }),
 }));

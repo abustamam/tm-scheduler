@@ -23,7 +23,11 @@ import {
 
 async function listMembersPublic(clubId: string) {
 	return testDb
-		.select({ id: members.id, name: members.name, office: members.office })
+		.select({
+			id: members.id,
+			name: members.name,
+			officerPosition: members.officerPosition,
+		})
 		.from(members)
 		.where(eq(members.clubId, clubId))
 		.orderBy(members.name);

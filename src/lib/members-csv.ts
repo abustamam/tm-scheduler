@@ -3,6 +3,7 @@
  * No DB access — unit-tested in isolation; the DB runner is
  * scripts/import-members.ts.
  */
+import { type OfficerPosition, parseOfficerPosition } from "#/lib/officers";
 
 /** Split one CSV line into fields, honoring double-quoted fields with commas. */
 function splitLine(line: string): string[] {
@@ -60,6 +61,11 @@ export interface MappedMember {
 	phone: string | null;
 	joinedAt: Date | null;
 	originalJoinDate: Date | null;
+	/** CSV "Current Position" parsed to the officer-position enum, or null. */
+	officerPosition: OfficerPosition | null;
+	/** Raw trimmed "Current Position" value — kept so the importer can tell a
+	 *  blank position (silent) from an unparseable one (logged as a warning). */
+	currentPosition: string | null;
 }
 
 /** Only rows whose Toastmasters status is a paid membership are imported. */
@@ -86,6 +92,7 @@ function nonEmpty(value: string | undefined): string | null {
 
 /** Map one CSV row to the person/member fields we persist (Mobile Phone only). */
 export function mapRow(row: Record<string, string>): MappedMember {
+	const currentPosition = nonEmpty(row["Current Position"]);
 	return {
 		customerId: nonEmpty(row["Customer ID"]),
 		name: (row.Name ?? "").trim(),
@@ -93,6 +100,8 @@ export function mapRow(row: Record<string, string>): MappedMember {
 		phone: nonEmpty(row["Mobile Phone"]),
 		joinedAt: parseMDY(row["Member of Club Since"]),
 		originalJoinDate: parseMDY(row["Original Join Date"]),
+		officerPosition: parseOfficerPosition(currentPosition),
+		currentPosition,
 	};
 }
 
