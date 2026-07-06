@@ -165,8 +165,10 @@ function PrintAgenda() {
 					.no-print { display: none !important; }
 					body { background: #fff; }
 					.pgwrap { padding: 0 !important; gap: 0 !important; }
-					.pgwrap > div { break-after: page; box-shadow: none !important; }
-					.pgwrap > div:last-child { break-after: auto; }
+					/* Every sheet is an .agenda-page — covers the single-page
+					   editorial/grid layouts too, which aren't wrapped in .pgwrap. */
+					.agenda-page { box-shadow: none !important; break-after: page; break-inside: avoid; }
+					.agenda-page:last-child { break-after: auto; }
 					@page { size: letter portrait; margin: 0; }
 				}
 			`}</style>
