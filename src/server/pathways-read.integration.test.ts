@@ -30,7 +30,7 @@ import { hasTestDb, testDb } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
-const { pathwaysForPerson, pathwaysForMember } = await import(
+const { pathwaysForPerson, pathwaysForMember, pathwaysByMember } = await import(
 	"./pathways-read-logic"
 );
 
@@ -170,5 +170,25 @@ describe.skipIf(!hasTestDb)("pathwaysForPerson / pathwaysForMember", () => {
 	it("pathwaysForMember returns [] for a memberId not in the club", async () => {
 		const result = await pathwaysForMember(clubId, randomUUID());
 		expect(result).toEqual([]);
+	});
+
+	it("pathwaysByMember batches every member's paths in one query, keyed by member id", async () => {
+		const enrolled = await makeMember({ email: "batch-enrolled@example.com" });
+		const unenrolled = await makeMember({
+			email: "batch-unenrolled@example.com",
+		});
+		await enrollInPath(enrolled.personId, {
+			courseCode: "8701",
+			pathName: "Presentation Mastery",
+		});
+
+		const map = await pathwaysByMember(clubId);
+
+		expect(map.has(unenrolled.memberId)).toBe(false);
+		const paths = map.get(enrolled.memberId);
+		expect(paths).toHaveLength(1);
+		expect(paths?.[0].courseCode).toBe("8701");
+		expect(paths?.[0].pathName).toBe("Presentation Mastery");
+		expect(paths).toEqual(await pathwaysForMember(clubId, enrolled.memberId));
 	});
 });

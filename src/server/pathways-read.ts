@@ -3,6 +3,7 @@ import { z } from "zod";
 import { requireUser } from "./guards";
 import {
 	type PathViewModel,
+	pathwaysByMember,
 	pathwaysForMember,
 	pathwaysForUser,
 } from "./pathways-read-logic";
@@ -25,4 +26,21 @@ export const getMemberPathways = createServerFn({ method: "GET" })
 	.validator((i: unknown) => memberSchema.parse(i))
 	.handler(async ({ data }): Promise<PathViewModel[]> => {
 		return pathwaysForMember(data.clubId, data.memberId);
+	});
+
+const clubSchema = z.object({
+	clubId: z.string().uuid(),
+});
+
+/**
+ * Every roster member's paths in one batch (roster Pathway column) — avoids
+ * an N+1 of per-member reads. A `Map` isn't serializable across the server-fn
+ * boundary, so this returns a plain `Record<memberId, PathViewModel[]>`.
+ * Members with no synced paths are simply absent from the record.
+ */
+export const listClubMemberPathways = createServerFn({ method: "GET" })
+	.validator((i: unknown) => clubSchema.parse(i))
+	.handler(async ({ data }): Promise<Record<string, PathViewModel[]>> => {
+		const map = await pathwaysByMember(data.clubId);
+		return Object.fromEntries(map);
 	});

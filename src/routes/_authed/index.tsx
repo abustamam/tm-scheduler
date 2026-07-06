@@ -26,23 +26,30 @@ import { cn } from "#/lib/utils";
 import { listClubMembers } from "#/server/club";
 import { listUpcomingMeetings } from "#/server/meetings";
 import { bulkImportMembers, mergeMembers } from "#/server/members";
+import { listClubMemberPathways } from "#/server/pathways-read";
+import type { PathViewModel } from "#/server/pathways-read-logic";
 
 export const Route = createFileRoute("/_authed/")({
 	loader: async ({ context }) => {
 		const clubId = context.clubs[0]?.clubId;
 		if (!clubId) {
-			return { members: [], openRoles: 0 };
+			return { members: [], openRoles: 0, pathways: {} };
 		}
-		const [members, upcoming] = await Promise.all([
+		const [members, upcoming, pathways] = await Promise.all([
 			listClubMembers({ data: clubId }),
 			listUpcomingMeetings({ data: clubId }),
+			listClubMemberPathways({ data: { clubId } }),
 		]);
-		return { members, openRoles: upcoming[0]?.openSlots ?? 0 };
+		return {
+			members,
+			openRoles: upcoming[0]?.openSlots ?? 0,
+			pathways,
+		};
 	},
 	component: Roster,
 });
 
-const TABLE_COLS = "1fr 150px 34px";
+const TABLE_COLS = "1fr 150px 170px 34px";
 
 type SegKey = "all" | "active" | "inactive";
 const ROSTER_SEGMENTS: { key: SegKey; label: string }[] = [
@@ -60,10 +67,22 @@ interface RosterRow {
 	speeches: number;
 	/** Roster membership status (renewal): active vs unrenewed/inactive. */
 	membershipStatus: "active" | "inactive";
+	/** Compact label for the member's first synced Pathway, or null if none synced. */
+	pathwayLabel: string | null;
+}
+
+/** "PathName · L2 3/5" (or "· Path complete"), compact for a one-line roster cell. */
+function pathwayLabelFor(paths: PathViewModel[]): string | null {
+	const path = paths[0];
+	if (!path) return null;
+	if (path.complete) return `${path.pathName} · Path complete`;
+	const level = path.levels.find((l) => l.level === path.currentLevel);
+	if (!level) return path.pathName;
+	return `${path.pathName} · L${level.level} ${level.completed}/${level.total}`;
 }
 
 function Roster() {
-	const { members, openRoles } = Route.useLoaderData();
+	const { members, openRoles, pathways } = Route.useLoaderData();
 	const { clubs, currentMemberId } = Route.useRouteContext();
 	const clubId = clubs[0]?.clubId;
 	const clubRole = clubs[0]?.clubRole;
@@ -72,8 +91,7 @@ function Roster() {
 	const [mergeOpen, setMergeOpen] = useState(false);
 	const [importOpen, setImportOpen] = useState(false);
 
-	// Identity, tenure, speeches and membership status are real; Pathways progress
-	// is not modeled (#61).
+	// Identity, tenure, speeches, membership status and Pathways progress are all real.
 	const rows: RosterRow[] = members.map((m) => {
 		const joined = m.joinedAt ?? m.createdAt;
 		return {
@@ -88,6 +106,7 @@ function Roster() {
 				: formatTenure(joined),
 			speeches: m.speeches,
 			membershipStatus: m.status,
+			pathwayLabel: pathwayLabelFor(pathways[m.id] ?? []),
 		};
 	});
 
@@ -189,6 +208,7 @@ function Roster() {
 				>
 					<div>Member</div>
 					<div>Speeches</div>
+					<div>Pathway</div>
 					<div />
 				</div>
 
@@ -233,6 +253,11 @@ function Roster() {
 									{" "}
 									given
 								</span>
+							</div>
+
+							{/* Pathway */}
+							<div className="min-w-0 truncate text-xs text-[var(--sea-ink-soft)]">
+								{m.pathwayLabel ?? "—"}
 							</div>
 
 							{/* Chevron */}

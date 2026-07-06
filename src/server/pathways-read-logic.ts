@@ -111,3 +111,60 @@ export async function pathwaysForUser(
 	if (!p) return [];
 	return pathwaysForPerson(p.id);
 }
+
+/**
+ * Every enrolled path for every member of a club, in ONE query, grouped by
+ * membership id — avoids an N+1 when rendering the roster (mirrors the
+ * batching shape of `currentOfficersByMember` in officer-terms-logic.ts).
+ * Memberships with no synced paths are simply absent from the map (callers
+ * default to an empty array).
+ */
+export async function pathwaysByMember(
+	clubId: string,
+): Promise<Map<string, PathViewModel[]>> {
+	const rows = await db
+		.select({
+			memberId: members.id,
+			courseCode: pathwaysPaths.courseCode,
+			pathName: pathwaysPaths.name,
+			level: pathLevelProgress.level,
+			completed: pathLevelProgress.completed,
+			total: pathLevelProgress.total,
+			approved: pathLevelProgress.approved,
+		})
+		.from(members)
+		.innerJoin(pathEnrollments, eq(pathEnrollments.personId, members.personId))
+		.innerJoin(pathwaysPaths, eq(pathEnrollments.pathId, pathwaysPaths.id))
+		.innerJoin(
+			pathLevelProgress,
+			eq(pathLevelProgress.enrollmentId, pathEnrollments.id),
+		)
+		.where(eq(members.clubId, clubId))
+		.orderBy(asc(pathwaysPaths.sortOrder), asc(pathLevelProgress.level));
+
+	const byMember = new Map<string, Map<string, SyncedPath>>();
+	for (const r of rows) {
+		let byPath = byMember.get(r.memberId);
+		if (!byPath) {
+			byPath = new Map<string, SyncedPath>();
+			byMember.set(r.memberId, byPath);
+		}
+		let p = byPath.get(r.courseCode);
+		if (!p) {
+			p = { courseCode: r.courseCode, pathName: r.pathName, levels: [] };
+			byPath.set(r.courseCode, p);
+		}
+		p.levels.push({
+			level: r.level,
+			completed: r.completed,
+			total: r.total,
+			approved: r.approved,
+		});
+	}
+
+	const result = new Map<string, PathViewModel[]>();
+	for (const [memberId, byPath] of byMember) {
+		result.set(memberId, [...byPath.values()].map(buildPathViewModel));
+	}
+	return result;
+}
