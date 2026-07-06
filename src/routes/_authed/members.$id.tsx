@@ -4,7 +4,12 @@ import {
 	useNavigate,
 	useRouter,
 } from "@tanstack/react-router";
-import { ChevronLeft } from "lucide-react";
+import {
+	Archive,
+	ArchiveRestore,
+	CalendarPlus,
+	ChevronLeft,
+} from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { MemberAvatar } from "#/components/club/member-avatar";
@@ -22,6 +27,7 @@ import {
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
+import { formatMeetingDate } from "#/lib/format";
 import { formatTenure } from "#/lib/members";
 import {
 	OFFICER_POSITIONS,
@@ -30,12 +36,20 @@ import {
 } from "#/lib/officers";
 import { getMemberProfile } from "#/server/club";
 import { editMember, removeMember, setMemberStatus } from "#/server/members";
+import { archiveSpeech, rescheduleSpeech } from "#/server/speeches";
 
 export const Route = createFileRoute("/_authed/members/$id")({
 	loader: async ({ params, context }) => {
 		const clubId = context.clubs[0]?.clubId;
 		if (!clubId) {
-			return { member: null, speechLog: [], rolesServed: [], speeches: 0 };
+			return {
+				member: null,
+				speechLog: [],
+				rolesServed: [],
+				speeches: 0,
+				unscheduledSpeeches: [],
+				openSpeakerSlots: [],
+			};
 		}
 		return getMemberProfile({ data: { clubId, memberId: params.id } });
 	},
@@ -60,7 +74,13 @@ function dayMon(value: Date | string) {
 }
 
 function MemberDetail() {
-	const { member, speechLog, rolesServed } = Route.useLoaderData();
+	const {
+		member,
+		speechLog,
+		rolesServed,
+		unscheduledSpeeches,
+		openSpeakerSlots,
+	} = Route.useLoaderData();
 	const { clubs, currentMemberId } = Route.useRouteContext();
 	const clubId = clubs[0]?.clubId;
 
@@ -213,9 +233,224 @@ function MemberDetail() {
 							</div>
 						)}
 					</div>
+
+					{clubId ? (
+						<UnscheduledSpeeches
+							speeches={unscheduledSpeeches}
+							openSlots={openSpeakerSlots}
+							clubId={clubId}
+						/>
+					) : null}
 				</div>
 			</div>
 		</PageContainer>
+	);
+}
+
+type UnscheduledSpeechRow = {
+	id: string;
+	title: string;
+	pathwayPath: string | null;
+	projectName: string | null;
+	projectLevel: string | null;
+	archived: boolean;
+};
+
+type OpenSlotRow = {
+	slotId: string;
+	scheduledAt: Date | string;
+	roleName: string;
+};
+
+/**
+ * A Person's unscheduled speeches (ADR-0009 / #102): drafts with no active slot.
+ * Each can be scheduled into an open speaker slot (reschedule flow) or archived
+ * to hide it. Archived rows aren't loaded by default — this only lists the live
+ * pool.
+ */
+function UnscheduledSpeeches({
+	speeches,
+	openSlots,
+	clubId,
+}: {
+	speeches: UnscheduledSpeechRow[];
+	openSlots: OpenSlotRow[];
+	clubId: string;
+}) {
+	const router = useRouter();
+	const [busyId, setBusyId] = useState<string | null>(null);
+	const [scheduling, setScheduling] = useState<UnscheduledSpeechRow | null>(
+		null,
+	);
+
+	const live = speeches.filter((s) => !s.archived);
+	const archived = speeches.filter((s) => s.archived);
+
+	async function onSetArchived(speechId: string, next: boolean) {
+		setBusyId(speechId);
+		try {
+			await archiveSpeech({ data: { speechId, clubId, archived: next } });
+			toast.success(next ? "Speech archived." : "Speech restored.");
+			await router.invalidate();
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+		} finally {
+			setBusyId(null);
+		}
+	}
+
+	async function onSchedule(speechId: string, slotId: string) {
+		setBusyId(speechId);
+		try {
+			await rescheduleSpeech({ data: { speechId, slotId } });
+			toast.success("Speech scheduled.");
+			setScheduling(null);
+			await router.invalidate();
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+		} finally {
+			setBusyId(null);
+		}
+	}
+
+	return (
+		<div className="rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] px-5 py-[18px] shadow-[0_1px_0_var(--inset-glint)_inset,0_10px_24px_rgba(23,58,64,.05)]">
+			<h2 className="mb-3 text-[15px] font-bold">Unscheduled speeches</h2>
+			{live.length === 0 ? (
+				<p className="text-[12.5px] text-[var(--sea-ink-soft)]">
+					No unscheduled speeches. Prepared speeches with no meeting slot show
+					up here.
+				</p>
+			) : (
+				<ul className="flex flex-col gap-2.5">
+					{live.map((s) => {
+						const sub = [s.projectName, s.pathwayPath, s.projectLevel]
+							.filter(Boolean)
+							.join(" · ");
+						return (
+							<li
+								key={s.id}
+								className="rounded-xl border border-[var(--line)] bg-[var(--foam)] px-3.5 py-2.5"
+							>
+								<div className="min-w-0">
+									<div className="truncate text-[13.5px] font-bold">
+										{s.title}
+									</div>
+									{sub ? (
+										<div className="truncate text-[11.5px] text-[var(--sea-ink-soft)]">
+											{sub}
+										</div>
+									) : null}
+								</div>
+								<div className="mt-2 flex flex-wrap gap-2">
+									<Button
+										size="sm"
+										variant="outline"
+										disabled={busyId === s.id || openSlots.length === 0}
+										onClick={() => setScheduling(s)}
+									>
+										<CalendarPlus className="size-[15px]" aria-hidden />
+										Schedule
+									</Button>
+									<Button
+										size="sm"
+										variant="ghost"
+										disabled={busyId === s.id}
+										onClick={() => onSetArchived(s.id, true)}
+									>
+										<Archive className="size-[15px]" aria-hidden />
+										Archive
+									</Button>
+								</div>
+								{openSlots.length === 0 ? (
+									<p className="mt-1.5 text-[11px] text-[var(--sea-ink-soft)]">
+										No open speaker slots to schedule into.
+									</p>
+								) : null}
+							</li>
+						);
+					})}
+				</ul>
+			)}
+
+			{archived.length > 0 ? (
+				<details className="mt-3 border-t border-[var(--line)] pt-3">
+					<summary className="cursor-pointer text-[12.5px] font-semibold text-[var(--sea-ink-soft)]">
+						Archived ({archived.length})
+					</summary>
+					<ul className="mt-2 flex flex-col gap-2">
+						{archived.map((s) => (
+							<li
+								key={s.id}
+								className="flex items-center justify-between gap-2 rounded-xl border border-dashed border-[var(--line)] px-3.5 py-2"
+							>
+								<span className="min-w-0 truncate text-[12.5px] text-[var(--sea-ink-soft)]">
+									{s.title}
+								</span>
+								<Button
+									size="sm"
+									variant="ghost"
+									disabled={busyId === s.id}
+									onClick={() => onSetArchived(s.id, false)}
+								>
+									<ArchiveRestore className="size-[15px]" aria-hidden />
+									Restore
+								</Button>
+							</li>
+						))}
+					</ul>
+				</details>
+			) : null}
+
+			<Dialog
+				open={scheduling !== null}
+				onOpenChange={(open) => !open && setScheduling(null)}
+			>
+				<DialogContent>
+					<DialogHeader>
+						<DialogTitle>Schedule "{scheduling?.title}"</DialogTitle>
+						<DialogDescription>
+							Pick an open speaker slot. This assigns the speaker and attaches
+							the speech.
+						</DialogDescription>
+					</DialogHeader>
+					<ul className="flex max-h-[50vh] flex-col gap-2 overflow-y-auto">
+						{openSlots.map((slot) => (
+							<li key={slot.slotId}>
+								<button
+									type="button"
+									disabled={busyId === scheduling?.id}
+									onClick={() =>
+										scheduling && onSchedule(scheduling.id, slot.slotId)
+									}
+									className="flex w-full items-center justify-between gap-3 rounded-xl border border-[var(--line)] bg-[var(--surface-strong)] px-3.5 py-2.5 text-left transition-colors hover:bg-[var(--foam)] disabled:opacity-60"
+								>
+									<span className="min-w-0">
+										<span className="block truncate text-[13.5px] font-semibold">
+											{formatMeetingDate(slot.scheduledAt)}
+										</span>
+										<span className="block truncate text-[11.5px] text-[var(--sea-ink-soft)]">
+											{slot.roleName}
+										</span>
+									</span>
+									<CalendarPlus
+										className="size-[16px] shrink-0 text-[var(--sea-ink-soft)]"
+										aria-hidden
+									/>
+								</button>
+							</li>
+						))}
+					</ul>
+					<DialogFooter>
+						<DialogClose asChild>
+							<Button type="button" variant="outline">
+								Cancel
+							</Button>
+						</DialogClose>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
+		</div>
 	);
 }
 

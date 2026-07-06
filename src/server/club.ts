@@ -16,6 +16,10 @@ import {
 	currentOfficersByMember,
 	currentOfficersFor,
 } from "./officer-terms-logic";
+import {
+	listOpenSpeakerSlots,
+	listUnscheduledSpeeches,
+} from "./speeches-logic";
 
 const uuid = z.string().uuid();
 
@@ -186,6 +190,7 @@ export const getMemberProfile = createServerFn({ method: "GET" })
 		const [member] = await db
 			.select({
 				id: members.id,
+				personId: members.personId,
 				name: members.name,
 				email: members.email,
 				phone: members.phone,
@@ -206,7 +211,14 @@ export const getMemberProfile = createServerFn({ method: "GET" })
 			.limit(1);
 
 		if (!member) {
-			return { member: null, speechLog: [], rolesServed: [], speeches: 0 };
+			return {
+				member: null,
+				speechLog: [],
+				rolesServed: [],
+				speeches: 0,
+				unscheduledSpeeches: [],
+				openSpeakerSlots: [],
+			};
 		}
 
 		// Current office(s) derived from open officer terms (#100).
@@ -215,6 +227,15 @@ export const getMemberProfile = createServerFn({ method: "GET" })
 		// History keys directly to the member row — no user bridge needed.
 		const speechLog = await loadSpeechLog(member.id, data.clubId, 6);
 		const rolesServed = await loadRolesServed(member.id, data.clubId);
+		// The Person's unscheduled speeches (derived from slot linkage, ADR-0009 /
+		// #102) + the club's open speaker slots to reschedule them into. Archived
+		// drafts are included so the profile can offer unarchive; the view splits
+		// live vs. archived on the row's `archived` flag.
+		const unscheduledSpeeches = await listUnscheduledSpeeches(db, {
+			personId: member.personId,
+			includeArchived: true,
+		});
+		const openSpeakerSlots = await listOpenSpeakerSlots(db, data.clubId);
 
 		return {
 			member: {
@@ -232,6 +253,8 @@ export const getMemberProfile = createServerFn({ method: "GET" })
 			speechLog,
 			rolesServed,
 			speeches: speechLog.length,
+			unscheduledSpeeches,
+			openSpeakerSlots,
 		};
 	});
 
