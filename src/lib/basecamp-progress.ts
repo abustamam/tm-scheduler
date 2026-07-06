@@ -20,6 +20,8 @@ export interface BcmProgressRow {
 	progression: Record<string, BcmProgressLevel>;
 }
 
+// Only the slice the parser reads. The real payload is a paginated envelope
+// that also carries `count`/`next`/`previous` — intentionally omitted here.
 export interface BcmProgressPage {
 	results: BcmProgressRow[];
 }

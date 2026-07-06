@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
 	type BcmProgressPage,
 	extractCourseCode,
+	normalizePages,
 	parseProgressPages,
 } from "./basecamp-progress";
 
@@ -60,5 +61,67 @@ describe("parseProgressPages", () => {
 		expect(
 			rows.every((r) => r.email === null || r.email === r.email?.toLowerCase()),
 		).toBe(true);
+	});
+});
+
+describe("parseProgressPages — synthetic edge cases", () => {
+	function pageWith(row: BcmProgressPage["results"][number]): BcmProgressPage {
+		return { results: [row] };
+	}
+
+	it("lowercases a mixed-case email", () => {
+		const [row] = parseProgressPages([
+			pageWith({
+				user: { id: 1, name: "Foo Bar", email: "Foo@Bar.com" },
+				path_name: "Presentation Mastery",
+				course_id: "course-v1:Toastmasters+8701+8_15_2023",
+				progression: { "Level 1": { completed: 1, total: 5, approved: true } },
+			}),
+		]);
+		expect(row.email).toBe("foo@bar.com");
+	});
+
+	it("passes a null email through as null (no crash)", () => {
+		const [row] = parseProgressPages([
+			pageWith({
+				user: { id: 2, name: "No Email", email: null },
+				path_name: "Presentation Mastery",
+				course_id: "course-v1:Toastmasters+8701+8_15_2023",
+				progression: { "Level 1": { completed: 0, total: 5, approved: false } },
+			}),
+		]);
+		expect(row.email).toBeNull();
+	});
+
+	it("defaults approved to false when the field is absent", () => {
+		const [row] = parseProgressPages([
+			pageWith({
+				user: { id: 3, name: "No Approved", email: null },
+				path_name: "Presentation Mastery",
+				course_id: "course-v1:Toastmasters+8701+8_15_2023",
+				progression: { "Level 1": { completed: 5, total: 5 } },
+			}),
+		]);
+		expect(row.levels).toHaveLength(1);
+		expect(row.levels[0]).toEqual({
+			level: 1,
+			completed: 5,
+			total: 5,
+			approved: false,
+		});
+	});
+});
+
+describe("normalizePages", () => {
+	const page: BcmProgressPage = { results: [] };
+
+	it("wraps a single page object in an array", () => {
+		expect(normalizePages(page)).toEqual([page]);
+	});
+
+	it("returns an array of pages unchanged", () => {
+		const pages = [page, { results: [] }];
+		expect(normalizePages(pages)).toBe(pages);
+		expect(normalizePages(pages)).toHaveLength(2);
 	});
 });
