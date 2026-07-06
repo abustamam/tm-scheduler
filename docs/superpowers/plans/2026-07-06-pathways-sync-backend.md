@@ -8,11 +8,11 @@
 
 **Tech Stack:** Drizzle ORM (node-postgres), TanStack Start `createServerFn`, Zod, Vitest, Biome (tabs + double quotes). Package manager: Bun.
 
-**Prerequisite (satisfied):** #64 is CLOSED — `people` / `members.person_id` exist in `src/db/schema.ts`. This plan builds on them. (#79 is still open; it only gates Phase 2, not this plan.)
+**Prerequisites (both satisfied):** #64 (`people`) and #79 (`speeches`, PR #109) are both on `main`. This plan (1a) needs only `people`; the `speeches` table means Phase 2 (named specificity) can follow immediately.
 
 **Spec:** `docs/superpowers/specs/2026-07-06-pathways-progression-model-design.md`
 
-> **Execution note:** This branch (`spec/pathways-progression-model`) was cut from an older `main`. Before executing, create a fresh worktree from **current `main`** (it has `people`, `officer_terms`, etc.) and copy this plan + spec over, or rebase. Also run `bun install` and `cp .env.local` into the worktree (fresh worktrees need deps + env). The `dev-postgres` container serves both `tm_scheduler` (dev) and `tm_test` (integration).
+> **Execution note:** This branch (`spec/pathways-progression-model`) has been **rebased onto current `main`** (it now has `people`, `speeches`, `officer_terms`), so it's a valid execution base as-is. Before running Task 1, into this worktree run `bun install` and copy `.env.local` from the main checkout (fresh worktrees need deps + env). The `dev-postgres` container serves both `tm_scheduler` (dev) and `tm_test` (integration).
 
 ---
 

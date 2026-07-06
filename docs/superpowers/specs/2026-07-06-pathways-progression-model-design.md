@@ -154,13 +154,14 @@ Dependencies are now split, enabling a leaner first ship:
   the manual ingest paste screen + the count-form member view (ring, level bars, `approved`
   celebration, "N of M"), member-detail Pathways tab, roster column, dashboard tile. 1a produces
   working, testable software on its own (ingest real JSON → query progress) with no UI.
-- **Phase 2 — Named specificity. Blocked on #79 (`speeches`), still OPEN; closes #101.**
-  `pathways_projects` name seed + `speeches.project_id` FK + free-text migration → "Your wins"
-  and named "Up next." This is the specificity layer of the locked visual.
+- **Phase 2 — Named specificity. `#79 (speeches) landed (PR #109) — unblocked; closes #101.**
+  `pathways_projects` name seed + `speeches.project_id` FK + migration off today's free-text
+  `speeches.pathway_path`/`project_name`/`project_level` → "Your wins" and named "Up next." This
+  is the specificity layer of the locked visual.
 
-(Status as of 2026-07-06: **#64 CLOSED** — `people`/`members.person_id` exist in `schema.ts`;
-**#79 OPEN** — speeches are still free-text `speaker_details`. So Phase 1 builds now; Phase 2
-waits on #79.)
+(Status as of 2026-07-06: **both prerequisites landed** — **#64** (`people`/`members.person_id`)
+and **#79** (`speeches` with free-text pathway fields + `role_slots.speech_id`, PR #109) are on
+`main`. So Phase 1 **and** Phase 2 are buildable now.)
 
 ## Testing
 
