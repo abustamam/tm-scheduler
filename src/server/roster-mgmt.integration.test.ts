@@ -13,6 +13,7 @@ import {
 	activityLog,
 	memberAvailability,
 	members,
+	people,
 	roleSlots,
 } from "#/db/schema";
 import { logActivity } from "#/server/activity";
@@ -34,6 +35,17 @@ async function addMemberRow(clubId: string, name: string) {
 		.values({ clubId, personId, name })
 		.returning({ id: members.id });
 	return m.id;
+}
+
+/** Link a member's Person to a sign-in account (ADR-0008 Phase B: the auth link
+ *  is people.user_id) so the "signed-in account" guards trip. */
+async function linkMemberToUser(memberId: string, userId: string) {
+	const [m] = await testDb
+		.select({ personId: members.personId })
+		.from(members)
+		.where(eq(members.id, memberId))
+		.limit(1);
+	await testDb.update(people).set({ userId }).where(eq(people.id, m.personId));
 }
 
 describe.skipIf(!hasTestDb)("roster management", () => {
@@ -162,10 +174,7 @@ describe.skipIf(!hasTestDb)("roster management", () => {
 	it("mergeMembers rejects absorbing a signed-in (user-linked) member", async () => {
 		const { applyMemberMerge } = await import("#/server/members-logic");
 		const absorbed = await addMemberRow(seed.clubId, "Linked");
-		await testDb
-			.update(members)
-			.set({ userId: seed.adminUserId })
-			.where(eq(members.id, absorbed));
+		await linkMemberToUser(absorbed, seed.memberUserId);
 		await expect(
 			applyMemberMerge({
 				clubId: seed.clubId,
@@ -241,12 +250,10 @@ describe.skipIf(!hasTestDb)("roster management", () => {
 
 	it("removeMember rejects a signed-in (user-linked) member", async () => {
 		const { applyMemberRemove } = await import("#/server/members-logic");
-		await testDb
-			.update(members)
-			.set({ userId: seed.adminUserId })
-			.where(eq(members.id, seed.memberId));
+		const linked = await addMemberRow(seed.clubId, "Signed In");
+		await linkMemberToUser(linked, seed.adminUserId);
 		await expect(
-			applyMemberRemove({ clubId: seed.clubId, memberId: seed.memberId }),
+			applyMemberRemove({ clubId: seed.clubId, memberId: linked }),
 		).rejects.toThrow();
 	});
 });

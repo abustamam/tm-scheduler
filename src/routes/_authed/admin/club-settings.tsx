@@ -10,9 +10,7 @@ import { getClubProfileSettings, updateClubProfile } from "#/server/clubs";
 
 export const Route = createFileRoute("/_authed/admin/club-settings")({
 	beforeLoad: ({ context }) => {
-		const adminClub = context.clubs.find(
-			(c) => c.clubRole === "admin" || c.clubRole === "vpe",
-		);
+		const adminClub = context.clubs.find((c) => c.clubRole === "admin");
 		if (!adminClub) {
 			throw redirect({ to: "/" });
 		}

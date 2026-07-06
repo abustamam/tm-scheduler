@@ -47,8 +47,6 @@ export const Route = createFileRoute("/_authed")({
 
 const CLUB_ROLE_LABELS: Record<string, string> = {
 	admin: "Officer",
-	vpe: "VP Education",
-	president: "President",
 	member: "Member",
 };
 
@@ -76,9 +74,7 @@ function WorkspaceLayout() {
 
 	const clubName = clubs[0]?.name ?? "Toastmasters";
 	const clubNumber = clubs[0]?.clubNumber ?? null;
-	const isOfficer = clubs.some(
-		(c) => c.clubRole === "admin" || c.clubRole === "vpe",
-	);
+	const isOfficer = clubs.some((c) => c.clubRole === "admin");
 	const roleLabel = clubs[0]?.clubRole
 		? (CLUB_ROLE_LABELS[clubs[0].clubRole] ?? "Member")
 		: "Member";

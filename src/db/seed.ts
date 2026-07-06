@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
-import type { OfficerPosition } from "#/lib/officers";
+import {
+	defaultClubRoleForOffices,
+	type OfficerPosition,
+} from "#/lib/officers";
 import { db } from "./index.ts";
 import {
-	clubMemberships,
 	clubs,
 	meetings,
 	members,
@@ -144,13 +146,6 @@ async function main() {
 		.values({ name: "MCF", slug: "mcf-toastmasters", clubNumber: "28677176" })
 		.returning({ id: clubs.id });
 
-	await db.insert(clubMemberships).values([
-		{ userId: adminId, clubId: club.id, clubRole: "admin" },
-		{ userId: jordanId, clubId: club.id, clubRole: "vpe" },
-		{ userId: alexId, clubId: club.id, clubRole: "member" },
-		{ userId: samId, clubId: club.id, clubRole: "member" },
-	]);
-
 	// Seed a roster of members (idempotent — guard with count check).
 	const existingMembers = await db
 		.select({ id: members.id })
@@ -162,21 +157,31 @@ async function main() {
 	if (existingMembers.length === 0) {
 		// Each roster member belongs to a person (ADR-0008). Create the people
 		// first, then the memberships pointing at them.
+		// Every seeded member is linked to a sign-in account at the Person level
+		// (ADR-0008 Phase B: people.user_id is the canonical auth link). Each
+		// membership's club_role is DEFAULTED from its office (President /
+		// VP Education ⇒ admin): Rasheed (VP Education) and Jordan (President) land
+		// as admins; Alex and Sam as members.
 		const roster: {
 			name: string;
 			email: string;
 			officerPosition?: OfficerPosition;
-			userId?: string;
+			userId: string;
 		}[] = [
 			{
 				name: "Rasheed Bustamam",
 				email: ADMIN_EMAIL,
 				officerPosition: "vp_education",
-				userId: adminId as string | undefined,
+				userId: adminId,
 			},
-			{ name: "Alex Rivera", email: "alex@example.com" },
-			{ name: "Sam Chen", email: "sam@example.com" },
-			{ name: "Jordan Patel", email: "jordan@example.com" },
+			{ name: "Alex Rivera", email: "alex@example.com", userId: alexId },
+			{ name: "Sam Chen", email: "sam@example.com", userId: samId },
+			{
+				name: "Jordan Patel",
+				email: "jordan@example.com",
+				officerPosition: "president",
+				userId: jordanId,
+			},
 		];
 		const insertedPeople = await db
 			.insert(people)
@@ -197,7 +202,9 @@ async function main() {
 					personId: personByName.get(r.name)!,
 					name: r.name,
 					email: r.email,
-					userId: r.userId,
+					clubRole: defaultClubRoleForOffices(
+						r.officerPosition ? [r.officerPosition] : [],
+					),
 				})),
 			)
 			.returning({ id: members.id, name: members.name });
@@ -415,7 +422,7 @@ async function main() {
 	console.log(`Seeded club MCF with 2 meetings.`);
 	console.log(`Admin sign-in email: ${ADMIN_EMAIL}`);
 	console.log(
-		"Members: alex@example.com, sam@example.com, jordan@example.com (VPE)",
+		"Members: alex@example.com, sam@example.com, jordan@example.com (President/admin)",
 	);
 }
 

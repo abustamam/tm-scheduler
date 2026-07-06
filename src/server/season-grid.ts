@@ -28,6 +28,6 @@ export const getSeasonGrid = createServerFn({ method: "GET" })
 	)
 	.handler(async ({ data }) => {
 		const user = await requireUser();
-		await requireClubRole(user.id, data.clubId, ["admin", "vpe"]);
+		await requireClubRole(user.id, data.clubId, ["admin"]);
 		return loadSeasonGrid(data);
 	});

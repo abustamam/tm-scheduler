@@ -99,7 +99,7 @@ export const clubProfileSchema = z.object({
 export type ClubProfileInput = z.infer<typeof clubProfileSchema>;
 
 /** Set/clear the club's district, mission, and meeting schedule. Caller is
- *  responsible for the admin/VPE authorization check (see `updateClubProfile`). */
+ *  responsible for the admin authorization check (see `updateClubProfile`). */
 export async function applyClubProfileUpdate(input: ClubProfileInput) {
 	const [updated] = await db
 		.update(clubs)

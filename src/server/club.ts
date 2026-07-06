@@ -37,7 +37,9 @@ export const listClubMembers = createServerFn({ method: "GET" })
 				id: members.id,
 				name: members.name,
 				email: members.email,
-				userId: members.userId,
+				// "Signed-in account?" is now a Person-level fact (ADR-0008 Phase B):
+				// the auth link lives on people.user_id, not the membership row.
+				userId: people.userId,
 				status: members.status,
 				createdAt: members.createdAt,
 				joinedAt: members.joinedAt,
@@ -187,7 +189,9 @@ export const getMemberProfile = createServerFn({ method: "GET" })
 				name: members.name,
 				email: members.email,
 				phone: members.phone,
-				userId: members.userId,
+				// "Signed-in account?" is now a Person-level fact (ADR-0008 Phase B):
+				// the auth link lives on people.user_id, not the membership row.
+				userId: people.userId,
 				status: members.status,
 				createdAt: members.createdAt,
 				joinedAt: members.joinedAt,
@@ -236,11 +240,14 @@ export const listMySpeeches = createServerFn({ method: "GET" }).handler(
 	async () => {
 		const currentUser = await requireUser();
 
-		// Resolve the signed-in user's linked roster member.
+		// Resolve the signed-in user → Person → a linked roster member (ADR-0008
+		// Phase B: the auth link is on people.user_id). A person may belong to
+		// several clubs; pick any one membership to seed their cross-club log.
 		const [myMember] = await db
 			.select({ id: members.id })
 			.from(members)
-			.where(eq(members.userId, currentUser.id))
+			.innerJoin(people, eq(people.id, members.personId))
+			.where(eq(people.userId, currentUser.id))
 			.limit(1);
 
 		if (!myMember) {

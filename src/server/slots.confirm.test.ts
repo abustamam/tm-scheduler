@@ -14,7 +14,7 @@
  */
 import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { clubMemberships, roleSlots } from "#/db/schema";
+import { members, people, roleSlots } from "#/db/schema";
 import {
 	cleanup,
 	hasTestDb,
@@ -159,47 +159,37 @@ describe.skipIf(!hasTestDb)("confirmSlot + unconfirmSlot integration", () => {
 	});
 
 	// -------------------------------------------------------------------------
-	// Authorization: member role is rejected by admin/vpe guard
+	// Authorization: member role is rejected by the admin guard
 	// -------------------------------------------------------------------------
 
-	it("member role is rejected by ['admin','vpe'] guard check", async () => {
-		// Mirror the requireClubRole predicate from guards.ts:55-65
+	/** Mirror of guards.getMembership: user → Person → members row for the club. */
+	async function membershipFor(userId: string) {
 		const [membership] = await testDb
-			.select()
-			.from(clubMemberships)
-			.where(
-				and(
-					eq(clubMemberships.userId, seed.memberUserId),
-					eq(clubMemberships.clubId, seed.clubId),
-				),
-			)
+			.select({ clubRole: members.clubRole, status: members.status })
+			.from(members)
+			.innerJoin(people, eq(people.id, members.personId))
+			.where(and(eq(people.userId, userId), eq(members.clubId, seed.clubId)))
 			.limit(1);
+		return membership ?? null;
+	}
 
-		const allowedRoles: Array<"admin" | "vpe"> = ["admin", "vpe"];
+	it("member role is rejected by ['admin'] guard check", async () => {
+		const membership = await membershipFor(seed.memberUserId);
+		const allowedRoles: Array<"admin" | "member"> = ["admin"];
 		const memberPasses =
-			membership != null &&
-			allowedRoles.includes(membership.clubRole as "admin" | "vpe");
+			membership != null && allowedRoles.includes(membership.clubRole);
 
+		expect(membership?.clubRole).toBe("member");
 		expect(memberPasses).toBe(false);
 	});
 
-	it("admin role passes the ['admin','vpe'] guard check", async () => {
-		const [membership] = await testDb
-			.select()
-			.from(clubMemberships)
-			.where(
-				and(
-					eq(clubMemberships.userId, seed.adminUserId),
-					eq(clubMemberships.clubId, seed.clubId),
-				),
-			)
-			.limit(1);
-
-		const allowedRoles: Array<"admin" | "vpe"> = ["admin", "vpe"];
+	it("admin role passes the ['admin'] guard check", async () => {
+		const membership = await membershipFor(seed.adminUserId);
+		const allowedRoles: Array<"admin" | "member"> = ["admin"];
 		const adminPasses =
-			membership != null &&
-			allowedRoles.includes(membership.clubRole as "admin" | "vpe");
+			membership != null && allowedRoles.includes(membership.clubRole);
 
+		expect(membership?.clubRole).toBe("admin");
 		expect(adminPasses).toBe(true);
 	});
 });

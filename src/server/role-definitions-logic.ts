@@ -78,7 +78,7 @@ export const createRoleSchema = z.object({
 export type CreateRoleInput = z.infer<typeof createRoleSchema>;
 
 /** Append a new custom role to the club's template. New roles sort last (max
- *  sortOrder + 1). The caller is responsible for the admin/VPE authorization
+ *  sortOrder + 1). The caller is responsible for the admin authorization
  *  check (see `createClubRole`). Affects only meetings generated afterwards —
  *  existing meetings' slots are untouched. */
 export async function applyRoleDefinitionCreate(input: CreateRoleInput) {
@@ -120,7 +120,7 @@ export type UpdateRoleInput = z.infer<typeof updateRoleSchema>;
  *  generated meetings (via `generateSlotRows`); existing meetings' slots are
  *  unchanged. Description is read at display time, so edits go live everywhere
  *  (before-claim sheet + public shared link) immediately. The caller is
- *  responsible for the admin/VPE authorization check (see `updateClubRole`). */
+ *  responsible for the admin authorization check (see `updateClubRole`). */
 export async function applyRoleDefinitionUpdate(input: UpdateRoleInput) {
 	const [updated] = await db
 		.update(roleDefinitions)
@@ -192,7 +192,7 @@ export type DeleteRoleInput = z.infer<typeof deleteRoleSchema>;
 /** Delete a custom role. BLOCKED with a clear message when the role is
  *  referenced by any existing meeting's slots — we never cascade-delete
  *  historical slots (the FK is onDelete: "restrict" as a backstop). The caller
- *  is responsible for the admin/VPE authorization check (see `deleteClubRole`). */
+ *  is responsible for the admin authorization check (see `deleteClubRole`). */
 export async function applyRoleDefinitionDelete(input: DeleteRoleInput) {
 	const [role] = await db
 		.select({ id: roleDefinitions.id })

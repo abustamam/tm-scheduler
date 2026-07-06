@@ -655,7 +655,7 @@ function MeetingView() {
 
 /**
  * TMOD meta editor — theme, Word of the Day, location, notes only. Date/time and
- * length are intentionally absent: reschedule stays admin/vpe-only (ADR-0010).
+ * length are intentionally absent: reschedule stays admin-only (ADR-0010).
  * We re-submit the meeting's current wall time unchanged so the server's
  * meta-only path accepts it.
  */
