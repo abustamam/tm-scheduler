@@ -43,7 +43,6 @@ const L3_POOL = [
 	"Know Your Sense of Humor",
 	"Make Connections Through Networking",
 	"Prepare for an Interview",
-	"Researching and Presenting",
 	"Understanding Vocal Variety",
 	"Using Descriptive Language",
 	"Using Presentation Software",
@@ -67,12 +66,18 @@ const L5_POOL = [
 	"Prepare to Speak Professionally",
 ];
 
-// Level 1 is identical (all required) across every current path.
+// Level 1 "Mastering Fundamentals" is identical (all required) across every path.
+// Five projects — matches Base Camp's L1 `total: 5` for all 6 club paths (verified
+// against fixture data) and westside's per-level pages. "Researching and Presenting"
+// is an L1 required project here (NOT an L3 elective, despite some sources listing it
+// in both). The official toastmasters.org site shows a newer 4-project L1 that Base
+// Camp hasn't adopted for these enrollments.
 const L1 = [
 	"Ice Breaker",
 	"Writing a Speech with Purpose",
 	"Introduction to Vocal Variety and Body Language",
 	"Evaluation and Feedback",
+	"Researching and Presenting",
 ];
 
 interface PathReq {
