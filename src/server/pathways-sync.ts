@@ -40,5 +40,5 @@ export const ingestPathwaysProgress = createServerFn({ method: "POST" })
 			);
 		}
 
-		return syncClubProgress(rows);
+		return syncClubProgress(data.clubId, rows);
 	});

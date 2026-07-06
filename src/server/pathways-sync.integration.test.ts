@@ -8,8 +8,19 @@
  */
 import { randomUUID } from "node:crypto";
 import { and, eq, inArray } from "drizzle-orm";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	afterAll,
+	afterEach,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
+import {
+	clubs,
+	members,
 	pathEnrollments,
 	pathLevelProgress,
 	pathwaysPaths,
@@ -37,13 +48,33 @@ function mp(over: Partial<ParsedMemberPath>): ParsedMemberPath {
 	};
 }
 
+// One test club shared by every case in this suite — identity match is now
+// scoped to roster members of the club being synced, so every matched person
+// needs a `members` row here.
+let clubId: string;
 const createdPersonIds: string[] = [];
 
-async function makePerson(over: Partial<typeof people.$inferInsert> = {}) {
+/** Create a Person AND a `members` row linking them to the test club. */
+async function makeMember(
+	over: Partial<typeof people.$inferInsert> = {},
+): Promise<string> {
+	const id = randomUUID();
+	const name = over.name ?? "P";
+	const email = over.email ?? "test@example.com";
+	await testDb.insert(people).values({ id, name, email, ...over });
+	createdPersonIds.push(id);
+	await testDb.insert(members).values({ clubId, personId: id, name, email });
+	return id;
+}
+
+/** Create a Person with NO membership in the test club (roster outsider). */
+async function makeNonMember(
+	over: Partial<typeof people.$inferInsert> = {},
+): Promise<string> {
 	const id = randomUUID();
 	await testDb
 		.insert(people)
-		.values({ id, name: "P", email: "test@example.com", ...over });
+		.values({ id, name: "Outsider", email: "outsider@example.com", ...over });
 	createdPersonIds.push(id);
 	return id;
 }
@@ -53,20 +84,34 @@ async function localCleanup() {
 	await testDb.delete(pathLevelProgress);
 	await testDb.delete(pathEnrollments);
 	await testDb.delete(pathwaysPaths);
-	// `people` is shared across suites — remove only what this suite created.
+	// `people`/`members` are shared across suites — remove only this suite's rows.
 	if (createdPersonIds.length > 0) {
+		await testDb
+			.delete(members)
+			.where(inArray(members.personId, createdPersonIds));
 		await testDb.delete(people).where(inArray(people.id, createdPersonIds));
 		createdPersonIds.length = 0;
 	}
 }
 
 describe.skipIf(!hasTestDb)("syncClubProgress", () => {
+	beforeAll(async () => {
+		clubId = randomUUID();
+		await testDb
+			.insert(clubs)
+			.values({ id: clubId, name: "Test Club", slug: `test-club-${clubId}` });
+	});
+
+	afterAll(async () => {
+		await testDb.delete(clubs).where(eq(clubs.id, clubId));
+	});
+
 	beforeEach(localCleanup);
 	afterEach(localCleanup);
 
 	it("matches by email, upserts path/enrollment/levels, sets basecampUserId", async () => {
-		const personId = await makePerson({ email: "match@example.com" });
-		const res = await syncClubProgress([
+		const personId = await makeMember({ email: "match@example.com" });
+		const res = await syncClubProgress(clubId, [
 			mp({ email: "match@example.com", basecampUserId: "123" }),
 		]);
 
@@ -104,11 +149,11 @@ describe.skipIf(!hasTestDb)("syncClubProgress", () => {
 	});
 
 	it("prefers a stored basecampUserId over email on re-sync (survives email change)", async () => {
-		const personId = await makePerson({
+		const personId = await makeMember({
 			email: "old@example.com",
 			basecampUserId: "555",
 		});
-		const res = await syncClubProgress([
+		const res = await syncClubProgress(clubId, [
 			mp({ email: "changed@example.com", basecampUserId: "555" }),
 		]);
 		expect(res.matched).toBe(1);
@@ -120,11 +165,11 @@ describe.skipIf(!hasTestDb)("syncClubProgress", () => {
 	});
 
 	it("re-sync updates counts idempotently (no duplicate rows)", async () => {
-		await makePerson({ email: "idem@example.com" });
-		await syncClubProgress([
+		await makeMember({ email: "idem@example.com" });
+		await syncClubProgress(clubId, [
 			mp({ email: "idem@example.com", basecampUserId: "1" }),
 		]);
-		await syncClubProgress([
+		await syncClubProgress(clubId, [
 			mp({
 				email: "idem@example.com",
 				basecampUserId: "1",
@@ -149,7 +194,7 @@ describe.skipIf(!hasTestDb)("syncClubProgress", () => {
 		// roster-mgmt's merge/remove cases) leave orphaned people the club
 		// cascade can't reclaim. Assert THIS sync created nobody instead.
 		const before = (await testDb.select().from(people)).length;
-		const res = await syncClubProgress([
+		const res = await syncClubProgress(clubId, [
 			mp({ email: "nobody@example.com", basecampUserId: "77" }),
 		]);
 		expect(res.matched).toBe(0);
@@ -164,11 +209,11 @@ describe.skipIf(!hasTestDb)("syncClubProgress", () => {
 	});
 
 	it("reports an identity anomaly as unmatched and never clobbers a stored basecampUserId", async () => {
-		const personId = await makePerson({
+		const personId = await makeMember({
 			email: "e@example.com",
 			basecampUserId: "111",
 		});
-		const res = await syncClubProgress([
+		const res = await syncClubProgress(clubId, [
 			mp({ email: "e@example.com", basecampUserId: "222" }),
 		]);
 		expect(res.matched).toBe(0);
@@ -182,12 +227,49 @@ describe.skipIf(!hasTestDb)("syncClubProgress", () => {
 	});
 
 	it("reports an email shared by 2+ people as unmatched (ambiguous)", async () => {
-		await makePerson({ email: "shared@example.com" });
-		await makePerson({ email: "shared@example.com" });
-		const res = await syncClubProgress([
+		// Both must be members of this club — otherwise the club-scoped lookup
+		// would resolve to a single (non-ambiguous) match on its own.
+		await makeMember({ email: "shared@example.com" });
+		await makeMember({ email: "shared@example.com" });
+		const res = await syncClubProgress(clubId, [
 			mp({ email: "shared@example.com", basecampUserId: "88" }),
 		]);
 		expect(res.matched).toBe(0);
 		expect(res.unmatched).toHaveLength(1);
+	});
+
+	it("does not match a person who exists but isn't a roster member of this club", async () => {
+		// Same email AND basecampUserId as the payload, but no `members` row in
+		// clubId — this is the authorization-scoping fix: a match anywhere in
+		// `people` is not enough, they must be on THIS club's roster.
+		const outsiderId = await makeNonMember({
+			email: "outsider@example.com",
+			basecampUserId: "321",
+		});
+		const res = await syncClubProgress(clubId, [
+			mp({ email: "outsider@example.com", basecampUserId: "321" }),
+		]);
+		expect(res.matched).toBe(0);
+		expect(res.unmatched).toEqual([
+			{
+				name: "Test Member",
+				email: "outsider@example.com",
+				basecampUserId: "321",
+			},
+		]);
+
+		// No pathway rows written for the outsider.
+		const enrs = await testDb
+			.select()
+			.from(pathEnrollments)
+			.where(eq(pathEnrollments.personId, outsiderId));
+		expect(enrs).toHaveLength(0);
+
+		// basecampUserId is not written onto the outsider's people row either.
+		const [p] = await testDb
+			.select({ bc: people.basecampUserId })
+			.from(people)
+			.where(eq(people.id, outsiderId));
+		expect(p.bc).toBe("321"); // unchanged from setup — never touched
 	});
 });

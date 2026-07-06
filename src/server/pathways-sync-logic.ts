@@ -4,10 +4,19 @@
  * unique email — ADR-0008 email fallback), and mirrors per-level counts.
  * Unmatched rows are reported, never auto-created. Kept in a `-logic.ts` so
  * `#/db` never leaks into the client bundle (server-modules guard).
+ *
+ * Identity match is scoped to the club being synced: a Person only matches if
+ * they have a `members` row for `clubId`, joined the same way every other
+ * admin write path scopes to the club (see `club.ts`'s roster query). Without
+ * this, a Club A admin could paste a payload containing a Club B member's
+ * email/basecampUserId and claim (or overwrite) their identity across clubs.
+ * A Person who exists but isn't a member of this club is reported unmatched,
+ * consistent with the existing match-or-report rule.
  */
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "#/db";
 import {
+	members,
 	pathEnrollments,
 	pathLevelProgress,
 	pathwaysPaths,
@@ -21,18 +30,34 @@ export interface SyncResult {
 	unmatched: { name: string; email: string | null; basecampUserId: string }[];
 }
 
-/** Resolve a Person id: stored Base Camp id → unique email → null (unmatched). */
-async function resolvePersonId(row: ParsedMemberPath): Promise<string | null> {
+/**
+ * Resolve a Person id: stored Base Camp id → unique email → null (unmatched).
+ * Both lookups are scoped to people who have a `members` row for `clubId` —
+ * a person who isn't on this club's roster can never match, no matter how
+ * their Base Camp id or email compares.
+ */
+async function resolvePersonId(
+	clubId: string,
+	row: ParsedMemberPath,
+): Promise<string | null> {
 	const byBc = await db
-		.select({ id: people.id })
+		.selectDistinct({ id: people.id })
 		.from(people)
+		.innerJoin(
+			members,
+			and(eq(members.personId, people.id), eq(members.clubId, clubId)),
+		)
 		.where(eq(people.basecampUserId, row.basecampUserId));
 	if (byBc.length === 1) return byBc[0].id;
 
 	if (!row.email) return null;
 	const byEmail = await db
-		.select({ id: people.id, basecampUserId: people.basecampUserId })
+		.selectDistinct({ id: people.id, basecampUserId: people.basecampUserId })
 		.from(people)
+		.innerJoin(
+			members,
+			and(eq(members.personId, people.id), eq(members.clubId, clubId)),
+		)
 		.where(sql`lower(${people.email}) = ${row.email}`);
 	if (byEmail.length !== 1) return null; // 0 or ambiguous → unmatched
 
@@ -80,13 +105,14 @@ async function upsertEnrollment(
 }
 
 export async function syncClubProgress(
+	clubId: string,
 	rows: ParsedMemberPath[],
 ): Promise<SyncResult> {
 	const result: SyncResult = { matched: 0, pathsUpserted: 0, unmatched: [] };
 	const seenPaths = new Set<string>();
 
 	for (const row of rows) {
-		const personId = await resolvePersonId(row);
+		const personId = await resolvePersonId(clubId, row);
 		if (!personId) {
 			result.unmatched.push({
 				name: row.name,
