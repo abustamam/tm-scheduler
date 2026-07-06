@@ -595,3 +595,32 @@ export const notificationsRelations = relations(notifications, ({ one }) => ({
 		references: [roleSlots.id],
 	}),
 }));
+
+export const pathwaysPathsRelations = relations(pathwaysPaths, ({ many }) => ({
+	enrollments: many(pathEnrollments),
+}));
+
+export const pathEnrollmentsRelations = relations(
+	pathEnrollments,
+	({ one, many }) => ({
+		person: one(people, {
+			fields: [pathEnrollments.personId],
+			references: [people.id],
+		}),
+		path: one(pathwaysPaths, {
+			fields: [pathEnrollments.pathId],
+			references: [pathwaysPaths.id],
+		}),
+		levels: many(pathLevelProgress),
+	}),
+);
+
+export const pathLevelProgressRelations = relations(
+	pathLevelProgress,
+	({ one }) => ({
+		enrollment: one(pathEnrollments, {
+			fields: [pathLevelProgress.enrollmentId],
+			references: [pathEnrollments.id],
+		}),
+	}),
+);
