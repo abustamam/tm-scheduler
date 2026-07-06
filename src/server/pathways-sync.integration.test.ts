@@ -189,11 +189,6 @@ describe.skipIf(!hasTestDb)("syncClubProgress", () => {
 	});
 
 	it("reports an unknown email as unmatched (no person created)", async () => {
-		// Delta check, not a global `people` count: vitest runs test files in
-		// parallel workers against the shared tm_test, and sibling suites (e.g.
-		// roster-mgmt's merge/remove cases) leave orphaned people the club
-		// cascade can't reclaim. Assert THIS sync created nobody instead.
-		const before = (await testDb.select().from(people)).length;
 		const res = await syncClubProgress(clubId, [
 			mp({ email: "nobody@example.com", basecampUserId: "77" }),
 		]);
@@ -205,7 +200,15 @@ describe.skipIf(!hasTestDb)("syncClubProgress", () => {
 				basecampUserId: "77",
 			},
 		]);
-		expect(await testDb.select().from(people)).toHaveLength(before);
+		// Scoped existence check, not a global `people` count: vitest runs test
+		// files in parallel workers against the shared tm_test, so a global
+		// before/after count flakes when a sibling suite writes people mid-test.
+		// The sync must not have created a person for this unmatched row.
+		const created = await testDb
+			.select()
+			.from(people)
+			.where(eq(people.email, "nobody@example.com"));
+		expect(created).toHaveLength(0);
 	});
 
 	it("reports an identity anomaly as unmatched and never clobbers a stored basecampUserId", async () => {
