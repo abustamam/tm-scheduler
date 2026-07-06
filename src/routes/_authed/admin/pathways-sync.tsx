@@ -10,9 +10,7 @@ import type { SyncResult } from "#/server/pathways-sync-logic";
 
 export const Route = createFileRoute("/_authed/admin/pathways-sync")({
 	beforeLoad: ({ context }) => {
-		const adminClub = context.clubs.find(
-			(c) => c.clubRole === "admin" || c.clubRole === "vpe",
-		);
+		const adminClub = context.clubs.find((c) => c.clubRole === "admin");
 		if (!adminClub) {
 			throw redirect({ to: "/" });
 		}

@@ -9,7 +9,6 @@ import { eq, inArray } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import * as schema from "#/db/schema";
 import {
-	clubMemberships,
 	clubs,
 	meetings,
 	members,
@@ -38,8 +37,9 @@ export interface SeededClub {
 	clubId: string;
 	adminUserId: string;
 	memberUserId: string;
-	personId: string; // person the seeded roster member belongs to
-	memberId: string; // roster member linked to memberUserId
+	personId: string; // person the seeded (member-role) roster member belongs to
+	memberId: string; // roster member (club_role=member) linked to memberUserId
+	adminMemberId: string; // roster member (club_role=admin) linked to adminUserId
 	roleDefinitionId: string;
 	meetingId: string;
 	slotId: string;
@@ -97,50 +97,53 @@ export async function seedClub(): Promise<SeededClub> {
 		},
 	]);
 
-	// memberships
-	await testDb.insert(clubMemberships).values([
-		{
-			userId: adminUserId,
-			clubId,
-			clubRole: "admin",
-			status: "active",
-		},
-		{
-			userId: memberUserId,
-			clubId,
-			clubRole: "member",
-			status: "active",
-		},
-	]);
-
-	// person for the roster member (ADR-0008: every membership has a person)
-	const [personRow] = await testDb
+	// People carry the auth link (ADR-0008 Phase B: people.user_id). Each sign-in
+	// user gets a Person; the membership's role lives on the members row.
+	const [adminPersonRow, personRow] = await testDb
 		.insert(people)
-		.values({
-			name: "Member User",
-			email: `member-${memberUserId}@test.example`,
-			userId: memberUserId,
-		})
+		.values([
+			{
+				name: "Admin User",
+				email: `admin-${adminUserId}@test.example`,
+				userId: adminUserId,
+			},
+			{
+				name: "Member User",
+				email: `member-${memberUserId}@test.example`,
+				userId: memberUserId,
+			},
+		])
 		.returning({ id: people.id });
 
-	if (!personRow) {
-		throw new Error("Failed to insert person");
+	if (!adminPersonRow || !personRow) {
+		throw new Error("Failed to insert people");
 	}
 
-	// roster member linked to memberUserId
-	const [memberRow] = await testDb
+	// Memberships: role resolved on the auth path via person → members row.
+	const [adminMemberRow, memberRow] = await testDb
 		.insert(members)
-		.values({
-			clubId,
-			personId: personRow.id,
-			name: "Member User",
-			email: `member-${memberUserId}@test.example`,
-			userId: memberUserId,
-		})
+		.values([
+			{
+				clubId,
+				personId: adminPersonRow.id,
+				name: "Admin User",
+				email: `admin-${adminUserId}@test.example`,
+				clubRole: "admin",
+				status: "active",
+			},
+			{
+				clubId,
+				personId: personRow.id,
+				name: "Member User",
+				email: `member-${memberUserId}@test.example`,
+				clubRole: "member",
+				status: "active",
+			},
+		])
 		.returning({ id: members.id });
 
-	if (!memberRow) {
-		throw new Error("Failed to insert member");
+	if (!adminMemberRow || !memberRow) {
+		throw new Error("Failed to insert members");
 	}
 
 	// role definition (non-speaker, e.g. Timer)
@@ -194,6 +197,7 @@ export async function seedClub(): Promise<SeededClub> {
 		memberUserId,
 		personId: personRow.id,
 		memberId: memberRow.id,
+		adminMemberId: adminMemberRow.id,
 		roleDefinitionId: roleDef.id,
 		meetingId: meeting.id,
 		slotId: slot.id,
@@ -218,7 +222,7 @@ export async function cleanup(
 		.where(eq(members.clubId, clubId));
 	const personIds = [...new Set(memberPeople.map((m) => m.personId))];
 
-	// club cascade removes meetings, role_slots, role_definitions, club_memberships, members
+	// club cascade removes meetings, role_slots, role_definitions, members
 	await testDb.delete(clubs).where(eq(clubs.id, clubId));
 	// people are club-less; delete the ones this club's members belonged to
 	if (personIds.length > 0) {

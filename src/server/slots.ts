@@ -194,7 +194,7 @@ export const confirmSlot = createServerFn({ method: "POST" })
 			throw new Error("Role not found.");
 		}
 
-		await requireClubRole(currentUser.id, slot.clubId, ["admin", "vpe"]);
+		await requireClubRole(currentUser.id, slot.clubId, ["admin"]);
 
 		if (slot.status !== "claimed") {
 			throw new Error("Only a claimed role can be confirmed.");
@@ -258,7 +258,7 @@ export const unconfirmSlot = createServerFn({ method: "POST" })
 			throw new Error("Role not found.");
 		}
 
-		await requireClubRole(currentUser.id, slot.clubId, ["admin", "vpe"]);
+		await requireClubRole(currentUser.id, slot.clubId, ["admin"]);
 
 		return db.transaction(async (tx) => {
 			// Conditional UPDATE: only flips 'confirmed' → 'claimed'.
@@ -430,7 +430,7 @@ export const updateSpeakerDetails = createServerFn({ method: "POST" })
 const speakerSlotSchema = z.object({
 	meetingId: z.string().uuid(),
 	actorMemberId: z.string().uuid().nullable().optional(),
-	/** Self-asserted TMOD member id (public page). Null for authed admin/vpe. */
+	/** Self-asserted TMOD member id (public page). Null for authed admin. */
 	selfMemberId: z.string().uuid().nullable().optional(),
 });
 
@@ -468,7 +468,7 @@ const moveSpeakerSchema = z.object({
 	slotId: z.string().uuid(),
 	direction: z.enum(["up", "down"]),
 	actorMemberId: z.string().uuid().nullable().optional(),
-	/** Self-asserted TMOD member id (public page). Null for authed admin/vpe. */
+	/** Self-asserted TMOD member id (public page). Null for authed admin. */
 	selfMemberId: z.string().uuid().nullable().optional(),
 });
 

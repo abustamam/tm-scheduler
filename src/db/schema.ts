@@ -25,14 +25,19 @@ export {
 	verification,
 } from "./auth-schema";
 
-// user is re-exported above for Better-Auth; imported here for clubMemberships and members foreign keys
+// user is re-exported above for Better-Auth; imported here for people.userId and
+// notifications foreign keys (the person-level auth link — ADR-0008 Phase B).
 import { user } from "./auth-schema";
 
 // ---------------------------------------------------------------------------
 // Enums
 // ---------------------------------------------------------------------------
 
-export const clubRoleEnum = pgEnum("club_role", ["admin", "vpe", "member"]);
+// Authorization role for a Person's membership in a club (ADR-0008 Phase B / #99).
+// Collapsed from the legacy {admin, vpe, member} — `admin` and `vpe` behaved
+// identically at every call site, so `vpe` folded into `admin`. Lives on the
+// `members` row (the membership); resolved on the auth path via `people.user_id`.
+export const clubRoleEnum = pgEnum("club_role", ["admin", "member"]);
 // Standard Toastmasters club officers (#63). The vocabulary for an officer term
 // (#100): each `officer_terms` row carries one of these. Keep in lockstep with
 // OFFICER_POSITIONS in src/lib/officers.ts.
@@ -112,26 +117,6 @@ export const clubs = pgTable("clubs", {
 	createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
-export const clubMemberships = pgTable(
-	"club_memberships",
-	{
-		id: uuid("id").defaultRandom().primaryKey(),
-		userId: text("user_id")
-			.notNull()
-			.references(() => user.id, { onDelete: "cascade" }),
-		clubId: uuid("club_id")
-			.notNull()
-			.references(() => clubs.id, { onDelete: "cascade" }),
-		clubRole: clubRoleEnum("club_role").notNull().default("member"),
-		status: membershipStatusEnum("status").notNull().default("active"),
-		joinedAt: timestamp("joined_at").defaultNow().notNull(),
-	},
-	(t) => [
-		index("club_memberships_user_idx").on(t.userId),
-		index("club_memberships_club_idx").on(t.clubId),
-	],
-);
-
 // ---------------------------------------------------------------------------
 // People — one row per human, above per-club membership (ADR-0008 / #64).
 // Holds the facts identical across every club a person belongs to. Keyed by
@@ -155,9 +140,9 @@ export const people = pgTable("people", {
 	// First-ever Toastmasters join date — a person-level fact (identical across
 	// every club), moved off the per-club members row (ADR-0008).
 	originalJoinDate: timestamp("original_join_date"),
-	// Optional link to a Better-Auth sign-in account (one login spans all their
-	// clubs). Phase A only carries it up; the auth path still resolves role via
-	// club_memberships (Phase B, #99).
+	// The canonical link to a Better-Auth sign-in account (one login spans all
+	// their clubs). The auth path resolves a signed-in user to this Person, then
+	// to their per-club memberships and roles (ADR-0008 Phase B / #99).
 	userId: text("user_id").references(() => user.id, { onDelete: "set null" }),
 	createdAt: timestamp("created_at").defaultNow().notNull(),
 });
@@ -184,6 +169,13 @@ export const members = pgTable(
 		name: text("name").notNull(),
 		email: text("email"),
 		phone: text("phone"),
+		// Authorization role for this membership (ADR-0008 Phase B / #99). The auth
+		// path (guards.ts / auth-context.ts) resolves a signed-in user → Person
+		// (people.user_id) → their memberships, and reads this role per club. An
+		// explicit stored field (not derived from office) so security is enforceable
+		// and unaffected by roster edits — but defaulted from office (President /
+		// VP Education ⇒ admin) at create/link time. Default `member`.
+		clubRole: clubRoleEnum("club_role").notNull().default("member"),
 		// Current elected office(s) are NOT stored here (#100). They are derived
 		// from open `officer_terms` rows (term_end IS NULL) — a membership may hold
 		// several concurrently (e.g. Secretary + Treasurer) and past terms are kept.
@@ -195,9 +187,6 @@ export const members = pgTable(
 		// scripts/import-members.ts). joinedAt = "Member of *this* Club Since"
 		// (per-club). First-ever TM join lives on people.originalJoinDate.
 		joinedAt: timestamp("joined_at"),
-		// Links a roster member to the Better-Auth account of the one signed-in
-		// admin/VPE. NULL for ordinary members (who never sign in).
-		userId: text("user_id").references(() => user.id, { onDelete: "set null" }),
 		createdAt: timestamp("created_at").defaultNow().notNull(),
 	},
 	(t) => [
@@ -381,6 +370,12 @@ export const speeches = pgTable(
 		projectLevel: text("project_level"),
 		minMinutes: integer("min_minutes"),
 		maxMinutes: integer("max_minutes"),
+		// The one non-derivable speech state (ADR-0009): hide an abandoned draft
+		// from the "unscheduled speeches" surface without deleting it. Scheduling
+		// state (unscheduled / scheduled / delivered) stays DERIVED from slot
+		// linkage; `archived` is orthogonal — an archived speech is simply hidden
+		// from the reschedule pool by default. Default false.
+		archived: boolean("archived").notNull().default(false),
 		createdAt: timestamp("created_at").defaultNow().notNull(),
 		updatedAt: timestamp("updated_at").defaultNow().notNull(),
 	},
@@ -502,7 +497,6 @@ export const membersRelations = relations(members, ({ one, many }) => ({
 		fields: [members.personId],
 		references: [people.id],
 	}),
-	user: one(user, { fields: [members.userId], references: [user.id] }),
 	officerTerms: many(officerTerms),
 }));
 
@@ -514,25 +508,10 @@ export const officerTermsRelations = relations(officerTerms, ({ one }) => ({
 }));
 
 export const clubsRelations = relations(clubs, ({ many }) => ({
-	memberships: many(clubMemberships),
 	meetings: many(meetings),
 	roleDefinitions: many(roleDefinitions),
 	members: many(members),
 }));
-
-export const clubMembershipsRelations = relations(
-	clubMemberships,
-	({ one }) => ({
-		user: one(user, {
-			fields: [clubMemberships.userId],
-			references: [user.id],
-		}),
-		club: one(clubs, {
-			fields: [clubMemberships.clubId],
-			references: [clubs.id],
-		}),
-	}),
-);
 
 export const meetingsRelations = relations(meetings, ({ one, many }) => ({
 	club: one(clubs, {

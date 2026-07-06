@@ -20,7 +20,7 @@ export const ingestPathwaysProgress = createServerFn({ method: "POST" })
 	.validator((i: unknown) => ingestSchema.parse(i))
 	.handler(async ({ data }): Promise<SyncResult> => {
 		const user = await requireUser();
-		await requireClubRole(user.id, data.clubId, ["admin", "vpe"]);
+		await requireClubRole(user.id, data.clubId, ["admin"]);
 
 		let parsedJson: unknown;
 		try {

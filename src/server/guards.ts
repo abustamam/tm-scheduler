@@ -1,7 +1,7 @@
 import { getRequest } from "@tanstack/react-start/server";
 import { and, eq } from "drizzle-orm";
 import { db } from "#/db";
-import { clubMemberships, members } from "#/db/schema";
+import { members, people } from "#/db/schema";
 import { auth } from "#/lib/auth";
 import {
 	type MeetingAgendaAuthz,
@@ -14,7 +14,7 @@ import {
 // `getAuthContext` server fn (imported by the layout) lives in its own file
 // (auth-context.ts) for the same reason.
 
-export type ClubRole = "admin" | "vpe" | "member";
+export type ClubRole = "admin" | "member";
 
 /** Raw session user (or null) for the current request. Server-only.
  *  Returns null when called outside a request context (e.g. integration tests
@@ -39,16 +39,24 @@ export async function requireUser() {
 	return user;
 }
 
+/**
+ * Resolve the signed-in user's membership in a club (ADR-0008 Phase B / #99):
+ * user → Person (`people.user_id`) → the `members` row for that person in this
+ * club. Returns the membership's id, role and status, or null when the user has
+ * no linked person or no membership in the club.
+ */
 export async function getMembership(userId: string, clubId: string) {
 	const [membership] = await db
-		.select()
-		.from(clubMemberships)
-		.where(
-			and(
-				eq(clubMemberships.userId, userId),
-				eq(clubMemberships.clubId, clubId),
-			),
-		)
+		.select({
+			id: members.id,
+			clubId: members.clubId,
+			personId: members.personId,
+			clubRole: members.clubRole,
+			status: members.status,
+		})
+		.from(members)
+		.innerJoin(people, eq(people.id, members.personId))
+		.where(and(eq(people.userId, userId), eq(members.clubId, clubId)))
 		.limit(1);
 	return membership ?? null;
 }
@@ -77,10 +85,10 @@ export async function requireClubRole(
 
 /**
  * Gate a per-meeting agenda write (meta edit + slot management). Allowed when
- * the current session is a club `admin`/`vpe` OR the self-asserted `selfMemberId`
+ * the current session is a club `admin` OR the self-asserted `selfMemberId`
  * holds the meeting's TMOD slot (ADR-0010). Throws when neither path applies.
  * Returns the resolved authz so callers can keep reschedule/cancel/status
- * admin-only (`via === "admin-vpe"`).
+ * admin-only (`via === "admin"`).
  */
 export async function requireMeetingAgendaEditor(input: {
 	meetingId: string;

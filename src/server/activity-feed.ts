@@ -10,11 +10,11 @@ import { requireClubRole, requireUser } from "./guards";
 // These are type-only, so they pull no runtime db code into the client.
 export type { ActivityEntry, ListActivityInput } from "./activity-feed-logic";
 
-/** VPE-only (admin/vpe) reverse-chron activity feed for a club. */
+/** Officer-only (admin) reverse-chron activity feed for a club. */
 export const listActivity = createServerFn({ method: "GET" })
 	.validator((i: unknown) => listActivitySchema.parse(i))
 	.handler(async ({ data }): Promise<ActivityEntry[]> => {
 		const user = await requireUser();
-		await requireClubRole(user.id, data.clubId, ["admin", "vpe"]);
+		await requireClubRole(user.id, data.clubId, ["admin"]);
 		return loadActivity(data);
 	});

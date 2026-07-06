@@ -1,6 +1,6 @@
 {
-  "id": "2b3a4313-b7ab-45ce-aa46-392f17d64640",
-  "prevId": "d0bf617b-7c27-4952-9fa9-c7d10d419927",
+  "id": "03472c1a-c6b6-48bc-83ad-b27ce32a5955",
+  "prevId": "d1eeecf3-6c5f-473b-a3e9-8485b66b1522",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -878,6 +878,241 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.path_enrollments": {
+      "name": "path_enrollments",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "person_id": {
+          "name": "person_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "path_id": {
+          "name": "path_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "last_synced_at": {
+          "name": "last_synced_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "archived_at": {
+          "name": "archived_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "path_enrollments_person_path_idx": {
+          "name": "path_enrollments_person_path_idx",
+          "columns": [
+            {
+              "expression": "person_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "path_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "path_enrollments_person_id_people_id_fk": {
+          "name": "path_enrollments_person_id_people_id_fk",
+          "tableFrom": "path_enrollments",
+          "tableTo": "people",
+          "columnsFrom": [
+            "person_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "path_enrollments_path_id_pathways_paths_id_fk": {
+          "name": "path_enrollments_path_id_pathways_paths_id_fk",
+          "tableFrom": "path_enrollments",
+          "tableTo": "pathways_paths",
+          "columnsFrom": [
+            "path_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.path_level_progress": {
+      "name": "path_level_progress",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "enrollment_id": {
+          "name": "enrollment_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "level": {
+          "name": "level",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "completed": {
+          "name": "completed",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "total": {
+          "name": "total",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "approved": {
+          "name": "approved",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "path_level_progress_enrollment_level_idx": {
+          "name": "path_level_progress_enrollment_level_idx",
+          "columns": [
+            {
+              "expression": "enrollment_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "level",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "path_level_progress_enrollment_id_path_enrollments_id_fk": {
+          "name": "path_level_progress_enrollment_id_path_enrollments_id_fk",
+          "tableFrom": "path_level_progress",
+          "tableTo": "path_enrollments",
+          "columnsFrom": [
+            "enrollment_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.pathways_paths": {
+      "name": "pathways_paths",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "course_code": {
+          "name": "course_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "pathway_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'current'"
+        },
+        "sort_order": {
+          "name": "sort_order",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "pathways_paths_course_code_unique": {
+          "name": "pathways_paths_course_code_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "course_code"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.people": {
       "name": "people",
       "schema": "",
@@ -891,6 +1126,12 @@
         },
         "customer_id": {
           "name": "customer_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "basecamp_user_id": {
+          "name": "basecamp_user_id",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -956,6 +1197,13 @@
           "nullsNotDistinct": false,
           "columns": [
             "customer_id"
+          ]
+        },
+        "people_basecamp_user_id_unique": {
+          "name": "people_basecamp_user_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "basecamp_user_id"
           ]
         }
       },
@@ -1401,6 +1649,13 @@
           "primaryKey": false,
           "notNull": false
         },
+        "archived": {
+          "name": "archived",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp",
@@ -1649,6 +1904,14 @@
         "treasurer",
         "sergeant_at_arms",
         "immediate_past_president"
+      ]
+    },
+    "public.pathway_status": {
+      "name": "pathway_status",
+      "schema": "public",
+      "values": [
+        "current",
+        "legacy"
       ]
     },
     "public.role_category": {

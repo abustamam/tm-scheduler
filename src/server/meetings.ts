@@ -8,6 +8,7 @@ import {
 	meetings,
 	memberAvailability,
 	members,
+	people,
 	roleDefinitions,
 	roleSlots,
 	speeches,
@@ -62,7 +63,7 @@ export const listUpcomingMeetings = createServerFn({ method: "GET" })
  * evaluator→speaker links. Shared by `getMeeting` (public) and `getNextMeeting` (authed).
  *
  * `currentUserId` is optional: when null/undefined, canManage is false.
- * When set, the user's membership is checked for admin/vpe status.
+ * When set, the user's membership is checked for admin status.
  */
 async function loadMeetingDetail(
 	meetingId: string,
@@ -79,8 +80,7 @@ async function loadMeetingDetail(
 	let canManage = false;
 	if (currentUserId) {
 		const membership = await getMembership(currentUserId, meeting.clubId);
-		canManage =
-			membership?.clubRole === "admin" || membership?.clubRole === "vpe";
+		canManage = membership?.clubRole === "admin";
 	}
 
 	const assignee = alias(members, "assignee");
@@ -233,11 +233,13 @@ export const listMyCommitments = createServerFn({ method: "GET" }).handler(
 	async () => {
 		const currentUser = await requireUser();
 
-		// Resolve the signed-in user's linked roster member(s).
+		// Resolve the signed-in user → Person (people.user_id) → their roster
+		// member(s) (ADR-0008 Phase B).
 		const myMembers = await db
 			.select({ id: members.id })
 			.from(members)
-			.where(eq(members.userId, currentUser.id));
+			.innerJoin(people, eq(people.id, members.personId))
+			.where(eq(people.userId, currentUser.id));
 
 		if (myMembers.length === 0) {
 			return [];
@@ -329,19 +331,19 @@ const createMeetingSchema = z.object({
 });
 
 /** Admin/VPE only: create a meeting and auto-generate its slots from the club's template.
- *  AUTHED — requires admin/vpe club role. */
+ *  AUTHED — requires admin club role. */
 export const createMeeting = createServerFn({ method: "POST" })
 	.validator((input: unknown) => createMeetingSchema.parse(input))
 	.handler(async ({ data }) => {
 		const currentUser = await requireUser();
-		await requireClubRole(currentUser.id, data.clubId, ["admin", "vpe"]);
+		await requireClubRole(currentUser.id, data.clubId, ["admin"]);
 		return applyCreateMeeting(data);
 	});
 
 const updateMeetingSchema = z.object({
 	meetingId: uuid,
 	actorMemberId: uuid.nullable().optional(),
-	/** Self-asserted TMOD member id (public page). Null for authed admin/vpe. */
+	/** Self-asserted TMOD member id (public page). Null for authed admin. */
 	selfMemberId: uuid.nullable().optional(),
 	scheduledAt: z.string().min(1),
 	lengthMinutes: z.number().int().positive().optional(),
@@ -363,6 +365,6 @@ export const updateMeeting = createServerFn({ method: "POST" })
 		return applyMeetingUpdate({
 			...data,
 			actorMemberId: data.actorMemberId ?? null,
-			canReschedule: authz.via === "admin-vpe",
+			canReschedule: authz.via === "admin",
 		});
 	});

@@ -1,6 +1,6 @@
 {
-  "id": "2b3a4313-b7ab-45ce-aa46-392f17d64640",
-  "prevId": "d0bf617b-7c27-4952-9fa9-c7d10d419927",
+  "id": "d1eeecf3-6c5f-473b-a3e9-8485b66b1522",
+  "prevId": "2b3a4313-b7ab-45ce-aa46-392f17d64640",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1400,6 +1400,13 @@
           "type": "integer",
           "primaryKey": false,
           "notNull": false
+        },
+        "archived": {
+          "name": "archived",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
         },
         "created_at": {
           "name": "created_at",

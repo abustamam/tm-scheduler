@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { and, asc, eq } from "drizzle-orm";
 import { db } from "#/db";
-import { clubMemberships, clubs, members } from "#/db/schema";
+import { clubs, members, people } from "#/db/schema";
 import { getSessionUser } from "./guards";
 
 /**
@@ -19,37 +19,32 @@ export const getAuthContext = createServerFn({ method: "GET" }).handler(
 		if (!user) {
 			return { user: null, clubs: [] as const, currentMemberId: null };
 		}
-		const myClubs = await db
+		// Resolve the signed-in user → Person (people.user_id) → their active
+		// memberships, reading role + the member id per club (ADR-0008 Phase B).
+		const myMemberships = await db
 			.select({
+				memberId: members.id,
 				clubId: clubs.id,
 				name: clubs.name,
 				clubNumber: clubs.clubNumber,
-				clubRole: clubMemberships.clubRole,
+				clubRole: members.clubRole,
 			})
-			.from(clubMemberships)
-			.innerJoin(clubs, eq(clubs.id, clubMemberships.clubId))
-			.where(
-				and(
-					eq(clubMemberships.userId, user.id),
-					eq(clubMemberships.status, "active"),
-				),
-			)
+			.from(members)
+			.innerJoin(people, eq(people.id, members.personId))
+			.innerJoin(clubs, eq(clubs.id, members.clubId))
+			.where(and(eq(people.userId, user.id), eq(members.status, "active")))
 			.orderBy(asc(clubs.name));
 
-		// Resolve the signed-in user's linked roster member for the active club
-		// (clubs[0] — matching how the workspace picks the active club).
-		let currentMemberId: string | null = null;
-		const activeClubId = myClubs[0]?.clubId;
-		if (activeClubId) {
-			const [memberRow] = await db
-				.select({ id: members.id })
-				.from(members)
-				.where(
-					and(eq(members.userId, user.id), eq(members.clubId, activeClubId)),
-				)
-				.limit(1);
-			currentMemberId = memberRow?.id ?? null;
-		}
+		const myClubs = myMemberships.map((m) => ({
+			clubId: m.clubId,
+			name: m.name,
+			clubNumber: m.clubNumber,
+			clubRole: m.clubRole,
+		}));
+
+		// The signed-in user's roster member for the active club (clubs[0] —
+		// matching how the workspace picks the active club).
+		const currentMemberId = myMemberships[0]?.memberId ?? null;
 
 		return {
 			user: { id: user.id, name: user.name, email: user.email },

@@ -86,7 +86,7 @@ function Roster() {
 	const { clubs, currentMemberId } = Route.useRouteContext();
 	const clubId = clubs[0]?.clubId;
 	const clubRole = clubs[0]?.clubRole;
-	const canManage = clubRole === "admin" || clubRole === "vpe";
+	const canManage = clubRole === "admin";
 	const [seg, setSeg] = useState<SegKey>("all");
 	const [mergeOpen, setMergeOpen] = useState(false);
 	const [importOpen, setImportOpen] = useState(false);
