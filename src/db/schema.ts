@@ -362,6 +362,12 @@ export const speeches = pgTable(
 		projectLevel: text("project_level"),
 		minMinutes: integer("min_minutes"),
 		maxMinutes: integer("max_minutes"),
+		// The one non-derivable speech state (ADR-0009): hide an abandoned draft
+		// from the "unscheduled speeches" surface without deleting it. Scheduling
+		// state (unscheduled / scheduled / delivered) stays DERIVED from slot
+		// linkage; `archived` is orthogonal — an archived speech is simply hidden
+		// from the reschedule pool by default. Default false.
+		archived: boolean("archived").notNull().default(false),
 		createdAt: timestamp("created_at").defaultNow().notNull(),
 		updatedAt: timestamp("updated_at").defaultNow().notNull(),
 	},
