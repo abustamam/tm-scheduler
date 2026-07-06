@@ -7,7 +7,7 @@
  *     bunx vitest run src/server/pathways-read.integration.test.ts
  */
 import { randomUUID } from "node:crypto";
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, like } from "drizzle-orm";
 import {
 	afterAll,
 	afterEach,
@@ -37,6 +37,15 @@ const { pathwaysForPerson, pathwaysForMember, pathwaysByMember } = await import(
 // One test club shared by every case in this suite.
 let clubId: string;
 const createdPersonIds: string[] = [];
+
+// vitest runs test FILES in parallel workers against the same shared tm_test
+// DB, and pathways-sync.integration.test.ts touches the same pathwaysPaths /
+// pathEnrollments / pathLevelProgress tables. A suite-unique course-code
+// suffix keeps this suite's rows disjoint from that suite's (courseCode is
+// globally unique), so cleanup can scope to "rows this suite created" instead
+// of wholesale-truncating shared tables out from under a sibling suite.
+const SUITE_TAG = randomUUID().slice(0, 8);
+const code = (base: string) => `${base}-${SUITE_TAG}`;
 
 /** Create a Person AND a `members` row linking them to the test club. */
 async function makeMember(
@@ -84,10 +93,12 @@ async function enrollInPath(
 }
 
 async function localCleanup() {
-	// Pathways tables are exclusive to this suite — safe to clear wholesale.
-	await testDb.delete(pathLevelProgress);
-	await testDb.delete(pathEnrollments);
-	await testDb.delete(pathwaysPaths);
+	// Scope to this suite's own tagged course codes — pathEnrollments and
+	// pathLevelProgress cascade-delete via FK (onDelete: "cascade"), so
+	// deleting the tagged pathwaysPaths rows is enough.
+	await testDb
+		.delete(pathwaysPaths)
+		.where(like(pathwaysPaths.courseCode, `%-${SUITE_TAG}`));
 	// `people`/`members` are shared across suites — remove only this suite's rows.
 	if (createdPersonIds.length > 0) {
 		await testDb
@@ -116,7 +127,7 @@ describe.skipIf(!hasTestDb)("pathwaysForPerson / pathwaysForMember", () => {
 	it("returns one PathViewModel with the expected ringPercent/currentLevel", async () => {
 		const { personId } = await makeMember({ email: "one-path@example.com" });
 		await enrollInPath(personId, {
-			courseCode: "8701",
+			courseCode: code("8701"),
 			pathName: "Presentation Mastery",
 		});
 
@@ -124,7 +135,7 @@ describe.skipIf(!hasTestDb)("pathwaysForPerson / pathwaysForMember", () => {
 
 		expect(result).toHaveLength(1);
 		const [vm] = result;
-		expect(vm.courseCode).toBe("8701");
+		expect(vm.courseCode).toBe(code("8701"));
 		expect(vm.pathName).toBe("Presentation Mastery");
 		expect(vm.levels).toHaveLength(2);
 		expect(vm.currentLevel).toBe(2);
@@ -136,11 +147,11 @@ describe.skipIf(!hasTestDb)("pathwaysForPerson / pathwaysForMember", () => {
 	it("returns two PathViewModels when the person is enrolled in a second path", async () => {
 		const { personId } = await makeMember({ email: "two-paths@example.com" });
 		await enrollInPath(personId, {
-			courseCode: "8701",
+			courseCode: code("8701"),
 			pathName: "Presentation Mastery",
 		});
 		await enrollInPath(personId, {
-			courseCode: "8702",
+			courseCode: code("8702"),
 			pathName: "Dynamic Leadership",
 		});
 
@@ -148,7 +159,7 @@ describe.skipIf(!hasTestDb)("pathwaysForPerson / pathwaysForMember", () => {
 
 		expect(result).toHaveLength(2);
 		const courseCodes = result.map((vm) => vm.courseCode).sort();
-		expect(courseCodes).toEqual(["8701", "8702"]);
+		expect(courseCodes).toEqual([code("8701"), code("8702")].sort());
 	});
 
 	it("pathwaysForMember resolves the same view models for that member's person", async () => {
@@ -156,7 +167,7 @@ describe.skipIf(!hasTestDb)("pathwaysForPerson / pathwaysForMember", () => {
 			email: "member-lookup@example.com",
 		});
 		await enrollInPath(personId, {
-			courseCode: "8701",
+			courseCode: code("8701"),
 			pathName: "Presentation Mastery",
 		});
 
@@ -178,7 +189,7 @@ describe.skipIf(!hasTestDb)("pathwaysForPerson / pathwaysForMember", () => {
 			email: "batch-unenrolled@example.com",
 		});
 		await enrollInPath(enrolled.personId, {
-			courseCode: "8701",
+			courseCode: code("8701"),
 			pathName: "Presentation Mastery",
 		});
 
@@ -187,7 +198,7 @@ describe.skipIf(!hasTestDb)("pathwaysForPerson / pathwaysForMember", () => {
 		expect(map.has(unenrolled.memberId)).toBe(false);
 		const paths = map.get(enrolled.memberId);
 		expect(paths).toHaveLength(1);
-		expect(paths?.[0].courseCode).toBe("8701");
+		expect(paths?.[0].courseCode).toBe(code("8701"));
 		expect(paths?.[0].pathName).toBe("Presentation Mastery");
 		expect(paths).toEqual(await pathwaysForMember(clubId, enrolled.memberId));
 	});

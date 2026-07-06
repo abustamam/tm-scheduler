@@ -33,12 +33,20 @@ vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
 const { syncClubProgress } = await import("./pathways-sync-logic");
 
+// vitest runs test FILES in parallel workers against the same shared tm_test
+// DB, and pathways-read.integration.test.ts touches the same pathwaysPaths /
+// pathEnrollments / pathLevelProgress tables. A suite-unique course code
+// (courseCode is globally unique) keeps this suite's rows disjoint from that
+// suite's, so cleanup can scope to "rows this suite created" instead of
+// wholesale-truncating shared tables out from under a sibling suite.
+const CODE = `8701-${randomUUID().slice(0, 8)}`;
+
 function mp(over: Partial<ParsedMemberPath>): ParsedMemberPath {
 	return {
 		basecampUserId: "999",
 		name: "Test Member",
 		email: "test@example.com",
-		courseCode: "8701",
+		courseCode: CODE,
 		pathName: "Presentation Mastery",
 		levels: [
 			{ level: 1, completed: 5, total: 5, approved: true },
@@ -80,10 +88,10 @@ async function makeNonMember(
 }
 
 async function localCleanup() {
-	// Pathways tables are exclusive to this suite — safe to clear wholesale.
-	await testDb.delete(pathLevelProgress);
-	await testDb.delete(pathEnrollments);
-	await testDb.delete(pathwaysPaths);
+	// Scope to this suite's own tagged course code — pathEnrollments and
+	// pathLevelProgress cascade-delete via FK (onDelete: "cascade"), so
+	// deleting the tagged pathwaysPaths row is enough.
+	await testDb.delete(pathwaysPaths).where(eq(pathwaysPaths.courseCode, CODE));
 	// `people`/`members` are shared across suites — remove only this suite's rows.
 	if (createdPersonIds.length > 0) {
 		await testDb
@@ -127,7 +135,7 @@ describe.skipIf(!hasTestDb)("syncClubProgress", () => {
 		const [path] = await testDb
 			.select({ id: pathwaysPaths.id })
 			.from(pathwaysPaths)
-			.where(eq(pathwaysPaths.courseCode, "8701"));
+			.where(eq(pathwaysPaths.courseCode, CODE));
 		expect(path).toBeDefined();
 
 		const [enr] = await testDb
@@ -165,7 +173,7 @@ describe.skipIf(!hasTestDb)("syncClubProgress", () => {
 	});
 
 	it("re-sync updates counts idempotently (no duplicate rows)", async () => {
-		await makeMember({ email: "idem@example.com" });
+		const personId = await makeMember({ email: "idem@example.com" });
 		await syncClubProgress(clubId, [
 			mp({ email: "idem@example.com", basecampUserId: "1" }),
 		]);
@@ -176,14 +184,28 @@ describe.skipIf(!hasTestDb)("syncClubProgress", () => {
 				levels: [{ level: 2, completed: 4, total: 4, approved: true }],
 			}),
 		]);
-		const paths = await testDb.select().from(pathwaysPaths);
+		// Scoped to this suite's tagged course code / person — a sibling suite
+		// (pathways-read.integration.test.ts) shares these tables and runs
+		// concurrently, so an unscoped whole-table select would flake.
+		const paths = await testDb
+			.select()
+			.from(pathwaysPaths)
+			.where(eq(pathwaysPaths.courseCode, CODE));
 		expect(paths).toHaveLength(1);
-		const enrs = await testDb.select().from(pathEnrollments);
+		const enrs = await testDb
+			.select()
+			.from(pathEnrollments)
+			.where(eq(pathEnrollments.personId, personId));
 		expect(enrs).toHaveLength(1);
 		const [l2] = await testDb
 			.select()
 			.from(pathLevelProgress)
-			.where(eq(pathLevelProgress.level, 2));
+			.where(
+				and(
+					eq(pathLevelProgress.enrollmentId, enrs[0].id),
+					eq(pathLevelProgress.level, 2),
+				),
+			);
 		expect(l2.approved).toBe(true);
 		expect(l2.completed).toBe(4);
 	});
