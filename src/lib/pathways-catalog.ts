@@ -182,7 +182,12 @@ function buildPath(p: PathReq): CatalogPath {
 		...p.l5.map((name) => ({ name, level: 5, isRequired: true })),
 		...electives(L5_POOL, 5),
 	];
-	return { courseCode: p.courseCode, name: p.name, status: "current", projects };
+	return {
+		courseCode: p.courseCode,
+		name: p.name,
+		status: "current",
+		projects,
+	};
 }
 
 export const PATHWAYS_CATALOG: CatalogPath[] = CLUB_PATHS.map(buildPath);
