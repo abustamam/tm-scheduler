@@ -21,6 +21,7 @@ import {
 	hasTestDb,
 	type SeededClub,
 	seedClub,
+	seedPerson,
 	testDb,
 } from "#/test/db";
 
@@ -57,11 +58,13 @@ async function addTmodSlot(
 	return slot.id;
 }
 
-/** Insert an extra active roster member; return its id. */
+/** Insert an extra active roster member; return its id. Every membership needs
+ *  a Person (ADR-0008 / #64) — seed one first. */
 async function addRosterMember(clubId: string, name: string): Promise<string> {
+	const personId = await seedPerson({ name });
 	const [m] = await testDb
 		.insert(members)
-		.values({ clubId, name })
+		.values({ clubId, personId, name })
 		.returning({ id: members.id });
 	return m.id;
 }

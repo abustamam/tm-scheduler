@@ -1,43 +1,86 @@
 import { describe, expect, it } from "vitest";
-import { officerRank } from "./officers";
+import {
+	OFFICER_POSITIONS,
+	officerPositionLabel,
+	officerRank,
+	parseOfficerPosition,
+} from "./officers";
 
-describe("officerRank", () => {
-	it("orders the standard officer line-up President → Sergeant-at-Arms", () => {
-		const offices = [
-			"Sergeant-at-Arms",
-			"Treasurer",
-			"VP Education",
-			"President",
-			"Secretary",
-			"VP Public Relations",
-			"VP Membership",
-		];
-		const sorted = [...offices].sort((a, b) => officerRank(a) - officerRank(b));
-		expect(sorted).toEqual([
-			"President",
-			"VP Education",
-			"VP Membership",
-			"VP Public Relations",
-			"Secretary",
-			"Treasurer",
-			"Sergeant-at-Arms",
-		]);
+describe("parseOfficerPosition", () => {
+	it("parses the Toastmasters CSV 'Club …' export labels for all 8 officers", () => {
+		expect(parseOfficerPosition("Club President")).toBe("president");
+		expect(parseOfficerPosition("Club VP Education")).toBe("vp_education");
+		expect(parseOfficerPosition("Club VP Membership")).toBe("vp_membership");
+		expect(parseOfficerPosition("Club VP PR")).toBe("vp_public_relations");
+		expect(parseOfficerPosition("Club Secretary")).toBe("secretary");
+		expect(parseOfficerPosition("Club Treasurer")).toBe("treasurer");
+		expect(parseOfficerPosition("Club Sergeant at Arms")).toBe(
+			"sergeant_at_arms",
+		);
+		expect(parseOfficerPosition("Immediate Past President")).toBe(
+			"immediate_past_president",
+		);
 	});
 
-	it("does not mistake a VP for the President", () => {
-		expect(officerRank("VP Education")).toBeGreaterThan(
-			officerRank("President"),
+	it("does not mistake a VP or past president for the President", () => {
+		expect(parseOfficerPosition("VP Education")).toBe("vp_education");
+		expect(parseOfficerPosition("Vice President of Membership")).toBe(
+			"vp_membership",
 		);
-		expect(officerRank("Vice President of Membership")).toBe(2);
+		expect(parseOfficerPosition("VP Public Relations")).toBe(
+			"vp_public_relations",
+		);
+		expect(parseOfficerPosition("Immediate Past President")).toBe(
+			"immediate_past_president",
+		);
 	});
 
 	it("tolerates common abbreviations", () => {
-		expect(officerRank("VPE")).toBe(1);
-		expect(officerRank("VPM")).toBe(2);
-		expect(officerRank("SAA")).toBe(6);
+		expect(parseOfficerPosition("VPE")).toBe("vp_education");
+		expect(parseOfficerPosition("VPM")).toBe("vp_membership");
+		expect(parseOfficerPosition("VPPR")).toBe("vp_public_relations");
+		expect(parseOfficerPosition("SAA")).toBe("sergeant_at_arms");
+		expect(parseOfficerPosition("IPP")).toBe("immediate_past_president");
 	});
 
-	it("sorts unrecognized offices last", () => {
-		expect(officerRank("Webmaster")).toBeGreaterThan(officerRank("Treasurer"));
+	it("returns null for blank input", () => {
+		expect(parseOfficerPosition("")).toBeNull();
+		expect(parseOfficerPosition("   ")).toBeNull();
+		expect(parseOfficerPosition(null)).toBeNull();
+		expect(parseOfficerPosition(undefined)).toBeNull();
+	});
+
+	it("returns null for unparseable offices", () => {
+		expect(parseOfficerPosition("Webmaster")).toBeNull();
+		expect(parseOfficerPosition("Toastmaster of the Day")).toBeNull();
+		expect(parseOfficerPosition("Area Director")).toBeNull();
+	});
+});
+
+describe("officerRank / labels", () => {
+	it("orders the standard line-up President → Immediate Past President", () => {
+		const shuffled = [
+			"sergeant_at_arms",
+			"treasurer",
+			"vp_education",
+			"immediate_past_president",
+			"president",
+			"secretary",
+			"vp_public_relations",
+			"vp_membership",
+		] as const;
+		const sorted = [...shuffled].sort(
+			(a, b) => officerRank(a) - officerRank(b),
+		);
+		expect(sorted).toEqual([...OFFICER_POSITIONS]);
+	});
+
+	it("gives a human label for each position", () => {
+		expect(officerPositionLabel("president")).toBe("President");
+		expect(officerPositionLabel("vp_education")).toBe("VP Education");
+		expect(officerPositionLabel("sergeant_at_arms")).toBe("Sergeant at Arms");
+		expect(officerPositionLabel("immediate_past_president")).toBe(
+			"Immediate Past President",
+		);
 	});
 });

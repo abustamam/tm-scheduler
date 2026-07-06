@@ -16,6 +16,7 @@ import {
 } from "#/components/ui/dialog";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
 import { formatTenure } from "#/lib/members";
+import { officerPositionLabel } from "#/lib/officers";
 import {
 	buildImportPreview,
 	type PreviewRow,
@@ -80,8 +81,8 @@ function Roster() {
 			name: m.name,
 			initials: initialsOf(m.name),
 			tone: toneFromSeed(m.id),
-			tenure: m.office
-				? `${formatTenure(joined)} · ${m.office}`
+			tenure: m.officerPosition
+				? `${formatTenure(joined)} · ${officerPositionLabel(m.officerPosition)}`
 				: formatTenure(joined),
 			speeches: m.speeches,
 			membershipStatus: m.status,

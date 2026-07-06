@@ -71,6 +71,13 @@
       "when": 1783362619809,
       "tag": "0009_conscious_morlun",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1783364973275,
+      "tag": "0010_aspiring_santa_claus",
+      "breakpoints": true
     }
   ]
 }

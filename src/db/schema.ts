@@ -33,6 +33,19 @@ import { user } from "./auth-schema";
 // ---------------------------------------------------------------------------
 
 export const clubRoleEnum = pgEnum("club_role", ["admin", "vpe", "member"]);
+// Standard Toastmasters club officers (#63). Replaces the old free-text
+// `office`. Nullable on the membership (null = no office). Keep in lockstep with
+// OFFICER_POSITIONS in src/lib/officers.ts.
+export const officerPositionEnum = pgEnum("officer_position", [
+	"president",
+	"vp_education",
+	"vp_membership",
+	"vp_public_relations",
+	"secretary",
+	"treasurer",
+	"sergeant_at_arms",
+	"immediate_past_president",
+]);
 export const membershipStatusEnum = pgEnum("membership_status", [
 	"active",
 	"inactive",
@@ -163,7 +176,10 @@ export const members = pgTable(
 		name: text("name").notNull(),
 		email: text("email"),
 		phone: text("phone"),
-		office: text("office"),
+		// Current elected club officer position (#63); null = no office. Structured
+		// enum replacing the old free-text `office`. In-app editing is authoritative;
+		// the CSV import only fills this when it's null (never overwrites).
+		officerPosition: officerPositionEnum("officer_position"),
 		// Roster membership status. "inactive" = didn't renew this season: hidden
 		// from sign-up / roster / season / picker views, but their past role
 		// history is preserved (never deleted). Reactivating restores them.

@@ -58,7 +58,8 @@ describe.skipIf(!hasTestDb)("bulk roster import", () => {
 		expect(alice.email).toBe("alice@club.org");
 		// Phone stored as raw digits, not reformatted.
 		expect(alice.phone).toBe("19165968820");
-		expect(alice.office).toBe("President");
+		// Pasted free-text office parsed into the structured enum.
+		expect(alice.officerPosition).toBe("president");
 
 		const [bob] = await testDb
 			.select()
@@ -69,7 +70,7 @@ describe.skipIf(!hasTestDb)("bulk roster import", () => {
 		expect(bob.email).toBe("bob@club.org");
 		// Empty cells stored as NULL, not "".
 		expect(bob.phone).toBeNull();
-		expect(bob.office).toBeNull();
+		expect(bob.officerPosition).toBeNull();
 
 		// One member_add activity row per inserted member.
 		for (const id of result.insertedIds) {

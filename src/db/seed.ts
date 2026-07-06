@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
+import type { OfficerPosition } from "#/lib/officers";
 import { db } from "./index.ts";
 import {
 	clubMemberships,
@@ -160,11 +161,16 @@ async function main() {
 	if (existingMembers.length === 0) {
 		// Each roster member belongs to a person (ADR-0008). Create the people
 		// first, then the memberships pointing at them.
-		const roster = [
+		const roster: {
+			name: string;
+			email: string;
+			officerPosition?: OfficerPosition;
+			userId?: string;
+		}[] = [
 			{
 				name: "Rasheed Bustamam",
 				email: ADMIN_EMAIL,
-				office: "VP Education",
+				officerPosition: "vp_education",
 				userId: adminId as string | undefined,
 			},
 			{ name: "Alex Rivera", email: "alex@example.com" },
@@ -190,7 +196,7 @@ async function main() {
 					personId: personByName.get(r.name)!,
 					name: r.name,
 					email: r.email,
-					office: r.office,
+					officerPosition: r.officerPosition,
 					userId: r.userId,
 				})),
 			)

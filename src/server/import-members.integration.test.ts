@@ -26,6 +26,8 @@ function row(over: Partial<MappedMember>): MappedMember {
 		phone: null,
 		joinedAt: null,
 		originalJoinDate: null,
+		officerPosition: null,
+		currentPosition: null,
 		...over,
 	};
 }
@@ -189,5 +191,73 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 			.where(and(eq(members.clubId, clubId), eq(members.personId, p.id)));
 		// joined_at (per-club) is on the membership.
 		expect(m.joinedAt).not.toBeNull();
+	});
+
+	it("sets the parsed officer position on a fresh membership", async () => {
+		const clubId = await club();
+		await importPeopleAndMembers(clubId, [
+			row({
+				customerId: "PN-OP",
+				name: "Ovi",
+				officerPosition: "vp_education",
+				currentPosition: "Club VP Education",
+			}),
+		]);
+		const [m] = await testDb
+			.select()
+			.from(members)
+			.where(eq(members.clubId, clubId));
+		expect(m.officerPosition).toBe("vp_education");
+	});
+
+	it("fill-only: never overwrites an existing in-app officer position", async () => {
+		const clubId = await club();
+		// First import sets president.
+		await importPeopleAndMembers(clubId, [
+			row({
+				customerId: "PN-K",
+				name: "Kai",
+				officerPosition: "president",
+				currentPosition: "Club President",
+			}),
+		]);
+		// A VPE later corrects it in-app to secretary.
+		await testDb
+			.update(members)
+			.set({ officerPosition: "secretary" })
+			.where(eq(members.clubId, clubId));
+		// Re-import still says president — must NOT clobber the in-app value.
+		const stats = await importPeopleAndMembers(clubId, [
+			row({
+				customerId: "PN-K",
+				name: "Kai",
+				officerPosition: "president",
+				currentPosition: "Club President",
+			}),
+		]);
+		expect(stats.membersUpdated).toBe(1);
+		const [m] = await testDb
+			.select()
+			.from(members)
+			.where(eq(members.clubId, clubId));
+		expect(m.officerPosition).toBe("secretary");
+	});
+
+	it("counts an unparseable non-blank position without setting it", async () => {
+		const clubId = await club();
+		const stats = await importPeopleAndMembers(clubId, [
+			row({
+				customerId: "PN-W",
+				name: "Web Master",
+				officerPosition: null,
+				currentPosition: "Webmaster",
+			}),
+		]);
+		expect(stats.unparseablePosition).toBe(1);
+		const [m] = await testDb
+			.select()
+			.from(members)
+			.where(eq(members.clubId, clubId));
+		expect(m.officerPosition).toBeNull();
 	});
 });

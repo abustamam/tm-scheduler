@@ -29,6 +29,9 @@ export interface ImportStats {
 	ambiguous: number;
 	/** Rows skipped because the CSV name was blank. */
 	skippedBlankName: number;
+	/** Rows whose "Current Position" was non-blank but unparseable (left null,
+	 *  logged as a warning — like the ambiguous-name skip). */
+	unparseablePosition: number;
 }
 
 interface PersonState extends ExistingPerson {
@@ -66,6 +69,7 @@ export async function importPeopleAndMembers(
 		membersUpdated: 0,
 		ambiguous: 0,
 		skippedBlankName: 0,
+		unparseablePosition: 0,
 	};
 
 	// Emails shared by 2+ distinct names within this batch must never merge —
@@ -76,6 +80,16 @@ export async function importPeopleAndMembers(
 		if (!row.name) {
 			stats.skippedBlankName++;
 			continue;
+		}
+
+		// A non-blank "Current Position" the parser couldn't map stays null and is
+		// logged (mirrors the ambiguous-name skip). In-app editing is the source of
+		// truth, so a warning is enough — we never guess an office.
+		if (row.currentPosition && !row.officerPosition) {
+			stats.unparseablePosition++;
+			console.warn(
+				`SKIP unparseable office "${row.currentPosition}" for ${row.name} — leaving officer_position null`,
+			);
 		}
 
 		const emailNorm = (row.email ?? "").trim().toLowerCase();
@@ -147,6 +161,7 @@ export async function importPeopleAndMembers(
 				name: members.name,
 				email: members.email,
 				phone: members.phone,
+				officerPosition: members.officerPosition,
 			})
 			.from(members)
 			.where(and(eq(members.clubId, clubId), eq(members.personId, personId)))
@@ -160,6 +175,10 @@ export async function importPeopleAndMembers(
 					email: fillOnly(existingMember.email, row.email),
 					phone: fillOnly(existingMember.phone, row.phone),
 					joinedAt: row.joinedAt,
+					// Fill-only: never overwrite an in-app office assignment (the source
+					// of truth). Only set when the membership currently has none.
+					officerPosition:
+						existingMember.officerPosition ?? row.officerPosition,
 				})
 				.where(eq(members.id, existingMember.id));
 			stats.membersUpdated++;
@@ -171,6 +190,7 @@ export async function importPeopleAndMembers(
 				email: row.email,
 				phone: row.phone,
 				joinedAt: row.joinedAt,
+				officerPosition: row.officerPosition,
 			});
 			stats.membersCreated++;
 		}

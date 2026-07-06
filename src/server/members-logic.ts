@@ -19,6 +19,7 @@ import {
 	roleSlots,
 	speakerDetails,
 } from "#/db/schema";
+import { OFFICER_POSITIONS, parseOfficerPosition } from "#/lib/officers";
 import { buildImportPreview } from "#/lib/roster-import";
 import { logActivity } from "./activity";
 
@@ -29,11 +30,12 @@ export const editSchema = z.object({
 	name: z.string().trim().min(1),
 	email: z.string().trim().email().nullable().optional(),
 	phone: z.string().trim().nullable().optional(),
-	office: z.string().trim().nullable().optional(),
+	// Structured officer position (#63); null = no office / cleared.
+	officerPosition: z.enum(OFFICER_POSITIONS).nullable().optional(),
 });
 type EditInput = z.infer<typeof editSchema>;
 
-/** Update a roster member's name/contact/office; logs member_edit. */
+/** Update a roster member's name/contact/officer position; logs member_edit. */
 export async function applyMemberEdit(input: EditInput) {
 	const [current] = await db
 		.select()
@@ -46,7 +48,7 @@ export async function applyMemberEdit(input: EditInput) {
 		name: input.name,
 		email: input.email ?? null,
 		phone: input.phone ?? null,
-		office: input.office ?? null,
+		officerPosition: input.officerPosition ?? null,
 	};
 	await db.transaction(async (tx) => {
 		await tx.update(members).set(next).where(eq(members.id, input.memberId));
@@ -61,7 +63,7 @@ export async function applyMemberEdit(input: EditInput) {
 					name: current.name,
 					email: current.email,
 					phone: current.phone,
-					office: current.office,
+					officerPosition: current.officerPosition,
 				},
 				after: next,
 			},
@@ -362,7 +364,8 @@ export async function applyBulkImport(
 					name,
 					email,
 					phone,
-					office: row.office.trim() || null,
+					// Pasted office is free text; parse to the enum (unparseable → null).
+					officerPosition: parseOfficerPosition(row.office),
 				})
 				.returning({ id: members.id });
 			if (!m) throw new Error("Failed to insert member.");

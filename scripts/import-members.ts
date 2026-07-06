@@ -62,7 +62,8 @@ async function main() {
 			`matched-by-customer-id=${stats.peopleMatchedByCustomerId} ` +
 			`matched-by-email=${stats.peopleMatchedByEmail} ambiguous=${stats.ambiguous}\n` +
 			`      members: created=${stats.membersCreated} updated=${stats.membersUpdated} ` +
-			`skipped-blank-name=${stats.skippedBlankName} skipped-unpaid=${skippedUnpaid}`,
+			`skipped-blank-name=${stats.skippedBlankName} skipped-unpaid=${skippedUnpaid} ` +
+			`unparseable-position=${stats.unparseablePosition}`,
 	);
 	process.exit(0);
 }
