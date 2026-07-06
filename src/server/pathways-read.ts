@@ -1,0 +1,51 @@
+import { createServerFn } from "@tanstack/react-start";
+import { z } from "zod";
+import { requireMembership, requireUser } from "./guards";
+import {
+	type PathViewModel,
+	pathwaysByMember,
+	pathwaysForMember,
+	pathwaysForUser,
+} from "./pathways-read-logic";
+
+/** The signed-in user's own enrolled paths (dashboard tile / "my progress"). */
+export const getMyPathways = createServerFn({ method: "GET" }).handler(
+	async (): Promise<PathViewModel[]> => {
+		const user = await requireUser();
+		return pathwaysForUser(user.id);
+	},
+);
+
+const memberSchema = z.object({
+	clubId: z.string().uuid(),
+	memberId: z.string().uuid(),
+});
+
+/** A roster member's paths (member-detail tab). Public read — roster is auth-decoupled. */
+export const getMemberPathways = createServerFn({ method: "GET" })
+	.validator((i: unknown) => memberSchema.parse(i))
+	.handler(async ({ data }): Promise<PathViewModel[]> => {
+		return pathwaysForMember(data.clubId, data.memberId);
+	});
+
+const clubSchema = z.object({
+	clubId: z.string().uuid(),
+});
+
+/**
+ * Every roster member's paths in one batch (roster Pathway column) — avoids
+ * an N+1 of per-member reads. A `Map` isn't serializable across the server-fn
+ * boundary, so this returns a plain `Record<memberId, PathViewModel[]>`.
+ * Members with no synced paths are simply absent from the record.
+ */
+export const listClubMemberPathways = createServerFn({ method: "GET" })
+	.validator((i: unknown) => clubSchema.parse(i))
+	.handler(async ({ data }): Promise<Record<string, PathViewModel[]>> => {
+		// A whole-club dump needs a real gate (unlike the single-member read, which
+		// is scoped to a matched (clubId, memberId) pair): only a member of the
+		// club may read every member's progress — mirrors `listClubMembers`.
+		const user = await requireUser();
+		await requireMembership(user.id, data.clubId);
+		const map = await pathwaysByMember(data.clubId);
+		return Object.fromEntries(map);
+	});

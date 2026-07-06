@@ -1,17 +1,20 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { BookOpen, CalendarDays } from "lucide-react";
 import { PageContainer } from "#/components/page-container";
+import { PathwaysProgress } from "#/components/pathways/pathways-progress";
 import { formatMeetingDate } from "#/lib/format";
 import { listMySpeeches } from "#/server/club";
 import { listMyCommitments } from "#/server/meetings";
+import { getMyPathways } from "#/server/pathways-read";
 
 export const Route = createFileRoute("/_authed/dashboard")({
 	loader: async () => {
-		const [commitments, speeches] = await Promise.all([
+		const [commitments, speeches, pathways] = await Promise.all([
 			listMyCommitments(),
 			listMySpeeches(),
+			getMyPathways(),
 		]);
-		return { commitments, speeches };
+		return { commitments, speeches, pathways };
 	},
 	component: Dashboard,
 });
@@ -38,7 +41,7 @@ function dayMon(value: Date | string, timeZone?: string) {
 
 function Dashboard() {
 	const { authUser } = Route.useRouteContext();
-	const { commitments, speeches } = Route.useLoaderData();
+	const { commitments, speeches, pathways } = Route.useLoaderData();
 
 	return (
 		<PageContainer>
@@ -153,6 +156,12 @@ function Dashboard() {
 								);
 							})
 						)}
+					</div>
+
+					{/* My Pathways progress (real, synced from Base Camp) */}
+					<div>
+						<h2 className="mb-2.5 px-0.5 text-[15px] font-bold">My Pathways</h2>
+						<PathwaysProgress paths={pathways} />
 					</div>
 
 					{/* Quick actions */}

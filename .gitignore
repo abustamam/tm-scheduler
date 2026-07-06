@@ -26,3 +26,8 @@ ds-bundle/
 # Local reference data (Toastmasters membership CSV exports — contain member PII;
 # consumed by scripts/import-members.ts but never committed)
 ref/
+
+# HAR captures contain live Base Camp session tokens (sessionid/ApiToken/edx-jwt).
+# Keep them local; the non-secret request recipe lives in issue #107. The scrubbed
+# samples/_api_bcm_progress_* JSON fixtures ARE committed for reference.
+*.har
