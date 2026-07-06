@@ -126,9 +126,9 @@ function PickNameScreen({
 								<span className="truncate font-medium text-foreground">
 									{m.name}
 								</span>
-								{m.officerPosition ? (
+								{m.officerPositions.length ? (
 									<span className="truncate text-muted-foreground text-xs">
-										{officerPositionLabel(m.officerPosition)}
+										{m.officerPositions.map(officerPositionLabel).join(", ")}
 									</span>
 								) : null}
 							</span>

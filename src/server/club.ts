@@ -12,6 +12,10 @@ import {
 	speakerDetails,
 } from "#/db/schema";
 import { requireMembership, requireUser } from "./guards";
+import {
+	currentOfficersByMember,
+	currentOfficersFor,
+} from "./officer-terms-logic";
 
 const uuid = z.string().uuid();
 
@@ -33,7 +37,6 @@ export const listClubMembers = createServerFn({ method: "GET" })
 				id: members.id,
 				name: members.name,
 				email: members.email,
-				officerPosition: members.officerPosition,
 				userId: members.userId,
 				status: members.status,
 				createdAt: members.createdAt,
@@ -45,6 +48,9 @@ export const listClubMembers = createServerFn({ method: "GET" })
 			.innerJoin(people, eq(people.id, members.personId))
 			.where(eq(members.clubId, clubId))
 			.orderBy(asc(members.name));
+
+		// Current office(s) per member, derived from open officer terms (#100).
+		const officers = await currentOfficersByMember(roster.map((m) => m.id));
 
 		const speechRows = await db
 			.select({
@@ -75,7 +81,7 @@ export const listClubMembers = createServerFn({ method: "GET" })
 			id: m.id,
 			name: m.name,
 			email: m.email,
-			officerPosition: m.officerPosition,
+			officerPositions: officers.get(m.id) ?? [],
 			userId: m.userId,
 			status: m.status,
 			createdAt: m.createdAt,
@@ -181,7 +187,6 @@ export const getMemberProfile = createServerFn({ method: "GET" })
 				name: members.name,
 				email: members.email,
 				phone: members.phone,
-				officerPosition: members.officerPosition,
 				userId: members.userId,
 				status: members.status,
 				createdAt: members.createdAt,
@@ -200,6 +205,9 @@ export const getMemberProfile = createServerFn({ method: "GET" })
 			return { member: null, speechLog: [], rolesServed: [], speeches: 0 };
 		}
 
+		// Current office(s) derived from open officer terms (#100).
+		const officerPositions = await currentOfficersFor(member.id);
+
 		// History keys directly to the member row — no user bridge needed.
 		const speechLog = await loadSpeechLog(member.id, data.clubId, 6);
 		const rolesServed = await loadRolesServed(member.id, data.clubId);
@@ -210,7 +218,7 @@ export const getMemberProfile = createServerFn({ method: "GET" })
 				name: member.name,
 				email: member.email,
 				phone: member.phone,
-				officerPosition: member.officerPosition,
+				officerPositions,
 				userId: member.userId,
 				status: member.status,
 				createdAt: member.createdAt,

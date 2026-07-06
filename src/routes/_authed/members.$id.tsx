@@ -77,8 +77,10 @@ function MemberDetail() {
 
 	// Identity, speech log and roles served are real; Pathways progress is not modeled (#61).
 	const joined = member.joinedAt ?? member.createdAt;
-	const tenure = member.officerPosition
-		? `${formatTenure(joined)} · ${officerPositionLabel(member.officerPosition)}`
+	const tenure = member.officerPositions.length
+		? `${formatTenure(joined)} · ${member.officerPositions
+				.map(officerPositionLabel)
+				.join(", ")}`
 		: formatTenure(joined);
 
 	return (
@@ -222,7 +224,7 @@ type ProfileMember = {
 	name: string;
 	email: string | null;
 	phone: string | null;
-	officerPosition: OfficerPosition | null;
+	officerPositions: OfficerPosition[];
 	userId: string | null;
 	status: "active" | "inactive";
 };
@@ -277,6 +279,10 @@ function MemberActions({
 			toast.error("Name is required.");
 			return;
 		}
+		// Checkboxes named "officerPositions" — the full desired office set (#100).
+		const officerPositions = form.getAll(
+			"officerPositions",
+		) as OfficerPosition[];
 		setBusy(true);
 		try {
 			await editMember({
@@ -287,8 +293,7 @@ function MemberActions({
 					name,
 					email: String(form.get("email") ?? "").trim() || null,
 					phone: String(form.get("phone") ?? "").trim() || null,
-					officerPosition: (String(form.get("officerPosition") ?? "").trim() ||
-						null) as OfficerPosition | null,
+					officerPositions,
 				},
 			});
 			toast.success("Member updated.");
@@ -374,33 +379,40 @@ function MemberActions({
 								placeholder="name@example.com"
 							/>
 						</div>
-						<div className="grid grid-cols-2 gap-3">
-							<div className="space-y-2">
-								<Label htmlFor="edit-phone">Phone</Label>
-								<Input
-									id="edit-phone"
-									name="phone"
-									type="tel"
-									defaultValue={member.phone ?? ""}
-								/>
-							</div>
-							<div className="space-y-2">
-								<Label htmlFor="edit-officer-position">Officer position</Label>
-								<select
-									id="edit-officer-position"
-									name="officerPosition"
-									defaultValue={member.officerPosition ?? ""}
-									className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-								>
-									<option value="">None</option>
-									{OFFICER_POSITIONS.map((pos) => (
-										<option key={pos} value={pos}>
-											{officerPositionLabel(pos)}
-										</option>
-									))}
-								</select>
-							</div>
+						<div className="space-y-2">
+							<Label htmlFor="edit-phone">Phone</Label>
+							<Input
+								id="edit-phone"
+								name="phone"
+								type="tel"
+								defaultValue={member.phone ?? ""}
+							/>
 						</div>
+						<fieldset className="space-y-2">
+							<legend className="font-medium text-sm">Offices held</legend>
+							<p className="text-muted-foreground text-xs">
+								A member can hold more than one office at once.
+							</p>
+							<div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+								{OFFICER_POSITIONS.map((pos) => (
+									<label
+										key={pos}
+										className="flex items-center gap-2 text-sm"
+										htmlFor={`edit-office-${pos}`}
+									>
+										<input
+											type="checkbox"
+											id={`edit-office-${pos}`}
+											name="officerPositions"
+											value={pos}
+											defaultChecked={member.officerPositions.includes(pos)}
+											className="size-4 rounded border-input"
+										/>
+										{officerPositionLabel(pos)}
+									</label>
+								))}
+							</div>
+						</fieldset>
 						<DialogFooter>
 							<DialogClose asChild>
 								<Button type="button" variant="outline" disabled={busy}>

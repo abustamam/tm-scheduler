@@ -9,11 +9,25 @@
  *     bunx vitest run src/server/import-members.integration.test.ts
  */
 import { randomUUID } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clubs, members, people } from "#/db/schema";
+import { clubs, members, officerTerms, people } from "#/db/schema";
 import type { MappedMember } from "#/lib/members-csv";
 import { cleanup, hasTestDb, testDb } from "#/test/db";
+
+/** Open (current) officer positions for a membership, for assertions. */
+async function openOffices(membershipId: string): Promise<string[]> {
+	const rows = await testDb
+		.select({ position: officerTerms.position })
+		.from(officerTerms)
+		.where(
+			and(
+				eq(officerTerms.membershipId, membershipId),
+				isNull(officerTerms.termEnd),
+			),
+		);
+	return rows.map((r) => r.position);
+}
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
@@ -193,7 +207,7 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		expect(m.joinedAt).not.toBeNull();
 	});
 
-	it("sets the parsed officer position on a fresh membership", async () => {
+	it("opens an officer term for the parsed position on a fresh membership", async () => {
 		const clubId = await club();
 		await importPeopleAndMembers(clubId, [
 			row({
@@ -207,12 +221,12 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 			.select()
 			.from(members)
 			.where(eq(members.clubId, clubId));
-		expect(m.officerPosition).toBe("vp_education");
+		expect(await openOffices(m.id)).toEqual(["vp_education"]);
 	});
 
-	it("fill-only: never overwrites an existing in-app officer position", async () => {
+	it("fill-only: never touches a membership that already holds an office", async () => {
 		const clubId = await club();
-		// First import sets president.
+		// First import opens a president term.
 		await importPeopleAndMembers(clubId, [
 			row({
 				customerId: "PN-K",
@@ -221,12 +235,16 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 				currentPosition: "Club President",
 			}),
 		]);
-		// A VPE later corrects it in-app to secretary.
-		await testDb
-			.update(members)
-			.set({ officerPosition: "secretary" })
+		const [m] = await testDb
+			.select()
+			.from(members)
 			.where(eq(members.clubId, clubId));
-		// Re-import still says president — must NOT clobber the in-app value.
+		// A VPE later corrects it in-app to secretary (close president, open secretary).
+		const { reconcileOfficerTerms } = await import(
+			"#/server/officer-terms-logic"
+		);
+		await reconcileOfficerTerms(testDb, m.id, ["secretary"]);
+		// Re-import still says president — must NOT touch the in-app office set.
 		const stats = await importPeopleAndMembers(clubId, [
 			row({
 				customerId: "PN-K",
@@ -236,14 +254,10 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 			}),
 		]);
 		expect(stats.membersUpdated).toBe(1);
-		const [m] = await testDb
-			.select()
-			.from(members)
-			.where(eq(members.clubId, clubId));
-		expect(m.officerPosition).toBe("secretary");
+		expect(await openOffices(m.id)).toEqual(["secretary"]);
 	});
 
-	it("counts an unparseable non-blank position without setting it", async () => {
+	it("counts an unparseable non-blank position without opening a term", async () => {
 		const clubId = await club();
 		const stats = await importPeopleAndMembers(clubId, [
 			row({
@@ -258,6 +272,6 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 			.select()
 			.from(members)
 			.where(eq(members.clubId, clubId));
-		expect(m.officerPosition).toBeNull();
+		expect(await openOffices(m.id)).toEqual([]);
 	});
 });

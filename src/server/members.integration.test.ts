@@ -26,7 +26,6 @@ async function listMembersPublic(clubId: string) {
 		.select({
 			id: members.id,
 			name: members.name,
-			officerPosition: members.officerPosition,
 		})
 		.from(members)
 		.where(eq(members.clubId, clubId))

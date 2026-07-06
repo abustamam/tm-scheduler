@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
-import { and, asc, eq, gte, isNotNull, ne, sql } from "drizzle-orm";
+import { and, asc, eq, gte, ne, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { db } from "#/db";
@@ -13,7 +13,7 @@ import {
 	speakerDetails,
 } from "#/db/schema";
 import { resolveEvaluatorLinks } from "#/lib/agenda";
-import { officerPositionLabel, officerRank } from "#/lib/officers";
+import { officerPositionLabel } from "#/lib/officers";
 import {
 	getMembership,
 	getSessionUser,
@@ -23,6 +23,7 @@ import {
 	requireUser,
 } from "./guards";
 import { applyCreateMeeting, applyMeetingUpdate } from "./meetings-logic";
+import { currentOfficersForClub } from "./officer-terms-logic";
 
 const uuid = z.string().uuid();
 
@@ -130,33 +131,15 @@ async function loadMeetingDetail(
 		},
 	});
 
-	// Officers (active members with an officer position set) for the printable
+	// Officers (active members holding an open office term) for the printable
 	// agenda's officer grid, ordered President → Immediate Past President then by
-	// name. The grid shows human labels; the stored value is the enum.
-	const officerRows = await db
-		.select({
-			officerPosition: members.officerPosition,
-			name: members.name,
-		})
-		.from(members)
-		.where(
-			and(
-				eq(members.clubId, meeting.clubId),
-				isNotNull(members.officerPosition),
-				ne(members.status, "inactive"),
-			),
-		)
-		.orderBy(asc(members.name));
-	const officers = officerRows
-		.filter((o) => o.officerPosition != null)
-		.sort(
-			(a, b) =>
-				officerRank(a.officerPosition!) - officerRank(b.officerPosition!),
-		)
-		.map((o) => ({
-			office: officerPositionLabel(o.officerPosition!),
-			name: o.name,
-		}));
+	// name (#100). Derived from open officer terms; a member holding two offices
+	// shows once per office. The grid shows human labels.
+	const officerRows = await currentOfficersForClub(meeting.clubId);
+	const officers = officerRows.map((o) => ({
+		office: officerPositionLabel(o.position),
+		name: o.name,
+	}));
 
 	// Members who've marked themselves Not Available for this meeting (with
 	// names, so the VPE can see who NOT to chase when filling open roles).

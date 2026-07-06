@@ -24,13 +24,18 @@ the nouns in `src/db/schema.ts`.
 - **`club_memberships`** — legacy auth-only link (signed-in `user` ↔ club) that today still
   resolves `club_role` in the auth path; being absorbed into Membership (ADR-0008, follow-up
   to #64). Not the roster.
-- **Officer position** — a Person's elected club job on a Membership (`members.officer_position`),
-  drawn from the standard Toastmasters club officers: President, VP Education, VP Membership,
-  VP Public Relations, Secretary, Treasurer, Sergeant at Arms, Immediate Past President.
-  Structured enum replacing the old free-text `office`; in-app editing is authoritative (CSV
-  import only fills empties). Distinct from `club_role` (permission) — though President / VP
-  Education *default* a linked account to `admin`. One current office per membership for now;
-  multiple concurrent offices + term history are a follow-up. See #63.
+- **Officer position** — a Person's elected club job on a Membership, drawn from the standard
+  Toastmasters club officers: President, VP Education, VP Membership, VP Public Relations,
+  Secretary, Treasurer, Sergeant at Arms, Immediate Past President. A structured enum
+  (`src/lib/officers.ts`) replacing the old free-text `office`; in-app editing is authoritative
+  (CSV import only fills empties). Distinct from `club_role` (permission) — though President /
+  VP Education *default* a linked account to `admin`. See #63.
+- **Officer term** (`officer_terms`) — the source of truth for who holds which office (#100):
+  one row per office a Membership holds, over a span (`term_start` … `term_end`). A Membership's
+  **current office(s)** are DERIVED as its open terms (`term_end IS NULL`) — it may hold several
+  concurrently (e.g. Secretary + Treasurer). Removing an office closes its term (sets `term_end`),
+  retaining it as history (officer recognition / term reporting); rows are never deleted on
+  removal. Replaced the single `members.officer_position` column. See #100.
 - **`club_role`** — the app **permission** on a Membership: `admin` (may create/edit meetings,
   manage roster/roles) or `member`. Bound to the sign-in account, enforceable independent of
   roster metadata; defaulted from Officer position but stored explicitly (ADR-0008). (`vpe`

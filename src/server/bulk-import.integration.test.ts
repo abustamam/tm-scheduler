@@ -7,9 +7,9 @@
  *   TEST_DATABASE_URL=postgresql://dev:…@localhost:5432/tm_test \
  *     bunx vitest run src/server/bulk-import.integration.test.ts
  */
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { activityLog, members } from "#/db/schema";
+import { activityLog, members, officerTerms } from "#/db/schema";
 import {
 	cleanup,
 	hasTestDb,
@@ -58,8 +58,17 @@ describe.skipIf(!hasTestDb)("bulk roster import", () => {
 		expect(alice.email).toBe("alice@club.org");
 		// Phone stored as raw digits, not reformatted.
 		expect(alice.phone).toBe("19165968820");
-		// Pasted free-text office parsed into the structured enum.
-		expect(alice.officerPosition).toBe("president");
+		// Pasted free-text office parsed into the enum and opened as a current term.
+		const aliceTerms = await testDb
+			.select({ position: officerTerms.position })
+			.from(officerTerms)
+			.where(
+				and(
+					eq(officerTerms.membershipId, alice.id),
+					isNull(officerTerms.termEnd),
+				),
+			);
+		expect(aliceTerms.map((t) => t.position)).toEqual(["president"]);
 
 		const [bob] = await testDb
 			.select()
@@ -70,7 +79,12 @@ describe.skipIf(!hasTestDb)("bulk roster import", () => {
 		expect(bob.email).toBe("bob@club.org");
 		// Empty cells stored as NULL, not "".
 		expect(bob.phone).toBeNull();
-		expect(bob.officerPosition).toBeNull();
+		// No office pasted → no officer term opened.
+		const bobTerms = await testDb
+			.select()
+			.from(officerTerms)
+			.where(eq(officerTerms.membershipId, bob.id));
+		expect(bobTerms).toHaveLength(0);
 
 		// One member_add activity row per inserted member.
 		for (const id of result.insertedIds) {
