@@ -26,6 +26,7 @@ import { Route as ApiPathwaysIngestRouteImport } from './routes/api/pathways/ing
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as AuthedMembersIdRouteImport } from './routes/_authed/members.$id'
 import { Route as AuthedMeetingsIdRouteImport } from './routes/_authed/meetings.$id'
+import { Route as AuthedAdminSyncTokensRouteImport } from './routes/_authed/admin/sync-tokens'
 import { Route as AuthedAdminRolesRouteImport } from './routes/_authed/admin/roles'
 import { Route as AuthedAdminPathwaysSyncRouteImport } from './routes/_authed/admin/pathways-sync'
 import { Route as AuthedAdminClubSettingsRouteImport } from './routes/_authed/admin/club-settings'
@@ -117,6 +118,11 @@ const AuthedMeetingsIdRoute = AuthedMeetingsIdRouteImport.update({
   path: '/meetings/$id',
   getParentRoute: () => AuthedRoute,
 } as any)
+const AuthedAdminSyncTokensRoute = AuthedAdminSyncTokensRouteImport.update({
+  id: '/admin/sync-tokens',
+  path: '/admin/sync-tokens',
+  getParentRoute: () => AuthedRoute,
+} as any)
 const AuthedAdminRolesRoute = AuthedAdminRolesRouteImport.update({
   id: '/admin/roles',
   path: '/admin/roles',
@@ -165,6 +171,7 @@ export interface FileRoutesByFullPath {
   '/admin/club-settings': typeof AuthedAdminClubSettingsRoute
   '/admin/pathways-sync': typeof AuthedAdminPathwaysSyncRoute
   '/admin/roles': typeof AuthedAdminRolesRoute
+  '/admin/sync-tokens': typeof AuthedAdminSyncTokensRoute
   '/meetings/$id': typeof AuthedMeetingsIdRoute
   '/members/$id': typeof AuthedMembersIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -188,6 +195,7 @@ export interface FileRoutesByTo {
   '/admin/club-settings': typeof AuthedAdminClubSettingsRoute
   '/admin/pathways-sync': typeof AuthedAdminPathwaysSyncRoute
   '/admin/roles': typeof AuthedAdminRolesRoute
+  '/admin/sync-tokens': typeof AuthedAdminSyncTokensRoute
   '/meetings/$id': typeof AuthedMeetingsIdRoute
   '/members/$id': typeof AuthedMembersIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -214,6 +222,7 @@ export interface FileRoutesById {
   '/_authed/admin/club-settings': typeof AuthedAdminClubSettingsRoute
   '/_authed/admin/pathways-sync': typeof AuthedAdminPathwaysSyncRoute
   '/_authed/admin/roles': typeof AuthedAdminRolesRoute
+  '/_authed/admin/sync-tokens': typeof AuthedAdminSyncTokensRoute
   '/_authed/meetings/$id': typeof AuthedMeetingsIdRoute
   '/_authed/members/$id': typeof AuthedMembersIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -240,6 +249,7 @@ export interface FileRouteTypes {
     | '/admin/club-settings'
     | '/admin/pathways-sync'
     | '/admin/roles'
+    | '/admin/sync-tokens'
     | '/meetings/$id'
     | '/members/$id'
     | '/api/auth/$'
@@ -263,6 +273,7 @@ export interface FileRouteTypes {
     | '/admin/club-settings'
     | '/admin/pathways-sync'
     | '/admin/roles'
+    | '/admin/sync-tokens'
     | '/meetings/$id'
     | '/members/$id'
     | '/api/auth/$'
@@ -288,6 +299,7 @@ export interface FileRouteTypes {
     | '/_authed/admin/club-settings'
     | '/_authed/admin/pathways-sync'
     | '/_authed/admin/roles'
+    | '/_authed/admin/sync-tokens'
     | '/_authed/meetings/$id'
     | '/_authed/members/$id'
     | '/api/auth/$'
@@ -430,6 +442,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedMeetingsIdRouteImport
       parentRoute: typeof AuthedRoute
     }
+    '/_authed/admin/sync-tokens': {
+      id: '/_authed/admin/sync-tokens'
+      path: '/admin/sync-tokens'
+      fullPath: '/admin/sync-tokens'
+      preLoaderRoute: typeof AuthedAdminSyncTokensRouteImport
+      parentRoute: typeof AuthedRoute
+    }
     '/_authed/admin/roles': {
       id: '/_authed/admin/roles'
       path: '/admin/roles'
@@ -486,6 +505,7 @@ interface AuthedRouteChildren {
   AuthedAdminClubSettingsRoute: typeof AuthedAdminClubSettingsRoute
   AuthedAdminPathwaysSyncRoute: typeof AuthedAdminPathwaysSyncRoute
   AuthedAdminRolesRoute: typeof AuthedAdminRolesRoute
+  AuthedAdminSyncTokensRoute: typeof AuthedAdminSyncTokensRoute
   AuthedMeetingsIdRoute: typeof AuthedMeetingsIdRoute
   AuthedMembersIdRoute: typeof AuthedMembersIdRoute
   AuthedAdminMeetingsNewRoute: typeof AuthedAdminMeetingsNewRoute
@@ -502,6 +522,7 @@ const AuthedRouteChildren: AuthedRouteChildren = {
   AuthedAdminClubSettingsRoute: AuthedAdminClubSettingsRoute,
   AuthedAdminPathwaysSyncRoute: AuthedAdminPathwaysSyncRoute,
   AuthedAdminRolesRoute: AuthedAdminRolesRoute,
+  AuthedAdminSyncTokensRoute: AuthedAdminSyncTokensRoute,
   AuthedMeetingsIdRoute: AuthedMeetingsIdRoute,
   AuthedMembersIdRoute: AuthedMembersIdRoute,
   AuthedAdminMeetingsNewRoute: AuthedAdminMeetingsNewRoute,
@@ -537,12 +558,3 @@ const rootRouteChildren: RootRouteChildren = {
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
-
-import type { getRouter } from './router.tsx'
-import type { createStart } from '@tanstack/react-start'
-declare module '@tanstack/react-start' {
-  interface Register {
-    ssr: true
-    router: Awaited<ReturnType<typeof getRouter>>
-  }
-}
