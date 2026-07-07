@@ -5,9 +5,10 @@
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test \
  *     bunx vitest run src/server/pathways-ingest-logic.integration.test.ts
  */
+import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { pathwaysProjects, syncTokens } from "#/db/schema";
+import { syncTokens } from "#/db/schema";
 import {
 	cleanup,
 	hasTestDb,
@@ -36,6 +37,16 @@ function pageForEmail(email: string) {
 	};
 }
 
+// Per-run-unique block id AND name so the project the detail sync derives can
+// never collide with a leftover row from a prior run (the 8701 catalog path is
+// shared across the file and outlives any single test). reconcileCatalog matches
+// an existing project two ways — by durable block id, then by (path, level, name)
+// — so BOTH must be unique for `projectsDerived === 1` to hold on every run
+// without any post-test cleanup. A fresh id + name never pre-exists.
+const RUN_SUFFIX = randomUUID().slice(0, 8);
+const UNIQUE_BLOCK = `ib-8701-${RUN_SUFFIX}`;
+const UNIQUE_NAME = `Ice Breaker ${RUN_SUFFIX}`;
+
 // A /detail payload for the same member (122747) + path (8701) the summary
 // fixture ingests — so the enrollment it joins to is created by the same POST.
 function detailFor122747() {
@@ -53,9 +64,9 @@ function detailFor122747() {
 					min_req_electives: 0,
 					children: [
 						{
-							block_id: "ib-8701",
+							block_id: UNIQUE_BLOCK,
 							type: "sequential",
-							display_name: "Ice Breaker",
+							display_name: UNIQUE_NAME,
 							complete: true,
 							block_lib_type: "imported",
 						},
@@ -77,14 +88,6 @@ describe.skipIf(!hasTestDb)("pathways ingest logic", () => {
 	afterEach(async () => {
 		await testDb.delete(syncTokens).where(eq(syncTokens.clubId, seed.clubId));
 		await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
-		// The 8701 catalog path is shared across every test in this file (via
-		// pageForEmail's fixed course id) and outlives any single test, so it's
-		// never deleted here. But "ingests details…" derives a fresh "ib-8701"
-		// project into that shared path — remove it so a re-run doesn't find it
-		// already stamped and report projectsDerived: 0 instead of 1.
-		await testDb
-			.delete(pathwaysProjects)
-			.where(eq(pathwaysProjects.bcmBlockId, "ib-8701"));
 	});
 
 	async function mkToken() {

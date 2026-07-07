@@ -1,9 +1,11 @@
 /**
  * Core logic for the extension ingest endpoint (#107). A `-logic.ts` so `#/db`
  * stays out of the client bundle. Reuses the v1 parse/upsert pipeline verbatim
- * (normalizePages → parseProgressPages → syncClubProgress) — this file only adds
- * token auth and the wrong-club soft-warn. Throws `IngestError` with an HTTP
- * status; the route maps it to a Response.
+ * (normalizePages → parseProgressPages → syncClubProgress) — this file adds
+ * token auth and the wrong-club soft-warn, and (when the body carries an optional
+ * `details` array) parses each /detail payload and runs `syncClubDetail`, merging
+ * a `detail` block into the result. Throws `IngestError` with an HTTP status; the
+ * route maps it to a Response.
  */
 import { eq } from "drizzle-orm";
 import { z } from "zod";
@@ -82,7 +84,7 @@ export async function ingestForToken(
 		} catch {
 			throw new IngestError(
 				400,
-				"That doesn't look like Base Camp /detail data (expected the /detail JSON).",
+				"That doesn't look like a Base Camp /detail payload (expected the /detail JSON).",
 			);
 		}
 		detail = await syncClubDetail(tok.clubId, parsedDetails);
