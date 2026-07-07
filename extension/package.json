@@ -1,0 +1,17 @@
+{
+	"name": "gavelup-pathways-sync-extension",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "wxt",
+		"build": "wxt build",
+		"zip": "wxt zip",
+		"test": "vitest run",
+		"postinstall": "wxt prepare"
+	},
+	"devDependencies": {
+		"typescript": "^6.0.3",
+		"vitest": "^4.1.10",
+		"wxt": "^0.20.27"
+	}
+}
