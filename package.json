@@ -24,7 +24,10 @@
     "seed:pathways-catalog": "bun run scripts/seed-pathways-catalog.ts",
     "resolve:speech-projects": "bun run scripts/resolve-speech-projects.ts",
     "db:pull": "drizzle-kit pull",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "ext:dev": "cd extension && bun run dev",
+    "ext:build": "cd extension && bun run build",
+    "ext:test": "cd extension && bun run test"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.18",
