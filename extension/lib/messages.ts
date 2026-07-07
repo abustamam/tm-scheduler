@@ -1,4 +1,4 @@
-/** Message contracts between the popup, content script, and background (#107). */
+/** Message contracts between the content script and the background worker (#107). */
 
 /** Minimal mirror of the server's SyncResult (+ optional warning). */
 export interface SyncResultLike {
@@ -8,19 +8,7 @@ export interface SyncResultLike {
 	warning?: string;
 }
 
-/** popup → content script (active Base Camp tab). */
-export interface SyncRequest {
-	type: "gavelup-sync";
-	guidOverride: string | null;
-}
-export interface SyncResponse {
-	ok: boolean;
-	guid?: string;
-	pages?: unknown[];
-	error?: string;
-}
-
-/** popup → background service worker. */
+/** content script → background: POST the collected pages to GavelUp. */
 export interface IngestRequest {
 	type: "gavelup-ingest";
 	guid: string;
@@ -30,4 +18,9 @@ export interface IngestResponse {
 	ok: boolean;
 	result?: SyncResultLike;
 	error?: string;
+}
+
+/** content script → background: open the extension's Options page. */
+export interface OpenOptionsRequest {
+	type: "gavelup-open-options";
 }
