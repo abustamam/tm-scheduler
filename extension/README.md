@@ -28,8 +28,9 @@ _On Firefox? See the [Firefox](#firefox) section below instead._
 
 1. Get the built `chrome-mv3` folder (or unzip the release).
 2. Open `chrome://extensions`, enable **Developer mode**, **Load unpacked**, pick the folder.
-3. Click the extension, paste your GavelUp **sync token** (GavelUp → Admin → Base Camp sync
-   tokens), leave Server URL as `https://gavelup.app`, **Save settings**.
+3. Click the toolbar icon to open **Options**; paste your GavelUp **sync token** (GavelUp → Admin →
+   Base Camp sync tokens), leave Server URL as `https://gavelup.app`, **Save**. Then sync from the
+   **Sync to GavelUp** widget on your club's Base Camp Paths Progress page.
 
 ## Firefox
 
@@ -70,11 +71,11 @@ It persists across restarts. Keep the AMO credentials in your environment — ne
 
 ## Manual smoke test (do before sharing a build)
 
-- [ ] Load unpacked with no errors on `chrome://extensions`.
-- [ ] Save + reopen popup — token/server persist.
-- [ ] On Paths Progress, **Sync now** succeeds and the count matches the roster.
-- [ ] Bad token → popup shows "Token invalid".
-- [ ] Not on a Base Camp tab → popup tells you to open Paths Progress.
-- [ ] Confirm on the GavelUp Pathways screens that progress updated.
-- [ ] Firefox: load the `firefox-mv2` build (temporary add-on or signed .xpi), then repeat the
-      above (persist settings, sync on Paths Progress, bad-token error, non-basecamp-tab message).
+- [ ] Load unpacked (Chrome) / temporary add-on (Firefox) with no errors.
+- [ ] Click the toolbar icon → the **Options** page opens; set token + server URL, Save.
+- [ ] On Base Camp → your club → **Paths Progress**, a **Sync to GavelUp** widget appears
+      (bottom-right). Click it → status shows "Syncing…" then "Matched N · … · U unmatched".
+- [ ] With no token set, the widget prompts to set a token in options (⚙ opens Options).
+- [ ] Off a Paths Progress page (GUID not seen), the widget says to open Paths Progress.
+- [ ] Bad/revoked token → the widget shows the server's error; unreachable server → a network error.
+- [ ] Firefox: repeat the above on the `firefox-mv2` build.

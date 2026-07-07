@@ -18,6 +18,9 @@ export default defineConfig({
 			"https://app.basecamp.toastmasters.org/*",
 			gavelupOrigin,
 		],
+		// Toolbar icon with NO popup — clicking it opens the Options page
+		// (see background.ts). WXT maps `action` → `browser_action` for Firefox MV2.
+		action: {},
 		// Firefox-only. A stable add-on id (required to sign/install a persistent
 		// .xpi), a floor that guarantees world:"MAIN" content-script support
 		// (Firefox 128+), and an honest "collects no data" declaration. Gated on the
