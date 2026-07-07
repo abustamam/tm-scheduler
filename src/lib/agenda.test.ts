@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	buildPickerRows,
 	buildRoleCounts,
+	buildRosterEntries,
 	buildShortCodes,
 	generateSlotRows,
 	resolveAssignAction,
@@ -9,6 +10,94 @@ import {
 	roleAbbrev,
 	slotLabel,
 } from "./agenda";
+
+const rosterSlot = (
+	roleName: string,
+	slotIndex: number,
+	category: "leadership" | "speaker" | "evaluator" | "functionary",
+	isSpeakerRole = false,
+	assigneeName: string | null = null,
+) => ({ roleName, slotIndex, category, isSpeakerRole, assigneeName });
+
+describe("buildRosterEntries", () => {
+	it("interleaves speakers with their paired evaluators so each pair shares a row", () => {
+		const slots = [
+			rosterSlot("Toastmaster of the Day", 0, "leadership"),
+			rosterSlot("Table Topics Master", 0, "leadership"),
+			rosterSlot("Speaker", 0, "speaker", true),
+			rosterSlot("Speaker", 1, "speaker", true),
+			rosterSlot("Speaker", 2, "speaker", true),
+			rosterSlot("Evaluator", 0, "evaluator"),
+			rosterSlot("Evaluator", 1, "evaluator"),
+			rosterSlot("Evaluator", 2, "evaluator"),
+			rosterSlot("General Evaluator", 0, "evaluator"),
+			rosterSlot("Timer", 0, "functionary"),
+		];
+		expect(buildRosterEntries(slots).map((e) => e.label)).toEqual([
+			"Toastmaster of the Day",
+			"Table Topics Master",
+			"Speaker 1",
+			"Evaluator 1",
+			"Speaker 2",
+			"Evaluator 2",
+			"Speaker 3",
+			"Evaluator 3",
+			"General Evaluator",
+			"Timer",
+		]);
+	});
+
+	it("keeps General Evaluator out of the pairing (uses the higher-count evaluator role)", () => {
+		const slots = [
+			rosterSlot("Speaker", 0, "speaker", true),
+			rosterSlot("Evaluator", 0, "evaluator"),
+			rosterSlot("General Evaluator", 0, "evaluator"),
+		];
+		const labels = buildRosterEntries(slots).map((e) => e.label);
+		expect(labels).toEqual(["Speaker", "Evaluator", "General Evaluator"]);
+	});
+
+	it("carries the assignee name through", () => {
+		const slots = [
+			rosterSlot("Speaker", 0, "speaker", true, "Jagpal Singh"),
+			rosterSlot("Evaluator", 0, "evaluator", false, "Sudheer Isanaka"),
+		];
+		expect(buildRosterEntries(slots)).toEqual([
+			{ label: "Speaker", name: "Jagpal Singh" },
+			{ label: "Evaluator", name: "Sudheer Isanaka" },
+		]);
+	});
+
+	it("falls back to original order when there is no evaluator to pair", () => {
+		const slots = [
+			rosterSlot("Toastmaster of the Day", 0, "leadership"),
+			rosterSlot("Speaker", 0, "speaker", true),
+			rosterSlot("Speaker", 1, "speaker", true),
+		];
+		expect(buildRosterEntries(slots).map((e) => e.label)).toEqual([
+			"Toastmaster of the Day",
+			"Speaker 1",
+			"Speaker 2",
+		]);
+	});
+
+	it("appends leftovers when speaker and evaluator counts differ", () => {
+		const slots = [
+			rosterSlot("Speaker", 0, "speaker", true),
+			rosterSlot("Speaker", 1, "speaker", true),
+			rosterSlot("Speaker", 2, "speaker", true),
+			rosterSlot("Evaluator", 0, "evaluator"),
+			rosterSlot("Evaluator", 1, "evaluator"),
+		];
+		expect(buildRosterEntries(slots).map((e) => e.label)).toEqual([
+			"Speaker 1",
+			"Evaluator 1",
+			"Speaker 2",
+			"Evaluator 2",
+			"Speaker 3",
+		]);
+	});
+});
 
 describe("generateSlotRows", () => {
 	it("generates the correct number of rows with 0-based slotIndex", () => {
