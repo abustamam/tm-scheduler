@@ -65,9 +65,12 @@ It persists across restarts. Keep the AMO credentials in your environment — ne
 ## Use
 
 1. In Base Camp, open **Base Camp Manager → your club → Paths Progress**.
-2. Click the extension → **Sync now**.
+2. Click **Sync to GavelUp** in the widget (bottom-right of the page).
 3. You'll see "Matched N · P path(s) updated · U unmatched" (plus a warning if the club
    looks different from last time).
+
+_(The toolbar icon opens the extension's Options page for one-time token/server setup — the
+sync itself happens from the in-page widget.)_
 
 ## Manual smoke test (do before sharing a build)
 
