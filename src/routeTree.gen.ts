@@ -22,6 +22,7 @@ import { Route as AuthedDashboardRouteImport } from './routes/_authed/dashboard'
 import { Route as AuthedAgendaRouteImport } from './routes/_authed/agenda'
 import { Route as AuthedActivityRouteImport } from './routes/_authed/activity'
 import { Route as ClubClubIdIndexRouteImport } from './routes/club.$clubId.index'
+import { Route as ApiPathwaysIngestRouteImport } from './routes/api/pathways/ingest'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as AuthedMembersIdRouteImport } from './routes/_authed/members.$id'
 import { Route as AuthedMeetingsIdRouteImport } from './routes/_authed/meetings.$id'
@@ -96,6 +97,11 @@ const ClubClubIdIndexRoute = ClubClubIdIndexRouteImport.update({
   path: '/',
   getParentRoute: () => ClubClubIdRoute,
 } as any)
+const ApiPathwaysIngestRoute = ApiPathwaysIngestRouteImport.update({
+  id: '/api/pathways/ingest',
+  path: '/api/pathways/ingest',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   id: '/api/auth/$',
   path: '/api/auth/$',
@@ -162,6 +168,7 @@ export interface FileRoutesByFullPath {
   '/meetings/$id': typeof AuthedMeetingsIdRoute
   '/members/$id': typeof AuthedMembersIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/pathways/ingest': typeof ApiPathwaysIngestRoute
   '/club/$clubId/': typeof ClubClubIdIndexRoute
   '/admin/meetings/new': typeof AuthedAdminMeetingsNewRoute
   '/club/$clubId/meeting/$meetingId': typeof ClubClubIdMeetingMeetingIdRoute
@@ -184,6 +191,7 @@ export interface FileRoutesByTo {
   '/meetings/$id': typeof AuthedMeetingsIdRoute
   '/members/$id': typeof AuthedMembersIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/pathways/ingest': typeof ApiPathwaysIngestRoute
   '/club/$clubId': typeof ClubClubIdIndexRoute
   '/admin/meetings/new': typeof AuthedAdminMeetingsNewRoute
   '/club/$clubId/meeting/$meetingId': typeof ClubClubIdMeetingMeetingIdRoute
@@ -209,6 +217,7 @@ export interface FileRoutesById {
   '/_authed/meetings/$id': typeof AuthedMeetingsIdRoute
   '/_authed/members/$id': typeof AuthedMembersIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/pathways/ingest': typeof ApiPathwaysIngestRoute
   '/club/$clubId/': typeof ClubClubIdIndexRoute
   '/_authed/admin/meetings/new': typeof AuthedAdminMeetingsNewRoute
   '/club/$clubId/meeting/$meetingId': typeof ClubClubIdMeetingMeetingIdRoute
@@ -234,6 +243,7 @@ export interface FileRouteTypes {
     | '/meetings/$id'
     | '/members/$id'
     | '/api/auth/$'
+    | '/api/pathways/ingest'
     | '/club/$clubId/'
     | '/admin/meetings/new'
     | '/club/$clubId/meeting/$meetingId'
@@ -256,6 +266,7 @@ export interface FileRouteTypes {
     | '/meetings/$id'
     | '/members/$id'
     | '/api/auth/$'
+    | '/api/pathways/ingest'
     | '/club/$clubId'
     | '/admin/meetings/new'
     | '/club/$clubId/meeting/$meetingId'
@@ -280,6 +291,7 @@ export interface FileRouteTypes {
     | '/_authed/meetings/$id'
     | '/_authed/members/$id'
     | '/api/auth/$'
+    | '/api/pathways/ingest'
     | '/club/$clubId/'
     | '/_authed/admin/meetings/new'
     | '/club/$clubId/meeting/$meetingId'
@@ -293,6 +305,7 @@ export interface RootRouteChildren {
   ApiHealthRoute: typeof ApiHealthRoute
   ClubClubIdRoute: typeof ClubClubIdRouteWithChildren
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
+  ApiPathwaysIngestRoute: typeof ApiPathwaysIngestRoute
   ClubClubIdMeetingMeetingIdPrintRoute: typeof ClubClubIdMeetingMeetingIdPrintRoute
 }
 
@@ -388,6 +401,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/club/$clubId/'
       preLoaderRoute: typeof ClubClubIdIndexRouteImport
       parentRoute: typeof ClubClubIdRoute
+    }
+    '/api/pathways/ingest': {
+      id: '/api/pathways/ingest'
+      path: '/api/pathways/ingest'
+      fullPath: '/api/pathways/ingest'
+      preLoaderRoute: typeof ApiPathwaysIngestRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/api/auth/$': {
       id: '/api/auth/$'
@@ -511,8 +531,18 @@ const rootRouteChildren: RootRouteChildren = {
   ApiHealthRoute: ApiHealthRoute,
   ClubClubIdRoute: ClubClubIdRouteWithChildren,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
+  ApiPathwaysIngestRoute: ApiPathwaysIngestRoute,
   ClubClubIdMeetingMeetingIdPrintRoute: ClubClubIdMeetingMeetingIdPrintRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
+
+import type { getRouter } from './router.tsx'
+import type { createStart } from '@tanstack/react-start'
+declare module '@tanstack/react-start' {
+  interface Register {
+    ssr: true
+    router: Awaited<ReturnType<typeof getRouter>>
+  }
+}
