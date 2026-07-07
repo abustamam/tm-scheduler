@@ -7,7 +7,7 @@
  */
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { syncTokens } from "#/db/schema";
+import { pathwaysProjects, syncTokens } from "#/db/schema";
 import {
 	cleanup,
 	hasTestDb,
@@ -36,6 +36,37 @@ function pageForEmail(email: string) {
 	};
 }
 
+// A /detail payload for the same member (122747) + path (8701) the summary
+// fixture ingests — so the enrollment it joins to is created by the same POST.
+function detailFor122747() {
+	return {
+		basecampUserId: "122747",
+		courseId: "course-v1:Toastmasters+8701+8_15_2023",
+		blocks: {
+			type: "course",
+			display_name: "Presentation Mastery",
+			children: [
+				{
+					type: "chapter",
+					display_name: "Level 1",
+					complete: true,
+					min_req_electives: 0,
+					children: [
+						{
+							block_id: "ib-8701",
+							type: "sequential",
+							display_name: "Ice Breaker",
+							complete: true,
+							block_lib_type: "imported",
+						},
+					],
+				},
+			],
+		},
+		speeches: {},
+	};
+}
+
 describe.skipIf(!hasTestDb)("pathways ingest logic", () => {
 	let seed: SeededClub;
 	let memberEmail: string;
@@ -46,6 +77,14 @@ describe.skipIf(!hasTestDb)("pathways ingest logic", () => {
 	afterEach(async () => {
 		await testDb.delete(syncTokens).where(eq(syncTokens.clubId, seed.clubId));
 		await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
+		// The 8701 catalog path is shared across every test in this file (via
+		// pageForEmail's fixed course id) and outlives any single test, so it's
+		// never deleted here. But "ingests details…" derives a fresh "ib-8701"
+		// project into that shared path — remove it so a re-run doesn't find it
+		// already stamped and report projectsDerived: 0 instead of 1.
+		await testDb
+			.delete(pathwaysProjects)
+			.where(eq(pathwaysProjects.bcmBlockId, "ib-8701"));
 	});
 
 	async function mkToken() {
@@ -117,5 +156,29 @@ describe.skipIf(!hasTestDb)("pathways ingest logic", () => {
 			pages: [pageForEmail(memberEmail)],
 		});
 		expect(second.warning).toMatch(/different Base Camp club/i);
+	});
+
+	it("ingests details and returns a detail block", async () => {
+		const { ingestForToken } = await import("#/server/pathways-ingest-logic");
+		const { token } = await mkToken();
+		const res = await ingestForToken(token, {
+			basecampClubGuid: "club-guid-1",
+			pages: [pageForEmail(memberEmail)],
+			details: [detailFor122747()],
+		});
+		expect(res.detail?.membersWithDetail).toBe(1);
+		// "Ice Breaker" wasn't seeded → derived as a required project.
+		expect(res.detail?.projectsDerived).toBe(1);
+	});
+
+	it("still works with no details (backward compatible)", async () => {
+		const { ingestForToken } = await import("#/server/pathways-ingest-logic");
+		const { token } = await mkToken();
+		const res = await ingestForToken(token, {
+			basecampClubGuid: "club-guid-1",
+			pages: [pageForEmail(memberEmail)],
+		});
+		expect(res.detail).toBeUndefined();
+		expect(res.matched).toBe(1);
 	});
 });

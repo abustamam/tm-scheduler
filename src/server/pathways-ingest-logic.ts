@@ -10,10 +10,15 @@ import { z } from "zod";
 import { db } from "#/db";
 import { syncTokens } from "#/db/schema";
 import {
+	type BcmDetailPayload,
+	parseDetailPayload,
+} from "#/lib/basecamp-detail";
+import {
 	type BcmProgressPage,
 	normalizePages,
 	parseProgressPages,
 } from "#/lib/basecamp-progress";
+import { type DetailSyncResult, syncClubDetail } from "./pathways-detail-logic";
 import { type SyncResult, syncClubProgress } from "./pathways-sync-logic";
 import { type ResolvedToken, resolveActiveToken } from "./sync-tokens-logic";
 
@@ -30,6 +35,7 @@ export class IngestError extends Error {
 const bodySchema = z.object({
 	basecampClubGuid: z.string().min(1),
 	pages: z.array(z.unknown()).min(1),
+	details: z.array(z.unknown()).optional(),
 });
 
 const WRONG_CLUB_WARNING =
@@ -38,7 +44,7 @@ const WRONG_CLUB_WARNING =
 export async function ingestForToken(
 	rawToken: string | null,
 	body: unknown,
-): Promise<SyncResult & { warning?: string }> {
+): Promise<SyncResult & { warning?: string; detail?: DetailSyncResult }> {
 	if (!rawToken) throw new IngestError(401, "Missing bearer token.");
 	const tok = await resolveActiveToken(rawToken);
 	if (!tok) throw new IngestError(401, "Invalid or revoked token.");
@@ -65,7 +71,28 @@ export async function ingestForToken(
 
 	const result = await syncClubProgress(tok.clubId, rows);
 	const warning = await recordTokenUse(tok, parsed.data.basecampClubGuid);
-	return warning ? { ...result, warning } : result;
+
+	let detail: DetailSyncResult | undefined;
+	if (parsed.data.details && parsed.data.details.length > 0) {
+		let parsedDetails: ReturnType<typeof parseDetailPayload>[];
+		try {
+			parsedDetails = (parsed.data.details as BcmDetailPayload[]).map(
+				parseDetailPayload,
+			);
+		} catch {
+			throw new IngestError(
+				400,
+				"That doesn't look like Base Camp /detail data (expected the /detail JSON).",
+			);
+		}
+		detail = await syncClubDetail(tok.clubId, parsedDetails);
+	}
+
+	return {
+		...result,
+		...(warning ? { warning } : {}),
+		...(detail ? { detail } : {}),
+	};
 }
 
 async function recordTokenUse(
