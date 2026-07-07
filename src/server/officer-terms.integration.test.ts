@@ -167,27 +167,41 @@ describe.skipIf(!hasTestDb)("officer terms (#100)", () => {
 		expect(open).toHaveLength(1);
 	});
 
-	it("currentOfficersForClub lists open officers ordered, one per office, excluding inactive", async () => {
+	it("currentOfficersForClub lists the full agenda line-up (vacant = null, no IPP), one per office, excluding inactive", async () => {
 		const { reconcileOfficerTerms, currentOfficersForClub } = await import(
 			"#/server/officer-terms-logic"
 		);
 		const zara = await addMembership(seed.clubId, "Zara Zephyr");
 		const abe = await addMembership(seed.clubId, "Abe Anchor");
-		// Zara holds two offices at once; Abe holds one.
+		// Zara holds two offices at once; Abe holds one. Nobody is IPP.
 		await reconcileOfficerTerms(testDb, zara, ["secretary", "treasurer"]);
 		await reconcileOfficerTerms(testDb, abe, ["president"]);
 		let officers = await currentOfficersForClub(seed.clubId);
+		// Every agenda office is present in canonical order; vacancies are null and
+		// Immediate Past President never appears.
 		expect(officers).toEqual([
 			{ position: "president", name: "Abe Anchor" },
+			{ position: "vp_education", name: null },
+			{ position: "vp_membership", name: null },
+			{ position: "vp_public_relations", name: null },
 			{ position: "secretary", name: "Zara Zephyr" },
 			{ position: "treasurer", name: "Zara Zephyr" },
+			{ position: "sergeant_at_arms", name: null },
 		]);
-		// Inactive members drop out of the officer grid.
+		// Inactive members drop out — their offices read as vacant.
 		await testDb
 			.update(members)
 			.set({ status: "inactive" })
 			.where(eq(members.id, zara));
 		officers = await currentOfficersForClub(seed.clubId);
-		expect(officers).toEqual([{ position: "president", name: "Abe Anchor" }]);
+		expect(officers).toEqual([
+			{ position: "president", name: "Abe Anchor" },
+			{ position: "vp_education", name: null },
+			{ position: "vp_membership", name: null },
+			{ position: "vp_public_relations", name: null },
+			{ position: "secretary", name: null },
+			{ position: "treasurer", name: null },
+			{ position: "sergeant_at_arms", name: null },
+		]);
 	});
 });

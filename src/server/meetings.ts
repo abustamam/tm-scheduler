@@ -131,14 +131,15 @@ async function loadMeetingDetail(
 		},
 	});
 
-	// Officers (active members holding an open office term) for the printable
-	// agenda's officer grid, ordered President → Immediate Past President then by
-	// name (#100). Derived from open officer terms; a member holding two offices
+	// Officers for the printable agenda's officer grid (#100). The full agenda
+	// line-up (President → Sergeant at Arms; Immediate Past President is left off
+	// the agenda), in canonical order — a vacant office comes back as name: null
+	// and prints as "Open" so every seat is visible. A member holding two offices
 	// shows once per office. The grid shows human labels.
 	const officerRows = await currentOfficersForClub(meeting.clubId);
 	const officers = officerRows.map((o) => ({
 		office: officerPositionLabel(o.position),
-		name: o.name,
+		name: o.name ?? "Open",
 	}));
 
 	// Members who've marked themselves Not Available for this meeting (with

@@ -7,7 +7,11 @@
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "#/db";
 import { members, officerTerms } from "#/db/schema";
-import { type OfficerPosition, officerRank } from "#/lib/officers";
+import {
+	AGENDA_OFFICER_POSITIONS,
+	type OfficerPosition,
+	officerRank,
+} from "#/lib/officers";
 
 // Accepts the shared `db` client or a drizzle transaction handle (`tx`) so
 // callers can reconcile terms inside the same transaction that edits the member.
@@ -65,13 +69,18 @@ export async function currentOfficersFor(
 	return map.get(membershipId) ?? [];
 }
 
-/** One club's current officers (open terms), with the member's name, ordered
- *  President → Immediate Past President then by name. Backs the printable
- *  agenda's officer grid. A member holding two offices appears once per office. */
+/**
+ * The printable agenda's officer line-up for one club. EVERY agenda officer
+ * position (see `AGENDA_OFFICER_POSITIONS` — Immediate Past President is
+ * excluded) is listed in canonical order; a position with no active officer
+ * comes back with `name: null` so the agenda can show it as "Open". A position
+ * held by two members yields one row per member (names sorted). Inactive members
+ * drop out (their position reads as vacant unless another active member holds it).
+ */
 export async function currentOfficersForClub(
 	clubId: string,
 	client: DbClient = db,
-): Promise<{ position: OfficerPosition; name: string }[]> {
+): Promise<{ position: OfficerPosition; name: string | null }[]> {
 	const rows = await client
 		.select({
 			position: officerTerms.position,
@@ -81,14 +90,29 @@ export async function currentOfficersForClub(
 		.from(officerTerms)
 		.innerJoin(members, eq(members.id, officerTerms.membershipId))
 		.where(and(eq(members.clubId, clubId), isNull(officerTerms.termEnd)));
-	return rows
-		.filter((r) => r.status !== "inactive")
-		.sort(
-			(a, b) =>
-				officerRank(a.position) - officerRank(b.position) ||
-				a.name.localeCompare(b.name),
-		)
-		.map((r) => ({ position: r.position, name: r.name }));
+
+	// Collect the active holders of each agenda office, names sorted.
+	const holders = new Map<OfficerPosition, string[]>();
+	for (const r of rows) {
+		if (r.status === "inactive") continue;
+		const list = holders.get(r.position) ?? [];
+		list.push(r.name);
+		holders.set(r.position, list);
+	}
+
+	// Emit the full line-up in canonical order; vacant offices as name: null.
+	const result: { position: OfficerPosition; name: string | null }[] = [];
+	for (const position of AGENDA_OFFICER_POSITIONS) {
+		const names = (holders.get(position) ?? []).sort((a, b) =>
+			a.localeCompare(b),
+		);
+		if (names.length === 0) {
+			result.push({ position, name: null });
+		} else {
+			for (const name of names) result.push({ position, name });
+		}
+	}
+	return result;
 }
 
 /**
