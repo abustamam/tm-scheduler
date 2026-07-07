@@ -1,9 +1,29 @@
+import { Trophy } from "lucide-react";
 import { useState } from "react";
 import { Badge } from "#/components/ui/badge";
 import { Card, CardContent } from "#/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "#/components/ui/tabs";
 import { cn } from "#/lib/utils";
 import type { PathViewModel } from "#/server/pathways-read-logic";
+
+// Fixed locale (not the runtime default) so SSR and client render the same
+// string for `deliveredAt` — avoids adding to the known hydration warning
+// from locale-dependent date formatting on the member-detail route.
+const WIN_DATE_FORMAT = new Intl.DateTimeFormat("en-US", {
+	month: "short",
+	year: "numeric",
+});
+
+/** Format a win's `deliveredAt`, tolerating either a `Date` or an ISO string
+ * (server-fn boundaries can serialize dates to strings). */
+function formatWinDate(
+	deliveredAt: PathViewModel["wins"][number]["deliveredAt"],
+) {
+	if (!deliveredAt) return null;
+	const d = deliveredAt instanceof Date ? deliveredAt : new Date(deliveredAt);
+	if (Number.isNaN(d.getTime())) return null;
+	return WIN_DATE_FORMAT.format(d);
+}
 
 const RING_SIZE = 100;
 const RING_STROKE = 8;
@@ -113,24 +133,96 @@ function CurrentLevelBar({
 	);
 }
 
-/** One path's ring + chips + current-level (or complete) block. */
+/** Named list of the person's delivered speeches matched to catalog projects. */
+function YourWins({ wins }: { wins: PathViewModel["wins"] }) {
+	if (wins.length === 0) return null;
+	return (
+		<div className="flex flex-col gap-2">
+			<div className="font-medium text-foreground text-sm">Your wins</div>
+			<ul className="flex flex-col gap-2">
+				{wins.map((w, i) => {
+					const dateLabel = formatWinDate(w.deliveredAt);
+					return (
+						<li
+							// biome-ignore lint/suspicious/noArrayIndexKey: wins have no stable id; name+level can repeat across levels in theory
+							key={`${w.level}-${w.name}-${i}`}
+							className="flex items-start gap-2 rounded-md bg-primary/10 px-3 py-2"
+						>
+							<Trophy className="mt-0.5 size-4 shrink-0 text-primary" />
+							<div className="flex min-w-0 flex-col">
+								<div className="flex flex-wrap items-baseline gap-x-2">
+									<span className="font-medium text-foreground text-sm">
+										{w.name}
+									</span>
+									<span className="text-muted-foreground text-xs">
+										Level {w.level}
+									</span>
+								</div>
+								{(w.speechTitle || dateLabel) && (
+									<span className="text-muted-foreground text-xs">
+										{w.speechTitle}
+										{w.speechTitle && dateLabel ? " · " : ""}
+										{dateLabel}
+									</span>
+								)}
+							</div>
+						</li>
+					);
+				})}
+			</ul>
+		</div>
+	);
+}
+
+/** Named current-level catalog projects not yet won — the specific layer
+ * beneath the count bar. Never phrased as a deficiency. */
+function UpNext({ upNext }: { upNext: PathViewModel["upNext"] }) {
+	if (upNext.length === 0) return null;
+	return (
+		<div className="flex flex-col gap-2">
+			<div className="font-medium text-foreground text-sm">Up next</div>
+			<div className="flex flex-wrap gap-1.5">
+				{upNext.map((p) => (
+					<Badge
+						key={p.name}
+						variant={p.isRequired ? "default" : "outline"}
+						className={cn(!p.isRequired && "font-normal text-muted-foreground")}
+					>
+						{p.name}
+						{p.isRequired && <span className="ml-1 opacity-80">Required</span>}
+					</Badge>
+				))}
+			</div>
+			<div className="text-muted-foreground text-xs">
+				Do it in Base Camp — it'll sync here.
+			</div>
+		</div>
+	);
+}
+
+/** One path's ring + chips + current-level (or complete) block, plus the
+ * named wins and up-next layers. */
 function PathBlock({ path }: { path: PathViewModel }) {
 	return (
-		<div className="flex flex-col gap-4 sm:flex-row sm:items-center">
-			<ProgressRing percent={path.ringPercent} />
-			<div className="flex min-w-0 flex-1 flex-col gap-3">
-				<LevelChips levels={path.levels} currentLevel={path.currentLevel} />
-				{path.complete ? (
-					<div className="font-medium text-foreground text-sm">
-						Path complete 🎉
-					</div>
-				) : path.currentLevel !== null ? (
-					<CurrentLevelBar
-						currentLevel={path.currentLevel}
-						levels={path.levels}
-					/>
-				) : null}
+		<div className="flex flex-col gap-4">
+			<div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+				<ProgressRing percent={path.ringPercent} />
+				<div className="flex min-w-0 flex-1 flex-col gap-3">
+					<LevelChips levels={path.levels} currentLevel={path.currentLevel} />
+					{path.complete ? (
+						<div className="font-medium text-foreground text-sm">
+							Path complete 🎉
+						</div>
+					) : path.currentLevel !== null ? (
+						<CurrentLevelBar
+							currentLevel={path.currentLevel}
+							levels={path.levels}
+						/>
+					) : null}
+				</div>
 			</div>
+			<YourWins wins={path.wins} />
+			{!path.complete && <UpNext upNext={path.upNext} />}
 		</div>
 	);
 }

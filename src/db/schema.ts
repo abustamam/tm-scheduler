@@ -368,6 +368,12 @@ export const speeches = pgTable(
 		pathwayPath: text("pathway_path"),
 		projectName: text("project_name"),
 		projectLevel: text("project_level"),
+		// Phase 2 (#101): link a speech to a real catalog project. Nullable — the
+		// free-text pathway_path/project_name/project_level stay as the fallback
+		// display until project_id coverage is high.
+		projectId: uuid("project_id").references(() => pathwaysProjects.id, {
+			onDelete: "set null",
+		}),
 		minMinutes: integer("min_minutes"),
 		maxMinutes: integer("max_minutes"),
 		// The one non-derivable speech state (ADR-0009): hide an abandoned draft
@@ -435,6 +441,29 @@ export const pathLevelProgress = pgTable(
 		uniqueIndex("path_level_progress_enrollment_level_idx").on(
 			t.enrollmentId,
 			t.level,
+		),
+	],
+);
+
+export const pathwaysProjects = pgTable(
+	"pathways_projects",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		pathId: uuid("path_id")
+			.notNull()
+			.references(() => pathwaysPaths.id, { onDelete: "cascade" }),
+		level: integer("level").notNull(),
+		name: text("name").notNull(),
+		// Required vs elective is display emphasis only — Base Camp counts/`approved`
+		// still drive level completion (Phase 1 decision).
+		isRequired: boolean("is_required").notNull().default(false),
+		sortOrder: integer("sort_order").notNull().default(0),
+	},
+	(t) => [
+		uniqueIndex("pathways_projects_path_level_name_idx").on(
+			t.pathId,
+			t.level,
+			t.name,
 		),
 	],
 );
@@ -562,6 +591,10 @@ export const speechesRelations = relations(speeches, ({ one, many }) => ({
 		references: [people.id],
 	}),
 	slots: many(roleSlots),
+	project: one(pathwaysProjects, {
+		fields: [speeches.projectId],
+		references: [pathwaysProjects.id],
+	}),
 }));
 
 export const notificationsRelations = relations(notifications, ({ one }) => ({
@@ -577,6 +610,7 @@ export const notificationsRelations = relations(notifications, ({ one }) => ({
 
 export const pathwaysPathsRelations = relations(pathwaysPaths, ({ many }) => ({
 	enrollments: many(pathEnrollments),
+	projects: many(pathwaysProjects),
 }));
 
 export const pathEnrollmentsRelations = relations(
@@ -601,5 +635,16 @@ export const pathLevelProgressRelations = relations(
 			fields: [pathLevelProgress.enrollmentId],
 			references: [pathEnrollments.id],
 		}),
+	}),
+);
+
+export const pathwaysProjectsRelations = relations(
+	pathwaysProjects,
+	({ one, many }) => ({
+		path: one(pathwaysPaths, {
+			fields: [pathwaysProjects.pathId],
+			references: [pathwaysPaths.id],
+		}),
+		speeches: many(speeches),
 	}),
 );

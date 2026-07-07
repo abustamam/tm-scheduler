@@ -1,11 +1,15 @@
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, inArray, lt, ne } from "drizzle-orm";
 import { db } from "#/db";
 import {
+	meetings,
 	members,
 	pathEnrollments,
 	pathLevelProgress,
 	pathwaysPaths,
+	pathwaysProjects,
 	people,
+	roleSlots,
+	speeches,
 } from "#/db/schema";
 
 export interface SyncedLevel {
@@ -15,6 +19,21 @@ export interface SyncedLevel {
 	approved: boolean;
 }
 
+/** A DELIVERED speech whose project is in this path (Phase 2 / #101). */
+export interface Win {
+	level: number;
+	name: string;
+	speechTitle: string;
+	deliveredAt: Date;
+}
+
+/** A current-level catalog project not yet won. */
+export interface UpNextProject {
+	level: number;
+	name: string;
+	isRequired: boolean;
+}
+
 export interface PathViewModel {
 	courseCode: string;
 	pathName: string;
@@ -22,12 +41,24 @@ export interface PathViewModel {
 	currentLevel: number | null; // lowest not-approved; null when complete
 	complete: boolean;
 	levels: SyncedLevel[];
+	/** This person's delivered speeches whose project is in this path. */
+	wins: Win[];
+	/** Current-level catalog projects not already a win. Empty when complete. */
+	upNext: UpNextProject[];
+}
+
+export interface CatalogProject {
+	level: number;
+	name: string;
+	isRequired: boolean;
 }
 
 interface SyncedPath {
 	courseCode: string;
 	pathName: string;
 	levels: SyncedLevel[];
+	wins: Win[];
+	catalogProjects: CatalogProject[];
 }
 
 /** Pure: shape one synced path into its display model. */
@@ -38,14 +69,100 @@ export function buildPathViewModel(path: SyncedPath): PathViewModel {
 	const ringPercent =
 		total === 0 ? 0 : Math.min(100, Math.round((done / total) * 100));
 	const firstUnapproved = levels.find((l) => !l.approved);
+	const currentLevel = firstUnapproved ? firstUnapproved.level : null;
+	const complete = !firstUnapproved;
+
+	// upNext = current-level catalog projects that aren't already a win (by
+	// name). Empty when the path is complete or there's no current level.
+	const winNames = new Set(path.wins.map((w) => w.name));
+	const upNext =
+		complete || currentLevel === null
+			? []
+			: path.catalogProjects
+					.filter((cp) => cp.level === currentLevel && !winNames.has(cp.name))
+					.map((cp) => ({
+						level: cp.level,
+						name: cp.name,
+						isRequired: cp.isRequired,
+					}));
+
 	return {
 		courseCode: path.courseCode,
 		pathName: path.pathName,
 		ringPercent,
-		currentLevel: firstUnapproved ? firstUnapproved.level : null,
-		complete: !firstUnapproved,
+		currentLevel,
+		complete,
 		levels,
+		wins: path.wins,
+		upNext,
 	};
+}
+
+interface WinRow {
+	personId: string;
+	courseCode: string;
+	level: number;
+	name: string;
+	speechTitle: string;
+	deliveredAt: Date;
+}
+
+/**
+ * DELIVERED speeches (ADR-0009) whose `project_id` resolves to a catalog
+ * project in one of `pathIds`, for one or more people. "Delivered" mirrors
+ * the existing past/upcoming split used elsewhere (season-grid-logic's
+ * `isPast`, members-logic's active→inactive "upcoming roles" release): a
+ * `role_slots` row referencing the speech whose meeting is non-cancelled and
+ * dated in the past.
+ */
+async function fetchDeliveredWins(
+	personIds: string[],
+	pathIds: string[],
+): Promise<WinRow[]> {
+	if (personIds.length === 0 || pathIds.length === 0) return [];
+	return db
+		.select({
+			personId: speeches.personId,
+			courseCode: pathwaysPaths.courseCode,
+			level: pathwaysProjects.level,
+			name: pathwaysProjects.name,
+			speechTitle: speeches.title,
+			deliveredAt: meetings.scheduledAt,
+		})
+		.from(speeches)
+		.innerJoin(pathwaysProjects, eq(pathwaysProjects.id, speeches.projectId))
+		.innerJoin(pathwaysPaths, eq(pathwaysPaths.id, pathwaysProjects.pathId))
+		.innerJoin(roleSlots, eq(roleSlots.speechId, speeches.id))
+		.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+		.where(
+			and(
+				inArray(speeches.personId, personIds),
+				inArray(pathwaysProjects.pathId, pathIds),
+				ne(meetings.status, "cancelled"),
+				lt(meetings.scheduledAt, new Date()),
+			),
+		);
+}
+
+interface CatalogRow {
+	pathId: string;
+	level: number;
+	name: string;
+	isRequired: boolean;
+}
+
+/** The catalog projects (`pathwaysProjects`) for a set of path ids. */
+async function fetchCatalogProjects(pathIds: string[]): Promise<CatalogRow[]> {
+	if (pathIds.length === 0) return [];
+	return db
+		.select({
+			pathId: pathwaysProjects.pathId,
+			level: pathwaysProjects.level,
+			name: pathwaysProjects.name,
+			isRequired: pathwaysProjects.isRequired,
+		})
+		.from(pathwaysProjects)
+		.where(inArray(pathwaysProjects.pathId, pathIds));
 }
 
 /** Read every enrolled path for a person and build view models. */
@@ -54,6 +171,7 @@ export async function pathwaysForPerson(
 ): Promise<PathViewModel[]> {
 	const rows = await db
 		.select({
+			pathId: pathwaysPaths.id,
 			courseCode: pathwaysPaths.courseCode,
 			pathName: pathwaysPaths.name,
 			level: pathLevelProgress.level,
@@ -70,12 +188,22 @@ export async function pathwaysForPerson(
 		.where(eq(pathEnrollments.personId, personId))
 		.orderBy(asc(pathwaysPaths.sortOrder), asc(pathLevelProgress.level));
 
+	if (rows.length === 0) return [];
+
 	const byPath = new Map<string, SyncedPath>();
+	const courseCodeByPathId = new Map<string, string>();
 	for (const r of rows) {
 		let p = byPath.get(r.courseCode);
 		if (!p) {
-			p = { courseCode: r.courseCode, pathName: r.pathName, levels: [] };
+			p = {
+				courseCode: r.courseCode,
+				pathName: r.pathName,
+				levels: [],
+				wins: [],
+				catalogProjects: [],
+			};
 			byPath.set(r.courseCode, p);
+			courseCodeByPathId.set(r.pathId, r.courseCode);
 		}
 		p.levels.push({
 			level: r.level,
@@ -84,6 +212,35 @@ export async function pathwaysForPerson(
 			approved: r.approved,
 		});
 	}
+
+	const pathIds = [...courseCodeByPathId.keys()];
+	const [winRows, catalogRows] = await Promise.all([
+		fetchDeliveredWins([personId], pathIds),
+		fetchCatalogProjects(pathIds),
+	]);
+
+	for (const w of winRows) {
+		const p = byPath.get(w.courseCode);
+		if (!p) continue;
+		p.wins.push({
+			level: w.level,
+			name: w.name,
+			speechTitle: w.speechTitle,
+			deliveredAt: w.deliveredAt,
+		});
+	}
+	for (const c of catalogRows) {
+		const courseCode = courseCodeByPathId.get(c.pathId);
+		if (!courseCode) continue;
+		const p = byPath.get(courseCode);
+		if (!p) continue;
+		p.catalogProjects.push({
+			level: c.level,
+			name: c.name,
+			isRequired: c.isRequired,
+		});
+	}
+
 	return [...byPath.values()].map(buildPathViewModel);
 }
 
@@ -113,11 +270,11 @@ export async function pathwaysForUser(
 }
 
 /**
- * Every enrolled path for every member of a club, in ONE query, grouped by
- * membership id — avoids an N+1 when rendering the roster (mirrors the
- * batching shape of `currentOfficersByMember` in officer-terms-logic.ts).
- * Memberships with no synced paths are simply absent from the map (callers
- * default to an empty array).
+ * Every enrolled path for every member of a club, in ONE query per concern
+ * (levels, wins, catalog), grouped by membership id — avoids an N+1 when
+ * rendering the roster (mirrors the batching shape of `currentOfficersByMember`
+ * in officer-terms-logic.ts). Memberships with no synced paths are simply
+ * absent from the map (callers default to an empty array).
  */
 export async function pathwaysByMember(
 	clubId: string,
@@ -125,6 +282,8 @@ export async function pathwaysByMember(
 	const rows = await db
 		.select({
 			memberId: members.id,
+			personId: members.personId,
+			pathId: pathwaysPaths.id,
 			courseCode: pathwaysPaths.courseCode,
 			pathName: pathwaysPaths.name,
 			level: pathLevelProgress.level,
@@ -142,8 +301,20 @@ export async function pathwaysByMember(
 		.where(eq(members.clubId, clubId))
 		.orderBy(asc(pathwaysPaths.sortOrder), asc(pathLevelProgress.level));
 
+	if (rows.length === 0) return new Map();
+
 	const byMember = new Map<string, Map<string, SyncedPath>>();
+	const personIdByMember = new Map<string, string>();
+	const courseCodeByPathId = new Map<string, string>();
+	const personIds = new Set<string>();
+	const pathIds = new Set<string>();
+
 	for (const r of rows) {
+		personIdByMember.set(r.memberId, r.personId);
+		personIds.add(r.personId);
+		pathIds.add(r.pathId);
+		courseCodeByPathId.set(r.pathId, r.courseCode);
+
 		let byPath = byMember.get(r.memberId);
 		if (!byPath) {
 			byPath = new Map<string, SyncedPath>();
@@ -151,7 +322,13 @@ export async function pathwaysByMember(
 		}
 		let p = byPath.get(r.courseCode);
 		if (!p) {
-			p = { courseCode: r.courseCode, pathName: r.pathName, levels: [] };
+			p = {
+				courseCode: r.courseCode,
+				pathName: r.pathName,
+				levels: [],
+				wins: [],
+				catalogProjects: [],
+			};
 			byPath.set(r.courseCode, p);
 		}
 		p.levels.push({
@@ -162,9 +339,50 @@ export async function pathwaysByMember(
 		});
 	}
 
+	const [winRows, catalogRows] = await Promise.all([
+		fetchDeliveredWins([...personIds], [...pathIds]),
+		fetchCatalogProjects([...pathIds]),
+	]);
+
+	// Group wins by personId+courseCode for O(1) lookup per member/path.
+	const winsByPersonAndPath = new Map<string, Win[]>();
+	for (const w of winRows) {
+		const key = `${w.personId}::${w.courseCode}`;
+		let list = winsByPersonAndPath.get(key);
+		if (!list) {
+			list = [];
+			winsByPersonAndPath.set(key, list);
+		}
+		list.push({
+			level: w.level,
+			name: w.name,
+			speechTitle: w.speechTitle,
+			deliveredAt: w.deliveredAt,
+		});
+	}
+
+	// Group catalog projects by courseCode (shared across every member on that path).
+	const catalogByCourseCode = new Map<string, CatalogProject[]>();
+	for (const c of catalogRows) {
+		const courseCode = courseCodeByPathId.get(c.pathId);
+		if (!courseCode) continue;
+		let list = catalogByCourseCode.get(courseCode);
+		if (!list) {
+			list = [];
+			catalogByCourseCode.set(courseCode, list);
+		}
+		list.push({ level: c.level, name: c.name, isRequired: c.isRequired });
+	}
+
 	const result = new Map<string, PathViewModel[]>();
 	for (const [memberId, byPath] of byMember) {
-		result.set(memberId, [...byPath.values()].map(buildPathViewModel));
+		const personId = personIdByMember.get(memberId);
+		const vms = [...byPath.values()].map((p) => {
+			p.wins = winsByPersonAndPath.get(`${personId}::${p.courseCode}`) ?? [];
+			p.catalogProjects = catalogByCourseCode.get(p.courseCode) ?? [];
+			return buildPathViewModel(p);
+		});
+		result.set(memberId, vms);
 	}
 	return result;
 }

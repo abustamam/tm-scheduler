@@ -7,7 +7,7 @@
  *     bunx vitest run src/server/pathways-read.integration.test.ts
  */
 import { randomUUID } from "node:crypto";
-import { eq, inArray, like } from "drizzle-orm";
+import { and, eq, inArray, like } from "drizzle-orm";
 import {
 	afterAll,
 	afterEach,
@@ -20,11 +20,16 @@ import {
 } from "vitest";
 import {
 	clubs,
+	meetings,
 	members,
 	pathEnrollments,
 	pathLevelProgress,
 	pathwaysPaths,
+	pathwaysProjects,
 	people,
+	roleDefinitions,
+	roleSlots,
+	speeches,
 } from "#/db/schema";
 import { hasTestDb, testDb } from "#/test/db";
 
@@ -37,6 +42,8 @@ const { pathwaysForPerson, pathwaysForMember, pathwaysByMember } = await import(
 // One test club shared by every case in this suite.
 let clubId: string;
 const createdPersonIds: string[] = [];
+const createdMeetingIds: string[] = [];
+const createdRoleDefinitionIds: string[] = [];
 
 // vitest runs test FILES in parallel workers against the same shared tm_test
 // DB, and pathways-sync.integration.test.ts touches the same pathwaysPaths /
@@ -92,14 +99,95 @@ async function enrollInPath(
 	return { pathId: path.id, enrollmentId: enr.id };
 }
 
+/** Seed catalog projects (`pathwaysProjects`) for a path. */
+async function addCatalogProjects(
+	pathId: string,
+	projects: { level: number; name: string; isRequired?: boolean }[],
+) {
+	await testDb.insert(pathwaysProjects).values(
+		projects.map((p) => ({
+			pathId,
+			level: p.level,
+			name: p.name,
+			isRequired: p.isRequired ?? false,
+		})),
+	);
+}
+
+/**
+ * Create a Person-owned speech and attach it to a speaker-role slot on a
+ * meeting at `scheduledAt`. "Delivered" = a slot on a non-cancelled meeting
+ * dated in the past (mirrors `fetchDeliveredWins` / season-grid's `isPast`).
+ */
+async function makeSpeechOnSlot(args: {
+	personId: string;
+	title: string;
+	projectId?: string | null;
+	scheduledAt: Date;
+	meetingStatus?: "scheduled" | "cancelled" | "completed";
+}) {
+	const [meeting] = await testDb
+		.insert(meetings)
+		.values({
+			clubId,
+			scheduledAt: args.scheduledAt,
+			status: args.meetingStatus ?? "scheduled",
+		})
+		.returning({ id: meetings.id });
+	createdMeetingIds.push(meeting.id);
+
+	const [roleDef] = await testDb
+		.insert(roleDefinitions)
+		.values({
+			clubId,
+			name: "Speaker",
+			category: "speaker",
+			isSpeakerRole: true,
+		})
+		.returning({ id: roleDefinitions.id });
+	createdRoleDefinitionIds.push(roleDef.id);
+
+	const [speech] = await testDb
+		.insert(speeches)
+		.values({
+			personId: args.personId,
+			title: args.title,
+			projectId: args.projectId ?? null,
+		})
+		.returning({ id: speeches.id });
+
+	await testDb.insert(roleSlots).values({
+		meetingId: meeting.id,
+		roleDefinitionId: roleDef.id,
+		speechId: speech.id,
+	});
+
+	return { meetingId: meeting.id, speechId: speech.id };
+}
+
 async function localCleanup() {
-	// Scope to this suite's own tagged course codes — pathEnrollments and
-	// pathLevelProgress cascade-delete via FK (onDelete: "cascade"), so
-	// deleting the tagged pathwaysPaths rows is enough.
+	// Meetings cascade-delete their role_slots; role_definitions are
+	// onDelete:"restrict" so must go after the slots referencing them are gone.
+	if (createdMeetingIds.length > 0) {
+		await testDb
+			.delete(meetings)
+			.where(inArray(meetings.id, createdMeetingIds));
+		createdMeetingIds.length = 0;
+	}
+	if (createdRoleDefinitionIds.length > 0) {
+		await testDb
+			.delete(roleDefinitions)
+			.where(inArray(roleDefinitions.id, createdRoleDefinitionIds));
+		createdRoleDefinitionIds.length = 0;
+	}
+	// Scope to this suite's own tagged course codes — pathEnrollments,
+	// pathLevelProgress, and pathwaysProjects cascade-delete via FK
+	// (onDelete: "cascade"), so deleting the tagged pathwaysPaths rows is enough.
 	await testDb
 		.delete(pathwaysPaths)
 		.where(like(pathwaysPaths.courseCode, `%-${SUITE_TAG}`));
 	// `people`/`members` are shared across suites — remove only this suite's rows.
+	// This cascades speeches (personId onDelete:"cascade") too.
 	if (createdPersonIds.length > 0) {
 		await testDb
 			.delete(members)
@@ -201,5 +289,130 @@ describe.skipIf(!hasTestDb)("pathwaysForPerson / pathwaysForMember", () => {
 		expect(paths?.[0].courseCode).toBe(code("8701"));
 		expect(paths?.[0].pathName).toBe("Presentation Mastery");
 		expect(paths).toEqual(await pathwaysForMember(clubId, enrolled.memberId));
+	});
+
+	it("a delivered speech becomes a named win and drops out of upNext", async () => {
+		const { personId } = await makeMember({ email: "wins-basic@example.com" });
+		const { pathId } = await enrollInPath(personId, {
+			courseCode: code("8701"),
+			pathName: "Presentation Mastery",
+		});
+		// currentLevel from enrollInPath is 2 (level 1 approved, level 2 not).
+		await addCatalogProjects(pathId, [
+			{ level: 2, name: "Evaluation and Feedback", isRequired: true },
+			{ level: 2, name: "Understanding Your Communication Style" },
+		]);
+		const [feedbackProject] = await testDb
+			.select({ id: pathwaysProjects.id })
+			.from(pathwaysProjects)
+			.where(
+				and(
+					eq(pathwaysProjects.pathId, pathId),
+					eq(pathwaysProjects.name, "Evaluation and Feedback"),
+				),
+			);
+		const past = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+		await makeSpeechOnSlot({
+			personId,
+			title: "My Feedback Speech",
+			projectId: feedbackProject?.id,
+			scheduledAt: past,
+		});
+
+		const [vm] = await pathwaysForPerson(personId);
+
+		expect(vm.wins).toHaveLength(1);
+		expect(vm.wins[0]).toMatchObject({
+			level: 2,
+			name: "Evaluation and Feedback",
+			speechTitle: "My Feedback Speech",
+		});
+		expect(vm.wins[0].deliveredAt).toBeInstanceOf(Date);
+		expect(vm.upNext).toEqual([
+			{
+				level: 2,
+				name: "Understanding Your Communication Style",
+				isRequired: false,
+			},
+		]);
+	});
+
+	it("a future, unlinked, or cancelled-meeting speech is NOT a win", async () => {
+		const { personId } = await makeMember({
+			email: "wins-negative@example.com",
+		});
+		const { pathId } = await enrollInPath(personId, {
+			courseCode: code("8702"),
+			pathName: "Dynamic Leadership",
+		});
+		await addCatalogProjects(pathId, [
+			{ level: 2, name: "Leading in Your Volunteer Organization" },
+			{ level: 2, name: "Managing Complexity", isRequired: true },
+		]);
+		const [project] = await testDb
+			.select({ id: pathwaysProjects.id })
+			.from(pathwaysProjects)
+			.where(
+				and(
+					eq(pathwaysProjects.pathId, pathId),
+					eq(pathwaysProjects.name, "Leading in Your Volunteer Organization"),
+				),
+			);
+		const [requiredProject] = await testDb
+			.select({ id: pathwaysProjects.id })
+			.from(pathwaysProjects)
+			.where(
+				and(
+					eq(pathwaysProjects.pathId, pathId),
+					eq(pathwaysProjects.name, "Managing Complexity"),
+				),
+			);
+
+		const future = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+		// Scheduled for the future — not yet delivered.
+		await makeSpeechOnSlot({
+			personId,
+			title: "Not Yet Given",
+			projectId: project?.id,
+			scheduledAt: future,
+		});
+		// Past, but not linked to a catalog project — can't resolve to a win.
+		const past = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+		await makeSpeechOnSlot({
+			personId,
+			title: "Delivered But Unlinked",
+			projectId: null,
+			scheduledAt: past,
+		});
+		// Past AND linked to a required catalog project, but the meeting was
+		// cancelled — fetchDeliveredWins filters `meetings.status != "cancelled"`,
+		// so this must not count as a win, and the required project must still
+		// surface in upNext.
+		await makeSpeechOnSlot({
+			personId,
+			title: "Cancelled Meeting Speech",
+			projectId: requiredProject?.id,
+			scheduledAt: past,
+			meetingStatus: "cancelled",
+		});
+
+		const [vm] = await pathwaysForPerson(personId);
+
+		expect(vm.wins).toEqual([]);
+		expect(vm.upNext).toEqual(
+			expect.arrayContaining([
+				{
+					level: 2,
+					name: "Leading in Your Volunteer Organization",
+					isRequired: false,
+				},
+				{
+					level: 2,
+					name: "Managing Complexity",
+					isRequired: true,
+				},
+			]),
+		);
+		expect(vm.upNext).toHaveLength(2);
 	});
 });

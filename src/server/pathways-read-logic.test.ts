@@ -2,7 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("#/db", () => ({ db: {} }));
 
-import { buildPathViewModel, type SyncedLevel } from "./pathways-read-logic";
+import {
+	buildPathViewModel,
+	type CatalogProject,
+	type SyncedLevel,
+	type Win,
+} from "./pathways-read-logic";
 
 const lv = (
 	level: number,
@@ -16,12 +21,27 @@ const lv = (
 	approved,
 });
 
+const win = (level: number, name: string, speechTitle = "A speech"): Win => ({
+	level,
+	name,
+	speechTitle,
+	deliveredAt: new Date("2026-01-01T00:00:00Z"),
+});
+
+const project = (
+	level: number,
+	name: string,
+	isRequired = true,
+): CatalogProject => ({ level, name, isRequired });
+
 describe("buildPathViewModel", () => {
 	it("computes ring %, current level, and per-level chips", () => {
 		const vm = buildPathViewModel({
 			courseCode: "8701",
 			pathName: "Presentation Mastery",
 			levels: [lv(1, 5, 5, true), lv(2, 2, 4, false), lv(3, 0, 4, false)],
+			wins: [],
+			catalogProjects: [],
 		});
 		expect(vm.pathName).toBe("Presentation Mastery");
 		expect(vm.ringPercent).toBe(54); // (5+2+0)/(5+4+4)=7/13→54
@@ -45,6 +65,8 @@ describe("buildPathViewModel", () => {
 				lv(3, 7, 3, true),
 				lv(4, 0, 2, false),
 			],
+			wins: [],
+			catalogProjects: [],
 		});
 		expect(vm.ringPercent).toBe(85); // (5+3+3+0)/(5+3+3+2)=11/13→85
 		expect(vm.currentLevel).toBe(4);
@@ -55,9 +77,61 @@ describe("buildPathViewModel", () => {
 			courseCode: "8701",
 			pathName: "Presentation Mastery",
 			levels: [lv(1, 5, 5, true), lv(2, 4, 4, true)],
+			wins: [],
+			catalogProjects: [],
 		});
 		expect(vm.ringPercent).toBe(100);
 		expect(vm.currentLevel).toBeNull();
 		expect(vm.complete).toBe(true);
+	});
+
+	it("passes wins through untouched", () => {
+		const wins = [win(2, "Evaluation and Feedback"), win(1, "Icebreaker")];
+		const vm = buildPathViewModel({
+			courseCode: "8701",
+			pathName: "Presentation Mastery",
+			levels: [lv(1, 5, 5, true), lv(2, 2, 4, false)],
+			wins,
+			catalogProjects: [],
+		});
+		expect(vm.wins).toEqual(wins);
+	});
+
+	it("upNext = current-level catalog projects minus wins (by name)", () => {
+		const vm = buildPathViewModel({
+			courseCode: "8701",
+			pathName: "Presentation Mastery",
+			levels: [lv(1, 5, 5, true), lv(2, 2, 4, false)],
+			wins: [win(2, "Evaluation and Feedback")],
+			catalogProjects: [
+				project(1, "Icebreaker"),
+				project(2, "Evaluation and Feedback"),
+				project(2, "Understanding Your Communication Style"),
+				project(3, "A Level 3 Project"),
+			],
+		});
+		expect(vm.currentLevel).toBe(2);
+		expect(vm.upNext).toEqual([
+			{
+				level: 2,
+				name: "Understanding Your Communication Style",
+				isRequired: true,
+			},
+		]);
+	});
+
+	it("upNext is empty when the path is complete", () => {
+		const vm = buildPathViewModel({
+			courseCode: "8701",
+			pathName: "Presentation Mastery",
+			levels: [lv(1, 5, 5, true), lv(2, 4, 4, true)],
+			wins: [],
+			catalogProjects: [
+				project(1, "Icebreaker"),
+				project(2, "Evaluation and Feedback"),
+			],
+		});
+		expect(vm.complete).toBe(true);
+		expect(vm.upNext).toEqual([]);
 	});
 });
