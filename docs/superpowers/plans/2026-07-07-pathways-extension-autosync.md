@@ -4,9 +4,9 @@
 
 **Goal:** Let a club officer sync Base Camp Pathways progress into GavelUp with one click from a Chromium extension, instead of hand-copying `/api/bcm/progress` pages out of DevTools.
 
-**Architecture:** A new token-authenticated REST endpoint (`POST /api/pathways/ingest`) reuses the existing `normalizePages` → `parseProgressPages` → `syncClubProgress` pipeline verbatim; the only new server logic is per-club Bearer-token auth. An MV3 (plain-JS, Chromium-only) extension rides the officer's live Base Camp session: a main-world script observes the club GUID, an isolated content script walks all progress pages same-origin, and the service worker POSTs the result to the endpoint.
+**Architecture:** A new token-authenticated REST endpoint (`POST /api/pathways/ingest`) reuses the existing `normalizePages` → `parseProgressPages` → `syncClubProgress` pipeline verbatim; the only new server logic is per-club Bearer-token auth. A **WXT** (TypeScript, Vite-based, Chromium-only) extension rides the officer's live Base Camp session: a main-world content script observes the club GUID, an isolated content script walks all progress pages same-origin, and the background service worker POSTs the result to the endpoint.
 
-**Tech Stack:** TanStack Start `server.handlers` routes, Drizzle/Postgres, Zod, Vitest (integration against `tm_test`), Better-Auth (for the admin-only token-management server fns), plain-JS MV3 extension (no bundler).
+**Tech Stack:** TanStack Start `server.handlers` routes, Drizzle/Postgres, Zod, Vitest (integration against `tm_test`), Better-Auth (admin-only token-management server fns). Extension: **WXT** (Vite + TypeScript), self-contained in `extension/` with its own `package.json` — **not** a monorepo/workspace; the app at the repo root is untouched.
 
 **Spec:** `docs/superpowers/specs/2026-07-06-pathways-extension-autosync-design.md`
 
@@ -31,7 +31,7 @@ This runs in an isolated worktree. A fresh worktree needs deps, env, and a migra
 
 ## File structure
 
-**Server (Phase A):**
+**Server (Phase A) — unchanged app at repo root:**
 - Modify `src/db/schema.ts` — add the `syncTokens` table.
 - Create `drizzle/00NN_*.sql` — generated migration (via `bun run db:generate`).
 - Create `src/server/sync-tokens-logic.ts` — token crypto + CRUD (db logic; client never imports it).
@@ -42,17 +42,16 @@ This runs in an isolated worktree. A fresh worktree needs deps, env, and a migra
 - Modify `src/routes/_authed/admin/pathways-sync.tsx` — link to the extension/token page.
 - Create `src/server/sync-tokens-logic.integration.test.ts` and `src/server/pathways-ingest-logic.integration.test.ts`.
 
-**Extension (Phase B):**
-- Modify `vitest.config.ts` — include `extension/**/*.test.js`.
-- Modify `biome.json` — include `extension/**/*`.
-- Create `extension/manifest.prod.json`, `extension/manifest.dev.json`.
-- Create `extension/lib/basecamp-walk.js` (+ `extension/lib/basecamp-walk.test.js`) — pure page-walk.
-- Create `extension/inject.js` — main-world GUID observer.
-- Create `extension/content.js` — isolated-world walker + message relay.
-- Create `extension/background.js` — service worker POST.
-- Create `extension/popup.html`, `extension/popup.js` — token/GUID UI + Sync button.
-- Create `scripts/build-extension.mjs` — assemble a `dist/extension` for prod or dev.
+**Extension (Phase B) — a self-contained WXT package in `extension/` (its own `package.json`; NOT a workspace, NOT a monorepo):**
+- Create `extension/package.json`, `extension/wxt.config.ts`, `extension/tsconfig.json`, `extension/vitest.config.ts`, `extension/.gitignore`.
+- Create `extension/lib/basecamp-walk.ts` (+ `extension/lib/basecamp-walk.test.ts`) — pure page-walk (normal ES import; WXT/Vite bundles it — no `globalThis` hack).
+- Create `extension/lib/messages.ts` — shared message/response types.
+- Create `extension/entrypoints/inject.content.ts` — main-world GUID observer.
+- Create `extension/entrypoints/basecamp.content.ts` — isolated-world walker + message relay.
+- Create `extension/entrypoints/background.ts` — service-worker POST.
+- Create `extension/entrypoints/popup/index.html` + `extension/entrypoints/popup/main.ts` — token/GUID UI.
 - Create `extension/README.md` — install + manual smoke-test checklist.
+- Root config (`vitest.config.ts`, `biome.json`, root `package.json` build) is **untouched**; the extension self-manages its own test/build.
 
 ---
 
@@ -723,7 +722,7 @@ Expected: `src/routeTree.gen.ts` now includes `/api/pathways/ingest`. Do not han
 
 - [ ] **Step 3: Manually verify end-to-end against the dev server.**
 
-In one terminal: `bun run dev`. In another, mint a token and curl the endpoint. Use a real club id from your dev DB (find one via `docker exec dev-postgres psql -U dev -d tm_scheduler -c "select id from clubs limit 1;"`), and generate a token by calling `createSyncToken` from a quick script or via the UI built in Task 6. Then:
+In one terminal: `bun run dev`. In another, mint a token (via the UI from Task 6, or a quick script) and curl the endpoint. Find a club id via `docker exec dev-postgres psql -U dev -d tm_scheduler -c "select id from clubs limit 1;"`, then:
 
 ```bash
 # 401 — no token
@@ -935,139 +934,127 @@ git commit -m "feat(ui): sync-token admin page + link from manual sync (#107)"
 
 ---
 
-## Task 7: Extension scaffold + test/lint config
+## Task 7: Scaffold the WXT extension package
 
-Set up the `extension/` directory and make its pure logic reachable by `bun run test` and Biome.
+A self-contained WXT project under `extension/` with its **own** `package.json` and `node_modules`. The root app is untouched. WXT is Vite-based, so the bundling that used to be painful "just works": content scripts, the service worker, and the popup are all normal TypeScript modules.
 
 **Files:**
-- Modify: `vitest.config.ts`
-- Modify: `biome.json`
-- Create: `extension/manifest.prod.json`, `extension/manifest.dev.json`
+- Create: `extension/package.json`, `extension/wxt.config.ts`, `extension/tsconfig.json`, `extension/vitest.config.ts`, `extension/.gitignore`
 
-- [ ] **Step 1: Extend the vitest include** in `vitest.config.ts`:
-
-```ts
-	test: {
-		environment: "node",
-		include: ["src/**/*.test.{ts,tsx}", "extension/**/*.test.js"],
-	},
-```
-
-- [ ] **Step 2: Extend Biome's file includes** in `biome.json` so extension sources are linted/formatted. Add these entries to the `files.includes` array (alongside the existing `"src/**/*"`):
-
-```json
-			"extension/**/*.js",
-			"extension/**/*.json",
-			"scripts/**/*.mjs",
-```
-
-- [ ] **Step 3: Write the production manifest** `extension/manifest.prod.json`:
+- [ ] **Step 1: Create `extension/package.json`.**
 
 ```json
 {
-	"manifest_version": 3,
-	"name": "GavelUp Pathways Sync",
-	"version": "0.1.0",
-	"description": "Sync your club's Base Camp Pathways progress into GavelUp in one click.",
-	"permissions": ["storage", "activeTab"],
-	"host_permissions": [
-		"https://basecamp.toastmasters.org/*",
-		"https://app.basecamp.toastmasters.org/*",
-		"https://gavelup.app/*"
-	],
-	"background": { "service_worker": "background.js", "type": "module" },
-	"action": { "default_popup": "popup.html", "default_title": "GavelUp Pathways Sync" },
-	"content_scripts": [
-		{
-			"matches": ["https://app.basecamp.toastmasters.org/*", "https://basecamp.toastmasters.org/*"],
-			"js": ["inject.js"],
-			"world": "MAIN",
-			"run_at": "document_start"
-		},
-		{
-			"matches": ["https://app.basecamp.toastmasters.org/*", "https://basecamp.toastmasters.org/*"],
-			"js": ["lib/basecamp-walk.js", "content.js"],
-			"world": "ISOLATED",
-			"run_at": "document_start"
-		}
-	]
+	"name": "gavelup-pathways-sync-extension",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "wxt",
+		"build": "wxt build",
+		"zip": "wxt zip",
+		"test": "vitest run",
+		"postinstall": "wxt prepare"
+	}
 }
 ```
 
-- [ ] **Step 4: Write the dev manifest** `extension/manifest.dev.json` — identical, but the name flags dev and `host_permissions` also allows localhost:
-
-```json
-{
-	"manifest_version": 3,
-	"name": "GavelUp Pathways Sync (DEV)",
-	"version": "0.1.0",
-	"description": "DEV build — Sync Base Camp Pathways progress into a local/staging GavelUp.",
-	"permissions": ["storage", "activeTab"],
-	"host_permissions": [
-		"https://basecamp.toastmasters.org/*",
-		"https://app.basecamp.toastmasters.org/*",
-		"https://gavelup.app/*",
-		"http://localhost:3000/*"
-	],
-	"background": { "service_worker": "background.js", "type": "module" },
-	"action": { "default_popup": "popup.html", "default_title": "GavelUp Pathways Sync (DEV)" },
-	"content_scripts": [
-		{
-			"matches": ["https://app.basecamp.toastmasters.org/*", "https://basecamp.toastmasters.org/*"],
-			"js": ["inject.js"],
-			"world": "MAIN",
-			"run_at": "document_start"
-		},
-		{
-			"matches": ["https://app.basecamp.toastmasters.org/*", "https://basecamp.toastmasters.org/*"],
-			"js": ["lib/basecamp-walk.js", "content.js"],
-			"world": "ISOLATED",
-			"run_at": "document_start"
-		}
-	]
-}
-```
-
-- [ ] **Step 5: Verify config didn't break the suite.**
-
-Run: `bunx vitest run` and `bun run check`
-Expected: existing tests still pass (no `extension` tests yet); Biome is clean.
-
-- [ ] **Step 6: Commit.**
+- [ ] **Step 2: Install WXT + Vitest into the extension package.** From the repo root:
 
 ```bash
-git add vitest.config.ts biome.json extension/manifest.prod.json extension/manifest.dev.json
-git commit -m "chore(ext): extension scaffold + vitest/biome includes (#107)"
+cd extension && bun add -D wxt vitest typescript && cd ..
+```
+Expected: `wxt`, `vitest`, `typescript` land in `extension/package.json` devDependencies at their current versions, and `wxt prepare` runs (postinstall) generating `extension/.wxt/`. If `wxt prepare` warns that entrypoints are missing, that's fine — they arrive in later tasks.
+
+- [ ] **Step 3: Create `extension/wxt.config.ts`.** Host permissions are derived from the target server URL so the prod build (default) only whitelists `gavelup.app`, and a dev build pointed at localhost whitelists localhost instead — no second manifest file.
+
+```ts
+import { defineConfig } from "wxt";
+
+// Target GavelUp server. Prod (unset) → gavelup.app. Dev → set WXT_GAVELUP_URL,
+// e.g. `WXT_GAVELUP_URL=http://localhost:3000 bun run dev`. The value is also
+// read at runtime via import.meta.env.WXT_GAVELUP_URL (see background.ts).
+const GAVELUP_URL = process.env.WXT_GAVELUP_URL ?? "https://gavelup.app";
+const gavelupOrigin = `${new URL(GAVELUP_URL).origin}/*`;
+const isDev = GAVELUP_URL.startsWith("http://");
+
+export default defineConfig({
+	manifest: {
+		name: isDev ? "GavelUp Pathways Sync (DEV)" : "GavelUp Pathways Sync",
+		description: "Sync your club's Base Camp Pathways progress into GavelUp in one click.",
+		permissions: ["storage", "activeTab"],
+		host_permissions: [
+			"https://basecamp.toastmasters.org/*",
+			"https://app.basecamp.toastmasters.org/*",
+			gavelupOrigin,
+		],
+	},
+});
+```
+
+- [ ] **Step 4: Create `extension/tsconfig.json`.**
+
+```json
+{
+	"extends": "./.wxt/tsconfig.json"
+}
+```
+
+- [ ] **Step 5: Create `extension/vitest.config.ts`.** The pure logic needs no WXT/browser runtime, so plain Vitest suffices.
+
+```ts
+import { defineConfig } from "vitest/config";
+
+export default defineConfig({
+	test: {
+		environment: "node",
+		include: ["lib/**/*.test.ts"],
+	},
+});
+```
+
+- [ ] **Step 6: Create `extension/.gitignore`.**
+
+```gitignore
+node_modules
+.wxt
+.output
+stats.html
+```
+
+- [ ] **Step 7: Verify the scaffold prepares.**
+
+Run: `cd extension && bun run postinstall && cd ..`
+Expected: `wxt prepare` completes and regenerates `extension/.wxt/` with no error.
+
+- [ ] **Step 8: Commit.**
+
+```bash
+git add extension/package.json extension/wxt.config.ts extension/tsconfig.json extension/vitest.config.ts extension/.gitignore extension/bun.lock
+git commit -m "chore(ext): scaffold WXT extension package (#107)"
 ```
 
 ---
 
-## Task 8: Pure page-walk logic (`extension/lib/basecamp-walk.js`)
+## Task 8: Pure page-walk logic (`extension/lib/basecamp-walk.ts`)
 
-The one piece with real logic and edge cases (pagination, all-or-nothing abort) — full TDD. It attaches to `globalThis` so the classic content script can use it without ES-module imports, while Vitest imports the file and reads the global.
+The one piece with real logic and edge cases (pagination, all-or-nothing abort) — full TDD. A normal TS module with an injected `fetch`, imported by the content script and by its own Vitest test.
 
 **Files:**
-- Create: `extension/lib/basecamp-walk.js`
-- Test: `extension/lib/basecamp-walk.test.js`
+- Create: `extension/lib/basecamp-walk.ts`
+- Test: `extension/lib/basecamp-walk.test.ts`
 
 - [ ] **Step 1: Write the failing test.**
 
-```js
+```ts
 /**
  * Unit tests for the pure Base Camp page-walk. Injectable fetch, no browser.
- * Run: bunx vitest run extension/lib/basecamp-walk.test.js
+ * Run: cd extension && bunx vitest run lib/basecamp-walk.test.ts
  */
-import { beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
+import { type BcmPage, walkProgressPages } from "./basecamp-walk";
 
-let walkProgressPages;
-beforeAll(async () => {
-	await import("./basecamp-walk.js"); // side-effect: sets globalThis.GavelUpBasecamp
-	walkProgressPages = globalThis.GavelUpBasecamp.walkProgressPages;
-});
-
-function mockFetch(pages) {
-	// pages: array of { results, next } — `next` is a URL string or null.
-	return async (url) => {
+function mockFetch(pages: BcmPage[]) {
+	return async (url: string) => {
 		const pageParam = new URL(url).searchParams.get("page");
 		const idx = pageParam ? Number(pageParam) - 1 : 0;
 		const page = pages[idx];
@@ -1078,7 +1065,7 @@ function mockFetch(pages) {
 
 describe("walkProgressPages", () => {
 	it("follows `next` until null and returns every page object", async () => {
-		const pages = [
+		const pages: BcmPage[] = [
 			{ results: [{ a: 1 }], next: "https://x/api/bcm/progress/?club=g&page=2" },
 			{ results: [{ a: 2 }], next: "https://x/api/bcm/progress/?club=g&page=3" },
 			{ results: [{ a: 3 }], next: null },
@@ -1093,20 +1080,21 @@ describe("walkProgressPages", () => {
 	});
 
 	it("sends the required Base Camp headers", async () => {
-		let seen;
-		const capture = async (url, opts) => {
+		let seen: { url: string; opts: RequestInit } | undefined;
+		const capture = async (url: string, opts: RequestInit) => {
 			seen = { url, opts };
 			return { ok: true, status: 200, json: async () => ({ results: [], next: null }) };
 		};
 		await walkProgressPages({ fetchImpl: capture, guid: "abc", csrftoken: "tok" });
-		expect(seen.url).toContain("club=abc");
-		expect(seen.opts.headers["X-CSRFToken"]).toBe("tok");
-		expect(seen.opts.headers["X-Platform"]).toBe("pathways");
-		expect(seen.opts.credentials).toBe("include");
+		expect(seen?.url).toContain("club=abc");
+		const headers = seen?.opts.headers as Record<string, string>;
+		expect(headers["X-CSRFToken"]).toBe("tok");
+		expect(headers["X-Platform"]).toBe("pathways");
+		expect(seen?.opts.credentials).toBe("include");
 	});
 
 	it("aborts on a non-ok page and throws with the page number (all-or-nothing)", async () => {
-		const failOnTwo = async (url) => {
+		const failOnTwo = async (url: string) => {
 			const page = Number(new URL(url).searchParams.get("page") ?? "1");
 			if (page === 2) return { ok: false, status: 500, json: async () => ({}) };
 			return {
@@ -1130,263 +1118,343 @@ describe("walkProgressPages", () => {
 
 - [ ] **Step 2: Run it to verify it fails.**
 
-Run: `bunx vitest run extension/lib/basecamp-walk.test.js`
-Expected: FAIL — `globalThis.GavelUpBasecamp` is undefined.
+Run: `cd extension && bunx vitest run lib/basecamp-walk.test.ts && cd ..`
+Expected: FAIL — cannot resolve `./basecamp-walk`.
 
-- [ ] **Step 3: Implement `extension/lib/basecamp-walk.js`.**
+- [ ] **Step 3: Implement `extension/lib/basecamp-walk.ts`.**
 
-```js
+```ts
 /**
  * Pure Base Camp progress page-walk for the GavelUp sync extension (#107).
- * No DOM, no chrome APIs — fetch is injected so it is unit-testable in Node.
- * Attaches to globalThis so the classic (non-module) content script can call it.
+ * No DOM, no browser APIs — fetch is injected so it is unit-testable in Node.
  *
  * All-or-nothing: any page that fails aborts the whole walk (throws). A partial
  * sync would silently leave some members stale, which is worse than a retryable
  * failure — syncClubProgress is idempotent so re-running the whole walk is free.
  */
-(function attach(root) {
-	const BASE = "https://basecamp.toastmasters.org/api/bcm/progress/";
 
-	/**
-	 * @param {object} args
-	 * @param {(url: string, opts: object) => Promise<{ok:boolean,status:number,json:()=>Promise<any>}>} args.fetchImpl
-	 * @param {string} args.guid   Base Camp club GUID
-	 * @param {string} args.csrftoken  value of the csrftoken cookie
-	 * @returns {Promise<Array<{results: any[]}>>} every page object, in order
-	 */
-	async function walkProgressPages({ fetchImpl, guid, csrftoken }) {
-		if (!guid) throw new Error("No Base Camp club selected (missing club GUID).");
-		const headers = {
-			Accept: "application/json",
-			"USE-JWT-COOKIE": "true",
-			"X-Platform": "pathways",
-			"X-CSRFToken": csrftoken || "",
-		};
+const BASE = "https://basecamp.toastmasters.org/api/bcm/progress/";
 
-		const pages = [];
-		let page = 1;
-		// Walk sequentially; stop when a page reports no `next`.
-		// Guard the loop with a hard cap so a malformed `next` can't spin forever.
-		for (let guardCap = 0; guardCap < 1000; guardCap++) {
-			const url = `${BASE}?club=${encodeURIComponent(guid)}&page=${page}`;
-			let res;
-			try {
-				res = await fetchImpl(url, { headers, credentials: "include" });
-			} catch (err) {
-				throw new Error(`Base Camp request failed on page ${page}: ${err.message}`);
-			}
-			if (!res.ok) {
-				throw new Error(`Base Camp returned ${res.status} on page ${page}.`);
-			}
-			const body = await res.json();
-			pages.push(body);
-			if (!body || !body.next) break;
-			page += 1;
+export interface BcmPage {
+	results: unknown[];
+	next: string | null;
+}
+
+/** Minimal shape of a fetch response this walk relies on (real fetch satisfies it). */
+interface FetchLike {
+	(
+		url: string,
+		opts: RequestInit,
+	): Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>;
+}
+
+export async function walkProgressPages(args: {
+	fetchImpl: FetchLike;
+	guid: string;
+	csrftoken: string;
+}): Promise<BcmPage[]> {
+	const { fetchImpl, guid, csrftoken } = args;
+	if (!guid) throw new Error("No Base Camp club selected (missing club GUID).");
+
+	const headers: Record<string, string> = {
+		Accept: "application/json",
+		"USE-JWT-COOKIE": "true",
+		"X-Platform": "pathways",
+		"X-CSRFToken": csrftoken || "",
+	};
+
+	const pages: BcmPage[] = [];
+	let page = 1;
+	// Walk sequentially; stop when a page reports no `next`. A hard cap guards
+	// against a malformed `next` looping forever.
+	for (let guardCap = 0; guardCap < 1000; guardCap++) {
+		const url = `${BASE}?club=${encodeURIComponent(guid)}&page=${page}`;
+		let res: Awaited<ReturnType<FetchLike>>;
+		try {
+			res = await fetchImpl(url, { headers, credentials: "include" });
+		} catch (err) {
+			throw new Error(
+				`Base Camp request failed on page ${page}: ${(err as Error).message}`,
+			);
 		}
-		return pages;
+		if (!res.ok) {
+			throw new Error(`Base Camp returned ${res.status} on page ${page}.`);
+		}
+		const body = (await res.json()) as BcmPage;
+		pages.push(body);
+		if (!body || !body.next) break;
+		page += 1;
 	}
-
-	root.GavelUpBasecamp = { walkProgressPages };
-})(typeof globalThis !== "undefined" ? globalThis : self);
+	return pages;
+}
 ```
 
 - [ ] **Step 4: Run the tests to verify they pass.**
 
-Run: `bunx vitest run extension/lib/basecamp-walk.test.js`
+Run: `cd extension && bunx vitest run lib/basecamp-walk.test.ts && cd ..`
 Expected: PASS (4 tests).
 
 - [ ] **Step 5: Commit.**
 
 ```bash
-git add extension/lib/basecamp-walk.js extension/lib/basecamp-walk.test.js
+git add extension/lib/basecamp-walk.ts extension/lib/basecamp-walk.test.ts
 git commit -m "feat(ext): pure Base Camp page-walk with all-or-nothing abort (#107)"
 ```
 
 ---
 
-## Task 9: GUID observer + content script
+## Task 9: Shared message types + content scripts
 
-The main-world `inject.js` watches the page's own `/api/bcm/progress` calls and reports the `club` GUID; the isolated `content.js` remembers it, and on a Sync request from the popup runs the walk (same-origin, with cookies) and forwards the pages to the service worker. These run in the browser only — verified by the manual smoke test in Task 11.
+The main-world `inject.content.ts` observes the page's own `/api/bcm/progress` calls and reports the `club` GUID; the isolated `basecamp.content.ts` remembers it and, on a Sync request from the popup, runs the walk (same-origin, cookies flow) and returns the pages. `defineContentScript` and `browser` are WXT globals (auto-imported — no import needed). These run in the browser only; verified by the Task 11 smoke test.
 
 **Files:**
-- Create: `extension/inject.js`
-- Create: `extension/content.js`
+- Create: `extension/lib/messages.ts`
+- Create: `extension/entrypoints/inject.content.ts`
+- Create: `extension/entrypoints/basecamp.content.ts`
 
-- [ ] **Step 1: Write `extension/inject.js` (main world).**
+- [ ] **Step 1: Create `extension/lib/messages.ts`.** The extension is a separate package and can't import server types, so the ingest result shape is redeclared minimally here.
 
-```js
-/**
- * Main-world script (#107): the isolated content script can't see the page's own
- * window.fetch/XHR, so this runs in the page world, wraps them, and forwards any
- * observed Base Camp `club` GUID to the content script via window.postMessage.
- * It never blocks or alters the page's requests.
- */
-(function observeClubGuid() {
-	function reportFromUrl(url) {
-		try {
-			const u = new URL(url, location.href);
-			if (u.pathname.includes("/api/bcm/progress")) {
-				const guid = u.searchParams.get("club");
-				if (guid) {
-					window.postMessage({ source: "gavelup-inject", type: "club-guid", guid }, "*");
-				}
-			}
-		} catch {
-			/* ignore non-URL inputs */
-		}
-	}
+```ts
+/** Message contracts between the popup, content script, and background (#107). */
 
-	const origFetch = window.fetch;
-	window.fetch = function (input, init) {
-		const url = typeof input === "string" ? input : input && input.url;
-		if (url) reportFromUrl(url);
-		return origFetch.apply(this, arguments);
-	};
-
-	const origOpen = XMLHttpRequest.prototype.open;
-	XMLHttpRequest.prototype.open = function (method, url) {
-		if (url) reportFromUrl(url);
-		return origOpen.apply(this, arguments);
-	};
-})();
-```
-
-- [ ] **Step 2: Write `extension/content.js` (isolated world).** It shares `document.cookie` with the page (so it can read `csrftoken`) and uses the `GavelUpBasecamp` global from `lib/basecamp-walk.js` (loaded before it per the manifest).
-
-```js
-/**
- * Isolated-world content script (#107). Remembers the club GUID observed by
- * inject.js, and on a "gavelup-sync" request from the popup/service worker runs
- * the same-origin page walk (cookies flow because this runs in the Base Camp
- * origin) and returns the collected pages + the GUID.
- */
-let lastClubGuid = null;
-
-window.addEventListener("message", (event) => {
-	if (event.source !== window) return;
-	const data = event.data;
-	if (data && data.source === "gavelup-inject" && data.type === "club-guid") {
-		lastClubGuid = data.guid;
-	}
-});
-
-function readCookie(name) {
-	const m = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
-	return m ? decodeURIComponent(m[1]) : "";
+/** Minimal mirror of the server's SyncResult (+ optional warning). */
+export interface SyncResultLike {
+	matched: number;
+	pathsUpserted: number;
+	unmatched: { name: string; email: string | null; basecampUserId: string }[];
+	warning?: string;
 }
 
-// The popup asks the active tab to sync via chrome.tabs.sendMessage.
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-	if (!msg || msg.type !== "gavelup-sync") return;
-	const guid = msg.guidOverride || lastClubGuid;
-	(async () => {
-		try {
-			if (!guid) {
-				sendResponse({
-					ok: false,
-					error:
-						"Couldn't detect the Base Camp club. Open your club's Paths Progress page, or enter the club GUID manually.",
-				});
-				return;
+/** popup → content script (active Base Camp tab). */
+export interface SyncRequest {
+	type: "gavelup-sync";
+	guidOverride: string | null;
+}
+export interface SyncResponse {
+	ok: boolean;
+	guid?: string;
+	pages?: unknown[];
+	error?: string;
+}
+
+/** popup → background service worker. */
+export interface IngestRequest {
+	type: "gavelup-ingest";
+	guid: string;
+	pages: unknown[];
+}
+export interface IngestResponse {
+	ok: boolean;
+	result?: SyncResultLike;
+	error?: string;
+}
+```
+
+- [ ] **Step 2: Create `extension/entrypoints/inject.content.ts` (main world).**
+
+```ts
+/**
+ * Main-world content script (#107): the isolated content script can't see the
+ * page's own window.fetch/XHR, so this runs in the page world, wraps them, and
+ * forwards any observed Base Camp `club` GUID to the isolated script via
+ * window.postMessage. It never blocks or alters the page's requests.
+ */
+export default defineContentScript({
+	matches: [
+		"https://app.basecamp.toastmasters.org/*",
+		"https://basecamp.toastmasters.org/*",
+	],
+	world: "MAIN",
+	runAt: "document_start",
+	main() {
+		function reportFromUrl(rawUrl: string) {
+			try {
+				const u = new URL(rawUrl, location.href);
+				if (u.pathname.includes("/api/bcm/progress")) {
+					const guid = u.searchParams.get("club");
+					if (guid) {
+						window.postMessage(
+							{ source: "gavelup-inject", type: "club-guid", guid },
+							"*",
+						);
+					}
+				}
+			} catch {
+				/* ignore non-URL inputs */
 			}
-			const pages = await globalThis.GavelUpBasecamp.walkProgressPages({
-				fetchImpl: (url, opts) => fetch(url, opts),
-				guid,
-				csrftoken: readCookie("csrftoken"),
-			});
-			sendResponse({ ok: true, guid, pages });
-		} catch (err) {
-			sendResponse({ ok: false, error: err.message });
 		}
-	})();
-	return true; // async sendResponse
+
+		const origFetch = window.fetch;
+		window.fetch = function (this: unknown, ...args: Parameters<typeof fetch>) {
+			const input = args[0];
+			const url = typeof input === "string" ? input : (input as Request)?.url;
+			if (url) reportFromUrl(url);
+			return origFetch.apply(this as typeof globalThis, args);
+		};
+
+		const origOpen = XMLHttpRequest.prototype.open;
+		// biome-ignore lint/suspicious/noExplicitAny: XHR.open overload signature
+		XMLHttpRequest.prototype.open = function (this: XMLHttpRequest, ...args: any[]) {
+			const url = args[1];
+			if (typeof url === "string") reportFromUrl(url);
+			return origOpen.apply(this, args as never);
+		};
+	},
 });
 ```
 
-- [ ] **Step 3: Sanity-check the JS lints.**
+- [ ] **Step 3: Create `extension/entrypoints/basecamp.content.ts` (isolated world).** It shares `document.cookie` with the page (reads `csrftoken`) and imports the pure walk directly.
 
-Run: `bun run check`
-Expected: Biome clean (fix any formatting it flags).
+```ts
+import { walkProgressPages } from "../lib/basecamp-walk";
+import type { SyncRequest, SyncResponse } from "../lib/messages";
 
-- [ ] **Step 4: Commit.**
+/**
+ * Isolated-world content script (#107). Remembers the club GUID observed by the
+ * main-world script, and on a "gavelup-sync" request from the popup runs the
+ * same-origin page walk (cookies flow because this runs in the Base Camp origin)
+ * and returns the collected pages + the GUID.
+ */
+export default defineContentScript({
+	matches: [
+		"https://app.basecamp.toastmasters.org/*",
+		"https://basecamp.toastmasters.org/*",
+	],
+	runAt: "document_start",
+	main() {
+		let lastClubGuid: string | null = null;
+
+		window.addEventListener("message", (event) => {
+			if (event.source !== window) return;
+			const data = event.data;
+			if (data && data.source === "gavelup-inject" && data.type === "club-guid") {
+				lastClubGuid = data.guid;
+			}
+		});
+
+		function readCookie(name: string): string {
+			const m = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
+			return m ? decodeURIComponent(m[1]) : "";
+		}
+
+		browser.runtime.onMessage.addListener(
+			(msg: SyncRequest, _sender, sendResponse: (r: SyncResponse) => void) => {
+				if (!msg || msg.type !== "gavelup-sync") return;
+				const guid = msg.guidOverride || lastClubGuid;
+				(async () => {
+					try {
+						if (!guid) {
+							sendResponse({
+								ok: false,
+								error:
+									"Couldn't detect the Base Camp club. Open your club's Paths Progress page, or enter the club GUID manually.",
+							});
+							return;
+						}
+						const pages = await walkProgressPages({
+							fetchImpl: (url, opts) => fetch(url, opts),
+							guid,
+							csrftoken: readCookie("csrftoken"),
+						});
+						sendResponse({ ok: true, guid, pages });
+					} catch (err) {
+						sendResponse({ ok: false, error: (err as Error).message });
+					}
+				})();
+				return true; // async sendResponse
+			},
+		);
+	},
+});
+```
+
+- [ ] **Step 4: Typecheck the extension.**
+
+Run: `cd extension && bun run postinstall && bunx tsc --noEmit -p tsconfig.json && cd ..`
+Expected: `wxt prepare` regenerates auto-import types for `defineContentScript`/`browser`, then `tsc` passes. (If `browser`/`defineContentScript` are flagged as undefined, `wxt prepare` didn't run — re-run it.)
+
+- [ ] **Step 5: Commit.**
 
 ```bash
-git add extension/inject.js extension/content.js
-git commit -m "feat(ext): main-world GUID observer + isolated-world walker (#107)"
+git add extension/lib/messages.ts extension/entrypoints/inject.content.ts extension/entrypoints/basecamp.content.ts
+git commit -m "feat(ext): message types + main/isolated content scripts (#107)"
 ```
 
 ---
 
-## Task 10: Service worker + popup
+## Task 10: Background service worker + popup
 
-The service worker POSTs collected pages to the configured server; the popup stores the token/server URL/optional GUID and drives a sync.
+The background worker POSTs the collected pages to GavelUp with the stored token; the popup stores token/server/GUID and drives a sync.
 
 **Files:**
-- Create: `extension/background.js`
-- Create: `extension/popup.html`
-- Create: `extension/popup.js`
+- Create: `extension/entrypoints/background.ts`
+- Create: `extension/entrypoints/popup/index.html`
+- Create: `extension/entrypoints/popup/main.ts`
 
-- [ ] **Step 1: Write `extension/background.js` (service worker, module).**
+- [ ] **Step 1: Create `extension/entrypoints/background.ts`.**
 
-```js
+```ts
+import type { IngestRequest, IngestResponse } from "../lib/messages";
+
 /**
- * Service worker (#107). Receives collected Base Camp pages from the popup and
- * POSTs them to GavelUp's ingest endpoint with the club Bearer token. Runs in
- * the extension origin, so the cross-origin POST is allowed by host_permissions
- * (no CORS handling needed on the server).
+ * Background service worker (#107). Receives collected Base Camp pages from the
+ * popup and POSTs them to GavelUp's ingest endpoint with the club Bearer token.
+ * Runs in the extension origin, so the cross-origin POST is allowed by
+ * host_permissions (no CORS handling needed on the server).
  */
-const DEFAULT_SERVER = "https://gavelup.app";
+const DEFAULT_SERVER = import.meta.env.WXT_GAVELUP_URL ?? "https://gavelup.app";
 
-async function getConfig() {
-	const { token, serverUrl } = await chrome.storage.local.get(["token", "serverUrl"]);
-	return { token: token || "", serverUrl: serverUrl || DEFAULT_SERVER };
-}
-
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-	if (!msg || msg.type !== "gavelup-ingest") return;
-	(async () => {
-		const { token, serverUrl } = await getConfig();
-		if (!token) {
-			sendResponse({ ok: false, error: "No GavelUp token set. Paste one in the popup." });
-			return;
-		}
-		try {
-			const res = await fetch(`${serverUrl}/api/pathways/ingest`, {
-				method: "POST",
-				headers: {
-					"content-type": "application/json",
-					authorization: `Bearer ${token}`,
-				},
-				body: JSON.stringify({ basecampClubGuid: msg.guid, pages: msg.pages }),
-			});
-			const json = await res.json().catch(() => ({}));
-			if (!res.ok) {
-				sendResponse({ ok: false, error: json.error || `Server returned ${res.status}.` });
-				return;
-			}
-			sendResponse({ ok: true, result: json });
-		} catch (err) {
-			sendResponse({ ok: false, error: `Could not reach GavelUp: ${err.message}` });
-		}
-	})();
-	return true; // async sendResponse
+export default defineBackground(() => {
+	browser.runtime.onMessage.addListener(
+		(msg: IngestRequest, _sender, sendResponse: (r: IngestResponse) => void) => {
+			if (!msg || msg.type !== "gavelup-ingest") return;
+			(async () => {
+				const stored = await browser.storage.local.get(["token", "serverUrl"]);
+				const token = (stored.token as string) || "";
+				const serverUrl = (stored.serverUrl as string) || DEFAULT_SERVER;
+				if (!token) {
+					sendResponse({ ok: false, error: "No GavelUp token set. Paste one in the popup." });
+					return;
+				}
+				try {
+					const res = await fetch(`${serverUrl}/api/pathways/ingest`, {
+						method: "POST",
+						headers: {
+							"content-type": "application/json",
+							authorization: `Bearer ${token}`,
+						},
+						body: JSON.stringify({ basecampClubGuid: msg.guid, pages: msg.pages }),
+					});
+					const json = await res.json().catch(() => ({}));
+					if (!res.ok) {
+						sendResponse({ ok: false, error: json.error || `Server returned ${res.status}.` });
+						return;
+					}
+					sendResponse({ ok: true, result: json });
+				} catch (err) {
+					sendResponse({ ok: false, error: `Could not reach GavelUp: ${(err as Error).message}` });
+				}
+			})();
+			return true; // async sendResponse
+		},
+	);
 });
 ```
 
-- [ ] **Step 2: Write `extension/popup.html`.**
+- [ ] **Step 2: Create `extension/entrypoints/popup/index.html`.**
 
 ```html
 <!doctype html>
-<html>
+<html lang="en">
 	<head>
 		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>GavelUp Pathways Sync</title>
 		<style>
 			body { font: 13px system-ui, sans-serif; width: 320px; padding: 12px; }
 			label { display: block; font-weight: 600; margin: 8px 0 2px; }
 			input { width: 100%; box-sizing: border-box; padding: 6px; }
 			button { margin-top: 10px; padding: 8px 12px; cursor: pointer; }
-			.muted { color: #666; font-size: 12px; }
 			.result { margin-top: 10px; white-space: pre-wrap; }
 			.warn { color: #92400e; }
 			.err { color: #b91c1c; }
@@ -1403,80 +1471,79 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 		<button id="save">Save settings</button>
 		<button id="sync">Sync now</button>
 		<div id="result" class="result"></div>
-		<script src="popup.js"></script>
+		<script type="module" src="./main.ts"></script>
 	</body>
 </html>
 ```
 
-- [ ] **Step 3: Write `extension/popup.js`.**
+- [ ] **Step 3: Create `extension/entrypoints/popup/main.ts`.**
 
-```js
+```ts
+import type { IngestRequest, IngestResponse, SyncRequest, SyncResponse } from "../../lib/messages";
+
 /** Popup controller (#107): persist settings, trigger a sync on the active tab. */
-const $ = (id) => document.getElementById(id);
+const DEFAULT_SERVER = import.meta.env.WXT_GAVELUP_URL ?? "https://gavelup.app";
+const $ = (id: string) => document.getElementById(id) as HTMLInputElement;
 
 async function load() {
-	const { token, serverUrl, guidOverride } = await chrome.storage.local.get([
-		"token",
-		"serverUrl",
-		"guidOverride",
-	]);
-	$("token").value = token || "";
-	$("server").value = serverUrl || "https://gavelup.app";
-	$("guid").value = guidOverride || "";
+	const s = await browser.storage.local.get(["token", "serverUrl", "guidOverride"]);
+	$("token").value = (s.token as string) || "";
+	$("server").value = (s.serverUrl as string) || DEFAULT_SERVER;
+	$("guid").value = (s.guidOverride as string) || "";
 }
 
-$("save").addEventListener("click", async () => {
-	await chrome.storage.local.set({
+async function persist() {
+	await browser.storage.local.set({
 		token: $("token").value.trim(),
-		serverUrl: $("server").value.trim() || "https://gavelup.app",
+		serverUrl: $("server").value.trim() || DEFAULT_SERVER,
 		guidOverride: $("guid").value.trim(),
 	});
-	setResult("Settings saved.");
-});
+}
 
-function setResult(text, cls = "") {
-	const el = $("result");
+function setResult(text: string, cls = "") {
+	const el = document.getElementById("result") as HTMLDivElement;
 	el.textContent = text;
 	el.className = `result ${cls}`;
 }
 
-$("sync").addEventListener("click", async () => {
-	setResult("Syncing…");
-	await chrome.storage.local.set({
-		token: $("token").value.trim(),
-		serverUrl: $("server").value.trim() || "https://gavelup.app",
-		guidOverride: $("guid").value.trim(),
-	});
+document.getElementById("save")?.addEventListener("click", async () => {
+	await persist();
+	setResult("Settings saved.");
+});
 
-	const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-	if (!tab || !/basecamp\.toastmasters\.org/.test(tab.url || "")) {
+document.getElementById("sync")?.addEventListener("click", async () => {
+	setResult("Syncing…");
+	await persist();
+
+	const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+	if (!tab?.id || !/basecamp\.toastmasters\.org/.test(tab.url || "")) {
 		setResult("Open your Base Camp Paths Progress page first.", "err");
 		return;
 	}
 
 	// 1) Ask the content script to walk the Base Camp pages.
-	let walk;
+	let walk: SyncResponse | undefined;
 	try {
-		walk = await chrome.tabs.sendMessage(tab.id, {
+		walk = (await browser.tabs.sendMessage(tab.id, {
 			type: "gavelup-sync",
 			guidOverride: $("guid").value.trim() || null,
-		});
+		} satisfies SyncRequest)) as SyncResponse;
 	} catch {
 		setResult("Couldn't reach the Base Camp page — reload it and retry.", "err");
 		return;
 	}
-	if (!walk || !walk.ok) {
+	if (!walk?.ok) {
 		setResult(walk?.error || "Base Camp sync failed.", "err");
 		return;
 	}
 
-	// 2) Hand the pages to the service worker to POST to GavelUp.
-	const ingest = await chrome.runtime.sendMessage({
+	// 2) Hand the pages to the background worker to POST to GavelUp.
+	const ingest = (await browser.runtime.sendMessage({
 		type: "gavelup-ingest",
 		guid: walk.guid,
 		pages: walk.pages,
-	});
-	if (!ingest || !ingest.ok) {
+	} satisfies IngestRequest)) as IngestResponse;
+	if (!ingest?.ok || !ingest.result) {
 		setResult(ingest?.error || "Upload failed.", "err");
 		return;
 	}
@@ -1489,94 +1556,80 @@ $("sync").addEventListener("click", async () => {
 load();
 ```
 
-- [ ] **Step 4: Lint.**
+- [ ] **Step 4: Typecheck + build the extension.**
 
-Run: `bun run check`
-Expected: Biome clean.
+Run: `cd extension && bun run postinstall && bunx tsc --noEmit && bun run build && cd ..`
+Expected: `wxt build` writes `extension/.output/chrome-mv3/` with a generated `manifest.json` containing the two content scripts, the background worker, and the popup. No type errors.
 
 - [ ] **Step 5: Commit.**
 
 ```bash
-git add extension/background.js extension/popup.html extension/popup.js
-git commit -m "feat(ext): service-worker POST + popup UI (#107)"
+git add extension/entrypoints/background.ts extension/entrypoints/popup/index.html extension/entrypoints/popup/main.ts
+git commit -m "feat(ext): background POST worker + popup UI (#107)"
 ```
 
 ---
 
-## Task 11: Build script + install/smoke-test docs
+## Task 11: Build/zip scripts + install & smoke-test docs
 
-Assemble a loadable extension directory for prod or dev, and document install + a manual smoke test (headless MV3 e2e is out of scope).
+Wire up prod/dev builds and document install + a manual smoke test (headless MV3 e2e is out of scope).
 
 **Files:**
-- Create: `scripts/build-extension.mjs`
 - Create: `extension/README.md`
+- Modify: root `package.json` (optional convenience scripts)
 
-- [ ] **Step 1: Write `scripts/build-extension.mjs`.**
-
-```js
-/**
- * Assemble a loadable MV3 extension into dist/extension-<variant> (#107).
- * Copies the static extension files and the chosen manifest as manifest.json.
- *   node scripts/build-extension.mjs prod   (default)
- *   node scripts/build-extension.mjs dev
- * Load the output via chrome://extensions → Developer mode → Load unpacked.
- */
-import { cpSync, mkdirSync, rmSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-
-const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const variant = process.argv[2] === "dev" ? "dev" : "prod";
-const src = join(root, "extension");
-const out = join(root, "dist", `extension-${variant}`);
-
-rmSync(out, { recursive: true, force: true });
-mkdirSync(out, { recursive: true });
-
-const staticFiles = [
-	"background.js",
-	"content.js",
-	"inject.js",
-	"popup.html",
-	"popup.js",
-	"lib",
-];
-for (const f of staticFiles) {
-	cpSync(join(src, f), join(out, f), { recursive: true });
-}
-// Chosen manifest becomes manifest.json.
-cpSync(join(src, `manifest.${variant}.json`), join(out, "manifest.json"));
-
-console.log(`Built ${variant} extension → ${out}`);
-```
-
-- [ ] **Step 2: Add build scripts to `package.json`.** In the `"scripts"` block add:
+- [ ] **Step 1: Add convenience scripts to the root `package.json`.** In the root `"scripts"` block add (these just delegate into the extension package; the root build/test are otherwise untouched):
 
 ```json
-		"build:ext": "node scripts/build-extension.mjs prod",
-		"build:ext:dev": "node scripts/build-extension.mjs dev",
+		"ext:dev": "cd extension && bun run dev",
+		"ext:build": "cd extension && bun run build",
+		"ext:test": "cd extension && bun run test"
 ```
 
-- [ ] **Step 3: Verify the build runs.**
+- [ ] **Step 2: Confirm prod and dev builds both work.**
 
-Run: `bun run build:ext && ls dist/extension-prod`
-Expected: `manifest.json`, `background.js`, `content.js`, `inject.js`, `popup.html`, `popup.js`, `lib/`.
+Run:
+```bash
+# prod (default host = gavelup.app)
+cd extension && bun run build && cd ..
+# dev (host = localhost:3000, name flips to DEV)
+cd extension && WXT_GAVELUP_URL=http://localhost:3000 bun run build && cd ..
+```
+Expected: both produce `extension/.output/chrome-mv3/`. In the dev build's `manifest.json`, `host_permissions` contains `http://localhost:3000/*` and the name ends with "(DEV)"; in the prod build it contains `https://gavelup.app/*` and no localhost.
 
-- [ ] **Step 4: Write `extension/README.md`** with install + smoke test:
+- [ ] **Step 3: Write `extension/README.md`.**
 
 ```markdown
 # GavelUp Pathways Sync — browser extension (#107)
 
 Pulls your club's Base Camp Pathways progress and pushes it to GavelUp in one click.
+Built with [WXT](https://wxt.dev). Chromium only (Chrome/Edge/Brave).
 
-## Install (Chromium: Chrome/Edge/Brave)
+## Develop
 
-1. Build it: `bun run build:ext` (or `bun run build:ext:dev` for a local server).
-2. Open `chrome://extensions`, enable **Developer mode**.
-3. **Load unpacked** → select `dist/extension-prod` (or `dist/extension-dev`).
-4. Click the extension, paste your GavelUp **sync token** (Admin → Base Camp sync tokens),
-   set the server URL (prod defaults to https://gavelup.app; dev: http://localhost:3000),
-   and **Save settings**.
+```bash
+cd extension
+bun install
+bun run dev            # launches a dev browser with HMR, points at gavelup.app
+# point at a local server instead:
+WXT_GAVELUP_URL=http://localhost:3000 bun run dev
+```
+
+## Build a shareable extension
+
+```bash
+cd extension
+bun run build                                   # prod → .output/chrome-mv3 (gavelup.app)
+WXT_GAVELUP_URL=http://localhost:3000 bun run build   # dev build (localhost)
+bun run zip                                      # distributable zip
+```
+
+## Install (officers)
+
+1. Get the built `chrome-mv3` folder (or unzip the release).
+2. Open `chrome://extensions`, enable **Developer mode**, **Load unpacked**, pick the folder.
+3. Click the extension, paste your GavelUp **sync token** (GavelUp → Admin → Base Camp sync
+   tokens), leave Server URL as `https://gavelup.app`, **Save settings**.
 
 ## Use
 
@@ -1595,14 +1648,15 @@ Pulls your club's Base Camp Pathways progress and pushes it to GavelUp in one cl
 - [ ] Confirm on the GavelUp Pathways screens that progress updated.
 ```
 
-- [ ] **Step 5: Final full check + commit.**
+- [ ] **Step 4: Final checks + commit.**
 
-Run: `bun run check && bunx vitest run && bunx tsc --noEmit`
-Expected: all green (integration suites need `TEST_DATABASE_URL` to actually run; otherwise they skip).
+Run (server side, from root): `bun run check && bunx tsc --noEmit`
+Run (extension side): `cd extension && bunx tsc --noEmit && bun run test && cd ..`
+Expected: all green (server integration suites need `TEST_DATABASE_URL` to actually run; otherwise they skip; the extension's Vitest runs the page-walk unit tests).
 
 ```bash
-git add scripts/build-extension.mjs extension/README.md package.json
-git commit -m "chore(ext): prod/dev build script + install & smoke-test docs (#107)"
+git add package.json extension/README.md
+git commit -m "chore(ext): prod/dev build convenience scripts + install & smoke-test docs (#107)"
 ```
 
 ---
@@ -1612,14 +1666,16 @@ git commit -m "chore(ext): prod/dev build script + install & smoke-test docs (#1
 - **New REST endpoint** (spec §Server contract) → Tasks 4–5. ✅
 - **Per-club Bearer token = club identity, hashed, revocable, lastUsedAt** (spec §sync_tokens) → Tasks 1–3. ✅
 - **Reuse normalizePages/parseProgressPages/syncClubProgress verbatim** → Task 4 imports them unchanged. ✅
-- **Split content-script (same-origin fetch) / service-worker (POST), no CORS** → Tasks 9–10; manifest worlds in Task 7. ✅
-- **Observed club GUID + manual fallback** → Task 9 (`inject.js` observer, `guidOverride` fallback in Task 10 popup). ✅
+- **Split content-script (same-origin fetch) / background-worker (POST), no CORS** → Tasks 9–10; content-script worlds set in Task 9. ✅
+- **Observed club GUID + manual fallback** → Task 9 (`inject.content.ts` observer, `guidOverride` fallback in the Task 10 popup). ✅
 - **Wrong-club soft-warn, store GUID on first sync** → Task 4 `recordTokenUse` + test. ✅
 - **Explicit-revoke tokens** → Task 2 `revokeSyncToken`, no expiry. ✅
-- **Two builds (locked prod / permissive dev)** → Tasks 7 + 11. ✅
+- **Two builds (locked prod / permissive dev)** → derived from `WXT_GAVELUP_URL` in Task 7 `wxt.config.ts`; both exercised in Task 11. ✅
 - **All-or-nothing page walk** → Task 8 abort test + implementation. ✅
 - **Admin-only token management UI** → Task 6. ✅
 - **Manual smoke test (MV3 e2e out of scope)** → Task 11 README checklist. ✅
+- **Self-contained extension, no monorepo/workspace** → Task 7 (own package.json); root app untouched. ✅
 - **Unattended sync explicitly deferred to #117** → not in this plan, by design. ✅
 
-Type consistency spot-checks: `ingestForToken(rawToken, body)` and `IngestError.status` are used identically in Task 4 and Task 5. `SyncTokenSummary` fields returned in Task 2 (`id/name/createdBy/basecampClubGuid/createdAt/lastUsedAt/revokedAt`) match the columns read in the Task 6 UI. `generateSyncToken/getSyncTokens/revokeSyncTokenFn` names match between Task 3 and Task 6. `globalThis.GavelUpBasecamp.walkProgressPages({ fetchImpl, guid, csrftoken })` signature matches between Task 8 (def), its test, and Task 9 (caller).
+Type consistency spot-checks: `ingestForToken(rawToken, body)` and `IngestError.status` are used identically in Task 4 and Task 5. `SyncTokenSummary` fields returned in Task 2 (`id/name/createdBy/basecampClubGuid/createdAt/lastUsedAt/revokedAt`) match the columns read in the Task 6 UI. `generateSyncToken/getSyncTokens/revokeSyncTokenFn` names match between Task 3 and Task 6. `walkProgressPages({ fetchImpl, guid, csrftoken })` and the exported `BcmPage` type match between Task 8 (def + test) and Task 9 (`basecamp.content.ts` caller). The `SyncRequest/SyncResponse/IngestRequest/IngestResponse` message types in Task 9 (`messages.ts`) are used consistently by the content script (Task 9), background worker (Task 10), and popup (Task 10).
+```

@@ -26,7 +26,13 @@ documented fallback.
 2. **Per-club API token** is the auth mechanism, and the token *is* the club identity: the server
    derives `clubId` from the token, so auth and club-mapping collapse into one credential.
 3. **Unpacked MV3 extension, Chromium only, in this repo** (`extension/`). No Chrome Web Store,
-   no Firefox for v1. Officers install via "Load unpacked" / a hosted release.
+   no Firefox for v1. Officers install via "Load unpacked" / a hosted release. Built with
+   **WXT** (Vite + TypeScript) as a **self-contained package** with its own `package.json` —
+   **not** a Bun workspace / monorepo (the value of one here is marginal — the only shared
+   surface is a tiny payload type — and a full conversion would churn the deploy pipeline
+   ADR-0007 pins down). WXT bundles the content scripts / service worker / popup as normal TS
+   modules, so the awkward no-bundler workarounds (a `globalThis` global to dodge ES-module
+   content scripts, a hand-rolled twin-manifest build) are gone.
 4. **Two contexts, split by origin.** A content script on the Base Camp tab does the Base Camp
    fetch (same-origin → cookies flow, and it reads the `csrftoken` cookie); the service worker
    does the POST to us (host_permissions → no CORS needed on our endpoint).
@@ -38,9 +44,10 @@ documented fallback.
    already prevents cross-club corruption (mismatched rows land as `unmatched`).
 7. **Tokens are standalone capabilities**, revoked explicitly — not tied to the minting admin's
    live role. Forced expiry is a documented future option, not built now.
-8. **Two builds:** the released extension is pinned to `https://gavelup.app` (single host
-   permission); a separate unpacked dev build also whitelists `http://localhost:3000` and exposes
-   a "server URL" field. Prod officers get the locked-down build.
+8. **Two builds, one config:** host permissions are **derived from `WXT_GAVELUP_URL`** in
+   `wxt.config.ts` — unset → the released build is pinned to `https://gavelup.app`; set to
+   `http://localhost:3000` → a dev build whitelists localhost instead (and the name flips to
+   "…(DEV)"). The popup also exposes a "server URL" field. Prod officers get the locked-down build.
 9. **All-or-nothing page walk.** Any Base Camp page error aborts the sync and POSTs nothing; the
    popup says "Sync failed on page N — retry." `syncClubProgress` is idempotent, so retrying the
    whole walk is free. A silent partial sync (some members stale, looks successful) is the failure
