@@ -93,7 +93,9 @@ describe.skipIf(!hasTestDb)("reconcileCatalog", () => {
 	});
 
 	it("stamps matched rows, creates required, reports electives, upserts levels", async () => {
-		const res = await reconcileCatalog([detail()]);
+		// Same detail twice = the batch shape (one ParsedDetail per member×path).
+		// The elective must be reported ONCE, not once per member — proves dedup.
+		const res = await reconcileCatalog([detail(), detail()]);
 
 		// Stamped the existing Ice Breaker row IN PLACE (same id → FK preserved).
 		const ice = await testDb
@@ -126,6 +128,8 @@ describe.skipIf(!hasTestDb)("reconcileCatalog", () => {
 				),
 			);
 		expect(socialRows).toHaveLength(0);
+		// Deduped across the two identical details → one entry, not two.
+		expect(res.unmatchedElectives).toHaveLength(1);
 		expect(res.unmatchedElectives).toEqual([
 			{ courseCode: CODE, name: "Deliver Social Speeches", level: 3 },
 		]);
@@ -146,6 +150,9 @@ describe.skipIf(!hasTestDb)("reconcileCatalog", () => {
 		expect(res.projectIdByBlockId.has("b-social")).toBe(false);
 	});
 
+	// NOTE: depends on the row stamped by the first test (shared beforeAll seed +
+	// b-ice stamped above) — relies on file execution order. If these are ever
+	// reordered or parallelized, seed the stamped state here explicitly first.
 	it("re-stamping by block id is idempotent and updates a renamed project", async () => {
 		const renamed = detail({
 			projects: [

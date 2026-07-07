@@ -56,6 +56,10 @@ export async function reconcileCatalog(
 		unmatchedElectives: [],
 		projectIdByBlockId: new Map(),
 	};
+	// Dedupe electives across the batch: one ParsedDetail per member×path means
+	// the same missing elective appears once per member (e.g. 30x on a 30-member
+	// path). Keyed by courseCode|level|name → one reported entry per unique slot.
+	const electivesByKey = new Map<string, UnmatchedElective>();
 	const pathIds = await resolvePathIds(details);
 
 	for (const detail of details) {
@@ -78,16 +82,21 @@ export async function reconcileCatalog(
 		}
 
 		for (const proj of detail.projects) {
-			// 1) Match by durable block id (handles renames → same row).
+			// 1) Match by durable block id (handles renames + level moves → same row).
 			const [byBlock] = await db
-				.select({ id: pathwaysProjects.id, name: pathwaysProjects.name })
+				.select({
+					id: pathwaysProjects.id,
+					name: pathwaysProjects.name,
+					level: pathwaysProjects.level,
+				})
 				.from(pathwaysProjects)
 				.where(eq(pathwaysProjects.bcmBlockId, proj.blockId));
 			if (byBlock) {
-				if (byBlock.name !== proj.name) {
+				// Keep name + level current if Base Camp renamed or re-leveled it.
+				if (byBlock.name !== proj.name || byBlock.level !== proj.level) {
 					await db
 						.update(pathwaysProjects)
-						.set({ name: proj.name })
+						.set({ name: proj.name, level: proj.level })
 						.where(eq(pathwaysProjects.id, byBlock.id));
 				}
 				res.projectIdByBlockId.set(proj.blockId, byBlock.id);
@@ -130,14 +139,18 @@ export async function reconcileCatalog(
 				res.projectsDerived += 1;
 				res.projectIdByBlockId.set(proj.blockId, created.id);
 			} else {
-				res.unmatchedElectives.push({
-					courseCode: detail.courseCode,
-					name: proj.name,
-					level: proj.level,
-				});
+				const key = `${detail.courseCode}|${proj.level}|${proj.name}`;
+				if (!electivesByKey.has(key)) {
+					electivesByKey.set(key, {
+						courseCode: detail.courseCode,
+						name: proj.name,
+						level: proj.level,
+					});
+				}
 			}
 		}
 	}
 
+	res.unmatchedElectives = [...electivesByKey.values()];
 	return res;
 }
