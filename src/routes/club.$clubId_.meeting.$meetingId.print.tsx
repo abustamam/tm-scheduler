@@ -6,7 +6,7 @@ import {
 	type AgendaRoleEntry,
 	MeetingAgendaPrint,
 } from "#/components/agenda/meeting-agenda-print";
-import { buildRoleCounts, slotLabel } from "#/lib/agenda";
+import { buildRosterEntries } from "#/lib/agenda";
 import { expandRunSheet } from "#/lib/agenda-runsheet";
 import { buildTimeline } from "#/lib/agenda-timing";
 import { resolveClubOrRedirect } from "#/lib/club-route";
@@ -100,12 +100,10 @@ function PrintAgenda() {
 		.format(startsAt)
 		.replace(",", " ·");
 
-	// Meeting-roles roster: one row per slot, numbered, with assignee or open.
-	const roleCounts = buildRoleCounts(slots);
-	const roles: AgendaRoleEntry[] = slots.map((s) => ({
-		label: slotLabel(s, roleCounts),
-		name: s.assigneeName ?? null,
-	}));
+	// Meeting-roles roster: numbered, with assignee or open. Speakers are
+	// interleaved with their paired evaluators so each pair shares a row in the
+	// two-column print layout.
+	const roles: AgendaRoleEntry[] = buildRosterEntries(slots);
 
 	// Plain-language role explainers (first description seen per role name).
 	const seen = new Set<string>();

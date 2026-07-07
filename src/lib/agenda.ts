@@ -35,6 +35,92 @@ export function slotLabel(
 		: slot.roleName;
 }
 
+/** One row of the "Meeting Roles" roster (name null → open/unfilled). */
+export type RosterEntry = { label: string; name: string | null };
+
+/** Minimal slot shape needed to order the meeting-roles roster. */
+export type RosterSlot = {
+	roleName: string;
+	slotIndex: number;
+	category: "leadership" | "speaker" | "evaluator" | "functionary";
+	isSpeakerRole: boolean;
+	assigneeName: string | null;
+};
+
+/**
+ * Order the meeting-roles roster so each speaker sits beside its paired
+ * evaluator in the two-column print layout. Speakers and the paired evaluator
+ * role are interleaved [Speaker 1, Evaluator 1, Speaker 2, Evaluator 2, …] in
+ * place of the speaker block; every other role keeps its original position.
+ *
+ * The paired evaluator is the evaluator-category role with the most slots (tie
+ * → first seen) — "Evaluator" (3), not "General Evaluator" (1), matching the
+ * `pickSpeakerAndEvaluatorRoles` heuristic. When there is no speaker or no such
+ * evaluator, the roster is returned in its original order.
+ *
+ * Assumes the roles before the speaker block fill whole rows (the standard
+ * template has two leadership roles), so the interleaved pairs start in the
+ * left column and each speaker/evaluator pair shares a row.
+ */
+export function buildRosterEntries<T extends RosterSlot>(
+	slots: T[],
+): RosterEntry[] {
+	const roleCounts = buildRoleCounts(slots);
+	const entry = (s: T): RosterEntry => ({
+		label: slotLabel(s, roleCounts),
+		name: s.assigneeName ?? null,
+	});
+
+	// Paired evaluator = evaluator-category role with the most slots.
+	const evalCounts = new Map<string, number>();
+	for (const s of slots) {
+		if (s.category === "evaluator") {
+			evalCounts.set(s.roleName, (evalCounts.get(s.roleName) ?? 0) + 1);
+		}
+	}
+	let pairedEvalName: string | null = null;
+	let bestCount = 0;
+	for (const [name, count] of evalCounts) {
+		if (count > bestCount) {
+			bestCount = count;
+			pairedEvalName = name;
+		}
+	}
+
+	const speakers = slots.filter((s) => s.isSpeakerRole);
+	const evaluators = pairedEvalName
+		? slots.filter((s) => s.roleName === pairedEvalName)
+		: [];
+	if (speakers.length === 0 || evaluators.length === 0) {
+		return slots.map(entry);
+	}
+
+	const interleaved: RosterEntry[] = [];
+	const n = Math.max(speakers.length, evaluators.length);
+	for (let i = 0; i < n; i++) {
+		const sp = speakers[i];
+		const ev = evaluators[i];
+		if (sp) interleaved.push(entry(sp));
+		if (ev) interleaved.push(entry(ev));
+	}
+
+	// Emit the interleaved block where the speaker block starts; drop the
+	// speaker and paired-evaluator slots from their original spots.
+	const result: RosterEntry[] = [];
+	let emitted = false;
+	for (const s of slots) {
+		if (s.isSpeakerRole || s.roleName === pairedEvalName) {
+			if (!emitted) {
+				result.push(...interleaved);
+				emitted = true;
+			}
+			continue;
+		}
+		result.push(entry(s));
+	}
+	return result;
+}
+
 type EvaluatorRow = {
 	id: string;
 	evaluatesSlotId: string | null;
