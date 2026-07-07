@@ -22,9 +22,11 @@ import { Route as AuthedDashboardRouteImport } from './routes/_authed/dashboard'
 import { Route as AuthedAgendaRouteImport } from './routes/_authed/agenda'
 import { Route as AuthedActivityRouteImport } from './routes/_authed/activity'
 import { Route as ClubClubIdIndexRouteImport } from './routes/club.$clubId.index'
+import { Route as ApiPathwaysIngestRouteImport } from './routes/api/pathways/ingest'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as AuthedMembersIdRouteImport } from './routes/_authed/members.$id'
 import { Route as AuthedMeetingsIdRouteImport } from './routes/_authed/meetings.$id'
+import { Route as AuthedAdminSyncTokensRouteImport } from './routes/_authed/admin/sync-tokens'
 import { Route as AuthedAdminRolesRouteImport } from './routes/_authed/admin/roles'
 import { Route as AuthedAdminPathwaysSyncRouteImport } from './routes/_authed/admin/pathways-sync'
 import { Route as AuthedAdminClubSettingsRouteImport } from './routes/_authed/admin/club-settings'
@@ -96,6 +98,11 @@ const ClubClubIdIndexRoute = ClubClubIdIndexRouteImport.update({
   path: '/',
   getParentRoute: () => ClubClubIdRoute,
 } as any)
+const ApiPathwaysIngestRoute = ApiPathwaysIngestRouteImport.update({
+  id: '/api/pathways/ingest',
+  path: '/api/pathways/ingest',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   id: '/api/auth/$',
   path: '/api/auth/$',
@@ -109,6 +116,11 @@ const AuthedMembersIdRoute = AuthedMembersIdRouteImport.update({
 const AuthedMeetingsIdRoute = AuthedMeetingsIdRouteImport.update({
   id: '/meetings/$id',
   path: '/meetings/$id',
+  getParentRoute: () => AuthedRoute,
+} as any)
+const AuthedAdminSyncTokensRoute = AuthedAdminSyncTokensRouteImport.update({
+  id: '/admin/sync-tokens',
+  path: '/admin/sync-tokens',
   getParentRoute: () => AuthedRoute,
 } as any)
 const AuthedAdminRolesRoute = AuthedAdminRolesRouteImport.update({
@@ -159,9 +171,11 @@ export interface FileRoutesByFullPath {
   '/admin/club-settings': typeof AuthedAdminClubSettingsRoute
   '/admin/pathways-sync': typeof AuthedAdminPathwaysSyncRoute
   '/admin/roles': typeof AuthedAdminRolesRoute
+  '/admin/sync-tokens': typeof AuthedAdminSyncTokensRoute
   '/meetings/$id': typeof AuthedMeetingsIdRoute
   '/members/$id': typeof AuthedMembersIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/pathways/ingest': typeof ApiPathwaysIngestRoute
   '/club/$clubId/': typeof ClubClubIdIndexRoute
   '/admin/meetings/new': typeof AuthedAdminMeetingsNewRoute
   '/club/$clubId/meeting/$meetingId': typeof ClubClubIdMeetingMeetingIdRoute
@@ -181,9 +195,11 @@ export interface FileRoutesByTo {
   '/admin/club-settings': typeof AuthedAdminClubSettingsRoute
   '/admin/pathways-sync': typeof AuthedAdminPathwaysSyncRoute
   '/admin/roles': typeof AuthedAdminRolesRoute
+  '/admin/sync-tokens': typeof AuthedAdminSyncTokensRoute
   '/meetings/$id': typeof AuthedMeetingsIdRoute
   '/members/$id': typeof AuthedMembersIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/pathways/ingest': typeof ApiPathwaysIngestRoute
   '/club/$clubId': typeof ClubClubIdIndexRoute
   '/admin/meetings/new': typeof AuthedAdminMeetingsNewRoute
   '/club/$clubId/meeting/$meetingId': typeof ClubClubIdMeetingMeetingIdRoute
@@ -206,9 +222,11 @@ export interface FileRoutesById {
   '/_authed/admin/club-settings': typeof AuthedAdminClubSettingsRoute
   '/_authed/admin/pathways-sync': typeof AuthedAdminPathwaysSyncRoute
   '/_authed/admin/roles': typeof AuthedAdminRolesRoute
+  '/_authed/admin/sync-tokens': typeof AuthedAdminSyncTokensRoute
   '/_authed/meetings/$id': typeof AuthedMeetingsIdRoute
   '/_authed/members/$id': typeof AuthedMembersIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/pathways/ingest': typeof ApiPathwaysIngestRoute
   '/club/$clubId/': typeof ClubClubIdIndexRoute
   '/_authed/admin/meetings/new': typeof AuthedAdminMeetingsNewRoute
   '/club/$clubId/meeting/$meetingId': typeof ClubClubIdMeetingMeetingIdRoute
@@ -231,9 +249,11 @@ export interface FileRouteTypes {
     | '/admin/club-settings'
     | '/admin/pathways-sync'
     | '/admin/roles'
+    | '/admin/sync-tokens'
     | '/meetings/$id'
     | '/members/$id'
     | '/api/auth/$'
+    | '/api/pathways/ingest'
     | '/club/$clubId/'
     | '/admin/meetings/new'
     | '/club/$clubId/meeting/$meetingId'
@@ -253,9 +273,11 @@ export interface FileRouteTypes {
     | '/admin/club-settings'
     | '/admin/pathways-sync'
     | '/admin/roles'
+    | '/admin/sync-tokens'
     | '/meetings/$id'
     | '/members/$id'
     | '/api/auth/$'
+    | '/api/pathways/ingest'
     | '/club/$clubId'
     | '/admin/meetings/new'
     | '/club/$clubId/meeting/$meetingId'
@@ -277,9 +299,11 @@ export interface FileRouteTypes {
     | '/_authed/admin/club-settings'
     | '/_authed/admin/pathways-sync'
     | '/_authed/admin/roles'
+    | '/_authed/admin/sync-tokens'
     | '/_authed/meetings/$id'
     | '/_authed/members/$id'
     | '/api/auth/$'
+    | '/api/pathways/ingest'
     | '/club/$clubId/'
     | '/_authed/admin/meetings/new'
     | '/club/$clubId/meeting/$meetingId'
@@ -293,6 +317,7 @@ export interface RootRouteChildren {
   ApiHealthRoute: typeof ApiHealthRoute
   ClubClubIdRoute: typeof ClubClubIdRouteWithChildren
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
+  ApiPathwaysIngestRoute: typeof ApiPathwaysIngestRoute
   ClubClubIdMeetingMeetingIdPrintRoute: typeof ClubClubIdMeetingMeetingIdPrintRoute
 }
 
@@ -389,6 +414,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ClubClubIdIndexRouteImport
       parentRoute: typeof ClubClubIdRoute
     }
+    '/api/pathways/ingest': {
+      id: '/api/pathways/ingest'
+      path: '/api/pathways/ingest'
+      fullPath: '/api/pathways/ingest'
+      preLoaderRoute: typeof ApiPathwaysIngestRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/auth/$': {
       id: '/api/auth/$'
       path: '/api/auth/$'
@@ -408,6 +440,13 @@ declare module '@tanstack/react-router' {
       path: '/meetings/$id'
       fullPath: '/meetings/$id'
       preLoaderRoute: typeof AuthedMeetingsIdRouteImport
+      parentRoute: typeof AuthedRoute
+    }
+    '/_authed/admin/sync-tokens': {
+      id: '/_authed/admin/sync-tokens'
+      path: '/admin/sync-tokens'
+      fullPath: '/admin/sync-tokens'
+      preLoaderRoute: typeof AuthedAdminSyncTokensRouteImport
       parentRoute: typeof AuthedRoute
     }
     '/_authed/admin/roles': {
@@ -466,6 +505,7 @@ interface AuthedRouteChildren {
   AuthedAdminClubSettingsRoute: typeof AuthedAdminClubSettingsRoute
   AuthedAdminPathwaysSyncRoute: typeof AuthedAdminPathwaysSyncRoute
   AuthedAdminRolesRoute: typeof AuthedAdminRolesRoute
+  AuthedAdminSyncTokensRoute: typeof AuthedAdminSyncTokensRoute
   AuthedMeetingsIdRoute: typeof AuthedMeetingsIdRoute
   AuthedMembersIdRoute: typeof AuthedMembersIdRoute
   AuthedAdminMeetingsNewRoute: typeof AuthedAdminMeetingsNewRoute
@@ -482,6 +522,7 @@ const AuthedRouteChildren: AuthedRouteChildren = {
   AuthedAdminClubSettingsRoute: AuthedAdminClubSettingsRoute,
   AuthedAdminPathwaysSyncRoute: AuthedAdminPathwaysSyncRoute,
   AuthedAdminRolesRoute: AuthedAdminRolesRoute,
+  AuthedAdminSyncTokensRoute: AuthedAdminSyncTokensRoute,
   AuthedMeetingsIdRoute: AuthedMeetingsIdRoute,
   AuthedMembersIdRoute: AuthedMembersIdRoute,
   AuthedAdminMeetingsNewRoute: AuthedAdminMeetingsNewRoute,
@@ -511,6 +552,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiHealthRoute: ApiHealthRoute,
   ClubClubIdRoute: ClubClubIdRouteWithChildren,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
+  ApiPathwaysIngestRoute: ApiPathwaysIngestRoute,
   ClubClubIdMeetingMeetingIdPrintRoute: ClubClubIdMeetingMeetingIdPrintRoute,
 }
 export const routeTree = rootRouteImport

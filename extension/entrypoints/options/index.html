@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>GavelUp Pathways Sync — Settings</title>
+		<style>
+			body { font: 14px system-ui, sans-serif; max-width: 480px; margin: 24px auto; padding: 0 16px; }
+			label { display: block; font-weight: 600; margin: 14px 0 4px; }
+			input { width: 100%; box-sizing: border-box; padding: 8px; }
+			button { margin-top: 16px; padding: 8px 14px; cursor: pointer; }
+			.muted { color: #666; font-size: 13px; }
+			.saved { color: #065f46; margin-left: 10px; }
+		</style>
+	</head>
+	<body>
+		<h2>GavelUp Pathways Sync</h2>
+		<p class="muted">
+			Set these once. Then sync from the <strong>Sync to GavelUp</strong> widget on your
+			club's Base Camp Paths Progress page.
+		</p>
+		<label for="token">GavelUp token</label>
+		<input id="token" type="password" placeholder="gup_…" />
+		<label for="server">Server URL</label>
+		<input id="server" type="text" placeholder="https://gavelup.app" />
+		<div>
+			<button id="save">Save</button>
+			<span id="saved" class="saved" hidden>Saved.</span>
+		</div>
+		<script type="module" src="./main.ts"></script>
+	</body>
+</html>

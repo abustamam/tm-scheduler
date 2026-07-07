@@ -469,6 +469,33 @@ export const pathwaysProjects = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// Sync tokens — per-club Bearer credentials for the Pathways auto-sync browser
+// extension (#107). The token IS the club identity: the ingest endpoint derives
+// clubId from the token, so no session is involved. Raw token is shown once at
+// creation and stored only as a SHA-256 hash. Revoked explicitly (revokedAt).
+// `basecampClubGuid` is captured on first sync and drives a soft wrong-club warning.
+// ---------------------------------------------------------------------------
+export const syncTokens = pgTable(
+	"sync_tokens",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		clubId: uuid("club_id")
+			.notNull()
+			.references(() => clubs.id, { onDelete: "cascade" }),
+		tokenHash: text("token_hash").notNull().unique(),
+		name: text("name"),
+		basecampClubGuid: text("basecamp_club_guid"),
+		createdBy: text("created_by")
+			.notNull()
+			.references(() => user.id),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+		lastUsedAt: timestamp("last_used_at"),
+		revokedAt: timestamp("revoked_at"),
+	},
+	(t) => [index("sync_tokens_club_idx").on(t.clubId)],
+);
+
+// ---------------------------------------------------------------------------
 // Activity log
 // ---------------------------------------------------------------------------
 

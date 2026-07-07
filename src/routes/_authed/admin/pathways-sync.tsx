@@ -75,8 +75,12 @@ function PathwaysSync() {
 					</li>
 				</ol>
 				<p className="text-xs text-muted-foreground">
-					A browser extension to automate this copy step is planned — for now
-					this manual paste keeps it simple.
+					Prefer one click? Generate a token on the{" "}
+					<a className="underline" href="/admin/sync-tokens">
+						Base Camp sync tokens
+					</a>{" "}
+					page and install the sync browser extension. This manual paste stays
+					as a fallback.
 				</p>
 			</div>
 
