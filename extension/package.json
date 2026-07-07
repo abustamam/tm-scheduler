@@ -2,6 +2,7 @@
 	"name": "gavelup-pathways-sync-extension",
 	"private": true,
 	"type": "module",
+	"version": "0.1.0",
 	"scripts": {
 		"dev": "wxt",
 		"build": "wxt build",

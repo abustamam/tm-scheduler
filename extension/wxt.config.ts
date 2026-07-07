@@ -8,14 +8,30 @@ const gavelupOrigin = `${new URL(GAVELUP_URL).origin}/*`;
 const isDev = GAVELUP_URL.startsWith("http://");
 
 export default defineConfig({
-	manifest: {
+	manifest: ({ browser }) => ({
 		name: isDev ? "GavelUp Pathways Sync (DEV)" : "GavelUp Pathways Sync",
-		description: "Sync your club's Base Camp Pathways progress into GavelUp in one click.",
+		description:
+			"Sync your club's Base Camp Pathways progress into GavelUp in one click.",
 		permissions: ["storage", "activeTab"],
 		host_permissions: [
 			"https://basecamp.toastmasters.org/*",
 			"https://app.basecamp.toastmasters.org/*",
 			gavelupOrigin,
 		],
-	},
+		// Firefox-only. A stable add-on id (required to sign/install a persistent
+		// .xpi), a floor that guarantees world:"MAIN" content-script support
+		// (Firefox 128+), and an honest "collects no data" declaration. Gated on the
+		// firefox target so the chrome-mv3 manifest is byte-for-byte unaffected.
+		...(browser === "firefox"
+			? {
+					browser_specific_settings: {
+						gecko: {
+							id: "pathways-sync@gavelup.app",
+							strict_min_version: "128.0",
+							data_collection_permissions: { required: ["none"] },
+						},
+					},
+				}
+			: {}),
+	}),
 });
