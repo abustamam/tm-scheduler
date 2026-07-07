@@ -337,7 +337,7 @@ describe.skipIf(!hasTestDb)("pathwaysForPerson / pathwaysForMember", () => {
 		]);
 	});
 
-	it("a future or unlinked speech is NOT a win", async () => {
+	it("a future, unlinked, or cancelled-meeting speech is NOT a win", async () => {
 		const { personId } = await makeMember({
 			email: "wins-negative@example.com",
 		});
@@ -347,11 +347,26 @@ describe.skipIf(!hasTestDb)("pathwaysForPerson / pathwaysForMember", () => {
 		});
 		await addCatalogProjects(pathId, [
 			{ level: 2, name: "Leading in Your Volunteer Organization" },
+			{ level: 2, name: "Managing Complexity", isRequired: true },
 		]);
 		const [project] = await testDb
 			.select({ id: pathwaysProjects.id })
 			.from(pathwaysProjects)
-			.where(eq(pathwaysProjects.pathId, pathId));
+			.where(
+				and(
+					eq(pathwaysProjects.pathId, pathId),
+					eq(pathwaysProjects.name, "Leading in Your Volunteer Organization"),
+				),
+			);
+		const [requiredProject] = await testDb
+			.select({ id: pathwaysProjects.id })
+			.from(pathwaysProjects)
+			.where(
+				and(
+					eq(pathwaysProjects.pathId, pathId),
+					eq(pathwaysProjects.name, "Managing Complexity"),
+				),
+			);
 
 		const future = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 		// Scheduled for the future — not yet delivered.
@@ -369,16 +384,35 @@ describe.skipIf(!hasTestDb)("pathwaysForPerson / pathwaysForMember", () => {
 			projectId: null,
 			scheduledAt: past,
 		});
+		// Past AND linked to a required catalog project, but the meeting was
+		// cancelled — fetchDeliveredWins filters `meetings.status != "cancelled"`,
+		// so this must not count as a win, and the required project must still
+		// surface in upNext.
+		await makeSpeechOnSlot({
+			personId,
+			title: "Cancelled Meeting Speech",
+			projectId: requiredProject?.id,
+			scheduledAt: past,
+			meetingStatus: "cancelled",
+		});
 
 		const [vm] = await pathwaysForPerson(personId);
 
 		expect(vm.wins).toEqual([]);
-		expect(vm.upNext).toEqual([
-			{
-				level: 2,
-				name: "Leading in Your Volunteer Organization",
-				isRequired: false,
-			},
-		]);
+		expect(vm.upNext).toEqual(
+			expect.arrayContaining([
+				{
+					level: 2,
+					name: "Leading in Your Volunteer Organization",
+					isRequired: false,
+				},
+				{
+					level: 2,
+					name: "Managing Complexity",
+					isRequired: true,
+				},
+			]),
+		);
+		expect(vm.upNext).toHaveLength(2);
 	});
 });

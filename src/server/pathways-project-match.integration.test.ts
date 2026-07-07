@@ -29,8 +29,20 @@ const { resolveSpeechProjects } = await import(
 
 // Suite-unique courseCode (globally unique column) keeps this suite's path +
 // projects disjoint from sibling suites sharing these tables.
-const CODE = `TEST-PM-${randomUUID().slice(0, 8)}`;
-const PATH_NAME = "Presentation Mastery";
+const SUITE_TAG = randomUUID().slice(0, 8);
+const CODE = `TEST-PM-${SUITE_TAG}`;
+// resolveSpeechProjects() matches a speech's free-text pathwayPath against
+// pathwaysPaths by NAME, globally (case-insensitively) — it requires exactly
+// one match. pathwaysPaths.name is not unique, and pathways-sync.integration
+// and pathways-read.integration both insert a path literally named
+// "Presentation Mastery" too. Under vitest's parallel file workers, when one
+// of those rows coexists with this suite's during the lookup, it returns 2+
+// matches and this suite's resolvable speech is (wrongly, but correctly per
+// the ambiguity rule) marked unresolved instead of resolved — a real flake
+// driven by shared DB state, not just an unscoped assertion query. A
+// suite-unique path name keeps that global by-name lookup exact-one
+// regardless of what sibling suites are doing concurrently.
+const PATH_NAME = `Presentation Mastery ${SUITE_TAG}`;
 
 let pathId: string;
 let level3ProjectId: string;
