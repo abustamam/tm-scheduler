@@ -1,4 +1,4 @@
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 import {
 	type AnyPgColumn,
 	boolean,
@@ -457,6 +457,10 @@ export const pathwaysProjects = pgTable(
 		// Required vs elective is display emphasis only — Base Camp counts/`approved`
 		// still drive level completion (Phase 1 decision).
 		isRequired: boolean("is_required").notNull().default(false),
+		// Base Camp block id (from /detail blocks). Stamped onto a catalog row when a
+		// member's /detail reveals it; null for pool rows no member has chosen yet.
+		// The durable join key for bcm_project_progress. Unique-when-present.
+		bcmBlockId: text("bcm_block_id"),
 		sortOrder: integer("sort_order").notNull().default(0),
 	},
 	(t) => [
@@ -464,6 +468,52 @@ export const pathwaysProjects = pgTable(
 			t.pathId,
 			t.level,
 			t.name,
+		),
+		uniqueIndex("pathways_projects_bcm_block_id_idx")
+			.on(t.bcmBlockId)
+			.where(sql`${t.bcmBlockId} is not null`),
+	],
+);
+
+// Per-(path, level) chapter facts from /detail (spec 2026-07-07). Currently just
+// `min_req_electives` — how many electives a level requires — which drives the
+// precise "up next" elective count. One row per (path, level).
+export const pathwaysPathLevels = pgTable(
+	"pathways_path_levels",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		pathId: uuid("path_id")
+			.notNull()
+			.references(() => pathwaysPaths.id, { onDelete: "cascade" }),
+		level: integer("level").notNull(),
+		minReqElectives: integer("min_req_electives").notNull().default(0),
+	},
+	(t) => [
+		uniqueIndex("pathways_path_levels_path_level_idx").on(t.pathId, t.level),
+	],
+);
+
+// Read-only mirror of Base Camp /detail per-project completion + speech (spec
+// 2026-07-07). One row per (enrollment, project). Re-derived every sync via
+// replace-per-enrollment; enrollments absent from a sync keep last-known-good.
+export const bcmProjectProgress = pgTable(
+	"bcm_project_progress",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		enrollmentId: uuid("enrollment_id")
+			.notNull()
+			.references(() => pathEnrollments.id, { onDelete: "cascade" }),
+		projectId: uuid("project_id")
+			.notNull()
+			.references(() => pathwaysProjects.id, { onDelete: "cascade" }),
+		complete: boolean("complete").notNull(),
+		speechTitle: text("speech_title"),
+		speechDate: timestamp("speech_date", { withTimezone: true }),
+	},
+	(t) => [
+		uniqueIndex("bcm_project_progress_enrollment_project_idx").on(
+			t.enrollmentId,
+			t.projectId,
 		),
 	],
 );
@@ -673,5 +723,29 @@ export const pathwaysProjectsRelations = relations(
 			references: [pathwaysPaths.id],
 		}),
 		speeches: many(speeches),
+	}),
+);
+
+export const bcmProjectProgressRelations = relations(
+	bcmProjectProgress,
+	({ one }) => ({
+		enrollment: one(pathEnrollments, {
+			fields: [bcmProjectProgress.enrollmentId],
+			references: [pathEnrollments.id],
+		}),
+		project: one(pathwaysProjects, {
+			fields: [bcmProjectProgress.projectId],
+			references: [pathwaysProjects.id],
+		}),
+	}),
+);
+
+export const pathwaysPathLevelsRelations = relations(
+	pathwaysPathLevels,
+	({ one }) => ({
+		path: one(pathwaysPaths, {
+			fields: [pathwaysPathLevels.pathId],
+			references: [pathwaysPaths.id],
+		}),
 	}),
 );
