@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>GavelUp Pathways Sync</title>
+		<style>
+			body { font: 13px system-ui, sans-serif; width: 320px; padding: 12px; }
+			label { display: block; font-weight: 600; margin: 8px 0 2px; }
+			input { width: 100%; box-sizing: border-box; padding: 6px; }
+			button { margin-top: 10px; padding: 8px 12px; cursor: pointer; }
+			.result { margin-top: 10px; white-space: pre-wrap; }
+			.warn { color: #92400e; }
+			.err { color: #b91c1c; }
+		</style>
+	</head>
+	<body>
+		<h3>GavelUp Pathways Sync</h3>
+		<label for="token">GavelUp token</label>
+		<input id="token" type="password" placeholder="gup_…" />
+		<label for="server">Server URL</label>
+		<input id="server" type="text" placeholder="https://gavelup.app" />
+		<label for="guid">Club GUID (optional — auto-detected)</label>
+		<input id="guid" type="text" placeholder="detected from Base Camp page" />
+		<button id="save">Save settings</button>
+		<button id="sync">Sync now</button>
+		<div id="result" class="result"></div>
+		<script type="module" src="./main.ts"></script>
+	</body>
+</html>
