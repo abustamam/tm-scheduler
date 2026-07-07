@@ -27,6 +27,17 @@ export const OFFICER_POSITIONS = [
 
 export type OfficerPosition = (typeof OFFICER_POSITIONS)[number];
 
+/**
+ * The officer positions shown on the printable agenda's officer grid, in
+ * canonical order. Excludes Immediate Past President — that office is tracked in
+ * the roster but deliberately left off the printed agenda (it's a courtesy title,
+ * not a running-the-meeting role). Every remaining position is always listed on
+ * the agenda; vacancies show as "Open".
+ */
+export const AGENDA_OFFICER_POSITIONS = OFFICER_POSITIONS.filter(
+	(p) => p !== "immediate_past_president",
+);
+
 /** Human-readable labels for each officer position. */
 export const OFFICER_POSITION_LABELS: Record<OfficerPosition, string> = {
 	president: "President",

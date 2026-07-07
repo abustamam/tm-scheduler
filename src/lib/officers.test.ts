@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	AGENDA_OFFICER_POSITIONS,
 	OFFICER_POSITIONS,
 	officerPositionLabel,
 	officerRank,
@@ -73,6 +74,19 @@ describe("officerRank / labels", () => {
 			(a, b) => officerRank(a) - officerRank(b),
 		);
 		expect(sorted).toEqual([...OFFICER_POSITIONS]);
+	});
+
+	it("agenda line-up keeps canonical order but drops Immediate Past President", () => {
+		expect(AGENDA_OFFICER_POSITIONS).toEqual([
+			"president",
+			"vp_education",
+			"vp_membership",
+			"vp_public_relations",
+			"secretary",
+			"treasurer",
+			"sergeant_at_arms",
+		]);
+		expect(AGENDA_OFFICER_POSITIONS).not.toContain("immediate_past_president");
 	});
 
 	it("gives a human label for each position", () => {
