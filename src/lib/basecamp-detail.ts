@@ -12,7 +12,7 @@ import { extractCourseCode } from "./basecamp-progress";
 // --- Raw payload shape (only the slice the parser reads) ---
 
 interface RawBlockNode {
-	type: string; // "course" | "chapter" | "sequential"
+	type: "course" | "chapter" | "sequential";
 	display_name: string;
 	block_id?: string;
 	complete?: boolean;
@@ -80,6 +80,8 @@ export function parseDetailPayload(payload: BcmDetailPayload): ParsedDetail {
 			});
 		}
 	}
+
+	levels.sort((a, b) => a.level - b.level);
 
 	return {
 		basecampUserId: payload.basecampUserId,

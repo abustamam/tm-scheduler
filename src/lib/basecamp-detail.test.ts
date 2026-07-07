@@ -48,6 +48,14 @@ const payload: BcmDetailPayload = {
 						block_lib_type: "elective",
 					},
 					{
+						// Real project, but `complete` is omitted entirely — exercises
+						// the missing→false coercion branch.
+						block_id: "b-pending",
+						type: "sequential",
+						display_name: "Manage Projects Successfully",
+						block_lib_type: "imported",
+					},
+					{
 						block_id: "",
 						type: "sequential",
 						display_name: "2nd Elective",
@@ -76,6 +84,7 @@ describe("parseDetailPayload", () => {
 			"b-ice",
 			"b-purpose",
 			"b-social",
+			"b-pending",
 		]);
 
 		const ice = parsed.projects.find((p) => p.blockId === "b-ice");
@@ -101,6 +110,15 @@ describe("parseDetailPayload", () => {
 
 	it("treats a missing `complete` as false", () => {
 		const parsed = parseDetailPayload(payload);
+		// "b-pending" is a real project whose `complete` field is omitted.
+		const pending = parsed.projects.find((p) => p.blockId === "b-pending");
+		expect(pending).toMatchObject({
+			name: "Manage Projects Successfully",
+			level: 3,
+			isRequired: true,
+			complete: false,
+			speechTitle: null,
+		});
 		for (const p of parsed.projects) expect(typeof p.complete).toBe("boolean");
 	});
 });
