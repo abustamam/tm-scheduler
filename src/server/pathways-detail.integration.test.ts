@@ -8,19 +8,27 @@ import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
+	bcmProjectProgress,
+	pathEnrollments,
 	pathwaysPathLevels,
 	pathwaysPaths,
 	pathwaysProjects,
+	people,
 } from "#/db/schema";
 import type { ParsedDetail } from "#/lib/basecamp-detail";
-import { hasTestDb, testDb } from "#/test/db";
-
-// (Task 4 extends these imports: add `people, pathEnrollments, bcmProjectProgress`
-//  from #/db/schema and `cleanup, seedClub, type SeededClub` from #/test/db.)
+import {
+	cleanup,
+	hasTestDb,
+	type SeededClub,
+	seedClub,
+	testDb,
+} from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
-const { reconcileCatalog } = await import("./pathways-detail-logic");
+const { reconcileCatalog, syncClubDetail } = await import(
+	"./pathways-detail-logic"
+);
 
 const CODE = `8700-${randomUUID().slice(0, 8)}`;
 
@@ -176,5 +184,118 @@ describe.skipIf(!hasTestDb)("reconcileCatalog", () => {
 		// Same row (matched by block id), name updated, no duplicate created.
 		expect(ice[0].name).toBe("Ice Breaker (Revised)");
 		expect(res.projectsStamped).toBe(0); // already stamped
+	});
+});
+
+describe.skipIf(!hasTestDb)("syncClubDetail", () => {
+	const D_CODE = `8700-${randomUUID().slice(0, 8)}`;
+	const BC_ID = `77${randomUUID().slice(0, 6)}`;
+	let seed: SeededClub;
+	let clubId: string;
+	let enrollmentId: string;
+	let iceId: string;
+
+	beforeAll(async () => {
+		seed = await seedClub();
+		clubId = seed.clubId;
+		// Give the seeded roster person a Base Camp id (the detail join key).
+		await testDb
+			.update(people)
+			.set({ basecampUserId: BC_ID })
+			.where(eq(people.id, seed.personId));
+		const [path] = await testDb
+			.insert(pathwaysPaths)
+			.values({ courseCode: D_CODE, name: "Motivational Strategies" })
+			.returning({ id: pathwaysPaths.id });
+		const [proj] = await testDb
+			.insert(pathwaysProjects)
+			.values({
+				pathId: path.id,
+				level: 1,
+				name: "Ice Breaker",
+				isRequired: true,
+				bcmBlockId: `ice-${D_CODE}`,
+			})
+			.returning({ id: pathwaysProjects.id });
+		iceId = proj.id;
+		const [enr] = await testDb
+			.insert(pathEnrollments)
+			.values({ personId: seed.personId, pathId: path.id })
+			.returning({ id: pathEnrollments.id });
+		enrollmentId = enr.id;
+	});
+
+	afterAll(async () => {
+		// people delete cascades enrollments → bcm_project_progress; path delete
+		// cascades projects + path_levels; cleanup removes the club + users.
+		await testDb
+			.delete(pathwaysPaths)
+			.where(eq(pathwaysPaths.courseCode, D_CODE));
+		await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
+	});
+
+	function detailFor(over: Partial<ParsedDetail> = {}): ParsedDetail {
+		return {
+			basecampUserId: BC_ID,
+			courseCode: D_CODE,
+			levels: [{ level: 1, minReqElectives: 0 }],
+			projects: [
+				{
+					blockId: `ice-${D_CODE}`,
+					name: "Ice Breaker",
+					level: 1,
+					isRequired: true,
+					complete: true,
+					speechTitle: "First Speech",
+					speechDate: new Date("2025-01-05T08:00:00Z"),
+				},
+			],
+			...over,
+		};
+	}
+
+	it("writes a mirror row for a matched enrollment", async () => {
+		const res = await syncClubDetail(clubId, [detailFor()]);
+		expect(res.membersWithDetail).toBe(1);
+		const rows = await testDb
+			.select()
+			.from(bcmProjectProgress)
+			.where(eq(bcmProjectProgress.enrollmentId, enrollmentId));
+		expect(rows).toHaveLength(1);
+		expect(rows[0]).toMatchObject({
+			projectId: iceId,
+			complete: true,
+			speechTitle: "First Speech",
+		});
+	});
+
+	it("replace-per-enrollment removes rows dropped from the latest detail", async () => {
+		// Second sync with NO projects → the previous Ice Breaker row is removed.
+		await syncClubDetail(clubId, [detailFor({ projects: [] })]);
+		const rows = await testDb
+			.select()
+			.from(bcmProjectProgress)
+			.where(eq(bcmProjectProgress.enrollmentId, enrollmentId));
+		expect(rows).toHaveLength(0);
+	});
+
+	it("leaves an enrollment absent from the batch untouched (last-known-good)", async () => {
+		await syncClubDetail(clubId, [detailFor()]); // re-populate
+		// Empty batch: nothing to sync → existing rows survive.
+		const res = await syncClubDetail(clubId, []);
+		expect(res.membersWithDetail).toBe(0);
+		const rows = await testDb
+			.select()
+			.from(bcmProjectProgress)
+			.where(eq(bcmProjectProgress.enrollmentId, enrollmentId));
+		expect(rows).toHaveLength(1);
+	});
+
+	it("reports an unmatched detail member (no enrollment)", async () => {
+		const res = await syncClubDetail(clubId, [
+			detailFor({ basecampUserId: "does-not-exist" }),
+		]);
+		expect(res.unmatchedMembers).toBe(1);
+		expect(res.membersWithDetail).toBe(0);
 	});
 });

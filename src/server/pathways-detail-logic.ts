@@ -12,9 +12,13 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "#/db";
 import {
+	bcmProjectProgress,
+	members,
+	pathEnrollments,
 	pathwaysPathLevels,
 	pathwaysPaths,
 	pathwaysProjects,
+	people,
 } from "#/db/schema";
 import type { ParsedDetail } from "#/lib/basecamp-detail";
 
@@ -153,4 +157,87 @@ export async function reconcileCatalog(
 
 	res.unmatchedElectives = [...electivesByKey.values()];
 	return res;
+}
+
+export interface DetailSyncResult {
+	membersWithDetail: number;
+	unmatchedMembers: number;
+	projectsStamped: number;
+	projectsDerived: number;
+	unmatchedElectives: UnmatchedElective[];
+}
+
+/**
+ * Resolve (numeric basecampUserId + courseCode) → enrollmentId, scoped to the
+ * club's roster (same club-scoping rule as summary sync — a person must have a
+ * `members` row for this club). Returns null when no enrollment matches.
+ */
+async function resolveEnrollmentId(
+	clubId: string,
+	basecampUserId: string,
+	courseCode: string,
+): Promise<string | null> {
+	const rows = await db
+		.selectDistinct({ id: pathEnrollments.id })
+		.from(pathEnrollments)
+		.innerJoin(people, eq(people.id, pathEnrollments.personId))
+		.innerJoin(
+			members,
+			and(eq(members.personId, people.id), eq(members.clubId, clubId)),
+		)
+		.innerJoin(pathwaysPaths, eq(pathwaysPaths.id, pathEnrollments.pathId))
+		.where(
+			and(
+				eq(people.basecampUserId, basecampUserId),
+				eq(pathwaysPaths.courseCode, courseCode),
+			),
+		);
+	return rows.length === 1 ? rows[0].id : null;
+}
+
+export async function syncClubDetail(
+	clubId: string,
+	details: ParsedDetail[],
+): Promise<DetailSyncResult> {
+	const recon = await reconcileCatalog(details);
+	const result: DetailSyncResult = {
+		membersWithDetail: 0,
+		unmatchedMembers: 0,
+		projectsStamped: recon.projectsStamped,
+		projectsDerived: recon.projectsDerived,
+		unmatchedElectives: recon.unmatchedElectives,
+	};
+
+	for (const detail of details) {
+		const enrollmentId = await resolveEnrollmentId(
+			clubId,
+			detail.basecampUserId,
+			detail.courseCode,
+		);
+		if (!enrollmentId) {
+			result.unmatchedMembers += 1;
+			continue;
+		}
+
+		// Replace-per-enrollment: clear then insert this enrollment's rows. Only
+		// enrollments present in `details` are touched (last-known-good otherwise).
+		await db
+			.delete(bcmProjectProgress)
+			.where(eq(bcmProjectProgress.enrollmentId, enrollmentId));
+
+		for (const proj of detail.projects) {
+			const projectId = recon.projectIdByBlockId.get(proj.blockId);
+			if (!projectId) continue; // unmatched elective — no catalog row to attribute
+			await db.insert(bcmProjectProgress).values({
+				enrollmentId,
+				projectId,
+				complete: proj.complete,
+				speechTitle: proj.speechTitle,
+				speechDate: proj.speechDate,
+			});
+		}
+		result.membersWithDetail += 1;
+	}
+
+	return result;
 }
