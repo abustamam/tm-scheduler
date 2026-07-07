@@ -162,6 +162,7 @@ export async function reconcileCatalog(
 export interface DetailSyncResult {
 	membersWithDetail: number;
 	unmatchedMembers: number;
+	failedMembers: number;
 	projectsStamped: number;
 	projectsDerived: number;
 	unmatchedElectives: UnmatchedElective[];
@@ -203,6 +204,7 @@ export async function syncClubDetail(
 	const result: DetailSyncResult = {
 		membersWithDetail: 0,
 		unmatchedMembers: 0,
+		failedMembers: 0,
 		projectsStamped: recon.projectsStamped,
 		projectsDerived: recon.projectsDerived,
 		unmatchedElectives: recon.unmatchedElectives,
@@ -219,24 +221,34 @@ export async function syncClubDetail(
 			continue;
 		}
 
-		// Replace-per-enrollment: clear then insert this enrollment's rows. Only
-		// enrollments present in `details` are touched (last-known-good otherwise).
-		await db
-			.delete(bcmProjectProgress)
-			.where(eq(bcmProjectProgress.enrollmentId, enrollmentId));
+		try {
+			// Replace-per-enrollment, atomically: clear then insert this enrollment's
+			// rows in ONE transaction so a failed insert rolls back the delete too —
+			// the member's PRIOR rows survive (never regress below last-known-good).
+			// Only enrollments present in `details` are touched.
+			await db.transaction(async (tx) => {
+				await tx
+					.delete(bcmProjectProgress)
+					.where(eq(bcmProjectProgress.enrollmentId, enrollmentId));
 
-		for (const proj of detail.projects) {
-			const projectId = recon.projectIdByBlockId.get(proj.blockId);
-			if (!projectId) continue; // unmatched elective — no catalog row to attribute
-			await db.insert(bcmProjectProgress).values({
-				enrollmentId,
-				projectId,
-				complete: proj.complete,
-				speechTitle: proj.speechTitle,
-				speechDate: proj.speechDate,
+				for (const proj of detail.projects) {
+					const projectId = recon.projectIdByBlockId.get(proj.blockId);
+					if (!projectId) continue; // unmatched elective — no catalog row to attribute
+					await tx.insert(bcmProjectProgress).values({
+						enrollmentId,
+						projectId,
+						complete: proj.complete,
+						speechTitle: proj.speechTitle,
+						speechDate: proj.speechDate,
+					});
+				}
 			});
+			result.membersWithDetail += 1;
+		} catch {
+			// Isolate the failure: this member's mirror is unchanged (rolled back);
+			// keep processing the rest of the batch rather than aborting everyone.
+			result.failedMembers += 1;
 		}
-		result.membersWithDetail += 1;
 	}
 
 	return result;
