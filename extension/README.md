@@ -29,6 +29,36 @@ bun run zip                                      # distributable zip
 3. Click the extension, paste your GavelUp **sync token** (GavelUp → Admin → Base Camp sync
    tokens), leave Server URL as `https://gavelup.app`, **Save settings**.
 
+## Firefox
+
+The same codebase builds a Firefox (MV2) add-on. Firefox 128+ is required (the club-GUID
+observer uses a `world: "MAIN"` content script, supported since Firefox 128).
+
+### Dev / quick iteration (non-persistent)
+
+```bash
+cd extension
+WXT_GAVELUP_URL=http://localhost:3000 bunx wxt build -b firefox   # or: bun run ext:build:firefox (prod)
+```
+Then open `about:debugging#/runtime/this-firefox` → **Load Temporary Add-on** → pick
+`extension/.output/firefox-mv2/manifest.json`. Note: temporary add-ons are removed when Firefox
+restarts — use the signed `.xpi` below for a lasting install.
+
+### Persistent install (signed .xpi)
+
+Regular-release Firefox only installs **signed** add-ons. Sign an **unlisted** build (automated
+signing via Mozilla AMO — no public listing, no full review):
+
+```bash
+cd extension
+bunx wxt zip -b firefox            # builds the unsigned artifact under .output/
+# sign it via the AMO API (requires a Mozilla add-ons account + API credentials):
+AMO_JWT_ISSUER=<your-issuer> AMO_JWT_SECRET=<your-secret> \
+  bunx web-ext sign --channel=unlisted --source-dir .output/firefox-mv2
+```
+Install the resulting signed `.xpi` via `about:addons` → gear → **Install Add-on From File…**.
+It persists across restarts. Keep the AMO credentials in your environment — never commit them.
+
 ## Use
 
 1. In Base Camp, open **Base Camp Manager → your club → Paths Progress**.
@@ -44,3 +74,5 @@ bun run zip                                      # distributable zip
 - [ ] Bad token → popup shows "Token invalid".
 - [ ] Not on a Base Camp tab → popup tells you to open Paths Progress.
 - [ ] Confirm on the GavelUp Pathways screens that progress updated.
+- [ ] Firefox: load the `firefox-mv2` build (temporary add-on or signed .xpi), then repeat the
+      above (persist settings, sync on Paths Progress, bad-token error, non-basecamp-tab message).

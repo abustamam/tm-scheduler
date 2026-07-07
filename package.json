@@ -27,7 +27,9 @@
     "db:studio": "drizzle-kit studio",
     "ext:dev": "cd extension && bun run dev",
     "ext:build": "cd extension && bun run build",
-    "ext:test": "cd extension && bun run test"
+    "ext:test": "cd extension && bun run test",
+    "ext:build:firefox": "cd extension && bunx wxt build -b firefox",
+    "ext:zip:firefox": "cd extension && bunx wxt zip -b firefox"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.18",
