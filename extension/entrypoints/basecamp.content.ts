@@ -1,3 +1,4 @@
+import { extractDetailTargets, fetchDetails } from "../lib/basecamp-detail-walk";
 import { walkProgressPages } from "../lib/basecamp-walk";
 import type { IngestRequest, IngestResponse } from "../lib/messages";
 
@@ -97,22 +98,38 @@ export default defineContentScript({
 				btn.disabled = true;
 				setStatus("Syncing…");
 				try {
+					const csrftoken = readCookie("csrftoken");
 					const pages = await walkProgressPages({
 						fetchImpl: (url, opts) => fetch(url, opts),
 						guid,
-						csrftoken: readCookie("csrftoken"),
+						csrftoken,
 					});
+
+					const targets = extractDetailTargets(pages as { results: unknown[] }[]);
+					setStatus(`Syncing… fetching details (0/${targets.length})`);
+					const details = await fetchDetails({
+						fetchImpl: (url, opts) => fetch(url, opts),
+						targets,
+						csrftoken,
+					});
+
 					const res = (await browser.runtime.sendMessage({
 						type: "gavelup-ingest",
 						guid,
 						pages,
+						details,
 					} satisfies IngestRequest)) as IngestResponse;
 					if (!res?.ok || !res.result) {
 						setStatus(res?.error || "Sync failed.", "#b91c1c");
 						return;
 					}
 					const r = res.result;
-					const base = `Matched ${r.matched} · ${r.pathsUpserted} path(s) updated · ${r.unmatched.length} unmatched`;
+					let base = `Matched ${r.matched} · ${r.pathsUpserted} path(s) updated · ${r.unmatched.length} unmatched`;
+					if (r.detail) {
+						const d = r.detail;
+						base += `\nDetails: ${d.membersWithDetail} member(s), ${d.projectsStamped + d.projectsDerived} project(s) linked`;
+						if (d.failedMembers > 0) base += ` · ${d.failedMembers} failed`;
+					}
 					setStatus(r.warning ? `${base}\n⚠ ${r.warning}` : base, r.warning ? "#b45309" : "#065f46");
 				} catch (err) {
 					setStatus((err as Error).message, "#b91c1c");
