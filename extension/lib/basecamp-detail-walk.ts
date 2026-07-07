@@ -8,6 +8,7 @@
  */
 const DETAIL_BASE = "https://basecamp.toastmasters.org/api/bcm/progress";
 
+/** Minimal shape of a fetch response this walk relies on (real fetch satisfies it). */
 interface FetchLike {
 	(
 		url: string,

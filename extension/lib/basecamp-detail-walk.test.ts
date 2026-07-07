@@ -25,6 +25,23 @@ describe("extractDetailTargets", () => {
 			{ basecampUserId: "55", guid: "guid-b", courseId: "course-v1:Toastmasters+8701+x" },
 		]);
 	});
+
+	it("skips malformed rows (missing id, username, or course_id)", () => {
+		const malformed = [
+			{
+				results: [
+					{ user: { username: "no-id" }, course_id: "course-v1:Toastmasters+9000+x" }, // missing user.id
+					{ user: { id: 77 }, course_id: "course-v1:Toastmasters+9001+x" }, // missing user.username
+					{ user: { id: 88, username: "no-course" } }, // missing course_id
+					{ user: { id: 99, username: "guid-ok" }, course_id: "course-v1:Toastmasters+9002+x" }, // valid
+				],
+				next: null,
+			},
+		];
+		expect(extractDetailTargets(malformed)).toEqual([
+			{ basecampUserId: "99", guid: "guid-ok", courseId: "course-v1:Toastmasters+9002+x" },
+		]);
+	});
 });
 
 describe("fetchDetails", () => {
