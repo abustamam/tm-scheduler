@@ -1,7 +1,7 @@
 # GavelUp Pathways Sync — browser extension (#107)
 
 Pulls your club's Base Camp Pathways progress and pushes it to GavelUp in one click.
-Built with [WXT](https://wxt.dev). Chromium only (Chrome/Edge/Brave).
+Built with [WXT](https://wxt.dev). Chromium (Chrome/Edge/Brave) and Firefox.
 
 ## Develop
 
@@ -23,6 +23,8 @@ bun run zip                                      # distributable zip
 ```
 
 ## Install (officers)
+
+_On Firefox? See the [Firefox](#firefox) section below instead._
 
 1. Get the built `chrome-mv3` folder (or unzip the release).
 2. Open `chrome://extensions`, enable **Developer mode**, **Load unpacked**, pick the folder.
