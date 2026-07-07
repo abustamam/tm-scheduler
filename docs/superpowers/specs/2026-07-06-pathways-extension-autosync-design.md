@@ -35,7 +35,8 @@ documented fallback.
    content scripts, a hand-rolled twin-manifest build) are gone.
 4. **Two contexts, split by origin.** A content script on the Base Camp tab does the Base Camp
    fetch (same-origin → cookies flow, and it reads the `csrftoken` cookie); the service worker
-   does the POST to us (host_permissions → no CORS needed on our endpoint).
+   does the POST to us. (host_permissions covers this on Chromium; Firefox still sends a CORS
+   preflight, so the endpoint handles CORS — see the Server contract section.)
 5. **Club GUID is observed, not scraped from app state.** The content script captures the
    `club=<guid>` param off the page's own first `/api/bcm/progress` request; a manual GUID field
    in the popup is the fallback.
@@ -128,8 +129,12 @@ high-entropy and not brute-forceable, so a slow hash (bcrypt/argon2) buys nothin
 - Call `syncClubProgress(clubId, rows)`; touch `lastUsedAt`. Return **200** with
   `SyncResult & { warning?: string }`.
 
-No CORS/OPTIONS handling: the service-worker POST uses `host_permissions`, so the request is not
-subject to CORS.
+CORS: **the endpoint answers a preflight and sends `Access-Control-Allow-*` on every response.**
+The original assumption — that `host_permissions` exempts the extension's background POST from CORS
+— holds in Chromium but **not reliably in Firefox** (its `moz-extension://` origin gets a preflight
+that failed with "NetworkError" until we added CORS). `Access-Control-Allow-Origin: *` is safe here
+because auth is a Bearer token, never a cookie (no credentialed CORS, so `*` grants no ambient
+authority). See `src/routes/api/pathways/ingest.ts`.
 
 ### Token management server functions
 
