@@ -25,11 +25,14 @@ export default defineConfig({
 		// .xpi), a floor that guarantees world:"MAIN" content-script support
 		// (Firefox 128+), and an honest "collects no data" declaration. Gated on the
 		// firefox target so the chrome-mv3 manifest is byte-for-byte unaffected.
+		// NOTE: the original id `pathways-sync@gavelup.app` was retired on AMO after a
+		// deleted submission — Mozilla permanently blocks reuse of a deleted add-on's
+		// id, so this id must never be deleted from AMO once signed.
 		...(browser === "firefox"
 			? {
 					browser_specific_settings: {
 						gecko: {
-							id: "pathways-sync@gavelup.app",
+							id: "gavelup-pathways-sync@gavelup.app",
 							strict_min_version: "128.0",
 							data_collection_permissions: { required: ["none"] },
 						},
