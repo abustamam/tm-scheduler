@@ -233,6 +233,33 @@ describe("buildPathViewModel", () => {
 			});
 			expect(vm.upNextElectives).toBeNull();
 		});
+
+		it("a same-named project completed at another level does not hide the current-level instance", () => {
+			const vm = buildPathViewModel({
+				courseCode: "8701",
+				pathName: "Presentation Mastery",
+				levels: [lv(1, 5, 5, true), lv(3, 0, 4, false)], // current level = 3
+				wins: [],
+				catalogProjects: [
+					project(3, "Deliver Social Speeches", false), // L3 elective, NOT complete
+					project(3, "Persuasive Speaking", false), // L3 elective, remaining
+					project(3, "Understanding Emotional Intelligence", true), // L3 required, remaining
+				],
+				detailProjects: [
+					dp(1, "Deliver Social Speeches", true, false), // complete at L1, not L3
+				],
+				pathLevels: [{ level: 3, minReqElectives: 1 }],
+			});
+			// The L1 completion must NOT mark the L3 elective of the same name done.
+			expect(vm.upNextElectives).toEqual({
+				chooseCount: 1,
+				options: ["Deliver Social Speeches", "Persuasive Speaking"],
+			});
+			// And the required L3 project is still surfaced.
+			expect(vm.upNext.map((p) => p.name)).toEqual([
+				"Understanding Emotional Intelligence",
+			]);
+		});
 	});
 
 	it("fallback branch (no detailProjects) sets upNextElectives null and keeps inference wins", () => {

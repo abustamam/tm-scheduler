@@ -60,7 +60,8 @@ export interface PathViewModel {
 	levels: SyncedLevel[];
 	/** This person's delivered speeches whose project is in this path. */
 	wins: Win[];
-	/** Current-level catalog projects not already a win. Empty when complete. */
+	/** Current-level catalog projects not already a win. Empty when complete.
+	 * On the bcm branch this is required-only (electives live in `upNextElectives`). */
 	upNext: UpNextProject[];
 	/** Current-level elective choice, when the mirror is present and the level's
 	 * elective requirement isn't met yet. Null on the inference fallback path. */
@@ -114,14 +115,20 @@ export function buildPathViewModel(path: SyncedPath): PathViewModel {
 		let upNextElectives: UpNextElectives | null = null;
 		if (!complete && currentLevel !== null) {
 			const completeNames = new Set(
-				detail.filter((p) => p.complete).map((p) => p.name),
+				detail
+					.filter((p) => p.complete && p.level === currentLevel)
+					.map((p) => p.name),
 			);
 			const currentCatalog = path.catalogProjects.filter(
 				(c) => c.level === currentLevel,
 			);
 			upNext = currentCatalog
 				.filter((c) => c.isRequired && !completeNames.has(c.name))
-				.map((c) => ({ level: c.level, name: c.name, isRequired: true }));
+				.map((c) => ({
+					level: c.level,
+					name: c.name,
+					isRequired: c.isRequired,
+				}));
 
 			const currentElectives = currentCatalog.filter((c) => !c.isRequired);
 			const completedElectives = currentElectives.filter((c) =>
