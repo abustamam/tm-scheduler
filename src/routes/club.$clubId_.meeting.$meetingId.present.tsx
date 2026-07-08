@@ -1,4 +1,4 @@
-import { createFileRoute, notFound } from "@tanstack/react-router";
+import { createFileRoute, notFound, useNavigate } from "@tanstack/react-router";
 import { MeetingPresent } from "#/components/agenda/meeting-present";
 import { buildSlideDeck } from "#/lib/agenda-slides";
 import { resolveClubOrRedirect } from "#/lib/club-route";
@@ -18,6 +18,8 @@ export const Route = createFileRoute(
 
 function PresentPage() {
 	const data = Route.useLoaderData();
+	const { clubId, meetingId } = Route.useParams();
+	const navigate = useNavigate();
 	const deck = buildSlideDeck(
 		data.meeting,
 		{
@@ -29,5 +31,15 @@ function PresentPage() {
 		},
 		data.slots,
 	);
-	return <MeetingPresent deck={deck} />;
+	return (
+		<MeetingPresent
+			deck={deck}
+			onExit={() =>
+				navigate({
+					to: "/club/$clubId/meeting/$meetingId",
+					params: { clubId, meetingId },
+				})
+			}
+		/>
+	);
 }

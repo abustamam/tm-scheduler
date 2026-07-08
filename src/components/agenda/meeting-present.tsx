@@ -2,7 +2,13 @@ import { useCallback, useEffect, useState } from "react";
 import type { Slide } from "#/lib/agenda-slides";
 
 /** Full-screen, keyboard-driven slideshow. Read-only; position is local state. */
-export function MeetingPresent({ deck }: { deck: Slide[] }) {
+export function MeetingPresent({
+	deck,
+	onExit,
+}: {
+	deck: Slide[];
+	onExit?: () => void;
+}) {
 	const [i, setI] = useState(0);
 	const last = deck.length - 1;
 	const next = useCallback(() => setI((n) => Math.min(n + 1, last)), [last]);
@@ -20,12 +26,16 @@ export function MeetingPresent({ deck }: { deck: Slide[] }) {
 				if (document.fullscreenElement) document.exitFullscreen();
 				else document.documentElement.requestFullscreen?.();
 			} else if (e.key === "Escape") {
-				window.history.back();
+				if (document.fullscreenElement) {
+					document.exitFullscreen();
+				} else {
+					onExit?.();
+				}
 			}
 		}
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
-	}, [next, prev]);
+	}, [next, prev, onExit]);
 
 	const slide = deck[i];
 	return (
@@ -211,7 +221,7 @@ function SlideView({ slide }: { slide: Slide }) {
 				</div>
 			);
 	}
-	return null; // unreachable: switch is exhaustive over Slide["kind"]
+	return ((_exhaustive: never) => null)(slide);
 }
 
 function VoteSlide({ title, names }: { title: string; names: string[] }) {
