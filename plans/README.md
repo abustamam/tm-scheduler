@@ -136,7 +136,7 @@ first run; statuses maintained the same way.
 |------|-------|----------|--------|------------|-------|--------|
 | 014 | Restore ADR-0005 race guard on attach/reassign slot writes | P1 | S | — | [#125](https://github.com/abustamam/tm-scheduler/issues/125) | DONE |
 | 015 | Harden `/api/pathways/ingest` (catalog scope, payload caps, logging, tests) | P1 | M | — | [#126](https://github.com/abustamam/tm-scheduler/issues/126) | DONE |
-| 016 | Correct actively-wrong agent-facing docs (CLAUDE.md, ADR-0008, persistence-todo, 2 design docs) | P1 | S | — | [#127](https://github.com/abustamam/tm-scheduler/issues/127) | TODO |
+| 016 | Correct actively-wrong agent-facing docs (CLAUDE.md, ADR-0008, persistence-todo, 2 design docs) | P1 | S | — | [#127](https://github.com/abustamam/tm-scheduler/issues/127) | DONE |
 | 017 | CI executes the bundled prod migrate runner (`.output/migrate.mjs`) | P2 | S | — | [#128](https://github.com/abustamam/tm-scheduler/issues/128) | DONE |
 | 018 | Extension CI job (wxt prepare, typecheck, tests, build) | P2 | S | — | [#129](https://github.com/abustamam/tm-scheduler/issues/129) | DONE |
 | 019 | Pin `latest`/nightly dependency ranges to locked versions | P2 | S | — | [#130](https://github.com/abustamam/tm-scheduler/issues/130) | DONE |

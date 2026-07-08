@@ -69,7 +69,14 @@ Optional (magic-link email delivery): `RESEND_API_KEY` and `EMAIL_FROM` (default
 
 ## Data layer
 
-Schema is `src/db/schema.ts` (a single `todos` table so far — this is an early scaffold).
+Schema is `src/db/schema.ts` — the full domain model (~19 tables): clubs,
+people/members (Person vs Membership, ADR-0008), officer_terms, meetings,
+role_definitions/role_slots (ADR-0005), member_availability, speeches
+(ADR-0009), the Pathways model (pathways_paths, path_enrollments,
+path_level_progress, pathways_projects, pathways_path_levels,
+bcm_project_progress — ADR-0011), sync_tokens, activity_log, and a
+notifications table (schema only). Better-Auth's tables live in
+`src/db/auth-schema.ts`. See `CONTEXT.md` for the glossary.
 The `db` client (`src/db/index.ts`) is `drizzle(process.env.DATABASE_URL!, { schema })`.
 Migrations are generated to `./drizzle` (`drizzle.config.ts`); edit the schema, then
 `bun run db:generate` + `bun run db:migrate` (or `db:push` for quick dev sync). CI fails if

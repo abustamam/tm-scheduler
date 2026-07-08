@@ -16,56 +16,49 @@ UI. Each notes where the placeholder lives so it can be swapped for real data.
   served this year" (`getMemberProfile`).
 - **My dashboard** (`/dashboard`) — greeting, speech log, upcoming roles
   (`listMyCommitments`, `listMySpeeches`).
+- **Roster cutover** — `role_slots` keys to `assigned_member_id` (FK → members);
+  the user bridge is gone. Member history (speeches / roles served) keys
+  directly to the member, so members with no sign-in account still carry full
+  history (PR #39 → cutover shipped).
+- **Pathways enrollment + progress** — modeled and synced from Base Camp:
+  `path_enrollments`, `path_level_progress`, `pathways_projects`,
+  `bcm_project_progress` (+ the `pathways_paths` / `pathways_path_levels`
+  catalog), populated by the browser extension via `POST /api/pathways/ingest`
+  (ADR-0011). The roster Pathway column, member-detail level stepper, and
+  `/pathways/detail` read this real data.
 
-## Roster cutover (post-PR #39)
+## Needs a model (todo)
 
-The roster now reads from the **`members`** table (the no-auth roster). But
-`role_slots.assigned_user_id` still keys to a Better-Auth **user**, so member
-history (speeches / speech log / roles served) is bridged member→user by
-`members.userId` (admin link) or an email match — see the `TODO(cutover)` in
-`src/server/club.ts`.
+### 1. Member status (on track / behind / DTM)
+A *derived* status view is not built yet. Only "new member" (joined < ~90 days)
+is real (`isNewMember` in `src/lib/members.ts`).
+- **To add:** compute a status from the real Pathways tables above
+  (`path_level_progress` / `bcm_project_progress`) + recent-speech recency, then
+  drive the roster status pills + segment filters (All / On track / Needs
+  attention / New / DTM track).
 
-- **To finish the cutover:** re-key `role_slots.assigned_user_id` →
-  `assigned_member_id` (FK → `members`), then drop the user bridge and key
-  history directly to the member. Members with no linked user currently show 0
-  history until then.
+### 2. Awards / completions
+No awards table. Pathways level/project completion is tracked in
+`path_level_progress` / `bcm_project_progress`, but club-level award records
+(DTM, Level completions rollups) have no home.
+- **To add:** an `awards` table (level completions, DTM, etc.), or derive the
+  roster "Level completions" stat from the Pathways progress tables.
 
-## Needs a model (mocked today)
-
-### 1. Pathways enrollment + progress  ← highest value
-No table for a member's path, level (1–5), % complete, or current project.
-- **Mocked by:** `mockPathway(seed)` in `src/data/club.ts` (deterministic per
-  user id). Drives the roster Pathway column + level/%, the member-detail level
-  stepper, and the dashboard ring / "next up".
-- **To add:** a `pathways` / `member_pathways` table (path, level, project,
-  progress) + a server query; replace every `mockPathway()` call.
-
-### 2. Member status (on track / behind / DTM)
-Derived from Pathways progress, which doesn't exist. Only "new member"
-(joined < ~90 days) is real (`isNewMember` in `src/lib/members.ts`).
-- **Mocked by:** `mockPathway().status`. Drives roster status pills + the
-  segment filters (All / On track / Needs attention / New / DTM track).
-- **To add:** compute from real Pathways progress + recent-speech recency.
-
-### 3. Awards / completions
-No awards table.
-- **Mocked by:** `mockAwards(level, status)` in `src/data/club.ts` (member
-  detail) and the roster "Level completions" stat.
-- **To add:** an `awards` table (level completions, DTM, etc.).
-
-### 4. Resources library
+### 3. Resources library
 Static content, no table.
 - **Mocked by:** `src/data/resources.ts` (the `/resources` view).
 - **To add:** a `resources` table if the library should be club-editable;
   otherwise this can stay static.
 
-### 5. Meeting RSVPs + duration
+### 4. Meeting RSVPs + duration
 The agenda "theme" card shows real word-of-the-day / speaker-slot counts, but the
 design's RSVP count and duration have no model.
 - **Handled by:** showing real-derived facts instead (open/confirmed counts).
 - **To add:** an RSVP/attendance table + meeting duration field if wanted.
 
-### 6. Reminders / notifications sending
-A `notifications` table exists but sending is out of scope.
+### 5. Reminders / notifications sending
+A `notifications` table exists but sending is not built yet.
 - **Stubbed by:** the agenda "Remind unfilled" button (toast only).
-- **To add:** wire the notification poller (#7) + a send path.
+- **To add:** wire the notification poller (#7) + a send path. The email gate is
+  now cleared (`src/lib/email.ts`, Resend), so the build is unblocked — see
+  `plans/020-reminders-build.md`.

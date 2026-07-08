@@ -1,13 +1,13 @@
 # Design: Real email delivery for magic-link sign-in
 
-> Resolves issue #1 ("Wire a real email provider for magic-link sign-in"). Status: **design approved**, plan to follow as `plans/012-magic-link-email.md`.
+> Resolves issue #1 ("Wire a real email provider for magic-link sign-in"). Status: **implemented** (shipped to `main`; `src/lib/email.ts` + `src/lib/magic-link-email.ts`). Historical design record.
 
 ## Problem
 
-Sign-in is magic-link only (ADR-0004) and is the only way in. `sendMagicLink` in
-`src/lib/auth.ts` currently only `console.log`s the URL — fine for dev, unusable for
-real club members. This is the hard launch blocker: without delivered email, no real
-member can sign in. The auth scaffold is already on the Better-Auth `magicLink` plugin;
+Sign-in is magic-link only (ADR-0004) and is the only way in. At the time of writing,
+`sendMagicLink` in `src/lib/auth.ts` only `console.log`ged the URL — fine for dev, unusable
+for real club members. This was the hard launch blocker: without delivered email, no real
+member could sign in. The auth scaffold is already on the Better-Auth `magicLink` plugin;
 this work is purely about email **delivery**.
 
 ## Decisions (locked)
