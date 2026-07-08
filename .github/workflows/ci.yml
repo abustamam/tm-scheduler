@@ -52,3 +52,27 @@ jobs:
         run: bun run test
       - name: Build (client bundle + migrate runner)
         run: bun run build
+
+  extension:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: extension
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      # wxt prepare generates the .wxt/ types the tsconfig extends; run it
+      # explicitly rather than relying on postinstall lifecycle behavior.
+      - name: Generate WXT types
+        run: bunx wxt prepare
+      - name: Typecheck
+        run: bunx tsc --noEmit
+      - name: Test
+        run: bun run test
+      # WXT_GAVELUP_URL unset → production default (https://gavelup.app),
+      # which is the shape that ships.
+      - name: Build
+        run: bun run build
