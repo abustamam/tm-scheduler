@@ -14,7 +14,8 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { and, eq } from "drizzle-orm";
 import { db } from "#/db";
-import { meetings, members, roleDefinitions, roleSlots, speeches } from "#/db/schema";
+import { clubs, meetings, members, roleDefinitions, roleSlots, speeches } from "#/db/schema";
+import { zonedWallTimeToUtc } from "#/lib/datetime";
 import {
 	type AgendaRecord,
 	type MeetingPlan,
@@ -31,14 +32,17 @@ export type WriterContext = {
 	clubId: string;
 	roster: RosterMember[];
 	roleDefs: RoleDef[];
+	/** The club's IANA timezone (`clubs.timezone`) — makes the meeting time and
+	 * the `(clubId, scheduledAt)` upsert key stable regardless of the host TZ. */
+	timezone: string;
 };
 
-const CLUB_START_HOUR = 18; // 6 PM
-const CLUB_START_MIN = 45; // :45
+// The club's regular meeting start, as a wall-clock time in the club's timezone.
+const CLUB_START_WALL = "18:45"; // 6:45 PM
 
-function scheduledAtFor(dateISO: string): Date {
-	const [y, mo, d] = dateISO.split("-").map(Number);
-	return new Date(y, mo - 1, d, CLUB_START_HOUR, CLUB_START_MIN, 0, 0);
+/** The UTC instant for a meeting: `record.date` at the club's 6:45 PM start. */
+function scheduledAtFor(dateISO: string, timezone: string): Date {
+	return zonedWallTimeToUtc(`${dateISO}T${CLUB_START_WALL}`, timezone);
 }
 
 /**
@@ -81,116 +85,167 @@ export async function applyMeetingPlan(
 	plan: MeetingPlan,
 	ctx: WriterContext,
 ): Promise<void> {
-	const scheduledAt = scheduledAtFor(plan.meeting.date);
+	const scheduledAt = scheduledAtFor(plan.meeting.date, ctx.timezone);
 
-	// Upsert meeting on (clubId, scheduledAt).
-	const existing = await db
-		.select({ id: meetings.id })
-		.from(meetings)
-		.where(
-			and(eq(meetings.clubId, ctx.clubId), eq(meetings.scheduledAt, scheduledAt)),
-		);
-	let meetingId: string;
-	if (existing[0]) {
-		meetingId = existing[0].id;
-		await db
-			.update(meetings)
-			.set({
-				theme: plan.meeting.theme,
-				wordOfTheDay: plan.meeting.wordOfTheDay,
-				lengthMinutes: plan.meeting.lengthMinutes,
-				status: plan.meeting.status,
-			})
-			.where(eq(meetings.id, meetingId));
-	} else {
-		const inserted = await db
-			.insert(meetings)
-			.values({
-				clubId: ctx.clubId,
-				scheduledAt,
-				theme: plan.meeting.theme,
-				wordOfTheDay: plan.meeting.wordOfTheDay,
-				lengthMinutes: plan.meeting.lengthMinutes,
-				status: plan.meeting.status,
-			})
-			.returning({ id: meetings.id });
-		const row = inserted[0];
-		if (!row) throw new Error("Failed to insert meeting");
-		meetingId = row.id;
-	}
+	// One transaction per meeting: if any step below fails, the whole meeting's
+	// write set rolls back so a re-run starts from a clean slate (no half-imported
+	// meeting). All writes go through `tx`.
+	await db.transaction(async (tx) => {
+		// Upsert meeting on (clubId, scheduledAt).
+		const existing = await tx
+			.select({ id: meetings.id })
+			.from(meetings)
+			.where(
+				and(eq(meetings.clubId, ctx.clubId), eq(meetings.scheduledAt, scheduledAt)),
+			);
+		let meetingId: string;
+		if (existing[0]) {
+			meetingId = existing[0].id;
+			await tx
+				.update(meetings)
+				.set({
+					theme: plan.meeting.theme,
+					wordOfTheDay: plan.meeting.wordOfTheDay,
+					lengthMinutes: plan.meeting.lengthMinutes,
+					status: plan.meeting.status,
+				})
+				.where(eq(meetings.id, meetingId));
+		} else {
+			const inserted = await tx
+				.insert(meetings)
+				.values({
+					clubId: ctx.clubId,
+					scheduledAt,
+					theme: plan.meeting.theme,
+					wordOfTheDay: plan.meeting.wordOfTheDay,
+					lengthMinutes: plan.meeting.lengthMinutes,
+					status: plan.meeting.status,
+				})
+				.returning({ id: meetings.id });
+			const row = inserted[0];
+			if (!row) throw new Error("Failed to insert meeting");
+			meetingId = row.id;
+		}
 
-	// Re-derive slots: delete then re-insert. Deleting only nulls speech_id
-	// pointers (speech FK is onDelete: set null) — durable speeches survive.
-	await db.delete(roleSlots).where(eq(roleSlots.meetingId, meetingId));
+		// Re-derive slots: delete then re-insert. Deleting a slot does NOT delete
+		// its speech — the speech row is person-owned and lives independently; the
+		// delete simply removes the slot (and with it the only reference to that
+		// speech via `role_slots.speech_id`). That freed speech is what the reuse
+		// lookup below finds on a re-run, keeping speeches from duplicating.
+		await tx.delete(roleSlots).where(eq(roleSlots.meetingId, meetingId));
 
-	const defById = new Map(ctx.roleDefs.map((d) => [d.id, d]));
-	const speakerSlotIdByIndex = new Map<number, string>();
-	const insertedIdBySlot = new Map<PlannedSlot, string>();
+		const defById = new Map(ctx.roleDefs.map((d) => [d.id, d]));
+		const speakerSlotIdByIndex = new Map<number, string>();
+		const insertedIdBySlot = new Map<PlannedSlot, string>();
 
-	for (const s of plan.slots) {
-		let speechId: string | null = null;
-		if (s.speech) {
-			const norm = normalizeName(s.speech.title);
-			const personSpeeches = await db
-				.select({ id: speeches.id, title: speeches.title })
-				.from(speeches)
-				.where(eq(speeches.personId, s.speech.personId));
-			const found = personSpeeches.find((row) => normalizeName(row.title) === norm);
-			if (found) {
-				speechId = found.id;
-			} else {
-				const ins = await db
-					.insert(speeches)
-					.values({
-						personId: s.speech.personId,
-						title: s.speech.title,
-						projectLevel: s.speech.projectLevel,
-						projectName: s.speech.projectName,
-					})
-					.returning({ id: speeches.id });
-				const row = ins[0];
-				if (!row) throw new Error("Failed to insert speech");
-				speechId = row.id;
+		for (const s of plan.slots) {
+			let speechId: string | null = null;
+			if (s.speech) {
+				const norm = normalizeName(s.speech.title);
+				const personSpeeches = await tx
+					.select({ id: speeches.id, title: speeches.title })
+					.from(speeches)
+					.where(eq(speeches.personId, s.speech.personId));
+				const candidates = personSpeeches.filter(
+					(row) => normalizeName(row.title) === norm,
+				);
+				// `role_slots.speech_id` is UNIQUE — a speech may be linked to at most
+				// one slot. So only reuse a same-(person,title) speech that is NOT
+				// currently referenced by any slot; otherwise a second meeting with the
+				// same speaker + title would collide on the unique index. (On a re-run
+				// this meeting's own slots were just deleted, freeing its speech, so the
+				// lookup finds it and reuses it — no duplication. A same-title speech
+				// still linked to a DIFFERENT meeting correctly forces a new row.)
+				let reuseId: string | null = null;
+				for (const c of candidates) {
+					const linked = await tx
+						.select({ id: roleSlots.id })
+						.from(roleSlots)
+						.where(eq(roleSlots.speechId, c.id))
+						.limit(1);
+					if (linked.length === 0) {
+						reuseId = c.id;
+						break;
+					}
+				}
+				if (reuseId) {
+					speechId = reuseId;
+				} else {
+					const ins = await tx
+						.insert(speeches)
+						.values({
+							personId: s.speech.personId,
+							title: s.speech.title,
+							projectLevel: s.speech.projectLevel,
+							projectName: s.speech.projectName,
+						})
+						.returning({ id: speeches.id });
+					const row = ins[0];
+					if (!row) throw new Error("Failed to insert speech");
+					speechId = row.id;
+				}
+			}
+
+			const ins = await tx
+				.insert(roleSlots)
+				.values({
+					meetingId,
+					roleDefinitionId: s.roleDefinitionId,
+					slotIndex: s.slotIndex,
+					assignedMemberId: s.assignedMemberId,
+					status: s.status,
+					speechId,
+					claimedAt: scheduledAt,
+				})
+				.returning({ id: roleSlots.id });
+			const row = ins[0];
+			if (!row) throw new Error("Failed to insert role slot");
+			insertedIdBySlot.set(s, row.id);
+
+			const def = defById.get(s.roleDefinitionId);
+			if (def?.name === "Speaker") {
+				if (speakerSlotIdByIndex.has(s.slotIndex)) {
+					// Malformed source: two Speaker rows at the same slotIndex. Keep the
+					// first (don't silently overwrite and mis-pair its evaluator).
+					console.warn(
+						`[${plan.meeting.date}] duplicate Speaker at slotIndex ${s.slotIndex} — keeping the first; ignoring the duplicate for evaluator pairing.`,
+					);
+				} else {
+					speakerSlotIdByIndex.set(s.slotIndex, row.id);
+				}
 			}
 		}
 
-		const ins = await db
-			.insert(roleSlots)
-			.values({
-				meetingId,
-				roleDefinitionId: s.roleDefinitionId,
-				slotIndex: s.slotIndex,
-				assignedMemberId: s.assignedMemberId,
-				status: s.status,
-				speechId,
-				claimedAt: scheduledAt,
-			})
-			.returning({ id: roleSlots.id });
-		const row = ins[0];
-		if (!row) throw new Error("Failed to insert role slot");
-		insertedIdBySlot.set(s, row.id);
-
-		const def = defById.get(s.roleDefinitionId);
-		if (def?.name === "Speaker") speakerSlotIdByIndex.set(s.slotIndex, row.id);
-	}
-
-	// Evaluator pairing pass — needs every Speaker slot already inserted.
-	for (const s of plan.slots) {
-		if (!s.evaluatesTarget || s.evaluatesTarget.roleName !== "Speaker") continue;
-		const slotId = insertedIdBySlot.get(s);
-		const speakerId = speakerSlotIdByIndex.get(s.evaluatesTarget.slotIndex);
-		if (slotId && speakerId) {
-			await db
-				.update(roleSlots)
-				.set({ evaluatesSlotId: speakerId })
-				.where(eq(roleSlots.id, slotId));
+		// Evaluator pairing pass — needs every Speaker slot already inserted.
+		for (const s of plan.slots) {
+			if (!s.evaluatesTarget || s.evaluatesTarget.roleName !== "Speaker") continue;
+			const slotId = insertedIdBySlot.get(s);
+			const speakerId = speakerSlotIdByIndex.get(s.evaluatesTarget.slotIndex);
+			if (slotId && speakerId) {
+				await tx
+					.update(roleSlots)
+					.set({ evaluatesSlotId: speakerId })
+					.where(eq(roleSlots.id, slotId));
+			} else if (slotId) {
+				// The evaluator's slot exists but its target Speaker slot doesn't (e.g.
+				// that speaker's name never matched, so no Speaker slot at that index).
+				// The evaluator↔speaker link is silently lost otherwise — surface it.
+				console.warn(
+					`[${plan.meeting.date}] evaluator slot has no Speaker slot at slotIndex ${s.evaluatesTarget.slotIndex} to pair with — leaving it unlinked.`,
+				);
+			}
 		}
-	}
+	});
 }
 
 // ---- CLI entrypoint (only runs when invoked directly, not under test import) ----
 
 async function loadContext(clubId: string): Promise<WriterContext> {
+	const club = await db
+		.select({ timezone: clubs.timezone })
+		.from(clubs)
+		.where(eq(clubs.id, clubId));
+	if (!club[0]) throw new Error(`No club found with id ${clubId}.`);
 	const roster = await db
 		.select({ memberId: members.id, personId: members.personId, name: members.name })
 		.from(members)
@@ -199,7 +254,7 @@ async function loadContext(clubId: string): Promise<WriterContext> {
 		.select({ id: roleDefinitions.id, name: roleDefinitions.name })
 		.from(roleDefinitions)
 		.where(eq(roleDefinitions.clubId, clubId));
-	return { clubId, roster, roleDefs };
+	return { clubId, roster, roleDefs, timezone: club[0].timezone };
 }
 
 function loadRecords(dir: string): AgendaRecord[] {

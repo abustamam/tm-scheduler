@@ -14,12 +14,14 @@
 import { and, eq, ne } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
+	clubs,
 	members,
 	meetings,
 	roleDefinitions,
 	roleSlots,
 	speeches,
 } from "#/db/schema";
+import { zonedWallTimeToUtc } from "#/lib/datetime";
 import {
 	cleanup,
 	hasTestDb,
@@ -102,7 +104,16 @@ describe.skipIf(!hasTestDb)("import-agendas writer", () => {
 			["Jagpal Singh", "Saiful Haque", "Mahbuba Khan"].map(seedRosterMember),
 		);
 
-		ctx = { clubId: seed.clubId, roster, roleDefs };
+		// seedClub inserts no timezone, so the club carries the schema default
+		// (America/Chicago). Read it back rather than hardcoding, so the writer and
+		// the test agree on exactly one source of truth for the meeting instant.
+		const [club] = await testDb
+			.select({ timezone: clubs.timezone })
+			.from(clubs)
+			.where(eq(clubs.id, seed.clubId));
+		if (!club) throw new Error("seeded club not found");
+
+		ctx = { clubId: seed.clubId, roster, roleDefs, timezone: club.timezone };
 	});
 
 	afterAll(async () => {
@@ -144,6 +155,11 @@ describe.skipIf(!hasTestDb)("import-agendas writer", () => {
 		const m = await importedMeeting();
 		expect(m.status).toBe("completed");
 		expect(m.lengthMinutes).toBe(60);
+		// scheduledAt is the club-timezone wall time (6:45 PM on the record's date),
+		// NOT the script host's local time — same conversion the writer uses.
+		expect(m.scheduledAt.getTime()).toBe(
+			zonedWallTimeToUtc(`${record.date}T18:45`, ctx.timezone).getTime(),
+		);
 
 		const slots = await testDb
 			.select()
@@ -187,5 +203,63 @@ describe.skipIf(!hasTestDb)("import-agendas writer", () => {
 		const evaluator = slots.find((s) => s.evaluatesSlotId != null);
 		expect(speaker).toBeDefined();
 		expect(evaluator?.evaluatesSlotId).toBe(speaker?.id);
+	});
+
+	// NOTE: this test runs last — it imports a SECOND meeting, so it must not run
+	// before the `importedMeeting()` (exactly-one-non-scaffold-meeting) assertions.
+	it("does not collide on role_slots.speech_id when the same person gives the same-titled speech at two meetings", async () => {
+		// Meeting #1 (from `record`, date 2025-01-09) has already been imported by
+		// the earlier tests: Jagpal Singh, "AI Talk". Import a DIFFERENT meeting
+		// with the SAME speaker + SAME title. The first meeting's speech is still
+		// linked to its slot, so reuse must be refused and a new speech inserted —
+		// otherwise the unique `role_slots.speech_id` index would throw.
+		const second: AgendaRecord = {
+			...record,
+			meetingNumber: 2,
+			date: "2025-01-16",
+			roles: [
+				{
+					label: "Speaker #1",
+					name: "Jagpal Singh",
+					speech: { title: "AI Talk", projectLevel: "Level 2" },
+				},
+			],
+		};
+
+		const importSecond = async () => {
+			const plan = planMeetingImport(second, ctx.roster, ctx.roleDefs, {});
+			await applyMeetingPlan(plan, ctx); // must NOT throw
+		};
+
+		await importSecond();
+
+		const jagpal = ctx.roster.find((m) => m.name === "Jagpal Singh");
+		if (!jagpal) throw new Error("Jagpal not in roster");
+		const aiTalks = (
+			await testDb
+				.select()
+				.from(speeches)
+				.where(eq(speeches.personId, jagpal.personId))
+		).filter((s) => s.title === "AI Talk");
+		// Two distinct meetings → two distinct speech rows for the same person+title.
+		expect(aiTalks).toHaveLength(2);
+
+		// Both meetings now exist (scaffold + 2 imported).
+		const imported = await testDb
+			.select()
+			.from(meetings)
+			.where(and(eq(meetings.clubId, seed.clubId), ne(meetings.id, seed.meetingId)));
+		expect(imported).toHaveLength(2);
+
+		// Re-running meeting #2 is idempotent: its slot is deleted first, freeing
+		// its speech, so the lookup reuses it — still exactly two "AI Talk" rows.
+		await importSecond();
+		const aiTalksAfter = (
+			await testDb
+				.select()
+				.from(speeches)
+				.where(eq(speeches.personId, jagpal.personId))
+		).filter((s) => s.title === "AI Talk");
+		expect(aiTalksAfter).toHaveLength(2);
 	});
 });
