@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchMember, normalizeName, type RosterMember } from "./import-agendas-logic";
+import { mapRoleLabel, matchMember, normalizeName, type RosterMember } from "./import-agendas-logic";
 
 const roster: RosterMember[] = [
 	{ memberId: "m1", personId: "p1", name: "Jagpal Singh" },
@@ -50,5 +50,32 @@ describe("matchMember", () => {
 	it("strips (G) and matches a former guest who is now on the roster", () => {
 		const r = matchMember("Schinthia Islam (G)", roster, {});
 		expect(r.member?.memberId).toBe("m4");
+	});
+});
+
+describe("mapRoleLabel", () => {
+	it("maps fixed labels to role-definition names at slotIndex 0", () => {
+		expect(mapRoleLabel("Toastmaster")).toEqual({ roleName: "Toastmaster of the Day", slotIndex: 0 });
+		expect(mapRoleLabel("TableTopic Master")).toEqual({ roleName: "Table Topics Master", slotIndex: 0 });
+		expect(mapRoleLabel("Grammarian/WOD")).toEqual({ roleName: "Grammarian", slotIndex: 0 });
+		expect(mapRoleLabel("Ah Counter")).toEqual({ roleName: "Ah-Counter", slotIndex: 0 });
+		expect(mapRoleLabel("General Evaluator")).toEqual({ roleName: "General Evaluator", slotIndex: 0 });
+		expect(mapRoleLabel("Timer")).toEqual({ roleName: "Timer", slotIndex: 0 });
+	});
+
+	it("maps numbered Speaker/Evaluator labels to slotIndex N-1", () => {
+		expect(mapRoleLabel("Speaker #1")).toEqual({ roleName: "Speaker", slotIndex: 0 });
+		expect(mapRoleLabel("Speaker #3")).toEqual({ roleName: "Speaker", slotIndex: 2 });
+		expect(mapRoleLabel("Evaluator #2")).toEqual({ roleName: "Evaluator", slotIndex: 1 });
+	});
+
+	it("maps Vote Counter (and the 'Voter Counter' typo) to Vote Counter", () => {
+		expect(mapRoleLabel("Vote Counter")).toEqual({ roleName: "Vote Counter", slotIndex: 0 });
+		expect(mapRoleLabel("Voter Counter")).toEqual({ roleName: "Vote Counter", slotIndex: 0 });
+	});
+
+	it("returns null for out-of-scope / unknown labels", () => {
+		expect(mapRoleLabel("Sergeant at Arms")).toBeNull();
+		expect(mapRoleLabel("Something Else")).toBeNull();
 	});
 });

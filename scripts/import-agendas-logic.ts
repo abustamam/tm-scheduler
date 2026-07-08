@@ -66,3 +66,37 @@ export function matchMember(
 	const suggestions = scored.filter((s) => s.d <= 2).map((s) => s.m.name);
 	return { member: undefined, suggestions };
 }
+
+export type RoleTarget = { roleName: string; slotIndex: number };
+
+const FIXED_ROLE_MAP: Record<string, string> = {
+	toastmaster: "Toastmaster of the Day",
+	"tabletopic master": "Table Topics Master",
+	"table topic master": "Table Topics Master",
+	"grammarian/wod": "Grammarian",
+	grammarian: "Grammarian",
+	"ah counter": "Ah-Counter",
+	"ah-counter": "Ah-Counter",
+	"general evaluator": "General Evaluator",
+	timer: "Timer",
+	"vote counter": "Vote Counter",
+	"voter counter": "Vote Counter",
+};
+
+/**
+ * Map an agenda role label to a role-definition name + slotIndex.
+ * Returns null for labels with no per-meeting slot (e.g. Sergeant at Arms — an
+ * officer position) or unknown labels; the caller reports & skips those.
+ */
+export function mapRoleLabel(label: string): RoleTarget | null {
+	const key = label.toLowerCase().replace(/\s+/g, " ").trim();
+
+	const numbered = key.match(/^(speaker|evaluator)\s*#\s*(\d+)$/);
+	if (numbered) {
+		const roleName = numbered[1] === "speaker" ? "Speaker" : "Evaluator";
+		return { roleName, slotIndex: Number(numbered[2]) - 1 };
+	}
+
+	const fixed = FIXED_ROLE_MAP[key];
+	return fixed ? { roleName: fixed, slotIndex: 0 } : null;
+}
