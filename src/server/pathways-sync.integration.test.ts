@@ -61,6 +61,9 @@ function mp(over: Partial<ParsedMemberPath>): ParsedMemberPath {
 // needs a `members` row here.
 let clubId: string;
 const createdPersonIds: string[] = [];
+// Extra course codes a case creates beyond CODE (e.g. the unseen-path case) —
+// cleaned up alongside CODE so shared catalog rows don't leak across runs.
+const createdPathCodes: string[] = [];
 
 /** Create a Person AND a `members` row linking them to the test club. */
 async function makeMember(
@@ -91,7 +94,10 @@ async function localCleanup() {
 	// Scope to this suite's own tagged course code — pathEnrollments and
 	// pathLevelProgress cascade-delete via FK (onDelete: "cascade"), so
 	// deleting the tagged pathwaysPaths row is enough.
-	await testDb.delete(pathwaysPaths).where(eq(pathwaysPaths.courseCode, CODE));
+	await testDb
+		.delete(pathwaysPaths)
+		.where(inArray(pathwaysPaths.courseCode, [CODE, ...createdPathCodes]));
+	createdPathCodes.length = 0;
 	// `people`/`members` are shared across suites — remove only this suite's rows.
 	if (createdPersonIds.length > 0) {
 		await testDb
@@ -154,6 +160,59 @@ describe.skipIf(!hasTestDb)("syncClubProgress", () => {
 			.from(pathLevelProgress)
 			.where(eq(pathLevelProgress.enrollmentId, enr.id));
 		expect(levels).toHaveLength(2);
+	});
+
+	it("never overwrites an existing shared-catalog path name (insert-if-missing)", async () => {
+		// pathways_paths is a globally shared catalog: one club's sync must not be
+		// able to rename an entry every other club displays. Seed the row with a
+		// canonical name, then sync a payload claiming the same courseCode with a
+		// DIFFERENT name — the stored name must be unchanged and the sync succeeds.
+		await testDb
+			.insert(pathwaysPaths)
+			.values({ courseCode: CODE, name: "Presentation Mastery" });
+		const personId = await makeMember({ email: "catalog@example.com" });
+		const res = await syncClubProgress(clubId, [
+			mp({
+				email: "catalog@example.com",
+				basecampUserId: "cat1",
+				pathName: "Renamed By Attacker",
+			}),
+		]);
+		expect(res.matched).toBe(1);
+
+		const [path] = await testDb
+			.select({ name: pathwaysPaths.name })
+			.from(pathwaysPaths)
+			.where(eq(pathwaysPaths.courseCode, CODE));
+		expect(path.name).toBe("Presentation Mastery");
+
+		// Enrollment/levels still written for the matched member.
+		const enrs = await testDb
+			.select()
+			.from(pathEnrollments)
+			.where(eq(pathEnrollments.personId, personId));
+		expect(enrs).toHaveLength(1);
+	});
+
+	it("creates a new catalog path for an unseen courseCode", async () => {
+		const unseen = `unseen-${randomUUID().slice(0, 8)}`;
+		createdPathCodes.push(unseen);
+		await makeMember({ email: "newpath@example.com" });
+		const res = await syncClubProgress(clubId, [
+			mp({
+				email: "newpath@example.com",
+				basecampUserId: "np1",
+				courseCode: unseen,
+				pathName: "Dynamic Leadership",
+			}),
+		]);
+		expect(res.matched).toBe(1);
+
+		const [path] = await testDb
+			.select({ name: pathwaysPaths.name })
+			.from(pathwaysPaths)
+			.where(eq(pathwaysPaths.courseCode, unseen));
+		expect(path.name).toBe("Dynamic Leadership");
 	});
 
 	it("prefers a stored basecampUserId over email on re-sync (survives email change)", async () => {
