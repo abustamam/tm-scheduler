@@ -249,8 +249,14 @@ export const meetings = pgTable(
 		location: text("location"),
 		theme: text("theme"),
 		wordOfTheDay: text("word_of_the_day"),
+		// Word-of-the-Day supporting copy for the projected present-mode deck.
+		wodDefinition: text("wod_definition"),
+		wodExample: text("wod_example"),
 		status: meetingStatusEnum("status").notNull().default("scheduled"),
 		notes: text("notes"),
+		// Free-text club announcements projected on the present-mode Reminders
+		// slide. Distinct from `notes` (private organizer scratch).
+		reminders: text("reminders"),
 		createdAt: timestamp("created_at").defaultNow().notNull(),
 	},
 	(t) => [index("meetings_club_scheduled_idx").on(t.clubId, t.scheduledAt)],
