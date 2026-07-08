@@ -136,6 +136,16 @@ export function buildSlideDeck(
 		deck.push({ kind: "voteSpeaker", names: assignedNames(speakers) });
 	}
 
+	const tableTopics = byRoleName(slots, ROLE.tableTopicsMaster);
+	if (tableTopics.length > 0) {
+		deck.push({
+			kind: "tableTopics",
+			master: tableTopics[0].assigneeName ?? OPEN_LABEL,
+			timing: TABLE_TOPICS_TIMING,
+		});
+		deck.push({ kind: "voteTableTopics" });
+	}
+
 	deck.push({ kind: "thankYou", meetingSchedule: club.meetingSchedule });
 
 	return deck;

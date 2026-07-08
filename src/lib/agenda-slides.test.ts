@@ -196,3 +196,38 @@ describe("buildSlideDeck speeches", () => {
 		expect(one).toMatchObject({ label: "Speech" });
 	});
 });
+
+describe("buildSlideDeck table topics", () => {
+	const tt = slot({
+		id: "tt",
+		roleName: "Table Topics Master",
+		category: "leadership",
+		assigneeName: "Rasheed Bustamam",
+	});
+
+	it("emits tableTopics + voteTableTopics when the role exists", () => {
+		const ks = buildSlideDeck(meeting, club, [tt]).map((s) => s.kind);
+		expect(ks).toEqual([
+			"title",
+			"toastmaster",
+			"tableTopics",
+			"voteTableTopics",
+			"thankYou",
+		]);
+	});
+
+	it("table topics slide has master + hardcoded standard timing", () => {
+		const slide = buildSlideDeck(meeting, club, [tt]).find(
+			(s) => s.kind === "tableTopics",
+		);
+		expect(slide).toMatchObject({
+			master: "Rasheed Bustamam",
+			timing: "1–2 minutes per speaker",
+		});
+	});
+
+	it("omits both table-topics slides when the role is absent", () => {
+		expect(kinds([])).not.toContain("tableTopics");
+		expect(kinds([])).not.toContain("voteTableTopics");
+	});
+});
