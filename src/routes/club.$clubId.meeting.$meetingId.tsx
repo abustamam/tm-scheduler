@@ -5,7 +5,14 @@ import {
 	notFound,
 	useRouter,
 } from "@tanstack/react-router";
-import { CalendarDays, Loader2, MapPin, Printer, Sparkles } from "lucide-react";
+import {
+	CalendarDays,
+	Loader2,
+	MapPin,
+	Presentation,
+	Printer,
+	Sparkles,
+} from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { AssignSlotSheet } from "#/components/club/assign-slot-sheet";
@@ -353,6 +360,17 @@ function MeetingView() {
 					>
 						<Printer />
 						Print agenda
+					</Link>
+				</Button>
+				<Button asChild variant="outline" size="sm">
+					<Link
+						to="/club/$clubId/meeting/$meetingId/present"
+						params={{ clubId, meetingId }}
+						target="_blank"
+						rel="noopener noreferrer"
+					>
+						<Presentation />
+						Present
 					</Link>
 				</Button>
 				{isTmod ? (
