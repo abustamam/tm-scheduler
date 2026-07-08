@@ -441,7 +441,8 @@ export async function pathwaysForUser(
 
 /**
  * Every enrolled path for every member of a club, in ONE query per concern
- * (levels, wins, catalog), grouped by membership id — avoids an N+1 when
+ * (levels, wins, catalog, /detail mirror, path-levels), grouped by membership
+ * id — avoids an N+1 when
  * rendering the roster (mirrors the batching shape of `currentOfficersByMember`
  * in officer-terms-logic.ts). Memberships with no synced paths are simply
  * absent from the map (callers default to an empty array).
