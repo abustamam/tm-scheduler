@@ -4,8 +4,11 @@ import { IngestError, ingestForToken } from "#/server/pathways-ingest-logic";
 /**
  * POST /api/pathways/ingest — the Pathways auto-sync extension (#107) posts here.
  * Auth is a per-club Bearer token (Authorization: Bearer gup_…), NOT a session:
- * the token encodes the club. Body: { basecampClubGuid, pages: BcmProgressPage[] }.
- * Returns the SyncResult (+ optional `warning`) as JSON.
+ * the token encodes the club. Body:
+ *   { basecampClubGuid, pages: BcmProgressPage[], details?: BcmDetailPayload[] }.
+ * `details` is optional (older extension builds omit it); when present, the
+ * result gains a `detail` block. Returns the SyncResult (+ optional `warning`,
+ * + optional `detail`) as JSON.
  *
  * CORS: the extension POSTs from a `moz-extension://`/`chrome-extension://` origin.
  * Chromium exempts host-permission fetches from CORS, but Firefox does not reliably,

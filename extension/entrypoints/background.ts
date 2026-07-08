@@ -52,7 +52,11 @@ export default defineBackground(() => {
 							"content-type": "application/json",
 							authorization: `Bearer ${token}`,
 						},
-						body: JSON.stringify({ basecampClubGuid: msg.guid, pages: msg.pages }),
+						body: JSON.stringify({
+							basecampClubGuid: msg.guid,
+							pages: msg.pages,
+							...(msg.details ? { details: msg.details } : {}),
+						}),
 					});
 					const json = await res.json().catch(() => ({}));
 					if (!res.ok) {
