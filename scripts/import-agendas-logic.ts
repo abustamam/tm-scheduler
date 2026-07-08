@@ -53,8 +53,11 @@ export function matchMember(
 	const aliased = aliases[norm];
 	const target = aliased ? normalizeName(aliased) : norm;
 
-	const exact = roster.find((m) => normalizeName(m.name) === target);
-	if (exact) return { member: exact, suggestions: [] };
+	const exact = roster.filter((m) => normalizeName(m.name) === target);
+	if (exact.length === 1) return { member: exact[0], suggestions: [] };
+	// 2+ roster members normalize to the same name — refuse to guess (same
+	// silent-misattribution guard as the distance-1 tie-break below).
+	if (exact.length > 1) return { member: undefined, suggestions: exact.map((m) => m.name) };
 
 	const scored = roster
 		.map((m) => ({ m, d: levenshtein(target, normalizeName(m.name)) }))
@@ -68,6 +71,11 @@ export function matchMember(
 }
 
 export type RoleTarget = { roleName: string; slotIndex: number };
+
+/** Lowercase, collapse internal whitespace, trim — shared by label mapping and the ignore-set. */
+export function normalizeLabel(label: string): string {
+	return label.toLowerCase().replace(/\s+/g, " ").trim();
+}
 
 const FIXED_ROLE_MAP: Record<string, string> = {
 	toastmaster: "Toastmaster of the Day",
@@ -89,7 +97,7 @@ const FIXED_ROLE_MAP: Record<string, string> = {
  * officer position) or unknown labels; the caller reports & skips those.
  */
 export function mapRoleLabel(label: string): RoleTarget | null {
-	const key = label.toLowerCase().replace(/\s+/g, " ").trim();
+	const key = normalizeLabel(label);
 
 	const numbered = key.match(/^(speaker|evaluator)\s*#\s*(\d+)$/);
 	if (numbered) {
@@ -146,9 +154,18 @@ export type PlannedMeeting = {
 	status: "completed";
 };
 
+/**
+ * Reasons a role row can't become a slot — each needs a different human fix:
+ * - `unknown-label`: the label maps to nothing (add a label mapping).
+ * - `missing-definition`: the label maps to a role the club has no definition for (create the definition).
+ * - `unknown-evaluates-label`: the row's `evaluates` pointer maps to nothing, so the
+ *   evaluator↔speaker link is lost (fix the agenda's evaluates label). The slot itself is still planned.
+ */
+export type RoleFailureReason = "unknown-label" | "missing-definition" | "unknown-evaluates-label";
+
 export type UnmatchedEntry =
 	| { kind: "name"; label: string; name: string; suggestions: string[] }
-	| { kind: "role"; label: string; name: string };
+	| { kind: "role"; label: string; name: string; reason: RoleFailureReason };
 
 export type MeetingPlan = {
 	meeting: PlannedMeeting;
@@ -178,16 +195,16 @@ export function planMeetingImport(
 
 	for (const row of record.roles) {
 		if (!row.name?.trim()) continue; // blank cell
-		if (IGNORED_LABELS.has(row.label.toLowerCase().trim())) continue;
+		if (IGNORED_LABELS.has(normalizeLabel(row.label))) continue;
 
 		const target = mapRoleLabel(row.label);
 		if (!target) {
-			unmatched.push({ kind: "role", label: row.label, name: row.name });
+			unmatched.push({ kind: "role", label: row.label, name: row.name, reason: "unknown-label" });
 			continue;
 		}
 		const def = defByName.get(target.roleName);
 		if (!def) {
-			unmatched.push({ kind: "role", label: row.label, name: row.name });
+			unmatched.push({ kind: "role", label: row.label, name: row.name, reason: "missing-definition" });
 			continue;
 		}
 
@@ -206,6 +223,16 @@ export function planMeetingImport(
 		if (row.evaluates) {
 			const evTarget = mapRoleLabel(row.evaluates);
 			if (evTarget) slot.evaluatesTarget = evTarget;
+			// The evaluator did their role (slot is kept), but we couldn't resolve
+			// who they evaluated — surface it so the human can fix the agenda label.
+			else {
+				unmatched.push({
+					kind: "role",
+					label: row.evaluates,
+					name: row.name,
+					reason: "unknown-evaluates-label",
+				});
+			}
 		}
 		if (row.speech?.title) {
 			slot.speech = {

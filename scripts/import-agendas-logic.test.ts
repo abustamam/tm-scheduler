@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	type AgendaRecord,
+	levenshtein,
 	mapRoleLabel,
 	matchMember,
 	missingRoleDefinitions,
@@ -16,6 +17,20 @@ const roster: RosterMember[] = [
 	{ memberId: "m3", personId: "p3", name: "Mahbuba Khan" },
 	{ memberId: "m4", personId: "p4", name: "Schinthia Islam" },
 ];
+
+describe("levenshtein", () => {
+	it("computes classic edit distances", () => {
+		expect(levenshtein("kitten", "sitting")).toBe(3);
+		expect(levenshtein("flaw", "lawn")).toBe(2);
+		expect(levenshtein("book", "book")).toBe(0);
+	});
+
+	it("handles empty-string cases as the other string's length", () => {
+		expect(levenshtein("", "")).toBe(0);
+		expect(levenshtein("", "abc")).toBe(3);
+		expect(levenshtein("abc", "")).toBe(3);
+	});
+});
 
 describe("normalizeName", () => {
 	it("lowercases, trims, collapses whitespace, strips the (G) guest marker", () => {
@@ -59,6 +74,16 @@ describe("matchMember", () => {
 	it("strips (G) and matches a former guest who is now on the roster", () => {
 		const r = matchMember("Schinthia Islam (G)", roster, {});
 		expect(r.member?.memberId).toBe("m4");
+	});
+
+	it("does NOT auto-match when two roster members share the same normalized name", () => {
+		const dupes: RosterMember[] = [
+			{ memberId: "d1", personId: "pd1", name: "John Smith" },
+			{ memberId: "d2", personId: "pd2", name: "john  smith" },
+		];
+		const r = matchMember("John Smith", dupes, {});
+		expect(r.member).toBeUndefined();
+		expect(r.suggestions).toEqual(["John Smith", "john  smith"]);
 	});
 });
 
@@ -155,17 +180,43 @@ describe("planMeetingImport", () => {
 		]);
 	});
 
+	it("reports an unknown role label with reason 'unknown-label'", () => {
+		const rec: AgendaRecord = { ...baseRecord, roles: [{ label: "Something Else", name: "Schinthia Islam" }] };
+		const plan = planMeetingImport(rec, roster, roleDefs, {});
+		expect(plan.slots).toHaveLength(0);
+		expect(plan.unmatched).toEqual([
+			expect.objectContaining({ kind: "role", label: "Something Else", reason: "unknown-label" }),
+		]);
+	});
+
 	it("reports (and skips) a row whose role label maps to a definition the club lacks", () => {
 		const rec: AgendaRecord = { ...baseRecord, roles: [{ label: "Timer", name: "Schinthia Islam" }] };
 		const plan = planMeetingImport(rec, roster, roleDefs, {}); // no Timer def
 		expect(plan.slots).toHaveLength(0);
 		expect(plan.unmatched).toEqual([
-			expect.objectContaining({ kind: "role", label: "Timer" }),
+			expect.objectContaining({ kind: "role", label: "Timer", reason: "missing-definition" }),
 		]);
 	});
 
-	it("skips out-of-scope labels (Sergeant at Arms) without reporting them as errors", () => {
-		const rec: AgendaRecord = { ...baseRecord, roles: [{ label: "Sergeant at Arms", name: "Muhammad Ali" }] };
+	it("keeps the evaluator slot but reports a malformed 'evaluates' label with reason 'unknown-evaluates-label'", () => {
+		const rec: AgendaRecord = {
+			...baseRecord,
+			roles: [{ label: "Evaluator #1", name: "Saiful Haque", evaluates: "Spekaer #1" }],
+		};
+		const plan = planMeetingImport(rec, roster, roleDefs, {});
+		const evSlot = plan.slots.find((s) => s.roleDefinitionId === "rd-ev" && s.slotIndex === 0);
+		expect(evSlot?.assignedMemberId).toBe("m2");
+		expect(evSlot?.evaluatesTarget).toBeUndefined();
+		expect(plan.unmatched).toEqual([
+			expect.objectContaining({ kind: "role", label: "Spekaer #1", reason: "unknown-evaluates-label" }),
+		]);
+	});
+
+	it("skips out-of-scope labels (Sergeant at Arms), even with odd spacing, without reporting them", () => {
+		const rec: AgendaRecord = {
+			...baseRecord,
+			roles: [{ label: "Sergeant  at  Arms", name: "Muhammad Ali" }],
+		};
 		const plan = planMeetingImport(rec, roster, roleDefs, {});
 		expect(plan.slots).toHaveLength(0);
 		expect(plan.unmatched).toHaveLength(0);
