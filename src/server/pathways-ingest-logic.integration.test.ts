@@ -128,6 +128,25 @@ describe.skipIf(!hasTestDb)("pathways ingest logic", () => {
 		).rejects.toMatchObject({ status: 400 });
 	});
 
+	it("400s when the payload exceeds the zod bounds", async () => {
+		const { ingestForToken } = await import("#/server/pathways-ingest-logic");
+		const { token } = await mkToken();
+		// 201 pages > the 200-page cap.
+		await expect(
+			ingestForToken(token, {
+				basecampClubGuid: "g",
+				pages: Array.from({ length: 201 }, () => pageForEmail(memberEmail)),
+			}),
+		).rejects.toMatchObject({ status: 400 });
+		// A basecampClubGuid over the 100-char cap.
+		await expect(
+			ingestForToken(token, {
+				basecampClubGuid: "x".repeat(101),
+				pages: [pageForEmail(memberEmail)],
+			}),
+		).rejects.toMatchObject({ status: 400 });
+	});
+
 	it("ingests a matching member and returns a SyncResult", async () => {
 		const { ingestForToken } = await import("#/server/pathways-ingest-logic");
 		const { token } = await mkToken();
