@@ -14,6 +14,7 @@ import {
 	List,
 	ListChecks,
 	LogOut,
+	RefreshCw,
 	ScrollText,
 	Settings,
 } from "lucide-react";
@@ -63,6 +64,8 @@ function crumbFor(pathname: string): string {
 	if (pathname.startsWith("/admin/roles")) return "Manage · Meeting roles";
 	if (pathname.startsWith("/admin/club-settings"))
 		return "Manage · Club settings";
+	if (pathname.startsWith("/admin/sync-tokens"))
+		return "Manage · Base Camp sync";
 	if (pathname.startsWith("/admin")) return "Manage · Admin";
 	return "Workspace";
 }
@@ -115,6 +118,11 @@ function WorkspaceLayout() {
 								to="/admin/club-settings"
 								icon={Settings}
 								label="Club settings"
+							/>
+							<NavItem
+								to="/admin/sync-tokens"
+								icon={RefreshCw}
+								label="Base Camp sync"
 							/>
 						</>
 					) : null}
