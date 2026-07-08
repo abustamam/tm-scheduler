@@ -19,6 +19,7 @@ import {
 	vi,
 } from "vitest";
 import {
+	bcmProjectProgress,
 	clubs,
 	meetings,
 	members,
@@ -414,5 +415,126 @@ describe.skipIf(!hasTestDb)("pathwaysForPerson / pathwaysForMember", () => {
 			]),
 		);
 		expect(vm.upNext).toHaveLength(2);
+	});
+
+	it("sources wins from the /detail mirror when bcm_project_progress rows exist", async () => {
+		const { personId } = await makeMember({
+			email: `detail-1-${SUITE_TAG}@x.test`,
+		});
+		const cc = code("8700");
+		const { pathId, enrollmentId } = await enrollInPath(personId, {
+			courseCode: cc,
+			pathName: "Motivational Strategies",
+		});
+		const [proj] = await testDb
+			.insert(pathwaysProjects)
+			.values({
+				pathId,
+				level: 1,
+				name: "Ice Breaker",
+				isRequired: true,
+				bcmBlockId: `ib-${cc}`,
+			})
+			.returning({ id: pathwaysProjects.id });
+		await testDb.insert(bcmProjectProgress).values({
+			enrollmentId,
+			projectId: proj.id,
+			complete: true,
+			speechTitle: "My First Speech",
+			speechDate: new Date("2025-03-01T08:00:00Z"),
+		});
+
+		const paths = await pathwaysForPerson(personId);
+		const path = paths.find((p) => p.courseCode === cc);
+		expect(
+			path?.wins.some(
+				(w) => w.name === "Ice Breaker" && w.speechTitle === "My First Speech",
+			),
+		).toBe(true);
+	});
+
+	it("falls back to inference (upNextElectives null) when no mirror rows exist", async () => {
+		const { personId } = await makeMember({
+			email: `detail-2-${SUITE_TAG}@x.test`,
+		});
+		const cc = code("8705");
+		await enrollInPath(personId, {
+			courseCode: cc,
+			pathName: "Strategic Relationships",
+		});
+		const paths = await pathwaysForPerson(personId);
+		const path = paths.find((p) => p.courseCode === cc);
+		// No mirror rows and no delivered speeches → inference branch: upNextElectives null.
+		expect(path?.upNextElectives).toBeNull();
+	});
+
+	it("pathwaysByMember keys detail per-member — one member's mirror win does not leak to another on the same path", async () => {
+		const a = await makeMember({ email: `detail-leak-a-${SUITE_TAG}@x.test` });
+		const b = await makeMember({ email: `detail-leak-b-${SUITE_TAG}@x.test` });
+		const cc = code("8710");
+		// Both members enroll in the SAME path (same course code) — each gets its
+		// own enrollment id, but they share the catalog + pathwaysPaths row.
+		const { pathId, enrollmentId: enrA } = await enrollInPath(a.personId, {
+			courseCode: cc,
+			pathName: "Team Collaboration",
+		});
+		// Member B enrolls in the SAME pathwaysPaths row (course code is globally
+		// unique, so enrollInPath — which inserts a new path — can't be reused).
+		// A distinct enrollment id + its own level-progress rows.
+		const [enrBRow] = await testDb
+			.insert(pathEnrollments)
+			.values({ personId: b.personId, pathId })
+			.returning({ id: pathEnrollments.id });
+		await testDb.insert(pathLevelProgress).values([
+			{
+				enrollmentId: enrBRow.id,
+				level: 1,
+				completed: 5,
+				total: 5,
+				approved: true,
+			},
+			{
+				enrollmentId: enrBRow.id,
+				level: 2,
+				completed: 2,
+				total: 4,
+				approved: false,
+			},
+		]);
+		const [proj] = await testDb
+			.insert(pathwaysProjects)
+			.values({
+				pathId,
+				level: 1,
+				name: "Ice Breaker",
+				isRequired: true,
+				bcmBlockId: `ib-${cc}`,
+			})
+			.returning({ id: pathwaysProjects.id });
+		// Mirror row for ONLY member A's enrollment.
+		await testDb.insert(bcmProjectProgress).values({
+			enrollmentId: enrA,
+			projectId: proj.id,
+			complete: true,
+			speechTitle: "A's Only Speech",
+			speechDate: new Date("2025-03-01T08:00:00Z"),
+		});
+
+		const map = await pathwaysByMember(clubId);
+		const pathA = map.get(a.memberId)?.find((p) => p.courseCode === cc);
+		const pathB = map.get(b.memberId)?.find((p) => p.courseCode === cc);
+
+		// Member A gets the bcm-sourced win.
+		expect(
+			pathA?.wins.some(
+				(w) => w.name === "Ice Breaker" && w.speechTitle === "A's Only Speech",
+			),
+		).toBe(true);
+		// Member B must NOT inherit A's mirror row: no matching win, and the
+		// absence of any mirror row for B → inference fallback (upNextElectives null).
+		expect(pathB?.wins.some((w) => w.speechTitle === "A's Only Speech")).toBe(
+			false,
+		);
+		expect(pathB?.upNextElectives).toBeNull();
 	});
 });

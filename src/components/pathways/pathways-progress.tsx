@@ -175,24 +175,57 @@ function YourWins({ wins }: { wins: PathViewModel["wins"] }) {
 }
 
 /** Named current-level catalog projects not yet won — the specific layer
- * beneath the count bar. Never phrased as a deficiency. */
-function UpNext({ upNext }: { upNext: PathViewModel["upNext"] }) {
-	if (upNext.length === 0) return null;
+ * beneath the count bar. Never phrased as a deficiency. Electives (from the
+ * /detail mirror) collapse into a "choose N more" group. */
+function UpNext({
+	upNext,
+	electives,
+}: {
+	upNext: PathViewModel["upNext"];
+	electives: PathViewModel["upNextElectives"];
+}) {
+	const hasElectives = electives != null && electives.options.length > 0;
+	if (upNext.length === 0 && !hasElectives) return null;
 	return (
 		<div className="flex flex-col gap-2">
 			<div className="font-medium text-foreground text-sm">Up next</div>
-			<div className="flex flex-wrap gap-1.5">
-				{upNext.map((p) => (
-					<Badge
-						key={p.name}
-						variant={p.isRequired ? "default" : "outline"}
-						className={cn(!p.isRequired && "font-normal text-muted-foreground")}
-					>
-						{p.name}
-						{p.isRequired && <span className="ml-1 opacity-80">Required</span>}
-					</Badge>
-				))}
-			</div>
+			{upNext.length > 0 && (
+				<div className="flex flex-wrap gap-1.5">
+					{upNext.map((p) => (
+						<Badge
+							key={p.name}
+							variant={p.isRequired ? "default" : "outline"}
+							className={cn(
+								!p.isRequired && "font-normal text-muted-foreground",
+							)}
+						>
+							{p.name}
+							{p.isRequired && (
+								<span className="ml-1 opacity-80">Required</span>
+							)}
+						</Badge>
+					))}
+				</div>
+			)}
+			{hasElectives && (
+				<div className="flex flex-col gap-1.5">
+					<div className="text-muted-foreground text-xs">
+						Choose {electives.chooseCount} more elective
+						{electives.chooseCount === 1 ? "" : "s"}:
+					</div>
+					<div className="flex flex-wrap gap-1.5">
+						{electives.options.map((name) => (
+							<Badge
+								key={name}
+								variant="outline"
+								className="font-normal text-muted-foreground"
+							>
+								{name}
+							</Badge>
+						))}
+					</div>
+				</div>
+			)}
 			<div className="text-muted-foreground text-xs">
 				Do it in Base Camp — it'll sync here.
 			</div>
@@ -222,7 +255,9 @@ function PathBlock({ path }: { path: PathViewModel }) {
 				</div>
 			</div>
 			<YourWins wins={path.wins} />
-			{!path.complete && <UpNext upNext={path.upNext} />}
+			{!path.complete && (
+				<UpNext upNext={path.upNext} electives={path.upNextElectives} />
+			)}
 		</div>
 	);
 }
