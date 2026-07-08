@@ -174,6 +174,22 @@ describe.skipIf(!hasTestDb)("pathways ingest logic", () => {
 		expect(res.detail?.projectsDerived).toBe(1);
 	});
 
+	it("degrades to a warning (never rejects) when the detail payload is malformed", async () => {
+		// The summary sync already committed by the time the detail phase runs.
+		// A malformed `details` entry (missing courseId/blocks) must not sink that
+		// committed result behind a 400/500 — it should degrade to a warning.
+		const { ingestForToken } = await import("#/server/pathways-ingest-logic");
+		const { token } = await mkToken();
+		const res = await ingestForToken(token, {
+			basecampClubGuid: "club-guid-1",
+			pages: [pageForEmail(memberEmail)],
+			details: [{}],
+		});
+		expect(res.matched).toBe(1); // summary sync still landed
+		expect(res.detail).toBeUndefined();
+		expect(res.warning).toMatch(/details/i);
+	});
+
 	it("still works with no details (backward compatible)", async () => {
 		const { ingestForToken } = await import("#/server/pathways-ingest-logic");
 		const { token } = await mkToken();

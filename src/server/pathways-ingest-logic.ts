@@ -74,25 +74,28 @@ export async function ingestForToken(
 	const result = await syncClubProgress(tok.clubId, rows);
 	const warning = await recordTokenUse(tok, parsed.data.basecampClubGuid);
 
+	// The detail phase is best-effort augmentation on top of the summary sync,
+	// which has ALREADY committed above. It must never turn a good summary sync
+	// into a 500 — parse failures and DB errors alike degrade to a warning
+	// rather than throwing, so the caller always gets back the committed result.
 	let detail: DetailSyncResult | undefined;
+	let detailWarning: string | undefined;
 	if (parsed.data.details && parsed.data.details.length > 0) {
-		let parsedDetails: ReturnType<typeof parseDetailPayload>[];
 		try {
-			parsedDetails = (parsed.data.details as BcmDetailPayload[]).map(
+			const parsedDetails = (parsed.data.details as BcmDetailPayload[]).map(
 				parseDetailPayload,
 			);
+			detail = await syncClubDetail(tok.clubId, parsedDetails);
 		} catch {
-			throw new IngestError(
-				400,
-				"That doesn't look like a Base Camp /detail payload (expected the /detail JSON).",
-			);
+			detailWarning =
+				"Project details couldn't be synced this time; counts are up to date.";
 		}
-		detail = await syncClubDetail(tok.clubId, parsedDetails);
 	}
 
+	const finalWarning = warning ?? detailWarning;
 	return {
 		...result,
-		...(warning ? { warning } : {}),
+		...(finalWarning ? { warning: finalWarning } : {}),
 		...(detail ? { detail } : {}),
 	};
 }

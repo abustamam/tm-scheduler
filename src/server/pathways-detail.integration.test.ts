@@ -185,6 +185,50 @@ describe.skipIf(!hasTestDb)("reconcileCatalog", () => {
 		expect(ice[0].name).toBe("Ice Breaker (Revised)");
 		expect(res.projectsStamped).toBe(0); // already stamped
 	});
+
+	it("two concurrent derives of the same new required project never throw a unique violation", async () => {
+		// pathways_projects is a globally shared catalog table — two concurrent
+		// ingests (two clubs, two officers, or the unattended sync) can derive the
+		// same brand-new project at the same time. Both reconcileCatalog calls see
+		// "no existing row" and race to insert; the onConflictDoNothing + reselect
+		// fallback must make the loser a no-op instead of throwing.
+		const suffix = randomUUID().slice(0, 8);
+		const blockId = `b-concurrent-${suffix}`;
+		const name = `Concurrent Required Project ${suffix}`;
+		const concurrent = detail({
+			levels: [{ level: 2, minReqElectives: 0 }],
+			projects: [
+				{
+					blockId,
+					name,
+					level: 2,
+					isRequired: true,
+					complete: false,
+					speechTitle: null,
+					speechDate: null,
+				},
+			],
+		});
+
+		const results = await Promise.all([
+			reconcileCatalog([concurrent]),
+			reconcileCatalog([concurrent]),
+		]);
+
+		// Neither call rejected (Promise.all resolved to get here at all).
+		expect(results).toHaveLength(2);
+
+		const rows = await testDb
+			.select()
+			.from(pathwaysProjects)
+			.where(eq(pathwaysProjects.bcmBlockId, blockId));
+		expect(rows).toHaveLength(1);
+
+		// Both calls resolved the block id to the SAME (only) row.
+		for (const res of results) {
+			expect(res.projectIdByBlockId.get(blockId)).toBe(rows[0].id);
+		}
+	});
 });
 
 describe.skipIf(!hasTestDb)("syncClubDetail", () => {

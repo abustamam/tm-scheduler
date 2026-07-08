@@ -130,6 +130,13 @@ export async function reconcileCatalog(
 
 			// 3) No catalog match. Derive required projects; report electives.
 			if (proj.isRequired) {
+				// pathways_projects is a globally shared catalog table — two clubs (or
+				// two officers, or the unattended sync #117) can derive the SAME new
+				// project concurrently. A plain insert would throw a unique violation
+				// (bcm_block_id partial unique, or the (pathId, level, name) unique)
+				// when a concurrent writer wins the race. onConflictDoNothing() makes
+				// the loser a no-op instead of a throw; it then re-selects the row the
+				// winner created so its projectIdByBlockId map still gets populated.
 				const [created] = await db
 					.insert(pathwaysProjects)
 					.values({
@@ -139,9 +146,39 @@ export async function reconcileCatalog(
 						isRequired: true,
 						bcmBlockId: proj.blockId,
 					})
+					.onConflictDoNothing()
 					.returning({ id: pathwaysProjects.id });
-				res.projectsDerived += 1;
-				res.projectIdByBlockId.set(proj.blockId, created.id);
+				if (created) {
+					res.projectsDerived += 1;
+					res.projectIdByBlockId.set(proj.blockId, created.id);
+				} else {
+					// Lost the race — a concurrent insert already landed this row.
+					// Re-select by block id first, then by (pathId, level, name) in case
+					// the conflict was on that index with a different/null block id.
+					const [byBlockAfter] = await db
+						.select({ id: pathwaysProjects.id })
+						.from(pathwaysProjects)
+						.where(eq(pathwaysProjects.bcmBlockId, proj.blockId));
+					if (byBlockAfter) {
+						res.projectIdByBlockId.set(proj.blockId, byBlockAfter.id);
+					} else {
+						const [byNameAfter] = await db
+							.select({ id: pathwaysProjects.id })
+							.from(pathwaysProjects)
+							.where(
+								and(
+									eq(pathwaysProjects.pathId, pathId),
+									eq(pathwaysProjects.level, proj.level),
+									eq(pathwaysProjects.name, proj.name),
+								),
+							);
+						if (byNameAfter) {
+							res.projectIdByBlockId.set(proj.blockId, byNameAfter.id);
+						}
+						// Neither found — shouldn't happen; this project just won't get
+						// a mirror row this run.
+					}
+				}
 			} else {
 				const key = `${detail.courseCode}|${proj.level}|${proj.name}`;
 				if (!electivesByKey.has(key)) {
