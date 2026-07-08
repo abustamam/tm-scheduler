@@ -34,14 +34,30 @@ export class IngestError extends Error {
 	}
 }
 
+// Bounds are defensive ceilings, not tuned limits — each is far above any real
+// club's payload. A summary walk is one page per ~25 members (200 pages ≫ any
+// real club); details are one entry per member×path (1000 ≫ real); the club
+// GUID is a fixed-shape identifier (100 chars ≫ real). They exist so a hostile
+// client can't force unbounded work after the token check.
 const bodySchema = z.object({
-	basecampClubGuid: z.string().min(1),
-	pages: z.array(z.unknown()).min(1),
-	details: z.array(z.unknown()).optional(),
+	basecampClubGuid: z.string().min(1).max(100),
+	pages: z.array(z.unknown()).min(1).max(200),
+	details: z.array(z.unknown()).max(1000).optional(),
 });
 
 const WRONG_CLUB_WARNING =
 	"This looks like a different Base Camp club than last time.";
+
+/**
+ * Extract the raw token from an Authorization header. The scheme is
+ * case-insensitive per RFC 7235; leading/trailing whitespace is tolerated.
+ * Returns null when the header is absent or not a `Bearer <token>` value.
+ */
+export function parseBearerToken(header: string | null): string | null {
+	if (!header) return null;
+	const m = /^Bearer\s+(.+)$/i.exec(header.trim());
+	return m ? m[1] : null;
+}
 
 export async function ingestForToken(
 	rawToken: string | null,
@@ -65,6 +81,8 @@ export async function ingestForToken(
 			normalizePages(parsed.data.pages as BcmProgressPage[]),
 		);
 	} catch {
+		// No payload contents in the log — it can carry member names/emails.
+		console.warn("[ingest] unparseable progress payload");
 		throw new IngestError(
 			400,
 			"That doesn't look like a Base Camp progress payload (expected the /api/bcm/progress JSON).",
@@ -86,7 +104,12 @@ export async function ingestForToken(
 				parseDetailPayload,
 			);
 			detail = await syncClubDetail(tok.clubId, parsedDetails);
-		} catch {
+		} catch (err) {
+			// ADR-0011: the detail phase is best-effort and must never sink the
+			// already-committed summary sync — degrade to a warning. But log the
+			// cause (club id + error only, no payload) so a persistently broken
+			// detail sync is debuggable in Railway logs instead of invisible.
+			console.warn("[ingest] detail phase degraded for club", tok.clubId, err);
 			detailWarning =
 				"Project details couldn't be synced this time; counts are up to date.";
 		}

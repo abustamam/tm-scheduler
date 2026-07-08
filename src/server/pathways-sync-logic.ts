@@ -75,17 +75,27 @@ async function resolvePersonId(
 	return null;
 }
 
+// `pathways_paths` is a GLOBALLY shared catalog (no clubId). The name is set
+// once, on first insert, and never overwritten from a later payload: any one
+// club's token (or a compromised extension) must not be able to rename a
+// catalog entry that every other club displays. So this is insert-if-missing +
+// select-if-exists, NOT an upsert — the same insert-then-reselect pattern used
+// under concurrency in pathways-detail-logic.ts. The name is length-capped so a
+// hostile payload can't stuff an oversized string into the shared row.
 async function upsertPath(row: ParsedMemberPath): Promise<string> {
-	const [p] = await db
+	const name = row.pathName.slice(0, 200);
+	const [inserted] = await db
 		.insert(pathwaysPaths)
-		.values({ courseCode: row.courseCode, name: row.pathName })
-		.onConflictDoUpdate({
-			target: pathwaysPaths.courseCode,
-			set: { name: row.pathName },
-		})
+		.values({ courseCode: row.courseCode, name })
+		.onConflictDoNothing()
 		.returning({ id: pathwaysPaths.id });
-	if (!p) throw new Error("Failed to upsert path.");
-	return p.id;
+	if (inserted) return inserted.id;
+	const [existing] = await db
+		.select({ id: pathwaysPaths.id })
+		.from(pathwaysPaths)
+		.where(eq(pathwaysPaths.courseCode, row.courseCode));
+	if (!existing) throw new Error("Failed to upsert path.");
+	return existing.id;
 }
 
 async function upsertEnrollment(
