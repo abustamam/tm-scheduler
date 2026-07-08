@@ -50,6 +50,20 @@ describe("PathwaysProgress", () => {
 		).toBeTruthy();
 	});
 
+	it("pluralizes the heading when chooseCount is not 1", () => {
+		render(
+			<PathwaysProgress
+				paths={[
+					{
+						...base,
+						upNextElectives: { chooseCount: 2, options: ["A", "B"] },
+					},
+				]}
+			/>,
+		);
+		expect(screen.getByText(/Choose 2 more electives/i)).toBeTruthy();
+	});
+
 	it("renders a non-speech win as a bare name (no crash on null date/empty title)", () => {
 		render(
 			<PathwaysProgress

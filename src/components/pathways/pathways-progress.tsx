@@ -184,7 +184,8 @@ function UpNext({
 	upNext: PathViewModel["upNext"];
 	electives: PathViewModel["upNextElectives"];
 }) {
-	if (upNext.length === 0 && !electives) return null;
+	const hasElectives = electives != null && electives.options.length > 0;
+	if (upNext.length === 0 && !hasElectives) return null;
 	return (
 		<div className="flex flex-col gap-2">
 			<div className="font-medium text-foreground text-sm">Up next</div>
@@ -206,7 +207,7 @@ function UpNext({
 					))}
 				</div>
 			)}
-			{electives && (
+			{hasElectives && (
 				<div className="flex flex-col gap-1.5">
 					<div className="text-muted-foreground text-xs">
 						Choose {electives.chooseCount} more elective
