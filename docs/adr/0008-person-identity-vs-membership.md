@@ -2,6 +2,12 @@
 
 Status: Accepted
 
+> **Status update (2026-07-08):** Phase B shipped in #99/#110 (migration
+> `drizzle/0014_spicy_rattler.sql`). `club_role` now lives on `members`,
+> `user_id` on `people`, `guards.ts`/`auth-context.ts` resolve roles via the
+> membership row, `club_memberships` is dropped, and `vpe` collapsed into
+> `admin`. Statements below that describe Phase B as pending are historical.
+
 ## Context
 
 The roster `members` table is club-scoped: one row per person per club. Person-level facts —

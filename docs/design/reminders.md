@@ -2,7 +2,9 @@
 
 **Related issue**: [#7 — Reminder send job over the notifications table](https://github.com/abustamam/tm-scheduler/issues/7)
 **Status**: Design spike only — no code ships from this doc.
-**Gate**: The entire build is blocked on wiring a real email provider (ADR-0004 pre-launch task). The `sendMagicLink` callback in `src/lib/auth.ts:21-24` is still a `console.log` stub. Nothing reminder-facing ships before that is resolved.
+**Gate — CLEARED (2026-07-08)**: the shared email transport shipped (`src/lib/email.ts`, Resend; `sendMagicLink` in `src/lib/auth.ts` now sends real email). The build is unblocked.
+
+**Drift note (2026-07-08)**: the schema references in §2c/§3/§6 predate the Person/Membership model (ADR-0008, shipped #110). `club_memberships` and `clubRole = 'vpe'` no longer exist — roles live on `members.club_role` with values `admin | member`. `role_slots.assignedUserId` is now `assigned_member_id` (FK → `members`, who may have no sign-in account, so recipient resolution must go member → person → optional `user`). The reconciled build spec is `plans/020-reminders-build.md`, which supersedes this doc's §6 recipient details.
 
 ---
 
