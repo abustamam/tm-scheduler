@@ -183,3 +183,18 @@ and **#79** (`speeches` with free-text pathway fields + `role_slots.speech_id`, 
 - **#61** — data-driven progress model + restored, celebratory progress UI (Phases 1–2).
 - **#101** — paths/projects first-class + speech→project FK + free-text migration (Phase 2).
 - **#107** — filed as the extension fast-follow.
+
+## Superseded assumptions (see 2026-07-07 /detail spec + ADR-0011)
+
+Two "decisive facts" above were later disproven by Base Camp's per-member
+`/detail` endpoint (#120):
+
+- *"project identity can never come from Base Camp"* — **false**;
+  `blocks[].children[].complete` gives named per-project completion.
+- *"scraping speech-level data (it isn't exposed)"* — **false**; `/detail`
+  returns a speeches map (title + date).
+
+The `/detail` design **augments** this model (it does not replace the count-based
+mirror): see `2026-07-07-pathways-detail-endpoint-design.md` and ADR-0011. The
+elective-pool reasoning here still holds — Base Camp does not enumerate a
+member's *unchosen* electives — which is why the hand-seeded catalog is retained.
