@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { mapRoleLabel, matchMember, normalizeName, type RosterMember } from "./import-agendas-logic";
+import {
+	type AgendaRecord,
+	mapRoleLabel,
+	matchMember,
+	normalizeName,
+	planMeetingImport,
+	type RoleDef,
+	type RosterMember,
+} from "./import-agendas-logic";
 
 const roster: RosterMember[] = [
 	{ memberId: "m1", personId: "p1", name: "Jagpal Singh" },
@@ -77,5 +85,96 @@ describe("mapRoleLabel", () => {
 	it("returns null for out-of-scope / unknown labels", () => {
 		expect(mapRoleLabel("Sergeant at Arms")).toBeNull();
 		expect(mapRoleLabel("Something Else")).toBeNull();
+	});
+});
+
+const roleDefs: RoleDef[] = [
+	{ id: "rd-tm", name: "Toastmaster of the Day" },
+	{ id: "rd-sp", name: "Speaker" },
+	{ id: "rd-ev", name: "Evaluator" },
+	{ id: "rd-vc", name: "Vote Counter" },
+];
+
+const baseRecord: AgendaRecord = {
+	meetingNumber: 55,
+	date: "2026-07-09",
+	theme: "Unity",
+	wordOfTheDay: "Momentum",
+	sourceFileId: "f1",
+	sourceTitle: "55th",
+	roles: [
+		{ label: "Toastmaster", name: "Schinthia Islam" },
+		{
+			label: "Speaker #1",
+			name: "Jagpal Singh",
+			speech: { title: "Leadership in the Era of AI", projectLevel: "Level 2", projectName: "Effective Body Language" },
+		},
+		{ label: "Evaluator #1", name: "Saiful Haque", evaluates: "Speaker #1" },
+		{ label: "Vote Counter", name: "Mahbuba Khan" },
+	],
+};
+
+describe("planMeetingImport", () => {
+	it("plans a meeting, matched slots, a speech, and links the evaluator to its speaker slot", () => {
+		const plan = planMeetingImport(baseRecord, roster, roleDefs, {});
+
+		expect(plan.meeting).toMatchObject({
+			date: "2026-07-09",
+			theme: "Unity",
+			wordOfTheDay: "Momentum",
+			lengthMinutes: 60,
+			status: "completed",
+		});
+
+		const tmSlot = plan.slots.find((s) => s.roleDefinitionId === "rd-tm");
+		expect(tmSlot).toMatchObject({ assignedMemberId: "m4", slotIndex: 0, status: "confirmed" });
+
+		const spSlot = plan.slots.find((s) => s.roleDefinitionId === "rd-sp" && s.slotIndex === 0);
+		expect(spSlot?.assignedMemberId).toBe("m1");
+		expect(spSlot?.speech).toMatchObject({
+			personId: "p1",
+			title: "Leadership in the Era of AI",
+			projectLevel: "Level 2",
+			projectName: "Effective Body Language",
+		});
+
+		const evSlot = plan.slots.find((s) => s.roleDefinitionId === "rd-ev" && s.slotIndex === 0);
+		expect(evSlot?.evaluatesTarget).toEqual({ roleName: "Speaker", slotIndex: 0 });
+
+		expect(plan.slots.some((s) => s.roleDefinitionId === "rd-vc")).toBe(true);
+		expect(plan.unmatched).toHaveLength(0);
+	});
+
+	it("reports (and skips) a row whose name has no confident match", () => {
+		const rec: AgendaRecord = { ...baseRecord, roles: [{ label: "Timer", name: "Totally Unknown" }] };
+		const plan = planMeetingImport(rec, roster, [...roleDefs, { id: "rd-ti", name: "Timer" }], {});
+		expect(plan.slots).toHaveLength(0);
+		expect(plan.unmatched).toEqual([
+			expect.objectContaining({ kind: "name", label: "Timer", name: "Totally Unknown" }),
+		]);
+	});
+
+	it("reports (and skips) a row whose role label maps to a definition the club lacks", () => {
+		const rec: AgendaRecord = { ...baseRecord, roles: [{ label: "Timer", name: "Schinthia Islam" }] };
+		const plan = planMeetingImport(rec, roster, roleDefs, {}); // no Timer def
+		expect(plan.slots).toHaveLength(0);
+		expect(plan.unmatched).toEqual([
+			expect.objectContaining({ kind: "role", label: "Timer" }),
+		]);
+	});
+
+	it("skips out-of-scope labels (Sergeant at Arms) without reporting them as errors", () => {
+		const rec: AgendaRecord = { ...baseRecord, roles: [{ label: "Sergeant at Arms", name: "Muhammad Ali" }] };
+		const plan = planMeetingImport(rec, roster, roleDefs, {});
+		expect(plan.slots).toHaveLength(0);
+		expect(plan.unmatched).toHaveLength(0);
+	});
+
+	it("creates a speaker slot with no speech when the row has no speech detail", () => {
+		const rec: AgendaRecord = { ...baseRecord, roles: [{ label: "Speaker #2", name: "Saiful Haque" }] };
+		const plan = planMeetingImport(rec, roster, roleDefs, {});
+		const s = plan.slots.find((x) => x.roleDefinitionId === "rd-sp" && x.slotIndex === 1);
+		expect(s?.assignedMemberId).toBe("m2");
+		expect(s?.speech).toBeUndefined();
 	});
 });

@@ -100,3 +100,123 @@ export function mapRoleLabel(label: string): RoleTarget | null {
 	const fixed = FIXED_ROLE_MAP[key];
 	return fixed ? { roleName: fixed, slotIndex: 0 } : null;
 }
+
+export type SpeechDetail = { title: string; projectLevel?: string; projectName?: string };
+
+export type AgendaRoleRow = {
+	label: string;
+	name: string;
+	speech?: SpeechDetail;
+	evaluates?: string; // e.g. "Speaker #1"
+};
+
+export type AgendaRecord = {
+	meetingNumber: number | null;
+	date: string; // ISO yyyy-mm-dd
+	theme?: string;
+	wordOfTheDay?: string;
+	roles: AgendaRoleRow[];
+	sourceFileId: string;
+	sourceTitle: string;
+};
+
+export type RoleDef = { id: string; name: string };
+
+export type PlannedSpeech = {
+	personId: string;
+	title: string;
+	projectLevel?: string;
+	projectName?: string;
+};
+
+export type PlannedSlot = {
+	roleDefinitionId: string;
+	slotIndex: number;
+	assignedMemberId: string;
+	status: "confirmed";
+	evaluatesTarget?: RoleTarget; // resolved to a speaker slot id by the writer
+	speech?: PlannedSpeech;
+};
+
+export type PlannedMeeting = {
+	date: string;
+	theme?: string;
+	wordOfTheDay?: string;
+	lengthMinutes: 60;
+	status: "completed";
+};
+
+export type UnmatchedEntry =
+	| { kind: "name"; label: string; name: string; suggestions: string[] }
+	| { kind: "role"; label: string; name: string };
+
+export type MeetingPlan = {
+	meeting: PlannedMeeting;
+	slots: PlannedSlot[];
+	unmatched: UnmatchedEntry[];
+};
+
+/** Labels that are intentionally not imported as per-meeting slots. */
+const IGNORED_LABELS = new Set(["sergeant at arms", "sergeant-at-arms"]);
+
+export function planMeetingImport(
+	record: AgendaRecord,
+	roster: RosterMember[],
+	roleDefs: RoleDef[],
+	aliases: Record<string, string>,
+): MeetingPlan {
+	const meeting: PlannedMeeting = {
+		date: record.date,
+		theme: record.theme,
+		wordOfTheDay: record.wordOfTheDay,
+		lengthMinutes: 60,
+		status: "completed",
+	};
+	const slots: PlannedSlot[] = [];
+	const unmatched: UnmatchedEntry[] = [];
+	const defByName = new Map(roleDefs.map((d) => [d.name, d]));
+
+	for (const row of record.roles) {
+		if (!row.name?.trim()) continue; // blank cell
+		if (IGNORED_LABELS.has(row.label.toLowerCase().trim())) continue;
+
+		const target = mapRoleLabel(row.label);
+		if (!target) {
+			unmatched.push({ kind: "role", label: row.label, name: row.name });
+			continue;
+		}
+		const def = defByName.get(target.roleName);
+		if (!def) {
+			unmatched.push({ kind: "role", label: row.label, name: row.name });
+			continue;
+		}
+
+		const match = matchMember(row.name, roster, aliases);
+		if (!match.member) {
+			unmatched.push({ kind: "name", label: row.label, name: row.name, suggestions: match.suggestions });
+			continue;
+		}
+
+		const slot: PlannedSlot = {
+			roleDefinitionId: def.id,
+			slotIndex: target.slotIndex,
+			assignedMemberId: match.member.memberId,
+			status: "confirmed",
+		};
+		if (row.evaluates) {
+			const evTarget = mapRoleLabel(row.evaluates);
+			if (evTarget) slot.evaluatesTarget = evTarget;
+		}
+		if (row.speech?.title) {
+			slot.speech = {
+				personId: match.member.personId,
+				title: row.speech.title,
+				projectLevel: row.speech.projectLevel,
+				projectName: row.speech.projectName,
+			};
+		}
+		slots.push(slot);
+	}
+
+	return { meeting, slots, unmatched };
+}
