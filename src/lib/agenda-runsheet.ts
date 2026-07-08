@@ -148,12 +148,16 @@ export const RUN_OF_SHOW: Beat[] = [
 ];
 
 /** "Speaker 1" when the role repeats this meeting, else "Speaker". */
-function numbered(roleName: string, index: number, multi: boolean): string {
+export function numbered(
+	roleName: string,
+	index: number,
+	multi: boolean,
+): string {
 	return multi ? `${roleName} ${index + 1}` : roleName;
 }
 
 /** Order evaluator slots by the position of the speaker each evaluates. */
-function orderEvaluators(
+export function orderEvaluators(
 	evaluators: AgendaSlot[],
 	allSlots: AgendaSlot[],
 ): AgendaSlot[] {
