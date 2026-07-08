@@ -241,4 +241,112 @@ describe.skipIf(!hasTestDb)("speech pointer lifecycle (ADR-0009)", () => {
 			.where(eq(speeches.id, created!));
 		expect(still?.title).toBe("Second");
 	});
+
+	// -------------------------------------------------------------------------
+	// attachSpeechToOpenSlot race guard (ADR-0005 / #125). The conditional
+	// UPDATE is the last-line guard: concurrent attaches onto one open slot must
+	// resolve to exactly one winner, never last-writer-wins.
+	// -------------------------------------------------------------------------
+
+	/** Insert an unscheduled Person-owned speech and return its id. */
+	async function seedSpeech(personId: string, title: string): Promise<string> {
+		const [row] = await testDb
+			.insert(speeches)
+			.values({ personId, title })
+			.returning({ id: speeches.id });
+		return row!.id;
+	}
+
+	/** Insert an OPEN speaker slot on the seeded meeting and return its id. */
+	async function seedOpenSpeakerSlot(slotIndex: number): Promise<string> {
+		const [row] = await testDb
+			.insert(roleSlots)
+			.values({
+				meetingId: seed.meetingId,
+				roleDefinitionId: speakerRoleId,
+				slotIndex,
+				status: "open",
+			})
+			.returning({ id: roleSlots.id });
+		return row!.id;
+	}
+
+	it("concurrent attach onto one open slot: exactly one wins, one is rejected", async () => {
+		const { attachSpeechToOpenSlot } = await import("./speeches-logic");
+		const openSlotId = await seedOpenSpeakerSlot(10);
+		// Two unscheduled speeches owned by two DIFFERENT active members.
+		const speechA = await seedSpeech(seed.personId, "Talk A");
+		const speechB = await seedSpeech(secondPersonId, "Talk B");
+
+		// Pass `testDb` (not a tx) so the two calls actually interleave.
+		const results = await Promise.allSettled([
+			attachSpeechToOpenSlot(testDb, {
+				speechId: speechA,
+				slotId: openSlotId,
+				actorMemberId: null,
+			}),
+			attachSpeechToOpenSlot(testDb, {
+				speechId: speechB,
+				slotId: openSlotId,
+				actorMemberId: null,
+			}),
+		]);
+
+		const fulfilled = results.filter((r) => r.status === "fulfilled");
+		const rejected = results.filter((r) => r.status === "rejected");
+		expect(fulfilled).toHaveLength(1);
+		expect(rejected).toHaveLength(1);
+
+		const winner = (
+			fulfilled[0] as PromiseFulfilledResult<{
+				clubId: string;
+				assignedMemberId: string;
+			}>
+		).value;
+
+		// The slot ends claimed with the winner's assignee and one of the speeches.
+		const [row] = await testDb
+			.select({
+				status: roleSlots.status,
+				speechId: roleSlots.speechId,
+				assignedMemberId: roleSlots.assignedMemberId,
+			})
+			.from(roleSlots)
+			.where(eq(roleSlots.id, openSlotId))
+			.limit(1);
+		expect(row?.status).toBe("claimed");
+		expect(row?.assignedMemberId).toBe(winner.assignedMemberId);
+		expect([speechA, speechB]).toContain(row?.speechId);
+	});
+
+	it("attach onto an already-claimed slot is rejected", async () => {
+		const { attachSpeechToOpenSlot } = await import("./speeches-logic");
+		// Pre-claim a fresh speaker slot directly.
+		const takenSlotId = await seedOpenSpeakerSlot(11);
+		await testDb
+			.update(roleSlots)
+			.set({ status: "claimed", assignedMemberId: seed.memberId })
+			.where(eq(roleSlots.id, takenSlotId));
+
+		const speechId = await seedSpeech(secondPersonId, "Too Late");
+		await expect(
+			attachSpeechToOpenSlot(testDb, {
+				speechId,
+				slotId: takenSlotId,
+				actorMemberId: null,
+			}),
+		).rejects.toThrow();
+
+		// The slot is untouched — still the original claimant, no speech.
+		const [row] = await testDb
+			.select({
+				assignedMemberId: roleSlots.assignedMemberId,
+				speechId: roleSlots.speechId,
+			})
+			.from(roleSlots)
+			.where(eq(roleSlots.id, takenSlotId))
+			.limit(1);
+		expect(row?.assignedMemberId).toBe(seed.memberId);
+		expect(row?.speechId).toBeNull();
+	});
 });

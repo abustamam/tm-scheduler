@@ -283,7 +283,11 @@ export async function attachSpeechToOpenSlot(
 		.set({ speechId: null })
 		.where(eq(roleSlots.speechId, args.speechId));
 
-	await conn
+	// Conditional UPDATE is the last-line race guard (ADR-0005): only one writer
+	// can flip an open, unassigned, speech-free slot. A concurrent attach/claim
+	// that already took the slot leaves zero rows here → we reject rather than
+	// silently clobbering the winner.
+	const updated = await conn
 		.update(roleSlots)
 		.set({
 			assignedMemberId: membership.id,
@@ -291,7 +295,18 @@ export async function attachSpeechToOpenSlot(
 			claimedAt: new Date(),
 			speechId: args.speechId,
 		})
-		.where(eq(roleSlots.id, args.slotId));
+		.where(
+			and(
+				eq(roleSlots.id, args.slotId),
+				eq(roleSlots.status, "open"),
+				isNull(roleSlots.assignedMemberId),
+				isNull(roleSlots.speechId),
+			),
+		)
+		.returning({ id: roleSlots.id });
+	if (updated.length === 0) {
+		throw new Error("That speaker slot was just claimed by someone else.");
+	}
 
 	await logActivity(conn, {
 		clubId: slot.clubId,
