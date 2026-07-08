@@ -45,8 +45,8 @@ exit 0, `bun run test` → 15 passed | 13 skipped (no DB) / **28 passed with a D
 | 011 | Fix the Biome gate (`bun run check`) | P2 | S | 004 | [#18](https://github.com/abustamam/tm-scheduler/issues/18) | DONE — merged to main |
 | 008 | Spike: VP Education dashboard | P3 | M | — | [#8](https://github.com/abustamam/tm-scheduler/issues/8) (+[#9](https://github.com/abustamam/tm-scheduler/issues/9)) | DONE — `docs/design/vpe-dashboard.md` (PR #23) |
 | 010 | Spike: reminders / notifications | P3 | M | — | [#7](https://github.com/abustamam/tm-scheduler/issues/7) | DONE — `docs/design/reminders.md` (PR #23) |
-| 012 | Migrate hosting to Railway (push-to-deploy) | P2 | M | — | [#11](https://github.com/abustamam/tm-scheduler/issues/11) | TODO — runbook ready; ADR-0007 supersedes 0003 |
-| 013 | Wire real email delivery (magic-link via Resend) | P1 | M | — | [#1](https://github.com/abustamam/tm-scheduler/issues/1) | DONE — on branch feat/magic-link-email |
+| 012 | Migrate hosting to Railway (push-to-deploy) | P2 | M | — | [#11](https://github.com/abustamam/tm-scheduler/issues/11) | DONE — live (Dockerfile + railway.json; push-to-main deploys; ADR-0007) |
+| 013 | Wire real email delivery (magic-link via Resend) | P1 | M | — | [#1](https://github.com/abustamam/tm-scheduler/issues/1) | DONE — merged to main (`src/lib/email.ts` Resend transport) |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | REJECTED (one-line rationale)
 
@@ -117,3 +117,119 @@ anytime, though `009`'s test wants `002`'s harness.
 - The request-bound auth path (`requireUser` via `getRequest`/`auth.api.getSession`
   and the `createServerFn` wrappers) is not covered by plan 002's tests — see its
   maintenance note; an HTTP/E2E layer is a future follow-up.
+
+---
+
+# Deep audit #2 — 2026-07-08, against commit `6a37548`
+
+A second full `/improve deep` audit, focused on the ~30 commits since the
+first (Pathways sync + browser extension, speeches as first-class entities,
+officer terms, TMOD self-serve editing, printable agendas). All plan-001–013
+fixes held up. Overall posture of the new code is strong (server-side authz
+consistent, sync tokens hashed CSPRNG, catalog concurrency handled); the
+selected findings became plans 014–020 below. Numbering continues from the
+first run; statuses maintained the same way.
+
+## Execution order & status (audit #2)
+
+| Plan | Title | Priority | Effort | Depends on | Issue | Status |
+|------|-------|----------|--------|------------|-------|--------|
+| 014 | Restore ADR-0005 race guard on attach/reassign slot writes | P1 | S | — | [#125](https://github.com/abustamam/tm-scheduler/issues/125) | TODO |
+| 015 | Harden `/api/pathways/ingest` (catalog scope, payload caps, logging, tests) | P1 | M | — | [#126](https://github.com/abustamam/tm-scheduler/issues/126) | TODO |
+| 016 | Correct actively-wrong agent-facing docs (CLAUDE.md, ADR-0008, persistence-todo, 2 design docs) | P1 | S | — | [#127](https://github.com/abustamam/tm-scheduler/issues/127) | TODO |
+| 017 | CI executes the bundled prod migrate runner (`.output/migrate.mjs`) | P2 | S | — | [#128](https://github.com/abustamam/tm-scheduler/issues/128) | TODO |
+| 018 | Extension CI job (wxt prepare, typecheck, tests, build) | P2 | S | — | [#129](https://github.com/abustamam/tm-scheduler/issues/129) | TODO |
+| 019 | Pin `latest`/nightly dependency ranges to locked versions | P2 | S | — | [#130](https://github.com/abustamam/tm-scheduler/issues/130) | TODO |
+| 020 | Reminders build: notifications schema v2, write points, poller, templates | P2 | L | 014 (soft — same `slots.ts` handlers) | [#7](https://github.com/abustamam/tm-scheduler/issues/7) (pre-existing) | TODO |
+
+Issues #125–#130 filed 2026-07-08 (repo is public, so #126's body is
+sanitized — the full finding detail lives in the plan file). Plan 020 maps to
+pre-existing #7 (a reconciliation comment was posted there instead of a new
+issue). Tracker hygiene from the audit: #120 closed as shipped (#122/#123).
+
+## Dependency notes (audit #2)
+
+- **014 before 020** (soft): both touch `claimSlot`/`releaseSlot`/`reassignSlot`
+  in `src/server/slots.ts`. 020's reassign write point belongs inside 014's
+  extracted `reassignSlotCore`. Not a hard blocker — 020 documents both shapes.
+- **015 and 020 are independent** but both add `console.*` logging patterns —
+  keep the `[ingest]` / `[notifications]` prefixes consistent.
+- **016 is independent** and safe to run first (docs only). It adds a pointer
+  from `docs/design/reminders.md` to plan 020.
+- **018 before any extension code changes** (none planned this round) so the
+  new job guards them.
+- **019 conflicts with nothing** but regenerates `bun.lock` — rebase other
+  branches after it lands.
+
+## Findings considered and rejected (audit #2)
+
+- **Devtools in the prod client bundle** (`__root.tsx` renders TanStack
+  devtools unconditionally): mitigated by the `@tanstack/devtools-vite` plugin,
+  whose job is stripping them from production builds. Not a finding.
+- **Missing indexes on new tables**: verified present and aligned with query
+  patterns (`bcm_project_progress` unique, `officer_terms_open_idx`,
+  `speeches_person_idx`, `activity_log (clubId, createdAt)`, etc.).
+- **`import-members-logic.ts` per-row queries**: offline CLI path, bounded to
+  rosters of tens. Not worth changing.
+- **esbuild moderate advisory** (GHSA-67mh-4wv8-2f99): dev-server only; the
+  production path never runs esbuild's dev server. Informational.
+- **Migration hygiene** (destructive DDL in 0009/0013/0014): reviewed — all
+  guarded, backfilled, ADR-cited. Verification note only: CI's empty test DB
+  can't catch constraint violations on real prod rows; consider a staging
+  apply for future `NOT NULL`/`DROP TABLE` migrations.
+- **Real-clock date boundaries in two integration suites**: latent flakiness
+  only (multi-day offsets today). Not planned.
+- **`/resources` route ships hardcoded mock data** (`src/data/resources.ts`,
+  linked in the sidebar): real, but whether to gate the nav item or promote
+  the content is a product call — operator to decide, no plan written.
+- **Ingest per-request DB round-trips (~500–2,000 sequential queries/sync)**
+  (`pathways-detail-logic.ts` / `pathways-sync-logic.ts` loops): real and
+  HIGH-confidence but deferred by operator choice — revisit before/with #117
+  (unattended scheduled sync), which multiplies request volume. Fix shape:
+  memoize resolved blocks, batch multi-row inserts, one-query enrollment
+  resolution.
+- **1,725-line `meeting-agenda-print.tsx` (4 copy-pasted layouts) + 850–960-line
+  route files**: deferred — high effort, pixel-tuned print regression risk,
+  low current pain.
+- **`guards.ts` tested via re-implemented mirror; route-wrapper/HTTP layer
+  untested; `club.ts`/`auth-context.ts` unextracted**: acknowledged coverage
+  gaps, not planned this round (015 covers the ingest slice of it).
+- **UI triplication across the three meeting routes** (`errMessage` ×3,
+  `ClaimSpeakerSheet` ×2 drifted, two edit-meta dialogs): real M-effort
+  cleanup, not selected this round.
+- **Small-cleanups bundle** (unused `popover.tsx`, `next-themes` without a
+  ThemeProvider, `requireClubRole` roles param always `["admin"]`, duplicated
+  Base Camp constants, extension `postMessage("*")` hardening, null-push in
+  `basecamp-walk.ts:57-59`, Biome not covering `scripts/`, missing
+  `TEST_DATABASE_URL`/`ENABLE_DEV_LOGIN` in `.env.example`, no `typecheck`
+  script): individually S; batch when convenient.
+- **Security headers (CSP/HSTS/XFO/nosniff)**: real hardening gap, not
+  selected this round; needs a report-only CSP rollout pass.
+
+## Direction findings recorded, not planned (audit #2)
+
+- **VPE speaker-queue/overdue dashboard** (#8/#9) — spike complete
+  (`docs/design/vpe-dashboard.md`), build files don't exist. Next feature
+  candidate after 020.
+- **CSV roster upload UI** (#62) — import logic fully built + tested; only a
+  CLI entry point exists. Gates second-club onboarding.
+- **Calendar export (.ics)** — stated scope (CONTEXT.md), zero code, no issue
+  yet.
+- **Unattended scheduled sync** (#117) — needs-info spike; do the ingest perf
+  batching (rejected-finding above) alongside it.
+- **Tracker hygiene**: issue #120's work had shipped (PRs #122/#123) — closed
+  2026-07-08 with a comment.
+
+## Not audited / caveats (audit #2)
+
+- Headless-browser/UI behavior not exercised; the audit was code-reading plus
+  the standard gates (`bun run check` exit 0 with 68 warnings, CI green on
+  main, `bun audit` clean apart from the dev-only esbuild advisory).
+- Local `tsc --noEmit` failed only on a stale local `node_modules`
+  (missing `cmdk`) — not a repo defect; CI typechecks clean.
+- `drizzle/` migrations were reviewed by grep + one full read (0014); not all
+  20 line-by-line.
+- Untracked `samples/*.har` files in the working tree contain live Base Camp
+  session tokens (gitignored, never committed) — operator advised to delete
+  them and treat those session tokens as burned.
+
