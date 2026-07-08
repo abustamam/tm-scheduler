@@ -231,3 +231,81 @@ describe("buildSlideDeck table topics", () => {
 		expect(kinds([])).not.toContain("voteTableTopics");
 	});
 });
+
+describe("buildSlideDeck evaluation session", () => {
+	const ge = slot({
+		id: "ge",
+		roleName: "General Evaluator",
+		category: "evaluator",
+		assigneeName: "Saiful Haque",
+	});
+	const grammarian = slot({
+		id: "gr",
+		roleName: "Grammarian",
+		category: "functionary",
+		assigneeName: "Mona",
+	});
+	const speaker = slot({
+		id: "sp1",
+		roleName: "Speaker",
+		category: "speaker",
+		isSpeakerRole: true,
+		slotIndex: 0,
+		assigneeName: "Rehanna Khan",
+	});
+	const evaluator = slot({
+		id: "ev1",
+		roleName: "Evaluator",
+		category: "evaluator",
+		slotIndex: 0,
+		assigneeName: "Faisal Ali",
+		evaluatesSlotId: "sp1",
+		evaluates: { speakerName: "Rehanna Khan" },
+	});
+
+	it("emits geIntro with the GE's functionary team via buildLegend", () => {
+		const slide = buildSlideDeck(meeting, club, [ge, grammarian]).find(
+			(s) => s.kind === "geIntro",
+		);
+		expect(slide).toMatchObject({
+			name: "Saiful Haque",
+			team: [{ role: "Grammarian", name: "Mona" }],
+		});
+	});
+
+	it("orders the full evaluation session correctly", () => {
+		const ks = buildSlideDeck(meeting, club, [
+			ge,
+			speaker,
+			evaluator,
+		]).map((s) => s.kind);
+		expect(ks).toEqual([
+			"title",
+			"toastmaster",
+			"geIntro",
+			"speech",
+			"voteSpeaker",
+			"evalIntro",
+			"evaluation",
+			"voteEvaluator",
+			"generalEvaluation",
+			"thankYou",
+		]);
+	});
+
+	it("evaluation slide pairs evaluator to the speaker they evaluate", () => {
+		const slide = buildSlideDeck(meeting, club, [ge, speaker, evaluator]).find(
+			(s) => s.kind === "evaluation",
+		);
+		expect(slide).toMatchObject({
+			evaluator: "Faisal Ali",
+			speaker: "Rehanna Khan",
+			time: "2–3 minutes",
+		});
+	});
+
+	it("omits GE slides when no General Evaluator slot exists", () => {
+		expect(kinds([])).not.toContain("geIntro");
+		expect(kinds([])).not.toContain("generalEvaluation");
+	});
+});

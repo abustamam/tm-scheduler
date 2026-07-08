@@ -1,8 +1,10 @@
 import type { AgendaSlot, LegendEntry } from "./agenda-runsheet";
 import {
+	buildLegend,
 	DEFAULT_SPEAKER_MINUTES,
 	numbered,
 	OPEN_LABEL,
+	orderEvaluators,
 } from "./agenda-runsheet";
 
 /** The meeting fields the deck needs (structural subset of the DB row). */
@@ -118,6 +120,15 @@ export function buildSlideDeck(
 		});
 	}
 
+	const generalEvaluator = byRoleName(slots, ROLE.generalEvaluator);
+	if (generalEvaluator.length > 0) {
+		deck.push({
+			kind: "geIntro",
+			name: generalEvaluator[0].assigneeName ?? OPEN_LABEL,
+			team: buildLegend(slots),
+		});
+	}
+
 	const speakers = slots
 		.filter((s) => s.isSpeakerRole)
 		.sort((a, b) => a.slotIndex - b.slotIndex);
@@ -144,6 +155,34 @@ export function buildSlideDeck(
 			timing: TABLE_TOPICS_TIMING,
 		});
 		deck.push({ kind: "voteTableTopics" });
+	}
+
+	const evaluators = orderEvaluators(
+		byRoleName(slots, ROLE.evaluator),
+		slots,
+	);
+	if (evaluators.length > 0) {
+		const geName = generalEvaluator[0]?.assigneeName ?? ROLE.generalEvaluator;
+		deck.push({ kind: "evalIntro", name: geName, time: EVAL_SESSION_TIMING });
+		const multi = evaluators.length > 1;
+		evaluators.forEach((s, i) => {
+			deck.push({
+				kind: "evaluation",
+				label: numbered("Evaluation", i, multi),
+				evaluator: s.assigneeName ?? OPEN_LABEL,
+				speaker: s.evaluates?.speakerName ?? null,
+				time: EVALUATION_TIMING,
+			});
+		});
+		deck.push({ kind: "voteEvaluator", names: assignedNames(evaluators) });
+	}
+
+	if (generalEvaluator.length > 0) {
+		deck.push({
+			kind: "generalEvaluation",
+			name: generalEvaluator[0].assigneeName ?? OPEN_LABEL,
+			time: GENERAL_EVALUATION_TIMING,
+		});
 	}
 
 	deck.push({ kind: "thankYou", meetingSchedule: club.meetingSchedule });
