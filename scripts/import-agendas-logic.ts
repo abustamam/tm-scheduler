@@ -220,3 +220,16 @@ export function planMeetingImport(
 
 	return { meeting, slots, unmatched };
 }
+
+export type RoleDefToCreate = {
+	name: string;
+	category: "functionary";
+	isSpeakerRole: false;
+	defaultCount: number;
+};
+
+/** The only role definition this backfill may create: Vote Counter. */
+export function missingRoleDefinitions(roleDefs: RoleDef[]): RoleDefToCreate[] {
+	const has = roleDefs.some((d) => d.name === "Vote Counter");
+	return has ? [] : [{ name: "Vote Counter", category: "functionary", isSpeakerRole: false, defaultCount: 1 }];
+}

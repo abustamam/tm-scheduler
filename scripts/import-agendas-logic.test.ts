@@ -3,6 +3,7 @@ import {
 	type AgendaRecord,
 	mapRoleLabel,
 	matchMember,
+	missingRoleDefinitions,
 	normalizeName,
 	planMeetingImport,
 	type RoleDef,
@@ -176,5 +177,16 @@ describe("planMeetingImport", () => {
 		const s = plan.slots.find((x) => x.roleDefinitionId === "rd-sp" && x.slotIndex === 1);
 		expect(s?.assignedMemberId).toBe("m2");
 		expect(s?.speech).toBeUndefined();
+	});
+});
+
+describe("missingRoleDefinitions", () => {
+	it("returns a Vote Counter definition to create when the club lacks it", () => {
+		const missing = missingRoleDefinitions([{ id: "rd-tm", name: "Toastmaster of the Day" }]);
+		expect(missing).toEqual([{ name: "Vote Counter", category: "functionary", isSpeakerRole: false, defaultCount: 1 }]);
+	});
+
+	it("returns nothing when Vote Counter already exists", () => {
+		expect(missingRoleDefinitions([{ id: "rd-vc", name: "Vote Counter" }])).toEqual([]);
 	});
 });
