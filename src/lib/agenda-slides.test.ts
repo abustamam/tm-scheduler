@@ -79,3 +79,46 @@ describe("buildSlideDeck anchors", () => {
 		});
 	});
 });
+
+describe("buildSlideDeck theme + word of the day", () => {
+	it("omits theme + wordOfDay when both blank", () => {
+		expect(kinds([])).not.toContain("theme");
+		expect(kinds([])).not.toContain("wordOfDay");
+	});
+
+	it("emits theme slide only when theme set", () => {
+		const deck = buildSlideDeck({ ...meeting, theme: "A Fresh Start" }, club, []);
+		expect(deck.map((s) => s.kind)).toEqual([
+			"title",
+			"toastmaster",
+			"theme",
+			"thankYou",
+		]);
+		expect(deck[2]).toMatchObject({ kind: "theme", theme: "A Fresh Start" });
+	});
+
+	it("wordOfDay slide includes definition + example only when present", () => {
+		const full = buildSlideDeck(
+			{
+				...meeting,
+				wordOfTheDay: "Momentum",
+				wodDefinition: "impetus gained by a moving object",
+				wodExample: "The momentum of the river keeps moving forward.",
+			},
+			club,
+			[],
+		);
+		expect(full.find((s) => s.kind === "wordOfDay")).toMatchObject({
+			word: "Momentum",
+			definition: "impetus gained by a moving object",
+			example: "The momentum of the river keeps moving forward.",
+		});
+
+		const wordOnly = buildSlideDeck({ ...meeting, wordOfTheDay: "Momentum" }, club, []);
+		expect(wordOnly.find((s) => s.kind === "wordOfDay")).toMatchObject({
+			word: "Momentum",
+			definition: null,
+			example: null,
+		});
+	});
+});

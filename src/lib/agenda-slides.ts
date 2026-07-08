@@ -85,6 +85,19 @@ export function buildSlideDeck(
 
 	deck.push({ kind: "toastmaster", name: assigneeOrOpen(slots, ROLE.toastmaster) });
 
+	if (meeting.theme?.trim()) {
+		deck.push({ kind: "theme", theme: meeting.theme.trim() });
+	}
+
+	if (meeting.wordOfTheDay?.trim()) {
+		deck.push({
+			kind: "wordOfDay",
+			word: meeting.wordOfTheDay.trim(),
+			definition: meeting.wodDefinition?.trim() || null,
+			example: meeting.wodExample?.trim() || null,
+		});
+	}
+
 	deck.push({ kind: "thankYou", meetingSchedule: club.meetingSchedule });
 
 	return deck;
