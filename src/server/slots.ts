@@ -16,7 +16,7 @@ import {
 	applyRemoveSpeakerSlot,
 	attachSpeechToSlot,
 	editSlotSpeech,
-	reassignSlotSpeech,
+	reassignSlotCore,
 } from "./slots-logic";
 
 const speakerDetailsSchema = z.object({
@@ -298,19 +298,12 @@ const reassignSchema = z.object({
 export const reassignSlot = createServerFn({ method: "POST" })
 	.validator((input: unknown) => reassignSchema.parse(input))
 	.handler(async ({ data }) => {
+		// Cheap pre-read solely to resolve clubId for the trust guards; the
+		// authoritative read-and-write happens under a row lock in
+		// reassignSlotCore (ADR-0005 atomicity — this row may change before the tx).
 		const [slot] = await db
-			.select({
-				id: roleSlots.id,
-				status: roleSlots.status,
-				assignedMemberId: roleSlots.assignedMemberId,
-				isSpeakerRole: roleDefinitions.isSpeakerRole,
-				clubId: meetings.clubId,
-			})
+			.select({ clubId: meetings.clubId })
 			.from(roleSlots)
-			.innerJoin(
-				roleDefinitions,
-				eq(roleDefinitions.id, roleSlots.roleDefinitionId),
-			)
 			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
 			.where(eq(roleSlots.id, data.slotId))
 			.limit(1);
@@ -323,54 +316,15 @@ export const reassignSlot = createServerFn({ method: "POST" })
 		await requireMemberInClub(data.actorMemberId, slot.clubId);
 		await requireMemberInClub(data.memberId, slot.clubId);
 
-		// Reassigning a speaker slot to a *different* Person unlinks the speech;
-		// the old speech persists Person-owned and unscheduled (ADR-0009 — no
-		// longer destructive). Reassigning within the same Person keeps it.
-		const personOf = async (memberId: string | null) =>
-			memberId
-				? ((
-						await db
-							.select({ personId: members.personId })
-							.from(members)
-							.where(eq(members.id, memberId))
-							.limit(1)
-					)[0]?.personId ?? null)
-				: null;
-		const fromPerson = slot.isSpeakerRole
-			? await personOf(slot.assignedMemberId)
-			: null;
-		const toPerson = slot.isSpeakerRole ? await personOf(data.memberId) : null;
-
-		return db.transaction(async (tx) => {
-			// New holder hasn't been confirmed → back to "claimed".
-			await tx
-				.update(roleSlots)
-				.set({ assignedMemberId: data.memberId, status: "claimed" })
-				.where(eq(roleSlots.id, data.slotId));
-
-			// Unlink the speech only when the Person actually changed.
-			if (slot.isSpeakerRole) {
-				await reassignSlotSpeech(tx, {
-					slotId: data.slotId,
-					fromPersonId: fromPerson,
-					toPersonId: toPerson,
-				});
-			}
-
-			await logActivity(tx, {
-				clubId: slot.clubId,
+		await db.transaction((tx) =>
+			reassignSlotCore(tx, {
+				slotId: data.slotId,
+				memberId: data.memberId,
 				actorMemberId: data.actorMemberId,
-				action: "reassign",
-				targetType: "slot",
-				targetId: data.slotId,
-				detail: {
-					fromMemberId: slot.assignedMemberId,
-					memberId: data.memberId,
-				},
-			});
+			}),
+		);
 
-			return { ok: true as const };
-		});
+		return { ok: true as const };
 	});
 
 const updateSpeakerDetailsSchema = z.object({
