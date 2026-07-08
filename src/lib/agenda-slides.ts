@@ -38,7 +38,12 @@ export type Slide =
 	  }
 	| { kind: "toastmaster"; name: string }
 	| { kind: "theme"; theme: string }
-	| { kind: "wordOfDay"; word: string; definition: string | null; example: string | null }
+	| {
+			kind: "wordOfDay";
+			word: string;
+			definition: string | null;
+			example: string | null;
+	  }
 	| { kind: "geIntro"; name: string; team: LegendEntry[] }
 	| {
 			kind: "speech";
@@ -52,7 +57,13 @@ export type Slide =
 	| { kind: "tableTopics"; master: string; timing: string }
 	| { kind: "voteTableTopics" }
 	| { kind: "evalIntro"; name: string; time: string }
-	| { kind: "evaluation"; label: string; evaluator: string; speaker: string | null; time: string }
+	| {
+			kind: "evaluation";
+			label: string;
+			evaluator: string;
+			speaker: string | null;
+			time: string;
+	  }
 	| { kind: "voteEvaluator"; names: string[] }
 	| { kind: "generalEvaluation"; name: string; time: string }
 	| { kind: "awards"; categories: string[] }
@@ -105,7 +116,10 @@ export function buildSlideDeck(
 		timezone: club.timezone,
 	});
 
-	deck.push({ kind: "toastmaster", name: assigneeOrOpen(slots, ROLE.toastmaster) });
+	deck.push({
+		kind: "toastmaster",
+		name: assigneeOrOpen(slots, ROLE.toastmaster),
+	});
 
 	if (meeting.theme?.trim()) {
 		deck.push({ kind: "theme", theme: meeting.theme.trim() });
@@ -157,10 +171,7 @@ export function buildSlideDeck(
 		deck.push({ kind: "voteTableTopics" });
 	}
 
-	const evaluators = orderEvaluators(
-		byRoleName(slots, ROLE.evaluator),
-		slots,
-	);
+	const evaluators = orderEvaluators(byRoleName(slots, ROLE.evaluator), slots);
 	if (evaluators.length > 0) {
 		const geName = generalEvaluator[0]?.assigneeName ?? ROLE.generalEvaluator;
 		deck.push({ kind: "evalIntro", name: geName, time: EVAL_SESSION_TIMING });
@@ -183,6 +194,18 @@ export function buildSlideDeck(
 			name: generalEvaluator[0].assigneeName ?? OPEN_LABEL,
 			time: GENERAL_EVALUATION_TIMING,
 		});
+	}
+
+	const awardCategories: string[] = [];
+	if (tableTopics.length > 0) awardCategories.push("Best Table Topic");
+	if (evaluators.length > 0) awardCategories.push("Best Evaluator");
+	if (speakers.length > 0) awardCategories.push("Best Speaker");
+	if (awardCategories.length > 0) {
+		deck.push({ kind: "awards", categories: awardCategories });
+	}
+
+	if (meeting.reminders?.trim()) {
+		deck.push({ kind: "reminders", text: meeting.reminders.trim() });
 	}
 
 	deck.push({ kind: "thankYou", meetingSchedule: club.meetingSchedule });

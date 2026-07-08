@@ -64,7 +64,10 @@ describe("buildSlideDeck anchors", () => {
 		const withTmod = buildSlideDeck(meeting, club, [
 			slot({ roleName: "Toastmaster of the Day", assigneeName: "Schinthia" }),
 		]);
-		expect(withTmod[1]).toMatchObject({ kind: "toastmaster", name: "Schinthia" });
+		expect(withTmod[1]).toMatchObject({
+			kind: "toastmaster",
+			name: "Schinthia",
+		});
 		expect(buildSlideDeck(meeting, club, [])[1]).toMatchObject({
 			kind: "toastmaster",
 			name: "— open —",
@@ -87,7 +90,11 @@ describe("buildSlideDeck theme + word of the day", () => {
 	});
 
 	it("emits theme slide only when theme set", () => {
-		const deck = buildSlideDeck({ ...meeting, theme: "A Fresh Start" }, club, []);
+		const deck = buildSlideDeck(
+			{ ...meeting, theme: "A Fresh Start" },
+			club,
+			[],
+		);
 		expect(deck.map((s) => s.kind)).toEqual([
 			"title",
 			"toastmaster",
@@ -114,7 +121,11 @@ describe("buildSlideDeck theme + word of the day", () => {
 			example: "The momentum of the river keeps moving forward.",
 		});
 
-		const wordOnly = buildSlideDeck({ ...meeting, wordOfTheDay: "Momentum" }, club, []);
+		const wordOnly = buildSlideDeck(
+			{ ...meeting, wordOfTheDay: "Momentum" },
+			club,
+			[],
+		);
 		expect(wordOnly.find((s) => s.kind === "wordOfDay")).toMatchObject({
 			word: "Momentum",
 			definition: null,
@@ -157,6 +168,7 @@ describe("buildSlideDeck speeches", () => {
 			"speech",
 			"speech",
 			"voteSpeaker",
+			"awards",
 			"thankYou",
 		]);
 	});
@@ -175,14 +187,17 @@ describe("buildSlideDeck speeches", () => {
 	});
 
 	it("vote slide lists assigned speaker names, skipping open slots", () => {
-		const withOpen = [...speakers, slot({
-			id: "sp3",
-			roleName: "Speaker",
-			category: "speaker",
-			isSpeakerRole: true,
-			slotIndex: 2,
-			assigneeName: null,
-		})];
+		const withOpen = [
+			...speakers,
+			slot({
+				id: "sp3",
+				roleName: "Speaker",
+				category: "speaker",
+				isSpeakerRole: true,
+				slotIndex: 2,
+				assigneeName: null,
+			}),
+		];
 		const vote = buildSlideDeck(meeting, club, withOpen).find(
 			(s) => s.kind === "voteSpeaker",
 		);
@@ -212,6 +227,7 @@ describe("buildSlideDeck table topics", () => {
 			"toastmaster",
 			"tableTopics",
 			"voteTableTopics",
+			"awards",
 			"thankYou",
 		]);
 	});
@@ -274,11 +290,9 @@ describe("buildSlideDeck evaluation session", () => {
 	});
 
 	it("orders the full evaluation session correctly", () => {
-		const ks = buildSlideDeck(meeting, club, [
-			ge,
-			speaker,
-			evaluator,
-		]).map((s) => s.kind);
+		const ks = buildSlideDeck(meeting, club, [ge, speaker, evaluator]).map(
+			(s) => s.kind,
+		);
 		expect(ks).toEqual([
 			"title",
 			"toastmaster",
@@ -289,6 +303,7 @@ describe("buildSlideDeck evaluation session", () => {
 			"evaluation",
 			"voteEvaluator",
 			"generalEvaluation",
+			"awards",
 			"thankYou",
 		]);
 	});
@@ -307,5 +322,137 @@ describe("buildSlideDeck evaluation session", () => {
 	it("omits GE slides when no General Evaluator slot exists", () => {
 		expect(kinds([])).not.toContain("geIntro");
 		expect(kinds([])).not.toContain("generalEvaluation");
+	});
+});
+
+describe("buildSlideDeck awards + reminders", () => {
+	const speaker = slot({
+		id: "sp1",
+		isSpeakerRole: true,
+		roleName: "Speaker",
+		category: "speaker",
+		assigneeName: "Rehanna Khan",
+	});
+	const tt = slot({
+		id: "tt",
+		roleName: "Table Topics Master",
+		assigneeName: "Rasheed",
+	});
+	const evaluator = slot({
+		id: "ev",
+		roleName: "Evaluator",
+		category: "evaluator",
+		assigneeName: "Faisal",
+	});
+
+	it("awards lists only categories whose sections exist", () => {
+		const slide = buildSlideDeck(meeting, club, [speaker, tt, evaluator]).find(
+			(s) => s.kind === "awards",
+		);
+		expect(slide).toMatchObject({
+			categories: ["Best Table Topic", "Best Evaluator", "Best Speaker"],
+		});
+
+		const speakerOnly = buildSlideDeck(meeting, club, [speaker]).find(
+			(s) => s.kind === "awards",
+		);
+		expect(speakerOnly).toMatchObject({ categories: ["Best Speaker"] });
+	});
+
+	it("no awards slide when no scored sections exist", () => {
+		expect(kinds([])).not.toContain("awards");
+	});
+
+	it("reminders slide only when reminders non-blank, just before thankYou", () => {
+		expect(kinds([])).not.toContain("reminders");
+		const deck = buildSlideDeck(
+			{ ...meeting, reminders: "Choose a learning path." },
+			club,
+			[],
+		);
+		expect(deck.map((s) => s.kind)).toEqual([
+			"title",
+			"toastmaster",
+			"reminders",
+			"thankYou",
+		]);
+		expect(deck[2]).toMatchObject({
+			kind: "reminders",
+			text: "Choose a learning path.",
+		});
+	});
+});
+
+describe("buildSlideDeck full meeting ordering", () => {
+	it("produces the canonical slide sequence", () => {
+		const slots: AgendaSlot[] = [
+			slot({ roleName: "Toastmaster of the Day", assigneeName: "Schinthia" }),
+			slot({
+				id: "ge",
+				roleName: "General Evaluator",
+				category: "evaluator",
+				assigneeName: "Saiful",
+			}),
+			slot({ id: "gr", roleName: "Grammarian", assigneeName: "Mona" }),
+			slot({
+				id: "sp1",
+				roleName: "Speaker",
+				category: "speaker",
+				isSpeakerRole: true,
+				slotIndex: 0,
+				assigneeName: "Rehanna",
+				minMinutes: 5,
+				maxMinutes: 7,
+			}),
+			slot({
+				id: "sp2",
+				roleName: "Speaker",
+				category: "speaker",
+				isSpeakerRole: true,
+				slotIndex: 1,
+				assigneeName: "Sudheer",
+				minMinutes: 5,
+				maxMinutes: 7,
+			}),
+			slot({
+				id: "tt",
+				roleName: "Table Topics Master",
+				assigneeName: "Rasheed",
+			}),
+			slot({
+				id: "ev1",
+				roleName: "Evaluator",
+				category: "evaluator",
+				slotIndex: 0,
+				assigneeName: "Faisal",
+				evaluatesSlotId: "sp1",
+				evaluates: { speakerName: "Rehanna" },
+			}),
+		];
+		const full: MeetingForDeck = {
+			...meeting,
+			theme: "A Fresh Start",
+			wordOfTheDay: "Momentum",
+			reminders: "Choose a learning path.",
+		};
+		expect(buildSlideDeck(full, club, slots).map((s) => s.kind)).toEqual([
+			"title",
+			"toastmaster",
+			"theme",
+			"wordOfDay",
+			"geIntro",
+			"speech",
+			"speech",
+			"voteSpeaker",
+			"tableTopics",
+			"voteTableTopics",
+			"evalIntro",
+			"evaluation",
+			"voteEvaluator",
+			"generalEvaluation",
+			"awards",
+			"reminders",
+			"thankYou",
+		]);
 	});
 });
