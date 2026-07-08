@@ -1,10 +1,12 @@
 import { and, asc, eq, inArray, lt, ne } from "drizzle-orm";
 import { db } from "#/db";
 import {
+	bcmProjectProgress,
 	meetings,
 	members,
 	pathEnrollments,
 	pathLevelProgress,
+	pathwaysPathLevels,
 	pathwaysPaths,
 	pathwaysProjects,
 	people,
@@ -255,6 +257,62 @@ async function fetchCatalogProjects(pathIds: string[]): Promise<CatalogRow[]> {
 		.where(inArray(pathwaysProjects.pathId, pathIds));
 }
 
+interface DetailRow {
+	personId: string;
+	courseCode: string;
+	level: number;
+	name: string;
+	isRequired: boolean;
+	complete: boolean;
+	speechTitle: string | null;
+	speechDate: Date | null;
+}
+
+/** /detail mirror rows joined to catalog + path, keyed by person (via the
+ * enrollment) — symmetric with `fetchDeliveredWins`, so both read paths group
+ * by `personId::courseCode`. */
+async function fetchDetailProjects(personIds: string[]): Promise<DetailRow[]> {
+	if (personIds.length === 0) return [];
+	return db
+		.select({
+			personId: pathEnrollments.personId,
+			courseCode: pathwaysPaths.courseCode,
+			level: pathwaysProjects.level,
+			name: pathwaysProjects.name,
+			isRequired: pathwaysProjects.isRequired,
+			complete: bcmProjectProgress.complete,
+			speechTitle: bcmProjectProgress.speechTitle,
+			speechDate: bcmProjectProgress.speechDate,
+		})
+		.from(bcmProjectProgress)
+		.innerJoin(
+			pathEnrollments,
+			eq(pathEnrollments.id, bcmProjectProgress.enrollmentId),
+		)
+		.innerJoin(
+			pathwaysProjects,
+			eq(pathwaysProjects.id, bcmProjectProgress.projectId),
+		)
+		.innerJoin(pathwaysPaths, eq(pathwaysPaths.id, pathwaysProjects.pathId))
+		.where(inArray(pathEnrollments.personId, personIds));
+}
+
+/** Per-level elective requirements (pathways_path_levels) for a set of path ids. */
+async function fetchPathLevels(
+	pathIds: string[],
+): Promise<{ courseCode: string; level: number; minReqElectives: number }[]> {
+	if (pathIds.length === 0) return [];
+	return db
+		.select({
+			courseCode: pathwaysPaths.courseCode,
+			level: pathwaysPathLevels.level,
+			minReqElectives: pathwaysPathLevels.minReqElectives,
+		})
+		.from(pathwaysPathLevels)
+		.innerJoin(pathwaysPaths, eq(pathwaysPaths.id, pathwaysPathLevels.pathId))
+		.where(inArray(pathwaysPathLevels.pathId, pathIds));
+}
+
 /** Read every enrolled path for a person and build view models. */
 export async function pathwaysForPerson(
 	personId: string,
@@ -304,9 +362,11 @@ export async function pathwaysForPerson(
 	}
 
 	const pathIds = [...courseCodeByPathId.keys()];
-	const [winRows, catalogRows] = await Promise.all([
+	const [winRows, catalogRows, detailRows, pathLevelRows] = await Promise.all([
 		fetchDeliveredWins([personId], pathIds),
 		fetchCatalogProjects(pathIds),
+		fetchDetailProjects([personId]),
+		fetchPathLevels(pathIds),
 	]);
 
 	for (const w of winRows) {
@@ -329,6 +389,26 @@ export async function pathwaysForPerson(
 			name: c.name,
 			isRequired: c.isRequired,
 		});
+	}
+	for (const d of detailRows) {
+		const p = byPath.get(d.courseCode);
+		if (!p) continue;
+		if (!p.detailProjects) p.detailProjects = [];
+		p.detailProjects.push({
+			courseCode: d.courseCode,
+			level: d.level,
+			name: d.name,
+			isRequired: d.isRequired,
+			complete: d.complete,
+			speechTitle: d.speechTitle,
+			speechDate: d.speechDate,
+		});
+	}
+	for (const pl of pathLevelRows) {
+		const p = byPath.get(pl.courseCode);
+		if (!p) continue;
+		if (!p.pathLevels) p.pathLevels = [];
+		p.pathLevels.push({ level: pl.level, minReqElectives: pl.minReqElectives });
 	}
 
 	return [...byPath.values()].map(buildPathViewModel);
@@ -429,9 +509,11 @@ export async function pathwaysByMember(
 		});
 	}
 
-	const [winRows, catalogRows] = await Promise.all([
+	const [winRows, catalogRows, detailRows, pathLevelRows] = await Promise.all([
 		fetchDeliveredWins([...personIds], [...pathIds]),
 		fetchCatalogProjects([...pathIds]),
+		fetchDetailProjects([...personIds]),
+		fetchPathLevels([...pathIds]),
 	]);
 
 	// Group wins by personId+courseCode for O(1) lookup per member/path.
@@ -464,12 +546,50 @@ export async function pathwaysByMember(
 		list.push({ level: c.level, name: c.name, isRequired: c.isRequired });
 	}
 
+	// Detail rows are person-scoped (like wins) → key by personId::courseCode.
+	const detailByPersonAndPath = new Map<string, DetailProjectRow[]>();
+	for (const d of detailRows) {
+		const key = `${d.personId}::${d.courseCode}`;
+		let list = detailByPersonAndPath.get(key);
+		if (!list) {
+			list = [];
+			detailByPersonAndPath.set(key, list);
+		}
+		list.push({
+			courseCode: d.courseCode,
+			level: d.level,
+			name: d.name,
+			isRequired: d.isRequired,
+			complete: d.complete,
+			speechTitle: d.speechTitle,
+			speechDate: d.speechDate,
+		});
+	}
+
+	// Path-levels are path-scoped (like catalog) → key by courseCode.
+	const pathLevelsByCourseCode = new Map<
+		string,
+		{ level: number; minReqElectives: number }[]
+	>();
+	for (const pl of pathLevelRows) {
+		let list = pathLevelsByCourseCode.get(pl.courseCode);
+		if (!list) {
+			list = [];
+			pathLevelsByCourseCode.set(pl.courseCode, list);
+		}
+		list.push({ level: pl.level, minReqElectives: pl.minReqElectives });
+	}
+
 	const result = new Map<string, PathViewModel[]>();
 	for (const [memberId, byPath] of byMember) {
 		const personId = personIdByMember.get(memberId);
 		const vms = [...byPath.values()].map((p) => {
 			p.wins = winsByPersonAndPath.get(`${personId}::${p.courseCode}`) ?? [];
 			p.catalogProjects = catalogByCourseCode.get(p.courseCode) ?? [];
+			p.detailProjects = detailByPersonAndPath.get(
+				`${personId}::${p.courseCode}`,
+			);
+			p.pathLevels = pathLevelsByCourseCode.get(p.courseCode);
 			return buildPathViewModel(p);
 		});
 		result.set(memberId, vms);

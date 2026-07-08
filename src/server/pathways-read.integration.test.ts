@@ -19,6 +19,7 @@ import {
 	vi,
 } from "vitest";
 import {
+	bcmProjectProgress,
 	clubs,
 	meetings,
 	members,
@@ -414,5 +415,56 @@ describe.skipIf(!hasTestDb)("pathwaysForPerson / pathwaysForMember", () => {
 			]),
 		);
 		expect(vm.upNext).toHaveLength(2);
+	});
+
+	it("sources wins from the /detail mirror when bcm_project_progress rows exist", async () => {
+		const { personId } = await makeMember({
+			email: `detail-1-${SUITE_TAG}@x.test`,
+		});
+		const cc = code("8700");
+		const { pathId, enrollmentId } = await enrollInPath(personId, {
+			courseCode: cc,
+			pathName: "Motivational Strategies",
+		});
+		const [proj] = await testDb
+			.insert(pathwaysProjects)
+			.values({
+				pathId,
+				level: 1,
+				name: "Ice Breaker",
+				isRequired: true,
+				bcmBlockId: `ib-${cc}`,
+			})
+			.returning({ id: pathwaysProjects.id });
+		await testDb.insert(bcmProjectProgress).values({
+			enrollmentId,
+			projectId: proj.id,
+			complete: true,
+			speechTitle: "My First Speech",
+			speechDate: new Date("2025-03-01T08:00:00Z"),
+		});
+
+		const paths = await pathwaysForPerson(personId);
+		const path = paths.find((p) => p.courseCode === cc);
+		expect(
+			path?.wins.some(
+				(w) => w.name === "Ice Breaker" && w.speechTitle === "My First Speech",
+			),
+		).toBe(true);
+	});
+
+	it("falls back to inference (upNextElectives null) when no mirror rows exist", async () => {
+		const { personId } = await makeMember({
+			email: `detail-2-${SUITE_TAG}@x.test`,
+		});
+		const cc = code("8705");
+		await enrollInPath(personId, {
+			courseCode: cc,
+			pathName: "Strategic Relationships",
+		});
+		const paths = await pathwaysForPerson(personId);
+		const path = paths.find((p) => p.courseCode === cc);
+		// No mirror rows and no delivered speeches → inference branch: upNextElectives null.
+		expect(path?.upNextElectives).toBeNull();
 	});
 });
