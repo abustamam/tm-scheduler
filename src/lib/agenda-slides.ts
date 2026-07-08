@@ -1,5 +1,9 @@
 import type { AgendaSlot, LegendEntry } from "./agenda-runsheet";
-import { OPEN_LABEL } from "./agenda-runsheet";
+import {
+	DEFAULT_SPEAKER_MINUTES,
+	numbered,
+	OPEN_LABEL,
+} from "./agenda-runsheet";
 
 /** The meeting fields the deck needs (structural subset of the DB row). */
 export type MeetingForDeck = {
@@ -61,6 +65,22 @@ const ROLE = {
 	evaluator: "Evaluator",
 } as const;
 
+/** Hardcoded standard Toastmasters durations for slots without per-slot timing. */
+export const TABLE_TOPICS_TIMING = "1–2 minutes per speaker";
+export const EVAL_SESSION_TIMING = "4–6 minutes";
+export const EVALUATION_TIMING = "2–3 minutes";
+export const GENERAL_EVALUATION_TIMING = "2 minutes";
+
+function speechTime(min: number | null, max: number | null): string {
+	if (min != null && max != null) return `${min}–${max} minutes`;
+	if (max != null) return `${max} minutes`;
+	if (min != null) return `${min} minutes`;
+	return `${DEFAULT_SPEAKER_MINUTES} minutes`;
+}
+
+const assignedNames = (slots: AgendaSlot[]): string[] =>
+	slots.map((s) => s.assigneeName).filter((n): n is string => n != null);
+
 const byRoleName = (slots: AgendaSlot[], name: string) =>
 	slots.filter((s) => s.roleName.toLowerCase() === name.toLowerCase());
 
@@ -96,6 +116,24 @@ export function buildSlideDeck(
 			definition: meeting.wodDefinition?.trim() || null,
 			example: meeting.wodExample?.trim() || null,
 		});
+	}
+
+	const speakers = slots
+		.filter((s) => s.isSpeakerRole)
+		.sort((a, b) => a.slotIndex - b.slotIndex);
+	if (speakers.length > 0) {
+		const multi = speakers.length > 1;
+		speakers.forEach((s, i) => {
+			deck.push({
+				kind: "speech",
+				label: numbered("Speech", i, multi),
+				speaker: s.assigneeName ?? OPEN_LABEL,
+				title: s.speechTitle,
+				projectLevel: s.projectLevel,
+				time: speechTime(s.minMinutes, s.maxMinutes),
+			});
+		});
+		deck.push({ kind: "voteSpeaker", names: assignedNames(speakers) });
 	}
 
 	deck.push({ kind: "thankYou", meetingSchedule: club.meetingSchedule });

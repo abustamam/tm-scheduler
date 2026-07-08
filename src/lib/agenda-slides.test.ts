@@ -122,3 +122,77 @@ describe("buildSlideDeck theme + word of the day", () => {
 		});
 	});
 });
+
+describe("buildSlideDeck speeches", () => {
+	const speakers = [
+		slot({
+			id: "sp1",
+			roleName: "Speaker",
+			category: "speaker",
+			isSpeakerRole: true,
+			slotIndex: 0,
+			assigneeName: "Rehanna Khan",
+			speechTitle: "A Tasteful Historic Profile",
+			projectLevel: "Level 1",
+			minMinutes: 5,
+			maxMinutes: 7,
+		}),
+		slot({
+			id: "sp2",
+			roleName: "Speaker",
+			category: "speaker",
+			isSpeakerRole: true,
+			slotIndex: 1,
+			assigneeName: "Sudheer Isanaka",
+			minMinutes: 5,
+			maxMinutes: 7,
+		}),
+	];
+
+	it("emits one speech slide per speaker then a vote slide", () => {
+		const ks = buildSlideDeck(meeting, club, speakers).map((s) => s.kind);
+		expect(ks).toEqual([
+			"title",
+			"toastmaster",
+			"speech",
+			"speech",
+			"voteSpeaker",
+			"thankYou",
+		]);
+	});
+
+	it("speech slide carries speaker, title, level, and real time range", () => {
+		const speech = buildSlideDeck(meeting, club, speakers).find(
+			(s) => s.kind === "speech",
+		);
+		expect(speech).toMatchObject({
+			label: "Speech 1",
+			speaker: "Rehanna Khan",
+			title: "A Tasteful Historic Profile",
+			projectLevel: "Level 1",
+			time: "5–7 minutes",
+		});
+	});
+
+	it("vote slide lists assigned speaker names, skipping open slots", () => {
+		const withOpen = [...speakers, slot({
+			id: "sp3",
+			roleName: "Speaker",
+			category: "speaker",
+			isSpeakerRole: true,
+			slotIndex: 2,
+			assigneeName: null,
+		})];
+		const vote = buildSlideDeck(meeting, club, withOpen).find(
+			(s) => s.kind === "voteSpeaker",
+		);
+		expect(vote).toMatchObject({ names: ["Rehanna Khan", "Sudheer Isanaka"] });
+	});
+
+	it("single speaker uses unnumbered label", () => {
+		const one = buildSlideDeck(meeting, club, [speakers[0]]).find(
+			(s) => s.kind === "speech",
+		);
+		expect(one).toMatchObject({ label: "Speech" });
+	});
+});
