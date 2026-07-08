@@ -3,7 +3,13 @@
 // Integration-testable by mocking `#/db`.
 import { and, eq } from "drizzle-orm";
 import { db } from "#/db";
-import { meetings, roleDefinitions, roleSlots, speeches } from "#/db/schema";
+import {
+	meetings,
+	members,
+	roleDefinitions,
+	roleSlots,
+	speeches,
+} from "#/db/schema";
 import { pickSpeakerAndEvaluatorRoles } from "#/lib/meeting-roles";
 import { logActivity } from "./activity";
 
@@ -329,6 +335,90 @@ export async function reassignSlotSpeech(
 	if (args.fromPersonId === args.toPersonId) return false;
 	await unlinkSlotSpeech(conn, args.slotId);
 	return true;
+}
+
+/**
+ * Reassign a slot to a different member, atomically (ADR-0005). MUST run inside
+ * a caller-provided transaction: it re-reads the slot **with a FOR UPDATE row
+ * lock** so the read that decides the speech keep-or-unlink and the write happen
+ * as one serialized unit — a concurrent release/claim/reassign can no longer be
+ * silently overwritten from a stale prior-assignee read.
+ *
+ * Deliberately allows assigning an *open* slot (admin/VPE assign-to-member
+ * flows) — the guarantee here is atomicity, not a status precondition. Returns
+ * the slot's club id so the caller can trust-guard/log against it.
+ */
+export async function reassignSlotCore(
+	tx: DbOrTx,
+	args: { slotId: string; memberId: string; actorMemberId: string | null },
+): Promise<{ clubId: string }> {
+	// Lock only the role_slots row; FOR UPDATE on the joined role_definitions /
+	// meetings catalog rows is unnecessary (they don't change under us).
+	const [slot] = await tx
+		.select({
+			id: roleSlots.id,
+			status: roleSlots.status,
+			assignedMemberId: roleSlots.assignedMemberId,
+			isSpeakerRole: roleDefinitions.isSpeakerRole,
+			clubId: meetings.clubId,
+		})
+		.from(roleSlots)
+		.innerJoin(
+			roleDefinitions,
+			eq(roleDefinitions.id, roleSlots.roleDefinitionId),
+		)
+		.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+		.where(eq(roleSlots.id, args.slotId))
+		.limit(1)
+		.for("update", { of: roleSlots });
+	if (!slot) throw new Error("Role not found.");
+
+	// Reassigning a speaker slot to a *different* Person unlinks the speech; the
+	// old speech persists Person-owned and unscheduled (ADR-0009). Within the
+	// same Person it keeps the speech. Both persons are read under the lock.
+	const personOf = async (memberId: string | null) =>
+		memberId
+			? ((
+					await tx
+						.select({ personId: members.personId })
+						.from(members)
+						.where(eq(members.id, memberId))
+						.limit(1)
+				)[0]?.personId ?? null)
+			: null;
+	const fromPerson = slot.isSpeakerRole
+		? await personOf(slot.assignedMemberId)
+		: null;
+	const toPerson = slot.isSpeakerRole ? await personOf(args.memberId) : null;
+
+	// New holder hasn't been confirmed → back to "claimed".
+	await tx
+		.update(roleSlots)
+		.set({ assignedMemberId: args.memberId, status: "claimed" })
+		.where(eq(roleSlots.id, args.slotId));
+
+	// Unlink the speech only when the Person actually changed.
+	if (slot.isSpeakerRole) {
+		await reassignSlotSpeech(tx, {
+			slotId: args.slotId,
+			fromPersonId: fromPerson,
+			toPersonId: toPerson,
+		});
+	}
+
+	await logActivity(tx, {
+		clubId: slot.clubId,
+		actorMemberId: args.actorMemberId,
+		action: "reassign",
+		targetType: "slot",
+		targetId: args.slotId,
+		detail: {
+			fromMemberId: slot.assignedMemberId,
+			memberId: args.memberId,
+		},
+	});
+
+	return { clubId: slot.clubId };
 }
 
 /**
