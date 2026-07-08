@@ -69,7 +69,10 @@ export interface MeetingUpdateInput {
 	theme?: string | null;
 	location?: string | null;
 	wordOfTheDay?: string | null;
+	wodDefinition?: string | null;
+	wodExample?: string | null;
 	notes?: string | null;
+	reminders?: string | null;
 	/**
 	 * Whether the caller may reschedule (change `scheduledAt`/`lengthMinutes`).
 	 * Defaults to true (admin). A self-serve TMOD passes false: an attempt to
@@ -98,7 +101,10 @@ export async function applyMeetingUpdate(input: MeetingUpdateInput) {
 		theme: input.theme?.trim() || null,
 		location: input.location?.trim() || null,
 		wordOfTheDay: input.wordOfTheDay?.trim() || null,
+		wodDefinition: input.wodDefinition?.trim() || null,
+		wodExample: input.wodExample?.trim() || null,
 		notes: input.notes?.trim() || null,
+		reminders: input.reminders?.trim() || null,
 	};
 
 	// Reschedule (date/time or length change) is an admin-only decision. A
@@ -131,8 +137,11 @@ export async function applyMeetingUpdate(input: MeetingUpdateInput) {
 				before: {
 					theme: meeting.theme,
 					wordOfTheDay: meeting.wordOfTheDay,
+					wodDefinition: meeting.wodDefinition,
+					wodExample: meeting.wodExample,
 					location: meeting.location,
 					notes: meeting.notes,
+					reminders: meeting.reminders,
 					scheduledAt: meeting.scheduledAt,
 					lengthMinutes: meeting.lengthMinutes,
 				},

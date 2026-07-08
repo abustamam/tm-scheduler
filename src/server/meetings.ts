@@ -351,7 +351,10 @@ const updateMeetingSchema = z.object({
 	location: z.string().trim().optional(),
 	theme: z.string().trim().optional(),
 	wordOfTheDay: z.string().trim().optional(),
+	wodDefinition: z.string().trim().optional(),
+	wodExample: z.string().trim().optional(),
 	notes: z.string().trim().optional(),
+	reminders: z.string().trim().optional(),
 });
 
 /** Edit a meeting's meta. Admin/VPE (may also reschedule) OR the meeting's

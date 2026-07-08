@@ -5,7 +5,14 @@ import {
 	notFound,
 	useRouter,
 } from "@tanstack/react-router";
-import { CalendarDays, Loader2, MapPin, Printer, Sparkles } from "lucide-react";
+import {
+	CalendarDays,
+	Loader2,
+	MapPin,
+	Presentation,
+	Printer,
+	Sparkles,
+} from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { AssignSlotSheet } from "#/components/club/assign-slot-sheet";
@@ -34,6 +41,7 @@ import {
 	SheetHeader,
 	SheetTitle,
 } from "#/components/ui/sheet";
+import { Textarea } from "#/components/ui/textarea";
 import { buildRoleCounts, slotLabel } from "#/lib/agenda";
 import { utcToZonedWallTime } from "#/lib/datetime";
 import { formatMeetingDate, formatMeetingTimeRange } from "#/lib/format";
@@ -352,6 +360,17 @@ function MeetingView() {
 					>
 						<Printer />
 						Print agenda
+					</Link>
+				</Button>
+				<Button asChild variant="outline" size="sm">
+					<Link
+						to="/club/$clubId/meeting/$meetingId/present"
+						params={{ clubId, meetingId }}
+						target="_blank"
+						rel="noopener noreferrer"
+					>
+						<Presentation />
+						Present
 					</Link>
 				</Button>
 				{isTmod ? (
@@ -697,7 +716,11 @@ function EditMeetingMetaDialog({
 					location: String(form.get("location") ?? "").trim() || undefined,
 					wordOfTheDay:
 						String(form.get("wordOfTheDay") ?? "").trim() || undefined,
+					wodDefinition:
+						String(form.get("wodDefinition") ?? "").trim() || undefined,
+					wodExample: String(form.get("wodExample") ?? "").trim() || undefined,
 					notes: String(form.get("notes") ?? "").trim() || undefined,
+					reminders: String(form.get("reminders") ?? "").trim() || undefined,
 				},
 			});
 			toast.success("Meeting updated.");
@@ -741,8 +764,35 @@ function EditMeetingMetaDialog({
 						/>
 					</div>
 					<div className="space-y-2">
+						<Label htmlFor="wodDefinition">Word of the day — definition</Label>
+						<Input
+							id="wodDefinition"
+							name="wodDefinition"
+							defaultValue={meeting.wodDefinition ?? ""}
+						/>
+					</div>
+					<div className="space-y-2">
+						<Label htmlFor="wodExample">
+							Word of the day — example sentence
+						</Label>
+						<Input
+							id="wodExample"
+							name="wodExample"
+							defaultValue={meeting.wodExample ?? ""}
+						/>
+					</div>
+					<div className="space-y-2">
 						<Label htmlFor="notes">Notes</Label>
 						<Input id="notes" name="notes" defaultValue={meeting.notes ?? ""} />
+					</div>
+					<div className="space-y-2">
+						<Label htmlFor="reminders">Reminders (projected slide)</Label>
+						<Textarea
+							id="reminders"
+							name="reminders"
+							rows={3}
+							defaultValue={meeting.reminders ?? ""}
+						/>
 					</div>
 					<DialogFooter>
 						<DialogClose asChild>
