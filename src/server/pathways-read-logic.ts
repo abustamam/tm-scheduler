@@ -24,7 +24,7 @@ export interface Win {
 	level: number;
 	name: string;
 	speechTitle: string;
-	deliveredAt: Date;
+	deliveredAt: Date | null; // null for a non-speech (leadership) completion from /detail
 }
 
 /** A current-level catalog project not yet won. */
@@ -32,6 +32,23 @@ export interface UpNextProject {
 	level: number;
 	name: string;
 	isRequired: boolean;
+}
+
+/** Grouped elective choice for the current level (from the /detail mirror). */
+export interface UpNextElectives {
+	chooseCount: number; // min_req_electives − electives already complete at this level
+	options: string[]; // remaining (not-complete) elective project names in the pool
+}
+
+/** One /detail mirror row joined to its catalog project. */
+export interface DetailProjectRow {
+	courseCode: string;
+	level: number;
+	name: string;
+	isRequired: boolean;
+	complete: boolean;
+	speechTitle: string | null;
+	speechDate: Date | null;
 }
 
 export interface PathViewModel {
@@ -45,6 +62,9 @@ export interface PathViewModel {
 	wins: Win[];
 	/** Current-level catalog projects not already a win. Empty when complete. */
 	upNext: UpNextProject[];
+	/** Current-level elective choice, when the mirror is present and the level's
+	 * elective requirement isn't met yet. Null on the inference fallback path. */
+	upNextElectives: UpNextElectives | null;
 }
 
 export interface CatalogProject {
@@ -59,6 +79,10 @@ interface SyncedPath {
 	levels: SyncedLevel[];
 	wins: Win[];
 	catalogProjects: CatalogProject[];
+	/** /detail mirror rows for this path, when synced. Presence selects the bcm branch. */
+	detailProjects?: DetailProjectRow[];
+	/** Per-level elective requirements (pathways_path_levels), when synced. */
+	pathLevels?: { level: number; minReqElectives: number }[];
 }
 
 /** Pure: shape one synced path into its display model. */
@@ -72,8 +96,66 @@ export function buildPathViewModel(path: SyncedPath): PathViewModel {
 	const currentLevel = firstUnapproved ? firstUnapproved.level : null;
 	const complete = !firstUnapproved;
 
-	// upNext = current-level catalog projects that aren't already a win (by
-	// name). Empty when the path is complete or there's no current level.
+	// The mirror augments: ring/levels/currentLevel/complete stay from the count
+	// mirror above. Wins + up-next switch to /detail when this path has mirror rows.
+	const detail = path.detailProjects;
+	if (detail && detail.length > 0) {
+		const wins: Win[] = detail
+			.filter((p) => p.complete)
+			.map((p) => ({
+				level: p.level,
+				name: p.name,
+				speechTitle: p.speechTitle ?? "",
+				deliveredAt: p.speechDate ?? null,
+			}))
+			.sort((a, b) => a.level - b.level || a.name.localeCompare(b.name));
+
+		let upNext: UpNextProject[] = [];
+		let upNextElectives: UpNextElectives | null = null;
+		if (!complete && currentLevel !== null) {
+			const completeNames = new Set(
+				detail.filter((p) => p.complete).map((p) => p.name),
+			);
+			const currentCatalog = path.catalogProjects.filter(
+				(c) => c.level === currentLevel,
+			);
+			upNext = currentCatalog
+				.filter((c) => c.isRequired && !completeNames.has(c.name))
+				.map((c) => ({ level: c.level, name: c.name, isRequired: true }));
+
+			const currentElectives = currentCatalog.filter((c) => !c.isRequired);
+			const completedElectives = currentElectives.filter((c) =>
+				completeNames.has(c.name),
+			).length;
+			const minReq =
+				path.pathLevels?.find((l) => l.level === currentLevel)
+					?.minReqElectives ?? 0;
+			const chooseCount = Math.max(0, minReq - completedElectives);
+			if (chooseCount > 0) {
+				upNextElectives = {
+					chooseCount,
+					options: currentElectives
+						.filter((c) => !completeNames.has(c.name))
+						.map((c) => c.name),
+				};
+			}
+		}
+
+		return {
+			courseCode: path.courseCode,
+			pathName: path.pathName,
+			ringPercent,
+			currentLevel,
+			complete,
+			levels,
+			wins,
+			upNext,
+			upNextElectives,
+		};
+	}
+
+	// Inference fallback (unchanged): wins from the member's own delivered
+	// speeches, up-next = current-level catalog minus win-names.
 	const winNames = new Set(path.wins.map((w) => w.name));
 	const upNext =
 		complete || currentLevel === null
@@ -95,6 +177,7 @@ export function buildPathViewModel(path: SyncedPath): PathViewModel {
 		levels,
 		wins: path.wins,
 		upNext,
+		upNextElectives: null,
 	};
 }
 
