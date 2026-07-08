@@ -105,8 +105,8 @@ export default defineContentScript({
 						csrftoken,
 					});
 
-					const targets = extractDetailTargets(pages as { results: unknown[] }[]);
-					setStatus(`Syncing… fetching details (0/${targets.length})`);
+					const targets = extractDetailTargets(pages);
+					setStatus(`Syncing… fetching project details for ${targets.length} member-path(s)…`);
 					const details = await fetchDetails({
 						fetchImpl: (url, opts) => fetch(url, opts),
 						targets,
