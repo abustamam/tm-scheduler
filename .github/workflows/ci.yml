@@ -52,6 +52,17 @@ jobs:
         run: bun run test
       - name: Build (client bundle + migrate runner)
         run: bun run build
+      # Exercise the EXACT runner production boots (Dockerfile CMD runs
+      # `node .output/migrate.mjs` before the server). The drizzle-kit step
+      # above validates the migration files; this validates the bundled
+      # runner itself (bundling, ./drizzle resolution, pool teardown) against
+      # a fresh database, so a runner-specific failure breaks CI instead of a
+      # production deploy.
+      - name: Prod migrate runner (fresh DB)
+        run: |
+          PGPASSWORD=test psql -h localhost -U test -d tm_test -c 'CREATE DATABASE tm_migrate_runner;'
+          DATABASE_URL=postgresql://test:test@localhost:5432/tm_migrate_runner node .output/migrate.mjs
+          DATABASE_URL=postgresql://test:test@localhost:5432/tm_migrate_runner node .output/migrate.mjs
 
   extension:
     runs-on: ubuntu-latest
