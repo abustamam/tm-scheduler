@@ -21,12 +21,12 @@ describe("MeetingPresent", () => {
 	afterEach(() => cleanup());
 
 	it("renders the first slide's club name", () => {
-		render(<MeetingPresent deck={deck} />);
+		render(<MeetingPresent deck={deck} clubName="MCF Toastmasters Club" />);
 		expect(screen.getByText("MCF Toastmasters Club")).toBeTruthy();
 	});
 
 	it("shows a slide position indicator", () => {
-		render(<MeetingPresent deck={deck} />);
+		render(<MeetingPresent deck={deck} clubName="MCF Toastmasters Club" />);
 		expect(screen.getByText("1 / 3")).toBeTruthy();
 	});
 });

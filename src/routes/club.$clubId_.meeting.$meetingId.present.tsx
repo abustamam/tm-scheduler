@@ -34,6 +34,7 @@ function PresentPage() {
 	return (
 		<MeetingPresent
 			deck={deck}
+			clubName={data.clubName}
 			onExit={() =>
 				navigate({
 					to: "/club/$clubId/meeting/$meetingId",
