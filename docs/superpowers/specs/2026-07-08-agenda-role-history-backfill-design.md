@@ -19,10 +19,13 @@ meetings."* So backfilling = creating past `meetings` + `role_slots` (+
 
 ## Accuracy bar
 
-**~75% is sufficient; more is better.** This is a one-time backfill of
-historical data, not a system of record. We do NOT fabricate matches to hit
-100%. Unmatched names, unreadable files, and ambiguous rows are **reported and
-skipped**, never guessed into the database.
+**~70% is sufficient; more is better** (lowered from 75% once shortcuts were
+ruled out — see Source data). This is a one-time backfill of historical data,
+not a system of record. We do NOT fabricate matches to hit 100%. Unmatched
+names, unreadable files, and ambiguous rows are **reported and skipped**, never
+guessed into the database. The one sanctioned automatic inference is a
+high-confidence typo correction (unique roster candidate at edit-distance ≤1 —
+see Name matching), which is a correction, not a guess.
 
 ## Source data
 
@@ -32,23 +35,31 @@ Drive folder `1MkX1A_OK2HlSiTHa2EAQMwkd5o5TmB29`: ~40 agenda files, meetings
 | Type | Count (approx) | Handling |
 | --- | --- | --- |
 | Google Docs (`vnd.google-apps.document`) | ~30 | Primary — clean text extract |
-| Word (`.docx`) | 3 (#3, #29, #31) | Readable via Drive tool |
-| Shortcuts (`vnd.google-apps.shortcut`) | ~10 | Resolve target where easy; else skip |
+| Word (`.docx`) | 3 (#3, #29, #31) | Readable via Drive tool (**verified**) |
+| Shortcuts (`vnd.google-apps.shortcut`) | ~13 (#1,2,4,5,37–39,42,43,48–50,54) | **Skipped** — see below |
 | JPEG (#35 speech competition) | 1 | Best-effort vision; else skip |
 | Subfolders (slides, Archive) | 2 | Ignore |
 
-Verified extract of a native Doc yields, reliably:
+**Shortcuts are skipped (decision).** The Drive MCP tools cannot resolve a
+shortcut to its target: `read_file_content` on a shortcut returns `{}` and
+metadata carries no `shortcutDetails.targetId`. Resolving them would mean either
+manual conversion in Drive or a fragile `/browse` scrape. Per the user, we skip
+them and **accept ~72% meeting coverage** (bar lowered from 75%). The ~13 lost
+meetings are among the earliest.
 
-- **Roles table** (markdown): `Toastmaster | <name>`, `Speaker #1..3 | <name>`,
-  `Evaluator #1..3 | <name>`, `General Evaluator`, `TableTopic Master`,
-  `Grammarian/WOD`, `Ah Counter`, `Timer`, `Vote Counter`.
-- **Speaker detail lines**:
-  `Speaker #1 - Jagpal Singh - Level 2: Effective Body Language ... "Leadership in the Era of AI"`
-  → speaker name, project level, project name, speech title.
+Verified extract (Doc **and** .docx) yields, reliably:
+
+- **Roles table** (markdown). Column layout drifts across years (older agendas
+  use an "Evaluations:" header cell, misspell "Voter Counter", leave cells
+  blank), which is exactly why extraction is agent-read, not regex-parsed.
+- **Speaker detail lines** — two shapes seen:
+  - newer: `Speaker #1 - Jagpal Singh - Level 2: Effective Body Language ... "Leadership in the Era of AI"` (name, level, project, title)
+  - older: `Speaker #1 - Faisal Ali | Time 5-7 mins "The day I became a scribe"` (**name + title only — no level/project**)
 - **Evaluator pairings**: `Sudheer Isanaka for Jagpal Singh`.
 - **Footer**: club #, meeting number, meeting date, theme, Word of the Day.
 
-Blank cells are common (upcoming/partly-filled agendas) → skipped.
+Blank cells are common (upcoming/partly-filled agendas) → skipped. Source names
+contain typos (e.g. "Jaqpal" for Jagpal) and guest markers ("Hana Haque (G)").
 
 ## Approach: extract (agent) → review (human) → import (tested script)
 
@@ -97,20 +108,28 @@ or JSON, and re-runs. Nothing is written until `--commit` is passed.
 Mirrors `scripts/import-members.ts` (standalone Bun script, `#/db`, dotenv).
 Deterministic and unit-testable. Reads `ref/agendas/*.json` and writes:
 
-- **`meetings`** — `clubId`, `scheduledAt` = meeting date at the club's start
-  time, `status: "completed"`, `theme`, `wordOfTheDay`. **Idempotency key:
+- **`meetings`** — `clubId`, `scheduledAt` = meeting date (from the **footer**
+  "Meeting Date"; filename date as fallback) at the club's 6:45 PM start,
+  `lengthMinutes: 60` (agendas run 6:45–7:45, not the 90 default),
+  `status: "completed"`, `theme`, `wordOfTheDay`. **Idempotency key:
   (clubId, scheduledAt::date)** — upsert, so re-runs never duplicate. (Meeting
   number is not a column; date is the natural key and is unique per club.)
+  Re-runs only touch meetings whose date appears in the extracted dataset, so
+  they never disturb meetings created natively in-app. **Caveat:** manual
+  in-app edits to a *backfilled* historical meeting are overwritten on re-run.
 - **`role_slots`** — one per filled role. Agenda label → the club's
   `role_definitions` (matched by name at runtime, see mapping below);
   `Speaker #1/2/3` → `slotIndex` 0/1/2, same for `Evaluator #1/2/3`.
   `assignedMemberId` = matched member, `status: "confirmed"`,
   `claimedAt` = meeting date. Idempotency: delete-and-reinsert this meeting's
   slots on re-run (a meeting's slot set is fully derived from its agenda).
-- **`speeches`** — for each filled speaker slot with detail: person-owned
-  (`personId` from the matched member), `title`, `projectLevel`, `projectName`.
-  Linked via `role_slots.speech_id`. `pathwayPath` left null (agendas don't
-  reliably name the path). **Idempotency (important):** because slots are
+- **`speeches`** — for each filled speaker slot with a speech: person-owned
+  (`personId` from the matched member), `title` (required — the one field always
+  present), `projectLevel`/`projectName` **when present** (older agendas give a
+  title only → these stay null). Linked via `role_slots.speech_id`.
+  `pathwayPath` left null (agendas don't reliably name the path). A speaker slot
+  with a matched member but no parseable speech line is still created (assignment
+  history) with no linked speech. **Idempotency (important):** because slots are
   delete-and-reinserted per meeting (below), the speech itself must NOT be tied
   to slot lifetime — reuse an existing speech keyed on **(personId, normalized
   title)**, else create one; then link the freshly-inserted slot to it. This
@@ -121,17 +140,23 @@ Deterministic and unit-testable. Reads `ref/agendas/*.json` and writes:
 
 ### Name matching
 
-A `matchMember(name, roster)` helper:
+A `matchMember(name, roster)` helper, in priority order:
 
-1. Normalize (lowercase, trim, collapse whitespace, strip trailing `(G)` guest
-   marker).
+1. Normalize (lowercase, trim, collapse whitespace, **strip trailing `(G)` guest
+   marker** then match normally — a former guest who has since joined links to
+   their roster row; a true outsider simply won't match and is skipped. No
+   guest special-casing, no placeholder `people` rows).
 2. Exact normalized match against club `members` (active + inactive — inactive
    members keep their history, `schema.ts` members comment).
-3. Hand-editable **alias map** (`ref/agendas/aliases.json`) for known short
-   forms seen in the data: `Saif→Saiful Haque`, `Farha Begum→Farhanaaz Begum`,
+3. Hand-editable **alias map** (`ref/agendas/aliases.json`), pre-seeded with the
+   short forms already seen: `Saif→Saiful Haque`, `Farha Begum→Farhanaaz Begum`,
    `Dina→Mahbuba Khan`, etc.
-4. No match → record in the **unmatched report** and **skip that row**. Guests
-   `(G)` are expected misses and are skipped silently (counted, not errored).
+4. **Fuzzy typo correction — auto-applied only when safe:** a single unique
+   roster candidate at Levenshtein distance ≤1 (e.g. `Jaqpal→Jagpal`) links
+   automatically. Two-or-more candidates, or distance ≥2, do NOT auto-link.
+5. No match → record in the **unmatched report** (with any near-miss candidates
+   at distance ≤2 listed as suggestions for the human to add to the alias map)
+   and **skip that row**.
 
 ### Role-label mapping
 
@@ -148,12 +173,15 @@ actual definitions at runtime:
 | Grammarian/WOD | Grammarian | 0 |
 | Ah Counter | Ah-Counter | 0 |
 | Timer | Timer | 0 |
-| **Vote Counter** | *(none seeded)* | — skip + report |
-| **Sergeant at Arms** | *(none seeded)* | — skip + report |
+| Vote Counter *(and "Voter Counter" typo)* | Vote Counter — **created if missing** | 0 |
+| Sergeant at Arms | *(officer position — out of scope)* | — |
 
-Labels with no matching role definition are **reported and skipped**. If the
-user wants Vote Counter / Sergeant at Arms history, they add those role
-definitions first, then re-run.
+The importer **creates a "Vote Counter" functionary `role_definition` if the
+club lacks one** (idempotent), then maps to it — Vote Counter is filled on
+nearly every agenda, so it's worth capturing. "Sergeant at Arms" is an officer
+position (belongs to `officer_terms`, out of scope) and lives in the officer
+list, not reliably in the roles table — it is not imported as a per-meeting
+slot. Any *other* unmapped label is reported and skipped.
 
 ## Components & boundaries
 
@@ -189,7 +217,19 @@ safety gate).
 - Meeting timings / boilerplate agenda script lines.
 - Any live/repeatable importer (this is a one-time backfill).
 
-## Open questions
+## Resolved decisions (grilling, 2026-07-08)
 
-- None blocking. Defaults chosen: roles + speeches scope, dry-run→prod,
-  skip-and-report on any ambiguity.
+- **Scope:** roles + speeches. **Target:** dry-run → prod.
+- **Shortcuts (~13 meetings):** skipped; coverage bar lowered to ~70%.
+- **Name typos:** auto-correct only at unique-candidate distance ≤1; else report
+  near-misses & skip.
+- **Guests `(G)`:** strip marker, match normally, keep if on roster today, else
+  skip (no placeholder people).
+- **Vote Counter:** captured; role definition created if missing. **Sergeant at
+  Arms:** out of scope (officer position).
+- **Meeting:** date from footer (filename fallback), `lengthMinutes` 60,
+  status `completed`.
+- **Speeches:** title required; level/project nullable; slot created even with
+  no parseable speech line.
+
+No open blockers.
