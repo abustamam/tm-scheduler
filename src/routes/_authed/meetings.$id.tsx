@@ -10,6 +10,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { AssignSlotSheet } from "#/components/club/assign-slot-sheet";
 import { EditSpeechSheet } from "#/components/club/edit-speech-sheet";
+import { MeetingViewActions } from "#/components/club/meeting-view-actions";
 import { PageContainer } from "#/components/page-container";
 import { ShareLinkButton } from "#/components/share-link-button";
 import { Badge } from "#/components/ui/badge";
@@ -262,21 +263,22 @@ function MeetingDetail() {
 						<span className="font-medium">{meeting.wordOfTheDay}</span>
 					</p>
 				) : null}
-				<ShareLinkButton
-					path={`/club/${clubSlug}/meeting/${meeting.id}`}
-					label="Copy member link"
-					className="mt-1"
-				/>
-				{canManage ? (
-					<Button
-						size="sm"
-						variant="outline"
-						className="mt-1 ml-2"
-						onClick={() => setEditOpen(true)}
-					>
-						Edit meeting
-					</Button>
-				) : null}
+				<div className="flex flex-wrap items-center gap-2 pt-1">
+					<ShareLinkButton
+						path={`/club/${clubSlug}/meeting/${meeting.id}`}
+						label="Copy member link"
+					/>
+					<MeetingViewActions clubSlug={clubSlug} meetingId={meeting.id} />
+					{canManage ? (
+						<Button
+							size="sm"
+							variant="outline"
+							onClick={() => setEditOpen(true)}
+						>
+							Edit meeting
+						</Button>
+					) : null}
+				</div>
 			</header>
 
 			{unavailableMembers.length > 0 ? (

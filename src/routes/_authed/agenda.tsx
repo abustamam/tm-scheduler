@@ -2,6 +2,7 @@ import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { CalendarPlus, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { MeetingViewActions } from "#/components/club/meeting-view-actions";
 import { MemberAvatar } from "#/components/club/member-avatar";
 import { PageContainer } from "#/components/page-container";
 import { Button } from "#/components/ui/button";
@@ -180,17 +181,7 @@ function Agenda() {
 					</p>
 				</div>
 				<div className="flex gap-[9px]">
-					<Button asChild variant="outline" size="sm">
-						<Link
-							to="/club/$clubId/meeting/$meetingId/print"
-							params={{ clubId: clubSlug, meetingId: meeting.id }}
-							search={{ layout: "timing" }}
-							target="_blank"
-							rel="noopener noreferrer"
-						>
-							Print agenda
-						</Link>
-					</Button>
+					<MeetingViewActions clubSlug={clubSlug} meetingId={meeting.id} />
 					{canManage ? (
 						<Button
 							size="sm"
