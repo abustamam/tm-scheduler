@@ -10,6 +10,8 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { AssignSlotSheet } from "#/components/club/assign-slot-sheet";
 import { EditSpeechSheet } from "#/components/club/edit-speech-sheet";
+import { MeetingNavStrip } from "#/components/club/meeting-nav-strip";
+import { MeetingViewActions } from "#/components/club/meeting-view-actions";
 import { PageContainer } from "#/components/page-container";
 import { ShareLinkButton } from "#/components/share-link-button";
 import { Badge } from "#/components/ui/badge";
@@ -36,7 +38,12 @@ import {
 import { buildRoleCounts, slotLabel } from "#/lib/agenda";
 import { utcToZonedWallTime } from "#/lib/datetime";
 import { formatMeetingDate, formatMeetingTimeRange } from "#/lib/format";
-import { getMeeting, updateMeeting } from "#/server/meetings";
+import { deriveMeetingNavItems } from "#/lib/meeting-nav";
+import {
+	getMeeting,
+	listUpcomingMeetings,
+	updateMeeting,
+} from "#/server/meetings";
 import {
 	addSpeakerSlot,
 	claimSlot,
@@ -48,7 +55,21 @@ import {
 } from "#/server/slots";
 
 export const Route = createFileRoute("/_authed/meetings/$id")({
-	loader: ({ params }) => getMeeting({ data: params.id }),
+	loader: async ({ params }) => {
+		const data = await getMeeting({ data: params.id });
+		// Non-fatal: a failure here degrades to no strip, never blocks the page
+		// (mirrors the public club route).
+		const upcoming = await listUpcomingMeetings({
+			data: data.meeting.clubId,
+		}).catch(() => [] as Awaited<ReturnType<typeof listUpcomingMeetings>>);
+		const navItems = deriveMeetingNavItems(
+			data.meeting,
+			data.slots,
+			upcoming,
+			data.timezone,
+		);
+		return { ...data, navItems };
+	},
 	component: MeetingDetail,
 });
 
@@ -74,6 +95,7 @@ function MeetingDetail() {
 		unavailableMembers,
 		clubSlug,
 		roster,
+		navItems,
 	} = Route.useLoaderData();
 	const { currentMemberId } = Route.useRouteContext();
 	const router = useRouter();
@@ -255,6 +277,14 @@ function MeetingDetail() {
 						</span>
 					) : null}
 				</div>
+				<MeetingNavStrip
+					clubId={clubSlug}
+					items={navItems}
+					getLinkProps={(meetingId) => ({
+						to: "/meetings/$id",
+						params: { id: meetingId },
+					})}
+				/>
 				{meeting.wordOfTheDay ? (
 					<p className="flex items-center gap-1.5 text-sm">
 						<Sparkles className="size-4 text-primary" aria-hidden />
@@ -262,21 +292,22 @@ function MeetingDetail() {
 						<span className="font-medium">{meeting.wordOfTheDay}</span>
 					</p>
 				) : null}
-				<ShareLinkButton
-					path={`/club/${clubSlug}/meeting/${meeting.id}`}
-					label="Copy member link"
-					className="mt-1"
-				/>
-				{canManage ? (
-					<Button
-						size="sm"
-						variant="outline"
-						className="mt-1 ml-2"
-						onClick={() => setEditOpen(true)}
-					>
-						Edit meeting
-					</Button>
-				) : null}
+				<div className="flex flex-wrap items-center gap-2 pt-1">
+					<ShareLinkButton
+						path={`/club/${clubSlug}/meeting/${meeting.id}`}
+						label="Copy member link"
+					/>
+					<MeetingViewActions clubSlug={clubSlug} meetingId={meeting.id} />
+					{canManage ? (
+						<Button
+							size="sm"
+							variant="outline"
+							onClick={() => setEditOpen(true)}
+						>
+							Edit meeting
+						</Button>
+					) : null}
+				</div>
 			</header>
 
 			{unavailableMembers.length > 0 ? (

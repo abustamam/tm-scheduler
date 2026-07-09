@@ -1,6 +1,10 @@
+import type { LinkProps } from "@tanstack/react-router";
 import { Link } from "@tanstack/react-router";
 import { useEffect, useRef } from "react";
-import type { MeetingNavItem } from "#/lib/meeting-nav";
+import {
+	defaultMeetingNavLinkProps,
+	type MeetingNavItem,
+} from "#/lib/meeting-nav";
 import { cn } from "#/lib/utils";
 
 /**
@@ -10,10 +14,17 @@ import { cn } from "#/lib/utils";
 export function MeetingNavStrip({
 	clubId,
 	items,
+	getLinkProps,
 }: {
+	// Only consumed by the default builder (when `getLinkProps` is omitted);
+	// callers passing their own `getLinkProps` ignore it.
 	clubId: string;
 	items: MeetingNavItem[];
+	getLinkProps?: (meetingId: string) => LinkProps;
 }) {
+	const linkPropsFor =
+		getLinkProps ??
+		((meetingId: string) => defaultMeetingNavLinkProps(clubId, meetingId));
 	const activeRef = useRef<HTMLLIElement>(null);
 	const activeId = items.find((i) => i.isCurrent)?.meetingId;
 
@@ -37,8 +48,7 @@ export function MeetingNavStrip({
 						className="shrink-0"
 					>
 						<Link
-							to="/club/$clubId/meeting/$meetingId"
-							params={{ clubId, meetingId: item.meetingId }}
+							{...linkPropsFor(item.meetingId)}
 							aria-current={item.isCurrent ? "page" : undefined}
 							className={cn(
 								"flex items-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-1.5 text-sm transition-colors",

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildMeetingNavItems } from "./meeting-nav";
+import {
+	buildMeetingNavItems,
+	defaultMeetingNavLinkProps,
+	deriveMeetingNavItems,
+} from "./meeting-nav";
 
 const TZ = "UTC";
 
@@ -70,5 +74,31 @@ describe("buildMeetingNavItems", () => {
 				hasOpenRoles: false,
 			},
 		]);
+	});
+});
+
+describe("deriveMeetingNavItems", () => {
+	it("derives the current meeting's open-role dot from its slots, overriding its upcoming row", () => {
+		const items = deriveMeetingNavItems(
+			{ id: "a", scheduledAt: "2026-07-09T19:00:00Z" },
+			[{ status: "open" }, { status: "confirmed" }, { status: "claimed" }],
+			// Upcoming lists the current meeting with a stale openSlots=0.
+			[{ id: "a", scheduledAt: "2026-07-09T19:00:00Z", openSlots: 0 }],
+			TZ,
+		);
+
+		const current = items.find((i) => i.isCurrent);
+		expect(current?.meetingId).toBe("a");
+		// Derived from the one "open" slot, not the upcoming-list's 0.
+		expect(current?.hasOpenRoles).toBe(true);
+	});
+});
+
+describe("defaultMeetingNavLinkProps", () => {
+	it("targets the public club meeting route with both params", () => {
+		expect(defaultMeetingNavLinkProps("koala-tm", "m-123")).toEqual({
+			to: "/club/$clubId/meeting/$meetingId",
+			params: { clubId: "koala-tm", meetingId: "m-123" },
+		});
 	});
 });

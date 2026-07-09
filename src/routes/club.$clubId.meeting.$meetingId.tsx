@@ -46,7 +46,7 @@ import { buildRoleCounts, slotLabel } from "#/lib/agenda";
 import { utcToZonedWallTime } from "#/lib/datetime";
 import { formatMeetingDate, formatMeetingTimeRange } from "#/lib/format";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
-import { buildMeetingNavItems } from "#/lib/meeting-nav";
+import { deriveMeetingNavItems } from "#/lib/meeting-nav";
 import { isTmodRoleName } from "#/lib/meeting-roles";
 import { useCurrentMember } from "#/lib/member-identity";
 import { clearAvailability, setAvailability } from "#/server/availability";
@@ -86,17 +86,9 @@ export const Route = createFileRoute("/club/$clubId/meeting/$meetingId")({
 		if (data.meeting.clubId !== context.clubUuid) throw notFound();
 
 		const upcoming = await upcomingPromise;
-		// The current meeting's open-role count comes from its own loaded agenda
-		// (authoritative + present even when it's absent from `upcoming`).
-		const currentOpenSlots = data.slots.filter(
-			(s) => s.status === "open",
-		).length;
-		const navItems = buildMeetingNavItems(
-			{
-				id: data.meeting.id,
-				scheduledAt: data.meeting.scheduledAt,
-				openSlots: currentOpenSlots,
-			},
+		const navItems = deriveMeetingNavItems(
+			data.meeting,
+			data.slots,
 			upcoming,
 			data.timezone,
 		);
