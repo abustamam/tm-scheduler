@@ -16,6 +16,8 @@ export function MeetingNavStrip({
 	items,
 	getLinkProps,
 }: {
+	// Only consumed by the default builder (when `getLinkProps` is omitted);
+	// callers passing their own `getLinkProps` ignore it.
 	clubId: string;
 	items: MeetingNavItem[];
 	getLinkProps?: (meetingId: string) => LinkProps;

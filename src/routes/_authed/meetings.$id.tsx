@@ -38,7 +38,7 @@ import {
 import { buildRoleCounts, slotLabel } from "#/lib/agenda";
 import { utcToZonedWallTime } from "#/lib/datetime";
 import { formatMeetingDate, formatMeetingTimeRange } from "#/lib/format";
-import { buildMeetingNavItems } from "#/lib/meeting-nav";
+import { deriveMeetingNavItems } from "#/lib/meeting-nav";
 import {
 	getMeeting,
 	listUpcomingMeetings,
@@ -62,15 +62,9 @@ export const Route = createFileRoute("/_authed/meetings/$id")({
 		const upcoming = await listUpcomingMeetings({
 			data: data.meeting.clubId,
 		}).catch(() => [] as Awaited<ReturnType<typeof listUpcomingMeetings>>);
-		const currentOpenSlots = data.slots.filter(
-			(s) => s.status === "open",
-		).length;
-		const navItems = buildMeetingNavItems(
-			{
-				id: data.meeting.id,
-				scheduledAt: data.meeting.scheduledAt,
-				openSlots: currentOpenSlots,
-			},
+		const navItems = deriveMeetingNavItems(
+			data.meeting,
+			data.slots,
 			upcoming,
 			data.timezone,
 		);

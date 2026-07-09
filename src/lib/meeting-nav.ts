@@ -57,6 +57,26 @@ export function buildMeetingNavItems(
 }
 
 /**
+ * Derive the meeting nav-strip items for a loaded meeting page. Centralizes the
+ * "the current meeting's own open-role count (from its loaded agenda) overrides
+ * whatever its row in `upcoming` says" rule so both the public and signed-in
+ * meeting loaders share one implementation.
+ */
+export function deriveMeetingNavItems(
+	meeting: { id: string; scheduledAt: Date | string },
+	slots: { status: string }[],
+	upcoming: UpcomingMeeting[],
+	timezone: string,
+): MeetingNavItem[] {
+	const openSlots = slots.filter((s) => s.status === "open").length;
+	return buildMeetingNavItems(
+		{ id: meeting.id, scheduledAt: meeting.scheduledAt, openSlots },
+		upcoming,
+		timezone,
+	);
+}
+
+/**
  * Default destination for a nav-strip item: the public club meeting page.
  * Signed-in views pass their own builder (targeting `/meetings/$id`) so paging
  * stays inside the workspace instead of jumping to the public tree (#140/#142).
