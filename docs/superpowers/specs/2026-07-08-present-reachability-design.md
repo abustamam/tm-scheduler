@@ -61,13 +61,27 @@ MeetingViewActions({ clubSlug, meetingId, printLayout = "timing" })
 
 Match the button styling already used in the header regions (shadcn `Button asChild variant="outline" size="sm"`).
 
+**Ungated:** the component takes no permission prop and both views render it for every
+signed-in member — Print and Present are read-only outputs (printable agenda / projector deck)
+that leak no write capability, matching the public club page, which shows them ungated
+(`club.$clubId.meeting.$meetingId.tsx:353-375`). Gating them would be *more* restrictive than
+the public page a member can already reach via the share link.
+
 ### 2. Route-agnostic `MeetingNavStrip` (prev/next; satisfies #142)
+
+Interface decision: **option (a)** — a plain builder prop returning `{ to, params }` (chosen over
+a render-prop or a `variant` union). It keeps the strip presentational, adds the smallest
+surface, and makes the default link target unit-testable as a pure function (no router harness).
+The `to: string` typing loosens TanStack's compile-time route check *at the strip boundary*
+only; call sites still pass typed literals, and the unit test + live check cover it.
 
 - Add an optional prop to `MeetingNavStrip`:
   `getLinkProps?: (meetingId: string) => { to: string; params: Record<string, string> }`.
-  **Default** (prop omitted) preserves today's behavior:
+  **Default** (prop omitted) is a small **named, exported builder** that closes over the existing
+  `clubId` prop and preserves today's behavior:
   `{ to: "/club/$clubId/meeting/$meetingId", params: { clubId, meetingId } }` — the public
-  route is untouched.
+  route is untouched. Extracting the default as a named function is what makes it directly
+  unit-testable.
 - `meetings.$id.tsx` loader: additionally call
   `listUpcomingMeetings({ data: <meeting.clubId uuid> })` (non-fatal — degrade to no strip on
   failure, mirroring the club route at `club.$clubId.meeting.$meetingId.tsx:80-82`), compute
@@ -95,12 +109,25 @@ Match the button styling already used in the header regions (shadcn `Button asCh
   no strip, never blocks the page.
 - New-tab links to Present/Print are unaffected by auth — the target pages are public.
 
+## Delivery / sequencing
+
+One branch (`140-present-reachability`) and one PR, closing **#140 and #142**. Two commits so
+review — and a fallback ship — can separate them:
+
+1. **Commit 1 (Present/Print reachability — the pre-launch fix):** `MeetingViewActions` +
+   wiring into `agenda.tsx` and `meetings.$id.tsx`. Self-contained; closes the #140 blocker.
+2. **Commit 2 (prev/next — #142):** `MeetingNavStrip` `getLinkProps` refactor + `meetings.$id`
+   loader change + strip render.
+
+If the nav-strip refactor hits friction in review, commit 1 can ship on its own.
+
 ## Testing
 
 - `buildMeetingNavItems` is already pure and covered; no change.
-- Add a small unit test asserting `MeetingNavStrip`'s default `getLinkProps` yields the public
-  `/club/$clubId/meeting/$meetingId` target and a supplied builder yields `/meetings/$id`
-  (guards the divergence trap from regressing).
+- Add a small **pure-function** unit test on the extracted default link builder: it yields the
+  public `/club/$clubId/meeting/$meetingId` target for a given `clubId`, and an authed builder
+  yields `{ to: "/meetings/$id", params: { id } }` (guards the divergence trap from regressing).
+  No router/jsdom harness needed.
 - Verify wiring live via `/browse`: from a signed-in `/meetings/$id`, Print and Present open
   the correct public URLs in a new tab, and the prev/next strip pages between meetings while
   staying under `/meetings/$id` (never jumping to `/club/...`).
