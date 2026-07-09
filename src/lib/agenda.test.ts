@@ -9,6 +9,7 @@ import {
 	resolveEvaluatorLinks,
 	roleAbbrev,
 	slotLabel,
+	summarizeAgenda,
 } from "./agenda";
 
 const rosterSlot = (
@@ -345,5 +346,36 @@ describe("buildPickerRows", () => {
 			unavailable: false,
 			currentRole: "Timer",
 		});
+	});
+});
+
+describe("summarizeAgenda", () => {
+	const slot = (
+		assigneeId: string | null,
+		status: string,
+		isSpeakerRole = false,
+	) => ({ assigneeId, status, isSpeakerRole });
+
+	it("tallies fill, confirmed, and speaker counts with rounded percentage", () => {
+		const summary = summarizeAgenda([
+			slot("m1", "confirmed", true),
+			slot("m2", "claimed", true),
+			slot(null, "open", true),
+			slot("m3", "confirmed"),
+			slot(null, "open"),
+		]);
+		expect(summary).toEqual({
+			total: 5,
+			filled: 3,
+			open: 2,
+			pct: 60,
+			confirmed: 2,
+			speakerTotal: 3,
+			speakerFilled: 2,
+		});
+	});
+
+	it("returns 0% for no slots", () => {
+		expect(summarizeAgenda([]).pct).toBe(0);
 	});
 });
