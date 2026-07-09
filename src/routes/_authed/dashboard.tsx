@@ -118,8 +118,8 @@ function Dashboard() {
 								to="/next"
 								className="block border-t border-[var(--line)] px-[18px] py-5 text-[13px] text-[var(--sea-ink-soft)] no-underline transition-colors hover:bg-[var(--foam)]"
 							>
-								You haven't signed up for any upcoming roles. Browse the agenda
-								→
+								You haven't signed up for any upcoming roles. Sign up for a
+								meeting role →
 							</Link>
 						) : (
 							commitments.map((r) => {
