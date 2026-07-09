@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildMeetingNavItems } from "./meeting-nav";
+import {
+	buildMeetingNavItems,
+	defaultMeetingNavLinkProps,
+} from "./meeting-nav";
 
 const TZ = "UTC";
 
@@ -70,5 +73,14 @@ describe("buildMeetingNavItems", () => {
 				hasOpenRoles: false,
 			},
 		]);
+	});
+});
+
+describe("defaultMeetingNavLinkProps", () => {
+	it("targets the public club meeting route with both params", () => {
+		expect(defaultMeetingNavLinkProps("koala-tm", "m-123")).toEqual({
+			to: "/club/$clubId/meeting/$meetingId",
+			params: { clubId: "koala-tm", meetingId: "m-123" },
+		});
 	});
 });

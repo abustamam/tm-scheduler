@@ -1,3 +1,4 @@
+import type { LinkProps } from "@tanstack/react-router";
 import { formatShortDate } from "./format";
 
 export type MeetingNavItem = {
@@ -53,4 +54,19 @@ export function buildMeetingNavItems(
 			isCurrent: m.id === current.id,
 			hasOpenRoles: m.openSlots > 0,
 		}));
+}
+
+/**
+ * Default destination for a nav-strip item: the public club meeting page.
+ * Signed-in views pass their own builder (targeting `/meetings/$id`) so paging
+ * stays inside the workspace instead of jumping to the public tree (#140/#142).
+ */
+export function defaultMeetingNavLinkProps(
+	clubId: string,
+	meetingId: string,
+): LinkProps {
+	return {
+		to: "/club/$clubId/meeting/$meetingId",
+		params: { clubId, meetingId },
+	};
 }

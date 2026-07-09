@@ -10,6 +10,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { AssignSlotSheet } from "#/components/club/assign-slot-sheet";
 import { EditSpeechSheet } from "#/components/club/edit-speech-sheet";
+import { MeetingNavStrip } from "#/components/club/meeting-nav-strip";
 import { MeetingViewActions } from "#/components/club/meeting-view-actions";
 import { PageContainer } from "#/components/page-container";
 import { ShareLinkButton } from "#/components/share-link-button";
@@ -37,7 +38,12 @@ import {
 import { buildRoleCounts, slotLabel } from "#/lib/agenda";
 import { utcToZonedWallTime } from "#/lib/datetime";
 import { formatMeetingDate, formatMeetingTimeRange } from "#/lib/format";
-import { getMeeting, updateMeeting } from "#/server/meetings";
+import { buildMeetingNavItems } from "#/lib/meeting-nav";
+import {
+	getMeeting,
+	listUpcomingMeetings,
+	updateMeeting,
+} from "#/server/meetings";
 import {
 	addSpeakerSlot,
 	claimSlot,
@@ -49,7 +55,27 @@ import {
 } from "#/server/slots";
 
 export const Route = createFileRoute("/_authed/meetings/$id")({
-	loader: ({ params }) => getMeeting({ data: params.id }),
+	loader: async ({ params }) => {
+		const data = await getMeeting({ data: params.id });
+		// Non-fatal: a failure here degrades to no strip, never blocks the page
+		// (mirrors the public club route).
+		const upcoming = await listUpcomingMeetings({
+			data: data.meeting.clubId,
+		}).catch(() => [] as Awaited<ReturnType<typeof listUpcomingMeetings>>);
+		const currentOpenSlots = data.slots.filter(
+			(s) => s.status === "open",
+		).length;
+		const navItems = buildMeetingNavItems(
+			{
+				id: data.meeting.id,
+				scheduledAt: data.meeting.scheduledAt,
+				openSlots: currentOpenSlots,
+			},
+			upcoming,
+			data.timezone,
+		);
+		return { ...data, navItems };
+	},
 	component: MeetingDetail,
 });
 
@@ -75,6 +101,7 @@ function MeetingDetail() {
 		unavailableMembers,
 		clubSlug,
 		roster,
+		navItems,
 	} = Route.useLoaderData();
 	const { currentMemberId } = Route.useRouteContext();
 	const router = useRouter();
@@ -256,6 +283,14 @@ function MeetingDetail() {
 						</span>
 					) : null}
 				</div>
+				<MeetingNavStrip
+					clubId={clubSlug}
+					items={navItems}
+					getLinkProps={(meetingId) => ({
+						to: "/meetings/$id",
+						params: { id: meetingId },
+					})}
+				/>
 				{meeting.wordOfTheDay ? (
 					<p className="flex items-center gap-1.5 text-sm">
 						<Sparkles className="size-4 text-primary" aria-hidden />
