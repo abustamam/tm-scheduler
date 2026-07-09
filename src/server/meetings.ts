@@ -193,8 +193,9 @@ export const getMeeting = createServerFn({ method: "GET" })
 
 /**
  * The club's soonest upcoming (non-cancelled) meeting with its full agenda, or
- * `{ meeting: null }` when none is scheduled. Backs the Agenda sign-up board.
- * AUTHED — VPE workspace only.
+ * `{ meeting: null }` when none is scheduled. Backs the `/next` shortcut, which
+ * redirects to that meeting's `/meetings/$id` page. AUTHED — any signed-in club
+ * member.
  */
 export const getNextMeeting = createServerFn({ method: "GET" })
 	.validator((clubId: unknown) => uuid.parse(clubId))

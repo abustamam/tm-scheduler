@@ -289,3 +289,38 @@ export function buildPickerRows(
 			return a.name.localeCompare(b.name);
 		});
 }
+
+export type AgendaSummary = {
+	total: number;
+	filled: number;
+	open: number;
+	pct: number;
+	confirmed: number;
+	speakerTotal: number;
+	speakerFilled: number;
+};
+
+/** At-a-glance counts for a meeting's slots: fill/confirm/speaker tallies and
+ *  the filled percentage (0 when there are no slots). */
+export function summarizeAgenda(
+	slots: {
+		assigneeId: string | null;
+		status: string;
+		isSpeakerRole: boolean;
+	}[],
+): AgendaSummary {
+	const total = slots.length;
+	const filled = slots.filter((s) => s.assigneeId).length;
+	const confirmed = slots.filter((s) => s.status === "confirmed").length;
+	const speakers = slots.filter((s) => s.isSpeakerRole);
+	const speakerFilled = speakers.filter((s) => s.assigneeId).length;
+	return {
+		total,
+		filled,
+		open: total - filled,
+		pct: total === 0 ? 0 : Math.round((filled / total) * 100),
+		confirmed,
+		speakerTotal: speakers.length,
+		speakerFilled,
+	};
+}

@@ -35,7 +35,7 @@ import {
 	SheetHeader,
 	SheetTitle,
 } from "#/components/ui/sheet";
-import { buildRoleCounts, slotLabel } from "#/lib/agenda";
+import { buildRoleCounts, slotLabel, summarizeAgenda } from "#/lib/agenda";
 import { utcToZonedWallTime } from "#/lib/datetime";
 import { formatMeetingDate, formatMeetingTimeRange } from "#/lib/format";
 import { deriveMeetingNavItems } from "#/lib/meeting-nav";
@@ -107,6 +107,7 @@ function MeetingDetail() {
 
 	// Number repeated roles ("Speaker 1", "Speaker 2", …).
 	const roleCounts = buildRoleCounts(slots);
+	const summary = summarizeAgenda(slots);
 
 	// memberId → their current role label this meeting (for picker flags).
 	const roleByMemberId: Record<string, string> = {};
@@ -309,6 +310,52 @@ function MeetingDetail() {
 					) : null}
 				</div>
 			</header>
+
+			<section className="rounded-xl border bg-card p-4">
+				<div className="flex flex-wrap items-center justify-between gap-3">
+					<div className="flex flex-wrap gap-x-6 gap-y-1 text-sm">
+						<span>
+							<span className="text-muted-foreground">Open roles: </span>
+							<span className="font-semibold">
+								{summary.open === 0 ? "All filled" : summary.open}
+							</span>
+						</span>
+						<span>
+							<span className="text-muted-foreground">Confirmed: </span>
+							<span className="font-semibold">
+								{summary.confirmed} of {summary.total}
+							</span>
+						</span>
+						<span>
+							<span className="text-muted-foreground">Prepared speeches: </span>
+							<span className="font-semibold">
+								{summary.speakerFilled} of {summary.speakerTotal}
+							</span>
+						</span>
+					</div>
+					{canManage ? (
+						<Button
+							size="sm"
+							variant="outline"
+							onClick={() => toast.info("Reminder sending isn't wired up yet.")}
+						>
+							Remind unfilled
+						</Button>
+					) : null}
+				</div>
+				<div className="mt-3">
+					<div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
+						<span>Roles filled</span>
+						<span>{summary.pct}%</span>
+					</div>
+					<div className="h-2 overflow-hidden rounded-full bg-muted">
+						<div
+							className="h-full rounded-full bg-primary transition-[width]"
+							style={{ width: `${summary.pct}%` }}
+						/>
+					</div>
+				</div>
+			</section>
 
 			{unavailableMembers.length > 0 ? (
 				<section className="rounded-xl border border-dashed bg-muted/40 p-4">

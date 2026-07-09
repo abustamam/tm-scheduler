@@ -115,11 +115,11 @@ function Dashboard() {
 						</div>
 						{commitments.length === 0 ? (
 							<Link
-								to="/agenda"
+								to="/next"
 								className="block border-t border-[var(--line)] px-[18px] py-5 text-[13px] text-[var(--sea-ink-soft)] no-underline transition-colors hover:bg-[var(--foam)]"
 							>
-								You haven't signed up for any upcoming roles. Browse the agenda
-								→
+								You haven't signed up for any upcoming roles. Sign up for a
+								meeting role →
 							</Link>
 						) : (
 							commitments.map((r) => {
@@ -127,7 +127,7 @@ function Dashboard() {
 								return (
 									<Link
 										key={r.slotId}
-										to="/agenda"
+										to="/next"
 										className="flex items-center gap-3 border-t border-[var(--line)] px-[18px] py-3 no-underline transition-colors hover:bg-[var(--foam)]"
 									>
 										<span
@@ -166,7 +166,7 @@ function Dashboard() {
 
 					{/* Quick actions */}
 					<div className="flex flex-col gap-[9px]">
-						<QuickAction to="/agenda" icon={CalendarDays}>
+						<QuickAction to="/next" icon={CalendarDays}>
 							Sign up for a meeting role
 						</QuickAction>
 						<QuickAction to="/resources" icon={BookOpen}>
@@ -193,7 +193,7 @@ function QuickAction({
 	icon: Icon,
 	children,
 }: {
-	to: "/agenda" | "/resources";
+	to: "/next" | "/resources";
 	icon: typeof CalendarDays;
 	children: React.ReactNode;
 }) {
