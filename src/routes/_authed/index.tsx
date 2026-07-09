@@ -138,7 +138,7 @@ function Roster() {
 			label: "Open roles",
 			value: String(openRoles),
 			note: "next meeting →",
-			to: "/agenda" as const,
+			to: "/next" as const,
 		},
 	];
 
@@ -627,7 +627,7 @@ function StatCard({
 		value: string;
 		note: string;
 		amber?: boolean;
-		to?: "/agenda";
+		to?: "/next";
 	};
 }) {
 	const inner = (

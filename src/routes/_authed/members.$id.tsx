@@ -143,7 +143,7 @@ function MemberDetail() {
 				</div>
 				<div className="flex flex-wrap gap-[9px]">
 					<Button asChild size="sm">
-						<Link to="/agenda">Assign a role</Link>
+						<Link to="/next">Assign a role</Link>
 					</Button>
 					{clubId ? (
 						<MemberActions

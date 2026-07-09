@@ -17,9 +17,9 @@ import { Route as ApiHealthRouteImport } from './routes/api/health'
 import { Route as ApiDevLoginRouteImport } from './routes/api/dev-login'
 import { Route as AuthedScheduleRouteImport } from './routes/_authed/schedule'
 import { Route as AuthedResourcesRouteImport } from './routes/_authed/resources'
+import { Route as AuthedNextRouteImport } from './routes/_authed/next'
 import { Route as AuthedMeRouteImport } from './routes/_authed/me'
 import { Route as AuthedDashboardRouteImport } from './routes/_authed/dashboard'
-import { Route as AuthedAgendaRouteImport } from './routes/_authed/agenda'
 import { Route as AuthedActivityRouteImport } from './routes/_authed/activity'
 import { Route as ClubClubIdIndexRouteImport } from './routes/club.$clubId.index'
 import { Route as ApiPathwaysIngestRouteImport } from './routes/api/pathways/ingest'
@@ -74,6 +74,11 @@ const AuthedResourcesRoute = AuthedResourcesRouteImport.update({
   path: '/resources',
   getParentRoute: () => AuthedRoute,
 } as any)
+const AuthedNextRoute = AuthedNextRouteImport.update({
+  id: '/next',
+  path: '/next',
+  getParentRoute: () => AuthedRoute,
+} as any)
 const AuthedMeRoute = AuthedMeRouteImport.update({
   id: '/me',
   path: '/me',
@@ -82,11 +87,6 @@ const AuthedMeRoute = AuthedMeRouteImport.update({
 const AuthedDashboardRoute = AuthedDashboardRouteImport.update({
   id: '/dashboard',
   path: '/dashboard',
-  getParentRoute: () => AuthedRoute,
-} as any)
-const AuthedAgendaRoute = AuthedAgendaRouteImport.update({
-  id: '/agenda',
-  path: '/agenda',
   getParentRoute: () => AuthedRoute,
 } as any)
 const AuthedActivityRoute = AuthedActivityRouteImport.update({
@@ -167,9 +167,9 @@ export interface FileRoutesByFullPath {
   '/': typeof AuthedIndexRoute
   '/signin': typeof SigninRoute
   '/activity': typeof AuthedActivityRoute
-  '/agenda': typeof AuthedAgendaRoute
   '/dashboard': typeof AuthedDashboardRoute
   '/me': typeof AuthedMeRoute
+  '/next': typeof AuthedNextRoute
   '/resources': typeof AuthedResourcesRoute
   '/schedule': typeof AuthedScheduleRoute
   '/api/dev-login': typeof ApiDevLoginRoute
@@ -192,9 +192,9 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/signin': typeof SigninRoute
   '/activity': typeof AuthedActivityRoute
-  '/agenda': typeof AuthedAgendaRoute
   '/dashboard': typeof AuthedDashboardRoute
   '/me': typeof AuthedMeRoute
+  '/next': typeof AuthedNextRoute
   '/resources': typeof AuthedResourcesRoute
   '/schedule': typeof AuthedScheduleRoute
   '/api/dev-login': typeof ApiDevLoginRoute
@@ -219,9 +219,9 @@ export interface FileRoutesById {
   '/_authed': typeof AuthedRouteWithChildren
   '/signin': typeof SigninRoute
   '/_authed/activity': typeof AuthedActivityRoute
-  '/_authed/agenda': typeof AuthedAgendaRoute
   '/_authed/dashboard': typeof AuthedDashboardRoute
   '/_authed/me': typeof AuthedMeRoute
+  '/_authed/next': typeof AuthedNextRoute
   '/_authed/resources': typeof AuthedResourcesRoute
   '/_authed/schedule': typeof AuthedScheduleRoute
   '/api/dev-login': typeof ApiDevLoginRoute
@@ -248,9 +248,9 @@ export interface FileRouteTypes {
     | '/'
     | '/signin'
     | '/activity'
-    | '/agenda'
     | '/dashboard'
     | '/me'
+    | '/next'
     | '/resources'
     | '/schedule'
     | '/api/dev-login'
@@ -273,9 +273,9 @@ export interface FileRouteTypes {
   to:
     | '/signin'
     | '/activity'
-    | '/agenda'
     | '/dashboard'
     | '/me'
+    | '/next'
     | '/resources'
     | '/schedule'
     | '/api/dev-login'
@@ -299,9 +299,9 @@ export interface FileRouteTypes {
     | '/_authed'
     | '/signin'
     | '/_authed/activity'
-    | '/_authed/agenda'
     | '/_authed/dashboard'
     | '/_authed/me'
+    | '/_authed/next'
     | '/_authed/resources'
     | '/_authed/schedule'
     | '/api/dev-login'
@@ -393,6 +393,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedResourcesRouteImport
       parentRoute: typeof AuthedRoute
     }
+    '/_authed/next': {
+      id: '/_authed/next'
+      path: '/next'
+      fullPath: '/next'
+      preLoaderRoute: typeof AuthedNextRouteImport
+      parentRoute: typeof AuthedRoute
+    }
     '/_authed/me': {
       id: '/_authed/me'
       path: '/me'
@@ -405,13 +412,6 @@ declare module '@tanstack/react-router' {
       path: '/dashboard'
       fullPath: '/dashboard'
       preLoaderRoute: typeof AuthedDashboardRouteImport
-      parentRoute: typeof AuthedRoute
-    }
-    '/_authed/agenda': {
-      id: '/_authed/agenda'
-      path: '/agenda'
-      fullPath: '/agenda'
-      preLoaderRoute: typeof AuthedAgendaRouteImport
       parentRoute: typeof AuthedRoute
     }
     '/_authed/activity': {
@@ -517,9 +517,9 @@ declare module '@tanstack/react-router' {
 
 interface AuthedRouteChildren {
   AuthedActivityRoute: typeof AuthedActivityRoute
-  AuthedAgendaRoute: typeof AuthedAgendaRoute
   AuthedDashboardRoute: typeof AuthedDashboardRoute
   AuthedMeRoute: typeof AuthedMeRoute
+  AuthedNextRoute: typeof AuthedNextRoute
   AuthedResourcesRoute: typeof AuthedResourcesRoute
   AuthedScheduleRoute: typeof AuthedScheduleRoute
   AuthedIndexRoute: typeof AuthedIndexRoute
@@ -534,9 +534,9 @@ interface AuthedRouteChildren {
 
 const AuthedRouteChildren: AuthedRouteChildren = {
   AuthedActivityRoute: AuthedActivityRoute,
-  AuthedAgendaRoute: AuthedAgendaRoute,
   AuthedDashboardRoute: AuthedDashboardRoute,
   AuthedMeRoute: AuthedMeRoute,
+  AuthedNextRoute: AuthedNextRoute,
   AuthedResourcesRoute: AuthedResourcesRoute,
   AuthedScheduleRoute: AuthedScheduleRoute,
   AuthedIndexRoute: AuthedIndexRoute,
