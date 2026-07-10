@@ -15,11 +15,12 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
-import { AssignSlotSheet } from "#/components/club/assign-slot-sheet";
-import { EditSpeechSheet } from "#/components/club/edit-speech-sheet";
+import {
+	MeetingAgenda,
+	type MeetingAgendaActions,
+} from "#/components/agenda/meeting-agenda";
 import { MeetingNavStrip } from "#/components/club/meeting-nav-strip";
 import { ShareLinkButton } from "#/components/share-link-button";
-import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import {
 	Dialog,
@@ -32,22 +33,13 @@ import {
 } from "#/components/ui/dialog";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
-import {
-	Sheet,
-	SheetClose,
-	SheetContent,
-	SheetDescription,
-	SheetFooter,
-	SheetHeader,
-	SheetTitle,
-} from "#/components/ui/sheet";
 import { Textarea } from "#/components/ui/textarea";
-import { buildRoleCounts, slotLabel } from "#/lib/agenda";
 import { utcToZonedWallTime } from "#/lib/datetime";
 import { formatMeetingDate, formatMeetingTimeRange } from "#/lib/format";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import { deriveMeetingNavItems } from "#/lib/meeting-nav";
 import { isTmodRoleName } from "#/lib/meeting-roles";
+import { selfAssertedViewer } from "#/lib/meeting-viewer";
 import { useCurrentMember } from "#/lib/member-identity";
 import { clearAvailability, setAvailability } from "#/server/availability";
 import {
@@ -115,15 +107,6 @@ function MeetingNotFound() {
 	);
 }
 
-const CATEGORY_LABELS: Record<string, string> = {
-	leadership: "Leadership",
-	speaker: "Speakers",
-	evaluator: "Evaluation",
-	functionary: "Functionaries",
-};
-
-type Slot = Awaited<ReturnType<typeof getMeeting>>["slots"][number];
-
 function errMessage(err: unknown) {
 	return err instanceof Error ? err.message : "Something went wrong.";
 }
@@ -142,25 +125,19 @@ function MeetingView() {
 	const { member } = useCurrentMember(clubId);
 	const router = useRouter();
 
-	const [claimSlotState, setClaimSlotState] = useState<Slot | null>(null);
-	const [takeoverSlot, setTakeoverSlot] = useState<Slot | null>(null);
-	const [editSpeechSlot, setEditSpeechSlot] = useState<Slot | null>(null);
-	const [busySlotId, setBusySlotId] = useState<string | null>(null);
 	const [availBusy, setAvailBusy] = useState(false);
 	const [editMetaOpen, setEditMetaOpen] = useState(false);
-	const [assignSlot, setAssignSlot] = useState<Slot | null>(null);
 
 	const myId = member?.id ?? null;
 	const isUnavailable = myId ? unavailableMemberIds.includes(myId) : false;
-
-	// Number repeated roles ("Speaker 1", "Speaker 2", …).
-	const roleCounts = buildRoleCounts(slots);
 
 	// The meeting's TMOD (Toastmaster of the Day) slot assignee, if any. When the
 	// self-asserted member holds it, they get self-serve agenda editing (ADR-0010).
 	const tmodMemberId =
 		slots.find((s) => isTmodRoleName(s.roleName))?.assigneeId ?? null;
 	const isTmod = myId !== null && myId === tmodMemberId;
+
+	const viewer = selfAssertedViewer({ memberId: myId, isTmod });
 
 	// Roster for the TMOD assign picker — only fetched when self-serve editing is
 	// unlocked (kept off the payload for ordinary viewers).
@@ -169,58 +146,6 @@ function MeetingView() {
 		queryFn: () => listMembers({ data: clubUuid }),
 		enabled: isTmod,
 	});
-
-	// memberId → their current role label this meeting (for the assign picker).
-	const roleByMemberId: Record<string, string> = {};
-	for (const s of slots) {
-		if (s.assigneeId) roleByMemberId[s.assigneeId] = slotLabel(s, roleCounts);
-	}
-
-	const speakerSlots = slots.filter((s) => s.isSpeakerRole);
-
-	// Preserve category order as it appears (slots arrive pre-sorted).
-	const categories: string[] = [];
-	for (const s of slots) {
-		if (!categories.includes(s.category)) categories.push(s.category);
-	}
-
-	async function doAddSpeaker() {
-		if (!myId) return;
-		setBusySlotId("add-speaker");
-		try {
-			await addSpeakerSlot({
-				data: { meetingId, actorMemberId: myId, selfMemberId: myId },
-			});
-			toast.success("Speaker added.");
-			await router.invalidate();
-		} catch (err) {
-			toast.error(errMessage(err));
-		} finally {
-			setBusySlotId(null);
-		}
-	}
-
-	async function doRemoveSpeaker() {
-		if (!myId) return;
-		if (speakerSlots.length <= 1) {
-			const ok = window.confirm(
-				"This meeting will have no speakers. Continue?",
-			);
-			if (!ok) return;
-		}
-		setBusySlotId("remove-speaker");
-		try {
-			await removeSpeakerSlot({
-				data: { meetingId, actorMemberId: myId, selfMemberId: myId },
-			});
-			toast.success("Speaker removed.");
-			await router.invalidate();
-		} catch (err) {
-			toast.error(errMessage(err));
-		} finally {
-			setBusySlotId(null);
-		}
-	}
 
 	async function toggleAvailability() {
 		if (!member) {
@@ -248,54 +173,46 @@ function MeetingView() {
 		}
 	}
 
-	function onRowTap(slot: Slot) {
-		if (slot.status === "open") {
-			setClaimSlotState(slot);
-		}
-	}
-
-	async function doRelease(slot: Slot) {
-		if (!member) {
-			toast.error("Pick your name first.");
-			return;
-		}
-		setBusySlotId(slot.id);
-		try {
-			await releaseSlot({
-				data: { slotId: slot.id, actorMemberId: member.id },
-			});
-			toast.success("Role released.");
-			await router.invalidate();
-		} catch (err) {
-			toast.error(errMessage(err));
-		} finally {
-			setBusySlotId(null);
-		}
-	}
-
-	async function doTakeover(slot: Slot) {
-		if (!member) {
-			toast.error("Pick your name first.");
-			return;
-		}
-		setBusySlotId(slot.id);
-		try {
-			await reassignSlot({
+	// Self-asserted actions: every mutation carries `selfMemberId` so the server
+	// takes the ADR-0010 self-serve path (vs. the admin/session path).
+	const actions: MeetingAgendaActions = {
+		claim: async (slot, speakerDetails) => {
+			if (!myId) throw new Error("Pick your name first.");
+			await claimSlot({
 				data: {
 					slotId: slot.id,
-					memberId: member.id,
-					actorMemberId: member.id,
+					memberId: myId,
+					actorMemberId: myId,
+					speakerDetails,
 				},
 			});
-			toast.success(`You've taken over ${slot.roleName}.`);
-			setTakeoverSlot(null);
-			await router.invalidate();
-		} catch (err) {
-			toast.error(errMessage(err));
-		} finally {
-			setBusySlotId(null);
-		}
-	}
+		},
+		release: async (slot) => {
+			if (!myId) throw new Error("Pick your name first.");
+			await releaseSlot({ data: { slotId: slot.id, actorMemberId: myId } });
+		},
+		takeover: async (slot) => {
+			if (!myId) throw new Error("Pick your name first.");
+			await reassignSlot({
+				data: { slotId: slot.id, memberId: myId, actorMemberId: myId },
+			});
+		},
+		addSpeaker: async () => {
+			if (!myId) throw new Error("Pick your name first.");
+			await addSpeakerSlot({
+				data: { meetingId, actorMemberId: myId, selfMemberId: myId },
+			});
+			toast.success("Speaker added.");
+		},
+		removeSpeaker: async () => {
+			if (!myId) throw new Error("Pick your name first.");
+			await removeSpeakerSlot({
+				data: { meetingId, actorMemberId: myId, selfMemberId: myId },
+			});
+			toast.success("Speaker removed.");
+		},
+		onMutated: () => router.invalidate(),
+	};
 
 	return (
 		<div className="space-y-5 p-4 pb-8">
@@ -333,7 +250,7 @@ function MeetingView() {
 					variant={isUnavailable ? "default" : "outline"}
 					size="sm"
 					onClick={toggleAvailability}
-					disabled={!member || availBusy}
+					disabled={!viewer.canToggleAvailability || availBusy}
 					className="mt-1"
 				>
 					{availBusy ? (
@@ -384,249 +301,14 @@ function MeetingView() {
 				) : null}
 			</header>
 
-			{categories.map((category) => (
-				<section key={category} className="space-y-2">
-					<h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-						{CATEGORY_LABELS[category] ?? category}
-					</h2>
-					<ul className="space-y-2">
-						{slots
-							.filter((s) => s.category === category)
-							.map((slot) => {
-								const isMine = myId !== null && slot.assigneeId === myId;
-								const busy = busySlotId === slot.id;
-								const isOpen = slot.status === "open";
-								return (
-									<li
-										key={slot.id}
-										className="rounded-xl border bg-card p-4 shadow-sm"
-									>
-										<div className="flex items-start justify-between gap-3">
-											<button
-												type="button"
-												onClick={() => onRowTap(slot)}
-												disabled={!isOpen}
-												className="min-w-0 flex-1 text-left disabled:cursor-default"
-											>
-												<p className="font-medium">
-													{slotLabel(slot, roleCounts)}
-												</p>
-
-												{slot.assigneeId ? (
-													<p className="text-sm text-muted-foreground">
-														{slot.assigneeName}
-														{isMine ? (
-															<span className="text-primary"> (you)</span>
-														) : null}
-													</p>
-												) : (
-													<p className="text-sm text-muted-foreground">Open</p>
-												)}
-
-												{slot.isSpeakerRole && slot.speechTitle ? (
-													<div className="mt-1 text-sm">
-														<p className="font-medium">
-															&ldquo;{slot.speechTitle}&rdquo;
-														</p>
-														<p className="text-xs text-muted-foreground">
-															{[
-																slot.pathwayPath,
-																slot.projectName,
-																slot.projectLevel,
-															]
-																.filter(Boolean)
-																.join(" · ")}
-															{slot.minMinutes && slot.maxMinutes
-																? ` · ${slot.minMinutes}–${slot.maxMinutes} min`
-																: ""}
-														</p>
-													</div>
-												) : null}
-
-												{slot.evaluates ? (
-													<p className="mt-1 text-xs text-muted-foreground">
-														Evaluates{" "}
-														<span className="font-medium text-foreground">
-															{slot.evaluates.speechTitle
-																? `“${slot.evaluates.speechTitle}”`
-																: (slot.evaluates.speakerName ?? "a speaker")}
-														</span>
-													</p>
-												) : null}
-											</button>
-
-											<div className="flex shrink-0 flex-col items-end gap-2">
-												{isTmod ? (
-													<Button
-														size="sm"
-														variant="outline"
-														onClick={() => setAssignSlot(slot)}
-													>
-														{isOpen ? "Assign…" : "Reassign…"}
-													</Button>
-												) : null}
-												{isOpen ? (
-													<Button
-														size="sm"
-														onClick={() => setClaimSlotState(slot)}
-													>
-														Claim
-													</Button>
-												) : isMine ? (
-													<>
-														<Button
-															size="sm"
-															variant="outline"
-															onClick={() => doRelease(slot)}
-															disabled={busy}
-														>
-															{busy ? (
-																<Loader2 className="size-4 animate-spin" />
-															) : (
-																"Release"
-															)}
-														</Button>
-														{slot.isSpeakerRole ? (
-															<button
-																type="button"
-																onClick={() => setEditSpeechSlot(slot)}
-																className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
-															>
-																Edit speech
-															</button>
-														) : null}
-													</>
-												) : (
-													<>
-														<Badge variant="secondary">Filled</Badge>
-														<button
-															type="button"
-															onClick={() => setTakeoverSlot(slot)}
-															className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
-														>
-															take over
-														</button>
-													</>
-												)}
-											</div>
-										</div>
-									</li>
-								);
-							})}
-					</ul>
-					{isTmod && category === "speaker" ? (
-						<div className="flex gap-2">
-							<Button
-								size="sm"
-								variant="outline"
-								disabled={busySlotId === "add-speaker"}
-								onClick={doAddSpeaker}
-							>
-								+ Add speaker
-							</Button>
-							{speakerSlots.length > 0 ? (
-								<Button
-									size="sm"
-									variant="outline"
-									disabled={busySlotId === "remove-speaker"}
-									onClick={doRemoveSpeaker}
-								>
-									− Remove speaker
-								</Button>
-							) : null}
-						</div>
-					) : null}
-				</section>
-			))}
-
-			{isTmod && speakerSlots.length === 0 ? (
-				<section className="space-y-2">
-					<h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-						{CATEGORY_LABELS.speaker}
-					</h2>
-					<Button
-						size="sm"
-						variant="outline"
-						onClick={doAddSpeaker}
-						disabled={busySlotId === "add-speaker"}
-					>
-						+ Add speaker
-					</Button>
-				</section>
-			) : null}
-
-			<ClaimSheet
-				slot={claimSlotState}
-				memberId={myId}
-				roleCounts={roleCounts}
-				onOpenChange={(open) => {
-					if (!open) setClaimSlotState(null);
-				}}
-				onClaimed={async () => {
-					setClaimSlotState(null);
-					await router.invalidate();
-				}}
+			<MeetingAgenda
+				slots={slots}
+				viewer={viewer}
+				actions={actions}
+				roster={roster}
+				roleRecency={roleRecency}
+				unavailableMemberIds={unavailableMemberIds}
 			/>
-
-			<EditSpeechSheet
-				slot={
-					editSpeechSlot
-						? {
-								id: editSpeechSlot.id,
-								label: slotLabel(editSpeechSlot, roleCounts),
-								speechTitle: editSpeechSlot.speechTitle,
-								pathwayPath: editSpeechSlot.pathwayPath,
-								projectName: editSpeechSlot.projectName,
-								projectLevel: editSpeechSlot.projectLevel,
-								minMinutes: editSpeechSlot.minMinutes,
-								maxMinutes: editSpeechSlot.maxMinutes,
-							}
-						: null
-				}
-				actorMemberId={myId}
-				onOpenChange={(open) => {
-					if (!open) setEditSpeechSlot(null);
-				}}
-				onSaved={async () => {
-					setEditSpeechSlot(null);
-					await router.invalidate();
-				}}
-			/>
-
-			<Dialog
-				open={takeoverSlot !== null}
-				onOpenChange={(open) => {
-					if (!open) setTakeoverSlot(null);
-				}}
-			>
-				<DialogContent>
-					<DialogHeader>
-						<DialogTitle>Take over this role?</DialogTitle>
-						<DialogDescription>
-							This is {takeoverSlot?.assigneeName ?? "someone"}'s slot — take it
-							over?
-						</DialogDescription>
-					</DialogHeader>
-					<DialogFooter>
-						<DialogClose asChild>
-							<Button type="button" variant="ghost">
-								Cancel
-							</Button>
-						</DialogClose>
-						<Button
-							type="button"
-							onClick={() => takeoverSlot && doTakeover(takeoverSlot)}
-							disabled={takeoverSlot ? busySlotId === takeoverSlot.id : false}
-						>
-							{takeoverSlot && busySlotId === takeoverSlot.id ? (
-								<Loader2 className="size-4 animate-spin" />
-							) : (
-								"Take it over"
-							)}
-						</Button>
-					</DialogFooter>
-				</DialogContent>
-			</Dialog>
 
 			{isTmod ? (
 				<EditMeetingMetaDialog
@@ -642,32 +324,6 @@ function MeetingView() {
 					}}
 				/>
 			) : null}
-
-			<AssignSlotSheet
-				slot={
-					assignSlot
-						? {
-								id: assignSlot.id,
-								roleDefinitionId: assignSlot.roleDefinitionId,
-								status: assignSlot.status,
-								isSpeakerRole: assignSlot.isSpeakerRole,
-								label: slotLabel(assignSlot, roleCounts),
-							}
-						: null
-				}
-				roster={roster}
-				roleByMemberId={roleByMemberId}
-				unavailableIds={unavailableMemberIds}
-				roleRecency={roleRecency}
-				actorMemberId={myId}
-				onOpenChange={(open) => {
-					if (!open) setAssignSlot(null);
-				}}
-				onAssigned={async () => {
-					setAssignSlot(null);
-					await router.invalidate();
-				}}
-			/>
 		</div>
 	);
 }
@@ -811,199 +467,5 @@ function EditMeetingMetaDialog({
 				</form>
 			</DialogContent>
 		</Dialog>
-	);
-}
-
-function ClaimSheet({
-	slot,
-	memberId,
-	roleCounts,
-	onOpenChange,
-	onClaimed,
-}: {
-	slot: Slot | null;
-	memberId: string | null;
-	roleCounts: Record<string, number>;
-	onOpenChange: (open: boolean) => void;
-	onClaimed: () => void | Promise<void>;
-}) {
-	const [submitting, setSubmitting] = useState(false);
-
-	async function claimNonSpeaker() {
-		if (!slot) return;
-		if (!memberId) {
-			toast.error("Pick your name first.");
-			return;
-		}
-		setSubmitting(true);
-		try {
-			await claimSlot({
-				data: {
-					slotId: slot.id,
-					memberId,
-					actorMemberId: memberId,
-				},
-			});
-			toast.success(`You're on as ${slot.roleName}.`);
-			await onClaimed();
-		} catch (err) {
-			toast.error(errMessage(err));
-		} finally {
-			setSubmitting(false);
-		}
-	}
-
-	async function claimSpeaker(e: React.FormEvent<HTMLFormElement>) {
-		e.preventDefault();
-		if (!slot) return;
-		if (!memberId) {
-			toast.error("Pick your name first.");
-			return;
-		}
-		const form = new FormData(e.currentTarget);
-		const speechTitle = String(form.get("speechTitle") ?? "").trim();
-		const minRaw = form.get("minMinutes");
-		const maxRaw = form.get("maxMinutes");
-		setSubmitting(true);
-		try {
-			await claimSlot({
-				data: {
-					slotId: slot.id,
-					memberId,
-					actorMemberId: memberId,
-					speakerDetails: {
-						speechTitle: speechTitle || undefined,
-						pathwayPath:
-							String(form.get("pathwayPath") ?? "").trim() || undefined,
-						projectName:
-							String(form.get("projectName") ?? "").trim() || undefined,
-						projectLevel:
-							String(form.get("projectLevel") ?? "").trim() || undefined,
-						minMinutes: minRaw ? Number(minRaw) : undefined,
-						maxMinutes: maxRaw ? Number(maxRaw) : undefined,
-					},
-				},
-			});
-			toast.success("You're booked to speak!");
-			await onClaimed();
-		} catch (err) {
-			toast.error(errMessage(err));
-		} finally {
-			setSubmitting(false);
-		}
-	}
-
-	const isSpeaker = slot?.isSpeakerRole ?? false;
-	const title = slot ? slotLabel(slot, roleCounts) : "";
-
-	return (
-		<Sheet open={slot !== null} onOpenChange={onOpenChange}>
-			<SheetContent side="bottom" className="max-h-[90svh] overflow-y-auto">
-				<SheetHeader>
-					<SheetTitle>{title || "Claim this role"}</SheetTitle>
-					{slot?.description ? (
-						<SheetDescription>{slot.description}</SheetDescription>
-					) : null}
-				</SheetHeader>
-
-				{isSpeaker ? (
-					<form onSubmit={claimSpeaker} className="space-y-4 px-4">
-						<div className="space-y-2">
-							<Label htmlFor="speechTitle">Speech title</Label>
-							<Input
-								id="speechTitle"
-								name="speechTitle"
-								placeholder="TBA if not decided yet"
-								autoFocus
-							/>
-						</div>
-						<div className="space-y-2">
-							<Label htmlFor="pathwayPath">Pathways path</Label>
-							<Input
-								id="pathwayPath"
-								name="pathwayPath"
-								placeholder="e.g. Presentation Mastery"
-							/>
-						</div>
-						<div className="grid grid-cols-2 gap-3">
-							<div className="space-y-2">
-								<Label htmlFor="projectName">Project</Label>
-								<Input
-									id="projectName"
-									name="projectName"
-									placeholder="Ice Breaker"
-								/>
-							</div>
-							<div className="space-y-2">
-								<Label htmlFor="projectLevel">Level</Label>
-								<Input
-									id="projectLevel"
-									name="projectLevel"
-									placeholder="Level 1"
-								/>
-							</div>
-						</div>
-						<div className="grid grid-cols-2 gap-3">
-							<div className="space-y-2">
-								<Label htmlFor="minMinutes">Min minutes</Label>
-								<Input
-									id="minMinutes"
-									name="minMinutes"
-									type="number"
-									inputMode="numeric"
-									min={1}
-									placeholder="4"
-								/>
-							</div>
-							<div className="space-y-2">
-								<Label htmlFor="maxMinutes">Max minutes</Label>
-								<Input
-									id="maxMinutes"
-									name="maxMinutes"
-									type="number"
-									inputMode="numeric"
-									min={1}
-									placeholder="6"
-								/>
-							</div>
-						</div>
-						<SheetFooter className="px-0">
-							<Button type="submit" disabled={submitting} className="w-full">
-								{submitting ? (
-									<Loader2 className="size-4 animate-spin" />
-								) : (
-									"Claim speaking slot"
-								)}
-							</Button>
-							<SheetClose asChild>
-								<Button type="button" variant="ghost" className="w-full">
-									Cancel
-								</Button>
-							</SheetClose>
-						</SheetFooter>
-					</form>
-				) : (
-					<SheetFooter>
-						<Button
-							type="button"
-							onClick={claimNonSpeaker}
-							disabled={submitting}
-							className="w-full"
-						>
-							{submitting ? (
-								<Loader2 className="size-4 animate-spin" />
-							) : (
-								"Claim"
-							)}
-						</Button>
-						<SheetClose asChild>
-							<Button type="button" variant="ghost" className="w-full">
-								Cancel
-							</Button>
-						</SheetClose>
-					</SheetFooter>
-				)}
-			</SheetContent>
-		</Sheet>
 	);
 }
