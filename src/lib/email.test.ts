@@ -74,6 +74,67 @@ describe("sendEmail", () => {
 		expect(body.from).toBe("GavelUp <noreply@gavelup.app>");
 	});
 
+	it("does NOT include an attachments field for attachment-less sends", async () => {
+		vi.stubEnv("RESEND_API_KEY", "re_test");
+		const fetchSpy = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValue(new Response("{}", { status: 200 }));
+
+		await sendEmail({
+			to: "a@b.com",
+			subject: "S",
+			html: "<p></p>",
+			text: "t",
+		});
+
+		const body = JSON.parse(fetchSpy.mock.calls[0][1]?.body as string);
+		expect(body).not.toHaveProperty("attachments");
+	});
+
+	it("passes attachments through to Resend and supports a recipient array", async () => {
+		vi.stubEnv("RESEND_API_KEY", "re_test");
+		const fetchSpy = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValue(new Response("{}", { status: 200 }));
+
+		await sendEmail({
+			to: ["a@b.com", "c@d.com"],
+			subject: "Minutes",
+			html: "<p>H</p>",
+			text: "T",
+			attachments: [
+				{ filename: "minutes-2026-07-10.pdf", content: "YmFzZTY0" },
+			],
+		});
+
+		const body = JSON.parse(fetchSpy.mock.calls[0][1]?.body as string);
+		expect(body.to).toEqual(["a@b.com", "c@d.com"]);
+		expect(body.attachments).toEqual([
+			{ filename: "minutes-2026-07-10.pdf", content: "YmFzZTY0" },
+		]);
+	});
+
+	it("logs the attachment count in the dev fallback (no key)", async () => {
+		vi.stubEnv("RESEND_API_KEY", "");
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+		await sendEmail({
+			to: ["a@b.com", "c@d.com"],
+			subject: "Minutes",
+			html: "<p></p>",
+			text: "body",
+			attachments: [
+				{ filename: "minutes-2026-07-10.pdf", content: "YmFzZTY0" },
+			],
+		});
+
+		const logged = logSpy.mock.calls.flat().join(" ");
+		expect(logged).toContain("a@b.com");
+		expect(logged).toContain("c@d.com");
+		expect(logged).toContain("attachments=1");
+		expect(logged).toContain("minutes-2026-07-10.pdf");
+	});
+
 	it("throws (does not swallow) when Resend returns a non-OK response", async () => {
 		vi.stubEnv("RESEND_API_KEY", "re_test");
 		vi.spyOn(globalThis, "fetch").mockResolvedValue(
