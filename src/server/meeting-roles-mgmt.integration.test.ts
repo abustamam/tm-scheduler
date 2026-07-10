@@ -129,4 +129,53 @@ describe.skipIf(!hasTestDb)("meeting role management (#143)", () => {
 			}),
 		).rejects.toThrow(/speaker controls/i);
 	});
+
+	it("applyRemoveRoleSlot deletes an unclaimed slot", async () => {
+		// The seeded club already has one open Timer slot on the meeting.
+		await applyRemoveRoleSlot({
+			slotId: club.slotId,
+			actorMemberId: club.adminMemberId,
+		});
+		expect(await slotsFor(club.meetingId, club.roleDefinitionId)).toHaveLength(
+			0,
+		);
+	});
+
+	it("applyRemoveRoleSlot rejects a claimed slot", async () => {
+		await testDb
+			.update(roleSlots)
+			.set({ status: "claimed", assignedMemberId: club.memberId })
+			.where(eq(roleSlots.id, club.slotId));
+		await expect(
+			applyRemoveRoleSlot({
+				slotId: club.slotId,
+				actorMemberId: club.adminMemberId,
+			}),
+		).rejects.toThrow(/release the role/i);
+	});
+
+	it("applyRemoveRoleSlot rejects the paired evaluator", async () => {
+		await addRole(club.clubId, {
+			name: "Speaker",
+			category: "speaker",
+			isSpeakerRole: true,
+			sortOrder: 10,
+		});
+		const evId = await addRole(club.clubId, {
+			name: "Evaluator",
+			category: "evaluator",
+			defaultCount: 3,
+			sortOrder: 11,
+		});
+		const [evSlot] = await testDb
+			.insert(roleSlots)
+			.values({ meetingId: club.meetingId, roleDefinitionId: evId })
+			.returning({ id: roleSlots.id });
+		await expect(
+			applyRemoveRoleSlot({
+				slotId: evSlot.id,
+				actorMemberId: club.adminMemberId,
+			}),
+		).rejects.toThrow(/speaker controls/i);
+	});
 });

@@ -158,6 +158,52 @@ export async function applyAddRoleSlot(input: {
 	return { clubId: meeting.clubId };
 }
 
+/** Remove one unclaimed, non-paired slot from a meeting. Rejects a claimed slot
+ *  (never destroys an assignment) and the speaker/paired-evaluator roles. */
+export async function applyRemoveRoleSlot(input: {
+	slotId: string;
+	actorMemberId: string | null;
+}) {
+	const [slot] = await db
+		.select({
+			id: roleSlots.id,
+			meetingId: roleSlots.meetingId,
+			roleDefinitionId: roleSlots.roleDefinitionId,
+			status: roleSlots.status,
+			assignedMemberId: roleSlots.assignedMemberId,
+			clubId: meetings.clubId,
+		})
+		.from(roleSlots)
+		.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+		.where(eq(roleSlots.id, input.slotId))
+		.limit(1);
+	if (!slot) throw new Error("Role not found.");
+	if (slot.assignedMemberId || slot.status !== "open") {
+		throw new Error("Release the role before removing it.");
+	}
+
+	const defs = await clubRoleDefs(slot.clubId);
+	if (pairedRoleIds(defs).has(slot.roleDefinitionId)) {
+		throw new Error("Remove speakers with the speaker controls.");
+	}
+
+	await db.transaction(async (tx) => {
+		await tx.delete(roleSlots).where(eq(roleSlots.id, input.slotId));
+		await logActivity(tx, {
+			clubId: slot.clubId,
+			actorMemberId: input.actorMemberId,
+			action: "meeting_edit",
+			targetType: "meeting",
+			targetId: slot.meetingId,
+			detail: {
+				change: "role_removed",
+				roleDefinitionId: slot.roleDefinitionId,
+			},
+		});
+	});
+	return { clubId: slot.clubId };
+}
+
 /** Highest-index unclaimed (open, unassigned) slot id for a role, or null. */
 function topUnclaimed(
 	slots: {
