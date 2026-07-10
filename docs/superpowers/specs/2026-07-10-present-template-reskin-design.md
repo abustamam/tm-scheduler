@@ -48,6 +48,19 @@ one small read-side addition (next-meeting date, below).
   Evaluation", "Award Presentation", "Table Topics").
 - **Logo:** recreate the official wordmark (swap-in point for the real brand file).
 
+## Grill resolutions (2026-07-10)
+
+Stress-tested with the user; each answer is baked into the sections below.
+
+1. **Logo:** use the official vendored assets in `src/assets/` (no recreation).
+2. **PPTX Thank-You background:** solid navy `#004062` (pptxgenjs has no gradients).
+3. **`nextMeetingAt`:** relative to this meeting's date, excluding cancelled.
+4. **District line:** render `club.district` verbatim; no new division field.
+5. **Speech project/level:** show as a bullet when present.
+6. **GE team line:** filled roles only.
+7. **Overflow:** fit-to-box guard (web hook + pptx `fit:"shrink"`).
+8. **Palette:** align navy/maroon to the official brand hexes (`#004062`/`#770D29`).
+
 ## Architecture
 
 `buildSlideDeck(meeting, club, slots, nextMeetingAt)` stays the single pure deck
@@ -141,7 +154,9 @@ no GE slides, etc.).
 - **toastmasterIntro** (centered): `head` lines "Meeting Theme:", `"{theme}"`,
   `spacer`, "Word of the Day:", `"{word}"` (only present groups).
 - **geIntro** (centered): "General Evaluator:", **{name}**, then a `muted` team
-  line built from the legend (roles · assignees).
+  line built from the legend (roles · assignees), **filled roles only** — open
+  slots omitted; if none are filled, drop the team line. Filtering is scoped to
+  this slide in `slideLayout`, leaving `buildLegend`'s other consumers unchanged.
 - **wordOfDay** (word): big `{word}`, `{definition}`, `"{example}"`.
 - **speech** (bullets): "Speaker: {name}", `Speech Title: "{title}"`,
   optional "Project: {projectLevel}", "Time: {time}". *No Link bullet (deferred).*
@@ -215,7 +230,9 @@ The only new read: the club's next meeting after the current one.
 - Add `nextMeetingAt: Date | null` to the meeting data source that the present
   route and `meetings.$id` loader already use (extend `getMeeting` /
   `meetings-logic`): `SELECT scheduled_at FROM meetings WHERE club_id = ? AND
-  scheduled_at > ? ORDER BY scheduled_at ASC LIMIT 1`.
+  scheduled_at > ? AND status <> 'cancelled' ORDER BY scheduled_at ASC LIMIT 1`.
+  Relative to **this meeting's** `scheduledAt` (not wall-clock now), so it is
+  correct when re-presenting a past meeting and stays deterministic/testable.
 - Thread it into `buildSlideDeck(..., nextMeetingAt)` at both call sites
   (`present.tsx`, `meetings.$id.tsx`). Date formatting stays in the renderers.
 
