@@ -4,6 +4,7 @@ import {
 	buildRoleCounts,
 	buildRosterEntries,
 	buildShortCodes,
+	formatLastServed,
 	generateSlotRows,
 	resolveAssignAction,
 	resolveEvaluatorLinks,
@@ -346,6 +347,39 @@ describe("buildPickerRows", () => {
 			unavailable: false,
 			currentRole: "Timer",
 		});
+	});
+
+	it("defaults lastServedAt to null (never) when no recency map is given", () => {
+		const rows = buildPickerRows(roster, {}, []);
+		expect(rows.every((r) => r.lastServedAt === null)).toBe(true);
+	});
+
+	it("attaches lastServedAt per member without changing order", () => {
+		const when = new Date("2026-06-01T00:00:00Z");
+		const rows = buildPickerRows(roster, {}, [], { a: when });
+		// Ordering is by name only (no flags here): Ana, Ben, Cara.
+		expect(rows.map((r) => r.id)).toEqual(["a", "b", "c"]);
+		expect(rows.find((r) => r.id === "a")?.lastServedAt).toBe(when);
+		expect(rows.find((r) => r.id === "b")?.lastServedAt).toBeNull();
+	});
+});
+
+describe("formatLastServed", () => {
+	const now = new Date("2026-07-10T12:00:00Z");
+	const daysAgo = (n: number) => new Date(now.getTime() - n * 86_400_000);
+
+	it("returns Never for null", () => {
+		expect(formatLastServed(null, now)).toBe("Never");
+	});
+
+	it("buckets recent dates by day/week/month/year", () => {
+		expect(formatLastServed(daysAgo(0), now)).toBe("today");
+		expect(formatLastServed(daysAgo(1), now)).toBe("yesterday");
+		expect(formatLastServed(daysAgo(3), now)).toBe("3 days ago");
+		expect(formatLastServed(daysAgo(21), now)).toBe("3 wks ago");
+		expect(formatLastServed(daysAgo(7), now)).toBe("1 wk ago");
+		expect(formatLastServed(daysAgo(90), now)).toBe("3 mo ago");
+		expect(formatLastServed(daysAgo(800), now)).toBe("2 yrs ago");
 	});
 });
 

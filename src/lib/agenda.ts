@@ -264,15 +264,20 @@ export type PickerRow = {
 	name: string;
 	unavailable: boolean;
 	currentRole: string | null;
+	/** When this member last held the role being assigned, or null = never (#146). */
+	lastServedAt: Date | null;
 };
 
 /** Build member-picker rows. Members flagged unavailable-for-this-meeting or
  *  already holding a role this meeting sort after unflagged members (then by
- *  name); all remain selectable. */
+ *  name); all remain selectable. `lastServedAt` maps memberId → the most recent
+ *  prior date they held the role being assigned (null = never); it annotates
+ *  rows but does NOT affect ordering (#146). */
 export function buildPickerRows(
 	roster: { id: string; name: string }[],
 	roleByMemberId: Record<string, string>,
 	unavailableIds: string[],
+	lastServedAt: Record<string, Date | null> = {},
 ): PickerRow[] {
 	const unavailable = new Set(unavailableIds);
 	return roster
@@ -281,6 +286,7 @@ export function buildPickerRows(
 			name: m.name,
 			unavailable: unavailable.has(m.id),
 			currentRole: roleByMemberId[m.id] ?? null,
+			lastServedAt: lastServedAt[m.id] ?? null,
 		}))
 		.sort((a, b) => {
 			const aFlag = a.unavailable || a.currentRole !== null;
@@ -288,6 +294,29 @@ export function buildPickerRows(
 			if (aFlag !== bFlag) return aFlag ? 1 : -1;
 			return a.name.localeCompare(b.name);
 		});
+}
+
+/** Muted "last time they did this role" label for the assign picker (#146),
+ *  measured from `now`. `null` → "Never". */
+export function formatLastServed(
+	lastAt: Date | null,
+	now: Date = new Date(),
+): string {
+	if (!lastAt) return "Never";
+	const days = Math.floor((now.getTime() - lastAt.getTime()) / 86_400_000);
+	if (days <= 0) return "today";
+	if (days === 1) return "yesterday";
+	if (days < 7) return `${days} days ago`;
+	if (days < 60) {
+		const wks = Math.round(days / 7);
+		return `${wks} wk${wks === 1 ? "" : "s"} ago`;
+	}
+	if (days < 365) {
+		const mo = Math.round(days / 30);
+		return `${mo} mo ago`;
+	}
+	const yrs = Math.floor(days / 365);
+	return `${yrs} yr${yrs === 1 ? "" : "s"} ago`;
 }
 
 export type AgendaSummary = {

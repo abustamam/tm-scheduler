@@ -99,6 +99,7 @@ function MeetingDetail() {
 		unavailableMembers,
 		clubSlug,
 		roster,
+		roleRecency,
 		navItems,
 		clubRoles,
 	} = Route.useLoaderData();
@@ -685,6 +686,7 @@ function MeetingDetail() {
 					assignSlot
 						? {
 								id: assignSlot.id,
+								roleDefinitionId: assignSlot.roleDefinitionId,
 								status: assignSlot.status,
 								isSpeakerRole: assignSlot.isSpeakerRole,
 								label: slotLabel(assignSlot, roleCounts),
@@ -694,6 +696,7 @@ function MeetingDetail() {
 				roster={roster}
 				roleByMemberId={roleByMemberId}
 				unavailableIds={unavailableMembers.map((m) => m.id)}
+				roleRecency={roleRecency}
 				actorMemberId={currentMemberId}
 				onOpenChange={(open) => {
 					if (!open) setAssignSlot(null);
