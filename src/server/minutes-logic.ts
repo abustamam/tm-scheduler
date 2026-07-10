@@ -1,0 +1,589 @@
+// Meeting-minutes DB logic (ADR-0014 / #152), split out from `minutes.ts` (a
+// createServerFn module the guard test forbids from exporting db-touching
+// functions). Integration-testable by mocking `#/db`.
+//
+// Minutes are a record OVER the `meetings` row: attendance, Table Topics
+// speakers, and awards. Every assignee is a member XOR a guest (mirroring
+// `role_slots`), enforced by DB check constraints. All mutations here trust the
+// caller's admin gate (the server fn calls `requireClubRole(..., ["admin"])`).
+import { and, asc, eq, isNotNull, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
+import { db } from "#/db";
+import {
+	guests,
+	meetingAttendance,
+	meetingAwards,
+	meetings,
+	members,
+	roleDefinitions,
+	roleSlots,
+	speeches,
+	tableTopicsSpeakers,
+} from "#/db/schema";
+
+export type AttendanceStatus = "present" | "absent" | "excused";
+export type AwardCategory =
+	| "best_speaker"
+	| "best_evaluator"
+	| "best_table_topics";
+
+/** The award categories, in display order. */
+export const AWARD_CATEGORIES: AwardCategory[] = [
+	"best_speaker",
+	"best_evaluator",
+	"best_table_topics",
+];
+
+/** Contact fields for a brand-new club guest (name required, contact optional). */
+export type NewGuestInput = {
+	name: string;
+	email?: string | null;
+	phone?: string | null;
+};
+
+export interface MinutesMemberRow {
+	memberId: string;
+	name: string;
+	status: AttendanceStatus;
+	/** Holds a role slot on this meeting — drives the `present` pre-fill. */
+	hasRole: boolean;
+}
+
+export interface MinutesGuestRow {
+	guestId: string;
+	name: string;
+	/** Pre-listed because they hold a role slot (vs explicitly added). */
+	fromRole: boolean;
+}
+
+export interface MinutesTableTopicsRow {
+	id: string;
+	memberId: string | null;
+	guestId: string | null;
+	name: string;
+	isGuest: boolean;
+	topic: string | null;
+	sortOrder: number;
+}
+
+export interface MinutesAwardRow {
+	category: AwardCategory;
+	memberId: string | null;
+	guestId: string | null;
+	/** Resolved winner name, or null when the award is unset. */
+	name: string | null;
+	isGuest: boolean;
+}
+
+export interface MinutesProgramRow {
+	slotId: string;
+	roleName: string;
+	category: string;
+	assigneeName: string | null;
+	isGuest: boolean;
+	speechTitle: string | null;
+}
+
+export interface MinutesData {
+	meetingId: string;
+	clubId: string;
+	members: MinutesMemberRow[];
+	guests: MinutesGuestRow[];
+	tableTopicsSpeakers: MinutesTableTopicsRow[];
+	awards: MinutesAwardRow[];
+	counts: { present: number; absent: number; excused: number; guests: number };
+}
+
+/** Resolve the club that owns a meeting (throws when the meeting is gone). */
+export async function getMeetingClubId(meetingId: string): Promise<string> {
+	const [row] = await db
+		.select({ clubId: meetings.clubId })
+		.from(meetings)
+		.where(eq(meetings.id, meetingId))
+		.limit(1);
+	if (!row) throw new Error("Meeting not found.");
+	return row.clubId;
+}
+
+/** The meeting's lifecycle status — drives member read-only visibility. */
+export async function getMeetingStatus(
+	meetingId: string,
+): Promise<"scheduled" | "cancelled" | "completed"> {
+	const [row] = await db
+		.select({ status: meetings.status })
+		.from(meetings)
+		.where(eq(meetings.id, meetingId))
+		.limit(1);
+	if (!row) throw new Error("Meeting not found.");
+	return row.status;
+}
+
+/**
+ * Load a meeting's minutes: the active-member roster each with a presence status
+ * (default `absent`, pre-filled `present` for members holding a role slot, and
+ * overridden by any saved attendance row), the present guests (explicitly added
+ * or pre-listed from a role slot), the ordered Table Topics speakers, and the
+ * three awards. Members who went inactive after being recorded still appear
+ * (the saved row is a snapshot).
+ */
+export async function loadMinutes(meetingId: string): Promise<MinutesData> {
+	const clubId = await getMeetingClubId(meetingId);
+
+	// Active roster (the editable attendance list).
+	const activeMembers = await db
+		.select({ id: members.id, name: members.name })
+		.from(members)
+		.where(and(eq(members.clubId, clubId), eq(members.status, "active")))
+		.orderBy(asc(members.name));
+
+	// Saved member attendance rows (a snapshot — may reference an inactive member).
+	const savedMemberRows = await db
+		.select({
+			memberId: meetingAttendance.memberId,
+			status: meetingAttendance.status,
+			name: members.name,
+		})
+		.from(meetingAttendance)
+		.innerJoin(members, eq(members.id, meetingAttendance.memberId))
+		.where(
+			and(
+				eq(meetingAttendance.meetingId, meetingId),
+				isNotNull(meetingAttendance.memberId),
+			),
+		);
+	const savedByMember = new Map(
+		savedMemberRows.map((r) => [r.memberId as string, r]),
+	);
+
+	// Role-slot holders on this meeting (member + guest), for the `present`
+	// pre-fill and the pre-listed guests.
+	const slotRows = await db
+		.select({
+			memberId: roleSlots.assignedMemberId,
+			guestId: roleSlots.assignedGuestId,
+			guestName: guests.name,
+		})
+		.from(roleSlots)
+		.leftJoin(guests, eq(guests.id, roleSlots.assignedGuestId))
+		.where(eq(roleSlots.meetingId, meetingId));
+	const roleMemberIds = new Set(
+		slotRows.map((r) => r.memberId).filter((x): x is string => x != null),
+	);
+	const roleGuests = new Map<string, string>();
+	for (const r of slotRows) {
+		if (r.guestId) roleGuests.set(r.guestId, r.guestName ?? "Guest");
+	}
+
+	// Build the member attendance list: active roster ∪ any snapshotted member.
+	const memberRows = new Map<string, MinutesMemberRow>();
+	for (const m of activeMembers) {
+		const saved = savedByMember.get(m.id);
+		const hasRole = roleMemberIds.has(m.id);
+		memberRows.set(m.id, {
+			memberId: m.id,
+			name: m.name,
+			status: saved?.status ?? (hasRole ? "present" : "absent"),
+			hasRole,
+		});
+	}
+	for (const r of savedMemberRows) {
+		const id = r.memberId as string;
+		if (!memberRows.has(id)) {
+			memberRows.set(id, {
+				memberId: id,
+				name: r.name,
+				status: r.status,
+				hasRole: roleMemberIds.has(id),
+			});
+		}
+	}
+	const memberList = [...memberRows.values()].sort((a, b) =>
+		a.name.localeCompare(b.name),
+	);
+
+	// Present guests: saved attendance rows ∪ guests holding a role slot.
+	const savedGuestRows = await db
+		.select({ guestId: meetingAttendance.guestId, name: guests.name })
+		.from(meetingAttendance)
+		.innerJoin(guests, eq(guests.id, meetingAttendance.guestId))
+		.where(
+			and(
+				eq(meetingAttendance.meetingId, meetingId),
+				isNotNull(meetingAttendance.guestId),
+			),
+		);
+	const guestRows = new Map<string, MinutesGuestRow>();
+	for (const g of savedGuestRows) {
+		guestRows.set(g.guestId as string, {
+			guestId: g.guestId as string,
+			name: g.name,
+			fromRole: false,
+		});
+	}
+	for (const [guestId, name] of roleGuests) {
+		if (!guestRows.has(guestId)) {
+			guestRows.set(guestId, { guestId, name, fromRole: true });
+		}
+	}
+	const guestList = [...guestRows.values()].sort((a, b) =>
+		a.name.localeCompare(b.name),
+	);
+
+	// Table Topics speakers (ordered) with resolved member/guest names.
+	const ttMember = alias(members, "tt_member");
+	const ttGuest = alias(guests, "tt_guest");
+	const ttRows = await db
+		.select({
+			id: tableTopicsSpeakers.id,
+			memberId: tableTopicsSpeakers.memberId,
+			guestId: tableTopicsSpeakers.guestId,
+			name: sql<string | null>`coalesce(${ttMember.name}, ${ttGuest.name})`,
+			topic: tableTopicsSpeakers.topic,
+			sortOrder: tableTopicsSpeakers.sortOrder,
+		})
+		.from(tableTopicsSpeakers)
+		.leftJoin(ttMember, eq(ttMember.id, tableTopicsSpeakers.memberId))
+		.leftJoin(ttGuest, eq(ttGuest.id, tableTopicsSpeakers.guestId))
+		.where(eq(tableTopicsSpeakers.meetingId, meetingId))
+		.orderBy(asc(tableTopicsSpeakers.sortOrder), asc(tableTopicsSpeakers.id));
+	const ttList: MinutesTableTopicsRow[] = ttRows.map((r) => ({
+		id: r.id,
+		memberId: r.memberId,
+		guestId: r.guestId,
+		name: r.name ?? "Unknown",
+		isGuest: r.guestId != null,
+		topic: r.topic,
+		sortOrder: r.sortOrder,
+	}));
+
+	// Awards — always return all three categories, unset ones with name: null.
+	const awMember = alias(members, "aw_member");
+	const awGuest = alias(guests, "aw_guest");
+	const awRows = await db
+		.select({
+			category: meetingAwards.category,
+			memberId: meetingAwards.memberId,
+			guestId: meetingAwards.guestId,
+			name: sql<string | null>`coalesce(${awMember.name}, ${awGuest.name})`,
+		})
+		.from(meetingAwards)
+		.leftJoin(awMember, eq(awMember.id, meetingAwards.memberId))
+		.leftJoin(awGuest, eq(awGuest.id, meetingAwards.guestId))
+		.where(eq(meetingAwards.meetingId, meetingId));
+	const awByCategory = new Map(awRows.map((r) => [r.category, r]));
+	const awardList: MinutesAwardRow[] = AWARD_CATEGORIES.map((category) => {
+		const row = awByCategory.get(category);
+		return {
+			category,
+			memberId: row?.memberId ?? null,
+			guestId: row?.guestId ?? null,
+			name: row?.name ?? null,
+			isGuest: row?.guestId != null,
+		};
+	});
+
+	let present = 0;
+	let absent = 0;
+	let excused = 0;
+	for (const m of memberList) {
+		if (m.status === "present") present++;
+		else if (m.status === "excused") excused++;
+		else absent++;
+	}
+
+	return {
+		meetingId,
+		clubId,
+		members: memberList,
+		guests: guestList,
+		tableTopicsSpeakers: ttList,
+		awards: awardList,
+		counts: { present, absent, excused, guests: guestList.length },
+	};
+}
+
+/** The compact program (roles + speeches, summary-level) for the PDF. */
+export async function loadMinutesProgram(
+	meetingId: string,
+): Promise<MinutesProgramRow[]> {
+	const assignee = alias(members, "program_member");
+	const guestAssignee = alias(guests, "program_guest");
+	const rows = await db
+		.select({
+			slotId: roleSlots.id,
+			roleName: roleDefinitions.name,
+			category: roleDefinitions.category,
+			assigneeName: sql<
+				string | null
+			>`coalesce(${assignee.name}, ${guestAssignee.name})`,
+			guestId: guestAssignee.id,
+			speechTitle: speeches.title,
+			sortOrder: roleDefinitions.sortOrder,
+			slotIndex: roleSlots.slotIndex,
+		})
+		.from(roleSlots)
+		.innerJoin(
+			roleDefinitions,
+			eq(roleDefinitions.id, roleSlots.roleDefinitionId),
+		)
+		.leftJoin(assignee, eq(assignee.id, roleSlots.assignedMemberId))
+		.leftJoin(guestAssignee, eq(guestAssignee.id, roleSlots.assignedGuestId))
+		.leftJoin(speeches, eq(speeches.id, roleSlots.speechId))
+		.where(eq(roleSlots.meetingId, meetingId))
+		.orderBy(asc(roleDefinitions.sortOrder), asc(roleSlots.slotIndex));
+	return rows.map((r) => ({
+		slotId: r.slotId,
+		roleName: r.roleName,
+		category: r.category,
+		assigneeName: r.assigneeName,
+		isGuest: r.guestId != null,
+		speechTitle: r.speechTitle,
+	}));
+}
+
+// ---------------------------------------------------------------------------
+// Mutations. Each trusts the caller's admin gate; they only validate that the
+// referenced member/guest is scoped to the meeting's club.
+// ---------------------------------------------------------------------------
+
+// Accepts either the main db client or a drizzle transaction (mirrors activity.ts).
+type DbOrTx =
+	| typeof db
+	| Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
+
+/** Resolve or create a guest scoped to `clubId` (mirrors guests-logic). */
+async function resolveGuestId(
+	tx: DbOrTx,
+	clubId: string,
+	input: { guestId?: string | null; newGuest?: NewGuestInput },
+): Promise<string> {
+	if (input.newGuest) {
+		const name = input.newGuest.name.trim();
+		if (!name) throw new Error("A guest name is required.");
+		const [created] = await tx
+			.insert(guests)
+			.values({
+				clubId,
+				name,
+				email: input.newGuest.email?.trim() || null,
+				phone: input.newGuest.phone?.trim() || null,
+			})
+			.returning({ id: guests.id });
+		if (!created) throw new Error("Failed to create guest.");
+		return created.id;
+	}
+	if (input.guestId) {
+		const [existing] = await tx
+			.select({ id: guests.id })
+			.from(guests)
+			.where(and(eq(guests.id, input.guestId), eq(guests.clubId, clubId)))
+			.limit(1);
+		if (!existing) throw new Error("Guest not found in this club.");
+		return existing.id;
+	}
+	throw new Error("Provide a guest to add.");
+}
+
+/** Validate a member belongs to the meeting's club. */
+async function requireMemberInMeetingClub(memberId: string, clubId: string) {
+	const [row] = await db
+		.select({ id: members.id })
+		.from(members)
+		.where(and(eq(members.id, memberId), eq(members.clubId, clubId)))
+		.limit(1);
+	if (!row) throw new Error("Member not found in this club.");
+}
+
+/** Set (upsert) a member's presence for a meeting. */
+export async function setMemberPresence(input: {
+	meetingId: string;
+	memberId: string;
+	status: AttendanceStatus;
+}): Promise<void> {
+	const clubId = await getMeetingClubId(input.meetingId);
+	await requireMemberInMeetingClub(input.memberId, clubId);
+	await db
+		.insert(meetingAttendance)
+		.values({
+			meetingId: input.meetingId,
+			memberId: input.memberId,
+			status: input.status,
+		})
+		.onConflictDoUpdate({
+			target: [meetingAttendance.meetingId, meetingAttendance.memberId],
+			set: { status: input.status, updatedAt: new Date() },
+		});
+}
+
+/** Add a present guest (existing club guest or a new one). Idempotent per guest. */
+export async function addGuestPresent(input: {
+	meetingId: string;
+	guestId?: string | null;
+	newGuest?: NewGuestInput;
+}): Promise<{ guestId: string }> {
+	const clubId = await getMeetingClubId(input.meetingId);
+	return db.transaction(async (tx) => {
+		const guestId = await resolveGuestId(tx, clubId, input);
+		await tx
+			.insert(meetingAttendance)
+			.values({ meetingId: input.meetingId, guestId, status: "present" })
+			.onConflictDoNothing({
+				target: [meetingAttendance.meetingId, meetingAttendance.guestId],
+			});
+		return { guestId };
+	});
+}
+
+/** Remove a present guest's attendance row (does not delete the club guest). */
+export async function removeGuestPresent(input: {
+	meetingId: string;
+	guestId: string;
+}): Promise<void> {
+	await db
+		.delete(meetingAttendance)
+		.where(
+			and(
+				eq(meetingAttendance.meetingId, input.meetingId),
+				eq(meetingAttendance.guestId, input.guestId),
+			),
+		);
+}
+
+/** Append a Table Topics speaker (member or guest) with an optional topic. */
+export async function addTableTopicsSpeaker(input: {
+	meetingId: string;
+	memberId?: string | null;
+	guestId?: string | null;
+	newGuest?: NewGuestInput;
+	topic?: string | null;
+}): Promise<{ id: string }> {
+	const clubId = await getMeetingClubId(input.meetingId);
+	return db.transaction(async (tx) => {
+		let memberId: string | null = null;
+		let guestId: string | null = null;
+		if (input.memberId) {
+			await requireMemberInMeetingClub(input.memberId, clubId);
+			memberId = input.memberId;
+		} else if (input.guestId || input.newGuest) {
+			guestId = await resolveGuestId(tx, clubId, input);
+		} else {
+			throw new Error("Provide a member or guest speaker.");
+		}
+		const [{ next } = { next: 0 }] = await tx
+			.select({
+				next: sql<number>`coalesce(max(${tableTopicsSpeakers.sortOrder}) + 1, 0)`,
+			})
+			.from(tableTopicsSpeakers)
+			.where(eq(tableTopicsSpeakers.meetingId, input.meetingId));
+		const [created] = await tx
+			.insert(tableTopicsSpeakers)
+			.values({
+				meetingId: input.meetingId,
+				memberId,
+				guestId,
+				topic: input.topic?.trim() || null,
+				sortOrder: next,
+			})
+			.returning({ id: tableTopicsSpeakers.id });
+		if (!created) throw new Error("Failed to add speaker.");
+		return { id: created.id };
+	});
+}
+
+/** Remove a Table Topics speaker by id (scoped to the meeting). */
+export async function removeTableTopicsSpeaker(input: {
+	meetingId: string;
+	id: string;
+}): Promise<void> {
+	await db
+		.delete(tableTopicsSpeakers)
+		.where(
+			and(
+				eq(tableTopicsSpeakers.id, input.id),
+				eq(tableTopicsSpeakers.meetingId, input.meetingId),
+			),
+		);
+}
+
+/** Move a Table Topics speaker up/down by swapping sortOrder with its neighbour. */
+export async function moveTableTopicsSpeaker(input: {
+	meetingId: string;
+	id: string;
+	direction: "up" | "down";
+}): Promise<void> {
+	await db.transaction(async (tx) => {
+		const ordered = await tx
+			.select({
+				id: tableTopicsSpeakers.id,
+				sortOrder: tableTopicsSpeakers.sortOrder,
+			})
+			.from(tableTopicsSpeakers)
+			.where(eq(tableTopicsSpeakers.meetingId, input.meetingId))
+			.orderBy(asc(tableTopicsSpeakers.sortOrder), asc(tableTopicsSpeakers.id));
+		const idx = ordered.findIndex((r) => r.id === input.id);
+		if (idx === -1) throw new Error("Speaker not found.");
+		const swapIdx = input.direction === "up" ? idx - 1 : idx + 1;
+		if (swapIdx < 0 || swapIdx >= ordered.length) return; // at the edge — no-op
+		const a = ordered[idx];
+		const b = ordered[swapIdx];
+		// Normalize to positional order first so equal/duplicate sortOrders still swap.
+		await tx
+			.update(tableTopicsSpeakers)
+			.set({ sortOrder: swapIdx })
+			.where(eq(tableTopicsSpeakers.id, a.id));
+		await tx
+			.update(tableTopicsSpeakers)
+			.set({ sortOrder: idx })
+			.where(eq(tableTopicsSpeakers.id, b.id));
+	});
+}
+
+/** Set (upsert) an award winner (member or guest) for a category. */
+export async function setAward(input: {
+	meetingId: string;
+	category: AwardCategory;
+	memberId?: string | null;
+	guestId?: string | null;
+	newGuest?: NewGuestInput;
+}): Promise<void> {
+	const clubId = await getMeetingClubId(input.meetingId);
+	await db.transaction(async (tx) => {
+		let memberId: string | null = null;
+		let guestId: string | null = null;
+		if (input.memberId) {
+			await requireMemberInMeetingClub(input.memberId, clubId);
+			memberId = input.memberId;
+		} else if (input.guestId || input.newGuest) {
+			guestId = await resolveGuestId(tx, clubId, input);
+		} else {
+			throw new Error("Provide a member or guest for the award.");
+		}
+		await tx
+			.insert(meetingAwards)
+			.values({
+				meetingId: input.meetingId,
+				category: input.category,
+				memberId,
+				guestId,
+			})
+			.onConflictDoUpdate({
+				target: [meetingAwards.meetingId, meetingAwards.category],
+				set: { memberId, guestId, updatedAt: new Date() },
+			});
+	});
+}
+
+/** Clear an award category for a meeting. */
+export async function clearAward(input: {
+	meetingId: string;
+	category: AwardCategory;
+}): Promise<void> {
+	await db
+		.delete(meetingAwards)
+		.where(
+			and(
+				eq(meetingAwards.meetingId, input.meetingId),
+				eq(meetingAwards.category, input.category),
+			),
+		);
+}
