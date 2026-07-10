@@ -6,6 +6,7 @@ import {
 	type AgendaRoleEntry,
 	MeetingAgendaPrint,
 } from "#/components/agenda/meeting-agenda-print";
+import { OfflineBadge } from "#/components/agenda/offline-badge";
 import { buildRosterEntries } from "#/lib/agenda";
 import { expandRunSheet } from "#/lib/agenda-runsheet";
 import { buildTimeline } from "#/lib/agenda-timing";
@@ -131,6 +132,7 @@ function PrintAgenda() {
 
 	return (
 		<div>
+			<OfflineBadge id={meetingId} />
 			<div className="no-print" style={toolbarStyle}>
 				<div style={{ display: "flex", gap: 4 }}>
 					{LAYOUTS.map((l) => (
