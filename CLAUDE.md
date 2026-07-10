@@ -45,7 +45,10 @@ Package manager is **Bun** (use `bun install`, `bun run <script>`).
 - `bun run db:migrate` — apply migrations. `db:push` for dev sync, `db:studio` to inspect.
 - `bun run generate-routes` — regenerate `src/routeTree.gen.ts` (also runs during dev/build).
 - `bun run build` — Vite build (Node server output via Nitro).
-- There is no dedicated typecheck script — `bun run build` (or `bunx tsc --noEmit`) surfaces type errors.
+- `bun run typecheck` — `tsc --noEmit`. **This is the only thing that type-checks.** `bun run build`
+  (Vite/esbuild) and `bun run test` (Vitest) transpile without type-checking, so both pass on
+  type-broken code; run `bun run typecheck` before claiming a change is green. CI runs it in the
+  `check` job.
 - Run a single test with `bunx vitest run <path>` (or `bunx vitest <path>` to watch).
 
 ## Environment

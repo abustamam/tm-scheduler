@@ -30,7 +30,7 @@ jobs:
       - name: Lint & format
         run: bun run check
       - name: Typecheck
-        run: bunx tsc --noEmit
+        run: bun run typecheck
       # Fail if schema.ts has changes not captured in a committed migration.
       # `drizzle-kit generate` writes a new migration only when the schema has
       # drifted from the snapshots; a non-empty git diff means someone edited

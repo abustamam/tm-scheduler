@@ -13,6 +13,7 @@
     "start": "node .output/migrate.mjs && node .output/server/index.mjs",
     "preview": "vite preview",
     "test": "vitest run",
+    "typecheck": "tsc --noEmit",
     "format": "biome format",
     "lint": "biome lint",
     "check": "biome check",
