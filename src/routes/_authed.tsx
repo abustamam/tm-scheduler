@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import type { ComponentType } from "react";
 import { BrandMark } from "#/components/brand-mark";
+import { ClubSwitcher } from "#/components/club/club-switcher";
 import { MemberAvatar } from "#/components/club/member-avatar";
 import { ThemeToggle } from "#/components/club/theme-toggle";
 import { Input } from "#/components/ui/input";
@@ -43,6 +44,7 @@ export const Route = createFileRoute("/_authed")({
 			authUser: ctx.user,
 			clubs: ctx.clubs,
 			currentMemberId: ctx.currentMemberId,
+			activeClubId: ctx.activeClubId,
 		};
 	},
 	component: WorkspaceLayout,
@@ -76,16 +78,18 @@ function crumbFor(pathname: string): string {
 }
 
 function WorkspaceLayout() {
-	const { authUser, clubs } = Route.useRouteContext();
+	const { authUser, clubs, activeClubId } = Route.useRouteContext();
 	const router = useRouter();
 	const pathname = useRouterState({ select: (s) => s.location.pathname });
 
-	const clubName = clubs[0]?.name ?? "Toastmasters";
-	const clubNumber = clubs[0]?.clubNumber ?? null;
+	// The club the workspace is currently acting in (cookie-backed, #10).
+	const activeClub = clubs.find((c) => c.clubId === activeClubId) ?? clubs[0];
+	const clubName = activeClub?.name ?? "Toastmasters";
+	const clubNumber = activeClub?.clubNumber ?? null;
 	// Club admins — includes VP Education / President, who resolve to "admin".
 	const isOfficer = clubs.some((c) => c.clubRole === "admin");
-	const roleLabel = clubs[0]?.clubRole
-		? (CLUB_ROLE_LABELS[clubs[0].clubRole] ?? "Member")
+	const roleLabel = activeClub?.clubRole
+		? (CLUB_ROLE_LABELS[activeClub.clubRole] ?? "Member")
 		: "Member";
 	const displayName = authUser.name || authUser.email;
 	const initials = initialsOf(displayName);
@@ -183,6 +187,7 @@ function WorkspaceLayout() {
 							className="h-9 rounded-[10px] border-[var(--line)] bg-[var(--surface-strong)]"
 						/>
 					</div>
+					<ClubSwitcher clubs={clubs} activeClubId={activeClubId} />
 					<ThemeToggle />
 					<MemberAvatar tone="palm" initials={initials} size={36} />
 				</header>

@@ -42,7 +42,7 @@ import { archiveSpeech, rescheduleSpeech } from "#/server/speeches";
 
 export const Route = createFileRoute("/_authed/members/$id")({
 	loader: async ({ params, context }) => {
-		const clubId = context.clubs[0]?.clubId;
+		const clubId = context.activeClubId;
 		if (!clubId) {
 			return {
 				member: null,
@@ -89,8 +89,8 @@ function MemberDetail() {
 		unscheduledSpeeches,
 		openSpeakerSlots,
 	} = Route.useLoaderData();
-	const { clubs, currentMemberId } = Route.useRouteContext();
-	const clubId = clubs[0]?.clubId;
+	const { currentMemberId, activeClubId } = Route.useRouteContext();
+	const clubId = activeClubId;
 
 	if (!member) {
 		return (

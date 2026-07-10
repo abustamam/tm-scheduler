@@ -31,7 +31,7 @@ import type { PathViewModel } from "#/server/pathways-read-logic";
 
 export const Route = createFileRoute("/_authed/")({
 	loader: async ({ context }) => {
-		const clubId = context.clubs[0]?.clubId;
+		const clubId = context.activeClubId;
 		if (!clubId) {
 			return { members: [], openRoles: 0, pathways: {} };
 		}
@@ -83,9 +83,9 @@ function pathwayLabelFor(paths: PathViewModel[]): string | null {
 
 function Roster() {
 	const { members, openRoles, pathways } = Route.useLoaderData();
-	const { clubs, currentMemberId } = Route.useRouteContext();
-	const clubId = clubs[0]?.clubId;
-	const clubRole = clubs[0]?.clubRole;
+	const { clubs, currentMemberId, activeClubId } = Route.useRouteContext();
+	const clubId = activeClubId;
+	const clubRole = clubs.find((c) => c.clubId === activeClubId)?.clubRole;
 	const canManage = clubRole === "admin";
 	const [seg, setSeg] = useState<SegKey>("all");
 	const [mergeOpen, setMergeOpen] = useState(false);
