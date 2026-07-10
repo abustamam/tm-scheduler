@@ -173,29 +173,40 @@ Reuse the existing constants; add gold.
 | Token   | Hex       | Use                                   |
 |---------|-----------|---------------------------------------|
 | INK     | `#2b2b2b` | body text, headlines                  |
-| MAROON  | `#9b1c2e` | header underline                      |
-| NAVY    | `#0a3a5a` | footer bar, Thank-You ground          |
+| MAROON  | `#770D29` | header underline (official brand)     |
+| NAVY    | `#004062` | footer bar, Thank-You ground (official brand) |
 | GROUND  | `#f3f4f4` | content/title ground                  |
 | MUTED   | `#565656` | sub-lines, definitions, team line     |
 | GOLD    | `#f3dd94` | "Thank You" headline (new)            |
 
-Thank-You ground is a vertical navy gradient (`#0d4467 → #062a41`).
+Navy + maroon are the official wordmark colors (sampled from
+`ToastmastersWordmarkColor.svg`) so the footer bar and header rule match the logo;
+these deepen the tones slightly versus the approved mockup. Thank-You ground is a
+vertical navy gradient derived from the brand navy (`#0a4f78 → #002a41`) on the
+web; the `.pptx` uses solid `#004062` (pptxgenjs has no gradient fill).
 
 ## Logo asset
 
-Recreate the Toastmasters International wordmark (two-line lockup: "TOASTMASTERS"
-over letter-spaced "INTERNATIONAL"; navy/maroon on light, white on dark).
+Use the official vendored brand files in `src/assets/` (no recreation):
 
-- **Web:** an inline SVG React component (`toastmasters-wordmark.tsx`) with a
-  `tone: "color" | "white"` prop — scales crisply at any slide size.
-- **PPTX:** a matching text lockup (two `addText` calls with letter-spacing) so
-  the `.pptx` needs no binary asset and stays editable. Visually identical to the
-  SVG because both are just the wordmark set in a bold sans.
-- **Swap point:** to use the official brand raster later, drop the file in and
-  switch the component to an `<img>` and the pptx to `addImage`.
+- `ToastmastersWordmarkColor.svg` (navy `#004062` / maroon `#770D29`) — title splash.
+- `ToastmastersWordmarkWhite.svg` — content footer + Thank-You splash.
+- `ToastmastersWordmarkBlack.svg` and `ToastmastersLogo3Color.svg` (the full globe
+  emblem + banner) are also vendored; the full logo is an option for the title
+  splash if we later want more presence there.
 
-Trademark: the user (an MCF club member) authorized recreating the mark for their
-own club's deck.
+- **Web:** import the SVGs (Vite resolves the import to a URL) and render via
+  `<img>`, sized by slide width. The Color/White wordmark SVGs ship on a padded
+  US-Letter canvas (`viewBox 0 0 612 792`, artwork ~420×84 with contradictory
+  `width`/`height` attrs), so **normalize once** to a tight transparent
+  `viewBox`; commit the normalized SVGs. (The White/Black PNGs are already tightly
+  cropped; the Color PNG is padded at 1836×2376.)
+- **PPTX:** embed tight transparent **PNG** variants via `addImage` (base64) —
+  Color for the title, White for the footer + Thank-You. Rasterize from the
+  normalized SVGs so all variants share one tight frame.
+
+Brand colors are taken from these files (navy `#004062`, maroon `#770D29`); the
+deck palette uses them so chrome matches the wordmark.
 
 ## Data plumbing (next-meeting date)
 
@@ -238,7 +249,9 @@ Both renderers being descriptor-driven means most assertions live on
   splash, footer, fit guard).
 - `src/lib/deck-to-pptx.ts` — render `SlideLayout` via pptxgenjs (header + maroon
   rule shape, navy footer + logo/meta, splash, gradient Thank-You, gold, shrink).
-- `src/components/agenda/toastmasters-wordmark.tsx` — **new** SVG wordmark.
+- `src/components/agenda/toastmasters-wordmark.tsx` — **new** thin `<img>` wrapper
+  over the vendored brand SVGs (`color` / `white`); plus normalized tight SVGs and
+  rasterized PNGs added under `src/assets/`.
 - Meeting data source (`getMeeting` / `meetings-logic`) + both call sites —
   `nextMeetingAt`.
 - Tests as above.
