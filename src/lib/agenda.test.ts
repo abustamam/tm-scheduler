@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	assigneeDisplayName,
 	buildPickerRows,
 	buildRoleCounts,
 	buildRosterEntries,
@@ -411,5 +412,50 @@ describe("summarizeAgenda", () => {
 
 	it("returns 0% for no slots", () => {
 		expect(summarizeAgenda([]).pct).toBe(0);
+	});
+
+	it("counts a guest-held slot as filled/confirmed like a member (#151)", () => {
+		const summary = summarizeAgenda([
+			// guest speaker: no member id, but a guest id → filled + speakerFilled
+			{
+				assigneeId: null,
+				assigneeGuestId: "g1",
+				status: "confirmed",
+				isSpeakerRole: true,
+			},
+			{
+				assigneeId: "m1",
+				assigneeGuestId: null,
+				status: "claimed",
+				isSpeakerRole: false,
+			},
+			{
+				assigneeId: null,
+				assigneeGuestId: null,
+				status: "open",
+				isSpeakerRole: false,
+			},
+		]);
+		expect(summary).toMatchObject({
+			total: 3,
+			filled: 2,
+			open: 1,
+			confirmed: 1,
+			speakerTotal: 1,
+			speakerFilled: 1,
+		});
+	});
+});
+
+describe("assigneeDisplayName (guest marker, #151)", () => {
+	it("appends the Guest marker for a guest assignee", () => {
+		expect(assigneeDisplayName("Ben Carter", true)).toBe("Ben Carter · Guest");
+	});
+	it("leaves a member name unmarked", () => {
+		expect(assigneeDisplayName("Rehanna Khan", false)).toBe("Rehanna Khan");
+		expect(assigneeDisplayName("Rehanna Khan")).toBe("Rehanna Khan");
+	});
+	it("returns null for an unassigned slot", () => {
+		expect(assigneeDisplayName(null, true)).toBeNull();
 	});
 });

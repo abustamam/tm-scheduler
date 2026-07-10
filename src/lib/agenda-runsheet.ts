@@ -1,3 +1,5 @@
+import { assigneeDisplayName } from "./agenda";
+
 /** Green/yellow/red timer-card marks, in minutes (e.g. 5, 6, 7). */
 export type TimingMarks = { green: number; yellow: number; red: number };
 
@@ -12,6 +14,8 @@ export type AgendaSlot = {
 	isSpeakerRole: boolean;
 	slotIndex: number;
 	assigneeName: string | null;
+	/** True when the assignee is a non-member guest (#151) — renders "· Guest". */
+	assigneeIsGuest?: boolean;
 	speechTitle: string | null;
 	projectLevel: string | null;
 	minMinutes: number | null;
@@ -19,6 +23,17 @@ export type AgendaSlot = {
 	evaluatesSlotId: string | null;
 	evaluates: { speakerName: string | null } | null;
 };
+
+/** A slot's rendered assignee name (with the "· Guest" marker for guests, #151),
+ *  or the OPEN placeholder when unassigned. */
+export function assigneeDisplay(slot: {
+	assigneeName: string | null;
+	assigneeIsGuest?: boolean;
+}): string {
+	return (
+		assigneeDisplayName(slot.assigneeName, slot.assigneeIsGuest) ?? OPEN_LABEL
+	);
+}
 
 /** One rendered agenda row (no clock time yet — buildTimeline adds it). */
 export type AgendaRow = {
@@ -52,7 +67,7 @@ export const OPEN_LABEL = "— open —";
 export function buildLegend(slots: AgendaSlot[]): LegendEntry[] {
 	return slots
 		.filter((s) => s.category === "functionary")
-		.map((s) => ({ role: s.roleName, name: s.assigneeName ?? OPEN_LABEL }));
+		.map((s) => ({ role: s.roleName, name: assigneeDisplay(s) }));
 }
 
 /**
@@ -214,7 +229,7 @@ export function expandRunSheet(
 					? `"${s.speechTitle}"${s.projectLevel ? ` · ${s.projectLevel}` : ""}`
 					: beat.detail;
 				rows.push({
-					who: `${numbered(beat.roleName, i, multi)} · ${s.assigneeName ?? OPEN_LABEL}`,
+					who: `${numbered(beat.roleName, i, multi)} · ${assigneeDisplay(s)}`,
 					detail,
 					minutes: s.maxMinutes ?? DEFAULT_SPEAKER_MINUTES,
 					marks,
@@ -225,7 +240,7 @@ export function expandRunSheet(
 			const multi = ordered.length > 1;
 			ordered.forEach((s, i) => {
 				rows.push({
-					who: `${numbered(beat.roleName, i, multi)} · ${s.assigneeName ?? OPEN_LABEL}`,
+					who: `${numbered(beat.roleName, i, multi)} · ${assigneeDisplay(s)}`,
 					detail: s.evaluates?.speakerName
 						? `Evaluates ${s.evaluates.speakerName}`
 						: beat.detail,
@@ -245,7 +260,7 @@ export function expandRunSheet(
 			} else {
 				for (const s of matching) {
 					rows.push({
-						who: `${beat.roleName} · ${s.assigneeName ?? OPEN_LABEL}`,
+						who: `${beat.roleName} · ${assigneeDisplay(s)}`,
 						detail: beat.detail,
 						minutes: beat.minutes,
 						marks: null,

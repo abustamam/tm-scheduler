@@ -41,12 +41,14 @@ const data: SeasonGridData = {
 		{ id: "b", name: "Bea" },
 		{ id: "c", name: "Carlos" },
 	],
+	guestNames: [],
 	cells: [
 		{
 			meetingId: "m1",
 			roleDefinitionId: "tm",
 			slotIndex: 0,
 			memberId: "a",
+			guestId: null,
 			status: "claimed",
 		},
 		{
@@ -54,6 +56,7 @@ const data: SeasonGridData = {
 			roleDefinitionId: "ti",
 			slotIndex: 0,
 			memberId: null,
+			guestId: null,
 			status: "open",
 		},
 	],
@@ -81,6 +84,7 @@ describe("projectGrid – roles orientation", () => {
 					slotIndex: 0,
 					memberId: "z",
 					status: "claimed",
+					guestId: null,
 				},
 				data.cells[1]!,
 			],
@@ -138,6 +142,7 @@ describe("projectGrid – members orientation", () => {
 					slotIndex: 0,
 					memberId: "z",
 					status: "claimed",
+					guestId: null,
 				},
 			],
 		};
@@ -156,6 +161,7 @@ describe("projectGrid – members orientation", () => {
 					slotIndex: 0,
 					memberId: "a",
 					status: "claimed",
+					guestId: null,
 				},
 			],
 		};

@@ -75,6 +75,7 @@ export const claimSlot = createServerFn({ method: "POST" })
 				.update(roleSlots)
 				.set({
 					assignedMemberId: data.memberId,
+					assignedGuestId: null,
 					status: "claimed",
 					claimedAt: new Date(),
 				})
@@ -154,6 +155,7 @@ export const releaseSlot = createServerFn({ method: "POST" })
 				.update(roleSlots)
 				.set({
 					assignedMemberId: null,
+					assignedGuestId: null,
 					status: "open",
 					claimedAt: null,
 					speechId: null,

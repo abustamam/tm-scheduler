@@ -1,5 +1,6 @@
 import type { AgendaSlot, LegendEntry } from "./agenda-runsheet";
 import {
+	assigneeDisplay,
 	buildLegend,
 	DEFAULT_SPEAKER_MINUTES,
 	numbered,
@@ -91,14 +92,17 @@ function speechTime(min: number | null, max: number | null): string {
 	return `${DEFAULT_SPEAKER_MINUTES} minutes`;
 }
 
+// Assigned names for the vote slides, each with the "· Guest" marker (#151).
 const assignedNames = (slots: AgendaSlot[]): string[] =>
-	slots.map((s) => s.assigneeName).filter((n): n is string => n != null);
+	slots.filter((s) => s.assigneeName != null).map((s) => assigneeDisplay(s));
 
 const byRoleName = (slots: AgendaSlot[], name: string) =>
 	slots.filter((s) => s.roleName.toLowerCase() === name.toLowerCase());
 
-const assigneeOrOpen = (slots: AgendaSlot[], name: string): string =>
-	byRoleName(slots, name)[0]?.assigneeName ?? OPEN_LABEL;
+const assigneeOrOpen = (slots: AgendaSlot[], name: string): string => {
+	const slot = byRoleName(slots, name)[0];
+	return slot ? assigneeDisplay(slot) : OPEN_LABEL;
+};
 
 export function buildSlideDeck(
 	meeting: MeetingForDeck,
@@ -138,7 +142,7 @@ export function buildSlideDeck(
 	if (generalEvaluator.length > 0) {
 		deck.push({
 			kind: "geIntro",
-			name: generalEvaluator[0].assigneeName ?? OPEN_LABEL,
+			name: assigneeDisplay(generalEvaluator[0]),
 			team: buildLegend(slots),
 		});
 	}
@@ -152,7 +156,7 @@ export function buildSlideDeck(
 			deck.push({
 				kind: "speech",
 				label: numbered("Speech", i, multi),
-				speaker: s.assigneeName ?? OPEN_LABEL,
+				speaker: assigneeDisplay(s),
 				title: s.speechTitle,
 				projectLevel: s.projectLevel,
 				time: speechTime(s.minMinutes, s.maxMinutes),
@@ -165,7 +169,7 @@ export function buildSlideDeck(
 	if (tableTopics.length > 0) {
 		deck.push({
 			kind: "tableTopics",
-			master: tableTopics[0].assigneeName ?? OPEN_LABEL,
+			master: assigneeDisplay(tableTopics[0]),
 			timing: TABLE_TOPICS_TIMING,
 		});
 		deck.push({ kind: "voteTableTopics" });
@@ -173,14 +177,16 @@ export function buildSlideDeck(
 
 	const evaluators = orderEvaluators(byRoleName(slots, ROLE.evaluator), slots);
 	if (evaluators.length > 0) {
-		const geName = generalEvaluator[0]?.assigneeName ?? ROLE.generalEvaluator;
+		const geName = generalEvaluator[0]?.assigneeName
+			? assigneeDisplay(generalEvaluator[0])
+			: ROLE.generalEvaluator;
 		deck.push({ kind: "evalIntro", name: geName, time: EVAL_SESSION_TIMING });
 		const multi = evaluators.length > 1;
 		evaluators.forEach((s, i) => {
 			deck.push({
 				kind: "evaluation",
 				label: numbered("Evaluation", i, multi),
-				evaluator: s.assigneeName ?? OPEN_LABEL,
+				evaluator: assigneeDisplay(s),
 				speaker: s.evaluates?.speakerName ?? null,
 				time: EVALUATION_TIMING,
 			});
@@ -191,7 +197,7 @@ export function buildSlideDeck(
 	if (generalEvaluator.length > 0) {
 		deck.push({
 			kind: "generalEvaluation",
-			name: generalEvaluator[0].assigneeName ?? OPEN_LABEL,
+			name: assigneeDisplay(generalEvaluator[0]),
 			time: GENERAL_EVALUATION_TIMING,
 		});
 	}

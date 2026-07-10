@@ -580,7 +580,11 @@ export async function reassignSlotCore(
 	// New holder hasn't been confirmed → back to "claimed".
 	await tx
 		.update(roleSlots)
-		.set({ assignedMemberId: args.memberId, status: "claimed" })
+		.set({
+			assignedMemberId: args.memberId,
+			assignedGuestId: null,
+			status: "claimed",
+		})
 		.where(eq(roleSlots.id, args.slotId));
 
 	// Unlink the speech only when the Person actually changed.

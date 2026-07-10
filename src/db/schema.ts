@@ -2,6 +2,7 @@ import { relations, sql } from "drizzle-orm";
 import {
 	type AnyPgColumn,
 	boolean,
+	check,
 	index,
 	integer,
 	jsonb,
@@ -230,6 +231,38 @@ export const officerTerms = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// Guests — club-scoped visitors who can be assigned to a role slot (#151).
+//
+// A guest is NOT a member: no Person, no login, no Pathways, no roster/officer
+// presence, and no `members` status (guests would otherwise leak into some
+// roster/season/picker views and vanish from others). It is a lightweight,
+// durable identity (name + optional contact) scoped to one club, so it reappears
+// as an assignable option in later meetings. A role slot references a guest via
+// `role_slots.assigned_guest_id`, mutually exclusive with `assigned_member_id`.
+//
+// Adjacent to Person/Membership (ADR-0008). Promotion-to-member is NOT built
+// here, but the durable, stable guest id keeps that future path open: a later
+// pipeline can create people/members from a guest and re-point slot assignments.
+// ---------------------------------------------------------------------------
+
+export const guests = pgTable(
+	"guests",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		clubId: uuid("club_id")
+			.notNull()
+			.references(() => clubs.id, { onDelete: "cascade" }),
+		name: text("name").notNull(),
+		// Optional contact — a guest may be assigned with just a name.
+		email: text("email"),
+		phone: text("phone"),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+		updatedAt: timestamp("updated_at").defaultNow().notNull(),
+	},
+	(t) => [index("guests_club_idx").on(t.clubId)],
+);
+
+// ---------------------------------------------------------------------------
 // Meetings
 // ---------------------------------------------------------------------------
 
@@ -303,6 +336,13 @@ export const roleSlots = pgTable(
 		assignedMemberId: uuid("assigned_member_id").references(() => members.id, {
 			onDelete: "set null",
 		}),
+		// A non-member guest holding this slot (#151), as an alternative to a
+		// member. MUTUALLY EXCLUSIVE with assignedMemberId — a slot has at most one
+		// assignee, either a member or a guest, never both (enforced in the assign
+		// logic AND the check constraint below). On guest delete → set null.
+		assignedGuestId: uuid("assigned_guest_id").references(() => guests.id, {
+			onDelete: "set null",
+		}),
 		status: slotStatusEnum("status").notNull().default("open"),
 		// For evaluator slots: which speaker slot this slot evaluates.
 		evaluatesSlotId: uuid("evaluates_slot_id").references(
@@ -324,7 +364,13 @@ export const roleSlots = pgTable(
 	(t) => [
 		index("role_slots_meeting_idx").on(t.meetingId),
 		index("role_slots_assigned_member_idx").on(t.assignedMemberId),
+		index("role_slots_assigned_guest_idx").on(t.assignedGuestId),
 		uniqueIndex("role_slots_speech_unique").on(t.speechId),
+		// A slot has at most one assignee: a member OR a guest, never both (#151).
+		check(
+			"role_slots_single_assignee",
+			sql`${t.assignedMemberId} is null or ${t.assignedGuestId} is null`,
+		),
 	],
 );
 
@@ -623,6 +669,12 @@ export const clubsRelations = relations(clubs, ({ many }) => ({
 	meetings: many(meetings),
 	roleDefinitions: many(roleDefinitions),
 	members: many(members),
+	guests: many(guests),
+}));
+
+export const guestsRelations = relations(guests, ({ one, many }) => ({
+	club: one(clubs, { fields: [guests.clubId], references: [clubs.id] }),
+	slots: many(roleSlots),
 }));
 
 export const meetingsRelations = relations(meetings, ({ one, many }) => ({
@@ -656,6 +708,10 @@ export const roleSlotsRelations = relations(roleSlots, ({ one }) => ({
 	assignedMember: one(members, {
 		fields: [roleSlots.assignedMemberId],
 		references: [members.id],
+	}),
+	assignedGuest: one(guests, {
+		fields: [roleSlots.assignedGuestId],
+		references: [guests.id],
 	}),
 	evaluatesSlot: one(roleSlots, {
 		fields: [roleSlots.evaluatesSlotId],
