@@ -69,6 +69,22 @@ the nouns in `src/db/schema.ts`.
   (a delivery's club comes from the slot it's attached to). Replaces the old slot-bound
   `speaker_details`. Scheduling state (unscheduled / scheduled / delivered) is **derived** from
   slot linkage, not stored. See ADR-0009 / #79.
+- **Minutes** — the post-meeting *record of what actually happened*, distinct from the agenda
+  (the plan). Not its own table: the `meetings` row is the header, and the record is the three
+  child sets below (attendance, Table Topics speakers, awards). Admin-authored on the meeting
+  view; members see it read-only, and only once the meeting is `completed`. Editable through and
+  after completion — **not** covered by the ADR-0012 lock. Exportable as a PDF. See ADR-0014 / #152.
+- **Attendance / Presence** — per-meeting record of who was there (`meeting_attendance`). Each
+  active **member** carries a presence status — `present` / `absent` / `excused` (default
+  `absent`), pre-filled to `present` for anyone holding a role slot. **Guests** present are added
+  to the same record (present by definition — no absent/excused). Rows reference a member **or** a
+  guest, never both (XOR check constraint, like `role_slots`). See ADR-0014.
+- **Table Topics speaker** — an impromptu participant who answered a Table Topic
+  (`table_topics_speakers`), captured as an ordered list of member-or-guest (XOR) + optional
+  topic text. Distinct from the **Table Topics Master** role (the role definition that runs the
+  segment). See ADR-0014.
+- **Award** — a meeting's ribbon winner (`meeting_awards`): Best Speaker, Best Evaluator, or Best
+  Table Topics, each an optional member-or-guest (XOR). See ADR-0014.
 - **Pathways** — Toastmasters' education program. A **path** (e.g. *Presentation Mastery*) is
   enrolled and owned by a **Person**, independent of any club; a person may work several paths
   at once. When a path **level** is completed, the credit is attributed to *one* of the
