@@ -11,8 +11,10 @@ import {
 	requireUser,
 } from "./guards";
 import {
+	applyAddRoleSlot,
 	applyAddSpeakerSlot,
 	applyMoveSpeakerSlot,
+	applyRemoveRoleSlot,
 	applyRemoveSpeakerSlot,
 	attachSpeechToSlot,
 	editSlotSpeech,
@@ -444,6 +446,55 @@ export const moveSpeakerSlot = createServerFn({ method: "POST" })
 		return applyMoveSpeakerSlot({
 			slotId: data.slotId,
 			direction: data.direction,
+			actorMemberId: data.actorMemberId ?? null,
+		});
+	});
+
+const addRoleSlotSchema = z.object({
+	meetingId: z.string().uuid(),
+	roleDefinitionId: z.string().uuid(),
+	actorMemberId: z.string().uuid().nullable().optional(),
+});
+
+/** Admin/VPE: add one arbitrary non-paired role slot to a meeting. AUTHED. */
+export const addRoleSlot = createServerFn({ method: "POST" })
+	.validator((input: unknown) => addRoleSlotSchema.parse(input))
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		const [row] = await db
+			.select({ clubId: meetings.clubId })
+			.from(meetings)
+			.where(eq(meetings.id, data.meetingId))
+			.limit(1);
+		if (!row) throw new Error("Meeting not found.");
+		await requireClubRole(currentUser.id, row.clubId, ["admin"]);
+		return applyAddRoleSlot({
+			meetingId: data.meetingId,
+			roleDefinitionId: data.roleDefinitionId,
+			actorMemberId: data.actorMemberId ?? null,
+		});
+	});
+
+const removeRoleSlotSchema = z.object({
+	slotId: z.string().uuid(),
+	actorMemberId: z.string().uuid().nullable().optional(),
+});
+
+/** Admin/VPE: remove one unclaimed non-paired role slot. AUTHED. */
+export const removeRoleSlot = createServerFn({ method: "POST" })
+	.validator((input: unknown) => removeRoleSlotSchema.parse(input))
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		const [row] = await db
+			.select({ clubId: meetings.clubId })
+			.from(roleSlots)
+			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+			.where(eq(roleSlots.id, data.slotId))
+			.limit(1);
+		if (!row) throw new Error("Role not found.");
+		await requireClubRole(currentUser.id, row.clubId, ["admin"]);
+		return applyRemoveRoleSlot({
+			slotId: data.slotId,
 			actorMemberId: data.actorMemberId ?? null,
 		});
 	});
