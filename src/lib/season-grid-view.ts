@@ -28,6 +28,7 @@ export function projectGrid(
 	// held a role in a past meeting); the members-orientation axis below still
 	// derives its rows from the active-only `data.members`.
 	const memberName = new Map(data.memberNames.map((m) => [m.id, m.name]));
+	const guestName = new Map(data.guestNames.map((g) => [g.id, g.name]));
 	const rowByKey = new Map(
 		data.rows.map((r) => [`${r.roleDefinitionId}:${r.slotIndex}`, r]),
 	);
@@ -57,6 +58,17 @@ export function projectGrid(
 						text: "",
 						title: "",
 					};
+				// Guest-held cell (#151): resolve the guest name + "· Guest" marker.
+				if (c.memberId === null && c.guestId !== null) {
+					const gname = guestName.get(c.guestId) ?? "—";
+					const label = `${gname} · Guest`;
+					return {
+						meetingId: m.id,
+						kind: "assigned" as const,
+						text: label,
+						title: `${label} — ${row.label}`,
+					};
+				}
 				if (c.memberId === null)
 					return {
 						meetingId: m.id,

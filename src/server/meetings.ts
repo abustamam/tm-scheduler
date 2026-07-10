@@ -5,6 +5,7 @@ import { z } from "zod";
 import { db } from "#/db";
 import {
 	clubs,
+	guests,
 	meetings,
 	memberAvailability,
 	members,
@@ -90,6 +91,7 @@ async function loadMeetingDetail(
 	}
 
 	const assignee = alias(members, "assignee");
+	const guestAssignee = alias(guests, "assignee_guest");
 	const rows = await db
 		.select({
 			id: roleSlots.id,
@@ -103,8 +105,15 @@ async function loadMeetingDetail(
 			description: roleDefinitions.description,
 			sortOrder: roleDefinitions.sortOrder,
 			isSpeakerRole: roleDefinitions.isSpeakerRole,
+			// assigneeId is the MEMBER id (null for a guest or open slot) — used for
+			// "is mine" / roster flags. A guest assignee is carried separately.
 			assigneeId: assignee.id,
-			assigneeName: assignee.name,
+			assigneeGuestId: guestAssignee.id,
+			// The rendered assignee name resolves either source (#151); the caller
+			// pairs it with `assigneeIsGuest` to show the "· Guest" marker.
+			assigneeName: sql<
+				string | null
+			>`coalesce(${assignee.name}, ${guestAssignee.name})`,
 			speechTitle: speeches.title,
 			pathwayPath: speeches.pathwayPath,
 			projectName: speeches.projectName,
@@ -118,12 +127,19 @@ async function loadMeetingDetail(
 			eq(roleDefinitions.id, roleSlots.roleDefinitionId),
 		)
 		.leftJoin(assignee, eq(assignee.id, roleSlots.assignedMemberId))
+		.leftJoin(guestAssignee, eq(guestAssignee.id, roleSlots.assignedGuestId))
 		.leftJoin(speeches, eq(speeches.id, roleSlots.speechId))
 		.where(eq(roleSlots.meetingId, meetingId))
 		.orderBy(asc(roleDefinitions.sortOrder), asc(roleSlots.slotIndex));
 
+	// Flag guest-held slots so every read path can render the "· Guest" marker.
+	const rowsWithGuestFlag = rows.map((r) => ({
+		...r,
+		assigneeIsGuest: r.assigneeGuestId != null,
+	}));
+
 	// Resolve which speaker each evaluator slot evaluates.
-	const slots = resolveEvaluatorLinks(rows);
+	const slots = resolveEvaluatorLinks(rowsWithGuestFlag);
 
 	const club = await db.query.clubs.findFirst({
 		where: eq(clubs.id, meeting.clubId),
@@ -187,6 +203,16 @@ async function loadMeetingDetail(
 				.orderBy(asc(roleDefinitions.sortOrder), asc(roleDefinitions.name))
 		: [];
 
+	// Club guests for the admin assign picker (#151) — pick-an-existing-guest.
+	// Management-only, like the roster; guests never appear on the public view.
+	const clubGuests = canManage
+		? await db
+				.select({ id: guests.id, name: guests.name })
+				.from(guests)
+				.where(eq(guests.clubId, meeting.clubId))
+				.orderBy(asc(guests.name))
+		: [];
+
 	// Role recency for the assign picker (#146): per role, when each member last
 	// held it in a prior non-cancelled meeting. Management-only, like the roster.
 	const roleRecency = canManage
@@ -214,6 +240,7 @@ async function loadMeetingDetail(
 		unavailableMembers,
 		unavailableMemberIds: unavailableMembers.map((m) => m.id),
 		roster,
+		clubGuests,
 		clubRoles,
 	};
 }

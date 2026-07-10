@@ -21,6 +21,15 @@ the nouns in `src/db/schema.ts`.
   `admin`/`vpe` may create meetings), `joined_at` ("member of *this* club since"), office
   (see #63), and status. This roster row is what meeting roles are claimed against. See
   ADR-0008.
+- **Guest** — a club-scoped visitor (`guests`) who can be assigned to a role slot as an
+  alternative to a member (real case: a visitor served as evaluator). A lightweight, durable
+  identity (name + optional contact), **not** a Person and **not** a Membership: no login, no
+  Pathways, no roster/officer presence, and NOT a `members` status. A slot references at most one
+  assignee — a member (`assigned_member_id`) OR a guest (`assigned_guest_id`), never both
+  (enforced in logic + a DB check constraint). Guests never appear in the member roster/picker;
+  guest-held slots render the name with a subtle "· Guest" marker and count as filled. Admin-only
+  to assign (not on the public/TMOD view). Promotion-to-member is anticipated (stable guest id)
+  but not built. See ADR-0013 / #151.
 - **`club_memberships`** — legacy auth-only link (signed-in `user` ↔ club) that today still
   resolves `club_role` in the auth path; being absorbed into Membership (ADR-0008, follow-up
   to #64). Not the roster.

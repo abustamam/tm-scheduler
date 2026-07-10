@@ -2,6 +2,7 @@ import { Loader2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "#/components/ui/badge";
+import { Button } from "#/components/ui/button";
 import {
 	Command,
 	CommandEmpty,
@@ -10,6 +11,7 @@ import {
 	CommandItem,
 	CommandList,
 } from "#/components/ui/command";
+import { Input } from "#/components/ui/input";
 import {
 	Sheet,
 	SheetContent,
@@ -22,6 +24,7 @@ import {
 	formatLastServed,
 	resolveAssignAction,
 } from "#/lib/agenda";
+import { assignGuestSlot } from "#/server/guests";
 import { claimSlot, reassignSlot } from "#/server/slots";
 
 type AssignSlot = {
@@ -42,6 +45,8 @@ export function AssignSlotSheet({
 	unavailableIds,
 	roleRecency,
 	actorMemberId,
+	allowGuests = false,
+	clubGuests = [],
 	onOpenChange,
 	onAssigned,
 }: {
@@ -51,6 +56,11 @@ export function AssignSlotSheet({
 	unavailableIds: string[];
 	roleRecency: RoleRecency;
 	actorMemberId: string | null;
+	/** Admin-only: offer the "assign a guest" path (#151). Never on the public
+	 *  self-serve/TMOD view. */
+	allowGuests?: boolean;
+	/** Existing club guests to pick from (admin path only). */
+	clubGuests?: { id: string; name: string }[];
 	onOpenChange: (open: boolean) => void;
 	onAssigned: () => void | Promise<void>;
 }) {
@@ -106,6 +116,42 @@ export function AssignSlotSheet({
 		}
 	}
 
+	async function assignGuest(payload: {
+		guestId?: string;
+		newGuest?: { name: string; email?: string; phone?: string };
+	}) {
+		if (!slot) return;
+		setBusy(true);
+		try {
+			await assignGuestSlot({
+				data: { slotId: slot.id, actorMemberId, ...payload },
+			});
+			toast.success("Guest assigned.");
+			await onAssigned();
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	function onCreateGuest(e: React.FormEvent<HTMLFormElement>) {
+		e.preventDefault();
+		const form = new FormData(e.currentTarget);
+		const name = String(form.get("guestName") ?? "").trim();
+		if (!name) {
+			toast.error("A guest name is required.");
+			return;
+		}
+		void assignGuest({
+			newGuest: {
+				name,
+				email: String(form.get("guestEmail") ?? "").trim() || undefined,
+				phone: String(form.get("guestPhone") ?? "").trim() || undefined,
+			},
+		});
+	}
+
 	return (
 		<Sheet open={slot !== null} onOpenChange={onOpenChange}>
 			<SheetContent side="bottom" className="max-h-[90svh] overflow-y-auto">
@@ -157,6 +203,61 @@ export function AssignSlotSheet({
 							</CommandGroup>
 						</CommandList>
 					</Command>
+
+					{allowGuests ? (
+						<div className="mt-4 space-y-3 border-t pt-4">
+							<p className="font-medium text-sm">Or assign a guest</p>
+							<p className="text-muted-foreground text-xs">
+								Guests aren't roster members — they won't appear in the member
+								picker or roster.
+							</p>
+							{clubGuests.length > 0 ? (
+								<div className="flex flex-wrap gap-2">
+									{clubGuests.map((g) => (
+										<Button
+											key={g.id}
+											type="button"
+											size="sm"
+											variant="secondary"
+											disabled={busy}
+											onClick={() => void assignGuest({ guestId: g.id })}
+										>
+											{g.name}
+										</Button>
+									))}
+								</div>
+							) : null}
+							<form onSubmit={onCreateGuest} className="space-y-2">
+								<Input
+									name="guestName"
+									placeholder="New guest name"
+									aria-label="New guest name"
+									required
+								/>
+								<div className="grid grid-cols-2 gap-2">
+									<Input
+										name="guestEmail"
+										type="email"
+										placeholder="Email (optional)"
+										aria-label="Guest email"
+									/>
+									<Input
+										name="guestPhone"
+										placeholder="Phone (optional)"
+										aria-label="Guest phone"
+									/>
+								</div>
+								<Button
+									type="submit"
+									size="sm"
+									variant="outline"
+									disabled={busy}
+								>
+									Add &amp; assign guest
+								</Button>
+							</form>
+						</div>
+					) : null}
 				</div>
 			</SheetContent>
 		</Sheet>

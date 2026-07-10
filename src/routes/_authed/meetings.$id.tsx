@@ -99,6 +99,7 @@ function MeetingDetail() {
 		clubNumber,
 		clubDistrict,
 		clubMeetingSchedule,
+		clubGuests,
 	} = Route.useLoaderData();
 	const { currentMemberId } = Route.useRouteContext();
 	const router = useRouter();
@@ -343,6 +344,7 @@ function MeetingDetail() {
 				unavailableMemberIds={unavailableMembers.map((m) => m.id)}
 				unavailableMembers={unavailableMembers}
 				pairedRoleIds={pairedIds}
+				clubGuests={clubGuests}
 			/>
 
 			{canManage ? (

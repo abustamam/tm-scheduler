@@ -38,6 +38,20 @@ export function slotLabel(
 /** One row of the "Meeting Roles" roster (name null → open/unfilled). */
 export type RosterEntry = { label: string; name: string | null };
 
+/** Subtle marker appended to a guest assignee's name everywhere it renders
+ *  (#151), e.g. "Ben Carter · Guest". */
+export const GUEST_MARKER = "Guest";
+
+/** Format an assignee's display name, appending the guest marker when the
+ *  assignee is a non-member guest. Null name → null (caller shows "open"). */
+export function assigneeDisplayName(
+	name: string | null,
+	isGuest?: boolean,
+): string | null {
+	if (!name) return null;
+	return isGuest ? `${name} · ${GUEST_MARKER}` : name;
+}
+
 /** Minimal slot shape needed to order the meeting-roles roster. */
 export type RosterSlot = {
 	roleName: string;
@@ -45,6 +59,8 @@ export type RosterSlot = {
 	category: "leadership" | "speaker" | "evaluator" | "functionary";
 	isSpeakerRole: boolean;
 	assigneeName: string | null;
+	/** True when the assignee is a non-member guest (#151) — renders "· Guest". */
+	assigneeIsGuest?: boolean;
 };
 
 /**
@@ -68,7 +84,7 @@ export function buildRosterEntries<T extends RosterSlot>(
 	const roleCounts = buildRoleCounts(slots);
 	const entry = (s: T): RosterEntry => ({
 		label: slotLabel(s, roleCounts),
-		name: s.assigneeName ?? null,
+		name: assigneeDisplayName(s.assigneeName, s.assigneeIsGuest),
 	});
 
 	// Paired evaluator = evaluator-category role with the most slots.
@@ -330,19 +346,25 @@ export type AgendaSummary = {
 };
 
 /** At-a-glance counts for a meeting's slots: fill/confirm/speaker tallies and
- *  the filled percentage (0 when there are no slots). */
+ *  the filled percentage (0 when there are no slots). A slot is "filled" when
+ *  it has EITHER a member or a guest assignee (#151). */
 export function summarizeAgenda(
 	slots: {
 		assigneeId: string | null;
+		assigneeGuestId?: string | null;
 		status: string;
 		isSpeakerRole: boolean;
 	}[],
 ): AgendaSummary {
+	const isFilled = (s: {
+		assigneeId: string | null;
+		assigneeGuestId?: string | null;
+	}) => Boolean(s.assigneeId) || Boolean(s.assigneeGuestId);
 	const total = slots.length;
-	const filled = slots.filter((s) => s.assigneeId).length;
+	const filled = slots.filter(isFilled).length;
 	const confirmed = slots.filter((s) => s.status === "confirmed").length;
 	const speakers = slots.filter((s) => s.isSpeakerRole);
-	const speakerFilled = speakers.filter((s) => s.assigneeId).length;
+	const speakerFilled = speakers.filter(isFilled).length;
 	return {
 		total,
 		filled,

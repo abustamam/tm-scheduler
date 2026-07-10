@@ -82,6 +82,9 @@ export interface MeetingAgendaProps {
 	/** Role ids managed by the speaker pair buttons — hidden from the remove-role
 	 *  control. Only consulted for managers; defaults to none. */
 	pairedRoleIds?: Set<string>;
+	/** Existing club guests for the admin "assign a guest" picker (#151). Admin
+	 *  surface only (gated on `viewer.canManage`); empty on the public view. */
+	clubGuests?: { id: string; name: string }[];
 }
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -111,6 +114,7 @@ export function MeetingAgenda({
 	unavailableMemberIds,
 	unavailableMembers = [],
 	pairedRoleIds = new Set<string>(),
+	clubGuests = [],
 }: MeetingAgendaProps) {
 	const { currentMemberId } = viewer;
 	const [busySlotId, setBusySlotId] = useState<string | null>(null);
@@ -313,6 +317,11 @@ export function MeetingAgenda({
 												{slot.assigneeId ? (
 													<p className="text-sm text-muted-foreground">
 														{slot.assigneeName}
+														{slot.assigneeIsGuest ? (
+															<span className="ml-1 rounded bg-muted px-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+																Guest
+															</span>
+														) : null}
 														{isMine ? (
 															<span className="text-primary"> (you)</span>
 														) : null}
@@ -559,6 +568,8 @@ export function MeetingAgenda({
 				unavailableIds={unavailableMemberIds}
 				roleRecency={roleRecency}
 				actorMemberId={currentMemberId}
+				allowGuests={viewer.canManage}
+				clubGuests={clubGuests}
 				onOpenChange={(open) => {
 					if (!open) setAssignSlot(null);
 				}}

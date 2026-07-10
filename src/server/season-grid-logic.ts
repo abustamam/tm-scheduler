@@ -2,6 +2,7 @@ import { and, asc, desc, eq, gte, inArray, lt, ne } from "drizzle-orm";
 import { db } from "#/db";
 import {
 	clubs,
+	guests,
 	meetings,
 	memberAvailability,
 	members,
@@ -41,6 +42,8 @@ export interface SeasonGridCell {
 	roleDefinitionId: string;
 	slotIndex: number;
 	memberId: string | null;
+	/** A non-member guest holding this slot (#151); null unless guest-assigned. */
+	guestId: string | null;
 	status: SlotStatus;
 }
 export interface SeasonGridData {
@@ -52,6 +55,9 @@ export interface SeasonGridData {
 	 *  including inactive members who held a role in a past-lookback meeting, so
 	 *  the roles orientation still renders their name (history preserved). */
 	memberNames: SeasonGridMember[];
+	/** id→name lookup for every guest referenced by `cells` (#151). Guests never
+	 *  appear on the member axis; the roles orientation resolves their name here. */
+	guestNames: SeasonGridMember[];
 	cells: SeasonGridCell[];
 	unavailable: { memberId: string; meetingId: string }[];
 }
@@ -121,6 +127,7 @@ export async function loadSeasonGrid(input: {
 					slotIndex: roleSlots.slotIndex,
 					status: roleSlots.status,
 					assignedMemberId: roleSlots.assignedMemberId,
+					assignedGuestId: roleSlots.assignedGuestId,
 					roleName: roleDefinitions.name,
 					sortOrder: roleDefinitions.sortOrder,
 				})
@@ -185,13 +192,15 @@ export async function loadSeasonGrid(input: {
 		roleDefinitionId: s.roleDefinitionId,
 		slotIndex: s.slotIndex,
 		memberId: s.assignedMemberId,
+		guestId: s.assignedGuestId,
 		status: s.status,
 	}));
 	const openByMeeting = new Map<string, number>();
 	const totalByMeeting = new Map<string, number>();
 	for (const c of cells) {
 		totalByMeeting.set(c.meetingId, (totalByMeeting.get(c.meetingId) ?? 0) + 1);
-		if (c.memberId === null)
+		// Open = no assignee at all: neither a member nor a guest (#151).
+		if (c.memberId === null && c.guestId === null)
 			openByMeeting.set(c.meetingId, (openByMeeting.get(c.meetingId) ?? 0) + 1);
 	}
 
@@ -233,11 +242,23 @@ export async function loadSeasonGrid(input: {
 				.where(inArray(memberAvailability.meetingId, meetingIds))
 		: [];
 
+	// Guest name lookup for guest-held cells (#151). Guests are a distinct list —
+	// they never appear on the member axis, so this is separate from memberNames.
+	const guestRows = await db
+		.select({ id: guests.id, name: guests.name })
+		.from(guests)
+		.where(eq(guests.clubId, input.clubId));
+	const guestNames: SeasonGridMember[] = guestRows.map((g) => ({
+		id: g.id,
+		name: g.name,
+	}));
+
 	return {
 		meetings: gridMeetings,
 		rows,
 		members: memberRows,
 		memberNames,
+		guestNames,
 		cells,
 		unavailable,
 	};
