@@ -46,3 +46,21 @@ export function pickSpeakerAndEvaluatorRoles(
 		)[0];
 	return { speakerRoleId: speaker.id, evaluatorRoleId: evaluator?.id ?? null };
 }
+
+/**
+ * Role ids the generic add/remove/template-sync must skip: the speaker role and
+ * its paired evaluator (both managed by the "+ Add speaker" / "− Remove speaker"
+ * pair buttons). Empty when the club has no speaker role. A non-throwing
+ * companion to `pickSpeakerAndEvaluatorRoles`, reusing the same heuristic.
+ */
+export function pairedRoleIds(defs: RoleDefLite[]): Set<string> {
+	try {
+		const { speakerRoleId, evaluatorRoleId } =
+			pickSpeakerAndEvaluatorRoles(defs);
+		return new Set(
+			evaluatorRoleId ? [speakerRoleId, evaluatorRoleId] : [speakerRoleId],
+		);
+	} catch {
+		return new Set<string>();
+	}
+}
