@@ -25,6 +25,7 @@ import {
 } from "./guards";
 import { applyCreateMeeting, applyMeetingUpdate } from "./meetings-logic";
 import { currentOfficersForClub } from "./officer-terms-logic";
+import { indexRoleRecency, loadRoleRecency } from "./role-recency-logic";
 
 const uuid = z.string().uuid();
 
@@ -181,10 +182,22 @@ async function loadMeetingDetail(
 				.orderBy(asc(roleDefinitions.sortOrder), asc(roleDefinitions.name))
 		: [];
 
+	// Role recency for the assign picker (#146): per role, when each member last
+	// held it in a prior non-cancelled meeting. Management-only, like the roster.
+	const roleRecency = canManage
+		? indexRoleRecency(
+				await loadRoleRecency({
+					clubId: meeting.clubId,
+					before: meeting.scheduledAt,
+				}),
+			)
+		: {};
+
 	return {
 		meeting,
 		slots,
 		canManage,
+		roleRecency,
 		timezone: club?.timezone ?? "UTC",
 		clubName: club?.name ?? "",
 		clubNumber: club?.clubNumber ?? null,

@@ -131,8 +131,14 @@ function errMessage(err: unknown) {
 function MeetingView() {
 	const { clubId, meetingId } = Route.useParams();
 	const { clubUuid } = Route.useRouteContext();
-	const { meeting, slots, timezone, unavailableMemberIds, navItems } =
-		Route.useLoaderData();
+	const {
+		meeting,
+		slots,
+		timezone,
+		unavailableMemberIds,
+		roleRecency,
+		navItems,
+	} = Route.useLoaderData();
 	const { member } = useCurrentMember(clubId);
 	const router = useRouter();
 
@@ -642,6 +648,7 @@ function MeetingView() {
 					assignSlot
 						? {
 								id: assignSlot.id,
+								roleDefinitionId: assignSlot.roleDefinitionId,
 								status: assignSlot.status,
 								isSpeakerRole: assignSlot.isSpeakerRole,
 								label: slotLabel(assignSlot, roleCounts),
@@ -651,6 +658,7 @@ function MeetingView() {
 				roster={roster}
 				roleByMemberId={roleByMemberId}
 				unavailableIds={unavailableMemberIds}
+				roleRecency={roleRecency}
 				actorMemberId={myId}
 				onOpenChange={(open) => {
 					if (!open) setAssignSlot(null);
