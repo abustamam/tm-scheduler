@@ -153,7 +153,9 @@ export function MeetingMinutes({
 					minutes={minutes}
 					canEdit={canEdit}
 					busy={busy}
-					roster={minutes.members}
+					// Only present members can be added as Table Topics speakers (#170);
+					// guests are handled separately by the picker's guest section.
+					roster={minutes.members.filter((m) => m.status === "present")}
 					clubGuests={clubGuests}
 					onAdd={(payload) =>
 						run(() => addTableTopics({ data: { meetingId, ...payload } }))
@@ -537,6 +539,36 @@ function AwardsSection({
 	) => void;
 	onClear: (category: AwardCategory) => void;
 }) {
+	// Scope each award's picker to the people who took that role this meeting
+	// (#170): Best Speaker → speaker-slot holders, Best Evaluator → evaluator-slot
+	// holders, Best Table Topics → the recorded Table Topics speakers. Falls back
+	// to the full roster when nobody was recorded so an award can always be set.
+	function eligibleFor(category: AwardCategory): {
+		roster: { memberId: string; name: string }[];
+		clubGuests: { id: string; name: string }[];
+	} {
+		const elig = minutes.awardEligible[category];
+		const memberIds = new Set(elig.memberIds);
+		const scopedRoster = roster.filter((m) => memberIds.has(m.memberId));
+
+		if (category === "best_table_topics") {
+			const guestIds = new Set(elig.guestIds);
+			const scopedGuests = clubGuests.filter((g) => guestIds.has(g.id));
+			// No Table Topics participants recorded → fall back to everyone.
+			if (scopedRoster.length === 0 && scopedGuests.length === 0) {
+				return { roster, clubGuests };
+			}
+			return { roster: scopedRoster, clubGuests: scopedGuests };
+		}
+
+		// Speaker / Evaluator: filter members, keep all club guests (guest role
+		// data may be incomplete). Fall back to the full roster only if empty.
+		return {
+			roster: scopedRoster.length > 0 ? scopedRoster : roster,
+			clubGuests,
+		};
+	}
+
 	return (
 		<section className="space-y-3">
 			<h3 className="font-semibold text-sm">Awards</h3>
@@ -566,8 +598,8 @@ function AwardsSection({
 							<div className="flex items-center gap-1">
 								<AssigneePicker
 									label={a.name ? "Change" : "Set"}
-									roster={roster}
-									clubGuests={clubGuests}
+									roster={eligibleFor(a.category).roster}
+									clubGuests={eligibleFor(a.category).clubGuests}
 									busy={busy}
 									onPick={(payload) => onSet(a.category, payload)}
 								/>

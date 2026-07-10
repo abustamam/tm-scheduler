@@ -15,6 +15,7 @@ import {
 	guests,
 	meetingAttendance,
 	meetingAwards,
+	roleDefinitions,
 	roleSlots,
 	tableTopicsSpeakers,
 } from "#/db/schema";
@@ -64,6 +65,31 @@ describe.skipIf(!hasTestDb)("meeting minutes (#152)", () => {
 			.update(roleSlots)
 			.set({ assignedMemberId: memberId, status: "claimed" })
 			.where(eq(roleSlots.id, seed.slotId));
+	}
+
+	/** Create a role definition + a role slot on the seeded meeting, optionally assigned. */
+	async function addRoleSlot(opts: {
+		name: string;
+		category: "leadership" | "speaker" | "evaluator" | "functionary";
+		memberId?: string;
+		guestId?: string;
+	}) {
+		const [rd] = await testDb
+			.insert(roleDefinitions)
+			.values({
+				clubId: seed.clubId,
+				name: opts.name,
+				category: opts.category,
+				isSpeakerRole: opts.category === "speaker",
+			})
+			.returning({ id: roleDefinitions.id });
+		await testDb.insert(roleSlots).values({
+			meetingId: seed.meetingId,
+			roleDefinitionId: rd!.id,
+			assignedMemberId: opts.memberId ?? null,
+			assignedGuestId: opts.guestId ?? null,
+			status: opts.memberId || opts.guestId ? "claimed" : "open",
+		});
 	}
 
 	it("pre-fills present for role-slot holders; others default absent", async () => {
@@ -248,6 +274,57 @@ describe.skipIf(!hasTestDb)("meeting minutes (#152)", () => {
 		expect(
 			m.awards.find((a) => a.category === "best_speaker")?.name,
 		).toBeNull();
+	});
+
+	it("awardEligible scopes each award to that meeting's participants (#170)", async () => {
+		const guestSpeakerId = await newGuest("Guest Speaker");
+		// Speaker slots: one member, one guest. Evaluator slot: the admin member.
+		await addRoleSlot({
+			name: "Speaker",
+			category: "speaker",
+			memberId: seed.memberId,
+		});
+		await addRoleSlot({
+			name: "Speaker",
+			category: "speaker",
+			guestId: guestSpeakerId,
+		});
+		await addRoleSlot({
+			name: "Evaluator",
+			category: "evaluator",
+			memberId: seed.adminMemberId,
+		});
+		// A functionary role holder must NOT be eligible for any award, even though
+		// the same member also holds a speaker slot above.
+		await addRoleSlot({
+			name: "Ah-Counter",
+			category: "functionary",
+			memberId: seed.memberId,
+		});
+
+		// Table Topics: the admin member + a guest.
+		const ttGuestId = await newGuest("TT Guest");
+		await addTableTopicsSpeaker({
+			meetingId: seed.meetingId,
+			memberId: seed.adminMemberId,
+		});
+		await addTableTopicsSpeaker({
+			meetingId: seed.meetingId,
+			guestId: ttGuestId,
+		});
+
+		const m = await loadMinutes(seed.meetingId);
+
+		expect(m.awardEligible.best_speaker.memberIds).toEqual([seed.memberId]);
+		expect(m.awardEligible.best_speaker.guestIds).toEqual([guestSpeakerId]);
+		expect(m.awardEligible.best_evaluator.memberIds).toEqual([
+			seed.adminMemberId,
+		]);
+		expect(m.awardEligible.best_evaluator.guestIds).toEqual([]);
+		expect(m.awardEligible.best_table_topics.memberIds).toEqual([
+			seed.adminMemberId,
+		]);
+		expect(m.awardEligible.best_table_topics.guestIds).toEqual([ttGuestId]);
 	});
 
 	it("always returns all three award categories, unset ones as null", async () => {
