@@ -87,6 +87,7 @@ async function loadMeetingDetail(
 	const rows = await db
 		.select({
 			id: roleSlots.id,
+			roleDefinitionId: roleSlots.roleDefinitionId,
 			status: roleSlots.status,
 			slotIndex: roleSlots.slotIndex,
 			claimedAt: roleSlots.claimedAt,
@@ -163,6 +164,23 @@ async function loadMeetingDetail(
 				.orderBy(asc(members.name))
 		: [];
 
+	// Club role template for the "+ Add role" picker — management-only, like the
+	// roster. Ordered like the roles page.
+	const clubRoles = canManage
+		? await db
+				.select({
+					id: roleDefinitions.id,
+					name: roleDefinitions.name,
+					category: roleDefinitions.category,
+					defaultCount: roleDefinitions.defaultCount,
+					sortOrder: roleDefinitions.sortOrder,
+					isSpeakerRole: roleDefinitions.isSpeakerRole,
+				})
+				.from(roleDefinitions)
+				.where(eq(roleDefinitions.clubId, meeting.clubId))
+				.orderBy(asc(roleDefinitions.sortOrder), asc(roleDefinitions.name))
+		: [];
+
 	return {
 		meeting,
 		slots,
@@ -178,6 +196,7 @@ async function loadMeetingDetail(
 		unavailableMembers,
 		unavailableMemberIds: unavailableMembers.map((m) => m.id),
 		roster,
+		clubRoles,
 	};
 }
 
