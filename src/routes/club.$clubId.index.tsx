@@ -49,7 +49,7 @@ function ClubHome() {
 	const meetingsWithOpenings = upcomingMeetings.filter((m) => m.openSlots > 0);
 
 	return (
-		<div className="space-y-6 p-4 pb-8">
+		<div className="mx-auto w-full max-w-5xl space-y-6 p-4 pb-8 md:p-6">
 			{/* Header */}
 			<div className="flex items-center justify-between pt-2">
 				<h1 className="font-display text-2xl font-semibold tracking-tight">
@@ -81,7 +81,7 @@ function ClubHome() {
 						)}
 					</div>
 				) : commitments.data && commitments.data.length > 0 ? (
-					<ul className="space-y-3">
+					<ul className="grid gap-3 md:grid-cols-2">
 						{commitments.data.map((c) => (
 							<li
 								key={c.slotId}
@@ -153,7 +153,7 @@ function ClubHome() {
 			{meetingsWithOpenings.length > 0 ? (
 				<section className="space-y-3">
 					<h2 className="text-base font-semibold">Meetings with open roles</h2>
-					<ul className="space-y-2">
+					<ul className="grid gap-2 md:grid-cols-2 lg:grid-cols-3">
 						{meetingsWithOpenings.map((m) => (
 							<li key={m.id}>
 								<Link
@@ -189,7 +189,7 @@ function ClubHome() {
 						No upcoming meetings scheduled.
 					</p>
 				) : (
-					<ul className="space-y-2">
+					<ul className="grid gap-2 md:grid-cols-2 lg:grid-cols-3">
 						{upcomingMeetings.map((m) => (
 							<li key={m.id}>
 								<Link
