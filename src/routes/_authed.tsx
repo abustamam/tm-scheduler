@@ -10,6 +10,7 @@ import {
 	BookOpen,
 	CalendarDays,
 	CalendarPlus,
+	GraduationCap,
 	Grid3x3,
 	LayoutGrid,
 	List,
@@ -70,6 +71,8 @@ function crumbFor(pathname: string): string {
 		return "Manage · Club settings";
 	if (pathname.startsWith("/admin/sync-tokens"))
 		return "Manage · Base Camp sync";
+	if (pathname.startsWith("/admin/vpe-dashboard"))
+		return "Manage · VP Education";
 	if (pathname.startsWith("/admin")) return "Manage · Admin";
 	return "Workspace";
 }
@@ -83,6 +86,7 @@ function WorkspaceLayout() {
 	const activeClub = clubs.find((c) => c.clubId === activeClubId) ?? clubs[0];
 	const clubName = activeClub?.name ?? "Toastmasters";
 	const clubNumber = activeClub?.clubNumber ?? null;
+	// Club admins — includes VP Education / President, who resolve to "admin".
 	const isOfficer = clubs.some((c) => c.clubRole === "admin");
 	const roleLabel = activeClub?.clubRole
 		? (CLUB_ROLE_LABELS[activeClub.clubRole] ?? "Member")
@@ -115,6 +119,11 @@ function WorkspaceLayout() {
 					<NavItem to="/activity" icon={ScrollText} label="Activity" />
 					{isOfficer ? (
 						<>
+							<NavItem
+								to="/admin/vpe-dashboard"
+								icon={GraduationCap}
+								label="VP Education"
+							/>
 							<NavItem
 								to="/admin/meetings/new"
 								icon={CalendarPlus}
