@@ -84,6 +84,12 @@ export interface MinutesProgramRow {
 	speechTitle: string | null;
 }
 
+/** The member/guest ids eligible to win one award category (#170). */
+export interface AwardEligible {
+	memberIds: string[];
+	guestIds: string[];
+}
+
 export interface MinutesData {
 	meetingId: string;
 	clubId: string;
@@ -91,6 +97,14 @@ export interface MinutesData {
 	guests: MinutesGuestRow[];
 	tableTopicsSpeakers: MinutesTableTopicsRow[];
 	awards: MinutesAwardRow[];
+	/**
+	 * Per-award eligible participants (#170): who actually took that role this
+	 * meeting — Best Speaker → speaker-slot holders, Best Evaluator →
+	 * evaluator-slot holders, Best Table Topics → the Table Topics speakers. The
+	 * award pickers scope to these; empty sets mean "no in-app participants
+	 * recorded" and the UI falls back to the full roster.
+	 */
+	awardEligible: Record<AwardCategory, AwardEligible>;
 	counts: { present: number; absent: number; excused: number; guests: number };
 }
 
@@ -156,14 +170,20 @@ export async function loadMinutes(meetingId: string): Promise<MinutesData> {
 	);
 
 	// Role-slot holders on this meeting (member + guest), for the `present`
-	// pre-fill and the pre-listed guests.
+	// pre-fill, the pre-listed guests, and the award eligibility sets (via the
+	// role's category — speaker/evaluator).
 	const slotRows = await db
 		.select({
 			memberId: roleSlots.assignedMemberId,
 			guestId: roleSlots.assignedGuestId,
 			guestName: guests.name,
+			category: roleDefinitions.category,
 		})
 		.from(roleSlots)
+		.innerJoin(
+			roleDefinitions,
+			eq(roleDefinitions.id, roleSlots.roleDefinitionId),
+		)
 		.leftJoin(guests, eq(guests.id, roleSlots.assignedGuestId))
 		.where(eq(roleSlots.meetingId, meetingId));
 	const roleMemberIds = new Set(
@@ -282,6 +302,43 @@ export async function loadMinutes(meetingId: string): Promise<MinutesData> {
 		};
 	});
 
+	// Award eligibility (#170): speaker/evaluator sets come from role slots by
+	// category; Table Topics from the recorded speakers. De-duped (a member may
+	// hold two speaker slots) and insertion-ordered.
+	const speakerMemberIds = new Set<string>();
+	const speakerGuestIds = new Set<string>();
+	const evaluatorMemberIds = new Set<string>();
+	const evaluatorGuestIds = new Set<string>();
+	for (const r of slotRows) {
+		if (r.category === "speaker") {
+			if (r.memberId) speakerMemberIds.add(r.memberId);
+			if (r.guestId) speakerGuestIds.add(r.guestId);
+		} else if (r.category === "evaluator") {
+			if (r.memberId) evaluatorMemberIds.add(r.memberId);
+			if (r.guestId) evaluatorGuestIds.add(r.guestId);
+		}
+	}
+	const ttMemberIds = new Set<string>();
+	const ttGuestIds = new Set<string>();
+	for (const t of ttList) {
+		if (t.memberId) ttMemberIds.add(t.memberId);
+		if (t.guestId) ttGuestIds.add(t.guestId);
+	}
+	const awardEligible: Record<AwardCategory, AwardEligible> = {
+		best_speaker: {
+			memberIds: [...speakerMemberIds],
+			guestIds: [...speakerGuestIds],
+		},
+		best_evaluator: {
+			memberIds: [...evaluatorMemberIds],
+			guestIds: [...evaluatorGuestIds],
+		},
+		best_table_topics: {
+			memberIds: [...ttMemberIds],
+			guestIds: [...ttGuestIds],
+		},
+	};
+
 	let present = 0;
 	let absent = 0;
 	let excused = 0;
@@ -298,6 +355,7 @@ export async function loadMinutes(meetingId: string): Promise<MinutesData> {
 		guests: guestList,
 		tableTopicsSpeakers: ttList,
 		awards: awardList,
+		awardEligible,
 		counts: { present, absent, excused, guests: guestList.length },
 	};
 }
