@@ -178,4 +178,114 @@ describe.skipIf(!hasTestDb)("meeting role management (#143)", () => {
 			}),
 		).rejects.toThrow(/speaker controls/i);
 	});
+
+	it("sync adds a missing standard role to upcoming meetings", async () => {
+		const vc = await addRole(club.clubId, {
+			name: "Vote Counter",
+			sortOrder: 60,
+		});
+		const res = await applyTemplateSyncToUpcomingMeetings({
+			clubId: club.clubId,
+			actorMemberId: club.adminMemberId,
+		});
+		expect(res.meetingsChanged).toBe(1);
+		expect(res.rolesAdded).toEqual(["Vote Counter"]);
+		expect(await slotsFor(club.meetingId, vc)).toHaveLength(1);
+	});
+
+	it("sync skips roles already present (idempotent)", async () => {
+		// Timer (the seeded role) is already on the meeting.
+		const first = await applyTemplateSyncToUpcomingMeetings({
+			clubId: club.clubId,
+			actorMemberId: club.adminMemberId,
+		});
+		expect(first.meetingsChanged).toBe(0);
+		// Adding then re-running adds it once, and a second run is a no-op.
+		await addRole(club.clubId, { name: "Vote Counter", sortOrder: 60 });
+		await applyTemplateSyncToUpcomingMeetings({
+			clubId: club.clubId,
+			actorMemberId: club.adminMemberId,
+		});
+		const again = await applyTemplateSyncToUpcomingMeetings({
+			clubId: club.clubId,
+			actorMemberId: club.adminMemberId,
+		});
+		expect(again.meetingsChanged).toBe(0);
+	});
+
+	it("sync skips defaultCount 0 roles", async () => {
+		const joke = await addRole(club.clubId, {
+			name: "Jokemaster",
+			defaultCount: 0,
+			sortOrder: 61,
+		});
+		await applyTemplateSyncToUpcomingMeetings({
+			clubId: club.clubId,
+			actorMemberId: club.adminMemberId,
+		});
+		expect(await slotsFor(club.meetingId, joke)).toHaveLength(0);
+	});
+
+	it("sync never adds speakers or the paired evaluator", async () => {
+		const spk = await addRole(club.clubId, {
+			name: "Speaker",
+			category: "speaker",
+			isSpeakerRole: true,
+			defaultCount: 2,
+			sortOrder: 10,
+		});
+		const ev = await addRole(club.clubId, {
+			name: "Evaluator",
+			category: "evaluator",
+			defaultCount: 2,
+			sortOrder: 11,
+		});
+		await applyTemplateSyncToUpcomingMeetings({
+			clubId: club.clubId,
+			actorMemberId: club.adminMemberId,
+		});
+		expect(await slotsFor(club.meetingId, spk)).toHaveLength(0);
+		expect(await slotsFor(club.meetingId, ev)).toHaveLength(0);
+	});
+
+	it("sync leaves past meetings untouched", async () => {
+		const [past] = await testDb
+			.insert(meetings)
+			.values({
+				clubId: club.clubId,
+				scheduledAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+				status: "scheduled",
+			})
+			.returning({ id: meetings.id });
+		const vc = await addRole(club.clubId, {
+			name: "Vote Counter",
+			sortOrder: 60,
+		});
+		await applyTemplateSyncToUpcomingMeetings({
+			clubId: club.clubId,
+			actorMemberId: club.adminMemberId,
+		});
+		expect(await slotsFor(past.id, vc)).toHaveLength(0);
+		// sanity: the upcoming meeting DID get it
+		expect(await slotsFor(club.meetingId, vc)).toHaveLength(1);
+	});
+
+	it("sync never tops up an existing role toward defaultCount", async () => {
+		// A standard role that wants 2 but the meeting already has 1 → presence-
+		// based sync leaves it at 1 (a naive count-based top-up would add a 2nd).
+		const greeter = await addRole(club.clubId, {
+			name: "Greeter",
+			defaultCount: 2,
+			sortOrder: 62,
+		});
+		await testDb
+			.insert(roleSlots)
+			.values({ meetingId: club.meetingId, roleDefinitionId: greeter });
+		const res = await applyTemplateSyncToUpcomingMeetings({
+			clubId: club.clubId,
+			actorMemberId: club.adminMemberId,
+		});
+		expect(res.meetingsChanged).toBe(0);
+		expect(await slotsFor(club.meetingId, greeter)).toHaveLength(1);
+	});
 });

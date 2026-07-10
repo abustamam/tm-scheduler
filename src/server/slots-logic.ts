@@ -204,6 +204,68 @@ export async function applyRemoveRoleSlot(input: {
 	return { clubId: slot.clubId };
 }
 
+/** Presence-based template backfill: for every upcoming meeting (scheduledAt >
+ *  now), add one open slot of each standard (defaultCount >= 1), non-paired role
+ *  the meeting has zero of. Never tops up counts, never adds speakers/paired
+ *  evaluators, never touches past meetings. Idempotent. Returns how many
+ *  meetings changed and the distinct role names added. */
+export async function applyTemplateSyncToUpcomingMeetings(input: {
+	clubId: string;
+	actorMemberId: string | null;
+}) {
+	const defs = await clubRoleDefs(input.clubId);
+	const paired = pairedRoleIds(defs);
+	const standard = defs.filter((d) => d.defaultCount >= 1 && !paired.has(d.id));
+
+	const upcoming = await db
+		.select({ id: meetings.id })
+		.from(meetings)
+		.where(
+			and(
+				eq(meetings.clubId, input.clubId),
+				gt(meetings.scheduledAt, new Date()),
+			),
+		);
+
+	const rolesAdded = new Set<string>();
+	let meetingsChanged = 0;
+
+	await db.transaction(async (tx) => {
+		for (const m of upcoming) {
+			const present = await tx
+				.select({ roleDefinitionId: roleSlots.roleDefinitionId })
+				.from(roleSlots)
+				.where(eq(roleSlots.meetingId, m.id));
+			const presentIds = new Set(present.map((s) => s.roleDefinitionId));
+			const missing = standard.filter((d) => !presentIds.has(d.id));
+			if (missing.length === 0) continue;
+
+			await tx.insert(roleSlots).values(
+				missing.map((d) => ({
+					meetingId: m.id,
+					roleDefinitionId: d.id,
+					slotIndex: 0,
+				})),
+			);
+			for (const d of missing) rolesAdded.add(d.name);
+			await logActivity(tx, {
+				clubId: input.clubId,
+				actorMemberId: input.actorMemberId,
+				action: "meeting_edit",
+				targetType: "meeting",
+				targetId: m.id,
+				detail: {
+					change: "template_sync",
+					roleDefinitionIds: missing.map((d) => d.id),
+				},
+			});
+			meetingsChanged += 1;
+		}
+	});
+
+	return { meetingsChanged, rolesAdded: [...rolesAdded] };
+}
+
 /** Highest-index unclaimed (open, unassigned) slot id for a role, or null. */
 function topUnclaimed(
 	slots: {
