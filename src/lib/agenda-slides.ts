@@ -38,7 +38,7 @@ export type Slide =
 			timezone: string;
 	  }
 	| { kind: "toastmaster"; name: string }
-	| { kind: "theme"; theme: string }
+	| { kind: "toastmasterIntro"; theme: string | null; word: string | null }
 	| {
 			kind: "wordOfDay";
 			word: string;
@@ -69,7 +69,12 @@ export type Slide =
 	| { kind: "generalEvaluation"; name: string; time: string }
 	| { kind: "awards"; categories: string[] }
 	| { kind: "reminders"; text: string }
-	| { kind: "thankYou"; meetingSchedule: string | null };
+	| {
+			kind: "thankYou";
+			meetingSchedule: string | null;
+			nextMeetingAt: Date | null;
+			timezone: string;
+	  };
 
 /** Standard Toastmasters role names (mirrors RUN_OF_SHOW in agenda-runsheet.ts). */
 const ROLE = {
@@ -104,10 +109,27 @@ const assigneeOrOpen = (slots: AgendaSlot[], name: string): string => {
 	return slot ? assigneeDisplay(slot) : OPEN_LABEL;
 };
 
+const SPEECH_ORDINALS = [
+	"First",
+	"Second",
+	"Third",
+	"Fourth",
+	"Fifth",
+] as const;
+
+/** "First Speech" … "Fifth Speech", then "Speech N"; a lone speech is "Speech". */
+function speechLabel(index: number, multi: boolean): string {
+	if (!multi) return "Speech";
+	return index < SPEECH_ORDINALS.length
+		? `${SPEECH_ORDINALS[index]} Speech`
+		: `Speech ${index + 1}`;
+}
+
 export function buildSlideDeck(
 	meeting: MeetingForDeck,
 	club: ClubForDeck,
 	slots: AgendaSlot[],
+	nextMeetingAt: Date | null = null,
 ): Slide[] {
 	const deck: Slide[] = [];
 
@@ -125,17 +147,10 @@ export function buildSlideDeck(
 		name: assigneeOrOpen(slots, ROLE.toastmaster),
 	});
 
-	if (meeting.theme?.trim()) {
-		deck.push({ kind: "theme", theme: meeting.theme.trim() });
-	}
-
-	if (meeting.wordOfTheDay?.trim()) {
-		deck.push({
-			kind: "wordOfDay",
-			word: meeting.wordOfTheDay.trim(),
-			definition: meeting.wodDefinition?.trim() || null,
-			example: meeting.wodExample?.trim() || null,
-		});
+	const themeText = meeting.theme?.trim() || null;
+	const wodWord = meeting.wordOfTheDay?.trim() || null;
+	if (themeText || wodWord) {
+		deck.push({ kind: "toastmasterIntro", theme: themeText, word: wodWord });
 	}
 
 	const generalEvaluator = byRoleName(slots, ROLE.generalEvaluator);
@@ -147,6 +162,17 @@ export function buildSlideDeck(
 		});
 	}
 
+	const wodDefinition = meeting.wodDefinition?.trim() || null;
+	const wodExample = meeting.wodExample?.trim() || null;
+	if (wodWord && (wodDefinition || wodExample)) {
+		deck.push({
+			kind: "wordOfDay",
+			word: wodWord,
+			definition: wodDefinition,
+			example: wodExample,
+		});
+	}
+
 	const speakers = slots
 		.filter((s) => s.isSpeakerRole)
 		.sort((a, b) => a.slotIndex - b.slotIndex);
@@ -155,7 +181,7 @@ export function buildSlideDeck(
 		speakers.forEach((s, i) => {
 			deck.push({
 				kind: "speech",
-				label: numbered("Speech", i, multi),
+				label: speechLabel(i, multi),
 				speaker: assigneeDisplay(s),
 				title: s.speechTitle,
 				projectLevel: s.projectLevel,
@@ -214,7 +240,12 @@ export function buildSlideDeck(
 		deck.push({ kind: "reminders", text: meeting.reminders.trim() });
 	}
 
-	deck.push({ kind: "thankYou", meetingSchedule: club.meetingSchedule });
+	deck.push({
+		kind: "thankYou",
+		meetingSchedule: club.meetingSchedule,
+		nextMeetingAt,
+		timezone: club.timezone,
+	});
 
 	return deck;
 }

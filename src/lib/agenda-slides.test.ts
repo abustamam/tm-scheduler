@@ -83,54 +83,37 @@ describe("buildSlideDeck anchors", () => {
 	});
 });
 
-describe("buildSlideDeck theme + word of the day", () => {
-	it("omits theme + wordOfDay when both blank", () => {
-		expect(kinds([])).not.toContain("theme");
-		expect(kinds([])).not.toContain("wordOfDay");
-	});
-
-	it("emits theme slide only when theme set", () => {
+describe("buildSlideDeck toastmaster intro + word of the day", () => {
+	it("merges theme + WOD word into one toastmasterIntro slide", () => {
 		const deck = buildSlideDeck(
-			{ ...meeting, theme: "A Fresh Start" },
+			{ ...meeting, theme: "Unity", wordOfTheDay: "Synergy" },
 			club,
 			[],
 		);
-		expect(deck.map((s) => s.kind)).toEqual([
-			"title",
-			"toastmaster",
-			"theme",
-			"thankYou",
-		]);
-		expect(deck[2]).toMatchObject({ kind: "theme", theme: "A Fresh Start" });
+		const intro = deck.find((s) => s.kind === "toastmasterIntro");
+		expect(intro).toMatchObject({ theme: "Unity", word: "Synergy" });
 	});
 
-	it("wordOfDay slide includes definition + example only when present", () => {
-		const full = buildSlideDeck(
-			{
-				...meeting,
-				wordOfTheDay: "Momentum",
-				wodDefinition: "impetus gained by a moving object",
-				wodExample: "The momentum of the river keeps moving forward.",
-			},
+	it("emits a standalone wordOfDay slide only when a definition/example exists", () => {
+		const withDef = buildSlideDeck(
+			{ ...meeting, wordOfTheDay: "Synergy", wodDefinition: "cooperation" },
 			club,
 			[],
 		);
-		expect(full.find((s) => s.kind === "wordOfDay")).toMatchObject({
-			word: "Momentum",
-			definition: "impetus gained by a moving object",
-			example: "The momentum of the river keeps moving forward.",
-		});
+		expect(withDef.some((s) => s.kind === "wordOfDay")).toBe(true);
 
 		const wordOnly = buildSlideDeck(
-			{ ...meeting, wordOfTheDay: "Momentum" },
+			{ ...meeting, wordOfTheDay: "Synergy" },
 			club,
 			[],
 		);
-		expect(wordOnly.find((s) => s.kind === "wordOfDay")).toMatchObject({
-			word: "Momentum",
-			definition: null,
-			example: null,
-		});
+		expect(wordOnly.some((s) => s.kind === "wordOfDay")).toBe(false);
+		expect(wordOnly.some((s) => s.kind === "toastmasterIntro")).toBe(true);
+	});
+
+	it("omits toastmasterIntro when neither theme nor WOD is set", () => {
+		const deck = buildSlideDeck(meeting, club, []);
+		expect(deck.some((s) => s.kind === "toastmasterIntro")).toBe(false);
 	});
 });
 
@@ -178,7 +161,7 @@ describe("buildSlideDeck speeches", () => {
 			(s) => s.kind === "speech",
 		);
 		expect(speech).toMatchObject({
-			label: "Speech 1",
+			label: "First Speech",
 			speaker: "Rehanna Khan",
 			title: "A Tasteful Historic Profile",
 			projectLevel: "Level 1",
@@ -204,7 +187,14 @@ describe("buildSlideDeck speeches", () => {
 		expect(vote).toMatchObject({ names: ["Rehanna Khan", "Sudheer Isanaka"] });
 	});
 
-	it("single speaker uses unnumbered label", () => {
+	it("labels multiple speeches with ordinal words; a lone speech is 'Speech'", () => {
+		const two = buildSlideDeck(meeting, club, speakers).filter(
+			(s) => s.kind === "speech",
+		);
+		expect(two.map((s) => (s as { label: string }).label)).toEqual([
+			"First Speech",
+			"Second Speech",
+		]);
 		const one = buildSlideDeck(meeting, club, [speakers[0]]).find(
 			(s) => s.kind === "speech",
 		);
@@ -381,6 +371,16 @@ describe("buildSlideDeck awards + reminders", () => {
 			text: "Choose a learning path.",
 		});
 	});
+
+	it("thankYou carries nextMeetingAt + timezone when provided", () => {
+		const next = new Date("2026-07-23T23:45:00Z");
+		const deck = buildSlideDeck(meeting, club, [], next);
+		expect(deck.at(-1)).toMatchObject({
+			kind: "thankYou",
+			nextMeetingAt: next,
+			timezone: "America/Chicago",
+		});
+	});
 });
 
 describe("buildSlideDeck full meeting ordering", () => {
@@ -428,25 +428,36 @@ describe("buildSlideDeck full meeting ordering", () => {
 				evaluatesSlotId: "sp1",
 				evaluates: { speakerName: "Rehanna" },
 			}),
+			slot({
+				id: "ev2",
+				roleName: "Evaluator",
+				category: "evaluator",
+				slotIndex: 1,
+				assigneeName: "Priya",
+				evaluatesSlotId: "sp2",
+				evaluates: { speakerName: "Sudheer" },
+			}),
 		];
 		const full: MeetingForDeck = {
 			...meeting,
 			theme: "A Fresh Start",
 			wordOfTheDay: "Momentum",
+			wodDefinition: "impetus gained by a moving object",
 			reminders: "Choose a learning path.",
 		};
 		expect(buildSlideDeck(full, club, slots).map((s) => s.kind)).toEqual([
 			"title",
 			"toastmaster",
-			"theme",
-			"wordOfDay",
+			"toastmasterIntro",
 			"geIntro",
+			"wordOfDay",
 			"speech",
 			"speech",
 			"voteSpeaker",
 			"tableTopics",
 			"voteTableTopics",
 			"evalIntro",
+			"evaluation",
 			"evaluation",
 			"voteEvaluator",
 			"generalEvaluation",
