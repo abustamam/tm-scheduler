@@ -225,7 +225,7 @@ function MeetingView() {
 	};
 
 	return (
-		<div className="space-y-5 p-4 pb-8">
+		<div className="mx-auto w-full max-w-3xl space-y-5 p-4 pb-8 md:p-6">
 			{locked ? (
 				<div className="flex items-center gap-2 rounded-xl border border-border bg-muted/60 px-4 py-3 text-sm font-medium text-muted-foreground">
 					<Lock className="size-4" aria-hidden />
