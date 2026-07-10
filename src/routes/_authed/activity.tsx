@@ -10,7 +10,7 @@ import { listUpcomingMeetings } from "#/server/meetings";
 
 export const Route = createFileRoute("/_authed/activity")({
 	loader: async ({ context }) => {
-		const clubId = context.clubs[0]?.clubId;
+		const clubId = context.activeClubId;
 		if (!clubId) {
 			return { activity: [], meetings: [], members: [] };
 		}
@@ -32,8 +32,8 @@ function dayKey(value: Date | string) {
 
 function ActivityLog() {
 	const { activity, meetings, members } = Route.useLoaderData();
-	const { clubs } = Route.useRouteContext();
-	const clubId = clubs[0]?.clubId;
+	const { activeClubId } = Route.useRouteContext();
+	const clubId = activeClubId;
 
 	const [meetingId, setMeetingId] = useState<string>(ALL);
 	const [actorMemberId, setActorMemberId] = useState<string>(ALL);

@@ -18,7 +18,7 @@ export const Route = createFileRoute("/_authed/schedule")({
 	}),
 	loaderDeps: ({ search }) => ({ count: search.count }),
 	loader: async ({ context, deps }) => {
-		const clubId = context.clubs[0]?.clubId;
+		const clubId = context.activeClubId;
 		if (!clubId) return { data: null };
 		return {
 			data: await getSeasonGrid({ data: { clubId, count: deps.count } }),

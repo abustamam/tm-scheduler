@@ -5,14 +5,14 @@ import { Button } from "#/components/ui/button";
 import { getNextMeeting } from "#/server/meetings";
 
 /**
- * Shortcut to the club's next meeting. Resolves `clubs[0]`'s soonest upcoming
+ * Shortcut to the club's next meeting. Resolves the active club's soonest upcoming
  * meeting and redirects to its `/meetings/$id` page; when nothing is scheduled
  * (or the user has no club), renders the empty state instead. There is no
  * standalone "agenda" screen — a meeting IS its agenda (#141).
  */
 export const Route = createFileRoute("/_authed/next")({
 	loader: async ({ context }) => {
-		const clubId = context.clubs[0]?.clubId;
+		const clubId = context.activeClubId;
 		if (!clubId) return { canManage: false };
 		const data = await getNextMeeting({ data: clubId });
 		if (data.meeting) {
