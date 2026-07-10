@@ -2,7 +2,7 @@
  * DB-backed integration test for the minutes-email port's REAL method,
  * `loadHeader` (meetings + clubs are existing tables). The other two port
  * methods (renderMinutesPdf, loadRecipients) depend on #152 and are stubbed to
- * throw, so they are not exercised here — see minutes-email-port.stub.ts.
+ * throw, so they are not exercised here — see minutes-email-port.ts. (Post-integration these methods are real; this suite still drives the send path with a mock port.)
  *
  * It also drives `sendMinutesEmail` end-to-end against the real header + a mock
  * PDF/recipients, capturing the sendEmail params, to prove recipient resolution

@@ -50,6 +50,7 @@ import {
 	updateMeeting,
 } from "#/server/meetings";
 import { getMinutes } from "#/server/minutes";
+import { getMinutesRecipients } from "#/server/minutes-email";
 import {
 	addRoleSlot,
 	addSpeakerSlot,
@@ -87,7 +88,15 @@ export const Route = createFileRoute("/_authed/meetings/$id")({
 					program: [],
 				}) as Awaited<ReturnType<typeof getMinutes>>,
 		);
-		return { ...data, navItems, minutes };
+		// Default email recipients (#165) — only for admins on a completed meeting
+		// (the send control is hidden otherwise). Non-fatal: degrade to no control.
+		const minutesEmail =
+			minutes.visible && minutes.canEdit && isMeetingLocked(data.meeting.status)
+				? await getMinutesRecipients({
+						data: { clubId: data.meeting.clubId, meetingId: params.id },
+					}).catch(() => null)
+				: null;
+		return { ...data, navItems, minutes, minutesEmail };
 	},
 	component: MeetingDetail,
 });
@@ -114,6 +123,7 @@ function MeetingDetail() {
 		clubMeetingSchedule,
 		clubGuests,
 		minutes,
+		minutesEmail,
 	} = Route.useLoaderData();
 	const { currentMemberId } = Route.useRouteContext();
 	const router = useRouter();
@@ -369,6 +379,17 @@ function MeetingDetail() {
 					canEdit={minutes.canEdit}
 					clubGuests={clubGuests}
 					onMutated={() => router.invalidate()}
+					email={
+						minutesEmail
+							? {
+									clubId: meeting.clubId,
+									clubName,
+									meetingDate: meeting.scheduledAt,
+									recipients: minutesEmail.recipients,
+									skipped: minutesEmail.skipped,
+								}
+							: null
+					}
 				/>
 			) : null}
 

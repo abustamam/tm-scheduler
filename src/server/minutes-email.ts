@@ -1,7 +1,7 @@
 // Server-fn wrappers for the minutes-email flow (#165). Per the server-module
 // rule (enforced by server-modules.guard.test.ts), this file exports ONLY
 // createServerFns + types — all db/logic lives in `minutes-email-logic.ts` and
-// the concrete port in `minutes-email-port.stub.ts`, so the Start compiler can
+// the concrete port in `minutes-email-port-logic.ts`, so the Start compiler can
 // strip the db-touching code from the client bundle.
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
@@ -11,7 +11,7 @@ import {
 	resolveMinutesRecipients,
 	sendMinutesEmail,
 } from "./minutes-email-logic";
-import { createMinutesEmailPortStub } from "./minutes-email-port.stub";
+import { createMinutesEmailPort } from "./minutes-email-port-logic";
 
 const recipientSchema = z.object({
 	name: z.string().trim().min(1),
@@ -41,7 +41,7 @@ export const sendMeetingMinutesEmail = createServerFn({ method: "POST" })
 	.handler(async ({ data }) => {
 		const user = await requireUser();
 		await requireClubRole(user.id, data.clubId, ["admin"]);
-		const port = createMinutesEmailPortStub();
+		const port = createMinutesEmailPort();
 		return sendMinutesEmail(
 			port,
 			{ sendEmail },
@@ -58,11 +58,6 @@ export const sendMeetingMinutesEmail = createServerFn({ method: "POST" })
  * Resolve the DEFAULT recipient list (active members + present guests) for a
  * meeting, split into `recipients` (have email) and `skipped` (no email on
  * file), for prefilling the "Send minutes" editor. ADMIN-ONLY.
- *
- * INTEGRATION TODO: this depends on the port's `loadRecipients`, which is
- * stubbed until #152 lands (see minutes-email-port.stub.ts). Until wired it
- * throws; the UI can instead be seeded with recipients #152's Minutes tab
- * already has on hand (the `initialRecipients` prop).
  */
 export const getMinutesRecipients = createServerFn({ method: "GET" })
 	.validator((i: unknown) =>
@@ -73,6 +68,6 @@ export const getMinutesRecipients = createServerFn({ method: "GET" })
 	.handler(async ({ data }) => {
 		const user = await requireUser();
 		await requireClubRole(user.id, data.clubId, ["admin"]);
-		const port = createMinutesEmailPortStub();
+		const port = createMinutesEmailPort();
 		return resolveMinutesRecipients(await port.loadRecipients(data.meetingId));
 	});

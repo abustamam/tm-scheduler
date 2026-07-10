@@ -1,6 +1,7 @@
 import { ChevronDown, ChevronUp, Download, X } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { SendMinutesDialog } from "#/components/minutes/send-minutes-dialog";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import {
@@ -63,6 +64,7 @@ export function MeetingMinutes({
 	canEdit,
 	clubGuests,
 	onMutated,
+	email,
 }: {
 	meetingId: string;
 	minutes: MinutesData;
@@ -70,6 +72,17 @@ export function MeetingMinutes({
 	canEdit: boolean;
 	clubGuests: { id: string; name: string }[];
 	onMutated: () => void | Promise<void>;
+	/**
+	 * Email-the-minutes context (#165), present only for admins on a completed
+	 * meeting. Null hides the "Send minutes" control (the PDF still downloads).
+	 */
+	email?: {
+		clubId: string;
+		clubName: string;
+		meetingDate: Date | string;
+		recipients: { name: string; email: string }[];
+		skipped: { name: string }[];
+	} | null;
 }) {
 	const [busy, setBusy] = useState(false);
 
@@ -96,16 +109,28 @@ export function MeetingMinutes({
 						happened.
 					</CardDescription>
 				</div>
-				<Button asChild variant="outline" size="sm">
-					<a
-						href={`/api/meetings/${meetingId}/minutes/pdf`}
-						target="_blank"
-						rel="noopener noreferrer"
-					>
-						<Download />
-						Download PDF
-					</a>
-				</Button>
+				<div className="flex items-center gap-2">
+					<Button asChild variant="outline" size="sm">
+						<a
+							href={`/api/meetings/${meetingId}/minutes/pdf`}
+							target="_blank"
+							rel="noopener noreferrer"
+						>
+							<Download />
+							Download PDF
+						</a>
+					</Button>
+					{email ? (
+						<SendMinutesDialog
+							clubId={email.clubId}
+							meetingId={meetingId}
+							clubName={email.clubName}
+							meetingDate={email.meetingDate}
+							initialRecipients={email.recipients}
+							skipped={email.skipped}
+						/>
+					) : null}
+				</div>
 			</CardHeader>
 			<CardContent className="space-y-8">
 				<AttendanceSection

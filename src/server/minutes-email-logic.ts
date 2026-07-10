@@ -19,11 +19,10 @@ import { formatMeetingDate } from "#/lib/format";
 // ---------------------------------------------------------------------------
 
 /**
- * The data/rendering the minutes-email flow needs from #152. Injected so this
- * slice compiles and tests without #152's `meeting_attendance` table or its
- * `renderMinutesPdf`. A concrete implementation lives in
- * `minutes-email-port.stub.ts` (the human swaps its stubbed methods for #152's
- * real functions at integration).
+ * The data/rendering the minutes-email flow needs from #152, injected so the
+ * orchestration stays pure and unit-testable with a mock. The concrete
+ * implementation lives in `minutes-email-port-logic.ts` (reuses #152's
+ * `renderMinutesPdf` and queries the `meeting_attendance` roster/guests).
  */
 export interface MinutesEmailPort {
 	/** #152's server-side PDF generator — the SAME one the download uses, so the
