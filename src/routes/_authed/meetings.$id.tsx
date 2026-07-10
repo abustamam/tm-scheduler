@@ -37,6 +37,7 @@ import {
 	SheetTitle,
 } from "#/components/ui/sheet";
 import { buildRoleCounts, slotLabel, summarizeAgenda } from "#/lib/agenda";
+import { buildSlideDeck } from "#/lib/agenda-slides";
 import { utcToZonedWallTime } from "#/lib/datetime";
 import { formatMeetingDate, formatMeetingTimeRange } from "#/lib/format";
 import { deriveMeetingNavItems } from "#/lib/meeting-nav";
@@ -102,6 +103,10 @@ function MeetingDetail() {
 		roleRecency,
 		navItems,
 		clubRoles,
+		clubName,
+		clubNumber,
+		clubDistrict,
+		clubMeetingSchedule,
 	} = Route.useLoaderData();
 	const { currentMemberId } = Route.useRouteContext();
 	const router = useRouter();
@@ -115,6 +120,18 @@ function MeetingDetail() {
 	// Number repeated roles ("Speaker 1", "Speaker 2", …).
 	const roleCounts = buildRoleCounts(slots);
 	const summary = summarizeAgenda(slots);
+	// Same deck present mode renders — reused as the source for the .pptx export.
+	const deck = buildSlideDeck(
+		meeting,
+		{
+			name: clubName,
+			clubNumber,
+			district: clubDistrict,
+			timezone,
+			meetingSchedule: clubMeetingSchedule,
+		},
+		slots,
+	);
 	const pairedIds = pairedRoleIds(clubRoles);
 	const addableRoles = clubRoles.filter((r) => !pairedIds.has(r.id));
 
@@ -342,7 +359,12 @@ function MeetingDetail() {
 						path={`/club/${clubSlug}/meeting/${meeting.id}`}
 						label="Copy member link"
 					/>
-					<MeetingViewActions clubSlug={clubSlug} meetingId={meeting.id} />
+					<MeetingViewActions
+						clubSlug={clubSlug}
+						meetingId={meeting.id}
+						deck={deck}
+						clubName={clubName}
+					/>
 					{canManage && addableRoles.length > 0 ? (
 						<Button
 							size="sm"

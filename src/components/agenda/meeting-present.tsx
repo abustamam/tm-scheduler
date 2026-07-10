@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { PptxDownloadButton } from "#/components/club/pptx-download-button";
 import type { Slide } from "#/lib/agenda-slides";
 
 // Plain, projection-friendly palette modeled on the official Toastmasters deck:
@@ -53,6 +54,11 @@ export function MeetingPresent({
 			className="fixed inset-0 flex flex-col"
 			style={{ background: GROUND, color: INK }}
 		>
+			{/* Editable .pptx export — above the click zones so it stays clickable. */}
+			<div className="absolute top-[2vmin] right-[2vmin] z-20">
+				<PptxDownloadButton deck={deck} clubName={clubName} />
+			</div>
+
 			<button
 				type="button"
 				aria-label="Previous slide"
