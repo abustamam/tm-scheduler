@@ -1,7 +1,7 @@
 // Speaker-slot management DB logic, split out from `slots.ts` (a createServerFn
 // module the guard test forbids from exporting db-touching functions).
 // Integration-testable by mocking `#/db`.
-import { and, eq } from "drizzle-orm";
+import { and, eq, gt } from "drizzle-orm";
 import { db } from "#/db";
 import {
 	meetings,
@@ -10,7 +10,10 @@ import {
 	roleSlots,
 	speeches,
 } from "#/db/schema";
-import { pickSpeakerAndEvaluatorRoles } from "#/lib/meeting-roles";
+import {
+	pairedRoleIds,
+	pickSpeakerAndEvaluatorRoles,
+} from "#/lib/meeting-roles";
 import { logActivity } from "./activity";
 
 // Either the main db client or a drizzle transaction — so speech helpers can run
@@ -86,6 +89,181 @@ export async function applyAddSpeakerSlot(input: {
 		});
 	});
 	return { clubId: meeting.clubId };
+}
+
+/** The club's role defs in the shape `pairedRoleIds` needs, plus name/id. */
+async function clubRoleDefs(clubId: string) {
+	return db
+		.select({
+			id: roleDefinitions.id,
+			name: roleDefinitions.name,
+			category: roleDefinitions.category,
+			defaultCount: roleDefinitions.defaultCount,
+			sortOrder: roleDefinitions.sortOrder,
+			isSpeakerRole: roleDefinitions.isSpeakerRole,
+		})
+		.from(roleDefinitions)
+		.where(eq(roleDefinitions.clubId, clubId));
+}
+
+/** Add one open slot of an arbitrary non-paired role to a meeting. Duplicates
+ *  allowed (next slotIndex). Rejects the speaker/paired-evaluator roles (those
+ *  go through the +/- speaker buttons) and roles from another club. */
+export async function applyAddRoleSlot(input: {
+	meetingId: string;
+	roleDefinitionId: string;
+	actorMemberId: string | null;
+}) {
+	const meeting = await db.query.meetings.findFirst({
+		where: eq(meetings.id, input.meetingId),
+	});
+	if (!meeting) throw new Error("Meeting not found.");
+
+	const defs = await clubRoleDefs(meeting.clubId);
+	const role = defs.find((d) => d.id === input.roleDefinitionId);
+	if (!role) throw new Error("Role not found for this club.");
+	if (pairedRoleIds(defs).has(role.id)) {
+		throw new Error("Add speakers with the speaker controls.");
+	}
+
+	const existing = await db
+		.select({ slotIndex: roleSlots.slotIndex })
+		.from(roleSlots)
+		.where(
+			and(
+				eq(roleSlots.meetingId, input.meetingId),
+				eq(roleSlots.roleDefinitionId, input.roleDefinitionId),
+			),
+		);
+	const slotIndex = nextIndex(existing.map((s) => s.slotIndex));
+
+	await db.transaction(async (tx) => {
+		await tx.insert(roleSlots).values({
+			meetingId: input.meetingId,
+			roleDefinitionId: input.roleDefinitionId,
+			slotIndex,
+		});
+		await logActivity(tx, {
+			clubId: meeting.clubId,
+			actorMemberId: input.actorMemberId,
+			action: "meeting_edit",
+			targetType: "meeting",
+			targetId: input.meetingId,
+			detail: {
+				change: "role_added",
+				roleDefinitionId: input.roleDefinitionId,
+			},
+		});
+	});
+	return { clubId: meeting.clubId };
+}
+
+/** Remove one unclaimed, non-paired slot from a meeting. Rejects a claimed slot
+ *  (never destroys an assignment) and the speaker/paired-evaluator roles. */
+export async function applyRemoveRoleSlot(input: {
+	slotId: string;
+	actorMemberId: string | null;
+}) {
+	const [slot] = await db
+		.select({
+			id: roleSlots.id,
+			meetingId: roleSlots.meetingId,
+			roleDefinitionId: roleSlots.roleDefinitionId,
+			status: roleSlots.status,
+			assignedMemberId: roleSlots.assignedMemberId,
+			clubId: meetings.clubId,
+		})
+		.from(roleSlots)
+		.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+		.where(eq(roleSlots.id, input.slotId))
+		.limit(1);
+	if (!slot) throw new Error("Role not found.");
+	if (slot.assignedMemberId || slot.status !== "open") {
+		throw new Error("Release the role before removing it.");
+	}
+
+	const defs = await clubRoleDefs(slot.clubId);
+	if (pairedRoleIds(defs).has(slot.roleDefinitionId)) {
+		throw new Error("Remove speakers with the speaker controls.");
+	}
+
+	await db.transaction(async (tx) => {
+		await tx.delete(roleSlots).where(eq(roleSlots.id, input.slotId));
+		await logActivity(tx, {
+			clubId: slot.clubId,
+			actorMemberId: input.actorMemberId,
+			action: "meeting_edit",
+			targetType: "meeting",
+			targetId: slot.meetingId,
+			detail: {
+				change: "role_removed",
+				roleDefinitionId: slot.roleDefinitionId,
+			},
+		});
+	});
+	return { clubId: slot.clubId };
+}
+
+/** Presence-based template backfill: for every upcoming meeting (scheduledAt >
+ *  now), add one open slot of each standard (defaultCount >= 1), non-paired role
+ *  the meeting has zero of. Never tops up counts, never adds speakers/paired
+ *  evaluators, never touches past meetings. Idempotent. Returns how many
+ *  meetings changed and the distinct role names added. */
+export async function applyTemplateSyncToUpcomingMeetings(input: {
+	clubId: string;
+	actorMemberId: string | null;
+}) {
+	const defs = await clubRoleDefs(input.clubId);
+	const paired = pairedRoleIds(defs);
+	const standard = defs.filter((d) => d.defaultCount >= 1 && !paired.has(d.id));
+
+	const upcoming = await db
+		.select({ id: meetings.id })
+		.from(meetings)
+		.where(
+			and(
+				eq(meetings.clubId, input.clubId),
+				gt(meetings.scheduledAt, new Date()),
+			),
+		);
+
+	const rolesAdded = new Set<string>();
+	let meetingsChanged = 0;
+
+	await db.transaction(async (tx) => {
+		for (const m of upcoming) {
+			const present = await tx
+				.select({ roleDefinitionId: roleSlots.roleDefinitionId })
+				.from(roleSlots)
+				.where(eq(roleSlots.meetingId, m.id));
+			const presentIds = new Set(present.map((s) => s.roleDefinitionId));
+			const missing = standard.filter((d) => !presentIds.has(d.id));
+			if (missing.length === 0) continue;
+
+			await tx.insert(roleSlots).values(
+				missing.map((d) => ({
+					meetingId: m.id,
+					roleDefinitionId: d.id,
+					slotIndex: 0,
+				})),
+			);
+			for (const d of missing) rolesAdded.add(d.name);
+			await logActivity(tx, {
+				clubId: input.clubId,
+				actorMemberId: input.actorMemberId,
+				action: "meeting_edit",
+				targetType: "meeting",
+				targetId: m.id,
+				detail: {
+					change: "template_sync",
+					roleDefinitionIds: missing.map((d) => d.id),
+				},
+			});
+			meetingsChanged += 1;
+		}
+	});
+
+	return { meetingsChanged, rolesAdded: [...rolesAdded] };
 }
 
 /** Highest-index unclaimed (open, unassigned) slot id for a role, or null. */

@@ -12,6 +12,7 @@ import {
 	reorderRolesSchema,
 	updateRoleSchema,
 } from "./role-definitions-logic";
+import { applyTemplateSyncToUpcomingMeetings } from "./slots-logic";
 
 const uuid = z.string().uuid();
 
@@ -62,4 +63,21 @@ export const deleteClubRole = createServerFn({ method: "POST" })
 		const currentUser = await requireUser();
 		await requireClubRole(currentUser.id, data.clubId, ["admin"]);
 		return applyRoleDefinitionDelete(data);
+	});
+
+const syncTemplateSchema = z.object({
+	clubId: z.string().uuid(),
+	actorMemberId: z.string().uuid().nullable().optional(),
+});
+
+/** Backfill missing standard roles onto all upcoming meetings. AUTHED — admin. */
+export const syncTemplateToUpcomingMeetings = createServerFn({ method: "POST" })
+	.validator((input: unknown) => syncTemplateSchema.parse(input))
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		await requireClubRole(currentUser.id, data.clubId, ["admin"]);
+		return applyTemplateSyncToUpcomingMeetings({
+			clubId: data.clubId,
+			actorMemberId: data.actorMemberId ?? null,
+		});
 	});

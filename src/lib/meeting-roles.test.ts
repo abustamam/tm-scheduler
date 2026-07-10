@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	isTmodRoleName,
+	pairedRoleIds,
 	pickSpeakerAndEvaluatorRoles,
 	type RoleDefLite,
 } from "./meeting-roles";
@@ -77,5 +78,39 @@ describe("pickSpeakerAndEvaluatorRoles", () => {
 		expect(() =>
 			pickSpeakerAndEvaluatorRoles([def({ category: "evaluator" })]),
 		).toThrow();
+	});
+});
+
+describe("pairedRoleIds", () => {
+	it("returns the speaker + highest-count evaluator ids", () => {
+		const ids = pairedRoleIds([
+			def({
+				id: "spk",
+				category: "speaker",
+				isSpeakerRole: true,
+				sortOrder: 1,
+			}),
+			def({ id: "ev", category: "evaluator", defaultCount: 3, sortOrder: 2 }),
+			def({
+				id: "gen-ev",
+				category: "evaluator",
+				defaultCount: 1,
+				sortOrder: 3,
+			}),
+			def({ id: "timer", sortOrder: 4 }),
+		]);
+		expect(ids).toEqual(new Set(["spk", "ev"]));
+	});
+
+	it("is empty when the club has no speaker role", () => {
+		expect(pairedRoleIds([def({ id: "timer" })])).toEqual(new Set());
+	});
+
+	it("returns just the speaker when there is no evaluator role", () => {
+		expect(
+			pairedRoleIds([
+				def({ id: "spk", category: "speaker", isSpeakerRole: true }),
+			]),
+		).toEqual(new Set(["spk"]));
 	});
 });
