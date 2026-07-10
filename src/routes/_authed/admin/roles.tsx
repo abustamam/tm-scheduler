@@ -11,6 +11,7 @@ import {
 	deleteClubRole,
 	listClubRoles,
 	reorderClubRoles,
+	syncTemplateToUpcomingMeetings,
 	updateClubRole,
 } from "#/server/role-definitions";
 import type { RoleDefinitionRow } from "#/server/role-definitions-logic";
@@ -43,7 +44,7 @@ const selectClass =
 	"flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
 
 function RolesManager() {
-	const { adminClub } = Route.useRouteContext();
+	const { adminClub, currentMemberId } = Route.useRouteContext();
 	const { roles } = Route.useLoaderData();
 	const router = useRouter();
 	const clubId = adminClub.clubId;
@@ -63,18 +64,57 @@ function RolesManager() {
 		}
 	}
 
+	const [syncing, setSyncing] = useState(false);
+	async function syncUpcoming() {
+		setSyncing(true);
+		try {
+			const res = await syncTemplateToUpcomingMeetings({
+				data: { clubId, actorMemberId: currentMemberId },
+			});
+			if (res.meetingsChanged === 0) {
+				toast.success("Upcoming meetings already match the standard set.");
+			} else {
+				const plural = res.meetingsChanged === 1 ? "" : "s";
+				toast.success(
+					`Added ${res.rolesAdded.join(", ")} to ${res.meetingsChanged} upcoming meeting${plural}.`,
+				);
+			}
+			await router.invalidate();
+		} catch (err) {
+			toast.error(
+				err instanceof Error ? err.message : "Couldn't update meetings.",
+			);
+		} finally {
+			setSyncing(false);
+		}
+	}
+
 	return (
 		<PageContainer className="space-y-6">
-			<div>
-				<h1 className="font-display text-[30px] font-semibold tracking-[-0.02em]">
-					Meeting roles
-				</h1>
-				<p className="text-sm text-muted-foreground">
-					The role template for {adminClub.name}. Descriptions show on the
-					sign-up sheet and the public shared agenda. Changing a role's default
-					count only affects meetings created afterwards — existing meetings
-					keep their slots.
-				</p>
+			<div className="flex flex-wrap items-start justify-between gap-3">
+				<div>
+					<h1 className="font-display text-[30px] font-semibold tracking-[-0.02em]">
+						Meeting roles
+					</h1>
+					<p className="text-sm text-muted-foreground">
+						The role template for {adminClub.name}. Descriptions show on the
+						sign-up sheet and the public shared agenda. Changing a role's
+						default count only affects meetings created afterwards — existing
+						meetings keep their slots.
+					</p>
+				</div>
+				<Button
+					size="sm"
+					variant="outline"
+					onClick={syncUpcoming}
+					disabled={syncing}
+				>
+					{syncing ? (
+						<Loader2 className="size-4 animate-spin" />
+					) : (
+						"Update upcoming meetings to match"
+					)}
+				</Button>
 			</div>
 
 			<div className="space-y-3">
@@ -92,7 +132,11 @@ function RolesManager() {
 				))}
 			</div>
 
-			<AddRoleForm clubId={clubId} onAdded={() => router.invalidate()} />
+			<AddRoleForm
+				clubId={clubId}
+				onAdded={() => router.invalidate()}
+				onSync={syncUpcoming}
+			/>
 		</PageContainer>
 	);
 }
@@ -294,9 +338,11 @@ function RoleCard({
 function AddRoleForm({
 	clubId,
 	onAdded,
+	onSync,
 }: {
 	clubId: string;
 	onAdded: () => Promise<void> | void;
+	onSync: () => Promise<void> | void;
 }) {
 	const [submitting, setSubmitting] = useState(false);
 
@@ -318,7 +364,14 @@ function AddRoleForm({
 					description: String(form.get("description") ?? ""),
 				},
 			});
-			toast.success("Role added.");
+			toast.success("Role added.", {
+				action: {
+					label: "Update upcoming meetings",
+					onClick: () => {
+						void onSync();
+					},
+				},
+			});
 			el.reset();
 			await onAdded();
 		} catch (err) {
