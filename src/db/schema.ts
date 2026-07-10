@@ -91,6 +91,23 @@ export const activityActionEnum = pgEnum("activity_action", [
 	"meeting_edit",
 ]);
 
+// Presence state on a `meeting_attendance` row (ADR-0014 / #152). Members
+// default to `absent`; a member holding a role slot is pre-filled `present`.
+// Guests are always stored `present` (a guest who didn't come isn't listed).
+export const attendanceStatusEnum = pgEnum("attendance_status", [
+	"present",
+	"absent",
+	"excused",
+]);
+
+// The three award/ribbon categories captured in the minutes (ADR-0014 / #152).
+// One winner (a member XOR a guest) per category per meeting; all optional.
+export const awardCategoryEnum = pgEnum("award_category", [
+	"best_speaker",
+	"best_evaluator",
+	"best_table_topics",
+]);
+
 // ---------------------------------------------------------------------------
 // Clubs & memberships
 // ---------------------------------------------------------------------------
@@ -398,6 +415,112 @@ export const memberAvailability = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// Meeting minutes — a record OVER the `meetings` row (ADR-0014 / #152). Three
+// child tables (attendance, Table Topics speakers, awards); the `meetings` row
+// is the header (date, theme, Word of the Day) — there is no minutes-header
+// table. Each assignee mirrors `role_slots`: a member XOR a guest, enforced by
+// a DB check constraint (at most one of the two is non-null). All cascade on
+// meeting delete.
+// ---------------------------------------------------------------------------
+
+export const meetingAttendance = pgTable(
+	"meeting_attendance",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		meetingId: uuid("meeting_id")
+			.notNull()
+			.references(() => meetings.id, { onDelete: "cascade" }),
+		// Member XOR guest. A member row snapshots roster presence and persists
+		// even if the member's roster status later changes (on member delete →
+		// set null keeps the historical count, though such rows carry no name).
+		memberId: uuid("member_id").references(() => members.id, {
+			onDelete: "set null",
+		}),
+		// A non-member guest present at the meeting (ADR-0013). Guests are stored
+		// with status `present` (a guest who didn't come isn't listed).
+		guestId: uuid("guest_id").references(() => guests.id, {
+			onDelete: "cascade",
+		}),
+		status: attendanceStatusEnum("status").notNull().default("absent"),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+		updatedAt: timestamp("updated_at").defaultNow().notNull(),
+	},
+	(t) => [
+		index("meeting_attendance_meeting_idx").on(t.meetingId),
+		// One attendance row per member per meeting, and one per guest per meeting.
+		// Plain (non-partial) unique indexes so ON CONFLICT can infer them as
+		// arbiters; Postgres treats NULLs as distinct, so the many member rows
+		// (guest_id NULL) and many guest rows (member_id NULL) never collide.
+		uniqueIndex("meeting_attendance_member_unique").on(t.meetingId, t.memberId),
+		uniqueIndex("meeting_attendance_guest_unique").on(t.meetingId, t.guestId),
+		// At most one assignee: a member OR a guest, never both (mirrors role_slots).
+		check(
+			"meeting_attendance_single_assignee",
+			sql`${t.memberId} is null or ${t.guestId} is null`,
+		),
+	],
+);
+
+export const tableTopicsSpeakers = pgTable(
+	"table_topics_speakers",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		meetingId: uuid("meeting_id")
+			.notNull()
+			.references(() => meetings.id, { onDelete: "cascade" }),
+		memberId: uuid("member_id").references(() => members.id, {
+			onDelete: "set null",
+		}),
+		guestId: uuid("guest_id").references(() => guests.id, {
+			onDelete: "cascade",
+		}),
+		// The impromptu prompt/topic the speaker answered. Optional.
+		topic: text("topic"),
+		// Display order within a meeting (0-based). Reordered by the admin.
+		sortOrder: integer("sort_order").notNull().default(0),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+	},
+	(t) => [
+		index("table_topics_speakers_meeting_idx").on(t.meetingId),
+		check(
+			"table_topics_speakers_single_assignee",
+			sql`${t.memberId} is null or ${t.guestId} is null`,
+		),
+	],
+);
+
+export const meetingAwards = pgTable(
+	"meeting_awards",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		meetingId: uuid("meeting_id")
+			.notNull()
+			.references(() => meetings.id, { onDelete: "cascade" }),
+		category: awardCategoryEnum("category").notNull(),
+		memberId: uuid("member_id").references(() => members.id, {
+			onDelete: "set null",
+		}),
+		guestId: uuid("guest_id").references(() => guests.id, {
+			onDelete: "cascade",
+		}),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+		updatedAt: timestamp("updated_at").defaultNow().notNull(),
+	},
+	(t) => [
+		index("meeting_awards_meeting_idx").on(t.meetingId),
+		// One winner per category per meeting (single-valued award).
+		uniqueIndex("meeting_awards_meeting_category_unique").on(
+			t.meetingId,
+			t.category,
+		),
+		check(
+			"meeting_awards_single_assignee",
+			sql`${t.memberId} is null or ${t.guestId} is null`,
+		),
+	],
+);
+
+// ---------------------------------------------------------------------------
 // Speeches — first-class, Person-owned content (ADR-0009 / #79).
 //
 // A speech is durable and independent of the schedule: it belongs to a Person
@@ -683,6 +806,60 @@ export const meetingsRelations = relations(meetings, ({ one, many }) => ({
 		references: [clubs.id],
 	}),
 	slots: many(roleSlots),
+	attendance: many(meetingAttendance),
+	tableTopicsSpeakers: many(tableTopicsSpeakers),
+	awards: many(meetingAwards),
+}));
+
+export const meetingAttendanceRelations = relations(
+	meetingAttendance,
+	({ one }) => ({
+		meeting: one(meetings, {
+			fields: [meetingAttendance.meetingId],
+			references: [meetings.id],
+		}),
+		member: one(members, {
+			fields: [meetingAttendance.memberId],
+			references: [members.id],
+		}),
+		guest: one(guests, {
+			fields: [meetingAttendance.guestId],
+			references: [guests.id],
+		}),
+	}),
+);
+
+export const tableTopicsSpeakersRelations = relations(
+	tableTopicsSpeakers,
+	({ one }) => ({
+		meeting: one(meetings, {
+			fields: [tableTopicsSpeakers.meetingId],
+			references: [meetings.id],
+		}),
+		member: one(members, {
+			fields: [tableTopicsSpeakers.memberId],
+			references: [members.id],
+		}),
+		guest: one(guests, {
+			fields: [tableTopicsSpeakers.guestId],
+			references: [guests.id],
+		}),
+	}),
+);
+
+export const meetingAwardsRelations = relations(meetingAwards, ({ one }) => ({
+	meeting: one(meetings, {
+		fields: [meetingAwards.meetingId],
+		references: [meetings.id],
+	}),
+	member: one(members, {
+		fields: [meetingAwards.memberId],
+		references: [members.id],
+	}),
+	guest: one(guests, {
+		fields: [meetingAwards.guestId],
+		references: [guests.id],
+	}),
 }));
 
 export const roleDefinitionsRelations = relations(

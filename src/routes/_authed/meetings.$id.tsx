@@ -14,6 +14,7 @@ import {
 	MeetingAgenda,
 	type MeetingAgendaActions,
 } from "#/components/agenda/meeting-agenda";
+import { MeetingMinutes } from "#/components/club/meeting-minutes";
 import { MeetingNavStrip } from "#/components/club/meeting-nav-strip";
 import { MeetingViewActions } from "#/components/club/meeting-view-actions";
 import { PageContainer } from "#/components/page-container";
@@ -48,6 +49,7 @@ import {
 	reopenMeeting,
 	updateMeeting,
 } from "#/server/meetings";
+import { getMinutes } from "#/server/minutes";
 import {
 	addRoleSlot,
 	addSpeakerSlot,
@@ -74,7 +76,18 @@ export const Route = createFileRoute("/_authed/meetings/$id")({
 			upcoming,
 			data.timezone,
 		);
-		return { ...data, navItems };
+		// Minutes (ADR-0014 / #152): non-fatal — degrade to a hidden section if
+		// the load fails, never block the page.
+		const minutes = await getMinutes({ data: params.id }).catch(
+			() =>
+				({
+					visible: false,
+					canEdit: false,
+					data: null,
+					program: [],
+				}) as Awaited<ReturnType<typeof getMinutes>>,
+		);
+		return { ...data, navItems, minutes };
 	},
 	component: MeetingDetail,
 });
@@ -100,6 +113,7 @@ function MeetingDetail() {
 		clubDistrict,
 		clubMeetingSchedule,
 		clubGuests,
+		minutes,
 	} = Route.useLoaderData();
 	const { currentMemberId } = Route.useRouteContext();
 	const router = useRouter();
@@ -346,6 +360,17 @@ function MeetingDetail() {
 				pairedRoleIds={pairedIds}
 				clubGuests={clubGuests}
 			/>
+
+			{minutes.visible && minutes.data ? (
+				<MeetingMinutes
+					meetingId={meeting.id}
+					minutes={minutes.data}
+					program={minutes.program}
+					canEdit={minutes.canEdit}
+					clubGuests={clubGuests}
+					onMutated={() => router.invalidate()}
+				/>
+			) : null}
 
 			{canManage ? (
 				<EditMeetingDialog

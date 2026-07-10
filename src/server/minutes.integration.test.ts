@@ -1,0 +1,262 @@
+/**
+ * DB-backed integration tests for meeting minutes (ADR-0014 / #152).
+ *
+ * Exercises the REAL minutes logic against a live Postgres identified by
+ * TEST_DATABASE_URL: the attendance pre-fill from role slots, guest add/reuse,
+ * the member-XOR-guest DB check constraints, Table Topics ordering, award
+ * upsert/clear, and the loaded minutes shape. `#/db` is mocked to the test
+ * client so the logic modules import cleanly without a production DATABASE_URL.
+ *
+ * When TEST_DATABASE_URL is unset the whole suite is skipped.
+ */
+import { eq } from "drizzle-orm";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	guests,
+	meetingAttendance,
+	meetingAwards,
+	roleSlots,
+	tableTopicsSpeakers,
+} from "#/db/schema";
+import {
+	cleanup,
+	hasTestDb,
+	type SeededClub,
+	seedClub,
+	testDb,
+} from "#/test/db";
+
+vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
+
+const {
+	addGuestPresent,
+	addTableTopicsSpeaker,
+	clearAward,
+	loadMinutes,
+	moveTableTopicsSpeaker,
+	removeGuestPresent,
+	removeTableTopicsSpeaker,
+	setAward,
+	setMemberPresence,
+} = await import("#/server/minutes-logic");
+
+describe.skipIf(!hasTestDb)("meeting minutes (#152)", () => {
+	let seed: SeededClub;
+
+	beforeEach(async () => {
+		seed = await seedClub();
+	});
+
+	afterEach(async () => {
+		await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
+	});
+
+	async function newGuest(name: string): Promise<string> {
+		const [g] = await testDb
+			.insert(guests)
+			.values({ clubId: seed.clubId, name })
+			.returning({ id: guests.id });
+		return g!.id;
+	}
+
+	async function assignSlotToMember(memberId: string) {
+		await testDb
+			.update(roleSlots)
+			.set({ assignedMemberId: memberId, status: "claimed" })
+			.where(eq(roleSlots.id, seed.slotId));
+	}
+
+	it("pre-fills present for role-slot holders; others default absent", async () => {
+		await assignSlotToMember(seed.memberId);
+
+		const m = await loadMinutes(seed.meetingId);
+		const withRole = m.members.find((x) => x.memberId === seed.memberId);
+		const without = m.members.find((x) => x.memberId === seed.adminMemberId);
+		expect(withRole).toMatchObject({ status: "present", hasRole: true });
+		expect(without).toMatchObject({ status: "absent", hasRole: false });
+		expect(m.counts.present).toBe(1);
+		expect(m.counts.absent).toBe(1);
+	});
+
+	it("setMemberPresence overrides the pre-fill and upserts idempotently", async () => {
+		await assignSlotToMember(seed.memberId);
+
+		await setMemberPresence({
+			meetingId: seed.meetingId,
+			memberId: seed.memberId,
+			status: "excused",
+		});
+		let m = await loadMinutes(seed.meetingId);
+		expect(m.members.find((x) => x.memberId === seed.memberId)?.status).toBe(
+			"excused",
+		);
+		expect(m.counts.excused).toBe(1);
+
+		// Second write updates the same row (no duplicate — the unique index).
+		await setMemberPresence({
+			meetingId: seed.meetingId,
+			memberId: seed.memberId,
+			status: "absent",
+		});
+		m = await loadMinutes(seed.meetingId);
+		expect(m.members.find((x) => x.memberId === seed.memberId)?.status).toBe(
+			"absent",
+		);
+		const rows = await testDb
+			.select({ id: meetingAttendance.id })
+			.from(meetingAttendance)
+			.where(eq(meetingAttendance.meetingId, seed.meetingId));
+		expect(rows).toHaveLength(1);
+	});
+
+	it("adds a NEW present guest and reuses an existing one without duplicating", async () => {
+		const { guestId } = await addGuestPresent({
+			meetingId: seed.meetingId,
+			newGuest: { name: "Ben Carter", email: "ben@example.com" },
+		});
+		let m = await loadMinutes(seed.meetingId);
+		expect(m.guests).toEqual([
+			{ guestId, name: "Ben Carter", fromRole: false },
+		]);
+		expect(m.counts.guests).toBe(1);
+
+		// Re-adding the same guest is a no-op (unique per meeting+guest).
+		await addGuestPresent({ meetingId: seed.meetingId, guestId });
+		m = await loadMinutes(seed.meetingId);
+		expect(m.guests).toHaveLength(1);
+
+		await removeGuestPresent({ meetingId: seed.meetingId, guestId });
+		m = await loadMinutes(seed.meetingId);
+		expect(m.guests).toHaveLength(0);
+	});
+
+	it("pre-lists a guest holding a role slot as present (fromRole)", async () => {
+		const guestId = await newGuest("Nadia Visitor");
+		await testDb
+			.update(roleSlots)
+			.set({ assignedGuestId: guestId, status: "claimed" })
+			.where(eq(roleSlots.id, seed.slotId));
+
+		const m = await loadMinutes(seed.meetingId);
+		expect(m.guests).toEqual([
+			{ guestId, name: "Nadia Visitor", fromRole: true },
+		]);
+	});
+
+	it("rejects an attendance row holding BOTH a member and a guest (DB check)", async () => {
+		const guestId = await newGuest("Both");
+		await expect(
+			testDb.insert(meetingAttendance).values({
+				meetingId: seed.meetingId,
+				memberId: seed.memberId,
+				guestId,
+				status: "present",
+			}),
+		).rejects.toThrow();
+	});
+
+	it("rejects a Table Topics / award row holding BOTH assignees (DB check)", async () => {
+		const guestId = await newGuest("Both2");
+		await expect(
+			testDb.insert(tableTopicsSpeakers).values({
+				meetingId: seed.meetingId,
+				memberId: seed.memberId,
+				guestId,
+			}),
+		).rejects.toThrow();
+		await expect(
+			testDb.insert(meetingAwards).values({
+				meetingId: seed.meetingId,
+				category: "best_speaker",
+				memberId: seed.memberId,
+				guestId,
+			}),
+		).rejects.toThrow();
+	});
+
+	it("adds, orders, reorders, and removes Table Topics speakers", async () => {
+		const first = await addTableTopicsSpeaker({
+			meetingId: seed.meetingId,
+			memberId: seed.memberId,
+			topic: "Your favorite season?",
+		});
+		const second = await addTableTopicsSpeaker({
+			meetingId: seed.meetingId,
+			newGuest: { name: "Guesty" },
+		});
+
+		let m = await loadMinutes(seed.meetingId);
+		expect(m.tableTopicsSpeakers.map((s) => s.id)).toEqual([
+			first.id,
+			second.id,
+		]);
+		expect(m.tableTopicsSpeakers[0]).toMatchObject({
+			memberId: seed.memberId,
+			isGuest: false,
+			topic: "Your favorite season?",
+		});
+		expect(m.tableTopicsSpeakers[1]).toMatchObject({
+			isGuest: true,
+			name: "Guesty",
+		});
+
+		// Move the guest up — order flips.
+		await moveTableTopicsSpeaker({
+			meetingId: seed.meetingId,
+			id: second.id,
+			direction: "up",
+		});
+		m = await loadMinutes(seed.meetingId);
+		expect(m.tableTopicsSpeakers.map((s) => s.id)).toEqual([
+			second.id,
+			first.id,
+		]);
+
+		await removeTableTopicsSpeaker({ meetingId: seed.meetingId, id: first.id });
+		m = await loadMinutes(seed.meetingId);
+		expect(m.tableTopicsSpeakers.map((s) => s.id)).toEqual([second.id]);
+	});
+
+	it("sets a single-valued award per category (upsert), then clears it", async () => {
+		await setAward({
+			meetingId: seed.meetingId,
+			category: "best_speaker",
+			memberId: seed.memberId,
+		});
+		// Re-set the same category to a guest — replaces, does not add a 2nd row.
+		await setAward({
+			meetingId: seed.meetingId,
+			category: "best_speaker",
+			newGuest: { name: "Award Guest" },
+		});
+
+		let m = await loadMinutes(seed.meetingId);
+		const bestSpeaker = m.awards.find((a) => a.category === "best_speaker");
+		expect(bestSpeaker).toMatchObject({
+			name: "Award Guest",
+			isGuest: true,
+			memberId: null,
+		});
+		const awardRows = await testDb
+			.select({ id: meetingAwards.id })
+			.from(meetingAwards)
+			.where(eq(meetingAwards.meetingId, seed.meetingId));
+		expect(awardRows).toHaveLength(1);
+
+		await clearAward({ meetingId: seed.meetingId, category: "best_speaker" });
+		m = await loadMinutes(seed.meetingId);
+		expect(
+			m.awards.find((a) => a.category === "best_speaker")?.name,
+		).toBeNull();
+	});
+
+	it("always returns all three award categories, unset ones as null", async () => {
+		const m = await loadMinutes(seed.meetingId);
+		expect(m.awards.map((a) => a.category)).toEqual([
+			"best_speaker",
+			"best_evaluator",
+			"best_table_topics",
+		]);
+		expect(m.awards.every((a) => a.name === null)).toBe(true);
+	});
+});
