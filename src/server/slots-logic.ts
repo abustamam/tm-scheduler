@@ -15,6 +15,7 @@ import {
 	pickSpeakerAndEvaluatorRoles,
 } from "#/lib/meeting-roles";
 import { logActivity } from "./activity";
+import { assertMeetingNotLocked } from "./meeting-authz-logic";
 
 // Either the main db client or a drizzle transaction — so speech helpers can run
 // inside a caller's transaction and commit atomically with the slot change.
@@ -118,6 +119,7 @@ export async function applyAddRoleSlot(input: {
 		where: eq(meetings.id, input.meetingId),
 	});
 	if (!meeting) throw new Error("Meeting not found.");
+	assertMeetingNotLocked(meeting.status);
 
 	const defs = await clubRoleDefs(meeting.clubId);
 	const role = defs.find((d) => d.id === input.roleDefinitionId);
@@ -172,12 +174,14 @@ export async function applyRemoveRoleSlot(input: {
 			status: roleSlots.status,
 			assignedMemberId: roleSlots.assignedMemberId,
 			clubId: meetings.clubId,
+			meetingStatus: meetings.status,
 		})
 		.from(roleSlots)
 		.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
 		.where(eq(roleSlots.id, input.slotId))
 		.limit(1);
 	if (!slot) throw new Error("Role not found.");
+	assertMeetingNotLocked(slot.meetingStatus);
 	if (slot.assignedMemberId || slot.status !== "open") {
 		throw new Error("Release the role before removing it.");
 	}
@@ -539,6 +543,7 @@ export async function reassignSlotCore(
 			assignedMemberId: roleSlots.assignedMemberId,
 			isSpeakerRole: roleDefinitions.isSpeakerRole,
 			clubId: meetings.clubId,
+			meetingStatus: meetings.status,
 		})
 		.from(roleSlots)
 		.innerJoin(
@@ -550,6 +555,9 @@ export async function reassignSlotCore(
 		.limit(1)
 		.for("update", { of: roleSlots });
 	if (!slot) throw new Error("Role not found.");
+	// Lock choke point (#150): reassign/claim-to-member on a completed meeting is
+	// rejected here under the row lock.
+	assertMeetingNotLocked(slot.meetingStatus);
 
 	// Reassigning a speaker slot to a *different* Person unlinks the speech; the
 	// old speech persists Person-owned and unscheduled (ADR-0009). Within the

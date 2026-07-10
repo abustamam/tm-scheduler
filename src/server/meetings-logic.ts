@@ -6,6 +6,7 @@ import { db } from "#/db";
 import { clubs, meetings, roleDefinitions, roleSlots } from "#/db/schema";
 import { generateSlotRows } from "#/lib/agenda";
 import { zonedWallTimeToUtc } from "#/lib/datetime";
+import { meetingDateReached } from "#/lib/meeting-lifecycle";
 import { logActivity } from "./activity";
 
 export interface MeetingCreateInput {
@@ -147,6 +148,81 @@ export async function applyMeetingUpdate(input: MeetingUpdateInput) {
 				},
 				after: next,
 			},
+		});
+	});
+
+	return { clubId: meeting.clubId };
+}
+
+/**
+ * Close out a meeting: set `status = completed`, which locks its agenda from
+ * further edits (#150). Guarded to the meeting's scheduled date being today or
+ * past (in the club timezone) so an upcoming meeting can't be locked by
+ * accident. Idempotent-ish: re-completing an already-completed meeting is a
+ * no-op update. Speech-delivered derivation is unchanged (date-based, ADR-0009).
+ */
+export async function applyCompleteMeeting(input: {
+	meetingId: string;
+	actorMemberId: string | null;
+}) {
+	const meeting = await db.query.meetings.findFirst({
+		where: eq(meetings.id, input.meetingId),
+	});
+	if (!meeting) throw new Error("Meeting not found.");
+	const club = await db.query.clubs.findFirst({
+		where: eq(clubs.id, meeting.clubId),
+	});
+	if (!club) throw new Error("Club not found.");
+	if (!meetingDateReached(meeting.scheduledAt, club.timezone)) {
+		throw new Error(
+			"You can only complete a meeting on or after its scheduled date.",
+		);
+	}
+
+	await db.transaction(async (tx) => {
+		await tx
+			.update(meetings)
+			.set({ status: "completed" })
+			.where(eq(meetings.id, input.meetingId));
+		await logActivity(tx, {
+			clubId: meeting.clubId,
+			actorMemberId: input.actorMemberId,
+			action: "meeting_edit",
+			targetType: "meeting",
+			targetId: input.meetingId,
+			detail: { change: "completed" },
+		});
+	});
+
+	return { clubId: meeting.clubId };
+}
+
+/**
+ * Reopen a completed meeting back to `scheduled` so an admin can amend it, then
+ * complete it again (#150). No date guard — reopen is available any time,
+ * admin-only.
+ */
+export async function applyReopenMeeting(input: {
+	meetingId: string;
+	actorMemberId: string | null;
+}) {
+	const meeting = await db.query.meetings.findFirst({
+		where: eq(meetings.id, input.meetingId),
+	});
+	if (!meeting) throw new Error("Meeting not found.");
+
+	await db.transaction(async (tx) => {
+		await tx
+			.update(meetings)
+			.set({ status: "scheduled" })
+			.where(eq(meetings.id, input.meetingId));
+		await logActivity(tx, {
+			clubId: meeting.clubId,
+			actorMemberId: input.actorMemberId,
+			action: "meeting_edit",
+			targetType: "meeting",
+			targetId: input.meetingId,
+			detail: { change: "reopened" },
 		});
 	});
 

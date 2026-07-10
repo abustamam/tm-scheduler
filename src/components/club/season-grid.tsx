@@ -1,4 +1,5 @@
 import { Link } from "@tanstack/react-router";
+import { Lock } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { formatMeetingDate } from "#/lib/format";
 import { type Orientation, projectGrid } from "#/lib/season-grid-view";
@@ -97,7 +98,8 @@ export function SeasonGrid({
 									ref={m.isAnchor ? anchorRef : undefined}
 									className={cn(
 										"sticky top-0 min-w-[3.5rem] bg-card px-2 py-2 text-center text-xs font-semibold",
-										m.isPast && "opacity-45",
+										m.isPast && !m.isCompleted && "opacity-45",
+										m.isCompleted && "bg-muted/60",
 										m.isAnchor && "rounded-md ring-2 ring-primary",
 									)}
 								>
@@ -107,13 +109,20 @@ export function SeasonGrid({
 										className="block"
 									>
 										<div>{formatMeetingDate(m.scheduledAt, m.timezone)}</div>
-										<div className="text-[10px] font-medium text-amber-600">
-											{m.isPast
-												? "done"
-												: m.openCount === 0
-													? "full"
-													: `${m.openCount} open`}
-										</div>
+										{m.isCompleted ? (
+											<div className="flex items-center justify-center gap-0.5 text-[10px] font-semibold text-muted-foreground">
+												<Lock className="size-2.5" aria-hidden />
+												locked
+											</div>
+										) : (
+											<div className="text-[10px] font-medium text-amber-600">
+												{m.isPast
+													? "done"
+													: m.openCount === 0
+														? "full"
+														: `${m.openCount} open`}
+											</div>
+										)}
 									</Link>
 								</th>
 							))}

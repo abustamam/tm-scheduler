@@ -1,5 +1,13 @@
 import { createFileRoute, useRouter } from "@tanstack/react-router";
-import { CalendarDays, Loader2, MapPin, Sparkles } from "lucide-react";
+import {
+	CalendarDays,
+	CheckCircle2,
+	Loader2,
+	Lock,
+	LockOpen,
+	MapPin,
+	Sparkles,
+} from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import {
@@ -24,12 +32,20 @@ import { Label } from "#/components/ui/label";
 import { buildSlideDeck } from "#/lib/agenda-slides";
 import { utcToZonedWallTime } from "#/lib/datetime";
 import { formatMeetingDate, formatMeetingTimeRange } from "#/lib/format";
+import {
+	isMeetingLocked,
+	lockedViewer,
+	MEETING_LOCKED_MESSAGE,
+	meetingDateReached,
+} from "#/lib/meeting-lifecycle";
 import { deriveMeetingNavItems } from "#/lib/meeting-nav";
 import { pairedRoleIds } from "#/lib/meeting-roles";
 import { sessionViewer } from "#/lib/meeting-viewer";
 import {
+	completeMeeting,
 	getMeeting,
 	listUpcomingMeetings,
+	reopenMeeting,
 	updateMeeting,
 } from "#/server/meetings";
 import {
@@ -89,6 +105,7 @@ function MeetingDetail() {
 	const [editOpen, setEditOpen] = useState(false);
 	const [addRoleOpen, setAddRoleOpen] = useState(false);
 	const [addRoleBusy, setAddRoleBusy] = useState(false);
+	const [lifecycleBusy, setLifecycleBusy] = useState(false);
 
 	// Same deck present mode renders — reused as the source for the .pptx export.
 	const deck = buildSlideDeck(
@@ -102,7 +119,14 @@ function MeetingDetail() {
 		},
 		slots,
 	);
-	const viewer = sessionViewer({ currentMemberId, canManage });
+	// #150: a completed meeting is locked. Deny every mutation capability so
+	// <MeetingAgenda> renders read-only; the server rejects any edit that reaches
+	// it, and only Reopen (admin) unlocks it.
+	const locked = isMeetingLocked(meeting.status);
+	// Complete is only offered once the meeting's date is today or past.
+	const canComplete = meetingDateReached(meeting.scheduledAt, timezone);
+	const baseViewer = sessionViewer({ currentMemberId, canManage });
+	const viewer = locked ? lockedViewer(baseViewer) : baseViewer;
 	const pairedIds = pairedRoleIds(clubRoles);
 	const addableRoles = clubRoles.filter((r) => !pairedIds.has(r.id));
 
@@ -179,8 +203,44 @@ function MeetingDetail() {
 		}
 	}
 
+	async function doComplete() {
+		setLifecycleBusy(true);
+		try {
+			await completeMeeting({
+				data: { meetingId: meeting.id, actorMemberId: currentMemberId },
+			});
+			toast.success("Meeting closed out and locked.");
+			await router.invalidate();
+		} catch (err) {
+			toast.error(errMessage(err));
+		} finally {
+			setLifecycleBusy(false);
+		}
+	}
+
+	async function doReopen() {
+		setLifecycleBusy(true);
+		try {
+			await reopenMeeting({
+				data: { meetingId: meeting.id, actorMemberId: currentMemberId },
+			});
+			toast.success("Meeting reopened for edits.");
+			await router.invalidate();
+		} catch (err) {
+			toast.error(errMessage(err));
+		} finally {
+			setLifecycleBusy(false);
+		}
+	}
+
 	return (
 		<PageContainer className="space-y-5">
+			{locked ? (
+				<div className="flex items-center gap-2 rounded-xl border border-border bg-muted/60 px-4 py-3 text-sm font-medium text-muted-foreground">
+					<Lock className="size-4" aria-hidden />
+					{MEETING_LOCKED_MESSAGE}
+				</div>
+			) : null}
 			<header className="space-y-2">
 				<h1 className="font-display text-[30px] font-semibold tracking-[-0.02em]">
 					{meeting.theme ?? "Meeting"}
@@ -228,7 +288,7 @@ function MeetingDetail() {
 						deck={deck}
 						clubName={clubName}
 					/>
-					{canManage && addableRoles.length > 0 ? (
+					{canManage && !locked && addableRoles.length > 0 ? (
 						<Button
 							size="sm"
 							variant="outline"
@@ -237,13 +297,38 @@ function MeetingDetail() {
 							+ Add role
 						</Button>
 					) : null}
-					{canManage ? (
+					{canManage && !locked ? (
 						<Button
 							size="sm"
 							variant="outline"
 							onClick={() => setEditOpen(true)}
 						>
 							Edit meeting
+						</Button>
+					) : null}
+					{canManage && locked ? (
+						<Button
+							size="sm"
+							variant="outline"
+							onClick={doReopen}
+							disabled={lifecycleBusy}
+						>
+							{lifecycleBusy ? (
+								<Loader2 className="size-4 animate-spin" />
+							) : (
+								<LockOpen className="size-4" />
+							)}
+							Reopen meeting
+						</Button>
+					) : null}
+					{canManage && !locked && canComplete ? (
+						<Button size="sm" onClick={doComplete} disabled={lifecycleBusy}>
+							{lifecycleBusy ? (
+								<Loader2 className="size-4 animate-spin" />
+							) : (
+								<CheckCircle2 className="size-4" />
+							)}
+							Complete meeting
 						</Button>
 					) : null}
 				</div>

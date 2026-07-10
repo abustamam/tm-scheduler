@@ -8,6 +8,7 @@ import {
 import {
 	CalendarDays,
 	Loader2,
+	Lock,
 	MapPin,
 	Presentation,
 	Printer,
@@ -37,6 +38,11 @@ import { Textarea } from "#/components/ui/textarea";
 import { utcToZonedWallTime } from "#/lib/datetime";
 import { formatMeetingDate, formatMeetingTimeRange } from "#/lib/format";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
+import {
+	isMeetingLocked,
+	lockedViewer,
+	MEETING_LOCKED_MESSAGE,
+} from "#/lib/meeting-lifecycle";
 import { deriveMeetingNavItems } from "#/lib/meeting-nav";
 import { isTmodRoleName } from "#/lib/meeting-roles";
 import { selfAssertedViewer } from "#/lib/meeting-viewer";
@@ -137,7 +143,11 @@ function MeetingView() {
 		slots.find((s) => isTmodRoleName(s.roleName))?.assigneeId ?? null;
 	const isTmod = myId !== null && myId === tmodMemberId;
 
-	const viewer = selfAssertedViewer({ memberId: myId, isTmod });
+	// #150: a completed meeting is locked — deny every self-serve capability so
+	// the shared agenda renders read-only (the server rejects edits too).
+	const locked = isMeetingLocked(meeting.status);
+	const baseViewer = selfAssertedViewer({ memberId: myId, isTmod });
+	const viewer = locked ? lockedViewer(baseViewer) : baseViewer;
 
 	// Roster for the TMOD assign picker — only fetched when self-serve editing is
 	// unlocked (kept off the payload for ordinary viewers).
@@ -216,6 +226,12 @@ function MeetingView() {
 
 	return (
 		<div className="space-y-5 p-4 pb-8">
+			{locked ? (
+				<div className="flex items-center gap-2 rounded-xl border border-border bg-muted/60 px-4 py-3 text-sm font-medium text-muted-foreground">
+					<Lock className="size-4" aria-hidden />
+					{MEETING_LOCKED_MESSAGE}
+				</div>
+			) : null}
 			<header className="space-y-2 pt-2">
 				<h1 className="font-display text-2xl font-semibold tracking-tight">
 					{meeting.theme ?? "Meeting"}
@@ -288,7 +304,7 @@ function MeetingView() {
 						Present
 					</Link>
 				</Button>
-				{isTmod ? (
+				{isTmod && !locked ? (
 					<Button
 						type="button"
 						variant="outline"
@@ -310,7 +326,7 @@ function MeetingView() {
 				unavailableMemberIds={unavailableMemberIds}
 			/>
 
-			{isTmod ? (
+			{isTmod && !locked ? (
 				<EditMeetingMetaDialog
 					open={editMetaOpen}
 					onOpenChange={setEditMetaOpen}

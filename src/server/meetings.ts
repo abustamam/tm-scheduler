@@ -23,7 +23,12 @@ import {
 	requireMembership,
 	requireUser,
 } from "./guards";
-import { applyCreateMeeting, applyMeetingUpdate } from "./meetings-logic";
+import {
+	applyCompleteMeeting,
+	applyCreateMeeting,
+	applyMeetingUpdate,
+	applyReopenMeeting,
+} from "./meetings-logic";
 import { currentOfficersForClub } from "./officer-terms-logic";
 import { indexRoleRecency, loadRoleRecency } from "./role-recency-logic";
 
@@ -403,5 +408,48 @@ export const updateMeeting = createServerFn({ method: "POST" })
 			...data,
 			actorMemberId: data.actorMemberId ?? null,
 			canReschedule: authz.via === "admin",
+		});
+	});
+
+const lifecycleSchema = z.object({
+	meetingId: uuid,
+	actorMemberId: uuid.nullable().optional(),
+});
+
+/** Close out a meeting: set `status = completed` and lock its agenda (#150).
+ *  Admin/manage-capability only; guarded to on/after the scheduled date. AUTHED. */
+export const completeMeeting = createServerFn({ method: "POST" })
+	.validator((input: unknown) => lifecycleSchema.parse(input))
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		const [row] = await db
+			.select({ clubId: meetings.clubId })
+			.from(meetings)
+			.where(eq(meetings.id, data.meetingId))
+			.limit(1);
+		if (!row) throw new Error("Meeting not found.");
+		await requireClubRole(currentUser.id, row.clubId, ["admin"]);
+		return applyCompleteMeeting({
+			meetingId: data.meetingId,
+			actorMemberId: data.actorMemberId ?? null,
+		});
+	});
+
+/** Reopen a completed meeting back to `scheduled` so it can be amended (#150).
+ *  Admin/manage-capability only; no date guard. AUTHED. */
+export const reopenMeeting = createServerFn({ method: "POST" })
+	.validator((input: unknown) => lifecycleSchema.parse(input))
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		const [row] = await db
+			.select({ clubId: meetings.clubId })
+			.from(meetings)
+			.where(eq(meetings.id, data.meetingId))
+			.limit(1);
+		if (!row) throw new Error("Meeting not found.");
+		await requireClubRole(currentUser.id, row.clubId, ["admin"]);
+		return applyReopenMeeting({
+			meetingId: data.meetingId,
+			actorMemberId: data.actorMemberId ?? null,
 		});
 	});

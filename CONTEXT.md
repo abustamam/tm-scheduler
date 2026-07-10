@@ -41,6 +41,10 @@ the nouns in `src/db/schema.ts`.
   roster metadata; defaulted from Officer position but stored explicitly (ADR-0008). (`vpe`
   was a third value that behaved identically to `admin`; it collapses into `admin`.)
 - **Meeting** — a single club session (`meetings`) with a date, theme, and word of the day.
+  Its `status` follows a lifecycle: `scheduled → completed` (admin **Complete**, only on/after
+  the meeting date) and `completed → scheduled` (admin **Reopen**, any time). A **completed**
+  meeting is **locked** — read-only, every agenda mutation is rejected server-side and shows a
+  "This meeting is locked." banner. Speech-delivered stays date-derived (ADR-0009). See ADR-0012.
 - **Role definition** — a club's template for a fillable role (`role_definitions`), e.g.
   Toastmaster of the Day (TMOD), Speaker, Evaluator, Table Topics Master, General Evaluator
   (GE), Timer, Ah-Counter, Grammarian. Carries `default_count` and `sort_order`.
@@ -85,6 +89,11 @@ progress dashboards, multi-club switching UI, calendar export. These are the lat
   member holding that meeting's Toastmaster (TMOD) slot. **Reschedule, cancel, and status
   stay `admin`/`vpe`-only.** TMOD self-serve editing is an interim self-assert measure pending
   real auth (ADR-0010).
+- A **completed** meeting is **locked**: every agenda mutation (assign/claim/takeover,
+  confirm/unconfirm, move/add/remove role/speaker, availability toggle, meta edit) is rejected
+  server-side, regardless of surface or capability. Only an admin **Reopen** (→ `scheduled`)
+  lifts the lock. Enforced at `resolveMeetingAgendaAuthz` / `assertMeetingNotLocked`, not the UI
+  (ADR-0012).
 - `src/server/*` touches `db`/`pg` and must never be imported by client components.
 
 ## Where decisions live
