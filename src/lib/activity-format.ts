@@ -59,6 +59,15 @@ export function formatActivity(entry: ActivityEntry): FormattedActivity {
 				case "speaker_reordered":
 					summary = "reordered speakers";
 					break;
+				case "role_added":
+					summary = "added a role";
+					break;
+				case "role_removed":
+					summary = "removed a role";
+					break;
+				case "template_sync":
+					summary = "updated upcoming meetings to match the standard set";
+					break;
 				default:
 					summary = "updated the meeting";
 			}

@@ -127,6 +127,15 @@ describe("formatActivity", () => {
 		expect(
 			formatActivity({ ...meetingBase, change: "speaker_reordered" }).summary,
 		).toBe("reordered speakers");
+		expect(
+			formatActivity({ ...meetingBase, change: "role_added" }).summary,
+		).toBe("added a role");
+		expect(
+			formatActivity({ ...meetingBase, change: "role_removed" }).summary,
+		).toBe("removed a role");
+		expect(
+			formatActivity({ ...meetingBase, change: "template_sync" }).summary,
+		).toBe("updated upcoming meetings to match the standard set");
 		expect(formatActivity({ ...meetingBase, change: null }).summary).toBe(
 			"updated the meeting",
 		);

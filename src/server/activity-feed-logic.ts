@@ -36,7 +36,7 @@ export interface ActivityEntry {
 	subjectName: string | null;
 	/** reassign/release → displaced assignee (see slots.ts detail.fromMemberId) */
 	fromName: string | null;
-	/** meeting_edit → agenda-structure change (speaker_added | speaker_removed | speaker_reordered) */
+	/** meeting_edit → agenda-structure change (speaker_added | speaker_removed | speaker_reordered | role_added | role_removed | template_sync) */
 	change: string | null;
 }
 
