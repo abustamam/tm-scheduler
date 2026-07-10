@@ -5,6 +5,7 @@ import {
 	Loader2,
 	MapPin,
 	Sparkles,
+	Trash2,
 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -39,17 +40,20 @@ import { buildRoleCounts, slotLabel, summarizeAgenda } from "#/lib/agenda";
 import { utcToZonedWallTime } from "#/lib/datetime";
 import { formatMeetingDate, formatMeetingTimeRange } from "#/lib/format";
 import { deriveMeetingNavItems } from "#/lib/meeting-nav";
+import { pairedRoleIds } from "#/lib/meeting-roles";
 import {
 	getMeeting,
 	listUpcomingMeetings,
 	updateMeeting,
 } from "#/server/meetings";
 import {
+	addRoleSlot,
 	addSpeakerSlot,
 	claimSlot,
 	confirmSlot,
 	moveSpeakerSlot,
 	releaseSlot,
+	removeRoleSlot,
 	removeSpeakerSlot,
 	unconfirmSlot,
 } from "#/server/slots";
@@ -96,6 +100,7 @@ function MeetingDetail() {
 		clubSlug,
 		roster,
 		navItems,
+		clubRoles,
 	} = Route.useLoaderData();
 	const { currentMemberId } = Route.useRouteContext();
 	const router = useRouter();
@@ -104,10 +109,13 @@ function MeetingDetail() {
 	const [editOpen, setEditOpen] = useState(false);
 	const [assignSlot, setAssignSlot] = useState<Slot | null>(null);
 	const [editSpeechSlot, setEditSpeechSlot] = useState<Slot | null>(null);
+	const [addRoleOpen, setAddRoleOpen] = useState(false);
 
 	// Number repeated roles ("Speaker 1", "Speaker 2", …).
 	const roleCounts = buildRoleCounts(slots);
 	const summary = summarizeAgenda(slots);
+	const pairedIds = pairedRoleIds(clubRoles);
+	const addableRoles = clubRoles.filter((r) => !pairedIds.has(r.id));
 
 	// memberId → their current role label this meeting (for picker flags).
 	const roleByMemberId: Record<string, string> = {};
@@ -255,6 +263,41 @@ function MeetingDetail() {
 		}
 	}
 
+	async function doAddRole(roleDefinitionId: string) {
+		setBusySlotId("add-role");
+		try {
+			await addRoleSlot({
+				data: {
+					meetingId: meeting.id,
+					roleDefinitionId,
+					actorMemberId: currentMemberId,
+				},
+			});
+			toast.success("Role added.");
+			setAddRoleOpen(false);
+			await router.invalidate();
+		} catch (err) {
+			toast.error(errMessage(err));
+		} finally {
+			setBusySlotId(null);
+		}
+	}
+
+	async function doRemoveRole(slot: Slot) {
+		setBusySlotId(slot.id);
+		try {
+			await removeRoleSlot({
+				data: { slotId: slot.id, actorMemberId: currentMemberId },
+			});
+			toast.success("Role removed.");
+			await router.invalidate();
+		} catch (err) {
+			toast.error(errMessage(err));
+		} finally {
+			setBusySlotId(null);
+		}
+	}
+
 	return (
 		<PageContainer className="space-y-5">
 			<header className="space-y-2">
@@ -299,6 +342,15 @@ function MeetingDetail() {
 						label="Copy member link"
 					/>
 					<MeetingViewActions clubSlug={clubSlug} meetingId={meeting.id} />
+					{canManage && addableRoles.length > 0 ? (
+						<Button
+							size="sm"
+							variant="outline"
+							onClick={() => setAddRoleOpen(true)}
+						>
+							+ Add role
+						</Button>
+					) : null}
 					{canManage ? (
 						<Button
 							size="sm"
@@ -486,6 +538,20 @@ function MeetingDetail() {
 														) : null}
 													</div>
 												) : null}
+												{canManage &&
+												slot.status === "open" &&
+												!slot.assigneeId &&
+												!pairedIds.has(slot.roleDefinitionId) ? (
+													<Button
+														size="sm"
+														variant="ghost"
+														aria-label={`Remove ${slot.roleName}`}
+														disabled={busy}
+														onClick={() => doRemoveRole(slot)}
+													>
+														<Trash2 className="size-4" />
+													</Button>
+												) : null}
 												{slot.status === "open" ? (
 													<Button
 														size="sm"
@@ -661,6 +727,57 @@ function MeetingDetail() {
 					await router.invalidate();
 				}}
 			/>
+			<Dialog open={addRoleOpen} onOpenChange={setAddRoleOpen}>
+				<DialogContent>
+					<DialogHeader>
+						<DialogTitle>Add a role</DialogTitle>
+					</DialogHeader>
+					<form
+						onSubmit={(e) => {
+							e.preventDefault();
+							const roleId = String(
+								new FormData(e.currentTarget).get("roleDefinitionId") ?? "",
+							);
+							if (roleId) void doAddRole(roleId);
+						}}
+						className="space-y-4"
+					>
+						<div className="space-y-2">
+							<Label htmlFor="roleDefinitionId">Role</Label>
+							<select
+								id="roleDefinitionId"
+								name="roleDefinitionId"
+								required
+								className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+							>
+								{addableRoles.map((r) => (
+									<option key={r.id} value={r.id}>
+										{r.name}
+									</option>
+								))}
+							</select>
+							<p className="text-xs text-muted-foreground">
+								Picking a role already on this meeting adds another instance
+								(e.g. “Timer 2”).
+							</p>
+						</div>
+						<DialogFooter>
+							<DialogClose asChild>
+								<Button type="button" variant="outline">
+									Cancel
+								</Button>
+							</DialogClose>
+							<Button type="submit" disabled={busySlotId === "add-role"}>
+								{busySlotId === "add-role" ? (
+									<Loader2 className="size-4 animate-spin" />
+								) : (
+									"Add role"
+								)}
+							</Button>
+						</DialogFooter>
+					</form>
+				</DialogContent>
+			</Dialog>
 		</PageContainer>
 	);
 }
