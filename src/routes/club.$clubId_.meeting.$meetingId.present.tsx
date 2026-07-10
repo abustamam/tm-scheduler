@@ -1,5 +1,6 @@
 import { createFileRoute, notFound, useNavigate } from "@tanstack/react-router";
 import { MeetingPresent } from "#/components/agenda/meeting-present";
+import { OfflineBadge } from "#/components/agenda/offline-badge";
 import { buildSlideDeck } from "#/lib/agenda-slides";
 import { resolveClubOrRedirect } from "#/lib/club-route";
 import { getMeeting } from "#/server/meetings";
@@ -32,15 +33,18 @@ function PresentPage() {
 		data.slots,
 	);
 	return (
-		<MeetingPresent
-			deck={deck}
-			clubName={data.clubName}
-			onExit={() =>
-				navigate({
-					to: "/club/$clubId/meeting/$meetingId",
-					params: { clubId, meetingId },
-				})
-			}
-		/>
+		<>
+			<OfflineBadge id={meetingId} />
+			<MeetingPresent
+				deck={deck}
+				clubName={data.clubName}
+				onExit={() =>
+					navigate({
+						to: "/club/$clubId/meeting/$meetingId",
+						params: { clubId, meetingId },
+					})
+				}
+			/>
+		</>
 	);
 }
