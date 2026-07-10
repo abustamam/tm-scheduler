@@ -1,7 +1,7 @@
 // Speaker-slot management DB logic, split out from `slots.ts` (a createServerFn
 // module the guard test forbids from exporting db-touching functions).
 // Integration-testable by mocking `#/db`.
-import { and, eq } from "drizzle-orm";
+import { and, eq, gt } from "drizzle-orm";
 import { db } from "#/db";
 import {
 	meetings,
@@ -10,7 +10,10 @@ import {
 	roleSlots,
 	speeches,
 } from "#/db/schema";
-import { pickSpeakerAndEvaluatorRoles } from "#/lib/meeting-roles";
+import {
+	pairedRoleIds,
+	pickSpeakerAndEvaluatorRoles,
+} from "#/lib/meeting-roles";
 import { logActivity } from "./activity";
 
 // Either the main db client or a drizzle transaction — so speech helpers can run
@@ -83,6 +86,73 @@ export async function applyAddSpeakerSlot(input: {
 			targetType: "meeting",
 			targetId: input.meetingId,
 			detail: { change: "speaker_added" },
+		});
+	});
+	return { clubId: meeting.clubId };
+}
+
+/** The club's role defs in the shape `pairedRoleIds` needs, plus name/id. */
+async function clubRoleDefs(clubId: string) {
+	return db
+		.select({
+			id: roleDefinitions.id,
+			name: roleDefinitions.name,
+			category: roleDefinitions.category,
+			defaultCount: roleDefinitions.defaultCount,
+			sortOrder: roleDefinitions.sortOrder,
+			isSpeakerRole: roleDefinitions.isSpeakerRole,
+		})
+		.from(roleDefinitions)
+		.where(eq(roleDefinitions.clubId, clubId));
+}
+
+/** Add one open slot of an arbitrary non-paired role to a meeting. Duplicates
+ *  allowed (next slotIndex). Rejects the speaker/paired-evaluator roles (those
+ *  go through the +/- speaker buttons) and roles from another club. */
+export async function applyAddRoleSlot(input: {
+	meetingId: string;
+	roleDefinitionId: string;
+	actorMemberId: string | null;
+}) {
+	const meeting = await db.query.meetings.findFirst({
+		where: eq(meetings.id, input.meetingId),
+	});
+	if (!meeting) throw new Error("Meeting not found.");
+
+	const defs = await clubRoleDefs(meeting.clubId);
+	const role = defs.find((d) => d.id === input.roleDefinitionId);
+	if (!role) throw new Error("Role not found for this club.");
+	if (pairedRoleIds(defs).has(role.id)) {
+		throw new Error("Add speakers with the speaker controls.");
+	}
+
+	const existing = await db
+		.select({ slotIndex: roleSlots.slotIndex })
+		.from(roleSlots)
+		.where(
+			and(
+				eq(roleSlots.meetingId, input.meetingId),
+				eq(roleSlots.roleDefinitionId, input.roleDefinitionId),
+			),
+		);
+	const slotIndex = nextIndex(existing.map((s) => s.slotIndex));
+
+	await db.transaction(async (tx) => {
+		await tx.insert(roleSlots).values({
+			meetingId: input.meetingId,
+			roleDefinitionId: input.roleDefinitionId,
+			slotIndex,
+		});
+		await logActivity(tx, {
+			clubId: meeting.clubId,
+			actorMemberId: input.actorMemberId,
+			action: "meeting_edit",
+			targetType: "meeting",
+			targetId: input.meetingId,
+			detail: {
+				change: "role_added",
+				roleDefinitionId: input.roleDefinitionId,
+			},
 		});
 	});
 	return { clubId: meeting.clubId };
