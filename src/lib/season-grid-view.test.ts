@@ -12,6 +12,7 @@ const data: SeasonGridData = {
 			totalSlots: 2,
 			isPast: false,
 			isAnchor: true,
+			isCompleted: false,
 		},
 	],
 	rows: [
@@ -104,6 +105,7 @@ describe("projectGrid – roles orientation", () => {
 					totalSlots: 0,
 					isPast: false,
 					isAnchor: false,
+					isCompleted: false,
 				},
 			],
 		};

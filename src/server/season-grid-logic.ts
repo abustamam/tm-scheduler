@@ -22,6 +22,8 @@ export interface SeasonGridMeeting {
 	totalSlots: number;
 	isPast: boolean;
 	isAnchor: boolean;
+	/** #150: a completed (locked) meeting reads distinctly from a scheduled one. */
+	isCompleted: boolean;
 }
 export interface SeasonGridRow {
 	roleDefinitionId: string;
@@ -70,7 +72,11 @@ export async function loadSeasonGrid(input: {
 	const timezone = club?.timezone ?? "UTC";
 
 	const past = await db
-		.select({ id: meetings.id, scheduledAt: meetings.scheduledAt })
+		.select({
+			id: meetings.id,
+			scheduledAt: meetings.scheduledAt,
+			status: meetings.status,
+		})
 		.from(meetings)
 		.where(
 			and(
@@ -83,7 +89,11 @@ export async function loadSeasonGrid(input: {
 		.limit(PAST_LOOKBACK);
 
 	const upcomingQuery = db
-		.select({ id: meetings.id, scheduledAt: meetings.scheduledAt })
+		.select({
+			id: meetings.id,
+			scheduledAt: meetings.scheduledAt,
+			status: meetings.status,
+		})
 		.from(meetings)
 		.where(
 			and(
@@ -193,6 +203,7 @@ export async function loadSeasonGrid(input: {
 		totalSlots: totalByMeeting.get(m.id) ?? 0,
 		isPast: m.scheduledAt < now,
 		isAnchor: m.id === anchorId,
+		isCompleted: m.status === "completed",
 	}));
 
 	// 5. Members + availability. The member-orientation AXIS is active-only, but

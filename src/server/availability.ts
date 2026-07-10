@@ -2,9 +2,21 @@ import { createServerFn } from "@tanstack/react-start";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
-import { memberAvailability } from "#/db/schema";
+import { meetings, memberAvailability } from "#/db/schema";
 import { logActivity } from "./activity";
 import { requireMemberInClub } from "./guards";
+import { assertMeetingNotLocked } from "./meeting-authz-logic";
+
+/** Load a meeting's status (for the #150 lock) or throw if it's missing. */
+async function meetingStatus(meetingId: string): Promise<string> {
+	const [row] = await db
+		.select({ status: meetings.status })
+		.from(meetings)
+		.where(eq(meetings.id, meetingId))
+		.limit(1);
+	if (!row) throw new Error("Meeting not found.");
+	return row.status;
+}
 
 const availabilitySchema = z.object({
 	memberId: z.string().uuid(),
@@ -17,6 +29,7 @@ const availabilitySchema = z.object({
 export const setAvailability = createServerFn({ method: "POST" })
 	.validator((i: unknown) => availabilitySchema.parse(i))
 	.handler(async ({ data }) => {
+		assertMeetingNotLocked(await meetingStatus(data.meetingId));
 		await requireMemberInClub(data.memberId, data.clubId);
 
 		await db
@@ -40,6 +53,7 @@ export const setAvailability = createServerFn({ method: "POST" })
 export const clearAvailability = createServerFn({ method: "POST" })
 	.validator((i: unknown) => availabilitySchema.parse(i))
 	.handler(async ({ data }) => {
+		assertMeetingNotLocked(await meetingStatus(data.meetingId));
 		await requireMemberInClub(data.memberId, data.clubId);
 
 		await db

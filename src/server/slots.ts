@@ -10,6 +10,7 @@ import {
 	requireMemberInClub,
 	requireUser,
 } from "./guards";
+import { assertMeetingNotLocked } from "./meeting-authz-logic";
 import {
 	applyAddRoleSlot,
 	applyAddSpeakerSlot,
@@ -50,6 +51,7 @@ export const claimSlot = createServerFn({ method: "POST" })
 				status: roleSlots.status,
 				isSpeakerRole: roleDefinitions.isSpeakerRole,
 				clubId: meetings.clubId,
+				meetingStatus: meetings.status,
 			})
 			.from(roleSlots)
 			.innerJoin(
@@ -63,6 +65,7 @@ export const claimSlot = createServerFn({ method: "POST" })
 		if (!slot) {
 			throw new Error("Role not found.");
 		}
+		assertMeetingNotLocked(slot.meetingStatus);
 		// Trust guard: memberId must be a roster member of this club.
 		await requireMemberInClub(data.memberId, slot.clubId);
 
@@ -127,6 +130,7 @@ export const releaseSlot = createServerFn({ method: "POST" })
 				id: roleSlots.id,
 				assignedMemberId: roleSlots.assignedMemberId,
 				clubId: meetings.clubId,
+				meetingStatus: meetings.status,
 			})
 			.from(roleSlots)
 			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
@@ -136,6 +140,7 @@ export const releaseSlot = createServerFn({ method: "POST" })
 		if (!slot) {
 			throw new Error("Role not found.");
 		}
+		assertMeetingNotLocked(slot.meetingStatus);
 
 		// Trust guard: actorMemberId must be a roster member of this club.
 		// Sheet-parity model — any club member may release/clear any slot; the
@@ -186,6 +191,7 @@ export const confirmSlot = createServerFn({ method: "POST" })
 				status: roleSlots.status,
 				assignedMemberId: roleSlots.assignedMemberId,
 				clubId: meetings.clubId,
+				meetingStatus: meetings.status,
 			})
 			.from(roleSlots)
 			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
@@ -195,6 +201,7 @@ export const confirmSlot = createServerFn({ method: "POST" })
 		if (!slot) {
 			throw new Error("Role not found.");
 		}
+		assertMeetingNotLocked(slot.meetingStatus);
 
 		await requireClubRole(currentUser.id, slot.clubId, ["admin"]);
 
@@ -250,6 +257,7 @@ export const unconfirmSlot = createServerFn({ method: "POST" })
 				status: roleSlots.status,
 				assignedMemberId: roleSlots.assignedMemberId,
 				clubId: meetings.clubId,
+				meetingStatus: meetings.status,
 			})
 			.from(roleSlots)
 			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
@@ -259,6 +267,7 @@ export const unconfirmSlot = createServerFn({ method: "POST" })
 		if (!slot) {
 			throw new Error("Role not found.");
 		}
+		assertMeetingNotLocked(slot.meetingStatus);
 
 		await requireClubRole(currentUser.id, slot.clubId, ["admin"]);
 
@@ -345,6 +354,7 @@ export const updateSpeakerDetails = createServerFn({ method: "POST" })
 				id: roleSlots.id,
 				isSpeakerRole: roleDefinitions.isSpeakerRole,
 				clubId: meetings.clubId,
+				meetingStatus: meetings.status,
 				speechId: roleSlots.speechId,
 				assignedMemberId: roleSlots.assignedMemberId,
 				personId: members.personId,
@@ -362,6 +372,7 @@ export const updateSpeakerDetails = createServerFn({ method: "POST" })
 		if (!slot) {
 			throw new Error("Role not found.");
 		}
+		assertMeetingNotLocked(slot.meetingStatus);
 		if (!slot.isSpeakerRole) {
 			throw new Error("Only speaker roles have speech details.");
 		}

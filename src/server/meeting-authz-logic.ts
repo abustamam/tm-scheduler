@@ -11,7 +11,23 @@ import {
 	roleDefinitions,
 	roleSlots,
 } from "#/db/schema";
+import {
+	isMeetingLocked,
+	MEETING_LOCKED_MESSAGE,
+} from "#/lib/meeting-lifecycle";
 import { isTmodRoleName } from "#/lib/meeting-roles";
+
+/**
+ * The meeting-lock choke point (#150). Throws when a meeting's status is
+ * `completed` so every agenda mutation that runs it inherits the lock. Only
+ * "Reopen" (a separate admin path) may change a completed meeting. Pure — call
+ * with the status a mutation already loaded.
+ */
+export function assertMeetingNotLocked(status: string): void {
+	if (isMeetingLocked(status)) {
+		throw new Error(MEETING_LOCKED_MESSAGE);
+	}
+}
 
 export interface MeetingAgendaAuthzInput {
 	meetingId: string;
@@ -46,6 +62,10 @@ export async function resolveMeetingAgendaAuthz(
 		where: eq(meetings.id, input.meetingId),
 	});
 	if (!meeting) throw new Error("Meeting not found.");
+	// Lock choke point (#150): a completed meeting rejects every agenda edit that
+	// funnels through here (update meta, add/remove/move speaker). Reopen is a
+	// separate admin path and does not run this.
+	assertMeetingNotLocked(meeting.status);
 	const clubId = meeting.clubId;
 
 	// Resolve the meeting's TMOD slot assignee (if any). Match the role by name
