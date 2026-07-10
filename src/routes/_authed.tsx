@@ -9,6 +9,7 @@ import {
 import {
 	BookOpen,
 	CalendarDays,
+	CalendarPlus,
 	Grid3x3,
 	LayoutGrid,
 	List,
@@ -59,6 +60,7 @@ function crumbFor(pathname: string): string {
 	if (pathname.startsWith("/dashboard")) return "Me · My dashboard";
 	if (pathname.startsWith("/resources")) return "Me · Resources";
 	if (pathname.startsWith("/members")) return "Roster · Member profile";
+	if (pathname.startsWith("/admin/meetings/new")) return "Manage · New meeting";
 	if (pathname.startsWith("/meetings")) return "Manage · Meeting";
 	if (pathname === "/me") return "Me · My roles";
 	if (pathname.startsWith("/admin/roles")) return "Manage · Meeting roles";
@@ -109,6 +111,11 @@ function WorkspaceLayout() {
 					<NavItem to="/activity" icon={ScrollText} label="Activity" />
 					{isOfficer ? (
 						<>
+							<NavItem
+								to="/admin/meetings/new"
+								icon={CalendarPlus}
+								label="New meeting"
+							/>
 							<NavItem
 								to="/admin/roles"
 								icon={ListChecks}
