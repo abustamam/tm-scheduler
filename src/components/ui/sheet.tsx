@@ -65,8 +65,11 @@ function SheetContent({
 						"inset-y-0 left-0 h-full w-3/4 border-r data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left sm:max-w-sm",
 					side === "top" &&
 						"inset-x-0 top-0 h-auto border-b data-[state=closed]:slide-out-to-top data-[state=open]:slide-in-from-top",
+					// Bottom sheet on mobile; centered dialog at md+ (the bottom-slide
+					// animation is scoped to max-md so desktop gets a zoom/fade like a
+					// Dialog — mirrors the centered classes in dialog.tsx).
 					side === "bottom" &&
-						"inset-x-0 bottom-0 h-auto border-t data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom",
+						"inset-x-0 bottom-0 h-auto border-t max-md:data-[state=closed]:slide-out-to-bottom max-md:data-[state=open]:slide-in-from-bottom md:top-[50%] md:left-[50%] md:right-auto md:bottom-auto md:w-full md:max-w-lg md:translate-x-[-50%] md:translate-y-[-50%] md:rounded-lg md:border md:data-[state=closed]:zoom-out-95 md:data-[state=open]:zoom-in-95 md:data-[state=closed]:fade-out-0 md:data-[state=open]:fade-in-0",
 					className,
 				)}
 				{...props}
