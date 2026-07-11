@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
-import type { AgendaSlot } from "./agenda-runsheet";
-import { buildLegend, expandRunSheet, RUN_OF_SHOW } from "./agenda-runsheet";
+import type { AgendaRow, AgendaSlot } from "./agenda-runsheet";
+import {
+	applyFlex,
+	buildLegend,
+	expandRunSheet,
+	FLEX_TOLERANCE_MINUTES,
+	RUN_OF_SHOW,
+	TABLE_TOPICS_MAX,
+	TABLE_TOPICS_MIN,
+} from "./agenda-runsheet";
 
 function slot(over: Partial<AgendaSlot>): AgendaSlot {
 	return {
@@ -195,5 +203,82 @@ describe("expandRunSheet", () => {
 		expect(evalRows[0].who).toBe("Evaluator 1 · EvalA");
 		expect(evalRows[0].detail).toBe("Evaluates A");
 		expect(evalRows[1].who).toBe("Evaluator 2 · EvalB");
+	});
+});
+
+describe("expandRunSheet flex marker", () => {
+	it("marks exactly one row — the Table Topics row — as flex", () => {
+		const rows = expandRunSheet([]);
+		const flexed = rows.filter((r) => r.flex === true);
+		expect(flexed).toHaveLength(1);
+		expect(flexed[0].who).toContain("Table Topics");
+	});
+
+	it("does not mark any row when the template has no flex beat", () => {
+		const noFlex = RUN_OF_SHOW.map((b) => ({ ...b, flex: undefined }));
+		const rows = expandRunSheet([], noFlex);
+		expect(rows.some((r) => r.flex === true)).toBe(false);
+	});
+});
+
+describe("applyFlex", () => {
+	// Helper: build rows with a marked flex row of `flexMin`, plus `fixed` fixed minutes.
+	function rowsFixture(fixed: number, flexMin: number): AgendaRow[] {
+		return [
+			{ who: "Fixed", detail: "", minutes: fixed, marks: null },
+			{
+				who: "Table Topics",
+				detail: "",
+				minutes: flexMin,
+				marks: null,
+				flex: true,
+			},
+		];
+	}
+
+	it("fills exactly when the remainder is within bounds", () => {
+		const res = applyFlex(rowsFixture(50, 10), 63); // wants 13
+		expect(res.rows[1].minutes).toBe(13);
+		expect(res.projectedMinutes).toBe(63);
+		expect(res.status).toBe("exact");
+		expect(res.deltaMinutes).toBe(0);
+	});
+
+	it("clamps to MAX and reports under when there is too much slack", () => {
+		const res = applyFlex(rowsFixture(40, 10), 90); // wants 50, capped at 25
+		expect(res.rows[1].minutes).toBe(TABLE_TOPICS_MAX);
+		expect(res.projectedMinutes).toBe(65);
+		expect(res.status).toBe("under");
+		expect(res.deltaMinutes).toBe(-25);
+	});
+
+	it("clamps to MIN and reports over when there is too little slack", () => {
+		const res = applyFlex(rowsFixture(58, 10), 60); // wants 2, floored at 5
+		expect(res.rows[1].minutes).toBe(TABLE_TOPICS_MIN);
+		expect(res.projectedMinutes).toBe(63);
+		expect(res.status).toBe("over");
+		expect(res.deltaMinutes).toBe(3);
+	});
+
+	it("treats a sub-tolerance clamp miss as exact (no banner) but still reports the true delta", () => {
+		const res = applyFlex(rowsFixture(57, 10), 60); // wants 3, floored at 5 -> +2
+		expect(res.rows[1].minutes).toBe(TABLE_TOPICS_MIN);
+		expect(res.deltaMinutes).toBe(2);
+		expect(Math.abs(res.deltaMinutes)).toBeLessThanOrEqual(
+			FLEX_TOLERANCE_MINUTES,
+		);
+		expect(res.status).toBe("exact"); // |2| <= FLEX_TOLERANCE_MINUTES
+	});
+
+	it("does not flex when no row is marked; status reflects the real over/under", () => {
+		const rows: AgendaRow[] = [
+			{ who: "A", detail: "", minutes: 50, marks: null },
+			{ who: "B", detail: "", minutes: 20, marks: null },
+		];
+		const res = applyFlex(rows, 60); // 70 total, no flex row -> +10
+		expect(res.projectedMinutes).toBe(70);
+		expect(res.status).toBe("over");
+		expect(res.deltaMinutes).toBe(10);
+		expect(res.rows).toEqual(rows); // unchanged
 	});
 });

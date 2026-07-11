@@ -43,13 +43,15 @@ export type AgendaRow = {
 	detail: string;
 	minutes: number; // duration this row contributes to the running clock
 	marks: TimingMarks | null;
+	/** True on the single squishy row (Table Topics). `applyFlex` resizes it. */
+	flex?: boolean;
 };
 
 /** A functionary/uncovered role shown in the header legend. */
 export type LegendEntry = { role: string; name: string };
 
-/** A beat in the standard run-of-show. */
-export type Beat =
+/** A beat in the standard run-of-show. `flex` marks the single squishy beat. */
+export type Beat = (
 	| { kind: "event"; who: string; detail: string; minutes: number }
 	| {
 			kind: "role";
@@ -57,10 +59,16 @@ export type Beat =
 			role: "plain" | "speaker" | "evaluator";
 			detail: string;
 			minutes: number;
-	  };
+	  }
+) & { flex?: true };
 
 /** Fallback speaker duration when a speaker slot has no maxMinutes. */
 export const DEFAULT_SPEAKER_MINUTES = 7;
+
+/** Squishy Table Topics bounds (minutes) and the on-time banner deadband. */
+export const TABLE_TOPICS_MIN = 5;
+export const TABLE_TOPICS_MAX = 25;
+export const FLEX_TOLERANCE_MINUTES = 2;
 
 /** Placeholder shown for an open (unassigned) slot. */
 export const OPEN_LABEL = "— open —";
@@ -123,6 +131,7 @@ export const RUN_OF_SHOW: Beat[] = [
 		role: "plain",
 		detail: "Impromptu topics using the Word of the Day",
 		minutes: 10,
+		flex: true,
 	},
 	{
 		kind: "event",
@@ -203,6 +212,8 @@ export function expandRunSheet(
 		slots.filter((s) => s.roleName.toLowerCase() === name.toLowerCase());
 
 	for (const beat of template) {
+		const startLen = rows.length;
+
 		if (beat.kind === "event") {
 			rows.push({
 				who: beat.who,
@@ -210,49 +221,46 @@ export function expandRunSheet(
 				minutes: beat.minutes,
 				marks: null,
 			});
-			continue;
-		}
-
-		const matching = byRole(beat.roleName);
-
-		if (beat.role === "speaker") {
-			const ordered = [...matching].sort((a, b) => a.slotIndex - b.slotIndex);
-			const multi = ordered.length > 1;
-			ordered.forEach((s, i) => {
-				const marks =
-					s.minMinutes != null && s.maxMinutes != null
-						? {
-								green: s.minMinutes,
-								yellow: (s.minMinutes + s.maxMinutes) / 2,
-								red: s.maxMinutes,
-							}
-						: null;
-				const detail = s.speechTitle
-					? `"${s.speechTitle}"${s.projectLevel ? ` · ${s.projectLevel}` : ""}`
-					: beat.detail;
-				rows.push({
-					who: `${numbered(beat.roleName, i, multi)} · ${assigneeDisplay(s)}`,
-					detail,
-					minutes: s.maxMinutes ?? DEFAULT_SPEAKER_MINUTES,
-					marks,
-				});
-			});
-		} else if (beat.role === "evaluator") {
-			const ordered = orderEvaluators(matching, slots);
-			const multi = ordered.length > 1;
-			ordered.forEach((s, i) => {
-				rows.push({
-					who: `${numbered(beat.roleName, i, multi)} · ${assigneeDisplay(s)}`,
-					detail: s.evaluates?.speakerName
-						? `Evaluates ${s.evaluates.speakerName}`
-						: beat.detail,
-					minutes: beat.minutes,
-					marks: null,
-				});
-			});
 		} else {
-			// plain role: usually one slot; a missing role degrades to a label-only row.
-			if (matching.length === 0) {
+			const matching = byRole(beat.roleName);
+
+			if (beat.role === "speaker") {
+				const ordered = [...matching].sort((a, b) => a.slotIndex - b.slotIndex);
+				const multi = ordered.length > 1;
+				ordered.forEach((s, i) => {
+					const marks =
+						s.minMinutes != null && s.maxMinutes != null
+							? {
+									green: s.minMinutes,
+									yellow: (s.minMinutes + s.maxMinutes) / 2,
+									red: s.maxMinutes,
+								}
+							: null;
+					const detail = s.speechTitle
+						? `"${s.speechTitle}"${s.projectLevel ? ` · ${s.projectLevel}` : ""}`
+						: beat.detail;
+					rows.push({
+						who: `${numbered(beat.roleName, i, multi)} · ${assigneeDisplay(s)}`,
+						detail,
+						minutes: s.maxMinutes ?? DEFAULT_SPEAKER_MINUTES,
+						marks,
+					});
+				});
+			} else if (beat.role === "evaluator") {
+				const ordered = orderEvaluators(matching, slots);
+				const multi = ordered.length > 1;
+				ordered.forEach((s, i) => {
+					rows.push({
+						who: `${numbered(beat.roleName, i, multi)} · ${assigneeDisplay(s)}`,
+						detail: s.evaluates?.speakerName
+							? `Evaluates ${s.evaluates.speakerName}`
+							: beat.detail,
+						minutes: beat.minutes,
+						marks: null,
+					});
+				});
+			} else if (matching.length === 0) {
+				// plain role, missing: degrade to a label-only row.
 				rows.push({
 					who: beat.roleName,
 					detail: beat.detail,
@@ -270,6 +278,64 @@ export function expandRunSheet(
 				}
 			}
 		}
+
+		// Mark the first row this beat produced as the squishy one.
+		if (beat.flex && rows.length > startLen) {
+			rows[startLen] = { ...rows[startLen], flex: true };
+		}
 	}
 	return rows;
+}
+
+export type FlexStatus = "exact" | "over" | "under";
+
+export type FlexResult = {
+	/** Rows with the flex row's `minutes` replaced by the clamped value. */
+	rows: AgendaRow[];
+	/** Actual total after clamping (= start-to-end meeting length). */
+	projectedMinutes: number;
+	/** Banner status, AFTER the deadband. */
+	status: FlexStatus;
+	/** True signed delta: +5 = runs 5 min long, −5 = ends 5 min early. */
+	deltaMinutes: number;
+};
+
+/**
+ * Resize the single `flex`-marked row (Table Topics) so the run-of-show totals
+ * `targetMinutes`, clamped to [TABLE_TOPICS_MIN, TABLE_TOPICS_MAX]. The flex row
+ * absorbs the exact remainder, so `deltaMinutes` is nonzero only when clamping
+ * makes the target unreachable. `status` applies the ±FLEX_TOLERANCE_MINUTES
+ * deadband to gate the banner; the computed duration is never deadbanded.
+ */
+export function applyFlex(
+	rows: AgendaRow[],
+	targetMinutes: number,
+): FlexResult {
+	const total = rows.reduce((sum, r) => sum + r.minutes, 0);
+	const flexIndex = rows.findIndex((r) => r.flex === true);
+
+	let out = rows;
+	let projectedMinutes = total;
+
+	if (flexIndex !== -1) {
+		const fixed = total - rows[flexIndex].minutes;
+		const flexMinutes = Math.min(
+			TABLE_TOPICS_MAX,
+			Math.max(TABLE_TOPICS_MIN, targetMinutes - fixed),
+		);
+		out = rows.map((r, i) =>
+			i === flexIndex ? { ...r, minutes: flexMinutes } : r,
+		);
+		projectedMinutes = fixed + flexMinutes;
+	}
+
+	const deltaMinutes = projectedMinutes - targetMinutes;
+	const status: FlexStatus =
+		Math.abs(deltaMinutes) <= FLEX_TOLERANCE_MINUTES
+			? "exact"
+			: deltaMinutes > 0
+				? "over"
+				: "under";
+
+	return { rows: out, projectedMinutes, status, deltaMinutes };
 }
