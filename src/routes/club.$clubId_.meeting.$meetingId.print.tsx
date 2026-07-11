@@ -8,7 +8,12 @@ import {
 } from "#/components/agenda/meeting-agenda-print";
 import { OfflineBadge } from "#/components/agenda/offline-badge";
 import { buildRosterEntries } from "#/lib/agenda";
-import { expandRunSheet } from "#/lib/agenda-runsheet";
+import {
+	applyFlex,
+	expandRunSheet,
+	TABLE_TOPICS_MAX,
+	TABLE_TOPICS_MIN,
+} from "#/lib/agenda-runsheet";
 import { buildTimeline } from "#/lib/agenda-timing";
 import { resolveClubOrRedirect } from "#/lib/club-route";
 import { getMeeting } from "#/server/meetings";
@@ -77,12 +82,12 @@ function PrintAgenda() {
 	} = Route.useLoaderData();
 
 	const runRows = expandRunSheet(slots);
-	const rows = buildTimeline(runRows, meeting.scheduledAt, timezone);
+	const flex = applyFlex(runRows, meeting.lengthMinutes);
+	const rows = buildTimeline(flex.rows, meeting.scheduledAt, timezone);
 
-	// Meeting end = start + total run-of-show minutes.
-	const totalMinutes = runRows.reduce((sum, r) => sum + r.minutes, 0);
+	// Meeting end = start + the flexed (projected) run-of-show length.
 	const startsAt = new Date(meeting.scheduledAt);
-	const endsAt = new Date(startsAt.getTime() + totalMinutes * 60_000);
+	const endsAt = new Date(startsAt.getTime() + flex.projectedMinutes * 60_000);
 
 	const dateLong = new Intl.DateTimeFormat(undefined, {
 		weekday: "long",
@@ -158,6 +163,25 @@ function PrintAgenda() {
 					Print
 				</button>
 			</div>
+			{flex.status !== "exact" ? (
+				<div
+					className="no-print"
+					style={{
+						margin: "8px auto 0",
+						maxWidth: 640,
+						padding: "8px 12px",
+						borderRadius: 8,
+						fontSize: 13,
+						textAlign: "center",
+						background: flex.status === "over" ? "#fbeaea" : "#eef2f7",
+						color: flex.status === "over" ? "#8a1c1c" : "#41546b",
+					}}
+				>
+					{flex.status === "over"
+						? `Agenda runs ${flex.deltaMinutes} min long — Table Topics is at its ${TABLE_TOPICS_MIN}-min floor. Trim a speech or shorten the agenda.`
+						: `Agenda ends ${-flex.deltaMinutes} min early — Table Topics is at its ${TABLE_TOPICS_MAX}-min cap.`}
+				</div>
+			) : null}
 			<style>{`
 				@media screen { body { background: #d8e6dd; } }
 				.pgwrap { padding: 28px 0; }
