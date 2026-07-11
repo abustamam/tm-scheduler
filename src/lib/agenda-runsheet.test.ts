@@ -197,3 +197,18 @@ describe("expandRunSheet", () => {
 		expect(evalRows[1].who).toBe("Evaluator 2 · EvalB");
 	});
 });
+
+describe("expandRunSheet flex marker", () => {
+	it("marks exactly one row — the Table Topics row — as flex", () => {
+		const rows = expandRunSheet([]);
+		const flexed = rows.filter((r) => r.flex === true);
+		expect(flexed).toHaveLength(1);
+		expect(flexed[0].who).toContain("Table Topics");
+	});
+
+	it("does not mark any row when the template has no flex beat", () => {
+		const noFlex = RUN_OF_SHOW.map((b) => ({ ...b, flex: undefined }));
+		const rows = expandRunSheet([], noFlex);
+		expect(rows.some((r) => r.flex === true)).toBe(false);
+	});
+});

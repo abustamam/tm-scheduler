@@ -41,13 +41,15 @@ export type AgendaRow = {
 	detail: string;
 	minutes: number; // duration this row contributes to the running clock
 	marks: TimingMarks | null;
+	/** True on the single squishy row (Table Topics). `applyFlex` resizes it. */
+	flex?: boolean;
 };
 
 /** A functionary/uncovered role shown in the header legend. */
 export type LegendEntry = { role: string; name: string };
 
-/** A beat in the standard run-of-show. */
-export type Beat =
+/** A beat in the standard run-of-show. `flex` marks the single squishy beat. */
+export type Beat = (
 	| { kind: "event"; who: string; detail: string; minutes: number }
 	| {
 			kind: "role";
@@ -55,7 +57,8 @@ export type Beat =
 			role: "plain" | "speaker" | "evaluator";
 			detail: string;
 			minutes: number;
-	  };
+	  }
+) & { flex?: true };
 
 /** Fallback speaker duration when a speaker slot has no maxMinutes. */
 export const DEFAULT_SPEAKER_MINUTES = 7;
@@ -121,6 +124,7 @@ export const RUN_OF_SHOW: Beat[] = [
 		role: "plain",
 		detail: "Impromptu topics using the Word of the Day",
 		minutes: 10,
+		flex: true,
 	},
 	{
 		kind: "event",
@@ -201,6 +205,8 @@ export function expandRunSheet(
 		slots.filter((s) => s.roleName.toLowerCase() === name.toLowerCase());
 
 	for (const beat of template) {
+		const startLen = rows.length;
+
 		if (beat.kind === "event") {
 			rows.push({
 				who: beat.who,
@@ -208,49 +214,46 @@ export function expandRunSheet(
 				minutes: beat.minutes,
 				marks: null,
 			});
-			continue;
-		}
-
-		const matching = byRole(beat.roleName);
-
-		if (beat.role === "speaker") {
-			const ordered = [...matching].sort((a, b) => a.slotIndex - b.slotIndex);
-			const multi = ordered.length > 1;
-			ordered.forEach((s, i) => {
-				const marks =
-					s.minMinutes != null && s.maxMinutes != null
-						? {
-								green: s.minMinutes,
-								yellow: (s.minMinutes + s.maxMinutes) / 2,
-								red: s.maxMinutes,
-							}
-						: null;
-				const detail = s.speechTitle
-					? `"${s.speechTitle}"${s.projectLevel ? ` · ${s.projectLevel}` : ""}`
-					: beat.detail;
-				rows.push({
-					who: `${numbered(beat.roleName, i, multi)} · ${assigneeDisplay(s)}`,
-					detail,
-					minutes: s.maxMinutes ?? DEFAULT_SPEAKER_MINUTES,
-					marks,
-				});
-			});
-		} else if (beat.role === "evaluator") {
-			const ordered = orderEvaluators(matching, slots);
-			const multi = ordered.length > 1;
-			ordered.forEach((s, i) => {
-				rows.push({
-					who: `${numbered(beat.roleName, i, multi)} · ${assigneeDisplay(s)}`,
-					detail: s.evaluates?.speakerName
-						? `Evaluates ${s.evaluates.speakerName}`
-						: beat.detail,
-					minutes: beat.minutes,
-					marks: null,
-				});
-			});
 		} else {
-			// plain role: usually one slot; a missing role degrades to a label-only row.
-			if (matching.length === 0) {
+			const matching = byRole(beat.roleName);
+
+			if (beat.role === "speaker") {
+				const ordered = [...matching].sort((a, b) => a.slotIndex - b.slotIndex);
+				const multi = ordered.length > 1;
+				ordered.forEach((s, i) => {
+					const marks =
+						s.minMinutes != null && s.maxMinutes != null
+							? {
+									green: s.minMinutes,
+									yellow: (s.minMinutes + s.maxMinutes) / 2,
+									red: s.maxMinutes,
+								}
+							: null;
+					const detail = s.speechTitle
+						? `"${s.speechTitle}"${s.projectLevel ? ` · ${s.projectLevel}` : ""}`
+						: beat.detail;
+					rows.push({
+						who: `${numbered(beat.roleName, i, multi)} · ${assigneeDisplay(s)}`,
+						detail,
+						minutes: s.maxMinutes ?? DEFAULT_SPEAKER_MINUTES,
+						marks,
+					});
+				});
+			} else if (beat.role === "evaluator") {
+				const ordered = orderEvaluators(matching, slots);
+				const multi = ordered.length > 1;
+				ordered.forEach((s, i) => {
+					rows.push({
+						who: `${numbered(beat.roleName, i, multi)} · ${assigneeDisplay(s)}`,
+						detail: s.evaluates?.speakerName
+							? `Evaluates ${s.evaluates.speakerName}`
+							: beat.detail,
+						minutes: beat.minutes,
+						marks: null,
+					});
+				});
+			} else if (matching.length === 0) {
+				// plain role, missing: degrade to a label-only row.
 				rows.push({
 					who: beat.roleName,
 					detail: beat.detail,
@@ -267,6 +270,11 @@ export function expandRunSheet(
 					});
 				}
 			}
+		}
+
+		// Mark the first row this beat produced as the squishy one.
+		if (beat.flex && rows.length > startLen) {
+			rows[startLen] = { ...rows[startLen], flex: true };
 		}
 	}
 	return rows;
