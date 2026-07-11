@@ -15,6 +15,7 @@ import { Route as AuthedIndexRouteImport } from './routes/_authed/index'
 import { Route as ClubClubIdRouteImport } from './routes/club.$clubId'
 import { Route as ApiHealthRouteImport } from './routes/api/health'
 import { Route as ApiDevLoginRouteImport } from './routes/api/dev-login'
+import { Route as AuthedSuperadminRouteImport } from './routes/_authed/superadmin'
 import { Route as AuthedScheduleRouteImport } from './routes/_authed/schedule'
 import { Route as AuthedResourcesRouteImport } from './routes/_authed/resources'
 import { Route as AuthedNextRouteImport } from './routes/_authed/next'
@@ -22,8 +23,10 @@ import { Route as AuthedMeRouteImport } from './routes/_authed/me'
 import { Route as AuthedDashboardRouteImport } from './routes/_authed/dashboard'
 import { Route as AuthedActivityRouteImport } from './routes/_authed/activity'
 import { Route as ClubClubIdIndexRouteImport } from './routes/club.$clubId.index'
+import { Route as AuthedSuperadminIndexRouteImport } from './routes/_authed/superadmin/index'
 import { Route as ApiPathwaysIngestRouteImport } from './routes/api/pathways/ingest'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
+import { Route as AuthedSuperadminClubIdRouteImport } from './routes/_authed/superadmin/$clubId'
 import { Route as AuthedMembersIdRouteImport } from './routes/_authed/members.$id'
 import { Route as AuthedMeetingsIdRouteImport } from './routes/_authed/meetings.$id'
 import { Route as AuthedAdminVpeDashboardRouteImport } from './routes/_authed/admin/vpe-dashboard'
@@ -66,6 +69,11 @@ const ApiDevLoginRoute = ApiDevLoginRouteImport.update({
   path: '/api/dev-login',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AuthedSuperadminRoute = AuthedSuperadminRouteImport.update({
+  id: '/superadmin',
+  path: '/superadmin',
+  getParentRoute: () => AuthedRoute,
+} as any)
 const AuthedScheduleRoute = AuthedScheduleRouteImport.update({
   id: '/schedule',
   path: '/schedule',
@@ -101,6 +109,11 @@ const ClubClubIdIndexRoute = ClubClubIdIndexRouteImport.update({
   path: '/',
   getParentRoute: () => ClubClubIdRoute,
 } as any)
+const AuthedSuperadminIndexRoute = AuthedSuperadminIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AuthedSuperadminRoute,
+} as any)
 const ApiPathwaysIngestRoute = ApiPathwaysIngestRouteImport.update({
   id: '/api/pathways/ingest',
   path: '/api/pathways/ingest',
@@ -110,6 +123,11 @@ const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   id: '/api/auth/$',
   path: '/api/auth/$',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AuthedSuperadminClubIdRoute = AuthedSuperadminClubIdRouteImport.update({
+  id: '/$clubId',
+  path: '/$clubId',
+  getParentRoute: () => AuthedSuperadminRoute,
 } as any)
 const AuthedMembersIdRoute = AuthedMembersIdRouteImport.update({
   id: '/members/$id',
@@ -184,6 +202,7 @@ export interface FileRoutesByFullPath {
   '/next': typeof AuthedNextRoute
   '/resources': typeof AuthedResourcesRoute
   '/schedule': typeof AuthedScheduleRoute
+  '/superadmin': typeof AuthedSuperadminRouteWithChildren
   '/api/dev-login': typeof ApiDevLoginRoute
   '/api/health': typeof ApiHealthRoute
   '/club/$clubId': typeof ClubClubIdRouteWithChildren
@@ -194,8 +213,10 @@ export interface FileRoutesByFullPath {
   '/admin/vpe-dashboard': typeof AuthedAdminVpeDashboardRoute
   '/meetings/$id': typeof AuthedMeetingsIdRoute
   '/members/$id': typeof AuthedMembersIdRoute
+  '/superadmin/$clubId': typeof AuthedSuperadminClubIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/pathways/ingest': typeof ApiPathwaysIngestRoute
+  '/superadmin/': typeof AuthedSuperadminIndexRoute
   '/club/$clubId/': typeof ClubClubIdIndexRoute
   '/admin/meetings/new': typeof AuthedAdminMeetingsNewRoute
   '/club/$clubId/meeting/$meetingId': typeof ClubClubIdMeetingMeetingIdRoute
@@ -221,8 +242,10 @@ export interface FileRoutesByTo {
   '/admin/vpe-dashboard': typeof AuthedAdminVpeDashboardRoute
   '/meetings/$id': typeof AuthedMeetingsIdRoute
   '/members/$id': typeof AuthedMembersIdRoute
+  '/superadmin/$clubId': typeof AuthedSuperadminClubIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/pathways/ingest': typeof ApiPathwaysIngestRoute
+  '/superadmin': typeof AuthedSuperadminIndexRoute
   '/club/$clubId': typeof ClubClubIdIndexRoute
   '/admin/meetings/new': typeof AuthedAdminMeetingsNewRoute
   '/club/$clubId/meeting/$meetingId': typeof ClubClubIdMeetingMeetingIdRoute
@@ -240,6 +263,7 @@ export interface FileRoutesById {
   '/_authed/next': typeof AuthedNextRoute
   '/_authed/resources': typeof AuthedResourcesRoute
   '/_authed/schedule': typeof AuthedScheduleRoute
+  '/_authed/superadmin': typeof AuthedSuperadminRouteWithChildren
   '/api/dev-login': typeof ApiDevLoginRoute
   '/api/health': typeof ApiHealthRoute
   '/club/$clubId': typeof ClubClubIdRouteWithChildren
@@ -251,8 +275,10 @@ export interface FileRoutesById {
   '/_authed/admin/vpe-dashboard': typeof AuthedAdminVpeDashboardRoute
   '/_authed/meetings/$id': typeof AuthedMeetingsIdRoute
   '/_authed/members/$id': typeof AuthedMembersIdRoute
+  '/_authed/superadmin/$clubId': typeof AuthedSuperadminClubIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/pathways/ingest': typeof ApiPathwaysIngestRoute
+  '/_authed/superadmin/': typeof AuthedSuperadminIndexRoute
   '/club/$clubId/': typeof ClubClubIdIndexRoute
   '/_authed/admin/meetings/new': typeof AuthedAdminMeetingsNewRoute
   '/club/$clubId/meeting/$meetingId': typeof ClubClubIdMeetingMeetingIdRoute
@@ -271,6 +297,7 @@ export interface FileRouteTypes {
     | '/next'
     | '/resources'
     | '/schedule'
+    | '/superadmin'
     | '/api/dev-login'
     | '/api/health'
     | '/club/$clubId'
@@ -281,8 +308,10 @@ export interface FileRouteTypes {
     | '/admin/vpe-dashboard'
     | '/meetings/$id'
     | '/members/$id'
+    | '/superadmin/$clubId'
     | '/api/auth/$'
     | '/api/pathways/ingest'
+    | '/superadmin/'
     | '/club/$clubId/'
     | '/admin/meetings/new'
     | '/club/$clubId/meeting/$meetingId'
@@ -308,8 +337,10 @@ export interface FileRouteTypes {
     | '/admin/vpe-dashboard'
     | '/meetings/$id'
     | '/members/$id'
+    | '/superadmin/$clubId'
     | '/api/auth/$'
     | '/api/pathways/ingest'
+    | '/superadmin'
     | '/club/$clubId'
     | '/admin/meetings/new'
     | '/club/$clubId/meeting/$meetingId'
@@ -326,6 +357,7 @@ export interface FileRouteTypes {
     | '/_authed/next'
     | '/_authed/resources'
     | '/_authed/schedule'
+    | '/_authed/superadmin'
     | '/api/dev-login'
     | '/api/health'
     | '/club/$clubId'
@@ -337,8 +369,10 @@ export interface FileRouteTypes {
     | '/_authed/admin/vpe-dashboard'
     | '/_authed/meetings/$id'
     | '/_authed/members/$id'
+    | '/_authed/superadmin/$clubId'
     | '/api/auth/$'
     | '/api/pathways/ingest'
+    | '/_authed/superadmin/'
     | '/club/$clubId/'
     | '/_authed/admin/meetings/new'
     | '/club/$clubId/meeting/$meetingId'
@@ -404,6 +438,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiDevLoginRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_authed/superadmin': {
+      id: '/_authed/superadmin'
+      path: '/superadmin'
+      fullPath: '/superadmin'
+      preLoaderRoute: typeof AuthedSuperadminRouteImport
+      parentRoute: typeof AuthedRoute
+    }
     '/_authed/schedule': {
       id: '/_authed/schedule'
       path: '/schedule'
@@ -453,6 +494,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ClubClubIdIndexRouteImport
       parentRoute: typeof ClubClubIdRoute
     }
+    '/_authed/superadmin/': {
+      id: '/_authed/superadmin/'
+      path: '/'
+      fullPath: '/superadmin/'
+      preLoaderRoute: typeof AuthedSuperadminIndexRouteImport
+      parentRoute: typeof AuthedSuperadminRoute
+    }
     '/api/pathways/ingest': {
       id: '/api/pathways/ingest'
       path: '/api/pathways/ingest'
@@ -466,6 +514,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/api/auth/$'
       preLoaderRoute: typeof ApiAuthSplatRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/_authed/superadmin/$clubId': {
+      id: '/_authed/superadmin/$clubId'
+      path: '/$clubId'
+      fullPath: '/superadmin/$clubId'
+      preLoaderRoute: typeof AuthedSuperadminClubIdRouteImport
+      parentRoute: typeof AuthedSuperadminRoute
     }
     '/_authed/members/$id': {
       id: '/_authed/members/$id'
@@ -554,6 +609,19 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface AuthedSuperadminRouteChildren {
+  AuthedSuperadminClubIdRoute: typeof AuthedSuperadminClubIdRoute
+  AuthedSuperadminIndexRoute: typeof AuthedSuperadminIndexRoute
+}
+
+const AuthedSuperadminRouteChildren: AuthedSuperadminRouteChildren = {
+  AuthedSuperadminClubIdRoute: AuthedSuperadminClubIdRoute,
+  AuthedSuperadminIndexRoute: AuthedSuperadminIndexRoute,
+}
+
+const AuthedSuperadminRouteWithChildren =
+  AuthedSuperadminRoute._addFileChildren(AuthedSuperadminRouteChildren)
+
 interface AuthedRouteChildren {
   AuthedActivityRoute: typeof AuthedActivityRoute
   AuthedDashboardRoute: typeof AuthedDashboardRoute
@@ -561,6 +629,7 @@ interface AuthedRouteChildren {
   AuthedNextRoute: typeof AuthedNextRoute
   AuthedResourcesRoute: typeof AuthedResourcesRoute
   AuthedScheduleRoute: typeof AuthedScheduleRoute
+  AuthedSuperadminRoute: typeof AuthedSuperadminRouteWithChildren
   AuthedIndexRoute: typeof AuthedIndexRoute
   AuthedAdminClubSettingsRoute: typeof AuthedAdminClubSettingsRoute
   AuthedAdminPathwaysSyncRoute: typeof AuthedAdminPathwaysSyncRoute
@@ -579,6 +648,7 @@ const AuthedRouteChildren: AuthedRouteChildren = {
   AuthedNextRoute: AuthedNextRoute,
   AuthedResourcesRoute: AuthedResourcesRoute,
   AuthedScheduleRoute: AuthedScheduleRoute,
+  AuthedSuperadminRoute: AuthedSuperadminRouteWithChildren,
   AuthedIndexRoute: AuthedIndexRoute,
   AuthedAdminClubSettingsRoute: AuthedAdminClubSettingsRoute,
   AuthedAdminPathwaysSyncRoute: AuthedAdminPathwaysSyncRoute,

@@ -3,7 +3,7 @@ import { getCookie, setCookie } from "@tanstack/react-start/server";
 import { and, asc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
-import { clubs, members, people } from "#/db/schema";
+import { clubs, members, people, user as userTable } from "#/db/schema";
 import { ACTIVE_CLUB_COOKIE, resolveActiveClubId } from "#/lib/active-club";
 import { getSessionUser } from "./guards";
 
@@ -26,8 +26,17 @@ export const getAuthContext = createServerFn({ method: "GET" }).handler(
 				clubs: [] as const,
 				currentMemberId: null,
 				activeClubId: null,
+				isSuperadmin: false,
 			};
 		}
+		// Platform superadmin flag (ADR-0016 / #183) — orthogonal to club role.
+		// Read fresh from the user row; the sign-in hook keeps it reconciled.
+		const [userRow] = await db
+			.select({ isSuperadmin: userTable.isSuperadmin })
+			.from(userTable)
+			.where(eq(userTable.id, user.id))
+			.limit(1);
+		const isSuperadmin = userRow?.isSuperadmin ?? false;
 		// Resolve the signed-in user → Person (people.user_id) → their active
 		// memberships, reading role + the member id per club (ADR-0008 Phase B).
 		const myMemberships = await db
@@ -73,6 +82,7 @@ export const getAuthContext = createServerFn({ method: "GET" }).handler(
 			clubs: myClubs,
 			currentMemberId,
 			activeClubId,
+			isSuperadmin,
 		};
 	},
 );
