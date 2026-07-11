@@ -7,6 +7,7 @@ import {
 } from "@tanstack/react-router";
 import {
 	CalendarDays,
+	Clock,
 	Loader2,
 	Lock,
 	MapPin,
@@ -35,8 +36,13 @@ import {
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { Textarea } from "#/components/ui/textarea";
+import { applyFlex, expandRunSheet } from "#/lib/agenda-runsheet";
 import { utcToZonedWallTime } from "#/lib/datetime";
-import { formatMeetingDate, formatMeetingTimeRange } from "#/lib/format";
+import {
+	formatMeetingDate,
+	formatMeetingTime,
+	formatMeetingTimeRange,
+} from "#/lib/format";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import {
 	isMeetingLocked,
@@ -128,6 +134,10 @@ function MeetingView() {
 		roleRecency,
 		navItems,
 	} = Route.useLoaderData();
+	const flex = applyFlex(expandRunSheet(slots), meeting.lengthMinutes);
+	const projectedEnd = new Date(
+		new Date(meeting.scheduledAt).getTime() + flex.projectedMinutes * 60_000,
+	);
 	const { member } = useCurrentMember(clubId);
 	const router = useRouter();
 
@@ -246,6 +256,20 @@ function MeetingView() {
 							timezone,
 						)}
 					</span>
+					{flex.status !== "exact" ? (
+						<span
+							className={
+								flex.status === "over"
+									? "flex items-center gap-1.5 font-medium text-destructive"
+									: "flex items-center gap-1.5 text-muted-foreground"
+							}
+						>
+							<Clock className="size-4" aria-hidden />
+							{flex.status === "over"
+								? `Projected end ${formatMeetingTime(projectedEnd, timezone)} · runs ${flex.deltaMinutes} min long`
+								: `Projected end ${formatMeetingTime(projectedEnd, timezone)} · ends ${-flex.deltaMinutes} min early`}
+						</span>
+					) : null}
 					{meeting.location ? (
 						<span className="flex items-center gap-1.5">
 							<MapPin className="size-4" aria-hidden />
