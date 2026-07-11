@@ -49,6 +49,13 @@ the nouns in `src/db/schema.ts`.
   manage roster/roles) or `member`. Bound to the sign-in account, enforceable independent of
   roster metadata; defaulted from Officer position but stored explicitly (ADR-0008). (`vpe`
   was a third value that behaved identically to `admin`; it collapses into `admin`.)
+- **Superadmin** — a **platform-level** capability (`user.is_superadmin`), ORTHOGONAL to `club_role`
+  and layered on top of club membership (a superadmin still earns per-club admin rights the normal
+  way). Provisioned, not self-serve: reconciled two-way from the `SUPERADMIN_EMAILS` env allowlist
+  (case-insensitive) on every sign-in — adding an email grants on next sign-in, removing it revokes;
+  unset ⇒ nobody (fail closed). Enforced by `requireSuperadmin` (a separate guard — it does NOT
+  bypass `requireClubRole`; no ambient cross-club access). Surfaced by `getAuthContext.isSuperadmin`.
+  See ADR-0016 / #183. (Console UI #182, impersonation #185.)
 - **Meeting** — a single club session (`meetings`) with a date, theme, and word of the day.
   Its `status` follows a lifecycle: `scheduled → completed` (admin **Complete**, only on/after
   the meeting date) and `completed → scheduled` (admin **Reopen**, any time). A **completed**

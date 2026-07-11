@@ -1,7 +1,7 @@
 import { getRequest } from "@tanstack/react-start/server";
 import { and, eq } from "drizzle-orm";
 import { db } from "#/db";
-import { members, people } from "#/db/schema";
+import { members, people, user } from "#/db/schema";
 import { auth } from "#/lib/auth";
 import {
 	type MeetingAgendaAuthz,
@@ -81,6 +81,24 @@ export async function requireClubRole(
 		throw new Error("You don't have permission to do that.");
 	}
 	return membership;
+}
+
+/**
+ * Gate a platform-level action to superadmins (ADR-0016 / #183). This is the
+ * global `user.is_superadmin` flag (provisioned from SUPERADMIN_EMAILS),
+ * ORTHOGONAL to any per-club membership — it deliberately does NOT grant ambient
+ * cross-club access (that's deferred to #185). Throws when the user is not a
+ * superadmin.
+ */
+export async function requireSuperadmin(userId: string) {
+	const [row] = await db
+		.select({ isSuperadmin: user.isSuperadmin })
+		.from(user)
+		.where(eq(user.id, userId))
+		.limit(1);
+	if (!row?.isSuperadmin) {
+		throw new Error("You don't have permission to do that.");
+	}
 }
 
 /**

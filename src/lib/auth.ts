@@ -9,16 +9,20 @@ import {
 	buildMagicLinkEmail,
 	MAGIC_LINK_EXPIRY_SECONDS,
 } from "#/lib/magic-link-email";
+import { reconcileSuperadminFlag } from "#/lib/superadmin";
 import { linkPersonToUser } from "#/server/account-link-logic";
 
 export const auth = betterAuth({
 	database: drizzleAdapter(db, { provider: "pg" }),
-	// Runtime linking of a sign-in account to its roster identity (#188). Fires on
-	// EVERY successful sign-in (a new session), so linking works regardless of
-	// ordering (Person provisioned before or after first sign-in) and is
-	// idempotent — see `linkPersonToUser`. Wrapped so a link failure never blocks
-	// the user from signing in (worst case: they land with no clubs).
-	// NOTE: keep each hook body self-contained — other features add sibling hooks.
+	// On EVERY successful sign-in (a new session), run two independent
+	// reconciliations. `session.create.after` fires for both new and returning
+	// users, so both are idempotent and self-healing on the next sign-in.
+	// Each is wrapped independently so one failing never blocks sign-in or the
+	// other — worst case the user lands with the pre-existing state.
+	//  - #188: link the sign-in account to its roster Person by email match, so
+	//    linking works regardless of ordering (Person provisioned before/after).
+	//  - #183 / ADR-0016: reconcile the platform superadmin flag from
+	//    SUPERADMIN_EMAILS (two-way grant/revoke).
 	databaseHooks: {
 		session: {
 			create: {
@@ -27,6 +31,11 @@ export const auth = betterAuth({
 						await linkPersonToUser(session.userId);
 					} catch (err) {
 						console.error("account-link on sign-in failed", err);
+					}
+					try {
+						await reconcileSuperadminFlag(session.userId);
+					} catch (err) {
+						console.error("superadmin reconcile on sign-in failed", err);
 					}
 				},
 			},
