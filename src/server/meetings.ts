@@ -154,6 +154,22 @@ async function loadMeetingDetail(
 		},
 	});
 
+	// The club's next non-cancelled meeting strictly after this one (spec: relative
+	// to the presented meeting, not wall-clock now). Backs the Thank-You slide.
+	const [nextMeeting] = await db
+		.select({ scheduledAt: meetings.scheduledAt })
+		.from(meetings)
+		.where(
+			and(
+				eq(meetings.clubId, meeting.clubId),
+				gte(meetings.scheduledAt, meeting.scheduledAt),
+				ne(meetings.id, meeting.id),
+				ne(meetings.status, "cancelled"),
+			),
+		)
+		.orderBy(asc(meetings.scheduledAt))
+		.limit(1);
+
 	// Officers for the printable agenda's officer grid (#100). The full agenda
 	// line-up (President → Sergeant at Arms; Immediate Past President is left off
 	// the agenda), in canonical order — a vacant office comes back as name: null
@@ -229,6 +245,7 @@ async function loadMeetingDetail(
 		slots,
 		canManage,
 		roleRecency,
+		nextMeetingAt: nextMeeting?.scheduledAt ?? null,
 		timezone: club?.timezone ?? "UTC",
 		clubName: club?.name ?? "",
 		clubNumber: club?.clubNumber ?? null,
