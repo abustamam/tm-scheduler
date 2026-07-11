@@ -41,6 +41,7 @@ describe("slideLayout headers (no 'Session', title-only)", () => {
 				title: null,
 				projectLevel: null,
 				time: "5–7 minutes",
+				link: null,
 			}),
 		).toBe("First Speech");
 	});
@@ -65,6 +66,7 @@ describe("slideLayout bodies", () => {
 			title: "AI",
 			projectLevel: "Level 3",
 			time: "5–7 minutes",
+			link: null,
 		});
 		if (
 			withProject.chrome === "content" &&
@@ -86,12 +88,44 @@ describe("slideLayout bodies", () => {
 			title: null,
 			projectLevel: null,
 			time: "5–7 minutes",
+			link: null,
 		});
 		if (noProject.chrome === "content" && noProject.body.form === "bullets") {
 			expect(noProject.body.items).toEqual([
 				"Speaker: Jagpal",
 				"Time: 5–7 minutes",
 			]);
+		}
+	});
+
+	it("speech carries a link on the bullets body only when set (#175)", () => {
+		const withLink = slideLayout({
+			kind: "speech",
+			label: "First Speech",
+			speaker: "Jagpal",
+			title: "AI",
+			projectLevel: null,
+			time: "5–7 minutes",
+			link: "https://acme.com/deck",
+		});
+		if (withLink.chrome === "content" && withLink.body.form === "bullets") {
+			expect(withLink.body.link).toBe("https://acme.com/deck");
+			// The "Link: Presentation" line is rendered from body.link, not an item.
+			expect(withLink.body.items).not.toContain("Link: Presentation");
+		} else {
+			throw new Error("expected bullets");
+		}
+		const noLink = slideLayout({
+			kind: "speech",
+			label: "First Speech",
+			speaker: "Jagpal",
+			title: null,
+			projectLevel: null,
+			time: "5–7 minutes",
+			link: null,
+		});
+		if (noLink.chrome === "content" && noLink.body.form === "bullets") {
+			expect(noLink.body.link).toBeNull();
 		}
 	});
 

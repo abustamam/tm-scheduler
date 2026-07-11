@@ -20,6 +20,8 @@ export type AgendaSlot = {
 	projectLevel: string | null;
 	minMinutes: number | null;
 	maxMinutes: number | null;
+	/** Optional link to the speaker's own slides/deck (#175). */
+	presentationUrl?: string | null;
 	evaluatesSlotId: string | null;
 	evaluates: { speakerName: string | null } | null;
 };

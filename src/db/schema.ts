@@ -551,6 +551,9 @@ export const speeches = pgTable(
 		}),
 		minMinutes: integer("min_minutes"),
 		maxMinutes: integer("max_minutes"),
+		// Optional link to the speaker's own slides/deck (#175). Rendered as a
+		// "Link: Presentation" bullet on the projected speech slide + .pptx export.
+		presentationUrl: text("presentation_url"),
 		// The one non-derivable speech state (ADR-0009): hide an abandoned draft
 		// from the "unscheduled speeches" surface without deleting it. Scheduling
 		// state (unscheduled / scheduled / delivered) stays DERIVED from slot

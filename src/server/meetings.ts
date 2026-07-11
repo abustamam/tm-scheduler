@@ -120,6 +120,7 @@ async function loadMeetingDetail(
 			projectLevel: speeches.projectLevel,
 			minMinutes: speeches.minMinutes,
 			maxMinutes: speeches.maxMinutes,
+			presentationUrl: speeches.presentationUrl,
 		})
 		.from(roleSlots)
 		.innerJoin(

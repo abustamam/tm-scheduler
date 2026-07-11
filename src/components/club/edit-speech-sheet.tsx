@@ -24,6 +24,7 @@ type SpeechSlot = {
 	projectLevel: string | null;
 	minMinutes: number | null;
 	maxMinutes: number | null;
+	presentationUrl: string | null;
 };
 
 export function EditSpeechSheet({
@@ -65,6 +66,8 @@ export function EditSpeechSheet({
 							String(form.get("projectLevel") ?? "").trim() || undefined,
 						minMinutes: minRaw ? Number(minRaw) : undefined,
 						maxMinutes: maxRaw ? Number(maxRaw) : undefined,
+						presentationUrl:
+							String(form.get("presentationUrl") ?? "").trim() || undefined,
 					},
 				},
 			});
@@ -153,6 +156,17 @@ export function EditSpeechSheet({
 									placeholder="6"
 								/>
 							</div>
+						</div>
+						<div className="space-y-2">
+							<Label htmlFor="presentationUrl">Presentation link</Label>
+							<Input
+								id="presentationUrl"
+								name="presentationUrl"
+								type="url"
+								inputMode="url"
+								defaultValue={slot.presentationUrl ?? ""}
+								placeholder="https://…  (speaker's slides)"
+							/>
 						</div>
 						<SheetFooter className="px-0">
 							<Button type="submit" disabled={busy} className="w-full">

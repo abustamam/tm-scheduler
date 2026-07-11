@@ -11,7 +11,7 @@ export type Line = { role: LineRole; text?: string };
 
 export type Body =
 	| { form: "centered"; lines: Line[] }
-	| { form: "bullets"; items: string[] }
+	| { form: "bullets"; items: string[]; link: string | null }
 	| { form: "numbered"; items: string[] }
 	| {
 			form: "word";
@@ -108,7 +108,7 @@ export function slideLayout(slide: Slide): SlideLayout {
 			if (slide.title) items.push(`Speech Title: “${slide.title}”`);
 			if (slide.projectLevel) items.push(`Project: ${slide.projectLevel}`);
 			items.push(`Time: ${slide.time}`);
-			return content(slide.label, { form: "bullets", items });
+			return content(slide.label, { form: "bullets", items, link: slide.link });
 		}
 		case "voteSpeaker":
 			return content("Vote for Best Speaker", {
@@ -127,6 +127,7 @@ export function slideLayout(slide: Slide): SlideLayout {
 					"Impromptu Speeches",
 					`Speaker time: ${slide.timing}`,
 				],
+				link: null,
 			});
 		case "voteTableTopics":
 			return content("Vote for Best Table Topic", {

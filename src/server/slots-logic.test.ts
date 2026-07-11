@@ -18,6 +18,7 @@ describe("normalizeSpeech", () => {
 			projectLevel: null,
 			minMinutes: null,
 			maxMinutes: null,
+			presentationUrl: null,
 		});
 		// A literal "TBA" title with nothing else is still not content.
 		expect(normalizeSpeech({ speechTitle: "  TBA  " }).hasContent).toBe(false);
@@ -40,7 +41,23 @@ describe("normalizeSpeech", () => {
 			projectLevel: null,
 			minMinutes: 4,
 			maxMinutes: 6,
+			presentationUrl: null,
 		});
+	});
+
+	it("normalizes a presentation link and counts it as content (#175)", () => {
+		const result = normalizeSpeech({
+			presentationUrl: "docs.google.com/d/abc",
+		});
+		expect(result.hasContent).toBe(true);
+		expect(result.content.presentationUrl).toBe(
+			"https://docs.google.com/d/abc",
+		);
+		// Junk links drop to null and don't count as content on their own.
+		expect(
+			normalizeSpeech({ presentationUrl: "tbd" }).content.presentationUrl,
+		).toBeNull();
+		expect(normalizeSpeech({ presentationUrl: "tbd" }).hasContent).toBe(false);
 	});
 
 	it("flags non-title fields as content even when the title is blank/TBA", () => {
