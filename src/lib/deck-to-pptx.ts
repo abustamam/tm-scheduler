@@ -1,234 +1,276 @@
-// Second renderer of the present-mode deck: turns the same `Slide[]` produced by
-// `buildSlideDeck` into a native, editable PowerPoint (.pptx) file. The HTML
-// present view (`meeting-present.tsx`) is the first renderer; this one emits
-// real text boxes (not images) so the deck stays editable in PowerPoint/Google
-// Slides. Keep the per-slide text mapping (`slideContent`) pure so it is
-// unit-testable in node independent of the browser download.
-//
-// NOTE: `pptxgenjs` is ~1 MB. This module imports it as a *type only* (erased at
-// build), and `deckToPptx` receives the constructor as an argument. Callers
-// dynamic-`import()` the library at click time so it is code-split out of the
-// main client bundle. Do not add a value import of "pptxgenjs" here.
+// Second renderer of the present-mode deck: turns the same Slide[] into a native,
+// editable PowerPoint (.pptx). Consumes the shared slideLayout descriptor so copy
+// and layout stay in lockstep with the on-screen present view. pptxgenjs is ~1 MB
+// and imported type-only here (erased at build); the constructor is passed in and
+// the library is dynamic-import()ed at click time (see pptx-download-button.tsx).
 import type PptxGenJS from "pptxgenjs";
+import colorMarkPng from "#/assets/ToastmastersWordmarkColorTight.png?inline";
+import whiteMarkPng from "#/assets/ToastmastersWordmarkWhiteTight.png?inline";
 import type { Slide } from "./agenda-slides";
+import {
+	type Body,
+	footerDate,
+	type Line,
+	type SlideLayout,
+	slideLayout,
+} from "./slide-layout";
 
 type PptxCtor = typeof PptxGenJS;
 type Presentation = InstanceType<PptxCtor>;
+type PptxSlide = PptxGenJS.Slide;
 
-/** Palette mirrors the HTML present view (`meeting-present.tsx`). */
 const INK = "2b2b2b";
-const MAROON = "9b1c2e";
-const MUTED = "565656";
+const MAROON = "770D29";
+const NAVY = "004062";
 const GROUND = "f3f4f4";
+const MUTED = "565656";
+const GOLD = "f3dd94";
 
-/**
- * The editable text of one slide, independent of pptxgenjs. `eyebrow` is the
- * small kicker (maroon), `title` the headline, `body` the supporting lines.
- * Pure so tests can assert text content per `Slide` kind.
- */
-export type SlideContent = {
-	eyebrow?: string;
-	title: string;
-	body: string[];
-};
+const W = 13.33;
+const H = 7.5;
+const FOOT_H = 1.13; // ~8.5% of width
 
-function formatTitleDate(scheduledAt: Date, timezone: string): string {
-	const date = new Intl.DateTimeFormat(undefined, {
-		weekday: "long",
-		month: "long",
-		day: "numeric",
-		year: "numeric",
-		timeZone: timezone,
-	}).format(scheduledAt);
-	const time = new Intl.DateTimeFormat(undefined, {
-		hour: "numeric",
-		minute: "2-digit",
-		timeZone: timezone,
-	}).format(scheduledAt);
-	return `${date} · ${time}`;
+// Tight wordmark aspect (px h/w) so addImage keeps the real proportions.
+const MARK_RATIO = { color: 184 / 1181, white: 257 / 1641 };
+
+function addWordmark(
+	s: PptxSlide,
+	tone: "color" | "white",
+	opts: { x: number; y: number; w: number },
+) {
+	s.addImage({
+		data: tone === "color" ? colorMarkPng : whiteMarkPng,
+		x: opts.x,
+		y: opts.y,
+		w: opts.w,
+		h: opts.w * MARK_RATIO[tone],
+	});
 }
 
-/** Pure mapping: one `Slide` → the editable text of one native slide. */
-export function slideContent(slide: Slide): SlideContent {
-	switch (slide.kind) {
-		case "title": {
-			const eyebrow = [
-				slide.district,
-				slide.clubNumber ? `Club #${slide.clubNumber}` : null,
-			]
-				.filter(Boolean)
-				.join(" · ");
-			return {
-				eyebrow: eyebrow || undefined,
-				title: slide.clubName,
-				body: [formatTitleDate(slide.scheduledAt, slide.timezone)],
-			};
-		}
-		case "toastmaster":
-			return {
-				eyebrow: "Toastmaster of the Day",
-				title: slide.name,
-				body: [],
-			};
-		case "theme":
-			return {
-				eyebrow: "Meeting Theme",
-				title: `“${slide.theme}”`,
-				body: [],
-			};
-		case "wordOfDay":
-			return {
-				eyebrow: "Word of the Day",
-				title: slide.word,
-				body: [
-					...(slide.definition ? [slide.definition] : []),
-					...(slide.example ? [`“${slide.example}”`] : []),
-				],
-			};
-		case "geIntro":
-			return {
-				eyebrow: "General Evaluator",
-				title: slide.name,
-				body: slide.team.map((t) => `${t.role} · ${t.name}`),
-			};
-		case "speech":
-			return {
-				eyebrow: slide.label,
-				title: slide.speaker,
-				body: [
-					...(slide.title ? [`“${slide.title}”`] : []),
-					[slide.projectLevel, slide.time].filter(Boolean).join(" · "),
-				].filter(Boolean),
-			};
-		case "voteSpeaker":
-			return voteContent("Vote for Best Speaker", slide.names);
-		case "tableTopics":
-			return {
-				eyebrow: "Table Topics",
-				title: slide.master,
-				body: [`Impromptu speaking · ${slide.timing}`],
-			};
-		case "voteTableTopics":
-			return voteContent("Vote for Best Table Topics", []);
-		case "evalIntro":
-			return {
-				eyebrow: "Evaluation Session",
-				title: slide.name,
-				body: [slide.time],
-			};
-		case "evaluation":
-			return {
-				eyebrow: slide.label,
-				title: slide.evaluator,
-				body: [
-					`${slide.speaker ? `Evaluates ${slide.speaker} · ` : ""}${slide.time}`,
-				],
-			};
-		case "voteEvaluator":
-			return voteContent("Vote for Best Evaluator", slide.names);
-		case "generalEvaluation":
-			return {
-				eyebrow: "General Evaluation",
-				title: slide.name,
-				body: [`Closing remarks · ${slide.time}`],
-			};
-		case "awards":
-			return {
-				eyebrow: "Awards",
-				title: "Awards",
-				body: slide.categories,
-			};
-		case "reminders":
-			return {
-				eyebrow: "Reminders",
-				title: "Reminders",
-				body: slide.text.split("\n"),
-			};
-		case "thankYou":
-			return {
-				eyebrow: undefined,
-				title: "Thank you",
-				body: slide.meetingSchedule ? [`We meet ${slide.meetingSchedule}`] : [],
-			};
-	}
-	return ((_exhaustive: never) => ({ title: "", body: [] }))(slide);
-}
-
-function voteContent(label: string, names: string[]): SlideContent {
-	return {
-		eyebrow: label,
-		title: "Cast your vote",
-		body: names,
-	};
-}
-
-/**
- * Build a fully-populated pptxgenjs presentation from the deck: one native
- * slide per deck slide, in order. `Pptx` is the `pptxgenjs` default export,
- * passed in so this module needs no value import of the heavy library.
- */
 export function deckToPptx(Pptx: PptxCtor, deck: Slide[]): Presentation {
 	const pptx = new Pptx();
-	pptx.layout = "LAYOUT_WIDE"; // 13.33 × 7.5 in (16:9)
-	const W = 13.33;
+	pptx.layout = "LAYOUT_WIDE";
+	const title = deck.find((s) => s.kind === "title");
+	const fdate = title ? footerDate(title.scheduledAt, title.timezone) : "";
+	const club = title?.clubName ?? "";
 
 	for (const slide of deck) {
-		const content = slideContent(slide);
+		const layout = slideLayout(slide);
 		const s = pptx.addSlide();
-		s.background = { color: GROUND };
-		const isTitle = slide.kind === "title";
-
-		let y = isTitle ? 2.6 : 1.6;
-
-		if (content.eyebrow) {
-			s.addText(content.eyebrow.toUpperCase(), {
-				x: 0.8,
-				y,
-				w: W - 1.6,
-				h: 0.5,
-				align: "center",
-				color: MAROON,
-				bold: true,
-				fontSize: 18,
-				charSpacing: 3,
-			});
-			y += 0.7;
-		}
-
-		s.addText(content.title, {
-			x: 0.8,
-			y,
-			w: W - 1.6,
-			h: 1.6,
-			align: "center",
-			color: INK,
-			bold: true,
-			fontSize: 44,
-		});
-		y += 1.7;
-
-		if (content.body.length > 0) {
-			s.addText(
-				content.body.map((line, i) => ({
-					text: line,
-					options: { breakLine: i < content.body.length - 1 },
-				})),
-				{
-					x: 0.8,
-					y,
-					w: W - 1.6,
-					h: 3,
-					align: "center",
-					valign: "top",
-					color: MUTED,
-					fontSize: 22,
-					lineSpacingMultiple: 1.2,
-				},
-			);
-		}
+		if (layout.chrome === "splash") renderSplash(pptx, s, layout);
+		else renderContent(pptx, s, layout, club, fdate);
 	}
-
 	return pptx;
+}
+
+function renderSplash(
+	pptx: Presentation,
+	s: PptxSlide,
+	layout: Extract<SlideLayout, { chrome: "splash" }>,
+) {
+	const dark = layout.tone === "dark";
+	s.background = { color: dark ? NAVY : GROUND };
+	addWordmark(s, dark ? "white" : "color", {
+		x: (W - 3.4) / 2,
+		y: 1.5,
+		w: 3.4,
+	});
+	s.addShape(pptx.ShapeType.line, {
+		x: (W - 6) / 2,
+		y: 2.5,
+		w: 6,
+		h: 0,
+		line: { color: dark ? "FFFFFF" : NAVY, width: 1 },
+	});
+	s.addText(layout.headline, {
+		x: 0.8,
+		y: 2.8,
+		w: W - 1.6,
+		h: 1.1,
+		align: "center",
+		bold: true,
+		fontSize: 48,
+		color: dark ? GOLD : INK,
+		fit: "shrink",
+	});
+	s.addText(
+		layout.sub
+			.filter((l) => l.role !== "spacer")
+			.map((l, i, arr) => ({
+				text: l.text ?? "",
+				options: {
+					breakLine: i < arr.length - 1,
+					bold: l.role === "strong",
+					fontSize: l.role === "strong" ? 22 : 20,
+					color: dark ? "DBE6EE" : MUTED,
+				},
+			})),
+		{
+			x: 0.8,
+			y: 4.2,
+			w: W - 1.6,
+			h: 2.4,
+			align: "center",
+			valign: "top",
+			lineSpacingMultiple: 1.15,
+		},
+	);
+}
+
+function renderContent(
+	pptx: Presentation,
+	s: PptxSlide,
+	layout: Extract<SlideLayout, { chrome: "content" }>,
+	club: string,
+	date: string,
+) {
+	s.background = { color: GROUND };
+	s.addText(layout.header, {
+		x: 0.8,
+		y: 0.6,
+		w: W - 1.6,
+		h: 0.8,
+		align: "left",
+		bold: true,
+		fontSize: 34,
+		color: INK,
+	});
+	s.addShape(pptx.ShapeType.rect, {
+		x: 0.8,
+		y: 1.5,
+		w: 1.05,
+		h: 0.09,
+		fill: { color: MAROON },
+	});
+	renderBody(s, layout.body);
+	s.addShape(pptx.ShapeType.rect, {
+		x: 0,
+		y: H - FOOT_H,
+		w: W,
+		h: FOOT_H,
+		fill: { color: NAVY },
+	});
+	addWordmark(s, "white", { x: 0.67, y: H - FOOT_H + 0.42, w: 1.7 });
+	s.addText(
+		[
+			{ text: club, options: { breakLine: true, bold: true, fontSize: 15 } },
+			{ text: date, options: { fontSize: 12, color: "D9E4EC" } },
+		],
+		{
+			x: W - 5.0,
+			y: H - FOOT_H + 0.18,
+			w: 4.33,
+			h: FOOT_H - 0.36,
+			align: "right",
+			valign: "middle",
+			color: "FFFFFF",
+		},
+	);
+}
+
+const BODY = { x: 1.0, y: 2.0, w: W - 2.0, h: H - FOOT_H - 2.2 };
+
+function renderBody(s: PptxSlide, body: Body) {
+	if (body.form === "word") {
+		const runs: { text: string; options: Record<string, unknown> }[] = [
+			{
+				text: body.word,
+				options: { fontSize: 82, breakLine: true, color: INK },
+			},
+		];
+		if (body.definition)
+			runs.push({
+				text: `\n${body.definition}`,
+				options: { fontSize: 26, color: MUTED, breakLine: true },
+			});
+		if (body.example)
+			runs.push({
+				text: `\n“${body.example}”`,
+				options: { fontSize: 26, italic: true, color: MUTED },
+			});
+		s.addText(runs, {
+			...BODY,
+			align: "center",
+			valign: "middle",
+			fit: "shrink",
+		});
+		return;
+	}
+	if (body.form === "bullets") {
+		s.addText(
+			body.items.map((t, i) => ({
+				text: t,
+				options: {
+					breakLine: i < body.items.length - 1,
+					bullet: { characterCode: "2022" },
+				},
+			})),
+			{
+				...BODY,
+				align: "left",
+				valign: "middle",
+				bold: true,
+				fontSize: 40,
+				color: INK,
+				fit: "shrink",
+				lineSpacingMultiple: 1.3,
+			},
+		);
+		return;
+	}
+	if (body.form === "numbered") {
+		s.addText(
+			body.items.map((t, i) => ({
+				text: t,
+				options: {
+					breakLine: i < body.items.length - 1,
+					bullet: { type: "number" },
+				},
+			})),
+			{
+				...BODY,
+				align: "left",
+				valign: "middle",
+				bold: true,
+				fontSize: 46,
+				color: INK,
+				fit: "shrink",
+				lineSpacingMultiple: 1.3,
+			},
+		);
+		return;
+	}
+	const runs = body.lines
+		.filter((l) => l.role !== "spacer")
+		.map((l, i, arr) => lineRun(l, i < arr.length - 1));
+	s.addText(runs, {
+		...BODY,
+		align: "center",
+		valign: "middle",
+		color: INK,
+		fit: "shrink",
+		lineSpacingMultiple: 1.2,
+	});
+}
+
+function lineRun(l: Line, br: boolean) {
+	const base = { breakLine: br };
+	if (l.role === "name")
+		return {
+			text: `•  ${l.text}`,
+			options: { ...base, bold: true, fontSize: 40 },
+		};
+	if (l.role === "muted")
+		return {
+			text: l.text ?? "",
+			options: { ...base, fontSize: 26, color: MUTED },
+		};
+	if (l.role === "strong")
+		return {
+			text: l.text ?? "",
+			options: { ...base, bold: true, fontSize: 28 },
+		};
+	return { text: l.text ?? "", options: { ...base, bold: true, fontSize: 46 } };
 }
 
 /** Sanitize a string for use inside a filename (drop path/reserved chars). */
@@ -239,11 +281,7 @@ function fileSafe(s: string): string {
 		.trim();
 }
 
-/**
- * Meaningful download name from club + meeting date, e.g.
- * `Acme Toastmasters - 2026-07-15 Agenda.pptx`. Date is the meeting's calendar
- * day in the club timezone.
- */
+/** Meaningful download name, e.g. `Acme Toastmasters - 2026-07-15 Agenda.pptx`. */
 export function pptxFileName(
 	clubName: string,
 	scheduledAt: Date,

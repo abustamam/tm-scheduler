@@ -5,9 +5,8 @@ import {
 	buildSlideDeck,
 	type ClubForDeck,
 	type MeetingForDeck,
-	type Slide,
 } from "./agenda-slides";
-import { deckToPptx, pptxFileName, slideContent } from "./deck-to-pptx";
+import { deckToPptx, pptxFileName } from "./deck-to-pptx";
 
 function slot(over: Partial<AgendaSlot>): AgendaSlot {
 	return {
@@ -88,111 +87,19 @@ const fullSlots: AgendaSlot[] = [
 	}),
 ];
 
-const contentByKind = (deck: Slide[]) => {
-	const map = new Map<Slide["kind"], ReturnType<typeof slideContent>>();
-	for (const s of deck) map.set(s.kind, slideContent(s));
-	return map;
-};
-
-describe("slideContent per kind", () => {
-	const deck = buildSlideDeck(meeting, club, fullSlots);
-	const by = contentByKind(deck);
-
-	it("covers every kind the deck can produce", () => {
-		// A full meeting exercises the whole union except the vote/thankYou
-		// anchors, which we assert individually below.
-		expect(by.get("title")).toMatchObject({ title: "MCF Toastmasters Club" });
-		expect(by.get("title")?.eyebrow).toContain("District 39");
-		expect(by.get("title")?.eyebrow).toContain("Club #28677176");
-	});
-
-	it("toastmaster shows assignee under the role eyebrow", () => {
-		expect(by.get("toastmaster")).toMatchObject({
-			eyebrow: "Toastmaster of the Day",
-			title: "Schinthia",
-		});
-	});
-
-	it("theme wraps the theme in quotes", () => {
-		expect(by.get("theme")).toMatchObject({ title: "“A Fresh Start”" });
-	});
-
-	it("wordOfDay carries word, definition and example", () => {
-		const wod = by.get("wordOfDay");
-		expect(wod?.title).toBe("Momentum");
-		expect(wod?.body).toEqual([
-			"impetus gained by a moving object",
-			"“The momentum of the river keeps moving forward.”",
-		]);
-	});
-
-	it("geIntro lists the functionary team", () => {
-		expect(by.get("geIntro")).toMatchObject({ title: "Saiful" });
-		expect(by.get("geIntro")?.body).toContain("Grammarian · Mona");
-	});
-
-	it("speech carries speaker, title, level and time", () => {
-		const speech = slideContent(deck.find((s) => s.kind === "speech") as Slide);
-		expect(speech.eyebrow).toBe("Speech 1");
-		expect(speech.title).toBe("Rehanna");
-		expect(speech.body).toEqual([
-			"“A Tasteful Historic Profile”",
-			"Level 1 · 5–7 minutes",
-		]);
-	});
-
-	it("vote slides list nominees under a Cast your vote headline", () => {
-		expect(by.get("voteSpeaker")).toMatchObject({
-			eyebrow: "Vote for Best Speaker",
-			title: "Cast your vote",
-			body: ["Rehanna", "Sudheer"],
-		});
-		expect(by.get("voteTableTopics")).toMatchObject({
-			eyebrow: "Vote for Best Table Topics",
-			title: "Cast your vote",
-			body: [],
-		});
-		expect(by.get("voteEvaluator")).toMatchObject({
-			eyebrow: "Vote for Best Evaluator",
-			body: ["Faisal"],
-		});
-	});
-
-	it("tableTopics + evaluation session carry their people and timing", () => {
-		expect(by.get("tableTopics")).toMatchObject({
-			eyebrow: "Table Topics",
-			title: "Rasheed",
-		});
-		expect(by.get("evalIntro")).toMatchObject({ title: "Saiful" });
-		expect(by.get("evaluation")).toMatchObject({ title: "Faisal" });
-		expect(by.get("evaluation")?.body[0]).toContain("Evaluates Rehanna");
-		expect(by.get("generalEvaluation")).toMatchObject({ title: "Saiful" });
-	});
-
-	it("awards + reminders + thankYou", () => {
-		expect(by.get("awards")?.body).toEqual([
-			"Best Table Topic",
-			"Best Evaluator",
-			"Best Speaker",
-		]);
-		expect(by.get("reminders")?.body).toEqual([
-			"Choose a learning path.",
-			"Bring a guest.",
-		]);
-		expect(by.get("thankYou")).toMatchObject({
-			title: "Thank you",
-			body: ["We meet 2nd & 4th Thursday"],
-		});
-	});
-});
-
-// Read the editable text back out of a built pptxgenjs slide.
+// Read the editable text back out of a built pptxgenjs slide. `addText` stores
+// `.text` as the raw string when called with a plain string, or as an array of
+// `{ text }` runs when called with an array — normalize both.
 function slideText(pptx: PptxGenJS, i: number): string {
 	// biome-ignore lint/suspicious/noExplicitAny: reads pptxgenjs internals in test
 	const objects = (pptx as any).slides[i]._slideObjects as any[];
 	return objects
 		.filter((o) => o._type === "text")
-		.flatMap((o) => (o.text as { text: string }[]).map((t) => t.text))
+		.flatMap((o) =>
+			Array.isArray(o.text)
+				? (o.text as { text: string }[]).map((t) => t.text)
+				: [o.text as string],
+		)
 		.join("\n");
 }
 
@@ -210,7 +117,7 @@ describe("deckToPptx", () => {
 		expect(slideText(pptx, 0)).toContain("MCF Toastmasters Club");
 		const voteIdx = deck.findIndex((s) => s.kind === "voteSpeaker");
 		const voteText = slideText(pptx, voteIdx);
-		expect(voteText).toContain("Cast your vote");
+		expect(voteText).toContain("Vote for Best Speaker");
 		expect(voteText).toContain("Rehanna");
 	});
 
@@ -239,5 +146,18 @@ describe("pptxFileName", () => {
 		expect(
 			pptxFileName("A/B: Club?", new Date("2026-01-02T12:00:00Z"), "UTC"),
 		).toBe("AB Club - 2026-01-02 Agenda.pptx");
+	});
+});
+
+describe("pptx via slideLayout", () => {
+	it("builds the whole deck without throwing", () => {
+		const deck = buildSlideDeck(
+			meeting,
+			club,
+			fullSlots,
+			new Date("2026-07-23T23:45:00Z"),
+		);
+		const pptx = deckToPptx(PptxGenJS, deck);
+		expect(pptx).toBeTruthy();
 	});
 });
