@@ -56,6 +56,11 @@ the nouns in `src/db/schema.ts`.
   unset ⇒ nobody (fail closed). Enforced by `requireSuperadmin` (a separate guard — it does NOT
   bypass `requireClubRole`; no ambient cross-club access). Surfaced by `getAuthContext.isSuperadmin`.
   See ADR-0016 / #183. (Console UI #182, impersonation #185.)
+- **Provisioned onboarding** — a new club is created only by a **superadmin** through the
+  console (`/superadmin`, #182), never self-serve: one atomic transaction writes the club (unique
+  number + derived slug) + the 8 standard role definitions + a first admin (a Person with
+  `user_id` NULL and an `admin` Membership); the admin's account links on their first sign-in
+  (#188), and their email is editable in the console only while still unclaimed. See ADR-0016.
 - **Meeting** — a single club session (`meetings`) with a date, theme, and word of the day.
   Its `status` follows a lifecycle: `scheduled → completed` (admin **Complete**, only on/after
   the meeting date) and `completed → scheduled` (admin **Reopen**, any time). A **completed**

@@ -19,6 +19,7 @@ import {
 	RefreshCw,
 	ScrollText,
 	Settings,
+	ShieldCheck,
 } from "lucide-react";
 import type { ComponentType } from "react";
 import { BrandMark } from "#/components/brand-mark";
@@ -45,6 +46,7 @@ export const Route = createFileRoute("/_authed")({
 			clubs: ctx.clubs,
 			currentMemberId: ctx.currentMemberId,
 			activeClubId: ctx.activeClubId,
+			isSuperadmin: ctx.isSuperadmin,
 		};
 	},
 	component: WorkspaceLayout,
@@ -74,11 +76,13 @@ function crumbFor(pathname: string): string {
 	if (pathname.startsWith("/admin/vpe-dashboard"))
 		return "Manage · VP Education";
 	if (pathname.startsWith("/admin")) return "Manage · Admin";
+	if (pathname.startsWith("/superadmin")) return "Platform · Superadmin";
 	return "Workspace";
 }
 
 function WorkspaceLayout() {
-	const { authUser, clubs, activeClubId } = Route.useRouteContext();
+	const { authUser, clubs, activeClubId, isSuperadmin } =
+		Route.useRouteContext();
 	const router = useRouter();
 	const pathname = useRouterState({ select: (s) => s.location.pathname });
 
@@ -152,6 +156,12 @@ function WorkspaceLayout() {
 					<NavItem to="/dashboard" icon={LayoutGrid} label="My dashboard" />
 					<NavItem to="/resources" icon={BookOpen} label="Resources" />
 				</NavGroup>
+
+				{isSuperadmin ? (
+					<NavGroup label="Platform">
+						<NavItem to="/superadmin" icon={ShieldCheck} label="Superadmin" />
+					</NavGroup>
+				) : null}
 
 				{/* Footer mini-profile */}
 				<div className="mt-auto flex items-center gap-2.5 rounded-xl border border-[var(--line)] bg-[var(--foam)] p-2.5">

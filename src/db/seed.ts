@@ -4,6 +4,7 @@ import {
 	defaultClubRoleForOffices,
 	type OfficerPosition,
 } from "#/lib/officers";
+import { ROLE_TEMPLATE } from "#/lib/role-template";
 import { db } from "./index.ts";
 import {
 	clubs,
@@ -22,90 +23,6 @@ import {
 // owner's email so a magic-link sign-in lands as an admin out of the box.
 const ADMIN_EMAIL =
 	process.env.SEED_ADMIN_EMAIL ?? "rasheed.bustamam@gmail.com";
-
-type RoleSeed = {
-	name: string;
-	category: "leadership" | "speaker" | "evaluator" | "functionary";
-	defaultCount: number;
-	sortOrder: number;
-	isSpeakerRole: boolean;
-	description: string;
-};
-
-const ROLE_TEMPLATE: RoleSeed[] = [
-	{
-		name: "Toastmaster of the Day",
-		category: "leadership",
-		defaultCount: 1,
-		sortOrder: 10,
-		isSpeakerRole: false,
-		description:
-			"Hosts the meeting: sets the theme, introduces each speaker and segment, and keeps energy and timing on track. Prep: review the agenda beforehand.",
-	},
-	{
-		name: "Table Topics Master",
-		category: "leadership",
-		defaultCount: 1,
-		sortOrder: 20,
-		isSpeakerRole: false,
-		description:
-			"Leads the impromptu speaking segment by preparing 8–10 questions or scenarios and calling on members or guests to respond on the spot.",
-	},
-	{
-		name: "Speaker",
-		category: "speaker",
-		defaultCount: 3,
-		sortOrder: 30,
-		isSpeakerRole: true,
-		description:
-			"Delivers a prepared speech from your Pathways project; coordinate with your evaluator on the project objectives and time target before the meeting.",
-	},
-	{
-		name: "Evaluator",
-		category: "evaluator",
-		defaultCount: 3,
-		sortOrder: 40,
-		isSpeakerRole: false,
-		description:
-			"Provides structured written and verbal feedback on your assigned speaker's delivery, language, and achievement of their project goals.",
-	},
-	{
-		name: "General Evaluator",
-		category: "evaluator",
-		defaultCount: 1,
-		sortOrder: 50,
-		isSpeakerRole: false,
-		description:
-			"Oversees meeting quality by evaluating all roles (except speakers) and summarizing feedback from the Timer, Ah-Counter, and Grammarian.",
-	},
-	{
-		name: "Timer",
-		category: "functionary",
-		defaultCount: 1,
-		sortOrder: 60,
-		isSpeakerRole: false,
-		description:
-			"Tracks and displays time signals for every speaker and evaluator, then reports any overtime violations to the General Evaluator at the end of the meeting.",
-	},
-	{
-		name: "Ah-Counter",
-		category: "functionary",
-		defaultCount: 1,
-		sortOrder: 70,
-		isSpeakerRole: false,
-		description:
-			"Tallies filler words (um, ah, so, you know, like) for each speaker during the meeting and reports the counts in the evaluation segment.",
-	},
-	{
-		name: "Grammarian",
-		category: "functionary",
-		defaultCount: 1,
-		sortOrder: 80,
-		isSpeakerRole: false,
-		description:
-			"Introduces a Word of the Day, monitors language use throughout the meeting, and commends creative phrasing while noting grammatical slips in the evaluation segment.",
-	},
-];
 
 async function upsertUser(name: string, email: string) {
 	const [row] = await db
