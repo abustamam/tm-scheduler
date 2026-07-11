@@ -9,9 +9,22 @@ import {
 	buildMagicLinkEmail,
 	MAGIC_LINK_EXPIRY_SECONDS,
 } from "#/lib/magic-link-email";
+import { reconcileSuperadminFlag } from "#/lib/superadmin";
 
 export const auth = betterAuth({
 	database: drizzleAdapter(db, { provider: "pg" }),
+	// Reconcile the platform superadmin flag from SUPERADMIN_EMAILS on every
+	// sign-in (ADR-0016 / #183). `session.create.after` fires for both new and
+	// returning users, giving the two-way grant/revoke on the next sign-in.
+	databaseHooks: {
+		session: {
+			create: {
+				after: async (session) => {
+					await reconcileSuperadminFlag(session.userId);
+				},
+			},
+		},
+	},
 	rateLimit: {
 		enabled: true,
 		// Global default: 20 requests per 60 s (covers all auth endpoints).

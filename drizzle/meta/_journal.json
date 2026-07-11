@@ -169,6 +169,13 @@
       "when": 1783737770402,
       "tag": "0023_overjoyed_mathemanic",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1783796668832,
+      "tag": "0024_naive_hellfire_club",
+      "breakpoints": true
     }
   ]
 }

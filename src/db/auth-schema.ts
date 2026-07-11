@@ -9,6 +9,10 @@ export const user = pgTable("user", {
 	image: text("image"),
 	// App-specific extension of Better-Auth's canonical user table.
 	phone: text("phone"),
+	// Platform-level superadmin (ADR-0016 / #183): a capability ORTHOGONAL to any
+	// per-club `club_role`. Provisioned from the SUPERADMIN_EMAILS allowlist and
+	// reconciled two-way on every sign-in; defaults false so absence fails closed.
+	isSuperadmin: boolean("is_superadmin").default(false).notNull(),
 	createdAt: timestamp("created_at").defaultNow().notNull(),
 	updatedAt: timestamp("updated_at")
 		.defaultNow()
