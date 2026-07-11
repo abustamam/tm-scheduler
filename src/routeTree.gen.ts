@@ -36,6 +36,7 @@ import { Route as AuthedAdminPathwaysSyncRouteImport } from './routes/_authed/ad
 import { Route as AuthedAdminClubSettingsRouteImport } from './routes/_authed/admin/club-settings'
 import { Route as ClubClubIdMeetingMeetingIdRouteImport } from './routes/club.$clubId.meeting.$meetingId'
 import { Route as AuthedAdminMeetingsNewRouteImport } from './routes/_authed/admin/meetings.new'
+import { Route as AuthedAdminMeetingsBatchRouteImport } from './routes/_authed/admin/meetings.batch'
 import { Route as ClubClubIdMeetingMeetingIdPrintRouteImport } from './routes/club.$clubId_.meeting.$meetingId.print'
 import { Route as ClubClubIdMeetingMeetingIdPresentRouteImport } from './routes/club.$clubId_.meeting.$meetingId.present'
 import { Route as ApiMeetingsIdMinutesPdfRouteImport } from './routes/api/meetings.$id.minutes.pdf'
@@ -175,6 +176,12 @@ const AuthedAdminMeetingsNewRoute = AuthedAdminMeetingsNewRouteImport.update({
   path: '/admin/meetings/new',
   getParentRoute: () => AuthedRoute,
 } as any)
+const AuthedAdminMeetingsBatchRoute =
+  AuthedAdminMeetingsBatchRouteImport.update({
+    id: '/admin/meetings/batch',
+    path: '/admin/meetings/batch',
+    getParentRoute: () => AuthedRoute,
+  } as any)
 const ClubClubIdMeetingMeetingIdPrintRoute =
   ClubClubIdMeetingMeetingIdPrintRouteImport.update({
     id: '/club/$clubId_/meeting/$meetingId/print',
@@ -218,6 +225,7 @@ export interface FileRoutesByFullPath {
   '/api/pathways/ingest': typeof ApiPathwaysIngestRoute
   '/superadmin/': typeof AuthedSuperadminIndexRoute
   '/club/$clubId/': typeof ClubClubIdIndexRoute
+  '/admin/meetings/batch': typeof AuthedAdminMeetingsBatchRoute
   '/admin/meetings/new': typeof AuthedAdminMeetingsNewRoute
   '/club/$clubId/meeting/$meetingId': typeof ClubClubIdMeetingMeetingIdRoute
   '/api/meetings/$id/minutes/pdf': typeof ApiMeetingsIdMinutesPdfRoute
@@ -247,6 +255,7 @@ export interface FileRoutesByTo {
   '/api/pathways/ingest': typeof ApiPathwaysIngestRoute
   '/superadmin': typeof AuthedSuperadminIndexRoute
   '/club/$clubId': typeof ClubClubIdIndexRoute
+  '/admin/meetings/batch': typeof AuthedAdminMeetingsBatchRoute
   '/admin/meetings/new': typeof AuthedAdminMeetingsNewRoute
   '/club/$clubId/meeting/$meetingId': typeof ClubClubIdMeetingMeetingIdRoute
   '/api/meetings/$id/minutes/pdf': typeof ApiMeetingsIdMinutesPdfRoute
@@ -280,6 +289,7 @@ export interface FileRoutesById {
   '/api/pathways/ingest': typeof ApiPathwaysIngestRoute
   '/_authed/superadmin/': typeof AuthedSuperadminIndexRoute
   '/club/$clubId/': typeof ClubClubIdIndexRoute
+  '/_authed/admin/meetings/batch': typeof AuthedAdminMeetingsBatchRoute
   '/_authed/admin/meetings/new': typeof AuthedAdminMeetingsNewRoute
   '/club/$clubId/meeting/$meetingId': typeof ClubClubIdMeetingMeetingIdRoute
   '/api/meetings/$id/minutes/pdf': typeof ApiMeetingsIdMinutesPdfRoute
@@ -313,6 +323,7 @@ export interface FileRouteTypes {
     | '/api/pathways/ingest'
     | '/superadmin/'
     | '/club/$clubId/'
+    | '/admin/meetings/batch'
     | '/admin/meetings/new'
     | '/club/$clubId/meeting/$meetingId'
     | '/api/meetings/$id/minutes/pdf'
@@ -342,6 +353,7 @@ export interface FileRouteTypes {
     | '/api/pathways/ingest'
     | '/superadmin'
     | '/club/$clubId'
+    | '/admin/meetings/batch'
     | '/admin/meetings/new'
     | '/club/$clubId/meeting/$meetingId'
     | '/api/meetings/$id/minutes/pdf'
@@ -374,6 +386,7 @@ export interface FileRouteTypes {
     | '/api/pathways/ingest'
     | '/_authed/superadmin/'
     | '/club/$clubId/'
+    | '/_authed/admin/meetings/batch'
     | '/_authed/admin/meetings/new'
     | '/club/$clubId/meeting/$meetingId'
     | '/api/meetings/$id/minutes/pdf'
@@ -585,6 +598,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedAdminMeetingsNewRouteImport
       parentRoute: typeof AuthedRoute
     }
+    '/_authed/admin/meetings/batch': {
+      id: '/_authed/admin/meetings/batch'
+      path: '/admin/meetings/batch'
+      fullPath: '/admin/meetings/batch'
+      preLoaderRoute: typeof AuthedAdminMeetingsBatchRouteImport
+      parentRoute: typeof AuthedRoute
+    }
     '/club/$clubId_/meeting/$meetingId/print': {
       id: '/club/$clubId_/meeting/$meetingId/print'
       path: '/club/$clubId/meeting/$meetingId/print'
@@ -638,6 +658,7 @@ interface AuthedRouteChildren {
   AuthedAdminVpeDashboardRoute: typeof AuthedAdminVpeDashboardRoute
   AuthedMeetingsIdRoute: typeof AuthedMeetingsIdRoute
   AuthedMembersIdRoute: typeof AuthedMembersIdRoute
+  AuthedAdminMeetingsBatchRoute: typeof AuthedAdminMeetingsBatchRoute
   AuthedAdminMeetingsNewRoute: typeof AuthedAdminMeetingsNewRoute
 }
 
@@ -657,6 +678,7 @@ const AuthedRouteChildren: AuthedRouteChildren = {
   AuthedAdminVpeDashboardRoute: AuthedAdminVpeDashboardRoute,
   AuthedMeetingsIdRoute: AuthedMeetingsIdRoute,
   AuthedMembersIdRoute: AuthedMembersIdRoute,
+  AuthedAdminMeetingsBatchRoute: AuthedAdminMeetingsBatchRoute,
   AuthedAdminMeetingsNewRoute: AuthedAdminMeetingsNewRoute,
 }
 
