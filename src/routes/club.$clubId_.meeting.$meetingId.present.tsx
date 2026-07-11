@@ -30,6 +30,7 @@ function PresentPage() {
 			meetingSchedule: data.clubMeetingSchedule,
 		},
 		data.slots,
+		data.nextMeetingAt,
 	);
 	return (
 		<MeetingPresent

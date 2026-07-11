@@ -124,6 +124,7 @@ function MeetingDetail() {
 		clubGuests,
 		minutes,
 		minutesEmail,
+		nextMeetingAt,
 	} = Route.useLoaderData();
 	const { currentMemberId } = Route.useRouteContext();
 	const router = useRouter();
@@ -143,6 +144,7 @@ function MeetingDetail() {
 			meetingSchedule: clubMeetingSchedule,
 		},
 		slots,
+		nextMeetingAt,
 	);
 	// #150: a completed meeting is locked. Deny every mutation capability so
 	// <MeetingAgenda> renders read-only; the server rejects any edit that reaches
