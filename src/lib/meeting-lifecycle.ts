@@ -32,6 +32,22 @@ export function meetingDateReached(
 }
 
 /**
+ * Whether a meeting's scheduled *date* is strictly before today, in the club's
+ * timezone. Unlike `meetingDateReached`, the meeting day itself is NOT past — so
+ * the public agenda stays editable the day of the meeting (people fill roles
+ * right up to it) and only flips to read-only/attendance the day after.
+ */
+export function meetingDatePassed(
+	scheduledAt: Date | string,
+	timezone: string,
+	now: Date = new Date(),
+): boolean {
+	const day = utcToZonedWallTime(new Date(scheduledAt), timezone).slice(0, 10);
+	const today = utcToZonedWallTime(now, timezone).slice(0, 10);
+	return day < today;
+}
+
+/**
  * A locked meeting's viewer (#150): keep the member identity but deny every
  * mutation capability, so the shared `<MeetingAgenda>` renders read-only. Used
  * by both meeting surfaces when `isMeetingLocked(status)`.
@@ -45,5 +61,7 @@ export function lockedViewer(v: MeetingViewer): MeetingViewer {
 		canToggleAvailability: false,
 		canTakeOver: false,
 		canEditOwnSpeech: false,
+		canClaim: false,
+		canReleaseOwn: false,
 	};
 }

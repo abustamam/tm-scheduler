@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { lockedViewer } from "#/lib/meeting-lifecycle";
 import { selfAssertedViewer, sessionViewer } from "#/lib/meeting-viewer";
 import {
 	type AgendaSlot,
@@ -125,6 +126,31 @@ describe("MeetingAgenda capability gating", () => {
 		const claim = screen.getByRole("button", { name: "Claim" });
 		expect((claim as HTMLButtonElement).disabled).toBe(true);
 		expect(screen.queryByRole("button", { name: /Assign/ })).toBeNull();
+	});
+
+	it("is read-only under a locked viewer: no release on your own slot", () => {
+		const mine = slot({
+			status: "claimed",
+			assigneeId: "me",
+			assigneeName: "Me",
+		});
+		renderAgenda(
+			lockedViewer(selfAssertedViewer({ memberId: "me", isTmod: false })),
+			[mine],
+		);
+		// Own filled slot renders read-only — "Filled", no Release button.
+		expect(screen.getByText("Filled")).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "Release" })).toBeNull();
+		expect(screen.queryByText("take over")).toBeNull();
+	});
+
+	it("is read-only under a locked viewer: open slots can't be claimed", () => {
+		renderAgenda(
+			lockedViewer(selfAssertedViewer({ memberId: "me", isTmod: false })),
+			[slot({ status: "open" })],
+		);
+		const claim = screen.getByRole("button", { name: "Claim" });
+		expect((claim as HTMLButtonElement).disabled).toBe(true);
 	});
 
 	it("grants the TMOD assign + speaker management on the public surface", () => {

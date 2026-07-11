@@ -11,8 +11,6 @@ import {
 	Loader2,
 	Lock,
 	MapPin,
-	Presentation,
-	Printer,
 	Sparkles,
 } from "lucide-react";
 import { useState } from "react";
@@ -22,6 +20,7 @@ import {
 	type MeetingAgendaActions,
 } from "#/components/agenda/meeting-agenda";
 import { MeetingNavStrip } from "#/components/club/meeting-nav-strip";
+import { MeetingViewActions } from "#/components/club/meeting-view-actions";
 import { ShareLinkButton } from "#/components/share-link-button";
 import { Button } from "#/components/ui/button";
 import {
@@ -37,6 +36,7 @@ import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { Textarea } from "#/components/ui/textarea";
 import { applyFlex, expandRunSheet } from "#/lib/agenda-runsheet";
+import { buildSlideDeck } from "#/lib/agenda-slides";
 import { utcToZonedWallTime } from "#/lib/datetime";
 import {
 	formatMeetingDate,
@@ -48,6 +48,7 @@ import {
 	isMeetingLocked,
 	lockedViewer,
 	MEETING_LOCKED_MESSAGE,
+	meetingDatePassed,
 } from "#/lib/meeting-lifecycle";
 import { deriveMeetingNavItems } from "#/lib/meeting-nav";
 import { isTmodRoleName } from "#/lib/meeting-roles";
@@ -133,6 +134,11 @@ function MeetingView() {
 		unavailableMemberIds,
 		roleRecency,
 		navItems,
+		clubName,
+		clubNumber,
+		clubDistrict,
+		clubMeetingSchedule,
+		nextMeetingAt,
 	} = Route.useLoaderData();
 	const flex = applyFlex(expandRunSheet(slots), meeting.lengthMinutes);
 	const projectedEnd = new Date(
@@ -140,6 +146,22 @@ function MeetingView() {
 	);
 	const { member } = useCurrentMember(clubId);
 	const router = useRouter();
+
+	// Same deck present mode renders — reused as the source for the .pptx export
+	// so this shared meeting-detail view offers Download .pptx alongside
+	// Print/Present (issue #147, via MeetingViewActions).
+	const deck = buildSlideDeck(
+		meeting,
+		{
+			name: clubName,
+			clubNumber,
+			district: clubDistrict,
+			timezone,
+			meetingSchedule: clubMeetingSchedule,
+		},
+		slots,
+		nextMeetingAt,
+	);
 
 	const [availBusy, setAvailBusy] = useState(false);
 	const [editMetaOpen, setEditMetaOpen] = useState(false);
@@ -153,11 +175,16 @@ function MeetingView() {
 		slots.find((s) => isTmodRoleName(s.roleName))?.assigneeId ?? null;
 	const isTmod = myId !== null && myId === tmodMemberId;
 
-	// #150: a completed meeting is locked — deny every self-serve capability so
-	// the shared agenda renders read-only (the server rejects edits too).
+	// #150: a completed meeting is locked. On this public/anonymous surface a
+	// meeting that's already *happened* (its date is past) is treated the same —
+	// there's nothing left to self-serve, so the agenda goes read-only and the
+	// availability toggle becomes an attendance statement. The meeting day itself
+	// stays editable (people fill roles right up to it). Admins keep full editing
+	// on the signed-in workspace regardless; only this anonymous view goes over.
 	const locked = isMeetingLocked(meeting.status);
+	const over = locked || meetingDatePassed(meeting.scheduledAt, timezone);
 	const baseViewer = selfAssertedViewer({ memberId: myId, isTmod });
-	const viewer = locked ? lockedViewer(baseViewer) : baseViewer;
+	const viewer = over ? lockedViewer(baseViewer) : baseViewer;
 
 	// Roster for the TMOD assign picker — only fetched when self-serve editing is
 	// unlocked (kept off the payload for ordinary viewers).
@@ -236,10 +263,12 @@ function MeetingView() {
 
 	return (
 		<div className="mx-auto w-full max-w-3xl space-y-5 p-4 pb-8 md:p-6">
-			{locked ? (
+			{over ? (
 				<div className="flex items-center gap-2 rounded-xl border border-border bg-muted/60 px-4 py-3 text-sm font-medium text-muted-foreground">
 					<Lock className="size-4" aria-hidden />
-					{MEETING_LOCKED_MESSAGE}
+					{locked
+						? MEETING_LOCKED_MESSAGE
+						: "This meeting has already taken place."}
 				</div>
 			) : null}
 			<header className="space-y-2 pt-2">
@@ -285,50 +314,43 @@ function MeetingView() {
 						<span className="font-medium">{meeting.wordOfTheDay}</span>
 					</p>
 				) : null}
-				<Button
-					type="button"
-					variant={isUnavailable ? "default" : "outline"}
-					size="sm"
-					onClick={toggleAvailability}
-					disabled={!viewer.canToggleAvailability || availBusy}
-					className="mt-1"
-				>
-					{availBusy ? (
-						<Loader2 className="size-4 animate-spin" />
-					) : isUnavailable ? (
-						"You can't make this one — undo?"
-					) : (
-						"I can't make this one"
-					)}
-				</Button>
+				{over ? (
+					myId ? (
+						<p className="mt-1 text-sm font-medium text-muted-foreground">
+							{isUnavailable
+								? "You did not attend this meeting."
+								: "You attended this meeting."}
+						</p>
+					) : null
+				) : (
+					<Button
+						type="button"
+						variant={isUnavailable ? "default" : "outline"}
+						size="sm"
+						onClick={toggleAvailability}
+						disabled={!viewer.canToggleAvailability || availBusy}
+						className="mt-1"
+					>
+						{availBusy ? (
+							<Loader2 className="size-4 animate-spin" />
+						) : isUnavailable ? (
+							"You can't make this one — undo?"
+						) : (
+							"I can't make this one"
+						)}
+					</Button>
+				)}
 				<ShareLinkButton
 					path={`/club/${clubId}/meeting/${meeting.id}`}
 					className="mt-1 ml-2"
 				/>
-				<Button asChild variant="outline" size="sm">
-					<Link
-						to="/club/$clubId/meeting/$meetingId/print"
-						params={{ clubId, meetingId }}
-						search={{ layout: "timing" }}
-						target="_blank"
-						rel="noopener noreferrer"
-					>
-						<Printer />
-						Print agenda
-					</Link>
-				</Button>
-				<Button asChild variant="outline" size="sm">
-					<Link
-						to="/club/$clubId/meeting/$meetingId/present"
-						params={{ clubId, meetingId }}
-						target="_blank"
-						rel="noopener noreferrer"
-					>
-						<Presentation />
-						Present
-					</Link>
-				</Button>
-				{isTmod && !locked ? (
+				<MeetingViewActions
+					clubSlug={clubId}
+					meetingId={meetingId}
+					deck={deck}
+					clubName={clubName}
+				/>
+				{isTmod && !over ? (
 					<Button
 						type="button"
 						variant="outline"
@@ -350,7 +372,7 @@ function MeetingView() {
 				unavailableMemberIds={unavailableMemberIds}
 			/>
 
-			{isTmod && !locked ? (
+			{isTmod && !over ? (
 				<EditMeetingMetaDialog
 					open={editMetaOpen}
 					onOpenChange={setEditMetaOpen}

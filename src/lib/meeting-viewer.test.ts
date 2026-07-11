@@ -12,6 +12,8 @@ describe("sessionViewer", () => {
 			canToggleAvailability: false,
 			canTakeOver: false,
 			canEditOwnSpeech: false,
+			canClaim: true,
+			canReleaseOwn: true,
 		});
 	});
 
@@ -40,6 +42,9 @@ describe("selfAssertedViewer", () => {
 		expect(v.canToggleAvailability).toBe(true);
 		expect(v.canTakeOver).toBe(true);
 		expect(v.canEditOwnSpeech).toBe(true);
+		// Claim an open slot / release their own — the self-serve slot actions.
+		expect(v.canClaim).toBe(true);
+		expect(v.canReleaseOwn).toBe(true);
 		// Never an admin, and not TMOD here.
 		expect(v.canManage).toBe(false);
 		expect(v.canAssign).toBe(false);
@@ -61,5 +66,8 @@ describe("selfAssertedViewer", () => {
 		expect(v.canEditOwnSpeech).toBe(false);
 		expect(v.canAssign).toBe(false);
 		expect(v.canManageSpeakers).toBe(false);
+		// No identity → cannot claim or release anything.
+		expect(v.canClaim).toBe(false);
+		expect(v.canReleaseOwn).toBe(false);
 	});
 });
