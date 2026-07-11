@@ -32,6 +32,17 @@ export interface MeetingViewer {
 	canTakeOver: boolean;
 	/** Edit the speech on your own filled speaker slot — public self-serve. */
 	canEditOwnSpeech: boolean;
+	/**
+	 * Claim an open slot for yourself. Any identity may (public self-serve or a
+	 * signed-in member); a `lockedViewer` denies it so a locked meeting can't be
+	 * claimed. The agenda additionally requires a non-null `currentMemberId`.
+	 */
+	canClaim: boolean;
+	/**
+	 * Release your own filled slot. Any identity holding the slot may; a
+	 * `lockedViewer` denies it so a locked meeting stays read-only client-side.
+	 */
+	canReleaseOwn: boolean;
 }
 
 /**
@@ -52,6 +63,9 @@ export function sessionViewer(input: {
 		canToggleAvailability: false,
 		canTakeOver: false,
 		canEditOwnSpeech: false,
+		// A signed-in member may still claim an open slot / release their own.
+		canClaim: true,
+		canReleaseOwn: true,
 	};
 }
 
@@ -75,5 +89,7 @@ export function selfAssertedViewer(input: {
 		canToggleAvailability: hasIdentity,
 		canTakeOver: hasIdentity,
 		canEditOwnSpeech: hasIdentity,
+		canClaim: hasIdentity,
+		canReleaseOwn: hasIdentity,
 	};
 }

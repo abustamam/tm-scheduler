@@ -117,6 +117,10 @@ export function MeetingAgenda({
 	clubGuests = [],
 }: MeetingAgendaProps) {
 	const { currentMemberId } = viewer;
+	// Claiming an open slot requires an identity AND the capability — a
+	// `lockedViewer` sets `canClaim` false so a locked/past meeting is read-only.
+	// Same for every slot, so compute once.
+	const canClaim = currentMemberId !== null && viewer.canClaim;
 	const [busySlotId, setBusySlotId] = useState<string | null>(null);
 	const [claimSlotState, setClaimSlotState] = useState<AgendaSlot | null>(null);
 	const [assignSlot, setAssignSlot] = useState<AgendaSlot | null>(null);
@@ -295,7 +299,6 @@ export function MeetingAgenda({
 									slot.assigneeId === currentMemberId;
 								const busy = busySlotId === slot.id;
 								const isOpen = slot.status === "open";
-								const canClaim = currentMemberId !== null;
 								return (
 									<li
 										key={slot.id}
@@ -423,7 +426,8 @@ export function MeetingAgenda({
 													>
 														Claim
 													</Button>
-												) : isMine || viewer.canManage ? (
+												) : (isMine && viewer.canReleaseOwn) ||
+													viewer.canManage ? (
 													<>
 														<Button
 															size="sm"
@@ -539,7 +543,7 @@ export function MeetingAgenda({
 
 			<ClaimSheet
 				slot={claimSlotState}
-				canClaim={currentMemberId !== null}
+				canClaim={canClaim}
 				roleCounts={roleCounts}
 				onClaim={actions.claim}
 				onOpenChange={(open) => {
