@@ -1,0 +1,1 @@
+ALTER TABLE "speeches" ADD COLUMN "presentation_url" text;

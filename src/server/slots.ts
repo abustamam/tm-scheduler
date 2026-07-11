@@ -30,6 +30,7 @@ const speakerDetailsSchema = z.object({
 	projectLevel: z.string().trim().optional(),
 	minMinutes: z.number().int().positive().optional(),
 	maxMinutes: z.number().int().positive().optional(),
+	presentationUrl: z.string().trim().optional(),
 });
 
 const claimSchema = z.object({

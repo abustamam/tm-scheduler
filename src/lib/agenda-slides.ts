@@ -53,6 +53,7 @@ export type Slide =
 			title: string | null;
 			projectLevel: string | null;
 			time: string;
+			link: string | null;
 	  }
 	| { kind: "voteSpeaker"; names: string[] }
 	| { kind: "tableTopics"; master: string; timing: string }
@@ -186,6 +187,7 @@ export function buildSlideDeck(
 				title: s.speechTitle,
 				projectLevel: s.projectLevel,
 				time: speechTime(s.minMinutes, s.maxMinutes),
+				link: s.presentationUrl ?? null,
 			});
 		});
 		deck.push({ kind: "voteSpeaker", names: assignedNames(speakers) });

@@ -14,6 +14,7 @@ import {
 	pairedRoleIds,
 	pickSpeakerAndEvaluatorRoles,
 } from "#/lib/meeting-roles";
+import { normalizePresentationUrl } from "#/lib/presentation-url";
 import { logActivity } from "./activity";
 import { assertMeetingNotLocked } from "./meeting-authz-logic";
 
@@ -409,6 +410,7 @@ export type SpeechInput = {
 	projectLevel?: string;
 	minMinutes?: number;
 	maxMinutes?: number;
+	presentationUrl?: string;
 };
 
 export type SpeechContent = {
@@ -419,6 +421,7 @@ export type SpeechContent = {
 	projectLevel: string | null;
 	minMinutes: number | null;
 	maxMinutes: number | null;
+	presentationUrl: string | null;
 };
 
 /**
@@ -439,13 +442,15 @@ export function normalizeSpeech(input?: SpeechInput): {
 	const projectLevel = input?.projectLevel?.trim() || null;
 	const minMinutes = input?.minMinutes ?? null;
 	const maxMinutes = input?.maxMinutes ?? null;
+	const presentationUrl = normalizePresentationUrl(input?.presentationUrl);
 	const hasOtherContent =
 		introduction !== null ||
 		pathwayPath !== null ||
 		projectName !== null ||
 		projectLevel !== null ||
 		minMinutes !== null ||
-		maxMinutes !== null;
+		maxMinutes !== null ||
+		presentationUrl !== null;
 	const hasRealTitle = title.length > 0 && title !== "TBA";
 	return {
 		content: {
@@ -456,6 +461,7 @@ export function normalizeSpeech(input?: SpeechInput): {
 			projectLevel,
 			minMinutes,
 			maxMinutes,
+			presentationUrl,
 		},
 		hasContent: hasRealTitle || hasOtherContent,
 	};

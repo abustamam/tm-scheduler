@@ -197,25 +197,34 @@ function renderBody(s: PptxSlide, body: Body) {
 		return;
 	}
 	if (body.form === "bullets") {
-		s.addText(
-			body.items.map((t, i) => ({
-				text: t,
-				options: {
-					breakLine: i < body.items.length - 1,
-					bullet: { characterCode: "2022" },
-				},
-			})),
-			{
-				...BODY,
-				align: "left",
-				valign: "middle",
-				bold: true,
-				fontSize: 40,
-				color: INK,
-				fit: "shrink",
-				lineSpacingMultiple: 1.3,
+		const runs: PptxGenJS.TextProps[] = body.items.map((t, i) => ({
+			text: t,
+			options: {
+				breakLine: i < body.items.length - 1 || body.link != null,
+				bullet: { characterCode: "2022" },
 			},
-		);
+		}));
+		if (body.link) {
+			// "Link: Presentation" — the word "Presentation" is a clickable hyperlink.
+			runs.push({
+				text: "Link: ",
+				options: { bullet: { characterCode: "2022" } },
+			});
+			runs.push({
+				text: "Presentation",
+				options: { hyperlink: { url: body.link } },
+			});
+		}
+		s.addText(runs, {
+			...BODY,
+			align: "left",
+			valign: "middle",
+			bold: true,
+			fontSize: 40,
+			color: INK,
+			fit: "shrink",
+			lineSpacingMultiple: 1.3,
+		});
 		return;
 	}
 	if (body.form === "numbered") {

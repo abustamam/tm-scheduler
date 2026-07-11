@@ -591,6 +591,7 @@ export function MeetingAgenda({
 								projectLevel: editSpeechSlot.projectLevel,
 								minMinutes: editSpeechSlot.minMinutes,
 								maxMinutes: editSpeechSlot.maxMinutes,
+								presentationUrl: editSpeechSlot.presentationUrl ?? null,
 							}
 						: null
 				}

@@ -257,6 +257,25 @@ function BodyView({
 						<span>{t}</span>
 					</div>
 				))}
+				{body.link ? (
+					<div className="flex gap-[1.6cqw] text-[4.3cqw] font-extrabold leading-tight">
+						<span>•</span>
+						<span>
+							Link:{" "}
+							<a
+								href={body.link}
+								target="_blank"
+								rel="noreferrer noopener"
+								// relative z-30 lifts the link above the invisible prev/next
+								// nav click-zones (z-10) so it stays clickable during projection.
+								className="relative z-30 underline"
+								style={{ color: NAVY }}
+							>
+								Presentation
+							</a>
+						</span>
+					</div>
+				) : null}
 			</div>
 		);
 	}
