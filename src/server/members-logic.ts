@@ -45,6 +45,38 @@ async function personHasAccount(personId: string): Promise<boolean> {
 	return Boolean(row?.userId);
 }
 
+/** A drizzle transaction handle (the arg the `db.transaction` callback gets). */
+type Tx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
+
+/**
+ * Enforce the "a club always keeps ≥1 active admin" invariant (#187). Throws
+ * `message` when NO membership other than `exceptMemberId` is both `active` and
+ * `club_role = 'admin'`. Run inside the mutating transaction (read + write
+ * commit together) on the two paths that could strand a club with zero admins:
+ * demoting an admin (applySetMemberRole) and deactivating an admin
+ * (applySetMemberStatus).
+ */
+async function assertKeepsAnActiveAdmin(
+	tx: Tx,
+	clubId: string,
+	exceptMemberId: string,
+	message: string,
+): Promise<void> {
+	const others = await tx
+		.select({ id: members.id })
+		.from(members)
+		.where(
+			and(
+				eq(members.clubId, clubId),
+				eq(members.status, "active"),
+				eq(members.clubRole, "admin"),
+				ne(members.id, exceptMemberId),
+			),
+		)
+		.limit(1);
+	if (others.length === 0) throw new Error(message);
+}
+
 export const editSchema = z.object({
 	clubId: z.string().uuid(),
 	memberId: z.string().uuid(),
@@ -136,6 +168,16 @@ export async function applySetMemberStatus(input: SetStatusInput) {
 	const deactivating =
 		current.status === "active" && input.status === "inactive";
 	await db.transaction(async (tx) => {
+		// Guardrail (#187): deactivating an admin must not strand the club with
+		// zero active admins — that would silently bypass the demote guard.
+		if (deactivating && current.clubRole === "admin") {
+			await assertKeepsAnActiveAdmin(
+				tx,
+				input.clubId,
+				input.memberId,
+				"You can't deactivate the club's last admin — promote another member to admin first.",
+			);
+		}
 		await tx
 			.update(members)
 			.set({ status: input.status })
@@ -189,6 +231,66 @@ export async function applySetMemberStatus(input: SetStatusInput) {
 		});
 	});
 	return { ok: true as const, status: input.status };
+}
+
+export const setRoleSchema = z.object({
+	clubId: z.string().uuid(),
+	memberId: z.string().uuid(),
+	clubRole: z.enum(["admin", "member"]),
+	actorMemberId: z.string().uuid().nullable().optional(),
+});
+type SetRoleInput = z.infer<typeof setRoleSchema>;
+
+/**
+ * Set a member's `club_role` (admin ⇄ member) — a PERMISSION change (#187),
+ * ORTHOGONAL to officer position: officer terms are deliberately left untouched
+ * (`club_role` and offices diverged at insert time and never reconcile). A
+ * no-op when the role is unchanged (no write, no log). Enforces the club-keeps-
+ * ≥1-active-admin invariant on the demote path (admin→member) and logs
+ * member_edit with the role before/after.
+ */
+export async function applySetMemberRole(input: SetRoleInput) {
+	const [current] = await db
+		.select()
+		.from(members)
+		.where(
+			and(eq(members.id, input.memberId), eq(members.clubId, input.clubId)),
+		);
+	if (!current) throw new Error("Member not found.");
+	// Idempotent: nothing changed → nothing to write or log.
+	if (current.clubRole === input.clubRole) {
+		return { ok: true as const, clubRole: current.clubRole };
+	}
+	const demoting = current.clubRole === "admin" && input.clubRole === "member";
+	await db.transaction(async (tx) => {
+		// Guardrail (#187): a demote can lower the active-admin count (a promote
+		// only raises it). An INACTIVE admin isn't counted, so a demote can only
+		// strand the club when the target is currently an active admin.
+		if (demoting && current.status === "active") {
+			await assertKeepsAnActiveAdmin(
+				tx,
+				input.clubId,
+				input.memberId,
+				"You can't remove the club's last admin — promote another member to admin first.",
+			);
+		}
+		await tx
+			.update(members)
+			.set({ clubRole: input.clubRole })
+			.where(eq(members.id, input.memberId));
+		await logActivity(tx, {
+			clubId: input.clubId,
+			actorMemberId: input.actorMemberId ?? null,
+			action: "member_edit",
+			targetType: "member",
+			targetId: input.memberId,
+			detail: {
+				before: { clubRole: current.clubRole },
+				after: { clubRole: input.clubRole },
+			},
+		});
+	});
+	return { ok: true as const, clubRole: input.clubRole };
 }
 
 export const mergeSchema = z.object({

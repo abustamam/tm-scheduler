@@ -9,6 +9,7 @@ import {
 	ArchiveRestore,
 	CalendarPlus,
 	ChevronLeft,
+	ShieldCheck,
 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -36,7 +37,12 @@ import {
 	officerPositionLabel,
 } from "#/lib/officers";
 import { getMemberProfile } from "#/server/club";
-import { editMember, removeMember, setMemberStatus } from "#/server/members";
+import {
+	editMember,
+	removeMember,
+	setMemberRole,
+	setMemberStatus,
+} from "#/server/members";
 import { getMemberPathways } from "#/server/pathways-read";
 import { archiveSpeech, rescheduleSpeech } from "#/server/speeches";
 
@@ -89,8 +95,12 @@ function MemberDetail() {
 		unscheduledSpeeches,
 		openSpeakerSlots,
 	} = Route.useLoaderData();
-	const { currentMemberId, activeClubId } = Route.useRouteContext();
+	const { currentMemberId, activeClubId, clubs } = Route.useRouteContext();
 	const clubId = activeClubId;
+	// Club-role management is admin-only: the viewer must be an admin in the
+	// club they're currently acting in (#187).
+	const viewerIsAdmin =
+		clubs.find((c) => c.clubId === activeClubId)?.clubRole === "admin";
 
 	if (!member) {
 		return (
@@ -247,6 +257,14 @@ function MemberDetail() {
 							speeches={unscheduledSpeeches}
 							openSlots={openSpeakerSlots}
 							clubId={clubId}
+						/>
+					) : null}
+
+					{clubId && viewerIsAdmin ? (
+						<ClubRoleControl
+							member={member}
+							clubId={clubId}
+							currentMemberId={currentMemberId}
 						/>
 					) : null}
 				</div>
@@ -476,6 +494,7 @@ type ProfileMember = {
 	officerPositions: OfficerPosition[];
 	userId: string | null;
 	status: "active" | "inactive";
+	clubRole: "admin" | "member";
 };
 
 function MemberActions({
@@ -703,6 +722,119 @@ function MemberActions({
 				</DialogContent>
 			</Dialog>
 		</>
+	);
+}
+
+/**
+ * Admin-only control to promote/demote a member's CLUB ROLE — the permission
+ * that gates club management, distinct from officer position (#187). Promote is
+ * one click; demote is behind a confirm. The server enforces the club-keeps-
+ * ≥1-active-admin invariant, so a last-admin demote surfaces as an error toast.
+ */
+function ClubRoleControl({
+	member,
+	clubId,
+	currentMemberId,
+}: {
+	member: ProfileMember;
+	clubId: string;
+	currentMemberId: string | null;
+}) {
+	const router = useRouter();
+	const [busy, setBusy] = useState(false);
+	const [demoteOpen, setDemoteOpen] = useState(false);
+	const isAdmin = member.clubRole === "admin";
+
+	async function setRole(next: "admin" | "member") {
+		setBusy(true);
+		try {
+			await setMemberRole({
+				data: {
+					clubId,
+					memberId: member.id,
+					clubRole: next,
+					actorMemberId: currentMemberId,
+				},
+			});
+			toast.success(
+				next === "admin"
+					? `${member.name} is now a club admin.`
+					: `${member.name} is now a member.`,
+			);
+			setDemoteOpen(false);
+			await router.invalidate();
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	return (
+		<div className="rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] px-5 py-[18px] shadow-[0_1px_0_var(--inset-glint)_inset,0_10px_24px_rgba(23,58,64,.05)]">
+			<div className="mb-2 flex items-center justify-between gap-2">
+				<h2 className="flex items-center gap-1.5 text-[15px] font-bold">
+					<ShieldCheck
+						className="size-[16px] text-[var(--sea-ink-soft)]"
+						aria-hidden
+					/>
+					Club role
+				</h2>
+				<span className="inline-flex items-center rounded-full border border-[var(--line)] bg-[var(--foam)] px-2.5 py-0.5 text-[11px] font-bold tracking-[0.03em] uppercase">
+					{isAdmin ? "Admin" : "Member"}
+				</span>
+			</div>
+			<p className="mb-3 text-[12px] text-[var(--sea-ink-soft)]">
+				Club role is a permission for managing the club — separate from officer
+				position.
+			</p>
+			{isAdmin ? (
+				<Button
+					variant="outline"
+					size="sm"
+					disabled={busy}
+					onClick={() => setDemoteOpen(true)}
+				>
+					Demote to member
+				</Button>
+			) : (
+				<Button
+					variant="outline"
+					size="sm"
+					disabled={busy}
+					onClick={() => setRole("admin")}
+				>
+					Make admin
+				</Button>
+			)}
+
+			<Dialog open={demoteOpen} onOpenChange={setDemoteOpen}>
+				<DialogContent>
+					<DialogHeader>
+						<DialogTitle>Demote {member.name} to member?</DialogTitle>
+						<DialogDescription>
+							They'll lose admin permissions for this club. Their officer
+							position (if any) is unchanged.
+						</DialogDescription>
+					</DialogHeader>
+					<DialogFooter>
+						<DialogClose asChild>
+							<Button type="button" variant="outline" disabled={busy}>
+								Cancel
+							</Button>
+						</DialogClose>
+						<Button
+							type="button"
+							variant="destructive"
+							disabled={busy}
+							onClick={() => setRole("member")}
+						>
+							{busy ? "Saving…" : "Demote to member"}
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
+		</div>
 	);
 }
 

@@ -10,11 +10,13 @@ import {
 	applyMemberEdit,
 	applyMemberMerge,
 	applyMemberRemove,
+	applySetMemberRole,
 	applySetMemberStatus,
 	bulkImportSchema,
 	editSchema,
 	mergeSchema,
 	removeSchema,
+	setRoleSchema,
 	setStatusSchema,
 } from "./members-logic";
 import { currentOfficersByMember } from "./officer-terms-logic";
@@ -108,6 +110,16 @@ export const setMemberStatus = createServerFn({ method: "POST" })
 		const user = await requireUser();
 		await requireClubRole(user.id, data.clubId, ["admin"]);
 		return applySetMemberStatus(data);
+	});
+
+/** Promote/demote a member's club role (admin ⇄ member). Admin-only; the logic
+ *  keeps the club's ≥1-active-admin invariant and logs the change (#187). */
+export const setMemberRole = createServerFn({ method: "POST" })
+	.validator((i: unknown) => setRoleSchema.parse(i))
+	.handler(async ({ data }) => {
+		const user = await requireUser();
+		await requireClubRole(user.id, data.clubId, ["admin"]);
+		return applySetMemberRole(data);
 	});
 
 export const bulkImportMembers = createServerFn({ method: "POST" })
