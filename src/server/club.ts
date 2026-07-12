@@ -198,6 +198,8 @@ export const getMemberProfile = createServerFn({ method: "GET" })
 				// the auth link lives on people.user_id, not the membership row.
 				userId: people.userId,
 				status: members.status,
+				// Club-role permission (admin ⇄ member) — orthogonal to office (#187).
+				clubRole: members.clubRole,
 				createdAt: members.createdAt,
 				joinedAt: members.joinedAt,
 				// Person-level fact (ADR-0008): read off the joined `people` row.
@@ -246,6 +248,7 @@ export const getMemberProfile = createServerFn({ method: "GET" })
 				officerPositions,
 				userId: member.userId,
 				status: member.status,
+				clubRole: member.clubRole,
 				createdAt: member.createdAt,
 				joinedAt: member.joinedAt,
 				originalJoinDate: member.originalJoinDate,
