@@ -101,6 +101,9 @@ export const setAttendance = createServerFn({ method: "POST" })
 const addGuestSchema = z
 	.object({
 		meetingId: uuid,
+		// Optional client-supplied id for the NEW guest row (#176 slice 2) — lets an
+		// offline create replay idempotently. Ignored on the existing-guest path.
+		id: uuid.optional(),
 		guestId: uuid.optional(),
 		newGuest: newGuestSchema.optional(),
 	})
@@ -130,6 +133,9 @@ export const removeMinutesGuest = createServerFn({ method: "POST" })
 const addSpeakerSchema = z
 	.object({
 		meetingId: uuid,
+		// Optional client-supplied id for the new Table Topics speaker row (#176
+		// slice 2) — the stable target for later remove/move ops; replays no-op.
+		id: uuid.optional(),
 		memberId: uuid.optional(),
 		guestId: uuid.optional(),
 		newGuest: newGuestSchema.optional(),
