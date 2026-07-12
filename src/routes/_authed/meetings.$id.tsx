@@ -7,6 +7,7 @@ import {
 	LockOpen,
 	MapPin,
 	Sparkles,
+	WifiOff,
 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -30,6 +31,7 @@ import {
 } from "#/components/ui/dialog";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
+import { useOnlineStatus } from "#/hooks/use-online-status";
 import { buildSlideDeck } from "#/lib/agenda-slides";
 import { utcToZonedWallTime } from "#/lib/datetime";
 import { formatMeetingDate, formatMeetingTimeRange } from "#/lib/format";
@@ -128,6 +130,10 @@ function MeetingDetail() {
 	} = Route.useLoaderData();
 	const { currentMemberId } = Route.useRouteContext();
 	const router = useRouter();
+	// #176 slice 1: this page loads offline from the cached SSR data, but it is
+	// read-only offline — edits can't reach the server until the connection is
+	// back (the offline write queue is a later slice).
+	const online = useOnlineStatus();
 	const [editOpen, setEditOpen] = useState(false);
 	const [addRoleOpen, setAddRoleOpen] = useState(false);
 	const [addRoleBusy, setAddRoleBusy] = useState(false);
@@ -262,6 +268,13 @@ function MeetingDetail() {
 
 	return (
 		<PageContainer className="space-y-5">
+			{!online ? (
+				<div className="flex items-center gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm font-medium text-amber-700 dark:text-amber-400">
+					<WifiOff className="size-4" aria-hidden />
+					You're offline — this meeting is readable, but changes can't be saved
+					until you reconnect.
+				</div>
+			) : null}
 			{locked ? (
 				<div className="flex items-center gap-2 rounded-xl border border-border bg-muted/60 px-4 py-3 text-sm font-medium text-muted-foreground">
 					<Lock className="size-4" aria-hidden />
