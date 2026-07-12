@@ -21,7 +21,7 @@ import {
 	Settings,
 	ShieldCheck,
 } from "lucide-react";
-import type { ComponentType } from "react";
+import { type ComponentType, useEffect } from "react";
 import { BrandMark } from "#/components/brand-mark";
 import { ClubSwitcher } from "#/components/club/club-switcher";
 import { MemberAvatar } from "#/components/club/member-avatar";
@@ -30,24 +30,37 @@ import { Input } from "#/components/ui/input";
 import { Toaster } from "#/components/ui/sonner";
 import { authClient } from "#/lib/auth-client";
 import { initialsOf } from "#/lib/avatar";
+import {
+	type AuthContextOutcome,
+	clearCachedAuthContext,
+	decideAuth,
+	persistAuthContext,
+	readCachedAuthContext,
+} from "#/lib/offline-auth-context";
 import { getAuthContext } from "#/server/auth-context";
 
 export const Route = createFileRoute("/_authed")({
 	beforeLoad: async ({ location }) => {
-		const ctx = await getAuthContext();
-		if (!ctx.user) {
-			throw redirect({
-				to: "/signin",
-				search: { redirect: location.href },
-			});
+		// Call the auth-context server fn, distinguishing a resolved value (reached
+		// the server — trust it) from a thrown call (offline / network down).
+		let outcome: AuthContextOutcome;
+		try {
+			outcome = { ok: true, value: await getAuthContext() };
+		} catch (error) {
+			outcome = { ok: false, error };
 		}
-		return {
-			authUser: ctx.user,
-			clubs: ctx.clubs,
-			currentMemberId: ctx.currentMemberId,
-			activeClubId: ctx.activeClubId,
-			isSuperadmin: ctx.isSuperadmin,
-		};
+
+		// #176 slice 1: when the call fails offline, fall back to the last-known-good
+		// context cached on this device so a cached meeting page still renders; a
+		// genuine signed-out response (or no cache at all) keeps the redirect.
+		const decision = decideAuth(outcome, readCachedAuthContext());
+		if (decision.kind === "redirect") {
+			// A real signed-out response invalidates any stale cached identity.
+			if (outcome.ok) clearCachedAuthContext();
+			throw redirect({ to: "/signin", search: { redirect: location.href } });
+		}
+		if (decision.fresh) persistAuthContext(decision.context);
+		return decision.context;
 	},
 	component: WorkspaceLayout,
 });
@@ -81,10 +94,25 @@ function crumbFor(pathname: string): string {
 }
 
 function WorkspaceLayout() {
-	const { authUser, clubs, activeClubId, isSuperadmin } =
+	const { authUser, clubs, currentMemberId, activeClubId, isSuperadmin } =
 		Route.useRouteContext();
 	const router = useRouter();
 	const pathname = useRouterState({ select: (s) => s.location.pathname });
+
+	// #176 slice 1: prime the offline auth-context cache on every online authed
+	// render (not only in `beforeLoad`), so a later offline reload of a cached
+	// meeting page can render with this identity even if the guard's server call
+	// fails. Persisting from the client component guarantees the cache is warmed
+	// regardless of whether `beforeLoad` re-runs on hydration.
+	useEffect(() => {
+		persistAuthContext({
+			authUser,
+			clubs,
+			currentMemberId,
+			activeClubId,
+			isSuperadmin,
+		});
+	}, [authUser, clubs, currentMemberId, activeClubId, isSuperadmin]);
 
 	// The club the workspace is currently acting in (cookie-backed, #10).
 	const activeClub = clubs.find((c) => c.clubId === activeClubId) ?? clubs[0];

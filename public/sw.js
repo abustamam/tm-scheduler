@@ -1,21 +1,26 @@
-// GavelUp offline service worker (issue #174).
+// GavelUp offline service worker (issue #174, extended by #176 slice 1).
 //
-// Scope: read-only offline access to a meeting's Present and Print views. A
-// full-page load of `/…/present` or `/…/print` while ONLINE primes the cache;
-// the loader data is inlined in the SSR HTML (TanStack Start dehydration) and
-// `buildSlideDeck` renders purely client-side, so a cached HTML document +
-// cached JS/CSS assets is enough to re-render the deck with no network.
+// Scope: read-only offline access to a meeting's Present and Print views AND
+// the signed-in meeting view (`/meetings/:id`, which holds the minutes). A
+// full-page load of `/…/present`, `/…/print`, or `/meetings/<id>` while ONLINE
+// primes the cache; the loader data is inlined in the SSR HTML (TanStack Start
+// dehydration) and the page re-renders purely client-side, so a cached HTML
+// document + cached JS/CSS assets is enough to render offline with no network.
 //
 // Strategy:
-//   - Present/Print navigations → network-first (fresh when online, cached when
-//     offline). Nothing else is cached at the navigation layer, so authed pages
-//     never land in the offline cache.
+//   - Present/Print + the signed-in meeting view → network-first (fresh when
+//     online, cached when offline). The navigation-layer widening is kept
+//     strictly to `/meetings/<id>` — no other authed page lands in the cache.
 //   - Static assets (script/style/font/image) → stale-while-revalidate.
 //   - Writes (POST) and cross-origin requests are never intercepted.
 //
+// Caching a signed-in page writes authed content to the on-device cache; this
+// is bounded by #176's single-user-device assumption, which is why the widening
+// stays scoped to the meeting-view path (not every `/_authed` navigation).
+//
 // Bumping VERSION invalidates every cache on the next activation.
 
-const VERSION = "v1";
+const VERSION = "v2";
 const NAV_CACHE = `gavelup-nav-${VERSION}`;
 const ASSET_CACHE = `gavelup-assets-${VERSION}`;
 const OWNED_CACHES = new Set([NAV_CACHE, ASSET_CACHE]);
@@ -40,10 +45,16 @@ self.addEventListener("activate", (event) => {
 	);
 });
 
-/** A meeting Present or Print view — the only navigations we cache offline. */
+/**
+ * The only navigations we cache offline: a meeting Present/Print view, or the
+ * signed-in meeting view (`/meetings/<id>`). Kept scoped to the meeting-view
+ * path so no other authed navigation is written to the offline cache.
+ */
 function isOfflineRoute(url) {
 	return (
-		url.pathname.endsWith("/present") || url.pathname.endsWith("/print")
+		url.pathname.endsWith("/present") ||
+		url.pathname.endsWith("/print") ||
+		url.pathname.startsWith("/meetings/")
 	);
 }
 
