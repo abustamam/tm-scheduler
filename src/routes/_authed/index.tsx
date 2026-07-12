@@ -49,7 +49,9 @@ export const Route = createFileRoute("/_authed/")({
 	component: Roster,
 });
 
-const TABLE_COLS = "1fr 150px 170px 34px";
+// Roster grid: on small screens only Member + chevron; Speeches/Pathway
+// (also hidden below) return at `sm`. Members can tap through for the detail.
+const TABLE_GRID = "grid-cols-[1fr_34px] sm:grid-cols-[1fr_150px_170px_34px]";
 
 type SegKey = "all" | "active" | "inactive";
 const ROSTER_SEGMENTS: { key: SegKey; label: string }[] = [
@@ -203,12 +205,14 @@ function Roster() {
 			{/* Table */}
 			<div className="overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] shadow-[0_1px_0_var(--inset-glint)_inset,0_14px_30px_rgba(23,58,64,.06)]">
 				<div
-					className="grid gap-3.5 border-b border-[var(--line)] bg-[var(--foam)] px-5 py-3 text-[10.5px] font-extrabold tracking-[0.08em] text-[var(--sea-ink-soft)] uppercase"
-					style={{ gridTemplateColumns: TABLE_COLS }}
+					className={cn(
+						"grid gap-3.5 border-b border-[var(--line)] bg-[var(--foam)] px-5 py-3 text-[10.5px] font-extrabold tracking-[0.08em] text-[var(--sea-ink-soft)] uppercase",
+						TABLE_GRID,
+					)}
 				>
 					<div>Member</div>
-					<div>Speeches</div>
-					<div>Pathway</div>
+					<div className="hidden sm:block">Speeches</div>
+					<div className="hidden sm:block">Pathway</div>
 					<div />
 				</div>
 
@@ -224,9 +228,9 @@ function Roster() {
 							params={{ id: m.id }}
 							className={cn(
 								"group grid cursor-pointer items-center gap-3.5 border-b border-[var(--line)] px-5 py-[13px] transition-colors last:border-b-0 hover:bg-[var(--foam)]",
+								TABLE_GRID,
 								m.membershipStatus === "inactive" && "opacity-55",
 							)}
-							style={{ gridTemplateColumns: TABLE_COLS }}
 						>
 							{/* Member */}
 							<div className="flex min-w-0 items-center gap-[11px]">
@@ -247,7 +251,7 @@ function Roster() {
 							</div>
 
 							{/* Speeches */}
-							<div className="text-sm font-bold text-[var(--sea-ink)]">
+							<div className="hidden text-sm font-bold text-[var(--sea-ink)] sm:block">
 								{m.speeches}
 								<span className="text-[11px] font-medium text-[var(--sea-ink-soft)]">
 									{" "}
@@ -256,7 +260,7 @@ function Roster() {
 							</div>
 
 							{/* Pathway */}
-							<div className="min-w-0 truncate text-xs text-[var(--sea-ink-soft)]">
+							<div className="hidden min-w-0 truncate text-xs text-[var(--sea-ink-soft)] sm:block">
 								{m.pathwayLabel ?? "—"}
 							</div>
 

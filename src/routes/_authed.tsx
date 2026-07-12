@@ -16,51 +16,40 @@ import {
 	List,
 	ListChecks,
 	LogOut,
+	Menu,
 	RefreshCw,
 	ScrollText,
 	Settings,
 	ShieldCheck,
 } from "lucide-react";
-import { type ComponentType, useEffect } from "react";
+import { type ComponentType, useState } from "react";
 import { BrandMark } from "#/components/brand-mark";
 import { ClubSwitcher } from "#/components/club/club-switcher";
 import { MemberAvatar } from "#/components/club/member-avatar";
 import { ThemeToggle } from "#/components/club/theme-toggle";
 import { Input } from "#/components/ui/input";
+import { Sheet, SheetContent, SheetTitle } from "#/components/ui/sheet";
 import { Toaster } from "#/components/ui/sonner";
 import { authClient } from "#/lib/auth-client";
 import { initialsOf } from "#/lib/avatar";
-import {
-	type AuthContextOutcome,
-	clearCachedAuthContext,
-	decideAuth,
-	persistAuthContext,
-	readCachedAuthContext,
-} from "#/lib/offline-auth-context";
 import { getAuthContext } from "#/server/auth-context";
 
 export const Route = createFileRoute("/_authed")({
 	beforeLoad: async ({ location }) => {
-		// Call the auth-context server fn, distinguishing a resolved value (reached
-		// the server — trust it) from a thrown call (offline / network down).
-		let outcome: AuthContextOutcome;
-		try {
-			outcome = { ok: true, value: await getAuthContext() };
-		} catch (error) {
-			outcome = { ok: false, error };
+		const ctx = await getAuthContext();
+		if (!ctx.user) {
+			throw redirect({
+				to: "/signin",
+				search: { redirect: location.href },
+			});
 		}
-
-		// #176 slice 1: when the call fails offline, fall back to the last-known-good
-		// context cached on this device so a cached meeting page still renders; a
-		// genuine signed-out response (or no cache at all) keeps the redirect.
-		const decision = decideAuth(outcome, readCachedAuthContext());
-		if (decision.kind === "redirect") {
-			// A real signed-out response invalidates any stale cached identity.
-			if (outcome.ok) clearCachedAuthContext();
-			throw redirect({ to: "/signin", search: { redirect: location.href } });
-		}
-		if (decision.fresh) persistAuthContext(decision.context);
-		return decision.context;
+		return {
+			authUser: ctx.user,
+			clubs: ctx.clubs,
+			currentMemberId: ctx.currentMemberId,
+			activeClubId: ctx.activeClubId,
+			isSuperadmin: ctx.isSuperadmin,
+		};
 	},
 	component: WorkspaceLayout,
 });
@@ -94,25 +83,12 @@ function crumbFor(pathname: string): string {
 }
 
 function WorkspaceLayout() {
-	const { authUser, clubs, currentMemberId, activeClubId, isSuperadmin } =
+	const { authUser, clubs, activeClubId, isSuperadmin } =
 		Route.useRouteContext();
 	const router = useRouter();
 	const pathname = useRouterState({ select: (s) => s.location.pathname });
-
-	// #176 slice 1: prime the offline auth-context cache on every online authed
-	// render (not only in `beforeLoad`), so a later offline reload of a cached
-	// meeting page can render with this identity even if the guard's server call
-	// fails. Persisting from the client component guarantees the cache is warmed
-	// regardless of whether `beforeLoad` re-runs on hydration.
-	useEffect(() => {
-		persistAuthContext({
-			authUser,
-			clubs,
-			currentMemberId,
-			activeClubId,
-			isSuperadmin,
-		});
-	}, [authUser, clubs, currentMemberId, activeClubId, isSuperadmin]);
+	// Mobile nav drawer (shown below `lg`; the sidebar is fixed at `lg+`).
+	const [navOpen, setNavOpen] = useState(false);
 
 	// The club the workspace is currently acting in (cookie-backed, #10).
 	const activeClub = clubs.find((c) => c.clubId === activeClubId) ?? clubs[0];
@@ -131,89 +107,42 @@ function WorkspaceLayout() {
 		await router.navigate({ to: "/signin", search: { redirect: "/" } });
 	}
 
+	const sidebar = (onNavigate?: () => void, showThemeToggle = false) => (
+		<SidebarInner
+			clubName={clubName}
+			clubNumber={clubNumber}
+			isOfficer={isOfficer}
+			isSuperadmin={isSuperadmin}
+			displayName={displayName}
+			roleLabel={roleLabel}
+			initials={initials}
+			onSignOut={handleSignOut}
+			onNavigate={onNavigate}
+			showThemeToggle={showThemeToggle}
+		/>
+	);
+
 	return (
 		<div className="flex min-h-svh w-full font-sans text-[var(--sea-ink)]">
-			<aside className="sticky top-0 flex h-svh w-[248px] shrink-0 flex-col gap-1.5 border-r border-[var(--line)] bg-[linear-gradient(180deg,var(--surface-strong),var(--surface))] px-3.5 py-[18px] backdrop-blur-[6px]">
-				{/* Brand */}
-				<div className="px-2 pt-1.5 pb-4">
-					<BrandMark
-						size="md"
-						subtitle={
-							clubNumber ? `${clubName} · Club ${clubNumber}` : clubName
-						}
-					/>
-				</div>
-
-				<NavGroup label="Manage">
-					<NavItem to="/schedule" icon={Grid3x3} label="Season grid" />
-					<NavItem to="/" exact icon={List} label="Roster" />
-					<NavItem to="/next" icon={CalendarDays} label="Next meeting" />
-					<NavItem to="/activity" icon={ScrollText} label="Activity" />
-					{isOfficer ? (
-						<>
-							<NavItem
-								to="/admin/vpe-dashboard"
-								icon={GraduationCap}
-								label="VP Education"
-							/>
-							<NavItem
-								to="/admin/meetings/new"
-								icon={CalendarPlus}
-								label="New meeting"
-							/>
-							<NavItem
-								to="/admin/roles"
-								icon={ListChecks}
-								label="Meeting roles"
-							/>
-							<NavItem
-								to="/admin/club-settings"
-								icon={Settings}
-								label="Club settings"
-							/>
-							<NavItem
-								to="/admin/sync-tokens"
-								icon={RefreshCw}
-								label="Base Camp sync"
-							/>
-						</>
-					) : null}
-				</NavGroup>
-
-				<NavGroup label="Me">
-					<NavItem to="/dashboard" icon={LayoutGrid} label="My dashboard" />
-					<NavItem to="/resources" icon={BookOpen} label="Resources" />
-				</NavGroup>
-
-				{isSuperadmin ? (
-					<NavGroup label="Platform">
-						<NavItem to="/superadmin" icon={ShieldCheck} label="Superadmin" />
-					</NavGroup>
-				) : null}
-
-				{/* Footer mini-profile */}
-				<div className="mt-auto flex items-center gap-2.5 rounded-xl border border-[var(--line)] bg-[var(--foam)] p-2.5">
-					<MemberAvatar tone="palm" initials={initials} size={34} />
-					<div className="min-w-0 leading-tight">
-						<div className="truncate text-[13px] font-bold">{displayName}</div>
-						<div className="text-[11px] text-[var(--sea-ink-soft)]">
-							{roleLabel}
-						</div>
-					</div>
-					<button
-						type="button"
-						onClick={handleSignOut}
-						title="Sign out"
-						className="ml-auto flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--sea-ink-soft)] transition-colors hover:bg-[var(--surface-strong)] hover:text-[var(--sea-ink)]"
-					>
-						<LogOut className="size-4" aria-hidden />
-						<span className="sr-only">Sign out</span>
-					</button>
-				</div>
+			{/* Desktop sidebar (lg+) */}
+			<aside className="sticky top-0 hidden h-svh w-[248px] shrink-0 flex-col gap-1.5 border-r border-[var(--line)] bg-[linear-gradient(180deg,var(--surface-strong),var(--surface))] px-3.5 py-[18px] backdrop-blur-[6px] lg:flex">
+				{sidebar()}
 			</aside>
 
+			{/* Mobile nav drawer (below lg) */}
+			<Sheet open={navOpen} onOpenChange={setNavOpen}>
+				<SheetContent
+					side="left"
+					className="w-[284px] max-w-[86vw] gap-1.5 border-[var(--line)] bg-[linear-gradient(180deg,var(--surface-strong),var(--surface))] px-3.5 py-[18px] sm:max-w-[86vw] lg:hidden"
+				>
+					<SheetTitle className="sr-only">Navigation</SheetTitle>
+					{sidebar(() => setNavOpen(false), true)}
+				</SheetContent>
+			</Sheet>
+
 			<main className="flex min-w-0 flex-1 flex-col">
-				<header className="sticky top-0 z-10 flex items-center gap-3.5 border-b border-[var(--line)] bg-[var(--surface)] px-7 py-4 backdrop-blur-[6px]">
+				{/* Desktop header (lg+) */}
+				<header className="sticky top-0 z-10 hidden items-center gap-3.5 border-b border-[var(--line)] bg-[var(--surface)] px-7 py-4 backdrop-blur-[6px] lg:flex">
 					<div className="text-[12.5px] font-semibold tracking-[0.01em] text-[var(--sea-ink-soft)]">
 						{crumbFor(pathname)}
 					</div>
@@ -230,12 +159,175 @@ function WorkspaceLayout() {
 					<MemberAvatar tone="palm" initials={initials} size={36} />
 				</header>
 
+				{/* Mobile top app-bar (below lg) */}
+				<header className="sticky top-0 z-10 flex items-center gap-2.5 border-b border-[var(--line)] bg-[var(--surface)] px-4 py-3 backdrop-blur-[6px] lg:hidden">
+					<button
+						type="button"
+						onClick={() => setNavOpen(true)}
+						aria-label="Open navigation"
+						className="flex size-9 shrink-0 items-center justify-center rounded-[10px] border border-[var(--line)] text-[var(--sea-ink-soft)] transition-colors hover:bg-[var(--foam)] hover:text-[var(--sea-ink)]"
+					>
+						<Menu className="size-[18px]" aria-hidden />
+					</button>
+					<div className="min-w-0 flex-1 truncate text-[12.5px] font-semibold tracking-[0.01em] text-[var(--sea-ink-soft)]">
+						{crumbFor(pathname)}
+					</div>
+					<ClubSwitcher clubs={clubs} activeClubId={activeClubId} />
+				</header>
+
 				<section className="min-w-0 flex-1 overflow-x-hidden">
 					<Outlet />
 				</section>
 			</main>
 			<Toaster position="top-center" />
 		</div>
+	);
+}
+
+function SidebarInner({
+	clubName,
+	clubNumber,
+	isOfficer,
+	isSuperadmin,
+	displayName,
+	roleLabel,
+	initials,
+	onSignOut,
+	onNavigate,
+	showThemeToggle,
+}: {
+	clubName: string;
+	clubNumber: string | null;
+	isOfficer: boolean;
+	isSuperadmin: boolean;
+	displayName: string;
+	roleLabel: string;
+	initials: string;
+	onSignOut: () => void;
+	onNavigate?: () => void;
+	showThemeToggle?: boolean;
+}) {
+	return (
+		<>
+			{/* Brand */}
+			<div className="px-2 pt-1.5 pb-4">
+				<BrandMark
+					size="md"
+					subtitle={clubNumber ? `${clubName} · Club ${clubNumber}` : clubName}
+				/>
+			</div>
+
+			<NavGroup label="Manage">
+				<NavItem
+					to="/schedule"
+					icon={Grid3x3}
+					label="Season grid"
+					onNavigate={onNavigate}
+				/>
+				<NavItem
+					to="/"
+					exact
+					icon={List}
+					label="Roster"
+					onNavigate={onNavigate}
+				/>
+				<NavItem
+					to="/next"
+					icon={CalendarDays}
+					label="Next meeting"
+					onNavigate={onNavigate}
+				/>
+				<NavItem
+					to="/activity"
+					icon={ScrollText}
+					label="Activity"
+					onNavigate={onNavigate}
+				/>
+				{isOfficer ? (
+					<>
+						<NavItem
+							to="/admin/vpe-dashboard"
+							icon={GraduationCap}
+							label="VP Education"
+							onNavigate={onNavigate}
+						/>
+						<NavItem
+							to="/admin/meetings/new"
+							icon={CalendarPlus}
+							label="New meeting"
+							onNavigate={onNavigate}
+						/>
+						<NavItem
+							to="/admin/roles"
+							icon={ListChecks}
+							label="Meeting roles"
+							onNavigate={onNavigate}
+						/>
+						<NavItem
+							to="/admin/club-settings"
+							icon={Settings}
+							label="Club settings"
+							onNavigate={onNavigate}
+						/>
+						<NavItem
+							to="/admin/sync-tokens"
+							icon={RefreshCw}
+							label="Base Camp sync"
+							onNavigate={onNavigate}
+						/>
+					</>
+				) : null}
+			</NavGroup>
+
+			<NavGroup label="Me">
+				<NavItem
+					to="/dashboard"
+					icon={LayoutGrid}
+					label="My dashboard"
+					onNavigate={onNavigate}
+				/>
+				<NavItem
+					to="/resources"
+					icon={BookOpen}
+					label="Resources"
+					onNavigate={onNavigate}
+				/>
+			</NavGroup>
+
+			{isSuperadmin ? (
+				<NavGroup label="Platform">
+					<NavItem
+						to="/superadmin"
+						icon={ShieldCheck}
+						label="Superadmin"
+						onNavigate={onNavigate}
+					/>
+				</NavGroup>
+			) : null}
+
+			{/* Footer mini-profile */}
+			<div className="mt-auto flex items-center gap-2.5 rounded-xl border border-[var(--line)] bg-[var(--foam)] p-2.5">
+				<MemberAvatar tone="palm" initials={initials} size={34} />
+				<div className="min-w-0 leading-tight">
+					<div className="truncate text-[13px] font-bold">{displayName}</div>
+					<div className="text-[11px] text-[var(--sea-ink-soft)]">
+						{roleLabel}
+					</div>
+				</div>
+				<div className="ml-auto flex shrink-0 items-center gap-1">
+					{showThemeToggle ? <ThemeToggle /> : null}
+					<button
+						type="button"
+						onClick={onSignOut}
+						title="Sign out"
+						className="flex size-7 items-center justify-center rounded-md text-[var(--sea-ink-soft)] transition-colors hover:bg-[var(--surface-strong)] hover:text-[var(--sea-ink)]"
+					>
+						<LogOut className="size-4" aria-hidden />
+						<span className="sr-only">Sign out</span>
+					</button>
+				</div>
+			</div>
+		</>
 	);
 }
 
@@ -261,15 +353,18 @@ function NavItem({
 	label,
 	icon: Icon,
 	exact = false,
+	onNavigate,
 }: {
 	to: string;
 	label: string;
 	icon: ComponentType<{ className?: string }>;
 	exact?: boolean;
+	onNavigate?: () => void;
 }) {
 	return (
 		<Link
 			to={to}
+			onClick={onNavigate}
 			activeOptions={{ exact }}
 			className="flex w-full items-center gap-[11px] rounded-[10px] px-3 py-[9px] text-left text-[13.5px] tracking-[0.01em] transition-colors"
 			activeProps={{
