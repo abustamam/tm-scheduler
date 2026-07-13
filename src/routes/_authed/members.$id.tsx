@@ -29,6 +29,7 @@ import {
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
+import { effectiveAdminClub } from "#/lib/effective-admin";
 import { formatMeetingDate } from "#/lib/format";
 import { formatTenure } from "#/lib/members";
 import {
@@ -95,12 +96,16 @@ function MemberDetail() {
 		unscheduledSpeeches,
 		openSpeakerSlots,
 	} = Route.useLoaderData();
-	const { currentMemberId, activeClubId, clubs } = Route.useRouteContext();
+	const { currentMemberId, activeClubId, clubs, officerPositions } =
+		Route.useRouteContext();
 	const clubId = activeClubId;
-	// Club-role management is admin-only: the viewer must be an admin in the
-	// club they're currently acting in (#187).
-	const viewerIsAdmin =
-		clubs.find((c) => c.clubId === activeClubId)?.clubRole === "admin";
+	// Club-role management is admin-only: the viewer must be an effective admin
+	// (stored admin OR an elected officer, #202) in the active club (#187).
+	const viewerIsAdmin = !!effectiveAdminClub({
+		clubs,
+		activeClubId,
+		officerPositions,
+	});
 
 	if (!member) {
 		return (

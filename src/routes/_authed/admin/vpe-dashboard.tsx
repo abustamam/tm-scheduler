@@ -3,6 +3,7 @@ import { ChevronRight } from "lucide-react";
 import { MemberAvatar } from "#/components/club/member-avatar";
 import { PageContainer } from "#/components/page-container";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
+import { effectiveAdminClub } from "#/lib/effective-admin";
 import { formatShortDate } from "#/lib/format";
 import { formatTenure } from "#/lib/members";
 import { cn } from "#/lib/utils";
@@ -12,20 +13,14 @@ import type {
 	SpeakerRotationRow,
 } from "#/server/reporting-logic";
 
-// Gated to clubRole "admin": VP Education / President already resolve to
-// "admin" (ADR-0008 / src/lib/officers.ts), so this covers VPEs.
-const findEducatorClub = (
-	clubs: readonly { clubId: string; name: string; clubRole: string }[],
-) => clubs.find((c) => c.clubRole === "admin");
-
 export const Route = createFileRoute("/_authed/admin/vpe-dashboard")({
 	beforeLoad: ({ context }) => {
-		if (!findEducatorClub(context.clubs)) {
+		if (!effectiveAdminClub(context)) {
 			throw redirect({ to: "/" });
 		}
 	},
 	loader: async ({ context }) => {
-		const club = findEducatorClub(context.clubs);
+		const club = effectiveAdminClub(context);
 		if (!club) return { rotation: [], overdue: [], clubName: "" };
 		const [rotation, overdue] = await Promise.all([
 			getSpeakerRotation({ data: { clubId: club.clubId } }),

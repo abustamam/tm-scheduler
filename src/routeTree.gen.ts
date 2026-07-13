@@ -18,6 +18,7 @@ import { Route as ApiDevLoginRouteImport } from './routes/api/dev-login'
 import { Route as AuthedSuperadminRouteImport } from './routes/_authed/superadmin'
 import { Route as AuthedScheduleRouteImport } from './routes/_authed/schedule'
 import { Route as AuthedResourcesRouteImport } from './routes/_authed/resources'
+import { Route as AuthedOfficersRouteImport } from './routes/_authed/officers'
 import { Route as AuthedNextRouteImport } from './routes/_authed/next'
 import { Route as AuthedMeRouteImport } from './routes/_authed/me'
 import { Route as AuthedDashboardRouteImport } from './routes/_authed/dashboard'
@@ -83,6 +84,11 @@ const AuthedScheduleRoute = AuthedScheduleRouteImport.update({
 const AuthedResourcesRoute = AuthedResourcesRouteImport.update({
   id: '/resources',
   path: '/resources',
+  getParentRoute: () => AuthedRoute,
+} as any)
+const AuthedOfficersRoute = AuthedOfficersRouteImport.update({
+  id: '/officers',
+  path: '/officers',
   getParentRoute: () => AuthedRoute,
 } as any)
 const AuthedNextRoute = AuthedNextRouteImport.update({
@@ -207,6 +213,7 @@ export interface FileRoutesByFullPath {
   '/dashboard': typeof AuthedDashboardRoute
   '/me': typeof AuthedMeRoute
   '/next': typeof AuthedNextRoute
+  '/officers': typeof AuthedOfficersRoute
   '/resources': typeof AuthedResourcesRoute
   '/schedule': typeof AuthedScheduleRoute
   '/superadmin': typeof AuthedSuperadminRouteWithChildren
@@ -238,6 +245,7 @@ export interface FileRoutesByTo {
   '/dashboard': typeof AuthedDashboardRoute
   '/me': typeof AuthedMeRoute
   '/next': typeof AuthedNextRoute
+  '/officers': typeof AuthedOfficersRoute
   '/resources': typeof AuthedResourcesRoute
   '/schedule': typeof AuthedScheduleRoute
   '/api/dev-login': typeof ApiDevLoginRoute
@@ -270,6 +278,7 @@ export interface FileRoutesById {
   '/_authed/dashboard': typeof AuthedDashboardRoute
   '/_authed/me': typeof AuthedMeRoute
   '/_authed/next': typeof AuthedNextRoute
+  '/_authed/officers': typeof AuthedOfficersRoute
   '/_authed/resources': typeof AuthedResourcesRoute
   '/_authed/schedule': typeof AuthedScheduleRoute
   '/_authed/superadmin': typeof AuthedSuperadminRouteWithChildren
@@ -305,6 +314,7 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/me'
     | '/next'
+    | '/officers'
     | '/resources'
     | '/schedule'
     | '/superadmin'
@@ -336,6 +346,7 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/me'
     | '/next'
+    | '/officers'
     | '/resources'
     | '/schedule'
     | '/api/dev-login'
@@ -367,6 +378,7 @@ export interface FileRouteTypes {
     | '/_authed/dashboard'
     | '/_authed/me'
     | '/_authed/next'
+    | '/_authed/officers'
     | '/_authed/resources'
     | '/_authed/schedule'
     | '/_authed/superadmin'
@@ -470,6 +482,13 @@ declare module '@tanstack/react-router' {
       path: '/resources'
       fullPath: '/resources'
       preLoaderRoute: typeof AuthedResourcesRouteImport
+      parentRoute: typeof AuthedRoute
+    }
+    '/_authed/officers': {
+      id: '/_authed/officers'
+      path: '/officers'
+      fullPath: '/officers'
+      preLoaderRoute: typeof AuthedOfficersRouteImport
       parentRoute: typeof AuthedRoute
     }
     '/_authed/next': {
@@ -647,6 +666,7 @@ interface AuthedRouteChildren {
   AuthedDashboardRoute: typeof AuthedDashboardRoute
   AuthedMeRoute: typeof AuthedMeRoute
   AuthedNextRoute: typeof AuthedNextRoute
+  AuthedOfficersRoute: typeof AuthedOfficersRoute
   AuthedResourcesRoute: typeof AuthedResourcesRoute
   AuthedScheduleRoute: typeof AuthedScheduleRoute
   AuthedSuperadminRoute: typeof AuthedSuperadminRouteWithChildren
@@ -667,6 +687,7 @@ const AuthedRouteChildren: AuthedRouteChildren = {
   AuthedDashboardRoute: AuthedDashboardRoute,
   AuthedMeRoute: AuthedMeRoute,
   AuthedNextRoute: AuthedNextRoute,
+  AuthedOfficersRoute: AuthedOfficersRoute,
   AuthedResourcesRoute: AuthedResourcesRoute,
   AuthedScheduleRoute: AuthedScheduleRoute,
   AuthedSuperadminRoute: AuthedSuperadminRouteWithChildren,
