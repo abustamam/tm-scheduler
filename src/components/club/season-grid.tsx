@@ -333,7 +333,9 @@ export function SeasonGrid({
 														? "Tap if you can make it after all"
 														: "Mark yourself unavailable — I can't make this one"
 												}
-												aria-pressed={status?.declined ?? false}
+												aria-label={`${
+													status?.declined ? "Not going" : "Can't go"
+												} — ${formatMeetingDate(m.scheduledAt, m.timezone)}`}
 												className={cn(
 													"mx-auto mt-1 flex cursor-pointer items-center gap-0.5 rounded-full border px-1.5 py-0.5 text-[10px] font-semibold whitespace-nowrap transition-colors disabled:opacity-50",
 													status?.declined
