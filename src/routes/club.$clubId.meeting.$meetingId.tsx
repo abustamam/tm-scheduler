@@ -112,7 +112,11 @@ function MeetingNotFound() {
 				This meeting doesn't exist for this club, or the link is out of date.
 			</p>
 			<Button asChild variant="outline">
-				<Link to="/club/$clubId" params={{ clubId }}>
+				<Link
+					to="/club/$clubId"
+					params={{ clubId }}
+					search={{ view: "roles", count: 8 }}
+				>
 					Back to meetings
 				</Link>
 			</Button>

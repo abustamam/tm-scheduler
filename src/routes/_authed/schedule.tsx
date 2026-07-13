@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { SeasonGrid } from "#/components/club/season-grid";
 import { PageContainer } from "#/components/page-container";
 import type { Orientation } from "#/lib/season-grid-view";
@@ -30,6 +30,9 @@ export const Route = createFileRoute("/_authed/schedule")({
 function SeasonGridPage() {
 	const { data } = Route.useLoaderData();
 	const { view, count } = Route.useSearch();
+	const { currentMemberId } = Route.useRouteContext();
+	const router = useRouter();
+	const navigate = Route.useNavigate();
 
 	return (
 		<PageContainer className="space-y-4">
@@ -37,7 +40,19 @@ function SeasonGridPage() {
 				Season grid
 			</h1>
 			{data ? (
-				<SeasonGrid data={data} orientation={view} count={count} />
+				<SeasonGrid
+					data={data}
+					orientation={view}
+					count={count}
+					currentMemberId={currentMemberId}
+					onOrientationChange={(v) =>
+						navigate({ search: (prev) => ({ ...prev, view: v }) })
+					}
+					onCountChange={(c) =>
+						navigate({ search: (prev) => ({ ...prev, count: c }) })
+					}
+					onChanged={() => router.invalidate()}
+				/>
 			) : (
 				<p className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
 					No club found.

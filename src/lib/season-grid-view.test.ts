@@ -44,6 +44,7 @@ const data: SeasonGridData = {
 	guestNames: [],
 	cells: [
 		{
+			slotId: "s-tm",
 			meetingId: "m1",
 			roleDefinitionId: "tm",
 			slotIndex: 0,
@@ -52,6 +53,7 @@ const data: SeasonGridData = {
 			status: "claimed",
 		},
 		{
+			slotId: "s-ti",
 			meetingId: "m1",
 			roleDefinitionId: "ti",
 			slotIndex: 0,
@@ -71,6 +73,20 @@ describe("projectGrid – roles orientation", () => {
 		expect(rows[1]!.cells[0]).toMatchObject({ kind: "open", text: "OPEN" });
 	});
 
+	it("carries slotId + memberId so cells can claim/release (#198)", () => {
+		const rows = projectGrid(data, "roles");
+		// Assigned cell: slotId present, memberId = the holder (drives "yours").
+		expect(rows[0]!.cells[0]).toMatchObject({
+			slotId: "s-tm",
+			memberId: "a",
+		});
+		// OPEN cell: slotId present (claimable), no member yet.
+		expect(rows[1]!.cells[0]).toMatchObject({
+			slotId: "s-ti",
+			memberId: null,
+		});
+	});
+
 	it("renders an inactive member's name in a past cell (not '—')", () => {
 		// "z" is referenced by a cell + present in memberNames, but absent from the
 		// active `members` axis — their name must still resolve in roles view.
@@ -79,6 +95,7 @@ describe("projectGrid – roles orientation", () => {
 			memberNames: [...data.memberNames, { id: "z", name: "Zoe Lapsed" }],
 			cells: [
 				{
+					slotId: "s-tm",
 					meetingId: "m1",
 					roleDefinitionId: "tm",
 					slotIndex: 0,
@@ -137,6 +154,7 @@ describe("projectGrid – members orientation", () => {
 			cells: [
 				...data.cells,
 				{
+					slotId: "s-tmz",
 					meetingId: "m1",
 					roleDefinitionId: "tm",
 					slotIndex: 0,
@@ -156,6 +174,7 @@ describe("projectGrid – members orientation", () => {
 			cells: [
 				...data.cells,
 				{
+					slotId: "s-ti-a",
 					meetingId: "m1",
 					roleDefinitionId: "ti",
 					slotIndex: 0,

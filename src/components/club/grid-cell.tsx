@@ -1,4 +1,5 @@
 import { Link } from "@tanstack/react-router";
+import { Loader2 } from "lucide-react";
 import type { ViewCell } from "#/lib/season-grid-view";
 import { cn } from "#/lib/utils";
 
@@ -10,13 +11,84 @@ const KIND_CLASS: Record<ViewCell["kind"], string> = {
 	blank: "opacity-0",
 };
 
-export function GridCell({ cell }: { cell: ViewCell }) {
+const BASE =
+	"flex h-8 min-w-[3rem] items-center justify-center rounded-md px-2 text-xs font-semibold";
+
+/**
+ * One season-grid cell. Read-only by default (links to the meeting). When a
+ * `currentMemberId` is supplied (the interactive sign-up sheet, #198) the cell
+ * becomes act-on-your-own: an OPEN slot is one-tap claimable, your own slot is
+ * releasable, everyone else's is greyed and read-only.
+ */
+export function GridCell({
+	cell,
+	currentMemberId,
+	busy = false,
+	onClaim,
+	onRelease,
+}: {
+	cell: ViewCell;
+	currentMemberId?: string | null;
+	busy?: boolean;
+	onClaim?: (slotId: string) => void;
+	onRelease?: (slotId: string) => void;
+}) {
+	const interactive = !!currentMemberId && !!cell.slotId;
+	const isMine =
+		interactive &&
+		cell.kind === "assigned" &&
+		cell.memberId === currentMemberId;
+	const isClaimable = interactive && cell.kind === "open";
+
+	// Claim an OPEN slot as the current member.
+	if (isClaimable && onClaim && cell.slotId) {
+		const slotId = cell.slotId;
+		return (
+			<button
+				type="button"
+				disabled={busy}
+				title={`${cell.title} — tap to claim`}
+				aria-label={`Claim ${cell.title}`}
+				onClick={() => onClaim(slotId)}
+				className={cn(
+					BASE,
+					"w-full cursor-pointer border border-emerald-500/70 text-emerald-700 transition-colors hover:bg-emerald-600 hover:text-white disabled:opacity-50",
+				)}
+			>
+				{busy ? <Loader2 className="size-3.5 animate-spin" /> : "Claim"}
+			</button>
+		);
+	}
+
+	// Release your own slot.
+	if (isMine && onRelease && cell.slotId) {
+		const slotId = cell.slotId;
+		return (
+			<button
+				type="button"
+				disabled={busy}
+				title={`${cell.title} — tap to release`}
+				aria-label={`Release ${cell.title}`}
+				onClick={() => onRelease(slotId)}
+				className={cn(
+					BASE,
+					"w-full cursor-pointer bg-emerald-600 text-white ring-2 ring-emerald-800 transition-opacity hover:opacity-80 disabled:opacity-50",
+				)}
+			>
+				{busy ? <Loader2 className="size-3.5 animate-spin" /> : cell.text}
+			</button>
+		);
+	}
+
 	const inner = (
 		<span
 			title={cell.title || undefined}
 			className={cn(
-				"flex h-8 min-w-[3rem] items-center justify-center rounded-md px-2 text-xs font-semibold",
+				BASE,
 				KIND_CLASS[cell.kind],
+				// In the interactive sheet, everyone else's filled cells are greyed
+				// so it's obvious you can only act on your own.
+				interactive && cell.kind === "assigned" && "opacity-45",
 			)}
 		>
 			{cell.text}

@@ -7,6 +7,12 @@ export interface ViewCell {
 	kind: CellKind;
 	text: string;
 	title: string;
+	/** `role_slots.id` for a real slot cell (assigned/open/guest); null for a
+	 *  blank cell or the read-only members orientation. Enables claim/release. */
+	slotId: string | null;
+	/** The member holding this slot (roles orientation only) — lets the grid
+	 *  tell "yours" from "someone else's". null for open/guest/blank/members. */
+	memberId: string | null;
 }
 
 export interface ViewRow {
@@ -57,6 +63,8 @@ export function projectGrid(
 						kind: "blank" as const,
 						text: "",
 						title: "",
+						slotId: null,
+						memberId: null,
 					};
 				// Guest-held cell (#151): resolve the guest name + "· Guest" marker.
 				if (c.memberId === null && c.guestId !== null) {
@@ -67,6 +75,8 @@ export function projectGrid(
 						kind: "assigned" as const,
 						text: label,
 						title: `${label} — ${row.label}`,
+						slotId: c.slotId,
+						memberId: null,
 					};
 				}
 				if (c.memberId === null)
@@ -75,6 +85,8 @@ export function projectGrid(
 						kind: "open" as const,
 						text: "OPEN",
 						title: `${row.label} — open`,
+						slotId: c.slotId,
+						memberId: null,
 					};
 				const name = memberName.get(c.memberId) ?? "—";
 				return {
@@ -82,6 +94,8 @@ export function projectGrid(
 					kind: "assigned" as const,
 					text: name,
 					title: `${name} — ${row.label}`,
+					slotId: c.slotId,
+					memberId: c.memberId,
 				};
 			}),
 		}));
@@ -119,11 +133,15 @@ export function projectGrid(
 					held.length > 1
 						? `${codes[0] ?? "?"} +${held.length - 1}`
 						: (codes[0] ?? "?");
+				// Members orientation is read-only (a cell can aggregate several
+				// slots), so it carries no actionable slotId.
 				return {
 					meetingId: m.id,
 					kind: "assigned" as const,
 					text,
 					title: labels.join(", "),
+					slotId: null,
+					memberId: null,
 				};
 			}
 			if (naSet.has(`${member.id}:${m.id}`))
@@ -132,12 +150,16 @@ export function projectGrid(
 					kind: "na" as const,
 					text: "NA",
 					title: "Not available",
+					slotId: null,
+					memberId: null,
 				};
 			return {
 				meetingId: m.id,
 				kind: "free" as const,
 				text: "·",
 				title: "Free",
+				slotId: null,
+				memberId: null,
 			};
 		}),
 	}));
