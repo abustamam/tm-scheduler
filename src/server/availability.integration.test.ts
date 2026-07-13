@@ -7,7 +7,7 @@
  */
 import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { activityLog, memberAvailability } from "#/db/schema";
+import { activityLog, memberAvailability, roleSlots } from "#/db/schema";
 import {
 	cleanup,
 	hasTestDb,
@@ -15,6 +15,7 @@ import {
 	seedClub,
 	testDb,
 } from "#/test/db";
+import { releaseSlotsAndMarkUnavailable } from "./availability-logic";
 
 // ---------------------------------------------------------------------------
 // Helpers — replicate the availability query logic using testDb
@@ -181,5 +182,99 @@ describe.skipIf(!hasTestDb)("availability (set + clear)", () => {
 		await expect(
 			clearAvailabilityPublic(seed.memberId, seed.meetingId, seed.clubId),
 		).resolves.toEqual({ ok: true });
+	});
+});
+
+describe.skipIf(!hasTestDb)("releaseSlotsAndMarkUnavailable (#204)", () => {
+	let seed: SeededClub;
+
+	beforeEach(async () => {
+		seed = await seedClub();
+	});
+
+	afterEach(async () => {
+		await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
+	});
+
+	it("releases the member's held slots AND marks them unavailable, atomically", async () => {
+		// Assign the seeded (open) slot to the member.
+		await testDb
+			.update(roleSlots)
+			.set({
+				assignedMemberId: seed.memberId,
+				status: "claimed",
+				claimedAt: new Date(),
+			})
+			.where(eq(roleSlots.id, seed.slotId));
+
+		const result = await releaseSlotsAndMarkUnavailable(testDb, {
+			memberId: seed.memberId,
+			meetingId: seed.meetingId,
+			clubId: seed.clubId,
+		});
+		expect(result.released).toBe(1);
+
+		// Slot is back to open and unassigned.
+		const [slot] = await testDb
+			.select()
+			.from(roleSlots)
+			.where(eq(roleSlots.id, seed.slotId))
+			.limit(1);
+		expect(slot?.assignedMemberId).toBeNull();
+		expect(slot?.status).toBe("open");
+
+		// Availability row present.
+		const avail = await testDb
+			.select()
+			.from(memberAvailability)
+			.where(
+				and(
+					eq(memberAvailability.memberId, seed.memberId),
+					eq(memberAvailability.meetingId, seed.meetingId),
+				),
+			);
+		expect(avail).toHaveLength(1);
+
+		// Logged both a release (for the slot) and availability_set (for the meeting).
+		const relLogs = await testDb
+			.select()
+			.from(activityLog)
+			.where(
+				and(
+					eq(activityLog.targetId, seed.slotId),
+					eq(activityLog.action, "release"),
+				),
+			);
+		expect(relLogs.length).toBeGreaterThan(0);
+		const setLogs = await testDb
+			.select()
+			.from(activityLog)
+			.where(
+				and(
+					eq(activityLog.targetId, seed.meetingId),
+					eq(activityLog.action, "availability_set"),
+				),
+			);
+		expect(setLogs.length).toBeGreaterThan(0);
+	});
+
+	it("marks unavailable even when the member holds no roles (released = 0)", async () => {
+		const result = await releaseSlotsAndMarkUnavailable(testDb, {
+			memberId: seed.memberId,
+			meetingId: seed.meetingId,
+			clubId: seed.clubId,
+		});
+		expect(result.released).toBe(0);
+
+		const avail = await testDb
+			.select()
+			.from(memberAvailability)
+			.where(
+				and(
+					eq(memberAvailability.memberId, seed.memberId),
+					eq(memberAvailability.meetingId, seed.meetingId),
+				),
+			);
+		expect(avail).toHaveLength(1);
 	});
 });

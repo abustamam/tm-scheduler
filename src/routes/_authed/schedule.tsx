@@ -30,7 +30,7 @@ export const Route = createFileRoute("/_authed/schedule")({
 function SeasonGridPage() {
 	const { data } = Route.useLoaderData();
 	const { view, count } = Route.useSearch();
-	const { currentMemberId } = Route.useRouteContext();
+	const { currentMemberId, activeClubId } = Route.useRouteContext();
 	const router = useRouter();
 	const navigate = Route.useNavigate();
 
@@ -45,6 +45,7 @@ function SeasonGridPage() {
 					orientation={view}
 					count={count}
 					currentMemberId={currentMemberId}
+					clubId={activeClubId ?? undefined}
 					onOrientationChange={(v) =>
 						navigate({ search: (prev) => ({ ...prev, view: v }) })
 					}

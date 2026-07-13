@@ -4,6 +4,7 @@ import { z } from "zod";
 import { db } from "#/db";
 import { meetings, memberAvailability } from "#/db/schema";
 import { logActivity } from "./activity";
+import { releaseSlotsAndMarkUnavailable } from "./availability-logic";
 import { requireMemberInClub } from "./guards";
 import { assertMeetingNotLocked } from "./meeting-authz-logic";
 
@@ -74,4 +75,20 @@ export const clearAvailability = createServerFn({ method: "POST" })
 		});
 
 		return { ok: true as const };
+	});
+
+/**
+ * Mark a member unavailable for a meeting AND release every role they hold in
+ * it, atomically (#204). A member can't both hold a role and be absent, so the
+ * grid offers this as one confirmed action instead of a contradiction. Release
+ * mirrors `releaseSlot` (slot → open, assignee + speech unlinked; speech kept).
+ * PUBLIC — trust guard via requireMemberInClub.
+ */
+export const markUnavailableReleasing = createServerFn({ method: "POST" })
+	.validator((i: unknown) => availabilitySchema.parse(i))
+	.handler(async ({ data }) => {
+		assertMeetingNotLocked(await meetingStatus(data.meetingId));
+		await requireMemberInClub(data.memberId, data.clubId);
+		const { released } = await releaseSlotsAndMarkUnavailable(db, data);
+		return { ok: true as const, released };
 	});
