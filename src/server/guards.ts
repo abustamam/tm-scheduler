@@ -7,6 +7,7 @@ import {
 	type MeetingAgendaAuthz,
 	resolveMeetingAgendaAuthz,
 } from "./meeting-authz-logic";
+import { getOpenOfficerPositions } from "./officers-logic";
 
 // IMPORTANT: this module touches `db`/`pg` and must never be imported by a
 // client component directly. Only server-function modules import it; the
@@ -70,17 +71,27 @@ export async function requireMembership(userId: string, clubId: string) {
 	return membership;
 }
 
-/** Gate admin actions to the given club roles. */
+/**
+ * Gate admin actions to the given club roles. Effective-admin (#202): when
+ * `admin` is required and the stored `club_role` isn't admin, an elected officer
+ * (any open `officer_terms` row) still passes — every officer is a full admin.
+ */
 export async function requireClubRole(
 	userId: string,
 	clubId: string,
 	roles: ClubRole[],
 ) {
 	const membership = await requireMembership(userId, clubId);
-	if (!roles.includes(membership.clubRole)) {
-		throw new Error("You don't have permission to do that.");
+	if (roles.includes(membership.clubRole)) {
+		return membership;
 	}
-	return membership;
+	if (
+		roles.includes("admin") &&
+		(await getOpenOfficerPositions(db, membership.id)).length > 0
+	) {
+		return membership;
+	}
+	throw new Error("You don't have permission to do that.");
 }
 
 /**

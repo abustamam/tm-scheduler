@@ -13,8 +13,11 @@ import { Label } from "#/components/ui/label";
 import { authClient } from "#/lib/auth-client";
 
 export const Route = createFileRoute("/signin")({
+	// Default post-sign-in landing is the Officer home (#202); it redirects
+	// non-officers straight to the roster, so members still land on "/".
 	validateSearch: (search: Record<string, unknown>) => ({
-		redirect: typeof search.redirect === "string" ? search.redirect : "/",
+		redirect:
+			typeof search.redirect === "string" ? search.redirect : "/officers",
 	}),
 	component: SignIn,
 });

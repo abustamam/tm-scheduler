@@ -6,6 +6,7 @@ import { db } from "#/db";
 import { clubs, members, people, user as userTable } from "#/db/schema";
 import { ACTIVE_CLUB_COOKIE, resolveActiveClubId } from "#/lib/active-club";
 import { getSessionUser } from "./guards";
+import { getOpenOfficerPositions } from "./officers-logic";
 
 /**
  * Auth context for the app shell + route guards: the signed-in user (or null)
@@ -26,6 +27,7 @@ export const getAuthContext = createServerFn({ method: "GET" }).handler(
 				clubs: [] as const,
 				currentMemberId: null,
 				activeClubId: null,
+				officerPositions: [] as const,
 				isSuperadmin: false,
 			};
 		}
@@ -77,11 +79,18 @@ export const getAuthContext = createServerFn({ method: "GET" }).handler(
 		const currentMemberId =
 			myMemberships.find((m) => m.clubId === activeClubId)?.memberId ?? null;
 
+		// Their open officer positions in the active club (#202) — drives the
+		// effective-admin nav + the Officer home's per-office sections.
+		const officerPositions = currentMemberId
+			? await getOpenOfficerPositions(db, currentMemberId)
+			: [];
+
 		return {
 			user: { id: user.id, name: user.name, email: user.email },
 			clubs: myClubs,
 			currentMemberId,
 			activeClubId,
+			officerPositions,
 			isSuperadmin,
 		};
 	},

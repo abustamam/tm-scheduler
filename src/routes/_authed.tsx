@@ -10,6 +10,7 @@ import {
 	BookOpen,
 	CalendarDays,
 	CalendarPlus,
+	Compass,
 	GraduationCap,
 	Grid3x3,
 	LayoutGrid,
@@ -32,6 +33,7 @@ import { Sheet, SheetContent, SheetTitle } from "#/components/ui/sheet";
 import { Toaster } from "#/components/ui/sonner";
 import { authClient } from "#/lib/auth-client";
 import { initialsOf } from "#/lib/avatar";
+import { officerPositionLabel, officerRank } from "#/lib/officers";
 import { getAuthContext } from "#/server/auth-context";
 
 export const Route = createFileRoute("/_authed")({
@@ -48,6 +50,7 @@ export const Route = createFileRoute("/_authed")({
 			clubs: ctx.clubs,
 			currentMemberId: ctx.currentMemberId,
 			activeClubId: ctx.activeClubId,
+			officerPositions: ctx.officerPositions,
 			isSuperadmin: ctx.isSuperadmin,
 		};
 	},
@@ -61,6 +64,7 @@ const CLUB_ROLE_LABELS: Record<string, string> = {
 
 function crumbFor(pathname: string): string {
 	if (pathname === "/") return "Manage · Roster";
+	if (pathname.startsWith("/officers")) return "Your office · Officer home";
 	if (pathname.startsWith("/schedule")) return "Manage · Season grid";
 	if (pathname.startsWith("/next")) return "Manage · Next meeting";
 	if (pathname.startsWith("/activity")) return "Manage · Activity";
@@ -83,7 +87,7 @@ function crumbFor(pathname: string): string {
 }
 
 function WorkspaceLayout() {
-	const { authUser, clubs, activeClubId, isSuperadmin } =
+	const { authUser, clubs, activeClubId, officerPositions, isSuperadmin } =
 		Route.useRouteContext();
 	const router = useRouter();
 	const pathname = useRouterState({ select: (s) => s.location.pathname });
@@ -94,11 +98,20 @@ function WorkspaceLayout() {
 	const activeClub = clubs.find((c) => c.clubId === activeClubId) ?? clubs[0];
 	const clubName = activeClub?.name ?? "Toastmasters";
 	const clubNumber = activeClub?.clubNumber ?? null;
-	// Club admins — includes VP Education / President, who resolve to "admin".
-	const isOfficer = clubs.some((c) => c.clubRole === "admin");
-	const roleLabel = activeClub?.clubRole
-		? (CLUB_ROLE_LABELS[activeClub.clubRole] ?? "Member")
-		: "Member";
+	// Holds an elected office in the active club → gets the Officer home (#202).
+	const hasOffice = officerPositions.length > 0;
+	// Effective admin (#202): a stored admin OR any elected officer sees the
+	// admin nav items.
+	const isOfficer = activeClub?.clubRole === "admin" || hasOffice;
+	// Prefer the office label (highest-ranked) for an officer; else the club role.
+	const topOffice = hasOffice
+		? [...officerPositions].sort((a, b) => officerRank(a) - officerRank(b))[0]
+		: undefined;
+	const roleLabel = topOffice
+		? officerPositionLabel(topOffice)
+		: activeClub?.clubRole
+			? (CLUB_ROLE_LABELS[activeClub.clubRole] ?? "Member")
+			: "Member";
 	const displayName = authUser.name || authUser.email;
 	const initials = initialsOf(displayName);
 
@@ -112,6 +125,7 @@ function WorkspaceLayout() {
 			clubName={clubName}
 			clubNumber={clubNumber}
 			isOfficer={isOfficer}
+			hasOffice={hasOffice}
 			isSuperadmin={isSuperadmin}
 			displayName={displayName}
 			roleLabel={roleLabel}
@@ -188,6 +202,7 @@ function SidebarInner({
 	clubName,
 	clubNumber,
 	isOfficer,
+	hasOffice,
 	isSuperadmin,
 	displayName,
 	roleLabel,
@@ -199,6 +214,7 @@ function SidebarInner({
 	clubName: string;
 	clubNumber: string | null;
 	isOfficer: boolean;
+	hasOffice: boolean;
 	isSuperadmin: boolean;
 	displayName: string;
 	roleLabel: string;
@@ -216,6 +232,17 @@ function SidebarInner({
 					subtitle={clubNumber ? `${clubName} · Club ${clubNumber}` : clubName}
 				/>
 			</div>
+
+			{hasOffice ? (
+				<NavGroup label="Your office">
+					<NavItem
+						to="/officers"
+						icon={Compass}
+						label="Officer home"
+						onNavigate={onNavigate}
+					/>
+				</NavGroup>
+			) : null}
 
 			<NavGroup label="Manage">
 				<NavItem

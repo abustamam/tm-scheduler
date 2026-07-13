@@ -7,6 +7,7 @@ import { PageContainer } from "#/components/page-container";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
+import { effectiveAdminClub } from "#/lib/effective-admin";
 import {
 	generateSyncToken,
 	getSyncTokens,
@@ -15,7 +16,7 @@ import {
 
 export const Route = createFileRoute("/_authed/admin/sync-tokens")({
 	beforeLoad: ({ context }) => {
-		const adminClub = context.clubs.find((c) => c.clubRole === "admin");
+		const adminClub = effectiveAdminClub(context);
 		if (!adminClub) throw redirect({ to: "/" });
 		return { adminClub };
 	},

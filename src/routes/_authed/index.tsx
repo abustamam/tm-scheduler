@@ -15,6 +15,7 @@ import {
 	DialogTitle,
 } from "#/components/ui/dialog";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
+import { effectiveAdminClub } from "#/lib/effective-admin";
 import { formatTenure } from "#/lib/members";
 import { officerPositionLabel } from "#/lib/officers";
 import {
@@ -85,10 +86,15 @@ function pathwayLabelFor(paths: PathViewModel[]): string | null {
 
 function Roster() {
 	const { members, openRoles, pathways } = Route.useLoaderData();
-	const { clubs, currentMemberId, activeClubId } = Route.useRouteContext();
+	const { clubs, currentMemberId, activeClubId, officerPositions } =
+		Route.useRouteContext();
 	const clubId = activeClubId;
-	const clubRole = clubs.find((c) => c.clubId === activeClubId)?.clubRole;
-	const canManage = clubRole === "admin";
+	// Effective admin (#202): stored admin OR any elected officer can manage.
+	const canManage = !!effectiveAdminClub({
+		clubs,
+		activeClubId,
+		officerPositions,
+	});
 	const [seg, setSeg] = useState<SegKey>("all");
 	const [mergeOpen, setMergeOpen] = useState(false);
 	const [importOpen, setImportOpen] = useState(false);

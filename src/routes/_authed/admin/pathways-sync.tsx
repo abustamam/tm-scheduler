@@ -5,12 +5,13 @@ import { toast } from "sonner";
 import { PageContainer } from "#/components/page-container";
 import { Button } from "#/components/ui/button";
 import { Label } from "#/components/ui/label";
+import { effectiveAdminClub } from "#/lib/effective-admin";
 import { ingestPathwaysProgress } from "#/server/pathways-sync";
 import type { SyncResult } from "#/server/pathways-sync-logic";
 
 export const Route = createFileRoute("/_authed/admin/pathways-sync")({
 	beforeLoad: ({ context }) => {
-		const adminClub = context.clubs.find((c) => c.clubRole === "admin");
+		const adminClub = effectiveAdminClub(context);
 		if (!adminClub) {
 			throw redirect({ to: "/" });
 		}
