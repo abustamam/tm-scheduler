@@ -24,11 +24,20 @@ function ClubShell() {
 	const { clubUuid, clubName, clubNumber } = Route.useRouteContext();
 	return (
 		<div className="flex min-h-svh w-full flex-col bg-background">
-			<header className="flex items-center justify-between gap-3 border-b border-[var(--line)] px-4 py-3 md:px-6">
+			<header className="flex items-center gap-3 border-b border-[var(--line)] px-4 py-3 md:px-6">
 				<BrandMark size="sm" />
 				<span className="min-w-0 flex-1 truncate text-right text-[11px] font-semibold tracking-[0.04em] text-muted-foreground uppercase">
 					{clubNumber ? `${clubName} · Club ${clubNumber}` : clubName}
 				</span>
+				{/* Bridge to the full signed-in workspace (dashboard, Pathways,
+				    resources) — the sign-up sheet stays usable without it. */}
+				<Link
+					to="/signin"
+					search={{ redirect: "/" }}
+					className="shrink-0 text-xs font-semibold text-muted-foreground underline underline-offset-2 hover:text-foreground"
+				>
+					Sign in
+				</Link>
 			</header>
 			<RequireMember clubUuid={clubUuid} clubSlug={clubId}>
 				<Outlet />

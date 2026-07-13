@@ -1,10 +1,12 @@
 import { Link } from "@tanstack/react-router";
 import { Lock } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import { formatMeetingDate } from "#/lib/format";
 import { type Orientation, projectGrid } from "#/lib/season-grid-view";
 import { cn } from "#/lib/utils";
 import type { SeasonGridCount, SeasonGridData } from "#/server/season-grid";
+import { claimSlot, releaseSlot } from "#/server/slots";
 import { GridCell } from "./grid-cell";
 
 const COUNTS: SeasonGridCount[] = [4, 8, "all"];
@@ -17,18 +19,74 @@ export function SeasonGrid({
 	data,
 	orientation,
 	count,
+	currentMemberId,
+	onOrientationChange,
+	onCountChange,
+	onChanged,
 }: {
 	data: SeasonGridData;
 	orientation: Orientation;
 	count: SeasonGridCount;
+	/** When set, the grid becomes the interactive sign-up sheet: claim OPEN
+	 *  roles, release your own (Roles × Meetings only). #198. */
+	currentMemberId?: string | null;
+	onOrientationChange?: (o: Orientation) => void;
+	onCountChange?: (c: SeasonGridCount) => void;
+	/** Called after a successful claim/release so the page can refetch. */
+	onChanged?: () => void | Promise<void>;
 }) {
 	const rows = projectGrid(data, orientation);
 	const labelHead = orientation === "roles" ? "Role" : "Member";
 	const anchorRef = useRef<HTMLTableCellElement>(null);
+	const [busySlotId, setBusySlotId] = useState<string | null>(null);
+
+	// Only Roles × Meetings is the tappable sheet (members orientation is a
+	// read-only lens — a member cell can aggregate several slots).
+	const actingMemberId = orientation === "roles" ? currentMemberId : null;
 
 	useEffect(() => {
 		anchorRef.current?.scrollIntoView({ inline: "center", block: "nearest" });
 	}, []);
+
+	async function claim(slotId: string) {
+		if (!currentMemberId) return;
+		setBusySlotId(slotId);
+		try {
+			await claimSlot({
+				data: {
+					slotId,
+					memberId: currentMemberId,
+					actorMemberId: currentMemberId,
+				},
+			});
+			await onChanged?.();
+			toast.success("Role claimed.", {
+				action: { label: "Undo", onClick: () => release(slotId) },
+			});
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Couldn't claim role.");
+		} finally {
+			setBusySlotId(null);
+		}
+	}
+
+	async function release(slotId: string) {
+		if (!currentMemberId) return;
+		setBusySlotId(slotId);
+		try {
+			await releaseSlot({ data: { slotId, actorMemberId: currentMemberId } });
+			await onChanged?.();
+			toast.success("Role released.", {
+				action: { label: "Undo", onClick: () => claim(slotId) },
+			});
+		} catch (err) {
+			toast.error(
+				err instanceof Error ? err.message : "Couldn't release role.",
+			);
+		} finally {
+			setBusySlotId(null);
+		}
+	}
 
 	if (data.meetings.length === 0) {
 		return (
@@ -51,10 +109,10 @@ export function SeasonGrid({
 			<div className="flex flex-wrap items-center gap-4">
 				<div className="inline-flex overflow-hidden rounded-lg border">
 					{VIEWS.map((v) => (
-						<Link
+						<button
 							key={v.value}
-							to="/schedule"
-							search={(prev) => ({ view: v.value, count: prev.count ?? 8 })}
+							type="button"
+							onClick={() => onOrientationChange?.(v.value)}
 							className={cn(
 								"px-3 py-1.5 text-xs font-semibold",
 								orientation === v.value
@@ -63,15 +121,15 @@ export function SeasonGrid({
 							)}
 						>
 							{v.label}
-						</Link>
+						</button>
 					))}
 				</div>
 				<div className="inline-flex overflow-hidden rounded-lg border">
 					{COUNTS.map((c) => (
-						<Link
+						<button
 							key={String(c)}
-							to="/schedule"
-							search={(prev) => ({ count: c, view: prev.view ?? "members" })}
+							type="button"
+							onClick={() => onCountChange?.(c)}
 							className={cn(
 								"px-3 py-1.5 text-xs font-semibold",
 								count === c
@@ -80,7 +138,7 @@ export function SeasonGrid({
 							)}
 						>
 							{c === "all" ? "All" : c}
-						</Link>
+						</button>
 					))}
 				</div>
 			</div>
@@ -146,7 +204,13 @@ export function SeasonGrid({
 								</th>
 								{row.cells.map((cell, i) => (
 									<td key={`${row.id}:${data.meetings[i]?.id}`} className="p-0">
-										<GridCell cell={cell} />
+										<GridCell
+											cell={cell}
+											currentMemberId={actingMemberId}
+											busy={busySlotId === cell.slotId}
+											onClaim={claim}
+											onRelease={release}
+										/>
 									</td>
 								))}
 							</tr>

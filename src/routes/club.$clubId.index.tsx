@@ -3,23 +3,47 @@ import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { CalendarDays, Loader2, Mic } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { SeasonGrid } from "#/components/club/season-grid";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import { formatMeetingDate, formatMeetingTimeRange } from "#/lib/format";
 import { useCurrentMember } from "#/lib/member-identity";
-import { listMemberCommitments, listUpcomingMeetings } from "#/server/meetings";
+import type { Orientation } from "#/lib/season-grid-view";
+import { listMemberCommitments } from "#/server/meetings";
+import {
+	getPublicSeasonGrid,
+	type SeasonGridCount,
+} from "#/server/season-grid";
 import { releaseSlot } from "#/server/slots";
 
+type Search = { view: Orientation; count: SeasonGridCount };
+
 export const Route = createFileRoute("/club/$clubId/")({
-	loader: ({ context }) => listUpcomingMeetings({ data: context.clubUuid }),
+	// Default to the Roles × Meetings sign-up sheet — the interactive orientation.
+	validateSearch: (search: Record<string, unknown>): Search => ({
+		view: search.view === "members" ? "members" : "roles",
+		count:
+			search.count === 4 || search.count === "4"
+				? 4
+				: search.count === "all"
+					? "all"
+					: 8,
+	}),
+	loaderDeps: ({ search }) => ({ count: search.count }),
+	loader: ({ context, deps }) =>
+		getPublicSeasonGrid({
+			data: { clubId: context.clubUuid, count: deps.count },
+		}),
 	component: ClubHome,
 });
 
 function ClubHome() {
 	const { clubId } = Route.useParams();
-	const upcomingMeetings = Route.useLoaderData();
+	const grid = Route.useLoaderData();
+	const { view, count } = Route.useSearch();
 	const { member, clearMember } = useCurrentMember(clubId);
 	const router = useRouter();
+	const navigate = Route.useNavigate();
 	const [busySlotId, setBusySlotId] = useState<string | null>(null);
 
 	const commitments = useQuery({
@@ -31,22 +55,24 @@ function ClubHome() {
 		enabled: !!member,
 	});
 
+	async function refetchAll() {
+		await router.invalidate();
+		await commitments.refetch();
+	}
+
 	async function doRelease(slotId: string) {
 		if (!member) return;
 		setBusySlotId(slotId);
 		try {
 			await releaseSlot({ data: { slotId, actorMemberId: member.id } });
 			toast.success("Role released.");
-			await router.invalidate();
-			await commitments.refetch();
+			await refetchAll();
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : "Something went wrong.");
 		} finally {
 			setBusySlotId(null);
 		}
 	}
-
-	const meetingsWithOpenings = upcomingMeetings.filter((m) => m.openSlots > 0);
 
 	return (
 		<div className="mx-auto w-full max-w-5xl space-y-6 p-4 pb-8 md:p-6">
@@ -66,7 +92,32 @@ function ClubHome() {
 				) : null}
 			</div>
 
-			{/* Your upcoming roles */}
+			{/* Sign-up sheet — the primary surface. Claim an OPEN role or release
+			    your own right in the grid; everyone else is greyed out. */}
+			<section className="space-y-3">
+				<div>
+					<h2 className="text-base font-semibold">Sign-up sheet</h2>
+					<p className="text-sm text-muted-foreground">
+						Tap an <span className="font-medium text-emerald-700">open</span>{" "}
+						role to claim it, or your own to release it.
+					</p>
+				</div>
+				<SeasonGrid
+					data={grid}
+					orientation={view}
+					count={count}
+					currentMemberId={member?.id ?? null}
+					onOrientationChange={(v) =>
+						navigate({ search: (prev) => ({ ...prev, view: v }) })
+					}
+					onCountChange={(c) =>
+						navigate({ search: (prev) => ({ ...prev, count: c }) })
+					}
+					onChanged={refetchAll}
+				/>
+			</section>
+
+			{/* Your upcoming roles — a compact summary of your commitments. */}
 			<section className="space-y-3">
 				<h2 className="text-base font-semibold">Your upcoming roles</h2>
 				{!member || commitments.isPending ? (
@@ -144,76 +195,8 @@ function ClubHome() {
 					</ul>
 				) : (
 					<p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
-						No roles yet — claim one below.
+						No roles yet — tap an open role in the sheet above to claim one.
 					</p>
-				)}
-			</section>
-
-			{/* Meetings with open roles */}
-			{meetingsWithOpenings.length > 0 ? (
-				<section className="space-y-3">
-					<h2 className="text-base font-semibold">Meetings with open roles</h2>
-					<ul className="grid gap-2 md:grid-cols-2 lg:grid-cols-3">
-						{meetingsWithOpenings.map((m) => (
-							<li key={m.id}>
-								<Link
-									to="/club/$clubId/meeting/$meetingId"
-									params={{ clubId, meetingId: m.id }}
-									className="flex items-center justify-between rounded-xl border bg-card p-4 shadow-sm hover:bg-accent transition-colors"
-								>
-									<div className="min-w-0">
-										<p className="font-medium">
-											{formatMeetingDate(m.scheduledAt, m.timezone)}
-										</p>
-										{m.theme ? (
-											<p className="truncate text-sm text-muted-foreground">
-												{m.theme}
-											</p>
-										) : null}
-									</div>
-									<Badge variant="secondary" className="ml-3 shrink-0">
-										{m.openSlots} open
-									</Badge>
-								</Link>
-							</li>
-						))}
-					</ul>
-				</section>
-			) : null}
-
-			{/* Browse all meetings */}
-			<section className="space-y-3">
-				<h2 className="text-base font-semibold">All meetings</h2>
-				{upcomingMeetings.length === 0 ? (
-					<p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
-						No upcoming meetings scheduled.
-					</p>
-				) : (
-					<ul className="grid gap-2 md:grid-cols-2 lg:grid-cols-3">
-						{upcomingMeetings.map((m) => (
-							<li key={m.id}>
-								<Link
-									to="/club/$clubId/meeting/$meetingId"
-									params={{ clubId, meetingId: m.id }}
-									className="flex items-center justify-between rounded-xl border bg-card p-4 shadow-sm hover:bg-accent transition-colors"
-								>
-									<div className="min-w-0">
-										<p className="font-medium">
-											{formatMeetingDate(m.scheduledAt, m.timezone)}
-										</p>
-										{m.theme ? (
-											<p className="truncate text-sm text-muted-foreground">
-												{m.theme}
-											</p>
-										) : null}
-									</div>
-									<span className="ml-3 shrink-0 text-sm text-muted-foreground">
-										{m.totalSlots - m.openSlots}/{m.totalSlots} filled
-									</span>
-								</Link>
-							</li>
-						))}
-					</ul>
 				)}
 			</section>
 		</div>

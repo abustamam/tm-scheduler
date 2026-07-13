@@ -38,6 +38,8 @@ export interface SeasonGridMember {
 	name: string;
 }
 export interface SeasonGridCell {
+	/** The `role_slots.id` — needed to claim/release this slot (#198). */
+	slotId: string;
 	meetingId: string;
 	roleDefinitionId: string;
 	slotIndex: number;
@@ -122,6 +124,7 @@ export async function loadSeasonGrid(input: {
 	const slotRows = meetingIds.length
 		? await db
 				.select({
+					id: roleSlots.id,
 					meetingId: roleSlots.meetingId,
 					roleDefinitionId: roleSlots.roleDefinitionId,
 					slotIndex: roleSlots.slotIndex,
@@ -188,6 +191,7 @@ export async function loadSeasonGrid(input: {
 
 	// 4. Cells + per-meeting counts.
 	const cells: SeasonGridCell[] = slotRows.map((s) => ({
+		slotId: s.id,
 		meetingId: s.meetingId,
 		roleDefinitionId: s.roleDefinitionId,
 		slotIndex: s.slotIndex,
