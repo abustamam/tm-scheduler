@@ -109,6 +109,7 @@ function ClubHome() {
 					count={count}
 					currentMemberId={member?.id ?? null}
 					clubId={clubUuid}
+					clubSlug={clubId}
 					onOrientationChange={(v) =>
 						navigate({ search: (prev) => ({ ...prev, view: v }) })
 					}

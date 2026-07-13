@@ -28,6 +28,7 @@ export function GridCell({
 	onRelease,
 	availabilityEditable = false,
 	onAvailability,
+	clubSlug,
 }: {
 	cell: ViewCell;
 	currentMemberId?: string | null;
@@ -38,6 +39,9 @@ export function GridCell({
 	 *  availability (#204). free → NA, NA → free, assigned → release + NA. */
 	availabilityEditable?: boolean;
 	onAvailability?: (cell: ViewCell) => void;
+	/** Club slug — when set (public club shell), cell links target the public
+	 *  meeting view instead of the signed-in `/meetings/$id` route. */
+	clubSlug?: string;
 }) {
 	const interactive = !!currentMemberId && !!cell.slotId;
 	const isMine =
@@ -134,6 +138,17 @@ export function GridCell({
 		</span>
 	);
 	if (cell.kind === "blank") return inner;
+	if (clubSlug)
+		return (
+			<Link
+				to="/club/$clubId/meeting/$meetingId"
+				params={{ clubId: clubSlug, meetingId: cell.meetingId }}
+				className="block"
+				aria-label={cell.title || "meeting"}
+			>
+				{inner}
+			</Link>
+		);
 	return (
 		<Link
 			to="/meetings/$id"

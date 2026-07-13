@@ -5,6 +5,7 @@ import { and, eq, gt } from "drizzle-orm";
 import { db } from "#/db";
 import {
 	meetings,
+	memberAvailability,
 	members,
 	roleDefinitions,
 	roleSlots,
@@ -526,6 +527,28 @@ export async function reassignSlotSpeech(
 }
 
 /**
+ * Self-claiming a role is the strongest "I'm coming" statement, so it clears
+ * the claimant's decline flag ("not going" row) for that meeting — spec
+ * 2026-07-13. Admin assignments (actor ≠ member, or no actor) must NOT
+ * silently erase the member's own absence statement, so they no-op.
+ */
+export async function clearAvailabilityOnSelfClaim(
+	tx: DbOrTx,
+	args: { memberId: string; actorMemberId: string | null; meetingId: string },
+): Promise<void> {
+	if (args.actorMemberId === null || args.memberId !== args.actorMemberId)
+		return;
+	await tx
+		.delete(memberAvailability)
+		.where(
+			and(
+				eq(memberAvailability.memberId, args.memberId),
+				eq(memberAvailability.meetingId, args.meetingId),
+			),
+		);
+}
+
+/**
  * Reassign a slot to a different member, atomically (ADR-0005). MUST run inside
  * a caller-provided transaction: it re-reads the slot **with a FOR UPDATE row
  * lock** so the read that decides the speech keep-or-unlink and the write happen
@@ -550,6 +573,7 @@ export async function reassignSlotCore(
 			isSpeakerRole: roleDefinitions.isSpeakerRole,
 			clubId: meetings.clubId,
 			meetingStatus: meetings.status,
+			meetingId: roleSlots.meetingId,
 		})
 		.from(roleSlots)
 		.innerJoin(
@@ -592,6 +616,12 @@ export async function reassignSlotCore(
 			status: "claimed",
 		})
 		.where(eq(roleSlots.id, args.slotId));
+
+	await clearAvailabilityOnSelfClaim(tx, {
+		memberId: args.memberId,
+		actorMemberId: args.actorMemberId,
+		meetingId: slot.meetingId,
+	});
 
 	// Unlink the speech only when the Person actually changed.
 	if (slot.isSpeakerRole) {

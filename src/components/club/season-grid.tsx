@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { Lock } from "lucide-react";
+import { Loader2, Lock, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "#/components/ui/button";
@@ -13,6 +13,8 @@ import {
 } from "#/components/ui/dialog";
 import { formatMeetingDate } from "#/lib/format";
 import {
+	type MemberMeetingStatus,
+	memberMeetingStatus,
 	type Orientation,
 	projectGrid,
 	type ViewCell,
@@ -39,6 +41,7 @@ export function SeasonGrid({
 	count,
 	currentMemberId,
 	clubId,
+	clubSlug,
 	onOrientationChange,
 	onCountChange,
 	onChanged,
@@ -51,12 +54,16 @@ export function SeasonGrid({
 	currentMemberId?: string | null;
 	/** Club uuid — required for the availability calls. */
 	clubId?: string;
+	/** Club slug — when set (public club shell), meeting links in the header
+	 *  and cells target the public meeting view instead of `/meetings/$id`. */
+	clubSlug?: string;
 	onOrientationChange?: (o: Orientation) => void;
 	onCountChange?: (c: SeasonGridCount) => void;
 	/** Called after a successful mutation so the page can refetch. */
 	onChanged?: () => void | Promise<void>;
 }) {
 	const rows = projectGrid(data, orientation);
+	const meetingStatus = memberMeetingStatus(data, currentMemberId ?? null);
 	const labelHead = orientation === "roles" ? "Role" : "Member";
 	const anchorRef = useRef<HTMLTableCellElement>(null);
 	const [busySlotId, setBusySlotId] = useState<string | null>(null);
@@ -183,6 +190,26 @@ export function SeasonGrid({
 		}
 	}
 
+	// Header chip: decline (or un-decline) a whole meeting. Holding a role
+	// routes through the same release-and-mark confirm as the members-row cells.
+	function onHeaderAvailability(
+		m: SeasonGridData["meetings"][number],
+		status: MemberMeetingStatus | undefined,
+	) {
+		if (!status) return;
+		if (status.declined) {
+			clearUnavailable(m.id);
+		} else if (status.heldRoleLabels.length > 0) {
+			setConfirm({
+				meetingId: m.id,
+				roleLabel: status.heldRoleLabels.join(", "),
+				date: formatMeetingDate(m.scheduledAt, m.timezone),
+			});
+		} else {
+			markUnavailable(m.id);
+		}
+	}
+
 	if (data.meetings.length === 0) {
 		return (
 			<p className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
@@ -245,22 +272,12 @@ export function SeasonGrid({
 							<th className="sticky top-0 left-0 z-20 bg-card px-3 py-2 text-left text-xs font-semibold">
 								{labelHead}
 							</th>
-							{data.meetings.map((m) => (
-								<th
-									key={m.id}
-									ref={m.isAnchor ? anchorRef : undefined}
-									className={cn(
-										"sticky top-0 min-w-[3.5rem] bg-card px-2 py-2 text-center text-xs font-semibold",
-										m.isPast && !m.isCompleted && "opacity-45",
-										m.isCompleted && "bg-muted/60",
-										m.isAnchor && "rounded-md ring-2 ring-primary",
-									)}
-								>
-									<Link
-										to="/meetings/$id"
-										params={{ id: m.id }}
-										className="block"
-									>
+							{data.meetings.map((m) => {
+								const status = meetingStatus.get(m.id);
+								const chipVisible =
+									!!currentMemberId && !!clubId && !m.isPast && !m.isCompleted;
+								const header = (
+									<>
 										<div>{formatMeetingDate(m.scheduledAt, m.timezone)}</div>
 										{m.isCompleted ? (
 											<div className="flex items-center justify-center gap-0.5 text-[10px] font-semibold text-muted-foreground">
@@ -276,9 +293,74 @@ export function SeasonGrid({
 														: `${m.openCount} open`}
 											</div>
 										)}
-									</Link>
-								</th>
-							))}
+									</>
+								);
+								return (
+									<th
+										key={m.id}
+										ref={m.isAnchor ? anchorRef : undefined}
+										className={cn(
+											"sticky top-0 min-w-[3.5rem] bg-card px-2 py-2 text-center text-xs font-semibold",
+											m.isPast && !m.isCompleted && "opacity-45",
+											m.isCompleted && "bg-muted/60",
+											m.isAnchor && "rounded-md ring-2 ring-primary",
+										)}
+									>
+										{clubSlug ? (
+											<Link
+												to="/club/$clubId/meeting/$meetingId"
+												params={{ clubId: clubSlug, meetingId: m.id }}
+												className="block"
+											>
+												{header}
+											</Link>
+										) : (
+											<Link
+												to="/meetings/$id"
+												params={{ id: m.id }}
+												className="block"
+											>
+												{header}
+											</Link>
+										)}
+										{chipVisible ? (
+											<button
+												type="button"
+												disabled={busyMeetingId === m.id}
+												onClick={() => onHeaderAvailability(m, status)}
+												title={
+													status?.declined
+														? "Tap if you can make it after all"
+														: "Mark yourself unavailable — I can't make this one"
+												}
+												aria-label={`${
+													status?.declined ? "Not going" : "Can't go"
+												} — ${formatMeetingDate(m.scheduledAt, m.timezone)}`}
+												className={cn(
+													"mx-auto mt-1 flex cursor-pointer items-center gap-0.5 rounded-full border px-1.5 py-0.5 text-[10px] font-semibold whitespace-nowrap transition-colors disabled:opacity-50",
+													status?.declined
+														? "border-rose-600 bg-rose-600 text-white hover:opacity-80"
+														: "border-border text-muted-foreground/70 hover:border-rose-400 hover:text-rose-600",
+												)}
+											>
+												{busyMeetingId === m.id ? (
+													<Loader2
+														className="size-2.5 animate-spin"
+														aria-hidden
+													/>
+												) : status?.declined ? (
+													<>
+														Not going
+														<X className="size-2.5" aria-hidden />
+													</>
+												) : (
+													"Can't go"
+												)}
+											</button>
+										) : null}
+									</th>
+								);
+							})}
 						</tr>
 					</thead>
 					<tbody>
@@ -321,6 +403,7 @@ export function SeasonGrid({
 												onRelease={release}
 												availabilityEditable={availabilityEditable}
 												onAvailability={onAvailability}
+												clubSlug={clubSlug}
 											/>
 										</td>
 									);

@@ -164,3 +164,48 @@ export function projectGrid(
 		}),
 	}));
 }
+
+export interface MemberMeetingStatus {
+	declined: boolean;
+	heldRoleLabels: string[];
+}
+
+/**
+ * Per-meeting availability status for one member — drives the header
+ * "Can't go" chip. `declined` mirrors the NA set; `heldRoleLabels` feeds the
+ * release-and-mark confirm dialog when declining a meeting where the member
+ * already holds roles.
+ */
+export function memberMeetingStatus(
+	data: SeasonGridData,
+	memberId: string | null,
+): Map<string, MemberMeetingStatus> {
+	const result = new Map<string, MemberMeetingStatus>();
+	if (!memberId) return result;
+
+	const labelByRow = new Map(
+		data.rows.map((r) => [`${r.roleDefinitionId}:${r.slotIndex}`, r.label]),
+	);
+	const heldByMeeting = new Map<string, string[]>();
+	for (const c of data.cells) {
+		if (c.memberId !== memberId) continue;
+		const label =
+			labelByRow.get(`${c.roleDefinitionId}:${c.slotIndex}`) ?? "a role";
+		const list = heldByMeeting.get(c.meetingId) ?? [];
+		list.push(label);
+		heldByMeeting.set(c.meetingId, list);
+	}
+	const declined = new Set(
+		data.unavailable
+			.filter((u) => u.memberId === memberId)
+			.map((u) => u.meetingId),
+	);
+
+	for (const m of data.meetings) {
+		result.set(m.id, {
+			declined: declined.has(m.id),
+			heldRoleLabels: heldByMeeting.get(m.id) ?? [],
+		});
+	}
+	return result;
+}

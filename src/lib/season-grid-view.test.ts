@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SeasonGridData } from "#/server/season-grid";
-import { projectGrid } from "./season-grid-view";
+import { memberMeetingStatus, projectGrid } from "./season-grid-view";
 
 const data: SeasonGridData = {
 	meetings: [
@@ -193,5 +193,54 @@ describe("projectGrid – members orientation", () => {
 		expect(amir.cells[0].text).toBe("Toas +1");
 		expect(amir.cells[0].title).toContain("Toastmaster");
 		expect(amir.cells[0].title).toContain("Timer");
+	});
+});
+
+describe("memberMeetingStatus", () => {
+	it("null member ⇒ empty map", () => {
+		expect(memberMeetingStatus(data, null).size).toBe(0);
+	});
+
+	it("declined member: declined=true, no roles", () => {
+		expect(memberMeetingStatus(data, "b").get("m1")).toEqual({
+			declined: true,
+			heldRoleLabels: [],
+		});
+	});
+
+	it("role holder: labels resolved from rows", () => {
+		expect(memberMeetingStatus(data, "a").get("m1")).toEqual({
+			declined: false,
+			heldRoleLabels: ["Toastmaster"],
+		});
+	});
+
+	it("free member: declined=false, no roles", () => {
+		expect(memberMeetingStatus(data, "c").get("m1")).toEqual({
+			declined: false,
+			heldRoleLabels: [],
+		});
+	});
+
+	it("collects every held role's label for the meeting", () => {
+		const dbl: SeasonGridData = {
+			...data,
+			cells: [
+				data.cells[0]!,
+				{
+					slotId: "s-ti-a",
+					meetingId: "m1",
+					roleDefinitionId: "ti",
+					slotIndex: 0,
+					memberId: "a",
+					status: "claimed",
+					guestId: null,
+				},
+			],
+		};
+		expect(memberMeetingStatus(dbl, "a").get("m1")).toEqual({
+			declined: false,
+			heldRoleLabels: ["Toastmaster", "Timer"],
+		});
 	});
 });
