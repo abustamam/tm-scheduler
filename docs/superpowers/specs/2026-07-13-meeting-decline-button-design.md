@@ -19,7 +19,10 @@ All server machinery already exists and is reused unchanged:
   public, trust-guarded via `requireMemberInClub`, meeting-lock checked.
 - `markUnavailableReleasing` — decline + atomically release held roles (#204).
 - `SeasonGridData.unavailable` already carries member × meeting unavailability;
-  `data.cells` carries slot assignments. **Zero server changes.**
+  `data.cells` carries slot assignments.
+
+One small server change ships with this (see "Claiming clears the decline
+flag"); everything else is UI.
 
 ## Design
 
@@ -40,7 +43,17 @@ The chip renders only when:
 - the meeting is upcoming — not `isPast`, not `isCompleted` (locked).
 
 Past/locked columns show no chip (matches the `availabilityEditable` rule the
-Members × Meetings cells already use).
+Members × Meetings cells already use). Decisions from spec review:
+
+- The chip shows in **both orientations** — it lives in the shared header, so
+  it stays in the same spot as views flip; the Members × Meetings row-cell
+  toggle remains as a redundant entry point.
+- The cutoff is the meeting's **start time** (`isPast`, `scheduledAt < now`) —
+  same rule as the row cells. Late "attendance statements" stay possible on
+  the meeting detail page, which allows them through meeting day.
+- The chip is **purely personal** — no public "N out" decline count in the
+  header for go-live (others see declines via the members orientation's NA
+  cells and the activity feed).
 
 ### States & behavior
 
@@ -65,6 +78,23 @@ memberMeetingStatus(data: SeasonGridData, memberId: string | null):
 
 Computed from `data.unavailable`, `data.cells`, and `data.rows` (role labels
 for the confirm-dialog text). Unit-tested in `season-grid-view.test.ts`.
+
+### Claiming clears the decline flag (server)
+
+Nothing clears `member_availability` when a declined member signs up for a
+role, so "not going" + holding a role is a reachable, contradictory state —
+and the chip would surface it on the main screen. Fix at the source:
+
+- `claimSlot` and `reassignSlot` (`src/server/slots.ts`) delete the
+  assignee's `member_availability` row for the meeting **when it's a
+  self-claim** (`memberId === actorMemberId`).
+- Admin assignments (`memberId !== actorMemberId`) leave the row intact: an
+  admin assigning a member who said "not coming" must not silently erase that
+  member's statement — the disagreement stays visible.
+- Covered by an integration test alongside the existing slot tests.
+
+If the contradictory state still occurs (admin assign), the chip shows the
+declined state — the member's own statement wins on their own control.
 
 ### HTML structure
 
@@ -93,14 +123,20 @@ server message; the lock guard (`assertMeetingNotLocked`) and
 
 - Unit: `memberMeetingStatus` cases — declined, holds-role (labels), free,
   null member ⇒ empty map.
-- Server fns already covered by `availability.integration.test.ts`.
+- Integration: self-claim clears the claimant's NA row; admin-assign leaves
+  it; self-reassign (takeover) clears it.
+- Availability server fns already covered by `availability.integration.test.ts`.
 - Manual browse-verify on the public page: pick a name → decline a free
   meeting → undo → decline a meeting where a role is held (confirm dialog,
   role released, grid updates) → date header links to the public meeting view.
 
 ## Out of scope
 
-- No schema/server changes, no new endpoints.
+- No schema changes, no new endpoints (the only server change is the NA-clear
+  inside the existing `claimSlot`/`reassignSlot`).
+- No public per-meeting decline count in the header.
 - No decline surface on the meeting card list ("Your upcoming roles").
 - No notification/digest of declines (VPE sees availability via existing
   views/activity log).
+- Known accepted asymmetry (existing behavior): the release-and-mark confirm
+  path's toast has no Undo — released roles can't be atomically restored.
