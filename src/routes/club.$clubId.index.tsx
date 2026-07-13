@@ -39,6 +39,7 @@ export const Route = createFileRoute("/club/$clubId/")({
 
 function ClubHome() {
 	const { clubId } = Route.useParams();
+	const { clubUuid } = Route.useRouteContext();
 	const grid = Route.useLoaderData();
 	const { view, count } = Route.useSearch();
 	const { member, clearMember } = useCurrentMember(clubId);
@@ -107,6 +108,7 @@ function ClubHome() {
 					orientation={view}
 					count={count}
 					currentMemberId={member?.id ?? null}
+					clubId={clubUuid}
 					onOrientationChange={(v) =>
 						navigate({ search: (prev) => ({ ...prev, view: v }) })
 					}

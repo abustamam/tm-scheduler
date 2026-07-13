@@ -2,9 +2,27 @@ import { Link } from "@tanstack/react-router";
 import { Lock } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { Button } from "#/components/ui/button";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "#/components/ui/dialog";
 import { formatMeetingDate } from "#/lib/format";
-import { type Orientation, projectGrid } from "#/lib/season-grid-view";
+import {
+	type Orientation,
+	projectGrid,
+	type ViewCell,
+} from "#/lib/season-grid-view";
 import { cn } from "#/lib/utils";
+import {
+	clearAvailability,
+	markUnavailableReleasing,
+	setAvailability,
+} from "#/server/availability";
 import type { SeasonGridCount, SeasonGridData } from "#/server/season-grid";
 import { claimSlot, releaseSlot } from "#/server/slots";
 import { GridCell } from "./grid-cell";
@@ -20,6 +38,7 @@ export function SeasonGrid({
 	orientation,
 	count,
 	currentMemberId,
+	clubId,
 	onOrientationChange,
 	onCountChange,
 	onChanged,
@@ -27,21 +46,29 @@ export function SeasonGrid({
 	data: SeasonGridData;
 	orientation: Orientation;
 	count: SeasonGridCount;
-	/** When set, the grid becomes the interactive sign-up sheet: claim OPEN
-	 *  roles, release your own (Roles × Meetings only). #198. */
+	/** When set, the grid becomes interactive as this member: claim/release
+	 *  roles (Roles × Meetings) and toggle availability (Members × Meetings). */
 	currentMemberId?: string | null;
+	/** Club uuid — required for the availability calls. */
+	clubId?: string;
 	onOrientationChange?: (o: Orientation) => void;
 	onCountChange?: (c: SeasonGridCount) => void;
-	/** Called after a successful claim/release so the page can refetch. */
+	/** Called after a successful mutation so the page can refetch. */
 	onChanged?: () => void | Promise<void>;
 }) {
 	const rows = projectGrid(data, orientation);
 	const labelHead = orientation === "roles" ? "Role" : "Member";
 	const anchorRef = useRef<HTMLTableCellElement>(null);
 	const [busySlotId, setBusySlotId] = useState<string | null>(null);
+	const [busyMeetingId, setBusyMeetingId] = useState<string | null>(null);
+	// The assigned-cell confirm: releasing your role + marking unavailable.
+	const [confirm, setConfirm] = useState<{
+		meetingId: string;
+		roleLabel: string;
+		date: string;
+	} | null>(null);
 
-	// Only Roles × Meetings is the tappable sheet (members orientation is a
-	// read-only lens — a member cell can aggregate several slots).
+	// Roles × Meetings is the claim/release sheet.
 	const actingMemberId = orientation === "roles" ? currentMemberId : null;
 
 	useEffect(() => {
@@ -85,6 +112,74 @@ export function SeasonGrid({
 			);
 		} finally {
 			setBusySlotId(null);
+		}
+	}
+
+	async function markUnavailable(meetingId: string) {
+		if (!currentMemberId || !clubId) return;
+		setBusyMeetingId(meetingId);
+		try {
+			await setAvailability({
+				data: { memberId: currentMemberId, meetingId, clubId },
+			});
+			await onChanged?.();
+			toast.success("Marked unavailable.", {
+				action: { label: "Undo", onClick: () => clearUnavailable(meetingId) },
+			});
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Couldn't update.");
+		} finally {
+			setBusyMeetingId(null);
+		}
+	}
+
+	async function clearUnavailable(meetingId: string) {
+		if (!currentMemberId || !clubId) return;
+		setBusyMeetingId(meetingId);
+		try {
+			await clearAvailability({
+				data: { memberId: currentMemberId, meetingId, clubId },
+			});
+			await onChanged?.();
+			toast.success("You're marked available.", {
+				action: { label: "Undo", onClick: () => markUnavailable(meetingId) },
+			});
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Couldn't update.");
+		} finally {
+			setBusyMeetingId(null);
+		}
+	}
+
+	async function releaseAndMark(meetingId: string) {
+		if (!currentMemberId || !clubId) return;
+		setConfirm(null);
+		setBusyMeetingId(meetingId);
+		try {
+			await markUnavailableReleasing({
+				data: { memberId: currentMemberId, meetingId, clubId },
+			});
+			await onChanged?.();
+			toast.success("Role released — you're marked unavailable.");
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Couldn't update.");
+		} finally {
+			setBusyMeetingId(null);
+		}
+	}
+
+	function onAvailability(cell: ViewCell) {
+		if (cell.kind === "na") {
+			clearUnavailable(cell.meetingId);
+		} else if (cell.kind === "assigned") {
+			const m = data.meetings.find((x) => x.id === cell.meetingId);
+			setConfirm({
+				meetingId: cell.meetingId,
+				roleLabel: cell.title,
+				date: m ? formatMeetingDate(m.scheduledAt, m.timezone) : "this meeting",
+			});
+		} else {
+			markUnavailable(cell.meetingId);
 		}
 	}
 
@@ -202,22 +297,64 @@ export function SeasonGrid({
 										row.label
 									)}
 								</th>
-								{row.cells.map((cell, i) => (
-									<td key={`${row.id}:${data.meetings[i]?.id}`} className="p-0">
-										<GridCell
-											cell={cell}
-											currentMemberId={actingMemberId}
-											busy={busySlotId === cell.slotId}
-											onClaim={claim}
-											onRelease={release}
-										/>
-									</td>
-								))}
+								{row.cells.map((cell, i) => {
+									const m = data.meetings[i];
+									// Members × Meetings, your own row, an upcoming (not
+									// past/locked) meeting → the cell toggles your availability.
+									const availabilityEditable =
+										orientation === "members" &&
+										!!currentMemberId &&
+										row.memberId === currentMemberId &&
+										!!m &&
+										!m.isCompleted &&
+										!m.isPast;
+									return (
+										<td key={`${row.id}:${m?.id}`} className="p-0">
+											<GridCell
+												cell={cell}
+												currentMemberId={actingMemberId}
+												busy={
+													(!!cell.slotId && busySlotId === cell.slotId) ||
+													busyMeetingId === cell.meetingId
+												}
+												onClaim={claim}
+												onRelease={release}
+												availabilityEditable={availabilityEditable}
+												onAvailability={onAvailability}
+											/>
+										</td>
+									);
+								})}
 							</tr>
 						))}
 					</tbody>
 				</table>
 			</div>
+
+			<Dialog
+				open={confirm !== null}
+				onOpenChange={(o) => !o && setConfirm(null)}
+			>
+				<DialogContent>
+					<DialogHeader>
+						<DialogTitle>Mark yourself unavailable?</DialogTitle>
+						<DialogDescription>
+							You're {confirm?.roleLabel} on {confirm?.date}. Release and mark
+							yourself unavailable for the meeting?
+						</DialogDescription>
+					</DialogHeader>
+					<DialogFooter>
+						<Button variant="outline" onClick={() => setConfirm(null)}>
+							Cancel
+						</Button>
+						<Button
+							onClick={() => confirm && releaseAndMark(confirm.meetingId)}
+						>
+							Release &amp; mark unavailable
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
 		</div>
 	);
 }
