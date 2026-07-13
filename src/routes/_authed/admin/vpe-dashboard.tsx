@@ -208,8 +208,11 @@ function OverdueRow({ member }: { member: OverdueMemberRow }) {
 		<Link
 			to="/members/$id"
 			params={{ id: member.memberId }}
-			className={ROW_CLASS}
-			style={{ gridTemplateColumns: "1fr 150px 34px" }}
+			className={cn(
+				ROW_CLASS,
+				// Narrower wait column below `sm` so the member name keeps room.
+				"grid-cols-[1fr_112px_28px] sm:grid-cols-[1fr_150px_34px]",
+			)}
 		>
 			<MemberIdentity
 				memberId={member.memberId}
@@ -235,8 +238,12 @@ function RotationRow({ row, rank }: { row: SpeakerRotationRow; rank: number }) {
 		<Link
 			to="/members/$id"
 			params={{ id: row.memberId }}
-			className={ROW_CLASS}
-			style={{ gridTemplateColumns: "28px 1fr 130px 190px 34px" }}
+			className={cn(
+				ROW_CLASS,
+				// Below `sm`: rank + member + chevron only; last-spoken and pathway
+				// return at `sm`. Tap through to the profile for the full picture.
+				"grid-cols-[28px_1fr_34px] sm:grid-cols-[28px_1fr_130px_190px_34px]",
+			)}
 		>
 			<div className="text-sm font-bold text-[var(--sea-ink-soft)] tabular-nums">
 				{rank}
@@ -246,7 +253,7 @@ function RotationRow({ row, rank }: { row: SpeakerRotationRow; rank: number }) {
 				name={row.name}
 				joinedAt={row.joinedAt}
 			/>
-			<div className="text-sm">
+			<div className="hidden text-sm sm:block">
 				{row.lastSpokenAt ? (
 					<>
 						<span className="font-bold text-[var(--sea-ink)]">
@@ -262,7 +269,7 @@ function RotationRow({ row, rank }: { row: SpeakerRotationRow; rank: number }) {
 					</span>
 				)}
 			</div>
-			<div className="min-w-0 truncate text-xs text-[var(--sea-ink-soft)]">
+			<div className="hidden min-w-0 truncate text-xs text-[var(--sea-ink-soft)] sm:block">
 				{pathway ?? "—"}
 			</div>
 			<Chevron />
