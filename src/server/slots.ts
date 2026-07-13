@@ -18,6 +18,7 @@ import {
 	applyRemoveRoleSlot,
 	applyRemoveSpeakerSlot,
 	attachSpeechToSlot,
+	clearAvailabilityOnSelfClaim,
 	editSlotSpeech,
 	reassignSlotCore,
 } from "./slots-logic";
@@ -50,6 +51,7 @@ export const claimSlot = createServerFn({ method: "POST" })
 			.select({
 				id: roleSlots.id,
 				status: roleSlots.status,
+				meetingId: roleSlots.meetingId,
 				isSpeakerRole: roleDefinitions.isSpeakerRole,
 				clubId: meetings.clubId,
 				meetingStatus: meetings.status,
@@ -103,6 +105,12 @@ export const claimSlot = createServerFn({ method: "POST" })
 					input: data.speakerDetails,
 				});
 			}
+
+			await clearAvailabilityOnSelfClaim(tx, {
+				memberId: data.memberId,
+				actorMemberId: data.actorMemberId,
+				meetingId: slot.meetingId,
+			});
 
 			await logActivity(tx, {
 				clubId: slot.clubId,
