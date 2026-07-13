@@ -113,6 +113,10 @@ they keep linking to `/meetings/$id`. Note the existing `clubId` prop is the
 club **uuid** (for the availability server fns) — the public route param is
 the slug, hence the separate prop.
 
+`GridCell`'s read-only cells have the same hardcoded `/meetings/$id` link, so
+the prop threads through to `GridCell` and fixes those too — otherwise the
+public grid's non-interactive cells would still bounce members to sign-in.
+
 ## Error handling
 
 Unchanged from existing handlers: failures surface as `toast.error` with the
