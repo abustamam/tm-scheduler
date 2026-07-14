@@ -132,7 +132,7 @@ export function GridCell({
 
 	const inner = (
 		<span
-			title={cell.title || undefined}
+			title={cell.title ? cell.title + dateSuffix : undefined}
 			className={cn(
 				BASE,
 				KIND_CLASS[cell.kind],
