@@ -14,8 +14,11 @@ const KIND_CLASS: Record<ViewCell["kind"], string> = {
 	blank: "opacity-0",
 };
 
+// h-11 below md: cells are the primary tap target on the phone sheet, so the
+// row itself grows to the 44px touch minimum (#224). md+ keeps the h-8 desktop
+// density unchanged.
 const BASE =
-	"flex h-8 min-w-[3rem] items-center justify-center rounded-md px-2 text-xs font-semibold";
+	"flex h-11 min-w-[3rem] items-center justify-center rounded-md px-2 text-xs font-semibold md:h-8";
 
 /**
  * One season-grid cell. Read-only by default (links to the meeting). When a
