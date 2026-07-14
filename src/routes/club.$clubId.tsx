@@ -1,6 +1,7 @@
 import { createFileRoute, Link, Outlet } from "@tanstack/react-router";
 import { BrandMark } from "#/components/brand-mark";
 import { RequireMember } from "#/components/club/require-member";
+import { ThemeToggle } from "#/components/club/theme-toggle";
 import { Button } from "#/components/ui/button";
 import { Toaster } from "#/components/ui/sonner";
 import { resolveClubOrRedirect } from "#/lib/club-route";
@@ -29,6 +30,9 @@ function ClubShell() {
 				<span className="min-w-0 flex-1 truncate text-right text-[11px] font-semibold tracking-[0.04em] text-muted-foreground uppercase">
 					{clubNumber ? `${clubName} · Club ${clubNumber}` : clubName}
 				</span>
+				{/* Same per-browser preference as the authed shell — shared
+				    `gavelup-theme` storage, applied pre-paint in `__root.tsx`. */}
+				<ThemeToggle compact />
 				{/* Bridge to the full signed-in workspace (dashboard, Pathways,
 				    resources) — the sign-up sheet stays usable without it. */}
 				<Link
