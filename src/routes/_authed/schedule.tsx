@@ -37,7 +37,7 @@ function SeasonGridPage() {
 	return (
 		<PageContainer className="space-y-4">
 			<h1 className="font-display text-[30px] font-semibold tracking-[-0.02em]">
-				Season grid
+				Sign-up sheet
 			</h1>
 			{data ? (
 				<SeasonGrid

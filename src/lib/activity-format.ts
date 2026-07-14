@@ -18,11 +18,20 @@ export function formatActivity(entry: ActivityEntry): FormattedActivity {
 
 	let summary: string;
 	switch (entry.action) {
+		// An officer can claim/release on someone else's behalf; when the subject
+		// isn't the actor, "claimed"/"released" would attribute the role to the
+		// wrong person — say who it actually went to (or came off of).
 		case "claim":
-			summary = `claimed ${role}`;
+			summary =
+				entry.subjectName && entry.subjectName !== actor
+					? `assigned ${role} to ${entry.subjectName}`
+					: `claimed ${role}`;
 			break;
 		case "release":
-			summary = `released ${role}`;
+			summary =
+				entry.fromName && entry.fromName !== actor
+					? `removed ${entry.fromName} from ${role}`
+					: `released ${role}`;
 			break;
 		case "reassign":
 			summary = `reassigned ${role}: ${from} → ${to}`;

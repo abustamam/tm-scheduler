@@ -25,6 +25,27 @@ describe("formatActivity", () => {
 		expect(formatActivity(e).summary).toMatch(/claimed Timer/i);
 	});
 
+	it("claim by an admin for someone else reads as an assignment", () => {
+		const e = {
+			...base,
+			action: "claim",
+			actorName: "Rasheed",
+			subjectName: "Sam Chen",
+		} as ActivityEntry;
+		expect(formatActivity(e).actor).toBe("Rasheed");
+		expect(formatActivity(e).summary).toBe("assigned Timer to Sam Chen");
+	});
+
+	it("release of someone else's role reads as a removal", () => {
+		const e = {
+			...base,
+			action: "release",
+			actorName: "Rasheed",
+			fromName: "Sam Chen",
+		} as ActivityEntry;
+		expect(formatActivity(e).summary).toBe("removed Sam Chen from Timer");
+	});
+
 	it("reassign shows from → to", () => {
 		const e = {
 			...base,

@@ -3,11 +3,13 @@ import type { ViewCell } from "#/lib/season-grid-view";
 import { cn } from "#/lib/utils";
 import { MeetingLink } from "./meeting-link";
 
+// 700-weight text/fills: the cells are 12px text, so WCAG AA needs 4.5:1 —
+// white on emerald-600 is 3.8:1 (fails); emerald-700/amber-700/rose-700 pass.
 const KIND_CLASS: Record<ViewCell["kind"], string> = {
-	assigned: "bg-emerald-600 text-white",
-	open: "border border-dashed border-amber-500/60 text-amber-600",
+	assigned: "bg-emerald-700 text-white",
+	open: "border border-dashed border-amber-500/60 text-amber-700",
 	free: "border border-border text-muted-foreground/60",
-	na: "border border-dashed border-rose-500/60 text-rose-600",
+	na: "border border-dashed border-rose-500/60 text-rose-700",
 	blank: "opacity-0",
 };
 
@@ -68,10 +70,10 @@ export function GridCell({
 					: "Mark yourself unavailable — I can't make this one") + dateSuffix;
 		const tone =
 			cell.kind === "na"
-				? "border border-dashed border-rose-500/70 text-rose-600 hover:bg-rose-500 hover:text-white"
+				? "border border-dashed border-rose-500/70 text-rose-700 hover:bg-rose-700 hover:text-white"
 				: cell.kind === "assigned"
-					? "bg-emerald-600 text-white ring-2 ring-emerald-800 hover:opacity-80"
-					: "border border-border text-muted-foreground/70 hover:border-rose-400 hover:text-rose-600";
+					? "bg-emerald-700 text-white ring-2 ring-emerald-800 hover:opacity-80"
+					: "border border-border text-muted-foreground/70 hover:border-rose-400 hover:text-rose-700";
 		return (
 			<button
 				type="button"
@@ -102,7 +104,7 @@ export function GridCell({
 				onClick={() => onClaim(slotId)}
 				className={cn(
 					BASE,
-					"w-full cursor-pointer border border-emerald-500/70 text-emerald-700 transition-colors hover:bg-emerald-600 hover:text-white disabled:opacity-50",
+					"w-full cursor-pointer border border-emerald-500/70 text-emerald-700 transition-colors hover:bg-emerald-700 hover:text-white disabled:opacity-50",
 				)}
 			>
 				{busy ? <Loader2 className="size-3.5 animate-spin" /> : "Claim"}
@@ -122,7 +124,7 @@ export function GridCell({
 				onClick={() => onRelease(slotId)}
 				className={cn(
 					BASE,
-					"w-full cursor-pointer bg-emerald-600 text-white ring-2 ring-emerald-800 transition-opacity hover:opacity-80 disabled:opacity-50",
+					"w-full cursor-pointer bg-emerald-700 text-white ring-2 ring-emerald-800 transition-opacity hover:opacity-80 disabled:opacity-50",
 				)}
 			>
 				{busy ? <Loader2 className="size-3.5 animate-spin" /> : cell.text}
@@ -136,9 +138,12 @@ export function GridCell({
 			className={cn(
 				BASE,
 				KIND_CLASS[cell.kind],
-				// In the interactive sheet, everyone else's filled cells are greyed
-				// so it's obvious you can only act on your own.
-				interactive && cell.kind === "assigned" && "opacity-45",
+				// In the interactive sheet, everyone else's filled cells recede so
+				// it's obvious you can only act on your own. A light wash + dark text
+				// (not opacity) keeps the receded names AA-readable.
+				interactive &&
+					cell.kind === "assigned" &&
+					"bg-emerald-700/15 text-emerald-900",
 			)}
 		>
 			{cell.text}

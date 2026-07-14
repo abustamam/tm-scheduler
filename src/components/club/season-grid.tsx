@@ -247,22 +247,27 @@ export function SeasonGrid({
 						</button>
 					))}
 				</div>
-				<div className="inline-flex overflow-hidden rounded-lg border">
-					{COUNTS.map((c) => (
-						<button
-							key={String(c)}
-							type="button"
-							onClick={() => onCountChange?.(c)}
-							className={cn(
-								"px-3 py-1.5 text-xs font-semibold",
-								count === c
-									? "bg-accent text-accent-foreground"
-									: "text-muted-foreground",
-							)}
-						>
-							{c === "all" ? "All" : c}
-						</button>
-					))}
+				<div className="inline-flex items-center gap-2">
+					<span className="text-xs font-medium text-muted-foreground">
+						Meetings shown
+					</span>
+					<div className="inline-flex overflow-hidden rounded-lg border">
+						{COUNTS.map((c) => (
+							<button
+								key={String(c)}
+								type="button"
+								onClick={() => onCountChange?.(c)}
+								className={cn(
+									"px-3 py-1.5 text-xs font-semibold",
+									count === c
+										? "bg-accent text-accent-foreground"
+										: "text-muted-foreground",
+								)}
+							>
+								{c === "all" ? "All" : c}
+							</button>
+						))}
+					</div>
 				</div>
 			</div>
 
@@ -270,7 +275,10 @@ export function SeasonGrid({
 				<table className="border-separate border-spacing-1">
 					<thead>
 						<tr>
-							<th className="sticky top-0 left-0 z-20 bg-card px-3 py-2 text-left text-xs font-semibold">
+							{/* shadow on the sticky label column: without an edge, columns
+						    sliding beneath it read as clipped/broken instead of
+						    scrolled (the grid auto-scrolls to the upcoming meeting). */}
+							<th className="sticky top-0 left-0 z-20 bg-card px-3 py-2 text-left text-xs font-semibold shadow-[4px_0_6px_-4px_rgba(0,0,0,0.35)]">
 								{labelHead}
 							</th>
 							{data.meetings.map((m) => {
@@ -286,9 +294,12 @@ export function SeasonGrid({
 												locked
 											</div>
 										) : (
-											<div className="text-[10px] font-medium text-amber-600">
+											// "ended", not "done": a past meeting still accepts
+											// late sign-ups (recording who stepped in), so the
+											// label shouldn't read as closed.
+											<div className="text-[10px] font-medium text-amber-700">
 												{m.isPast
-													? "done"
+													? "ended"
 													: m.openCount === 0
 														? "full"
 														: `${m.openCount} open`}
@@ -328,10 +339,12 @@ export function SeasonGrid({
 													status?.declined ? "Not going" : "Can't go"
 												} — ${formatMeetingDate(m.scheduledAt, m.timezone)}`}
 												className={cn(
-													"mx-auto mt-1 flex cursor-pointer items-center gap-0.5 rounded-full border px-1.5 py-0.5 text-[10px] font-semibold whitespace-nowrap transition-colors disabled:opacity-50",
+													// px-2.5/py-1/11px (was px-1.5/py-0.5/10px): the chip is a
+													// primary mobile action — 19px tall was too small to tap.
+													"mx-auto mt-1 flex cursor-pointer items-center gap-0.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold whitespace-nowrap transition-colors disabled:opacity-50",
 													status?.declined
-														? "border-rose-600 bg-rose-600 text-white hover:opacity-80"
-														: "border-border text-muted-foreground/70 hover:border-rose-400 hover:text-rose-600",
+														? "border-rose-700 bg-rose-700 text-white hover:opacity-80"
+														: "border-border text-muted-foreground/70 hover:border-rose-400 hover:text-rose-700",
 												)}
 											>
 												{busyMeetingId === m.id ? (
@@ -357,7 +370,7 @@ export function SeasonGrid({
 					<tbody>
 						{rows.map((row) => (
 							<tr key={row.id}>
-								<th className="sticky left-0 z-10 bg-card px-3 py-1 text-right text-xs font-semibold whitespace-nowrap">
+								<th className="sticky left-0 z-10 bg-card px-3 py-1 text-right text-xs font-semibold whitespace-nowrap shadow-[4px_0_6px_-4px_rgba(0,0,0,0.35)]">
 									{row.memberId ? (
 										<Link
 											to="/members/$id"

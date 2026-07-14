@@ -61,7 +61,8 @@ function NewMeeting() {
 					New meeting
 				</h1>
 				<p className="text-sm text-muted-foreground">
-					Roles are generated automatically from {adminClub.name}'s template.
+					Roles are generated automatically from the {adminClub.name} role
+					template.
 				</p>
 			</div>
 

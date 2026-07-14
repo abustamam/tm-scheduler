@@ -244,12 +244,16 @@ export function MeetingAgenda({
 								</span>
 							</span>
 						</div>
+						{/* Reminder sending isn't built yet (#7) — a live-looking button
+						    that only apologizes on click erodes trust, so it's disabled
+						    with the status in plain sight until the feature lands. */}
 						<Button
 							size="sm"
 							variant="outline"
-							onClick={() => toast.info("Reminder sending isn't wired up yet.")}
+							disabled
+							title="Coming soon — reminder sending isn't built yet"
 						>
-							Remind unfilled
+							Remind unfilled (soon)
 						</Button>
 					</div>
 					<div className="mt-3">
@@ -419,8 +423,13 @@ export function MeetingAgenda({
 												) : null}
 
 												{isOpen ? (
+													// Same emerald-outline treatment as the sign-up grid's
+													// Claim cells — one visual language for one verb.
 													<Button
 														size="sm"
+														variant="outline"
+														className="border-emerald-500/70 text-emerald-700 hover:bg-emerald-700 hover:text-white"
+														aria-label={`Claim ${slot.roleName} — open`}
 														onClick={() => canClaim && setClaimSlotState(slot)}
 														disabled={busy || !canClaim}
 													>
@@ -486,6 +495,7 @@ export function MeetingAgenda({
 														{viewer.canTakeOver ? (
 															<button
 																type="button"
+																aria-label={`Take over ${slot.roleName}`}
 																onClick={() => setTakeoverSlot(slot)}
 																className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
 															>

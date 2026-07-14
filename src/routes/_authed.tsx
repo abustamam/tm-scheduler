@@ -65,7 +65,7 @@ const CLUB_ROLE_LABELS: Record<string, string> = {
 function crumbFor(pathname: string): string {
 	if (pathname === "/") return "Manage · Roster";
 	if (pathname.startsWith("/officers")) return "Your office · Officer home";
-	if (pathname.startsWith("/schedule")) return "Manage · Season grid";
+	if (pathname.startsWith("/schedule")) return "Manage · Sign-up sheet";
 	if (pathname.startsWith("/next")) return "Manage · Next meeting";
 	if (pathname.startsWith("/activity")) return "Manage · Activity";
 	if (pathname.startsWith("/dashboard")) return "Me · My dashboard";
@@ -248,7 +248,7 @@ function SidebarInner({
 				<NavItem
 					to="/schedule"
 					icon={Grid3x3}
-					label="Season grid"
+					label="Sign-up sheet"
 					onNavigate={onNavigate}
 				/>
 				<NavItem
