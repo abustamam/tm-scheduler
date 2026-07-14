@@ -429,6 +429,7 @@ export function MeetingAgenda({
 														size="sm"
 														variant="outline"
 														className="border-emerald-500/70 text-emerald-700 hover:bg-emerald-700 hover:text-white"
+														aria-label={`Claim ${slot.roleName} — open`}
 														onClick={() => canClaim && setClaimSlotState(slot)}
 														disabled={busy || !canClaim}
 													>
@@ -494,6 +495,7 @@ export function MeetingAgenda({
 														{viewer.canTakeOver ? (
 															<button
 																type="button"
+																aria-label={`Take over ${slot.roleName}`}
 																onClick={() => setTakeoverSlot(slot)}
 																className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
 															>
