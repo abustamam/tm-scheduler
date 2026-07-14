@@ -23,12 +23,15 @@ import {
 	Settings,
 	ShieldCheck,
 } from "lucide-react";
-import { type ComponentType, useState } from "react";
+import { type ComponentType, type ReactNode, useRef, useState } from "react";
 import { BrandMark } from "#/components/brand-mark";
 import { ClubSwitcher } from "#/components/club/club-switcher";
+import {
+	GlobalSearch,
+	type GlobalSearchHandle,
+} from "#/components/club/global-search";
 import { MemberAvatar } from "#/components/club/member-avatar";
 import { ThemeToggle } from "#/components/club/theme-toggle";
-import { Input } from "#/components/ui/input";
 import { Sheet, SheetContent, SheetTitle } from "#/components/ui/sheet";
 import { Toaster } from "#/components/ui/sonner";
 import { authClient } from "#/lib/auth-client";
@@ -93,6 +96,8 @@ function WorkspaceLayout() {
 	const pathname = useRouterState({ select: (s) => s.location.pathname });
 	// Mobile nav drawer (shown below `lg`; the sidebar is fixed at `lg+`).
 	const [navOpen, setNavOpen] = useState(false);
+	// Lets Escape clear open drawer-search results before closing the drawer.
+	const drawerSearchRef = useRef<GlobalSearchHandle>(null);
 
 	// The club the workspace is currently acting in (cookie-backed, #10).
 	const activeClub = clubs.find((c) => c.clubId === activeClubId) ?? clubs[0];
@@ -120,7 +125,14 @@ function WorkspaceLayout() {
 		await router.navigate({ to: "/signin", search: { redirect: "/" } });
 	}
 
-	const sidebar = (onNavigate?: () => void, showThemeToggle = false) => (
+	// Which workspace pages the global search may surface for this user.
+	const searchGrants = { hasOffice, isOfficer, isSuperadmin };
+
+	const sidebar = (
+		onNavigate?: () => void,
+		showThemeToggle = false,
+		searchSlot?: ReactNode,
+	) => (
 		<SidebarInner
 			clubName={clubName}
 			clubNumber={clubNumber}
@@ -133,6 +145,7 @@ function WorkspaceLayout() {
 			onSignOut={handleSignOut}
 			onNavigate={onNavigate}
 			showThemeToggle={showThemeToggle}
+			searchSlot={searchSlot}
 		/>
 	);
 
@@ -147,10 +160,32 @@ function WorkspaceLayout() {
 			<Sheet open={navOpen} onOpenChange={setNavOpen}>
 				<SheetContent
 					side="left"
-					className="w-[284px] max-w-[86vw] gap-1.5 border-[var(--line)] bg-[linear-gradient(180deg,var(--surface-strong),var(--surface))] px-3.5 py-[18px] sm:max-w-[86vw] lg:hidden"
+					className="w-[284px] max-w-[86vw] gap-1.5 overflow-y-auto border-[var(--line)] bg-[linear-gradient(180deg,var(--surface-strong),var(--surface))] px-3.5 py-[18px] sm:max-w-[86vw] lg:hidden"
+					onEscapeKeyDown={(e) => {
+						// Escape clears open search results first; only a second
+						// Escape (nothing left to clear) closes the drawer.
+						if (drawerSearchRef.current?.clearResults()) e.preventDefault();
+					}}
+					onOpenAutoFocus={(e) => {
+						// The search input is now the drawer's first tabbable —
+						// don't autofocus it (that pops the phone keyboard over
+						// the nav). Focus the drawer itself; Tab reaches search.
+						e.preventDefault();
+						(e.currentTarget as HTMLElement | null)?.focus();
+					}}
 				>
 					<SheetTitle className="sr-only">Navigation</SheetTitle>
-					{sidebar(() => setNavOpen(false), true)}
+					{sidebar(
+						() => setNavOpen(false),
+						true,
+						<GlobalSearch
+							ref={drawerSearchRef}
+							variant="inline"
+							clubId={activeClubId}
+							grants={searchGrants}
+							onNavigate={() => setNavOpen(false)}
+						/>,
+					)}
 				</SheetContent>
 			</Sheet>
 
@@ -162,11 +197,7 @@ function WorkspaceLayout() {
 					</div>
 					<div className="flex-1" />
 					<div className="w-[248px] max-w-[34vw]">
-						<Input
-							type="search"
-							placeholder="Search members, roles…"
-							className="h-9 rounded-[10px] border-[var(--line)] bg-[var(--surface-strong)]"
-						/>
+						<GlobalSearch clubId={activeClubId} grants={searchGrants} />
 					</div>
 					<ClubSwitcher clubs={clubs} activeClubId={activeClubId} />
 					<ThemeToggle />
@@ -210,6 +241,7 @@ function SidebarInner({
 	onSignOut,
 	onNavigate,
 	showThemeToggle,
+	searchSlot,
 }: {
 	clubName: string;
 	clubNumber: string | null;
@@ -222,6 +254,8 @@ function SidebarInner({
 	onSignOut: () => void;
 	onNavigate?: () => void;
 	showThemeToggle?: boolean;
+	/** Global search rendered below the brand (mobile drawer only, #221). */
+	searchSlot?: ReactNode;
 }) {
 	return (
 		<>
@@ -232,6 +266,8 @@ function SidebarInner({
 					subtitle={clubNumber ? `${clubName} · Club ${clubNumber}` : clubName}
 				/>
 			</div>
+
+			{searchSlot ? <div className="px-0.5 pb-2">{searchSlot}</div> : null}
 
 			{hasOffice ? (
 				<NavGroup label="Your office">
