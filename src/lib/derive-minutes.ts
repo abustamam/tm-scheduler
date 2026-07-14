@@ -89,9 +89,11 @@ export function deriveMinutes(
 					draft.tableTopicsSpeakers.push({
 						id: op.id,
 						memberId: op.memberId ?? null,
-						// A new inline guest gets its real id only on drain; null is fine
-						// for the optimistic render (isGuest drives the badge).
-						guestId: op.guestId ?? null,
+						// Existing guest → its id; a new inline guest → its client PK
+						// (`newGuestId`, #176 slice 5) so the optimistic row is consistent
+						// and best-table-topics eligibility can reference the new guest.
+						// A pre-slice-5 op has neither → null (isGuest still drives the badge).
+						guestId: op.guestId ?? op.newGuestId ?? null,
 						name: op.name,
 						isGuest: op.isGuest,
 						topic: op.topic?.trim() ? op.topic.trim() : null,
@@ -131,7 +133,9 @@ export function deriveMinutes(
 				const award = draft.awards.find((a) => a.category === op.category);
 				if (award) {
 					award.memberId = op.memberId ?? null;
-					award.guestId = op.guestId ?? null;
+					// Existing guest → its id; a new inline guest → its client PK
+					// (`newGuestId`, #176 slice 5); pre-slice-5 op → null.
+					award.guestId = op.guestId ?? op.newGuestId ?? null;
 					award.name = op.name;
 					award.isGuest = op.isGuest;
 				}

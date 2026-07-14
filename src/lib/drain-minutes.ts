@@ -14,13 +14,14 @@
 // thunks + queue-removal as injected params, so it stays out of the `pg` client
 // bundle and is directly unit-testable. `MinutesOp` is imported TYPE-ONLY.
 //
-// KNOWN ACCEPTED LIMITATION (deferred, do not fix here): a brand-new guest
-// embedded inline in an `addTableTopics` or `setAward` op has no client guest id
-// (only the speaker-row / category is keyed). A single clean drain is correct
-// and the transactional server-fns roll a truly-failed op back with no partial
-// write — but a *lost-ack* retry (the op committed server-side yet the ack was
-// lost, so the op re-drains) can create an orphan/phantom guest. Full hardening
-// (minting that guest as its own idempotent op with a client id) is slice-5+.
+// Inline new guests are idempotent too (#176 slice 5): a brand-new guest
+// embedded inline in an `addTableTopics` or `setAward` op carries its own client
+// guest PK (`op.newGuestId`, distinct from the speaker-row `op.id`), threaded to
+// the server-fn so the guest insert is `onConflictDoNothing` on that PK. A
+// *lost-ack* retry (the op committed server-side yet the ack was lost, so the op
+// re-drains) therefore reuses the same guest row instead of minting an orphan —
+// closing the last correctness gap from slice 4. The online path never sets
+// `newGuestId`, so it is unchanged (fresh server-side id per create).
 //
 // The literal-union types (`AttendanceStatus`/`AwardCategory`) are imported
 // TYPE-ONLY (erased at build time, like the queue module) so the fn signatures
@@ -58,6 +59,8 @@ export type MinutesServerFns = {
 			memberId?: string;
 			guestId?: string;
 			newGuest?: NewGuestPayload;
+			/** Client guest PK for the inline new-guest path (idempotent replay). */
+			newGuestId?: string;
 			topic?: string;
 		};
 	}) => Promise<unknown>;
@@ -74,6 +77,8 @@ export type MinutesServerFns = {
 			memberId?: string;
 			guestId?: string;
 			newGuest?: NewGuestPayload;
+			/** Client guest PK for the inline new-guest path (idempotent replay). */
+			newGuestId?: string;
 		};
 	}) => Promise<unknown>;
 	clearAward: (args: {
@@ -126,6 +131,10 @@ export async function dispatchOp(
 					memberId: op.memberId,
 					guestId: op.guestId,
 					newGuest: op.newGuest,
+					// Client guest PK for an inline new guest — idempotent replay (#176
+					// slice 5). Undefined for member/existing-guest ops (and pre-slice-5
+					// ops), where the server keeps its fresh-id behaviour.
+					newGuestId: op.newGuestId,
 					topic: op.topic,
 				},
 			});
@@ -149,6 +158,9 @@ export async function dispatchOp(
 					memberId: op.memberId,
 					guestId: op.guestId,
 					newGuest: op.newGuest,
+					// Client guest PK for an inline new guest — idempotent replay (#176
+					// slice 5). Undefined otherwise (server keeps its fresh-id behaviour).
+					newGuestId: op.newGuestId,
 				},
 			});
 			return;

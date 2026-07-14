@@ -271,8 +271,35 @@ describe("deriveMinutes", () => {
 			name: "Newbie",
 			sortOrder: 2,
 		});
-		// Eligibility can't reference the not-yet-created guest id.
+		// No newGuestId (a pre-slice-5 op) ⇒ eligibility can't reference the guest.
 		expect(d.awardEligible.best_table_topics.guestIds).toEqual([]);
+	});
+
+	it("a new-guest addTableTopics with newGuestId sets guestId + eligibility (#176 slice 5)", () => {
+		const d = deriveMinutes(makeSnapshot(), [
+			{
+				type: "addTableTopics",
+				...meta(),
+				id: "tt-guest",
+				name: "Newbie",
+				isGuest: true,
+				newGuest: { name: "Newbie" },
+				newGuestId: "g-new-inline",
+			},
+		]);
+		const added = d.tableTopicsSpeakers.find((t) => t.id === "tt-guest");
+		expect(added).toMatchObject({
+			memberId: null,
+			// The inline guest's client PK is carried onto the optimistic row.
+			guestId: "g-new-inline",
+			isGuest: true,
+			name: "Newbie",
+			sortOrder: 2,
+		});
+		// Now best-TT eligibility can reference the new guest.
+		expect(d.awardEligible.best_table_topics.guestIds).toEqual([
+			"g-new-inline",
+		]);
 	});
 
 	it("normalises a blank topic to null", () => {
@@ -447,6 +474,28 @@ describe("deriveMinutes", () => {
 			category: "best_speaker",
 			memberId: null,
 			guestId: null,
+			name: "Guesty",
+			isGuest: true,
+		});
+	});
+
+	it("sets an award to a new guest with newGuestId (guestId = newGuestId, #176 slice 5)", () => {
+		const d = deriveMinutes(makeSnapshot(), [
+			{
+				type: "setAward",
+				...meta(),
+				category: "best_speaker",
+				name: "Guesty",
+				isGuest: true,
+				newGuest: { name: "Guesty" },
+				newGuestId: "g-award-inline",
+			},
+		]);
+		expect(d.awards.find((a) => a.category === "best_speaker")).toEqual({
+			category: "best_speaker",
+			memberId: null,
+			// The inline guest's client PK is carried onto the optimistic award row.
+			guestId: "g-award-inline",
 			name: "Guesty",
 			isGuest: true,
 		});

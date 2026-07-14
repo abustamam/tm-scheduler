@@ -66,6 +66,14 @@ export type MinutesOp =
 			memberId?: string;
 			guestId?: string;
 			newGuest?: NewGuestPayload;
+			/**
+			 * Client-generated guest PK for the INLINE new-guest path (`newGuest`
+			 * present) — DISTINCT from `id` (the speaker row). Threaded to the server
+			 * so a lost-ack drain replay reuses the same guest row instead of minting
+			 * an orphan (#176 slice 5). Optional: ops queued before slice 5 lack it
+			 * and fall back to the old server-side fresh-id behaviour.
+			 */
+			newGuestId?: string;
 			topic?: string;
 	  }
 	| {
@@ -91,6 +99,13 @@ export type MinutesOp =
 			memberId?: string;
 			guestId?: string;
 			newGuest?: NewGuestPayload;
+			/**
+			 * Client-generated guest PK for the INLINE new-guest award path (`newGuest`
+			 * present) — makes a lost-ack drain replay reuse the same guest row instead
+			 * of minting an orphan (#176 slice 5). Optional for back-compat with ops
+			 * queued before slice 5.
+			 */
+			newGuestId?: string;
 	  }
 	| {
 			type: "clearAward";

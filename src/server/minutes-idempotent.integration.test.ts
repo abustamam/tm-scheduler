@@ -13,7 +13,12 @@
 import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { guests, meetingAttendance, tableTopicsSpeakers } from "#/db/schema";
+import {
+	guests,
+	meetingAttendance,
+	meetingAwards,
+	tableTopicsSpeakers,
+} from "#/db/schema";
 import {
 	cleanup,
 	hasTestDb,
@@ -31,6 +36,7 @@ const {
 	moveTableTopicsSpeaker,
 	removeGuestPresent,
 	removeTableTopicsSpeaker,
+	setAward,
 } = await import("#/server/minutes-logic");
 
 const UUID_RE =
@@ -173,6 +179,118 @@ describe.skipIf(!hasTestDb)(
 				expect(created.guestId).toMatch(UUID_RE);
 				const m = await loadMinutes(seed.meetingId);
 				expect(m.guests.map((g) => g.guestId)).toEqual([created.guestId]);
+			});
+		});
+
+		// #176 slice 5: the orphan-guest window. An inline NEW guest embedded in a
+		// TT-speaker / award op now carries its own client PK (`newGuestId`, distinct
+		// from the speaker-row `id`). Replaying the SAME op (a lost-ack retry) must
+		// reuse that guest row — exactly ONE guest, no orphan — and the TT/award must
+		// reference it.
+		describe("inline new-guest replay is idempotent (no orphan guest)", () => {
+			it("addTableTopicsSpeaker with newGuestId replays to exactly one guest", async () => {
+				const speakerRowId = randomUUID();
+				const newGuestId = randomUUID();
+				const op = {
+					meetingId: seed.meetingId,
+					id: speakerRowId,
+					newGuestId,
+					newGuest: { name: "Vera Visitor", email: "vera@example.com" },
+					topic: "First time here?",
+				};
+
+				// (1) First drain: the client speaker-row id and guest PK are honored.
+				const first = await addTableTopicsSpeaker(op);
+				expect(first.id).toBe(speakerRowId);
+
+				// (2) Lost-ack retry: replay the SAME op. Idempotent — no throw.
+				const replay = await addTableTopicsSpeaker(op);
+				expect(replay.id).toBe(speakerRowId);
+
+				// (3) Exactly ONE guest row exists (no orphan) — both by the client PK
+				// and across the whole club (nothing else was minted).
+				const byId = await testDb
+					.select({ id: guests.id })
+					.from(guests)
+					.where(eq(guests.id, newGuestId));
+				expect(byId).toHaveLength(1);
+				const allClubGuests = await testDb
+					.select({ id: guests.id })
+					.from(guests)
+					.where(eq(guests.clubId, seed.clubId));
+				expect(allClubGuests).toHaveLength(1);
+
+				// (4) Exactly one TT-speaker row, and it references the new guest.
+				const ttRows = await testDb
+					.select({
+						id: tableTopicsSpeakers.id,
+						guestId: tableTopicsSpeakers.guestId,
+					})
+					.from(tableTopicsSpeakers)
+					.where(eq(tableTopicsSpeakers.meetingId, seed.meetingId));
+				expect(ttRows).toHaveLength(1);
+				expect(ttRows[0].guestId).toBe(newGuestId);
+
+				// (5) loadMinutes surfaces the guest speaker + best-TT eligibility.
+				const m = await loadMinutes(seed.meetingId);
+				expect(m.tableTopicsSpeakers).toHaveLength(1);
+				expect(m.tableTopicsSpeakers[0]).toMatchObject({
+					id: speakerRowId,
+					guestId: newGuestId,
+					isGuest: true,
+					name: "Vera Visitor",
+				});
+				expect(m.awardEligible.best_table_topics.guestIds).toEqual([
+					newGuestId,
+				]);
+			});
+
+			it("setAward with newGuestId replays to exactly one guest", async () => {
+				const newGuestId = randomUUID();
+				const op = {
+					meetingId: seed.meetingId,
+					category: "best_speaker" as const,
+					newGuestId,
+					newGuest: { name: "Gina Guest" },
+				};
+
+				// (1) First drain, then (2) lost-ack retry of the SAME op.
+				await setAward(op);
+				await setAward(op);
+
+				// (3) Exactly ONE guest row (no orphan).
+				const byId = await testDb
+					.select({ id: guests.id })
+					.from(guests)
+					.where(eq(guests.id, newGuestId));
+				expect(byId).toHaveLength(1);
+				const allClubGuests = await testDb
+					.select({ id: guests.id })
+					.from(guests)
+					.where(eq(guests.clubId, seed.clubId));
+				expect(allClubGuests).toHaveLength(1);
+
+				// (4) A single award row for the category, referencing the new guest.
+				const awardRows = await testDb
+					.select({ guestId: meetingAwards.guestId })
+					.from(meetingAwards)
+					.where(
+						and(
+							eq(meetingAwards.meetingId, seed.meetingId),
+							eq(meetingAwards.category, "best_speaker"),
+						),
+					);
+				expect(awardRows).toHaveLength(1);
+				expect(awardRows[0].guestId).toBe(newGuestId);
+
+				// (5) loadMinutes resolves the award winner to the new guest.
+				const m = await loadMinutes(seed.meetingId);
+				const award = m.awards.find((a) => a.category === "best_speaker");
+				expect(award).toMatchObject({
+					guestId: newGuestId,
+					isGuest: true,
+					name: "Gina Guest",
+				});
 			});
 		});
 	},

@@ -271,9 +271,10 @@ function MeetingDetail() {
 		<PageContainer className="space-y-5">
 			{!online ? (
 				<div className="flex items-center gap-2 rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm font-medium text-warning-foreground">
-					<WifiOff className="size-4" aria-hidden />
-					You're offline — this meeting is readable, but changes can't be saved
-					until you reconnect.
+					<WifiOff className="size-4 shrink-0" aria-hidden />
+					You're offline — minutes edits are saved on this device and sync when
+					you reconnect. Other changes (meeting details, roles) need a
+					connection.
 				</div>
 			) : null}
 			{locked ? (
