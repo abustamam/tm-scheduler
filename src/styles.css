@@ -162,6 +162,16 @@
 @theme inline {
   --font-sans: 'Manrope', ui-sans-serif, system-ui, sans-serif;
   --font-display: 'Fraunces', Georgia, serif;
+  /*
+   * Container widths (#226). One declaration per surface; consumed as
+   * `max-w-workspace` / `max-w-public` / `max-w-reading`.
+   *  - workspace: the _authed PageContainer cap.
+   *  - public:    the public club sign-up page (was max-w-5xl, 64rem).
+   *  - reading:   the public meeting page (was max-w-3xl, 48rem).
+   */
+  --container-workspace: 1180px;
+  --container-public: 64rem;
+  --container-reading: 48rem;
   --color-warning: var(--warning);
   --color-warning-foreground: var(--warning-foreground);
   --color-warning-strong: var(--warning-strong);

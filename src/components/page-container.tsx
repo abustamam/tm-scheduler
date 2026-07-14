@@ -20,7 +20,7 @@ export function PageContainer({
 	return (
 		<div
 			className={cn(
-				"max-w-[1180px] px-4 pt-5 pb-10 sm:px-7 sm:pt-[26px]",
+				"max-w-workspace px-4 pt-5 pb-10 sm:px-7 sm:pt-[26px]",
 				className,
 			)}
 		>
