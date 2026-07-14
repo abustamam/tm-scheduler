@@ -2,6 +2,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RequireMember } from "./require-member";
 
@@ -28,6 +29,24 @@ describe("RequireMember", () => {
 	afterEach(() => {
 		cleanup();
 		localStorage.clear();
+	});
+
+	it("renders skeleton placeholders (not '…') before the identity check runs", () => {
+		// renderToString doesn't run effects, so this exercises the SSR /
+		// pre-mount branch that browsers paint while the page loads.
+		const qc = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const html = renderToString(
+			<QueryClientProvider client={qc}>
+				<RequireMember clubUuid="club-uuid-1" clubSlug="club-1">
+					<div data-testid="protected">protected content</div>
+				</RequireMember>
+			</QueryClientProvider>,
+		);
+		expect(html).toContain('data-slot="skeleton"');
+		expect(html).not.toContain("…");
+		expect(html).not.toContain("protected content");
 	});
 
 	it("shows the pick-name screen (roster) when no member is stored", async () => {

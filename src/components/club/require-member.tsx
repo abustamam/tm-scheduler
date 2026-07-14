@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
+import { Skeleton } from "#/components/ui/skeleton";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
 import { type StoredMember, useCurrentMember } from "#/lib/member-identity";
 import { officerPositionLabel } from "#/lib/officers";
@@ -32,14 +33,7 @@ export function RequireMember({
 	useEffect(() => setMounted(true), []);
 
 	if (!mounted) {
-		return (
-			<output
-				className="flex flex-1 items-center justify-center text-muted-foreground"
-				aria-label="Loading"
-			>
-				<span aria-hidden>…</span>
-			</output>
-		);
+		return <IdentityGateSkeleton />;
 	}
 
 	if (!member) {
@@ -47,6 +41,49 @@ export function RequireMember({
 	}
 
 	return <>{children}</>;
+}
+
+/**
+ * Varied widths (also the React keys) for the placeholder name lines so the
+ * skeleton roster reads as a list of different names, not a repeated bar.
+ */
+const SKELETON_ROW_WIDTHS = ["w-32", "w-40", "w-24", "w-36", "w-28"];
+
+/**
+ * Loading placeholder mirroring {@link PickNameScreen}'s layout (heading,
+ * search field, member rows) inside the same max-width container, so the swap
+ * to real content produces no layout jump. Rendered while the client-side
+ * stored-identity check hasn't run yet.
+ */
+function IdentityGateSkeleton() {
+	return (
+		<output
+			aria-label="Loading"
+			className="mx-auto flex w-full max-w-md flex-1 flex-col gap-6 px-5 py-8"
+		>
+			<div className="space-y-1">
+				<Skeleton className="h-8 w-44" />
+				<Skeleton className="h-5 w-52 max-w-full" />
+			</div>
+
+			<div className="space-y-2">
+				<Skeleton className="h-3.5 w-28" />
+				<Skeleton className="h-9 w-full" />
+			</div>
+
+			<div className="flex flex-col gap-2">
+				{SKELETON_ROW_WIDTHS.map((width) => (
+					<div
+						key={width}
+						className="flex items-center gap-3 rounded-lg border border-border bg-card px-3 py-2.5"
+					>
+						<Skeleton className="size-[38px] shrink-0 rounded-full" />
+						<Skeleton className={`h-4 ${width}`} />
+					</div>
+				))}
+			</div>
+		</output>
+	);
 }
 
 function PickNameScreen({
