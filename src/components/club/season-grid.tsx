@@ -275,7 +275,10 @@ export function SeasonGrid({
 				<table className="border-separate border-spacing-1">
 					<thead>
 						<tr>
-							<th className="sticky top-0 left-0 z-20 bg-card px-3 py-2 text-left text-xs font-semibold">
+							{/* shadow on the sticky label column: without an edge, columns
+						    sliding beneath it read as clipped/broken instead of
+						    scrolled (the grid auto-scrolls to the upcoming meeting). */}
+							<th className="sticky top-0 left-0 z-20 bg-card px-3 py-2 text-left text-xs font-semibold shadow-[4px_0_6px_-4px_rgba(0,0,0,0.35)]">
 								{labelHead}
 							</th>
 							{data.meetings.map((m) => {
@@ -365,7 +368,7 @@ export function SeasonGrid({
 					<tbody>
 						{rows.map((row) => (
 							<tr key={row.id}>
-								<th className="sticky left-0 z-10 bg-card px-3 py-1 text-right text-xs font-semibold whitespace-nowrap">
+								<th className="sticky left-0 z-10 bg-card px-3 py-1 text-right text-xs font-semibold whitespace-nowrap shadow-[4px_0_6px_-4px_rgba(0,0,0,0.35)]">
 									{row.memberId ? (
 										<Link
 											to="/members/$id"
