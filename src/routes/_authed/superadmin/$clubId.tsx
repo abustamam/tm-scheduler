@@ -1,5 +1,5 @@
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
-import { ArrowLeft, Loader2 } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowLeft, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { PageContainer } from "#/components/page-container";
@@ -7,7 +7,9 @@ import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import {
+	archiveConsoleClub,
 	getConsoleClubDetail,
+	unarchiveConsoleClub,
 	updateConsoleAdminEmail,
 } from "#/server/onboarding";
 
@@ -38,6 +40,11 @@ function ClubDetail() {
 				</Link>
 				<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
 					{club.name}
+					{club.archivedAt ? (
+						<span className="ml-3 inline-block rounded-full bg-[var(--sand)] px-2.5 py-1 align-middle text-xs font-semibold text-[var(--sea-ink-soft)] uppercase tracking-[0.04em]">
+							Archived
+						</span>
+					) : null}
 				</h1>
 				<p className="text-sm text-muted-foreground">
 					Club {club.clubNumber ?? "—"} · slug {club.slug} · {club.memberCount}{" "}
@@ -62,7 +69,123 @@ function ClubDetail() {
 					</p>
 				)}
 			</section>
+
+			<ArchivePanel
+				clubId={clubId}
+				clubName={club.name}
+				archivedAt={club.archivedAt ? new Date(club.archivedAt) : null}
+				onChanged={() => router.invalidate()}
+			/>
 		</PageContainer>
+	);
+}
+
+function ArchivePanel({
+	clubId,
+	clubName,
+	archivedAt,
+	onChanged,
+}: {
+	clubId: string;
+	clubName: string;
+	archivedAt: Date | null;
+	onChanged: () => void;
+}) {
+	const [submitting, setSubmitting] = useState(false);
+	const isArchived = archivedAt != null;
+
+	async function onArchive() {
+		if (
+			!window.confirm(
+				`Archive "${clubName}"? Members and the public club pages lose access immediately. No data is deleted and you can unarchive at any time.`,
+			)
+		) {
+			return;
+		}
+		setSubmitting(true);
+		try {
+			await archiveConsoleClub({ data: clubId });
+			toast.success("Club archived.");
+			onChanged();
+		} catch (err) {
+			toast.error(
+				err instanceof Error ? err.message : "Couldn't archive the club.",
+			);
+		} finally {
+			setSubmitting(false);
+		}
+	}
+
+	async function onUnarchive() {
+		if (!window.confirm(`Unarchive "${clubName}"? Access is fully restored.`)) {
+			return;
+		}
+		setSubmitting(true);
+		try {
+			await unarchiveConsoleClub({ data: clubId });
+			toast.success("Club unarchived.");
+			onChanged();
+		} catch (err) {
+			toast.error(
+				err instanceof Error ? err.message : "Couldn't unarchive the club.",
+			);
+		} finally {
+			setSubmitting(false);
+		}
+	}
+
+	return (
+		<section className="max-w-xl space-y-3 rounded-xl border border-dashed border-[var(--line)] p-4">
+			<h2 className="text-sm font-bold">
+				{isArchived ? "Archived club" : "Archive club"}
+			</h2>
+			{isArchived ? (
+				<p className="text-sm text-muted-foreground">
+					This club was archived {dateFmt.format(archivedAt)}. Members and its
+					public pages are blocked; all data is retained. Unarchive to restore
+					full access.
+				</p>
+			) : (
+				<p className="text-sm text-muted-foreground">
+					Archiving hides the club from its members and public pages (a
+					reversible soft-archive — no data is deleted and the slug stays
+					reserved). Only a superadmin can undo it.
+				</p>
+			)}
+			{isArchived ? (
+				<Button
+					type="button"
+					size="sm"
+					variant="outline"
+					disabled={submitting}
+					onClick={onUnarchive}
+				>
+					{submitting ? (
+						<Loader2 className="size-4 animate-spin" />
+					) : (
+						<>
+							<ArchiveRestore className="size-4" /> Unarchive club
+						</>
+					)}
+				</Button>
+			) : (
+				<Button
+					type="button"
+					size="sm"
+					variant="destructive"
+					disabled={submitting}
+					onClick={onArchive}
+				>
+					{submitting ? (
+						<Loader2 className="size-4 animate-spin" />
+					) : (
+						<>
+							<Archive className="size-4" /> Archive club
+						</>
+					)}
+				</Button>
+			)}
+		</section>
 	);
 }
 

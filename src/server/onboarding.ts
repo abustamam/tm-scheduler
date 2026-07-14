@@ -2,10 +2,12 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSuperadmin, requireUser } from "./guards";
 import {
+	archiveClub,
 	createClubSchema,
 	createClubWithAdmin,
 	getClubConsoleDetail,
 	listClubsForConsole,
+	unarchiveClub,
 	updateAdminEmailSchema,
 	updateUnclaimedAdminEmail,
 } from "./onboarding-logic";
@@ -50,4 +52,23 @@ export const updateConsoleAdminEmail = createServerFn({ method: "POST" })
 		const currentUser = await requireUser();
 		await requireSuperadmin(currentUser.id);
 		return updateUnclaimedAdminEmail(data);
+	});
+
+/** Soft-archive a club (ADR-0016 / #186): reversible, no data loss, slug stays
+ *  reserved. Blocks all access except this console. SUPERADMIN-only. */
+export const archiveConsoleClub = createServerFn({ method: "POST" })
+	.validator((clubId: unknown) => z.string().uuid().parse(clubId))
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		await requireSuperadmin(currentUser.id);
+		return archiveClub(data);
+	});
+
+/** Unarchive a club, fully restoring authed + public access. SUPERADMIN-only. */
+export const unarchiveConsoleClub = createServerFn({ method: "POST" })
+	.validator((clubId: unknown) => z.string().uuid().parse(clubId))
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		await requireSuperadmin(currentUser.id);
+		return unarchiveClub(data);
 	});

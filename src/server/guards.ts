@@ -1,8 +1,9 @@
 import { getRequest } from "@tanstack/react-start/server";
 import { and, eq } from "drizzle-orm";
 import { db } from "#/db";
-import { members, people, user } from "#/db/schema";
+import { clubs, members, people, user } from "#/db/schema";
 import { auth } from "#/lib/auth";
+import { isClubArchived } from "#/lib/club-archive";
 import {
 	type MeetingAgendaAuthz,
 	resolveMeetingAgendaAuthz,
@@ -62,11 +63,22 @@ export async function getMembership(userId: string, clubId: string) {
 	return membership ?? null;
 }
 
-/** Any active member may view/claim. */
+/** Any active member may view/claim. Rejects when the club is soft-archived
+ *  (ADR-0016 / #186): archiving makes a club inaccessible to every member and
+ *  admin. This is the single authed choke point — `requireClubRole` builds on it
+ *  — so the one check here covers all authed member/admin operations. */
 export async function requireMembership(userId: string, clubId: string) {
 	const membership = await getMembership(userId, clubId);
 	if (!membership || membership.status !== "active") {
 		throw new Error("You're not a member of this club.");
+	}
+	const [club] = await db
+		.select({ archivedAt: clubs.archivedAt })
+		.from(clubs)
+		.where(eq(clubs.id, clubId))
+		.limit(1);
+	if (club && isClubArchived(club)) {
+		throw new Error("This club has been archived.");
 	}
 	return membership;
 }

@@ -176,6 +176,13 @@
       "when": 1783796668832,
       "tag": "0024_naive_hellfire_club",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1784072666547,
+      "tag": "0025_cuddly_molly_hayes",
+      "breakpoints": true
     }
   ]
 }

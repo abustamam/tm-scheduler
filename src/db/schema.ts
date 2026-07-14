@@ -132,6 +132,11 @@ export const clubs = pgTable("clubs", {
 	defaultMeetingMinutes: integer("default_meeting_minutes")
 		.notNull()
 		.default(90),
+	// Soft-archive (ADR-0016 / #186). NULL = active; a set timestamp = archived.
+	// Reversible: unarchive clears it. Archiving retains all club data untouched
+	// and blocks every access path except the superadmin console — `requireMembership`
+	// rejects authed access and the public no-auth club loaders return not-found.
+	archivedAt: timestamp("archived_at"),
 	createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
