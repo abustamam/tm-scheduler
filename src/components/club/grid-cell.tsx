@@ -1,7 +1,7 @@
-import { Link } from "@tanstack/react-router";
 import { Loader2 } from "lucide-react";
 import type { ViewCell } from "#/lib/season-grid-view";
 import { cn } from "#/lib/utils";
+import { MeetingLink } from "./meeting-link";
 
 const KIND_CLASS: Record<ViewCell["kind"], string> = {
 	assigned: "bg-emerald-600 text-white",
@@ -138,25 +138,14 @@ export function GridCell({
 		</span>
 	);
 	if (cell.kind === "blank") return inner;
-	if (clubSlug)
-		return (
-			<Link
-				to="/club/$clubId/meeting/$meetingId"
-				params={{ clubId: clubSlug, meetingId: cell.meetingId }}
-				className="block"
-				aria-label={cell.title || "meeting"}
-			>
-				{inner}
-			</Link>
-		);
 	return (
-		<Link
-			to="/meetings/$id"
-			params={{ id: cell.meetingId }}
+		<MeetingLink
+			clubSlug={clubSlug}
+			meetingId={cell.meetingId}
 			className="block"
 			aria-label={cell.title || "meeting"}
 		>
 			{inner}
-		</Link>
+		</MeetingLink>
 	);
 }
