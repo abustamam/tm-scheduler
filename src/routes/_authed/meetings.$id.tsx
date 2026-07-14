@@ -131,9 +131,9 @@ function MeetingDetail() {
 	} = Route.useLoaderData();
 	const { currentMemberId } = Route.useRouteContext();
 	const router = useRouter();
-	// #176 slice 1: this page loads offline from the cached SSR data, but it is
-	// read-only offline — edits can't reach the server until the connection is
-	// back (the offline write queue is a later slice).
+	// #176 slice 1: this page loads offline from the cached SSR data. Slice 3
+	// makes the Minutes section editable offline (edits queue locally in
+	// IndexedDB and replay on reconnect — the drain is slice 4).
 	const online = useOnlineStatus();
 	const [editOpen, setEditOpen] = useState(false);
 	const [addRoleOpen, setAddRoleOpen] = useState(false);

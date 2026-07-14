@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronUp, Download, X } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { SendMinutesDialog } from "#/components/minutes/send-minutes-dialog";
 import { Badge } from "#/components/ui/badge";
@@ -25,6 +25,15 @@ import {
 	PopoverContent,
 	PopoverTrigger,
 } from "#/components/ui/popover";
+import { useOnlineStatus } from "#/hooks/use-online-status";
+import { deriveMinutes } from "#/lib/derive-minutes";
+import {
+	enqueue,
+	type MinutesOp,
+	readQueue,
+	readSnapshot,
+	saveSnapshot,
+} from "#/lib/offline-minutes-queue";
 import {
 	addMinutesGuest,
 	addTableTopics,
@@ -94,11 +103,63 @@ export function MeetingMinutes({
 }) {
 	const [busy, setBusy] = useState(false);
 
-	async function run(fn: () => Promise<unknown>) {
+	// #176 slice 3: offline write queue. ONLINE the behaviour below is unchanged
+	// (server-fn + onMutated). OFFLINE, edits are captured to a durable IndexedDB
+	// queue and the view is derived from the last online snapshot + that queue.
+	const online = useOnlineStatus();
+	const [queue, setQueue] = useState<MinutesOp[]>([]);
+	const [snapshot, setSnapshot] = useState<MinutesData | null>(null);
+
+	// Load any persisted snapshot + queue once per meeting (survives reloads).
+	useEffect(() => {
+		let alive = true;
+		void (async () => {
+			const [savedQueue, savedSnapshot] = await Promise.all([
+				readQueue(meetingId),
+				readSnapshot(meetingId),
+			]);
+			if (!alive) return;
+			setQueue(savedQueue);
+			setSnapshot(savedSnapshot);
+		})();
+		return () => {
+			alive = false;
+		};
+	}, [meetingId]);
+
+	// Keep the offline snapshot fresh from every ONLINE render of the loader data.
+	useEffect(() => {
+		if (!online) return;
+		setSnapshot(minutes);
+		void saveSnapshot(meetingId, minutes);
+	}, [online, minutes, meetingId]);
+
+	// Displayed state: the live loader data online; the optimistic projection off.
+	const displayMinutes = useMemo(
+		() => (online ? minutes : deriveMinutes(snapshot ?? minutes, queue)),
+		[online, minutes, snapshot, queue],
+	);
+
+	// ONLINE: run the server-fn and re-fetch (unchanged). OFFLINE: enqueue the op
+	// and reflect it optimistically; never hit the server or onMutated.
+	async function mutate(
+		onlineFn: () => Promise<unknown>,
+		makeOp: () => MinutesOp,
+	) {
 		if (busy) return;
+		if (!online) {
+			const op = makeOp();
+			setQueue((q) => [...q, op]);
+			try {
+				await enqueue(meetingId, op);
+			} catch (err) {
+				toast.error(errMessage(err));
+			}
+			return;
+		}
 		setBusy(true);
 		try {
-			await fn();
+			await onlineFn();
 			await onMutated();
 		} catch (err) {
 			toast.error(errMessage(err));
@@ -106,6 +167,19 @@ export function MeetingMinutes({
 			setBusy(false);
 		}
 	}
+
+	const opMeta = () => ({
+		opId: crypto.randomUUID(),
+		queuedAt: Date.now(),
+	});
+
+	const guestName = (guestId: string) =>
+		clubGuests.find((g) => g.id === guestId)?.name ?? "Guest";
+	const memberName = (memberId: string) =>
+		displayMinutes.members.find((m) => m.memberId === memberId)?.name ??
+		"Member";
+
+	const pendingCount = online ? 0 : queue.length;
 
 	return (
 		<Card>
@@ -141,24 +215,53 @@ export function MeetingMinutes({
 				</div>
 			</CardHeader>
 			<CardContent className="space-y-8">
+				{pendingCount > 0 ? (
+					<p className="text-muted-foreground text-sm">
+						{pendingCount} change{pendingCount === 1 ? "" : "s"} pending locally
+						— they'll sync when you're back online.
+					</p>
+				) : null}
 				<AttendanceSection
-					minutes={minutes}
+					minutes={displayMinutes}
 					canEdit={canEdit}
 					busy={busy}
 					clubGuests={clubGuests}
 					onSetStatus={(memberId, status) =>
-						run(() => setAttendance({ data: { meetingId, memberId, status } }))
+						mutate(
+							() => setAttendance({ data: { meetingId, memberId, status } }),
+							() => ({ type: "setAttendance", ...opMeta(), memberId, status }),
+						)
 					}
 					onAddGuest={(payload) =>
-						run(() => addMinutesGuest({ data: { meetingId, ...payload } }))
+						mutate(
+							() => addMinutesGuest({ data: { meetingId, ...payload } }),
+							() =>
+								payload.newGuest
+									? {
+											type: "addGuest",
+											...opMeta(),
+											guestId: crypto.randomUUID(),
+											name: payload.newGuest.name,
+											newGuest: payload.newGuest,
+										}
+									: {
+											type: "addGuest",
+											...opMeta(),
+											guestId: payload.guestId as string,
+											name: guestName(payload.guestId as string),
+										},
+						)
 					}
 					onRemoveGuest={(guestId) =>
-						run(() => removeMinutesGuest({ data: { meetingId, guestId } }))
+						mutate(
+							() => removeMinutesGuest({ data: { meetingId, guestId } }),
+							() => ({ type: "removeGuest", ...opMeta(), guestId }),
+						)
 					}
 				/>
 
 				<TableTopicsSection
-					minutes={minutes}
+					minutes={displayMinutes}
 					canEdit={canEdit}
 					busy={busy}
 					// Only present members can be added as Table Topics speakers (#170);
@@ -166,34 +269,83 @@ export function MeetingMinutes({
 					// Present or unmarked members can be added as Table Topics speakers:
 					// unmarked means "not recorded", never absent (#218), so only members
 					// explicitly marked absent/excused are filtered out.
-					roster={minutes.members.filter(
+					roster={displayMinutes.members.filter(
 						(m) => m.status === "present" || m.status === null,
 					)}
 					clubGuests={clubGuests}
 					onAdd={(payload) =>
-						run(() => addTableTopics({ data: { meetingId, ...payload } }))
+						mutate(
+							() => addTableTopics({ data: { meetingId, ...payload } }),
+							() => {
+								const isGuest = !payload.memberId;
+								const name = payload.memberId
+									? memberName(payload.memberId)
+									: payload.guestId
+										? guestName(payload.guestId)
+										: (payload.newGuest?.name ?? "Guest");
+								return {
+									type: "addTableTopics",
+									...opMeta(),
+									id: crypto.randomUUID(),
+									name,
+									isGuest,
+									memberId: payload.memberId,
+									guestId: payload.guestId,
+									newGuest: payload.newGuest,
+									topic: payload.topic,
+								};
+							},
+						)
 					}
 					onRemove={(id) =>
-						run(() => removeTableTopics({ data: { meetingId, id } }))
+						mutate(
+							() => removeTableTopics({ data: { meetingId, id } }),
+							() => ({ type: "removeTableTopics", ...opMeta(), id }),
+						)
 					}
 					onMove={(id, direction) =>
-						run(() => moveTableTopics({ data: { meetingId, id, direction } }))
+						mutate(
+							() => moveTableTopics({ data: { meetingId, id, direction } }),
+							() => ({ type: "moveTableTopics", ...opMeta(), id, direction }),
+						)
 					}
 				/>
 
 				<AwardsSection
-					minutes={minutes}
+					minutes={displayMinutes}
 					canEdit={canEdit}
 					busy={busy}
-					roster={minutes.members}
+					roster={displayMinutes.members}
 					clubGuests={clubGuests}
 					onSet={(category, payload) =>
-						run(() =>
-							setMinutesAward({ data: { meetingId, category, ...payload } }),
+						mutate(
+							() =>
+								setMinutesAward({ data: { meetingId, category, ...payload } }),
+							() => {
+								const isGuest = !payload.memberId;
+								const name = payload.memberId
+									? memberName(payload.memberId)
+									: payload.guestId
+										? guestName(payload.guestId)
+										: (payload.newGuest?.name ?? "Guest");
+								return {
+									type: "setAward",
+									...opMeta(),
+									category,
+									name,
+									isGuest,
+									memberId: payload.memberId,
+									guestId: payload.guestId,
+									newGuest: payload.newGuest,
+								};
+							},
 						)
 					}
 					onClear={(category) =>
-						run(() => clearMinutesAward({ data: { meetingId, category } }))
+						mutate(
+							() => clearMinutesAward({ data: { meetingId, category } }),
+							() => ({ type: "clearAward", ...opMeta(), category }),
+						)
 					}
 				/>
 
