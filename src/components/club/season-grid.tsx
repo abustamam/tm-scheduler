@@ -247,22 +247,27 @@ export function SeasonGrid({
 						</button>
 					))}
 				</div>
-				<div className="inline-flex overflow-hidden rounded-lg border">
-					{COUNTS.map((c) => (
-						<button
-							key={String(c)}
-							type="button"
-							onClick={() => onCountChange?.(c)}
-							className={cn(
-								"px-3 py-1.5 text-xs font-semibold",
-								count === c
-									? "bg-accent text-accent-foreground"
-									: "text-muted-foreground",
-							)}
-						>
-							{c === "all" ? "All" : c}
-						</button>
-					))}
+				<div className="inline-flex items-center gap-2">
+					<span className="text-xs font-medium text-muted-foreground">
+						Meetings shown
+					</span>
+					<div className="inline-flex overflow-hidden rounded-lg border">
+						{COUNTS.map((c) => (
+							<button
+								key={String(c)}
+								type="button"
+								onClick={() => onCountChange?.(c)}
+								className={cn(
+									"px-3 py-1.5 text-xs font-semibold",
+									count === c
+										? "bg-accent text-accent-foreground"
+										: "text-muted-foreground",
+								)}
+							>
+								{c === "all" ? "All" : c}
+							</button>
+						))}
+					</div>
 				</div>
 			</div>
 
