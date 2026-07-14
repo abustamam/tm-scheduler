@@ -342,7 +342,7 @@ function BatchMeetings() {
 					) : (
 						<>
 							{clamped && (
-								<p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-950 dark:text-amber-300">
+								<p className="rounded-md bg-warning-soft px-3 py-2 text-xs text-warning-foreground">
 									Capped at {MAX_BATCH} meetings — narrow the range to generate
 									the rest in a later batch.
 								</p>

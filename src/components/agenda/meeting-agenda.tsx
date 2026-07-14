@@ -423,12 +423,12 @@ export function MeetingAgenda({
 												) : null}
 
 												{isOpen ? (
-													// Same emerald-outline treatment as the sign-up grid's
+													// Same success-outline treatment as the sign-up grid's
 													// Claim cells — one visual language for one verb.
 													<Button
 														size="sm"
 														variant="outline"
-														className="border-emerald-500/70 text-emerald-700 hover:bg-emerald-700 hover:text-white"
+														className="border-success/70 text-success hover:bg-success hover:text-success-foreground"
 														aria-label={`Claim ${slot.roleName} — open`}
 														onClick={() => canClaim && setClaimSlotState(slot)}
 														disabled={busy || !canClaim}

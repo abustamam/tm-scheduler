@@ -185,7 +185,7 @@ export function AssignSlotSheet({
 													Last: {formatLastServed(row.lastServedAt)}
 												</span>
 											) : (
-												<span className="font-medium text-amber-600 text-xs dark:text-amber-500">
+												<span className="font-medium text-warning-foreground text-xs">
 													Never done this role
 												</span>
 											)}

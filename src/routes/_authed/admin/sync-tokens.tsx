@@ -91,7 +91,7 @@ function SyncTokens() {
 					</Button>
 				</div>
 				{freshToken ? (
-					<div className="space-y-1 rounded-md border border-amber-400 bg-amber-50 p-3 text-sm dark:bg-amber-950/40">
+					<div className="space-y-1 rounded-md border border-warning/60 bg-warning-soft p-3 text-sm">
 						<p className="font-bold">Copy this now — you won't see it again:</p>
 						<code className="block break-all font-mono text-xs">
 							{freshToken}
