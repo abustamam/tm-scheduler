@@ -427,11 +427,22 @@ type DbOrTx =
 	| typeof db
 	| Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
 
-/** Resolve or create a guest scoped to `clubId` (mirrors guests-logic). */
+/**
+ * Resolve or create a guest scoped to `clubId` (mirrors guests-logic).
+ *
+ * `newGuestId` (optional, #176 slice 2) lets a caller supply the primary key for
+ * the NEW guest row so an offline create can be replayed idempotently: the insert
+ * uses that id with `onConflictDoNothing`, and a conflict (row already created by
+ * a prior replay) returns the same id instead of throwing. It is threaded from
+ * `addGuestPresent` only — it is deliberately kept OUT of the shared `input` so a
+ * caller's own row id (e.g. a Table Topics speaker's id) can never leak into the
+ * guest's id.
+ */
 async function resolveGuestId(
 	tx: DbOrTx,
 	clubId: string,
 	input: { guestId?: string | null; newGuest?: NewGuestInput },
+	newGuestId?: string,
 ): Promise<string> {
 	if (input.newGuest) {
 		const name = input.newGuest.name.trim();
@@ -439,14 +450,19 @@ async function resolveGuestId(
 		const [created] = await tx
 			.insert(guests)
 			.values({
+				...(newGuestId ? { id: newGuestId } : {}),
 				clubId,
 				name,
 				email: input.newGuest.email?.trim() || null,
 				phone: input.newGuest.phone?.trim() || null,
 			})
+			.onConflictDoNothing({ target: guests.id })
 			.returning({ id: guests.id });
-		if (!created) throw new Error("Failed to create guest.");
-		return created.id;
+		if (created) return created.id;
+		// Conflict on the client-supplied id → the guest already exists from a
+		// prior replay; the create is idempotent, so return that same id.
+		if (newGuestId) return newGuestId;
+		throw new Error("Failed to create guest.");
 	}
 	if (input.guestId) {
 		const [existing] = await tx
@@ -491,15 +507,24 @@ export async function setMemberPresence(input: {
 		});
 }
 
-/** Add a present guest (existing club guest or a new one). Idempotent per guest. */
+/**
+ * Add a present guest (existing club guest or a new one). Idempotent per guest.
+ *
+ * `id` (optional, #176 slice 2) is the client-supplied primary key for a NEW
+ * guest row (the new-guest path only — ignored when an existing `guestId` is
+ * passed). It makes a replayed offline create a stable no-op: the guest insert is
+ * `onConflictDoNothing` and the attendance insert already is, so re-running the
+ * whole op returns the same `guestId` without duplicating either row.
+ */
 export async function addGuestPresent(input: {
 	meetingId: string;
+	id?: string;
 	guestId?: string | null;
 	newGuest?: NewGuestInput;
 }): Promise<{ guestId: string }> {
 	const clubId = await getMeetingClubId(input.meetingId);
 	return db.transaction(async (tx) => {
-		const guestId = await resolveGuestId(tx, clubId, input);
+		const guestId = await resolveGuestId(tx, clubId, input, input.id);
 		await tx
 			.insert(meetingAttendance)
 			.values({ meetingId: input.meetingId, guestId, status: "present" })
@@ -525,9 +550,19 @@ export async function removeGuestPresent(input: {
 		);
 }
 
-/** Append a Table Topics speaker (member or guest) with an optional topic. */
+/**
+ * Append a Table Topics speaker (member or guest) with an optional topic.
+ *
+ * `id` (optional, #176 slice 2) is the client-supplied primary key for the new
+ * `table_topics_speakers` row — the stable target that later `remove`/`move` ops
+ * reference. The insert uses it with `onConflictDoNothing`, so replaying the same
+ * offline create is a no-op that still returns the same id (no duplicate row, no
+ * throw). Note: the id names the SPEAKER row only; a new inline guest is NOT given
+ * this id (the queue mints/creates guests as their own op via `addGuestPresent`).
+ */
 export async function addTableTopicsSpeaker(input: {
 	meetingId: string;
+	id?: string;
 	memberId?: string | null;
 	guestId?: string | null;
 	newGuest?: NewGuestInput;
@@ -554,15 +589,20 @@ export async function addTableTopicsSpeaker(input: {
 		const [created] = await tx
 			.insert(tableTopicsSpeakers)
 			.values({
+				...(input.id ? { id: input.id } : {}),
 				meetingId: input.meetingId,
 				memberId,
 				guestId,
 				topic: input.topic?.trim() || null,
 				sortOrder: next,
 			})
+			.onConflictDoNothing({ target: tableTopicsSpeakers.id })
 			.returning({ id: tableTopicsSpeakers.id });
-		if (!created) throw new Error("Failed to add speaker.");
-		return { id: created.id };
+		if (created) return { id: created.id };
+		// Conflict on the client-supplied id → the speaker row already exists from
+		// a prior replay; the create is idempotent, so return that same id.
+		if (input.id) return { id: input.id };
+		throw new Error("Failed to add speaker.");
 	});
 }
 
