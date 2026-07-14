@@ -28,6 +28,7 @@ import {
 import type { SeasonGridCount, SeasonGridData } from "#/server/season-grid";
 import { claimSlot, releaseSlot } from "#/server/slots";
 import { GridCell } from "./grid-cell";
+import { MeetingLink } from "./meeting-link";
 
 const COUNTS: SeasonGridCount[] = [4, 8, "all"];
 const VIEWS: { value: Orientation; label: string }[] = [
@@ -306,23 +307,13 @@ export function SeasonGrid({
 											m.isAnchor && "rounded-md ring-2 ring-primary",
 										)}
 									>
-										{clubSlug ? (
-											<Link
-												to="/club/$clubId/meeting/$meetingId"
-												params={{ clubId: clubSlug, meetingId: m.id }}
-												className="block"
-											>
-												{header}
-											</Link>
-										) : (
-											<Link
-												to="/meetings/$id"
-												params={{ id: m.id }}
-												className="block"
-											>
-												{header}
-											</Link>
-										)}
+										<MeetingLink
+											clubSlug={clubSlug}
+											meetingId={m.id}
+											className="block"
+										>
+											{header}
+										</MeetingLink>
 										{chipVisible ? (
 											<button
 												type="button"
@@ -404,6 +395,11 @@ export function SeasonGrid({
 												availabilityEditable={availabilityEditable}
 												onAvailability={onAvailability}
 												clubSlug={clubSlug}
+												meetingLabel={
+													m
+														? formatMeetingDate(m.scheduledAt, m.timezone)
+														: undefined
+												}
 											/>
 										</td>
 									);
