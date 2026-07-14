@@ -244,12 +244,16 @@ export function MeetingAgenda({
 								</span>
 							</span>
 						</div>
+						{/* Reminder sending isn't built yet (#7) — a live-looking button
+						    that only apologizes on click erodes trust, so it's disabled
+						    with the status in plain sight until the feature lands. */}
 						<Button
 							size="sm"
 							variant="outline"
-							onClick={() => toast.info("Reminder sending isn't wired up yet.")}
+							disabled
+							title="Coming soon — reminder sending isn't built yet"
 						>
-							Remind unfilled
+							Remind unfilled (soon)
 						</Button>
 					</div>
 					<div className="mt-3">
