@@ -61,6 +61,19 @@ the nouns in `src/db/schema.ts`.
   number + derived slug) + the 8 standard role definitions + a first admin (a Person with
   `user_id` NULL and an `admin` Membership); the admin's account links on their first sign-in
   (#188), and their email is editable in the console only while still unclaimed. See ADR-0016.
+- **Dues period** — a club-defined membership-billing window (`dues_periods`): a `label`, a
+  `due_date`, and an optional `default_amount_cents`. Periods are DATA, not a hardcoded cadence,
+  because clubs bill differently (annual, semi-annual, custom); the default is semi-annual with the
+  Toastmasters Apr 1 / Oct 1 renewal presets one click away. The **active** period (the Treasurer
+  view's default) is the one whose window — its own `due_date` up to the next period's — contains
+  today, else the nearest upcoming. Managed by the Treasurer (a club `admin`). See ADR-0017 / #206.
+- **Dues status** — a member's payment state for a period (`member_dues`, keyed on
+  `(membership_id, dues_period_id)`): `paid` or `waived`. **Unpaid is the ABSENCE of a row** — the
+  table is never pre-seeded, so a member owes a period exactly when they have no `paid`/`waived`
+  row for it. A **full-year** pre-payment is two `paid` rows (this period + the next) sharing one
+  `paid_at`. **Overdue** = an active member owing a period whose `due_date` has passed (full-year
+  payers are excluded for free). Amounts are integer cents, optional. Deliberately DECOUPLED from
+  Membership `status`: no dues action ever changes roster/renewal state. See ADR-0017 / #206.
 - **Meeting** — a single club session (`meetings`) with a date, theme, and word of the day.
   Its `status` follows a lifecycle: `scheduled → completed` (admin **Complete**, only on/after
   the meeting date) and `completed → scheduled` (admin **Reopen**, any time). A **completed**

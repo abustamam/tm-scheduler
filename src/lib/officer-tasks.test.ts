@@ -17,10 +17,16 @@ describe("buildOfficerHome", () => {
 
 	it("omits offices that have no dedicated tasks", () => {
 		const { sections } = buildOfficerHome([
-			"treasurer",
 			"sergeant_at_arms",
+			"vp_public_relations",
 			"vp_education",
 		]);
 		expect(sections.map((s) => s.position)).toEqual(["vp_education"]);
+	});
+
+	it("surfaces the Treasurer dues tracker (#206)", () => {
+		const { sections } = buildOfficerHome(["treasurer"]);
+		expect(sections.map((s) => s.position)).toEqual(["treasurer"]);
+		expect(sections[0]?.tasks.some((t) => t.to === "/admin/dues")).toBe(true);
 	});
 });
