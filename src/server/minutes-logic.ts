@@ -430,12 +430,14 @@ type DbOrTx =
 /**
  * Resolve or create a guest scoped to `clubId` (mirrors guests-logic).
  *
- * `newGuestId` (optional, #176 slice 2) lets a caller supply the primary key for
- * the NEW guest row so an offline create can be replayed idempotently: the insert
- * uses that id with `onConflictDoNothing`, and a conflict (row already created by
- * a prior replay) returns the same id instead of throwing. It is threaded from
- * `addGuestPresent` only — it is deliberately kept OUT of the shared `input` so a
- * caller's own row id (e.g. a Table Topics speaker's id) can never leak into the
+ * `newGuestId` (optional, #176 slices 2 + 5) lets a caller supply the primary key
+ * for the NEW guest row so an offline create can be replayed idempotently: the
+ * insert uses that id with `onConflictDoNothing`, and a conflict (row already
+ * created by a prior replay) returns the same id instead of throwing. It is passed
+ * as an EXPLICIT 4th arg by every create that mints a guest — `addGuestPresent`
+ * (from its `input.id`), and `addTableTopicsSpeaker` / `setAward` (from their
+ * `input.newGuestId`) — and is deliberately kept OUT of the shared `input` so a
+ * caller's own row id (e.g. a Table Topics speaker's `id`) can never leak into the
  * guest's id.
  */
 async function resolveGuestId(
@@ -557,12 +559,18 @@ export async function removeGuestPresent(input: {
  * `table_topics_speakers` row — the stable target that later `remove`/`move` ops
  * reference. The insert uses it with `onConflictDoNothing`, so replaying the same
  * offline create is a no-op that still returns the same id (no duplicate row, no
- * throw). Note: the id names the SPEAKER row only; a new inline guest is NOT given
- * this id (the queue mints/creates guests as their own op via `addGuestPresent`).
+ * throw).
+ *
+ * `newGuestId` (optional, #176 slice 5) is the client-supplied primary key for an
+ * INLINE new guest (`newGuest` present) — DISTINCT from `id` (the speaker row).
+ * Threaded to `resolveGuestId` so a lost-ack replay reuses the same guest row
+ * (`onConflictDoNothing` on the guest PK) instead of minting an orphan guest.
+ * The online path never passes it, so it keeps the fresh-random-id behaviour.
  */
 export async function addTableTopicsSpeaker(input: {
 	meetingId: string;
 	id?: string;
+	newGuestId?: string;
 	memberId?: string | null;
 	guestId?: string | null;
 	newGuest?: NewGuestInput;
@@ -576,7 +584,7 @@ export async function addTableTopicsSpeaker(input: {
 			await requireMemberInMeetingClub(input.memberId, clubId);
 			memberId = input.memberId;
 		} else if (input.guestId || input.newGuest) {
-			guestId = await resolveGuestId(tx, clubId, input);
+			guestId = await resolveGuestId(tx, clubId, input, input.newGuestId);
 		} else {
 			throw new Error("Provide a member or guest speaker.");
 		}
@@ -654,10 +662,18 @@ export async function moveTableTopicsSpeaker(input: {
 	});
 }
 
-/** Set (upsert) an award winner (member or guest) for a category. */
+/**
+ * Set (upsert) an award winner (member or guest) for a category.
+ *
+ * `newGuestId` (optional, #176 slice 5) is the client-supplied primary key for an
+ * INLINE new guest (`newGuest` present). Threaded to `resolveGuestId` so a
+ * lost-ack offline replay reuses the same guest row instead of minting an orphan.
+ * The online path never passes it, so it keeps the fresh-random-id behaviour.
+ */
 export async function setAward(input: {
 	meetingId: string;
 	category: AwardCategory;
+	newGuestId?: string;
 	memberId?: string | null;
 	guestId?: string | null;
 	newGuest?: NewGuestInput;
@@ -670,7 +686,7 @@ export async function setAward(input: {
 			await requireMemberInMeetingClub(input.memberId, clubId);
 			memberId = input.memberId;
 		} else if (input.guestId || input.newGuest) {
-			guestId = await resolveGuestId(tx, clubId, input);
+			guestId = await resolveGuestId(tx, clubId, input, input.newGuestId);
 		} else {
 			throw new Error("Provide a member or guest for the award.");
 		}

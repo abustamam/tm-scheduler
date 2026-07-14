@@ -142,6 +142,31 @@ describe("dispatchOp", () => {
 		});
 	});
 
+	it("forwards newGuestId on a new-guest addTableTopics (idempotent replay, #176 slice 5)", async () => {
+		const fns = fakeFns();
+		const op: MinutesOp = {
+			type: "addTableTopics",
+			...meta(),
+			id: "tt-guest",
+			name: "Newbie",
+			isGuest: true,
+			newGuest: { name: "Newbie" },
+			newGuestId: "guest-pk",
+		};
+		await dispatchOp(op, MEETING, fns);
+		expect(fns.addTableTopics).toHaveBeenCalledWith({
+			data: {
+				meetingId: MEETING,
+				id: "tt-guest",
+				memberId: undefined,
+				guestId: undefined,
+				newGuest: { name: "Newbie" },
+				newGuestId: "guest-pk",
+				topic: undefined,
+			},
+		});
+	});
+
 	it("maps removeTableTopics to removeTableTopics with id", async () => {
 		const fns = fakeFns();
 		const op: MinutesOp = {
@@ -187,6 +212,30 @@ describe("dispatchOp", () => {
 				memberId: "m-alice",
 				guestId: undefined,
 				newGuest: undefined,
+			},
+		});
+	});
+
+	it("forwards newGuestId on a new-guest setAward (idempotent replay, #176 slice 5)", async () => {
+		const fns = fakeFns();
+		const op: MinutesOp = {
+			type: "setAward",
+			...meta(),
+			category: "best_table_topics",
+			name: "Guesty",
+			isGuest: true,
+			newGuest: { name: "Guesty" },
+			newGuestId: "guest-pk",
+		};
+		await dispatchOp(op, MEETING, fns);
+		expect(fns.setAward).toHaveBeenCalledWith({
+			data: {
+				meetingId: MEETING,
+				category: "best_table_topics",
+				memberId: undefined,
+				guestId: undefined,
+				newGuest: { name: "Guesty" },
+				newGuestId: "guest-pk",
 			},
 		});
 	});

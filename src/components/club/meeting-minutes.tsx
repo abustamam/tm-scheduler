@@ -1,4 +1,13 @@
-import { ChevronDown, ChevronUp, Download, X } from "lucide-react";
+import {
+	AlertTriangle,
+	CheckCircle2,
+	ChevronDown,
+	ChevronUp,
+	Download,
+	Loader2,
+	WifiOff,
+	X,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { SendMinutesDialog } from "#/components/minutes/send-minutes-dialog";
@@ -120,6 +129,9 @@ export function MeetingMinutes({
 	// queued ops are replayed to the server in order (see `runDrain` below).
 	const [draining, setDraining] = useState(false);
 	const [syncError, setSyncError] = useState<string | null>(null);
+	// Transient "All changes synced" confirmation shown briefly after a drain
+	// fully lands, then auto-dismissed (the effect below clears it on a timer).
+	const [justSynced, setJustSynced] = useState(false);
 	// `draining` state lags a tick, so the drain effect can re-fire before it
 	// flips — a synchronous ref blocks a second concurrent drain.
 	const drainingRef = useRef(false);
@@ -168,6 +180,7 @@ export function MeetingMinutes({
 			drainingRef.current = true;
 			setDraining(true);
 			setSyncError(null);
+			setJustSynced(false);
 			// Map the component's server-fn imports to the by-op names dispatchOp uses.
 			const fns: MinutesServerFns = {
 				setAttendance,
@@ -196,6 +209,8 @@ export function MeetingMinutes({
 					// Everything replayed — re-fetch authoritative state (the online
 					// snapshot-save effect then refreshes the offline snapshot).
 					await onMutatedRef.current();
+					// Flash a brief "All changes synced" confirmation (auto-dismissed).
+					setJustSynced(true);
 				}
 			} catch (err) {
 				setSyncError(errMessage(err));
@@ -221,6 +236,15 @@ export function MeetingMinutes({
 	useEffect(() => {
 		if (!online) setSyncError(null);
 	}, [online]);
+
+	// Auto-dismiss the "All changes synced" confirmation a few seconds after it
+	// appears. The timer is cleared on unmount (or if it re-fires) so it never
+	// fires against a gone component.
+	useEffect(() => {
+		if (!justSynced) return;
+		const t = setTimeout(() => setJustSynced(false), 4000);
+		return () => clearTimeout(t);
+	}, [justSynced]);
 
 	// ONLINE: run the server-fn and re-fetch (unchanged). OFFLINE: enqueue the op
 	// and reflect it optimistically; never hit the server or onMutated.
@@ -301,31 +325,15 @@ export function MeetingMinutes({
 				</div>
 			</CardHeader>
 			<CardContent className="space-y-8">
-				{pendingCount > 0 ? (
-					<p className="text-muted-foreground text-sm">
-						{pendingCount} change{pendingCount === 1 ? "" : "s"} pending locally
-						— they'll sync when you're back online.
-					</p>
-				) : null}
-				{draining ? (
-					<p className="text-muted-foreground text-sm">
-						Syncing {queue.length} change{queue.length === 1 ? "" : "s"}…
-					</p>
-				) : null}
-				{syncError && !draining ? (
-					<p className="text-muted-foreground text-sm">
-						Couldn't sync changes —{" "}
-						<Button
-							type="button"
-							variant="link"
-							size="sm"
-							className="h-auto p-0 align-baseline"
-							onClick={() => runDrain(queue)}
-						>
-							Retry
-						</Button>
-					</p>
-				) : null}
+				<SyncStatus
+					online={online}
+					pendingCount={pendingCount}
+					queueCount={queue.length}
+					draining={draining}
+					syncError={syncError}
+					justSynced={justSynced}
+					onRetry={() => runDrain(queue)}
+				/>
 				<AttendanceSection
 					minutes={displayMinutes}
 					canEdit={canEdit}
@@ -397,6 +405,11 @@ export function MeetingMinutes({
 									memberId: payload.memberId,
 									guestId: payload.guestId,
 									newGuest: payload.newGuest,
+									// Inline new guest: mint its client PK so a drain replay is
+									// idempotent (no orphan guest). #176 slice 5.
+									newGuestId: payload.newGuest
+										? crypto.randomUUID()
+										: undefined,
 									topic: payload.topic,
 								};
 							},
@@ -442,6 +455,11 @@ export function MeetingMinutes({
 									memberId: payload.memberId,
 									guestId: payload.guestId,
 									newGuest: payload.newGuest,
+									// Inline new guest: mint its client PK so a drain replay is
+									// idempotent (no orphan guest). #176 slice 5.
+									newGuestId: payload.newGuest
+										? crypto.randomUUID()
+										: undefined,
 								};
 							},
 						)
@@ -458,6 +476,85 @@ export function MeetingMinutes({
 			</CardContent>
 		</Card>
 	);
+}
+
+// ---------------------------------------------------------------------------
+// Offline sync status (#176 slice 5)
+// ---------------------------------------------------------------------------
+
+/**
+ * One cohesive indicator for the offline write-queue's sync lifecycle. Purely
+ * presentational — it reads the component's `online`/queue/`draining`/`syncError`
+ * state and never drives a mutation. States, in priority order:
+ *   • syncing  → a spinner + "Syncing N change(s)…"      (a drain is in flight)
+ *   • error    → a warning + "Couldn't sync changes" + Retry
+ *   • offline  → WifiOff + "N change(s) saved on this device…"
+ *   • synced   → a brief "All changes synced" confirmation (auto-dismissed)
+ * Online with an empty queue and none of the above → renders nothing (the steady
+ * state is invisible).
+ */
+function SyncStatus({
+	online,
+	pendingCount,
+	queueCount,
+	draining,
+	syncError,
+	justSynced,
+	onRetry,
+}: {
+	online: boolean;
+	pendingCount: number;
+	queueCount: number;
+	draining: boolean;
+	syncError: string | null;
+	justSynced: boolean;
+	onRetry: () => void;
+}) {
+	if (draining) {
+		return (
+			<p className="flex items-center gap-2 text-muted-foreground text-sm">
+				<Loader2 className="size-4 shrink-0 animate-spin" aria-hidden />
+				Syncing {queueCount} change{queueCount === 1 ? "" : "s"}…
+			</p>
+		);
+	}
+	if (syncError) {
+		return (
+			<p className="flex items-center gap-2 text-warning-foreground text-sm">
+				<AlertTriangle className="size-4 shrink-0" aria-hidden />
+				<span>
+					Couldn't sync changes —{" "}
+					<Button
+						type="button"
+						variant="link"
+						size="sm"
+						className="h-auto p-0 align-baseline text-warning-foreground"
+						onClick={onRetry}
+					>
+						Retry
+					</Button>
+				</span>
+			</p>
+		);
+	}
+	if (!online && pendingCount > 0) {
+		return (
+			<p className="flex items-center gap-2 text-muted-foreground text-sm">
+				<WifiOff className="size-4 shrink-0" aria-hidden />
+				{pendingCount} change{pendingCount === 1 ? "" : "s"} saved on this
+				device — will sync when you're back online.
+			</p>
+		);
+	}
+	if (justSynced) {
+		return (
+			<p className="flex items-center gap-2 text-muted-foreground text-sm">
+				<CheckCircle2 className="size-4 shrink-0 text-success" aria-hidden />
+				All changes synced.
+			</p>
+		);
+	}
+	return null;
 }
 
 // ---------------------------------------------------------------------------

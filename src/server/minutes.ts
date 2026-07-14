@@ -136,6 +136,10 @@ const addSpeakerSchema = z
 		// Optional client-supplied id for the new Table Topics speaker row (#176
 		// slice 2) — the stable target for later remove/move ops; replays no-op.
 		id: uuid.optional(),
+		// Optional client-supplied id for an INLINE new guest (#176 slice 5) —
+		// distinct from `id` (the speaker-row id). Threads the guest PK so an
+		// offline new-guest speaker replays idempotently (no orphan guest).
+		newGuestId: uuid.optional(),
 		memberId: uuid.optional(),
 		guestId: uuid.optional(),
 		newGuest: newGuestSchema.optional(),
@@ -187,6 +191,9 @@ const setAwardSchema = z
 	.object({
 		meetingId: uuid,
 		category: awardCategory,
+		// Optional client-supplied id for an INLINE new guest (#176 slice 5) — makes
+		// an offline new-guest award replay idempotently (no orphan guest).
+		newGuestId: uuid.optional(),
 		memberId: uuid.optional(),
 		guestId: uuid.optional(),
 		newGuest: newGuestSchema.optional(),
