@@ -79,8 +79,9 @@ export interface MeetingAgendaProps {
 	unavailableMemberIds: string[];
 	/** Named unavailable members for the manager "not available" section. */
 	unavailableMembers?: { id: string; name: string }[];
-	/** Role ids managed by the speaker pair buttons — hidden from the remove-role
-	 *  control. Only consulted for managers; defaults to none. */
+	/** Role ids managed by the speaker pair buttons — the remove-role control
+	 *  renders disabled (with the reason) on their non-speaker cards (#225). Only
+	 *  consulted for managers; defaults to none. */
 	pairedRoleIds?: Set<string>;
 	/** Existing club guests for the admin "assign a guest" picker (#151). Admin
 	 *  surface only (gated on `viewer.canManage`); empty on the public view. */
@@ -303,6 +304,18 @@ export function MeetingAgenda({
 									slot.assigneeId === currentMemberId;
 								const busy = busySlotId === slot.id;
 								const isOpen = slot.status === "open";
+								// Remove-role (#225): enabled only on an open, unassigned,
+								// non-paired slot (matching the server's rules). Everywhere
+								// else a manager sees the control disabled with the reason —
+								// never silently missing — except on speaker cards, where
+								// "− Remove speaker" below is the real affordance. Pairing
+								// wins over "assigned": releasing wouldn't make a paired
+								// slot removable.
+								const paired = pairedRoleIds.has(slot.roleDefinitionId);
+								const canRemoveRole = isOpen && !slot.assigneeId && !paired;
+								const removeRoleDisabledReason = paired
+									? "Remove the paired speaker role instead"
+									: "Unassign first";
 								return (
 									<li
 										key={slot.id}
@@ -407,19 +420,28 @@ export function MeetingAgenda({
 													</Button>
 												) : null}
 
-												{viewer.canManage &&
-												isOpen &&
-												!slot.assigneeId &&
-												!pairedRoleIds.has(slot.roleDefinitionId) ? (
-													<Button
-														size="sm"
-														variant="ghost"
-														aria-label={`Remove ${slot.roleName}`}
-														disabled={busy}
-														onClick={() => doRemoveRole(slot)}
-													>
-														<Trash2 className="size-4" />
-													</Button>
+												{viewer.canManage && !slot.isSpeakerRole ? (
+													canRemoveRole ? (
+														<Button
+															size="sm"
+															variant="ghost"
+															aria-label={`Remove ${slot.roleName}`}
+															disabled={busy}
+															onClick={() => doRemoveRole(slot)}
+														>
+															<Trash2 className="size-4" />
+														</Button>
+													) : (
+														<Button
+															size="sm"
+															variant="ghost"
+															aria-label={`Remove ${slot.roleName} — unavailable: ${removeRoleDisabledReason}`}
+															disabled
+															title={removeRoleDisabledReason}
+														>
+															<Trash2 className="size-4" />
+														</Button>
+													)
 												) : null}
 
 												{isOpen ? (

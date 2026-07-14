@@ -55,6 +55,7 @@ function slot(over: Partial<AgendaSlot>): AgendaSlot {
 function renderAgenda(
 	viewer: ReturnType<typeof sessionViewer>,
 	slots: AgendaSlot[],
+	pairedRoleIds?: Set<string>,
 ) {
 	return render(
 		<MeetingAgenda
@@ -64,6 +65,7 @@ function renderAgenda(
 			roster={[]}
 			roleRecency={{}}
 			unavailableMemberIds={[]}
+			pairedRoleIds={pairedRoleIds}
 		/>,
 	);
 }
@@ -166,5 +168,82 @@ describe("MeetingAgenda capability gating", () => {
 		]);
 		expect(screen.getByRole("button", { name: /Assign/ })).toBeTruthy();
 		expect(screen.getByRole("button", { name: "+ Add speaker" })).toBeTruthy();
+	});
+});
+
+describe("MeetingAgenda remove-role control (#225)", () => {
+	afterEach(() => cleanup());
+	const manager = () =>
+		sessionViewer({ currentMemberId: "me", canManage: true });
+
+	it("keeps the enabled trash on an open, unassigned, non-paired slot", () => {
+		renderAgenda(manager(), [slot({ status: "open" })]);
+		const trash = screen.getByRole("button", {
+			name: "Remove Timer",
+		}) as HTMLButtonElement;
+		expect(trash.disabled).toBe(false);
+	});
+
+	it("shows a disabled trash with 'Unassign first' on an assigned slot", () => {
+		renderAgenda(manager(), [
+			slot({ status: "claimed", assigneeId: "other", assigneeName: "Other" }),
+		]);
+		const trash = screen.getByRole("button", {
+			name: "Remove Timer — unavailable: Unassign first",
+		}) as HTMLButtonElement;
+		expect(trash.disabled).toBe(true);
+		// Pointer users get the same reason as a tooltip.
+		expect(trash.title).toBe("Unassign first");
+	});
+
+	it("shows a disabled trash with the pairing reason on a paired evaluator slot", () => {
+		renderAgenda(
+			manager(),
+			[
+				slot({
+					id: "ev1",
+					roleName: "Evaluator",
+					roleDefinitionId: "rdE",
+					category: "evaluator",
+					status: "open",
+				}),
+			],
+			new Set(["rdE"]),
+		);
+		const trash = screen.getByRole("button", {
+			name: "Remove Evaluator — unavailable: Remove the paired speaker role instead",
+		}) as HTMLButtonElement;
+		expect(trash.disabled).toBe(true);
+		expect(trash.title).toBe("Remove the paired speaker role instead");
+	});
+
+	it("omits the trash on speaker cards — '− Remove speaker' is the affordance", () => {
+		renderAgenda(
+			manager(),
+			[
+				slot({
+					id: "sp1",
+					roleName: "Speaker",
+					roleDefinitionId: "rdS",
+					category: "speaker",
+					isSpeakerRole: true,
+					status: "open",
+				}),
+			],
+			new Set(["rdS"]),
+		);
+		expect(
+			screen.queryByRole("button", { name: /^Remove Speaker/ }),
+		).toBeNull();
+		expect(
+			screen.getByRole("button", { name: "− Remove speaker" }),
+		).toBeTruthy();
+	});
+
+	it("renders no trash at all for a non-manager", () => {
+		renderAgenda(sessionViewer({ currentMemberId: "me", canManage: false }), [
+			slot({ status: "open" }),
+		]);
+		expect(screen.queryByRole("button", { name: /^Remove Timer/ })).toBeNull();
 	});
 });

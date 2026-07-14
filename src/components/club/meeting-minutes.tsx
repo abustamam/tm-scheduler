@@ -61,6 +61,7 @@ export function MeetingMinutes({
 	meetingId,
 	minutes,
 	program,
+	meetingPast,
 	canEdit,
 	clubGuests,
 	onMutated,
@@ -69,6 +70,13 @@ export function MeetingMinutes({
 	meetingId: string;
 	minutes: MinutesData;
 	program: MinutesResult["program"];
+	/**
+	 * True once the meeting is completed or its date has passed. The Program
+	 * section then renders even with zero assignees (the record shows, even if
+	 * empty); while false, an all-placeholder Program on a future meeting is
+	 * hidden — it would only duplicate the role cards above (#225).
+	 */
+	meetingPast: boolean;
 	canEdit: boolean;
 	clubGuests: { id: string; name: string }[];
 	onMutated: () => void | Promise<void>;
@@ -189,7 +197,7 @@ export function MeetingMinutes({
 					}
 				/>
 
-				<ProgramSection program={program} />
+				<ProgramSection program={program} meetingPast={meetingPast} />
 			</CardContent>
 		</Card>
 	);
@@ -633,8 +641,18 @@ function AwardsSection({
 // Program (read-only)
 // ---------------------------------------------------------------------------
 
-function ProgramSection({ program }: { program: MinutesResult["program"] }) {
-	if (program.length === 0) return null;
+function ProgramSection({
+	program,
+	meetingPast,
+}: {
+	program: MinutesResult["program"];
+	meetingPast: boolean;
+}) {
+	// #225: only render once the Program has something to say — someone is on
+	// the program, or the meeting is past/completed (the record shows even if
+	// empty). A future meeting's all-"—" list duplicates the role cards above.
+	const hasAssignee = program.some((p) => p.assigneeName !== null);
+	if (program.length === 0 || (!hasAssignee && !meetingPast)) return null;
 	return (
 		<section className="space-y-2">
 			<h3 className="font-semibold text-sm">Program</h3>
