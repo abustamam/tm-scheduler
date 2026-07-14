@@ -24,9 +24,11 @@ import { db } from "#/db";
 import { clubs, meetings } from "#/db/schema";
 import { formatMeetingDate } from "#/lib/format";
 import {
+	type AttendanceStatus,
 	type AwardCategory,
 	loadMinutes,
 	loadMinutesProgram,
+	type MinutesData,
 } from "./minutes-logic";
 
 const AWARD_LABELS: Record<AwardCategory, string> = {
@@ -70,10 +72,42 @@ function names(list: { name: string }[]): string {
 }
 
 /**
+ * Pure view-model for the PDF's Attendance section — the single source of the
+ * counts line and the per-status name rows. Unmarked members (no saved
+ * attendance record, `status: null`, #218) are NEVER listed as absent: they
+ * get their own "Unmarked" row and count, included only when at least one
+ * member is unmarked so fully-recorded minutes render unchanged.
+ */
+export function buildAttendanceSection(minutes: {
+	members: Pick<MinutesData["members"][number], "name" | "status">[];
+	guests: { name: string }[];
+	counts: MinutesData["counts"];
+}): { countsLine: string; rows: { label: string; names: string }[] } {
+	const byStatus = (status: AttendanceStatus | null) =>
+		minutes.members.filter((m) => m.status === status);
+	const { present, absent, excused, unmarked, guests } = minutes.counts;
+	const countsLine =
+		`Present: ${present}   Absent: ${absent}   Excused: ${excused}   ` +
+		(unmarked > 0 ? `Unmarked: ${unmarked}   ` : "") +
+		`Guests: ${guests}`;
+	const rows = [
+		{ label: "Present", names: names(byStatus("present")) },
+		{ label: "Excused", names: names(byStatus("excused")) },
+		{ label: "Absent", names: names(byStatus("absent")) },
+		...(unmarked > 0
+			? [{ label: "Unmarked", names: names(byStatus(null)) }]
+			: []),
+		{ label: "Guests", names: names(minutes.guests) },
+	];
+	return { countsLine, rows };
+}
+
+/**
  * Build the minutes PDF for a meeting and return it as a byte buffer. Contains:
  * a header (club, date, theme, Word of the Day), attendance (present/absent/
- * excused counts + names + the guest list), Table Topics speakers + topics,
- * awards, and a compact program section (roles + speeches, summary-level).
+ * excused/unmarked counts + names + the guest list), Table Topics speakers +
+ * topics, awards, and a compact program section (roles + speeches,
+ * summary-level).
  */
 export async function renderMinutesPdf(meetingId: string): Promise<Uint8Array> {
 	const [meeting] = await db
@@ -99,9 +133,7 @@ export async function renderMinutesPdf(meetingId: string): Promise<Uint8Array> {
 		loadMinutesProgram(meetingId),
 	]);
 
-	const present = minutes.members.filter((m) => m.status === "present");
-	const excused = minutes.members.filter((m) => m.status === "excused");
-	const absent = minutes.members.filter((m) => m.status === "absent");
+	const attendance = buildAttendanceSection(minutes);
 
 	const doc = h(
 		Document,
@@ -135,35 +167,14 @@ export async function renderMinutesPdf(meetingId: string): Promise<Uint8Array> {
 				View,
 				{ style: styles.section },
 				h(Text, { style: styles.sectionTitle }, "Attendance"),
-				h(
-					Text,
-					{ style: styles.counts },
-					`Present: ${minutes.counts.present}   Absent: ${minutes.counts.absent}   ` +
-						`Excused: ${minutes.counts.excused}   Guests: ${minutes.counts.guests}`,
-				),
-				h(
-					View,
-					{ style: styles.row },
-					h(Text, { style: styles.rowLabel }, "Present"),
-					h(Text, { style: styles.rowValue }, names(present)),
-				),
-				h(
-					View,
-					{ style: styles.row },
-					h(Text, { style: styles.rowLabel }, "Excused"),
-					h(Text, { style: styles.rowValue }, names(excused)),
-				),
-				h(
-					View,
-					{ style: styles.row },
-					h(Text, { style: styles.rowLabel }, "Absent"),
-					h(Text, { style: styles.rowValue }, names(absent)),
-				),
-				h(
-					View,
-					{ style: styles.row },
-					h(Text, { style: styles.rowLabel }, "Guests"),
-					h(Text, { style: styles.rowValue }, names(minutes.guests)),
+				h(Text, { style: styles.counts }, attendance.countsLine),
+				attendance.rows.map((r) =>
+					h(
+						View,
+						{ key: r.label, style: styles.row },
+						h(Text, { style: styles.rowLabel }, r.label),
+						h(Text, { style: styles.rowValue }, r.names),
+					),
 				),
 			),
 			// Table Topics

@@ -44,8 +44,16 @@ export type NewGuestInput = {
 export interface MinutesMemberRow {
 	memberId: string;
 	name: string;
-	status: AttendanceStatus;
-	/** Holds a role slot on this meeting — drives the `present` pre-fill. */
+	/**
+	 * The saved attendance status, or `null` when nobody has recorded one yet —
+	 * "unmarked" (#218). Unmarked is the absence of a record, NOT a synonym for
+	 * absent: consumers (chips, PDF, exports) must treat it as "not recorded".
+	 */
+	status: AttendanceStatus | null;
+	/**
+	 * Holds a role slot on this meeting. Informational only — it does NOT imply
+	 * presence and never pre-fills attendance (#218).
+	 */
 	hasRole: boolean;
 }
 
@@ -105,7 +113,14 @@ export interface MinutesData {
 	 * recorded" and the UI falls back to the full roster.
 	 */
 	awardEligible: Record<AwardCategory, AwardEligible>;
-	counts: { present: number; absent: number; excused: number; guests: number };
+	counts: {
+		present: number;
+		absent: number;
+		excused: number;
+		/** Members with no saved attendance record (#218) — not recorded, not absent. */
+		unmarked: number;
+		guests: number;
+	};
 }
 
 /** Resolve the club that owns a meeting (throws when the meeting is gone). */
@@ -133,12 +148,12 @@ export async function getMeetingStatus(
 }
 
 /**
- * Load a meeting's minutes: the active-member roster each with a presence status
- * (default `absent`, pre-filled `present` for members holding a role slot, and
- * overridden by any saved attendance row), the present guests (explicitly added
- * or pre-listed from a role slot), the ordered Table Topics speakers, and the
- * three awards. Members who went inactive after being recorded still appear
- * (the saved row is a snapshot).
+ * Load a meeting's minutes: the active-member roster each with a presence
+ * status (the saved attendance row, or `null` — "unmarked" — when none exists;
+ * holding a role slot never infers presence, #218), the present guests
+ * (explicitly added or pre-listed from a role slot), the ordered Table Topics
+ * speakers, and the three awards. Members who went inactive after being
+ * recorded still appear (the saved row is a snapshot).
  */
 export async function loadMinutes(meetingId: string): Promise<MinutesData> {
 	const clubId = await getMeetingClubId(meetingId);
@@ -169,9 +184,10 @@ export async function loadMinutes(meetingId: string): Promise<MinutesData> {
 		savedMemberRows.map((r) => [r.memberId as string, r]),
 	);
 
-	// Role-slot holders on this meeting (member + guest), for the `present`
-	// pre-fill, the pre-listed guests, and the award eligibility sets (via the
-	// role's category — speaker/evaluator).
+	// Role-slot holders on this meeting (member + guest), for the informational
+	// `hasRole` flag, the pre-listed guests, and the award eligibility sets (via
+	// the role's category — speaker/evaluator). Holding a slot never sets
+	// attendance (#218).
 	const slotRows = await db
 		.select({
 			memberId: roleSlots.assignedMemberId,
@@ -198,12 +214,12 @@ export async function loadMinutes(meetingId: string): Promise<MinutesData> {
 	const memberRows = new Map<string, MinutesMemberRow>();
 	for (const m of activeMembers) {
 		const saved = savedByMember.get(m.id);
-		const hasRole = roleMemberIds.has(m.id);
 		memberRows.set(m.id, {
 			memberId: m.id,
 			name: m.name,
-			status: saved?.status ?? (hasRole ? "present" : "absent"),
-			hasRole,
+			// No saved record ⇒ unmarked (null). Never inferred from a role slot (#218).
+			status: saved?.status ?? null,
+			hasRole: roleMemberIds.has(m.id),
 		});
 	}
 	for (const r of savedMemberRows) {
@@ -342,10 +358,12 @@ export async function loadMinutes(meetingId: string): Promise<MinutesData> {
 	let present = 0;
 	let absent = 0;
 	let excused = 0;
+	let unmarked = 0;
 	for (const m of memberList) {
 		if (m.status === "present") present++;
 		else if (m.status === "excused") excused++;
-		else absent++;
+		else if (m.status === "absent") absent++;
+		else unmarked++;
 	}
 
 	return {
@@ -356,7 +374,7 @@ export async function loadMinutes(meetingId: string): Promise<MinutesData> {
 		tableTopicsSpeakers: ttList,
 		awards: awardList,
 		awardEligible,
-		counts: { present, absent, excused, guests: guestList.length },
+		counts: { present, absent, excused, unmarked, guests: guestList.length },
 	};
 }
 
