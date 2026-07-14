@@ -94,7 +94,7 @@ function RolesManager() {
 		<PageContainer className="space-y-6">
 			<div className="flex flex-wrap items-start justify-between gap-3">
 				<div>
-					<h1 className="font-display text-[30px] font-semibold tracking-[-0.02em]">
+					<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
 						Meeting roles
 					</h1>
 					<p className="text-sm text-muted-foreground">

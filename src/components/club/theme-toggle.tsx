@@ -41,9 +41,9 @@ export function ThemeToggle({ compact = false }: { compact?: boolean }) {
 				className="flex size-[30px] shrink-0 items-center justify-center rounded-[9px] border border-[var(--line)] bg-[var(--surface-strong)] text-[var(--sea-ink)] transition-colors hover:bg-[var(--foam)]"
 			>
 				{isDark ? (
-					<Sun className="size-[15px]" aria-hidden />
+					<Sun className="size-4" aria-hidden />
 				) : (
-					<Moon className="size-[15px]" aria-hidden />
+					<Moon className="size-4" aria-hidden />
 				)}
 			</button>
 		);
@@ -54,12 +54,12 @@ export function ThemeToggle({ compact = false }: { compact?: boolean }) {
 			type="button"
 			onClick={toggle}
 			title="Toggle theme"
-			className="flex items-center gap-[7px] rounded-[10px] border border-[var(--line)] bg-[var(--surface-strong)] px-[13px] py-2 text-[12.5px] font-semibold text-[var(--sea-ink)] transition-colors hover:bg-[var(--foam)]"
+			className="flex items-center gap-2 rounded-lg border border-[var(--line)] bg-[var(--surface-strong)] px-3 py-2 text-xs font-semibold text-[var(--sea-ink)] transition-colors hover:bg-[var(--foam)]"
 		>
 			{isDark ? (
-				<Sun className="size-[15px]" aria-hidden />
+				<Sun className="size-4" aria-hidden />
 			) : (
-				<Moon className="size-[15px]" aria-hidden />
+				<Moon className="size-4" aria-hidden />
 			)}
 			{/* Render the label only after mount so server and client agree. */}
 			<span suppressHydrationWarning>

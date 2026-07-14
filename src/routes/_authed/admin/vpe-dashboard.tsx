@@ -66,32 +66,32 @@ function VpeDashboard() {
 		<PageContainer className="space-y-6">
 			{/* Header */}
 			<div>
-				<h1 className="font-display text-[30px] font-semibold tracking-[-0.02em]">
+				<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
 					VP Education
 				</h1>
-				<p className="mt-[5px] text-sm text-[var(--sea-ink-soft)]">
+				<p className="mt-1 text-sm text-[var(--sea-ink-soft)]">
 					Speaker rotation and role fairness at a glance — who's up next to
 					speak and who's overdue for a role.
 				</p>
 			</div>
 
 			{/* Stat cards */}
-			<div className="grid grid-cols-[repeat(auto-fit,minmax(168px,1fr))] gap-[13px]">
+			<div className="grid grid-cols-[repeat(auto-fit,minmax(168px,1fr))] gap-3">
 				{stats.map((s) => (
 					<div
 						key={s.label}
 						className={cn(
-							"rounded-[14px] border bg-[var(--surface-strong)] px-4 py-[15px] shadow-[0_1px_0_var(--inset-glint)_inset,0_8px_20px_rgba(23,58,64,.05)]",
+							"rounded-xl border bg-[var(--surface-strong)] px-4 py-4 shadow-[0_1px_0_var(--inset-glint)_inset,0_8px_20px_rgba(23,58,64,.05)]",
 							s.amber ? "border-[var(--warning)]" : "border-[var(--line)]",
 						)}
 					>
-						<div className="text-[11.5px] font-bold tracking-[0.04em] text-[var(--sea-ink-soft)] uppercase">
+						<div className="text-xs font-bold tracking-[0.04em] text-[var(--sea-ink-soft)] uppercase">
 							{s.label}
 						</div>
-						<div className="mt-[7px] flex items-baseline gap-2">
+						<div className="mt-2 flex items-baseline gap-2">
 							<span
 								className={cn(
-									"font-display text-[30px] leading-none font-semibold",
+									"font-display text-3xl leading-none font-semibold",
 									s.amber && "text-[var(--warning-strong)]",
 								)}
 							>
@@ -146,8 +146,8 @@ function Section({
 	return (
 		<div>
 			<div className="mb-2.5">
-				<h2 className="text-[15px] font-bold tracking-[-0.01em]">{title}</h2>
-				<p className="text-[12.5px] text-[var(--sea-ink-soft)]">{subtitle}</p>
+				<h2 className="text-sm font-bold tracking-[-0.01em]">{title}</h2>
+				<p className="text-xs text-[var(--sea-ink-soft)]">{subtitle}</p>
 			</div>
 			<div className="overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] shadow-[0_1px_0_var(--inset-glint)_inset,0_14px_30px_rgba(23,58,64,.06)]">
 				{children}
@@ -175,7 +175,7 @@ function MemberIdentity({
 	joinedAt: Date | string | null;
 }) {
 	return (
-		<div className="flex min-w-0 items-center gap-[11px]">
+		<div className="flex min-w-0 items-center gap-3">
 			<MemberAvatar
 				tone={toneFromSeed(memberId)}
 				initials={initialsOf(name)}
@@ -183,7 +183,7 @@ function MemberIdentity({
 			/>
 			<div className="min-w-0 leading-[1.25]">
 				<div className="truncate text-sm font-bold">{name}</div>
-				<div className="text-[11.5px] text-[var(--sea-ink-soft)]">
+				<div className="text-xs text-[var(--sea-ink-soft)]">
 					{joinedAt ? formatTenure(joinedAt) : "Tenure unknown"}
 				</div>
 			</div>
@@ -192,7 +192,7 @@ function MemberIdentity({
 }
 
 const ROW_CLASS =
-	"group grid cursor-pointer items-center gap-3.5 border-b border-[var(--line)] px-5 py-[13px] transition-colors last:border-b-0 hover:bg-[var(--foam)]";
+	"group grid cursor-pointer items-center gap-3.5 border-b border-[var(--line)] px-5 py-3 transition-colors last:border-b-0 hover:bg-[var(--foam)]";
 
 function OverdueRow({ member }: { member: OverdueMemberRow }) {
 	const wait =
@@ -216,7 +216,7 @@ function OverdueRow({ member }: { member: OverdueMemberRow }) {
 			/>
 			<div className="text-sm">
 				<span className="font-bold text-[var(--warning-strong)]">{wait}</span>
-				<div className="text-[11px] text-[var(--sea-ink-soft)]">
+				<div className="text-xs text-[var(--sea-ink-soft)]">
 					{member.lastAnyRoleAt
 						? `last: ${formatShortDate(member.lastAnyRoleAt)}`
 						: "no role history"}
@@ -254,7 +254,7 @@ function RotationRow({ row, rank }: { row: SpeakerRotationRow; rank: number }) {
 						<span className="font-bold text-[var(--sea-ink)]">
 							{formatShortDate(row.lastSpokenAt)}
 						</span>
-						<div className="text-[11px] text-[var(--sea-ink-soft)]">
+						<div className="text-xs text-[var(--sea-ink-soft)]">
 							{row.timesSpoken} time{row.timesSpoken === 1 ? "" : "s"}
 						</div>
 					</>
@@ -274,8 +274,8 @@ function RotationRow({ row, rank }: { row: SpeakerRotationRow; rank: number }) {
 
 function Chevron() {
 	return (
-		<div className="justify-self-end text-[var(--sea-ink-soft)] opacity-45 transition-all group-hover:translate-x-[3px] group-hover:opacity-100">
-			<ChevronRight className="size-[17px]" aria-hidden />
+		<div className="justify-self-end text-[var(--sea-ink-soft)] opacity-45 transition-all group-hover:translate-x-0.5 group-hover:opacity-100">
+			<ChevronRight className="size-4" aria-hidden />
 		</div>
 	);
 }

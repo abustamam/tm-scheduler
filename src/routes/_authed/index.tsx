@@ -153,16 +153,16 @@ function Roster() {
 	return (
 		<PageContainer>
 			{/* Header */}
-			<div className="mb-[22px] flex flex-wrap items-end gap-[18px]">
+			<div className="mb-5 flex flex-wrap items-end gap-5">
 				<div className="min-w-[240px] flex-1">
-					<h1 className="font-display text-[30px] font-semibold tracking-[-0.02em]">
+					<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
 						Club roster
 					</h1>
-					<p className="mt-[5px] text-sm text-[var(--sea-ink-soft)]">
+					<p className="mt-1 text-sm text-[var(--sea-ink-soft)]">
 						Every member of your club at a glance · Spring 2026 term
 					</p>
 				</div>
-				<div className="flex gap-[9px]">
+				<div className="flex gap-2">
 					<Button variant="outline" size="sm">
 						Export CSV
 					</Button>
@@ -189,7 +189,7 @@ function Roster() {
 			</div>
 
 			{/* Stat cards */}
-			<div className="mb-6 grid grid-cols-[repeat(auto-fit,minmax(168px,1fr))] gap-[13px]">
+			<div className="mb-6 grid grid-cols-[repeat(auto-fit,minmax(168px,1fr))] gap-3">
 				{stats.map((s) => (
 					<StatCard key={s.label} stat={s} />
 				))}
@@ -212,7 +212,7 @@ function Roster() {
 			<div className="overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] shadow-[0_1px_0_var(--inset-glint)_inset,0_14px_30px_rgba(23,58,64,.06)]">
 				<div
 					className={cn(
-						"grid gap-3.5 border-b border-[var(--line)] bg-[var(--foam)] px-5 py-3 text-[10.5px] font-extrabold tracking-[0.08em] text-[var(--sea-ink-soft)] uppercase",
+						"grid gap-3.5 border-b border-[var(--line)] bg-[var(--foam)] px-5 py-3 text-xs font-extrabold tracking-[0.08em] text-[var(--sea-ink-soft)] uppercase",
 						TABLE_GRID,
 					)}
 				>
@@ -233,24 +233,24 @@ function Roster() {
 							to="/members/$id"
 							params={{ id: m.id }}
 							className={cn(
-								"group grid cursor-pointer items-center gap-3.5 border-b border-[var(--line)] px-5 py-[13px] transition-colors last:border-b-0 hover:bg-[var(--foam)]",
+								"group grid cursor-pointer items-center gap-3.5 border-b border-[var(--line)] px-5 py-3 transition-colors last:border-b-0 hover:bg-[var(--foam)]",
 								TABLE_GRID,
 								m.membershipStatus === "inactive" && "opacity-55",
 							)}
 						>
 							{/* Member */}
-							<div className="flex min-w-0 items-center gap-[11px]">
+							<div className="flex min-w-0 items-center gap-3">
 								<MemberAvatar tone={m.tone} initials={m.initials} size={38} />
 								<div className="min-w-0 leading-[1.25]">
 									<div className="flex items-center gap-2">
 										<span className="truncate text-sm font-bold">{m.name}</span>
 										{m.membershipStatus === "inactive" ? (
-											<span className="shrink-0 rounded-full border border-[var(--line)] bg-[var(--sand)] px-2 py-0.5 text-[10px] font-bold tracking-[0.03em] text-[var(--sea-ink-soft)] uppercase">
+											<span className="shrink-0 rounded-full border border-[var(--line)] bg-[var(--sand)] px-2 py-0.5 text-xs font-bold tracking-[0.03em] text-[var(--sea-ink-soft)] uppercase">
 												Inactive
 											</span>
 										) : null}
 									</div>
-									<div className="text-[11.5px] text-[var(--sea-ink-soft)]">
+									<div className="text-xs text-[var(--sea-ink-soft)]">
 										{m.tenure}
 									</div>
 								</div>
@@ -259,7 +259,7 @@ function Roster() {
 							{/* Speeches */}
 							<div className="hidden text-sm font-bold text-[var(--sea-ink)] sm:block">
 								{m.speeches}
-								<span className="text-[11px] font-medium text-[var(--sea-ink-soft)]">
+								<span className="text-xs font-medium text-[var(--sea-ink-soft)]">
 									{" "}
 									given
 								</span>
@@ -271,8 +271,8 @@ function Roster() {
 							</div>
 
 							{/* Chevron */}
-							<div className="justify-self-end text-[var(--sea-ink-soft)] opacity-45 transition-all group-hover:translate-x-[3px] group-hover:opacity-100">
-								<ChevronRight className="size-[17px]" aria-hidden />
+							<div className="justify-self-end text-[var(--sea-ink-soft)] opacity-45 transition-all group-hover:translate-x-0.5 group-hover:opacity-100">
+								<ChevronRight className="size-4" aria-hidden />
 							</div>
 						</Link>
 					))
@@ -392,12 +392,12 @@ function BulkImportDialog({
 						placeholder={
 							"Jane Doe, jane@club.org, 19165551234, President\nJohn Smith, john@club.org, 19165555678"
 						}
-						className="w-full rounded-[10px] border border-[var(--line)] bg-[var(--surface-strong)] px-3 py-2 font-mono text-[12.5px] text-[var(--sea-ink)] transition-colors hover:border-[var(--lagoon-deep)] focus:outline-none"
+						className="w-full rounded-lg border border-[var(--line)] bg-[var(--surface-strong)] px-3 py-2 font-mono text-xs text-[var(--sea-ink)] transition-colors hover:border-[var(--lagoon-deep)] focus:outline-none"
 					/>
 
 					{preview.length > 0 ? (
 						<>
-							<div className="text-[13px] text-[var(--sea-ink-soft)]">
+							<div className="text-sm text-[var(--sea-ink-soft)]">
 								<span className="font-bold text-[var(--sea-ink)]">
 									{importable.length}
 								</span>{" "}
@@ -413,9 +413,9 @@ function BulkImportDialog({
 								) : null}
 							</div>
 
-							<div className="max-h-[260px] overflow-auto rounded-[10px] border border-[var(--line)]">
-								<table className="w-full text-[12.5px]">
-									<thead className="sticky top-0 bg-[var(--foam)] text-[10.5px] font-extrabold tracking-[0.06em] text-[var(--sea-ink-soft)] uppercase">
+							<div className="max-h-[260px] overflow-auto rounded-lg border border-[var(--line)]">
+								<table className="w-full text-xs">
+									<thead className="sticky top-0 bg-[var(--foam)] text-xs font-extrabold tracking-[0.06em] text-[var(--sea-ink-soft)] uppercase">
 										<tr>
 											<th className="px-3 py-2 text-left">Name</th>
 											<th className="px-3 py-2 text-left">Email</th>
@@ -517,7 +517,7 @@ function MergeMembersDialog({
 	const canSubmit = Boolean(keeper && absorbed) && !sameMember && !busy;
 
 	const selectClass =
-		"h-9 w-full rounded-[10px] border border-[var(--line)] bg-[var(--surface-strong)] px-3 text-[13px] font-medium text-[var(--sea-ink)] transition-colors hover:border-[var(--lagoon-deep)]";
+		"h-9 w-full rounded-lg border border-[var(--line)] bg-[var(--surface-strong)] px-3 text-sm font-medium text-[var(--sea-ink)] transition-colors hover:border-[var(--lagoon-deep)]";
 
 	async function onMerge() {
 		if (!keeper || !absorbed || sameMember) return;
@@ -601,11 +601,11 @@ function MergeMembersDialog({
 					</div>
 
 					{sameMember ? (
-						<p className="text-[13px] font-medium text-[var(--warning-strong)]">
+						<p className="text-sm font-medium text-[var(--warning-strong)]">
 							Pick two different members.
 						</p>
 					) : keeper && absorbed ? (
-						<p className="text-[13px] text-[var(--sea-ink-soft)]">
+						<p className="text-sm text-[var(--sea-ink-soft)]">
 							Merge <span className="font-bold">{absorbed.name}</span> into{" "}
 							<span className="font-bold">{keeper.name}</span>? {absorbed.name}
 							's roles and history move to {keeper.name}, then {absorbed.name}{" "}
@@ -642,13 +642,13 @@ function StatCard({
 }) {
 	const inner = (
 		<>
-			<div className="text-[11.5px] font-bold tracking-[0.04em] text-[var(--sea-ink-soft)] uppercase">
+			<div className="text-xs font-bold tracking-[0.04em] text-[var(--sea-ink-soft)] uppercase">
 				{stat.label}
 			</div>
-			<div className="mt-[7px] flex items-baseline gap-2">
+			<div className="mt-2 flex items-baseline gap-2">
 				<span
 					className={cn(
-						"font-display text-[30px] leading-none font-semibold",
+						"font-display text-3xl leading-none font-semibold",
 						stat.amber && "text-[var(--warning-strong)]",
 					)}
 				>
@@ -660,7 +660,7 @@ function StatCard({
 	);
 
 	const className = cn(
-		"rounded-[14px] border bg-[var(--surface-strong)] px-4 py-[15px] shadow-[0_1px_0_var(--inset-glint)_inset,0_8px_20px_rgba(23,58,64,.05)] transition-transform hover:-translate-y-0.5",
+		"rounded-xl border bg-[var(--surface-strong)] px-4 py-4 shadow-[0_1px_0_var(--inset-glint)_inset,0_8px_20px_rgba(23,58,64,.05)] transition-transform hover:-translate-y-0.5",
 		stat.amber ? "border-[var(--warning)]" : "border-[var(--line)]",
 	);
 
@@ -690,7 +690,7 @@ function SegmentChip({
 			type="button"
 			onClick={onSelect}
 			className={cn(
-				"inline-flex items-center gap-2 rounded-full border px-[13px] py-[7px] text-[13px] font-semibold transition-transform active:scale-[0.97]",
+				"inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm font-semibold transition-transform active:scale-[0.97]",
 				active
 					? "border-[var(--sea-ink)] bg-[var(--sea-ink)] text-[var(--background)]"
 					: "border-[var(--line)] bg-[var(--surface-strong)] text-[var(--sea-ink-soft)]",
@@ -699,7 +699,7 @@ function SegmentChip({
 			{segment.label}
 			<span
 				className={cn(
-					"inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-[5px] text-[11px] font-bold",
+					"inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-xs font-bold",
 					active
 						? "bg-white/20 text-current"
 						: "bg-[var(--sand)] text-[var(--sea-ink-soft)]",

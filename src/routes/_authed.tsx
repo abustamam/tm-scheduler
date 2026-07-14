@@ -152,7 +152,7 @@ function WorkspaceLayout() {
 	return (
 		<div className="flex min-h-svh w-full font-sans text-[var(--sea-ink)]">
 			{/* Desktop sidebar (lg+) */}
-			<aside className="sticky top-0 hidden h-svh w-[248px] shrink-0 flex-col gap-1.5 border-r border-[var(--line)] bg-[linear-gradient(180deg,var(--surface-strong),var(--surface))] px-3.5 py-[18px] backdrop-blur-[6px] lg:flex">
+			<aside className="sticky top-0 hidden h-svh w-[248px] shrink-0 flex-col gap-1.5 border-r border-[var(--line)] bg-[linear-gradient(180deg,var(--surface-strong),var(--surface))] px-3.5 py-4 backdrop-blur-[6px] lg:flex">
 				{sidebar()}
 			</aside>
 
@@ -160,7 +160,7 @@ function WorkspaceLayout() {
 			<Sheet open={navOpen} onOpenChange={setNavOpen}>
 				<SheetContent
 					side="left"
-					className="w-[284px] max-w-[86vw] gap-1.5 overflow-y-auto border-[var(--line)] bg-[linear-gradient(180deg,var(--surface-strong),var(--surface))] px-3.5 py-[18px] sm:max-w-[86vw] lg:hidden"
+					className="w-[284px] max-w-[86vw] gap-1.5 overflow-y-auto border-[var(--line)] bg-[linear-gradient(180deg,var(--surface-strong),var(--surface))] px-3.5 py-4 sm:max-w-[86vw] lg:hidden"
 					onEscapeKeyDown={(e) => {
 						// Escape clears open search results first; only a second
 						// Escape (nothing left to clear) closes the drawer.
@@ -192,7 +192,7 @@ function WorkspaceLayout() {
 			<main className="flex min-w-0 flex-1 flex-col">
 				{/* Desktop header (lg+) */}
 				<header className="sticky top-0 z-10 hidden items-center gap-3.5 border-b border-[var(--line)] bg-[var(--surface)] px-7 py-4 backdrop-blur-[6px] lg:flex">
-					<div className="text-[12.5px] font-semibold tracking-[0.01em] text-[var(--sea-ink-soft)]">
+					<div className="text-xs font-semibold tracking-[0.01em] text-[var(--sea-ink-soft)]">
 						{crumbFor(pathname)}
 					</div>
 					<div className="flex-1" />
@@ -210,11 +210,11 @@ function WorkspaceLayout() {
 						type="button"
 						onClick={() => setNavOpen(true)}
 						aria-label="Open navigation"
-						className="flex size-9 shrink-0 items-center justify-center rounded-[10px] border border-[var(--line)] text-[var(--sea-ink-soft)] transition-colors hover:bg-[var(--foam)] hover:text-[var(--sea-ink)]"
+						className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-[var(--line)] text-[var(--sea-ink-soft)] transition-colors hover:bg-[var(--foam)] hover:text-[var(--sea-ink)]"
 					>
-						<Menu className="size-[18px]" aria-hidden />
+						<Menu className="size-4" aria-hidden />
 					</button>
-					<div className="min-w-0 flex-1 truncate text-[12.5px] font-semibold tracking-[0.01em] text-[var(--sea-ink-soft)]">
+					<div className="min-w-0 flex-1 truncate text-xs font-semibold tracking-[0.01em] text-[var(--sea-ink-soft)]">
 						{crumbFor(pathname)}
 					</div>
 					<ClubSwitcher clubs={clubs} activeClubId={activeClubId} />
@@ -372,10 +372,8 @@ function SidebarInner({
 			<div className="mt-auto flex items-center gap-2.5 rounded-xl border border-[var(--line)] bg-[var(--foam)] p-2.5">
 				<MemberAvatar tone="palm" initials={initials} size={34} />
 				<div className="min-w-0 leading-tight">
-					<div className="truncate text-[13px] font-bold">{displayName}</div>
-					<div className="text-[11px] text-[var(--sea-ink-soft)]">
-						{roleLabel}
-					</div>
+					<div className="truncate text-sm font-bold">{displayName}</div>
+					<div className="text-xs text-[var(--sea-ink-soft)]">{roleLabel}</div>
 				</div>
 				<div className="ml-auto flex shrink-0 items-center gap-1">
 					{showThemeToggle ? <ThemeToggle /> : null}
@@ -403,7 +401,7 @@ function NavGroup({
 }) {
 	return (
 		<>
-			<div className="px-2.5 pt-3.5 pb-0.5 text-[10.5px] font-extrabold tracking-[0.12em] text-[var(--sea-ink-soft)] uppercase opacity-70 first:pt-1">
+			<div className="px-2.5 pt-3.5 pb-0.5 text-xs font-extrabold tracking-[0.12em] text-[var(--sea-ink-soft)] uppercase opacity-70 first:pt-1">
 				{label}
 			</div>
 			{children}
@@ -429,7 +427,7 @@ function NavItem({
 			to={to}
 			onClick={onNavigate}
 			activeOptions={{ exact }}
-			className="flex w-full items-center gap-[11px] rounded-[10px] px-3 py-[9px] text-left text-[13.5px] tracking-[0.01em] transition-colors"
+			className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm tracking-[0.01em] transition-colors"
 			activeProps={{
 				className:
 					"bg-[var(--sand)] font-bold text-[var(--sea-ink)] [&_svg]:opacity-100",
@@ -439,7 +437,7 @@ function NavItem({
 					"font-medium text-[var(--sea-ink-soft)] hover:bg-[var(--foam)] [&_svg]:opacity-70",
 			}}
 		>
-			<Icon className="size-[17px]" />
+			<Icon className="size-4" />
 			{label}
 		</Link>
 	);

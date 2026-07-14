@@ -26,7 +26,7 @@ function SuperadminConsole() {
 	return (
 		<PageContainer className="space-y-6">
 			<div>
-				<h1 className="font-display text-[30px] font-semibold tracking-[-0.02em]">
+				<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
 					Superadmin console
 				</h1>
 				<p className="text-sm text-muted-foreground">
@@ -46,7 +46,7 @@ function SuperadminConsole() {
 					<div className="overflow-x-auto rounded-xl border border-[var(--line)]">
 						<table className="w-full text-sm">
 							<thead>
-								<tr className="border-b border-[var(--line)] bg-[var(--surface-strong)] text-left text-[12px] font-semibold text-[var(--sea-ink-soft)]">
+								<tr className="border-b border-[var(--line)] bg-[var(--surface-strong)] text-left text-xs font-semibold text-[var(--sea-ink-soft)]">
 									<th className="px-4 py-2.5">Club</th>
 									<th className="px-4 py-2.5">Number</th>
 									<th className="px-4 py-2.5">Members</th>
@@ -110,8 +110,8 @@ function LinkBadge({ linked }: { linked: boolean }) {
 		<span
 			className={
 				linked
-					? "inline-block rounded-full bg-[var(--foam)] px-2 py-0.5 text-[11px] font-semibold text-[var(--palm)]"
-					: "inline-block rounded-full bg-[var(--sand)] px-2 py-0.5 text-[11px] font-semibold text-[var(--sea-ink-soft)]"
+					? "inline-block rounded-full bg-[var(--foam)] px-2 py-0.5 text-xs font-semibold text-[var(--palm)]"
+					: "inline-block rounded-full bg-[var(--sand)] px-2 py-0.5 text-xs font-semibold text-[var(--sea-ink-soft)]"
 			}
 		>
 			{linked ? "Linked" : "Unclaimed"}

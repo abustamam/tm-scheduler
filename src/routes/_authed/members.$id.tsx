@@ -111,7 +111,7 @@ function MemberDetail() {
 		return (
 			<PageContainer>
 				<BackLink />
-				<h1 className="mt-5 font-display text-[28px] font-semibold">
+				<h1 className="mt-5 font-display text-3xl font-semibold">
 					Member not found
 				</h1>
 			</PageContainer>
@@ -131,7 +131,7 @@ function MemberDetail() {
 			<BackLink />
 
 			{/* Header */}
-			<div className="mt-[18px] mb-6 flex flex-wrap items-center gap-[18px]">
+			<div className="mt-5 mb-6 flex flex-wrap items-center gap-5">
 				<MemberAvatar
 					tone={toneFromSeed(member.id)}
 					initials={initialsOf(member.name)}
@@ -139,24 +139,24 @@ function MemberDetail() {
 					className="shadow-[0_6px_16px_rgba(23,58,64,.18)]"
 				/>
 				<div className="min-w-[220px] flex-1">
-					<h1 className="font-display text-[28px] font-semibold tracking-[-0.02em]">
+					<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
 						{member.name}
 					</h1>
 					<div className="mt-1.5 flex flex-wrap items-center gap-2.5">
-						<span className="text-[13.5px] text-[var(--sea-ink-soft)]">
+						<span className="text-sm text-[var(--sea-ink-soft)]">
 							{tenure} · joined {joinedLabel(joined)}
 						</span>
 						{member.status === "inactive" ? (
 							<>
 								<span className="size-1 rounded-full bg-[var(--sea-ink-soft)]" />
-								<span className="inline-flex items-center rounded-full border border-[var(--line)] bg-[var(--sand)] px-2.5 py-0.5 text-[11px] font-bold tracking-[0.03em] text-[var(--sea-ink-soft)] uppercase">
+								<span className="inline-flex items-center rounded-full border border-[var(--line)] bg-[var(--sand)] px-2.5 py-0.5 text-xs font-bold tracking-[0.03em] text-[var(--sea-ink-soft)] uppercase">
 									Inactive
 								</span>
 							</>
 						) : null}
 					</div>
 				</div>
-				<div className="flex flex-wrap gap-[9px]">
+				<div className="flex flex-wrap gap-2">
 					<Button asChild size="sm">
 						<Link to="/next">Assign a role</Link>
 					</Button>
@@ -171,17 +171,17 @@ function MemberDetail() {
 			</div>
 
 			{/* Speech log (real) + side cards */}
-			<div className="grid grid-cols-1 items-start gap-[18px] lg:grid-cols-[1.5fr_1fr]">
+			<div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[1.5fr_1fr]">
 				{/* Speech log */}
 				<div className="min-w-0 overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] shadow-[0_1px_0_var(--inset-glint)_inset,0_10px_24px_rgba(23,58,64,.05)]">
 					<div className="flex items-center justify-between px-5 pt-4 pb-3">
-						<h2 className="text-[15px] font-bold">Speech log</h2>
+						<h2 className="text-sm font-bold">Speech log</h2>
 						<span className="text-xs text-[var(--sea-ink-soft)]">
 							most recent {speechLog.length}
 						</span>
 					</div>
 					{speechLog.length === 0 ? (
-						<p className="border-t border-[var(--line)] px-5 py-8 text-center text-[13px] text-[var(--sea-ink-soft)]">
+						<p className="border-t border-[var(--line)] px-5 py-8 text-center text-sm text-[var(--sea-ink-soft)]">
 							No speeches logged yet.
 						</p>
 					) : (
@@ -197,18 +197,18 @@ function MemberDetail() {
 									className="grid grid-cols-[54px_1fr_auto] items-center gap-3 border-t border-[var(--line)] px-5 py-3 transition-colors hover:bg-[var(--foam)]"
 								>
 									<div className="text-center leading-[1.1]">
-										<div className="font-display text-[17px] font-semibold">
+										<div className="font-display text-lg font-semibold">
 											{day}
 										</div>
-										<div className="text-[10px] font-bold tracking-[0.05em] text-[var(--sea-ink-soft)]">
+										<div className="text-xs font-bold tracking-[0.05em] text-[var(--sea-ink-soft)]">
 											{mon}
 										</div>
 									</div>
 									<div className="min-w-0">
-										<div className="truncate text-[13.5px] font-bold">
+										<div className="truncate text-sm font-bold">
 											{l.speechTitle ?? l.roleName}
 										</div>
-										<div className="truncate text-[11.5px] text-[var(--sea-ink-soft)]">
+										<div className="truncate text-xs text-[var(--sea-ink-soft)]">
 											{sub ||
 												(l.evaluatorName
 													? `Evaluated by ${l.evaluatorName}`
@@ -216,11 +216,11 @@ function MemberDetail() {
 										</div>
 									</div>
 									{scheduled ? (
-										<span className="shrink-0 rounded-full bg-[rgba(79,184,178,.16)] px-2.5 py-1 text-[11px] font-bold text-[var(--lagoon-deep)]">
+										<span className="shrink-0 rounded-full bg-[rgba(79,184,178,.16)] px-2.5 py-1 text-xs font-bold text-[var(--lagoon-deep)]">
 											Scheduled
 										</span>
 									) : (
-										<span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--foam)] px-2.5 py-1 text-[11px] font-semibold text-[var(--palm)]">
+										<span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--foam)] px-2.5 py-1 text-xs font-semibold text-[var(--palm)]">
 											Completed
 										</span>
 									)}
@@ -231,13 +231,11 @@ function MemberDetail() {
 				</div>
 
 				{/* Side cards */}
-				<div className="flex min-w-0 flex-col gap-[18px]">
-					<div className="rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] px-5 py-[18px] shadow-[0_1px_0_var(--inset-glint)_inset,0_10px_24px_rgba(23,58,64,.05)]">
-						<h2 className="mb-3 text-[15px] font-bold">
-							Roles served this year
-						</h2>
+				<div className="flex min-w-0 flex-col gap-5">
+					<div className="rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] p-5 shadow-[0_1px_0_var(--inset-glint)_inset,0_10px_24px_rgba(23,58,64,.05)]">
+						<h2 className="mb-3 text-sm font-bold">Roles served this year</h2>
 						{rolesServed.length === 0 ? (
-							<p className="text-[12.5px] text-[var(--sea-ink-soft)]">
+							<p className="text-xs text-[var(--sea-ink-soft)]">
 								No roles served yet this year.
 							</p>
 						) : (
@@ -245,10 +243,10 @@ function MemberDetail() {
 								{rolesServed.map((r) => (
 									<span
 										key={r.name}
-										className="inline-flex items-center gap-[7px] rounded-full border border-[var(--line)] bg-[var(--foam)] px-[11px] py-1.5 text-xs font-semibold"
+										className="inline-flex items-center gap-2 rounded-full border border-[var(--line)] bg-[var(--foam)] px-3 py-1.5 text-xs font-semibold"
 									>
 										{r.name}
-										<span className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-[var(--sand)] px-[5px] text-[10.5px] font-bold text-[var(--sea-ink-soft)]">
+										<span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-[var(--sand)] px-1 text-xs font-bold text-[var(--sea-ink-soft)]">
 											{r.count}
 										</span>
 									</span>
@@ -276,8 +274,8 @@ function MemberDetail() {
 			</div>
 
 			{/* Pathways progress (real, synced from Base Camp) */}
-			<div className="mt-[18px]">
-				<h2 className="mb-3 text-[15px] font-bold">Pathways</h2>
+			<div className="mt-5">
+				<h2 className="mb-3 text-sm font-bold">Pathways</h2>
 				<PathwaysProgress paths={pathways} />
 			</div>
 		</PageContainer>
@@ -351,10 +349,10 @@ function UnscheduledSpeeches({
 	}
 
 	return (
-		<div className="rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] px-5 py-[18px] shadow-[0_1px_0_var(--inset-glint)_inset,0_10px_24px_rgba(23,58,64,.05)]">
-			<h2 className="mb-3 text-[15px] font-bold">Unscheduled speeches</h2>
+		<div className="rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] p-5 shadow-[0_1px_0_var(--inset-glint)_inset,0_10px_24px_rgba(23,58,64,.05)]">
+			<h2 className="mb-3 text-sm font-bold">Unscheduled speeches</h2>
 			{live.length === 0 ? (
-				<p className="text-[12.5px] text-[var(--sea-ink-soft)]">
+				<p className="text-xs text-[var(--sea-ink-soft)]">
 					No unscheduled speeches. Prepared speeches with no meeting slot show
 					up here.
 				</p>
@@ -370,11 +368,9 @@ function UnscheduledSpeeches({
 								className="rounded-xl border border-[var(--line)] bg-[var(--foam)] px-3.5 py-2.5"
 							>
 								<div className="min-w-0">
-									<div className="truncate text-[13.5px] font-bold">
-										{s.title}
-									</div>
+									<div className="truncate text-sm font-bold">{s.title}</div>
 									{sub ? (
-										<div className="truncate text-[11.5px] text-[var(--sea-ink-soft)]">
+										<div className="truncate text-xs text-[var(--sea-ink-soft)]">
 											{sub}
 										</div>
 									) : null}
@@ -386,7 +382,7 @@ function UnscheduledSpeeches({
 										disabled={busyId === s.id || openSlots.length === 0}
 										onClick={() => setScheduling(s)}
 									>
-										<CalendarPlus className="size-[15px]" aria-hidden />
+										<CalendarPlus className="size-4" aria-hidden />
 										Schedule
 									</Button>
 									<Button
@@ -395,12 +391,12 @@ function UnscheduledSpeeches({
 										disabled={busyId === s.id}
 										onClick={() => onSetArchived(s.id, true)}
 									>
-										<Archive className="size-[15px]" aria-hidden />
+										<Archive className="size-4" aria-hidden />
 										Archive
 									</Button>
 								</div>
 								{openSlots.length === 0 ? (
-									<p className="mt-1.5 text-[11px] text-[var(--sea-ink-soft)]">
+									<p className="mt-1.5 text-xs text-[var(--sea-ink-soft)]">
 										No open speaker slots to schedule into.
 									</p>
 								) : null}
@@ -412,7 +408,7 @@ function UnscheduledSpeeches({
 
 			{archived.length > 0 ? (
 				<details className="mt-3 border-t border-[var(--line)] pt-3">
-					<summary className="cursor-pointer text-[12.5px] font-semibold text-[var(--sea-ink-soft)]">
+					<summary className="cursor-pointer text-xs font-semibold text-[var(--sea-ink-soft)]">
 						Archived ({archived.length})
 					</summary>
 					<ul className="mt-2 flex flex-col gap-2">
@@ -421,7 +417,7 @@ function UnscheduledSpeeches({
 								key={s.id}
 								className="flex items-center justify-between gap-2 rounded-xl border border-dashed border-[var(--line)] px-3.5 py-2"
 							>
-								<span className="min-w-0 truncate text-[12.5px] text-[var(--sea-ink-soft)]">
+								<span className="min-w-0 truncate text-xs text-[var(--sea-ink-soft)]">
 									{s.title}
 								</span>
 								<Button
@@ -430,7 +426,7 @@ function UnscheduledSpeeches({
 									disabled={busyId === s.id}
 									onClick={() => onSetArchived(s.id, false)}
 								>
-									<ArchiveRestore className="size-[15px]" aria-hidden />
+									<ArchiveRestore className="size-4" aria-hidden />
 									Restore
 								</Button>
 							</li>
@@ -463,15 +459,15 @@ function UnscheduledSpeeches({
 									className="flex w-full items-center justify-between gap-3 rounded-xl border border-[var(--line)] bg-[var(--surface-strong)] px-3.5 py-2.5 text-left transition-colors hover:bg-[var(--foam)] disabled:opacity-60"
 								>
 									<span className="min-w-0">
-										<span className="block truncate text-[13.5px] font-semibold">
+										<span className="block truncate text-sm font-semibold">
 											{formatMeetingDate(slot.scheduledAt)}
 										</span>
-										<span className="block truncate text-[11.5px] text-[var(--sea-ink-soft)]">
+										<span className="block truncate text-xs text-[var(--sea-ink-soft)]">
 											{slot.roleName}
 										</span>
 									</span>
 									<CalendarPlus
-										className="size-[16px] shrink-0 text-[var(--sea-ink-soft)]"
+										className="size-4 shrink-0 text-[var(--sea-ink-soft)]"
 										aria-hidden
 									/>
 								</button>
@@ -776,20 +772,20 @@ function ClubRoleControl({
 	}
 
 	return (
-		<div className="rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] px-5 py-[18px] shadow-[0_1px_0_var(--inset-glint)_inset,0_10px_24px_rgba(23,58,64,.05)]">
+		<div className="rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] p-5 shadow-[0_1px_0_var(--inset-glint)_inset,0_10px_24px_rgba(23,58,64,.05)]">
 			<div className="mb-2 flex items-center justify-between gap-2">
-				<h2 className="flex items-center gap-1.5 text-[15px] font-bold">
+				<h2 className="flex items-center gap-1.5 text-sm font-bold">
 					<ShieldCheck
-						className="size-[16px] text-[var(--sea-ink-soft)]"
+						className="size-4 text-[var(--sea-ink-soft)]"
 						aria-hidden
 					/>
 					Club role
 				</h2>
-				<span className="inline-flex items-center rounded-full border border-[var(--line)] bg-[var(--foam)] px-2.5 py-0.5 text-[11px] font-bold tracking-[0.03em] uppercase">
+				<span className="inline-flex items-center rounded-full border border-[var(--line)] bg-[var(--foam)] px-2.5 py-0.5 text-xs font-bold tracking-[0.03em] uppercase">
 					{isAdmin ? "Admin" : "Member"}
 				</span>
 			</div>
-			<p className="mb-3 text-[12px] text-[var(--sea-ink-soft)]">
+			<p className="mb-3 text-xs text-[var(--sea-ink-soft)]">
 				Club role is a permission for managing the club — separate from officer
 				position.
 			</p>
@@ -847,10 +843,10 @@ function BackLink() {
 	return (
 		<Link
 			to="/"
-			className="group inline-flex items-center gap-[7px] text-[13px] font-semibold text-[var(--sea-ink-soft)] no-underline transition-colors hover:text-[var(--sea-ink)]"
+			className="group inline-flex items-center gap-2 text-sm font-semibold text-[var(--sea-ink-soft)] no-underline transition-colors hover:text-[var(--sea-ink)]"
 		>
 			<ChevronLeft
-				className="size-[15px] transition-transform group-hover:-translate-x-0.5"
+				className="size-4 transition-transform group-hover:-translate-x-0.5"
 				aria-hidden
 			/>
 			Back to roster
