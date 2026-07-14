@@ -123,7 +123,7 @@ describe("MeetingAgenda capability gating", () => {
 		renderAgenda(selfAssertedViewer({ memberId: null, isTmod: false }), [
 			slot({ status: "open" }),
 		]);
-		const claim = screen.getByRole("button", { name: "Claim" });
+		const claim = screen.getByRole("button", { name: /^Claim / });
 		expect((claim as HTMLButtonElement).disabled).toBe(true);
 		expect(screen.queryByRole("button", { name: /Assign/ })).toBeNull();
 	});
@@ -149,7 +149,7 @@ describe("MeetingAgenda capability gating", () => {
 			lockedViewer(selfAssertedViewer({ memberId: "me", isTmod: false })),
 			[slot({ status: "open" })],
 		);
-		const claim = screen.getByRole("button", { name: "Claim" });
+		const claim = screen.getByRole("button", { name: /^Claim / });
 		expect((claim as HTMLButtonElement).disabled).toBe(true);
 	});
 

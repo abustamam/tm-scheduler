@@ -22,6 +22,9 @@
   --warning: #d99a2e;
   --warning-foreground: #a8761a;
   --warning-strong: #c2851a;
+  /* Soft warning surface (row highlights); was referenced but never defined,
+     so usages silently fell back to a hardcoded hex. */
+  --warning-soft: #fdf3e7;
   --kicker: rgba(47, 106, 74, 0.9);
   --bg-base: #e7f3ec;
   --header-bg: rgba(251, 255, 248, 0.84);
@@ -81,6 +84,7 @@
   --warning: #e0b357;
   --warning-foreground: #e6c98a;
   --warning-strong: #e0b357;
+  --warning-soft: rgba(224, 179, 87, 0.14);
   --kicker: #b8efe5;
   --bg-base: #0a1418;
   --header-bg: rgba(10, 20, 24, 0.8);
