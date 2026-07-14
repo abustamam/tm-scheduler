@@ -248,7 +248,8 @@ export const officerTerms = pgTable(
 );
 
 // ---------------------------------------------------------------------------
-// Guests — club-scoped visitors who can be assigned to a role slot (#151).
+// Guests — club-scoped visitors who can be assigned to a role slot (#151) and
+// tracked through the VP-Membership pipeline (#208, ADR-0017).
 //
 // A guest is NOT a member: no Person, no login, no Pathways, no roster/officer
 // presence, and no `members` status (guests would otherwise leak into some
@@ -257,10 +258,22 @@ export const officerTerms = pgTable(
 // as an assignable option in later meetings. A role slot references a guest via
 // `role_slots.assigned_guest_id`, mutually exclusive with `assigned_member_id`.
 //
-// Adjacent to Person/Membership (ADR-0008). Promotion-to-member is NOT built
-// here, but the durable, stable guest id keeps that future path open: a later
-// pipeline can create people/members from a guest and re-point slot assignments.
+// Adjacent to Person/Membership (ADR-0008). Promotion-to-member (ADR-0017): a
+// guest carries a lifecycle `stage`; converting one creates a Membership,
+// re-points its slot assignments, and stamps `converted_membership_id` while
+// keeping the guest row (at stage=joined) as durable history.
 // ---------------------------------------------------------------------------
+
+// The VP-Membership funnel a guest travels (#208 / ADR-0017). New guests default
+// to `prospect`; `following_up`/`lost` are manual transitions; `joined` is set
+// only by convert-to-member (never a manual transition), alongside
+// `converted_membership_id`.
+export const guestStageEnum = pgEnum("guest_stage", [
+	"prospect",
+	"following_up",
+	"joined",
+	"lost",
+]);
 
 export const guests = pgTable(
 	"guests",
@@ -273,6 +286,15 @@ export const guests = pgTable(
 		// Optional contact — a guest may be assigned with just a name.
 		email: text("email"),
 		phone: text("phone"),
+		// Pipeline lifecycle stage (#208 / ADR-0017). Defaults to `prospect`.
+		stage: guestStageEnum("stage").notNull().default("prospect"),
+		// Set once, on convert-to-member: the Membership this guest became. The
+		// guest row persists (stage=joined) so its past slot/attendance history is
+		// never lost; on member delete → set null (history stays, pointer clears).
+		convertedMembershipId: uuid("converted_membership_id").references(
+			() => members.id,
+			{ onDelete: "set null" },
+		),
 		createdAt: timestamp("created_at").defaultNow().notNull(),
 		updatedAt: timestamp("updated_at").defaultNow().notNull(),
 	},

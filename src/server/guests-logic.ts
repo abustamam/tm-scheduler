@@ -1,7 +1,7 @@
 // Guest-assignment DB logic (#151), split out from `guests.ts` (a createServerFn
 // module the guard test forbids from exporting db-touching functions).
 // Integration-testable by mocking `#/db`.
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import { db } from "#/db";
 import { guests, meetings, roleSlots } from "#/db/schema";
 import { logActivity } from "./activity";
@@ -13,7 +13,9 @@ export type NewGuestInput = {
 	phone?: string | null;
 };
 
-/** A club's guests, for the admin assign picker. Club-scoped, name-ordered. */
+/** A club's guests, for the admin assign picker. Club-scoped, name-ordered.
+ *  Excludes `joined` (converted) guests — they are members now and get assigned
+ *  as members — and `lost` guests; only live prospects appear (#208 / ADR-0017). */
 export async function listClubGuests(clubId: string) {
 	return db
 		.select({
@@ -23,7 +25,12 @@ export async function listClubGuests(clubId: string) {
 			phone: guests.phone,
 		})
 		.from(guests)
-		.where(eq(guests.clubId, clubId))
+		.where(
+			and(
+				eq(guests.clubId, clubId),
+				inArray(guests.stage, ["prospect", "following_up"]),
+			),
+		)
 		.orderBy(asc(guests.name));
 }
 

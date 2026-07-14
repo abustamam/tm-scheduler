@@ -22,6 +22,7 @@ import {
 	ScrollText,
 	Settings,
 	ShieldCheck,
+	UserPlus,
 } from "lucide-react";
 import { type ComponentType, type ReactNode, useRef, useState } from "react";
 import { BrandMark } from "#/components/brand-mark";
@@ -84,6 +85,8 @@ function crumbFor(pathname: string): string {
 		return "Manage · Base Camp sync";
 	if (pathname.startsWith("/admin/vpe-dashboard"))
 		return "Manage · VP Education";
+	if (pathname.startsWith("/admin/vp-membership"))
+		return "Manage · VP Membership";
 	if (pathname.startsWith("/admin")) return "Manage · Admin";
 	if (pathname.startsWith("/superadmin")) return "Platform · Superadmin";
 	return "Workspace";
@@ -312,6 +315,12 @@ function SidebarInner({
 							to="/admin/vpe-dashboard"
 							icon={GraduationCap}
 							label="VP Education"
+							onNavigate={onNavigate}
+						/>
+						<NavItem
+							to="/admin/vp-membership"
+							icon={UserPlus}
+							label="VP Membership"
 							onNavigate={onNavigate}
 						/>
 						<NavItem

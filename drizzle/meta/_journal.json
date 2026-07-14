@@ -176,6 +176,13 @@
       "when": 1783796668832,
       "tag": "0024_naive_hellfire_club",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1784072553724,
+      "tag": "0025_big_scarlet_spider",
+      "breakpoints": true
     }
   ]
 }
