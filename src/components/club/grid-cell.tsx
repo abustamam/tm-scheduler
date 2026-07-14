@@ -138,9 +138,12 @@ export function GridCell({
 			className={cn(
 				BASE,
 				KIND_CLASS[cell.kind],
-				// In the interactive sheet, everyone else's filled cells are greyed
-				// so it's obvious you can only act on your own.
-				interactive && cell.kind === "assigned" && "opacity-45",
+				// In the interactive sheet, everyone else's filled cells recede so
+				// it's obvious you can only act on your own. A light wash + dark text
+				// (not opacity) keeps the receded names AA-readable.
+				interactive &&
+					cell.kind === "assigned" &&
+					"bg-emerald-700/15 text-emerald-900",
 			)}
 		>
 			{cell.text}
