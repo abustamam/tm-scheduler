@@ -297,7 +297,7 @@ export function SeasonGrid({
 											// "ended", not "done": a past meeting still accepts
 											// late sign-ups (recording who stepped in), so the
 											// label shouldn't read as closed.
-											<div className="text-[10px] font-medium text-amber-700">
+											<div className="text-[10px] font-medium text-warning-foreground">
 												{m.isPast
 													? "ended"
 													: m.openCount === 0
@@ -343,8 +343,10 @@ export function SeasonGrid({
 													// primary mobile action — 19px tall was too small to tap.
 													"mx-auto mt-1 flex cursor-pointer items-center gap-0.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold whitespace-nowrap transition-colors disabled:opacity-50",
 													status?.declined
-														? "border-rose-700 bg-rose-700 text-white hover:opacity-80"
-														: "border-border text-muted-foreground/70 hover:border-rose-400 hover:text-rose-700",
+														? // Same fill recipe as the destructive Button variant, so
+															// white text stays AA in dark (destructive/60 ⇒ 6.0:1).
+															"border-destructive bg-destructive text-white hover:opacity-80 dark:border-destructive/60 dark:bg-destructive/60"
+														: "border-border text-muted-foreground/70 hover:border-destructive/50 hover:text-destructive",
 												)}
 											>
 												{busyMeetingId === m.id ? (
