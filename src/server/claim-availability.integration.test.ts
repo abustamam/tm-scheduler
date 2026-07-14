@@ -13,7 +13,13 @@
  */
 import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { activityLog, memberAvailability, roleSlots } from "#/db/schema";
+import {
+	activityLog,
+	memberAvailability,
+	roleDefinitions,
+	roleSlots,
+	speeches,
+} from "#/db/schema";
 import {
 	cleanup,
 	hasTestDb,
@@ -168,3 +174,93 @@ describe.skipIf(!hasTestDb)("self-claim clears the decline flag", () => {
 		expect(await naRowExists(seed.memberId, seed.meetingId)).toBe(true);
 	});
 });
+
+// -----------------------------------------------------------------------------
+// #212 — attachSpeechToOpenSlot (the rescheduleSpeech flow) applies the same
+// self-only rule: scheduling a speech into an open slot for the ACTOR
+// themselves clears their own NA row; an admin scheduling someone else's
+// speech (a different member's) must NOT touch that member's absence
+// statement.
+// -----------------------------------------------------------------------------
+
+describe.skipIf(!hasTestDb)(
+	"speech attach onto an open slot clears the decline flag (#212)",
+	() => {
+		let seed: SeededClub;
+		let speakerRoleId: string;
+
+		beforeEach(async () => {
+			seed = await seedClub();
+			// The member has declined the seeded meeting.
+			await testDb
+				.insert(memberAvailability)
+				.values({ memberId: seed.memberId, meetingId: seed.meetingId });
+			const [def] = await testDb
+				.insert(roleDefinitions)
+				.values({
+					clubId: seed.clubId,
+					name: "Speaker",
+					category: "speaker",
+					isSpeakerRole: true,
+				})
+				.returning({ id: roleDefinitions.id });
+			speakerRoleId = def!.id;
+		});
+
+		afterEach(async () => {
+			await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
+		});
+
+		async function seedOpenSpeakerSlot(): Promise<string> {
+			const [row] = await testDb
+				.insert(roleSlots)
+				.values({
+					meetingId: seed.meetingId,
+					roleDefinitionId: speakerRoleId,
+					slotIndex: 1,
+					status: "open",
+				})
+				.returning({ id: roleSlots.id });
+			return row!.id;
+		}
+
+		async function seedSpeech(
+			personId: string,
+			title: string,
+		): Promise<string> {
+			const [row] = await testDb
+				.insert(speeches)
+				.values({ personId, title })
+				.returning({ id: speeches.id });
+			return row!.id;
+		}
+
+		it("self attach (actor === the speech owner's membership) clears the actor's NA row", async () => {
+			const { attachSpeechToOpenSlot } = await import("./speeches-logic");
+			const slotId = await seedOpenSpeakerSlot();
+			const speechId = await seedSpeech(seed.personId, "My Icebreaker");
+
+			await attachSpeechToOpenSlot(testDb, {
+				speechId,
+				slotId,
+				actorMemberId: seed.memberId,
+			});
+
+			expect(await naRowExists(seed.memberId, seed.meetingId)).toBe(false);
+		});
+
+		it("admin attach for someone else's speech leaves that member's NA row", async () => {
+			const { attachSpeechToOpenSlot } = await import("./speeches-logic");
+			const slotId = await seedOpenSpeakerSlot();
+			const speechId = await seedSpeech(seed.personId, "My Icebreaker");
+
+			await attachSpeechToOpenSlot(testDb, {
+				speechId,
+				slotId,
+				actorMemberId: seed.adminMemberId,
+			});
+
+			expect(await naRowExists(seed.memberId, seed.meetingId)).toBe(true);
+		});
+	},
+);
