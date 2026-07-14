@@ -4,12 +4,14 @@ import { useEffect, useState } from "react";
 const STORAGE_KEY = "gavelup-theme";
 
 /**
- * Light/dark toggle for the workspace top bar. Flips the `dark` class on the
- * document root (all tokens cascade from there) and persists the choice. The
- * initial class is applied pre-paint by a script in `__root.tsx`; here we read
- * the live state after mount to keep SSR markup stable.
+ * Light/dark toggle for the workspace top bar and the public club shell.
+ * Flips the `dark` class on the document root (all tokens cascade from there)
+ * and persists the choice. The initial class is applied pre-paint by a script
+ * in `__root.tsx`; here we read the live state after mount to keep SSR markup
+ * stable. `compact` renders an icon-only square button (sized to match the
+ * public header's 30px brand chip) for tight headers.
  */
-export function ThemeToggle() {
+export function ThemeToggle({ compact = false }: { compact?: boolean }) {
 	const [isDark, setIsDark] = useState(false);
 	const [mounted, setMounted] = useState(false);
 
@@ -27,6 +29,24 @@ export function ThemeToggle() {
 		} catch {
 			// localStorage unavailable (private mode / SSR) — ignore.
 		}
+	}
+
+	if (compact) {
+		return (
+			<button
+				type="button"
+				onClick={toggle}
+				title="Toggle theme"
+				aria-label="Toggle theme"
+				className="flex size-[30px] shrink-0 items-center justify-center rounded-[9px] border border-[var(--line)] bg-[var(--surface-strong)] text-[var(--sea-ink)] transition-colors hover:bg-[var(--foam)]"
+			>
+				{isDark ? (
+					<Sun className="size-[15px]" aria-hidden />
+				) : (
+					<Moon className="size-[15px]" aria-hidden />
+				)}
+			</button>
+		);
 	}
 
 	return (
