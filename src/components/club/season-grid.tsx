@@ -318,10 +318,14 @@ export function SeasonGrid({
 											m.isAnchor && "rounded-md ring-2 ring-primary",
 										)}
 									>
+										{/* py-2 below md: the date link + the chip below can't both
+										    reach 44px inside today's ~60px header, so the link gets
+										    real padding (the header grows a little on the phone);
+										    md+ is py-0 — unchanged (#224). */}
 										<MeetingLink
 											clubSlug={clubSlug}
 											meetingId={m.id}
-											className="block"
+											className="block py-2 md:py-0"
 										>
 											{header}
 										</MeetingLink>
@@ -342,6 +346,12 @@ export function SeasonGrid({
 													// px-2.5/py-1/11px (was px-1.5/py-0.5/10px): the chip is a
 													// primary mobile action — 19px tall was too small to tap.
 													"mx-auto mt-1 flex cursor-pointer items-center gap-0.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold whitespace-nowrap transition-colors disabled:opacity-50",
+													// Below md the pill gets a bit more padding (~33px) and an
+													// invisible ::after pad tops it up to a ≥44px hit area:
+													// 4px up (exactly the mt-1 gap, so it never covers the
+													// date link) + 12px down (exactly the th padding + row
+													// gap, so it never covers the first grid row) (#224).
+													"max-md:relative max-md:py-2 max-md:after:absolute max-md:after:inset-x-0 max-md:after:-top-1 max-md:after:-bottom-3 max-md:after:content-['']",
 													status?.declined
 														? // Same fill recipe as the destructive Button variant, so
 															// white text stays AA in dark (destructive/60 ⇒ 6.0:1).
@@ -374,10 +384,15 @@ export function SeasonGrid({
 							<tr key={row.id}>
 								<th className="sticky left-0 z-10 bg-card px-3 py-1 text-right text-xs font-semibold whitespace-nowrap shadow-[4px_0_6px_-4px_rgba(0,0,0,0.35)]">
 									{row.memberId ? (
+										// Below md the row is already 44px tall (the cells grew),
+										// so an invisible ::before pad stretches this ~17px text
+										// link over the whole row height (±14px) and into the th
+										// side padding (±8px) without moving a pixel visually;
+										// md+ renders exactly as before (#224).
 										<Link
 											to="/members/$id"
 											params={{ id: row.memberId }}
-											className="hover:underline"
+											className="hover:underline max-md:relative max-md:before:absolute max-md:before:-inset-x-2 max-md:before:-inset-y-3.5 max-md:before:content-['']"
 										>
 											{row.label}
 										</Link>
