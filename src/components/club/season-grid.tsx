@@ -395,6 +395,11 @@ export function SeasonGrid({
 												availabilityEditable={availabilityEditable}
 												onAvailability={onAvailability}
 												clubSlug={clubSlug}
+												meetingLabel={
+													m
+														? formatMeetingDate(m.scheduledAt, m.timezone)
+														: undefined
+												}
 											/>
 										</td>
 									);

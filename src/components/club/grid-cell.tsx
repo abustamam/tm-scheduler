@@ -29,6 +29,7 @@ export function GridCell({
 	availabilityEditable = false,
 	onAvailability,
 	clubSlug,
+	meetingLabel,
 }: {
 	cell: ViewCell;
 	currentMemberId?: string | null;
@@ -42,6 +43,11 @@ export function GridCell({
 	/** Club slug — when set (public club shell), cell links target the public
 	 *  meeting view instead of the signed-in `/meetings/$id` route. */
 	clubSlug?: string;
+	/** Formatted meeting date (e.g. from `formatMeetingDate`) — appended to
+	 *  every button/link accessible name so a screen reader tabbing across the
+	 *  row hears which meeting each identical "Claim"/"NA"/member-name control
+	 *  belongs to, not just the repeated label (#213). Omitted ⇒ unchanged. */
+	meetingLabel?: string;
 }) {
 	const interactive = !!currentMemberId && !!cell.slotId;
 	const isMine =
@@ -49,16 +55,17 @@ export function GridCell({
 		cell.kind === "assigned" &&
 		cell.memberId === currentMemberId;
 	const isClaimable = interactive && cell.kind === "open";
+	const dateSuffix = meetingLabel ? ` — ${meetingLabel}` : "";
 
 	// Availability toggle (Members × Meetings, your row). "blank" cells (the
 	// meeting has no slots) aren't toggleable.
 	if (availabilityEditable && onAvailability && cell.kind !== "blank") {
 		const label =
-			cell.kind === "na"
+			(cell.kind === "na"
 				? "Mark yourself available again"
 				: cell.kind === "assigned"
 					? `Release ${cell.text} and mark yourself unavailable`
-					: "Mark yourself unavailable — I can't make this one";
+					: "Mark yourself unavailable — I can't make this one") + dateSuffix;
 		const tone =
 			cell.kind === "na"
 				? "border border-dashed border-rose-500/70 text-rose-600 hover:bg-rose-500 hover:text-white"
@@ -90,8 +97,8 @@ export function GridCell({
 			<button
 				type="button"
 				disabled={busy}
-				title={`${cell.title} — tap to claim`}
-				aria-label={`Claim ${cell.title}`}
+				title={`${cell.title} — tap to claim${dateSuffix}`}
+				aria-label={`Claim ${cell.title}${dateSuffix}`}
 				onClick={() => onClaim(slotId)}
 				className={cn(
 					BASE,
@@ -110,8 +117,8 @@ export function GridCell({
 			<button
 				type="button"
 				disabled={busy}
-				title={`${cell.title} — tap to release`}
-				aria-label={`Release ${cell.title}`}
+				title={`${cell.title} — tap to release${dateSuffix}`}
+				aria-label={`Release ${cell.title}${dateSuffix}`}
 				onClick={() => onRelease(slotId)}
 				className={cn(
 					BASE,
@@ -143,7 +150,7 @@ export function GridCell({
 			clubSlug={clubSlug}
 			meetingId={cell.meetingId}
 			className="block"
-			aria-label={cell.title || "meeting"}
+			aria-label={(cell.title || "meeting") + dateSuffix}
 		>
 			{inner}
 		</MeetingLink>
