@@ -291,9 +291,12 @@ export function SeasonGrid({
 												locked
 											</div>
 										) : (
+											// "ended", not "done": a past meeting still accepts
+											// late sign-ups (recording who stepped in), so the
+											// label shouldn't read as closed.
 											<div className="text-[10px] font-medium text-amber-700">
 												{m.isPast
-													? "done"
+													? "ended"
 													: m.openCount === 0
 														? "full"
 														: `${m.openCount} open`}
