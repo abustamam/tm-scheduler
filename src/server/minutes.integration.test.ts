@@ -2,7 +2,8 @@
  * DB-backed integration tests for meeting minutes (ADR-0014 / #152).
  *
  * Exercises the REAL minutes logic against a live Postgres identified by
- * TEST_DATABASE_URL: the attendance pre-fill from role slots, guest add/reuse,
+ * TEST_DATABASE_URL: the unmarked attendance default (#218 — no saved record
+ * means `status: null`, never inferred from role slots), guest add/reuse,
  * the member-XOR-guest DB check constraints, Table Topics ordering, award
  * upsert/clear, and the loaded minutes shape. `#/db` is mocked to the test
  * client so the logic modules import cleanly without a production DATABASE_URL.
@@ -40,6 +41,9 @@ const {
 	setAward,
 	setMemberPresence,
 } = await import("#/server/minutes-logic");
+const { buildAttendanceSection, renderMinutesPdf } = await import(
+	"#/server/minutes-pdf-logic"
+);
 
 describe.skipIf(!hasTestDb)("meeting minutes (#152)", () => {
 	let seed: SeededClub;
@@ -92,19 +96,33 @@ describe.skipIf(!hasTestDb)("meeting minutes (#152)", () => {
 		});
 	}
 
-	it("pre-fills present for role-slot holders; others default absent", async () => {
+	it("defaults every member without a saved record to unmarked (#218)", async () => {
+		const m = await loadMinutes(seed.meetingId);
+		expect(m.members).toHaveLength(2);
+		expect(m.members.every((x) => x.status === null)).toBe(true);
+		expect(m.counts).toEqual({
+			present: 0,
+			absent: 0,
+			excused: 0,
+			unmarked: 2,
+			guests: 0,
+		});
+	});
+
+	it("does NOT infer attendance from a role slot — holders stay unmarked (#218)", async () => {
 		await assignSlotToMember(seed.memberId);
 
 		const m = await loadMinutes(seed.meetingId);
 		const withRole = m.members.find((x) => x.memberId === seed.memberId);
 		const without = m.members.find((x) => x.memberId === seed.adminMemberId);
-		expect(withRole).toMatchObject({ status: "present", hasRole: true });
-		expect(without).toMatchObject({ status: "absent", hasRole: false });
-		expect(m.counts.present).toBe(1);
-		expect(m.counts.absent).toBe(1);
+		expect(withRole).toMatchObject({ status: null, hasRole: true });
+		expect(without).toMatchObject({ status: null, hasRole: false });
+		expect(m.counts.present).toBe(0);
+		expect(m.counts.absent).toBe(0);
+		expect(m.counts.unmarked).toBe(2);
 	});
 
-	it("setMemberPresence overrides the pre-fill and upserts idempotently", async () => {
+	it("setMemberPresence saves, round-trips, and upserts idempotently", async () => {
 		await assignSlotToMember(seed.memberId);
 
 		await setMemberPresence({
@@ -116,7 +134,14 @@ describe.skipIf(!hasTestDb)("meeting minutes (#152)", () => {
 		expect(m.members.find((x) => x.memberId === seed.memberId)?.status).toBe(
 			"excused",
 		);
+		// The other member is still unmarked — recording one member never
+		// implicitly marks the rest.
+		expect(
+			m.members.find((x) => x.memberId === seed.adminMemberId)?.status,
+		).toBeNull();
 		expect(m.counts.excused).toBe(1);
+		expect(m.counts.unmarked).toBe(1);
+		expect(m.counts.absent).toBe(0);
 
 		// Second write updates the same row (no duplicate — the unique index).
 		await setMemberPresence({
@@ -128,11 +153,35 @@ describe.skipIf(!hasTestDb)("meeting minutes (#152)", () => {
 		expect(m.members.find((x) => x.memberId === seed.memberId)?.status).toBe(
 			"absent",
 		);
+		// Only the explicitly saved record counts as absent.
+		expect(m.counts.absent).toBe(1);
+		expect(m.counts.unmarked).toBe(1);
 		const rows = await testDb
 			.select({ id: meetingAttendance.id })
 			.from(meetingAttendance)
 			.where(eq(meetingAttendance.meetingId, seed.meetingId));
 		expect(rows).toHaveLength(1);
+	});
+
+	it("renders the minutes PDF with unmarked members separate from absent (#218)", async () => {
+		// One explicit absentee, one unmarked member.
+		await setMemberPresence({
+			meetingId: seed.meetingId,
+			memberId: seed.memberId,
+			status: "absent",
+		});
+		const minutes = await loadMinutes(seed.meetingId);
+		const section = buildAttendanceSection(minutes);
+		expect(section.countsLine).toContain("Absent: 1");
+		expect(section.countsLine).toContain("Unmarked: 1");
+		const absentRow = section.rows.find((r) => r.label === "Absent");
+		const unmarkedRow = section.rows.find((r) => r.label === "Unmarked");
+		expect(absentRow?.names).toBe("Member User");
+		expect(unmarkedRow?.names).toBe("Admin User");
+
+		// The full renderer consumes that section model and produces a real PDF.
+		const pdf = await renderMinutesPdf(seed.meetingId);
+		expect(new TextDecoder().decode(pdf.slice(0, 5))).toBe("%PDF-");
 	});
 
 	it("adds a NEW present guest and reuses an existing one without duplicating", async () => {

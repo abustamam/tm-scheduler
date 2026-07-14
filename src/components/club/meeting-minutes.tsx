@@ -155,7 +155,12 @@ export function MeetingMinutes({
 					busy={busy}
 					// Only present members can be added as Table Topics speakers (#170);
 					// guests are handled separately by the picker's guest section.
-					roster={minutes.members.filter((m) => m.status === "present")}
+					// Present or unmarked members can be added as Table Topics speakers:
+					// unmarked means "not recorded", never absent (#218), so only members
+					// explicitly marked absent/excused are filtered out.
+					roster={minutes.members.filter(
+						(m) => m.status === "present" || m.status === null,
+					)}
 					clubGuests={clubGuests}
 					onAdd={(payload) =>
 						run(() => addTableTopics({ data: { meetingId, ...payload } }))
@@ -214,7 +219,7 @@ function AttendanceSection({
 	}) => void;
 	onRemoveGuest: (guestId: string) => void;
 }) {
-	const { present, absent, excused, guests } = minutes.counts;
+	const { present, absent, excused, unmarked, guests } = minutes.counts;
 	return (
 		<section className="space-y-3">
 			<div className="flex flex-wrap items-center gap-2">
@@ -222,6 +227,7 @@ function AttendanceSection({
 				<Badge variant="secondary">{present} present</Badge>
 				<Badge variant="outline">{excused} excused</Badge>
 				<Badge variant="outline">{absent} absent</Badge>
+				<Badge variant="outline">{unmarked} unmarked</Badge>
 				<Badge variant="secondary">{guests} guests</Badge>
 			</div>
 
@@ -249,7 +255,7 @@ function AttendanceSection({
 							</div>
 						) : (
 							<Badge variant={m.status === "present" ? "secondary" : "outline"}>
-								{STATUS_LABELS[m.status]}
+								{m.status ? STATUS_LABELS[m.status] : "Unmarked"}
 							</Badge>
 						)}
 					</li>
