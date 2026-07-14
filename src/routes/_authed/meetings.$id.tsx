@@ -39,6 +39,7 @@ import {
 	isMeetingLocked,
 	lockedViewer,
 	MEETING_LOCKED_MESSAGE,
+	meetingDatePassed,
 	meetingDateReached,
 } from "#/lib/meeting-lifecycle";
 import { deriveMeetingNavItems } from "#/lib/meeting-nav";
@@ -391,6 +392,12 @@ function MeetingDetail() {
 					meetingId={meeting.id}
 					minutes={minutes.data}
 					program={minutes.program}
+					// Past/completed (#225): completed is locked; "past" is strictly
+					// before today so the day-of agenda isn't shadowed by an empty
+					// Program (roles are still being filled the day of the meeting).
+					meetingPast={
+						locked || meetingDatePassed(meeting.scheduledAt, timezone)
+					}
 					canEdit={minutes.canEdit}
 					clubGuests={clubGuests}
 					onMutated={() => router.invalidate()}
