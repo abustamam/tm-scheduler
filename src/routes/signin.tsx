@@ -1,5 +1,6 @@
 import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { useState } from "react";
+import { BrandMark } from "#/components/brand-mark";
 import { Button } from "#/components/ui/button";
 import {
 	Card,
@@ -49,10 +50,11 @@ function SignIn() {
 	}
 
 	return (
-		<main className="flex min-h-svh items-center justify-center p-4">
+		<main className="flex min-h-svh flex-col items-center justify-center gap-6 p-4">
+			<BrandMark />
 			<Card className="w-full max-w-sm">
 				<CardHeader>
-					<CardTitle>Sign in</CardTitle>
+					<CardTitle className="font-display text-xl">Sign in</CardTitle>
 					<CardDescription>
 						Enter your email and we&apos;ll send you a magic link to sign in. No
 						password needed.
@@ -104,6 +106,10 @@ function SignIn() {
 					)}
 				</CardContent>
 			</Card>
+			<p className="w-full max-w-sm text-center text-xs text-muted-foreground">
+				Just signing up for a meeting role? No account needed — open your
+				club&apos;s sign-up link and pick your name.
+			</p>
 		</main>
 	);
 }
