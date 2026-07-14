@@ -58,7 +58,7 @@ export function ClubSwitcher({
 				<button
 					type="button"
 					disabled={busy}
-					className="flex max-w-[220px] items-center gap-2 rounded-[10px] border border-[var(--line)] bg-[var(--surface-strong)] px-3 py-[7px] text-left text-[13px] font-semibold text-[var(--sea-ink)] transition-colors hover:border-[var(--lagoon-deep)] disabled:opacity-60"
+					className="flex max-w-[220px] items-center gap-2 rounded-lg border border-[var(--line)] bg-[var(--surface-strong)] px-3 py-2 text-left text-sm font-semibold text-[var(--sea-ink)] transition-colors hover:border-[var(--lagoon-deep)] disabled:opacity-60"
 				>
 					<span className="truncate">{active.name}</span>
 					<ChevronsUpDown
@@ -68,7 +68,7 @@ export function ClubSwitcher({
 				</button>
 			</PopoverTrigger>
 			<PopoverContent align="end" className="w-[248px] p-1.5">
-				<div className="px-2 pt-1 pb-1.5 text-[10.5px] font-extrabold tracking-[0.08em] text-[var(--sea-ink-soft)] uppercase">
+				<div className="px-2 pt-1 pb-1.5 text-xs font-extrabold tracking-[0.08em] text-[var(--sea-ink-soft)] uppercase">
 					Switch club
 				</div>
 				{clubs.map((c) => {
@@ -80,14 +80,14 @@ export function ClubSwitcher({
 							disabled={busy}
 							onClick={() => choose(c.clubId)}
 							className={cn(
-								"flex w-full items-center gap-2 rounded-[8px] px-2 py-2 text-left text-[13px] transition-colors hover:bg-[var(--foam)] disabled:opacity-60",
+								"flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors hover:bg-[var(--foam)] disabled:opacity-60",
 								isActive && "bg-[var(--sand)]",
 							)}
 						>
 							<div className="min-w-0 flex-1">
 								<div className="truncate font-semibold">{c.name}</div>
 								{c.clubNumber ? (
-									<div className="text-[11px] text-[var(--sea-ink-soft)]">
+									<div className="text-xs text-[var(--sea-ink-soft)]">
 										Club {c.clubNumber}
 									</div>
 								) : null}

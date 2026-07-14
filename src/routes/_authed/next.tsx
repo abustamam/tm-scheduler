@@ -30,7 +30,7 @@ function NoUpcomingMeeting() {
 	const { canManage } = Route.useLoaderData();
 	return (
 		<PageContainer>
-			<h1 className="font-display text-[30px] font-semibold tracking-[-0.02em]">
+			<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
 				Next meeting
 			</h1>
 			<div className="mt-7 rounded-2xl border border-dashed border-[var(--line)] bg-[var(--surface)] px-6 py-16 text-center">

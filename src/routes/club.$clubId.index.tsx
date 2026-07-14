@@ -76,7 +76,7 @@ function ClubHome() {
 	}
 
 	return (
-		<div className="mx-auto w-full max-w-5xl space-y-6 p-4 pb-8 md:p-6">
+		<div className="mx-auto w-full max-w-public space-y-6 p-4 pb-8 md:p-6">
 			{/* Header */}
 			<div className="flex items-center justify-between pt-2">
 				<h1 className="font-display text-2xl font-semibold tracking-tight">

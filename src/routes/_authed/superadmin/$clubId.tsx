@@ -32,11 +32,11 @@ function ClubDetail() {
 			<div className="space-y-1">
 				<Link
 					to="/superadmin"
-					className="inline-flex items-center gap-1 text-[13px] text-[var(--sea-ink-soft)] hover:text-[var(--sea-ink)]"
+					className="inline-flex items-center gap-1 text-sm text-[var(--sea-ink-soft)] hover:text-[var(--sea-ink)]"
 				>
 					<ArrowLeft className="size-4" /> All clubs
 				</Link>
-				<h1 className="font-display text-[30px] font-semibold tracking-[-0.02em]">
+				<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
 					{club.name}
 				</h1>
 				<p className="text-sm text-muted-foreground">
@@ -110,8 +110,8 @@ function AdminPanel({
 				<span
 					className={
 						linked
-							? "inline-block rounded-full bg-[var(--foam)] px-2 py-0.5 text-[11px] font-semibold text-[var(--palm)]"
-							: "inline-block rounded-full bg-[var(--sand)] px-2 py-0.5 text-[11px] font-semibold text-[var(--sea-ink-soft)]"
+							? "inline-block rounded-full bg-[var(--foam)] px-2 py-0.5 text-xs font-semibold text-[var(--palm)]"
+							: "inline-block rounded-full bg-[var(--sand)] px-2 py-0.5 text-xs font-semibold text-[var(--sea-ink-soft)]"
 					}
 				>
 					{linked ? "Linked" : "Unclaimed"}

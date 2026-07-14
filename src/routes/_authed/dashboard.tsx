@@ -45,28 +45,28 @@ function Dashboard() {
 
 	return (
 		<PageContainer>
-			<div className="mb-[22px]">
-				<h1 className="font-display text-[30px] font-semibold tracking-[-0.02em]">
+			<div className="mb-5">
+				<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
 					{greeting(authUser.name || authUser.email)}
 				</h1>
-				<p className="mt-[5px] text-sm text-[var(--sea-ink-soft)]">
+				<p className="mt-1 text-sm text-[var(--sea-ink-soft)]">
 					Here's where you stand and what's coming up.
 				</p>
 			</div>
 
-			<div className="grid grid-cols-1 items-start gap-[18px] lg:grid-cols-[1.55fr_1fr]">
+			<div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[1.55fr_1fr]">
 				{/* Left column */}
-				<div className="flex min-w-0 flex-col gap-[18px]">
+				<div className="flex min-w-0 flex-col gap-5">
 					{/* Speech log (real) */}
 					<div className="overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] shadow-[0_1px_0_var(--inset-glint)_inset,0_10px_24px_rgba(23,58,64,.05)]">
 						<div className="flex items-center justify-between px-5 pt-4 pb-2.5">
-							<h2 className="text-[15px] font-bold">My speech log</h2>
+							<h2 className="text-sm font-bold">My speech log</h2>
 							<span className="text-xs text-[var(--sea-ink-soft)]">
 								{speeches.length} recent
 							</span>
 						</div>
 						{speeches.length === 0 ? (
-							<p className="border-t border-[var(--line)] px-5 py-8 text-center text-[13px] text-[var(--sea-ink-soft)]">
+							<p className="border-t border-[var(--line)] px-5 py-8 text-center text-sm text-[var(--sea-ink-soft)]">
 								No speeches yet. Sign up for a speaking slot to get started.
 							</p>
 						) : (
@@ -75,13 +75,13 @@ function Dashboard() {
 								return (
 									<div
 										key={l.slotId}
-										className="grid grid-cols-[64px_1fr_auto] items-center gap-3.5 border-t border-[var(--line)] px-5 py-[13px] transition-colors hover:bg-[var(--foam)]"
+										className="grid grid-cols-[64px_1fr_auto] items-center gap-3.5 border-t border-[var(--line)] px-5 py-3 transition-colors hover:bg-[var(--foam)]"
 									>
 										<div className="text-center leading-[1.1]">
-											<div className="font-display text-[18px] font-semibold">
+											<div className="font-display text-lg font-semibold">
 												{day}
 											</div>
-											<div className="text-[10.5px] font-bold tracking-[0.05em] text-[var(--sea-ink-soft)]">
+											<div className="text-xs font-bold tracking-[0.05em] text-[var(--sea-ink-soft)]">
 												{mon}
 											</div>
 										</div>
@@ -107,16 +107,16 @@ function Dashboard() {
 				</div>
 
 				{/* Right column */}
-				<div className="flex min-w-0 flex-col gap-[18px]">
+				<div className="flex min-w-0 flex-col gap-5">
 					{/* Upcoming roles (real) */}
 					<div className="overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] shadow-[0_1px_0_var(--inset-glint)_inset,0_10px_24px_rgba(23,58,64,.05)]">
-						<div className="px-[18px] pt-4 pb-2.5">
-							<h2 className="text-[15px] font-bold">My upcoming roles</h2>
+						<div className="px-5 pt-4 pb-2.5">
+							<h2 className="text-sm font-bold">My upcoming roles</h2>
 						</div>
 						{commitments.length === 0 ? (
 							<Link
 								to="/next"
-								className="block border-t border-[var(--line)] px-[18px] py-5 text-[13px] text-[var(--sea-ink-soft)] no-underline transition-colors hover:bg-[var(--foam)]"
+								className="block border-t border-[var(--line)] px-5 py-5 text-sm text-[var(--sea-ink-soft)] no-underline transition-colors hover:bg-[var(--foam)]"
 							>
 								You haven't signed up for any upcoming roles. Sign up for a
 								meeting role →
@@ -128,17 +128,17 @@ function Dashboard() {
 									<Link
 										key={r.slotId}
 										to="/next"
-										className="flex items-center gap-3 border-t border-[var(--line)] px-[18px] py-3 no-underline transition-colors hover:bg-[var(--foam)]"
+										className="flex items-center gap-3 border-t border-[var(--line)] px-5 py-3 no-underline transition-colors hover:bg-[var(--foam)]"
 									>
 										<span
 											className="size-2 shrink-0 rounded-full"
 											style={{ background: "var(--palm)" }}
 										/>
 										<div className="min-w-0 flex-1 leading-[1.25]">
-											<div className="text-[13.5px] font-bold text-[var(--sea-ink)]">
+											<div className="text-sm font-bold text-[var(--sea-ink)]">
 												{r.roleName}
 											</div>
-											<div className="text-[11.5px] text-[var(--sea-ink-soft)]">
+											<div className="text-xs text-[var(--sea-ink-soft)]">
 												{formatMeetingDate(r.scheduledAt, r.timezone)} ·{" "}
 												{r.speechTitle ?? r.theme ?? r.clubName}
 											</div>
@@ -146,8 +146,8 @@ function Dashboard() {
 										<span
 											className={
 												confirmed
-													? "shrink-0 rounded-full border border-[var(--line)] bg-[var(--foam)] px-2.5 py-1 text-[11px] font-bold text-[var(--sea-ink-soft)]"
-													: "shrink-0 rounded-full bg-[rgba(79,184,178,.16)] px-2.5 py-1 text-[11px] font-bold text-[var(--lagoon-deep)]"
+													? "shrink-0 rounded-full border border-[var(--line)] bg-[var(--foam)] px-2.5 py-1 text-xs font-bold text-[var(--sea-ink-soft)]"
+													: "shrink-0 rounded-full bg-[rgba(79,184,178,.16)] px-2.5 py-1 text-xs font-bold text-[var(--lagoon-deep)]"
 											}
 										>
 											{confirmed ? "Confirmed" : "Signed up"}
@@ -160,12 +160,12 @@ function Dashboard() {
 
 					{/* My Pathways progress (real, synced from Base Camp) */}
 					<div>
-						<h2 className="mb-2.5 px-0.5 text-[15px] font-bold">My Pathways</h2>
+						<h2 className="mb-2.5 px-0.5 text-sm font-bold">My Pathways</h2>
 						<PathwaysProgress paths={pathways} />
 					</div>
 
 					{/* Quick actions */}
-					<div className="flex flex-col gap-[9px]">
+					<div className="flex flex-col gap-2">
 						<QuickAction to="/next" icon={CalendarDays}>
 							Sign up for a meeting role
 						</QuickAction>
@@ -181,7 +181,7 @@ function Dashboard() {
 
 function CompletedPill() {
 	return (
-		<span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--foam)] px-2.5 py-[5px] text-[11.5px] font-semibold text-[var(--palm)]">
+		<span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--foam)] px-2.5 py-1 text-xs font-semibold text-[var(--palm)]">
 			<span className="size-1.5 rounded-full bg-[var(--palm)]" />
 			Completed
 		</span>
@@ -200,9 +200,9 @@ function QuickAction({
 	return (
 		<Link
 			to={to}
-			className="flex items-center gap-[11px] rounded-[13px] border border-[var(--line)] bg-[var(--surface-strong)] px-[15px] py-[13px] text-[13.5px] font-semibold text-[var(--sea-ink)] no-underline transition-colors hover:border-[var(--lagoon-deep)] hover:bg-[var(--foam)]"
+			className="flex items-center gap-2.5 rounded-xl border border-[var(--line)] bg-[var(--surface-strong)] px-4 py-3 text-sm font-semibold text-[var(--sea-ink)] no-underline transition-colors hover:border-[var(--lagoon-deep)] hover:bg-[var(--foam)]"
 		>
-			<Icon className="size-[18px] text-[var(--lagoon-deep)]" aria-hidden />
+			<Icon className="size-5 text-[var(--lagoon-deep)]" aria-hidden />
 			{children}
 		</Link>
 	);

@@ -283,7 +283,7 @@ function MeetingDetail() {
 				</div>
 			) : null}
 			<header className="space-y-2">
-				<h1 className="font-display text-[30px] font-semibold tracking-[-0.02em]">
+				<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
 					{meeting.theme ?? "Meeting"}
 				</h1>
 				<div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">

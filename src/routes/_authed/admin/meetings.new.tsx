@@ -57,7 +57,7 @@ function NewMeeting() {
 	return (
 		<PageContainer className="space-y-4">
 			<div>
-				<h1 className="font-display text-[30px] font-semibold tracking-[-0.02em]">
+				<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
 					New meeting
 				</h1>
 				<p className="text-sm text-muted-foreground">

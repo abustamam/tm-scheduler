@@ -40,10 +40,10 @@ function Resources() {
 	return (
 		<PageContainer>
 			<div className="mb-5">
-				<h1 className="font-display text-[30px] font-semibold tracking-[-0.02em]">
+				<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
 					Resources
 				</h1>
-				<p className="mt-[5px] text-sm text-[var(--sea-ink-soft)]">
+				<p className="mt-1 text-sm text-[var(--sea-ink-soft)]">
 					Everything in one place — guides, templates and references, without
 					digging through Base Camp.
 				</p>
@@ -57,7 +57,7 @@ function Resources() {
 						type="button"
 						onClick={() => setCat(k)}
 						className={cn(
-							"rounded-full border px-[13px] py-[7px] text-[13px] font-semibold transition-transform active:scale-[0.97]",
+							"rounded-full border px-3 py-2 text-sm font-semibold transition-transform active:scale-[0.97]",
 							cat === k
 								? "border-[var(--sea-ink)] bg-[var(--sea-ink)] text-[var(--background)]"
 								: "border-[var(--line)] bg-[var(--surface-strong)] text-[var(--sea-ink-soft)]",
@@ -83,28 +83,26 @@ function ResourceCard({ resource }: { resource: Resource }) {
 	return (
 		<button
 			type="button"
-			className="group flex flex-col gap-[11px] rounded-[15px] border border-[var(--line)] bg-[var(--surface-strong)] p-[18px] text-left shadow-[0_1px_0_var(--inset-glint)_inset,0_8px_20px_rgba(23,58,64,.05)] transition-all hover:-translate-y-0.5 hover:border-[var(--lagoon-deep)]"
+			className="group flex flex-col gap-3 rounded-xl border border-[var(--line)] bg-[var(--surface-strong)] p-5 text-left shadow-[0_1px_0_var(--inset-glint)_inset,0_8px_20px_rgba(23,58,64,.05)] transition-all hover:-translate-y-0.5 hover:border-[var(--lagoon-deep)]"
 		>
 			<div className="flex items-center justify-between">
 				<span
-					className="flex size-10 items-center justify-center rounded-[11px] text-white"
+					className="flex size-10 items-center justify-center rounded-lg text-white"
 					style={{ background: resourceToneGradient(resource.tone) }}
 				>
-					<Icon className="size-[19px]" />
+					<Icon className="size-5" />
 				</span>
-				<span className="text-[10.5px] font-bold tracking-[0.05em] text-[var(--sea-ink-soft)] uppercase">
+				<span className="text-xs font-bold tracking-[0.05em] text-[var(--sea-ink-soft)] uppercase">
 					{resource.cat}
 				</span>
 			</div>
 			<div>
-				<div className="text-[15px] leading-tight font-bold">
-					{resource.title}
-				</div>
-				<p className="mt-[5px] text-[12.5px] leading-snug text-[var(--sea-ink-soft)]">
+				<div className="text-sm leading-tight font-bold">{resource.title}</div>
+				<p className="mt-1 text-xs leading-snug text-[var(--sea-ink-soft)]">
 					{resource.desc}
 				</p>
 			</div>
-			<div className="mt-auto inline-flex items-center gap-[5px] text-[12.5px] font-bold text-[var(--lagoon-deep)] opacity-85 transition-opacity group-hover:opacity-100">
+			<div className="mt-auto inline-flex items-center gap-1 text-xs font-bold text-[var(--lagoon-deep)] opacity-85 transition-opacity group-hover:opacity-100">
 				Open
 				<svg
 					width="14"

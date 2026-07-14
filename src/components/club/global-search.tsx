@@ -165,19 +165,19 @@ export function GlobalSearch({
 						setQuery("");
 					}
 				}}
-				className="h-9 rounded-[10px] border-[var(--line)] bg-[var(--surface-strong)]"
+				className="h-9 rounded-lg border-[var(--line)] bg-[var(--surface-strong)]"
 			/>
 			{open ? (
 				<div
 					id={listId}
 					className={
 						variant === "popover"
-							? "absolute inset-x-0 top-full z-50 mt-1.5 max-h-[min(420px,60vh)] overflow-y-auto rounded-[10px] border border-[var(--line)] bg-[var(--surface-strong)] p-1 shadow-lg backdrop-blur-[6px]"
-							: "mt-1.5 max-h-[45svh] overflow-y-auto rounded-[10px] border border-[var(--line)] bg-[var(--surface-strong)] p-1"
+							? "absolute inset-x-0 top-full z-50 mt-1.5 max-h-[min(420px,60vh)] overflow-y-auto rounded-lg border border-[var(--line)] bg-[var(--surface-strong)] p-1 shadow-lg backdrop-blur-[6px]"
+							: "mt-1.5 max-h-[45svh] overflow-y-auto rounded-lg border border-[var(--line)] bg-[var(--surface-strong)] p-1"
 					}
 				>
 					{results.members.length === 0 && results.pages.length === 0 ? (
-						<div className="px-2.5 py-2 text-[12.5px] text-[var(--sea-ink-soft)]">
+						<div className="px-2.5 py-2 text-xs text-[var(--sea-ink-soft)]">
 							No matches for “{query.trim()}”
 						</div>
 					) : (
@@ -204,11 +204,11 @@ export function GlobalSearch({
 													size={28}
 												/>
 												<span className="min-w-0 leading-tight">
-													<span className="block truncate text-[13px] font-semibold text-[var(--sea-ink)]">
+													<span className="block truncate text-sm font-semibold text-[var(--sea-ink)]">
 														{m.name}
 													</span>
 													{m.officerPositions.length > 0 ? (
-														<span className="block truncate text-[11px] text-[var(--sea-ink-soft)]">
+														<span className="block truncate text-xs text-[var(--sea-ink-soft)]">
 															{m.officerPositions
 																.map(officerPositionLabel)
 																.join(", ")}
@@ -227,7 +227,7 @@ export function GlobalSearch({
 											<button
 												type="button"
 												onClick={() => choose(() => navigate({ to: p.to }))}
-												className="flex w-full items-center rounded-lg px-2.5 py-2 text-left text-[13px] font-medium text-[var(--sea-ink)] transition-colors hover:bg-[var(--foam)]"
+												className="flex w-full items-center rounded-lg px-2.5 py-2 text-left text-sm font-medium text-[var(--sea-ink)] transition-colors hover:bg-[var(--foam)]"
 											>
 												{p.label}
 											</button>
@@ -252,7 +252,7 @@ function ResultGroup({
 }) {
 	return (
 		<>
-			<div className="px-2.5 pt-2 pb-0.5 text-[10.5px] font-extrabold tracking-[0.12em] text-[var(--sea-ink-soft)] uppercase opacity-70 first:pt-1">
+			<div className="px-2.5 pt-2 pb-0.5 text-xs font-extrabold tracking-[0.12em] text-[var(--sea-ink-soft)] uppercase opacity-70 first:pt-1">
 				{label}
 			</div>
 			<ul aria-label={label}>{children}</ul>

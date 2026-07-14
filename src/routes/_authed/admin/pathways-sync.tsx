@@ -50,7 +50,7 @@ function PathwaysSync() {
 	return (
 		<PageContainer className="space-y-6">
 			<div>
-				<h1 className="font-display text-[30px] font-semibold tracking-[-0.02em]">
+				<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
 					Sync Pathways progress
 				</h1>
 				<p className="text-sm text-muted-foreground">
