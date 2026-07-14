@@ -110,6 +110,7 @@ export const claimSlot = createServerFn({ method: "POST" })
 				memberId: data.memberId,
 				actorMemberId: data.actorMemberId,
 				meetingId: slot.meetingId,
+				clubId: slot.clubId,
 			});
 
 			await logActivity(tx, {
