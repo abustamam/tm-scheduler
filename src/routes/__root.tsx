@@ -54,7 +54,11 @@ export const Route = createRootRouteWithContext<MyRouterContext>()({
 
 function RootDocument({ children }: { children: React.ReactNode }) {
 	return (
-		<html lang="en">
+		// suppressHydrationWarning: the theme script below adds `.dark` to <html>
+		// before hydration, so the client attribute legitimately differs from the
+		// SSR markup; without it React reconciles the class away (dark-mode flash)
+		// and logs a mismatch on every navigation.
+		<html lang="en" suppressHydrationWarning>
 			<head>
 				{/* Apply the saved theme before paint to avoid a flash of the wrong mode. */}
 				<script
