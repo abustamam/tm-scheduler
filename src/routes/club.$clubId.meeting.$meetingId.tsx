@@ -21,6 +21,7 @@ import {
 } from "#/components/agenda/meeting-agenda";
 import { MeetingNavStrip } from "#/components/club/meeting-nav-strip";
 import { MeetingViewActions } from "#/components/club/meeting-view-actions";
+import { SigningUpAs } from "#/components/club/signing-up-as";
 import { ShareLinkButton } from "#/components/share-link-button";
 import { Button } from "#/components/ui/button";
 import {
@@ -318,6 +319,9 @@ function MeetingView() {
 						<span className="font-medium">{meeting.wordOfTheDay}</span>
 					</p>
 				) : null}
+				{/* Who claims/availability will be attributed to, with the same
+				    "not you?" escape hatch as the sign-up sheet (issue #220). */}
+				<SigningUpAs clubSlug={clubId} />
 				{over ? (
 					myId ? (
 						<p className="mt-1 text-sm font-medium text-muted-foreground">
