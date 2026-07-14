@@ -339,7 +339,9 @@ export function SeasonGrid({
 													status?.declined ? "Not going" : "Can't go"
 												} — ${formatMeetingDate(m.scheduledAt, m.timezone)}`}
 												className={cn(
-													"mx-auto mt-1 flex cursor-pointer items-center gap-0.5 rounded-full border px-1.5 py-0.5 text-[10px] font-semibold whitespace-nowrap transition-colors disabled:opacity-50",
+													// px-2.5/py-1/11px (was px-1.5/py-0.5/10px): the chip is a
+													// primary mobile action — 19px tall was too small to tap.
+													"mx-auto mt-1 flex cursor-pointer items-center gap-0.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold whitespace-nowrap transition-colors disabled:opacity-50",
 													status?.declined
 														? "border-rose-700 bg-rose-700 text-white hover:opacity-80"
 														: "border-border text-muted-foreground/70 hover:border-rose-400 hover:text-rose-700",
