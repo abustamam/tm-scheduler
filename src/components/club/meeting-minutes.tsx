@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronUp, Download, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { SendMinutesDialog } from "#/components/minutes/send-minutes-dialog";
 import { Badge } from "#/components/ui/badge";
@@ -28,10 +28,16 @@ import {
 import { useOnlineStatus } from "#/hooks/use-online-status";
 import { deriveMinutes } from "#/lib/derive-minutes";
 import {
+	dispatchOp,
+	drainMinutesQueue,
+	type MinutesServerFns,
+} from "#/lib/drain-minutes";
+import {
 	enqueue,
 	type MinutesOp,
 	readQueue,
 	readSnapshot,
+	removeOp,
 	saveSnapshot,
 } from "#/lib/offline-minutes-queue";
 import {
@@ -110,6 +116,19 @@ export function MeetingMinutes({
 	const [queue, setQueue] = useState<MinutesOp[]>([]);
 	const [snapshot, setSnapshot] = useState<MinutesData | null>(null);
 
+	// #176 slice 4: reconnect drain. When back online with a pending queue, the
+	// queued ops are replayed to the server in order (see `runDrain` below).
+	const [draining, setDraining] = useState(false);
+	const [syncError, setSyncError] = useState<string | null>(null);
+	// `draining` state lags a tick, so the drain effect can re-fire before it
+	// flips — a synchronous ref blocks a second concurrent drain.
+	const drainingRef = useRef(false);
+	// `onMutated` is a fresh arrow every render (router.invalidate); stash it in a
+	// ref so `runDrain`'s identity stays stable and the drain effect isn't
+	// re-triggered on every parent re-render.
+	const onMutatedRef = useRef(onMutated);
+	onMutatedRef.current = onMutated;
+
 	// Load any persisted snapshot + queue once per meeting (survives reloads).
 	useEffect(() => {
 		let alive = true;
@@ -140,13 +159,80 @@ export function MeetingMinutes({
 		[online, minutes, snapshot, queue],
 	);
 
+	// #176 slice 4: replay the queued ops to the server IN ORDER, removing each as
+	// it lands, then re-fetch authoritative state. Stops at the first failure and
+	// keeps the failed op + successors queued for the next reconnect / Retry.
+	const runDrain = useCallback(
+		async (ops: MinutesOp[]) => {
+			if (drainingRef.current || ops.length === 0) return;
+			drainingRef.current = true;
+			setDraining(true);
+			setSyncError(null);
+			// Map the component's server-fn imports to the by-op names dispatchOp uses.
+			const fns: MinutesServerFns = {
+				setAttendance,
+				addGuest: addMinutesGuest,
+				removeGuest: removeMinutesGuest,
+				addTableTopics,
+				removeTableTopics,
+				moveTableTopics,
+				setAward: setMinutesAward,
+				clearAward: clearMinutesAward,
+			};
+			try {
+				const result = await drainMinutesQueue({
+					meetingId,
+					ops,
+					dispatch: (op) => dispatchOp(op, meetingId, fns),
+					onOpDrained: async (opId) => {
+						await removeOp(meetingId, opId);
+						setQueue((q) => q.filter((o) => o.opId !== opId));
+					},
+				});
+				if (result.error) {
+					// Stop-on-failure: the failed op + successors stay queued.
+					setSyncError(errMessage(result.error));
+				} else {
+					// Everything replayed — re-fetch authoritative state (the online
+					// snapshot-save effect then refreshes the offline snapshot).
+					await onMutatedRef.current();
+				}
+			} catch (err) {
+				setSyncError(errMessage(err));
+			} finally {
+				drainingRef.current = false;
+				setDraining(false);
+			}
+		},
+		[meetingId],
+	);
+
+	// Auto-drain when back online with a pending queue: covers the offline→online
+	// transition and an online mount with a leftover queue (e.g. after a reload).
+	// Skipped while a drain is in flight (ref guard) or a sync error is showing —
+	// a persistent failure would otherwise tight-loop; the user retries explicitly.
+	useEffect(() => {
+		if (!online || queue.length === 0 || syncError) return;
+		void runDrain(queue);
+	}, [online, queue, syncError, runDrain]);
+
+	// Going offline clears a stale sync error so the next genuine reconnect
+	// auto-retries; while online, a persistent error stays set (see above).
+	useEffect(() => {
+		if (!online) setSyncError(null);
+	}, [online]);
+
 	// ONLINE: run the server-fn and re-fetch (unchanged). OFFLINE: enqueue the op
 	// and reflect it optimistically; never hit the server or onMutated.
 	async function mutate(
 		onlineFn: () => Promise<unknown>,
 		makeOp: () => MinutesOp,
 	) {
-		if (busy) return;
+		// `draining` joins the guard so a reconnect drain isn't interleaved with a
+		// fresh edit (which could reorder ops). A queue only ever exists after an
+		// actual offline session, so `draining` is ALWAYS false for a normal
+		// online-only user — their online path (below) is byte-for-byte unchanged.
+		if (busy || draining) return;
 		if (!online) {
 			const op = makeOp();
 			setQueue((q) => [...q, op]);
@@ -219,6 +305,25 @@ export function MeetingMinutes({
 					<p className="text-muted-foreground text-sm">
 						{pendingCount} change{pendingCount === 1 ? "" : "s"} pending locally
 						— they'll sync when you're back online.
+					</p>
+				) : null}
+				{draining ? (
+					<p className="text-muted-foreground text-sm">
+						Syncing {queue.length} change{queue.length === 1 ? "" : "s"}…
+					</p>
+				) : null}
+				{syncError && !draining ? (
+					<p className="text-muted-foreground text-sm">
+						Couldn't sync changes —{" "}
+						<Button
+							type="button"
+							variant="link"
+							size="sm"
+							className="h-auto p-0 align-baseline"
+							onClick={() => runDrain(queue)}
+						>
+							Retry
+						</Button>
 					</p>
 				) : null}
 				<AttendanceSection
