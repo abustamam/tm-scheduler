@@ -13,7 +13,7 @@
  */
 import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { memberAvailability, roleSlots } from "#/db/schema";
+import { activityLog, memberAvailability, roleSlots } from "#/db/schema";
 import {
 	cleanup,
 	hasTestDb,
@@ -37,6 +37,19 @@ async function naRowExists(memberId: string, meetingId: string) {
 	return rows.length > 0;
 }
 
+async function availabilityClearLogRows(clubId: string, meetingId: string) {
+	return testDb
+		.select({ id: activityLog.id, detail: activityLog.detail })
+		.from(activityLog)
+		.where(
+			and(
+				eq(activityLog.clubId, clubId),
+				eq(activityLog.action, "availability_clear"),
+				eq(activityLog.targetId, meetingId),
+			),
+		);
+}
+
 describe.skipIf(!hasTestDb)("self-claim clears the decline flag", () => {
 	let seed: SeededClub;
 
@@ -58,6 +71,7 @@ describe.skipIf(!hasTestDb)("self-claim clears the decline flag", () => {
 			memberId: seed.memberId,
 			actorMemberId: seed.memberId,
 			meetingId: seed.meetingId,
+			clubId: seed.clubId,
 		});
 		expect(await naRowExists(seed.memberId, seed.meetingId)).toBe(false);
 	});
@@ -68,6 +82,7 @@ describe.skipIf(!hasTestDb)("self-claim clears the decline flag", () => {
 			memberId: seed.memberId,
 			actorMemberId: seed.adminMemberId,
 			meetingId: seed.meetingId,
+			clubId: seed.clubId,
 		});
 		expect(await naRowExists(seed.memberId, seed.meetingId)).toBe(true);
 	});
@@ -78,8 +93,49 @@ describe.skipIf(!hasTestDb)("self-claim clears the decline flag", () => {
 			memberId: seed.memberId,
 			actorMemberId: null,
 			meetingId: seed.meetingId,
+			clubId: seed.clubId,
 		});
 		expect(await naRowExists(seed.memberId, seed.meetingId)).toBe(true);
+	});
+
+	// -------------------------------------------------------------------------
+	// #211 — the implicit clear inside clearAvailabilityOnSelfClaim logs an
+	// `availability_clear` activity (matching the explicit clearAvailability
+	// server fn in availability.ts), but only when a row was actually deleted —
+	// don't spam the feed on every claim of a member with no NA row.
+	// -------------------------------------------------------------------------
+
+	it("self-claim with a pre-existing NA row logs an availability_clear activity", async () => {
+		const { clearAvailabilityOnSelfClaim } = await import("./slots-logic");
+		await clearAvailabilityOnSelfClaim(testDb, {
+			memberId: seed.memberId,
+			actorMemberId: seed.memberId,
+			meetingId: seed.meetingId,
+			clubId: seed.clubId,
+		});
+		const rows = await availabilityClearLogRows(seed.clubId, seed.meetingId);
+		expect(rows).toHaveLength(1);
+	});
+
+	it("self-claim with NO pre-existing NA row logs nothing", async () => {
+		const { clearAvailabilityOnSelfClaim } = await import("./slots-logic");
+		// Clear the seeded NA row first so there's nothing to delete.
+		await testDb
+			.delete(memberAvailability)
+			.where(
+				and(
+					eq(memberAvailability.memberId, seed.memberId),
+					eq(memberAvailability.meetingId, seed.meetingId),
+				),
+			);
+		await clearAvailabilityOnSelfClaim(testDb, {
+			memberId: seed.memberId,
+			actorMemberId: seed.memberId,
+			meetingId: seed.meetingId,
+			clubId: seed.clubId,
+		});
+		const rows = await availabilityClearLogRows(seed.clubId, seed.meetingId);
+		expect(rows).toHaveLength(0);
 	});
 
 	it("reassignSlotCore self-takeover clears the NA row end-to-end", async () => {

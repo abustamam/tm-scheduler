@@ -531,21 +531,40 @@ export async function reassignSlotSpeech(
  * the claimant's decline flag ("not going" row) for that meeting — spec
  * 2026-07-13. Admin assignments (actor ≠ member, or no actor) must NOT
  * silently erase the member's own absence statement, so they no-op.
+ *
+ * Logs an `availability_clear` activity (#211) when a row was actually
+ * deleted, mirroring the explicit `clearAvailability` server fn — but only
+ * then, so a claim by a member with no NA row doesn't spam the activity feed.
  */
 export async function clearAvailabilityOnSelfClaim(
 	tx: DbOrTx,
-	args: { memberId: string; actorMemberId: string | null; meetingId: string },
+	args: {
+		memberId: string;
+		actorMemberId: string | null;
+		meetingId: string;
+		clubId: string;
+	},
 ): Promise<void> {
 	if (args.actorMemberId === null || args.memberId !== args.actorMemberId)
 		return;
-	await tx
+	const deleted = await tx
 		.delete(memberAvailability)
 		.where(
 			and(
 				eq(memberAvailability.memberId, args.memberId),
 				eq(memberAvailability.meetingId, args.meetingId),
 			),
-		);
+		)
+		.returning({ id: memberAvailability.id });
+	if (deleted.length === 0) return;
+	await logActivity(tx, {
+		clubId: args.clubId,
+		actorMemberId: args.memberId,
+		action: "availability_clear",
+		targetType: "meeting",
+		targetId: args.meetingId,
+		detail: { via: "claim" },
+	});
 }
 
 /**
@@ -621,6 +640,7 @@ export async function reassignSlotCore(
 		memberId: args.memberId,
 		actorMemberId: args.actorMemberId,
 		meetingId: slot.meetingId,
+		clubId: slot.clubId,
 	});
 
 	// Unlink the speech only when the Person actually changed.
