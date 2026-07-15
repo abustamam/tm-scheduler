@@ -68,6 +68,11 @@ function SuperadminConsole() {
 											>
 												{club.name}
 											</Link>
+											{club.archivedAt ? (
+												<span className="ml-2 inline-block rounded-full bg-[var(--sand)] px-2 py-0.5 text-xs font-semibold text-[var(--sea-ink-soft)] uppercase tracking-[0.04em]">
+													Archived
+												</span>
+											) : null}
 										</td>
 										<td className="px-4 py-2.5 tabular-nums">
 											{club.clubNumber ?? "—"}
