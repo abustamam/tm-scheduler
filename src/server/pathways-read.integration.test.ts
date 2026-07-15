@@ -393,7 +393,9 @@ describe.skipIf(!hasTestDb)("pathwaysForPerson / pathwaysForMember", () => {
 			personId,
 			title: "Cancelled Meeting Speech",
 			projectId: requiredProject?.id,
-			scheduledAt: past,
+			// A distinct past instant — two meetings for one club can't share an
+			// exact instant (unique club_id+scheduled_at, #190).
+			scheduledAt: new Date(past.getTime() - 60 * 60 * 1000),
 			meetingStatus: "cancelled",
 		});
 

@@ -158,6 +158,77 @@ export const clubs = pgTable("clubs", {
 });
 
 // ---------------------------------------------------------------------------
+// Standing meeting-recurrence rule (#190). A per-club, OPEN-ENDED schedule rule
+// that keeps the calendar topped up to `keep_ahead` future meetings. Reuses
+// #184's `RecurrenceInput` pattern fields (src/lib/meeting-recurrence.ts) MINUS
+// the one-off `bound`; generation is lazy/read-triggered (no poller — ADR: see
+// docs/adr). Row-present ⇒ has-a-rule (1:1 with clubs). Supplements — does not
+// replace — the free-text `clubs.meetingSchedule`.
+// ---------------------------------------------------------------------------
+
+export const recurrenceModeEnum = pgEnum("recurrence_mode", [
+	"interval",
+	"monthly",
+]);
+
+export const clubMeetingRecurrence = pgTable(
+	"club_meeting_recurrence",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		// 1:1 with clubs — unique so a club has at most one standing rule.
+		clubId: uuid("club_id")
+			.notNull()
+			.unique()
+			.references(() => clubs.id, { onDelete: "cascade" }),
+		mode: recurrenceModeEnum("mode").notNull(),
+		// 0 = Sunday … 6 = Saturday (matches RecurrenceInput.Weekday / getUTCDay()).
+		weekday: integer("weekday").notNull(),
+		// interval mode: N in "every N weeks" (>= 1). NULL for monthly.
+		intervalWeeks: integer("interval_weeks"),
+		// interval mode: phase anchor (YYYY-MM-DD, club-local) so "every N weeks"
+		// knows which weeks are "on". NULL for monthly (ordinals are calendar-
+		// anchored). Also the seed for the first generation / deleted-everything
+		// recovery.
+		anchorDate: text("anchor_date"),
+		// monthly mode: which ordinals each month — a subset of {1,2,3,4,5,"last"}
+		// stored as text[] to match RecurrenceInput.Ordinal. NULL for interval.
+		ordinals: text("ordinals").array(),
+		// Wall-clock time-of-day (HH:mm) in the club timezone, applied to every
+		// generated meeting; converted to a UTC instant at insert (DST-correct).
+		timeOfDay: text("time_of_day").notNull(),
+		// Default location copied onto auto-created meetings. Nullable.
+		location: text("location"),
+		// Keep this many FUTURE `scheduled` meetings on the calendar. Bounded
+		// 1..52 (MAX_BATCH); the config form uses a tighter 1..12.
+		keepAhead: integer("keep_ahead").notNull().default(4),
+		// When false, top-up is paused (rule retained, no generation).
+		enabled: boolean("enabled").notNull().default(true),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+		updatedAt: timestamp("updated_at").defaultNow().notNull(),
+	},
+	(t) => [
+		// Exactly the fields valid for the chosen mode are set (true XOR): interval
+		// needs interval_weeks + anchor_date and NO ordinals; monthly needs a
+		// non-empty ordinals and NO interval_weeks/anchor_date. `cardinality`
+		// (not `array_length`) so an empty array reads as 0, not NULL — a CHECK
+		// only fails on FALSE, so a NULL result would let an empty array slip past.
+		check(
+			"club_meeting_recurrence_mode_fields_check",
+			sql`(
+				(${t.mode} = 'interval' AND ${t.intervalWeeks} IS NOT NULL AND ${t.intervalWeeks} >= 1 AND ${t.anchorDate} IS NOT NULL AND ${t.ordinals} IS NULL)
+				OR
+				(${t.mode} = 'monthly' AND ${t.ordinals} IS NOT NULL AND cardinality(${t.ordinals}) >= 1 AND ${t.intervalWeeks} IS NULL AND ${t.anchorDate} IS NULL)
+			)`,
+		),
+		// weekday in [0,6] and keep_ahead in [1,52] (MAX_BATCH).
+		check(
+			"club_meeting_recurrence_bounds_check",
+			sql`${t.weekday} >= 0 AND ${t.weekday} <= 6 AND ${t.keepAhead} >= 1 AND ${t.keepAhead} <= 52`,
+		),
+	],
+);
+
+// ---------------------------------------------------------------------------
 // People — one row per human, above per-club membership (ADR-0008 / #64).
 // Holds the facts identical across every club a person belongs to. Keyed by
 // Toastmasters Customer ID (PN-…) when known, unique-when-present (nullable);
@@ -477,7 +548,13 @@ export const meetings = pgTable(
 		reminders: text("reminders"),
 		createdAt: timestamp("created_at").defaultNow().notNull(),
 	},
-	(t) => [index("meetings_club_scheduled_idx").on(t.clubId, t.scheduledAt)],
+	(t) => [
+		// Unique per (club, instant): two meetings at the same instant in one club
+		// is never legitimate, and this doubles as the concurrency backstop for the
+		// #190 read-triggered top-up (deterministic occurrences ⇒ ON CONFLICT DO
+		// NOTHING). Also serves the club+scheduled lookups the plain index did.
+		uniqueIndex("meetings_club_scheduled_unique").on(t.clubId, t.scheduledAt),
+	],
 );
 
 // ---------------------------------------------------------------------------
@@ -1012,12 +1089,23 @@ export const memberDuesRelations = relations(memberDues, ({ one }) => ({
 	}),
 }));
 
-export const clubsRelations = relations(clubs, ({ many }) => ({
+export const clubsRelations = relations(clubs, ({ one, many }) => ({
 	meetings: many(meetings),
 	roleDefinitions: many(roleDefinitions),
 	members: many(members),
 	guests: many(guests),
+	recurrence: one(clubMeetingRecurrence),
 }));
+
+export const clubMeetingRecurrenceRelations = relations(
+	clubMeetingRecurrence,
+	({ one }) => ({
+		club: one(clubs, {
+			fields: [clubMeetingRecurrence.clubId],
+			references: [clubs.id],
+		}),
+	}),
+);
 
 export const guestsRelations = relations(guests, ({ one, many }) => ({
 	club: one(clubs, { fields: [guests.clubId], references: [clubs.id] }),
