@@ -17,7 +17,7 @@ import {
 import { resolveEvaluatorLinks } from "#/lib/agenda";
 import { officerPositionLabel } from "#/lib/officers";
 import {
-	getMembership,
+	canManageClub,
 	getSessionUser,
 	requireClubRole,
 	requireClubViewAccess,
@@ -83,11 +83,12 @@ async function loadMeetingDetail(
 		throw new Error("Meeting not found.");
 	}
 
-	// canManage: only resolve when a session user is present; else false.
+	// canManage: only resolve when a session user is present; else false. A real
+	// admin OR a superadmin with an active read_write impersonation session (#246)
+	// manages the meeting; read_only impersonation does not surface write controls.
 	let canManage = false;
 	if (currentUserId) {
-		const membership = await getMembership(currentUserId, meeting.clubId);
-		canManage = membership?.clubRole === "admin";
+		canManage = await canManageClub(currentUserId, meeting.clubId);
 	}
 
 	const assignee = alias(members, "assignee");

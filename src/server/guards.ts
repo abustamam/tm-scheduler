@@ -174,6 +174,27 @@ export async function requireClubRole(
 }
 
 /**
+ * READ-surface "can this user manage this club as an admin?" — for computing the
+ * `canManage` / `canEdit` flags that GET loaders return to drive admin
+ * affordances (e.g. `getMeeting`, `getMinutes`). True for a real active admin
+ * membership OR an active `read_write` impersonation session (#246): a superadmin
+ * acting as admin has no membership but should see the admin UI. Deliberately
+ * does NOT grant for `read_only` impersonation — read-only keeps those write
+ * surfaces hidden. The write itself is still enforced by the mutating guards, so
+ * this only decides what affordances render. The impersonation lookup runs only
+ * when there's no real membership (zero cost for real members).
+ */
+export async function canManageClub(
+	userId: string,
+	clubId: string,
+): Promise<boolean> {
+	const membership = await getMembership(userId, clubId);
+	if (membership) return membership.clubRole === "admin";
+	const session = await getActiveImpersonation(userId, clubId);
+	return session?.mode === "read_write";
+}
+
+/**
  * Read-access grant for a club (#185 / ADR-0020). Returned by the read-only view
  * guards: `via` is `"member"` for a real membership, `"impersonation"` for a
  * superadmin viewing via an active session (then `membership` is null).

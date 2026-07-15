@@ -26,6 +26,7 @@ vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
 import { logActivity } from "./activity";
 import {
+	canManageClub,
 	requireClubAdminView,
 	requireClubRole,
 	requireClubViewAccess,
@@ -289,6 +290,29 @@ describe.skipIf(!hasTestDb)("superadmin impersonation (integration)", () => {
 			);
 		expect(row?.impersonatedBy).toBe(su.id);
 		expect(row?.actorMemberId).toBeNull();
+	});
+
+	it("canManageClub: admin + read_write grant; member/none/read_only do not", async () => {
+		const su = await seedSuperadmin();
+
+		// Real admin manages; real plain member does not.
+		expect(await canManageClub(seeded.adminUserId, seeded.clubId)).toBe(true);
+		expect(await canManageClub(seeded.memberUserId, seeded.clubId)).toBe(false);
+
+		// Superadmin with no session — no ambient management.
+		expect(await canManageClub(su.id, seeded.clubId)).toBe(false);
+
+		// read_only impersonation does NOT surface admin write affordances.
+		await startImpersonation(su.id, { clubId: seeded.clubId });
+		expect(await canManageClub(su.id, seeded.clubId)).toBe(false);
+
+		// read_write impersonation does.
+		await startImpersonation(su.id, {
+			clubId: seeded.clubId,
+			mode: "read_write",
+			reason: "managing a meeting",
+		});
+		expect(await canManageClub(su.id, seeded.clubId)).toBe(true);
 	});
 
 	it("logActivity leaves ordinary writes unattributed to a superadmin", async () => {

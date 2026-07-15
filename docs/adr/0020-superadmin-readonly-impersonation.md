@@ -105,7 +105,13 @@ superadmin actor, a **required reason**, a **15-minute** TTL, and **no new per-w
 
 4. **UI.** `getAuthContext.impersonating.mode` now spans both modes; the banner has a danger
    (read-write) variant ("Acting as … admin · changes are live") and write controls actually
-   function.
+   function. The read loaders that compute admin affordances from the real membership
+   (`getMeeting`'s `canManage`, `getMinutes`'s `canEdit` — the "niche `getMembership`-direct read
+   surfaces" §2 called out) now go through `canManageClub`, which grants for a real admin OR an
+   active `read_write` session, so the meeting/minutes admin controls actually render for an acting
+   superadmin. `read_only` still keeps them hidden. Comprehensive control management across every
+   surface remains an ongoing follow-up (some placeholder buttons like the roster "+ Add member"
+   are unwired for everyone, unrelated to impersonation).
 
 ### Consequences
 

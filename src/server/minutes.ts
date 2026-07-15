@@ -6,6 +6,7 @@ import {
 	requireClubRole,
 	requireUser,
 } from "./guards";
+import { getActiveImpersonation } from "./impersonation-logic";
 import {
 	addGuestPresent,
 	addTableTopicsSpeaker,
@@ -64,8 +65,15 @@ export const getMinutes = createServerFn({ method: "GET" })
 		if (!sessionUser) return empty;
 		const clubId = await getMeetingClubId(meetingId);
 		const membership = await getMembership(sessionUser.id, clubId);
-		if (!membership) return empty;
-		const canEdit = membership.clubRole === "admin";
+		// Read-write impersonation (#246): a superadmin acting as admin has no
+		// membership but may still edit minutes. Only checked when there's no real
+		// membership (zero cost for real members).
+		const impersonatingRW =
+			!membership &&
+			(await getActiveImpersonation(sessionUser.id, clubId))?.mode ===
+				"read_write";
+		if (!membership && !impersonatingRW) return empty;
+		const canEdit = membership?.clubRole === "admin" || impersonatingRW;
 		const status = await getMeetingStatus(meetingId);
 		const visible = canEdit || status === "completed";
 		if (!visible) return empty;
