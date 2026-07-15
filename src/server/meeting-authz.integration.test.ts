@@ -7,9 +7,10 @@
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test \
  *     bunx vitest run src/server/meeting-authz.integration.test.ts
  */
+import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { members, roleDefinitions, roleSlots } from "#/db/schema";
+import { members, roleDefinitions, roleSlots, user } from "#/db/schema";
 import { utcToZonedWallTime } from "#/lib/datetime";
 import {
 	cleanup,
@@ -24,6 +25,7 @@ vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
 const { resolveMeetingAgendaAuthz } = await import("./meeting-authz-logic");
 const { applyMeetingUpdate } = await import("./meetings-logic");
+const { startImpersonation } = await import("./impersonation-logic");
 
 /** Add a Toastmaster of the Day role def + slot to the meeting; optionally
  *  assign a roster member. Returns the slot id. */
@@ -66,12 +68,16 @@ async function addRosterMember(clubId: string, name: string): Promise<string> {
 
 describe.skipIf(!hasTestDb)("meeting agenda authorization", () => {
 	let club: SeededClub;
+	const extraUsers: string[] = [];
 
 	beforeEach(async () => {
 		club = await seedClub();
 	});
 	afterEach(async () => {
 		await cleanup(club.clubId, [club.adminUserId, club.memberUserId]);
+		for (const id of extraUsers.splice(0)) {
+			await testDb.delete(user).where(eq(user.id, id));
+		}
 	});
 
 	it("allows a club admin (session) — via admin", async () => {
@@ -93,6 +99,40 @@ describe.skipIf(!hasTestDb)("meeting agenda authorization", () => {
 		const authz = await resolveMeetingAgendaAuthz({
 			meetingId: club.meetingId,
 			sessionUserId: club.memberUserId,
+		});
+		expect(authz.allowed).toBe(true);
+		expect(authz.via).toBe("admin");
+	});
+
+	it("allows a superadmin with a read_write impersonation session — via admin (#246)", async () => {
+		await addTmodSlot(club, null);
+		const suId = randomUUID();
+		await testDb.insert(user).values({
+			id: suId,
+			name: "Verify SU",
+			email: `su-${suId}@test.example`,
+			emailVerified: true,
+			isSuperadmin: true,
+		});
+		extraUsers.push(suId);
+
+		// read_only impersonation does NOT grant the admin editor (write-blind).
+		await startImpersonation(suId, { clubId: club.clubId });
+		let authz = await resolveMeetingAgendaAuthz({
+			meetingId: club.meetingId,
+			sessionUserId: suId,
+		});
+		expect(authz.allowed).toBe(false);
+
+		// read_write impersonation grants the admin editor path.
+		await startImpersonation(suId, {
+			clubId: club.clubId,
+			mode: "read_write",
+			reason: "fixing the agenda",
+		});
+		authz = await resolveMeetingAgendaAuthz({
+			meetingId: club.meetingId,
+			sessionUserId: suId,
 		});
 		expect(authz.allowed).toBe(true);
 		expect(authz.via).toBe("admin");

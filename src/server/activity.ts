@@ -1,5 +1,6 @@
 import type { db } from "#/db";
 import { activityLog } from "#/db/schema";
+import { getImpersonatedWriteActor } from "./impersonation-actor";
 
 type ActivityAction =
 	| "claim"
@@ -21,6 +22,13 @@ export interface ActivityInput {
 	targetType: "slot" | "meeting" | "member";
 	targetId?: string | null;
 	detail?: unknown;
+	/**
+	 * Real superadmin behind this write when it happens under a `read_write`
+	 * impersonation session (#246). Usually omitted — `logActivity` reads the
+	 * request-scoped marker set by the mutating guards. Pass explicitly only to
+	 * override that resolution (e.g. in tests).
+	 */
+	impersonatedBy?: string | null;
 }
 
 // Accepts either the main db client or a drizzle transaction so callers can
@@ -37,9 +45,18 @@ export async function logActivity(
 	conn: DbOrTx,
 	input: ActivityInput,
 ): Promise<void> {
+	// A read-write impersonated write is attributed to the real superadmin, not a
+	// member: when set, `impersonated_by` carries the identity and `actor_member_id`
+	// is null (the superadmin is memberless in the club). The explicit input wins;
+	// otherwise read the request-scoped marker the mutating guards set (#246).
+	const impersonatedBy =
+		input.impersonatedBy !== undefined
+			? input.impersonatedBy
+			: getImpersonatedWriteActor();
 	await conn.insert(activityLog).values({
 		clubId: input.clubId,
-		actorMemberId: input.actorMemberId ?? null,
+		actorMemberId: impersonatedBy ? null : (input.actorMemberId ?? null),
+		impersonatedBy: impersonatedBy ?? null,
 		action: input.action,
 		targetType: input.targetType,
 		targetId: input.targetId ?? null,

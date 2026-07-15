@@ -1,5 +1,12 @@
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
-import { Archive, ArchiveRestore, ArrowLeft, Eye, Loader2 } from "lucide-react";
+import {
+	Archive,
+	ArchiveRestore,
+	ArrowLeft,
+	Eye,
+	Loader2,
+	Pencil,
+} from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { PageContainer } from "#/components/page-container";
@@ -72,7 +79,10 @@ function ClubDetail() {
 			</section>
 
 			{club.archivedAt ? null : (
-				<ViewAsPanel clubId={clubId} clubName={club.name} />
+				<>
+					<ViewAsPanel clubId={clubId} clubName={club.name} />
+					<ActAsAdminPanel clubId={clubId} clubName={club.name} />
+				</>
 			)}
 
 			<ArchivePanel
@@ -127,6 +137,85 @@ function ViewAsPanel({
 				) : (
 					<>
 						<Eye className="size-4" /> View as this club
+					</>
+				)}
+			</Button>
+		</section>
+	);
+}
+
+/**
+ * "Act as admin" — start a read-WRITE impersonation session (#246). Unlike
+ * "View as this club", this can change the club's data, so it requires a reason
+ * (recorded in the club's activity feed), auto-expires in 15 minutes, and every
+ * change is attributed to the acting superadmin. Danger styling throughout.
+ */
+function ActAsAdminPanel({
+	clubId,
+	clubName,
+}: {
+	clubId: string;
+	clubName: string;
+}) {
+	const router = useRouter();
+	const [submitting, setSubmitting] = useState(false);
+	const [reason, setReason] = useState("");
+	const trimmedReason = reason.trim();
+
+	async function onActAs() {
+		if (!trimmedReason) return;
+		setSubmitting(true);
+		try {
+			await startImpersonation({
+				data: { clubId, mode: "read_write", reason: trimmedReason },
+			});
+			await router.invalidate();
+			await router.navigate({ to: "/" });
+		} catch (err) {
+			toast.error(
+				err instanceof Error ? err.message : "Couldn't start the session.",
+			);
+			setSubmitting(false);
+		}
+	}
+
+	return (
+		<section className="max-w-xl space-y-3 rounded-xl border border-[var(--danger,#dc2626)]/40 bg-[var(--danger,#dc2626)]/5 p-4">
+			<h2 className="text-sm font-bold text-[var(--danger-strong,#b91c1c)]">
+				Act as this club's admin
+			</h2>
+			<p className="text-sm text-muted-foreground">
+				Open <span className="font-medium">{clubName}</span>'s workspace with
+				full admin powers to fix an issue.{" "}
+				<span className="font-medium text-[var(--danger-strong,#b91c1c)]">
+					Changes are live
+				</span>{" "}
+				and made in the club's data. The session auto-expires in{" "}
+				<span className="font-medium">15 minutes</span>, and every change is
+				recorded against your name in the club's activity log.
+			</p>
+			<div className="space-y-1.5">
+				<Label htmlFor="act-as-reason">Reason for access (required)</Label>
+				<Input
+					id="act-as-reason"
+					value={reason}
+					onChange={(e) => setReason(e.target.value)}
+					placeholder="e.g. Fixing a corrupted agenda at the club's request"
+					maxLength={500}
+				/>
+			</div>
+			<Button
+				type="button"
+				size="sm"
+				variant="destructive"
+				disabled={submitting || !trimmedReason}
+				onClick={onActAs}
+			>
+				{submitting ? (
+					<Loader2 className="size-4 animate-spin" />
+				) : (
+					<>
+						<Pencil className="size-4" /> Act as this club's admin
 					</>
 				)}
 			</Button>

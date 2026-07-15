@@ -65,15 +65,16 @@ export const getAuthContext = createServerFn({ method: "GET" }).handler(
 			clubRole: m.clubRole,
 		}));
 
-		// Read-only impersonation (#185 / ADR-0020): a superadmin with an active
-		// session may VIEW a club they aren't a member of. Surface it as a read-only
-		// admin club and force it active, so the workspace + banner act in it. Never
-		// ambient — this requires an active session, and the mutating guards still
-		// reject the superadmin (they resolve real memberships only).
+		// Impersonation (#185, #246 / ADR-0020): a superadmin with an active session
+		// may VIEW (`read_only`) or ACT ON (`read_write`) a club they aren't a member
+		// of. Surface it as an admin club and force it active, so the workspace +
+		// banner act in it. Never ambient — this requires an active session. In
+		// `read_only` the mutating guards still reject the superadmin; in `read_write`
+		// they honor the session as an effective admin (memberless).
 		let impersonating: {
 			clubId: string;
 			expiresAt: Date;
-			mode: "read_only";
+			mode: "read_only" | "read_write";
 		} | null = null;
 		if (isSuperadmin) {
 			const session = await getActiveImpersonationForUser(user.id);
