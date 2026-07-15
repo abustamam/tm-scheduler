@@ -89,6 +89,16 @@ export const activityActionEnum = pgEnum("activity_action", [
 	"member_remove",
 	"meeting_create",
 	"meeting_edit",
+	// A platform superadmin started a read-only impersonation session viewing this
+	// club (ADR-0020 / #185). actor is null (no member row); the real superadmin
+	// identity is carried in `detail`.
+	"superadmin_viewed",
+]);
+
+// Impersonation session mode (ADR-0020 / #185). v1 ships read_only only; the
+// read-write phase (#246) adds a `read_write` value here without a reshape.
+export const impersonationModeEnum = pgEnum("impersonation_mode", [
+	"read_only",
 ]);
 
 // Presence state on a `meeting_attendance` row (ADR-0014 / #152). Members
@@ -903,6 +913,40 @@ export const activityLog = pgTable(
 		createdAt: timestamp("created_at").defaultNow().notNull(),
 	},
 	(t) => [index("activity_log_club_created_idx").on(t.clubId, t.createdAt)],
+);
+
+// ---------------------------------------------------------------------------
+// Impersonation sessions (ADR-0020 / #185) — a superadmin's time-bounded,
+// read-only "View as this club" grant. The durable audit record of cross-club
+// access, and the ONLY thing that grants a superadmin read access to a club they
+// aren't a real member of. NOT ambient: no active session ⇒ no access. Consulted
+// only by the read-access guards (`requireClubViewAccess` / `requireClubAdminView`);
+// the mutating guards resolve real memberships only, so read-only holds by
+// construction. Read-write is deferred (#246 — adds a `mode` value).
+//
+// Active = `ended_at IS NULL AND expires_at > now()`. Invariant: at most one
+// active row per superadmin (starting a new one ends any existing).
+// ---------------------------------------------------------------------------
+
+export const impersonationSessions = pgTable(
+	"impersonation_sessions",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		superadminUserId: text("superadmin_user_id")
+			.notNull()
+			.references(() => user.id, { onDelete: "cascade" }),
+		clubId: uuid("club_id")
+			.notNull()
+			.references(() => clubs.id, { onDelete: "cascade" }),
+		mode: impersonationModeEnum("mode").notNull().default("read_only"),
+		startedAt: timestamp("started_at").defaultNow().notNull(),
+		expiresAt: timestamp("expires_at").notNull(),
+		// Set on explicit Exit; null = not manually ended (may still be expired).
+		endedAt: timestamp("ended_at"),
+	},
+	(t) => [
+		index("impersonation_sessions_superadmin_idx").on(t.superadminUserId),
+	],
 );
 
 // ---------------------------------------------------------------------------

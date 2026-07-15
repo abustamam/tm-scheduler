@@ -4,6 +4,7 @@ import { db } from "#/db";
 import { clubs, members, people, user } from "#/db/schema";
 import { auth } from "#/lib/auth";
 import { isClubArchived } from "#/lib/club-archive";
+import { getActiveImpersonation } from "./impersonation-logic";
 import {
 	type MeetingAgendaAuthz,
 	resolveMeetingAgendaAuthz,
@@ -104,6 +105,63 @@ export async function requireClubRole(
 		return membership;
 	}
 	throw new Error("You don't have permission to do that.");
+}
+
+/**
+ * Read-access grant for a club (#185 / ADR-0020). Returned by the read-only view
+ * guards: `via` is `"member"` for a real membership, `"impersonation"` for a
+ * superadmin viewing via an active session (then `membership` is null).
+ */
+export interface ClubViewAccess {
+	via: "member" | "impersonation";
+	impersonating: boolean;
+	/** The real membership when `via === "member"`; null when impersonating. */
+	membership: Awaited<ReturnType<typeof getMembership>> | null;
+}
+
+/**
+ * MEMBER-level READ access (#185): any real active member, OR a superadmin with
+ * an active read-only impersonation session for this club. Use in GET server fns
+ * where `requireMembership` gated a view. NEVER call from a mutating fn — the
+ * write guards stay impersonation-blind so read-only holds by construction.
+ */
+export async function requireClubViewAccess(
+	userId: string,
+	clubId: string,
+): Promise<ClubViewAccess> {
+	const membership = await getMembership(userId, clubId);
+	if (membership && membership.status === "active") {
+		return { via: "member", impersonating: false, membership };
+	}
+	if (await getActiveImpersonation(userId, clubId)) {
+		return { via: "impersonation", impersonating: true, membership: null };
+	}
+	throw new Error("You're not a member of this club.");
+}
+
+/**
+ * ADMIN-level READ access (#185): a real club admin (stored `admin` or any open
+ * officer term — effective-admin), OR a superadmin with an active read-only
+ * impersonation session. Use in GET server fns where `requireClubRole(["admin"])`
+ * gated an admin-only view. NEVER call from a mutating fn.
+ */
+export async function requireClubAdminView(
+	userId: string,
+	clubId: string,
+): Promise<ClubViewAccess> {
+	const membership = await getMembership(userId, clubId);
+	if (membership && membership.status === "active") {
+		if (membership.clubRole === "admin") {
+			return { via: "member", impersonating: false, membership };
+		}
+		if ((await getOpenOfficerPositions(db, membership.id)).length > 0) {
+			return { via: "member", impersonating: false, membership };
+		}
+	}
+	if (await getActiveImpersonation(userId, clubId)) {
+		return { via: "impersonation", impersonating: true, membership: null };
+	}
+	throw new Error("You don't have permission to view this club.");
 }
 
 /**

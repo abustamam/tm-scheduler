@@ -7,7 +7,11 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import { meetings, roleSlots } from "#/db/schema";
-import { requireMembership, requireUser } from "./guards";
+import {
+	requireClubViewAccess,
+	requireMembership,
+	requireUser,
+} from "./guards";
 import {
 	attachSpeechToOpenSlot,
 	listUnscheduledSpeeches,
@@ -31,7 +35,7 @@ export const getUnscheduledSpeeches = createServerFn({ method: "GET" })
 	.validator((input: unknown) => listSchema.parse(input))
 	.handler(async ({ data }) => {
 		const currentUser = await requireUser();
-		await requireMembership(currentUser.id, data.clubId);
+		await requireClubViewAccess(currentUser.id, data.clubId);
 		return listUnscheduledSpeeches(db, {
 			clubId: data.clubId,
 			personId: data.personId,

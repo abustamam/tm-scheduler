@@ -6,7 +6,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { sendEmail } from "#/lib/email";
-import { requireClubRole, requireUser } from "./guards";
+import { requireClubAdminView, requireClubRole, requireUser } from "./guards";
 import {
 	resolveMinutesRecipients,
 	sendMinutesEmail,
@@ -67,7 +67,7 @@ export const getMinutesRecipients = createServerFn({ method: "GET" })
 	)
 	.handler(async ({ data }) => {
 		const user = await requireUser();
-		await requireClubRole(user.id, data.clubId, ["admin"]);
+		await requireClubAdminView(user.id, data.clubId);
 		const port = createMinutesEmailPort();
 		return resolveMinutesRecipients(await port.loadRecipients(data.meetingId));
 	});

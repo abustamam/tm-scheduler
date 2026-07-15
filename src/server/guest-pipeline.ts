@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { requireClubRole, requireUser } from "./guards";
+import { requireClubAdminView, requireClubRole, requireUser } from "./guards";
 import {
 	applyConvertGuestToMember,
 	applySetGuestStage,
@@ -50,7 +50,7 @@ export const getGuestPipeline = createServerFn({ method: "GET" })
 	.validator((clubId: unknown) => uuid.parse(clubId))
 	.handler(async ({ data: clubId }) => {
 		const currentUser = await requireUser();
-		await requireClubRole(currentUser.id, clubId, ["admin"]);
+		await requireClubAdminView(currentUser.id, clubId);
 		return loadGuestPipeline(clubId);
 	});
 

@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { requireMembership, requireUser } from "./guards";
+import { requireClubViewAccess, requireUser } from "./guards";
 import {
 	type PathViewModel,
 	pathwaysByMember,
@@ -45,7 +45,7 @@ export const listClubMemberPathways = createServerFn({ method: "GET" })
 		// is scoped to a matched (clubId, memberId) pair): only a member of the
 		// club may read every member's progress — mirrors `listClubMembers`.
 		const user = await requireUser();
-		await requireMembership(user.id, data.clubId);
+		await requireClubViewAccess(user.id, data.clubId);
 		const map = await pathwaysByMember(data.clubId);
 		return Object.fromEntries(map);
 	});

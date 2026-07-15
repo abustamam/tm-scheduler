@@ -6,6 +6,7 @@ import { db } from "#/db";
 import { clubs, members, people, user as userTable } from "#/db/schema";
 import { ACTIVE_CLUB_COOKIE, resolveActiveClubId } from "#/lib/active-club";
 import { getSessionUser } from "./guards";
+import { getActiveImpersonationForUser } from "./impersonation-logic";
 import { getOpenOfficerPositions } from "./officers-logic";
 
 /**
@@ -29,6 +30,7 @@ export const getAuthContext = createServerFn({ method: "GET" }).handler(
 				activeClubId: null,
 				officerPositions: [] as const,
 				isSuperadmin: false,
+				impersonating: null,
 			};
 		}
 		// Platform superadmin flag (ADR-0016 / #183) — orthogonal to club role.
@@ -62,18 +64,61 @@ export const getAuthContext = createServerFn({ method: "GET" }).handler(
 			clubRole: m.clubRole,
 		}));
 
-		// Active club = the cookie's club (if still a member) else their first.
-		// getCookie can throw off a request context (tests) — tolerate that.
+		// Read-only impersonation (#185 / ADR-0020): a superadmin with an active
+		// session may VIEW a club they aren't a member of. Surface it as a read-only
+		// admin club and force it active, so the workspace + banner act in it. Never
+		// ambient — this requires an active session, and the mutating guards still
+		// reject the superadmin (they resolve real memberships only).
+		let impersonating: {
+			clubId: string;
+			expiresAt: Date;
+			mode: "read_only";
+		} | null = null;
+		if (isSuperadmin) {
+			const session = await getActiveImpersonationForUser(user.id);
+			if (session) {
+				impersonating = {
+					clubId: session.clubId,
+					expiresAt: session.expiresAt,
+					mode: session.mode,
+				};
+				if (!myClubs.some((c) => c.clubId === session.clubId)) {
+					const [c] = await db
+						.select({
+							id: clubs.id,
+							name: clubs.name,
+							clubNumber: clubs.clubNumber,
+						})
+						.from(clubs)
+						.where(eq(clubs.id, session.clubId))
+						.limit(1);
+					if (c) {
+						myClubs.push({
+							clubId: c.id,
+							name: c.name,
+							clubNumber: c.clubNumber,
+							clubRole: "admin",
+						});
+					}
+				}
+			}
+		}
+
+		// Active club = the impersonated club when a session is active; otherwise the
+		// cookie's club (if still a member) else their first. getCookie can throw off
+		// a request context (tests) — tolerate that.
 		let cookieClub: string | undefined;
 		try {
 			cookieClub = getCookie(ACTIVE_CLUB_COOKIE);
 		} catch {
 			cookieClub = undefined;
 		}
-		const activeClubId = resolveActiveClubId(
-			myClubs.map((c) => c.clubId),
-			cookieClub,
-		);
+		const activeClubId =
+			impersonating?.clubId ??
+			resolveActiveClubId(
+				myClubs.map((c) => c.clubId),
+				cookieClub,
+			);
 
 		// The signed-in user's roster member for the active club.
 		const currentMemberId =
@@ -92,6 +137,7 @@ export const getAuthContext = createServerFn({ method: "GET" }).handler(
 			activeClubId,
 			officerPositions,
 			isSuperadmin,
+			impersonating,
 		};
 	},
 );

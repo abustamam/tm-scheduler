@@ -23,7 +23,7 @@ import {
 	waiveDues as waiveDuesDb,
 	waiveSchema,
 } from "./dues-logic";
-import { requireClubRole, requireUser } from "./guards";
+import { requireClubAdminView, requireClubRole, requireUser } from "./guards";
 
 const clubScoped = z.object({ clubId: z.string().uuid() });
 const periodScoped = z.object({
@@ -35,7 +35,7 @@ export const getDuesOverview = createServerFn({ method: "GET" })
 	.validator((i: unknown) => clubScoped.parse(i))
 	.handler(async ({ data }) => {
 		const user = await requireUser();
-		await requireClubRole(user.id, data.clubId, ["admin"]);
+		await requireClubAdminView(user.id, data.clubId);
 		return getDuesOverviewDb(data.clubId);
 	});
 
@@ -43,7 +43,7 @@ export const getDuesForPeriod = createServerFn({ method: "GET" })
 	.validator((i: unknown) => periodScoped.parse(i))
 	.handler(async ({ data }) => {
 		const user = await requireUser();
-		await requireClubRole(user.id, data.clubId, ["admin"]);
+		await requireClubAdminView(user.id, data.clubId);
 		return getDuesForPeriodDb(data.clubId, data.periodId);
 	});
 

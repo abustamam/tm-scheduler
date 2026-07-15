@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { requireClubRole, requireMembership, requireUser } from "./guards";
+import { requireClubRole, requireClubViewAccess, requireUser } from "./guards";
 import {
 	applyRoleDefinitionCreate,
 	applyRoleDefinitionDelete,
@@ -23,7 +23,7 @@ export const listClubRoles = createServerFn({ method: "GET" })
 	.validator((clubId: unknown) => uuid.parse(clubId))
 	.handler(async ({ data: clubId }) => {
 		const currentUser = await requireUser();
-		await requireMembership(currentUser.id, clubId);
+		await requireClubViewAccess(currentUser.id, clubId);
 		return listRoleDefinitions(clubId);
 	});
 

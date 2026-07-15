@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { requireClubRole, requireUser } from "./guards";
+import { requireClubAdminView, requireClubRole, requireUser } from "./guards";
 import {
 	type CreatedToken,
 	createSyncToken,
@@ -34,7 +34,7 @@ export const getSyncTokens = createServerFn({ method: "GET" })
 	.validator((i: unknown) => z.object({ clubId: z.string().uuid() }).parse(i))
 	.handler(async ({ data }): Promise<SyncTokenSummary[]> => {
 		const user = await requireUser();
-		await requireClubRole(user.id, data.clubId, ["admin"]);
+		await requireClubAdminView(user.id, data.clubId);
 		return listSyncTokens(data.clubId);
 	});
 

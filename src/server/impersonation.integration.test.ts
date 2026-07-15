@@ -1,0 +1,190 @@
+/**
+ * DB-backed integration tests for superadmin read-only impersonation (#185):
+ * the session lifecycle (start/end/expiry, one-active-per-superadmin), the audit
+ * row, and — the security-critical guarantee — that an active session grants the
+ * READ-access guards but the WRITE guards (`requireClubRole` / `requireMembership`)
+ * still reject the impersonating superadmin by construction.
+ *
+ * Runs against a real Postgres identified by TEST_DATABASE_URL; skipped when unset.
+ *
+ *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test_185 \
+ *     bunx vitest run src/server/impersonation.integration.test.ts
+ */
+import { randomUUID } from "node:crypto";
+import { and, eq } from "drizzle-orm";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { activityLog, clubs, impersonationSessions, user } from "#/db/schema";
+import {
+	cleanup,
+	hasTestDb,
+	type SeededClub,
+	seedClub,
+	testDb,
+} from "#/test/db";
+
+vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
+
+import {
+	requireClubAdminView,
+	requireClubRole,
+	requireClubViewAccess,
+	requireMembership,
+} from "./guards";
+import {
+	endImpersonation,
+	getActiveImpersonation,
+	getActiveImpersonationForUser,
+	IMPERSONATION_TTL_MS,
+	startImpersonation,
+} from "./impersonation-logic";
+
+const extraClubs: string[] = [];
+const extraUsers: string[] = [];
+
+async function seedSuperadmin(): Promise<{ id: string; email: string }> {
+	const id = randomUUID();
+	const email = `super-${id}@test.example`;
+	await testDb.insert(user).values({
+		id,
+		name: "Super Admin",
+		email,
+		emailVerified: true,
+		isSuperadmin: true,
+	});
+	extraUsers.push(id);
+	return { id, email };
+}
+
+async function seedBareClub(): Promise<string> {
+	const id = randomUUID();
+	await testDb
+		.insert(clubs)
+		.values({ id, name: "Other Club", slug: `other-${id}` });
+	extraClubs.push(id);
+	return id;
+}
+
+describe.skipIf(!hasTestDb)("superadmin impersonation (integration)", () => {
+	let seeded: SeededClub;
+
+	beforeEach(async () => {
+		seeded = await seedClub();
+	});
+
+	afterEach(async () => {
+		await cleanup(seeded.clubId, [seeded.adminUserId, seeded.memberUserId]);
+		for (const c of extraClubs.splice(0)) {
+			await testDb.delete(clubs).where(eq(clubs.id, c));
+		}
+		for (const u of extraUsers.splice(0)) {
+			await testDb.delete(user).where(eq(user.id, u));
+		}
+	});
+
+	it("grants read access to real members/admins via 'member'", async () => {
+		const view = await requireClubViewAccess(
+			seeded.memberUserId,
+			seeded.clubId,
+		);
+		expect(view.via).toBe("member");
+		expect(view.impersonating).toBe(false);
+
+		const admin = await requireClubAdminView(seeded.adminUserId, seeded.clubId);
+		expect(admin.via).toBe("member");
+
+		// A plain member is not an admin and has no session → admin view rejects.
+		await expect(
+			requireClubAdminView(seeded.memberUserId, seeded.clubId),
+		).rejects.toThrow(/permission/i);
+	});
+
+	it("an active session grants READ access but WRITE guards still reject", async () => {
+		const su = await seedSuperadmin();
+
+		// No session yet → no read access, no ambient bypass.
+		expect(await getActiveImpersonation(su.id, seeded.clubId)).toBeNull();
+		await expect(requireClubViewAccess(su.id, seeded.clubId)).rejects.toThrow();
+
+		await startImpersonation(su.id, { clubId: seeded.clubId });
+
+		// Reads now pass via impersonation…
+		const view = await requireClubViewAccess(su.id, seeded.clubId);
+		expect(view.via).toBe("impersonation");
+		expect(view.impersonating).toBe(true);
+		expect(view.membership).toBeNull();
+		const admin = await requireClubAdminView(su.id, seeded.clubId);
+		expect(admin.via).toBe("impersonation");
+
+		// …but the WRITE guards are impersonation-blind → writes reject.
+		await expect(
+			requireClubRole(su.id, seeded.clubId, ["admin"]),
+		).rejects.toThrow();
+		await expect(requireMembership(su.id, seeded.clubId)).rejects.toThrow();
+	});
+
+	it("scopes the session to one club and revokes on end + expiry", async () => {
+		const su = await seedSuperadmin();
+		const other = await seedBareClub();
+		await startImpersonation(su.id, { clubId: seeded.clubId });
+
+		// Not granted for a different club.
+		expect(await getActiveImpersonation(su.id, other)).toBeNull();
+		await expect(requireClubViewAccess(su.id, other)).rejects.toThrow();
+
+		// Expired sessions don't count (simulate "now" past expiry).
+		const future = new Date(Date.now() + IMPERSONATION_TTL_MS + 1000);
+		expect(
+			await getActiveImpersonation(su.id, seeded.clubId, future),
+		).toBeNull();
+
+		// Explicit end revokes immediately.
+		await endImpersonation(su.id);
+		expect(await getActiveImpersonation(su.id, seeded.clubId)).toBeNull();
+		await expect(requireClubViewAccess(su.id, seeded.clubId)).rejects.toThrow();
+	});
+
+	it("keeps at most one active session per superadmin", async () => {
+		const su = await seedSuperadmin();
+		const clubB = await seedBareClub();
+		await startImpersonation(su.id, { clubId: seeded.clubId });
+		await startImpersonation(su.id, { clubId: clubB });
+
+		const active = await getActiveImpersonationForUser(su.id);
+		expect(active?.clubId).toBe(clubB);
+		// The first club's session is no longer active.
+		expect(await getActiveImpersonation(su.id, seeded.clubId)).toBeNull();
+
+		const open = await testDb
+			.select({ id: impersonationSessions.id })
+			.from(impersonationSessions)
+			.where(
+				and(
+					eq(impersonationSessions.superadminUserId, su.id),
+					// still-open rows
+					eq(impersonationSessions.mode, "read_only"),
+				),
+			);
+		expect(open).toHaveLength(2); // both rows kept as history; only one open
+	});
+
+	it("writes a superadmin_viewed audit row on the club at start", async () => {
+		const su = await seedSuperadmin();
+		await startImpersonation(su.id, { clubId: seeded.clubId });
+
+		const rows = await testDb
+			.select()
+			.from(activityLog)
+			.where(
+				and(
+					eq(activityLog.clubId, seeded.clubId),
+					eq(activityLog.action, "superadmin_viewed"),
+				),
+			);
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.targetType).toBe("club");
+		expect(rows[0]?.actorMemberId).toBeNull();
+		expect(
+			(rows[0]?.detail as { superadminUserId?: string })?.superadminUserId,
+		).toBe(su.id);
+	});
+});
