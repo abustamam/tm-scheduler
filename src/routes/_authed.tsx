@@ -371,6 +371,12 @@ function SidebarInner({
 							onNavigate={onNavigate}
 						/>
 						<NavItem
+							to="/admin/schedule"
+							icon={CalendarDays}
+							label="Recurring schedule"
+							onNavigate={onNavigate}
+						/>
+						<NavItem
 							to="/admin/roles"
 							icon={ListChecks}
 							label="Meeting roles"

@@ -34,6 +34,7 @@ import { Route as AuthedMeetingsIdRouteImport } from './routes/_authed/meetings.
 import { Route as AuthedAdminVpeDashboardRouteImport } from './routes/_authed/admin/vpe-dashboard'
 import { Route as AuthedAdminVpMembershipRouteImport } from './routes/_authed/admin/vp-membership'
 import { Route as AuthedAdminSyncTokensRouteImport } from './routes/_authed/admin/sync-tokens'
+import { Route as AuthedAdminScheduleRouteImport } from './routes/_authed/admin/schedule'
 import { Route as AuthedAdminRolesRouteImport } from './routes/_authed/admin/roles'
 import { Route as AuthedAdminPathwaysSyncRouteImport } from './routes/_authed/admin/pathways-sync'
 import { Route as AuthedAdminDuesRouteImport } from './routes/_authed/admin/dues'
@@ -170,6 +171,11 @@ const AuthedAdminSyncTokensRoute = AuthedAdminSyncTokensRouteImport.update({
   path: '/admin/sync-tokens',
   getParentRoute: () => AuthedRoute,
 } as any)
+const AuthedAdminScheduleRoute = AuthedAdminScheduleRouteImport.update({
+  id: '/admin/schedule',
+  path: '/admin/schedule',
+  getParentRoute: () => AuthedRoute,
+} as any)
 const AuthedAdminRolesRoute = AuthedAdminRolesRouteImport.update({
   id: '/admin/roles',
   path: '/admin/roles',
@@ -249,6 +255,7 @@ export interface FileRoutesByFullPath {
   '/admin/dues': typeof AuthedAdminDuesRoute
   '/admin/pathways-sync': typeof AuthedAdminPathwaysSyncRoute
   '/admin/roles': typeof AuthedAdminRolesRoute
+  '/admin/schedule': typeof AuthedAdminScheduleRoute
   '/admin/sync-tokens': typeof AuthedAdminSyncTokensRoute
   '/admin/vp-membership': typeof AuthedAdminVpMembershipRoute
   '/admin/vpe-dashboard': typeof AuthedAdminVpeDashboardRoute
@@ -284,6 +291,7 @@ export interface FileRoutesByTo {
   '/admin/dues': typeof AuthedAdminDuesRoute
   '/admin/pathways-sync': typeof AuthedAdminPathwaysSyncRoute
   '/admin/roles': typeof AuthedAdminRolesRoute
+  '/admin/schedule': typeof AuthedAdminScheduleRoute
   '/admin/sync-tokens': typeof AuthedAdminSyncTokensRoute
   '/admin/vp-membership': typeof AuthedAdminVpMembershipRoute
   '/admin/vpe-dashboard': typeof AuthedAdminVpeDashboardRoute
@@ -323,6 +331,7 @@ export interface FileRoutesById {
   '/_authed/admin/dues': typeof AuthedAdminDuesRoute
   '/_authed/admin/pathways-sync': typeof AuthedAdminPathwaysSyncRoute
   '/_authed/admin/roles': typeof AuthedAdminRolesRoute
+  '/_authed/admin/schedule': typeof AuthedAdminScheduleRoute
   '/_authed/admin/sync-tokens': typeof AuthedAdminSyncTokensRoute
   '/_authed/admin/vp-membership': typeof AuthedAdminVpMembershipRoute
   '/_authed/admin/vpe-dashboard': typeof AuthedAdminVpeDashboardRoute
@@ -362,6 +371,7 @@ export interface FileRouteTypes {
     | '/admin/dues'
     | '/admin/pathways-sync'
     | '/admin/roles'
+    | '/admin/schedule'
     | '/admin/sync-tokens'
     | '/admin/vp-membership'
     | '/admin/vpe-dashboard'
@@ -397,6 +407,7 @@ export interface FileRouteTypes {
     | '/admin/dues'
     | '/admin/pathways-sync'
     | '/admin/roles'
+    | '/admin/schedule'
     | '/admin/sync-tokens'
     | '/admin/vp-membership'
     | '/admin/vpe-dashboard'
@@ -435,6 +446,7 @@ export interface FileRouteTypes {
     | '/_authed/admin/dues'
     | '/_authed/admin/pathways-sync'
     | '/_authed/admin/roles'
+    | '/_authed/admin/schedule'
     | '/_authed/admin/sync-tokens'
     | '/_authed/admin/vp-membership'
     | '/_authed/admin/vpe-dashboard'
@@ -645,6 +657,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedAdminSyncTokensRouteImport
       parentRoute: typeof AuthedRoute
     }
+    '/_authed/admin/schedule': {
+      id: '/_authed/admin/schedule'
+      path: '/admin/schedule'
+      fullPath: '/admin/schedule'
+      preLoaderRoute: typeof AuthedAdminScheduleRouteImport
+      parentRoute: typeof AuthedRoute
+    }
     '/_authed/admin/roles': {
       id: '/_authed/admin/roles'
       path: '/admin/roles'
@@ -753,6 +772,7 @@ interface AuthedRouteChildren {
   AuthedAdminDuesRoute: typeof AuthedAdminDuesRoute
   AuthedAdminPathwaysSyncRoute: typeof AuthedAdminPathwaysSyncRoute
   AuthedAdminRolesRoute: typeof AuthedAdminRolesRoute
+  AuthedAdminScheduleRoute: typeof AuthedAdminScheduleRoute
   AuthedAdminSyncTokensRoute: typeof AuthedAdminSyncTokensRoute
   AuthedAdminVpMembershipRoute: typeof AuthedAdminVpMembershipRoute
   AuthedAdminVpeDashboardRoute: typeof AuthedAdminVpeDashboardRoute
@@ -777,6 +797,7 @@ const AuthedRouteChildren: AuthedRouteChildren = {
   AuthedAdminDuesRoute: AuthedAdminDuesRoute,
   AuthedAdminPathwaysSyncRoute: AuthedAdminPathwaysSyncRoute,
   AuthedAdminRolesRoute: AuthedAdminRolesRoute,
+  AuthedAdminScheduleRoute: AuthedAdminScheduleRoute,
   AuthedAdminSyncTokensRoute: AuthedAdminSyncTokensRoute,
   AuthedAdminVpMembershipRoute: AuthedAdminVpMembershipRoute,
   AuthedAdminVpeDashboardRoute: AuthedAdminVpeDashboardRoute,

@@ -8,6 +8,7 @@ import { ACTIVE_CLUB_COOKIE, resolveActiveClubId } from "#/lib/active-club";
 import { getSessionUser } from "./guards";
 import { getActiveImpersonationForUser } from "./impersonation-logic";
 import { getOpenOfficerPositions } from "./officers-logic";
+import { ensureScheduleToppedUp } from "./schedule-topup-logic";
 
 /**
  * Auth context for the app shell + route guards: the signed-in user (or null)
@@ -129,6 +130,22 @@ export const getAuthContext = createServerFn({ method: "GET" }).handler(
 		const officerPositions = currentMemberId
 			? await getOpenOfficerPositions(db, currentMemberId)
 			: [];
+
+		// #190: keep the active club's schedule topped up to its recurrence rule,
+		// materialized lazily on this authenticated member load (read-triggered —
+		// there is no background poller). Only for a REAL member of the active club
+		// (currentMemberId set) and NEVER during read-only impersonation, which must
+		// not write. Best-effort: a top-up failure must never break navigation.
+		if (activeClubId && currentMemberId && !impersonating) {
+			try {
+				await ensureScheduleToppedUp(activeClubId);
+			} catch (err) {
+				console.error(
+					`[recurrence] schedule top-up failed for club ${activeClubId}:`,
+					err,
+				);
+			}
+		}
 
 		return {
 			user: { id: user.id, name: user.name, email: user.email },

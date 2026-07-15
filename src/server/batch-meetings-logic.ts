@@ -9,9 +9,9 @@
 // parity.
 import { asc, eq } from "drizzle-orm";
 import { db } from "#/db";
-import { clubs, meetings, roleDefinitions, roleSlots } from "#/db/schema";
-import { generateSlotRows } from "#/lib/agenda";
+import { clubs, meetings, roleDefinitions } from "#/db/schema";
 import { utcToZonedWallTime, zonedWallTimeToUtc } from "#/lib/datetime";
+import { insertMeetingWithSlots } from "./meeting-create-logic";
 
 export interface BatchCreateInput {
 	clubId: string;
@@ -86,29 +86,24 @@ export async function applyBatchCreateMeetings(
 		return { createdCount: 0, skippedDates };
 	}
 
+	let createdCount = 0;
 	await db.transaction(async (tx) => {
 		for (const { scheduledAt } of toCreate) {
-			const [meeting] = await tx
-				.insert(meetings)
-				.values({
+			const id = await insertMeetingWithSlots(
+				tx,
+				{
 					clubId: input.clubId,
 					scheduledAt,
 					lengthMinutes: club.defaultMeetingMinutes,
 					location,
-					theme: null,
-					wordOfTheDay: null,
-					notes: null,
-				})
-				.returning({ id: meetings.id });
-
-			const slotRows = generateSlotRows(defs, meeting.id);
-			if (slotRows.length > 0) {
-				await tx.insert(roleSlots).values(slotRows);
-			}
+				},
+				defs,
+			);
+			if (id) createdCount += 1;
 		}
 	});
 
-	return { createdCount: toCreate.length, skippedDates };
+	return { createdCount, skippedDates };
 }
 
 /**
