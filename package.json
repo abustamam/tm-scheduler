@@ -6,6 +6,8 @@
     "#/*": "./src/*"
   },
   "scripts": {
+    "prepare": "git config core.hooksPath .githooks 2>/dev/null || true",
+    "predev": "bun run db:migrate",
     "dev": "vite dev --port 3000",
     "generate-routes": "tsr generate",
     "build": "NITRO_PRESET=node-server vite build && bun run build:migrate",
