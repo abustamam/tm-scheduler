@@ -36,6 +36,9 @@ export interface ConsoleClubRow {
 	clubNumber: string | null;
 	memberCount: number;
 	createdAt: Date;
+	/** Soft-archive timestamp (ADR-0016 / #186); null = active. Archived clubs
+	 *  stay listed in the console, marked archived, with an Unarchive action. */
+	archivedAt: Date | null;
 	firstAdmin: ConsoleAdmin | null;
 }
 
@@ -52,6 +55,7 @@ export async function listClubsForConsole(): Promise<ConsoleClubRow[]> {
 			name: clubs.name,
 			clubNumber: clubs.clubNumber,
 			createdAt: clubs.createdAt,
+			archivedAt: clubs.archivedAt,
 		})
 		.from(clubs)
 		.orderBy(asc(clubs.createdAt));
@@ -93,6 +97,7 @@ export async function listClubsForConsole(): Promise<ConsoleClubRow[]> {
 		clubNumber: c.clubNumber,
 		memberCount: countByClub.get(c.id) ?? 0,
 		createdAt: c.createdAt,
+		archivedAt: c.archivedAt,
 		firstAdmin: firstAdminByClub.get(c.id) ?? null,
 	}));
 }
@@ -108,6 +113,9 @@ export interface ConsoleClubDetail {
 	clubNumber: string | null;
 	slug: string;
 	createdAt: Date;
+	/** Soft-archive timestamp (ADR-0016 / #186); null = active. Drives the
+	 *  console's Archive/Unarchive control. */
+	archivedAt: Date | null;
 	memberCount: number;
 	firstAdmin: {
 		personId: string;
@@ -130,6 +138,7 @@ export async function getClubConsoleDetail(
 			clubNumber: clubs.clubNumber,
 			slug: clubs.slug,
 			createdAt: clubs.createdAt,
+			archivedAt: clubs.archivedAt,
 		})
 		.from(clubs)
 		.where(eq(clubs.id, clubId))
@@ -149,6 +158,7 @@ export async function getClubConsoleDetail(
 		clubNumber: club.clubNumber,
 		slug: club.slug,
 		createdAt: club.createdAt,
+		archivedAt: club.archivedAt,
 		memberCount: count,
 		firstAdmin: admin
 			? {
@@ -330,4 +340,51 @@ export async function updateUnclaimedAdminEmail(
 		.where(eq(people.id, admin.personId));
 
 	return { ok: true, personId: admin.personId };
+}
+
+// ---------------------------------------------------------------------------
+// Soft-archive / unarchive a club (ADR-0016 / #186).
+// ---------------------------------------------------------------------------
+
+/**
+ * Soft-archive a club: set `archived_at` so the club becomes inaccessible
+ * everywhere except the superadmin console (`requireMembership` rejects authed
+ * access; the public no-auth loaders return not-found). SOFT and REVERSIBLE — no
+ * data is deleted and the slug/club number stay reserved. Re-archiving an
+ * already-archived club is a no-op that preserves the original timestamp. The
+ * caller enforces the superadmin gate. Throws when the club does not exist.
+ */
+export async function archiveClub(
+	clubId: string,
+): Promise<{ ok: true; archivedAt: Date }> {
+	const [club] = await db
+		.select({ archivedAt: clubs.archivedAt })
+		.from(clubs)
+		.where(eq(clubs.id, clubId))
+		.limit(1);
+	if (!club) throw new Error("Club not found.");
+	if (club.archivedAt) return { ok: true, archivedAt: club.archivedAt };
+
+	const [updated] = await db
+		.update(clubs)
+		.set({ archivedAt: new Date() })
+		.where(eq(clubs.id, clubId))
+		.returning({ archivedAt: clubs.archivedAt });
+	if (!updated?.archivedAt) throw new Error("Failed to archive the club.");
+	return { ok: true, archivedAt: updated.archivedAt };
+}
+
+/**
+ * Unarchive a club: clear `archived_at`, fully restoring authed + public access
+ * with all prior data intact. The caller enforces the superadmin gate. Throws
+ * when the club does not exist.
+ */
+export async function unarchiveClub(clubId: string): Promise<{ ok: true }> {
+	const [updated] = await db
+		.update(clubs)
+		.set({ archivedAt: null })
+		.where(eq(clubs.id, clubId))
+		.returning({ id: clubs.id });
+	if (!updated) throw new Error("Club not found.");
+	return { ok: true };
 }

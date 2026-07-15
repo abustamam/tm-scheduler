@@ -10,7 +10,11 @@ no reminders, no at-a-glance "what's still open," and edit conflicts.
 Use these exact terms in issues, ADRs, tests, and code. They map Toastmasters vocabulary to
 the nouns in `src/db/schema.ts`.
 
-- **Club** — a Toastmasters club (`clubs`). A person can belong to several (see ADR-0006).
+- **Club** — a Toastmasters club (`clubs`). A person can belong to several (see ADR-0006). A club
+  can be **soft-archived** by a superadmin (`clubs.archived_at`; NULL = active): a reversible flag
+  that blocks all access — authed (`requireMembership` rejects) and public (loaders return
+  not-found) — except the superadmin console, retaining every row and keeping the slug reserved.
+  See ADR-0016 / #186.
 - **Person** — a human (`people`), keyed by their Toastmasters Customer ID (`PN-…`, nullable;
   unique when present, with email as a fallback match key). Holds the facts that are the same
   across *every* club a person belongs to: name, contact, `original_join_date` (first-ever TM

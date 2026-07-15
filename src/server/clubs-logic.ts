@@ -15,6 +15,7 @@ export type ResolvedClub = {
 	name: string;
 	timezone: string;
 	clubNumber: string | null;
+	archivedAt: Date | null;
 };
 
 /**
@@ -40,6 +41,7 @@ export async function resolveClubByIdentifier(
 			name: clubs.name,
 			timezone: clubs.timezone,
 			clubNumber: clubs.clubNumber,
+			archivedAt: clubs.archivedAt,
 		})
 		.from(clubs)
 		.where(or(...conds));
