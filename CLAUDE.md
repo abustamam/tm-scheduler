@@ -42,7 +42,12 @@ Package manager is **Bun** (use `bun install`, `bun run <script>`).
 - `bun run check` — Biome lint + format gate. (`bun run lint` / `bun run format` individually.)
 - `bun run test` — Vitest (uses Vitest, NOT `bun test`).
 - `bun run db:generate` — generate Drizzle migrations from `src/db/schema.ts`.
-- `bun run db:migrate` — apply migrations. `db:push` for dev sync, `db:studio` to inspect.
+- `bun run db:migrate` — apply migrations. Use this (NOT `db:push`) to keep the local dev DB
+  (`tm_scheduler`) current: it is applied automatically as a `predev` step on `bun run dev` and by
+  the `.githooks/post-merge` hook after a `git pull` that lands new migrations, so the dev DB always
+  mirrors prod's migration path. Mixing in `db:push` diverges the migration-tracking table and
+  breaks replay — reserve `db:push` for throwaway/test databases (e.g. syncing `tm_test`). `db:studio`
+  to inspect.
 - `bun run generate-routes` — regenerate `src/routeTree.gen.ts` (also runs during dev/build).
 - `bun run build` — Vite build (Node server output via Nitro).
 - `bun run typecheck` — `tsc --noEmit`. **This is the only thing that type-checks.** `bun run build`
@@ -84,7 +89,8 @@ notifications table (schema only). Better-Auth's tables live in
 `src/db/auth-schema.ts`. See `CONTEXT.md` for the glossary.
 The `db` client (`src/db/index.ts`) is `drizzle(process.env.DATABASE_URL!, { schema })`.
 Migrations are generated to `./drizzle` (`drizzle.config.ts`); edit the schema, then
-`bun run db:generate` + `bun run db:migrate` (or `db:push` for quick dev sync). CI fails if
+`bun run db:generate` + `bun run db:migrate` (do NOT `db:push` the dev DB — see the `db:migrate`
+note above). CI fails if
 `schema.ts` drifts from the committed migrations (a generate that produces a diff) and applies
 migrations (not `push`) so the migration files are exercised the same way prod runs them.
 

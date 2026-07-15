@@ -1,0 +1,32 @@
+#!/bin/sh
+# Auto-apply new DB migrations to the local dev database after a merge/pull —
+# e.g. `git pull` on main after a PR lands. Enabled via `core.hooksPath=.githooks`,
+# which the package.json `prepare` script sets on `bun install`.
+#
+# Guards:
+#   - Only acts when a migration file actually changed in this merge.
+#   - Skips linked worktrees (feature branches) — only the primary checkout, the
+#     one that tracks main, migrates the shared local dev DB.
+#   - Never blocks: a failed migrate just prints a hint (post-merge can't abort
+#     the merge anyway).
+set -e
+
+# Skip in linked worktrees: there the per-worktree git dir differs from the
+# common git dir. Only the main checkout should touch the dev DB.
+if [ "$(git rev-parse --git-dir)" != "$(git rev-parse --git-common-dir)" ]; then
+	exit 0
+fi
+
+# Did this merge change any migration? ORIG_HEAD is the pre-merge HEAD.
+if ! git rev-parse --verify --quiet ORIG_HEAD >/dev/null; then
+	exit 0
+fi
+changed=$(git diff-tree -r --name-only --no-commit-id ORIG_HEAD HEAD -- 'drizzle/*.sql' 2>/dev/null || true)
+[ -z "$changed" ] && exit 0
+
+echo "[post-merge] New migration(s) detected — applying to the local dev DB…"
+if command -v bun >/dev/null 2>&1; then
+	bun run db:migrate || echo "[post-merge] db:migrate failed — run 'bun run db:migrate' manually once the DB is up."
+else
+	echo "[post-merge] bun not found — run 'bun run db:migrate' manually."
+fi
