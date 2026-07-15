@@ -64,6 +64,9 @@ const createdPersonIds: string[] = [];
 // Extra course codes a case creates beyond CODE (e.g. the unseen-path case) —
 // cleaned up alongside CODE so shared catalog rows don't leak across runs.
 const createdPathCodes: string[] = [];
+// Extra clubs a case creates beyond the shared test club (the multi-club
+// first-syncer-wins case) — cleaned up so club rows don't leak across runs.
+const createdClubIds: string[] = [];
 
 /** Create a Person AND a `members` row linking them to the test club. */
 async function makeMember(
@@ -106,6 +109,40 @@ async function localCleanup() {
 		await testDb.delete(people).where(inArray(people.id, createdPersonIds));
 		createdPersonIds.length = 0;
 	}
+	// Extra clubs — deleted AFTER level rows (via CODE cascade above) and their
+	// memberships (via personId above), so no credited_club_id / members FK is
+	// left dangling. The shared `clubId` is owned by afterAll, not here.
+	if (createdClubIds.length > 0) {
+		await testDb.delete(clubs).where(inArray(clubs.id, createdClubIds));
+		createdClubIds.length = 0;
+	}
+}
+
+/** Read the single path_level_progress row for a person's CODE-path level. */
+async function readLevel(personId: string, level: number) {
+	const [path] = await testDb
+		.select({ id: pathwaysPaths.id })
+		.from(pathwaysPaths)
+		.where(eq(pathwaysPaths.courseCode, CODE));
+	const [enr] = await testDb
+		.select({ id: pathEnrollments.id })
+		.from(pathEnrollments)
+		.where(
+			and(
+				eq(pathEnrollments.personId, personId),
+				eq(pathEnrollments.pathId, path.id),
+			),
+		);
+	const [row] = await testDb
+		.select()
+		.from(pathLevelProgress)
+		.where(
+			and(
+				eq(pathLevelProgress.enrollmentId, enr.id),
+				eq(pathLevelProgress.level, level),
+			),
+		);
+	return row;
 }
 
 describe.skipIf(!hasTestDb)("syncClubProgress", () => {
@@ -355,5 +392,169 @@ describe.skipIf(!hasTestDb)("syncClubProgress", () => {
 			.from(people)
 			.where(eq(people.id, outsiderId));
 		expect(p.bc).toBe("321"); // unchanged from setup — never touched
+	});
+
+	// --- Completion attribution (ADR-0022, #116) -------------------------------
+
+	it("stamps completedAt + creditedClubId when a level is witnessed flipping approved false→true", async () => {
+		const personId = await makeMember({ email: "flip@example.com" });
+		const before = Date.now();
+
+		// First sync: level not yet approved → columns stay null.
+		await syncClubProgress(clubId, [
+			mp({
+				email: "flip@example.com",
+				basecampUserId: "f1",
+				levels: [{ level: 1, completed: 2, total: 4, approved: false }],
+			}),
+		]);
+		let row = await readLevel(personId, 1);
+		expect(row.completedAt).toBeNull();
+		expect(row.creditedClubId).toBeNull();
+
+		// Second sync: approved flips false→true → stamp date + syncing club.
+		await syncClubProgress(clubId, [
+			mp({
+				email: "flip@example.com",
+				basecampUserId: "f1",
+				levels: [{ level: 1, completed: 4, total: 4, approved: true }],
+			}),
+		]);
+		row = await readLevel(personId, 1);
+		expect(row.completedAt).toBeInstanceOf(Date);
+		expect(row.completedAt?.getTime() ?? 0).toBeGreaterThanOrEqual(
+			before - 1000,
+		);
+		expect(row.creditedClubId).toBe(clubId);
+	});
+
+	it("leaves completion columns null for a level already approved on the enrollment's first sync (cold start)", async () => {
+		const personId = await makeMember({ email: "cold@example.com" });
+		await syncClubProgress(clubId, [
+			mp({
+				email: "cold@example.com",
+				basecampUserId: "c1",
+				levels: [{ level: 1, completed: 5, total: 5, approved: true }],
+			}),
+		]);
+		const row = await readLevel(personId, 1);
+		// The level IS done, but we never witnessed the transition — so no
+		// fabricated date or club.
+		expect(row.approved).toBe(true);
+		expect(row.completedAt).toBeNull();
+		expect(row.creditedClubId).toBeNull();
+	});
+
+	it("leaves completion columns null for a never-approved level", async () => {
+		const personId = await makeMember({ email: "never@example.com" });
+		await syncClubProgress(clubId, [
+			mp({
+				email: "never@example.com",
+				basecampUserId: "n1",
+				levels: [{ level: 1, completed: 1, total: 5, approved: false }],
+			}),
+		]);
+		await syncClubProgress(clubId, [
+			mp({
+				email: "never@example.com",
+				basecampUserId: "n1",
+				levels: [{ level: 1, completed: 3, total: 5, approved: false }],
+			}),
+		]);
+		const row = await readLevel(personId, 1);
+		expect(row.completedAt).toBeNull();
+		expect(row.creditedClubId).toBeNull();
+	});
+
+	it("preserves the original completion stamp across true→false→true churn (write-once)", async () => {
+		const personId = await makeMember({ email: "churn@example.com" });
+		await syncClubProgress(clubId, [
+			mp({
+				email: "churn@example.com",
+				basecampUserId: "ch1",
+				levels: [{ level: 1, completed: 2, total: 4, approved: false }],
+			}),
+		]);
+		// Witness the completion.
+		await syncClubProgress(clubId, [
+			mp({
+				email: "churn@example.com",
+				basecampUserId: "ch1",
+				levels: [{ level: 1, completed: 4, total: 4, approved: true }],
+			}),
+		]);
+		const first = await readLevel(personId, 1);
+		expect(first.completedAt).toBeInstanceOf(Date);
+
+		// Base Camp re-opens the level (true→false)…
+		await syncClubProgress(clubId, [
+			mp({
+				email: "churn@example.com",
+				basecampUserId: "ch1",
+				levels: [{ level: 1, completed: 3, total: 4, approved: false }],
+			}),
+		]);
+		// …then it is approved again (false→true). Write-once: original wins.
+		await syncClubProgress(clubId, [
+			mp({
+				email: "churn@example.com",
+				basecampUserId: "ch1",
+				levels: [{ level: 1, completed: 4, total: 4, approved: true }],
+			}),
+		]);
+		const after = await readLevel(personId, 1);
+		expect(after.completedAt?.getTime()).toBe(first.completedAt?.getTime());
+		expect(after.creditedClubId).toBe(clubId);
+	});
+
+	it("does not let a second club steal credit once the first club has stamped (first-syncer-wins)", async () => {
+		const personId = await makeMember({ email: "multi@example.com" });
+		// Same person, second club on the roster — they share ONE enrollment
+		// (person + path), so both clubs' syncs hit the same level row.
+		const secondClubId = randomUUID();
+		createdClubIds.push(secondClubId);
+		await testDb.insert(clubs).values({
+			id: secondClubId,
+			name: "Second Club",
+			slug: `second-club-${secondClubId}`,
+		});
+		await testDb.insert(members).values({
+			clubId: secondClubId,
+			personId,
+			name: "Multi",
+			email: "multi@example.com",
+		});
+
+		// Club A witnesses the completion → A is credited.
+		await syncClubProgress(clubId, [
+			mp({
+				email: "multi@example.com",
+				basecampUserId: "m1",
+				levels: [{ level: 1, completed: 2, total: 4, approved: false }],
+			}),
+		]);
+		await syncClubProgress(clubId, [
+			mp({
+				email: "multi@example.com",
+				basecampUserId: "m1",
+				levels: [{ level: 1, completed: 4, total: 4, approved: true }],
+			}),
+		]);
+		const afterA = await readLevel(personId, 1);
+		expect(afterA.creditedClubId).toBe(clubId);
+		const stampedAt = afterA.completedAt?.getTime();
+
+		// Club B later syncs the same (already-approved) shared enrollment.
+		await syncClubProgress(secondClubId, [
+			mp({
+				email: "multi@example.com",
+				basecampUserId: "m1",
+				levels: [{ level: 1, completed: 4, total: 4, approved: true }],
+			}),
+		]);
+		const afterB = await readLevel(personId, 1);
+		// Credit and date are unchanged — A got there first.
+		expect(afterB.creditedClubId).toBe(clubId);
+		expect(afterB.completedAt?.getTime()).toBe(stampedAt);
 	});
 });

@@ -138,6 +138,15 @@ export async function syncClubProgress(
 		}
 		const enrollmentId = await upsertEnrollment(personId, pathId);
 		for (const lvl of row.levels) {
+			// Completion attribution (ADR-0022, #116). We WITNESS a completion only
+			// when the STORED row's `approved` is false and this sync brings it true,
+			// and only stamp when not already stamped (`completed_at IS NULL`) — so
+			// the stamp is write-once and never re-fires on churn. On the INSERT
+			// branch (first time we ever see this enrollment/level) both columns are
+			// left null: a level already approved at first sight has no witnessed
+			// date or club, and we never fabricate one. `${pathLevelProgress.*}` in an
+			// ON CONFLICT DO UPDATE `set` refers to the EXISTING (pre-update) row.
+			const witnessedCompletion = sql`${pathLevelProgress.approved} = false and ${lvl.approved} = true and ${pathLevelProgress.completedAt} is null`;
 			await db
 				.insert(pathLevelProgress)
 				.values({
@@ -153,6 +162,8 @@ export async function syncClubProgress(
 						completed: lvl.completed,
 						total: lvl.total,
 						approved: lvl.approved,
+						completedAt: sql`case when ${witnessedCompletion} then now() else ${pathLevelProgress.completedAt} end`,
+						creditedClubId: sql`case when ${witnessedCompletion} then ${clubId}::uuid else ${pathLevelProgress.creditedClubId} end`,
 					},
 				});
 		}
