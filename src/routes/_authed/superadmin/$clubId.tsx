@@ -1,11 +1,12 @@
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
-import { Archive, ArchiveRestore, ArrowLeft, Loader2 } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowLeft, Eye, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { PageContainer } from "#/components/page-container";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
+import { startImpersonation } from "#/server/impersonation";
 import {
 	archiveConsoleClub,
 	getConsoleClubDetail,
@@ -70,6 +71,10 @@ function ClubDetail() {
 				)}
 			</section>
 
+			{club.archivedAt ? null : (
+				<ViewAsPanel clubId={clubId} clubName={club.name} />
+			)}
+
 			<ArchivePanel
 				clubId={clubId}
 				clubName={club.name}
@@ -77,6 +82,55 @@ function ClubDetail() {
 				onChanged={() => router.invalidate()}
 			/>
 		</PageContainer>
+	);
+}
+
+function ViewAsPanel({
+	clubId,
+	clubName,
+}: {
+	clubId: string;
+	clubName: string;
+}) {
+	const router = useRouter();
+	const [submitting, setSubmitting] = useState(false);
+
+	async function onViewAs() {
+		setSubmitting(true);
+		try {
+			await startImpersonation({ data: { clubId } });
+			// Re-run getAuthContext so the workspace picks up the session (it forces
+			// the impersonated club active) and renders the read-only banner.
+			await router.invalidate();
+			await router.navigate({ to: "/" });
+		} catch (err) {
+			toast.error(
+				err instanceof Error ? err.message : "Couldn't start the session.",
+			);
+			setSubmitting(false);
+		}
+	}
+
+	return (
+		<section className="max-w-xl space-y-3 rounded-xl border border-[var(--line)] bg-[var(--surface-strong)] p-4">
+			<h2 className="text-sm font-bold">View as this club</h2>
+			<p className="text-sm text-muted-foreground">
+				Open <span className="font-medium">{clubName}</span>'s workspace exactly
+				as an admin sees it, to diagnose an issue. The session is{" "}
+				<span className="font-medium">read-only</span> (you can't change the
+				club's data), auto-expires in 60 minutes, and is recorded in the club's
+				activity log.
+			</p>
+			<Button type="button" size="sm" disabled={submitting} onClick={onViewAs}>
+				{submitting ? (
+					<Loader2 className="size-4 animate-spin" />
+				) : (
+					<>
+						<Eye className="size-4" /> View as this club
+					</>
+				)}
+			</Button>
+		</section>
 	);
 }
 

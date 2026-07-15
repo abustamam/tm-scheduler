@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import { meetings, roleSlots } from "#/db/schema";
-import { requireClubRole, requireUser } from "./guards";
+import { requireClubAdminView, requireClubRole, requireUser } from "./guards";
 import { applyAssignGuestToSlot, listClubGuests } from "./guests-logic";
 
 const uuid = z.string().uuid();
@@ -13,7 +13,7 @@ export const listGuests = createServerFn({ method: "GET" })
 	.validator((clubId: unknown) => uuid.parse(clubId))
 	.handler(async ({ data: clubId }) => {
 		const currentUser = await requireUser();
-		await requireClubRole(currentUser.id, clubId, ["admin"]);
+		await requireClubAdminView(currentUser.id, clubId);
 		return listClubGuests(clubId);
 	});
 

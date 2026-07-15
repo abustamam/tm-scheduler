@@ -197,6 +197,13 @@
       "when": 1784075092788,
       "tag": "0027_rich_grandmaster",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1784136805528,
+      "tag": "0028_nosy_george_stacy",
+      "breakpoints": true
     }
   ]
 }

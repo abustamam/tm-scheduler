@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { requireMembership, requireUser } from "./guards";
+import { requireClubViewAccess, requireUser } from "./guards";
 import { loadSeasonGrid } from "./season-grid-logic";
 
 const seasonGridInput = z.object({
@@ -32,7 +32,7 @@ export const getSeasonGrid = createServerFn({ method: "GET" })
 	.validator((input: unknown) => seasonGridInput.parse(input))
 	.handler(async ({ data }) => {
 		const user = await requireUser();
-		await requireMembership(user.id, data.clubId);
+		await requireClubViewAccess(user.id, data.clubId);
 		return loadSeasonGrid(data);
 	});
 

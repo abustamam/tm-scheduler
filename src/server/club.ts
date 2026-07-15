@@ -11,7 +11,7 @@ import {
 	roleSlots,
 	speeches,
 } from "#/db/schema";
-import { requireMembership, requireUser } from "./guards";
+import { requireClubViewAccess, requireUser } from "./guards";
 import {
 	currentOfficersByMember,
 	currentOfficersFor,
@@ -34,7 +34,7 @@ export const listClubMembers = createServerFn({ method: "GET" })
 	.validator((clubId: unknown) => uuid.parse(clubId))
 	.handler(async ({ data: clubId }) => {
 		const currentUser = await requireUser();
-		await requireMembership(currentUser.id, clubId);
+		await requireClubViewAccess(currentUser.id, clubId);
 
 		const roster = await db
 			.select({
@@ -185,7 +185,7 @@ export const getMemberProfile = createServerFn({ method: "GET" })
 	)
 	.handler(async ({ data }) => {
 		const currentUser = await requireUser();
-		await requireMembership(currentUser.id, data.clubId);
+		await requireClubViewAccess(currentUser.id, data.clubId);
 
 		const [member] = await db
 			.select({

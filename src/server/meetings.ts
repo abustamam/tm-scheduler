@@ -20,8 +20,8 @@ import {
 	getMembership,
 	getSessionUser,
 	requireClubRole,
+	requireClubViewAccess,
 	requireMeetingAgendaEditor,
-	requireMembership,
 	requireUser,
 } from "./guards";
 import {
@@ -283,7 +283,7 @@ export const getNextMeeting = createServerFn({ method: "GET" })
 	.validator((clubId: unknown) => uuid.parse(clubId))
 	.handler(async ({ data: clubId }) => {
 		const currentUser = await requireUser();
-		await requireMembership(currentUser.id, clubId);
+		await requireClubViewAccess(currentUser.id, clubId);
 
 		const [next] = await db
 			.select({ id: meetings.id })

@@ -6,7 +6,7 @@ import {
 	getClubProfile,
 	resolveClubByIdentifier,
 } from "./clubs-logic";
-import { requireClubRole, requireMembership, requireUser } from "./guards";
+import { requireClubRole, requireClubViewAccess, requireUser } from "./guards";
 
 const uuid = z.string().uuid();
 
@@ -22,7 +22,7 @@ export const getClubProfileSettings = createServerFn({ method: "GET" })
 	.validator((clubId: unknown) => uuid.parse(clubId))
 	.handler(async ({ data: clubId }) => {
 		const currentUser = await requireUser();
-		await requireMembership(currentUser.id, clubId);
+		await requireClubViewAccess(currentUser.id, clubId);
 		return getClubProfile(clubId);
 	});
 

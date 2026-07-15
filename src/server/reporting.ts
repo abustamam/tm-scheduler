@@ -7,7 +7,7 @@
 // covers VPEs without a separate role.
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { requireClubRole, requireUser } from "./guards";
+import { requireClubAdminView, requireUser } from "./guards";
 import { loadOverdueMembers, loadSpeakerRotation } from "./reporting-logic";
 
 const clubScoped = z.object({ clubId: z.string().uuid() });
@@ -16,7 +16,7 @@ export const getSpeakerRotation = createServerFn({ method: "GET" })
 	.validator((input: unknown) => clubScoped.parse(input))
 	.handler(async ({ data }) => {
 		const user = await requireUser();
-		await requireClubRole(user.id, data.clubId, ["admin"]);
+		await requireClubAdminView(user.id, data.clubId);
 		return loadSpeakerRotation(data.clubId);
 	});
 
@@ -30,6 +30,6 @@ export const getOverdueMembers = createServerFn({ method: "GET" })
 	)
 	.handler(async ({ data }) => {
 		const user = await requireUser();
-		await requireClubRole(user.id, data.clubId, ["admin"]);
+		await requireClubAdminView(user.id, data.clubId);
 		return loadOverdueMembers(data.clubId, data.thresholdDays);
 	});

@@ -26,12 +26,14 @@ import {
 	Wallet,
 } from "lucide-react";
 import { type ComponentType, type ReactNode, useRef, useState } from "react";
+import { toast } from "sonner";
 import { BrandMark } from "#/components/brand-mark";
 import { ClubSwitcher } from "#/components/club/club-switcher";
 import {
 	GlobalSearch,
 	type GlobalSearchHandle,
 } from "#/components/club/global-search";
+import { ImpersonationBanner } from "#/components/club/impersonation-banner";
 import { MemberAvatar } from "#/components/club/member-avatar";
 import { ThemeToggle } from "#/components/club/theme-toggle";
 import { Sheet, SheetContent, SheetTitle } from "#/components/ui/sheet";
@@ -40,6 +42,7 @@ import { authClient } from "#/lib/auth-client";
 import { initialsOf } from "#/lib/avatar";
 import { officerPositionLabel, officerRank } from "#/lib/officers";
 import { getAuthContext } from "#/server/auth-context";
+import { endImpersonation } from "#/server/impersonation";
 
 export const Route = createFileRoute("/_authed")({
 	beforeLoad: async ({ location }) => {
@@ -57,6 +60,7 @@ export const Route = createFileRoute("/_authed")({
 			activeClubId: ctx.activeClubId,
 			officerPositions: ctx.officerPositions,
 			isSuperadmin: ctx.isSuperadmin,
+			impersonating: ctx.impersonating,
 		};
 	},
 	component: WorkspaceLayout,
@@ -95,8 +99,14 @@ function crumbFor(pathname: string): string {
 }
 
 function WorkspaceLayout() {
-	const { authUser, clubs, activeClubId, officerPositions, isSuperadmin } =
-		Route.useRouteContext();
+	const {
+		authUser,
+		clubs,
+		activeClubId,
+		officerPositions,
+		isSuperadmin,
+		impersonating,
+	} = Route.useRouteContext();
 	const router = useRouter();
 	const pathname = useRouterState({ select: (s) => s.location.pathname });
 	// Mobile nav drawer (shown below `lg`; the sidebar is fixed at `lg+`).
@@ -128,6 +138,18 @@ function WorkspaceLayout() {
 	async function handleSignOut() {
 		await authClient.signOut();
 		await router.navigate({ to: "/signin", search: { redirect: "/" } });
+	}
+
+	async function handleExitImpersonation() {
+		try {
+			await endImpersonation();
+			await router.navigate({ to: "/superadmin" });
+			await router.invalidate();
+		} catch (err) {
+			toast.error(
+				err instanceof Error ? err.message : "Couldn't exit the session.",
+			);
+		}
 	}
 
 	// Which workspace pages the global search may surface for this user.
@@ -195,8 +217,17 @@ function WorkspaceLayout() {
 			</Sheet>
 
 			<main className="flex min-w-0 flex-1 flex-col">
+				{impersonating ? (
+					<ImpersonationBanner
+						clubName={clubName}
+						expiresAt={impersonating.expiresAt}
+						onExit={handleExitImpersonation}
+					/>
+				) : null}
 				{/* Desktop header (lg+) */}
-				<header className="sticky top-0 z-10 hidden items-center gap-3.5 border-b border-[var(--line)] bg-[var(--surface)] px-7 py-4 backdrop-blur-[6px] lg:flex">
+				<header
+					className={`sticky z-10 ${impersonating ? "top-9" : "top-0"} hidden items-center gap-3.5 border-b border-[var(--line)] bg-[var(--surface)] px-7 py-4 backdrop-blur-[6px] lg:flex`}
+				>
 					<div className="text-xs font-semibold tracking-[0.01em] text-[var(--sea-ink-soft)]">
 						{crumbFor(pathname)}
 					</div>
@@ -210,7 +241,9 @@ function WorkspaceLayout() {
 				</header>
 
 				{/* Mobile top app-bar (below lg) */}
-				<header className="sticky top-0 z-10 flex items-center gap-2.5 border-b border-[var(--line)] bg-[var(--surface)] px-4 py-3 backdrop-blur-[6px] lg:hidden">
+				<header
+					className={`sticky z-10 ${impersonating ? "top-9" : "top-0"} flex items-center gap-2.5 border-b border-[var(--line)] bg-[var(--surface)] px-4 py-3 backdrop-blur-[6px] lg:hidden`}
+				>
 					<button
 						type="button"
 						onClick={() => setNavOpen(true)}

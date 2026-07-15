@@ -4,7 +4,7 @@ import {
 	listActivitySchema,
 	loadActivity,
 } from "./activity-feed-logic";
-import { requireClubRole, requireUser } from "./guards";
+import { requireClubAdminView, requireUser } from "./guards";
 
 // Re-export the feed types for client/lib consumers (e.g. lib/activity-format).
 // These are type-only, so they pull no runtime db code into the client.
@@ -15,6 +15,6 @@ export const listActivity = createServerFn({ method: "GET" })
 	.validator((i: unknown) => listActivitySchema.parse(i))
 	.handler(async ({ data }): Promise<ActivityEntry[]> => {
 		const user = await requireUser();
-		await requireClubRole(user.id, data.clubId, ["admin"]);
+		await requireClubAdminView(user.id, data.clubId);
 		return loadActivity(data);
 	});
