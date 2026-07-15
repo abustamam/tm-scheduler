@@ -16,6 +16,8 @@ import {
 	MEETING_LOCKED_MESSAGE,
 } from "#/lib/meeting-lifecycle";
 import { isTmodRoleName } from "#/lib/meeting-roles";
+import { markImpersonatedWrite } from "./impersonation-actor";
+import { getActiveImpersonation } from "./impersonation-logic";
 
 /**
  * The meeting-lock choke point (#150). Throws when a meeting's status is
@@ -103,6 +105,16 @@ export async function resolveMeetingAgendaAuthz(
 			membership.status === "active" &&
 			membership.clubRole === "admin"
 		) {
+			return { clubId, allowed: true, via: "admin", tmodMemberId };
+		}
+
+		// Read-write impersonation (#246): a superadmin acting as this club's admin
+		// gets the admin editor path. Mark the request so the agenda write is
+		// attributed to the real superadmin. (A read_only session never reaches here
+		// — writes stay blind to it by construction.)
+		const session = await getActiveImpersonation(input.sessionUserId, clubId);
+		if (session?.mode === "read_write") {
+			markImpersonatedWrite(input.sessionUserId);
 			return { clubId, allowed: true, via: "admin", tmodMemberId };
 		}
 	}

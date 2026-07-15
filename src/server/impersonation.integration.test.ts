@@ -24,6 +24,7 @@ import {
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
+import { logActivity } from "./activity";
 import {
 	requireClubAdminView,
 	requireClubRole,
@@ -34,6 +35,7 @@ import {
 	endImpersonation,
 	getActiveImpersonation,
 	getActiveImpersonationForUser,
+	IMPERSONATION_RW_TTL_MS,
 	IMPERSONATION_TTL_MS,
 	startImpersonation,
 } from "./impersonation-logic";
@@ -186,5 +188,129 @@ describe.skipIf(!hasTestDb)("superadmin impersonation (integration)", () => {
 		expect(
 			(rows[0]?.detail as { superadminUserId?: string })?.superadminUserId,
 		).toBe(su.id);
+	});
+
+	// --- Read-write "act as admin" phase (#246) ---------------------------------
+
+	it("read_write session grants the WRITE guards as a memberless effective-admin", async () => {
+		const su = await seedSuperadmin();
+		await startImpersonation(su.id, {
+			clubId: seeded.clubId,
+			mode: "read_write",
+			reason: "fixing a broken agenda",
+		});
+
+		// requireMembership resolves — memberless (id null), attributed to the superadmin.
+		const m = await requireMembership(su.id, seeded.clubId);
+		expect(m.id).toBeNull();
+		expect(m.clubRole).toBe("admin");
+		expect(m.impersonatedBy).toBe(su.id);
+
+		// requireClubRole passes for admin AND member requirements (full parity).
+		const asAdmin = await requireClubRole(su.id, seeded.clubId, ["admin"]);
+		expect(asAdmin.impersonatedBy).toBe(su.id);
+		const asMember = await requireClubRole(su.id, seeded.clubId, ["member"]);
+		expect(asMember.impersonatedBy).toBe(su.id);
+
+		// Reads still work too.
+		const view = await requireClubAdminView(su.id, seeded.clubId);
+		expect(view.via).toBe("impersonation");
+	});
+
+	it("read_write requires a reason", async () => {
+		const su = await seedSuperadmin();
+		await expect(
+			startImpersonation(su.id, { clubId: seeded.clubId, mode: "read_write" }),
+		).rejects.toThrow(/reason/i);
+		// And no session/audit row leaked from the failed start.
+		expect(await getActiveImpersonationForUser(su.id)).toBeNull();
+	});
+
+	it("read_write uses the shorter 15-minute TTL", async () => {
+		const su = await seedSuperadmin();
+		const before = Date.now();
+		const session = await startImpersonation(su.id, {
+			clubId: seeded.clubId,
+			mode: "read_write",
+			reason: "support fix",
+		});
+		const life = session.expiresAt.getTime() - before;
+		// ~15 min, and well under the 60-min read-only window.
+		expect(life).toBeGreaterThan(IMPERSONATION_RW_TTL_MS - 5000);
+		expect(life).toBeLessThan(IMPERSONATION_RW_TTL_MS + 5000);
+		expect(life).toBeLessThan(IMPERSONATION_TTL_MS);
+	});
+
+	it("read_write start logs superadmin_acted with the reason", async () => {
+		const su = await seedSuperadmin();
+		await startImpersonation(su.id, {
+			clubId: seeded.clubId,
+			mode: "read_write",
+			reason: "correcting the roster",
+		});
+		const rows = await testDb
+			.select()
+			.from(activityLog)
+			.where(
+				and(
+					eq(activityLog.clubId, seeded.clubId),
+					eq(activityLog.action, "superadmin_acted"),
+				),
+			);
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.actorMemberId).toBeNull();
+		expect(rows[0]?.impersonatedBy).toBe(su.id);
+		const detail = rows[0]?.detail as { reason?: string; mode?: string };
+		expect(detail?.reason).toBe("correcting the roster");
+		expect(detail?.mode).toBe("read_write");
+	});
+
+	it("logActivity attributes an impersonated write to the superadmin (actor null)", async () => {
+		const su = await seedSuperadmin();
+		// The resolved actor (from the request session in production) is passed
+		// explicitly here: impersonated_by is set and actor_member_id forced null,
+		// even though a member id was supplied.
+		await logActivity(testDb, {
+			clubId: seeded.clubId,
+			actorMemberId: seeded.memberId,
+			action: "member_edit",
+			targetType: "member",
+			targetId: seeded.memberId,
+			impersonatedBy: su.id,
+		});
+		const [row] = await testDb
+			.select()
+			.from(activityLog)
+			.where(
+				and(
+					eq(activityLog.clubId, seeded.clubId),
+					eq(activityLog.action, "member_edit"),
+				),
+			);
+		expect(row?.impersonatedBy).toBe(su.id);
+		expect(row?.actorMemberId).toBeNull();
+	});
+
+	it("logActivity leaves ordinary writes unattributed to a superadmin", async () => {
+		// No request/session in tests → resolveImpersonatedWriteActor returns null,
+		// so a normal write keeps its member actor and no impersonated_by.
+		await logActivity(testDb, {
+			clubId: seeded.clubId,
+			actorMemberId: seeded.adminMemberId,
+			action: "member_edit",
+			targetType: "member",
+			targetId: seeded.memberId,
+		});
+		const [row] = await testDb
+			.select()
+			.from(activityLog)
+			.where(
+				and(
+					eq(activityLog.clubId, seeded.clubId),
+					eq(activityLog.action, "member_edit"),
+				),
+			);
+		expect(row?.impersonatedBy).toBeNull();
+		expect(row?.actorMemberId).toBe(seeded.adminMemberId);
 	});
 });

@@ -68,5 +68,51 @@ console (`_authed/superadmin/$clubId`); Exit ends the session and returns to the
   `requireClubRole` / `requireMembership` still throw.
 - Write **controls** in the impersonated UI are still rendered (the superadmin's context club is
   admin so pages show admin affordances); clicking one is rejected server-side with an error rather
-  than silently succeeding. Comprehensive hiding/disabling of those controls, and the read-write
-  "act as" phase, are follow-ups (#246).
+  than silently succeeding under `read_only`. Comprehensive hiding/disabling of those controls
+  remains a follow-up. The read-write "act as" phase shipped in #246 (below).
+
+## Amendment — read-write "act as admin" phase (#246)
+
+Status: Accepted. Read-write is the **deliberate, auditable inversion** of §2 that this ADR
+anticipated. Triage (#246) settled: **full admin parity** (no mutation denylist), a **memberless**
+superadmin actor, a **required reason**, a **15-minute** TTL, and **no new per-write confirmation**
+(irreversible ops keep their existing confirmations).
+
+### Decision
+
+1. **Mode.** `impersonation_mode` gains `read_write` (was `read_only`-only). `impersonation_sessions`
+   gains a `reason` column — required (non-empty) for `read_write`, null for `read_only`. TTL is
+   mode-dependent: 60 min read-only, **15 min** read-write. Entry is a distinct "Act as admin"
+   action on the console (beside "View as this club") that collects the reason. Start logs
+   `superadmin_acted` (vs `superadmin_viewed`) with the reason in `detail`.
+
+2. **The inversion, in one place.** Under an active `read_write` session, the mutating guards
+   (`requireMembership`, `requireClubRole`, and the admin branch of `requireMeetingAgendaEditor`)
+   resolve a **synthetic memberless effective-admin** — `clubRole: "admin"`, `id: null` (no `members`
+   row is created, so nothing leaks into rosters/counts/reminders/emails), satisfying any required
+   role. `requireMemberInClub` is unchanged (it validates a *target* member). A `read_only` session
+   still matches none of these, so §2's by-construction guarantee is untouched for read-only. Guards
+   apply the same archive lockout a real admin faces.
+
+3. **Per-write audit.** Every mutation funnels through `logActivity`. When a guard grants a
+   read-write session it marks the current request (a `WeakMap` keyed on the request object from
+   `getRequest()`, which TanStack Start makes stable across the request's async frames — `enterWith`
+   would not survive the guard→handler boundary). `logActivity` reads that marker and stamps
+   `activity_log.impersonated_by` = the real superadmin with `actor_member_id` null, so every
+   impersonated change is attributable to the real person — without threading an actor argument
+   through the ~60 mutation callsites. The marker module imports only `getRequest` (no db/auth), so
+   `logActivity` stays lightweight.
+
+4. **UI.** `getAuthContext.impersonating.mode` now spans both modes; the banner has a danger
+   (read-write) variant ("Acting as … admin · changes are live") and write controls actually
+   function.
+
+### Consequences
+
+- A superadmin can genuinely fix a club's data under a tight, fully-audited window, while read-only
+  remains the strictly-safer default and its by-construction guarantee is unchanged.
+- Attribution is comprehensive for every audited write (anything through `logActivity`); a mutation
+  that writes without logging activity would not be tagged — no such parity-relevant path exists
+  today, but it's the boundary to watch.
+- Overhead on the write path is one `getRequest()` + `WeakMap` lookup per audited write (no extra
+  session query).

@@ -221,6 +221,7 @@ function WorkspaceLayout() {
 					<ImpersonationBanner
 						clubName={clubName}
 						expiresAt={impersonating.expiresAt}
+						mode={impersonating.mode}
 						onExit={handleExitImpersonation}
 					/>
 				) : null}

@@ -2,11 +2,12 @@
 // `createServerFn` wrappers in `impersonation.ts` so the Start compiler strips it
 // from the client bundle (enforced by `server-modules.guard.test.ts`).
 //
-// A session is a superadmin's time-bounded, read-only "View as this club" grant.
-// It is the ONLY thing that grants a superadmin read access to a club they aren't
-// a real member of (consulted by the read-access guards in `guards.ts`); the
-// mutating guards never look at it, so read-only holds by construction. Read-write
-// is deferred (#246).
+// A session is a superadmin's time-bounded grant to a club they aren't a real
+// member of. `read_only` = "View as this club" (the read-access guards in
+// `guards.ts` honor it; the mutating guards never look at it, so read-only holds
+// by construction). `read_write` = "Act as admin" (#246) — the mutating guards
+// ALSO honor it as an effective admin, under a shorter TTL + required reason +
+// per-write audit.
 import { and, desc, eq, gt, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
@@ -17,13 +18,23 @@ import {
 	user as userTable,
 } from "#/db/schema";
 
-/** Fixed session lifetime — 60 minutes. Re-enter for a fresh window (no extend). */
+export type ImpersonationMode = "read_only" | "read_write";
+
+/** Read-only session lifetime — 60 minutes. Re-enter for a fresh window (no extend). */
 export const IMPERSONATION_TTL_MS = 60 * 60 * 1000;
+/** Read-write session lifetime — 15 minutes (#246): a tighter window for the
+ *  dangerous "act as admin" mode. Re-enter (with a fresh reason) to continue. */
+export const IMPERSONATION_RW_TTL_MS = 15 * 60 * 1000;
+
+/** TTL for a given mode. */
+export function ttlForMode(mode: ImpersonationMode): number {
+	return mode === "read_write" ? IMPERSONATION_RW_TTL_MS : IMPERSONATION_TTL_MS;
+}
 
 export interface ActiveImpersonation {
 	id: string;
 	clubId: string;
-	mode: "read_only";
+	mode: ImpersonationMode;
 	expiresAt: Date;
 }
 
@@ -64,15 +75,27 @@ export async function getActiveImpersonation(
 	return active && active.clubId === clubId ? active : null;
 }
 
-export const startImpersonationSchema = z.object({
-	clubId: z.string().uuid(),
-});
-export type StartImpersonationInput = z.infer<typeof startImpersonationSchema>;
+export const startImpersonationSchema = z
+	.object({
+		clubId: z.string().uuid(),
+		mode: z.enum(["read_only", "read_write"]).default("read_only"),
+		// Required (non-empty) for read_write; ignored for read_only.
+		reason: z.string().trim().min(1).max(500).optional(),
+	})
+	.refine((v) => v.mode !== "read_write" || Boolean(v.reason), {
+		message: "A reason is required to act as this club's admin.",
+		path: ["reason"],
+	});
+// Pre-parse (input) shape: `mode`/`reason` are optional here (mode defaults to
+// read_only), so callers may pass just `{ clubId }` for a read-only session.
+export type StartImpersonationInput = z.input<typeof startImpersonationSchema>;
 
 /**
- * Start a read-only session for a club: end any existing active session for this
- * superadmin, insert a fresh one (60-min expiry), and write the club-feed audit
- * entry (`superadmin_viewed`, real identity in `detail`). Returns the new session.
+ * Start a session for a club: end any existing active session for this
+ * superadmin, insert a fresh one (TTL by mode — 60 min read-only, 15 min
+ * read-write), and write the club-feed audit entry with the real superadmin
+ * identity. Read-only logs `superadmin_viewed`; read-write logs `superadmin_acted`
+ * with the access `reason` (and stamps `impersonated_by`). Returns the new session.
  */
 export async function startImpersonation(
 	superadminUserId: string,
@@ -85,6 +108,12 @@ export async function startImpersonation(
 		.limit(1);
 	if (!club) throw new Error("Club not found.");
 
+	const mode: ImpersonationMode = input.mode ?? "read_only";
+	const reason = mode === "read_write" ? (input.reason ?? null) : null;
+	if (mode === "read_write" && !reason) {
+		throw new Error("A reason is required to act as this club's admin.");
+	}
+
 	const [me] = await db
 		.select({ email: userTable.email })
 		.from(userTable)
@@ -92,7 +121,7 @@ export async function startImpersonation(
 		.limit(1);
 
 	const now = new Date();
-	const expiresAt = new Date(now.getTime() + IMPERSONATION_TTL_MS);
+	const expiresAt = new Date(now.getTime() + ttlForMode(mode));
 
 	const session = await db.transaction(async (tx) => {
 		// One active session per superadmin — end any that are still open.
@@ -111,7 +140,8 @@ export async function startImpersonation(
 			.values({
 				superadminUserId,
 				clubId: input.clubId,
-				mode: "read_only",
+				mode,
+				reason,
 				startedAt: now,
 				expiresAt,
 			})
@@ -123,14 +153,21 @@ export async function startImpersonation(
 			});
 		if (!row) throw new Error("Failed to start impersonation session.");
 
-		// Transparency: the club's own admins can see platform support viewed them.
+		// Transparency: the club's own admins can see when platform support viewed
+		// (read-only) or acted on (read-write) their club, and why.
 		await tx.insert(activityLog).values({
 			clubId: input.clubId,
 			actorMemberId: null,
-			action: "superadmin_viewed",
+			impersonatedBy: mode === "read_write" ? superadminUserId : null,
+			action: mode === "read_write" ? "superadmin_acted" : "superadmin_viewed",
 			targetType: "club",
 			targetId: input.clubId,
-			detail: { superadminUserId, superadminEmail: me?.email ?? null },
+			detail: {
+				superadminUserId,
+				superadminEmail: me?.email ?? null,
+				mode,
+				...(reason ? { reason } : {}),
+			},
 		});
 		return row;
 	});

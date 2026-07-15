@@ -225,6 +225,13 @@
       "when": 1784152911151,
       "tag": "0031_sharp_namor",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1784155174763,
+      "tag": "0032_awesome_swordsman",
+      "breakpoints": true
     }
   ]
 }

@@ -4,6 +4,7 @@ import { db } from "#/db";
 import { clubs, members, people, user } from "#/db/schema";
 import { auth } from "#/lib/auth";
 import { isClubArchived } from "#/lib/club-archive";
+import { markImpersonatedWrite } from "./impersonation-actor";
 import { getActiveImpersonation } from "./impersonation-logic";
 import {
 	type MeetingAgendaAuthz,
@@ -64,15 +65,28 @@ export async function getMembership(userId: string, clubId: string) {
 	return membership ?? null;
 }
 
-/** Any active member may view/claim. Rejects when the club is soft-archived
- *  (ADR-0016 / #186): archiving makes a club inaccessible to every member and
- *  admin. This is the single authed choke point — `requireClubRole` builds on it
- *  — so the one check here covers all authed member/admin operations. */
-export async function requireMembership(userId: string, clubId: string) {
-	const membership = await getMembership(userId, clubId);
-	if (!membership || membership.status !== "active") {
-		throw new Error("You're not a member of this club.");
-	}
+/**
+ * A resolved WRITE actor for a club: either a real active membership, or — under
+ * a `read_write` impersonation session (#246) — a memberless synthetic
+ * effective-admin. The synthetic arm carries `id: null` (the superadmin has no
+ * `members` row, so it can never be used as a real `actor_member_id`) and
+ * `impersonatedBy` = the real superadmin user id.
+ */
+type RealMembership = NonNullable<Awaited<ReturnType<typeof getMembership>>>;
+export type ResolvedMembership =
+	| (RealMembership & { impersonatedBy?: null })
+	| {
+			id: null;
+			clubId: string;
+			personId: null;
+			clubRole: "admin";
+			status: "active";
+			impersonatedBy: string;
+	  };
+
+/** Reject when a club is soft-archived (ADR-0016 / #186) — archiving locks out
+ *  every member and admin. Shared by the real and impersonated write paths. */
+async function assertClubNotArchived(clubId: string): Promise<void> {
 	const [club] = await db
 		.select({ archivedAt: clubs.archivedAt })
 		.from(clubs)
@@ -81,6 +95,52 @@ export async function requireMembership(userId: string, clubId: string) {
 	if (club && isClubArchived(club)) {
 		throw new Error("This club has been archived.");
 	}
+}
+
+/**
+ * WRITE fallback for a superadmin with an active `read_write` "act as admin"
+ * session (#246): grant a memberless effective-admin and mark the request so
+ * every `logActivity` in it is attributed to the real superadmin. A `read_only`
+ * session does NOT match here — read-only stays write-blind by construction.
+ * Throws (memberless) otherwise, so callers keep their normal rejection.
+ */
+async function requireReadWriteImpersonation(
+	userId: string,
+	clubId: string,
+): Promise<ResolvedMembership> {
+	const session = await getActiveImpersonation(userId, clubId);
+	if (session?.mode === "read_write") {
+		// Parity: a real admin can't act on an archived club, so neither can the
+		// impersonating superadmin.
+		await assertClubNotArchived(clubId);
+		markImpersonatedWrite(userId);
+		return {
+			id: null,
+			clubId,
+			personId: null,
+			clubRole: "admin",
+			status: "active",
+			impersonatedBy: userId,
+		};
+	}
+	throw new Error("You're not a member of this club.");
+}
+
+/** Any active member may view/claim. Rejects when the club is soft-archived
+ *  (ADR-0016 / #186): archiving makes a club inaccessible to every member and
+ *  admin. This is the single authed choke point — `requireClubRole` builds on it
+ *  — so the one check here covers all authed member/admin operations. A
+ *  `read_write` impersonation session resolves to a memberless effective-admin
+ *  here (#246); a `read_only` session does not (writes stay blind by construction). */
+export async function requireMembership(
+	userId: string,
+	clubId: string,
+): Promise<ResolvedMembership> {
+	const membership = await getMembership(userId, clubId);
+	if (!membership || membership.status !== "active") {
+		return requireReadWriteImpersonation(userId, clubId);
+	}
+	await assertClubNotArchived(clubId);
 	return membership;
 }
 
@@ -93,13 +153,19 @@ export async function requireClubRole(
 	userId: string,
 	clubId: string,
 	roles: ClubRole[],
-) {
+): Promise<ResolvedMembership> {
 	const membership = await requireMembership(userId, clubId);
+	// A read-write impersonating superadmin acts with full admin authority (#246):
+	// they satisfy any required role, mirroring "everything a club admin can do".
+	if (membership.impersonatedBy) {
+		return membership;
+	}
 	if (roles.includes(membership.clubRole)) {
 		return membership;
 	}
 	if (
 		roles.includes("admin") &&
+		membership.id !== null &&
 		(await getOpenOfficerPositions(db, membership.id)).length > 0
 	) {
 		return membership;

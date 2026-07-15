@@ -80,16 +80,24 @@ the nouns in `src/db/schema.ts`.
   unset ⇒ nobody (fail closed). Enforced by `requireSuperadmin` (a separate guard — it does NOT
   bypass `requireClubRole`; no ambient cross-club access). Surfaced by `getAuthContext.isSuperadmin`.
   See ADR-0016 / #183. (Console UI #182, impersonation #185.)
-- **Impersonation session** (`impersonation_sessions`) — a superadmin's time-bounded (60-min),
-  single-club, **read-only** "View as this club" grant (ADR-0020 / #185). The durable audit record
-  of cross-club access, and the ONLY thing that grants a superadmin read access to a club they
-  aren't a member of. Consulted only by the read-access guards (`requireClubViewAccess` /
-  `requireClubAdminView`, used by GET server fns); the mutating guards resolve real memberships
-  only, so read-only holds **by construction** — a superadmin with an active session passes the
-  read guards but still fails `requireClubRole` / `requireMembership`. Not ambient: no active
-  session ⇒ no access. Starting one forces the club active in `getAuthContext` (rendering a
-  persistent read-only banner) and writes a `superadmin_viewed` entry to the club's activity feed.
-  Read-write ("act as") is deferred (#246).
+- **Impersonation session** (`impersonation_sessions`) — a superadmin's time-bounded, single-club
+  grant to a club they aren't a member of (ADR-0020 / #185, #246). The durable audit record of
+  cross-club access, and the ONLY thing that grants such access. Not ambient: no active session ⇒
+  no access. Starting one forces the club active in `getAuthContext` (rendering a persistent
+  banner) and writes a start entry to the club's activity feed. Two `mode`s:
+  - **`read_only`** — "View as this club" (60-min TTL). Consulted only by the read-access guards
+    (`requireClubViewAccess` / `requireClubAdminView`, used by GET server fns); the mutating guards
+    resolve real memberships only, so read-only holds **by construction** — a superadmin with an
+    active read-only session passes the read guards but still fails `requireClubRole` /
+    `requireMembership`. Start logs `superadmin_viewed`.
+  - **`read_write`** — "Act as admin" (#246; 15-min TTL, a required `reason`). The **deliberate
+    inversion**: the mutating guards ALSO honor an active read-write session as a **memberless
+    effective-admin** (`requireMembership` / `requireClubRole` return a synthetic admin with `id:
+    null`; no roster row is created), so the superadmin can do anything a club admin can. Every
+    write is attributed to the real superadmin via `activity_log.impersonated_by` (with
+    `actor_member_id` null), stamped by `logActivity` from a request-scoped marker the guards set.
+    Start logs `superadmin_acted` with the reason. The banner turns danger-styled ("changes are
+    live").
 - **Provisioned onboarding** — a new club is created only by a **superadmin** through the
   console (`/superadmin`, #182), never self-serve: one atomic transaction writes the club (unique
   number + derived slug) + the 8 standard role definitions + a first admin (a Person with

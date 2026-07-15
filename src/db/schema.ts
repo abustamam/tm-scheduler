@@ -93,12 +93,19 @@ export const activityActionEnum = pgEnum("activity_action", [
 	// club (ADR-0020 / #185). actor is null (no member row); the real superadmin
 	// identity is carried in `detail`.
 	"superadmin_viewed",
+	// A platform superadmin started a read-WRITE ("act as admin") session on this
+	// club (ADR-0020 / #246). Like `superadmin_viewed`, actor is null and the real
+	// superadmin identity + the required access reason are carried in `detail`.
+	"superadmin_acted",
 ]);
 
-// Impersonation session mode (ADR-0020 / #185). v1 ships read_only only; the
-// read-write phase (#246) adds a `read_write` value here without a reshape.
+// Impersonation session mode (ADR-0020 / #185, #246). `read_only` = "View as this
+// club" (writes reject by construction). `read_write` = "Act as admin" — the
+// mutating guards honor the session as an effective admin (memberless), under a
+// shorter TTL + required reason + per-write audit.
 export const impersonationModeEnum = pgEnum("impersonation_mode", [
 	"read_only",
+	"read_write",
 ]);
 
 // Presence state on a `meeting_attendance` row (ADR-0014 / #152). Members
@@ -992,8 +999,17 @@ export const activityLog = pgTable(
 		clubId: uuid("club_id")
 			.notNull()
 			.references(() => clubs.id, { onDelete: "cascade" }),
-		// The self-asserted member who acted (NULL = system/unknown).
+		// The self-asserted member who acted (NULL = system/unknown, or an
+		// impersonated write — see `impersonatedBy`).
 		actorMemberId: uuid("actor_member_id").references(() => members.id, {
+			onDelete: "set null",
+		}),
+		// The platform superadmin who performed this write via a read-write
+		// impersonation session (ADR-0020 / #246). NULL for ordinary member/admin
+		// writes. When set, `actor_member_id` is NULL — the superadmin is memberless
+		// in the club — so this column is the sole actor. Makes every impersonated
+		// change attributable to the real person behind it.
+		impersonatedBy: text("impersonated_by").references(() => user.id, {
 			onDelete: "set null",
 		}),
 		action: activityActionEnum("action").notNull(),
@@ -1006,13 +1022,14 @@ export const activityLog = pgTable(
 );
 
 // ---------------------------------------------------------------------------
-// Impersonation sessions (ADR-0020 / #185) — a superadmin's time-bounded,
-// read-only "View as this club" grant. The durable audit record of cross-club
-// access, and the ONLY thing that grants a superadmin read access to a club they
-// aren't a real member of. NOT ambient: no active session ⇒ no access. Consulted
-// only by the read-access guards (`requireClubViewAccess` / `requireClubAdminView`);
-// the mutating guards resolve real memberships only, so read-only holds by
-// construction. Read-write is deferred (#246 — adds a `mode` value).
+// Impersonation sessions (ADR-0020 / #185, #246) — a superadmin's time-bounded
+// grant to view (`read_only`) or act on (`read_write`) a club they aren't a real
+// member of. The durable audit record of cross-club access, and the ONLY thing
+// that grants such access. NOT ambient: no active session ⇒ no access. A
+// `read_only` session is consulted only by the read-access guards
+// (`requireClubViewAccess` / `requireClubAdminView`) and the mutating guards
+// reject it by construction; a `read_write` session is ALSO honored by the
+// mutating guards as an effective admin (#246).
 //
 // Active = `ended_at IS NULL AND expires_at > now()`. Invariant: at most one
 // active row per superadmin (starting a new one ends any existing).
@@ -1029,6 +1046,9 @@ export const impersonationSessions = pgTable(
 			.notNull()
 			.references(() => clubs.id, { onDelete: "cascade" }),
 		mode: impersonationModeEnum("mode").notNull().default("read_only"),
+		// Why the superadmin needed access. Required (non-empty) for `read_write`
+		// sessions (#246), null for `read_only`. Surfaced in the club's activity feed.
+		reason: text("reason"),
 		startedAt: timestamp("started_at").defaultNow().notNull(),
 		expiresAt: timestamp("expires_at").notNull(),
 		// Set on explicit Exit; null = not manually ended (may still be expired).
