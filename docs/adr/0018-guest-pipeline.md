@@ -1,4 +1,4 @@
-# ADR-0017: Guest pipeline — capture, lifecycle stages, and convert-to-member
+# ADR-0018: Guest pipeline — capture, lifecycle stages, and convert-to-member
 
 Status: Accepted
 

@@ -180,8 +180,22 @@
     {
       "idx": 25,
       "version": "7",
-      "when": 1784072553724,
-      "tag": "0025_big_scarlet_spider",
+      "when": 1784072666547,
+      "tag": "0025_cuddly_molly_hayes",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1784074543579,
+      "tag": "0026_fearless_krista_starr",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1784075092788,
+      "tag": "0027_rich_grandmaster",
       "breakpoints": true
     }
   ]

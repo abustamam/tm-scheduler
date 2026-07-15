@@ -10,7 +10,11 @@ no reminders, no at-a-glance "what's still open," and edit conflicts.
 Use these exact terms in issues, ADRs, tests, and code. They map Toastmasters vocabulary to
 the nouns in `src/db/schema.ts`.
 
-- **Club** — a Toastmasters club (`clubs`). A person can belong to several (see ADR-0006).
+- **Club** — a Toastmasters club (`clubs`). A person can belong to several (see ADR-0006). A club
+  can be **soft-archived** by a superadmin (`clubs.archived_at`; NULL = active): a reversible flag
+  that blocks all access — authed (`requireMembership` rejects) and public (loaders return
+  not-found) — except the superadmin console, retaining every row and keeping the slug reserved.
+  See ADR-0016 / #186.
 - **Person** — a human (`people`), keyed by their Toastmasters Customer ID (`PN-…`, nullable;
   unique when present, with email as a fallback match key). Holds the facts that are the same
   across *every* club a person belongs to: name, contact, `original_join_date` (first-ever TM
@@ -30,7 +34,7 @@ the nouns in `src/db/schema.ts`.
   guest-held slots render the name with a subtle "· Guest" marker and count as filled. Admin-only
   to assign (not on the public/TMOD view). A guest also carries a pipeline `stage` and, once
   promoted, a `converted_membership_id` — see **Guest pipeline**. See ADR-0013 / #151.
-- **Guest pipeline** — the VP-Membership funnel over the `guests` entity (ADR-0017 / #208):
+- **Guest pipeline** — the VP-Membership funnel over the `guests` entity (ADR-0018 / #208):
   **capture → stage-tracked prospect list → convert-to-member**. A guest's **stage**
   (`guest_stage` enum) is `prospect → following_up → joined → lost`: new guests default
   `prospect`, `following_up`/`lost` are manual admin transitions, and `joined` is set **only**
@@ -38,14 +42,14 @@ the nouns in `src/db/schema.ts`.
   **first-visit date** are *derived* from `meeting_attendance` (never a stored counter). The
   admin pipeline view lives at `/admin/vp-membership`; the assign-guest picker excludes `joined`
   and `lost` guests (`stage in (prospect, following_up)`).
-- **Guest book** — the public, no-auth capture front door (ADR-0017, absorbing #239):
+- **Guest book** — the public, no-auth capture front door (ADR-0018, absorbing #239):
   `/club/:clubId/guest-book`, escaping the member-identity shell. A visitor self-enters
   name + optional email/phone; the server **creates-or-finds** the guest (dedup by phone → email,
   club-scoped, phone normalized to digits) and records a `meeting_attendance` visit against the
   club's **current/nearest meeting** (today's, else the next scheduled; none ⇒ no attendance
   row). Reached via a **stable per-club QR** on the VP-Membership view (printable table-tent);
   the QR never needs regenerating because the route resolves the current meeting itself.
-- **Convert-to-member** — the admin action that promotes a guest into a Membership (ADR-0017):
+- **Convert-to-member** — the admin action that promotes a guest into a Membership (ADR-0018):
   dedup/link the Person (phone → email), create the club Membership (`clubRole: member`,
   `joinedAt` today) or reuse the person's existing one, re-point the guest's role-slot
   assignments to the new member, stamp the guest `stage: joined` + `converted_membership_id`
@@ -81,6 +85,19 @@ the nouns in `src/db/schema.ts`.
   number + derived slug) + the 8 standard role definitions + a first admin (a Person with
   `user_id` NULL and an `admin` Membership); the admin's account links on their first sign-in
   (#188), and their email is editable in the console only while still unclaimed. See ADR-0016.
+- **Dues period** — a club-defined membership-billing window (`dues_periods`): a `label`, a
+  `due_date`, and an optional `default_amount_cents`. Periods are DATA, not a hardcoded cadence,
+  because clubs bill differently (annual, semi-annual, custom); the default is semi-annual with the
+  Toastmasters Apr 1 / Oct 1 renewal presets one click away. The **active** period (the Treasurer
+  view's default) is the one whose window — its own `due_date` up to the next period's — contains
+  today, else the nearest upcoming. Managed by the Treasurer (a club `admin`). See ADR-0017 / #206.
+- **Dues status** — a member's payment state for a period (`member_dues`, keyed on
+  `(membership_id, dues_period_id)`): `paid` or `waived`. **Unpaid is the ABSENCE of a row** — the
+  table is never pre-seeded, so a member owes a period exactly when they have no `paid`/`waived`
+  row for it. A **full-year** pre-payment is two `paid` rows (this period + the next) sharing one
+  `paid_at`. **Overdue** = an active member owing a period whose `due_date` has passed (full-year
+  payers are excluded for free). Amounts are integer cents, optional. Deliberately DECOUPLED from
+  Membership `status`: no dues action ever changes roster/renewal state. See ADR-0017 / #206.
 - **Meeting** — a single club session (`meetings`) with a date, theme, and word of the day.
   Its `status` follows a lifecycle: `scheduled → completed` (admin **Complete**, only on/after
   the meeting date) and `completed → scheduled` (admin **Reopen**, any time). A **completed**

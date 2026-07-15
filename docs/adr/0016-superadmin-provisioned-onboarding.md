@@ -79,6 +79,27 @@ account.
   club deactivation. Those are separate issues (#182 console/club-creation, #185 impersonation/ambient
   access, #186 club deactivation, #187 in-app club-role management).
 
+## Follow-up: club soft-archive (#186)
+
+The "club deactivation" deferred above is now built as a **soft-archive**, extending this ADR:
+
+- A nullable **`clubs.archived_at` timestamp** (migration `drizzle/0025_cuddly_molly_hayes.sql`).
+  NULL = active; a set timestamp = archived. **Soft and reversible — no hard delete or cascade:**
+  archiving retains all club data (members, meetings, speeches, activity log) untouched, and
+  unarchive clears `archived_at` to fully restore access. The slug/club number stay reserved.
+- **Superadmin-only.** `archiveConsoleClub` / `unarchiveConsoleClub` server fns (`src/server/onboarding.ts`,
+  db logic `archiveClub` / `unarchiveClub` in `onboarding-logic.ts`) are `requireSuperadmin`-gated;
+  they are exposed from the console club-detail behind a confirm step. A club admin cannot archive
+  their own club.
+- **What archived blocks:** authed access is rejected by `requireMembership` (the single choke point
+  `requireClubRole` also builds on) with an "archived" message; every public no-auth club loader
+  (landing, present, print — and the #208 guest-book) returns not-found. The shared archive predicate
+  is `isClubArchived` (`src/lib/club-archive.ts`, client-safe so both the guard and the public-loader
+  helper `resolveClubOrRedirect` import it). Sign-in is untouched — auth is global; an archived club
+  simply shows as inaccessible.
+
+Still deferred: superadmin impersonation / ambient cross-club access ("act as", #185).
+
 ## Deferred / out of scope
 
 - The `/superadmin` console UI, routes, and club creation (#182).

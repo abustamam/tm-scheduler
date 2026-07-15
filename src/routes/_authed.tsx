@@ -23,6 +23,7 @@ import {
 	Settings,
 	ShieldCheck,
 	UserPlus,
+	Wallet,
 } from "lucide-react";
 import { type ComponentType, type ReactNode, useRef, useState } from "react";
 import { BrandMark } from "#/components/brand-mark";
@@ -87,6 +88,7 @@ function crumbFor(pathname: string): string {
 		return "Manage · VP Education";
 	if (pathname.startsWith("/admin/vp-membership"))
 		return "Manage · VP Membership";
+	if (pathname.startsWith("/admin/dues")) return "Manage · Dues";
 	if (pathname.startsWith("/admin")) return "Manage · Admin";
 	if (pathname.startsWith("/superadmin")) return "Platform · Superadmin";
 	return "Workspace";
@@ -321,6 +323,12 @@ function SidebarInner({
 							to="/admin/vp-membership"
 							icon={UserPlus}
 							label="VP Membership"
+							onNavigate={onNavigate}
+						/>
+						<NavItem
+							to="/admin/dues"
+							icon={Wallet}
+							label="Dues"
 							onNavigate={onNavigate}
 						/>
 						<NavItem

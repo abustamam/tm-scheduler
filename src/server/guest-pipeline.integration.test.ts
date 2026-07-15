@@ -1,6 +1,6 @@
 /**
  * DB-backed integration tests for the VP-Membership guest pipeline (#208 /
- * ADR-0017): guest-book capture (create-or-find + attendance), derived visits,
+ * ADR-0018): guest-book capture (create-or-find + attendance), derived visits,
  * manual stage transitions, and convert-to-member (Person dedup, membership
  * create, slot re-point, stage=joined, picker exclusion, activity log).
  *

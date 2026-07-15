@@ -108,6 +108,13 @@ export const awardCategoryEnum = pgEnum("award_category", [
 	"best_table_topics",
 ]);
 
+// Membership-dues payment state (#206 / ADR-0017). A `member_dues` row exists
+// ONLY when a member has PAID or been WAIVED for a period; "unpaid" is the
+// ABSENCE of a row (keeps the table sparse and the overdue query simple).
+// Deliberately decoupled from `membership_status` — dues track money, not the
+// roster/season renewal state, and no dues action ever mutates it.
+export const duesStatusEnum = pgEnum("dues_status", ["paid", "waived"]);
+
 // ---------------------------------------------------------------------------
 // Clubs & memberships
 // ---------------------------------------------------------------------------
@@ -132,6 +139,11 @@ export const clubs = pgTable("clubs", {
 	defaultMeetingMinutes: integer("default_meeting_minutes")
 		.notNull()
 		.default(90),
+	// Soft-archive (ADR-0016 / #186). NULL = active; a set timestamp = archived.
+	// Reversible: unarchive clears it. Archiving retains all club data untouched
+	// and blocks every access path except the superadmin console — `requireMembership`
+	// rejects authed access and the public no-auth club loaders return not-found.
+	archivedAt: timestamp("archived_at"),
 	createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -248,8 +260,71 @@ export const officerTerms = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// Membership dues (#206 / ADR-0017) — the Treasurer's dues tracker.
+//
+// `dues_periods` is the club-defined billing period a dues record keys off:
+// clubs bill differently (annual, semi-annual, custom amounts), so periods are
+// DATA, not hardcoded. `member_dues` is the sparse paid/waived record keyed on
+// (membership, period): a member OWES a period when they have NO row for it.
+// Amounts are stored as integer CENTS so totals sum exactly (nullable — a club
+// may track status without recording a dollar figure). This is status tracking
+// ONLY: no payment processing, and `memberships.status` is NEVER touched by a
+// dues action (dues and roster renewal stay fully decoupled).
+// ---------------------------------------------------------------------------
+
+export const duesPeriods = pgTable(
+	"dues_periods",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		clubId: uuid("club_id")
+			.notNull()
+			.references(() => clubs.id, { onDelete: "cascade" }),
+		// Human label the Treasurer sees (e.g. "2026 Apr 1 renewal").
+		label: text("label").notNull(),
+		// When dues for this period are due. A member with no paid/waived row for a
+		// period whose due_date has passed is "overdue".
+		dueDate: timestamp("due_date").notNull(),
+		// Optional club default charge for the period, in integer cents. Nullable —
+		// a club may track status without recording amounts.
+		defaultAmountCents: integer("default_amount_cents"),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+	},
+	(t) => [index("dues_periods_club_idx").on(t.clubId, t.dueDate)],
+);
+
+export const memberDues = pgTable(
+	"member_dues",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		membershipId: uuid("membership_id")
+			.notNull()
+			.references(() => members.id, { onDelete: "cascade" }),
+		duesPeriodId: uuid("dues_period_id")
+			.notNull()
+			.references(() => duesPeriods.id, { onDelete: "cascade" }),
+		status: duesStatusEnum("status").notNull(),
+		// Collected amount for THIS row, in integer cents. Nullable (optional per
+		// row — a full-year payment may split the total or leave a row blank).
+		amountCents: integer("amount_cents"),
+		// When the payment was recorded. A full-year pre-payment writes two `paid`
+		// rows sharing one paid_at; null for a waiver.
+		paidAt: timestamp("paid_at"),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+	},
+	(t) => [
+		// One record per member per period; "unpaid" is the absence of this row. A
+		// plain unique index so ON CONFLICT can infer it (record/waive → upsert).
+		uniqueIndex("member_dues_membership_period_unique").on(
+			t.membershipId,
+			t.duesPeriodId,
+		),
+		index("member_dues_period_idx").on(t.duesPeriodId),
+	],
+);
+
+// ---------------------------------------------------------------------------
 // Guests — club-scoped visitors who can be assigned to a role slot (#151) and
-// tracked through the VP-Membership pipeline (#208, ADR-0017).
+// tracked through the VP-Membership pipeline (#208, ADR-0018).
 //
 // A guest is NOT a member: no Person, no login, no Pathways, no roster/officer
 // presence, and no `members` status (guests would otherwise leak into some
@@ -258,13 +333,13 @@ export const officerTerms = pgTable(
 // as an assignable option in later meetings. A role slot references a guest via
 // `role_slots.assigned_guest_id`, mutually exclusive with `assigned_member_id`.
 //
-// Adjacent to Person/Membership (ADR-0008). Promotion-to-member (ADR-0017): a
+// Adjacent to Person/Membership (ADR-0008). Promotion-to-member (ADR-0018): a
 // guest carries a lifecycle `stage`; converting one creates a Membership,
 // re-points its slot assignments, and stamps `converted_membership_id` while
 // keeping the guest row (at stage=joined) as durable history.
 // ---------------------------------------------------------------------------
 
-// The VP-Membership funnel a guest travels (#208 / ADR-0017). New guests default
+// The VP-Membership funnel a guest travels (#208 / ADR-0018). New guests default
 // to `prospect`; `following_up`/`lost` are manual transitions; `joined` is set
 // only by convert-to-member (never a manual transition), alongside
 // `converted_membership_id`.
@@ -286,7 +361,7 @@ export const guests = pgTable(
 		// Optional contact — a guest may be assigned with just a name.
 		email: text("email"),
 		phone: text("phone"),
-		// Pipeline lifecycle stage (#208 / ADR-0017). Defaults to `prospect`.
+		// Pipeline lifecycle stage (#208 / ADR-0018). Defaults to `prospect`.
 		stage: guestStageEnum("stage").notNull().default("prospect"),
 		// Set once, on convert-to-member: the Membership this guest became. The
 		// guest row persists (stage=joined) so its past slot/attendance history is
@@ -809,6 +884,25 @@ export const membersRelations = relations(members, ({ one, many }) => ({
 export const officerTermsRelations = relations(officerTerms, ({ one }) => ({
 	membership: one(members, {
 		fields: [officerTerms.membershipId],
+		references: [members.id],
+	}),
+}));
+
+export const duesPeriodsRelations = relations(duesPeriods, ({ one, many }) => ({
+	club: one(clubs, {
+		fields: [duesPeriods.clubId],
+		references: [clubs.id],
+	}),
+	dues: many(memberDues),
+}));
+
+export const memberDuesRelations = relations(memberDues, ({ one }) => ({
+	period: one(duesPeriods, {
+		fields: [memberDues.duesPeriodId],
+		references: [duesPeriods.id],
+	}),
+	membership: one(members, {
+		fields: [memberDues.membershipId],
 		references: [members.id],
 	}),
 }));

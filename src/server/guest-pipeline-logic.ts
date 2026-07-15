@@ -1,4 +1,4 @@
-// VP-Membership guest-pipeline DB logic (#208 / ADR-0017), split out from the
+// VP-Membership guest-pipeline DB logic (#208 / ADR-0018), split out from the
 // createServerFn wrappers in `guest-pipeline.ts` (a client-imported module the
 // guard test forbids from exporting db-touching functions). Integration-testable
 // by mocking `#/db`. See the header of `members-logic.ts` for the why.
@@ -15,7 +15,7 @@ import {
 } from "#/db/schema";
 import { logActivity } from "./activity";
 
-/** The pipeline stages a guest may occupy (#208 / ADR-0017). */
+/** The pipeline stages a guest may occupy (#208 / ADR-0018). */
 export type GuestStage = "prospect" | "following_up" | "joined" | "lost";
 
 /**
@@ -284,7 +284,7 @@ export interface ConvertGuestResult {
 }
 
 /**
- * Convert-to-member (ADR-0017): promote a guest into a club Membership.
+ * Convert-to-member (ADR-0018): promote a guest into a club Membership.
  *
  * Transactional: (1) dedup the Person by phone→email (link an existing Person,
  * else create one); (2) create the Membership for this club (`clubRole: member`,

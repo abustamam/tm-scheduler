@@ -15,7 +15,7 @@ export type NewGuestInput = {
 
 /** A club's guests, for the admin assign picker. Club-scoped, name-ordered.
  *  Excludes `joined` (converted) guests — they are members now and get assigned
- *  as members — and `lost` guests; only live prospects appear (#208 / ADR-0017). */
+ *  as members — and `lost` guests; only live prospects appear (#208 / ADR-0018). */
 export async function listClubGuests(clubId: string) {
 	return db
 		.select({
