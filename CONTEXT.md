@@ -147,8 +147,13 @@ the nouns in `src/db/schema.ts`.
 - **Pathways** — Toastmasters' education program. A **path** (e.g. *Presentation Mastery*) is
   enrolled and owned by a **Person**, independent of any club; a person may work several paths
   at once. When a path **level** is completed, the credit is attributed to *one* of the
-  person's clubs — a per-completion choice, and the only club-scoped Pathways concept. A
-  speaker's project belongs to a path.
+  person's clubs — the only club-scoped Pathways concept. Base Camp exposes neither the
+  completion date nor the crediting club, so both are **inferred at sync time** and stored
+  write-once on `path_level_progress` as `completed_at` (first sync that witnessed `approved`
+  flip false→true) and `credited_club_id` (the syncing club; first-syncer-wins). Both are null
+  for levels already approved before we ever synced the enrollment — an *observed* completion,
+  not a Base Camp mirror field. Consumed by DCP education-goal derivation (#245). See ADR-0022.
+  A speaker's project belongs to a path.
 - **Evaluator → speaker link** — an evaluator slot points at the speaker slot it evaluates
   via `role_slots.evaluates_slot_id` (self-reference).
 - **Distinguished Club Program (DCP)** — Toastmasters International's annual club-recognition
