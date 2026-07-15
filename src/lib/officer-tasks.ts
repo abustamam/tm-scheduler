@@ -11,6 +11,7 @@ export type OfficerTaskTarget =
 	| "/next"
 	| "/activity"
 	| "/admin/vpe-dashboard"
+	| "/admin/dcp"
 	| "/admin/dues"
 	| "/admin/meetings/new"
 	| "/admin/meetings/batch"
@@ -52,6 +53,11 @@ export const COMMON_TASKS: OfficerTask[] = [
  */
 export const OFFICER_TASKS: Partial<Record<OfficerPosition, OfficerTask[]>> = {
 	president: [
+		{
+			label: "Distinguished Club Program",
+			description: "Track the 10 DCP goals for the year.",
+			to: "/admin/dcp",
+		},
 		{
 			label: "Club settings",
 			description: "Name, number, meeting details.",

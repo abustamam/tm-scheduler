@@ -1,6 +1,6 @@
 {
-  "id": "d11c77c7-3b00-4b21-8a90-f6a3ee644eff",
-  "prevId": "e13c581d-2d4f-452e-9939-9a9fa4cfff6a",
+  "id": "bc82455d-d8ee-455c-acde-070d27457d84",
+  "prevId": "d11c77c7-3b00-4b21-8a90-f6a3ee644eff",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -818,6 +818,108 @@
             "id"
           ],
           "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.impersonation_sessions": {
+      "name": "impersonation_sessions",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "superadmin_user_id": {
+          "name": "superadmin_user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "club_id": {
+          "name": "club_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "mode": {
+          "name": "mode",
+          "type": "impersonation_mode",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'read_only'"
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ended_at": {
+          "name": "ended_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "impersonation_sessions_superadmin_idx": {
+          "name": "impersonation_sessions_superadmin_idx",
+          "columns": [
+            {
+              "expression": "superadmin_user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "impersonation_sessions_superadmin_user_id_user_id_fk": {
+          "name": "impersonation_sessions_superadmin_user_id_user_id_fk",
+          "tableFrom": "impersonation_sessions",
+          "tableTo": "user",
+          "columnsFrom": [
+            "superadmin_user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "impersonation_sessions_club_id_clubs_id_fk": {
+          "name": "impersonation_sessions_club_id_clubs_id_fk",
+          "tableFrom": "impersonation_sessions",
+          "tableTo": "clubs",
+          "columnsFrom": [
+            "club_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },
@@ -3305,7 +3407,8 @@
         "member_merge",
         "member_remove",
         "meeting_create",
-        "meeting_edit"
+        "meeting_edit",
+        "superadmin_viewed"
       ]
     },
     "public.attendance_status": {
@@ -3350,6 +3453,13 @@
         "following_up",
         "joined",
         "lost"
+      ]
+    },
+    "public.impersonation_mode": {
+      "name": "impersonation_mode",
+      "schema": "public",
+      "values": [
+        "read_only"
       ]
     },
     "public.meeting_status": {
