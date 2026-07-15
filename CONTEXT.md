@@ -141,6 +141,21 @@ the nouns in `src/db/schema.ts`.
   speaker's project belongs to a path.
 - **Evaluator → speaker link** — an evaluator slot points at the speaker slot it evaluates
   via `role_slots.evaluates_slot_id` (self-reference).
+- **Distinguished Club Program (DCP)** — Toastmasters International's annual club-recognition
+  program: 10 standardized goals across a **program year** (Jul 1 – Jun 30). Recognition tiers
+  are **Distinguished** (5 goals), **Select Distinguished** (7), **President's Distinguished**
+  (9), each also requiring the **membership base** (≥20 active members OR net growth of +5). The
+  President owns the club's progress. In GavelUp it's a **manual scoreboard** — the goal catalog
+  (labels + targets) is static code (`src/lib/dcp.ts`); only per-club progress is stored, and the
+  tier/base are DERIVED, never stored. See ADR-0019 / #207.
+- **Program year** — the Toastmasters year, Jul 1 – Jun 30, keyed by its **starting calendar
+  year** (e.g. 2026 = Jul 1 2026 – Jun 30 2027).
+- **DCP scoreboard** (`dcp_scoreboards`) — a club's DCP record for one program year: the parent
+  row holding the auto-snapshotted, President-editable `base_member_count` (for the net-+5 base
+  test). **DCP goal progress** (`dcp_goal_progress`) is one hand-entered `achieved` value per
+  catalog goal (`met = achieved ≥ target`; composite goals 9 & 10 are a 0/1 toggle). Only the two
+  new-member goals are roster-derived (pre-filled from `members.joined_at` in the program-year
+  window). Education-goal (1–6) auto-derivation from Pathways is deferred (#245).
 
 ## Scope
 
