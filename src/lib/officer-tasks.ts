@@ -11,6 +11,7 @@ export type OfficerTaskTarget =
 	| "/next"
 	| "/activity"
 	| "/admin/vpe-dashboard"
+	| "/admin/dues"
 	| "/admin/meetings/new"
 	| "/admin/meetings/batch"
 	| "/admin/roles"
@@ -46,9 +47,8 @@ export const COMMON_TASKS: OfficerTask[] = [
 
 /**
  * Office-specific jobs → destinations. Only the offices that map to real
- * surfaces appear here; the rest (Treasurer, VP PR, Sergeant-at-Arms, Past
- * President) intentionally have no section — see #206 / #207 / #208 for their
- * future features.
+ * surfaces appear here; the rest (VP PR, Sergeant-at-Arms, Past President)
+ * intentionally have no section — see #207 / #208 for their future features.
  */
 export const OFFICER_TASKS: Partial<Record<OfficerPosition, OfficerTask[]>> = {
 	president: [
@@ -116,6 +116,18 @@ export const OFFICER_TASKS: Partial<Record<OfficerPosition, OfficerTask[]>> = {
 		{
 			label: "Add members",
 			description: "Grow the roster.",
+			to: "/",
+		},
+	],
+	treasurer: [
+		{
+			label: "Dues tracker",
+			description: "Who has paid, who owes, by period.",
+			to: "/admin/dues",
+		},
+		{
+			label: "Members & contacts",
+			description: "The roster to follow up with.",
 			to: "/",
 		},
 	],
