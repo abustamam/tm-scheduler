@@ -859,12 +859,25 @@ export const pathLevelProgress = pgTable(
 		completed: integer("completed").notNull(),
 		total: integer("total").notNull(),
 		approved: boolean("approved").notNull(),
+		// Completion attribution (ADR-0022, #116). These two are NOT Base Camp
+		// mirror fields — Base Camp exposes neither a completion date nor a
+		// crediting club, so both are FIRST-OBSERVED facts inferred at sync time:
+		// stamped WRITE-ONCE on the sync that witnesses `approved` flip false→true,
+		// left null for levels already approved before we first synced the
+		// enrollment (never fabricated). `completedAt` = that sync's wall-clock;
+		// `creditedClubId` = the syncing club (first-syncer-wins). Consumed by DCP
+		// education-goal derivation (#245).
+		completedAt: timestamp("completed_at", { withTimezone: true }),
+		creditedClubId: uuid("credited_club_id").references(() => clubs.id, {
+			onDelete: "set null",
+		}),
 	},
 	(t) => [
 		uniqueIndex("path_level_progress_enrollment_level_idx").on(
 			t.enrollmentId,
 			t.level,
 		),
+		index("path_level_progress_credited_club_idx").on(t.creditedClubId),
 	],
 );
 
