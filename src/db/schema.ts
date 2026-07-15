@@ -323,6 +323,67 @@ export const memberDues = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// Distinguished Club Program (DCP) — the President's goal scoreboard
+// (#207 / ADR-0019). A per-club, per-program-year MANUAL scoreboard of the 10
+// standardized DCP goals. The goal *catalog* (labels + targets) is static code
+// (src/lib/dcp.ts); only per-club PROGRESS is stored. `dcp_scoreboards` is the
+// parent per (club, program_year); `dcp_goal_progress` holds one hand-entered
+// `achieved` value per catalog goal (met = achieved ≥ target). Recognition tier
+// and the membership base are DERIVED, never stored. Education-goal
+// auto-derivation from Pathways is deferred (#245).
+// ---------------------------------------------------------------------------
+
+export const dcpScoreboards = pgTable(
+	"dcp_scoreboards",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		clubId: uuid("club_id")
+			.notNull()
+			.references(() => clubs.id, { onDelete: "cascade" }),
+		// Program year identified by its STARTING calendar year (Jul 1 – Jun 30):
+		// e.g. 2026 = Jul 1 2026 – Jun 30 2027. See src/lib/dcp.ts.
+		programYear: integer("program_year").notNull(),
+		// Active-member count snapshotted when the scoreboard is first started, for
+		// the DCP "net +5" membership-base test. Nullable (base can also be met by
+		// ≥20 active); President-editable to correct a mid-year adoption.
+		baseMemberCount: integer("base_member_count"),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+		updatedAt: timestamp("updated_at").defaultNow().notNull(),
+	},
+	(t) => [
+		uniqueIndex("dcp_scoreboards_club_year_unique").on(t.clubId, t.programYear),
+	],
+);
+
+export const dcpGoalProgress = pgTable(
+	"dcp_goal_progress",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		scoreboardId: uuid("scoreboard_id")
+			.notNull()
+			.references(() => dcpScoreboards.id, { onDelete: "cascade" }),
+		// Matches a DCP_GOALS[].key in src/lib/dcp.ts (e.g. "g1".."g10"). Plain text,
+		// not an enum, so the static catalog stays the single source of truth.
+		goalKey: text("goal_key").notNull(),
+		// Hand-entered count (0/1 for composite goals 9 & 10). met = achieved ≥ the
+		// catalog target.
+		achieved: integer("achieved").notNull().default(0),
+		// Audit: the signed-in user who last edited this value (ADR-0019). Nullable —
+		// seeded rows and roster-derived pre-fills have no editor until touched.
+		updatedBy: text("updated_by").references(() => user.id, {
+			onDelete: "set null",
+		}),
+		updatedAt: timestamp("updated_at").defaultNow().notNull(),
+	},
+	(t) => [
+		uniqueIndex("dcp_goal_progress_scoreboard_goal_unique").on(
+			t.scoreboardId,
+			t.goalKey,
+		),
+	],
+);
+
+// ---------------------------------------------------------------------------
 // Guests — club-scoped visitors who can be assigned to a role slot (#151) and
 // tracked through the VP-Membership pipeline (#208, ADR-0018).
 //
