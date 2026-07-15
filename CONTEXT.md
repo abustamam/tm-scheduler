@@ -32,8 +32,28 @@ the nouns in `src/db/schema.ts`.
   assignee — a member (`assigned_member_id`) OR a guest (`assigned_guest_id`), never both
   (enforced in logic + a DB check constraint). Guests never appear in the member roster/picker;
   guest-held slots render the name with a subtle "· Guest" marker and count as filled. Admin-only
-  to assign (not on the public/TMOD view). Promotion-to-member is anticipated (stable guest id)
-  but not built. See ADR-0013 / #151.
+  to assign (not on the public/TMOD view). A guest also carries a pipeline `stage` and, once
+  promoted, a `converted_membership_id` — see **Guest pipeline**. See ADR-0013 / #151.
+- **Guest pipeline** — the VP-Membership funnel over the `guests` entity (ADR-0018 / #208):
+  **capture → stage-tracked prospect list → convert-to-member**. A guest's **stage**
+  (`guest_stage` enum) is `prospect → following_up → joined → lost`: new guests default
+  `prospect`, `following_up`/`lost` are manual admin transitions, and `joined` is set **only**
+  by convert-to-member (alongside `converted_membership_id`). Each guest's **visit count** and
+  **first-visit date** are *derived* from `meeting_attendance` (never a stored counter). The
+  admin pipeline view lives at `/admin/vp-membership`; the assign-guest picker excludes `joined`
+  and `lost` guests (`stage in (prospect, following_up)`).
+- **Guest book** — the public, no-auth capture front door (ADR-0018, absorbing #239):
+  `/club/:clubId/guest-book`, escaping the member-identity shell. A visitor self-enters
+  name + optional email/phone; the server **creates-or-finds** the guest (dedup by phone → email,
+  club-scoped, phone normalized to digits) and records a `meeting_attendance` visit against the
+  club's **current/nearest meeting** (today's, else the next scheduled; none ⇒ no attendance
+  row). Reached via a **stable per-club QR** on the VP-Membership view (printable table-tent);
+  the QR never needs regenerating because the route resolves the current meeting itself.
+- **Convert-to-member** — the admin action that promotes a guest into a Membership (ADR-0018):
+  dedup/link the Person (phone → email), create the club Membership (`clubRole: member`,
+  `joinedAt` today) or reuse the person's existing one, re-point the guest's role-slot
+  assignments to the new member, stamp the guest `stage: joined` + `converted_membership_id`
+  (the guest row persists as history — its past attendance stays), and log `member_add`.
 - **`club_memberships`** — legacy auth-only link (signed-in `user` ↔ club) that today still
   resolves `club_role` in the auth path; being absorbed into Membership (ADR-0008, follow-up
   to #64). Not the roster.

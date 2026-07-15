@@ -54,6 +54,7 @@
     "nitro": "npm:nitro-nightly@3.0.1-20260626-071224-83acc441",
     "pg": "^8.16.3",
     "pptxgenjs": "^4.0.1",
+    "qrcode.react": "^4.2.0",
     "radix-ui": "^1.6.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
