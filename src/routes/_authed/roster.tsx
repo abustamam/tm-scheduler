@@ -30,7 +30,7 @@ import { bulkImportMembers, mergeMembers } from "#/server/members";
 import { listClubMemberPathways } from "#/server/pathways-read";
 import type { PathViewModel } from "#/server/pathways-read-logic";
 
-export const Route = createFileRoute("/_authed/")({
+export const Route = createFileRoute("/_authed/roster")({
 	loader: async ({ context }) => {
 		const clubId = context.activeClubId;
 		if (!clubId) {

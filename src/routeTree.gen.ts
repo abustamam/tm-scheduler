@@ -11,12 +11,13 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as SigninRouteImport } from './routes/signin'
 import { Route as AuthedRouteImport } from './routes/_authed'
-import { Route as AuthedIndexRouteImport } from './routes/_authed/index'
+import { Route as IndexRouteImport } from './routes/index'
 import { Route as ClubClubIdRouteImport } from './routes/club.$clubId'
 import { Route as ApiHealthRouteImport } from './routes/api/health'
 import { Route as ApiDevLoginRouteImport } from './routes/api/dev-login'
 import { Route as AuthedSuperadminRouteImport } from './routes/_authed/superadmin'
 import { Route as AuthedScheduleRouteImport } from './routes/_authed/schedule'
+import { Route as AuthedRosterRouteImport } from './routes/_authed/roster'
 import { Route as AuthedResourcesRouteImport } from './routes/_authed/resources'
 import { Route as AuthedOfficersRouteImport } from './routes/_authed/officers'
 import { Route as AuthedNextRouteImport } from './routes/_authed/next'
@@ -56,10 +57,10 @@ const AuthedRoute = AuthedRouteImport.update({
   id: '/_authed',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AuthedIndexRoute = AuthedIndexRouteImport.update({
+const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => AuthedRoute,
+  getParentRoute: () => rootRouteImport,
 } as any)
 const ClubClubIdRoute = ClubClubIdRouteImport.update({
   id: '/club/$clubId',
@@ -84,6 +85,11 @@ const AuthedSuperadminRoute = AuthedSuperadminRouteImport.update({
 const AuthedScheduleRoute = AuthedScheduleRouteImport.update({
   id: '/schedule',
   path: '/schedule',
+  getParentRoute: () => AuthedRoute,
+} as any)
+const AuthedRosterRoute = AuthedRosterRouteImport.update({
+  id: '/roster',
+  path: '/roster',
   getParentRoute: () => AuthedRoute,
 } as any)
 const AuthedResourcesRoute = AuthedResourcesRouteImport.update({
@@ -237,7 +243,7 @@ const ApiMeetingsIdMinutesPdfRoute = ApiMeetingsIdMinutesPdfRouteImport.update({
 } as any)
 
 export interface FileRoutesByFullPath {
-  '/': typeof AuthedIndexRoute
+  '/': typeof IndexRoute
   '/signin': typeof SigninRoute
   '/activity': typeof AuthedActivityRoute
   '/dashboard': typeof AuthedDashboardRoute
@@ -245,6 +251,7 @@ export interface FileRoutesByFullPath {
   '/next': typeof AuthedNextRoute
   '/officers': typeof AuthedOfficersRoute
   '/resources': typeof AuthedResourcesRoute
+  '/roster': typeof AuthedRosterRoute
   '/schedule': typeof AuthedScheduleRoute
   '/superadmin': typeof AuthedSuperadminRouteWithChildren
   '/api/dev-login': typeof ApiDevLoginRoute
@@ -275,6 +282,7 @@ export interface FileRoutesByFullPath {
   '/club/$clubId/meeting/$meetingId/print': typeof ClubClubIdMeetingMeetingIdPrintRoute
 }
 export interface FileRoutesByTo {
+  '/': typeof IndexRoute
   '/signin': typeof SigninRoute
   '/activity': typeof AuthedActivityRoute
   '/dashboard': typeof AuthedDashboardRoute
@@ -282,10 +290,10 @@ export interface FileRoutesByTo {
   '/next': typeof AuthedNextRoute
   '/officers': typeof AuthedOfficersRoute
   '/resources': typeof AuthedResourcesRoute
+  '/roster': typeof AuthedRosterRoute
   '/schedule': typeof AuthedScheduleRoute
   '/api/dev-login': typeof ApiDevLoginRoute
   '/api/health': typeof ApiHealthRoute
-  '/': typeof AuthedIndexRoute
   '/admin/club-settings': typeof AuthedAdminClubSettingsRoute
   '/admin/dcp': typeof AuthedAdminDcpRoute
   '/admin/dues': typeof AuthedAdminDuesRoute
@@ -312,6 +320,7 @@ export interface FileRoutesByTo {
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
+  '/': typeof IndexRoute
   '/_authed': typeof AuthedRouteWithChildren
   '/signin': typeof SigninRoute
   '/_authed/activity': typeof AuthedActivityRoute
@@ -320,12 +329,12 @@ export interface FileRoutesById {
   '/_authed/next': typeof AuthedNextRoute
   '/_authed/officers': typeof AuthedOfficersRoute
   '/_authed/resources': typeof AuthedResourcesRoute
+  '/_authed/roster': typeof AuthedRosterRoute
   '/_authed/schedule': typeof AuthedScheduleRoute
   '/_authed/superadmin': typeof AuthedSuperadminRouteWithChildren
   '/api/dev-login': typeof ApiDevLoginRoute
   '/api/health': typeof ApiHealthRoute
   '/club/$clubId': typeof ClubClubIdRouteWithChildren
-  '/_authed/': typeof AuthedIndexRoute
   '/_authed/admin/club-settings': typeof AuthedAdminClubSettingsRoute
   '/_authed/admin/dcp': typeof AuthedAdminDcpRoute
   '/_authed/admin/dues': typeof AuthedAdminDuesRoute
@@ -361,6 +370,7 @@ export interface FileRouteTypes {
     | '/next'
     | '/officers'
     | '/resources'
+    | '/roster'
     | '/schedule'
     | '/superadmin'
     | '/api/dev-login'
@@ -391,6 +401,7 @@ export interface FileRouteTypes {
     | '/club/$clubId/meeting/$meetingId/print'
   fileRoutesByTo: FileRoutesByTo
   to:
+    | '/'
     | '/signin'
     | '/activity'
     | '/dashboard'
@@ -398,10 +409,10 @@ export interface FileRouteTypes {
     | '/next'
     | '/officers'
     | '/resources'
+    | '/roster'
     | '/schedule'
     | '/api/dev-login'
     | '/api/health'
-    | '/'
     | '/admin/club-settings'
     | '/admin/dcp'
     | '/admin/dues'
@@ -427,6 +438,7 @@ export interface FileRouteTypes {
     | '/club/$clubId/meeting/$meetingId/print'
   id:
     | '__root__'
+    | '/'
     | '/_authed'
     | '/signin'
     | '/_authed/activity'
@@ -435,12 +447,12 @@ export interface FileRouteTypes {
     | '/_authed/next'
     | '/_authed/officers'
     | '/_authed/resources'
+    | '/_authed/roster'
     | '/_authed/schedule'
     | '/_authed/superadmin'
     | '/api/dev-login'
     | '/api/health'
     | '/club/$clubId'
-    | '/_authed/'
     | '/_authed/admin/club-settings'
     | '/_authed/admin/dcp'
     | '/_authed/admin/dues'
@@ -467,6 +479,7 @@ export interface FileRouteTypes {
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
+  IndexRoute: typeof IndexRoute
   AuthedRoute: typeof AuthedRouteWithChildren
   SigninRoute: typeof SigninRoute
   ApiDevLoginRoute: typeof ApiDevLoginRoute
@@ -496,12 +509,12 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/_authed/': {
-      id: '/_authed/'
+    '/': {
+      id: '/'
       path: '/'
       fullPath: '/'
-      preLoaderRoute: typeof AuthedIndexRouteImport
-      parentRoute: typeof AuthedRoute
+      preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/club/$clubId': {
       id: '/club/$clubId'
@@ -536,6 +549,13 @@ declare module '@tanstack/react-router' {
       path: '/schedule'
       fullPath: '/schedule'
       preLoaderRoute: typeof AuthedScheduleRouteImport
+      parentRoute: typeof AuthedRoute
+    }
+    '/_authed/roster': {
+      id: '/_authed/roster'
+      path: '/roster'
+      fullPath: '/roster'
+      preLoaderRoute: typeof AuthedRosterRouteImport
       parentRoute: typeof AuthedRoute
     }
     '/_authed/resources': {
@@ -764,9 +784,9 @@ interface AuthedRouteChildren {
   AuthedNextRoute: typeof AuthedNextRoute
   AuthedOfficersRoute: typeof AuthedOfficersRoute
   AuthedResourcesRoute: typeof AuthedResourcesRoute
+  AuthedRosterRoute: typeof AuthedRosterRoute
   AuthedScheduleRoute: typeof AuthedScheduleRoute
   AuthedSuperadminRoute: typeof AuthedSuperadminRouteWithChildren
-  AuthedIndexRoute: typeof AuthedIndexRoute
   AuthedAdminClubSettingsRoute: typeof AuthedAdminClubSettingsRoute
   AuthedAdminDcpRoute: typeof AuthedAdminDcpRoute
   AuthedAdminDuesRoute: typeof AuthedAdminDuesRoute
@@ -789,9 +809,9 @@ const AuthedRouteChildren: AuthedRouteChildren = {
   AuthedNextRoute: AuthedNextRoute,
   AuthedOfficersRoute: AuthedOfficersRoute,
   AuthedResourcesRoute: AuthedResourcesRoute,
+  AuthedRosterRoute: AuthedRosterRoute,
   AuthedScheduleRoute: AuthedScheduleRoute,
   AuthedSuperadminRoute: AuthedSuperadminRouteWithChildren,
-  AuthedIndexRoute: AuthedIndexRoute,
   AuthedAdminClubSettingsRoute: AuthedAdminClubSettingsRoute,
   AuthedAdminDcpRoute: AuthedAdminDcpRoute,
   AuthedAdminDuesRoute: AuthedAdminDuesRoute,
@@ -825,6 +845,7 @@ const ClubClubIdRouteWithChildren = ClubClubIdRoute._addFileChildren(
 )
 
 const rootRouteChildren: RootRouteChildren = {
+  IndexRoute: IndexRoute,
   AuthedRoute: AuthedRouteWithChildren,
   SigninRoute: SigninRoute,
   ApiDevLoginRoute: ApiDevLoginRoute,

@@ -21,7 +21,7 @@ export const Route = createFileRoute("/_authed/admin/roles")({
 	beforeLoad: ({ context }) => {
 		const adminClub = effectiveAdminClub(context);
 		if (!adminClub) {
-			throw redirect({ to: "/" });
+			throw redirect({ to: "/roster" });
 		}
 		return { adminClub };
 	},

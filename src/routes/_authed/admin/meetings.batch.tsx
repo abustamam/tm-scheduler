@@ -26,7 +26,7 @@ export const Route = createFileRoute("/_authed/admin/meetings/batch")({
 	beforeLoad: ({ context }) => {
 		const adminClub = effectiveAdminClub(context);
 		if (!adminClub) {
-			throw redirect({ to: "/" });
+			throw redirect({ to: "/roster" });
 		}
 		return { adminClub };
 	},
@@ -148,7 +148,7 @@ function BatchMeetings() {
 				? `, skipped ${result.skippedDates.length} already scheduled`
 				: "";
 			toast.success(`Created ${result.createdCount} meetings${skipMsg}.`);
-			await router.navigate({ to: "/" });
+			await router.navigate({ to: "/roster" });
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : "Something went wrong.");
 			setSubmitting(false);

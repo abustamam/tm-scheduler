@@ -23,7 +23,7 @@ import {
 export const Route = createFileRoute("/_authed/admin/vp-membership")({
 	beforeLoad: ({ context }) => {
 		if (!effectiveAdminClub(context)) {
-			throw redirect({ to: "/" });
+			throw redirect({ to: "/roster" });
 		}
 	},
 	loader: async ({ context }) => {

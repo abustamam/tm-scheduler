@@ -6,7 +6,7 @@ import {
 
 /** A route the officer home links to (must be a static, param-free path). */
 export type OfficerTaskTarget =
-	| "/"
+	| "/roster"
 	| "/schedule"
 	| "/next"
 	| "/activity"
@@ -33,7 +33,7 @@ export const COMMON_TASKS: OfficerTask[] = [
 		description: "See the season and fill roles.",
 		to: "/schedule",
 	},
-	{ label: "Roster", description: "Everyone in the club.", to: "/" },
+	{ label: "Roster", description: "Everyone in the club.", to: "/roster" },
 	{
 		label: "Next meeting",
 		description: "The upcoming agenda.",
@@ -66,7 +66,7 @@ export const OFFICER_TASKS: Partial<Record<OfficerPosition, OfficerTask[]>> = {
 		{
 			label: "Members & officer roles",
 			description: "Promote, demote, edit the roster.",
-			to: "/",
+			to: "/roster",
 		},
 		{
 			label: "Season at a glance",
@@ -122,7 +122,7 @@ export const OFFICER_TASKS: Partial<Record<OfficerPosition, OfficerTask[]>> = {
 		{
 			label: "Add members",
 			description: "Grow the roster.",
-			to: "/",
+			to: "/roster",
 		},
 	],
 	treasurer: [
@@ -134,7 +134,7 @@ export const OFFICER_TASKS: Partial<Record<OfficerPosition, OfficerTask[]>> = {
 		{
 			label: "Members & contacts",
 			description: "The roster to follow up with.",
-			to: "/",
+			to: "/roster",
 		},
 	],
 };

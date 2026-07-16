@@ -27,7 +27,7 @@ export interface SearchGrants {
 const WORKSPACE_PAGES = [
 	{ label: "Officer home", to: "/officers", grant: "office" },
 	{ label: "Sign-up sheet", to: "/schedule" },
-	{ label: "Roster", to: "/" },
+	{ label: "Roster", to: "/roster" },
 	{ label: "Next meeting", to: "/next" },
 	{ label: "Activity", to: "/activity" },
 	{ label: "VP Education", to: "/admin/vpe-dashboard", grant: "officer" },

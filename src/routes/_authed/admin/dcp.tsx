@@ -42,7 +42,7 @@ const CATEGORY_ORDER: DcpGoalCategory[] = [
 export const Route = createFileRoute("/_authed/admin/dcp")({
 	beforeLoad: ({ context }) => {
 		if (!effectiveAdminClub(context)) {
-			throw redirect({ to: "/" });
+			throw redirect({ to: "/roster" });
 		}
 	},
 	loader: async ({ context }) => {

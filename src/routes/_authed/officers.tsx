@@ -8,7 +8,7 @@ export const Route = createFileRoute("/_authed/officers")({
 	// the roster (the default workspace home).
 	beforeLoad: ({ context }) => {
 		if (!context.officerPositions?.length) {
-			throw redirect({ to: "/" });
+			throw redirect({ to: "/roster" });
 		}
 	},
 	component: OfficerHome,
