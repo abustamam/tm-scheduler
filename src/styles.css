@@ -265,14 +265,19 @@ body::after {
   mask-image: radial-gradient(circle at 50% 30%, black, transparent 78%);
 }
 
-a {
+/* Text-link styling — but NOT anchors rendered as buttons (`<Button asChild>`
+   → `<a data-slot="button">`), whose color and decoration come from the button
+   variant. This bare `a` rule is unlayered, so without the exclusion it wins
+   over the layered `text-primary-foreground` utility and washes out the primary
+   CTA (e.g. the landing "Sign in" button read teal-on-teal in dark mode). */
+a:not([data-slot="button"]) {
   color: var(--lagoon-deep);
   text-decoration-color: rgba(50, 143, 151, 0.4);
   text-decoration-thickness: 1px;
   text-underline-offset: 2px;
 }
 
-a:hover {
+a:not([data-slot="button"]):hover {
   color: var(--lagoon-ink);
 }
 
