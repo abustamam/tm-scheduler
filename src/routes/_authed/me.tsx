@@ -20,6 +20,12 @@ function MyCommitments() {
 	const router = useRouter();
 	const [busySlotId, setBusySlotId] = useState<string | null>(null);
 
+	// Speaking roles assigned without a speech title/project yet — usually because
+	// an officer slotted you in from the sign-up sheet (#officer-assign).
+	const needsSpeechDetails = commitments.filter(
+		(c) => c.isSpeakerRole && !c.speechTitle,
+	);
+
 	async function doRelease(slotId: string) {
 		if (!currentMemberId) {
 			toast.error("Your account isn't linked to a club member yet.");
@@ -42,6 +48,38 @@ function MyCommitments() {
 			<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
 				My roles
 			</h1>
+
+			{needsSpeechDetails.length > 0 ? (
+				<div className="rounded-xl border border-[var(--warning)]/40 bg-[var(--warning-soft)] p-4">
+					<div className="flex items-center gap-2 font-semibold text-[var(--warning-foreground)]">
+						<Mic className="size-4" aria-hidden />
+						Speeches needing details
+					</div>
+					<p className="mt-1 text-sm text-[var(--sea-ink-soft)]">
+						You're down to speak but haven't added a title or project yet. Add
+						them so your evaluator can prepare.
+					</p>
+					<ul className="mt-3 space-y-1.5">
+						{needsSpeechDetails.map((c) => (
+							<li key={c.slotId}>
+								<Link
+									to="/meetings/$id"
+									params={{ id: c.meetingId }}
+									className="flex items-center justify-between gap-2 rounded-lg bg-card/60 px-3 py-2 text-sm no-underline hover:bg-card"
+								>
+									<span className="min-w-0 truncate">
+										{c.roleName} ·{" "}
+										{formatMeetingDate(c.scheduledAt, c.timezone)}
+									</span>
+									<span className="shrink-0 font-semibold text-primary">
+										Add details →
+									</span>
+								</Link>
+							</li>
+						))}
+					</ul>
+				</div>
+			) : null}
 
 			{commitments.length === 0 ? (
 				<p className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">

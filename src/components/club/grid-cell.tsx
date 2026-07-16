@@ -6,7 +6,7 @@ import { MeetingLink } from "./meeting-link";
 // The cells are 12px text, so WCAG AA needs 4.5:1. The success/warning/
 // destructive token values are AA-verified in BOTH themes (see styles.css,
 // #219): success fill pairs ≥6.4:1, warning/destructive text-on-surface ≥5:1.
-const KIND_CLASS: Record<ViewCell["kind"], string> = {
+export const CELL_KIND_CLASS: Record<ViewCell["kind"], string> = {
 	assigned: "bg-success text-success-foreground",
 	open: "border border-dashed border-warning/60 text-warning-foreground",
 	free: "border border-border text-muted-foreground/60",
@@ -17,7 +17,7 @@ const KIND_CLASS: Record<ViewCell["kind"], string> = {
 // h-11 below md: cells are the primary tap target on the phone sheet, so the
 // row itself grows to the 44px touch minimum (#224). md+ keeps the h-8 desktop
 // density unchanged.
-const BASE =
+export const CELL_BASE =
 	"flex h-11 min-w-[3rem] items-center justify-center rounded-md px-2 text-xs font-semibold md:h-8";
 
 /**
@@ -98,7 +98,7 @@ export function GridCell({
 				aria-label={label}
 				onClick={() => onAvailability(cell)}
 				className={cn(
-					BASE,
+					CELL_BASE,
 					"w-full cursor-pointer transition-colors disabled:opacity-50",
 					tone,
 				)}
@@ -119,7 +119,7 @@ export function GridCell({
 				aria-label={`Claim ${cell.title}${dateSuffix}`}
 				onClick={() => onClaim(slotId)}
 				className={cn(
-					BASE,
+					CELL_BASE,
 					"w-full cursor-pointer border border-success/70 text-success transition-colors hover:bg-success hover:text-success-foreground disabled:opacity-50",
 				)}
 			>
@@ -139,7 +139,7 @@ export function GridCell({
 				aria-label={`Release ${cell.title}${dateSuffix}`}
 				onClick={() => onRelease(slotId)}
 				className={cn(
-					BASE,
+					CELL_BASE,
 					"w-full cursor-pointer bg-success text-success-foreground ring-2 ring-success-strong transition-opacity hover:opacity-80 disabled:opacity-50",
 				)}
 			>
@@ -152,8 +152,8 @@ export function GridCell({
 		<span
 			title={cell.title ? cell.title + dateSuffix : undefined}
 			className={cn(
-				BASE,
-				KIND_CLASS[cell.kind],
+				CELL_BASE,
+				CELL_KIND_CLASS[cell.kind],
 				// In the interactive sheet, everyone else's filled cells recede so
 				// it's obvious you can only act on your own. A light success wash +
 				// full-strength foreground text (not opacity) keeps the receded
