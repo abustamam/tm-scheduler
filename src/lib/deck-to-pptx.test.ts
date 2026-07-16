@@ -6,6 +6,7 @@ import {
 	type ClubForDeck,
 	type MeetingForDeck,
 } from "./agenda-slides";
+import { TOASTMASTERS_DISCLAIMER } from "./brand";
 import { deckToPptx, pptxFileName } from "./deck-to-pptx";
 
 function slot(over: Partial<AgendaSlot>): AgendaSlot {
@@ -119,6 +120,13 @@ describe("deckToPptx", () => {
 		const voteText = slideText(pptx, voteIdx);
 		expect(voteText).toContain("Vote for Best Speaker");
 		expect(voteText).toContain("Rehanna");
+	});
+
+	it("stamps the Toastmasters non-affiliation disclaimer on content-slide footers", () => {
+		const deck = buildSlideDeck(meeting, club, fullSlots);
+		const pptx = deckToPptx(PptxGenJS, deck);
+		const allText = deck.map((_, i) => slideText(pptx, i)).join("\n");
+		expect(allText).toContain(TOASTMASTERS_DISCLAIMER);
 	});
 
 	it("produces a real, non-empty pptx buffer that opens as a zip (pptx)", async () => {
