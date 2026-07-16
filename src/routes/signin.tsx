@@ -12,6 +12,7 @@ import {
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { authClient } from "#/lib/auth-client";
+import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
 
 export const Route = createFileRoute("/signin")({
 	// Default post-sign-in landing is the Officer home (#202); it redirects
@@ -109,6 +110,9 @@ function SignIn() {
 			<p className="w-full max-w-sm text-center text-xs text-muted-foreground">
 				Just signing up for a meeting role? No account needed — open your
 				club&apos;s sign-up link and pick your name.
+			</p>
+			<p className="w-full max-w-sm text-center text-[11px] leading-relaxed text-muted-foreground/80">
+				{TOASTMASTERS_DISCLAIMER}
 			</p>
 		</main>
 	);

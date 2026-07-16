@@ -9,6 +9,7 @@
 // Logo upload remains a tracked follow-up (#83).
 import { useEffect, useRef, useState } from "react";
 import type { TimelineRow } from "#/lib/agenda-timing";
+import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
 
 export type AgendaLayout = "timing" | "spacious" | "editorial" | "grid";
 
@@ -469,24 +470,39 @@ function DarkFooter({
 				marginTop: "auto",
 				background: INK,
 				padding: "11px 38px",
-				display: "flex",
-				justifyContent: "space-between",
-				alignItems: "center",
 			}}
 		>
-			<span style={{ fontSize: 11, fontWeight: 600, color: "#fff" }}>
-				{left}
-			</span>
-			<span
+			<div
 				style={{
-					fontSize: 11,
-					fontWeight: 700,
-					color: SEAFOAM,
-					letterSpacing: ".03em",
+					display: "flex",
+					justifyContent: "space-between",
+					alignItems: "center",
 				}}
 			>
-				{right}
-			</span>
+				<span style={{ fontSize: 11, fontWeight: 600, color: "#fff" }}>
+					{left}
+				</span>
+				<span
+					style={{
+						fontSize: 11,
+						fontWeight: 700,
+						color: SEAFOAM,
+						letterSpacing: ".03em",
+					}}
+				>
+					{right}
+				</span>
+			</div>
+			<p
+				style={{
+					margin: "6px 0 0",
+					fontSize: 7.5,
+					lineHeight: 1.35,
+					color: "rgba(255,255,255,0.5)",
+				}}
+			>
+				{TOASTMASTERS_DISCLAIMER}
+			</p>
 		</div>
 	);
 }

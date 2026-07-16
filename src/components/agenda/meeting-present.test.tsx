@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Slide } from "#/lib/agenda-slides";
+import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
 import { MeetingPresent } from "./meeting-present";
 
 const CLUB_NAME = "MCF Toastmasters Club";
@@ -57,6 +58,13 @@ describe("MeetingPresent", () => {
 
 		// The club name now lives in the footer, not a running per-slide header.
 		expect(screen.getAllByText(CLUB_NAME).length).toBeGreaterThanOrEqual(1);
+	});
+
+	it("shows the Toastmasters non-affiliation disclaimer in the content-slide footer", () => {
+		render(<MeetingPresent deck={deck} clubName={CLUB_NAME} />);
+		clickNext(); // -> wordOfDay (content slide with footer)
+
+		expect(screen.getByText(TOASTMASTERS_DISCLAIMER)).toBeTruthy();
 	});
 
 	it("renders the vote prompt on a vote slide", () => {

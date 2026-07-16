@@ -40,6 +40,7 @@ import { Sheet, SheetContent, SheetTitle } from "#/components/ui/sheet";
 import { Toaster } from "#/components/ui/sonner";
 import { authClient } from "#/lib/auth-client";
 import { initialsOf } from "#/lib/avatar";
+import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
 import { officerPositionLabel, officerRank } from "#/lib/officers";
 import { getAuthContext } from "#/server/auth-context";
 import { endImpersonation } from "#/server/impersonation";
@@ -262,6 +263,9 @@ function WorkspaceLayout() {
 				<section className="min-w-0 flex-1 overflow-x-hidden">
 					<Outlet />
 				</section>
+				<footer className="border-t border-[var(--line)] px-7 py-3 text-center text-[11px] leading-relaxed text-[var(--sea-ink-soft)]">
+					{TOASTMASTERS_DISCLAIMER}
+				</footer>
 			</main>
 			<Toaster position="top-center" />
 		</div>

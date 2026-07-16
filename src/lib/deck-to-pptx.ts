@@ -7,6 +7,7 @@ import type PptxGenJS from "pptxgenjs";
 import colorMarkPng from "#/assets/ToastmastersWordmarkColorTight.png?inline";
 import whiteMarkPng from "#/assets/ToastmastersWordmarkWhiteTight.png?inline";
 import type { Slide } from "./agenda-slides";
+import { TOASTMASTERS_DISCLAIMER } from "./brand";
 import {
 	type Body,
 	footerDate,
@@ -166,6 +167,17 @@ function renderContent(
 			color: "FFFFFF",
 		},
 	);
+	// Trademark fine print, centered along the very bottom of the navy band.
+	s.addText(TOASTMASTERS_DISCLAIMER, {
+		x: 0.3,
+		y: H - 0.27,
+		w: W - 0.6,
+		h: 0.22,
+		align: "center",
+		valign: "middle",
+		fontSize: 5,
+		color: "9FB6C2",
+	});
 }
 
 const BODY = { x: 1.0, y: 2.0, w: W - 2.0, h: H - FOOT_H - 2.2 };

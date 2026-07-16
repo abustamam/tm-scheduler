@@ -8,6 +8,7 @@ import {
 import { ToastmastersWordmark } from "#/components/agenda/toastmasters-wordmark";
 import { PptxDownloadButton } from "#/components/club/pptx-download-button";
 import type { Slide } from "#/lib/agenda-slides";
+import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
 import {
 	footerDate,
 	type Line,
@@ -203,14 +204,19 @@ function ContentSlide({
 				</div>
 			</div>
 			<footer
-				className="flex h-[8.5cqw] items-center justify-between px-[5cqw]"
+				className="flex h-[8.5cqw] flex-col justify-center gap-[0.7cqw] px-[5cqw]"
 				style={{ background: NAVY }}
 			>
-				<ToastmastersWordmark tone="white" style={{ width: "13cqw" }} />
-				<div className="text-right leading-tight text-white">
-					<div className="text-[2.4cqw] font-bold">{clubName}</div>
-					<div className="text-[2cqw] opacity-90">{date}</div>
+				<div className="flex items-center justify-between">
+					<ToastmastersWordmark tone="white" style={{ width: "13cqw" }} />
+					<div className="text-right leading-tight text-white">
+						<div className="text-[2.4cqw] font-bold">{clubName}</div>
+						<div className="text-[2cqw] opacity-90">{date}</div>
+					</div>
 				</div>
+				<p className="text-center text-[1.05cqw] leading-tight text-white/50">
+					{TOASTMASTERS_DISCLAIMER}
+				</p>
 			</footer>
 		</div>
 	);
