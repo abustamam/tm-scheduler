@@ -112,7 +112,7 @@ function ViewAsPanel({
 			// Re-run getAuthContext so the workspace picks up the session (it forces
 			// the impersonated club active) and renders the read-only banner.
 			await router.invalidate();
-			await router.navigate({ to: "/" });
+			await router.navigate({ to: "/roster" });
 		} catch (err) {
 			toast.error(
 				err instanceof Error ? err.message : "Couldn't start the session.",
@@ -170,7 +170,7 @@ function ActAsAdminPanel({
 				data: { clubId, mode: "read_write", reason: trimmedReason },
 			});
 			await router.invalidate();
-			await router.navigate({ to: "/" });
+			await router.navigate({ to: "/roster" });
 		} catch (err) {
 			toast.error(
 				err instanceof Error ? err.message : "Couldn't start the session.",

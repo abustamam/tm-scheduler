@@ -46,7 +46,7 @@ function MyCommitments() {
 			{commitments.length === 0 ? (
 				<p className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
 					You haven't claimed any roles yet.{" "}
-					<Link to="/" className="font-medium text-primary underline">
+					<Link to="/roster" className="font-medium text-primary underline">
 						Browse the schedule
 					</Link>
 					.

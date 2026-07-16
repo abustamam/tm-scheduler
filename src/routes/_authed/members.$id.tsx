@@ -583,7 +583,7 @@ function MemberActions({
 			});
 			toast.success(`${member.name} removed from the roster.`);
 			setRemoveOpen(false);
-			await navigate({ to: "/" });
+			await navigate({ to: "/roster" });
 			await router.invalidate();
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : "Something went wrong.");
@@ -842,7 +842,7 @@ function ClubRoleControl({
 function BackLink() {
 	return (
 		<Link
-			to="/"
+			to="/roster"
 			className="group inline-flex items-center gap-2 text-sm font-semibold text-[var(--sea-ink-soft)] no-underline transition-colors hover:text-[var(--sea-ink)]"
 		>
 			<ChevronLeft

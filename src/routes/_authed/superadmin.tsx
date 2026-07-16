@@ -10,7 +10,7 @@ import { createFileRoute, Outlet, redirect } from "@tanstack/react-router";
 export const Route = createFileRoute("/_authed/superadmin")({
 	beforeLoad: ({ context }) => {
 		if (!context.isSuperadmin) {
-			throw redirect({ to: "/" });
+			throw redirect({ to: "/roster" });
 		}
 	},
 	component: () => <Outlet />,
