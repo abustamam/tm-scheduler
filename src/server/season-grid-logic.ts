@@ -28,6 +28,9 @@ export interface SeasonGridMeeting {
 }
 export interface SeasonGridRow {
 	roleDefinitionId: string;
+	/** A speaking slot — the member×meeting role picker uses this to nudge for
+	 *  speech details after assigning one. */
+	isSpeakerRole: boolean;
 	slotIndex: number;
 	label: string; // "Speaker 2" (hover)
 	shortCode: string; // "SP2"
@@ -133,6 +136,7 @@ export async function loadSeasonGrid(input: {
 					assignedGuestId: roleSlots.assignedGuestId,
 					roleName: roleDefinitions.name,
 					sortOrder: roleDefinitions.sortOrder,
+					isSpeakerRole: roleDefinitions.isSpeakerRole,
 				})
 				.from(roleSlots)
 				.innerJoin(
@@ -150,6 +154,7 @@ export async function loadSeasonGrid(input: {
 			slotIndex: number;
 			roleName: string;
 			sortOrder: number;
+			isSpeakerRole: boolean;
 		}
 	>();
 	for (const s of slotRows) {
@@ -160,6 +165,7 @@ export async function loadSeasonGrid(input: {
 				slotIndex: s.slotIndex,
 				roleName: s.roleName,
 				sortOrder: s.sortOrder,
+				isSpeakerRole: s.isSpeakerRole,
 			});
 	}
 	const rowDefs = [...rowMap.values()].sort(
@@ -187,6 +193,7 @@ export async function loadSeasonGrid(input: {
 		),
 		shortCode: shortCodes.get(`${r.roleDefinitionId}:${r.slotIndex}`) ?? "?",
 		sortOrder: r.sortOrder,
+		isSpeakerRole: r.isSpeakerRole,
 	}));
 
 	// 4. Cells + per-meeting counts.

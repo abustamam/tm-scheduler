@@ -22,6 +22,7 @@ const data: SeasonGridData = {
 			label: "Toastmaster",
 			shortCode: "Toas",
 			sortOrder: 0,
+			isSpeakerRole: false,
 		},
 		{
 			roleDefinitionId: "ti",
@@ -29,6 +30,7 @@ const data: SeasonGridData = {
 			label: "Timer",
 			shortCode: "Time",
 			sortOrder: 1,
+			isSpeakerRole: false,
 		},
 	],
 	members: [

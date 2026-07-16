@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { Loader2, Lock, X } from "lucide-react";
+import { Loader2, Lock, Plus, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "#/components/ui/button";
@@ -12,12 +12,12 @@ import {
 	DialogTitle,
 } from "#/components/ui/dialog";
 import { formatMeetingDate } from "#/lib/format";
+import { meetingRoleOptions } from "#/lib/member-role-picker";
 import {
 	type MemberMeetingStatus,
 	memberMeetingStatus,
 	type Orientation,
 	projectGrid,
-	type ViewCell,
 } from "#/lib/season-grid-view";
 import { cn } from "#/lib/utils";
 import {
@@ -27,8 +27,9 @@ import {
 } from "#/server/availability";
 import type { SeasonGridCount, SeasonGridData } from "#/server/season-grid";
 import { claimSlot, releaseSlot } from "#/server/slots";
-import { GridCell } from "./grid-cell";
+import { CELL_BASE, CELL_KIND_CLASS, GridCell } from "./grid-cell";
 import { MeetingLink } from "./meeting-link";
+import { MemberRolePicker } from "./member-role-picker";
 
 const COUNTS: SeasonGridCount[] = [4, 8, "all"];
 const VIEWS: { value: Orientation; label: string }[] = [
@@ -216,27 +217,6 @@ export function SeasonGrid({
 		}
 	}
 
-	function onAvailability(
-		cell: ViewCell,
-		targetMemberId: string,
-		targetName: string | null,
-	) {
-		if (cell.kind === "na") {
-			clearUnavailable(targetMemberId, cell.meetingId);
-		} else if (cell.kind === "assigned") {
-			const m = data.meetings.find((x) => x.id === cell.meetingId);
-			setConfirm({
-				memberId: targetMemberId,
-				memberName: targetName,
-				meetingId: cell.meetingId,
-				roleLabel: cell.title,
-				date: m ? formatMeetingDate(m.scheduledAt, m.timezone) : "this meeting",
-			});
-		} else {
-			markUnavailable(targetMemberId, cell.meetingId);
-		}
-	}
-
 	// Header chip: decline (or un-decline) a whole meeting for YOURSELF. Holding a
 	// role routes through the same release-and-mark confirm as the members cells.
 	function onHeaderAvailability(
@@ -256,6 +236,31 @@ export function SeasonGrid({
 			});
 		} else {
 			markUnavailable(currentMemberId, m.id);
+		}
+	}
+
+	// Picker "Not available": if the target holds roles in the meeting, route
+	// through the release-and-mark confirm; otherwise mark directly.
+	function requestUnavailable(
+		targetMemberId: string,
+		meetingId: string,
+		targetName: string,
+		isOwnRow: boolean,
+	) {
+		const held = meetingRoleOptions(data, meetingId, targetMemberId).filter(
+			(o) => o.state === "mine",
+		);
+		const m = data.meetings.find((x) => x.id === meetingId);
+		if (held.length > 0) {
+			setConfirm({
+				memberId: targetMemberId,
+				memberName: isOwnRow ? null : targetName,
+				meetingId,
+				roleLabel: held.map((o) => o.label).join(", "),
+				date: m ? formatMeetingDate(m.scheduledAt, m.timezone) : "this meeting",
+			});
+		} else {
+			markUnavailable(targetMemberId, meetingId);
 		}
 	}
 
@@ -452,18 +457,71 @@ export function SeasonGrid({
 									const m = data.meetings[i];
 									const isOwnRow =
 										!!currentMemberId && row.memberId === currentMemberId;
+									const targetMemberId = row.memberId;
 									// Members × Meetings, an upcoming (not past/locked) meeting →
-									// the cell toggles availability: your own row for anyone, or
+									// the cell opens the role picker: your own row for anyone, or
 									// ANY member's row for an officer (canManageOthers).
-									const availabilityEditable =
+									const editable =
 										orientation === "members" &&
-										!!row.memberId &&
+										!!targetMemberId &&
 										!!currentMemberId &&
+										!!clubId &&
 										!!m &&
 										!m.isCompleted &&
 										!m.isPast &&
 										(isOwnRow || canManageOthers);
-									const targetMemberId = row.memberId;
+									if (editable && m && targetMemberId && currentMemberId) {
+										const label = row.label;
+										const date = formatMeetingDate(m.scheduledAt, m.timezone);
+										return (
+											<td key={`${row.id}:${m.id}`} className="p-0">
+												<MemberRolePicker
+													data={data}
+													meetingId={m.id}
+													meetingDate={date}
+													targetMemberId={targetMemberId}
+													targetName={label}
+													isOwnRow={isOwnRow}
+													canReassign={canManageOthers}
+													actorMemberId={currentMemberId}
+													declined={cell.kind === "na"}
+													onMarkUnavailable={() =>
+														requestUnavailable(
+															targetMemberId,
+															m.id,
+															label,
+															isOwnRow,
+														)
+													}
+													onMarkAvailable={() =>
+														clearUnavailable(targetMemberId, m.id)
+													}
+													onChanged={() => onChanged?.()}
+												>
+													<button
+														type="button"
+														disabled={busyMeetingId === m.id}
+														title={cell.title || "Assign a role"}
+														aria-label={`Edit ${label} — ${date}`}
+														className={cn(
+															CELL_BASE,
+															CELL_KIND_CLASS[cell.kind],
+															"w-full cursor-pointer transition-[filter,border-color] hover:brightness-95 disabled:opacity-50",
+															cell.kind === "free" &&
+																"hover:border-[var(--lagoon-deep)] hover:text-[var(--lagoon-deep)]",
+														)}
+													>
+														{cell.text || (
+															<Plus
+																className="size-3.5 opacity-40"
+																aria-hidden
+															/>
+														)}
+													</button>
+												</MemberRolePicker>
+											</td>
+										);
+									}
 									return (
 										<td key={`${row.id}:${m?.id}`} className="p-0">
 											<GridCell
@@ -475,20 +533,6 @@ export function SeasonGrid({
 												}
 												onClaim={claim}
 												onRelease={release}
-												availabilityEditable={availabilityEditable}
-												subjectName={
-													isOwnRow ? undefined : (row.label ?? undefined)
-												}
-												onAvailability={
-													targetMemberId
-														? (c) =>
-																onAvailability(
-																	c,
-																	targetMemberId,
-																	isOwnRow ? null : row.label,
-																)
-														: undefined
-												}
 												clubSlug={clubSlug}
 												meetingLabel={
 													m
