@@ -1,9 +1,10 @@
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, ShieldCheck } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { MemberAvatar } from "#/components/club/member-avatar";
 import { PageContainer } from "#/components/page-container";
+import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import {
 	Dialog,
@@ -72,6 +73,12 @@ interface RosterRow {
 	membershipStatus: "active" | "inactive";
 	/** Compact label for the member's first synced Pathway, or null if none synced. */
 	pathwayLabel: string | null;
+	/**
+	 * Holds an open officer term ⇒ effective club-admin (#202 / #270). Display
+	 * only — surfaces that any office confers full admin; the auth model is
+	 * unchanged.
+	 */
+	holdsOffice: boolean;
 }
 
 /** "PathName · L2 3/5" (or "· Path complete"), compact for a one-line roster cell. */
@@ -115,6 +122,7 @@ function Roster() {
 			speeches: m.speeches,
 			membershipStatus: m.status,
 			pathwayLabel: pathwayLabelFor(pathways[m.id] ?? []),
+			holdsOffice: m.officerPositions.length > 0,
 		};
 	});
 
@@ -244,6 +252,16 @@ function Roster() {
 								<div className="min-w-0 leading-[1.25]">
 									<div className="flex items-center gap-2">
 										<span className="truncate text-sm font-bold">{m.name}</span>
+										{m.holdsOffice ? (
+											<Badge
+												variant="secondary"
+												className="hidden sm:inline-flex"
+												title="Holding an officer term grants full club-admin access."
+											>
+												<ShieldCheck aria-hidden />
+												Officer · full admin
+											</Badge>
+										) : null}
 										{m.membershipStatus === "inactive" ? (
 											<span className="shrink-0 rounded-full border border-[var(--line)] bg-[var(--sand)] px-2 py-0.5 text-xs font-bold tracking-[0.03em] text-[var(--sea-ink-soft)] uppercase">
 												Inactive
