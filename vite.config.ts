@@ -11,7 +11,12 @@ const config = defineConfig({
 	resolve: { tsconfigPaths: true },
 	plugins: [
 		devtools(),
-		nitro({ rollupConfig: { external: [/^@sentry\//] } }),
+		nitro({
+			rollupConfig: { external: [/^@sentry\//] },
+			// Boot the in-process reminder poller (#271 / ADR-0023) once per server
+			// start — a Nitro runtime plugin, not an edge/cron job (ADR-0007).
+			plugins: ["./src/server/reminder-poller.nitro.ts"],
+		}),
 		tailwindcss(),
 		tanstackStart(),
 		viteReact(),
