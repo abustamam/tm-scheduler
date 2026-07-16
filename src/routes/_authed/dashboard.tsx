@@ -66,9 +66,13 @@ function Dashboard() {
 							</span>
 						</div>
 						{speeches.length === 0 ? (
-							<p className="border-t border-[var(--line)] px-5 py-8 text-center text-sm text-[var(--sea-ink-soft)]">
-								No speeches yet. Sign up for a speaking slot to get started.
-							</p>
+							<Link
+								to="/schedule"
+								search={{ view: "members", count: 8 }}
+								className="block border-t border-[var(--line)] px-5 py-8 text-center text-sm text-[var(--sea-ink-soft)] no-underline transition-colors hover:bg-[var(--foam)]"
+							>
+								No speeches yet. Sign up for a speaking slot to get started →
+							</Link>
 						) : (
 							speeches.map((l) => {
 								const { day, mon } = dayMon(l.scheduledAt);

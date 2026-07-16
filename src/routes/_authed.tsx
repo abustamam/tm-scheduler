@@ -36,6 +36,7 @@ import {
 import { ImpersonationBanner } from "#/components/club/impersonation-banner";
 import { MemberAvatar } from "#/components/club/member-avatar";
 import { ThemeToggle } from "#/components/club/theme-toggle";
+import { NoClubScreen } from "#/components/no-club-screen";
 import { Sheet, SheetContent, SheetTitle } from "#/components/ui/sheet";
 import { Toaster } from "#/components/ui/sonner";
 import { authClient } from "#/lib/auth-client";
@@ -151,6 +152,18 @@ function WorkspaceLayout() {
 				err instanceof Error ? err.message : "Couldn't exit the session.",
 			);
 		}
+	}
+
+	// No club (and not impersonating one) → the workspace nav dead-ends into empty
+	// pages, so show a purposeful "you're not in a club yet" screen instead (#267).
+	if (clubs.length === 0) {
+		return (
+			<NoClubScreen
+				email={authUser.email}
+				onSignOut={handleSignOut}
+				isSuperadmin={isSuperadmin}
+			/>
+		);
 	}
 
 	// Which workspace pages the global search may surface for this user.

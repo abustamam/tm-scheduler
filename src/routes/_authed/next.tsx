@@ -1,5 +1,5 @@
 import { createFileRoute, Link, redirect } from "@tanstack/react-router";
-import { CalendarPlus } from "lucide-react";
+import { CalendarPlus, Grid3x3 } from "lucide-react";
 import { PageContainer } from "#/components/page-container";
 import { Button } from "#/components/ui/button";
 import { getNextMeeting } from "#/server/meetings";
@@ -44,7 +44,14 @@ function NoUpcomingMeeting() {
 							Schedule a meeting
 						</Link>
 					</Button>
-				) : null}
+				) : (
+					<Button asChild size="sm" variant="outline" className="mt-4">
+						<Link to="/schedule" search={{ view: "members", count: 8 }}>
+							<Grid3x3 className="size-4" aria-hidden />
+							Browse the sign-up sheet
+						</Link>
+					</Button>
+				)}
 			</div>
 		</PageContainer>
 	);
