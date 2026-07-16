@@ -34,6 +34,7 @@ export function GridCell({
 	onRelease,
 	availabilityEditable = false,
 	onAvailability,
+	subjectName,
 	clubSlug,
 	meetingLabel,
 }: {
@@ -42,10 +43,15 @@ export function GridCell({
 	busy?: boolean;
 	onClaim?: (slotId: string) => void;
 	onRelease?: (slotId: string) => void;
-	/** Members × Meetings, your own row, upcoming meeting: the cell toggles your
-	 *  availability (#204). free → NA, NA → free, assigned → release + NA. */
+	/** Members × Meetings, upcoming meeting: the cell toggles availability (#204).
+	 *  free → NA, NA → free, assigned → release + NA. Enabled for your own row, or
+	 *  any row when an officer manages the sheet. */
 	availabilityEditable?: boolean;
 	onAvailability?: (cell: ViewCell) => void;
+	/** The member this row belongs to when it is NOT the viewer (an officer acting
+	 *  on their behalf) — used to word the control "Mark {name} unavailable"
+	 *  instead of "yourself". Omitted ⇒ the viewer's own row. */
+	subjectName?: string;
 	/** Club slug — when set (public club shell), cell links target the public
 	 *  meeting view instead of the signed-in `/meetings/$id` route. */
 	clubSlug?: string;
@@ -68,10 +74,16 @@ export function GridCell({
 	if (availabilityEditable && onAvailability && cell.kind !== "blank") {
 		const label =
 			(cell.kind === "na"
-				? "Mark yourself available again"
+				? subjectName
+					? `Mark ${subjectName} available again`
+					: "Mark yourself available again"
 				: cell.kind === "assigned"
-					? `Release ${cell.text} and mark yourself unavailable`
-					: "Mark yourself unavailable — I can't make this one") + dateSuffix;
+					? subjectName
+						? `Release ${cell.text} and mark ${subjectName} unavailable`
+						: `Release ${cell.text} and mark yourself unavailable`
+					: subjectName
+						? `Mark ${subjectName} unavailable — can't make this one`
+						: "Mark yourself unavailable — I can't make this one") + dateSuffix;
 		const tone =
 			cell.kind === "na"
 				? "border border-dashed border-destructive/70 text-destructive hover:bg-destructive hover:text-white dark:hover:bg-destructive/60"

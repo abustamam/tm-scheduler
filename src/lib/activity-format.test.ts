@@ -57,6 +57,38 @@ describe("formatActivity", () => {
 		expect(formatActivity(e).summary).toMatch(/Schinthia.*→.*Mahbuba/);
 	});
 
+	it("availability_set for yourself reads reflexively", () => {
+		const e = {
+			...base,
+			action: "availability_set",
+			actorName: "Alex",
+			subjectName: "Alex",
+		} as ActivityEntry;
+		expect(formatActivity(e).summary).toBe("marked themselves unavailable");
+	});
+
+	it("availability_set by an officer for someone else names the member", () => {
+		const e = {
+			...base,
+			action: "availability_set",
+			actorName: "Jordan",
+			subjectName: "Alex Rivera",
+		} as ActivityEntry;
+		expect(formatActivity(e).summary).toBe("marked Alex Rivera unavailable");
+	});
+
+	it("availability_clear by an officer for someone else names the member", () => {
+		const e = {
+			...base,
+			action: "availability_clear",
+			actorName: "Jordan",
+			subjectName: "Alex Rivera",
+		} as ActivityEntry;
+		expect(formatActivity(e).summary).toBe(
+			"marked Alex Rivera available again",
+		);
+	});
+
 	it("release names the role", () => {
 		const e = {
 			...base,

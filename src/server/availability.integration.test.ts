@@ -277,4 +277,52 @@ describe.skipIf(!hasTestDb)("releaseSlotsAndMarkUnavailable (#204)", () => {
 			);
 		expect(avail).toHaveLength(1);
 	});
+
+	it("attributes an officer's action to the officer, with the member as subject", async () => {
+		await testDb
+			.update(roleSlots)
+			.set({
+				assignedMemberId: seed.memberId,
+				status: "claimed",
+				claimedAt: new Date(),
+			})
+			.where(eq(roleSlots.id, seed.slotId));
+
+		// Officer (adminMemberId) marks the member (memberId) unavailable.
+		await releaseSlotsAndMarkUnavailable(testDb, {
+			memberId: seed.memberId,
+			actorMemberId: seed.adminMemberId,
+			meetingId: seed.meetingId,
+			clubId: seed.clubId,
+		});
+
+		const [setLog] = await testDb
+			.select()
+			.from(activityLog)
+			.where(
+				and(
+					eq(activityLog.targetId, seed.meetingId),
+					eq(activityLog.action, "availability_set"),
+				),
+			)
+			.limit(1);
+		// Actor = the officer; subject (detail.memberId) = the target member.
+		expect(setLog?.actorMemberId).toBe(seed.adminMemberId);
+		expect((setLog?.detail as { memberId?: string })?.memberId).toBe(
+			seed.memberId,
+		);
+
+		// The released-slot log is likewise attributed to the officer.
+		const [relLog] = await testDb
+			.select()
+			.from(activityLog)
+			.where(
+				and(
+					eq(activityLog.targetId, seed.slotId),
+					eq(activityLog.action, "release"),
+				),
+			)
+			.limit(1);
+		expect(relLog?.actorMemberId).toBe(seed.adminMemberId);
+	});
 });
