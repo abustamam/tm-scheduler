@@ -16,6 +16,7 @@ import { toast } from "sonner";
 import { MemberAvatar } from "#/components/club/member-avatar";
 import { PageContainer } from "#/components/page-container";
 import { PathwaysProgress } from "#/components/pathways/pathways-progress";
+import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import {
 	Dialog,
@@ -125,6 +126,10 @@ function MemberDetail() {
 				.map(officerPositionLabel)
 				.join(", ")}`
 		: formatTenure(joined);
+	// Holding any open officer term makes this membership an effective admin
+	// (#202 / #270): the club-admin guard treats any office as admin. Surface
+	// that here — this is display only; the authorization model is unchanged.
+	const holdsOffice = member.officerPositions.length > 0;
 
 	return (
 		<PageContainer>
@@ -146,6 +151,15 @@ function MemberDetail() {
 						<span className="text-sm text-[var(--sea-ink-soft)]">
 							{tenure} · joined {joinedLabel(joined)}
 						</span>
+						{holdsOffice ? (
+							<Badge
+								variant="secondary"
+								title="Holding an officer term grants full club-admin access."
+							>
+								<ShieldCheck aria-hidden />
+								Officer · full admin access
+							</Badge>
+						) : null}
 						{member.status === "inactive" ? (
 							<>
 								<span className="size-1 rounded-full bg-[var(--sea-ink-soft)]" />
@@ -660,7 +674,8 @@ function MemberActions({
 						<fieldset className="space-y-2">
 							<legend className="font-medium text-sm">Offices held</legend>
 							<p className="text-muted-foreground text-xs">
-								A member can hold more than one office at once.
+								A member can hold more than one office at once. Assigning any
+								office grants full club-admin access.
 							</p>
 							<div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
 								{OFFICER_POSITIONS.map((pos) => (
