@@ -72,6 +72,7 @@ export function SeasonGrid({
 	const meetingStatus = memberMeetingStatus(data, currentMemberId ?? null);
 	const labelHead = orientation === "roles" ? "Role" : "Member";
 	const anchorRef = useRef<HTMLTableCellElement>(null);
+	const selfRowRef = useRef<HTMLTableRowElement>(null);
 	const [busySlotId, setBusySlotId] = useState<string | null>(null);
 	const [busyMeetingId, setBusyMeetingId] = useState<string | null>(null);
 	// The assigned-cell confirm: releasing a role + marking unavailable. When
@@ -90,6 +91,13 @@ export function SeasonGrid({
 	useEffect(() => {
 		anchorRef.current?.scrollIntoView({ inline: "center", block: "nearest" });
 	}, []);
+
+	// Members × Meetings: bring the viewer's own row into view on load (and when
+	// switching into this orientation), mirroring the horizontal anchor scroll.
+	useEffect(() => {
+		if (orientation !== "members") return;
+		selfRowRef.current?.scrollIntoView({ block: "center", inline: "nearest" });
+	}, [orientation]);
 
 	async function claim(slotId: string) {
 		if (!currentMemberId) return;
@@ -433,118 +441,162 @@ export function SeasonGrid({
 						</tr>
 					</thead>
 					<tbody>
-						{rows.map((row) => (
-							<tr key={row.id}>
-								<th className="sticky left-0 z-10 bg-card px-3 py-1 text-right text-xs font-semibold whitespace-nowrap shadow-[4px_0_6px_-4px_rgba(0,0,0,0.35)]">
-									{row.memberId ? (
-										// Below md the row is already 44px tall (the cells grew),
-										// so an invisible ::before pad stretches this ~17px text
-										// link over the whole row height (±14px) and into the th
-										// side padding (±8px) without moving a pixel visually;
-										// md+ renders exactly as before (#224).
-										<Link
-											to="/members/$id"
-											params={{ id: row.memberId }}
-											className="hover:underline max-md:relative max-md:before:absolute max-md:before:-inset-x-2 max-md:before:-inset-y-3.5 max-md:before:content-['']"
-										>
-											{row.label}
-										</Link>
-									) : (
-										row.label
+						{rows.map((row) => {
+							const isMemberView = orientation === "members";
+							const isSelfRow =
+								isMemberView &&
+								!!currentMemberId &&
+								row.memberId === currentMemberId;
+							// Recede OTHER members only on the self-serve sheet. The officer
+							// schedule (canManageOthers) manages everyone, so nothing dims
+							// there — every row stays full-strength.
+							const dimRow =
+								isMemberView &&
+								!!row.memberId &&
+								!isSelfRow &&
+								!!currentMemberId &&
+								!canManageOthers;
+							// Dimmed cells brighten when the row is hovered (`group`), so any
+							// member can still be traced across the meeting columns.
+							const tdClass = cn(
+								"p-0",
+								dimRow &&
+									"opacity-55 transition-opacity group-hover:opacity-100",
+							);
+							return (
+								<tr
+									key={row.id}
+									ref={isSelfRow ? selfRowRef : undefined}
+									className={cn(
+										"group transition-colors",
+										isSelfRow ? "bg-primary/[0.07]" : "hover:bg-muted/40",
 									)}
-								</th>
-								{row.cells.map((cell, i) => {
-									const m = data.meetings[i];
-									const isOwnRow =
-										!!currentMemberId && row.memberId === currentMemberId;
-									const targetMemberId = row.memberId;
-									// Members × Meetings, an upcoming (not past/locked) meeting →
-									// the cell opens the role picker: your own row for anyone, or
-									// ANY member's row for an officer (canManageOthers).
-									const editable =
-										orientation === "members" &&
-										!!targetMemberId &&
-										!!currentMemberId &&
-										!!clubId &&
-										!!m &&
-										!m.isCompleted &&
-										!m.isPast &&
-										(isOwnRow || canManageOthers);
-									if (editable && m && targetMemberId && currentMemberId) {
-										const label = row.label;
-										const date = formatMeetingDate(m.scheduledAt, m.timezone);
-										return (
-											<td key={`${row.id}:${m.id}`} className="p-0">
-												<MemberRolePicker
-													data={data}
-													meetingId={m.id}
-													meetingDate={date}
-													targetMemberId={targetMemberId}
-													targetName={label}
-													isOwnRow={isOwnRow}
-													canReassign={canManageOthers}
-													actorMemberId={currentMemberId}
-													declined={cell.kind === "na"}
-													onMarkUnavailable={() =>
-														requestUnavailable(
-															targetMemberId,
-															m.id,
-															label,
-															isOwnRow,
-														)
-													}
-													onMarkAvailable={() =>
-														clearUnavailable(targetMemberId, m.id)
-													}
-													onChanged={() => onChanged?.()}
-												>
-													<button
-														type="button"
-														disabled={busyMeetingId === m.id}
-														title={cell.title || "Assign a role"}
-														aria-label={`Edit ${label} — ${date}`}
-														className={cn(
-															CELL_BASE,
-															CELL_KIND_CLASS[cell.kind],
-															"w-full cursor-pointer transition-[filter,border-color] hover:brightness-95 disabled:opacity-50",
-															cell.kind === "free" &&
-																"hover:border-[var(--lagoon-deep)] hover:text-[var(--lagoon-deep)]",
-														)}
+								>
+									<th
+										className={cn(
+											"sticky left-0 z-10 px-3 py-1 text-right text-xs font-semibold whitespace-nowrap",
+											isSelfRow
+												? // Opaque tinted fill (color-mix stays opaque, so nothing
+													// bleeds under the sticky column) + a 3px inset accent bar.
+													"bg-[color-mix(in_oklab,var(--card),var(--primary)_8%)] shadow-[inset_3px_0_0_0_var(--primary),4px_0_6px_-4px_rgba(0,0,0,0.35)]"
+												: "bg-card group-hover:bg-muted shadow-[4px_0_6px_-4px_rgba(0,0,0,0.35)]",
+										)}
+									>
+										{row.memberId ? (
+											// Below md the row is already 44px tall (the cells grew),
+											// so an invisible ::before pad stretches this ~17px text
+											// link over the whole row height (±14px) and into the th
+											// side padding (±8px) without moving a pixel visually;
+											// md+ renders exactly as before (#224).
+											<Link
+												to="/members/$id"
+												params={{ id: row.memberId }}
+												className="hover:underline max-md:relative max-md:before:absolute max-md:before:-inset-x-2 max-md:before:-inset-y-3.5 max-md:before:content-['']"
+											>
+												{row.label}
+											</Link>
+										) : (
+											row.label
+										)}
+										{isSelfRow ? (
+											<span className="ml-1.5 inline-flex items-center rounded-full bg-primary px-1.5 py-0.5 align-middle text-[10px] font-semibold leading-none text-primary-foreground">
+												You
+											</span>
+										) : null}
+									</th>
+									{row.cells.map((cell, i) => {
+										const m = data.meetings[i];
+										const isOwnRow =
+											!!currentMemberId && row.memberId === currentMemberId;
+										const targetMemberId = row.memberId;
+										// Members × Meetings, an upcoming (not past/locked) meeting →
+										// the cell opens the role picker: your own row for anyone, or
+										// ANY member's row for an officer (canManageOthers).
+										const editable =
+											orientation === "members" &&
+											!!targetMemberId &&
+											!!currentMemberId &&
+											!!clubId &&
+											!!m &&
+											!m.isCompleted &&
+											!m.isPast &&
+											(isOwnRow || canManageOthers);
+										if (editable && m && targetMemberId && currentMemberId) {
+											const label = row.label;
+											const date = formatMeetingDate(m.scheduledAt, m.timezone);
+											return (
+												<td key={`${row.id}:${m.id}`} className={tdClass}>
+													<MemberRolePicker
+														data={data}
+														meetingId={m.id}
+														meetingDate={date}
+														targetMemberId={targetMemberId}
+														targetName={label}
+														isOwnRow={isOwnRow}
+														canReassign={canManageOthers}
+														actorMemberId={currentMemberId}
+														declined={cell.kind === "na"}
+														onMarkUnavailable={() =>
+															requestUnavailable(
+																targetMemberId,
+																m.id,
+																label,
+																isOwnRow,
+															)
+														}
+														onMarkAvailable={() =>
+															clearUnavailable(targetMemberId, m.id)
+														}
+														onChanged={() => onChanged?.()}
 													>
-														{cell.text || (
-															<Plus
-																className="size-3.5 opacity-40"
-																aria-hidden
-															/>
-														)}
-													</button>
-												</MemberRolePicker>
+														<button
+															type="button"
+															disabled={busyMeetingId === m.id}
+															title={cell.title || "Assign a role"}
+															aria-label={`Edit ${label} — ${date}`}
+															className={cn(
+																CELL_BASE,
+																CELL_KIND_CLASS[cell.kind],
+																"w-full cursor-pointer transition-[filter,border-color] hover:brightness-95 disabled:opacity-50",
+																cell.kind === "free" &&
+																	"hover:border-[var(--lagoon-deep)] hover:text-[var(--lagoon-deep)]",
+															)}
+														>
+															{cell.text || (
+																<Plus
+																	className="size-3.5 opacity-40"
+																	aria-hidden
+																/>
+															)}
+														</button>
+													</MemberRolePicker>
+												</td>
+											);
+										}
+										return (
+											<td key={`${row.id}:${m?.id}`} className={tdClass}>
+												<GridCell
+													cell={cell}
+													currentMemberId={actingMemberId}
+													busy={
+														(!!cell.slotId && busySlotId === cell.slotId) ||
+														busyMeetingId === cell.meetingId
+													}
+													onClaim={claim}
+													onRelease={release}
+													clubSlug={clubSlug}
+													meetingLabel={
+														m
+															? formatMeetingDate(m.scheduledAt, m.timezone)
+															: undefined
+													}
+												/>
 											</td>
 										);
-									}
-									return (
-										<td key={`${row.id}:${m?.id}`} className="p-0">
-											<GridCell
-												cell={cell}
-												currentMemberId={actingMemberId}
-												busy={
-													(!!cell.slotId && busySlotId === cell.slotId) ||
-													busyMeetingId === cell.meetingId
-												}
-												onClaim={claim}
-												onRelease={release}
-												clubSlug={clubSlug}
-												meetingLabel={
-													m
-														? formatMeetingDate(m.scheduledAt, m.timezone)
-														: undefined
-												}
-											/>
-										</td>
-									);
-								})}
-							</tr>
-						))}
+									})}
+								</tr>
+							);
+						})}
 					</tbody>
 				</table>
 			</div>
