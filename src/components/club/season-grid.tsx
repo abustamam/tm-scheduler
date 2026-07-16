@@ -41,6 +41,7 @@ export function SeasonGrid({
 	orientation,
 	count,
 	currentMemberId,
+	canManageOthers = false,
 	clubId,
 	clubSlug,
 	onOrientationChange,
@@ -53,6 +54,9 @@ export function SeasonGrid({
 	/** When set, the grid becomes interactive as this member: claim/release
 	 *  roles (Roles × Meetings) and toggle availability (Members × Meetings). */
 	currentMemberId?: string | null;
+	/** An officer/admin: may toggle ANY member's availability (Members ×
+	 *  Meetings), not just their own row. Attribution stays `currentMemberId`. */
+	canManageOthers?: boolean;
 	/** Club uuid — required for the availability calls. */
 	clubId?: string;
 	/** Club slug — when set (public club shell), meeting links in the header
@@ -69,8 +73,11 @@ export function SeasonGrid({
 	const anchorRef = useRef<HTMLTableCellElement>(null);
 	const [busySlotId, setBusySlotId] = useState<string | null>(null);
 	const [busyMeetingId, setBusyMeetingId] = useState<string | null>(null);
-	// The assigned-cell confirm: releasing your role + marking unavailable.
+	// The assigned-cell confirm: releasing a role + marking unavailable. When
+	// `memberName` is set, an officer is acting on that member (not themselves).
 	const [confirm, setConfirm] = useState<{
+		memberId: string;
+		memberName: string | null;
 		meetingId: string;
 		roleLabel: string;
 		date: string;
@@ -123,16 +130,27 @@ export function SeasonGrid({
 		}
 	}
 
-	async function markUnavailable(meetingId: string) {
+	// `targetMemberId` is who is being marked (self, or another member when an
+	// officer acts); `currentMemberId` is always the actor (attribution).
+	async function markUnavailable(targetMemberId: string, meetingId: string) {
 		if (!currentMemberId || !clubId) return;
+		const self = targetMemberId === currentMemberId;
 		setBusyMeetingId(meetingId);
 		try {
 			await setAvailability({
-				data: { memberId: currentMemberId, meetingId, clubId },
+				data: {
+					memberId: targetMemberId,
+					actorMemberId: currentMemberId,
+					meetingId,
+					clubId,
+				},
 			});
 			await onChanged?.();
-			toast.success("Marked unavailable.", {
-				action: { label: "Undo", onClick: () => clearUnavailable(meetingId) },
+			toast.success(self ? "Marked unavailable." : "Marked them unavailable.", {
+				action: {
+					label: "Undo",
+					onClick: () => clearUnavailable(targetMemberId, meetingId),
+				},
 			});
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : "Couldn't update.");
@@ -141,17 +159,29 @@ export function SeasonGrid({
 		}
 	}
 
-	async function clearUnavailable(meetingId: string) {
+	async function clearUnavailable(targetMemberId: string, meetingId: string) {
 		if (!currentMemberId || !clubId) return;
+		const self = targetMemberId === currentMemberId;
 		setBusyMeetingId(meetingId);
 		try {
 			await clearAvailability({
-				data: { memberId: currentMemberId, meetingId, clubId },
+				data: {
+					memberId: targetMemberId,
+					actorMemberId: currentMemberId,
+					meetingId,
+					clubId,
+				},
 			});
 			await onChanged?.();
-			toast.success("You're marked available.", {
-				action: { label: "Undo", onClick: () => markUnavailable(meetingId) },
-			});
+			toast.success(
+				self ? "You're marked available." : "Marked them available.",
+				{
+					action: {
+						label: "Undo",
+						onClick: () => markUnavailable(targetMemberId, meetingId),
+					},
+				},
+			);
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : "Couldn't update.");
 		} finally {
@@ -159,16 +189,26 @@ export function SeasonGrid({
 		}
 	}
 
-	async function releaseAndMark(meetingId: string) {
+	async function releaseAndMark(targetMemberId: string, meetingId: string) {
 		if (!currentMemberId || !clubId) return;
+		const self = targetMemberId === currentMemberId;
 		setConfirm(null);
 		setBusyMeetingId(meetingId);
 		try {
 			await markUnavailableReleasing({
-				data: { memberId: currentMemberId, meetingId, clubId },
+				data: {
+					memberId: targetMemberId,
+					actorMemberId: currentMemberId,
+					meetingId,
+					clubId,
+				},
 			});
 			await onChanged?.();
-			toast.success("Role released — you're marked unavailable.");
+			toast.success(
+				self
+					? "Role released — you're marked unavailable."
+					: "Role released — they're marked unavailable.",
+			);
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : "Couldn't update.");
 		} finally {
@@ -176,38 +216,46 @@ export function SeasonGrid({
 		}
 	}
 
-	function onAvailability(cell: ViewCell) {
+	function onAvailability(
+		cell: ViewCell,
+		targetMemberId: string,
+		targetName: string | null,
+	) {
 		if (cell.kind === "na") {
-			clearUnavailable(cell.meetingId);
+			clearUnavailable(targetMemberId, cell.meetingId);
 		} else if (cell.kind === "assigned") {
 			const m = data.meetings.find((x) => x.id === cell.meetingId);
 			setConfirm({
+				memberId: targetMemberId,
+				memberName: targetName,
 				meetingId: cell.meetingId,
 				roleLabel: cell.title,
 				date: m ? formatMeetingDate(m.scheduledAt, m.timezone) : "this meeting",
 			});
 		} else {
-			markUnavailable(cell.meetingId);
+			markUnavailable(targetMemberId, cell.meetingId);
 		}
 	}
 
-	// Header chip: decline (or un-decline) a whole meeting. Holding a role
-	// routes through the same release-and-mark confirm as the members-row cells.
+	// Header chip: decline (or un-decline) a whole meeting for YOURSELF. Holding a
+	// role routes through the same release-and-mark confirm as the members cells.
 	function onHeaderAvailability(
 		m: SeasonGridData["meetings"][number],
 		status: MemberMeetingStatus | undefined,
 	) {
-		if (!status) return;
+		if (!status || !currentMemberId) return;
 		if (status.declined) {
-			clearUnavailable(m.id);
+			clearUnavailable(currentMemberId, m.id);
 		} else if (status.heldRoleLabels.length > 0) {
 			setConfirm({
+				memberId: currentMemberId,
+				memberName: null,
 				meetingId: m.id,
 				roleLabel: status.heldRoleLabels.join(", "),
 				date: formatMeetingDate(m.scheduledAt, m.timezone),
 			});
 		} else {
-			markUnavailable(m.id);
+			markUnavailable(currentMemberId, m.id);
 		}
 	}
 
@@ -402,15 +450,20 @@ export function SeasonGrid({
 								</th>
 								{row.cells.map((cell, i) => {
 									const m = data.meetings[i];
-									// Members × Meetings, your own row, an upcoming (not
-									// past/locked) meeting → the cell toggles your availability.
+									const isOwnRow =
+										!!currentMemberId && row.memberId === currentMemberId;
+									// Members × Meetings, an upcoming (not past/locked) meeting →
+									// the cell toggles availability: your own row for anyone, or
+									// ANY member's row for an officer (canManageOthers).
 									const availabilityEditable =
 										orientation === "members" &&
+										!!row.memberId &&
 										!!currentMemberId &&
-										row.memberId === currentMemberId &&
 										!!m &&
 										!m.isCompleted &&
-										!m.isPast;
+										!m.isPast &&
+										(isOwnRow || canManageOthers);
+									const targetMemberId = row.memberId;
 									return (
 										<td key={`${row.id}:${m?.id}`} className="p-0">
 											<GridCell
@@ -423,7 +476,19 @@ export function SeasonGrid({
 												onClaim={claim}
 												onRelease={release}
 												availabilityEditable={availabilityEditable}
-												onAvailability={onAvailability}
+												subjectName={
+													isOwnRow ? undefined : (row.label ?? undefined)
+												}
+												onAvailability={
+													targetMemberId
+														? (c) =>
+																onAvailability(
+																	c,
+																	targetMemberId,
+																	isOwnRow ? null : row.label,
+																)
+														: undefined
+												}
 												clubSlug={clubSlug}
 												meetingLabel={
 													m
@@ -446,10 +511,15 @@ export function SeasonGrid({
 			>
 				<DialogContent>
 					<DialogHeader>
-						<DialogTitle>Mark yourself unavailable?</DialogTitle>
+						<DialogTitle>
+							{confirm?.memberName
+								? `Mark ${confirm.memberName} unavailable?`
+								: "Mark yourself unavailable?"}
+						</DialogTitle>
 						<DialogDescription>
-							You're {confirm?.roleLabel} on {confirm?.date}. Release and mark
-							yourself unavailable for the meeting?
+							{confirm?.memberName
+								? `${confirm.memberName} is ${confirm?.roleLabel} on ${confirm?.date}. Release the role and mark them unavailable for the meeting?`
+								: `You're ${confirm?.roleLabel} on ${confirm?.date}. Release and mark yourself unavailable for the meeting?`}
 						</DialogDescription>
 					</DialogHeader>
 					<DialogFooter>
@@ -457,7 +527,9 @@ export function SeasonGrid({
 							Cancel
 						</Button>
 						<Button
-							onClick={() => confirm && releaseAndMark(confirm.meetingId)}
+							onClick={() =>
+								confirm && releaseAndMark(confirm.memberId, confirm.meetingId)
+							}
 						>
 							Release &amp; mark unavailable
 						</Button>

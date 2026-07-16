@@ -14,8 +14,17 @@ type Database = typeof db;
  */
 export async function releaseSlotsAndMarkUnavailable(
 	database: Database,
-	args: { memberId: string; meetingId: string; clubId: string },
+	args: {
+		/** The member being marked unavailable (whose roles are released). */
+		memberId: string;
+		/** Who performed the action — self, or an officer acting on their behalf.
+		 *  Attributed in the activity log; defaults to `memberId` (self-service). */
+		actorMemberId?: string;
+		meetingId: string;
+		clubId: string;
+	},
 ): Promise<{ released: number }> {
+	const actorMemberId = args.actorMemberId ?? args.memberId;
 	return database.transaction(async (tx) => {
 		const released = await tx
 			.update(roleSlots)
@@ -42,7 +51,7 @@ export async function releaseSlotsAndMarkUnavailable(
 		for (const slot of released) {
 			await logActivity(tx, {
 				clubId: args.clubId,
-				actorMemberId: args.memberId,
+				actorMemberId,
 				action: "release",
 				targetType: "slot",
 				targetId: slot.id,
@@ -51,10 +60,13 @@ export async function releaseSlotsAndMarkUnavailable(
 		}
 		await logActivity(tx, {
 			clubId: args.clubId,
-			actorMemberId: args.memberId,
+			actorMemberId,
 			action: "availability_set",
 			targetType: "meeting",
 			targetId: args.meetingId,
+			// Subject (whose availability changed) so the feed can distinguish an
+			// officer marking someone else vs. a self-decline.
+			detail: { memberId: args.memberId },
 		});
 
 		return { released: released.length };

@@ -37,10 +37,16 @@ export function formatActivity(entry: ActivityEntry): FormattedActivity {
 			summary = `reassigned ${role}: ${from} → ${to}`;
 			break;
 		case "availability_set":
-			summary = "marked themselves unavailable";
+			summary =
+				entry.subjectName && entry.subjectName !== actor
+					? `marked ${entry.subjectName} unavailable`
+					: "marked themselves unavailable";
 			break;
 		case "availability_clear":
-			summary = "marked themselves available again";
+			summary =
+				entry.subjectName && entry.subjectName !== actor
+					? `marked ${entry.subjectName} available again`
+					: "marked themselves available again";
 			break;
 		case "member_add":
 			summary = `added member "${entry.subjectName ?? "someone"}"`;

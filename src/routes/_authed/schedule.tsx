@@ -1,6 +1,7 @@
 import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { SeasonGrid } from "#/components/club/season-grid";
 import { PageContainer } from "#/components/page-container";
+import { effectiveAdminClub } from "#/lib/effective-admin";
 import type { Orientation } from "#/lib/season-grid-view";
 import { getSeasonGrid, type SeasonGridCount } from "#/server/season-grid";
 
@@ -30,7 +31,10 @@ export const Route = createFileRoute("/_authed/schedule")({
 function SeasonGridPage() {
 	const { data } = Route.useLoaderData();
 	const { view, count } = Route.useSearch();
-	const { currentMemberId, activeClubId } = Route.useRouteContext();
+	const context = Route.useRouteContext();
+	const { currentMemberId, activeClubId } = context;
+	// Officers/admins may mark ANY member unavailable, not just their own row.
+	const canManageOthers = !!effectiveAdminClub(context);
 	const router = useRouter();
 	const navigate = Route.useNavigate();
 
@@ -45,6 +49,7 @@ function SeasonGridPage() {
 					orientation={view}
 					count={count}
 					currentMemberId={currentMemberId}
+					canManageOthers={canManageOthers}
 					clubId={activeClubId ?? undefined}
 					onOrientationChange={(v) =>
 						navigate({ search: (prev) => ({ ...prev, view: v }) })
