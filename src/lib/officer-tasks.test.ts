@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildOfficerHome, COMMON_TASKS } from "./officer-tasks";
+import { buildOfficerHome, COMMON_TASKS, OFFICER_TASKS } from "./officer-tasks";
+import { OFFICER_POSITIONS } from "./officers";
 
 describe("buildOfficerHome", () => {
 	it("always includes the common band, no sections for no offices", () => {
@@ -15,13 +16,37 @@ describe("buildOfficerHome", () => {
 		expect(sections[0]?.tasks.length).toBeGreaterThan(0);
 	});
 
-	it("omits offices that have no dedicated tasks", () => {
+	it("gives every one of the 8 offices a non-empty section (#269)", () => {
+		for (const position of OFFICER_POSITIONS) {
+			const { sections } = buildOfficerHome([position]);
+			expect(sections.map((s) => s.position)).toEqual([position]);
+			expect(sections[0]?.tasks.length).toBeGreaterThan(0);
+		}
+	});
+
+	it("covers VP PR, Sergeant at Arms, and IPP — no more empty offices (#269)", () => {
 		const { sections } = buildOfficerHome([
 			"sergeant_at_arms",
 			"vp_public_relations",
+			"immediate_past_president",
 			"vp_education",
 		]);
-		expect(sections.map((s) => s.position)).toEqual(["vp_education"]);
+		// Ordered President-first (canonical rank), all four present.
+		expect(sections.map((s) => s.position)).toEqual([
+			"vp_education",
+			"vp_public_relations",
+			"sergeant_at_arms",
+			"immediate_past_president",
+		]);
+		for (const s of sections) {
+			expect(s.tasks.length).toBeGreaterThan(0);
+		}
+	});
+
+	it("every OFFICER_TASKS entry has a non-empty task list", () => {
+		for (const position of OFFICER_POSITIONS) {
+			expect(OFFICER_TASKS[position].length).toBeGreaterThan(0);
+		}
 	});
 
 	it("surfaces the Treasurer dues tracker (#206)", () => {
