@@ -10,6 +10,8 @@ import {
 	BookOpen,
 	CalendarDays,
 	CalendarPlus,
+	CalendarRange,
+	ClipboardPaste,
 	Compass,
 	GraduationCap,
 	Grid3x3,
@@ -18,10 +20,12 @@ import {
 	ListChecks,
 	LogOut,
 	Menu,
+	Mic,
 	RefreshCw,
 	ScrollText,
 	Settings,
 	ShieldCheck,
+	Trophy,
 	UserPlus,
 	Wallet,
 } from "lucide-react";
@@ -82,13 +86,18 @@ function crumbFor(pathname: string): string {
 	if (pathname.startsWith("/resources")) return "Me · Resources";
 	if (pathname.startsWith("/members")) return "Roster · Member profile";
 	if (pathname.startsWith("/admin/meetings/new")) return "Manage · New meeting";
+	if (pathname.startsWith("/admin/meetings/batch"))
+		return "Manage · Batch meetings";
 	if (pathname.startsWith("/meetings")) return "Manage · Meeting";
 	if (pathname === "/me") return "Me · My roles";
+	if (pathname.startsWith("/admin/dcp")) return "Manage · DCP scoreboard";
 	if (pathname.startsWith("/admin/roles")) return "Manage · Meeting roles";
 	if (pathname.startsWith("/admin/club-settings"))
 		return "Manage · Club settings";
 	if (pathname.startsWith("/admin/sync-tokens"))
 		return "Manage · Base Camp sync";
+	if (pathname.startsWith("/admin/pathways-sync"))
+		return "Manage · Manual Pathways sync";
 	if (pathname.startsWith("/admin/vpe-dashboard"))
 		return "Manage · VP Education";
 	if (pathname.startsWith("/admin/vp-membership"))
@@ -363,6 +372,12 @@ function SidebarInner({
 							onNavigate={onNavigate}
 						/>
 						<NavItem
+							to="/admin/dcp"
+							icon={Trophy}
+							label="DCP scoreboard"
+							onNavigate={onNavigate}
+						/>
+						<NavItem
 							to="/admin/dues"
 							icon={Wallet}
 							label="Dues"
@@ -372,6 +387,12 @@ function SidebarInner({
 							to="/admin/meetings/new"
 							icon={CalendarPlus}
 							label="New meeting"
+							onNavigate={onNavigate}
+						/>
+						<NavItem
+							to="/admin/meetings/batch"
+							icon={CalendarRange}
+							label="Batch meetings"
 							onNavigate={onNavigate}
 						/>
 						<NavItem
@@ -398,6 +419,12 @@ function SidebarInner({
 							label="Base Camp sync"
 							onNavigate={onNavigate}
 						/>
+						<NavItem
+							to="/admin/pathways-sync"
+							icon={ClipboardPaste}
+							label="Manual Pathways sync"
+							onNavigate={onNavigate}
+						/>
 					</>
 				) : null}
 			</NavGroup>
@@ -409,6 +436,7 @@ function SidebarInner({
 					label="My dashboard"
 					onNavigate={onNavigate}
 				/>
+				<NavItem to="/me" icon={Mic} label="My roles" onNavigate={onNavigate} />
 				<NavItem
 					to="/resources"
 					icon={BookOpen}
