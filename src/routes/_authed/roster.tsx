@@ -231,9 +231,37 @@ function Roster() {
 				</div>
 
 				{visible.length === 0 ? (
-					<p className="px-5 py-10 text-center text-sm text-[var(--sea-ink-soft)]">
-						No members to show.
-					</p>
+					rows.length === 0 ? (
+						<div className="px-5 py-12 text-center">
+							<p className="text-sm font-semibold text-[var(--sea-ink)]">
+								No members yet
+							</p>
+							{canManage ? (
+								<>
+									<p className="mx-auto mt-1.5 max-w-sm text-sm text-[var(--sea-ink-soft)]">
+										Import your club's roster to get everyone set up — paste
+										names and emails, or add them one at a time.
+									</p>
+									<Button
+										size="sm"
+										className="mt-4"
+										onClick={() => setImportOpen(true)}
+									>
+										Import your roster
+									</Button>
+								</>
+							) : (
+								<p className="mx-auto mt-1.5 max-w-sm text-sm text-[var(--sea-ink-soft)]">
+									Once an officer adds the club's roster, members will show up
+									here.
+								</p>
+							)}
+						</div>
+					) : (
+						<p className="px-5 py-10 text-center text-sm text-[var(--sea-ink-soft)]">
+							No members match this filter.
+						</p>
+					)
 				) : (
 					visible.map((m) => (
 						<Link

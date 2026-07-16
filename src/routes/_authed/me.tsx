@@ -84,10 +84,14 @@ function MyCommitments() {
 			{commitments.length === 0 ? (
 				<p className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
 					You haven't claimed any roles yet.{" "}
-					<Link to="/roster" className="font-medium text-primary underline">
-						Browse the schedule
-					</Link>
-					.
+					<Link
+						to="/schedule"
+						search={{ view: "members", count: 8 }}
+						className="font-medium text-primary underline"
+					>
+						Sign up on the sign-up sheet
+					</Link>{" "}
+					to get started.
 				</p>
 			) : (
 				<ul className="space-y-3">

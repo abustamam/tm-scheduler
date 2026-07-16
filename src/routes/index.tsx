@@ -7,15 +7,13 @@ import {
 } from "lucide-react";
 import { BrandMark } from "#/components/brand-mark";
 import { Button } from "#/components/ui/button";
-import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
+import { ACCESS_REQUEST_MAILTO, TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
 import { homeRedirectTarget } from "#/lib/home-route";
 import { getAuthContext } from "#/server/auth-context";
 
 const TITLE = "GavelUp — the meeting runner for Toastmasters clubs";
 const DESCRIPTION =
 	"Schedule roles, run the agenda, and track Pathways & DCP — the tool officers use to keep their Toastmasters club moving.";
-const ACCESS_MAILTO =
-	"mailto:rasheed.bustamam@gmail.com?subject=GavelUp%20access%20request";
 
 export const Route = createFileRoute("/")({
 	// Public front door. Signed-in visitors are sent into the app, role-aware:
@@ -99,7 +97,7 @@ function Landing() {
 								</Link>
 							</Button>
 							<Button asChild size="lg" variant="outline" className="px-6">
-								<a href={ACCESS_MAILTO}>Request access</a>
+								<a href={ACCESS_REQUEST_MAILTO}>Request access</a>
 							</Button>
 						</div>
 						<p className="mt-4 text-sm text-[var(--sea-ink-soft)]">

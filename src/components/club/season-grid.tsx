@@ -283,7 +283,15 @@ export function SeasonGrid({
 	if (orientation === "members" && data.members.length === 0) {
 		return (
 			<p className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
-				No members yet. Add members from the Roster view.
+				No members yet. Add members from the{" "}
+				{clubSlug ? (
+					"Roster view"
+				) : (
+					<Link to="/roster" className="font-medium text-primary underline">
+						Roster view
+					</Link>
+				)}
+				.
 			</p>
 		);
 	}

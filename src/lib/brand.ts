@@ -15,3 +15,11 @@
  */
 export const TOASTMASTERS_DISCLAIMER =
 	'GavelUp is an independent product and is not affiliated with, endorsed by, or sponsored by Toastmasters International. "Toastmasters International," "Toastmasters," and related trademarks are the property of Toastmasters International.';
+
+/**
+ * The "Request access" mailto used by the invite-only front door (`index.tsx`)
+ * and the signed-in "you're not in a club yet" screen (#267). Single source of
+ * truth so the support address can't drift between surfaces.
+ */
+export const ACCESS_REQUEST_MAILTO =
+	"mailto:rasheed.bustamam@gmail.com?subject=GavelUp%20access%20request";
