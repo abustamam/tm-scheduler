@@ -47,11 +47,15 @@ export const COMMON_TASKS: OfficerTask[] = [
 ];
 
 /**
- * Office-specific jobs → destinations. Only the offices that map to real
- * surfaces appear here; the rest (VP PR, Sergeant-at-Arms, Past President)
- * intentionally have no section — see #207 / #208 for their future features.
+ * Office-specific jobs → destinations. Every one of the 8 offices has a
+ * non-empty section so no elected officer ever lands on an empty page (#269).
+ * Offices without a bespoke workflow yet (VP PR, Sergeant-at-Arms, Immediate
+ * Past President) point at the general tools most relevant to the role until
+ * dedicated features land (see #207 / #208). Typed as a total `Record` (not
+ * `Partial`) so adding a new office to the enum is a compile error until it has
+ * a section here.
  */
-export const OFFICER_TASKS: Partial<Record<OfficerPosition, OfficerTask[]>> = {
+export const OFFICER_TASKS: Record<OfficerPosition, OfficerTask[]> = {
 	president: [
 		{
 			label: "Distinguished Club Program",
@@ -101,6 +105,23 @@ export const OFFICER_TASKS: Partial<Record<OfficerPosition, OfficerTask[]>> = {
 			to: "/admin/sync-tokens",
 		},
 	],
+	vp_public_relations: [
+		{
+			label: "Promote the season",
+			description: "Share a full agenda when you publicize meetings.",
+			to: "/schedule",
+		},
+		{
+			label: "Members to celebrate",
+			description: "Feature wins and milestones from the roster.",
+			to: "/roster",
+		},
+		{
+			label: "Club settings",
+			description: "Keep the public club details current.",
+			to: "/admin/club-settings",
+		},
+	],
 	secretary: [
 		{
 			label: "Record attendance & minutes",
@@ -137,6 +158,40 @@ export const OFFICER_TASKS: Partial<Record<OfficerPosition, OfficerTask[]>> = {
 			to: "/roster",
 		},
 	],
+	sergeant_at_arms: [
+		{
+			label: "Set up the next meeting",
+			description: "Prep the room and agenda for what's coming up.",
+			to: "/next",
+		},
+		{
+			label: "Meeting-role catalog",
+			description: "The roles that keep a meeting running.",
+			to: "/admin/roles",
+		},
+		{
+			label: "Roster",
+			description: "Know who's who to greet members and guests.",
+			to: "/roster",
+		},
+	],
+	immediate_past_president: [
+		{
+			label: "Distinguished Club Program",
+			description: "Advise the President on the year's DCP goals.",
+			to: "/admin/dcp",
+		},
+		{
+			label: "Season at a glance",
+			description: "Keep an eye on how meetings are filling.",
+			to: "/schedule",
+		},
+		{
+			label: "Activity log",
+			description: "Recent changes across the club.",
+			to: "/activity",
+		},
+	],
 };
 
 export interface OfficerHomeSection {
@@ -147,19 +202,19 @@ export interface OfficerHomeSection {
 
 /**
  * Build the officer home for the positions a member holds: the common band plus
- * one section per office that has specific tasks, ordered President-first.
+ * one section per office, ordered President-first. Every office has a non-empty
+ * task list (#269), so every held office yields a section.
  */
 export function buildOfficerHome(positions: OfficerPosition[]): {
 	common: OfficerTask[];
 	sections: OfficerHomeSection[];
 } {
-	const sections = positions
-		.filter((p): p is OfficerPosition => !!OFFICER_TASKS[p])
+	const sections = [...positions]
 		.sort((a, b) => officerRank(a) - officerRank(b))
 		.map((position) => ({
 			position,
 			label: officerPositionLabel(position),
-			tasks: OFFICER_TASKS[position] ?? [],
+			tasks: OFFICER_TASKS[position],
 		}));
 	return { common: COMMON_TASKS, sections };
 }
