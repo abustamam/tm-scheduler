@@ -33,7 +33,7 @@ export const getSeasonGrid = createServerFn({ method: "GET" })
 	.handler(async ({ data }) => {
 		const user = await requireUser();
 		await requireClubViewAccess(user.id, data.clubId);
-		return loadSeasonGrid(data);
+		return loadSeasonGrid({ ...data, includeContact: true });
 	});
 
 /**
@@ -44,4 +44,4 @@ export const getSeasonGrid = createServerFn({ method: "GET" })
  */
 export const getPublicSeasonGrid = createServerFn({ method: "GET" })
 	.validator((input: unknown) => seasonGridInput.parse(input))
-	.handler(async ({ data }) => loadSeasonGrid(data));
+	.handler(async ({ data }) => loadSeasonGrid({ ...data, includeContact: false }));
