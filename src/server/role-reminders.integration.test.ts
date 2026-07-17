@@ -306,6 +306,42 @@ describe.skipIf(!hasTestDb)("role-reminder producer (#272)", () => {
 		expect(row.lastError).toBeNull();
 	});
 
+	// --- fan-out regression (#282): non-unique people.user_id ----------------
+
+	it("does not fan out when the account links to multiple Person rows (#282)", async () => {
+		await moveMeetingToSendWindow();
+		await holdSeededSlot();
+		await produceRoleReminders({ now: () => SEND_PRODUCE_NOW });
+
+		// A duplicate Person sharing the member's sign-in account, opted OUT. Because
+		// people.user_id is not unique, a user_id-based join fans the single reminder
+		// out to both rows and could honor the wrong opt-out. The send must resolve
+		// the member's own Person (opted in) via the membership and mail exactly once.
+		await testDb.insert(people).values({
+			name: "Duplicate identity",
+			email: `dup-${randomUUID()}@test.example`,
+			userId: club.memberUserId,
+			reminderOptOut: true,
+		});
+
+		const sendEmail = okSender();
+		const result = await processDueNotifications({
+			sendEmail,
+			now: () => SEND_NOW,
+		});
+
+		// No fan-out: one due row, delivered once to the member (not suppressed by the
+		// opted-out duplicate). Pre-fix this was due=2 and order-dependently wrong.
+		expect(result.due).toBe(1);
+		expect(result.sent).toBe(1);
+		expect(
+			sendEmail.mock.calls.filter((c) => c[0].to === memberEmail),
+		).toHaveLength(1);
+		const [row] = await listReminders();
+		expect(row.sentAt).toBeInstanceOf(Date);
+		expect(row.lastError).toBeNull();
+	});
+
 	// --- stale-assignment safety (the AC that makes this PR safe) -------------
 
 	it("does NOT send a reminder for a slot reassigned before send time", async () => {

@@ -15,6 +15,7 @@ import { db } from "#/db";
 import {
 	clubs,
 	meetings,
+	members,
 	notifications,
 	people,
 	roleDefinitions,
@@ -217,10 +218,26 @@ export async function selectDueNotifications(
 			})
 			.from(notifications)
 			.innerJoin(user, eq(user.id, notifications.userId))
-			// Reminders address members, who always have a Person (ADR-0008 Phase B:
-			// people.user_id). The join yields the personId for the unsubscribe link and
-			// the recipient's opt-out preference (#274).
-			.innerJoin(people, eq(people.userId, notifications.userId))
+			// Resolve the recipient Person, preferring the notification's membership
+			// (assigned_member_id → members.person_id) — a strict 1:1 that yields the
+			// personId for the unsubscribe link and the recipient's opt-out (#274).
+			// A role reminder MUST resolve via the member and NOT via user_id, because
+			// `people.user_id` is not unique (one sign-in account links to several
+			// Person rows via email-match linking / multi-club identities): a user_id
+			// join fans out, inflating the due set and reading an arbitrary duplicate's
+			// opt-out + unsubscribe id (see #282). Rows without a member (generic
+			// notifications, e.g. the #271 foundation) fall back to the user_id match.
+			.leftJoin(members, eq(members.id, notifications.assignedMemberId))
+			.innerJoin(
+				people,
+				or(
+					eq(people.id, members.personId),
+					and(
+						isNull(notifications.assignedMemberId),
+						eq(people.userId, notifications.userId),
+					),
+				),
+			)
 			.innerJoin(roleSlots, eq(roleSlots.id, notifications.slotId))
 			.innerJoin(
 				roleDefinitions,
