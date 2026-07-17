@@ -67,6 +67,16 @@ export interface DueNotification {
 	roleName: string;
 	clubName: string;
 	meetingScheduledAt: Date;
+	// Send-time staleness re-validation for role-assignment reminders (#272).
+	// `expectedAssignedMemberId` is the assignee the reminder was enqueued FOR
+	// (NULL ⇒ not a role reminder — e.g. a #271 row — so it is never re-validated);
+	// the other three are the slot/meeting's CURRENT state. When they no longer
+	// agree (reassigned/released, or the meeting is completed/cancelled) the
+	// reminder is stale and suppressed instead of sent.
+	expectedAssignedMemberId: string | null;
+	currentAssignedMemberId: string | null;
+	slotStatus: string;
+	meetingStatus: string;
 }
 
 export interface ProcessResult {
@@ -80,6 +90,9 @@ export interface ProcessResult {
 	skipped: number;
 	/** Rows finalized without sending because the recipient opted out (#274). */
 	suppressed: number;
+	/** Rows finalized without sending because the role assignment went stale —
+	 *  reassigned/released, or the meeting is no longer scheduled (#272). */
+	stale: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -197,6 +210,10 @@ export async function selectDueNotifications(
 				roleName: roleDefinitions.name,
 				clubName: clubs.name,
 				meetingScheduledAt: meetings.scheduledAt,
+				expectedAssignedMemberId: notifications.assignedMemberId,
+				currentAssignedMemberId: roleSlots.assignedMemberId,
+				slotStatus: roleSlots.status,
+				meetingStatus: meetings.status,
 			})
 			.from(notifications)
 			.innerJoin(user, eq(user.id, notifications.userId))
@@ -289,6 +306,41 @@ async function markSuppressed(id: string, now: Date): Promise<void> {
 }
 
 /**
+ * Finalize a claimed row WITHOUT sending because the role assignment it names is
+ * no longer current (#272 stale-assignment safety). Sets `sent_at` (terminal —
+ * never retried) and records the reason. This is the send-time half of the
+ * robust staleness approach: the producer records the intended `assigned_member_id`
+ * and the poller checks it against reality here, so a slot reassigned/released —
+ * or a meeting completed/cancelled — after enqueue but before send never mails a
+ * reminder that stopped being true.
+ */
+async function markStale(id: string, now: Date): Promise<void> {
+	await db
+		.update(notifications)
+		.set({
+			sentAt: now,
+			lastError: "suppressed: role assignment changed before send",
+		})
+		.where(eq(notifications.id, id));
+}
+
+/**
+ * Is a due role-assignment reminder still accurate? True unless it named an
+ * assignee (`expectedAssignedMemberId` set) whose slot no longer matches: the
+ * slot must still be HELD BY THAT MEMBER, still `claimed`/`confirmed`, on a
+ * still-`scheduled` meeting. A NULL member reference is not a role reminder
+ * (#271 rows) and is always considered current.
+ */
+export function isRoleReminderStale(row: DueNotification): boolean {
+	if (row.expectedAssignedMemberId === null) return false;
+	return (
+		row.currentAssignedMemberId !== row.expectedAssignedMemberId ||
+		(row.slotStatus !== "claimed" && row.slotStatus !== "confirmed") ||
+		row.meetingStatus !== "scheduled"
+	);
+}
+
+/**
  * Process one batch of due notifications: for each due row, claim it (at-most-
  * once), route by `channel`, deliver, and mark the outcome. Delivery failures
  * are logged and left unsent for a bounded retry; they never abort the batch.
@@ -305,11 +357,21 @@ export async function processDueNotifications(
 	let failed = 0;
 	let skipped = 0;
 	let suppressed = 0;
+	let stale = 0;
 
 	for (const row of due) {
 		// Claim before sending — the loser of a concurrent claim skips here.
 		const won = await claimNotification(row.id, row.attempts, now);
 		if (!won) continue;
+
+		// Re-validate a role-assignment reminder against the live slot (#272). A
+		// reminder whose slot was reassigned/released — or whose meeting is no
+		// longer scheduled — since enqueue is stale; finalize it without sending.
+		if (isRoleReminderStale(row)) {
+			await markStale(row.id, now);
+			stale++;
+			continue;
+		}
 
 		// Honor the member's opt-out at send time (#274). Finalize without sending
 		// so an opt-out that landed after enqueue never mails the person.
@@ -344,5 +406,5 @@ export async function processDueNotifications(
 		}
 	}
 
-	return { due: due.length, sent, failed, skipped, suppressed };
+	return { due: due.length, sent, failed, skipped, suppressed, stale };
 }

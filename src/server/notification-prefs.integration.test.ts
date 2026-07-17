@@ -63,9 +63,9 @@ describe.skipIf(!hasTestDb)("reminder control layer (#274)", () => {
 
 	// --- Club-level settings -------------------------------------------------
 
-	it("getClubReminderSettings returns the conservative defaults for a fresh club", async () => {
+	it("getClubReminderSettings returns the defaults (reminders off) for a fresh club", async () => {
 		const settings = await getClubReminderSettings(club.clubId);
-		expect(settings).toEqual({ enabled: true, leadTimeDays: 3 });
+		expect(settings).toEqual({ enabled: false, leadTimeDays: 3 });
 		expect(settings).toEqual(DEFAULT_CLUB_REMINDER_SETTINGS);
 	});
 

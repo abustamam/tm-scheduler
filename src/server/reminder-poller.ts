@@ -7,6 +7,7 @@
 // referenced solely from the Nitro plugin — never from a client route — so it
 // stays out of the client bundle.
 import { processDueNotifications } from "./notifications-logic";
+import { produceRoleReminders } from "./role-reminders-logic";
 
 /** Default cadence; override with `REMINDER_POLL_INTERVAL_MS`. */
 const DEFAULT_POLL_INTERVAL_MS = 60_000;
@@ -23,19 +24,38 @@ let timer: ReturnType<typeof setInterval> | null = null;
 let ticking = false;
 
 /**
- * Run one poll tick. Overlap guard: if the previous tick is still in flight when
- * the interval fires (a slow send batch), skip this one so ticks never stack up
- * in the single process. A thrown error is logged and swallowed — the poller
- * must survive a bad tick and keep running.
+ * Run one poll tick: ENQUEUE-then-SEND. First the role-reminder producer (#272)
+ * tops up the queue with reminders for upcoming slot holders; then the delivery
+ * loop (#271) drains everything currently due. The producer is idempotent (a
+ * partial unique index makes a re-enqueue a no-op), so running it every tick is
+ * safe and needs no separate cadence. A producer failure is logged but never
+ * blocks the send pass — delivery of already-queued reminders must still happen.
+ *
+ * Overlap guard: if the previous tick is still in flight when the interval fires
+ * (a slow send batch), skip this one so ticks never stack up in the single
+ * process. A thrown error is logged and swallowed — the poller must survive a
+ * bad tick and keep running.
  */
 async function tick(): Promise<void> {
 	if (ticking) return;
 	ticking = true;
 	try {
+		try {
+			const produced = await produceRoleReminders();
+			if (produced.enqueued > 0) {
+				console.log(
+					`[reminders] produced: enqueued=${produced.enqueued} duplicates=${produced.duplicates} optedOut=${produced.optedOut} disabled=${produced.disabled}`,
+				);
+			}
+		} catch (err) {
+			// Never let a producer error skip the send pass below.
+			console.error("[reminders] producer failed:", err);
+		}
+
 		const result = await processDueNotifications();
 		if (result.due > 0) {
 			console.log(
-				`[reminders] tick: due=${result.due} sent=${result.sent} failed=${result.failed} skipped=${result.skipped} suppressed=${result.suppressed}`,
+				`[reminders] tick: due=${result.due} sent=${result.sent} failed=${result.failed} skipped=${result.skipped} suppressed=${result.suppressed} stale=${result.stale}`,
 			);
 		}
 	} catch (err) {

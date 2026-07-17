@@ -28,14 +28,13 @@ export interface ClubReminderSettings {
 }
 
 /**
- * Conservative defaults so a club that never opens settings still behaves
- * reasonably (#274): reminders ON, 3 days ahead. These also back the column
- * defaults in the schema, so every existing club got them at migration time —
- * `getClubReminderSettings` returns these verbatim only for the (unexpected)
- * missing-club case.
+ * Fallback for the (unexpected) missing-club case — `getClubReminderSettings`
+ * returns these only when no club row is found. Matches the schema column
+ * defaults: reminders OFF (opt-in per club — soft launch, see schema.ts / #272),
+ * 3 days ahead.
  */
 export const DEFAULT_CLUB_REMINDER_SETTINGS: ClubReminderSettings = {
-	enabled: true,
+	enabled: false,
 	leadTimeDays: 3,
 };
 

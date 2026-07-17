@@ -160,13 +160,14 @@ export const clubs = pgTable("clubs", {
 	// scalar knobs the admin/VP-Education sets on /admin/club-settings; the role-
 	// reminder producer (#272) reads them. `reminder_enabled` gates whether the
 	// club sends role reminders at all; `reminder_lead_time_days` is how many days
-	// before a meeting to remind slot holders. Both non-null with conservative
-	// defaults so an untouched club behaves reasonably (enabled, 3 days ahead) —
-	// the migration backfills every existing club with these. Modeled as columns
-	// on `clubs` (like `default_meeting_minutes`), not a 1:1 table: they are two
-	// scalars with universal defaults, unlike the multi-field, check-constrained
-	// `club_meeting_recurrence`.
-	reminderEnabled: boolean("reminder_enabled").notNull().default(true),
+	// before a meeting to remind slot holders. Both non-null. `reminder_enabled`
+	// defaults FALSE — role reminders are opt-in per club (soft launch): a club
+	// turns them on from /admin/club-settings once ready, and the 0036 migration
+	// flips every existing club off. `reminder_lead_time_days` defaults 3. Modeled
+	// as columns on `clubs` (like `default_meeting_minutes`), not a 1:1 table: they
+	// are two scalars with universal defaults, unlike the multi-field,
+	// check-constrained `club_meeting_recurrence`.
+	reminderEnabled: boolean("reminder_enabled").notNull().default(false),
 	reminderLeadTimeDays: integer("reminder_lead_time_days").notNull().default(3),
 	// Soft-archive (ADR-0016 / #186). NULL = active; a set timestamp = archived.
 	// Reversible: unarchive clears it. Archiving retains all club data untouched
@@ -1087,26 +1088,51 @@ export const impersonationSessions = pgTable(
 // carries the retry/error bookkeeping the poller needs.
 // ---------------------------------------------------------------------------
 
-export const notifications = pgTable("notifications", {
-	id: uuid("id").defaultRandom().primaryKey(),
-	userId: text("user_id")
-		.notNull()
-		.references(() => user.id, { onDelete: "cascade" }),
-	slotId: uuid("slot_id")
-		.notNull()
-		.references(() => roleSlots.id, { onDelete: "cascade" }),
-	type: text("type").notNull(),
-	channel: text("channel").notNull(),
-	sendAt: timestamp("send_at", { withTimezone: true }).notNull(),
-	sentAt: timestamp("sent_at", { withTimezone: true }),
-	// Delivery bookkeeping (#271). `attempts` is the optimistic-lock token the
-	// poller bumps to claim a row before sending (at-most-once under concurrent
-	// ticks); once it reaches the max the row is abandoned. `last_attempted_at`
-	// paces retries (backoff) and `last_error` records the most recent failure.
-	attempts: integer("attempts").notNull().default(0),
-	lastAttemptedAt: timestamp("last_attempted_at", { withTimezone: true }),
-	lastError: text("last_error"),
-});
+export const notifications = pgTable(
+	"notifications",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		userId: text("user_id")
+			.notNull()
+			.references(() => user.id, { onDelete: "cascade" }),
+		slotId: uuid("slot_id")
+			.notNull()
+			.references(() => roleSlots.id, { onDelete: "cascade" }),
+		// The membership the role reminder is FOR — the assignee holding the slot at
+		// enqueue time (#272). Two jobs: (1) it is the dedup key alongside `slot_id`
+		// (one reminder per member per slot — see the partial unique index below),
+		// and (2) the send-time staleness re-validation compares it against the
+		// slot's CURRENT `assigned_member_id`: if the slot was reassigned/released or
+		// the meeting is no longer scheduled, the poller suppresses the row instead
+		// of mailing a stale reminder. NULL for non-role-assignment rows (e.g. the
+		// #271 delivery-foundation tests), which are never re-validated. On member
+		// delete → cascade: a reminder about a removed member is meaningless.
+		assignedMemberId: uuid("assigned_member_id").references(() => members.id, {
+			onDelete: "cascade",
+		}),
+		type: text("type").notNull(),
+		channel: text("channel").notNull(),
+		sendAt: timestamp("send_at", { withTimezone: true }).notNull(),
+		sentAt: timestamp("sent_at", { withTimezone: true }),
+		// Delivery bookkeeping (#271). `attempts` is the optimistic-lock token the
+		// poller bumps to claim a row before sending (at-most-once under concurrent
+		// ticks); once it reaches the max the row is abandoned. `last_attempted_at`
+		// paces retries (backoff) and `last_error` records the most recent failure.
+		attempts: integer("attempts").notNull().default(0),
+		lastAttemptedAt: timestamp("last_attempted_at", { withTimezone: true }),
+		lastError: text("last_error"),
+	},
+	(t) => [
+		// Idempotent enqueue (#272): at most one reminder per (slot, member). The
+		// producer inserts with ON CONFLICT DO NOTHING against this arbiter, so a
+		// re-run (every poller tick) never creates a duplicate. Partial (WHERE
+		// assigned_member_id IS NOT NULL) so the many #271 rows with a NULL member
+		// reference are unconstrained and never collide.
+		uniqueIndex("notifications_slot_member_unique")
+			.on(t.slotId, t.assignedMemberId)
+			.where(sql`${t.assignedMemberId} is not null`),
+	],
+);
 
 // ---------------------------------------------------------------------------
 // Relations
