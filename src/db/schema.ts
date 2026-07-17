@@ -1060,7 +1060,11 @@ export const impersonationSessions = pgTable(
 );
 
 // ---------------------------------------------------------------------------
-// Notifications — table only; sending logic is out of scope for the MVP.
+// Notifications — the reminder delivery queue. A row is DUE when
+// `send_at <= now()` AND `sent_at IS NULL`; the in-process poller (#271,
+// `src/server/reminder-poller.ts`) claims and delivers due rows exactly once.
+// Producers (#272 role reminders / #274 preferences) enqueue rows; this table
+// carries the retry/error bookkeeping the poller needs.
 // ---------------------------------------------------------------------------
 
 export const notifications = pgTable("notifications", {
@@ -1075,6 +1079,13 @@ export const notifications = pgTable("notifications", {
 	channel: text("channel").notNull(),
 	sendAt: timestamp("send_at", { withTimezone: true }).notNull(),
 	sentAt: timestamp("sent_at", { withTimezone: true }),
+	// Delivery bookkeeping (#271). `attempts` is the optimistic-lock token the
+	// poller bumps to claim a row before sending (at-most-once under concurrent
+	// ticks); once it reaches the max the row is abandoned. `last_attempted_at`
+	// paces retries (backoff) and `last_error` records the most recent failure.
+	attempts: integer("attempts").notNull().default(0),
+	lastAttemptedAt: timestamp("last_attempted_at", { withTimezone: true }),
+	lastError: text("last_error"),
 });
 
 // ---------------------------------------------------------------------------

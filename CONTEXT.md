@@ -186,9 +186,11 @@ the nouns in `src/db/schema.ts`.
 detail capture, `/me` commitments with release, admin meeting creation with slot generation,
 seed data.
 
-**Out of scope (schema must not block, but build no logic):** reminder/notification sending
-(the `notifications` table exists, unused), swap matching, role-rotation fairness, Pathways
-progress dashboards, multi-club switching UI, calendar export. These are the later phases.
+**Out of scope (schema must not block, but build no logic):** swap matching, role-rotation
+fairness, Pathways progress dashboards, multi-club switching UI, calendar export. These are the
+later phases. (Reminder **delivery** is now built — the `notifications` table is drained by an
+in-process poller, #271 / ADR-0023 — but the **producers** that enqueue rows, #272, and
+notification **preferences/unsubscribe**, #274, are still later phases.)
 
 ## Invariants
 
@@ -207,6 +209,9 @@ progress dashboards, multi-club switching UI, calendar export. These are the lat
   lifts the lock. Enforced at `resolveMeetingAgendaAuthz` / `assertMeetingNotLocked`, not the UI
   (ADR-0012).
 - `src/server/*` touches `db`/`pg` and must never be imported by client components.
+- A `notifications` row is delivered **at most once**: the poller claims it with a conditional
+  update (bump `attempts` / stamp `last_attempted_at` `WHERE sent_at IS NULL AND attempts = <read>`)
+  before sending, then sets `sent_at` on success. Never send without claiming first (ADR-0023).
 
 ## Where decisions live
 
