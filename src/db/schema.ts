@@ -160,13 +160,14 @@ export const clubs = pgTable("clubs", {
 	// scalar knobs the admin/VP-Education sets on /admin/club-settings; the role-
 	// reminder producer (#272) reads them. `reminder_enabled` gates whether the
 	// club sends role reminders at all; `reminder_lead_time_days` is how many days
-	// before a meeting to remind slot holders. Both non-null with conservative
-	// defaults so an untouched club behaves reasonably (enabled, 3 days ahead) —
-	// the migration backfills every existing club with these. Modeled as columns
-	// on `clubs` (like `default_meeting_minutes`), not a 1:1 table: they are two
-	// scalars with universal defaults, unlike the multi-field, check-constrained
-	// `club_meeting_recurrence`.
-	reminderEnabled: boolean("reminder_enabled").notNull().default(true),
+	// before a meeting to remind slot holders. Both non-null. `reminder_enabled`
+	// defaults FALSE — role reminders are opt-in per club (soft launch): a club
+	// turns them on from /admin/club-settings once ready, and the 0036 migration
+	// flips every existing club off. `reminder_lead_time_days` defaults 3. Modeled
+	// as columns on `clubs` (like `default_meeting_minutes`), not a 1:1 table: they
+	// are two scalars with universal defaults, unlike the multi-field,
+	// check-constrained `club_meeting_recurrence`.
+	reminderEnabled: boolean("reminder_enabled").notNull().default(false),
 	reminderLeadTimeDays: integer("reminder_lead_time_days").notNull().default(3),
 	// Soft-archive (ADR-0016 / #186). NULL = active; a set timestamp = archived.
 	// Reversible: unarchive clears it. Archiving retains all club data untouched

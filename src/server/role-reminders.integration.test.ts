@@ -80,6 +80,13 @@ describe.skipIf(!hasTestDb)("role-reminder producer (#272)", () => {
 
 	beforeEach(async () => {
 		club = await seedClub();
+		// Role reminders are opt-in per club (default off — soft launch), so enable
+		// this test club to give the producer's happy-path cases an enabled baseline.
+		// The "disabled" case below overrides it back to false.
+		await testDb
+			.update(clubs)
+			.set({ reminderEnabled: true })
+			.where(eq(clubs.id, club.clubId));
 		extraUserIds = [];
 		memberEmail = `member-${club.memberUserId}@test.example`;
 		const [m] = await testDb
