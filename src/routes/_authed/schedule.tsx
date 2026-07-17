@@ -1,6 +1,7 @@
 import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { SeasonGrid } from "#/components/club/season-grid";
 import { PageContainer } from "#/components/page-container";
+import { ShareLinkButton } from "#/components/share-link-button";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import type { Orientation } from "#/lib/season-grid-view";
 import { getSeasonGrid, type SeasonGridCount } from "#/server/season-grid";
@@ -40,14 +41,23 @@ function SeasonGridPage() {
 
 	return (
 		<PageContainer className="space-y-4">
-			<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
-				Sign-up sheet
-			</h1>
+			<div className="flex flex-wrap items-center justify-between gap-3">
+				<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
+					Sign-up sheet
+				</h1>
+				{data?.clubSlug ? (
+					<ShareLinkButton
+						path={`/club/${data.clubSlug}`}
+						label="Copy sign-up sheet link"
+					/>
+				) : null}
+			</div>
 			{data ? (
 				<SeasonGrid
 					data={data}
 					orientation={view}
 					count={count}
+					showContact
 					currentMemberId={currentMemberId}
 					canManageOthers={canManageOthers}
 					clubId={activeClubId ?? undefined}
