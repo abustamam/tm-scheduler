@@ -16,6 +16,7 @@ import {
 	clubs,
 	meetings,
 	notifications,
+	people,
 	roleDefinitions,
 	roleSlots,
 	user,
@@ -23,6 +24,7 @@ import {
 import type { SendEmailParams } from "#/lib/email";
 import { sendEmail as realSendEmail } from "#/lib/email";
 import { formatMeetingDate } from "#/lib/format";
+import { buildUnsubscribeUrl } from "#/lib/unsubscribe-token";
 
 /** Give up on a row after this many failed attempts (bounded retry). */
 export const MAX_SEND_ATTEMPTS = 5;
@@ -55,6 +57,11 @@ export interface DueNotification {
 	type: string;
 	channel: string;
 	attempts: number;
+	/** The recipient's Person (people.id) — for the per-person unsubscribe link
+	 *  and the send-time opt-out check (#274). */
+	personId: string;
+	/** The recipient Person's reminder opt-out preference (#274). */
+	reminderOptOut: boolean;
 	recipientEmail: string;
 	recipientName: string;
 	roleName: string;
@@ -71,6 +78,8 @@ export interface ProcessResult {
 	failed: number;
 	/** Rows skipped for an unsupported channel (recorded as an error). */
 	skipped: number;
+	/** Rows finalized without sending because the recipient opted out (#274). */
+	suppressed: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -90,6 +99,9 @@ export function buildNotificationEmail(row: {
 	roleName: string;
 	clubName: string;
 	meetingScheduledAt: Date;
+	/** The one-click, no-auth unsubscribe URL for this recipient (#274). Every
+	 *  reminder email carries it (deliverability + etiquette). */
+	unsubscribeUrl: string;
 }): NotificationEmailContent {
 	const when = formatMeetingDate(row.meetingScheduledAt);
 	const subject = `Reminder: you're ${row.roleName} at ${row.clubName} on ${when}`;
@@ -101,12 +113,19 @@ export function buildNotificationEmail(row: {
 		"",
 		"See you there!",
 		row.clubName,
+		"",
+		"—",
+		`Don't want role reminders? Unsubscribe: ${row.unsubscribeUrl}`,
 	].join("\n");
 
 	const html = `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.5;color:#18181b;">
   <p>Hi ${escapeHtml(row.recipientName)},</p>
   <p>This is a reminder that you're signed up as <strong>${escapeHtml(row.roleName)}</strong> for ${escapeHtml(row.clubName)}'s meeting on <strong>${escapeHtml(when)}</strong>.</p>
   <p>See you there!<br>${escapeHtml(row.clubName)}</p>
+  <p style="font-size:12px;color:#a1a1aa;margin-top:24px;">
+    Don't want role reminders?
+    <a href="${escapeHtml(row.unsubscribeUrl)}" style="color:#71717a;">Unsubscribe</a>.
+  </p>
 </div>`;
 
 	return { subject, html, text };
@@ -164,40 +183,48 @@ export async function selectDueNotifications(
 	limit: number,
 ): Promise<DueNotification[]> {
 	const retryReady = new Date(now.getTime() - RETRY_BACKOFF_MS);
-	return db
-		.select({
-			id: notifications.id,
-			type: notifications.type,
-			channel: notifications.channel,
-			attempts: notifications.attempts,
-			recipientEmail: user.email,
-			recipientName: user.name,
-			roleName: roleDefinitions.name,
-			clubName: clubs.name,
-			meetingScheduledAt: meetings.scheduledAt,
-		})
-		.from(notifications)
-		.innerJoin(user, eq(user.id, notifications.userId))
-		.innerJoin(roleSlots, eq(roleSlots.id, notifications.slotId))
-		.innerJoin(
-			roleDefinitions,
-			eq(roleDefinitions.id, roleSlots.roleDefinitionId),
-		)
-		.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
-		.innerJoin(clubs, eq(clubs.id, meetings.clubId))
-		.where(
-			and(
-				lte(notifications.sendAt, now),
-				isNull(notifications.sentAt),
-				lt(notifications.attempts, MAX_SEND_ATTEMPTS),
-				or(
-					isNull(notifications.lastAttemptedAt),
-					lte(notifications.lastAttemptedAt, retryReady),
+	return (
+		db
+			.select({
+				id: notifications.id,
+				type: notifications.type,
+				channel: notifications.channel,
+				attempts: notifications.attempts,
+				personId: people.id,
+				reminderOptOut: people.reminderOptOut,
+				recipientEmail: user.email,
+				recipientName: user.name,
+				roleName: roleDefinitions.name,
+				clubName: clubs.name,
+				meetingScheduledAt: meetings.scheduledAt,
+			})
+			.from(notifications)
+			.innerJoin(user, eq(user.id, notifications.userId))
+			// Reminders address members, who always have a Person (ADR-0008 Phase B:
+			// people.user_id). The join yields the personId for the unsubscribe link and
+			// the recipient's opt-out preference (#274).
+			.innerJoin(people, eq(people.userId, notifications.userId))
+			.innerJoin(roleSlots, eq(roleSlots.id, notifications.slotId))
+			.innerJoin(
+				roleDefinitions,
+				eq(roleDefinitions.id, roleSlots.roleDefinitionId),
+			)
+			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+			.innerJoin(clubs, eq(clubs.id, meetings.clubId))
+			.where(
+				and(
+					lte(notifications.sendAt, now),
+					isNull(notifications.sentAt),
+					lt(notifications.attempts, MAX_SEND_ATTEMPTS),
+					or(
+						isNull(notifications.lastAttemptedAt),
+						lte(notifications.lastAttemptedAt, retryReady),
+					),
 				),
-			),
-		)
-		.orderBy(asc(notifications.sendAt))
-		.limit(limit);
+			)
+			.orderBy(asc(notifications.sendAt))
+			.limit(limit)
+	);
 }
 
 /**
@@ -245,6 +272,23 @@ async function recordFailure(id: string, message: string): Promise<void> {
 }
 
 /**
+ * Finalize a claimed row WITHOUT sending because the recipient opted out (#274).
+ * Sets `sent_at` (terminal — never retried, never lingers in the due set) and
+ * records the reason. The producer (#272) already skips opted-out people, so
+ * this only catches an opt-out that landed AFTER the row was enqueued but before
+ * it was due — the send-time honoring of the member's preference (#274 AC).
+ */
+async function markSuppressed(id: string, now: Date): Promise<void> {
+	await db
+		.update(notifications)
+		.set({
+			sentAt: now,
+			lastError: "suppressed: recipient opted out of reminders",
+		})
+		.where(eq(notifications.id, id));
+}
+
+/**
  * Process one batch of due notifications: for each due row, claim it (at-most-
  * once), route by `channel`, deliver, and mark the outcome. Delivery failures
  * are logged and left unsent for a bounded retry; they never abort the batch.
@@ -260,11 +304,20 @@ export async function processDueNotifications(
 	let sent = 0;
 	let failed = 0;
 	let skipped = 0;
+	let suppressed = 0;
 
 	for (const row of due) {
 		// Claim before sending — the loser of a concurrent claim skips here.
 		const won = await claimNotification(row.id, row.attempts, now);
 		if (!won) continue;
+
+		// Honor the member's opt-out at send time (#274). Finalize without sending
+		// so an opt-out that landed after enqueue never mails the person.
+		if (row.reminderOptOut) {
+			await markSuppressed(row.id, now);
+			suppressed++;
+			continue;
+		}
 
 		// Route by channel. Only `email` is wired in this foundation (#271); an
 		// unknown channel is recorded as an error (the attempts bump already spent
@@ -276,7 +329,10 @@ export async function processDueNotifications(
 		}
 
 		try {
-			const email = buildNotificationEmail(row);
+			const email = buildNotificationEmail({
+				...row,
+				unsubscribeUrl: buildUnsubscribeUrl(row.personId),
+			});
 			await deps.sendEmail({ to: row.recipientEmail, ...email });
 			await markSent(row.id, deps.now());
 			sent++;
@@ -288,5 +344,5 @@ export async function processDueNotifications(
 		}
 	}
 
-	return { due: due.length, sent, failed, skipped };
+	return { due: due.length, sent, failed, skipped, suppressed };
 }

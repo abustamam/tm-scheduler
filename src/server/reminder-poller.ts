@@ -35,7 +35,7 @@ async function tick(): Promise<void> {
 		const result = await processDueNotifications();
 		if (result.due > 0) {
 			console.log(
-				`[reminders] tick: due=${result.due} sent=${result.sent} failed=${result.failed} skipped=${result.skipped}`,
+				`[reminders] tick: due=${result.due} sent=${result.sent} failed=${result.failed} skipped=${result.skipped} suppressed=${result.suppressed}`,
 			);
 		}
 	} catch (err) {

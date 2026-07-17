@@ -8,6 +8,10 @@ import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { getClubProfileSettings, updateClubProfile } from "#/server/clubs";
+import {
+	loadClubReminderSettings,
+	updateClubReminderSettings,
+} from "#/server/notification-prefs";
 
 export const Route = createFileRoute("/_authed/admin/club-settings")({
 	beforeLoad: ({ context }) => {
@@ -18,10 +22,11 @@ export const Route = createFileRoute("/_authed/admin/club-settings")({
 		return { adminClub };
 	},
 	loader: async ({ context }) => {
-		const profile = await getClubProfileSettings({
-			data: context.adminClub.clubId,
-		});
-		return { profile };
+		const [profile, reminders] = await Promise.all([
+			getClubProfileSettings({ data: context.adminClub.clubId }),
+			loadClubReminderSettings({ data: context.adminClub.clubId }),
+		]);
+		return { profile, reminders };
 	},
 	component: ClubSettings,
 });
@@ -31,9 +36,14 @@ const textareaClass =
 
 function ClubSettings() {
 	const { adminClub } = Route.useRouteContext();
-	const { profile } = Route.useLoaderData();
+	const { profile, reminders } = Route.useLoaderData();
 	const router = useRouter();
 	const [submitting, setSubmitting] = useState(false);
+	const [remindersEnabled, setRemindersEnabled] = useState(reminders.enabled);
+	const [leadTimeDays, setLeadTimeDays] = useState(
+		String(reminders.leadTimeDays),
+	);
+	const [savingReminders, setSavingReminders] = useState(false);
 
 	async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
 		e.preventDefault();
@@ -54,6 +64,31 @@ function ClubSettings() {
 			toast.error(err instanceof Error ? err.message : "Something went wrong.");
 		} finally {
 			setSubmitting(false);
+		}
+	}
+
+	async function onSaveReminders(e: React.FormEvent<HTMLFormElement>) {
+		e.preventDefault();
+		const days = Number.parseInt(leadTimeDays, 10);
+		if (!Number.isFinite(days) || days < 0 || days > 60) {
+			toast.error("Lead time must be a whole number of days (0–60).");
+			return;
+		}
+		setSavingReminders(true);
+		try {
+			await updateClubReminderSettings({
+				data: {
+					clubId: adminClub.clubId,
+					enabled: remindersEnabled,
+					leadTimeDays: days,
+				},
+			});
+			toast.success("Reminder settings saved.");
+			await router.invalidate();
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+		} finally {
+			setSavingReminders(false);
 		}
 	}
 
@@ -105,6 +140,55 @@ function ClubSettings() {
 						<Loader2 className="size-4 animate-spin" />
 					) : (
 						"Save club profile"
+					)}
+				</Button>
+			</form>
+
+			<div className="pt-2">
+				<h2 className="font-display text-xl font-semibold tracking-[-0.01em]">
+					Role reminders
+				</h2>
+				<p className="text-sm text-muted-foreground">
+					Email members a reminder before a meeting when they're signed up for a
+					role. Members can opt out individually. Off by club here disables role
+					reminders entirely.
+				</p>
+			</div>
+
+			<form onSubmit={onSaveReminders} className="max-w-xl space-y-4">
+				<label className="flex items-center gap-2 text-sm font-medium">
+					<input
+						type="checkbox"
+						checked={remindersEnabled}
+						onChange={(e) => setRemindersEnabled(e.target.checked)}
+					/>
+					Send role reminders for this club
+				</label>
+				<div className="space-y-2">
+					<Label htmlFor="leadTimeDays">
+						Lead time (days before the meeting)
+					</Label>
+					<Input
+						id="leadTimeDays"
+						name="leadTimeDays"
+						type="number"
+						min={0}
+						max={60}
+						inputMode="numeric"
+						value={leadTimeDays}
+						onChange={(e) => setLeadTimeDays(e.target.value)}
+						disabled={!remindersEnabled}
+						className="max-w-[10rem]"
+					/>
+					<p className="text-xs text-muted-foreground">
+						e.g. 3 = remind members three days before the meeting.
+					</p>
+				</div>
+				<Button type="submit" disabled={savingReminders} className="w-full">
+					{savingReminders ? (
+						<Loader2 className="size-4 animate-spin" />
+					) : (
+						"Save reminder settings"
 					)}
 				</Button>
 			</form>

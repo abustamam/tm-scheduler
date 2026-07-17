@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as UnsubscribeRouteImport } from './routes/unsubscribe'
 import { Route as SigninRouteImport } from './routes/signin'
 import { Route as AuthedRouteImport } from './routes/_authed'
 import { Route as IndexRouteImport } from './routes/index'
@@ -48,6 +49,11 @@ import { Route as ClubClubIdMeetingMeetingIdPrintRouteImport } from './routes/cl
 import { Route as ClubClubIdMeetingMeetingIdPresentRouteImport } from './routes/club.$clubId_.meeting.$meetingId.present'
 import { Route as ApiMeetingsIdMinutesPdfRouteImport } from './routes/api/meetings.$id.minutes.pdf'
 
+const UnsubscribeRoute = UnsubscribeRouteImport.update({
+  id: '/unsubscribe',
+  path: '/unsubscribe',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SigninRoute = SigninRouteImport.update({
   id: '/signin',
   path: '/signin',
@@ -245,6 +251,7 @@ const ApiMeetingsIdMinutesPdfRoute = ApiMeetingsIdMinutesPdfRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/signin': typeof SigninRoute
+  '/unsubscribe': typeof UnsubscribeRoute
   '/activity': typeof AuthedActivityRoute
   '/dashboard': typeof AuthedDashboardRoute
   '/me': typeof AuthedMeRoute
@@ -284,6 +291,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/signin': typeof SigninRoute
+  '/unsubscribe': typeof UnsubscribeRoute
   '/activity': typeof AuthedActivityRoute
   '/dashboard': typeof AuthedDashboardRoute
   '/me': typeof AuthedMeRoute
@@ -323,6 +331,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/_authed': typeof AuthedRouteWithChildren
   '/signin': typeof SigninRoute
+  '/unsubscribe': typeof UnsubscribeRoute
   '/_authed/activity': typeof AuthedActivityRoute
   '/_authed/dashboard': typeof AuthedDashboardRoute
   '/_authed/me': typeof AuthedMeRoute
@@ -364,6 +373,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/signin'
+    | '/unsubscribe'
     | '/activity'
     | '/dashboard'
     | '/me'
@@ -403,6 +413,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/signin'
+    | '/unsubscribe'
     | '/activity'
     | '/dashboard'
     | '/me'
@@ -441,6 +452,7 @@ export interface FileRouteTypes {
     | '/'
     | '/_authed'
     | '/signin'
+    | '/unsubscribe'
     | '/_authed/activity'
     | '/_authed/dashboard'
     | '/_authed/me'
@@ -482,6 +494,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AuthedRoute: typeof AuthedRouteWithChildren
   SigninRoute: typeof SigninRoute
+  UnsubscribeRoute: typeof UnsubscribeRoute
   ApiDevLoginRoute: typeof ApiDevLoginRoute
   ApiHealthRoute: typeof ApiHealthRoute
   ClubClubIdRoute: typeof ClubClubIdRouteWithChildren
@@ -495,6 +508,13 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/unsubscribe': {
+      id: '/unsubscribe'
+      path: '/unsubscribe'
+      fullPath: '/unsubscribe'
+      preLoaderRoute: typeof UnsubscribeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/signin': {
       id: '/signin'
       path: '/signin'
@@ -848,6 +868,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AuthedRoute: AuthedRouteWithChildren,
   SigninRoute: SigninRoute,
+  UnsubscribeRoute: UnsubscribeRoute,
   ApiDevLoginRoute: ApiDevLoginRoute,
   ApiHealthRoute: ApiHealthRoute,
   ClubClubIdRoute: ClubClubIdRouteWithChildren,
