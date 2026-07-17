@@ -39,6 +39,10 @@ export interface SeasonGridRow {
 export interface SeasonGridMember {
 	id: string;
 	name: string;
+	/** Present only on the member axis when contact is included (authed).
+	 *  Never populated for the public sheet or for name-only lookups. */
+	email?: string | null;
+	phone?: string | null;
 }
 export interface SeasonGridCell {
 	/** The `role_slots.id` — needed to claim/release this slot (#198). */
@@ -52,6 +56,10 @@ export interface SeasonGridCell {
 	status: SlotStatus;
 }
 export interface SeasonGridData {
+	/** The club's URL slug — used to build the public sign-up-sheet share link.
+	 *  Optional so existing view/picker test fixtures need not set it; always
+	 *  populated by loadSeasonGrid. */
+	clubSlug?: string | null;
 	meetings: SeasonGridMeeting[];
 	rows: SeasonGridRow[];
 	/** Member-orientation AXIS — active members only (inactive members get no row). */
@@ -72,13 +80,16 @@ const PAST_LOOKBACK = 2;
 export async function loadSeasonGrid(input: {
 	clubId: string;
 	count: SeasonGridCount;
+	/** Include member email/phone on the member axis. Off by default so the
+	 *  public sheet never carries contact PII. */
+	includeContact?: boolean;
 }): Promise<SeasonGridData> {
 	const now = new Date();
 
 	// 1. Columns: up to PAST_LOOKBACK most-recent past meetings + upcoming.
 	const club = await db.query.clubs.findFirst({
 		where: eq(clubs.id, input.clubId),
-		columns: { timezone: true },
+		columns: { timezone: true, slug: true },
 	});
 	const timezone = club?.timezone ?? "UTC";
 
@@ -231,13 +242,23 @@ export async function loadSeasonGrid(input: {
 	//    ones who held a role in the past-lookback window — so the roles
 	//    orientation still resolves their name (history preserved).
 	const allMemberRows = await db
-		.select({ id: members.id, name: members.name, status: members.status })
+		.select({
+			id: members.id,
+			name: members.name,
+			status: members.status,
+			email: members.email,
+			phone: members.phone,
+		})
 		.from(members)
 		.where(eq(members.clubId, input.clubId))
 		.orderBy(asc(members.name));
 	const memberRows: SeasonGridMember[] = allMemberRows
 		.filter((m) => m.status !== "inactive")
-		.map((m) => ({ id: m.id, name: m.name }));
+		.map((m) =>
+			input.includeContact
+				? { id: m.id, name: m.name, email: m.email, phone: m.phone }
+				: { id: m.id, name: m.name },
+		);
 	const memberNames: SeasonGridMember[] = allMemberRows.map((m) => ({
 		id: m.id,
 		name: m.name,
@@ -265,6 +286,7 @@ export async function loadSeasonGrid(input: {
 	}));
 
 	return {
+		clubSlug: club?.slug ?? null,
 		meetings: gridMeetings,
 		rows,
 		members: memberRows,
@@ -273,4 +295,19 @@ export async function loadSeasonGrid(input: {
 		cells,
 		unavailable,
 	};
+}
+
+/**
+ * Public (no-auth) variant of {@link loadSeasonGrid}. Hardcodes
+ * `includeContact: false` so the sheet shared at `/club/:clubId` — which sits
+ * behind only a soft "pick your name" gate — can NEVER carry member email/phone.
+ * Keeping this a named seam (rather than a `false` literal inside the
+ * un-testable `createServerFn` handler) lets the "public payload has no contact"
+ * invariant be asserted in a unit test.
+ */
+export function loadPublicSeasonGrid(input: {
+	clubId: string;
+	count: SeasonGridCount;
+}): Promise<SeasonGridData> {
+	return loadSeasonGrid({ ...input, includeContact: false });
 }

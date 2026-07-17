@@ -9,6 +9,8 @@ import {
 	ArchiveRestore,
 	CalendarPlus,
 	ChevronLeft,
+	Mail,
+	Phone,
 	ShieldCheck,
 } from "lucide-react";
 import { useState } from "react";
@@ -169,6 +171,28 @@ function MemberDetail() {
 							</>
 						) : null}
 					</div>
+					{member.email || member.phone ? (
+						<div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-[var(--sea-ink-soft)]">
+							{member.email ? (
+								<a
+									href={`mailto:${member.email}`}
+									className="inline-flex items-center gap-1.5 hover:text-[var(--sea-ink)] hover:underline"
+								>
+									<Mail className="size-3.5" aria-hidden />
+									{member.email}
+								</a>
+							) : null}
+							{member.phone ? (
+								<a
+									href={`tel:${member.phone}`}
+									className="inline-flex items-center gap-1.5 hover:text-[var(--sea-ink)] hover:underline"
+								>
+									<Phone className="size-3.5" aria-hidden />
+									{member.phone}
+								</a>
+							) : null}
+						</div>
+					) : null}
 				</div>
 				<div className="flex flex-wrap gap-2">
 					<Button asChild size="sm">

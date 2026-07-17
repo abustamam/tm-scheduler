@@ -6,6 +6,7 @@
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	clubs,
 	meetings,
 	memberAvailability,
 	roleDefinitions,
@@ -154,5 +155,52 @@ describe.skipIf(!hasTestDb)("loadSeasonGrid", () => {
 		const data = await loadSeasonGrid({ clubId: seed.clubId, count: "all" });
 		const upcomingCols = data.meetings.filter((m) => !m.isPast);
 		expect(upcomingCols).toHaveLength(3);
+	});
+
+	it("includeContact: true puts email + phone on the member axis", async () => {
+		const { loadSeasonGrid } = await import("#/server/season-grid-logic");
+		const data = await loadSeasonGrid({
+			clubId: seed.clubId,
+			count: 8,
+			includeContact: true,
+		});
+		const member = data.members.find((m) => m.id === seed.memberId);
+		expect(member).toBeDefined();
+		// seedClub sets the member's email but no phone.
+		expect(member?.email).toBe(`member-${seed.memberUserId}@test.example`);
+		expect(member).toHaveProperty("phone");
+		expect(member?.phone).toBeNull();
+	});
+
+	it("includeContact omitted (default) leaves contact off the member axis", async () => {
+		const { loadSeasonGrid } = await import("#/server/season-grid-logic");
+		const data = await loadSeasonGrid({ clubId: seed.clubId, count: 8 });
+		const member = data.members.find((m) => m.id === seed.memberId);
+		expect(member).toBeDefined();
+		expect(member).not.toHaveProperty("email");
+		expect(member).not.toHaveProperty("phone");
+	});
+
+	it("returns the club slug on the payload", async () => {
+		const { loadSeasonGrid } = await import("#/server/season-grid-logic");
+		const [club] = await testDb
+			.select({ slug: clubs.slug })
+			.from(clubs)
+			.where(eq(clubs.id, seed.clubId));
+		const data = await loadSeasonGrid({ clubId: seed.clubId, count: 8 });
+		expect(data.clubSlug).toBe(club!.slug);
+	});
+
+	it("loadPublicSeasonGrid strips contact even though the DB has it", async () => {
+		const { loadPublicSeasonGrid } = await import("#/server/season-grid-logic");
+		// The seeded member HAS an email in the DB; the public variant (used by
+		// getPublicSeasonGrid for the effectively-public /club/:clubId sheet) must
+		// still never expose email/phone. Guards against a regression that wires
+		// the public fn to include contact.
+		const data = await loadPublicSeasonGrid({ clubId: seed.clubId, count: 8 });
+		const member = data.members.find((m) => m.id === seed.memberId);
+		expect(member).toBeDefined();
+		expect(member).not.toHaveProperty("email");
+		expect(member).not.toHaveProperty("phone");
 	});
 });
