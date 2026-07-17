@@ -1,0 +1,3 @@
+ALTER TABLE "notifications" ADD COLUMN "assigned_member_id" uuid;--> statement-breakpoint
+ALTER TABLE "notifications" ADD CONSTRAINT "notifications_assigned_member_id_members_id_fk" FOREIGN KEY ("assigned_member_id") REFERENCES "public"."members"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+CREATE UNIQUE INDEX "notifications_slot_member_unique" ON "notifications" USING btree ("slot_id","assigned_member_id") WHERE "notifications"."assigned_member_id" is not null;

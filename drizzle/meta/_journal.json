@@ -246,6 +246,13 @@
       "when": 1784249049787,
       "tag": "0034_illegal_changeling",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1784250500285,
+      "tag": "0035_sad_nighthawk",
+      "breakpoints": true
     }
   ]
 }
