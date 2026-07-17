@@ -44,4 +44,6 @@ export const getSeasonGrid = createServerFn({ method: "GET" })
  */
 export const getPublicSeasonGrid = createServerFn({ method: "GET" })
 	.validator((input: unknown) => seasonGridInput.parse(input))
-	.handler(async ({ data }) => loadSeasonGrid({ ...data, includeContact: false }));
+	.handler(async ({ data }) =>
+		loadSeasonGrid({ ...data, includeContact: false }),
+	);
