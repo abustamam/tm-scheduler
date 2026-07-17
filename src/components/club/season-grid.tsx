@@ -45,6 +45,7 @@ export function SeasonGrid({
 	canManageOthers = false,
 	clubId,
 	clubSlug,
+	showContact = false,
 	onOrientationChange,
 	onCountChange,
 	onChanged,
@@ -63,12 +64,18 @@ export function SeasonGrid({
 	/** Club slug — when set (public club shell), meeting links in the header
 	 *  and cells target the public meeting view instead of `/meetings/$id`. */
 	clubSlug?: string;
+	/** Show member Email/Phone columns (Members × Meetings, signed-in only). */
+	showContact?: boolean;
 	onOrientationChange?: (o: Orientation) => void;
 	onCountChange?: (c: SeasonGridCount) => void;
 	/** Called after a successful mutation so the page can refetch. */
 	onChanged?: () => void | Promise<void>;
 }) {
 	const rows = projectGrid(data, orientation);
+	// Members × Meetings contact columns (signed-in only) resolve email/phone
+	// off the member axis; role rows have no memberId and never render these.
+	const showContactCols = orientation === "members" && showContact;
+	const contactByMember = new Map(data.members.map((m) => [m.id, m]));
 	const meetingStatus = memberMeetingStatus(data, currentMemberId ?? null);
 	const labelHead = orientation === "roles" ? "Role" : "Member";
 	const anchorRef = useRef<HTMLTableCellElement>(null);
@@ -446,6 +453,16 @@ export function SeasonGrid({
 									</th>
 								);
 							})}
+							{showContactCols ? (
+								<>
+									<th className="sticky top-0 bg-card px-3 py-2 text-left text-xs font-semibold">
+										Email
+									</th>
+									<th className="sticky top-0 bg-card px-3 py-2 text-left text-xs font-semibold">
+										Phone
+									</th>
+								</>
+							) : null}
 						</tr>
 					</thead>
 					<tbody>
@@ -471,6 +488,9 @@ export function SeasonGrid({
 								dimRow &&
 									"opacity-55 transition-opacity group-hover:opacity-100",
 							);
+							const contact = row.memberId
+								? contactByMember.get(row.memberId)
+								: undefined;
 							return (
 								<tr
 									key={row.id}
@@ -602,6 +622,34 @@ export function SeasonGrid({
 											</td>
 										);
 									})}
+									{showContactCols ? (
+										<>
+											<td className="px-3 py-1 text-left text-xs whitespace-nowrap">
+												{contact?.email ? (
+													<a
+														href={`mailto:${contact.email}`}
+														className="text-primary hover:underline"
+													>
+														{contact.email}
+													</a>
+												) : (
+													<span className="text-muted-foreground">—</span>
+												)}
+											</td>
+											<td className="px-3 py-1 text-left text-xs whitespace-nowrap">
+												{contact?.phone ? (
+													<a
+														href={`tel:${contact.phone}`}
+														className="text-primary hover:underline"
+													>
+														{contact.phone}
+													</a>
+												) : (
+													<span className="text-muted-foreground">—</span>
+												)}
+											</td>
+										</>
+									) : null}
 								</tr>
 							);
 						})}
