@@ -156,6 +156,18 @@ export const clubs = pgTable("clubs", {
 	defaultMeetingMinutes: integer("default_meeting_minutes")
 		.notNull()
 		.default(90),
+	// Club-level reminder settings (#274 — the reminders control layer). Two
+	// scalar knobs the admin/VP-Education sets on /admin/club-settings; the role-
+	// reminder producer (#272) reads them. `reminder_enabled` gates whether the
+	// club sends role reminders at all; `reminder_lead_time_days` is how many days
+	// before a meeting to remind slot holders. Both non-null with conservative
+	// defaults so an untouched club behaves reasonably (enabled, 3 days ahead) —
+	// the migration backfills every existing club with these. Modeled as columns
+	// on `clubs` (like `default_meeting_minutes`), not a 1:1 table: they are two
+	// scalars with universal defaults, unlike the multi-field, check-constrained
+	// `club_meeting_recurrence`.
+	reminderEnabled: boolean("reminder_enabled").notNull().default(true),
+	reminderLeadTimeDays: integer("reminder_lead_time_days").notNull().default(3),
 	// Soft-archive (ADR-0016 / #186). NULL = active; a set timestamp = archived.
 	// Reversible: unarchive clears it. Archiving retains all club data untouched
 	// and blocks every access path except the superadmin console — `requireMembership`
@@ -262,6 +274,14 @@ export const people = pgTable("people", {
 	// their clubs). The auth path resolves a signed-in user to this Person, then
 	// to their per-club memberships and roles (ADR-0008 Phase B / #99).
 	userId: text("user_id").references(() => user.id, { onDelete: "set null" }),
+	// Reminder-email opt-out (#274 — the reminders control layer, member level).
+	// Keyed per Person, so it governs this human's inbox GLOBALLY across every club
+	// they belong to (a reminder is a self-regarding nudge about a role they
+	// claimed — one preference per person, not per membership). Default false =
+	// opted IN: members receive reminders unless they turn them off (the product
+	// decision, matching #272). Flipped from /me (member settings) or the no-auth
+	// one-click /unsubscribe link every reminder email carries.
+	reminderOptOut: boolean("reminder_opt_out").notNull().default(false),
 	createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
