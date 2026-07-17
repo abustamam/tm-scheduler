@@ -296,3 +296,18 @@ export async function loadSeasonGrid(input: {
 		unavailable,
 	};
 }
+
+/**
+ * Public (no-auth) variant of {@link loadSeasonGrid}. Hardcodes
+ * `includeContact: false` so the sheet shared at `/club/:clubId` — which sits
+ * behind only a soft "pick your name" gate — can NEVER carry member email/phone.
+ * Keeping this a named seam (rather than a `false` literal inside the
+ * un-testable `createServerFn` handler) lets the "public payload has no contact"
+ * invariant be asserted in a unit test.
+ */
+export function loadPublicSeasonGrid(input: {
+	clubId: string;
+	count: SeasonGridCount;
+}): Promise<SeasonGridData> {
+	return loadSeasonGrid({ ...input, includeContact: false });
+}

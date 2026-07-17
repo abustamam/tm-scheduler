@@ -190,4 +190,17 @@ describe.skipIf(!hasTestDb)("loadSeasonGrid", () => {
 		const data = await loadSeasonGrid({ clubId: seed.clubId, count: 8 });
 		expect(data.clubSlug).toBe(club!.slug);
 	});
+
+	it("loadPublicSeasonGrid strips contact even though the DB has it", async () => {
+		const { loadPublicSeasonGrid } = await import("#/server/season-grid-logic");
+		// The seeded member HAS an email in the DB; the public variant (used by
+		// getPublicSeasonGrid for the effectively-public /club/:clubId sheet) must
+		// still never expose email/phone. Guards against a regression that wires
+		// the public fn to include contact.
+		const data = await loadPublicSeasonGrid({ clubId: seed.clubId, count: 8 });
+		const member = data.members.find((m) => m.id === seed.memberId);
+		expect(member).toBeDefined();
+		expect(member).not.toHaveProperty("email");
+		expect(member).not.toHaveProperty("phone");
+	});
 });
