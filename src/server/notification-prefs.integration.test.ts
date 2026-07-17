@@ -186,15 +186,19 @@ describe.skipIf(!hasTestDb)("reminder control layer (#274)", () => {
 			now: () => new Date(),
 		});
 
-		expect(sendEmail).not.toHaveBeenCalled();
-		expect(result).toMatchObject({ due: 1, sent: 0, suppressed: 1 });
+		// Isolation-safe: processDueNotifications is GLOBAL, so under the parallel
+		// suite it can also sweep a concurrent test's due row (it runs with real
+		// `now()`, above the other reminder suites' isolated clock windows). Assert on
+		// THIS row's terminal state + a lower-bound suppression count — not the shared
+		// sender mock or exact global counts.
+		expect(result.suppressed).toBeGreaterThanOrEqual(1);
 
 		const [row] = await testDb
 			.select()
 			.from(notifications)
 			.where(eq(notifications.id, id));
 		expect(row.sentAt).toBeInstanceOf(Date); // finalized — never retried
-		expect(row.lastError).toContain("opted out");
+		expect(row.lastError).toContain("opted out"); // suppressed, not delivered
 	});
 
 	it("a delivered reminder email carries a valid no-auth unsubscribe link", async () => {
