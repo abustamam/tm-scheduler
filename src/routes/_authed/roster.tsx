@@ -1,6 +1,6 @@
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
-import { ChevronRight, ShieldCheck } from "lucide-react";
-import { useState } from "react";
+import { ChevronRight, ShieldCheck, Upload } from "lucide-react";
+import { type ChangeEvent, useState } from "react";
 import { toast } from "sonner";
 import { MemberAvatar } from "#/components/club/member-avatar";
 import { PageContainer } from "#/components/page-container";
@@ -30,6 +30,10 @@ import { listUpcomingMeetings } from "#/server/meetings";
 import { bulkImportMembers, mergeMembers } from "#/server/members";
 import { listClubMemberPathways } from "#/server/pathways-read";
 import type { PathViewModel } from "#/server/pathways-read-logic";
+import {
+	commitMemberUpload,
+	previewMemberUpload,
+} from "#/server/upload-members";
 
 export const Route = createFileRoute("/_authed/roster")({
 	loader: async ({ context }) => {
@@ -105,6 +109,7 @@ function Roster() {
 	const [seg, setSeg] = useState<SegKey>("all");
 	const [mergeOpen, setMergeOpen] = useState(false);
 	const [importOpen, setImportOpen] = useState(false);
+	const [csvOpen, setCsvOpen] = useState(false);
 
 	// Identity, tenure, speeches, membership status and Pathways progress are all real.
 	const rows: RosterRow[] = members.map((m) => {
@@ -190,6 +195,16 @@ function Roster() {
 							onClick={() => setImportOpen(true)}
 						>
 							Bulk import
+						</Button>
+					) : null}
+					{clubId && canManage ? (
+						<Button
+							variant="outline"
+							size="sm"
+							onClick={() => setCsvOpen(true)}
+						>
+							<Upload aria-hidden />
+							Upload TM CSV
 						</Button>
 					) : null}
 					<Button size="sm">+ Add member</Button>
@@ -349,7 +364,263 @@ function Roster() {
 					currentMemberId={currentMemberId}
 				/>
 			) : null}
+
+			{clubId && canManage ? (
+				<CsvUploadDialog
+					open={csvOpen}
+					onOpenChange={setCsvOpen}
+					clubId={clubId}
+				/>
+			) : null}
 		</PageContainer>
+	);
+}
+
+type CsvPreview = Awaited<ReturnType<typeof previewMemberUpload>>;
+
+const CSV_ACTION_META: Record<
+	CsvPreview["rows"][number]["action"],
+	{ label: string; className: string }
+> = {
+	insert: { label: "New", className: "text-[var(--lagoon-deep)]" },
+	update: { label: "Update", className: "text-[var(--sea-ink)]" },
+	skip: { label: "Skip", className: "text-[var(--warning-strong)]" },
+};
+
+/**
+ * VPE-only upload of the official Toastmasters membership CSV export (#62).
+ * Reads the file, shows a server-computed insert/update/skip diff (the shared
+ * parse/match/fill-only logic — never trusting the client), then commits.
+ */
+function CsvUploadDialog({
+	open,
+	onOpenChange,
+	clubId,
+}: {
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+	clubId: string;
+}) {
+	const router = useRouter();
+	const [fileName, setFileName] = useState<string | null>(null);
+	const [csv, setCsv] = useState<string | null>(null);
+	const [preview, setPreview] = useState<CsvPreview | null>(null);
+	const [previewing, setPreviewing] = useState(false);
+	const [committing, setCommitting] = useState(false);
+
+	function reset() {
+		setFileName(null);
+		setCsv(null);
+		setPreview(null);
+		setPreviewing(false);
+		setCommitting(false);
+	}
+
+	async function onFile(e: ChangeEvent<HTMLInputElement>) {
+		const file = e.target.files?.[0];
+		// Allow re-selecting the same file later (onChange won't fire otherwise).
+		e.target.value = "";
+		if (!file) return;
+		setFileName(file.name);
+		setPreview(null);
+		setCsv(null);
+		setPreviewing(true);
+		try {
+			const text = await file.text();
+			const p = await previewMemberUpload({ data: { clubId, csv: text } });
+			setCsv(text);
+			setPreview(p);
+		} catch (err) {
+			toast.error(
+				err instanceof Error ? err.message : "Couldn't read that file.",
+			);
+			setFileName(null);
+		} finally {
+			setPreviewing(false);
+		}
+	}
+
+	async function onCommit() {
+		if (!csv || !preview) return;
+		setCommitting(true);
+		try {
+			const result = await commitMemberUpload({ data: { clubId, csv } });
+			const { membersCreated, membersUpdated } = result.stats;
+			toast.success(
+				`Imported ${membersCreated} new, updated ${membersUpdated}` +
+					(result.unpaidSkipped > 0
+						? ` · ${result.unpaidSkipped} unpaid skipped`
+						: ""),
+			);
+			onOpenChange(false);
+			reset();
+			await router.invalidate();
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+		} finally {
+			setCommitting(false);
+		}
+	}
+
+	const changes = preview
+		? preview.summary.toInsert + preview.summary.toUpdate
+		: 0;
+	const canCommit = changes > 0 && !committing && !previewing;
+
+	return (
+		<Dialog
+			open={open}
+			onOpenChange={(o) => {
+				onOpenChange(o);
+				if (!o) reset();
+			}}
+		>
+			<DialogContent className="sm:max-w-[680px]">
+				<DialogHeader>
+					<DialogTitle>Upload Toastmasters membership CSV</DialogTitle>
+					<DialogDescription>
+						Upload the official membership export from Toastmasters. Only{" "}
+						<span className="font-semibold">paid members</span> are imported;
+						real join dates fill in, and existing names, emails and phones are
+						never overwritten. Review the preview, then confirm.
+					</DialogDescription>
+				</DialogHeader>
+
+				<div className="space-y-3">
+					<label className="flex cursor-pointer items-center gap-3 rounded-lg border border-dashed border-[var(--line)] bg-[var(--foam)] px-4 py-3 text-sm transition-colors hover:border-[var(--lagoon-deep)]">
+						<Upload className="size-4 text-[var(--sea-ink-soft)]" aria-hidden />
+						<span className="font-semibold text-[var(--sea-ink)]">
+							{fileName ?? "Choose a .csv file…"}
+						</span>
+						<input
+							type="file"
+							accept=".csv,text/csv"
+							className="sr-only"
+							onChange={onFile}
+						/>
+					</label>
+
+					{previewing ? (
+						<p className="text-sm text-[var(--sea-ink-soft)]">
+							Reading and matching rows…
+						</p>
+					) : null}
+
+					{preview ? (
+						<>
+							<div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-[var(--sea-ink-soft)]">
+								<span>
+									<span className="font-bold text-[var(--lagoon-deep)]">
+										{preview.summary.toInsert}
+									</span>{" "}
+									new
+								</span>
+								<span>
+									<span className="font-bold text-[var(--sea-ink)]">
+										{preview.summary.toUpdate}
+									</span>{" "}
+									to update
+								</span>
+								{preview.summary.toSkip > 0 ? (
+									<span>
+										<span className="font-bold text-[var(--warning-strong)]">
+											{preview.summary.toSkip}
+										</span>{" "}
+										skipped
+									</span>
+								) : null}
+								{preview.unpaidSkipped > 0 ? (
+									<span>
+										<span className="font-bold">{preview.unpaidSkipped}</span>{" "}
+										unpaid (not imported)
+									</span>
+								) : null}
+							</div>
+
+							{preview.summary.ambiguous > 0 ||
+							preview.summary.unparseablePositions > 0 ? (
+								<p className="text-xs text-[var(--warning-strong)]">
+									{preview.summary.ambiguous > 0
+										? `${preview.summary.ambiguous} row(s) share an email and were added as separate members. `
+										: ""}
+									{preview.summary.unparseablePositions > 0
+										? `${preview.summary.unparseablePositions} office title(s) couldn't be recognized and were left blank.`
+										: ""}
+								</p>
+							) : null}
+
+							{preview.rows.length > 0 ? (
+								<div className="max-h-[300px] overflow-auto rounded-lg border border-[var(--line)]">
+									<table className="w-full text-xs">
+										<thead className="sticky top-0 bg-[var(--foam)] text-xs font-extrabold tracking-[0.06em] text-[var(--sea-ink-soft)] uppercase">
+											<tr>
+												<th className="px-3 py-2 text-left">Member</th>
+												<th className="px-3 py-2 text-left">Email</th>
+												<th className="px-3 py-2 text-left">Action</th>
+												<th className="px-3 py-2 text-left">Details</th>
+											</tr>
+										</thead>
+										<tbody>
+											{preview.rows.map((row, i) => {
+												const meta = CSV_ACTION_META[row.action];
+												return (
+													<tr
+														// biome-ignore lint/suspicious/noArrayIndexKey: preview rows have no stable id
+														key={i}
+														className={cn(
+															"border-t border-[var(--line)]",
+															row.action === "skip" &&
+																"bg-[var(--warning-soft,#fdf3e7)]",
+														)}
+													>
+														<td className="px-3 py-1.5 font-medium">
+															{row.name || (
+																<span className="text-[var(--sea-ink-soft)] italic">
+																	(blank)
+																</span>
+															)}
+														</td>
+														<td className="px-3 py-1.5 text-[var(--sea-ink-soft)]">
+															{row.email || "—"}
+														</td>
+														<td
+															className={cn(
+																"px-3 py-1.5 font-semibold",
+																meta.className,
+															)}
+														>
+															{meta.label}
+														</td>
+														<td className="px-3 py-1.5 text-[var(--sea-ink-soft)]">
+															{row.note ?? "—"}
+														</td>
+													</tr>
+												);
+											})}
+										</tbody>
+									</table>
+								</div>
+							) : null}
+						</>
+					) : null}
+				</div>
+
+				<DialogFooter>
+					<DialogClose asChild>
+						<Button type="button" variant="outline" disabled={committing}>
+							Cancel
+						</Button>
+					</DialogClose>
+					<Button type="button" disabled={!canCommit} onClick={onCommit}>
+						{committing
+							? "Importing…"
+							: changes > 0
+								? `Import ${changes} member${changes === 1 ? "" : "s"}`
+								: "Import"}
+					</Button>
+				</DialogFooter>
+			</DialogContent>
+		</Dialog>
 	);
 }
 

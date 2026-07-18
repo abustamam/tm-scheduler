@@ -11,13 +11,12 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "#/db";
 import { members, people } from "#/db/schema";
+import { batchSharedEmails, type MappedMember } from "#/lib/members-csv";
 import {
-	batchSharedEmails,
-	type ExistingPerson,
-	fillOnly,
-	type MappedMember,
-	resolvePerson,
-} from "#/lib/members-csv";
+	classifyMembership,
+	type ExistingPersonRow,
+	resolvePersonDecision,
+} from "#/lib/members-import-plan";
 import {
 	currentOfficersFor,
 	openOfficerTermIfAbsent,
@@ -38,16 +37,16 @@ export interface ImportStats {
 	unparseablePosition: number;
 }
 
-interface PersonState extends ExistingPerson {
-	name: string;
-	phone: string | null;
-}
-
 /**
  * Import mapped CSV rows into `people` + `members` for one club. Returns counts.
  * People-level facts (canonical name/contact, original join date, Customer ID)
  * land on `people`; the per-club membership carries name/email/phone (fill-only)
  * and `joined_at`.
+ *
+ * The per-row verdicts (which Person a row resolves to, insert vs. fill-only
+ * update of the membership) come from the shared pure decisions in
+ * `members-import-plan.ts` — the SAME code the pre-commit preview runs — so the
+ * VPE's diff can never drift from what this writer actually does.
  */
 export async function importPeopleAndMembers(
 	clubId: string,
@@ -55,7 +54,7 @@ export async function importPeopleAndMembers(
 ): Promise<ImportStats> {
 	// Load all people once; keep the in-memory list in sync as we insert so
 	// duplicate rows within a single run resolve against freshly-created people.
-	const existing: PersonState[] = await db
+	const existing: ExistingPersonRow[] = await db
 		.select({
 			id: people.id,
 			customerId: people.customerId,
@@ -96,63 +95,38 @@ export async function importPeopleAndMembers(
 			);
 		}
 
-		const emailNorm = (row.email ?? "").trim().toLowerCase();
-		const match =
-			emailNorm !== "" && sharedEmails.has(emailNorm)
-				? ({ kind: "ambiguous" } as const)
-				: resolvePerson(
-						{ customerId: row.customerId, email: row.email },
-						existing,
-					);
+		// Which Person does this row resolve to? Shared code with the preview.
+		const pd = resolvePersonDecision(row, existing, sharedEmails);
 
 		let personId: string;
-		if (match.kind === "customerId" || match.kind === "email") {
-			const current = existing.find((p) => p.id === match.id);
+		if (pd.kind === "customerId" || pd.kind === "email") {
+			const current = existing.find((p) => p.id === pd.id);
 			if (!current) continue; // unreachable — match ids come from `existing`
 			personId = current.id;
-			if (match.kind === "customerId") stats.peopleMatchedByCustomerId++;
+			if (pd.kind === "customerId") stats.peopleMatchedByCustomerId++;
 			else stats.peopleMatchedByEmail++;
 
-			// Person-level: fill-only name/email/phone; adopt a Customer ID when we
+			// Person-level fill-only name/email/phone; adopt a Customer ID when we
 			// finally have one; always refresh the original join date from the CSV.
-			const nextCustomerId = current.customerId ?? row.customerId;
-			const nextName = fillOnly(current.name, row.name) ?? current.name;
-			const nextEmail = fillOnly(current.email, row.email);
-			const nextPhone = fillOnly(current.phone, row.phone);
-			await db
-				.update(people)
-				.set({
-					customerId: nextCustomerId,
-					name: nextName,
-					email: nextEmail,
-					phone: nextPhone,
-					originalJoinDate: row.originalJoinDate,
-				})
-				.where(eq(people.id, personId));
-			current.customerId = nextCustomerId;
-			current.name = nextName;
-			current.email = nextEmail;
-			current.phone = nextPhone;
+			await db.update(people).set(pd.set).where(eq(people.id, personId));
+			current.customerId = pd.set.customerId;
+			current.name = pd.set.name;
+			current.email = pd.set.email;
+			current.phone = pd.set.phone;
 		} else {
-			if (match.kind === "ambiguous") stats.ambiguous++;
+			if (pd.kind === "ambiguous") stats.ambiguous++;
 			const [created] = await db
 				.insert(people)
-				.values({
-					customerId: row.customerId,
-					name: row.name,
-					email: row.email,
-					phone: row.phone,
-					originalJoinDate: row.originalJoinDate,
-				})
+				.values(pd.values)
 				.returning({ id: people.id });
 			if (!created) throw new Error("Failed to insert person");
 			personId = created.id;
 			existing.push({
 				id: personId,
-				customerId: row.customerId,
-				email: row.email,
-				name: row.name,
-				phone: row.phone,
+				customerId: pd.values.customerId,
+				email: pd.values.email,
+				name: pd.values.name,
+				phone: pd.values.phone,
 			});
 			stats.peopleCreated++;
 		}
@@ -170,34 +144,25 @@ export async function importPeopleAndMembers(
 			.where(and(eq(members.clubId, clubId), eq(members.personId, personId)))
 			.limit(1);
 
+		const md = classifyMembership(row, existingMember);
 		let membershipId: string;
-		if (existingMember) {
+		if (md.kind === "update" && existingMember) {
 			await db
 				.update(members)
-				.set({
-					name: fillOnly(existingMember.name, row.name) ?? existingMember.name,
-					email: fillOnly(existingMember.email, row.email),
-					phone: fillOnly(existingMember.phone, row.phone),
-					joinedAt: row.joinedAt,
-				})
+				.set(md.set)
 				.where(eq(members.id, existingMember.id));
 			membershipId = existingMember.id;
 			stats.membersUpdated++;
-		} else {
+		} else if (md.kind === "insert") {
 			const [created] = await db
 				.insert(members)
-				.values({
-					clubId,
-					personId,
-					name: row.name,
-					email: row.email,
-					phone: row.phone,
-					joinedAt: row.joinedAt,
-				})
+				.values({ clubId, personId, ...md.values })
 				.returning({ id: members.id });
 			if (!created) throw new Error("Failed to insert member");
 			membershipId = created.id;
 			stats.membersCreated++;
+		} else {
+			continue; // unreachable — update ⟺ existingMember present
 		}
 
 		// Officer term (#100): the CSV's current position opens a term ONLY when
