@@ -36,6 +36,9 @@ function SeasonGridPage() {
 	const { currentMemberId, activeClubId } = context;
 	// Officers/admins may mark ANY member unavailable, not just their own row.
 	const canManageOthers = !!effectiveAdminClub(context);
+	// Club name personalizes the VPE tap-to-nudge message (#37).
+	const clubName =
+		context.clubs.find((c) => c.clubId === activeClubId)?.name ?? null;
 	const router = useRouter();
 	const navigate = Route.useNavigate();
 
@@ -61,6 +64,7 @@ function SeasonGridPage() {
 					currentMemberId={currentMemberId}
 					canManageOthers={canManageOthers}
 					clubId={activeClubId ?? undefined}
+					clubName={clubName}
 					onOrientationChange={(v) =>
 						navigate({ search: (prev) => ({ ...prev, view: v }) })
 					}

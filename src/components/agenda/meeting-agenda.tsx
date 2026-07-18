@@ -350,6 +350,16 @@ export function MeetingAgenda({
 													<p className="text-sm text-muted-foreground">Open</p>
 												)}
 
+												{/* Responsibilities blurb, shown inline on open (claimable)
+												    roles so the no-login shared link (#37) explains what
+												    the role involves before you tap to claim. Filled roles
+												    stay compact. */}
+												{isOpen && slot.description ? (
+													<p className="mt-1 text-xs text-muted-foreground">
+														{slot.description}
+													</p>
+												) : null}
+
 												{slot.isSpeakerRole && slot.speechTitle ? (
 													<div className="mt-1 text-sm">
 														<p className="font-medium">

@@ -30,6 +30,7 @@ import { claimSlot, releaseSlot } from "#/server/slots";
 import { CELL_BASE, CELL_KIND_CLASS, GridCell } from "./grid-cell";
 import { MeetingLink } from "./meeting-link";
 import { MemberRolePicker } from "./member-role-picker";
+import { NudgeButton } from "./nudge-button";
 
 const COUNTS: SeasonGridCount[] = [4, 8, "all"];
 const VIEWS: { value: Orientation; label: string }[] = [
@@ -45,6 +46,7 @@ export function SeasonGrid({
 	canManageOthers = false,
 	clubId,
 	clubSlug,
+	clubName,
 	showContact = false,
 	onOrientationChange,
 	onCountChange,
@@ -64,6 +66,8 @@ export function SeasonGrid({
 	/** Club slug — when set (public club shell), meeting links in the header
 	 *  and cells target the public meeting view instead of `/meetings/$id`. */
 	clubSlug?: string;
+	/** Club name — used to personalize the VPE tap-to-nudge message (#37). */
+	clubName?: string | null;
 	/** Show member Email/Phone columns (Members × Meetings, signed-in only). */
 	showContact?: boolean;
 	onOrientationChange?: (o: Orientation) => void;
@@ -75,6 +79,9 @@ export function SeasonGrid({
 	// Members × Meetings contact columns (signed-in only) resolve email/phone
 	// off the member axis; role rows have no memberId and never render these.
 	const showContactCols = orientation === "members" && showContact;
+	// The VPE tap-to-nudge (#37) rides the contact columns — same signed-in gate —
+	// but also needs the club slug to build the public sign-up-sheet link.
+	const showNudgeCol = showContactCols && !!data.clubSlug;
 	const contactByMember = new Map(data.members.map((m) => [m.id, m]));
 	const meetingStatus = memberMeetingStatus(data, currentMemberId ?? null);
 	const labelHead = orientation === "roles" ? "Role" : "Member";
@@ -463,6 +470,11 @@ export function SeasonGrid({
 									</th>
 								</>
 							) : null}
+							{showNudgeCol ? (
+								<th className="sticky top-0 bg-card px-3 py-2 text-left text-xs font-semibold">
+									Nudge
+								</th>
+							) : null}
 						</tr>
 					</thead>
 					<tbody>
@@ -649,6 +661,21 @@ export function SeasonGrid({
 												)}
 											</td>
 										</>
+									) : null}
+									{showNudgeCol ? (
+										<td className="px-3 py-1 text-left whitespace-nowrap">
+											{row.memberId && data.clubSlug ? (
+												<NudgeButton
+													memberName={row.label}
+													clubName={clubName}
+													path={`/club/${data.clubSlug}`}
+													email={contact?.email}
+													phone={contact?.phone}
+												/>
+											) : (
+												<span className="text-xs text-muted-foreground">—</span>
+											)}
+										</td>
 									) : null}
 								</tr>
 							);
