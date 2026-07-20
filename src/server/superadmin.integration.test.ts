@@ -12,8 +12,16 @@ import { randomUUID } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { user } from "#/db/schema";
+import { reconcileSuperadminFlag } from "#/lib/superadmin";
+import { requireSuperadmin } from "#/server/guards";
 import { hasTestDb, testDb } from "#/test/db";
 
+// Static, not per-test `await import()`: `vi.mock` is hoisted above these, so
+// they still resolve `#/db` to the test database, and the allowlist is read at
+// CALL time (see `parseSuperadminEmails`) so nothing here captures env at load.
+// Importing lazily charged the first test to touch a module with its cold load —
+// which is how `#/server/guards`, used only by the last test, blew a 5s budget
+// under full-suite contention (#290).
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
 const ENV_KEY = "SUPERADMIN_EMAILS";
@@ -57,7 +65,6 @@ describe.skipIf(!hasTestDb)("superadmin platform role (#183)", () => {
 	});
 
 	it("grants when the email is in the allowlist (persists the flag)", async () => {
-		const { reconcileSuperadminFlag } = await import("#/lib/superadmin");
 		const email = `grant-${randomUUID()}@test.example`;
 		const id = await seedUser(email, false);
 		process.env[ENV_KEY] = `someone@else.test, ${email}`;
@@ -66,7 +73,6 @@ describe.skipIf(!hasTestDb)("superadmin platform role (#183)", () => {
 	});
 
 	it("revokes on the next reconcile when the email leaves the allowlist (two-way)", async () => {
-		const { reconcileSuperadminFlag } = await import("#/lib/superadmin");
 		const email = `revoke-${randomUUID()}@test.example`;
 		const id = await seedUser(email, true); // currently a superadmin
 		process.env[ENV_KEY] = "only-someone-else@test.example";
@@ -75,7 +81,6 @@ describe.skipIf(!hasTestDb)("superadmin platform role (#183)", () => {
 	});
 
 	it("matches case-insensitively and ignores surrounding whitespace", async () => {
-		const { reconcileSuperadminFlag } = await import("#/lib/superadmin");
 		const email = `case-${randomUUID()}@test.example`;
 		const id = await seedUser(email, false);
 		process.env[ENV_KEY] = `  ${email.toUpperCase()}  `;
@@ -83,7 +88,6 @@ describe.skipIf(!hasTestDb)("superadmin platform role (#183)", () => {
 	});
 
 	it("fails closed: an unset allowlist grants nobody (and revokes existing)", async () => {
-		const { reconcileSuperadminFlag } = await import("#/lib/superadmin");
 		const email = `closed-${randomUUID()}@test.example`;
 		const id = await seedUser(email, true);
 		delete process.env[ENV_KEY];
@@ -92,7 +96,6 @@ describe.skipIf(!hasTestDb)("superadmin platform role (#183)", () => {
 	});
 
 	it("fails closed: an all-whitespace allowlist grants nobody", async () => {
-		const { reconcileSuperadminFlag } = await import("#/lib/superadmin");
 		const email = `empty-${randomUUID()}@test.example`;
 		const id = await seedUser(email, false);
 		process.env[ENV_KEY] = "   ,  ";
@@ -100,7 +103,6 @@ describe.skipIf(!hasTestDb)("superadmin platform role (#183)", () => {
 	});
 
 	it("is idempotent — repeated reconciles keep the same flag", async () => {
-		const { reconcileSuperadminFlag } = await import("#/lib/superadmin");
 		const email = `idem-${randomUUID()}@test.example`;
 		const id = await seedUser(email, false);
 		process.env[ENV_KEY] = email;
@@ -110,13 +112,11 @@ describe.skipIf(!hasTestDb)("superadmin platform role (#183)", () => {
 	});
 
 	it("reconcile returns false for an unknown user id", async () => {
-		const { reconcileSuperadminFlag } = await import("#/lib/superadmin");
 		process.env[ENV_KEY] = "anyone@test.example";
 		expect(await reconcileSuperadminFlag(randomUUID(), testDb)).toBe(false);
 	});
 
 	it("requireSuperadmin passes for a superadmin and throws for others", async () => {
-		const { requireSuperadmin } = await import("#/server/guards");
 		const superId = await seedUser(`super-${randomUUID()}@test.example`, true);
 		const normalId = await seedUser(
 			`normal-${randomUUID()}@test.example`,
