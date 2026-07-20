@@ -25,6 +25,10 @@ import {
 	requireUser,
 } from "./guards";
 import {
+	loadHolderContacts,
+	loadRosterWithContact,
+} from "./meeting-contacts-logic";
+import {
 	applyCompleteMeeting,
 	applyCreateMeeting,
 	applyMeetingUpdate,
@@ -192,17 +196,10 @@ async function loadMeetingDetail(
 		.where(eq(memberAvailability.meetingId, meetingId))
 		.orderBy(asc(members.name));
 
-	// Roster for the VPE assign picker — active members only. Kept out of the
-	// public/unauthenticated payload: only populated when the caller can manage.
-	const roster = canManage
-		? await db
-				.select({ id: members.id, name: members.name })
-				.from(members)
-				.where(
-					and(eq(members.clubId, meeting.clubId), eq(members.status, "active")),
-				)
-				.orderBy(asc(members.name))
-		: [];
+	// Roster for the VPE assign/recruit picker — active members with contact for
+	// tap-to-nudge (#37). Management-only: contact is never fetched for a public
+	// caller (loadRosterWithContact isn't called when !canManage).
+	const roster = canManage ? await loadRosterWithContact(meeting.clubId) : [];
 
 	// Club role template for the "+ Add role" picker — management-only, like the
 	// roster. Ordered like the roles page.
@@ -242,9 +239,34 @@ async function loadMeetingDetail(
 			)
 		: {};
 
+	// Holder contact for filled-slot confirm nudges (#37). Gated: only queried
+	// when the caller manages the club. `holderPhone`/`holderEmail` are null on
+	// the public payload.
+	const holderContacts = canManage
+		? await loadHolderContacts(
+				meeting.clubId,
+				slots.flatMap((s) => (s.assigneeId ? [s.assigneeId] : [])),
+				slots.flatMap((s) => (s.assigneeGuestId ? [s.assigneeGuestId] : [])),
+			)
+		: new Map<string, { phone: string | null; email: string | null }>();
+
+	const slotsWithContact = slots.map((s) => {
+		const key = s.assigneeGuestId
+			? `guest:${s.assigneeGuestId}`
+			: s.assigneeId
+				? `member:${s.assigneeId}`
+				: null;
+		const c = key ? holderContacts.get(key) : undefined;
+		return {
+			...s,
+			holderPhone: c?.phone ?? null,
+			holderEmail: c?.email ?? null,
+		};
+	});
+
 	return {
 		meeting,
-		slots,
+		slots: slotsWithContact,
 		canManage,
 		roleRecency,
 		nextMeetingAt: nextMeeting?.scheduledAt ?? null,
