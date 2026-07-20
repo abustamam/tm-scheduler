@@ -9,6 +9,8 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import {
+	applyEducationSchema,
+	applyEducationSuggestions as applyEducationSuggestionsDb,
 	getScoreboard as getScoreboardDb,
 	getScoreboardSchema,
 	listScoreboardYears as listScoreboardYearsDb,
@@ -53,6 +55,14 @@ export const updateGoal = createServerFn({ method: "POST" })
 		const user = await requireUser();
 		await requireClubRole(user.id, data.clubId, ["admin"]);
 		return updateGoalDb(data, user.id);
+	});
+
+export const applyEducationSuggestions = createServerFn({ method: "POST" })
+	.validator((i: unknown) => applyEducationSchema.parse(i))
+	.handler(async ({ data }) => {
+		const user = await requireUser();
+		await requireClubRole(user.id, data.clubId, ["admin"]);
+		return applyEducationSuggestionsDb(data, user.id);
 	});
 
 export const updateBaseMemberCount = createServerFn({ method: "POST" })

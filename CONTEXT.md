@@ -168,17 +168,28 @@ the nouns in `src/db/schema.ts`.
   program: 10 standardized goals across a **program year** (Jul 1 – Jun 30). Recognition tiers
   are **Distinguished** (5 goals), **Select Distinguished** (7), **President's Distinguished**
   (9), each also requiring the **membership base** (≥20 active members OR net growth of +5). The
-  President owns the club's progress. In GavelUp it's a **manual scoreboard** — the goal catalog
-  (labels + targets) is static code (`src/lib/dcp.ts`); only per-club progress is stored, and the
-  tier/base are DERIVED, never stored. See ADR-0019 / #207.
+  President owns the club's progress. In GavelUp it's a **President-owned scoreboard** — every
+  goal is hand-entered, with roster and Pathways assists offered as editable suggestions rather
+  than applied automatically. The goal catalog (labels + targets) is static code
+  (`src/lib/dcp.ts`); only per-club progress is stored, and the tier/base are DERIVED, never
+  stored. See ADR-0019 / #207, and #245 for the education assist.
 - **Program year** — the Toastmasters year, Jul 1 – Jun 30, keyed by its **starting calendar
   year** (e.g. 2026 = Jul 1 2026 – Jun 30 2027).
 - **DCP scoreboard** (`dcp_scoreboards`) — a club's DCP record for one program year: the parent
   row holding the auto-snapshotted, President-editable `base_member_count` (for the net-+5 base
   test). **DCP goal progress** (`dcp_goal_progress`) is one hand-entered `achieved` value per
-  catalog goal (`met = achieved ≥ target`; composite goals 9 & 10 are a 0/1 toggle). Only the two
-  new-member goals are roster-derived (pre-filled from `members.joined_at` in the program-year
-  window). Education-goal (1–6) auto-derivation from Pathways is deferred (#245).
+  catalog goal (`met = achieved ≥ target`; composite goals 9 & 10 are a 0/1 toggle). The two
+  new-member goals are roster-derived (pre-filled at start from `members.joined_at` in the
+  program-year window); the six education goals carry a live Pathways **suggestion** the
+  President reviews and applies (#245). Stored progress remains the only thing that scores —
+  a suggestion counts toward nothing until applied.
+- **Education award** — the atomic unit the DCP education goals count: **one approved Pathways
+  level, credited to this club, completed inside the program year**. Counted per completion,
+  NOT per member — one person finishing the same level in two paths is two enrollments and so
+  two awards. Levels whose `completed_at` is null (approved before this club first synced) are
+  excluded and need entering by hand. Awards map onto goals as n(L1)→g1, n(L2)→g2/g3 (cap 2
+  each), n(L3)→g4, n(L4)+n(L5)→g5/g6 (cap 1 each); "a Path" in the goal 5/6 wording ≡ Level 5,
+  as the count-based mirror carries no separate path-complete signal. See #245 / ADR-0022.
 
 ## Scope
 
