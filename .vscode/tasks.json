@@ -1,0 +1,19 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "CodeLedger: Open Panel",
+      "type": "shell",
+      "command": "node .codeledger/bin/codeledger-standalone.cjs panel serve",
+      "isBackground": true,
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared"
+      },
+      "runOptions": {
+        "runOn": "default"
+      },
+      "problemMatcher": []
+    }
+  ]
+}

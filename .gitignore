@@ -31,3 +31,14 @@ ref/
 # Keep them local; the non-secret request recipe lives in issue #107. The scrubbed
 # samples/_api_bcm_progress_* JSON fixtures ARE committed for reference.
 *.har
+.codeledger/*
+!.codeledger/
+!.codeledger/bin/
+!.codeledger/bin/**
+!.codeledger/team-ledger/
+!.codeledger/team-ledger/**
+.claude/*
+!.claude/
+!.claude/hooks.json
+CLAUDE.local.md
+.release-worktree/

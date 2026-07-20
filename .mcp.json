@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "codeledger": {
+      "command": "node",
+      "args": [
+        ".codeledger/bin/codeledger-standalone.cjs",
+        "mcp",
+        "start"
+      ]
+    }
+  }
+}
