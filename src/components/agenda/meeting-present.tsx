@@ -99,7 +99,12 @@ export function MeetingPresent({
 				)}
 			</div>
 
-			<div className="absolute bottom-[1.5vmin] left-1/2 -translate-x-1/2 text-[1.6vmin] text-white/70 tabular-nums">
+			{/* Top-center: the one region empty on both splash and content slides.
+			    Bottom-center would sit on the footer's centered trademark
+			    disclaimer; top-right holds the PPTX button, top-left the content
+			    header. The dark pill keeps it legible over both the light content
+			    ground and the dark splash. */}
+			<div className="absolute top-[2vmin] left-1/2 -translate-x-1/2 rounded-full bg-black/35 px-[1.4vmin] py-[0.3vmin] text-[1.6vmin] text-white/90 tabular-nums">
 				{i + 1} / {deck.length}
 			</div>
 		</div>
