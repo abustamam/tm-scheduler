@@ -5,7 +5,6 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { ToastmastersWordmark } from "#/components/agenda/toastmasters-wordmark";
 import { PptxDownloadButton } from "#/components/club/pptx-download-button";
 import type { Slide } from "#/lib/agenda-slides";
 import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
@@ -147,10 +146,13 @@ function Splash({
 					: { background: GROUND, color: INK }
 			}
 		>
-			<ToastmastersWordmark
-				tone={dark ? "white" : "color"}
-				style={{ width: dark ? "21cqw" : "25cqw" }}
-			/>
+			{/* Nominative word use, not the official wordmark image (ADR-0024). */}
+			<div
+				className="font-display font-semibold tracking-[-0.01em]"
+				style={{ fontSize: "6cqw", color: dark ? "#ffffff" : NAVY }}
+			>
+				Toastmasters
+			</div>
 			<div
 				className="my-[3.4cqw] h-px w-[58cqw]"
 				style={{ background: dark ? "rgba(255,255,255,.55)" : NAVY }}
@@ -208,7 +210,13 @@ function ContentSlide({
 				style={{ background: NAVY }}
 			>
 				<div className="flex items-center justify-between">
-					<ToastmastersWordmark tone="white" style={{ width: "13cqw" }} />
+					{/* GavelUp origin mark on deck chrome (ADR-0024). */}
+					<div
+						className="font-display font-semibold text-white"
+						style={{ fontSize: "2.8cqw" }}
+					>
+						GavelUp
+					</div>
 					<div className="text-right leading-tight text-white">
 						<div className="text-[2.4cqw] font-bold">{clubName}</div>
 						<div className="text-[2cqw] opacity-90">{date}</div>
