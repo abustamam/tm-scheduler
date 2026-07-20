@@ -249,3 +249,55 @@ describe("MeetingAgenda remove-role control (#225)", () => {
 		expect(screen.queryByRole("button", { name: /^Remove Timer/ })).toBeNull();
 	});
 });
+
+describe("tap-to-nudge confirm gate (#37)", () => {
+	afterEach(() => cleanup());
+	const manager = () =>
+		sessionViewer({ currentMemberId: "me", canManage: true });
+	const member = () =>
+		sessionViewer({ currentMemberId: "me", canManage: false });
+	const filled = () =>
+		slot({
+			status: "claimed",
+			assigneeId: "other",
+			assigneeName: "Other Person",
+		});
+
+	it("renders the confirm nudge for a manager on a filled slot", () => {
+		renderAgenda(manager(), [filled()]);
+		// The factory leaves holderPhone/holderEmail unset, so NudgeButtons
+		// renders its no-contact fallback — proof the component rendered at all
+		// under a manager viewer on a filled slot.
+		expect(screen.getByText(/no contact on file/i)).toBeTruthy();
+	});
+
+	it("does not render the confirm nudge for a manager on an open slot", () => {
+		renderAgenda(manager(), [slot({ status: "open" })]);
+		expect(screen.queryByText(/no contact on file/i)).toBeNull();
+		expect(screen.queryByRole("link", { name: /whatsapp/i })).toBeNull();
+		expect(screen.queryByRole("link", { name: /email/i })).toBeNull();
+	});
+
+	it("does not render the confirm nudge for a non-manager on a filled slot", () => {
+		renderAgenda(member(), [filled()]);
+		expect(screen.queryByText(/no contact on file/i)).toBeNull();
+		expect(screen.queryByRole("link", { name: /whatsapp/i })).toBeNull();
+		expect(screen.queryByRole("link", { name: /email/i })).toBeNull();
+	});
+
+	it("renders a real Email nudge link when the holder has contact info", () => {
+		renderAgenda(manager(), [
+			slot({
+				status: "claimed",
+				assigneeId: "other",
+				assigneeName: "Other Person",
+				holderEmail: "other@example.com",
+			}),
+		]);
+		expect(screen.queryByText(/no contact on file/i)).toBeNull();
+		const emailLink = screen.getByRole("link", {
+			name: /email/i,
+		}) as HTMLAnchorElement;
+		expect(emailLink.href.startsWith("mailto:other@example.com")).toBe(true);
+	});
+});
