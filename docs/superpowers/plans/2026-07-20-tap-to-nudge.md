@@ -96,7 +96,7 @@ describe("buildNudge", () => {
 		);
 	});
 
-	it("encodes names with apostrophes safely in the message channels", () => {
+	it("keeps special characters in names intact through URL encoding", () => {
 		const r = buildNudge({
 			...base,
 			name: "O'Brien",
@@ -105,9 +105,12 @@ describe("buildNudge", () => {
 			mode: "confirm",
 		});
 		expect(r.message).toContain("Hi O'Brien,");
-		// URL-encoded in the channel links (apostrophe → %27).
-		expect(r.whatsappUrl).toContain("O%27Brien");
-		expect(r.mailtoUrl).toContain("O%27Brien");
+		// The name survives encoding: decoding the channel payload recovers it.
+		// (encodeURIComponent leaves apostrophes literal, so don't assert %27.)
+		const waText = decodeURIComponent(r.whatsappUrl?.split("?text=")[1] ?? "");
+		expect(waText).toContain("O'Brien");
+		const mailBody = decodeURIComponent(r.mailtoUrl?.split("&body=")[1] ?? "");
+		expect(mailBody).toContain("O'Brien");
 	});
 
 	it("returns neither channel when no contact is present", () => {
