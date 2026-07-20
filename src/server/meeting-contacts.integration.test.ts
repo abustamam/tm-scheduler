@@ -98,7 +98,7 @@ describe.skipIf(!hasTestDb)("meeting contacts (integration)", () => {
 			email: "g@x.io",
 		});
 
-		const map = await loadHolderContacts([memberId], [guestId]);
+		const map = await loadHolderContacts(seeded.clubId, [memberId], [guestId]);
 		expect(map.get(`member:${memberId}`)).toEqual({
 			phone: "14155550003",
 			email: "m@x.io",
@@ -109,8 +109,19 @@ describe.skipIf(!hasTestDb)("meeting contacts (integration)", () => {
 		});
 	});
 
+	it("loadHolderContacts excludes ids from a different club (PII scope)", async () => {
+		const other = await seedClub();
+		const foreignMemberId = await addMember(other.clubId, "Other Club Member", {
+			phone: "14155559999",
+			email: "other@x.io",
+		});
+		const map = await loadHolderContacts(seeded.clubId, [foreignMemberId], []);
+		expect(map.size).toBe(0);
+		await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+	});
+
 	it("loadHolderContacts returns an empty map for empty inputs (no query)", async () => {
-		const map = await loadHolderContacts([], []);
+		const map = await loadHolderContacts(seeded.clubId, [], []);
 		expect(map.size).toBe(0);
 	});
 });

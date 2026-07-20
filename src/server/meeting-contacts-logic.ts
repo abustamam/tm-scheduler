@@ -36,9 +36,12 @@ export async function loadRosterWithContact(
 /**
  * Resolve contact for held slots, keyed `member:<id>` / `guest:<id>`. Handles
  * holders who are NOT in the active roster (inactive members, guests). Runs no
- * query for an empty id list.
+ * query for an empty id list. Scoped by `clubId` as defense-in-depth: this is a
+ * PII-boundary function, so it never returns another club's contact even if a
+ * caller passes a foreign id.
  */
 export async function loadHolderContacts(
+	clubId: string,
 	memberIds: string[],
 	guestIds: string[],
 ): Promise<Map<string, Contact>> {
@@ -48,7 +51,7 @@ export async function loadHolderContacts(
 		const rows = await db
 			.select({ id: members.id, phone: members.phone, email: members.email })
 			.from(members)
-			.where(inArray(members.id, memberIds));
+			.where(and(eq(members.clubId, clubId), inArray(members.id, memberIds)));
 		for (const r of rows) {
 			map.set(`member:${r.id}`, { phone: r.phone, email: r.email });
 		}
@@ -58,7 +61,7 @@ export async function loadHolderContacts(
 		const rows = await db
 			.select({ id: guests.id, phone: guests.phone, email: guests.email })
 			.from(guests)
-			.where(inArray(guests.id, guestIds));
+			.where(and(eq(guests.clubId, clubId), inArray(guests.id, guestIds)));
 		for (const r of rows) {
 			map.set(`guest:${r.id}`, { phone: r.phone, email: r.email });
 		}
