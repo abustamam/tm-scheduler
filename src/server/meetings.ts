@@ -25,6 +25,8 @@ import {
 	requireUser,
 } from "./guards";
 import {
+	type Contact,
+	contactKey,
 	loadHolderContacts,
 	loadRosterWithContact,
 } from "./meeting-contacts-logic";
@@ -248,13 +250,13 @@ async function loadMeetingDetail(
 				slots.flatMap((s) => (s.assigneeId ? [s.assigneeId] : [])),
 				slots.flatMap((s) => (s.assigneeGuestId ? [s.assigneeGuestId] : [])),
 			)
-		: new Map<string, { phone: string | null; email: string | null }>();
+		: new Map<string, Contact>();
 
 	const slotsWithContact = slots.map((s) => {
 		const key = s.assigneeGuestId
-			? `guest:${s.assigneeGuestId}`
+			? contactKey("guest", s.assigneeGuestId)
 			: s.assigneeId
-				? `member:${s.assigneeId}`
+				? contactKey("member", s.assigneeId)
 				: null;
 		const c = key ? holderContacts.get(key) : undefined;
 		return {

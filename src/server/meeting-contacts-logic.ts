@@ -17,6 +17,12 @@ export interface RosterContact extends Contact {
 	name: string;
 }
 
+/** Map key for a holder contact — kept in one place so the write side
+ *  (loadHolderContacts) and read side (loadMeetingDetail) can't drift. */
+export function contactKey(kind: "member" | "guest", id: string): string {
+	return `${kind}:${id}`;
+}
+
 /** Active members of the club with contact — the recruiting pool. */
 export async function loadRosterWithContact(
 	clubId: string,
@@ -53,7 +59,7 @@ export async function loadHolderContacts(
 			.from(members)
 			.where(and(eq(members.clubId, clubId), inArray(members.id, memberIds)));
 		for (const r of rows) {
-			map.set(`member:${r.id}`, { phone: r.phone, email: r.email });
+			map.set(contactKey("member", r.id), { phone: r.phone, email: r.email });
 		}
 	}
 
@@ -63,7 +69,7 @@ export async function loadHolderContacts(
 			.from(guests)
 			.where(and(eq(guests.clubId, clubId), inArray(guests.id, guestIds)));
 		for (const r of rows) {
-			map.set(`guest:${r.id}`, { phone: r.phone, email: r.email });
+			map.set(contactKey("guest", r.id), { phone: r.phone, email: r.email });
 		}
 	}
 

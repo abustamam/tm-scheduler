@@ -210,6 +210,9 @@ describe.skipIf(!hasTestDb)("public reads (no session)", () => {
 		expect(res?.unavailableMemberIds).toEqual([seed.memberId]);
 	});
 
+	// Documents the public payload shape (no contact). NOTE: this asserts against
+	// the mirror, so real regression protection lives in the source-structural
+	// guard meetings-contact-gate.guard.test.ts, not here.
 	it("PII guard: the public (no-session) payload carries no member contact", async () => {
 		const res = await getMeetingPublic(seed.meetingId);
 		expect(res?.roster ?? []).toEqual([]);
