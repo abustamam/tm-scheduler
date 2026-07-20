@@ -319,7 +319,7 @@ describe.skipIf(!hasTestDb)("meeting contacts (integration)", () => {
 		});
 		const guestId = await addGuest(seeded.clubId, "Holder G", { email: "g@x.io" });
 
-		const map = await loadHolderContacts([memberId], [guestId]);
+		const map = await loadHolderContacts(seeded.clubId, [memberId], [guestId]);
 		expect(map.get(`member:${memberId}`)).toEqual({
 			phone: "14155550003",
 			email: "m@x.io",
@@ -327,8 +327,19 @@ describe.skipIf(!hasTestDb)("meeting contacts (integration)", () => {
 		expect(map.get(`guest:${guestId}`)).toEqual({ phone: null, email: "g@x.io" });
 	});
 
+	it("loadHolderContacts excludes ids from a different club (PII scope)", async () => {
+		const other = await seedClub();
+		const foreignMemberId = await addMember(other.clubId, "Other Club Member", {
+			phone: "14155559999",
+			email: "other@x.io",
+		});
+		const map = await loadHolderContacts(seeded.clubId, [foreignMemberId], []);
+		expect(map.size).toBe(0);
+		await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+	});
+
 	it("loadHolderContacts returns an empty map for empty inputs (no query)", async () => {
-		const map = await loadHolderContacts([], []);
+		const map = await loadHolderContacts(seeded.clubId, [], []);
 		expect(map.size).toBe(0);
 	});
 });
@@ -382,9 +393,12 @@ export async function loadRosterWithContact(
 /**
  * Resolve contact for held slots, keyed `member:<id>` / `guest:<id>`. Handles
  * holders who are NOT in the active roster (inactive members, guests). Runs no
- * query for an empty id list.
+ * query for an empty id list. Scoped by `clubId` as defense-in-depth: this is a
+ * PII-boundary function, so it never returns another club's contact even if a
+ * caller passes a foreign id.
  */
 export async function loadHolderContacts(
+	clubId: string,
 	memberIds: string[],
 	guestIds: string[],
 ): Promise<Map<string, Contact>> {
@@ -394,7 +408,7 @@ export async function loadHolderContacts(
 		const rows = await db
 			.select({ id: members.id, phone: members.phone, email: members.email })
 			.from(members)
-			.where(inArray(members.id, memberIds));
+			.where(and(eq(members.clubId, clubId), inArray(members.id, memberIds)));
 		for (const r of rows) {
 			map.set(`member:${r.id}`, { phone: r.phone, email: r.email });
 		}
@@ -404,7 +418,7 @@ export async function loadHolderContacts(
 		const rows = await db
 			.select({ id: guests.id, phone: guests.phone, email: guests.email })
 			.from(guests)
-			.where(inArray(guests.id, guestIds));
+			.where(and(eq(guests.clubId, clubId), inArray(guests.id, guestIds)));
 		for (const r of rows) {
 			map.set(`guest:${r.id}`, { phone: r.phone, email: r.email });
 		}
@@ -507,6 +521,7 @@ with a call to the new loader:
 	// the public payload.
 	const holderContacts = canManage
 		? await loadHolderContacts(
+				meeting.clubId,
 				slots.flatMap((s) => (s.assigneeId ? [s.assigneeId] : [])),
 				slots.flatMap((s) => (s.assigneeGuestId ? [s.assigneeGuestId] : [])),
 			)
