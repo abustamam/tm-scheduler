@@ -70,9 +70,11 @@ export type RosterSlot = {
  * place of the speaker block; every other role keeps its original position.
  *
  * The paired evaluator is the evaluator-category role with the most slots (tie
- * → first seen) — "Evaluator" (3), not "General Evaluator" (1), matching the
- * `pickSpeakerAndEvaluatorRoles` heuristic. When there is no speaker or no such
- * evaluator, the roster is returned in its original order.
+ * → first seen), matching the `pickSpeakerAndEvaluatorRoles` heuristic. In the
+ * standard template that is "Evaluator" (3) uncontested, since General Evaluator
+ * is a leadership role; the count tie-break still guards clubs that categorize
+ * their GE as an evaluator. When there is no speaker or no such evaluator, the
+ * roster is returned in its original order.
  *
  * Assumes the roles before the speaker block fill whole rows (the standard
  * template has two leadership roles), so the interleaved pairs start in the

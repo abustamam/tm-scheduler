@@ -260,6 +260,27 @@
       "when": 1784252620043,
       "tag": "0036_cold_sharon_carter",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1784508398362,
+      "tag": "0037_backfill_role_descriptions",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1784508848697,
+      "tag": "0038_add_vote_counter_to_all_clubs",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1784508942581,
+      "tag": "0039_general_evaluator_is_leadership",
+      "breakpoints": true
     }
   ]
 }
