@@ -1,3 +1,5 @@
+import { type RoleSeed, roleSeed } from "#/lib/role-template";
+
 export type RosterMember = {
 	memberId: string;
 	personId: string;
@@ -248,15 +250,15 @@ export function planMeetingImport(
 	return { meeting, slots, unmatched };
 }
 
-export type RoleDefToCreate = {
-	name: string;
-	category: "functionary";
-	isSpeakerRole: false;
-	defaultCount: number;
-};
+export type RoleDefToCreate = RoleSeed;
 
-/** The only role definition this backfill may create: Vote Counter. */
+/**
+ * The only role definition this backfill may create: Vote Counter. Sourced from
+ * ROLE_TEMPLATE rather than re-declared here, so a club backfilled by the
+ * importer gets the same sortOrder and stock description as a freshly seeded
+ * one — before, this inserted a bare row with a null description.
+ */
 export function missingRoleDefinitions(roleDefs: RoleDef[]): RoleDefToCreate[] {
 	const has = roleDefs.some((d) => d.name === "Vote Counter");
-	return has ? [] : [{ name: "Vote Counter", category: "functionary", isSpeakerRole: false, defaultCount: 1 }];
+	return has ? [] : [roleSeed("Vote Counter")];
 }

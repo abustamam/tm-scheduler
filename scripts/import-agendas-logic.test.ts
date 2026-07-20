@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { roleSeed } from "#/lib/role-template";
 import {
 	type AgendaRecord,
 	levenshtein,
@@ -232,9 +233,12 @@ describe("planMeetingImport", () => {
 });
 
 describe("missingRoleDefinitions", () => {
-	it("returns a Vote Counter definition to create when the club lacks it", () => {
+	it("returns the stock Vote Counter definition to create when the club lacks it", () => {
 		const missing = missingRoleDefinitions([{ id: "rd-tm", name: "Toastmaster of the Day" }]);
-		expect(missing).toEqual([{ name: "Vote Counter", category: "functionary", isSpeakerRole: false, defaultCount: 1 }]);
+		// Sourced from ROLE_TEMPLATE, so a backfilled club gets the same sortOrder
+		// and stock description as a freshly seeded one — not a bare row.
+		expect(missing).toEqual([roleSeed("Vote Counter")]);
+		expect(missing[0]?.description).toBeTruthy();
 	});
 
 	it("returns nothing when Vote Counter already exists", () => {

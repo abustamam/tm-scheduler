@@ -214,7 +214,7 @@ export interface CreateClubResult {
 /**
  * Provision a new club in ONE atomic transaction (#182):
  *   1. the `clubs` row (name + unique club number + a derived unique slug),
- *   2. the 8 standard `role_definitions` (ROLE_TEMPLATE) — a club is
+ *   2. the standard `role_definitions` (ROLE_TEMPLATE) — a club is
  *      non-functional without them,
  *   3. the first admin: a `people` row (user_id LEFT NULL — #188 links it on
  *      first sign-in) + a `members` row with club_role=admin, status=active.

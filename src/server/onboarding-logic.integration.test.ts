@@ -44,7 +44,7 @@ describe.skipIf(!hasTestDb)("onboarding console (#182)", () => {
 		return `TM-${randomUUID().slice(0, 8)}`;
 	}
 
-	it("creates the club, the 8 standard roles, and an unlinked admin membership atomically", async () => {
+	it("creates the club, the standard roles, and an unlinked admin membership atomically", async () => {
 		const number = uniqueNumber();
 		const res = await createClubWithAdmin({
 			clubName: "Downtown Speakers",
@@ -64,7 +64,7 @@ describe.skipIf(!hasTestDb)("onboarding console (#182)", () => {
 		expect(club.slug.length).toBeGreaterThan(0);
 		expect(club.slug).toBe(res.slug);
 
-		// The 8 standard role definitions (reused from ROLE_TEMPLATE)
+		// The standard role definitions (reused from ROLE_TEMPLATE)
 		const defs = await testDb
 			.select({ name: roleDefinitions.name })
 			.from(roleDefinitions)

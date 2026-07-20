@@ -1,10 +1,14 @@
 /**
- * The 8 standard Toastmasters meeting roles seeded into a brand-new club's
+ * The 9 standard Toastmasters meeting roles seeded into a brand-new club's
  * `role_definitions` — a club is non-functional without them. Kept as a pure,
  * db-free constant so it can be shared by BOTH the dev seed (`src/db/seed.ts`)
  * and the superadmin onboarding console (`onboarding-logic.ts`, #182) without
  * duplicating role strings or pulling the self-executing seed script into the
  * server bundle.
+ *
+ * The agenda importer (`scripts/import-agendas-logic.ts`) also reads Vote
+ * Counter from here when backfilling a club that predates it, so the seeded
+ * row and the backfilled row are byte-identical.
  */
 export type RoleSeed = {
 	name: string;
@@ -53,8 +57,11 @@ export const ROLE_TEMPLATE: RoleSeed[] = [
 			"Provides structured written and verbal feedback on your assigned speaker's delivery, language, and achievement of their project goals.",
 	},
 	{
+		// Leadership, not evaluator: the GE runs the evaluation team rather than
+		// evaluating a speech. Category drives the agenda-screen section grouping
+		// and Best Evaluator award eligibility (the GE is not a candidate).
 		name: "General Evaluator",
-		category: "evaluator",
+		category: "leadership",
 		defaultCount: 1,
 		sortOrder: 50,
 		isSpeakerRole: false,
@@ -88,4 +95,20 @@ export const ROLE_TEMPLATE: RoleSeed[] = [
 		description:
 			"Introduces a Word of the Day, monitors language use throughout the meeting, and commends creative phrasing while noting grammatical slips in the evaluation segment.",
 	},
+	{
+		name: "Vote Counter",
+		category: "functionary",
+		defaultCount: 1,
+		sortOrder: 90,
+		isSpeakerRole: false,
+		description:
+			"Distributes and collects ballots for Best Speaker, Best Evaluator, and Best Table Topics, tallies the votes discreetly, and hands the results to the Toastmaster before the awards are announced.",
+	},
 ];
+
+/** Look up a stock role by name — throws if the template no longer defines it. */
+export function roleSeed(name: string): RoleSeed {
+	const seed = ROLE_TEMPLATE.find((r) => r.name === name);
+	if (!seed) throw new Error(`No stock role definition named "${name}"`);
+	return seed;
+}
