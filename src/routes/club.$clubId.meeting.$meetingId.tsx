@@ -378,6 +378,10 @@ function MeetingView() {
 				roster={roster}
 				roleRecency={roleRecency}
 				unavailableMemberIds={unavailableMemberIds}
+				// Public self-serve viewers never have `canManage`, so the confirm
+				// nudge never renders here — no share context to build these from.
+				shareUrl=""
+				meetingDate=""
 			/>
 
 			{isTmod && !over ? (

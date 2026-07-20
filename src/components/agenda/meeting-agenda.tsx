@@ -3,6 +3,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { AssignSlotSheet } from "#/components/club/assign-slot-sheet";
 import { EditSpeechSheet } from "#/components/club/edit-speech-sheet";
+import { NudgeButtons } from "#/components/club/nudge-buttons";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import {
@@ -86,6 +87,9 @@ export interface MeetingAgendaProps {
 	/** Existing club guests for the admin "assign a guest" picker (#151). Admin
 	 *  surface only (gated on `viewer.canManage`); empty on the public view. */
 	clubGuests?: { id: string; name: string }[];
+	/** Absolute public meeting URL + friendly date, for tap-to-nudge (#37). */
+	shareUrl: string;
+	meetingDate: string;
 }
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -116,6 +120,8 @@ export function MeetingAgenda({
 	unavailableMembers = [],
 	pairedRoleIds = new Set<string>(),
 	clubGuests = [],
+	shareUrl,
+	meetingDate,
 }: MeetingAgendaProps) {
 	const { currentMemberId } = viewer;
 	// Claiming an open slot requires an identity AND the capability — a
@@ -418,6 +424,18 @@ export function MeetingAgenda({
 													>
 														{isOpen ? "Assign…" : "Reassign…"}
 													</Button>
+												) : null}
+
+												{viewer.canManage && !isOpen && slot.assigneeName ? (
+													<NudgeButtons
+														name={slot.assigneeName}
+														phone={slot.holderPhone}
+														email={slot.holderEmail}
+														roleName={slot.roleName}
+														meetingDate={meetingDate}
+														shareUrl={shareUrl}
+														mode="confirm"
+													/>
 												) : null}
 
 												{viewer.canManage && !slot.isSpeakerRole ? (

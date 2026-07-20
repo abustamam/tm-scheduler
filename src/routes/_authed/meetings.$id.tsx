@@ -45,6 +45,7 @@ import {
 import { deriveMeetingNavItems } from "#/lib/meeting-nav";
 import { pairedRoleIds } from "#/lib/meeting-roles";
 import { sessionViewer } from "#/lib/meeting-viewer";
+import { footerDate } from "#/lib/slide-layout";
 import {
 	completeMeeting,
 	getMeeting,
@@ -163,6 +164,11 @@ function MeetingDetail() {
 	const viewer = locked ? lockedViewer(baseViewer) : baseViewer;
 	const pairedIds = pairedRoleIds(clubRoles);
 	const addableRoles = clubRoles.filter((r) => !pairedIds.has(r.id));
+	const shareUrl =
+		typeof window === "undefined"
+			? `/club/${clubSlug}/meeting/${meeting.id}`
+			: `${window.location.origin}/club/${clubSlug}/meeting/${meeting.id}`;
+	const nudgeDate = footerDate(meeting.scheduledAt, timezone);
 
 	// Session/admin actions: no `selfMemberId` — the server takes the admin path.
 	const actions: MeetingAgendaActions = {
@@ -386,6 +392,8 @@ function MeetingDetail() {
 				unavailableMembers={unavailableMembers}
 				pairedRoleIds={pairedIds}
 				clubGuests={clubGuests}
+				shareUrl={shareUrl}
+				meetingDate={nudgeDate}
 			/>
 
 			{minutes.visible && minutes.data ? (

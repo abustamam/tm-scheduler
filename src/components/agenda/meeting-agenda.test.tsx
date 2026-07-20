@@ -66,6 +66,8 @@ function renderAgenda(
 			roleRecency={{}}
 			unavailableMemberIds={[]}
 			pairedRoleIds={pairedRoleIds}
+			shareUrl="https://gavelup.app/club/test/meeting/m1"
+			meetingDate="Jan 1, 2026"
 		/>,
 	);
 }
