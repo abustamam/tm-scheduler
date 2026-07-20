@@ -4,8 +4,6 @@
 // and imported type-only here (erased at build); the constructor is passed in and
 // the library is dynamic-import()ed at click time (see pptx-download-button.tsx).
 import type PptxGenJS from "pptxgenjs";
-import colorMarkPng from "#/assets/ToastmastersWordmarkColorTight.png?inline";
-import whiteMarkPng from "#/assets/ToastmastersWordmarkWhiteTight.png?inline";
 import type { Slide } from "./agenda-slides";
 import { TOASTMASTERS_DISCLAIMER } from "./brand";
 import {
@@ -31,23 +29,6 @@ const W = 13.33;
 const H = 7.5;
 const FOOT_H = 1.13; // ~8.5% of width
 
-// Tight wordmark aspect (px h/w) so addImage keeps the real proportions.
-const MARK_RATIO = { color: 184 / 1181, white: 257 / 1641 };
-
-function addWordmark(
-	s: PptxSlide,
-	tone: "color" | "white",
-	opts: { x: number; y: number; w: number },
-) {
-	s.addImage({
-		data: tone === "color" ? colorMarkPng : whiteMarkPng,
-		x: opts.x,
-		y: opts.y,
-		w: opts.w,
-		h: opts.w * MARK_RATIO[tone],
-	});
-}
-
 export function deckToPptx(Pptx: PptxCtor, deck: Slide[]): Presentation {
 	const pptx = new Pptx();
 	pptx.layout = "LAYOUT_WIDE";
@@ -71,10 +52,16 @@ function renderSplash(
 ) {
 	const dark = layout.tone === "dark";
 	s.background = { color: dark ? NAVY : GROUND };
-	addWordmark(s, dark ? "white" : "color", {
-		x: (W - 3.4) / 2,
-		y: 1.5,
-		w: 3.4,
+	// Nominative word use, not the official wordmark image (ADR-0024).
+	s.addText("Toastmasters", {
+		x: 0.8,
+		y: 1.35,
+		w: W - 1.6,
+		h: 0.9,
+		align: "center",
+		bold: true,
+		fontSize: 40,
+		color: dark ? "FFFFFF" : NAVY,
 	});
 	s.addShape(pptx.ShapeType.line, {
 		x: (W - 6) / 2,
@@ -151,7 +138,18 @@ function renderContent(
 		h: FOOT_H,
 		fill: { color: NAVY },
 	});
-	addWordmark(s, "white", { x: 0.67, y: H - FOOT_H + 0.42, w: 1.7 });
+	// GavelUp origin mark on deck chrome (ADR-0024).
+	s.addText("GavelUp", {
+		x: 0.67,
+		y: H - FOOT_H + 0.18,
+		w: 2.5,
+		h: FOOT_H - 0.36,
+		align: "left",
+		valign: "middle",
+		bold: true,
+		fontSize: 15,
+		color: "FFFFFF",
+	});
 	s.addText(
 		[
 			{ text: club, options: { breakLine: true, bold: true, fontSize: 15 } },
