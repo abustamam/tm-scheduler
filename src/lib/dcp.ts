@@ -3,9 +3,10 @@
 // and the client route (`src/routes/_authed/admin/dcp.tsx`) can share the goal
 // catalog and the tier/base math without dragging `pg` into the browser bundle.
 //
-// v1 is a MANUAL scoreboard: every goal is hand-entered except the two
-// new-member goals, which are pre-filled from the roster (see `splitNewMembers`).
-// The education goals (1–6) auto-derivation is deferred (#245).
+// Every goal is President-entered. Two assists offer editable SUGGESTIONS rather
+// than writing on their own: the new-member goals from the roster
+// (`splitNewMembers`, pre-filled at start) and the education goals from Pathways
+// completions (`educationGoalsFromLevelCounts`, live-derived — #245).
 
 export type DcpGoalCategory =
 	| "education"
@@ -182,18 +183,86 @@ export function isBaseMet(
 }
 
 // ---------------------------------------------------------------------------
-// New-member assist (goals 7 & 8) — the only roster-derived pre-fill
+// Paired-goal splits (the "N ... N additional" goal pairs)
 // ---------------------------------------------------------------------------
 
 /**
- * Split a program-year new-member count across the two membership goals: fill
- * goal 7 first (up to 4), then goal 8 (up to 4). Anything beyond 8 is ignored —
- * both goals are already met.
+ * Split a count across a DCP goal PAIR — the recurring "N members achieve X" +
+ * "N additional members achieve X" shape (goals 2/3 at cap 2, 5/6 at cap 1,
+ * 7/8 at cap 4). Fill the first goal to `cap`, spill the remainder into the
+ * second up to `cap`; anything beyond `2 × cap` is dropped because both goals
+ * are already met and DCP awards no credit past that.
  */
+export function splitPaired(
+	count: number,
+	cap: number,
+): { first: number; second: number } {
+	const first = Math.max(0, Math.min(count, cap));
+	const second = Math.max(0, Math.min(count - cap, cap));
+	return { first, second };
+}
+
+/** New members added this year across the two membership goals (cap 4 each). */
 export function splitNewMembers(count: number): { g7: number; g8: number } {
-	const g7 = Math.max(0, Math.min(count, 4));
-	const g8 = Math.max(0, Math.min(count - 4, 4));
-	return { g7, g8 };
+	const { first, second } = splitPaired(count, 4);
+	return { g7: first, g8: second };
+}
+
+// ---------------------------------------------------------------------------
+// Education assist (goals 1–6) — derived from Pathways level completions (#245)
+// ---------------------------------------------------------------------------
+
+/** Goal keys the Pathways derivation may fill. Never g7–g10 or the base. */
+export const EDUCATION_GOAL_KEYS = [
+	"g1",
+	"g2",
+	"g3",
+	"g4",
+	"g5",
+	"g6",
+] as const;
+
+/**
+ * Program-year *education awards* counted by level. An award is one approved
+ * Pathways level credited to the club inside the year — counted per completion,
+ * NOT per member: one person finishing the same level in two paths is two
+ * enrollments and therefore two awards.
+ */
+export interface EducationLevelCounts {
+	/** Level 1 completions (goal 1). */
+	n1: number;
+	/** Level 2 completions (split across the goal 2/3 pair). */
+	n2: number;
+	/** Level 3 completions (goal 4). */
+	n3: number;
+	/** Level 4 + Level 5 completions (split across the goal 5/6 pair). */
+	n45: number;
+}
+
+/**
+ * Map per-level award counts onto education goals 1–6.
+ *
+ * Goals 1 and 4 are unpaired and UNCAPPED — a raw count that may exceed the
+ * target, matching how hand entry behaves. The two "N additional" pairs (2/3 at
+ * cap 2, 5/6 at cap 1) fill in order via `splitPaired`, dropping overflow.
+ *
+ * Note "a Path" in the goal 5/6 wording ≡ completing Level 5: the count-based
+ * mirror carries no separate path-complete signal, so a member finishing Level 4
+ * AND the Path in one year contributes 2 to `n45` (filling both goals).
+ */
+export function educationGoalsFromLevelCounts(
+	counts: EducationLevelCounts,
+): Record<string, number> {
+	const l2 = splitPaired(counts.n2, 2);
+	const l45 = splitPaired(counts.n45, 1);
+	return {
+		g1: Math.max(0, counts.n1),
+		g2: l2.first,
+		g3: l2.second,
+		g4: Math.max(0, counts.n3),
+		g5: l45.first,
+		g6: l45.second,
+	};
 }
 
 // ---------------------------------------------------------------------------
