@@ -20,7 +20,10 @@ const uploadSchema = z.object({
 	clubId: z.string().uuid(),
 	// Raw CSV text (the client reads the File via `file.text()`). A TM export is a
 	// few KB even for a large club, so JSON text is fine — no multipart needed.
-	csv: z.string().min(1),
+	// Bounded to 2 MB so an authenticated admin can't force unbounded parse/memory
+	// or a long DB-connection hold via a huge payload (matches the batch-size caps
+	// on other endpoints, e.g. pathways-ingest).
+	csv: z.string().min(1).max(2_000_000),
 });
 
 /** Dry-run: parse + classify the upload into an insert/update/skip diff. */
