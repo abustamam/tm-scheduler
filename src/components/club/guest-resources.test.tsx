@@ -7,7 +7,8 @@ import {
 } from "@tanstack/react-router";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import { GuestResources } from "./guest-resources";
+import { resourceBySlug } from "#/data/resources";
+import { GUEST_LINKS, GuestResources } from "./guest-resources";
 
 afterEach(cleanup);
 
@@ -29,5 +30,14 @@ describe("GuestResources", () => {
 		expect(screen.getByText(/what to expect/i)).toBeTruthy();
 		expect(screen.getByText(/first-time guest faq/i)).toBeTruthy();
 		expect(screen.getByText(/meeting roles/i)).toBeTruthy();
+	});
+
+	it("every guest link points to a real resource slug", () => {
+		for (const { slug } of GUEST_LINKS) {
+			expect(
+				resourceBySlug(slug),
+				`unknown resource slug: ${slug}`,
+			).toBeTruthy();
+		}
 	});
 });

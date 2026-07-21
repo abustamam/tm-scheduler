@@ -2,7 +2,7 @@ import { Link } from "@tanstack/react-router";
 import { ArrowRight } from "lucide-react";
 
 /** Slugs live in `src/data/resources.ts` — these three are the guest-facing ones. */
-const GUEST_LINKS: { slug: string; label: string }[] = [
+export const GUEST_LINKS: { slug: string; label: string }[] = [
 	{ slug: "what-to-expect", label: "What to expect" },
 	{ slug: "guest-faq", label: "First-time guest FAQ" },
 	{ slug: "meeting-roles", label: "Meeting roles" },
@@ -15,9 +15,9 @@ const GUEST_LINKS: { slug: string; label: string }[] = [
 export function GuestResources() {
 	return (
 		<section className="rounded-xl border border-[var(--line)] bg-card p-4">
-			<p className="text-sm font-semibold text-foreground">
+			<h2 className="text-sm font-semibold text-foreground">
 				New to Toastmasters?
-			</p>
+			</h2>
 			<ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1.5">
 				{GUEST_LINKS.map((r) => (
 					<li key={r.slug}>
