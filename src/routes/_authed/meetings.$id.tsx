@@ -433,6 +433,17 @@ function MeetingDetail() {
 				clubGuests={clubGuests}
 				shareUrl={shareUrl}
 				meetingDate={nudgeDate}
+				meeting={{
+					id: meeting.id,
+					wordOfTheDay: meeting.wordOfTheDay,
+					wodDefinition: meeting.wodDefinition,
+					wodExample: meeting.wodExample,
+				}}
+				actorMemberId={currentMemberId}
+				selfMemberId={currentMemberId}
+				onMetaSaved={async () => {
+					await router.invalidate();
+				}}
 			/>
 
 			{minutes.visible && minutes.data ? (

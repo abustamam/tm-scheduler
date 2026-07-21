@@ -1,6 +1,7 @@
 import { Loader2, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { MeetingWordOfTheDayDialog } from "#/components/agenda/meeting-word-of-the-day-dialog";
 import { AssignSlotSheet } from "#/components/club/assign-slot-sheet";
 import { EditSpeechSheet } from "#/components/club/edit-speech-sheet";
 import { NudgeButtons } from "#/components/club/nudge-buttons";
@@ -102,6 +103,17 @@ export interface MeetingAgendaProps {
 	/** Absolute public meeting URL + friendly date, for tap-to-nudge (#37). */
 	shareUrl: string;
 	meetingDate: string;
+	/** The meeting's WOD fields + id, for the lifted editors. */
+	meeting: {
+		id: string;
+		wordOfTheDay: string | null;
+		wodDefinition: string | null;
+		wodExample: string | null;
+	};
+	/** Identity args the lifted edit dialogs pass to their server fns. */
+	actorMemberId: string | null;
+	selfMemberId: string | null;
+	onMetaSaved: () => void | Promise<void>;
 }
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -134,8 +146,13 @@ export function MeetingAgenda({
 	clubGuests = [],
 	shareUrl,
 	meetingDate,
+	meeting,
+	actorMemberId,
+	selfMemberId,
+	onMetaSaved,
 }: MeetingAgendaProps) {
 	const { currentMemberId } = viewer;
+	const [wodOpen, setWodOpen] = useState(false);
 	// Claiming an open slot requires an identity AND the capability — a
 	// `lockedViewer` sets `canClaim` false so a locked/past meeting is read-only.
 	// Same for every slot, so compute once.
@@ -246,6 +263,30 @@ export function MeetingAgenda({
 
 	return (
 		<>
+			{viewer.canEditWod ? (
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					onClick={() => setWodOpen(true)}
+				>
+					Edit Word of the Day
+				</Button>
+			) : null}
+			{viewer.canEditWod ? (
+				<MeetingWordOfTheDayDialog
+					open={wodOpen}
+					onOpenChange={setWodOpen}
+					meeting={meeting}
+					actorMemberId={actorMemberId}
+					selfMemberId={selfMemberId}
+					onSaved={async () => {
+						setWodOpen(false);
+						await onMetaSaved();
+					}}
+				/>
+			) : null}
+
 			{viewer.canManage ? (
 				<section className="rounded-xl border bg-card p-4">
 					<div className="flex flex-wrap items-center justify-between gap-3">

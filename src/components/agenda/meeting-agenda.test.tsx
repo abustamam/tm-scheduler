@@ -68,6 +68,15 @@ function renderAgenda(
 			pairedRoleIds={pairedRoleIds}
 			shareUrl="https://gavelup.app/club/test/meeting/m1"
 			meetingDate="Jan 1, 2026"
+			meeting={{
+				id: "m1",
+				wordOfTheDay: null,
+				wodDefinition: null,
+				wodExample: null,
+			}}
+			actorMemberId="me"
+			selfMemberId="me"
+			onMetaSaved={() => {}}
 		/>,
 	);
 }
@@ -225,6 +234,36 @@ describe("MeetingAgenda capability gating", () => {
 		);
 		expect(screen.getByRole("button", { name: /Assign/ })).toBeTruthy();
 		expect(screen.getByRole("button", { name: "+ Add speaker" })).toBeTruthy();
+	});
+
+	it("shows the WOD editor to a pure grammarian, hides it from a plain member", () => {
+		renderAgenda(
+			meetingViewer({
+				currentMemberId: "me",
+				canManage: false,
+				isTmod: false,
+				isGrammarian: true,
+				isEditableWindow: true,
+			}),
+			[slot({ status: "open" })],
+		);
+		expect(
+			screen.getByRole("button", { name: /edit word of the day/i }),
+		).toBeTruthy();
+		cleanup();
+		renderAgenda(
+			meetingViewer({
+				currentMemberId: "me",
+				canManage: false,
+				isTmod: false,
+				isGrammarian: false,
+				isEditableWindow: true,
+			}),
+			[slot({ status: "open" })],
+		);
+		expect(
+			screen.queryByRole("button", { name: /edit word of the day/i }),
+		).toBeNull();
 	});
 });
 
