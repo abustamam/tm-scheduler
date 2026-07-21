@@ -336,6 +336,21 @@ git commit -m "refactor(meeting): unify the meeting viewer adapter + role-flag h
 
 ---
 
+## Task 1b: Wire the newly-granted self-serve/TMOD actions on the authed route
+
+**(Added during execution — the plan gap surfaced by Task 1.)** Unifying the viewer turns on `canTakeOver` for any signed-in member and `canManageSpeakers` for a signed-in TMOD on the authed route, but the authed route's `actions` object wired neither: `takeover` was absent (the component's `actions.takeover?.()` → silent no-op button), and `addSpeaker`/`removeSpeaker` omitted `selfMemberId` (the server's tmod-self-assert path), so a non-admin TMOD was rejected. The assign picker (`AssignSlotSheet`) and edit-speech sheet (`EditSpeechSheet`) already work — they call the trust-based `reassignSlot` / `updateSpeakerDetails` with `currentMemberId` internally.
+
+**Files:** Modify `src/routes/_authed/meetings.$id.tsx`.
+
+- [x] Add `reassignSlot` to the `#/server/slots` import.
+- [x] Add a `takeover` handler to the `actions` object: `reassignSlot({ data: { slotId: slot.id, memberId: currentMemberId, actorMemberId: currentMemberId } })` (guard `currentMemberId` non-null). Trust-based, mirrors the public route.
+- [x] Thread `selfMemberId: currentMemberId` into the `addSpeakerSlot` and `removeSpeakerSlot` calls (harmless for admins; enables the non-admin TMOD path).
+- [x] Verify: `bun run typecheck` clean, `bun run check` exit 0, `meeting-agenda.test.tsx` green. Commit `fix(meeting): wire self-serve/TMOD actions on the authed route for the unified viewer (#302)`.
+
+(Done in commit `50dc486`.)
+
+---
+
 ## Task 2: Lift the focused Word-of-the-Day dialog into `<MeetingAgenda>`
 
 Extract the existing `WordOfTheDayDialog` (public route) into a shared component and render it inside `<MeetingAgenda>` under `viewer.canEditWod`, wired via a new action. Remove the inline dialog + button from the public route. After this task the **authed route gains the WOD editor for a signed-in Grammarian** — the #302 WOD half.
