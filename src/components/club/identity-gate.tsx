@@ -2,6 +2,7 @@ import {
 	createContext,
 	useCallback,
 	useContext,
+	useEffect,
 	useMemo,
 	useRef,
 	useState,
@@ -75,6 +76,10 @@ export function IdentityGateProvider({
 	}, [effective]);
 
 	const promptIdentity = useCallback(() => setOpen(true), []);
+
+	// If the provider unmounts while a caller is awaiting, don't leave the
+	// promise hanging — resolve pending callers with null (abort).
+	useEffect(() => () => flush(null), [flush]);
 
 	const handlePicked = useCallback(
 		(m: StoredMember) => {

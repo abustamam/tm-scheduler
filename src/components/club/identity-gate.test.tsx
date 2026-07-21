@@ -76,4 +76,63 @@ describe("IdentityGateProvider", () => {
 		await userEvent.keyboard("{Escape}");
 		await waitFor(() => expect(results).toEqual([null]));
 	});
+
+	it("with a session member, requireIdentity resolves immediately and never opens the dialog", async () => {
+		const results: unknown[] = [];
+		const qc = new QueryClient();
+		render(
+			<QueryClientProvider client={qc}>
+				<IdentityGateProvider
+					clubUuid={CLUB_UUID}
+					clubSlug={CLUB_SLUG}
+					sessionMember={{ id: "m-sess", name: "Session User" }}
+				>
+					<Harness onResult={(v) => results.push(v)} />
+				</IdentityGateProvider>
+			</QueryClientProvider>,
+		);
+		await userEvent.click(screen.getByText("act"));
+		await waitFor(() =>
+			expect(results).toEqual([{ id: "m-sess", name: "Session User" }]),
+		);
+		// No dialog was ever shown (PickNameForm's roster never renders).
+		expect(screen.queryByText("Jane Doe")).toBeNull();
+	});
+
+	it("single-flight: concurrent requireIdentity calls all resolve with the one pick", async () => {
+		const results: unknown[] = [];
+		function MultiHarness() {
+			const { requireIdentity } = useRequireIdentity();
+			return (
+				<button
+					type="button"
+					onClick={() => {
+						void requireIdentity().then((v) => results.push(v));
+						void requireIdentity().then((v) => results.push(v));
+					}}
+				>
+					act2
+				</button>
+			);
+		}
+		const qc = new QueryClient();
+		render(
+			<QueryClientProvider client={qc}>
+				<IdentityGateProvider
+					clubUuid={CLUB_UUID}
+					clubSlug={CLUB_SLUG}
+					sessionMember={null}
+				>
+					<MultiHarness />
+				</IdentityGateProvider>
+			</QueryClientProvider>,
+		);
+		await userEvent.click(screen.getByText("act2"));
+		await userEvent.click(await screen.findByText("Jane Doe"));
+		await waitFor(() => expect(results).toHaveLength(2));
+		expect(results).toEqual([
+			{ id: "m-jane", name: "Jane Doe" },
+			{ id: "m-jane", name: "Jane Doe" },
+		]);
+	});
 });
