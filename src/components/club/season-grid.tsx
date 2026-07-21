@@ -12,6 +12,7 @@ import {
 	DialogTitle,
 } from "#/components/ui/dialog";
 import { formatMeetingDate } from "#/lib/format";
+import type { StoredMember } from "#/lib/member-identity";
 import { meetingRoleOptions } from "#/lib/member-role-picker";
 import {
 	type MemberMeetingStatus,
@@ -73,9 +74,7 @@ export function SeasonGrid({
 	onChanged?: () => void | Promise<void>;
 	/** Public surface: resolve/collect identity before a claim when there's no
 	 *  `currentMemberId`. */
-	requireIdentity?: () => Promise<
-		import("#/lib/member-identity").StoredMember | null
-	>;
+	requireIdentity?: () => Promise<StoredMember | null>;
 }) {
 	const rows = projectGrid(data, orientation);
 	// Members × Meetings contact columns (signed-in only) resolve email/phone
@@ -117,21 +116,26 @@ export function SeasonGrid({
 	}, [orientation]);
 
 	async function claim(slotId: string) {
-		let memberId = currentMemberId;
-		if (!memberId && requireIdentity) {
-			const me = await requireIdentity();
-			if (!me) return;
-			memberId = me.id;
-		}
-		if (!memberId) return;
+		// Busy set BEFORE the (possibly multi-second) identity-picker await, so
+		// the tapped cell disables for the whole window — otherwise a second tap
+		// while the picker is open could fire a duplicate claim.
 		setBusySlotId(slotId);
 		try {
+			let memberId = currentMemberId;
+			if (!memberId && requireIdentity) {
+				const me = await requireIdentity();
+				if (!me) return; // dismissed — finally clears busy
+				memberId = me.id;
+			}
+			if (!memberId) return;
 			await claimSlot({
 				data: { slotId, memberId, actorMemberId: memberId },
 			});
 			await onChanged?.();
+			// Pass the freshly-resolved memberId, not the (possibly stale/null)
+			// `currentMemberId` prop, so Undo works for a prospective claimer too.
 			toast.success("Role claimed.", {
-				action: { label: "Undo", onClick: () => release(slotId) },
+				action: { label: "Undo", onClick: () => release(slotId, memberId) },
 			});
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : "Couldn't claim role.");
@@ -140,11 +144,11 @@ export function SeasonGrid({
 		}
 	}
 
-	async function release(slotId: string) {
-		if (!currentMemberId) return;
+	async function release(slotId: string, actorMemberId = currentMemberId) {
+		if (!actorMemberId) return;
 		setBusySlotId(slotId);
 		try {
-			await releaseSlot({ data: { slotId, actorMemberId: currentMemberId } });
+			await releaseSlot({ data: { slotId, actorMemberId } });
 			await onChanged?.();
 			toast.success("Role released.", {
 				action: { label: "Undo", onClick: () => claim(slotId) },
