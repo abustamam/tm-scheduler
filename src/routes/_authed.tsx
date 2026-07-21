@@ -187,7 +187,6 @@ function WorkspaceLayout() {
 			clubName={clubName}
 			clubNumber={clubNumber}
 			isOfficer={isOfficer}
-			hasOffice={hasOffice}
 			isSuperadmin={isSuperadmin}
 			displayName={displayName}
 			roleLabel={roleLabel}
@@ -298,7 +297,6 @@ function SidebarInner({
 	clubName,
 	clubNumber,
 	isOfficer,
-	hasOffice,
 	isSuperadmin,
 	displayName,
 	roleLabel,
@@ -311,7 +309,6 @@ function SidebarInner({
 	clubName: string;
 	clubNumber: string | null;
 	isOfficer: boolean;
-	hasOffice: boolean;
 	isSuperadmin: boolean;
 	displayName: string;
 	roleLabel: string;
@@ -334,7 +331,7 @@ function SidebarInner({
 
 			{searchSlot ? <div className="px-0.5 pb-2">{searchSlot}</div> : null}
 
-			{hasOffice ? (
+			{isOfficer ? (
 				<NavGroup label="Your office">
 					<NavItem
 						to="/officers"
