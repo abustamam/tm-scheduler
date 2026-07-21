@@ -22,7 +22,16 @@ import {
 import { createElement as h, type ReactNode } from "react";
 import { TOASTMASTERS_DISCLAIMER } from "../src/lib/brand";
 
-const C = { ink: "#1f2933", soft: "#52606d", line: "#b8c1cc", faint: "#eef1f4" };
+const C = {
+	ink: "#1f2933",
+	soft: "#52606d",
+	line: "#b8c1cc",
+	faint: "#eef1f4",
+	// Signal colors, mirroring the Timer's green / amber / red cards.
+	green: "#1b7f3b",
+	amber: "#b45309",
+	red: "#c0392b",
+};
 
 const s = StyleSheet.create({
 	page: {
@@ -40,9 +49,19 @@ const s = StyleSheet.create({
 		color: C.soft,
 		letterSpacing: 2,
 	},
-	title: { fontSize: 20, fontFamily: "Helvetica-Bold", marginTop: 2 },
-	subtitle: { fontSize: 10, color: C.soft, marginTop: 2 },
+	// Explicit lineHeight so the 20pt title's descenders sit inside its box and
+	// don't collide with the subtitle; marginBottom owns the title→subtitle gap.
+	title: {
+		fontSize: 20,
+		fontFamily: "Helvetica-Bold",
+		lineHeight: 1.3,
+		marginTop: 4,
+		marginBottom: 6,
+	},
+	subtitle: { fontSize: 10, color: C.soft },
 	metaRow: { flexDirection: "row", gap: 18, marginTop: 14 },
+	wodRow: { flexDirection: "row", gap: 18 },
+	winnerRow: { flexDirection: "row", gap: 18, marginTop: 6 },
 	metaField: {
 		flexGrow: 1,
 		flexBasis: 0,
@@ -55,7 +74,7 @@ const s = StyleSheet.create({
 	sectionTitle: {
 		fontSize: 12,
 		fontFamily: "Helvetica-Bold",
-		marginTop: 18,
+		marginTop: 14,
 		marginBottom: 6,
 	},
 	note: { fontSize: 9, color: C.soft, marginBottom: 6 },
@@ -84,8 +103,8 @@ const s = StyleSheet.create({
 	blankLine: {
 		borderBottomWidth: 1,
 		borderColor: C.line,
-		height: 22,
-		marginTop: 8,
+		height: 20,
+		marginTop: 6,
 	},
 	box: { borderWidth: 1, borderColor: C.line, padding: 10, marginTop: 8 },
 	footer: {
@@ -101,15 +120,23 @@ const s = StyleSheet.create({
 	},
 });
 
-type Col = { label: string; flex: number };
+type Col = { label: string; flex: number; color?: string };
 
-/** A header row plus one row per entry in `rows` (empty strings = blank cells). */
+/** A header row plus one row per entry in `rows` (empty strings = blank cells).
+ *  A column's optional `color` tints both its header label and its cell text. */
 function table(cols: Col[], rows: string[][]): ReactNode {
 	const head = h(
 		View,
 		{ style: s.thRow },
 		cols.map((c, i) =>
-			h(Text, { key: i, style: [s.th, { flexGrow: c.flex, flexBasis: 0 }] }, c.label),
+			h(
+				Text,
+				{
+					key: i,
+					style: [s.th, { flexGrow: c.flex, flexBasis: 0, color: c.color ?? C.ink }],
+				},
+				c.label,
+			),
 		),
 	);
 	const body = rows.map((row, r) =>
@@ -120,7 +147,7 @@ function table(cols: Col[], rows: string[][]): ReactNode {
 				h(
 					View,
 					{ key: i, style: [s.td, { flexGrow: c.flex, flexBasis: 0 }] },
-					h(Text, { style: s.tdText }, row[i] ?? ""),
+					h(Text, { style: [s.tdText, { color: c.color ?? C.ink }] }, row[i] ?? ""),
 				),
 			),
 		),
@@ -185,9 +212,9 @@ function timer(): ReactNode {
 			table(
 				[
 					{ label: "Assignment", flex: 2 },
-					{ label: "Green (min)", flex: 1 },
-					{ label: "Amber", flex: 1 },
-					{ label: "Red (max)", flex: 1 },
+					{ label: "Green (min)", flex: 1, color: C.green },
+					{ label: "Amber", flex: 1, color: C.amber },
+					{ label: "Red (max)", flex: 1, color: C.red },
 				],
 				[
 					["Ice Breaker", "4:00", "5:00", "6:00"],
@@ -242,17 +269,23 @@ function grammarian(): ReactNode {
 		h(
 			View,
 			{ key: "b", style: s.box },
-			h(Text, {}, "Word:"),
-			h(View, { style: s.blankLine }),
-			h(Text, { style: { marginTop: 8 } }, "Meaning / part of speech:"),
-			h(View, { style: s.blankLine }),
-			h(Text, { style: { marginTop: 8 } }, "Used well by:"),
+			h(
+				View,
+				{ style: s.wodRow },
+				h(Text, { style: s.metaField }, "Word:"),
+				h(Text, { style: s.metaField }, "Part of speech:"),
+			),
+			h(
+				Text,
+				{ style: { marginTop: 12, fontSize: 9, color: C.soft } },
+				"Meaning / how it was used:",
+			),
 			h(View, { style: s.blankLine }),
 		),
 		h(Text, { key: "c", style: s.sectionTitle }, "Good use of language"),
-		h(View, { key: "c-lines" }, ...lines(6)),
+		h(View, { key: "c-lines" }, ...lines(5)),
 		h(Text, { key: "d", style: s.sectionTitle }, "Language to improve"),
-		h(View, { key: "d-lines" }, ...lines(6)),
+		h(View, { key: "d-lines" }, ...lines(5)),
 	]);
 }
 
@@ -273,7 +306,7 @@ function award(title: string): ReactNode[] {
 		),
 		h(
 			View,
-			{ key: `${title}-w`, style: s.metaRow },
+			{ key: `${title}-w`, style: s.winnerRow },
 			h(Text, { style: s.metaField }, "Winner:"),
 		),
 	];
@@ -290,11 +323,9 @@ function ballotCounter(): ReactNode {
 function generalEvaluator(): ReactNode {
 	return sheet("General Evaluator notes", "Evaluate the meeting as a whole and lead the evaluation team.", [
 		h(Text, { key: "a", style: s.sectionTitle }, "Meeting flow & timing"),
-		h(View, { key: "a-lines" }, ...lines(4)),
+		h(View, { key: "a-lines" }, ...lines(3)),
 		h(Text, { key: "b", style: s.sectionTitle }, "Evaluators (evaluate the evaluators)"),
-		h(View, { key: "b-lines" }, ...lines(4)),
-		h(Text, { key: "c", style: s.sectionTitle }, "Language roles (Timer / Ah-Counter / Grammarian)"),
-		h(View, { key: "c-lines" }, ...lines(3)),
+		h(View, { key: "b-lines" }, ...lines(3)),
 		h(Text, { key: "d", style: s.sectionTitle }, "Environment & Sergeant at Arms"),
 		h(View, { key: "d-lines" }, ...lines(3)),
 		h(Text, { key: "e", style: s.sectionTitle }, "Overall commendations"),
