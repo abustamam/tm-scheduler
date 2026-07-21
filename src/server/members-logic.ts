@@ -7,7 +7,7 @@
 // that same module is NOT stripped and drags `pg` → `Buffer` into the browser
 // (ReferenceError: Buffer is not defined). Keeping the db logic in this
 // never-client-imported module keeps `pg` server-side. See `auth-context.ts`.
-import { and, eq, gte, inArray, ne, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, isNull, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import {
@@ -116,6 +116,18 @@ export async function applyMemberEdit(input: EditInput) {
 	const beforeOffices = await currentOfficersFor(input.memberId);
 	await db.transaction(async (tx) => {
 		await tx.update(members).set(next).where(eq(members.id, input.memberId));
+		// Reconcile people.email UP from the membership when the edit sets an email
+		// and the linked Person has none (#306). This fills the gap that made the
+		// #266 emailless-claim takeover possible — a member whose email lived only
+		// on the membership row looked "emailless" at the Person level. Guarded on
+		// `people.email IS NULL` so an existing Person email is NEVER clobbered
+		// (that protects linked accounts, whose email is already set); belt-only.
+		if (next.email !== null) {
+			await tx
+				.update(people)
+				.set({ email: next.email })
+				.where(and(eq(people.id, current.personId), isNull(people.email)));
+		}
 		// Reconcile the office set only when the caller sent one (undefined = leave
 		// terms alone). Dedupe first so a repeated office can't open two terms.
 		if (input.officerPositions !== undefined) {
