@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	deriveMeetingRoleFlags,
 	isGrammarianRoleName,
 	isTmodRoleName,
 	pairedRoleIds,
@@ -127,5 +128,41 @@ describe("pairedRoleIds", () => {
 				def({ id: "spk", category: "speaker", isSpeakerRole: true }),
 			]),
 		).toEqual(new Set(["spk"]));
+	});
+});
+
+describe("deriveMeetingRoleFlags", () => {
+	const slots = [
+		{ roleName: "Toastmaster of the Day", assigneeId: "tmod-m" },
+		{ roleName: "Grammarian", assigneeId: "gram-m" },
+		{ roleName: "Timer", assigneeId: "other-m" },
+	];
+
+	it("flags the member holding the TMOD slot", () => {
+		expect(deriveMeetingRoleFlags(slots, "tmod-m")).toEqual({
+			isTmod: true,
+			isGrammarian: false,
+		});
+	});
+
+	it("flags the member holding the Grammarian slot", () => {
+		expect(deriveMeetingRoleFlags(slots, "gram-m")).toEqual({
+			isTmod: false,
+			isGrammarian: true,
+		});
+	});
+
+	it("flags neither for an unrelated member", () => {
+		expect(deriveMeetingRoleFlags(slots, "other-m")).toEqual({
+			isTmod: false,
+			isGrammarian: false,
+		});
+	});
+
+	it("flags neither when identity is null", () => {
+		expect(deriveMeetingRoleFlags(slots, null)).toEqual({
+			isTmod: false,
+			isGrammarian: false,
+		});
 	});
 });

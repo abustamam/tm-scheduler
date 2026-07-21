@@ -29,11 +29,9 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "#/components/ui/dialog";
-import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { useOnlineStatus } from "#/hooks/use-online-status";
 import { buildSlideDeck } from "#/lib/agenda-slides";
-import { utcToZonedWallTime } from "#/lib/datetime";
 import { formatMeetingDate, formatMeetingTimeRange } from "#/lib/format";
 import {
 	isMeetingLocked,
@@ -43,15 +41,14 @@ import {
 	meetingDateReached,
 } from "#/lib/meeting-lifecycle";
 import { deriveMeetingNavItems } from "#/lib/meeting-nav";
-import { pairedRoleIds } from "#/lib/meeting-roles";
-import { sessionViewer } from "#/lib/meeting-viewer";
+import { deriveMeetingRoleFlags, pairedRoleIds } from "#/lib/meeting-roles";
+import { meetingViewer } from "#/lib/meeting-viewer";
 import { footerDate } from "#/lib/slide-layout";
 import {
 	completeMeeting,
 	getMeeting,
 	listUpcomingMeetings,
 	reopenMeeting,
-	updateMeeting,
 } from "#/server/meetings";
 import { getMinutes } from "#/server/minutes";
 import { getMinutesRecipients } from "#/server/minutes-email";
@@ -61,6 +58,7 @@ import {
 	claimSlot,
 	confirmSlot,
 	moveSpeakerSlot,
+	reassignSlot,
 	releaseSlot,
 	removeRoleSlot,
 	removeSpeakerSlot,
@@ -136,7 +134,6 @@ function MeetingDetail() {
 	// makes the Minutes section editable offline (edits queue locally in
 	// IndexedDB and replay on reconnect — the drain is slice 4).
 	const online = useOnlineStatus();
-	const [editOpen, setEditOpen] = useState(false);
 	const [addRoleOpen, setAddRoleOpen] = useState(false);
 	const [addRoleBusy, setAddRoleBusy] = useState(false);
 	const [lifecycleBusy, setLifecycleBusy] = useState(false);
@@ -160,7 +157,20 @@ function MeetingDetail() {
 	const locked = isMeetingLocked(meeting.status);
 	// Complete is only offered once the meeting's date is today or past.
 	const canComplete = meetingDateReached(meeting.scheduledAt, timezone);
-	const baseViewer = sessionViewer({ currentMemberId, canManage });
+	const { isTmod, isGrammarian } = deriveMeetingRoleFlags(
+		slots,
+		currentMemberId,
+	);
+	const over = meeting.status
+		? meetingDatePassed(meeting.scheduledAt, timezone)
+		: false;
+	const baseViewer = meetingViewer({
+		currentMemberId,
+		canManage,
+		isTmod,
+		isGrammarian,
+		isEditableWindow: !locked && !over,
+	});
 	const viewer = locked ? lockedViewer(baseViewer) : baseViewer;
 	const pairedIds = pairedRoleIds(clubRoles);
 	const addableRoles = clubRoles.filter((r) => !pairedIds.has(r.id));
@@ -190,6 +200,21 @@ function MeetingDetail() {
 				data: { slotId: slot.id, actorMemberId: currentMemberId },
 			});
 		},
+		// Self-serve (rendered under `canTakeOver` for any signed-in member): take
+		// over another member's filled slot. Trust-based (`reassignSlot`), same as
+		// the public surface — a signed-in member acts as their verified self.
+		takeover: async (slot) => {
+			if (!currentMemberId) {
+				throw new Error("Your account isn't linked to a club member yet.");
+			}
+			await reassignSlot({
+				data: {
+					slotId: slot.id,
+					memberId: currentMemberId,
+					actorMemberId: currentMemberId,
+				},
+			});
+		},
 		confirm: async (slot) => {
 			await confirmSlot({
 				data: { slotId: slot.id, actorMemberId: currentMemberId },
@@ -210,14 +235,24 @@ function MeetingDetail() {
 				data: { slotId: slot.id, actorMemberId: currentMemberId },
 			});
 		},
+		// `selfMemberId` lets a signed-in non-admin TMOD add/remove speakers via the
+		// server's tmod-self-assert path; an admin is authorized regardless.
 		addSpeaker: async () => {
 			await addSpeakerSlot({
-				data: { meetingId: meeting.id, actorMemberId: currentMemberId },
+				data: {
+					meetingId: meeting.id,
+					actorMemberId: currentMemberId,
+					selfMemberId: currentMemberId,
+				},
 			});
 		},
 		removeSpeaker: async () => {
 			await removeSpeakerSlot({
-				data: { meetingId: meeting.id, actorMemberId: currentMemberId },
+				data: {
+					meetingId: meeting.id,
+					actorMemberId: currentMemberId,
+					selfMemberId: currentMemberId,
+				},
 			});
 		},
 		onMutated: () => router.invalidate(),
@@ -345,15 +380,6 @@ function MeetingDetail() {
 							+ Add role
 						</Button>
 					) : null}
-					{canManage && !locked ? (
-						<Button
-							size="sm"
-							variant="outline"
-							onClick={() => setEditOpen(true)}
-						>
-							Edit meeting
-						</Button>
-					) : null}
 					{canManage && locked ? (
 						<Button
 							size="sm"
@@ -394,6 +420,13 @@ function MeetingDetail() {
 				clubGuests={clubGuests}
 				shareUrl={shareUrl}
 				meetingDate={nudgeDate}
+				meeting={meeting}
+				timezone={timezone}
+				actorMemberId={currentMemberId}
+				selfMemberId={currentMemberId}
+				onMetaSaved={async () => {
+					await router.invalidate();
+				}}
 			/>
 
 			{minutes.visible && minutes.data ? (
@@ -424,19 +457,6 @@ function MeetingDetail() {
 				/>
 			) : null}
 
-			{canManage ? (
-				<EditMeetingDialog
-					open={editOpen}
-					onOpenChange={setEditOpen}
-					meeting={meeting}
-					timezone={timezone}
-					actorMemberId={currentMemberId}
-					onSaved={async () => {
-						setEditOpen(false);
-						await router.invalidate();
-					}}
-				/>
-			) : null}
 			<Dialog open={addRoleOpen} onOpenChange={setAddRoleOpen}>
 				<DialogContent>
 					<DialogHeader>
@@ -489,151 +509,5 @@ function MeetingDetail() {
 				</DialogContent>
 			</Dialog>
 		</PageContainer>
-	);
-}
-
-function EditMeetingDialog({
-	open,
-	onOpenChange,
-	meeting,
-	timezone,
-	actorMemberId,
-	onSaved,
-}: {
-	open: boolean;
-	onOpenChange: (open: boolean) => void;
-	meeting: Awaited<ReturnType<typeof getMeeting>>["meeting"];
-	timezone: string;
-	actorMemberId: string | null;
-	onSaved: () => void | Promise<void>;
-}) {
-	const [submitting, setSubmitting] = useState(false);
-
-	async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
-		e.preventDefault();
-		const form = new FormData(e.currentTarget);
-		const scheduledAt = String(form.get("scheduledAt") ?? "");
-		if (!scheduledAt) {
-			toast.error("Date & time is required.");
-			return;
-		}
-		setSubmitting(true);
-		try {
-			const lengthRaw = String(form.get("lengthMinutes") ?? "").trim();
-			await updateMeeting({
-				data: {
-					meetingId: meeting.id,
-					actorMemberId,
-					scheduledAt,
-					lengthMinutes: lengthRaw ? Number(lengthRaw) : undefined,
-					theme: String(form.get("theme") ?? "").trim() || undefined,
-					location: String(form.get("location") ?? "").trim() || undefined,
-					wordOfTheDay:
-						String(form.get("wordOfTheDay") ?? "").trim() || undefined,
-					wodDefinition:
-						String(form.get("wodDefinition") ?? "").trim() || undefined,
-					wodExample: String(form.get("wodExample") ?? "").trim() || undefined,
-					notes: String(form.get("notes") ?? "").trim() || undefined,
-				},
-			});
-			toast.success("Meeting updated.");
-			await onSaved();
-		} catch (err) {
-			toast.error(errMessage(err));
-		} finally {
-			setSubmitting(false);
-		}
-	}
-
-	return (
-		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent>
-				<DialogHeader>
-					<DialogTitle>Edit meeting</DialogTitle>
-				</DialogHeader>
-				<form onSubmit={onSubmit} className="space-y-4">
-					<div className="space-y-2">
-						<Label htmlFor="scheduledAt">Date &amp; time</Label>
-						<Input
-							id="scheduledAt"
-							name="scheduledAt"
-							type="datetime-local"
-							required
-							defaultValue={utcToZonedWallTime(
-								new Date(meeting.scheduledAt),
-								timezone,
-							)}
-						/>
-					</div>
-					<div className="space-y-2">
-						<Label htmlFor="lengthMinutes">Length (minutes)</Label>
-						<Input
-							id="lengthMinutes"
-							name="lengthMinutes"
-							type="number"
-							min={1}
-							step={1}
-							defaultValue={meeting.lengthMinutes}
-						/>
-					</div>
-					<div className="space-y-2">
-						<Label htmlFor="theme">Theme</Label>
-						<Input id="theme" name="theme" defaultValue={meeting.theme ?? ""} />
-					</div>
-					<div className="space-y-2">
-						<Label htmlFor="location">Location</Label>
-						<Input
-							id="location"
-							name="location"
-							defaultValue={meeting.location ?? ""}
-						/>
-					</div>
-					<div className="space-y-2">
-						<Label htmlFor="wordOfTheDay">Word of the day</Label>
-						<Input
-							id="wordOfTheDay"
-							name="wordOfTheDay"
-							defaultValue={meeting.wordOfTheDay ?? ""}
-						/>
-					</div>
-					<div className="space-y-2">
-						<Label htmlFor="wodDefinition">Word of the day — definition</Label>
-						<Input
-							id="wodDefinition"
-							name="wodDefinition"
-							defaultValue={meeting.wodDefinition ?? ""}
-						/>
-					</div>
-					<div className="space-y-2">
-						<Label htmlFor="wodExample">
-							Word of the day — example sentence
-						</Label>
-						<Input
-							id="wodExample"
-							name="wodExample"
-							defaultValue={meeting.wodExample ?? ""}
-						/>
-					</div>
-					<div className="space-y-2">
-						<Label htmlFor="notes">Notes</Label>
-						<Input id="notes" name="notes" defaultValue={meeting.notes ?? ""} />
-					</div>
-					<DialogFooter>
-						<DialogClose asChild>
-							<Button type="button" variant="outline" disabled={submitting}>
-								Cancel
-							</Button>
-						</DialogClose>
-						<Button type="submit" disabled={submitting}>
-							{submitting ? (
-								<Loader2 className="size-4 animate-spin" />
-							) : (
-								"Save changes"
-							)}
-						</Button>
-					</DialogFooter>
-				</form>
-			</DialogContent>
-		</Dialog>
 	);
 }

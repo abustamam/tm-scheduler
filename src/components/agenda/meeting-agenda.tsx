@@ -1,6 +1,8 @@
 import { Loader2, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { MeetingMetaDialog } from "#/components/agenda/meeting-meta-dialog";
+import { MeetingWordOfTheDayDialog } from "#/components/agenda/meeting-word-of-the-day-dialog";
 import { AssignSlotSheet } from "#/components/club/assign-slot-sheet";
 import { EditSpeechSheet } from "#/components/club/edit-speech-sheet";
 import { NudgeButtons } from "#/components/club/nudge-buttons";
@@ -102,6 +104,15 @@ export interface MeetingAgendaProps {
 	/** Absolute public meeting URL + friendly date, for tap-to-nudge (#37). */
 	shareUrl: string;
 	meetingDate: string;
+	/** The full meeting row, for the lifted edit dialogs. The WOD dialog reads
+	 *  only a subset (id + wod fields); the meta dialog needs all of it. */
+	meeting: Awaited<ReturnType<typeof getMeeting>>["meeting"];
+	/** Club timezone — the meta dialog renders/parses the date field in it. */
+	timezone: string;
+	/** Identity args the lifted edit dialogs pass to their server fns. */
+	actorMemberId: string | null;
+	selfMemberId: string | null;
+	onMetaSaved: () => void | Promise<void>;
 }
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -134,8 +145,15 @@ export function MeetingAgenda({
 	clubGuests = [],
 	shareUrl,
 	meetingDate,
+	meeting,
+	timezone,
+	actorMemberId,
+	selfMemberId,
+	onMetaSaved,
 }: MeetingAgendaProps) {
 	const { currentMemberId } = viewer;
+	const [wodOpen, setWodOpen] = useState(false);
+	const [metaOpen, setMetaOpen] = useState(false);
 	// Claiming an open slot requires an identity AND the capability — a
 	// `lockedViewer` sets `canClaim` false so a locked/past meeting is read-only.
 	// Same for every slot, so compute once.
@@ -246,6 +264,55 @@ export function MeetingAgenda({
 
 	return (
 		<>
+			{viewer.canEditWod ? (
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					onClick={() => setWodOpen(true)}
+				>
+					Edit Word of the Day
+				</Button>
+			) : null}
+			{viewer.canEditWod ? (
+				<MeetingWordOfTheDayDialog
+					open={wodOpen}
+					onOpenChange={setWodOpen}
+					meeting={meeting}
+					actorMemberId={actorMemberId}
+					selfMemberId={selfMemberId}
+					onSaved={async () => {
+						setWodOpen(false);
+						await onMetaSaved();
+					}}
+				/>
+			) : null}
+			{viewer.canEditMeetingMeta ? (
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					onClick={() => setMetaOpen(true)}
+				>
+					Edit meeting
+				</Button>
+			) : null}
+			{viewer.canEditMeetingMeta ? (
+				<MeetingMetaDialog
+					open={metaOpen}
+					onOpenChange={setMetaOpen}
+					meeting={meeting}
+					timezone={timezone}
+					actorMemberId={actorMemberId}
+					selfMemberId={selfMemberId}
+					canReschedule={viewer.canManage}
+					onSaved={async () => {
+						setMetaOpen(false);
+						await onMetaSaved();
+					}}
+				/>
+			) : null}
+
 			{viewer.canManage ? (
 				<section className="rounded-xl border bg-card p-4">
 					<div className="flex flex-wrap items-center justify-between gap-3">

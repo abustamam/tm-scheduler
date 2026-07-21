@@ -1,73 +1,81 @@
 import { describe, expect, it } from "vitest";
-import { selfAssertedViewer, sessionViewer } from "./meeting-viewer";
+import { meetingViewer } from "./meeting-viewer";
 
-describe("sessionViewer", () => {
-	it("grants the full management set to an admin", () => {
-		const v = sessionViewer({ currentMemberId: "m1", canManage: true });
-		expect(v).toEqual({
-			currentMemberId: "m1",
-			canManage: true,
-			canAssign: true,
-			canManageSpeakers: true,
-			canToggleAvailability: false,
-			canTakeOver: false,
-			canEditOwnSpeech: false,
-			canClaim: true,
-			canReleaseOwn: true,
-		});
+const base = {
+	currentMemberId: "m1",
+	canManage: false,
+	isTmod: false,
+	isGrammarian: false,
+	isEditableWindow: true,
+};
+
+describe("meetingViewer", () => {
+	it("admin gets the full management + meta-edit set, no focused WOD dialog", () => {
+		const v = meetingViewer({ ...base, canManage: true });
+		expect(v.canManage).toBe(true);
+		expect(v.canAssign).toBe(true);
+		expect(v.canManageSpeakers).toBe(true);
+		expect(v.canEditMeetingMeta).toBe(true);
+		expect(v.canEditWod).toBe(false); // admins edit WOD via "Edit meeting"
+		expect(v.canToggleAvailability).toBe(true);
 	});
 
-	it("grants nothing manage-y to a non-admin member", () => {
-		const v = sessionViewer({ currentMemberId: "m1", canManage: false });
+	it("a plain member gets self-serve, no management or meta-edit", () => {
+		const v = meetingViewer(base);
 		expect(v.canManage).toBe(false);
 		expect(v.canAssign).toBe(false);
-		expect(v.canManageSpeakers).toBe(false);
-		// Self-serve capabilities are the public surface's — never on here.
-		expect(v.canToggleAvailability).toBe(false);
-		expect(v.canTakeOver).toBe(false);
-		expect(v.canEditOwnSpeech).toBe(false);
-		expect(v.currentMemberId).toBe("m1");
-	});
-
-	it("keeps a null current member id (unlinked account)", () => {
-		const v = sessionViewer({ currentMemberId: null, canManage: false });
-		expect(v.currentMemberId).toBeNull();
-	});
-});
-
-describe("selfAssertedViewer", () => {
-	it("grants self-serve capabilities to a picked member", () => {
-		const v = selfAssertedViewer({ memberId: "m1", isTmod: false });
-		expect(v.currentMemberId).toBe("m1");
+		expect(v.canEditMeetingMeta).toBe(false);
+		expect(v.canEditWod).toBe(false);
 		expect(v.canToggleAvailability).toBe(true);
 		expect(v.canTakeOver).toBe(true);
 		expect(v.canEditOwnSpeech).toBe(true);
-		// Claim an open slot / release their own — the self-serve slot actions.
 		expect(v.canClaim).toBe(true);
 		expect(v.canReleaseOwn).toBe(true);
-		// Never an admin, and not TMOD here.
-		expect(v.canManage).toBe(false);
-		expect(v.canAssign).toBe(false);
-		expect(v.canManageSpeakers).toBe(false);
 	});
 
-	it("adds assign + speaker management for the TMOD, but never canManage", () => {
-		const v = selfAssertedViewer({ memberId: "m1", isTmod: true });
+	it("a non-admin TMOD gets assign/speakers/meta-edit but no focused WOD dialog", () => {
+		const v = meetingViewer({ ...base, isTmod: true });
 		expect(v.canAssign).toBe(true);
 		expect(v.canManageSpeakers).toBe(true);
-		expect(v.canManage).toBe(false);
+		expect(v.canEditMeetingMeta).toBe(true);
+		expect(v.canEditWod).toBe(false); // TMOD edits WOD via "Edit meeting"
 	});
 
-	it("grants a read-only agenda to a visitor with no picked name", () => {
-		const v = selfAssertedViewer({ memberId: null, isTmod: false });
-		expect(v.currentMemberId).toBeNull();
+	it("a pure Grammarian (not TMOD, not admin) gets the focused WOD dialog", () => {
+		const v = meetingViewer({ ...base, isGrammarian: true });
+		expect(v.canEditWod).toBe(true);
+		expect(v.canEditMeetingMeta).toBe(false);
+	});
+
+	it("a TMOD who is also Grammarian uses meta-edit, not the focused WOD dialog", () => {
+		const v = meetingViewer({ ...base, isTmod: true, isGrammarian: true });
+		expect(v.canEditMeetingMeta).toBe(true);
+		expect(v.canEditWod).toBe(false);
+	});
+
+	it("a null identity can do nothing mutating", () => {
+		const v = meetingViewer({ ...base, currentMemberId: null });
+		expect(v.canClaim).toBe(false);
+		expect(v.canReleaseOwn).toBe(false);
 		expect(v.canToggleAvailability).toBe(false);
 		expect(v.canTakeOver).toBe(false);
 		expect(v.canEditOwnSpeech).toBe(false);
-		expect(v.canAssign).toBe(false);
-		expect(v.canManageSpeakers).toBe(false);
-		// No identity → cannot claim or release anything.
-		expect(v.canClaim).toBe(false);
-		expect(v.canReleaseOwn).toBe(false);
+	});
+
+	it("a closed edit window disables meta-edit + WOD but leaves claim/release", () => {
+		const admin = meetingViewer({
+			...base,
+			canManage: true,
+			isEditableWindow: false,
+		});
+		expect(admin.canEditMeetingMeta).toBe(false);
+		const gram = meetingViewer({
+			...base,
+			isGrammarian: true,
+			isEditableWindow: false,
+		});
+		expect(gram.canEditWod).toBe(false);
+		expect(gram.canClaim).toBe(true);
+		expect(gram.canReleaseOwn).toBe(true);
 	});
 });

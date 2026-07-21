@@ -24,21 +24,8 @@ import { MeetingViewActions } from "#/components/club/meeting-view-actions";
 import { SigningUpAs } from "#/components/club/signing-up-as";
 import { ShareLinkButton } from "#/components/share-link-button";
 import { Button } from "#/components/ui/button";
-import {
-	Dialog,
-	DialogClose,
-	DialogContent,
-	DialogDescription,
-	DialogFooter,
-	DialogHeader,
-	DialogTitle,
-} from "#/components/ui/dialog";
-import { Input } from "#/components/ui/input";
-import { Label } from "#/components/ui/label";
-import { Textarea } from "#/components/ui/textarea";
 import { applyFlex, expandRunSheet } from "#/lib/agenda-runsheet";
 import { buildSlideDeck } from "#/lib/agenda-slides";
-import { utcToZonedWallTime } from "#/lib/datetime";
 import {
 	formatMeetingDate,
 	formatMeetingTime,
@@ -52,16 +39,11 @@ import {
 	meetingDatePassed,
 } from "#/lib/meeting-lifecycle";
 import { deriveMeetingNavItems } from "#/lib/meeting-nav";
-import { isGrammarianRoleName, isTmodRoleName } from "#/lib/meeting-roles";
-import { selfAssertedViewer } from "#/lib/meeting-viewer";
+import { deriveMeetingRoleFlags } from "#/lib/meeting-roles";
+import { meetingViewer } from "#/lib/meeting-viewer";
 import { useCurrentMember } from "#/lib/member-identity";
 import { clearAvailability, setAvailability } from "#/server/availability";
-import {
-	getPublicMeeting,
-	listUpcomingMeetings,
-	updateMeeting,
-	updateWordOfTheDay,
-} from "#/server/meetings";
+import { getPublicMeeting, listUpcomingMeetings } from "#/server/meetings";
 import { listMembers } from "#/server/members";
 import {
 	addSpeakerSlot,
@@ -170,24 +152,14 @@ function MeetingView() {
 	);
 
 	const [availBusy, setAvailBusy] = useState(false);
-	const [editMetaOpen, setEditMetaOpen] = useState(false);
-	const [editWodOpen, setEditWodOpen] = useState(false);
 
 	const myId = member?.id ?? null;
 	const isUnavailable = myId ? unavailableMemberIds.includes(myId) : false;
 
-	// The meeting's TMOD (Toastmaster of the Day) slot assignee, if any. When the
-	// self-asserted member holds it, they get self-serve agenda editing (ADR-0010).
-	const tmodMemberId =
-		slots.find((s) => isTmodRoleName(s.roleName))?.assigneeId ?? null;
-	const isTmod = myId !== null && myId === tmodMemberId;
-
-	// The meeting's Grammarian slot assignee, if any. The Grammarian owns the Word
-	// of the Day, so when the self-asserted member holds this slot they get a
-	// focused WOD editor (#296) — a narrower self-serve capability than the TMOD's.
-	const grammarianMemberId =
-		slots.find((s) => isGrammarianRoleName(s.roleName))?.assigneeId ?? null;
-	const isGrammarian = myId !== null && myId === grammarianMemberId;
+	// The current member's role flags for this meeting (TMOD holds the Toastmaster
+	// slot → self-serve agenda editing per ADR-0010; Grammarian holds the WOD →
+	// focused WOD editor per #296). Both false for a visitor with no picked name.
+	const { isTmod, isGrammarian } = deriveMeetingRoleFlags(slots, myId);
 
 	// #150: a completed meeting is locked. On this public/anonymous surface a
 	// meeting that's already *happened* (its date is past) is treated the same —
@@ -197,7 +169,13 @@ function MeetingView() {
 	// on the signed-in workspace regardless; only this anonymous view goes over.
 	const locked = isMeetingLocked(meeting.status);
 	const over = locked || meetingDatePassed(meeting.scheduledAt, timezone);
-	const baseViewer = selfAssertedViewer({ memberId: myId, isTmod });
+	const baseViewer = meetingViewer({
+		currentMemberId: myId,
+		canManage: false,
+		isTmod,
+		isGrammarian,
+		isEditableWindow: !over,
+	});
 	const viewer = over ? lockedViewer(baseViewer) : baseViewer;
 
 	// Roster for the TMOD assign picker — only fetched when self-serve editing is
@@ -367,31 +345,6 @@ function MeetingView() {
 					deck={deck}
 					clubName={clubName}
 				/>
-				{isTmod && !over ? (
-					<Button
-						type="button"
-						variant="outline"
-						size="sm"
-						className="mt-1 ml-2"
-						onClick={() => setEditMetaOpen(true)}
-					>
-						Edit meeting
-					</Button>
-				) : null}
-				{/* Grammarian-only WOD editor. A TMOD-and-Grammarian already gets the
-				    full "Edit meeting" dialog (which includes the WOD), so this shows
-				    only when they're the Grammarian but not the TMOD. */}
-				{isGrammarian && !isTmod && !over ? (
-					<Button
-						type="button"
-						variant="outline"
-						size="sm"
-						className="mt-1 ml-2"
-						onClick={() => setEditWodOpen(true)}
-					>
-						Edit Word of the Day
-					</Button>
-				) : null}
 			</header>
 
 			<MeetingAgenda
@@ -405,281 +358,14 @@ function MeetingView() {
 				// nudge never renders here — no share context to build these from.
 				shareUrl=""
 				meetingDate=""
+				meeting={meeting}
+				timezone={timezone}
+				actorMemberId={myId}
+				selfMemberId={myId}
+				onMetaSaved={async () => {
+					await router.invalidate();
+				}}
 			/>
-
-			{isTmod && !over ? (
-				<EditMeetingMetaDialog
-					open={editMetaOpen}
-					onOpenChange={setEditMetaOpen}
-					meeting={meeting}
-					timezone={timezone}
-					actorMemberId={myId}
-					selfMemberId={myId}
-					onSaved={async () => {
-						setEditMetaOpen(false);
-						await router.invalidate();
-					}}
-				/>
-			) : null}
-
-			{isGrammarian && !isTmod && !over ? (
-				<WordOfTheDayDialog
-					open={editWodOpen}
-					onOpenChange={setEditWodOpen}
-					meeting={meeting}
-					actorMemberId={myId}
-					selfMemberId={myId}
-					onSaved={async () => {
-						setEditWodOpen(false);
-						await router.invalidate();
-					}}
-				/>
-			) : null}
 		</div>
-	);
-}
-
-/**
- * Grammarian's focused Word-of-the-Day editor — word, definition, and example
- * only (#296). Distinct from the TMOD's full meeting-meta dialog: the grammarian
- * owns the WOD but not the rest of the agenda meta, so this is all they can edit.
- */
-function WordOfTheDayDialog({
-	open,
-	onOpenChange,
-	meeting,
-	actorMemberId,
-	selfMemberId,
-	onSaved,
-}: {
-	open: boolean;
-	onOpenChange: (open: boolean) => void;
-	meeting: Awaited<ReturnType<typeof getPublicMeeting>>["meeting"];
-	actorMemberId: string | null;
-	selfMemberId: string | null;
-	onSaved: () => void | Promise<void>;
-}) {
-	const [submitting, setSubmitting] = useState(false);
-
-	async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
-		e.preventDefault();
-		const form = new FormData(e.currentTarget);
-		setSubmitting(true);
-		try {
-			await updateWordOfTheDay({
-				data: {
-					meetingId: meeting.id,
-					actorMemberId,
-					selfMemberId,
-					wordOfTheDay:
-						String(form.get("wordOfTheDay") ?? "").trim() || undefined,
-					wodDefinition:
-						String(form.get("wodDefinition") ?? "").trim() || undefined,
-					wodExample: String(form.get("wodExample") ?? "").trim() || undefined,
-				},
-			});
-			toast.success("Word of the day updated.");
-			await onSaved();
-		} catch (err) {
-			toast.error(errMessage(err));
-		} finally {
-			setSubmitting(false);
-		}
-	}
-
-	return (
-		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent>
-				<DialogHeader>
-					<DialogTitle>Word of the day</DialogTitle>
-					<DialogDescription>
-						As Grammarian you can set the Word of the Day, its definition, and
-						an example sentence for the meeting.
-					</DialogDescription>
-				</DialogHeader>
-				<form onSubmit={onSubmit} className="space-y-4">
-					<div className="space-y-2">
-						<Label htmlFor="wordOfTheDay">Word of the day</Label>
-						<Input
-							id="wordOfTheDay"
-							name="wordOfTheDay"
-							defaultValue={meeting.wordOfTheDay ?? ""}
-						/>
-					</div>
-					<div className="space-y-2">
-						<Label htmlFor="wodDefinition">Definition</Label>
-						<Input
-							id="wodDefinition"
-							name="wodDefinition"
-							defaultValue={meeting.wodDefinition ?? ""}
-						/>
-					</div>
-					<div className="space-y-2">
-						<Label htmlFor="wodExample">Example sentence</Label>
-						<Input
-							id="wodExample"
-							name="wodExample"
-							defaultValue={meeting.wodExample ?? ""}
-						/>
-					</div>
-					<DialogFooter>
-						<DialogClose asChild>
-							<Button type="button" variant="outline" disabled={submitting}>
-								Cancel
-							</Button>
-						</DialogClose>
-						<Button type="submit" disabled={submitting}>
-							{submitting ? (
-								<Loader2 className="size-4 animate-spin" />
-							) : (
-								"Save changes"
-							)}
-						</Button>
-					</DialogFooter>
-				</form>
-			</DialogContent>
-		</Dialog>
-	);
-}
-
-/**
- * TMOD meta editor — theme, Word of the Day, location, notes only. Date/time and
- * length are intentionally absent: reschedule stays admin-only (ADR-0010).
- * We re-submit the meeting's current wall time unchanged so the server's
- * meta-only path accepts it.
- */
-function EditMeetingMetaDialog({
-	open,
-	onOpenChange,
-	meeting,
-	timezone,
-	actorMemberId,
-	selfMemberId,
-	onSaved,
-}: {
-	open: boolean;
-	onOpenChange: (open: boolean) => void;
-	meeting: Awaited<ReturnType<typeof getPublicMeeting>>["meeting"];
-	timezone: string;
-	actorMemberId: string | null;
-	selfMemberId: string | null;
-	onSaved: () => void | Promise<void>;
-}) {
-	const [submitting, setSubmitting] = useState(false);
-
-	async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
-		e.preventDefault();
-		const form = new FormData(e.currentTarget);
-		setSubmitting(true);
-		try {
-			await updateMeeting({
-				data: {
-					meetingId: meeting.id,
-					actorMemberId,
-					selfMemberId,
-					// Current time, unchanged — TMOD can't reschedule.
-					scheduledAt: utcToZonedWallTime(
-						new Date(meeting.scheduledAt),
-						timezone,
-					),
-					theme: String(form.get("theme") ?? "").trim() || undefined,
-					location: String(form.get("location") ?? "").trim() || undefined,
-					wordOfTheDay:
-						String(form.get("wordOfTheDay") ?? "").trim() || undefined,
-					wodDefinition:
-						String(form.get("wodDefinition") ?? "").trim() || undefined,
-					wodExample: String(form.get("wodExample") ?? "").trim() || undefined,
-					notes: String(form.get("notes") ?? "").trim() || undefined,
-					reminders: String(form.get("reminders") ?? "").trim() || undefined,
-				},
-			});
-			toast.success("Meeting updated.");
-			await onSaved();
-		} catch (err) {
-			toast.error(errMessage(err));
-		} finally {
-			setSubmitting(false);
-		}
-	}
-
-	return (
-		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent>
-				<DialogHeader>
-					<DialogTitle>Edit meeting</DialogTitle>
-					<DialogDescription>
-						As Toastmaster you can edit the theme and details. Ask a VP
-						Education to change the date or time.
-					</DialogDescription>
-				</DialogHeader>
-				<form onSubmit={onSubmit} className="space-y-4">
-					<div className="space-y-2">
-						<Label htmlFor="theme">Theme</Label>
-						<Input id="theme" name="theme" defaultValue={meeting.theme ?? ""} />
-					</div>
-					<div className="space-y-2">
-						<Label htmlFor="location">Location</Label>
-						<Input
-							id="location"
-							name="location"
-							defaultValue={meeting.location ?? ""}
-						/>
-					</div>
-					<div className="space-y-2">
-						<Label htmlFor="wordOfTheDay">Word of the day</Label>
-						<Input
-							id="wordOfTheDay"
-							name="wordOfTheDay"
-							defaultValue={meeting.wordOfTheDay ?? ""}
-						/>
-					</div>
-					<div className="space-y-2">
-						<Label htmlFor="wodDefinition">Word of the day — definition</Label>
-						<Input
-							id="wodDefinition"
-							name="wodDefinition"
-							defaultValue={meeting.wodDefinition ?? ""}
-						/>
-					</div>
-					<div className="space-y-2">
-						<Label htmlFor="wodExample">
-							Word of the day — example sentence
-						</Label>
-						<Input
-							id="wodExample"
-							name="wodExample"
-							defaultValue={meeting.wodExample ?? ""}
-						/>
-					</div>
-					<div className="space-y-2">
-						<Label htmlFor="notes">Notes</Label>
-						<Input id="notes" name="notes" defaultValue={meeting.notes ?? ""} />
-					</div>
-					<div className="space-y-2">
-						<Label htmlFor="reminders">Reminders (projected slide)</Label>
-						<Textarea
-							id="reminders"
-							name="reminders"
-							rows={3}
-							defaultValue={meeting.reminders ?? ""}
-						/>
-					</div>
-					<DialogFooter>
-						<DialogClose asChild>
-							<Button type="button" variant="outline" disabled={submitting}>
-								Cancel
-							</Button>
-						</DialogClose>
-						<Button type="submit" disabled={submitting}>
-							{submitting ? (
-								<Loader2 className="size-4 animate-spin" />
-							) : (
-								"Save changes"
-							)}
-						</Button>
-					</DialogFooter>
-				</form>
-			</DialogContent>
-		</Dialog>
 	);
 }

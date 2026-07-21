@@ -4,8 +4,8 @@
  * The agenda component never reads a Better-Auth session or the self-asserted
  * `useCurrentMember` store directly — it only asks this object "who is the
  * current member" and "which actions may they take". Each surface constructs one
- * via an adapter (`sessionViewer` / `selfAssertedViewer`), which is the seam that
- * lets one component serve both identity models (ADR-0008 session vs. ADR-0010
+ * via the shared `meetingViewer` adapter, which is the seam that lets one
+ * component serve both identity models (ADR-0008 session vs. ADR-0010
  * self-serve). A capability the adapter doesn't grant renders nothing in the
  * component — there is no per-surface branching inside the agenda.
  */
@@ -43,53 +43,44 @@ export interface MeetingViewer {
 	 * `lockedViewer` denies it so a locked meeting stays read-only client-side.
 	 */
 	canReleaseOwn: boolean;
+	/** Open the "Edit meeting" dialog (theme/location/WOD/notes; reschedule is
+	 *  admin-only inside it). Manager surface: admin OR the meeting's TMOD. */
+	canEditMeetingMeta: boolean;
+	/** Open the focused Word-of-the-Day editor. The pure Grammarian's affordance
+	 *  only — admins and the TMOD edit the WOD through "Edit meeting". */
+	canEditWod: boolean;
 }
 
 /**
- * Adapter from the signed-in Better-Auth session (ADR-0008): the route context's
- * current member id plus the loader's admin `canManage` flag. Admins get the full
- * management set; the self-serve capabilities (availability/takeover/own-speech)
- * are the public surface's and stay off here.
+ * The single adapter both meeting surfaces construct (ADR-0008 session and
+ * ADR-0010 self-serve converge here). The public route passes `canManage:false`;
+ * the authed route passes it from the loader. `isTmod`/`isGrammarian` come from
+ * `deriveMeetingRoleFlags`. `isEditableWindow` is false for a PAST meeting — it
+ * disables the edit affordances while leaving claim/release available; a LOCKED
+ * meeting is handled separately by `lockedViewer`.
  */
-export function sessionViewer(input: {
+export function meetingViewer(input: {
 	currentMemberId: string | null;
 	canManage: boolean;
+	isTmod: boolean;
+	isGrammarian: boolean;
+	isEditableWindow: boolean;
 }): MeetingViewer {
+	const hasIdentity = input.currentMemberId !== null;
+	const manages = input.canManage;
+	const runsMeeting = manages || input.isTmod;
 	return {
 		currentMemberId: input.currentMemberId,
-		canManage: input.canManage,
-		canAssign: input.canManage,
-		canManageSpeakers: input.canManage,
-		canToggleAvailability: false,
-		canTakeOver: false,
-		canEditOwnSpeech: false,
-		// A signed-in member may still claim an open slot / release their own.
-		canClaim: true,
-		canReleaseOwn: true,
-	};
-}
-
-/**
- * Adapter from the self-asserted public identity (ADR-0010): the picked member
- * plus the derived `isTmod` flag (they hold the meeting's Toastmaster slot). Any
- * picked member may toggle availability, take over a slot, and edit their own
- * speech; the TMOD additionally gets assign and speaker-slot management. A
- * visitor who hasn't picked a name (`memberId === null`) gets a read-only agenda.
- */
-export function selfAssertedViewer(input: {
-	memberId: string | null;
-	isTmod: boolean;
-}): MeetingViewer {
-	const hasIdentity = input.memberId !== null;
-	return {
-		currentMemberId: input.memberId,
-		canManage: false,
-		canAssign: input.isTmod,
-		canManageSpeakers: input.isTmod,
+		canManage: manages,
+		canAssign: runsMeeting,
+		canManageSpeakers: runsMeeting,
+		canEditMeetingMeta: runsMeeting && input.isEditableWindow,
 		canToggleAvailability: hasIdentity,
 		canTakeOver: hasIdentity,
 		canEditOwnSpeech: hasIdentity,
 		canClaim: hasIdentity,
 		canReleaseOwn: hasIdentity,
+		canEditWod:
+			input.isGrammarian && !input.isTmod && !manages && input.isEditableWindow,
 	};
 }
