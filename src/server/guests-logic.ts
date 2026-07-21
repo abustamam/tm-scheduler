@@ -4,7 +4,9 @@
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { db } from "#/db";
 import { guests, meetings, roleSlots } from "#/db/schema";
+import { toStoredPhone } from "#/lib/phone";
 import { logActivity } from "./activity";
+import { loadClubDefaultCountryCode } from "./clubs-logic";
 
 /** Contact fields for a brand-new club guest (name required, contact optional). */
 export type NewGuestInput = {
@@ -64,6 +66,9 @@ export async function applyAssignGuestToSlot(input: {
 		.limit(1);
 	if (!slot) throw new Error("Role not found.");
 
+	// Club default country code for E.164 normalization on write (#295).
+	const cc = await loadClubDefaultCountryCode(slot.clubId);
+
 	return db.transaction(async (tx) => {
 		let guestId: string;
 		if (input.newGuest) {
@@ -75,7 +80,7 @@ export async function applyAssignGuestToSlot(input: {
 					clubId: slot.clubId,
 					name,
 					email: input.newGuest.email?.trim() || null,
-					phone: input.newGuest.phone?.trim() || null,
+					phone: toStoredPhone(input.newGuest.phone, cc),
 				})
 				.returning({ id: guests.id });
 			if (!created) throw new Error("Failed to create guest.");

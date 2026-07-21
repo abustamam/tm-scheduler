@@ -13,7 +13,9 @@ import {
 	people,
 	roleSlots,
 } from "#/db/schema";
+import { toStoredPhone } from "#/lib/phone";
 import { logActivity } from "./activity";
+import { loadClubDefaultCountryCode } from "./clubs-logic";
 
 /** The pipeline stages a guest may occupy (#208 / ADR-0018). */
 export type GuestStage = "prospect" | "following_up" | "joined" | "lost";
@@ -108,7 +110,10 @@ export async function captureGuestVisit(
 	const name = input.name.trim();
 	if (!name) throw new Error("Please enter your name.");
 	const email = input.email?.trim() || null;
-	const phone = input.phone?.trim() || null;
+	// Standardize to E.164 on write (#295); the digits form below (for dedup) is
+	// derived from the normalized value so matching stays consistent.
+	const cc = await loadClubDefaultCountryCode(input.clubId);
+	const phone = toStoredPhone(input.phone, cc);
 	const digits = normalizePhone(phone);
 
 	const meetingId = await resolveCurrentMeetingId(input.clubId);
@@ -310,7 +315,10 @@ export async function applyConvertGuestToMember(
 
 	const name = guest.name.trim();
 	const email = guest.email?.trim() || null;
-	const phone = guest.phone?.trim() || null;
+	// Re-standardize to E.164 on the way into people/members (#295) — the guest
+	// row may predate normalize-on-write; the digits form (dedup) follows it.
+	const cc = await loadClubDefaultCountryCode(input.clubId);
+	const phone = toStoredPhone(guest.phone, cc);
 	const digits = normalizePhone(phone);
 
 	return db.transaction(async (tx) => {

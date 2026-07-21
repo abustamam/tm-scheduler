@@ -5,18 +5,9 @@
 // real code. See `docs/superpowers/specs/2026-07-20-tap-to-nudge-design.md`.
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "#/db";
-import { clubs, guests, members } from "#/db/schema";
+import { guests, members } from "#/db/schema";
 import { toE164 } from "#/lib/phone";
-
-/** The club's default international dialing code (#295), for phone normalization. */
-async function clubDefaultCountryCode(clubId: string): Promise<string | null> {
-	const [row] = await db
-		.select({ cc: clubs.defaultCountryCode })
-		.from(clubs)
-		.where(eq(clubs.id, clubId))
-		.limit(1);
-	return row?.cc ?? null;
-}
+import { loadClubDefaultCountryCode } from "./clubs-logic";
 
 export interface Contact {
 	phone: string | null;
@@ -51,7 +42,7 @@ export async function loadRosterWithContact(
 			.from(members)
 			.where(and(eq(members.clubId, clubId), eq(members.status, "active")))
 			.orderBy(members.name),
-		clubDefaultCountryCode(clubId),
+		loadClubDefaultCountryCode(clubId),
 	]);
 	return rows.map((r) => ({ ...r, phone: toE164(r.phone, cc) }));
 }
@@ -72,7 +63,7 @@ export async function loadHolderContacts(
 	if (memberIds.length === 0 && guestIds.length === 0) return map;
 
 	// Phone normalized to E.164 with the club default country code (#295).
-	const cc = await clubDefaultCountryCode(clubId);
+	const cc = await loadClubDefaultCountryCode(clubId);
 
 	if (memberIds.length > 0) {
 		const rows = await db

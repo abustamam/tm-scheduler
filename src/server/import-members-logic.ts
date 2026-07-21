@@ -17,6 +17,8 @@ import {
 	type ExistingPersonRow,
 	resolvePersonDecision,
 } from "#/lib/members-import-plan";
+import { toStoredPhone } from "#/lib/phone";
+import { loadClubDefaultCountryCode } from "./clubs-logic";
 import {
 	currentOfficersFor,
 	openOfficerTermIfAbsent,
@@ -50,8 +52,17 @@ export interface ImportStats {
  */
 export async function importPeopleAndMembers(
 	clubId: string,
-	rows: MappedMember[],
+	rawRows: MappedMember[],
 ): Promise<ImportStats> {
+	// Standardize every imported phone to E.164 on write (#295) with the club's
+	// default country code, before the shared planner decides person/membership
+	// fills — so both the CLI runner and the VPE upload commit store E.164.
+	const cc = await loadClubDefaultCountryCode(clubId);
+	const rows: MappedMember[] = rawRows.map((r) => ({
+		...r,
+		phone: toStoredPhone(r.phone, cc),
+	}));
+
 	// Load all people once; keep the in-memory list in sync as we insert so
 	// duplicate rows within a single run resolve against freshly-created people.
 	const existing: ExistingPersonRow[] = await db

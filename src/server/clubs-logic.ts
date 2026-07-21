@@ -6,6 +6,23 @@ import { z } from "zod";
 import { db } from "#/db";
 import { clubs } from "#/db/schema";
 
+/**
+ * The club's default international dialing code (#295), for phone normalization.
+ * Null when the club hasn't set one. Shared by the read-time nudge loaders and
+ * the normalize-on-write paths so every phone write is standardized with the
+ * same default.
+ */
+export async function loadClubDefaultCountryCode(
+	clubId: string,
+): Promise<string | null> {
+	const [row] = await db
+		.select({ cc: clubs.defaultCountryCode })
+		.from(clubs)
+		.where(eq(clubs.id, clubId))
+		.limit(1);
+	return row?.cc ?? null;
+}
+
 const UUID_RE =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
