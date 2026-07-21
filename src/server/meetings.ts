@@ -299,6 +299,19 @@ export const getMeeting = createServerFn({ method: "GET" })
 	});
 
 /**
+ * Meeting detail for a PUBLIC surface (share link, present, print). Forces
+ * `canManage = false` regardless of the requester's session, so member/guest
+ * CONTACT and other manager-only data are NEVER shipped on a public payload —
+ * even when the visitor is a signed-in admin checking what members see. The soft
+ * honor-system gate on `/club/:clubId` must never carry PII (#37 / PR #284).
+ * `canManage` is deliberately NOT session-derived here: an authenticated admin
+ * hitting a public route still gets the public (contact-free) payload.
+ */
+export const getPublicMeeting = createServerFn({ method: "GET" })
+	.validator((meetingId: unknown) => uuid.parse(meetingId))
+	.handler(async ({ data: meetingId }) => loadMeetingDetail(meetingId, null));
+
+/**
  * The club's soonest upcoming (non-cancelled) meeting with its full agenda, or
  * `{ meeting: null }` when none is scheduled. Backs the `/next` shortcut, which
  * redirects to that meeting's `/meetings/$id` page. AUTHED — any signed-in club
