@@ -550,7 +550,10 @@ function InviteAllDialog({
 			const res = await inviteAllMembers({ data: { clubId } });
 			toast.success(
 				`Sent ${res.sent} invite${res.sent === 1 ? "" : "s"}.` +
-					(res.noEmail > 0 ? ` ${res.noEmail} skipped (no email).` : ""),
+					(res.noEmail > 0 ? ` ${res.noEmail} skipped (no email).` : "") +
+					(res.recentlyInvited > 0
+						? ` ${res.recentlyInvited} already invited recently.`
+						: ""),
 			);
 			onOpenChange(false);
 			await router.invalidate();

@@ -276,4 +276,65 @@ describe.skipIf(!hasTestDb)("account invites + claim (#266)", () => {
 			prepareMemberInvite({ clubId: randomUUID(), memberId }),
 		).rejects.toThrow(/not found/i);
 	});
+
+	// -------------------------------------------------------------------------
+	// prepareMemberInvite — bulk cooldown (#307)
+	// -------------------------------------------------------------------------
+
+	it("bulk cooldown skips a recently-invited member without re-stamping invited_at", async () => {
+		const { prepareMemberInvite } = await import("./account-invite-logic");
+		const email = `recent-${randomUUID()}@test.example`;
+		const { memberId, personId } = await seedMember({ email });
+		// Stamp the invite as of NOW — inside the cooldown window.
+		const invitedAt = new Date();
+		await testDb
+			.update(people)
+			.set({ invitedAt })
+			.where(eq(people.id, personId));
+
+		const prep = await prepareMemberInvite({
+			clubId: club.clubId,
+			memberId,
+			respectCooldown: true,
+		});
+		expect(prep.outcome).toBe("recently_invited");
+		// The existing stamp is left untouched (no resend / re-stamp).
+		expect((await personRow(personId))?.invitedAt?.getTime()).toBe(
+			invitedAt.getTime(),
+		);
+	});
+
+	it("bulk cooldown lets an expired invite through as ready", async () => {
+		const { prepareMemberInvite } = await import("./account-invite-logic");
+		const email = `expired-${randomUUID()}@test.example`;
+		const { memberId, personId } = await seedMember({ email });
+		// Stamp ~25h ago — outside the 24h cooldown window.
+		await testDb
+			.update(people)
+			.set({ invitedAt: new Date(Date.now() - 25 * 60 * 60 * 1000) })
+			.where(eq(people.id, personId));
+
+		const prep = await prepareMemberInvite({
+			clubId: club.clubId,
+			memberId,
+			respectCooldown: true,
+		});
+		expect(prep.outcome).toBe("ready");
+		expect(prep.email).toBe(email);
+	});
+
+	it("single explicit invite ignores the cooldown (deliberate resend)", async () => {
+		const { prepareMemberInvite } = await import("./account-invite-logic");
+		const email = `single-${randomUUID()}@test.example`;
+		const { memberId, personId } = await seedMember({ email });
+		// Recently invited, but the single path omits respectCooldown → always sends.
+		await testDb
+			.update(people)
+			.set({ invitedAt: new Date() })
+			.where(eq(people.id, personId));
+
+		const prep = await prepareMemberInvite({ clubId: club.clubId, memberId });
+		expect(prep.outcome).toBe("ready");
+		expect(prep.email).toBe(email);
+	});
 });
