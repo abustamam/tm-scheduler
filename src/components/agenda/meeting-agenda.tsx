@@ -34,6 +34,7 @@ import {
 } from "#/components/ui/sheet";
 import { buildRoleCounts, slotLabel, summarizeAgenda } from "#/lib/agenda";
 import type { MeetingViewer } from "#/lib/meeting-viewer";
+import type { StoredMember } from "#/lib/member-identity";
 import type { getMeeting } from "#/server/meetings";
 
 export type AgendaSlot = Awaited<
@@ -113,6 +114,8 @@ export interface MeetingAgendaProps {
 	actorMemberId: string | null;
 	selfMemberId: string | null;
 	onMetaSaved: () => void | Promise<void>;
+	/** Public surface: resolve/collect identity before opening the claim flow when there's no identity. */
+	requireIdentity?: () => Promise<StoredMember | null>;
 }
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -150,14 +153,17 @@ export function MeetingAgenda({
 	actorMemberId,
 	selfMemberId,
 	onMetaSaved,
+	requireIdentity,
 }: MeetingAgendaProps) {
 	const { currentMemberId } = viewer;
 	const [wodOpen, setWodOpen] = useState(false);
 	const [metaOpen, setMetaOpen] = useState(false);
-	// Claiming an open slot requires an identity AND the capability — a
-	// `lockedViewer` sets `canClaim` false so a locked/past meeting is read-only.
+	// Claiming an open slot requires only the capability — a `lockedViewer` sets
+	// `canClaim` false so a locked/past meeting is read-only. A prospective
+	// (no-identity) visitor is allowed here too: identity is resolved at the
+	// claim click (see `handleClaimClick`), not gated on `currentMemberId`.
 	// Same for every slot, so compute once.
-	const canClaim = currentMemberId !== null && viewer.canClaim;
+	const canClaim = viewer.canClaim;
 	const [busySlotId, setBusySlotId] = useState<string | null>(null);
 	const [claimSlotState, setClaimSlotState] = useState<AgendaSlot | null>(null);
 	const [assignSlot, setAssignSlot] = useState<AgendaSlot | null>(null);
@@ -199,6 +205,15 @@ export function MeetingAgenda({
 		} finally {
 			setBusySlotId(null);
 		}
+	}
+
+	async function handleClaimClick(slot: AgendaSlot) {
+		if (slot.status !== "open" || !canClaim) return;
+		if (currentMemberId === null && requireIdentity) {
+			const me = await requireIdentity();
+			if (!me) return; // dismissed → abort
+		}
+		setClaimSlotState(slot);
 	}
 
 	async function doRelease(slot: AgendaSlot) {
@@ -417,9 +432,7 @@ export function MeetingAgenda({
 										<div className="flex items-start justify-between gap-3">
 											<button
 												type="button"
-												onClick={() => {
-													if (isOpen && canClaim) setClaimSlotState(slot);
-												}}
+												onClick={() => handleClaimClick(slot)}
 												disabled={!isOpen || !canClaim}
 												className="min-w-0 flex-1 text-left disabled:cursor-default"
 											>
@@ -566,7 +579,7 @@ export function MeetingAgenda({
 														variant="outline"
 														className="border-success/70 text-success hover:bg-success hover:text-success-foreground"
 														aria-label={`Claim ${slot.roleName} — open`}
-														onClick={() => canClaim && setClaimSlotState(slot)}
+														onClick={() => handleClaimClick(slot)}
 														disabled={busy || !canClaim}
 													>
 														Claim

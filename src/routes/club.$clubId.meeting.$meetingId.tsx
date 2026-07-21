@@ -150,7 +150,7 @@ function MeetingView() {
 			? { id: effectiveMemberId, name: authCtx.user.name || authCtx.user.email }
 			: null;
 	const { member, source } = useEffectiveMember(clubId, session);
-	const { promptIdentity } = useRequireIdentity();
+	const { requireIdentity, promptIdentity } = useRequireIdentity();
 	const router = useRouter();
 
 	// Same deck present mode renders — reused as the source for the .pptx export
@@ -206,20 +206,18 @@ function MeetingView() {
 	});
 
 	async function toggleAvailability() {
-		if (!member) {
-			toast.error("Pick your name first.");
-			return;
-		}
+		const me = await requireIdentity();
+		if (!me) return;
 		setAvailBusy(true);
 		try {
 			if (isUnavailable) {
 				await clearAvailability({
-					data: { memberId: member.id, meetingId, clubId: clubUuid },
+					data: { memberId: me.id, meetingId, clubId: clubUuid },
 				});
 				toast.success("You're marked as available again.");
 			} else {
 				await setAvailability({
-					data: { memberId: member.id, meetingId, clubId: clubUuid },
+					data: { memberId: me.id, meetingId, clubId: clubUuid },
 				});
 				toast.success("Got it — you can't make this one.");
 			}
@@ -235,37 +233,42 @@ function MeetingView() {
 	// takes the ADR-0010 self-serve path (vs. the admin/session path).
 	const actions: MeetingAgendaActions = {
 		claim: async (slot, speakerDetails) => {
-			if (!myId) throw new Error("Pick your name first.");
+			const me = await requireIdentity();
+			if (!me) return;
 			await claimSlot({
 				data: {
 					slotId: slot.id,
-					memberId: myId,
-					actorMemberId: myId,
+					memberId: me.id,
+					actorMemberId: me.id,
 					speakerDetails,
 				},
 			});
 		},
 		release: async (slot) => {
-			if (!myId) throw new Error("Pick your name first.");
-			await releaseSlot({ data: { slotId: slot.id, actorMemberId: myId } });
+			const me = await requireIdentity();
+			if (!me) return;
+			await releaseSlot({ data: { slotId: slot.id, actorMemberId: me.id } });
 		},
 		takeover: async (slot) => {
-			if (!myId) throw new Error("Pick your name first.");
+			const me = await requireIdentity();
+			if (!me) return;
 			await reassignSlot({
-				data: { slotId: slot.id, memberId: myId, actorMemberId: myId },
+				data: { slotId: slot.id, memberId: me.id, actorMemberId: me.id },
 			});
 		},
 		addSpeaker: async () => {
-			if (!myId) throw new Error("Pick your name first.");
+			const me = await requireIdentity();
+			if (!me) return;
 			await addSpeakerSlot({
-				data: { meetingId, actorMemberId: myId, selfMemberId: myId },
+				data: { meetingId, actorMemberId: me.id, selfMemberId: me.id },
 			});
 			toast.success("Speaker added.");
 		},
 		removeSpeaker: async () => {
-			if (!myId) throw new Error("Pick your name first.");
+			const me = await requireIdentity();
+			if (!me) return;
 			await removeSpeakerSlot({
-				data: { meetingId, actorMemberId: myId, selfMemberId: myId },
+				data: { meetingId, actorMemberId: me.id, selfMemberId: me.id },
 			});
 			toast.success("Speaker removed.");
 		},
@@ -388,6 +391,7 @@ function MeetingView() {
 				onMetaSaved={async () => {
 					await router.invalidate();
 				}}
+				requireIdentity={requireIdentity}
 			/>
 		</div>
 	);

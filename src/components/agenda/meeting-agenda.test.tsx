@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { lockedViewer } from "#/lib/meeting-lifecycle";
 import { meetingViewer } from "#/lib/meeting-viewer";
@@ -57,6 +58,7 @@ function renderAgenda(
 	viewer: ReturnType<typeof meetingViewer>,
 	slots: AgendaSlot[],
 	pairedRoleIds?: Set<string>,
+	requireIdentity?: () => Promise<{ id: string; name: string } | null>,
 ) {
 	return render(
 		<MeetingAgenda
@@ -86,6 +88,7 @@ function renderAgenda(
 			actorMemberId="me"
 			selfMemberId="me"
 			onMetaSaved={() => {}}
+			requireIdentity={requireIdentity}
 		/>,
 	);
 }
@@ -167,7 +170,8 @@ describe("MeetingAgenda capability gating", () => {
 		expect(screen.queryByRole("button", { name: /Reassign/ })).toBeNull();
 	});
 
-	it("gives a visitor with no name a read-only agenda (claim disabled)", () => {
+	it("gives a visitor with no name an enabled Claim that resolves identity on click", async () => {
+		const requireIdentity = vi.fn(async () => null); // dismissed → aborts
 		renderAgenda(
 			meetingViewer({
 				currentMemberId: null,
@@ -177,9 +181,14 @@ describe("MeetingAgenda capability gating", () => {
 				isEditableWindow: true,
 			}),
 			[slot({ status: "open" })],
+			undefined,
+			requireIdentity,
 		);
 		const claim = screen.getByRole("button", { name: /^Claim / });
-		expect((claim as HTMLButtonElement).disabled).toBe(true);
+		expect((claim as HTMLButtonElement).disabled).toBe(false);
+		await userEvent.click(claim);
+		expect(requireIdentity).toHaveBeenCalled();
+		// Still no manager assign picker for an anonymous visitor.
 		expect(screen.queryByRole("button", { name: /Assign/ })).toBeNull();
 	});
 
