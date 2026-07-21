@@ -1,4 +1,5 @@
 import { Mail, MessageCircle } from "lucide-react";
+import { useEffect, useState } from "react";
 import { Button } from "#/components/ui/button";
 import { buildNudge, type NudgeMode } from "#/lib/nudge";
 
@@ -24,6 +25,15 @@ export function NudgeButtons({
 	shareUrl: string;
 	mode: NudgeMode;
 }) {
+	// Render the channel links only after mount. The caller builds `shareUrl` with
+	// a `window.location.origin` prefix that is correct only on the client; during
+	// SSR it falls back to a RELATIVE path, so an anchor tapped before hydration
+	// would carry a broken link in the draft message. Gating on mount keeps the
+	// links off the server render entirely (#37). The no-contact state needs no
+	// URL, so it still renders on the server.
+	const [mounted, setMounted] = useState(false);
+	useEffect(() => setMounted(true), []);
+
 	const nudge = buildNudge({
 		name,
 		phone,
@@ -41,6 +51,8 @@ export function NudgeButtons({
 			</span>
 		);
 	}
+
+	if (!mounted) return null;
 
 	return (
 		<div className="flex items-center gap-1.5">
