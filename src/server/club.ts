@@ -44,6 +44,9 @@ export const listClubMembers = createServerFn({ method: "GET" })
 				// "Signed-in account?" is now a Person-level fact (ADR-0008 Phase B):
 				// the auth link lives on people.user_id, not the membership row.
 				userId: people.userId,
+				// Account-invite tracking (#266) — drives the roster's per-row
+				// invited/joined state alongside `userId`.
+				invitedAt: people.invitedAt,
 				status: members.status,
 				createdAt: members.createdAt,
 				joinedAt: members.joinedAt,
@@ -89,6 +92,7 @@ export const listClubMembers = createServerFn({ method: "GET" })
 			email: m.email,
 			officerPositions: officers.get(m.id) ?? [],
 			userId: m.userId,
+			invitedAt: m.invitedAt,
 			status: m.status,
 			createdAt: m.createdAt,
 			joinedAt: m.joinedAt,

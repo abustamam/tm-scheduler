@@ -280,6 +280,13 @@ export const people = pgTable("people", {
 	// their clubs). The auth path resolves a signed-in user to this Person, then
 	// to their per-club memberships and roles (ADR-0008 Phase B / #99).
 	userId: text("user_id").references(() => user.id, { onDelete: "set null" }),
+	// Account-invite tracking (#266). Stamped when an admin sends this person a
+	// magic-link account invite (or a self-claim link is initiated) that will link
+	// them on acceptance. Person-level (one human, all clubs) like `user_id`.
+	// Drives the roster's per-row invite state: `invited_at` set + `user_id` NULL =
+	// "invited, not joined"; `user_id` set = "joined" (supersedes the invite).
+	// Never cleared — a linked account (`user_id`) makes it moot.
+	invitedAt: timestamp("invited_at"),
 	// Reminder-email opt-out (#274 — the reminders control layer, member level).
 	// Keyed per Person, so it governs this human's inbox GLOBALLY across every club
 	// they belong to (a reminder is a self-regarding nudge about a role they

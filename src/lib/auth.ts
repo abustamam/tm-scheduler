@@ -6,6 +6,7 @@ import { db } from "#/db";
 import { captureDevMagicLink, isDevLoginEnabled } from "#/lib/dev-login";
 import { sendEmail } from "#/lib/email";
 import {
+	buildInviteEmail,
 	buildMagicLinkEmail,
 	MAGIC_LINK_EXPIRY_SECONDS,
 } from "#/lib/magic-link-email";
@@ -56,13 +57,23 @@ export const auth = betterAuth({
 			// Magic links are the only way in — keep the window short. Shares one
 			// constant with the email copy so the displayed duration can't drift.
 			expiresIn: MAGIC_LINK_EXPIRY_SECONDS,
-			sendMagicLink: async ({ email, url }) => {
+			sendMagicLink: async ({ email, url, metadata }) => {
 				// Dev-login (local e2e) completes sign-in without an inbox by
 				// redirecting to this same verify URL — stash it. Inert in prod.
 				if (isDevLoginEnabled()) {
 					captureDevMagicLink(email, url);
 				}
-				const { subject, html, text } = buildMagicLinkEmail(url);
+				// Admin roster invites (#266) pass `metadata.kind === "invite"` (plus an
+				// optional club name) so the copy reads as an invitation; every other
+				// caller gets the standard sign-in email. The link itself is identical.
+				const isInvite = metadata?.kind === "invite";
+				const clubName =
+					typeof metadata?.clubName === "string"
+						? metadata.clubName
+						: undefined;
+				const { subject, html, text } = isInvite
+					? buildInviteEmail(url, clubName)
+					: buildMagicLinkEmail(url);
 				await sendEmail({ to: email, subject, html, text });
 			},
 		}),
