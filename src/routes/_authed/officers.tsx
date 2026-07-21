@@ -1,21 +1,38 @@
 import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import { ChevronRight } from "lucide-react";
+import { OnboardingChecklist } from "#/components/club/onboarding-checklist";
 import { PageContainer } from "#/components/page-container";
+import { effectiveAdminClub } from "#/lib/effective-admin";
 import { buildOfficerHome, type OfficerTask } from "#/lib/officer-tasks";
+import { getOnboardingChecklist } from "#/server/onboarding-checklist";
 
 export const Route = createFileRoute("/_authed/officers")({
-	// Officer home is only for people who hold an office; everyone else lands on
-	// the roster (the default workspace home).
+	// Officer home is for effective admins (#202): a stored `admin` club role OR
+	// anyone holding an elected office — mirrors `isOfficer` in `_authed.tsx` and
+	// `homeRedirectTarget` (`#/lib/home-route`). A freshly-provisioned first admin
+	// has no elected office yet, so gating on `officerPositions` alone bounced
+	// them straight back to `/roster` before they ever saw the setup checklist
+	// (#265) — `effectiveAdminClub` is the fix, consistent with every other
+	// admin-gated route (club-settings, schedule, …).
 	beforeLoad: ({ context }) => {
-		if (!context.officerPositions?.length) {
+		const adminClub = effectiveAdminClub(context);
+		if (!adminClub) {
 			throw redirect({ to: "/roster" });
 		}
+		return { adminClub };
+	},
+	loader: async ({ context }) => {
+		const checklist = await getOnboardingChecklist({
+			data: context.adminClub.clubId,
+		});
+		return { checklist };
 	},
 	component: OfficerHome,
 });
 
 function OfficerHome() {
-	const { authUser, officerPositions } = Route.useRouteContext();
+	const { authUser, officerPositions, adminClub } = Route.useRouteContext();
+	const { checklist } = Route.useLoaderData();
 	const { common, sections } = buildOfficerHome([...officerPositions]);
 	const firstName = (authUser.name || authUser.email).split(/\s+/)[0];
 
@@ -29,6 +46,8 @@ function OfficerHome() {
 					Hi {firstName} — here's where to go to run the club.
 				</p>
 			</div>
+
+			<OnboardingChecklist clubId={adminClub.clubId} status={checklist} />
 
 			<TaskSection title="Everyday" tasks={common} />
 
