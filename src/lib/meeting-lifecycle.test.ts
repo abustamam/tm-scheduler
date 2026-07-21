@@ -5,7 +5,7 @@ import {
 	meetingDatePassed,
 	meetingDateReached,
 } from "./meeting-lifecycle";
-import { selfAssertedViewer } from "./meeting-viewer";
+import { meetingViewer } from "./meeting-viewer";
 
 describe("isMeetingLocked", () => {
 	it("is true only for a completed meeting", () => {
@@ -40,7 +40,13 @@ describe("meetingDatePassed", () => {
 describe("lockedViewer", () => {
 	it("denies every mutation capability, including claim and own-release", () => {
 		const locked = lockedViewer(
-			selfAssertedViewer({ memberId: "m1", isTmod: true }),
+			meetingViewer({
+				currentMemberId: "m1",
+				canManage: false,
+				isTmod: true,
+				isGrammarian: false,
+				isEditableWindow: true,
+			}),
 		);
 		expect(locked.currentMemberId).toBe("m1");
 		expect(locked.canManage).toBe(false);

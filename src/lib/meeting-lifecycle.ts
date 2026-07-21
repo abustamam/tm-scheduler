@@ -63,5 +63,7 @@ export function lockedViewer(v: MeetingViewer): MeetingViewer {
 		canEditOwnSpeech: false,
 		canClaim: false,
 		canReleaseOwn: false,
+		canEditMeetingMeta: false,
+		canEditWod: false,
 	};
 }

@@ -2,7 +2,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { lockedViewer } from "#/lib/meeting-lifecycle";
-import { selfAssertedViewer, sessionViewer } from "#/lib/meeting-viewer";
+import { meetingViewer } from "#/lib/meeting-viewer";
 import {
 	type AgendaSlot,
 	MeetingAgenda,
@@ -53,7 +53,7 @@ function slot(over: Partial<AgendaSlot>): AgendaSlot {
 }
 
 function renderAgenda(
-	viewer: ReturnType<typeof sessionViewer>,
+	viewer: ReturnType<typeof meetingViewer>,
 	slots: AgendaSlot[],
 	pairedRoleIds?: Set<string>,
 ) {
@@ -84,9 +84,16 @@ describe("MeetingAgenda capability gating", () => {
 			category: "leadership",
 			roleName: "Toastmaster",
 		});
-		renderAgenda(sessionViewer({ currentMemberId: "me", canManage: true }), [
-			filled,
-		]);
+		renderAgenda(
+			meetingViewer({
+				currentMemberId: "me",
+				canManage: true,
+				isTmod: false,
+				isGrammarian: false,
+				isEditableWindow: true,
+			}),
+			[filled],
+		);
 		expect(screen.getByText("Open roles:")).toBeTruthy();
 		expect(screen.getByRole("button", { name: "Confirm" })).toBeTruthy();
 		expect(screen.getByRole("button", { name: /Reassign/ })).toBeTruthy();
@@ -98,12 +105,23 @@ describe("MeetingAgenda capability gating", () => {
 			assigneeId: "other",
 			assigneeName: "Other Person",
 		});
-		renderAgenda(sessionViewer({ currentMemberId: "me", canManage: false }), [
-			filled,
-		]);
+		renderAgenda(
+			meetingViewer({
+				currentMemberId: "me",
+				canManage: false,
+				isTmod: false,
+				isGrammarian: false,
+				isEditableWindow: true,
+			}),
+			[filled],
+		);
 		expect(screen.queryByText("Open roles:")).toBeNull();
 		expect(screen.queryByRole("button", { name: "Confirm" })).toBeNull();
-		expect(screen.queryByText("take over")).toBeNull();
+		expect(screen.queryByRole("button", { name: /Reassign/ })).toBeNull();
+		// #302 parity: a signed-in non-manager gets the self-serve take-over, same
+		// as a self-asserted public member — the unified viewer grants it on any
+		// identity. Only the manager-only controls above stay hidden.
+		expect(screen.getByText("take over")).toBeTruthy();
 		expect(screen.getByText("Filled")).toBeTruthy();
 	});
 
@@ -113,9 +131,16 @@ describe("MeetingAgenda capability gating", () => {
 			assigneeId: "other",
 			assigneeName: "Other Person",
 		});
-		renderAgenda(selfAssertedViewer({ memberId: "me", isTmod: false }), [
-			filled,
-		]);
+		renderAgenda(
+			meetingViewer({
+				currentMemberId: "me",
+				canManage: false,
+				isTmod: false,
+				isGrammarian: false,
+				isEditableWindow: true,
+			}),
+			[filled],
+		);
 		expect(screen.getByText("take over")).toBeTruthy();
 		expect(screen.queryByRole("button", { name: "Confirm" })).toBeNull();
 		expect(screen.queryByText("Open roles:")).toBeNull();
@@ -124,9 +149,16 @@ describe("MeetingAgenda capability gating", () => {
 	});
 
 	it("gives a visitor with no name a read-only agenda (claim disabled)", () => {
-		renderAgenda(selfAssertedViewer({ memberId: null, isTmod: false }), [
-			slot({ status: "open" }),
-		]);
+		renderAgenda(
+			meetingViewer({
+				currentMemberId: null,
+				canManage: false,
+				isTmod: false,
+				isGrammarian: false,
+				isEditableWindow: true,
+			}),
+			[slot({ status: "open" })],
+		);
 		const claim = screen.getByRole("button", { name: /^Claim / });
 		expect((claim as HTMLButtonElement).disabled).toBe(true);
 		expect(screen.queryByRole("button", { name: /Assign/ })).toBeNull();
@@ -139,7 +171,15 @@ describe("MeetingAgenda capability gating", () => {
 			assigneeName: "Me",
 		});
 		renderAgenda(
-			lockedViewer(selfAssertedViewer({ memberId: "me", isTmod: false })),
+			lockedViewer(
+				meetingViewer({
+					currentMemberId: "me",
+					canManage: false,
+					isTmod: false,
+					isGrammarian: false,
+					isEditableWindow: true,
+				}),
+			),
 			[mine],
 		);
 		// Own filled slot renders read-only — "Filled", no Release button.
@@ -150,7 +190,15 @@ describe("MeetingAgenda capability gating", () => {
 
 	it("is read-only under a locked viewer: open slots can't be claimed", () => {
 		renderAgenda(
-			lockedViewer(selfAssertedViewer({ memberId: "me", isTmod: false })),
+			lockedViewer(
+				meetingViewer({
+					currentMemberId: "me",
+					canManage: false,
+					isTmod: false,
+					isGrammarian: false,
+					isEditableWindow: true,
+				}),
+			),
 			[slot({ status: "open" })],
 		);
 		const claim = screen.getByRole("button", { name: /^Claim / });
@@ -165,9 +213,16 @@ describe("MeetingAgenda capability gating", () => {
 			isSpeakerRole: true,
 			status: "open",
 		});
-		renderAgenda(selfAssertedViewer({ memberId: "me", isTmod: true }), [
-			openSpeaker,
-		]);
+		renderAgenda(
+			meetingViewer({
+				currentMemberId: "me",
+				canManage: false,
+				isTmod: true,
+				isGrammarian: false,
+				isEditableWindow: true,
+			}),
+			[openSpeaker],
+		);
 		expect(screen.getByRole("button", { name: /Assign/ })).toBeTruthy();
 		expect(screen.getByRole("button", { name: "+ Add speaker" })).toBeTruthy();
 	});
@@ -176,7 +231,13 @@ describe("MeetingAgenda capability gating", () => {
 describe("MeetingAgenda remove-role control (#225)", () => {
 	afterEach(() => cleanup());
 	const manager = () =>
-		sessionViewer({ currentMemberId: "me", canManage: true });
+		meetingViewer({
+			currentMemberId: "me",
+			canManage: true,
+			isTmod: false,
+			isGrammarian: false,
+			isEditableWindow: true,
+		});
 
 	it("keeps the enabled trash on an open, unassigned, non-paired slot", () => {
 		renderAgenda(manager(), [slot({ status: "open" })]);
@@ -243,9 +304,16 @@ describe("MeetingAgenda remove-role control (#225)", () => {
 	});
 
 	it("renders no trash at all for a non-manager", () => {
-		renderAgenda(sessionViewer({ currentMemberId: "me", canManage: false }), [
-			slot({ status: "open" }),
-		]);
+		renderAgenda(
+			meetingViewer({
+				currentMemberId: "me",
+				canManage: false,
+				isTmod: false,
+				isGrammarian: false,
+				isEditableWindow: true,
+			}),
+			[slot({ status: "open" })],
+		);
 		expect(screen.queryByRole("button", { name: /^Remove Timer/ })).toBeNull();
 	});
 });
@@ -253,9 +321,21 @@ describe("MeetingAgenda remove-role control (#225)", () => {
 describe("tap-to-nudge confirm gate (#37)", () => {
 	afterEach(() => cleanup());
 	const manager = () =>
-		sessionViewer({ currentMemberId: "me", canManage: true });
+		meetingViewer({
+			currentMemberId: "me",
+			canManage: true,
+			isTmod: false,
+			isGrammarian: false,
+			isEditableWindow: true,
+		});
 	const member = () =>
-		sessionViewer({ currentMemberId: "me", canManage: false });
+		meetingViewer({
+			currentMemberId: "me",
+			canManage: false,
+			isTmod: false,
+			isGrammarian: false,
+			isEditableWindow: true,
+		});
 	const filled = () =>
 		slot({
 			status: "claimed",

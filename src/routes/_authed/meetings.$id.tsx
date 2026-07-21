@@ -43,8 +43,8 @@ import {
 	meetingDateReached,
 } from "#/lib/meeting-lifecycle";
 import { deriveMeetingNavItems } from "#/lib/meeting-nav";
-import { pairedRoleIds } from "#/lib/meeting-roles";
-import { sessionViewer } from "#/lib/meeting-viewer";
+import { deriveMeetingRoleFlags, pairedRoleIds } from "#/lib/meeting-roles";
+import { meetingViewer } from "#/lib/meeting-viewer";
 import { footerDate } from "#/lib/slide-layout";
 import {
 	completeMeeting,
@@ -160,7 +160,20 @@ function MeetingDetail() {
 	const locked = isMeetingLocked(meeting.status);
 	// Complete is only offered once the meeting's date is today or past.
 	const canComplete = meetingDateReached(meeting.scheduledAt, timezone);
-	const baseViewer = sessionViewer({ currentMemberId, canManage });
+	const { isTmod, isGrammarian } = deriveMeetingRoleFlags(
+		slots,
+		currentMemberId,
+	);
+	const over = meeting.status
+		? meetingDatePassed(meeting.scheduledAt, timezone)
+		: false;
+	const baseViewer = meetingViewer({
+		currentMemberId,
+		canManage,
+		isTmod,
+		isGrammarian,
+		isEditableWindow: !locked && !over,
+	});
 	const viewer = locked ? lockedViewer(baseViewer) : baseViewer;
 	const pairedIds = pairedRoleIds(clubRoles);
 	const addableRoles = clubRoles.filter((r) => !pairedIds.has(r.id));

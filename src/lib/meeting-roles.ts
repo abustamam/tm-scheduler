@@ -19,6 +19,23 @@ export function isGrammarianRoleName(name: string): boolean {
 	return /^grammarian\b/.test(name.trim().toLowerCase());
 }
 
+/**
+ * The current member's role flags for a meeting, from its slots. Both `false`
+ * when `memberId` is null (no identity holds a role). Shared by both meeting
+ * surfaces so the TMOD/Grammarian derivation can't drift between them.
+ */
+export function deriveMeetingRoleFlags(
+	slots: { roleName: string; assigneeId: string | null }[],
+	memberId: string | null,
+): { isTmod: boolean; isGrammarian: boolean } {
+	if (memberId === null) return { isTmod: false, isGrammarian: false };
+	const tmod =
+		slots.find((s) => isTmodRoleName(s.roleName))?.assigneeId ?? null;
+	const gram =
+		slots.find((s) => isGrammarianRoleName(s.roleName))?.assigneeId ?? null;
+	return { isTmod: memberId === tmod, isGrammarian: memberId === gram };
+}
+
 /** Minimal role-definition shape needed to choose speaker/evaluator roles. */
 export interface RoleDefLite {
 	id: string;

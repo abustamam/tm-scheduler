@@ -52,8 +52,8 @@ import {
 	meetingDatePassed,
 } from "#/lib/meeting-lifecycle";
 import { deriveMeetingNavItems } from "#/lib/meeting-nav";
-import { isGrammarianRoleName, isTmodRoleName } from "#/lib/meeting-roles";
-import { selfAssertedViewer } from "#/lib/meeting-viewer";
+import { deriveMeetingRoleFlags } from "#/lib/meeting-roles";
+import { meetingViewer } from "#/lib/meeting-viewer";
 import { useCurrentMember } from "#/lib/member-identity";
 import { clearAvailability, setAvailability } from "#/server/availability";
 import {
@@ -176,18 +176,10 @@ function MeetingView() {
 	const myId = member?.id ?? null;
 	const isUnavailable = myId ? unavailableMemberIds.includes(myId) : false;
 
-	// The meeting's TMOD (Toastmaster of the Day) slot assignee, if any. When the
-	// self-asserted member holds it, they get self-serve agenda editing (ADR-0010).
-	const tmodMemberId =
-		slots.find((s) => isTmodRoleName(s.roleName))?.assigneeId ?? null;
-	const isTmod = myId !== null && myId === tmodMemberId;
-
-	// The meeting's Grammarian slot assignee, if any. The Grammarian owns the Word
-	// of the Day, so when the self-asserted member holds this slot they get a
-	// focused WOD editor (#296) — a narrower self-serve capability than the TMOD's.
-	const grammarianMemberId =
-		slots.find((s) => isGrammarianRoleName(s.roleName))?.assigneeId ?? null;
-	const isGrammarian = myId !== null && myId === grammarianMemberId;
+	// The current member's role flags for this meeting (TMOD holds the Toastmaster
+	// slot → self-serve agenda editing per ADR-0010; Grammarian holds the WOD →
+	// focused WOD editor per #296). Both false for a visitor with no picked name.
+	const { isTmod, isGrammarian } = deriveMeetingRoleFlags(slots, myId);
 
 	// #150: a completed meeting is locked. On this public/anonymous surface a
 	// meeting that's already *happened* (its date is past) is treated the same —
@@ -197,7 +189,13 @@ function MeetingView() {
 	// on the signed-in workspace regardless; only this anonymous view goes over.
 	const locked = isMeetingLocked(meeting.status);
 	const over = locked || meetingDatePassed(meeting.scheduledAt, timezone);
-	const baseViewer = selfAssertedViewer({ memberId: myId, isTmod });
+	const baseViewer = meetingViewer({
+		currentMemberId: myId,
+		canManage: false,
+		isTmod,
+		isGrammarian,
+		isEditableWindow: !over,
+	});
 	const viewer = over ? lockedViewer(baseViewer) : baseViewer;
 
 	// Roster for the TMOD assign picker — only fetched when self-serve editing is
