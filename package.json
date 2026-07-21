@@ -27,6 +27,7 @@
     "import-agendas": "bun run scripts/import-agendas.ts",
     "seed:pathways-catalog": "bun run scripts/seed-pathways-catalog.ts",
     "resolve:speech-projects": "bun run scripts/resolve-speech-projects.ts",
+    "build:role-sheets": "bun run scripts/build-role-sheets.ts",
     "db:pull": "drizzle-kit pull",
     "db:studio": "drizzle-kit studio",
     "ext:dev": "cd extension && bun run dev",
