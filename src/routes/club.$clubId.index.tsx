@@ -1,13 +1,16 @@
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
-import { CalendarDays, Loader2, Mic } from "lucide-react";
+import { CalendarDays, Loader2, MailCheck, Mic, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { SeasonGrid } from "#/components/club/season-grid";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
+import { Input } from "#/components/ui/input";
+import { Label } from "#/components/ui/label";
+import { authClient } from "#/lib/auth-client";
 import { formatMeetingDate, formatMeetingTimeRange } from "#/lib/format";
-import { useCurrentMember } from "#/lib/member-identity";
+import { type StoredMember, useCurrentMember } from "#/lib/member-identity";
 import type { Orientation } from "#/lib/season-grid-view";
 import { listMemberCommitments } from "#/server/meetings";
 import {
@@ -92,6 +95,9 @@ function ClubHome() {
 					</button>
 				) : null}
 			</div>
+
+			{/* "This is me" — graduate a public picker into a real account (#266). */}
+			{member ? <ClaimAccountCard member={member} /> : null}
 
 			{/* Sign-up sheet — the primary surface. Claim an OPEN role or release
 			    your own right in the grid; everyone else is greyed out. */}
@@ -202,6 +208,114 @@ function ClubHome() {
 					</p>
 				)}
 			</section>
+		</div>
+	);
+}
+
+/**
+ * Persistent "Save this to your account" prompt on the public sign-up surface
+ * (#266, Part B). Sends a standard magic link (the rate-limited sign-in path)
+ * with a callback that binds the picked Person to the new account after
+ * verification (`/claim?person=<memberId>`). Hidden for already-signed-in
+ * visitors. Linking stays safe server-side (`claimPersonForUser`): the picked
+ * name is only attached when the verified email matches, so this can't hijack a
+ * name that belongs to someone else.
+ */
+function ClaimAccountCard({ member }: { member: StoredMember }) {
+	const { data: session, isPending } = authClient.useSession();
+	const [email, setEmail] = useState("");
+	const [status, setStatus] = useState<"idle" | "sending" | "sent" | "error">(
+		"idle",
+	);
+	const [error, setError] = useState<string | null>(null);
+
+	// Only offer this to visitors who aren't already signed in.
+	if (isPending || session) return null;
+
+	async function onSubmit(e: React.FormEvent) {
+		e.preventDefault();
+		if (!email.trim() || status === "sending") return;
+		setStatus("sending");
+		setError(null);
+		const { error: sendError } = await authClient.signIn.magicLink({
+			email: email.trim(),
+			callbackURL: `/claim?person=${member.id}`,
+		});
+		if (sendError) {
+			setStatus("error");
+			setError(sendError.message ?? "Something went wrong. Please try again.");
+			return;
+		}
+		setStatus("sent");
+	}
+
+	if (status === "sent") {
+		return (
+			<div className="flex items-start gap-3 rounded-xl border border-success/40 bg-success/5 p-4">
+				<MailCheck
+					className="mt-0.5 size-5 shrink-0 text-success"
+					aria-hidden
+				/>
+				<div className="text-sm">
+					<p className="font-semibold text-foreground">Check your email</p>
+					<p className="text-muted-foreground">
+						We sent a sign-in link to{" "}
+						<span className="font-medium text-foreground">{email}</span>. Open
+						it to save{" "}
+						<span className="font-medium text-foreground">{member.name}</span>{" "}
+						to your account.
+					</p>
+				</div>
+			</div>
+		);
+	}
+
+	return (
+		<div className="rounded-xl border bg-card p-4 shadow-sm">
+			<div className="flex items-start gap-3">
+				<Sparkles className="mt-0.5 size-5 shrink-0 text-primary" aria-hidden />
+				<div className="min-w-0 flex-1 space-y-3">
+					<div>
+						<p className="text-sm font-semibold text-foreground">
+							Save this to your account
+						</p>
+						<p className="text-sm text-muted-foreground">
+							Create a free account so your roles and speech history follow you.
+							We'll email you a magic link — no password needed.
+						</p>
+					</div>
+					<form onSubmit={onSubmit} className="space-y-2">
+						<Label htmlFor="claim-email" className="sr-only">
+							Your email
+						</Label>
+						<div className="flex flex-col gap-2 sm:flex-row">
+							<Input
+								id="claim-email"
+								type="email"
+								inputMode="email"
+								autoComplete="email"
+								required
+								placeholder="you@example.com"
+								value={email}
+								onChange={(e) => setEmail(e.target.value)}
+								className="flex-1"
+							/>
+							<Button type="submit" disabled={status === "sending"}>
+								{status === "sending" ? (
+									<Loader2 className="size-4 animate-spin" aria-hidden />
+								) : (
+									"Send me a link"
+								)}
+							</Button>
+						</div>
+						{error ? (
+							<p className="text-sm text-destructive" role="alert">
+								{error}
+							</p>
+						) : null}
+					</form>
+				</div>
+			</div>
 		</div>
 	);
 }

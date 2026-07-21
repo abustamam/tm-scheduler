@@ -1,5 +1,14 @@
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
-import { ChevronRight, ShieldCheck, Upload } from "lucide-react";
+import {
+	CheckCircle2,
+	ChevronRight,
+	Loader2,
+	Mail,
+	MailCheck,
+	ShieldCheck,
+	Upload,
+	UserPlus,
+} from "lucide-react";
 import { type ChangeEvent, useState } from "react";
 import { toast } from "sonner";
 import { MemberAvatar } from "#/components/club/member-avatar";
@@ -17,6 +26,7 @@ import {
 } from "#/components/ui/dialog";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
 import { effectiveAdminClub } from "#/lib/effective-admin";
+import { type InviteState, inviteStateOf } from "#/lib/invite-state";
 import { formatTenure } from "#/lib/members";
 import { officerPositionLabel } from "#/lib/officers";
 import {
@@ -25,6 +35,7 @@ import {
 	parseRosterText,
 } from "#/lib/roster-import";
 import { cn } from "#/lib/utils";
+import { inviteAllMembers, inviteMember } from "#/server/account-invite";
 import { listClubMembers } from "#/server/club";
 import { listUpcomingMeetings } from "#/server/meetings";
 import { bulkImportMembers, mergeMembers } from "#/server/members";
@@ -73,6 +84,10 @@ interface RosterRow {
 	tone: ReturnType<typeof toneFromSeed>;
 	tenure: string;
 	speeches: number;
+	/** Contact email on file — gates whether an invite can be sent (#266). */
+	email: string | null;
+	/** Account-invite state: none / invited (link sent) / joined (linked) (#266). */
+	inviteState: InviteState;
 	/** Roster membership status (renewal): active vs unrenewed/inactive. */
 	membershipStatus: "active" | "inactive";
 	/** Compact label for the member's first synced Pathway, or null if none synced. */
@@ -110,6 +125,14 @@ function Roster() {
 	const [mergeOpen, setMergeOpen] = useState(false);
 	const [importOpen, setImportOpen] = useState(false);
 	const [csvOpen, setCsvOpen] = useState(false);
+	const [inviteAllOpen, setInviteAllOpen] = useState(false);
+
+	// The invite control adds a wider trailing column (icon button + chevron) for
+	// managers; members see the original chevron-only layout. Fixed widths keep the
+	// header and rows (independent grids) column-aligned.
+	const gridCols = canManage
+		? "grid-cols-[1fr_64px] sm:grid-cols-[1fr_140px_160px_64px]"
+		: TABLE_GRID;
 
 	// Identity, tenure, speeches, membership status and Pathways progress are all real.
 	const rows: RosterRow[] = members.map((m) => {
@@ -125,6 +148,8 @@ function Roster() {
 						.join(", ")}`
 				: formatTenure(joined),
 			speeches: m.speeches,
+			email: m.email,
+			inviteState: inviteStateOf({ userId: m.userId, invitedAt: m.invitedAt }),
 			membershipStatus: m.status,
 			pathwayLabel: pathwayLabelFor(pathways[m.id] ?? []),
 			holdsOffice: m.officerPositions.length > 0,
@@ -143,6 +168,11 @@ function Roster() {
 		key === "all"
 			? rows.length
 			: rows.filter((r) => r.membershipStatus === key).length;
+
+	// How many not-yet-joined members with an email could be invited in bulk (#266).
+	const invitableCount = rows.filter(
+		(r) => r.inviteState !== "joined" && r.email,
+	).length;
 
 	const stats = [
 		{
@@ -186,6 +216,16 @@ function Roster() {
 							onClick={() => setMergeOpen(true)}
 						>
 							Merge duplicates
+						</Button>
+					) : null}
+					{clubId && canManage && invitableCount > 0 ? (
+						<Button
+							variant="outline"
+							size="sm"
+							onClick={() => setInviteAllOpen(true)}
+						>
+							<UserPlus aria-hidden />
+							Invite all
 						</Button>
 					) : null}
 					{clubId && canManage ? (
@@ -236,13 +276,13 @@ function Roster() {
 				<div
 					className={cn(
 						"grid gap-3.5 border-b border-[var(--line)] bg-[var(--foam)] px-5 py-3 text-xs font-extrabold tracking-[0.08em] text-[var(--sea-ink-soft)] uppercase",
-						TABLE_GRID,
+						gridCols,
 					)}
 				>
 					<div>Member</div>
 					<div className="hidden sm:block">Speeches</div>
 					<div className="hidden sm:block">Pathway</div>
-					<div />
+					<div className="justify-self-end">{canManage ? "Account" : ""}</div>
 				</div>
 
 				{visible.length === 0 ? (
@@ -279,18 +319,27 @@ function Roster() {
 					)
 				) : (
 					visible.map((m) => (
-						<Link
+						// Overlay-link row: the profile Link fills the row (absolute inset)
+						// as the click target while the invite button sits above it, so the
+						// button never nests inside an anchor. Content cells are
+						// pointer-events-none so clicks fall through to the Link.
+						<div
 							key={m.id}
-							to="/members/$id"
-							params={{ id: m.id }}
 							className={cn(
-								"group grid cursor-pointer items-center gap-3.5 border-b border-[var(--line)] px-5 py-3 transition-colors last:border-b-0 hover:bg-[var(--foam)]",
-								TABLE_GRID,
+								"group relative grid items-center gap-3.5 border-b border-[var(--line)] px-5 py-3 transition-colors last:border-b-0 hover:bg-[var(--foam)]",
+								gridCols,
 								m.membershipStatus === "inactive" && "opacity-55",
 							)}
 						>
+							<Link
+								to="/members/$id"
+								params={{ id: m.id }}
+								aria-label={`Open ${m.name}'s profile`}
+								className="absolute inset-0 z-0 cursor-pointer"
+							/>
+
 							{/* Member */}
-							<div className="flex min-w-0 items-center gap-3">
+							<div className="pointer-events-none relative z-[1] flex min-w-0 items-center gap-3">
 								<MemberAvatar tone={m.tone} initials={m.initials} size={38} />
 								<div className="min-w-0 leading-[1.25]">
 									<div className="flex items-center gap-2">
@@ -318,7 +367,7 @@ function Roster() {
 							</div>
 
 							{/* Speeches */}
-							<div className="hidden text-sm font-bold text-[var(--sea-ink)] sm:block">
+							<div className="pointer-events-none relative z-[1] hidden text-sm font-bold text-[var(--sea-ink)] sm:block">
 								{m.speeches}
 								<span className="text-xs font-medium text-[var(--sea-ink-soft)]">
 									{" "}
@@ -327,15 +376,25 @@ function Roster() {
 							</div>
 
 							{/* Pathway */}
-							<div className="hidden min-w-0 truncate text-xs text-[var(--sea-ink-soft)] sm:block">
+							<div className="pointer-events-none relative z-[1] hidden min-w-0 truncate text-xs text-[var(--sea-ink-soft)] sm:block">
 								{m.pathwayLabel ?? "—"}
 							</div>
 
-							{/* Chevron */}
-							<div className="justify-self-end text-[var(--sea-ink-soft)] opacity-45 transition-all group-hover:translate-x-0.5 group-hover:opacity-100">
-								<ChevronRight className="size-4" aria-hidden />
+							{/* Invite control (managers) + chevron */}
+							<div className="relative z-[2] flex items-center justify-self-end gap-1.5">
+								{canManage && clubId ? (
+									<RowInviteControl
+										clubId={clubId}
+										memberId={m.id}
+										email={m.email}
+										state={m.inviteState}
+									/>
+								) : null}
+								<span className="pointer-events-none text-[var(--sea-ink-soft)] opacity-45 transition-all group-hover:translate-x-0.5 group-hover:opacity-100">
+									<ChevronRight className="size-4" aria-hidden />
+								</span>
 							</div>
-						</Link>
+						</div>
 					))
 				)}
 			</div>
@@ -372,7 +431,162 @@ function Roster() {
 					clubId={clubId}
 				/>
 			) : null}
+
+			{clubId && canManage ? (
+				<InviteAllDialog
+					open={inviteAllOpen}
+					onOpenChange={setInviteAllOpen}
+					clubId={clubId}
+					invitableCount={invitableCount}
+				/>
+			) : null}
 		</PageContainer>
+	);
+}
+
+/**
+ * Per-row account-invite control (#266). "Joined" members show a static badge;
+ * everyone else gets a one-tap invite (resend when already invited). Disabled
+ * with a hint when there's no email on file — invites only ever go to the
+ * member's own address (the server enforces this too).
+ */
+function RowInviteControl({
+	clubId,
+	memberId,
+	email,
+	state,
+}: {
+	clubId: string;
+	memberId: string;
+	email: string | null;
+	state: InviteState;
+}) {
+	const router = useRouter();
+	const [busy, setBusy] = useState(false);
+
+	if (state === "joined") {
+		return (
+			<span
+				title="This member has an account"
+				className="inline-flex items-center text-[var(--lagoon-deep)]"
+			>
+				<CheckCircle2 className="size-4" aria-hidden />
+				<span className="sr-only">Joined</span>
+			</span>
+		);
+	}
+
+	const noEmail = !email;
+
+	async function onInvite() {
+		if (busy || noEmail) return;
+		setBusy(true);
+		try {
+			const res = await inviteMember({ data: { clubId, memberId } });
+			if (res.outcome === "no_email") {
+				toast.error("Add an email for this member first.");
+			} else if (res.outcome === "already_joined") {
+				toast.info("They already have an account.");
+			} else {
+				toast.success("Invite sent.");
+			}
+			await router.invalidate();
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Couldn't send invite.");
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	const label = noEmail
+		? "Add an email to invite this member"
+		: state === "invited"
+			? "Resend account invite"
+			: "Send account invite";
+
+	return (
+		<button
+			type="button"
+			onClick={onInvite}
+			disabled={busy || noEmail}
+			title={label}
+			aria-label={label}
+			className={cn(
+				"inline-flex size-7 items-center justify-center rounded-md border border-[var(--line)] bg-[var(--surface-strong)] text-[var(--sea-ink-soft)] transition-colors hover:border-[var(--lagoon-deep)] hover:text-[var(--lagoon-deep)] disabled:cursor-not-allowed disabled:opacity-40",
+				state === "invited" && "text-[var(--lagoon-deep)]",
+			)}
+		>
+			{busy ? (
+				<Loader2 className="size-4 animate-spin" aria-hidden />
+			) : state === "invited" ? (
+				<MailCheck className="size-4" aria-hidden />
+			) : (
+				<Mail className="size-4" aria-hidden />
+			)}
+		</button>
+	);
+}
+
+/** Confirm + send account invites to every not-yet-joined member with an email
+ *  in one action (#266). Summarizes the send afterward (sent / already joined /
+ *  skipped-no-email). */
+function InviteAllDialog({
+	open,
+	onOpenChange,
+	clubId,
+	invitableCount,
+}: {
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+	clubId: string;
+	invitableCount: number;
+}) {
+	const router = useRouter();
+	const [busy, setBusy] = useState(false);
+
+	async function onSend() {
+		setBusy(true);
+		try {
+			const res = await inviteAllMembers({ data: { clubId } });
+			toast.success(
+				`Sent ${res.sent} invite${res.sent === 1 ? "" : "s"}.` +
+					(res.noEmail > 0 ? ` ${res.noEmail} skipped (no email).` : ""),
+			);
+			onOpenChange(false);
+			await router.invalidate();
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	return (
+		<Dialog open={open} onOpenChange={onOpenChange}>
+			<DialogContent>
+				<DialogHeader>
+					<DialogTitle>Invite everyone to claim their account</DialogTitle>
+					<DialogDescription>
+						We'll email a magic-link account invite to{" "}
+						<span className="font-semibold">{invitableCount}</span> member
+						{invitableCount === 1 ? "" : "s"} who haven't joined yet and have an
+						email on file. Members already signed in are skipped.
+					</DialogDescription>
+				</DialogHeader>
+				<DialogFooter>
+					<DialogClose asChild>
+						<Button type="button" variant="outline" disabled={busy}>
+							Cancel
+						</Button>
+					</DialogClose>
+					<Button type="button" onClick={onSend} disabled={busy}>
+						{busy
+							? "Sending…"
+							: `Send ${invitableCount} invite${invitableCount === 1 ? "" : "s"}`}
+					</Button>
+				</DialogFooter>
+			</DialogContent>
+		</Dialog>
 	);
 }
 

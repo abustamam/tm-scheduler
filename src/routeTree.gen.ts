@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as UnsubscribeRouteImport } from './routes/unsubscribe'
 import { Route as SigninRouteImport } from './routes/signin'
+import { Route as ClaimRouteImport } from './routes/claim'
 import { Route as AuthedRouteImport } from './routes/_authed'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ClubClubIdRouteImport } from './routes/club.$clubId'
@@ -57,6 +58,11 @@ const UnsubscribeRoute = UnsubscribeRouteImport.update({
 const SigninRoute = SigninRouteImport.update({
   id: '/signin',
   path: '/signin',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ClaimRoute = ClaimRouteImport.update({
+  id: '/claim',
+  path: '/claim',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AuthedRoute = AuthedRouteImport.update({
@@ -250,6 +256,7 @@ const ApiMeetingsIdMinutesPdfRoute = ApiMeetingsIdMinutesPdfRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/claim': typeof ClaimRoute
   '/signin': typeof SigninRoute
   '/unsubscribe': typeof UnsubscribeRoute
   '/activity': typeof AuthedActivityRoute
@@ -290,6 +297,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/claim': typeof ClaimRoute
   '/signin': typeof SigninRoute
   '/unsubscribe': typeof UnsubscribeRoute
   '/activity': typeof AuthedActivityRoute
@@ -330,6 +338,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/_authed': typeof AuthedRouteWithChildren
+  '/claim': typeof ClaimRoute
   '/signin': typeof SigninRoute
   '/unsubscribe': typeof UnsubscribeRoute
   '/_authed/activity': typeof AuthedActivityRoute
@@ -372,6 +381,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/claim'
     | '/signin'
     | '/unsubscribe'
     | '/activity'
@@ -412,6 +422,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/claim'
     | '/signin'
     | '/unsubscribe'
     | '/activity'
@@ -451,6 +462,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/_authed'
+    | '/claim'
     | '/signin'
     | '/unsubscribe'
     | '/_authed/activity'
@@ -493,6 +505,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AuthedRoute: typeof AuthedRouteWithChildren
+  ClaimRoute: typeof ClaimRoute
   SigninRoute: typeof SigninRoute
   UnsubscribeRoute: typeof UnsubscribeRoute
   ApiDevLoginRoute: typeof ApiDevLoginRoute
@@ -520,6 +533,13 @@ declare module '@tanstack/react-router' {
       path: '/signin'
       fullPath: '/signin'
       preLoaderRoute: typeof SigninRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/claim': {
+      id: '/claim'
+      path: '/claim'
+      fullPath: '/claim'
+      preLoaderRoute: typeof ClaimRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_authed': {
@@ -867,6 +887,7 @@ const ClubClubIdRouteWithChildren = ClubClubIdRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AuthedRoute: AuthedRouteWithChildren,
+  ClaimRoute: ClaimRoute,
   SigninRoute: SigninRoute,
   UnsubscribeRoute: UnsubscribeRoute,
   ApiDevLoginRoute: ApiDevLoginRoute,
