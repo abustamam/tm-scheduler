@@ -410,3 +410,80 @@ a {
     color: var(--foreground);
   }
 }
+
+/* Resource article prose (#310) — brand-token markdown styling. */
+.prose-gavelup {
+	color: var(--sea-ink);
+	line-height: 1.65;
+}
+.prose-gavelup h1 {
+	font-family: var(--font-display, "Fraunces", serif);
+	font-size: 1.875rem;
+	font-weight: 600;
+	letter-spacing: -0.02em;
+	margin: 0 0 0.5rem;
+}
+.prose-gavelup h2 {
+	font-size: 1.25rem;
+	font-weight: 600;
+	letter-spacing: -0.01em;
+	margin: 1.75rem 0 0.5rem;
+}
+.prose-gavelup h3 {
+	font-size: 1.05rem;
+	font-weight: 600;
+	margin: 1.25rem 0 0.4rem;
+}
+.prose-gavelup p {
+	margin: 0.75rem 0;
+}
+.prose-gavelup ul,
+.prose-gavelup ol {
+	margin: 0.75rem 0;
+	padding-left: 1.35rem;
+}
+.prose-gavelup ul {
+	list-style: disc;
+}
+.prose-gavelup ol {
+	list-style: decimal;
+}
+.prose-gavelup li {
+	margin: 0.3rem 0;
+}
+.prose-gavelup strong {
+	font-weight: 700;
+}
+.prose-gavelup a {
+	color: var(--lagoon-deep);
+	text-decoration: underline;
+}
+.prose-gavelup blockquote {
+	border-left: 3px solid var(--line);
+	padding-left: 1rem;
+	margin: 1rem 0;
+	color: var(--sea-ink-soft);
+}
+.prose-gavelup table {
+	width: 100%;
+	border-collapse: collapse;
+	margin: 1rem 0;
+	font-size: 0.9rem;
+}
+.prose-gavelup th,
+.prose-gavelup td {
+	border: 1px solid var(--line);
+	padding: 0.4rem 0.6rem;
+	text-align: left;
+}
+.prose-gavelup th {
+	background: var(--surface-strong);
+	font-weight: 700;
+}
+.prose-gavelup code {
+	font-family: ui-monospace, monospace;
+	font-size: 0.85em;
+	background: var(--surface-strong);
+	padding: 0.1rem 0.3rem;
+	border-radius: 4px;
+}
