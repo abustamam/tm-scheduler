@@ -73,11 +73,16 @@ function Landing() {
 		<div className="flex min-h-svh flex-col bg-[var(--foam)] text-[var(--sea-ink)]">
 			<header className="mx-auto flex w-full max-w-6xl items-center justify-between px-5 py-5 sm:px-8">
 				<BrandMark />
-				<Button asChild variant="ghost" className="font-semibold">
-					<Link to="/signin" search={{ redirect: "/officers" }}>
-						Sign in
-					</Link>
-				</Button>
+				<nav className="flex items-center gap-1">
+					<Button asChild variant="ghost" className="font-semibold">
+						<Link to="/resources">Resources</Link>
+					</Button>
+					<Button asChild variant="ghost" className="font-semibold">
+						<Link to="/signin" search={{ redirect: "/officers" }}>
+							Sign in
+						</Link>
+					</Button>
+				</nav>
 			</header>
 
 			<main className="flex-1">
@@ -150,13 +155,21 @@ function Landing() {
 				<div className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-5 py-8 text-sm text-[var(--sea-ink-soft)] sm:px-8">
 					<div className="flex flex-wrap items-center justify-between gap-3">
 						<BrandMark size="sm" />
-						<Link
-							to="/signin"
-							search={{ redirect: "/officers" }}
-							className="font-semibold text-[var(--sea-ink)] no-underline hover:underline"
-						>
-							Sign in
-						</Link>
+						<div className="flex items-center gap-4">
+							<Link
+								to="/resources"
+								className="font-semibold text-[var(--sea-ink)] no-underline hover:underline"
+							>
+								Resources
+							</Link>
+							<Link
+								to="/signin"
+								search={{ redirect: "/officers" }}
+								className="font-semibold text-[var(--sea-ink)] no-underline hover:underline"
+							>
+								Sign in
+							</Link>
+						</div>
 					</div>
 					<p className="max-w-3xl text-xs leading-relaxed">
 						{TOASTMASTERS_DISCLAIMER}

@@ -1,21 +1,34 @@
 /**
- * Mock resource library data. Static reference content in the real app; the
- * category filter is client-side.
+ * Registry of public resource articles (#310). Metadata lives here (typed);
+ * the prose body of each article lives in `content/resources/<slug>.md` and is
+ * loaded by `resource-content.ts`. Kept free of `#/db` so client routes import
+ * it safely.
  */
 
-export type ResourceCategory = "Pathways" | "Roles" | "Meeting" | "Officer";
+export type ResourceCategory = "Pathways" | "Roles" | "Meeting";
 
 export type ResourceIcon = "book" | "clock" | "list" | "users" | "doc" | "star";
 
 /** Icon-tile gradient tone, chosen by category. */
 export type ResourceTone = "lagoon" | "palm" | "ink";
 
+/** A downloadable role sheet. `href` is served from `public/role-sheets/`. */
+export interface RoleSheet {
+	label: string;
+	href: string;
+}
+
 export interface Resource {
+	/** URL slug and markdown filename (`content/resources/<slug>.md`). */
+	slug: string;
 	cat: ResourceCategory;
 	icon: ResourceIcon;
 	tone: ResourceTone;
 	title: string;
+	/** Card blurb. */
 	desc: string;
+	/** Printable sheets shown on the article (only `meeting-roles` in v1). */
+	downloads?: RoleSheet[];
 }
 
 export function resourceToneGradient(tone: ResourceTone): string {
@@ -29,76 +42,71 @@ export function resourceToneGradient(tone: ResourceTone): string {
 	}
 }
 
-export const resourceCategories: Array<"all" | ResourceCategory> = [
-	"all",
-	"Pathways",
-	"Roles",
-	"Meeting",
-	"Officer",
-];
-
 export const resources: Resource[] = [
 	{
-		cat: "Pathways",
-		icon: "book",
-		tone: "lagoon",
-		title: "Pathways project library",
-		desc: "Every project across all 11 paths, with objectives and the speeches required to advance.",
+		slug: "what-to-expect",
+		cat: "Meeting",
+		icon: "clock",
+		tone: "ink",
+		title: "What to expect at a meeting",
+		desc: "The running order of a typical Toastmasters meeting, start to finish.",
 	},
 	{
-		cat: "Pathways",
-		icon: "star",
-		tone: "lagoon",
-		title: "Path picker & assessment",
-		desc: "The questionnaire that recommends a learning path based on a member's goals.",
-	},
-	{
-		cat: "Pathways",
-		icon: "list",
-		tone: "lagoon",
-		title: "Level completion checklist",
-		desc: "What's required to finish each of the five levels and request your award.",
-	},
-	{
+		slug: "meeting-roles",
 		cat: "Roles",
 		icon: "users",
 		tone: "palm",
-		title: "Evaluation guide (CRC)",
-		desc: "How to give a Commend–Recommend–Commend evaluation that actually helps.",
+		title: "Meeting roles",
+		desc: "What each role does — plus printable sheets for the hands-on roles.",
+		downloads: [
+			{ label: "Timer's log", href: "/role-sheets/timer.pdf" },
+			{ label: "Ah-Counter's log", href: "/role-sheets/ah-counter.pdf" },
+			{ label: "Grammarian's log", href: "/role-sheets/grammarian.pdf" },
+			{
+				label: "Ballot / Vote Counter tally",
+				href: "/role-sheets/ballot-counter.pdf",
+			},
+			{
+				label: "General Evaluator notes",
+				href: "/role-sheets/general-evaluator.pdf",
+			},
+		],
 	},
 	{
+		slug: "evaluation-crc",
 		cat: "Roles",
-		icon: "clock",
+		icon: "star",
 		tone: "palm",
-		title: "Timer & color cards",
-		desc: "Green / amber / red timing windows for every speech and Table Topics.",
+		title: "How to give a great evaluation",
+		desc: "The Commend–Recommend–Commend method for helpful, encouraging feedback.",
 	},
 	{
-		cat: "Roles",
-		icon: "doc",
-		tone: "palm",
-		title: "Grammarian & Ah-Counter sheet",
-		desc: "Printable tracking sheet plus tips for the language roles.",
-	},
-	{
+		slug: "table-topics",
 		cat: "Meeting",
 		icon: "list",
 		tone: "ink",
-		title: "Agenda template",
-		desc: "The standard running order Harborlight uses, ready to duplicate each week.",
+		title: "Table Topics guide",
+		desc: "How the impromptu-speaking segment works and how to answer with confidence.",
 	},
 	{
+		slug: "guest-faq",
 		cat: "Meeting",
 		icon: "doc",
 		tone: "ink",
-		title: "Speech contest rulebook",
-		desc: "Rules and eligibility for the International, Humorous and Evaluation contests.",
+		title: "First-time guest FAQ",
+		desc: "Do I have to speak? What do I wear? Is it free? Your questions answered.",
 	},
 	{
-		cat: "Officer",
-		icon: "star",
-		tone: "ink",
-		title: "Officer handbook & club plan",
-		desc: "Roles, responsibilities and the Distinguished Club Program goals for the year.",
+		slug: "what-is-pathways",
+		cat: "Pathways",
+		icon: "book",
+		tone: "lagoon",
+		title: "What is Pathways?",
+		desc: "A short intro to the Toastmasters learning experience.",
 	},
 ];
+
+/** Look up a resource by its URL slug. */
+export function resourceBySlug(slug: string): Resource | undefined {
+	return resources.find((r) => r.slug === slug);
+}

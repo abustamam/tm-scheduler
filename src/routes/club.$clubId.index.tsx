@@ -96,6 +96,14 @@ function ClubHome() {
 				) : null}
 			</div>
 
+			<Link
+				to="/resources/$slug"
+				params={{ slug: "what-to-expect" }}
+				className="inline-flex text-sm font-semibold text-[var(--lagoon-deep)] no-underline hover:underline"
+			>
+				New to Toastmasters? See what to expect at a meeting →
+			</Link>
+
 			{/* "This is me" — graduate a public picker into a real account (#266). */}
 			{member ? <ClaimAccountCard member={member} /> : null}
 
