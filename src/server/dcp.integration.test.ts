@@ -10,8 +10,14 @@
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test_207 \
  *     bunx vitest run src/server/dcp.integration.test.ts
  */
+import { and, eq, inArray } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { members } from "#/db/schema";
+import {
+	members,
+	pathEnrollments,
+	pathLevelProgress,
+	pathwaysPaths,
+} from "#/db/schema";
 import {
 	cleanup,
 	hasTestDb,
@@ -21,6 +27,7 @@ import {
 	testDb,
 } from "#/test/db";
 import {
+	applyEducationSuggestions,
 	getScoreboard,
 	listScoreboardYears,
 	startScoreboard,
@@ -209,5 +216,314 @@ describe.skipIf(!hasTestDb)("DCP scoreboard (integration)", () => {
 		await startScoreboard({ clubId: seeded.clubId, programYear: 2026 });
 		const years = await listScoreboardYears(seeded.clubId);
 		expect(years).toEqual([2026, 2025]);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Education-goal derivation from Pathways completions (#245 / ADR-0022)
+// ---------------------------------------------------------------------------
+
+/** Completion timestamps inside / outside the PY 2026 window. */
+const DONE_IN_WINDOW = new Date(2026, 9, 15); // Oct 15 2026
+const DONE_OUT_OF_WINDOW = new Date(2026, 2, 3); // Mar 3 2026 → program year 2025
+
+describe.skipIf(!hasTestDb)("DCP education derivation (integration)", () => {
+	let seeded: SeededClub;
+	/** Catalog paths are club-less and survive the club cascade — track + drop. */
+	let pathIds: string[];
+	/** A second club, to prove credit is club-scoped. */
+	let otherClubId: string;
+	let otherIds: string[];
+
+	beforeEach(async () => {
+		seeded = await seedClub();
+		pathIds = [];
+		const other = await seedClub();
+		otherClubId = other.clubId;
+		otherIds = [other.clubId, other.adminUserId, other.memberUserId];
+	});
+
+	afterEach(async () => {
+		await cleanup(seeded.clubId, [seeded.adminUserId, seeded.memberUserId]);
+		await cleanup(otherIds[0], [otherIds[1], otherIds[2]]);
+		if (pathIds.length > 0) {
+			await testDb
+				.delete(pathwaysPaths)
+				.where(inArray(pathwaysPaths.id, pathIds));
+		}
+	});
+
+	/** A roster member + its person (cleanup collects the person via the club). */
+	async function addMemberPerson(name: string): Promise<string> {
+		const personId = await seedPerson({ name });
+		await testDb.insert(members).values({
+			clubId: seeded.clubId,
+			personId,
+			name,
+			clubRole: "member",
+			status: "active",
+		});
+		return personId;
+	}
+
+	/** A fresh catalog path with a run-unique course code. */
+	async function addPath(label: string): Promise<string> {
+		const [row] = await testDb
+			.insert(pathwaysPaths)
+			.values({
+				courseCode: `${seeded.clubId.slice(0, 8)}-${label}`,
+				name: `Path ${label}`,
+			})
+			.returning({ id: pathwaysPaths.id });
+		if (!row) throw new Error("path insert failed");
+		pathIds.push(row.id);
+		return row.id;
+	}
+
+	/**
+	 * Seed one level row for a person on a path — the atomic "education award"
+	 * unit. Defaults are the countable case (approved, dated in window, credited
+	 * to the seeded club); each test overrides the one field it is probing.
+	 */
+	async function addLevel(opts: {
+		personId: string;
+		pathId: string;
+		level: number;
+		approved?: boolean;
+		completedAt?: Date | null;
+		creditedClubId?: string | null;
+	}): Promise<void> {
+		const [enrollment] = await testDb
+			.insert(pathEnrollments)
+			.values({ personId: opts.personId, pathId: opts.pathId })
+			.onConflictDoNothing({
+				target: [pathEnrollments.personId, pathEnrollments.pathId],
+			})
+			.returning({ id: pathEnrollments.id });
+		let enrollmentId = enrollment?.id;
+		if (!enrollmentId) {
+			const [existing] = await testDb
+				.select({ id: pathEnrollments.id })
+				.from(pathEnrollments)
+				.where(
+					and(
+						eq(pathEnrollments.personId, opts.personId),
+						eq(pathEnrollments.pathId, opts.pathId),
+					),
+				)
+				.limit(1);
+			if (!existing) throw new Error("enrollment insert failed");
+			enrollmentId = existing.id;
+		}
+		await testDb.insert(pathLevelProgress).values({
+			enrollmentId,
+			level: opts.level,
+			completed: 4,
+			total: 4,
+			approved: opts.approved ?? true,
+			completedAt:
+				opts.completedAt === undefined ? DONE_IN_WINDOW : opts.completedAt,
+			creditedClubId:
+				opts.creditedClubId === undefined ? seeded.clubId : opts.creditedClubId,
+		});
+	}
+
+	it("counts only approved, in-window, this-club-credited, dated completions", async () => {
+		const p = await addMemberPerson("Deriver");
+		// The one countable award: a Level 1 that satisfies every predicate.
+		await addLevel({ personId: p, pathId: await addPath("ok"), level: 1 });
+		// Each of these violates exactly one predicate and must NOT count.
+		await addLevel({
+			personId: p,
+			pathId: await addPath("unapproved"),
+			level: 1,
+			approved: false,
+		});
+		await addLevel({
+			personId: p,
+			pathId: await addPath("undated"),
+			level: 1,
+			completedAt: null,
+		});
+		await addLevel({
+			personId: p,
+			pathId: await addPath("lastyear"),
+			level: 1,
+			completedAt: DONE_OUT_OF_WINDOW,
+		});
+		await addLevel({
+			personId: p,
+			pathId: await addPath("otherclub"),
+			level: 1,
+			creditedClubId: otherClubId,
+		});
+		await addLevel({
+			personId: p,
+			pathId: await addPath("nocredit"),
+			level: 1,
+			creditedClubId: null,
+		});
+
+		const view = await getScoreboard({
+			clubId: seeded.clubId,
+			programYear: PY,
+		});
+		expect(view.derivedEducation.g1).toBe(1);
+	});
+
+	it("counts awards per completion, not per member", async () => {
+		// Same person, same level, two different paths ⇒ two awards.
+		const p = await addMemberPerson("Two-pather");
+		await addLevel({ personId: p, pathId: await addPath("a"), level: 2 });
+		await addLevel({ personId: p, pathId: await addPath("b"), level: 2 });
+
+		const view = await getScoreboard({
+			clubId: seeded.clubId,
+			programYear: PY,
+		});
+		expect(view.derivedEducation.g2).toBe(2);
+		expect(view.derivedEducation.g3).toBe(0);
+	});
+
+	it("derives the six education goals from a mixed seed", async () => {
+		// n1 = 6 → g1 6 (uncapped) · n2 = 3 → g2 2, g3 1 · n3 = 2 → g4 2
+		// n45 = one L4 + one L5 → g5 1, g6 1
+		for (let i = 0; i < 6; i++) {
+			const p = await addMemberPerson(`L1 ${i}`);
+			await addLevel({
+				personId: p,
+				pathId: await addPath(`l1-${i}`),
+				level: 1,
+			});
+		}
+		for (let i = 0; i < 3; i++) {
+			const p = await addMemberPerson(`L2 ${i}`);
+			await addLevel({
+				personId: p,
+				pathId: await addPath(`l2-${i}`),
+				level: 2,
+			});
+		}
+		for (let i = 0; i < 2; i++) {
+			const p = await addMemberPerson(`L3 ${i}`);
+			await addLevel({
+				personId: p,
+				pathId: await addPath(`l3-${i}`),
+				level: 3,
+			});
+		}
+		const l4 = await addMemberPerson("L4");
+		await addLevel({ personId: l4, pathId: await addPath("l4"), level: 4 });
+		const l5 = await addMemberPerson("L5");
+		await addLevel({ personId: l5, pathId: await addPath("l5"), level: 5 });
+
+		const view = await getScoreboard({
+			clubId: seeded.clubId,
+			programYear: PY,
+		});
+		expect(view.derivedEducation).toEqual({
+			g1: 6,
+			g2: 2,
+			g3: 1,
+			g4: 2,
+			g5: 1,
+			g6: 1,
+		});
+		// Derived values are suggestions only — nothing scores until applied.
+		expect(view.progress.g1).toBe(0);
+		expect(view.summary.goalsMet).toBe(0);
+	});
+
+	it("reports pathwaysSynced false until a dated club-credited completion exists", async () => {
+		const p = await addMemberPerson("Unsynced");
+		let view = await getScoreboard({ clubId: seeded.clubId, programYear: PY });
+		expect(view.pathwaysSynced).toBe(false);
+
+		// An undated row (approved before we first synced) still does not count.
+		await addLevel({
+			personId: p,
+			pathId: await addPath("undated"),
+			level: 1,
+			completedAt: null,
+		});
+		view = await getScoreboard({ clubId: seeded.clubId, programYear: PY });
+		expect(view.pathwaysSynced).toBe(false);
+
+		// A dated completion in ANOTHER program year is enough — it proves sync.
+		await addLevel({
+			personId: p,
+			pathId: await addPath("prioryear"),
+			level: 1,
+			completedAt: DONE_OUT_OF_WINDOW,
+		});
+		view = await getScoreboard({ clubId: seeded.clubId, programYear: PY });
+		expect(view.pathwaysSynced).toBe(true);
+		expect(view.derivedEducation.g1).toBe(0); // but not in THIS year's counts
+	});
+
+	it("applies the suggestions to goals 1–6 without touching g7–g10 or the base", async () => {
+		await addMemberPerson("Roster filler");
+		const p = await addMemberPerson("Achiever");
+		await addLevel({ personId: p, pathId: await addPath("l1"), level: 1 });
+		await addLevel({ personId: p, pathId: await addPath("l2"), level: 2 });
+
+		await startScoreboard({ clubId: seeded.clubId, programYear: PY });
+		// Hand-set the non-education goals; apply must leave them alone.
+		await updateGoal(
+			{ clubId: seeded.clubId, programYear: PY, goalKey: "g7", achieved: 3 },
+			seeded.adminUserId,
+		);
+		await updateGoal(
+			{ clubId: seeded.clubId, programYear: PY, goalKey: "g9", achieved: 1 },
+			seeded.adminUserId,
+		);
+		const before = await getScoreboard({
+			clubId: seeded.clubId,
+			programYear: PY,
+		});
+
+		const view = await applyEducationSuggestions(
+			{ clubId: seeded.clubId, programYear: PY },
+			seeded.adminUserId,
+		);
+
+		expect(view.progress.g1).toBe(1);
+		expect(view.progress.g2).toBe(1);
+		expect(view.progress.g3).toBe(0);
+		expect(view.progress.g7).toBe(3); // untouched
+		expect(view.progress.g9).toBe(1); // untouched
+		expect(view.baseMemberCount).toBe(before.baseMemberCount);
+		// Applied values now score.
+		expect(view.summary.goalsMet).toBe(before.summary.goalsMet);
+	});
+
+	it("keeps deriving after an apply so later completions resurface", async () => {
+		const p = await addMemberPerson("Achiever");
+		await addLevel({ personId: p, pathId: await addPath("l1a"), level: 1 });
+		await startScoreboard({ clubId: seeded.clubId, programYear: PY });
+		await applyEducationSuggestions(
+			{ clubId: seeded.clubId, programYear: PY },
+			seeded.adminUserId,
+		);
+
+		// A new completion lands after the apply.
+		const q = await addMemberPerson("Latecomer");
+		await addLevel({ personId: q, pathId: await addPath("l1b"), level: 1 });
+
+		const view = await getScoreboard({
+			clubId: seeded.clubId,
+			programYear: PY,
+		});
+		expect(view.progress.g1).toBe(1); // stored: what was applied
+		expect(view.derivedEducation.g1).toBe(2); // live: includes the new one
+	});
+
+	it("refuses to apply before a scoreboard is started", async () => {
+		await expect(
+			applyEducationSuggestions(
+				{ clubId: seeded.clubId, programYear: PY },
+				null,
+			),
+		).rejects.toThrow(/no dcp scoreboard/i);
 	});
 });

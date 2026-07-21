@@ -1,5 +1,5 @@
 import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
-import { Award, Check, Trophy } from "lucide-react";
+import { Award, Check, Sparkles, Trophy } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { PageContainer } from "#/components/page-container";
@@ -18,6 +18,7 @@ import {
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { cn } from "#/lib/utils";
 import {
+	applyEducationSuggestions,
 	getScoreboard,
 	getScoreboardYears,
 	startScoreboard,
@@ -134,6 +135,26 @@ function DcpTracker() {
 		}
 	}
 
+	async function handleApplyEducation() {
+		if (!clubId) return;
+		setLoading(true);
+		try {
+			const v = await applyEducationSuggestions({
+				data: { clubId, programYear: year },
+			});
+			setView(v);
+			toast.success("Applied the Pathways suggestions to goals 1–6.");
+		} catch (err) {
+			toast.error(
+				err instanceof Error
+					? err.message
+					: "Couldn't apply the Pathways suggestions.",
+			);
+		} finally {
+			setLoading(false);
+		}
+	}
+
 	async function handleBase(baseMemberCount: number | null) {
 		if (!clubId) return;
 		try {
@@ -202,7 +223,9 @@ function DcpTracker() {
 							key={cat}
 							category={cat}
 							view={view}
+							loading={loading}
 							onGoal={handleGoal}
+							onApplyEducation={handleApplyEducation}
 						/>
 					))}
 				</>
@@ -387,28 +410,58 @@ function Stat({ label, value }: { label: string; value: string }) {
 function GoalGroup({
 	category,
 	view,
+	loading,
 	onGoal,
+	onApplyEducation,
 }: {
 	category: DcpGoalCategory;
 	view: DcpScoreboardView;
+	loading: boolean;
 	onGoal: (goal: DcpGoal, achieved: number) => void;
+	onApplyEducation: () => void;
 }) {
 	const goals = DCP_GOALS.filter((g) => g.category === category);
+	// Suggestions exist only for the education goals, and only once this club has
+	// actually synced Base Camp — a bare "0" from a club that never synced would
+	// read as "nobody completed anything" rather than "we have no data".
+	const suggest = category === "education" && view.pathwaysSynced;
 	return (
 		<div>
-			<h2 className="mb-2 text-sm font-bold tracking-[-0.01em]">
-				{CATEGORY_LABEL[category]}
-			</h2>
+			<div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+				<h2 className="text-sm font-bold tracking-[-0.01em]">
+					{CATEGORY_LABEL[category]}
+				</h2>
+				{suggest ? (
+					<Button
+						size="sm"
+						variant="outline"
+						onClick={onApplyEducation}
+						disabled={loading}
+					>
+						<Sparkles className="size-3.5" aria-hidden />
+						{loading ? "Applying…" : "Apply Pathways suggestions"}
+					</Button>
+				) : null}
+			</div>
 			<div className="overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] shadow-[0_1px_0_var(--inset-glint)_inset,0_14px_30px_rgba(23,58,64,.06)]">
 				{goals.map((g) => (
 					<GoalRow
 						key={g.key}
 						goal={g}
 						achieved={view.progress[g.key] ?? 0}
+						derived={suggest ? (view.derivedEducation[g.key] ?? 0) : null}
 						onGoal={onGoal}
 					/>
 				))}
 			</div>
+			{suggest ? (
+				<p className="mt-2 text-xs text-[var(--sea-ink-soft)]">
+					Pathways figures are approximate: a level is dated when this club
+					first synced it — not Base Camp's award date — and only completions
+					from your first sync onward are counted. Anything earlier needs
+					entering by hand.
+				</p>
+			) : null}
 		</div>
 	);
 }
@@ -416,10 +469,13 @@ function GoalGroup({
 function GoalRow({
 	goal,
 	achieved,
+	derived,
 	onGoal,
 }: {
 	goal: DcpGoal;
 	achieved: number;
+	/** Live Pathways suggestion, or null when this goal has none to offer. */
+	derived: number | null;
 	onGoal: (goal: DcpGoal, achieved: number) => void;
 }) {
 	const met = achieved >= goal.target;
@@ -467,6 +523,16 @@ function GoalRow({
 				</Button>
 			) : (
 				<div className="flex items-center gap-2">
+					{derived !== null ? (
+						<Badge
+							variant="outline"
+							className="gap-1 border-dashed text-[var(--sea-ink-soft)]"
+							title="Derived from synced Pathways completions — not yet applied"
+						>
+							<Sparkles className="size-3" aria-hidden />
+							Pathways: {derived}
+						</Badge>
+					) : null}
 					<Input
 						inputMode="numeric"
 						aria-label={`${goal.label} achieved`}

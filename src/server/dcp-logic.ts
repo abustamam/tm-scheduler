@@ -4,18 +4,27 @@
 // db-touching export in the server-fn module would drag `pg` → `Buffer` into the
 // browser. All the tier/base/catalog math is the pure, client-safe `#/lib/dcp`.
 //
-// v1 is a MANUAL scoreboard: only the two new-member goals (g7/g8) are
-// roster-derived (pre-filled at start from `members.joinedAt` in the program-year
-// window); every other goal is hand-entered. The recognition tier + membership
-// base are DERIVED at read time, never stored.
-import { and, asc, eq, gte, isNotNull, lt } from "drizzle-orm";
+// Goals are President-entered. Two assists SUGGEST values without writing on
+// their own: g7/g8 pre-filled at start from `members.joinedAt` in the
+// program-year window, and g1–g6 live-derived from this club's dated Pathways
+// completions (#245 / ADR-0022) and only stored when explicitly applied. The
+// recognition tier + membership base are DERIVED at read time, never stored.
+import { and, asc, count, eq, gte, isNotNull, lt, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
-import { dcpGoalProgress, dcpScoreboards, members } from "#/db/schema";
+import {
+	dcpGoalProgress,
+	dcpScoreboards,
+	members,
+	pathLevelProgress,
+} from "#/db/schema";
 import {
 	computeDcpSummary,
 	DCP_GOALS,
 	type DcpSummary,
+	EDUCATION_GOAL_KEYS,
+	type EducationLevelCounts,
+	educationGoalsFromLevelCounts,
 	goalByKey,
 	programYearWindow,
 	splitNewMembers,
@@ -32,6 +41,19 @@ export interface DcpScoreboardView {
 	newMemberCount: number;
 	/** goalKey → achieved (all zero when not started). */
 	progress: Record<string, number>;
+	/**
+	 * Live Pathways-derived SUGGESTIONS for education goals 1–6 (#245). Always
+	 * computed, never stored — `progress` stays the only thing that scores, so a
+	 * suggestion counts toward nothing until the President Applies it.
+	 */
+	derivedEducation: Record<string, number>;
+	/**
+	 * Whether this club has any dated, club-credited Pathways completion at all
+	 * (any year). A zero derived value is ambiguous — "synced and genuinely zero"
+	 * vs "never synced" — so the UI needs this to know whether to offer the
+	 * suggestions or fall back to pure manual entry.
+	 */
+	pathwaysSynced: boolean;
 	summary: DcpSummary;
 }
 
@@ -74,6 +96,83 @@ export async function countNewMembers(
 }
 
 // ---------------------------------------------------------------------------
+// Pathways-derived education awards (#245 / ADR-0022)
+// ---------------------------------------------------------------------------
+
+/**
+ * Count this club's *education awards* for the program year, by level.
+ *
+ * The countable pool is `path_level_progress` rows that are `approved`, credited
+ * to THIS club, and whose `completed_at` falls inside the year. Rows where
+ * `completed_at` is null are levels that were already approved before this club
+ * first synced the enrollment — ADR-0022 never fabricates a date for them, so
+ * they are excluded and need manual entry.
+ *
+ * Counting is per-row (award-counting), deliberately NOT per-member: the unique
+ * index is (enrollment, level), so one person finishing the same level in two
+ * paths yields two rows and two awards — which is how DCP credits them.
+ */
+export async function countEducationAwards(
+	clubId: string,
+	programYear: number,
+): Promise<EducationLevelCounts> {
+	const { start, end } = programYearWindow(programYear);
+	const rows = await db
+		.select({ level: pathLevelProgress.level, n: count() })
+		.from(pathLevelProgress)
+		.where(
+			and(
+				eq(pathLevelProgress.creditedClubId, clubId),
+				eq(pathLevelProgress.approved, true),
+				// Redundant against the range below (NULL satisfies neither bound),
+				// but states the ADR-0022 exclusion rule literally.
+				isNotNull(pathLevelProgress.completedAt),
+				gte(pathLevelProgress.completedAt, start),
+				lt(pathLevelProgress.completedAt, end),
+			),
+		)
+		.groupBy(pathLevelProgress.level);
+
+	const byLevel = new Map(rows.map((r) => [r.level, Number(r.n)]));
+	return {
+		n1: byLevel.get(1) ?? 0,
+		n2: byLevel.get(2) ?? 0,
+		n3: byLevel.get(3) ?? 0,
+		// "Level 4, Level 5, or a Path" — see educationGoalsFromLevelCounts.
+		n45: (byLevel.get(4) ?? 0) + (byLevel.get(5) ?? 0),
+	};
+}
+
+/**
+ * Has this club ever witnessed a Pathways completion? Any single dated,
+ * club-credited row (in ANY program year) proves the Base Camp sync has run for
+ * this club, which is what distinguishes a real zero from "no data".
+ */
+export async function hasPathwaysCompletions(clubId: string): Promise<boolean> {
+	const [row] = await db
+		.select({ id: pathLevelProgress.id })
+		.from(pathLevelProgress)
+		.where(
+			and(
+				eq(pathLevelProgress.creditedClubId, clubId),
+				isNotNull(pathLevelProgress.completedAt),
+			),
+		)
+		.limit(1);
+	return Boolean(row);
+}
+
+/** The live education-goal suggestions for a club-year (g1–g6). */
+export async function deriveEducationGoals(
+	clubId: string,
+	programYear: number,
+): Promise<Record<string, number>> {
+	return educationGoalsFromLevelCounts(
+		await countEducationAwards(clubId, programYear),
+	);
+}
+
+// ---------------------------------------------------------------------------
 // Read
 // ---------------------------------------------------------------------------
 
@@ -106,10 +205,18 @@ export async function getScoreboard(
 	input: GetScoreboardInput,
 ): Promise<DcpScoreboardView> {
 	const { clubId, programYear } = input;
-	const [board, currentActive, newMemberCount] = await Promise.all([
+	const [
+		board,
+		currentActive,
+		newMemberCount,
+		derivedEducation,
+		pathwaysSynced,
+	] = await Promise.all([
 		findScoreboard(clubId, programYear),
 		countActiveMembers(clubId),
 		countNewMembers(clubId, programYear),
+		deriveEducationGoals(clubId, programYear),
+		hasPathwaysCompletions(clubId),
 	]);
 
 	const progress: Record<string, number> = {};
@@ -135,6 +242,9 @@ export async function getScoreboard(
 		currentActive,
 		newMemberCount,
 		progress,
+		derivedEducation,
+		pathwaysSynced,
+		// Scores from STORED progress only — derived suggestions never count.
 		summary: computeDcpSummary({ progress, currentActive, baseMemberCount }),
 	};
 }
@@ -250,6 +360,49 @@ export async function updateGoal(
 			set: { achieved, updatedBy, updatedAt: new Date() },
 		});
 	return { ok: true };
+}
+
+export const applyEducationSchema = z.object({
+	clubId: z.string().uuid(),
+	programYear: z.number().int().min(2000).max(2100),
+});
+export type ApplyEducationInput = z.infer<typeof applyEducationSchema>;
+
+/**
+ * Write the live Pathways suggestions into the stored scoreboard for goals 1–6
+ * (#245) — the President reviewing and accepting the derivation.
+ *
+ * One multi-row upsert, so all six land or none do. Deliberately scoped to the
+ * education goals: g7/g8 (new members), the composite g9/g10, and the membership
+ * base are never touched. The suggestions stay live afterward — the next read
+ * re-derives, so later completions resurface as a new suggestion to apply.
+ */
+export async function applyEducationSuggestions(
+	input: ApplyEducationInput,
+	updatedBy: string | null,
+): Promise<DcpScoreboardView> {
+	const { clubId, programYear } = input;
+	const board = await requireScoreboard(clubId, programYear);
+	const derived = await deriveEducationGoals(clubId, programYear);
+	const updatedAt = new Date();
+
+	await db
+		.insert(dcpGoalProgress)
+		.values(
+			EDUCATION_GOAL_KEYS.map((goalKey) => ({
+				scoreboardId: board.id,
+				goalKey,
+				achieved: derived[goalKey] ?? 0,
+				updatedBy,
+				updatedAt,
+			})),
+		)
+		.onConflictDoUpdate({
+			target: [dcpGoalProgress.scoreboardId, dcpGoalProgress.goalKey],
+			set: { achieved: sql`excluded.achieved`, updatedBy, updatedAt },
+		});
+
+	return getScoreboard({ clubId, programYear });
 }
 
 export const updateBaseSchema = z.object({

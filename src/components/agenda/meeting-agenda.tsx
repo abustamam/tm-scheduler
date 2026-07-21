@@ -3,6 +3,11 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { AssignSlotSheet } from "#/components/club/assign-slot-sheet";
 import { EditSpeechSheet } from "#/components/club/edit-speech-sheet";
+import { NudgeButtons } from "#/components/club/nudge-buttons";
+import {
+	buildRecruitTargets,
+	NudgeRecruitPicker,
+} from "#/components/club/nudge-recruit-picker";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import {
@@ -74,7 +79,15 @@ export interface MeetingAgendaProps {
 	viewer: MeetingViewer;
 	actions: MeetingAgendaActions;
 	/** Roster for the assign picker — only needed where `viewer.canAssign`. */
-	roster: { id: string; name: string }[];
+	roster: {
+		id: string;
+		name: string;
+		// Optional so the public route (no contact — PII-safe) still satisfies
+		// the prop; the recruit picker that consumes them only renders under
+		// `viewer.canManage` (#37).
+		phone?: string | null;
+		email?: string | null;
+	}[];
 	roleRecency: RoleRecency;
 	unavailableMemberIds: string[];
 	/** Named unavailable members for the manager "not available" section. */
@@ -86,6 +99,9 @@ export interface MeetingAgendaProps {
 	/** Existing club guests for the admin "assign a guest" picker (#151). Admin
 	 *  surface only (gated on `viewer.canManage`); empty on the public view. */
 	clubGuests?: { id: string; name: string }[];
+	/** Absolute public meeting URL + friendly date, for tap-to-nudge (#37). */
+	shareUrl: string;
+	meetingDate: string;
 }
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -116,6 +132,8 @@ export function MeetingAgenda({
 	unavailableMembers = [],
 	pairedRoleIds = new Set<string>(),
 	clubGuests = [],
+	shareUrl,
+	meetingDate,
 }: MeetingAgendaProps) {
 	const { currentMemberId } = viewer;
 	// Claiming an open slot requires an identity AND the capability — a
@@ -138,6 +156,14 @@ export function MeetingAgenda({
 	for (const s of slots) {
 		if (s.assigneeId) roleByMemberId[s.assigneeId] = slotLabel(s, roleCounts);
 	}
+
+	// Recruiting pool for open-slot nudges (#37) — every active member, annotated
+	// (not filtered) with availability + the role they already hold this meeting.
+	const recruitTargets = buildRecruitTargets(
+		roster,
+		new Set(unavailableMemberIds),
+		roleByMemberId,
+	);
 
 	// Preserve category order as it appears (slots arrive pre-sorted).
 	const categories: string[] = [];
@@ -418,6 +444,27 @@ export function MeetingAgenda({
 													>
 														{isOpen ? "Assign…" : "Reassign…"}
 													</Button>
+												) : null}
+
+												{viewer.canManage && !isOpen && slot.assigneeName ? (
+													<NudgeButtons
+														name={slot.assigneeName}
+														phone={slot.holderPhone}
+														email={slot.holderEmail}
+														roleName={slot.roleName}
+														meetingDate={meetingDate}
+														shareUrl={shareUrl}
+														mode="confirm"
+													/>
+												) : null}
+
+												{viewer.canManage && isOpen ? (
+													<NudgeRecruitPicker
+														roleName={slot.roleName}
+														meetingDate={meetingDate}
+														shareUrl={shareUrl}
+														targets={recruitTargets}
+													/>
 												) : null}
 
 												{viewer.canManage && !slot.isSpeakerRole ? (

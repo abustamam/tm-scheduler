@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
 	computeDcpSummary,
 	DCP_GOALS,
+	EDUCATION_GOAL_KEYS,
+	educationGoalsFromLevelCounts,
 	isBaseMet,
 	isGoalMet,
 	netGrowth,
@@ -9,6 +11,7 @@ import {
 	programYearLabel,
 	programYearWindow,
 	splitNewMembers,
+	splitPaired,
 	tierLabel,
 } from "./dcp";
 
@@ -106,6 +109,98 @@ describe("new-member assist split (goals 7 & 8)", () => {
 		expect(splitNewMembers(4)).toEqual({ g7: 4, g8: 0 });
 		expect(splitNewMembers(6)).toEqual({ g7: 4, g8: 2 });
 		expect(splitNewMembers(9)).toEqual({ g7: 4, g8: 4 }); // extra beyond 8 ignored
+	});
+});
+
+describe("paired-goal split (generalizes the 7/8 assist)", () => {
+	it("fills the first goal to the cap before the second (cap 2 — goals 2/3)", () => {
+		expect(splitPaired(0, 2)).toEqual({ first: 0, second: 0 });
+		expect(splitPaired(1, 2)).toEqual({ first: 1, second: 0 });
+		expect(splitPaired(2, 2)).toEqual({ first: 2, second: 0 });
+		expect(splitPaired(3, 2)).toEqual({ first: 2, second: 1 });
+		expect(splitPaired(4, 2)).toEqual({ first: 2, second: 2 });
+	});
+
+	it("handles the cap-1 pair (goals 5/6)", () => {
+		expect(splitPaired(0, 1)).toEqual({ first: 0, second: 0 });
+		expect(splitPaired(1, 1)).toEqual({ first: 1, second: 0 });
+		expect(splitPaired(2, 1)).toEqual({ first: 1, second: 1 });
+	});
+
+	it("drops overflow beyond both caps — both goals are already met", () => {
+		expect(splitPaired(9, 2)).toEqual({ first: 2, second: 2 });
+		expect(splitPaired(7, 1)).toEqual({ first: 1, second: 1 });
+	});
+
+	it("never returns negatives for a zero or empty count", () => {
+		expect(splitPaired(0, 4)).toEqual({ first: 0, second: 0 });
+	});
+
+	it("agrees with splitNewMembers, which is the cap-4 case", () => {
+		for (const n of [0, 1, 4, 5, 8, 12]) {
+			const { first, second } = splitPaired(n, 4);
+			expect(splitNewMembers(n)).toEqual({ g7: first, g8: second });
+		}
+	});
+});
+
+describe("education assist derivation (goals 1–6)", () => {
+	const none = { n1: 0, n2: 0, n3: 0, n45: 0 };
+
+	it("derives nothing from an empty count set", () => {
+		expect(educationGoalsFromLevelCounts(none)).toEqual({
+			g1: 0,
+			g2: 0,
+			g3: 0,
+			g4: 0,
+			g5: 0,
+			g6: 0,
+		});
+	});
+
+	it("maps the mixed seed from the spec (n1=6, n2=3, n45=2)", () => {
+		expect(
+			educationGoalsFromLevelCounts({ n1: 6, n2: 3, n3: 2, n45: 2 }),
+		).toEqual({ g1: 6, g2: 2, g3: 1, g4: 2, g5: 1, g6: 1 });
+	});
+
+	it("leaves the unpaired goals 1 and 4 uncapped past their targets", () => {
+		const d = educationGoalsFromLevelCounts({ ...none, n1: 9, n3: 7 });
+		expect(d.g1).toBe(9); // target is 4
+		expect(d.g4).toBe(7); // target is 2
+	});
+
+	it("splits level 2 across the 2/3 pair and drops overflow past 4", () => {
+		expect(educationGoalsFromLevelCounts({ ...none, n2: 1 })).toMatchObject({
+			g2: 1,
+			g3: 0,
+		});
+		expect(educationGoalsFromLevelCounts({ ...none, n2: 3 })).toMatchObject({
+			g2: 2,
+			g3: 1,
+		});
+		expect(educationGoalsFromLevelCounts({ ...none, n2: 11 })).toMatchObject({
+			g2: 2,
+			g3: 2,
+		});
+	});
+
+	it("splits level 4+5 across the 5/6 pair at cap 1 each", () => {
+		expect(educationGoalsFromLevelCounts({ ...none, n45: 1 })).toMatchObject({
+			g5: 1,
+			g6: 0,
+		});
+		expect(educationGoalsFromLevelCounts({ ...none, n45: 5 })).toMatchObject({
+			g5: 1,
+			g6: 1,
+		});
+	});
+
+	it("fills exactly the six education goals — never g7–g10", () => {
+		const keys = Object.keys(
+			educationGoalsFromLevelCounts({ n1: 4, n2: 4, n3: 4, n45: 4 }),
+		);
+		expect(keys.sort()).toEqual([...EDUCATION_GOAL_KEYS].sort());
 	});
 });
 

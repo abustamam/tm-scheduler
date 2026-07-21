@@ -5,7 +5,6 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { ToastmastersWordmark } from "#/components/agenda/toastmasters-wordmark";
 import { PptxDownloadButton } from "#/components/club/pptx-download-button";
 import type { Slide } from "#/lib/agenda-slides";
 import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
@@ -100,7 +99,12 @@ export function MeetingPresent({
 				)}
 			</div>
 
-			<div className="absolute bottom-[1.5vmin] left-1/2 -translate-x-1/2 text-[1.6vmin] text-white/70 tabular-nums">
+			{/* Top-center: the one region empty on both splash and content slides.
+			    Bottom-center would sit on the footer's centered trademark
+			    disclaimer; top-right holds the PPTX button, top-left the content
+			    header. The dark pill keeps it legible over both the light content
+			    ground and the dark splash. */}
+			<div className="absolute top-[2vmin] left-1/2 -translate-x-1/2 rounded-full bg-black/35 px-[1.4vmin] py-[0.3vmin] text-[1.6vmin] text-white/90 tabular-nums">
 				{i + 1} / {deck.length}
 			</div>
 		</div>
@@ -147,10 +151,13 @@ function Splash({
 					: { background: GROUND, color: INK }
 			}
 		>
-			<ToastmastersWordmark
-				tone={dark ? "white" : "color"}
-				style={{ width: dark ? "21cqw" : "25cqw" }}
-			/>
+			{/* Nominative word use, not the official wordmark image (ADR-0024). */}
+			<div
+				className="font-display font-semibold tracking-[-0.01em]"
+				style={{ fontSize: "6cqw", color: dark ? "#ffffff" : NAVY }}
+			>
+				Toastmasters
+			</div>
 			<div
 				className="my-[3.4cqw] h-px w-[58cqw]"
 				style={{ background: dark ? "rgba(255,255,255,.55)" : NAVY }}
@@ -208,7 +215,13 @@ function ContentSlide({
 				style={{ background: NAVY }}
 			>
 				<div className="flex items-center justify-between">
-					<ToastmastersWordmark tone="white" style={{ width: "13cqw" }} />
+					{/* GavelUp origin mark on deck chrome (ADR-0024). */}
+					<div
+						className="font-display font-semibold text-white"
+						style={{ fontSize: "2.8cqw" }}
+					>
+						GavelUp
+					</div>
 					<div className="text-right leading-tight text-white">
 						<div className="text-[2.4cqw] font-bold">{clubName}</div>
 						<div className="text-[2cqw] opacity-90">{date}</div>

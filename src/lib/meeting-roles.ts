@@ -28,8 +28,10 @@ export interface SpeakerEvaluatorRoles {
  * Choose the club's speaker role and the evaluator role paired with it.
  * - Speaker = the `isSpeakerRole` def (lowest `sortOrder` if several).
  * - Paired evaluator = the `category === "evaluator"` def with the highest
- *   `defaultCount` (tie → lowest `sortOrder`). For the standard template this is
- *   "Evaluator" (3), not "General Evaluator" (1). Heuristic, not a modeled link.
+ *   `defaultCount` (tie → lowest `sortOrder`). In the standard template that is
+ *   "Evaluator" (3) uncontested, since General Evaluator is a leadership role;
+ *   the count tie-break still guards clubs that categorize their GE as an
+ *   evaluator. Heuristic, not a modeled link.
  * Throws when there is no speaker role.
  */
 export function pickSpeakerAndEvaluatorRoles(

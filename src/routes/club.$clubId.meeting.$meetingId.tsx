@@ -57,7 +57,7 @@ import { selfAssertedViewer } from "#/lib/meeting-viewer";
 import { useCurrentMember } from "#/lib/member-identity";
 import { clearAvailability, setAvailability } from "#/server/availability";
 import {
-	getMeeting,
+	getPublicMeeting,
 	listUpcomingMeetings,
 	updateMeeting,
 } from "#/server/meetings";
@@ -72,12 +72,12 @@ import {
 
 export const Route = createFileRoute("/club/$clubId/meeting/$meetingId")({
 	loader: async ({ params, context }) => {
-		// Fire both in parallel. getMeeting stays fatal (the agenda is the page)
+		// Fire both in parallel. getPublicMeeting stays fatal (the agenda is the page)
 		// EXCEPT when the meeting row is simply absent (stale/expired link) —
 		// that translates to notFound() so notFoundComponent renders instead of
 		// the generic error boundary. Other failures (DB errors, etc.) stay fatal.
 		// The upcoming list is non-fatal — a failure degrades to no strip.
-		const meetingPromise = getMeeting({ data: params.meetingId }).catch(
+		const meetingPromise = getPublicMeeting({ data: params.meetingId }).catch(
 			(err) => {
 				if (isMeetingNotFoundError(err)) throw notFound();
 				throw err;
@@ -378,6 +378,10 @@ function MeetingView() {
 				roster={roster}
 				roleRecency={roleRecency}
 				unavailableMemberIds={unavailableMemberIds}
+				// Public self-serve viewers never have `canManage`, so the confirm
+				// nudge never renders here — no share context to build these from.
+				shareUrl=""
+				meetingDate=""
 			/>
 
 			{isTmod && !over ? (
@@ -415,7 +419,7 @@ function EditMeetingMetaDialog({
 }: {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
-	meeting: Awaited<ReturnType<typeof getMeeting>>["meeting"];
+	meeting: Awaited<ReturnType<typeof getPublicMeeting>>["meeting"];
 	timezone: string;
 	actorMemberId: string | null;
 	selfMemberId: string | null;

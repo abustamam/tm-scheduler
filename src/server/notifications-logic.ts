@@ -195,6 +195,12 @@ export async function enqueueNotification(
 export async function selectDueNotifications(
 	now: Date,
 	limit: number,
+	// Optional single-club scope. Prod polls globally (undefined); tests pass
+	// their own club so concurrent poller test files — which share one tm_test DB
+	// and would otherwise claim each other's due rows via this global poll —
+	// isolate to their own notifications, exactly as every other DB test scopes
+	// by clubId (#298).
+	clubId?: string,
 ): Promise<DueNotification[]> {
 	const retryReady = new Date(now.getTime() - RETRY_BACKOFF_MS);
 	return (
@@ -254,6 +260,8 @@ export async function selectDueNotifications(
 						isNull(notifications.lastAttemptedAt),
 						lte(notifications.lastAttemptedAt, retryReady),
 					),
+					// undefined is dropped by `and()`, so prod stays global (#298).
+					clubId ? eq(clubs.id, clubId) : undefined,
 				),
 			)
 			.orderBy(asc(notifications.sendAt))
@@ -366,9 +374,11 @@ export function isRoleReminderStale(row: DueNotification): boolean {
 export async function processDueNotifications(
 	deps: NotificationDeps = defaultNotificationDeps,
 	limit: number = DEFAULT_BATCH_LIMIT,
+	// Optional single-club scope for test isolation (#298); prod polls globally.
+	clubId?: string,
 ): Promise<ProcessResult> {
 	const now = deps.now();
-	const due = await selectDueNotifications(now, limit);
+	const due = await selectDueNotifications(now, limit, clubId);
 
 	let sent = 0;
 	let failed = 0;

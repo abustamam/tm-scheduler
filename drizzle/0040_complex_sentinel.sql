@@ -1,0 +1,1 @@
+ALTER TABLE "clubs" ADD COLUMN "default_country_code" text;
