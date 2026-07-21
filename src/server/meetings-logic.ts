@@ -154,6 +154,55 @@ export async function applyMeetingUpdate(input: MeetingUpdateInput) {
 	return { clubId: meeting.clubId };
 }
 
+export interface WordOfTheDayUpdateInput {
+	meetingId: string;
+	actorMemberId: string | null;
+	wordOfTheDay?: string | null;
+	wodDefinition?: string | null;
+	wodExample?: string | null;
+}
+
+/**
+ * Update ONLY a meeting's Word of the Day (word + definition + example) and log
+ * a `meeting_edit` (#296). Least-privilege by construction: the narrow WOD-edit
+ * capability (grammarian / TMOD / admin) funnels through here, and this function
+ * physically cannot touch theme/location/times/notes — so granting it never
+ * risks the rest of the meeting meta. Empty values trim to null.
+ */
+export async function applyWordOfTheDayUpdate(input: WordOfTheDayUpdateInput) {
+	const meeting = await db.query.meetings.findFirst({
+		where: eq(meetings.id, input.meetingId),
+	});
+	if (!meeting) throw new Error("Meeting not found.");
+
+	const next = {
+		wordOfTheDay: input.wordOfTheDay?.trim() || null,
+		wodDefinition: input.wodDefinition?.trim() || null,
+		wodExample: input.wodExample?.trim() || null,
+	};
+
+	await db.transaction(async (tx) => {
+		await tx.update(meetings).set(next).where(eq(meetings.id, input.meetingId));
+		await logActivity(tx, {
+			clubId: meeting.clubId,
+			actorMemberId: input.actorMemberId,
+			action: "meeting_edit",
+			targetType: "meeting",
+			targetId: input.meetingId,
+			detail: {
+				before: {
+					wordOfTheDay: meeting.wordOfTheDay,
+					wodDefinition: meeting.wodDefinition,
+					wodExample: meeting.wodExample,
+				},
+				after: next,
+			},
+		});
+	});
+
+	return { clubId: meeting.clubId };
+}
+
 /**
  * Close out a meeting: set `status = completed`, which locks its agenda from
  * further edits (#150). Guarded to the meeting's scheduled date being today or

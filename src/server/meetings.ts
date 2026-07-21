@@ -23,12 +23,14 @@ import {
 	requireClubViewAccess,
 	requireMeetingAgendaEditor,
 	requireUser,
+	requireWordOfTheDayEditor,
 } from "./guards";
 import {
 	applyCompleteMeeting,
 	applyCreateMeeting,
 	applyMeetingUpdate,
 	applyReopenMeeting,
+	applyWordOfTheDayUpdate,
 } from "./meetings-logic";
 import { currentOfficersForClub } from "./officer-terms-logic";
 import { indexRoleRecency, loadRoleRecency } from "./role-recency-logic";
@@ -454,6 +456,36 @@ export const updateMeeting = createServerFn({ method: "POST" })
 			...data,
 			actorMemberId: data.actorMemberId ?? null,
 			canReschedule: authz.via === "admin",
+		});
+	});
+
+const updateWordOfTheDaySchema = z.object({
+	meetingId: uuid,
+	actorMemberId: uuid.nullable().optional(),
+	/** Self-asserted TMOD/Grammarian member id (public page). Null for authed admin. */
+	selfMemberId: uuid.nullable().optional(),
+	wordOfTheDay: z.string().trim().optional(),
+	wodDefinition: z.string().trim().optional(),
+	wodExample: z.string().trim().optional(),
+});
+
+/** Edit only a meeting's Word of the Day (word + definition + example). Admin OR
+ *  the meeting's self-asserted TMOD OR its self-asserted Grammarian (#296). A
+ *  narrower capability than `updateMeeting`: it can't touch any other meta.
+ *  AUTHED or self-assert. */
+export const updateWordOfTheDay = createServerFn({ method: "POST" })
+	.validator((input: unknown) => updateWordOfTheDaySchema.parse(input))
+	.handler(async ({ data }) => {
+		await requireWordOfTheDayEditor({
+			meetingId: data.meetingId,
+			selfMemberId: data.selfMemberId ?? null,
+		});
+		return applyWordOfTheDayUpdate({
+			meetingId: data.meetingId,
+			actorMemberId: data.actorMemberId ?? null,
+			wordOfTheDay: data.wordOfTheDay,
+			wodDefinition: data.wodDefinition,
+			wodExample: data.wodExample,
 		});
 	});
 
