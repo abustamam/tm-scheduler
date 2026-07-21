@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-21
 **Status:** Approved (brainstorm)
-**Issue:** TBD (create on plan hand-off)
+**Issue:** [#310](https://github.com/abustamam/tm-scheduler/issues/310)
 
 ## Summary
 
@@ -167,15 +167,18 @@ dependency risk in the client bundle).
 - A light render smoke test: `resources.$slug` renders a known article's heading
   from markdown (optional; keep minimal).
 
-## Rollout / follow-ups (create as tickets)
+## Rollout / follow-ups (tracked)
 
-- Dynamic, club-pre-filled role sheets (name/date header) — reuse the
-  `@react-pdf/renderer` path server-side, like minutes PDFs.
-- Additional resources (officer handbook, contest rules, timing color-card
-  reference, glossary of TM terms).
-- Resource search / index page filtering (the current placeholder had a
-  category filter; port it if the list grows).
-- Member-gated resources, if any material shouldn't be public.
+- [#311](https://github.com/abustamam/tm-scheduler/issues/311) — Dynamic,
+  club-pre-filled role sheets (name/date header), server-side like minutes PDFs.
+- [#312](https://github.com/abustamam/tm-scheduler/issues/312) — Additional
+  resources (officer handbook, contest rules, timing color-card reference,
+  glossary of TM terms).
+- [#313](https://github.com/abustamam/tm-scheduler/issues/313) — Resource
+  search / index filtering (port the placeholder's category filter when the
+  list grows).
+- [#314](https://github.com/abustamam/tm-scheduler/issues/314) — Member-gated
+  resources, if any material shouldn't be public.
 
 ## Open questions
 
