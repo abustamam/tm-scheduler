@@ -4,6 +4,10 @@ import { toast } from "sonner";
 import { AssignSlotSheet } from "#/components/club/assign-slot-sheet";
 import { EditSpeechSheet } from "#/components/club/edit-speech-sheet";
 import { NudgeButtons } from "#/components/club/nudge-buttons";
+import {
+	buildRecruitTargets,
+	NudgeRecruitPicker,
+} from "#/components/club/nudge-recruit-picker";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import {
@@ -75,7 +79,15 @@ export interface MeetingAgendaProps {
 	viewer: MeetingViewer;
 	actions: MeetingAgendaActions;
 	/** Roster for the assign picker — only needed where `viewer.canAssign`. */
-	roster: { id: string; name: string }[];
+	roster: {
+		id: string;
+		name: string;
+		// Optional so the public route (no contact — PII-safe) still satisfies
+		// the prop; the recruit picker that consumes them only renders under
+		// `viewer.canManage` (#37).
+		phone?: string | null;
+		email?: string | null;
+	}[];
 	roleRecency: RoleRecency;
 	unavailableMemberIds: string[];
 	/** Named unavailable members for the manager "not available" section. */
@@ -144,6 +156,14 @@ export function MeetingAgenda({
 	for (const s of slots) {
 		if (s.assigneeId) roleByMemberId[s.assigneeId] = slotLabel(s, roleCounts);
 	}
+
+	// Recruiting pool for open-slot nudges (#37) — every active member, annotated
+	// (not filtered) with availability + the role they already hold this meeting.
+	const recruitTargets = buildRecruitTargets(
+		roster,
+		new Set(unavailableMemberIds),
+		roleByMemberId,
+	);
 
 	// Preserve category order as it appears (slots arrive pre-sorted).
 	const categories: string[] = [];
@@ -435,6 +455,15 @@ export function MeetingAgenda({
 														meetingDate={meetingDate}
 														shareUrl={shareUrl}
 														mode="confirm"
+													/>
+												) : null}
+
+												{viewer.canManage && isOpen ? (
+													<NudgeRecruitPicker
+														roleName={slot.roleName}
+														meetingDate={meetingDate}
+														shareUrl={shareUrl}
+														targets={recruitTargets}
 													/>
 												) : null}
 
