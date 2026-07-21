@@ -111,8 +111,6 @@ describe.skipIf(!hasTestDb)("club profile logic", () => {
 		await applyClubProfileUpdate(
 			clubProfileSchema.parse({ clubId: seed.clubId, defaultCountryCode: "" }),
 		);
-		expect(
-			(await getClubProfile(seed.clubId))?.defaultCountryCode,
-		).toBeNull();
+		expect((await getClubProfile(seed.clubId))?.defaultCountryCode).toBeNull();
 	});
 });
