@@ -761,9 +761,9 @@ function grammarian(): ReactNode {
 			h(View, { style: s.blankLine }),
 		),
 		h(Text, { key: "c", style: s.sectionTitle }, "Good use of language"),
-		...lines(6),
+		h(View, { key: "c-lines" }, ...lines(6)),
 		h(Text, { key: "d", style: s.sectionTitle }, "Language to improve"),
-		...lines(6),
+		h(View, { key: "d-lines" }, ...lines(6)),
 	]);
 }
 
@@ -801,17 +801,17 @@ function ballotCounter(): ReactNode {
 function generalEvaluator(): ReactNode {
 	return sheet("General Evaluator notes", "Evaluate the meeting as a whole and lead the evaluation team.", [
 		h(Text, { key: "a", style: s.sectionTitle }, "Meeting flow & timing"),
-		...lines(4),
+		h(View, { key: "a-lines" }, ...lines(4)),
 		h(Text, { key: "b", style: s.sectionTitle }, "Evaluators (evaluate the evaluators)"),
-		...lines(4),
+		h(View, { key: "b-lines" }, ...lines(4)),
 		h(Text, { key: "c", style: s.sectionTitle }, "Language roles (Timer / Ah-Counter / Grammarian)"),
-		...lines(3),
+		h(View, { key: "c-lines" }, ...lines(3)),
 		h(Text, { key: "d", style: s.sectionTitle }, "Environment & Sergeant at Arms"),
-		...lines(3),
+		h(View, { key: "d-lines" }, ...lines(3)),
 		h(Text, { key: "e", style: s.sectionTitle }, "Overall commendations"),
-		...lines(3),
+		h(View, { key: "e-lines" }, ...lines(3)),
 		h(Text, { key: "f", style: s.sectionTitle }, "Overall recommendations"),
-		...lines(3),
+		h(View, { key: "f-lines" }, ...lines(3)),
 	]);
 }
 
