@@ -5,18 +5,23 @@ import { describe, expect, it } from "vitest";
 
 /**
  * Discoverability guard (#268): every user-facing `_authed` route must have at
- * least one in-app nav link in the sidebar (`src/routes/_authed.tsx`), so live
- * routes can't quietly become URL-only/orphaned again (as `/admin/pathways-sync`,
- * `/admin/meetings/batch`, `/admin/dcp`, and `/me` all had).
+ * least one in-app nav link in the sidebar (`src/components/app-shell.tsx`), so
+ * live routes can't quietly become URL-only/orphaned again (as `/admin/pathways-sync`,
+ * `/admin/meetings/batch`, `/admin/dcp`, and `/me` all had). The sidebar `NavItem`s
+ * live in `<AppShell>` (extracted from `_authed.tsx` in #317).
  *
  * Dynamic routes (`$param`, e.g. `/meetings/$id`, `/members/$id`) are reached
  * contextually rather than from a static nav, so they're exempt. If you add a
  * new static `_authed` route, add a `NavItem` for it (respecting role gating) —
  * or, for a deliberately contextual-only route, this list's exemption rule.
  */
-const routesDir = join(dirname(fileURLToPath(import.meta.url)), "..", "routes");
+const srcDir = join(dirname(fileURLToPath(import.meta.url)), "..");
+const routesDir = join(srcDir, "routes");
 const authedDir = join(routesDir, "_authed");
-const authedSource = readFileSync(join(routesDir, "_authed.tsx"), "utf8");
+const authedSource = readFileSync(
+	join(srcDir, "components", "app-shell.tsx"),
+	"utf8",
+);
 
 function walk(dir: string): string[] {
 	return readdirSync(dir).flatMap((entry) => {

@@ -10,7 +10,7 @@ import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { authClient } from "#/lib/auth-client";
 import { formatMeetingDate, formatMeetingTimeRange } from "#/lib/format";
-import { type StoredMember, useCurrentMember } from "#/lib/member-identity";
+import { type StoredMember, useEffectiveMember } from "#/lib/member-identity";
 import type { Orientation } from "#/lib/season-grid-view";
 import { listMemberCommitments } from "#/server/meetings";
 import {
@@ -42,10 +42,16 @@ export const Route = createFileRoute("/club/$clubId/")({
 
 function ClubHome() {
 	const { clubId } = Route.useParams();
-	const { clubUuid } = Route.useRouteContext();
+	const { clubUuid, effectiveMemberId, authCtx } = Route.useRouteContext();
 	const grid = Route.useLoaderData();
 	const { view, count } = Route.useSearch();
-	const { member, clearMember } = useCurrentMember(clubId);
+	// Shell-wrapped signed-in member → session identity; anonymous → localStorage
+	// pick (#317). `source` hides the anon-only "not you?" + claim affordances.
+	const session =
+		effectiveMemberId && authCtx?.user
+			? { id: effectiveMemberId, name: authCtx.user.name || authCtx.user.email }
+			: null;
+	const { member, clearMember, source } = useEffectiveMember(clubId, session);
 	const router = useRouter();
 	const navigate = Route.useNavigate();
 	const [busySlotId, setBusySlotId] = useState<string | null>(null);
@@ -85,7 +91,7 @@ function ClubHome() {
 				<h1 className="font-display text-2xl font-semibold tracking-tight">
 					Hi {member?.name ?? "there"} 👋
 				</h1>
-				{member ? (
+				{member && source === "anon" ? (
 					<button
 						type="button"
 						onClick={clearMember}
@@ -105,7 +111,9 @@ function ClubHome() {
 			</Link>
 
 			{/* "This is me" — graduate a public picker into a real account (#266). */}
-			{member ? <ClaimAccountCard member={member} /> : null}
+			{member && source === "anon" ? (
+				<ClaimAccountCard member={member} />
+			) : null}
 
 			{/* Sign-up sheet — the primary surface. Claim an OPEN role or release
 			    your own right in the grid; everyone else is greyed out. */}

@@ -41,9 +41,13 @@ import {
 import { deriveMeetingNavItems } from "#/lib/meeting-nav";
 import { deriveMeetingRoleFlags } from "#/lib/meeting-roles";
 import { meetingViewer } from "#/lib/meeting-viewer";
-import { useCurrentMember } from "#/lib/member-identity";
+import { useEffectiveMember } from "#/lib/member-identity";
 import { clearAvailability, setAvailability } from "#/server/availability";
-import { getPublicMeeting, listUpcomingMeetings } from "#/server/meetings";
+import {
+	getMeeting,
+	getPublicMeeting,
+	listUpcomingMeetings,
+} from "#/server/meetings";
 import { listMembers } from "#/server/members";
 import {
 	addSpeakerSlot,
@@ -60,12 +64,16 @@ export const Route = createFileRoute("/club/$clubId/meeting/$meetingId")({
 		// that translates to notFound() so notFoundComponent renders instead of
 		// the generic error boundary. Other failures (DB errors, etc.) stay fatal.
 		// The upcoming list is non-fatal — a failure degrades to no strip.
-		const meetingPromise = getPublicMeeting({ data: params.meetingId }).catch(
-			(err) => {
-				if (isMeetingNotFoundError(err)) throw notFound();
-				throw err;
-			},
-		);
+		// A signed-in member of this club (shell-wrapped) loads via the session-aware
+		// getMeeting — an admin regains management + contact; a non-admin member
+		// gets the same non-manager view. Anonymous visitors use getPublicMeeting
+		// (hard canManage=false, never any PII). Both call the same resolver, so
+		// the loader shape is identical either way (#317).
+		const load = context.shell ? getMeeting : getPublicMeeting;
+		const meetingPromise = load({ data: params.meetingId }).catch((err) => {
+			if (isMeetingNotFoundError(err)) throw notFound();
+			throw err;
+		});
 		const upcomingPromise = listUpcomingMeetings({
 			data: context.clubUuid,
 		}).catch(() => [] as Awaited<ReturnType<typeof listUpcomingMeetings>>);
@@ -114,7 +122,7 @@ function errMessage(err: unknown) {
 
 function MeetingView() {
 	const { clubId, meetingId } = Route.useParams();
-	const { clubUuid } = Route.useRouteContext();
+	const { clubUuid, effectiveMemberId, authCtx } = Route.useRouteContext();
 	const {
 		meeting,
 		slots,
@@ -132,7 +140,14 @@ function MeetingView() {
 	const projectedEnd = new Date(
 		new Date(meeting.scheduledAt).getTime() + flex.projectedMinutes * 60_000,
 	);
-	const { member } = useCurrentMember(clubId);
+	// Shell-wrapped signed-in member → act as the session identity; anonymous
+	// visitor → the localStorage-picked member (#317). Only `member.id` is used
+	// below, so the session display name is only for consistency with the seam.
+	const session =
+		effectiveMemberId && authCtx?.user
+			? { id: effectiveMemberId, name: authCtx.user.name || authCtx.user.email }
+			: null;
+	const { member } = useEffectiveMember(clubId, session);
 	const router = useRouter();
 
 	// Same deck present mode renders — reused as the source for the .pptx export
