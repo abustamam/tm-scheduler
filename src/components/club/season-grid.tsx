@@ -49,6 +49,7 @@ export function SeasonGrid({
 	onOrientationChange,
 	onCountChange,
 	onChanged,
+	requireIdentity,
 }: {
 	data: SeasonGridData;
 	orientation: Orientation;
@@ -70,6 +71,11 @@ export function SeasonGrid({
 	onCountChange?: (c: SeasonGridCount) => void;
 	/** Called after a successful mutation so the page can refetch. */
 	onChanged?: () => void | Promise<void>;
+	/** Public surface: resolve/collect identity before a claim when there's no
+	 *  `currentMemberId`. */
+	requireIdentity?: () => Promise<
+		import("#/lib/member-identity").StoredMember | null
+	>;
 }) {
 	const rows = projectGrid(data, orientation);
 	// Members × Meetings contact columns (signed-in only) resolve email/phone
@@ -94,6 +100,10 @@ export function SeasonGrid({
 
 	// Roles × Meetings is the claim/release sheet.
 	const actingMemberId = orientation === "roles" ? currentMemberId : null;
+	// No-identity visitor on the public sign-up sheet: OPEN cells still show
+	// "Claim" — the click resolves identity first (via requireIdentity).
+	const prospectiveClaim =
+		orientation === "roles" && !currentMemberId && !!requireIdentity;
 
 	useEffect(() => {
 		anchorRef.current?.scrollIntoView({ inline: "center", block: "nearest" });
@@ -107,15 +117,17 @@ export function SeasonGrid({
 	}, [orientation]);
 
 	async function claim(slotId: string) {
-		if (!currentMemberId) return;
+		let memberId = currentMemberId;
+		if (!memberId && requireIdentity) {
+			const me = await requireIdentity();
+			if (!me) return;
+			memberId = me.id;
+		}
+		if (!memberId) return;
 		setBusySlotId(slotId);
 		try {
 			await claimSlot({
-				data: {
-					slotId,
-					memberId: currentMemberId,
-					actorMemberId: currentMemberId,
-				},
+				data: { slotId, memberId, actorMemberId: memberId },
 			});
 			await onChanged?.();
 			toast.success("Role claimed.", {
@@ -606,6 +618,7 @@ export function SeasonGrid({
 												<GridCell
 													cell={cell}
 													currentMemberId={actingMemberId}
+													prospectiveClaim={prospectiveClaim}
 													busy={
 														(!!cell.slotId && busySlotId === cell.slotId) ||
 														busyMeetingId === cell.meetingId

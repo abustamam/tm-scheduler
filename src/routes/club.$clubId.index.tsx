@@ -55,7 +55,7 @@ function ClubHome() {
 			? { id: effectiveMemberId, name: authCtx.user.name || authCtx.user.email }
 			: null;
 	const { member, source } = useEffectiveMember(clubId, session);
-	const { promptIdentity } = useRequireIdentity();
+	const { requireIdentity, promptIdentity } = useRequireIdentity();
 	const router = useRouter();
 	const navigate = Route.useNavigate();
 	const [busySlotId, setBusySlotId] = useState<string | null>(null);
@@ -124,6 +124,7 @@ function ClubHome() {
 					currentMemberId={member?.id ?? null}
 					clubId={clubUuid}
 					clubSlug={clubId}
+					requireIdentity={requireIdentity}
 					onOrientationChange={(v) =>
 						navigate({ search: (prev) => ({ ...prev, view: v }) })
 					}
@@ -137,16 +138,16 @@ function ClubHome() {
 			{/* Your upcoming roles — a compact summary of your commitments. */}
 			<section className="space-y-3">
 				<h2 className="text-base font-semibold">Your upcoming roles</h2>
-				{!member || commitments.isPending ? (
+				{!member ? (
+					<p className="rounded-xl border bg-card p-4 text-sm text-muted-foreground">
+						Claim a role in the sheet above to see it here.
+					</p>
+				) : commitments.isPending ? (
 					<div className="rounded-xl border bg-card p-4 text-sm text-muted-foreground">
-						{commitments.isFetching ? (
-							<span className="flex items-center gap-2">
-								<Loader2 className="size-4 animate-spin" aria-hidden />
-								Loading your roles…
-							</span>
-						) : (
-							"Loading your roles…"
-						)}
+						<span className="flex items-center gap-2">
+							<Loader2 className="size-4 animate-spin" aria-hidden />
+							Loading your roles…
+						</span>
 					</div>
 				) : commitments.data && commitments.data.length > 0 ? (
 					<ul className="grid gap-3 md:grid-cols-2">
