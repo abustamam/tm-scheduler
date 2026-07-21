@@ -19,9 +19,10 @@ import {
 	MeetingAgenda,
 	type MeetingAgendaActions,
 } from "#/components/agenda/meeting-agenda";
+import { useRequireIdentity } from "#/components/club/identity-gate";
 import { MeetingNavStrip } from "#/components/club/meeting-nav-strip";
 import { MeetingViewActions } from "#/components/club/meeting-view-actions";
-import { SigningUpAs } from "#/components/club/signing-up-as";
+import { ViewingAs } from "#/components/club/viewing-as";
 import { ShareLinkButton } from "#/components/share-link-button";
 import { Button } from "#/components/ui/button";
 import { applyFlex, expandRunSheet } from "#/lib/agenda-runsheet";
@@ -147,7 +148,8 @@ function MeetingView() {
 		effectiveMemberId && authCtx?.user
 			? { id: effectiveMemberId, name: authCtx.user.name || authCtx.user.email }
 			: null;
-	const { member } = useEffectiveMember(clubId, session);
+	const { member, source } = useEffectiveMember(clubId, session);
+	const { promptIdentity } = useRequireIdentity();
 	const router = useRouter();
 
 	// Same deck present mode renders — reused as the source for the .pptx export
@@ -324,7 +326,9 @@ function MeetingView() {
 				) : null}
 				{/* Who claims/availability will be attributed to, with the same
 				    "not you?" escape hatch as the sign-up sheet (issue #220). */}
-				<SigningUpAs clubSlug={clubId} />
+				{source === "anon" ? (
+					<ViewingAs member={member} promptIdentity={promptIdentity} />
+				) : null}
 				{over ? (
 					myId ? (
 						<p className="mt-1 text-sm font-medium text-muted-foreground">

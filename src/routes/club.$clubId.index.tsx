@@ -3,7 +3,9 @@ import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { CalendarDays, Loader2, MailCheck, Mic, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { useRequireIdentity } from "#/components/club/identity-gate";
 import { SeasonGrid } from "#/components/club/season-grid";
+import { ViewingAs } from "#/components/club/viewing-as";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
@@ -51,7 +53,8 @@ function ClubHome() {
 		effectiveMemberId && authCtx?.user
 			? { id: effectiveMemberId, name: authCtx.user.name || authCtx.user.email }
 			: null;
-	const { member, clearMember, source } = useEffectiveMember(clubId, session);
+	const { member, source } = useEffectiveMember(clubId, session);
+	const { promptIdentity } = useRequireIdentity();
 	const router = useRouter();
 	const navigate = Route.useNavigate();
 	const [busySlotId, setBusySlotId] = useState<string | null>(null);
@@ -91,16 +94,10 @@ function ClubHome() {
 				<h1 className="font-display text-2xl font-semibold tracking-tight">
 					Hi {member?.name ?? "there"} 👋
 				</h1>
-				{member && source === "anon" ? (
-					<button
-						type="button"
-						onClick={clearMember}
-						className="text-sm text-muted-foreground underline underline-offset-2"
-					>
-						not you?
-					</button>
-				) : null}
 			</div>
+			{source === "anon" ? (
+				<ViewingAs member={member} promptIdentity={promptIdentity} />
+			) : null}
 
 			<Link
 				to="/resources/$slug"
