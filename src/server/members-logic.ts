@@ -23,8 +23,10 @@ import {
 	OFFICER_POSITIONS,
 	parseOfficerPosition,
 } from "#/lib/officers";
+import { toStoredPhone } from "#/lib/phone";
 import { buildImportPreview } from "#/lib/roster-import";
 import { logActivity } from "./activity";
+import { loadClubDefaultCountryCode } from "./clubs-logic";
 import {
 	currentOfficersFor,
 	openOfficerTermIfAbsent,
@@ -102,10 +104,13 @@ export async function applyMemberEdit(input: EditInput) {
 			and(eq(members.id, input.memberId), eq(members.clubId, input.clubId)),
 		);
 	if (!current) throw new Error("Member not found.");
+	// Standardize the phone to E.164 on write (#295), using the club default
+	// country code for numbers entered without one.
+	const cc = await loadClubDefaultCountryCode(input.clubId);
 	const next = {
 		name: input.name,
 		email: input.email ?? null,
-		phone: input.phone ?? null,
+		phone: toStoredPhone(input.phone, cc),
 	};
 	// Current offices before the edit — derived from open terms, for the log.
 	const beforeOffices = await currentOfficersFor(input.memberId);
@@ -481,8 +486,8 @@ export interface BulkImportResult {
  * Insert the valid pasted rows into `members`, skipping blank names, malformed
  * emails, and duplicates (against the live roster + within the batch — same
  * rules as the client preview). Logs one `member_add` per inserted member
- * (mirrors `addMember`'s action/targetType/detail shape). Phone is stored as the
- * raw digit string the user pasted (no reformatting — the wa.me nudge wants it).
+ * (mirrors `addMember`'s action/targetType/detail shape). Phone is standardized
+ * to E.164 on write with the club default country code (#295).
  */
 export async function applyBulkImport(
 	input: BulkImportInput,
@@ -498,12 +503,16 @@ export async function applyBulkImport(
 		return { insertedIds: [], inserted: 0, skipped: preview.length };
 	}
 
+	// Club default country code for E.164 normalization on write (#295), loaded
+	// once for the whole batch.
+	const cc = await loadClubDefaultCountryCode(input.clubId);
+
 	const insertedIds = await db.transaction(async (tx) => {
 		const ids: string[] = [];
 		for (const row of toInsert) {
 			const name = row.name.trim();
 			const email = row.email.trim() || null;
-			const phone = row.phone.trim() || null;
+			const phone = toStoredPhone(row.phone, cc);
 			// Each pasted row is a new person (ADR-0008); cross-club dedupe is the
 			// CSV importer's job, and buildImportPreview already drops in-club dupes.
 			const [person] = await tx

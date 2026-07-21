@@ -54,3 +54,18 @@ export function toE164(
 	const national = digits.replace(/^0/, "");
 	return `+${cc}${national}`;
 }
+
+/**
+ * Normalize a phone for STORAGE on write (#295): E.164 (`+…`) when it can be
+ * derived (already international, or a national number plus the club's default
+ * country code), otherwise the trimmed raw input so a number we can't fully
+ * normalize is preserved rather than dropped (read-time `toE164` coalescing can
+ * still reach it later, and the user can see/edit it). `null` only for
+ * empty/contentless input.
+ */
+export function toStoredPhone(
+	raw: string | null | undefined,
+	defaultCountryCode?: string | null,
+): string | null {
+	return toE164(raw, defaultCountryCode) ?? ((raw ?? "").trim() || null);
+}

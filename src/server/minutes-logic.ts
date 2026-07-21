@@ -20,6 +20,8 @@ import {
 	speeches,
 	tableTopicsSpeakers,
 } from "#/db/schema";
+import { toStoredPhone } from "#/lib/phone";
+import { loadClubDefaultCountryCode } from "./clubs-logic";
 
 export type AttendanceStatus = "present" | "absent" | "excused";
 export type AwardCategory =
@@ -449,6 +451,8 @@ async function resolveGuestId(
 	if (input.newGuest) {
 		const name = input.newGuest.name.trim();
 		if (!name) throw new Error("A guest name is required.");
+		// Standardize the guest phone to E.164 on write (#295).
+		const cc = await loadClubDefaultCountryCode(clubId);
 		const [created] = await tx
 			.insert(guests)
 			.values({
@@ -456,7 +460,7 @@ async function resolveGuestId(
 				clubId,
 				name,
 				email: input.newGuest.email?.trim() || null,
-				phone: input.newGuest.phone?.trim() || null,
+				phone: toStoredPhone(input.newGuest.phone, cc),
 			})
 			.onConflictDoNothing({ target: guests.id })
 			.returning({ id: guests.id });

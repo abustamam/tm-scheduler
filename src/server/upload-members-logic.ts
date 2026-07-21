@@ -22,6 +22,8 @@ import {
 	type ImportPlan,
 	planImport,
 } from "#/lib/members-import-plan";
+import { toStoredPhone } from "#/lib/phone";
+import { loadClubDefaultCountryCode } from "./clubs-logic";
 import {
 	type ImportStats,
 	importPeopleAndMembers,
@@ -66,7 +68,12 @@ export async function previewMemberImport(
 ): Promise<ImportPreviewResult> {
 	const parsed = parseAndValidate(csv);
 	const paid = parsed.filter(isPaid);
-	const mapped = paid.map(mapRow);
+	// Normalize phones to E.164 so the preview diff matches what the committing
+	// writer (importPeopleAndMembers) will actually store (#295).
+	const cc = await loadClubDefaultCountryCode(clubId);
+	const mapped = paid
+		.map(mapRow)
+		.map((r) => ({ ...r, phone: toStoredPhone(r.phone, cc) }));
 
 	// People are global (club-less) — the resolver matches across every club, so
 	// load them all, exactly as the committing writer does.
