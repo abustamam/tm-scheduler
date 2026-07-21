@@ -114,7 +114,10 @@ export function NudgeRecruitPicker({
 								{sorted.map((t) => (
 									<CommandItem
 										key={t.id}
-										value={t.name}
+										// Suffix the id so two members with the same name are
+										// distinct cmdk values (keyboard selection targets the
+										// right one); search still matches on the name.
+										value={`${t.name} ${t.id}`}
 										onSelect={() => setPicked(t)}
 									>
 										<span className="flex-1 truncate">{t.name}</span>

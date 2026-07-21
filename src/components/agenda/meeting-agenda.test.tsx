@@ -300,4 +300,19 @@ describe("tap-to-nudge confirm gate (#37)", () => {
 		}) as HTMLAnchorElement;
 		expect(emailLink.href.startsWith("mailto:other@example.com")).toBe(true);
 	});
+
+	it("renders the recruit picker for a manager on an open slot", () => {
+		renderAgenda(manager(), [slot({ status: "open" })]);
+		expect(screen.getByRole("button", { name: /nudge someone/i })).toBeTruthy();
+	});
+
+	it("does not render the recruit picker on a filled slot", () => {
+		renderAgenda(manager(), [filled()]);
+		expect(screen.queryByRole("button", { name: /nudge someone/i })).toBeNull();
+	});
+
+	it("does not render the recruit picker for a non-manager", () => {
+		renderAgenda(member(), [slot({ status: "open" })]);
+		expect(screen.queryByRole("button", { name: /nudge someone/i })).toBeNull();
+	});
 });
