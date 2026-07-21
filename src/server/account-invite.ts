@@ -57,6 +57,7 @@ export interface BulkInviteResult {
 	sent: number;
 	alreadyJoined: number;
 	noEmail: number;
+	recentlyInvited: number;
 }
 
 /**
@@ -88,11 +89,17 @@ export const inviteAllMembers = createServerFn({ method: "POST" })
 			);
 
 		const request = getRequest();
-		const result: BulkInviteResult = { sent: 0, alreadyJoined: 0, noEmail: 0 };
+		const result: BulkInviteResult = {
+			sent: 0,
+			alreadyJoined: 0,
+			noEmail: 0,
+			recentlyInvited: 0,
+		};
 		for (const row of rows) {
 			const prep = await prepareMemberInvite({
 				clubId: data.clubId,
 				memberId: row.memberId,
+				respectCooldown: true,
 			});
 			if (prep.outcome === "already_joined") {
 				result.alreadyJoined += 1;
@@ -100,6 +107,10 @@ export const inviteAllMembers = createServerFn({ method: "POST" })
 			}
 			if (prep.outcome === "no_email") {
 				result.noEmail += 1;
+				continue;
+			}
+			if (prep.outcome === "recently_invited") {
+				result.recentlyInvited += 1;
 				continue;
 			}
 			await auth.api.signInMagicLink({

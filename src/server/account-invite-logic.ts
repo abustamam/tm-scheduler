@@ -20,7 +20,16 @@ import { and, eq, isNull } from "drizzle-orm";
 import { db } from "#/db";
 import { clubs, members, people, user } from "#/db/schema";
 
-export type InvitePrepOutcome = "ready" | "already_joined" | "no_email";
+export type InvitePrepOutcome =
+	| "ready"
+	| "already_joined"
+	| "no_email"
+	| "recently_invited";
+
+/** Cooldown for the BULK invite path: skip re-inviting an un-joined member who
+ *  was invited within this window (24h), so one bulk click can't resend to the
+ *  same person on every press. The single explicit invite ignores this. */
+export const INVITE_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 24h
 
 export interface InvitePrep {
 	outcome: InvitePrepOutcome;
@@ -37,11 +46,16 @@ export interface InvitePrep {
  * address — so acceptance provably links exactly that Person (email-match +
  * `claimPersonForUser`). Idempotent: an already-linked Person returns
  * `already_joined` (no resend); a Person with no email anywhere returns
- * `no_email` so the caller can ask the admin to add one first.
+ * `no_email` so the caller can ask the admin to add one first. When
+ * `respectCooldown` is set (the bulk path passes it; the single explicit invite
+ * omits it), a Person invited within `INVITE_COOLDOWN_MS` returns
+ * `recently_invited` WITHOUT re-stamping `invited_at` or sending, so one bulk
+ * click can't resend to the same un-joined member on every press.
  */
 export async function prepareMemberInvite(input: {
 	clubId: string;
 	memberId: string;
+	respectCooldown?: boolean;
 }): Promise<InvitePrep> {
 	const [member] = await db
 		.select({
@@ -58,7 +72,12 @@ export async function prepareMemberInvite(input: {
 	}
 
 	const [person] = await db
-		.select({ id: people.id, email: people.email, userId: people.userId })
+		.select({
+			id: people.id,
+			email: people.email,
+			userId: people.userId,
+			invitedAt: people.invitedAt,
+		})
 		.from(people)
 		.where(eq(people.id, member.personId))
 		.limit(1);
@@ -71,6 +90,17 @@ export async function prepareMemberInvite(input: {
 	// membership email and copy it up so `claimPersonToUser`/email-match works.
 	const email = (person.email ?? member.email)?.trim() || null;
 	if (!email) return { outcome: "no_email" };
+
+	// Bulk cooldown: with a usable email but an invite stamped within the window,
+	// skip this member (no resend, no re-stamp). Single explicit invite omits
+	// `respectCooldown`, so an admin "resend" always sends.
+	if (
+		input.respectCooldown &&
+		person.invitedAt &&
+		Date.now() - person.invitedAt.getTime() < INVITE_COOLDOWN_MS
+	) {
+		return { outcome: "recently_invited" };
+	}
 
 	// Persist the effective email on the Person if it was missing, and stamp the
 	// invite. Both guarded on `user_id IS NULL` so a concurrent sign-in that just
