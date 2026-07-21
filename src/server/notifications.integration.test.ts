@@ -65,6 +65,44 @@ describe.skipIf(!hasTestDb)("reminder delivery foundation (#271)", () => {
 		vi.restoreAllMocks();
 	});
 
+	// Every poll scopes to THIS club so a concurrently-running poller test file
+	// (shared tm_test DB, global poller) can't claim our due notifications (#298).
+	const poll = (deps: Parameters<typeof processDueNotifications>[0]) =>
+		processDueNotifications(deps, undefined, club.clubId);
+
+	it("scoped poll ignores another club's due notifications (isolation, #298)", async () => {
+		const mineId = await enqueueNotification({
+			userId: club.memberUserId,
+			slotId: club.slotId,
+			type: "role_reminder",
+			sendAt: new Date(NOW.getTime() - 60_000),
+		});
+
+		// A second club with its own due notification — stands in for a
+		// concurrently-running poller test file sharing this tm_test DB. An
+		// UNscoped (global) poll would claim and send this too.
+		const other = await seedClub();
+		const otherId = await enqueueNotification({
+			userId: other.memberUserId,
+			slotId: other.slotId,
+			type: "role_reminder",
+			sendAt: new Date(NOW.getTime() - 60_000),
+		});
+
+		const sendEmail = okSender();
+		const result = await poll({ sendEmail, now: () => NOW });
+
+		// Only our club's row is seen, claimed, and sent.
+		expect(result.due).toBe(1);
+		expect(result.sent).toBe(1);
+		expect((await readNotification(mineId)).sentAt).not.toBeNull();
+		expect(sendEmail).toHaveBeenCalledTimes(1);
+		// The other club's row is untouched — no cross-club claim.
+		expect((await readNotification(otherId)).sentAt).toBeNull();
+
+		await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+	});
+
 	it("selects and delivers a due row: sends email + sets sent_at", async () => {
 		const id = await enqueueNotification({
 			userId: club.memberUserId,
@@ -74,7 +112,7 @@ describe.skipIf(!hasTestDb)("reminder delivery foundation (#271)", () => {
 		});
 
 		const sendEmail = okSender();
-		const result = await processDueNotifications({
+		const result = await poll({
 			sendEmail,
 			now: () => NOW,
 		});
@@ -104,7 +142,7 @@ describe.skipIf(!hasTestDb)("reminder delivery foundation (#271)", () => {
 		});
 
 		const sendEmail = okSender();
-		const result = await processDueNotifications({ sendEmail, now: () => NOW });
+		const result = await poll({ sendEmail, now: () => NOW });
 
 		expect(result.due).toBe(0);
 		expect(sendEmail).not.toHaveBeenCalled();
@@ -119,7 +157,7 @@ describe.skipIf(!hasTestDb)("reminder delivery foundation (#271)", () => {
 		});
 
 		const sendEmail = failingSender("resend exploded");
-		const result = await processDueNotifications({ sendEmail, now: () => NOW });
+		const result = await poll({ sendEmail, now: () => NOW });
 
 		expect(result).toMatchObject({ due: 1, sent: 0, failed: 1 });
 
@@ -141,10 +179,7 @@ describe.skipIf(!hasTestDb)("reminder delivery foundation (#271)", () => {
 		const sendEmail = okSender();
 		const deps = { sendEmail, now: () => NOW };
 
-		const [a, b] = await Promise.all([
-			processDueNotifications(deps),
-			processDueNotifications(deps),
-		]);
+		const [a, b] = await Promise.all([poll(deps), poll(deps)]);
 
 		// Exactly one delivery across both ticks.
 		expect(sendEmail).toHaveBeenCalledTimes(1);
@@ -165,7 +200,7 @@ describe.skipIf(!hasTestDb)("reminder delivery foundation (#271)", () => {
 		});
 
 		const sendEmail = okSender();
-		const result = await processDueNotifications({ sendEmail, now: () => NOW });
+		const result = await poll({ sendEmail, now: () => NOW });
 
 		expect(result).toMatchObject({ due: 1, sent: 0, skipped: 1 });
 		expect(sendEmail).not.toHaveBeenCalled();
@@ -184,14 +219,14 @@ describe.skipIf(!hasTestDb)("reminder delivery foundation (#271)", () => {
 		});
 
 		// First tick fails.
-		await processDueNotifications({
+		await poll({
 			sendEmail: failingSender(),
 			now: () => NOW,
 		});
 
 		// Same instant: within backoff → not retried yet.
 		const soon = okSender();
-		const within = await processDueNotifications({
+		const within = await poll({
 			sendEmail: soon,
 			now: () => NOW,
 		});
@@ -200,7 +235,7 @@ describe.skipIf(!hasTestDb)("reminder delivery foundation (#271)", () => {
 
 		// Past the backoff → eligible again, and this time it succeeds.
 		const later = okSender();
-		const afterBackoff = await processDueNotifications({
+		const afterBackoff = await poll({
 			sendEmail: later,
 			now: () => new Date(NOW.getTime() + RETRY_BACKOFF_MS + 60_000),
 		});
@@ -226,7 +261,7 @@ describe.skipIf(!hasTestDb)("reminder delivery foundation (#271)", () => {
 			.where(eq(notifications.id, id));
 
 		const sendEmail = okSender();
-		const result = await processDueNotifications({ sendEmail, now: () => NOW });
+		const result = await poll({ sendEmail, now: () => NOW });
 
 		expect(result.due).toBe(0);
 		expect(sendEmail).not.toHaveBeenCalled();

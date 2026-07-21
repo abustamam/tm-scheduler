@@ -61,6 +61,11 @@ describe.skipIf(!hasTestDb)("reminder control layer (#274)", () => {
 		vi.restoreAllMocks();
 	});
 
+	// Every poll scopes to THIS club so a concurrently-running poller test file
+	// (shared tm_test DB, global poller) can't claim our due notifications (#298).
+	const poll = (deps: Parameters<typeof processDueNotifications>[0]) =>
+		processDueNotifications(deps, undefined, club.clubId);
+
 	// --- Club-level settings -------------------------------------------------
 
 	it("getClubReminderSettings returns the defaults (reminders off) for a fresh club", async () => {
@@ -181,17 +186,14 @@ describe.skipIf(!hasTestDb)("reminder control layer (#274)", () => {
 		});
 
 		const sendEmail = okSender();
-		const result = await processDueNotifications({
+		const result = await poll({
 			sendEmail,
 			now: () => new Date(),
 		});
 
-		// Isolation-safe: processDueNotifications is GLOBAL, so under the parallel
-		// suite it can also sweep a concurrent test's due row (it runs with real
-		// `now()`, above the other reminder suites' isolated clock windows). Assert on
-		// THIS row's terminal state + a lower-bound suppression count — not the shared
-		// sender mock or exact global counts.
-		expect(result.suppressed).toBeGreaterThanOrEqual(1);
+		// Club-scoped poll (#298), so only this club's rows are swept — counts are
+		// deterministic even under the parallel suite (no more global sweep).
+		expect(result.suppressed).toBe(1);
 
 		const [row] = await testDb
 			.select()
@@ -210,7 +212,7 @@ describe.skipIf(!hasTestDb)("reminder control layer (#274)", () => {
 		});
 
 		const sendEmail = okSender();
-		const result = await processDueNotifications({
+		const result = await poll({
 			sendEmail,
 			now: () => new Date(),
 		});
