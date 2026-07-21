@@ -84,3 +84,22 @@ export function useCurrentMember(clubId: string) {
 	const clearMember = useCallback(() => clearStoredMember(clubId), [clubId]);
 	return { member, setMember, clearMember };
 }
+
+/**
+ * The member to act as on a public route (#317). A signed-in member of the club
+ * (shell-wrapped) passes their `session` identity (id + display name), which
+ * takes precedence over the localStorage pick; an anonymous visitor passes
+ * `null` and gets the localStorage-picked member. `source` lets the UI hide the
+ * "not you? / re-pick" affordance for a signed-in member (whose identity is the
+ * session, not a localStorage choice they can clear).
+ */
+export function useEffectiveMember(
+	clubId: string,
+	session: StoredMember | null,
+) {
+	const picked = useCurrentMember(clubId);
+	if (session) {
+		return { ...picked, member: session, source: "session" as const };
+	}
+	return { ...picked, source: "anon" as const };
+}
