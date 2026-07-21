@@ -24,6 +24,9 @@ export const Route = createFileRoute("/club/$clubId_/guest-book")({
 		};
 	},
 	component: GuestBook,
+	head: () => ({
+		meta: [{ name: "robots", content: "noindex, nofollow" }],
+	}),
 });
 
 function GuestBook() {

@@ -5,9 +5,8 @@ import { useCurrentMember } from "#/lib/member-identity";
  * (issue #220). Reads the club-scoped identity via {@link useCurrentMember} —
  * the same source the meeting viewer derives claim attribution from — so the
  * displayed name always matches who a Claim would go to. "not you?" clears the
- * stored identity through the shared store, which makes the club layout's
- * `RequireMember` gate re-render to the "Who are you?" screen in place — the
- * same semantics as the sign-up sheet's "not you?".
+ * stored identity through the shared store; the next participate action then
+ * prompts `IdentityGateProvider`'s "Who are you?" picker fresh.
  *
  * Renders nothing when no identity is stored for this club (and on the server
  * / during hydration, where the store snapshot is null).

@@ -8,7 +8,7 @@ import {
 import { toast } from "sonner";
 import { AppShell, shellPropsFromContext } from "#/components/app-shell";
 import { BrandMark } from "#/components/brand-mark";
-import { RequireMember } from "#/components/club/require-member";
+import { IdentityGateProvider } from "#/components/club/identity-gate";
 import { ThemeToggle } from "#/components/club/theme-toggle";
 import { Button } from "#/components/ui/button";
 import { Toaster } from "#/components/ui/sonner";
@@ -46,13 +46,22 @@ export const Route = createFileRoute("/club/$clubId")({
 	},
 	component: ClubShell,
 	notFoundComponent: ClubNotFound,
+	head: () => ({
+		// Member-data pages are for people you share the link with, not search
+		// discovery (spec decision #5). Covers the nested index + meeting agenda.
+		meta: [{ name: "robots", content: "noindex, nofollow" }],
+	}),
 });
 
 function ClubShell() {
 	const { clubId } = Route.useParams();
-	const { clubUuid, clubName, clubNumber, shell, authCtx } =
+	const { clubUuid, clubName, clubNumber, shell, authCtx, effectiveMemberId } =
 		Route.useRouteContext();
 	const router = useRouter();
+	const sessionMember =
+		effectiveMemberId && authCtx?.user
+			? { id: effectiveMemberId, name: authCtx.user.name || authCtx.user.email }
+			: null;
 
 	async function handleSignOut() {
 		await authClient.signOut();
@@ -72,7 +81,7 @@ function ClubShell() {
 	}
 
 	// Signed-in member of this club → the full app shell, session identity known
-	// (no name-pick / RequireMember gate).
+	// (no name-pick gate).
 	if (shell && authCtx) {
 		return (
 			<AppShell
@@ -80,7 +89,13 @@ function ClubShell() {
 				onSignOut={handleSignOut}
 				onExitImpersonation={handleExitImpersonation}
 			>
-				<Outlet />
+				<IdentityGateProvider
+					clubUuid={clubUuid}
+					clubSlug={clubId}
+					sessionMember={sessionMember}
+				>
+					<Outlet />
+				</IdentityGateProvider>
 			</AppShell>
 		);
 	}
@@ -106,9 +121,13 @@ function ClubShell() {
 					Sign in
 				</Link>
 			</header>
-			<RequireMember clubUuid={clubUuid} clubSlug={clubId}>
+			<IdentityGateProvider
+				clubUuid={clubUuid}
+				clubSlug={clubId}
+				sessionMember={null}
+			>
 				<Outlet />
-			</RequireMember>
+			</IdentityGateProvider>
 			<Toaster position="top-center" />
 		</div>
 	);
