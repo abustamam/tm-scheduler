@@ -1,19 +1,47 @@
-import { createFileRoute, Link, Outlet } from "@tanstack/react-router";
+import {
+	createFileRoute,
+	Link,
+	Outlet,
+	redirect,
+	useRouter,
+} from "@tanstack/react-router";
+import { toast } from "sonner";
+import { AppShell, shellPropsFromContext } from "#/components/app-shell";
 import { BrandMark } from "#/components/brand-mark";
 import { RequireMember } from "#/components/club/require-member";
 import { ThemeToggle } from "#/components/club/theme-toggle";
 import { Button } from "#/components/ui/button";
 import { Toaster } from "#/components/ui/sonner";
+import { authClient } from "#/lib/auth-client";
 import { resolveClubOrRedirect } from "#/lib/club-route";
+import { publicShellDecision } from "#/lib/public-shell";
+import { getAuthContext, setActiveClub } from "#/server/auth-context";
+import { endImpersonation } from "#/server/impersonation";
 
 export const Route = createFileRoute("/club/$clubId")({
 	beforeLoad: async ({ params, location }) => {
 		const club = await resolveClubOrRedirect(params.clubId, location);
+		// Shell-wrap for a signed-in member of the viewed club (#317): keep the app
+		// chrome + session identity instead of the anonymous name-pick.
+		const ctx = await getAuthContext();
+		const decision = publicShellDecision(ctx, club.id);
+		if (decision.switchActiveTo) {
+			// Member of the viewed club, but it isn't active — switch, then re-run
+			// beforeLoad so `currentMemberId`/`shell` resolve for the viewed club.
+			await setActiveClub({ data: { clubId: decision.switchActiveTo } });
+			// Re-run beforeLoad on the SAME url (preserves any deep sub-route +
+			// search); getAuthContext now sees the viewed club active, so the
+			// decision resolves to `shell` with no further switch.
+			throw redirect({ href: location.href });
+		}
 		return {
 			clubUuid: club.id,
 			clubSlug: club.slug,
 			clubName: club.name,
 			clubNumber: club.clubNumber,
+			shell: decision.shell,
+			effectiveMemberId: decision.effectiveMemberId,
+			authCtx: decision.shell ? ctx : null,
 		};
 	},
 	component: ClubShell,
@@ -22,7 +50,42 @@ export const Route = createFileRoute("/club/$clubId")({
 
 function ClubShell() {
 	const { clubId } = Route.useParams();
-	const { clubUuid, clubName, clubNumber } = Route.useRouteContext();
+	const { clubUuid, clubName, clubNumber, shell, authCtx } =
+		Route.useRouteContext();
+	const router = useRouter();
+
+	async function handleSignOut() {
+		await authClient.signOut();
+		await router.navigate({ to: "/signin", search: { redirect: "/" } });
+	}
+
+	async function handleExitImpersonation() {
+		try {
+			await endImpersonation();
+			await router.navigate({ to: "/superadmin" });
+			await router.invalidate();
+		} catch (err) {
+			toast.error(
+				err instanceof Error ? err.message : "Couldn't exit the session.",
+			);
+		}
+	}
+
+	// Signed-in member of this club → the full app shell, session identity known
+	// (no name-pick / RequireMember gate).
+	if (shell && authCtx) {
+		return (
+			<AppShell
+				{...shellPropsFromContext(authCtx)}
+				onSignOut={handleSignOut}
+				onExitImpersonation={handleExitImpersonation}
+			>
+				<Outlet />
+			</AppShell>
+		);
+	}
+
+	// Anonymous visitor → today's lightweight header + name-pick, unchanged.
 	return (
 		<div className="flex min-h-svh w-full flex-col bg-background">
 			<header className="flex items-center gap-3 border-b border-[var(--line)] px-4 py-3 md:px-6">

@@ -34,7 +34,13 @@ import { MemberAvatar } from "#/components/club/member-avatar";
 import { ThemeToggle } from "#/components/club/theme-toggle";
 import { Sheet, SheetContent, SheetTitle } from "#/components/ui/sheet";
 import { Toaster } from "#/components/ui/sonner";
+import { initialsOf } from "#/lib/avatar";
 import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
+import {
+	type OfficerPosition,
+	officerPositionLabel,
+	officerRank,
+} from "#/lib/officers";
 
 export interface AppShellProps {
 	clubs: readonly {
@@ -65,6 +71,89 @@ export interface AppShellProps {
 	onSignOut: () => void;
 	onExitImpersonation: () => void;
 	children: React.ReactNode;
+}
+
+/**
+ * The auth-context shape the shell derives its display props from — the
+ * `getAuthContext()` result. `_authed.tsx` and the public shell-wrappers both
+ * pass this to `shellPropsFromContext`, so the shell's display fields are derived
+ * in exactly ONE place (#317 anti-drift).
+ */
+export interface ShellContext {
+	user: { id: string; name: string; email: string } | null;
+	clubs: readonly {
+		clubId: string;
+		name: string;
+		clubNumber: string | null;
+		clubRole: "admin" | "member";
+	}[];
+	currentMemberId: string | null;
+	activeClubId: string | null;
+	officerPositions: readonly OfficerPosition[];
+	isSuperadmin: boolean;
+	impersonating: {
+		clubName?: string;
+		expiresAt: string | Date;
+		mode: "read_only" | "read_write";
+	} | null;
+}
+
+/** The `AppShell` display props — every field except the render/callback props. */
+export type AppShellDisplayProps = Omit<
+	AppShellProps,
+	"children" | "onSignOut" | "onExitImpersonation"
+>;
+
+const CLUB_ROLE_LABELS: Record<string, string> = {
+	admin: "Officer",
+	member: "Member",
+};
+
+/**
+ * Derive the shell's display props from an auth-context result. The SINGLE
+ * source of truth for the shell chrome's display fields, shared by `_authed.tsx`
+ * and the public shell-wrappers so the two shells never drift (#317). Only ever
+ * called for a signed-in user, so `ctx.user` is non-null (guarded).
+ */
+export function shellPropsFromContext(ctx: ShellContext): AppShellDisplayProps {
+	if (!ctx.user) {
+		throw new Error("shellPropsFromContext requires a signed-in user");
+	}
+	const { clubs, activeClubId, officerPositions, isSuperadmin, impersonating } =
+		ctx;
+	// The club the workspace is acting in (cookie-backed active club, else first).
+	const activeClub = clubs.find((c) => c.clubId === activeClubId) ?? clubs[0];
+	const clubName = activeClub?.name ?? "Toastmasters";
+	const clubNumber = activeClub?.clubNumber ?? null;
+	// Holds an elected office in the active club → gets the Officer home (#202).
+	const hasOffice = officerPositions.length > 0;
+	// Effective admin (#202): a stored admin OR any elected officer.
+	const isOfficer = activeClub?.clubRole === "admin" || hasOffice;
+	// Prefer the highest-ranked office label for an officer; else the club role.
+	const topOffice = hasOffice
+		? [...officerPositions].sort((a, b) => officerRank(a) - officerRank(b))[0]
+		: undefined;
+	const roleLabel = topOffice
+		? officerPositionLabel(topOffice)
+		: activeClub?.clubRole
+			? (CLUB_ROLE_LABELS[activeClub.clubRole] ?? "Member")
+			: "Member";
+	const displayName = ctx.user.name || ctx.user.email;
+	const initials = initialsOf(displayName);
+	return {
+		clubs,
+		activeClubId,
+		clubName,
+		clubNumber,
+		isOfficer,
+		hasOffice,
+		isSuperadmin,
+		roleLabel,
+		displayName,
+		initials,
+		impersonating,
+		searchGrants: { hasOffice, isOfficer, isSuperadmin },
+	};
 }
 
 function crumbFor(pathname: string): string {
