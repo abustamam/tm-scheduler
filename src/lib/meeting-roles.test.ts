@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	isGrammarianRoleName,
 	isTmodRoleName,
 	pairedRoleIds,
 	pickSpeakerAndEvaluatorRoles,
@@ -18,6 +19,20 @@ describe("isTmodRoleName", () => {
 		expect(isTmodRoleName("Toastmasters")).toBe(false); // plural, no boundary
 		expect(isTmodRoleName("General Evaluator")).toBe(false);
 		expect(isTmodRoleName("Timer")).toBe(false);
+	});
+});
+
+describe("isGrammarianRoleName", () => {
+	it("matches the standard Grammarian role name (case/space-insensitive)", () => {
+		expect(isGrammarianRoleName("Grammarian")).toBe(true);
+		expect(isGrammarianRoleName("  grammarian  ")).toBe(true);
+	});
+
+	it("does not match other roles", () => {
+		expect(isGrammarianRoleName("Grammarians")).toBe(false); // plural, no boundary
+		expect(isGrammarianRoleName("Grammar")).toBe(false);
+		expect(isGrammarianRoleName("Ah-Counter")).toBe(false);
+		expect(isGrammarianRoleName("Toastmaster of the Day")).toBe(false);
 	});
 });
 

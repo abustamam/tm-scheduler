@@ -530,6 +530,9 @@ function EditMeetingDialog({
 					location: String(form.get("location") ?? "").trim() || undefined,
 					wordOfTheDay:
 						String(form.get("wordOfTheDay") ?? "").trim() || undefined,
+					wodDefinition:
+						String(form.get("wodDefinition") ?? "").trim() || undefined,
+					wodExample: String(form.get("wodExample") ?? "").trim() || undefined,
 					notes: String(form.get("notes") ?? "").trim() || undefined,
 				},
 			});
@@ -591,6 +594,24 @@ function EditMeetingDialog({
 							id="wordOfTheDay"
 							name="wordOfTheDay"
 							defaultValue={meeting.wordOfTheDay ?? ""}
+						/>
+					</div>
+					<div className="space-y-2">
+						<Label htmlFor="wodDefinition">Word of the day — definition</Label>
+						<Input
+							id="wodDefinition"
+							name="wodDefinition"
+							defaultValue={meeting.wodDefinition ?? ""}
+						/>
+					</div>
+					<div className="space-y-2">
+						<Label htmlFor="wodExample">
+							Word of the day — example sentence
+						</Label>
+						<Input
+							id="wodExample"
+							name="wodExample"
+							defaultValue={meeting.wodExample ?? ""}
 						/>
 					</div>
 					<div className="space-y-2">

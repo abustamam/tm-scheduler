@@ -9,6 +9,8 @@ import { getActiveImpersonation } from "./impersonation-logic";
 import {
 	type MeetingAgendaAuthz,
 	resolveMeetingAgendaAuthz,
+	resolveWordOfTheDayAuthz,
+	type WordOfTheDayAuthz,
 } from "./meeting-authz-logic";
 import { getOpenOfficerPositions } from "./officers-logic";
 
@@ -288,6 +290,28 @@ export async function requireMeetingAgendaEditor(input: {
 	});
 	if (!authz.allowed) {
 		throw new Error("You don't have permission to edit this meeting.");
+	}
+	return authz;
+}
+
+/**
+ * Gate a per-meeting Word-of-the-Day write (#296) — a narrower capability than
+ * the full agenda edit. Allowed when the current session is a club `admin`, OR
+ * the self-asserted `selfMemberId` holds the meeting's TMOD or Grammarian slot.
+ * Throws when none apply. Returns the resolved authz.
+ */
+export async function requireWordOfTheDayEditor(input: {
+	meetingId: string;
+	selfMemberId?: string | null;
+}): Promise<WordOfTheDayAuthz> {
+	const user = await getSessionUser();
+	const authz = await resolveWordOfTheDayAuthz({
+		meetingId: input.meetingId,
+		sessionUserId: user?.id ?? null,
+		selfMemberId: input.selfMemberId ?? null,
+	});
+	if (!authz.allowed) {
+		throw new Error("You don't have permission to edit the Word of the Day.");
 	}
 	return authz;
 }

@@ -9,6 +9,16 @@ export function isTmodRoleName(name: string): boolean {
 	return /^toastmaster\b/.test(name.trim().toLowerCase());
 }
 
+/**
+ * True when a role-definition name is the Grammarian role. Matches the
+ * standard-template name ("Grammarian"), case-insensitively — but NOT the plural
+ * "Grammarians" (no word boundary) or "Grammar". This is how the app identifies
+ * the meeting's Grammarian slot for self-serve Word-of-the-Day editing (#296).
+ */
+export function isGrammarianRoleName(name: string): boolean {
+	return /^grammarian\b/.test(name.trim().toLowerCase());
+}
+
 /** Minimal role-definition shape needed to choose speaker/evaluator roles. */
 export interface RoleDefLite {
 	id: string;
