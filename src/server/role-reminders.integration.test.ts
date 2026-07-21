@@ -106,6 +106,11 @@ describe.skipIf(!hasTestDb)("role-reminder producer (#272)", () => {
 		vi.restoreAllMocks();
 	});
 
+	// Every poll scopes to THIS club so a concurrently-running poller test file
+	// (shared tm_test DB, global poller) can't claim our due notifications (#298).
+	const poll = (deps: Parameters<typeof processDueNotifications>[0]) =>
+		processDueNotifications(deps, undefined, club.clubId);
+
 	// --- helpers -------------------------------------------------------------
 
 	/** Put the seeded slot in a held state for the seeded (linked) member. */
@@ -297,7 +302,7 @@ describe.skipIf(!hasTestDb)("role-reminder producer (#272)", () => {
 		await produceRoleReminders({ now: () => SEND_PRODUCE_NOW });
 
 		const sendEmail = okSender();
-		await processDueNotifications({ sendEmail, now: () => SEND_NOW });
+		await poll({ sendEmail, now: () => SEND_NOW });
 
 		// Delivered, not suppressed/stale — a terminal state any sweeper produces
 		// identically for this (valid) row.
@@ -325,7 +330,7 @@ describe.skipIf(!hasTestDb)("role-reminder producer (#272)", () => {
 		});
 
 		const sendEmail = okSender();
-		const result = await processDueNotifications({
+		const result = await poll({
 			sendEmail,
 			now: () => SEND_NOW,
 		});
@@ -357,7 +362,7 @@ describe.skipIf(!hasTestDb)("role-reminder producer (#272)", () => {
 			.where(eq(roleSlots.id, club.slotId));
 
 		const sendEmail = okSender();
-		await processDueNotifications({ sendEmail, now: () => SEND_NOW });
+		await poll({ sendEmail, now: () => SEND_NOW });
 
 		// The original assignee is never mailed; the row is finalized as stale.
 		expect(sendEmail.mock.calls.some((c) => c[0].to === memberEmail)).toBe(
@@ -380,7 +385,7 @@ describe.skipIf(!hasTestDb)("role-reminder producer (#272)", () => {
 			.where(eq(roleSlots.id, club.slotId));
 
 		const sendEmail = okSender();
-		await processDueNotifications({ sendEmail, now: () => SEND_NOW });
+		await poll({ sendEmail, now: () => SEND_NOW });
 
 		expect(sendEmail.mock.calls.some((c) => c[0].to === memberEmail)).toBe(
 			false,
@@ -401,7 +406,7 @@ describe.skipIf(!hasTestDb)("role-reminder producer (#272)", () => {
 			.where(eq(meetings.id, club.meetingId));
 
 		const sendEmail = okSender();
-		await processDueNotifications({ sendEmail, now: () => SEND_NOW });
+		await poll({ sendEmail, now: () => SEND_NOW });
 
 		expect(sendEmail.mock.calls.some((c) => c[0].to === memberEmail)).toBe(
 			false,
