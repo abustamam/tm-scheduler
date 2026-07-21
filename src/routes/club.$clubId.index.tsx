@@ -3,6 +3,7 @@ import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { CalendarDays, Loader2, MailCheck, Mic, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { GuestResources } from "#/components/club/guest-resources";
 import { useRequireIdentity } from "#/components/club/identity-gate";
 import { SeasonGrid } from "#/components/club/season-grid";
 import { ViewingAs } from "#/components/club/viewing-as";
@@ -99,13 +100,7 @@ function ClubHome() {
 				<ViewingAs member={member} promptIdentity={promptIdentity} />
 			) : null}
 
-			<Link
-				to="/resources/$slug"
-				params={{ slug: "what-to-expect" }}
-				className="inline-flex text-sm font-semibold text-[var(--lagoon-deep)] no-underline hover:underline"
-			>
-				New to Toastmasters? See what to expect at a meeting →
-			</Link>
+			<GuestResources />
 
 			{/* "This is me" — graduate a public picker into a real account (#266). */}
 			{member && source === "anon" ? (
