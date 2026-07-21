@@ -6,8 +6,15 @@ import { ResourcesShell } from "#/components/resources/resources-shell";
 import { Button } from "#/components/ui/button";
 import { getResourceMarkdown } from "#/data/resource-content";
 import { resourceBySlug } from "#/data/resources";
+import { getAuthContext } from "#/server/auth-context";
 
 export const Route = createFileRoute("/resources/$slug")({
+	// #317: shell-wrap for a signed-in user with a club (see resources.index.tsx).
+	beforeLoad: async () => {
+		const ctx = await getAuthContext();
+		const shell = !!ctx.user && ctx.clubs.length > 0;
+		return { shell, authCtx: shell ? ctx : null };
+	},
 	loader: ({ params }) => {
 		const resource = resourceBySlug(params.slug);
 		const markdown = getResourceMarkdown(params.slug);
@@ -28,8 +35,9 @@ export const Route = createFileRoute("/resources/$slug")({
 
 function ResourceArticle() {
 	const { resource, markdown } = Route.useLoaderData();
+	const { shell, authCtx } = Route.useRouteContext();
 	return (
-		<ResourcesShell>
+		<ResourcesShell shell={shell} authCtx={authCtx}>
 			<Link
 				to="/resources"
 				className="mt-2 inline-flex items-center gap-1 text-sm font-semibold text-[var(--lagoon-deep)] no-underline hover:underline"

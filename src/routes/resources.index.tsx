@@ -15,12 +15,21 @@ import {
 	resources,
 	resourceToneGradient,
 } from "#/data/resources";
+import { getAuthContext } from "#/server/auth-context";
 
 const TITLE = "Toastmasters resources — GavelUp";
 const DESCRIPTION =
 	"What to expect at a Toastmasters meeting, what each role does, and printable role sheets.";
 
 export const Route = createFileRoute("/resources/")({
+	// #317: a signed-in user with a club sees the resources page inside the app
+	// shell (so "Resources" in the sidebar keeps them oriented); anonymous
+	// visitors get the lightweight header. getAuthContext is fast for anon.
+	beforeLoad: async () => {
+		const ctx = await getAuthContext();
+		const shell = !!ctx.user && ctx.clubs.length > 0;
+		return { shell, authCtx: shell ? ctx : null };
+	},
 	head: () => ({
 		meta: [
 			{ title: TITLE },
@@ -43,8 +52,9 @@ const ICONS: Record<ResourceIcon, ComponentType<{ className?: string }>> = {
 };
 
 function ResourcesIndex() {
+	const { shell, authCtx } = Route.useRouteContext();
 	return (
-		<ResourcesShell>
+		<ResourcesShell shell={shell} authCtx={authCtx}>
 			<div className="mb-6 pt-2">
 				<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
 					Toastmasters resources
