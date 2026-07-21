@@ -2,6 +2,7 @@ import { createFileRoute, useRouter } from "@tanstack/react-router";
 import {
 	CalendarDays,
 	CheckCircle2,
+	Eye,
 	Loader2,
 	Lock,
 	LockOpen,
@@ -137,6 +138,9 @@ function MeetingDetail() {
 	const [addRoleOpen, setAddRoleOpen] = useState(false);
 	const [addRoleBusy, setAddRoleBusy] = useState(false);
 	const [lifecycleBusy, setLifecycleBusy] = useState(false);
+	// #320: an admin can preview the meeting as a non-admin member would see it
+	// (no management controls). Client-only, no persistence — resets on reload.
+	const [previewAsMember, setPreviewAsMember] = useState(false);
 
 	// Same deck present mode renders — reused as the source for the .pptx export.
 	const deck = buildSlideDeck(
@@ -164,9 +168,13 @@ function MeetingDetail() {
 	const over = meeting.status
 		? meetingDatePassed(meeting.scheduledAt, timezone)
 		: false;
+	// #320: while previewing-as-member, drop management everywhere it gates admin
+	// UI — the viewer (so <MeetingAgenda> hides admin controls) and the route-level
+	// controls below. This is exactly "the viewer I'd have as a non-admin member".
+	const effectiveCanManage = canManage && !previewAsMember;
 	const baseViewer = meetingViewer({
 		currentMemberId,
-		canManage,
+		canManage: effectiveCanManage,
 		isTmod,
 		isGrammarian,
 		isEditableWindow: !locked && !over,
@@ -310,6 +318,21 @@ function MeetingDetail() {
 
 	return (
 		<PageContainer className="space-y-5">
+			{previewAsMember ? (
+				<div className="flex items-center justify-between gap-3 rounded-xl border border-primary/40 bg-primary/10 px-4 py-3 text-sm font-medium text-primary">
+					<span className="flex items-center gap-2">
+						<Eye className="size-4 shrink-0" aria-hidden />
+						Previewing as a member — management controls are hidden.
+					</span>
+					<Button
+						size="sm"
+						variant="outline"
+						onClick={() => setPreviewAsMember(false)}
+					>
+						Exit preview
+					</Button>
+				</div>
+			) : null}
 			{!online ? (
 				<div className="flex items-center gap-2 rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm font-medium text-warning-foreground">
 					<WifiOff className="size-4 shrink-0" aria-hidden />
@@ -371,7 +394,7 @@ function MeetingDetail() {
 						deck={deck}
 						clubName={clubName}
 					/>
-					{canManage && !locked && addableRoles.length > 0 ? (
+					{effectiveCanManage && !locked && addableRoles.length > 0 ? (
 						<Button
 							size="sm"
 							variant="outline"
@@ -380,7 +403,7 @@ function MeetingDetail() {
 							+ Add role
 						</Button>
 					) : null}
-					{canManage && locked ? (
+					{effectiveCanManage && locked ? (
 						<Button
 							size="sm"
 							variant="outline"
@@ -395,7 +418,7 @@ function MeetingDetail() {
 							Reopen meeting
 						</Button>
 					) : null}
-					{canManage && !locked && canComplete ? (
+					{effectiveCanManage && !locked && canComplete ? (
 						<Button size="sm" onClick={doComplete} disabled={lifecycleBusy}>
 							{lifecycleBusy ? (
 								<Loader2 className="size-4 animate-spin" />
@@ -403,6 +426,18 @@ function MeetingDetail() {
 								<CheckCircle2 className="size-4" />
 							)}
 							Complete meeting
+						</Button>
+					) : null}
+					{/* #320: real admins get a preview-as-member toggle; the banner up
+					    top provides the exit while previewing, so hide the button then. */}
+					{canManage && !previewAsMember ? (
+						<Button
+							size="sm"
+							variant="ghost"
+							onClick={() => setPreviewAsMember(true)}
+						>
+							<Eye className="size-4" />
+							Preview as member
 						</Button>
 					) : null}
 				</div>
@@ -440,7 +475,7 @@ function MeetingDetail() {
 					meetingPast={
 						locked || meetingDatePassed(meeting.scheduledAt, timezone)
 					}
-					canEdit={minutes.canEdit}
+					canEdit={effectiveCanManage && minutes.canEdit}
 					clubGuests={clubGuests}
 					onMutated={() => router.invalidate()}
 					email={
