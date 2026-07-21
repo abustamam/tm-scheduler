@@ -7,6 +7,7 @@ import {
 	type AgendaSlot,
 	MeetingAgenda,
 	type MeetingAgendaActions,
+	type MeetingAgendaProps,
 } from "./meeting-agenda";
 
 // The component imports the AssignSlot/EditSpeech sheets, which pull in the
@@ -68,12 +69,20 @@ function renderAgenda(
 			pairedRoleIds={pairedRoleIds}
 			shareUrl="https://gavelup.app/club/test/meeting/m1"
 			meetingDate="Jan 1, 2026"
-			meeting={{
-				id: "m1",
-				wordOfTheDay: null,
-				wodDefinition: null,
-				wodExample: null,
-			}}
+			meeting={
+				{
+					id: "m1",
+					scheduledAt: "2026-01-01T00:00:00Z",
+					lengthMinutes: 90,
+					theme: null,
+					location: null,
+					wordOfTheDay: null,
+					wodDefinition: null,
+					wodExample: null,
+					notes: null,
+				} as unknown as MeetingAgendaProps["meeting"]
+			}
+			timezone="UTC"
 			actorMemberId="me"
 			selfMemberId="me"
 			onMetaSaved={() => {}}
@@ -264,6 +273,42 @@ describe("MeetingAgenda capability gating", () => {
 		expect(
 			screen.queryByRole("button", { name: /edit word of the day/i }),
 		).toBeNull();
+	});
+
+	it("shows 'Edit meeting' to a TMOD and an admin, hides it from a plain member", () => {
+		for (const v of [
+			meetingViewer({
+				currentMemberId: "me",
+				canManage: false,
+				isTmod: true,
+				isGrammarian: false,
+				isEditableWindow: true,
+			}),
+			meetingViewer({
+				currentMemberId: "me",
+				canManage: true,
+				isTmod: false,
+				isGrammarian: false,
+				isEditableWindow: true,
+			}),
+		]) {
+			renderAgenda(v, [slot({ status: "open" })]);
+			expect(
+				screen.getByRole("button", { name: /edit meeting/i }),
+			).toBeTruthy();
+			cleanup();
+		}
+		renderAgenda(
+			meetingViewer({
+				currentMemberId: "me",
+				canManage: false,
+				isTmod: false,
+				isGrammarian: false,
+				isEditableWindow: true,
+			}),
+			[slot({ status: "open" })],
+		);
+		expect(screen.queryByRole("button", { name: /edit meeting/i })).toBeNull();
 	});
 });
 

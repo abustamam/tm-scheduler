@@ -24,21 +24,8 @@ import { MeetingViewActions } from "#/components/club/meeting-view-actions";
 import { SigningUpAs } from "#/components/club/signing-up-as";
 import { ShareLinkButton } from "#/components/share-link-button";
 import { Button } from "#/components/ui/button";
-import {
-	Dialog,
-	DialogClose,
-	DialogContent,
-	DialogDescription,
-	DialogFooter,
-	DialogHeader,
-	DialogTitle,
-} from "#/components/ui/dialog";
-import { Input } from "#/components/ui/input";
-import { Label } from "#/components/ui/label";
-import { Textarea } from "#/components/ui/textarea";
 import { applyFlex, expandRunSheet } from "#/lib/agenda-runsheet";
 import { buildSlideDeck } from "#/lib/agenda-slides";
-import { utcToZonedWallTime } from "#/lib/datetime";
 import {
 	formatMeetingDate,
 	formatMeetingTime,
@@ -56,11 +43,7 @@ import { deriveMeetingRoleFlags } from "#/lib/meeting-roles";
 import { meetingViewer } from "#/lib/meeting-viewer";
 import { useCurrentMember } from "#/lib/member-identity";
 import { clearAvailability, setAvailability } from "#/server/availability";
-import {
-	getPublicMeeting,
-	listUpcomingMeetings,
-	updateMeeting,
-} from "#/server/meetings";
+import { getPublicMeeting, listUpcomingMeetings } from "#/server/meetings";
 import { listMembers } from "#/server/members";
 import {
 	addSpeakerSlot,
@@ -169,7 +152,6 @@ function MeetingView() {
 	);
 
 	const [availBusy, setAvailBusy] = useState(false);
-	const [editMetaOpen, setEditMetaOpen] = useState(false);
 
 	const myId = member?.id ?? null;
 	const isUnavailable = myId ? unavailableMemberIds.includes(myId) : false;
@@ -363,17 +345,6 @@ function MeetingView() {
 					deck={deck}
 					clubName={clubName}
 				/>
-				{isTmod && !over ? (
-					<Button
-						type="button"
-						variant="outline"
-						size="sm"
-						className="mt-1 ml-2"
-						onClick={() => setEditMetaOpen(true)}
-					>
-						Edit meeting
-					</Button>
-				) : null}
 			</header>
 
 			<MeetingAgenda
@@ -387,175 +358,14 @@ function MeetingView() {
 				// nudge never renders here — no share context to build these from.
 				shareUrl=""
 				meetingDate=""
-				meeting={{
-					id: meeting.id,
-					wordOfTheDay: meeting.wordOfTheDay,
-					wodDefinition: meeting.wodDefinition,
-					wodExample: meeting.wodExample,
-				}}
+				meeting={meeting}
+				timezone={timezone}
 				actorMemberId={myId}
 				selfMemberId={myId}
 				onMetaSaved={async () => {
 					await router.invalidate();
 				}}
 			/>
-
-			{isTmod && !over ? (
-				<EditMeetingMetaDialog
-					open={editMetaOpen}
-					onOpenChange={setEditMetaOpen}
-					meeting={meeting}
-					timezone={timezone}
-					actorMemberId={myId}
-					selfMemberId={myId}
-					onSaved={async () => {
-						setEditMetaOpen(false);
-						await router.invalidate();
-					}}
-				/>
-			) : null}
 		</div>
-	);
-}
-
-/**
- * TMOD meta editor — theme, Word of the Day, location, notes only. Date/time and
- * length are intentionally absent: reschedule stays admin-only (ADR-0010).
- * We re-submit the meeting's current wall time unchanged so the server's
- * meta-only path accepts it.
- */
-function EditMeetingMetaDialog({
-	open,
-	onOpenChange,
-	meeting,
-	timezone,
-	actorMemberId,
-	selfMemberId,
-	onSaved,
-}: {
-	open: boolean;
-	onOpenChange: (open: boolean) => void;
-	meeting: Awaited<ReturnType<typeof getPublicMeeting>>["meeting"];
-	timezone: string;
-	actorMemberId: string | null;
-	selfMemberId: string | null;
-	onSaved: () => void | Promise<void>;
-}) {
-	const [submitting, setSubmitting] = useState(false);
-
-	async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
-		e.preventDefault();
-		const form = new FormData(e.currentTarget);
-		setSubmitting(true);
-		try {
-			await updateMeeting({
-				data: {
-					meetingId: meeting.id,
-					actorMemberId,
-					selfMemberId,
-					// Current time, unchanged — TMOD can't reschedule.
-					scheduledAt: utcToZonedWallTime(
-						new Date(meeting.scheduledAt),
-						timezone,
-					),
-					theme: String(form.get("theme") ?? "").trim() || undefined,
-					location: String(form.get("location") ?? "").trim() || undefined,
-					wordOfTheDay:
-						String(form.get("wordOfTheDay") ?? "").trim() || undefined,
-					wodDefinition:
-						String(form.get("wodDefinition") ?? "").trim() || undefined,
-					wodExample: String(form.get("wodExample") ?? "").trim() || undefined,
-					notes: String(form.get("notes") ?? "").trim() || undefined,
-					reminders: String(form.get("reminders") ?? "").trim() || undefined,
-				},
-			});
-			toast.success("Meeting updated.");
-			await onSaved();
-		} catch (err) {
-			toast.error(errMessage(err));
-		} finally {
-			setSubmitting(false);
-		}
-	}
-
-	return (
-		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent>
-				<DialogHeader>
-					<DialogTitle>Edit meeting</DialogTitle>
-					<DialogDescription>
-						As Toastmaster you can edit the theme and details. Ask a VP
-						Education to change the date or time.
-					</DialogDescription>
-				</DialogHeader>
-				<form onSubmit={onSubmit} className="space-y-4">
-					<div className="space-y-2">
-						<Label htmlFor="theme">Theme</Label>
-						<Input id="theme" name="theme" defaultValue={meeting.theme ?? ""} />
-					</div>
-					<div className="space-y-2">
-						<Label htmlFor="location">Location</Label>
-						<Input
-							id="location"
-							name="location"
-							defaultValue={meeting.location ?? ""}
-						/>
-					</div>
-					<div className="space-y-2">
-						<Label htmlFor="wordOfTheDay">Word of the day</Label>
-						<Input
-							id="wordOfTheDay"
-							name="wordOfTheDay"
-							defaultValue={meeting.wordOfTheDay ?? ""}
-						/>
-					</div>
-					<div className="space-y-2">
-						<Label htmlFor="wodDefinition">Word of the day — definition</Label>
-						<Input
-							id="wodDefinition"
-							name="wodDefinition"
-							defaultValue={meeting.wodDefinition ?? ""}
-						/>
-					</div>
-					<div className="space-y-2">
-						<Label htmlFor="wodExample">
-							Word of the day — example sentence
-						</Label>
-						<Input
-							id="wodExample"
-							name="wodExample"
-							defaultValue={meeting.wodExample ?? ""}
-						/>
-					</div>
-					<div className="space-y-2">
-						<Label htmlFor="notes">Notes</Label>
-						<Input id="notes" name="notes" defaultValue={meeting.notes ?? ""} />
-					</div>
-					<div className="space-y-2">
-						<Label htmlFor="reminders">Reminders (projected slide)</Label>
-						<Textarea
-							id="reminders"
-							name="reminders"
-							rows={3}
-							defaultValue={meeting.reminders ?? ""}
-						/>
-					</div>
-					<DialogFooter>
-						<DialogClose asChild>
-							<Button type="button" variant="outline" disabled={submitting}>
-								Cancel
-							</Button>
-						</DialogClose>
-						<Button type="submit" disabled={submitting}>
-							{submitting ? (
-								<Loader2 className="size-4 animate-spin" />
-							) : (
-								"Save changes"
-							)}
-						</Button>
-					</DialogFooter>
-				</form>
-			</DialogContent>
-		</Dialog>
 	);
 }
