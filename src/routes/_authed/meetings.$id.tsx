@@ -61,6 +61,7 @@ import {
 	claimSlot,
 	confirmSlot,
 	moveSpeakerSlot,
+	reassignSlot,
 	releaseSlot,
 	removeRoleSlot,
 	removeSpeakerSlot,
@@ -203,6 +204,21 @@ function MeetingDetail() {
 				data: { slotId: slot.id, actorMemberId: currentMemberId },
 			});
 		},
+		// Self-serve (rendered under `canTakeOver` for any signed-in member): take
+		// over another member's filled slot. Trust-based (`reassignSlot`), same as
+		// the public surface — a signed-in member acts as their verified self.
+		takeover: async (slot) => {
+			if (!currentMemberId) {
+				throw new Error("Your account isn't linked to a club member yet.");
+			}
+			await reassignSlot({
+				data: {
+					slotId: slot.id,
+					memberId: currentMemberId,
+					actorMemberId: currentMemberId,
+				},
+			});
+		},
 		confirm: async (slot) => {
 			await confirmSlot({
 				data: { slotId: slot.id, actorMemberId: currentMemberId },
@@ -223,14 +239,24 @@ function MeetingDetail() {
 				data: { slotId: slot.id, actorMemberId: currentMemberId },
 			});
 		},
+		// `selfMemberId` lets a signed-in non-admin TMOD add/remove speakers via the
+		// server's tmod-self-assert path; an admin is authorized regardless.
 		addSpeaker: async () => {
 			await addSpeakerSlot({
-				data: { meetingId: meeting.id, actorMemberId: currentMemberId },
+				data: {
+					meetingId: meeting.id,
+					actorMemberId: currentMemberId,
+					selfMemberId: currentMemberId,
+				},
 			});
 		},
 		removeSpeaker: async () => {
 			await removeSpeakerSlot({
-				data: { meetingId: meeting.id, actorMemberId: currentMemberId },
+				data: {
+					meetingId: meeting.id,
+					actorMemberId: currentMemberId,
+					selfMemberId: currentMemberId,
+				},
 			});
 		},
 		onMutated: () => router.invalidate(),
