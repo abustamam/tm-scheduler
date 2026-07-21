@@ -16,7 +16,7 @@ import {
 } from "#/lib/agenda-runsheet";
 import { buildTimeline } from "#/lib/agenda-timing";
 import { resolveClubOrRedirect } from "#/lib/club-route";
-import { getMeeting } from "#/server/meetings";
+import { getPublicMeeting } from "#/server/meetings";
 
 const LAYOUTS: { id: AgendaLayout; label: string }[] = [
 	{ id: "timing", label: "Timing" },
@@ -40,7 +40,7 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/print")(
 		},
 		loader: async ({ params, location }) => {
 			const club = await resolveClubOrRedirect(params.clubId, location);
-			const data = await getMeeting({ data: params.meetingId });
+			const data = await getPublicMeeting({ data: params.meetingId });
 			if (data.meeting.clubId !== club.id) throw notFound();
 			return data;
 		},

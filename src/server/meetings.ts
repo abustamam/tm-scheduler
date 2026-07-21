@@ -26,6 +26,12 @@ import {
 	requireWordOfTheDayEditor,
 } from "./guards";
 import {
+	type Contact,
+	contactKey,
+	loadHolderContacts,
+	loadRosterWithContact,
+} from "./meeting-contacts-logic";
+import {
 	applyCompleteMeeting,
 	applyCreateMeeting,
 	applyMeetingUpdate,
@@ -194,17 +200,10 @@ async function loadMeetingDetail(
 		.where(eq(memberAvailability.meetingId, meetingId))
 		.orderBy(asc(members.name));
 
-	// Roster for the VPE assign picker — active members only. Kept out of the
-	// public/unauthenticated payload: only populated when the caller can manage.
-	const roster = canManage
-		? await db
-				.select({ id: members.id, name: members.name })
-				.from(members)
-				.where(
-					and(eq(members.clubId, meeting.clubId), eq(members.status, "active")),
-				)
-				.orderBy(asc(members.name))
-		: [];
+	// Roster for the VPE assign/recruit picker — active members with contact for
+	// tap-to-nudge (#37). Management-only: contact is never fetched for a public
+	// caller (loadRosterWithContact isn't called when !canManage).
+	const roster = canManage ? await loadRosterWithContact(meeting.clubId) : [];
 
 	// Club role template for the "+ Add role" picker — management-only, like the
 	// roster. Ordered like the roles page.
@@ -244,9 +243,34 @@ async function loadMeetingDetail(
 			)
 		: {};
 
+	// Holder contact for filled-slot confirm nudges (#37). Gated: only queried
+	// when the caller manages the club. `holderPhone`/`holderEmail` are null on
+	// the public payload.
+	const holderContacts = canManage
+		? await loadHolderContacts(
+				meeting.clubId,
+				slots.flatMap((s) => (s.assigneeId ? [s.assigneeId] : [])),
+				slots.flatMap((s) => (s.assigneeGuestId ? [s.assigneeGuestId] : [])),
+			)
+		: new Map<string, Contact>();
+
+	const slotsWithContact = slots.map((s) => {
+		const key = s.assigneeGuestId
+			? contactKey("guest", s.assigneeGuestId)
+			: s.assigneeId
+				? contactKey("member", s.assigneeId)
+				: null;
+		const c = key ? holderContacts.get(key) : undefined;
+		return {
+			...s,
+			holderPhone: c?.phone ?? null,
+			holderEmail: c?.email ?? null,
+		};
+	});
+
 	return {
 		meeting,
-		slots,
+		slots: slotsWithContact,
 		canManage,
 		roleRecency,
 		nextMeetingAt: nextMeeting?.scheduledAt ?? null,
@@ -275,6 +299,19 @@ export const getMeeting = createServerFn({ method: "GET" })
 		const sessionUser = await getSessionUser();
 		return loadMeetingDetail(meetingId, sessionUser?.id ?? null);
 	});
+
+/**
+ * Meeting detail for a PUBLIC surface (share link, present, print). Forces
+ * `canManage = false` regardless of the requester's session, so member/guest
+ * CONTACT and other manager-only data are NEVER shipped on a public payload —
+ * even when the visitor is a signed-in admin checking what members see. The soft
+ * honor-system gate on `/club/:clubId` must never carry PII (#37 / PR #284).
+ * `canManage` is deliberately NOT session-derived here: an authenticated admin
+ * hitting a public route still gets the public (contact-free) payload.
+ */
+export const getPublicMeeting = createServerFn({ method: "GET" })
+	.validator((meetingId: unknown) => uuid.parse(meetingId))
+	.handler(async ({ data: meetingId }) => loadMeetingDetail(meetingId, null));
 
 /**
  * The club's soonest upcoming (non-cancelled) meeting with its full agenda, or

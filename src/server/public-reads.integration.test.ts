@@ -52,11 +52,17 @@ async function getMeetingPublic(meetingId: string) {
 		columns: { timezone: true },
 	});
 
-	// Slot query (simplified — we just need to verify it works)
-	const slots = await testDb
+	// Slot query (simplified — we just need to verify it works). Public path
+	// never carries holder contact (#37): holderPhone/holderEmail are always null.
+	const rawSlots = await testDb
 		.select({ id: roleSlots.id, status: roleSlots.status })
 		.from(roleSlots)
 		.where(eq(roleSlots.meetingId, meetingId));
+	const slots = rawSlots.map((s) => ({
+		...s,
+		holderPhone: null as string | null,
+		holderEmail: null as string | null,
+	}));
 
 	const unavailableMembers = await testDb
 		.select({ id: members.id, name: members.name })
@@ -69,6 +75,12 @@ async function getMeetingPublic(meetingId: string) {
 		meeting,
 		slots,
 		canManage,
+		roster: [] as Array<{
+			id: string;
+			name: string;
+			phone: string | null;
+			email: string | null;
+		}>,
 		timezone: club?.timezone ?? "UTC",
 		unavailableMembers,
 		unavailableMemberIds: unavailableMembers.map((m) => m.id),
@@ -196,6 +208,22 @@ describe.skipIf(!hasTestDb)("public reads (no session)", () => {
 			{ id: seed.memberId, name: "Member User" },
 		]);
 		expect(res?.unavailableMemberIds).toEqual([seed.memberId]);
+	});
+
+	// Documents the public payload shape (no contact). NOTE: this asserts against
+	// the mirror, so real regression protection lives in the source-structural
+	// guard meetings-contact-gate.guard.test.ts, not here.
+	it("PII guard: the public (no-session) payload carries no member contact", async () => {
+		const res = await getMeetingPublic(seed.meetingId);
+		expect(res?.roster ?? []).toEqual([]);
+		for (const slot of res?.slots ?? []) {
+			expect(
+				(slot as { holderPhone?: unknown }).holderPhone ?? null,
+			).toBeNull();
+			expect(
+				(slot as { holderEmail?: unknown }).holderEmail ?? null,
+			).toBeNull();
+		}
 	});
 
 	// -------------------------------------------------------------------------
