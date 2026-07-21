@@ -10,8 +10,8 @@ import type { OnboardingChecklistStatus } from "#/server/onboarding-checklist-lo
  *  the "Import your roster" checklist item and the show/dismiss gate. */
 export const CHECKLIST_MEMBER_THRESHOLD = 5;
 
-/** The routes a checklist item deep-links to (a subset of `OfficerTaskTarget`,
- *  src/lib/officer-tasks.ts — all static, param-free paths). */
+/** The routes a checklist item deep-links to — all static, param-free admin
+ *  paths that already exist as routes. */
 export type OnboardingChecklistTarget =
 	| "/admin/club-settings"
 	| "/roster"
