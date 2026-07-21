@@ -281,6 +281,13 @@
       "when": 1784508942581,
       "tag": "0039_general_evaluator_is_leadership",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1784605008324,
+      "tag": "0040_complex_sentinel",
+      "breakpoints": true
     }
   ]
 }

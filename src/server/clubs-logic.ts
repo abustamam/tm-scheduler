@@ -64,6 +64,7 @@ export type ClubProfile = {
 	district: string | null;
 	mission: string | null;
 	meetingSchedule: string | null;
+	defaultCountryCode: string | null;
 };
 
 /** The free-text profile fields for the club-settings form. Null if unset. */
@@ -76,6 +77,7 @@ export async function getClubProfile(
 			district: clubs.district,
 			mission: clubs.mission,
 			meetingSchedule: clubs.meetingSchedule,
+			defaultCountryCode: clubs.defaultCountryCode,
 		})
 		.from(clubs)
 		.where(eq(clubs.id, clubId))
@@ -92,11 +94,25 @@ const emptyToNull = z
 	.nullable()
 	.optional();
 
+// Default international dialing code (#295). Normalized to `+<digits>` (or null)
+// so member/guest phone numbers lacking a country code can be coalesced to a
+// valid WhatsApp number.
+const countryCode = z
+	.string()
+	.trim()
+	.transform((s) => {
+		const digits = s.replace(/\D/g, "");
+		return digits === "" ? null : `+${digits}`;
+	})
+	.nullable()
+	.optional();
+
 export const clubProfileSchema = z.object({
 	clubId: z.string().uuid(),
 	district: emptyToNull,
 	mission: emptyToNull,
 	meetingSchedule: emptyToNull,
+	defaultCountryCode: countryCode,
 });
 export type ClubProfileInput = z.infer<typeof clubProfileSchema>;
 
@@ -109,6 +125,7 @@ export async function applyClubProfileUpdate(input: ClubProfileInput) {
 			district: input.district ?? null,
 			mission: input.mission ?? null,
 			meetingSchedule: input.meetingSchedule ?? null,
+			defaultCountryCode: input.defaultCountryCode ?? null,
 		})
 		.where(eq(clubs.id, input.clubId))
 		.returning({ id: clubs.id });

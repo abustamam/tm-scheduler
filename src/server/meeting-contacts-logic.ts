@@ -5,7 +5,18 @@
 // real code. See `docs/superpowers/specs/2026-07-20-tap-to-nudge-design.md`.
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "#/db";
-import { guests, members } from "#/db/schema";
+import { clubs, guests, members } from "#/db/schema";
+import { toE164 } from "#/lib/phone";
+
+/** The club's default international dialing code (#295), for phone normalization. */
+async function clubDefaultCountryCode(clubId: string): Promise<string | null> {
+	const [row] = await db
+		.select({ cc: clubs.defaultCountryCode })
+		.from(clubs)
+		.where(eq(clubs.id, clubId))
+		.limit(1);
+	return row?.cc ?? null;
+}
 
 export interface Contact {
 	phone: string | null;
@@ -23,20 +34,26 @@ export function contactKey(kind: "member" | "guest", id: string): string {
 	return `${kind}:${id}`;
 }
 
-/** Active members of the club with contact — the recruiting pool. */
+/** Active members of the club with contact — the recruiting pool. Phone is
+ *  normalized to E.164 with the club default country code (#295) so the
+ *  tap-to-nudge WhatsApp link is a valid full number. */
 export async function loadRosterWithContact(
 	clubId: string,
 ): Promise<RosterContact[]> {
-	return db
-		.select({
-			id: members.id,
-			name: members.name,
-			phone: members.phone,
-			email: members.email,
-		})
-		.from(members)
-		.where(and(eq(members.clubId, clubId), eq(members.status, "active")))
-		.orderBy(members.name);
+	const [rows, cc] = await Promise.all([
+		db
+			.select({
+				id: members.id,
+				name: members.name,
+				phone: members.phone,
+				email: members.email,
+			})
+			.from(members)
+			.where(and(eq(members.clubId, clubId), eq(members.status, "active")))
+			.orderBy(members.name),
+		clubDefaultCountryCode(clubId),
+	]);
+	return rows.map((r) => ({ ...r, phone: toE164(r.phone, cc) }));
 }
 
 /**
@@ -52,6 +69,10 @@ export async function loadHolderContacts(
 	guestIds: string[],
 ): Promise<Map<string, Contact>> {
 	const map = new Map<string, Contact>();
+	if (memberIds.length === 0 && guestIds.length === 0) return map;
+
+	// Phone normalized to E.164 with the club default country code (#295).
+	const cc = await clubDefaultCountryCode(clubId);
 
 	if (memberIds.length > 0) {
 		const rows = await db
@@ -59,7 +80,10 @@ export async function loadHolderContacts(
 			.from(members)
 			.where(and(eq(members.clubId, clubId), inArray(members.id, memberIds)));
 		for (const r of rows) {
-			map.set(contactKey("member", r.id), { phone: r.phone, email: r.email });
+			map.set(contactKey("member", r.id), {
+				phone: toE164(r.phone, cc),
+				email: r.email,
+			});
 		}
 	}
 
@@ -69,7 +93,10 @@ export async function loadHolderContacts(
 			.from(guests)
 			.where(and(eq(guests.clubId, clubId), inArray(guests.id, guestIds)));
 		for (const r of rows) {
-			map.set(contactKey("guest", r.id), { phone: r.phone, email: r.email });
+			map.set(contactKey("guest", r.id), {
+				phone: toE164(r.phone, cc),
+				email: r.email,
+			});
 		}
 	}
 

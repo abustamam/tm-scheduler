@@ -149,6 +149,11 @@ export const clubs = pgTable("clubs", {
 	district: text("district"),
 	mission: text("mission"),
 	meetingSchedule: text("meeting_schedule"),
+	// Default international dialing code (e.g. "+1") applied to member/guest phone
+	// numbers that lack one, so the tap-to-nudge WhatsApp link (#37) is a valid
+	// full E.164 number. Nullable — unset means numbers without a country code
+	// simply don't get a WhatsApp link (#295).
+	defaultCountryCode: text("default_country_code"),
 	// Default meeting length in minutes. New meetings inherit this at insert
 	// (copied onto the meeting row) so a later change here never silently moves
 	// the end time of meetings already scheduled. Non-null with a sensible
