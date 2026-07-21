@@ -47,9 +47,12 @@ describe.skipIf(!hasTestDb)("account invites + claim (#266)", () => {
 		return id;
 	}
 
-	/** Insert a (person, membership) pair in the seeded club. */
+	/** Insert a (person, membership) pair in the seeded club. `email` sets both the
+	 *  person and membership email; pass `memberEmail` to set the membership email
+	 *  independently (e.g. the VPE-edited case where only `members.email` is set). */
 	async function seedMember(opts: {
 		email?: string | null;
+		memberEmail?: string | null;
 		userId?: string | null;
 		clubRole?: "admin" | "member";
 	}): Promise<{ memberId: string; personId: string }> {
@@ -68,7 +71,9 @@ describe.skipIf(!hasTestDb)("account invites + claim (#266)", () => {
 				clubId: club.clubId,
 				personId: person.id,
 				name: "Picked Person",
-				email: opts.email ?? null,
+				email:
+					(opts.memberEmail !== undefined ? opts.memberEmail : opts.email) ??
+					null,
 				clubRole: opts.clubRole ?? "member",
 			})
 			.returning({ id: members.id });
@@ -102,26 +107,45 @@ describe.skipIf(!hasTestDb)("account invites + claim (#266)", () => {
 		expect((await personRow(personId))?.userId).toBe(userId);
 	});
 
-	it("adopts an emailless self-add Person under the verified email", async () => {
+	it("refuses an emailless Person on the public claim — never adopts under an arbitrary address (#266 takeover fix)", async () => {
 		const { claimPersonForUser } = await import("./account-invite-logic");
-		const { memberId, personId } = await seedMember({ email: null });
-		const email = `adopt-${randomUUID()}@test.example`;
+		// No email on the person OR the membership → un-claimable by anyone.
+		const { memberId, personId } = await seedMember({
+			email: null,
+			memberEmail: null,
+		});
+		const userId = await seedUser(`stranger-${randomUUID()}@test.example`);
+
+		expect(await claimPersonForUser({ memberId, userId })).toBe("needs_invite");
+		const row = await personRow(personId);
+		expect(row?.userId).toBeNull(); // not seized
+		expect(row?.email).toBeNull(); // email NOT overwritten (no lockout)
+	});
+
+	it("links via the membership email when the person has none, and stamps it onto the Person (VPE-edited case)", async () => {
+		const { claimPersonForUser } = await import("./account-invite-logic");
+		const email = `edited-${randomUUID()}@test.example`;
+		// people.email null but members.email set (what applyMemberEdit produces).
+		const { memberId, personId } = await seedMember({
+			email: null,
+			memberEmail: email,
+		});
 		const userId = await seedUser(email);
 
 		expect(await claimPersonForUser({ memberId, userId })).toBe("linked");
 		const row = await personRow(personId);
 		expect(row?.userId).toBe(userId);
-		// The verified email is written onto the previously-emailless Person.
+		// The proven on-file email is stamped onto the Person for future auto-link.
 		expect(row?.email?.toLowerCase()).toBe(email.toLowerCase());
 	});
 
-	it("refuses to adopt an emailless Person that holds an admin role (no silent escalation)", async () => {
+	it("refuses when the membership email does not match the verified address", async () => {
 		const { claimPersonForUser } = await import("./account-invite-logic");
 		const { memberId, personId } = await seedMember({
 			email: null,
-			clubRole: "admin",
+			memberEmail: `onfile-${randomUUID()}@test.example`,
 		});
-		const userId = await seedUser(`stranger-${randomUUID()}@test.example`);
+		const userId = await seedUser(`other-${randomUUID()}@test.example`);
 
 		expect(await claimPersonForUser({ memberId, userId })).toBe(
 			"email_mismatch",

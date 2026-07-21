@@ -25,6 +25,7 @@ type ClaimView =
 	| "already_yours"
 	| "already_other"
 	| "email_mismatch"
+	| "needs_invite"
 	| "not_found"
 	| "needs_signin";
 
@@ -69,6 +70,11 @@ const COPY: Record<
 	email_mismatch: {
 		title: "Couldn't attach this name",
 		body: "We couldn't automatically attach this name to your account — the email on file doesn't match. You're signed in; ask a club officer to send you an invite to the right address.",
+		success: false,
+	},
+	needs_invite: {
+		title: "Ask for an invite",
+		body: "This name doesn't have an email on file yet, so it can't be claimed here. Ask a club officer to send you an invite — that link will attach it to your account.",
 		success: false,
 	},
 	not_found: {

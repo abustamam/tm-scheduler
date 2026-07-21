@@ -11,23 +11,14 @@
 //    magic link should go to; the wrapper sends it via `auth.api.signInMagicLink`.
 //  - `claimPersonForUser` — the post-sign-in finish step for BOTH the admin
 //    invite and the public "This is me" claim (Part B). Binds the picked Person
-//    to the freshly-signed-in account, IDEMPOTENTLY and SAFELY (never steals a
-//    Person already linked to a different account; never adopts a Person whose
-//    real email differs; guards privilege escalation on emailless admins).
+//    to the freshly-signed-in account, IDEMPOTENTLY and SAFELY: it links ONLY
+//    when the verified sign-in email matches the member's on-file address, so
+//    nobody can adopt another member's identity by picking their name. A member
+//    with NO email on file anywhere is un-claimable on the public surface (it
+//    needs an officer invite) — never adopted under an arbitrary address.
 import { and, eq, isNull } from "drizzle-orm";
 import { db } from "#/db";
 import { clubs, members, people, user } from "#/db/schema";
-
-/** Does this Person hold an `admin` club role in ANY club? Used to block the
- *  emailless-adoption path from silently granting admin (see claimPersonForUser). */
-async function personHoldsAdminRole(personId: string): Promise<boolean> {
-	const [row] = await db
-		.select({ id: members.id })
-		.from(members)
-		.where(and(eq(members.personId, personId), eq(members.clubRole, "admin")))
-		.limit(1);
-	return Boolean(row);
-}
 
 export type InvitePrepOutcome = "ready" | "already_joined" | "no_email";
 
@@ -114,22 +105,26 @@ export type ClaimOutcome =
 	| "already_yours"
 	| "already_other"
 	| "email_mismatch"
+	| "needs_invite"
 	| "not_found";
 
 /**
  * Bind the Person behind `memberId` to the signed-in `userId` (the finish step
  * for invite-accept AND the public claim). SECURITY — the whole point of this
- * function is that it stays safe on a public, honor-system surface:
+ * function is that it stays safe on a public, honor-system surface. Linking
+ * ALWAYS requires the verified sign-in email to match the member's on-file
+ * address, so picking a name can never adopt someone else's identity:
  *   - `already_yours`  — the Person is already linked to THIS user (idempotent).
  *   - `already_other`  — linked to a DIFFERENT user: never reassigned (no theft).
- *   - `email_mismatch` — the Person has a real email that isn't the one the user
- *                        just proved they own: not adopted (you can't grab a
- *                        Person with someone else's address).
- *   - `linked`         — the Person was unlinked and adoptable:
- *        · its email already matches the verified sign-in email, OR
- *        · it had NO email (a walk-in self-add): we set the verified email and
- *          link — but ONLY when the Person holds no admin role anywhere, so an
- *          emailless officer can't be silently claimed into admin.
+ *   - `email_mismatch` — the member has an on-file email that isn't the one the
+ *                        user just proved they own: not adopted.
+ *   - `needs_invite`   — the member has NO email on file anywhere: un-claimable
+ *                        on the public surface (an officer must invite them),
+ *                        never adopted under an arbitrary verified address.
+ *   - `linked`         — the on-file email matches the verified sign-in email.
+ * "On file" coalesces `people.email` with the membership's `members.email`
+ * (`applyMemberEdit` writes the latter but not the former), so a member the VPE
+ * gave an email still uses the email-match path, not the un-claimable one.
  * The link write is guarded on `user_id IS NULL` and re-checks on a 0-row result
  * so two concurrent claims resolve deterministically.
  */
@@ -138,7 +133,11 @@ export async function claimPersonForUser(input: {
 	userId: string;
 }): Promise<ClaimOutcome> {
 	const [member] = await db
-		.select({ id: members.id, personId: members.personId })
+		.select({
+			id: members.id,
+			personId: members.personId,
+			email: members.email,
+		})
 		.from(members)
 		.where(eq(members.id, input.memberId))
 		.limit(1);
@@ -155,31 +154,29 @@ export async function claimPersonForUser(input: {
 		return person.userId === input.userId ? "already_yours" : "already_other";
 	}
 
+	// The address the club has for this member — on the Person OR the membership
+	// row. NO email anywhere ⇒ un-claimable on the public surface: an officer must
+	// invite them, so nobody adopts another member's identity by picking a name.
+	const onFileEmail =
+		(person.email ?? member.email)?.trim().toLowerCase() || null;
+	if (!onFileEmail) return "needs_invite";
+
 	// The signed-in account's email is the address the magic link proved ownership
-	// of — the only credential we trust for adoption.
+	// of — the only credential we trust. Link ONLY when it matches the on-file one.
 	const [account] = await db
 		.select({ email: user.email })
 		.from(user)
 		.where(eq(user.id, input.userId))
 		.limit(1);
 	const verifiedEmail = account?.email?.trim().toLowerCase() ?? null;
+	if (!verifiedEmail || onFileEmail !== verifiedEmail) return "email_mismatch";
 
-	if (person.email) {
-		// Real email on file: only link when it matches the verified address.
-		if (!verifiedEmail || person.email.trim().toLowerCase() !== verifiedEmail) {
-			return "email_mismatch";
-		}
-		return await bindPerson({ personId: person.id, userId: input.userId });
-	}
-
-	// Emailless Person (a public self-add): adopt it under the verified email, but
-	// never let that silently confer admin.
-	if (!verifiedEmail) return "email_mismatch";
-	if (await personHoldsAdminRole(person.id)) return "email_mismatch";
+	// Match proven. Stamp the address onto the Person if it lived only on the
+	// membership row, so future sign-in auto-link resolves it directly.
 	return await bindPerson({
 		personId: person.id,
 		userId: input.userId,
-		setEmail: verifiedEmail,
+		setEmail: person.email ? undefined : onFileEmail,
 	});
 }
 
