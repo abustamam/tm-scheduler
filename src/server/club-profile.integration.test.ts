@@ -96,4 +96,23 @@ describe.skipIf(!hasTestDb)("club profile logic", () => {
 			}),
 		).rejects.toThrow("Club not found.");
 	});
+
+	it("saves and normalizes the default country code, and clears on blank (#295)", async () => {
+		// Entered without a `+` → normalized to `+1` by the schema.
+		const input = clubProfileSchema.parse({
+			clubId: seed.clubId,
+			defaultCountryCode: "1",
+		});
+		expect(input.defaultCountryCode).toBe("+1");
+		await applyClubProfileUpdate(input);
+		expect((await getClubProfile(seed.clubId))?.defaultCountryCode).toBe("+1");
+
+		// Blank clears it back to null.
+		await applyClubProfileUpdate(
+			clubProfileSchema.parse({ clubId: seed.clubId, defaultCountryCode: "" }),
+		);
+		expect(
+			(await getClubProfile(seed.clubId))?.defaultCountryCode,
+		).toBeNull();
+	});
 });

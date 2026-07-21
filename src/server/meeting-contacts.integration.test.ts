@@ -1,5 +1,6 @@
+import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { guests, members } from "#/db/schema";
+import { clubs, guests, members } from "#/db/schema";
 import {
 	cleanup,
 	hasTestDb,
@@ -71,12 +72,13 @@ describe.skipIf(!hasTestDb)("meeting contacts (integration)", () => {
 	});
 
 	it("loadRosterWithContact returns active members with phone/email", async () => {
+		// Stored as E.164 (already has a country code) → passed through as-is.
 		await addMember(seeded.clubId, "Has Both", {
-			phone: "14155550001",
+			phone: "+14155550001",
 			email: "both@x.io",
 		});
 		await addMember(seeded.clubId, "Inactive", {
-			phone: "14155550002",
+			phone: "+14155550002",
 			status: "inactive",
 		});
 
@@ -85,13 +87,38 @@ describe.skipIf(!hasTestDb)("meeting contacts (integration)", () => {
 		expect(names).toContain("Has Both");
 		expect(names).not.toContain("Inactive");
 		const both = roster.find((r) => r.name === "Has Both");
-		expect(both?.phone).toBe("14155550001");
+		expect(both?.phone).toBe("+14155550001");
 		expect(both?.email).toBe("both@x.io");
+	});
+
+	it("normalizes a country-code-less phone with the club default (#295)", async () => {
+		await testDb
+			.update(clubs)
+			.set({ defaultCountryCode: "+1" })
+			.where(eq(clubs.id, seeded.clubId));
+		const memberId = await addMember(seeded.clubId, "Local Number", {
+			phone: "(415) 555-2671",
+		});
+
+		const roster = await loadRosterWithContact(seeded.clubId);
+		expect(roster.find((r) => r.name === "Local Number")?.phone).toBe(
+			"+14155552671",
+		);
+
+		const map = await loadHolderContacts(seeded.clubId, [memberId], []);
+		expect(map.get(`member:${memberId}`)?.phone).toBe("+14155552671");
+	});
+
+	it("leaves a country-code-less phone null when the club has no default", async () => {
+		await addMember(seeded.clubId, "No CC", { phone: "415-555-2671" });
+		const roster = await loadRosterWithContact(seeded.clubId);
+		// No `+`, no club default → not a reliable WhatsApp number.
+		expect(roster.find((r) => r.name === "No CC")?.phone).toBeNull();
 	});
 
 	it("loadHolderContacts resolves member and guest contact by id", async () => {
 		const memberId = await addMember(seeded.clubId, "Holder M", {
-			phone: "14155550003",
+			phone: "+14155550003",
 			email: "m@x.io",
 		});
 		const guestId = await addGuest(seeded.clubId, "Holder G", {
@@ -100,7 +127,7 @@ describe.skipIf(!hasTestDb)("meeting contacts (integration)", () => {
 
 		const map = await loadHolderContacts(seeded.clubId, [memberId], [guestId]);
 		expect(map.get(`member:${memberId}`)).toEqual({
-			phone: "14155550003",
+			phone: "+14155550003",
 			email: "m@x.io",
 		});
 		expect(map.get(`guest:${guestId}`)).toEqual({

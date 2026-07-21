@@ -56,6 +56,7 @@ function ClubSettings() {
 					district: String(form.get("district") ?? ""),
 					mission: String(form.get("mission") ?? ""),
 					meetingSchedule: String(form.get("meetingSchedule") ?? ""),
+					defaultCountryCode: String(form.get("defaultCountryCode") ?? ""),
 				},
 			});
 			toast.success("Club profile saved.");
@@ -134,6 +135,19 @@ function ClubSettings() {
 						className={textareaClass}
 						placeholder="Your club's mission statement"
 					/>
+				</div>
+				<div className="space-y-2">
+					<Label htmlFor="defaultCountryCode">Default country code</Label>
+					<Input
+						id="defaultCountryCode"
+						name="defaultCountryCode"
+						defaultValue={profile?.defaultCountryCode ?? ""}
+						placeholder="e.g. +1"
+					/>
+					<p className="text-xs text-muted-foreground">
+						Added to member phone numbers that don't include a country code, so
+						the "Nudge on WhatsApp" links work. Leave blank to skip.
+					</p>
 				</div>
 				<Button type="submit" disabled={submitting} className="w-full">
 					{submitting ? (
