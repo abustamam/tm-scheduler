@@ -190,6 +190,7 @@ function MeetingView() {
 		isTmod,
 		isGrammarian,
 		isEditableWindow: !over,
+		isSignedIn: session !== null,
 	});
 	const viewer = over ? lockedViewer(baseViewer) : baseViewer;
 

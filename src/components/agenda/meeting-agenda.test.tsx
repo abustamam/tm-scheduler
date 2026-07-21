@@ -130,20 +130,21 @@ describe("MeetingAgenda capability gating", () => {
 				isTmod: false,
 				isGrammarian: false,
 				isEditableWindow: true,
+				isSignedIn: true,
 			}),
 			[filled],
 		);
 		expect(screen.queryByText("Open roles:")).toBeNull();
 		expect(screen.queryByRole("button", { name: "Confirm" })).toBeNull();
 		expect(screen.queryByRole("button", { name: /Reassign/ })).toBeNull();
-		// #302 parity: a signed-in non-manager gets the self-serve take-over, same
-		// as a self-asserted public member — the unified viewer grants it on any
-		// identity. Only the manager-only controls above stay hidden.
+		// A signed-in non-manager keeps self-serve take-over; only the
+		// manager-only controls above stay hidden. (Take-over is now
+		// signed-in-only — see the self-asserted-member case below.)
 		expect(screen.getByText("take over")).toBeTruthy();
 		expect(screen.getByText("Filled")).toBeTruthy();
 	});
 
-	it("shows takeover but no admin controls for a self-asserted member", () => {
+	it("hides takeover for a self-asserted (name-pick) member", () => {
 		const filled = slot({
 			status: "claimed",
 			assigneeId: "other",
@@ -159,7 +160,7 @@ describe("MeetingAgenda capability gating", () => {
 			}),
 			[filled],
 		);
-		expect(screen.getByText("take over")).toBeTruthy();
+		expect(screen.queryByText("take over")).toBeNull();
 		expect(screen.queryByRole("button", { name: "Confirm" })).toBeNull();
 		expect(screen.queryByText("Open roles:")).toBeNull();
 		// Not TMOD → no assign picker.

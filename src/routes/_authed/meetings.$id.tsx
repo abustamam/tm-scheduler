@@ -178,6 +178,7 @@ function MeetingDetail() {
 		isTmod,
 		isGrammarian,
 		isEditableWindow: !locked && !over,
+		isSignedIn: true,
 	});
 	const viewer = locked ? lockedViewer(baseViewer) : baseViewer;
 	const pairedIds = pairedRoleIds(clubRoles);
