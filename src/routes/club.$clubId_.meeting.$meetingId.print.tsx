@@ -7,6 +7,7 @@ import {
 	MeetingAgendaPrint,
 } from "#/components/agenda/meeting-agenda-print";
 import { OfflineBadge } from "#/components/agenda/offline-badge";
+import { ShareLinkButton } from "#/components/share-link-button";
 import { buildRosterEntries } from "#/lib/agenda";
 import {
 	applyFlex,
@@ -14,6 +15,7 @@ import {
 	TABLE_TOPICS_MAX,
 	TABLE_TOPICS_MIN,
 } from "#/lib/agenda-runsheet";
+import { buildAgendaSharePath } from "#/lib/agenda-share-url";
 import { buildTimeline } from "#/lib/agenda-timing";
 import { resolveClubOrRedirect } from "#/lib/club-route";
 import { meetingPdfBasename } from "#/lib/pdf-filename";
@@ -31,12 +33,15 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/print")(
 	{
 		validateSearch: (
 			search: Record<string, unknown>,
-		): { layout: AgendaLayout } => {
+		): { layout: AgendaLayout; chrome?: "none" } => {
 			const l = search.layout;
 			return {
 				layout: LAYOUT_IDS.includes(l as AgendaLayout)
 					? (l as AgendaLayout)
 					: "timing",
+				// `chrome=none` is the clean shareable view (#334): no layout selector,
+				// offline badge, or timing banner — just the agenda + a Print button.
+				chrome: search.chrome === "none" ? "none" : undefined,
 			};
 		},
 		loader: async ({ params, location }) => {
@@ -87,8 +92,10 @@ function timeRange(startsAt: Date, endsAt: Date, timeZone: string): string {
 }
 
 function PrintAgenda() {
-	const { layout } = Route.useSearch();
+	const { layout, chrome } = Route.useSearch();
 	const { clubId: clubIdParam, meetingId } = Route.useParams();
+	// Clean shareable view: hide the editing chrome, keep only the Print button.
+	const bare = chrome === "none";
 	const {
 		meeting,
 		slots,
@@ -157,24 +164,32 @@ function PrintAgenda() {
 
 	return (
 		<div>
-			<OfflineBadge id={meetingId} />
+			{bare ? null : <OfflineBadge id={meetingId} />}
 			<div className="no-print" style={toolbarStyle}>
-				<div style={{ display: "flex", gap: 4 }}>
-					{LAYOUTS.map((l) => (
-						<Link
-							key={l.id}
-							to="/club/$clubId/meeting/$meetingId/print"
-							params={{ clubId: clubIdParam, meetingId }}
-							search={{ layout: l.id }}
-							style={{
-								...tabStyle,
-								...(l.id === layout ? tabActiveStyle : null),
-							}}
-						>
-							{l.label}
-						</Link>
-					))}
-				</div>
+				{bare ? null : (
+					<div style={{ display: "flex", gap: 4 }}>
+						{LAYOUTS.map((l) => (
+							<Link
+								key={l.id}
+								to="/club/$clubId/meeting/$meetingId/print"
+								params={{ clubId: clubIdParam, meetingId }}
+								search={{ layout: l.id }}
+								style={{
+									...tabStyle,
+									...(l.id === layout ? tabActiveStyle : null),
+								}}
+							>
+								{l.label}
+							</Link>
+						))}
+					</div>
+				)}
+				{bare ? null : (
+					<ShareLinkButton
+						path={buildAgendaSharePath(clubIdParam, meetingId, layout)}
+						label="Copy shareable link"
+					/>
+				)}
 				<button
 					type="button"
 					onClick={() => window.print()}
@@ -183,7 +198,7 @@ function PrintAgenda() {
 					Print
 				</button>
 			</div>
-			{flex.status !== "exact" ? (
+			{!bare && flex.status !== "exact" ? (
 				<div
 					className="no-print"
 					style={{
