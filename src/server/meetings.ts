@@ -327,19 +327,6 @@ export const getMeeting = createServerFn({ method: "GET" })
 		return loadMeetingDetail(meetingId, sessionUser?.id ?? null);
 	});
 
-/**
- * Meeting detail for a PUBLIC surface (share link, present, print). Forces
- * `canManage = false` regardless of the requester's session, so member/guest
- * CONTACT and other manager-only data are NEVER shipped on a public payload —
- * even when the visitor is a signed-in admin checking what members see. The soft
- * honor-system gate on `/club/:clubId` must never carry PII (#37 / PR #284).
- * `canManage` is deliberately NOT session-derived here: an authenticated admin
- * hitting a public route still gets the public (contact-free) payload.
- */
-export const getPublicMeeting = createServerFn({ method: "GET" })
-	.validator((meetingId: unknown) => uuid.parse(meetingId))
-	.handler(async ({ data: meetingId }) => loadMeetingDetail(meetingId, null));
-
 const meetingKeyInput = z.object({ clubId: uuid, key: z.string().min(1) });
 
 /**
@@ -358,8 +345,11 @@ export const getMeetingByKey = createServerFn({ method: "GET" })
 	});
 
 /**
- * Public meeting detail resolved by URL key — forces `canManage = false` (no PII),
- * exactly like `getPublicMeeting`. For the present/print/anonymous surfaces.
+ * Public meeting detail resolved by URL key (share link, present, print). Forces
+ * `canManage = false` regardless of the requester's session, so member/guest
+ * CONTACT and other manager-only data are NEVER shipped on a public payload —
+ * even to a signed-in admin checking what members see. The soft honor-system gate
+ * on `/club/:clubId` must never carry PII (#37 / PR #284).
  */
 export const getPublicMeetingByKey = createServerFn({ method: "GET" })
 	.validator((input: unknown) => meetingKeyInput.parse(input))

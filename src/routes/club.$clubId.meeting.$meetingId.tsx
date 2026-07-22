@@ -61,16 +61,16 @@ import {
 
 export const Route = createFileRoute("/club/$clubId/meeting/$meetingId")({
 	loader: async ({ params, context }) => {
-		// Fire both in parallel. getPublicMeeting stays fatal (the agenda is the page)
-		// EXCEPT when the meeting row is simply absent (stale/expired link) —
-		// that translates to notFound() so notFoundComponent renders instead of
+		// Fire both in parallel. getPublicMeetingByKey stays fatal (the agenda is
+		// the page) EXCEPT when the key resolves to no meeting (stale/expired link)
+		// — that translates to notFound() so notFoundComponent renders instead of
 		// the generic error boundary. Other failures (DB errors, etc.) stay fatal.
 		// The upcoming list is non-fatal — a failure degrades to no strip.
 		// A signed-in member of this club (shell-wrapped) loads via the session-aware
-		// getMeeting — an admin regains management + contact; a non-admin member
-		// gets the same non-manager view. Anonymous visitors use getPublicMeeting
-		// (hard canManage=false, never any PII). Both call the same resolver, so
-		// the loader shape is identical either way (#317).
+		// getMeetingByKey — an admin regains management + contact; a non-admin member
+		// gets the same non-manager view. Anonymous visitors use getPublicMeetingByKey
+		// (hard canManage=false, never any PII). Both resolve the $meetingId key the
+		// same way, so the loader shape is identical either way (#317).
 		const load = context.shell ? getMeetingByKey : getPublicMeetingByKey;
 		const meetingPromise = load({
 			data: { clubId: context.clubUuid, key: params.meetingId },
