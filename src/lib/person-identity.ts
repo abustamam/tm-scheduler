@@ -31,3 +31,36 @@ export function pickKeeper<T extends KeeperCandidate>(
 		return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 	})[0];
 }
+
+/**
+ * The earlier of two nullable dates (null = unknown, treated as "no lower
+ * bound"). Shared by `membership-collapse-logic.ts` (joined_at reconcile) and
+ * `people-merge-logic.ts` (original_join_date reconcile) so the two byte-
+ * identical local copies don't drift apart.
+ */
+export function earliestDate(a: Date | null, b: Date | null): Date | null {
+	if (!a) return b;
+	if (!b) return a;
+	return a < b ? a : b;
+}
+
+/**
+ * Does the absorbed person's enrollment survive as the keeper's on a shared
+ * path? `keeper: null` means the keeper isn't enrolled in that path (the
+ * absorbed's enrollment always moves in that case). Mirrors the merge's
+ * keep-more-progressed rule: more approved levels wins, ties broken by the
+ * fresher `lastSyncedAt`. Shared by `mergeEnrollments` (the write path in
+ * `people-merge-logic.ts`) and `getMergePreview` (the read-only preview in
+ * `people-logic.ts`) so the preview can never overstate what a merge will do.
+ */
+export function absorbedEnrollmentMoves(
+	absorbed: { approved: number; lastSyncedAt: Date },
+	keeper: { approved: number; lastSyncedAt: Date } | null,
+): boolean {
+	if (keeper === null) return true;
+	return (
+		absorbed.approved > keeper.approved ||
+		(absorbed.approved === keeper.approved &&
+			absorbed.lastSyncedAt > keeper.lastSyncedAt)
+	);
+}

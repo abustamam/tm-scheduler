@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { type KeeperCandidate, pickKeeper } from "./person-identity";
+import {
+	absorbedEnrollmentMoves,
+	earliestDate,
+	type KeeperCandidate,
+	pickKeeper,
+} from "./person-identity";
 
 const c = (o: Partial<KeeperCandidate> & { id: string }): KeeperCandidate => ({
 	linked: false,
@@ -53,5 +58,73 @@ describe("pickKeeper", () => {
 		const copy = [...input];
 		pickKeeper(input);
 		expect(input).toEqual(copy);
+	});
+});
+
+describe("earliestDate", () => {
+	it("returns the other date when one side is null", () => {
+		const d = new Date("2020-01-01");
+		expect(earliestDate(null, d)).toBe(d);
+		expect(earliestDate(d, null)).toBe(d);
+	});
+
+	it("returns null when both sides are null", () => {
+		expect(earliestDate(null, null)).toBeNull();
+	});
+
+	it("returns the earlier of two dates", () => {
+		const older = new Date("2020-01-01");
+		const newer = new Date("2024-01-01");
+		expect(earliestDate(older, newer)).toBe(older);
+		expect(earliestDate(newer, older)).toBe(older);
+	});
+});
+
+describe("absorbedEnrollmentMoves", () => {
+	const at = (iso: string) => new Date(iso);
+
+	it("moves when the keeper isn't enrolled in that path (keeper = null)", () => {
+		expect(
+			absorbedEnrollmentMoves(
+				{ approved: 0, lastSyncedAt: at("2020-01-01") },
+				null,
+			),
+		).toBe(true);
+	});
+
+	it("moves when the absorbed enrollment has more approved levels", () => {
+		expect(
+			absorbedEnrollmentMoves(
+				{ approved: 2, lastSyncedAt: at("2020-01-01") },
+				{ approved: 1, lastSyncedAt: at("2024-01-01") },
+			),
+		).toBe(true);
+	});
+
+	it("does not move when the keeper's enrollment has more approved levels", () => {
+		expect(
+			absorbedEnrollmentMoves(
+				{ approved: 1, lastSyncedAt: at("2024-01-01") },
+				{ approved: 2, lastSyncedAt: at("2020-01-01") },
+			),
+		).toBe(false);
+	});
+
+	it("moves on a tie in approved levels when the absorbed synced more recently", () => {
+		expect(
+			absorbedEnrollmentMoves(
+				{ approved: 1, lastSyncedAt: at("2024-01-01") },
+				{ approved: 1, lastSyncedAt: at("2020-01-01") },
+			),
+		).toBe(true);
+	});
+
+	it("does not move on a tie in approved levels when the keeper synced more recently", () => {
+		expect(
+			absorbedEnrollmentMoves(
+				{ approved: 1, lastSyncedAt: at("2020-01-01") },
+				{ approved: 1, lastSyncedAt: at("2024-01-01") },
+			),
+		).toBe(false);
 	});
 });

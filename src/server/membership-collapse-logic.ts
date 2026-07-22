@@ -26,16 +26,10 @@ import {
 	roleSlots,
 	tableTopicsSpeakers,
 } from "#/db/schema";
+import { earliestDate } from "#/lib/person-identity";
 
 /** A drizzle transaction handle (the arg the `db.transaction` callback gets). */
 type Tx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
-
-/** Earliest of two nullable dates; a null is treated as "unknown" (loses). */
-function earliest(a: Date | null, b: Date | null): Date | null {
-	if (!a) return b;
-	if (!b) return a;
-	return a < b ? a : b;
-}
 
 /**
  * Collapse the `absorbedId` membership into `keeperId` (both must belong to
@@ -89,7 +83,7 @@ export async function collapseMemberships(
 				keeper.status === "active" || absorbed.status === "active"
 					? "active"
 					: "inactive",
-			joinedAt: earliest(keeper.joinedAt, absorbed.joinedAt),
+			joinedAt: earliestDate(keeper.joinedAt, absorbed.joinedAt),
 			email: keeper.email ?? absorbed.email,
 			phone: keeper.phone ?? absorbed.phone,
 		})

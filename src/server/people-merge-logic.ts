@@ -27,6 +27,7 @@ import {
 	people,
 	speeches,
 } from "#/db/schema";
+import { absorbedEnrollmentMoves, earliestDate } from "#/lib/person-identity";
 import { collapseMemberships } from "./membership-collapse-logic";
 
 // A transaction handle (or the base db) — both expose the query builder we use.
@@ -199,13 +200,6 @@ export async function mergePeople(
 	});
 }
 
-/** Earliest of two nullable dates; a null is treated as "unknown" (loses). */
-function earliestDate(a: Date | null, b: Date | null): Date | null {
-	if (!a) return b;
-	if (!b) return a;
-	return a < b ? a : b;
-}
-
 /**
  * Re-point the absorbed Person's Pathways enrollments onto the keeper. On a
  * shared path (the keeper is already enrolled) the unique `(person_id, path_id)`
@@ -242,9 +236,10 @@ async function mergeEnrollments(
 			await approvedLevels(tx, abs.id),
 			await approvedLevels(tx, k.id),
 		];
-		const keepAbsorbed =
-			aScore > kScore ||
-			(aScore === kScore && abs.lastSyncedAt > k.lastSyncedAt);
+		const keepAbsorbed = absorbedEnrollmentMoves(
+			{ approved: aScore, lastSyncedAt: abs.lastSyncedAt },
+			{ approved: kScore, lastSyncedAt: k.lastSyncedAt },
+		);
 		if (keepAbsorbed) {
 			// Delete the keeper's losing enrollment FIRST, then re-point the
 			// absorbed one — otherwise the re-point collides on the unique

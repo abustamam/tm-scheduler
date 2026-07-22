@@ -6,10 +6,21 @@
 // createServerFn wrapper so it stays directly integration-testable and its
 // `#/db` import never leaks into the client bundle (the server-modules.guard.test.ts
 // rule; see `members-logic.ts`).
-import { eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "#/db";
-import { clubs, members, pathEnrollments, people, speeches } from "#/db/schema";
-import { type KeeperCandidate, pickKeeper } from "#/lib/person-identity";
+import {
+	clubs,
+	members,
+	pathEnrollments,
+	pathLevelProgress,
+	people,
+	speeches,
+} from "#/db/schema";
+import {
+	absorbedEnrollmentMoves,
+	type KeeperCandidate,
+	pickKeeper,
+} from "#/lib/person-identity";
 import { checkMergeBlocks } from "#/server/people-merge-logic";
 
 // A transaction handle (or the base db) — both expose the query builder we use.
@@ -217,10 +228,6 @@ export async function getMergePreview(
 		.select({ n: sql<number>`count(*)::int` })
 		.from(speeches)
 		.where(eq(speeches.personId, absorbedId));
-	const [enrollmentCount] = await db
-		.select({ n: sql<number>`count(*)::int` })
-		.from(pathEnrollments)
-		.where(eq(pathEnrollments.personId, absorbedId));
 
 	return {
 		block: checkMergeBlocks(keeper, absorbed),
@@ -230,9 +237,83 @@ export async function getMergePreview(
 			memberships: absorbedMemberships.length - collapsed,
 			collapsed,
 			speeches: speechCount?.n ?? 0,
-			enrollments: enrollmentCount?.n ?? 0,
+			enrollments: await countMovingEnrollments(keeperId, absorbedId),
 		},
 	};
+}
+
+/**
+ * The number of the absorbed Person's Pathways enrollments that would
+ * actually MOVE onto the keeper in a real merge — i.e. `mergeEnrollments`'
+ * count, computed read-only. On a shared path (both enrolled), the absorbed's
+ * enrollment only moves if `absorbedEnrollmentMoves` says it wins; when the
+ * keeper wins, the absorbed's enrollment is dropped, not moved, so it must
+ * NOT be counted here (this is the fix for the preview overstating the count
+ * to include enrollments that a real merge silently deletes).
+ */
+async function countMovingEnrollments(
+	keeperId: string,
+	absorbedId: string,
+): Promise<number> {
+	const [absorbedEnr, keeperEnr] = await Promise.all([
+		db
+			.select({
+				id: pathEnrollments.id,
+				pathId: pathEnrollments.pathId,
+				lastSyncedAt: pathEnrollments.lastSyncedAt,
+			})
+			.from(pathEnrollments)
+			.where(eq(pathEnrollments.personId, absorbedId)),
+		db
+			.select({
+				id: pathEnrollments.id,
+				pathId: pathEnrollments.pathId,
+				lastSyncedAt: pathEnrollments.lastSyncedAt,
+			})
+			.from(pathEnrollments)
+			.where(eq(pathEnrollments.personId, keeperId)),
+	]);
+	if (absorbedEnr.length === 0) return 0;
+	const keeperByPath = new Map(keeperEnr.map((e) => [e.pathId, e]));
+
+	const enrollmentIds = [
+		...absorbedEnr.map((e) => e.id),
+		...keeperEnr.map((e) => e.id),
+	];
+	const approvedCounts = new Map<string, number>();
+	if (enrollmentIds.length > 0) {
+		const rows = await db
+			.select({
+				id: pathLevelProgress.enrollmentId,
+				n: sql<number>`count(*)::int`,
+			})
+			.from(pathLevelProgress)
+			.where(
+				and(
+					inArray(pathLevelProgress.enrollmentId, enrollmentIds),
+					eq(pathLevelProgress.approved, true),
+				),
+			)
+			.groupBy(pathLevelProgress.enrollmentId);
+		for (const row of rows) approvedCounts.set(row.id, row.n);
+	}
+
+	let moving = 0;
+	for (const abs of absorbedEnr) {
+		const k = keeperByPath.get(abs.pathId);
+		const keeperScore = k
+			? {
+					approved: approvedCounts.get(k.id) ?? 0,
+					lastSyncedAt: k.lastSyncedAt,
+				}
+			: null;
+		const absorbedScore = {
+			approved: approvedCounts.get(abs.id) ?? 0,
+			lastSyncedAt: abs.lastSyncedAt,
+		};
+		if (absorbedEnrollmentMoves(absorbedScore, keeperScore)) moving++;
+	}
+	return moving;
 }
 
 /** All Persons sharing a (lowercased) email, decorated for display. */

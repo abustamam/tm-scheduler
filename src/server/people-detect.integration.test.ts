@@ -12,7 +12,15 @@
 import { randomUUID } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { clubs, members, people, speeches } from "#/db/schema";
+import {
+	clubs,
+	members,
+	pathEnrollments,
+	pathLevelProgress,
+	pathwaysPaths,
+	people,
+	speeches,
+} from "#/db/schema";
 import { hasTestDb, seedPerson, testDb } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -24,12 +32,18 @@ const { listDuplicatePeople, searchPeopleForMerge, getMergePreview } =
 describe.skipIf(!hasTestDb)("people-logic duplicate detection", () => {
 	const clubIds: string[] = [];
 	const personIds: string[] = [];
+	const pathIds: string[] = [];
 
 	afterEach(async () => {
 		// clubs cascade → members. Delete clubs BEFORE people so no membership
 		// row is left dangling on a deleted person.
 		if (clubIds.length)
 			await testDb.delete(clubs).where(inArray(clubs.id, clubIds.splice(0)));
+		// paths cascade → path_enrollments → path_level_progress.
+		if (pathIds.length)
+			await testDb
+				.delete(pathwaysPaths)
+				.where(inArray(pathwaysPaths.id, pathIds.splice(0)));
 		// people cascade → speeches / any remaining memberships or enrollments.
 		if (personIds.length)
 			await testDb
@@ -63,6 +77,42 @@ describe.skipIf(!hasTestDb)("people-logic duplicate detection", () => {
 		await testDb
 			.insert(members)
 			.values({ clubId, personId, name: "Member", status: "active" });
+	}
+
+	async function makePath(): Promise<string> {
+		const [p] = await testDb
+			.insert(pathwaysPaths)
+			.values({
+				courseCode: `PM-${randomUUID()}`,
+				name: "Presentation Mastery",
+			})
+			.returning({ id: pathwaysPaths.id });
+		if (!p) throw new Error("Failed to insert path");
+		pathIds.push(p.id);
+		return p.id;
+	}
+
+	/** Enroll a person in a path with `approvedLevels` approved levels. */
+	async function enroll(
+		personId: string,
+		pathId: string,
+		approvedLevels: number,
+	): Promise<string> {
+		const [e] = await testDb
+			.insert(pathEnrollments)
+			.values({ personId, pathId })
+			.returning({ id: pathEnrollments.id });
+		if (!e) throw new Error("Failed to insert enrollment");
+		for (let level = 1; level <= approvedLevels; level++) {
+			await testDb.insert(pathLevelProgress).values({
+				enrollmentId: e.id,
+				level,
+				completed: 3,
+				total: 3,
+				approved: true,
+			});
+		}
+		return e.id;
 	}
 
 	it("groups two people sharing a case-insensitive email across clubs", async () => {
@@ -147,5 +197,25 @@ describe.skipIf(!hasTestDb)("people-logic duplicate detection", () => {
 
 		expect(await searchPeopleForMerge("a")).toEqual([]);
 		expect(await searchPeopleForMerge("")).toEqual([]);
+	});
+
+	it("reports movedCounts.enrollments truthfully: keeper-wins collision counts 0, absorbed-only path counts 1", async () => {
+		const keeper = await makePerson();
+		const absorbed = await makePerson();
+
+		// Shared path P: keeper has 2 approved levels, absorbed has 1 — the
+		// keeper wins the collision, so the absorbed's enrollment is DROPPED
+		// (not moved) by a real merge. The preview must reflect that: 0.
+		const pathP = await makePath();
+		await enroll(keeper, pathP, 2);
+		await enroll(absorbed, pathP, 1);
+
+		// Absorbed-only path Q: no keeper enrollment, so it always moves — 1.
+		const pathQ = await makePath();
+		await enroll(absorbed, pathQ, 0);
+
+		const preview = await getMergePreview(keeper, absorbed);
+
+		expect(preview.movedCounts.enrollments).toBe(1);
 	});
 });
