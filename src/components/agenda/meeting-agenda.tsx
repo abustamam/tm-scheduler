@@ -158,12 +158,18 @@ export function MeetingAgenda({
 	const { currentMemberId } = viewer;
 	const [wodOpen, setWodOpen] = useState(false);
 	const [metaOpen, setMetaOpen] = useState(false);
-	// Claiming an open slot requires only the capability — a `lockedViewer` sets
-	// `canClaim` false so a locked/past meeting is read-only. A prospective
-	// (no-identity) visitor is allowed here too: identity is resolved at the
-	// claim click (see `handleClaimClick`), not gated on `currentMemberId`.
-	// Same for every slot, so compute once.
-	const canClaim = viewer.canClaim;
+	// Claiming an open slot requires the capability AND either an identity or a
+	// `requireIdentity` resolver to collect one at click time — a `lockedViewer`
+	// sets `canClaim` false so a locked/past meeting is read-only. Without a
+	// resolver, a memberless viewer stays locked out even with `canClaim` true:
+	// e.g. a superadmin impersonating a club (ADR-0020) is a memberless
+	// effective admin on the authed route, which passes no `requireIdentity` —
+	// unlike the public route's prospective (no-identity) visitor, who resolves
+	// identity at the claim click (see `handleClaimClick`). Same for every slot,
+	// so compute once.
+	const canClaim =
+		(currentMemberId !== null || requireIdentity !== undefined) &&
+		viewer.canClaim;
 	const [busySlotId, setBusySlotId] = useState<string | null>(null);
 	const [claimSlotState, setClaimSlotState] = useState<AgendaSlot | null>(null);
 	const [assignSlot, setAssignSlot] = useState<AgendaSlot | null>(null);

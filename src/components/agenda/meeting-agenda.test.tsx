@@ -192,6 +192,21 @@ describe("MeetingAgenda capability gating", () => {
 		expect(screen.queryByRole("button", { name: /Assign/ })).toBeNull();
 	});
 
+	it("keeps Claim disabled for a memberless viewer with no requireIdentity (authed impersonation)", () => {
+		renderAgenda(
+			meetingViewer({
+				currentMemberId: null,
+				canManage: true,
+				isTmod: false,
+				isGrammarian: false,
+				isEditableWindow: true,
+			}),
+			[slot({ status: "open" })],
+		);
+		const claim = screen.getByRole("button", { name: /^Claim / });
+		expect((claim as HTMLButtonElement).disabled).toBe(true);
+	});
+
 	it("is read-only under a locked viewer: no release on your own slot", () => {
 		const mine = slot({
 			status: "claimed",

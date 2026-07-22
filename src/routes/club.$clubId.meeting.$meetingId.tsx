@@ -206,10 +206,10 @@ function MeetingView() {
 	});
 
 	async function toggleAvailability() {
-		const me = await requireIdentity();
-		if (!me) return;
 		setAvailBusy(true);
 		try {
+			const me = await requireIdentity();
+			if (!me) return; // finally clears availBusy
 			if (isUnavailable) {
 				await clearAvailability({
 					data: { memberId: me.id, meetingId, clubId: clubUuid },
@@ -233,6 +233,11 @@ function MeetingView() {
 	// takes the ADR-0010 self-serve path (vs. the admin/session path).
 	const actions: MeetingAgendaActions = {
 		claim: async (slot, speakerDetails) => {
+			// `requireIdentity()` resolving null (picker dismissed) is currently
+			// unreachable here: `handleClaimClick` in `<MeetingAgenda>` already
+			// resolves identity before opening the ClaimSheet, so by the time this
+			// fires an identity is set. The guard stays as defense-in-depth — a
+			// silent return (not a throw) so it never surfaces a false success toast.
 			const me = await requireIdentity();
 			if (!me) return;
 			await claimSlot({
