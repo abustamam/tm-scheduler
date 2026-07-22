@@ -381,8 +381,8 @@ describe.skipIf(!hasTestDb)("mergePeople", () => {
 		const email = `audit-${randomUUID()}@x.io`;
 		const actorUserId = await makeUser();
 		const clubB = await makeClub();
-		const keeper = await makePerson({ email });
-		const absorbed = await makePerson({ email });
+		const keeper = await makePerson({ email, name: "Keeper K" });
+		const absorbed = await makePerson({ email, name: "Absorbed A" });
 		await addMembership(clubB, absorbed); // absorbed's club = the affected club.
 
 		await mergePeople({
@@ -403,10 +403,17 @@ describe.skipIf(!hasTestDb)("mergePeople", () => {
 		expect(audit).toHaveLength(1);
 		expect(audit[0]?.impersonatedBy).toBe(actorUserId);
 		expect(audit[0]?.actorMemberId).toBeNull();
+		// targetId is a Person id → labelled "person", not "member" (#330).
+		expect(audit[0]?.targetType).toBe("person");
 		expect(audit[0]?.targetId).toBe(keeper);
-		expect(
-			(audit[0]?.detail as { absorbedPersonId?: string })?.absorbedPersonId,
-		).toBe(absorbed);
+		const detail = audit[0]?.detail as {
+			absorbedPersonId?: string;
+			keeperName?: string;
+			absorbedName?: string;
+		};
+		expect(detail?.absorbedPersonId).toBe(absorbed);
+		expect(detail?.keeperName).toBe("Keeper K");
+		expect(detail?.absorbedName).toBe("Absorbed A");
 	});
 
 	it("collapses in one club and re-points in another within a single merge", async () => {
