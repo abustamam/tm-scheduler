@@ -39,7 +39,7 @@ import { hasTestDb, testDb } from "#/test/db";
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
 // Import after the mock so the logic module's `#/db` import resolves to testDb.
-const { mergePeople } = await import("./people-logic");
+const { mergePeople } = await import("#/server/people-merge-logic");
 
 describe.skipIf(!hasTestDb)("mergePeople", () => {
 	// Everything created here, tracked for FK-safe teardown.
@@ -350,6 +350,33 @@ describe.skipIf(!hasTestDb)("mergePeople", () => {
 		expect(await countApproved(keeperEnr[0]?.id ?? "")).toBe(2);
 	});
 
+	it("keeps the KEEPER's enrollment on a collision when it is more progressed", async () => {
+		const email = `path2-${randomUUID()}@x.io`;
+		const keeper = await makePerson({ email });
+		const absorbed = await makePerson({ email });
+		const path = await makePath();
+		// keeper enrolled in P with 2 approved levels; absorbed with only 1.
+		const keeperEnrollment = await enroll(keeper, path, 2);
+		await enroll(absorbed, path, 1);
+
+		const result = await mergePeople({
+			keeperPersonId: keeper,
+			absorbedPersonId: absorbed,
+		});
+
+		// The absorbed's enrollment was DROPPED (not moved) — so nothing moved.
+		expect(result.movedCounts.enrollments).toBe(0);
+
+		// keeper still has exactly ONE enrollment in P — its OWN (2 approved).
+		const keeperEnr = await testDb
+			.select()
+			.from(pathEnrollments)
+			.where(eq(pathEnrollments.personId, keeper));
+		expect(keeperEnr).toHaveLength(1);
+		expect(keeperEnr[0]?.id).toBe(keeperEnrollment);
+		expect(await countApproved(keeperEnr[0]?.id ?? "")).toBe(2);
+	});
+
 	it("writes a member_merge audit row per affected club with impersonated_by", async () => {
 		const email = `audit-${randomUUID()}@x.io`;
 		const actorUserId = await makeUser();
@@ -380,5 +407,52 @@ describe.skipIf(!hasTestDb)("mergePeople", () => {
 		expect(
 			(audit[0]?.detail as { absorbedPersonId?: string })?.absorbedPersonId,
 		).toBe(absorbed);
+	});
+
+	it("collapses in one club and re-points in another within a single merge", async () => {
+		const email = `combo-${randomUUID()}@x.io`;
+		const clubA = await makeClub(); // both are members here → collapse.
+		const clubB = await makeClub(); // only absorbed is here → re-point.
+		const keeper = await makePerson({ email });
+		const absorbed = await makePerson({ email });
+		await addMembership(clubA, keeper);
+		await addMembership(clubA, absorbed);
+		const clubBMembership = await addMembership(clubB, absorbed);
+
+		const result = await mergePeople({
+			keeperPersonId: keeper,
+			absorbedPersonId: absorbed,
+		});
+
+		expect(result.movedCounts.collapsed).toBe(1); // club A
+		expect(result.movedCounts.memberships).toBe(1); // club B re-point
+
+		// Club A has exactly one keeper membership; club B's membership re-pointed.
+		const clubAMembers = await testDb
+			.select()
+			.from(members)
+			.where(eq(members.clubId, clubA));
+		expect(clubAMembers).toHaveLength(1);
+		expect(clubAMembers[0]?.personId).toBe(keeper);
+		const [clubBAfter] = await testDb
+			.select()
+			.from(members)
+			.where(eq(members.id, clubBMembership));
+		expect(clubBAfter?.personId).toBe(keeper);
+
+		// A member_merge audit row was written for BOTH affected clubs.
+		const audit = await testDb
+			.select()
+			.from(activityLog)
+			.where(
+				and(
+					inArray(activityLog.clubId, [clubA, clubB]),
+					eq(activityLog.action, "member_merge"),
+				),
+			);
+		expect(audit).toHaveLength(2);
+		expect(new Set(audit.map((r) => r.clubId))).toEqual(
+			new Set([clubA, clubB]),
+		);
 	});
 });
