@@ -14,6 +14,7 @@ import { db } from "#/db";
 import { clubs, members, people, roleDefinitions } from "#/db/schema";
 import { ROLE_TEMPLATE } from "#/lib/role-template";
 import { slugify } from "#/lib/slug";
+import { findBestPersonByEmail } from "./people-logic";
 
 // A transaction handle (or the base db) — both expose the query builder we use.
 type Db = typeof db;
@@ -216,8 +217,10 @@ export interface CreateClubResult {
  *   1. the `clubs` row (name + unique club number + a derived unique slug),
  *   2. the standard `role_definitions` (ROLE_TEMPLATE) — a club is
  *      non-functional without them,
- *   3. the first admin: a `people` row (user_id LEFT NULL — #188 links it on
- *      first sign-in) + a `members` row with club_role=admin, status=active.
+ *   3. the first admin: reuses an existing Person on an email match (Rule B —
+ *      "one human, one Person") via `findBestPersonByEmail`, else creates a
+ *      fresh `people` row (user_id LEFT NULL — #188 links it on first
+ *      sign-in) + a `members` row with club_role=admin, status=active.
  *
  * Club number is REQUIRED and UNIQUE: a duplicate is rejected with a clear
  * error and NO partial writes (the whole transaction rolls back). The caller
@@ -254,21 +257,28 @@ export async function createClubWithAdmin(
 			.insert(roleDefinitions)
 			.values(ROLE_TEMPLATE.map((r) => ({ ...r, clubId: club.id })));
 
-		const [person] = await tx
-			.insert(people)
-			.values({
-				name: input.adminName,
-				email: input.adminEmail,
-				// user_id LEFT NULL on purpose — #188 links on first sign-in.
-			})
-			.returning({ id: people.id });
-		if (!person) throw new Error("Failed to create the admin person.");
+		// Reuse an existing Person on an email match (Rule B) so one human stays
+		// one Person across clubs; otherwise create a fresh Person (#188 links it
+		// on first sign-in). In-tx so a concurrent create sees a consistent view.
+		let personId = await findBestPersonByEmail(input.adminEmail, tx);
+		if (!personId) {
+			const [person] = await tx
+				.insert(people)
+				.values({
+					name: input.adminName,
+					email: input.adminEmail,
+					// user_id LEFT NULL on purpose — #188 links on first sign-in.
+				})
+				.returning({ id: people.id });
+			if (!person) throw new Error("Failed to create the admin person.");
+			personId = person.id;
+		}
 
 		const [member] = await tx
 			.insert(members)
 			.values({
 				clubId: club.id,
-				personId: person.id,
+				personId,
 				name: input.adminName,
 				email: input.adminEmail,
 				clubRole: "admin",
@@ -280,7 +290,7 @@ export async function createClubWithAdmin(
 		return {
 			clubId: club.id,
 			slug: club.slug,
-			personId: person.id,
+			personId,
 			memberId: member.id,
 		};
 	});
