@@ -408,6 +408,7 @@ function MeetingView() {
 					await router.invalidate();
 				}}
 				requireIdentity={requireIdentity}
+				contactedMemberIds={[]}
 			/>
 		</div>
 	);
