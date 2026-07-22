@@ -6,13 +6,18 @@
 // prints it once and reuses it at every meeting (e.g. hands it to guests / new
 // members). See issue #341.
 //
-// This file is intentionally self-contained (its own brand tokens + one-page
-// FitPage primitive) rather than importing the module-private primitives of
-// `meeting-agenda-print.tsx`, so this feature and the one-page-timing work
-// (#342, which edits that file) stay on cleanly separable branches. A future
-// cleanup can hoist the shared tokens/FitPage into one module.
-import { useEffect, useRef, useState } from "react";
-import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
+// Shares the print aesthetic (brand tokens, one-page FitPage, Kick, DarkFooter)
+// with the meeting agenda layouts via `./print-theme` (#345).
+import {
+	DarkFooter,
+	FitPage,
+	HAIR,
+	INK,
+	Kick,
+	LAGOON,
+	MUTED,
+	SERIF,
+} from "./print-theme";
 
 export type RoleSheetEntry = {
 	id: string;
@@ -20,103 +25,6 @@ export type RoleSheetEntry = {
 	category: "leadership" | "speaker" | "evaluator" | "functionary";
 	description: string | null;
 };
-
-// Brand palette, transcribed from meeting-agenda-print.tsx (kept in sync by eye;
-// these are the canonical GavelUp agenda colors).
-const INK = "#173a40";
-const LAGOON = "#328f97";
-const MUTED = "#416166";
-const FOREST = "#2f6a4a";
-const SEAFOAM = "#8fd6d0";
-const SERIF = "'Fraunces', Georgia, serif";
-const SANS = "'Manrope', ui-sans-serif, system-ui, sans-serif";
-const HAIR = "1px solid rgba(23,58,64,.08)";
-
-// US Letter at 96 CSS px/in — one .agenda-page maps to one printed page.
-const PAGE_W = 816;
-const PAGE_H = 1056;
-
-const PAGE_OUTER: React.CSSProperties = {
-	width: PAGE_W,
-	height: PAGE_H,
-	background: "#fff",
-	boxShadow: "0 14px 44px rgba(23,58,64,.22)",
-	overflow: "hidden",
-	position: "relative",
-	color: INK,
-	fontFamily: SANS,
-	printColorAdjust: "exact",
-	WebkitPrintColorAdjust: "exact",
-};
-
-/** One letter page that never overflows onto a second sheet: measures the real
- *  content height once (after webfonts settle) and scales down to fit if taller
- *  than the sheet. Mirrors the `FitPage` in meeting-agenda-print.tsx. */
-function FitPage({ children }: { children: React.ReactNode }) {
-	const innerRef = useRef<HTMLDivElement>(null);
-	const [fit, setFit] = useState<number | null>(null);
-
-	useEffect(() => {
-		const el = innerRef.current;
-		if (!el || fit !== null) return; // measure once, at the natural width
-		let cancelled = false;
-		const measure = () => {
-			if (cancelled) return;
-			const h = el.scrollHeight;
-			if (h > PAGE_H) setFit((PAGE_H - 2) / h);
-		};
-		const fonts = (
-			document as Document & { fonts?: { ready: Promise<unknown> } }
-		).fonts;
-		if (fonts?.ready) fonts.ready.then(measure);
-		else measure();
-		return () => {
-			cancelled = true;
-		};
-	}, [fit]);
-
-	return (
-		<div className="agenda-page" style={PAGE_OUTER}>
-			<div
-				ref={innerRef}
-				style={{
-					width: fit ? PAGE_W / fit : PAGE_W,
-					minHeight: fit ? undefined : PAGE_H,
-					transform: fit ? `scale(${fit})` : undefined,
-					transformOrigin: "top left",
-					display: "flex",
-					flexDirection: "column",
-					flex: "none",
-				}}
-			>
-				{children}
-			</div>
-		</div>
-	);
-}
-
-function Kick({
-	children,
-	style,
-}: {
-	children: React.ReactNode;
-	style?: React.CSSProperties;
-}) {
-	return (
-		<div
-			style={{
-				textTransform: "uppercase",
-				letterSpacing: ".09em",
-				fontSize: 10,
-				fontWeight: 800,
-				color: FOREST,
-				...style,
-			}}
-		>
-			{children}
-		</div>
-	);
-}
 
 // Categories render top-to-bottom in this order; empty ones are skipped.
 const CATEGORY_ORDER = [
@@ -239,46 +147,7 @@ export function ClubRoleSheet({
 					)}
 				</div>
 
-				{/* dark footer + non-affiliation disclaimer */}
-				<div
-					style={{
-						marginTop: "auto",
-						background: INK,
-						padding: "12px 44px",
-					}}
-				>
-					<div
-						style={{
-							display: "flex",
-							justifyContent: "space-between",
-							alignItems: "center",
-						}}
-					>
-						<span style={{ fontSize: 11, fontWeight: 600, color: "#fff" }}>
-							{clubName}
-						</span>
-						<span
-							style={{
-								fontSize: 11,
-								fontWeight: 700,
-								color: SEAFOAM,
-								letterSpacing: ".03em",
-							}}
-						>
-							Meeting Roles
-						</span>
-					</div>
-					<p
-						style={{
-							margin: "6px 0 0",
-							fontSize: 7.5,
-							lineHeight: 1.35,
-							color: "rgba(255,255,255,0.5)",
-						}}
-					>
-						{TOASTMASTERS_DISCLAIMER}
-					</p>
-				</div>
+				<DarkFooter left={clubName} right="Meeting Roles" />
 			</FitPage>
 		</div>
 	);
