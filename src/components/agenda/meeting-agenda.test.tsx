@@ -120,6 +120,36 @@ describe("MeetingAgenda capability gating", () => {
 		expect(screen.getByRole("button", { name: /Reassign/ })).toBeTruthy();
 	});
 
+	it("shows a guest speaker's name (not 'Open') on a claimed slot", () => {
+		// A guest (e.g. a club mentor) is assigned to a speaker slot: the slot
+		// carries assigneeGuestId/assigneeName but no member id. Regression:
+		// the name gate keyed off the MEMBER id, so the slot rendered "Open".
+		const guestSlot = slot({
+			id: "s1",
+			status: "claimed",
+			roleName: "Speaker",
+			category: "speaker",
+			isSpeakerRole: true,
+			assigneeId: null,
+			assigneeGuestId: "g1",
+			assigneeName: "Mentor Mike",
+			assigneeIsGuest: true,
+		});
+		renderAgenda(
+			meetingViewer({
+				currentMemberId: "me",
+				canManage: true,
+				isTmod: false,
+				isGrammarian: false,
+				isEditableWindow: true,
+			}),
+			[guestSlot],
+		);
+		expect(screen.getByText("Mentor Mike")).toBeTruthy();
+		// The "Guest" badge should render alongside the name.
+		expect(screen.getByText("Guest")).toBeTruthy();
+	});
+
 	it("hides manager-only controls for a signed-in non-manager", () => {
 		const filled = slot({
 			status: "claimed",
