@@ -13,6 +13,9 @@ export interface ViewCell {
 	/** The member holding this slot (roles orientation only) — lets the grid
 	 *  tell "yours" from "someone else's". null for open/guest/blank/members. */
 	memberId: string | null;
+	/** Members orientation, `free` cells only: this (member, meeting) pair is
+	 *  in the admin-only `data.contacted` set — drives the outreach dot (#340). */
+	contacted?: boolean;
 }
 
 export interface ViewRow {
@@ -46,6 +49,9 @@ export function projectGrid(
 	);
 	const naSet = new Set(
 		data.unavailable.map((u) => `${u.memberId}:${u.meetingId}`),
+	);
+	const contactedSet = new Set(
+		data.contacted.map((c) => `${c.memberId}:${c.meetingId}`),
 	);
 
 	if (orientation === "roles") {
@@ -157,9 +163,12 @@ export function projectGrid(
 				meetingId: m.id,
 				kind: "free" as const,
 				text: "·",
-				title: "Free",
+				title: contactedSet.has(`${member.id}:${m.id}`)
+					? "Free · contacted"
+					: "Free",
 				slotId: null,
 				memberId: null,
+				contacted: contactedSet.has(`${member.id}:${m.id}`),
 			};
 		}),
 	}));

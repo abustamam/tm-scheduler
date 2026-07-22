@@ -598,7 +598,7 @@ export function SeasonGrid({
 															type="button"
 															disabled={busyMeetingId === m.id}
 															title={cell.title || "Assign a role"}
-															aria-label={`Edit ${label} — ${date}`}
+															aria-label={`Edit ${label} — ${date}${cell.contacted ? " — contacted" : ""}`}
 															className={cn(
 																CELL_BASE,
 																CELL_KIND_CLASS[cell.kind],
@@ -613,6 +613,12 @@ export function SeasonGrid({
 																	aria-hidden
 																/>
 															)}
+															{cell.contacted ? (
+																<span
+																	aria-hidden
+																	className="ml-1 inline-block size-1.5 rounded-full bg-[var(--success-strong)]"
+																/>
+															) : null}
 														</button>
 													</MemberRolePicker>
 												</td>
