@@ -139,6 +139,7 @@ function MeetingView() {
 		clubDistrict,
 		clubMeetingSchedule,
 		nextMeetingAt,
+		urlKey,
 	} = Route.useLoaderData();
 	const flex = applyFlex(expandRunSheet(slots), meeting.lengthMinutes);
 	const projectedEnd = new Date(
@@ -367,12 +368,12 @@ function MeetingView() {
 					</Button>
 				)}
 				<ShareLinkButton
-					path={`/club/${clubId}/meeting/${meeting.id}`}
+					path={`/club/${clubId}/meeting/${urlKey}`}
 					className="mt-1 ml-2"
 				/>
 				<MeetingViewActions
 					clubSlug={clubId}
-					meetingId={meetingId}
+					meetingId={urlKey}
 					deck={deck}
 					clubName={clubName}
 				/>

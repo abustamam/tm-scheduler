@@ -128,6 +128,7 @@ function MeetingDetail() {
 		minutes,
 		minutesEmail,
 		nextMeetingAt,
+		urlKey,
 	} = Route.useLoaderData();
 	const { currentMemberId } = Route.useRouteContext();
 	const router = useRouter();
@@ -185,8 +186,8 @@ function MeetingDetail() {
 	const addableRoles = clubRoles.filter((r) => !pairedIds.has(r.id));
 	const shareUrl =
 		typeof window === "undefined"
-			? `/club/${clubSlug}/meeting/${meeting.id}`
-			: `${window.location.origin}/club/${clubSlug}/meeting/${meeting.id}`;
+			? `/club/${clubSlug}/meeting/${urlKey}`
+			: `${window.location.origin}/club/${clubSlug}/meeting/${urlKey}`;
 	const nudgeDate = footerDate(meeting.scheduledAt, timezone);
 
 	// Session/admin actions: no `selfMemberId` — the server takes the admin path.
@@ -386,12 +387,12 @@ function MeetingDetail() {
 				) : null}
 				<div className="flex flex-wrap items-center gap-2 pt-1">
 					<ShareLinkButton
-						path={`/club/${clubSlug}/meeting/${meeting.id}`}
+						path={`/club/${clubSlug}/meeting/${urlKey}`}
 						label="Copy member link"
 					/>
 					<MeetingViewActions
 						clubSlug={clubSlug}
-						meetingId={meeting.id}
+						meetingId={urlKey}
 						deck={deck}
 						clubName={clubName}
 					/>
