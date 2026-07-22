@@ -118,6 +118,22 @@ describe.skipIf(!hasTestDb)("people-logic duplicate detection", () => {
 		expect(preview.absorbed.id).toBe(absorbed2);
 	});
 
+	it("partitions movedCounts into collapsed (shared club) vs. memberships (repoint-only club)", async () => {
+		const clubA = await makeClub(); // both are members here → collapse.
+		const clubB = await makeClub(); // only absorbed is here → repoint.
+		const keeper = await makePerson();
+		const absorbed = await makePerson();
+		await addMembership(clubA, keeper);
+		await addMembership(clubA, absorbed);
+		await addMembership(clubB, absorbed);
+
+		const preview = await getMergePreview(keeper, absorbed);
+
+		expect(preview.block).toBeNull();
+		expect(preview.movedCounts.collapsed).toBe(1);
+		expect(preview.movedCounts.memberships).toBe(1);
+	});
+
 	it("searches by name/email substring and short-circuits below 2 chars", async () => {
 		const email = `search-${randomUUID()}@x.io`;
 		const uniqueName = `Findme-${randomUUID()}`;
