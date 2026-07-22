@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { Presentation, Printer } from "lucide-react";
+import { ClipboardList, Presentation, Printer } from "lucide-react";
 import type { AgendaLayout } from "#/components/agenda/meeting-agenda-print";
 import { PptxDownloadButton } from "#/components/club/pptx-download-button";
 import { Button } from "#/components/ui/button";
@@ -51,6 +51,18 @@ export function MeetingViewActions({
 				>
 					<Presentation />
 					Present
+				</Link>
+			</Button>
+			{/* Club-level, meeting-agnostic printable of the club's roles (#341). */}
+			<Button asChild variant="outline" size="sm">
+				<Link
+					to="/club/$clubId/roles"
+					params={{ clubId: clubSlug }}
+					target="_blank"
+					rel="noopener noreferrer"
+				>
+					<ClipboardList />
+					Role sheet
 				</Link>
 			</Button>
 			{deck && clubName ? (

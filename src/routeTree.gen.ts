@@ -29,6 +29,7 @@ import { Route as AuthedDashboardRouteImport } from './routes/_authed/dashboard'
 import { Route as AuthedActivityRouteImport } from './routes/_authed/activity'
 import { Route as ClubClubIdIndexRouteImport } from './routes/club.$clubId.index'
 import { Route as AuthedSuperadminIndexRouteImport } from './routes/_authed/superadmin/index'
+import { Route as ClubClubIdRolesRouteImport } from './routes/club.$clubId_.roles'
 import { Route as ClubClubIdGuestBookRouteImport } from './routes/club.$clubId_.guest-book'
 import { Route as ApiPathwaysIngestRouteImport } from './routes/api/pathways/ingest'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
@@ -151,6 +152,11 @@ const AuthedSuperadminIndexRoute = AuthedSuperadminIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => AuthedSuperadminRoute,
+} as any)
+const ClubClubIdRolesRoute = ClubClubIdRolesRouteImport.update({
+  id: '/club/$clubId_/roles',
+  path: '/club/$clubId/roles',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const ClubClubIdGuestBookRoute = ClubClubIdGuestBookRouteImport.update({
   id: '/club/$clubId_/guest-book',
@@ -308,6 +314,7 @@ export interface FileRoutesByFullPath {
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/pathways/ingest': typeof ApiPathwaysIngestRoute
   '/club/$clubId/guest-book': typeof ClubClubIdGuestBookRoute
+  '/club/$clubId/roles': typeof ClubClubIdRolesRoute
   '/superadmin/': typeof AuthedSuperadminIndexRoute
   '/club/$clubId/': typeof ClubClubIdIndexRoute
   '/admin/meetings/batch': typeof AuthedAdminMeetingsBatchRoute
@@ -350,6 +357,7 @@ export interface FileRoutesByTo {
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/pathways/ingest': typeof ApiPathwaysIngestRoute
   '/club/$clubId/guest-book': typeof ClubClubIdGuestBookRoute
+  '/club/$clubId/roles': typeof ClubClubIdRolesRoute
   '/superadmin': typeof AuthedSuperadminIndexRoute
   '/club/$clubId': typeof ClubClubIdIndexRoute
   '/admin/meetings/batch': typeof AuthedAdminMeetingsBatchRoute
@@ -396,6 +404,7 @@ export interface FileRoutesById {
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/pathways/ingest': typeof ApiPathwaysIngestRoute
   '/club/$clubId_/guest-book': typeof ClubClubIdGuestBookRoute
+  '/club/$clubId_/roles': typeof ClubClubIdRolesRoute
   '/_authed/superadmin/': typeof AuthedSuperadminIndexRoute
   '/club/$clubId/': typeof ClubClubIdIndexRoute
   '/_authed/admin/meetings/batch': typeof AuthedAdminMeetingsBatchRoute
@@ -442,6 +451,7 @@ export interface FileRouteTypes {
     | '/api/auth/$'
     | '/api/pathways/ingest'
     | '/club/$clubId/guest-book'
+    | '/club/$clubId/roles'
     | '/superadmin/'
     | '/club/$clubId/'
     | '/admin/meetings/batch'
@@ -484,6 +494,7 @@ export interface FileRouteTypes {
     | '/api/auth/$'
     | '/api/pathways/ingest'
     | '/club/$clubId/guest-book'
+    | '/club/$clubId/roles'
     | '/superadmin'
     | '/club/$clubId'
     | '/admin/meetings/batch'
@@ -529,6 +540,7 @@ export interface FileRouteTypes {
     | '/api/auth/$'
     | '/api/pathways/ingest'
     | '/club/$clubId_/guest-book'
+    | '/club/$clubId_/roles'
     | '/_authed/superadmin/'
     | '/club/$clubId/'
     | '/_authed/admin/meetings/batch'
@@ -554,6 +566,7 @@ export interface RootRouteChildren {
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiPathwaysIngestRoute: typeof ApiPathwaysIngestRoute
   ClubClubIdGuestBookRoute: typeof ClubClubIdGuestBookRoute
+  ClubClubIdRolesRoute: typeof ClubClubIdRolesRoute
   ApiMeetingsIdMinutesPdfRoute: typeof ApiMeetingsIdMinutesPdfRoute
   ClubClubIdMeetingMeetingIdPresentRoute: typeof ClubClubIdMeetingMeetingIdPresentRoute
   ClubClubIdMeetingMeetingIdPrintRoute: typeof ClubClubIdMeetingMeetingIdPrintRoute
@@ -701,6 +714,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/superadmin/'
       preLoaderRoute: typeof AuthedSuperadminIndexRouteImport
       parentRoute: typeof AuthedSuperadminRoute
+    }
+    '/club/$clubId_/roles': {
+      id: '/club/$clubId_/roles'
+      path: '/club/$clubId/roles'
+      fullPath: '/club/$clubId/roles'
+      preLoaderRoute: typeof ClubClubIdRolesRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/club/$clubId_/guest-book': {
       id: '/club/$clubId_/guest-book'
@@ -960,6 +980,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiPathwaysIngestRoute: ApiPathwaysIngestRoute,
   ClubClubIdGuestBookRoute: ClubClubIdGuestBookRoute,
+  ClubClubIdRolesRoute: ClubClubIdRolesRoute,
   ApiMeetingsIdMinutesPdfRoute: ApiMeetingsIdMinutesPdfRoute,
   ClubClubIdMeetingMeetingIdPresentRoute:
     ClubClubIdMeetingMeetingIdPresentRoute,
