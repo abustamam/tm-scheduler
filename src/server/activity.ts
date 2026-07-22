@@ -13,7 +13,9 @@ type ActivityAction =
 	| "member_merge"
 	| "member_remove"
 	| "meeting_create"
-	| "meeting_edit";
+	| "meeting_edit"
+	| "outreach_set"
+	| "outreach_clear";
 
 export interface ActivityInput {
 	clubId: string;
