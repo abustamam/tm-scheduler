@@ -6,6 +6,7 @@ import { db } from "#/db";
 import {
 	clubs,
 	guests,
+	meetingOutreach,
 	meetings,
 	memberAvailability,
 	members,
@@ -227,6 +228,16 @@ async function loadMeetingDetail(
 		.where(eq(memberAvailability.meetingId, meetingId))
 		.orderBy(asc(members.name));
 
+	// Contacted-for-this-meeting member ids (#340). Admin-only — same gate as the
+	// roster; empty on the public/member view so it never leaks who was asked.
+	const contactedRows = canManage
+		? await db
+				.select({ memberId: meetingOutreach.memberId })
+				.from(meetingOutreach)
+				.where(eq(meetingOutreach.meetingId, meetingId))
+		: [];
+	const contactedMemberIds = contactedRows.map((r) => r.memberId);
+
 	// Roster for the VPE assign/recruit picker — active members with contact for
 	// tap-to-nudge (#37). Management-only: contact is never fetched for a public
 	// caller (loadRosterWithContact isn't called when !canManage).
@@ -312,6 +323,7 @@ async function loadMeetingDetail(
 		officers,
 		unavailableMembers,
 		unavailableMemberIds: unavailableMembers.map((m) => m.id),
+		contactedMemberIds,
 		roster,
 		clubGuests,
 		clubRoles,

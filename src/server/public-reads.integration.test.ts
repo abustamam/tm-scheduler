@@ -17,6 +17,7 @@ import { and, asc, eq, gte, ne, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	clubs,
+	meetingOutreach,
 	meetings,
 	memberAvailability,
 	members,
@@ -71,6 +72,17 @@ async function getMeetingPublic(meetingId: string) {
 		.where(eq(memberAvailability.meetingId, meetingId))
 		.orderBy(asc(members.name));
 
+	// Contacted-for-this-meeting member ids (#340) — admin-only, same gate as
+	// roster. canManage is hardcoded false above (no-session mirror), so this
+	// always resolves to [] here, mirroring loadMeetingDetail's `canManage ? … : []`.
+	const contactedRows = canManage
+		? await testDb
+				.select({ memberId: meetingOutreach.memberId })
+				.from(meetingOutreach)
+				.where(eq(meetingOutreach.meetingId, meetingId))
+		: [];
+	const contactedMemberIds = contactedRows.map((r) => r.memberId);
+
 	return {
 		meeting,
 		slots,
@@ -84,6 +96,7 @@ async function getMeetingPublic(meetingId: string) {
 		timezone: club?.timezone ?? "UTC",
 		unavailableMembers,
 		unavailableMemberIds: unavailableMembers.map((m) => m.id),
+		contactedMemberIds,
 	};
 }
 
@@ -224,6 +237,18 @@ describe.skipIf(!hasTestDb)("public reads (no session)", () => {
 				(slot as { holderEmail?: unknown }).holderEmail ?? null,
 			).toBeNull();
 		}
+	});
+
+	// #340: contactedMemberIds is admin-only, same gate as roster/holder contact —
+	// it must never leak on the public/no-session payload, even when a
+	// meeting_outreach row exists for this meeting.
+	it("contacted guard: the public (no-session) payload never includes contactedMemberIds", async () => {
+		await testDb
+			.insert(meetingOutreach)
+			.values({ memberId: seed.memberId, meetingId: seed.meetingId });
+
+		const res = await getMeetingPublic(seed.meetingId);
+		expect(res?.contactedMemberIds).toEqual([]);
 	});
 
 	// -------------------------------------------------------------------------
