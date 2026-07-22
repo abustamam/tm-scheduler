@@ -186,6 +186,7 @@ async function loadMeetingDetail(
 				eq(meetings.clubId, meeting.clubId),
 				gte(meetings.scheduledAt, dayStart),
 				lt(meetings.scheduledAt, dayEnd),
+				ne(meetings.status, "cancelled"),
 			),
 		);
 	const urlKey = meetingUrlKey(meeting.scheduledAt, tz, sameDayCount >= 2);

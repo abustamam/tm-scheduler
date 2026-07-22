@@ -125,7 +125,7 @@ function errMessage(err: unknown) {
 }
 
 function MeetingView() {
-	const { clubId, meetingId } = Route.useParams();
+	const { clubId } = Route.useParams();
 	const { clubUuid, effectiveMemberId, authCtx } = Route.useRouteContext();
 	const {
 		meeting,
@@ -215,12 +215,12 @@ function MeetingView() {
 			if (!me) return; // finally clears availBusy
 			if (isUnavailable) {
 				await clearAvailability({
-					data: { memberId: me.id, meetingId, clubId: clubUuid },
+					data: { memberId: me.id, meetingId: meeting.id, clubId: clubUuid },
 				});
 				toast.success("You're marked as available again.");
 			} else {
 				await setAvailability({
-					data: { memberId: me.id, meetingId, clubId: clubUuid },
+					data: { memberId: me.id, meetingId: meeting.id, clubId: clubUuid },
 				});
 				toast.success("Got it — you can't make this one.");
 			}
@@ -268,7 +268,11 @@ function MeetingView() {
 			const me = await requireIdentity();
 			if (!me) return;
 			await addSpeakerSlot({
-				data: { meetingId, actorMemberId: me.id, selfMemberId: me.id },
+				data: {
+					meetingId: meeting.id,
+					actorMemberId: me.id,
+					selfMemberId: me.id,
+				},
 			});
 			toast.success("Speaker added.");
 		},
@@ -276,7 +280,11 @@ function MeetingView() {
 			const me = await requireIdentity();
 			if (!me) return;
 			await removeSpeakerSlot({
-				data: { meetingId, actorMemberId: me.id, selfMemberId: me.id },
+				data: {
+					meetingId: meeting.id,
+					actorMemberId: me.id,
+					selfMemberId: me.id,
+				},
 			});
 			toast.success("Speaker removed.");
 		},

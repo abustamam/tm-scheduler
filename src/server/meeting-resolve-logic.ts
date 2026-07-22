@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, lt } from "drizzle-orm";
+import { and, asc, eq, gte, lt, ne } from "drizzle-orm";
 import { db } from "#/db";
 import { clubs, meetings } from "#/db/schema";
 import { zonedWallTimeToUtc } from "#/lib/datetime";
@@ -53,6 +53,7 @@ export async function resolveMeetingKey(
 				eq(meetings.clubId, clubId),
 				gte(meetings.scheduledAt, start),
 				lt(meetings.scheduledAt, end),
+				ne(meetings.status, "cancelled"),
 			),
 		)
 		.orderBy(asc(meetings.scheduledAt))

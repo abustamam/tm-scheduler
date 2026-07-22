@@ -94,6 +94,28 @@ describe.skipIf(!hasTestDb)("resolveMeetingKey", () => {
 		);
 	});
 
+	it("skips a cancelled same-day meeting when resolving a bare date", async () => {
+		const { resolveMeetingKey } = await import(
+			"#/server/meeting-resolve-logic"
+		);
+		// Cancelled earlier that local day + an active later meeting.
+		await testDb.insert(meetings).values({
+			clubId: seed.clubId,
+			scheduledAt: new Date("2026-07-21T23:00:00Z"), // 18:00 local, cancelled
+			status: "cancelled",
+		});
+		const [active] = await testDb
+			.insert(meetings)
+			.values({
+				clubId: seed.clubId,
+				scheduledAt: new Date("2026-07-22T00:00:00Z"), // 19:00 local, active
+				status: "scheduled",
+			})
+			.returning({ id: meetings.id });
+		// Bare date must resolve to the ACTIVE meeting, not the earlier cancelled one.
+		expect(await resolveMeetingKey(seed.clubId, "2026-07-21")).toBe(active.id);
+	});
+
 	it("returns null for an unknown key or a uuid from another club", async () => {
 		const { resolveMeetingKey } = await import(
 			"#/server/meeting-resolve-logic"
