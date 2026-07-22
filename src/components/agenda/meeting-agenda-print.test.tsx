@@ -107,4 +107,20 @@ describe("MeetingAgendaPrint announcements", () => {
 			expect(screen.queryByText("Bring a guest")).toBeNull();
 		});
 	}
+
+	for (const layout of ["spacious", "timing"] as const) {
+		it(`${layout}: announcements replace the ruled Meeting Notes lines when present`, () => {
+			renderWith(layout, withAnnouncements);
+			expect(screen.getByText("Bring a guest")).toBeTruthy();
+			expect(screen.queryByText("Meeting Notes")).toBeNull();
+			expect(screen.getByText(/Tonight.s Votes/)).toBeTruthy();
+		});
+
+		it(`${layout}: keeps the Meeting Notes lines when there are no announcements`, () => {
+			renderWith(layout, header);
+			expect(screen.getByText("Meeting Notes")).toBeTruthy();
+			expect(screen.queryByText("Bring a guest")).toBeNull();
+			expect(screen.getByText(/Tonight.s Votes/)).toBeTruthy();
+		});
+	}
 });

@@ -1093,7 +1093,14 @@ function SpaciousLayout({
 					</div>
 
 					<div style={{ display: "flex", gap: 20, marginTop: 22 }}>
-						<NotesBlock lines={3} />
+						{announcementLines(header.announcements).length > 0 ? (
+							<AnnouncementsBlock
+								text={header.announcements}
+								style={{ flex: 1 }}
+							/>
+						) : (
+							<NotesBlock lines={3} />
+						)}
 						<VotesBlock />
 					</div>
 				</div>
@@ -1493,7 +1500,14 @@ function TimingLayout({
 					</div>
 
 					<div style={{ display: "flex", gap: 16, marginTop: 18 }}>
-						<NotesBlock lines={4} />
+						{announcementLines(header.announcements).length > 0 ? (
+							<AnnouncementsBlock
+								text={header.announcements}
+								style={{ flex: 1 }}
+							/>
+						) : (
+							<NotesBlock lines={4} />
+						)}
 						<VotesBlock compact />
 					</div>
 				</div>
