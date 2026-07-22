@@ -32,6 +32,7 @@ export function GridCell({
 	busy = false,
 	onClaim,
 	onRelease,
+	prospectiveClaim = false,
 	availabilityEditable = false,
 	onAvailability,
 	subjectName,
@@ -43,6 +44,10 @@ export function GridCell({
 	busy?: boolean;
 	onClaim?: (slotId: string) => void;
 	onRelease?: (slotId: string) => void;
+	/** Public read-only surface: show "Claim" on OPEN cells even with no
+	 *  identity — the caller resolves identity on click (spec:
+	 *  read-only-by-default). */
+	prospectiveClaim?: boolean;
 	/** Members × Meetings, upcoming meeting: the cell toggles availability (#204).
 	 *  free → NA, NA → free, assigned → release + NA. Enabled for your own row, or
 	 *  any row when an officer manages the sheet. */
@@ -66,7 +71,7 @@ export function GridCell({
 		interactive &&
 		cell.kind === "assigned" &&
 		cell.memberId === currentMemberId;
-	const isClaimable = interactive && cell.kind === "open";
+	const isClaimable = (interactive || prospectiveClaim) && cell.kind === "open";
 	const dateSuffix = meetingLabel ? ` — ${meetingLabel}` : "";
 
 	// Availability toggle (Members × Meetings, your row). "blank" cells (the
