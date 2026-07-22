@@ -470,7 +470,7 @@ export function MeetingAgenda({
 													{slotLabel(slot, roleCounts)}
 												</p>
 
-												{slot.assigneeId ? (
+												{slot.assigneeName ? (
 													<p className="text-sm text-muted-foreground">
 														{slot.assigneeName}
 														{slot.assigneeIsGuest ? (
