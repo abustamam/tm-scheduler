@@ -574,7 +574,7 @@ export function MeetingAgenda({
 														meetingDate={meetingDate}
 														shareUrl={shareUrl}
 														targets={recruitTargets}
-														onContacted={(id) => onContacted?.(id, "nudge")}
+														onContacted={(id, via) => onContacted?.(id, via)}
 														onUncontacted={(id) => onUncontacted?.(id)}
 													/>
 												) : null}

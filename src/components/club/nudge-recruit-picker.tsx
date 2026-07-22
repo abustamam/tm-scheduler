@@ -73,8 +73,10 @@ export function NudgeRecruitPicker({
 	meetingDate: string;
 	shareUrl: string;
 	targets: RecruitTarget[];
-	/** Mark a member contacted (auto-fired on nudge tap, or manual toggle). */
-	onContacted?: (memberId: string) => void;
+	/** Mark a member contacted (auto-fired on nudge tap, or manual toggle). `via`
+	 *  distinguishes the nudge-draft tap ("nudge") from the manual checkbox
+	 *  ("manual") for the activity log. */
+	onContacted?: (memberId: string, via: "nudge" | "manual") => void;
 	/** Manual toggle only — clear the contacted flag. */
 	onUncontacted?: (memberId: string) => void;
 }) {
@@ -119,7 +121,7 @@ export function NudgeRecruitPicker({
 							meetingDate={meetingDate}
 							shareUrl={shareUrl}
 							mode="recruit"
-							onContacted={() => onContacted?.(livePicked.id)}
+							onContacted={() => onContacted?.(livePicked.id, "nudge")}
 						/>
 						<label className="flex items-center gap-2 text-xs">
 							<input
@@ -127,7 +129,7 @@ export function NudgeRecruitPicker({
 								checked={livePicked.contacted}
 								onChange={(e) =>
 									e.target.checked
-										? onContacted?.(livePicked.id)
+										? onContacted?.(livePicked.id, "manual")
 										: onUncontacted?.(livePicked.id)
 								}
 							/>
