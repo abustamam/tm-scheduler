@@ -46,8 +46,8 @@ import { meetingViewer } from "#/lib/meeting-viewer";
 import { useEffectiveMember } from "#/lib/member-identity";
 import { clearAvailability, setAvailability } from "#/server/availability";
 import {
-	getMeeting,
-	getPublicMeeting,
+	getMeetingByKey,
+	getPublicMeetingByKey,
 	listUpcomingMeetings,
 } from "#/server/meetings";
 import { listMembers } from "#/server/members";
@@ -71,8 +71,10 @@ export const Route = createFileRoute("/club/$clubId/meeting/$meetingId")({
 		// gets the same non-manager view. Anonymous visitors use getPublicMeeting
 		// (hard canManage=false, never any PII). Both call the same resolver, so
 		// the loader shape is identical either way (#317).
-		const load = context.shell ? getMeeting : getPublicMeeting;
-		const meetingPromise = load({ data: params.meetingId }).catch((err) => {
+		const load = context.shell ? getMeetingByKey : getPublicMeetingByKey;
+		const meetingPromise = load({
+			data: { clubId: context.clubUuid, key: params.meetingId },
+		}).catch((err) => {
 			if (isMeetingNotFoundError(err)) throw notFound();
 			throw err;
 		});
