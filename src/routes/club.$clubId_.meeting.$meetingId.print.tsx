@@ -162,6 +162,7 @@ function PrintAgenda() {
 		theme: meeting.theme,
 		wordOfTheDay: meeting.wordOfTheDay,
 		location: meeting.location,
+		announcements: meeting.reminders,
 	};
 
 	return (

@@ -8,6 +8,7 @@
 // designated slot when set and is omitted gracefully (no empty label) when not.
 // Logo upload remains a tracked follow-up (#83).
 import type { TimelineRow } from "#/lib/agenda-timing";
+import { announcementLines } from "#/lib/announcement-lines";
 import {
 	AMBER,
 	DarkFooter,
@@ -41,6 +42,7 @@ export type AgendaHeader = {
 	theme: string | null;
 	wordOfTheDay: string | null;
 	location: string | null;
+	announcements: string | null; // free-text, one per line; null/empty ⇒ hidden
 };
 
 /** "Club #NNN  ·  District 39" — either half optional; "" when both unset. */
@@ -562,6 +564,10 @@ function EditorialLayout({
 							</div>
 						</>
 					) : null}
+					<AnnouncementsBlock
+						text={header.announcements}
+						style={{ marginTop: 14 }}
+					/>
 				</div>
 
 				{/* main — roles + run of show */}
@@ -741,6 +747,11 @@ function GridLayout({
 						</div>
 					))}
 				</div>
+
+				<AnnouncementsBlock
+					text={header.announcements}
+					style={{ marginTop: 14 }}
+				/>
 
 				{/* officer footer (also carries the club's meets schedule + mission) */}
 				{officers.length > 0 || header.meetingSchedule || header.mission ? (
@@ -1576,6 +1587,38 @@ function NotesBlock({ lines }: { lines: number }) {
 					style={{ borderBottom: "1px solid rgba(23,58,64,.16)", height: 20 }}
 				/>
 			))}
+		</div>
+	);
+}
+
+function AnnouncementsBlock({
+	text,
+	style,
+}: {
+	text: string | null;
+	style?: React.CSSProperties;
+}) {
+	const lines = announcementLines(text);
+	if (lines.length === 0) return null;
+	return (
+		<div style={style}>
+			<Kick style={{ fontSize: 9.5, marginBottom: 7 }}>Announcements</Kick>
+			<ul style={{ margin: 0, paddingLeft: 16, listStyleType: "disc" }}>
+				{lines.map((line, i) => (
+					<li
+						// biome-ignore lint/suspicious/noArrayIndexKey: lines have no stable id and can repeat
+						key={`${i}-${line}`}
+						style={{
+							fontSize: 10.5,
+							color: INK,
+							lineHeight: 1.4,
+							marginBottom: 3,
+						}}
+					>
+						{line}
+					</li>
+				))}
+			</ul>
 		</div>
 	);
 }
