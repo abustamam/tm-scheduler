@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { NudgeButtons } from "./nudge-buttons";
 
 const base = {
@@ -36,5 +37,21 @@ describe("NudgeButtons", () => {
 		render(<NudgeButtons {...base} phone={null} email={null} />);
 		expect(screen.getByText(/no contact on file/i)).toBeTruthy();
 		expect(screen.queryByRole("link")).toBeNull();
+	});
+
+	it("fires onContacted when the WhatsApp draft link is clicked", async () => {
+		const onContacted = vi.fn();
+		const user = userEvent.setup();
+		render(
+			<NudgeButtons
+				{...base}
+				phone="14155552671"
+				email={null}
+				onContacted={onContacted}
+			/>,
+		);
+		const wa = await screen.findByRole("link", { name: /whatsapp/i });
+		await user.click(wa);
+		expect(onContacted).toHaveBeenCalledTimes(1);
 	});
 });

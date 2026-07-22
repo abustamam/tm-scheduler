@@ -33,4 +33,27 @@ describe("buildRecruitTargets", () => {
 		});
 		expect(t.find((x) => x.id === "c")?.email).toBe("cy@x.io");
 	});
+
+	it("flags contacted members", () => {
+		const targets = buildRecruitTargets(
+			[
+				{ id: "m1", name: "Alice" },
+				{ id: "m2", name: "Bob" },
+			],
+			new Set<string>(), // unavailable
+			{}, // roleByMemberId
+			new Set(["m1"]), // contactedIds
+		);
+		expect(targets.find((t) => t.id === "m1")?.contacted).toBe(true);
+		expect(targets.find((t) => t.id === "m2")?.contacted).toBe(false);
+	});
+
+	it("defaults contacted to false when no contactedIds passed", () => {
+		const targets = buildRecruitTargets(
+			[{ id: "m1", name: "Alice" }],
+			new Set<string>(),
+			{},
+		);
+		expect(targets[0]?.contacted).toBe(false);
+	});
 });

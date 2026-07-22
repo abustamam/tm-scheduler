@@ -3,6 +3,7 @@ import { db } from "#/db";
 import {
 	clubs,
 	guests,
+	meetingOutreach,
 	meetings,
 	memberAvailability,
 	members,
@@ -77,6 +78,10 @@ export interface SeasonGridData {
 	guestNames: SeasonGridMember[];
 	cells: SeasonGridCell[];
 	unavailable: { memberId: string; meetingId: string }[];
+	/** Members contacted about each meeting (#340). Admin-only: populated only
+	 *  when loadSeasonGrid is called with includeOutreach; empty otherwise, so it
+	 *  never reaches members or the public sheet. */
+	contacted: { memberId: string; meetingId: string }[];
 }
 
 const PAST_LOOKBACK = 2;
@@ -87,6 +92,9 @@ export async function loadSeasonGrid(input: {
 	/** Include member email/phone on the member axis. Off by default so the
 	 *  public sheet never carries contact PII. */
 	includeContact?: boolean;
+	/** Include the per-(member, meeting) "contacted" set. Admin-only; off by
+	 *  default so members / the public sheet never receive it. */
+	includeOutreach?: boolean;
 }): Promise<SeasonGridData> {
 	const now = new Date();
 
@@ -280,6 +288,17 @@ export async function loadSeasonGrid(input: {
 				.where(inArray(memberAvailability.meetingId, meetingIds))
 		: [];
 
+	const contacted =
+		input.includeOutreach && meetingIds.length
+			? await db
+					.select({
+						memberId: meetingOutreach.memberId,
+						meetingId: meetingOutreach.meetingId,
+					})
+					.from(meetingOutreach)
+					.where(inArray(meetingOutreach.meetingId, meetingIds))
+			: [];
+
 	// Guest name lookup for guest-held cells (#151). Guests are a distinct list —
 	// they never appear on the member axis, so this is separate from memberNames.
 	const guestRows = await db
@@ -300,6 +319,7 @@ export async function loadSeasonGrid(input: {
 		guestNames,
 		cells,
 		unavailable,
+		contacted,
 	};
 }
 

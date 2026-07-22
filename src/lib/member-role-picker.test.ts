@@ -69,6 +69,7 @@ const data: SeasonGridData = {
 		},
 	],
 	unavailable: [],
+	contacted: [],
 };
 
 describe("meetingRoleOptions", () => {

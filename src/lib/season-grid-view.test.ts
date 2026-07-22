@@ -66,6 +66,7 @@ const data: SeasonGridData = {
 		},
 	],
 	unavailable: [{ memberId: "b", meetingId: "m1" }],
+	contacted: [],
 };
 
 describe("projectGrid – roles orientation", () => {
@@ -170,6 +171,19 @@ describe("projectGrid – members orientation", () => {
 		};
 		const rows = projectGrid(withInactive, "members");
 		expect(rows.some((r) => r.id === "z")).toBe(false);
+	});
+
+	it("marks a free member cell as contacted when in the contacted set", () => {
+		const withContacted: SeasonGridData = {
+			...data,
+			contacted: [{ memberId: "c", meetingId: "m1" }],
+		};
+		const rows = projectGrid(withContacted, "members");
+		const cell = rows
+			.find((r) => r.id === "c")
+			?.cells.find((c) => c.meetingId === "m1");
+		expect(cell?.kind).toBe("free");
+		expect(cell?.contacted).toBe(true);
 	});
 
 	it("collapses multiple roles in one meeting to first + +N", () => {

@@ -80,9 +80,43 @@ const data: SeasonGridData = {
 		},
 	],
 	unavailable: [],
+	contacted: [],
 };
 
 const PICKED: StoredMember = { id: "m-picked", name: "Picked Member" };
+
+// Members orientation, admin viewer: a free member cell that's in the
+// contacted set (#340). Reuses `data`'s single upcoming, non-past,
+// non-completed meeting — that's what makes the editable-button branch active.
+const membersData: SeasonGridData = {
+	...data,
+	members: [{ id: "c1", name: "Carla Nguyen" }],
+	memberNames: [{ id: "c1", name: "Carla Nguyen" }],
+	contacted: [{ memberId: "c1", meetingId: "m1" }],
+};
+
+// Members × Meetings as an admin (canManageOthers): every row's cell renders
+// through the editable `<MemberRolePicker>`-wrapped button, not `<GridCell>`.
+async function renderMembersGrid() {
+	const rootRoute = createRootRoute({
+		component: () => (
+			<SeasonGrid
+				data={membersData}
+				orientation="members"
+				count="all"
+				currentMemberId="admin-1"
+				canManageOthers
+				clubId="club-1"
+			/>
+		),
+	});
+	const router = createRouter({
+		routeTree: rootRoute,
+		history: createMemoryHistory({ initialEntries: ["/"] }),
+	});
+	render(<RouterProvider router={router} />);
+	await waitFor(() => expect(router.state.status).toBe("idle"));
+}
 
 // SeasonGrid renders <Link>s (meeting header, member row), so mount it under
 // a minimal router — mirrors the pattern in guest-resources.test.tsx.
@@ -157,5 +191,17 @@ describe("SeasonGrid prospective claim + undo", () => {
 		expect(claimSlot).not.toHaveBeenCalled();
 		expect(toastSuccess).not.toHaveBeenCalled();
 		expect(toastError).not.toHaveBeenCalled();
+	});
+});
+
+describe("SeasonGrid contacted marker (#340)", () => {
+	it("surfaces the contacted state on an editable free member cell, reachably and accessibly", async () => {
+		await renderMembersGrid();
+
+		// Reachable: the editable-button branch (not GridCell) renders for this
+		// admin-viewed, upcoming, members-orientation cell. Accessible: the
+		// contacted state is folded into the button's aria-label, not just the
+		// aria-hidden dot.
+		expect(screen.getByRole("button", { name: /contacted/i })).toBeTruthy();
 	});
 });

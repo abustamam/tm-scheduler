@@ -89,6 +89,7 @@ function renderAgenda(
 			selfMemberId="me"
 			onMetaSaved={() => {}}
 			requireIdentity={requireIdentity}
+			contactedMemberIds={[]}
 		/>,
 	);
 }

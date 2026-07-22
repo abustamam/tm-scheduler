@@ -54,6 +54,7 @@ import {
 } from "#/server/meetings";
 import { getMinutes } from "#/server/minutes";
 import { getMinutesRecipients } from "#/server/minutes-email";
+import { clearContacted, setContacted } from "#/server/outreach";
 import {
 	addRoleSlot,
 	addSpeakerSlot,
@@ -130,6 +131,7 @@ function MeetingDetail() {
 		minutesEmail,
 		nextMeetingAt,
 		urlKey,
+		contactedMemberIds,
 	} = Route.useLoaderData();
 	const { currentMemberId } = Route.useRouteContext();
 	const router = useRouter();
@@ -465,6 +467,32 @@ function MeetingDetail() {
 				selfMemberId={currentMemberId}
 				onMetaSaved={async () => {
 					await router.invalidate();
+				}}
+				contactedMemberIds={contactedMemberIds}
+				onContacted={async (memberId, via) => {
+					try {
+						await setContacted({
+							data: {
+								memberId,
+								meetingId: meeting.id,
+								clubId: meeting.clubId,
+								via,
+							},
+						});
+						await router.invalidate();
+					} catch (err) {
+						toast.error(errMessage(err));
+					}
+				}}
+				onUncontacted={async (memberId) => {
+					try {
+						await clearContacted({
+							data: { memberId, meetingId: meeting.id, clubId: meeting.clubId },
+						});
+						await router.invalidate();
+					} catch (err) {
+						toast.error(errMessage(err));
+					}
 				}}
 			/>
 

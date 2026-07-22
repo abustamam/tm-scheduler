@@ -173,6 +173,12 @@ export function GridCell({
 			)}
 		>
 			{cell.text}
+			{cell.contacted ? (
+				<span
+					aria-hidden
+					className="ml-1 inline-block size-1.5 rounded-full bg-[var(--success-strong)]"
+				/>
+			) : null}
 		</span>
 	);
 	if (cell.kind === "blank") return inner;

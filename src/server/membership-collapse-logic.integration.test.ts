@@ -28,6 +28,7 @@ import {
 	duesPeriods,
 	meetingAttendance,
 	meetingAwards,
+	meetingOutreach,
 	memberAvailability,
 	memberDues,
 	members,
@@ -249,6 +250,37 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 			.from(memberDues)
 			.where(eq(memberDues.membershipId, absorbedId));
 		expect(absorbedDues).toHaveLength(0);
+	});
+
+	it("survives a same-meeting outreach (contacted) collision", async () => {
+		const keeperId = await addMembership({ name: "Keeper" });
+		const absorbedId = await addMembership({ name: "Absorbed" });
+
+		// Both are marked contacted for the SAME meeting (unique member,meeting).
+		await testDb.insert(meetingOutreach).values([
+			{ memberId: keeperId, meetingId: seed.meetingId },
+			{ memberId: absorbedId, meetingId: seed.meetingId },
+		]);
+
+		// Must NOT throw a unique-violation.
+		await expect(collapse(keeperId, absorbedId)).resolves.toBeUndefined();
+
+		// Exactly one outreach row remains for (keeper, meeting); none for absorbed.
+		const keeperOutreach = await testDb
+			.select()
+			.from(meetingOutreach)
+			.where(
+				and(
+					eq(meetingOutreach.memberId, keeperId),
+					eq(meetingOutreach.meetingId, seed.meetingId),
+				),
+			);
+		expect(keeperOutreach).toHaveLength(1);
+		const absorbedOutreach = await testDb
+			.select()
+			.from(meetingOutreach)
+			.where(eq(meetingOutreach.memberId, absorbedId));
+		expect(absorbedOutreach).toHaveLength(0);
 	});
 
 	it("dedupes two OPEN terms for one position down to the earliest-started", async () => {
@@ -497,6 +529,7 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 			"member_availability.member_id",
 			"meeting_attendance.member_id",
 			"meeting_awards.member_id",
+			"meeting_outreach.member_id",
 			"notifications.assigned_member_id",
 			"role_slots.assigned_member_id",
 			"table_topics_speakers.member_id",

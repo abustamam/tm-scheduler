@@ -10,6 +10,7 @@ import {
 	buildRecruitTargets,
 	NudgeRecruitPicker,
 } from "#/components/club/nudge-recruit-picker";
+import { OutreachPanel } from "#/components/club/outreach-panel";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import {
@@ -116,6 +117,15 @@ export interface MeetingAgendaProps {
 	onMetaSaved: () => void | Promise<void>;
 	/** Public surface: resolve/collect identity before opening the claim flow when there's no identity. */
 	requireIdentity?: () => Promise<StoredMember | null>;
+	/** Member ids already contacted for this meeting (#340). Admin-only; empty on
+	 *  the public/member view. */
+	contactedMemberIds: string[];
+	/** Mark/unmark a member contacted (#340). Manager surface only. */
+	onContacted?: (
+		memberId: string,
+		via: "nudge" | "manual",
+	) => void | Promise<void>;
+	onUncontacted?: (memberId: string) => void | Promise<void>;
 }
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -154,6 +164,9 @@ export function MeetingAgenda({
 	selfMemberId,
 	onMetaSaved,
 	requireIdentity,
+	contactedMemberIds,
+	onContacted,
+	onUncontacted,
 }: MeetingAgendaProps) {
 	const { currentMemberId } = viewer;
 	const [wodOpen, setWodOpen] = useState(false);
@@ -193,6 +206,7 @@ export function MeetingAgenda({
 		roster,
 		new Set(unavailableMemberIds),
 		roleByMemberId,
+		new Set(contactedMemberIds),
 	);
 
 	// Preserve category order as it appears (slots arrive pre-sorted).
@@ -404,6 +418,16 @@ export function MeetingAgenda({
 				</section>
 			) : null}
 
+			{viewer.canManage ? (
+				<OutreachPanel
+					roster={roster}
+					assignedIds={new Set(Object.keys(roleByMemberId))}
+					contactedIds={new Set(contactedMemberIds)}
+					onContacted={(id) => onContacted?.(id, "manual")}
+					onUncontacted={(id) => onUncontacted?.(id)}
+				/>
+			) : null}
+
 			{categories.map((category) => (
 				<section key={category} className="space-y-2">
 					<h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -550,6 +574,8 @@ export function MeetingAgenda({
 														meetingDate={meetingDate}
 														shareUrl={shareUrl}
 														targets={recruitTargets}
+														onContacted={(id, via) => onContacted?.(id, via)}
+														onUncontacted={(id) => onUncontacted?.(id)}
 													/>
 												) : null}
 

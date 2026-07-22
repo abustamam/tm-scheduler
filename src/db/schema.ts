@@ -97,6 +97,10 @@ export const activityActionEnum = pgEnum("activity_action", [
 	// club (ADR-0020 / #246). Like `superadmin_viewed`, actor is null and the real
 	// superadmin identity + the required access reason are carried in `detail`.
 	"superadmin_acted",
+	// Officer outreach tracking (#340): a member was marked "contacted" for a
+	// meeting (or the mark was cleared). `detail = { memberId, via }`.
+	"outreach_set",
+	"outreach_clear",
 ]);
 
 // Impersonation session mode (ADR-0020 / #185, #246). `read_only` = "View as this
@@ -696,6 +700,36 @@ export const memberAvailability = pgTable(
 		// Presence of a row = "Not Available" for that meeting. One per pair.
 		uniqueIndex("member_availability_unique").on(t.memberId, t.meetingId),
 		index("member_availability_meeting_idx").on(t.meetingId),
+	],
+);
+
+// ---------------------------------------------------------------------------
+// Meeting outreach (#340) — the officer's private "contacted" record. Presence
+// of a row = "this member was contacted about filling a role for this meeting".
+// A near-clone of member_availability: per-(member, meeting), one row per pair,
+// cascade on member/meeting delete. WHO marked it and HOW (nudge vs. manual)
+// live in activity_log.detail, not on the row — the row is a pure boolean.
+// Admin/VPE-only to read and write (never surfaced to members or the public).
+// ---------------------------------------------------------------------------
+
+export const meetingOutreach = pgTable(
+	"meeting_outreach",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		memberId: uuid("member_id")
+			.notNull()
+			.references(() => members.id, { onDelete: "cascade" }),
+		meetingId: uuid("meeting_id")
+			.notNull()
+			.references(() => meetings.id, { onDelete: "cascade" }),
+		// = "contacted at". No separate contactedAt column.
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+	},
+	(t) => [
+		// Presence of a row = "contacted"; one per (member, meeting). Plain unique
+		// index so ON CONFLICT can infer it (idempotent mark).
+		uniqueIndex("meeting_outreach_unique").on(t.memberId, t.meetingId),
+		index("meeting_outreach_meeting_idx").on(t.meetingId),
 	],
 );
 
@@ -1326,6 +1360,20 @@ export const speechesRelations = relations(speeches, ({ one, many }) => ({
 		references: [pathwaysProjects.id],
 	}),
 }));
+
+export const meetingOutreachRelations = relations(
+	meetingOutreach,
+	({ one }) => ({
+		member: one(members, {
+			fields: [meetingOutreach.memberId],
+			references: [members.id],
+		}),
+		meeting: one(meetings, {
+			fields: [meetingOutreach.meetingId],
+			references: [meetings.id],
+		}),
+	}),
+);
 
 export const notificationsRelations = relations(notifications, ({ one }) => ({
 	user: one(user, {

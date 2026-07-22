@@ -295,6 +295,13 @@
       "when": 1784612150073,
       "tag": "0041_broad_thor",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1784753401462,
+      "tag": "0042_sleepy_blizzard",
+      "breakpoints": true
     }
   ]
 }

@@ -16,6 +16,7 @@ export function NudgeButtons({
 	meetingDate,
 	shareUrl,
 	mode,
+	onContacted,
 }: {
 	name: string;
 	phone: string | null;
@@ -24,6 +25,8 @@ export function NudgeButtons({
 	meetingDate: string;
 	shareUrl: string;
 	mode: NudgeMode;
+	/** Fired when the WhatsApp or Email draft link is tapped (auto-mark contacted). */
+	onContacted?: () => void;
 }) {
 	// Render the channel links only after mount. The caller builds `shareUrl` with
 	// a `window.location.origin` prefix that is correct only on the client; during
@@ -58,7 +61,12 @@ export function NudgeButtons({
 		<div className="flex items-center gap-1.5">
 			{nudge.whatsappUrl ? (
 				<Button asChild size="sm" variant="outline">
-					<a href={nudge.whatsappUrl} target="_blank" rel="noopener noreferrer">
+					<a
+						href={nudge.whatsappUrl}
+						target="_blank"
+						rel="noopener noreferrer"
+						onClick={onContacted}
+					>
 						<MessageCircle className="size-4" aria-hidden />
 						WhatsApp
 					</a>
@@ -66,7 +74,7 @@ export function NudgeButtons({
 			) : null}
 			{nudge.mailtoUrl ? (
 				<Button asChild size="sm" variant="outline">
-					<a href={nudge.mailtoUrl}>
+					<a href={nudge.mailtoUrl} onClick={onContacted}>
 						<Mail className="size-4" aria-hidden />
 						Email
 					</a>
