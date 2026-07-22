@@ -23,7 +23,11 @@ to "Announcements".
 - **Single multi-line text box** — one `<textarea>`; each line is one
   announcement. Matches the existing single-column storage and how the
   present-mode slide already renders the value. No child table, no JSON.
-- **Display surfaces:** on-screen agenda (new), printed one-page agenda (new),
+- **Line rule (agenda + print):** split on `\n`, trim, drop blank lines. Present
+  mode keeps its existing blank-line-as-spacer behavior.
+- **On-screen agenda = plain inline section**, not a highlighted callout.
+- **Display surfaces:** on-screen agenda (new, plain inline), printed agenda
+  across **all four layouts** (new — see §3 for per-layout placement),
   present-mode slide (already exists — kept as-is functionally).
 - **Naming:** label the field **"Announcements"** everywhere in the UI, and
   rename the present-mode slide's visible title from **"Reminders" → "Announcements"**
@@ -63,48 +67,79 @@ No changes to schema, migrations, zod, or the persistence layer are required.
 
 `src/components/agenda/meeting-meta-dialog.tsx`
 
-- Add an **"Announcements"** multi-line `<textarea>` to the meta form, beside
-  theme / word-of-the-day / notes.
+- Add an **"Announcements"** multi-line `<textarea>` to the meta form, placed
+  among the public-facing fields (theme / word-of-the-day), NOT next to notes.
 - Add `reminders` to the dialog's local form state (initialized from
   `meeting.reminders ?? ""`).
 - Include `reminders` in the payload the dialog sends to `updateMeeting`
   (it currently omits `reminders`). The server fn already accepts it.
 - Gate: unchanged — the dialog is already rendered only under
-  `viewer.canEditMeetingMeta`, so the same admins / VPE who edit meeting meta
-  can edit announcements.
-- Helper text: *"Shown on the agenda and the present-mode slides. One per line."*
+  `viewer.canEditMeetingMeta`, which resolves to **admin OR the meeting's
+  Toastmaster (TMOD), and only within the editable window** (false for a past
+  meeting). The Grammarian's narrow WOD-only editor does NOT gain announcements.
+  This is the intended audience — no new permission.
+- **Make visibility explicit in the copy** so the public/private split is
+  obvious (both fields are free text in one dialog):
+  - Announcements help text: *"Shown publicly on the agenda, printout, and
+    slides — visible to guests. One per line."*
+  - Notes label/help: *"Private — only visible to organizers."*
+
+### Line rendering (shared rule)
+
+A small pure helper turns the stored blob into display lines: **split on `\n`,
+trim each line, drop blank lines** → an array of non-empty strings, each one
+announcement. Used by the on-screen agenda and all print surfaces so they render
+an identical clean list. Present mode keeps its own existing behavior (splits on
+`\n`, blank lines become vertical spacers) — deliberately unchanged, since a
+centered slide is a different visual context. This helper is unit-tested.
 
 ### 2. On-screen agenda display
 
 `src/routes/club.$clubId.meeting.$meetingId.tsx`
 
-- Where `theme` and `wordOfTheDay` are rendered in the meeting header, add an
-  **Announcements callout** directly beneath the header and above the role list.
-- Render as a labeled section ("Announcements") with each non-empty line as a
-  bullet; preserve line breaks.
-- Hidden entirely when `meeting.reminders` is empty/null (no empty section).
+- Where `theme` and `wordOfTheDay` are rendered in the meeting header, add a
+  **plain inline "Announcements" section** (NOT a highlighted callout) directly
+  beneath the header and above the role list.
+- Render the shared line list (bullets / stacked lines).
+- Hidden entirely when `meeting.reminders` is empty/null (no empty section) — a
+  normal agenda is visually unchanged.
 - Visible to all viewers (signed-in and guest) — no gating.
 
-### 3. Printed one-page agenda
+### 3. Printed agenda — all four layouts
 
 `src/components/agenda/meeting-agenda-print.tsx` +
 `src/routes/club.$clubId_.meeting.$meetingId.print.tsx`
 
-- Add an `announcements` field to the `AgendaHeader` type.
-- Pass `meeting.reminders` from the print route into the header
-  (alongside the existing `theme` / `wordOfTheDay` / `location`).
-- Render an **"Announcements"** section in the one-page layout, styled with the
-  existing print theme tokens (`print-theme.tsx`). Hidden when empty.
+- Add an `announcements` field to the `AgendaHeader` type; pass `meeting.reminders`
+  from the print route (alongside `theme` / `wordOfTheDay` / `location`).
+- A shared `AnnouncementsBlock` print component ("Announcements" `Kick` label +
+  the shared line list, styled with `print-theme.tsx` tokens). Rendered only when
+  announcements exist. Per-layout placement:
+  - **Editorial** (`FitPage`, one page): bottom of the **left rail**, after the
+    Club Mission block.
+  - **Grid** (`FitPage`, one page): a compact section **after the Run of Show
+    table, before the pinned officer footer**. `FitPage` scale-to-fits, so the
+    sheet shrinks slightly if needed — it stays **one page** regardless.
+  - **Spacious** (`TwoPage`): in the page-2 `NotesBlock`/`VotesBlock` row,
+    **swap the `NotesBlock` (3 ruled "Meeting Notes" lines) for the announcements
+    block WHEN announcements exist; otherwise keep the ruled lines.** `VotesBlock`
+    unchanged.
+  - **Timing** (`TwoPage`): same conditional swap for its `NotesBlock` (4 lines);
+    `VotesBlock` unchanged.
+- No hard line cap. `FitPage` guarantees one page for Grid/Editorial; the
+  two-pagers have ample room. Truncating on the un-scrollable printout would hide
+  real content, so we don't.
 
 ### 4. Present-mode slide (rename only)
 
-`src/lib/agenda-slides.ts` / `src/components/agenda/meeting-present.tsx`
+`src/lib/slide-layout.ts` (the `case "reminders"` descriptor, ~line 179) — the
+present deck itself (`buildSlideDeck` in `src/lib/agenda-slides.ts`) is unchanged.
 
 - Functionally unchanged — `buildSlideDeck` already emits the reminders slide
-  from `meeting.reminders`.
-- Update the slide's **visible title** from "Reminders" to "Announcements" for
-  naming consistency. The slide `kind` string may stay `"reminders"` internally;
-  only user-visible text changes.
+  from `meeting.reminders`, and the descriptor already splits on `\n`.
+- Update the slide's **visible title** from `content("Reminders", …)` to
+  `content("Announcements", …)` for naming consistency. The slide `kind` string
+  stays `"reminders"` internally; only user-visible text changes.
 
 ## Error / edge handling
 
@@ -116,16 +151,20 @@ No changes to schema, migrations, zod, or the persistence layer are required.
 
 ## Testing
 
+- **Line helper (unit):** `split \n → trim → drop blanks` returns the expected
+  array; empty/whitespace-only input ⇒ `[]`.
 - `src/components/agenda/meeting-meta-dialog.test.tsx`
   - Submitting the dialog includes `reminders` in the `updateMeeting` payload.
   - Editing to empty submits empty (⇒ server normalizes to null).
 - Agenda render test (route/component):
-  - Announcements callout appears when `meeting.reminders` is present.
-  - Callout is absent when `reminders` is null/empty.
-  - Multi-line value renders each line as a separate item.
+  - Plain announcements section appears when `meeting.reminders` is present;
+    absent when null/empty; multi-line value renders each line as a separate item.
 - `src/components/agenda/meeting-agenda-print.test.tsx`
-  - Announcements section renders when present; hidden when empty.
-- `src/lib/agenda-slides.test.ts` (or `meeting-present.test.tsx`)
+  - Announcements section renders when present / hidden when empty, per layout.
+  - **Two-pager conditional swap:** Spacious & Timing show announcements in the
+    notes slot when present, and fall back to the ruled `NotesBlock` when empty;
+    `VotesBlock` present in both cases.
+- `src/lib/slide-layout.test.ts` (or `meeting-present.test.tsx`)
   - Present-slide visible title asserts "Announcements".
 
 ## Out of scope (YAGNI)
@@ -140,9 +179,10 @@ No changes to schema, migrations, zod, or the persistence layer are required.
 
 | File | Change |
 |------|--------|
-| `src/components/agenda/meeting-meta-dialog.tsx` | Add Announcements textarea + form state + include `reminders` in update payload |
-| `src/routes/club.$clubId.meeting.$meetingId.tsx` | Render Announcements callout under the header |
-| `src/components/agenda/meeting-agenda-print.tsx` | Add `announcements` to `AgendaHeader`; render section |
+| shared line helper (new, e.g. in `src/lib/`) | `split \n → trim → drop blanks`; unit-tested |
+| `src/components/agenda/meeting-meta-dialog.tsx` | Add Announcements textarea (public) + form state + include `reminders` in update payload; make notes/announcements visibility explicit in copy |
+| `src/routes/club.$clubId.meeting.$meetingId.tsx` | Render plain inline Announcements section under the header |
+| `src/components/agenda/meeting-agenda-print.tsx` | Add `announcements` to `AgendaHeader`; add `AnnouncementsBlock`; place in Editorial (left rail), Grid (after Run of Show), and conditionally swap `NotesBlock` in Spacious + Timing |
 | `src/routes/club.$clubId_.meeting.$meetingId.print.tsx` | Pass `meeting.reminders` into the print header |
-| `src/lib/agenda-slides.ts` / `src/components/agenda/meeting-present.tsx` | Rename visible slide title "Reminders" → "Announcements" |
-| Tests (4 files above) | Coverage for editor payload, agenda render, print render, slide title |
+| `src/lib/slide-layout.ts` (line ~179) | Rename visible slide title "Reminders" → "Announcements" (slide `kind` stays `"reminders"`) |
+| Tests | Line helper, editor payload, agenda render, print render (per layout + two-pager swap), slide title |
