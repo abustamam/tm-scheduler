@@ -417,6 +417,7 @@ export function SeasonGrid({
 										<MeetingLink
 											clubSlug={clubSlug}
 											meetingId={m.id}
+											meetingKey={m.urlKey}
 											className="block py-2 md:py-0"
 										>
 											{header}
