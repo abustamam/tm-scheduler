@@ -24,6 +24,8 @@ export interface RecruitTarget {
 	notAvailable: boolean;
 	/** Role this member already holds in this meeting, if any. */
 	alreadyRole: string | null;
+	/** VPE has recorded this member as contacted for this recruiting effort. */
+	contacted: boolean;
 }
 
 /**
@@ -41,6 +43,7 @@ export function buildRecruitTargets(
 	}[],
 	unavailableIds: ReadonlySet<string>,
 	roleByMemberId: Readonly<Record<string, string>>,
+	contactedIds: ReadonlySet<string> = new Set(),
 ): RecruitTarget[] {
 	return roster.map((m) => ({
 		id: m.id,
@@ -49,6 +52,7 @@ export function buildRecruitTargets(
 		email: m.email ?? null,
 		notAvailable: unavailableIds.has(m.id),
 		alreadyRole: roleByMemberId[m.id] ?? null,
+		contacted: contactedIds.has(m.id),
 	}));
 }
 
@@ -62,11 +66,17 @@ export function NudgeRecruitPicker({
 	meetingDate,
 	shareUrl,
 	targets,
+	onContacted,
+	onUncontacted,
 }: {
 	roleName: string;
 	meetingDate: string;
 	shareUrl: string;
 	targets: RecruitTarget[];
+	/** Mark a member contacted (auto-fired on nudge tap, or manual toggle). */
+	onContacted?: (memberId: string) => void;
+	/** Manual toggle only — clear the contacted flag. */
+	onUncontacted?: (memberId: string) => void;
 }) {
 	const [open, setOpen] = useState(false);
 	const [picked, setPicked] = useState<RecruitTarget | null>(null);
@@ -74,6 +84,15 @@ export function NudgeRecruitPicker({
 		() => [...targets].sort((a, b) => a.name.localeCompare(b.name)),
 		[targets],
 	);
+	// `picked` is a point-in-time snapshot from the moment it was selected; once
+	// Task 7 wires onContacted/onUncontacted to flip `contacted` upstream (via
+	// optimistic update or refetch), `targets` changes but the frozen `picked`
+	// object doesn't. Re-derive the live record each render so the open detail
+	// panel (in particular the "Contacted" checkbox) reflects the current state
+	// instead of going stale until closed and reopened.
+	const livePicked = picked
+		? (sorted.find((t) => t.id === picked.id) ?? picked)
+		: null;
 
 	return (
 		<Popover
@@ -89,18 +108,31 @@ export function NudgeRecruitPicker({
 				</Button>
 			</PopoverTrigger>
 			<PopoverContent className="w-72 p-0" align="end">
-				{picked ? (
+				{livePicked ? (
 					<div className="space-y-2 p-3">
-						<div className="text-sm font-semibold">{picked.name}</div>
+						<div className="text-sm font-semibold">{livePicked.name}</div>
 						<NudgeButtons
-							name={picked.name}
-							phone={picked.phone}
-							email={picked.email}
+							name={livePicked.name}
+							phone={livePicked.phone}
+							email={livePicked.email}
 							roleName={roleName}
 							meetingDate={meetingDate}
 							shareUrl={shareUrl}
 							mode="recruit"
+							onContacted={() => onContacted?.(livePicked.id)}
 						/>
+						<label className="flex items-center gap-2 text-xs">
+							<input
+								type="checkbox"
+								checked={livePicked.contacted}
+								onChange={(e) =>
+									e.target.checked
+										? onContacted?.(livePicked.id)
+										: onUncontacted?.(livePicked.id)
+								}
+							/>
+							Contacted
+						</label>
 						<Button size="sm" variant="ghost" onClick={() => setPicked(null)}>
 							← Back to list
 						</Button>
@@ -129,6 +161,11 @@ export function NudgeRecruitPicker({
 										{t.alreadyRole ? (
 											<span className="ml-2 text-xs text-[var(--sea-ink-soft)]">
 												Already: {t.alreadyRole}
+											</span>
+										) : null}
+										{t.contacted ? (
+											<span className="ml-2 text-xs text-[var(--success-strong)]">
+												Contacted
 											</span>
 										) : null}
 										{!t.phone && !t.email ? (
