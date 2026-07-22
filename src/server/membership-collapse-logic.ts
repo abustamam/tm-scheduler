@@ -18,6 +18,7 @@ import {
 	guests,
 	meetingAttendance,
 	meetingAwards,
+	meetingOutreach,
 	memberAvailability,
 	memberDues,
 	members,
@@ -33,7 +34,7 @@ type Tx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
 
 /**
  * Collapse the `absorbedId` membership into `keeperId` (both must belong to
- * `clubId`), inside the caller's transaction. Re-points all ten membership-
+ * `clubId`), inside the caller's transaction. Re-points all eleven membership-
  * scoped foreign keys to the keeper — dropping the absorbed row on each
  * uniqueness collision so a re-point can never raise a unique-violation — then
  * reconciles the surviving keeper row and deletes the absorbed `members` row.
@@ -89,7 +90,7 @@ export async function collapseMemberships(
 		})
 		.where(eq(members.id, keeperId));
 
-	// --- Re-point the ten membership FKs (absorbed → keeper) ---------------
+	// --- Re-point the eleven membership FKs (absorbed → keeper) ------------
 	// Pattern for the unique-constrained tables: DELETE the absorbed rows that
 	// would collide with an existing keeper row FIRST, then re-point the rest.
 
@@ -225,6 +226,20 @@ export async function collapseMemberships(
 				eq(activityLog.targetId, absorbedId),
 			),
 		);
+
+	// 11. meeting_outreach.member_id — unique (member, meeting), exactly like
+	//     member_availability. Drop the absorbed dup for a meeting the keeper is
+	//     already contacted on, then re-point the rest.
+	await tx.execute(sql`
+		DELETE FROM meeting_outreach
+		WHERE member_id = ${absorbedId}
+			AND meeting_id IN (
+				SELECT meeting_id FROM meeting_outreach WHERE member_id = ${keeperId}
+			)`);
+	await tx
+		.update(meetingOutreach)
+		.set({ memberId: keeperId })
+		.where(eq(meetingOutreach.memberId, absorbedId));
 
 	// --- Delete the now-empty absorbed membership --------------------------
 	await tx.delete(members).where(eq(members.id, absorbedId));
