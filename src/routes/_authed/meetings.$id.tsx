@@ -18,6 +18,7 @@ import {
 } from "#/components/agenda/meeting-agenda";
 import { MeetingMinutes } from "#/components/club/meeting-minutes";
 import { MeetingNavStrip } from "#/components/club/meeting-nav-strip";
+import { MeetingRoleSheets } from "#/components/club/meeting-role-sheets";
 import { MeetingViewActions } from "#/components/club/meeting-view-actions";
 import { PageContainer } from "#/components/page-container";
 import { ShareLinkButton } from "#/components/share-link-button";
@@ -396,6 +397,7 @@ function MeetingDetail() {
 						deck={deck}
 						clubName={clubName}
 					/>
+					<MeetingRoleSheets meetingId={meeting.id} />
 					{effectiveCanManage && !locked && addableRoles.length > 0 ? (
 						<Button
 							size="sm"
