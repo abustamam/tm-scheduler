@@ -32,6 +32,12 @@ describe("slideLayout headers (no 'Session', title-only)", () => {
 		).toBe("Award Presentation");
 	});
 
+	it("titles the reminders slide 'Announcements'", () => {
+		expect(contentHeader({ kind: "reminders", text: "Bring a guest" })).toBe(
+			"Announcements",
+		);
+	});
+
 	it("speech header uses the slide's ordinal label", () => {
 		expect(
 			contentHeader({

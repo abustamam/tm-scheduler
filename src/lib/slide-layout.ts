@@ -176,7 +176,7 @@ export function slideLayout(slide: Slide): SlideLayout {
 				items: slide.categories,
 			});
 		case "reminders":
-			return content("Reminders", {
+			return content("Announcements", {
 				form: "centered",
 				lines: slide.text
 					.split("\n")
