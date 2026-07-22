@@ -7,6 +7,7 @@ import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	clubs,
+	meetingOutreach,
 	meetings,
 	memberAvailability,
 	roleDefinitions,
@@ -189,6 +190,43 @@ describe.skipIf(!hasTestDb)("loadSeasonGrid", () => {
 			.where(eq(clubs.id, seed.clubId));
 		const data = await loadSeasonGrid({ clubId: seed.clubId, count: 8 });
 		expect(data.clubSlug).toBe(club!.slug);
+	});
+
+	it("includes the contacted set only when includeOutreach is set", async () => {
+		const { loadSeasonGrid } = await import("#/server/season-grid-logic");
+		await testDb
+			.insert(meetingOutreach)
+			.values({ memberId: seed.memberId, meetingId: seed.meetingId })
+			.onConflictDoNothing();
+
+		const withFlag = await loadSeasonGrid({
+			clubId: seed.clubId,
+			count: 8,
+			includeOutreach: true,
+		});
+		expect(withFlag.contacted).toContainEqual({
+			memberId: seed.memberId,
+			meetingId: seed.meetingId,
+		});
+
+		const withoutFlag = await loadSeasonGrid({ clubId: seed.clubId, count: 8 });
+		expect(withoutFlag.contacted).toEqual([]);
+	});
+
+	it("public season grid never includes the contacted set", async () => {
+		const { loadPublicSeasonGrid } = await import("#/server/season-grid-logic");
+		// A contacted row exists for the seeded (member, meeting); the public
+		// loader must never surface it — who-was-contacted is officer-private.
+		await testDb
+			.insert(meetingOutreach)
+			.values({ memberId: seed.memberId, meetingId: seed.meetingId })
+			.onConflictDoNothing();
+
+		const result = await loadPublicSeasonGrid({
+			clubId: seed.clubId,
+			count: 8,
+		});
+		expect(result.contacted).toEqual([]);
 	});
 
 	it("loadPublicSeasonGrid strips contact even though the DB has it", async () => {

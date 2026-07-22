@@ -80,6 +80,7 @@ const data: SeasonGridData = {
 		},
 	],
 	unavailable: [],
+	contacted: [],
 };
 
 const PICKED: StoredMember = { id: "m-picked", name: "Picked Member" };

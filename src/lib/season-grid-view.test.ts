@@ -66,6 +66,7 @@ const data: SeasonGridData = {
 		},
 	],
 	unavailable: [{ memberId: "b", meetingId: "m1" }],
+	contacted: [],
 };
 
 describe("projectGrid – roles orientation", () => {
