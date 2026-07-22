@@ -21,11 +21,13 @@ import { resolveClubOrRedirect } from "#/lib/club-route";
 import { meetingPdfBasename } from "#/lib/pdf-filename";
 import { getPublicMeetingByKey } from "#/server/meetings";
 
+// One-page layouts lead: we prefer single-page agendas, and both one-pagers now
+// carry color-coded timing. The two-page Timing/Spacious layouts stay available.
 const LAYOUTS: { id: AgendaLayout; label: string }[] = [
+	{ id: "grid", label: "Grid" },
+	{ id: "editorial", label: "Editorial" },
 	{ id: "timing", label: "Timing" },
 	{ id: "spacious", label: "Spacious" },
-	{ id: "editorial", label: "Editorial" },
-	{ id: "grid", label: "Grid" },
 ];
 const LAYOUT_IDS = LAYOUTS.map((l) => l.id);
 
@@ -38,7 +40,7 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/print")(
 			return {
 				layout: LAYOUT_IDS.includes(l as AgendaLayout)
 					? (l as AgendaLayout)
-					: "timing",
+					: "grid",
 				// `chrome=none` is the clean shareable view (#334): no layout selector,
 				// offline badge, or timing banner — just the agenda + a Print button.
 				chrome: search.chrome === "none" ? "none" : undefined,

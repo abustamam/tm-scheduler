@@ -18,7 +18,7 @@ import type { Slide } from "#/lib/agenda-slides";
 export function MeetingViewActions({
 	clubSlug,
 	meetingId,
-	printLayout = "timing",
+	printLayout = "grid",
 	deck,
 	clubName,
 }: {
