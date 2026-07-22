@@ -104,6 +104,38 @@ export const resources: Resource[] = [
 		title: "What is Pathways?",
 		desc: "A short intro to the Toastmasters learning experience.",
 	},
+	{
+		slug: "officer-roles",
+		cat: "Roles",
+		icon: "users",
+		tone: "palm",
+		title: "Club officer roles",
+		desc: "Who runs the club — President, VP Education, and the rest of the team.",
+	},
+	{
+		slug: "speech-contests",
+		cat: "Meeting",
+		icon: "star",
+		tone: "ink",
+		title: "Speech contests",
+		desc: "The contest types, who can compete, and how the judging works.",
+	},
+	{
+		slug: "timing-card",
+		cat: "Roles",
+		icon: "clock",
+		tone: "palm",
+		title: "Timing color-card reference",
+		desc: "What green, amber, and red mean — plus the usual timing windows.",
+	},
+	{
+		slug: "glossary",
+		cat: "Meeting",
+		icon: "book",
+		tone: "ink",
+		title: "Glossary of Toastmasters terms",
+		desc: "Plain-language definitions of the words you'll hear at your first meetings.",
+	},
 ];
 
 /** Look up a resource by its URL slug. */
