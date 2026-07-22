@@ -20,11 +20,11 @@ export function MeetingNavStrip({
 	// callers passing their own `getLinkProps` ignore it.
 	clubId: string;
 	items: MeetingNavItem[];
-	getLinkProps?: (meetingId: string) => LinkProps;
+	getLinkProps?: (item: MeetingNavItem) => LinkProps;
 }) {
 	const linkPropsFor =
 		getLinkProps ??
-		((meetingId: string) => defaultMeetingNavLinkProps(clubId, meetingId));
+		((item: MeetingNavItem) => defaultMeetingNavLinkProps(clubId, item));
 	const activeRef = useRef<HTMLLIElement>(null);
 	const activeId = items.find((i) => i.isCurrent)?.meetingId;
 
@@ -48,7 +48,7 @@ export function MeetingNavStrip({
 						className="shrink-0"
 					>
 						<Link
-							{...linkPropsFor(item.meetingId)}
+							{...linkPropsFor(item)}
 							aria-current={item.isCurrent ? "page" : undefined}
 							className={cn(
 								"flex items-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-1.5 text-sm transition-colors",

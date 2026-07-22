@@ -373,9 +373,9 @@ function MeetingDetail() {
 				<MeetingNavStrip
 					clubId={clubSlug}
 					items={navItems}
-					getLinkProps={(meetingId) => ({
+					getLinkProps={(item) => ({
 						to: "/meetings/$id",
-						params: { id: meetingId },
+						params: { id: item.meetingId },
 					})}
 				/>
 				{meeting.wordOfTheDay ? (
