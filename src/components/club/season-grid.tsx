@@ -630,6 +630,7 @@ export function SeasonGrid({
 													onClaim={claim}
 													onRelease={release}
 													clubSlug={clubSlug}
+													meetingKey={m?.urlKey}
 													meetingLabel={
 														m
 															? formatMeetingDate(m.scheduledAt, m.timezone)
