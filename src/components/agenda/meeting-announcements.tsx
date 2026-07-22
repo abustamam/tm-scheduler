@@ -14,8 +14,8 @@ export function MeetingAnnouncements({
 	if (lines.length === 0) return null;
 	return (
 		<section className="space-y-1.5">
-			<h2 className="flex items-center gap-1.5 text-sm font-semibold">
-				<Megaphone className="size-4 text-primary" aria-hidden />
+			<h2 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+				<Megaphone className="size-3.5" aria-hidden />
 				Announcements
 			</h2>
 			<ul className="ml-5 list-disc space-y-1 text-sm text-muted-foreground">
