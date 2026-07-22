@@ -150,6 +150,63 @@ function mark(minutes: number): string {
 	return `${whole}:${String(secs).padStart(2, "0")}`;
 }
 
+/** The green·amber·red timing marks for one beat, rendered inline and colored.
+ *  Shared by the one-page layouts (editorial + grid) so their per-speaker
+ *  timing reads the same as the detailed timing table's Green·Amber·Red column. */
+function TimingTrio({
+	marks,
+	size = 10,
+}: {
+	marks: NonNullable<TimelineRow["marks"]>;
+	size?: number;
+}) {
+	return (
+		<span style={{ whiteSpace: "nowrap" }}>
+			<span style={{ fontSize: size, color: GREEN, fontWeight: 700 }}>
+				{mark(marks.green)}
+			</span>
+			<span
+				style={{ fontSize: size, color: AMBER, fontWeight: 700, marginLeft: 6 }}
+			>
+				{mark(marks.yellow)}
+			</span>
+			<span
+				style={{ fontSize: size, color: RED, fontWeight: 700, marginLeft: 6 }}
+			>
+				{mark(marks.red)}
+			</span>
+		</span>
+	);
+}
+
+/** A compact one-line green/amber/red key for the one-page layouts (the full
+ *  "Timing Signals" callout only exists on the 2-page timing layout). */
+function TimingLegend() {
+	const dot = (color: string, label: string) => (
+		<span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+			<span
+				style={{
+					width: 9,
+					height: 9,
+					borderRadius: "50%",
+					background: color,
+					flex: "none",
+				}}
+			/>
+			<span style={{ fontSize: 9, color: MUTED, fontWeight: 600 }}>
+				{label}
+			</span>
+		</span>
+	);
+	return (
+		<div style={{ display: "flex", gap: 14, alignItems: "center" }}>
+			{dot(GREEN, "Min reached")}
+			{dot(AMBER, "Approaching")}
+			{dot(RED, "Wrap up")}
+		</div>
+	);
+}
+
 /** The colored spine for a run-of-show beat, keyed off the role/segment name. */
 function beatColor(who: string): string {
 	const w = who.toLowerCase();
@@ -314,13 +371,17 @@ function OfficerGrid({
 	);
 }
 
-/** The narrative run-of-show (editorial / spacious): a colored-spine list. */
+/** The narrative run-of-show (editorial / spacious): a colored-spine list.
+ *  `timingColors` swaps the muted min–max range for the colored green·amber·red
+ *  trio (used by the one-page editorial layout). */
 function RunNarrative({
 	rows,
 	scale,
+	timingColors,
 }: {
 	rows: TimelineRow[];
 	scale: "sm" | "lg";
+	timingColors?: boolean;
 }) {
 	const lg = scale === "lg";
 	return (
@@ -354,10 +415,16 @@ function RunNarrative({
 							<div style={{ fontSize: lg ? 14 : 11.5, fontWeight: 700 }}>
 								{r.who}
 								{r.marks ? (
-									<span style={{ fontWeight: 600, color: MUTED }}>
-										{" · "}
-										{mark(r.marks.green)}–{mark(r.marks.red)}
-									</span>
+									timingColors ? (
+										<span style={{ marginLeft: 8 }}>
+											<TimingTrio marks={r.marks} size={lg ? 11 : 10} />
+										</span>
+									) : (
+										<span style={{ fontWeight: 600, color: MUTED }}>
+											{" · "}
+											{mark(r.marks.green)}–{mark(r.marks.red)}
+										</span>
+									)
 								) : null}
 							</div>
 							<div
@@ -651,8 +718,18 @@ function EditorialLayout({
 					<div style={{ marginBottom: 4 }}>
 						<RolesRoster roles={roles} variant="plain" />
 					</div>
-					<Kick style={{ margin: "18px 0 8px" }}>Run of Show</Kick>
-					<RunNarrative rows={rows} scale="sm" />
+					<div
+						style={{
+							display: "flex",
+							justifyContent: "space-between",
+							alignItems: "baseline",
+							margin: "18px 0 8px",
+						}}
+					>
+						<Kick>Run of Show</Kick>
+						<TimingLegend />
+					</div>
+					<RunNarrative rows={rows} scale="sm" timingColors />
 				</div>
 			</div>
 
@@ -747,7 +824,17 @@ function GridLayout({
 					<RolesRoster roles={roles} variant="boxed" />
 				</div>
 
-				<Kick style={{ marginBottom: 6 }}>Run of Show</Kick>
+				<div
+					style={{
+						display: "flex",
+						justifyContent: "space-between",
+						alignItems: "baseline",
+						marginBottom: 6,
+					}}
+				>
+					<Kick>Run of Show</Kick>
+					<TimingLegend />
+				</div>
 				<div
 					style={{
 						border: "1px solid rgba(23,58,64,.12)",
@@ -787,6 +874,18 @@ function GridLayout({
 								</span>{" "}
 								<span style={{ fontSize: 10, color: MUTED }}>{r.detail}</span>
 							</div>
+							{r.marks ? (
+								<div
+									style={{
+										flex: "none",
+										display: "flex",
+										alignItems: "center",
+										padding: "4px 12px 4px 0",
+									}}
+								>
+									<TimingTrio marks={r.marks} size={9.5} />
+								</div>
+							) : null}
 						</div>
 					))}
 				</div>
