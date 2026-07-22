@@ -21,6 +21,15 @@ describe("pickKeeper", () => {
 		expect(best?.id).toBe("linked");
 	});
 
+	it("prefers more history when linked status is tied", () => {
+		expect(
+			pickKeeper([
+				c({ id: "a", historyCount: 3 }),
+				c({ id: "b", historyCount: 10 }),
+			])?.id,
+		).toBe("b");
+	});
+
 	it("breaks ties among linked/unlinked by history, then oldest join, then id", () => {
 		const older = new Date("2020-01-01");
 		const newer = new Date("2024-01-01");
