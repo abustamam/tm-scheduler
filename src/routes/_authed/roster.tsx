@@ -24,15 +24,23 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "#/components/ui/dialog";
+import { Input } from "#/components/ui/input";
+import { Label } from "#/components/ui/label";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { type InviteState, inviteStateOf } from "#/lib/invite-state";
 import { formatTenure } from "#/lib/members";
-import { officerPositionLabel } from "#/lib/officers";
+import {
+	OFFICER_POSITION_LABELS,
+	OFFICER_POSITIONS,
+	type OfficerPosition,
+	officerPositionLabel,
+} from "#/lib/officers";
 import {
 	buildImportPreview,
 	type PreviewRow,
 	parseRosterText,
+	type RowIssue,
 } from "#/lib/roster-import";
 import { cn } from "#/lib/utils";
 import { inviteAllMembers, inviteMember } from "#/server/account-invite";
@@ -126,6 +134,7 @@ function Roster() {
 	const [importOpen, setImportOpen] = useState(false);
 	const [csvOpen, setCsvOpen] = useState(false);
 	const [inviteAllOpen, setInviteAllOpen] = useState(false);
+	const [addOpen, setAddOpen] = useState(false);
 
 	// The invite control adds a wider trailing column (icon button + chevron) for
 	// managers; members see the original chevron-only layout. Fixed widths keep the
@@ -247,7 +256,11 @@ function Roster() {
 							Upload TM CSV
 						</Button>
 					) : null}
-					<Button size="sm">+ Add member</Button>
+					{clubId && canManage ? (
+						<Button size="sm" onClick={() => setAddOpen(true)}>
+							+ Add member
+						</Button>
+					) : null}
 				</div>
 			</div>
 
@@ -438,6 +451,16 @@ function Roster() {
 					onOpenChange={setInviteAllOpen}
 					clubId={clubId}
 					invitableCount={invitableCount}
+				/>
+			) : null}
+
+			{clubId && canManage ? (
+				<AddMemberDialog
+					open={addOpen}
+					onOpenChange={setAddOpen}
+					existing={members}
+					clubId={clubId}
+					currentMemberId={currentMemberId}
 				/>
 			) : null}
 		</PageContainer>
@@ -846,6 +869,206 @@ const ISSUE_LABELS: Record<PreviewRow["issues"][number], string> = {
 	"invalid-email": "Bad email",
 	duplicate: "Duplicate",
 };
+
+// Native <select> styled to match the shadcn <Input> (no shadcn Select in ui/).
+const MEMBER_SELECT_CLASS =
+	"h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 md:text-sm dark:bg-input/30";
+
+// Friendlier, single-row phrasings of the shared import issues (ISSUE_LABELS is
+// tuned for the dense bulk-preview table).
+const ADD_ISSUE_MESSAGE: Record<RowIssue, string> = {
+	"blank-name": "Enter a name.",
+	"invalid-email": "That email doesn't look right.",
+	duplicate: "Someone with that name is already on the roster.",
+};
+
+/**
+ * Quick single-member add (VPE). A one-row wrapper over `bulkImportMembers`, so
+ * it inherits the same server-side dedupe, email validation, E.164 phone
+ * normalization and officer-term wiring as Bulk import — just a form instead of
+ * a paste box. Only the name is required; picking an office opens a current
+ * officer term (President / VP Education also default the member to club-admin),
+ * exactly like an imported row.
+ */
+function AddMemberDialog({
+	open,
+	onOpenChange,
+	existing,
+	clubId,
+	currentMemberId,
+}: {
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+	existing: { name: string; email: string | null }[];
+	clubId: string;
+	currentMemberId: string | null;
+}) {
+	const router = useRouter();
+	const [name, setName] = useState("");
+	const [email, setEmail] = useState("");
+	const [phone, setPhone] = useState("");
+	const [office, setOffice] = useState<OfficerPosition | "">("");
+	const [busy, setBusy] = useState(false);
+
+	// Office travels to the server as free text (its label); parseOfficerPosition
+	// maps it back to the enum, matching how pasted rows are handled.
+	const officeText = office ? OFFICER_POSITION_LABELS[office] : "";
+
+	// Validate the single row through the same preview builder Bulk import uses,
+	// so a blank name / bad email / duplicate is caught before we ever submit.
+	const preview: PreviewRow | null = name.trim()
+		? (buildImportPreview(
+				[{ name, email, phone, office: officeText }],
+				existing,
+			)[0] ?? null)
+		: null;
+	const blockingIssue =
+		preview && !preview.willImport ? preview.issues[0] : null;
+	const canSubmit = !!preview?.willImport && !busy;
+
+	function reset() {
+		setName("");
+		setEmail("");
+		setPhone("");
+		setOffice("");
+	}
+
+	async function onSubmit() {
+		if (!canSubmit) return;
+		setBusy(true);
+		try {
+			const result = await bulkImportMembers({
+				data: {
+					clubId,
+					actorMemberId: currentMemberId,
+					rows: [{ name, email, phone, office: officeText }],
+				},
+			});
+			if (result.inserted === 1) {
+				toast.success(`Added ${name.trim()}.`);
+				onOpenChange(false);
+				reset();
+				await router.invalidate();
+			} else {
+				// The client preview cleared it, so a 0-insert means the roster
+				// changed under us (e.g. a concurrent add of the same name).
+				toast.error("Couldn't add them — they may already be on the roster.");
+			}
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	return (
+		<Dialog open={open} onOpenChange={onOpenChange}>
+			<DialogContent className="sm:max-w-[440px]">
+				<DialogHeader>
+					<DialogTitle>Add member</DialogTitle>
+					<DialogDescription>
+						Add one person to the roster. Only a name is required — email, phone
+						and office are optional.
+					</DialogDescription>
+				</DialogHeader>
+
+				<form
+					onSubmit={(e) => {
+						e.preventDefault();
+						onSubmit();
+					}}
+					className="space-y-4"
+				>
+					<div className="space-y-3">
+						<div className="space-y-1.5">
+							<Label htmlFor="add-member-name">Name</Label>
+							<Input
+								id="add-member-name"
+								value={name}
+								onChange={(e) => setName(e.target.value)}
+								placeholder="Jane Doe"
+								autoFocus
+							/>
+						</div>
+
+						<div className="space-y-1.5">
+							<Label htmlFor="add-member-email">
+								Email{" "}
+								<span className="font-normal text-[var(--sea-ink-soft)]">
+									optional
+								</span>
+							</Label>
+							<Input
+								id="add-member-email"
+								type="email"
+								value={email}
+								onChange={(e) => setEmail(e.target.value)}
+								placeholder="jane@club.org"
+							/>
+						</div>
+
+						<div className="space-y-1.5">
+							<Label htmlFor="add-member-phone">
+								Phone{" "}
+								<span className="font-normal text-[var(--sea-ink-soft)]">
+									optional
+								</span>
+							</Label>
+							<Input
+								id="add-member-phone"
+								type="tel"
+								value={phone}
+								onChange={(e) => setPhone(e.target.value)}
+								placeholder="(555) 123-4567"
+							/>
+						</div>
+
+						<div className="space-y-1.5">
+							<Label htmlFor="add-member-office">
+								Office{" "}
+								<span className="font-normal text-[var(--sea-ink-soft)]">
+									optional
+								</span>
+							</Label>
+							<select
+								id="add-member-office"
+								value={office}
+								onChange={(e) =>
+									setOffice(e.target.value as OfficerPosition | "")
+								}
+								className={MEMBER_SELECT_CLASS}
+							>
+								<option value="">No office</option>
+								{OFFICER_POSITIONS.map((p) => (
+									<option key={p} value={p}>
+										{OFFICER_POSITION_LABELS[p]}
+									</option>
+								))}
+							</select>
+						</div>
+
+						{blockingIssue ? (
+							<p className="text-sm font-semibold text-[var(--warning-strong)]">
+								{ADD_ISSUE_MESSAGE[blockingIssue]}
+							</p>
+						) : null}
+					</div>
+
+					<DialogFooter>
+						<DialogClose asChild>
+							<Button type="button" variant="outline" disabled={busy}>
+								Cancel
+							</Button>
+						</DialogClose>
+						<Button type="submit" disabled={!canSubmit}>
+							{busy ? "Adding…" : "Add member"}
+						</Button>
+					</DialogFooter>
+				</form>
+			</DialogContent>
+		</Dialog>
+	);
+}
 
 function BulkImportDialog({
 	open,
