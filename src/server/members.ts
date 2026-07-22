@@ -2,14 +2,14 @@ import { createServerFn } from "@tanstack/react-start";
 import { and, asc, eq, ne } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
-import { members, people } from "#/db/schema";
-import { logActivity } from "./activity";
+import { members } from "#/db/schema";
 import { requireClubRole, requireUser } from "./guards";
 import {
 	applyBulkImport,
 	applyMemberEdit,
 	applyMemberMerge,
 	applyMemberRemove,
+	applySelfAdd,
 	applySetMemberRole,
 	applySetMemberStatus,
 	bulkImportSchema,
@@ -43,35 +43,15 @@ export const listMembers = createServerFn({ method: "GET" })
 
 const addMemberSchema = z.object({
 	clubId: z.string().uuid(),
-	name: z.string().trim().min(1),
+	// Cap the length so one public self-add can't insert an oversized row (#326).
+	name: z.string().trim().min(1).max(80),
 });
 
-/** Add a new roster member to a club. PUBLIC — no session required (self-add). */
+/** Add a new roster member to a club. PUBLIC — no session required (self-add).
+ *  Throttled per club in `applySelfAdd` (#326). */
 export const addMember = createServerFn({ method: "POST" })
 	.validator((i: unknown) => addMemberSchema.parse(i))
-	.handler(async ({ data }) => {
-		// Every membership belongs to a person (ADR-0008). A self-add is a new
-		// person; dedupe/merge is a later, deliberate action.
-		const [person] = await db
-			.insert(people)
-			.values({ name: data.name })
-			.returning({ id: people.id });
-		if (!person) throw new Error("Failed to insert person.");
-		const [m] = await db
-			.insert(members)
-			.values({ clubId: data.clubId, personId: person.id, name: data.name })
-			.returning({ id: members.id });
-		if (!m) throw new Error("Failed to insert member.");
-		await logActivity(db, {
-			clubId: data.clubId,
-			actorMemberId: m.id,
-			action: "member_add",
-			targetType: "member",
-			targetId: m.id,
-			detail: { name: data.name },
-		});
-		return { id: m.id };
-	});
+	.handler(async ({ data }) => applySelfAdd(data));
 
 // ---------------------------------------------------------------------------
 // VPE roster management (authed). The DB logic lives in `members-logic.ts` so
