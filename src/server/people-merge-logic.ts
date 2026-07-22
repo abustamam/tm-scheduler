@@ -187,11 +187,15 @@ export async function mergePeople(
 				actorMemberId: null,
 				impersonatedBy: parsed.actorUserId ?? null,
 				action: "member_merge",
-				targetType: "member",
+				// targetId is a Person id (not a membership id) — label the id-space
+				// as "person" so consumers don't mis-resolve it as a membership (#330).
+				targetType: "person",
 				targetId: keeper.id,
 				detail: {
 					keeperPersonId: keeper.id,
 					absorbedPersonId: absorbed.id,
+					keeperName: keeper.name,
+					absorbedName: absorbed.name,
 					movedCounts,
 				},
 			});
