@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
-import { and, asc, eq, gte, ne, sql } from "drizzle-orm";
+import { and, asc, eq, gte, lt, ne, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { db } from "#/db";
@@ -15,6 +15,7 @@ import {
 	speeches,
 } from "#/db/schema";
 import { resolveEvaluatorLinks } from "#/lib/agenda";
+import { localDateKey, localDayRange, meetingUrlKey } from "#/lib/meeting-url";
 import { officerPositionLabel } from "#/lib/officers";
 import {
 	canManageClub,
@@ -31,6 +32,7 @@ import {
 	loadHolderContacts,
 	loadRosterWithContact,
 } from "./meeting-contacts-logic";
+import { resolveMeetingKey } from "./meeting-resolve-logic";
 import {
 	applyCompleteMeeting,
 	applyCreateMeeting,
@@ -164,6 +166,25 @@ async function loadMeetingDetail(
 		},
 	});
 
+	// Canonical date URL key for THIS meeting: club-local date, suffixed with
+	// -HHmm only when the club has 2+ meetings that local day (date-urls feature).
+	const tz = club?.timezone ?? "UTC";
+	const { start: dayStart, end: dayEnd } = localDayRange(
+		localDateKey(meeting.scheduledAt, tz),
+		tz,
+	);
+	const [{ count: sameDayCount } = { count: 0 }] = await db
+		.select({ count: sql<number>`count(*)::int` })
+		.from(meetings)
+		.where(
+			and(
+				eq(meetings.clubId, meeting.clubId),
+				gte(meetings.scheduledAt, dayStart),
+				lt(meetings.scheduledAt, dayEnd),
+			),
+		);
+	const urlKey = meetingUrlKey(meeting.scheduledAt, tz, sameDayCount >= 2);
+
 	// The club's next non-cancelled meeting strictly after this one (spec: relative
 	// to the presented meeting, not wall-clock now). Backs the Thank-You slide.
 	const [nextMeeting] = await db
@@ -278,6 +299,7 @@ async function loadMeetingDetail(
 		clubName: club?.name ?? "",
 		clubNumber: club?.clubNumber ?? null,
 		clubSlug: club?.slug ?? "",
+		urlKey,
 		clubDistrict: club?.district ?? null,
 		clubMission: club?.mission ?? null,
 		clubMeetingSchedule: club?.meetingSchedule ?? null,
@@ -312,6 +334,35 @@ export const getMeeting = createServerFn({ method: "GET" })
 export const getPublicMeeting = createServerFn({ method: "GET" })
 	.validator((meetingId: unknown) => uuid.parse(meetingId))
 	.handler(async ({ data: meetingId }) => loadMeetingDetail(meetingId, null));
+
+const meetingKeyInput = z.object({ clubId: uuid, key: z.string().min(1) });
+
+/**
+ * Public meeting detail resolved by URL key (club-local date / date-HHmm / uuid),
+ * session-aware `canManage`. Mirrors `getMeeting` but keyed by the pretty URL
+ * segment. Throws "Meeting not found." (recognized by `isMeetingNotFoundError`)
+ * when the key resolves to nothing, so route loaders render `notFound()`.
+ */
+export const getMeetingByKey = createServerFn({ method: "GET" })
+	.validator((input: unknown) => meetingKeyInput.parse(input))
+	.handler(async ({ data }) => {
+		const meetingId = await resolveMeetingKey(data.clubId, data.key);
+		if (!meetingId) throw new Error("Meeting not found.");
+		const sessionUser = await getSessionUser();
+		return loadMeetingDetail(meetingId, sessionUser?.id ?? null);
+	});
+
+/**
+ * Public meeting detail resolved by URL key — forces `canManage = false` (no PII),
+ * exactly like `getPublicMeeting`. For the present/print/anonymous surfaces.
+ */
+export const getPublicMeetingByKey = createServerFn({ method: "GET" })
+	.validator((input: unknown) => meetingKeyInput.parse(input))
+	.handler(async ({ data }) => {
+		const meetingId = await resolveMeetingKey(data.clubId, data.key);
+		if (!meetingId) throw new Error("Meeting not found.");
+		return loadMeetingDetail(meetingId, null);
+	});
 
 /**
  * The club's soonest upcoming (non-cancelled) meeting with its full agenda, or
