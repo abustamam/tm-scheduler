@@ -174,7 +174,7 @@ export function MeetingMetaDialog({
 						<Label htmlFor="notes">Notes</Label>
 						<Input id="notes" name="notes" defaultValue={meeting.notes ?? ""} />
 						<p className="text-xs text-muted-foreground">
-							Private — only visible to organizers.
+							Organizer notes — not shown on the agenda, printout, or slides.
 						</p>
 					</div>
 					<DialogFooter>
