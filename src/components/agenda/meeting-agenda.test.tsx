@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { lockedViewer } from "#/lib/meeting-lifecycle";
 import { meetingViewer } from "#/lib/meeting-viewer";
@@ -57,6 +58,7 @@ function renderAgenda(
 	viewer: ReturnType<typeof meetingViewer>,
 	slots: AgendaSlot[],
 	pairedRoleIds?: Set<string>,
+	requireIdentity?: () => Promise<{ id: string; name: string } | null>,
 ) {
 	return render(
 		<MeetingAgenda
@@ -86,6 +88,7 @@ function renderAgenda(
 			actorMemberId="me"
 			selfMemberId="me"
 			onMetaSaved={() => {}}
+			requireIdentity={requireIdentity}
 		/>,
 	);
 }
@@ -130,20 +133,21 @@ describe("MeetingAgenda capability gating", () => {
 				isTmod: false,
 				isGrammarian: false,
 				isEditableWindow: true,
+				isSignedIn: true,
 			}),
 			[filled],
 		);
 		expect(screen.queryByText("Open roles:")).toBeNull();
 		expect(screen.queryByRole("button", { name: "Confirm" })).toBeNull();
 		expect(screen.queryByRole("button", { name: /Reassign/ })).toBeNull();
-		// #302 parity: a signed-in non-manager gets the self-serve take-over, same
-		// as a self-asserted public member — the unified viewer grants it on any
-		// identity. Only the manager-only controls above stay hidden.
+		// A signed-in non-manager keeps self-serve take-over; only the
+		// manager-only controls above stay hidden. (Take-over is now
+		// signed-in-only — see the self-asserted-member case below.)
 		expect(screen.getByText("take over")).toBeTruthy();
 		expect(screen.getByText("Filled")).toBeTruthy();
 	});
 
-	it("shows takeover but no admin controls for a self-asserted member", () => {
+	it("hides takeover for a self-asserted (name-pick) member", () => {
 		const filled = slot({
 			status: "claimed",
 			assigneeId: "other",
@@ -159,14 +163,15 @@ describe("MeetingAgenda capability gating", () => {
 			}),
 			[filled],
 		);
-		expect(screen.getByText("take over")).toBeTruthy();
+		expect(screen.queryByText("take over")).toBeNull();
 		expect(screen.queryByRole("button", { name: "Confirm" })).toBeNull();
 		expect(screen.queryByText("Open roles:")).toBeNull();
 		// Not TMOD → no assign picker.
 		expect(screen.queryByRole("button", { name: /Reassign/ })).toBeNull();
 	});
 
-	it("gives a visitor with no name a read-only agenda (claim disabled)", () => {
+	it("gives a visitor with no name an enabled Claim that resolves identity on click", async () => {
+		const requireIdentity = vi.fn(async () => null); // dismissed → aborts
 		renderAgenda(
 			meetingViewer({
 				currentMemberId: null,
@@ -176,10 +181,30 @@ describe("MeetingAgenda capability gating", () => {
 				isEditableWindow: true,
 			}),
 			[slot({ status: "open" })],
+			undefined,
+			requireIdentity,
+		);
+		const claim = screen.getByRole("button", { name: /^Claim / });
+		expect((claim as HTMLButtonElement).disabled).toBe(false);
+		await userEvent.click(claim);
+		expect(requireIdentity).toHaveBeenCalled();
+		// Still no manager assign picker for an anonymous visitor.
+		expect(screen.queryByRole("button", { name: /Assign/ })).toBeNull();
+	});
+
+	it("keeps Claim disabled for a memberless viewer with no requireIdentity (authed impersonation)", () => {
+		renderAgenda(
+			meetingViewer({
+				currentMemberId: null,
+				canManage: true,
+				isTmod: false,
+				isGrammarian: false,
+				isEditableWindow: true,
+			}),
+			[slot({ status: "open" })],
 		);
 		const claim = screen.getByRole("button", { name: /^Claim / });
 		expect((claim as HTMLButtonElement).disabled).toBe(true);
-		expect(screen.queryByRole("button", { name: /Assign/ })).toBeNull();
 	});
 
 	it("is read-only under a locked viewer: no release on your own slot", () => {

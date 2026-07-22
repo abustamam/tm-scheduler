@@ -1,92 +1,22 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
-import { Skeleton } from "#/components/ui/skeleton";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
-import { type StoredMember, useCurrentMember } from "#/lib/member-identity";
+import type { StoredMember } from "#/lib/member-identity";
 import { officerPositionLabel } from "#/lib/officers";
 import { addMember, listMembers } from "#/server/members";
 import { MemberAvatar } from "./member-avatar";
 
 /**
- * Public gate for the member-mobile club shell. Reads the per-club identity
- * from localStorage (via {@link useCurrentMember}); until a member is picked it
- * shows the roster pick-name screen, then renders `children`.
- *
- * Router-independent on purpose — `clubUuid` and `clubSlug` are passed in by
- * the route layout, so this can be rendered (and tested) without a router.
+ * Roster search + "I'm new — add me" picker. Extracted from the retired
+ * `PickNameScreen` so the identity dialog reuses it. Router-independent:
+ * `clubUuid` is passed in; on pick it calls `onPicked` with the chosen/created
+ * member. Renders inside a Dialog (no full-page chrome of its own).
  */
-export function RequireMember({
-	clubUuid,
-	clubSlug,
-	children,
-}: {
-	clubUuid: string;
-	clubSlug: string;
-	children: React.ReactNode;
-}) {
-	const { member, setMember } = useCurrentMember(clubSlug);
-	const [mounted, setMounted] = useState(false);
-	useEffect(() => setMounted(true), []);
-
-	if (!mounted) {
-		return <IdentityGateSkeleton />;
-	}
-
-	if (!member) {
-		return <PickNameScreen clubUuid={clubUuid} onPicked={setMember} />;
-	}
-
-	return <>{children}</>;
-}
-
-/**
- * Varied widths (also the React keys) for the placeholder name lines so the
- * skeleton roster reads as a list of different names, not a repeated bar.
- */
-const SKELETON_ROW_WIDTHS = ["w-32", "w-40", "w-24", "w-36", "w-28"];
-
-/**
- * Loading placeholder mirroring {@link PickNameScreen}'s layout (heading,
- * search field, member rows) inside the same max-width container, so the swap
- * to real content produces no layout jump. Rendered while the client-side
- * stored-identity check hasn't run yet.
- */
-function IdentityGateSkeleton() {
-	return (
-		<output
-			aria-label="Loading"
-			className="mx-auto flex w-full max-w-md flex-1 flex-col gap-6 px-5 py-8"
-		>
-			<div className="space-y-1">
-				<Skeleton className="h-8 w-44" />
-				<Skeleton className="h-5 w-52 max-w-full" />
-			</div>
-
-			<div className="space-y-2">
-				<Skeleton className="h-3.5 w-28" />
-				<Skeleton className="h-9 w-full" />
-			</div>
-
-			<div className="flex flex-col gap-2">
-				{SKELETON_ROW_WIDTHS.map((width) => (
-					<div
-						key={width}
-						className="flex items-center gap-3 rounded-lg border border-border bg-card px-3 py-2.5"
-					>
-						<Skeleton className="size-[38px] shrink-0 rounded-full" />
-						<Skeleton className={`h-4 ${width}`} />
-					</div>
-				))}
-			</div>
-		</output>
-	);
-}
-
-function PickNameScreen({
+export function PickNameForm({
 	clubUuid,
 	onPicked,
 }: {
@@ -124,16 +54,7 @@ function PickNameScreen({
 	}
 
 	return (
-		<div className="mx-auto flex w-full max-w-md flex-1 flex-col gap-6 px-5 py-8">
-			<header className="space-y-1">
-				<h1 className="font-display text-2xl font-semibold text-foreground">
-					Who are you?
-				</h1>
-				<p className="text-muted-foreground text-sm">
-					Pick your name to continue.
-				</p>
-			</header>
-
+		<div className="flex flex-col gap-4">
 			<div className="space-y-2">
 				<Label htmlFor="member-search">Search members</Label>
 				<Input
@@ -146,7 +67,7 @@ function PickNameScreen({
 				/>
 			</div>
 
-			<ul className="flex flex-col gap-2">
+			<ul className="flex max-h-[40svh] flex-col gap-2 overflow-y-auto">
 				{filtered.map((m) => (
 					<li key={m.id}>
 						<button
@@ -179,7 +100,7 @@ function PickNameScreen({
 				) : null}
 			</ul>
 
-			<div className="mt-auto space-y-2 border-border border-t pt-6">
+			<div className="space-y-2 border-border border-t pt-4">
 				<Label htmlFor="new-member-name">I'm new — add me</Label>
 				<div className="flex gap-2">
 					<Input

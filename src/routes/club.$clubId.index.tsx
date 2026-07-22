@@ -3,7 +3,10 @@ import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { CalendarDays, Loader2, MailCheck, Mic, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { GuestResources } from "#/components/club/guest-resources";
+import { useRequireIdentity } from "#/components/club/identity-gate";
 import { SeasonGrid } from "#/components/club/season-grid";
+import { ViewingAs } from "#/components/club/viewing-as";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
@@ -51,7 +54,8 @@ function ClubHome() {
 		effectiveMemberId && authCtx?.user
 			? { id: effectiveMemberId, name: authCtx.user.name || authCtx.user.email }
 			: null;
-	const { member, clearMember, source } = useEffectiveMember(clubId, session);
+	const { member, source } = useEffectiveMember(clubId, session);
+	const { requireIdentity, promptIdentity } = useRequireIdentity();
 	const router = useRouter();
 	const navigate = Route.useNavigate();
 	const [busySlotId, setBusySlotId] = useState<string | null>(null);
@@ -91,24 +95,12 @@ function ClubHome() {
 				<h1 className="font-display text-2xl font-semibold tracking-tight">
 					Hi {member?.name ?? "there"} 👋
 				</h1>
-				{member && source === "anon" ? (
-					<button
-						type="button"
-						onClick={clearMember}
-						className="text-sm text-muted-foreground underline underline-offset-2"
-					>
-						not you?
-					</button>
-				) : null}
 			</div>
+			{source === "anon" ? (
+				<ViewingAs member={member} promptIdentity={promptIdentity} />
+			) : null}
 
-			<Link
-				to="/resources/$slug"
-				params={{ slug: "what-to-expect" }}
-				className="inline-flex text-sm font-semibold text-[var(--lagoon-deep)] no-underline hover:underline"
-			>
-				New to Toastmasters? See what to expect at a meeting →
-			</Link>
+			<GuestResources />
 
 			{/* "This is me" — graduate a public picker into a real account (#266). */}
 			{member && source === "anon" ? (
@@ -132,6 +124,7 @@ function ClubHome() {
 					currentMemberId={member?.id ?? null}
 					clubId={clubUuid}
 					clubSlug={clubId}
+					requireIdentity={requireIdentity}
 					onOrientationChange={(v) =>
 						navigate({ search: (prev) => ({ ...prev, view: v }) })
 					}
@@ -145,16 +138,16 @@ function ClubHome() {
 			{/* Your upcoming roles — a compact summary of your commitments. */}
 			<section className="space-y-3">
 				<h2 className="text-base font-semibold">Your upcoming roles</h2>
-				{!member || commitments.isPending ? (
+				{!member ? (
+					<p className="rounded-xl border bg-card p-4 text-sm text-muted-foreground">
+						Claim a role in the sheet above to see it here.
+					</p>
+				) : commitments.isPending ? (
 					<div className="rounded-xl border bg-card p-4 text-sm text-muted-foreground">
-						{commitments.isFetching ? (
-							<span className="flex items-center gap-2">
-								<Loader2 className="size-4 animate-spin" aria-hidden />
-								Loading your roles…
-							</span>
-						) : (
-							"Loading your roles…"
-						)}
+						<span className="flex items-center gap-2">
+							<Loader2 className="size-4 animate-spin" aria-hidden />
+							Loading your roles…
+						</span>
 					</div>
 				) : commitments.data && commitments.data.length > 0 ? (
 					<ul className="grid gap-3 md:grid-cols-2">

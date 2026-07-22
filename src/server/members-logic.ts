@@ -7,7 +7,7 @@
 // that same module is NOT stripped and drags `pg` → `Buffer` into the browser
 // (ReferenceError: Buffer is not defined). Keeping the db logic in this
 // never-client-imported module keeps `pg` server-side. See `auth-context.ts`.
-import { and, eq, gte, inArray, isNull, ne } from "drizzle-orm";
+import { and, count, eq, gte, inArray, isNull, ne } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import { meetings, members, people, roleSlots } from "#/db/schema";
@@ -26,6 +26,58 @@ import {
 	openOfficerTermIfAbsent,
 	reconcileOfficerTerms,
 } from "./officer-terms-logic";
+
+// Public self-add throttle (#326). `addMember` is a session-less public write
+// (the "I'm new — add me" name-pick path), so an unauthenticated actor with a
+// club link could otherwise spam roster rows. Cap brand-new members per club per
+// rolling window. The count includes members added by ANY path (incl. an admin
+// bulk-import) — an intentional, acceptable safety valve: a large import briefly
+// pausing public self-adds is fine (the admin is present), and it needs no new
+// table or `member_add`-action split (self-add and bulk-import share that action).
+export const SELF_ADD_WINDOW_MS = 60 * 60 * 1000; // 1h
+export const SELF_ADD_MAX_PER_WINDOW = 15;
+export const SELF_ADD_THROTTLED_MESSAGE =
+	"Too many new members were just added to this club — please try again in a bit.";
+
+/**
+ * Public "I'm new — add me" self-add: a fresh Person + Membership (ADR-0008; a
+ * self-add is a new person, dedupe/merge is a later deliberate action). Throttled
+ * per club (see `SELF_ADD_MAX_PER_WINDOW`) — over the cap throws
+ * `SELF_ADD_THROTTLED_MESSAGE`, which the name-pick dialog surfaces verbatim.
+ * Extracted from `addMember`'s handler so the throttle is integration-testable.
+ */
+export async function applySelfAdd(input: { clubId: string; name: string }) {
+	const since = new Date(Date.now() - SELF_ADD_WINDOW_MS);
+	const [recent] = await db
+		.select({ n: count() })
+		.from(members)
+		.where(
+			and(eq(members.clubId, input.clubId), gte(members.createdAt, since)),
+		);
+	if ((recent?.n ?? 0) >= SELF_ADD_MAX_PER_WINDOW) {
+		throw new Error(SELF_ADD_THROTTLED_MESSAGE);
+	}
+
+	const [person] = await db
+		.insert(people)
+		.values({ name: input.name })
+		.returning({ id: people.id });
+	if (!person) throw new Error("Failed to insert person.");
+	const [m] = await db
+		.insert(members)
+		.values({ clubId: input.clubId, personId: person.id, name: input.name })
+		.returning({ id: members.id });
+	if (!m) throw new Error("Failed to insert member.");
+	await logActivity(db, {
+		clubId: input.clubId,
+		actorMemberId: m.id,
+		action: "member_add",
+		targetType: "member",
+		targetId: m.id,
+		detail: { name: input.name },
+	});
+	return { id: m.id };
+}
 
 /**
  * Whether a Person is linked to a sign-in account (people.user_id). Gates the

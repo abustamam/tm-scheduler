@@ -15,6 +15,9 @@ export const Route = createFileRoute(
 		return data;
 	},
 	component: PresentPage,
+	head: () => ({
+		meta: [{ name: "robots", content: "noindex, nofollow" }],
+	}),
 });
 
 function PresentPage() {

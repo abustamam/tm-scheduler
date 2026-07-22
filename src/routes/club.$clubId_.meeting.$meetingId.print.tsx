@@ -45,6 +45,9 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/print")(
 			return data;
 		},
 		component: PrintAgenda,
+		head: () => ({
+			meta: [{ name: "robots", content: "noindex, nofollow" }],
+		}),
 	},
 );
 

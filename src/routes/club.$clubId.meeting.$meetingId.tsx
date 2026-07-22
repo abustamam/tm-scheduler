@@ -19,9 +19,11 @@ import {
 	MeetingAgenda,
 	type MeetingAgendaActions,
 } from "#/components/agenda/meeting-agenda";
+import { GuestResources } from "#/components/club/guest-resources";
+import { useRequireIdentity } from "#/components/club/identity-gate";
 import { MeetingNavStrip } from "#/components/club/meeting-nav-strip";
 import { MeetingViewActions } from "#/components/club/meeting-view-actions";
-import { SigningUpAs } from "#/components/club/signing-up-as";
+import { ViewingAs } from "#/components/club/viewing-as";
 import { ShareLinkButton } from "#/components/share-link-button";
 import { Button } from "#/components/ui/button";
 import { applyFlex, expandRunSheet } from "#/lib/agenda-runsheet";
@@ -147,7 +149,8 @@ function MeetingView() {
 		effectiveMemberId && authCtx?.user
 			? { id: effectiveMemberId, name: authCtx.user.name || authCtx.user.email }
 			: null;
-	const { member } = useEffectiveMember(clubId, session);
+	const { member, source } = useEffectiveMember(clubId, session);
+	const { requireIdentity, promptIdentity } = useRequireIdentity();
 	const router = useRouter();
 
 	// Same deck present mode renders — reused as the source for the .pptx export
@@ -190,6 +193,7 @@ function MeetingView() {
 		isTmod,
 		isGrammarian,
 		isEditableWindow: !over,
+		isSignedIn: session !== null,
 	});
 	const viewer = over ? lockedViewer(baseViewer) : baseViewer;
 
@@ -202,20 +206,18 @@ function MeetingView() {
 	});
 
 	async function toggleAvailability() {
-		if (!member) {
-			toast.error("Pick your name first.");
-			return;
-		}
 		setAvailBusy(true);
 		try {
+			const me = await requireIdentity();
+			if (!me) return; // finally clears availBusy
 			if (isUnavailable) {
 				await clearAvailability({
-					data: { memberId: member.id, meetingId, clubId: clubUuid },
+					data: { memberId: me.id, meetingId, clubId: clubUuid },
 				});
 				toast.success("You're marked as available again.");
 			} else {
 				await setAvailability({
-					data: { memberId: member.id, meetingId, clubId: clubUuid },
+					data: { memberId: me.id, meetingId, clubId: clubUuid },
 				});
 				toast.success("Got it — you can't make this one.");
 			}
@@ -231,37 +233,47 @@ function MeetingView() {
 	// takes the ADR-0010 self-serve path (vs. the admin/session path).
 	const actions: MeetingAgendaActions = {
 		claim: async (slot, speakerDetails) => {
-			if (!myId) throw new Error("Pick your name first.");
+			// `requireIdentity()` resolving null (picker dismissed) is currently
+			// unreachable here: `handleClaimClick` in `<MeetingAgenda>` already
+			// resolves identity before opening the ClaimSheet, so by the time this
+			// fires an identity is set. The guard stays as defense-in-depth — a
+			// silent return (not a throw) so it never surfaces a false success toast.
+			const me = await requireIdentity();
+			if (!me) return;
 			await claimSlot({
 				data: {
 					slotId: slot.id,
-					memberId: myId,
-					actorMemberId: myId,
+					memberId: me.id,
+					actorMemberId: me.id,
 					speakerDetails,
 				},
 			});
 		},
 		release: async (slot) => {
-			if (!myId) throw new Error("Pick your name first.");
-			await releaseSlot({ data: { slotId: slot.id, actorMemberId: myId } });
+			const me = await requireIdentity();
+			if (!me) return;
+			await releaseSlot({ data: { slotId: slot.id, actorMemberId: me.id } });
 		},
 		takeover: async (slot) => {
-			if (!myId) throw new Error("Pick your name first.");
+			const me = await requireIdentity();
+			if (!me) return;
 			await reassignSlot({
-				data: { slotId: slot.id, memberId: myId, actorMemberId: myId },
+				data: { slotId: slot.id, memberId: me.id, actorMemberId: me.id },
 			});
 		},
 		addSpeaker: async () => {
-			if (!myId) throw new Error("Pick your name first.");
+			const me = await requireIdentity();
+			if (!me) return;
 			await addSpeakerSlot({
-				data: { meetingId, actorMemberId: myId, selfMemberId: myId },
+				data: { meetingId, actorMemberId: me.id, selfMemberId: me.id },
 			});
 			toast.success("Speaker added.");
 		},
 		removeSpeaker: async () => {
-			if (!myId) throw new Error("Pick your name first.");
+			const me = await requireIdentity();
+			if (!me) return;
 			await removeSpeakerSlot({
-				data: { meetingId, actorMemberId: myId, selfMemberId: myId },
+				data: { meetingId, actorMemberId: me.id, selfMemberId: me.id },
 			});
 			toast.success("Speaker removed.");
 		},
@@ -323,7 +335,9 @@ function MeetingView() {
 				) : null}
 				{/* Who claims/availability will be attributed to, with the same
 				    "not you?" escape hatch as the sign-up sheet (issue #220). */}
-				<SigningUpAs clubSlug={clubId} />
+				{source === "anon" ? (
+					<ViewingAs member={member} promptIdentity={promptIdentity} />
+				) : null}
 				{over ? (
 					myId ? (
 						<p className="mt-1 text-sm font-medium text-muted-foreground">
@@ -362,6 +376,8 @@ function MeetingView() {
 				/>
 			</header>
 
+			<GuestResources />
+
 			<MeetingAgenda
 				slots={slots}
 				viewer={viewer}
@@ -380,6 +396,7 @@ function MeetingView() {
 				onMetaSaved={async () => {
 					await router.invalidate();
 				}}
+				requireIdentity={requireIdentity}
 			/>
 		</div>
 	);

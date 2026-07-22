@@ -28,15 +28,11 @@ export interface MeetingViewer {
 	canManageSpeakers: boolean;
 	/** Toggle own availability ("I can't make this one") — public self-serve. */
 	canToggleAvailability: boolean;
-	/** Take over someone else's filled slot — public self-serve. */
+	/** Take over someone else's filled slot — SIGNED-IN only (no honor-system booting). */
 	canTakeOver: boolean;
 	/** Edit the speech on your own filled speaker slot — public self-serve. */
 	canEditOwnSpeech: boolean;
-	/**
-	 * Claim an open slot for yourself. Any identity may (public self-serve or a
-	 * signed-in member); a `lockedViewer` denies it so a locked meeting can't be
-	 * claimed. The agenda additionally requires a non-null `currentMemberId`.
-	 */
+	/** Claim an open slot. Offered to any visitor incl. a no-identity one (who identifies at click); a lockedViewer denies it. */
 	canClaim: boolean;
 	/**
 	 * Release your own filled slot. Any identity holding the slot may; a
@@ -65,6 +61,11 @@ export function meetingViewer(input: {
 	isTmod: boolean;
 	isGrammarian: boolean;
 	isEditableWindow: boolean;
+	/** The real-auth (Better-Auth) shell path (#317). Take-over ("boot" a held
+	 *  role) is granted ONLY here — the honor-system name-pick path may claim
+	 *  open slots but not reassign someone else's. Optional, defaults to false
+	 *  (fail closed: no take-over unless a caller opts in). */
+	isSignedIn?: boolean;
 }): MeetingViewer {
 	const hasIdentity = input.currentMemberId !== null;
 	const manages = input.canManage;
@@ -75,10 +76,14 @@ export function meetingViewer(input: {
 		canAssign: runsMeeting,
 		canManageSpeakers: runsMeeting,
 		canEditMeetingMeta: runsMeeting && input.isEditableWindow,
-		canToggleAvailability: hasIdentity,
-		canTakeOver: hasIdentity,
+		// Offered to everyone incl. a no-identity visitor (they identify at click);
+		// lockedViewer denies these for a locked/past meeting.
+		canToggleAvailability: true,
+		canClaim: true,
+		// Boot a held role: real sign-in only (spec decision #6).
+		canTakeOver: input.isSignedIn ?? false,
+		// Need an established identity that actually holds the slot.
 		canEditOwnSpeech: hasIdentity,
-		canClaim: hasIdentity,
 		canReleaseOwn: hasIdentity,
 		canEditWod:
 			input.isGrammarian && !input.isTmod && !manages && input.isEditableWindow,
