@@ -7,17 +7,10 @@
 // that same module is NOT stripped and drags `pg` → `Buffer` into the browser
 // (ReferenceError: Buffer is not defined). Keeping the db logic in this
 // never-client-imported module keeps `pg` server-side. See `auth-context.ts`.
-import { and, eq, gte, inArray, isNull, ne, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, isNull, ne } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
-import {
-	activityLog,
-	meetings,
-	memberAvailability,
-	members,
-	people,
-	roleSlots,
-} from "#/db/schema";
+import { meetings, members, people, roleSlots } from "#/db/schema";
 import {
 	defaultClubRoleForOffices,
 	OFFICER_POSITIONS,
@@ -27,6 +20,7 @@ import { toStoredPhone } from "#/lib/phone";
 import { buildImportPreview } from "#/lib/roster-import";
 import { logActivity } from "./activity";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
+import { collapseMemberships } from "./membership-collapse-logic";
 import {
 	currentOfficersFor,
 	openOfficerTermIfAbsent,
@@ -347,45 +341,7 @@ export async function applyMemberMerge(input: MergeInput) {
 	}
 
 	await db.transaction(async (tx) => {
-		// 1. Role assignments → keeper (multiple slots per member allowed).
-		await tx
-			.update(roleSlots)
-			.set({ assignedMemberId: keeperId })
-			.where(eq(roleSlots.assignedMemberId, absorbedId));
-		// 2. Availability → keeper, dropping meetings the keeper already covers.
-		await tx.execute(
-			sql`DELETE FROM member_availability WHERE member_id = ${absorbedId}
-				AND meeting_id IN (SELECT meeting_id FROM member_availability WHERE member_id = ${keeperId})`,
-		);
-		await tx
-			.update(memberAvailability)
-			.set({ memberId: keeperId })
-			.where(eq(memberAvailability.memberId, absorbedId));
-		// 3. Activity history → keeper (actor column + jsonb subject refs); drop
-		//    the absorbed member's own member_add row.
-		await tx
-			.update(activityLog)
-			.set({ actorMemberId: keeperId })
-			.where(eq(activityLog.actorMemberId, absorbedId));
-		await tx.execute(
-			sql`UPDATE activity_log SET detail = jsonb_set(detail, '{memberId}', ${`"${keeperId}"`}::jsonb)
-				WHERE club_id = ${clubId} AND detail->>'memberId' = ${absorbedId}`,
-		);
-		await tx.execute(
-			sql`UPDATE activity_log SET detail = jsonb_set(detail, '{fromMemberId}', ${`"${keeperId}"`}::jsonb)
-				WHERE club_id = ${clubId} AND detail->>'fromMemberId' = ${absorbedId}`,
-		);
-		await tx
-			.delete(activityLog)
-			.where(
-				and(
-					eq(activityLog.targetType, "member"),
-					eq(activityLog.targetId, absorbedId),
-				),
-			);
-		// 4. Delete the absorbed member.
-		await tx.delete(members).where(eq(members.id, absorbedId));
-		// 5. Log the merge.
+		await collapseMemberships(tx, clubId, keeperId, absorbedId);
 		await logActivity(tx, {
 			clubId,
 			actorMemberId: input.actorMemberId ?? null,
