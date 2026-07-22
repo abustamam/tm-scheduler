@@ -48,6 +48,12 @@ export function formatActivity(entry: ActivityEntry): FormattedActivity {
 					? `marked ${entry.subjectName} available again`
 					: "marked themselves available again";
 			break;
+		case "outreach_set":
+			summary = `marked ${entry.subjectName ?? "someone"} contacted`;
+			break;
+		case "outreach_clear":
+			summary = `marked ${entry.subjectName ?? "someone"} not contacted`;
+			break;
 		case "member_add":
 			summary = `added member "${entry.subjectName ?? "someone"}"`;
 			break;

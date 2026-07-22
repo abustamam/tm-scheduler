@@ -89,6 +89,26 @@ describe("formatActivity", () => {
 		);
 	});
 
+	it("outreach_set by an officer names the member as contacted", () => {
+		const e = {
+			...base,
+			action: "outreach_set",
+			actorName: "Jordan",
+			subjectName: "Bob",
+		} as ActivityEntry;
+		expect(formatActivity(e).summary).toBe("marked Bob contacted");
+	});
+
+	it("outreach_clear by an officer un-marks the member as contacted", () => {
+		const e = {
+			...base,
+			action: "outreach_clear",
+			actorName: "Jordan",
+			subjectName: "Bob",
+		} as ActivityEntry;
+		expect(formatActivity(e).summary).toBe("marked Bob not contacted");
+	});
+
 	it("release names the role", () => {
 		const e = {
 			...base,
