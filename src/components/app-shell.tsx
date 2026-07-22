@@ -20,6 +20,7 @@ import {
 	ShieldCheck,
 	Trophy,
 	UserPlus,
+	Users,
 	Wallet,
 } from "lucide-react";
 import { type ComponentType, type ReactNode, useRef, useState } from "react";
@@ -493,6 +494,13 @@ function SidebarInner({
 						to="/superadmin"
 						icon={ShieldCheck}
 						label="Superadmin"
+						onNavigate={onNavigate}
+						exact
+					/>
+					<NavItem
+						to="/superadmin/duplicate-people"
+						icon={Users}
+						label="Duplicate people"
 						onNavigate={onNavigate}
 					/>
 				</NavGroup>

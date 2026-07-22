@@ -32,6 +32,7 @@ import { Route as AuthedSuperadminIndexRouteImport } from './routes/_authed/supe
 import { Route as ClubClubIdGuestBookRouteImport } from './routes/club.$clubId_.guest-book'
 import { Route as ApiPathwaysIngestRouteImport } from './routes/api/pathways/ingest'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
+import { Route as AuthedSuperadminDuplicatePeopleRouteImport } from './routes/_authed/superadmin/duplicate-people'
 import { Route as AuthedSuperadminClubIdRouteImport } from './routes/_authed/superadmin/$clubId'
 import { Route as AuthedMembersIdRouteImport } from './routes/_authed/members.$id'
 import { Route as AuthedMeetingsIdRouteImport } from './routes/_authed/meetings.$id'
@@ -165,6 +166,12 @@ const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   path: '/api/auth/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AuthedSuperadminDuplicatePeopleRoute =
+  AuthedSuperadminDuplicatePeopleRouteImport.update({
+    id: '/duplicate-people',
+    path: '/duplicate-people',
+    getParentRoute: () => AuthedSuperadminRoute,
+  } as any)
 const AuthedSuperadminClubIdRoute = AuthedSuperadminClubIdRouteImport.update({
   id: '/$clubId',
   path: '/$clubId',
@@ -290,6 +297,7 @@ export interface FileRoutesByFullPath {
   '/meetings/$id': typeof AuthedMeetingsIdRoute
   '/members/$id': typeof AuthedMembersIdRoute
   '/superadmin/$clubId': typeof AuthedSuperadminClubIdRoute
+  '/superadmin/duplicate-people': typeof AuthedSuperadminDuplicatePeopleRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/pathways/ingest': typeof ApiPathwaysIngestRoute
   '/club/$clubId/guest-book': typeof ClubClubIdGuestBookRoute
@@ -330,6 +338,7 @@ export interface FileRoutesByTo {
   '/meetings/$id': typeof AuthedMeetingsIdRoute
   '/members/$id': typeof AuthedMembersIdRoute
   '/superadmin/$clubId': typeof AuthedSuperadminClubIdRoute
+  '/superadmin/duplicate-people': typeof AuthedSuperadminDuplicatePeopleRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/pathways/ingest': typeof ApiPathwaysIngestRoute
   '/club/$clubId/guest-book': typeof ClubClubIdGuestBookRoute
@@ -374,6 +383,7 @@ export interface FileRoutesById {
   '/_authed/meetings/$id': typeof AuthedMeetingsIdRoute
   '/_authed/members/$id': typeof AuthedMembersIdRoute
   '/_authed/superadmin/$clubId': typeof AuthedSuperadminClubIdRoute
+  '/_authed/superadmin/duplicate-people': typeof AuthedSuperadminDuplicatePeopleRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/pathways/ingest': typeof ApiPathwaysIngestRoute
   '/club/$clubId_/guest-book': typeof ClubClubIdGuestBookRoute
@@ -418,6 +428,7 @@ export interface FileRouteTypes {
     | '/meetings/$id'
     | '/members/$id'
     | '/superadmin/$clubId'
+    | '/superadmin/duplicate-people'
     | '/api/auth/$'
     | '/api/pathways/ingest'
     | '/club/$clubId/guest-book'
@@ -458,6 +469,7 @@ export interface FileRouteTypes {
     | '/meetings/$id'
     | '/members/$id'
     | '/superadmin/$clubId'
+    | '/superadmin/duplicate-people'
     | '/api/auth/$'
     | '/api/pathways/ingest'
     | '/club/$clubId/guest-book'
@@ -501,6 +513,7 @@ export interface FileRouteTypes {
     | '/_authed/meetings/$id'
     | '/_authed/members/$id'
     | '/_authed/superadmin/$clubId'
+    | '/_authed/superadmin/duplicate-people'
     | '/api/auth/$'
     | '/api/pathways/ingest'
     | '/club/$clubId_/guest-book'
@@ -696,6 +709,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAuthSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_authed/superadmin/duplicate-people': {
+      id: '/_authed/superadmin/duplicate-people'
+      path: '/duplicate-people'
+      fullPath: '/superadmin/duplicate-people'
+      preLoaderRoute: typeof AuthedSuperadminDuplicatePeopleRouteImport
+      parentRoute: typeof AuthedSuperadminRoute
+    }
     '/_authed/superadmin/$clubId': {
       id: '/_authed/superadmin/$clubId'
       path: '/$clubId'
@@ -827,11 +847,13 @@ declare module '@tanstack/react-router' {
 
 interface AuthedSuperadminRouteChildren {
   AuthedSuperadminClubIdRoute: typeof AuthedSuperadminClubIdRoute
+  AuthedSuperadminDuplicatePeopleRoute: typeof AuthedSuperadminDuplicatePeopleRoute
   AuthedSuperadminIndexRoute: typeof AuthedSuperadminIndexRoute
 }
 
 const AuthedSuperadminRouteChildren: AuthedSuperadminRouteChildren = {
   AuthedSuperadminClubIdRoute: AuthedSuperadminClubIdRoute,
+  AuthedSuperadminDuplicatePeopleRoute: AuthedSuperadminDuplicatePeopleRoute,
   AuthedSuperadminIndexRoute: AuthedSuperadminIndexRoute,
 }
 
