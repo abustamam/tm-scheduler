@@ -171,7 +171,7 @@ function ClubHome() {
 										) : null}
 										<Link
 											to="/club/$clubId/meeting/$meetingId"
-											params={{ clubId, meetingId: c.meetingId }}
+											params={{ clubId, meetingId: c.urlKey }}
 											className="mt-1 flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
 										>
 											<CalendarDays className="size-4" aria-hidden />

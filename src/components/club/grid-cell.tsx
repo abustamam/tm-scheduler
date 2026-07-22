@@ -37,6 +37,7 @@ export function GridCell({
 	onAvailability,
 	subjectName,
 	clubSlug,
+	meetingKey,
 	meetingLabel,
 }: {
 	cell: ViewCell;
@@ -60,6 +61,9 @@ export function GridCell({
 	/** Club slug — when set (public club shell), cell links target the public
 	 *  meeting view instead of the signed-in `/meetings/$id` route. */
 	clubSlug?: string;
+	/** The column meeting's public-view key (date URL). Passed through to
+	 *  `MeetingLink` — ignored in authed mode. */
+	meetingKey?: string;
 	/** Formatted meeting date (e.g. from `formatMeetingDate`) — appended to
 	 *  every button/link accessible name so a screen reader tabbing across the
 	 *  row hears which meeting each identical "Claim"/"NA"/member-name control
@@ -176,6 +180,7 @@ export function GridCell({
 		<MeetingLink
 			clubSlug={clubSlug}
 			meetingId={cell.meetingId}
+			meetingKey={meetingKey}
 			className="block"
 			aria-label={(cell.title || "meeting") + dateSuffix}
 		>

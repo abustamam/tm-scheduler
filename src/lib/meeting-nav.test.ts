@@ -69,11 +69,34 @@ describe("buildMeetingNavItems", () => {
 		expect(items).toEqual([
 			{
 				meetingId: "only",
+				urlKey: "2026-07-09",
 				label: "Jul 9",
 				isCurrent: true,
 				hasOpenRoles: false,
 			},
 		]);
+	});
+
+	it("emits a club-local-date urlKey per item and keeps meetingId as the raw id", () => {
+		const items = buildMeetingNavItems(
+			{
+				id: "cur",
+				scheduledAt: new Date("2026-07-21T23:45:00Z"),
+				openSlots: 0,
+			},
+			[
+				{
+					id: "up",
+					scheduledAt: new Date("2026-07-28T23:45:00Z"),
+					openSlots: 2,
+				},
+			],
+			"America/Chicago",
+		);
+		const cur = items.find((i) => i.meetingId === "cur");
+		const up = items.find((i) => i.meetingId === "up");
+		expect(cur?.urlKey).toBe("2026-07-21");
+		expect(up?.urlKey).toBe("2026-07-28");
 	});
 });
 
@@ -95,10 +118,18 @@ describe("deriveMeetingNavItems", () => {
 });
 
 describe("defaultMeetingNavLinkProps", () => {
-	it("targets the public club meeting route with both params", () => {
-		expect(defaultMeetingNavLinkProps("koala-tm", "m-123")).toEqual({
+	it("targets the public club meeting route keyed by the item's urlKey", () => {
+		expect(
+			defaultMeetingNavLinkProps("koala-tm", {
+				meetingId: "m-123",
+				urlKey: "2026-07-09",
+				label: "Jul 9",
+				isCurrent: true,
+				hasOpenRoles: false,
+			}),
+		).toEqual({
 			to: "/club/$clubId/meeting/$meetingId",
-			params: { clubId: "koala-tm", meetingId: "m-123" },
+			params: { clubId: "koala-tm", meetingId: "2026-07-09" },
 		});
 	});
 });

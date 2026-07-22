@@ -47,6 +47,7 @@ const data: SeasonGridData = {
 			id: "m1",
 			scheduledAt: "2026-07-01T19:00:00Z",
 			timezone: "UTC",
+			urlKey: "2026-07-01",
 			openCount: 1,
 			totalSlots: 1,
 			isPast: false,

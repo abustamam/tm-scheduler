@@ -1,8 +1,10 @@
 import type { LinkProps } from "@tanstack/react-router";
 import { formatShortDate } from "./format";
+import { urlKeysForMeetings } from "./meeting-url";
 
 export type MeetingNavItem = {
 	meetingId: string;
+	urlKey: string;
 	label: string;
 	isCurrent: boolean;
 	hasOpenRoles: boolean;
@@ -46,14 +48,17 @@ export function buildMeetingNavItems(
 		openSlots: current.openSlots,
 	});
 
-	return [...byId.values()]
-		.sort((a, b) => toMillis(a.scheduledAt) - toMillis(b.scheduledAt))
-		.map((m) => ({
-			meetingId: m.id,
-			label: formatShortDate(m.scheduledAt, timezone),
-			isCurrent: m.id === current.id,
-			hasOpenRoles: m.openSlots > 0,
-		}));
+	const ordered = [...byId.values()].sort(
+		(a, b) => toMillis(a.scheduledAt) - toMillis(b.scheduledAt),
+	);
+	const keys = urlKeysForMeetings(ordered, timezone);
+	return ordered.map((m) => ({
+		meetingId: m.id,
+		urlKey: keys.get(m.id) ?? m.id,
+		label: formatShortDate(m.scheduledAt, timezone),
+		isCurrent: m.id === current.id,
+		hasOpenRoles: m.openSlots > 0,
+	}));
 }
 
 /**
@@ -77,16 +82,16 @@ export function deriveMeetingNavItems(
 }
 
 /**
- * Default destination for a nav-strip item: the public club meeting page.
- * Signed-in views pass their own builder (targeting `/meetings/$id`) so paging
- * stays inside the workspace instead of jumping to the public tree (#140/#142).
+ * Default destination for a nav-strip item: the public club meeting page, keyed
+ * by the item's club-local-date `urlKey`. Signed-in views pass their own builder
+ * (targeting `/meetings/$id` by raw id) so paging stays in the workspace.
  */
 export function defaultMeetingNavLinkProps(
 	clubId: string,
-	meetingId: string,
+	item: MeetingNavItem,
 ): LinkProps {
 	return {
 		to: "/club/$clubId/meeting/$meetingId",
-		params: { clubId, meetingId },
+		params: { clubId, meetingId: item.urlKey },
 	};
 }

@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
-import { and, asc, eq, gte, ne, sql } from "drizzle-orm";
+import { and, asc, eq, gte, lt, ne, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { db } from "#/db";
@@ -15,6 +15,12 @@ import {
 	speeches,
 } from "#/db/schema";
 import { resolveEvaluatorLinks } from "#/lib/agenda";
+import {
+	localDateKey,
+	localDayRange,
+	meetingUrlKey,
+	urlKeysForMeetings,
+} from "#/lib/meeting-url";
 import { officerPositionLabel } from "#/lib/officers";
 import {
 	canManageClub,
@@ -31,6 +37,7 @@ import {
 	loadHolderContacts,
 	loadRosterWithContact,
 } from "./meeting-contacts-logic";
+import { resolveMeetingKey } from "./meeting-resolve-logic";
 import {
 	applyCompleteMeeting,
 	applyCreateMeeting,
@@ -164,6 +171,26 @@ async function loadMeetingDetail(
 		},
 	});
 
+	// Canonical date URL key for THIS meeting: club-local date, suffixed with
+	// -HHmm only when the club has 2+ meetings that local day (date-urls feature).
+	const tz = club?.timezone ?? "UTC";
+	const { start: dayStart, end: dayEnd } = localDayRange(
+		localDateKey(meeting.scheduledAt, tz),
+		tz,
+	);
+	const [{ count: sameDayCount } = { count: 0 }] = await db
+		.select({ count: sql<number>`count(*)::int` })
+		.from(meetings)
+		.where(
+			and(
+				eq(meetings.clubId, meeting.clubId),
+				gte(meetings.scheduledAt, dayStart),
+				lt(meetings.scheduledAt, dayEnd),
+				ne(meetings.status, "cancelled"),
+			),
+		);
+	const urlKey = meetingUrlKey(meeting.scheduledAt, tz, sameDayCount >= 2);
+
 	// The club's next non-cancelled meeting strictly after this one (spec: relative
 	// to the presented meeting, not wall-clock now). Backs the Thank-You slide.
 	const [nextMeeting] = await db
@@ -278,6 +305,7 @@ async function loadMeetingDetail(
 		clubName: club?.name ?? "",
 		clubNumber: club?.clubNumber ?? null,
 		clubSlug: club?.slug ?? "",
+		urlKey,
 		clubDistrict: club?.district ?? null,
 		clubMission: club?.mission ?? null,
 		clubMeetingSchedule: club?.meetingSchedule ?? null,
@@ -300,18 +328,37 @@ export const getMeeting = createServerFn({ method: "GET" })
 		return loadMeetingDetail(meetingId, sessionUser?.id ?? null);
 	});
 
+const meetingKeyInput = z.object({ clubId: uuid, key: z.string().min(1) });
+
 /**
- * Meeting detail for a PUBLIC surface (share link, present, print). Forces
+ * Public meeting detail resolved by URL key (club-local date / date-HHmm / uuid),
+ * session-aware `canManage`. Mirrors `getMeeting` but keyed by the pretty URL
+ * segment. Throws "Meeting not found." (recognized by `isMeetingNotFoundError`)
+ * when the key resolves to nothing, so route loaders render `notFound()`.
+ */
+export const getMeetingByKey = createServerFn({ method: "GET" })
+	.validator((input: unknown) => meetingKeyInput.parse(input))
+	.handler(async ({ data }) => {
+		const meetingId = await resolveMeetingKey(data.clubId, data.key);
+		if (!meetingId) throw new Error("Meeting not found.");
+		const sessionUser = await getSessionUser();
+		return loadMeetingDetail(meetingId, sessionUser?.id ?? null);
+	});
+
+/**
+ * Public meeting detail resolved by URL key (share link, present, print). Forces
  * `canManage = false` regardless of the requester's session, so member/guest
  * CONTACT and other manager-only data are NEVER shipped on a public payload —
- * even when the visitor is a signed-in admin checking what members see. The soft
- * honor-system gate on `/club/:clubId` must never carry PII (#37 / PR #284).
- * `canManage` is deliberately NOT session-derived here: an authenticated admin
- * hitting a public route still gets the public (contact-free) payload.
+ * even to a signed-in admin checking what members see. The soft honor-system gate
+ * on `/club/:clubId` must never carry PII (#37 / PR #284).
  */
-export const getPublicMeeting = createServerFn({ method: "GET" })
-	.validator((meetingId: unknown) => uuid.parse(meetingId))
-	.handler(async ({ data: meetingId }) => loadMeetingDetail(meetingId, null));
+export const getPublicMeetingByKey = createServerFn({ method: "GET" })
+	.validator((input: unknown) => meetingKeyInput.parse(input))
+	.handler(async ({ data }) => {
+		const meetingId = await resolveMeetingKey(data.clubId, data.key);
+		if (!meetingId) throw new Error("Meeting not found.");
+		return loadMeetingDetail(meetingId, null);
+	});
 
 /**
  * The club's soonest upcoming (non-cancelled) meeting with its full agenda, or
@@ -411,7 +458,7 @@ export const listMyCommitments = createServerFn({ method: "GET" }).handler(
 export const listMemberCommitments = createServerFn({ method: "GET" })
 	.validator((memberId: unknown) => uuid.parse(memberId))
 	.handler(async ({ data: memberId }) => {
-		return db
+		const rows = await db
 			.select({
 				slotId: roleSlots.id,
 				status: roleSlots.status,
@@ -442,6 +489,18 @@ export const listMemberCommitments = createServerFn({ method: "GET" })
 				),
 			)
 			.orderBy(asc(meetings.scheduledAt));
+
+		// A member belongs to one club, so every row shares a timezone; fall back
+		// to UTC only for the (empty-rows) edge case.
+		const timezone = rows[0]?.timezone ?? "UTC";
+		const keys = urlKeysForMeetings(
+			rows.map((r) => ({ id: r.meetingId, scheduledAt: r.scheduledAt })),
+			timezone,
+		);
+		return rows.map((r) => ({
+			...r,
+			urlKey: keys.get(r.meetingId) ?? r.meetingId,
+		}));
 	});
 
 const createMeetingSchema = z.object({

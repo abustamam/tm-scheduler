@@ -17,7 +17,7 @@ import {
 import { buildTimeline } from "#/lib/agenda-timing";
 import { resolveClubOrRedirect } from "#/lib/club-route";
 import { meetingPdfBasename } from "#/lib/pdf-filename";
-import { getPublicMeeting } from "#/server/meetings";
+import { getPublicMeetingByKey } from "#/server/meetings";
 
 const LAYOUTS: { id: AgendaLayout; label: string }[] = [
 	{ id: "timing", label: "Timing" },
@@ -41,7 +41,9 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/print")(
 		},
 		loader: async ({ params, location }) => {
 			const club = await resolveClubOrRedirect(params.clubId, location);
-			const data = await getPublicMeeting({ data: params.meetingId });
+			const data = await getPublicMeetingByKey({
+				data: { clubId: club.id, key: params.meetingId },
+			});
 			if (data.meeting.clubId !== club.id) throw notFound();
 			return data;
 		},

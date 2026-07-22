@@ -11,6 +11,7 @@ import {
 	type slotStatusEnum,
 } from "#/db/schema";
 import { buildRoleCounts, buildShortCodes, slotLabel } from "#/lib/agenda";
+import { urlKeysForMeetings } from "#/lib/meeting-url";
 
 export type SeasonGridCount = 4 | 8 | "all";
 export type SlotStatus = (typeof slotStatusEnum.enumValues)[number];
@@ -19,6 +20,9 @@ export interface SeasonGridMeeting {
 	id: string;
 	scheduledAt: string;
 	timezone: string;
+	/** Club-local-date URL key for the public meeting view (#214 follow-up).
+	 *  Falls back to `id` if it can't be resolved. */
+	urlKey: string;
 	openCount: number;
 	totalSlots: number;
 	isPast: boolean;
@@ -226,10 +230,12 @@ export async function loadSeasonGrid(input: {
 			openByMeeting.set(c.meetingId, (openByMeeting.get(c.meetingId) ?? 0) + 1);
 	}
 
+	const gridKeys = urlKeysForMeetings(ordered, timezone);
 	const gridMeetings: SeasonGridMeeting[] = ordered.map((m) => ({
 		id: m.id,
 		scheduledAt: m.scheduledAt.toISOString(),
 		timezone,
+		urlKey: gridKeys.get(m.id) ?? m.id,
 		openCount: openByMeeting.get(m.id) ?? 0,
 		totalSlots: totalByMeeting.get(m.id) ?? 0,
 		isPast: m.scheduledAt < now,

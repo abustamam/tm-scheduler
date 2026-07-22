@@ -10,6 +10,7 @@ import type { ReactNode } from "react";
 export function MeetingLink({
 	clubSlug,
 	meetingId,
+	meetingKey,
 	className,
 	"aria-label": ariaLabel,
 	children,
@@ -18,6 +19,10 @@ export function MeetingLink({
 	 *  meeting view instead of the signed-in `/meetings/$id` route. */
 	clubSlug?: string;
 	meetingId: string;
+	/** Club-local-date key for the PUBLIC view (`$meetingId` param). Defaults to
+	 *  `meetingId`. Ignored by the authed `/meetings/$id` branch, which always
+	 *  uses the raw uuid. */
+	meetingKey?: string;
 	className?: string;
 	"aria-label"?: string;
 	children: ReactNode;
@@ -26,7 +31,7 @@ export function MeetingLink({
 		return (
 			<Link
 				to="/club/$clubId/meeting/$meetingId"
-				params={{ clubId: clubSlug, meetingId }}
+				params={{ clubId: clubSlug, meetingId: meetingKey ?? meetingId }}
 				className={className}
 				aria-label={ariaLabel}
 			>

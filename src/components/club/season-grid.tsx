@@ -417,6 +417,7 @@ export function SeasonGrid({
 										<MeetingLink
 											clubSlug={clubSlug}
 											meetingId={m.id}
+											meetingKey={m.urlKey}
 											className="block py-2 md:py-0"
 										>
 											{header}
@@ -630,6 +631,7 @@ export function SeasonGrid({
 													onClaim={claim}
 													onRelease={release}
 													clubSlug={clubSlug}
+													meetingKey={m?.urlKey}
 													meetingLabel={
 														m
 															? formatMeetingDate(m.scheduledAt, m.timezone)

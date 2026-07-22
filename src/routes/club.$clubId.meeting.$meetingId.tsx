@@ -46,8 +46,8 @@ import { meetingViewer } from "#/lib/meeting-viewer";
 import { useEffectiveMember } from "#/lib/member-identity";
 import { clearAvailability, setAvailability } from "#/server/availability";
 import {
-	getMeeting,
-	getPublicMeeting,
+	getMeetingByKey,
+	getPublicMeetingByKey,
 	listUpcomingMeetings,
 } from "#/server/meetings";
 import { listMembers } from "#/server/members";
@@ -61,18 +61,20 @@ import {
 
 export const Route = createFileRoute("/club/$clubId/meeting/$meetingId")({
 	loader: async ({ params, context }) => {
-		// Fire both in parallel. getPublicMeeting stays fatal (the agenda is the page)
-		// EXCEPT when the meeting row is simply absent (stale/expired link) —
-		// that translates to notFound() so notFoundComponent renders instead of
+		// Fire both in parallel. getPublicMeetingByKey stays fatal (the agenda is
+		// the page) EXCEPT when the key resolves to no meeting (stale/expired link)
+		// — that translates to notFound() so notFoundComponent renders instead of
 		// the generic error boundary. Other failures (DB errors, etc.) stay fatal.
 		// The upcoming list is non-fatal — a failure degrades to no strip.
 		// A signed-in member of this club (shell-wrapped) loads via the session-aware
-		// getMeeting — an admin regains management + contact; a non-admin member
-		// gets the same non-manager view. Anonymous visitors use getPublicMeeting
-		// (hard canManage=false, never any PII). Both call the same resolver, so
-		// the loader shape is identical either way (#317).
-		const load = context.shell ? getMeeting : getPublicMeeting;
-		const meetingPromise = load({ data: params.meetingId }).catch((err) => {
+		// getMeetingByKey — an admin regains management + contact; a non-admin member
+		// gets the same non-manager view. Anonymous visitors use getPublicMeetingByKey
+		// (hard canManage=false, never any PII). Both resolve the $meetingId key the
+		// same way, so the loader shape is identical either way (#317).
+		const load = context.shell ? getMeetingByKey : getPublicMeetingByKey;
+		const meetingPromise = load({
+			data: { clubId: context.clubUuid, key: params.meetingId },
+		}).catch((err) => {
 			if (isMeetingNotFoundError(err)) throw notFound();
 			throw err;
 		});
@@ -123,7 +125,7 @@ function errMessage(err: unknown) {
 }
 
 function MeetingView() {
-	const { clubId, meetingId } = Route.useParams();
+	const { clubId } = Route.useParams();
 	const { clubUuid, effectiveMemberId, authCtx } = Route.useRouteContext();
 	const {
 		meeting,
@@ -137,6 +139,7 @@ function MeetingView() {
 		clubDistrict,
 		clubMeetingSchedule,
 		nextMeetingAt,
+		urlKey,
 	} = Route.useLoaderData();
 	const flex = applyFlex(expandRunSheet(slots), meeting.lengthMinutes);
 	const projectedEnd = new Date(
@@ -212,12 +215,12 @@ function MeetingView() {
 			if (!me) return; // finally clears availBusy
 			if (isUnavailable) {
 				await clearAvailability({
-					data: { memberId: me.id, meetingId, clubId: clubUuid },
+					data: { memberId: me.id, meetingId: meeting.id, clubId: clubUuid },
 				});
 				toast.success("You're marked as available again.");
 			} else {
 				await setAvailability({
-					data: { memberId: me.id, meetingId, clubId: clubUuid },
+					data: { memberId: me.id, meetingId: meeting.id, clubId: clubUuid },
 				});
 				toast.success("Got it — you can't make this one.");
 			}
@@ -265,7 +268,11 @@ function MeetingView() {
 			const me = await requireIdentity();
 			if (!me) return;
 			await addSpeakerSlot({
-				data: { meetingId, actorMemberId: me.id, selfMemberId: me.id },
+				data: {
+					meetingId: meeting.id,
+					actorMemberId: me.id,
+					selfMemberId: me.id,
+				},
 			});
 			toast.success("Speaker added.");
 		},
@@ -273,7 +280,11 @@ function MeetingView() {
 			const me = await requireIdentity();
 			if (!me) return;
 			await removeSpeakerSlot({
-				data: { meetingId, actorMemberId: me.id, selfMemberId: me.id },
+				data: {
+					meetingId: meeting.id,
+					actorMemberId: me.id,
+					selfMemberId: me.id,
+				},
 			});
 			toast.success("Speaker removed.");
 		},
@@ -365,12 +376,12 @@ function MeetingView() {
 					</Button>
 				)}
 				<ShareLinkButton
-					path={`/club/${clubId}/meeting/${meeting.id}`}
+					path={`/club/${clubId}/meeting/${urlKey}`}
 					className="mt-1 ml-2"
 				/>
 				<MeetingViewActions
 					clubSlug={clubId}
-					meetingId={meetingId}
+					meetingId={urlKey}
 					deck={deck}
 					clubName={clubName}
 				/>
