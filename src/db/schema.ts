@@ -587,8 +587,10 @@ export const meetings = pgTable(
 		wodExample: text("wod_example"),
 		status: meetingStatusEnum("status").notNull().default("scheduled"),
 		notes: text("notes"),
-		// Free-text club announcements projected on the present-mode Reminders
-		// slide. Distinct from `notes` (private organizer scratch).
+		// Free-text club announcements (one per line), shown on the meeting
+		// agenda, the printable agenda, and the present-mode Announcements slide.
+		// Edited via the "Edit meeting" dialog. Distinct from `notes` (private
+		// organizer scratch). Column stays named `reminders` for history.
 		reminders: text("reminders"),
 		createdAt: timestamp("created_at").defaultNow().notNull(),
 	},

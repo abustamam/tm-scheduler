@@ -22,6 +22,7 @@ const header: AgendaHeader = {
 	theme: "New Horizons",
 	wordOfTheDay: "Ebullient",
 	location: null,
+	announcements: null,
 };
 
 // One timed speaker beat (has green/amber/red marks) + one plain beat (no marks).
@@ -70,6 +71,56 @@ describe("MeetingAgendaPrint one-page timing", () => {
 			expect(screen.getByText("Min reached")).toBeTruthy();
 			expect(screen.getByText("Approaching")).toBeTruthy();
 			expect(screen.getByText("Wrap up")).toBeTruthy();
+		});
+	}
+});
+
+describe("MeetingAgendaPrint announcements", () => {
+	const withAnnouncements: AgendaHeader = {
+		...header,
+		announcements: "Bring a guest\n\nRenew your dues",
+	};
+
+	function renderWith(layout: AgendaLayout, h: AgendaHeader) {
+		return render(
+			<MeetingAgendaPrint
+				layout={layout}
+				header={h}
+				roles={[{ label: "Toastmaster", name: "Lee P." }]}
+				officers={[]}
+				explainers={[]}
+				rows={rows}
+			/>,
+		);
+	}
+
+	for (const layout of ["grid", "editorial"] as const) {
+		it(`renders the announcements list on the ${layout} one-pager`, () => {
+			renderWith(layout, withAnnouncements);
+			expect(screen.getAllByText("Announcements").length).toBeGreaterThan(0);
+			expect(screen.getByText("Bring a guest")).toBeTruthy();
+			expect(screen.getByText("Renew your dues")).toBeTruthy();
+		});
+
+		it(`renders no announcements on the ${layout} one-pager when empty`, () => {
+			renderWith(layout, header);
+			expect(screen.queryByText("Bring a guest")).toBeNull();
+		});
+	}
+
+	for (const layout of ["spacious", "timing"] as const) {
+		it(`${layout}: announcements replace the ruled Meeting Notes lines when present`, () => {
+			renderWith(layout, withAnnouncements);
+			expect(screen.getByText("Bring a guest")).toBeTruthy();
+			expect(screen.queryByText("Meeting Notes")).toBeNull();
+			expect(screen.getByText(/Tonight.s Votes/)).toBeTruthy();
+		});
+
+		it(`${layout}: keeps the Meeting Notes lines when there are no announcements`, () => {
+			renderWith(layout, header);
+			expect(screen.getByText("Meeting Notes")).toBeTruthy();
+			expect(screen.queryByText("Bring a guest")).toBeNull();
+			expect(screen.getByText(/Tonight.s Votes/)).toBeTruthy();
 		});
 	}
 });

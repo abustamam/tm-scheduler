@@ -19,6 +19,7 @@ import {
 	MeetingAgenda,
 	type MeetingAgendaActions,
 } from "#/components/agenda/meeting-agenda";
+import { MeetingAnnouncements } from "#/components/agenda/meeting-announcements";
 import { GuestResources } from "#/components/club/guest-resources";
 import { useRequireIdentity } from "#/components/club/identity-gate";
 import { MeetingNavStrip } from "#/components/club/meeting-nav-strip";
@@ -386,6 +387,8 @@ function MeetingView() {
 					clubName={clubName}
 				/>
 			</header>
+
+			<MeetingAnnouncements text={meeting.reminders} />
 
 			<GuestResources />
 

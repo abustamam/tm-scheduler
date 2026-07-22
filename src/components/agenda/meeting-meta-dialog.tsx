@@ -12,8 +12,10 @@ import {
 } from "#/components/ui/dialog";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
+import { Textarea } from "#/components/ui/textarea";
 import { utcToZonedWallTime } from "#/lib/datetime";
 import { type getMeeting, updateMeeting } from "#/server/meetings";
+import { meetingUpdateFromForm } from "./meeting-meta-form";
 
 function errMessage(err: unknown) {
 	return err instanceof Error ? err.message : "Something went wrong.";
@@ -65,25 +67,13 @@ export function MeetingMetaDialog({
 		}
 		setSubmitting(true);
 		try {
-			// Only admins get the length field; without it `lengthRaw` is "" →
-			// undefined, which leaves the meeting's current length untouched.
-			const lengthRaw = String(form.get("lengthMinutes") ?? "").trim();
 			await updateMeeting({
-				data: {
+				data: meetingUpdateFromForm(form, {
 					meetingId: meeting.id,
 					actorMemberId,
 					selfMemberId,
 					scheduledAt,
-					lengthMinutes: lengthRaw ? Number(lengthRaw) : undefined,
-					theme: String(form.get("theme") ?? "").trim() || undefined,
-					location: String(form.get("location") ?? "").trim() || undefined,
-					wordOfTheDay:
-						String(form.get("wordOfTheDay") ?? "").trim() || undefined,
-					wodDefinition:
-						String(form.get("wodDefinition") ?? "").trim() || undefined,
-					wodExample: String(form.get("wodExample") ?? "").trim() || undefined,
-					notes: String(form.get("notes") ?? "").trim() || undefined,
-				},
+				}),
 			});
 			toast.success("Meeting updated.");
 			await onSaved();
@@ -168,8 +158,24 @@ export function MeetingMetaDialog({
 						/>
 					</div>
 					<div className="space-y-2">
+						<Label htmlFor="reminders">Announcements</Label>
+						<Textarea
+							id="reminders"
+							name="reminders"
+							rows={3}
+							defaultValue={meeting.reminders ?? ""}
+						/>
+						<p className="text-xs text-muted-foreground">
+							Shown publicly on the agenda, printout, and slides — visible to
+							guests. One per line.
+						</p>
+					</div>
+					<div className="space-y-2">
 						<Label htmlFor="notes">Notes</Label>
 						<Input id="notes" name="notes" defaultValue={meeting.notes ?? ""} />
+						<p className="text-xs text-muted-foreground">
+							Organizer notes — not shown on the agenda, printout, or slides.
+						</p>
 					</div>
 					<DialogFooter>
 						<DialogClose asChild>
