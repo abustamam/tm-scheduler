@@ -27,6 +27,15 @@ export const listClubRoles = createServerFn({ method: "GET" })
 		return listRoleDefinitions(clubId);
 	});
 
+/** The club's role template (ordered), for the PUBLIC printable role sheet
+ *  (#341). Ungated on purpose — role names + responsibilities are non-sensitive
+ *  reference content, matching the public print/present routes, and the sheet is
+ *  meant to be shareable/handed to guests. Returns the same rows as
+ *  `listClubRoles`; the extra `slotCount` is harmless here. */
+export const getPublicClubRoles = createServerFn({ method: "GET" })
+	.validator((clubId: unknown) => uuid.parse(clubId))
+	.handler(async ({ data: clubId }) => listRoleDefinitions(clubId));
+
 /** Add a custom role to the club template. AUTHED — requires admin. */
 export const createClubRole = createServerFn({ method: "POST" })
 	.validator((input: unknown) => createRoleSchema.parse(input))
