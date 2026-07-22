@@ -15,7 +15,12 @@ import {
 	speeches,
 } from "#/db/schema";
 import { resolveEvaluatorLinks } from "#/lib/agenda";
-import { localDateKey, localDayRange, meetingUrlKey } from "#/lib/meeting-url";
+import {
+	localDateKey,
+	localDayRange,
+	meetingUrlKey,
+	urlKeysForMeetings,
+} from "#/lib/meeting-url";
 import { officerPositionLabel } from "#/lib/officers";
 import {
 	canManageClub,
@@ -462,7 +467,7 @@ export const listMyCommitments = createServerFn({ method: "GET" }).handler(
 export const listMemberCommitments = createServerFn({ method: "GET" })
 	.validator((memberId: unknown) => uuid.parse(memberId))
 	.handler(async ({ data: memberId }) => {
-		return db
+		const rows = await db
 			.select({
 				slotId: roleSlots.id,
 				status: roleSlots.status,
@@ -493,6 +498,18 @@ export const listMemberCommitments = createServerFn({ method: "GET" })
 				),
 			)
 			.orderBy(asc(meetings.scheduledAt));
+
+		// A member belongs to one club, so every row shares a timezone; fall back
+		// to UTC only for the (empty-rows) edge case.
+		const timezone = rows[0]?.timezone ?? "UTC";
+		const keys = urlKeysForMeetings(
+			rows.map((r) => ({ id: r.meetingId, scheduledAt: r.scheduledAt })),
+			timezone,
+		);
+		return rows.map((r) => ({
+			...r,
+			urlKey: keys.get(r.meetingId) ?? r.meetingId,
+		}));
 	});
 
 const createMeetingSchema = z.object({
