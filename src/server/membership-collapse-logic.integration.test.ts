@@ -3,27 +3,38 @@
  * primitive that re-points all ten membership-scoped FKs onto a keeper and
  * deletes the absorbed `members` row.
  *
- * Covers the three required cases plus the officer-term open-term dedup:
+ * Covers the required cases plus the trickier re-point paths:
  *   1. Data-loss fix: an OPEN officer_term + a member_dues row on the absorbed
  *      membership are RE-POINTED (not cascade-deleted) to the keeper.
  *   2. Reconcile: club_role/status/joined_at/email are folded correctly.
- *   3. Collision: keeper AND absorbed both have a same-meeting availability row
- *      and a same-period dues row → collapse succeeds, exactly one survives.
+ *   3. Collision (unique-constraint) tests: availability + dues, attendance,
+ *      and notifications — collapse succeeds, exactly one survivor each.
  *   4. Officer-term dedup: two OPEN terms for one position collapse to the
  *      earliest-started one.
+ *   5. Happy-path re-point: role_slots, meeting_awards (distinct category),
+ *      table_topics_speakers, and activity_log (actor + jsonb detail refs +
+ *      member-target deletion) all move to the keeper.
+ *   6. FK drift-guard: the DB's set of foreign keys referencing `members`
+ *      exactly matches the 10 this primitive re-points.
  *
  * Run with:
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test \
  *     bunx vitest run src/server/membership-collapse-logic.integration.test.ts
  */
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	activityLog,
 	duesPeriods,
+	meetingAttendance,
+	meetingAwards,
 	memberAvailability,
 	memberDues,
 	members,
+	notifications,
 	officerTerms,
+	roleSlots,
+	tableTopicsSpeakers,
 } from "#/db/schema";
 import {
 	cleanup,
@@ -271,6 +282,242 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 			);
 		expect(openPresident).toHaveLength(1);
 		expect(openPresident[0]?.termStart?.getTime()).toBe(earlyStart.getTime());
+	});
+
+	it("survives a same-meeting attendance collision", async () => {
+		const keeperId = await addMembership({ name: "Keeper" });
+		const absorbedId = await addMembership({ name: "Absorbed" });
+
+		// Both recorded present at the SAME meeting (unique meeting,member).
+		await testDb.insert(meetingAttendance).values([
+			{ meetingId: seed.meetingId, memberId: keeperId, status: "present" },
+			{ meetingId: seed.meetingId, memberId: absorbedId, status: "excused" },
+		]);
+
+		await expect(collapse(keeperId, absorbedId)).resolves.toBeUndefined();
+
+		// Exactly one attendance row remains for (keeper, meeting) — the keeper's
+		// own (present); the absorbed dup (excused) was dropped.
+		const keeperRows = await testDb
+			.select()
+			.from(meetingAttendance)
+			.where(
+				and(
+					eq(meetingAttendance.memberId, keeperId),
+					eq(meetingAttendance.meetingId, seed.meetingId),
+				),
+			);
+		expect(keeperRows).toHaveLength(1);
+		expect(keeperRows[0]?.status).toBe("present");
+		const absorbedRows = await testDb
+			.select()
+			.from(meetingAttendance)
+			.where(eq(meetingAttendance.memberId, absorbedId));
+		expect(absorbedRows).toHaveLength(0);
+	});
+
+	it("survives a same-slot notifications collision", async () => {
+		const keeperId = await addMembership({ name: "Keeper" });
+		const absorbedId = await addMembership({ name: "Absorbed" });
+
+		// Both queued a reminder for the SAME slot (partial unique on
+		// slot_id, assigned_member_id where member is not null).
+		const sendAt = new Date(Date.now() + DAY);
+		await testDb.insert(notifications).values([
+			{
+				userId: seed.adminUserId,
+				slotId: seed.slotId,
+				assignedMemberId: keeperId,
+				type: "role_reminder",
+				channel: "email",
+				sendAt,
+			},
+			{
+				userId: seed.memberUserId,
+				slotId: seed.slotId,
+				assignedMemberId: absorbedId,
+				type: "role_reminder",
+				channel: "email",
+				sendAt,
+			},
+		]);
+
+		await expect(collapse(keeperId, absorbedId)).resolves.toBeUndefined();
+
+		// Exactly one notification remains for (slot, keeper); none for absorbed.
+		const keeperNotifs = await testDb
+			.select()
+			.from(notifications)
+			.where(
+				and(
+					eq(notifications.assignedMemberId, keeperId),
+					eq(notifications.slotId, seed.slotId),
+				),
+			);
+		expect(keeperNotifs).toHaveLength(1);
+		const absorbedNotifs = await testDb
+			.select()
+			.from(notifications)
+			.where(eq(notifications.assignedMemberId, absorbedId));
+		expect(absorbedNotifs).toHaveLength(0);
+	});
+
+	it("re-points set-null FKs + activity_log (actor + jsonb detail) to the keeper", async () => {
+		const keeperId = await addMembership({ name: "Keeper" });
+		const absorbedId = await addMembership({ name: "Absorbed" });
+
+		// role_slots.assigned_member_id (no member-unique) — a fresh assigned slot.
+		const [slot] = await testDb
+			.insert(roleSlots)
+			.values({
+				meetingId: seed.meetingId,
+				roleDefinitionId: seed.roleDefinitionId,
+				assignedMemberId: absorbedId,
+				status: "confirmed",
+			})
+			.returning({ id: roleSlots.id });
+		if (!slot) throw new Error("Failed to insert role slot");
+
+		// meeting_awards — DISTINCT category so there is no (meeting,category) clash.
+		await testDb.insert(meetingAwards).values({
+			meetingId: seed.meetingId,
+			category: "best_speaker",
+			memberId: absorbedId,
+		});
+
+		// table_topics_speakers (no member-unique).
+		await testDb.insert(tableTopicsSpeakers).values({
+			meetingId: seed.meetingId,
+			memberId: absorbedId,
+			topic: "A tricky question",
+		});
+
+		// activity_log — an actor row with a jsonb detail.memberId ref…
+		await testDb.insert(activityLog).values({
+			clubId: seed.clubId,
+			actorMemberId: absorbedId,
+			action: "claim",
+			targetType: "slot",
+			targetId: slot.id,
+			detail: { memberId: absorbedId },
+		});
+		// …a jsonb detail.fromMemberId ref (the second jsonb_set path)…
+		await testDb.insert(activityLog).values({
+			clubId: seed.clubId,
+			actorMemberId: null,
+			action: "release",
+			targetType: "slot",
+			targetId: slot.id,
+			detail: { fromMemberId: absorbedId },
+		});
+		// …and the absorbed member's OWN member-target row (must be deleted).
+		const [ownRow] = await testDb
+			.insert(activityLog)
+			.values({
+				clubId: seed.clubId,
+				actorMemberId: absorbedId,
+				action: "member_add",
+				targetType: "member",
+				targetId: absorbedId,
+				detail: { name: "Absorbed" },
+			})
+			.returning({ id: activityLog.id });
+		if (!ownRow) throw new Error("Failed to insert activity row");
+
+		await collapse(keeperId, absorbedId);
+
+		// role_slots re-pointed.
+		const [slotAfter] = await testDb
+			.select()
+			.from(roleSlots)
+			.where(eq(roleSlots.id, slot.id));
+		expect(slotAfter?.assignedMemberId).toBe(keeperId);
+
+		// meeting_awards re-pointed.
+		const awards = await testDb
+			.select()
+			.from(meetingAwards)
+			.where(eq(meetingAwards.meetingId, seed.meetingId));
+		expect(awards).toHaveLength(1);
+		expect(awards[0]?.memberId).toBe(keeperId);
+
+		// table_topics_speakers re-pointed.
+		const topics = await testDb
+			.select()
+			.from(tableTopicsSpeakers)
+			.where(eq(tableTopicsSpeakers.meetingId, seed.meetingId));
+		expect(topics).toHaveLength(1);
+		expect(topics[0]?.memberId).toBe(keeperId);
+
+		// activity_log: actor column + BOTH jsonb detail refs rewritten to keeper.
+		const actorRows = await testDb
+			.select()
+			.from(activityLog)
+			.where(eq(activityLog.actorMemberId, keeperId));
+		expect(actorRows.length).toBeGreaterThanOrEqual(1);
+		const claimRow = actorRows.find((r) => r.action === "claim");
+		expect((claimRow?.detail as { memberId?: string })?.memberId).toBe(
+			keeperId,
+		);
+		const [releaseRow] = await testDb
+			.select()
+			.from(activityLog)
+			.where(
+				and(
+					eq(activityLog.clubId, seed.clubId),
+					eq(activityLog.action, "release"),
+				),
+			);
+		expect(
+			(releaseRow?.detail as { fromMemberId?: string })?.fromMemberId,
+		).toBe(keeperId);
+		// No activity_log actor still points at the absorbed membership.
+		const absorbedActor = await testDb
+			.select()
+			.from(activityLog)
+			.where(eq(activityLog.actorMemberId, absorbedId));
+		expect(absorbedActor).toHaveLength(0);
+
+		// The absorbed member's own member-target row was deleted.
+		const ownAfter = await testDb
+			.select()
+			.from(activityLog)
+			.where(eq(activityLog.id, ownRow.id));
+		expect(ownAfter).toHaveLength(0);
+	});
+
+	it("FK drift-guard: every foreign key referencing `members` is handled", async () => {
+		// The exact set of (referencing table, column) FKs pointing at members.id
+		// that collapseMemberships re-points. If a future migration adds an 11th FK
+		// to members, this fails LOUDLY here — instead of silently cascade-deleting
+		// or orphaning that data on the next merge.
+		const HANDLED = new Set([
+			"officer_terms.membership_id",
+			"member_dues.membership_id",
+			"member_availability.member_id",
+			"meeting_attendance.member_id",
+			"meeting_awards.member_id",
+			"notifications.assigned_member_id",
+			"role_slots.assigned_member_id",
+			"table_topics_speakers.member_id",
+			"guests.converted_membership_id",
+			"activity_log.actor_member_id",
+		]);
+
+		const result = await testDb.execute(sql`
+			SELECT con.conrelid::regclass::text AS tbl, a.attname AS col
+			FROM pg_constraint con
+			CROSS JOIN LATERAL unnest(con.conkey) AS ck(attnum)
+			JOIN pg_attribute a
+				ON a.attrelid = con.conrelid AND a.attnum = ck.attnum
+			WHERE con.contype = 'f' AND con.confrelid = 'members'::regclass`);
+		const actual = new Set(
+			(result.rows as { tbl: string; col: string }[]).map(
+				(r) => `${r.tbl}.${r.col}`,
+			),
+		);
+
+		expect([...actual].sort()).toEqual([...HANDLED].sort());
 	});
 
 	it("is a no-op when keeper === absorbed", async () => {
