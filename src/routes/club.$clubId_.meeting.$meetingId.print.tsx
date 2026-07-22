@@ -16,6 +16,7 @@ import {
 } from "#/lib/agenda-runsheet";
 import { buildTimeline } from "#/lib/agenda-timing";
 import { resolveClubOrRedirect } from "#/lib/club-route";
+import { meetingPdfBasename } from "#/lib/pdf-filename";
 import { getPublicMeeting } from "#/server/meetings";
 
 const LAYOUTS: { id: AgendaLayout; label: string }[] = [
@@ -45,8 +46,22 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/print")(
 			return data;
 		},
 		component: PrintAgenda,
-		head: () => ({
-			meta: [{ name: "robots", content: "noindex, nofollow" }],
+		// The <title> becomes the browser's default "Save as PDF" filename, so we
+		// name it after the club + meeting date (e.g. Downtown-Toastmasters-meeting-
+		// 2026-07-22.pdf). loaderData is absent during the pending state → fallback.
+		head: ({ loaderData }) => ({
+			meta: [
+				{
+					title: loaderData
+						? meetingPdfBasename(
+								loaderData.clubName,
+								loaderData.meeting.scheduledAt,
+								loaderData.timezone,
+							)
+						: "Agenda — GavelUp",
+				},
+				{ name: "robots", content: "noindex, nofollow" },
+			],
 		}),
 	},
 );
