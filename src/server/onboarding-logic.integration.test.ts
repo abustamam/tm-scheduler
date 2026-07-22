@@ -12,7 +12,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { asc, eq } from "drizzle-orm";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clubs, members, people, roleDefinitions, user } from "#/db/schema";
 import { ROLE_TEMPLATE } from "#/lib/role-template";
 import { cleanup, hasTestDb, testDb } from "#/test/db";
@@ -228,5 +228,60 @@ describe.skipIf(!hasTestDb)("onboarding console (#182)", () => {
 		expect(detail.firstAdmin?.personId).toBe(res.personId);
 		expect(detail.firstAdmin?.linked).toBe(false);
 		expect(detail.memberCount).toBe(1);
+	});
+});
+
+describe.skipIf(!hasTestDb)("createClubWithAdmin dedupe (Rule B)", () => {
+	const clubIds: string[] = [];
+	const personIds: string[] = [];
+
+	beforeEach(() => {
+		clubIds.length = 0;
+		personIds.length = 0;
+	});
+	afterEach(async () => {
+		for (const id of clubIds) await cleanup(id, []);
+		for (const id of personIds)
+			await testDb.delete(people).where(eq(people.id, id));
+	});
+
+	function input(
+		over: Partial<import("#/server/onboarding-logic").CreateClubInput> = {},
+	) {
+		return {
+			clubName: `C ${randomUUID()}`,
+			clubNumber: randomUUID().slice(0, 8),
+			adminName: "Rasheed",
+			adminEmail: `r-${randomUUID()}@x.io`,
+			...over,
+		};
+	}
+
+	it("creates a fresh Person when no email match exists", async () => {
+		const res = await createClubWithAdmin(input());
+		clubIds.push(res.clubId);
+		personIds.push(res.personId);
+		const [p] = await testDb
+			.select()
+			.from(people)
+			.where(eq(people.id, res.personId));
+		expect(p).toBeTruthy();
+	});
+
+	it("reuses an existing Person (one human, two memberships) on an email match", async () => {
+		const email = `share-${randomUUID()}@x.io`;
+		const first = await createClubWithAdmin(input({ adminEmail: email }));
+		clubIds.push(first.clubId);
+		personIds.push(first.personId);
+
+		const second = await createClubWithAdmin(input({ adminEmail: email }));
+		clubIds.push(second.clubId);
+
+		expect(second.personId).toBe(first.personId);
+		const rosterRows = await testDb
+			.select({ id: members.id })
+			.from(members)
+			.where(eq(members.personId, first.personId));
+		expect(rosterRows).toHaveLength(2);
 	});
 });

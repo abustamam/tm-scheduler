@@ -11,8 +11,11 @@ import { and, desc, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
+	duesPeriods,
 	memberAvailability,
+	memberDues,
 	members,
+	officerTerms,
 	people,
 	roleSlots,
 } from "#/db/schema";
@@ -169,6 +172,70 @@ describe.skipIf(!hasTestDb)("roster management", () => {
 			.from(activityLog)
 			.where(eq(activityLog.action, "member_merge"));
 		expect(merge.length).toBe(1);
+	});
+
+	it("mergeMembers re-points (not cascade-deletes) the absorbed member's officer_terms + member_dues", async () => {
+		const { applyMemberMerge } = await import("#/server/members-logic");
+		const keeper = seed.memberId;
+		const absorbed = await addMemberRow(seed.clubId, "Dupe Officer");
+
+		// The absorbed membership holds an OPEN office and a paid dues record —
+		// both are ON DELETE CASCADE on members, so the old (non-collapse) merge
+		// silently destroyed them when it deleted the absorbed row directly.
+		await testDb.insert(officerTerms).values({
+			membershipId: absorbed,
+			position: "treasurer",
+			termStart: new Date(),
+			termEnd: null,
+		});
+		const [period] = await testDb
+			.insert(duesPeriods)
+			.values({
+				clubId: seed.clubId,
+				label: "2026 renewal",
+				dueDate: new Date(),
+			})
+			.returning({ id: duesPeriods.id });
+		if (!period) throw new Error("Failed to insert dues period");
+		await testDb.insert(memberDues).values({
+			membershipId: absorbed,
+			duesPeriodId: period.id,
+			status: "paid",
+			amountCents: 5000,
+		});
+
+		await applyMemberMerge({
+			clubId: seed.clubId,
+			keeperId: keeper,
+			absorbedId: absorbed,
+			actorMemberId: keeper,
+		});
+
+		// Absorbed member row gone.
+		const bRows = await testDb
+			.select()
+			.from(members)
+			.where(eq(members.id, absorbed));
+		expect(bRows.length).toBe(0);
+
+		// The office survived and now references the keeper (previously
+		// cascade-deleted along with the absorbed member row).
+		const terms = await testDb
+			.select()
+			.from(officerTerms)
+			.where(eq(officerTerms.position, "treasurer"));
+		expect(terms).toHaveLength(1);
+		expect(terms[0]?.membershipId).toBe(keeper);
+		expect(terms[0]?.termEnd).toBeNull();
+
+		// The dues row survived and now references the keeper.
+		const dues = await testDb
+			.select()
+			.from(memberDues)
+			.where(eq(memberDues.duesPeriodId, period.id));
+		expect(dues).toHaveLength(1);
+		expect(dues[0]?.membershipId).toBe(keeper);
+		expect(dues[0]?.amountCents).toBe(5000);
 	});
 
 	it("mergeMembers rejects absorbing a signed-in (user-linked) member", async () => {
