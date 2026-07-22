@@ -51,6 +51,7 @@ import { Route as AuthedAdminMeetingsBatchRouteImport } from './routes/_authed/a
 import { Route as ClubClubIdMeetingMeetingIdPrintRouteImport } from './routes/club.$clubId_.meeting.$meetingId.print'
 import { Route as ClubClubIdMeetingMeetingIdPresentRouteImport } from './routes/club.$clubId_.meeting.$meetingId.present'
 import { Route as ApiMeetingsIdMinutesPdfRouteImport } from './routes/api/meetings.$id.minutes.pdf'
+import { Route as ApiMeetingsIdRoleSheetsSheetPdfRouteImport } from './routes/api/meetings.$id.role-sheets.$sheet.pdf'
 
 const UnsubscribeRoute = UnsubscribeRouteImport.update({
   id: '/unsubscribe',
@@ -266,6 +267,12 @@ const ApiMeetingsIdMinutesPdfRoute = ApiMeetingsIdMinutesPdfRouteImport.update({
   path: '/api/meetings/$id/minutes/pdf',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiMeetingsIdRoleSheetsSheetPdfRoute =
+  ApiMeetingsIdRoleSheetsSheetPdfRouteImport.update({
+    id: '/api/meetings/$id/role-sheets/$sheet/pdf',
+    path: '/api/meetings/$id/role-sheets/$sheet/pdf',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -309,6 +316,7 @@ export interface FileRoutesByFullPath {
   '/api/meetings/$id/minutes/pdf': typeof ApiMeetingsIdMinutesPdfRoute
   '/club/$clubId/meeting/$meetingId/present': typeof ClubClubIdMeetingMeetingIdPresentRoute
   '/club/$clubId/meeting/$meetingId/print': typeof ClubClubIdMeetingMeetingIdPrintRoute
+  '/api/meetings/$id/role-sheets/$sheet/pdf': typeof ApiMeetingsIdRoleSheetsSheetPdfRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -350,6 +358,7 @@ export interface FileRoutesByTo {
   '/api/meetings/$id/minutes/pdf': typeof ApiMeetingsIdMinutesPdfRoute
   '/club/$clubId/meeting/$meetingId/present': typeof ClubClubIdMeetingMeetingIdPresentRoute
   '/club/$clubId/meeting/$meetingId/print': typeof ClubClubIdMeetingMeetingIdPrintRoute
+  '/api/meetings/$id/role-sheets/$sheet/pdf': typeof ApiMeetingsIdRoleSheetsSheetPdfRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -395,6 +404,7 @@ export interface FileRoutesById {
   '/api/meetings/$id/minutes/pdf': typeof ApiMeetingsIdMinutesPdfRoute
   '/club/$clubId_/meeting/$meetingId/present': typeof ClubClubIdMeetingMeetingIdPresentRoute
   '/club/$clubId_/meeting/$meetingId/print': typeof ClubClubIdMeetingMeetingIdPrintRoute
+  '/api/meetings/$id/role-sheets/$sheet/pdf': typeof ApiMeetingsIdRoleSheetsSheetPdfRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -440,6 +450,7 @@ export interface FileRouteTypes {
     | '/api/meetings/$id/minutes/pdf'
     | '/club/$clubId/meeting/$meetingId/present'
     | '/club/$clubId/meeting/$meetingId/print'
+    | '/api/meetings/$id/role-sheets/$sheet/pdf'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -481,6 +492,7 @@ export interface FileRouteTypes {
     | '/api/meetings/$id/minutes/pdf'
     | '/club/$clubId/meeting/$meetingId/present'
     | '/club/$clubId/meeting/$meetingId/print'
+    | '/api/meetings/$id/role-sheets/$sheet/pdf'
   id:
     | '__root__'
     | '/'
@@ -525,6 +537,7 @@ export interface FileRouteTypes {
     | '/api/meetings/$id/minutes/pdf'
     | '/club/$clubId_/meeting/$meetingId/present'
     | '/club/$clubId_/meeting/$meetingId/print'
+    | '/api/meetings/$id/role-sheets/$sheet/pdf'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -544,6 +557,7 @@ export interface RootRouteChildren {
   ApiMeetingsIdMinutesPdfRoute: typeof ApiMeetingsIdMinutesPdfRoute
   ClubClubIdMeetingMeetingIdPresentRoute: typeof ClubClubIdMeetingMeetingIdPresentRoute
   ClubClubIdMeetingMeetingIdPrintRoute: typeof ClubClubIdMeetingMeetingIdPrintRoute
+  ApiMeetingsIdRoleSheetsSheetPdfRoute: typeof ApiMeetingsIdRoleSheetsSheetPdfRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -842,6 +856,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiMeetingsIdMinutesPdfRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/meetings/$id/role-sheets/$sheet/pdf': {
+      id: '/api/meetings/$id/role-sheets/$sheet/pdf'
+      path: '/api/meetings/$id/role-sheets/$sheet/pdf'
+      fullPath: '/api/meetings/$id/role-sheets/$sheet/pdf'
+      preLoaderRoute: typeof ApiMeetingsIdRoleSheetsSheetPdfRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -943,6 +964,7 @@ const rootRouteChildren: RootRouteChildren = {
   ClubClubIdMeetingMeetingIdPresentRoute:
     ClubClubIdMeetingMeetingIdPresentRoute,
   ClubClubIdMeetingMeetingIdPrintRoute: ClubClubIdMeetingMeetingIdPrintRoute,
+  ApiMeetingsIdRoleSheetsSheetPdfRoute: ApiMeetingsIdRoleSheetsSheetPdfRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
