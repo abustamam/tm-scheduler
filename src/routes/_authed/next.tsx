@@ -17,8 +17,8 @@ export const Route = createFileRoute("/_authed/next")({
 		const data = await getNextMeeting({ data: clubId });
 		if (data.meeting) {
 			throw redirect({
-				to: "/meetings/$id",
-				params: { id: data.meeting.id },
+				to: "/club/$clubId/meeting/$meetingId",
+				params: { clubId: data.clubSlug, meetingId: data.urlKey },
 			});
 		}
 		return { canManage: data.canManage };
