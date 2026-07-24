@@ -4,6 +4,7 @@ import {
 	lockedViewer,
 	meetingDatePassed,
 	meetingDateReached,
+	resolveMeetingViewer,
 } from "./meeting-lifecycle";
 import { meetingViewer } from "./meeting-viewer";
 
@@ -57,5 +58,107 @@ describe("lockedViewer", () => {
 		expect(locked.canEditOwnSpeech).toBe(false);
 		expect(locked.canClaim).toBe(false);
 		expect(locked.canReleaseOwn).toBe(false);
+	});
+});
+
+describe("resolveMeetingViewer", () => {
+	const tz = "America/New_York";
+	const now = new Date("2026-07-10T12:00:00Z");
+	const future = "2026-07-15T18:00:00Z";
+	const past = "2026-07-05T18:00:00Z";
+	const common = {
+		timezone: tz,
+		currentMemberId: "m1" as string | null,
+		isTmod: false,
+		isGrammarian: false,
+		now,
+	};
+
+	it("admin on a future meeting: full management, editable meta", () => {
+		const v = resolveMeetingViewer({
+			...common,
+			status: "scheduled",
+			scheduledAt: future,
+			canManage: true,
+			isSignedIn: true,
+		});
+		expect(v.canManage).toBe(true);
+		expect(v.canAssign).toBe(true);
+		expect(v.canEditMeetingMeta).toBe(true);
+	});
+
+	it("admin keeps editing a past-but-open meeting (not locked-wrapped)", () => {
+		const v = resolveMeetingViewer({
+			...common,
+			status: "scheduled",
+			scheduledAt: past,
+			canManage: true,
+			isSignedIn: true,
+		});
+		expect(v.canManage).toBe(true);
+		expect(v.canAssign).toBe(true);
+		expect(v.canEditMeetingMeta).toBe(true);
+	});
+
+	it("admin on a completed (locked) meeting is read-only", () => {
+		const v = resolveMeetingViewer({
+			...common,
+			status: "completed",
+			scheduledAt: past,
+			canManage: true,
+			isSignedIn: true,
+		});
+		expect(v.canManage).toBe(false);
+		expect(v.canAssign).toBe(false);
+		expect(v.canClaim).toBe(false);
+	});
+
+	it("signed-in member on a future meeting can claim + take over", () => {
+		const v = resolveMeetingViewer({
+			...common,
+			status: "scheduled",
+			scheduledAt: future,
+			canManage: false,
+			isSignedIn: true,
+		});
+		expect(v.canManage).toBe(false);
+		expect(v.canClaim).toBe(true);
+		expect(v.canTakeOver).toBe(true);
+		expect(v.canToggleAvailability).toBe(true);
+	});
+
+	it("member on a past meeting freezes read-only (over)", () => {
+		const v = resolveMeetingViewer({
+			...common,
+			status: "scheduled",
+			scheduledAt: past,
+			canManage: false,
+			isSignedIn: true,
+		});
+		expect(v.canClaim).toBe(false);
+		expect(v.canToggleAvailability).toBe(false);
+	});
+
+	it("anon on a future meeting can claim but not take over", () => {
+		const v = resolveMeetingViewer({
+			...common,
+			status: "scheduled",
+			scheduledAt: future,
+			canManage: false,
+			isSignedIn: false,
+		});
+		expect(v.canClaim).toBe(true);
+		expect(v.canTakeOver).toBe(false);
+	});
+
+	it("anon on a past meeting freezes read-only", () => {
+		const v = resolveMeetingViewer({
+			...common,
+			status: "scheduled",
+			scheduledAt: past,
+			canManage: false,
+			isSignedIn: false,
+		});
+		expect(v.canClaim).toBe(false);
 	});
 });
