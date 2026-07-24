@@ -20,7 +20,7 @@
 //
 // Bumping VERSION invalidates every cache on the next activation.
 
-const VERSION = "v2";
+const VERSION = "v3";
 const NAV_CACHE = `gavelup-nav-${VERSION}`;
 const ASSET_CACHE = `gavelup-assets-${VERSION}`;
 const OWNED_CACHES = new Set([NAV_CACHE, ASSET_CACHE]);
@@ -46,14 +46,17 @@ self.addEventListener("activate", (event) => {
 });
 
 /**
- * The only navigations we cache offline: a meeting Present/Print view, or the
- * signed-in meeting view (`/meetings/<id>`). Kept scoped to the meeting-view
- * path so no other authed navigation is written to the offline cache.
+ * The only navigations we cache offline: a meeting Present/Print view, the
+ * canonical pretty meeting page (`/club/<slug>/meeting/<key>`, which for a
+ * signed-in member holds the minutes), or the legacy `/meetings/<id>` redirect
+ * page. Kept scoped to meeting paths so no other navigation is written to the
+ * offline cache.
  */
 function isOfflineRoute(url) {
 	return (
 		url.pathname.endsWith("/present") ||
 		url.pathname.endsWith("/print") ||
+		/^\/club\/[^/]+\/meeting\//.test(url.pathname) ||
 		url.pathname.startsWith("/meetings/")
 	);
 }
