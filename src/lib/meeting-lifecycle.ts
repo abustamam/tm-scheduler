@@ -100,5 +100,5 @@ export function resolveMeetingViewer(input: {
 		isEditableWindow: editable,
 		isSignedIn: input.isSignedIn,
 	});
-	return (input.canManage ? locked : over) ? lockedViewer(base) : base;
+	return editable ? base : lockedViewer(base);
 }

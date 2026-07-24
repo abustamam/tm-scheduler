@@ -68,7 +68,7 @@ describe("resolveMeetingViewer", () => {
 	const past = "2026-07-05T18:00:00Z";
 	const common = {
 		timezone: tz,
-		currentMemberId: "m1" as string | null,
+		currentMemberId: "m1",
 		isTmod: false,
 		isGrammarian: false,
 		now,
