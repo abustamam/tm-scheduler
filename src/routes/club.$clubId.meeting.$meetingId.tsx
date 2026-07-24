@@ -7,11 +7,15 @@ import {
 } from "@tanstack/react-router";
 import {
 	CalendarDays,
+	CheckCircle2,
 	Clock,
+	Eye,
 	Loader2,
 	Lock,
+	LockOpen,
 	MapPin,
 	Sparkles,
+	WifiOff,
 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -22,11 +26,23 @@ import {
 import { MeetingAnnouncements } from "#/components/agenda/meeting-announcements";
 import { GuestResources } from "#/components/club/guest-resources";
 import { useRequireIdentity } from "#/components/club/identity-gate";
+import { MeetingMinutes } from "#/components/club/meeting-minutes";
 import { MeetingNavStrip } from "#/components/club/meeting-nav-strip";
+import { MeetingRoleSheets } from "#/components/club/meeting-role-sheets";
 import { MeetingViewActions } from "#/components/club/meeting-view-actions";
 import { ViewingAs } from "#/components/club/viewing-as";
 import { ShareLinkButton } from "#/components/share-link-button";
 import { Button } from "#/components/ui/button";
+import {
+	Dialog,
+	DialogClose,
+	DialogContent,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "#/components/ui/dialog";
+import { Label } from "#/components/ui/label";
+import { useOnlineStatus } from "#/hooks/use-online-status";
 import { applyFlex, expandRunSheet } from "#/lib/agenda-runsheet";
 import { buildSlideDeck } from "#/lib/agenda-slides";
 import {
@@ -37,41 +53,58 @@ import {
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import {
 	isMeetingLocked,
-	lockedViewer,
 	MEETING_LOCKED_MESSAGE,
 	meetingDatePassed,
+	meetingDateReached,
+	resolveMeetingViewer,
 } from "#/lib/meeting-lifecycle";
 import { deriveMeetingNavItems } from "#/lib/meeting-nav";
-import { deriveMeetingRoleFlags } from "#/lib/meeting-roles";
-import { meetingViewer } from "#/lib/meeting-viewer";
+import { deriveMeetingRoleFlags, pairedRoleIds } from "#/lib/meeting-roles";
 import { useEffectiveMember } from "#/lib/member-identity";
+import { footerDate } from "#/lib/slide-layout";
 import { clearAvailability, setAvailability } from "#/server/availability";
 import {
+	completeMeeting,
 	getMeetingByKey,
 	getPublicMeetingByKey,
 	listUpcomingMeetings,
+	reopenMeeting,
 } from "#/server/meetings";
 import { listMembers } from "#/server/members";
+import { getMinutes } from "#/server/minutes";
+import { getMinutesRecipients } from "#/server/minutes-email";
+import { clearContacted, setContacted } from "#/server/outreach";
 import {
+	addRoleSlot,
 	addSpeakerSlot,
 	claimSlot,
+	confirmSlot,
+	moveSpeakerSlot,
 	reassignSlot,
 	releaseSlot,
+	removeRoleSlot,
 	removeSpeakerSlot,
+	unconfirmSlot,
 } from "#/server/slots";
+
+// Anonymous (non-shell) visitors never load minutes — this hidden default keeps
+// the loader's return shape uniform without a server call or any PII fetch.
+const EMPTY_MINUTES = {
+	visible: false,
+	canEdit: false,
+	data: null,
+	program: [],
+} as Awaited<ReturnType<typeof getMinutes>>;
 
 export const Route = createFileRoute("/club/$clubId/meeting/$meetingId")({
 	loader: async ({ params, context }) => {
-		// Fire both in parallel. getPublicMeetingByKey stays fatal (the agenda is
-		// the page) EXCEPT when the key resolves to no meeting (stale/expired link)
-		// — that translates to notFound() so notFoundComponent renders instead of
-		// the generic error boundary. Other failures (DB errors, etc.) stay fatal.
-		// The upcoming list is non-fatal — a failure degrades to no strip.
-		// A signed-in member of this club (shell-wrapped) loads via the session-aware
-		// getMeetingByKey — an admin regains management + contact; a non-admin member
-		// gets the same non-manager view. Anonymous visitors use getPublicMeetingByKey
-		// (hard canManage=false, never any PII). Both resolve the $meetingId key the
-		// same way, so the loader shape is identical either way (#317).
+		// PII boundary (#37): a signed-in member of this club (shell) loads the
+		// session-aware getMeetingByKey — an admin regains management + contact; a
+		// non-admin member gets canManage=false. An anonymous visitor loads
+		// getPublicMeetingByKey (hard canManage=false, never any PII). Both resolve
+		// the $meetingId key identically, so the loader shape matches either way
+		// (#317). KEEP THIS FORK VERBATIM — public-meeting-contact.guard.test.ts
+		// asserts it.
 		const load = context.shell ? getMeetingByKey : getPublicMeetingByKey;
 		const meetingPromise = load({
 			data: { clubId: context.clubUuid, key: params.meetingId },
@@ -94,7 +127,26 @@ export const Route = createFileRoute("/club/$clubId/meeting/$meetingId")({
 			upcoming,
 			data.timezone,
 		);
-		return { ...data, navItems };
+
+		// Minutes (ADR-0014 / #152) — ONLY for a signed-in member (shell); an anon
+		// visitor never reaches getMinutes. Non-fatal: degrade to hidden. Keyed by
+		// the resolved uuid (params.meetingId is the pretty key). The PII guard test
+		// asserts this shell gate stays.
+		const minutes = context.shell
+			? await getMinutes({ data: data.meeting.id }).catch(() => EMPTY_MINUTES)
+			: EMPTY_MINUTES;
+		// Default email recipients (#165) — admins on a completed meeting only.
+		const minutesEmail =
+			context.shell &&
+			minutes.visible &&
+			minutes.canEdit &&
+			isMeetingLocked(data.meeting.status)
+				? await getMinutesRecipients({
+						data: { clubId: data.meeting.clubId, meetingId: data.meeting.id },
+					}).catch(() => null)
+				: null;
+
+		return { ...data, navItems, minutes, minutesEmail };
 	},
 	component: MeetingView,
 	notFoundComponent: MeetingNotFound,
@@ -127,11 +179,14 @@ function errMessage(err: unknown) {
 
 function MeetingView() {
 	const { clubId } = Route.useParams();
-	const { clubUuid, effectiveMemberId, authCtx } = Route.useRouteContext();
+	const { clubUuid, effectiveMemberId, authCtx, shell } =
+		Route.useRouteContext();
 	const {
 		meeting,
 		slots,
+		canManage,
 		timezone,
+		unavailableMembers,
 		unavailableMemberIds,
 		roleRecency,
 		navItems,
@@ -139,27 +194,44 @@ function MeetingView() {
 		clubNumber,
 		clubDistrict,
 		clubMeetingSchedule,
+		clubRoles,
+		clubGuests,
+		roster: loaderRoster,
+		contactedMemberIds,
+		minutes,
+		minutesEmail,
 		nextMeetingAt,
 		urlKey,
 	} = Route.useLoaderData();
-	const flex = applyFlex(expandRunSheet(slots), meeting.lengthMinutes);
-	const projectedEnd = new Date(
-		new Date(meeting.scheduledAt).getTime() + flex.projectedMinutes * 60_000,
-	);
+	const router = useRouter();
+	const online = useOnlineStatus();
+
 	// Shell-wrapped signed-in member → act as the session identity; anonymous
-	// visitor → the localStorage-picked member (#317). Only `member.id` is used
-	// below, so the session display name is only for consistency with the seam.
+	// visitor → the localStorage-picked member (#317).
 	const session =
 		effectiveMemberId && authCtx?.user
 			? { id: effectiveMemberId, name: authCtx.user.name || authCtx.user.email }
 			: null;
 	const { member, source } = useEffectiveMember(clubId, session);
 	const { requireIdentity, promptIdentity } = useRequireIdentity();
-	const router = useRouter();
+	const myId = member?.id ?? null;
+	const isSignedIn = session !== null;
+	// The session member drives the manager action path (matches the old
+	// /meetings/:id route's `currentMemberId`); null for an impersonating
+	// superadmin (canManage without a linked member).
+	const managerActorId = session?.id ?? null;
 
-	// Same deck present mode renders — reused as the source for the .pptx export
-	// so this shared meeting-detail view offers Download .pptx alongside
-	// Print/Present (issue #147, via MeetingViewActions).
+	const [availBusy, setAvailBusy] = useState(false);
+	const [addRoleOpen, setAddRoleOpen] = useState(false);
+	const [addRoleBusy, setAddRoleBusy] = useState(false);
+	const [lifecycleBusy, setLifecycleBusy] = useState(false);
+	// #320: an admin can preview the page as a non-admin member sees it.
+	const [previewAsMember, setPreviewAsMember] = useState(false);
+
+	const flex = applyFlex(expandRunSheet(slots), meeting.lengthMinutes);
+	const projectedEnd = new Date(
+		new Date(meeting.scheduledAt).getTime() + flex.projectedMinutes * 60_000,
+	);
 	const deck = buildSlideDeck(
 		meeting,
 		{
@@ -173,48 +245,59 @@ function MeetingView() {
 		nextMeetingAt,
 	);
 
-	const [availBusy, setAvailBusy] = useState(false);
-
-	const myId = member?.id ?? null;
-	const isUnavailable = myId ? unavailableMemberIds.includes(myId) : false;
-
-	// The current member's role flags for this meeting (TMOD holds the Toastmaster
-	// slot → self-serve agenda editing per ADR-0010; Grammarian holds the WOD →
-	// focused WOD editor per #296). Both false for a visitor with no picked name.
 	const { isTmod, isGrammarian } = deriveMeetingRoleFlags(slots, myId);
-
-	// #150: a completed meeting is locked. On this public/anonymous surface a
-	// meeting that's already *happened* (its date is past) is treated the same —
-	// there's nothing left to self-serve, so the agenda goes read-only and the
-	// availability toggle becomes an attendance statement. The meeting day itself
-	// stays editable (people fill roles right up to it). Admins keep full editing
-	// on the signed-in workspace regardless; only this anonymous view goes over.
 	const locked = isMeetingLocked(meeting.status);
-	const over = locked || meetingDatePassed(meeting.scheduledAt, timezone);
-	const baseViewer = meetingViewer({
+	const datePassed = meetingDatePassed(meeting.scheduledAt, timezone);
+	const over = locked || datePassed;
+	// #320: previewing-as-member drops management everywhere it gates admin UI.
+	const effectiveCanManage = canManage && !previewAsMember;
+	const canComplete = meetingDateReached(meeting.scheduledAt, timezone);
+
+	// One viewer for all audiences: an admin keeps editing a past-but-open meeting
+	// until Complete; a member/anon agenda freezes once the date passes; a locked
+	// meeting is read-only for everyone. (Pure — unit-tested in Task 1.)
+	const viewer = resolveMeetingViewer({
+		status: meeting.status,
+		scheduledAt: meeting.scheduledAt,
+		timezone,
 		currentMemberId: myId,
-		canManage: false,
+		canManage: effectiveCanManage,
 		isTmod,
 		isGrammarian,
-		isEditableWindow: !over,
-		isSignedIn: session !== null,
+		isSignedIn,
 	});
-	const viewer = over ? lockedViewer(baseViewer) : baseViewer;
 
-	// Roster for the TMOD assign picker — only fetched when self-serve editing is
-	// unlocked (kept off the payload for ordinary viewers).
-	const { data: roster = [] } = useQuery({
+	// Roster for the assign picker: a manager already has it (with contact) from
+	// the loader; a non-admin TMOD (public or signed-in) fetches the plain member
+	// list client-side, since the public payload carries no roster.
+	const { data: fetchedRoster = [] } = useQuery({
 		queryKey: ["members", clubUuid],
 		queryFn: () => listMembers({ data: clubUuid }),
-		enabled: isTmod,
+		enabled: !canManage && isTmod,
 	});
+	const roster = canManage ? loaderRoster : fetchedRoster;
+
+	const pairedIds = pairedRoleIds(clubRoles);
+	const addableRoles = clubRoles.filter((r) => !pairedIds.has(r.id));
+	const nudgeShareUrl =
+		typeof window === "undefined"
+			? `/club/${clubId}/meeting/${urlKey}`
+			: `${window.location.origin}/club/${clubId}/meeting/${urlKey}`;
+	const nudgeDate = footerDate(meeting.scheduledAt, timezone);
+	const myUnavailable = myId ? unavailableMemberIds.includes(myId) : false;
+	// The agenda's internal claim/assign acts as this member: the session member
+	// for a manager (null for an impersonator), the effective member otherwise.
+	const agendaMemberId = effectiveCanManage ? managerActorId : myId;
+	const containerClass = canManage
+		? "max-w-workspace px-4 pt-5 pb-10 sm:px-7 sm:pt-7 space-y-5"
+		: "mx-auto w-full max-w-reading p-4 pb-8 md:p-6 space-y-5";
 
 	async function toggleAvailability() {
 		setAvailBusy(true);
 		try {
 			const me = await requireIdentity();
-			if (!me) return; // finally clears availBusy
-			if (isUnavailable) {
+			if (!me) return;
+			if (myUnavailable) {
 				await clearAvailability({
 					data: { memberId: me.id, meetingId: meeting.id, clubId: clubUuid },
 				});
@@ -233,15 +316,85 @@ function MeetingView() {
 		}
 	}
 
-	// Self-asserted actions: every mutation carries `selfMemberId` so the server
-	// takes the ADR-0010 self-serve path (vs. the admin/session path).
-	const actions: MeetingAgendaActions = {
+	// Manager (admin) actions: act as the session member; exposes the manager-only
+	// confirm/unconfirm/moveSpeaker/removeRole set.
+	const managerActions: MeetingAgendaActions = {
 		claim: async (slot, speakerDetails) => {
-			// `requireIdentity()` resolving null (picker dismissed) is currently
-			// unreachable here: `handleClaimClick` in `<MeetingAgenda>` already
-			// resolves identity before opening the ClaimSheet, so by the time this
-			// fires an identity is set. The guard stays as defense-in-depth — a
-			// silent return (not a throw) so it never surfaces a false success toast.
+			if (!managerActorId) {
+				throw new Error("Your account isn't linked to a club member yet.");
+			}
+			await claimSlot({
+				data: {
+					slotId: slot.id,
+					memberId: managerActorId,
+					actorMemberId: managerActorId,
+					speakerDetails,
+				},
+			});
+		},
+		release: async (slot) => {
+			await releaseSlot({
+				data: { slotId: slot.id, actorMemberId: managerActorId },
+			});
+		},
+		takeover: async (slot) => {
+			if (!managerActorId) {
+				throw new Error("Your account isn't linked to a club member yet.");
+			}
+			await reassignSlot({
+				data: {
+					slotId: slot.id,
+					memberId: managerActorId,
+					actorMemberId: managerActorId,
+				},
+			});
+		},
+		confirm: async (slot) => {
+			await confirmSlot({
+				data: { slotId: slot.id, actorMemberId: managerActorId },
+			});
+		},
+		unconfirm: async (slot) => {
+			await unconfirmSlot({
+				data: { slotId: slot.id, actorMemberId: managerActorId },
+			});
+		},
+		moveSpeaker: async (slot, direction) => {
+			await moveSpeakerSlot({
+				data: { slotId: slot.id, direction, actorMemberId: managerActorId },
+			});
+		},
+		removeRole: async (slot) => {
+			await removeRoleSlot({
+				data: { slotId: slot.id, actorMemberId: managerActorId },
+			});
+		},
+		addSpeaker: async () => {
+			await addSpeakerSlot({
+				data: {
+					meetingId: meeting.id,
+					actorMemberId: managerActorId,
+					selfMemberId: managerActorId,
+				},
+			});
+		},
+		removeSpeaker: async () => {
+			await removeSpeakerSlot({
+				data: {
+					meetingId: meeting.id,
+					actorMemberId: managerActorId,
+					selfMemberId: managerActorId,
+				},
+			});
+		},
+		onMutated: () => router.invalidate(),
+	};
+
+	// Self-serve (member / anon) actions: resolve identity first (a signed-in
+	// member resolves without a prompt; an anon visitor identifies at click) and
+	// carry `selfMemberId`, so the server takes the ADR-0010 self-serve path.
+	const selfActions: MeetingAgendaActions = {
+		claim: async (slot, speakerDetails) => {
 			const me = await requireIdentity();
 			if (!me) return;
 			await claimSlot({
@@ -292,14 +445,92 @@ function MeetingView() {
 		onMutated: () => router.invalidate(),
 	};
 
+	const actions = effectiveCanManage ? managerActions : selfActions;
+
+	async function doAddRole(roleDefinitionId: string) {
+		setAddRoleBusy(true);
+		try {
+			await addRoleSlot({
+				data: {
+					meetingId: meeting.id,
+					roleDefinitionId,
+					actorMemberId: managerActorId,
+				},
+			});
+			toast.success("Role added.");
+			setAddRoleOpen(false);
+			await router.invalidate();
+		} catch (err) {
+			toast.error(errMessage(err));
+		} finally {
+			setAddRoleBusy(false);
+		}
+	}
+
+	async function doComplete() {
+		setLifecycleBusy(true);
+		try {
+			await completeMeeting({
+				data: { meetingId: meeting.id, actorMemberId: managerActorId },
+			});
+			toast.success("Meeting closed out and locked.");
+			await router.invalidate();
+		} catch (err) {
+			toast.error(errMessage(err));
+		} finally {
+			setLifecycleBusy(false);
+		}
+	}
+
+	async function doReopen() {
+		setLifecycleBusy(true);
+		try {
+			await reopenMeeting({
+				data: { meetingId: meeting.id, actorMemberId: managerActorId },
+			});
+			toast.success("Meeting reopened for edits.");
+			await router.invalidate();
+		} catch (err) {
+			toast.error(errMessage(err));
+		} finally {
+			setLifecycleBusy(false);
+		}
+	}
+
 	return (
-		<div className="mx-auto w-full max-w-reading space-y-5 p-4 pb-8 md:p-6">
-			{over ? (
+		<div className={containerClass}>
+			{previewAsMember ? (
+				<div className="flex items-center justify-between gap-3 rounded-xl border border-primary/40 bg-primary/10 px-4 py-3 text-sm font-medium text-primary">
+					<span className="flex items-center gap-2">
+						<Eye className="size-4 shrink-0" aria-hidden />
+						Previewing as a member — management controls are hidden.
+					</span>
+					<Button
+						size="sm"
+						variant="outline"
+						onClick={() => setPreviewAsMember(false)}
+					>
+						Exit preview
+					</Button>
+				</div>
+			) : null}
+			{!online && shell ? (
+				<div className="flex items-center gap-2 rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm font-medium text-warning-foreground">
+					<WifiOff className="size-4 shrink-0" aria-hidden />
+					You're offline — minutes edits are saved on this device and sync when
+					you reconnect. Other changes (meeting details, roles) need a
+					connection.
+				</div>
+			) : null}
+			{locked ? (
 				<div className="flex items-center gap-2 rounded-xl border border-border bg-muted/60 px-4 py-3 text-sm font-medium text-muted-foreground">
 					<Lock className="size-4" aria-hidden />
-					{locked
-						? MEETING_LOCKED_MESSAGE
-						: "This meeting has already taken place."}
+					{MEETING_LOCKED_MESSAGE}
+				</div>
+			) : datePassed && !effectiveCanManage ? (
+				<div className="flex items-center gap-2 rounded-xl border border-border bg-muted/60 px-4 py-3 text-sm font-medium text-muted-foreground">
+					<Lock className="size-4" aria-hidden />
+					This meeting has already taken place.
 				</div>
 			) : null}
 			<header className="space-y-2 pt-2">
@@ -345,15 +576,13 @@ function MeetingView() {
 						<span className="font-medium">{meeting.wordOfTheDay}</span>
 					</p>
 				) : null}
-				{/* Who claims/availability will be attributed to, with the same
-				    "not you?" escape hatch as the sign-up sheet (issue #220). */}
 				{source === "anon" ? (
 					<ViewingAs member={member} promptIdentity={promptIdentity} />
 				) : null}
 				{over ? (
 					myId ? (
 						<p className="mt-1 text-sm font-medium text-muted-foreground">
-							{isUnavailable
+							{myUnavailable
 								? "You did not attend this meeting."
 								: "You attended this meeting."}
 						</p>
@@ -361,7 +590,7 @@ function MeetingView() {
 				) : (
 					<Button
 						type="button"
-						variant={isUnavailable ? "default" : "outline"}
+						variant={myUnavailable ? "default" : "outline"}
 						size="sm"
 						onClick={toggleAvailability}
 						disabled={!viewer.canToggleAvailability || availBusy}
@@ -369,28 +598,77 @@ function MeetingView() {
 					>
 						{availBusy ? (
 							<Loader2 className="size-4 animate-spin" />
-						) : isUnavailable ? (
+						) : myUnavailable ? (
 							"You can't make this one — undo?"
 						) : (
 							"I can't make this one"
 						)}
 					</Button>
 				)}
-				<ShareLinkButton
-					path={`/club/${clubId}/meeting/${urlKey}`}
-					className="mt-1 ml-2"
-				/>
-				<MeetingViewActions
-					clubSlug={clubId}
-					meetingId={urlKey}
-					deck={deck}
-					clubName={clubName}
-				/>
+				<div className="flex flex-wrap items-center gap-2 pt-1">
+					<ShareLinkButton
+						path={`/club/${clubId}/meeting/${urlKey}`}
+						label={canManage ? "Copy member link" : undefined}
+					/>
+					<MeetingViewActions
+						clubSlug={clubId}
+						meetingId={urlKey}
+						deck={deck}
+						clubName={clubName}
+					/>
+					{effectiveCanManage ? (
+						<MeetingRoleSheets meetingId={meeting.id} />
+					) : null}
+					{effectiveCanManage && !locked && addableRoles.length > 0 ? (
+						<Button
+							size="sm"
+							variant="outline"
+							onClick={() => setAddRoleOpen(true)}
+						>
+							+ Add role
+						</Button>
+					) : null}
+					{effectiveCanManage && locked ? (
+						<Button
+							size="sm"
+							variant="outline"
+							onClick={doReopen}
+							disabled={lifecycleBusy}
+						>
+							{lifecycleBusy ? (
+								<Loader2 className="size-4 animate-spin" />
+							) : (
+								<LockOpen className="size-4" />
+							)}
+							Reopen meeting
+						</Button>
+					) : null}
+					{effectiveCanManage && !locked && canComplete ? (
+						<Button size="sm" onClick={doComplete} disabled={lifecycleBusy}>
+							{lifecycleBusy ? (
+								<Loader2 className="size-4 animate-spin" />
+							) : (
+								<CheckCircle2 className="size-4" />
+							)}
+							Complete meeting
+						</Button>
+					) : null}
+					{canManage && !previewAsMember ? (
+						<Button
+							size="sm"
+							variant="ghost"
+							onClick={() => setPreviewAsMember(true)}
+						>
+							<Eye className="size-4" />
+							Preview as member
+						</Button>
+					) : null}
+				</div>
 			</header>
 
 			<MeetingAnnouncements text={meeting.reminders} />
 
-			<GuestResources />
+			{effectiveCanManage ? null : <GuestResources />}
 
 			<MeetingAgenda
 				slots={slots}
@@ -399,20 +677,121 @@ function MeetingView() {
 				roster={roster}
 				roleRecency={roleRecency}
 				unavailableMemberIds={unavailableMemberIds}
-				// Public self-serve viewers never have `canManage`, so the confirm
-				// nudge never renders here — no share context to build these from.
-				shareUrl=""
-				meetingDate=""
+				unavailableMembers={effectiveCanManage ? unavailableMembers : undefined}
+				pairedRoleIds={effectiveCanManage ? pairedIds : undefined}
+				clubGuests={effectiveCanManage ? clubGuests : undefined}
+				shareUrl={effectiveCanManage ? nudgeShareUrl : ""}
+				meetingDate={effectiveCanManage ? nudgeDate : ""}
 				meeting={meeting}
 				timezone={timezone}
-				actorMemberId={myId}
-				selfMemberId={myId}
+				actorMemberId={agendaMemberId}
+				selfMemberId={agendaMemberId}
 				onMetaSaved={async () => {
 					await router.invalidate();
 				}}
 				requireIdentity={requireIdentity}
-				contactedMemberIds={[]}
+				contactedMemberIds={contactedMemberIds}
+				onContacted={async (memberId, via) => {
+					try {
+						await setContacted({
+							data: {
+								memberId,
+								meetingId: meeting.id,
+								clubId: meeting.clubId,
+								via,
+							},
+						});
+						await router.invalidate();
+					} catch (err) {
+						toast.error(errMessage(err));
+					}
+				}}
+				onUncontacted={async (memberId) => {
+					try {
+						await clearContacted({
+							data: { memberId, meetingId: meeting.id, clubId: meeting.clubId },
+						});
+						await router.invalidate();
+					} catch (err) {
+						toast.error(errMessage(err));
+					}
+				}}
 			/>
+
+			{minutes.visible && minutes.data ? (
+				<MeetingMinutes
+					meetingId={meeting.id}
+					minutes={minutes.data}
+					program={minutes.program}
+					meetingPast={locked || datePassed}
+					canEdit={effectiveCanManage && minutes.canEdit}
+					clubGuests={clubGuests}
+					onMutated={() => router.invalidate()}
+					email={
+						minutesEmail
+							? {
+									clubId: meeting.clubId,
+									clubName,
+									meetingDate: meeting.scheduledAt,
+									recipients: minutesEmail.recipients,
+									skipped: minutesEmail.skipped,
+								}
+							: null
+					}
+				/>
+			) : null}
+
+			<Dialog open={addRoleOpen} onOpenChange={setAddRoleOpen}>
+				<DialogContent>
+					<DialogHeader>
+						<DialogTitle>Add a role</DialogTitle>
+					</DialogHeader>
+					<form
+						onSubmit={(e) => {
+							e.preventDefault();
+							const roleId = String(
+								new FormData(e.currentTarget).get("roleDefinitionId") ?? "",
+							);
+							if (roleId) void doAddRole(roleId);
+						}}
+						className="space-y-4"
+					>
+						<div className="space-y-2">
+							<Label htmlFor="roleDefinitionId">Role</Label>
+							<select
+								id="roleDefinitionId"
+								name="roleDefinitionId"
+								required
+								className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+							>
+								{addableRoles.map((r) => (
+									<option key={r.id} value={r.id}>
+										{r.name}
+									</option>
+								))}
+							</select>
+							<p className="text-xs text-muted-foreground">
+								Picking a role already on this meeting adds another instance
+								(e.g. “Timer 2”).
+							</p>
+						</div>
+						<DialogFooter>
+							<DialogClose asChild>
+								<Button type="button" variant="outline">
+									Cancel
+								</Button>
+							</DialogClose>
+							<Button type="submit" disabled={addRoleBusy}>
+								{addRoleBusy ? (
+									<Loader2 className="size-4 animate-spin" />
+								) : (
+									"Add role"
+								)}
+							</Button>
+						</DialogFooter>
+					</form>
+				</DialogContent>
+			</Dialog>
 		</div>
 	);
 }
