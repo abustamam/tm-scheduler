@@ -6,9 +6,9 @@ import { getNextMeeting } from "#/server/meetings";
 
 /**
  * Shortcut to the club's next meeting. Resolves the active club's soonest upcoming
- * meeting and redirects to its `/meetings/$id` page; when nothing is scheduled
- * (or the user has no club), renders the empty state instead. There is no
- * standalone "agenda" screen — a meeting IS its agenda (#141).
+ * meeting and redirects to its canonical `/club/:clubId/meeting/:key` page; when
+ * nothing is scheduled (or the user has no club), renders the empty state instead.
+ * There is no standalone "agenda" screen — a meeting IS its agenda (#141).
  */
 export const Route = createFileRoute("/_authed/next")({
 	loader: async ({ context }) => {

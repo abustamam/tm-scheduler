@@ -1,22 +1,24 @@
 // GavelUp offline service worker (issue #174, extended by #176 slice 1).
 //
 // Scope: read-only offline access to a meeting's Present and Print views AND
-// the signed-in meeting view (`/meetings/:id`, which holds the minutes). A
-// full-page load of `/…/present`, `/…/print`, or `/meetings/<id>` while ONLINE
-// primes the cache; the loader data is inlined in the SSR HTML (TanStack Start
-// dehydration) and the page re-renders purely client-side, so a cached HTML
-// document + cached JS/CSS assets is enough to render offline with no network.
+// the canonical pretty meeting page (`/club/:slug/meeting/:key`, which for a
+// signed-in member holds the minutes; the legacy `/meetings/:id` is now just a
+// redirect to it). A full-page load of `/…/present`, `/…/print`, or the pretty
+// meeting page while ONLINE primes the cache; the loader data is inlined in the
+// SSR HTML (TanStack Start dehydration) and the page re-renders purely
+// client-side, so a cached HTML document + cached JS/CSS assets is enough to
+// render offline with no network.
 //
 // Strategy:
-//   - Present/Print + the signed-in meeting view → network-first (fresh when
+//   - Present/Print + the pretty meeting page → network-first (fresh when
 //     online, cached when offline). The navigation-layer widening is kept
-//     strictly to `/meetings/<id>` — no other authed page lands in the cache.
+//     strictly to meeting paths — no other authed page lands in the cache.
 //   - Static assets (script/style/font/image) → stale-while-revalidate.
 //   - Writes (POST) and cross-origin requests are never intercepted.
 //
 // Caching a signed-in page writes authed content to the on-device cache; this
 // is bounded by #176's single-user-device assumption, which is why the widening
-// stays scoped to the meeting-view path (not every `/_authed` navigation).
+// stays scoped to the meeting paths (not every `/_authed` navigation).
 //
 // Bumping VERSION invalidates every cache on the next activation.
 
