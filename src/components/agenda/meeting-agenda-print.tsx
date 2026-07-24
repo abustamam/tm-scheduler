@@ -43,11 +43,18 @@ export type AgendaHeader = {
 	wordOfTheDay: string | null;
 	location: string | null;
 	announcements: string | null; // free-text, one per line; null/empty ⇒ hidden
+	meetingNumber: number | null; // the club's own "Meeting #56"; null ⇒ hidden
 };
 
-/** "Club #NNN  ·  District 39" — either half optional; "" when both unset. */
-function clubLine(clubNumber: string | null, district: string | null): string {
-	return [clubNumber ? `Club #${clubNumber}` : null, district]
+/** "Club #NNN  ·  District 39  ·  Meeting #56" — every part optional; "" when
+ *  all are unset. The club's own meeting number (#358) rides here so it lands on
+ *  all four layouts from one place, exactly once each. */
+function clubLine(h: AgendaHeader): string {
+	return [
+		h.clubNumber ? `Club #${h.clubNumber}` : null,
+		h.district,
+		h.meetingNumber != null ? `Meeting #${h.meetingNumber}` : null,
+	]
 		.filter(Boolean)
 		.join("  ·  ");
 }
@@ -350,7 +357,7 @@ function RunNarrative({
 }
 
 function HeaderBand({ header }: { header: AgendaHeader }) {
-	const meta = [clubLine(header.clubNumber, header.district), header.dateLong]
+	const meta = [clubLine(header), header.dateLong]
 		.filter(Boolean)
 		.join("  ·  ");
 	return (
@@ -631,7 +638,7 @@ function GridLayout({
 					>
 						{header.clubName}
 					</div>
-					{clubLine(header.clubNumber, header.district) ? (
+					{clubLine(header) ? (
 						<div
 							style={{
 								fontSize: 10.5,
@@ -640,7 +647,7 @@ function GridLayout({
 								fontWeight: 600,
 							}}
 						>
-							{clubLine(header.clubNumber, header.district)}
+							{clubLine(header)}
 						</div>
 					) : null}
 				</div>
@@ -920,7 +927,7 @@ function SpaciousLayout({
 							>
 								{header.clubName}
 							</div>
-							{clubLine(header.clubNumber, header.district) ? (
+							{clubLine(header) ? (
 								<div
 									style={{
 										fontSize: 12.5,
@@ -929,7 +936,7 @@ function SpaciousLayout({
 										letterSpacing: ".02em",
 									}}
 								>
-									{clubLine(header.clubNumber, header.district)}
+									{clubLine(header)}
 								</div>
 							) : null}
 						</div>
@@ -1175,7 +1182,7 @@ function TimingLayout({
 						>
 							{header.clubName}
 						</div>
-						{clubLine(header.clubNumber, header.district) ? (
+						{clubLine(header) ? (
 							<div
 								style={{
 									fontSize: 11,
@@ -1184,7 +1191,7 @@ function TimingLayout({
 									fontWeight: 600,
 								}}
 							>
-								{clubLine(header.clubNumber, header.district)}
+								{clubLine(header)}
 							</div>
 						) : null}
 					</div>

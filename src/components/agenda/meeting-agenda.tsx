@@ -109,6 +109,8 @@ export interface MeetingAgendaProps {
 	/** The full meeting row, for the lifted edit dialogs. The WOD dialog reads
 	 *  only a subset (id + wod fields); the meta dialog needs all of it. */
 	meeting: Awaited<ReturnType<typeof getMeeting>>["meeting"];
+	/** The meeting's EFFECTIVE number (stored or derived, #358). */
+	effectiveMeetingNumber?: number | null;
 	/** Club timezone — the meta dialog renders/parses the date field in it. */
 	timezone: string;
 	/** Identity args the lifted edit dialogs pass to their server fns. */
@@ -159,6 +161,7 @@ export function MeetingAgenda({
 	shareUrl,
 	meetingDate,
 	meeting,
+	effectiveMeetingNumber = null,
 	timezone,
 	actorMemberId,
 	selfMemberId,
@@ -341,6 +344,7 @@ export function MeetingAgenda({
 					actorMemberId={actorMemberId}
 					selfMemberId={selfMemberId}
 					canReschedule={viewer.canManage}
+					effectiveMeetingNumber={effectiveMeetingNumber}
 					onSaved={async () => {
 						setMetaOpen(false);
 						await onMetaSaved();

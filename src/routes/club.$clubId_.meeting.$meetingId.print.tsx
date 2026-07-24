@@ -107,6 +107,7 @@ function PrintAgenda() {
 		clubDistrict,
 		clubMission,
 		clubMeetingSchedule,
+		meetingNumber,
 		officers,
 	} = Route.useLoaderData();
 
@@ -163,6 +164,7 @@ function PrintAgenda() {
 		wordOfTheDay: meeting.wordOfTheDay,
 		location: meeting.location,
 		announcements: meeting.reminders,
+		meetingNumber,
 	};
 
 	return (
