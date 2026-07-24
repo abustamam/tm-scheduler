@@ -40,4 +40,15 @@ describe("public meeting routes never ship contact (#37 PII)", () => {
 		// …and never as a direct, ungated call.
 		expect(src).not.toMatch(/[^c]getMeetingByKey\(\{/);
 	});
+
+	// The unified pretty route loads minutes for a signed-in member (shell) but an
+	// anonymous visitor (shell=false) must never reach getMinutes — it is gated on
+	// the same `context.shell` flag as getMeetingByKey.
+	it("club.$clubId.meeting.$meetingId.tsx gates getMinutes behind context.shell", () => {
+		const src = read("club.$clubId.meeting.$meetingId.tsx");
+		// Minutes are loaded for members…
+		expect(src).toMatch(/getMinutes\(/);
+		// …only as the shell branch of the ternary (guard token immediately before).
+		expect(src).toMatch(/context\.shell\s*\?\s*await getMinutes\(/);
+	});
 });
