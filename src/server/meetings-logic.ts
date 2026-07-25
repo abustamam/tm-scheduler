@@ -8,6 +8,7 @@ import { generateSlotRows } from "#/lib/agenda";
 import { zonedWallTimeToUtc } from "#/lib/datetime";
 import { meetingDateReached } from "#/lib/meeting-lifecycle";
 import { logActivity } from "./activity";
+import { freezeMeetingNumber } from "./meeting-number-logic";
 
 export interface MeetingCreateInput {
 	clubId: string;
@@ -74,6 +75,9 @@ export interface MeetingUpdateInput {
 	wodExample?: string | null;
 	notes?: string | null;
 	reminders?: string | null;
+	/** The club's meeting number (#358). Omit to leave the current one alone;
+	 *  pass null to clear it back to provisional/derived. */
+	meetingNumber?: number | null;
 	/**
 	 * Whether the caller may reschedule (change `scheduledAt`/`lengthMinutes`).
 	 * Defaults to true (admin). A self-serve TMOD passes false: an attempt to
@@ -106,6 +110,12 @@ export async function applyMeetingUpdate(input: MeetingUpdateInput) {
 		wodExample: input.wodExample?.trim() || null,
 		notes: input.notes?.trim() || null,
 		reminders: input.reminders?.trim() || null,
+		// Omitted (undefined) leaves the stored number untouched — the dialog only
+		// sends this field when the admin actually typed one (#358).
+		meetingNumber:
+			input.meetingNumber === undefined
+				? meeting.meetingNumber
+				: input.meetingNumber,
 	};
 
 	// Reschedule (date/time or length change) is an admin-only decision. A
@@ -242,6 +252,12 @@ export async function applyCompleteMeeting(input: {
 			detail: { change: "completed" },
 		});
 	});
+
+	// The meeting is history now, so its number stops being provisional and is
+	// frozen onto the row (#358) — becoming the anchor the next meetings count
+	// from. Deliberately AFTER the commit and non-fatal: if it fails, the number
+	// simply stays derived, which still displays correctly.
+	await freezeMeetingNumber(input.meetingId);
 
 	return { clubId: meeting.clubId };
 }

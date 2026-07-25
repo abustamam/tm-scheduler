@@ -38,6 +38,7 @@ import {
 	loadHolderContacts,
 	loadRosterWithContact,
 } from "./meeting-contacts-logic";
+import { resolveMeetingNumber } from "./meeting-number-logic";
 import { resolveMeetingKey } from "./meeting-resolve-logic";
 import {
 	applyCompleteMeeting,
@@ -306,8 +307,15 @@ async function loadMeetingDetail(
 		};
 	});
 
+	// The number to DISPLAY (#358): the stored one, or derived by counting held
+	// meetings forward from the club's most recent numbered meeting. Null when
+	// the club has never numbered one. Renderers use THIS, not
+	// `meeting.meetingNumber` (which is the raw stored column, often null).
+	const meetingNumber = await resolveMeetingNumber(meetingId);
+
 	return {
 		meeting,
+		meetingNumber,
 		slots: slotsWithContact,
 		canManage,
 		roleRecency,
@@ -549,6 +557,8 @@ const updateMeetingSchema = z.object({
 	wodExample: z.string().trim().optional(),
 	notes: z.string().trim().optional(),
 	reminders: z.string().trim().optional(),
+	// The club's meeting number (#358). Nullable = cleared back to derived.
+	meetingNumber: z.number().int().positive().nullable().optional(),
 });
 
 /** Edit a meeting's meta. Admin/VPE (may also reschedule) OR the meeting's

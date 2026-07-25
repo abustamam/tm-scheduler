@@ -126,6 +126,7 @@ function MeetingDetail() {
 		clubNumber,
 		clubDistrict,
 		clubMeetingSchedule,
+		meetingNumber,
 		clubGuests,
 		minutes,
 		minutesEmail,
@@ -158,6 +159,7 @@ function MeetingDetail() {
 		},
 		slots,
 		nextMeetingAt,
+		meetingNumber,
 	);
 	// #150: a completed meeting is locked. Deny every mutation capability so
 	// <MeetingAgenda> renders read-only; the server rejects any edit that reaches
@@ -451,6 +453,7 @@ function MeetingDetail() {
 
 			<MeetingAgenda
 				slots={slots}
+				effectiveMeetingNumber={meetingNumber}
 				viewer={viewer}
 				actions={actions}
 				roster={roster}

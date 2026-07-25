@@ -13,6 +13,7 @@ const deck: Slide[] = [
 		clubName: CLUB_NAME,
 		district: "District 39",
 		clubNumber: "28677176",
+		meetingNumber: null,
 		scheduledAt: new Date("2026-06-25T23:45:00Z"),
 		timezone: "America/Chicago",
 	},

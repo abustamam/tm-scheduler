@@ -64,6 +64,8 @@ export function slideLayout(slide: Slide): SlideLayout {
 			const sub: Line[] = [];
 			if (slide.district) sub.push(muted(slide.district));
 			if (slide.clubNumber) sub.push(muted(`Club #${slide.clubNumber}`));
+			if (slide.meetingNumber != null)
+				sub.push(muted(`Meeting #${slide.meetingNumber}`));
 			sub.push(muted(fmtDate(slide.scheduledAt, slide.timezone, true)));
 			sub.push(
 				muted(`Start time: ${fmtTime(slide.scheduledAt, slide.timezone)}`),

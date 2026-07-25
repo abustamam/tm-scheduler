@@ -37,6 +37,7 @@ function PresentPage() {
 		},
 		data.slots,
 		data.nextMeetingAt,
+		data.meetingNumber,
 	);
 	return (
 		<>

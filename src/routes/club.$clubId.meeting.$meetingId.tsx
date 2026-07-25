@@ -139,6 +139,7 @@ function MeetingView() {
 		clubNumber,
 		clubDistrict,
 		clubMeetingSchedule,
+		meetingNumber,
 		nextMeetingAt,
 		urlKey,
 	} = Route.useLoaderData();
@@ -171,6 +172,7 @@ function MeetingView() {
 		},
 		slots,
 		nextMeetingAt,
+		meetingNumber,
 	);
 
 	const [availBusy, setAvailBusy] = useState(false);
@@ -394,6 +396,7 @@ function MeetingView() {
 
 			<MeetingAgenda
 				slots={slots}
+				effectiveMeetingNumber={meetingNumber}
 				viewer={viewer}
 				actions={actions}
 				roster={roster}

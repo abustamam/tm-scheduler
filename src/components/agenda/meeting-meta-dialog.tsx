@@ -39,6 +39,7 @@ export function MeetingMetaDialog({
 	actorMemberId,
 	selfMemberId,
 	canReschedule,
+	effectiveMeetingNumber = null,
 	onSaved,
 }: {
 	open: boolean;
@@ -48,6 +49,9 @@ export function MeetingMetaDialog({
 	actorMemberId: string | null;
 	selfMemberId: string | null;
 	canReschedule: boolean;
+	/** The meeting's EFFECTIVE number (stored or derived, #358) — shown as the
+	 *  placeholder so an admin can see what automatic numbering would produce. */
+	effectiveMeetingNumber?: number | null;
 	onSaved: () => void | Promise<void>;
 }) {
 	const [submitting, setSubmitting] = useState(false);
@@ -116,6 +120,31 @@ export function MeetingMetaDialog({
 									step={1}
 									defaultValue={meeting.lengthMinutes}
 								/>
+							</div>
+							{/* #358 — admin-only, and deliberately pre-filled from the
+							    STORED number only: leaving it blank keeps the meeting on
+							    automatic numbering instead of freezing today's guess. */}
+							<div className="space-y-2">
+								<Label htmlFor="meetingNumber">Meeting number</Label>
+								<Input
+									id="meetingNumber"
+									name="meetingNumber"
+									type="number"
+									min={1}
+									step={1}
+									defaultValue={meeting.meetingNumber ?? ""}
+									placeholder={
+										effectiveMeetingNumber != null
+											? String(effectiveMeetingNumber)
+											: undefined
+									}
+								/>
+								<p className="text-muted-foreground text-xs">
+									{effectiveMeetingNumber != null &&
+									meeting.meetingNumber == null
+										? `Leave blank to number automatically — this is currently meeting #${effectiveMeetingNumber}.`
+										: "Leave blank to number automatically from the club's last numbered meeting."}
+								</p>
 							</div>
 						</>
 					) : null}
