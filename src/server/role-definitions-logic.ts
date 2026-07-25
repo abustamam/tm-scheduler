@@ -31,7 +31,7 @@ export interface RoleDefinitionRow {
 	description: string | null;
 	/** Number of existing slots referencing this role (blocks deletion when > 0). */
 	slotCount: number;
-	/** Whether new meetings generate slots for this role (#369). Disabled roles
+	/** Whether new meetings generate slots for this role (#368). Disabled roles
 	 *  stay in this list — never deleted, never hidden from admin — they just
 	 *  stop being offered anywhere a role is filled. */
 	enabled: boolean;
@@ -40,7 +40,7 @@ export interface RoleDefinitionRow {
 /** The club's role template, ordered by sortOrder then name, each annotated with
  *  how many existing slots reference it (so the UI can disable deletion) and
  *  whether it's enabled. By default includes disabled roles (the admin-only
- *  listing keeps them visible/retrievable, #369); pass `onlyEnabled: true` for
+ *  listing keeps them visible/retrievable, #368); pass `onlyEnabled: true` for
  *  any surface that OFFERS a role to be filled — the single tested path both
  *  `getPublicClubRoles` (the printable sheet) and `loadMeetingDetail`'s
  *  "+ Add role" picker (`meetings.ts`) route through, so that rule lives in one
@@ -140,7 +140,7 @@ export type UpdateRoleInput = z.infer<typeof updateRoleSchema>;
  *  responsible for the admin authorization check (see `updateClubRole`).
  *
  *  Deliberately does NOT touch `enabled` — see `applyRoleDefinitionSetEnabled`
- *  below, a separate narrow action (#369) so a plain field edit here can never
+ *  below, a separate narrow action (#368) so a plain field edit here can never
  *  discard an admin's in-progress toggle (or vice versa) under last-write-wins,
  *  and so this function doesn't need to read-before-write to detect a flip. */
 export async function applyRoleDefinitionUpdate(input: UpdateRoleInput) {
@@ -172,7 +172,7 @@ export const setRoleEnabledSchema = z.object({
 });
 export type SetRoleEnabledInput = z.infer<typeof setRoleEnabledSchema>;
 
-/** Toggle a role's `enabled` flag (#369) — a narrow action, separate from
+/** Toggle a role's `enabled` flag (#368) — a narrow action, separate from
  *  `applyRoleDefinitionUpdate`, that posts only `{ clubId, roleId, enabled }`
  *  rather than a whole-row snapshot taken from a loader. A whole-row toggle
  *  would silently discard any unsaved edits typed into the same card and
@@ -181,23 +181,39 @@ export type SetRoleEnabledInput = z.infer<typeof setRoleEnabledSchema>;
  *
  *  A club can't delete a standard role once any meeting has used it
  *  (`role_slots.role_definition_id` is ON DELETE RESTRICT) — `enabled` is the
- *  lever instead. A real flip runs `syncSlotsForRoleEnabledChange`: disabling
- *  drops the role's open, unclaimed slots from future, non-cancelled meetings
- *  (never a claimed one); enabling backfills them back in (skipped for the
- *  paired Speaker/Evaluator roles — see that function's docstring). Setting
- *  the flag to its current value is a no-op (no slot walk, no activity log).
+ *  lever instead. Writing the flag runs `syncSlotsForRoleEnabledChange`:
+ *  disabling drops the role's open, unclaimed slots from future, non-cancelled
+ *  meetings (never a claimed one); enabling backfills them back in (skipped for
+ *  the paired Speaker/Evaluator roles — see that function's docstring).
+ *
+ *  This is an IDEMPOTENT RECONCILE, not a flip-detecting no-op: setting the flag
+ *  to the value it already holds still runs the slot sync. That is deliberate.
+ *  The flag UPDATE and the slot sync are separate statements, so a sync that
+ *  throws (a deadlock against the PUBLIC, no-auth `claimSlot`, a connection
+ *  blip, a large `meetingIds` set) leaves the flag persisted and the slots
+ *  unsynced — the role reads Disabled in the admin UI, is hidden from the
+ *  "+ Add role" picker and the public role sheet, yet every future meeting still
+ *  carries its open slot, still printed on the agenda and still claimable by a
+ *  guest. Short-circuiting on `enabled` already matching made retrying the same
+ *  action do nothing, so the only escape from that state was Enable → Disable.
+ *  Re-running the action now repairs it. The cost is that a redundant toggle
+ *  does real (harmless, presence-based) slot work; it reports what it actually
+ *  did, so the toast stays honest.
+ *
  *  Returns `keptClaimedMeetings` (upcoming meetings that still have the role
  *  assigned to someone, disable-only) and `meetingsChanged` (upcoming meetings
  *  that actually gained/lost a slot) so the caller can build an informative
- *  toast either way instead of discarding what the slot sync already computed. */
+ *  toast either way instead of discarding what the slot sync already computed.
+ *  Both are 0 when the slots already agree with the flag. */
 export async function applyRoleDefinitionSetEnabled(
 	input: SetRoleEnabledInput,
 ) {
+	// Read for the sync's inputs (and to reject a role that isn't this club's) —
+	// NOT to detect a flip: the reconcile runs either way, see above.
 	const [current] = await db
 		.select({
 			name: roleDefinitions.name,
 			defaultCount: roleDefinitions.defaultCount,
-			enabled: roleDefinitions.enabled,
 		})
 		.from(roleDefinitions)
 		.where(
@@ -208,10 +224,6 @@ export async function applyRoleDefinitionSetEnabled(
 		)
 		.limit(1);
 	if (!current) throw new Error("Role not found.");
-
-	if (current.enabled === input.enabled) {
-		return { ok: true as const, keptClaimedMeetings: 0, meetingsChanged: 0 };
-	}
 
 	await db
 		.update(roleDefinitions)

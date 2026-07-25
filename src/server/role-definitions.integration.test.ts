@@ -10,7 +10,7 @@
  */
 import { asc, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { roleDefinitions, roleSlots } from "#/db/schema";
+import { activityLog, roleDefinitions, roleSlots } from "#/db/schema";
 import { generateSlotRows } from "#/lib/agenda";
 import {
 	cleanup,
@@ -30,6 +30,23 @@ const {
 	applyRoleDefinitionSetEnabled,
 	listRoleDefinitions,
 } = await import("./role-definitions-logic");
+
+/** Slot rows for a role, across every meeting. */
+async function roleSlotRows(roleDefinitionId: string) {
+	return testDb
+		.select({ id: roleSlots.id })
+		.from(roleSlots)
+		.where(eq(roleSlots.roleDefinitionId, roleDefinitionId));
+}
+
+/** Activity-log rows for a club — the seed writes none, so any row here came
+ *  from the action under test. */
+async function activityRows(clubId: string) {
+	return testDb
+		.select({ id: activityLog.id })
+		.from(activityLog)
+		.where(eq(activityLog.clubId, clubId));
+}
 
 async function orderedRoles(clubId: string) {
 	return testDb
@@ -213,7 +230,7 @@ describe.skipIf(!hasTestDb)("role-definition management", () => {
 			}),
 		).rejects.toThrow(/existing meetings/);
 		// The message points admins at disabling instead of the old
-		// "set default count to 0" workaround the toggle now replaces (#369).
+		// "set default count to 0" workaround the toggle now replaces (#368).
 		await expect(
 			applyRoleDefinitionDelete({
 				clubId: seed.clubId,
@@ -267,7 +284,7 @@ describe.skipIf(!hasTestDb)("role-definition management", () => {
 	// accepts `enabled` at all — enforced by `UpdateRoleInput` not having the
 	// field, so this is now a compile-time guarantee, not just a runtime one.
 	// Toggling goes through the narrow `applyRoleDefinitionSetEnabled` instead
-	// (#369 review: a whole-row toggle risked discarding unsaved edits in the
+	// (#368 review: a whole-row toggle risked discarding unsaved edits in the
 	// same card / last-write-wins against a concurrent admin).
 	it("updateRole never touches enabled, even across repeated saves", async () => {
 		await applyRoleDefinitionUpdate({
@@ -357,7 +374,11 @@ describe.skipIf(!hasTestDb)("role-definition management", () => {
 		expect(slots).toHaveLength(1);
 	});
 
-	it("setRoleEnabled to its current value is a no-op (no slot walk, no activity log)", async () => {
+	// Setting the flag to the value it already holds is a RECONCILE, not an
+	// early-returning no-op (#368): when the slots already agree with the flag it
+	// changes nothing and logs nothing, which is what this pins. What it must
+	// NOT do is short-circuit — see the convergence test below.
+	it("setRoleEnabled to its current value changes no slots and logs nothing", async () => {
 		const result = await applyRoleDefinitionSetEnabled({
 			clubId: seed.clubId,
 			roleId: seed.roleDefinitionId,
@@ -370,6 +391,77 @@ describe.skipIf(!hasTestDb)("role-definition management", () => {
 			.from(roleSlots)
 			.where(eq(roleSlots.roleDefinitionId, seed.roleDefinitionId));
 		expect(slots).toHaveLength(1);
+		expect(await activityRows(seed.clubId)).toHaveLength(0);
+	});
+
+	// Regression (#368): the flag UPDATE and the slot sync are separate
+	// statements. If the sync throws (a deadlock against the public, no-auth
+	// `claimSlot`, a connection blip, a large `meetingIds` set) the flag is
+	// persisted and the slots are not. The old `current.enabled === input.enabled`
+	// early return then made retrying the same disable do NOTHING, so the admin
+	// UI showed the role Disabled while every future meeting still carried its
+	// open slot — still printed on the agenda, still claimable on the public
+	// sign-up sheet. The only escape was Enable → Disable.
+	it("re-running the same disable after a failed slot sync converges", async () => {
+		// Exactly the state a half-applied disable leaves behind: flag written
+		// straight to the db (as the committed UPDATE would have), slot untouched
+		// (as the sync that threw would have left it).
+		await testDb
+			.update(roleDefinitions)
+			.set({ enabled: false })
+			.where(eq(roleDefinitions.id, seed.roleDefinitionId));
+		expect(await roleSlotRows(seed.roleDefinitionId)).toHaveLength(1);
+
+		// Retrying the identical action repairs it, and says so.
+		const repair = await applyRoleDefinitionSetEnabled({
+			clubId: seed.clubId,
+			roleId: seed.roleDefinitionId,
+			enabled: false,
+		});
+		expect(repair.meetingsChanged).toBe(1);
+		expect(await roleSlotRows(seed.roleDefinitionId)).toHaveLength(0);
+
+		// …and it has converged: a third run is a clean no-op.
+		const again = await applyRoleDefinitionSetEnabled({
+			clubId: seed.clubId,
+			roleId: seed.roleDefinitionId,
+			enabled: false,
+		});
+		expect(again.meetingsChanged).toBe(0);
+		expect(await roleSlotRows(seed.roleDefinitionId)).toHaveLength(0);
+	});
+
+	// The mirror case: a half-applied ENABLE leaves the flag on with no slots
+	// backfilled, and the same retry has to fill them in.
+	it("re-running the same enable after a failed slot sync converges", async () => {
+		// Disable cleanly first (removes the seeded open slot), then simulate the
+		// enable whose flag committed but whose backfill never ran.
+		await applyRoleDefinitionSetEnabled({
+			clubId: seed.clubId,
+			roleId: seed.roleDefinitionId,
+			enabled: false,
+		});
+		await testDb
+			.update(roleDefinitions)
+			.set({ enabled: true })
+			.where(eq(roleDefinitions.id, seed.roleDefinitionId));
+		expect(await roleSlotRows(seed.roleDefinitionId)).toHaveLength(0);
+
+		const repair = await applyRoleDefinitionSetEnabled({
+			clubId: seed.clubId,
+			roleId: seed.roleDefinitionId,
+			enabled: true,
+		});
+		expect(repair.meetingsChanged).toBe(1);
+		expect(await roleSlotRows(seed.roleDefinitionId)).toHaveLength(1);
+
+		const again = await applyRoleDefinitionSetEnabled({
+			clubId: seed.clubId,
+			roleId: seed.roleDefinitionId,
+			enabled: true,
+		});
+		expect(again.meetingsChanged).toBe(0);
+		expect(await roleSlotRows(seed.roleDefinitionId)).toHaveLength(1);
 	});
 
 	it("setRoleEnabled rejects a role from a different club", async () => {
