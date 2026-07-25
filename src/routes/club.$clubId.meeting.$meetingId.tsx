@@ -43,7 +43,11 @@ import {
 } from "#/components/ui/dialog";
 import { Label } from "#/components/ui/label";
 import { useOnlineStatus } from "#/hooks/use-online-status";
-import { applyFlex, expandRunSheet } from "#/lib/agenda-runsheet";
+import {
+	applyFlex,
+	buildRunOfShow,
+	expandRunSheet,
+} from "#/lib/agenda-runsheet";
 import { buildSlideDeck } from "#/lib/agenda-slides";
 import {
 	formatMeetingDate,
@@ -203,6 +207,7 @@ function MeetingView() {
 		meetingNumber,
 		nextMeetingAt,
 		urlKey,
+		geIntroducesFunctionaries,
 	} = Route.useLoaderData();
 	const router = useRouter();
 	const online = useOnlineStatus();
@@ -229,13 +234,17 @@ function MeetingView() {
 	// #320: an admin can preview the page as a non-admin member sees it.
 	const [previewAsMember, setPreviewAsMember] = useState(false);
 
-	const flex = applyFlex(expandRunSheet(slots), meeting.lengthMinutes);
+	// One club config drives both renderings of this meeting (#367).
+	const flex = applyFlex(
+		expandRunSheet(slots, buildRunOfShow({ geIntroducesFunctionaries })),
+		meeting.lengthMinutes,
+	);
 	const projectedEnd = new Date(
 		new Date(meeting.scheduledAt).getTime() + flex.projectedMinutes * 60_000,
 	);
-	const deck = buildSlideDeck(
+	const deck = buildSlideDeck({
 		meeting,
-		{
+		club: {
 			name: clubName,
 			clubNumber,
 			district: clubDistrict,
@@ -245,7 +254,8 @@ function MeetingView() {
 		slots,
 		nextMeetingAt,
 		meetingNumber,
-	);
+		geIntroducesFunctionaries,
+	});
 
 	const { isTmod, isGrammarian } = deriveMeetingRoleFlags(slots, myId);
 	const locked = isMeetingLocked(meeting.status);

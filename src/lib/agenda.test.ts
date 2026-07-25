@@ -104,7 +104,7 @@ describe("buildRosterEntries", () => {
 
 describe("generateSlotRows", () => {
 	it("generates the correct number of rows with 0-based slotIndex", () => {
-		const defs = [{ id: "def-1", defaultCount: 3 }];
+		const defs = [{ id: "def-1", defaultCount: 3, enabled: true }];
 		const rows = generateSlotRows(defs, "meeting-1");
 		expect(rows).toHaveLength(3);
 		expect(rows[0]).toEqual({
@@ -126,7 +126,7 @@ describe("generateSlotRows", () => {
 
 	it("yields no rows for defaultCount: 0", () => {
 		const rows = generateSlotRows(
-			[{ id: "def-1", defaultCount: 0 }],
+			[{ id: "def-1", defaultCount: 0, enabled: true }],
 			"meeting-1",
 		);
 		expect(rows).toHaveLength(0);
@@ -134,8 +134,8 @@ describe("generateSlotRows", () => {
 
 	it("flattens multiple defs in order", () => {
 		const defs = [
-			{ id: "def-a", defaultCount: 2 },
-			{ id: "def-b", defaultCount: 1 },
+			{ id: "def-a", defaultCount: 2, enabled: true },
+			{ id: "def-b", defaultCount: 1, enabled: true },
 		];
 		const rows = generateSlotRows(defs, "meeting-x");
 		expect(rows).toHaveLength(3);
@@ -146,6 +146,24 @@ describe("generateSlotRows", () => {
 
 	it("returns [] for empty defs", () => {
 		expect(generateSlotRows([], "meeting-1")).toEqual([]);
+	});
+
+	it("skips a disabled role definition entirely (#368)", () => {
+		const defs = [
+			{ id: "def-1", defaultCount: 3, enabled: true },
+			{ id: "def-2", defaultCount: 2, enabled: false },
+		];
+		const rows = generateSlotRows(defs, "meeting-1");
+		expect(rows).toHaveLength(3);
+		expect(rows.every((r) => r.roleDefinitionId === "def-1")).toBe(true);
+	});
+
+	it("yields no rows when every def is disabled", () => {
+		const defs = [
+			{ id: "def-1", defaultCount: 3, enabled: false },
+			{ id: "def-2", defaultCount: 2, enabled: false },
+		];
+		expect(generateSlotRows(defs, "meeting-1")).toEqual([]);
 	});
 });
 

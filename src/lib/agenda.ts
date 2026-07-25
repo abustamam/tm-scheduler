@@ -1,18 +1,29 @@
 /** A role definition's shape needed to generate slots. */
-export type SlotGenInput = { id: string; defaultCount: number };
+export type SlotGenInput = {
+	id: string;
+	defaultCount: number;
+	enabled: boolean;
+};
 
-/** Generate one slot row per (definition × defaultCount), 0-based slotIndex. */
+/** Generate one slot row per (definition × defaultCount), 0-based slotIndex.
+ *  Definitions with `enabled: false` (#368 — a club's "skeleton crew" roles it
+ *  has turned off) are skipped entirely: no slots are generated for them, but
+ *  the definition row itself is untouched (disable, not delete — delete is
+ *  blocked by `role_slots.role_definition_id`'s ON DELETE RESTRICT once any
+ *  meeting has used the role). */
 export function generateSlotRows(
 	defs: SlotGenInput[],
 	meetingId: string,
 ): { meetingId: string; roleDefinitionId: string; slotIndex: number }[] {
-	return defs.flatMap((def) =>
-		Array.from({ length: def.defaultCount }, (_, i) => ({
-			meetingId,
-			roleDefinitionId: def.id,
-			slotIndex: i,
-		})),
-	);
+	return defs
+		.filter((def) => def.enabled)
+		.flatMap((def) =>
+			Array.from({ length: def.defaultCount }, (_, i) => ({
+				meetingId,
+				roleDefinitionId: def.id,
+				slotIndex: i,
+			})),
+		);
 }
 
 /** Build the count of slots per role name (for numbering repeated roles). */

@@ -17,6 +17,9 @@ export type RoleSeed = {
 	sortOrder: number;
 	isSpeakerRole: boolean;
 	description: string;
+	/** Stable, rename-proof identity for this standard role (#368) — snake_case
+	 *  of the canonical name. See `role_definitions.key` in `src/db/schema.ts`. */
+	key: string;
 };
 
 export const ROLE_TEMPLATE: RoleSeed[] = [
@@ -28,6 +31,7 @@ export const ROLE_TEMPLATE: RoleSeed[] = [
 		isSpeakerRole: false,
 		description:
 			"Hosts the meeting: sets the theme, introduces each speaker and segment, and keeps energy and timing on track. Prep: review the agenda beforehand.",
+		key: "toastmaster_of_the_day",
 	},
 	{
 		name: "Table Topics Master",
@@ -37,6 +41,7 @@ export const ROLE_TEMPLATE: RoleSeed[] = [
 		isSpeakerRole: false,
 		description:
 			"Leads the impromptu speaking segment by preparing 8–10 questions or scenarios and calling on members or guests to respond on the spot.",
+		key: "table_topics_master",
 	},
 	{
 		name: "Speaker",
@@ -46,6 +51,7 @@ export const ROLE_TEMPLATE: RoleSeed[] = [
 		isSpeakerRole: true,
 		description:
 			"Delivers a prepared speech from your Pathways project; coordinate with your evaluator on the project objectives and time target before the meeting.",
+		key: "speaker",
 	},
 	{
 		name: "Evaluator",
@@ -55,6 +61,7 @@ export const ROLE_TEMPLATE: RoleSeed[] = [
 		isSpeakerRole: false,
 		description:
 			"Provides structured written and verbal feedback on your assigned speaker's delivery, language, and achievement of their project goals.",
+		key: "evaluator",
 	},
 	{
 		// Leadership, not evaluator: the GE runs the evaluation team rather than
@@ -67,6 +74,7 @@ export const ROLE_TEMPLATE: RoleSeed[] = [
 		isSpeakerRole: false,
 		description:
 			"Oversees meeting quality by evaluating all roles (except speakers) and summarizing feedback from the Timer, Ah-Counter, and Grammarian.",
+		key: "general_evaluator",
 	},
 	{
 		name: "Timer",
@@ -76,6 +84,7 @@ export const ROLE_TEMPLATE: RoleSeed[] = [
 		isSpeakerRole: false,
 		description:
 			"Tracks and displays time signals for every speaker and evaluator, then reports any overtime violations to the General Evaluator at the end of the meeting.",
+		key: "timer",
 	},
 	{
 		name: "Ah-Counter",
@@ -85,6 +94,7 @@ export const ROLE_TEMPLATE: RoleSeed[] = [
 		isSpeakerRole: false,
 		description:
 			"Tallies filler words (um, ah, so, you know, like) for each speaker during the meeting and reports the counts in the evaluation segment.",
+		key: "ah_counter",
 	},
 	{
 		name: "Grammarian",
@@ -94,6 +104,7 @@ export const ROLE_TEMPLATE: RoleSeed[] = [
 		isSpeakerRole: false,
 		description:
 			"Introduces a Word of the Day, monitors language use throughout the meeting, and commends creative phrasing while noting grammatical slips in the evaluation segment.",
+		key: "grammarian",
 	},
 	{
 		name: "Vote Counter",
@@ -103,6 +114,7 @@ export const ROLE_TEMPLATE: RoleSeed[] = [
 		isSpeakerRole: false,
 		description:
 			"Distributes and collects ballots for Best Speaker, Best Evaluator, and Best Table Topics, tallies the votes discreetly, and hands the results to the Toastmaster before the awards are announced.",
+		key: "vote_counter",
 	},
 ];
 

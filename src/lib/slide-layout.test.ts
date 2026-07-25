@@ -18,8 +18,12 @@ describe("slideLayout headers (no 'Session', title-only)", () => {
 			}),
 		).toBe("Word of the Day");
 		expect(
-			contentHeader({ kind: "evalIntro", name: "Riyaz", time: "4–6 minutes" }),
-		).toBe("Speech Evaluation");
+			contentHeader({
+				kind: "evaluatorEvaluation",
+				name: "Riyaz",
+				time: "2 minutes",
+			}),
+		).toBe("Evaluation of the Evaluators");
 		expect(
 			contentHeader({
 				kind: "generalEvaluation",
@@ -135,26 +139,91 @@ describe("slideLayout bodies", () => {
 		}
 	});
 
-	it("vote-speaker shows the two prompts then bulleted names", () => {
-		const l = slideLayout({
-			kind: "voteSpeaker",
-			names: ["Jagpal", "Farhanaaz"],
-		});
-		if (l.chrome === "content" && l.body.form === "centered") {
-			expect(l.body.lines).toEqual([
-				{ role: "head", text: "Ask for speaking time." },
-				{ role: "head", text: "Please Vote for Best Speaker:" },
-				{ role: "name", text: "Jagpal" },
-				{ role: "name", text: "Farhanaaz" },
-			]);
-		} else {
-			throw new Error("expected centered");
-		}
+	it("vote-speaker asks for speaking time only when the club runs a Timer (#367)", () => {
+		const lines = (hasTimer: boolean) => {
+			const l = slideLayout({
+				kind: "voteSpeaker",
+				names: ["Jagpal", "Farhanaaz"],
+				hasTimer,
+			});
+			if (l.chrome !== "content" || l.body.form !== "centered")
+				throw new Error("expected centered");
+			return l.body.lines;
+		};
+		expect(lines(true)).toEqual([
+			{ role: "head", text: "Ask for speaking time." },
+			{ role: "head", text: "Please Vote for Best Speaker:" },
+			{ role: "name", text: "Jagpal" },
+			{ role: "name", text: "Farhanaaz" },
+		]);
+		// The run sheet's beat-6 fallback drops the timer's-report clause on the
+		// same signal; the vote itself still happens. Without this, a club with no
+		// Timer prints "Toastmaster · Vote Best Speaker" while the deck tells the
+		// presenter to call for a report from a role nobody holds.
+		expect(lines(false)).toEqual([
+			{ role: "head", text: "Please Vote for Best Speaker:" },
+			{ role: "name", text: "Jagpal" },
+			{ role: "name", text: "Farhanaaz" },
+		]);
 	});
 
-	it("GE team line lists filled roles only", () => {
+	it("vote-table-topics asks for the times only when the club runs a Timer (#367)", () => {
+		const lines = (hasTimer: boolean) => {
+			const l = slideLayout({ kind: "voteTableTopics", hasTimer });
+			if (l.chrome !== "content" || l.body.form !== "centered")
+				throw new Error("expected centered");
+			return l.body.lines;
+		};
+		expect(lines(true)).toEqual([
+			{ role: "head", text: "Ask for Table Topics times." },
+			{ role: "head", text: "Please Vote for Best Table Topic Speaker:" },
+		]);
+		// Beat 8's fallback drops the same clause when there is no Timer.
+		expect(lines(false)).toEqual([
+			{ role: "head", text: "Please Vote for Best Table Topic Speaker:" },
+		]);
+	});
+
+	it("vote-evaluator asks for the timer's report only when the club runs a Timer (#367)", () => {
+		const lines = (hasTimer: boolean) => {
+			const l = slideLayout({
+				kind: "voteEvaluator",
+				names: ["Riyaz"],
+				hasTimer,
+			});
+			if (l.chrome !== "content" || l.body.form !== "centered")
+				throw new Error("expected centered");
+			return l.body.lines.map((x) => x.text);
+		};
+		expect(lines(true)).toEqual([
+			"Ask for timer’s report:",
+			"Please Vote for Best Evaluator:",
+			"Riyaz",
+		]);
+		// The run sheet drops the timer's-report clause the same way (#367); the
+		// vote itself still happens.
+		expect(lines(false)).toEqual(["Please Vote for Best Evaluator:", "Riyaz"]);
+	});
+
+	it("evaluation of the evaluators is the GE's beat-11 slide (#367)", () => {
 		const l = slideLayout({
-			kind: "geIntro",
+			kind: "evaluatorEvaluation",
+			name: "Riyaz",
+			time: "2 minutes",
+		});
+		if (l.chrome === "content" && l.body.form === "centered") {
+			expect(l.body.lines.map((x) => x.text)).toEqual([
+				"General Evaluator:",
+				"Riyaz",
+				"Time: 2 minutes",
+			]);
+		} else throw new Error("expected centered");
+	});
+
+	it("functionary intro team line lists filled roles only", () => {
+		const l = slideLayout({
+			kind: "functionaryIntro",
+			owner: "General Evaluator",
 			name: "Riyaz",
 			team: [
 				{ role: "Grammarian", name: "Priya" },
@@ -167,6 +236,46 @@ describe("slideLayout bodies", () => {
 				.map((x) => x.text);
 			expect(muted.join("")).toContain("Grammarian: Priya");
 			expect(muted.join("")).not.toContain("open");
+		} else {
+			throw new Error("expected centered");
+		}
+	});
+
+	it("functionary intro names whichever role owns it (#367)", () => {
+		const owned = (owner: string) =>
+			slideLayout({ kind: "functionaryIntro", owner, name: "Riyaz", team: [] });
+		for (const owner of ["Toastmaster of the Day", "General Evaluator"]) {
+			const l = owned(owner);
+			expect(l).toMatchObject({ chrome: "content", header: "Functionaries" });
+			if (l.chrome === "content" && l.body.form === "centered") {
+				expect(l.body.lines.map((x) => x.text)).toEqual([`${owner}:`, "Riyaz"]);
+			} else {
+				throw new Error("expected centered");
+			}
+		}
+	});
+
+	it("functionary reports lists each reporter, skipping open roles (#353)", () => {
+		const l = slideLayout({
+			kind: "functionaryReports",
+			name: "Riyaz",
+			team: [
+				{ role: "Grammarian", name: "Priya" },
+				{ role: "Ah-Counter", name: "— open —" },
+				{ role: "Timer", name: "Bilal" },
+			],
+		});
+		expect(l).toMatchObject({
+			chrome: "content",
+			header: "Functionary Reports",
+		});
+		if (l.chrome === "content" && l.body.form === "centered") {
+			expect(l.body.lines.map((x) => x.text)).toEqual([
+				"General Evaluator:",
+				"Riyaz",
+				"Grammarian: Priya",
+				"Timer: Bilal",
+			]);
 		} else {
 			throw new Error("expected centered");
 		}

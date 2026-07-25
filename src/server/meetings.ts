@@ -48,6 +48,7 @@ import {
 	applyWordOfTheDayUpdate,
 } from "./meetings-logic";
 import { currentOfficersForClub } from "./officer-terms-logic";
+import { listRoleDefinitions } from "./role-definitions-logic";
 import { indexRoleRecency, loadRoleRecency } from "./role-recency-logic";
 
 const uuid = z.string().uuid();
@@ -119,6 +120,11 @@ async function loadMeetingDetail(
 			claimedAt: roleSlots.claimedAt,
 			evaluatesSlotId: roleSlots.evaluatesSlotId,
 			roleName: roleDefinitions.name,
+			// Stable role identity (#368) for the agenda run-of-show (#367) to bind
+			// beats to by key rather than free-text name — a rename via
+			// `updateClubRole` never touches this. Null for a custom club role, or
+			// a standard role predating the #368 backfill.
+			roleKey: roleDefinitions.key,
 			category: roleDefinitions.category,
 			description: roleDefinitions.description,
 			sortOrder: roleDefinitions.sortOrder,
@@ -170,6 +176,9 @@ async function loadMeetingDetail(
 			district: true,
 			mission: true,
 			meetingSchedule: true,
+			// The club's run-of-show variant (#367) — both renderers of this
+			// payload (printed run sheet and projected deck) need it.
+			geIntroducesFunctionaries: true,
 		},
 	});
 
@@ -245,20 +254,23 @@ async function loadMeetingDetail(
 	const roster = canManage ? await loadRosterWithContact(meeting.clubId) : [];
 
 	// Club role template for the "+ Add role" picker — management-only, like the
-	// roster. Ordered like the roles page.
+	// roster. Ordered like the roles page. Disabled roles (#368) are excluded via
+	// `listRoleDefinitions`'s `onlyEnabled` — this picker OFFERS a role to be
+	// filled, which is exactly what a "skeleton crew" club turned a role off to
+	// stop; the roles admin page is where a disabled role stays visible. Routed
+	// through the same helper `getPublicClubRoles` uses so "only enabled" is one
+	// tested rule, not a second SQL filter that could drift from it.
 	const clubRoles = canManage
-		? await db
-				.select({
-					id: roleDefinitions.id,
-					name: roleDefinitions.name,
-					category: roleDefinitions.category,
-					defaultCount: roleDefinitions.defaultCount,
-					sortOrder: roleDefinitions.sortOrder,
-					isSpeakerRole: roleDefinitions.isSpeakerRole,
-				})
-				.from(roleDefinitions)
-				.where(eq(roleDefinitions.clubId, meeting.clubId))
-				.orderBy(asc(roleDefinitions.sortOrder), asc(roleDefinitions.name))
+		? (await listRoleDefinitions(meeting.clubId, { onlyEnabled: true })).map(
+				(r) => ({
+					id: r.id,
+					name: r.name,
+					category: r.category,
+					defaultCount: r.defaultCount,
+					sortOrder: r.sortOrder,
+					isSpeakerRole: r.isSpeakerRole,
+				}),
+			)
 		: [];
 
 	// Club guests for the admin assign picker (#151) — pick-an-existing-guest.
@@ -328,6 +340,10 @@ async function loadMeetingDetail(
 		clubDistrict: club?.district ?? null,
 		clubMission: club?.mission ?? null,
 		clubMeetingSchedule: club?.meetingSchedule ?? null,
+		// MCF's variant (#367): the General Evaluator, not the Toastmaster of the
+		// Day, introduces the functionaries. Feeds `buildRunOfShow` (print) and
+		// `buildSlideDeck` (deck) so the two never disagree.
+		geIntroducesFunctionaries: club?.geIntroducesFunctionaries ?? false,
 		officers,
 		unavailableMembers,
 		unavailableMemberIds: unavailableMembers.map((m) => m.id),

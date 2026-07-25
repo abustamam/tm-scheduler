@@ -9,7 +9,12 @@
  */
 import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clubMeetingRecurrence, meetings, roleSlots } from "#/db/schema";
+import {
+	clubMeetingRecurrence,
+	meetings,
+	roleDefinitions,
+	roleSlots,
+} from "#/db/schema";
 import { utcToZonedWallTime, zonedWallTimeToUtc } from "#/lib/datetime";
 import {
 	cleanup,
@@ -116,6 +121,35 @@ describe.skipIf(!hasTestDb)("ensureScheduleToppedUp (#190)", () => {
 			.from(roleSlots)
 			.where(eq(roleSlots.meetingId, m.id));
 		expect(slots.length).toBeGreaterThan(0); // Timer role from the club template
+	});
+
+	it("generates no slots for a disabled role on auto-created meetings (#368)", async () => {
+		await clearMeetings(club.clubId);
+		await seedWeeklyRule(club.clubId);
+		// Disable the club's only seeded role definition ("Timer") before the
+		// top-up reads the template — proves the #190 auto-create path (which
+		// selects the FULL role_definitions row into `generateSlotRows`) actually
+		// honors `enabled`, not just the manual "New meeting" button.
+		await testDb
+			.update(roleDefinitions)
+			.set({ enabled: false })
+			.where(eq(roleDefinitions.id, club.roleDefinitionId));
+
+		const res = await ensureScheduleToppedUp(club.clubId, NOW);
+		expect(res.created).toBe(4);
+
+		const created = await testDb
+			.select({ id: meetings.id })
+			.from(meetings)
+			.where(eq(meetings.clubId, club.clubId));
+		expect(created.length).toBe(4);
+		for (const m of created) {
+			const slots = await testDb
+				.select({ id: roleSlots.id })
+				.from(roleSlots)
+				.where(eq(roleSlots.meetingId, m.id));
+			expect(slots.length).toBe(0);
+		}
 	});
 
 	it("is idempotent — a second run creates nothing", async () => {

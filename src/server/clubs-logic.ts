@@ -149,3 +149,52 @@ export async function applyClubProfileUpdate(input: ClubProfileInput) {
 	if (!updated) throw new Error("Club not found.");
 	return { ok: true as const };
 }
+
+// ---------------------------------------------------------------------------
+// Agenda settings — the club's run-of-show variant (#367).
+// ---------------------------------------------------------------------------
+
+/** The one axis of per-club variance in the generated run-of-show. Kept as an
+ *  object (rather than a bare boolean) because it is the config `buildRunOfShow`
+ *  and `buildSlideDeck` take, and because it is the natural home for any second
+ *  agenda knob. */
+export type ClubAgendaSettings = { geIntroducesFunctionaries: boolean };
+
+/** The standard Toastmasters flow — what a club gets unless it says otherwise.
+ *  Mirrors the column default in `schema.ts`. */
+export const DEFAULT_CLUB_AGENDA_SETTINGS: ClubAgendaSettings = {
+	geIntroducesFunctionaries: false,
+};
+
+/** Read a club's agenda settings. Falls back to the standard flow when the club
+ *  row is somehow missing (never throws), so a renderer can always render. */
+export async function getClubAgendaSettings(
+	clubId: string,
+): Promise<ClubAgendaSettings> {
+	const [row] = await db
+		.select({ geIntroducesFunctionaries: clubs.geIntroducesFunctionaries })
+		.from(clubs)
+		.where(eq(clubs.id, clubId))
+		.limit(1);
+	return row ?? DEFAULT_CLUB_AGENDA_SETTINGS;
+}
+
+export const clubAgendaSettingsSchema = z.object({
+	clubId: z.string().uuid(),
+	geIntroducesFunctionaries: z.boolean(),
+});
+export type ClubAgendaSettingsInput = z.infer<typeof clubAgendaSettingsSchema>;
+
+/** Persist a club's agenda settings. Caller enforces admin authz (see the
+ *  `updateClubAgendaSettings` wrapper). */
+export async function applyClubAgendaSettingsUpdate(
+	input: ClubAgendaSettingsInput,
+): Promise<{ ok: true }> {
+	const [updated] = await db
+		.update(clubs)
+		.set({ geIntroducesFunctionaries: input.geIntroducesFunctionaries })
+		.where(eq(clubs.id, input.clubId))
+		.returning({ id: clubs.id });
+	if (!updated) throw new Error("Club not found.");
+	return { ok: true as const };
+}

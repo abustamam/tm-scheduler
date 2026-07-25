@@ -178,6 +178,17 @@ export const clubs = pgTable("clubs", {
 	// check-constrained `club_meeting_recurrence`.
 	reminderEnabled: boolean("reminder_enabled").notNull().default(false),
 	reminderLeadTimeDays: integer("reminder_lead_time_days").notNull().default(3),
+	// The one axis of per-club variance in the generated run-of-show (#367).
+	// FALSE (the default, and the standard Toastmasters flow) means the
+	// Toastmaster of the Day introduces the functionaries at the top of the
+	// meeting, each explaining their own role. TRUE is MCF's variant, where the
+	// General Evaluator introduces them instead. Nothing else about the agenda
+	// depends on it — the GE's closing sequence (evaluate the evaluators → call
+	// for the functionary reports → overall evaluation) is the same either way.
+	// Read by `buildRunOfShow` (printed agenda) and `buildSlideDeck` (deck).
+	geIntroducesFunctionaries: boolean("ge_introduces_functionaries")
+		.notNull()
+		.default(false),
 	// Soft-archive (ADR-0016 / #186). NULL = active; a set timestamp = archived.
 	// Reversible: unarchive clears it. Archiving retains all club data untouched
 	// and blocks every access path except the superadmin console — `requireMembership`
@@ -635,8 +646,31 @@ export const roleDefinitions = pgTable(
 		isSpeakerRole: boolean("is_speaker_role").notNull().default(false),
 		// Human-readable responsibilities, shown before claiming + on the shared link.
 		description: text("description"),
+		// Whether new meetings generate slots for this role (#368). A "skeleton
+		// crew" club can turn OFF roles it doesn't run (e.g. Ah-Counter, Vote
+		// Counter) without deleting the definition — delete is unavailable once any
+		// meeting has used the role (`role_slots.role_definition_id` is ON DELETE
+		// RESTRICT), so disabling is the only way to retire a role going forward
+		// while keeping its slot history intact. Read by `generateSlotRows`
+		// (src/lib/agenda.ts); existing meetings' already-generated slots are
+		// untouched. Default true — every seeded/custom role starts active.
+		enabled: boolean("enabled").notNull().default(true),
+		// Stable, immutable identity for one of the 9 standard roles (ROLE_TEMPLATE,
+		// src/lib/role-template.ts), independent of the human-editable `name` a club
+		// can rename via updateClubRole. A later feature binds agenda beats to
+		// roles by this key so a rename never breaks the binding. NULL for a
+		// club-invented custom role, which has no canonical identity to key on.
+		key: text("key"),
 	},
-	(t) => [index("role_definitions_club_idx").on(t.clubId)],
+	(t) => [
+		index("role_definitions_club_idx").on(t.clubId),
+		// One row per (club, key) among the standard roles. PARTIAL (WHERE key IS
+		// NOT NULL) so the many custom roles with a NULL key are unconstrained and
+		// never collide — mirrors `meetings_club_number_unique` above.
+		uniqueIndex("role_definitions_club_key_unique")
+			.on(t.clubId, t.key)
+			.where(sql`${t.key} is not null`),
+	],
 );
 
 // ---------------------------------------------------------------------------

@@ -11,6 +11,7 @@ import { ShareLinkButton } from "#/components/share-link-button";
 import { buildRosterEntries } from "#/lib/agenda";
 import {
 	applyFlex,
+	buildRunOfShow,
 	expandRunSheet,
 	TABLE_TOPICS_MAX,
 	TABLE_TOPICS_MIN,
@@ -109,9 +110,13 @@ function PrintAgenda() {
 		clubMeetingSchedule,
 		meetingNumber,
 		officers,
+		geIntroducesFunctionaries,
 	} = Route.useLoaderData();
 
-	const runRows = expandRunSheet(slots);
+	const runRows = expandRunSheet(
+		slots,
+		buildRunOfShow({ geIntroducesFunctionaries }),
+	);
 	const flex = applyFlex(runRows, meeting.lengthMinutes);
 	const rows = buildTimeline(flex.rows, meeting.scheduledAt, timezone);
 

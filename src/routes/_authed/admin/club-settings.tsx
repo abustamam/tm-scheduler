@@ -7,7 +7,12 @@ import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { effectiveAdminClub } from "#/lib/effective-admin";
-import { getClubProfileSettings, updateClubProfile } from "#/server/clubs";
+import {
+	getClubProfileSettings,
+	loadClubAgendaSettings,
+	updateClubAgendaSettings,
+	updateClubProfile,
+} from "#/server/clubs";
 import {
 	loadClubReminderSettings,
 	updateClubReminderSettings,
@@ -22,11 +27,12 @@ export const Route = createFileRoute("/_authed/admin/club-settings")({
 		return { adminClub };
 	},
 	loader: async ({ context }) => {
-		const [profile, reminders] = await Promise.all([
+		const [profile, reminders, agenda] = await Promise.all([
 			getClubProfileSettings({ data: context.adminClub.clubId }),
 			loadClubReminderSettings({ data: context.adminClub.clubId }),
+			loadClubAgendaSettings({ data: context.adminClub.clubId }),
 		]);
-		return { profile, reminders };
+		return { profile, reminders, agenda };
 	},
 	component: ClubSettings,
 });
@@ -36,7 +42,7 @@ const textareaClass =
 
 function ClubSettings() {
 	const { adminClub } = Route.useRouteContext();
-	const { profile, reminders } = Route.useLoaderData();
+	const { profile, reminders, agenda } = Route.useLoaderData();
 	const router = useRouter();
 	const [submitting, setSubmitting] = useState(false);
 	const [remindersEnabled, setRemindersEnabled] = useState(reminders.enabled);
@@ -44,6 +50,10 @@ function ClubSettings() {
 		String(reminders.leadTimeDays),
 	);
 	const [savingReminders, setSavingReminders] = useState(false);
+	const [geIntroduces, setGeIntroduces] = useState(
+		agenda.geIntroducesFunctionaries,
+	);
+	const [savingAgenda, setSavingAgenda] = useState(false);
 
 	async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
 		e.preventDefault();
@@ -90,6 +100,25 @@ function ClubSettings() {
 			toast.error(err instanceof Error ? err.message : "Something went wrong.");
 		} finally {
 			setSavingReminders(false);
+		}
+	}
+
+	async function onSaveAgenda(e: React.FormEvent<HTMLFormElement>) {
+		e.preventDefault();
+		setSavingAgenda(true);
+		try {
+			await updateClubAgendaSettings({
+				data: {
+					clubId: adminClub.clubId,
+					geIntroducesFunctionaries: geIntroduces,
+				},
+			});
+			toast.success("Agenda settings saved.");
+			await router.invalidate();
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+		} finally {
+			setSavingAgenda(false);
 		}
 	}
 
@@ -203,6 +232,43 @@ function ClubSettings() {
 						<Loader2 className="size-4 animate-spin" />
 					) : (
 						"Save reminder settings"
+					)}
+				</Button>
+			</form>
+
+			<div className="pt-2">
+				<h2 className="font-display text-xl font-semibold tracking-[-0.01em]">
+					Meeting agenda
+				</h2>
+				<p className="text-sm text-muted-foreground">
+					How your club runs its meeting, on the generated agenda and the
+					projected slides.
+				</p>
+			</div>
+
+			<form onSubmit={onSaveAgenda} className="max-w-xl space-y-4">
+				<div className="space-y-2">
+					<label className="flex items-center gap-2 text-sm font-medium">
+						<input
+							type="checkbox"
+							checked={geIntroduces}
+							onChange={(e) => setGeIntroduces(e.target.checked)}
+						/>
+						General Evaluator introduces the functionaries
+					</label>
+					<p className="text-xs text-muted-foreground">
+						Most clubs have the Toastmaster of the Day introduce the Timer,
+						Ah-Counter, Grammarian and Vote Counter at the top of the meeting,
+						each explaining their own role. Tick this if your General Evaluator
+						does it instead. Either way the General Evaluator still calls for
+						their reports near the end.
+					</p>
+				</div>
+				<Button type="submit" disabled={savingAgenda} className="w-full">
+					{savingAgenda ? (
+						<Loader2 className="size-4 animate-spin" />
+					) : (
+						"Save agenda settings"
 					)}
 				</Button>
 			</form>
