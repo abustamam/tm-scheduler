@@ -281,6 +281,53 @@ describe("buildSlideDeck table topics", () => {
 	});
 });
 
+describe("buildSlideDeck vote slides (#367)", () => {
+	const timer = slot({ id: "ti", roleName: "Timer", assigneeName: "Alex" });
+	const speaker = slot({
+		id: "sp1",
+		roleName: "Speaker",
+		category: "speaker",
+		isSpeakerRole: true,
+		assigneeName: "Rehanna Khan",
+	});
+	const ttm = slot({
+		id: "tt",
+		roleName: "Table Topics Master",
+		category: "leadership",
+		assigneeName: "Rasheed Bustamam",
+	});
+	const evaluator = slot({
+		id: "ev",
+		roleName: "Evaluator",
+		category: "evaluator",
+		assigneeName: "Saiful Haque",
+	});
+
+	// Every vote beat in the run sheet (6, 8 and 10) drops its timer's-report
+	// clause via the same `fallback` when the club runs no Timer. All three vote
+	// SLIDES have to adapt on the same signal or the deck prompts the presenter
+	// to call for a report from a role nobody holds.
+	it("all three vote slides carry whether the club runs a Timer", () => {
+		const votes = (slots: AgendaSlot[]) => {
+			const deck = build({ slots });
+			return {
+				speaker: deck.find((s) => s.kind === "voteSpeaker"),
+				tableTopics: deck.find((s) => s.kind === "voteTableTopics"),
+				evaluator: deck.find((s) => s.kind === "voteEvaluator"),
+			};
+		};
+		const withTimer = votes([speaker, ttm, evaluator, timer]);
+		expect(withTimer.speaker).toMatchObject({ hasTimer: true });
+		expect(withTimer.tableTopics).toMatchObject({ hasTimer: true });
+		expect(withTimer.evaluator).toMatchObject({ hasTimer: true });
+
+		const noTimer = votes([speaker, ttm, evaluator]);
+		expect(noTimer.speaker).toMatchObject({ hasTimer: false });
+		expect(noTimer.tableTopics).toMatchObject({ hasTimer: false });
+		expect(noTimer.evaluator).toMatchObject({ hasTimer: false });
+	});
+});
+
 // Shared fixtures for the functionary + evaluation-session suites below.
 const tmod = slot({
 	id: "tm",

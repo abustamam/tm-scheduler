@@ -139,21 +139,49 @@ describe("slideLayout bodies", () => {
 		}
 	});
 
-	it("vote-speaker shows the two prompts then bulleted names", () => {
-		const l = slideLayout({
-			kind: "voteSpeaker",
-			names: ["Jagpal", "Farhanaaz"],
-		});
-		if (l.chrome === "content" && l.body.form === "centered") {
-			expect(l.body.lines).toEqual([
-				{ role: "head", text: "Ask for speaking time." },
-				{ role: "head", text: "Please Vote for Best Speaker:" },
-				{ role: "name", text: "Jagpal" },
-				{ role: "name", text: "Farhanaaz" },
-			]);
-		} else {
-			throw new Error("expected centered");
-		}
+	it("vote-speaker asks for speaking time only when the club runs a Timer (#367)", () => {
+		const lines = (hasTimer: boolean) => {
+			const l = slideLayout({
+				kind: "voteSpeaker",
+				names: ["Jagpal", "Farhanaaz"],
+				hasTimer,
+			});
+			if (l.chrome !== "content" || l.body.form !== "centered")
+				throw new Error("expected centered");
+			return l.body.lines;
+		};
+		expect(lines(true)).toEqual([
+			{ role: "head", text: "Ask for speaking time." },
+			{ role: "head", text: "Please Vote for Best Speaker:" },
+			{ role: "name", text: "Jagpal" },
+			{ role: "name", text: "Farhanaaz" },
+		]);
+		// The run sheet's beat-6 fallback drops the timer's-report clause on the
+		// same signal; the vote itself still happens. Without this, a club with no
+		// Timer prints "Toastmaster · Vote Best Speaker" while the deck tells the
+		// presenter to call for a report from a role nobody holds.
+		expect(lines(false)).toEqual([
+			{ role: "head", text: "Please Vote for Best Speaker:" },
+			{ role: "name", text: "Jagpal" },
+			{ role: "name", text: "Farhanaaz" },
+		]);
+	});
+
+	it("vote-table-topics asks for the times only when the club runs a Timer (#367)", () => {
+		const lines = (hasTimer: boolean) => {
+			const l = slideLayout({ kind: "voteTableTopics", hasTimer });
+			if (l.chrome !== "content" || l.body.form !== "centered")
+				throw new Error("expected centered");
+			return l.body.lines;
+		};
+		expect(lines(true)).toEqual([
+			{ role: "head", text: "Ask for Table Topics times." },
+			{ role: "head", text: "Please Vote for Best Table Topic Speaker:" },
+		]);
+		// Beat 8's fallback drops the same clause when there is no Timer.
+		expect(lines(false)).toEqual([
+			{ role: "head", text: "Please Vote for Best Table Topic Speaker:" },
+		]);
 	});
 
 	it("vote-evaluator asks for the timer's report only when the club runs a Timer (#367)", () => {

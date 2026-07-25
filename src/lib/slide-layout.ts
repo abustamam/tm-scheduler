@@ -131,15 +131,20 @@ export function slideLayout(slide: Slide): SlideLayout {
 			items.push(`Time: ${slide.time}`);
 			return content(slide.label, { form: "bullets", items, link: slide.link });
 		}
-		case "voteSpeaker":
-			return content("Vote for Best Speaker", {
-				form: "centered",
-				lines: [
-					head("Ask for speaking time."),
-					head("Please Vote for Best Speaker:"),
-					...slide.names.map(name),
-				],
-			});
+		case "voteSpeaker": {
+			// Timer-aware like the other two vote slides: the run sheet's beat-6
+			// fallback drops the same clause (#367), so a club with no Timer prints
+			// "Toastmaster · Vote Best Speaker" and must not be told to call for a
+			// report from a role nobody holds.
+			const lines: Line[] = slide.hasTimer
+				? [head("Ask for speaking time.")]
+				: [];
+			lines.push(
+				head("Please Vote for Best Speaker:"),
+				...slide.names.map(name),
+			);
+			return content("Vote for Best Speaker", { form: "centered", lines });
+		}
 		case "tableTopics":
 			return content("Table Topics", {
 				form: "bullets",
@@ -150,14 +155,17 @@ export function slideLayout(slide: Slide): SlideLayout {
 				],
 				link: null,
 			});
-		case "voteTableTopics":
+		case "voteTableTopics": {
+			// Beat 8's fallback drops the timer's-report clause on the same signal.
+			const lines: Line[] = slide.hasTimer
+				? [head("Ask for Table Topics times.")]
+				: [];
+			lines.push(head("Please Vote for Best Table Topic Speaker:"));
 			return content("Vote for Best Table Topic", {
 				form: "centered",
-				lines: [
-					head("Ask for Table Topics times."),
-					head("Please Vote for Best Table Topic Speaker:"),
-				],
+				lines,
 			});
+		}
 		case "evaluatorEvaluation":
 			return content("Evaluation of the Evaluators", {
 				form: "centered",
@@ -174,8 +182,7 @@ export function slideLayout(slide: Slide): SlideLayout {
 			return content("Speech Evaluation", { form: "centered", lines });
 		}
 		case "voteEvaluator": {
-			// The timer's-report prompt appears only when the club runs a Timer —
-			// the run sheet's beat-10 fallback drops the same clause (#367).
+			// Beat 10's fallback, likewise.
 			const lines: Line[] = slide.hasTimer
 				? [head("Ask for timer’s report:")]
 				: [];

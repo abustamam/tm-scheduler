@@ -23,7 +23,7 @@ const deck: Slide[] = [
 		definition: "A fortunate happenstance.",
 		example: "Meeting my mentor was pure serendipity.",
 	},
-	{ kind: "voteSpeaker", names: ["Jane Doe"] },
+	{ kind: "voteSpeaker", names: ["Jane Doe"], hasTimer: true },
 	{
 		kind: "thankYou",
 		meetingSchedule: "2nd & 4th Thursday",

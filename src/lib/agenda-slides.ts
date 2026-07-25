@@ -32,6 +32,14 @@ export type ClubForDeck = {
 	meetingSchedule: string | null;
 };
 
+/** Carried by all three vote slides — the ends of the speech, Table Topics and
+ *  evaluation segments (beats 6, 8 and 10). True when the club runs a Timer, so
+ *  the slide asks for the timer's report before the vote. Each of those beats'
+ *  run-sheet `fallback` drops its timer's-report clause on exactly the same
+ *  signal (#367): a club with no Timer still votes, it just has no report to
+ *  call for and nobody to call on for it. */
+type VoteTiming = { hasTimer: boolean };
+
 /** One projected slide. Date formatting is deferred to the renderer. */
 export type Slide =
 	| {
@@ -83,9 +91,9 @@ export type Slide =
 			time: string;
 			link: string | null;
 	  }
-	| { kind: "voteSpeaker"; names: string[] }
+	| ({ kind: "voteSpeaker"; names: string[] } & VoteTiming)
 	| { kind: "tableTopics"; master: string; timing: string }
-	| { kind: "voteTableTopics" }
+	| ({ kind: "voteTableTopics" } & VoteTiming)
 	| {
 			kind: "evaluation";
 			label: string;
@@ -93,15 +101,7 @@ export type Slide =
 			speaker: string | null;
 			time: string;
 	  }
-	| {
-			kind: "voteEvaluator";
-			names: string[];
-			/** True when the club runs a Timer, so the slide asks for the timer's
-			 *  report before the vote. The run sheet's beat-10 fallback drops the
-			 *  timer's-report clause on exactly the same signal (#367) — a club
-			 *  with no Timer still votes, it just has no report to call for. */
-			hasTimer: boolean;
-	  }
+	| ({ kind: "voteEvaluator"; names: string[] } & VoteTiming)
 	| {
 			/** Beat 11 (#367): the General Evaluator evaluates the evaluators,
 			 *  after the Best-Evaluator vote and before the functionary reports.
@@ -239,6 +239,10 @@ export function buildSlideDeck({
 		deck.push({ kind: "toastmasterIntro", theme: themeText, word: wodWord });
 	}
 
+	// The one signal all three vote slides share (see `VoteTiming`), read once so
+	// they cannot disagree about whether the club runs a Timer.
+	const hasTimer = byRole(slots, ROLE.timer).length > 0;
+
 	const generalEvaluator = byRole(slots, ROLE.generalEvaluator);
 	// Beat 4. Gated exactly as the run sheet gates it: the owning role has a
 	// slot AND the club runs at least one functionary to introduce.
@@ -287,7 +291,11 @@ export function buildSlideDeck({
 				link: s.presentationUrl ?? null,
 			});
 		});
-		deck.push({ kind: "voteSpeaker", names: assignedNames(speakers) });
+		deck.push({
+			kind: "voteSpeaker",
+			names: assignedNames(speakers),
+			hasTimer,
+		});
 	}
 
 	const tableTopics = byRole(slots, ROLE.tableTopicsMaster);
@@ -297,7 +305,7 @@ export function buildSlideDeck({
 			master: assigneeDisplay(tableTopics[0]),
 			timing: TABLE_TOPICS_TIMING,
 		});
-		deck.push({ kind: "voteTableTopics" });
+		deck.push({ kind: "voteTableTopics", hasTimer });
 	}
 
 	const evaluators = orderEvaluators(byRole(slots, ROLE.evaluator), slots);
@@ -315,7 +323,7 @@ export function buildSlideDeck({
 		deck.push({
 			kind: "voteEvaluator",
 			names: assignedNames(evaluators),
-			hasTimer: byRole(slots, ROLE.timer).length > 0,
+			hasTimer,
 		});
 	}
 
