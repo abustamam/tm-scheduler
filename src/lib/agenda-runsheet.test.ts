@@ -115,6 +115,22 @@ describe("buildRunOfShow", () => {
 		}
 	});
 
+	// Regression: the #367 template rewrite silently dropped ", guest comments"
+	// from the closing beat that has carried it since before the rewrite. The
+	// dedicated guest-comments beat (#352) is deferred, so nothing replaces it —
+	// dropping the clause removes guest comments from every club's agenda. This
+	// pins the wording so it can only ever change deliberately.
+	it("the closing beat still invites guest comments (#352 is deferred)", () => {
+		for (const geIntroducesFunctionaries of [false, true]) {
+			const beats = buildRunOfShow({ geIntroducesFunctionaries });
+			expect(beats[beats.length - 1]).toMatchObject({
+				kind: "event",
+				who: "President",
+				detail: "Club business · elections, guest comments · adjourn",
+			});
+		}
+	});
+
 	it("RUN_OF_SHOW is the corrected default variant, kept exported for existing callers", () => {
 		expect(RUN_OF_SHOW).toEqual(
 			buildRunOfShow({ geIntroducesFunctionaries: false }),

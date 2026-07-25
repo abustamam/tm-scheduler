@@ -85,7 +85,10 @@ const BEATS: { detail: string; section: Section | null }[] = [
 	// closing event. That is a content difference, not a section-ordering one.
 	{ detail: "Awards · Best Table Topic, Evaluator & Speaker", section: null },
 	// Beat 15 — President's club business / adjourn. Event beat, no slide.
-	{ detail: "Club business · elections · adjourn", section: null },
+	{
+		detail: "Club business · elections, guest comments · adjourn",
+		section: null,
+	},
 ];
 
 /**

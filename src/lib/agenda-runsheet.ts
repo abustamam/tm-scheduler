@@ -311,7 +311,12 @@ export function buildRunOfShow({
 		{
 			kind: "event",
 			who: "President",
-			detail: "Club business · elections · adjourn",
+			// "guest comments" has been part of this beat since before the #367
+			// rewrite and is the only place guests are invited to speak: the
+			// dedicated guest-comments beat (#352) is deferred, so dropping the
+			// clause here removes guest comments from every club's agenda with
+			// nothing replacing them.
+			detail: "Club business · elections, guest comments · adjourn",
 			minutes: 3,
 		},
 	];
