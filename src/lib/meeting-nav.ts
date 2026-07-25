@@ -82,9 +82,10 @@ export function deriveMeetingNavItems(
 }
 
 /**
- * Default destination for a nav-strip item: the public club meeting page, keyed
- * by the item's club-local-date `urlKey`. Signed-in views pass their own builder
- * (targeting `/meetings/$id` by raw id) so paging stays in the workspace.
+ * Default destination for a nav-strip item: the canonical club meeting page,
+ * keyed by the item's club-local-date `urlKey`. Every audience (public + the
+ * unified signed-in view) uses this now, so nav-strip paging stays on the pretty
+ * meeting URL. A caller may still pass its own builder via `getLinkProps`.
  */
 export function defaultMeetingNavLinkProps(
 	clubId: string,

@@ -169,6 +169,7 @@ function crumbFor(pathname: string): string {
 	if (pathname.startsWith("/admin/meetings/new")) return "Manage · New meeting";
 	if (pathname.startsWith("/admin/meetings/batch"))
 		return "Manage · Batch meetings";
+	if (/^\/club\/[^/]+\/meeting(\/|$)/.test(pathname)) return "Manage · Meeting";
 	if (pathname.startsWith("/meetings")) return "Manage · Meeting";
 	if (pathname === "/me") return "Me · My roles";
 	if (pathname.startsWith("/admin/dcp")) return "Manage · DCP scoreboard";
