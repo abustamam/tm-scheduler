@@ -33,7 +33,8 @@ type Section =
 	| "voteEvaluator"
 	| "evaluatorEvaluation"
 	| "functionaryReports"
-	| "generalEvaluation";
+	| "generalEvaluation"
+	| "awards";
 
 // ---------------------------------------------------------------------------
 // The two mappings. Every beat and every slide kind is accounted for; the
@@ -79,11 +80,11 @@ const BEATS: { detail: string; section: Section | null }[] = [
 		section: "functionaryReports",
 	},
 	{ detail: "Overall meeting evaluation", section: "generalEvaluation" },
-	// Beat 14 — the Toastmaster's awards handout. Excluded because the deck's
-	// `awards` slide is gated on WHICH SCORED SECTIONS EXIST (it lists only the
-	// categories the meeting actually ran) while the print beat is a fixed
-	// closing event. That is a content difference, not a section-ordering one.
-	{ detail: "Awards · Best Table Topic, Evaluator & Speaker", section: null },
+	// Beat 14 — the Toastmaster's awards handout. Compared as of #372: the beat
+	// is now gated on the scored segments and names only those categories, which
+	// is exactly how the deck's `awards` slide was already built, so the two are
+	// comparable rather than a standing content difference.
+	{ detail: "Awards · {awards}", section: "awards" },
 	// Beat 15 — President's club business / adjourn. Event beat, no slide.
 	{
 		detail: "Club business · elections, guest comments · adjourn",
@@ -107,8 +108,8 @@ const SECTION_BY_SLIDE = {
 	// The standalone Word-of-the-Day slide. Content-gated like the above (needs a
 	// definition or example). #354 may move it; deliberately not compared.
 	wordOfDay: null,
-	// Content-gated on which scored sections exist — see beat 14 above.
-	awards: null,
+	// Gated on which scored segments exist — and so is beat 14, as of #372.
+	awards: "awards",
 	// Free-text per-meeting announcements (#349). No beat.
 	reminders: null,
 	// Deck chrome: the closing splash. No beat.
@@ -442,6 +443,7 @@ describe("run-sheet ⇄ deck section-order parity (#367)", () => {
 			"evaluatorEvaluation",
 			"functionaryReports",
 			"generalEvaluation",
+			"awards",
 		];
 		for (const config of CONFIGS) {
 			expect(printSections(FULL, config)).toEqual(expected);

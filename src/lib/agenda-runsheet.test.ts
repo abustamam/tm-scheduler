@@ -173,11 +173,27 @@ describe("expandRunSheet", () => {
 		expect(callToOrder.minutes).toBe(1);
 	});
 
-	it("renders event beats with no `fallback` unconditionally, even with no slots at all", () => {
+	it("renders ungated event beats unconditionally, even with no slots at all", () => {
 		const rows = expandRunSheet([]);
 		expect(rows.some((r) => r.who === "Sergeant-at-Arms")).toBe(true);
 		expect(rows.filter((r) => r.who === "President")).toHaveLength(2);
-		expect(rows.some((r) => r.who === "Toastmaster")).toBe(true);
+	});
+
+	it("drops the awards beat with no slots — it is gated, not ungated (#372)", () => {
+		// The awards beat is the one Toastmaster-owned event beat that IS gated:
+		// on the scored segments, so a club hands out only the awards it scores.
+		const rows = expandRunSheet([]);
+		expect(rows.some((r) => r.detail.startsWith("Awards ·"))).toBe(false);
+		const scored = expandRunSheet([
+			slot({
+				id: "sp",
+				roleName: "Speaker",
+				category: "speaker",
+				isSpeakerRole: true,
+				assigneeName: "S",
+			}),
+		]);
+		expect(scored.some((r) => r.who === "Toastmaster")).toBe(true);
 	});
 
 	it("renders a plain role with its assignee name", () => {
@@ -725,5 +741,60 @@ describe("applyFlex", () => {
 		expect(res.status).toBe("over");
 		expect(res.deltaMinutes).toBe(10);
 		expect(res.rows).toEqual(rows); // unchanged
+	});
+});
+
+describe("expandRunSheet — awards beat adapts to the scored segments (#372)", () => {
+	const speaker = slot({
+		id: "sp",
+		roleName: "Speaker",
+		category: "speaker",
+		isSpeakerRole: true,
+		assigneeName: "S",
+	});
+	const ttm = slot({
+		id: "tt",
+		roleName: "Table Topics Master",
+		category: "leadership",
+		assigneeName: "M",
+	});
+	const evaluator = slot({
+		id: "ev",
+		roleName: "Evaluator",
+		category: "evaluator",
+		assigneeName: "E",
+	});
+	const awardsRow = (slots: AgendaSlot[]): AgendaRow | undefined =>
+		expandRunSheet(slots).find((r) => r.detail.startsWith("Awards ·"));
+
+	it("lists every category when the club runs all three scored segments", () => {
+		expect(awardsRow([speaker, ttm, evaluator])?.detail).toBe(
+			"Awards · Best Table Topic, Best Evaluator & Best Speaker",
+		);
+	});
+
+	it("omits Best Table Topic for a club with no Table Topics Master", () => {
+		expect(awardsRow([speaker, evaluator])?.detail).toBe(
+			"Awards · Best Evaluator & Best Speaker",
+		);
+	});
+
+	it("names a single category without a conjunction", () => {
+		expect(awardsRow([speaker])?.detail).toBe("Awards · Best Speaker");
+	});
+
+	it("omits the beat entirely when the club scores nothing", () => {
+		expect(awardsRow([])).toBeUndefined();
+	});
+
+	it("uses the fixed award labels, not the club's own role names", () => {
+		const renamed = slot({
+			id: "tt",
+			roleKey: "table_topics_master",
+			roleName: "Topics Chief",
+			category: "leadership",
+			assigneeName: "M",
+		});
+		expect(awardsRow([renamed])?.detail).toBe("Awards · Best Table Topic");
 	});
 });
