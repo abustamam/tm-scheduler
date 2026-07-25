@@ -5,11 +5,13 @@ import {
 	applyRoleDefinitionCreate,
 	applyRoleDefinitionDelete,
 	applyRoleDefinitionReorder,
+	applyRoleDefinitionSetEnabled,
 	applyRoleDefinitionUpdate,
 	createRoleSchema,
 	deleteRoleSchema,
 	listRoleDefinitions,
 	reorderRolesSchema,
+	setRoleEnabledSchema,
 	updateRoleSchema,
 } from "./role-definitions-logic";
 import { applyTemplateSyncToUpcomingMeetings } from "./slots-logic";
@@ -31,10 +33,15 @@ export const listClubRoles = createServerFn({ method: "GET" })
  *  (#341). Ungated on purpose — role names + responsibilities are non-sensitive
  *  reference content, matching the public print/present routes, and the sheet is
  *  meant to be shareable/handed to guests. Returns the same rows as
- *  `listClubRoles`; the extra `slotCount` is harmless here. */
+ *  `listClubRoles` minus disabled ones (#369, via `onlyEnabled`) — this sheet
+ *  OFFERS the club's roles, which a "skeleton crew" club turned some off to
+ *  stop offering; the admin-only `listClubRoles` is where a disabled role
+ *  stays visible. The extra `slotCount` is harmless here. */
 export const getPublicClubRoles = createServerFn({ method: "GET" })
 	.validator((clubId: unknown) => uuid.parse(clubId))
-	.handler(async ({ data: clubId }) => listRoleDefinitions(clubId));
+	.handler(async ({ data: clubId }) =>
+		listRoleDefinitions(clubId, { onlyEnabled: true }),
+	);
 
 /** Add a custom role to the club template. AUTHED — requires admin. */
 export const createClubRole = createServerFn({ method: "POST" })
@@ -53,6 +60,18 @@ export const updateClubRole = createServerFn({ method: "POST" })
 		const currentUser = await requireUser();
 		await requireClubRole(currentUser.id, data.clubId, ["admin"]);
 		return applyRoleDefinitionUpdate(data);
+	});
+
+/** Turn a role on/off for future meetings without deleting it (#369). Narrow
+ *  payload (`{ clubId, roleId, enabled }`) rather than the whole-row shape
+ *  `updateClubRole` takes — see `applyRoleDefinitionSetEnabled`. AUTHED —
+ *  requires admin. */
+export const setClubRoleEnabled = createServerFn({ method: "POST" })
+	.validator((input: unknown) => setRoleEnabledSchema.parse(input))
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		await requireClubRole(currentUser.id, data.clubId, ["admin"]);
+		return applyRoleDefinitionSetEnabled(data);
 	});
 
 /** Persist a new ordering of the club's roles. AUTHED — requires admin. */

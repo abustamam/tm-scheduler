@@ -89,6 +89,12 @@ export function formatActivity(entry: ActivityEntry): FormattedActivity {
 				case "template_sync":
 					summary = "updated upcoming meetings to match the standard set";
 					break;
+				case "role_disabled":
+					summary = "disabled a role for upcoming meetings";
+					break;
+				case "role_enabled":
+					summary = "enabled a role for upcoming meetings";
+					break;
 				default:
 					summary = "updated the meeting";
 			}

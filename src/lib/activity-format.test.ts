@@ -209,6 +209,12 @@ describe("formatActivity", () => {
 		expect(
 			formatActivity({ ...meetingBase, change: "template_sync" }).summary,
 		).toBe("updated upcoming meetings to match the standard set");
+		expect(
+			formatActivity({ ...meetingBase, change: "role_disabled" }).summary,
+		).toBe("disabled a role for upcoming meetings");
+		expect(
+			formatActivity({ ...meetingBase, change: "role_enabled" }).summary,
+		).toBe("enabled a role for upcoming meetings");
 		expect(formatActivity({ ...meetingBase, change: null }).summary).toBe(
 			"updated the meeting",
 		);

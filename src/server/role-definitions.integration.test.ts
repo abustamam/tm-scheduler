@@ -27,6 +27,7 @@ const {
 	applyRoleDefinitionUpdate,
 	applyRoleDefinitionReorder,
 	applyRoleDefinitionDelete,
+	applyRoleDefinitionSetEnabled,
 	listRoleDefinitions,
 } = await import("./role-definitions-logic");
 
@@ -211,6 +212,14 @@ describe.skipIf(!hasTestDb)("role-definition management", () => {
 				roleId: seed.roleDefinitionId,
 			}),
 		).rejects.toThrow(/existing meetings/);
+		// The message points admins at disabling instead of the old
+		// "set default count to 0" workaround the toggle now replaces (#369).
+		await expect(
+			applyRoleDefinitionDelete({
+				clubId: seed.clubId,
+				roleId: seed.roleDefinitionId,
+			}),
+		).rejects.toThrow(/disable/i);
 
 		// The role and its slot are both still present (history preserved).
 		const [role] = await testDb
@@ -223,5 +232,158 @@ describe.skipIf(!hasTestDb)("role-definition management", () => {
 			.from(roleSlots)
 			.where(eq(roleSlots.id, seed.slotId));
 		expect(slot).toBeTruthy();
+	});
+
+	it("listRoleDefinitions includes the enabled flag", async () => {
+		const list = await listRoleDefinitions(seed.clubId);
+		expect(list[0].enabled).toBe(true);
+	});
+
+	it("listRoleDefinitions({ onlyEnabled: true }) excludes a disabled role", async () => {
+		const { id: disabledId } = await applyRoleDefinitionCreate({
+			clubId: seed.clubId,
+			name: "Ah-Counter",
+			category: "functionary",
+			defaultCount: 1,
+		});
+		await applyRoleDefinitionSetEnabled({
+			clubId: seed.clubId,
+			roleId: disabledId,
+			enabled: false,
+		});
+
+		const all = await listRoleDefinitions(seed.clubId);
+		expect(all.map((r) => r.id)).toContain(disabledId);
+
+		const onlyEnabled = await listRoleDefinitions(seed.clubId, {
+			onlyEnabled: true,
+		});
+		expect(onlyEnabled.map((r) => r.id)).not.toContain(disabledId);
+		// The seeded (enabled) Timer role still shows up.
+		expect(onlyEnabled.map((r) => r.id)).toContain(seed.roleDefinitionId);
+	});
+
+	// `applyRoleDefinitionUpdate` (the plain field-edit "Save" path) never
+	// accepts `enabled` at all — enforced by `UpdateRoleInput` not having the
+	// field, so this is now a compile-time guarantee, not just a runtime one.
+	// Toggling goes through the narrow `applyRoleDefinitionSetEnabled` instead
+	// (#369 review: a whole-row toggle risked discarding unsaved edits in the
+	// same card / last-write-wins against a concurrent admin).
+	it("updateRole never touches enabled, even across repeated saves", async () => {
+		await applyRoleDefinitionUpdate({
+			clubId: seed.clubId,
+			roleId: seed.roleDefinitionId,
+			name: "Timer",
+			category: "functionary",
+			defaultCount: 1,
+			description: "Updated description only.",
+		});
+		const [row] = await testDb
+			.select()
+			.from(roleDefinitions)
+			.where(eq(roleDefinitions.id, seed.roleDefinitionId));
+		expect(row.enabled).toBe(true);
+		// No slot side effects — the seeded (open, unclaimed) slot is untouched.
+		const slots = await testDb
+			.select()
+			.from(roleSlots)
+			.where(eq(roleSlots.roleDefinitionId, seed.roleDefinitionId));
+		expect(slots).toHaveLength(1);
+	});
+
+	it("setRoleEnabled(false) removes the role's open future slots and reports 0 kept", async () => {
+		// Seeded Timer role has one open, unclaimed slot on a future meeting.
+		const result = await applyRoleDefinitionSetEnabled({
+			clubId: seed.clubId,
+			roleId: seed.roleDefinitionId,
+			enabled: false,
+		});
+		expect(result.keptClaimedMeetings).toBe(0);
+		expect(result.meetingsChanged).toBe(1);
+
+		const [row] = await testDb
+			.select()
+			.from(roleDefinitions)
+			.where(eq(roleDefinitions.id, seed.roleDefinitionId));
+		expect(row.enabled).toBe(false);
+
+		const slots = await testDb
+			.select()
+			.from(roleSlots)
+			.where(eq(roleSlots.roleDefinitionId, seed.roleDefinitionId));
+		expect(slots).toHaveLength(0);
+	});
+
+	it("setRoleEnabled(false) keeps a claimed slot and reports it", async () => {
+		await testDb
+			.update(roleSlots)
+			.set({ status: "claimed", assignedMemberId: seed.memberId })
+			.where(eq(roleSlots.id, seed.slotId));
+
+		const result = await applyRoleDefinitionSetEnabled({
+			clubId: seed.clubId,
+			roleId: seed.roleDefinitionId,
+			enabled: false,
+		});
+		expect(result.keptClaimedMeetings).toBe(1);
+
+		const slots = await testDb
+			.select()
+			.from(roleSlots)
+			.where(eq(roleSlots.roleDefinitionId, seed.roleDefinitionId));
+		expect(slots).toHaveLength(1);
+		expect(slots[0].id).toBe(seed.slotId);
+	});
+
+	it("setRoleEnabled(true) backfills an open slot on future meetings with none", async () => {
+		// Disable first (removes the seeded open slot), then re-enable.
+		await applyRoleDefinitionSetEnabled({
+			clubId: seed.clubId,
+			roleId: seed.roleDefinitionId,
+			enabled: false,
+		});
+		const result = await applyRoleDefinitionSetEnabled({
+			clubId: seed.clubId,
+			roleId: seed.roleDefinitionId,
+			enabled: true,
+		});
+		expect(result.keptClaimedMeetings).toBe(0);
+		expect(result.meetingsChanged).toBe(1);
+
+		const slots = await testDb
+			.select()
+			.from(roleSlots)
+			.where(eq(roleSlots.roleDefinitionId, seed.roleDefinitionId));
+		expect(slots).toHaveLength(1);
+	});
+
+	it("setRoleEnabled to its current value is a no-op (no slot walk, no activity log)", async () => {
+		const result = await applyRoleDefinitionSetEnabled({
+			clubId: seed.clubId,
+			roleId: seed.roleDefinitionId,
+			enabled: true,
+		});
+		expect(result.keptClaimedMeetings).toBe(0);
+		expect(result.meetingsChanged).toBe(0);
+		const slots = await testDb
+			.select()
+			.from(roleSlots)
+			.where(eq(roleSlots.roleDefinitionId, seed.roleDefinitionId));
+		expect(slots).toHaveLength(1);
+	});
+
+	it("setRoleEnabled rejects a role from a different club", async () => {
+		const other = await seedClub();
+		try {
+			await expect(
+				applyRoleDefinitionSetEnabled({
+					clubId: seed.clubId,
+					roleId: other.roleDefinitionId,
+					enabled: false,
+				}),
+			).rejects.toThrow(/not found/i);
+		} finally {
+			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+		}
 	});
 });

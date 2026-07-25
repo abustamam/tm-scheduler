@@ -12,6 +12,7 @@ import { and, asc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import { roleDefinitions, roleSlots } from "#/db/schema";
+import { syncSlotsForRoleEnabledChange } from "./slots-logic";
 
 const roleCategory = z.enum([
 	"leadership",
@@ -30,13 +31,28 @@ export interface RoleDefinitionRow {
 	description: string | null;
 	/** Number of existing slots referencing this role (blocks deletion when > 0). */
 	slotCount: number;
+	/** Whether new meetings generate slots for this role (#369). Disabled roles
+	 *  stay in this list — never deleted, never hidden from admin — they just
+	 *  stop being offered anywhere a role is filled. */
+	enabled: boolean;
 }
 
 /** The club's role template, ordered by sortOrder then name, each annotated with
- *  how many existing slots reference it (so the UI can disable deletion). */
+ *  how many existing slots reference it (so the UI can disable deletion) and
+ *  whether it's enabled. By default includes disabled roles (the admin-only
+ *  listing keeps them visible/retrievable, #369); pass `onlyEnabled: true` for
+ *  any surface that OFFERS a role to be filled — the single tested path both
+ *  `getPublicClubRoles` (the printable sheet) and `loadMeetingDetail`'s
+ *  "+ Add role" picker (`meetings.ts`) route through, so that rule lives in one
+ *  place instead of being re-expressed as a separate filter/query at each
+ *  call site where it could drift. */
 export async function listRoleDefinitions(
 	clubId: string,
+	opts?: { onlyEnabled?: boolean },
 ): Promise<RoleDefinitionRow[]> {
+	const where = [eq(roleDefinitions.clubId, clubId)];
+	if (opts?.onlyEnabled) where.push(eq(roleDefinitions.enabled, true));
+
 	const rows = await db
 		.select({
 			id: roleDefinitions.id,
@@ -47,10 +63,11 @@ export async function listRoleDefinitions(
 			isSpeakerRole: roleDefinitions.isSpeakerRole,
 			description: roleDefinitions.description,
 			slotCount: sql<number>`count(${roleSlots.id})::int`,
+			enabled: roleDefinitions.enabled,
 		})
 		.from(roleDefinitions)
 		.leftJoin(roleSlots, eq(roleSlots.roleDefinitionId, roleDefinitions.id))
-		.where(eq(roleDefinitions.clubId, clubId))
+		.where(and(...where))
 		.groupBy(roleDefinitions.id)
 		.orderBy(asc(roleDefinitions.sortOrder), asc(roleDefinitions.name));
 	return rows;
@@ -120,7 +137,12 @@ export type UpdateRoleInput = z.infer<typeof updateRoleSchema>;
  *  generated meetings (via `generateSlotRows`); existing meetings' slots are
  *  unchanged. Description is read at display time, so edits go live everywhere
  *  (before-claim sheet + public shared link) immediately. The caller is
- *  responsible for the admin authorization check (see `updateClubRole`). */
+ *  responsible for the admin authorization check (see `updateClubRole`).
+ *
+ *  Deliberately does NOT touch `enabled` — see `applyRoleDefinitionSetEnabled`
+ *  below, a separate narrow action (#369) so a plain field edit here can never
+ *  discard an admin's in-progress toggle (or vice versa) under last-write-wins,
+ *  and so this function doesn't need to read-before-write to detect a flip. */
 export async function applyRoleDefinitionUpdate(input: UpdateRoleInput) {
 	const [updated] = await db
 		.update(roleDefinitions)
@@ -140,6 +162,80 @@ export async function applyRoleDefinitionUpdate(input: UpdateRoleInput) {
 		.returning({ id: roleDefinitions.id });
 	if (!updated) throw new Error("Role not found.");
 	return { ok: true as const };
+}
+
+export const setRoleEnabledSchema = z.object({
+	clubId: z.string().uuid(),
+	roleId: z.string().uuid(),
+	enabled: z.boolean(),
+	actorMemberId: z.string().uuid().nullable().optional(),
+});
+export type SetRoleEnabledInput = z.infer<typeof setRoleEnabledSchema>;
+
+/** Toggle a role's `enabled` flag (#369) — a narrow action, separate from
+ *  `applyRoleDefinitionUpdate`, that posts only `{ clubId, roleId, enabled }`
+ *  rather than a whole-row snapshot taken from a loader. A whole-row toggle
+ *  would silently discard any unsaved edits typed into the same card and
+ *  last-write-wins against a concurrent admin editing other fields; this can't,
+ *  since it never writes name/category/defaultCount/etc.
+ *
+ *  A club can't delete a standard role once any meeting has used it
+ *  (`role_slots.role_definition_id` is ON DELETE RESTRICT) — `enabled` is the
+ *  lever instead. A real flip runs `syncSlotsForRoleEnabledChange`: disabling
+ *  drops the role's open, unclaimed slots from future, non-cancelled meetings
+ *  (never a claimed one); enabling backfills them back in (skipped for the
+ *  paired Speaker/Evaluator roles — see that function's docstring). Setting
+ *  the flag to its current value is a no-op (no slot walk, no activity log).
+ *  Returns `keptClaimedMeetings` (upcoming meetings that still have the role
+ *  assigned to someone, disable-only) and `meetingsChanged` (upcoming meetings
+ *  that actually gained/lost a slot) so the caller can build an informative
+ *  toast either way instead of discarding what the slot sync already computed. */
+export async function applyRoleDefinitionSetEnabled(
+	input: SetRoleEnabledInput,
+) {
+	const [current] = await db
+		.select({
+			name: roleDefinitions.name,
+			defaultCount: roleDefinitions.defaultCount,
+			enabled: roleDefinitions.enabled,
+		})
+		.from(roleDefinitions)
+		.where(
+			and(
+				eq(roleDefinitions.id, input.roleId),
+				eq(roleDefinitions.clubId, input.clubId),
+			),
+		)
+		.limit(1);
+	if (!current) throw new Error("Role not found.");
+
+	if (current.enabled === input.enabled) {
+		return { ok: true as const, keptClaimedMeetings: 0, meetingsChanged: 0 };
+	}
+
+	await db
+		.update(roleDefinitions)
+		.set({ enabled: input.enabled })
+		.where(
+			and(
+				eq(roleDefinitions.id, input.roleId),
+				eq(roleDefinitions.clubId, input.clubId),
+			),
+		);
+
+	const result = await syncSlotsForRoleEnabledChange({
+		clubId: input.clubId,
+		roleDefinitionId: input.roleId,
+		roleName: current.name,
+		defaultCount: current.defaultCount,
+		enabled: input.enabled,
+		actorMemberId: input.actorMemberId ?? null,
+	});
+	return {
+		ok: true as const,
+		keptClaimedMeetings: result.keptClaimedMeetings,
+		meetingsChanged: result.meetingsChanged,
+	};
 }
 
 export const reorderRolesSchema = z.object({
@@ -213,7 +309,8 @@ export async function applyRoleDefinitionDelete(input: DeleteRoleInput) {
 	if (count > 0) {
 		throw new Error(
 			"This role is used by existing meetings and can't be deleted. " +
-				"Set its default count to 0 to stop adding it to new meetings.",
+				"Disable it instead — future meetings stop offering it, its history " +
+				"stays intact, and you can turn it back on later.",
 		);
 	}
 

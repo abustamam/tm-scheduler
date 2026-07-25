@@ -48,6 +48,7 @@ import {
 	applyWordOfTheDayUpdate,
 } from "./meetings-logic";
 import { currentOfficersForClub } from "./officer-terms-logic";
+import { listRoleDefinitions } from "./role-definitions-logic";
 import { indexRoleRecency, loadRoleRecency } from "./role-recency-logic";
 
 const uuid = z.string().uuid();
@@ -245,20 +246,23 @@ async function loadMeetingDetail(
 	const roster = canManage ? await loadRosterWithContact(meeting.clubId) : [];
 
 	// Club role template for the "+ Add role" picker — management-only, like the
-	// roster. Ordered like the roles page.
+	// roster. Ordered like the roles page. Disabled roles (#369) are excluded via
+	// `listRoleDefinitions`'s `onlyEnabled` — this picker OFFERS a role to be
+	// filled, which is exactly what a "skeleton crew" club turned a role off to
+	// stop; the roles admin page is where a disabled role stays visible. Routed
+	// through the same helper `getPublicClubRoles` uses so "only enabled" is one
+	// tested rule, not a second SQL filter that could drift from it.
 	const clubRoles = canManage
-		? await db
-				.select({
-					id: roleDefinitions.id,
-					name: roleDefinitions.name,
-					category: roleDefinitions.category,
-					defaultCount: roleDefinitions.defaultCount,
-					sortOrder: roleDefinitions.sortOrder,
-					isSpeakerRole: roleDefinitions.isSpeakerRole,
-				})
-				.from(roleDefinitions)
-				.where(eq(roleDefinitions.clubId, meeting.clubId))
-				.orderBy(asc(roleDefinitions.sortOrder), asc(roleDefinitions.name))
+		? (await listRoleDefinitions(meeting.clubId, { onlyEnabled: true })).map(
+				(r) => ({
+					id: r.id,
+					name: r.name,
+					category: r.category,
+					defaultCount: r.defaultCount,
+					sortOrder: r.sortOrder,
+					isSpeakerRole: r.isSpeakerRole,
+				}),
+			)
 		: [];
 
 	// Club guests for the admin assign picker (#151) — pick-an-existing-guest.

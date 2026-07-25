@@ -1,8 +1,16 @@
 import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
-import { ChevronDown, ChevronUp, Loader2, Plus, Trash2 } from "lucide-react";
+import {
+	ChevronDown,
+	ChevronUp,
+	Loader2,
+	Plus,
+	Power,
+	Trash2,
+} from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { PageContainer } from "#/components/page-container";
+import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
@@ -12,6 +20,7 @@ import {
 	deleteClubRole,
 	listClubRoles,
 	reorderClubRoles,
+	setClubRoleEnabled,
 	syncTemplateToUpcomingMeetings,
 	updateClubRole,
 } from "#/server/role-definitions";
@@ -101,7 +110,9 @@ function RolesManager() {
 						The role template for {adminClub.name}. Descriptions show on the
 						sign-up sheet and the public shared agenda. Changing a role's
 						default count only affects meetings created afterwards — existing
-						meetings keep their slots.
+						meetings keep their slots. Not running a role yet? Disable it
+						instead of deleting it — it stays here, ready to turn back on, and
+						stops being offered elsewhere in the meantime.
 					</p>
 				</div>
 				<Button
@@ -123,6 +134,7 @@ function RolesManager() {
 					<RoleCard
 						key={role.id}
 						clubId={clubId}
+						actorMemberId={currentMemberId}
 						role={role}
 						isFirst={i === 0}
 						isLast={i === roles.length - 1}
@@ -142,8 +154,37 @@ function RolesManager() {
 	);
 }
 
+/** Toast copy for an enable/disable toggle result. Surfaces the counts
+ *  `applyRoleDefinitionSetEnabled` (#369) already computed — "kept claimed
+ *  slots" on disable, so an admin knows their disable didn't silently
+ *  un-assign anyone, and how many meetings got the role back on enable — so
+ *  neither the sync-style result nor the toggle re-does work the server
+ *  already did just to throw it away. */
+function toggleToastMessage(
+	roleName: string,
+	nextEnabled: boolean,
+	result: { keptClaimedMeetings: number; meetingsChanged: number },
+): string {
+	if (nextEnabled) {
+		if (result.meetingsChanged === 0) {
+			return `${roleName} is back on. No upcoming meetings needed it added back.`;
+		}
+		const plural = result.meetingsChanged === 1 ? "" : "s";
+		return `${roleName} is back on — added to ${result.meetingsChanged} upcoming meeting${plural}.`;
+	}
+	if (result.keptClaimedMeetings > 0) {
+		const plural = result.keptClaimedMeetings === 1 ? "" : "s";
+		return (
+			`${roleName} is off for future meetings; ${result.keptClaimedMeetings} upcoming ` +
+			`meeting${plural} still has it assigned.`
+		);
+	}
+	return `${roleName} is off — future meetings won't offer it.`;
+}
+
 function RoleCard({
 	clubId,
+	actorMemberId,
 	role,
 	isFirst,
 	isLast,
@@ -152,6 +193,7 @@ function RoleCard({
 	onChanged,
 }: {
 	clubId: string;
+	actorMemberId: string | null;
 	role: RoleDefinitionRow;
 	isFirst: boolean;
 	isLast: boolean;
@@ -161,6 +203,7 @@ function RoleCard({
 }) {
 	const [saving, setSaving] = useState(false);
 	const [deleting, setDeleting] = useState(false);
+	const [toggling, setToggling] = useState(false);
 
 	async function onSave(e: React.FormEvent<HTMLFormElement>) {
 		e.preventDefault();
@@ -202,12 +245,30 @@ function RoleCard({
 		}
 	}
 
+	async function onToggleEnabled() {
+		const nextEnabled = !role.enabled;
+		setToggling(true);
+		try {
+			const res = await setClubRoleEnabled({
+				data: { clubId, roleId: role.id, enabled: nextEnabled, actorMemberId },
+			});
+			toast.success(toggleToastMessage(role.name, nextEnabled, res));
+			await onChanged();
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Couldn't update role.");
+		} finally {
+			setToggling(false);
+		}
+	}
+
 	const referenced = role.slotCount > 0;
 
 	return (
 		<form
 			onSubmit={onSave}
-			className="rounded-xl border border-[var(--line)] bg-[var(--surface-strong)] p-4"
+			className={`rounded-xl border border-[var(--line)] bg-[var(--surface-strong)] p-4 ${
+				role.enabled ? "" : "opacity-70"
+			}`}
 		>
 			<div className="flex items-start gap-3">
 				<div className="flex flex-col gap-1 pt-6">
@@ -236,7 +297,17 @@ function RoleCard({
 				<div className="grid flex-1 gap-3">
 					<div className="grid gap-3 sm:grid-cols-[2fr_1fr_auto]">
 						<div className="space-y-1.5">
-							<Label htmlFor={`name-${role.id}`}>Name</Label>
+							<Label
+								htmlFor={`name-${role.id}`}
+								className="flex items-center gap-2"
+							>
+								Name
+								{role.enabled ? null : (
+									<Badge variant="secondary" className="font-normal">
+										Disabled
+									</Badge>
+								)}
+							</Label>
 							<Input
 								id={`name-${role.id}`}
 								name="name"
@@ -307,11 +378,32 @@ function RoleCard({
 								type="button"
 								size="sm"
 								variant="outline"
+								disabled={toggling}
+								onClick={onToggleEnabled}
+								title={
+									role.enabled
+										? "Stop offering this role on future meetings, without deleting it"
+										: "Start offering this role on future meetings again"
+								}
+							>
+								{toggling ? (
+									<Loader2 className="size-4 animate-spin" />
+								) : (
+									<>
+										<Power className="size-4" />
+										{role.enabled ? "Disable" : "Enable"}
+									</>
+								)}
+							</Button>
+							<Button
+								type="button"
+								size="sm"
+								variant="outline"
 								disabled={deleting || referenced}
 								onClick={onDelete}
 								title={
 									referenced
-										? "Used by existing meetings — set default count to 0 instead"
+										? "Used by existing meetings — disable it instead"
 										: "Delete role"
 								}
 							>
@@ -326,8 +418,9 @@ function RoleCard({
 					{referenced ? (
 						<p className="text-xs text-muted-foreground">
 							Used by {role.slotCount} existing meeting slot
-							{role.slotCount === 1 ? "" : "s"} — can't be deleted. Set the
-							default count to 0 to stop adding it to new meetings.
+							{role.slotCount === 1 ? "" : "s"} — can't be deleted. Disable it
+							instead to stop offering it on future meetings; its history stays
+							intact.
 						</p>
 					) : null}
 				</div>

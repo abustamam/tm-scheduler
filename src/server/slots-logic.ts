@@ -1,7 +1,7 @@
 // Speaker-slot management DB logic, split out from `slots.ts` (a createServerFn
 // module the guard test forbids from exporting db-touching functions).
 // Integration-testable by mocking `#/db`.
-import { and, eq, gt } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull, ne } from "drizzle-orm";
 import { db } from "#/db";
 import {
 	meetings,
@@ -14,6 +14,7 @@ import {
 import {
 	pairedRoleIds,
 	pickSpeakerAndEvaluatorRoles,
+	type SpeakerEvaluatorRoles,
 } from "#/lib/meeting-roles";
 import { normalizePresentationUrl } from "#/lib/presentation-url";
 import { logActivity } from "./activity";
@@ -25,7 +26,17 @@ type DbOrTx =
 	| typeof db
 	| Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
 
-async function clubRoles(clubId: string) {
+/** The club's resolved speaker/evaluator role ids, plus whether each is
+ *  currently `enabled` (#369) — a disabled role must never be reintroduced by
+ *  the "+ Add speaker" path, which `applyAddSpeakerSlot` below enforces using
+ *  these flags. `evaluatorEnabled` is false (not just absent) when the club has
+ *  no paired evaluator role at all, which is the safe default for a caller
+ *  that only checks the flag before inserting. */
+async function clubRoles(
+	clubId: string,
+): Promise<
+	SpeakerEvaluatorRoles & { speakerEnabled: boolean; evaluatorEnabled: boolean }
+> {
 	const defs = await db
 		.select({
 			id: roleDefinitions.id,
@@ -33,10 +44,18 @@ async function clubRoles(clubId: string) {
 			defaultCount: roleDefinitions.defaultCount,
 			sortOrder: roleDefinitions.sortOrder,
 			isSpeakerRole: roleDefinitions.isSpeakerRole,
+			enabled: roleDefinitions.enabled,
 		})
 		.from(roleDefinitions)
 		.where(eq(roleDefinitions.clubId, clubId));
-	return pickSpeakerAndEvaluatorRoles(defs);
+	const picked = pickSpeakerAndEvaluatorRoles(defs);
+	const enabledOf = (id: string | null) =>
+		id ? (defs.find((d) => d.id === id)?.enabled ?? false) : false;
+	return {
+		...picked,
+		speakerEnabled: enabledOf(picked.speakerRoleId),
+		evaluatorEnabled: enabledOf(picked.evaluatorRoleId),
+	};
 }
 
 /** Next 0-based slotIndex for a (meeting, role) pair. */
@@ -44,7 +63,14 @@ function nextIndex(indices: number[]): number {
 	return indices.length === 0 ? 0 : Math.max(...indices) + 1;
 }
 
-/** Add one Speaker slot (+ a paired Evaluator slot, count-parity). */
+/** Add one Speaker slot (+ a paired Evaluator slot, count-parity). Reached from
+ *  a PUBLIC, no-session path (a self-asserted TMOD, see `requireMeetingAgendaEditor`
+ *  in `guards.ts`), so it must independently enforce `enabled` (#369) — the roles
+ *  admin toggle already clears a disabled role's open slots from upcoming
+ *  meetings, and this is the one place a public caller could otherwise put one
+ *  right back. Rejects outright when the club's Speaker role is disabled (there's
+ *  nothing sensible to add); silently skips the Evaluator insert when only the
+ *  paired Evaluator role is disabled (the Speaker slot alone is still useful). */
 export async function applyAddSpeakerSlot(input: {
 	meetingId: string;
 	actorMemberId: string | null;
@@ -53,7 +79,11 @@ export async function applyAddSpeakerSlot(input: {
 		where: eq(meetings.id, input.meetingId),
 	});
 	if (!meeting) throw new Error("Meeting not found.");
-	const { speakerRoleId, evaluatorRoleId } = await clubRoles(meeting.clubId);
+	const { speakerRoleId, evaluatorRoleId, speakerEnabled, evaluatorEnabled } =
+		await clubRoles(meeting.clubId);
+	if (!speakerEnabled) {
+		throw new Error("This club's Speaker role is currently disabled.");
+	}
 
 	const existing = await db
 		.select({
@@ -75,7 +105,7 @@ export async function applyAddSpeakerSlot(input: {
 			roleDefinitionId: speakerRoleId,
 			slotIndex: idxFor(speakerRoleId),
 		});
-		if (evaluatorRoleId) {
+		if (evaluatorRoleId && evaluatorEnabled) {
 			await tx.insert(roleSlots).values({
 				meetingId: input.meetingId,
 				roleDefinitionId: evaluatorRoleId,
@@ -94,7 +124,7 @@ export async function applyAddSpeakerSlot(input: {
 	return { clubId: meeting.clubId };
 }
 
-/** The club's role defs in the shape `pairedRoleIds` needs, plus name/id. */
+/** The club's role defs in the shape `pairedRoleIds` needs, plus name/id/enabled. */
 async function clubRoleDefs(clubId: string) {
 	return db
 		.select({
@@ -104,6 +134,7 @@ async function clubRoleDefs(clubId: string) {
 			defaultCount: roleDefinitions.defaultCount,
 			sortOrder: roleDefinitions.sortOrder,
 			isSpeakerRole: roleDefinitions.isSpeakerRole,
+			enabled: roleDefinitions.enabled,
 		})
 		.from(roleDefinitions)
 		.where(eq(roleDefinitions.clubId, clubId));
@@ -126,6 +157,7 @@ export async function applyAddRoleSlot(input: {
 	const defs = await clubRoleDefs(meeting.clubId);
 	const role = defs.find((d) => d.id === input.roleDefinitionId);
 	if (!role) throw new Error("Role not found for this club.");
+	if (!role.enabled) throw new Error("This role is currently disabled.");
 	if (pairedRoleIds(defs).has(role.id)) {
 		throw new Error("Add speakers with the speaker controls.");
 	}
@@ -210,45 +242,42 @@ export async function applyRemoveRoleSlot(input: {
 	return { clubId: slot.clubId };
 }
 
-/** Presence-based template backfill: for every upcoming meeting (scheduledAt >
- *  now), add one open slot of each standard (defaultCount >= 1), non-paired role
- *  the meeting has zero of. Never tops up counts, never adds speakers/paired
- *  evaluators, never touches past meetings. Idempotent. Returns how many
- *  meetings changed and the distinct role names added. */
-export async function applyTemplateSyncToUpcomingMeetings(input: {
+/** `detail.change` values `backfillMissingRoleSlots` can log — a plain `string`
+ *  param would let a typo degrade silently through `logActivity`'s untyped
+ *  `detail` into `formatActivity`'s switch (`#/lib/activity-format.ts`), which
+ *  falls back to "updated the meeting" for anything it doesn't recognize. */
+type BackfillChangeLabel = "template_sync" | "role_enabled";
+
+/** For each of `meetingIds`, add one open slot of each of `defs` the meeting
+ *  doesn't already have any slot for. Never tops up an existing role's count
+ *  toward its `defaultCount` — presence-based, not count-based (a naive
+ *  count-based top-up would fight a club that intentionally removed a slot).
+ *  Shared "add missing slots" walk behind both the "Update upcoming meetings
+ *  to match" admin action and the role enable-toggle backfill (#369). Returns
+ *  how many meetings changed and the distinct role names added. */
+async function backfillMissingRoleSlots(input: {
 	clubId: string;
+	meetingIds: string[];
+	defs: { id: string; name: string }[];
 	actorMemberId: string | null;
-}) {
-	const defs = await clubRoleDefs(input.clubId);
-	const paired = pairedRoleIds(defs);
-	const standard = defs.filter((d) => d.defaultCount >= 1 && !paired.has(d.id));
-
-	const upcoming = await db
-		.select({ id: meetings.id })
-		.from(meetings)
-		.where(
-			and(
-				eq(meetings.clubId, input.clubId),
-				gt(meetings.scheduledAt, new Date()),
-			),
-		);
-
+	changeLabel: BackfillChangeLabel;
+}): Promise<{ meetingsChanged: number; rolesAdded: string[] }> {
 	const rolesAdded = new Set<string>();
 	let meetingsChanged = 0;
 
 	await db.transaction(async (tx) => {
-		for (const m of upcoming) {
+		for (const meetingId of input.meetingIds) {
 			const present = await tx
 				.select({ roleDefinitionId: roleSlots.roleDefinitionId })
 				.from(roleSlots)
-				.where(eq(roleSlots.meetingId, m.id));
+				.where(eq(roleSlots.meetingId, meetingId));
 			const presentIds = new Set(present.map((s) => s.roleDefinitionId));
-			const missing = standard.filter((d) => !presentIds.has(d.id));
+			const missing = input.defs.filter((d) => !presentIds.has(d.id));
 			if (missing.length === 0) continue;
 
 			await tx.insert(roleSlots).values(
 				missing.map((d) => ({
-					meetingId: m.id,
+					meetingId,
 					roleDefinitionId: d.id,
 					slotIndex: 0,
 				})),
@@ -259,9 +288,9 @@ export async function applyTemplateSyncToUpcomingMeetings(input: {
 				actorMemberId: input.actorMemberId,
 				action: "meeting_edit",
 				targetType: "meeting",
-				targetId: m.id,
+				targetId: meetingId,
 				detail: {
-					change: "template_sync",
+					change: input.changeLabel,
 					roleDefinitionIds: missing.map((d) => d.id),
 				},
 			});
@@ -270,6 +299,211 @@ export async function applyTemplateSyncToUpcomingMeetings(input: {
 	});
 
 	return { meetingsChanged, rolesAdded: [...rolesAdded] };
+}
+
+/** Presence-based template backfill: for every upcoming meeting (scheduledAt >
+ *  now), add one open slot of each standard (`enabled`, `defaultCount >= 1`),
+ *  non-paired role the meeting has zero of. Never tops up counts, never adds
+ *  speakers/paired evaluators, never touches past meetings. Idempotent. Backs
+ *  the roles admin page's "Update upcoming meetings to match" button. */
+export async function applyTemplateSyncToUpcomingMeetings(input: {
+	clubId: string;
+	actorMemberId: string | null;
+}) {
+	const defs = await clubRoleDefs(input.clubId);
+	const paired = pairedRoleIds(defs);
+	// `enabled` matters here (#369): without it, disabling a role (e.g.
+	// Ah-Counter) and then clicking this button would re-add it to every
+	// upcoming meeting — exactly the workflow the toggle exists to prevent.
+	const standard = defs.filter(
+		(d) => d.defaultCount >= 1 && d.enabled && !paired.has(d.id),
+	);
+
+	// Deliberately does NOT exclude cancelled meetings, unlike the enable-toggle
+	// path below (`futureNonCancelledMeetingIds`): that's a #369 addition and
+	// this pre-existing query's behavior toward cancelled meetings was out of
+	// scope to change without its own dedicated test — this comment documents
+	// the divergence is intentional, not an oversight.
+	const upcoming = await db
+		.select({ id: meetings.id })
+		.from(meetings)
+		.where(
+			and(
+				eq(meetings.clubId, input.clubId),
+				gt(meetings.scheduledAt, new Date()),
+			),
+		);
+
+	return backfillMissingRoleSlots({
+		clubId: input.clubId,
+		meetingIds: upcoming.map((m) => m.id),
+		defs: standard,
+		actorMemberId: input.actorMemberId,
+		changeLabel: "template_sync",
+	});
+}
+
+/** Ids of a club's meetings scheduled in the future (`scheduledAt > now`) that
+ *  are not cancelled. Used by the role enable/disable toggle (#369): past
+ *  meetings are the club's history and cancelled ones aren't going to run, so
+ *  neither should gain or lose slots when a role's `enabled` flag flips. */
+async function futureNonCancelledMeetingIds(clubId: string): Promise<string[]> {
+	const rows = await db
+		.select({ id: meetings.id })
+		.from(meetings)
+		.where(
+			and(
+				eq(meetings.clubId, clubId),
+				gt(meetings.scheduledAt, new Date()),
+				ne(meetings.status, "cancelled"),
+			),
+		);
+	return rows.map((r) => r.id);
+}
+
+/** Delete a role's OPEN, UNCLAIMED slots across `meetingIds`, atomically. A
+ *  slot counts as claimed — and is never deleted — if it has an assigned
+ *  member OR an assigned guest; silently un-assigning someone who volunteered
+ *  is the one genuinely bad outcome a disable could cause.
+ *
+ *  The "unclaimed" predicate is embedded directly in the DELETE's WHERE clause
+ *  rather than decided by a separate SELECT beforehand: `claimSlot` is a
+ *  PUBLIC, no-session server fn (`src/server/slots.ts`), so a read-then-delete
+ *  split has a window where a claim lands in between and gets destroyed anyway
+ *  — exactly the outcome this function promises never happens. Postgres
+ *  evaluates a DELETE's WHERE clause against each row's current (lock-waited,
+ *  post-commit) state, so a concurrent claim either commits first (the row no
+ *  longer matches `assignedMemberId/assignedGuestId IS NULL` and survives) or
+ *  loses the row lock race entirely — there is no gap. Same idea as
+ *  `claimSlot`'s own "conditional UPDATE is the race guard" and
+ *  `reassignSlotCore`'s `FOR UPDATE` lock.
+ *
+ *  Returns how many of those meetings had a slot deleted, and how many kept at
+ *  least one claimed slot for the role — read via a follow-up SELECT inside
+ *  the SAME transaction as the delete (any row still present afterward is, by
+ *  construction, claimed) so the count can't be skewed by anything that
+ *  commits after this transaction does. */
+async function removeOpenRoleSlots(
+	meetingIds: string[],
+	roleDefinitionId: string,
+	clubId: string,
+	actorMemberId: string | null,
+): Promise<{ keptClaimedMeetings: number; meetingsChanged: number }> {
+	if (meetingIds.length === 0) {
+		return { keptClaimedMeetings: 0, meetingsChanged: 0 };
+	}
+
+	return db.transaction(async (tx) => {
+		const deleted = await tx
+			.delete(roleSlots)
+			.where(
+				and(
+					inArray(roleSlots.meetingId, meetingIds),
+					eq(roleSlots.roleDefinitionId, roleDefinitionId),
+					isNull(roleSlots.assignedMemberId),
+					isNull(roleSlots.assignedGuestId),
+				),
+			)
+			.returning({ id: roleSlots.id, meetingId: roleSlots.meetingId });
+
+		const affectedMeetings = [...new Set(deleted.map((d) => d.meetingId))];
+		for (const meetingId of affectedMeetings) {
+			await logActivity(tx, {
+				clubId,
+				actorMemberId,
+				action: "meeting_edit",
+				targetType: "meeting",
+				targetId: meetingId,
+				detail: {
+					change: "role_disabled",
+					roleDefinitionIds: [roleDefinitionId],
+				},
+			});
+		}
+
+		// Anything still present for this role on these meetings, post-delete, is
+		// necessarily claimed — we just deleted every unclaimed row. Reading this
+		// inside the same transaction keeps it consistent with the delete above.
+		const remaining = await tx
+			.select({ meetingId: roleSlots.meetingId })
+			.from(roleSlots)
+			.where(
+				and(
+					inArray(roleSlots.meetingId, meetingIds),
+					eq(roleSlots.roleDefinitionId, roleDefinitionId),
+				),
+			);
+		const keptClaimedMeetings = new Set(remaining.map((r) => r.meetingId)).size;
+
+		return { keptClaimedMeetings, meetingsChanged: affectedMeetings.length };
+	});
+}
+
+/** Slot side effects when a role definition's `enabled` flag flips (#369):
+ *  a "skeleton crew" club turning a role off shouldn't have to manually clean
+ *  up every future meeting, and turning it back on shouldn't require a
+ *  separate trip to "Update upcoming meetings to match".
+ *
+ *  - Disabling removes the role's open, unclaimed slots from future,
+ *    non-cancelled meetings — never a claimed one (see `removeOpenRoleSlots`).
+ *  - Enabling backfills one open slot onto every future, non-cancelled meeting
+ *    that currently has none for this role — but ONLY for a non-paired role.
+ *    The Speaker role and its paired Evaluator are managed exclusively by the
+ *    "+ / − speaker" controls (`applyAddSpeakerSlot`/`applyRemoveSpeakerSlot`),
+ *    which always add/remove them together to keep count-parity; backfilling a
+ *    bare Speaker slot here with no matching Evaluator would break that
+ *    invariant on every future meeting. This is a no-op for a paired role,
+ *    mirroring `applyTemplateSyncToUpcomingMeetings`'s own `!paired.has(d.id)`
+ *    exclusion from its "standard" backfill set. For a non-paired role, this
+ *    still never tops up toward `defaultCount` (presence-based, like that same
+ *    function) and is skipped entirely when `defaultCount` is 0.
+ *  - Past and cancelled meetings are never touched either way.
+ *
+ *  Returns `keptClaimedMeetings` (upcoming meetings that still have the role
+ *  assigned to someone — always 0 when enabling) and `meetingsChanged` +
+ *  `rolesAdded` (0 / `[]` when disabling, or when enabling was a no-op) so the
+ *  caller can build an informative toast either way. */
+export async function syncSlotsForRoleEnabledChange(input: {
+	clubId: string;
+	roleDefinitionId: string;
+	roleName: string;
+	defaultCount: number;
+	enabled: boolean;
+	actorMemberId: string | null;
+}): Promise<{
+	keptClaimedMeetings: number;
+	meetingsChanged: number;
+	rolesAdded: string[];
+}> {
+	const meetingIds = await futureNonCancelledMeetingIds(input.clubId);
+	if (meetingIds.length === 0) {
+		return { keptClaimedMeetings: 0, meetingsChanged: 0, rolesAdded: [] };
+	}
+
+	if (!input.enabled) {
+		const result = await removeOpenRoleSlots(
+			meetingIds,
+			input.roleDefinitionId,
+			input.clubId,
+			input.actorMemberId,
+		);
+		return { ...result, rolesAdded: [] };
+	}
+
+	const defs = await clubRoleDefs(input.clubId);
+	const isPaired = pairedRoleIds(defs).has(input.roleDefinitionId);
+	if (isPaired || input.defaultCount < 1) {
+		return { keptClaimedMeetings: 0, meetingsChanged: 0, rolesAdded: [] };
+	}
+
+	const result = await backfillMissingRoleSlots({
+		clubId: input.clubId,
+		meetingIds,
+		defs: [{ id: input.roleDefinitionId, name: input.roleName }],
+		actorMemberId: input.actorMemberId,
+		changeLabel: "role_enabled",
+	});
+	return { keptClaimedMeetings: 0, ...result };
 }
 
 /** Highest-index unclaimed (open, unassigned) slot id for a role, or null. */
