@@ -3,6 +3,7 @@ import type { AgendaRow, AgendaSlot } from "./agenda-runsheet";
 import {
 	applyFlex,
 	buildLegend,
+	buildRunOfShow,
 	expandRunSheet,
 	FLEX_TOLERANCE_MINUTES,
 	RUN_OF_SHOW,
@@ -28,26 +29,77 @@ function slot(over: Partial<AgendaSlot>): AgendaSlot {
 	};
 }
 
-describe("RUN_OF_SHOW template", () => {
-	it("is an ordered list of 13 beats", () => {
-		expect(RUN_OF_SHOW).toHaveLength(13);
+describe("buildRunOfShow", () => {
+	it("returns 15 ordered beats for the corrected default (non-MCF) variant", () => {
+		const beats = buildRunOfShow({ geIntroducesFunctionaries: false });
+		expect(beats).toHaveLength(15);
 	});
 
 	it("every beat has a positive duration", () => {
-		for (const beat of RUN_OF_SHOW) {
-			expect(beat.minutes).toBeGreaterThan(0);
+		for (const geIntroducesFunctionaries of [false, true]) {
+			for (const beat of buildRunOfShow({ geIntroducesFunctionaries })) {
+				expect(beat.minutes).toBeGreaterThan(0);
+			}
 		}
 	});
 
-	it("role beats reference the club's standard role names", () => {
-		const roleNames = RUN_OF_SHOW.filter((b) => b.kind === "role").map(
-			(b) => (b as { roleName: string }).roleName,
+	it("role beats reference the club's standard role keys", () => {
+		const beats = buildRunOfShow({ geIntroducesFunctionaries: false });
+		const roleKeys = beats
+			.filter((b) => b.kind === "role")
+			.map((b) => (b as { roleKey: string }).roleKey);
+		expect(roleKeys).toContain("toastmaster_of_the_day");
+		expect(roleKeys).toContain("speaker");
+		expect(roleKeys).toContain("evaluator");
+		expect(roleKeys).toContain("table_topics_master");
+		expect(roleKeys).toContain("general_evaluator");
+	});
+
+	it("beat 4 (functionary intro) is owned by the Toastmaster of the Day by default", () => {
+		const beats = buildRunOfShow({ geIntroducesFunctionaries: false });
+		const beat4 = beats[3];
+		expect(beat4.kind).toBe("role");
+		expect((beat4 as { roleKey: string }).roleKey).toBe(
+			"toastmaster_of_the_day",
 		);
-		expect(roleNames).toContain("Toastmaster of the Day");
-		expect(roleNames).toContain("Speaker");
-		expect(roleNames).toContain("Evaluator");
-		expect(roleNames).toContain("Table Topics Master");
-		expect(roleNames).toContain("General Evaluator");
+		expect(beat4.detail).toBe(
+			"Introduces the functionaries; each explains their role",
+		);
+	});
+
+	it("beat 4 is owned by the General Evaluator when geIntroducesFunctionaries is true (MCF)", () => {
+		const beats = buildRunOfShow({ geIntroducesFunctionaries: true });
+		const beat4 = beats[3];
+		expect(beat4.kind).toBe("role");
+		expect((beat4 as { roleKey: string }).roleKey).toBe("general_evaluator");
+		expect(beat4.detail).toBe(
+			"Introduces the functionaries; each explains their role",
+		);
+	});
+
+	it("the MCF variant differs from the default ONLY in beat 4's owner", () => {
+		const withoutGe = buildRunOfShow({ geIntroducesFunctionaries: false });
+		const withGe = buildRunOfShow({ geIntroducesFunctionaries: true });
+		expect(withoutGe).toHaveLength(withGe.length);
+		withoutGe.forEach((beat, i) => {
+			if (i === 3) return; // the one beat allowed to differ
+			expect(withGe[i]).toEqual(beat);
+		});
+		expect(withGe[3]).not.toEqual(withoutGe[3]);
+	});
+
+	it("beats 11–13 (the GE closing sequence) are identical across both variants", () => {
+		const withoutGe = buildRunOfShow({ geIntroducesFunctionaries: false });
+		const withGe = buildRunOfShow({ geIntroducesFunctionaries: true });
+		for (const i of [10, 11, 12]) {
+			expect(withGe[i]).toEqual(withoutGe[i]);
+		}
+	});
+
+	it("RUN_OF_SHOW is the corrected default variant, kept exported for existing callers", () => {
+		expect(RUN_OF_SHOW).toEqual(
+			buildRunOfShow({ geIntroducesFunctionaries: false }),
+		);
 	});
 });
 
@@ -86,10 +138,11 @@ describe("expandRunSheet", () => {
 		expect(callToOrder.minutes).toBe(1);
 	});
 
-	it("event beats always render even with no slots", () => {
+	it("renders event beats with no `fallback` unconditionally, even with no slots at all", () => {
 		const rows = expandRunSheet([]);
-		// 7 event beats in the template render regardless of assignees.
-		expect(rows.filter((r) => r.who === "Timer").length).toBe(3);
+		expect(rows.some((r) => r.who === "Sergeant-at-Arms")).toBe(true);
+		expect(rows.filter((r) => r.who === "President")).toHaveLength(2);
+		expect(rows.some((r) => r.who === "Toastmaster")).toBe(true);
 	});
 
 	it("renders a plain role with its assignee name", () => {
@@ -103,11 +156,6 @@ describe("expandRunSheet", () => {
 		expect(rows.some((r) => r.who === "Toastmaster of the Day · Dana")).toBe(
 			true,
 		);
-	});
-
-	it("renders a missing plain role as a label-only row (graceful)", () => {
-		const rows = expandRunSheet([]); // no Toastmaster slot
-		expect(rows.some((r) => r.who === "Toastmaster of the Day")).toBe(true);
 	});
 
 	it("expands speakers by actual slots, numbering when >1, with marks from min/max and duration from max", () => {
@@ -206,9 +254,227 @@ describe("expandRunSheet", () => {
 	});
 });
 
-describe("expandRunSheet flex marker", () => {
-	it("marks exactly one row — the Table Topics row — as flex", () => {
+describe("expandRunSheet — role-key matching (#368)", () => {
+	it("matches a beat's role via roleKey even when the club renamed the role's display name", () => {
+		const rows = expandRunSheet([
+			slot({
+				roleName: "Chief Evaluator", // renamed via updateClubRole
+				roleKey: "general_evaluator", // rename never touches the key
+				category: "leadership",
+				assigneeName: "Priya",
+			}),
+		]);
+		expect(rows.some((r) => r.who === "General Evaluator · Priya")).toBe(true);
+	});
+
+	it("falls back to matching by name when the slot carries no roleKey", () => {
+		const rows = expandRunSheet([
+			slot({
+				roleName: "General Evaluator",
+				roleKey: undefined,
+				category: "leadership",
+				assigneeName: "Priya",
+			}),
+		]);
+		expect(rows.some((r) => r.who === "General Evaluator · Priya")).toBe(true);
+	});
+
+	it("does NOT match by name when the slot carries a different, non-null roleKey", () => {
+		// A custom/renamed role that happens to be named "General Evaluator" but
+		// is really keyed to something else entirely must not satisfy the GE beats.
+		const rows = expandRunSheet([
+			slot({
+				roleName: "General Evaluator",
+				roleKey: "vote_counter",
+				category: "leadership",
+				assigneeName: "Priya",
+			}),
+		]);
+		expect(rows.some((r) => r.detail === "Evaluates the evaluators")).toBe(
+			false,
+		);
+		expect(rows.some((r) => r.detail === "Overall meeting evaluation")).toBe(
+			false,
+		);
+	});
+});
+
+describe("expandRunSheet — omission of no-slot beats (#367)", () => {
+	it("omits a plain-role beat entirely when its role has no slots this meeting", () => {
+		const rows = expandRunSheet([]); // no Toastmaster of the Day slot at all
+		expect(rows.some((r) => r.who.startsWith("Toastmaster of the Day"))).toBe(
+			false,
+		);
+	});
+
+	it("still renders an enabled-but-unclaimed role as an open row (sign-up prompt)", () => {
+		const rows = expandRunSheet([
+			slot({
+				roleName: "Toastmaster of the Day",
+				category: "leadership",
+				assigneeName: null,
+			}),
+		]);
+		expect(
+			rows.some((r) => r.who === "Toastmaster of the Day · — open —"),
+		).toBe(true);
+	});
+
+	it("omits both General Evaluator closing beats (11 & 13) when there's no GE slot", () => {
 		const rows = expandRunSheet([]);
+		expect(rows.some((r) => r.detail === "Evaluates the evaluators")).toBe(
+			false,
+		);
+		expect(rows.some((r) => r.detail === "Overall meeting evaluation")).toBe(
+			false,
+		);
+	});
+});
+
+describe("expandRunSheet — Timer vote-beat fallback (#367)", () => {
+	const voteDetails = [
+		"Timer's report · vote Best Speaker",
+		"Timer's report · vote Best Table Topics",
+		"Timer's report · vote Best Evaluator",
+	];
+	const fallbackDetails = [
+		"Vote Best Speaker",
+		"Vote Best Table Topics",
+		"Vote Best Evaluator",
+	];
+
+	it("keeps the vote beats Timer-owned when a Timer slot exists", () => {
+		const rows = expandRunSheet([
+			slot({ roleName: "Timer", category: "functionary", assigneeName: "T" }),
+		]);
+		for (const detail of voteDetails) {
+			expect(rows.some((r) => r.who === "Timer" && r.detail === detail)).toBe(
+				true,
+			);
+		}
+	});
+
+	it("reassigns the vote beats to the Toastmaster (dropping the timer's-report clause) when there is no Timer slot", () => {
+		const rows = expandRunSheet([]); // no Timer slot
+		for (const detail of fallbackDetails) {
+			expect(
+				rows.some((r) => r.who === "Toastmaster" && r.detail === detail),
+			).toBe(true);
+		}
+		expect(rows.some((r) => r.who === "Timer")).toBe(false);
+	});
+
+	it("still runs all three votes (not omitted) with no Timer role", () => {
+		const rows = expandRunSheet([]);
+		const votes = rows.filter((r) => fallbackDetails.includes(r.detail));
+		expect(votes).toHaveLength(3);
+	});
+});
+
+describe("expandRunSheet — functionary-dependent beats 4 & 12 (#367)", () => {
+	const totd = slot({
+		roleName: "Toastmaster of the Day",
+		category: "leadership",
+		assigneeName: "Dana",
+	});
+	const ge = slot({
+		roleName: "General Evaluator",
+		category: "leadership",
+		assigneeName: "Priya",
+	});
+	const grammarian = slot({
+		roleName: "Grammarian",
+		category: "functionary",
+		assigneeName: "Gina",
+	});
+
+	it("omits beat 4 (functionary intro) when there are no functionary slots, even with a Toastmaster slot", () => {
+		const rows = expandRunSheet([totd]);
+		expect(
+			rows.some(
+				(r) =>
+					r.detail === "Introduces the functionaries; each explains their role",
+			),
+		).toBe(false);
+	});
+
+	it("renders beat 4 when at least one functionary slot exists", () => {
+		const rows = expandRunSheet([totd, grammarian]);
+		expect(
+			rows.some(
+				(r) =>
+					r.who === "Toastmaster of the Day · Dana" &&
+					r.detail === "Introduces the functionaries; each explains their role",
+			),
+		).toBe(true);
+	});
+
+	it("omits beat 12 (functionary reports) when there are no functionary slots, even with a GE slot", () => {
+		const rows = expandRunSheet([ge]);
+		expect(
+			rows.some((r) => r.detail === "Calls for the functionary reports"),
+		).toBe(false);
+		// But the OTHER two GE beats (not functionary-gated) still render.
+		expect(rows.some((r) => r.detail === "Evaluates the evaluators")).toBe(
+			true,
+		);
+		expect(rows.some((r) => r.detail === "Overall meeting evaluation")).toBe(
+			true,
+		);
+	});
+
+	it("renders beat 12 when the GE slot exists and at least one functionary slot exists", () => {
+		const rows = expandRunSheet([ge, grammarian]);
+		expect(
+			rows.some(
+				(r) =>
+					r.who === "General Evaluator · Priya" &&
+					r.detail === "Calls for the functionary reports",
+			),
+		).toBe(true);
+	});
+
+	it("MCF variant: beat 4 (GE-owned) is still omitted when there are no functionary slots, despite a GE slot existing", () => {
+		const template = buildRunOfShow({ geIntroducesFunctionaries: true });
+		const rows = expandRunSheet([totd, ge], template);
+		expect(
+			rows.some(
+				(r) =>
+					r.detail === "Introduces the functionaries; each explains their role",
+			),
+		).toBe(false);
+	});
+
+	it("MCF variant: beat 4 renders owned by the General Evaluator when GE and a functionary both exist", () => {
+		const template = buildRunOfShow({ geIntroducesFunctionaries: true });
+		const rows = expandRunSheet([totd, ge, grammarian], template);
+		expect(
+			rows.some(
+				(r) =>
+					r.who === "General Evaluator · Priya" &&
+					r.detail === "Introduces the functionaries; each explains their role",
+			),
+		).toBe(true);
+		// It is NOT owned by the Toastmaster in this variant.
+		expect(
+			rows.some(
+				(r) =>
+					r.who.startsWith("Toastmaster of the Day") &&
+					r.detail === "Introduces the functionaries; each explains their role",
+			),
+		).toBe(false);
+	});
+});
+
+describe("expandRunSheet flex marker", () => {
+	const ttm = slot({
+		roleName: "Table Topics Master",
+		category: "leadership",
+		assigneeName: "T",
+	});
+
+	it("marks exactly one row — the Table Topics row — as flex", () => {
+		const rows = expandRunSheet([ttm]);
 		const flexed = rows.filter((r) => r.flex === true);
 		expect(flexed).toHaveLength(1);
 		expect(flexed[0].who).toContain("Table Topics");
@@ -216,7 +482,12 @@ describe("expandRunSheet flex marker", () => {
 
 	it("does not mark any row when the template has no flex beat", () => {
 		const noFlex = RUN_OF_SHOW.map((b) => ({ ...b, flex: undefined }));
-		const rows = expandRunSheet([], noFlex);
+		const rows = expandRunSheet([ttm], noFlex);
+		expect(rows.some((r) => r.flex === true)).toBe(false);
+	});
+
+	it("marks no row as flex when the Table Topics role itself has no slots", () => {
+		const rows = expandRunSheet([]);
 		expect(rows.some((r) => r.flex === true)).toBe(false);
 	});
 });

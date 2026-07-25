@@ -120,6 +120,11 @@ async function loadMeetingDetail(
 			claimedAt: roleSlots.claimedAt,
 			evaluatesSlotId: roleSlots.evaluatesSlotId,
 			roleName: roleDefinitions.name,
+			// Stable role identity (#368) for the agenda run-of-show (#367) to bind
+			// beats to by key rather than free-text name — a rename via
+			// `updateClubRole` never touches this. Null for a custom club role, or
+			// a standard role predating the #368 backfill.
+			roleKey: roleDefinitions.key,
 			category: roleDefinitions.category,
 			description: roleDefinitions.description,
 			sortOrder: roleDefinitions.sortOrder,
