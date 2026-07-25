@@ -9,7 +9,7 @@
  */
 import { and, eq, gte } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clubs, meetings, roleSlots } from "#/db/schema";
+import { clubs, meetings, roleDefinitions, roleSlots } from "#/db/schema";
 import { utcToZonedWallTime, zonedWallTimeToUtc } from "#/lib/datetime";
 import {
 	cleanup,
@@ -85,6 +85,26 @@ describe.skipIf(!hasTestDb)("batch meeting creation", () => {
 		expect(jan5?.scheduledAt.toISOString()).toBe(
 			zonedWallTimeToUtc("2027-01-05T19:00", TZ).toISOString(),
 		);
+	});
+
+	it("generates no slots for a disabled role (#368)", async () => {
+		// Disable the club's only seeded role definition ("Timer") before the
+		// batch reads the template once and reuses it for every created meeting.
+		await testDb
+			.update(roleDefinitions)
+			.set({ enabled: false })
+			.where(eq(roleDefinitions.id, club.roleDefinitionId));
+
+		const res = await applyBatchCreateMeetings({
+			clubId: club.clubId,
+			wallTimes: ["2027-04-06T19:00"],
+			location: "Disabled Role Hall",
+		});
+		expect(res.createdCount).toBe(1);
+
+		const created = await meetingsByLocation(club.clubId, "Disabled Role Hall");
+		expect(created).toHaveLength(1);
+		expect(await slotCount(created[0].id)).toBe(0);
 	});
 
 	it("skips a date that already has a meeting and re-runs idempotently", async () => {

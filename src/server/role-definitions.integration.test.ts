@@ -121,6 +121,7 @@ describe.skipIf(!hasTestDb)("role-definition management", () => {
 			.select({
 				id: roleDefinitions.id,
 				defaultCount: roleDefinitions.defaultCount,
+				enabled: roleDefinitions.enabled,
 			})
 			.from(roleDefinitions)
 			.where(eq(roleDefinitions.id, seed.roleDefinitionId));
