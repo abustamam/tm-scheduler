@@ -1,6 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { roleSheetByKey } from "#/data/role-sheets";
-import { getMembership, getSessionUser } from "#/server/guards";
 import { getMeetingClubId } from "#/server/minutes-logic";
 import { renderRoleSheetPdf } from "#/server/role-sheets-pdf-logic";
 
@@ -8,8 +7,10 @@ import { renderRoleSheetPdf } from "#/server/role-sheets-pdf-logic";
  * GET /api/meetings/$id/role-sheets/$sheet/pdf — download a meeting-aware role
  * sheet, pre-filled with the club name, meeting date, and scheduled speakers
  * (#311). Generated server-side via `@react-pdf/renderer` (no Chromium),
- * mirroring the minutes-PDF route. Any signed-in member of the club may
- * download (prep material, not private minutes): anon → 401, non-member → 403.
+ * mirroring the minutes-PDF route. PUBLIC (#317/#365): the sheet contains only
+ * what the public agenda already shows — club, date, scheduled speaker names,
+ * and the Word of the Day — no member contact or private minutes, so anyone
+ * viewing the canonical meeting page can download it. Unknown sheet/meeting → 404.
  */
 export const Route = createFileRoute(
 	"/api/meetings/$id/role-sheets/$sheet/pdf",
@@ -23,21 +24,11 @@ export const Route = createFileRoute(
 					return new Response("Unknown role sheet.", { status: 404 });
 				}
 
-				const sessionUser = await getSessionUser();
-				if (!sessionUser) {
-					return new Response("Sign in required.", { status: 401 });
-				}
-
-				let clubId: string;
+				// Validate the meeting exists (clean 404 instead of a render 500).
 				try {
-					clubId = await getMeetingClubId(meetingId);
+					await getMeetingClubId(meetingId);
 				} catch {
 					return new Response("Meeting not found.", { status: 404 });
-				}
-
-				const membership = await getMembership(sessionUser.id, clubId);
-				if (!membership) {
-					return new Response("Not a member of this club.", { status: 403 });
 				}
 
 				const { bytes, clubName, date } = await renderRoleSheetPdf(

@@ -616,9 +616,9 @@ function MeetingView() {
 						deck={deck}
 						clubName={clubName}
 					/>
-					{effectiveCanManage ? (
-						<MeetingRoleSheets meetingId={meeting.id} />
-					) : null}
+					{/* Public prep material — role-sheet PDFs hold only public-agenda
+					    data, so every audience gets the download menu (#365). */}
+					<MeetingRoleSheets meetingId={meeting.id} />
 					{effectiveCanManage && !locked && addableRoles.length > 0 ? (
 						<Button
 							size="sm"

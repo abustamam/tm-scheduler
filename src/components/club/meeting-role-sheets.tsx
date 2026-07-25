@@ -10,10 +10,10 @@ import { ROLE_SHEETS } from "#/data/role-sheets";
 /**
  * "Role sheets" download menu for a meeting (#311). Each item downloads a PDF
  * pre-filled with this meeting's club, date, and scheduled speakers from
- * `/api/meetings/$id/role-sheets/$sheet/pdf` (member-gated). Client-safe: imports
- * only the registry in `#/data/role-sheets`, never the react-pdf layout. Lives on
- * the signed-in meeting view only, so the member-gated download is never shown to
- * anonymous guests.
+ * `/api/meetings/$id/role-sheets/$sheet/pdf` (public — the sheet holds only
+ * public-agenda data, no contact/minutes). Client-safe: imports only the registry
+ * in `#/data/role-sheets`, never the react-pdf layout. Shown to every audience on
+ * the canonical meeting page (#317/#365).
  */
 export function MeetingRoleSheets({ meetingId }: { meetingId: string }) {
 	return (
