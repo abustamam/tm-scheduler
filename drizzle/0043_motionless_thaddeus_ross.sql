@@ -1,0 +1,2 @@
+ALTER TABLE "meetings" ADD COLUMN "meeting_number" integer;--> statement-breakpoint
+CREATE UNIQUE INDEX "meetings_club_number_unique" ON "meetings" USING btree ("club_id","meeting_number") WHERE "meetings"."meeting_number" is not null;

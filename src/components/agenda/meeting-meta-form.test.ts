@@ -30,6 +30,27 @@ describe("meetingUpdateFromForm", () => {
 		expect(meetingUpdateFromForm(form({}), ctx).reminders).toBeUndefined();
 	});
 
+	it("sends a typed meeting number as a number (#358)", () => {
+		expect(
+			meetingUpdateFromForm(form({ meetingNumber: " 56 " }), ctx).meetingNumber,
+		).toBe(56);
+	});
+
+	it("sends null for a blank meeting number so it falls back to derived (#358)", () => {
+		// Blank is meaningful here, unlike the text fields: it CLEARS the stored
+		// number and hands the meeting back to automatic numbering.
+		expect(
+			meetingUpdateFromForm(form({ meetingNumber: "  " }), ctx).meetingNumber,
+		).toBeNull();
+	});
+
+	it("omits the meeting number entirely when the field isn't rendered (#358)", () => {
+		// The number input is admin-only. A self-serve TMOD's form has no such
+		// field at all, and saving their theme edit must NOT wipe the club's
+		// meeting number — absent (leave alone) is distinct from blank (clear).
+		expect(meetingUpdateFromForm(form({}), ctx).meetingNumber).toBeUndefined();
+	});
+
 	it("carries the other meta fields and the provided scheduledAt", () => {
 		const data = meetingUpdateFromForm(
 			form({ theme: " New Horizons ", lengthMinutes: "75" }),

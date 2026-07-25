@@ -302,6 +302,13 @@
       "when": 1784753401462,
       "tag": "0042_sleepy_blizzard",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1784932888284,
+      "tag": "0043_motionless_thaddeus_ross",
+      "breakpoints": true
     }
   ]
 }

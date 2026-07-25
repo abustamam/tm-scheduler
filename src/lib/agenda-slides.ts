@@ -34,6 +34,8 @@ export type Slide =
 			clubName: string;
 			district: string | null;
 			clubNumber: string | null;
+			/** The club's own meeting number ("Meeting #56", #358); null ⇒ omitted. */
+			meetingNumber: number | null;
 			scheduledAt: Date;
 			timezone: string;
 	  }
@@ -131,6 +133,8 @@ export function buildSlideDeck(
 	club: ClubForDeck,
 	slots: AgendaSlot[],
 	nextMeetingAt: Date | null = null,
+	/** The club's effective meeting number (#358) — stored or derived upstream. */
+	meetingNumber: number | null = null,
 ): Slide[] {
 	const deck: Slide[] = [];
 
@@ -139,6 +143,7 @@ export function buildSlideDeck(
 		clubName: club.name,
 		district: club.district,
 		clubNumber: club.clubNumber,
+		meetingNumber,
 		scheduledAt: new Date(meeting.scheduledAt),
 		timezone: club.timezone,
 	});

@@ -200,6 +200,7 @@ function MeetingView() {
 		contactedMemberIds,
 		minutes,
 		minutesEmail,
+		meetingNumber,
 		nextMeetingAt,
 		urlKey,
 	} = Route.useLoaderData();
@@ -243,6 +244,7 @@ function MeetingView() {
 		},
 		slots,
 		nextMeetingAt,
+		meetingNumber,
 	);
 
 	const { isTmod, isGrammarian } = deriveMeetingRoleFlags(slots, myId);
@@ -672,6 +674,7 @@ function MeetingView() {
 
 			<MeetingAgenda
 				slots={slots}
+				effectiveMeetingNumber={meetingNumber}
 				viewer={viewer}
 				actions={actions}
 				roster={roster}

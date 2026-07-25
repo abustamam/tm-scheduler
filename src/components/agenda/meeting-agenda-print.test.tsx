@@ -23,6 +23,7 @@ const header: AgendaHeader = {
 	wordOfTheDay: "Ebullient",
 	location: null,
 	announcements: null,
+	meetingNumber: null,
 };
 
 // One timed speaker beat (has green/amber/red marks) + one plain beat (no marks).
@@ -105,6 +106,21 @@ describe("MeetingAgendaPrint announcements", () => {
 		it(`renders no announcements on the ${layout} one-pager when empty`, () => {
 			renderWith(layout, header);
 			expect(screen.queryByText("Bring a guest")).toBeNull();
+		});
+	}
+
+	// #358 — the club's own meeting number, on every layout.
+	const withNumber: AgendaHeader = { ...header, meetingNumber: 56 };
+
+	for (const layout of ["grid", "editorial", "spacious", "timing"] as const) {
+		it(`${layout}: prints the meeting number when the club has one`, () => {
+			renderWith(layout, withNumber);
+			expect(screen.getByText(/Meeting #56/)).toBeTruthy();
+		});
+
+		it(`${layout}: prints no meeting-number label when there is none`, () => {
+			renderWith(layout, header);
+			expect(screen.queryByText(/Meeting #/)).toBeNull();
 		});
 	}
 

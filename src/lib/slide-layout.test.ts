@@ -172,12 +172,47 @@ describe("slideLayout bodies", () => {
 		}
 	});
 
+	it("title splash carries the club's meeting number when set (#358)", () => {
+		const l = slideLayout({
+			kind: "title",
+			clubName: "MCF",
+			district: "District 39",
+			clubNumber: "28677176",
+			meetingNumber: 56,
+			scheduledAt: new Date("2026-07-10T00:00:00Z"),
+			timezone: "UTC",
+		});
+		expect(l.chrome).toBe("splash");
+		if (l.chrome === "splash") {
+			expect(l.sub.map((s) => s.text ?? "")).toContain("Meeting #56");
+		}
+	});
+
+	it("title splash omits the meeting number when the club has none", () => {
+		const l = slideLayout({
+			kind: "title",
+			clubName: "MCF",
+			district: null,
+			clubNumber: null,
+			meetingNumber: null,
+			scheduledAt: new Date("2026-07-10T00:00:00Z"),
+			timezone: "UTC",
+		});
+		expect(l.chrome).toBe("splash");
+		if (l.chrome === "splash") {
+			expect(l.sub.map((s) => s.text ?? "").join(" ")).not.toContain(
+				"Meeting #",
+			);
+		}
+	});
+
 	it("title splash sub carries district, club #, date, start time", () => {
 		const l = slideLayout({
 			kind: "title",
 			clubName: "MCF",
 			district: "District 39",
 			clubNumber: "28677176",
+			meetingNumber: null,
 			scheduledAt: new Date("2026-07-10T00:00:00Z"),
 			timezone: "UTC",
 		});

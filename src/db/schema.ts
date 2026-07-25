@@ -586,6 +586,14 @@ export const meetings = pgTable(
 		wodDefinition: text("wod_definition"),
 		wodExample: text("wod_example"),
 		status: meetingStatusEnum("status").notNull().default("scheduled"),
+		// The club's own meeting number ("Meeting #56"), #358. NULL = provisional:
+		// the number is DERIVED for display by counting held meetings forward from
+		// the most recent numbered one (see src/lib/meeting-number.ts) and only
+		// FROZEN into this column when the meeting is completed, or when a human
+		// types one. Deliberately not stamped at insert — the #190 top-up creates
+		// meetings in batches, so a later cancellation would invalidate every
+		// stored number after it.
+		meetingNumber: integer("meeting_number"),
 		notes: text("notes"),
 		// Free-text club announcements (one per line), shown on the meeting
 		// agenda, the printable agenda, and the present-mode Announcements slide.
@@ -600,6 +608,12 @@ export const meetings = pgTable(
 		// #190 read-triggered top-up (deterministic occurrences ⇒ ON CONFLICT DO
 		// NOTHING). Also serves the club+scheduled lookups the plain index did.
 		uniqueIndex("meetings_club_scheduled_unique").on(t.clubId, t.scheduledAt),
+		// One meeting number per club (#358). PARTIAL — the vast majority of rows
+		// carry NULL (provisional/derived) and NULLs must not collide. Catches a
+		// double-assignment (two meetings frozen as #57) at the database.
+		uniqueIndex("meetings_club_number_unique")
+			.on(t.clubId, t.meetingNumber)
+			.where(sql`${t.meetingNumber} is not null`),
 	],
 );
 
