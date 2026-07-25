@@ -42,15 +42,25 @@ const club: ClubForDeck = {
 	meetingSchedule: "2nd & 4th Thursday",
 };
 
-/** `buildSlideDeck` with the standard fixtures, overridden per test. */
+/** `buildSlideDeck` with the standard fixtures, overridden per test. The club
+ *  config is required (#367), so the helper pins the standard flow and each
+ *  test opts into MCF's variant explicitly. */
 const build = (over: Partial<SlideDeckInput> = {}) =>
-	buildSlideDeck({ meeting, club, slots: [], ...over });
+	buildSlideDeck({
+		meeting,
+		club,
+		slots: [],
+		geIntroducesFunctionaries: false,
+		...over,
+	});
 
 const kinds = (slots: AgendaSlot[] = []) => build({ slots }).map((s) => s.kind);
 
 describe("buildSlideDeck anchors", () => {
-	it("always emits title, toastmaster, thankYou — even with no slots", () => {
-		expect(kinds([])).toEqual(["title", "toastmaster", "thankYou"]);
+	it("always emits title and thankYou — even with no slots", () => {
+		// The Toastmaster slide is NOT an anchor: it is beat 3 in slide form and
+		// is gated on the role, like every other section (#367).
+		expect(kinds([])).toEqual(["title", "thankYou"]);
 	});
 
 	it("title slide carries club identity + schedule time", () => {
@@ -64,7 +74,7 @@ describe("buildSlideDeck anchors", () => {
 		});
 	});
 
-	it("toastmaster slide shows the assignee, else the open placeholder", () => {
+	it("toastmaster slide shows the assignee, or the open placeholder when unclaimed", () => {
 		const withTmod = build({
 			slots: [
 				slot({
@@ -77,10 +87,24 @@ describe("buildSlideDeck anchors", () => {
 			kind: "toastmaster",
 			name: "Schinthia",
 		});
-		expect(build()[1]).toMatchObject({
+		// Enabled but unclaimed: the role still has a slot, so it still projects —
+		// as a sign-up prompt, exactly as the run sheet prints it.
+		const unclaimed = build({
+			slots: [slot({ roleName: "Toastmaster of the Day", assigneeName: null })],
+		});
+		expect(unclaimed[1]).toMatchObject({
 			kind: "toastmaster",
 			name: "— open —",
 		});
+	});
+
+	it("omits the toastmaster slide when the club does not run the role (#367)", () => {
+		// No Toastmaster-of-the-Day slot at all (the role is disabled, #368) ⇒ the
+		// run sheet omits beat 3, so the deck must omit the slide rather than
+		// projecting "— open —" for a role the club never configured.
+		expect(kinds([slot({ roleName: "Grammarian" })])).not.toContain(
+			"toastmaster",
+		);
 	});
 
 	it("thankYou carries the club meeting schedule", () => {
@@ -151,13 +175,36 @@ describe("buildSlideDeck speeches", () => {
 	it("emits one speech slide per speaker then a vote slide", () => {
 		expect(kinds(speakers)).toEqual([
 			"title",
-			"toastmaster",
 			"speech",
 			"speech",
 			"voteSpeaker",
 			"awards",
 			"thankYou",
 		]);
+	});
+
+	it("binds speakers by role key, not the isSpeakerRole flag (#367/#368)", () => {
+		// A club-invented role can also carry isSpeakerRole. It binds to no beat,
+		// so it must project no speech slide and win no Best-Speaker vote either.
+		const custom = slot({
+			id: "cus",
+			roleName: "Ice Breaker",
+			roleKey: null,
+			category: "speaker",
+			isSpeakerRole: true,
+			assigneeName: "Nadia",
+		});
+		expect(kinds([custom])).toEqual(["title", "thankYou"]);
+		// …while a RENAMED standard speaker role keeps its key and still binds.
+		const renamed = slot({
+			id: "sp",
+			roleName: "Featured Speaker",
+			roleKey: "speaker",
+			category: "speaker",
+			isSpeakerRole: true,
+			assigneeName: "Rehanna Khan",
+		});
+		expect(kinds([renamed])).toContain("speech");
 	});
 
 	it("speech slide carries speaker, title, level, and real time range", () => {
@@ -213,7 +260,6 @@ describe("buildSlideDeck table topics", () => {
 	it("emits tableTopics + voteTableTopics when the role exists", () => {
 		expect(kinds([tt])).toEqual([
 			"title",
-			"toastmaster",
 			"tableTopics",
 			"voteTableTopics",
 			"awards",
@@ -394,9 +440,9 @@ describe("buildSlideDeck functionary reports (#367 / #353)", () => {
 			"functionaryIntro",
 			"speech",
 			"voteSpeaker",
-			"evalIntro",
 			"evaluation",
 			"voteEvaluator",
+			"evaluatorEvaluation",
 			"functionaryReports",
 			"generalEvaluation",
 			"awards",
@@ -444,12 +490,14 @@ describe("buildSlideDeck evaluation session", () => {
 	it("orders the full evaluation session correctly", () => {
 		expect(kinds([ge, speaker, evaluator])).toEqual([
 			"title",
-			"toastmaster",
 			"speech",
 			"voteSpeaker",
-			"evalIntro",
 			"evaluation",
 			"voteEvaluator",
+			// Beat 11 — the GE evaluates the evaluators, AFTER the Best-Evaluator
+			// vote, where the run sheet puts it. The old `evalIntro` slide sat
+			// before the evaluations, matching no beat at all.
+			"evaluatorEvaluation",
 			"generalEvaluation",
 			"awards",
 			"thankYou",
@@ -470,6 +518,47 @@ describe("buildSlideDeck evaluation session", () => {
 	it("omits GE slides when no General Evaluator slot exists", () => {
 		expect(kinds([])).not.toContain("generalEvaluation");
 		expect(kinds([])).not.toContain("functionaryReports");
+		expect(kinds([])).not.toContain("evaluatorEvaluation");
+	});
+
+	it("gates beat 11 on the General Evaluator, NOT on the evaluators (#367)", () => {
+		// Spec: no General Evaluator ⇒ beats 11–13 all vanish and nothing
+		// replaces the overall meeting evaluation. Before this fix the deck gated
+		// the slide on the EVALUATORS and fell back to the literal role name, so a
+		// club with evaluators and no GE projected "General Evaluator: General
+		// Evaluator".
+		const noGe = build({ slots: [speaker, evaluator] });
+		expect(noGe.map((s) => s.kind)).not.toContain("evaluatorEvaluation");
+		expect(JSON.stringify(noGe)).not.toContain("General Evaluator");
+
+		// …and symmetrically, a GE with no evaluators still gives beat 11.
+		expect(kinds([ge])).toContain("evaluatorEvaluation");
+	});
+
+	it("beat 11 names the GE holder, or the open placeholder when unclaimed", () => {
+		const openGe = slot({
+			id: "ge",
+			roleName: "General Evaluator",
+			category: "leadership",
+			assigneeName: null,
+		});
+		expect(
+			build({ slots: [ge] }).find((s) => s.kind === "evaluatorEvaluation"),
+		).toMatchObject({ name: "Saiful Haque", time: "2 minutes" });
+		expect(
+			build({ slots: [openGe] }).find((s) => s.kind === "evaluatorEvaluation"),
+		).toMatchObject({ name: "— open —" });
+	});
+
+	it("the Best-Evaluator vote carries whether the club runs a Timer (#367)", () => {
+		// The run sheet's beat-10 fallback drops the timer's-report clause when
+		// there is no Timer; the slide's copy has to adapt on the same signal.
+		const voteOf = (slots: AgendaSlot[]) =>
+			build({ slots }).find((s) => s.kind === "voteEvaluator");
+		expect(voteOf([speaker, evaluator])).toMatchObject({ hasTimer: false });
+		expect(voteOf([speaker, evaluator, timer])).toMatchObject({
+			hasTimer: true,
+		});
 	});
 });
 
@@ -516,13 +605,8 @@ describe("buildSlideDeck awards + reminders", () => {
 		const deck = build({
 			meeting: { ...meeting, reminders: "Choose a learning path." },
 		});
-		expect(deck.map((s) => s.kind)).toEqual([
-			"title",
-			"toastmaster",
-			"reminders",
-			"thankYou",
-		]);
-		expect(deck[2]).toMatchObject({
+		expect(deck.map((s) => s.kind)).toEqual(["title", "reminders", "thankYou"]);
+		expect(deck[1]).toMatchObject({
 			kind: "reminders",
 			text: "Choose a learning path.",
 		});
@@ -612,10 +696,10 @@ describe("buildSlideDeck full meeting ordering", () => {
 			"voteSpeaker",
 			"tableTopics",
 			"voteTableTopics",
-			"evalIntro",
 			"evaluation",
 			"evaluation",
 			"voteEvaluator",
+			"evaluatorEvaluation",
 			"functionaryReports",
 			"generalEvaluation",
 			"awards",

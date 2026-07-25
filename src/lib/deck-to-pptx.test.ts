@@ -106,14 +106,24 @@ function slideText(pptx: PptxGenJS, i: number): string {
 
 describe("deckToPptx", () => {
 	it("emits exactly one native slide per deck slide, in order", () => {
-		const deck = buildSlideDeck({ meeting, club, slots: fullSlots });
+		const deck = buildSlideDeck({
+			meeting,
+			club,
+			slots: fullSlots,
+			geIntroducesFunctionaries: false,
+		});
 		const pptx = deckToPptx(PptxGenJS, deck);
 		// biome-ignore lint/suspicious/noExplicitAny: reads pptxgenjs internals
 		expect((pptx as any).slides).toHaveLength(deck.length);
 	});
 
 	it("writes the club name onto the title slide and nominees onto votes", () => {
-		const deck = buildSlideDeck({ meeting, club, slots: fullSlots });
+		const deck = buildSlideDeck({
+			meeting,
+			club,
+			slots: fullSlots,
+			geIntroducesFunctionaries: false,
+		});
 		const pptx = deckToPptx(PptxGenJS, deck);
 		expect(slideText(pptx, 0)).toContain("MCF Toastmasters Club");
 		const voteIdx = deck.findIndex((s) => s.kind === "voteSpeaker");
@@ -123,14 +133,24 @@ describe("deckToPptx", () => {
 	});
 
 	it("stamps the Toastmasters non-affiliation disclaimer on content-slide footers", () => {
-		const deck = buildSlideDeck({ meeting, club, slots: fullSlots });
+		const deck = buildSlideDeck({
+			meeting,
+			club,
+			slots: fullSlots,
+			geIntroducesFunctionaries: false,
+		});
 		const pptx = deckToPptx(PptxGenJS, deck);
 		const allText = deck.map((_, i) => slideText(pptx, i)).join("\n");
 		expect(allText).toContain(TOASTMASTERS_DISCLAIMER);
 	});
 
 	it("produces a real, non-empty pptx buffer that opens as a zip (pptx)", async () => {
-		const deck = buildSlideDeck({ meeting, club, slots: [] });
+		const deck = buildSlideDeck({
+			meeting,
+			club,
+			slots: [],
+			geIntroducesFunctionaries: false,
+		});
 		const pptx = deckToPptx(PptxGenJS, deck);
 		const buf = (await pptx.write({ outputType: "nodebuffer" })) as Buffer;
 		expect(buf.length).toBeGreaterThan(0);
@@ -164,6 +184,7 @@ describe("pptx via slideLayout", () => {
 			club,
 			slots: fullSlots,
 			nextMeetingAt: new Date("2026-07-23T23:45:00Z"),
+			geIntroducesFunctionaries: false,
 		});
 		const pptx = deckToPptx(PptxGenJS, deck);
 		expect(pptx).toBeTruthy();

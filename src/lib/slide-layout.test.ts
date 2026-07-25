@@ -18,8 +18,12 @@ describe("slideLayout headers (no 'Session', title-only)", () => {
 			}),
 		).toBe("Word of the Day");
 		expect(
-			contentHeader({ kind: "evalIntro", name: "Riyaz", time: "4–6 minutes" }),
-		).toBe("Speech Evaluation");
+			contentHeader({
+				kind: "evaluatorEvaluation",
+				name: "Riyaz",
+				time: "2 minutes",
+			}),
+		).toBe("Evaluation of the Evaluators");
 		expect(
 			contentHeader({
 				kind: "generalEvaluation",
@@ -150,6 +154,42 @@ describe("slideLayout bodies", () => {
 		} else {
 			throw new Error("expected centered");
 		}
+	});
+
+	it("vote-evaluator asks for the timer's report only when the club runs a Timer (#367)", () => {
+		const lines = (hasTimer: boolean) => {
+			const l = slideLayout({
+				kind: "voteEvaluator",
+				names: ["Riyaz"],
+				hasTimer,
+			});
+			if (l.chrome !== "content" || l.body.form !== "centered")
+				throw new Error("expected centered");
+			return l.body.lines.map((x) => x.text);
+		};
+		expect(lines(true)).toEqual([
+			"Ask for timer’s report:",
+			"Please Vote for Best Evaluator:",
+			"Riyaz",
+		]);
+		// The run sheet drops the timer's-report clause the same way (#367); the
+		// vote itself still happens.
+		expect(lines(false)).toEqual(["Please Vote for Best Evaluator:", "Riyaz"]);
+	});
+
+	it("evaluation of the evaluators is the GE's beat-11 slide (#367)", () => {
+		const l = slideLayout({
+			kind: "evaluatorEvaluation",
+			name: "Riyaz",
+			time: "2 minutes",
+		});
+		if (l.chrome === "content" && l.body.form === "centered") {
+			expect(l.body.lines.map((x) => x.text)).toEqual([
+				"General Evaluator:",
+				"Riyaz",
+				"Time: 2 minutes",
+			]);
+		} else throw new Error("expected centered");
 	});
 
 	it("functionary intro team line lists filled roles only", () => {

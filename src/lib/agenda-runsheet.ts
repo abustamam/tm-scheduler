@@ -58,6 +58,11 @@ export type AgendaRow = {
 /** A functionary/uncovered role shown in the header legend. */
 export type LegendEntry = { role: string; name: string };
 
+/** A standard role a beat can bind to: the immutable `role_definitions.key`
+ *  (#368) plus the canonical display name used as a fallback for slots that
+ *  predate the backfill. */
+export type BeatRole = { roleKey: string; roleName: string };
+
 /**
  * A beat in the standard run-of-show. `flex` marks the single squishy beat.
  *
@@ -68,8 +73,13 @@ export type LegendEntry = { role: string; name: string };
  * - A `role` beat's own `roleKey`/`roleName` gate it directly: no slots for
  *   that role this meeting ⇒ the beat is omitted.
  * - `requiresAnyOf` is an ADDITIONAL gate for a beat that is about OTHER
- *   roles besides its owner (the functionary-intro and functionary-reports
- *   beats): omitted unless at least one of these roles has a slot.
+ *   roles besides its owner: the functionary-intro and functionary-reports
+ *   beats (nothing to introduce, nobody to call for a report), and the three
+ *   vote beats, which belong to a segment — a club with no Table Topics Master
+ *   must not print "vote Best Table Topics" for a segment not on its agenda.
+ *   A beat is omitted unless at least one of these roles has a slot.
+ * - `detail` may contain `ROLES_TOKEN`, replaced at expansion time by the
+ *   `requiresAnyOf` roles the club actually runs, under their own names.
  * - An `event` beat's `fallback` reassigns it to a different owner/detail
  *   when `fallback.roleKey` has no slots, instead of disappearing — the
  *   Timer's-report vote beats become Toastmaster-run plain votes.
@@ -89,9 +99,8 @@ export type Beat = (
 			role: "plain" | "speaker" | "evaluator";
 			detail: string;
 			minutes: number;
-			requiresAnyOf?: { roleKey: string; roleName: string }[];
 	  }
-) & { flex?: true };
+) & { requiresAnyOf?: BeatRole[]; flex?: true };
 
 /** Fallback speaker duration when a speaker slot has no maxMinutes. */
 export const DEFAULT_SPEAKER_MINUTES = 7;
@@ -103,6 +112,13 @@ export const FLEX_TOLERANCE_MINUTES = 2;
 
 /** Placeholder shown for an open (unassigned) slot. */
 export const OPEN_LABEL = "— open —";
+
+/** Token in a beat's `detail`, replaced at expansion time by the roles from
+ *  the beat's `requiresAnyOf` that the club actually runs, under the club's OWN
+ *  display names (#367). Beat 4 uses it so the printed row names only the
+ *  functionaries this club has — the same list the deck's `functionaryIntro`
+ *  slide enumerates — rather than a fixed "the functionaries". */
+export const ROLES_TOKEN = "{roles}";
 
 /** Functionary-category roles for the header legend (Timer, Ah-Counter, Grammarian…). */
 export function buildLegend(slots: AgendaSlot[]): LegendEntry[] {
@@ -123,12 +139,24 @@ export type RunOfShowConfig = { geIntroducesFunctionaries: boolean };
  *  functionary-intro and functionary-reports beats depend on collectively —
  *  "introduce/call for the functionaries" only makes sense once a club runs
  *  at least one. */
-const FUNCTIONARY_ROLES: { roleKey: string; roleName: string }[] = [
+const FUNCTIONARY_ROLES: BeatRole[] = [
 	{ roleKey: "grammarian", roleName: "Grammarian" },
 	{ roleKey: "ah_counter", roleName: "Ah-Counter" },
 	{ roleKey: "timer", roleName: "Timer" },
 	{ roleKey: "vote_counter", roleName: "Vote Counter" },
 ];
+
+/** The three segments that each end in a vote. Single-sourced so a vote beat's
+ *  `requiresAnyOf` gate can never drift from the segment beat it follows. */
+const SPEAKER_ROLE: BeatRole = { roleKey: "speaker", roleName: "Speaker" };
+const TABLE_TOPICS_ROLE: BeatRole = {
+	roleKey: "table_topics_master",
+	roleName: "Table Topics Master",
+};
+const EVALUATOR_ROLE: BeatRole = {
+	roleKey: "evaluator",
+	roleName: "Evaluator",
+};
 
 /**
  * Build the standard Toastmasters run-of-show (#367). Pure, no db — every
@@ -138,10 +166,13 @@ const FUNCTIONARY_ROLES: { roleKey: string; roleName: string }[] = [
  * function or its caller special-casing any one role by name.
  *
  * The corrected default flow: the Toastmaster of the Day introduces the
- * functionaries at the top (beat 4) — each explains their own role, which is
- * when the Grammarian gives the Word of the Day — and the General Evaluator's
- * work happens at the end (beats 11–13): evaluate the evaluators, call for
- * the functionary reports, then evaluate the meeting overall.
+ * functionaries at the top (beat 4, naming the ones this club runs) — each
+ * explains their own role, which is when the Grammarian gives the Word of the
+ * Day — and the General Evaluator's work happens at the end (beats 11–13):
+ * evaluate the evaluators, call for the functionary reports, then evaluate the
+ * meeting overall. The three vote beats (6, 8, 10) each belong to a segment and
+ * are gated on it, so a club with no Table Topics Master never prints a vote for
+ * a segment it does not run.
  *
  * `geIntroducesFunctionaries: true` is MCF's variant: beat 4 ONLY changes
  * owner to the General Evaluator. Durations are tunable constants
@@ -184,14 +215,13 @@ export function buildRunOfShow({
 			roleKey: functionaryIntroOwner.roleKey,
 			roleName: functionaryIntroOwner.roleName,
 			role: "plain",
-			detail: "Introduces the functionaries; each explains their role",
+			detail: `Introduces the ${ROLES_TOKEN}; each explains their role`,
 			minutes: 3,
 			requiresAnyOf: FUNCTIONARY_ROLES,
 		},
 		{
 			kind: "role",
-			roleKey: "speaker",
-			roleName: "Speaker",
+			...SPEAKER_ROLE,
 			role: "speaker",
 			detail: "Prepared speech",
 			minutes: DEFAULT_SPEAKER_MINUTES,
@@ -206,11 +236,11 @@ export function buildRunOfShow({
 				who: "Toastmaster",
 				detail: "Vote Best Speaker",
 			},
+			requiresAnyOf: [SPEAKER_ROLE],
 		},
 		{
 			kind: "role",
-			roleKey: "table_topics_master",
-			roleName: "Table Topics Master",
+			...TABLE_TOPICS_ROLE,
 			role: "plain",
 			detail: "Impromptu topics using the Word of the Day",
 			minutes: 10,
@@ -226,11 +256,11 @@ export function buildRunOfShow({
 				who: "Toastmaster",
 				detail: "Vote Best Table Topics",
 			},
+			requiresAnyOf: [TABLE_TOPICS_ROLE],
 		},
 		{
 			kind: "role",
-			roleKey: "evaluator",
-			roleName: "Evaluator",
+			...EVALUATOR_ROLE,
 			role: "evaluator",
 			detail: "Evaluates a speaker",
 			minutes: 3,
@@ -245,6 +275,7 @@ export function buildRunOfShow({
 				who: "Toastmaster",
 				detail: "Vote Best Evaluator",
 			},
+			requiresAnyOf: [EVALUATOR_ROLE],
 		},
 		{
 			kind: "role",
@@ -365,6 +396,24 @@ export function hasAnyFunctionaryRole(slots: AgendaSlot[]): boolean {
 	return FUNCTIONARY_ROLES.some((r) => hasRole(slots, r.roleKey, r.roleName));
 }
 
+/** "Timer", "Timer & Grammarian", "Timer, Grammarian & Ah-Counter". */
+function joinRoleNames(names: string[]): string {
+	if (names.length < 2) return names[0] ?? "";
+	return `${names.slice(0, -1).join(", ")} & ${names[names.length - 1]}`;
+}
+
+/** Resolve `ROLES_TOKEN` in a beat's detail against the roles the club runs
+ *  (#367), in slot order and under the club's own display names — the same
+ *  order and names the deck's functionary slides list. */
+function resolveDetail(beat: Beat, slots: AgendaSlot[]): string {
+	if (!beat.detail.includes(ROLES_TOKEN)) return beat.detail;
+	const required = beat.requiresAnyOf ?? [];
+	const names = slots
+		.filter((s) => required.some((r) => matchesRole(s, r.roleKey, r.roleName)))
+		.map((s) => s.roleName);
+	return beat.detail.replace(ROLES_TOKEN, joinRoleNames([...new Set(names)]));
+}
+
 export function expandRunSheet(
 	slots: AgendaSlot[],
 	template: Beat[] = RUN_OF_SHOW,
@@ -373,8 +422,17 @@ export function expandRunSheet(
 
 	for (const beat of template) {
 		const startLen = rows.length;
+		const detail = resolveDetail(beat, slots);
+		// The beat is about OTHER roles than its owner (the functionary beats) or
+		// belongs to a segment (the vote beats), and the club runs none of them —
+		// nothing to introduce, nobody to call for a report, no segment to vote on.
+		const missingRequired =
+			beat.requiresAnyOf != null &&
+			!beat.requiresAnyOf.some((r) => hasRole(slots, r.roleKey, r.roleName));
 
-		if (beat.kind === "event") {
+		if (missingRequired) {
+			// omitted
+		} else if (beat.kind === "event") {
 			const fb = beat.fallback;
 			// An event beat's own display name doubles as the name to match
 			// against when a slot carries no key (e.g. "Timer") — every event
@@ -382,7 +440,7 @@ export function expandRunSheet(
 			const useFallback = fb != null && !hasRole(slots, fb.roleKey, beat.who);
 			rows.push({
 				who: useFallback ? fb.who : beat.who,
-				detail: useFallback ? fb.detail : beat.detail,
+				detail: useFallback ? fb.detail : detail,
 				minutes: beat.minutes,
 				marks: null,
 			});
@@ -401,12 +459,11 @@ export function expandRunSheet(
 									red: s.maxMinutes,
 								}
 							: null;
-					const detail = s.speechTitle
-						? `"${s.speechTitle}"${s.projectLevel ? ` · ${s.projectLevel}` : ""}`
-						: beat.detail;
 					rows.push({
 						who: `${numbered(beat.roleName, i, multi)} · ${assigneeDisplay(s)}`,
-						detail,
+						detail: s.speechTitle
+							? `"${s.speechTitle}"${s.projectLevel ? ` · ${s.projectLevel}` : ""}`
+							: detail,
 						minutes: s.maxMinutes ?? DEFAULT_SPEAKER_MINUTES,
 						marks,
 					});
@@ -419,7 +476,7 @@ export function expandRunSheet(
 						who: `${numbered(beat.roleName, i, multi)} · ${assigneeDisplay(s)}`,
 						detail: s.evaluates?.speakerName
 							? `Evaluates ${s.evaluates.speakerName}`
-							: beat.detail,
+							: detail,
 						minutes: beat.minutes,
 						marks: null,
 					});
@@ -428,18 +485,11 @@ export function expandRunSheet(
 				// Role not run by this club this meeting (#367/#368: disabled ⇒
 				// no slots generated) — omit the beat entirely rather than
 				// printing a ghost row with no assignee.
-			} else if (
-				beat.requiresAnyOf &&
-				!beat.requiresAnyOf.some((r) => hasRole(slots, r.roleKey, r.roleName))
-			) {
-				// The beat's own owner role exists, but none of the OTHER roles
-				// it's actually about do (the functionaries) — nothing to
-				// introduce or call for.
 			} else {
 				for (const s of matching) {
 					rows.push({
 						who: `${beat.roleName} · ${assigneeDisplay(s)}`,
-						detail: beat.detail,
+						detail,
 						minutes: beat.minutes,
 						marks: null,
 					});

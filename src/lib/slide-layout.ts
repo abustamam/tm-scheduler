@@ -158,8 +158,8 @@ export function slideLayout(slide: Slide): SlideLayout {
 					head("Please Vote for Best Table Topic Speaker:"),
 				],
 			});
-		case "evalIntro":
-			return content("Speech Evaluation", {
+		case "evaluatorEvaluation":
+			return content("Evaluation of the Evaluators", {
 				form: "centered",
 				lines: [
 					head("General Evaluator:"),
@@ -173,15 +173,18 @@ export function slideLayout(slide: Slide): SlideLayout {
 			lines.push(strong(`Time: ${slide.time}`));
 			return content("Speech Evaluation", { form: "centered", lines });
 		}
-		case "voteEvaluator":
-			return content("Speech Evaluation", {
-				form: "centered",
-				lines: [
-					head("Ask for timer’s report:"),
-					head("Please Vote for Best Evaluator:"),
-					...slide.names.map(name),
-				],
-			});
+		case "voteEvaluator": {
+			// The timer's-report prompt appears only when the club runs a Timer —
+			// the run sheet's beat-10 fallback drops the same clause (#367).
+			const lines: Line[] = slide.hasTimer
+				? [head("Ask for timer’s report:")]
+				: [];
+			lines.push(
+				head("Please Vote for Best Evaluator:"),
+				...slide.names.map(name),
+			);
+			return content("Speech Evaluation", { form: "centered", lines });
+		}
 		case "generalEvaluation":
 			return content("General Evaluation", {
 				form: "centered",
