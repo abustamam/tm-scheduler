@@ -26,19 +26,20 @@ function PresentPage() {
 	const data = Route.useLoaderData();
 	const { clubId, meetingId } = Route.useParams();
 	const navigate = useNavigate();
-	const deck = buildSlideDeck(
-		data.meeting,
-		{
+	const deck = buildSlideDeck({
+		meeting: data.meeting,
+		club: {
 			name: data.clubName,
 			clubNumber: data.clubNumber,
 			district: data.clubDistrict,
 			timezone: data.timezone,
 			meetingSchedule: data.clubMeetingSchedule,
 		},
-		data.slots,
-		data.nextMeetingAt,
-		data.meetingNumber,
-	);
+		slots: data.slots,
+		nextMeetingAt: data.nextMeetingAt,
+		meetingNumber: data.meetingNumber,
+		geIntroducesFunctionaries: data.geIntroducesFunctionaries,
+	});
 	return (
 		<>
 			<OfflineBadge id={meetingId} />

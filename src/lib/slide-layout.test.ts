@@ -152,9 +152,10 @@ describe("slideLayout bodies", () => {
 		}
 	});
 
-	it("GE team line lists filled roles only", () => {
+	it("functionary intro team line lists filled roles only", () => {
 		const l = slideLayout({
-			kind: "geIntro",
+			kind: "functionaryIntro",
+			owner: "General Evaluator",
 			name: "Riyaz",
 			team: [
 				{ role: "Grammarian", name: "Priya" },
@@ -167,6 +168,46 @@ describe("slideLayout bodies", () => {
 				.map((x) => x.text);
 			expect(muted.join("")).toContain("Grammarian: Priya");
 			expect(muted.join("")).not.toContain("open");
+		} else {
+			throw new Error("expected centered");
+		}
+	});
+
+	it("functionary intro names whichever role owns it (#367)", () => {
+		const owned = (owner: string) =>
+			slideLayout({ kind: "functionaryIntro", owner, name: "Riyaz", team: [] });
+		for (const owner of ["Toastmaster of the Day", "General Evaluator"]) {
+			const l = owned(owner);
+			expect(l).toMatchObject({ chrome: "content", header: "Functionaries" });
+			if (l.chrome === "content" && l.body.form === "centered") {
+				expect(l.body.lines.map((x) => x.text)).toEqual([`${owner}:`, "Riyaz"]);
+			} else {
+				throw new Error("expected centered");
+			}
+		}
+	});
+
+	it("functionary reports lists each reporter, skipping open roles (#353)", () => {
+		const l = slideLayout({
+			kind: "functionaryReports",
+			name: "Riyaz",
+			team: [
+				{ role: "Grammarian", name: "Priya" },
+				{ role: "Ah-Counter", name: "— open —" },
+				{ role: "Timer", name: "Bilal" },
+			],
+		});
+		expect(l).toMatchObject({
+			chrome: "content",
+			header: "Functionary Reports",
+		});
+		if (l.chrome === "content" && l.body.form === "centered") {
+			expect(l.body.lines.map((x) => x.text)).toEqual([
+				"General Evaluator:",
+				"Riyaz",
+				"Grammarian: Priya",
+				"Timer: Bilal",
+			]);
 		} else {
 			throw new Error("expected centered");
 		}

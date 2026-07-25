@@ -178,6 +178,17 @@ export const clubs = pgTable("clubs", {
 	// check-constrained `club_meeting_recurrence`.
 	reminderEnabled: boolean("reminder_enabled").notNull().default(false),
 	reminderLeadTimeDays: integer("reminder_lead_time_days").notNull().default(3),
+	// The one axis of per-club variance in the generated run-of-show (#367).
+	// FALSE (the default, and the standard Toastmasters flow) means the
+	// Toastmaster of the Day introduces the functionaries at the top of the
+	// meeting, each explaining their own role. TRUE is MCF's variant, where the
+	// General Evaluator introduces them instead. Nothing else about the agenda
+	// depends on it — the GE's closing sequence (evaluate the evaluators → call
+	// for the functionary reports → overall evaluation) is the same either way.
+	// Read by `buildRunOfShow` (printed agenda) and `buildSlideDeck` (deck).
+	geIntroducesFunctionaries: boolean("ge_introduces_functionaries")
+		.notNull()
+		.default(false),
 	// Soft-archive (ADR-0016 / #186). NULL = active; a set timestamp = archived.
 	// Reversible: unarchive clears it. Archiving retains all club data untouched
 	// and blocks every access path except the superadmin console — `requireMembership`

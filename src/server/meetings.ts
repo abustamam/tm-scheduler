@@ -176,6 +176,9 @@ async function loadMeetingDetail(
 			district: true,
 			mission: true,
 			meetingSchedule: true,
+			// The club's run-of-show variant (#367) — both renderers of this
+			// payload (printed run sheet and projected deck) need it.
+			geIntroducesFunctionaries: true,
 		},
 	});
 
@@ -337,6 +340,10 @@ async function loadMeetingDetail(
 		clubDistrict: club?.district ?? null,
 		clubMission: club?.mission ?? null,
 		clubMeetingSchedule: club?.meetingSchedule ?? null,
+		// MCF's variant (#367): the General Evaluator, not the Toastmaster of the
+		// Day, introduces the functionaries. Feeds `buildRunOfShow` (print) and
+		// `buildSlideDeck` (deck) so the two never disagree.
+		geIntroducesFunctionaries: club?.geIntroducesFunctionaries ?? false,
 		officers,
 		unavailableMembers,
 		unavailableMemberIds: unavailableMembers.map((m) => m.id),

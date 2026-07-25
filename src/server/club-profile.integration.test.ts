@@ -1,6 +1,7 @@
 /**
- * DB-backed tests for the club-profile (district / mission / meeting schedule)
- * read + update logic. `#/db` is redirected to the test database.
+ * DB-backed tests for the /admin/club-settings logic: the club profile
+ * (district / mission / meeting schedule) and the agenda run-of-show variant
+ * (#367). `#/db` is redirected to the test database.
  *
  * Run with:
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test \
@@ -9,8 +10,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, hasTestDb, type SeededClub, seedClub } from "#/test/db";
 import {
+	applyClubAgendaSettingsUpdate,
 	applyClubProfileUpdate,
 	clubProfileSchema,
+	getClubAgendaSettings,
 	getClubProfile,
 } from "./clubs-logic";
 
@@ -112,5 +115,69 @@ describe.skipIf(!hasTestDb)("club profile logic", () => {
 			clubProfileSchema.parse({ clubId: seed.clubId, defaultCountryCode: "" }),
 		);
 		expect((await getClubProfile(seed.clubId))?.defaultCountryCode).toBeNull();
+	});
+});
+
+describe.skipIf(!hasTestDb)("club agenda settings logic (#367)", () => {
+	let seed: SeededClub;
+
+	beforeEach(async () => {
+		seed = await seedClub();
+	});
+	afterEach(async () => {
+		await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
+	});
+
+	it("defaults a new club to the standard flow", async () => {
+		expect(await getClubAgendaSettings(seed.clubId)).toEqual({
+			geIntroducesFunctionaries: false,
+		});
+	});
+
+	it("flips to MCF's variant and back", async () => {
+		await applyClubAgendaSettingsUpdate({
+			clubId: seed.clubId,
+			geIntroducesFunctionaries: true,
+		});
+		expect(await getClubAgendaSettings(seed.clubId)).toEqual({
+			geIntroducesFunctionaries: true,
+		});
+
+		await applyClubAgendaSettingsUpdate({
+			clubId: seed.clubId,
+			geIntroducesFunctionaries: false,
+		});
+		expect(await getClubAgendaSettings(seed.clubId)).toEqual({
+			geIntroducesFunctionaries: false,
+		});
+	});
+
+	it("does not disturb the profile fields", async () => {
+		await applyClubProfileUpdate({
+			clubId: seed.clubId,
+			district: "District 39",
+			mission: null,
+			meetingSchedule: null,
+		});
+		await applyClubAgendaSettingsUpdate({
+			clubId: seed.clubId,
+			geIntroducesFunctionaries: true,
+		});
+		expect((await getClubProfile(seed.clubId))?.district).toBe("District 39");
+	});
+
+	it("reads the standard flow for a club that does not exist", async () => {
+		expect(
+			await getClubAgendaSettings("00000000-0000-0000-0000-000000000000"),
+		).toEqual({ geIntroducesFunctionaries: false });
+	});
+
+	it("throws when updating a club that does not exist", async () => {
+		await expect(
+			applyClubAgendaSettingsUpdate({
+				clubId: "00000000-0000-0000-0000-000000000000",
+				geIntroducesFunctionaries: true,
+			}),
+		).rejects.toThrow("Club not found.");
 	});
 });

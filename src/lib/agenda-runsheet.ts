@@ -329,7 +329,7 @@ export function orderEvaluators(
  *  slots even after a club renames "General Evaluator" to something else.
  *  Falls back to matching the free-text name only when the slot itself
  *  carries no key (a genuinely custom club role, or data predating #368). */
-function matchesRole(
+export function matchesRole(
 	slot: AgendaSlot,
 	roleKey: string,
 	roleName: string,
@@ -353,6 +353,16 @@ function hasRole(
 	roleName: string,
 ): boolean {
 	return slots.some((s) => matchesRole(s, roleKey, roleName));
+}
+
+/** True when the club runs at least one functionary role this meeting — the
+ *  gate the functionary-intro and functionary-reports beats share (#367).
+ *  Exported so the deck (`buildSlideDeck`) gates its matching slides on the
+ *  SAME signal the run sheet does, rather than a second rule that could drift:
+ *  there is nothing to introduce, and nobody to call for a report, when a club
+ *  runs no functionaries at all. */
+export function hasAnyFunctionaryRole(slots: AgendaSlot[]): boolean {
+	return FUNCTIONARY_ROLES.some((r) => hasRole(slots, r.roleKey, r.roleName));
 }
 
 export function expandRunSheet(

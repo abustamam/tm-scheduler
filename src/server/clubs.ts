@@ -1,8 +1,11 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import {
+	applyClubAgendaSettingsUpdate,
 	applyClubProfileUpdate,
+	clubAgendaSettingsSchema,
 	clubProfileSchema,
+	getClubAgendaSettings,
 	getClubProfile,
 	resolveClubByIdentifier,
 } from "./clubs-logic";
@@ -34,4 +37,24 @@ export const updateClubProfile = createServerFn({ method: "POST" })
 		const currentUser = await requireUser();
 		await requireClubRole(currentUser.id, data.clubId, ["admin"]);
 		return applyClubProfileUpdate(data);
+	});
+
+/** The club's agenda run-of-show settings (#367) for the settings form.
+ *  AUTHED — any active member of the club. */
+export const loadClubAgendaSettings = createServerFn({ method: "GET" })
+	.validator((clubId: unknown) => uuid.parse(clubId))
+	.handler(async ({ data: clubId }) => {
+		const currentUser = await requireUser();
+		await requireClubViewAccess(currentUser.id, clubId);
+		return getClubAgendaSettings(clubId);
+	});
+
+/** Choose who introduces the functionaries on the generated agenda (#367).
+ *  AUTHED — requires admin club role. */
+export const updateClubAgendaSettings = createServerFn({ method: "POST" })
+	.validator((input: unknown) => clubAgendaSettingsSchema.parse(input))
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		await requireClubRole(currentUser.id, data.clubId, ["admin"]);
+		return applyClubAgendaSettingsUpdate(data);
 	});

@@ -6,6 +6,7 @@ import {
 	buildRunOfShow,
 	expandRunSheet,
 	FLEX_TOLERANCE_MINUTES,
+	hasAnyFunctionaryRole,
 	RUN_OF_SHOW,
 	TABLE_TOPICS_MAX,
 	TABLE_TOPICS_MIN,
@@ -462,6 +463,42 @@ describe("expandRunSheet — functionary-dependent beats 4 & 12 (#367)", () => {
 					r.who.startsWith("Toastmaster of the Day") &&
 					r.detail === "Introduces the functionaries; each explains their role",
 			),
+		).toBe(false);
+	});
+});
+
+// The deck gates its functionary slides on this exact predicate rather than a
+// rule of its own, which is what keeps print and deck from disagreeing (#367).
+describe("hasAnyFunctionaryRole", () => {
+	it("is false for no slots and for a leadership-only crew", () => {
+		expect(hasAnyFunctionaryRole([])).toBe(false);
+		expect(
+			hasAnyFunctionaryRole([
+				slot({ roleName: "Toastmaster of the Day", category: "leadership" }),
+				slot({ roleName: "General Evaluator", category: "leadership" }),
+				slot({ roleName: "Speaker", category: "speaker" }),
+			]),
+		).toBe(false);
+	});
+
+	it("is true for any of the four standard functionaries, claimed or open", () => {
+		for (const roleName of ["Timer", "Ah-Counter", "Grammarian", "Vote Counter"])
+			expect(hasAnyFunctionaryRole([slot({ roleName })])).toBe(true);
+	});
+
+	it("matches by role key, so a renamed functionary still counts (#368)", () => {
+		expect(
+			hasAnyFunctionaryRole([
+				slot({ roleName: "Wordsmith", roleKey: "grammarian" }),
+			]),
+		).toBe(true);
+	});
+
+	it("ignores a club-invented functionary that maps to no standard role", () => {
+		expect(
+			hasAnyFunctionaryRole([
+				slot({ roleName: "Joke Master", category: "functionary" }),
+			]),
 		).toBe(false);
 	});
 });

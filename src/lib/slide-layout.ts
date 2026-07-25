@@ -2,6 +2,7 @@
 // renderers — meeting-present.tsx (screen) and deck-to-pptx.ts (.pptx) — consume
 // this descriptor, so copy/layout never drifts between them. Pure + unit-tested.
 
+import type { LegendEntry } from "./agenda-runsheet";
 import { OPEN_LABEL } from "./agenda-runsheet";
 import type { Slide } from "./agenda-slides";
 
@@ -58,6 +59,12 @@ const content = (header: string, body: Body): SlideLayout => ({
 	body,
 });
 
+/** Functionaries with a holder. An open role is dropped from the projected list
+ *  on both functionary slides — there is nobody to introduce, and nobody to
+ *  call on for a report. */
+const filledTeam = (team: LegendEntry[]): LegendEntry[] =>
+	team.filter((t) => t.name !== OPEN_LABEL);
+
 export function slideLayout(slide: Slide): SlideLayout {
 	switch (slide.kind) {
 		case "title": {
@@ -86,9 +93,12 @@ export function slideLayout(slide: Slide): SlideLayout {
 				lines.push(head("Word of the Day:"), head(`“${slide.word}”`));
 			return content("Toastmaster Intro", { form: "centered", lines });
 		}
-		case "geIntro": {
-			const lines: Line[] = [head("General Evaluator:"), head(slide.name)];
-			const teamMembers = slide.team.filter((t) => t.name !== OPEN_LABEL);
+		case "functionaryIntro": {
+			// The header names the segment, not its owner: the owner varies by club
+			// (#367) and "Toastmaster of the Day Intro" would collide with the
+			// "Toastmaster Intro" (theme + Word of the Day) slide above.
+			const lines: Line[] = [head(`${slide.owner}:`), head(slide.name)];
+			const teamMembers = filledTeam(slide.team);
 			if (teamMembers.length > 0) {
 				lines.push(
 					muted(
@@ -96,8 +106,17 @@ export function slideLayout(slide: Slide): SlideLayout {
 					),
 				);
 			}
-			return content("General Evaluator Intro", { form: "centered", lines });
+			return content("Functionaries", { form: "centered", lines });
 		}
+		case "functionaryReports":
+			return content("Functionary Reports", {
+				form: "centered",
+				lines: [
+					head("General Evaluator:"),
+					head(slide.name),
+					...filledTeam(slide.team).map((t) => name(`${t.role}: ${t.name}`)),
+				],
+			});
 		case "wordOfDay":
 			return content("Word of the Day", {
 				form: "word",

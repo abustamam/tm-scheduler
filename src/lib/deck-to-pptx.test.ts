@@ -50,7 +50,7 @@ const fullSlots: AgendaSlot[] = [
 	slot({
 		id: "ge",
 		roleName: "General Evaluator",
-		category: "evaluator",
+		category: "leadership",
 		assigneeName: "Saiful",
 	}),
 	slot({ id: "gr", roleName: "Grammarian", assigneeName: "Mona" }),
@@ -106,14 +106,14 @@ function slideText(pptx: PptxGenJS, i: number): string {
 
 describe("deckToPptx", () => {
 	it("emits exactly one native slide per deck slide, in order", () => {
-		const deck = buildSlideDeck(meeting, club, fullSlots);
+		const deck = buildSlideDeck({ meeting, club, slots: fullSlots });
 		const pptx = deckToPptx(PptxGenJS, deck);
 		// biome-ignore lint/suspicious/noExplicitAny: reads pptxgenjs internals
 		expect((pptx as any).slides).toHaveLength(deck.length);
 	});
 
 	it("writes the club name onto the title slide and nominees onto votes", () => {
-		const deck = buildSlideDeck(meeting, club, fullSlots);
+		const deck = buildSlideDeck({ meeting, club, slots: fullSlots });
 		const pptx = deckToPptx(PptxGenJS, deck);
 		expect(slideText(pptx, 0)).toContain("MCF Toastmasters Club");
 		const voteIdx = deck.findIndex((s) => s.kind === "voteSpeaker");
@@ -123,14 +123,14 @@ describe("deckToPptx", () => {
 	});
 
 	it("stamps the Toastmasters non-affiliation disclaimer on content-slide footers", () => {
-		const deck = buildSlideDeck(meeting, club, fullSlots);
+		const deck = buildSlideDeck({ meeting, club, slots: fullSlots });
 		const pptx = deckToPptx(PptxGenJS, deck);
 		const allText = deck.map((_, i) => slideText(pptx, i)).join("\n");
 		expect(allText).toContain(TOASTMASTERS_DISCLAIMER);
 	});
 
 	it("produces a real, non-empty pptx buffer that opens as a zip (pptx)", async () => {
-		const deck = buildSlideDeck(meeting, club, []);
+		const deck = buildSlideDeck({ meeting, club, slots: [] });
 		const pptx = deckToPptx(PptxGenJS, deck);
 		const buf = (await pptx.write({ outputType: "nodebuffer" })) as Buffer;
 		expect(buf.length).toBeGreaterThan(0);
@@ -159,13 +159,40 @@ describe("pptxFileName", () => {
 
 describe("pptx via slideLayout", () => {
 	it("builds the whole deck without throwing", () => {
-		const deck = buildSlideDeck(
+		const deck = buildSlideDeck({
 			meeting,
 			club,
-			fullSlots,
-			new Date("2026-07-23T23:45:00Z"),
-		);
+			slots: fullSlots,
+			nextMeetingAt: new Date("2026-07-23T23:45:00Z"),
+		});
 		const pptx = deckToPptx(PptxGenJS, deck);
 		expect(pptx).toBeTruthy();
+	});
+
+	// Both new/renamed slide kinds (#367) go through the shared descriptor, so
+	// the .pptx exporter needs no per-kind branch — but it does need to keep
+	// producing readable text for them under both club configs.
+	it("exports the functionary intro + reports slides under either config", () => {
+		for (const geIntroducesFunctionaries of [false, true]) {
+			const deck = buildSlideDeck({
+				meeting,
+				club,
+				slots: fullSlots,
+				geIntroducesFunctionaries,
+			});
+			const pptx = deckToPptx(PptxGenJS, deck);
+			const introIdx = deck.findIndex((s) => s.kind === "functionaryIntro");
+			const reportsIdx = deck.findIndex((s) => s.kind === "functionaryReports");
+			expect(introIdx).toBeGreaterThan(-1);
+			expect(reportsIdx).toBeGreaterThan(-1);
+			expect(slideText(pptx, introIdx)).toContain(
+				geIntroducesFunctionaries
+					? "General Evaluator:"
+					: "Toastmaster of the Day:",
+			);
+			expect(slideText(pptx, introIdx)).toContain("Grammarian: Mona");
+			expect(slideText(pptx, reportsIdx)).toContain("Functionary Reports");
+			expect(slideText(pptx, reportsIdx)).toContain("Grammarian: Mona");
+		}
 	});
 });
