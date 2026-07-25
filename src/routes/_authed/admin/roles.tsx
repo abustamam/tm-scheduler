@@ -155,7 +155,7 @@ function RolesManager() {
 }
 
 /** Toast copy for an enable/disable toggle result. Surfaces the counts
- *  `applyRoleDefinitionSetEnabled` (#369) already computed — "kept claimed
+ *  `applyRoleDefinitionSetEnabled` (#368) already computed — "kept claimed
  *  slots" on disable, so an admin knows their disable didn't silently
  *  un-assign anyone, and how many meetings got the role back on enable — so
  *  neither the sync-style result nor the toggle re-does work the server

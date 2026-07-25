@@ -27,7 +27,7 @@ type DbOrTx =
 	| Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
 
 /** The club's resolved speaker/evaluator role ids, plus whether each is
- *  currently `enabled` (#369) — a disabled role must never be reintroduced by
+ *  currently `enabled` (#368) — a disabled role must never be reintroduced by
  *  the "+ Add speaker" path, which `applyAddSpeakerSlot` below enforces using
  *  these flags. `evaluatorEnabled` is false (not just absent) when the club has
  *  no paired evaluator role at all, which is the safe default for a caller
@@ -65,7 +65,7 @@ function nextIndex(indices: number[]): number {
 
 /** Add one Speaker slot (+ a paired Evaluator slot, count-parity). Reached from
  *  a PUBLIC, no-session path (a self-asserted TMOD, see `requireMeetingAgendaEditor`
- *  in `guards.ts`), so it must independently enforce `enabled` (#369) — the roles
+ *  in `guards.ts`), so it must independently enforce `enabled` (#368) — the roles
  *  admin toggle already clears a disabled role's open slots from upcoming
  *  meetings, and this is the one place a public caller could otherwise put one
  *  right back. Rejects outright when the club's Speaker role is disabled (there's
@@ -253,7 +253,7 @@ type BackfillChangeLabel = "template_sync" | "role_enabled";
  *  toward its `defaultCount` — presence-based, not count-based (a naive
  *  count-based top-up would fight a club that intentionally removed a slot).
  *  Shared "add missing slots" walk behind both the "Update upcoming meetings
- *  to match" admin action and the role enable-toggle backfill (#369). Returns
+ *  to match" admin action and the role enable-toggle backfill (#368). Returns
  *  how many meetings changed and the distinct role names added. */
 async function backfillMissingRoleSlots(input: {
 	clubId: string;
@@ -312,7 +312,7 @@ export async function applyTemplateSyncToUpcomingMeetings(input: {
 }) {
 	const defs = await clubRoleDefs(input.clubId);
 	const paired = pairedRoleIds(defs);
-	// `enabled` matters here (#369): without it, disabling a role (e.g.
+	// `enabled` matters here (#368): without it, disabling a role (e.g.
 	// Ah-Counter) and then clicking this button would re-add it to every
 	// upcoming meeting — exactly the workflow the toggle exists to prevent.
 	const standard = defs.filter(
@@ -320,7 +320,7 @@ export async function applyTemplateSyncToUpcomingMeetings(input: {
 	);
 
 	// Deliberately does NOT exclude cancelled meetings, unlike the enable-toggle
-	// path below (`futureNonCancelledMeetingIds`): that's a #369 addition and
+	// path below (`futureNonCancelledMeetingIds`): that's a #368 addition and
 	// this pre-existing query's behavior toward cancelled meetings was out of
 	// scope to change without its own dedicated test — this comment documents
 	// the divergence is intentional, not an oversight.
@@ -344,7 +344,7 @@ export async function applyTemplateSyncToUpcomingMeetings(input: {
 }
 
 /** Ids of a club's meetings scheduled in the future (`scheduledAt > now`) that
- *  are not cancelled. Used by the role enable/disable toggle (#369): past
+ *  are not cancelled. Used by the role enable/disable toggle (#368): past
  *  meetings are the club's history and cancelled ones aren't going to run, so
  *  neither should gain or lose slots when a role's `enabled` flag flips. */
 async function futureNonCancelledMeetingIds(clubId: string): Promise<string[]> {
@@ -439,7 +439,7 @@ async function removeOpenRoleSlots(
 	});
 }
 
-/** Slot side effects when a role definition's `enabled` flag flips (#369):
+/** Slot side effects when a role definition's `enabled` flag flips (#368):
  *  a "skeleton crew" club turning a role off shouldn't have to manually clean
  *  up every future meeting, and turning it back on shouldn't require a
  *  separate trip to "Update upcoming meetings to match".

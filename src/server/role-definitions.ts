@@ -33,7 +33,7 @@ export const listClubRoles = createServerFn({ method: "GET" })
  *  (#341). Ungated on purpose — role names + responsibilities are non-sensitive
  *  reference content, matching the public print/present routes, and the sheet is
  *  meant to be shareable/handed to guests. Returns the same rows as
- *  `listClubRoles` minus disabled ones (#369, via `onlyEnabled`) — this sheet
+ *  `listClubRoles` minus disabled ones (#368, via `onlyEnabled`) — this sheet
  *  OFFERS the club's roles, which a "skeleton crew" club turned some off to
  *  stop offering; the admin-only `listClubRoles` is where a disabled role
  *  stays visible. The extra `slotCount` is harmless here. */
@@ -62,7 +62,7 @@ export const updateClubRole = createServerFn({ method: "POST" })
 		return applyRoleDefinitionUpdate(data);
 	});
 
-/** Turn a role on/off for future meetings without deleting it (#369). Narrow
+/** Turn a role on/off for future meetings without deleting it (#368). Narrow
  *  payload (`{ clubId, roleId, enabled }`) rather than the whole-row shape
  *  `updateClubRole` takes — see `applyRoleDefinitionSetEnabled`. AUTHED —
  *  requires admin. */

@@ -134,7 +134,7 @@ describe.skipIf(!hasTestDb)("meeting role management (#143)", () => {
 		).rejects.toThrow(/speaker controls/i);
 	});
 
-	// #369 review item 3: the "+ Add role" picker already excludes disabled
+	// #368 review item 3: the "+ Add role" picker already excludes disabled
 	// roles from its data, but a stale tab (the picker payload is baked into
 	// the meeting page at load) could still post one — the server must reject
 	// it independently, like it already does for cross-club and paired roles.
@@ -203,7 +203,7 @@ describe.skipIf(!hasTestDb)("meeting role management (#143)", () => {
 		).rejects.toThrow(/speaker controls/i);
 	});
 
-	// #369 review item 2: `addSpeakerSlot` is reachable from a PUBLIC, no-session
+	// #368 review item 2: `addSpeakerSlot` is reachable from a PUBLIC, no-session
 	// path (a self-asserted TMOD — see `requireMeetingAgendaEditor`), so it's
 	// the one place a disabled role could otherwise get a fresh, claimable slot
 	// even after the roles-admin toggle already cleared its old ones.
@@ -376,7 +376,7 @@ describe.skipIf(!hasTestDb)("meeting role management (#143)", () => {
 		expect(await slotsFor(club.meetingId, greeter)).toHaveLength(1);
 	});
 
-	// Regression (#369): `applyTemplateSyncToUpcomingMeetings` didn't know about
+	// Regression (#368): `applyTemplateSyncToUpcomingMeetings` didn't know about
 	// `enabled` — a club that disabled Ah-Counter and then clicked "Update
 	// upcoming meetings to match" would get Ah-Counter re-added everywhere.
 	it("sync never re-adds a role that's been disabled", async () => {
@@ -395,7 +395,7 @@ describe.skipIf(!hasTestDb)("meeting role management (#143)", () => {
 	});
 });
 
-describe.skipIf(!hasTestDb)("role enable/disable slot sync (#369)", () => {
+describe.skipIf(!hasTestDb)("role enable/disable slot sync (#368)", () => {
 	let club: SeededClub;
 	beforeEach(async () => {
 		club = await seedClub();
@@ -609,7 +609,7 @@ describe.skipIf(!hasTestDb)("role enable/disable slot sync (#369)", () => {
 		);
 	});
 
-	// #369 review item 4: the enable-toggle backfill must never add a bare
+	// #368 review item 4: the enable-toggle backfill must never add a bare
 	// Speaker slot with no paired Evaluator (or vice versa) — that parity is
 	// owned exclusively by the +/- speaker controls. Mirrors
 	// `applyTemplateSyncToUpcomingMeetings`'s own paired-role exclusion.
@@ -659,7 +659,7 @@ describe.skipIf(!hasTestDb)("role enable/disable slot sync (#369)", () => {
 		expect(await slotsFor(club.meetingId, ev)).toHaveLength(0);
 	});
 
-	// #369 review item 10: a second-club fixture, same shape as
+	// #368 review item 10: a second-club fixture, same shape as
 	// "applyAddRoleSlot rejects a role from a different club" above — proves
 	// the bulk delete is scoped by roleDefinitionId + the club's own meetings,
 	// not just by role name (both clubs seed a role called "Timer").
@@ -687,7 +687,7 @@ describe.skipIf(!hasTestDb)("role enable/disable slot sync (#369)", () => {
 		}
 	});
 
-	// #369 review item 10: distinguishes "count of meetings" from "count of
+	// #368 review item 10: distinguishes "count of meetings" from "count of
 	// slots" — two separate future meetings each with one claimed slot must
 	// report keptClaimedMeetings = 2, not some other tally an implementation
 	// that doesn't dedupe by meeting id could produce.
@@ -722,7 +722,7 @@ describe.skipIf(!hasTestDb)("role enable/disable slot sync (#369)", () => {
 		expect(result.keptClaimedMeetings).toBe(2);
 	});
 
-	// #369 review item 1 (TOCTOU): the "claimed" predicate is defined by
+	// #368 review item 1 (TOCTOU): the "claimed" predicate is defined by
 	// assignedMemberId/assignedGuestId, not the `status` column — a slot that
 	// somehow carries an assignee without `status: "claimed"` must still
 	// survive, since the atomic DELETE checks the assignee columns directly.

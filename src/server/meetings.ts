@@ -254,7 +254,7 @@ async function loadMeetingDetail(
 	const roster = canManage ? await loadRosterWithContact(meeting.clubId) : [];
 
 	// Club role template for the "+ Add role" picker — management-only, like the
-	// roster. Ordered like the roles page. Disabled roles (#369) are excluded via
+	// roster. Ordered like the roles page. Disabled roles (#368) are excluded via
 	// `listRoleDefinitions`'s `onlyEnabled` — this picker OFFERS a role to be
 	// filled, which is exactly what a "skeleton crew" club turned a role off to
 	// stop; the roles admin page is where a disabled role stays visible. Routed
