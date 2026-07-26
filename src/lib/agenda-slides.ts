@@ -6,8 +6,10 @@ import type {
 import {
 	assigneeDisplay,
 	buildLegend,
+	buildReportingLegend,
 	DEFAULT_SPEAKER_MINUTES,
 	hasAnyFunctionaryRole,
+	hasAnyReportingFunctionaryRole,
 	matchesRole,
 	numbered,
 	orderEvaluators,
@@ -367,11 +369,14 @@ export function buildSlideDeck({
 		});
 	}
 
-	if (generalEvaluator.length > 0 && anyFunctionary) {
+	// Beat 12's gate is functionaries who REPORT (#371), not functionaries: a club
+	// whose only functionary is a Vote Counter has nobody to call on, and the
+	// team lists the same subset so the slide never names someone with no report.
+	if (generalEvaluator.length > 0 && hasAnyReportingFunctionaryRole(slots)) {
 		deck.push({
 			kind: "functionaryReports",
 			name: assigneeDisplay(generalEvaluator[0]),
-			team: buildLegend(slots),
+			team: buildReportingLegend(slots),
 		});
 	}
 

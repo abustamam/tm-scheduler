@@ -476,6 +476,24 @@ describe("buildSlideDeck functionary intro (#367)", () => {
 		expect(kinds([tmod, ge])).not.toContain("functionaryIntro");
 	});
 
+	it("renders for a club whose functionaries are ALL club-invented (#371)", () => {
+		// #368's disable lifecycle plus a club's own roles: the slide used to
+		// vanish because the gate resolved against the four standard keys, while
+		// its own `team` came from the category. Same definition now.
+		const jokeMaster = slot({
+			id: "jm",
+			roleName: "Joke Master",
+			assigneeName: "Nadia",
+		});
+		const slide = build({ slots: [tmod, jokeMaster] }).find(
+			(s) => s.kind === "functionaryIntro",
+		);
+		expect(slide).toMatchObject({
+			owner: "Toastmaster of the Day",
+			team: [{ role: "Joke Master", name: "Nadia" }],
+		});
+	});
+
 	it("is omitted when the owning role has no slot", () => {
 		// Default owner is the Toastmaster of the Day: a GE + functionaries is
 		// not enough under the standard flow.
@@ -573,6 +591,39 @@ describe("buildSlideDeck functionary reports (#367 / #353)", () => {
 
 	it("is omitted when the club runs no functionary roles", () => {
 		expect(kinds([tmod, ge])).not.toContain("functionaryReports");
+	});
+
+	it("omits the Vote Counter, who is a functionary but gives no report (#371)", () => {
+		const voteCounter = slot({
+			id: "vc",
+			roleName: "Vote Counter",
+			assigneeName: "Omar",
+		});
+		const slide = build({ slots: [ge, grammarian, voteCounter] }).find(
+			(s) => s.kind === "functionaryReports",
+		);
+		expect(slide).toMatchObject({
+			team: [{ role: "Grammarian", name: "Mona" }],
+		});
+		// …and with nobody else to report, the slide goes away entirely — the same
+		// signal beat 12's gate reads, so print and deck can't disagree.
+		expect(kinds([tmod, ge, voteCounter])).not.toContain("functionaryReports");
+		// The Vote Counter is still introduced: they ARE a functionary.
+		expect(kinds([tmod, ge, voteCounter])).toContain("functionaryIntro");
+	});
+
+	it("renders for a club whose only functionary is a club-invented one (#371)", () => {
+		const jokeMaster = slot({
+			id: "jm",
+			roleName: "Joke Master",
+			assigneeName: "Nadia",
+		});
+		const slide = build({ slots: [ge, jokeMaster] }).find(
+			(s) => s.kind === "functionaryReports",
+		);
+		expect(slide).toMatchObject({
+			team: [{ role: "Joke Master", name: "Nadia" }],
+		});
 	});
 
 	it("is omitted when there is no General Evaluator", () => {
