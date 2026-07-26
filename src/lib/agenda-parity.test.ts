@@ -13,7 +13,11 @@
 
 import { describe, expect, it } from "vitest";
 import type { AgendaSlot, RunOfShowConfig } from "./agenda-runsheet";
-import { buildRunOfShow, expandRunSheet } from "./agenda-runsheet";
+import {
+	buildRunOfShow,
+	expandRunSheet,
+	formatBeatMinutes,
+} from "./agenda-runsheet";
 import {
 	buildSlideDeck,
 	type ClubForDeck,
@@ -34,7 +38,8 @@ type Section =
 	| "evaluatorEvaluation"
 	| "functionaryReports"
 	| "generalEvaluation"
-	| "awards";
+	| "awards"
+	| "guestComments";
 
 // ---------------------------------------------------------------------------
 // The two mappings. Every beat and every slide kind is accounted for; the
@@ -44,7 +49,7 @@ type Section =
 
 /**
  * Section identity of each beat `buildRunOfShow` emits, IN ORDER (beats 1–15 of
- * the spec's table). `detail` pins each entry to the actual beat, so a reworded
+ * the spec's table, plus the guest-comments beat #352 inserts at 15). `detail` pins each entry to the actual beat, so a reworded
  * or reordered template fails here with a readable diff instead of silently
  * mislabelling a section.
  */
@@ -85,11 +90,19 @@ const BEATS: { detail: string; section: Section | null }[] = [
 	// is exactly how the deck's `awards` slide was already built, so the two are
 	// comparable rather than a standing content difference.
 	{ detail: "Awards · {awards}", section: "awards" },
-	// Beat 15 — President's club business / adjourn. Event beat, no slide.
+	// Beat 15 (#352) — guest comments, carved out of the President's closing so
+	// they get a row to point at and minutes on the clock. Ungated, like the
+	// opening remarks: every meeting can have guests, and the spec rules out a
+	// per-club toggle. It is a SECTION, not an exclusion — #352 adds it to both
+	// surfaces, so it has to be compared.
 	{
-		detail: "Club business · elections, guest comments · adjourn",
-		section: null,
+		detail: "Guest Comments · invites our guests to share their thoughts",
+		section: "guestComments",
 	},
+	// Beat 16 — President's club business / adjourn. Event beat, no slide. It no
+	// longer mentions guest comments: the beat above is the replacement the
+	// clause was waiting for, and prompting for them twice is worse than once.
+	{ detail: "Club business · elections · adjourn", section: null },
 ];
 
 /**
@@ -115,8 +128,6 @@ const SECTION_BY_SLIDE = {
 	// the word is beat 4's "each explains their role" and beat 7's Table Topics
 	// detail — neither is a Word-of-the-Day section of its own.
 	wordOfDay: null,
-	// Gated on which scored segments exist — and so is beat 14, as of #372.
-	awards: "awards",
 	// Free-text per-meeting announcements (#349). No beat.
 	reminders: null,
 	// Deck chrome: the closing splash. No beat.
@@ -133,7 +144,53 @@ const SECTION_BY_SLIDE = {
 	evaluatorEvaluation: "evaluatorEvaluation",
 	functionaryReports: "functionaryReports",
 	generalEvaluation: "generalEvaluation",
+	// Gated on which scored segments exist — and so is beat 14, as of #372.
+	awards: "awards",
+	// Ungated on both surfaces (#352): every meeting can have guests.
+	guestComments: "guestComments",
 } satisfies Record<Slide["kind"], Section | null>;
+
+/**
+ * Deck slide kinds that project a DURATION, and the section — hence the beat —
+ * whose budget that duration has to be (#356).
+ *
+ * Ordering parity alone let the two surfaces state different minutes for the
+ * same beat, and they did: beat 9 budgeted 3 minutes while the deck's
+ * `EVALUATION_TIMING` said "2–3 minutes". Deriving the deck's timings from the
+ * beat makes that unrepresentable, and makes this assertion cheap — the check
+ * is just "the slide says what its beat budgets", with no minute values
+ * restated here to drift in their turn.
+ *
+ * `satisfies` keeps it exhaustive over the slides that carry a `time`: a new
+ * timed slide has to be classified or this stops compiling. The `tableTopics`
+ * slide is outside it by construction — its `timing` is a PER-SPEAKER limit,
+ * not the segment budget beat 7 books, so there is nothing to compare.
+ *
+ * The exhaustiveness has a shape requirement worth knowing: `Extract<Slide,
+ * { time: string }>` selects only slides whose duration is a REQUIRED `string`
+ * under that exact key. A slide typed `time: string | null` or `time?: string`
+ * — the natural shape for a duration shown only when known — is silently not
+ * selected and compiles clean, as does any duration under a different property
+ * name (which is how `tableTopics.timing` already sits outside). Adding one of
+ * those reopens exactly the drift this file exists to catch, with the suite
+ * still green. Give a new timed slide a required `time: string`, or widen this.
+ */
+const TIMED_SLIDES = {
+	// The prepared-speech slide states the SLOT's range and the run sheet books
+	// that slot for the same row, so there is no beat budget to compare against.
+	//
+	// This is an exclusion, NOT a proof the two agree: `minMinutes` and
+	// `maxMinutes` are independently optional, so a slot with Min 5 and Max
+	// blank projects "Time: 5 minutes" while the timeline books
+	// `maxMinutes ?? DEFAULT_SPEAKER_MINUTES` = 7 for the same row, shifting
+	// every later printed row's clock. Pre-existing and out of scope here;
+	// closing it means coupling the two fields at the edit surface, not
+	// comparing a slide to a beat.
+	speech: null,
+	evaluation: "evaluation",
+	evaluatorEvaluation: "evaluatorEvaluation",
+	generalEvaluation: "generalEvaluation",
+} satisfies Record<Extract<Slide, { time: string }>["kind"], Section | null>;
 
 // ---------------------------------------------------------------------------
 // Sequence extraction
@@ -500,10 +557,36 @@ describe("run-sheet ⇄ deck section-order parity (#367)", () => {
 			"functionaryReports",
 			"generalEvaluation",
 			"awards",
+			"guestComments",
 		];
 		for (const config of CONFIGS) {
 			expect(printSections(FULL, config)).toEqual(expected);
 			expect(deckSections(FULL, config)).toEqual(expected);
+		}
+	});
+});
+
+describe("run-sheet ⇄ deck duration parity (#356)", () => {
+	it("projects each timed beat's own budgeted duration", () => {
+		for (const config of CONFIGS) {
+			const template = buildRunOfShow(config);
+			const deck = buildSlideDeck({ meeting, club, slots: FULL, ...config });
+			const checked: Section[] = [];
+			for (const slide of deck) {
+				if (!("time" in slide)) continue;
+				const section = TIMED_SLIDES[slide.kind];
+				if (section == null) continue;
+				const beat = template[BEATS.findIndex((b) => b.section === section)];
+				expect(slide.time).toBe(formatBeatMinutes(beat.minutes));
+				checked.push(section);
+			}
+			// The matrix above proves the sections are all present; this proves the
+			// loop actually reached every timed one rather than vacuously passing.
+			expect([...new Set(checked)]).toEqual([
+				"evaluation",
+				"evaluatorEvaluation",
+				"generalEvaluation",
+			]);
 		}
 	});
 });

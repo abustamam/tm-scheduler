@@ -12,7 +12,15 @@ export type Line = { role: LineRole; text?: string };
 
 export type Body =
 	| { form: "centered"; lines: Line[] }
-	| { form: "bullets"; items: string[]; link: string | null }
+	| {
+			form: "bullets";
+			items: string[];
+			link: string | null;
+			/** A muted line under the bullets, for context rather than instruction —
+			 *  the Word of the Day's definition on the Table Topics slide (#355).
+			 *  Set it on the item it belongs to by putting that item last. */
+			note: string | null;
+	  }
 	| { form: "numbered"; items: string[] }
 	| {
 			form: "word";
@@ -146,7 +154,12 @@ export function slideLayout(slide: Slide): SlideLayout {
 			if (slide.title) items.push(`Speech Title: “${slide.title}”`);
 			if (slide.projectLevel) items.push(`Project: ${slide.projectLevel}`);
 			items.push(`Time: ${slide.time}`);
-			return content(slide.label, { form: "bullets", items, link: slide.link });
+			return content(slide.label, {
+				form: "bullets",
+				items,
+				link: slide.link,
+				note: null,
+			});
 		}
 		case "voteSpeaker": {
 			// Timer-aware like the other two vote slides: the run sheet's beat-6
@@ -162,16 +175,24 @@ export function slideLayout(slide: Slide): SlideLayout {
 			);
 			return content("Vote for Best Speaker", { form: "centered", lines });
 		}
-		case "tableTopics":
+		case "tableTopics": {
+			const items = [
+				`Table Topic Master: ${slide.master}`,
+				"Impromptu Speeches",
+				`Speaker time: ${slide.timing}`,
+			];
+			// Last, so the definition below it reads as belonging to it — and so the
+			// word is the line the room's eye ends on for the whole segment (#355).
+			if (slide.word) items.push(`Word of the Day: “${slide.word}”`);
 			return content("Table Topics", {
 				form: "bullets",
-				items: [
-					`Table Topic Master: ${slide.master}`,
-					"Impromptu Speeches",
-					`Speaker time: ${slide.timing}`,
-				],
+				items,
 				link: null,
+				// Muted, not a fourth bullet: the definition is context for working
+				// the word in, not another instruction to the Table Topics Master.
+				note: slide.word ? slide.definition : null,
 			});
+		}
 		case "voteTableTopics": {
 			// Beat 8's fallback drops the timer's-report clause on the same signal.
 			const lines: Line[] = slide.hasTimer
@@ -222,6 +243,18 @@ export function slideLayout(slide: Slide): SlideLayout {
 			return content("Award Presentation", {
 				form: "numbered",
 				items: slide.categories,
+			});
+		case "guestComments":
+			// Addressed to the room rather than to named individuals (#352): the
+			// slide is up while the President turns to whoever is visiting, and a
+			// list built from the recorded guests would silently leave out anyone
+			// who simply walked in.
+			return content("Guest Comments", {
+				form: "centered",
+				lines: [
+					head("We’d love to hear from our guests."),
+					muted("How did you find the meeting today?"),
+				],
 			});
 		case "reminders":
 			return content("Announcements", {

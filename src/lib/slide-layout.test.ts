@@ -474,6 +474,76 @@ describe("slideLayout bodies", () => {
 		});
 	});
 
+	// #355. #354 made the standalone `wordOfDay` slide the PRESENTATION of the
+	// word — full size, definition and example, credited to the Grammarian who
+	// delivers it. This is the other half: a REMINDER, kept in front of the room
+	// for the ten minutes the word is actually being used. No example, and no
+	// presenter credit, because nobody is presenting it here.
+	it("table topics reminds the room of the Word of the Day (#355)", () => {
+		const l = slideLayout({
+			kind: "tableTopics",
+			master: "Rasheed",
+			timing: "1–2 minutes per speaker",
+			word: "Momentum",
+			definition: "impetus gained by a moving object",
+		});
+		if (l.chrome === "content" && l.body.form === "bullets") {
+			expect(l.body.items).toEqual([
+				"Table Topic Master: Rasheed",
+				"Impromptu Speeches",
+				"Speaker time: 1–2 minutes per speaker",
+				"Word of the Day: “Momentum”",
+			]);
+			// The definition rides under the word as a muted note rather than a
+			// fourth 40pt bullet — it is context, not an instruction.
+			expect(l.body.note).toBe("impetus gained by a moving object");
+		} else throw new Error("expected bullets");
+	});
+
+	it("table topics shows the word with no definition, and neither when unset", () => {
+		const wordOnly = slideLayout({
+			kind: "tableTopics",
+			master: "Rasheed",
+			timing: "1–2 minutes per speaker",
+			word: "Momentum",
+			definition: null,
+		});
+		if (wordOnly.chrome === "content" && wordOnly.body.form === "bullets") {
+			expect(wordOnly.body.items).toContain("Word of the Day: “Momentum”");
+			expect(wordOnly.body.note).toBeNull();
+		} else throw new Error("expected bullets");
+
+		const none = slideLayout({
+			kind: "tableTopics",
+			master: "Rasheed",
+			timing: "1–2 minutes per speaker",
+			word: null,
+			definition: null,
+		});
+		if (none.chrome === "content" && none.body.form === "bullets") {
+			expect(none.body.items).toEqual([
+				"Table Topic Master: Rasheed",
+				"Impromptu Speeches",
+				"Speaker time: 1–2 minutes per speaker",
+			]);
+			expect(none.body.note).toBeNull();
+		} else throw new Error("expected bullets");
+	});
+
+	it("guest comments is a generic invitation, with no names on it (#352)", () => {
+		// A first cut deliberately: the meeting's recorded guests could be named
+		// here, but a guest who came without being booked in is the common case and
+		// a slide that lists only the known ones reads as excluding the rest.
+		const l = slideLayout({ kind: "guestComments" });
+		expect(l.chrome === "content" && l.header).toBe("Guest Comments");
+		if (l.chrome === "content" && l.body.form === "centered") {
+			expect(l.body.lines).toEqual([
+				{ role: "head", text: "We’d love to hear from our guests." },
+				{ role: "muted", text: "How did you find the meeting today?" },
+			]);
+		} else throw new Error("expected centered");
+	});
+
 	it("reminders maps non-blank lines to trimmed muted lines, blanks to spacers", () => {
 		const l = slideLayout({
 			kind: "reminders",

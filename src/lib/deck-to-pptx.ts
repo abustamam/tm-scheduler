@@ -235,6 +235,16 @@ function renderBody(s: PptxSlide, body: Body) {
 				options: { hyperlink: { url: body.link } },
 			});
 		}
+		if (body.note) {
+			// A muted, unbulleted line under the last bullet (#355). The run options
+			// below override the block's bold 40pt, so it reads as context.
+			const last = runs[runs.length - 1];
+			if (last) last.options = { ...last.options, breakLine: true };
+			runs.push({
+				text: body.note,
+				options: { bullet: false, bold: false, fontSize: 26, color: MUTED },
+			});
+		}
 		s.addText(runs, {
 			...BODY,
 			align: "left",

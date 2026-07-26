@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgendaSlot } from "./agenda-runsheet";
+import { beatDuration, buildRunOfShow } from "./agenda-runsheet";
 import {
 	buildSlideDeck,
 	type ClubForDeck,
@@ -60,7 +61,7 @@ describe("buildSlideDeck anchors", () => {
 	it("always emits title and thankYou — even with no slots", () => {
 		// The Toastmaster slide is NOT an anchor: it is beat 3 in slide form and
 		// is gated on the role, like every other section (#367).
-		expect(kinds([])).toEqual(["title", "thankYou"]);
+		expect(kinds([])).toEqual(["title", "guestComments", "thankYou"]);
 	});
 
 	it("title slide carries club identity + schedule time", () => {
@@ -165,6 +166,7 @@ describe("buildSlideDeck toastmaster intro + word of the day", () => {
 			"toastmasterIntro",
 			"wordOfDay",
 			"functionaryIntro",
+			"guestComments",
 			"thankYou",
 		]);
 	});
@@ -253,6 +255,7 @@ describe("buildSlideDeck speeches", () => {
 			"speech",
 			"voteSpeaker",
 			"awards",
+			"guestComments",
 			"thankYou",
 		]);
 	});
@@ -268,7 +271,7 @@ describe("buildSlideDeck speeches", () => {
 			isSpeakerRole: true,
 			assigneeName: "Nadia",
 		});
-		expect(kinds([custom])).toEqual(["title", "thankYou"]);
+		expect(kinds([custom])).toEqual(["title", "guestComments", "thankYou"]);
 		// …while a RENAMED standard speaker role keeps its key and still binds.
 		const renamed = slot({
 			id: "sp",
@@ -337,6 +340,7 @@ describe("buildSlideDeck table topics", () => {
 			"tableTopics",
 			"voteTableTopics",
 			"awards",
+			"guestComments",
 			"thankYou",
 		]);
 	});
@@ -352,6 +356,62 @@ describe("buildSlideDeck table topics", () => {
 	it("omits both table-topics slides when the role is absent", () => {
 		expect(kinds([])).not.toContain("tableTopics");
 		expect(kinds([])).not.toContain("voteTableTopics");
+	});
+
+	// #355: the beat is literally "Impromptu topics using the Word of the Day", so
+	// the word has to be on the slide the room is looking at while they use it.
+	// The standalone `wordOfDay` slide (#354) is a dozen slides back by then.
+	describe("carries the Word of the Day (#355)", () => {
+		const wodOf = (over: Partial<MeetingForDeck>) =>
+			build({ slots: [tt], meeting: { ...meeting, ...over } }).find(
+				(s) => s.kind === "tableTopics",
+			);
+
+		it("reminds the room of the word and its definition", () => {
+			expect(
+				wodOf({
+					wordOfTheDay: "Momentum",
+					wodDefinition: "impetus gained by a moving object",
+				}),
+			).toMatchObject({
+				word: "Momentum",
+				definition: "impetus gained by a moving object",
+			});
+		});
+
+		it("shows the word even with no definition — a narrower gate than #354's", () => {
+			// The standalone slide needs a definition or an example to be worth a
+			// slide of its own, so a club that sets only the word gets none at all —
+			// which is exactly the club whose Table Topics segment would otherwise
+			// have no record of the word anywhere.
+			expect(wodOf({ wordOfTheDay: "Momentum" })).toMatchObject({
+				word: "Momentum",
+				definition: null,
+			});
+		});
+
+		it("carries no example — the word is being used here, not presented", () => {
+			expect(
+				wodOf({
+					wordOfTheDay: "Momentum",
+					wodDefinition: "impetus",
+					wodExample: "The momentum of the river keeps moving forward.",
+				}),
+			).not.toMatchObject({ example: expect.anything() });
+		});
+
+		it("is blank when the meeting has no Word of the Day", () => {
+			expect(wodOf({})).toMatchObject({ word: null, definition: null });
+		});
+
+		it("ignores a whitespace-only word, like every other WOD surface", () => {
+			expect(wodOf({ wordOfTheDay: "   ", wodDefinition: "  " })).toMatchObject(
+				{
+					word: null,
+					definition: null,
+				},
+			);
+		});
 	});
 });
 
@@ -525,6 +585,7 @@ describe("buildSlideDeck functionary intro (#367)", () => {
 			"title",
 			"toastmaster",
 			"functionaryIntro",
+			"guestComments",
 			"thankYou",
 		]);
 	});
@@ -585,6 +646,7 @@ describe("buildSlideDeck functionary reports (#367 / #353)", () => {
 			"functionaryReports",
 			"generalEvaluation",
 			"awards",
+			"guestComments",
 			"thankYou",
 		]);
 	});
@@ -672,6 +734,7 @@ describe("buildSlideDeck evaluation session", () => {
 			"evaluatorEvaluation",
 			"generalEvaluation",
 			"awards",
+			"guestComments",
 			"thankYou",
 		]);
 	});
@@ -683,7 +746,23 @@ describe("buildSlideDeck evaluation session", () => {
 		expect(slide).toMatchObject({
 			evaluator: "Faisal Ali",
 			speaker: "Rehanna Khan",
-			time: "2–3 minutes",
+			// Beat 9's budget, not a second opinion about it (#356). The deck used
+			// to hardcode "2–3 minutes" while the run sheet booked 3.
+			time: "3 minutes",
+		});
+	});
+
+	it("quotes the beat's budget, so a retimed beat moves the slide (#356)", () => {
+		const template = buildRunOfShow({ geIntroducesFunctionaries: false });
+		const deck = build({ slots: [ge, speaker, evaluator] });
+		expect(deck.find((s) => s.kind === "evaluation")).toMatchObject({
+			time: beatDuration(template, "evaluation"),
+		});
+		expect(deck.find((s) => s.kind === "evaluatorEvaluation")).toMatchObject({
+			time: beatDuration(template, "evaluatorEvaluation"),
+		});
+		expect(deck.find((s) => s.kind === "generalEvaluation")).toMatchObject({
+			time: beatDuration(template, "generalEvaluation"),
 		});
 	});
 
@@ -772,13 +851,38 @@ describe("buildSlideDeck awards + reminders", () => {
 		expect(kinds([])).not.toContain("awards");
 	});
 
+	it("projects guest comments between the awards and the announcements (#352)", () => {
+		const deck = build({
+			slots: [speaker, tt, evaluator],
+			meeting: { ...meeting, reminders: "Choose a learning path." },
+		});
+		const kindsOf = deck.map((s) => s.kind);
+		expect(kindsOf.indexOf("guestComments")).toBe(
+			kindsOf.indexOf("awards") + 1,
+		);
+		expect(kindsOf.indexOf("reminders")).toBe(
+			kindsOf.indexOf("guestComments") + 1,
+		);
+	});
+
+	it("guest comments are projected even for a club that scores nothing (#352)", () => {
+		// The beat is ungated — every meeting can have guests — so the slide is
+		// too, or the deck skips a segment the printed agenda books time for.
+		expect(kinds([])).toEqual(["title", "guestComments", "thankYou"]);
+	});
+
 	it("reminders slide only when reminders non-blank, just before thankYou", () => {
 		expect(kinds([])).not.toContain("reminders");
 		const deck = build({
 			meeting: { ...meeting, reminders: "Choose a learning path." },
 		});
-		expect(deck.map((s) => s.kind)).toEqual(["title", "reminders", "thankYou"]);
-		expect(deck[1]).toMatchObject({
+		expect(deck.map((s) => s.kind)).toEqual([
+			"title",
+			"guestComments",
+			"reminders",
+			"thankYou",
+		]);
+		expect(deck[2]).toMatchObject({
 			kind: "reminders",
 			text: "Choose a learning path.",
 		});
@@ -877,6 +981,9 @@ describe("buildSlideDeck full meeting ordering", () => {
 			"functionaryReports",
 			"generalEvaluation",
 			"awards",
+			// #352: guest comments come between the awards and the closing
+			// announcements, where the room actually takes them.
+			"guestComments",
 			"reminders",
 			"thankYou",
 		]);

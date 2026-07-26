@@ -5,8 +5,10 @@ import type {
 } from "./agenda-runsheet";
 import {
 	assigneeDisplay,
+	beatDuration,
 	buildLegend,
 	buildReportingLegend,
+	buildRunOfShow,
 	DEFAULT_SPEAKER_MINUTES,
 	hasAnyFunctionaryRole,
 	hasAnyReportingFunctionaryRole,
@@ -106,7 +108,26 @@ export type Slide =
 			link: string | null;
 	  }
 	| ({ kind: "voteSpeaker"; names: string[] } & VoteTiming)
-	| { kind: "tableTopics"; master: string; timing: string }
+	| {
+			kind: "tableTopics";
+			master: string;
+			timing: string;
+			/** The Word of the Day, kept on screen for the segment that exists to
+			 *  use it — beat 7 is literally "Impromptu topics using the Word of the
+			 *  Day" (#355). A REMINDER, not a second presentation: the standalone
+			 *  `wordOfDay` slide (#354) is where the Grammarian presents the word
+			 *  in full, a dozen slides earlier. Hence no example and no presenter
+			 *  credit here — nobody is delivering it at this point, they are
+			 *  working it into an answer. `null` when the meeting has no word. */
+			word: string | null;
+			/** The word's definition, when the meeting records one. A narrower gate
+			 *  than the standalone slide's, which needs a definition or an example
+			 *  to exist at all: a club that sets only the word gets no `wordOfDay`
+			 *  slide, so by Table Topics the word has not been on screen since the
+			 *  opening `toastmasterIntro` — which is the segment that asks the room
+			 *  to use it. */
+			definition: string | null;
+	  }
 	| ({ kind: "voteTableTopics" } & VoteTiming)
 	| {
 			kind: "evaluation";
@@ -132,6 +153,15 @@ export type Slide =
 	  }
 	| { kind: "generalEvaluation"; name: string; time: string }
 	| { kind: "awards"; categories: string[] }
+	| {
+			/** Beat 15 (#352): the President invites the guests to comment, between
+			 *  the awards and the closing announcements. Carries no data — a first
+			 *  cut that prompts the room generically rather than reading the
+			 *  meeting's recorded guests, since guests who were never booked in are
+			 *  the common case and a partial list reads as excluding the rest.
+			 *  Ungated, exactly like the beat. */
+			kind: "guestComments";
+	  }
 	| { kind: "reminders"; text: string }
 	| {
 			kind: "thankYou";
@@ -165,12 +195,18 @@ const ROLE = {
 	grammarian: { key: "grammarian", name: "Grammarian" },
 } as const satisfies Record<string, RoleRef>;
 
-/** Hardcoded standard Toastmasters durations for slots without per-slot timing. */
+/**
+ * The one duration on the deck that is NOT a beat's budget (#356), and the
+ * reason it is exempt: this is the limit on a SINGLE impromptu answer, while
+ * beat 7 books the whole Table Topics SEGMENT. Deriving it would project
+ * "Speaker time: 10 minutes" at a speaker who has one to two — a per-speaker
+ * versus per-segment difference, not a disagreement.
+ *
+ * The segment number is also the one the deck could never state honestly:
+ * `applyFlex` resizes beat 7 at render time to whatever makes the meeting come
+ * out to its scheduled length, and the deck is not given that length.
+ */
 export const TABLE_TOPICS_TIMING = "1–2 minutes per speaker";
-export const EVALUATION_TIMING = "2–3 minutes";
-/** Beat 11's duration, as the run-of-show sets it. */
-export const EVALUATOR_EVALUATION_TIMING = "2 minutes";
-export const GENERAL_EVALUATION_TIMING = "2 minutes";
 
 function speechTime(min: number | null, max: number | null): string {
 	if (min != null && max != null) return `${min}–${max} minutes`;
@@ -229,6 +265,10 @@ export function buildSlideDeck({
 	geIntroducesFunctionaries,
 }: SlideDeckInput): Slide[] {
 	const deck: Slide[] = [];
+	// The same run-of-show the printed agenda expands, built from the same club
+	// config — so the durations the deck projects ARE the ones the timeline
+	// books, rather than a second set of numbers that happens to match (#356).
+	const runOfShow = buildRunOfShow({ geIntroducesFunctionaries });
 
 	deck.push({
 		kind: "title",
@@ -334,6 +374,11 @@ export function buildSlideDeck({
 			kind: "tableTopics",
 			master: assigneeDisplay(tableTopics[0]),
 			timing: TABLE_TOPICS_TIMING,
+			// Gated on the word alone (#355) — the definition rides along when the
+			// meeting has one. Read from the same trimmed values the opening slides
+			// use, so a whitespace-only field is blank everywhere.
+			word: wodWord,
+			definition: wodWord ? wodDefinition : null,
 		});
 		deck.push({ kind: "voteTableTopics", hasTimer });
 	}
@@ -347,7 +392,7 @@ export function buildSlideDeck({
 				label: numbered("Evaluation", i, multi),
 				evaluator: assigneeDisplay(s),
 				speaker: s.evaluates?.speakerName ?? null,
-				time: EVALUATION_TIMING,
+				time: beatDuration(runOfShow, "evaluation"),
 			});
 		});
 		deck.push({
@@ -365,7 +410,7 @@ export function buildSlideDeck({
 		deck.push({
 			kind: "evaluatorEvaluation",
 			name: assigneeDisplay(generalEvaluator[0]),
-			time: EVALUATOR_EVALUATION_TIMING,
+			time: beatDuration(runOfShow, "evaluatorEvaluation"),
 		});
 	}
 
@@ -384,7 +429,7 @@ export function buildSlideDeck({
 		deck.push({
 			kind: "generalEvaluation",
 			name: assigneeDisplay(generalEvaluator[0]),
-			time: GENERAL_EVALUATION_TIMING,
+			time: beatDuration(runOfShow, "generalEvaluation"),
 		});
 	}
 
@@ -395,6 +440,10 @@ export function buildSlideDeck({
 	if (awardCategories.length > 0) {
 		deck.push({ kind: "awards", categories: awardCategories });
 	}
+
+	// Beat 15 (#352), between the awards and the announcements. Ungated, like the
+	// beat: the club cannot know in advance whether guests will be in the room.
+	deck.push({ kind: "guestComments" });
 
 	if (meeting.reminders?.trim()) {
 		deck.push({ kind: "reminders", text: meeting.reminders.trim() });
