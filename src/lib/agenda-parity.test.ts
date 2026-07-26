@@ -38,7 +38,8 @@ type Section =
 	| "evaluatorEvaluation"
 	| "functionaryReports"
 	| "generalEvaluation"
-	| "awards";
+	| "awards"
+	| "guestComments";
 
 // ---------------------------------------------------------------------------
 // The two mappings. Every beat and every slide kind is accounted for; the
@@ -48,7 +49,7 @@ type Section =
 
 /**
  * Section identity of each beat `buildRunOfShow` emits, IN ORDER (beats 1–15 of
- * the spec's table). `detail` pins each entry to the actual beat, so a reworded
+ * the spec's table, plus the guest-comments beat #352 inserts at 15). `detail` pins each entry to the actual beat, so a reworded
  * or reordered template fails here with a readable diff instead of silently
  * mislabelling a section.
  */
@@ -89,11 +90,19 @@ const BEATS: { detail: string; section: Section | null }[] = [
 	// is exactly how the deck's `awards` slide was already built, so the two are
 	// comparable rather than a standing content difference.
 	{ detail: "Awards · {awards}", section: "awards" },
-	// Beat 15 — President's club business / adjourn. Event beat, no slide.
+	// Beat 15 (#352) — guest comments, carved out of the President's closing so
+	// they get a row to point at and minutes on the clock. Ungated, like the
+	// opening remarks: every meeting can have guests, and the spec rules out a
+	// per-club toggle. It is a SECTION, not an exclusion — #352 adds it to both
+	// surfaces, so it has to be compared.
 	{
-		detail: "Club business · elections, guest comments · adjourn",
-		section: null,
+		detail: "Guest Comments · invites our guests to share their thoughts",
+		section: "guestComments",
 	},
+	// Beat 16 — President's club business / adjourn. Event beat, no slide. It no
+	// longer mentions guest comments: the beat above is the replacement the
+	// clause was waiting for, and prompting for them twice is worse than once.
+	{ detail: "Club business · elections · adjourn", section: null },
 ];
 
 /**
@@ -119,8 +128,6 @@ const SECTION_BY_SLIDE = {
 	// the word is beat 4's "each explains their role" and beat 7's Table Topics
 	// detail — neither is a Word-of-the-Day section of its own.
 	wordOfDay: null,
-	// Gated on which scored segments exist — and so is beat 14, as of #372.
-	awards: "awards",
 	// Free-text per-meeting announcements (#349). No beat.
 	reminders: null,
 	// Deck chrome: the closing splash. No beat.
@@ -137,6 +144,10 @@ const SECTION_BY_SLIDE = {
 	evaluatorEvaluation: "evaluatorEvaluation",
 	functionaryReports: "functionaryReports",
 	generalEvaluation: "generalEvaluation",
+	// Gated on which scored segments exist — and so is beat 14, as of #372.
+	awards: "awards",
+	// Ungated on both surfaces (#352): every meeting can have guests.
+	guestComments: "guestComments",
 } satisfies Record<Slide["kind"], Section | null>;
 
 /**
@@ -532,6 +543,7 @@ describe("run-sheet ⇄ deck section-order parity (#367)", () => {
 			"functionaryReports",
 			"generalEvaluation",
 			"awards",
+			"guestComments",
 		];
 		for (const config of CONFIGS) {
 			expect(printSections(FULL, config)).toEqual(expected);

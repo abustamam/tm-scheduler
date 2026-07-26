@@ -466,14 +466,30 @@ export function buildRunOfShow({
 			requiresAnyOf: AWARD_CATEGORIES.map((a) => a.role),
 		},
 		{
+			// Guest comments (#352). They happen every meeting, right after the
+			// awards, and until now were a clause inside the President's closing —
+			// no row the Toastmaster could point at and no minutes on the clock, so
+			// the agenda ran late by however long they took.
+			//
+			// Ungated on purpose. Every meeting can have guests, the club cannot
+			// know in advance, and a segment that is skipped when the room is empty
+			// costs nothing; the spec explicitly rules out a per-club toggle.
+			// The President owns it because the beat is carved out of the
+			// President's closing — this gives the responsibility its own row, it
+			// does not move it to somebody else — and because the President is who
+			// welcomed those guests at beat 2.
 			kind: "event",
 			who: "President",
-			// "guest comments" has been part of this beat since before the #367
-			// rewrite and is the only place guests are invited to speak: the
-			// dedicated guest-comments beat (#352) is deferred, so dropping the
-			// clause here removes guest comments from every club's agenda with
-			// nothing replacing them.
-			detail: "Club business · elections, guest comments · adjourn",
+			detail: "Guest Comments · invites our guests to share their thoughts",
+			minutes: 2,
+		},
+		{
+			kind: "event",
+			who: "President",
+			// The ", guest comments" clause that used to live here is gone: it was
+			// kept only because the dedicated beat above was deferred, and leaving
+			// both would have the agenda invite the same guests to speak twice.
+			detail: "Club business · elections · adjourn",
 			minutes: 3,
 		},
 	];

@@ -223,6 +223,18 @@ export function slideLayout(slide: Slide): SlideLayout {
 				form: "numbered",
 				items: slide.categories,
 			});
+		case "guestComments":
+			// Addressed to the room rather than to named individuals (#352): the
+			// slide is up while the President turns to whoever is visiting, and a
+			// list built from the recorded guests would silently leave out anyone
+			// who simply walked in.
+			return content("Guest Comments", {
+				form: "centered",
+				lines: [
+					head("We’d love to hear from our guests."),
+					muted("How did you find the meeting today?"),
+				],
+			});
 		case "reminders":
 			return content("Announcements", {
 				form: "centered",

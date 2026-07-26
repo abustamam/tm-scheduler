@@ -61,7 +61,7 @@ describe("buildSlideDeck anchors", () => {
 	it("always emits title and thankYou — even with no slots", () => {
 		// The Toastmaster slide is NOT an anchor: it is beat 3 in slide form and
 		// is gated on the role, like every other section (#367).
-		expect(kinds([])).toEqual(["title", "thankYou"]);
+		expect(kinds([])).toEqual(["title", "guestComments", "thankYou"]);
 	});
 
 	it("title slide carries club identity + schedule time", () => {
@@ -166,6 +166,7 @@ describe("buildSlideDeck toastmaster intro + word of the day", () => {
 			"toastmasterIntro",
 			"wordOfDay",
 			"functionaryIntro",
+			"guestComments",
 			"thankYou",
 		]);
 	});
@@ -254,6 +255,7 @@ describe("buildSlideDeck speeches", () => {
 			"speech",
 			"voteSpeaker",
 			"awards",
+			"guestComments",
 			"thankYou",
 		]);
 	});
@@ -269,7 +271,7 @@ describe("buildSlideDeck speeches", () => {
 			isSpeakerRole: true,
 			assigneeName: "Nadia",
 		});
-		expect(kinds([custom])).toEqual(["title", "thankYou"]);
+		expect(kinds([custom])).toEqual(["title", "guestComments", "thankYou"]);
 		// …while a RENAMED standard speaker role keeps its key and still binds.
 		const renamed = slot({
 			id: "sp",
@@ -338,6 +340,7 @@ describe("buildSlideDeck table topics", () => {
 			"tableTopics",
 			"voteTableTopics",
 			"awards",
+			"guestComments",
 			"thankYou",
 		]);
 	});
@@ -526,6 +529,7 @@ describe("buildSlideDeck functionary intro (#367)", () => {
 			"title",
 			"toastmaster",
 			"functionaryIntro",
+			"guestComments",
 			"thankYou",
 		]);
 	});
@@ -586,6 +590,7 @@ describe("buildSlideDeck functionary reports (#367 / #353)", () => {
 			"functionaryReports",
 			"generalEvaluation",
 			"awards",
+			"guestComments",
 			"thankYou",
 		]);
 	});
@@ -673,6 +678,7 @@ describe("buildSlideDeck evaluation session", () => {
 			"evaluatorEvaluation",
 			"generalEvaluation",
 			"awards",
+			"guestComments",
 			"thankYou",
 		]);
 	});
@@ -789,13 +795,38 @@ describe("buildSlideDeck awards + reminders", () => {
 		expect(kinds([])).not.toContain("awards");
 	});
 
+	it("projects guest comments between the awards and the announcements (#352)", () => {
+		const deck = build({
+			slots: [speaker, tt, evaluator],
+			meeting: { ...meeting, reminders: "Choose a learning path." },
+		});
+		const kindsOf = deck.map((s) => s.kind);
+		expect(kindsOf.indexOf("guestComments")).toBe(
+			kindsOf.indexOf("awards") + 1,
+		);
+		expect(kindsOf.indexOf("reminders")).toBe(
+			kindsOf.indexOf("guestComments") + 1,
+		);
+	});
+
+	it("guest comments are projected even for a club that scores nothing (#352)", () => {
+		// The beat is ungated — every meeting can have guests — so the slide is
+		// too, or the deck skips a segment the printed agenda books time for.
+		expect(kinds([])).toEqual(["title", "guestComments", "thankYou"]);
+	});
+
 	it("reminders slide only when reminders non-blank, just before thankYou", () => {
 		expect(kinds([])).not.toContain("reminders");
 		const deck = build({
 			meeting: { ...meeting, reminders: "Choose a learning path." },
 		});
-		expect(deck.map((s) => s.kind)).toEqual(["title", "reminders", "thankYou"]);
-		expect(deck[1]).toMatchObject({
+		expect(deck.map((s) => s.kind)).toEqual([
+			"title",
+			"guestComments",
+			"reminders",
+			"thankYou",
+		]);
+		expect(deck[2]).toMatchObject({
 			kind: "reminders",
 			text: "Choose a learning path.",
 		});
@@ -894,6 +925,9 @@ describe("buildSlideDeck full meeting ordering", () => {
 			"functionaryReports",
 			"generalEvaluation",
 			"awards",
+			// #352: guest comments come between the awards and the closing
+			// announcements, where the room actually takes them.
+			"guestComments",
 			"reminders",
 			"thankYou",
 		]);

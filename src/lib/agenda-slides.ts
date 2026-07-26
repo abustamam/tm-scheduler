@@ -134,6 +134,15 @@ export type Slide =
 	  }
 	| { kind: "generalEvaluation"; name: string; time: string }
 	| { kind: "awards"; categories: string[] }
+	| {
+			/** Beat 15 (#352): the President invites the guests to comment, between
+			 *  the awards and the closing announcements. Carries no data — a first
+			 *  cut that prompts the room generically rather than reading the
+			 *  meeting's recorded guests, since guests who were never booked in are
+			 *  the common case and a partial list reads as excluding the rest.
+			 *  Ungated, exactly like the beat. */
+			kind: "guestComments";
+	  }
 	| { kind: "reminders"; text: string }
 	| {
 			kind: "thankYou";
@@ -407,6 +416,10 @@ export function buildSlideDeck({
 	if (awardCategories.length > 0) {
 		deck.push({ kind: "awards", categories: awardCategories });
 	}
+
+	// Beat 15 (#352), between the awards and the announcements. Ungated, like the
+	// beat: the club cannot know in advance whether guests will be in the room.
+	deck.push({ kind: "guestComments" });
 
 	if (meeting.reminders?.trim()) {
 		deck.push({ kind: "reminders", text: meeting.reminders.trim() });

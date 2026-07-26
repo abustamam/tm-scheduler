@@ -474,6 +474,20 @@ describe("slideLayout bodies", () => {
 		});
 	});
 
+	it("guest comments is a generic invitation, with no names on it (#352)", () => {
+		// A first cut deliberately: the meeting's recorded guests could be named
+		// here, but a guest who came without being booked in is the common case and
+		// a slide that lists only the known ones reads as excluding the rest.
+		const l = slideLayout({ kind: "guestComments" });
+		expect(l.chrome === "content" && l.header).toBe("Guest Comments");
+		if (l.chrome === "content" && l.body.form === "centered") {
+			expect(l.body.lines).toEqual([
+				{ role: "head", text: "We’d love to hear from our guests." },
+				{ role: "muted", text: "How did you find the meeting today?" },
+			]);
+		} else throw new Error("expected centered");
+	});
+
 	it("reminders maps non-blank lines to trimmed muted lines, blanks to spacers", () => {
 		const l = slideLayout({
 			kind: "reminders",

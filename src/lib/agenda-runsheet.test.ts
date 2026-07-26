@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AgendaRow, AgendaSlot } from "./agenda-runsheet";
 import {
+	AWARDS_TOKEN,
 	applyFlex,
 	beatDuration,
 	buildLegend,
@@ -38,9 +39,9 @@ function slot(over: Partial<AgendaSlot>): AgendaSlot {
 }
 
 describe("buildRunOfShow", () => {
-	it("returns 15 ordered beats for the corrected default (non-MCF) variant", () => {
+	it("returns 16 ordered beats for the corrected default (non-MCF) variant", () => {
 		const beats = buildRunOfShow({ geIntroducesFunctionaries: false });
-		expect(beats).toHaveLength(15);
+		expect(beats).toHaveLength(16);
 	});
 
 	it("every beat has a positive duration", () => {
@@ -121,19 +122,37 @@ describe("buildRunOfShow", () => {
 		}
 	});
 
-	// Regression: the #367 template rewrite silently dropped ", guest comments"
-	// from the closing beat that has carried it since before the rewrite. The
-	// dedicated guest-comments beat (#352) is deferred, so nothing replaces it —
-	// dropping the clause removes guest comments from every club's agenda. This
-	// pins the wording so it can only ever change deliberately.
-	it("the closing beat still invites guest comments (#352 is deferred)", () => {
+	// Guest comments used to be a clause inside the President's closing beat, kept
+	// there only because the dedicated beat (#352) was deferred and dropping it
+	// would have removed guest comments from every club's agenda with nothing
+	// replacing them. This IS the replacement, so the clause goes: two prompts to
+	// invite the same guests, one of them with no time booked, is worse than the
+	// single row the Toastmaster can point at.
+	it("invites guest comments once — its own beat, after the awards (#352)", () => {
 		for (const geIntroducesFunctionaries of [false, true]) {
 			const beats = buildRunOfShow({ geIntroducesFunctionaries });
+			const guests = beats[beats.length - 2];
+			expect(guests).toMatchObject({
+				kind: "event",
+				who: "President",
+				detail: "Guest Comments · invites our guests to share their thoughts",
+			});
+			// Its own minutes, so the timeline accounts for time the meeting was
+			// already spending off-book.
+			expect(guests.minutes).toBeGreaterThan(0);
+			// Directly after the awards, and directly before the closing.
+			expect(beats[beats.length - 3].detail).toBe(`Awards · ${AWARDS_TOKEN}`);
 			expect(beats[beats.length - 1]).toMatchObject({
 				kind: "event",
 				who: "President",
-				detail: "Club business · elections, guest comments · adjourn",
+				detail: "Club business · elections · adjourn",
 			});
+			// Exactly one beat asks for guest comments.
+			expect(
+				beats.filter(
+					(b) => /guest/i.test(b.detail) && !/welcome/i.test(b.detail),
+				),
+			).toHaveLength(1);
 		}
 	});
 
@@ -318,7 +337,10 @@ describe("expandRunSheet", () => {
 	it("renders ungated event beats unconditionally, even with no slots at all", () => {
 		const rows = expandRunSheet([]);
 		expect(rows.some((r) => r.who === "Sergeant-at-Arms")).toBe(true);
-		expect(rows.filter((r) => r.who === "President")).toHaveLength(2);
+		// Opening remarks, guest comments (#352) and the closing. Guest comments is
+		// unconditional by design: every meeting can have guests, and the spec rules
+		// out a per-club toggle.
+		expect(rows.filter((r) => r.who === "President")).toHaveLength(3);
 	});
 
 	it("drops the awards beat with no slots — it is gated, not ungated (#372)", () => {
