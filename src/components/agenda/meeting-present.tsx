@@ -522,6 +522,17 @@ function BodyView({
 						</span>
 					</div>
 				) : null}
+				{body.note ? (
+					// Pulled up under the last bullet and indented past its marker, so
+					// the note reads as belonging to that line rather than floating as
+					// a fifth item (#355).
+					<div
+						className="-mt-[1.6cqw] pl-[3.4cqw] text-[2.5cqw] leading-snug"
+						style={{ color: MUTED }}
+					>
+						{body.note}
+					</div>
+				) : null}
 			</div>
 		);
 	}

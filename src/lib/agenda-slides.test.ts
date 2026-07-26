@@ -357,6 +357,62 @@ describe("buildSlideDeck table topics", () => {
 		expect(kinds([])).not.toContain("tableTopics");
 		expect(kinds([])).not.toContain("voteTableTopics");
 	});
+
+	// #355: the beat is literally "Impromptu topics using the Word of the Day", so
+	// the word has to be on the slide the room is looking at while they use it.
+	// The standalone `wordOfDay` slide (#354) is a dozen slides back by then.
+	describe("carries the Word of the Day (#355)", () => {
+		const wodOf = (over: Partial<MeetingForDeck>) =>
+			build({ slots: [tt], meeting: { ...meeting, ...over } }).find(
+				(s) => s.kind === "tableTopics",
+			);
+
+		it("reminds the room of the word and its definition", () => {
+			expect(
+				wodOf({
+					wordOfTheDay: "Momentum",
+					wodDefinition: "impetus gained by a moving object",
+				}),
+			).toMatchObject({
+				word: "Momentum",
+				definition: "impetus gained by a moving object",
+			});
+		});
+
+		it("shows the word even with no definition — a narrower gate than #354's", () => {
+			// The standalone slide needs a definition or an example to be worth a
+			// slide of its own, so a club that sets only the word gets none at all —
+			// which is exactly the club whose Table Topics segment would otherwise
+			// have no record of the word anywhere.
+			expect(wodOf({ wordOfTheDay: "Momentum" })).toMatchObject({
+				word: "Momentum",
+				definition: null,
+			});
+		});
+
+		it("carries no example — the word is being used here, not presented", () => {
+			expect(
+				wodOf({
+					wordOfTheDay: "Momentum",
+					wodDefinition: "impetus",
+					wodExample: "The momentum of the river keeps moving forward.",
+				}),
+			).not.toMatchObject({ example: expect.anything() });
+		});
+
+		it("is blank when the meeting has no Word of the Day", () => {
+			expect(wodOf({})).toMatchObject({ word: null, definition: null });
+		});
+
+		it("ignores a whitespace-only word, like every other WOD surface", () => {
+			expect(wodOf({ wordOfTheDay: "   ", wodDefinition: "  " })).toMatchObject(
+				{
+					word: null,
+					definition: null,
+				},
+			);
+		});
+	});
 });
 
 describe("buildSlideDeck vote slides (#367)", () => {

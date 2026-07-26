@@ -95,6 +95,30 @@ describe("MeetingPresent", () => {
 		expect(screen.getByText("Presented by the Grammarian · Mona")).toBeTruthy();
 	});
 
+	// #355. The word is announced up front and then a dozen slides go by before
+	// Table Topics, which is where it is meant to be USED. Projecting it again
+	// here is a reminder, not a second presentation — hence no Grammarian credit
+	// and no example, both of which belong to the slide #354 moved up front.
+	it("keeps the Word of the Day on screen through Table Topics (#355)", () => {
+		render(
+			<MeetingPresent
+				deck={[
+					{
+						kind: "tableTopics",
+						master: "Rasheed",
+						timing: "1–2 minutes per speaker",
+						word: "Momentum",
+						definition: "impetus gained by a moving object",
+					},
+				]}
+				clubName={CLUB_NAME}
+			/>,
+		);
+
+		expect(screen.getByText("Word of the Day: “Momentum”")).toBeTruthy();
+		expect(screen.getByText("impetus gained by a moving object")).toBeTruthy();
+	});
+
 	it("shows the Toastmasters non-affiliation disclaimer in the content-slide footer", () => {
 		render(<MeetingPresent deck={deck} clubName={CLUB_NAME} />);
 		clickNext(); // -> wordOfDay (content slide with footer)

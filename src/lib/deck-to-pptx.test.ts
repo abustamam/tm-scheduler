@@ -216,4 +216,19 @@ describe("pptx via slideLayout", () => {
 			expect(slideText(pptx, reportsIdx)).toContain("Grammarian: Mona");
 		}
 	});
+
+	it("exports the Word of the Day onto the Table Topics slide (#355)", () => {
+		const deck = buildSlideDeck({
+			meeting,
+			club,
+			slots: fullSlots,
+			geIntroducesFunctionaries: false,
+		});
+		const pptx = deckToPptx(PptxGenJS, deck);
+		const idx = deck.findIndex((s) => s.kind === "tableTopics");
+		expect(idx).toBeGreaterThan(-1);
+		const text = slideText(pptx, idx);
+		expect(text).toContain("Word of the Day: “Momentum”");
+		expect(text).toContain("impetus gained by a moving object");
+	});
 });

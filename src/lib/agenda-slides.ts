@@ -108,7 +108,25 @@ export type Slide =
 			link: string | null;
 	  }
 	| ({ kind: "voteSpeaker"; names: string[] } & VoteTiming)
-	| { kind: "tableTopics"; master: string; timing: string }
+	| {
+			kind: "tableTopics";
+			master: string;
+			timing: string;
+			/** The Word of the Day, kept on screen for the segment that exists to
+			 *  use it — beat 7 is literally "Impromptu topics using the Word of the
+			 *  Day" (#355). A REMINDER, not a second presentation: the standalone
+			 *  `wordOfDay` slide (#354) is where the Grammarian presents the word
+			 *  in full, a dozen slides earlier. Hence no example and no presenter
+			 *  credit here — nobody is delivering it at this point, they are
+			 *  working it into an answer. `null` when the meeting has no word. */
+			word: string | null;
+			/** The word's definition, when the meeting records one. A narrower gate
+			 *  than the standalone slide's, which needs a definition or an example
+			 *  to exist at all: a club that sets only the word gets no `wordOfDay`
+			 *  slide, and is exactly the club whose Table Topics segment would
+			 *  otherwise have the word written down nowhere. */
+			definition: string | null;
+	  }
 	| ({ kind: "voteTableTopics" } & VoteTiming)
 	| {
 			kind: "evaluation";
@@ -355,6 +373,11 @@ export function buildSlideDeck({
 			kind: "tableTopics",
 			master: assigneeDisplay(tableTopics[0]),
 			timing: TABLE_TOPICS_TIMING,
+			// Gated on the word alone (#355) — the definition rides along when the
+			// meeting has one. Read from the same trimmed values the opening slides
+			// use, so a whitespace-only field is blank everywhere.
+			word: wodWord,
+			definition: wodWord ? wodDefinition : null,
 		});
 		deck.push({ kind: "voteTableTopics", hasTimer });
 	}
