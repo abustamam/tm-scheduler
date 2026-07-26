@@ -48,6 +48,7 @@ import {
 	applyWordOfTheDayUpdate,
 } from "./meetings-logic";
 import { currentOfficersForClub } from "./officer-terms-logic";
+import { loadPastMeetings } from "./past-meetings-logic";
 import { listRoleDefinitions } from "./role-definitions-logic";
 import { indexRoleRecency, loadRoleRecency } from "./role-recency-logic";
 
@@ -82,6 +83,39 @@ export const listUpcomingMeetings = createServerFn({ method: "GET" })
 			.groupBy(meetings.id, clubs.timezone)
 			.orderBy(asc(meetings.scheduledAt));
 	});
+
+const pastMeetingsInput = z.object({
+	clubId: uuid,
+	/** ISO instant; rows STRICTLY before it. Defaults to now. */
+	before: z.string().min(1).optional(),
+	limit: z.number().int().positive().max(100).optional(),
+	offset: z.number().int().min(0).optional(),
+});
+
+/**
+ * Past, non-cancelled meetings for a club, newest first — the archive behind
+ * `/meetings` (#375) and the nav strip's backward paging.
+ *
+ * PUBLIC — no session required, exactly like `listUpcomingMeetings`, which it
+ * mirrors. It carries the same non-PII columns (date, theme, location, status,
+ * slot counts) and every page it links to is already public (#317/#327), so it
+ * exposes nothing new; making it authed would leave the nav strip forward-only
+ * for the anonymous visitor the strip fix is for.
+ *
+ * NOTE: the issue asked for a "minutes sent" flag per row. No such record
+ * exists — `meetings` has no sent timestamp and `sendMeetingMinutesEmail` writes
+ * none. The row reports `hasMinutes` (minutes actually recorded) instead.
+ */
+export const listPastMeetings = createServerFn({ method: "GET" })
+	.validator((input: unknown) => pastMeetingsInput.parse(input))
+	.handler(async ({ data }) =>
+		loadPastMeetings({
+			clubId: data.clubId,
+			before: data.before ? new Date(data.before) : undefined,
+			limit: data.limit,
+			offset: data.offset,
+		}),
+	);
 
 /**
  * Load a meeting plus its ordered slots, assignees, speaker details, and

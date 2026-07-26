@@ -77,6 +77,68 @@ describe("buildMeetingNavItems", () => {
 		]);
 	});
 
+	it("pages backwards: past meetings sort ahead of the current one and stay linkable", () => {
+		const items = buildMeetingNavItems(
+			{ id: "cur", scheduledAt: "2026-07-23T19:00:00Z", openSlots: 0 },
+			[{ id: "next", scheduledAt: "2026-07-30T19:00:00Z", openSlots: 1 }],
+			TZ,
+			[
+				{ id: "older", scheduledAt: "2026-07-02T19:00:00Z", openSlots: 0 },
+				{ id: "prev", scheduledAt: "2026-07-09T19:00:00Z", openSlots: 0 },
+			],
+		);
+
+		expect(items.map((i) => i.meetingId)).toEqual([
+			"older",
+			"prev",
+			"cur",
+			"next",
+		]);
+		expect(items.map((i) => i.isCurrent)).toEqual([false, false, true, false]);
+		expect(items.map((i) => i.urlKey)).toEqual([
+			"2026-07-02",
+			"2026-07-09",
+			"2026-07-23",
+			"2026-07-30",
+		]);
+	});
+
+	it("never shows an open-roles dot on a past meeting", () => {
+		// A meeting that has already happened with unfilled roles is history, not a
+		// call to action — the dot would read as "go claim this".
+		const items = buildMeetingNavItems(
+			{ id: "cur", scheduledAt: "2026-07-23T19:00:00Z", openSlots: 0 },
+			[{ id: "next", scheduledAt: "2026-07-30T19:00:00Z", openSlots: 2 }],
+			TZ,
+			[{ id: "prev", scheduledAt: "2026-07-09T19:00:00Z", openSlots: 4 }],
+		);
+
+		expect(items.find((i) => i.meetingId === "prev")?.hasOpenRoles).toBe(false);
+		expect(items.find((i) => i.meetingId === "next")?.hasOpenRoles).toBe(true);
+	});
+
+	it("keeps the current meeting's own dot when it also appears in the past window", () => {
+		// Viewing a past meeting: its authoritative agenda still wins over the
+		// past-window row, so the current tab's dot matches the roles on the page.
+		const items = buildMeetingNavItems(
+			{ id: "cur", scheduledAt: "2026-07-09T19:00:00Z", openSlots: 3 },
+			[],
+			TZ,
+			[
+				{ id: "cur", scheduledAt: "2026-07-09T19:00:00Z", openSlots: 0 },
+				{ id: "older", scheduledAt: "2026-07-02T19:00:00Z", openSlots: 1 },
+			],
+		);
+
+		expect(items.map((i) => i.meetingId)).toEqual(["older", "cur"]);
+		const current = items.find((i) => i.isCurrent);
+		expect(current?.meetingId).toBe("cur");
+		expect(current?.hasOpenRoles).toBe(true);
+		expect(items.find((i) => i.meetingId === "older")?.hasOpenRoles).toBe(
+			false,
+		);
+	});
+
 	it("emits a club-local-date urlKey per item and keeps meetingId as the raw id", () => {
 		const items = buildMeetingNavItems(
 			{
@@ -114,6 +176,29 @@ describe("deriveMeetingNavItems", () => {
 		expect(current?.meetingId).toBe("a");
 		// Derived from the one "open" slot, not the upcoming-list's 0.
 		expect(current?.hasOpenRoles).toBe(true);
+	});
+
+	it("threads the past window through so the strip pages backwards", () => {
+		const items = deriveMeetingNavItems(
+			{ id: "b", scheduledAt: "2026-07-16T19:00:00Z" },
+			[{ status: "open" }],
+			[{ id: "c", scheduledAt: "2026-07-23T19:00:00Z", openSlots: 0 }],
+			TZ,
+			[{ id: "a", scheduledAt: "2026-07-09T19:00:00Z", openSlots: 2 }],
+		);
+
+		expect(items.map((i) => i.meetingId)).toEqual(["a", "b", "c"]);
+		expect(items.find((i) => i.meetingId === "a")?.hasOpenRoles).toBe(false);
+	});
+
+	it("is unchanged when no past window is supplied", () => {
+		const items = deriveMeetingNavItems(
+			{ id: "a", scheduledAt: "2026-07-09T19:00:00Z" },
+			[],
+			[{ id: "b", scheduledAt: "2026-07-16T19:00:00Z", openSlots: 1 }],
+			TZ,
+		);
+		expect(items.map((i) => i.meetingId)).toEqual(["a", "b"]);
 	});
 });
 
