@@ -1,8 +1,25 @@
 /**
- * Hand-curated Pathways project catalog (Phase 2 / #101). Source: the official
- * Toastmasters path pages (toastmasters.org/pathways-overview/…), current as of
- * 2026-07. Seeded into `pathways_paths` + `pathways_projects` by
- * `scripts/seed-pathways-catalog.ts`.
+ * Seed Pathways project catalog (Phase 2 / #101). Seeded into `pathways_paths` +
+ * `pathways_projects` by `scripts/seed-pathways-catalog.ts`.
+ *
+ * PROVENANCE (#382): these names were **LLM-generated, not transcribed** from a
+ * TI source. An earlier version of this comment claimed "Source: the official
+ * Toastmasters path pages (toastmasters.org/pathways-overview/…)" — that was
+ * wrong, and is corrected here rather than quietly deleted so nobody re-derives
+ * false confidence from it. Treat every name below as a *starting guess*.
+ *
+ * The guess is self-correcting for anything Base Camp actually returns.
+ * `reconcileCatalog` (`src/server/pathways-detail-logic.ts`) runs on every
+ * /detail sync and, per project: matches by durable `bcm_block_id` (keeping name
+ * and level current across TI renames), else stamps `bcm_block_id` onto a seeded
+ * row matched by (path, level, name), else derives the required project we
+ * failed to seed. So a corroborated row carries a block id and a fabricated one
+ * never gets one — run `scripts/audit-pathways-catalog.ts` to list the latter.
+ *
+ * The gap that leaves: unchosen electives arrive from Base Camp as placeholders
+ * with an empty block id and are skipped (`src/lib/basecamp-detail.ts`), so an
+ * elective is corroborated only once some member picks it. The three pools below
+ * are therefore the one part of this file no sync can verify — tracked in #398.
  *
  * Scope: the 6 paths this club actually uses (real Base Camp fixture data). The
  * catalog is keyed by Base Camp `course_code`; other paths can be appended later
@@ -67,8 +84,9 @@ const L5_POOL = [
 ];
 
 // Level 1 "Mastering Fundamentals" is identical (all required) across every path.
-// Five projects — matches Base Camp's L1 `total: 5` for all 6 club paths (verified
-// against fixture data) and westside's per-level pages. "Researching and Presenting"
+// Five projects — the *count* matches Base Camp's L1 `total: 5` for all 6 club
+// paths (that part really was checked against fixture data); the five *names* have
+// the same LLM provenance as everything else here (#382). "Researching and Presenting"
 // is an L1 required project here (NOT an L3 elective, despite some sources listing it
 // in both). The official toastmasters.org site shows a newer 4-project L1 that Base
 // Camp hasn't adopted for these enrollments.

@@ -36,6 +36,17 @@ Two facts frame the risk:
   rather than replacing them or reproducing their protected content. (TI's "requests are typically
   denied" language concerns its merchandise store, not software.)
 
+  **Audited 2026-07-26 (#382), so the claim is precise rather than merely unchallenged.** Two files
+  looked like exceptions and neither is. `src/lib/pathways-catalog.ts` holds project *names, levels
+  and course codes* — facts, not educational content. Titles and short phrases aren't copyrightable,
+  and a compilation is protected only for original selection or arrangement; here selection is
+  dictated entirely by TI's curriculum (the list must be exactly what TI defines, no creative
+  choice) and arrangement is by level number, which is the "sweat of the brow" *Feist v. Rural
+  Telephone* rejected. The public articles under `content/resources/` are original prose — invented
+  examples, conversational register, hedged cross-club generalization where TI materials prescribe.
+  What they state are facts about how meetings run; facts aren't copyrightable, and the expression
+  is GavelUp's own.
+
 ## Decision
 
 Take the **safe default**, proportionate to an undecided trajectory: remove the reproduced mark,
