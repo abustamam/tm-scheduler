@@ -15,6 +15,7 @@ import { describe, expect, it } from "vitest";
 import type { AgendaSlot, RunOfShowConfig } from "./agenda-runsheet";
 import {
 	buildRunOfShow,
+	DEFAULT_SPEAKER_MINUTES,
 	expandRunSheet,
 	formatBeatMinutes,
 } from "./agenda-runsheet";
@@ -178,14 +179,13 @@ const SECTION_BY_SLIDE = {
 const TIMED_SLIDES = {
 	// The prepared-speech slide states the SLOT's range and the run sheet books
 	// that slot for the same row, so there is no beat budget to compare against.
-	//
-	// This is an exclusion, NOT a proof the two agree: `minMinutes` and
-	// `maxMinutes` are independently optional, so a slot with Min 5 and Max
-	// blank projects "Time: 5 minutes" while the timeline books
+	// This exclusion is about SHAPE, not about the two surfaces being unchecked:
+	// they ARE compared, slot-to-slot rather than slide-to-beat, by the
+	// "speech-slot time agreement" suite at the bottom of this file (#394). That
+	// is the assertion whose absence let the divergence ship — a slot with Min 5
+	// and Max blank projected "Time: 5 minutes" while the timeline booked
 	// `maxMinutes ?? DEFAULT_SPEAKER_MINUTES` = 7 for the same row, shifting
-	// every later printed row's clock. Pre-existing and out of scope here;
-	// closing it means coupling the two fields at the edit surface, not
-	// comparing a slide to a beat.
+	// every later printed row's clock.
 	speech: null,
 	evaluation: "evaluation",
 	evaluatorEvaluation: "evaluatorEvaluation",
@@ -589,4 +589,144 @@ describe("run-sheet ⇄ deck duration parity (#356)", () => {
 			]);
 		}
 	});
+});
+
+// ---------------------------------------------------------------------------
+// Speech-slot time agreement (#394)
+// ---------------------------------------------------------------------------
+
+/**
+ * The prepared-speech row is the one place the two surfaces read a SLOT rather
+ * than a beat, so `TIMED_SLIDES.speech` is excluded above — but that exclusion
+ * is what let the deck and the run sheet disagree about the same speaker for
+ * three releases. This pins the invariant directly: the upper bound the deck
+ * projects and the duration the printed clock books are the same number, for
+ * all four shapes a slot's Min/Max pair can take — INCLUDING the half-filled
+ * ones already sitting in the database, which is the whole point, since they
+ * are not being migrated.
+ *
+ * The four shapes do NOT all resolve the same way, and that is deliberate
+ * (#394): the deck and the clock always agree with each other, but a max-only
+ * slot keeps the max its club typed rather than being rounded up to the house
+ * default. Two questions, two helpers — see `speech-window.ts`.
+ */
+const SPEECH_BEAT_INDEX = BEATS.findIndex((b) => b.section === "speech");
+
+/** The last number in a slide's "Time:" text: "4–6 minutes" ⇒ 6, "7 minutes" ⇒ 7. */
+function projectedUpperBound(time: string): number {
+	const nums = time.match(/\d+(?:\.\d+)?/g);
+	if (nums == null) throw new Error(`no minutes in "${time}"`);
+	return Number(nums[nums.length - 1]);
+}
+
+const WINDOW_CASES: {
+	name: string;
+	minMinutes: number | null;
+	maxMinutes: number | null;
+	/** What the deck projects, verbatim. */
+	time: string;
+	/** What the printed run sheet books for the row. */
+	minutes: number;
+	/** Whether the Timer gets green·amber·red marks. */
+	marks: boolean;
+}[] = [
+	{
+		name: "both ends set — the club's own range, on both surfaces",
+		minMinutes: 4,
+		maxMinutes: 6,
+		time: "4–6 minutes",
+		minutes: 6,
+		marks: true,
+	},
+	{
+		// The reported bug: this used to project "4 minutes" against a row the
+		// printed clock booked for 7, so the deck's end time and every later row
+		// ran three minutes apart. A minimum is not an allowance — the default is
+		// the honest answer here, because the club never said how long this gets.
+		name: "min only — a min is not a max, so the schedule uses the default",
+		minMinutes: 4,
+		maxMinutes: null,
+		time: `${DEFAULT_SPEAKER_MINUTES} minutes`,
+		minutes: DEFAULT_SPEAKER_MINUTES,
+		marks: false,
+	},
+	{
+		// The mirror case, and the reason the booked duration is NOT gated on
+		// having a full range: 6 is a number the club typed. Overriding it with
+		// the house default would reserve more of the meeting than they asked
+		// for — the original bug in reverse. The range display and the marks do
+		// drop, honestly, because there is no range.
+		name: "max only — the typed maximum survives; only the range drops",
+		minMinutes: null,
+		maxMinutes: 6,
+		time: "6 minutes",
+		minutes: 6,
+		marks: false,
+	},
+	{
+		name: "neither end set",
+		minMinutes: null,
+		maxMinutes: null,
+		time: `${DEFAULT_SPEAKER_MINUTES} minutes`,
+		minutes: DEFAULT_SPEAKER_MINUTES,
+		marks: false,
+	},
+	{
+		// Unreachable through the edit surfaces now, but a legacy row could hold
+		// it. An inverted pair is not a range, so no marks — but the max is still
+		// a stated allowance, so it is still what gets booked.
+		name: "min above max — no range, but the max is still the allowance",
+		minMinutes: 9,
+		maxMinutes: 4,
+		time: "4 minutes",
+		minutes: 4,
+		marks: false,
+	},
+];
+
+describe("speech-slot time agreement — deck ⇄ run sheet (#394)", () => {
+	for (const c of WINDOW_CASES) {
+		it(`${c.name}`, () => {
+			// Two speakers, so the comparison is positional and a mismatch cannot
+			// pass by both surfaces emitting one row.
+			const slots = [
+				...without("sp1"),
+				{ ...speaker1, minMinutes: c.minMinutes, maxMinutes: c.maxMinutes },
+			];
+			for (const config of CONFIGS) {
+				const beat = buildRunOfShow(config)[SPEECH_BEAT_INDEX];
+				const rows = expandRunSheet(slots, [beat]);
+				const slides = buildSlideDeck({
+					meeting,
+					club,
+					slots,
+					...config,
+				}).filter(
+					(s): s is Extract<Slide, { kind: "speech" }> => s.kind === "speech",
+				);
+
+				expect(rows).toHaveLength(2);
+				expect(slides).toHaveLength(2);
+				rows.forEach((row, i) => {
+					const slide = slides[i];
+					// THE invariant: the printed clock books exactly the upper bound
+					// the projector is showing the speaker.
+					expect(projectedUpperBound(slide.time)).toBe(row.minutes);
+					// …and the Timer's marks exist exactly when the deck shows a real
+					// range, so all three readings of the slot stay one reading.
+					expect(row.marks !== null).toBe(slide.time.includes("–"));
+				});
+
+				// The case's own speaker (slotIndex 0 ⇒ first row/slide) states the
+				// expected values outright, so this cannot pass by both surfaces
+				// being wrong in the same direction.
+				expect(slides[0].time).toBe(c.time);
+				expect(rows[0].minutes).toBe(c.minutes);
+				expect(rows[0].marks !== null).toBe(c.marks);
+				// The untouched second speaker (5–7) proves the fixture is live.
+				expect(slides[1].time).toBe("5–7 minutes");
+				expect(rows[1].minutes).toBe(7);
+			}
+		});
+	}
 });

@@ -36,6 +36,7 @@ import {
 import { buildRoleCounts, slotLabel, summarizeAgenda } from "#/lib/agenda";
 import type { MeetingViewer } from "#/lib/meeting-viewer";
 import type { StoredMember } from "#/lib/member-identity";
+import { speechWindow, speechWindowInputError } from "#/lib/speech-window";
 import type { getMeeting } from "#/server/meetings";
 
 export type AgendaSlot = Awaited<
@@ -460,6 +461,10 @@ export function MeetingAgenda({
 									slot.assigneeId === currentMemberId;
 								const busy = busySlotId === slot.id;
 								const isOpen = slot.status === "open";
+								// Same rule as the deck and the run sheet (#394): a half-filled
+								// Min/Max pair shows no range at all, rather than the one
+								// bound that happens to be set.
+								const timeWindow = speechWindow(slot);
 								// Remove-role (#225): enabled only on an open, unassigned,
 								// non-paired slot (matching the server's rules). Everywhere
 								// else a manager sees the control disabled with the reason —
@@ -517,8 +522,8 @@ export function MeetingAgenda({
 															]
 																.filter(Boolean)
 																.join(" · ")}
-															{slot.minMinutes && slot.maxMinutes
-																? ` · ${slot.minMinutes}–${slot.maxMinutes} min`
+															{timeWindow
+																? ` · ${timeWindow.min}–${timeWindow.max} min`
 																: ""}
 														</p>
 													</div>
@@ -902,6 +907,16 @@ function ClaimSheet({
 		const speechTitle = String(form.get("speechTitle") ?? "").trim();
 		const minRaw = form.get("minMinutes");
 		const maxRaw = form.get("maxMinutes");
+		const minMinutes = minRaw ? Number(minRaw) : undefined;
+		const maxMinutes = maxRaw ? Number(maxRaw) : undefined;
+		// Both or neither (#394). A half-filled pair is unreadable downstream —
+		// the deck, the run sheet and the Timer's marks would each have to guess
+		// the bound that wasn't typed — so it never reaches the server.
+		const windowError = speechWindowInputError(minMinutes, maxMinutes);
+		if (windowError) {
+			toast.error(windowError);
+			return;
+		}
 		setSubmitting(true);
 		try {
 			await onClaim(slot, {
@@ -910,8 +925,8 @@ function ClaimSheet({
 				projectName: String(form.get("projectName") ?? "").trim() || undefined,
 				projectLevel:
 					String(form.get("projectLevel") ?? "").trim() || undefined,
-				minMinutes: minRaw ? Number(minRaw) : undefined,
-				maxMinutes: maxRaw ? Number(maxRaw) : undefined,
+				minMinutes,
+				maxMinutes,
 			});
 			toast.success("You're booked to speak!");
 			await onClaimed();

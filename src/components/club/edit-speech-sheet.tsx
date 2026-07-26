@@ -13,6 +13,7 @@ import {
 	SheetHeader,
 	SheetTitle,
 } from "#/components/ui/sheet";
+import { speechWindowInputError } from "#/lib/speech-window";
 import { updateSpeakerDetails } from "#/server/slots";
 
 type SpeechSlot = {
@@ -49,6 +50,17 @@ export function EditSpeechSheet({
 		const form = new FormData(e.currentTarget);
 		const minRaw = form.get("minMinutes");
 		const maxRaw = form.get("maxMinutes");
+		const minMinutes = minRaw ? Number(minRaw) : undefined;
+		const maxMinutes = maxRaw ? Number(maxRaw) : undefined;
+		// Both or neither (#394). This is also where a LEGACY half-pair gets
+		// resolved: the sheet still shows the min that was typed, and this save
+		// won't go through until the missing max is supplied by the person who
+		// actually knows it — rather than the app inventing one on their behalf.
+		const windowError = speechWindowInputError(minMinutes, maxMinutes);
+		if (windowError) {
+			toast.error(windowError);
+			return;
+		}
 		setBusy(true);
 		try {
 			await updateSpeakerDetails({
@@ -64,8 +76,8 @@ export function EditSpeechSheet({
 							String(form.get("projectName") ?? "").trim() || undefined,
 						projectLevel:
 							String(form.get("projectLevel") ?? "").trim() || undefined,
-						minMinutes: minRaw ? Number(minRaw) : undefined,
-						maxMinutes: maxRaw ? Number(maxRaw) : undefined,
+						minMinutes,
+						maxMinutes,
 						presentationUrl:
 							String(form.get("presentationUrl") ?? "").trim() || undefined,
 					},
