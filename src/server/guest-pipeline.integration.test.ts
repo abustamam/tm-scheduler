@@ -232,7 +232,9 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 				clubId: seed.clubId,
 				name: "Jamie Rivera",
 				stage: "prospect",
-				phone: "(555) 123-4567",
+				// E.164 even though this club never set a country code (#397): the
+				// stored value IS the dedup key, so it can't depend on the spelling.
+				phone: "+15551234567",
 			});
 
 			const att = await attendanceForGuest(res.guestId);
@@ -311,6 +313,146 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			expect(res.meetingId).toBeNull();
 			expect(res.attendanceRecorded).toBe(false);
 			expect(await attendanceForGuest(res.guestId)).toHaveLength(0);
+		});
+	});
+
+	/**
+	 * #397: the dedup key is the E.164 form, and the promotion to E.164 now
+	 * always applies — `loadClubDefaultCountryCode` falls back to the app default
+	 * for a club that never set one (`seedClub` doesn't). Before this, a club with
+	 * no country code stored `(555) 123-4567` as typed and `+1 (555) 123-4567` as
+	 * `+15551234567`: one phone, two keys, two "1 visit" prospects.
+	 */
+	describe("phone dedup across +country-code spellings (#397)", () => {
+		/** The issue's own acceptance test, end to end. */
+		it("one guest with 2 visits when the same number is typed with and without +1", async () => {
+			const first = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Jamie Rivera",
+				phone: "(555) 123-4567",
+			});
+			expect(first.created).toBe(true);
+
+			// Second visit, a different meeting — an officer types the country code.
+			const m2 = await seedSoonerMeeting(seed.clubId);
+			const second = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Jamie Rivera",
+				phone: "+1 (555) 123-4567",
+			});
+			expect(second.created).toBe(false);
+			expect(second.guestId).toBe(first.guestId);
+
+			const clubGuests = await testDb
+				.select()
+				.from(guests)
+				.where(eq(guests.clubId, seed.clubId));
+			expect(clubGuests).toHaveLength(1);
+
+			// Both meetings in the past so the derivation counts them (#374).
+			await testDb
+				.update(meetings)
+				.set({ scheduledAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000) })
+				.where(eq(meetings.id, seed.meetingId));
+			await testDb
+				.update(meetings)
+				.set({ scheduledAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000) })
+				.where(eq(meetings.id, m2));
+
+			const row = await pipelineRow(seed.clubId, first.guestId);
+			expect(row.visitCount).toBe(2);
+		});
+
+		it.each([
+			["+1 (555) 123-4567"],
+			["+1 555 123 4567"],
+			["+15551234567"],
+			["1 (555) 123-4567"],
+			["1-555-123-4567"],
+			["15551234567"],
+			["(555) 123-4567"],
+			["555-123-4567"],
+			["555.123.4567"],
+			["5551234567"],
+			["001 555 123 4567"],
+		])("reuses the guest when the second visit types %s", async (spelling) => {
+			const first = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Jamie Rivera",
+				phone: "(555) 123-4567",
+			});
+			await seedSoonerMeeting(seed.clubId);
+			const second = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Jamie Rivera",
+				phone: spelling,
+			});
+			expect(second.created).toBe(false);
+			expect(second.guestId).toBe(first.guestId);
+		});
+
+		it("does NOT merge two numbers that differ by a real country code", async () => {
+			// The rejected fix — compare the last 10 digits — would make these one
+			// guest. `+44 20 7946 0958` and `+1 (207) 946-0958` are two people.
+			const uk = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "London Visitor",
+				phone: "+44 20 7946 0958",
+			});
+			const us = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Maine Visitor",
+				phone: "+1 (207) 946-0958",
+			});
+			expect(us.created).toBe(true);
+			expect(us.guestId).not.toBe(uk.guestId);
+
+			const stored = await testDb
+				.select({ phone: guests.phone })
+				.from(guests)
+				.where(eq(guests.clubId, seed.clubId));
+			expect(stored.map((g) => g.phone).sort()).toEqual([
+				"+12079460958",
+				"+442079460958",
+			]);
+		});
+
+		it("dedups on the CLUB's country code, not on +1", async () => {
+			// A club outside NANP: the local spelling is the trunk-0 form, and the
+			// same digits under +1 stay a different number.
+			await testDb
+				.update(clubs)
+				.set({ defaultCountryCode: "+44" })
+				.where(eq(clubs.id, seed.clubId));
+
+			const first = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Alex Fenn",
+				phone: "020 7946 0958",
+			});
+			await seedSoonerMeeting(seed.clubId);
+			const second = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Alex Fenn",
+				phone: "+44 20 7946 0958",
+			});
+			expect(second.created).toBe(false);
+			expect(second.guestId).toBe(first.guestId);
+
+			const [g] = await testDb
+				.select({ phone: guests.phone })
+				.from(guests)
+				.where(eq(guests.id, first.guestId));
+			expect(g.phone).toBe("+442079460958");
+
+			// Same national digits, different country → a different guest.
+			const other = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Not Alex",
+				phone: "+1 207 946 0958",
+			});
+			expect(other.created).toBe(true);
+			expect(other.guestId).not.toBe(first.guestId);
 		});
 	});
 
@@ -930,9 +1072,12 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 		});
 
 		it("links an existing Person by phone rather than creating a duplicate", async () => {
+			// Stored E.164 — what every write path produces (#295/#397). A `people`
+			// row written before that carries a bare national number and matches
+			// nothing here; `scripts/backfill-phone-e164.ts` is what brings it over.
 			const [existingPerson] = await testDb
 				.insert(people)
-				.values({ name: "Existing Human", phone: "5559990000" })
+				.values({ name: "Existing Human", phone: "+15559990000" })
 				.returning({ id: people.id });
 
 			const { guestId } = await captureGuestVisit({

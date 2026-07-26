@@ -29,7 +29,19 @@ export type GuestStage = "prospect" | "following_up" | "joined" | "lost";
  */
 export type ManualGuestStage = "prospect" | "following_up" | "lost";
 
-/** Digits-only form of a phone number, so formatting variants dedupe/match. */
+/**
+ * Digits-only form of a phone number, so formatting variants dedupe/match.
+ *
+ * ALWAYS apply this to the E.164 value (`toStoredPhone(raw, cc)`), never to raw
+ * input: the digits of `+1 (555) 123-4567` and of `(555) 123-4567` differ, and
+ * that mismatch is the whole of #397. Since `loadClubDefaultCountryCode` now
+ * always yields a country code, the E.164 promotion always applies and the two
+ * converge on `15551234567`.
+ *
+ * The key is the digits of the FULL international number, deliberately — not the
+ * last 10 digits. A suffix compare would merge `+1 20 7946 0958` with
+ * `+44 20 7946 0958`, two different people's phones.
+ */
 export function normalizePhone(phone: string | null | undefined): string {
 	return (phone ?? "").replace(/\D/g, "");
 }
@@ -52,6 +64,12 @@ type GuestContactRow = {
  * guests, used both by guest-book capture (to reuse the row) and by the edit
  * path (to refuse creating a second row that would match). Phone wins over
  * email, mirroring `applyConvertGuestToMember`'s Person dedup.
+ *
+ * `opts.digits` is the caller's number in E.164 digits; the SQL compares it
+ * against the STORED phone's digits. Both sides therefore have to be E.164 for
+ * the compare to mean anything — writes are (every path funnels through
+ * `toStoredPhone` with a never-null country code), and rows written before that
+ * are brought over by `scripts/backfill-phone-e164.ts` (#397).
  *
  * Ordered oldest-first and tie-broken on id: without an ORDER BY, a `limit(1)`
  * over two matching rows is a Postgres coin flip, so a returning visitor's
@@ -187,7 +205,10 @@ export async function captureGuestVisit(
 	if (!name) throw new Error("Please enter your name.");
 	const email = input.email?.trim() || null;
 	// Standardize to E.164 on write (#295); the digits form below (for dedup) is
-	// derived from the normalized value so matching stays consistent.
+	// derived from the normalized value so matching stays consistent. The country
+	// code is never null (#397), so the guest who types `(555) 123-4567` on their
+	// first visit and `+1 (555) 123-4567` on their second is ONE guest with two
+	// visits — not two "1 visit" prospects.
 	const cc = await loadClubDefaultCountryCode(input.clubId);
 	const phone = toStoredPhone(input.phone, cc);
 	const digits = normalizePhone(phone);

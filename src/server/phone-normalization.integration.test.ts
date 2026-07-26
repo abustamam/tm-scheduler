@@ -11,6 +11,7 @@
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clubs, guests, members, people } from "#/db/schema";
+import { DEFAULT_COUNTRY_CODE } from "#/lib/phone";
 import {
 	cleanup,
 	hasTestDb,
@@ -157,7 +158,7 @@ describe.skipIf(!hasTestDb)("phone normalize-on-write (#295)", () => {
 		expect(m.phone).toBe("+14155552671");
 	});
 
-	it("preserves a bare national number when the club has no default country code", async () => {
+	it("promotes a bare national number with the app default when the club has no country code (#397)", async () => {
 		await setClubCountryCode(club.clubId, null);
 		await applyMemberEdit({
 			clubId: club.clubId,
@@ -169,7 +170,23 @@ describe.skipIf(!hasTestDb)("phone normalize-on-write (#295)", () => {
 			.select({ phone: members.phone })
 			.from(members)
 			.where(eq(members.id, club.memberId));
-		// Can't be made reliable, but must not be dropped.
-		expect(m.phone).toBe("415-555-2671");
+		// Before #397 this stored `415-555-2671` as typed, so the same number typed
+		// with `+1` was a different value — and a different dedup key.
+		expect(m.phone).toBe(`${DEFAULT_COUNTRY_CODE}4155552671`);
+	});
+
+	it("still returns null for contentless input (nothing to promote)", async () => {
+		await setClubCountryCode(club.clubId, null);
+		await applyMemberEdit({
+			clubId: club.clubId,
+			memberId: club.memberId,
+			name: "Member User",
+			phone: "   ",
+		});
+		const [m] = await testDb
+			.select({ phone: members.phone })
+			.from(members)
+			.where(eq(members.id, club.memberId));
+		expect(m.phone).toBeNull();
 	});
 });

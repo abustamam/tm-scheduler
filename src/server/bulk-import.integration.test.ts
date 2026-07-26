@@ -56,8 +56,11 @@ describe.skipIf(!hasTestDb)("bulk roster import", () => {
 				and(eq(members.clubId, seed.clubId), eq(members.name, "Alice Apple")),
 			);
 		expect(alice.email).toBe("alice@club.org");
-		// Phone stored as raw digits, not reformatted.
-		expect(alice.phone).toBe("19165968820");
+		// Standardized to E.164 on write (#295/#397) — this club never set a
+		// country code, so the app default applies. The pasted `1` is NANP's
+		// long-distance prefix, not a 12th digit, so it becomes the `+1` rather
+		// than being prepended to (`+119165968820`).
+		expect(alice.phone).toBe("+19165968820");
 		// Pasted free-text office parsed into the enum and opened as a current term.
 		const aliceTerms = await testDb
 			.select({ position: officerTerms.position })

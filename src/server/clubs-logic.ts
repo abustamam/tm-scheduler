@@ -5,22 +5,31 @@ import { eq, or, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import { clubs } from "#/db/schema";
+import { DEFAULT_COUNTRY_CODE } from "#/lib/phone";
 
 /**
- * The club's default international dialing code (#295), for phone normalization.
- * Null when the club hasn't set one. Shared by the read-time nudge loaders and
- * the normalize-on-write paths so every phone write is standardized with the
- * same default.
+ * The country code to normalize this club's phone numbers with (#295) — the
+ * club's own setting, or `DEFAULT_COUNTRY_CODE` when it hasn't set one.
+ *
+ * NEVER null (#397). This is the ONE seam every phone write and every read-time
+ * coalescer goes through, so returning null here is what let a bare national
+ * number be stored as typed while the same number typed with `+1` was stored as
+ * E.164 — one phone, two dedup keys, two guest rows. Defaulting here fixes every
+ * call site at once instead of asking each one to remember.
+ *
+ * The stored NULL is preserved (this doesn't write the default back to the club
+ * row): "never told us" stays distinguishable from "chose +1", so a later
+ * onboarding question or timezone-based inference can still fill it in.
  */
 export async function loadClubDefaultCountryCode(
 	clubId: string,
-): Promise<string | null> {
+): Promise<string> {
 	const [row] = await db
 		.select({ cc: clubs.defaultCountryCode })
 		.from(clubs)
 		.where(eq(clubs.id, clubId))
 		.limit(1);
-	return row?.cc ?? null;
+	return row?.cc?.trim() || DEFAULT_COUNTRY_CODE;
 }
 
 const UUID_RE =
