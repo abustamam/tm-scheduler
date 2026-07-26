@@ -11,6 +11,8 @@ import {
 	ClubRoleSheet,
 	type RoleSheetEntry,
 } from "#/components/agenda/club-role-sheet";
+import { INK, MUTED } from "#/components/agenda/print-theme";
+import { PublicFooter } from "#/components/public-footer";
 import { ShareLinkButton } from "#/components/share-link-button";
 import { resolveClubOrRedirect } from "#/lib/club-route";
 import { getPublicClubRoles } from "#/server/role-definitions";
@@ -85,6 +87,18 @@ function RoleSheet() {
 				clubName={club.name}
 				clubNumber={club.clubNumber}
 				roles={entries}
+			/>
+			{/* This route escapes the `/club/$clubId` shell, so it carries its own
+			    disclaimer (#381). `no-print` because the printed sheet already ends
+			    in ClubRoleSheet's DarkFooter, which states the same text — this is
+			    the on-screen equivalent, and duplicating it on paper would waste the
+			    one-pager. Colors come from the print palette rather than the themed
+			    tokens: the page forces a light sage backdrop on screen in BOTH themes
+			    (see the <style> above), where the dark-mode `--sea-ink-soft` would be
+			    unreadable. */}
+			<PublicFooter
+				className="no-print"
+				style={{ color: MUTED, borderColor: `${INK}24` }}
 			/>
 		</div>
 	);

@@ -4,6 +4,7 @@ import { CheckCircle2, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { BrandMark } from "#/components/brand-mark";
 import { ThemeToggle } from "#/components/club/theme-toggle";
+import { PublicFooter } from "#/components/public-footer";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
@@ -174,6 +175,8 @@ function GuestBook() {
 					</form>
 				)}
 			</main>
+			{/* Escapes the `/club/$clubId` shell, so it needs its own disclaimer (#381). */}
+			<PublicFooter />
 			<Toaster position="top-center" />
 		</div>
 	);

@@ -10,6 +10,7 @@ import { AppShell, shellPropsFromContext } from "#/components/app-shell";
 import { BrandMark } from "#/components/brand-mark";
 import { IdentityGateProvider } from "#/components/club/identity-gate";
 import { ThemeToggle } from "#/components/club/theme-toggle";
+import { PublicFooter } from "#/components/public-footer";
 import { Button } from "#/components/ui/button";
 import { Toaster } from "#/components/ui/sonner";
 import { authClient } from "#/lib/auth-client";
@@ -128,6 +129,11 @@ function ClubShell() {
 			>
 				<Outlet />
 			</IdentityGateProvider>
+			{/* The signed-in branch above gets the disclaimer from <AppShell>; this
+			    branch is the guest-facing one, so it carries its own (#381). One
+			    footer here covers every nested public club route (the sign-up sheet
+			    index and the meeting agenda). */}
+			<PublicFooter />
 			<Toaster position="top-center" />
 		</div>
 	);
