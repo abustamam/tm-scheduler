@@ -791,3 +791,38 @@ export function applyFlex(
 
 	return { rows: out, projectedMinutes, status, deltaMinutes };
 }
+
+/**
+ * The over/under banner's text, or `null` when the agenda fits (`"exact"`) and
+ * there is nothing to say.
+ *
+ * The explanatory half is conditional on a flex row actually EXISTING (#395).
+ * `applyFlex` only resizes the single `flex: true` beat — Table Topics — and
+ * since #367 a club that runs no Table Topics Master has no such beat at all.
+ * `applyFlex` then finds nothing to squeeze and leaves the total alone, but the
+ * copy used to explain the shortfall in terms of a segment that is not on the
+ * agenda: a skeleton crew printed "Table Topics is at its 25-min cap" with no
+ * Table Topics row anywhere. With no flex row the shortfall is entirely the
+ * booked meeting length, so that is what the message names.
+ *
+ * The banner is never suppressed. It is accurate about the mismatch, and it is
+ * the prompt that gets `lengthMinutes` corrected — hiding it would conceal a
+ * real discrepancy between the agenda and the time booked for it.
+ *
+ * Lives here, next to `applyFlex`, rather than inline in the print route: the
+ * decision is entirely a function of the `FlexResult`, and out here it is
+ * unit-testable without mounting a route.
+ */
+export function flexBannerMessage(flex: FlexResult): string | null {
+	if (flex.status === "exact") return null;
+	const hasFlexRow = flex.rows.some((r) => r.flex === true);
+
+	if (flex.status === "over") {
+		return hasFlexRow
+			? `Agenda runs ${flex.deltaMinutes} min long — Table Topics is at its ${TABLE_TOPICS_MIN}-min floor. Trim a speech or shorten the agenda.`
+			: `Agenda runs ${flex.deltaMinutes} min long — trim a speech, or increase the meeting length.`;
+	}
+	return hasFlexRow
+		? `Agenda ends ${-flex.deltaMinutes} min early — Table Topics is at its ${TABLE_TOPICS_MAX}-min cap.`
+		: `Agenda ends ${-flex.deltaMinutes} min early — consider shortening the meeting length.`;
+}
