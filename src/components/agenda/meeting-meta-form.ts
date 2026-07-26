@@ -1,6 +1,5 @@
 export interface MeetingUpdateFormContext {
 	meetingId: string;
-	actorMemberId: string | null;
 	selfMemberId: string | null;
 	/** Already-resolved wall-time string the caller decided on. */
 	scheduledAt: string;
@@ -26,7 +25,6 @@ export function meetingUpdateFromForm(
 	const numberRaw = numberField == null ? null : String(numberField).trim();
 	return {
 		meetingId: ctx.meetingId,
-		actorMemberId: ctx.actorMemberId,
 		selfMemberId: ctx.selfMemberId,
 		scheduledAt: ctx.scheduledAt,
 		lengthMinutes: lengthRaw ? Number(lengthRaw) : undefined,

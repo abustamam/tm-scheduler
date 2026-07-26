@@ -29,12 +29,15 @@ describe("outreach write-fn authz gating (#340)", () => {
 	for (const fn of ["setContacted", "clearContacted"]) {
 		it(`${fn} requires the admin club role`, () => {
 			const body = handlerBody(fn);
-			expect(body).toMatch(/requireClubRole\([^)]*\[["']admin["']\]\)/);
+			// Whitespace-tolerant: the formatter wraps the call across lines.
+			expect(body).toMatch(/requireClubRole\([^)]*\[\s*["']admin["'],?\s*\]/);
 		});
 
 		it(`${fn} is not gated on member-only role`, () => {
 			const body = handlerBody(fn);
-			expect(body).not.toMatch(/requireClubRole\([^)]*\[["']member["']\]\)/);
+			expect(body).not.toMatch(
+				/requireClubRole\([^)]*\[\s*["']member["'],?\s*\]/,
+			);
 		});
 
 		it(`${fn} asserts the meeting isn't locked`, () => {

@@ -99,8 +99,7 @@ function MemberDetail() {
 		unscheduledSpeeches,
 		openSpeakerSlots,
 	} = Route.useLoaderData();
-	const { currentMemberId, activeClubId, clubs, officerPositions } =
-		Route.useRouteContext();
+	const { activeClubId, clubs, officerPositions } = Route.useRouteContext();
 	const clubId = activeClubId;
 	// Club-role management is admin-only: the viewer must be an effective admin
 	// (stored admin OR an elected officer, #202) in the active club (#187).
@@ -198,13 +197,7 @@ function MemberDetail() {
 					<Button asChild size="sm">
 						<Link to="/next">Assign a role</Link>
 					</Button>
-					{clubId ? (
-						<MemberActions
-							member={member}
-							clubId={clubId}
-							currentMemberId={currentMemberId}
-						/>
-					) : null}
+					{clubId ? <MemberActions member={member} clubId={clubId} /> : null}
 				</div>
 			</div>
 
@@ -302,11 +295,7 @@ function MemberDetail() {
 					) : null}
 
 					{clubId && viewerIsAdmin ? (
-						<ClubRoleControl
-							member={member}
-							clubId={clubId}
-							currentMemberId={currentMemberId}
-						/>
+						<ClubRoleControl member={member} clubId={clubId} />
 					) : null}
 				</div>
 			</div>
@@ -539,11 +528,9 @@ type ProfileMember = {
 function MemberActions({
 	member,
 	clubId,
-	currentMemberId,
 }: {
 	member: ProfileMember;
 	clubId: string;
-	currentMemberId: string | null;
 }) {
 	const router = useRouter();
 	const navigate = useNavigate();
@@ -558,12 +545,7 @@ function MemberActions({
 		setBusy(true);
 		try {
 			await setMemberStatus({
-				data: {
-					clubId,
-					memberId: member.id,
-					status: next,
-					actorMemberId: currentMemberId,
-				},
+				data: { clubId, memberId: member.id, status: next },
 			});
 			toast.success(
 				next === "inactive"
@@ -596,7 +578,6 @@ function MemberActions({
 				data: {
 					clubId,
 					memberId: member.id,
-					actorMemberId: currentMemberId,
 					name,
 					email: String(form.get("email") ?? "").trim() || null,
 					phone: String(form.get("phone") ?? "").trim() || null,
@@ -617,7 +598,7 @@ function MemberActions({
 		setBusy(true);
 		try {
 			await removeMember({
-				data: { clubId, memberId: member.id, actorMemberId: currentMemberId },
+				data: { clubId, memberId: member.id },
 			});
 			toast.success(`${member.name} removed from the roster.`);
 			setRemoveOpen(false);
@@ -774,11 +755,9 @@ function MemberActions({
 function ClubRoleControl({
 	member,
 	clubId,
-	currentMemberId,
 }: {
 	member: ProfileMember;
 	clubId: string;
-	currentMemberId: string | null;
 }) {
 	const router = useRouter();
 	const [busy, setBusy] = useState(false);
@@ -789,12 +768,7 @@ function ClubRoleControl({
 		setBusy(true);
 		try {
 			await setMemberRole({
-				data: {
-					clubId,
-					memberId: member.id,
-					clubRole: next,
-					actorMemberId: currentMemberId,
-				},
+				data: { clubId, memberId: member.id, clubRole: next },
 			});
 			toast.success(
 				next === "admin"

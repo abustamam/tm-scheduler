@@ -48,6 +48,7 @@ describe.skipIf(!hasTestDb)("phone normalize-on-write (#295)", () => {
 
 	it("member edit stores E.164 using the club default country code", async () => {
 		await applyMemberEdit({
+			actorMemberId: null,
 			clubId: club.clubId,
 			memberId: club.memberId,
 			name: "Member User",
@@ -62,6 +63,7 @@ describe.skipIf(!hasTestDb)("phone normalize-on-write (#295)", () => {
 
 	it("member edit keeps an already-international number, stripping formatting", async () => {
 		await applyMemberEdit({
+			actorMemberId: null,
 			clubId: club.clubId,
 			memberId: club.memberId,
 			name: "Member User",
@@ -76,6 +78,7 @@ describe.skipIf(!hasTestDb)("phone normalize-on-write (#295)", () => {
 
 	it("bulk import stores E.164 on both the person and the membership", async () => {
 		await applyBulkImport({
+			actorMemberId: null,
 			clubId: club.clubId,
 			rows: [
 				{ name: "Bulk Person", email: "", phone: "(415) 555-2671", office: "" },
@@ -161,6 +164,7 @@ describe.skipIf(!hasTestDb)("phone normalize-on-write (#295)", () => {
 	it("promotes a bare national number with the app default when the club has no country code (#397)", async () => {
 		await setClubCountryCode(club.clubId, null);
 		await applyMemberEdit({
+			actorMemberId: null,
 			clubId: club.clubId,
 			memberId: club.memberId,
 			name: "Member User",
@@ -178,6 +182,7 @@ describe.skipIf(!hasTestDb)("phone normalize-on-write (#295)", () => {
 	it("still returns null for contentless input (nothing to promote)", async () => {
 		await setClubCountryCode(club.clubId, null);
 		await applyMemberEdit({
+			actorMemberId: null,
 			clubId: club.clubId,
 			memberId: club.memberId,
 			name: "Member User",

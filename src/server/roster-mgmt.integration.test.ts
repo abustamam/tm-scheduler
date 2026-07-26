@@ -256,6 +256,7 @@ describe.skipIf(!hasTestDb)("roster management", () => {
 		const { applyMemberMerge } = await import("#/server/members-logic");
 		await expect(
 			applyMemberMerge({
+				actorMemberId: null,
 				clubId: seed.clubId,
 				keeperId: seed.memberId,
 				absorbedId: seed.memberId,
@@ -320,7 +321,11 @@ describe.skipIf(!hasTestDb)("roster management", () => {
 		const linked = await addMemberRow(seed.clubId, "Signed In");
 		await linkMemberToUser(linked, seed.adminUserId);
 		await expect(
-			applyMemberRemove({ clubId: seed.clubId, memberId: linked }),
+			applyMemberRemove({
+				clubId: seed.clubId,
+				memberId: linked,
+				actorMemberId: null,
+			}),
 		).rejects.toThrow();
 	});
 });

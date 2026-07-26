@@ -7,20 +7,26 @@ import { logActivity } from "./activity";
 import { requireClubRole, requireMemberInClub, requireUser } from "./guards";
 import { assertMeetingNotLocked } from "./meeting-authz-logic";
 
-/** Load a meeting's status (for the ADR-0012 lock) or throw if missing. */
-async function meetingStatus(meetingId: string): Promise<string> {
+/** Load a meeting's status (for the ADR-0012 lock) and its OWNING club, or throw
+ *  if missing. The club comes from the meeting, not the payload (#396): gating on
+ *  a client-supplied `clubId` would let an admin of club A act on club B's
+ *  meeting and file the row under A. */
+async function loadMeeting(
+	meetingId: string,
+): Promise<{ status: string; clubId: string }> {
 	const [row] = await db
-		.select({ status: meetings.status })
+		.select({ status: meetings.status, clubId: meetings.clubId })
 		.from(meetings)
 		.where(eq(meetings.id, meetingId))
 		.limit(1);
 	if (!row) throw new Error("Meeting not found.");
-	return row.status;
+	return row;
 }
 
 const contactedSchema = z.object({
 	memberId: z.string().uuid(),
 	meetingId: z.string().uuid(),
+	/** Deprecated as an authority: the club is derived from `meetingId`. */
 	clubId: z.string().uuid(),
 	/** How the ask happened. Recorded in activity_log.detail only. */
 	via: z.enum(["nudge", "manual"]).default("manual"),
@@ -39,9 +45,12 @@ export const setContacted = createServerFn({ method: "POST" })
 	.validator((i: unknown) => contactedSchema.parse(i))
 	.handler(async ({ data }) => {
 		const user = await requireUser();
-		const membership = await requireClubRole(user.id, data.clubId, ["admin"]);
-		assertMeetingNotLocked(await meetingStatus(data.meetingId));
-		await requireMemberInClub(data.memberId, data.clubId);
+		const meeting = await loadMeeting(data.meetingId);
+		const membership = await requireClubRole(user.id, meeting.clubId, [
+			"admin",
+		]);
+		assertMeetingNotLocked(meeting.status);
+		await requireMemberInClub(data.memberId, meeting.clubId);
 
 		await db
 			.insert(meetingOutreach)
@@ -49,7 +58,7 @@ export const setContacted = createServerFn({ method: "POST" })
 			.onConflictDoNothing();
 
 		await logActivity(db, {
-			clubId: data.clubId,
+			clubId: meeting.clubId,
 			actorMemberId: membership.id,
 			action: "outreach_set",
 			targetType: "meeting",
@@ -65,9 +74,12 @@ export const clearContacted = createServerFn({ method: "POST" })
 	.validator((i: unknown) => contactedSchema.parse(i))
 	.handler(async ({ data }) => {
 		const user = await requireUser();
-		const membership = await requireClubRole(user.id, data.clubId, ["admin"]);
-		assertMeetingNotLocked(await meetingStatus(data.meetingId));
-		await requireMemberInClub(data.memberId, data.clubId);
+		const meeting = await loadMeeting(data.meetingId);
+		const membership = await requireClubRole(user.id, meeting.clubId, [
+			"admin",
+		]);
+		assertMeetingNotLocked(meeting.status);
+		await requireMemberInClub(data.memberId, meeting.clubId);
 
 		await db
 			.delete(meetingOutreach)
@@ -79,7 +91,7 @@ export const clearContacted = createServerFn({ method: "POST" })
 			);
 
 		await logActivity(db, {
-			clubId: data.clubId,
+			clubId: meeting.clubId,
 			actorMemberId: membership.id,
 			action: "outreach_clear",
 			targetType: "meeting",

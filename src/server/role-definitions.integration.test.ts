@@ -264,6 +264,7 @@ describe.skipIf(!hasTestDb)("role-definition management", () => {
 			defaultCount: 1,
 		});
 		await applyRoleDefinitionSetEnabled({
+			actorMemberId: null,
 			clubId: seed.clubId,
 			roleId: disabledId,
 			enabled: false,
@@ -311,6 +312,7 @@ describe.skipIf(!hasTestDb)("role-definition management", () => {
 	it("setRoleEnabled(false) removes the role's open future slots and reports 0 kept", async () => {
 		// Seeded Timer role has one open, unclaimed slot on a future meeting.
 		const result = await applyRoleDefinitionSetEnabled({
+			actorMemberId: null,
 			clubId: seed.clubId,
 			roleId: seed.roleDefinitionId,
 			enabled: false,
@@ -338,6 +340,7 @@ describe.skipIf(!hasTestDb)("role-definition management", () => {
 			.where(eq(roleSlots.id, seed.slotId));
 
 		const result = await applyRoleDefinitionSetEnabled({
+			actorMemberId: null,
 			clubId: seed.clubId,
 			roleId: seed.roleDefinitionId,
 			enabled: false,
@@ -355,11 +358,13 @@ describe.skipIf(!hasTestDb)("role-definition management", () => {
 	it("setRoleEnabled(true) backfills an open slot on future meetings with none", async () => {
 		// Disable first (removes the seeded open slot), then re-enable.
 		await applyRoleDefinitionSetEnabled({
+			actorMemberId: null,
 			clubId: seed.clubId,
 			roleId: seed.roleDefinitionId,
 			enabled: false,
 		});
 		const result = await applyRoleDefinitionSetEnabled({
+			actorMemberId: null,
 			clubId: seed.clubId,
 			roleId: seed.roleDefinitionId,
 			enabled: true,
@@ -380,6 +385,7 @@ describe.skipIf(!hasTestDb)("role-definition management", () => {
 	// NOT do is short-circuit — see the convergence test below.
 	it("setRoleEnabled to its current value changes no slots and logs nothing", async () => {
 		const result = await applyRoleDefinitionSetEnabled({
+			actorMemberId: null,
 			clubId: seed.clubId,
 			roleId: seed.roleDefinitionId,
 			enabled: true,
@@ -414,6 +420,7 @@ describe.skipIf(!hasTestDb)("role-definition management", () => {
 
 		// Retrying the identical action repairs it, and says so.
 		const repair = await applyRoleDefinitionSetEnabled({
+			actorMemberId: null,
 			clubId: seed.clubId,
 			roleId: seed.roleDefinitionId,
 			enabled: false,
@@ -423,6 +430,7 @@ describe.skipIf(!hasTestDb)("role-definition management", () => {
 
 		// …and it has converged: a third run is a clean no-op.
 		const again = await applyRoleDefinitionSetEnabled({
+			actorMemberId: null,
 			clubId: seed.clubId,
 			roleId: seed.roleDefinitionId,
 			enabled: false,
@@ -437,6 +445,7 @@ describe.skipIf(!hasTestDb)("role-definition management", () => {
 		// Disable cleanly first (removes the seeded open slot), then simulate the
 		// enable whose flag committed but whose backfill never ran.
 		await applyRoleDefinitionSetEnabled({
+			actorMemberId: null,
 			clubId: seed.clubId,
 			roleId: seed.roleDefinitionId,
 			enabled: false,
@@ -448,6 +457,7 @@ describe.skipIf(!hasTestDb)("role-definition management", () => {
 		expect(await roleSlotRows(seed.roleDefinitionId)).toHaveLength(0);
 
 		const repair = await applyRoleDefinitionSetEnabled({
+			actorMemberId: null,
 			clubId: seed.clubId,
 			roleId: seed.roleDefinitionId,
 			enabled: true,
@@ -456,6 +466,7 @@ describe.skipIf(!hasTestDb)("role-definition management", () => {
 		expect(await roleSlotRows(seed.roleDefinitionId)).toHaveLength(1);
 
 		const again = await applyRoleDefinitionSetEnabled({
+			actorMemberId: null,
 			clubId: seed.clubId,
 			roleId: seed.roleDefinitionId,
 			enabled: true,
@@ -469,6 +480,7 @@ describe.skipIf(!hasTestDb)("role-definition management", () => {
 		try {
 			await expect(
 				applyRoleDefinitionSetEnabled({
+					actorMemberId: null,
 					clubId: seed.clubId,
 					roleId: other.roleDefinitionId,
 					enabled: false,

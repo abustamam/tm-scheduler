@@ -125,10 +125,21 @@ async function assertKeepsAnActiveAdmin(
 	if (others.length === 0) throw new Error(message);
 }
 
+/**
+ * The roster member to credit in `activity_log` for a roster write. Deliberately
+ * NOT part of the zod schemas below (#396): these fns are all reached through an
+ * admin-gated server fn, so the actor is the membership that guard already
+ * resolved from the session. Accepting it on the wire is what let an admin of one
+ * club post a row crediting another club's member. Null = a system/impersonated
+ * write (`logActivity` stamps `impersonated_by` in that case).
+ */
+interface RosterActor {
+	actorMemberId: string | null;
+}
+
 export const editSchema = z.object({
 	clubId: z.string().uuid(),
 	memberId: z.string().uuid(),
-	actorMemberId: z.string().uuid().nullable().optional(),
 	name: z.string().trim().min(1),
 	email: z.string().trim().email().nullable().optional(),
 	phone: z.string().trim().nullable().optional(),
@@ -138,7 +149,7 @@ export const editSchema = z.object({
 	// kept). Omitted = leave officer terms untouched (edits to name/contact only).
 	officerPositions: z.array(z.enum(OFFICER_POSITIONS)).optional(),
 });
-type EditInput = z.infer<typeof editSchema>;
+type EditInput = z.infer<typeof editSchema> & RosterActor;
 
 /** Update a roster member's name/contact and reconcile their office set (#100);
  *  logs member_edit with the office change. */
@@ -187,7 +198,7 @@ export async function applyMemberEdit(input: EditInput) {
 				: beforeOffices;
 		await logActivity(tx, {
 			clubId: input.clubId,
-			actorMemberId: input.actorMemberId ?? null,
+			actorMemberId: input.actorMemberId,
 			action: "member_edit",
 			targetType: "member",
 			targetId: input.memberId,
@@ -209,9 +220,8 @@ export const setStatusSchema = z.object({
 	clubId: z.string().uuid(),
 	memberId: z.string().uuid(),
 	status: z.enum(["active", "inactive"]),
-	actorMemberId: z.string().uuid().nullable().optional(),
 });
-type SetStatusInput = z.infer<typeof setStatusSchema>;
+type SetStatusInput = z.infer<typeof setStatusSchema> & RosterActor;
 
 /** Toggle a roster member active/inactive. Inactive members are hidden from
  *  sign-up / roster / season / picker views and can't claim or be assigned new
@@ -273,7 +283,7 @@ export async function applySetMemberStatus(input: SetStatusInput) {
 					.where(eq(roleSlots.id, s.id));
 				await logActivity(tx, {
 					clubId: input.clubId,
-					actorMemberId: input.actorMemberId ?? null,
+					actorMemberId: input.actorMemberId,
 					action: "release",
 					targetType: "slot",
 					targetId: s.id,
@@ -283,7 +293,7 @@ export async function applySetMemberStatus(input: SetStatusInput) {
 		}
 		await logActivity(tx, {
 			clubId: input.clubId,
-			actorMemberId: input.actorMemberId ?? null,
+			actorMemberId: input.actorMemberId,
 			action: "member_edit",
 			targetType: "member",
 			targetId: input.memberId,
@@ -300,9 +310,8 @@ export const setRoleSchema = z.object({
 	clubId: z.string().uuid(),
 	memberId: z.string().uuid(),
 	clubRole: z.enum(["admin", "member"]),
-	actorMemberId: z.string().uuid().nullable().optional(),
 });
-type SetRoleInput = z.infer<typeof setRoleSchema>;
+type SetRoleInput = z.infer<typeof setRoleSchema> & RosterActor;
 
 /**
  * Set a member's `club_role` (admin ⇄ member) — a PERMISSION change (#187),
@@ -343,7 +352,7 @@ export async function applySetMemberRole(input: SetRoleInput) {
 			.where(eq(members.id, input.memberId));
 		await logActivity(tx, {
 			clubId: input.clubId,
-			actorMemberId: input.actorMemberId ?? null,
+			actorMemberId: input.actorMemberId,
 			action: "member_edit",
 			targetType: "member",
 			targetId: input.memberId,
@@ -360,9 +369,8 @@ export const mergeSchema = z.object({
 	clubId: z.string().uuid(),
 	keeperId: z.string().uuid(),
 	absorbedId: z.string().uuid(),
-	actorMemberId: z.string().uuid().nullable().optional(),
 });
-type MergeInput = z.infer<typeof mergeSchema>;
+type MergeInput = z.infer<typeof mergeSchema> & RosterActor;
 
 /** Merge an absorbed member into a keeper: re-point assignments, availability
  *  (dedupe meeting conflicts), and activity history; delete the absorbed; log
@@ -396,7 +404,7 @@ export async function applyMemberMerge(input: MergeInput) {
 		await collapseMemberships(tx, clubId, keeperId, absorbedId);
 		await logActivity(tx, {
 			clubId,
-			actorMemberId: input.actorMemberId ?? null,
+			actorMemberId: input.actorMemberId,
 			action: "member_merge",
 			targetType: "member",
 			targetId: keeperId,
@@ -413,9 +421,8 @@ export async function applyMemberMerge(input: MergeInput) {
 export const removeSchema = z.object({
 	clubId: z.string().uuid(),
 	memberId: z.string().uuid(),
-	actorMemberId: z.string().uuid().nullable().optional(),
 });
-type RemoveInput = z.infer<typeof removeSchema>;
+type RemoveInput = z.infer<typeof removeSchema> & RosterActor;
 
 /** Remove a member: release their upcoming, non-cancelled slots (logged) then
  *  delete them (availability cascades). A user-linked member can't be removed. */
@@ -458,7 +465,7 @@ export async function applyMemberRemove(input: RemoveInput) {
 				.where(eq(roleSlots.id, s.id));
 			await logActivity(tx, {
 				clubId: input.clubId,
-				actorMemberId: input.actorMemberId ?? null,
+				actorMemberId: input.actorMemberId,
 				action: "release",
 				targetType: "slot",
 				targetId: s.id,
@@ -468,7 +475,7 @@ export async function applyMemberRemove(input: RemoveInput) {
 		await tx.delete(members).where(eq(members.id, input.memberId));
 		await logActivity(tx, {
 			clubId: input.clubId,
-			actorMemberId: input.actorMemberId ?? null,
+			actorMemberId: input.actorMemberId,
 			action: "member_remove",
 			targetType: "member",
 			targetId: input.memberId,
@@ -480,7 +487,6 @@ export async function applyMemberRemove(input: RemoveInput) {
 
 export const bulkImportSchema = z.object({
 	clubId: z.string().uuid(),
-	actorMemberId: z.string().uuid().nullable().optional(),
 	// Rows are parsed client-side (see #/lib/roster-import). The server
 	// re-validates and dedupes against the live roster — never trust the client.
 	rows: z
@@ -494,7 +500,7 @@ export const bulkImportSchema = z.object({
 		)
 		.min(1),
 });
-type BulkImportInput = z.infer<typeof bulkImportSchema>;
+type BulkImportInput = z.infer<typeof bulkImportSchema> & RosterActor;
 
 export interface BulkImportResult {
 	insertedIds: string[];
@@ -564,7 +570,7 @@ export async function applyBulkImport(
 			}
 			await logActivity(tx, {
 				clubId: input.clubId,
-				actorMemberId: input.actorMemberId ?? null,
+				actorMemberId: input.actorMemberId,
 				action: "member_add",
 				targetType: "member",
 				targetId: m.id,

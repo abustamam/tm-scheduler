@@ -94,7 +94,6 @@ const MANUAL_STAGES: { id: ManualGuestStage; label: string }[] = [
 
 function VpMembership() {
 	const { guests, clubId, clubName, clubSlug } = Route.useLoaderData();
-	const { currentMemberId } = Route.useRouteContext();
 	const router = useRouter();
 	const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -128,7 +127,7 @@ function VpMembership() {
 		setBusyId(guest.id);
 		try {
 			await convertGuestToMember({
-				data: { clubId, guestId: guest.id, actorMemberId: currentMemberId },
+				data: { clubId, guestId: guest.id },
 			});
 			toast.success(`${guest.name} is now a member. 🎉`);
 			await router.invalidate();
@@ -210,7 +209,6 @@ function VpMembership() {
 									key={g.id}
 									guest={g}
 									clubId={clubId}
-									currentMemberId={currentMemberId}
 									busy={busyId === g.id}
 									onMove={move}
 									onConvert={convert}
@@ -282,14 +280,12 @@ function EmptyRow({ children }: { children: React.ReactNode }) {
 function GuestRow({
 	guest,
 	clubId,
-	currentMemberId,
 	busy,
 	onMove,
 	onConvert,
 }: {
 	guest: PipelineGuestRow;
 	clubId: string;
-	currentMemberId: string | null;
 	busy: boolean;
 	onMove: (guestId: string, stage: ManualGuestStage) => void;
 	onConvert: (guest: PipelineGuestRow) => void;
@@ -349,12 +345,7 @@ function GuestRow({
 				    (#364). Edit is offered at every stage (the guest row is only ever
 				    the record of the visitor); delete is not offered once they have
 				    converted — the server rejects it too. */}
-				<GuestEditDelete
-					guest={guest}
-					clubId={clubId}
-					currentMemberId={currentMemberId}
-					disabled={busy}
-				/>
+				<GuestEditDelete guest={guest} clubId={clubId} disabled={busy} />
 				{joined ? null : (
 					<Button
 						type="button"
@@ -405,12 +396,10 @@ function deleteBlurb(guest: PipelineGuestRow): string {
 function GuestEditDelete({
 	guest,
 	clubId,
-	currentMemberId,
 	disabled,
 }: {
 	guest: PipelineGuestRow;
 	clubId: string;
-	currentMemberId: string | null;
 	disabled: boolean;
 }) {
 	const router = useRouter();
@@ -452,7 +441,7 @@ function GuestEditDelete({
 		setBusy(true);
 		try {
 			const res = await deleteGuest({
-				data: { clubId, guestId: guest.id, actorMemberId: currentMemberId },
+				data: { clubId, guestId: guest.id },
 			});
 			toast.success(
 				res.slotsReopened > 0

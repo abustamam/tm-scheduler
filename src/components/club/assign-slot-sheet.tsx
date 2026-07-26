@@ -124,9 +124,9 @@ export function AssignSlotSheet({
 		if (!slot) return;
 		setBusy(true);
 		try {
-			await assignGuestSlot({
-				data: { slotId: slot.id, actorMemberId, ...payload },
-			});
+			// No actor on the wire: assignGuestSlot is admin-gated and credits the
+			// membership the server resolved from the session (#396).
+			await assignGuestSlot({ data: { slotId: slot.id, ...payload } });
 			toast.success("Guest assigned.");
 			await onAssigned();
 		} catch (err) {

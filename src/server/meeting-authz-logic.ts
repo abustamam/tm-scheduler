@@ -48,6 +48,13 @@ export interface MeetingAgendaAuthz {
 	via: "admin" | "tmod-self-assert" | null;
 	/** The meeting's TMOD slot assignee, or null when unassigned/absent. */
 	tmodMemberId: string | null;
+	/** The member to credit in `activity_log` for a write made under this grant
+	 *  (#396): the session's own membership on the admin path, the verified
+	 *  self-asserted holder on the TMOD path. Null when denied, or when the grant
+	 *  came from a memberless `read_write` impersonation (`logActivity` stamps the
+	 *  superadmin instead). NEVER the client's `actorMemberId` — that is the
+	 *  forgeable input this replaces. */
+	actorMemberId: string | null;
 }
 
 /**
@@ -56,16 +63,20 @@ export interface MeetingAgendaAuthz {
  * membership in this club, OR a superadmin with an active `read_write`
  * impersonation of this club (#246). In the impersonation case it marks the
  * request so the write is attributed to the real superadmin. A `read_only`
- * session never grants — writes stay blind to it by construction. Returns true
- * when the admin path grants access.
+ * session never grants — writes stay blind to it by construction.
+ *
+ * Returns `granted` plus the membership id to credit the write to (#396) — null
+ * for the memberless impersonation arm, where `logActivity` records the real
+ * superadmin in `impersonated_by` instead.
  */
 async function resolveAdminGrant(
 	sessionUserId: string | null | undefined,
 	clubId: string,
-): Promise<boolean> {
-	if (!sessionUserId) return false;
+): Promise<{ granted: boolean; memberId: string | null }> {
+	if (!sessionUserId) return { granted: false, memberId: null };
 	const [membership] = await db
 		.select({
+			id: members.id,
 			clubRole: members.clubRole,
 			status: members.status,
 		})
@@ -78,14 +89,14 @@ async function resolveAdminGrant(
 		membership.status === "active" &&
 		membership.clubRole === "admin"
 	) {
-		return true;
+		return { granted: true, memberId: membership.id };
 	}
 	const session = await getActiveImpersonation(sessionUserId, clubId);
 	if (session?.mode === "read_write") {
 		markImpersonatedWrite(sessionUserId);
-		return true;
+		return { granted: true, memberId: null };
 	}
-	return false;
+	return { granted: false, memberId: null };
 }
 
 /**
@@ -139,8 +150,15 @@ export async function resolveMeetingAgendaAuthz(
 	const { tmodMemberId } = await loadRoleSlotAssignees(input.meetingId);
 
 	// Admin path (session admin or read_write impersonation, #246).
-	if (await resolveAdminGrant(input.sessionUserId, clubId)) {
-		return { clubId, allowed: true, via: "admin", tmodMemberId };
+	const admin = await resolveAdminGrant(input.sessionUserId, clubId);
+	if (admin.granted) {
+		return {
+			clubId,
+			allowed: true,
+			via: "admin",
+			tmodMemberId,
+			actorMemberId: admin.memberId,
+		};
 	}
 
 	// TMOD self-assert path: caller holds this meeting's TMOD slot.
@@ -149,10 +167,23 @@ export async function resolveMeetingAgendaAuthz(
 		tmodMemberId &&
 		input.selfMemberId === tmodMemberId
 	) {
-		return { clubId, allowed: true, via: "tmod-self-assert", tmodMemberId };
+		return {
+			clubId,
+			allowed: true,
+			via: "tmod-self-assert",
+			tmodMemberId,
+			// Verified against the slot above, so it is safe to credit.
+			actorMemberId: tmodMemberId,
+		};
 	}
 
-	return { clubId, allowed: false, via: null, tmodMemberId };
+	return {
+		clubId,
+		allowed: false,
+		via: null,
+		tmodMemberId,
+		actorMemberId: null,
+	};
 }
 
 export interface WordOfTheDayAuthz {
@@ -162,6 +193,8 @@ export interface WordOfTheDayAuthz {
 	via: "admin" | "tmod-self-assert" | "grammarian-self-assert" | null;
 	tmodMemberId: string | null;
 	grammarianMemberId: string | null;
+	/** The member to credit in `activity_log` (#396) — see `MeetingAgendaAuthz`. */
+	actorMemberId: string | null;
 }
 
 /**
@@ -188,13 +221,15 @@ export async function resolveWordOfTheDayAuthz(
 		input.meetingId,
 	);
 
-	if (await resolveAdminGrant(input.sessionUserId, clubId)) {
+	const admin = await resolveAdminGrant(input.sessionUserId, clubId);
+	if (admin.granted) {
 		return {
 			clubId,
 			allowed: true,
 			via: "admin",
 			tmodMemberId,
 			grammarianMemberId,
+			actorMemberId: admin.memberId,
 		};
 	}
 
@@ -209,6 +244,7 @@ export async function resolveWordOfTheDayAuthz(
 			via: "tmod-self-assert",
 			tmodMemberId,
 			grammarianMemberId,
+			actorMemberId: tmodMemberId,
 		};
 	}
 
@@ -223,6 +259,7 @@ export async function resolveWordOfTheDayAuthz(
 			via: "grammarian-self-assert",
 			tmodMemberId,
 			grammarianMemberId,
+			actorMemberId: grammarianMemberId,
 		};
 	}
 
@@ -232,5 +269,6 @@ export async function resolveWordOfTheDayAuthz(
 		via: null,
 		tmodMemberId,
 		grammarianMemberId,
+		actorMemberId: null,
 	};
 }

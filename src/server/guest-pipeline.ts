@@ -96,7 +96,6 @@ export const updateGuest = createServerFn({ method: "POST" })
 const deleteGuestSchema = z.object({
 	clubId: uuid,
 	guestId: uuid,
-	actorMemberId: uuid.nullable().optional(),
 });
 
 /**
@@ -108,18 +107,20 @@ export const deleteGuest = createServerFn({ method: "POST" })
 	.validator((input: unknown) => deleteGuestSchema.parse(input))
 	.handler(async ({ data }) => {
 		const currentUser = await requireUser();
-		await requireClubRole(currentUser.id, data.clubId, ["admin"]);
+		// Actor = the admin membership resolved from the session (#396).
+		const membership = await requireClubRole(currentUser.id, data.clubId, [
+			"admin",
+		]);
 		return applyDeleteGuest({
 			clubId: data.clubId,
 			guestId: data.guestId,
-			actorMemberId: data.actorMemberId ?? null,
+			actorMemberId: membership.id,
 		});
 	});
 
 const convertSchema = z.object({
 	clubId: uuid,
 	guestId: uuid,
-	actorMemberId: uuid.nullable().optional(),
 });
 
 /**
@@ -131,10 +132,13 @@ export const convertGuestToMember = createServerFn({ method: "POST" })
 	.validator((input: unknown) => convertSchema.parse(input))
 	.handler(async ({ data }) => {
 		const currentUser = await requireUser();
-		await requireClubRole(currentUser.id, data.clubId, ["admin"]);
+		// Actor = the admin membership resolved from the session (#396).
+		const membership = await requireClubRole(currentUser.id, data.clubId, [
+			"admin",
+		]);
 		return applyConvertGuestToMember({
 			clubId: data.clubId,
 			guestId: data.guestId,
-			actorMemberId: data.actorMemberId ?? null,
+			actorMemberId: membership.id,
 		});
 	});

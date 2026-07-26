@@ -63,24 +63,24 @@ export const editMember = createServerFn({ method: "POST" })
 	.validator((i: unknown) => editSchema.parse(i))
 	.handler(async ({ data }) => {
 		const user = await requireUser();
-		await requireClubRole(user.id, data.clubId, ["admin"]);
-		return applyMemberEdit(data);
+		const membership = await requireClubRole(user.id, data.clubId, ["admin"]);
+		return applyMemberEdit({ ...data, actorMemberId: membership.id });
 	});
 
 export const mergeMembers = createServerFn({ method: "POST" })
 	.validator((i: unknown) => mergeSchema.parse(i))
 	.handler(async ({ data }) => {
 		const user = await requireUser();
-		await requireClubRole(user.id, data.clubId, ["admin"]);
-		return applyMemberMerge(data);
+		const membership = await requireClubRole(user.id, data.clubId, ["admin"]);
+		return applyMemberMerge({ ...data, actorMemberId: membership.id });
 	});
 
 export const removeMember = createServerFn({ method: "POST" })
 	.validator((i: unknown) => removeSchema.parse(i))
 	.handler(async ({ data }) => {
 		const user = await requireUser();
-		await requireClubRole(user.id, data.clubId, ["admin"]);
-		return applyMemberRemove(data);
+		const membership = await requireClubRole(user.id, data.clubId, ["admin"]);
+		return applyMemberRemove({ ...data, actorMemberId: membership.id });
 	});
 
 /** Toggle a roster member active/inactive (NOT deletion — see removeMember). */
@@ -88,8 +88,8 @@ export const setMemberStatus = createServerFn({ method: "POST" })
 	.validator((i: unknown) => setStatusSchema.parse(i))
 	.handler(async ({ data }) => {
 		const user = await requireUser();
-		await requireClubRole(user.id, data.clubId, ["admin"]);
-		return applySetMemberStatus(data);
+		const membership = await requireClubRole(user.id, data.clubId, ["admin"]);
+		return applySetMemberStatus({ ...data, actorMemberId: membership.id });
 	});
 
 /** Promote/demote a member's club role (admin ⇄ member). Admin-only; the logic
@@ -98,14 +98,14 @@ export const setMemberRole = createServerFn({ method: "POST" })
 	.validator((i: unknown) => setRoleSchema.parse(i))
 	.handler(async ({ data }) => {
 		const user = await requireUser();
-		await requireClubRole(user.id, data.clubId, ["admin"]);
-		return applySetMemberRole(data);
+		const membership = await requireClubRole(user.id, data.clubId, ["admin"]);
+		return applySetMemberRole({ ...data, actorMemberId: membership.id });
 	});
 
 export const bulkImportMembers = createServerFn({ method: "POST" })
 	.validator((i: unknown) => bulkImportSchema.parse(i))
 	.handler(async ({ data }) => {
 		const user = await requireUser();
-		await requireClubRole(user.id, data.clubId, ["admin"]);
-		return applyBulkImport(data);
+		const membership = await requireClubRole(user.id, data.clubId, ["admin"]);
+		return applyBulkImport({ ...data, actorMemberId: membership.id });
 	});

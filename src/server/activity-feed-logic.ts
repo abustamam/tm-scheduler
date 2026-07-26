@@ -108,11 +108,22 @@ export async function loadActivity(
 		: [];
 	for (const s of slotRows) meetingIds.add(s.meetingId);
 
+	// Scoped to THIS club (#396): a member id is only ever resolved to a name if
+	// that membership belongs to the club whose feed we're rendering. Historically
+	// this lookup was unscoped, so a row carrying another club's member id (the
+	// forged-actor bug this shipped with) rendered that person's name to officers
+	// who have no business seeing it. Anything out of club now falls back to null
+	// ("Someone"), which is the honest answer.
 	const memberRows = memberIds.size
 		? await db
 				.select({ id: members.id, name: members.name })
 				.from(members)
-				.where(inArray(members.id, [...memberIds]))
+				.where(
+					and(
+						eq(members.clubId, input.clubId),
+						inArray(members.id, [...memberIds]),
+					),
+				)
 		: [];
 	const meetingRows = meetingIds.size
 		? await db

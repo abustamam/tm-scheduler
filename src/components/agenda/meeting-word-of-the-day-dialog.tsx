@@ -30,7 +30,6 @@ export function MeetingWordOfTheDayDialog({
 	open,
 	onOpenChange,
 	meeting,
-	actorMemberId,
 	selfMemberId,
 	onSaved,
 }: {
@@ -42,7 +41,6 @@ export function MeetingWordOfTheDayDialog({
 		wodDefinition: string | null;
 		wodExample: string | null;
 	};
-	actorMemberId: string | null;
 	selfMemberId: string | null;
 	onSaved: () => void | Promise<void>;
 }) {
@@ -56,7 +54,6 @@ export function MeetingWordOfTheDayDialog({
 			await updateWordOfTheDay({
 				data: {
 					meetingId: meeting.id,
-					actorMemberId,
 					selfMemberId,
 					wordOfTheDay:
 						String(form.get("wordOfTheDay") ?? "").trim() || undefined,
