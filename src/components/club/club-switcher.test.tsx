@@ -81,6 +81,22 @@ describe("ClubSwitcher", () => {
 		expect(container.innerHTML).toBe("");
 	});
 
+	it("renders nothing while impersonating, even with several clubs (#246)", () => {
+		// getAuthContext resolves the active club as
+		// `impersonating?.clubId ?? <cookie>`, so the cookie this control writes
+		// is ignored for the session. Before #378 picking a club was a silent
+		// no-op; now that it also navigates, leaving the control rendered would
+		// throw a superadmin off their page AND still not switch anything.
+		const { container } = render(
+			<ClubSwitcher
+				clubs={[MORNING, EVENING]}
+				activeClubId="aaa"
+				impersonating
+			/>,
+		);
+		expect(container.innerHTML).toBe("");
+	});
+
 	it("persists the choice before it moves the user (#378)", async () => {
 		await pick(/evening club/i);
 		await waitFor(() => expect(navigate).toHaveBeenCalled());

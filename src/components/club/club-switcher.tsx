@@ -25,20 +25,29 @@ export interface SwitcherClub {
  * url, `/meetings/$id` and `/members/$id` belong to it, admin routes resolve it
  * through `effectiveAdminClub`), so re-rendering them under a new active club
  * is the "weird things" the issue reports.
+ *
+ * Hidden entirely while impersonating (#246): `getAuthContext` resolves the
+ * active club as `impersonating?.clubId ?? <cookie>`, so the cookie this
+ * control writes is ignored for the whole session — picking a club could only
+ * ever mislead. Before #378 that was an invisible no-op; now that selecting
+ * also navigates, leaving it rendered would throw a superadmin off the page
+ * they were working on and still not switch anything.
  */
 export function ClubSwitcher({
 	clubs,
 	activeClubId,
+	impersonating = false,
 }: {
 	clubs: readonly SwitcherClub[];
 	activeClubId: string | null;
+	impersonating?: boolean;
 }) {
 	const router = useRouter();
 	const [open, setOpen] = useState(false);
 	const [busy, setBusy] = useState(false);
 
 	const active = clubs.find((c) => c.clubId === activeClubId) ?? clubs[0];
-	if (clubs.length <= 1 || !active) return null;
+	if (impersonating || clubs.length <= 1 || !active) return null;
 
 	async function choose(clubId: string) {
 		if (clubId === active?.clubId) {
@@ -54,12 +63,18 @@ export function ClubSwitcher({
 			// bouncing the user onto the previous club's page with the new club
 			// active, which is the same bug via history.
 			await router.navigate({ to: "/", replace: true });
-			// Still needed after the navigation, and only after it: when the club
-			// home IS the page you were already on, the destination match is
-			// reused and its loader does not re-run on its own (staleTime 0 only
-			// reloads a match that's newly entered), so it would keep the previous
-			// club's data. Invalidating first would instead re-run the OLD url's
-			// loaders under the NEW active club — the bug this fixes.
+			// Belt-and-braces, and only AFTER the navigation. Invalidating first
+			// would re-run the OLD url's loaders under the NEW active club —
+			// exactly the bug this fixes.
+			//
+			// The navigation alone does appear to reload the destination even when
+			// the club home IS the page you were already on, via the router's
+			// `forceStaleReload` (same-href) branch. But that branch depends on
+			// `resolvedLocation`, which a React layout effect advances only once a
+			// load settles — timing we neither control nor test. So this is kept
+			// deliberately as insurance against a heuristic, not because the
+			// reload is known to be missing. Cost is one redundant destination
+			// load per switch, on an explicit user action.
 			await router.invalidate();
 		} finally {
 			setBusy(false);
