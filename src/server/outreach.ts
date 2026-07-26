@@ -10,7 +10,17 @@ import { assertMeetingNotLocked } from "./meeting-authz-logic";
 /** Load a meeting's status (for the ADR-0012 lock) and its OWNING club, or throw
  *  if missing. The club comes from the meeting, not the payload (#396): gating on
  *  a client-supplied `clubId` would let an admin of club A act on club B's
- *  meeting and file the row under A. */
+ *  meeting and file the row under A.
+ *
+ *  This necessarily runs BEFORE `requireClubRole` — the role check needs a club
+ *  and the meeting is the only trustworthy source of one — so a non-member gets
+ *  "Meeting not found." rather than a permission error, i.e. it answers "does
+ *  this meeting id exist". Deliberately accepted: meeting existence is already
+ *  public (`getMeeting` / `getPublicMeetingByKey` take no session and the
+ *  `/club/:clubId/meeting/:key` page is anonymous-readable), so the ordering
+ *  discloses nothing that isn't already world-readable, and the alternative —
+ *  pre-gating on the payload's `clubId` — reintroduces exactly the trust in
+ *  client-supplied club ids that #396 removed. */
 async function loadMeeting(
 	meetingId: string,
 ): Promise<{ status: string; clubId: string }> {

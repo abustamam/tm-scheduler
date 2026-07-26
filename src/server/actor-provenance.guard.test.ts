@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
@@ -28,14 +28,33 @@ import { describe, expect, it } from "vitest";
  *  2. Where the payload legitimately does carry one — the PUBLIC, no-auth
  *     sign-up surfaces, where an anonymous visitor's name-pick is the whole
  *     design — it may only be read as an *assertion* handed to
- *     `write-actor-logic`, which club-scopes it and lets a real session win.
+ *     `write-actor-logic`, which club-scopes it and lets a real membership win.
+ *
+ * ## What this guard catches, and what it does not
+ *
+ * It is a source-text guard, and its job is narrow and real: **stop the known
+ * shape from propagating by copy-paste**, which is exactly how the bug spread.
+ * Both rules key on the field being *named* `actorMemberId`, so they see the
+ * copied schema field whatever validator it uses, the spread that carried it
+ * onward (`applyMemberEdit({ ...data })` — literally how `members.ts` propagated
+ * it), and the destructured read.
+ *
+ * They do NOT see a renamed or restructured actor: `actorId: z.string().uuid()`
+ * later assigned to `actorMemberId`, or `actor: z.object({ memberId: … })`.
+ * Catching those needs type-aware analysis of what actually reaches
+ * `logActivity`, which a regex cannot win — and a guard that pretends otherwise
+ * is worse than one with a stated limit. The real control on a genuinely new
+ * no-auth write endpoint is human review of `PUBLIC_ACTOR_MODULES` below; the
+ * size assertion at the bottom of this file makes widening that allowlist show
+ * up in the diff instead of landing as a silently-green one-line edit.
  */
 const serverDir = dirname(fileURLToPath(import.meta.url));
 
 /**
  * Modules whose server fns are genuinely PUBLIC (no session to derive from), so
- * their payload may assert an actor. Adding to this list means adding a
- * no-auth write endpoint — think hard before you do.
+ * their payload may assert an actor. Adding to this list means adding a no-auth
+ * write endpoint — think hard before you do, and see the size assertion at the
+ * bottom of this file.
  */
 const PUBLIC_ACTOR_MODULES = new Set(["slots.ts", "availability.ts"]);
 
@@ -46,11 +65,79 @@ const ACTOR_FILTER_MODULES = new Set(["activity-feed-logic.ts"]);
 /** The one sanctioned way to read a client-asserted actor. */
 const SANCTIONED_READ = /claimedActorMemberId:\s*data\.actorMemberId/g;
 
-const files = readdirSync(serverDir).filter(
-	(f) => f.endsWith(".ts") && !f.endsWith(".test.ts"),
-);
+/** `const { …, actorMemberId, … } = data` — the destructured read of the same
+ *  client assertion, which searching for `data.actorMemberId` alone would miss. */
+const DESTRUCTURED_READ =
+	/(?:const|let|var)\s*\{[^{}]*\bactorMemberId\b[^{}]*\}\s*=\s*data\b/g;
+
+/**
+ * Every `*.ts` under `src/server/`, recursively — a future
+ * `src/server/<subdir>/x.ts` must be scanned too, and the old non-recursive
+ * `readdirSync` would never have seen it. Paths come back relative to
+ * `serverDir` with `/` separators, so the allowlists above stay readable.
+ */
+function serverModules(dir: string = serverDir): string[] {
+	const out: string[] = [];
+	for (const entry of readdirSync(dir, { withFileTypes: true })) {
+		const full = join(dir, entry.name);
+		if (entry.isDirectory()) {
+			out.push(...serverModules(full));
+		} else if (entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) {
+			out.push(relative(serverDir, full).split(sep).join("/"));
+		}
+	}
+	return out.sort();
+}
+
+/**
+ * The `[start, end]` spans of every `z.object({ … })` literal in `src`, found by
+ * brace-matching from each `z.object(`. Rule 1 uses these so it can flag a
+ * schema-position `actorMemberId` whatever sits on the right-hand side —
+ * `z.string().uuid()`, a shared `uuid` alias, any other locally-named validator
+ * — instead of only the two spellings we happened to write.
+ */
+function zodObjectSpans(src: string): [number, number][] {
+	const spans: [number, number][] = [];
+	const open = /z\.object\(\s*\{/g;
+	let m = open.exec(src);
+	while (m) {
+		let depth = 0;
+		let i = m.index + m[0].length - 1; // sitting on the '{'
+		for (; i < src.length; i++) {
+			if (src[i] === "{") depth++;
+			else if (src[i] === "}") {
+				depth--;
+				if (depth === 0) break;
+			}
+		}
+		spans.push([m.index, i]);
+		m = open.exec(src);
+	}
+	return spans;
+}
+
+/** Schema-position `actorMemberId:` declarations, as reportable snippets. */
+function schemaActorFields(src: string): string[] {
+	const found: string[] = [];
+	for (const [start, end] of zodObjectSpans(src)) {
+		const field = /\bactorMemberId\s*:[^,\n]*/g;
+		let m = field.exec(src.slice(start, end));
+		while (m) {
+			found.push(m[0].trim());
+			m = field.exec(src.slice(start, end));
+		}
+	}
+	return found;
+}
+
+const files = serverModules();
 
 describe("activity_log actors are derived, not client-supplied (#396)", () => {
+	it("sweeps every server module, including any nested directory", () => {
+		expect(files.length).toBeGreaterThan(50);
+		expect(files).toContain("slots.ts");
+	});
+
 	for (const file of files) {
 		const src = readFileSync(join(serverDir, file), "utf8");
 
@@ -58,9 +145,7 @@ describe("activity_log actors are derived, not client-supplied (#396)", () => {
 			if (PUBLIC_ACTOR_MODULES.has(file) || ACTOR_FILTER_MODULES.has(file)) {
 				return;
 			}
-			const offenders = src
-				.split("\n")
-				.filter((line) => /^\s*actorMemberId:\s*(z\.|uuid\b)/.test(line));
+			const offenders = schemaActorFields(src);
 			expect(
 				offenders,
 				`${file} declares 'actorMemberId' in a zod schema, so the client picks who the ` +
@@ -71,16 +156,19 @@ describe("activity_log actors are derived, not client-supplied (#396)", () => {
 		});
 
 		it(`${file} only reads a client-asserted actor through write-actor-logic`, () => {
-			const unsanctioned = src
-				.replace(SANCTIONED_READ, "")
-				.split("\n")
-				.filter((line) => line.includes("data.actorMemberId"));
+			const stripped = src.replace(SANCTIONED_READ, "");
+			const unsanctioned = [
+				...stripped.split("\n").filter((l) => l.includes("data.actorMemberId")),
+				...(stripped.match(DESTRUCTURED_READ) ?? []).map((m) =>
+					m.replace(/\s+/g, " "),
+				),
+			];
 			expect(
 				unsanctioned,
-				`${file} uses the client's 'data.actorMemberId' directly (#396). It is an ` +
+				`${file} reads the client's actor straight off 'data' (#396). It is an ` +
 					`assertion, not proof: pass it as 'claimedActorMemberId' to ` +
-					`requireRequestWriteActor/requestWriteActor, which club-scopes it and lets a ` +
-					`real session override it:\n  ${unsanctioned.join("\n  ")}`,
+					`requestWriteActor, which club-scopes it and lets a real membership override ` +
+					`it:\n  ${unsanctioned.join("\n  ")}`,
 			).toEqual([]);
 		});
 	}
@@ -95,7 +183,7 @@ describe("activity_log actors are derived, not client-supplied (#396)", () => {
 				src,
 				`${file} accepts an asserted actor but never resolves it`,
 			).toMatch(/from "\.\/write-actor-logic"/);
-			const asserted = (src.match(/^\s*actorMemberId:\s*z\./gm) ?? []).length;
+			const asserted = schemaActorFields(src).length;
 			const resolved = (src.match(SANCTIONED_READ) ?? []).length;
 			expect(
 				resolved,
@@ -103,5 +191,18 @@ describe("activity_log actors are derived, not client-supplied (#396)", () => {
 					`every server fn that accepts one must hand it to write-actor-logic`,
 			).toBeGreaterThanOrEqual(asserted);
 		}
+	});
+
+	it("the no-auth allowlist has not grown", () => {
+		// Widening PUBLIC_ACTOR_MODULES exempts a whole module from rule 1, so it
+		// must never be a silently-green one-line edit: adding an entry breaks this
+		// and forces the change to be argued for in review. That review is also the
+		// real control on the shapes the regexes above cannot see (see the header)
+		// — a new no-auth write endpoint is the only way one of them lands.
+		expect(PUBLIC_ACTOR_MODULES.size).toBe(2);
+		expect([...PUBLIC_ACTOR_MODULES].sort()).toEqual([
+			"availability.ts",
+			"slots.ts",
+		]);
 	});
 });

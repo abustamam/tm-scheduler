@@ -22,7 +22,7 @@ import {
 	editSlotSpeech,
 	reassignSlotCore,
 } from "./slots-logic";
-import { requireRequestWriteActor } from "./write-actor-logic";
+import { requestWriteActor } from "./write-actor-logic";
 
 const speakerDetailsSchema = z.object({
 	speechTitle: z.string().trim().optional(),
@@ -74,7 +74,7 @@ export const claimSlot = createServerFn({ method: "POST" })
 		await requireMemberInClub(data.memberId, slot.clubId);
 		// Actor provenance (#396): a signed-in caller is credited as themselves; an
 		// anonymous one keeps the name-pick, club-scoped to THIS slot's club.
-		const actorMemberId = await requireRequestWriteActor({
+		const actorMemberId = await requestWriteActor({
 			clubId: slot.clubId,
 			claimedActorMemberId: data.actorMemberId,
 		});
@@ -164,7 +164,7 @@ export const releaseSlot = createServerFn({ method: "POST" })
 		// of THIS slot's club, and a signed-in caller is credited as themselves.
 		// Sheet-parity model — any club member may release/clear any slot; the
 		// activity log records who did it (mirrors reassignSlot).
-		const actorMemberId = await requireRequestWriteActor({
+		const actorMemberId = await requestWriteActor({
 			clubId: slot.clubId,
 			claimedActorMemberId: data.actorMemberId,
 		});
@@ -353,7 +353,7 @@ export const reassignSlot = createServerFn({ method: "POST" })
 		// Trust guards: both the actor and the target must be club roster members;
 		// a signed-in caller is credited as themselves rather than the name they
 		// asserted (#396).
-		const actorMemberId = await requireRequestWriteActor({
+		const actorMemberId = await requestWriteActor({
 			clubId: slot.clubId,
 			claimedActorMemberId: data.actorMemberId,
 		});
@@ -414,7 +414,7 @@ export const updateSpeakerDetails = createServerFn({ method: "POST" })
 		}
 		// No activity row here, but the same trust guard applies: the caller must
 		// resolve to a member of THIS club (session first, name-pick second, #396).
-		await requireRequestWriteActor({
+		await requestWriteActor({
 			clubId: slot.clubId,
 			claimedActorMemberId: data.actorMemberId,
 		});

@@ -7,7 +7,7 @@ import { logActivity } from "./activity";
 import { releaseSlotsAndMarkUnavailable } from "./availability-logic";
 import { requireMemberInClub } from "./guards";
 import { assertMeetingNotLocked } from "./meeting-authz-logic";
-import { requireRequestWriteActor } from "./write-actor-logic";
+import { requestWriteActor } from "./write-actor-logic";
 
 /** Load a meeting's status (for the #150 lock) and its OWNING club, or throw if
  *  it's missing. The club is read from the meeting rather than trusted from the
@@ -30,7 +30,7 @@ const availabilitySchema = z.object({
 	memberId: z.string().uuid(),
 	/** Who performed the action. Omitted ⇒ self-service (actor = subject); set
 	 *  to an officer's member id when an admin marks someone else unavailable.
-	 *  PUBLIC path, so this is an assertion, not proof — `requireRequestWriteActor`
+	 *  PUBLIC path, so this is an assertion, not proof — `requestWriteActor`
 	 *  club-scopes it and a real session overrides it (#396). */
 	actorMemberId: z.string().uuid().optional(),
 	meetingId: z.string().uuid(),
@@ -46,7 +46,7 @@ export const setAvailability = createServerFn({ method: "POST" })
 		const meeting = await loadMeeting(data.meetingId);
 		assertMeetingNotLocked(meeting.status);
 		await requireMemberInClub(data.memberId, meeting.clubId);
-		const actorMemberId = await requireRequestWriteActor({
+		const actorMemberId = await requestWriteActor({
 			clubId: meeting.clubId,
 			claimedActorMemberId: data.actorMemberId ?? data.memberId,
 		});
@@ -76,7 +76,7 @@ export const clearAvailability = createServerFn({ method: "POST" })
 		const meeting = await loadMeeting(data.meetingId);
 		assertMeetingNotLocked(meeting.status);
 		await requireMemberInClub(data.memberId, meeting.clubId);
-		const actorMemberId = await requireRequestWriteActor({
+		const actorMemberId = await requestWriteActor({
 			clubId: meeting.clubId,
 			claimedActorMemberId: data.actorMemberId ?? data.memberId,
 		});
@@ -115,7 +115,7 @@ export const markUnavailableReleasing = createServerFn({ method: "POST" })
 		const meeting = await loadMeeting(data.meetingId);
 		assertMeetingNotLocked(meeting.status);
 		await requireMemberInClub(data.memberId, meeting.clubId);
-		const actorMemberId = await requireRequestWriteActor({
+		const actorMemberId = await requestWriteActor({
 			clubId: meeting.clubId,
 			claimedActorMemberId: data.actorMemberId ?? data.memberId,
 		});

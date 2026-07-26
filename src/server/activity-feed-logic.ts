@@ -92,6 +92,13 @@ export async function loadActivity(
 		if (r.targetType === "meeting" && r.targetId) meetingIds.add(r.targetId);
 	}
 
+	// Every enrichment lookup below is scoped to THIS club (#396). A row's
+	// `target_id` / `detail` ids are just numbers on a row: a legacy row (or a
+	// direct insert) in club A's feed can name club B's slot, meeting or member,
+	// and an unscoped lookup would render B's role name, B's meeting date or B's
+	// member name to A's officers, who have no business seeing any of it.
+	// Anything out of club resolves to null, which the UI renders as "Someone" /
+	// no role / no date — the honest answer.
 	const slotRows = slotIds.size
 		? await db
 				.select({
@@ -104,16 +111,17 @@ export async function loadActivity(
 					roleDefinitions,
 					eq(roleDefinitions.id, roleSlots.roleDefinitionId),
 				)
-				.where(inArray(roleSlots.id, [...slotIds]))
+				.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+				.where(
+					and(
+						eq(meetings.clubId, input.clubId),
+						inArray(roleSlots.id, [...slotIds]),
+					),
+				)
 		: [];
+	// Safe to widen the meeting set with these: they came back club-scoped.
 	for (const s of slotRows) meetingIds.add(s.meetingId);
 
-	// Scoped to THIS club (#396): a member id is only ever resolved to a name if
-	// that membership belongs to the club whose feed we're rendering. Historically
-	// this lookup was unscoped, so a row carrying another club's member id (the
-	// forged-actor bug this shipped with) rendered that person's name to officers
-	// who have no business seeing it. Anything out of club now falls back to null
-	// ("Someone"), which is the honest answer.
 	const memberRows = memberIds.size
 		? await db
 				.select({ id: members.id, name: members.name })
@@ -129,7 +137,12 @@ export async function loadActivity(
 		? await db
 				.select({ id: meetings.id, scheduledAt: meetings.scheduledAt })
 				.from(meetings)
-				.where(inArray(meetings.id, [...meetingIds]))
+				.where(
+					and(
+						eq(meetings.clubId, input.clubId),
+						inArray(meetings.id, [...meetingIds]),
+					),
+				)
 		: [];
 
 	const memberName = new Map(memberRows.map((m) => [m.id, m.name]));
