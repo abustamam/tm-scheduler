@@ -2,7 +2,8 @@
 // createServerFn wrappers in `guest-pipeline.ts` (a client-imported module the
 // guard test forbids from exporting db-touching functions). Integration-testable
 // by mocking `#/db`. See the header of `members-logic.ts` for the why.
-import { and, asc, count, eq, min, ne, sql } from "drizzle-orm";
+import { and, asc, count, eq, isNotNull, lte, min, ne, sql } from "drizzle-orm";
+import { union } from "drizzle-orm/pg-core";
 import { db } from "#/db";
 import {
 	clubs,
@@ -12,6 +13,7 @@ import {
 	members,
 	people,
 	roleSlots,
+	tableTopicsSpeakers,
 } from "#/db/schema";
 import { toStoredPhone } from "#/lib/phone";
 import { logActivity } from "./activity";
@@ -198,52 +200,125 @@ export interface PipelineGuestRow {
 	phone: string | null;
 	stage: GuestStage;
 	convertedMembershipId: string | null;
-	/** Earliest attended meeting date (derived from attendance); null if none. */
+	/** Earliest visited meeting date (derived — see `loadGuestPipeline`); null if none. */
 	firstVisitAt: Date | null;
-	/** Count of attendance rows (derived, never a stored counter). */
+	/** Meetings visited (derived, never a stored counter). */
 	visitCount: number;
 	createdAt: Date;
 }
 
 /**
- * Every guest in a club with a DERIVED first-visit date and visit count computed
- * from `meeting_attendance` joined to `meetings` — never a stored counter (the
- * derived style of `role-recency-logic.ts`). Grouped/served for the pipeline
- * view; the caller buckets by `stage`.
+ * The (guest, meeting) pairs that count as a VISIT for one club (#374).
+ *
+ * A guest visited a meeting when the meeting is NOT cancelled and any of:
+ *   - an attendance row exists (the guest book, or an officer adding them in the
+ *     minutes) — an explicit human assertion that they were there, so it counts
+ *     from the moment it is written: a guest-book scan at the door lands before
+ *     the meeting's own start time and must not read as "No recorded visits";
+ *   - they HELD A ROLE SLOT, or SPOKE AT TABLE TOPICS, at a meeting that has
+ *     already started. Taking part in the meeting IS attending it — but only
+ *     once it has happened: a guest penciled in for a future role isn't a
+ *     visitor yet.
+ *
+ * `union` (not `union all`) de-dupes the pairs, so a guest with an attendance
+ * row AND a role slot AND a Table Topics turn at one meeting counts once.
+ *
+ * This is a READ-SIDE derivation only: participation never writes an attendance
+ * row, so the "holding a slot never sets attendance" rule (#218,
+ * `minutes-logic.ts`) is untouched.
+ */
+function guestVisits(clubId: string) {
+	const heldMeeting = and(
+		eq(meetings.clubId, clubId),
+		ne(meetings.status, "cancelled"),
+		lte(meetings.scheduledAt, sql`now()`),
+	);
+	const attended = db
+		.select({
+			guestId: meetingAttendance.guestId,
+			meetingId: meetings.id,
+			scheduledAt: meetings.scheduledAt,
+		})
+		.from(meetingAttendance)
+		.innerJoin(meetings, eq(meetings.id, meetingAttendance.meetingId))
+		.where(
+			and(
+				eq(meetings.clubId, clubId),
+				ne(meetings.status, "cancelled"),
+				isNotNull(meetingAttendance.guestId),
+			),
+		);
+	const heldRole = db
+		.select({
+			guestId: roleSlots.assignedGuestId,
+			meetingId: meetings.id,
+			scheduledAt: meetings.scheduledAt,
+		})
+		.from(roleSlots)
+		.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+		.where(and(heldMeeting, isNotNull(roleSlots.assignedGuestId)));
+	const spoke = db
+		.select({
+			guestId: tableTopicsSpeakers.guestId,
+			meetingId: meetings.id,
+			scheduledAt: meetings.scheduledAt,
+		})
+		.from(tableTopicsSpeakers)
+		.innerJoin(meetings, eq(meetings.id, tableTopicsSpeakers.meetingId))
+		.where(and(heldMeeting, isNotNull(tableTopicsSpeakers.guestId)));
+	return union(attended, heldRole, spoke);
+}
+
+/**
+ * Every guest in a club with a DERIVED first-visit date and visit count — never
+ * a stored counter (the derived style of `role-recency-logic.ts`). See
+ * `guestVisits` for what counts as a visit. Served for the pipeline view; the
+ * caller buckets by `stage`.
  */
 export async function loadGuestPipeline(
 	clubId: string,
 ): Promise<PipelineGuestRow[]> {
-	const rows = await db
-		.select({
-			id: guests.id,
-			name: guests.name,
-			email: guests.email,
-			phone: guests.phone,
-			stage: guests.stage,
-			convertedMembershipId: guests.convertedMembershipId,
-			createdAt: guests.createdAt,
-			visitCount: count(meetingAttendance.id),
-			firstVisitAt: min(meetings.scheduledAt),
-		})
-		.from(guests)
-		.leftJoin(meetingAttendance, eq(meetingAttendance.guestId, guests.id))
-		.leftJoin(meetings, eq(meetings.id, meetingAttendance.meetingId))
-		.where(eq(guests.clubId, clubId))
-		.groupBy(guests.id)
-		.orderBy(asc(guests.name));
+	const visits = guestVisits(clubId).as("guest_visits");
+	const [rows, visitRows] = await Promise.all([
+		db
+			.select({
+				id: guests.id,
+				name: guests.name,
+				email: guests.email,
+				phone: guests.phone,
+				stage: guests.stage,
+				convertedMembershipId: guests.convertedMembershipId,
+				createdAt: guests.createdAt,
+			})
+			.from(guests)
+			.where(eq(guests.clubId, clubId))
+			.orderBy(asc(guests.name)),
+		db
+			.select({
+				guestId: visits.guestId,
+				visitCount: count(),
+				firstVisitAt: min(visits.scheduledAt),
+			})
+			.from(visits)
+			.groupBy(visits.guestId),
+	]);
 
-	return rows.map((r) => ({
-		id: r.id,
-		name: r.name,
-		email: r.email,
-		phone: r.phone,
-		stage: r.stage,
-		convertedMembershipId: r.convertedMembershipId,
-		visitCount: Number(r.visitCount),
-		firstVisitAt: r.firstVisitAt ? new Date(r.firstVisitAt) : null,
-		createdAt: r.createdAt,
-	}));
+	const visitsByGuest = new Map(visitRows.map((v) => [v.guestId, v]));
+
+	return rows.map((r) => {
+		const v = visitsByGuest.get(r.id);
+		return {
+			id: r.id,
+			name: r.name,
+			email: r.email,
+			phone: r.phone,
+			stage: r.stage,
+			convertedMembershipId: r.convertedMembershipId,
+			visitCount: Number(v?.visitCount ?? 0),
+			firstVisitAt: v?.firstVisitAt ? new Date(v.firstVisitAt) : null,
+			createdAt: r.createdAt,
+		};
+	});
 }
 
 export interface SetGuestStageInput {

@@ -218,6 +218,34 @@ describe.skipIf(!hasTestDb)("meeting minutes (#152)", () => {
 		]);
 	});
 
+	it("pre-lists a guest who only spoke at Table Topics as present (fromRole, #374)", async () => {
+		const guestId = await newGuest("Topics Only");
+		await addTableTopicsSpeaker({ meetingId: seed.meetingId, guestId });
+
+		const m = await loadMinutes(seed.meetingId);
+		expect(m.guests).toEqual([
+			{ guestId, name: "Topics Only", fromRole: true },
+		]);
+		expect(m.counts.guests).toBe(1);
+		// Still derived — taking part never writes an attendance row (#218).
+		const rows = await testDb
+			.select({ id: meetingAttendance.id })
+			.from(meetingAttendance)
+			.where(eq(meetingAttendance.guestId, guestId));
+		expect(rows).toHaveLength(0);
+	});
+
+	it("lists a Table Topics guest ONCE, as explicitly present when they also have an attendance row", async () => {
+		const { guestId } = await addGuestPresent({
+			meetingId: seed.meetingId,
+			newGuest: { name: "Both Ways" },
+		});
+		await addTableTopicsSpeaker({ meetingId: seed.meetingId, guestId });
+
+		const m = await loadMinutes(seed.meetingId);
+		expect(m.guests).toEqual([{ guestId, name: "Both Ways", fromRole: false }]);
+	});
+
 	it("rejects an attendance row holding BOTH a member and a guest (DB check)", async () => {
 		const guestId = await newGuest("Both");
 		await expect(

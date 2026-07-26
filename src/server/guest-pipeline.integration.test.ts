@@ -1,8 +1,9 @@
 /**
  * DB-backed integration tests for the VP-Membership guest pipeline (#208 /
- * ADR-0018): guest-book capture (create-or-find + attendance), derived visits,
- * manual stage transitions, and convert-to-member (Person dedup, membership
- * create, slot re-point, stage=joined, picker exclusion, activity log).
+ * ADR-0018): guest-book capture (create-or-find + attendance), derived visits
+ * (including participation — #374), manual stage transitions, and
+ * convert-to-member (Person dedup, membership create, slot re-point,
+ * stage=joined, picker exclusion, activity log).
  *
  * `#/db` is mocked to the TEST_DATABASE_URL client; the whole suite skips when
  * that env is unset.
@@ -17,6 +18,7 @@ import {
 	members,
 	people,
 	roleSlots,
+	tableTopicsSpeakers,
 } from "#/db/schema";
 import {
 	cleanup,
@@ -52,11 +54,64 @@ async function seedSoonerMeeting(clubId: string, daysOut = 1): Promise<string> {
 	return m.id;
 }
 
+/** Insert a meeting that has already HAPPENED (the seeded one is 7 days out). */
+async function seedPastMeeting(
+	clubId: string,
+	daysAgo: number,
+	status: "scheduled" | "cancelled" = "scheduled",
+): Promise<string> {
+	const [m] = await testDb
+		.insert(meetings)
+		.values({
+			clubId,
+			scheduledAt: new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000),
+			status,
+		})
+		.returning({ id: meetings.id });
+	if (!m) throw new Error("Failed to seed meeting");
+	return m.id;
+}
+
+/** A bare club guest — no attendance, no participation anywhere. */
+async function seedGuest(clubId: string, name: string): Promise<string> {
+	const [g] = await testDb
+		.insert(guests)
+		.values({ clubId, name })
+		.returning({ id: guests.id });
+	if (!g) throw new Error("Failed to seed guest");
+	return g.id;
+}
+
+/** A claimed role slot on `meetingId` held by `guestId`. */
+async function seedGuestRoleSlot(
+	meetingId: string,
+	roleDefinitionId: string,
+	guestId: string,
+): Promise<string> {
+	const [s] = await testDb
+		.insert(roleSlots)
+		.values({
+			meetingId,
+			roleDefinitionId,
+			assignedGuestId: guestId,
+			status: "claimed",
+		})
+		.returning({ id: roleSlots.id });
+	if (!s) throw new Error("Failed to seed role slot");
+	return s.id;
+}
+
 async function attendanceForGuest(guestId: string) {
 	return testDb
 		.select({ meetingId: meetingAttendance.meetingId })
 		.from(meetingAttendance)
 		.where(eq(meetingAttendance.guestId, guestId));
+}
+
+async function pipelineRow(clubId: string, guestId: string) {
+	const row = (await loadGuestPipeline(clubId)).find((g) => g.id === guestId);
+	expect(row).toBeDefined();
+	return row!;
 }
 
 describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
@@ -201,6 +256,88 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			const orphanRow = pipeline2.find((g) => g.id === orphan!.id);
 			expect(orphanRow!.visitCount).toBe(0);
 			expect(orphanRow!.firstVisitAt).toBeNull();
+		});
+	});
+
+	// #374: taking part IS visiting. The derivation reads role_slots and
+	// table_topics_speakers alongside attendance — and still writes nothing (the
+	// "holding a slot never sets attendance" rule of #218 is untouched).
+	describe("participation counts as a visit (#374)", () => {
+		it("counts a guest who only HELD A ROLE at a meeting that has happened", async () => {
+			const past = await seedPastMeeting(seed.clubId, 7);
+			const guestId = await seedGuest(seed.clubId, "Role Only");
+			await seedGuestRoleSlot(past, seed.roleDefinitionId, guestId);
+
+			const row = await pipelineRow(seed.clubId, guestId);
+			expect(row.visitCount).toBe(1);
+			expect(row.firstVisitAt).toBeInstanceOf(Date);
+			// Derived, never stored: no attendance row was written for them (#218).
+			expect(await attendanceForGuest(guestId)).toHaveLength(0);
+		});
+
+		it("counts a guest who only SPOKE AT TABLE TOPICS at a meeting that has happened", async () => {
+			const past = await seedPastMeeting(seed.clubId, 5);
+			const guestId = await seedGuest(seed.clubId, "Topics Only");
+			await testDb
+				.insert(tableTopicsSpeakers)
+				.values({ meetingId: past, guestId });
+
+			const row = await pipelineRow(seed.clubId, guestId);
+			expect(row.visitCount).toBe(1);
+			expect(row.firstVisitAt).toBeInstanceOf(Date);
+			expect(await attendanceForGuest(guestId)).toHaveLength(0);
+		});
+
+		it("does NOT count a FUTURE meeting (penciled in ≠ visited), nor a cancelled one", async () => {
+			const guestId = await seedGuest(seed.clubId, "Penciled In");
+			// The seeded meeting is 7 days out — a future role and a future Table
+			// Topics slot are plans, not visits.
+			await seedGuestRoleSlot(seed.meetingId, seed.roleDefinitionId, guestId);
+			await testDb
+				.insert(tableTopicsSpeakers)
+				.values({ meetingId: seed.meetingId, guestId });
+			// A cancelled past meeting never happened either.
+			const cancelled = await seedPastMeeting(seed.clubId, 14, "cancelled");
+			await seedGuestRoleSlot(cancelled, seed.roleDefinitionId, guestId);
+
+			const row = await pipelineRow(seed.clubId, guestId);
+			expect(row.visitCount).toBe(0);
+			expect(row.firstVisitAt).toBeNull();
+		});
+
+		it("counts a meeting ONCE when the guest has attendance AND a role slot on it", async () => {
+			const past = await seedPastMeeting(seed.clubId, 3);
+			const guestId = await seedGuest(seed.clubId, "Both Sources");
+			await testDb
+				.insert(meetingAttendance)
+				.values({ meetingId: past, guestId, status: "present" });
+			await seedGuestRoleSlot(past, seed.roleDefinitionId, guestId);
+			await testDb
+				.insert(tableTopicsSpeakers)
+				.values({ meetingId: past, guestId });
+
+			const row = await pipelineRow(seed.clubId, guestId);
+			expect(row.visitCount).toBe(1);
+		});
+
+		it("derives firstVisitAt as the EARLIEST qualifying meeting across sources", async () => {
+			const older = await seedPastMeeting(seed.clubId, 30);
+			const newer = await seedPastMeeting(seed.clubId, 2);
+			const guestId = await seedGuest(seed.clubId, "Two Visits");
+			await seedGuestRoleSlot(older, seed.roleDefinitionId, guestId);
+			await testDb
+				.insert(meetingAttendance)
+				.values({ meetingId: newer, guestId, status: "present" });
+
+			const row = await pipelineRow(seed.clubId, guestId);
+			expect(row.visitCount).toBe(2);
+			const [oldMeeting] = await testDb
+				.select({ scheduledAt: meetings.scheduledAt })
+				.from(meetings)
+				.where(eq(meetings.id, older));
+			expect(row.firstVisitAt?.getTime()).toBe(
+				oldMeeting!.scheduledAt.getTime(),
+			);
 		});
 	});
 
