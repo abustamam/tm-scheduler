@@ -5,6 +5,14 @@
 // The mirror of `listUpcomingMeetings`: `lt(scheduledAt, before)` +
 // `desc(scheduledAt)` + limit/offset, same club scoping, same open/total slot
 // aggregates, same "cancelled meetings are not history you can browse" rule.
+//
+// `lt(scheduledAt, before)` is deliberately NOT `isMeetingOver` (#393). This
+// query and `listUpcomingMeetings`' `gte(scheduledAt, now)` are exact
+// complements on the INSTANT axis; `isMeetingOver` is a club-local-DAY rule, so
+// swapping it in here would drop a meeting that started an hour ago out of both
+// lists until midnight. Listing = which side of now; `isMeetingOver` = is the
+// planning window closed. See the note on `isMeetingOver` in
+// `src/lib/meeting-lifecycle.ts`.
 import { and, asc, desc, eq, inArray, lt, ne, sql } from "drizzle-orm";
 import { db } from "#/db";
 import { clubs, meetingAttendance, meetings, roleSlots } from "#/db/schema";

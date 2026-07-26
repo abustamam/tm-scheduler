@@ -2,7 +2,11 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { lockedViewer, resolveMeetingViewer } from "#/lib/meeting-lifecycle";
+import {
+	isMeetingOver,
+	lockedViewer,
+	resolveMeetingViewer,
+} from "#/lib/meeting-lifecycle";
 import { meetingViewer } from "#/lib/meeting-viewer";
 import {
 	type AgendaSlot,
@@ -84,6 +88,12 @@ function renderAgenda(
 	requireIdentity?: () => Promise<{ id: string; name: string } | null>,
 	extra?: Partial<MeetingAgendaProps>,
 ) {
+	// Production-faithful: the route computes `meetingOver` once with
+	// `isMeetingOver` and hands it down, so derive it from whatever meeting the
+	// caller actually renders (#393). An `extra.meetingOver` still wins, for the
+	// tests that pin an injected clock.
+	const meeting = extra?.meeting ?? meetingFixture();
+	const timezone = extra?.timezone ?? "UTC";
 	return render(
 		<MeetingAgenda
 			slots={slots}
@@ -95,8 +105,13 @@ function renderAgenda(
 			pairedRoleIds={pairedRoleIds}
 			shareUrl="https://gavelup.app/club/test/meeting/m1"
 			meetingDate="Jan 1, 2026"
-			meeting={meetingFixture()}
-			timezone="UTC"
+			meeting={meeting}
+			timezone={timezone}
+			meetingOver={isMeetingOver({
+				status: meeting.status,
+				scheduledAt: meeting.scheduledAt,
+				timezone,
+			})}
 			actorMemberId="me"
 			selfMemberId="me"
 			onMetaSaved={() => {}}
@@ -645,6 +660,81 @@ describe("planning panels hide once the meeting is over (#376)", () => {
 			undefined,
 			withRoster(meeting),
 		);
+		expect(screen.queryByText("Outreach")).toBeNull();
+		expect(screen.queryByText("Not available this week")).toBeNull();
+	});
+});
+
+describe("viewer and panels agree on one injected clock (#393)", () => {
+	afterEach(() => cleanup());
+
+	// The regression the shared `isMeetingOver` exists to prevent: before it, the
+	// viewer took an injectable `now` and the component read the wall clock, so a
+	// pinned clock moved one and not the other. Both sides here are fed the SAME
+	// `now`, which is only possible because they call the same function.
+	const TZ = "America/Los_Angeles";
+	// 6pm Pacific on 2026-07-10.
+	const SCHEDULED = "2026-07-11T01:00:00Z";
+
+	function renderAtClock(now: Date) {
+		const meeting = meetingFixture({
+			scheduledAt: SCHEDULED,
+			status: "scheduled",
+		});
+		const viewer = resolveMeetingViewer({
+			status: meeting.status,
+			scheduledAt: meeting.scheduledAt,
+			timezone: TZ,
+			currentMemberId: "me",
+			canManage: true,
+			isTmod: false,
+			isGrammarian: false,
+			isSignedIn: true,
+			now,
+		});
+		renderAgenda(viewer, [slot({ status: "open" })], undefined, undefined, {
+			meeting,
+			timezone: TZ,
+			meetingOver: isMeetingOver({
+				status: meeting.status,
+				scheduledAt: meeting.scheduledAt,
+				timezone: TZ,
+				now,
+			}),
+			roster: [
+				{ id: "r1", name: "Rita Roster" },
+				{ id: "r2", name: "Otto Out" },
+			],
+			unavailableMemberIds: ["r2"],
+			unavailableMembers: [{ id: "r2", name: "Otto Out" }],
+		});
+		return viewer;
+	}
+
+	it("shows the panels at a clock pinned before the meeting day", () => {
+		const viewer = renderAtClock(new Date("2026-07-09T12:00:00Z"));
+		expect(viewer.canManage).toBe(true);
+		expect(screen.getByText("Outreach")).toBeTruthy();
+		expect(screen.getByText("Not available this week")).toBeTruthy();
+	});
+
+	it("still shows them late on the meeting's own club-local day", () => {
+		// 9pm Pacific, three hours after the meeting started: the instant has
+		// passed but the club-local DAY has not, so nothing is over yet.
+		const viewer = renderAtClock(new Date("2026-07-11T04:00:00Z"));
+		expect(viewer.canManage).toBe(true);
+		expect(screen.getByText("Outreach")).toBeTruthy();
+		expect(screen.getByText("Not available this week")).toBeTruthy();
+	});
+
+	it("hides them once the pinned clock reaches the next club-local day", () => {
+		// 12:30am Pacific on 2026-07-11 — the same UTC day as the assertion
+		// above, which is exactly why the club timezone has to be the one
+		// consulted.
+		const viewer = renderAtClock(new Date("2026-07-11T07:30:00Z"));
+		// An admin keeps management on a past-but-never-completed meeting, so only
+		// the shared date rule can have hidden the panels.
+		expect(viewer.canManage).toBe(true);
 		expect(screen.queryByText("Outreach")).toBeNull();
 		expect(screen.queryByText("Not available this week")).toBeNull();
 	});
