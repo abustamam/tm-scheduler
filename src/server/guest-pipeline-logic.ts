@@ -2,7 +2,7 @@
 // createServerFn wrappers in `guest-pipeline.ts` (a client-imported module the
 // guard test forbids from exporting db-touching functions). Integration-testable
 // by mocking `#/db`. See the header of `members-logic.ts` for the why.
-import { and, asc, count, eq, isNotNull, lte, min, ne, sql } from "drizzle-orm";
+import { and, asc, count, eq, isNotNull, min, ne, sql } from "drizzle-orm";
 import { union } from "drizzle-orm/pg-core";
 import { db } from "#/db";
 import {
@@ -34,6 +34,73 @@ export function normalizePhone(phone: string | null | undefined): string {
 	return (phone ?? "").replace(/\D/g, "");
 }
 
+/** Either the main db client or a drizzle transaction (see `activity.ts`). */
+type DbOrTx =
+	| typeof db
+	| Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
+
+/** The guest row `findGuestByContact` resolves: identity + the dedup keys. */
+type GuestContactRow = {
+	id: string;
+	name: string;
+	email: string | null;
+	phone: string | null;
+};
+
+/**
+ * The club guest matching a phone (digits) or email — the ONE dedup key for
+ * guests, used both by guest-book capture (to reuse the row) and by the edit
+ * path (to refuse creating a second row that would match). Phone wins over
+ * email, mirroring `applyConvertGuestToMember`'s Person dedup.
+ *
+ * Ordered oldest-first and tie-broken on id: without an ORDER BY, a `limit(1)`
+ * over two matching rows is a Postgres coin flip, so a returning visitor's
+ * history would split nondeterministically across them.
+ */
+async function findGuestByContact(
+	conn: DbOrTx,
+	clubId: string,
+	opts: { digits: string; email: string | null; excludeGuestId?: string },
+): Promise<GuestContactRow | undefined> {
+	const cols = {
+		id: guests.id,
+		name: guests.name,
+		email: guests.email,
+		phone: guests.phone,
+	};
+	const scope = opts.excludeGuestId
+		? and(eq(guests.clubId, clubId), ne(guests.id, opts.excludeGuestId))
+		: eq(guests.clubId, clubId);
+	const order = [asc(guests.createdAt), asc(guests.id)] as const;
+
+	if (opts.digits) {
+		const [byPhone] = await conn
+			.select(cols)
+			.from(guests)
+			.where(
+				and(
+					scope,
+					sql`regexp_replace(coalesce(${guests.phone}, ''), '[^0-9]', '', 'g') = ${opts.digits}`,
+				),
+			)
+			.orderBy(...order)
+			.limit(1);
+		if (byPhone) return byPhone;
+	}
+	if (opts.email) {
+		const [byEmail] = await conn
+			.select(cols)
+			.from(guests)
+			.where(
+				and(scope, sql`lower(${guests.email}) = ${opts.email.toLowerCase()}`),
+			)
+			.orderBy(...order)
+			.limit(1);
+		if (byEmail) return byEmail;
+	}
+	return undefined;
+}
+
 /** `YYYY-MM-DD` for an instant in a timezone (locale `en-CA` yields ISO order). */
 function localDateKey(instant: Date, timeZone: string): string {
 	return new Intl.DateTimeFormat("en-CA", {
@@ -42,6 +109,18 @@ function localDateKey(instant: Date, timeZone: string): string {
 		month: "2-digit",
 		day: "2-digit",
 	}).format(instant);
+}
+
+/** A club's IANA timezone (the schema default when the club is missing). Every
+ *  "has this meeting happened?" question is answered in the CLUB's local day —
+ *  see `guestVisits` — so the zone is read once and threaded through. */
+async function loadClubTimeZone(clubId: string): Promise<string> {
+	const [club] = await db
+		.select({ timezone: clubs.timezone })
+		.from(clubs)
+		.where(eq(clubs.id, clubId))
+		.limit(1);
+	return club?.timezone ?? "America/Chicago";
 }
 
 /**
@@ -53,12 +132,7 @@ function localDateKey(instant: Date, timeZone: string): string {
 export async function resolveCurrentMeetingId(
 	clubId: string,
 ): Promise<string | null> {
-	const [club] = await db
-		.select({ timezone: clubs.timezone })
-		.from(clubs)
-		.where(eq(clubs.id, clubId))
-		.limit(1);
-	const timeZone = club?.timezone ?? "America/Chicago";
+	const timeZone = await loadClubTimeZone(clubId);
 
 	const rows = await db
 		.select({ id: meetings.id, scheduledAt: meetings.scheduledAt })
@@ -122,33 +196,10 @@ export async function captureGuestVisit(
 
 	return db.transaction(async (tx) => {
 		// 1. Dedup, club-scoped: phone (digits) → email → none.
-		let existing:
-			| { id: string; email: string | null; phone: string | null }
-			| undefined;
-		if (digits) {
-			[existing] = await tx
-				.select({ id: guests.id, email: guests.email, phone: guests.phone })
-				.from(guests)
-				.where(
-					and(
-						eq(guests.clubId, input.clubId),
-						sql`regexp_replace(coalesce(${guests.phone}, ''), '[^0-9]', '', 'g') = ${digits}`,
-					),
-				)
-				.limit(1);
-		}
-		if (!existing && email) {
-			[existing] = await tx
-				.select({ id: guests.id, email: guests.email, phone: guests.phone })
-				.from(guests)
-				.where(
-					and(
-						eq(guests.clubId, input.clubId),
-						sql`lower(${guests.email}) = ${email.toLowerCase()}`,
-					),
-				)
-				.limit(1);
-		}
+		const existing = await findGuestByContact(tx, input.clubId, {
+			digits,
+			email,
+		});
 
 		let guestId: string;
 		let created: boolean;
@@ -216,15 +267,26 @@ export interface PipelineGuestRow {
 /**
  * The (guest, meeting) pairs that count as a VISIT for one club (#374).
  *
- * A guest visited a meeting when the meeting is NOT cancelled and any of:
- *   - an attendance row exists (the guest book, or an officer adding them in the
- *     minutes) — an explicit human assertion that they were there, so it counts
- *     from the moment it is written: a guest-book scan at the door lands before
- *     the meeting's own start time and must not read as "No recorded visits";
- *   - they HELD A ROLE SLOT, or SPOKE AT TABLE TOPICS, at a meeting that has
- *     already started. Taking part in the meeting IS attending it — but only
- *     once it has happened: a guest penciled in for a future role isn't a
- *     visitor yet.
+ * A guest visited a meeting when the meeting is NOT cancelled, its DATE has
+ * arrived in the CLUB's timezone, and any of these is true: an attendance row
+ * exists (the guest book, or an officer adding them in the minutes), they HELD
+ * A ROLE SLOT, or they SPOKE AT TABLE TOPICS. Taking part in the meeting IS
+ * attending it.
+ *
+ * The date guard is club-local-DATE, not a clock compare, and it applies to all
+ * three sources — the two things a wall-clock `scheduled_at <= now()` gets
+ * wrong are equal and opposite:
+ *   - Too strict for today. The VPM opens VP Membership at 18:45 to set up the
+ *     minutes for a 19:00 meeting; the guest already down for Timer would read
+ *     "No recorded visits" until the meeting's own start time passed. Today's
+ *     meeting is today's meeting from midnight.
+ *   - Too loose for later. `resolveCurrentMeetingId` falls back to the NEXT
+ *     upcoming meeting when none is scheduled today, so a guest-book submission
+ *     on 25 Jul writes attendance against 1 Aug. Ungated, that renders as
+ *     "1 visit · first Aug 1" — a visit dated a week in the future. It starts
+ *     counting on 1 Aug, like every other source.
+ * Same reasoning as `resolveCurrentMeetingId`'s own `localDateKey` compare: a
+ * club's day is the day it is in the club's town.
  *
  * `union` (not `union all`) de-dupes the pairs, so a guest with an attendance
  * row AND a role slot AND a Table Topics turn at one meeting counts once.
@@ -233,11 +295,11 @@ export interface PipelineGuestRow {
  * row, so the "holding a slot never sets attendance" rule (#218,
  * `minutes-logic.ts`) is untouched.
  */
-function guestVisits(clubId: string) {
-	const heldMeeting = and(
+function guestVisits(clubId: string, timeZone: string) {
+	const happened = and(
 		eq(meetings.clubId, clubId),
 		ne(meetings.status, "cancelled"),
-		lte(meetings.scheduledAt, sql`now()`),
+		sql`(${meetings.scheduledAt} at time zone ${timeZone}::text)::date <= (now() at time zone ${timeZone}::text)::date`,
 	);
 	const attended = db
 		.select({
@@ -247,13 +309,7 @@ function guestVisits(clubId: string) {
 		})
 		.from(meetingAttendance)
 		.innerJoin(meetings, eq(meetings.id, meetingAttendance.meetingId))
-		.where(
-			and(
-				eq(meetings.clubId, clubId),
-				ne(meetings.status, "cancelled"),
-				isNotNull(meetingAttendance.guestId),
-			),
-		);
+		.where(and(happened, isNotNull(meetingAttendance.guestId)));
 	const heldRole = db
 		.select({
 			guestId: roleSlots.assignedGuestId,
@@ -262,7 +318,7 @@ function guestVisits(clubId: string) {
 		})
 		.from(roleSlots)
 		.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
-		.where(and(heldMeeting, isNotNull(roleSlots.assignedGuestId)));
+		.where(and(happened, isNotNull(roleSlots.assignedGuestId)));
 	const spoke = db
 		.select({
 			guestId: tableTopicsSpeakers.guestId,
@@ -271,7 +327,7 @@ function guestVisits(clubId: string) {
 		})
 		.from(tableTopicsSpeakers)
 		.innerJoin(meetings, eq(meetings.id, tableTopicsSpeakers.meetingId))
-		.where(and(heldMeeting, isNotNull(tableTopicsSpeakers.guestId)));
+		.where(and(happened, isNotNull(tableTopicsSpeakers.guestId)));
 	return union(attended, heldRole, spoke);
 }
 
@@ -284,7 +340,9 @@ function guestVisits(clubId: string) {
 export async function loadGuestPipeline(
 	clubId: string,
 ): Promise<PipelineGuestRow[]> {
-	const visits = guestVisits(clubId).as("guest_visits");
+	const visits = guestVisits(clubId, await loadClubTimeZone(clubId)).as(
+		"guest_visits",
+	);
 	const [rows, visitRows, slotRows] = await Promise.all([
 		db
 			.select({
@@ -358,6 +416,14 @@ export interface UpdateGuestInput {
  * row is only ever the record of the VISITOR, so correcting it is always safe —
  * the Membership that convert-to-member created is a separate row, edited on the
  * roster.
+ *
+ * The edit is REFUSED when the new phone/email already belongs to a different
+ * club guest. `captureGuestVisit` dedups on exactly those two keys, so allowing
+ * the collision would leave two rows matching one submission — the returning
+ * visitor's history would then split across them depending on which row the
+ * lookup happened to pick. Create can silently reuse the match; an edit cannot
+ * (that would be a merge, and merging two visit histories is not this path's
+ * job), so it fails with a message naming the other guest.
  */
 export async function applyUpdateGuest(
 	input: UpdateGuestInput,
@@ -372,14 +438,23 @@ export async function applyUpdateGuest(
 	if (!guest) throw new Error("Guest not found in this club.");
 
 	const cc = await loadClubDefaultCountryCode(input.clubId);
+	const email = input.email?.trim() || null;
+	const phone = toStoredPhone(input.phone, cc);
+
+	const clash = await findGuestByContact(db, input.clubId, {
+		digits: normalizePhone(phone),
+		email,
+		excludeGuestId: input.guestId,
+	});
+	if (clash) {
+		throw new Error(
+			`Another guest in this club (${clash.name}) already has that phone number or email.`,
+		);
+	}
+
 	await db
 		.update(guests)
-		.set({
-			name,
-			email: input.email?.trim() || null,
-			phone: toStoredPhone(input.phone, cc),
-			updatedAt: new Date(),
-		})
+		.set({ name, email, phone, updatedAt: new Date() })
 		.where(eq(guests.id, input.guestId));
 	return { ok: true as const };
 }
@@ -414,28 +489,46 @@ export interface DeleteGuestResult {
  *   they are the record of someone who, by the officer's own action, was never
  *   there. That is also why a real visitor should be marked `lost` rather than
  *   deleted; delete is for mistakes.
+ *
+ * Everything runs in ONE transaction, and both reads that gate a write take the
+ * write's own predicate with them — the concurrent writers here are not
+ * hypothetical:
+ * - The guest row is read `FOR UPDATE`. `applyConvertGuestToMember` is one
+ *   click away in the same view; read outside the transaction, a convert that
+ *   commits in the gap would leave this delete happily destroying the joined
+ *   guest and the pipeline history the "never deleted" rule exists to protect.
+ * - Each slot UPDATE re-asserts `assigned_guest_id = <this guest>` and its
+ *   effect is read from `RETURNING`, so the count reflects what actually
+ *   changed. `claimSlot`/`reassignSlot` (`src/server/slots.ts`) are PUBLIC,
+ *   no-session server fns that accept a guest-held slot: an id-only UPDATE
+ *   could land on a slot a visitor just took for a member and blank it to
+ *   `status='open'` while leaving `assigned_member_id` set — a slot showing
+ *   that member's name that `claimSlot`'s `WHERE status='open'` guard then lets
+ *   anyone silently take. The conditional UPDATE is the race guard; same
+ *   standard as `removeOpenRoleSlots` and `reassignSlotCore` (`slots-logic.ts`).
  */
 export async function applyDeleteGuest(
 	input: DeleteGuestInput,
 ): Promise<DeleteGuestResult> {
-	const [guest] = await db
-		.select({
-			id: guests.id,
-			name: guests.name,
-			stage: guests.stage,
-			convertedMembershipId: guests.convertedMembershipId,
-		})
-		.from(guests)
-		.where(and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)))
-		.limit(1);
-	if (!guest) throw new Error("Guest not found in this club.");
-	if (guest.stage === "joined" || guest.convertedMembershipId) {
-		throw new Error(
-			"This guest is now a club member — remove them from the roster instead.",
-		);
-	}
-
 	return db.transaction(async (tx) => {
+		const [guest] = await tx
+			.select({
+				id: guests.id,
+				name: guests.name,
+				stage: guests.stage,
+				convertedMembershipId: guests.convertedMembershipId,
+			})
+			.from(guests)
+			.where(and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)))
+			.limit(1)
+			.for("update");
+		if (!guest) throw new Error("Guest not found in this club.");
+		if (guest.stage === "joined" || guest.convertedMembershipId) {
+			throw new Error(
+				"This guest is now a club member — remove them from the roster instead.",
+			);
+		}
+
 		const held = await tx
 			.select({ id: roleSlots.id })
 			.from(roleSlots)
@@ -446,11 +539,22 @@ export async function applyDeleteGuest(
 					eq(meetings.clubId, input.clubId),
 				),
 			);
+		let slotsReopened = 0;
 		for (const slot of held) {
-			await tx
+			const reopened = await tx
 				.update(roleSlots)
 				.set({ assignedGuestId: null, status: "open", claimedAt: null })
-				.where(eq(roleSlots.id, slot.id));
+				.where(
+					and(
+						eq(roleSlots.id, slot.id),
+						eq(roleSlots.assignedGuestId, input.guestId),
+					),
+				)
+				.returning({ id: roleSlots.id });
+			// Someone else took the slot between the read and the write — it is
+			// theirs now, and a `release` row here would blame the wrong person.
+			if (reopened.length === 0) continue;
+			slotsReopened += 1;
 			await logActivity(tx, {
 				clubId: input.clubId,
 				actorMemberId: input.actorMemberId,
@@ -461,7 +565,7 @@ export async function applyDeleteGuest(
 			});
 		}
 		await tx.delete(guests).where(eq(guests.id, input.guestId));
-		return { ok: true as const, slotsReopened: held.length };
+		return { ok: true as const, slotsReopened };
 	});
 }
 

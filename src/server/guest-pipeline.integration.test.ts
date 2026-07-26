@@ -9,10 +9,11 @@
  * that env is unset.
  */
 import { randomUUID } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
+	clubs,
 	guests,
 	meetingAttendance,
 	meetings,
@@ -73,6 +74,89 @@ async function seedPastMeeting(
 		.returning({ id: meetings.id });
 	if (!m) throw new Error("Failed to seed meeting");
 	return m.id;
+}
+
+/**
+ * A meeting LATER TODAY in the club's own timezone (23:59 local). The visit
+ * derivation compares club-local DATES, so this counts as having happened even
+ * though the wall clock hasn't reached it — the "VPM opens the minutes at 18:45
+ * for a 19:00 meeting" case from #374.
+ */
+async function seedMeetingLaterToday(clubId: string): Promise<string> {
+	const [club] = await testDb
+		.select({ timezone: clubs.timezone })
+		.from(clubs)
+		.where(eq(clubs.id, clubId))
+		.limit(1);
+	const tz = club?.timezone ?? "America/Chicago";
+	const [m] = await testDb
+		.insert(meetings)
+		.values({
+			clubId,
+			scheduledAt: sql`((date_trunc('day', now() at time zone ${tz}::text) + interval '23 hours 59 minutes') at time zone ${tz}::text)`,
+			status: "scheduled",
+		})
+		.returning({ id: meetings.id });
+	if (!m) throw new Error("Failed to seed meeting");
+	return m.id;
+}
+
+/** A drizzle transaction handle for the test client. */
+type Tx = Parameters<Parameters<(typeof testDb)["transaction"]>[0]>[0];
+
+/**
+ * Run `work` in a transaction that STAYS OPEN — holding its row locks — until
+ * the returned `commit()` is called. Lets a test drive a real interleaving: the
+ * concurrent writer takes the lock, the code under test reads stale state and
+ * then blocks on the write, and only then does the writer commit.
+ */
+async function openBlockingTx(
+	work: (tx: Tx) => Promise<void>,
+): Promise<{ commit: () => Promise<void> }> {
+	let release!: () => void;
+	const gate = new Promise<void>((r) => {
+		release = r;
+	});
+	let ready!: () => void;
+	let failed!: (e: unknown) => void;
+	const started = new Promise<void>((res, rej) => {
+		ready = res;
+		failed = rej;
+	});
+	const done = testDb.transaction(async (tx) => {
+		try {
+			await work(tx);
+		} catch (e) {
+			failed(e);
+			throw e;
+		}
+		ready();
+		await gate;
+	});
+	// Claim the rejection now so a failure inside `work` never surfaces as an
+	// unhandled rejection; `commit()` still re-throws it.
+	done.catch(() => {});
+	await started;
+	return {
+		commit: async () => {
+			release();
+			await done;
+		},
+	};
+}
+
+/** Wait until a backend on THIS database is blocked waiting for a row lock. */
+async function waitForLockWait(timeoutMs = 10_000): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		const res = await testDb.execute(sql`
+			select count(*)::int as n from pg_stat_activity
+			where datname = current_database()
+			  and state = 'active' and wait_event_type = 'Lock'`);
+		if (Number((res.rows[0] as { n: number }).n) > 0) return;
+		await new Promise((r) => setTimeout(r, 25));
+	}
+	throw new Error("timed out waiting for a statement to block on a row lock");
 }
 
 /** A bare club guest — no attendance, no participation anywhere. */
@@ -237,12 +321,31 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 				name: "Repeat Visitor",
 				phone: "555-777-8888",
 			});
-			await seedSoonerMeeting(seed.clubId);
+			const m2 = await seedSoonerMeeting(seed.clubId);
 			await captureGuestVisit({
 				clubId: seed.clubId,
 				name: "Repeat Visitor",
 				phone: "555-777-8888",
 			});
+
+			// Both meetings are still ahead of us. `resolveCurrentMeetingId` falls
+			// back to the UPCOMING meeting when none is scheduled today, so these
+			// attendance rows are dated in the future — a plan, not a visit. They
+			// must not render as "1 visit · first Aug 1" a week early (#374).
+			const early = await pipelineRow(seed.clubId, first.guestId);
+			expect(early.visitCount).toBe(0);
+			expect(early.firstVisitAt).toBeNull();
+
+			// Once those meeting DATES have passed, the very same attendance rows
+			// count — nothing was rewritten, the derivation just re-reads the dates.
+			await testDb
+				.update(meetings)
+				.set({ scheduledAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000) })
+				.where(eq(meetings.id, seed.meetingId));
+			await testDb
+				.update(meetings)
+				.set({ scheduledAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000) })
+				.where(eq(meetings.id, m2));
 
 			const pipeline = await loadGuestPipeline(seed.clubId);
 			const row = pipeline.find((g) => g.id === first.guestId);
@@ -306,6 +409,50 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			const row = await pipelineRow(seed.clubId, guestId);
 			expect(row.visitCount).toBe(0);
 			expect(row.firstVisitAt).toBeNull();
+		});
+
+		it("does NOT count an ATTENDANCE row on a future meeting, nor on a cancelled one", async () => {
+			const guestId = await seedGuest(seed.clubId, "Booked Ahead");
+			// The guest book resolves the UPCOMING meeting when none is today, so a
+			// walk-up today writes attendance against next week's meeting. Same rule
+			// as a penciled-in role: it's a visit on the day, not before it.
+			await testDb
+				.insert(meetingAttendance)
+				.values({ meetingId: seed.meetingId, guestId, status: "present" });
+			const cancelled = await seedPastMeeting(seed.clubId, 10, "cancelled");
+			await testDb
+				.insert(meetingAttendance)
+				.values({ meetingId: cancelled, guestId, status: "present" });
+
+			const row = await pipelineRow(seed.clubId, guestId);
+			expect(row.visitCount).toBe(0);
+			expect(row.firstVisitAt).toBeNull();
+		});
+
+		it("counts a meeting scheduled LATER TODAY in the club's timezone", async () => {
+			// #374 verbatim: the VPM opens VP Membership at 18:45 to set up the
+			// minutes for a 19:00 meeting. The guest holding Timer is a visitor —
+			// the compare is on the club-local DATE, not the wall clock.
+			const tonight = await seedMeetingLaterToday(seed.clubId);
+
+			const timerId = await seedGuest(seed.clubId, "Tonight Timer");
+			await seedGuestRoleSlot(tonight, seed.roleDefinitionId, timerId);
+			const timer = await pipelineRow(seed.clubId, timerId);
+			expect(timer.visitCount).toBe(1);
+			expect(timer.firstVisitAt).toBeInstanceOf(Date);
+
+			const topicsId = await seedGuest(seed.clubId, "Tonight Topics");
+			await testDb
+				.insert(tableTopicsSpeakers)
+				.values({ meetingId: tonight, guestId: topicsId });
+			expect((await pipelineRow(seed.clubId, topicsId)).visitCount).toBe(1);
+
+			// The guest-book scan at the door still counts the moment it lands.
+			const bookId = await seedGuest(seed.clubId, "Tonight Walk-Up");
+			await testDb
+				.insert(meetingAttendance)
+				.values({ meetingId: tonight, guestId: bookId, status: "present" });
+			expect((await pipelineRow(seed.clubId, bookId)).visitCount).toBe(1);
 		});
 
 		it("counts a meeting ONCE when the guest has attendance AND a role slot on it", async () => {
@@ -503,6 +650,166 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 					actorMemberId: null,
 				}),
 			).rejects.toThrow(/not found/i);
+		});
+
+		it("rejects an edit that would collide with another guest's phone or email", async () => {
+			// `captureGuestVisit` dedups on phone→email, so two club guests sharing
+			// either one make the next guest-book submission ambiguous — it would
+			// split the returning visitor's history across both rows.
+			await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Jamie",
+				phone: "+15551234567",
+				email: "jamie@example.com",
+			});
+			const otherId = await seedGuest(seed.clubId, "Jamie Rivera");
+
+			await expect(
+				applyUpdateGuest({
+					clubId: seed.clubId,
+					guestId: otherId,
+					name: "Jamie Rivera",
+					phone: "+1 (555) 123-4567", // same digits, different formatting
+				}),
+			).rejects.toThrow(/already/i);
+			await expect(
+				applyUpdateGuest({
+					clubId: seed.clubId,
+					guestId: otherId,
+					name: "Jamie Rivera",
+					email: "JAMIE@example.com", // case-insensitive collision
+				}),
+			).rejects.toThrow(/already/i);
+
+			// The row is untouched, and editing a guest's OWN contact still works.
+			const [g] = await testDb
+				.select({ phone: guests.phone, email: guests.email })
+				.from(guests)
+				.where(eq(guests.id, otherId));
+			expect(g).toMatchObject({ phone: null, email: null });
+			await expect(
+				applyUpdateGuest({
+					clubId: seed.clubId,
+					guestId: otherId,
+					name: "Jamie Rivera",
+					phone: "+15559998888",
+				}),
+			).resolves.toMatchObject({ ok: true });
+			await expect(
+				applyUpdateGuest({
+					clubId: seed.clubId,
+					guestId: otherId,
+					name: "Jamie R.",
+					phone: "555-999-8888", // its own number — not a collision
+				}),
+			).resolves.toMatchObject({ ok: true });
+		});
+
+		// The delete is a read-then-write over role_slots, and `reassignSlot` /
+		// `claimSlot` are PUBLIC, no-session server fns — so a visitor can land on
+		// the same slot mid-delete. The conditional UPDATE is the race guard
+		// (same standard as `removeOpenRoleSlots` / `reassignSlotCore`).
+		it("leaves a slot alone when it is reassigned to a member mid-delete", async () => {
+			const guestId = await seedGuest(seed.clubId, "Racy Guest");
+			await applyAssignGuestToSlot({
+				slotId: seed.slotId,
+				guestId,
+				actorMemberId: null,
+			});
+
+			// A public reassign takes the slot for a member, uncommitted.
+			const writer = await openBlockingTx(async (tx) => {
+				await tx
+					.update(roleSlots)
+					.set({
+						assignedMemberId: seed.memberId,
+						assignedGuestId: null,
+						status: "claimed",
+						claimedAt: new Date(),
+					})
+					.where(eq(roleSlots.id, seed.slotId));
+			});
+
+			// The delete reads the slot as still guest-held, then blocks on the
+			// writer's row lock; the writer commits into that gap.
+			const pending = applyDeleteGuest({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+			pending.catch(() => {});
+			try {
+				await waitForLockWait();
+			} finally {
+				await writer.commit();
+			}
+			const res = await pending;
+
+			// Nothing was reopened — the slot no longer matched "held by this guest".
+			expect(res.slotsReopened).toBe(0);
+			const [slot] = await testDb
+				.select({
+					status: roleSlots.status,
+					assignedGuestId: roleSlots.assignedGuestId,
+					assignedMemberId: roleSlots.assignedMemberId,
+				})
+				.from(roleSlots)
+				.where(eq(roleSlots.id, seed.slotId));
+			// Never "open" while still showing the member's name — that state lets
+			// anyone silently claim the slot out from under them.
+			expect(slot).toMatchObject({
+				status: "claimed",
+				assignedGuestId: null,
+				assignedMemberId: seed.memberId,
+			});
+
+			// And no `release` entry blaming the deleted guest for a slot they lost.
+			const log = await testDb
+				.select()
+				.from(activityLog)
+				.where(
+					and(
+						eq(activityLog.clubId, seed.clubId),
+						eq(activityLog.targetId, seed.slotId),
+						eq(activityLog.action, "release"),
+					),
+				);
+			expect(log).toHaveLength(0);
+
+			// The guest itself is still deleted — that part was never in doubt.
+			expect(
+				await testDb.select().from(guests).where(eq(guests.id, guestId)),
+			).toHaveLength(0);
+		});
+
+		it("loses to a convert-to-member that commits mid-delete", async () => {
+			const guestId = await seedGuest(seed.clubId, "Converting Now");
+
+			// Tab B converts the guest while tab A's delete is in flight.
+			const writer = await openBlockingTx(async (tx) => {
+				await tx
+					.update(guests)
+					.set({ stage: "joined" })
+					.where(eq(guests.id, guestId));
+			});
+
+			const pending = applyDeleteGuest({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+			pending.catch(() => {});
+			try {
+				await waitForLockWait();
+			} finally {
+				await writer.commit();
+			}
+
+			// "A converted guest is NEVER deleted" must hold across the interleaving.
+			await expect(pending).rejects.toThrow(/member/i);
+			expect(
+				await testDb.select().from(guests).where(eq(guests.id, guestId)),
+			).toHaveLength(1);
 		});
 	});
 
