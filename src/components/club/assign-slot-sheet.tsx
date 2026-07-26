@@ -177,16 +177,27 @@ export function AssignSlotSheet({
 										value={`${row.name} ${row.id}`}
 										disabled={busy}
 										onSelect={() => pick(row.id)}
-										className={cn(
-											"flex items-center justify-between gap-2",
-											// Tier 3 (#377): sorted last AND visually receded, so the
-											// bottom of the list reads as "not candidates" without
-											// hiding anyone who might still need assigning.
-											row.unavailable && "opacity-60",
-										)}
+										className="flex items-center justify-between gap-2"
 									>
 										<span className="flex flex-col">
-											<span>{row.name}</span>
+											{/* Tier 3 (#377): sorted last AND visually receded, so the
+											    bottom of the list reads as "not candidates" without
+											    hiding anyone who might still need assigning. The
+											    recession is on the NAME only — dimming the whole row
+											    would drag the muted sub-line and the amber "Never done
+											    this role" hint below WCAG AA (the latter to 2.46:1,
+											    worse than the value styles.css records as having been
+											    rejected for failing AA), and would wash out cmdk's
+											    keyboard-selection highlight on exactly the rows a user
+											    reaches by typing an unavailable member's name. The
+											    "Not available" badge carries the semantic signal. */}
+											<span
+												className={cn(
+													row.unavailable && "text-muted-foreground",
+												)}
+											>
+												{row.name}
+											</span>
 											{row.lastServedAt ? (
 												<span className="text-muted-foreground text-xs">
 													Last: {formatLastServed(row.lastServedAt)}
