@@ -174,10 +174,9 @@ function PrintAgenda() {
 
 	return (
 		<div>
-			{bare ? null : <OfflineBadge id={meetingId} />}
 			<div className="no-print" style={toolbarStyle}>
 				{bare ? null : (
-					<div style={{ display: "flex", gap: 4 }}>
+					<div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
 						{LAYOUTS.map((l) => (
 							<Link
 								key={l.id}
@@ -207,6 +206,16 @@ function PrintAgenda() {
 				>
 					Print
 				</button>
+				{/* The "Available offline" pill lives in the toolbar, not over the
+				    agenda (#361). Mounted here it also gives the genuinely-offline
+				    banner — which pins itself top-center — the toolbar's stacking
+				    context, so it still paints above the sheet.
+
+				    Last, not first: the toolbar is right-anchored and wraps, so the
+				    trailing items are the ones pushed to a second row on a narrow
+				    phone. This pill is passive reassurance and the cheapest thing to
+				    demote; the layout tabs and Print are why the toolbar exists. */}
+				{bare ? null : <OfflineBadge id={meetingId} />}
 			</div>
 			{!bare && flex.status !== "exact" ? (
 				<div
@@ -259,6 +268,12 @@ const toolbarStyle: React.CSSProperties = {
 	right: 12,
 	zIndex: 10,
 	display: "flex",
+	// Wrap, don't overflow. Anchored to the right with no width, an unwrapped row
+	// grows leftward off the viewport on a phone and the lost controls cannot be
+	// scrolled back to (the toolbar is `position: fixed`). Right-justified so the
+	// wrapped rows stay stacked under the anchor.
+	flexWrap: "wrap",
+	justifyContent: "flex-end",
 	gap: 8,
 	alignItems: "center",
 	background: "#fff",
