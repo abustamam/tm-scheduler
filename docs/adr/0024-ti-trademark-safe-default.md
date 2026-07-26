@@ -1,6 +1,6 @@
 # ADR-0024: Toastmasters trademarks — remove the official wordmark, keep nominative word use
 
-Status: Accepted
+Status: Accepted (decision 3 revisited 2026-07-26 — see "Revisited" below)
 
 ## Context
 
@@ -77,3 +77,34 @@ trademark attorney's opinion — on both the logo and the nominative-use posture
   call, not a settled fact — to be revisited with counsel at commercialization.
 - **Unaffected:** #256 disclaimer proceeds independently; Base Camp sync (which consumes TI data
   but reproduces no mark) is out of scope.
+
+## Revisited — 2026-07-26 (#380)
+
+**Trigger: commercialization.** Decision 3 above ("keep the assets in-repo") and decision 4 ("defer
+a lawyer's read until commercialization") were both explicitly conditioned on the trajectory being
+undecided. It no longer is — monetization is on the table, which fires decision 4's own trigger and
+invalidates the premise decision 3 rested on.
+
+**What changes: decision 3 is reversed.** The ten vendored official TI mark assets
+(`src/assets/ToastmastersWordmark*.{png,svg}`, `ToastmastersLogo3Color.{png,svg}`) are **deleted**
+from the repository.
+
+The original trade — carry the unreferenced assets so re-adding the wordmark is a near-trivial
+revert — was sound for an exploratory project. It is not sound for a commercial one. Under a
+commercial product, "we keep a full set of the other party's trademark assets in our repository,
+just unused" reads materially worse in a due-diligence or discovery posture than not having them,
+and the convenience it buys is worth very little: re-vendoring from TI's Brand Portal is a
+five-minute job *if* a Trademark Use Request is ever approved. The asymmetry now runs the other way.
+
+**Enforcement.** `src/components/agenda/ti-wordmark.guard.test.ts` was widened from three deck
+renderers to (a) a grep of the whole `src/` + `extension/` tree for the asset-reference pattern and
+(b) an on-disk existence assertion, so re-vendoring fails the build rather than passing silently.
+
+**Not changed.** Decisions 1 (no reproduced mark in rendered/exported output) and 2 (the word
+"Toastmasters" under nominative fair use) stand as written; the #256 non-affiliation disclaimer
+still does not license the marks. Decision 4's deferral has now fired: counsel's read on the
+nominative-use posture is due at commercialization, tracked separately.
+
+**Deliberately out of scope: git history is not rewritten.** The assets remain in earlier commits.
+That is expected and proportionate — a force-push across a repo with this much branch history costs
+more than it buys, and deleting from `HEAD` is what the due-diligence posture actually turns on.
