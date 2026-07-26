@@ -62,7 +62,11 @@ export interface MinutesMemberRow {
 export interface MinutesGuestRow {
 	guestId: string;
 	name: string;
-	/** Pre-listed because they hold a role slot (vs explicitly added). */
+	/**
+	 * Pre-listed because they TOOK PART — they hold a role slot or spoke at Table
+	 * Topics (#374) — rather than being explicitly added as present. There is no
+	 * attendance row behind such a guest, so the UI hides their remove button.
+	 */
 	fromRole: boolean;
 }
 
@@ -153,9 +157,10 @@ export async function getMeetingStatus(
  * Load a meeting's minutes: the active-member roster each with a presence
  * status (the saved attendance row, or `null` — "unmarked" — when none exists;
  * holding a role slot never infers presence, #218), the present guests
- * (explicitly added or pre-listed from a role slot), the ordered Table Topics
- * speakers, and the three awards. Members who went inactive after being
- * recorded still appear (the saved row is a snapshot).
+ * (explicitly added, or pre-listed because they took part — a role slot or a
+ * Table Topics turn, #374), the ordered Table Topics speakers, and the three
+ * awards. Members who went inactive after being recorded still appear (the
+ * saved row is a snapshot).
  */
 export async function loadMinutes(meetingId: string): Promise<MinutesData> {
 	const clubId = await getMeetingClubId(meetingId);
@@ -239,7 +244,7 @@ export async function loadMinutes(meetingId: string): Promise<MinutesData> {
 		a.name.localeCompare(b.name),
 	);
 
-	// Present guests: saved attendance rows ∪ guests holding a role slot.
+	// Saved guest attendance rows — the explicitly-present guests.
 	const savedGuestRows = await db
 		.select({ guestId: meetingAttendance.guestId, name: guests.name })
 		.from(meetingAttendance)
@@ -250,22 +255,6 @@ export async function loadMinutes(meetingId: string): Promise<MinutesData> {
 				isNotNull(meetingAttendance.guestId),
 			),
 		);
-	const guestRows = new Map<string, MinutesGuestRow>();
-	for (const g of savedGuestRows) {
-		guestRows.set(g.guestId as string, {
-			guestId: g.guestId as string,
-			name: g.name,
-			fromRole: false,
-		});
-	}
-	for (const [guestId, name] of roleGuests) {
-		if (!guestRows.has(guestId)) {
-			guestRows.set(guestId, { guestId, name, fromRole: true });
-		}
-	}
-	const guestList = [...guestRows.values()].sort((a, b) =>
-		a.name.localeCompare(b.name),
-	);
 
 	// Table Topics speakers (ordered) with resolved member/guest names.
 	const ttMember = alias(members, "tt_member");
@@ -293,6 +282,38 @@ export async function loadMinutes(meetingId: string): Promise<MinutesData> {
 		topic: r.topic,
 		sortOrder: r.sortOrder,
 	}));
+
+	// Present guests: saved attendance rows ∪ guests who TOOK PART — holding a
+	// role slot, or speaking at Table Topics (#374). A guest who only spoke at
+	// Table Topics was previously missing from this list entirely. Participation
+	// is flagged `fromRole` (the UI hides the remove button: the slot/topics row
+	// is what lists them, so there is no attendance row to remove) and an explicit
+	// attendance row always wins.
+	const guestRows = new Map<string, MinutesGuestRow>();
+	for (const g of savedGuestRows) {
+		guestRows.set(g.guestId as string, {
+			guestId: g.guestId as string,
+			name: g.name,
+			fromRole: false,
+		});
+	}
+	for (const [guestId, name] of roleGuests) {
+		if (!guestRows.has(guestId)) {
+			guestRows.set(guestId, { guestId, name, fromRole: true });
+		}
+	}
+	for (const t of ttList) {
+		if (t.guestId && !guestRows.has(t.guestId)) {
+			guestRows.set(t.guestId, {
+				guestId: t.guestId,
+				name: t.name,
+				fromRole: true,
+			});
+		}
+	}
+	const guestList = [...guestRows.values()].sort((a, b) =>
+		a.name.localeCompare(b.name),
+	);
 
 	// Awards — always return all three categories, unset ones with name: null.
 	const awMember = alias(members, "aw_member");
