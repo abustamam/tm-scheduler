@@ -292,7 +292,11 @@ export function AppShell({
 					<div className="w-[248px] max-w-[34vw]">
 						<GlobalSearch clubId={activeClubId} grants={searchGrants} />
 					</div>
-					<ClubSwitcher clubs={clubs} activeClubId={activeClubId} />
+					<ClubSwitcher
+						clubs={clubs}
+						activeClubId={activeClubId}
+						impersonating={impersonating != null}
+					/>
 					<ThemeToggle />
 					<MemberAvatar tone="palm" initials={initials} size={36} />
 				</header>
@@ -312,7 +316,11 @@ export function AppShell({
 					<div className="min-w-0 flex-1 truncate text-xs font-semibold tracking-[0.01em] text-[var(--sea-ink-soft)]">
 						{crumbFor(pathname)}
 					</div>
-					<ClubSwitcher clubs={clubs} activeClubId={activeClubId} />
+					<ClubSwitcher
+						clubs={clubs}
+						activeClubId={activeClubId}
+						impersonating={impersonating != null}
+					/>
 				</header>
 
 				<section className="min-w-0 flex-1 overflow-x-hidden">
