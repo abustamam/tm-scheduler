@@ -9,6 +9,7 @@ import {
 	buildRunOfShow,
 	expandRunSheet,
 	FLEX_TOLERANCE_MINUTES,
+	flexBannerMessage,
 	formatBeatMinutes,
 	functionarySlots,
 	hasAnyFunctionaryRole,
@@ -1057,6 +1058,106 @@ describe("applyFlex", () => {
 		expect(res.status).toBe("over");
 		expect(res.deltaMinutes).toBe(10);
 		expect(res.rows).toEqual(rows); // unchanged
+	});
+});
+
+describe("flexBannerMessage (#395)", () => {
+	function rowsFixture(fixed: number, flexMin: number): AgendaRow[] {
+		return [
+			{ who: "Fixed", detail: "", minutes: fixed, marks: null },
+			{
+				who: "Table Topics",
+				detail: "",
+				minutes: flexMin,
+				marks: null,
+				flex: true,
+			},
+		];
+	}
+
+	/** No Table Topics Master, so no `flex: true` beat exists at all (#367). */
+	function noFlexRows(fixed: number): AgendaRow[] {
+		return [{ who: "Fixed", detail: "", minutes: fixed, marks: null }];
+	}
+
+	it("says nothing when the agenda fits", () => {
+		expect(flexBannerMessage(applyFlex(rowsFixture(50, 10), 63))).toBeNull();
+	});
+
+	it("names Table Topics when Table Topics is what is capped", () => {
+		expect(flexBannerMessage(applyFlex(rowsFixture(40, 10), 90))).toBe(
+			`Agenda ends 25 min early — Table Topics is at its ${TABLE_TOPICS_MAX}-min cap.`,
+		);
+	});
+
+	it("names Table Topics when Table Topics is what is floored", () => {
+		expect(flexBannerMessage(applyFlex(rowsFixture(58, 10), 60))).toBe(
+			`Agenda runs 3 min long — Table Topics is at its ${TABLE_TOPICS_MIN}-min floor. Trim a speech or shorten the agenda.`,
+		);
+	});
+
+	it("blames the meeting length, not Table Topics, when there is no flex row", () => {
+		const msg = flexBannerMessage(applyFlex(noFlexRows(40), 90));
+		expect(msg).toBe(
+			"Agenda ends 50 min early — consider shortening the meeting length.",
+		);
+		expect(msg).not.toMatch(/table topics/i);
+	});
+
+	it("blames the meeting length running over too, when there is no flex row", () => {
+		const msg = flexBannerMessage(applyFlex(noFlexRows(75), 60));
+		expect(msg).toBe(
+			"Agenda runs 15 min long — trim a speech, or increase the meeting length.",
+		);
+		expect(msg).not.toMatch(/table topics/i);
+	});
+
+	// The failure scenario the issue reports, end to end from real slots rather
+	// than a hand-built row fixture: a skeleton crew (Toastmaster of the Day, one
+	// speaker, one evaluator, NO Table Topics Master) at the default 90-minute
+	// `lengthMinutes`. Since #367 that club's run sheet has no Table Topics beat
+	// to resize, so the banner used to explain the shortfall in terms of a
+	// segment printed nowhere on the page.
+	it("does not name Table Topics on a skeleton crew's agenda that has none", () => {
+		const rows = expandRunSheet([
+			slot({
+				id: "tm",
+				roleName: "Toastmaster of the Day",
+				category: "leadership",
+				assigneeName: "Schinthia",
+			}),
+			slot({
+				id: "sp",
+				roleName: "Speaker",
+				category: "speaker",
+				isSpeakerRole: true,
+				assigneeName: "Rehanna",
+				minMinutes: 5,
+				maxMinutes: 7,
+			}),
+			slot({
+				id: "ev",
+				roleName: "Evaluator",
+				category: "evaluator",
+				assigneeName: "Faisal",
+			}),
+		]);
+		// Nothing on this agenda is squishy…
+		expect(rows.some((r) => r.flex === true)).toBe(false);
+		expect(rows.some((r) => /table topics/i.test(r.who))).toBe(false);
+
+		const flex = applyFlex(rows, 90);
+		// …so the whole shortfall survives: a 24-minute agenda in a 90-minute
+		// booking. The banner is NOT suppressed — it is the prompt that gets
+		// `lengthMinutes` corrected; it just stops naming a segment the club does
+		// not run.
+		expect(flex.projectedMinutes).toBe(24);
+		expect(flex.status).toBe("under");
+		const msg = flexBannerMessage(flex);
+		expect(msg).toBe(
+			"Agenda ends 66 min early — consider shortening the meeting length.",
+		);
+		expect(msg).not.toMatch(/table topics/i);
 	});
 });
 

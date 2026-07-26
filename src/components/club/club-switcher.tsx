@@ -1,6 +1,7 @@
 import { useRouter } from "@tanstack/react-router";
 import { Check, ChevronsUpDown } from "lucide-react";
 import { useState } from "react";
+import { toast } from "sonner";
 import {
 	Popover,
 	PopoverContent,
@@ -76,6 +77,19 @@ export function ClubSwitcher({
 			// reload is known to be missing. Cost is one redundant destination
 			// load per switch, on an explicit user action.
 			await router.invalidate();
+		} catch (err) {
+			// #392: without this the rejection escaped into an unhandled promise —
+			// `busy` cleared, the popover stayed open, and NOTHING told the user the
+			// switch had failed. Since #378 a silent failure reads as "I clicked my
+			// other club and stayed exactly where I was", i.e. a dead button. The
+			// popover is deliberately left open (the `setOpen(false)` above never
+			// ran when the persist is what rejected): the user is still where they
+			// were, with the choice still in front of them. Same shape as the other
+			// write paths in this app (admin roles, the guest pipeline) — surface
+			// the server's own message, fall back to a plain one.
+			toast.error(
+				err instanceof Error ? err.message : "Couldn't switch clubs.",
+			);
 		} finally {
 			setBusy(false);
 		}
@@ -107,7 +121,13 @@ export function ClubSwitcher({
 							key={c.clubId}
 							type="button"
 							disabled={busy}
-							onClick={() => choose(c.clubId)}
+							// `void`: the handler must not return the promise (#392) —
+							// `choose` now owns its own failure, and an unhandled
+							// rejection escaping here is what made the dropped test
+							// impossible to write.
+							onClick={() => {
+								void choose(c.clubId);
+							}}
 							className={cn(
 								"flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors hover:bg-[var(--foam)] disabled:opacity-60",
 								isActive && "bg-[var(--sand)]",

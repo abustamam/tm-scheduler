@@ -14,26 +14,30 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // real server context). `vi.mock` factories are hoisted above the imports, so
 // the spies must come from `vi.hoisted`. `calls` records the call ORDER — the
 // point of #378 is that the switch persists, THEN leaves the old club's page.
-const { calls, setActiveClub, navigate, invalidate } = vi.hoisted(() => {
-	const calls: string[] = [];
-	return {
-		calls,
-		setActiveClub: vi.fn(async () => {
-			calls.push("setActiveClub");
-			return { ok: true as const };
-		}),
-		navigate: vi.fn(async () => {
-			calls.push("navigate");
-		}),
-		invalidate: vi.fn(async () => {
-			calls.push("invalidate");
-		}),
-	};
-});
+const { calls, setActiveClub, navigate, invalidate, toastError } = vi.hoisted(
+	() => {
+		const calls: string[] = [];
+		return {
+			calls,
+			setActiveClub: vi.fn(async () => {
+				calls.push("setActiveClub");
+				return { ok: true as const };
+			}),
+			navigate: vi.fn(async () => {
+				calls.push("navigate");
+			}),
+			invalidate: vi.fn(async () => {
+				calls.push("invalidate");
+			}),
+			toastError: vi.fn(),
+		};
+	},
+);
 vi.mock("#/server/auth-context", () => ({ setActiveClub }));
 vi.mock("@tanstack/react-router", () => ({
 	useRouter: () => ({ navigate, invalidate }),
 }));
+vi.mock("sonner", () => ({ toast: { error: toastError } }));
 
 import { ClubSwitcher, type SwitcherClub } from "./club-switcher";
 
@@ -118,6 +122,47 @@ describe("ClubSwitcher", () => {
 		// Invalidating first would re-run the OLD url's loaders under the NEW
 		// active club — the bug this fixes.
 		expect(calls).toEqual(["setActiveClub", "navigate", "invalidate"]);
+	});
+
+	// The test #378 wrote and then had to drop: a rejecting `setActiveClub`
+	// became an unhandled promise rejection (nothing `catch`es it, and the
+	// onClick discarded the promise), which fails the whole vitest run — the bug
+	// #392 reports, and its own best evidence.
+	it("surfaces the error and leaves the user where they were when the switch fails (#392)", async () => {
+		setActiveClub.mockRejectedValueOnce(new Error("Your session has expired."));
+
+		await pick(/evening club/i);
+
+		// The server's own message, not a generic one — same as the other write
+		// paths in this app.
+		await waitFor(() =>
+			expect(toastError).toHaveBeenCalledWith("Your session has expired."),
+		);
+		// Stayed put: no navigation, no invalidation, nothing rewritten.
+		expect(navigate).not.toHaveBeenCalled();
+		expect(invalidate).not.toHaveBeenCalled();
+		expect(calls).toEqual([]);
+		// The popover is still open with the choice in front of them, rather than
+		// closing as if the switch had taken.
+		expect(screen.getByRole("dialog")).toBeTruthy();
+		// The control is usable again — `finally` still clears `busy`. (Exact
+		// name: the open popover also holds a "Morning Club Club 123" option.)
+		const trigger = screen.getByRole("button", { name: "Morning Club" });
+		expect((trigger as HTMLButtonElement).disabled).toBe(false);
+	});
+
+	it("falls back to a plain message when the failure is not an Error (#392)", async () => {
+		setActiveClub.mockRejectedValueOnce("nope");
+		await pick(/evening club/i);
+		await waitFor(() =>
+			expect(toastError).toHaveBeenCalledWith("Couldn't switch clubs."),
+		);
+	});
+
+	it("says nothing when the switch succeeds", async () => {
+		await pick(/evening club/i);
+		await waitFor(() => expect(invalidate).toHaveBeenCalled());
+		expect(toastError).not.toHaveBeenCalled();
 	});
 
 	it("does nothing when the active club is re-picked", async () => {

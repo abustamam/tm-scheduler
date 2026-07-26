@@ -13,8 +13,7 @@ import {
 	applyFlex,
 	buildRunOfShow,
 	expandRunSheet,
-	TABLE_TOPICS_MAX,
-	TABLE_TOPICS_MIN,
+	flexBannerMessage,
 } from "#/lib/agenda-runsheet";
 import { buildAgendaSharePath } from "#/lib/agenda-share-url";
 import { buildTimeline } from "#/lib/agenda-timing";
@@ -118,6 +117,9 @@ function PrintAgenda() {
 		buildRunOfShow({ geIntroducesFunctionaries }),
 	);
 	const flex = applyFlex(runRows, meeting.lengthMinutes);
+	// null when the agenda fits. The copy is conditional on a flex row actually
+	// existing (#395) — see `flexBannerMessage`.
+	const flexBanner = flexBannerMessage(flex);
 	const rows = buildTimeline(flex.rows, meeting.scheduledAt, timezone);
 
 	// Meeting end = start + the flexed (projected) run-of-show length.
@@ -217,7 +219,7 @@ function PrintAgenda() {
 				    demote; the layout tabs and Print are why the toolbar exists. */}
 				{bare ? null : <OfflineBadge id={meetingId} />}
 			</div>
-			{!bare && flex.status !== "exact" ? (
+			{!bare && flexBanner ? (
 				<div
 					className="no-print"
 					style={{
@@ -231,9 +233,7 @@ function PrintAgenda() {
 						color: flex.status === "over" ? "#8a1c1c" : "#41546b",
 					}}
 				>
-					{flex.status === "over"
-						? `Agenda runs ${flex.deltaMinutes} min long — Table Topics is at its ${TABLE_TOPICS_MIN}-min floor. Trim a speech or shorten the agenda.`
-						: `Agenda ends ${-flex.deltaMinutes} min early — Table Topics is at its ${TABLE_TOPICS_MAX}-min cap.`}
+					{flexBanner}
 				</div>
 			) : null}
 			<style>{`
