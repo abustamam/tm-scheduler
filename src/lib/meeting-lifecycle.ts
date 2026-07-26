@@ -48,6 +48,39 @@ export function meetingDatePassed(
 }
 
 /**
+ * THE "is this meeting over?" rule (#393) — one definition, every surface.
+ *
+ * Over = the meeting is completed (locked), OR its scheduled DAY is strictly
+ * past in the club's timezone. **Club-local day granularity, not an instant:**
+ * the agenda stays live all day so people can fill roles right up to — and
+ * during — the meeting, and only freezes the next club-local day. `now` is
+ * injectable so every consumer on a page can be pinned to the same clock (the
+ * viewer and the panels must never read the wall clock separately); omit it for
+ * the live clock.
+ *
+ * NOT the same predicate as the past/upcoming LISTING split — `loadPastMeetings`
+ * (`scheduledAt < now`), `listUpcomingMeetings` (`scheduledAt >= now`), and the
+ * season grid's `isPast`. Those are exact complements on the INSTANT axis and
+ * must stay that way: a meeting that started an hour ago has already left
+ * "upcoming", so an archive built on this day-granularity rule would leave it in
+ * NEITHER list until midnight, unreachable from both. Listing answers "which
+ * side of now is it"; `isMeetingOver` answers "is the planning window closed".
+ * They deliberately disagree between a meeting's start time and the end of its
+ * club-local day. Do not unify them.
+ */
+export function isMeetingOver(input: {
+	status: string;
+	scheduledAt: Date | string;
+	timezone: string;
+	now?: Date;
+}): boolean {
+	return (
+		isMeetingLocked(input.status) ||
+		meetingDatePassed(input.scheduledAt, input.timezone, input.now)
+	);
+}
+
+/**
  * A locked meeting's viewer (#150): keep the member identity but deny every
  * mutation capability, so the shared `<MeetingAgenda>` renders read-only. Used
  * by both meeting surfaces when `isMeetingLocked(status)`.
@@ -88,8 +121,7 @@ export function resolveMeetingViewer(input: {
 	now?: Date;
 }): MeetingViewer {
 	const locked = isMeetingLocked(input.status);
-	const over =
-		locked || meetingDatePassed(input.scheduledAt, input.timezone, input.now);
+	const over = isMeetingOver(input);
 	// Managers edit until Complete (locked); members/anon freeze once `over`.
 	const editable = input.canManage ? !locked : !over;
 	const base = meetingViewer({

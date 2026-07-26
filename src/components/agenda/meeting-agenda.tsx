@@ -34,7 +34,6 @@ import {
 	SheetTitle,
 } from "#/components/ui/sheet";
 import { buildRoleCounts, slotLabel, summarizeAgenda } from "#/lib/agenda";
-import { isMeetingLocked, meetingDatePassed } from "#/lib/meeting-lifecycle";
 import type { MeetingViewer } from "#/lib/meeting-viewer";
 import type { StoredMember } from "#/lib/member-identity";
 import type { getMeeting } from "#/server/meetings";
@@ -114,6 +113,11 @@ export interface MeetingAgendaProps {
 	effectiveMeetingNumber?: number | null;
 	/** Club timezone — the meta dialog renders/parses the date field in it. */
 	timezone: string;
+	/** Has this meeting already happened? Passed in — NOT recomputed here — so the
+	 *  panels and the `viewer` are decided by one evaluation of `isMeetingOver`
+	 *  against one clock (#393). Callers get it from
+	 *  `isMeetingOver({ status, scheduledAt, timezone, now? })`. */
+	meetingOver: boolean;
 	/** Identity args the lifted edit dialogs pass to their server fns. */
 	actorMemberId: string | null;
 	selfMemberId: string | null;
@@ -164,6 +168,7 @@ export function MeetingAgenda({
 	meeting,
 	effectiveMeetingNumber = null,
 	timezone,
+	meetingOver,
 	actorMemberId,
 	selfMemberId,
 	onMetaSaved,
@@ -204,16 +209,13 @@ export function MeetingAgenda({
 		if (s.assigneeId) roleByMemberId[s.assigneeId] = slotLabel(s, roleCounts);
 	}
 
-	// Is the meeting over? (#376) The SAME condition `resolveMeetingViewer` uses
-	// (`meeting-lifecycle.ts`) — completed, or the day after its date — rather
-	// than a second rule that could drift from it. Gates the forward-looking
-	// planning panels (Outreach, "Not available this week"): "who still needs to
-	// be asked" and "skip them when filling open roles" are meaningless once the
-	// meeting has happened, yet an admin keeps `canManage` on a past-but-never-
-	// completed meeting, so capability alone can't hide them.
-	const meetingOver =
-		isMeetingLocked(meeting.status) ||
-		meetingDatePassed(meeting.scheduledAt, timezone);
+	// Gate the forward-looking planning panels (Outreach, "Not available this
+	// week") on the meeting being over (#376): "who still needs to be asked" and
+	// "skip them when filling open roles" are meaningless once the meeting has
+	// happened, yet an admin keeps `canManage` on a past-but-never-completed
+	// meeting, so capability alone can't hide them. `meetingOver` arrives as a
+	// prop from the same `isMeetingOver` call that built `viewer` (#393) — the
+	// component must not read the clock itself or the two can silently disagree.
 	const showPlanningPanels = viewer.canManage && !meetingOver;
 
 	// Recruiting pool for open-slot nudges (#37) — every active member, annotated

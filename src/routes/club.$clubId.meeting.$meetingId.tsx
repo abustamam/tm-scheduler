@@ -57,6 +57,7 @@ import {
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import {
 	isMeetingLocked,
+	isMeetingOver,
 	MEETING_LOCKED_MESSAGE,
 	meetingDatePassed,
 	meetingDateReached,
@@ -274,8 +275,16 @@ function MeetingView() {
 
 	const { isTmod, isGrammarian } = deriveMeetingRoleFlags(slots, myId);
 	const locked = isMeetingLocked(meeting.status);
+	// Its own fact, not a step toward `over`: it drives the "already taken place"
+	// notice, which a manager (still editing) must not see.
 	const datePassed = meetingDatePassed(meeting.scheduledAt, timezone);
-	const over = locked || datePassed;
+	// The one "is it over?" rule (#393) — shared with `resolveMeetingViewer` and
+	// handed to <MeetingAgenda> rather than recomputed there.
+	const over = isMeetingOver({
+		status: meeting.status,
+		scheduledAt: meeting.scheduledAt,
+		timezone,
+	});
 	// #320: previewing-as-member drops management everywhere it gates admin UI.
 	const effectiveCanManage = canManage && !previewAsMember;
 	const canComplete = meetingDateReached(meeting.scheduledAt, timezone);
@@ -712,6 +721,7 @@ function MeetingView() {
 				meetingDate={effectiveCanManage ? nudgeDate : ""}
 				meeting={meeting}
 				timezone={timezone}
+				meetingOver={over}
 				actorMemberId={agendaMemberId}
 				selfMemberId={agendaMemberId}
 				onMetaSaved={async () => {
@@ -751,7 +761,7 @@ function MeetingView() {
 					meetingId={meeting.id}
 					minutes={minutes.data}
 					program={minutes.program}
-					meetingPast={locked || datePassed}
+					meetingPast={over}
 					canEdit={effectiveCanManage && minutes.canEdit}
 					clubGuests={clubGuests}
 					onMutated={() => router.invalidate()}
