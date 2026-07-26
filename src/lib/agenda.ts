@@ -297,11 +297,27 @@ export type PickerRow = {
 	lastServedAt: Date | null;
 };
 
-/** Build member-picker rows. Members flagged unavailable-for-this-meeting or
- *  already holding a role this meeting sort after unflagged members (then by
- *  name); all remain selectable. `lastServedAt` maps memberId → the most recent
- *  prior date they held the role being assigned (null = never); it annotates
- *  rows but does NOT affect ordering (#146). */
+/** Picker sort tier (#377): 0 = available and unassigned (the real candidates),
+ *  1 = already holding a role this meeting (still assignable — double-booking is
+ *  sometimes deliberate), 2 = marked Not Available. Unavailable outranks
+ *  already-assigned: "not coming at all" is a stronger signal than "here but
+ *  busy", and collapsing the two into one bucket is what made the old order read
+ *  as haphazard. */
+function pickerTier(row: {
+	unavailable: boolean;
+	currentRole: string | null;
+}): 0 | 1 | 2 {
+	if (row.unavailable) return 2;
+	return row.currentRole === null ? 0 : 1;
+}
+
+/** Build member-picker rows, sorted into three tiers (see `pickerTier`) and
+ *  alphabetized within each; every row stays selectable. Unavailable members are
+ *  sorted last rather than hidden behind a toggle — an officer sometimes must
+ *  assign someone who said no, and a name the search box can't find is worse
+ *  than one sitting at the bottom. `lastServedAt` maps memberId → the most
+ *  recent prior date they held the role being assigned (null = never); it
+ *  annotates rows but does NOT affect ordering (#146). */
 export function buildPickerRows(
 	roster: { id: string; name: string }[],
 	roleByMemberId: Record<string, string>,
@@ -318,10 +334,11 @@ export function buildPickerRows(
 			lastServedAt: lastServedAt[m.id] ?? null,
 		}))
 		.sort((a, b) => {
-			const aFlag = a.unavailable || a.currentRole !== null;
-			const bFlag = b.unavailable || b.currentRole !== null;
-			if (aFlag !== bFlag) return aFlag ? 1 : -1;
-			return a.name.localeCompare(b.name);
+			const tier = pickerTier(a) - pickerTier(b);
+			// `localeCompare` stays the authority within a tier — Postgres
+			// collation and it disagree on punctuation/case, and the roster
+			// arrives in Postgres's order.
+			return tier !== 0 ? tier : a.name.localeCompare(b.name);
 		});
 }
 

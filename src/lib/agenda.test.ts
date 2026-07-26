@@ -354,10 +354,11 @@ describe("buildPickerRows", () => {
 		{ id: "b", name: "Ben" },
 	];
 
-	it("flags unavailable and already-assigned members, sorting them last", () => {
+	it("sorts free members first, then already-assigned, then unavailable (#377)", () => {
 		const rows = buildPickerRows(roster, { b: "Timer" }, ["a"]);
-		// Clean member (Cara) first, then flagged sorted by name (Ana, Ben).
-		expect(rows.map((r) => r.id)).toEqual(["c", "a", "b"]);
+		// Free (Cara), then already-holds-a-role (Ben), then unavailable (Ana) —
+		// three tiers, NOT one trailing "flagged" bucket.
+		expect(rows.map((r) => r.id)).toEqual(["c", "b", "a"]);
 		expect(rows.find((r) => r.id === "a")).toMatchObject({
 			unavailable: true,
 			currentRole: null,
@@ -366,6 +367,44 @@ describe("buildPickerRows", () => {
 			unavailable: false,
 			currentRole: "Timer",
 		});
+	});
+
+	it("alphabetizes within each of the three tiers (#377)", () => {
+		const mixed = [
+			{ id: "u2", name: "Zoe Out" },
+			{ id: "f2", name: "Bea Free" },
+			{ id: "a2", name: "Yuri Busy" },
+			{ id: "f1", name: "Ada Free" },
+			{ id: "a1", name: "Xander Busy" },
+			{ id: "u1", name: "Willa Out" },
+		];
+		const rows = buildPickerRows(mixed, { a1: "Timer", a2: "Ah-Counter" }, [
+			"u1",
+			"u2",
+		]);
+		// The alphabet restarts exactly twice — once per tier boundary.
+		expect(rows.map((r) => r.id)).toEqual([
+			"f1",
+			"f2", // tier 1: available + unassigned
+			"a1",
+			"a2", // tier 2: already holding a role here
+			"u1",
+			"u2", // tier 3: marked Not Available
+		]);
+	});
+
+	it("puts an unavailable member who also holds a role in the last tier (#377)", () => {
+		// "Not coming at all" is the stronger signal than "here but busy".
+		const rows = buildPickerRows(
+			[
+				{ id: "x", name: "Xena" },
+				{ id: "a", name: "Ada" },
+			],
+			{ x: "Timer" },
+			["x"],
+		);
+		expect(rows.map((r) => r.id)).toEqual(["a", "x"]);
+		expect(rows[1]).toMatchObject({ unavailable: true, currentRole: "Timer" });
 	});
 
 	it("defaults lastServedAt to null (never) when no recency map is given", () => {

@@ -24,6 +24,7 @@ import {
 	formatLastServed,
 	resolveAssignAction,
 } from "#/lib/agenda";
+import { cn } from "#/lib/utils";
 import { assignGuestSlot } from "#/server/guests";
 import { claimSlot, reassignSlot } from "#/server/slots";
 
@@ -176,7 +177,13 @@ export function AssignSlotSheet({
 										value={`${row.name} ${row.id}`}
 										disabled={busy}
 										onSelect={() => pick(row.id)}
-										className="flex items-center justify-between gap-2"
+										className={cn(
+											"flex items-center justify-between gap-2",
+											// Tier 3 (#377): sorted last AND visually receded, so the
+											// bottom of the list reads as "not candidates" without
+											// hiding anyone who might still need assigning.
+											row.unavailable && "opacity-60",
+										)}
 									>
 										<span className="flex flex-col">
 											<span>{row.name}</span>
