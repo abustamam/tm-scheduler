@@ -71,6 +71,7 @@ import {
 	completeMeeting,
 	getMeetingByKey,
 	getPublicMeetingByKey,
+	listPastMeetings,
 	listUpcomingMeetings,
 	reopenMeeting,
 } from "#/server/meetings";
@@ -124,12 +125,26 @@ export const Route = createFileRoute("/club/$clubId/meeting/$meetingId")({
 		// Guard against a meetingId that belongs to a different club than the URL.
 		if (data.meeting.clubId !== context.clubUuid) throw notFound();
 
+		// Nav strip backward paging (#375): the window of meetings immediately
+		// BEFORE the one being viewed — anchored to THIS meeting rather than to
+		// today, so paging back from a three-month-old meeting keeps going back
+		// instead of jumping to last week. Public like `listUpcomingMeetings`, so
+		// the anonymous visitor gets it too. Non-fatal: degrade to forward-only.
+		const past = await listPastMeetings({
+			data: {
+				clubId: context.clubUuid,
+				before: new Date(data.meeting.scheduledAt).toISOString(),
+				limit: 3,
+			},
+		}).catch(() => null);
+
 		const upcoming = await upcomingPromise;
 		const navItems = deriveMeetingNavItems(
 			data.meeting,
 			data.slots,
 			upcoming,
 			data.timezone,
+			past?.meetings ?? [],
 		);
 
 		// Minutes (ADR-0014 / #152) — ONLY for a signed-in member (shell); an anon

@@ -36,6 +36,22 @@ export function formatMeetingTimeRange(
 	return `${formatMeetingTime(start, timeZone)} – ${formatMeetingTime(end, timeZone)}`;
 }
 
+/**
+ * A meeting's date including the YEAR. For history surfaces (the past-meetings
+ * archive, #375) where the list spans years and `formatMeetingDate`'s
+ * year-less "Thu, Jul 23" is ambiguous.
+ */
+export function formatArchiveDate(value: Date | string, timeZone?: string) {
+	const d = typeof value === "string" ? new Date(value) : value;
+	return new Intl.DateTimeFormat(undefined, {
+		weekday: "short",
+		year: "numeric",
+		month: "short",
+		day: "numeric",
+		timeZone,
+	}).format(d);
+}
+
 export function formatShortDate(value: Date | string, timeZone?: string) {
 	const d = typeof value === "string" ? new Date(value) : value;
 	return new Intl.DateTimeFormat(undefined, {

@@ -29,6 +29,7 @@ import { Route as AuthedDashboardRouteImport } from './routes/_authed/dashboard'
 import { Route as AuthedActivityRouteImport } from './routes/_authed/activity'
 import { Route as ClubClubIdIndexRouteImport } from './routes/club.$clubId.index'
 import { Route as AuthedSuperadminIndexRouteImport } from './routes/_authed/superadmin/index'
+import { Route as AuthedMeetingsIndexRouteImport } from './routes/_authed/meetings.index'
 import { Route as ClubClubIdRolesRouteImport } from './routes/club.$clubId_.roles'
 import { Route as ClubClubIdGuestBookRouteImport } from './routes/club.$clubId_.guest-book'
 import { Route as ApiPathwaysIngestRouteImport } from './routes/api/pathways/ingest'
@@ -152,6 +153,11 @@ const AuthedSuperadminIndexRoute = AuthedSuperadminIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => AuthedSuperadminRoute,
+} as any)
+const AuthedMeetingsIndexRoute = AuthedMeetingsIndexRouteImport.update({
+  id: '/meetings/',
+  path: '/meetings/',
+  getParentRoute: () => AuthedRoute,
 } as any)
 const ClubClubIdRolesRoute = ClubClubIdRolesRouteImport.update({
   id: '/club/$clubId_/roles',
@@ -315,6 +321,7 @@ export interface FileRoutesByFullPath {
   '/api/pathways/ingest': typeof ApiPathwaysIngestRoute
   '/club/$clubId/guest-book': typeof ClubClubIdGuestBookRoute
   '/club/$clubId/roles': typeof ClubClubIdRolesRoute
+  '/meetings/': typeof AuthedMeetingsIndexRoute
   '/superadmin/': typeof AuthedSuperadminIndexRoute
   '/club/$clubId/': typeof ClubClubIdIndexRoute
   '/admin/meetings/batch': typeof AuthedAdminMeetingsBatchRoute
@@ -358,6 +365,7 @@ export interface FileRoutesByTo {
   '/api/pathways/ingest': typeof ApiPathwaysIngestRoute
   '/club/$clubId/guest-book': typeof ClubClubIdGuestBookRoute
   '/club/$clubId/roles': typeof ClubClubIdRolesRoute
+  '/meetings': typeof AuthedMeetingsIndexRoute
   '/superadmin': typeof AuthedSuperadminIndexRoute
   '/club/$clubId': typeof ClubClubIdIndexRoute
   '/admin/meetings/batch': typeof AuthedAdminMeetingsBatchRoute
@@ -405,6 +413,7 @@ export interface FileRoutesById {
   '/api/pathways/ingest': typeof ApiPathwaysIngestRoute
   '/club/$clubId_/guest-book': typeof ClubClubIdGuestBookRoute
   '/club/$clubId_/roles': typeof ClubClubIdRolesRoute
+  '/_authed/meetings/': typeof AuthedMeetingsIndexRoute
   '/_authed/superadmin/': typeof AuthedSuperadminIndexRoute
   '/club/$clubId/': typeof ClubClubIdIndexRoute
   '/_authed/admin/meetings/batch': typeof AuthedAdminMeetingsBatchRoute
@@ -452,6 +461,7 @@ export interface FileRouteTypes {
     | '/api/pathways/ingest'
     | '/club/$clubId/guest-book'
     | '/club/$clubId/roles'
+    | '/meetings/'
     | '/superadmin/'
     | '/club/$clubId/'
     | '/admin/meetings/batch'
@@ -495,6 +505,7 @@ export interface FileRouteTypes {
     | '/api/pathways/ingest'
     | '/club/$clubId/guest-book'
     | '/club/$clubId/roles'
+    | '/meetings'
     | '/superadmin'
     | '/club/$clubId'
     | '/admin/meetings/batch'
@@ -541,6 +552,7 @@ export interface FileRouteTypes {
     | '/api/pathways/ingest'
     | '/club/$clubId_/guest-book'
     | '/club/$clubId_/roles'
+    | '/_authed/meetings/'
     | '/_authed/superadmin/'
     | '/club/$clubId/'
     | '/_authed/admin/meetings/batch'
@@ -714,6 +726,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/superadmin/'
       preLoaderRoute: typeof AuthedSuperadminIndexRouteImport
       parentRoute: typeof AuthedSuperadminRoute
+    }
+    '/_authed/meetings/': {
+      id: '/_authed/meetings/'
+      path: '/meetings'
+      fullPath: '/meetings/'
+      preLoaderRoute: typeof AuthedMeetingsIndexRouteImport
+      parentRoute: typeof AuthedRoute
     }
     '/club/$clubId_/roles': {
       id: '/club/$clubId_/roles'
@@ -921,6 +940,7 @@ interface AuthedRouteChildren {
   AuthedAdminVpeDashboardRoute: typeof AuthedAdminVpeDashboardRoute
   AuthedMeetingsIdRoute: typeof AuthedMeetingsIdRoute
   AuthedMembersIdRoute: typeof AuthedMembersIdRoute
+  AuthedMeetingsIndexRoute: typeof AuthedMeetingsIndexRoute
   AuthedAdminMeetingsBatchRoute: typeof AuthedAdminMeetingsBatchRoute
   AuthedAdminMeetingsNewRoute: typeof AuthedAdminMeetingsNewRoute
 }
@@ -945,6 +965,7 @@ const AuthedRouteChildren: AuthedRouteChildren = {
   AuthedAdminVpeDashboardRoute: AuthedAdminVpeDashboardRoute,
   AuthedMeetingsIdRoute: AuthedMeetingsIdRoute,
   AuthedMembersIdRoute: AuthedMembersIdRoute,
+  AuthedMeetingsIndexRoute: AuthedMeetingsIndexRoute,
   AuthedAdminMeetingsBatchRoute: AuthedAdminMeetingsBatchRoute,
   AuthedAdminMeetingsNewRoute: AuthedAdminMeetingsNewRoute,
 }

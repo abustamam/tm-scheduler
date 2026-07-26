@@ -34,18 +34,27 @@ function toMillis(value: Date | string): number {
  * meeting — and always with its own authoritative `openSlots` (derived from the
  * loaded agenda), which both covers the absent-from-`upcoming` case and keeps
  * the current tab's dot consistent with the roles shown on the page.
+ *
+ * `past` (#375) is the window of meetings immediately BEFORE the viewed one, so
+ * the strip pages backwards instead of dead-ending at wherever you entered.
+ * Past items never carry the open-roles dot: an unfilled role on a meeting that
+ * already happened is history, not a call to action. `current` is written last,
+ * so a current meeting that is itself past keeps its own authoritative dot.
  */
 export function buildMeetingNavItems(
 	current: CurrentMeeting,
 	upcoming: UpcomingMeeting[],
 	timezone: string,
+	past: UpcomingMeeting[] = [],
 ): MeetingNavItem[] {
-	const byId = new Map<string, UpcomingMeeting>();
-	for (const m of upcoming) byId.set(m.id, m);
+	const byId = new Map<string, UpcomingMeeting & { isPast: boolean }>();
+	for (const m of past) byId.set(m.id, { ...m, isPast: true });
+	for (const m of upcoming) byId.set(m.id, { ...m, isPast: false });
 	byId.set(current.id, {
 		id: current.id,
 		scheduledAt: current.scheduledAt,
 		openSlots: current.openSlots,
+		isPast: false,
 	});
 
 	const ordered = [...byId.values()].sort(
@@ -57,7 +66,7 @@ export function buildMeetingNavItems(
 		urlKey: keys.get(m.id) ?? m.id,
 		label: formatShortDate(m.scheduledAt, timezone),
 		isCurrent: m.id === current.id,
-		hasOpenRoles: m.openSlots > 0,
+		hasOpenRoles: !m.isPast && m.openSlots > 0,
 	}));
 }
 
@@ -72,12 +81,14 @@ export function deriveMeetingNavItems(
 	slots: { status: string }[],
 	upcoming: UpcomingMeeting[],
 	timezone: string,
+	past: UpcomingMeeting[] = [],
 ): MeetingNavItem[] {
 	const openSlots = slots.filter((s) => s.status === "open").length;
 	return buildMeetingNavItems(
 		{ id: meeting.id, scheduledAt: meeting.scheduledAt, openSlots },
 		upcoming,
 		timezone,
+		past,
 	);
 }
 

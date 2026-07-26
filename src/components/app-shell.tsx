@@ -8,6 +8,7 @@ import {
 	Compass,
 	GraduationCap,
 	Grid3x3,
+	History,
 	LayoutGrid,
 	List,
 	ListChecks,
@@ -170,6 +171,9 @@ function crumbFor(pathname: string): string {
 	if (pathname.startsWith("/admin/meetings/batch"))
 		return "Manage · Batch meetings";
 	if (/^\/club\/[^/]+\/meeting(\/|$)/.test(pathname)) return "Manage · Meeting";
+	// The archive index (#375); deeper `/meetings/:id` is the redirect to a meeting.
+	if (pathname === "/meetings" || pathname === "/meetings/")
+		return "Manage · Past meetings";
 	if (pathname.startsWith("/meetings")) return "Manage · Meeting";
 	if (pathname === "/me") return "Me · My roles";
 	if (pathname.startsWith("/admin/dcp")) return "Manage · DCP scoreboard";
@@ -401,6 +405,12 @@ function SidebarInner({
 					to="/next"
 					icon={CalendarDays}
 					label="Next meeting"
+					onNavigate={onNavigate}
+				/>
+				<NavItem
+					to="/meetings"
+					icon={History}
+					label="Past meetings"
 					onNavigate={onNavigate}
 				/>
 				<NavItem
