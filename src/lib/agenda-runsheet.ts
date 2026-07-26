@@ -120,6 +120,13 @@ export const OPEN_LABEL = "— open —";
  *  slide enumerates — rather than a fixed "the functionaries". */
 export const ROLES_TOKEN = "{roles}";
 
+/** Token in a beat's `detail`, replaced at expansion time by the award
+ *  categories the club actually scores (#372) — the same list, in the same
+ *  order, that the deck's `awards` slide builds. Unlike `ROLES_TOKEN` these are
+ *  FIXED labels, not the club's role names: a club that renames "Table Topics
+ *  Master" still hands out Best Table Topic. */
+export const AWARDS_TOKEN = "{awards}";
+
 /** Functionary-category roles for the header legend (Timer, Ah-Counter, Grammarian…). */
 export function buildLegend(slots: AgendaSlot[]): LegendEntry[] {
 	return slots
@@ -157,6 +164,18 @@ const EVALUATOR_ROLE: BeatRole = {
 	roleKey: "evaluator",
 	roleName: "Evaluator",
 };
+
+/** The award handed out for each scored segment, in the order the awards beat
+ *  reads them out — which is the order `buildSlideDeck` pushes them onto the
+ *  `awards` slide, so print and deck can't disagree (#372). A club only hands
+ *  out the awards for segments it actually runs; with no scored segment at all
+ *  the beat's `requiresAnyOf` gate drops it, exactly as the deck omits the
+ *  slide. */
+const AWARD_CATEGORIES: { role: BeatRole; label: string }[] = [
+	{ role: TABLE_TOPICS_ROLE, label: "Best Table Topic" },
+	{ role: EVALUATOR_ROLE, label: "Best Evaluator" },
+	{ role: SPEAKER_ROLE, label: "Best Speaker" },
+];
 
 /**
  * Build the standard Toastmasters run-of-show (#367). Pure, no db — every
@@ -305,8 +324,9 @@ export function buildRunOfShow({
 		{
 			kind: "event",
 			who: "Toastmaster",
-			detail: "Awards · Best Table Topic, Evaluator & Speaker",
+			detail: `Awards · ${AWARDS_TOKEN}`,
 			minutes: 2,
+			requiresAnyOf: AWARD_CATEGORIES.map((a) => a.role),
 		},
 		{
 			kind: "event",
@@ -411,6 +431,15 @@ function joinRoleNames(names: string[]): string {
  *  (#367), in slot order and under the club's own display names — the same
  *  order and names the deck's functionary slides list. */
 function resolveDetail(beat: Beat, slots: AgendaSlot[]): string {
+	if (beat.detail.includes(AWARDS_TOKEN)) {
+		// Fixed labels in a fixed order (not the club's role names, and not slot
+		// order) — the awards are the club's, the role names only decide WHICH
+		// are handed out.
+		const labels = AWARD_CATEGORIES.filter((a) =>
+			hasRole(slots, a.role.roleKey, a.role.roleName),
+		).map((a) => a.label);
+		return beat.detail.replace(AWARDS_TOKEN, joinRoleNames(labels));
+	}
 	if (!beat.detail.includes(ROLES_TOKEN)) return beat.detail;
 	const required = beat.requiresAnyOf ?? [];
 	const names = slots
