@@ -10,10 +10,73 @@
 // `+`/`00`-prefixed. The durable fix is standardizing phone INPUTS to E.164 on
 // write (the deferred part of #295); until then, a club default country code
 // makes existing free-text numbers reliable for WhatsApp.
+//
+// E.164 is also the DEDUP KEY for guests and people (#397): two spellings of one
+// number must produce one key. That only works if the promotion below ALWAYS
+// applies — see `DEFAULT_COUNTRY_CODE`.
+
+/**
+ * The country code assumed when a club hasn't set one (#397).
+ *
+ * Without a default, `toE164` returns null for a bare national number, so
+ * `toStoredPhone` stores it as typed — and then `(555) 123-4567` and
+ * `+1 (555) 123-4567` are two different dedup keys for one phone. Every spelling
+ * has to converge, and the only way to compare a country-code-less number is to
+ * assume a country: comparing "the last 10 digits" instead would silently equate
+ * numbers that genuinely differ across country codes.
+ *
+ * `+1` mirrors the `America/Chicago` default on `clubs.timezone` — the app's
+ * standing assumption for a club that hasn't told us otherwise. A club outside
+ * NANP sets its own code on /admin/club-settings, which wins everywhere (see
+ * `loadClubDefaultCountryCode`); this is only the fallback.
+ */
+export const DEFAULT_COUNTRY_CODE = "+1";
 
 /** Digits of a country code, e.g. "+1" | "1" → "1"; empty/invalid → "". */
 function ccDigits(cc: string | null | undefined): string {
 	return (cc ?? "").replace(/\D/g, "");
+}
+
+/**
+ * Strip the DOMESTIC dialing prefix from a national-format number, so the
+ * country code can be prepended without duplicating it.
+ *
+ * - NANP (`+1`): the long-distance prefix is `1`, and NANP national numbers are
+ *   exactly 10 digits — so 11 digits starting with `1` is `1` + the number
+ *   ("1 (555) 123-4567"), never an 11-digit national number. Without this,
+ *   "1 555 123 4567" would store as `+115551234567` and miss dedup against the
+ *   same number typed the other ways (#397). A 10-digit number starting with 1
+ *   is untouched: NANP area codes never start with 0 or 1.
+ * - Elsewhere: a single leading trunk `0` (the UK/EU "020…" → "+44 20…").
+ */
+function toNationalDigits(digits: string, cc: string): string {
+	if (cc === "1") {
+		return digits.length === 11 && digits.startsWith("1")
+			? digits.slice(1)
+			: digits;
+	}
+	return digits.replace(/^0/, "");
+}
+
+/**
+ * Repair an already-international number that carries NANP's domestic `1` on
+ * top of the `+1` country code (#397).
+ *
+ * `+1` + `1 (555) 123-4567` was the pre-fix output for a pasted "1 555…" in a
+ * club with a country code set, so those rows are already in the database. They
+ * pass through the `+…` branch untouched, which would leave them permanently
+ * unmatchable against the same number typed any other way — the dedup bug, one
+ * level down, for the rows the backfill was supposed to rescue.
+ *
+ * 12 digits beginning `11` can only be that: country code 1 is the ONLY code
+ * beginning with 1, NANP subscriber numbers are exactly 10 digits (so 11 total),
+ * and NANP area codes never start with 1. There is no valid number this
+ * misidentifies.
+ */
+function repairIntlDigits(digits: string): string {
+	return digits.length === 12 && digits.startsWith("11")
+		? `1${digits.slice(2)}`
+		: digits;
 }
 
 /**
@@ -34,7 +97,7 @@ export function toE164(
 
 	if (trimmed.startsWith("+")) {
 		const digits = trimmed.replace(/\D/g, "");
-		return digits === "" ? null : `+${digits}`;
+		return digits === "" ? null : `+${repairIntlDigits(digits)}`;
 	}
 
 	const digits = trimmed.replace(/\D/g, "");
@@ -43,16 +106,13 @@ export function toE164(
 	// `00` international access prefix → the rest is the international number.
 	if (digits.startsWith("00")) {
 		const intl = digits.slice(2);
-		return intl === "" ? null : `+${intl}`;
+		return intl === "" ? null : `+${repairIntlDigits(intl)}`;
 	}
 
 	const cc = ccDigits(defaultCountryCode);
 	if (cc === "") return null; // no country code, no default → not reliable
 
-	// Drop a single national trunk `0` before prepending the country code
-	// (common in the UK/EU: "020…" nationally is "+44 20…").
-	const national = digits.replace(/^0/, "");
-	return `+${cc}${national}`;
+	return `+${cc}${toNationalDigits(digits, cc)}`;
 }
 
 /**

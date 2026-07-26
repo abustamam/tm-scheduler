@@ -171,11 +171,13 @@ function ClubSettings() {
 						id="defaultCountryCode"
 						name="defaultCountryCode"
 						defaultValue={profile?.defaultCountryCode ?? ""}
-						placeholder="e.g. +1"
+						placeholder="+1"
 					/>
 					<p className="text-xs text-muted-foreground">
-						Added to member phone numbers that don't include a country code, so
-						the "Nudge on WhatsApp" links work. Leave blank to skip.
+						Added to member and guest phone numbers that don't include a country
+						code, so the "Nudge on WhatsApp" links work and the same number
+						typed two ways is recognized as one person. Leave blank to use +1
+						(US/Canada) — set yours if your club is elsewhere.
 					</p>
 				</div>
 				<Button type="submit" disabled={submitting} className="w-full">

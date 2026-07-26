@@ -109,11 +109,13 @@ describe.skipIf(!hasTestDb)("meeting contacts (integration)", () => {
 		expect(map.get(`member:${memberId}`)?.phone).toBe("+14155552671");
 	});
 
-	it("leaves a country-code-less phone null when the club has no default", async () => {
+	it("falls back to the app default country code when the club has no default (#397)", async () => {
 		await addMember(seeded.clubId, "No CC", { phone: "415-555-2671" });
 		const roster = await loadRosterWithContact(seeded.clubId);
-		// No `+`, no club default → not a reliable WhatsApp number.
-		expect(roster.find((r) => r.name === "No CC")?.phone).toBeNull();
+		// A club that never set a country code is assumed to be on the app default
+		// rather than losing the number entirely — the same substitution the write
+		// paths make, so read and write agree.
+		expect(roster.find((r) => r.name === "No CC")?.phone).toBe("+14155552671");
 	});
 
 	it("loadHolderContacts resolves member and guest contact by id", async () => {
