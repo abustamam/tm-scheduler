@@ -9,13 +9,17 @@ import {
 	buildLegend,
 	buildReportingLegend,
 	buildRunOfShow,
-	DEFAULT_SPEAKER_MINUTES,
 	hasAnyFunctionaryRole,
 	hasAnyReportingFunctionaryRole,
 	matchesRole,
 	numbered,
 	orderEvaluators,
 } from "./agenda-runsheet";
+import {
+	type SpeechWindowInput,
+	speechBookedMinutes,
+	speechWindow,
+} from "./speech-window";
 
 /** The meeting fields the deck needs (structural subset of the DB row). */
 export type MeetingForDeck = {
@@ -208,11 +212,21 @@ const ROLE = {
  */
 export const TABLE_TOPICS_TIMING = "1–2 minutes per speaker";
 
-function speechTime(min: number | null, max: number | null): string {
-	if (min != null && max != null) return `${min}–${max} minutes`;
-	if (max != null) return `${max} minutes`;
-	if (min != null) return `${min} minutes`;
-	return `${DEFAULT_SPEAKER_MINUTES} minutes`;
+/**
+ * The "Time:" line on a prepared-speech slide: the slot's assigned range when
+ * it has one, otherwise the minutes the run sheet books for that same row.
+ *
+ * Both branches end at `speechBookedMinutes` (#394) — the top of the range IS
+ * the booked duration — so the number the projector shows the speaker and the
+ * number the printed clock reserves can never drift. It used to project the
+ * single bound that happened to be set, which showed a min-only slot "5
+ * minutes" against a row the run sheet gave 7.
+ */
+function speechTime(slot: SpeechWindowInput): string {
+	const w = speechWindow(slot);
+	return w
+		? `${w.min}–${w.max} minutes`
+		: `${speechBookedMinutes(slot)} minutes`;
 }
 
 // Assigned names for the vote slides, each with the "· Guest" marker (#151).
@@ -357,7 +371,7 @@ export function buildSlideDeck({
 				speaker: assigneeDisplay(s),
 				title: s.speechTitle,
 				projectLevel: s.projectLevel,
-				time: speechTime(s.minMinutes, s.maxMinutes),
+				time: speechTime(s),
 				link: s.presentationUrl ?? null,
 			});
 		});

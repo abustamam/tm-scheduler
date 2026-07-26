@@ -11,6 +11,7 @@
 // role sheet) states it here, from one source of truth, in concrete clock
 // values derived from the slot's own min/max.
 import type { TimingMarks } from "./agenda-runsheet";
+import { speechWindow } from "./speech-window";
 
 /** The grace period either side of the assigned range, in minutes (30 s). */
 export const TIMING_GRACE_MINUTES = 0.5;
@@ -48,19 +49,19 @@ export type QualifyingWindow = {
 /**
  * The qualifying window for an assigned min–max, in minutes.
  *
- * `null` unless BOTH ends are known: a window has two edges, and a slot with
- * only a minimum (or only a maximum) has no window to state — which matches
- * `expandRunSheet`, where a half-specified slot gets no timing marks either.
+ * `null` unless the slot has a window at all — `speechWindow` (#394) is the one
+ * rule for that, shared with the deck's "Time:" line, the run sheet's booked
+ * duration and its timing marks. A half-specified slot is unconfigured, and a
+ * window that isn't backed by two real edges is one nobody can time against.
  */
 export function qualifyingWindow(
 	minMinutes: number | null | undefined,
 	maxMinutes: number | null | undefined,
 ): QualifyingWindow | null {
-	if (minMinutes == null || maxMinutes == null) return null;
-	if (!Number.isFinite(minMinutes) || !Number.isFinite(maxMinutes)) return null;
-	if (maxMinutes < minMinutes) return null;
-	const fromMinutes = Math.max(0, minMinutes - TIMING_GRACE_MINUTES);
-	const toMinutes = maxMinutes + TIMING_GRACE_MINUTES;
+	const w = speechWindow({ minMinutes, maxMinutes });
+	if (!w) return null;
+	const fromMinutes = Math.max(0, w.min - TIMING_GRACE_MINUTES);
+	const toMinutes = w.max + TIMING_GRACE_MINUTES;
 	const from = formatTimingClock(fromMinutes);
 	const to = formatTimingClock(toMinutes);
 	return {
@@ -69,7 +70,7 @@ export function qualifyingWindow(
 		from,
 		to,
 		range: `${from}–${to}`,
-		assigned: `${formatTimingClock(minMinutes)}–${formatTimingClock(maxMinutes)}`,
+		assigned: `${formatTimingClock(w.min)}–${formatTimingClock(w.max)}`,
 	};
 }
 

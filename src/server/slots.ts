@@ -22,18 +22,8 @@ import {
 	editSlotSpeech,
 	reassignSlotCore,
 } from "./slots-logic";
+import { speakerDetailsSchema } from "./speaker-details-schema";
 import { requestWriteActor } from "./write-actor-logic";
-
-const speakerDetailsSchema = z.object({
-	speechTitle: z.string().trim().optional(),
-	introduction: z.string().trim().optional(),
-	pathwayPath: z.string().trim().optional(),
-	projectName: z.string().trim().optional(),
-	projectLevel: z.string().trim().optional(),
-	minMinutes: z.number().int().positive().optional(),
-	maxMinutes: z.number().int().positive().optional(),
-	presentationUrl: z.string().trim().optional(),
-});
 
 const claimSchema = z.object({
 	slotId: z.string().uuid(),

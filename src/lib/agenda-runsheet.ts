@@ -1,4 +1,13 @@
 import { assigneeDisplayName } from "./agenda";
+import {
+	DEFAULT_SPEAKER_MINUTES,
+	speechBookedMinutes,
+	speechWindow,
+} from "./speech-window";
+
+/** The default lives with the booked-duration rule it belongs to (#394); it is
+ *  re-exported here because this is where every call site already reads it. */
+export { DEFAULT_SPEAKER_MINUTES };
 
 /** Green/yellow/red timer-card marks, in minutes (e.g. 5, 6, 7). */
 export type TimingMarks = { green: number; yellow: number; red: number };
@@ -155,9 +164,6 @@ export function beatDuration(template: Beat[], id: BeatId): string {
  *  `"functionaries"` is every `category: "functionary"` role;
  *  `"reportingFunctionaries"` drops the Vote Counter, who gives no report. */
 export type RoleGroup = "functionaries" | "reportingFunctionaries";
-
-/** Fallback speaker duration when a speaker slot has no maxMinutes. */
-export const DEFAULT_SPEAKER_MINUTES = 7;
 
 /** Squishy Table Topics bounds (minutes) and the on-time banner deadband. */
 export const TABLE_TOPICS_MIN = 5;
@@ -685,20 +691,22 @@ export function expandRunSheet(
 				const ordered = [...matching].sort((a, b) => a.slotIndex - b.slotIndex);
 				const multi = ordered.length > 1;
 				ordered.forEach((s, i) => {
-					const marks =
-						s.minMinutes != null && s.maxMinutes != null
-							? {
-									green: s.minMinutes,
-									yellow: (s.minMinutes + s.maxMinutes) / 2,
-									red: s.maxMinutes,
-								}
-							: null;
+					// The row's two numbers answer two different questions (#394), so
+					// they read two different helpers: the marks need an assigned
+					// RANGE (both ends, or none at all), while the clock needs an
+					// ALLOWANCE, which a max alone states perfectly well. Same
+					// `speechBookedMinutes` the deck projects, so the printed clock and
+					// the projector cannot drift.
+					const w = speechWindow(s);
+					const marks = w
+						? { green: w.min, yellow: (w.min + w.max) / 2, red: w.max }
+						: null;
 					rows.push({
 						who: `${numbered(beat.roleName, i, multi)} · ${assigneeDisplay(s)}`,
 						detail: s.speechTitle
 							? `"${s.speechTitle}"${s.projectLevel ? ` · ${s.projectLevel}` : ""}`
 							: detail,
-						minutes: s.maxMinutes ?? DEFAULT_SPEAKER_MINUTES,
+						minutes: speechBookedMinutes(s),
 						marks,
 					});
 				});
