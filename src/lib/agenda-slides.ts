@@ -123,8 +123,9 @@ export type Slide =
 			/** The word's definition, when the meeting records one. A narrower gate
 			 *  than the standalone slide's, which needs a definition or an example
 			 *  to exist at all: a club that sets only the word gets no `wordOfDay`
-			 *  slide, and is exactly the club whose Table Topics segment would
-			 *  otherwise have the word written down nowhere. */
+			 *  slide, so by Table Topics the word has not been on screen since the
+			 *  opening `toastmasterIntro` — which is the segment that asks the room
+			 *  to use it. */
 			definition: string | null;
 	  }
 	| ({ kind: "voteTableTopics" } & VoteTiming)

@@ -165,13 +165,27 @@ const SECTION_BY_SLIDE = {
  * timed slide has to be classified or this stops compiling. The `tableTopics`
  * slide is outside it by construction — its `timing` is a PER-SPEAKER limit,
  * not the segment budget beat 7 books, so there is nothing to compare.
+ *
+ * The exhaustiveness has a shape requirement worth knowing: `Extract<Slide,
+ * { time: string }>` selects only slides whose duration is a REQUIRED `string`
+ * under that exact key. A slide typed `time: string | null` or `time?: string`
+ * — the natural shape for a duration shown only when known — is silently not
+ * selected and compiles clean, as does any duration under a different property
+ * name (which is how `tableTopics.timing` already sits outside). Adding one of
+ * those reopens exactly the drift this file exists to catch, with the suite
+ * still green. Give a new timed slide a required `time: string`, or widen this.
  */
 const TIMED_SLIDES = {
-	// The prepared-speech slide states the SLOT's assigned range ("5–7 minutes"),
-	// and the run sheet books that slot's max for the same row. Both read the
-	// slot rather than the beat, so there is no beat budget to compare against,
-	// and the shapes differ deliberately: the speaker is told the window they
-	// have to land in, the timeline books the longest the speech can run.
+	// The prepared-speech slide states the SLOT's range and the run sheet books
+	// that slot for the same row, so there is no beat budget to compare against.
+	//
+	// This is an exclusion, NOT a proof the two agree: `minMinutes` and
+	// `maxMinutes` are independently optional, so a slot with Min 5 and Max
+	// blank projects "Time: 5 minutes" while the timeline books
+	// `maxMinutes ?? DEFAULT_SPEAKER_MINUTES` = 7 for the same row, shifting
+	// every later printed row's clock. Pre-existing and out of scope here;
+	// closing it means coupling the two fields at the edit surface, not
+	// comparing a slide to a beat.
 	speech: null,
 	evaluation: "evaluation",
 	evaluatorEvaluation: "evaluatorEvaluation",
