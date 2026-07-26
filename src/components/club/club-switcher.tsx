@@ -20,8 +20,11 @@ export interface SwitcherClub {
  * Header control (issue #10) that lets a member who belongs to several clubs
  * pick which one the workspace acts in. Renders nothing when the user has a
  * single club — the common case needs no chrome. Selecting a club persists the
- * choice server-side, then invalidates the router so every loader re-runs with
- * the new active club (no client-side wrong-club flash on reload).
+ * choice server-side, then leaves the page you were on for the club home (#378):
+ * most pages are identified by the OLD club (`/club/$clubId/*` has it in the
+ * url, `/meetings/$id` and `/members/$id` belong to it, admin routes resolve it
+ * through `effectiveAdminClub`), so re-rendering them under a new active club
+ * is the "weird things" the issue reports.
  */
 export function ClubSwitcher({
 	clubs,
@@ -46,6 +49,17 @@ export function ClubSwitcher({
 		try {
 			await setActiveClub({ data: { clubId } });
 			setOpen(false);
+			// `/` owns the role-aware landing decision (officer → /officers, else
+			// → /roster, #255) — don't duplicate it here. `replace` keeps Back from
+			// bouncing the user onto the previous club's page with the new club
+			// active, which is the same bug via history.
+			await router.navigate({ to: "/", replace: true });
+			// Still needed after the navigation, and only after it: when the club
+			// home IS the page you were already on, the destination match is
+			// reused and its loader does not re-run on its own (staleTime 0 only
+			// reloads a match that's newly entered), so it would keep the previous
+			// club's data. Invalidating first would instead re-run the OLD url's
+			// loaders under the NEW active club — the bug this fixes.
 			await router.invalidate();
 		} finally {
 			setBusy(false);
