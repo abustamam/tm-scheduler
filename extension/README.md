@@ -3,6 +3,23 @@
 Pulls your club's Base Camp Pathways progress and pushes it to GavelUp in one click.
 Built with [WXT](https://wxt.dev). Chromium (Chrome/Edge/Brave) and Firefox.
 
+> ### Internal only — not part of the commercial product
+>
+> **[ADR-0025](../docs/adr/0025-no-automated-basecamp-sync-in-commercial-product.md)** (#383): this
+> extension is unlisted and internal, for the maintainer's own clubs. It is **not** published to
+> the Chrome Web Store, not advertised to customers, and not supported for them. Customer-facing
+> Base Camp import is the manual paste at `/admin/pathways-sync`.
+>
+> Read the ADR before shipping this anywhere. The short version: store review is the binding
+> constraint (broad host permissions on a third party's authenticated domain + user-data
+> collection + transmission to a first-party server), per-user install is an onboarding cliff in
+> front of a paid feature, TI's release cycle becomes our SLA, and processing member PII *on behalf
+> of* clubs is a different legal role than reading your own. Using this on your own clubs is fine;
+> distributing it to paying customers is a different thing and needs the decision reopened.
+>
+> Nothing here is deprecated — `sync_tokens`, `/api/pathways/ingest` and the `bcm_project_progress`
+> mirror all stay, and are what would be reused if TI ever grants API access.
+
 ## Develop
 
 ```bash
