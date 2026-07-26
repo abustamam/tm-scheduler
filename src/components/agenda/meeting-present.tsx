@@ -28,8 +28,10 @@ const GOLD = "#f3dd94";
 const NAVY_GRADIENT_TOP = "#0a4f78";
 const NAVY_GRADIENT_BOTTOM = "#002a41";
 
-/** Overview grid width. Fixed rather than responsive so ↑/↓ can move by exactly
- *  one row — a presenter remote sends nothing but arrows. */
+/** Overview grid width. Fixed rather than responsive so ↑/↓ move by exactly one
+ *  row, and so the row arithmetic lives in one place the tests can pin. Row
+ *  moves are keyboard-only on purpose: the presenter remotes this feature exists
+ *  for have no ↑/↓ at all — see the key map in the overview branch of `onKey`. */
 const OVERVIEW_COLUMNS = 4;
 
 /** The name a slide answers to in the overview: the same header the audience
@@ -86,28 +88,39 @@ export function MeetingPresent({
 				return;
 			}
 			if (overview) {
-				// The overview answers to the same keys the deck does, because a
-				// presenter remote sends nothing else: arrows browse the grid,
-				// space/enter commits, b/o/escape backs out unchanged.
-				if (
-					k === "Escape" ||
-					k === "b" ||
-					k === "B" ||
-					k === "o" ||
-					k === "O"
-				) {
+				// The key map is built for the hardware, not the laptop. A Logitech
+				// R400/R800 — and the clones that copy it — sends PageDown/PageUp for
+				// forward/back, `b` for blank screen, and F5/Esc off the start/stop
+				// button. No Enter, no Space, no ↑/↓. So:
+				//   · PageDown/PageUp keep the meaning they carry on the deck (±1
+				//     slide), applied to the cursor. ←/→ are the same move.
+				//   · ↑/↓ move a whole row. Keyboard-only, by necessity.
+				//   · `b`/`o` — the only button the remote has left — commits, which
+				//     is what makes the grid usable from the back of the room.
+				// Commit is safe as the single "done" key because `openOverview` seeds
+				// the cursor to the current slide: open and close without moving and
+				// the jump is to where you already were, i.e. an unchanged close. To
+				// back out AFTER browsing, discard the cursor with Escape or the ✕.
+				// Escape stays bound for muscle memory but is deliberately absent from
+				// the on-screen hint: a browser leaves fullscreen on Escape whatever
+				// `preventDefault` says, so telling a presenter it is the safe dismiss
+				// would drop the projector to the desktop mid-meeting.
+				if (k === "Escape") {
 					e.preventDefault();
 					setOverview(false);
-				} else if (k === "ArrowRight") {
+				} else if (k === "b" || k === "B" || k === "o" || k === "O") {
+					e.preventDefault();
+					jumpTo(cursor);
+				} else if (k === "ArrowRight" || k === "PageDown") {
 					e.preventDefault();
 					setCursor((c) => Math.min(c + 1, last));
-				} else if (k === "ArrowLeft") {
+				} else if (k === "ArrowLeft" || k === "PageUp") {
 					e.preventDefault();
 					setCursor((c) => Math.max(c - 1, 0));
-				} else if (k === "ArrowDown" || k === "PageDown") {
+				} else if (k === "ArrowDown") {
 					e.preventDefault();
 					setCursor((c) => Math.min(c + OVERVIEW_COLUMNS, last));
-				} else if (k === "ArrowUp" || k === "PageUp") {
+				} else if (k === "ArrowUp") {
 					e.preventDefault();
 					setCursor((c) => Math.max(c - OVERVIEW_COLUMNS, 0));
 				} else if (k === "Enter" || k === " ") {
@@ -185,14 +198,23 @@ export function MeetingPresent({
 			    It doubles as the overview's mouse affordance: the counter already
 			    reads "where am I in the deck", so making it clickable adds the
 			    "take me somewhere else" answer without putting a single new pixel
-			    on the projection (#360). */}
+			    on the projection (#360).
+
+			    Deliberately NOT z-20. The offline banner (#361) is mounted inside
+			    the z-20 top-right cluster and pins itself top-center; a second
+			    z-20 sibling later in the DOM wins the tie and paints this pill
+			    straight across "Offline · showing the agenda as of …" — the one
+			    message a presenter on a dropped wifi needs to read. Leaving it
+			    unlayered puts it back under the banner. It stays clickable: the
+			    invisible prev/next zones (z-10) are the left/right quarters and a
+			    centered pill this narrow never reaches them. */}
 			<button
 				type="button"
 				onClick={openOverview}
 				title="Jump to a slide (B)"
 				aria-label={`Slide ${i + 1} of ${deck.length} — jump to a slide`}
 				aria-haspopup="dialog"
-				className="absolute top-[2vmin] left-1/2 z-20 -translate-x-1/2 cursor-pointer rounded-full bg-black/35 px-[1.4vmin] py-[0.3vmin] text-[1.6vmin] text-white/90 tabular-nums"
+				className="absolute top-[2vmin] left-1/2 -translate-x-1/2 cursor-pointer rounded-full bg-black/35 px-[1.4vmin] py-[0.3vmin] text-[1.6vmin] text-white/90 tabular-nums"
 			>
 				{i + 1} / {deck.length}
 			</button>
@@ -247,12 +269,18 @@ function SlideOverview({
 			<div className="flex items-center justify-between gap-[2vmin]">
 				<div className="text-[2.4vmin] font-extrabold">Jump to a slide</div>
 				<div className="flex items-center gap-[2vmin]">
+					{/* Never advertise Escape here. It closes the overview, but it is
+					    also a browser-level fullscreen exit that `preventDefault`
+					    cannot cancel, so a presenter who follows this hint drops the
+					    projector to the tab strip and the OS taskbar in front of the
+					    room. B is both the way out and the way to commit, and it is
+					    the one the remote in their hand can actually press. */}
 					<span className="text-[1.5vmin] text-white/60">
-						← → browse · Enter go · Esc close
+						← → browse · B or Enter go · ✕ cancel
 					</span>
 					<button
 						type="button"
-						aria-label="Close the slide list"
+						aria-label="Cancel and stay on the current slide"
 						onClick={onClose}
 						className="rounded-full bg-white/10 p-[1vmin] text-white/80 hover:bg-white/20"
 					>

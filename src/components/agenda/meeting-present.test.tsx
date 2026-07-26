@@ -39,6 +39,17 @@ const deck: Slide[] = [
 	},
 ];
 
+/** Ten slides — enough rows for ↑/↓ to have somewhere to go in a 4-wide grid. */
+const longDeck: Slide[] = Array.from({ length: 10 }, (_, n) => ({
+	kind: "speech",
+	label: `Section ${n + 1}`,
+	speaker: "Jane Doe",
+	title: null,
+	projectLevel: null,
+	time: "5–7 min",
+	link: null,
+}));
+
 function clickNext() {
 	fireEvent.click(screen.getByLabelText("Next slide"));
 }
@@ -200,6 +211,97 @@ describe("MeetingPresent", () => {
 			press("Escape");
 
 			expect(onExit).toHaveBeenCalledTimes(1);
+		});
+
+		// The hardware this feature exists for: a Logitech R400/R800 and its clones
+		// send PageDown/PageUp for forward/back and `b` for blank — no Enter, no
+		// Space, no ↑/↓. If those three keys do the wrong thing in the overview, the
+		// presenter at the back of the room walks to the laptop, which is the exact
+		// failure #360 exists to eliminate.
+		describe("driven from a presenter remote", () => {
+			it("moves the highlight one slide on PageDown/PageUp, not one row", () => {
+				render(<MeetingPresent deck={longDeck} clubName={CLUB_NAME} />);
+				press("b");
+				press("PageDown");
+				press("PageDown");
+				// Still parked on slide 1 — the remote moved the highlight, not the
+				// projection.
+				expect(screen.getByText("1 / 10")).toBeTruthy();
+				press("Enter");
+
+				// 1 + 1 + 1. A row-sized PageDown would have landed on slide 9 and
+				// left slides 2–4 unreachable from the remote entirely.
+				expect(screen.getByText("3 / 10")).toBeTruthy();
+			});
+
+			it("commits on `b` — the only button the remote has left", () => {
+				render(<MeetingPresent deck={longDeck} clubName={CLUB_NAME} />);
+				press("b");
+				press("PageDown");
+				press("PageDown");
+				press("b");
+
+				expect(overview()).toBeNull();
+				expect(screen.getByText("3 / 10")).toBeTruthy();
+			});
+
+			it("is an unchanged close when `b` is pressed without moving the highlight", () => {
+				render(<MeetingPresent deck={deck} clubName={CLUB_NAME} />);
+				clickNext(); // -> slide 2
+				press("b");
+				press("b");
+
+				// The cursor is seeded to the current slide, so committing it is the
+				// same thing as backing out — b-b is a safe peek.
+				expect(overview()).toBeNull();
+				expect(screen.getByText("2 / 4")).toBeTruthy();
+			});
+
+			it("keeps Space, PageDown and PageUp off the deck while the overview is open", () => {
+				render(<MeetingPresent deck={deck} clubName={CLUB_NAME} />);
+				press("b");
+				press("PageDown");
+				press("PageUp"); // net zero on the cursor
+				expect(screen.getByText("1 / 4")).toBeTruthy();
+				expect(overview()).toBeTruthy();
+
+				press(" "); // commits the (unmoved) cursor and closes
+
+				// Space must not ALSO have reached the deck's next(); an early
+				// `return` in the overview branch is the only thing stopping it.
+				expect(overview()).toBeNull();
+				expect(screen.getByText("1 / 4")).toBeTruthy();
+			});
+
+			it("never tells the presenter to press Escape — that drops the projector out of fullscreen", () => {
+				render(<MeetingPresent deck={deck} clubName={CLUB_NAME} />);
+				press("b");
+
+				const panel = overview() as HTMLElement;
+				expect(panel.textContent).not.toMatch(/esc/i);
+				expect(panel.textContent).toContain("B or Enter go");
+			});
+		});
+
+		it("moves the highlight one whole row at a time on ↑/↓", () => {
+			render(<MeetingPresent deck={longDeck} clubName={CLUB_NAME} />);
+			press("b");
+			press("ArrowDown");
+			press("Enter");
+			// One row down from slide 1 in the 4-wide grid. This is the only reason
+			// OVERVIEW_COLUMNS exists — it cannot be changed with a green suite.
+			expect(screen.getByText("5 / 10")).toBeTruthy();
+
+			press("b");
+			press("ArrowUp");
+			press("Enter");
+			expect(screen.getByText("1 / 10")).toBeTruthy();
+
+			// And ↑ clamps at the top rather than wrapping to the end of the deck.
+			press("b");
+			press("ArrowUp");
+			press("Enter");
+			expect(screen.getByText("1 / 10")).toBeTruthy();
 		});
 	});
 });
