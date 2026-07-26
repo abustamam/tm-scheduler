@@ -11,19 +11,32 @@ helps you finish strong.
 - **Amber (yellow)** — you're near the end. Start wrapping up your point.
 - **Red** — you've hit the *maximum* time. Bring your remarks to a close now.
 
-After red, most clubs allow a grace period (often 30 seconds) before a speaker is
-disqualified from voting or, in a contest, from the results.
+## The 30-second grace period
+
+The colors are guidance; the **qualifying window** is the rule. A speech
+qualifies from **30 seconds before green** through **30 seconds after red** —
+half a minute of grace at each end. Finish outside that window and the speech is
+disqualified from the vote (and, in a contest, from the results).
+
+So a 5–7 minute speech qualifies anywhere between **4:30 and 7:30**. Green at
+5:00 and red at 7:00 are still the times to aim for — the grace period is what
+the Timer uses to decide whether a speech counts, not a licence to run long.
 
 ## Typical timing windows
 
 Exact times vary by segment and are set by your club — or, for contests, by the
 official rulebook — but the common defaults are:
 
-| Segment | Green | Amber | Red |
-| --- | --- | --- | --- |
-| Prepared speech | 5:00 | 6:00 | 7:00 |
-| Evaluation | 2:00 | 2:30 | 3:00 |
-| Table Topics answer | 1:00 | 1:30 | 2:00 |
+| Segment | Green | Amber | Red | Qualifies between |
+| --- | --- | --- | --- | --- |
+| Ice Breaker | 4:00 | 5:00 | 6:00 | 3:30 – 6:30 |
+| Prepared speech | 5:00 | 6:00 | 7:00 | 4:30 – 7:30 |
+| Evaluation | 2:00 | 2:30 | 3:00 | 1:30 – 3:30 |
+| Table Topics answer | 1:00 | 1:30 | 2:00 | 0:30 – 2:30 |
+
+Your printed agenda shows the same thing for the speeches actually on it: the
+green·amber·red trio next to each speaker, and the qualifying window in the
+timing key.
 
 ## A tip for speakers
 

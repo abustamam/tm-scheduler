@@ -10,6 +10,12 @@
 import type { TimelineRow } from "#/lib/agenda-timing";
 import { announcementLines } from "#/lib/announcement-lines";
 import {
+	firstQualifyingWindow,
+	formatTimingClock,
+	graceNote,
+	graceSentence,
+} from "#/lib/timing-window";
+import {
 	AMBER,
 	DarkFooter,
 	FitPage,
@@ -77,12 +83,9 @@ type Props = {
 	rows: TimelineRow[];
 };
 
-/** minutes (e.g. 6.5) → "6:30" for the timing marks. */
-function mark(minutes: number): string {
-	const whole = Math.floor(minutes);
-	const secs = Math.round((minutes - whole) * 60);
-	return `${whole}:${String(secs).padStart(2, "0")}`;
-}
+/** minutes (e.g. 6.5) → "6:30" for the timing marks. Shared with the grace
+ *  window (#357) so a mark and its window always read in the same units. */
+const mark = formatTimingClock;
 
 /** The green·amber·red timing marks for one beat, rendered inline and colored.
  *  Shared by the one-page layouts (editorial + grid) so their per-speaker
@@ -113,9 +116,16 @@ function TimingTrio({
 	);
 }
 
-/** A compact one-line green/amber/red key for the one-page layouts (the full
- *  "Timing Signals" callout only exists on the 2-page timing layout). */
-function TimingLegend() {
+/** The compact green/amber/red key for the one-page layouts (the full "Timing
+ *  Signals" callout only exists on the 2-page timing layout).
+ *
+ *  Second line (#357) states the 30-second grace period — the window the Timer
+ *  actually judges by — in concrete clock values taken from the first timed
+ *  beat on THIS agenda, so a club running 4–6 minute speeches reads its own
+ *  numbers. Deliberately 8px and right-aligned: the one-pagers are one page by
+ *  design, and `FitPage` scales the sheet down rather than spilling, so the key
+ *  stays as small as it can while still teaching the rule. */
+function TimingLegend({ rows }: { rows: TimelineRow[] }) {
 	const dot = (color: string, label: string) => (
 		<span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
 			<span
@@ -133,10 +143,38 @@ function TimingLegend() {
 		</span>
 	);
 	return (
-		<div style={{ display: "flex", gap: 14, alignItems: "center" }}>
-			{dot(GREEN, "Min reached")}
-			{dot(AMBER, "Approaching")}
-			{dot(RED, "Wrap up")}
+		<div
+			style={{
+				display: "flex",
+				flexDirection: "column",
+				alignItems: "flex-end",
+				gap: 2,
+			}}
+		>
+			<div style={{ display: "flex", gap: 14, alignItems: "center" }}>
+				{dot(GREEN, "Min reached")}
+				{dot(AMBER, "Approaching")}
+				{dot(RED, "Wrap up")}
+			</div>
+			<div
+				style={{
+					// 9.5px, not the 8px used elsewhere on this sheet: FitPage
+					// scales the whole page, so 8px lands at ~5.25pt on the grid
+					// layout and ~4.6pt on editorial — below every other piece of
+					// CONTENT there, and lower still (≈4.2pt) on a denser agenda,
+					// since the scale is recomputed per agenda. The other 8px uses
+					// are short uppercase labels; this is 52 characters of running
+					// prose that has to be readable to teach the rule at all.
+					// Costs ~2px of height, which FitPage absorbs.
+					fontSize: 9.5,
+					color: MUTED,
+					fontWeight: 600,
+					textAlign: "right",
+					lineHeight: 1.3,
+				}}
+			>
+				{graceNote(firstQualifyingWindow(rows))}
+			</div>
 		</div>
 	);
 }
@@ -592,7 +630,7 @@ function EditorialLayout({
 						}}
 					>
 						<Kick>Run of Show</Kick>
-						<TimingLegend />
+						<TimingLegend rows={rows} />
 					</div>
 					<RunNarrative rows={rows} scale="sm" timingColors />
 				</div>
@@ -698,7 +736,7 @@ function GridLayout({
 					}}
 				>
 					<Kick>Run of Show</Kick>
-					<TimingLegend />
+					<TimingLegend rows={rows} />
 				</div>
 				<div
 					style={{
@@ -1257,8 +1295,6 @@ function TimingLayout({
 					<Kick style={{ marginBottom: 7 }}>Timing Signals</Kick>
 					<div
 						style={{
-							display: "flex",
-							gap: 22,
 							background: MINT,
 							border: "1px solid rgba(23,58,64,.1)",
 							borderRadius: 10,
@@ -1266,9 +1302,29 @@ function TimingLayout({
 							marginBottom: 20,
 						}}
 					>
-						<Signal color={GREEN} label="Green" text="minimum time reached" />
-						<Signal color={AMBER} label="Amber" text="approaching the target" />
-						<Signal color={RED} label="Red" text="maximum; please conclude" />
+						<div style={{ display: "flex", gap: 22 }}>
+							<Signal color={GREEN} label="Green" text="minimum time reached" />
+							<Signal
+								color={AMBER}
+								label="Amber"
+								text="approaching the target"
+							/>
+							<Signal color={RED} label="Red" text="maximum; please conclude" />
+						</div>
+						{/* #357 — the grace period the Timer judges qualification by, spelled
+						    out with this agenda's own numbers. */}
+						<div
+							style={{
+								marginTop: 10,
+								paddingTop: 9,
+								borderTop: "1px solid rgba(23,58,64,.1)",
+								fontSize: 10.5,
+								lineHeight: 1.4,
+								color: MUTED,
+							}}
+						>
+							{graceSentence(firstQualifyingWindow(rows))}
+						</div>
 					</div>
 
 					{officers.length > 0 ? (

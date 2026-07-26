@@ -73,7 +73,66 @@ describe("MeetingAgendaPrint one-page timing", () => {
 			expect(screen.getByText("Approaching")).toBeTruthy();
 			expect(screen.getByText("Wrap up")).toBeTruthy();
 		});
+
+		// #357 — the grace period, with this agenda's own numbers (4:00–6:00 ⇒
+		// qualifies 3:30–6:30), not a hardcoded 5–7 example.
+		it(`states the 30-second grace window on the ${layout} one-pager`, () => {
+			renderLayout(layout);
+			expect(
+				screen.getByText(
+					"±0:30 grace — e.g. a 4:00–6:00 speech qualifies 3:30–6:30",
+				),
+			).toBeTruthy();
+		});
+
+		it(`falls back to the bare grace rule on the ${layout} one-pager when nothing is timed`, () => {
+			render(
+				<MeetingAgendaPrint
+					layout={layout}
+					header={header}
+					roles={[{ label: "Toastmaster", name: "Lee P." }]}
+					officers={[]}
+					explainers={[]}
+					rows={rows.map((r) => ({ ...r, marks: null }))}
+				/>,
+			);
+			expect(
+				screen.getByText(
+					"±0:30 grace — 0:30 before green through 0:30 after red",
+				),
+			).toBeTruthy();
+		});
 	}
+});
+
+// #357 — the two-page timing layout has room to spell the rule out in full.
+describe("MeetingAgendaPrint timing-signals callout", () => {
+	it("states the qualifying window in the Timing Signals callout", () => {
+		renderLayout("timing");
+		expect(
+			screen.getByText(
+				"A speech qualifies from 0:30 before green through 0:30 after red — a 4:00–6:00 speech qualifies between 3:30 and 6:30.",
+			),
+		).toBeTruthy();
+	});
+
+	it("still states the rule when no beat is timed", () => {
+		render(
+			<MeetingAgendaPrint
+				layout="timing"
+				header={header}
+				roles={[{ label: "Toastmaster", name: "Lee P." }]}
+				officers={[]}
+				explainers={[]}
+				rows={rows.map((r) => ({ ...r, marks: null }))}
+			/>,
+		);
+		expect(
+			screen.getByText(
+				"A speech qualifies from 0:30 before green through 0:30 after red.",
+			),
+		).toBeTruthy();
+	});
 });
 
 describe("MeetingAgendaPrint announcements", () => {

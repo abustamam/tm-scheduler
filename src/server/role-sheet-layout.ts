@@ -18,6 +18,11 @@ import { Document, Page, StyleSheet, Text, View } from "@react-pdf/renderer";
 import { createElement as h, type ReactNode } from "react";
 import type { RoleSheetKey } from "../data/role-sheets";
 import { TOASTMASTERS_DISCLAIMER } from "../lib/brand";
+import {
+	formatTimingClock,
+	graceSentence,
+	qualifyingWindow,
+} from "../lib/timing-window";
 
 // Re-export the client-safe registry so `scripts/build-role-sheets.ts` (which
 // renders every sheet) can pull the list + builder from one import.
@@ -271,6 +276,34 @@ function sheet(
 
 // ---- The five sheets -------------------------------------------------------
 
+/**
+ * The standard assignment windows printed on the Timer's sheet, held as MINUTES
+ * so every printed column is derived rather than transcribed (#357): amber is
+ * the midpoint, and the qualifying window is the 30-second grace either side.
+ */
+const STANDARD_TIMING_WINDOWS: {
+	assignment: string;
+	min: number;
+	max: number;
+}[] = [
+	{ assignment: "Ice Breaker", min: 4, max: 6 },
+	{ assignment: "Prepared speech", min: 5, max: 7 },
+	{ assignment: "Evaluation", min: 2, max: 3 },
+	{ assignment: "Table Topics", min: 1, max: 2 },
+];
+
+/** The Timer sheet's "Standard timing windows" table rows, as printed:
+ *  assignment · green · amber · red · qualifying window. */
+export function standardTimingRows(): string[][] {
+	return STANDARD_TIMING_WINDOWS.map(({ assignment, min, max }) => [
+		assignment,
+		formatTimingClock(min),
+		formatTimingClock((min + max) / 2),
+		formatTimingClock(max),
+		qualifyingWindow(min, max)?.range ?? "",
+	]);
+}
+
 function timer(fill?: RoleSheetFill): ReactNode {
 	return sheet(
 		"Timer's log",
@@ -291,14 +324,15 @@ function timer(fill?: RoleSheetFill): ReactNode {
 						{ label: "Green (min)", flex: 1, color: C.green },
 						{ label: "Amber", flex: 1, color: C.amber },
 						{ label: "Red (max)", flex: 1, color: C.red },
+						{ label: "Qualifies", flex: 1.6 },
 					],
-					[
-						["Ice Breaker", "4:00", "5:00", "6:00"],
-						["Prepared speech", "5:00", "6:00", "7:00"],
-						["Evaluation", "2:00", "2:30", "3:00"],
-						["Table Topics", "1:00", "1:30", "2:00"],
-					],
+					standardTimingRows(),
 				),
+			),
+			h(
+				Text,
+				{ key: "c-grace", style: [s.note, { marginTop: 6 }] },
+				`${graceSentence(null)} Outside that window the speech is disqualified from the vote — call it out in your report.`,
 			),
 			h(Text, { key: "d", style: s.sectionTitle }, "Timing log"),
 			h(
