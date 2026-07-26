@@ -260,6 +260,14 @@ function BodyView({
 						{`“${body.example}”`}
 					</div>
 				) : null}
+				{body.presenter ? (
+					<div
+						className="mt-[3.4cqw] text-[2.2cqw] leading-snug"
+						style={{ color: MUTED }}
+					>
+						{body.presenter}
+					</div>
+				) : null}
 			</div>
 		);
 	}

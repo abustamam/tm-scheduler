@@ -22,6 +22,7 @@ const deck: Slide[] = [
 		word: "Serendipity",
 		definition: "A fortunate happenstance.",
 		example: "Meeting my mentor was pure serendipity.",
+		presenter: { role: "Grammarian", name: "Mona" },
 	},
 	{ kind: "voteSpeaker", names: ["Jane Doe"], hasTimer: true },
 	{
@@ -59,6 +60,13 @@ describe("MeetingPresent", () => {
 
 		// The club name now lives in the footer, not a running per-slide header.
 		expect(screen.getAllByText(CLUB_NAME).length).toBeGreaterThanOrEqual(1);
+	});
+
+	it("credits the Grammarian on the Word of the Day slide (#354)", () => {
+		render(<MeetingPresent deck={deck} clubName={CLUB_NAME} />);
+		clickNext(); // -> wordOfDay
+
+		expect(screen.getByText("Presented by the Grammarian · Mona")).toBeTruthy();
 	});
 
 	it("shows the Toastmasters non-affiliation disclaimer in the content-slide footer", () => {

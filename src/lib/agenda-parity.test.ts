@@ -105,8 +105,15 @@ const SECTION_BY_SLIDE = {
 	// which roles the club runs, so it has no beat of its own; beat 3 is the
 	// Toastmaster opening, which maps to the `toastmaster` slide below.
 	toastmasterIntro: null,
-	// The standalone Word-of-the-Day slide. Content-gated like the above (needs a
-	// definition or example). #354 may move it; deliberately not compared.
+	// The standalone Word-of-the-Day slide. #354 moved it out of the General
+	// Evaluator's stretch and into the Toastmaster's opening, immediately after
+	// `toastmasterIntro` — but it stays excluded for the reason it always was:
+	// its gate is MEETING CONTENT (a word plus a definition or example), not
+	// which roles the club runs, so no beat corresponds to it. The Grammarian it
+	// now credits changes the slide's COPY, never whether it exists, so the
+	// exclusion still holds after the move. What the run sheet does say about
+	// the word is beat 4's "each explains their role" and beat 7's Table Topics
+	// detail — neither is a Word-of-the-Day section of its own.
 	wordOfDay: null,
 	// Gated on which scored segments exist — and so is beat 14, as of #372.
 	awards: "awards",

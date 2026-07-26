@@ -144,6 +144,80 @@ describe("buildSlideDeck toastmaster intro + word of the day", () => {
 	it("omits toastmasterIntro when neither theme nor WOD is set", () => {
 		expect(build().some((s) => s.kind === "toastmasterIntro")).toBe(false);
 	});
+
+	it("sits with the Toastmaster's opening, BEFORE the functionary intro (#354)", () => {
+		// The word, its definition and its example land together up front, where
+		// the room can use them — not stranded several beats later, after the
+		// functionaries have been introduced.
+		expect(
+			build({
+				meeting: {
+					...meeting,
+					theme: "Unity",
+					wordOfTheDay: "Synergy",
+					wodDefinition: "cooperation",
+				},
+				slots: [tmod, grammarian],
+			}).map((s) => s.kind),
+		).toEqual([
+			"title",
+			"toastmaster",
+			"toastmasterIntro",
+			"wordOfDay",
+			"functionaryIntro",
+			"thankYou",
+		]);
+	});
+});
+
+/**
+ * The Grammarian presents the Word of the Day (#354). The slide sits inside the
+ * Toastmaster's opening, so it has to say whose it is — otherwise its position
+ * implies the Toastmaster (or, under MCF's variant, the General Evaluator)
+ * delivers it.
+ */
+describe("buildSlideDeck word of the day presenter (#354)", () => {
+	const wodMeeting: MeetingForDeck = {
+		...meeting,
+		wordOfTheDay: "Synergy",
+		wodDefinition: "cooperation",
+	};
+	const wod = (slots: AgendaSlot[]) =>
+		build({ meeting: wodMeeting, slots }).find((s) => s.kind === "wordOfDay");
+
+	it("attributes the Grammarian and who holds the role", () => {
+		expect(wod([tmod, grammarian])).toMatchObject({
+			presenter: { role: "Grammarian", name: "Mona" },
+		});
+	});
+
+	it("shows the open placeholder when the Grammarian is unclaimed", () => {
+		expect(
+			wod([
+				tmod,
+				slot({ id: "gr", roleName: "Grammarian", assigneeName: null }),
+			]),
+		).toMatchObject({ presenter: { role: "Grammarian", name: "— open —" } });
+	});
+
+	it("uses the club's OWN name for a renamed Grammarian (#368)", () => {
+		expect(
+			wod([
+				tmod,
+				slot({
+					id: "gr",
+					roleKey: "grammarian",
+					roleName: "Wordsmith",
+					assigneeName: "Mona",
+				}),
+			]),
+		).toMatchObject({ presenter: { role: "Wordsmith", name: "Mona" } });
+	});
+
+	it("attributes nobody when the club does not run a Grammarian", () => {
+		// Better a bare word than crediting a role this club never configured.
+		expect(wod([tmod, timer])).toMatchObject({ presenter: null });
+	});
 });
 
 describe("buildSlideDeck speeches", () => {
@@ -735,9 +809,11 @@ describe("buildSlideDeck full meeting ordering", () => {
 		expect(build({ meeting: full, slots }).map((s) => s.kind)).toEqual([
 			"title",
 			"toastmaster",
+			// #354: the Word of the Day belongs to the Toastmaster's opening, not
+			// several beats downstream of the functionary intro.
 			"toastmasterIntro",
-			"functionaryIntro",
 			"wordOfDay",
+			"functionaryIntro",
 			"speech",
 			"speech",
 			"voteSpeaker",
