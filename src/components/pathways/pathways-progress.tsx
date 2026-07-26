@@ -226,8 +226,11 @@ function UpNext({
 					</div>
 				</div>
 			)}
+			{/* Not "it'll sync here": under ADR-0025 nothing syncs on its own — an
+			    officer runs it. Promising automatic updates would be false for every
+			    club on the commercial product. */}
 			<div className="text-muted-foreground text-xs">
-				Do it in Base Camp — it'll sync here.
+				Do it in Base Camp, then sync to see it here.
 			</div>
 		</div>
 	);
@@ -271,11 +274,22 @@ function PathBlock({ path }: { path: PathViewModel }) {
 export function PathwaysProgress({ paths }: { paths: PathViewModel[] }) {
 	const [active, setActive] = useState(paths[0]?.courseCode);
 
+	// Path enrollments only ever come from a Base Camp sync, and under ADR-0025
+	// most clubs will never run one — so for them this panel is permanently
+	// empty, not pending. "No Pathways synced yet" implied a sync was on its way.
+	// Say where the data comes from instead, and point at the record that does
+	// exist without a sync: the path + project captured on each speech.
 	if (paths.length === 0) {
 		return (
 			<Card>
-				<CardContent className="text-muted-foreground text-sm">
-					No Pathways synced yet.
+				<CardContent className="flex flex-col gap-1 text-muted-foreground text-sm">
+					<span>
+						This panel is built from Base Camp, which this club hasn't synced.
+					</span>
+					<span className="text-xs">
+						Pathways paths and projects recorded on individual speeches still
+						show up with those speeches.
+					</span>
 				</CardContent>
 			</Card>
 		);

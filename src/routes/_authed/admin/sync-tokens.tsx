@@ -63,9 +63,20 @@ function SyncTokens() {
 				<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
 					Base Camp sync tokens
 				</h1>
+				{/* ADR-0025: the extension is internal-only and unlisted, so this page
+				    can't present it as something an officer can go install. Tokens
+				    still work and still authenticate /api/pathways/ingest. */}
 				<p className="text-sm text-muted-foreground">
-					Tokens let the Pathways sync browser extension push {adminClub.name}'s
+					Tokens authenticate a Pathways sync client pushing {adminClub.name}'s
 					Base Camp progress into GavelUp. Treat a token like a password.
+				</p>
+				<p className="text-sm text-muted-foreground">
+					The sync browser extension isn't distributed — to bring progress in,
+					use{" "}
+					<a className="underline" href="/admin/pathways-sync">
+						Manual Pathways sync
+					</a>
+					.
 				</p>
 			</div>
 

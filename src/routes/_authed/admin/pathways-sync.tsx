@@ -75,13 +75,13 @@ function PathwaysSync() {
 						array of multiple pages.
 					</li>
 				</ol>
+				{/* Was a pitch for the one-click browser extension. ADR-0025 makes
+				    the extension internal-only and unlisted, so this page is the
+				    supported route — it must not advertise something customers can't
+				    get. */}
 				<p className="text-xs text-muted-foreground">
-					Prefer one click? Generate a token on the{" "}
-					<a className="underline" href="/admin/sync-tokens">
-						Base Camp sync tokens
-					</a>{" "}
-					page and install the sync browser extension. This manual paste stays
-					as a fallback.
+					This is the supported way to bring Base Camp progress in. There's no
+					automatic sync — pull it whenever you want the numbers refreshed.
 				</p>
 			</div>
 
