@@ -12,6 +12,7 @@ import {
 	buildRoleSheetDoc,
 	type RoleSheetFill,
 	roleSheetByKey,
+	standardTimingRows,
 } from "./role-sheet-layout";
 
 const fill: RoleSheetFill = {
@@ -56,5 +57,37 @@ describe("role-sheet layout (#311)", () => {
 	it("resolves known keys and rejects unknown ones", () => {
 		expect(roleSheetByKey("timer")?.title).toBe("Timer's log");
 		expect(roleSheetByKey("nope")).toBeUndefined();
+	});
+});
+
+// #357 — the Timer needs the qualifying window, not just the signal times.
+describe("Timer sheet standard timing windows (#357)", () => {
+	const rows = standardTimingRows();
+
+	it("keeps the published green/amber/red times, deriving amber as the midpoint", () => {
+		expect(rows).toContainEqual([
+			"Prepared speech",
+			"5:00",
+			"6:00",
+			"7:00",
+			"4:30–7:30",
+		]);
+		expect(rows).toContainEqual([
+			"Evaluation",
+			"2:00",
+			"2:30",
+			"3:00",
+			"1:30–3:30",
+		]);
+	});
+
+	it("never prints a negative lower bound on a short assignment", () => {
+		expect(rows).toContainEqual([
+			"Table Topics",
+			"1:00",
+			"1:30",
+			"2:00",
+			"0:30–2:30",
+		]);
 	});
 });
