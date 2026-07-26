@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import {
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+	within,
+} from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Slide } from "#/lib/agenda-slides";
 import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
 import { MeetingPresent } from "./meeting-present";
@@ -35,6 +41,15 @@ const deck: Slide[] = [
 
 function clickNext() {
 	fireEvent.click(screen.getByLabelText("Next slide"));
+}
+
+function press(key: string) {
+	fireEvent.keyDown(window, { key });
+}
+
+/** The overview overlay, or null when it is closed. */
+function overview() {
+	return screen.queryByRole("dialog", { name: "Jump to a slide" });
 }
 
 describe("MeetingPresent", () => {
@@ -91,5 +106,100 @@ describe("MeetingPresent", () => {
 		clickNext(); // -> thankYou
 
 		expect(screen.getByText("Thank You")).toBeTruthy();
+	});
+
+	// #360 — arrowing through twenty slides in front of the room is not a
+	// navigation model. The overview must be invisible until asked for, so the
+	// projection is unchanged during normal use.
+	describe("slide overview (#360)", () => {
+		it("is hidden until it is invoked", () => {
+			render(<MeetingPresent deck={deck} clubName={CLUB_NAME} />);
+
+			expect(overview()).toBeNull();
+			// Nothing from a later slide is on screen either.
+			expect(screen.queryByText("Vote for Best Speaker")).toBeNull();
+		});
+
+		it("opens on `b` and lists every slide by its header", () => {
+			render(<MeetingPresent deck={deck} clubName={CLUB_NAME} />);
+			press("b");
+
+			const panel = overview();
+			expect(panel).toBeTruthy();
+			const items = within(panel as HTMLElement).getAllByRole("button", {
+				name: /^Slide \d+:/,
+			});
+			expect(items.map((b) => b.getAttribute("aria-label"))).toEqual([
+				`Slide 1: ${CLUB_NAME}`,
+				"Slide 2: Word of the Day",
+				"Slide 3: Vote for Best Speaker",
+				"Slide 4: Thank You",
+			]);
+		});
+
+		it("also opens on `o` and from the slide counter", () => {
+			render(<MeetingPresent deck={deck} clubName={CLUB_NAME} />);
+			press("o");
+			expect(overview()).toBeTruthy();
+			press("Escape");
+			expect(overview()).toBeNull();
+
+			fireEvent.click(screen.getByText("1 / 4"));
+			expect(overview()).toBeTruthy();
+		});
+
+		it("jumps straight to a chosen slide and closes", () => {
+			render(<MeetingPresent deck={deck} clubName={CLUB_NAME} />);
+			press("b");
+			fireEvent.click(
+				screen.getByRole("button", { name: "Slide 3: Vote for Best Speaker" }),
+			);
+
+			expect(overview()).toBeNull();
+			expect(screen.getByText("3 / 4")).toBeTruthy();
+			expect(screen.getByText("Please Vote for Best Speaker:")).toBeTruthy();
+		});
+
+		it("closes on Escape without changing position or exiting present mode", () => {
+			const onExit = vi.fn();
+			render(
+				<MeetingPresent deck={deck} clubName={CLUB_NAME} onExit={onExit} />,
+			);
+			clickNext(); // -> wordOfDay
+			press("b");
+			// Move the highlight around; Escape must still discard it.
+			press("ArrowRight");
+			press("ArrowRight");
+			press("Escape");
+
+			expect(overview()).toBeNull();
+			expect(screen.getByText("2 / 4")).toBeTruthy();
+			expect(screen.getByText("Word of the Day")).toBeTruthy();
+			// Escape closed the overview; it did not also leave the deck.
+			expect(onExit).not.toHaveBeenCalled();
+		});
+
+		it("navigates the overview with the arrow keys and commits on Enter", () => {
+			render(<MeetingPresent deck={deck} clubName={CLUB_NAME} />);
+			press("b");
+			press("ArrowRight");
+			press("ArrowRight");
+			// The deck itself has not moved while the overview is open.
+			expect(screen.getByText("1 / 4")).toBeTruthy();
+			press("Enter");
+
+			expect(overview()).toBeNull();
+			expect(screen.getByText("3 / 4")).toBeTruthy();
+		});
+
+		it("still exits present mode on Escape when the overview is closed", () => {
+			const onExit = vi.fn();
+			render(
+				<MeetingPresent deck={deck} clubName={CLUB_NAME} onExit={onExit} />,
+			);
+			press("Escape");
+
+			expect(onExit).toHaveBeenCalledTimes(1);
+		});
 	});
 });

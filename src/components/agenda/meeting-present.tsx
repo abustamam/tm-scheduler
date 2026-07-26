@@ -1,8 +1,10 @@
+import { X } from "lucide-react";
 import {
 	type ReactNode,
 	useCallback,
 	useEffect,
 	useLayoutEffect,
+	useMemo,
 	useRef,
 	useState,
 } from "react";
@@ -26,6 +28,18 @@ const GOLD = "#f3dd94";
 const NAVY_GRADIENT_TOP = "#0a4f78";
 const NAVY_GRADIENT_BOTTOM = "#002a41";
 
+/** Overview grid width. Fixed rather than responsive so ↑/↓ can move by exactly
+ *  one row — a presenter remote sends nothing but arrows. */
+const OVERVIEW_COLUMNS = 4;
+
+/** The name a slide answers to in the overview: the same header the audience
+ *  reads off it, straight from `slideLayout` — never a parallel naming scheme
+ *  that could drift from what is projected. */
+function slideLabel(slide: Slide): string {
+	const layout = slideLayout(slide);
+	return layout.chrome === "content" ? layout.header : layout.headline;
+}
+
 /** Full-screen, keyboard-driven slideshow. Read-only; position is local state. */
 export function MeetingPresent({
 	deck,
@@ -41,29 +55,86 @@ export function MeetingPresent({
 	offlineBadge?: ReactNode;
 }) {
 	const [i, setI] = useState(0);
+	// The overview is closed until asked for (#360): the meeting sees the deck
+	// and nothing else. `cursor` is the highlighted card while it is open —
+	// separate from `i` so browsing the list does not move the projection until
+	// the presenter commits.
+	const [overview, setOverview] = useState(false);
+	const [cursor, setCursor] = useState(0);
 	const last = deck.length - 1;
 	const next = useCallback(() => setI((n) => Math.min(n + 1, last)), [last]);
 	const prev = useCallback(() => setI((n) => Math.max(n - 1, 0)), []);
 
+	const openOverview = useCallback(() => {
+		setCursor(i);
+		setOverview(true);
+	}, [i]);
+	const jumpTo = useCallback((n: number) => {
+		setI(n);
+		setOverview(false);
+	}, []);
+
+	const labels = useMemo(() => deck.map(slideLabel), [deck]);
+
 	useEffect(() => {
 		function onKey(e: KeyboardEvent) {
-			if (e.key === "ArrowRight" || e.key === "PageDown" || e.key === " ") {
-				e.preventDefault();
-				next();
-			} else if (e.key === "ArrowLeft" || e.key === "PageUp") {
-				e.preventDefault();
-				prev();
-			} else if (e.key === "f" || e.key === "F") {
+			const k = e.key;
+			// Fullscreen is orthogonal to both modes.
+			if (k === "f" || k === "F") {
 				if (document.fullscreenElement) document.exitFullscreen();
 				else document.documentElement.requestFullscreen?.();
-			} else if (e.key === "Escape") {
+				return;
+			}
+			if (overview) {
+				// The overview answers to the same keys the deck does, because a
+				// presenter remote sends nothing else: arrows browse the grid,
+				// space/enter commits, b/o/escape backs out unchanged.
+				if (
+					k === "Escape" ||
+					k === "b" ||
+					k === "B" ||
+					k === "o" ||
+					k === "O"
+				) {
+					e.preventDefault();
+					setOverview(false);
+				} else if (k === "ArrowRight") {
+					e.preventDefault();
+					setCursor((c) => Math.min(c + 1, last));
+				} else if (k === "ArrowLeft") {
+					e.preventDefault();
+					setCursor((c) => Math.max(c - 1, 0));
+				} else if (k === "ArrowDown" || k === "PageDown") {
+					e.preventDefault();
+					setCursor((c) => Math.min(c + OVERVIEW_COLUMNS, last));
+				} else if (k === "ArrowUp" || k === "PageUp") {
+					e.preventDefault();
+					setCursor((c) => Math.max(c - OVERVIEW_COLUMNS, 0));
+				} else if (k === "Enter" || k === " ") {
+					e.preventDefault();
+					jumpTo(cursor);
+				}
+				return;
+			}
+			if (k === "ArrowRight" || k === "PageDown" || k === " ") {
+				e.preventDefault();
+				next();
+			} else if (k === "ArrowLeft" || k === "PageUp") {
+				e.preventDefault();
+				prev();
+			} else if (k === "b" || k === "B" || k === "o" || k === "O") {
+				// `b`/`o` is the presenter-tool convention (PowerPoint, Keynote,
+				// reveal.js all put the slide overview behind one of the two).
+				e.preventDefault();
+				openOverview();
+			} else if (k === "Escape") {
 				if (document.fullscreenElement) document.exitFullscreen();
 				else onExit?.();
 			}
 		}
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
-	}, [next, prev, onExit]);
+	}, [next, prev, onExit, overview, cursor, last, openOverview, jumpTo]);
 
 	const slide = deck[i];
 	const layout = slideLayout(slide);
@@ -109,9 +180,123 @@ export function MeetingPresent({
 			    Bottom-center would sit on the footer's centered trademark
 			    disclaimer; top-right holds the PPTX button, top-left the content
 			    header. The dark pill keeps it legible over both the light content
-			    ground and the dark splash. */}
-			<div className="absolute top-[2vmin] left-1/2 -translate-x-1/2 rounded-full bg-black/35 px-[1.4vmin] py-[0.3vmin] text-[1.6vmin] text-white/90 tabular-nums">
+			    ground and the dark splash.
+
+			    It doubles as the overview's mouse affordance: the counter already
+			    reads "where am I in the deck", so making it clickable adds the
+			    "take me somewhere else" answer without putting a single new pixel
+			    on the projection (#360). */}
+			<button
+				type="button"
+				onClick={openOverview}
+				title="Jump to a slide (B)"
+				aria-label={`Slide ${i + 1} of ${deck.length} — jump to a slide`}
+				aria-haspopup="dialog"
+				className="absolute top-[2vmin] left-1/2 z-20 -translate-x-1/2 cursor-pointer rounded-full bg-black/35 px-[1.4vmin] py-[0.3vmin] text-[1.6vmin] text-white/90 tabular-nums"
+			>
 				{i + 1} / {deck.length}
+			</button>
+
+			{overview ? (
+				<SlideOverview
+					labels={labels}
+					current={i}
+					cursor={cursor}
+					onPick={jumpTo}
+					onClose={() => setOverview(false)}
+				/>
+			) : null}
+		</div>
+	);
+}
+
+/** The jump-to-slide grid. Mounted only while open, so normal projection is
+ *  byte-for-byte what it was before. Everything it needs is already in memory
+ *  — no fetch, so it works from the service worker's cached bundle mid-meeting. */
+function SlideOverview({
+	labels,
+	current,
+	cursor,
+	onPick,
+	onClose,
+}: {
+	labels: string[];
+	current: number;
+	cursor: number;
+	onPick: (n: number) => void;
+	onClose: () => void;
+}) {
+	const cursorRef = useRef<HTMLButtonElement>(null);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: cursor re-points the ref rather than appearing in the body
+	useEffect(() => {
+		// Follow the highlight: focus keeps `aria-modal` honest (tab order starts
+		// inside the overview) and long decks scroll, so the keyboard cursor has
+		// to be brought on screen. Optional calls — jsdom leaves `scrollIntoView`
+		// undefined.
+		cursorRef.current?.focus?.({ preventScroll: true });
+		cursorRef.current?.scrollIntoView?.({ block: "nearest" });
+	}, [cursor]);
+
+	return (
+		<div
+			role="dialog"
+			aria-modal="true"
+			aria-label="Jump to a slide"
+			className="absolute inset-0 z-40 flex flex-col bg-black/95 px-[4vmin] py-[3vmin] text-white"
+		>
+			<div className="flex items-center justify-between gap-[2vmin]">
+				<div className="text-[2.4vmin] font-extrabold">Jump to a slide</div>
+				<div className="flex items-center gap-[2vmin]">
+					<span className="text-[1.5vmin] text-white/60">
+						← → browse · Enter go · Esc close
+					</span>
+					<button
+						type="button"
+						aria-label="Close the slide list"
+						onClick={onClose}
+						className="rounded-full bg-white/10 p-[1vmin] text-white/80 hover:bg-white/20"
+					>
+						<X className="size-[2vmin]" aria-hidden />
+					</button>
+				</div>
+			</div>
+			<div
+				className="mt-[2.5vmin] grid min-h-0 flex-1 auto-rows-min gap-[1.5vmin] overflow-y-auto"
+				style={{
+					gridTemplateColumns: `repeat(${OVERVIEW_COLUMNS}, minmax(0, 1fr))`,
+				}}
+			>
+				{labels.map((label, idx) => (
+					<button
+						// biome-ignore lint/suspicious/noArrayIndexKey: position IS the identity here — headers repeat (two "Speech Evaluation" slides)
+						key={idx}
+						ref={idx === cursor ? cursorRef : null}
+						type="button"
+						aria-label={`Slide ${idx + 1}: ${label}`}
+						aria-current={idx === current ? "true" : undefined}
+						onClick={() => onPick(idx)}
+						className="flex items-center gap-[1.4vmin] rounded-[1.2vmin] border px-[1.6vmin] py-[1.4vmin] text-left"
+						style={{
+							borderColor: idx === cursor ? GOLD : "rgba(255,255,255,.18)",
+							background:
+								idx === cursor
+									? "rgba(255,255,255,.14)"
+									: "rgba(255,255,255,.06)",
+						}}
+					>
+						<span
+							className="shrink-0 rounded-[0.8vmin] px-[1.1vmin] py-[0.3vmin] text-[1.6vmin] font-bold tabular-nums"
+							style={{
+								background: idx === current ? MAROON : "rgba(255,255,255,.12)",
+							}}
+						>
+							{idx + 1}
+						</span>
+						<span className="min-w-0 text-[1.9vmin] font-semibold leading-tight">
+							{label}
+						</span>
+					</button>
+				))}
 			</div>
 		</div>
 	);
