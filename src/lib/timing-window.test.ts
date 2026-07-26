@@ -110,7 +110,7 @@ describe("grace copy", () => {
 	it("makes the rule concrete when the agenda has a timed beat", () => {
 		const w = qualifyingWindow(5, 7);
 		expect(graceNote(w)).toBe(
-			"±0:30 grace — a 5:00–7:00 speech qualifies 4:30–7:30",
+			"±0:30 grace — e.g. a 5:00–7:00 speech qualifies 4:30–7:30",
 		);
 		expect(graceSentence(w)).toBe(
 			"A speech qualifies from 0:30 before green through 0:30 after red — a 5:00–7:00 speech qualifies between 4:30 and 7:30.",

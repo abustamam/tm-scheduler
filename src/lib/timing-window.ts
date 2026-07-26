@@ -100,8 +100,14 @@ export function firstQualifyingWindow(
 /** The compact one-line grace note for the one-page agenda keys, made concrete
  *  when the agenda has a timed beat and stating the bare rule when it doesn't. */
 export function graceNote(w: QualifyingWindow | null): string {
+	// "e.g." is load-bearing: the window comes from the FIRST timed beat, and an
+	// agenda can mix assignments (an Ice Breaker at 4–6 ahead of two 5–7
+	// speeches). Stated bare, a Timer reading the key would disqualify a 7:10
+	// prepared speech that actually qualifies — the exact error #357 exists to
+	// prevent. The "±0:30 grace" prefix is the rule; the numbers are one example
+	// of it, and each speaker's own trio is inches away on the same sheet.
 	return w
-		? `±0:30 grace — a ${w.assigned} speech qualifies ${w.range}`
+		? `±0:30 grace — e.g. a ${w.assigned} speech qualifies ${w.range}`
 		: "±0:30 grace — 0:30 before green through 0:30 after red";
 }
 

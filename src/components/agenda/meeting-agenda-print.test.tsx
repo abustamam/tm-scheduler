@@ -80,7 +80,7 @@ describe("MeetingAgendaPrint one-page timing", () => {
 			renderLayout(layout);
 			expect(
 				screen.getByText(
-					"±0:30 grace — a 4:00–6:00 speech qualifies 3:30–6:30",
+					"±0:30 grace — e.g. a 4:00–6:00 speech qualifies 3:30–6:30",
 				),
 			).toBeTruthy();
 		});

@@ -158,7 +158,15 @@ function TimingLegend({ rows }: { rows: TimelineRow[] }) {
 			</div>
 			<div
 				style={{
-					fontSize: 8,
+					// 9.5px, not the 8px used elsewhere on this sheet: FitPage
+					// scales the whole page, so 8px lands at ~5.25pt on the grid
+					// layout and ~4.6pt on editorial — below every other piece of
+					// CONTENT there, and lower still (≈4.2pt) on a denser agenda,
+					// since the scale is recomputed per agenda. The other 8px uses
+					// are short uppercase labels; this is 52 characters of running
+					// prose that has to be readable to teach the rule at all.
+					// Costs ~2px of height, which FitPage absorbs.
+					fontSize: 9.5,
 					color: MUTED,
 					fontWeight: 600,
 					textAlign: "right",
