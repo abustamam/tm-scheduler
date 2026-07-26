@@ -41,18 +41,18 @@ function PresentPage() {
 		geIntroducesFunctionaries: data.geIntroducesFunctionaries,
 	});
 	return (
-		<>
-			<OfflineBadge id={meetingId} />
-			<MeetingPresent
-				deck={deck}
-				clubName={data.clubName}
-				onExit={() =>
-					navigate({
-						to: "/club/$clubId/meeting/$meetingId",
-						params: { clubId, meetingId },
-					})
-				}
-			/>
-		</>
+		<MeetingPresent
+			deck={deck}
+			clubName={data.clubName}
+			// Rendered inside the deck's top-right chrome instead of floating over
+			// the slide (#361); the offline banner still pins itself top-center.
+			offlineBadge={<OfflineBadge id={meetingId} />}
+			onExit={() =>
+				navigate({
+					to: "/club/$clubId/meeting/$meetingId",
+					params: { clubId, meetingId },
+				})
+			}
+		/>
 	);
 }

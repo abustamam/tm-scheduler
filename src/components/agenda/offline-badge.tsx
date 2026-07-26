@@ -9,8 +9,18 @@ import { offlineVisitKey, relativeTime } from "#/lib/offline-status";
  * Online + cached → a quiet "Available offline" pill (trust, no action needed).
  * Offline → a banner naming how stale the cached agenda is.
  *
- * Floats top-center to clear the Present `.pptx` button and Print toolbar (both
- * top-right); always `no-print` so it never lands on a printed sheet.
+ * The two states are positioned differently on purpose (#361). The online pill
+ * used to float `position: fixed` top-center, which put a passive reassurance
+ * message on top of the one thing we want people to read; it now renders inline
+ * so the host places it in its own chrome (the Print toolbar row, the Present
+ * top-right cluster). The offline banner is the opposite case — it is news the
+ * reader needs — so it stays pinned top-center and prominent no matter where
+ * the component is mounted. Both are `no-print` so neither lands on a sheet.
+ *
+ * Mounting note: because the banner is `position: fixed`, its DOM parent is
+ * irrelevant to where it paints — but a positioned ancestor (`z-index`) does
+ * form the stacking context it competes in, which is why both hosts mount this
+ * inside chrome that already paints above the page content.
  */
 export function OfflineBadge({ id }: { id: string }) {
 	const online = useOnlineStatus();
@@ -43,12 +53,10 @@ export function OfflineBadge({ id }: { id: string }) {
 	if (online) {
 		if (!offlineReady) return null;
 		return (
-			<div className="no-print" style={wrap}>
-				<span style={pill}>
-					<span style={dot} />
-					Available offline
-				</span>
-			</div>
+			<span className="no-print" style={pill}>
+				<span style={dot} />
+				Available offline
+			</span>
 		);
 	}
 
@@ -65,6 +73,7 @@ export function OfflineBadge({ id }: { id: string }) {
 	);
 }
 
+/** Only the offline banner pins itself; the online pill flows with its host. */
 const wrap: React.CSSProperties = {
 	position: "fixed",
 	top: 8,

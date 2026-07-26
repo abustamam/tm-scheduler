@@ -1,4 +1,5 @@
 import {
+	type ReactNode,
 	useCallback,
 	useEffect,
 	useLayoutEffect,
@@ -30,10 +31,14 @@ export function MeetingPresent({
 	deck,
 	clubName,
 	onExit,
+	offlineBadge,
 }: {
 	deck: Slide[];
 	clubName: string;
 	onExit?: () => void;
+	/** Connectivity indicator, rendered in the top-right chrome cluster beside
+	 *  the .pptx button rather than over the slide (#361). */
+	offlineBadge?: ReactNode;
 }) {
 	const [i, setI] = useState(0);
 	const last = deck.length - 1;
@@ -67,7 +72,8 @@ export function MeetingPresent({
 
 	return (
 		<div className="fixed inset-0 flex items-center justify-center bg-black">
-			<div className="absolute top-[2vmin] right-[2vmin] z-20">
+			<div className="absolute top-[2vmin] right-[2vmin] z-20 flex items-center gap-[1.2vmin]">
+				{offlineBadge}
 				<PptxDownloadButton deck={deck} clubName={clubName} />
 			</div>
 			<button

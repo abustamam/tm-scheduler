@@ -174,8 +174,12 @@ function PrintAgenda() {
 
 	return (
 		<div>
-			{bare ? null : <OfflineBadge id={meetingId} />}
 			<div className="no-print" style={toolbarStyle}>
+				{/* The "Available offline" pill lives in the toolbar, not over the
+				    agenda (#361). Mounted here it also gives the genuinely-offline
+				    banner — which pins itself top-center — the toolbar's stacking
+				    context, so it still paints above the sheet. */}
+				{bare ? null : <OfflineBadge id={meetingId} />}
 				{bare ? null : (
 					<div style={{ display: "flex", gap: 4 }}>
 						{LAYOUTS.map((l) => (
