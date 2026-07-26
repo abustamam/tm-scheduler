@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgendaSlot } from "./agenda-runsheet";
+import { beatDuration, buildRunOfShow } from "./agenda-runsheet";
 import {
 	buildSlideDeck,
 	type ClubForDeck,
@@ -683,7 +684,23 @@ describe("buildSlideDeck evaluation session", () => {
 		expect(slide).toMatchObject({
 			evaluator: "Faisal Ali",
 			speaker: "Rehanna Khan",
-			time: "2–3 minutes",
+			// Beat 9's budget, not a second opinion about it (#356). The deck used
+			// to hardcode "2–3 minutes" while the run sheet booked 3.
+			time: "3 minutes",
+		});
+	});
+
+	it("quotes the beat's budget, so a retimed beat moves the slide (#356)", () => {
+		const template = buildRunOfShow({ geIntroducesFunctionaries: false });
+		const deck = build({ slots: [ge, speaker, evaluator] });
+		expect(deck.find((s) => s.kind === "evaluation")).toMatchObject({
+			time: beatDuration(template, "evaluation"),
+		});
+		expect(deck.find((s) => s.kind === "evaluatorEvaluation")).toMatchObject({
+			time: beatDuration(template, "evaluatorEvaluation"),
+		});
+		expect(deck.find((s) => s.kind === "generalEvaluation")).toMatchObject({
+			time: beatDuration(template, "generalEvaluation"),
 		});
 	});
 

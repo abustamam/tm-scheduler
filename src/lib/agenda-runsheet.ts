@@ -90,6 +90,7 @@ export type BeatRole = { roleKey: string; roleName: string };
  * - An `event` beat's `fallback` reassigns it to a different owner/detail
  *   when `fallback.roleKey` has no slots, instead of disappearing — the
  *   Timer's-report vote beats become Toastmaster-run plain votes.
+ * - `id` names a beat another surface has to quote (#356). See `BeatId`.
  */
 export type Beat = (
 	| {
@@ -107,7 +108,48 @@ export type Beat = (
 			detail: string;
 			minutes: number;
 	  }
-) & { requiresAnyOf?: BeatRole[]; requiresGroup?: RoleGroup; flex?: true };
+) & {
+	id?: BeatId;
+	requiresAnyOf?: BeatRole[];
+	requiresGroup?: RoleGroup;
+	flex?: true;
+};
+
+/**
+ * Stable identity of a beat whose DURATION another surface states verbatim
+ * (#356) — currently the three projected slides that print a "Time:" line.
+ *
+ * The deck used to carry its own timing constants, so the same beat could be
+ * budgeted at one length on the printed agenda and announced as another on the
+ * wall, and was: beat 9 booked 3 minutes while the deck said "2–3 minutes".
+ * They agreed everywhere else only because someone had just set both by hand.
+ *
+ * An id is how a slide says WHICH beat it is speaking for, the way `roleKey`
+ * is how a beat says which role it binds to — matching on `detail` would break
+ * the first time a beat is reworded, and matching on position the first time
+ * one is inserted (#352 inserts one). Only the beats something else quotes
+ * carry an id; the rest are reached by iteration, in order.
+ */
+export type BeatId = "evaluation" | "evaluatorEvaluation" | "generalEvaluation";
+
+/** A beat's budget as the deck states it: "3 minutes", "1 minute". */
+export function formatBeatMinutes(minutes: number): string {
+	return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
+}
+
+/**
+ * The duration `id`'s beat budgets, ready to project.
+ *
+ * Throws rather than falling back: every id is emitted by `buildRunOfShow`, so
+ * a miss means the template and the ids have been edited out of step, and a
+ * silent default would put a made-up number on a projector — the exact failure
+ * this seam exists to prevent. The unit tests cover both variants.
+ */
+export function beatDuration(template: Beat[], id: BeatId): string {
+	const beat = template.find((b) => b.id === id);
+	if (beat == null) throw new Error(`run-of-show has no "${id}" beat`);
+	return formatBeatMinutes(beat.minutes);
+}
 
 /** A group of roles the CLUB defines, not a list of keys we shipped (#371).
  *  `"functionaries"` is every `category: "functionary"` role;
@@ -369,6 +411,7 @@ export function buildRunOfShow({
 		{
 			kind: "role",
 			...EVALUATOR_ROLE,
+			id: "evaluation",
 			role: "evaluator",
 			detail: "Evaluates a speaker",
 			minutes: 3,
@@ -389,6 +432,7 @@ export function buildRunOfShow({
 			kind: "role",
 			roleKey: "general_evaluator",
 			roleName: "General Evaluator",
+			id: "evaluatorEvaluation",
 			role: "plain",
 			detail: "Evaluates the evaluators",
 			minutes: 2,
@@ -409,6 +453,7 @@ export function buildRunOfShow({
 			kind: "role",
 			roleKey: "general_evaluator",
 			roleName: "General Evaluator",
+			id: "generalEvaluation",
 			role: "plain",
 			detail: "Overall meeting evaluation",
 			minutes: 2,

@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import type { AgendaRow, AgendaSlot } from "./agenda-runsheet";
 import {
 	applyFlex,
+	beatDuration,
 	buildLegend,
 	buildReportingLegend,
 	buildRunOfShow,
 	expandRunSheet,
 	FLEX_TOLERANCE_MINUTES,
+	formatBeatMinutes,
 	functionarySlots,
 	hasAnyFunctionaryRole,
 	hasAnyReportingFunctionaryRole,
@@ -139,6 +141,38 @@ describe("buildRunOfShow", () => {
 		expect(RUN_OF_SHOW).toEqual(
 			buildRunOfShow({ geIntroducesFunctionaries: false }),
 		);
+	});
+});
+
+describe("beat durations quoted by the deck (#356)", () => {
+	it("formats a beat's budget as slide copy, singular at one minute", () => {
+		expect(formatBeatMinutes(1)).toBe("1 minute");
+		expect(formatBeatMinutes(2)).toBe("2 minutes");
+		expect(formatBeatMinutes(3)).toBe("3 minutes");
+	});
+
+	it("resolves every quoted beat, identically for both club variants", () => {
+		// Today's numbers, stated once. They are the run sheet's — the deck no
+		// longer keeps a second copy that can disagree, which is the whole point:
+		// changing a beat's `minutes` moves the projected slide with it.
+		for (const geIntroducesFunctionaries of [false, true]) {
+			const template = buildRunOfShow({ geIntroducesFunctionaries });
+			expect(beatDuration(template, "evaluation")).toBe("3 minutes");
+			expect(beatDuration(template, "evaluatorEvaluation")).toBe("2 minutes");
+			expect(beatDuration(template, "generalEvaluation")).toBe("2 minutes");
+		}
+	});
+
+	it("reads the beat rather than a copy of its number", () => {
+		const template = buildRunOfShow({ geIntroducesFunctionaries: false });
+		const retimed = template.map((b) =>
+			b.id === "evaluation" ? { ...b, minutes: 5 } : b,
+		);
+		expect(beatDuration(retimed, "evaluation")).toBe("5 minutes");
+	});
+
+	it("throws rather than guessing when the template has no such beat", () => {
+		expect(() => beatDuration([], "evaluation")).toThrow(/evaluation/);
 	});
 });
 

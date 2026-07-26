@@ -5,8 +5,10 @@ import type {
 } from "./agenda-runsheet";
 import {
 	assigneeDisplay,
+	beatDuration,
 	buildLegend,
 	buildReportingLegend,
+	buildRunOfShow,
 	DEFAULT_SPEAKER_MINUTES,
 	hasAnyFunctionaryRole,
 	hasAnyReportingFunctionaryRole,
@@ -165,12 +167,18 @@ const ROLE = {
 	grammarian: { key: "grammarian", name: "Grammarian" },
 } as const satisfies Record<string, RoleRef>;
 
-/** Hardcoded standard Toastmasters durations for slots without per-slot timing. */
+/**
+ * The one duration on the deck that is NOT a beat's budget (#356), and the
+ * reason it is exempt: this is the limit on a SINGLE impromptu answer, while
+ * beat 7 books the whole Table Topics SEGMENT. Deriving it would project
+ * "Speaker time: 10 minutes" at a speaker who has one to two — a per-speaker
+ * versus per-segment difference, not a disagreement.
+ *
+ * The segment number is also the one the deck could never state honestly:
+ * `applyFlex` resizes beat 7 at render time to whatever makes the meeting come
+ * out to its scheduled length, and the deck is not given that length.
+ */
 export const TABLE_TOPICS_TIMING = "1–2 minutes per speaker";
-export const EVALUATION_TIMING = "2–3 minutes";
-/** Beat 11's duration, as the run-of-show sets it. */
-export const EVALUATOR_EVALUATION_TIMING = "2 minutes";
-export const GENERAL_EVALUATION_TIMING = "2 minutes";
 
 function speechTime(min: number | null, max: number | null): string {
 	if (min != null && max != null) return `${min}–${max} minutes`;
@@ -229,6 +237,10 @@ export function buildSlideDeck({
 	geIntroducesFunctionaries,
 }: SlideDeckInput): Slide[] {
 	const deck: Slide[] = [];
+	// The same run-of-show the printed agenda expands, built from the same club
+	// config — so the durations the deck projects ARE the ones the timeline
+	// books, rather than a second set of numbers that happens to match (#356).
+	const runOfShow = buildRunOfShow({ geIntroducesFunctionaries });
 
 	deck.push({
 		kind: "title",
@@ -347,7 +359,7 @@ export function buildSlideDeck({
 				label: numbered("Evaluation", i, multi),
 				evaluator: assigneeDisplay(s),
 				speaker: s.evaluates?.speakerName ?? null,
-				time: EVALUATION_TIMING,
+				time: beatDuration(runOfShow, "evaluation"),
 			});
 		});
 		deck.push({
@@ -365,7 +377,7 @@ export function buildSlideDeck({
 		deck.push({
 			kind: "evaluatorEvaluation",
 			name: assigneeDisplay(generalEvaluator[0]),
-			time: EVALUATOR_EVALUATION_TIMING,
+			time: beatDuration(runOfShow, "evaluatorEvaluation"),
 		});
 	}
 
@@ -384,7 +396,7 @@ export function buildSlideDeck({
 		deck.push({
 			kind: "generalEvaluation",
 			name: assigneeDisplay(generalEvaluator[0]),
-			time: GENERAL_EVALUATION_TIMING,
+			time: beatDuration(runOfShow, "generalEvaluation"),
 		});
 	}
 

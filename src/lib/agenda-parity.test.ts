@@ -13,7 +13,11 @@
 
 import { describe, expect, it } from "vitest";
 import type { AgendaSlot, RunOfShowConfig } from "./agenda-runsheet";
-import { buildRunOfShow, expandRunSheet } from "./agenda-runsheet";
+import {
+	buildRunOfShow,
+	expandRunSheet,
+	formatBeatMinutes,
+} from "./agenda-runsheet";
 import {
 	buildSlideDeck,
 	type ClubForDeck,
@@ -134,6 +138,34 @@ const SECTION_BY_SLIDE = {
 	functionaryReports: "functionaryReports",
 	generalEvaluation: "generalEvaluation",
 } satisfies Record<Slide["kind"], Section | null>;
+
+/**
+ * Deck slide kinds that project a DURATION, and the section — hence the beat —
+ * whose budget that duration has to be (#356).
+ *
+ * Ordering parity alone let the two surfaces state different minutes for the
+ * same beat, and they did: beat 9 budgeted 3 minutes while the deck's
+ * `EVALUATION_TIMING` said "2–3 minutes". Deriving the deck's timings from the
+ * beat makes that unrepresentable, and makes this assertion cheap — the check
+ * is just "the slide says what its beat budgets", with no minute values
+ * restated here to drift in their turn.
+ *
+ * `satisfies` keeps it exhaustive over the slides that carry a `time`: a new
+ * timed slide has to be classified or this stops compiling. The `tableTopics`
+ * slide is outside it by construction — its `timing` is a PER-SPEAKER limit,
+ * not the segment budget beat 7 books, so there is nothing to compare.
+ */
+const TIMED_SLIDES = {
+	// The prepared-speech slide states the SLOT's assigned range ("5–7 minutes"),
+	// and the run sheet books that slot's max for the same row. Both read the
+	// slot rather than the beat, so there is no beat budget to compare against,
+	// and the shapes differ deliberately: the speaker is told the window they
+	// have to land in, the timeline books the longest the speech can run.
+	speech: null,
+	evaluation: "evaluation",
+	evaluatorEvaluation: "evaluatorEvaluation",
+	generalEvaluation: "generalEvaluation",
+} satisfies Record<Extract<Slide, { time: string }>["kind"], Section | null>;
 
 // ---------------------------------------------------------------------------
 // Sequence extraction
@@ -504,6 +536,31 @@ describe("run-sheet ⇄ deck section-order parity (#367)", () => {
 		for (const config of CONFIGS) {
 			expect(printSections(FULL, config)).toEqual(expected);
 			expect(deckSections(FULL, config)).toEqual(expected);
+		}
+	});
+});
+
+describe("run-sheet ⇄ deck duration parity (#356)", () => {
+	it("projects each timed beat's own budgeted duration", () => {
+		for (const config of CONFIGS) {
+			const template = buildRunOfShow(config);
+			const deck = buildSlideDeck({ meeting, club, slots: FULL, ...config });
+			const checked: Section[] = [];
+			for (const slide of deck) {
+				if (!("time" in slide)) continue;
+				const section = TIMED_SLIDES[slide.kind];
+				if (section == null) continue;
+				const beat = template[BEATS.findIndex((b) => b.section === section)];
+				expect(slide.time).toBe(formatBeatMinutes(beat.minutes));
+				checked.push(section);
+			}
+			// The matrix above proves the sections are all present; this proves the
+			// loop actually reached every timed one rather than vacuously passing.
+			expect([...new Set(checked)]).toEqual([
+				"evaluation",
+				"evaluatorEvaluation",
+				"generalEvaluation",
+			]);
 		}
 	});
 });
