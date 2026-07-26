@@ -118,8 +118,9 @@ export interface MeetingAgendaProps {
 	 *  against one clock (#393). Callers get it from
 	 *  `isMeetingOver({ status, scheduledAt, timezone, now? })`. */
 	meetingOver: boolean;
-	/** Identity args the lifted edit dialogs pass to their server fns. */
-	actorMemberId: string | null;
+	/** Self-asserted identity the lifted edit dialogs pass to their server fns
+	 *  (ADR-0010 TMOD/Grammarian path). The activity-log actor is NOT sent — the
+	 *  server derives it from the session or the verified self-assertion (#396). */
 	selfMemberId: string | null;
 	onMetaSaved: () => void | Promise<void>;
 	/** Public surface: resolve/collect identity before opening the claim flow when there's no identity. */
@@ -169,7 +170,6 @@ export function MeetingAgenda({
 	effectiveMeetingNumber = null,
 	timezone,
 	meetingOver,
-	actorMemberId,
 	selfMemberId,
 	onMetaSaved,
 	requireIdentity,
@@ -332,7 +332,6 @@ export function MeetingAgenda({
 					open={wodOpen}
 					onOpenChange={setWodOpen}
 					meeting={meeting}
-					actorMemberId={actorMemberId}
 					selfMemberId={selfMemberId}
 					onSaved={async () => {
 						setWodOpen(false);
@@ -356,7 +355,6 @@ export function MeetingAgenda({
 					onOpenChange={setMetaOpen}
 					meeting={meeting}
 					timezone={timezone}
-					actorMemberId={actorMemberId}
 					selfMemberId={selfMemberId}
 					canReschedule={viewer.canManage}
 					effectiveMeetingNumber={effectiveMeetingNumber}

@@ -168,9 +168,12 @@ export const setRoleEnabledSchema = z.object({
 	clubId: z.string().uuid(),
 	roleId: z.string().uuid(),
 	enabled: z.boolean(),
-	actorMemberId: z.string().uuid().nullable().optional(),
 });
-export type SetRoleEnabledInput = z.infer<typeof setRoleEnabledSchema>;
+/** The actor is NOT on the wire (#396): `setClubRoleEnabled` gates on the club
+ *  admin role and credits the membership that guard resolved from the session. */
+export type SetRoleEnabledInput = z.infer<typeof setRoleEnabledSchema> & {
+	actorMemberId: string | null;
+};
 
 /** Toggle a role's `enabled` flag (#368) — a narrow action, separate from
  *  `applyRoleDefinitionUpdate`, that posts only `{ clubId, roleId, enabled }`
@@ -241,7 +244,7 @@ export async function applyRoleDefinitionSetEnabled(
 		roleName: current.name,
 		defaultCount: current.defaultCount,
 		enabled: input.enabled,
-		actorMemberId: input.actorMemberId ?? null,
+		actorMemberId: input.actorMemberId,
 	});
 	return {
 		ok: true as const,

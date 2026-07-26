@@ -88,6 +88,7 @@ describe.skipIf(!hasTestDb)("club-role management (#187)", () => {
 
 		// Promote the plain member so the club has two active admins…
 		await applySetMemberRole({
+			actorMemberId: null,
 			clubId: seed.clubId,
 			memberId: seed.memberId,
 			clubRole: "admin",
@@ -115,6 +116,7 @@ describe.skipIf(!hasTestDb)("club-role management (#187)", () => {
 
 		await expect(
 			applySetMemberRole({
+				actorMemberId: null,
 				clubId: seed.clubId,
 				memberId: seed.adminMemberId,
 				clubRole: "member",
@@ -130,6 +132,7 @@ describe.skipIf(!hasTestDb)("club-role management (#187)", () => {
 
 		await expect(
 			applySetMemberStatus({
+				actorMemberId: null,
 				clubId: seed.clubId,
 				memberId: seed.adminMemberId,
 				status: "inactive",
@@ -144,6 +147,7 @@ describe.skipIf(!hasTestDb)("club-role management (#187)", () => {
 
 		const before = await latestMemberEdit(seed.memberId);
 		const res = await applySetMemberRole({
+			actorMemberId: null,
 			clubId: seed.clubId,
 			memberId: seed.memberId,
 			clubRole: "member", // already a member
@@ -168,6 +172,7 @@ describe.skipIf(!hasTestDb)("club-role management (#187)", () => {
 			.where(eq(officerTerms.membershipId, seed.memberId));
 
 		await applySetMemberRole({
+			actorMemberId: null,
 			clubId: seed.clubId,
 			memberId: seed.memberId,
 			clubRole: "admin",

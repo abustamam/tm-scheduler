@@ -109,6 +109,7 @@ describe.skipIf(!hasTestDb)("member active/inactive status", () => {
 		const { applySetMemberStatus } = await import("#/server/members-logic");
 		await expect(
 			applySetMemberStatus({
+				actorMemberId: null,
 				clubId: crypto.randomUUID(),
 				memberId: seed.memberId,
 				status: "inactive",
@@ -121,6 +122,7 @@ describe.skipIf(!hasTestDb)("member active/inactive status", () => {
 		const active = await addMemberRow(seed.clubId, "Active Annie");
 		const inactive = await addMemberRow(seed.clubId, "Inactive Ivan");
 		await applySetMemberStatus({
+			actorMemberId: null,
 			clubId: seed.clubId,
 			memberId: inactive,
 			status: "inactive",
@@ -229,6 +231,7 @@ describe.skipIf(!hasTestDb)("member active/inactive status", () => {
 			.where(eq(roleSlots.id, seed.slotId));
 
 		await applySetMemberStatus({
+			actorMemberId: null,
 			clubId: seed.clubId,
 			memberId: seed.memberId,
 			status: "inactive",

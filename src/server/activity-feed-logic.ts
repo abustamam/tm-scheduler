@@ -92,6 +92,13 @@ export async function loadActivity(
 		if (r.targetType === "meeting" && r.targetId) meetingIds.add(r.targetId);
 	}
 
+	// Every enrichment lookup below is scoped to THIS club (#396). A row's
+	// `target_id` / `detail` ids are just numbers on a row: a legacy row (or a
+	// direct insert) in club A's feed can name club B's slot, meeting or member,
+	// and an unscoped lookup would render B's role name, B's meeting date or B's
+	// member name to A's officers, who have no business seeing any of it.
+	// Anything out of club resolves to null, which the UI renders as "Someone" /
+	// no role / no date — the honest answer.
 	const slotRows = slotIds.size
 		? await db
 				.select({
@@ -104,21 +111,38 @@ export async function loadActivity(
 					roleDefinitions,
 					eq(roleDefinitions.id, roleSlots.roleDefinitionId),
 				)
-				.where(inArray(roleSlots.id, [...slotIds]))
+				.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+				.where(
+					and(
+						eq(meetings.clubId, input.clubId),
+						inArray(roleSlots.id, [...slotIds]),
+					),
+				)
 		: [];
+	// Safe to widen the meeting set with these: they came back club-scoped.
 	for (const s of slotRows) meetingIds.add(s.meetingId);
 
 	const memberRows = memberIds.size
 		? await db
 				.select({ id: members.id, name: members.name })
 				.from(members)
-				.where(inArray(members.id, [...memberIds]))
+				.where(
+					and(
+						eq(members.clubId, input.clubId),
+						inArray(members.id, [...memberIds]),
+					),
+				)
 		: [];
 	const meetingRows = meetingIds.size
 		? await db
 				.select({ id: meetings.id, scheduledAt: meetings.scheduledAt })
 				.from(meetings)
-				.where(inArray(meetings.id, [...meetingIds]))
+				.where(
+					and(
+						eq(meetings.clubId, input.clubId),
+						inArray(meetings.id, [...meetingIds]),
+					),
+				)
 		: [];
 
 	const memberName = new Map(memberRows.map((m) => [m.id, m.name]));

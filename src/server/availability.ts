@@ -7,16 +7,22 @@ import { logActivity } from "./activity";
 import { releaseSlotsAndMarkUnavailable } from "./availability-logic";
 import { requireMemberInClub } from "./guards";
 import { assertMeetingNotLocked } from "./meeting-authz-logic";
+import { requestWriteActor } from "./write-actor-logic";
 
-/** Load a meeting's status (for the #150 lock) or throw if it's missing. */
-async function meetingStatus(meetingId: string): Promise<string> {
+/** Load a meeting's status (for the #150 lock) and its OWNING club, or throw if
+ *  it's missing. The club is read from the meeting rather than trusted from the
+ *  payload (#396) — otherwise a caller could aim a write at club B's meeting and
+ *  file the activity row under club A. */
+async function loadMeeting(
+	meetingId: string,
+): Promise<{ status: string; clubId: string }> {
 	const [row] = await db
-		.select({ status: meetings.status })
+		.select({ status: meetings.status, clubId: meetings.clubId })
 		.from(meetings)
 		.where(eq(meetings.id, meetingId))
 		.limit(1);
 	if (!row) throw new Error("Meeting not found.");
-	return row.status;
+	return row;
 }
 
 const availabilitySchema = z.object({
@@ -24,9 +30,11 @@ const availabilitySchema = z.object({
 	memberId: z.string().uuid(),
 	/** Who performed the action. Omitted ⇒ self-service (actor = subject); set
 	 *  to an officer's member id when an admin marks someone else unavailable.
-	 *  Trust-guarded as a club member, mirroring `claimSlot`/`reassignSlot`. */
+	 *  PUBLIC path, so this is an assertion, not proof — `requestWriteActor`
+	 *  club-scopes it and a real session overrides it (#396). */
 	actorMemberId: z.string().uuid().optional(),
 	meetingId: z.string().uuid(),
+	/** Deprecated as an authority: the club is derived from `meetingId`. */
 	clubId: z.string().uuid(),
 });
 
@@ -35,11 +43,13 @@ const availabilitySchema = z.object({
 export const setAvailability = createServerFn({ method: "POST" })
 	.validator((i: unknown) => availabilitySchema.parse(i))
 	.handler(async ({ data }) => {
-		const actorMemberId = data.actorMemberId ?? data.memberId;
-		assertMeetingNotLocked(await meetingStatus(data.meetingId));
-		await requireMemberInClub(data.memberId, data.clubId);
-		if (actorMemberId !== data.memberId)
-			await requireMemberInClub(actorMemberId, data.clubId);
+		const meeting = await loadMeeting(data.meetingId);
+		assertMeetingNotLocked(meeting.status);
+		await requireMemberInClub(data.memberId, meeting.clubId);
+		const actorMemberId = await requestWriteActor({
+			clubId: meeting.clubId,
+			claimedActorMemberId: data.actorMemberId ?? data.memberId,
+		});
 
 		await db
 			.insert(memberAvailability)
@@ -47,7 +57,7 @@ export const setAvailability = createServerFn({ method: "POST" })
 			.onConflictDoNothing();
 
 		await logActivity(db, {
-			clubId: data.clubId,
+			clubId: meeting.clubId,
 			actorMemberId,
 			action: "availability_set",
 			targetType: "meeting",
@@ -63,11 +73,13 @@ export const setAvailability = createServerFn({ method: "POST" })
 export const clearAvailability = createServerFn({ method: "POST" })
 	.validator((i: unknown) => availabilitySchema.parse(i))
 	.handler(async ({ data }) => {
-		const actorMemberId = data.actorMemberId ?? data.memberId;
-		assertMeetingNotLocked(await meetingStatus(data.meetingId));
-		await requireMemberInClub(data.memberId, data.clubId);
-		if (actorMemberId !== data.memberId)
-			await requireMemberInClub(actorMemberId, data.clubId);
+		const meeting = await loadMeeting(data.meetingId);
+		assertMeetingNotLocked(meeting.status);
+		await requireMemberInClub(data.memberId, meeting.clubId);
+		const actorMemberId = await requestWriteActor({
+			clubId: meeting.clubId,
+			claimedActorMemberId: data.actorMemberId ?? data.memberId,
+		});
 
 		await db
 			.delete(memberAvailability)
@@ -79,7 +91,7 @@ export const clearAvailability = createServerFn({ method: "POST" })
 			);
 
 		await logActivity(db, {
-			clubId: data.clubId,
+			clubId: meeting.clubId,
 			actorMemberId,
 			action: "availability_clear",
 			targetType: "meeting",
@@ -100,13 +112,17 @@ export const clearAvailability = createServerFn({ method: "POST" })
 export const markUnavailableReleasing = createServerFn({ method: "POST" })
 	.validator((i: unknown) => availabilitySchema.parse(i))
 	.handler(async ({ data }) => {
-		const actorMemberId = data.actorMemberId ?? data.memberId;
-		assertMeetingNotLocked(await meetingStatus(data.meetingId));
-		await requireMemberInClub(data.memberId, data.clubId);
-		if (actorMemberId !== data.memberId)
-			await requireMemberInClub(actorMemberId, data.clubId);
+		const meeting = await loadMeeting(data.meetingId);
+		assertMeetingNotLocked(meeting.status);
+		await requireMemberInClub(data.memberId, meeting.clubId);
+		const actorMemberId = await requestWriteActor({
+			clubId: meeting.clubId,
+			claimedActorMemberId: data.actorMemberId ?? data.memberId,
+		});
 		const { released } = await releaseSlotsAndMarkUnavailable(db, {
-			...data,
+			memberId: data.memberId,
+			meetingId: data.meetingId,
+			clubId: meeting.clubId,
 			actorMemberId,
 		});
 		return { ok: true as const, released };

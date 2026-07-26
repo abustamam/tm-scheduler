@@ -593,9 +593,10 @@ export const createMeeting = createServerFn({ method: "POST" })
 		return applyCreateMeeting(data);
 	});
 
+// No `actorMemberId` on the wire (#396) — see `speakerSlotSchema` in slots.ts:
+// the agenda-editor guard resolves who the caller is and that is what is logged.
 const updateMeetingSchema = z.object({
 	meetingId: uuid,
-	actorMemberId: uuid.nullable().optional(),
 	/** Self-asserted TMOD member id (public page). Null for authed admin. */
 	selfMemberId: uuid.nullable().optional(),
 	scheduledAt: z.string().min(1),
@@ -622,14 +623,13 @@ export const updateMeeting = createServerFn({ method: "POST" })
 		});
 		return applyMeetingUpdate({
 			...data,
-			actorMemberId: data.actorMemberId ?? null,
+			actorMemberId: authz.actorMemberId,
 			canReschedule: authz.via === "admin",
 		});
 	});
 
 const updateWordOfTheDaySchema = z.object({
 	meetingId: uuid,
-	actorMemberId: uuid.nullable().optional(),
 	/** Self-asserted TMOD/Grammarian member id (public page). Null for authed admin. */
 	selfMemberId: uuid.nullable().optional(),
 	wordOfTheDay: z.string().trim().optional(),
@@ -644,13 +644,13 @@ const updateWordOfTheDaySchema = z.object({
 export const updateWordOfTheDay = createServerFn({ method: "POST" })
 	.validator((input: unknown) => updateWordOfTheDaySchema.parse(input))
 	.handler(async ({ data }) => {
-		await requireWordOfTheDayEditor({
+		const authz = await requireWordOfTheDayEditor({
 			meetingId: data.meetingId,
 			selfMemberId: data.selfMemberId ?? null,
 		});
 		return applyWordOfTheDayUpdate({
 			meetingId: data.meetingId,
-			actorMemberId: data.actorMemberId ?? null,
+			actorMemberId: authz.actorMemberId,
 			wordOfTheDay: data.wordOfTheDay,
 			wodDefinition: data.wodDefinition,
 			wodExample: data.wodExample,
@@ -659,7 +659,6 @@ export const updateWordOfTheDay = createServerFn({ method: "POST" })
 
 const lifecycleSchema = z.object({
 	meetingId: uuid,
-	actorMemberId: uuid.nullable().optional(),
 });
 
 /** Close out a meeting: set `status = completed` and lock its agenda (#150).
@@ -674,10 +673,12 @@ export const completeMeeting = createServerFn({ method: "POST" })
 			.where(eq(meetings.id, data.meetingId))
 			.limit(1);
 		if (!row) throw new Error("Meeting not found.");
-		await requireClubRole(currentUser.id, row.clubId, ["admin"]);
+		const membership = await requireClubRole(currentUser.id, row.clubId, [
+			"admin",
+		]);
 		return applyCompleteMeeting({
 			meetingId: data.meetingId,
-			actorMemberId: data.actorMemberId ?? null,
+			actorMemberId: membership.id,
 		});
 	});
 
@@ -693,9 +694,11 @@ export const reopenMeeting = createServerFn({ method: "POST" })
 			.where(eq(meetings.id, data.meetingId))
 			.limit(1);
 		if (!row) throw new Error("Meeting not found.");
-		await requireClubRole(currentUser.id, row.clubId, ["admin"]);
+		const membership = await requireClubRole(currentUser.id, row.clubId, [
+			"admin",
+		]);
 		return applyReopenMeeting({
 			meetingId: data.meetingId,
-			actorMemberId: data.actorMemberId ?? null,
+			actorMemberId: membership.id,
 		});
 	});

@@ -112,7 +112,6 @@ function renderAgenda(
 				scheduledAt: meeting.scheduledAt,
 				timezone,
 			})}
-			actorMemberId="me"
 			selfMemberId="me"
 			onMetaSaved={() => {}}
 			requireIdentity={requireIdentity}

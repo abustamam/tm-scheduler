@@ -386,41 +386,25 @@ function MeetingView() {
 			});
 		},
 		confirm: async (slot) => {
-			await confirmSlot({
-				data: { slotId: slot.id, actorMemberId: managerActorId },
-			});
+			await confirmSlot({ data: { slotId: slot.id } });
 		},
 		unconfirm: async (slot) => {
-			await unconfirmSlot({
-				data: { slotId: slot.id, actorMemberId: managerActorId },
-			});
+			await unconfirmSlot({ data: { slotId: slot.id } });
 		},
 		moveSpeaker: async (slot, direction) => {
-			await moveSpeakerSlot({
-				data: { slotId: slot.id, direction, actorMemberId: managerActorId },
-			});
+			await moveSpeakerSlot({ data: { slotId: slot.id, direction } });
 		},
 		removeRole: async (slot) => {
-			await removeRoleSlot({
-				data: { slotId: slot.id, actorMemberId: managerActorId },
-			});
+			await removeRoleSlot({ data: { slotId: slot.id } });
 		},
 		addSpeaker: async () => {
 			await addSpeakerSlot({
-				data: {
-					meetingId: meeting.id,
-					actorMemberId: managerActorId,
-					selfMemberId: managerActorId,
-				},
+				data: { meetingId: meeting.id, selfMemberId: managerActorId },
 			});
 		},
 		removeSpeaker: async () => {
 			await removeSpeakerSlot({
-				data: {
-					meetingId: meeting.id,
-					actorMemberId: managerActorId,
-					selfMemberId: managerActorId,
-				},
+				data: { meetingId: meeting.id, selfMemberId: managerActorId },
 			});
 		},
 		onMutated: () => router.invalidate(),
@@ -458,11 +442,7 @@ function MeetingView() {
 			const me = await requireIdentity();
 			if (!me) return;
 			await addSpeakerSlot({
-				data: {
-					meetingId: meeting.id,
-					actorMemberId: me.id,
-					selfMemberId: me.id,
-				},
+				data: { meetingId: meeting.id, selfMemberId: me.id },
 			});
 			toast.success("Speaker added.");
 		},
@@ -470,11 +450,7 @@ function MeetingView() {
 			const me = await requireIdentity();
 			if (!me) return;
 			await removeSpeakerSlot({
-				data: {
-					meetingId: meeting.id,
-					actorMemberId: me.id,
-					selfMemberId: me.id,
-				},
+				data: { meetingId: meeting.id, selfMemberId: me.id },
 			});
 			toast.success("Speaker removed.");
 		},
@@ -486,13 +462,7 @@ function MeetingView() {
 	async function doAddRole(roleDefinitionId: string) {
 		setAddRoleBusy(true);
 		try {
-			await addRoleSlot({
-				data: {
-					meetingId: meeting.id,
-					roleDefinitionId,
-					actorMemberId: managerActorId,
-				},
-			});
+			await addRoleSlot({ data: { meetingId: meeting.id, roleDefinitionId } });
 			toast.success("Role added.");
 			setAddRoleOpen(false);
 			await router.invalidate();
@@ -506,9 +476,7 @@ function MeetingView() {
 	async function doComplete() {
 		setLifecycleBusy(true);
 		try {
-			await completeMeeting({
-				data: { meetingId: meeting.id, actorMemberId: managerActorId },
-			});
+			await completeMeeting({ data: { meetingId: meeting.id } });
 			toast.success("Meeting closed out and locked.");
 			await router.invalidate();
 		} catch (err) {
@@ -521,9 +489,7 @@ function MeetingView() {
 	async function doReopen() {
 		setLifecycleBusy(true);
 		try {
-			await reopenMeeting({
-				data: { meetingId: meeting.id, actorMemberId: managerActorId },
-			});
+			await reopenMeeting({ data: { meetingId: meeting.id } });
 			toast.success("Meeting reopened for edits.");
 			await router.invalidate();
 		} catch (err) {
@@ -722,7 +688,6 @@ function MeetingView() {
 				meeting={meeting}
 				timezone={timezone}
 				meetingOver={over}
-				actorMemberId={agendaMemberId}
 				selfMemberId={agendaMemberId}
 				onMetaSaved={async () => {
 					await router.invalidate();

@@ -70,8 +70,13 @@ export const setClubRoleEnabled = createServerFn({ method: "POST" })
 	.validator((input: unknown) => setRoleEnabledSchema.parse(input))
 	.handler(async ({ data }) => {
 		const currentUser = await requireUser();
-		await requireClubRole(currentUser.id, data.clubId, ["admin"]);
-		return applyRoleDefinitionSetEnabled(data);
+		const membership = await requireClubRole(currentUser.id, data.clubId, [
+			"admin",
+		]);
+		return applyRoleDefinitionSetEnabled({
+			...data,
+			actorMemberId: membership.id,
+		});
 	});
 
 /** Persist a new ordering of the club's roles. AUTHED — requires admin. */
@@ -95,7 +100,6 @@ export const deleteClubRole = createServerFn({ method: "POST" })
 
 const syncTemplateSchema = z.object({
 	clubId: z.string().uuid(),
-	actorMemberId: z.string().uuid().nullable().optional(),
 });
 
 /** Backfill missing standard roles onto all upcoming meetings. AUTHED — admin. */
@@ -103,9 +107,11 @@ export const syncTemplateToUpcomingMeetings = createServerFn({ method: "POST" })
 	.validator((input: unknown) => syncTemplateSchema.parse(input))
 	.handler(async ({ data }) => {
 		const currentUser = await requireUser();
-		await requireClubRole(currentUser.id, data.clubId, ["admin"]);
+		const membership = await requireClubRole(currentUser.id, data.clubId, [
+			"admin",
+		]);
 		return applyTemplateSyncToUpcomingMeetings({
 			clubId: data.clubId,
-			actorMemberId: data.actorMemberId ?? null,
+			actorMemberId: membership.id,
 		});
 	});

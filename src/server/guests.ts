@@ -30,7 +30,6 @@ const assignGuestSchema = z
 				phone: z.string().trim().optional(),
 			})
 			.optional(),
-		actorMemberId: uuid.nullable().optional(),
 	})
 	.refine((d) => Boolean(d.guestId) || Boolean(d.newGuest), {
 		message: "Provide an existing guest or a new guest.",
@@ -53,13 +52,17 @@ export const assignGuestSlot = createServerFn({ method: "POST" })
 			.where(eq(roleSlots.id, data.slotId))
 			.limit(1);
 		if (!slot) throw new Error("Role not found.");
-		await requireClubRole(currentUser.id, slot.clubId, ["admin"]);
+		// The actor is the admin membership this guard resolved from the session —
+		// never a client-supplied id, which could name another club's member (#396).
+		const membership = await requireClubRole(currentUser.id, slot.clubId, [
+			"admin",
+		]);
 
 		await applyAssignGuestToSlot({
 			slotId: data.slotId,
 			guestId: data.guestId,
 			newGuest: data.newGuest,
-			actorMemberId: data.actorMemberId ?? null,
+			actorMemberId: membership.id,
 		});
 		return { ok: true as const };
 	});

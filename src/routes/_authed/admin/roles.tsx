@@ -54,7 +54,7 @@ const selectClass =
 	"flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
 
 function RolesManager() {
-	const { adminClub, currentMemberId } = Route.useRouteContext();
+	const { adminClub } = Route.useRouteContext();
 	const { roles } = Route.useLoaderData();
 	const router = useRouter();
 	const clubId = adminClub.clubId;
@@ -78,9 +78,7 @@ function RolesManager() {
 	async function syncUpcoming() {
 		setSyncing(true);
 		try {
-			const res = await syncTemplateToUpcomingMeetings({
-				data: { clubId, actorMemberId: currentMemberId },
-			});
+			const res = await syncTemplateToUpcomingMeetings({ data: { clubId } });
 			if (res.meetingsChanged === 0) {
 				toast.success("Upcoming meetings already match the standard set.");
 			} else {
@@ -134,7 +132,6 @@ function RolesManager() {
 					<RoleCard
 						key={role.id}
 						clubId={clubId}
-						actorMemberId={currentMemberId}
 						role={role}
 						isFirst={i === 0}
 						isLast={i === roles.length - 1}
@@ -184,7 +181,6 @@ function toggleToastMessage(
 
 function RoleCard({
 	clubId,
-	actorMemberId,
 	role,
 	isFirst,
 	isLast,
@@ -193,7 +189,6 @@ function RoleCard({
 	onChanged,
 }: {
 	clubId: string;
-	actorMemberId: string | null;
 	role: RoleDefinitionRow;
 	isFirst: boolean;
 	isLast: boolean;
@@ -254,7 +249,7 @@ function RoleCard({
 		setToggling(true);
 		try {
 			const res = await setClubRoleEnabled({
-				data: { clubId, roleId: role.id, enabled: nextEnabled, actorMemberId },
+				data: { clubId, roleId: role.id, enabled: nextEnabled },
 			});
 			toast.success(toggleToastMessage(role.name, nextEnabled, res));
 			await onChanged();

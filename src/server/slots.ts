@@ -22,6 +22,7 @@ import {
 	editSlotSpeech,
 	reassignSlotCore,
 } from "./slots-logic";
+import { requestWriteActor } from "./write-actor-logic";
 
 const speakerDetailsSchema = z.object({
 	speechTitle: z.string().trim().optional(),
@@ -71,6 +72,12 @@ export const claimSlot = createServerFn({ method: "POST" })
 		assertMeetingNotLocked(slot.meetingStatus);
 		// Trust guard: memberId must be a roster member of this club.
 		await requireMemberInClub(data.memberId, slot.clubId);
+		// Actor provenance (#396): a signed-in caller is credited as themselves; an
+		// anonymous one keeps the name-pick, club-scoped to THIS slot's club.
+		const actorMemberId = await requestWriteActor({
+			clubId: slot.clubId,
+			claimedActorMemberId: data.actorMemberId,
+		});
 
 		return db.transaction(async (tx) => {
 			// Conditional UPDATE is the race guard: only one claim can flip 'open'.
@@ -108,14 +115,14 @@ export const claimSlot = createServerFn({ method: "POST" })
 
 			await clearAvailabilityOnSelfClaim(tx, {
 				memberId: data.memberId,
-				actorMemberId: data.actorMemberId,
+				actorMemberId,
 				meetingId: slot.meetingId,
 				clubId: slot.clubId,
 			});
 
 			await logActivity(tx, {
 				clubId: slot.clubId,
-				actorMemberId: data.actorMemberId,
+				actorMemberId,
 				action: "claim",
 				targetType: "slot",
 				targetId: data.slotId,
@@ -153,10 +160,14 @@ export const releaseSlot = createServerFn({ method: "POST" })
 		}
 		assertMeetingNotLocked(slot.meetingStatus);
 
-		// Trust guard: actorMemberId must be a roster member of this club.
+		// Trust guard + actor provenance (#396): the actor must be a roster member
+		// of THIS slot's club, and a signed-in caller is credited as themselves.
 		// Sheet-parity model — any club member may release/clear any slot; the
 		// activity log records who did it (mirrors reassignSlot).
-		await requireMemberInClub(data.actorMemberId, slot.clubId);
+		const actorMemberId = await requestWriteActor({
+			clubId: slot.clubId,
+			claimedActorMemberId: data.actorMemberId,
+		});
 
 		return db.transaction(async (tx) => {
 			// Release unlinks the speech (speech_id → NULL) but never deletes it:
@@ -174,7 +185,7 @@ export const releaseSlot = createServerFn({ method: "POST" })
 
 			await logActivity(tx, {
 				clubId: slot.clubId,
-				actorMemberId: data.actorMemberId,
+				actorMemberId,
 				action: "release",
 				targetType: "slot",
 				targetId: data.slotId,
@@ -187,7 +198,6 @@ export const releaseSlot = createServerFn({ method: "POST" })
 
 const confirmSchema = z.object({
 	slotId: z.string().uuid(),
-	actorMemberId: z.string().uuid(),
 });
 
 /** Confirm a claimed slot. Only club admins/VPEs may do this.
@@ -215,7 +225,10 @@ export const confirmSlot = createServerFn({ method: "POST" })
 		}
 		assertMeetingNotLocked(slot.meetingStatus);
 
-		await requireClubRole(currentUser.id, slot.clubId, ["admin"]);
+		// The actor is the resolved admin membership — never the client (#396).
+		const membership = await requireClubRole(currentUser.id, slot.clubId, [
+			"admin",
+		]);
 
 		if (slot.status !== "claimed") {
 			throw new Error("Only a claimed role can be confirmed.");
@@ -240,7 +253,7 @@ export const confirmSlot = createServerFn({ method: "POST" })
 
 			await logActivity(tx, {
 				clubId: slot.clubId,
-				actorMemberId: data.actorMemberId,
+				actorMemberId: membership.id,
 				action: "claim",
 				targetType: "slot",
 				targetId: data.slotId,
@@ -253,7 +266,6 @@ export const confirmSlot = createServerFn({ method: "POST" })
 
 const unconfirmSchema = z.object({
 	slotId: z.string().uuid(),
-	actorMemberId: z.string().uuid(),
 });
 
 /** Un-confirm a slot back to claimed. Only club admins/VPEs may do this.
@@ -281,7 +293,10 @@ export const unconfirmSlot = createServerFn({ method: "POST" })
 		}
 		assertMeetingNotLocked(slot.meetingStatus);
 
-		await requireClubRole(currentUser.id, slot.clubId, ["admin"]);
+		// The actor is the resolved admin membership — never the client (#396).
+		const membership = await requireClubRole(currentUser.id, slot.clubId, [
+			"admin",
+		]);
 
 		return db.transaction(async (tx) => {
 			// Conditional UPDATE: only flips 'confirmed' → 'claimed'.
@@ -299,7 +314,7 @@ export const unconfirmSlot = createServerFn({ method: "POST" })
 
 			await logActivity(tx, {
 				clubId: slot.clubId,
-				actorMemberId: data.actorMemberId,
+				actorMemberId: membership.id,
 				action: "release",
 				targetType: "slot",
 				targetId: data.slotId,
@@ -335,15 +350,20 @@ export const reassignSlot = createServerFn({ method: "POST" })
 			throw new Error("Role not found.");
 		}
 
-		// Trust guards: both the actor and the target must be club roster members.
-		await requireMemberInClub(data.actorMemberId, slot.clubId);
+		// Trust guards: both the actor and the target must be club roster members;
+		// a signed-in caller is credited as themselves rather than the name they
+		// asserted (#396).
+		const actorMemberId = await requestWriteActor({
+			clubId: slot.clubId,
+			claimedActorMemberId: data.actorMemberId,
+		});
 		await requireMemberInClub(data.memberId, slot.clubId);
 
 		await db.transaction((tx) =>
 			reassignSlotCore(tx, {
 				slotId: data.slotId,
 				memberId: data.memberId,
-				actorMemberId: data.actorMemberId,
+				actorMemberId,
 			}),
 		);
 
@@ -392,7 +412,12 @@ export const updateSpeakerDetails = createServerFn({ method: "POST" })
 		if (!slot.assignedMemberId || !slot.personId) {
 			throw new Error("Assign a member before adding speech details.");
 		}
-		await requireMemberInClub(data.actorMemberId, slot.clubId);
+		// No activity row here, but the same trust guard applies: the caller must
+		// resolve to a member of THIS club (session first, name-pick second, #396).
+		await requestWriteActor({
+			clubId: slot.clubId,
+			claimedActorMemberId: data.actorMemberId,
+		});
 
 		await db.transaction(async (tx) => {
 			await editSlotSpeech(tx, {
@@ -406,9 +431,11 @@ export const updateSpeakerDetails = createServerFn({ method: "POST" })
 		return { ok: true as const };
 	});
 
+// No `actorMemberId` on the wire (#396): the agenda-editor guard already knows
+// who the caller is — the session's admin membership, or the self-asserted TMOD
+// it verified against the meeting's TMOD slot — and that is what gets credited.
 const speakerSlotSchema = z.object({
 	meetingId: z.string().uuid(),
-	actorMemberId: z.string().uuid().nullable().optional(),
 	/** Self-asserted TMOD member id (public page). Null for authed admin. */
 	selfMemberId: z.string().uuid().nullable().optional(),
 });
@@ -418,13 +445,13 @@ const speakerSlotSchema = z.object({
 export const addSpeakerSlot = createServerFn({ method: "POST" })
 	.validator((input: unknown) => speakerSlotSchema.parse(input))
 	.handler(async ({ data }) => {
-		await requireMeetingAgendaEditor({
+		const authz = await requireMeetingAgendaEditor({
 			meetingId: data.meetingId,
 			selfMemberId: data.selfMemberId ?? null,
 		});
 		return applyAddSpeakerSlot({
 			meetingId: data.meetingId,
-			actorMemberId: data.actorMemberId ?? null,
+			actorMemberId: authz.actorMemberId,
 		});
 	});
 
@@ -433,20 +460,19 @@ export const addSpeakerSlot = createServerFn({ method: "POST" })
 export const removeSpeakerSlot = createServerFn({ method: "POST" })
 	.validator((input: unknown) => speakerSlotSchema.parse(input))
 	.handler(async ({ data }) => {
-		await requireMeetingAgendaEditor({
+		const authz = await requireMeetingAgendaEditor({
 			meetingId: data.meetingId,
 			selfMemberId: data.selfMemberId ?? null,
 		});
 		return applyRemoveSpeakerSlot({
 			meetingId: data.meetingId,
-			actorMemberId: data.actorMemberId ?? null,
+			actorMemberId: authz.actorMemberId,
 		});
 	});
 
 const moveSpeakerSchema = z.object({
 	slotId: z.string().uuid(),
 	direction: z.enum(["up", "down"]),
-	actorMemberId: z.string().uuid().nullable().optional(),
 	/** Self-asserted TMOD member id (public page). Null for authed admin. */
 	selfMemberId: z.string().uuid().nullable().optional(),
 });
@@ -462,21 +488,20 @@ export const moveSpeakerSlot = createServerFn({ method: "POST" })
 			.where(eq(roleSlots.id, data.slotId))
 			.limit(1);
 		if (!row) throw new Error("Speaker slot not found.");
-		await requireMeetingAgendaEditor({
+		const authz = await requireMeetingAgendaEditor({
 			meetingId: row.meetingId,
 			selfMemberId: data.selfMemberId ?? null,
 		});
 		return applyMoveSpeakerSlot({
 			slotId: data.slotId,
 			direction: data.direction,
-			actorMemberId: data.actorMemberId ?? null,
+			actorMemberId: authz.actorMemberId,
 		});
 	});
 
 const addRoleSlotSchema = z.object({
 	meetingId: z.string().uuid(),
 	roleDefinitionId: z.string().uuid(),
-	actorMemberId: z.string().uuid().nullable().optional(),
 });
 
 /** Admin/VPE: add one arbitrary non-paired role slot to a meeting. AUTHED. */
@@ -490,17 +515,18 @@ export const addRoleSlot = createServerFn({ method: "POST" })
 			.where(eq(meetings.id, data.meetingId))
 			.limit(1);
 		if (!row) throw new Error("Meeting not found.");
-		await requireClubRole(currentUser.id, row.clubId, ["admin"]);
+		const membership = await requireClubRole(currentUser.id, row.clubId, [
+			"admin",
+		]);
 		return applyAddRoleSlot({
 			meetingId: data.meetingId,
 			roleDefinitionId: data.roleDefinitionId,
-			actorMemberId: data.actorMemberId ?? null,
+			actorMemberId: membership.id,
 		});
 	});
 
 const removeRoleSlotSchema = z.object({
 	slotId: z.string().uuid(),
-	actorMemberId: z.string().uuid().nullable().optional(),
 });
 
 /** Admin/VPE: remove one unclaimed non-paired role slot. AUTHED. */
@@ -515,9 +541,11 @@ export const removeRoleSlot = createServerFn({ method: "POST" })
 			.where(eq(roleSlots.id, data.slotId))
 			.limit(1);
 		if (!row) throw new Error("Role not found.");
-		await requireClubRole(currentUser.id, row.clubId, ["admin"]);
+		const membership = await requireClubRole(currentUser.id, row.clubId, [
+			"admin",
+		]);
 		return applyRemoveRoleSlot({
 			slotId: data.slotId,
-			actorMemberId: data.actorMemberId ?? null,
+			actorMemberId: membership.id,
 		});
 	});

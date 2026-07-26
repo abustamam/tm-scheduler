@@ -9,7 +9,6 @@ function form(fields: Record<string, string>) {
 
 const ctx = {
 	meetingId: "m1",
-	actorMemberId: null,
 	selfMemberId: null,
 	scheduledAt: "2026-07-22T19:00",
 };

@@ -85,6 +85,7 @@ describe.skipIf(!hasTestDb)("member email reconciliation (#306)", () => {
 		const email = `copyup-${randomUUID()}@test.example`;
 
 		await applyMemberEdit({
+			actorMemberId: null,
 			clubId: club.clubId,
 			memberId,
 			name: "Recon Person",
@@ -104,6 +105,7 @@ describe.skipIf(!hasTestDb)("member email reconciliation (#306)", () => {
 		const different = `different-${randomUUID()}@test.example`;
 
 		await applyMemberEdit({
+			actorMemberId: null,
 			clubId: club.clubId,
 			memberId,
 			name: "Recon Person",
@@ -123,6 +125,7 @@ describe.skipIf(!hasTestDb)("member email reconciliation (#306)", () => {
 		});
 
 		await applyMemberEdit({
+			actorMemberId: null,
 			clubId: club.clubId,
 			memberId,
 			name: "Recon Person",

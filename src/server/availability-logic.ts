@@ -18,13 +18,18 @@ export async function releaseSlotsAndMarkUnavailable(
 		/** The member being marked unavailable (whose roles are released). */
 		memberId: string;
 		/** Who performed the action — self, or an officer acting on their behalf.
-		 *  Attributed in the activity log; defaults to `memberId` (self-service). */
-		actorMemberId?: string;
+		 *  Attributed in the activity log; an ABSENT actor defaults to `memberId`
+		 *  (self-service). An explicit `null` is a decision, not an omission — it's
+		 *  what an impersonated write resolves to (#396/#246), and `logActivity`
+		 *  stamps the real superadmin for it — so it must NOT fall back to the
+		 *  member, or the write lands under their name. */
+		actorMemberId?: string | null;
 		meetingId: string;
 		clubId: string;
 	},
 ): Promise<{ released: number }> {
-	const actorMemberId = args.actorMemberId ?? args.memberId;
+	const actorMemberId =
+		args.actorMemberId === undefined ? args.memberId : args.actorMemberId;
 	return database.transaction(async (tx) => {
 		const released = await tx
 			.update(roleSlots)

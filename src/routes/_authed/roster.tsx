@@ -120,8 +120,7 @@ function pathwayLabelFor(paths: PathViewModel[]): string | null {
 
 function Roster() {
 	const { members, openRoles, pathways } = Route.useLoaderData();
-	const { clubs, currentMemberId, activeClubId, officerPositions } =
-		Route.useRouteContext();
+	const { clubs, activeClubId, officerPositions } = Route.useRouteContext();
 	const clubId = activeClubId;
 	// Effective admin (#202): stored admin OR any elected officer can manage.
 	const canManage = !!effectiveAdminClub({
@@ -423,7 +422,6 @@ function Roster() {
 					onOpenChange={setMergeOpen}
 					members={members}
 					clubId={clubId}
-					currentMemberId={currentMemberId}
 				/>
 			) : null}
 
@@ -433,7 +431,6 @@ function Roster() {
 					onOpenChange={setImportOpen}
 					existing={members}
 					clubId={clubId}
-					currentMemberId={currentMemberId}
 				/>
 			) : null}
 
@@ -460,7 +457,6 @@ function Roster() {
 					onOpenChange={setAddOpen}
 					existing={members}
 					clubId={clubId}
-					currentMemberId={currentMemberId}
 				/>
 			) : null}
 		</PageContainer>
@@ -895,13 +891,11 @@ function AddMemberDialog({
 	onOpenChange,
 	existing,
 	clubId,
-	currentMemberId,
 }: {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	existing: { name: string; email: string | null }[];
 	clubId: string;
-	currentMemberId: string | null;
 }) {
 	const router = useRouter();
 	const [name, setName] = useState("");
@@ -938,11 +932,7 @@ function AddMemberDialog({
 		setBusy(true);
 		try {
 			const result = await bulkImportMembers({
-				data: {
-					clubId,
-					actorMemberId: currentMemberId,
-					rows: [{ name, email, phone, office: officeText }],
-				},
+				data: { clubId, rows: [{ name, email, phone, office: officeText }] },
 			});
 			if (result.inserted === 1) {
 				toast.success(`Added ${name.trim()}.`);
@@ -1075,13 +1065,11 @@ function BulkImportDialog({
 	onOpenChange,
 	existing,
 	clubId,
-	currentMemberId,
 }: {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	existing: { name: string; email: string | null }[];
 	clubId: string;
-	currentMemberId: string | null;
 }) {
 	const router = useRouter();
 	const [text, setText] = useState("");
@@ -1105,7 +1093,6 @@ function BulkImportDialog({
 			const result = await bulkImportMembers({
 				data: {
 					clubId,
-					actorMemberId: currentMemberId,
 					rows: importable.map((r) => ({
 						name: r.name,
 						email: r.email,
@@ -1251,7 +1238,6 @@ function MergeMembersDialog({
 	onOpenChange,
 	members,
 	clubId,
-	currentMemberId,
 }: {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
@@ -1261,7 +1247,6 @@ function MergeMembersDialog({
 		userId: string | null;
 	}[];
 	clubId: string;
-	currentMemberId: string | null;
 }) {
 	const router = useRouter();
 	const [keeperId, setKeeperId] = useState("");
@@ -1281,12 +1266,7 @@ function MergeMembersDialog({
 		setBusy(true);
 		try {
 			await mergeMembers({
-				data: {
-					clubId,
-					keeperId: keeper.id,
-					absorbedId: absorbed.id,
-					actorMemberId: currentMemberId,
-				},
+				data: { clubId, keeperId: keeper.id, absorbedId: absorbed.id },
 			});
 			toast.success(`Merged ${absorbed.name} into ${keeper.name}.`);
 			onOpenChange(false);

@@ -36,7 +36,6 @@ export function MeetingMetaDialog({
 	onOpenChange,
 	meeting,
 	timezone,
-	actorMemberId,
 	selfMemberId,
 	canReschedule,
 	effectiveMeetingNumber = null,
@@ -46,7 +45,6 @@ export function MeetingMetaDialog({
 	onOpenChange: (open: boolean) => void;
 	meeting: Awaited<ReturnType<typeof getMeeting>>["meeting"];
 	timezone: string;
-	actorMemberId: string | null;
 	selfMemberId: string | null;
 	canReschedule: boolean;
 	/** The meeting's EFFECTIVE number (stored or derived, #358) — shown as the
@@ -74,7 +72,6 @@ export function MeetingMetaDialog({
 			await updateMeeting({
 				data: meetingUpdateFromForm(form, {
 					meetingId: meeting.id,
-					actorMemberId,
 					selfMemberId,
 					scheduledAt,
 				}),
