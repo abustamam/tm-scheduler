@@ -3,7 +3,9 @@ import { z } from "zod";
 import { requireClubAdminView, requireClubRole, requireUser } from "./guards";
 import {
 	applyConvertGuestToMember,
+	applyDeleteGuest,
 	applySetGuestStage,
+	applyUpdateGuest,
 	captureGuestVisit,
 	loadGuestPipeline,
 } from "./guest-pipeline-logic";
@@ -13,6 +15,7 @@ import {
 // module exports ONLY createServerFns + types — see `server-modules.guard.test.ts`.
 export type {
 	CaptureGuestResult,
+	DeleteGuestResult,
 	GuestStage,
 	ManualGuestStage,
 	PipelineGuestRow,
@@ -67,6 +70,50 @@ export const setGuestStage = createServerFn({ method: "POST" })
 		const currentUser = await requireUser();
 		await requireClubRole(currentUser.id, data.clubId, ["admin"]);
 		return applySetGuestStage(data);
+	});
+
+const updateGuestSchema = z.object({
+	clubId: uuid,
+	guestId: uuid,
+	name: z.string().trim().min(1, "A guest name is required."),
+	email: z.string().trim().email().nullable().optional(),
+	phone: z.string().trim().nullable().optional(),
+});
+
+/**
+ * Fix a guest's name / email / phone (#364). AUTHED — admin-only, the same gate
+ * as `setGuestStage` / `convertGuestToMember` (a guest record is officer data;
+ * nothing here is offered on the public guest-book/self-serve views).
+ */
+export const updateGuest = createServerFn({ method: "POST" })
+	.validator((input: unknown) => updateGuestSchema.parse(input))
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		await requireClubRole(currentUser.id, data.clubId, ["admin"]);
+		return applyUpdateGuest(data);
+	});
+
+const deleteGuestSchema = z.object({
+	clubId: uuid,
+	guestId: uuid,
+	actorMemberId: uuid.nullable().optional(),
+});
+
+/**
+ * Delete a guest added by mistake (#364): any slots they hold are reset to Open
+ * (logged), then the row goes. A guest already converted to a member is
+ * rejected. AUTHED — admin-only.
+ */
+export const deleteGuest = createServerFn({ method: "POST" })
+	.validator((input: unknown) => deleteGuestSchema.parse(input))
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		await requireClubRole(currentUser.id, data.clubId, ["admin"]);
+		return applyDeleteGuest({
+			clubId: data.clubId,
+			guestId: data.guestId,
+			actorMemberId: data.actorMemberId ?? null,
+		});
 	});
 
 const convertSchema = z.object({

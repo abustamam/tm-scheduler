@@ -1,13 +1,14 @@
 /**
  * DB-backed integration tests for the VP-Membership guest pipeline (#208 /
  * ADR-0018): guest-book capture (create-or-find + attendance), derived visits
- * (including participation — #374), manual stage transitions, and
- * convert-to-member (Person dedup, membership create, slot re-point,
- * stage=joined, picker exclusion, activity log).
+ * (including participation — #374), edit/delete (#364), manual stage
+ * transitions, and convert-to-member (Person dedup, membership create, slot
+ * re-point, stage=joined, picker exclusion, activity log).
  *
  * `#/db` is mocked to the TEST_DATABASE_URL client; the whole suite skips when
  * that env is unset.
  */
+import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -32,7 +33,9 @@ vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
 const {
 	applyConvertGuestToMember,
+	applyDeleteGuest,
 	applySetGuestStage,
+	applyUpdateGuest,
 	captureGuestVisit,
 	loadGuestPipeline,
 } = await import("#/server/guest-pipeline-logic");
@@ -338,6 +341,168 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			expect(row.firstVisitAt?.getTime()).toBe(
 				oldMeeting!.scheduledAt.getTime(),
 			);
+		});
+	});
+
+	// #364: a typo'd guest was permanent — there was no update or delete path.
+	describe("edit + delete (#364)", () => {
+		it("updates a guest's name/email/phone, normalizing the phone to E.164 (#295)", async () => {
+			const guestId = await seedGuest(seed.clubId, "Tpyo Nmae");
+
+			await applyUpdateGuest({
+				clubId: seed.clubId,
+				guestId,
+				name: "  Typo Fixed  ",
+				email: "  fixed@example.com  ",
+				phone: "+1 (555) 010-2030",
+			});
+
+			const [g] = await testDb
+				.select({ name: guests.name, email: guests.email, phone: guests.phone })
+				.from(guests)
+				.where(eq(guests.id, guestId));
+			expect(g).toMatchObject({
+				name: "Typo Fixed",
+				email: "fixed@example.com",
+				phone: "+15550102030",
+			});
+		});
+
+		it("clears contact when the edit sends empty values", async () => {
+			const guestId = await seedGuest(seed.clubId, "Has Contact");
+			await applyUpdateGuest({
+				clubId: seed.clubId,
+				guestId,
+				name: "Has Contact",
+				email: "drop@example.com",
+				phone: "+15550001111",
+			});
+			await applyUpdateGuest({
+				clubId: seed.clubId,
+				guestId,
+				name: "Has Contact",
+				email: null,
+				phone: null,
+			});
+			const [g] = await testDb
+				.select({ email: guests.email, phone: guests.phone })
+				.from(guests)
+				.where(eq(guests.id, guestId));
+			expect(g).toMatchObject({ email: null, phone: null });
+		});
+
+		it("rejects an empty name, and a guest outside the caller's club", async () => {
+			const guestId = await seedGuest(seed.clubId, "Real Guest");
+			await expect(
+				applyUpdateGuest({ clubId: seed.clubId, guestId, name: "   " }),
+			).rejects.toThrow(/name is required/i);
+			await expect(
+				applyUpdateGuest({ clubId: randomUUID(), guestId, name: "Nope" }),
+			).rejects.toThrow(/not found/i);
+		});
+
+		it("deletes a guest, resets the slots they held to Open, and drops their minutes rows", async () => {
+			const guestId = await seedGuest(seed.clubId, "Delete Me");
+			await applyAssignGuestToSlot({
+				slotId: seed.slotId,
+				guestId,
+				actorMemberId: null,
+			});
+			const past = await seedPastMeeting(seed.clubId, 4);
+			await testDb
+				.insert(meetingAttendance)
+				.values({ meetingId: past, guestId, status: "present" });
+			await testDb
+				.insert(tableTopicsSpeakers)
+				.values({ meetingId: past, guestId });
+
+			// The pipeline surfaces the held-slot count so the UI can warn first.
+			expect((await pipelineRow(seed.clubId, guestId)).heldSlotCount).toBe(1);
+
+			const res = await applyDeleteGuest({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+			expect(res.slotsReopened).toBe(1);
+
+			expect(
+				await testDb.select().from(guests).where(eq(guests.id, guestId)),
+			).toHaveLength(0);
+
+			// The slot is genuinely Open again — never "claimed" by nobody.
+			const [slot] = await testDb
+				.select({
+					status: roleSlots.status,
+					assignedGuestId: roleSlots.assignedGuestId,
+					assignedMemberId: roleSlots.assignedMemberId,
+					claimedAt: roleSlots.claimedAt,
+				})
+				.from(roleSlots)
+				.where(eq(roleSlots.id, seed.slotId));
+			expect(slot).toMatchObject({
+				status: "open",
+				assignedGuestId: null,
+				assignedMemberId: null,
+				claimedAt: null,
+			});
+
+			// Minutes rows cascade with the guest — nothing dangles.
+			expect(await attendanceForGuest(guestId)).toHaveLength(0);
+			expect(
+				await testDb
+					.select()
+					.from(tableTopicsSpeakers)
+					.where(eq(tableTopicsSpeakers.guestId, guestId)),
+			).toHaveLength(0);
+
+			// Each reopened slot is logged as a release (mirrors applyMemberRemove).
+			const log = await testDb
+				.select()
+				.from(activityLog)
+				.where(
+					and(
+						eq(activityLog.clubId, seed.clubId),
+						eq(activityLog.targetId, seed.slotId),
+						eq(activityLog.action, "release"),
+					),
+				);
+			expect(log).toHaveLength(1);
+		});
+
+		it("BLOCKS deleting a guest who has been converted to a member", async () => {
+			const { guestId } = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Now A Member",
+				phone: "555-606-7070",
+			});
+			await applyConvertGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: null,
+			});
+
+			await expect(
+				applyDeleteGuest({
+					clubId: seed.clubId,
+					guestId,
+					actorMemberId: null,
+				}),
+			).rejects.toThrow(/member/i);
+			expect(
+				await testDb.select().from(guests).where(eq(guests.id, guestId)),
+			).toHaveLength(1);
+		});
+
+		it("rejects deleting a guest outside the caller's club", async () => {
+			const guestId = await seedGuest(seed.clubId, "Other Club Guest");
+			await expect(
+				applyDeleteGuest({
+					clubId: randomUUID(),
+					guestId,
+					actorMemberId: null,
+				}),
+			).rejects.toThrow(/not found/i);
 		});
 	});
 

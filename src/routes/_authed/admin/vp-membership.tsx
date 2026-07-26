@@ -6,6 +6,17 @@ import { toast } from "sonner";
 import { MemberAvatar } from "#/components/club/member-avatar";
 import { PageContainer } from "#/components/page-container";
 import { Button } from "#/components/ui/button";
+import {
+	Dialog,
+	DialogClose,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "#/components/ui/dialog";
+import { Input } from "#/components/ui/input";
+import { Label } from "#/components/ui/label";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { formatShortDate } from "#/lib/format";
@@ -13,11 +24,13 @@ import { cn } from "#/lib/utils";
 import { getClubByIdentifier } from "#/server/clubs";
 import {
 	convertGuestToMember,
+	deleteGuest,
 	type GuestStage,
 	getGuestPipeline,
 	type ManualGuestStage,
 	type PipelineGuestRow,
 	setGuestStage,
+	updateGuest,
 } from "#/server/guest-pipeline";
 
 export const Route = createFileRoute("/_authed/admin/vp-membership")({
@@ -196,6 +209,8 @@ function VpMembership() {
 								<GuestRow
 									key={g.id}
 									guest={g}
+									clubId={clubId}
+									currentMemberId={currentMemberId}
 									busy={busyId === g.id}
 									onMove={move}
 									onConvert={convert}
@@ -266,11 +281,15 @@ function EmptyRow({ children }: { children: React.ReactNode }) {
 
 function GuestRow({
 	guest,
+	clubId,
+	currentMemberId,
 	busy,
 	onMove,
 	onConvert,
 }: {
 	guest: PipelineGuestRow;
+	clubId: string;
+	currentMemberId: string | null;
 	busy: boolean;
 	onMove: (guestId: string, stage: ManualGuestStage) => void;
 	onConvert: (guest: PipelineGuestRow) => void;
@@ -307,13 +326,13 @@ function GuestRow({
 				</div>
 			</div>
 
-			{joined ? (
-				<span className="shrink-0 self-start rounded-full bg-[var(--success)] px-2.5 py-1 text-xs font-bold text-[var(--success-foreground)] sm:self-center">
-					Member
-				</span>
-			) : (
-				<div className="flex shrink-0 flex-wrap items-center gap-1.5">
-					{MANUAL_STAGES.filter((s) => s.id !== guest.stage).map((s) => (
+			<div className="flex shrink-0 flex-wrap items-center gap-1.5">
+				{joined ? (
+					<span className="rounded-full bg-[var(--success)] px-2.5 py-1 text-xs font-bold text-[var(--success-foreground)]">
+						Member
+					</span>
+				) : (
+					MANUAL_STAGES.filter((s) => s.id !== guest.stage).map((s) => (
 						<Button
 							key={s.id}
 							type="button"
@@ -324,7 +343,19 @@ function GuestRow({
 						>
 							{s.label}
 						</Button>
-					))}
+					))
+				)}
+				{/* Fix a typo'd name/contact, or delete a guest added by mistake
+				    (#364). Edit is offered at every stage (the guest row is only ever
+				    the record of the visitor); delete is not offered once they have
+				    converted — the server rejects it too. */}
+				<GuestEditDelete
+					guest={guest}
+					clubId={clubId}
+					currentMemberId={currentMemberId}
+					disabled={busy}
+				/>
+				{joined ? null : (
 					<Button
 						type="button"
 						size="sm"
@@ -340,8 +371,206 @@ function GuestRow({
 							</>
 						)}
 					</Button>
-				</div>
-			)}
+				)}
+			</div>
 		</div>
+	);
+}
+
+/**
+ * What deleting this guest will actually do, spelled out: held roles go back to
+ * Open, and their visit history goes with them. A guest who really visited
+ * should be moved to Lost instead — delete is for mistakes (#364).
+ */
+function deleteBlurb(guest: PipelineGuestRow): string {
+	const held =
+		guest.heldSlotCount > 0
+			? `They hold ${guest.heldSlotCount} role${
+					guest.heldSlotCount === 1 ? "" : "s"
+				}, which will be reset to Open. `
+			: "";
+	const kept =
+		guest.visitCount > 0
+			? " If they really visited, move them to Lost instead so the record is kept."
+			: "";
+	return `${held}Their visits and minutes entries go with them. This can't be undone.${kept}`;
+}
+
+/**
+ * Per-guest Edit + Delete (#364). Each row owns its own dialog state (mirrors
+ * the roster's member Edit/Remove pair). The delete confirm names exactly what
+ * it will do — including how many role slots get reset to Open — so a guest
+ * holding roles is never a silent surprise.
+ */
+function GuestEditDelete({
+	guest,
+	clubId,
+	currentMemberId,
+	disabled,
+}: {
+	guest: PipelineGuestRow;
+	clubId: string;
+	currentMemberId: string | null;
+	disabled: boolean;
+}) {
+	const router = useRouter();
+	const [editOpen, setEditOpen] = useState(false);
+	const [deleteOpen, setDeleteOpen] = useState(false);
+	const [busy, setBusy] = useState(false);
+	const joined = guest.stage === "joined";
+
+	async function onEditSubmit(e: React.FormEvent<HTMLFormElement>) {
+		e.preventDefault();
+		const form = new FormData(e.currentTarget);
+		const name = String(form.get("name") ?? "").trim();
+		if (!name) {
+			toast.error("Name is required.");
+			return;
+		}
+		setBusy(true);
+		try {
+			await updateGuest({
+				data: {
+					clubId,
+					guestId: guest.id,
+					name,
+					email: String(form.get("email") ?? "").trim() || null,
+					phone: String(form.get("phone") ?? "").trim() || null,
+				},
+			});
+			toast.success("Guest updated.");
+			setEditOpen(false);
+			await router.invalidate();
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	async function onDelete() {
+		setBusy(true);
+		try {
+			const res = await deleteGuest({
+				data: { clubId, guestId: guest.id, actorMemberId: currentMemberId },
+			});
+			toast.success(
+				res.slotsReopened > 0
+					? `${guest.name} deleted. ${res.slotsReopened} role${
+							res.slotsReopened === 1 ? "" : "s"
+						} reset to Open.`
+					: `${guest.name} deleted.`,
+			);
+			setDeleteOpen(false);
+			await router.invalidate();
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	return (
+		<>
+			<Button
+				type="button"
+				variant="outline"
+				size="sm"
+				disabled={disabled || busy}
+				onClick={() => setEditOpen(true)}
+			>
+				Edit
+			</Button>
+			{joined ? null : (
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					className="border-[var(--line)] text-[var(--danger,#b4232a)] hover:bg-[rgba(180,35,42,.08)]"
+					disabled={disabled || busy}
+					onClick={() => setDeleteOpen(true)}
+				>
+					Delete
+				</Button>
+			)}
+
+			<Dialog open={editOpen} onOpenChange={setEditOpen}>
+				<DialogContent>
+					<DialogHeader>
+						<DialogTitle>Edit guest</DialogTitle>
+						<DialogDescription>
+							{joined
+								? `Fix ${guest.name}'s guest record. They are already a member — their roster details are edited on the roster.`
+								: `Fix ${guest.name}'s name and contact details.`}
+						</DialogDescription>
+					</DialogHeader>
+					<form onSubmit={onEditSubmit} className="space-y-4">
+						<div className="space-y-2">
+							<Label htmlFor={`guest-name-${guest.id}`}>Name</Label>
+							<Input
+								id={`guest-name-${guest.id}`}
+								name="name"
+								required
+								defaultValue={guest.name}
+								autoFocus
+							/>
+						</div>
+						<div className="space-y-2">
+							<Label htmlFor={`guest-email-${guest.id}`}>Email</Label>
+							<Input
+								id={`guest-email-${guest.id}`}
+								name="email"
+								type="email"
+								defaultValue={guest.email ?? ""}
+								placeholder="name@example.com"
+							/>
+						</div>
+						<div className="space-y-2">
+							<Label htmlFor={`guest-phone-${guest.id}`}>Phone</Label>
+							<Input
+								id={`guest-phone-${guest.id}`}
+								name="phone"
+								type="tel"
+								defaultValue={guest.phone ?? ""}
+							/>
+						</div>
+						<DialogFooter>
+							<DialogClose asChild>
+								<Button type="button" variant="outline" disabled={busy}>
+									Cancel
+								</Button>
+							</DialogClose>
+							<Button type="submit" disabled={busy}>
+								{busy ? "Saving…" : "Save changes"}
+							</Button>
+						</DialogFooter>
+					</form>
+				</DialogContent>
+			</Dialog>
+
+			<Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+				<DialogContent>
+					<DialogHeader>
+						<DialogTitle>Delete {guest.name}?</DialogTitle>
+						<DialogDescription>{deleteBlurb(guest)}</DialogDescription>
+					</DialogHeader>
+					<DialogFooter>
+						<DialogClose asChild>
+							<Button type="button" variant="outline" disabled={busy}>
+								Cancel
+							</Button>
+						</DialogClose>
+						<Button
+							type="button"
+							variant="destructive"
+							disabled={busy}
+							onClick={onDelete}
+						>
+							{busy ? "Deleting…" : "Delete guest"}
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
+		</>
 	);
 }

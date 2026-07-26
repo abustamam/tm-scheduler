@@ -204,6 +204,12 @@ export interface PipelineGuestRow {
 	firstVisitAt: Date | null;
 	/** Meetings visited (derived, never a stored counter). */
 	visitCount: number;
+	/**
+	 * Role slots this guest currently holds, across all of the club's meetings
+	 * (derived). Only used to warn before a delete — deleting resets each of them
+	 * back to Open (#364).
+	 */
+	heldSlotCount: number;
 	createdAt: Date;
 }
 
@@ -270,16 +276,16 @@ function guestVisits(clubId: string) {
 }
 
 /**
- * Every guest in a club with a DERIVED first-visit date and visit count — never
- * a stored counter (the derived style of `role-recency-logic.ts`). See
- * `guestVisits` for what counts as a visit. Served for the pipeline view; the
- * caller buckets by `stage`.
+ * Every guest in a club with a DERIVED first-visit date, visit count, and
+ * held-slot count — never stored counters (the derived style of
+ * `role-recency-logic.ts`). See `guestVisits` for what counts as a visit.
+ * Served for the pipeline view; the caller buckets by `stage`.
  */
 export async function loadGuestPipeline(
 	clubId: string,
 ): Promise<PipelineGuestRow[]> {
 	const visits = guestVisits(clubId).as("guest_visits");
-	const [rows, visitRows] = await Promise.all([
+	const [rows, visitRows, slotRows] = await Promise.all([
 		db
 			.select({
 				id: guests.id,
@@ -301,9 +307,21 @@ export async function loadGuestPipeline(
 			})
 			.from(visits)
 			.groupBy(visits.guestId),
+		db
+			.select({
+				guestId: roleSlots.assignedGuestId,
+				heldSlotCount: count(),
+			})
+			.from(roleSlots)
+			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+			.where(
+				and(eq(meetings.clubId, clubId), isNotNull(roleSlots.assignedGuestId)),
+			)
+			.groupBy(roleSlots.assignedGuestId),
 	]);
 
 	const visitsByGuest = new Map(visitRows.map((v) => [v.guestId, v]));
+	const slotsByGuest = new Map(slotRows.map((s) => [s.guestId, s]));
 
 	return rows.map((r) => {
 		const v = visitsByGuest.get(r.id);
@@ -316,8 +334,134 @@ export async function loadGuestPipeline(
 			convertedMembershipId: r.convertedMembershipId,
 			visitCount: Number(v?.visitCount ?? 0),
 			firstVisitAt: v?.firstVisitAt ? new Date(v.firstVisitAt) : null,
+			heldSlotCount: Number(slotsByGuest.get(r.id)?.heldSlotCount ?? 0),
 			createdAt: r.createdAt,
 		};
+	});
+}
+
+export interface UpdateGuestInput {
+	clubId: string;
+	guestId: string;
+	name: string;
+	email?: string | null;
+	phone?: string | null;
+}
+
+/**
+ * Fix a guest's details (#364) — name (required) plus optional email/phone.
+ * Before this there was no update path at all, so a typo'd name was permanent
+ * and public (guest-held slots render on the agenda with a "· Guest" marker).
+ *
+ * Club-scoped; the phone is standardized to E.164 on write like every other
+ * contact write path (#295). Allowed at ANY stage, `joined` included: the guest
+ * row is only ever the record of the VISITOR, so correcting it is always safe —
+ * the Membership that convert-to-member created is a separate row, edited on the
+ * roster.
+ */
+export async function applyUpdateGuest(
+	input: UpdateGuestInput,
+): Promise<{ ok: true }> {
+	const name = input.name.trim();
+	if (!name) throw new Error("A guest name is required.");
+	const [guest] = await db
+		.select({ id: guests.id })
+		.from(guests)
+		.where(and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)))
+		.limit(1);
+	if (!guest) throw new Error("Guest not found in this club.");
+
+	const cc = await loadClubDefaultCountryCode(input.clubId);
+	await db
+		.update(guests)
+		.set({
+			name,
+			email: input.email?.trim() || null,
+			phone: toStoredPhone(input.phone, cc),
+			updatedAt: new Date(),
+		})
+		.where(eq(guests.id, input.guestId));
+	return { ok: true as const };
+}
+
+export interface DeleteGuestInput {
+	clubId: string;
+	guestId: string;
+	actorMemberId: string | null;
+}
+
+export interface DeleteGuestResult {
+	ok: true;
+	/** Slots that were held by this guest and have been reset to Open. */
+	slotsReopened: number;
+}
+
+/**
+ * Delete a guest added by mistake (#364). Club-scoped; caller gates on admin.
+ *
+ * Rules:
+ * - A CONVERTED guest (stage `joined` / `converted_membership_id` set) is NEVER
+ *   deleted — the Membership is the record of truth now and this row is the
+ *   durable history of how they arrived (ADR-0018). Rejected with a message the
+ *   UI surfaces; remove them from the roster instead.
+ * - Slots the guest HOLDS are reset to Open first (assignee cleared, status
+ *   `open`, `claimed_at` cleared), each logged as a `release` — mirroring
+ *   `applyMemberRemove`. `role_slots.assigned_guest_id` is ON DELETE SET NULL,
+ *   so skipping this would leave slots "claimed" by nobody. Past slots are reset
+ *   too (unlike a member removal, which keeps history): the FK nulls them either
+ *   way, so leaving them `claimed` would just be a lie.
+ * - Their minutes rows (attendance, Table Topics, awards) CASCADE with the row —
+ *   they are the record of someone who, by the officer's own action, was never
+ *   there. That is also why a real visitor should be marked `lost` rather than
+ *   deleted; delete is for mistakes.
+ */
+export async function applyDeleteGuest(
+	input: DeleteGuestInput,
+): Promise<DeleteGuestResult> {
+	const [guest] = await db
+		.select({
+			id: guests.id,
+			name: guests.name,
+			stage: guests.stage,
+			convertedMembershipId: guests.convertedMembershipId,
+		})
+		.from(guests)
+		.where(and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)))
+		.limit(1);
+	if (!guest) throw new Error("Guest not found in this club.");
+	if (guest.stage === "joined" || guest.convertedMembershipId) {
+		throw new Error(
+			"This guest is now a club member — remove them from the roster instead.",
+		);
+	}
+
+	return db.transaction(async (tx) => {
+		const held = await tx
+			.select({ id: roleSlots.id })
+			.from(roleSlots)
+			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+			.where(
+				and(
+					eq(roleSlots.assignedGuestId, input.guestId),
+					eq(meetings.clubId, input.clubId),
+				),
+			);
+		for (const slot of held) {
+			await tx
+				.update(roleSlots)
+				.set({ assignedGuestId: null, status: "open", claimedAt: null })
+				.where(eq(roleSlots.id, slot.id));
+			await logActivity(tx, {
+				clubId: input.clubId,
+				actorMemberId: input.actorMemberId,
+				action: "release",
+				targetType: "slot",
+				targetId: slot.id,
+				detail: { guestId: input.guestId, guestName: guest.name },
+			});
+		}
+		await tx.delete(guests).where(eq(guests.id, input.guestId));
+		return { ok: true as const, slotsReopened: held.length };
 	});
 }
 
