@@ -2,7 +2,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { lockedViewer } from "#/lib/meeting-lifecycle";
+import { lockedViewer, resolveMeetingViewer } from "#/lib/meeting-lifecycle";
 import { meetingViewer } from "#/lib/meeting-viewer";
 import {
 	type AgendaSlot,
@@ -54,11 +54,35 @@ function slot(over: Partial<AgendaSlot>): AgendaSlot {
 	} as unknown as AgendaSlot;
 }
 
+const DAY_MS = 86_400_000;
+/** Relative so the fixtures never rot: 30 days clears any tz day boundary. */
+const daysFromNow = (n: number) =>
+	new Date(Date.now() + n * DAY_MS).toISOString();
+
+function meetingFixture(
+	over: Partial<{ scheduledAt: string; status: string }> = {},
+): MeetingAgendaProps["meeting"] {
+	return {
+		id: "m1",
+		scheduledAt: daysFromNow(30),
+		status: "scheduled",
+		lengthMinutes: 90,
+		theme: null,
+		location: null,
+		wordOfTheDay: null,
+		wodDefinition: null,
+		wodExample: null,
+		notes: null,
+		...over,
+	} as unknown as MeetingAgendaProps["meeting"];
+}
+
 function renderAgenda(
 	viewer: ReturnType<typeof meetingViewer>,
 	slots: AgendaSlot[],
 	pairedRoleIds?: Set<string>,
 	requireIdentity?: () => Promise<{ id: string; name: string } | null>,
+	extra?: Partial<MeetingAgendaProps>,
 ) {
 	return render(
 		<MeetingAgenda
@@ -71,25 +95,14 @@ function renderAgenda(
 			pairedRoleIds={pairedRoleIds}
 			shareUrl="https://gavelup.app/club/test/meeting/m1"
 			meetingDate="Jan 1, 2026"
-			meeting={
-				{
-					id: "m1",
-					scheduledAt: "2026-01-01T00:00:00Z",
-					lengthMinutes: 90,
-					theme: null,
-					location: null,
-					wordOfTheDay: null,
-					wodDefinition: null,
-					wodExample: null,
-					notes: null,
-				} as unknown as MeetingAgendaProps["meeting"]
-			}
+			meeting={meetingFixture()}
 			timezone="UTC"
 			actorMemberId="me"
 			selfMemberId="me"
 			onMetaSaved={() => {}}
 			requireIdentity={requireIdentity}
 			contactedMemberIds={[]}
+			{...extra}
 		/>,
 	);
 }
@@ -534,5 +547,105 @@ describe("tap-to-nudge confirm gate (#37)", () => {
 	it("does not render the recruit picker for a non-manager", () => {
 		renderAgenda(member(), [slot({ status: "open" })]);
 		expect(screen.queryByRole("button", { name: /nudge someone/i })).toBeNull();
+	});
+});
+
+describe("planning panels hide once the meeting is over (#376)", () => {
+	afterEach(() => cleanup());
+
+	// Production-faithful: both meeting surfaces build their viewer through
+	// `resolveMeetingViewer`, so the test exercises the real canManage outcome
+	// for each lifecycle state rather than hand-rolling one.
+	const adminViewer = (meeting: MeetingAgendaProps["meeting"]) =>
+		resolveMeetingViewer({
+			status: meeting.status,
+			scheduledAt: meeting.scheduledAt,
+			timezone: "UTC",
+			currentMemberId: "me",
+			canManage: true,
+			isTmod: false,
+			isGrammarian: false,
+			isSignedIn: true,
+		});
+
+	const withRoster = (meeting: MeetingAgendaProps["meeting"]) => ({
+		meeting,
+		roster: [
+			{ id: "r1", name: "Rita Roster" },
+			{ id: "r2", name: "Otto Out" },
+		],
+		unavailableMemberIds: ["r2"],
+		unavailableMembers: [{ id: "r2", name: "Otto Out" }],
+	});
+
+	it("shows Outreach and 'Not available this week' on an upcoming meeting", () => {
+		const meeting = meetingFixture({ scheduledAt: daysFromNow(7) });
+		renderAgenda(
+			adminViewer(meeting),
+			[slot({ status: "open" })],
+			undefined,
+			undefined,
+			withRoster(meeting),
+		);
+		expect(screen.getByText("Outreach")).toBeTruthy();
+		expect(screen.getByText("Not available this week")).toBeTruthy();
+	});
+
+	it("hides both on a PAST but never-completed meeting (canManage is still true)", () => {
+		const meeting = meetingFixture({
+			scheduledAt: daysFromNow(-7),
+			status: "scheduled",
+		});
+		const viewer = adminViewer(meeting);
+		// The case that bit us: an admin keeps full management on a past-but-open
+		// meeting, so `lockedViewer` never strips the panel — the date must.
+		expect(viewer.canManage).toBe(true);
+		renderAgenda(viewer, [slot({ status: "open" })], undefined, undefined, {
+			...withRoster(meeting),
+		});
+		expect(screen.queryByText("Outreach")).toBeNull();
+		expect(screen.queryByText("Not available this week")).toBeNull();
+	});
+
+	it("hides both on a COMPLETED meeting", () => {
+		const meeting = meetingFixture({
+			scheduledAt: daysFromNow(-7),
+			status: "completed",
+		});
+		const viewer = adminViewer(meeting);
+		// Completed already strips management (`lockedViewer`) — belt to the
+		// date's braces.
+		expect(viewer.canManage).toBe(false);
+		renderAgenda(viewer, [slot({ status: "open" })], undefined, undefined, {
+			...withRoster(meeting),
+		});
+		expect(screen.queryByText("Outreach")).toBeNull();
+		expect(screen.queryByText("Not available this week")).toBeNull();
+	});
+
+	it("hides both when completed EARLY, before the meeting date", () => {
+		// Isolates the lock branch from the date branch: a future meeting marked
+		// completed must hide them on `status` alone.
+		const meeting = meetingFixture({
+			scheduledAt: daysFromNow(7),
+			status: "completed",
+		});
+		renderAgenda(
+			// Forced canManage so the assertion can only be satisfied by the new
+			// lifecycle gate, not by `lockedViewer` zeroing the capability.
+			meetingViewer({
+				currentMemberId: "me",
+				canManage: true,
+				isTmod: false,
+				isGrammarian: false,
+				isEditableWindow: true,
+			}),
+			[slot({ status: "open" })],
+			undefined,
+			undefined,
+			withRoster(meeting),
+		);
+		expect(screen.queryByText("Outreach")).toBeNull();
+		expect(screen.queryByText("Not available this week")).toBeNull();
 	});
 });

@@ -34,6 +34,7 @@ import {
 	SheetTitle,
 } from "#/components/ui/sheet";
 import { buildRoleCounts, slotLabel, summarizeAgenda } from "#/lib/agenda";
+import { isMeetingLocked, meetingDatePassed } from "#/lib/meeting-lifecycle";
 import type { MeetingViewer } from "#/lib/meeting-viewer";
 import type { StoredMember } from "#/lib/member-identity";
 import type { getMeeting } from "#/server/meetings";
@@ -202,6 +203,18 @@ export function MeetingAgenda({
 	for (const s of slots) {
 		if (s.assigneeId) roleByMemberId[s.assigneeId] = slotLabel(s, roleCounts);
 	}
+
+	// Is the meeting over? (#376) The SAME condition `resolveMeetingViewer` uses
+	// (`meeting-lifecycle.ts`) — completed, or the day after its date — rather
+	// than a second rule that could drift from it. Gates the forward-looking
+	// planning panels (Outreach, "Not available this week"): "who still needs to
+	// be asked" and "skip them when filling open roles" are meaningless once the
+	// meeting has happened, yet an admin keeps `canManage` on a past-but-never-
+	// completed meeting, so capability alone can't hide them.
+	const meetingOver =
+		isMeetingLocked(meeting.status) ||
+		meetingDatePassed(meeting.scheduledAt, timezone);
+	const showPlanningPanels = viewer.canManage && !meetingOver;
 
 	// Recruiting pool for open-slot nudges (#37) — every active member, annotated
 	// (not filtered) with availability + the role they already hold this meeting.
@@ -404,7 +417,7 @@ export function MeetingAgenda({
 				</section>
 			) : null}
 
-			{viewer.canManage && unavailableMembers.length > 0 ? (
+			{showPlanningPanels && unavailableMembers.length > 0 ? (
 				<section className="rounded-xl border border-dashed bg-muted/40 p-4">
 					<h2 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
 						Not available this week
@@ -422,11 +435,12 @@ export function MeetingAgenda({
 				</section>
 			) : null}
 
-			{viewer.canManage ? (
+			{showPlanningPanels ? (
 				<OutreachPanel
 					roster={roster}
 					assignedIds={new Set(Object.keys(roleByMemberId))}
 					contactedIds={new Set(contactedMemberIds)}
+					unavailableIds={new Set(unavailableMemberIds)}
 					onContacted={(id) => onContacted?.(id, "manual")}
 					onUncontacted={(id) => onUncontacted?.(id)}
 				/>
