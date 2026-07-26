@@ -105,8 +105,15 @@ const SECTION_BY_SLIDE = {
 	// which roles the club runs, so it has no beat of its own; beat 3 is the
 	// Toastmaster opening, which maps to the `toastmaster` slide below.
 	toastmasterIntro: null,
-	// The standalone Word-of-the-Day slide. Content-gated like the above (needs a
-	// definition or example). #354 may move it; deliberately not compared.
+	// The standalone Word-of-the-Day slide. #354 moved it out of the General
+	// Evaluator's stretch and into the Toastmaster's opening, immediately after
+	// `toastmasterIntro` — but it stays excluded for the reason it always was:
+	// its gate is MEETING CONTENT (a word plus a definition or example), not
+	// which roles the club runs, so no beat corresponds to it. The Grammarian it
+	// now credits changes the slide's COPY, never whether it exists, so the
+	// exclusion still holds after the move. What the run sheet does say about
+	// the word is beat 4's "each explains their role" and beat 7's Table Topics
+	// detail — neither is a Word-of-the-Day section of its own.
 	wordOfDay: null,
 	// Gated on which scored segments exist — and so is beat 14, as of #372.
 	awards: "awards",
@@ -307,6 +314,15 @@ const voteCounter = slot({
 	roleName: "Vote Counter",
 	assigneeName: "Omar",
 });
+/** A role the club invented, marked `category: "functionary"` — it binds to no
+ *  standard key, which is precisely the combination neither surface handled
+ *  consistently before #371. */
+const jokeMaster = slot({
+	id: "jm",
+	roleKey: null,
+	roleName: "Joke Master",
+	assigneeName: "Nadia",
+});
 
 /** Every standard role a club can run — the full nine-role club. */
 const FULL: AgendaSlot[] = [
@@ -368,6 +384,46 @@ const CASES: { name: string; slots: AgendaSlot[] }[] = [
 				isSpeakerRole: true,
 				assigneeName: "Nadia",
 			}),
+		],
+	},
+	{
+		// #371: a club-invented functionary is a functionary. It used to appear on
+		// the projected `functionaryIntro` slide (whose team came from
+		// `buildLegend`, a category filter) but not in the printed beat-4 row
+		// (whose `{roles}` resolved against the four standard keys) — a CONTENT
+		// divergence this ordering test cannot see, which is why the run-sheet and
+		// deck suites assert the lists directly. What it can see is the gate.
+		name: "custom functionary-category role alongside the standard four",
+		slots: [...FULL, jokeMaster],
+	},
+	{
+		// The all-custom club: #368's disable lifecycle turns off all four standard
+		// functionaries and the club runs its own. Beats 4 and 12 used to vanish
+		// from print AND deck together — consistent, and consistently wrong.
+		name: "all-custom functionaries (standard four disabled)",
+		slots: [tmod, ttm, ge, speaker1, evaluator1, jokeMaster],
+	},
+	{
+		// The beat-12 gate decision (#371): a Vote Counter is a functionary, so
+		// they are INTRODUCED, but they give no report — so the reports section is
+		// absent from both surfaces.
+		name: "Vote Counter is the club's only functionary",
+		slots: [tmod, ttm, ge, speaker1, evaluator1, voteCounter],
+	},
+	{
+		// An admin can change a role's category (`applyRoleDefinitionUpdate`), so a
+		// standard KEY under a non-functionary category is reachable. The category
+		// is the definition (#371), so this club runs no functionaries and both
+		// surfaces must drop beats 4 and 12 together — the case where a key-based
+		// gating fallback would have made print render a beat the deck omits.
+		name: "standard functionary key recategorised out of the functionaries",
+		slots: [
+			tmod,
+			ttm,
+			ge,
+			speaker1,
+			evaluator1,
+			{ ...timer, category: "leadership" },
 		],
 	},
 	{

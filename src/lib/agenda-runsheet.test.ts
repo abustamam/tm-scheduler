@@ -3,12 +3,16 @@ import type { AgendaRow, AgendaSlot } from "./agenda-runsheet";
 import {
 	applyFlex,
 	buildLegend,
+	buildReportingLegend,
 	buildRunOfShow,
 	expandRunSheet,
 	FLEX_TOLERANCE_MINUTES,
+	functionarySlots,
 	hasAnyFunctionaryRole,
+	hasAnyReportingFunctionaryRole,
 	ROLES_TOKEN,
 	RUN_OF_SHOW,
+	reportingFunctionarySlots,
 	TABLE_TOPICS_MAX,
 	TABLE_TOPICS_MIN,
 } from "./agenda-runsheet";
@@ -161,6 +165,110 @@ describe("buildLegend", () => {
 		expect(
 			buildLegend([slot({ roleName: "Ah-Counter", assigneeName: null })]),
 		).toEqual([{ role: "Ah-Counter", name: "— open —" }]);
+	});
+});
+
+/**
+ * The single definition of "this club's functionaries" (#371). Before it, the
+ * legend filtered on `category === "functionary"` while the beat gates and the
+ * `{roles}` token resolved against the four standard keys — so a club's own
+ * "Joke Master" appeared on the projected slide but not in the printed row, and
+ * a club that disabled all four standard functionaries lost beats 4 and 12 from
+ * both surfaces while the legend still listed its people.
+ *
+ * The call: the CATEGORY is the definition. Keys are for identity — they make a
+ * beat rename-proof (#368) — not for membership. A club marking a role
+ * `category: "functionary"` is the club telling us it is one.
+ */
+describe("functionarySlots (#371)", () => {
+	it("is the category, not the standard key set", () => {
+		const jokeMaster = slot({
+			id: "jm",
+			roleKey: null,
+			roleName: "Joke Master",
+			category: "functionary",
+		});
+		const timer = slot({ id: "ti", roleName: "Timer" });
+		const tmod = slot({
+			id: "tm",
+			roleName: "Toastmaster of the Day",
+			category: "leadership",
+		});
+		expect(functionarySlots([tmod, timer, jokeMaster])).toEqual([
+			timer,
+			jokeMaster,
+		]);
+	});
+
+	it("is exactly what buildLegend lists, so slide and printed row can't diverge", () => {
+		const slots = [
+			slot({ id: "ti", roleName: "Timer", assigneeName: "Alice" }),
+			slot({
+				id: "jm",
+				roleKey: null,
+				roleName: "Joke Master",
+				assigneeName: "Bob",
+			}),
+			slot({ id: "sp", roleName: "Speaker", category: "speaker" }),
+		];
+		expect(buildLegend(slots)).toEqual(
+			functionarySlots(slots).map((s) => ({
+				role: s.roleName,
+				name: s.assigneeName ?? "— open —",
+			})),
+		);
+	});
+});
+
+/**
+ * Beat 12's gate is "functionaries who REPORT", not "functionaries" (#371).
+ * A Vote Counter is a functionary — introduced at beat 4, listed in the legend —
+ * but tallies votes rather than giving a report, so a Vote-Counter-only club
+ * must not get a "Calls for the functionary reports" beat naming only them.
+ * Vote Counter is excluded by IDENTITY (its key), which is what keys are for;
+ * a club-invented functionary is presumed to report, since we cannot know
+ * otherwise and an extra name in a list the GE reads out is a smaller error
+ * than silently deleting the beat.
+ */
+describe("reportingFunctionarySlots (#371)", () => {
+	it("drops the Vote Counter and keeps the three that report", () => {
+		const timer = slot({ id: "ti", roleName: "Timer" });
+		const grammarian = slot({ id: "gr", roleName: "Grammarian" });
+		const ahCounter = slot({ id: "ah", roleName: "Ah-Counter" });
+		const voteCounter = slot({ id: "vc", roleName: "Vote Counter" });
+		expect(
+			reportingFunctionarySlots([timer, grammarian, ahCounter, voteCounter]),
+		).toEqual([timer, grammarian, ahCounter]);
+	});
+
+	it("drops a RENAMED Vote Counter too — identity is the key (#368)", () => {
+		expect(
+			reportingFunctionarySlots([
+				slot({
+					id: "vc",
+					roleKey: "vote_counter",
+					roleName: "Ballot Wrangler",
+				}),
+			]),
+		).toEqual([]);
+	});
+
+	it("keeps a club-invented functionary, which is presumed to report", () => {
+		const jokeMaster = slot({
+			id: "jm",
+			roleKey: null,
+			roleName: "Joke Master",
+		});
+		expect(reportingFunctionarySlots([jokeMaster])).toEqual([jokeMaster]);
+	});
+
+	it("buildReportingLegend lists exactly those, for the reports slide", () => {
+		expect(
+			buildReportingLegend([
+				slot({ id: "gr", roleName: "Grammarian", assigneeName: "Gina" }),
+				slot({ id: "vc", roleName: "Vote Counter", assigneeName: "Omar" }),
+			]),
+		).toEqual([{ role: "Grammarian", name: "Gina" }]);
 	});
 });
 
@@ -592,6 +700,101 @@ describe("expandRunSheet — functionary-dependent beats 4 & 12 (#367)", () => {
 		).toBe(true);
 	});
 
+	it("beat 4 names a club-invented functionary, and renders for a club that runs ONLY custom ones (#371)", () => {
+		// #368's disable lifecycle lets a club turn off all four standard
+		// functionaries and run its own. Before #371 that lost beats 4 and 12
+		// from the printed agenda and both slides from the deck, while the legend
+		// still listed the very same people.
+		const jokeMaster = slot({
+			id: "jm",
+			roleKey: null,
+			roleName: "Joke Master",
+			category: "functionary",
+			assigneeName: "Nadia",
+		});
+		const wordMaster = slot({
+			id: "wm",
+			roleKey: null,
+			roleName: "Word Master",
+			category: "functionary",
+			assigneeName: "Omar",
+		});
+		expect(
+			introRow(expandRunSheet([totd, jokeMaster, wordMaster]))?.detail,
+		).toBe(
+			"Introduces the Joke Master & Word Master; each explains their role",
+		);
+	});
+
+	it("beat 4 names a custom functionary ALONGSIDE the standard ones — the same list the slide shows (#371)", () => {
+		const jokeMaster = slot({
+			id: "jm",
+			roleKey: null,
+			roleName: "Joke Master",
+			category: "functionary",
+			assigneeName: "Nadia",
+		});
+		expect(
+			introRow(expandRunSheet([totd, timer, grammarian, jokeMaster]))?.detail,
+		).toBe(
+			"Introduces the Timer, Grammarian & Joke Master; each explains their role",
+		);
+	});
+
+	it("beat 12 is omitted for a Vote-Counter-only club — a Vote Counter gives no report (#371)", () => {
+		const voteCounter = slot({
+			id: "vc",
+			roleName: "Vote Counter",
+			category: "functionary",
+			assigneeName: "Omar",
+		});
+		const rows = expandRunSheet([totd, ge, voteCounter]);
+		expect(
+			rows.some((r) => r.detail === "Calls for the functionary reports"),
+		).toBe(false);
+		// The Vote Counter is still a functionary: beat 4 introduces them.
+		expect(introRow(rows)?.detail).toBe(
+			"Introduces the Vote Counter; each explains their role",
+		);
+	});
+
+	it("beats 4 & 12 are omitted when the only candidate is a standard KEY recategorised out of the functionaries (#371)", () => {
+		// `applyRoleDefinitionUpdate` lets an admin change a role's category, so a
+		// timer-keyed slot filed under "leadership" is reachable. The category is
+		// the definition, so this club runs no functionaries — and crucially the
+		// beat must be OMITTED, not rendered off the standard key list with an
+		// empty `{roles}` ("Introduces the ; each explains their role") while the
+		// deck, which reads `hasAnyFunctionaryRole`, drops the slide.
+		const recategorisedTimer = slot({
+			id: "ti",
+			roleKey: "timer",
+			roleName: "Timer",
+			category: "leadership",
+			assigneeName: "Tariq",
+		});
+		const rows = expandRunSheet([totd, ge, recategorisedTimer]);
+		expect(introRow(rows)).toBeUndefined();
+		expect(
+			rows.some((r) => r.detail === "Calls for the functionary reports"),
+		).toBe(false);
+	});
+
+	it("beat 12 renders for a club whose only functionary is a custom one (#371)", () => {
+		const rows = expandRunSheet([
+			ge,
+			slot({
+				id: "jm",
+				roleKey: null,
+				roleName: "Joke Master",
+				category: "functionary",
+				assigneeName: "Nadia",
+			}),
+		]);
+		expect(
+			rows.some((r) => r.detail === "Calls for the functionary reports"),
+		).toBe(true);
+	});
+
 	it("MCF variant: beat 4 (GE-owned) is still omitted when there are no functionary slots, despite a GE slot existing", () => {
 		const template = buildRunOfShow({ geIntroducesFunctionaries: true });
 		expect(introRow(expandRunSheet([totd, ge], template))).toBeUndefined();
@@ -647,12 +850,69 @@ describe("hasAnyFunctionaryRole", () => {
 		).toBe(true);
 	});
 
-	it("ignores a club-invented functionary that maps to no standard role", () => {
+	// Was: "ignores a club-invented functionary that maps to no standard role".
+	// That pinned the pre-#371 narrowing, where this predicate resolved against
+	// the four standard keys while `buildLegend` filtered on the category — the
+	// exact split #371 removes. Updated deliberately, in the direction the
+	// triage decided: the category is the definition.
+	it("counts a club-invented functionary, which is the club telling us it is one (#371)", () => {
 		expect(
 			hasAnyFunctionaryRole([
-				slot({ roleName: "Joke Master", category: "functionary" }),
+				slot({
+					roleKey: null,
+					roleName: "Joke Master",
+					category: "functionary",
+				}),
+			]),
+		).toBe(true);
+	});
+
+	it("is false for a standard KEY carried by a non-functionary category", () => {
+		// Membership is the category, full stop — the key only says which role it
+		// is, so a club that recategorised its Timer out of the functionaries is
+		// taken at its word here as it already was in the legend.
+		expect(
+			hasAnyFunctionaryRole([
+				slot({ roleKey: "timer", roleName: "Timer", category: "leadership" }),
 			]),
 		).toBe(false);
+	});
+});
+
+// Beat 12's gate, and the deck's functionary-REPORTS slide (#371). Narrower
+// than `hasAnyFunctionaryRole` by exactly one standard role: the Vote Counter,
+// who is a functionary but gives no report.
+describe("hasAnyReportingFunctionaryRole (#371)", () => {
+	it("is false for no slots and for a leadership-only crew", () => {
+		expect(hasAnyReportingFunctionaryRole([])).toBe(false);
+		expect(
+			hasAnyReportingFunctionaryRole([
+				slot({ roleName: "Toastmaster of the Day", category: "leadership" }),
+			]),
+		).toBe(false);
+	});
+
+	it("is true for the three standard functionaries that report", () => {
+		for (const roleName of ["Timer", "Ah-Counter", "Grammarian"])
+			expect(hasAnyReportingFunctionaryRole([slot({ roleName })])).toBe(true);
+	});
+
+	it("is FALSE for a Vote-Counter-only club, though beat 4 still introduces them", () => {
+		const voteCounter = slot({ roleName: "Vote Counter" });
+		expect(hasAnyReportingFunctionaryRole([voteCounter])).toBe(false);
+		expect(hasAnyFunctionaryRole([voteCounter])).toBe(true);
+	});
+
+	it("is true for a club-invented functionary", () => {
+		expect(
+			hasAnyReportingFunctionaryRole([
+				slot({
+					roleKey: null,
+					roleName: "Joke Master",
+					category: "functionary",
+				}),
+			]),
+		).toBe(true);
 	});
 });
 

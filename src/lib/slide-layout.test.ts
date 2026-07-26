@@ -15,6 +15,7 @@ describe("slideLayout headers (no 'Session', title-only)", () => {
 				word: "Synergy",
 				definition: null,
 				example: null,
+				presenter: null,
 			}),
 		).toBe("Word of the Day");
 		expect(
@@ -407,12 +408,58 @@ describe("slideLayout bodies", () => {
 			word: "Synergy",
 			definition: "cooperation",
 			example: null,
+			presenter: null,
 		});
 		expect(l.chrome === "content" && l.body).toMatchObject({
 			form: "word",
 			word: "Synergy",
 			definition: "cooperation",
 			example: null,
+			// No Grammarian on this club's roster ⇒ no attribution line at all.
+			presenter: null,
+		});
+	});
+
+	it("wordOfDay credits the Grammarian who presents it (#354)", () => {
+		// The slide now sits inside the Toastmaster's opening, so the copy has to
+		// say whose it is rather than letting its position imply the Toastmaster
+		// (or, under MCF's variant, the General Evaluator) delivers it.
+		const held = slideLayout({
+			kind: "wordOfDay",
+			word: "Synergy",
+			definition: "cooperation",
+			example: null,
+			presenter: { role: "Grammarian", name: "Mona" },
+		});
+		expect(held.chrome === "content" && held.body).toMatchObject({
+			form: "word",
+			presenter: "Presented by the Grammarian · Mona",
+		});
+
+		// Unclaimed: still the Grammarian's, just nobody's yet — the role alone,
+		// never "Presented by the Grammarian · — open —".
+		const open = slideLayout({
+			kind: "wordOfDay",
+			word: "Synergy",
+			definition: "cooperation",
+			example: null,
+			presenter: { role: "Grammarian", name: "— open —" },
+		});
+		expect(open.chrome === "content" && open.body).toMatchObject({
+			presenter: "Presented by the Grammarian",
+		});
+
+		// The club's own name for the role, so a renamed Grammarian is credited
+		// as the club calls them (#368).
+		const renamed = slideLayout({
+			kind: "wordOfDay",
+			word: "Synergy",
+			definition: "cooperation",
+			example: null,
+			presenter: { role: "Wordsmith", name: "Mona" },
+		});
+		expect(renamed.chrome === "content" && renamed.body).toMatchObject({
+			presenter: "Presented by the Wordsmith · Mona",
 		});
 	});
 

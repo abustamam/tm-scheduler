@@ -78,8 +78,15 @@ export type BeatRole = { roleKey: string; roleName: string };
  *   vote beats, which belong to a segment — a club with no Table Topics Master
  *   must not print "vote Best Table Topics" for a segment not on its agenda.
  *   A beat is omitted unless at least one of these roles has a slot.
- * - `detail` may contain `ROLES_TOKEN`, replaced at expansion time by the
- *   `requiresAnyOf` roles the club actually runs, under their own names.
+ * - `requiresGroup` gates on a role GROUP the club defines rather than a fixed
+ *   key list (#371) — "this club's functionaries", which is a category, not a
+ *   set of keys we shipped. It SUPERSEDES `requiresAnyOf` on the beats that
+ *   declare it (see `requirementsMet` for why they can't be ORed); the keys
+ *   stay on those beats as the standard roles the beat is nominally about,
+ *   which is what `docs/superpowers/specs` and the deck's `ROLE` map mirror.
+ * - `detail` may contain `ROLES_TOKEN`, replaced at expansion time by the roles
+ *   the club actually runs, under their own names — the beat's `requiresGroup`
+ *   members when it has one, else its `requiresAnyOf` matches.
  * - An `event` beat's `fallback` reassigns it to a different owner/detail
  *   when `fallback.roleKey` has no slots, instead of disappearing — the
  *   Timer's-report vote beats become Toastmaster-run plain votes.
@@ -100,7 +107,12 @@ export type Beat = (
 			detail: string;
 			minutes: number;
 	  }
-) & { requiresAnyOf?: BeatRole[]; flex?: true };
+) & { requiresAnyOf?: BeatRole[]; requiresGroup?: RoleGroup; flex?: true };
+
+/** A group of roles the CLUB defines, not a list of keys we shipped (#371).
+ *  `"functionaries"` is every `category: "functionary"` role;
+ *  `"reportingFunctionaries"` drops the Vote Counter, who gives no report. */
+export type RoleGroup = "functionaries" | "reportingFunctionaries";
 
 /** Fallback speaker duration when a speaker slot has no maxMinutes. */
 export const DEFAULT_SPEAKER_MINUTES = 7;
@@ -127,11 +139,79 @@ export const ROLES_TOKEN = "{roles}";
  *  Master" still hands out Best Table Topic. */
 export const AWARDS_TOKEN = "{awards}";
 
-/** Functionary-category roles for the header legend (Timer, Ah-Counter, Grammarian…). */
+/**
+ * THE definition of "this club's functionaries" (#371) — the one every surface
+ * reads: the legend, the beat-4/12 gates, the deck's two functionary slides,
+ * and the `ROLES_TOKEN` list in beat 4's printed detail.
+ *
+ * Membership is the **category**. Keys are for IDENTITY — they make a beat
+ * rename-proof (#368) and let us say which specific role something is — never
+ * for membership. A club that marks a role `category: "functionary"` is telling
+ * us it is one, and a tool whose premise (#367) is that clubs differ has no
+ * business overruling that because we didn't ship the role.
+ *
+ * Before this, `buildLegend` filtered on the category while `hasAnyFunctionaryRole`
+ * and `ROLES_TOKEN` resolved against the four standard keys, so a club's own
+ * "Joke Master" was projected on the functionary slide but missing from the
+ * printed row, and a club that disabled all four standard functionaries lost
+ * beats 4 and 12 from both surfaces while the legend still listed its people.
+ */
+export function functionarySlots(slots: AgendaSlot[]): AgendaSlot[] {
+	return slots.filter((s) => s.category === "functionary");
+}
+
+/** The one standard functionary who does not give a report: a Vote Counter
+ *  tallies ballots. Excluded by IDENTITY (its key, so a rename does not smuggle
+ *  it back in) — exactly what keys are for. */
+const NON_REPORTING_FUNCTIONARY: BeatRole = {
+	roleKey: "vote_counter",
+	roleName: "Vote Counter",
+};
+
+/**
+ * The functionaries who actually give a report — beat 12's subject, and the
+ * deck's `functionaryReports` team (#371).
+ *
+ * Widening "functionary" to the category makes the Vote-Counter-only club more
+ * reachable, not less, so beat 12 is gated on "functionaries who REPORT" rather
+ * than "functionaries": otherwise a club running a Vote Counter and nothing
+ * else gets "General Evaluator · Calls for the functionary reports" naming only
+ * the person with no report to give. They are still introduced at beat 4 and
+ * still in the legend — being a functionary and having a report are different
+ * questions, and only the second one gates beat 12.
+ *
+ * A club-invented functionary is presumed TO report. We cannot know, and an
+ * extra name in a list the General Evaluator reads out is a smaller error than
+ * silently deleting the beat from a club that runs only custom functionaries.
+ */
+export function reportingFunctionarySlots(slots: AgendaSlot[]): AgendaSlot[] {
+	return functionarySlots(slots).filter(
+		(s) =>
+			!matchesRole(
+				s,
+				NON_REPORTING_FUNCTIONARY.roleKey,
+				NON_REPORTING_FUNCTIONARY.roleName,
+			),
+	);
+}
+
+const toLegendEntry = (s: AgendaSlot): LegendEntry => ({
+	role: s.roleName,
+	name: assigneeDisplay(s),
+});
+
+/** Every functionary this club runs, for the header legend and the deck's
+ *  functionary-intro slide (Timer, Ah-Counter, Grammarian… and whatever else
+ *  the club invented). */
 export function buildLegend(slots: AgendaSlot[]): LegendEntry[] {
-	return slots
-		.filter((s) => s.category === "functionary")
-		.map((s) => ({ role: s.roleName, name: assigneeDisplay(s) }));
+	return functionarySlots(slots).map(toLegendEntry);
+}
+
+/** The subset that reports, for the deck's functionary-reports slide — the same
+ *  list beat 12's gate is computed from, so the slide never names someone the
+ *  printed beat implies has a report when they do not (#371). */
+export function buildReportingLegend(slots: AgendaSlot[]): LegendEntry[] {
+	return reportingFunctionarySlots(slots).map(toLegendEntry);
 }
 
 /** Config for `buildRunOfShow`: the one axis of per-club variance (#367). At
@@ -142,16 +222,24 @@ export function buildLegend(slots: AgendaSlot[]): LegendEntry[] {
  *  evaluation) — depends on this flag. */
 export type RunOfShowConfig = { geIntroducesFunctionaries: boolean };
 
-/** The 4 functionary-category roles (`ROLE_TEMPLATE`) that the
- *  functionary-intro and functionary-reports beats depend on collectively —
- *  "introduce/call for the functionaries" only makes sense once a club runs
- *  at least one. */
+/** The 4 standard functionary roles we ship (`ROLE_TEMPLATE`). Since #371 these
+ *  DECLARE which standard roles beat 4 is nominally about; they are no longer
+ *  the definition of a functionary, which is the category
+ *  (`functionarySlots`), nor the beat's gate — see `requirementsMet`. */
 const FUNCTIONARY_ROLES: BeatRole[] = [
 	{ roleKey: "grammarian", roleName: "Grammarian" },
 	{ roleKey: "ah_counter", roleName: "Ah-Counter" },
 	{ roleKey: "timer", roleName: "Timer" },
-	{ roleKey: "vote_counter", roleName: "Vote Counter" },
+	NON_REPORTING_FUNCTIONARY,
 ];
+
+/** What beat 12 is nominally about: the standard functionaries MINUS the Vote
+ *  Counter, who gives no report. Same relationship to
+ *  `reportingFunctionarySlots` as `FUNCTIONARY_ROLES` has to
+ *  `functionarySlots`. */
+const REPORTING_FUNCTIONARY_ROLES: BeatRole[] = FUNCTIONARY_ROLES.filter(
+	(r) => r.roleKey !== NON_REPORTING_FUNCTIONARY.roleKey,
+);
 
 /** The three segments that each end in a vote. Single-sourced so a vote beat's
  *  `requiresAnyOf` gate can never drift from the segment beat it follows. */
@@ -237,6 +325,7 @@ export function buildRunOfShow({
 			detail: `Introduces the ${ROLES_TOKEN}; each explains their role`,
 			minutes: 3,
 			requiresAnyOf: FUNCTIONARY_ROLES,
+			requiresGroup: "functionaries",
 		},
 		{
 			kind: "role",
@@ -311,7 +400,10 @@ export function buildRunOfShow({
 			role: "plain",
 			detail: "Calls for the functionary reports",
 			minutes: 3,
-			requiresAnyOf: FUNCTIONARY_ROLES,
+			// Gated on functionaries who REPORT, not on functionaries (#371) — a
+			// club whose only functionary is a Vote Counter has nobody to call on.
+			requiresAnyOf: REPORTING_FUNCTIONARY_ROLES,
+			requiresGroup: "reportingFunctionaries",
 		},
 		{
 			kind: "role",
@@ -411,14 +503,29 @@ function hasRole(
 	return slots.some((s) => matchesRole(s, roleKey, roleName));
 }
 
-/** True when the club runs at least one functionary role this meeting — the
- *  gate the functionary-intro and functionary-reports beats share (#367).
- *  Exported so the deck (`buildSlideDeck`) gates its matching slides on the
- *  SAME signal the run sheet does, rather than a second rule that could drift:
- *  there is nothing to introduce, and nobody to call for a report, when a club
- *  runs no functionaries at all. */
+/** The slots behind each role group (#371) — the single lookup `expandRunSheet`
+ *  and the two exported predicates below all go through, so a beat's gate, its
+ *  `ROLES_TOKEN` list and the deck's slide can't answer "which functionaries?"
+ *  three different ways. */
+const GROUP_SLOTS: Record<RoleGroup, (slots: AgendaSlot[]) => AgendaSlot[]> = {
+	functionaries: functionarySlots,
+	reportingFunctionaries: reportingFunctionarySlots,
+};
+
+/** True when the club runs at least one functionary role this meeting — beat
+ *  4's gate (#367). Exported so the deck (`buildSlideDeck`) gates its
+ *  functionary-intro slide on the SAME signal the run sheet does, rather than a
+ *  second rule that could drift: there is nothing to introduce when a club runs
+ *  no functionaries at all. */
 export function hasAnyFunctionaryRole(slots: AgendaSlot[]): boolean {
-	return FUNCTIONARY_ROLES.some((r) => hasRole(slots, r.roleKey, r.roleName));
+	return functionarySlots(slots).length > 0;
+}
+
+/** True when at least one of those functionaries gives a report — beat 12's
+ *  gate, and the deck's functionary-reports slide (#371). Narrower than
+ *  `hasAnyFunctionaryRole` by exactly the Vote Counter. */
+export function hasAnyReportingFunctionaryRole(slots: AgendaSlot[]): boolean {
+	return reportingFunctionarySlots(slots).length > 0;
 }
 
 /** "Timer", "Timer & Grammarian", "Timer, Grammarian & Ah-Counter". */
@@ -441,11 +548,45 @@ function resolveDetail(beat: Beat, slots: AgendaSlot[]): string {
 		return beat.detail.replace(AWARDS_TOKEN, joinRoleNames(labels));
 	}
 	if (!beat.detail.includes(ROLES_TOKEN)) return beat.detail;
+	// A group beat names the group's members (#371) — beat 4 lists exactly the
+	// functionaries `buildLegend` puts on the projected slide, including any the
+	// club invented. The group also gates the beat (`requirementsMet`), so this
+	// list is never empty. Without a group, resolve the beat's own key list.
 	const required = beat.requiresAnyOf ?? [];
-	const names = slots
-		.filter((s) => required.some((r) => matchesRole(s, r.roleKey, r.roleName)))
-		.map((s) => s.roleName);
+	const matched =
+		beat.requiresGroup != null
+			? GROUP_SLOTS[beat.requiresGroup](slots)
+			: slots.filter((s) =>
+					required.some((r) => matchesRole(s, r.roleKey, r.roleName)),
+				);
+	const names = matched.map((s) => s.roleName);
 	return beat.detail.replace(ROLES_TOKEN, joinRoleNames([...new Set(names)]));
+}
+
+/**
+ * Whether a beat's role dependencies are met.
+ *
+ * A declared `requiresGroup` is AUTHORITATIVE — it is not ORed with the beat's
+ * `requiresAnyOf` key list (#371). The triage that set the direction here
+ * suggested keeping the standard keys as a "gating fallback", but the two
+ * cannot coexist: a group beat RENDERS its group as a list (`ROLES_TOKEN`, and
+ * the matching deck slide's `team`), so a gate that admits a slot the group
+ * excludes prints "Introduces the ; each explains their role" — and the deck,
+ * which reads the group directly, drops the slide, so print and deck disagree.
+ * That case is reachable: `applyRoleDefinitionUpdate` lets an admin change a
+ * role's category, so a `timer`-keyed slot filed under "leadership" exists. The
+ * category is the definition, so such a club simply runs no functionaries, and
+ * both surfaces drop the beat together. `agenda-parity.test.ts` covers it.
+ *
+ * `requiresAnyOf` still gates every beat with no group: the three vote beats and
+ * the awards beat, which are about fixed standard roles rather than a group the
+ * club composes. An ungated beat always renders.
+ */
+function requirementsMet(beat: Beat, slots: AgendaSlot[]): boolean {
+	if (beat.requiresGroup != null)
+		return GROUP_SLOTS[beat.requiresGroup](slots).length > 0;
+	if (beat.requiresAnyOf == null) return true;
+	return beat.requiresAnyOf.some((r) => hasRole(slots, r.roleKey, r.roleName));
 }
 
 export function expandRunSheet(
@@ -460,9 +601,7 @@ export function expandRunSheet(
 		// The beat is about OTHER roles than its owner (the functionary beats) or
 		// belongs to a segment (the vote beats), and the club runs none of them —
 		// nothing to introduce, nobody to call for a report, no segment to vote on.
-		const missingRequired =
-			beat.requiresAnyOf != null &&
-			!beat.requiresAnyOf.some((r) => hasRole(slots, r.roleKey, r.roleName));
+		const missingRequired = !requirementsMet(beat, slots);
 
 		if (missingRequired) {
 			// omitted

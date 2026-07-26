@@ -144,6 +144,80 @@ describe("buildSlideDeck toastmaster intro + word of the day", () => {
 	it("omits toastmasterIntro when neither theme nor WOD is set", () => {
 		expect(build().some((s) => s.kind === "toastmasterIntro")).toBe(false);
 	});
+
+	it("sits with the Toastmaster's opening, BEFORE the functionary intro (#354)", () => {
+		// The word, its definition and its example land together up front, where
+		// the room can use them — not stranded several beats later, after the
+		// functionaries have been introduced.
+		expect(
+			build({
+				meeting: {
+					...meeting,
+					theme: "Unity",
+					wordOfTheDay: "Synergy",
+					wodDefinition: "cooperation",
+				},
+				slots: [tmod, grammarian],
+			}).map((s) => s.kind),
+		).toEqual([
+			"title",
+			"toastmaster",
+			"toastmasterIntro",
+			"wordOfDay",
+			"functionaryIntro",
+			"thankYou",
+		]);
+	});
+});
+
+/**
+ * The Grammarian presents the Word of the Day (#354). The slide sits inside the
+ * Toastmaster's opening, so it has to say whose it is — otherwise its position
+ * implies the Toastmaster (or, under MCF's variant, the General Evaluator)
+ * delivers it.
+ */
+describe("buildSlideDeck word of the day presenter (#354)", () => {
+	const wodMeeting: MeetingForDeck = {
+		...meeting,
+		wordOfTheDay: "Synergy",
+		wodDefinition: "cooperation",
+	};
+	const wod = (slots: AgendaSlot[]) =>
+		build({ meeting: wodMeeting, slots }).find((s) => s.kind === "wordOfDay");
+
+	it("attributes the Grammarian and who holds the role", () => {
+		expect(wod([tmod, grammarian])).toMatchObject({
+			presenter: { role: "Grammarian", name: "Mona" },
+		});
+	});
+
+	it("shows the open placeholder when the Grammarian is unclaimed", () => {
+		expect(
+			wod([
+				tmod,
+				slot({ id: "gr", roleName: "Grammarian", assigneeName: null }),
+			]),
+		).toMatchObject({ presenter: { role: "Grammarian", name: "— open —" } });
+	});
+
+	it("uses the club's OWN name for a renamed Grammarian (#368)", () => {
+		expect(
+			wod([
+				tmod,
+				slot({
+					id: "gr",
+					roleKey: "grammarian",
+					roleName: "Wordsmith",
+					assigneeName: "Mona",
+				}),
+			]),
+		).toMatchObject({ presenter: { role: "Wordsmith", name: "Mona" } });
+	});
+
+	it("attributes nobody when the club does not run a Grammarian", () => {
+		// Better a bare word than crediting a role this club never configured.
+		expect(wod([tmod, timer])).toMatchObject({ presenter: null });
+	});
 });
 
 describe("buildSlideDeck speeches", () => {
@@ -402,6 +476,24 @@ describe("buildSlideDeck functionary intro (#367)", () => {
 		expect(kinds([tmod, ge])).not.toContain("functionaryIntro");
 	});
 
+	it("renders for a club whose functionaries are ALL club-invented (#371)", () => {
+		// #368's disable lifecycle plus a club's own roles: the slide used to
+		// vanish because the gate resolved against the four standard keys, while
+		// its own `team` came from the category. Same definition now.
+		const jokeMaster = slot({
+			id: "jm",
+			roleName: "Joke Master",
+			assigneeName: "Nadia",
+		});
+		const slide = build({ slots: [tmod, jokeMaster] }).find(
+			(s) => s.kind === "functionaryIntro",
+		);
+		expect(slide).toMatchObject({
+			owner: "Toastmaster of the Day",
+			team: [{ role: "Joke Master", name: "Nadia" }],
+		});
+	});
+
 	it("is omitted when the owning role has no slot", () => {
 		// Default owner is the Toastmaster of the Day: a GE + functionaries is
 		// not enough under the standard flow.
@@ -499,6 +591,39 @@ describe("buildSlideDeck functionary reports (#367 / #353)", () => {
 
 	it("is omitted when the club runs no functionary roles", () => {
 		expect(kinds([tmod, ge])).not.toContain("functionaryReports");
+	});
+
+	it("omits the Vote Counter, who is a functionary but gives no report (#371)", () => {
+		const voteCounter = slot({
+			id: "vc",
+			roleName: "Vote Counter",
+			assigneeName: "Omar",
+		});
+		const slide = build({ slots: [ge, grammarian, voteCounter] }).find(
+			(s) => s.kind === "functionaryReports",
+		);
+		expect(slide).toMatchObject({
+			team: [{ role: "Grammarian", name: "Mona" }],
+		});
+		// …and with nobody else to report, the slide goes away entirely — the same
+		// signal beat 12's gate reads, so print and deck can't disagree.
+		expect(kinds([tmod, ge, voteCounter])).not.toContain("functionaryReports");
+		// The Vote Counter is still introduced: they ARE a functionary.
+		expect(kinds([tmod, ge, voteCounter])).toContain("functionaryIntro");
+	});
+
+	it("renders for a club whose only functionary is a club-invented one (#371)", () => {
+		const jokeMaster = slot({
+			id: "jm",
+			roleName: "Joke Master",
+			assigneeName: "Nadia",
+		});
+		const slide = build({ slots: [ge, jokeMaster] }).find(
+			(s) => s.kind === "functionaryReports",
+		);
+		expect(slide).toMatchObject({
+			team: [{ role: "Joke Master", name: "Nadia" }],
+		});
 	});
 
 	it("is omitted when there is no General Evaluator", () => {
@@ -735,9 +860,11 @@ describe("buildSlideDeck full meeting ordering", () => {
 		expect(build({ meeting: full, slots }).map((s) => s.kind)).toEqual([
 			"title",
 			"toastmaster",
+			// #354: the Word of the Day belongs to the Toastmaster's opening, not
+			// several beats downstream of the functionary intro.
 			"toastmasterIntro",
-			"functionaryIntro",
 			"wordOfDay",
+			"functionaryIntro",
 			"speech",
 			"speech",
 			"voteSpeaker",

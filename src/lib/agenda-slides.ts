@@ -6,8 +6,10 @@ import type {
 import {
 	assigneeDisplay,
 	buildLegend,
+	buildReportingLegend,
 	DEFAULT_SPEAKER_MINUTES,
 	hasAnyFunctionaryRole,
+	hasAnyReportingFunctionaryRole,
 	matchesRole,
 	numbered,
 	orderEvaluators,
@@ -55,10 +57,22 @@ export type Slide =
 	| { kind: "toastmaster"; name: string }
 	| { kind: "toastmasterIntro"; theme: string | null; word: string | null }
 	| {
+			/** The Word of the Day in full — word, definition, example — projected
+			 *  inside the Toastmaster's opening, right after the theme+word intro
+			 *  (#354). It used to sit after the functionary intro, so the room saw
+			 *  the word, sat through another beat, and only then learned what it
+			 *  meant. Content-gated (needs a definition or an example), not
+			 *  role-gated, which is why it has no run-sheet beat of its own. */
 			kind: "wordOfDay";
 			word: string;
 			definition: string | null;
 			example: string | null;
+			/** The Grammarian — who actually presents the Word of the Day — under
+			 *  the club's own name for the role, plus its holder (or the open
+			 *  placeholder). `null` when the club runs no Grammarian at all.
+			 *  Without it the slide's position would imply the Toastmaster of the
+			 *  Day delivers it (#354). */
+			presenter: LegendEntry | null;
 	  }
 	| {
 			/** Beat 4 of the run-of-show (#367): the functionaries are introduced
@@ -146,6 +160,9 @@ const ROLE = {
 	speaker: { key: "speaker", name: "Speaker" },
 	evaluator: { key: "evaluator", name: "Evaluator" },
 	timer: { key: "timer", name: "Timer" },
+	/** Bound only to credit the Word-of-the-Day slide (#354) — the Grammarian is
+	 *  otherwise reached through the shared functionary helpers, never by key. */
+	grammarian: { key: "grammarian", name: "Grammarian" },
 } as const satisfies Record<string, RoleRef>;
 
 /** Hardcoded standard Toastmasters durations for slots without per-slot timing. */
@@ -243,6 +260,30 @@ export function buildSlideDeck({
 	// they cannot disagree about whether the club runs a Timer.
 	const hasTimer = byRole(slots, ROLE.timer).length > 0;
 
+	// Still part of the Toastmaster's opening (#354): the word was just announced
+	// on the intro slide, so its definition and example belong here — before the
+	// functionaries are introduced, not several beats downstream of them. The
+	// Grammarian presents it, and the slide says so, since sitting inside the
+	// Toastmaster's opening would otherwise imply the Toastmaster does.
+	const wodDefinition = meeting.wodDefinition?.trim() || null;
+	const wodExample = meeting.wodExample?.trim() || null;
+	if (wodWord && (wodDefinition || wodExample)) {
+		const grammarian = byRole(slots, ROLE.grammarian);
+		deck.push({
+			kind: "wordOfDay",
+			word: wodWord,
+			definition: wodDefinition,
+			example: wodExample,
+			presenter:
+				grammarian.length > 0
+					? {
+							role: grammarian[0].roleName,
+							name: assigneeDisplay(grammarian[0]),
+						}
+					: null,
+		});
+	}
+
 	const generalEvaluator = byRole(slots, ROLE.generalEvaluator);
 	// Beat 4. Gated exactly as the run sheet gates it: the owning role has a
 	// slot AND the club runs at least one functionary to introduce.
@@ -257,17 +298,6 @@ export function buildSlideDeck({
 			owner: introOwner.name,
 			name: assigneeDisplay(introOwnerSlots[0]),
 			team: buildLegend(slots),
-		});
-	}
-
-	const wodDefinition = meeting.wodDefinition?.trim() || null;
-	const wodExample = meeting.wodExample?.trim() || null;
-	if (wodWord && (wodDefinition || wodExample)) {
-		deck.push({
-			kind: "wordOfDay",
-			word: wodWord,
-			definition: wodDefinition,
-			example: wodExample,
 		});
 	}
 
@@ -339,11 +369,14 @@ export function buildSlideDeck({
 		});
 	}
 
-	if (generalEvaluator.length > 0 && anyFunctionary) {
+	// Beat 12's gate is functionaries who REPORT (#371), not functionaries: a club
+	// whose only functionary is a Vote Counter has nobody to call on, and the
+	// team lists the same subset so the slide never names someone with no report.
+	if (generalEvaluator.length > 0 && hasAnyReportingFunctionaryRole(slots)) {
 		deck.push({
 			kind: "functionaryReports",
 			name: assigneeDisplay(generalEvaluator[0]),
-			team: buildLegend(slots),
+			team: buildReportingLegend(slots),
 		});
 	}
 

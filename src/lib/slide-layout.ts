@@ -19,6 +19,9 @@ export type Body =
 			word: string;
 			definition: string | null;
 			example: string | null;
+			/** Ready-to-render attribution line ("Presented by the Grammarian ·
+			 *  Mona"), or `null` when the club runs no Grammarian (#354). */
+			presenter: string | null;
 	  };
 
 export type SlideLayout =
@@ -64,6 +67,19 @@ const content = (header: string, body: Body): SlideLayout => ({
  *  call on for a report. */
 const filledTeam = (team: LegendEntry[]): LegendEntry[] =>
 	team.filter((t) => t.name !== OPEN_LABEL);
+
+/** Credit for the Word of the Day (#354). The slide sits inside the
+ *  Toastmaster's opening, so it names the role that actually presents it — the
+ *  Grammarian, under the club's own name for it. An unclaimed Grammarian is
+ *  still the Grammarian's, so the role is credited without the placeholder;
+ *  a club that runs no Grammarian gets no line rather than a credit to a role
+ *  it never configured. */
+function presenterLine(presenter: LegendEntry | null): string | null {
+	if (presenter == null) return null;
+	return presenter.name === OPEN_LABEL
+		? `Presented by the ${presenter.role}`
+		: `Presented by the ${presenter.role} · ${presenter.name}`;
+}
 
 export function slideLayout(slide: Slide): SlideLayout {
 	switch (slide.kind) {
@@ -123,6 +139,7 @@ export function slideLayout(slide: Slide): SlideLayout {
 				word: slide.word,
 				definition: slide.definition,
 				example: slide.example,
+				presenter: presenterLine(slide.presenter),
 			});
 		case "speech": {
 			const items = [`Speaker: ${slide.speaker}`];

@@ -196,7 +196,17 @@ function renderBody(s: PptxSlide, body: Body) {
 		if (body.example)
 			runs.push({
 				text: `\n“${body.example}”`,
-				options: { fontSize: 26, italic: true, color: MUTED },
+				options: {
+					fontSize: 26,
+					italic: true,
+					color: MUTED,
+					breakLine: body.presenter != null,
+				},
+			});
+		if (body.presenter)
+			runs.push({
+				text: `\n${body.presenter}`,
+				options: { fontSize: 20, color: MUTED },
 			});
 		s.addText(runs, {
 			...BODY,
