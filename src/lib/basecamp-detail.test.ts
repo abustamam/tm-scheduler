@@ -1,9 +1,22 @@
 /**
- * Unit tests for the pure /detail parser. Synthetic fixture (no real PII).
+ * Unit tests for the pure /detail parser. Synthetic fixture (no real PII), but
+ * shaped after a real captured payload (Engaging Humor, 2026-07-27).
+ *
+ * The shape matters more than it looks. This fixture used to key `speeches` by
+ * the short `block_id`, and asserted the join worked — against a shape Base Camp
+ * never sends. Base Camp keys by the node's FULL usage key (`id`), so the join
+ * had never worked in production and the test said it did (#425). So: `id` and
+ * `block_id` are kept deliberately DIFFERENT here, and `speeches` is keyed by
+ * `id`. If a future edit makes them the same, this stops testing anything.
+ *
  * Run: bunx vitest run src/lib/basecamp-detail.test.ts
  */
 import { describe, expect, it } from "vitest";
 import { type BcmDetailPayload, parseDetailPayload } from "./basecamp-detail";
+
+/** Real Base Camp usage-key format: the short block_id is its tail. */
+const usage = (blockId: string) =>
+	`block-v1:Toastmasters+8700+8_15_2023+type@sequential+block@${blockId}`;
 
 const payload: BcmDetailPayload = {
 	basecampUserId: "122747",
@@ -22,12 +35,14 @@ const payload: BcmDetailPayload = {
 						// The level's own intro unit — a real block_id, not a project.
 						// Base Camp lists it first, which is why its per-member table
 						// shows 5 rows for a Level 1 that has 4 projects (#415).
+						id: usage("b-l1-intro"),
 						block_id: "b-l1-intro",
 						type: "sequential",
 						display_name: "Level 1: Mastering Fundamentals",
 						complete: true,
 					},
 					{
+						id: usage("b-ice"),
 						block_id: "b-ice",
 						type: "sequential",
 						display_name: "Ice Breaker",
@@ -35,6 +50,7 @@ const payload: BcmDetailPayload = {
 						block_lib_type: "imported",
 					},
 					{
+						id: usage("b-purpose"),
 						block_id: "b-purpose",
 						type: "sequential",
 						display_name: "Writing a Speech with Purpose",
@@ -50,12 +66,14 @@ const payload: BcmDetailPayload = {
 				min_req_electives: 2,
 				children: [
 					{
+						id: usage("b-l3-intro"),
 						block_id: "b-l3-intro",
 						type: "sequential",
 						display_name: "Level 3: Increasing Knowledge",
 						complete: false,
 					},
 					{
+						id: usage("b-social"),
 						block_id: "b-social",
 						type: "sequential",
 						display_name: "Deliver Social Speeches",
@@ -65,6 +83,7 @@ const payload: BcmDetailPayload = {
 					{
 						// Real project, but `complete` is omitted entirely — exercises
 						// the missing→false coercion branch.
+						id: usage("b-pending"),
 						block_id: "b-pending",
 						type: "sequential",
 						display_name: "Manage Projects Successfully",
@@ -81,7 +100,7 @@ const payload: BcmDetailPayload = {
 		],
 	},
 	speeches: {
-		"b-ice": {
+		[usage("b-ice")]: {
 			speech_title: "My Journey Here",
 			speech_date: "2025-02-27T08:00:00Z",
 		},
@@ -161,12 +180,14 @@ describe("parseDetailPayload", () => {
 						min_req_electives: 0,
 						children: [
 							{
+								id: usage("b-path-intro"),
 								block_id: "b-path-intro",
 								type: "sequential",
 								display_name: "Path Introduction",
 								complete: true,
 							},
 							{
+								id: usage("b-ice-legacy"),
 								block_id: "b-ice-legacy",
 								type: "sequential",
 								display_name: "Ice Breaker (Legacy)",
@@ -182,6 +203,32 @@ describe("parseDetailPayload", () => {
 		expect(parsed.projects.map((p) => p.name)).toEqual([
 			"Ice Breaker (Legacy)",
 		]);
+	});
+
+	// #425. The main test above already fails if the lookup reverts to
+	// `block_id` — the fixture's only speeches key is the full usage key. This
+	// pins the two halves separately so the failure names the cause.
+	it("joins speeches on the full usage key, not the short block_id", () => {
+		const ice = parsePath(payload).projects.find((p) => p.blockId === "b-ice");
+		expect(ice?.speechTitle).toBe("My Journey Here");
+		// The short id is NOT a key in the map — proving the join used `id`.
+		expect(Object.keys(payload.speeches)).not.toContain("b-ice");
+	});
+
+	it("still falls back to the short block_id if a payload keys speeches that way", () => {
+		const shortKeyed: BcmDetailPayload = {
+			...payload,
+			speeches: {
+				"b-purpose": {
+					speech_title: "Short-keyed",
+					speech_date: "2025-03-01T08:00:00Z",
+				},
+			},
+		};
+		const p = parsePath(shortKeyed).projects.find(
+			(x) => x.blockId === "b-purpose",
+		);
+		expect(p?.speechTitle).toBe("Short-keyed");
 	});
 
 	// Base Camp hosts Club Officer Training, the Mentor Program and friends in

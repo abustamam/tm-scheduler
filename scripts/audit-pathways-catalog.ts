@@ -34,13 +34,9 @@
  * DATABASE_URL. Run it against whichever database has real sync data; on a
  * database that has never synced, every path is skipped and it says so.
  */
-import { asc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { db } from "#/db";
-import {
-	pathwaysPathLevels,
-	pathwaysPaths,
-	pathwaysProjects,
-} from "#/db/schema";
+import { pathwaysPaths, pathwaysProjects } from "#/db/schema";
 import { PATHWAYS_CATALOG } from "#/lib/pathways-catalog";
 
 /** `courseCode|level|name` for every project the seed claims. */
@@ -56,12 +52,29 @@ async function main() {
 			id: pathwaysPaths.id,
 			courseCode: pathwaysPaths.courseCode,
 			name: pathwaysPaths.name,
-			// A pathways_path_levels row exists only once reconcileCatalog has run
-			// for this path, so it's the marker for "this path has detail-synced".
-			levelRows: sql<number>`count(${pathwaysPathLevels.id})`,
+			// "Has this path ever detail-synced?" — answered by a stamped
+			// bcm_block_id, which ONLY reconcileCatalog writes. The seed always
+			// leaves it null.
+			//
+			// This used to count pathways_path_levels rows, on the reasoning that
+			// such a row "exists only once reconcileCatalog has run". #412 broke
+			// that by making the seed write min_req_electives to the same table —
+			// necessary, since without it a never-synced club silently lost its
+			// whole "choose N electives" section. The consequence was that every
+			// seeded path looked synced: the first prod run after that shipped
+			// reported 11 of 11 detail-synced and 83 SUSPECT rows, 55 of which were
+			// the required projects of five paths nobody is enrolled in (#422).
+			// Worse than noise — it invites "fixing" catalog entries that are right.
+			stampedProjects: sql<number>`count(${pathwaysProjects.id})`,
 		})
 		.from(pathwaysPaths)
-		.leftJoin(pathwaysPathLevels, eq(pathwaysPathLevels.pathId, pathwaysPaths.id))
+		.leftJoin(
+			pathwaysProjects,
+			and(
+				eq(pathwaysProjects.pathId, pathwaysPaths.id),
+				isNotNull(pathwaysProjects.bcmBlockId),
+			),
+		)
 		.groupBy(pathwaysPaths.id, pathwaysPaths.courseCode, pathwaysPaths.name)
 		.orderBy(asc(pathwaysPaths.courseCode));
 
@@ -72,8 +85,8 @@ async function main() {
 		process.exit(0);
 	}
 
-	const synced = paths.filter((p) => Number(p.levelRows) > 0);
-	const unsynced = paths.filter((p) => Number(p.levelRows) === 0);
+	const synced = paths.filter((p) => Number(p.stampedProjects) > 0);
+	const unsynced = paths.filter((p) => Number(p.stampedProjects) === 0);
 
 	console.log(
 		`Paths: ${paths.length} total · ${synced.length} detail-synced · ${unsynced.length} never detail-synced\n`,
