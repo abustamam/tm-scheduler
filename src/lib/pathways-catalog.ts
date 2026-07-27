@@ -31,11 +31,24 @@
  * is why they were checked by hand — and why they need re-checking by hand
  * whenever TI revises the curriculum. That is not automatic.
  *
- * Scope: the 6 paths this club actually uses (real Base Camp fixture data). The
- * catalog is keyed by Base Camp `course_code`; other paths can be appended later
- * (the seed is idempotent). Names are for the *display* layer ("Your wins" /
- * "Up next") — Base Camp's per-level counts still own completion (Phase 1), so a
- * path's catalog project count deliberately need NOT equal Base Camp's `total`.
+ * Scope: ALL 11 paths TI publishes — 6 current and 5 legacy — completed
+ * 2026-07-27 (#412). It used to hold only the 6 this club happened to use, which
+ * was fine while this file was a display-only mirror of data Base Camp already
+ * supplied. It is not fine now: under #420 this catalog becomes the backing store
+ * for a project picker, and on a club that never syncs `pathways_projects` is
+ * empty unless seeded from here. A member on a path we omitted would get an empty
+ * picker.
+ *
+ * The `course_code` keys are not guesses. They come from Base Camp's own Open edX
+ * course-discovery API — `https://basecamp.toastmasters.org/api/courses/v1/courses/`,
+ * which answers UNAUTHENTICATED, needs no enrolled member, and is the only place
+ * these codes exist (toastmasters.org does not publish them). It independently
+ * reproduces all 6 codes this file already had, which is what makes the 5 new
+ * ones trustworthy. There is no 8710.
+ *
+ * Names are for the *display* layer ("Your wins" / "Up next") — Base Camp's
+ * per-level counts still own completion (Phase 1), so a path's catalog project
+ * count deliberately need NOT equal Base Camp's `total`.
  *
  * Encoding: each path lists its REQUIRED projects per level. Electives at levels
  * 3–5 are a standard pool MINUS that path's own required projects (this is how TI
@@ -64,12 +77,39 @@ export interface CatalogProject {
 	isRequired: boolean;
 }
 
+export interface CatalogLevel {
+	level: number; // 1–5
+	/** How many electives this level requires. 0 at levels 1–2. */
+	minReqElectives: number;
+}
+
 export interface CatalogPath {
 	courseCode: string;
 	name: string;
 	status: "current" | "legacy";
 	projects: CatalogProject[];
+	levels: CatalogLevel[];
 }
+
+/**
+ * Electives required per level. Identical on all 11 paths — verified 2026-07-27
+ * (#412) by parsing every path page: levels 3, 4 and 5 say "Choose 2 / 1 / 1 of
+ * the following", levels 1–2 have no electives at all.
+ *
+ * This mirrors `pathways_path_levels.min_req_electives`, which until now was
+ * written ONLY by `reconcileCatalog` from a Base Camp sync. Without it
+ * `pathways-read-logic.ts` computes `minReq = … ?? 0`, then `chooseCount = 0`,
+ * and never builds `upNextElectives` — so a never-synced club's Level 3 view
+ * silently omitted the two electives the level requires. No error, no empty
+ * state, just absence. That is why the seed has to write this table.
+ */
+const MIN_REQ_ELECTIVES: Record<number, number> = {
+	1: 0,
+	2: 0,
+	3: 2,
+	4: 1,
+	5: 1,
+};
 
 // Standard elective pools (identical across paths). A path's electives at a
 // level = pool minus that path's required projects anywhere — which is exactly
@@ -231,6 +271,84 @@ const CLUB_PATHS: PathReq[] = [
 		l4: ["Leading Your Team"],
 		l5: ["Manage Successful Events", "Reflect on Your Path"],
 	},
+	// --- Added 2026-07-27 (#412). Course codes from Base Camp's course-discovery
+	// API; required projects parsed from each path's toastmasters.org page. Each
+	// one cross-checks itself: the page also prints that path's elective options,
+	// which must equal pool-minus-requireds. All five reconcile exactly, and
+	// `pathways-catalog.test.ts` asserts the counts so a bad edit can't pass.
+	{
+		courseCode: "8704",
+		name: "Visionary Communication",
+		l2: [
+			"Understanding Your Leadership Style",
+			"Understanding Your Communication Style",
+			"Introduction to Toastmasters Mentoring",
+		],
+		l3: ["Develop a Communication Plan"],
+		l4: ["Communicate Change"],
+		l5: ["Develop Your Vision", "Reflect on Your Path"],
+	},
+	{
+		courseCode: "8707",
+		name: "Persuasive Influence",
+		l2: [
+			"Understanding Your Leadership Style",
+			"Active Listening",
+			"Introduction to Toastmasters Mentoring",
+		],
+		l3: ["Understanding Conflict Resolution"],
+		l4: ["Leading in Difficult Situations"],
+		l5: ["High Performance Leadership", "Reflect on Your Path"],
+	},
+	{
+		courseCode: "8703",
+		name: "Innovative Planning",
+		// TI lists this under "Legacy Paths" (#412). Members stay enrolled.
+		status: "legacy",
+		l2: [
+			"Understanding Your Leadership Style",
+			// toastmasters.org prints this as "Connect With Your Audience" on the
+			// Innovative Planning page and as "Connect with Your Audience" in every
+			// elective pool — TI is not case-consistent with itself. The pool's
+			// casing is the one to use here: `buildPath` subtracts requireds from
+			// the pools by exact string, so the other spelling would leave the
+			// project in this path's L3 electives *and* list it as an L2 required.
+			// The page's own elective count (14, not 15) confirms which is meant.
+			"Connect with Your Audience",
+			"Introduction to Toastmasters Mentoring",
+		],
+		l3: ["Present a Proposal"],
+		l4: ["Manage Projects Successfully"],
+		l5: ["High Performance Leadership", "Reflect on Your Path"],
+	},
+	{
+		courseCode: "8708",
+		name: "Effective Coaching",
+		// TI lists this under "Legacy Paths" (#412). Members stay enrolled.
+		status: "legacy",
+		l2: [
+			"Understanding Your Leadership Style",
+			"Understanding Your Communication Style",
+			"Introduction to Toastmasters Mentoring",
+		],
+		l3: ["Reaching Consensus"],
+		l4: ["Improvement Through Positive Coaching"],
+		l5: ["High Performance Leadership", "Reflect on Your Path"],
+	},
+	{
+		courseCode: "8709",
+		name: "Team Collaboration",
+		// TI lists this under "Legacy Paths" (#412). Members stay enrolled.
+		status: "legacy",
+		l2: [
+			"Understanding Your Leadership Style",
+			"Active Listening",
+			"Introduction to Toastmasters Mentoring",
+		],
+		l3: ["Successful Collaboration"],
+		l4: ["Motivate Others"],
+		l5: ["Lead in Any Situation", "Reflect on Your Path"],
+	},
 ];
 
 function buildPath(p: PathReq): CatalogPath {
@@ -255,6 +373,10 @@ function buildPath(p: PathReq): CatalogPath {
 		name: p.name,
 		status: p.status ?? "current",
 		projects,
+		levels: [1, 2, 3, 4, 5].map((level) => ({
+			level,
+			minReqElectives: MIN_REQ_ELECTIVES[level] ?? 0,
+		})),
 	};
 }
 
