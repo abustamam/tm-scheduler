@@ -22,6 +22,11 @@
  * boot is a few hundred upserts and safe under multiple replicas. A failure
  * exits non-zero and the deploy fails closed, exactly like a bad migration.
  */
+// Makes this a module so top-level `await` is legal. It would normally be
+// implied by a static import, but the only import here is deliberately dynamic
+// (see below), which doesn't count.
+export {};
+
 if (!process.env.DATABASE_URL) {
 	console.error("[seed-catalog] DATABASE_URL is not set");
 	process.exit(1);
