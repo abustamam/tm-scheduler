@@ -154,6 +154,24 @@ describe("PATHWAYS_CATALOG", () => {
 	}
 });
 
+// TI is not case-consistent with itself: toastmasters.org capitalises the W in
+// both of these, Base Camp does not. Base Camp is authoritative for strings
+// because that is what `reconcileCatalog` matches on — the capitalised form
+// seeded an orphan row on prod that could never be stamped (#413, #429).
+describe("8711 casing follows Base Camp, not the website", () => {
+	const humor = PATHWAYS_CATALOG.find((p) => p.courseCode === "8711");
+	const names = humor?.projects.map((p) => p.name) ?? [];
+
+	it("uses lowercase 'with Humor'", () => {
+		expect(names).toContain("Engage Your Audience with Humor");
+		expect(names).toContain("Deliver Your Message with Humor");
+	});
+
+	it("carries no capitalised twin", () => {
+		expect(names.filter((n) => n.includes("With Humor"))).toEqual([]);
+	});
+});
+
 describe("levelLabel", () => {
 	it("names the sentinel rather than printing 'Level 6'", () => {
 		expect(levelLabel(PATH_COMPLETION_LEVEL)).toBe("Path Completion");

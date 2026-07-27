@@ -227,9 +227,16 @@ const CLUB_PATHS: PathReq[] = [
 			"Connect with Your Audience",
 			"Introduction to Toastmasters Mentoring",
 		],
-		l3: ["Engage Your Audience With Humor"],
+		// Lowercase "with", which is BASE CAMP's spelling — toastmasters.org
+		// capitalises the W on both of these. Base Camp wins for strings (#413):
+		// `reconcileCatalog` matches a seeded row to a real block by name, and the
+		// capitalised form left an orphan that could never be stamped, because
+		// step 1 finds the already-derived lowercase row by `bcm_block_id` and
+		// returns before the case-insensitive step 2 is reached. Prod carried both
+		// spellings as separate rows until #429.
+		l3: ["Engage Your Audience with Humor"],
 		l4: ["The Power of Humor in an Impromptu Speech"],
-		l5: ["Deliver Your Message With Humor"],
+		l5: ["Deliver Your Message with Humor"],
 	},
 	{
 		courseCode: "8705",
