@@ -13,6 +13,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { type BcmDetailPayload, parseDetailPayload } from "./basecamp-detail";
+import { PATH_COMPLETION_LEVEL } from "./pathways-catalog";
 
 /** Real Base Camp usage-key format: the short block_id is its tail. */
 const usage = (blockId: string) =>
@@ -229,6 +230,47 @@ describe("parseDetailPayload", () => {
 			(x) => x.blockId === "b-purpose",
 		);
 		expect(p?.speechTitle).toBe("Short-keyed");
+	});
+
+	// #424. Base Camp ships path completion as a SIBLING of the five levels, not
+	// inside Level 5 where toastmasters.org draws it. The chapter used to be
+	// discarded, so "Reflect on Your Path" was never corroborated on any path.
+	it("ingests the Path Completion chapter as a sibling of the levels", () => {
+		const withCompletion: BcmDetailPayload = {
+			...payload,
+			blocks: {
+				type: "course",
+				display_name: "Motivational Strategies",
+				children: [
+					{
+						type: "chapter",
+						display_name: "Path Completion",
+						min_req_electives: 0,
+						children: [
+							{
+								id: usage("b-reflect"),
+								block_id: "b-reflect",
+								type: "sequential",
+								display_name: "Reflect on Your Path",
+								block_lib_type: "imported",
+							},
+						],
+					},
+				],
+			},
+		};
+		const parsed = parsePath(withCompletion);
+		expect(parsed.projects).toEqual([
+			expect.objectContaining({
+				name: "Reflect on Your Path",
+				level: PATH_COMPLETION_LEVEL,
+				isRequired: true,
+				complete: false,
+			}),
+		]);
+		// Not a level: no pathways_path_levels row, so it can never reach
+		// `currentLevel` or the progress ring.
+		expect(parsed.levels).toEqual([]);
 	});
 
 	// Base Camp hosts Club Officer Training, the Mentor Program and friends in

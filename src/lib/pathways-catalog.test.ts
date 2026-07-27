@@ -14,7 +14,11 @@
  * from Base Camp), so this is the only automated guard they get.
  */
 import { describe, expect, it } from "vitest";
-import { PATHWAYS_CATALOG } from "./pathways-catalog";
+import {
+	levelLabel,
+	PATH_COMPLETION_LEVEL,
+	PATHWAYS_CATALOG,
+} from "./pathways-catalog";
 
 /** courseCode → [name, status, L3 electives, L4 electives, L5 electives] */
 const PUBLISHED: Record<
@@ -97,11 +101,36 @@ describe("PATHWAYS_CATALOG", () => {
 				);
 			});
 
-			it("has 3 required at level 2, 1 at 3 and 4, and 2 at level 5", () => {
+			// Level 5 has ONE required project, not two. "Reflect on Your Path" used
+			// to be counted here because toastmasters.org draws it inside the
+			// Demonstrating Expertise column; Base Camp files it under its own
+			// Path Completion chapter, and it is not a level 5 item (#424).
+			it("has 3 required at level 2 and 1 each at levels 3, 4 and 5", () => {
 				expect(requiredAt(code, 2)).toHaveLength(3);
 				expect(requiredAt(code, 3)).toHaveLength(1);
 				expect(requiredAt(code, 4)).toHaveLength(1);
-				expect(requiredAt(code, 5)).toHaveLength(2);
+				expect(requiredAt(code, 5)).toHaveLength(1);
+			});
+
+			it("carries exactly one path-completion project, outside levels 1-5", () => {
+				const suffix = status === "legacy" ? " (Legacy)" : "";
+				expect(
+					requiredAt(code, PATH_COMPLETION_LEVEL).map((p) => p.name),
+				).toEqual([`Reflect on Your Path${suffix}`]);
+				// It must not also be sitting at level 5.
+				expect(
+					byCode
+						.get(code)
+						?.projects.filter((p) => p.name.startsWith("Reflect on Your Path")),
+				).toHaveLength(1);
+			});
+
+			// pathways_path_levels describes real levels and their elective
+			// minimums. Path completion has neither, so it gets no row.
+			it("does not add a path-completion row to `levels`", () => {
+				expect(byCode.get(code)?.levels.map((l) => l.level)).toEqual([
+					1, 2, 3, 4, 5,
+				]);
 			});
 
 			// A project listed both as required and left in a pool would be seeded
@@ -123,4 +152,15 @@ describe("PATHWAYS_CATALOG", () => {
 			});
 		});
 	}
+});
+
+describe("levelLabel", () => {
+	it("names the sentinel rather than printing 'Level 6'", () => {
+		expect(levelLabel(PATH_COMPLETION_LEVEL)).toBe("Path Completion");
+		expect(levelLabel(PATH_COMPLETION_LEVEL)).not.toContain("6");
+	});
+
+	it("prints ordinary levels unchanged", () => {
+		for (const n of [1, 2, 3, 4, 5]) expect(levelLabel(n)).toBe(`Level ${n}`);
+	});
 });

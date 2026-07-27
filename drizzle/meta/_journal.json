@@ -337,6 +337,13 @@
       "when": 1785191084282,
       "tag": "0047_drop_unsuffixed_legacy_projects",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1785192735077,
+      "tag": "0048_relevel_path_completion",
+      "breakpoints": true
     }
   ]
 }

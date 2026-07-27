@@ -8,6 +8,10 @@
  * captures gitignored; only synthetic fixtures live in the repo.
  */
 import { extractCourseCode } from "./basecamp-progress";
+import { PATH_COMPLETION_LEVEL } from "./pathways-catalog";
+
+/** Base Camp's sibling-of-the-levels chapter holding "Reflect on Your Path". */
+const PATH_COMPLETION_CHAPTER = "Path Completion";
 
 // --- Raw payload shape (only the slice the parser reads) ---
 
@@ -96,9 +100,22 @@ export function parseDetailPayload(
 
 	for (const chapter of payload.blocks.children ?? []) {
 		const match = LEVEL_KEY.exec(chapter.display_name);
-		if (!match) continue; // skip "Path Completion" and non-level chapters
-		const level = Number(match[1]);
-		levels.push({ level, minReqElectives: chapter.min_req_electives ?? 0 });
+		const isPathCompletion = chapter.display_name === PATH_COMPLETION_CHAPTER;
+		// Anything that is neither a numbered level nor Path Completion.
+		if (!match && !isPathCompletion) continue;
+
+		// Path completion is a sibling of the five levels, not a sixth one (#424).
+		// It used to be discarded here along with its project, which is why
+		// "Reflect on Your Path" was never corroborated on any path — the only
+		// SUSPECT row on all three cleanly-synced paths in the prod audit.
+		const level = match ? Number(match[1]) : PATH_COMPLETION_LEVEL;
+
+		// No `levels` entry for it: `pathways_path_levels` describes real levels
+		// and their elective minimums, and path completion has neither. Keeping it
+		// out also keeps this value away from `currentLevel` and the ring.
+		if (match) {
+			levels.push({ level, minReqElectives: chapter.min_req_electives ?? 0 });
+		}
 
 		for (const node of chapter.children ?? []) {
 			if (node.type !== "sequential") continue;

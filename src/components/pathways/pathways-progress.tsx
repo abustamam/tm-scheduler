@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Badge } from "#/components/ui/badge";
 import { Card, CardContent } from "#/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "#/components/ui/tabs";
+import { levelLabel } from "#/lib/pathways-catalog";
 import { cn } from "#/lib/utils";
 import type { PathViewModel } from "#/server/pathways-read-logic";
 
@@ -155,7 +156,9 @@ function YourWins({ wins }: { wins: PathViewModel["wins"] }) {
 										{w.name}
 									</span>
 									<span className="text-muted-foreground text-xs">
-										Level {w.level}
+										{/* Not `Level {w.level}` — path completion is a sibling
+										    of the five levels, not a sixth one (#424). */}
+										{levelLabel(w.level)}
 									</span>
 								</div>
 								{(w.speechTitle || dateLabel) && (

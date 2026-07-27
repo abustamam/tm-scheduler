@@ -205,7 +205,7 @@ const CLUB_PATHS: PathReq[] = [
 		],
 		l3: ["Persuasive Speaking"],
 		l4: ["Managing a Difficult Audience"],
-		l5: ["Prepare to Speak Professionally", "Reflect on Your Path"],
+		l5: ["Prepare to Speak Professionally"],
 	},
 	{
 		courseCode: "8700",
@@ -217,7 +217,7 @@ const CLUB_PATHS: PathReq[] = [
 		],
 		l3: ["Understanding Emotional Intelligence"],
 		l4: ["Motivate Others"],
-		l5: ["Team Building", "Reflect on Your Path"],
+		l5: ["Team Building"],
 	},
 	{
 		courseCode: "8711",
@@ -229,7 +229,7 @@ const CLUB_PATHS: PathReq[] = [
 		],
 		l3: ["Engage Your Audience With Humor"],
 		l4: ["The Power of Humor in an Impromptu Speech"],
-		l5: ["Deliver Your Message With Humor", "Reflect on Your Path"],
+		l5: ["Deliver Your Message With Humor"],
 	},
 	{
 		courseCode: "8705",
@@ -243,7 +243,7 @@ const CLUB_PATHS: PathReq[] = [
 		],
 		l3: ["Make Connections Through Networking"],
 		l4: ["Public Relations Strategies"],
-		l5: ["Leading in Your Volunteer Organization", "Reflect on Your Path"],
+		l5: ["Leading in Your Volunteer Organization"],
 	},
 	{
 		courseCode: "8706",
@@ -255,7 +255,7 @@ const CLUB_PATHS: PathReq[] = [
 		],
 		l3: ["Negotiate the Best Outcome"],
 		l4: ["Manage Change"],
-		l5: ["Lead in Any Situation", "Reflect on Your Path"],
+		l5: ["Lead in Any Situation"],
 	},
 	{
 		courseCode: "8702",
@@ -269,7 +269,7 @@ const CLUB_PATHS: PathReq[] = [
 		],
 		l3: ["Planning and Implementing"],
 		l4: ["Leading Your Team"],
-		l5: ["Manage Successful Events", "Reflect on Your Path"],
+		l5: ["Manage Successful Events"],
 	},
 	// --- Added 2026-07-27 (#412). Course codes from Base Camp's course-discovery
 	// API; required projects parsed from each path's toastmasters.org page. Each
@@ -286,7 +286,7 @@ const CLUB_PATHS: PathReq[] = [
 		],
 		l3: ["Develop a Communication Plan"],
 		l4: ["Communicate Change"],
-		l5: ["Develop Your Vision", "Reflect on Your Path"],
+		l5: ["Develop Your Vision"],
 	},
 	{
 		courseCode: "8707",
@@ -298,7 +298,7 @@ const CLUB_PATHS: PathReq[] = [
 		],
 		l3: ["Understanding Conflict Resolution"],
 		l4: ["Leading in Difficult Situations"],
-		l5: ["High Performance Leadership", "Reflect on Your Path"],
+		l5: ["High Performance Leadership"],
 	},
 	{
 		courseCode: "8703",
@@ -319,7 +319,7 @@ const CLUB_PATHS: PathReq[] = [
 		],
 		l3: ["Present a Proposal"],
 		l4: ["Manage Projects Successfully"],
-		l5: ["High Performance Leadership", "Reflect on Your Path"],
+		l5: ["High Performance Leadership"],
 	},
 	{
 		courseCode: "8708",
@@ -333,7 +333,7 @@ const CLUB_PATHS: PathReq[] = [
 		],
 		l3: ["Reaching Consensus"],
 		l4: ["Improvement Through Positive Coaching"],
-		l5: ["High Performance Leadership", "Reflect on Your Path"],
+		l5: ["High Performance Leadership"],
 	},
 	{
 		courseCode: "8709",
@@ -347,7 +347,7 @@ const CLUB_PATHS: PathReq[] = [
 		],
 		l3: ["Successful Collaboration"],
 		l4: ["Motivate Others"],
-		l5: ["Lead in Any Situation", "Reflect on Your Path"],
+		l5: ["Lead in Any Situation"],
 	},
 ];
 
@@ -382,8 +382,49 @@ const withLegacySuffix = (p: CatalogProject): CatalogProject => ({
 	name: `${p.name} (Legacy)`,
 });
 
+/**
+ * Path completion is NOT a sixth level (#424). Toastmasters has five, and Base
+ * Camp says so: it ships this as its own `Path Completion` chapter, a sibling of
+ * `Level 1`…`Level 5`, carrying one project. Confirmed in real /detail payloads
+ * for 8711 and 8705.
+ *
+ * This catalog used to file "Reflect on Your Path" as a Level 5 required project
+ * on all 11 paths, because toastmasters.org draws it inside the Demonstrating
+ * Expertise column. That was wrong on both counts: Base Camp never returned it
+ * at level 5 (it was the only SUSPECT row on all three cleanly-synced paths in
+ * the 2026-07-27 prod audit), and the maintainer confirms it is not a level 5
+ * item — it is a reflection ON the path, taken after the levels are done.
+ *
+ * `pathways_projects.level` is a NOT NULL integer, so the marker has to be a
+ * number. 6 is a sentinel chosen for sort order — it puts path completion last
+ * without any special-casing — and it must never be rendered as "Level 6". Use
+ * `levelLabel()` for anything user-facing.
+ *
+ * Deliberately NOT added to `levels` below: `pathways_path_levels` describes
+ * real levels and their elective minimums, and path completion has neither. Nor
+ * can this value reach `currentLevel` or the progress ring, which are derived
+ * from `path_level_progress` — written by the summary parser, which filters on
+ * `^Level (\d+)$` and so can never emit it.
+ */
+export const PATH_COMPLETION_LEVEL = 6;
+
+/** Identical on every path. Legacy paths get " (Legacy)" like everything else. */
+const PATH_COMPLETION_PROJECT = "Reflect on Your Path";
+
+/** User-facing label for a project's level. Never prints "Level 6". */
+export function levelLabel(level: number): string {
+	return level === PATH_COMPLETION_LEVEL ? "Path Completion" : `Level ${level}`;
+}
+
 function buildPath(p: PathReq): CatalogPath {
-	const required = new Set<string>([...L1, ...p.l2, ...p.l3, ...p.l4, ...p.l5]);
+	const required = new Set<string>([
+		...L1,
+		...p.l2,
+		...p.l3,
+		...p.l4,
+		...p.l5,
+		PATH_COMPLETION_PROJECT,
+	]);
 	const electives = (pool: string[], level: number): CatalogProject[] =>
 		pool
 			.filter((name) => !required.has(name))
@@ -398,6 +439,11 @@ function buildPath(p: PathReq): CatalogPath {
 		...electives(L4_POOL, 4),
 		...p.l5.map((name) => ({ name, level: 5, isRequired: true })),
 		...electives(L5_POOL, 5),
+		{
+			name: PATH_COMPLETION_PROJECT,
+			level: PATH_COMPLETION_LEVEL,
+			isRequired: true,
+		},
 	];
 	return {
 		courseCode: p.courseCode,
