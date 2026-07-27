@@ -17,14 +17,48 @@ function loadPage(n: 1 | 2): BcmProgressPage {
 }
 
 describe("extractCourseCode", () => {
-	it("pulls the numeric code from a course_id", () => {
+	it("pulls the numeric code from a course_id, whichever org segment", () => {
 		expect(extractCourseCode("course-v1:Toastmasters+8701+8_15_2023")).toBe(
 			"8701",
 		);
 		expect(extractCourseCode("course-v1:pathways+8705+8_31_2023")).toBe("8705");
 	});
-	it("throws on a malformed course_id", () => {
-		expect(() => extractCourseCode("garbage")).toThrow();
+
+	// TI puts the language in the RUN slot for current paths and in the CODE slot
+	// for the five legacy ones. The second form used to throw, so every localized
+	// edition of a legacy path 400'd its club's whole sync (#414).
+	it("resolves a localized legacy path to its base code", () => {
+		expect(extractCourseCode("course-v1:pathways+SP8702+8_31_2023")).toBe(
+			"8702",
+		);
+		expect(extractCourseCode("course-v1:pathways+AR8709+8_31_2023")).toBe(
+			"8709",
+		);
+		// Language in the run slot instead — already worked, must keep working.
+		expect(extractCourseCode("course-v1:pathways+8700+AR8700")).toBe("8700");
+	});
+
+	// Base Camp hosts these alongside the paths. They are numeric, so they used
+	// to pass and get inserted into the GLOBAL pathways_paths table.
+	it("rejects numeric courses that are not Pathways paths", () => {
+		for (const code of ["8604", "8605", "8669", "8712", "8731", "8710"]) {
+			expect(
+				extractCourseCode(`course-v1:pathways+${code}+8_31_2023`),
+			).toBeNull();
+		}
+	});
+
+	it("returns null rather than throwing on anything unrecognized", () => {
+		for (const id of [
+			"garbage",
+			"course-v1:pathways+COT-S+01_21_2026",
+			"course-v1:pathways+en-us-DTM+01_21_2026",
+			"course-v1:pathways+TI_MA_L1+01_21_2026",
+			"course-v1:pathways+8650_002+09_02_2025",
+			"course-v1:pathways+08012025+08_01_2025",
+		]) {
+			expect(extractCourseCode(id)).toBeNull();
+		}
 	});
 });
 

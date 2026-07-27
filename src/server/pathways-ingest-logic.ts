@@ -100,9 +100,12 @@ export async function ingestForToken(
 	let detailWarning: string | undefined;
 	if (parsed.data.details && parsed.data.details.length > 0) {
 		try {
-			const parsedDetails = (parsed.data.details as BcmDetailPayload[]).map(
-				parseDetailPayload,
-			);
+			// `parseDetailPayload` returns null for a course that isn't a Pathways
+			// path — Club Officer Training, the Mentor Program etc. share Base Camp
+			// (#414). Drop those rather than letting one sink the detail phase.
+			const parsedDetails = (parsed.data.details as BcmDetailPayload[])
+				.map(parseDetailPayload)
+				.filter((d) => d !== null);
 			detail = await syncClubDetail(tok.clubId, parsedDetails);
 		} catch (err) {
 			// ADR-0011: the detail phase is best-effort and must never sink the
