@@ -73,13 +73,28 @@ describe("PATHWAYS_CATALOG", () => {
 			// "These four projects form the base of your Toastmasters journey."
 			// Identical on every path, and not five — Base Camp's `total: 5` counts
 			// the level's own intro unit, which is not a project (#398).
+			//
+			// Legacy paths carry TI's superseded edition of each one, which Base Camp
+			// names with a " (Legacy)" suffix (#423).
 			it("has exactly the 4 shared Level 1 projects", () => {
+				const suffix = status === "legacy" ? " (Legacy)" : "";
 				expect(requiredAt(code, 1).map((p) => p.name)).toEqual([
-					"Ice Breaker",
-					"Writing a Speech with Purpose",
-					"Introduction to Vocal Variety and Body Language",
-					"Evaluation and Feedback",
+					`Ice Breaker${suffix}`,
+					`Writing a Speech with Purpose${suffix}`,
+					`Introduction to Vocal Variety and Body Language${suffix}`,
+					`Evaluation and Feedback${suffix}`,
 				]);
+			});
+
+			// Uniform: required and elective alike, on every level. Verified against
+			// a full 8705 /detail payload, where even the Path Completion project is
+			// "Reflect on Your Path (Legacy)".
+			it(`${status === "legacy" ? "suffixes" : "does not suffix"} every project name`, () => {
+				const names = byCode.get(code)?.projects.map((p) => p.name) ?? [];
+				expect(names.length).toBeGreaterThan(0);
+				expect(names.every((n) => n.endsWith(" (Legacy)"))).toBe(
+					status === "legacy",
+				);
 			});
 
 			it("has 3 required at level 2, 1 at 3 and 4, and 2 at level 5", () => {

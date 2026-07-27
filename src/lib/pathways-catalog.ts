@@ -351,6 +351,37 @@ const CLUB_PATHS: PathReq[] = [
 	},
 ];
 
+/**
+ * TI revised the Pathways projects and kept the superseded editions for members
+ * already on a legacy path, so Base Camp returns EVERY project on 8702/8705 (and
+ * by the same pattern 8703/8708/8709) with a " (Legacy)" suffix — required and
+ * elective alike, right down to "Reflect on Your Path (Legacy)".
+ *
+ * These are therefore different projects, not a different spelling of the same
+ * one, which is why the suffix belongs in the catalog rather than being papered
+ * over by loose matching. Seeding the unsuffixed names put 22 rows on prod that
+ * describe projects nobody on those paths is taking, none of which Base Camp
+ * could ever stamp (#423).
+ *
+ * Note toastmasters.org's legacy path pages list the names WITHOUT the suffix —
+ * the website was updated to current project names while Base Camp still serves
+ * legacy members the old editions. Base Camp wins, per #413: the website is
+ * authoritative for structure, Base Camp for strings.
+ *
+ * CORROBORATED for 8705 (full /detail payload, 2026-07-27) and 8702 (every
+ * derived row on prod). 8703, 8708 and 8709 are INFERRED from the same pattern —
+ * nobody in this club is enrolled in them, so no payload exists. If TI treated
+ * one of those differently, its rows simply never get a `bcm_block_id` and
+ * `scripts/audit-pathways-catalog.ts` reports them as SUSPECT the first time
+ * anyone syncs one. That is the cheap, visible failure mode; the alternative
+ * (leaving three legacy paths unsuffixed) is wrong under the same inference and
+ * fails identically.
+ */
+const withLegacySuffix = (p: CatalogProject): CatalogProject => ({
+	...p,
+	name: `${p.name} (Legacy)`,
+});
+
 function buildPath(p: PathReq): CatalogPath {
 	const required = new Set<string>([...L1, ...p.l2, ...p.l3, ...p.l4, ...p.l5]);
 	const electives = (pool: string[], level: number): CatalogProject[] =>
@@ -372,7 +403,12 @@ function buildPath(p: PathReq): CatalogPath {
 		courseCode: p.courseCode,
 		name: p.name,
 		status: p.status ?? "current",
-		projects,
+		// Legacy paths carry TI's superseded EDITION of each project, and Base Camp
+		// names them accordingly (#423). Applied as a final transform rather than
+		// to the inputs so every pool subtraction above is unaffected — suffixing
+		// both sides of `pool minus required` would cancel out anyway, but doing it
+		// here keeps the elective arithmetic provably identical to a current path's.
+		projects: p.status === "legacy" ? projects.map(withLegacySuffix) : projects,
 		levels: [1, 2, 3, 4, 5].map((level) => ({
 			level,
 			minReqElectives: MIN_REQ_ELECTIVES[level] ?? 0,
