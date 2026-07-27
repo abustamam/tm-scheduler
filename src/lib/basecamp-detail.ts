@@ -14,6 +14,13 @@ import { extractCourseCode } from "./basecamp-progress";
 interface RawBlockNode {
 	type: "course" | "chapter" | "sequential";
 	display_name: string;
+	/**
+	 * The FULL Open edX usage key, e.g.
+	 * `block-v1:Toastmasters+8711+08_15_2023+type@sequential+block@5adcbe3e…`.
+	 * This — not `block_id` — is what the `speeches` map is keyed by (#425).
+	 */
+	id?: string;
+	/** The short hash tail of `id`. Our durable catalog join key. */
 	block_id?: string;
 	complete?: boolean;
 	block_lib_type?: "imported" | "elective";
@@ -99,7 +106,18 @@ export function parseDetailPayload(
 			if (!node.block_id) continue;
 			// The level's own intro unit. Has a block_id, is not a project.
 			if (LEVEL_CONTAINER.test(node.display_name)) continue;
-			const speech = payload.speeches[node.block_id];
+			// Base Camp keys `speeches` by the node's FULL usage key (`id`), not the
+			// short `block_id` this used to look up (#425) — so every speech title
+			// and date was silently dropped, on every synced club, since the feature
+			// shipped. `bcm_project_progress.speech_title`/`.speech_date` were always
+			// null, and "Your wins" rendered completions with no title and no date.
+			//
+			// The block_id fallback is for payload shapes that key by the short id;
+			// nothing observed does, but a miss here is invisible rather than loud,
+			// which is exactly how this survived so long.
+			const speech =
+				(node.id ? payload.speeches[node.id] : undefined) ??
+				payload.speeches[node.block_id];
 			projects.push({
 				blockId: node.block_id,
 				name: node.display_name,
