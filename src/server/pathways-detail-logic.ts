@@ -9,7 +9,7 @@
  * A `-logic.ts` so `#/db` never leaks into the client bundle (server-modules
  * guard). Never imported by client code.
  */
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "#/db";
 import {
 	bcmProjectProgress,
@@ -108,6 +108,18 @@ export async function reconcileCatalog(
 			}
 
 			// 2) Match an unstamped hand-seeded row by (path, level, name) → stamp it.
+			//
+			// Case-INSENSITIVE (#413). TI is not case-consistent about its own
+			// project names: toastmasters.org writes "Engage Your Audience With
+			// Humor" and "Connect With Your Audience", Base Camp returns both with a
+			// lowercase "with", and the elective pools use lowercase throughout. An
+			// exact `eq` therefore missed a correctly-seeded row and fell through to
+			// (3), deriving a second row differing only in capitalisation — visible
+			// on prod as two of the audit script's SEED GAPS.
+			//
+			// This self-heals: once stamped, step (1) matches on bcm_block_id and
+			// rewrites `name` to Base Camp's spelling on the next sync. Structure
+			// comes from toastmasters.org; the exact strings come from Base Camp.
 			const [byName] = await db
 				.select({ id: pathwaysProjects.id })
 				.from(pathwaysProjects)
@@ -115,7 +127,7 @@ export async function reconcileCatalog(
 					and(
 						eq(pathwaysProjects.pathId, pathId),
 						eq(pathwaysProjects.level, proj.level),
-						eq(pathwaysProjects.name, proj.name),
+						sql`lower(${pathwaysProjects.name}) = lower(${proj.name})`,
 					),
 				);
 			if (byName) {

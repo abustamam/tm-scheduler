@@ -25,6 +25,13 @@ RUN bun run build
 # the server so pending migrations apply on every deploy. Drizzle tracks applied
 # migrations, so reruns are no-ops; a migration failure exits non-zero and the
 # deploy fails closed instead of serving a stale schema.
+#
+# `.output/seed-catalog.mjs` is bundled the same way and runs between the two
+# (#416). It upserts the Pathways catalog, which under #420 is product data
+# rather than a mirror: the project picker reads `pathways_projects`, and on a
+# club that never runs a Base Camp sync that table is empty unless seeded. It is
+# idempotent and never deletes, so re-running each boot is a no-op after the
+# first; like migrations, a failure fails the deploy closed.
 FROM node:22-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
@@ -32,4 +39,4 @@ ENV NODE_ENV=production
 COPY --from=build /app/.output ./.output
 COPY --from=build /app/drizzle ./drizzle
 EXPOSE 3000
-CMD ["sh", "-c", "node .output/migrate.mjs && node .output/server/index.mjs"]
+CMD ["sh", "-c", "node .output/migrate.mjs && node .output/seed-catalog.mjs && node .output/server/index.mjs"]
