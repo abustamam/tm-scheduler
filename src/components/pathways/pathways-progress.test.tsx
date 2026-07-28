@@ -14,6 +14,8 @@ const base: PathViewModel = {
 		{ level: 1, completed: 5, total: 5, approved: true },
 		{ level: 3, completed: 1, total: 4, approved: false },
 	],
+	levelsSource: "basecamp",
+	hasBasecamp: true,
 	wins: [],
 	upNext: [],
 	upNextElectives: null,
@@ -30,6 +32,7 @@ describe("PathwaysProgress", () => {
 						...base,
 						upNext: [
 							{
+								projectId: "p1",
 								level: 3,
 								name: "Understanding Emotional Intelligence",
 								isRequired: true,
@@ -37,7 +40,10 @@ describe("PathwaysProgress", () => {
 						],
 						upNextElectives: {
 							chooseCount: 1,
-							options: ["Persuasive Speaking", "Connect with Storytelling"],
+							options: [
+								{ projectId: "p2", name: "Persuasive Speaking" },
+								{ projectId: "p3", name: "Connect with Storytelling" },
+							],
 						},
 					},
 				]}
@@ -56,7 +62,13 @@ describe("PathwaysProgress", () => {
 				paths={[
 					{
 						...base,
-						upNextElectives: { chooseCount: 2, options: ["A", "B"] },
+						upNextElectives: {
+							chooseCount: 2,
+							options: [
+								{ projectId: "p4", name: "A" },
+								{ projectId: "p5", name: "B" },
+							],
+						},
 					},
 				]}
 			/>,
@@ -72,10 +84,13 @@ describe("PathwaysProgress", () => {
 						...base,
 						wins: [
 							{
+								projectId: "p6",
 								level: 1,
 								name: "Manage Projects Successfully",
 								speechTitle: "",
 								deliveredAt: null,
+								markedHere: false,
+								awaitingProcessing: false,
 							},
 						],
 					},
@@ -92,7 +107,12 @@ describe("PathwaysProgress", () => {
 					{
 						...base,
 						upNext: [
-							{ level: 3, name: "Speaking to Inform", isRequired: true },
+							{
+								projectId: "p7",
+								level: 3,
+								name: "Speaking to Inform",
+								isRequired: true,
+							},
 						],
 					},
 				]}

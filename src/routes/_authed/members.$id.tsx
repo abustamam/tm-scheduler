@@ -57,6 +57,11 @@ import {
 	removeMemberPath,
 } from "#/server/path-enrollment";
 import { getMemberPathways } from "#/server/pathways-read";
+import type { PathViewModel } from "#/server/pathways-read-logic";
+import {
+	markMemberProject,
+	unmarkMemberProject,
+} from "#/server/progress-marks";
 import { archiveSpeech, rescheduleSpeech } from "#/server/speeches";
 
 export const Route = createFileRoute("/_authed/members/$id")({
@@ -321,10 +326,22 @@ function MemberDetail() {
 				</div>
 			</div>
 
-			{/* Pathways progress (real, synced from Base Camp) */}
+			{/* Pathways progress: Base Camp where synced, explicit marks otherwise. */}
 			<div className="mt-5">
 				<h2 className="mb-3 text-sm font-bold">Pathways</h2>
-				<PathwaysProgress paths={pathways} />
+				{/* Admins may mark progress for anyone on their roster (#419) — a
+				    club can then be kept current without every member signing in.
+				    A plain member viewing this page gets the read-only panel and
+				    marks their own from the dashboard. */}
+				{clubId && viewerIsAdmin ? (
+					<MemberProgressPanel
+						clubId={clubId}
+						memberId={member.id}
+						pathways={pathways}
+					/>
+				) : (
+					<PathwaysProgress paths={pathways} />
+				)}
 				{/* Admin-only here. A member manages their OWN paths from the
 				    dashboard, which needs no club context; this surface exists so a
 				    club can be set up without waiting for everyone to sign in. */}
@@ -938,6 +955,46 @@ function MemberPathControl({
 			subject={memberName}
 			onAdd={(id) => mutate(addMemberPath, id)}
 			onRemove={(id) => mutate(removeMemberPath, id)}
+		/>
+	);
+}
+
+/** The Pathways panel with admin mark/un-mark controls wired in (#419). */
+function MemberProgressPanel({
+	clubId,
+	memberId,
+	pathways,
+}: {
+	clubId: string;
+	memberId: string;
+	pathways: PathViewModel[];
+}) {
+	const router = useRouter();
+	const [busyId, setBusyId] = useState<string | null>(null);
+
+	async function mutate(
+		fn: (args: {
+			data: { clubId: string; memberId: string; projectId: string };
+		}) => Promise<unknown>,
+		projectId: string,
+	) {
+		setBusyId(projectId);
+		try {
+			await fn({ data: { clubId, memberId, projectId } });
+			await router.invalidate();
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+		} finally {
+			setBusyId(null);
+		}
+	}
+
+	return (
+		<PathwaysProgress
+			paths={pathways}
+			onMark={(id) => mutate(markMemberProject, id)}
+			onUnmark={(id) => mutate(unmarkMemberProject, id)}
+			busyId={busyId}
 		/>
 	);
 }

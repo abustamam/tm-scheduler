@@ -24,6 +24,7 @@ import {
 	members,
 	notifications,
 	officerTerms,
+	projectCompletionMarks,
 	roleSlots,
 	tableTopicsSpeakers,
 } from "#/db/schema";
@@ -195,14 +196,23 @@ export async function collapseMemberships(
 		.set({ memberId: keeperId })
 		.where(eq(tableTopicsSpeakers.memberId, absorbedId));
 
-	// 9. guests.converted_membership_id — no member-unique; re-point all so the
+	// 9. project_completion_marks.marked_by_member_id — attribution only, and
+	//    nullable. No member-unique constraint (the mark's uniqueness is on
+	//    enrollment+project, which is person-level and so unaffected by a
+	//    membership collapse), so re-point all: "who ticked this" survives.
+	await tx
+		.update(projectCompletionMarks)
+		.set({ markedByMemberId: keeperId })
+		.where(eq(projectCompletionMarks.markedByMemberId, absorbedId));
+
+	// 10. guests.converted_membership_id — no member-unique; re-point all so the
 	//    "guest became this membership" history survives the collapse.
 	await tx
 		.update(guests)
 		.set({ convertedMembershipId: keeperId })
 		.where(eq(guests.convertedMembershipId, absorbedId));
 
-	// 10. activity_log — re-point the actor column AND the jsonb subject refs
+	// 11. activity_log — re-point the actor column AND the jsonb subject refs
 	//     (detail.memberId / detail.fromMemberId, scoped to this club), then
 	//     drop the absorbed member's OWN member-target rows (member_add etc.),
 	//     mirroring the existing merge so we don't accumulate dangling history.

@@ -1,5 +1,6 @@
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { BookOpen, CalendarDays } from "lucide-react";
+import { useState } from "react";
 import { toast } from "sonner";
 import { PageContainer } from "#/components/page-container";
 import { PathEnrollmentManager } from "#/components/pathways/path-enrollment-manager";
@@ -14,6 +15,7 @@ import {
 	removeMyPath,
 } from "#/server/path-enrollment";
 import { getMyPathways } from "#/server/pathways-read";
+import { markMyProject, unmarkMyProject } from "#/server/progress-marks";
 
 export const Route = createFileRoute("/_authed/dashboard")({
 	loader: async () => {
@@ -55,6 +57,7 @@ function Dashboard() {
 	const { commitments, speeches, pathways, enrollments, pathOptions } =
 		Route.useLoaderData();
 	const router = useRouter();
+	const [busyProjectId, setBusyProjectId] = useState<string | null>(null);
 
 	// The server fns return the fresh list, but the Pathways panel above is
 	// loader-driven and would go stale, so re-run the loader instead of holding
@@ -68,6 +71,23 @@ function Dashboard() {
 			await router.invalidate();
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+		}
+	}
+
+	// Same reasoning as `mutatePath`: the mark fns return the fresh view models,
+	// but the panel is loader-driven, so re-run the loader (#419).
+	async function mutateMark(
+		fn: (args: { data: { projectId: string } }) => Promise<unknown>,
+		projectId: string,
+	) {
+		setBusyProjectId(projectId);
+		try {
+			await fn({ data: { projectId } });
+			await router.invalidate();
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+		} finally {
+			setBusyProjectId(null);
 		}
 	}
 
@@ -193,7 +213,12 @@ function Dashboard() {
 					{/* My Pathways progress (real, synced from Base Camp) */}
 					<div>
 						<h2 className="mb-2.5 px-0.5 text-sm font-bold">My Pathways</h2>
-						<PathwaysProgress paths={pathways} />
+						<PathwaysProgress
+							paths={pathways}
+							onMark={(id) => mutateMark(markMyProject, id)}
+							onUnmark={(id) => mutateMark(unmarkMyProject, id)}
+							busyId={busyProjectId}
+						/>
 						<div className="mt-3">
 							<PathEnrollmentManager
 								enrollments={enrollments}

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("#/db", () => ({ db: {} }));
 
-import type { DetailProjectRow } from "./pathways-read-logic";
+import type { DetailProjectRow, MarkRow } from "./pathways-read-logic";
 import {
 	buildPathViewModel,
 	type CatalogProject,
@@ -22,18 +22,26 @@ const lv = (
 	approved,
 });
 
+// A stable synthetic project id so the catalog, the /detail mirror and the
+// manual marks all agree on which project they mean — the real ids are uuids
+// from `pathways_projects`, and the union logic keys on exactly this identity.
+const pid = (level: number, name: string) => `p:${level}:${name}`;
+
 const win = (level: number, name: string, speechTitle = "A speech"): Win => ({
+	projectId: pid(level, name),
 	level,
 	name,
 	speechTitle,
 	deliveredAt: new Date("2026-01-01T00:00:00Z"),
+	markedHere: false,
+	awaitingProcessing: false,
 });
 
 const project = (
 	level: number,
 	name: string,
 	isRequired = true,
-): CatalogProject => ({ level, name, isRequired });
+): CatalogProject => ({ projectId: pid(level, name), level, name, isRequired });
 
 const dp = (
 	level: number,
@@ -43,6 +51,7 @@ const dp = (
 	speechTitle: string | null = null,
 	speechDate: Date | null = null,
 ): DetailProjectRow => ({
+	projectId: pid(level, name),
 	courseCode: "8701",
 	level,
 	name,
@@ -50,6 +59,15 @@ const dp = (
 	complete,
 	speechTitle,
 	speechDate,
+});
+
+const mark = (level: number, name: string, isRequired = true): MarkRow => ({
+	projectId: pid(level, name),
+	courseCode: "8701",
+	level,
+	name,
+	isRequired,
+	markedAt: new Date("2026-02-01T00:00:00Z"),
 });
 
 describe("buildPathViewModel", () => {
@@ -131,6 +149,7 @@ describe("buildPathViewModel", () => {
 		expect(vm.currentLevel).toBe(2);
 		expect(vm.upNext).toEqual([
 			{
+				projectId: pid(2, "Understanding Your Communication Style"),
 				level: 2,
 				name: "Understanding Your Communication Style",
 				isRequired: true,
@@ -209,10 +228,11 @@ describe("buildPathViewModel", () => {
 			expect(vm.upNext.map((p) => p.name)).toEqual([
 				"Understanding Emotional Intelligence",
 			]);
-			expect(vm.upNextElectives).toEqual({
-				chooseCount: 1,
-				options: ["Persuasive Speaking", "Connect with Storytelling"],
-			});
+			expect(vm.upNextElectives?.chooseCount).toBe(1);
+			expect(vm.upNextElectives?.options.map((o) => o.name)).toEqual([
+				"Persuasive Speaking",
+				"Connect with Storytelling",
+			]);
 		});
 
 		it("no elective group when the level's elective requirement is already met", () => {
@@ -251,10 +271,13 @@ describe("buildPathViewModel", () => {
 				pathLevels: [{ level: 3, minReqElectives: 1 }],
 			});
 			// The L1 completion must NOT mark the L3 elective of the same name done.
-			expect(vm.upNextElectives).toEqual({
-				chooseCount: 1,
-				options: ["Deliver Social Speeches", "Persuasive Speaking"],
-			});
+			// Matching is by project id now, so this holds structurally rather than
+			// by the name-plus-level check it used to need.
+			expect(vm.upNextElectives?.chooseCount).toBe(1);
+			expect(vm.upNextElectives?.options.map((o) => o.name)).toEqual([
+				"Deliver Social Speeches",
+				"Persuasive Speaking",
+			]);
 			// And the required L3 project is still surfaced.
 			expect(vm.upNext.map((p) => p.name)).toEqual([
 				"Understanding Emotional Intelligence",
@@ -277,5 +300,176 @@ describe("buildPathViewModel", () => {
 		expect(vm.upNextElectives).toBeNull();
 		expect(vm.wins.map((w) => w.name)).toEqual(["Ice Breaker"]); // inference passthrough
 		expect(vm.upNext.map((p) => p.name)).toEqual(["Speaking to Inform"]); // today's logic
+	});
+});
+
+// The whole point of #419: a club with no Base Camp still gets a real path.
+describe("manual progress marks (#419)", () => {
+	const catalog = [
+		project(1, "Ice Breaker"),
+		project(1, "Evaluation and Feedback"),
+		project(2, "Understanding Your Style"),
+		project(3, "Understanding Emotional Intelligence"),
+		project(3, "Persuasive Speaking", false),
+		project(3, "Connect with Storytelling", false),
+	];
+	const pathLevels = [
+		{ level: 1, minReqElectives: 0 },
+		{ level: 2, minReqElectives: 0 },
+		{ level: 3, minReqElectives: 2 },
+	];
+
+	// Before this, `pathwaysForPerson` inner-joined path_level_progress, so this
+	// enrollment produced NOTHING and the dashboard claimed the club hadn't
+	// synced — after the member had explicitly declared a path.
+	it("derives levels from the catalog when Base Camp has never spoken", () => {
+		const vm = buildPathViewModel({
+			courseCode: "8701",
+			pathName: "Presentation Mastery",
+			levels: [], // no path_level_progress at all
+			wins: [],
+			catalogProjects: catalog,
+			pathLevels,
+			marks: [mark(1, "Ice Breaker")],
+		});
+		expect(vm.levelsSource).toBe("catalog");
+		expect(vm.hasBasecamp).toBe(false);
+		expect(vm.levels).toEqual([
+			{ level: 1, completed: 1, total: 2, approved: false },
+			{ level: 2, completed: 0, total: 1, approved: false },
+			// 1 required + 2 required electives — TI's real requirement, not a
+			// count of the pool.
+			{ level: 3, completed: 0, total: 3, approved: false },
+		]);
+		expect(vm.currentLevel).toBe(1);
+		expect(vm.wins.map((w) => w.name)).toEqual(["Ice Breaker"]);
+	});
+
+	// Only Base Camp approves a level. Inferring approval from marks would be
+	// exactly the over-crediting explicit marks exist to prevent.
+	it("never reports a path complete off marks alone", () => {
+		const vm = buildPathViewModel({
+			courseCode: "8701",
+			pathName: "Presentation Mastery",
+			levels: [],
+			wins: [],
+			catalogProjects: [project(1, "Ice Breaker")],
+			pathLevels: [{ level: 1, minReqElectives: 0 }],
+			marks: [mark(1, "Ice Breaker")],
+		});
+		expect(vm.levels.every((l) => !l.approved)).toBe(true);
+		expect(vm.complete).toBe(false);
+		expect(vm.ringPercent).toBe(100); // 1 of 1 marked — the count is honest
+	});
+
+	it("drops a marked project off what's next", () => {
+		const vm = buildPathViewModel({
+			courseCode: "8701",
+			pathName: "Presentation Mastery",
+			levels: [lv(1, 2, 2, true), lv(2, 0, 1, false), lv(3, 0, 3, false)],
+			wins: [],
+			catalogProjects: catalog,
+			pathLevels,
+			marks: [mark(2, "Understanding Your Style")],
+		});
+		expect(vm.currentLevel).toBe(2);
+		expect(vm.upNext).toEqual([]);
+	});
+
+	it("counts a marked elective against the choose-N requirement", () => {
+		const vm = buildPathViewModel({
+			courseCode: "8701",
+			pathName: "Presentation Mastery",
+			levels: [lv(1, 2, 2, true), lv(2, 1, 1, true), lv(3, 0, 3, false)],
+			wins: [],
+			catalogProjects: catalog,
+			pathLevels,
+			marks: [mark(3, "Persuasive Speaking", false)],
+		});
+		expect(vm.upNextElectives?.chooseCount).toBe(1);
+		expect(vm.upNextElectives?.options.map((o) => o.name)).toEqual([
+			"Connect with Storytelling",
+		]);
+	});
+
+	describe("the two sources are never merged", () => {
+		it("flags marked-but-not-in-Base-Camp as awaiting processing", () => {
+			const vm = buildPathViewModel({
+				courseCode: "8701",
+				pathName: "Presentation Mastery",
+				levels: [lv(1, 1, 2, false)],
+				wins: [],
+				catalogProjects: catalog,
+				pathLevels,
+				detailProjects: [
+					dp(1, "Ice Breaker", true),
+					dp(1, "Evaluation and Feedback", false),
+				],
+				marks: [mark(1, "Evaluation and Feedback")],
+			});
+			const byName = new Map(vm.wins.map((w) => [w.name, w]));
+			// Base Camp's own — nothing pending about it.
+			expect(byName.get("Ice Breaker")?.awaitingProcessing).toBe(false);
+			expect(byName.get("Ice Breaker")?.markedHere).toBe(false);
+			// Done here, Base Camp hasn't caught up. Not a conflict.
+			expect(byName.get("Evaluation and Feedback")?.awaitingProcessing).toBe(
+				true,
+			);
+			expect(byName.get("Evaluation and Feedback")?.markedHere).toBe(true);
+		});
+
+		// A club with no /detail has no per-project verdict from Base Camp, so
+		// there is nothing for a mark to be "awaiting".
+		it("never says awaiting when Base Camp has no per-project verdict", () => {
+			const vm = buildPathViewModel({
+				courseCode: "8701",
+				pathName: "Presentation Mastery",
+				levels: [lv(1, 1, 2, false)], // summary counts only
+				wins: [],
+				catalogProjects: catalog,
+				pathLevels,
+				marks: [mark(1, "Ice Breaker")],
+			});
+			expect(vm.hasBasecamp).toBe(false);
+			expect(vm.wins[0].awaitingProcessing).toBe(false);
+			// Base Camp still owns the levels — its counts are real data.
+			expect(vm.levelsSource).toBe("basecamp");
+		});
+
+		it("keeps Base Camp's completion after the mark is removed", () => {
+			const withMark = {
+				courseCode: "8701",
+				pathName: "Presentation Mastery",
+				levels: [lv(1, 1, 2, false)],
+				wins: [],
+				catalogProjects: catalog,
+				pathLevels,
+				detailProjects: [dp(1, "Ice Breaker", true)],
+			};
+			const marked = buildPathViewModel({
+				...withMark,
+				marks: [mark(1, "Ice Breaker")],
+			});
+			const unmarked = buildPathViewModel({ ...withMark, marks: [] });
+			expect(marked.wins.map((w) => w.name)).toEqual(["Ice Breaker"]);
+			expect(unmarked.wins.map((w) => w.name)).toEqual(["Ice Breaker"]);
+			expect(unmarked.wins[0].markedHere).toBe(false);
+		});
+	});
+
+	// #419: "Completed projects, with their speeches where a speeches.project_id
+	// links one." A mark on its own has no speech; the delivered-speech row does.
+	it("attaches a delivered speech to a mark that has one", () => {
+		const vm = buildPathViewModel({
+			courseCode: "8701",
+			pathName: "Presentation Mastery",
+			levels: [],
+			wins: [win(1, "Ice Breaker", "My First Speech")],
+			catalogProjects: catalog,
+			pathLevels,
+			marks: [mark(1, "Ice Breaker")],
+		});
+		expect(vm.wins[0].speechTitle).toBe("My First Speech");
+		expect(vm.wins[0].deliveredAt).toEqual(new Date("2026-01-01T00:00:00Z"));
 	});
 });

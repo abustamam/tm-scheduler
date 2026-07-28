@@ -1,4 +1,4 @@
-import { Trophy } from "lucide-react";
+import { Check, Trophy } from "lucide-react";
 import { useState } from "react";
 import { Badge } from "#/components/ui/badge";
 import { Card, CardContent } from "#/components/ui/card";
@@ -134,8 +134,17 @@ function CurrentLevelBar({
 	);
 }
 
-/** Named list of the person's delivered speeches matched to catalog projects. */
-function YourWins({ wins }: { wins: PathViewModel["wins"] }) {
+/** Named list of the person's completed projects — Base Camp's, marks made
+ * here, and the union of both. */
+function YourWins({
+	wins,
+	onUnmark,
+	busyId,
+}: {
+	wins: PathViewModel["wins"];
+	onUnmark?: (projectId: string) => void;
+	busyId?: string | null;
+}) {
 	if (wins.length === 0) return null;
 	return (
 		<div className="flex flex-col gap-2">
@@ -150,7 +159,7 @@ function YourWins({ wins }: { wins: PathViewModel["wins"] }) {
 							className="flex items-start gap-2 rounded-md bg-primary/10 px-3 py-2"
 						>
 							<Trophy className="mt-0.5 size-4 shrink-0 text-primary" />
-							<div className="flex min-w-0 flex-col">
+							<div className="flex min-w-0 flex-1 flex-col">
 								<div className="flex flex-wrap items-baseline gap-x-2">
 									<span className="font-medium text-foreground text-sm">
 										{w.name}
@@ -160,6 +169,14 @@ function YourWins({ wins }: { wins: PathViewModel["wins"] }) {
 										    of the five levels, not a sixth one (#424). */}
 										{levelLabel(w.level)}
 									</span>
+									{/* Done here, Base Camp hasn't caught up. Its own words for
+									    the same idea are `completed` vs `approved` — this is not
+									    an error state and must not read like one. */}
+									{w.awaitingProcessing ? (
+										<Badge variant="outline" className="text-[10px]">
+											Awaiting Base Camp
+										</Badge>
+									) : null}
 								</div>
 								{(w.speechTitle || dateLabel) && (
 									<span className="text-muted-foreground text-xs">
@@ -169,6 +186,16 @@ function YourWins({ wins }: { wins: PathViewModel["wins"] }) {
 									</span>
 								)}
 							</div>
+							{onUnmark && w.markedHere && w.projectId ? (
+								<button
+									type="button"
+									className="shrink-0 text-muted-foreground text-xs underline underline-offset-2 disabled:opacity-50"
+									disabled={busyId === w.projectId}
+									onClick={() => onUnmark(w.projectId as string)}
+								>
+									Undo
+								</button>
+							) : null}
 						</li>
 					);
 				})}
@@ -183,9 +210,15 @@ function YourWins({ wins }: { wins: PathViewModel["wins"] }) {
 function UpNext({
 	upNext,
 	electives,
+	hasBasecamp,
+	onMark,
+	busyId,
 }: {
 	upNext: PathViewModel["upNext"];
 	electives: PathViewModel["upNextElectives"];
+	hasBasecamp: boolean;
+	onMark?: (projectId: string) => void;
+	busyId?: string | null;
 }) {
 	const hasElectives = electives != null && electives.options.length > 0;
 	if (upNext.length === 0 && !hasElectives) return null;
@@ -195,18 +228,14 @@ function UpNext({
 			{upNext.length > 0 && (
 				<div className="flex flex-wrap gap-1.5">
 					{upNext.map((p) => (
-						<Badge
-							key={p.name}
-							variant={p.isRequired ? "default" : "outline"}
-							className={cn(
-								!p.isRequired && "font-normal text-muted-foreground",
-							)}
-						>
-							{p.name}
-							{p.isRequired && (
-								<span className="ml-1 opacity-80">Required</span>
-							)}
-						</Badge>
+						<MarkableProject
+							key={p.projectId ?? p.name}
+							projectId={p.projectId}
+							name={p.name}
+							isRequired={p.isRequired}
+							onMark={onMark}
+							busyId={busyId}
+						/>
 					))}
 				</div>
 			)}
@@ -217,31 +246,89 @@ function UpNext({
 						{electives.chooseCount === 1 ? "" : "s"}:
 					</div>
 					<div className="flex flex-wrap gap-1.5">
-						{electives.options.map((name) => (
-							<Badge
-								key={name}
-								variant="outline"
-								className="font-normal text-muted-foreground"
-							>
-								{name}
-							</Badge>
+						{electives.options.map((o) => (
+							<MarkableProject
+								key={o.projectId ?? o.name}
+								projectId={o.projectId}
+								name={o.name}
+								isRequired={false}
+								onMark={onMark}
+								busyId={busyId}
+							/>
 						))}
 					</div>
 				</div>
 			)}
 			{/* Not "it'll sync here": under ADR-0025 nothing syncs on its own — an
 			    officer runs it. Promising automatic updates would be false for every
-			    club on the commercial product. */}
+			    club on the commercial product. So only say it to clubs that DO sync;
+			    for everyone else this list is the record, and the tick is how it
+			    moves. */}
 			<div className="text-muted-foreground text-xs">
-				Do it in Base Camp, then sync to see it here.
+				{hasBasecamp
+					? "Do it in Base Camp, then sync to see it here."
+					: onMark
+						? "Tick one off when you've delivered it."
+						: null}
 			</div>
 		</div>
 	);
 }
 
+/** One up-next project. A plain badge when read-only; a tick-to-complete button
+ * where the viewer may mark progress (#419). */
+function MarkableProject({
+	projectId,
+	name,
+	isRequired,
+	onMark,
+	busyId,
+}: {
+	projectId: string | null;
+	name: string;
+	isRequired: boolean;
+	onMark?: (projectId: string) => void;
+	busyId?: string | null;
+}) {
+	const badge = (
+		<Badge
+			variant={isRequired ? "default" : "outline"}
+			className={cn(!isRequired && "font-normal text-muted-foreground")}
+		>
+			{onMark && projectId ? (
+				<Check className="mr-1 size-3 opacity-70" aria-hidden />
+			) : null}
+			{name}
+			{isRequired && <span className="ml-1 opacity-80">Required</span>}
+		</Badge>
+	);
+	if (!onMark || !projectId) return badge;
+	return (
+		<button
+			type="button"
+			aria-label={`Mark ${name} complete`}
+			disabled={busyId === projectId}
+			className="disabled:opacity-50"
+			onClick={() => onMark(projectId)}
+		>
+			{badge}
+		</button>
+	);
+}
+
 /** One path's ring + chips + current-level (or complete) block, plus the
  * named wins and up-next layers. */
-function PathBlock({ path }: { path: PathViewModel }) {
+function PathBlock({
+	path,
+	onMark,
+	onUnmark,
+	busyId,
+}: {
+	path: PathViewModel;
+	onMark?: (projectId: string) => void;
+	onUnmark?: (projectId: string) => void;
+	busyId?: string | null;
+}) {
 	return (
 		<div className="flex flex-col gap-4">
 			<div className="flex flex-col gap-4 sm:flex-row sm:items-center">
@@ -260,9 +347,24 @@ function PathBlock({ path }: { path: PathViewModel }) {
 					) : null}
 				</div>
 			</div>
-			<YourWins wins={path.wins} />
+			{/* Where the numbers come from. The catalog denominator is TI's real
+			    per-level requirement, but calling it Base Camp progress when Base
+			    Camp has never seen this enrollment would be a lie. */}
+			{path.levelsSource === "catalog" ? (
+				<div className="text-muted-foreground text-xs">
+					Tracked here, not from Base Camp. Levels are marked complete in Base
+					Camp only.
+				</div>
+			) : null}
+			<YourWins wins={path.wins} onUnmark={onUnmark} busyId={busyId} />
 			{!path.complete && (
-				<UpNext upNext={path.upNext} electives={path.upNextElectives} />
+				<UpNext
+					upNext={path.upNext}
+					electives={path.upNextElectives}
+					hasBasecamp={path.hasBasecamp}
+					onMark={onMark}
+					busyId={busyId}
+				/>
 			)}
 		</div>
 	);
@@ -274,24 +376,34 @@ function PathBlock({ path }: { path: PathViewModel }) {
  * models as a prop, does no data fetching. Zero paths render a muted empty
  * state; multiple paths get a tab switcher across path names.
  */
-export function PathwaysProgress({ paths }: { paths: PathViewModel[] }) {
+export function PathwaysProgress({
+	paths,
+	onMark,
+	onUnmark,
+	busyId,
+}: {
+	paths: PathViewModel[];
+	/** Mark a project complete. Omit on read-only surfaces — the controls then
+	 *  simply aren't rendered (#419). */
+	onMark?: (projectId: string) => void;
+	onUnmark?: (projectId: string) => void;
+	busyId?: string | null;
+}) {
 	const [active, setActive] = useState(paths[0]?.courseCode);
 
-	// Path enrollments only ever come from a Base Camp sync, and under ADR-0025
-	// most clubs will never run one — so for them this panel is permanently
-	// empty, not pending. "No Pathways synced yet" implied a sync was on its way.
-	// Say where the data comes from instead, and point at the record that does
-	// exist without a sync: the path + project captured on each speech.
+	// Empty now means ONE thing: no declared path. It used to mean "no Base Camp
+	// sync", because enrollments only ever came from one — but a path can be
+	// declared by hand since #417, and #419 gives it levels from the catalog, so
+	// a member with a path always gets a real panel whether or not their club
+	// syncs. Pointing at Base Camp here would send them to the wrong place.
 	if (paths.length === 0) {
 		return (
 			<Card>
 				<CardContent className="flex flex-col gap-1 text-muted-foreground text-sm">
-					<span>
-						This panel is built from Base Camp, which this club hasn't synced.
-					</span>
+					<span>No Pathways path set yet.</span>
 					<span className="text-xs">
-						Pathways paths and projects recorded on individual speeches still
-						show up with those speeches.
+						Add one to track what you've completed and what's next — no Base
+						Camp sync needed.
 					</span>
 				</CardContent>
 			</Card>
@@ -302,7 +414,12 @@ export function PathwaysProgress({ paths }: { paths: PathViewModel[] }) {
 		return (
 			<Card>
 				<CardContent>
-					<PathBlock path={paths[0]} />
+					<PathBlock
+						path={paths[0]}
+						onMark={onMark}
+						onUnmark={onUnmark}
+						busyId={busyId}
+					/>
 				</CardContent>
 			</Card>
 		);
@@ -323,7 +440,12 @@ export function PathwaysProgress({ paths }: { paths: PathViewModel[] }) {
 					</TabsList>
 					{paths.map((p) => (
 						<TabsContent key={p.courseCode} value={p.courseCode}>
-							<PathBlock path={p} />
+							<PathBlock
+								path={p}
+								onMark={onMark}
+								onUnmark={onUnmark}
+								busyId={busyId}
+							/>
 						</TabsContent>
 					))}
 				</Tabs>

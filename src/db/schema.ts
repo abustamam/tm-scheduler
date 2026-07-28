@@ -1079,6 +1079,54 @@ export const bcmProjectProgress = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// Manually marked project completion (#419) — the source of completion truth for
+// clubs with no Base Camp.
+//
+// A SEPARATE TABLE from `bcm_project_progress`, deliberately. Every /detail sync
+// does `delete(bcmProjectProgress).where(enrollmentId = …)` then re-inserts from
+// the payload (`pathways-detail-logic.ts`), so a manual mark written there would
+// work until that member's next sync and then vanish with no error.
+//
+// Completion is MARKED, never derived from delivered speeches. Derivation is
+// wrong in both directions: "Evaluation and Feedback" takes three assignments
+// (speech, evaluation, repeat speech — #409), so one delivery would complete a
+// project that is two-thirds outstanding; and a member working ahead has
+// delivered Level 2 speeches while Level 1 sits unapproved, which no
+// speech-derived rule can express.
+//
+// The two sources are never merged and neither overwrites the other. Marked but
+// not yet complete in Base Camp is a first-class state — "done, awaiting
+// processing" — not a conflict; it's the same distinction Base Camp itself draws
+// between `path_level_progress.completed` and `approved`.
+export const projectCompletionMarks = pgTable(
+	"project_completion_marks",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		enrollmentId: uuid("enrollment_id")
+			.notNull()
+			.references(() => pathEnrollments.id, { onDelete: "cascade" }),
+		projectId: uuid("project_id")
+			.notNull()
+			.references(() => pathwaysProjects.id, { onDelete: "cascade" }),
+		// Who ticked it — the member themselves or a club admin acting for them.
+		// `set null` rather than cascade: losing the attribution must never delete
+		// the member's completion record.
+		markedByMemberId: uuid("marked_by_member_id").references(() => members.id, {
+			onDelete: "set null",
+		}),
+		markedAt: timestamp("marked_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(t) => [
+		uniqueIndex("project_completion_marks_enrollment_project_idx").on(
+			t.enrollmentId,
+			t.projectId,
+		),
+	],
+);
+
+// ---------------------------------------------------------------------------
 // Sync tokens — per-club Bearer credentials for the Pathways auto-sync browser
 // extension (#107). The token IS the club identity: the ingest endpoint derives
 // clubId from the token, so no session is involved. Raw token is shown once at
@@ -1497,6 +1545,20 @@ export const pathwaysPathLevelsRelations = relations(
 		path: one(pathwaysPaths, {
 			fields: [pathwaysPathLevels.pathId],
 			references: [pathwaysPaths.id],
+		}),
+	}),
+);
+
+export const projectCompletionMarksRelations = relations(
+	projectCompletionMarks,
+	({ one }) => ({
+		enrollment: one(pathEnrollments, {
+			fields: [projectCompletionMarks.enrollmentId],
+			references: [pathEnrollments.id],
+		}),
+		project: one(pathwaysProjects, {
+			fields: [projectCompletionMarks.projectId],
+			references: [pathwaysProjects.id],
 		}),
 	}),
 );
