@@ -457,13 +457,23 @@ export function buildRunOfShow({
 			minutes: DEFAULT_SPEAKER_MINUTES,
 		},
 		{
-			kind: "event",
-			who: "Timer",
-			detail: "Timer's report · vote Best Speaker",
+			// The vote belongs to whoever is running the segment that just scored,
+			// not to the Timer (#363) — the club's own printed agenda has this line
+			// inside the leader's block every time, because the Timer gives a report
+			// but never holds the room. Owner IS the gate here (`requiresAnyOf`
+			// mirrors the owning role) since the beat is nominally about the
+			// Toastmaster of the Day regardless; `renderUnowned` covers the one club
+			// that disables that role outright. Only the timer's-report clause is
+			// conditional — `fallback` drops it, and it alone, when there is no
+			// Timer to report.
+			kind: "role",
+			...TOASTMASTER_ROLE,
+			role: "plain",
+			detail: "Calls for the Timer's report · vote Best Speaker",
 			minutes: 1,
+			renderUnowned: true,
 			fallback: {
 				unless: { roleKey: "timer", roleName: "Timer" },
-				owner: TOASTMASTER_ROLE,
 				detail: "Vote Best Speaker",
 			},
 			requiresAnyOf: [SPEAKER_ROLE],
@@ -477,13 +487,23 @@ export function buildRunOfShow({
 			flex: true,
 		},
 		{
-			kind: "event",
-			who: "Timer",
-			detail: "Timer's report · vote Best Table Topics",
+			// Same call as the Best-Speaker vote above, but the leader here is the
+			// Table Topics Master — confirmed by the club's own agenda, where the
+			// very next row has the Table Topics Master introducing the General
+			// Evaluator, so they were still holding the room. `renderUnowned` can
+			// never actually fire on this beat: it is owned by and gated on the same
+			// role (`requiresAnyOf: [TABLE_TOPICS_ROLE]`), so no slot ⇒ omitted
+			// before `renderUnowned` is even consulted. Left on anyway for the same
+			// reason the other two votes carry it — this beat is ABOUT a segment,
+			// not its owner, and that is a property of the vote beats as a group.
+			kind: "role",
+			...TABLE_TOPICS_ROLE,
+			role: "plain",
+			detail: "Calls for the Timer's report · vote Best Table Topics",
 			minutes: 1,
+			renderUnowned: true,
 			fallback: {
 				unless: { roleKey: "timer", roleName: "Timer" },
-				owner: TOASTMASTER_ROLE,
 				detail: "Vote Best Table Topics",
 			},
 			requiresAnyOf: [TABLE_TOPICS_ROLE],
@@ -497,13 +517,16 @@ export function buildRunOfShow({
 			minutes: 3,
 		},
 		{
-			kind: "event",
-			who: "Timer",
-			detail: "Timer's report · vote Best Evaluator",
+			// The General Evaluator, per the same club agenda.
+			kind: "role",
+			roleKey: "general_evaluator",
+			roleName: "General Evaluator",
+			role: "plain",
+			detail: "Calls for the Timer's report · vote Best Evaluator",
 			minutes: 1,
+			renderUnowned: true,
 			fallback: {
 				unless: { roleKey: "timer", roleName: "Timer" },
-				owner: TOASTMASTER_ROLE,
 				detail: "Vote Best Evaluator",
 			},
 			requiresAnyOf: [EVALUATOR_ROLE],

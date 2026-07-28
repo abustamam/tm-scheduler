@@ -95,13 +95,15 @@ describe("buildRunOfShow", () => {
 			beats
 				.find((b) => b.detail === detail)
 				?.requiresAnyOf?.map((r) => r.roleKey);
-		expect(gateOf("Timer's report · vote Best Speaker")).toEqual(["speaker"]);
-		expect(gateOf("Timer's report · vote Best Table Topics")).toEqual([
-			"table_topics_master",
+		expect(gateOf("Calls for the Timer's report · vote Best Speaker")).toEqual([
+			"speaker",
 		]);
-		expect(gateOf("Timer's report · vote Best Evaluator")).toEqual([
-			"evaluator",
-		]);
+		expect(
+			gateOf("Calls for the Timer's report · vote Best Table Topics"),
+		).toEqual(["table_topics_master"]);
+		expect(
+			gateOf("Calls for the Timer's report · vote Best Evaluator"),
+		).toEqual(["evaluator"]);
 	});
 
 	it("the MCF variant differs from the default ONLY in beat 4's owner and the handback that follows it", () => {
@@ -577,69 +579,109 @@ describe("expandRunSheet — omission of no-slot beats (#367)", () => {
 	});
 });
 
-describe("expandRunSheet — Timer vote-beat fallback (#367)", () => {
-	const voteDetails = [
-		"Timer's report · vote Best Speaker",
-		"Timer's report · vote Best Table Topics",
-		"Timer's report · vote Best Evaluator",
-	];
-	const fallbackDetails = [
-		"Vote Best Speaker",
-		"Vote Best Table Topics",
-		"Vote Best Evaluator",
-	];
-	// Each vote beat belongs to a segment and is gated on it, so a club must
-	// actually run all three segments for all three votes to be in play.
-	const segments = [
+describe("expandRunSheet — vote beats are owned by the segment leader (#363)", () => {
+	const full = () => [
+		slot({
+			id: "tm",
+			roleKey: "toastmaster_of_the_day",
+			roleName: "Toastmaster of the Day",
+			category: "leadership",
+			assigneeName: "Faisal",
+		}),
 		slot({
 			id: "sp",
+			roleKey: "speaker",
 			roleName: "Speaker",
 			category: "speaker",
 			isSpeakerRole: true,
-			assigneeName: "S",
+			assigneeName: "Jagpal",
 		}),
 		slot({
-			id: "tt",
+			id: "ttm",
+			roleKey: "table_topics_master",
 			roleName: "Table Topics Master",
 			category: "leadership",
-			assigneeName: "M",
+			assigneeName: "Rasheed",
 		}),
 		slot({
 			id: "ev",
+			roleKey: "evaluator",
 			roleName: "Evaluator",
 			category: "evaluator",
-			assigneeName: "E",
+			assigneeName: "Sudheer",
+		}),
+		slot({
+			id: "ge",
+			roleKey: "general_evaluator",
+			roleName: "General Evaluator",
+			category: "leadership",
+			assigneeName: "Riyaz",
+		}),
+		slot({
+			id: "ti",
+			roleKey: "timer",
+			roleName: "Timer",
+			category: "functionary",
+			assigneeName: "Muhammad",
 		}),
 	];
 
-	it("keeps the vote beats Timer-owned when a Timer slot exists", () => {
-		const rows = expandRunSheet([
-			...segments,
-			slot({ roleName: "Timer", category: "functionary", assigneeName: "T" }),
+	const voteRows = (rows: AgendaRow[]) =>
+		rows.filter((r) => /vote /i.test(r.detail));
+
+	it("attributes each vote to the leader running that segment", () => {
+		const rows = voteRows(expandRunSheet(full(), RUN_OF_SHOW));
+		expect(rows.map((r) => [r.who, r.detail])).toEqual([
+			[
+				"Toastmaster of the Day · Faisal",
+				"Calls for the Timer's report · vote Best Speaker",
+			],
+			[
+				"Table Topics Master · Rasheed",
+				"Calls for the Timer's report · vote Best Table Topics",
+			],
+			[
+				"General Evaluator · Riyaz",
+				"Calls for the Timer's report · vote Best Evaluator",
+			],
 		]);
-		for (const detail of voteDetails) {
-			expect(rows.some((r) => r.who === "Timer" && r.detail === detail)).toBe(
-				true,
-			);
-		}
 	});
 
-	it("reassigns the vote beats to the Toastmaster of the Day (dropping the timer's-report clause) when there is no Timer slot", () => {
-		const rows = expandRunSheet(segments); // no Timer slot
-		for (const detail of fallbackDetails) {
-			expect(
-				rows.some(
-					(r) => r.who === "Toastmaster of the Day" && r.detail === detail,
-				),
-			).toBe(true);
-		}
-		expect(rows.some((r) => r.who === "Timer")).toBe(false);
+	it("drops the timer's-report clause, keeping the leader, when there is no Timer", () => {
+		const noTimer = full().filter((s) => s.roleKey !== "timer");
+		expect(
+			voteRows(expandRunSheet(noTimer, RUN_OF_SHOW)).map((r) => [
+				r.who,
+				r.detail,
+			]),
+		).toEqual([
+			["Toastmaster of the Day · Faisal", "Vote Best Speaker"],
+			["Table Topics Master · Rasheed", "Vote Best Table Topics"],
+			["General Evaluator · Riyaz", "Vote Best Evaluator"],
+		]);
 	});
 
-	it("still runs all three votes (not omitted) with no Timer role", () => {
-		const rows = expandRunSheet(segments);
-		const votes = rows.filter((r) => fallbackDetails.includes(r.detail));
-		expect(votes).toHaveLength(3);
+	it("never gives the Timer a row of its own — the report is the leader's cue", () => {
+		const rows = expandRunSheet(full(), RUN_OF_SHOW);
+		expect(rows.filter((r) => r.who.startsWith("Timer"))).toEqual([]);
+	});
+
+	it("still prints the vote, unattributed, at a club that disabled its Toastmaster", () => {
+		const noTm = full().filter((s) => s.roleKey !== "toastmaster_of_the_day");
+		expect(voteRows(expandRunSheet(noTm, RUN_OF_SHOW))[0]).toMatchObject({
+			who: "Toastmaster of the Day",
+			detail: "Calls for the Timer's report · vote Best Speaker",
+		});
+	});
+
+	it("omits a vote whose segment the club does not run", () => {
+		const noTopics = full().filter((s) => s.roleKey !== "table_topics_master");
+		expect(
+			voteRows(expandRunSheet(noTopics, RUN_OF_SHOW)).map((r) => r.detail),
+		).toEqual([
+			"Calls for the Timer's report · vote Best Speaker",
+			"Calls for the Timer's report · vote Best Evaluator",
+		]);
 	});
 });
 
@@ -683,15 +725,18 @@ describe("expandRunSheet — vote beats are gated on their segment (#367)", () =
 			.filter((r) => r.detail.includes("vote Best"))
 			.map((r) => r.detail);
 		expect(votes).toEqual([
-			"Timer's report · vote Best Speaker",
-			"Timer's report · vote Best Evaluator",
+			"Calls for the Timer's report · vote Best Speaker",
+			"Calls for the Timer's report · vote Best Evaluator",
 		]);
 	});
 
 	it("prints the Table Topics vote once the club runs the segment", () => {
 		const rows = expandRunSheet([timer, ttm]);
 		expect(
-			rows.some((r) => r.detail === "Timer's report · vote Best Table Topics"),
+			rows.some(
+				(r) =>
+					r.detail === "Calls for the Timer's report · vote Best Table Topics",
+			),
 		).toBe(true);
 	});
 });

@@ -69,17 +69,23 @@ const BEATS: { detail: string; section: Section | null }[] = [
 		section: "functionaryIntro",
 	},
 	{ detail: "Prepared speech", section: "speech" },
-	{ detail: "Timer's report · vote Best Speaker", section: "voteSpeaker" },
+	{
+		detail: "Calls for the Timer's report · vote Best Speaker",
+		section: "voteSpeaker",
+	},
 	{
 		detail: "Impromptu topics using the Word of the Day",
 		section: "tableTopics",
 	},
 	{
-		detail: "Timer's report · vote Best Table Topics",
+		detail: "Calls for the Timer's report · vote Best Table Topics",
 		section: "voteTableTopics",
 	},
 	{ detail: "Evaluates a speaker", section: "evaluation" },
-	{ detail: "Timer's report · vote Best Evaluator", section: "voteEvaluator" },
+	{
+		detail: "Calls for the Timer's report · vote Best Evaluator",
+		section: "voteEvaluator",
+	},
 	{ detail: "Evaluates the evaluators", section: "evaluatorEvaluation" },
 	{
 		detail: "Calls for the functionary reports",
