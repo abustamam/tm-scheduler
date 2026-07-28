@@ -264,10 +264,11 @@ export function buildReportingLegend(slots: AgendaSlot[]): LegendEntry[] {
 
 /** Config for `buildRunOfShow`: the one axis of per-club variance (#367). At
  *  MCF the General Evaluator introduces the functionaries; almost everywhere
- *  else the Toastmaster of the Day does, at the top of the meeting. Nothing
- *  else about the run-of-show — including the GE's closing sequence
- *  (evaluate the evaluators → call for functionary reports → overall
- *  evaluation) — depends on this flag. */
+ *  else the Toastmaster of the Day does, at the top of the meeting. It decides
+ *  beat 4's owner and, because of that, whether the run sheet needs the
+ *  handback beat that follows it — nothing else about the run-of-show,
+ *  including the GE's closing sequence (evaluate the evaluators → call for
+ *  functionary reports → overall evaluation), depends on this flag. */
 export type RunOfShowConfig = { geIntroducesFunctionaries: boolean };
 
 /** The 4 standard functionary roles we ship (`ROLE_TEMPLATE`). Since #371 these
@@ -288,6 +289,14 @@ const FUNCTIONARY_ROLES: BeatRole[] = [
 const REPORTING_FUNCTIONARY_ROLES: BeatRole[] = FUNCTIONARY_ROLES.filter(
 	(r) => r.roleKey !== NON_REPORTING_FUNCTIONARY.roleKey,
 );
+
+/** The Toastmaster of the Day — the meeting's host. Named once because two
+ *  beats bind to it as the same role: the opening, and (in MCF's variant) the
+ *  handback before the speeches. */
+const TOASTMASTER_ROLE: BeatRole = {
+	roleKey: "toastmaster_of_the_day",
+	roleName: "Toastmaster of the Day",
+};
 
 /** The three segments that each end in a vote. Single-sourced so a vote beat's
  *  `requiresAnyOf` gate can never drift from the segment beat it follows. */
@@ -329,20 +338,47 @@ const AWARD_CATEGORIES: { role: BeatRole; label: string }[] = [
  * are gated on it, so a club with no Table Topics Master never prints a vote for
  * a segment it does not run.
  *
- * `geIntroducesFunctionaries: true` is MCF's variant: beat 4 ONLY changes
- * owner to the General Evaluator. Durations are tunable constants
- * approximating templates/meeting-agenda/MeetingAgenda.dc.html; per-beat
- * durations and arbitrary reordering are deliberately out of scope.
+ * `geIntroducesFunctionaries: true` is MCF's variant: beat 4 changes owner to
+ * the General Evaluator, and gains the handback beat below, which exists only
+ * because of that swap. Durations are tunable constants approximating
+ * templates/meeting-agenda/MeetingAgenda.dc.html; per-beat durations and
+ * arbitrary reordering are deliberately out of scope.
  */
 export function buildRunOfShow({
 	geIntroducesFunctionaries,
 }: RunOfShowConfig): Beat[] {
 	const functionaryIntroOwner = geIntroducesFunctionaries
 		? { roleKey: "general_evaluator", roleName: "General Evaluator" }
-		: {
-				roleKey: "toastmaster_of_the_day",
-				roleName: "Toastmaster of the Day",
-			};
+		: TOASTMASTER_ROLE;
+
+	/**
+	 * The handback, MCF's variant only. In the default flow the Toastmaster
+	 * runs beat 4 and is still holding the room when the first speaker stands,
+	 * so nothing needs to say who introduces the speakers. Swap beat 4 to the
+	 * General Evaluator and the printed agenda goes straight from the GE's row
+	 * into Speaker 1, which reads as though the GE introduces the speakers too
+	 * — so the Toastmaster takes the room back in a row of their own, with a
+	 * minute on the clock for the introductions that were already happening
+	 * off-book.
+	 *
+	 * Gated on the SPEAKERS, not on the functionaries that put the GE at the
+	 * front: a row must never promise speakers a club is not running, and a
+	 * meeting with no prepared speech has nobody to introduce. An MCF club with
+	 * speakers and no functionaries at all loses beat 4 (nothing to introduce)
+	 * and keeps this one, where it is merely redundant rather than wrong.
+	 */
+	const handback: Beat[] = geIntroducesFunctionaries
+		? [
+				{
+					kind: "role",
+					...TOASTMASTER_ROLE,
+					role: "plain",
+					detail: "Introduces the speakers",
+					minutes: 1,
+					requiresAnyOf: [SPEAKER_ROLE],
+				},
+			]
+		: [];
 
 	return [
 		{
@@ -359,8 +395,7 @@ export function buildRunOfShow({
 		},
 		{
 			kind: "role",
-			roleKey: "toastmaster_of_the_day",
-			roleName: "Toastmaster of the Day",
+			...TOASTMASTER_ROLE,
 			role: "plain",
 			detail: "Opens meeting · introduces the theme",
 			minutes: 3,
@@ -375,6 +410,7 @@ export function buildRunOfShow({
 			requiresAnyOf: FUNCTIONARY_ROLES,
 			requiresGroup: "functionaries",
 		},
+		...handback,
 		{
 			kind: "role",
 			...SPEAKER_ROLE,

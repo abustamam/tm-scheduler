@@ -107,6 +107,31 @@ const BEATS: { detail: string; section: Section | null }[] = [
 ];
 
 /**
+ * The one beat only MCF's variant carries: the Toastmaster taking the room back
+ * from the General Evaluator before the speeches.
+ *
+ * Excluded, like the other beats with no counterpart, and for the same kind of
+ * reason: the deck's next slide after `functionaryIntro` is the speech itself,
+ * which already names the speaker being introduced. The introduction happens
+ * over that slide, so a handback slide would project nothing the room cannot
+ * already see — the row exists for the person running the meeting, not the
+ * wall. Nothing is unchecked by this: the run-sheet suite asserts the row's
+ * owner, gate and position directly.
+ */
+const HANDBACK_BEAT: { detail: string; section: Section | null } = {
+	detail: "Introduces the speakers",
+	section: null,
+};
+
+/** `BEATS`, for the variant in play: MCF's inserts the handback directly after
+ *  the functionary intro, which is where `buildRunOfShow` puts it. */
+function beatsFor({ geIntroducesFunctionaries }: RunOfShowConfig) {
+	if (!geIntroducesFunctionaries) return BEATS;
+	const after = BEATS.findIndex((b) => b.section === "functionaryIntro") + 1;
+	return [...BEATS.slice(0, after), HANDBACK_BEAT, ...BEATS.slice(after)];
+}
+
+/**
  * Section identity of each deck slide kind. `satisfies` makes this exhaustive:
  * adding a `Slide` kind without classifying it is a compile error.
  */
@@ -218,9 +243,10 @@ function dedupeConsecutive(xs: string[]): string[] {
  */
 function printSections(slots: AgendaSlot[], config: RunOfShowConfig): string[] {
 	const template = buildRunOfShow(config);
+	const beats = beatsFor(config);
 	const out: string[] = [];
 	template.forEach((beat, i) => {
-		const section = BEATS[i]?.section;
+		const section = beats[i]?.section;
 		if (section && expandRunSheet(slots, [beat]).length > 0) out.push(section);
 	});
 	return dedupeConsecutive(out);
@@ -510,8 +536,9 @@ describe("run-sheet ⇄ deck parity harness", () => {
 	it("maps every beat of the template, in order, for both club configs", () => {
 		for (const config of CONFIGS) {
 			const template = buildRunOfShow(config);
-			expect(template).toHaveLength(BEATS.length);
-			expect(template.map((b) => b.detail)).toEqual(BEATS.map((b) => b.detail));
+			const beats = beatsFor(config);
+			expect(template).toHaveLength(beats.length);
+			expect(template.map((b) => b.detail)).toEqual(beats.map((b) => b.detail));
 		}
 	});
 
@@ -576,7 +603,8 @@ describe("run-sheet ⇄ deck duration parity (#356)", () => {
 				if (!("time" in slide)) continue;
 				const section = TIMED_SLIDES[slide.kind];
 				if (section == null) continue;
-				const beat = template[BEATS.findIndex((b) => b.section === section)];
+				const beat =
+					template[beatsFor(config).findIndex((b) => b.section === section)];
 				expect(slide.time).toBe(formatBeatMinutes(beat.minutes));
 				checked.push(section);
 			}
@@ -610,7 +638,8 @@ describe("run-sheet ⇄ deck duration parity (#356)", () => {
  * slot keeps the max its club typed rather than being rounded up to the house
  * default. Two questions, two helpers — see `speech-window.ts`.
  */
-const SPEECH_BEAT_INDEX = BEATS.findIndex((b) => b.section === "speech");
+const speechBeatIndex = (config: RunOfShowConfig) =>
+	beatsFor(config).findIndex((b) => b.section === "speech");
 
 /** The last number in a slide's "Time:" text: "4–6 minutes" ⇒ 6, "7 minutes" ⇒ 7. */
 function projectedUpperBound(time: string): number {
@@ -694,7 +723,7 @@ describe("speech-slot time agreement — deck ⇄ run sheet (#394)", () => {
 				{ ...speaker1, minMinutes: c.minMinutes, maxMinutes: c.maxMinutes },
 			];
 			for (const config of CONFIGS) {
-				const beat = buildRunOfShow(config)[SPEECH_BEAT_INDEX];
+				const beat = buildRunOfShow(config)[speechBeatIndex(config)];
 				const rows = expandRunSheet(slots, [beat]);
 				const slides = buildSlideDeck({
 					meeting,
