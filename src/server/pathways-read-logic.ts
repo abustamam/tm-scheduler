@@ -9,11 +9,11 @@ import {
 	pathwaysPathLevels,
 	pathwaysPaths,
 	pathwaysProjects,
-	people,
 	projectCompletionMarks,
 	roleSlots,
 	speeches,
 } from "#/db/schema";
+import { resolveUserPersonId } from "./person-identity-logic";
 
 export interface SyncedLevel {
 	level: number;
@@ -638,12 +638,12 @@ export async function pathwaysForMember(
 export async function pathwaysForUser(
 	userId: string,
 ): Promise<PathViewModel[]> {
-	const [p] = await db
-		.select({ id: people.id })
-		.from(people)
-		.where(eq(people.userId, userId));
-	if (!p) return [];
-	return pathwaysForPerson(p.id);
+	// Was `const [p] = … where(userId)` — an arbitrary Person when the account
+	// has duplicates, so the dashboard could read a different record than the
+	// one the speech picker writes. See person-identity-logic.
+	const personId = await resolveUserPersonId(userId);
+	if (!personId) return [];
+	return pathwaysForPerson(personId);
 }
 
 /**

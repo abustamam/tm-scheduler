@@ -27,14 +27,11 @@ export function PathEnrollmentManager({
 	options,
 	onAdd,
 	onRemove,
-	subject = "you",
 }: {
 	enrollments: MemberEnrollment[];
 	options: EnrollablePath[];
 	onAdd: (pathId: string) => Promise<void>;
 	onRemove: (pathId: string) => Promise<void>;
-	/** Whose paths these are, for copy. "you" (default) or a member's name. */
-	subject?: string;
 }) {
 	const [open, setOpen] = useState(false);
 	const [busyId, setBusyId] = useState<string | null>(null);
@@ -56,13 +53,11 @@ export function PathEnrollmentManager({
 
 	return (
 		<div className="flex flex-col gap-2">
-			{enrollments.length === 0 ? (
-				<p className="text-muted-foreground text-sm">
-					{subject === "you"
-						? "You haven't set a Pathways path yet."
-						: `${subject} has no Pathways path set.`}
-				</p>
-			) : (
+			{/* No empty-state copy here. The Pathways panel this sits under already
+			    says "No Pathways path set yet" (#419), and rendering a second
+			    sentence saying the same thing in different words read as a bug.
+			    The "Add a path" button below is the whole affordance. */}
+			{enrollments.length === 0 ? null : (
 				<ul className="flex flex-col gap-1.5">
 					{enrollments.map((e) => (
 						<li
