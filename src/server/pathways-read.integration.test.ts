@@ -329,7 +329,13 @@ describe.skipIf(!hasTestDb)("pathwaysForPerson / pathwaysForMember", () => {
 			speechTitle: "My Feedback Speech",
 		});
 		expect(vm.wins[0].deliveredAt).toBeInstanceOf(Date);
-		expect(vm.upNext).toEqual([
+		expect(
+			vm.upNext.map(({ level, name, isRequired }) => ({
+				level,
+				name,
+				isRequired,
+			})),
+		).toEqual([
 			{
 				level: 2,
 				name: "Understanding Your Communication Style",
@@ -402,7 +408,13 @@ describe.skipIf(!hasTestDb)("pathwaysForPerson / pathwaysForMember", () => {
 		const [vm] = await pathwaysForPerson(personId);
 
 		expect(vm.wins).toEqual([]);
-		expect(vm.upNext).toEqual(
+		expect(
+			vm.upNext.map(({ level, name, isRequired }) => ({
+				level,
+				name,
+				isRequired,
+			})),
+		).toEqual(
 			expect.arrayContaining([
 				{
 					level: 2,

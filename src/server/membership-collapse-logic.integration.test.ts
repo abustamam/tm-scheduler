@@ -15,7 +15,7 @@
  *      table_topics_speakers, and activity_log (actor + jsonb detail refs +
  *      member-target deletion) all move to the keeper.
  *   6. FK drift-guard: the DB's set of foreign keys referencing `members`
- *      exactly matches the 10 this primitive re-points.
+ *      exactly matches the 11 this primitive re-points.
  *
  * Run with:
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test \
@@ -520,7 +520,7 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 
 	it("FK drift-guard: every foreign key referencing `members` is handled", async () => {
 		// The exact set of (referencing table, column) FKs pointing at members.id
-		// that collapseMemberships re-points. If a future migration adds an 11th FK
+		// that collapseMemberships re-points. If a future migration adds another FK
 		// to members, this fails LOUDLY here — instead of silently cascade-deleting
 		// or orphaning that data on the next merge.
 		const HANDLED = new Set([
@@ -531,6 +531,8 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 			"meeting_awards.member_id",
 			"meeting_outreach.member_id",
 			"notifications.assigned_member_id",
+			// #419 — attribution for a manual completion mark.
+			"project_completion_marks.marked_by_member_id",
 			"role_slots.assigned_member_id",
 			"table_topics_speakers.member_id",
 			"guests.converted_membership_id",

@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, lt, ne } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lt, ne } from "drizzle-orm";
 import { db } from "#/db";
 import {
 	bcmProjectProgress,
@@ -10,6 +10,7 @@ import {
 	pathwaysPaths,
 	pathwaysProjects,
 	people,
+	projectCompletionMarks,
 	roleSlots,
 	speeches,
 } from "#/db/schema";
@@ -27,10 +28,27 @@ export interface Win {
 	name: string;
 	speechTitle: string;
 	deliveredAt: Date | null; // null for a non-speech (leadership) completion from /detail
+	/** Catalog project id, when this win resolves to one — the handle the
+	 *  un-mark control needs. Null on inference-fallback wins. */
+	projectId: string | null;
+	/** Completed by an explicit mark here (#419) — the handle for un-marking.
+	 *  A project can be both marked here and complete in Base Camp. */
+	markedHere: boolean;
+	/**
+	 * Marked complete here but NOT (yet) complete in Base Camp (#419).
+	 *
+	 * A first-class state, not a conflict: it is exactly "done, awaiting
+	 * processing" — the working-ahead case. Only ever true where Base Camp has
+	 * something to say about this enrollment; a club that never syncs has one
+	 * source and never sees the distinction.
+	 */
+	awaitingProcessing: boolean;
 }
 
 /** A current-level catalog project not yet won. */
 export interface UpNextProject {
+	/** Catalog project id — the handle the "mark complete" control needs. */
+	projectId: string | null;
 	level: number;
 	name: string;
 	isRequired: boolean;
@@ -39,11 +57,12 @@ export interface UpNextProject {
 /** Grouped elective choice for the current level (from the /detail mirror). */
 export interface UpNextElectives {
 	chooseCount: number; // min_req_electives − electives already complete at this level
-	options: string[]; // remaining (not-complete) elective project names in the pool
+	options: { projectId: string | null; name: string }[]; // remaining (not-complete) electives in the pool
 }
 
 /** One /detail mirror row joined to its catalog project. */
 export interface DetailProjectRow {
+	projectId: string;
 	courseCode: string;
 	level: number;
 	name: string;
@@ -53,6 +72,16 @@ export interface DetailProjectRow {
 	speechDate: Date | null;
 }
 
+/** One manual completion mark (#419), joined to its catalog project. */
+export interface MarkRow {
+	projectId: string;
+	courseCode: string;
+	level: number;
+	name: string;
+	isRequired: boolean;
+	markedAt: Date;
+}
+
 export interface PathViewModel {
 	courseCode: string;
 	pathName: string;
@@ -60,6 +89,21 @@ export interface PathViewModel {
 	currentLevel: number | null; // lowest not-approved; null when complete
 	complete: boolean;
 	levels: SyncedLevel[];
+	/**
+	 * Where `levels` (and therefore the ring and the level bar) come from.
+	 *
+	 * "basecamp" — `path_level_progress`, the authoritative mirror.
+	 * "catalog"  — the seeded TI curriculum, counted against manual marks,
+	 *              for an enrollment Base Camp has never spoken about (#419).
+	 *
+	 * Surfaced rather than hidden so the UI can say which it is. The catalog
+	 * denominator is real (it is TI's own per-level requirement), but `approved`
+	 * is never inferred from it — only Base Camp approves a level.
+	 */
+	levelsSource: "basecamp" | "catalog";
+	/** Does Base Camp have anything to say about this enrollment at all? Drives
+	 *  whether "awaiting processing" is a meaningful distinction to show. */
+	hasBasecamp: boolean;
 	/** This person's delivered speeches whose project is in this path. */
 	wins: Win[];
 	/** Current-level catalog projects not already a win. Empty when complete.
@@ -71,6 +115,7 @@ export interface PathViewModel {
 }
 
 export interface CatalogProject {
+	projectId: string;
 	level: number;
 	name: string;
 	isRequired: boolean;
@@ -86,47 +131,139 @@ interface SyncedPath {
 	detailProjects?: DetailProjectRow[];
 	/** Per-level elective requirements (pathways_path_levels), when synced. */
 	pathLevels?: { level: number; minReqElectives: number }[];
+	/** Manual completion marks for this enrollment (#419). */
+	marks?: MarkRow[];
+}
+
+/**
+ * Levels derived from the seeded catalog, for an enrollment Base Camp has never
+ * spoken about (#419).
+ *
+ * Before this, `pathwaysForPerson` INNER-joined `path_level_progress`, so a
+ * member who declared a path by hand (#417) produced no view model at all and
+ * the dashboard told them their club hadn't synced — which was true and useless.
+ *
+ * The denominator is not invented: it is TI's own per-level requirement, the
+ * required projects at that level plus `min_req_electives`. `approved` is always
+ * false — only Base Camp approves a level, and inferring it from marks would be
+ * exactly the over-crediting this feature exists to avoid.
+ */
+function levelsFromCatalog(
+	catalogProjects: CatalogProject[],
+	pathLevels: { level: number; minReqElectives: number }[] | undefined,
+	completeProjectIds: Set<string>,
+): SyncedLevel[] {
+	const levels = [...new Set(catalogProjects.map((p) => p.level))].sort(
+		(a, b) => a - b,
+	);
+	return levels.map((level) => {
+		const atLevel = catalogProjects.filter((p) => p.level === level);
+		const required = atLevel.filter((p) => p.isRequired);
+		const minReqElectives =
+			pathLevels?.find((l) => l.level === level)?.minReqElectives ?? 0;
+		return {
+			level,
+			completed: atLevel.filter((p) => completeProjectIds.has(p.projectId))
+				.length,
+			total: required.length + minReqElectives,
+			approved: false,
+		};
+	});
 }
 
 /** Pure: shape one synced path into its display model. */
 export function buildPathViewModel(path: SyncedPath): PathViewModel {
-	const levels = [...path.levels].sort((a, b) => a.level - b.level);
+	const detail = path.detailProjects ?? [];
+	const marks = path.marks ?? [];
+
+	// The two sources are UNIONED for "what's done", never merged into one
+	// another: Base Camp never overwrites a mark and a mark never overwrites Base
+	// Camp. `hasBasecampDetail` is what makes "awaiting processing" meaningful —
+	// it needs Base Camp's per-PROJECT verdict, which only /detail gives. A club
+	// that syncs summary counts only, or never syncs, has no such verdict, so
+	// nothing is ever labelled as awaiting anything.
+	const hasBasecampDetail = detail.length > 0;
+	const bcmCompleteIds = new Set(
+		detail.filter((p) => p.complete).map((p) => p.projectId),
+	);
+	const markedIds = new Set(marks.map((m) => m.projectId));
+	const completeIds = new Set([...bcmCompleteIds, ...markedIds]);
+
+	// Base Camp's own level counts win where they exist. Otherwise derive them
+	// from the seeded catalog so a hand-declared enrollment (#417) is a real,
+	// visible path rather than nothing at all.
+	const levelsSource: "basecamp" | "catalog" =
+		path.levels.length > 0 ? "basecamp" : "catalog";
+	const levels =
+		levelsSource === "basecamp"
+			? [...path.levels].sort((a, b) => a.level - b.level)
+			: levelsFromCatalog(path.catalogProjects, path.pathLevels, completeIds);
+
 	const done = levels.reduce((s, l) => s + Math.min(l.completed, l.total), 0);
 	const total = levels.reduce((s, l) => s + l.total, 0);
 	const ringPercent =
 		total === 0 ? 0 : Math.min(100, Math.round((done / total) * 100));
 	const firstUnapproved = levels.find((l) => !l.approved);
 	const currentLevel = firstUnapproved ? firstUnapproved.level : null;
+	// On the catalog branch `approved` is always false, so a path is never
+	// reported complete off marks alone — only Base Camp closes a path.
 	const complete = !firstUnapproved;
 
-	// The mirror augments: ring/levels/currentLevel/complete stay from the count
-	// mirror above. Wins + up-next switch to /detail when this path has mirror rows.
-	const detail = path.detailProjects;
-	if (detail && detail.length > 0) {
-		const wins: Win[] = detail
-			.filter((p) => p.complete)
-			.map((p) => ({
-				level: p.level,
-				name: p.name,
-				speechTitle: p.speechTitle ?? "",
-				deliveredAt: p.speechDate ?? null,
-			}))
+	const base = {
+		courseCode: path.courseCode,
+		pathName: path.pathName,
+		ringPercent,
+		currentLevel,
+		complete,
+		levels,
+		levelsSource,
+		hasBasecamp: hasBasecampDetail,
+	};
+
+	// Project-level branch: taken as soon as EITHER source has per-project truth.
+	if (hasBasecampDetail || marks.length > 0) {
+		// A delivered speech linked to this project (via `speeches.project_id`)
+		// gives a mark its title and date; /detail carries its own.
+		const speechByProjectId = new Map(
+			path.wins
+				.filter((w) => w.projectId !== null)
+				.map((w) => [
+					w.projectId as string,
+					{ speechTitle: w.speechTitle, deliveredAt: w.deliveredAt },
+				]),
+		);
+		const byId = new Map<string, { level: number; name: string }>();
+		for (const p of detail) byId.set(p.projectId, p);
+		for (const m of marks) byId.set(m.projectId, m);
+
+		const wins: Win[] = [...completeIds]
+			.map((projectId) => {
+				const meta = byId.get(projectId);
+				const fromDetail = detail.find((p) => p.projectId === projectId);
+				const speech = speechByProjectId.get(projectId);
+				return {
+					projectId,
+					level: meta?.level ?? 0,
+					name: meta?.name ?? "",
+					speechTitle: fromDetail?.speechTitle ?? speech?.speechTitle ?? "",
+					deliveredAt: fromDetail?.speechDate ?? speech?.deliveredAt ?? null,
+					markedHere: markedIds.has(projectId),
+					awaitingProcessing:
+						hasBasecampDetail && !bcmCompleteIds.has(projectId),
+				};
+			})
 			.sort((a, b) => a.level - b.level || a.name.localeCompare(b.name));
 
 		let upNext: UpNextProject[] = [];
 		let upNextElectives: UpNextElectives | null = null;
 		if (!complete && currentLevel !== null) {
-			const completeNames = new Set(
-				detail
-					.filter((p) => p.complete && p.level === currentLevel)
-					.map((p) => p.name),
-			);
 			const currentCatalog = path.catalogProjects.filter(
 				(c) => c.level === currentLevel,
 			);
 			upNext = currentCatalog
-				.filter((c) => c.isRequired && !completeNames.has(c.name))
+				.filter((c) => c.isRequired && !completeIds.has(c.projectId))
 				.map((c) => ({
+					projectId: c.projectId,
 					level: c.level,
 					name: c.name,
 					isRequired: c.isRequired,
@@ -134,7 +271,7 @@ export function buildPathViewModel(path: SyncedPath): PathViewModel {
 
 			const currentElectives = currentCatalog.filter((c) => !c.isRequired);
 			const completedElectives = currentElectives.filter((c) =>
-				completeNames.has(c.name),
+				completeIds.has(c.projectId),
 			).length;
 			const minReq =
 				path.pathLevels?.find((l) => l.level === currentLevel)
@@ -144,23 +281,13 @@ export function buildPathViewModel(path: SyncedPath): PathViewModel {
 				upNextElectives = {
 					chooseCount,
 					options: currentElectives
-						.filter((c) => !completeNames.has(c.name))
-						.map((c) => c.name),
+						.filter((c) => !completeIds.has(c.projectId))
+						.map((c) => ({ projectId: c.projectId, name: c.name })),
 				};
 			}
 		}
 
-		return {
-			courseCode: path.courseCode,
-			pathName: path.pathName,
-			ringPercent,
-			currentLevel,
-			complete,
-			levels,
-			wins,
-			upNext,
-			upNextElectives,
-		};
+		return { ...base, wins, upNext, upNextElectives };
 	}
 
 	// Inference fallback (unchanged): wins from the member's own delivered
@@ -172,26 +299,18 @@ export function buildPathViewModel(path: SyncedPath): PathViewModel {
 			: path.catalogProjects
 					.filter((cp) => cp.level === currentLevel && !winNames.has(cp.name))
 					.map((cp) => ({
+						projectId: cp.projectId,
 						level: cp.level,
 						name: cp.name,
 						isRequired: cp.isRequired,
 					}));
 
-	return {
-		courseCode: path.courseCode,
-		pathName: path.pathName,
-		ringPercent,
-		currentLevel,
-		complete,
-		levels,
-		wins: path.wins,
-		upNext,
-		upNextElectives: null,
-	};
+	return { ...base, wins: path.wins, upNext, upNextElectives: null };
 }
 
 interface WinRow {
 	personId: string;
+	projectId: string;
 	courseCode: string;
 	level: number;
 	name: string;
@@ -215,6 +334,7 @@ async function fetchDeliveredWins(
 	return db
 		.select({
 			personId: speeches.personId,
+			projectId: pathwaysProjects.id,
 			courseCode: pathwaysPaths.courseCode,
 			level: pathwaysProjects.level,
 			name: pathwaysProjects.name,
@@ -237,6 +357,7 @@ async function fetchDeliveredWins(
 }
 
 interface CatalogRow {
+	projectId: string;
 	pathId: string;
 	level: number;
 	name: string;
@@ -248,17 +369,24 @@ async function fetchCatalogProjects(pathIds: string[]): Promise<CatalogRow[]> {
 	if (pathIds.length === 0) return [];
 	return db
 		.select({
+			projectId: pathwaysProjects.id,
 			pathId: pathwaysProjects.pathId,
 			level: pathwaysProjects.level,
 			name: pathwaysProjects.name,
 			isRequired: pathwaysProjects.isRequired,
 		})
 		.from(pathwaysProjects)
-		.where(inArray(pathwaysProjects.pathId, pathIds));
+		.where(inArray(pathwaysProjects.pathId, pathIds))
+		.orderBy(
+			asc(pathwaysProjects.level),
+			asc(pathwaysProjects.sortOrder),
+			asc(pathwaysProjects.name),
+		);
 }
 
 interface DetailRow {
 	personId: string;
+	projectId: string;
 	courseCode: string;
 	level: number;
 	name: string;
@@ -276,6 +404,7 @@ async function fetchDetailProjects(personIds: string[]): Promise<DetailRow[]> {
 	return db
 		.select({
 			personId: pathEnrollments.personId,
+			projectId: pathwaysProjects.id,
 			courseCode: pathwaysPaths.courseCode,
 			level: pathwaysProjects.level,
 			name: pathwaysProjects.name,
@@ -295,6 +424,54 @@ async function fetchDetailProjects(personIds: string[]): Promise<DetailRow[]> {
 		)
 		.innerJoin(pathwaysPaths, eq(pathwaysPaths.id, pathwaysProjects.pathId))
 		.where(inArray(pathEnrollments.personId, personIds));
+}
+
+interface ManualMarkRow {
+	personId: string;
+	projectId: string;
+	courseCode: string;
+	level: number;
+	name: string;
+	isRequired: boolean;
+	markedAt: Date;
+}
+
+/**
+ * Manual completion marks (#419), joined to catalog + path and keyed by person —
+ * symmetric with `fetchDetailProjects`, so both project-level sources group by
+ * `personId::courseCode`.
+ *
+ * Restricted to LIVE enrollments: archiving a path (#417) hides it, and its
+ * marks with it, without deleting either.
+ */
+async function fetchMarks(personIds: string[]): Promise<ManualMarkRow[]> {
+	if (personIds.length === 0) return [];
+	return db
+		.select({
+			personId: pathEnrollments.personId,
+			projectId: pathwaysProjects.id,
+			courseCode: pathwaysPaths.courseCode,
+			level: pathwaysProjects.level,
+			name: pathwaysProjects.name,
+			isRequired: pathwaysProjects.isRequired,
+			markedAt: projectCompletionMarks.markedAt,
+		})
+		.from(projectCompletionMarks)
+		.innerJoin(
+			pathEnrollments,
+			eq(pathEnrollments.id, projectCompletionMarks.enrollmentId),
+		)
+		.innerJoin(
+			pathwaysProjects,
+			eq(pathwaysProjects.id, projectCompletionMarks.projectId),
+		)
+		.innerJoin(pathwaysPaths, eq(pathwaysPaths.id, pathwaysProjects.pathId))
+		.where(
+			and(
+				inArray(pathEnrollments.personId, personIds),
+				isNull(pathEnrollments.archivedAt),
+			),
+		);
 }
 
 /** Per-level elective requirements (pathways_path_levels) for a set of path ids. */
@@ -317,6 +494,14 @@ async function fetchPathLevels(
 export async function pathwaysForPerson(
 	personId: string,
 ): Promise<PathViewModel[]> {
+	// LEFT join on `path_level_progress`, not inner (#419). An inner join dropped
+	// every enrollment Base Camp had never spoken about — so a member who
+	// declared a path by hand (#417) got no view model at all and the dashboard
+	// told them their club hadn't synced. `buildPathViewModel` derives levels
+	// from the seeded catalog when this comes back null.
+	//
+	// Archived enrollments are excluded here too; before, `path_level_progress`
+	// happened to mask most of them.
 	const rows = await db
 		.select({
 			pathId: pathwaysPaths.id,
@@ -329,11 +514,16 @@ export async function pathwaysForPerson(
 		})
 		.from(pathEnrollments)
 		.innerJoin(pathwaysPaths, eq(pathEnrollments.pathId, pathwaysPaths.id))
-		.innerJoin(
+		.leftJoin(
 			pathLevelProgress,
 			eq(pathLevelProgress.enrollmentId, pathEnrollments.id),
 		)
-		.where(eq(pathEnrollments.personId, personId))
+		.where(
+			and(
+				eq(pathEnrollments.personId, personId),
+				isNull(pathEnrollments.archivedAt),
+			),
+		)
 		.orderBy(asc(pathwaysPaths.sortOrder), asc(pathLevelProgress.level));
 
 	if (rows.length === 0) return [];
@@ -353,30 +543,39 @@ export async function pathwaysForPerson(
 			byPath.set(r.courseCode, p);
 			courseCodeByPathId.set(r.pathId, r.courseCode);
 		}
-		p.levels.push({
-			level: r.level,
-			completed: r.completed,
-			total: r.total,
-			approved: r.approved,
-		});
+		// Null for an enrollment with no Base Camp counts — the row exists only to
+		// carry the path itself.
+		if (r.level !== null) {
+			p.levels.push({
+				level: r.level,
+				completed: r.completed ?? 0,
+				total: r.total ?? 0,
+				approved: r.approved ?? false,
+			});
+		}
 	}
 
 	const pathIds = [...courseCodeByPathId.keys()];
-	const [winRows, catalogRows, detailRows, pathLevelRows] = await Promise.all([
-		fetchDeliveredWins([personId], pathIds),
-		fetchCatalogProjects(pathIds),
-		fetchDetailProjects([personId]),
-		fetchPathLevels(pathIds),
-	]);
+	const [winRows, catalogRows, detailRows, pathLevelRows, markRows] =
+		await Promise.all([
+			fetchDeliveredWins([personId], pathIds),
+			fetchCatalogProjects(pathIds),
+			fetchDetailProjects([personId]),
+			fetchPathLevels(pathIds),
+			fetchMarks([personId]),
+		]);
 
 	for (const w of winRows) {
 		const p = byPath.get(w.courseCode);
 		if (!p) continue;
 		p.wins.push({
+			projectId: w.projectId,
 			level: w.level,
 			name: w.name,
 			speechTitle: w.speechTitle,
 			deliveredAt: w.deliveredAt,
+			markedHere: false,
+			awaitingProcessing: false,
 		});
 	}
 	for (const c of catalogRows) {
@@ -385,6 +584,7 @@ export async function pathwaysForPerson(
 		const p = byPath.get(courseCode);
 		if (!p) continue;
 		p.catalogProjects.push({
+			projectId: c.projectId,
 			level: c.level,
 			name: c.name,
 			isRequired: c.isRequired,
@@ -395,6 +595,7 @@ export async function pathwaysForPerson(
 		if (!p) continue;
 		if (!p.detailProjects) p.detailProjects = [];
 		p.detailProjects.push({
+			projectId: d.projectId,
 			courseCode: d.courseCode,
 			level: d.level,
 			name: d.name,
@@ -403,6 +604,12 @@ export async function pathwaysForPerson(
 			speechTitle: d.speechTitle,
 			speechDate: d.speechDate,
 		});
+	}
+	for (const m of markRows) {
+		const p = byPath.get(m.courseCode);
+		if (!p) continue;
+		if (!p.marks) p.marks = [];
+		p.marks.push(m);
 	}
 	for (const pl of pathLevelRows) {
 		const p = byPath.get(pl.courseCode);
@@ -465,11 +672,13 @@ export async function pathwaysByMember(
 		.from(members)
 		.innerJoin(pathEnrollments, eq(pathEnrollments.personId, members.personId))
 		.innerJoin(pathwaysPaths, eq(pathEnrollments.pathId, pathwaysPaths.id))
-		.innerJoin(
+		// LEFT, and archived enrollments excluded — same reasoning as
+		// `pathwaysForPerson` (#419).
+		.leftJoin(
 			pathLevelProgress,
 			eq(pathLevelProgress.enrollmentId, pathEnrollments.id),
 		)
-		.where(eq(members.clubId, clubId))
+		.where(and(eq(members.clubId, clubId), isNull(pathEnrollments.archivedAt)))
 		.orderBy(asc(pathwaysPaths.sortOrder), asc(pathLevelProgress.level));
 
 	if (rows.length === 0) return new Map();
@@ -502,20 +711,24 @@ export async function pathwaysByMember(
 			};
 			byPath.set(r.courseCode, p);
 		}
-		p.levels.push({
-			level: r.level,
-			completed: r.completed,
-			total: r.total,
-			approved: r.approved,
-		});
+		if (r.level !== null) {
+			p.levels.push({
+				level: r.level,
+				completed: r.completed ?? 0,
+				total: r.total ?? 0,
+				approved: r.approved ?? false,
+			});
+		}
 	}
 
-	const [winRows, catalogRows, detailRows, pathLevelRows] = await Promise.all([
-		fetchDeliveredWins([...personIds], [...pathIds]),
-		fetchCatalogProjects([...pathIds]),
-		fetchDetailProjects([...personIds]),
-		fetchPathLevels([...pathIds]),
-	]);
+	const [winRows, catalogRows, detailRows, pathLevelRows, markRows] =
+		await Promise.all([
+			fetchDeliveredWins([...personIds], [...pathIds]),
+			fetchCatalogProjects([...pathIds]),
+			fetchDetailProjects([...personIds]),
+			fetchPathLevels([...pathIds]),
+			fetchMarks([...personIds]),
+		]);
 
 	// Group wins by personId+courseCode for O(1) lookup per member/path.
 	const winsByPersonAndPath = new Map<string, Win[]>();
@@ -527,10 +740,13 @@ export async function pathwaysByMember(
 			winsByPersonAndPath.set(key, list);
 		}
 		list.push({
+			projectId: w.projectId,
 			level: w.level,
 			name: w.name,
 			speechTitle: w.speechTitle,
 			deliveredAt: w.deliveredAt,
+			markedHere: false,
+			awaitingProcessing: false,
 		});
 	}
 
@@ -544,7 +760,12 @@ export async function pathwaysByMember(
 			list = [];
 			catalogByCourseCode.set(courseCode, list);
 		}
-		list.push({ level: c.level, name: c.name, isRequired: c.isRequired });
+		list.push({
+			projectId: c.projectId,
+			level: c.level,
+			name: c.name,
+			isRequired: c.isRequired,
+		});
 	}
 
 	// Detail rows are person-scoped (like wins) → key by personId::courseCode.
@@ -557,6 +778,7 @@ export async function pathwaysByMember(
 			detailByPersonAndPath.set(key, list);
 		}
 		list.push({
+			projectId: d.projectId,
 			courseCode: d.courseCode,
 			level: d.level,
 			name: d.name,
@@ -565,6 +787,18 @@ export async function pathwaysByMember(
 			speechTitle: d.speechTitle,
 			speechDate: d.speechDate,
 		});
+	}
+
+	// Marks are person-scoped too (#419).
+	const marksByPersonAndPath = new Map<string, MarkRow[]>();
+	for (const m of markRows) {
+		const key = `${m.personId}::${m.courseCode}`;
+		let list = marksByPersonAndPath.get(key);
+		if (!list) {
+			list = [];
+			marksByPersonAndPath.set(key, list);
+		}
+		list.push(m);
 	}
 
 	// Path-levels are path-scoped (like catalog) → key by courseCode.
@@ -591,6 +825,7 @@ export async function pathwaysByMember(
 				`${personId}::${p.courseCode}`,
 			);
 			p.pathLevels = pathLevelsByCourseCode.get(p.courseCode);
+			p.marks = marksByPersonAndPath.get(`${personId}::${p.courseCode}`);
 			return buildPathViewModel(p);
 		});
 		result.set(memberId, vms);
