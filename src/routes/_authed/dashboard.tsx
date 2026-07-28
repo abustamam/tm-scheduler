@@ -1,20 +1,31 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { BookOpen, CalendarDays } from "lucide-react";
+import { toast } from "sonner";
 import { PageContainer } from "#/components/page-container";
+import { PathEnrollmentManager } from "#/components/pathways/path-enrollment-manager";
 import { PathwaysProgress } from "#/components/pathways/pathways-progress";
 import { formatMeetingDate } from "#/lib/format";
 import { listMySpeeches } from "#/server/club";
 import { listMyCommitments } from "#/server/meetings";
+import {
+	addMyPath,
+	getMyPathEnrollments,
+	listPathwayOptions,
+	removeMyPath,
+} from "#/server/path-enrollment";
 import { getMyPathways } from "#/server/pathways-read";
 
 export const Route = createFileRoute("/_authed/dashboard")({
 	loader: async () => {
-		const [commitments, speeches, pathways] = await Promise.all([
-			listMyCommitments(),
-			listMySpeeches(),
-			getMyPathways(),
-		]);
-		return { commitments, speeches, pathways };
+		const [commitments, speeches, pathways, enrollments, pathOptions] =
+			await Promise.all([
+				listMyCommitments(),
+				listMySpeeches(),
+				getMyPathways(),
+				getMyPathEnrollments(),
+				listPathwayOptions(),
+			]);
+		return { commitments, speeches, pathways, enrollments, pathOptions };
 	},
 	component: Dashboard,
 });
@@ -41,7 +52,24 @@ function dayMon(value: Date | string, timeZone?: string) {
 
 function Dashboard() {
 	const { authUser } = Route.useRouteContext();
-	const { commitments, speeches, pathways } = Route.useLoaderData();
+	const { commitments, speeches, pathways, enrollments, pathOptions } =
+		Route.useLoaderData();
+	const router = useRouter();
+
+	// The server fns return the fresh list, but the Pathways panel above is
+	// loader-driven and would go stale, so re-run the loader instead of holding
+	// two sources of truth for the same thing.
+	async function mutatePath(
+		fn: (args: { data: { pathId: string } }) => Promise<unknown>,
+		pathId: string,
+	) {
+		try {
+			await fn({ data: { pathId } });
+			await router.invalidate();
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+		}
+	}
 
 	return (
 		<PageContainer>
@@ -166,6 +194,14 @@ function Dashboard() {
 					<div>
 						<h2 className="mb-2.5 px-0.5 text-sm font-bold">My Pathways</h2>
 						<PathwaysProgress paths={pathways} />
+						<div className="mt-3">
+							<PathEnrollmentManager
+								enrollments={enrollments}
+								options={pathOptions}
+								onAdd={(id) => mutatePath(addMyPath, id)}
+								onRemove={(id) => mutatePath(removeMyPath, id)}
+							/>
+						</div>
 					</div>
 
 					{/* Quick actions */}
