@@ -377,8 +377,9 @@ describe("expandRunSheet", () => {
 	});
 
 	it("drops the awards beat with no slots — it is gated, not ungated (#372)", () => {
-		// The awards beat is the one Toastmaster-owned event beat that IS gated:
-		// on the scored segments, so a club hands out only the awards it scores.
+		// The awards beat is the one Toastmaster-owned beat in this group that IS
+		// gated: on the scored segments, so a club hands out only the awards it
+		// scores.
 		const rows = expandRunSheet([]);
 		expect(rows.some((r) => r.detail.startsWith("Awards ·"))).toBe(false);
 		const scored = expandRunSheet([
@@ -390,7 +391,7 @@ describe("expandRunSheet", () => {
 				assigneeName: "S",
 			}),
 		]);
-		expect(scored.some((r) => r.who === "Toastmaster")).toBe(true);
+		expect(scored.some((r) => r.who === "Toastmaster of the Day")).toBe(true);
 	});
 
 	it("renders a plain role with its assignee name", () => {
@@ -1392,6 +1393,76 @@ describe("expandRunSheet — awards beat adapts to the scored segments (#372)", 
 			assigneeName: "M",
 		});
 		expect(awardsRow([renamed])?.detail).toBe("Awards · Best Table Topic");
+	});
+});
+
+describe("awards beat is role-bound (#363)", () => {
+	it("names the Toastmaster who presents them", () => {
+		const slots = [
+			slot({
+				id: "tm",
+				roleKey: "toastmaster_of_the_day",
+				roleName: "Toastmaster of the Day",
+				category: "leadership",
+				assigneeName: "Faisal",
+			}),
+			slot({
+				id: "sp",
+				roleKey: "speaker",
+				roleName: "Speaker",
+				category: "speaker",
+				isSpeakerRole: true,
+			}),
+		];
+		const awards = expandRunSheet(slots, RUN_OF_SHOW).find((r) =>
+			r.detail.startsWith("Awards"),
+		);
+		expect(awards?.who).toBe("Toastmaster of the Day · Faisal");
+	});
+
+	it("binds by key through a club rename, and labels the row with the canonical role name", () => {
+		const slots = [
+			slot({
+				id: "tm",
+				roleKey: "toastmaster_of_the_day",
+				roleName: "Master of Ceremonies",
+				category: "leadership",
+				assigneeName: "Faisal",
+			}),
+			slot({
+				id: "sp",
+				roleKey: "speaker",
+				roleName: "Speaker",
+				category: "speaker",
+				isSpeakerRole: true,
+			}),
+		];
+		const awards = expandRunSheet(slots, RUN_OF_SHOW).find((r) =>
+			r.detail.startsWith("Awards"),
+		);
+		// The beat still FINDS the renamed slot (#368 — binding is by key), so the
+		// awards row exists and names its holder. The label is the beat's canonical
+		// role name, not the club's rename: every role row in `expandRunSheet` reads
+		// `owner.roleName`, while the header legend and `ROLES_TOKEN` read the slot's
+		// own name. That inconsistency is pre-existing and tracked separately — this
+		// test pins today's behaviour so a future change to it is deliberate.
+		expect(awards?.who).toBe("Toastmaster of the Day · Faisal");
+	});
+
+	it("still hands out awards at a club with no Toastmaster of the Day", () => {
+		const slots = [
+			slot({
+				id: "sp",
+				roleKey: "speaker",
+				roleName: "Speaker",
+				category: "speaker",
+				isSpeakerRole: true,
+			}),
+		];
+		const awards = expandRunSheet(slots, RUN_OF_SHOW).find((r) =>
+			r.detail.startsWith("Awards"),
+		);
+		expect(awards?.who).toBe("Toastmaster of the Day");
 	});
 });
 

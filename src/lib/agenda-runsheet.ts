@@ -571,10 +571,16 @@ export function buildRunOfShow({
 			minutes: 2,
 		},
 		{
-			kind: "event",
-			who: "Toastmaster",
+			// Same move as the three vote beats (#363): name the Toastmaster who
+			// hands out the ribbons instead of the bare, nonexistent "Toastmaster".
+			// `renderUnowned` so a club with no Toastmaster of the Day still gets
+			// the row — `buildSlideDeck` still projects the `awards` slide.
+			kind: "role",
+			...TOASTMASTER_ROLE,
+			role: "plain",
 			detail: `Awards · ${AWARDS_TOKEN}`,
 			minutes: 2,
+			renderUnowned: true,
 			requiresAnyOf: AWARD_CATEGORIES.map((a) => a.role),
 		},
 		{
