@@ -1,4 +1,5 @@
 import { defineConfig } from "wxt";
+import { BASECAMP_MATCHES } from "./lib/basecamp-hosts";
 
 // Target GavelUp server. Prod (unset) → gavelup.app. Dev → set WXT_GAVELUP_URL,
 // e.g. `WXT_GAVELUP_URL=http://localhost:3000 bun run dev`. The value is also
@@ -13,11 +14,7 @@ export default defineConfig({
 		description:
 			"Sync your club's Base Camp Pathways progress into GavelUp in one click.",
 		permissions: ["storage", "activeTab"],
-		host_permissions: [
-			"https://basecamp.toastmasters.org/*",
-			"https://app.basecamp.toastmasters.org/*",
-			gavelupOrigin,
-		],
+		host_permissions: [...BASECAMP_MATCHES, gavelupOrigin],
 		// Toolbar icon with NO popup — clicking it opens the Options page
 		// (see background.ts). WXT maps `action` → `browser_action` for Firefox MV2.
 		action: {},

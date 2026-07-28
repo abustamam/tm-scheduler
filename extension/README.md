@@ -66,23 +66,52 @@ restarts — use the signed `.xpi` below for a lasting install.
 
 ### Persistent install (signed .xpi)
 
-Regular-release Firefox only installs **signed** add-ons. Sign an **unlisted** build (automated
-signing via Mozilla AMO — no public listing, no full review):
+Regular-release Firefox only installs **signed** add-ons. Build the artifacts, then sign them
+through AMO — **unlisted**, so automated signing, no public listing and no full review.
 
 ```bash
 cd extension
-bunx wxt zip -b firefox            # builds the unsigned artifact under .output/
-# sign it via the AMO API (requires a Mozilla add-ons account + API credentials):
+bun run zip -b firefox
+```
+
+That writes two files under `.output/`:
+
+| File | What it's for |
+| --- | --- |
+| `…-<version>-firefox.zip` | the add-on itself — this is what you upload |
+| `…-<version>-sources.zip` | AMO requires source for bundler-built add-ons |
+
+**Web upload (what you want almost always).** [addons.mozilla.org](https://addons.mozilla.org) →
+Developer Hub → **Manage My Submissions** → the add-on → **Upload New Version** → pick the
+`-firefox.zip`, and supply the `-sources.zip` when asked for source code. AMO signs it; download
+the signed `.xpi` and install via `about:addons` → gear → **Install Add-on From File…**. No API
+credentials involved.
+
+**CLI signing** is only worth it for automation:
+
+```bash
 AMO_JWT_ISSUER=<your-issuer> AMO_JWT_SECRET=<your-secret> \
   bunx web-ext sign --channel=unlisted --source-dir .output/firefox-mv2
 ```
-Install the resulting signed `.xpi` via `about:addons` → gear → **Install Add-on From File…**.
-It persists across restarts. Keep the AMO credentials in your environment — never commit them.
+Keep the credentials in your environment — never commit them.
+
+Either way: **bump `version` in `extension/package.json` first.** AMO rejects a version it has
+already seen, and the installed add-on won't pick up changes to `matches` / `host_permissions`
+until it is genuinely reinstalled — a temporary add-on is dropped on restart. Leave the gecko
+`id` alone; it identifies the existing listing.
 
 ## Use
 
 1. In Base Camp, open **Base Camp Manager → your club → Paths Progress**.
+   TI serves this from `apps.basecamp.toastmasters.org` (plural). All three known
+   Base Camp hosts are supported — see `lib/basecamp-hosts.ts`; that one list
+   feeds both content scripts and `host_permissions`, so there is nowhere for a
+   host to be half-added.
 2. Click **Sync to GavelUp** in the widget (bottom-right of the page).
+
+**No widget?** The content script only injects on the hosts in that list. Check the
+page's host against it before debugging anything else — a missing host produces no
+button and no error, which looks identical to the extension not being installed.
 3. You'll see "Matched N · P path(s) updated · U unmatched" (plus a warning if the club
    looks different from last time).
 
