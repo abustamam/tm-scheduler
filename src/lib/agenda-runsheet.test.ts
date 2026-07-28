@@ -626,8 +626,12 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 		}),
 	];
 
+	// "Best" narrows to the three scored-segment votes: beat 4's functionary
+	// intro can interpolate "Vote Counter" — a standard functionary role name —
+	// into its `{roles}` list, and a looser `/vote /i` would swallow that row
+	// too the first time a fixture includes one (Task 4's do).
 	const voteRows = (rows: AgendaRow[]) =>
-		rows.filter((r) => /vote /i.test(r.detail));
+		rows.filter((r) => /vote Best/i.test(r.detail));
 
 	it("attributes each vote to the leader running that segment", () => {
 		const rows = voteRows(expandRunSheet(full(), RUN_OF_SHOW));
@@ -682,6 +686,51 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 			"Calls for the Timer's report · vote Best Speaker",
 			"Calls for the Timer's report · vote Best Evaluator",
 		]);
+	});
+
+	// The two features above (`renderUnowned` and `fallback`) interact rather
+	// than only ever firing alone — worth pinning directly, since `beatDetail`
+	// is computed once, before the unowned/matched branch, precisely so this
+	// combination works; an edit that moved detail resolution inside the
+	// `matching.length > 0` arm would break it silently.
+	it("renders the bare role name AND drops the timer's-report clause when both the owner and the Timer are missing", () => {
+		const noTmNoTimer = full().filter(
+			(s) => s.roleKey !== "toastmaster_of_the_day" && s.roleKey !== "timer",
+		);
+		const rows = voteRows(expandRunSheet(noTmNoTimer, RUN_OF_SHOW));
+		expect(rows[0]).toEqual({
+			who: "Toastmaster of the Day",
+			detail: "Vote Best Speaker",
+			minutes: 1,
+			marks: null,
+		});
+	});
+
+	// A deliberate, user-visible consequence of `renderUnowned` (see the beat's
+	// own comment): a club with evaluators but no General Evaluator gets a vote
+	// row naming a role nobody holds, rather than losing the vote — the deck
+	// still projects the Best-Evaluator slide, and an unattributed cue beats no
+	// cue at all. The GE's other three beats carry no such flag and vanish.
+	it("prints the Best-Evaluator vote unattributed, and drops the GE's other three beats, when there is no General Evaluator", () => {
+		const noGe = full().filter((s) => s.roleKey !== "general_evaluator");
+		const rows = expandRunSheet(noGe, RUN_OF_SHOW);
+		expect(
+			voteRows(rows).find((r) => r.detail.endsWith("vote Best Evaluator")),
+		).toEqual({
+			who: "General Evaluator",
+			detail: "Calls for the Timer's report · vote Best Evaluator",
+			minutes: 1,
+			marks: null,
+		});
+		expect(rows.some((r) => r.detail === "Evaluates the evaluators")).toBe(
+			false,
+		);
+		expect(
+			rows.some((r) => r.detail === "Calls for the functionary reports"),
+		).toBe(false);
+		expect(rows.some((r) => r.detail === "Overall meeting evaluation")).toBe(
+			false,
+		);
 	});
 });
 

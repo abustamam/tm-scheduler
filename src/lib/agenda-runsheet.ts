@@ -101,7 +101,7 @@ export type BeatRole = { roleKey: string; roleName: string };
  * - `fallback` reassigns a beat to a different owner and/or detail when its
  *   `unless` role has no slots, instead of disappearing (#363). On the three
  *   vote beats the owner is ALREADY the segment leader — Toastmaster of the
- *   Day, Table Topics Master, General Evaluator — so `unless: TIMER` only
+ *   Day, Table Topics Master, General Evaluator — so `unless: TIMER_ROLE` only
  *   swaps `detail`, dropping the "Calls for the Timer's report" clause when
  *   there is no Timer; `owner` is for a beat whose usual owner isn't the one
  *   actually holding the room. See `BeatFallback`.
@@ -149,7 +149,7 @@ export type Beat = (
  * did not follow a club rename.
  *
  * Two jobs, one mechanism:
- * - `{ unless: TIMER, detail: … }` drops a vote beat's timer's-report clause at
+ * - `{ unless: TIMER_ROLE, detail: … }` drops a vote beat's timer's-report clause at
  *   a club with no Timer — exactly the old behaviour.
  * - `{ unless: TABLE_TOPICS_ROLE, owner: TOASTMASTER_ROLE }` moves a hand-off to
  *   whoever is actually holding the room: with no Table Topics segment, the
@@ -312,6 +312,12 @@ export function buildReportingLegend(slots: AgendaSlot[]): LegendEntry[] {
  *  functionary reports → overall evaluation), depends on this flag. */
 export type RunOfShowConfig = { geIntroducesFunctionaries: boolean };
 
+/** The Timer — one of the four standard functionaries, and the role whose
+ *  ABSENCE (not presence) drives the three vote beats' `fallback` (#363): the
+ *  vote is already owned by the segment leader, so losing the Timer only
+ *  drops the "Calls for the Timer's report" clause, never the row. */
+const TIMER_ROLE: BeatRole = { roleKey: "timer", roleName: "Timer" };
+
 /** The 4 standard functionary roles we ship (`ROLE_TEMPLATE`). Since #371 these
  *  DECLARE which standard roles beat 4 is nominally about; they are no longer
  *  the definition of a functionary, which is the category
@@ -319,7 +325,7 @@ export type RunOfShowConfig = { geIntroducesFunctionaries: boolean };
 const FUNCTIONARY_ROLES: BeatRole[] = [
 	{ roleKey: "grammarian", roleName: "Grammarian" },
 	{ roleKey: "ah_counter", roleName: "Ah-Counter" },
-	{ roleKey: "timer", roleName: "Timer" },
+	TIMER_ROLE,
 	NON_REPORTING_FUNCTIONARY,
 ];
 
@@ -477,7 +483,7 @@ export function buildRunOfShow({
 			minutes: 1,
 			renderUnowned: true,
 			fallback: {
-				unless: { roleKey: "timer", roleName: "Timer" },
+				unless: TIMER_ROLE,
 				detail: "Vote Best Speaker",
 			},
 			requiresAnyOf: [SPEAKER_ROLE],
@@ -491,12 +497,9 @@ export function buildRunOfShow({
 			flex: true,
 		},
 		{
-			// Unlike the Best-Speaker vote above, `renderUnowned` can never actually
-			// fire on this beat: owner and gate are the SAME role here
-			// (`requiresAnyOf: [TABLE_TOPICS_ROLE]`), both resolved through the same
-			// `matchesRole` predicate, so a met gate guarantees `matching.length >=
-			// 1` before the "no slot" branch is ever reached. Left on anyway — this
-			// beat is still ABOUT a segment, not its owner, like the other two votes.
+			// Owner and gate are the same role here, so `renderUnowned` can never
+			// fire; kept because all three votes are about segments, not their
+			// owners.
 			kind: "role",
 			...TABLE_TOPICS_ROLE,
 			role: "plain",
@@ -504,7 +507,7 @@ export function buildRunOfShow({
 			minutes: 1,
 			renderUnowned: true,
 			fallback: {
-				unless: { roleKey: "timer", roleName: "Timer" },
+				unless: TIMER_ROLE,
 				detail: "Vote Best Table Topics",
 			},
 			requiresAnyOf: [TABLE_TOPICS_ROLE],
@@ -518,6 +521,12 @@ export function buildRunOfShow({
 			minutes: 3,
 		},
 		{
+			// The General Evaluator, per the same club agenda. A club that runs
+			// evaluators but no General Evaluator still gets this row: `renderUnowned`
+			// prints "General Evaluator" unattributed rather than losing the vote —
+			// deliberately, since the deck still projects the Best-Evaluator slide
+			// and an unattributed cue beats no cue at all. The GE's other three
+			// beats (11–13) carry no such flag and vanish outright without a GE.
 			kind: "role",
 			roleKey: "general_evaluator",
 			roleName: "General Evaluator",
@@ -526,7 +535,7 @@ export function buildRunOfShow({
 			minutes: 1,
 			renderUnowned: true,
 			fallback: {
-				unless: { roleKey: "timer", roleName: "Timer" },
+				unless: TIMER_ROLE,
 				detail: "Vote Best Evaluator",
 			},
 			requiresAnyOf: [EVALUATOR_ROLE],
