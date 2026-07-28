@@ -10,7 +10,14 @@
  */
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { members, roleDefinitions, roleSlots, speeches } from "#/db/schema";
+import {
+	members,
+	pathwaysPaths,
+	pathwaysProjects,
+	roleDefinitions,
+	roleSlots,
+	speeches,
+} from "#/db/schema";
 import {
 	cleanup,
 	hasTestDb,
@@ -348,5 +355,140 @@ describe.skipIf(!hasTestDb)("speech pointer lifecycle (ADR-0009)", () => {
 			.limit(1);
 		expect(row?.assignedMemberId).toBe(seed.memberId);
 		expect(row?.speechId).toBeNull();
+	});
+
+	// #418. The agenda, the print layouts, the projected deck, the run sheet and
+	// reporting ALL read the free-text triple — the schema calls it the fallback
+	// display "until project_id coverage is high". So picking a real project has
+	// to write those three from the catalog, or every one of those surfaces goes
+	// blank for picked speeches.
+	describe("picking a catalog project (#418)", () => {
+		let pathId: string;
+		let projectId: string;
+
+		beforeEach(async () => {
+			const suffix = seed.clubId.slice(0, 8);
+			const [path] = await testDb
+				.insert(pathwaysPaths)
+				.values({ courseCode: "8701", name: "Presentation Mastery" })
+				.onConflictDoUpdate({
+					target: pathwaysPaths.courseCode,
+					set: { name: "Presentation Mastery" },
+				})
+				.returning({ id: pathwaysPaths.id });
+			pathId = path!.id;
+			const [project] = await testDb
+				.insert(pathwaysProjects)
+				.values({
+					pathId,
+					level: 2,
+					name: `Managing Time ${suffix}`,
+					isRequired: true,
+				})
+				.returning({ id: pathwaysProjects.id });
+			projectId = project!.id;
+		});
+
+		afterEach(async () => {
+			await testDb
+				.delete(pathwaysProjects)
+				.where(eq(pathwaysProjects.id, projectId));
+		});
+
+		it("overwrites the typed path/project/level from the catalog", async () => {
+			const { attachSpeechToSlot } = await import("./slots-logic");
+			const speechId = await attachSpeechToSlot(testDb, {
+				slotId: speakerSlotId,
+				personId: seed.personId,
+				input: {
+					speechTitle: "On Time",
+					// Deliberately WRONG free text alongside the real pick — the
+					// catalog wins, so the fallback can never drift from the link.
+					pathwayPath: "Whatever I Typed",
+					projectName: "Something Else",
+					projectLevel: "Level 9",
+					projectId,
+				},
+			});
+			const [row] = await testDb
+				.select({
+					projectId: speeches.projectId,
+					pathwayPath: speeches.pathwayPath,
+					projectName: speeches.projectName,
+					projectLevel: speeches.projectLevel,
+				})
+				.from(speeches)
+				.where(eq(speeches.id, speechId!));
+			expect(row?.projectId).toBe(projectId);
+			expect(row?.pathwayPath).toBe("Presentation Mastery");
+			expect(row?.projectName).toContain("Managing Time");
+			expect(row?.projectName).not.toBe("Something Else");
+			expect(row?.projectLevel).toBe("Level 2");
+		});
+
+		it("leaves free text exactly as typed when nothing was picked", async () => {
+			const { attachSpeechToSlot } = await import("./slots-logic");
+			const speechId = await attachSpeechToSlot(testDb, {
+				slotId: speakerSlotId,
+				personId: seed.personId,
+				input: {
+					speechTitle: "Off Catalog",
+					pathwayPath: "A Path I Typed",
+					projectName: "A Project I Typed",
+					projectLevel: "Level 1",
+				},
+			});
+			const [row] = await testDb
+				.select({
+					projectId: speeches.projectId,
+					pathwayPath: speeches.pathwayPath,
+					projectName: speeches.projectName,
+				})
+				.from(speeches)
+				.where(eq(speeches.id, speechId!));
+			expect(row?.projectId).toBeNull();
+			expect(row?.pathwayPath).toBe("A Path I Typed");
+			expect(row?.projectName).toBe("A Project I Typed");
+		});
+
+		it("refuses a project id that isn't in the catalog", async () => {
+			const { attachSpeechToSlot } = await import("./slots-logic");
+			await expect(
+				attachSpeechToSlot(testDb, {
+					slotId: speakerSlotId,
+					personId: seed.personId,
+					input: {
+						speechTitle: "Bogus",
+						projectId: "00000000-0000-4000-8000-000000000000",
+					},
+				}),
+			).rejects.toThrow("no longer exists");
+		});
+
+		it("editSlotSpeech re-derives the free text when the pick changes", async () => {
+			const { attachSpeechToSlot, editSlotSpeech } = await import(
+				"./slots-logic"
+			);
+			const speechId = await attachSpeechToSlot(testDb, {
+				slotId: speakerSlotId,
+				personId: seed.personId,
+				input: { speechTitle: "Draft", pathwayPath: "Typed" },
+			});
+			await editSlotSpeech(testDb, {
+				slotId: speakerSlotId,
+				personId: seed.personId,
+				currentSpeechId: speechId,
+				input: { speechTitle: "Draft", projectId },
+			});
+			const [row] = await testDb
+				.select({
+					pathwayPath: speeches.pathwayPath,
+					projectLevel: speeches.projectLevel,
+				})
+				.from(speeches)
+				.where(eq(speeches.id, speechId!));
+			expect(row?.pathwayPath).toBe("Presentation Mastery");
+			expect(row?.projectLevel).toBe("Level 2");
+		});
 	});
 });

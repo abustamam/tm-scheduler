@@ -176,6 +176,10 @@ async function loadMeetingDetail(
 			pathwayPath: speeches.pathwayPath,
 			projectName: speeches.projectName,
 			projectLevel: speeches.projectLevel,
+			// Carried so the edit sheet can PRE-SELECT the linked catalog project
+			// (#418) rather than reopening on a blank picker. Display still comes
+			// from the free-text triple above.
+			projectId: speeches.projectId,
 			minMinutes: speeches.minMinutes,
 			maxMinutes: speeches.maxMinutes,
 			presentationUrl: speeches.presentationUrl,

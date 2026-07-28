@@ -29,6 +29,11 @@ export const speakerDetailsSchema = z
 		pathwayPath: z.string().trim().optional(),
 		projectName: z.string().trim().optional(),
 		projectLevel: z.string().trim().optional(),
+		// A real catalog project (#418). When present the server OVERWRITES the
+		// three free-text fields above from the catalog, so they stay the accurate
+		// fallback every display surface already reads. `null` clears the link and
+		// hands the fields back to whatever was typed.
+		projectId: z.string().uuid().nullable().optional(),
 		minMinutes: z.number().int().positive().optional(),
 		maxMinutes: z.number().int().positive().optional(),
 		presentationUrl: z.string().trim().optional(),
