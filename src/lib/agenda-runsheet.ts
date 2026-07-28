@@ -96,9 +96,10 @@ export type BeatRole = { roleKey: string; roleName: string };
  * - `detail` may contain `ROLES_TOKEN`, replaced at expansion time by the roles
  *   the club actually runs, under their own names — the beat's `requiresGroup`
  *   members when it has one, else its `requiresAnyOf` matches.
- * - An `event` beat's `fallback` reassigns it to a different owner/detail
- *   when `fallback.roleKey` has no slots, instead of disappearing — the
- *   Timer's-report vote beats become Toastmaster-run plain votes.
+ * - `fallback` reassigns a beat to a different owner and/or detail when its
+ *   `unless` role has no slots, instead of disappearing — the Timer's-report
+ *   vote beats become Toastmaster-of-the-Day-run plain votes. See
+ *   `BeatFallback`.
  * - `id` names a beat another surface has to quote (#356). See `BeatId`.
  */
 export type Beat = (
@@ -107,7 +108,6 @@ export type Beat = (
 			who: string;
 			detail: string;
 			minutes: number;
-			fallback?: { roleKey: string; who: string; detail: string };
 	  }
 	| {
 			kind: "role";
@@ -116,12 +116,48 @@ export type Beat = (
 			role: "plain" | "speaker" | "evaluator";
 			detail: string;
 			minutes: number;
+			/** Render this beat even when the owning role has no slot this meeting,
+			 *  as the bare role name with no assignee (#363). For beats that are
+			 *  ABOUT a segment rather than about their owner — the three votes and
+			 *  the awards. Without it a club that disabled Toastmaster of the Day
+			 *  would lose the Best-Speaker vote from the printed agenda while
+			 *  `buildSlideDeck` still projected the slide. */
+			renderUnowned?: true;
 	  }
 ) & {
 	id?: BeatId;
 	requiresAnyOf?: BeatRole[];
 	requiresGroup?: RoleGroup;
+	fallback?: BeatFallback;
 	flex?: true;
+	/** A 0-minute transition — "X introduces Y". Marks the row so the print
+	 *  layouts can render it as a compact band rather than a full segment
+	 *  block (#363). */
+	handoff?: true;
+};
+
+/**
+ * An alternative owner and/or detail, used when `unless` has no slots this
+ * meeting (#363). Generalises the old event-only `fallback`, which could only
+ * name a replacement `who` as a bare string — a string that named a role which
+ * does not exist ("Toastmaster", when the role is "Toastmaster of the Day") and
+ * did not follow a club rename.
+ *
+ * Two jobs, one mechanism:
+ * - `{ unless: TIMER, detail: … }` drops a vote beat's timer's-report clause at
+ *   a club with no Timer — exactly the old behaviour.
+ * - `{ unless: TABLE_TOPICS_ROLE, owner: TOASTMASTER_ROLE }` moves a hand-off to
+ *   whoever is actually holding the room: with no Table Topics segment, the
+ *   Toastmaster never gave the room away, so the Toastmaster introduces the
+ *   General Evaluator rather than the row vanishing.
+ */
+export type BeatFallback = {
+	/** The role whose ABSENCE triggers the fallback. */
+	unless: BeatRole;
+	/** Owning role for the fallback row; omitted ⇒ keep the beat's own owner. */
+	owner?: BeatRole;
+	/** Detail for the fallback row; omitted ⇒ keep the beat's own detail. */
+	detail?: string;
 };
 
 /**
@@ -424,8 +460,8 @@ export function buildRunOfShow({
 			detail: "Timer's report · vote Best Speaker",
 			minutes: 1,
 			fallback: {
-				roleKey: "timer",
-				who: "Toastmaster",
+				unless: { roleKey: "timer", roleName: "Timer" },
+				owner: TOASTMASTER_ROLE,
 				detail: "Vote Best Speaker",
 			},
 			requiresAnyOf: [SPEAKER_ROLE],
@@ -444,8 +480,8 @@ export function buildRunOfShow({
 			detail: "Timer's report · vote Best Table Topics",
 			minutes: 1,
 			fallback: {
-				roleKey: "timer",
-				who: "Toastmaster",
+				unless: { roleKey: "timer", roleName: "Timer" },
+				owner: TOASTMASTER_ROLE,
 				detail: "Vote Best Table Topics",
 			},
 			requiresAnyOf: [TABLE_TOPICS_ROLE],
@@ -464,8 +500,8 @@ export function buildRunOfShow({
 			detail: "Timer's report · vote Best Evaluator",
 			minutes: 1,
 			fallback: {
-				roleKey: "timer",
-				who: "Toastmaster",
+				unless: { roleKey: "timer", roleName: "Timer" },
+				owner: TOASTMASTER_ROLE,
 				detail: "Vote Best Evaluator",
 			},
 			requiresAnyOf: [EVALUATOR_ROLE],
@@ -710,18 +746,26 @@ export function expandRunSheet(
 			// omitted
 		} else if (beat.kind === "event") {
 			const fb = beat.fallback;
-			// An event beat's own display name doubles as the name to match
-			// against when a slot carries no key (e.g. "Timer") — every event
-			// beat with a fallback names the exact role it depends on.
-			const useFallback = fb != null && !hasRole(slots, fb.roleKey, beat.who);
+			const useFallback =
+				fb != null && !hasRole(slots, fb.unless.roleKey, fb.unless.roleName);
 			rows.push({
-				who: useFallback ? fb.who : beat.who,
-				detail: useFallback ? fb.detail : detail,
+				who: useFallback ? (fb.owner?.roleName ?? beat.who) : beat.who,
+				detail: useFallback ? (fb.detail ?? detail) : detail,
 				minutes: beat.minutes,
 				marks: null,
 			});
 		} else {
-			const matching = slotsForRole(slots, beat.roleKey, beat.roleName);
+			// A fallback may move the beat to a different owner (#363) — resolve the
+			// owner BEFORE looking up slots, so the row binds to the right role.
+			const fb = beat.fallback;
+			const useFallback =
+				fb != null && !hasRole(slots, fb.unless.roleKey, fb.unless.roleName);
+			const owner =
+				useFallback && fb.owner != null
+					? fb.owner
+					: { roleKey: beat.roleKey, roleName: beat.roleName };
+			const beatDetail = useFallback ? (fb.detail ?? detail) : detail;
+			const matching = slotsForRole(slots, owner.roleKey, owner.roleName);
 
 			if (beat.role === "speaker") {
 				const ordered = [...matching].sort((a, b) => a.slotIndex - b.slotIndex);
@@ -738,10 +782,10 @@ export function expandRunSheet(
 						? { green: w.min, yellow: (w.min + w.max) / 2, red: w.max }
 						: null;
 					rows.push({
-						who: `${numbered(beat.roleName, i, multi)} · ${assigneeDisplay(s)}`,
+						who: `${numbered(owner.roleName, i, multi)} · ${assigneeDisplay(s)}`,
 						detail: s.speechTitle
 							? `"${s.speechTitle}"${s.projectLevel ? ` · ${s.projectLevel}` : ""}`
-							: detail,
+							: beatDetail,
 						minutes: speechBookedMinutes(s),
 						marks,
 					});
@@ -751,23 +795,32 @@ export function expandRunSheet(
 				const multi = ordered.length > 1;
 				ordered.forEach((s, i) => {
 					rows.push({
-						who: `${numbered(beat.roleName, i, multi)} · ${assigneeDisplay(s)}`,
+						who: `${numbered(owner.roleName, i, multi)} · ${assigneeDisplay(s)}`,
 						detail: s.evaluates?.speakerName
 							? `Evaluates ${s.evaluates.speakerName}`
-							: detail,
+							: beatDetail,
 						minutes: beat.minutes,
 						marks: null,
 					});
 				});
 			} else if (matching.length === 0) {
-				// Role not run by this club this meeting (#367/#368: disabled ⇒
-				// no slots generated) — omit the beat entirely rather than
-				// printing a ghost row with no assignee.
+				// Role not run by this club this meeting (#367/#368: disabled ⇒ no
+				// slots generated). Normally omit rather than printing a ghost row —
+				// unless the beat is about a SEGMENT rather than its owner (#363), in
+				// which case the bare role name still carries the instruction.
+				if (beat.renderUnowned) {
+					rows.push({
+						who: owner.roleName,
+						detail: beatDetail,
+						minutes: beat.minutes,
+						marks: null,
+					});
+				}
 			} else {
 				for (const s of matching) {
 					rows.push({
-						who: `${beat.roleName} · ${assigneeDisplay(s)}`,
-						detail,
+						who: `${owner.roleName} · ${assigneeDisplay(s)}`,
+						detail: beatDetail,
 						minutes: beat.minutes,
 						marks: null,
 					});

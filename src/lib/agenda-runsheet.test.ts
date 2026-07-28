@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AgendaRow, AgendaSlot } from "./agenda-runsheet";
+import type { AgendaRow, AgendaSlot, Beat } from "./agenda-runsheet";
 import {
 	AWARDS_TOKEN,
 	applyFlex,
@@ -624,11 +624,13 @@ describe("expandRunSheet — Timer vote-beat fallback (#367)", () => {
 		}
 	});
 
-	it("reassigns the vote beats to the Toastmaster (dropping the timer's-report clause) when there is no Timer slot", () => {
+	it("reassigns the vote beats to the Toastmaster of the Day (dropping the timer's-report clause) when there is no Timer slot", () => {
 		const rows = expandRunSheet(segments); // no Timer slot
 		for (const detail of fallbackDetails) {
 			expect(
-				rows.some((r) => r.who === "Toastmaster" && r.detail === detail),
+				rows.some(
+					(r) => r.who === "Toastmaster of the Day" && r.detail === detail,
+				),
 			).toBe(true);
 		}
 		expect(rows.some((r) => r.who === "Timer")).toBe(false);
@@ -1296,5 +1298,146 @@ describe("expandRunSheet — awards beat adapts to the scored segments (#372)", 
 			assigneeName: "M",
 		});
 		expect(awardsRow([renamed])?.detail).toBe("Awards · Best Table Topic");
+	});
+});
+
+describe("BeatFallback — owner and detail swap (#363)", () => {
+	const TM = {
+		roleKey: "toastmaster_of_the_day",
+		roleName: "Toastmaster of the Day",
+	};
+	const TTM = {
+		roleKey: "table_topics_master",
+		roleName: "Table Topics Master",
+	};
+
+	const beat: Beat = {
+		kind: "role",
+		...TTM,
+		role: "plain",
+		detail: "Introduces the General Evaluator",
+		minutes: 0,
+		fallback: { unless: TTM, owner: TM },
+	};
+
+	it("keeps the beat's own owner when the `unless` role has a slot", () => {
+		const slots = [
+			slot({
+				roleKey: "table_topics_master",
+				roleName: "Table Topics Master",
+				category: "leadership",
+				assigneeName: "Rasheed",
+			}),
+		];
+		expect(expandRunSheet(slots, [beat])).toEqual([
+			{
+				who: "Table Topics Master · Rasheed",
+				detail: "Introduces the General Evaluator",
+				minutes: 0,
+				marks: null,
+			},
+		]);
+	});
+
+	it("swaps to the fallback owner when the `unless` role has no slot", () => {
+		const slots = [
+			slot({
+				roleKey: "toastmaster_of_the_day",
+				roleName: "Toastmaster of the Day",
+				category: "leadership",
+				assigneeName: "Faisal",
+			}),
+		];
+		expect(expandRunSheet(slots, [beat])).toEqual([
+			{
+				who: "Toastmaster of the Day · Faisal",
+				detail: "Introduces the General Evaluator",
+				minutes: 0,
+				marks: null,
+			},
+		]);
+	});
+
+	it("swaps only the detail when the fallback names no owner", () => {
+		const withDetail: Beat = {
+			...beat,
+			fallback: {
+				unless: { roleKey: "timer", roleName: "Timer" },
+				detail: "Vote Best Speaker",
+			},
+		};
+		const slots = [
+			slot({
+				roleKey: "table_topics_master",
+				roleName: "Table Topics Master",
+				category: "leadership",
+				assigneeName: "Rasheed",
+			}),
+		];
+		expect(expandRunSheet(slots, [withDetail])[0]).toMatchObject({
+			who: "Table Topics Master · Rasheed",
+			detail: "Vote Best Speaker",
+		});
+	});
+
+	it("omits the beat when neither the owner nor the fallback owner has a slot", () => {
+		expect(expandRunSheet([], [beat])).toEqual([]);
+	});
+});
+
+describe("renderUnowned (#363)", () => {
+	it("renders the bare role name when the owning role has no slot", () => {
+		const beat: Beat = {
+			kind: "role",
+			roleKey: "toastmaster_of_the_day",
+			roleName: "Toastmaster of the Day",
+			role: "plain",
+			detail: "Vote Best Speaker",
+			minutes: 1,
+			renderUnowned: true,
+		};
+		expect(expandRunSheet([], [beat])).toEqual([
+			{
+				who: "Toastmaster of the Day",
+				detail: "Vote Best Speaker",
+				minutes: 1,
+				marks: null,
+			},
+		]);
+	});
+
+	it("still prefers the assignee when the role IS held", () => {
+		const beat: Beat = {
+			kind: "role",
+			roleKey: "toastmaster_of_the_day",
+			roleName: "Toastmaster of the Day",
+			role: "plain",
+			detail: "Vote Best Speaker",
+			minutes: 1,
+			renderUnowned: true,
+		};
+		const slots = [
+			slot({
+				roleKey: "toastmaster_of_the_day",
+				roleName: "Toastmaster of the Day",
+				category: "leadership",
+				assigneeName: "Faisal",
+			}),
+		];
+		expect(expandRunSheet(slots, [beat])[0].who).toBe(
+			"Toastmaster of the Day · Faisal",
+		);
+	});
+
+	it("omits an unowned beat WITHOUT the flag — the existing default is unchanged", () => {
+		const beat: Beat = {
+			kind: "role",
+			roleKey: "toastmaster_of_the_day",
+			roleName: "Toastmaster of the Day",
+			role: "plain",
+			detail: "Opens meeting",
+			minutes: 3,
+		};
+		expect(expandRunSheet([], [beat])).toEqual([]);
 	});
 });
