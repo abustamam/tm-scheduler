@@ -62,6 +62,10 @@ export type AgendaRow = {
 	marks: TimingMarks | null;
 	/** True on the single squishy row (Table Topics). `applyFlex` resizes it. */
 	flex?: boolean;
+	/** True on a 0-minute transition row — "X introduces Y" (#363). The print
+	 *  layouts render these as a compact band rather than a full segment block,
+	 *  so a hand-off never reads as a duplicate of the row it precedes. */
+	handoff?: boolean;
 };
 
 /** A functionary/uncovered role shown in the header legend. */
@@ -307,10 +311,11 @@ export function buildReportingLegend(slots: AgendaSlot[]): LegendEntry[] {
 /** Config for `buildRunOfShow`: the one axis of per-club variance (#367). At
  *  MCF the General Evaluator introduces the functionaries; almost everywhere
  *  else the Toastmaster of the Day does, at the top of the meeting. It decides
- *  beat 4's owner and, because of that, whether the run sheet needs the
- *  handback beat that follows it — nothing else about the run-of-show,
- *  including the GE's closing sequence (evaluate the evaluators → call for
- *  functionary reports → overall evaluation), depends on this flag. */
+ *  the functionary-intro beat's owner and, because of that, whether the run
+ *  sheet needs the hand-off that introduces the GE first — nothing else about
+ *  the run-of-show, including the GE's closing sequence (evaluate the
+ *  evaluators → call for functionary reports → overall evaluation), depends on
+ *  this flag. */
 export type RunOfShowConfig = { geIntroducesFunctionaries: boolean };
 
 /** The Timer — one of the four standard functionaries, and the role whose
@@ -338,12 +343,17 @@ const REPORTING_FUNCTIONARY_ROLES: BeatRole[] = FUNCTIONARY_ROLES.filter(
 	(r) => r.roleKey !== NON_REPORTING_FUNCTIONARY.roleKey,
 );
 
-/** The Toastmaster of the Day — the meeting's host. Named once because two
- *  beats bind to it as the same role: the opening, and (in MCF's variant) the
- *  handback before the speeches. */
+/** The Toastmaster of the Day — the meeting's host. Named once because several
+ *  beats bind to it as the same role: the opening, the hand-offs, the awards. */
 const TOASTMASTER_ROLE: BeatRole = {
 	roleKey: "toastmaster_of_the_day",
 	roleName: "Toastmaster of the Day",
+};
+
+/** The General Evaluator, named once because several beats bind to it. */
+const GENERAL_EVALUATOR_ROLE: BeatRole = {
+	roleKey: "general_evaluator",
+	roleName: "General Evaluator",
 };
 
 /** The three segments that each end in a vote. Single-sourced so a vote beat's
@@ -380,50 +390,47 @@ const AWARD_CATEGORIES: { role: BeatRole; label: string }[] = [
  * The corrected default flow: the Toastmaster of the Day introduces the
  * functionaries at the top (beat 4, naming the ones this club runs) — each
  * explains their own role, which is when the Grammarian gives the Word of the
- * Day — and the General Evaluator's work happens at the end (beats 11–13):
- * evaluate the evaluators, call for the functionary reports, then evaluate the
- * meeting overall. The three vote beats (6, 8, 10) each belong to a segment and
- * are gated on it, so a club with no Table Topics Master never prints a vote for
- * a segment it does not run.
+ * Day — and the General Evaluator's work happens at the end: evaluate the
+ * evaluators, call for the functionary reports, then evaluate the meeting
+ * overall. The three vote beats each belong to a segment and are gated on it,
+ * so a club with no Table Topics Master never prints a vote for a segment it
+ * does not run.
+ *
+ * The 0-minute `handoff` beats between segments say who introduces whom (#363),
+ * so nobody has to guess whose cue it is mid-meeting.
  *
  * `geIntroducesFunctionaries: true` is MCF's variant: beat 4 changes owner to
- * the General Evaluator, and gains the handback beat below, which exists only
- * because of that swap. Durations are tunable constants approximating
- * templates/meeting-agenda/MeetingAgenda.dc.html; per-beat durations and
- * arbitrary reordering are deliberately out of scope.
+ * the General Evaluator, and gains the hand-off that introduces them first,
+ * which exists only because of that swap. Durations are tunable constants
+ * approximating templates/meeting-agenda/MeetingAgenda.dc.html; per-beat
+ * durations and arbitrary reordering are deliberately out of scope.
  */
 export function buildRunOfShow({
 	geIntroducesFunctionaries,
 }: RunOfShowConfig): Beat[] {
 	const functionaryIntroOwner = geIntroducesFunctionaries
-		? { roleKey: "general_evaluator", roleName: "General Evaluator" }
+		? GENERAL_EVALUATOR_ROLE
 		: TOASTMASTER_ROLE;
 
 	/**
-	 * The handback, MCF's variant only. In the default flow the Toastmaster
-	 * runs beat 4 and is still holding the room when the first speaker stands,
-	 * so nothing needs to say who introduces the speakers. Swap beat 4 to the
-	 * General Evaluator and the printed agenda goes straight from the GE's row
-	 * into Speaker 1, which reads as though the GE introduces the speakers too
-	 * — so the Toastmaster takes the room back in a row of their own, with a
-	 * minute on the clock for the introductions that were already happening
-	 * off-book.
+	 * MCF's variant only: the Toastmaster introduces the General Evaluator before
+	 * handing them the room for the functionary introductions (#363). The
+	 * standard flow has no early GE appearance, so there is nothing to introduce
+	 * and this beat does not exist there.
 	 *
-	 * Gated on the SPEAKERS, not on the functionaries that put the GE at the
-	 * front: a row must never promise speakers a club is not running, and a
-	 * meeting with no prepared speech has nobody to introduce. An MCF club with
-	 * speakers and no functionaries at all loses beat 4 (nothing to introduce)
-	 * and keeps this one, where it is merely redundant rather than wrong.
+	 * Gated on the GE, not on the functionaries: the row introduces a person, and
+	 * a club with no General Evaluator has nobody to introduce.
 	 */
-	const handback: Beat[] = geIntroducesFunctionaries
+	const geOpeningIntro: Beat[] = geIntroducesFunctionaries
 		? [
 				{
 					kind: "role",
 					...TOASTMASTER_ROLE,
 					role: "plain",
-					detail: "Introduces the speakers",
-					minutes: 1,
-					requiresAnyOf: [SPEAKER_ROLE],
+					detail: "Introduces the General Evaluator",
+					minutes: 0,
+					handoff: true,
+					requiresAnyOf: [GENERAL_EVALUATOR_ROLE],
 				},
 			]
 		: [];
@@ -448,6 +455,7 @@ export function buildRunOfShow({
 			detail: "Opens meeting · introduces the theme",
 			minutes: 3,
 		},
+		...geOpeningIntro,
 		{
 			kind: "role",
 			roleKey: functionaryIntroOwner.roleKey,
@@ -458,7 +466,20 @@ export function buildRunOfShow({
 			requiresAnyOf: FUNCTIONARY_ROLES,
 			requiresGroup: "functionaries",
 		},
-		...handback,
+		{
+			// Universal since #363. #438 added this for MCF only, reasoning that in
+			// the standard flow the Toastmaster is already holding the room — but the
+			// Table Topics hand-off below is added on exactly that reasoning, so
+			// being explicit in both flows is the consistent choice. Gated on the
+			// SPEAKERS: a row must never promise speakers a club is not running.
+			kind: "role",
+			...TOASTMASTER_ROLE,
+			role: "plain",
+			detail: "Introduces the speakers",
+			minutes: 0,
+			handoff: true,
+			requiresAnyOf: [SPEAKER_ROLE],
+		},
 		{
 			kind: "role",
 			...SPEAKER_ROLE,
@@ -491,6 +512,15 @@ export function buildRunOfShow({
 		},
 		{
 			kind: "role",
+			...TOASTMASTER_ROLE,
+			role: "plain",
+			detail: "Introduces the Table Topics Master",
+			minutes: 0,
+			handoff: true,
+			requiresAnyOf: [TABLE_TOPICS_ROLE],
+		},
+		{
+			kind: "role",
 			...TABLE_TOPICS_ROLE,
 			role: "plain",
 			detail: "Impromptu topics using the Word of the Day",
@@ -514,6 +544,30 @@ export function buildRunOfShow({
 			requiresAnyOf: [TABLE_TOPICS_ROLE],
 		},
 		{
+			// The Table Topics Master is holding the room when the segment ends, so
+			// they hand to the GE. With no Table Topics segment the Toastmaster never
+			// gave the room away, so the fallback puts the hand-off back on them
+			// rather than dropping it (#363).
+			kind: "role",
+			...TABLE_TOPICS_ROLE,
+			role: "plain",
+			detail: "Introduces the General Evaluator",
+			minutes: 0,
+			handoff: true,
+			requiresAnyOf: [GENERAL_EVALUATOR_ROLE],
+			fallback: { unless: TABLE_TOPICS_ROLE, owner: TOASTMASTER_ROLE },
+		},
+		{
+			kind: "role",
+			...GENERAL_EVALUATOR_ROLE,
+			role: "plain",
+			detail: "Introduces the speech evaluators",
+			minutes: 0,
+			handoff: true,
+			requiresAnyOf: [EVALUATOR_ROLE],
+			fallback: { unless: GENERAL_EVALUATOR_ROLE, owner: TOASTMASTER_ROLE },
+		},
+		{
 			kind: "role",
 			...EVALUATOR_ROLE,
 			id: "evaluation",
@@ -527,10 +581,9 @@ export function buildRunOfShow({
 			// prints "General Evaluator" unattributed rather than losing the vote —
 			// deliberately, since the deck still projects the Best-Evaluator slide
 			// and an unattributed cue beats no cue at all. The GE's other three
-			// beats (11–13) carry no such flag and vanish outright without a GE.
+			// closing beats carry no such flag and vanish outright without a GE.
 			kind: "role",
-			roleKey: "general_evaluator",
-			roleName: "General Evaluator",
+			...GENERAL_EVALUATOR_ROLE,
 			role: "plain",
 			detail: "Calls for the Timer's report · vote Best Evaluator",
 			minutes: 1,
@@ -543,8 +596,7 @@ export function buildRunOfShow({
 		},
 		{
 			kind: "role",
-			roleKey: "general_evaluator",
-			roleName: "General Evaluator",
+			...GENERAL_EVALUATOR_ROLE,
 			id: "evaluatorEvaluation",
 			role: "plain",
 			detail: "Evaluates the evaluators",
@@ -552,8 +604,7 @@ export function buildRunOfShow({
 		},
 		{
 			kind: "role",
-			roleKey: "general_evaluator",
-			roleName: "General Evaluator",
+			...GENERAL_EVALUATOR_ROLE,
 			role: "plain",
 			detail: "Calls for the functionary reports",
 			minutes: 3,
@@ -564,8 +615,7 @@ export function buildRunOfShow({
 		},
 		{
 			kind: "role",
-			roleKey: "general_evaluator",
-			roleName: "General Evaluator",
+			...GENERAL_EVALUATOR_ROLE,
 			id: "generalEvaluation",
 			role: "plain",
 			detail: "Overall meeting evaluation",
@@ -877,6 +927,14 @@ export function expandRunSheet(
 						marks: null,
 					});
 				}
+			}
+		}
+
+		// A hand-off beat marks every row it produced (a leadership role has one
+		// slot in practice, but the loop above does not assume that).
+		if (beat.handoff) {
+			for (let i = startLen; i < rows.length; i++) {
+				rows[i] = { ...rows[i], handoff: true };
 			}
 		}
 

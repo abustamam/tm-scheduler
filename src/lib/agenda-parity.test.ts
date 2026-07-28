@@ -49,9 +49,19 @@ type Section =
 // ---------------------------------------------------------------------------
 
 /**
- * Section identity of each beat `buildRunOfShow` emits, IN ORDER (beats 1–15 of
- * the spec's table, plus the guest-comments beat #352 inserts at 15). `detail` pins each entry to the actual beat, so a reworded
- * or reordered template fails here with a readable diff instead of silently
+ * A hand-off beat's section: none YET (#363). `buildSlideDeck` grows hand-off
+ * slides in a later slice of the same issue, at which point these stop being
+ * exclusions and become a compared section like any other. Until then they are
+ * excluded exactly as every other slide-less beat is — named, with the reason —
+ * and the run-sheet suite asserts their owner, gate and position directly.
+ */
+const HANDOFF: Section | null = null;
+
+/**
+ * Section identity of each beat `buildRunOfShow` emits, IN ORDER (the spec's
+ * table, plus the guest-comments beat #352 inserts and the hand-off beats #363
+ * inserts). `detail` pins each entry to the actual beat, so a reworded or
+ * reordered template fails here with a readable diff instead of silently
  * mislabelling a section.
  */
 const BEATS: { detail: string; section: Section | null }[] = [
@@ -68,11 +78,13 @@ const BEATS: { detail: string; section: Section | null }[] = [
 		detail: "Introduces the {roles}; each explains their role",
 		section: "functionaryIntro",
 	},
+	{ detail: "Introduces the speakers", section: HANDOFF },
 	{ detail: "Prepared speech", section: "speech" },
 	{
 		detail: "Calls for the Timer's report · vote Best Speaker",
 		section: "voteSpeaker",
 	},
+	{ detail: "Introduces the Table Topics Master", section: HANDOFF },
 	{
 		detail: "Impromptu topics using the Word of the Day",
 		section: "tableTopics",
@@ -81,6 +93,8 @@ const BEATS: { detail: string; section: Section | null }[] = [
 		detail: "Calls for the Timer's report · vote Best Table Topics",
 		section: "voteTableTopics",
 	},
+	{ detail: "Introduces the General Evaluator", section: HANDOFF },
+	{ detail: "Introduces the speech evaluators", section: HANDOFF },
 	{ detail: "Evaluates a speaker", section: "evaluation" },
 	{
 		detail: "Calls for the Timer's report · vote Best Evaluator",
@@ -112,29 +126,21 @@ const BEATS: { detail: string; section: Section | null }[] = [
 	{ detail: "Club business · elections · adjourn", section: null },
 ];
 
-/**
- * The one beat only MCF's variant carries: the Toastmaster taking the room back
- * from the General Evaluator before the speeches.
- *
- * Excluded, like the other beats with no counterpart, and for the same kind of
- * reason: the deck's next slide after `functionaryIntro` is the speech itself,
- * which already names the speaker being introduced. The introduction happens
- * over that slide, so a handback slide would project nothing the room cannot
- * already see — the row exists for the person running the meeting, not the
- * wall. Nothing is unchecked by this: the run-sheet suite asserts the row's
- * owner, gate and position directly.
- */
-const HANDBACK_BEAT: { detail: string; section: Section | null } = {
-	detail: "Introduces the speakers",
-	section: null,
+/** The one beat only MCF's variant carries (#363): the Toastmaster introducing
+ *  the General Evaluator before handing them the room for the functionary
+ *  introductions. The standard flow has no early GE appearance. */
+const GE_OPENING_INTRO_BEAT: { detail: string; section: Section | null } = {
+	detail: "Introduces the General Evaluator",
+	section: HANDOFF,
 };
 
-/** `BEATS`, for the variant in play: MCF's inserts the handback directly after
- *  the functionary intro, which is where `buildRunOfShow` puts it. */
+/** `BEATS`, for the variant in play: MCF's inserts the opening GE introduction
+ *  directly BEFORE the functionary intro, which is where `buildRunOfShow` puts
+ *  it — it introduces the person who then runs that beat. */
 function beatsFor({ geIntroducesFunctionaries }: RunOfShowConfig) {
 	if (!geIntroducesFunctionaries) return BEATS;
-	const after = BEATS.findIndex((b) => b.section === "functionaryIntro") + 1;
-	return [...BEATS.slice(0, after), HANDBACK_BEAT, ...BEATS.slice(after)];
+	const at = BEATS.findIndex((b) => b.section === "functionaryIntro");
+	return [...BEATS.slice(0, at), GE_OPENING_INTRO_BEAT, ...BEATS.slice(at)];
 }
 
 /**

@@ -40,15 +40,21 @@ function slot(over: Partial<AgendaSlot>): AgendaSlot {
 }
 
 describe("buildRunOfShow", () => {
-	it("returns 16 ordered beats for the corrected default (non-MCF) variant", () => {
+	it("returns 20 ordered beats for the corrected default (non-MCF) variant", () => {
 		const beats = buildRunOfShow({ geIntroducesFunctionaries: false });
-		expect(beats).toHaveLength(16);
+		expect(beats).toHaveLength(20);
 	});
 
-	it("every beat has a positive duration", () => {
-		for (const geIntroducesFunctionaries of [false, true]) {
-			for (const beat of buildRunOfShow({ geIntroducesFunctionaries })) {
-				expect(beat.minutes).toBeGreaterThan(0);
+	// Was "every beat has a positive duration". The 0-minute hand-off beats
+	// (#363) contradict that by design — a transition costs the clock nothing —
+	// so the invariant is now the tighter biconditional: zero minutes iff
+	// hand-off. Anything else with no duration is still a bug.
+	it("every beat has a non-negative duration, and only hand-offs are zero", () => {
+		for (const flag of [true, false]) {
+			for (const beat of buildRunOfShow({ geIntroducesFunctionaries: flag })) {
+				expect(beat.minutes).toBeGreaterThanOrEqual(0);
+				if (beat.minutes === 0) expect(beat.handoff).toBe(true);
+				if (beat.handoff) expect(beat.minutes).toBe(0);
 			}
 		}
 	});
@@ -81,7 +87,9 @@ describe("buildRunOfShow", () => {
 
 	it("beat 4 is owned by the General Evaluator when geIntroducesFunctionaries is true (MCF)", () => {
 		const beats = buildRunOfShow({ geIntroducesFunctionaries: true });
-		const beat4 = beats[3];
+		// One index later than the default variant: the opening GE introduction
+		// (#363) precedes it here.
+		const beat4 = beats[4];
 		expect(beat4.kind).toBe("role");
 		expect((beat4 as { roleKey: string }).roleKey).toBe("general_evaluator");
 		expect(beat4.detail).toBe(
@@ -106,51 +114,74 @@ describe("buildRunOfShow", () => {
 		).toEqual(["evaluator"]);
 	});
 
-	it("the MCF variant differs from the default ONLY in beat 4's owner and the handback that follows it", () => {
+	it("the MCF variant differs from the default ONLY in the functionary intro's owner and the opening GE introduction that precedes it", () => {
 		const withoutGe = buildRunOfShow({ geIntroducesFunctionaries: false });
 		const withGe = buildRunOfShow({ geIntroducesFunctionaries: true });
 		expect(withGe).toHaveLength(withoutGe.length + 1);
-		// Beat 4 changes owner, beat 5 is the handback the swap makes necessary.
-		expect(withGe[3]).not.toEqual(withoutGe[3]);
+		// The extra beat comes FIRST now (#363): the Toastmaster introduces the GE,
+		// and the beat after it is the functionary intro the swap moved to them.
+		expect(withGe[3]).toMatchObject({
+			roleKey: "toastmaster_of_the_day",
+			detail: "Introduces the General Evaluator",
+			handoff: true,
+		});
+		expect(withGe[4]).toMatchObject({
+			roleKey: "general_evaluator",
+			detail: `Introduces the ${ROLES_TOKEN}; each explains their role`,
+		});
 		// Every other beat is the default template's, in the default order.
 		expect(withGe.filter((_, i) => i !== 3 && i !== 4)).toEqual(
 			withoutGe.filter((_, i) => i !== 3),
 		);
 	});
 
-	it("MCF hands the room back to the Toastmaster before the speeches, in a row of its own", () => {
-		const beats = buildRunOfShow({ geIntroducesFunctionaries: true });
-		expect(beats[4]).toMatchObject({
-			kind: "role",
-			roleKey: "toastmaster_of_the_day",
-			roleName: "Toastmaster of the Day",
-			role: "plain",
-			detail: "Introduces the speakers",
-		});
-		// Gated on the speakers it promises, not on the functionaries whose intro
-		// put the General Evaluator in front of them.
-		expect(beats[4].requiresAnyOf?.map((r) => r.roleKey)).toEqual(["speaker"]);
-		expect(beats[4].requiresGroup).toBeUndefined();
-		// Directly after the GE's intro and directly before the prepared speeches.
-		expect(beats[3].detail).toBe(
-			`Introduces the ${ROLES_TOKEN}; each explains their role`,
-		);
-		expect(beats[5]).toMatchObject({ detail: "Prepared speech" });
+	// Was two tests: one pinning the MCF-only handback at index 4, and one
+	// asserting the default variant had no such beat. #363 makes the speakers
+	// hand-off universal, so the second claim is now false — its question ("does
+	// this variant carry it?") is answered here for BOTH variants instead.
+	it("the speakers hand-off is universal, in a row of its own directly before the prepared speeches", () => {
+		for (const geIntroducesFunctionaries of [false, true]) {
+			const beats = buildRunOfShow({ geIntroducesFunctionaries });
+			const i = beats.findIndex((b) => b.detail === "Introduces the speakers");
+			expect(
+				beats.filter((b) => b.detail === "Introduces the speakers"),
+			).toHaveLength(1);
+			expect(beats[i]).toMatchObject({
+				kind: "role",
+				roleKey: "toastmaster_of_the_day",
+				roleName: "Toastmaster of the Day",
+				role: "plain",
+				detail: "Introduces the speakers",
+				handoff: true,
+				minutes: 0,
+			});
+			// Gated on the speakers it promises, not on the functionaries whose intro
+			// put the General Evaluator in front of them in MCF's variant.
+			expect(beats[i].requiresAnyOf?.map((r) => r.roleKey)).toEqual([
+				"speaker",
+			]);
+			expect(beats[i].requiresGroup).toBeUndefined();
+			// Directly after the functionary intro and directly before the speeches.
+			expect(beats[i - 1].detail).toBe(
+				`Introduces the ${ROLES_TOKEN}; each explains their role`,
+			);
+			expect(beats[i + 1]).toMatchObject({ detail: "Prepared speech" });
+		}
 	});
 
-	it("the default variant has no handback beat — the Toastmaster never gave the room away", () => {
-		const beats = buildRunOfShow({ geIntroducesFunctionaries: false });
-		expect(beats.some((b) => b.detail === "Introduces the speakers")).toBe(
-			false,
-		);
-	});
-
-	it("beats 11–13 (the GE closing sequence) are identical across both variants", () => {
+	it("the GE closing sequence is identical across both variants", () => {
 		const withoutGe = buildRunOfShow({ geIntroducesFunctionaries: false });
 		const withGe = buildRunOfShow({ geIntroducesFunctionaries: true });
-		// The MCF variant carries one extra beat before them (the handback), so
-		// the sequence is located by its content rather than a shared index.
-		for (const i of [10, 11, 12]) {
+		// The MCF variant carries one extra beat before them (the opening GE
+		// introduction), so the shared sequence sits one index later there.
+		const closing = [
+			"Evaluates the evaluators",
+			"Calls for the functionary reports",
+			"Overall meeting evaluation",
+		];
+		for (const detail of closing) {
+			const i = withoutGe.findIndex((b) => b.detail === detail);
+			expect(i).toBeGreaterThan(-1);
 			expect(withGe[i + 1]).toEqual(withoutGe[i]);
 		}
 	});
@@ -740,6 +771,144 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 	});
 });
 
+describe("hand-off beats — who introduces whom (#363)", () => {
+	const nine = () => [
+		slot({
+			id: "tm",
+			roleKey: "toastmaster_of_the_day",
+			roleName: "Toastmaster of the Day",
+			category: "leadership",
+			assigneeName: "Faisal",
+		}),
+		slot({
+			id: "ttm",
+			roleKey: "table_topics_master",
+			roleName: "Table Topics Master",
+			category: "leadership",
+			assigneeName: "Rasheed",
+		}),
+		slot({
+			id: "sp",
+			roleKey: "speaker",
+			roleName: "Speaker",
+			category: "speaker",
+			isSpeakerRole: true,
+			assigneeName: "Jagpal",
+		}),
+		slot({
+			id: "ev",
+			roleKey: "evaluator",
+			roleName: "Evaluator",
+			category: "evaluator",
+			assigneeName: "Sudheer",
+		}),
+		slot({
+			id: "ge",
+			roleKey: "general_evaluator",
+			roleName: "General Evaluator",
+			category: "leadership",
+			assigneeName: "Riyaz",
+		}),
+		slot({
+			id: "ti",
+			roleKey: "timer",
+			roleName: "Timer",
+			category: "functionary",
+			assigneeName: "Muhammad",
+		}),
+	];
+	const handoffs = (rows: AgendaRow[]) =>
+		rows.filter((r) => r.handoff === true);
+
+	it("every hand-off books zero minutes", () => {
+		for (const flag of [true, false]) {
+			const rows = expandRunSheet(
+				nine(),
+				buildRunOfShow({ geIntroducesFunctionaries: flag }),
+			);
+			expect(handoffs(rows).every((r) => r.minutes === 0)).toBe(true);
+		}
+	});
+
+	it("states the full MCF chain, in order", () => {
+		const rows = expandRunSheet(
+			nine(),
+			buildRunOfShow({ geIntroducesFunctionaries: true }),
+		);
+		expect(handoffs(rows).map((r) => [r.who, r.detail])).toEqual([
+			["Toastmaster of the Day · Faisal", "Introduces the General Evaluator"],
+			["Toastmaster of the Day · Faisal", "Introduces the speakers"],
+			["Toastmaster of the Day · Faisal", "Introduces the Table Topics Master"],
+			["Table Topics Master · Rasheed", "Introduces the General Evaluator"],
+			["General Evaluator · Riyaz", "Introduces the speech evaluators"],
+		]);
+	});
+
+	it("omits the opening GE introduction in the standard flow, where the GE has no early appearance", () => {
+		const rows = expandRunSheet(
+			nine(),
+			buildRunOfShow({ geIntroducesFunctionaries: false }),
+		);
+		expect(handoffs(rows).map((r) => [r.who, r.detail])).toEqual([
+			["Toastmaster of the Day · Faisal", "Introduces the speakers"],
+			["Toastmaster of the Day · Faisal", "Introduces the Table Topics Master"],
+			["Table Topics Master · Rasheed", "Introduces the General Evaluator"],
+			["General Evaluator · Riyaz", "Introduces the speech evaluators"],
+		]);
+	});
+
+	it("hands to the GE from the Toastmaster when the club runs no Table Topics", () => {
+		const noTopics = nine().filter((s) => s.roleKey !== "table_topics_master");
+		const rows = expandRunSheet(noTopics, RUN_OF_SHOW);
+		expect(handoffs(rows).map((r) => [r.who, r.detail])).toEqual([
+			["Toastmaster of the Day · Faisal", "Introduces the speakers"],
+			["Toastmaster of the Day · Faisal", "Introduces the General Evaluator"],
+			["General Evaluator · Riyaz", "Introduces the speech evaluators"],
+		]);
+	});
+
+	it("has the Toastmaster introduce the evaluators when the club runs no General Evaluator", () => {
+		const noGe = nine().filter((s) => s.roleKey !== "general_evaluator");
+		const rows = expandRunSheet(noGe, RUN_OF_SHOW);
+		expect(handoffs(rows).map((r) => [r.who, r.detail])).toContainEqual([
+			"Toastmaster of the Day · Faisal",
+			"Introduces the speech evaluators",
+		]);
+	});
+
+	it("promises no segment the club does not run", () => {
+		const bare = [
+			slot({
+				id: "tm",
+				roleKey: "toastmaster_of_the_day",
+				roleName: "Toastmaster of the Day",
+				category: "leadership",
+				assigneeName: "Faisal",
+			}),
+		];
+		expect(handoffs(expandRunSheet(bare, RUN_OF_SHOW))).toEqual([]);
+	});
+
+	it("leaves both variants the same total length (the old handback booked a minute)", () => {
+		const total = (rs: AgendaRow[]) => rs.reduce((n, r) => n + r.minutes, 0);
+		expect(
+			total(
+				expandRunSheet(
+					nine(),
+					buildRunOfShow({ geIntroducesFunctionaries: true }),
+				),
+			),
+		).toBe(
+			total(
+				expandRunSheet(
+					nine(),
+					buildRunOfShow({ geIntroducesFunctionaries: false }),
+				),
+			),
+		);
+	});
+});
+
 describe("expandRunSheet — vote beats are gated on their segment (#367)", () => {
 	const timer = slot({
 		roleName: "Timer",
@@ -826,9 +995,8 @@ describe("expandRunSheet — functionary-dependent beats 4 & 12 (#367)", () => {
 		isSpeakerRole: true,
 		assigneeName: "Sam",
 	});
-	// The functionary intro specifically — MCF's variant adds a second row that
-	// also starts "Introduces the" (the handback), so the beat is identified by
-	// the clause only it carries.
+	// The functionary intro specifically — the hand-off rows (#363) also start
+	// "Introduces the", so the beat is identified by the clause only it carries.
 	const introRow = (rows: { detail: string }[]) =>
 		rows.find((r) => r.detail.endsWith("; each explains their role"));
 
@@ -1016,16 +1184,15 @@ describe("expandRunSheet — functionary-dependent beats 4 & 12 (#367)", () => {
 		).toBe(false);
 	});
 
-	// The handback (MCF only): with the General Evaluator introducing the
-	// functionaries, the run sheet has to say out loud that the Toastmaster is
-	// back for the speeches.
-	const handbackRow = (rows: { detail: string }[]) =>
+	// The speakers hand-off. Universal since #363, but its interaction with the
+	// GE-owned functionary intro is what these cases are about.
+	const speakersHandoffRow = (rows: { detail: string }[]) =>
 		rows.find((r) => r.detail === "Introduces the speakers");
 
 	it("MCF variant: the Toastmaster introduces the speakers, in a row between the GE's intro and the first speech", () => {
 		const template = buildRunOfShow({ geIntroducesFunctionaries: true });
 		const rows = expandRunSheet([totd, ge, grammarian, speaker], template);
-		expect(handbackRow(rows)).toMatchObject({
+		expect(speakersHandoffRow(rows)).toMatchObject({
 			who: "Toastmaster of the Day · Dana",
 			detail: "Introduces the speakers",
 		});
@@ -1039,24 +1206,33 @@ describe("expandRunSheet — functionary-dependent beats 4 & 12 (#367)", () => {
 		);
 	});
 
-	it("MCF variant: no handback row when the club runs no speakers — there is nobody to introduce", () => {
+	it("MCF variant: no speakers hand-off when the club runs no speakers — there is nobody to introduce", () => {
 		const template = buildRunOfShow({ geIntroducesFunctionaries: true });
 		expect(
-			handbackRow(expandRunSheet([totd, ge, grammarian], template)),
+			speakersHandoffRow(expandRunSheet([totd, ge, grammarian], template)),
 		).toBeUndefined();
 	});
 
-	it("MCF variant: no handback row without a Toastmaster slot", () => {
+	it("MCF variant: no speakers hand-off without a Toastmaster slot", () => {
 		const template = buildRunOfShow({ geIntroducesFunctionaries: true });
 		expect(
-			handbackRow(expandRunSheet([ge, grammarian, speaker], template)),
+			speakersHandoffRow(expandRunSheet([ge, grammarian, speaker], template)),
 		).toBeUndefined();
 	});
 
-	it("default variant: no handback row — the Toastmaster ran the intro and never left", () => {
+	// Was "default variant: no handback row — the Toastmaster ran the intro and
+	// never left". #363 makes the row universal: the Toastmaster IS still holding
+	// the room, and the agenda now says so rather than leaving it implied.
+	it("default variant: the speakers hand-off is there too, owned by the Toastmaster", () => {
 		expect(
-			handbackRow(expandRunSheet([totd, ge, grammarian, speaker])),
-		).toBeUndefined();
+			speakersHandoffRow(expandRunSheet([totd, ge, grammarian, speaker])),
+		).toEqual({
+			who: "Toastmaster of the Day · Dana",
+			detail: "Introduces the speakers",
+			minutes: 0,
+			marks: null,
+			handoff: true,
+		});
 	});
 });
 
