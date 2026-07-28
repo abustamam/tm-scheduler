@@ -1,3 +1,5 @@
+import { BASECAMP_MATCHES } from "../lib/basecamp-hosts";
+
 /**
  * Main-world content script (#107): the isolated content script can't see the
  * page's own window.fetch/XHR, so this runs in the page world, wraps them, and
@@ -5,10 +7,7 @@
  * window.postMessage. It never blocks or alters the page's requests.
  */
 export default defineContentScript({
-	matches: [
-		"https://app.basecamp.toastmasters.org/*",
-		"https://basecamp.toastmasters.org/*",
-	],
+	matches: [...BASECAMP_MATCHES],
 	world: "MAIN",
 	runAt: "document_start",
 	main() {

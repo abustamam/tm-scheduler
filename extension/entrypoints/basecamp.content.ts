@@ -1,4 +1,5 @@
 import { extractDetailTargets, fetchDetails } from "../lib/basecamp-detail-walk";
+import { BASECAMP_MATCHES } from "../lib/basecamp-hosts";
 import { walkProgressPages } from "../lib/basecamp-walk";
 import type { IngestRequest, IngestResponse } from "../lib/messages";
 
@@ -10,10 +11,7 @@ import type { IngestRequest, IngestResponse } from "../lib/messages";
  * no popup to babysit.
  */
 export default defineContentScript({
-	matches: [
-		"https://app.basecamp.toastmasters.org/*",
-		"https://basecamp.toastmasters.org/*",
-	],
+	matches: [...BASECAMP_MATCHES],
 	runAt: "document_start",
 	cssInjectionMode: "ui",
 	async main(ctx) {

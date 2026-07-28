@@ -82,7 +82,15 @@ It persists across restarts. Keep the AMO credentials in your environment — ne
 ## Use
 
 1. In Base Camp, open **Base Camp Manager → your club → Paths Progress**.
+   TI serves this from `apps.basecamp.toastmasters.org` (plural). All three known
+   Base Camp hosts are supported — see `lib/basecamp-hosts.ts`; that one list
+   feeds both content scripts and `host_permissions`, so there is nowhere for a
+   host to be half-added.
 2. Click **Sync to GavelUp** in the widget (bottom-right of the page).
+
+**No widget?** The content script only injects on the hosts in that list. Check the
+page's host against it before debugging anything else — a missing host produces no
+button and no error, which looks identical to the extension not being installed.
 3. You'll see "Matched N · P path(s) updated · U unmatched" (plus a warning if the club
    looks different from last time).
 
