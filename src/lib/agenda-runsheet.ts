@@ -99,9 +99,12 @@ export type BeatRole = { roleKey: string; roleName: string };
  *   the club actually runs, under their own names — the beat's `requiresGroup`
  *   members when it has one, else its `requiresAnyOf` matches.
  * - `fallback` reassigns a beat to a different owner and/or detail when its
- *   `unless` role has no slots, instead of disappearing — the Timer's-report
- *   vote beats become Toastmaster-of-the-Day-run plain votes. See
- *   `BeatFallback`.
+ *   `unless` role has no slots, instead of disappearing (#363). On the three
+ *   vote beats the owner is ALREADY the segment leader — Toastmaster of the
+ *   Day, Table Topics Master, General Evaluator — so `unless: TIMER` only
+ *   swaps `detail`, dropping the "Calls for the Timer's report" clause when
+ *   there is no Timer; `owner` is for a beat whose usual owner isn't the one
+ *   actually holding the room. See `BeatFallback`.
  * - `id` names a beat another surface has to quote (#356). See `BeatId`.
  */
 export type Beat = (
@@ -460,12 +463,13 @@ export function buildRunOfShow({
 			// The vote belongs to whoever is running the segment that just scored,
 			// not to the Timer (#363) — the club's own printed agenda has this line
 			// inside the leader's block every time, because the Timer gives a report
-			// but never holds the room. Owner IS the gate here (`requiresAnyOf`
-			// mirrors the owning role) since the beat is nominally about the
-			// Toastmaster of the Day regardless; `renderUnowned` covers the one club
-			// that disables that role outright. Only the timer's-report clause is
-			// conditional — `fallback` drops it, and it alone, when there is no
-			// Timer to report.
+			// but never holds the room. Owner and gate are DELIBERATELY different
+			// roles: this beat is owned by the Toastmaster of the Day (the segment
+			// leader) but gated on the Speaker (the segment itself), so a club that
+			// disables Toastmaster of the Day still runs the vote — `renderUnowned`
+			// prints the bare role name rather than losing the row. Only the
+			// timer's-report clause is conditional — `fallback` drops it, and it
+			// alone, when there is no Timer to report.
 			kind: "role",
 			...TOASTMASTER_ROLE,
 			role: "plain",
@@ -487,15 +491,12 @@ export function buildRunOfShow({
 			flex: true,
 		},
 		{
-			// Same call as the Best-Speaker vote above, but the leader here is the
-			// Table Topics Master — confirmed by the club's own agenda, where the
-			// very next row has the Table Topics Master introducing the General
-			// Evaluator, so they were still holding the room. `renderUnowned` can
-			// never actually fire on this beat: it is owned by and gated on the same
-			// role (`requiresAnyOf: [TABLE_TOPICS_ROLE]`), so no slot ⇒ omitted
-			// before `renderUnowned` is even consulted. Left on anyway for the same
-			// reason the other two votes carry it — this beat is ABOUT a segment,
-			// not its owner, and that is a property of the vote beats as a group.
+			// Unlike the Best-Speaker vote above, `renderUnowned` can never actually
+			// fire on this beat: owner and gate are the SAME role here
+			// (`requiresAnyOf: [TABLE_TOPICS_ROLE]`), both resolved through the same
+			// `matchesRole` predicate, so a met gate guarantees `matching.length >=
+			// 1` before the "no slot" branch is ever reached. Left on anyway — this
+			// beat is still ABOUT a segment, not its owner, like the other two votes.
 			kind: "role",
 			...TABLE_TOPICS_ROLE,
 			role: "plain",
@@ -517,7 +518,6 @@ export function buildRunOfShow({
 			minutes: 3,
 		},
 		{
-			// The General Evaluator, per the same club agenda.
 			kind: "role",
 			roleKey: "general_evaluator",
 			roleName: "General Evaluator",
