@@ -2,6 +2,8 @@ import { Loader2 } from "lucide-react";
 import type React from "react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { ProjectPicker } from "#/components/pathways/project-picker";
+import { useProjectOptions } from "#/components/pathways/use-project-options";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
@@ -23,6 +25,11 @@ type SpeechSlot = {
 	pathwayPath: string | null;
 	projectName: string | null;
 	projectLevel: string | null;
+	/** Linked catalog project (#418), pre-selected in the picker. */
+	projectId: string | null;
+	/** The SPEAKER's member id — whose paths the picker offers. Not the actor:
+	 *  an admin editing someone else's speech still picks from THEIR path. */
+	assigneeId: string | null;
 	minMinutes: number | null;
 	maxMinutes: number | null;
 	presentationUrl: string | null;
@@ -40,6 +47,23 @@ export function EditSpeechSheet({
 	onSaved: () => void | Promise<void>;
 }) {
 	const [busy, setBusy] = useState(false);
+	const [projectId, setProjectId] = useState<string | null>(null);
+	const [seededFor, setSeededFor] = useState<string | null>(null);
+	const paths = useProjectOptions(slot?.assigneeId ?? null, slot !== null);
+
+	// Re-seed from the slot each time the sheet opens on a different speech. The
+	// form is remounted by `key`, but this state lives above it, so an abandoned
+	// pick would otherwise follow the user to the next slot. Adjusted during
+	// render rather than in an effect (React's documented pattern) — `slot` is
+	// rebuilt inline by the caller every render, so it can't be an effect dep.
+	// Both sides normalize to null: comparing a bare `slot?.id` (undefined with
+	// no slot) against null state never settles, and a render-phase update that
+	// never settles is an infinite re-render.
+	const openSlotId = slot?.id ?? null;
+	if (openSlotId !== seededFor) {
+		setSeededFor(openSlotId);
+		setProjectId(slot?.projectId ?? null);
+	}
 
 	async function submit(e: React.FormEvent<HTMLFormElement>) {
 		e.preventDefault();
@@ -70,12 +94,15 @@ export function EditSpeechSheet({
 					speakerDetails: {
 						speechTitle:
 							String(form.get("speechTitle") ?? "").trim() || undefined,
+						// Free text is sent as typed; when `projectId` is set the server
+						// overwrites all three from the catalog (#418).
 						pathwayPath:
 							String(form.get("pathwayPath") ?? "").trim() || undefined,
 						projectName:
 							String(form.get("projectName") ?? "").trim() || undefined,
 						projectLevel:
 							String(form.get("projectLevel") ?? "").trim() || undefined,
+						projectId,
 						minMinutes,
 						maxMinutes,
 						presentationUrl:
@@ -114,35 +141,16 @@ export function EditSpeechSheet({
 								autoFocus
 							/>
 						</div>
-						<div className="space-y-2">
-							<Label htmlFor="pathwayPath">Pathways path</Label>
-							<Input
-								id="pathwayPath"
-								name="pathwayPath"
-								defaultValue={slot.pathwayPath ?? ""}
-								placeholder="e.g. Presentation Mastery"
-							/>
-						</div>
-						<div className="grid grid-cols-2 gap-3">
-							<div className="space-y-2">
-								<Label htmlFor="projectName">Project</Label>
-								<Input
-									id="projectName"
-									name="projectName"
-									defaultValue={slot.projectName ?? ""}
-									placeholder="Ice Breaker"
-								/>
-							</div>
-							<div className="space-y-2">
-								<Label htmlFor="projectLevel">Level</Label>
-								<Input
-									id="projectLevel"
-									name="projectLevel"
-									defaultValue={slot.projectLevel ?? ""}
-									placeholder="Level 1"
-								/>
-							</div>
-						</div>
+						<ProjectPicker
+							paths={paths}
+							value={projectId}
+							onChange={setProjectId}
+							fallback={{
+								pathwayPath: slot.pathwayPath,
+								projectName: slot.projectName,
+								projectLevel: slot.projectLevel,
+							}}
+						/>
 						<div className="grid grid-cols-2 gap-3">
 							<div className="space-y-2">
 								<Label htmlFor="minMinutes">Min minutes</Label>

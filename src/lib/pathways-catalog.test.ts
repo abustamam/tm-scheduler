@@ -15,6 +15,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+	defaultOpenLevel,
 	levelLabel,
 	PATH_COMPLETION_LEVEL,
 	PATHWAYS_CATALOG,
@@ -180,5 +181,72 @@ describe("levelLabel", () => {
 
 	it("prints ordinary levels unchanged", () => {
 		for (const n of [1, 2, 3, 4, 5]) expect(levelLabel(n)).toBe(`Level ${n}`);
+	});
+});
+
+/** Level 1 has two requireds + an elective; Levels 2 and 3 one required each. */
+function progressFixture(completeNames: string[] = []) {
+	return [
+		{ level: 1, isRequired: true, name: "Ice Breaker" },
+		{ level: 1, isRequired: true, name: "Evaluation and Feedback" },
+		{ level: 1, isRequired: false, name: "An Elective" },
+		{ level: 2, isRequired: true, name: "Managing Time" },
+		{ level: 3, isRequired: true, name: "Understanding Conflict" },
+	].map((p) => ({ ...p, complete: completeNames.includes(p.name) }));
+}
+
+describe("defaultOpenLevel (#418)", () => {
+	it("opens Level 1 for a member with no progress data at all", () => {
+		// The common case: a club that has never run a Base Camp sync.
+		expect(defaultOpenLevel(progressFixture(), null)).toBe(1);
+	});
+
+	it("opens the lowest level with an unfinished required project", () => {
+		expect(
+			defaultOpenLevel(
+				progressFixture(["Ice Breaker", "Evaluation and Feedback"]),
+				null,
+			),
+		).toBe(2);
+	});
+
+	it("ignores incomplete ELECTIVES when deciding what's unfinished", () => {
+		// Level 1's elective is untouched but its requireds are done. TI's elective
+		// requirement is a per-level count, not a per-project one, so an untaken
+		// elective must not pin the member to Level 1 forever.
+		const projects = progressFixture([
+			"Ice Breaker",
+			"Evaluation and Feedback",
+		]);
+		expect(projects.some((p) => !p.isRequired && !p.complete)).toBe(true);
+		expect(defaultOpenLevel(projects, null)).toBe(2);
+	});
+
+	it("prefers Base Camp's approval over the required-project scan", () => {
+		// Approved through 2 while our per-project mirror still shows Level 1
+		// requireds incomplete — Base Camp is the system of record, so open 3.
+		expect(defaultOpenLevel(progressFixture(), 2)).toBe(3);
+	});
+
+	it("stays on the last level when every level is approved", () => {
+		expect(defaultOpenLevel(progressFixture(), 3)).toBe(3);
+	});
+
+	it("returns 1 for a path with no catalog projects", () => {
+		expect(defaultOpenLevel([], null)).toBe(1);
+	});
+
+	it("never opens on a level that has no required projects", () => {
+		// Path Completion carries no requireds; treating it as "unfinished" would
+		// open the picker on a level with nothing to deliver.
+		expect(
+			defaultOpenLevel(
+				[
+					{ level: 1, isRequired: true, complete: true },
+					{ level: PATH_COMPLETION_LEVEL, isRequired: false, complete: false },
+				],
+				null,
+			),
+		).toBe(1);
 	});
 });

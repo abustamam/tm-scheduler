@@ -11,6 +11,8 @@ import {
 	NudgeRecruitPicker,
 } from "#/components/club/nudge-recruit-picker";
 import { OutreachPanel } from "#/components/club/outreach-panel";
+import { ProjectPicker } from "#/components/pathways/project-picker";
+import { useProjectOptions } from "#/components/pathways/use-project-options";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import {
@@ -50,6 +52,8 @@ export interface SpeakerDetails {
 	pathwayPath?: string;
 	projectName?: string;
 	projectLevel?: string;
+	/** Linked catalog project (#418); free text above stays the display. */
+	projectId?: string | null;
 	minMinutes?: number;
 	maxMinutes?: number;
 }
@@ -757,6 +761,7 @@ export function MeetingAgenda({
 
 			<ClaimSheet
 				slot={claimSlotState}
+				claimantMemberId={currentMemberId}
 				canClaim={canClaim}
 				roleCounts={roleCounts}
 				onClaim={actions.claim}
@@ -807,6 +812,8 @@ export function MeetingAgenda({
 								pathwayPath: editSpeechSlot.pathwayPath,
 								projectName: editSpeechSlot.projectName,
 								projectLevel: editSpeechSlot.projectLevel,
+								projectId: editSpeechSlot.projectId ?? null,
+								assigneeId: editSpeechSlot.assigneeId ?? null,
 								minMinutes: editSpeechSlot.minMinutes,
 								maxMinutes: editSpeechSlot.maxMinutes,
 								presentationUrl: editSpeechSlot.presentationUrl ?? null,
@@ -863,6 +870,7 @@ export function MeetingAgenda({
 
 function ClaimSheet({
 	slot,
+	claimantMemberId,
 	canClaim,
 	roleCounts,
 	onClaim,
@@ -870,6 +878,10 @@ function ClaimSheet({
 	onClaimed,
 }: {
 	slot: AgendaSlot | null;
+	/** Who is claiming — whose declared paths the project picker offers. Null on
+	 *  the public surface until a name is picked, which is also when the picker
+	 *  first has a subject to load. */
+	claimantMemberId: string | null;
 	canClaim: boolean;
 	roleCounts: Record<string, number>;
 	onClaim: (slot: AgendaSlot, speakerDetails?: SpeakerDetails) => Promise<void>;
@@ -877,6 +889,22 @@ function ClaimSheet({
 	onClaimed: () => void | Promise<void>;
 }) {
 	const [submitting, setSubmitting] = useState(false);
+	const [projectId, setProjectId] = useState<string | null>(null);
+	const [openedFor, setOpenedFor] = useState<string | null>(null);
+	const paths = useProjectOptions(claimantMemberId, slot !== null);
+
+	// A claim sheet always starts blank — abandoning one slot's pick must not
+	// carry it into the next slot the same person opens. Adjusted during render
+	// (React's documented pattern) rather than in an effect, since `slot` is
+	// rebuilt inline by the caller every render and so can't be an effect dep.
+	// Both sides normalize to null: comparing a bare `slot?.id` (undefined with
+	// no slot) against null state never settles, and render-phase updates that
+	// never settle are an infinite re-render.
+	const openSlotId = slot?.id ?? null;
+	if (openSlotId !== openedFor) {
+		setOpenedFor(openSlotId);
+		setProjectId(null);
+	}
 
 	async function claimNonSpeaker() {
 		if (!slot) return;
@@ -921,14 +949,18 @@ function ClaimSheet({
 		try {
 			await onClaim(slot, {
 				speechTitle: speechTitle || undefined,
+				// Free text is sent as typed; when `projectId` is set the server
+				// overwrites all three from the catalog (#418).
 				pathwayPath: String(form.get("pathwayPath") ?? "").trim() || undefined,
 				projectName: String(form.get("projectName") ?? "").trim() || undefined,
 				projectLevel:
 					String(form.get("projectLevel") ?? "").trim() || undefined,
+				projectId,
 				minMinutes,
 				maxMinutes,
 			});
 			toast.success("You're booked to speak!");
+			setProjectId(null);
 			await onClaimed();
 		} catch (err) {
 			toast.error(errMessage(err));
@@ -961,32 +993,16 @@ function ClaimSheet({
 								autoFocus
 							/>
 						</div>
-						<div className="space-y-2">
-							<Label htmlFor="pathwayPath">Pathways path</Label>
-							<Input
-								id="pathwayPath"
-								name="pathwayPath"
-								placeholder="e.g. Presentation Mastery"
-							/>
-						</div>
-						<div className="grid grid-cols-2 gap-3">
-							<div className="space-y-2">
-								<Label htmlFor="projectName">Project</Label>
-								<Input
-									id="projectName"
-									name="projectName"
-									placeholder="Ice Breaker"
-								/>
-							</div>
-							<div className="space-y-2">
-								<Label htmlFor="projectLevel">Level</Label>
-								<Input
-									id="projectLevel"
-									name="projectLevel"
-									placeholder="Level 1"
-								/>
-							</div>
-						</div>
+						<ProjectPicker
+							paths={paths}
+							value={projectId}
+							onChange={setProjectId}
+							fallback={{
+								pathwayPath: null,
+								projectName: null,
+								projectLevel: null,
+							}}
+						/>
 						<div className="grid grid-cols-2 gap-3">
 							<div className="space-y-2">
 								<Label htmlFor="minMinutes">Min minutes</Label>

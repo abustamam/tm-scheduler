@@ -19,6 +19,7 @@ import {
 import { normalizePresentationUrl } from "#/lib/presentation-url";
 import { logActivity } from "./activity";
 import { assertMeetingNotLocked } from "./meeting-authz-logic";
+import { resolveProjectDisplay } from "./project-picker-logic";
 
 // Either the main db client or a drizzle transaction — so speech helpers can run
 // inside a caller's transaction and commit atomically with the slot change.
@@ -643,6 +644,8 @@ export type SpeechInput = {
 	pathwayPath?: string;
 	projectName?: string;
 	projectLevel?: string;
+	/** A real catalog project (#418). Null clears the link back to free text. */
+	projectId?: string | null;
 	minMinutes?: number;
 	maxMinutes?: number;
 	presentationUrl?: string;
@@ -654,6 +657,7 @@ export type SpeechContent = {
 	pathwayPath: string | null;
 	projectName: string | null;
 	projectLevel: string | null;
+	projectId: string | null;
 	minMinutes: number | null;
 	maxMinutes: number | null;
 	presentationUrl: string | null;
@@ -665,6 +669,11 @@ export type SpeechContent = {
  * and no other field set) — the caller then leaves the slot's `speech_id` NULL
  * instead of creating a blank speech (mirrors the migration's empty-placeholder
  * rule and keeps "TBA" a derived, unstored state).
+ *
+ * Stays PURE. A picked `projectId` also has to overwrite the free-text triple
+ * from the catalog, but that needs a query, so it happens in the callers via
+ * `applyProjectDisplay` rather than turning this into an async function every
+ * existing test would have to await.
  */
 export function normalizeSpeech(input?: SpeechInput): {
 	content: SpeechContent;
@@ -675,6 +684,7 @@ export function normalizeSpeech(input?: SpeechInput): {
 	const pathwayPath = input?.pathwayPath?.trim() || null;
 	const projectName = input?.projectName?.trim() || null;
 	const projectLevel = input?.projectLevel?.trim() || null;
+	const projectId = input?.projectId?.trim() || null;
 	const minMinutes = input?.minMinutes ?? null;
 	const maxMinutes = input?.maxMinutes ?? null;
 	const presentationUrl = normalizePresentationUrl(input?.presentationUrl);
@@ -683,6 +693,7 @@ export function normalizeSpeech(input?: SpeechInput): {
 		pathwayPath !== null ||
 		projectName !== null ||
 		projectLevel !== null ||
+		projectId !== null ||
 		minMinutes !== null ||
 		maxMinutes !== null ||
 		presentationUrl !== null;
@@ -694,12 +705,32 @@ export function normalizeSpeech(input?: SpeechInput): {
 			pathwayPath,
 			projectName,
 			projectLevel,
+			projectId,
 			minMinutes,
 			maxMinutes,
 			presentationUrl,
 		},
 		hasContent: hasRealTitle || hasOtherContent,
 	};
+}
+
+/**
+ * Overwrite the free-text triple from the catalog when a real project was
+ * picked (#418).
+ *
+ * The whole display layer — agenda, print layouts, the projected deck, the run
+ * sheet, reporting — reads `pathway_path` / `project_name` / `project_level`,
+ * which the schema documents as the fallback display "until project_id coverage
+ * is high". Deriving them server-side means every one of those surfaces keeps
+ * working with no change, and the fallback text can never drift from the linked
+ * project. A speech with no picked project is left exactly as typed.
+ */
+async function applyProjectDisplay(
+	content: SpeechContent,
+): Promise<SpeechContent> {
+	if (!content.projectId) return content;
+	const display = await resolveProjectDisplay(content.projectId);
+	return { ...content, ...display };
 }
 
 /**
@@ -714,9 +745,10 @@ export async function attachSpeechToSlot(
 ): Promise<string | null> {
 	const { content, hasContent } = normalizeSpeech(args.input);
 	if (!hasContent) return null;
+	const values = await applyProjectDisplay(content);
 	const [row] = await conn
 		.insert(speeches)
-		.values({ personId: args.personId, ...content })
+		.values({ personId: args.personId, ...values })
 		.returning({ id: speeches.id });
 	if (!row) throw new Error("Failed to create speech.");
 	await conn
@@ -924,9 +956,10 @@ export async function editSlotSpeech(
 		return;
 	}
 	if (args.currentSpeechId) {
+		const values = await applyProjectDisplay(content);
 		await conn
 			.update(speeches)
-			.set({ ...content, updatedAt: new Date() })
+			.set({ ...values, updatedAt: new Date() })
 			.where(eq(speeches.id, args.currentSpeechId));
 		return;
 	}

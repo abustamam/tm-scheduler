@@ -423,6 +423,45 @@ export function levelLabel(level: number): string {
 	return level === PATH_COMPLETION_LEVEL ? "Path Completion" : `Level ${level}`;
 }
 
+/**
+ * Which level group the project picker opens on (#418): the lowest one that
+ * still has an incomplete REQUIRED project.
+ *
+ * Deliberately not a gate. Someone whose Level 1 is finished but not yet
+ * approved is already delivering Level 2 speeches, and someone repeating an
+ * elective is going backwards — both are ordinary. Every level stays reachable
+ * and every project stays selectable; this only decides what's already open
+ * when the sheet appears.
+ *
+ * `approvedThrough` is Base Camp's own verdict (the highest contiguous approved
+ * `path_level_progress.level`) and wins when present, because a level can be
+ * approved while our per-project mirror is stale or partial. Falls back to the
+ * required-project scan, then to the lowest level for a member with no progress
+ * data at all — the common case for a club that has never synced.
+ *
+ * Levels with no required projects — Path Completion — are skipped: nothing
+ * there is deliverable, so it can never be "the level you're on".
+ */
+export function defaultOpenLevel(
+	projects: { level: number; isRequired: boolean; complete: boolean }[],
+	approvedThrough: number | null,
+): number {
+	const levels = [...new Set(projects.map((p) => p.level))].sort(
+		(a, b) => a - b,
+	);
+	if (levels.length === 0) return 1;
+
+	if (approvedThrough !== null) {
+		return levels.find((l) => l > approvedThrough) ?? levels[levels.length - 1];
+	}
+
+	const firstUnfinished = levels.find((level) => {
+		const required = projects.filter((p) => p.level === level && p.isRequired);
+		return required.length > 0 && required.some((p) => !p.complete);
+	});
+	return firstUnfinished ?? levels[0];
+}
+
 function buildPath(p: PathReq): CatalogPath {
 	const required = new Set<string>([
 		...L1,
