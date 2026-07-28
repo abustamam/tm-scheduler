@@ -80,7 +80,9 @@ export type BeatRole = { roleKey: string; roleName: string };
  * === Timer" style special cases (#367):
  *
  * - A `role` beat's own `roleKey`/`roleName` gate it directly: no slots for
- *   that role this meeting ⇒ the beat is omitted.
+ *   that role this meeting ⇒ the beat is omitted — unless `renderUnowned`
+ *   says to print the bare role name anyway, or `fallback.owner` has
+ *   relocated the lookup to a different role that DOES have a slot.
  * - `requiresAnyOf` is an ADDITIONAL gate for a beat that is about OTHER
  *   roles besides its owner: the functionary-intro and functionary-reports
  *   beats (nothing to introduce, nobody to call for a report), and the three
@@ -742,29 +744,40 @@ export function expandRunSheet(
 		// nothing to introduce, nobody to call for a report, no segment to vote on.
 		const missingRequired = !requirementsMet(beat, slots);
 
+		// `fallback` lives on the shared half of `Beat` (#363), so this is computed
+		// once for both arms below — the event arm only needs `who`, the role arm
+		// only needs `owner`, but "did the fallback fire, and what does it say"
+		// must answer the same way in both or the two arms can silently drift.
+		const fb = beat.fallback;
+		const useFallback =
+			fb != null && !hasRole(slots, fb.unless.roleKey, fb.unless.roleName);
+		// A fallback's own detail can carry the same `ROLES_TOKEN`/`AWARDS_TOKEN`
+		// the beat's detail can (nothing stops a later beat from writing one) —
+		// `resolveDetail` only reads `detail`/`requiresAnyOf`/`requiresGroup`, all
+		// of which the fallback inherits from its beat, so this borrows the same
+		// resolution rather than substituting `fb.detail` verbatim and risking a
+		// literal "{roles}" on the printed agenda.
+		const beatDetail =
+			useFallback && fb.detail != null
+				? resolveDetail({ ...beat, detail: fb.detail }, slots)
+				: detail;
+
 		if (missingRequired) {
 			// omitted
 		} else if (beat.kind === "event") {
-			const fb = beat.fallback;
-			const useFallback =
-				fb != null && !hasRole(slots, fb.unless.roleKey, fb.unless.roleName);
 			rows.push({
 				who: useFallback ? (fb.owner?.roleName ?? beat.who) : beat.who,
-				detail: useFallback ? (fb.detail ?? detail) : detail,
+				detail: beatDetail,
 				minutes: beat.minutes,
 				marks: null,
 			});
 		} else {
 			// A fallback may move the beat to a different owner (#363) — resolve the
 			// owner BEFORE looking up slots, so the row binds to the right role.
-			const fb = beat.fallback;
-			const useFallback =
-				fb != null && !hasRole(slots, fb.unless.roleKey, fb.unless.roleName);
 			const owner =
 				useFallback && fb.owner != null
 					? fb.owner
 					: { roleKey: beat.roleKey, roleName: beat.roleName };
-			const beatDetail = useFallback ? (fb.detail ?? detail) : detail;
 			const matching = slotsForRole(slots, owner.roleKey, owner.roleName);
 
 			if (beat.role === "speaker") {

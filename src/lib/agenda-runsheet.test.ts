@@ -1383,6 +1383,58 @@ describe("BeatFallback — owner and detail swap (#363)", () => {
 	it("omits the beat when neither the owner nor the fallback owner has a slot", () => {
 		expect(expandRunSheet([], [beat])).toEqual([]);
 	});
+
+	it("swaps both owner and detail when the fallback names both", () => {
+		const both: Beat = {
+			...beat,
+			fallback: {
+				unless: TTM,
+				owner: TM,
+				detail: "Hands off directly to the General Evaluator",
+			},
+		};
+		const slots = [
+			slot({
+				roleKey: "toastmaster_of_the_day",
+				roleName: "Toastmaster of the Day",
+				category: "leadership",
+				assigneeName: "Faisal",
+			}),
+		];
+		expect(expandRunSheet(slots, [both])).toEqual([
+			{
+				who: "Toastmaster of the Day · Faisal",
+				detail: "Hands off directly to the General Evaluator",
+				minutes: 0,
+				marks: null,
+			},
+		]);
+	});
+
+	it("a degenerate fallback (`unless` only, no owner or detail) changes nothing when it fires", () => {
+		const noOp: Beat = {
+			...beat,
+			fallback: { unless: { roleKey: "timer", roleName: "Timer" } },
+		};
+		const slots = [
+			slot({
+				roleKey: "table_topics_master",
+				roleName: "Table Topics Master",
+				category: "leadership",
+				assigneeName: "Rasheed",
+			}),
+		];
+		// No Timer slot ⇒ the fallback fires, but names neither a replacement
+		// owner nor detail, so the row is identical to a beat with no fallback.
+		expect(expandRunSheet(slots, [noOp])).toEqual([
+			{
+				who: "Table Topics Master · Rasheed",
+				detail: "Introduces the General Evaluator",
+				minutes: 0,
+				marks: null,
+			},
+		]);
+	});
 });
 
 describe("renderUnowned (#363)", () => {
@@ -1439,5 +1491,116 @@ describe("renderUnowned (#363)", () => {
 			minutes: 3,
 		};
 		expect(expandRunSheet([], [beat])).toEqual([]);
+	});
+
+	it("requiresAnyOf still gates the beat even with renderUnowned set — the combination Task 2 puts on the vote beats", () => {
+		const beat: Beat = {
+			kind: "role",
+			roleKey: "toastmaster_of_the_day",
+			roleName: "Toastmaster of the Day",
+			role: "plain",
+			detail: "Vote Best Speaker",
+			minutes: 1,
+			renderUnowned: true,
+			requiresAnyOf: [{ roleKey: "speaker", roleName: "Speaker" }],
+		};
+		const slots = [
+			slot({
+				roleKey: "toastmaster_of_the_day",
+				roleName: "Toastmaster of the Day",
+				category: "leadership",
+				assigneeName: "Faisal",
+			}),
+		];
+		// The Toastmaster IS held, so a bug that let renderUnowned bypass the
+		// gate would print a row here — but requiresAnyOf (no Speaker slot) must
+		// still win, exactly as it does on the vote beats Task 2 stacks this onto.
+		expect(expandRunSheet(slots, [beat])).toEqual([]);
+	});
+});
+
+describe("BeatFallback — fb.detail resolves through resolveDetail (#363)", () => {
+	// A fallback's `detail` isn't a fixed literal — it can carry ROLES_TOKEN
+	// just like a beat's own detail can — so it must go through the same
+	// resolution the beat's own detail does, not get substituted verbatim.
+
+	it("resolves ROLES_TOKEN in the fallback detail on a role beat", () => {
+		const beat: Beat = {
+			kind: "role",
+			roleKey: "table_topics_master",
+			roleName: "Table Topics Master",
+			role: "plain",
+			detail: "Own detail, unused once the fallback fires",
+			minutes: 1,
+			requiresAnyOf: [{ roleKey: "timer", roleName: "Timer" }],
+			fallback: {
+				unless: {
+					roleKey: "table_topics_master",
+					roleName: "Table Topics Master",
+				},
+				owner: {
+					roleKey: "toastmaster_of_the_day",
+					roleName: "Toastmaster of the Day",
+				},
+				detail: `Introduces the ${ROLES_TOKEN}`,
+			},
+		};
+		const slots = [
+			slot({
+				roleKey: "timer",
+				roleName: "Timer",
+				category: "functionary",
+				assigneeName: "T",
+			}),
+			slot({
+				roleKey: "toastmaster_of_the_day",
+				roleName: "Toastmaster of the Day",
+				category: "leadership",
+				assigneeName: "Faisal",
+			}),
+		];
+		// No Table Topics Master slot ⇒ the fallback fires; ROLES_TOKEN must
+		// resolve against the beat's own requiresAnyOf (the Timer slot), not
+		// print literally.
+		expect(expandRunSheet(slots, [beat])).toEqual([
+			{
+				who: "Toastmaster of the Day · Faisal",
+				detail: "Introduces the Timer",
+				minutes: 1,
+				marks: null,
+			},
+		]);
+	});
+
+	it("resolves ROLES_TOKEN in the fallback detail on an event beat", () => {
+		const beat: Beat = {
+			kind: "event",
+			who: "Timer",
+			detail: "Own detail, unused once the fallback fires",
+			minutes: 1,
+			requiresAnyOf: [{ roleKey: "grammarian", roleName: "Grammarian" }],
+			fallback: {
+				unless: { roleKey: "timer", roleName: "Timer" },
+				detail: `Introduces the ${ROLES_TOKEN}`,
+			},
+		};
+		const slots = [
+			slot({
+				roleKey: "grammarian",
+				roleName: "Grammarian",
+				category: "functionary",
+				assigneeName: "G",
+			}),
+		];
+		// No Timer slot ⇒ the fallback fires; ROLES_TOKEN resolves against the
+		// beat's own requiresAnyOf (the Grammarian slot).
+		expect(expandRunSheet(slots, [beat])).toEqual([
+			{
+				who: "Timer",
+				detail: "Introduces the Grammarian",
+				minutes: 1,
+				marks: null,
+			},
+		]);
 	});
 });
