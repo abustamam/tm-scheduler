@@ -85,10 +85,11 @@ export type BeatRole = { roleKey: string; roleName: string };
  *   relocated the lookup to a different role that DOES have a slot.
  * - `requiresAnyOf` is an ADDITIONAL gate for a beat that is about OTHER
  *   roles besides its owner: the functionary-intro and functionary-reports
- *   beats (nothing to introduce, nobody to call for a report), and the three
- *   vote beats, which belong to a segment — a club with no Table Topics Master
- *   must not print "vote Best Table Topics" for a segment not on its agenda.
- *   A beat is omitted unless at least one of these roles has a slot.
+ *   beats (nothing to introduce, nobody to call for a report), the three
+ *   vote beats, and the awards beat, all of which belong to a segment — a
+ *   club with no Table Topics Master must not print "vote Best Table Topics"
+ *   for a segment not on its agenda. A beat is omitted unless at least one of
+ *   these roles has a slot.
  * - `requiresGroup` gates on a role GROUP the club defines rather than a fixed
  *   key list (#371) — "this club's functionaries", which is a category, not a
  *   set of keys we shipped. It SUPERSEDES `requiresAnyOf` on the beats that
