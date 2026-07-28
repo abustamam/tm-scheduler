@@ -53,7 +53,7 @@ function dayMon(value: Date | string, timeZone?: string) {
 }
 
 function Dashboard() {
-	const { authUser } = Route.useRouteContext();
+	const { authUser, activeClubId } = Route.useRouteContext();
 	const { commitments, speeches, pathways, enrollments, pathOptions } =
 		Route.useLoaderData();
 	const router = useRouter();
@@ -77,12 +77,17 @@ function Dashboard() {
 	// Same reasoning as `mutatePath`: the mark fns return the fresh view models,
 	// but the panel is loader-driven, so re-run the loader (#419).
 	async function mutateMark(
-		fn: (args: { data: { projectId: string } }) => Promise<unknown>,
+		fn: (args: {
+			data: { projectId: string; clubId?: string | null };
+		}) => Promise<unknown>,
 		projectId: string,
 	) {
 		setBusyProjectId(projectId);
 		try {
-			await fn({ data: { projectId } });
+			// `clubId` is attribution only — authz is person-level. Without it
+			// every self-mark landed with a null `marked_by_member_id`, which made
+			// the column dead weight on the surface that writes most of them.
+			await fn({ data: { projectId, clubId: activeClubId } });
 			await router.invalidate();
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : "Something went wrong.");

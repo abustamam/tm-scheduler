@@ -27,6 +27,7 @@ import {
 } from "#/db/schema";
 import { PATHWAYS_COURSE_CODES } from "#/lib/basecamp-progress";
 import { requireClubRole } from "./guards";
+import { resolveUserPersonId, userPersonIds } from "./person-identity-logic";
 
 /**
  * The live enrollment this project belongs to, for this person.
@@ -119,11 +120,7 @@ export async function unmarkProjectComplete(input: {
 
 /** The signed-in user's own `people` row, or null when unlinked. */
 export async function selfPersonId(userId: string): Promise<string | null> {
-	const [p] = await db
-		.select({ id: people.id })
-		.from(people)
-		.where(eq(people.userId, userId));
-	return p?.id ?? null;
+	return resolveUserPersonId(userId);
 }
 
 /** The signed-in user's membership id in a club, for mark attribution. */
@@ -166,11 +163,9 @@ export async function resolveMarkAuthz(input: {
 		throw new Error("Member not found in this club.");
 	}
 
-	const [self] = await db
-		.select({ id: people.id })
-		.from(people)
-		.where(eq(people.userId, input.userId));
-	if (self && self.id === member.personId) {
+	// Every linked Person, not one arbitrary row — see person-identity-logic.
+	const mine = await userPersonIds(input.userId);
+	if (mine.includes(member.personId)) {
 		return { personId: member.personId, actorMemberId: member.id };
 	}
 

@@ -350,7 +350,6 @@ function MemberDetail() {
 						<MemberPathControl
 							clubId={clubId}
 							memberId={member.id}
-							memberName={member.name}
 							enrollments={enrollments}
 							options={pathOptions}
 						/>
@@ -922,13 +921,11 @@ function BackLink() {
 function MemberPathControl({
 	clubId,
 	memberId,
-	memberName,
 	enrollments,
 	options,
 }: {
 	clubId: string;
 	memberId: string;
-	memberName: string;
 	enrollments: MemberEnrollment[];
 	options: EnrollablePath[];
 }) {
@@ -952,7 +949,6 @@ function MemberPathControl({
 		<PathEnrollmentManager
 			enrollments={enrollments}
 			options={options}
-			subject={memberName}
 			onAdd={(id) => mutate(addMemberPath, id)}
 			onRemove={(id) => mutate(removeMemberPath, id)}
 		/>

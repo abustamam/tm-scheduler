@@ -25,10 +25,10 @@ import {
 	pathEnrollments,
 	pathLevelProgress,
 	pathwaysPaths,
-	people,
 } from "#/db/schema";
 import { PATHWAYS_COURSE_CODES } from "#/lib/basecamp-progress";
 import { requireClubRole } from "./guards";
+import { resolveUserPersonId, userPersonIds } from "./person-identity-logic";
 
 export interface EnrollablePath {
 	id: string;
@@ -136,11 +136,7 @@ export async function listMemberEnrollments(
  * a roster row). Callers surface that rather than silently doing nothing.
  */
 export async function selfPersonId(userId: string): Promise<string | null> {
-	const [p] = await db
-		.select({ id: people.id })
-		.from(people)
-		.where(eq(people.userId, userId));
-	return p?.id ?? null;
+	return resolveUserPersonId(userId);
 }
 
 /**
@@ -177,11 +173,12 @@ export async function resolveEnrollmentAuthz(input: {
 		throw new Error("Member not found in this club.");
 	}
 
-	const [self] = await db
-		.select({ id: people.id })
-		.from(people)
-		.where(eq(people.userId, input.userId));
-	if (self && self.id === member.personId) return { personId: member.personId };
+	// Compare against EVERY Person linked to this account, not one arbitrary
+	// row: `people.user_id` is not unique, and matching only the first would
+	// tell a member with a duplicate Person that their own roster row isn't
+	// theirs — bouncing them into the admin gate on their own record.
+	const mine = await userPersonIds(input.userId);
+	if (mine.includes(member.personId)) return { personId: member.personId };
 
 	// Not themselves — must be a club admin. Throws with its own message.
 	await requireClubRole(input.userId, input.clubId, ["admin"]);

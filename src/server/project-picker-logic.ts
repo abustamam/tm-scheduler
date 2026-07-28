@@ -22,6 +22,7 @@ import {
 } from "#/db/schema";
 import { PATHWAYS_COURSE_CODES } from "#/lib/basecamp-progress";
 import { defaultOpenLevel, levelLabel } from "#/lib/pathways-catalog";
+import { userPersonIds } from "./person-identity-logic";
 
 export interface PickerProject {
 	id: string;
@@ -211,11 +212,9 @@ export async function viewerMaySeeProgress(input: {
 	clubId: string;
 	personId: string;
 }): Promise<boolean> {
-	const [self] = await db
-		.select({ id: people.id })
-		.from(people)
-		.where(eq(people.userId, input.userId));
-	if (self && self.id === input.personId) return true;
+	// Every linked Person, not one arbitrary row — see person-identity-logic.
+	const mine = await userPersonIds(input.userId);
+	if (mine.includes(input.personId)) return true;
 
 	const [membership] = await db
 		.select({ clubRole: members.clubRole })
