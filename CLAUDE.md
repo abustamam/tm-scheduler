@@ -153,10 +153,11 @@ Just describe your task in plain English and start coding — CodeLedger handles
 4. **You code normally** → CodeLedger tracks progress, drift, and recall in the background
 5. **Session ends** → CodeLedger shows how well the bundle predicted the files you changed
 
-Meaningful-task auto-refresh is automatic in environments that honor CodeLedger hooks (for example Claude Code sessions).
-Repo-local ambient wrappers like `./.codeledger/bin/codex "your request"` and `./.codeledger/bin/claude "your request"` now apply the same rule before handoff in non-hook environments.
-In browser/cloud agent containers, use the pinned runtime directly: `node .codeledger/bin/codeledger-standalone.cjs auto-refresh --prompt "<user request>"`.
-If you need to trigger the rule directly, use `./.codeledger/bin/codeledger auto-refresh --prompt "<user request>"`: refresh on new meaningful tasks, skip acknowledgements like "yes please" or same-task follow-ups.
+Meaningful-task refresh is automatic in environments that honor CodeLedger hooks (for example Claude Code sessions).
+Claude hooks delegate to CLI-backed handlers: `codeledger hooks claude user-prompt-submit`, `codeledger hooks claude pre-tool-use`, and `codeledger hooks claude stop`.
+Repo-local ambient wrappers like `./.codeledger/bin/codex "your request"` and `./.codeledger/bin/claude "your request"` apply the same task-boundary rule before handoff in non-hook environments.
+In browser/cloud agent containers, use the pinned runtime directly: `node .codeledger/bin/codeledger-standalone.cjs activate --task "<user request>"`.
+If you need to trigger the hook decision directly for debugging, use `./.codeledger/bin/codeledger hooks claude user-prompt-submit --mode warn --json` with the Claude hook JSON payload on stdin.
 Ambient toggles live in `.codeledger/config.json` under `ambient.auto_refresh_enabled` and `ambient.prompt_coach_enabled`.
 For mid-session retrieval, call `./.codeledger/bin/codeledger broker refresh --task "<user request>" --json` first. Use the returned ranked files and bundle delta before falling back to raw shell search.
 Broker responses include `retrievalContract.schema_version: "codeledger/broker-first/v1"`, and hooks/wrappers write `.codeledger/runtime/latest-broker-contract.json` as proof that raw search is only a fallback.
@@ -228,8 +229,8 @@ If you only need the notebook value block, run `./.codeledger/bin/codeledger not
 Hooks in `.claude/hooks.json` run automatically:
 
 - **SessionStart** — runs `ensure-session` (init-if-missing + scan-if-stale warmup)
-- **UserPromptSubmit** — intent-aware auto-refresh; skips "yes please" style follow-ups and same-task replies
-- **PreToolUse** — reminds agent to check the active bundle before editing
+- **UserPromptSubmit** — CLI-backed intent-aware activation refresh; skips "yes please" style follow-ups and same-task replies
+- **PreToolUse** — activation preflight before mutating tools; warns locally and can block in managed mode
 - **PostToolUse** — shows bundle recall/precision and a compact value receipt after git commits
 - **PreCompact** — saves progress snapshot before context compaction
 - **Stop** — shows final session recap with recall, precision, token savings

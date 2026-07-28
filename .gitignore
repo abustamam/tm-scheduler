@@ -12,7 +12,7 @@ dist-ssr
 __unconfig*
 todos.json
 .gstack/
-.claude/
+.claude/*
 
 # design-sync (claude.ai/design) build artifacts — durable inputs live in .design-sync/ and ARE committed
 .ds-sync/
