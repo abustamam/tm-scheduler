@@ -17,6 +17,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { MemberAvatar } from "#/components/club/member-avatar";
 import { PageContainer } from "#/components/page-container";
+import { PathEnrollmentManager } from "#/components/pathways/path-enrollment-manager";
 import { PathwaysProgress } from "#/components/pathways/pathways-progress";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
@@ -47,6 +48,14 @@ import {
 	setMemberRole,
 	setMemberStatus,
 } from "#/server/members";
+import {
+	addMemberPath,
+	type EnrollablePath,
+	getMemberEnrollments,
+	listPathwayOptions,
+	type MemberEnrollment,
+	removeMemberPath,
+} from "#/server/path-enrollment";
 import { getMemberPathways } from "#/server/pathways-read";
 import { archiveSpeech, rescheduleSpeech } from "#/server/speeches";
 
@@ -62,13 +71,23 @@ export const Route = createFileRoute("/_authed/members/$id")({
 				pathways: [],
 				unscheduledSpeeches: [],
 				openSpeakerSlots: [],
+				pathOptions: [] as EnrollablePath[],
+				enrollments: [] as MemberEnrollment[],
 			};
 		}
-		const [profile, pathways] = await Promise.all([
+		const [profile, pathways, pathOptions, enrollments] = await Promise.all([
 			getMemberProfile({ data: { clubId, memberId: params.id } }),
 			getMemberPathways({ data: { clubId, memberId: params.id } }),
+			// Both are gated on "self or club admin", so a plain member viewing
+			// someone else's page gets a throw. That's the correct authz, not an
+			// error worth failing the whole page over — swallow to empty and let
+			// the admin gate below decide whether to render the control at all.
+			listPathwayOptions().catch(() => []),
+			getMemberEnrollments({ data: { clubId, memberId: params.id } }).catch(
+				() => [],
+			),
 		]);
-		return { ...profile, pathways };
+		return { ...profile, pathways, pathOptions, enrollments };
 	},
 	component: MemberDetail,
 });
@@ -98,6 +117,8 @@ function MemberDetail() {
 		pathways,
 		unscheduledSpeeches,
 		openSpeakerSlots,
+		pathOptions,
+		enrollments,
 	} = Route.useLoaderData();
 	const { activeClubId, clubs, officerPositions } = Route.useRouteContext();
 	const clubId = activeClubId;
@@ -304,6 +325,20 @@ function MemberDetail() {
 			<div className="mt-5">
 				<h2 className="mb-3 text-sm font-bold">Pathways</h2>
 				<PathwaysProgress paths={pathways} />
+				{/* Admin-only here. A member manages their OWN paths from the
+				    dashboard, which needs no club context; this surface exists so a
+				    club can be set up without waiting for everyone to sign in. */}
+				{clubId && viewerIsAdmin ? (
+					<div className="mt-3">
+						<MemberPathControl
+							clubId={clubId}
+							memberId={member.id}
+							memberName={member.name}
+							enrollments={enrollments}
+							options={pathOptions}
+						/>
+					</div>
+				) : null}
 			</div>
 		</PageContainer>
 	);
@@ -864,5 +899,45 @@ function BackLink() {
 			/>
 			Back to roster
 		</Link>
+	);
+}
+
+function MemberPathControl({
+	clubId,
+	memberId,
+	memberName,
+	enrollments,
+	options,
+}: {
+	clubId: string;
+	memberId: string;
+	memberName: string;
+	enrollments: MemberEnrollment[];
+	options: EnrollablePath[];
+}) {
+	const router = useRouter();
+
+	async function mutate(
+		fn: (args: {
+			data: { clubId: string; memberId: string; pathId: string };
+		}) => Promise<unknown>,
+		pathId: string,
+	) {
+		try {
+			await fn({ data: { clubId, memberId, pathId } });
+			await router.invalidate();
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+		}
+	}
+
+	return (
+		<PathEnrollmentManager
+			enrollments={enrollments}
+			options={options}
+			subject={memberName}
+			onAdd={(id) => mutate(addMemberPath, id)}
+			onRemove={(id) => mutate(removeMemberPath, id)}
+		/>
 	);
 }
