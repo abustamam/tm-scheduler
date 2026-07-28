@@ -52,6 +52,16 @@ Filed against #363, deliberately out of scope here:
 - **H** — the old agenda prints the Table Topics limits ("1 min min, 2.3 min
   max, 2.31+ disqualified"). Our run sheet prints none and the deck says
   "1–2 minutes per speaker", which contradicts it. Needs per-club fields.
+- **Rename inconsistency** — a club that renames a role sees BOTH names on one
+  printed page. `expandRunSheet` labels every run-sheet row with the beat's
+  canonical `owner.roleName` (`:836`, `:849`, `:864`, `:873`), while
+  `buildLegend` (`:288`) and `ROLES_TOKEN` (`:741`) use the slot's own
+  `s.roleName`. So renaming "General Evaluator" to "Chief Evaluator" gives
+  "Chief Evaluator" in the roles table and in beat 4's functionary list, and
+  "General Evaluator" on every row. Pre-existing and not introduced here, but it
+  is the same who-leads confusion this change exists to remove, and #368's
+  key-binding was specifically meant to make renames safe. Deferred because the
+  fix touches every role beat and flips a pinned #368 test — its own decision.
 - **Role-description drift** — `ROLE_TEMPLATE` descriptions, rendered on the
   role sheets, disagree with the run-of-show this change makes explicit: the
   Table Topics Master's says nothing about calling the vote or introducing the
@@ -209,9 +219,15 @@ Timer's report is a line inside the leader's block, never a row.
 ### The awards beat becomes role-bound
 
 Owned by Toastmaster of the Day with `renderUnowned: true`, so it shows the
-holder's name, follows a club rename, and matches every other leader row. It is
-otherwise the only leader row without a name, at the moment someone has to stand
-up and hand out ribbons.
+holder's name and matches every other leader row. It is otherwise the only
+leader row without a name, at the moment someone has to stand up and hand out
+ribbons. It also stops naming a role that does not exist: the bare string was
+`"Toastmaster"`, while the role is "Toastmaster of the Day".
+
+It does **not** make the row follow a club rename — an earlier draft of this
+spec claimed it would, which was wrong. No role row does: `expandRunSheet`
+labels every row with the beat's canonical `owner.roleName`. See the
+rename-inconsistency follow-up below.
 
 ### Print: hand-off rows render as a compact band
 
