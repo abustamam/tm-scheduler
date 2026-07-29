@@ -293,7 +293,12 @@ export function slideLayout(slide: Slide): SlideLayout {
 				head("Please Vote for Best Evaluator:"),
 				...slide.names.map(name),
 			);
-			return content("Speech Evaluation", { form: "centered", lines });
+			// Names its own segment, like its two sibling votes (#446). It used to
+			// return the `evaluation` slide's "Speech Evaluation", so a meeting with
+			// three evaluators put four consecutive identical cells in the
+			// jump-to-slide grid — `slideLabel` renders this header verbatim — and
+			// the one that was actually the vote could only be found by counting.
+			return content("Vote for Best Evaluator", { form: "centered", lines });
 		}
 		case "generalEvaluation":
 			// The header names the SEGMENT; this line names the ROLE giving it — the

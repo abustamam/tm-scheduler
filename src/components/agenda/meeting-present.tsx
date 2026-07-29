@@ -296,7 +296,7 @@ function SlideOverview({
 			>
 				{labels.map((label, idx) => (
 					<button
-						// biome-ignore lint/suspicious/noArrayIndexKey: position IS the identity here — headers repeat (two "Speech Evaluation" slides)
+						// biome-ignore lint/suspicious/noArrayIndexKey: position IS the identity here — headers legitimately repeat, one "Speech Evaluation" per evaluator
 						key={idx}
 						ref={idx === cursor ? cursorRef : null}
 						type="button"

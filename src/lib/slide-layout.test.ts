@@ -214,6 +214,61 @@ describe("slideLayout bodies", () => {
 		expect(lines(false)).toEqual(["Please Vote for Best Evaluator:", "Riyaz"]);
 	});
 
+	describe("slide headers name their own segment (#446)", () => {
+		// Nothing asserted a `header` before this, only `lines` — which is how
+		// `voteEvaluator` came to reuse the `evaluation` slide's header. The header
+		// is not decoration: `slideLabel` (meeting-present.tsx) returns it verbatim
+		// for the jump-to-slide grid, so two slides sharing one make that grid
+		// unusable for the segment they collide on.
+		const header = (slide: Slide) => {
+			const l = slideLayout(slide);
+			if (l.chrome !== "content") throw new Error("expected content chrome");
+			return l.header;
+		};
+
+		it("gives each of the three votes its own header", () => {
+			const headers = [
+				header({
+					kind: "voteSpeaker",
+					names: ["Jagpal"],
+					hasTimer: true,
+					caller: null,
+				}),
+				header({ kind: "voteTableTopics", hasTimer: true, caller: null }),
+				header({
+					kind: "voteEvaluator",
+					names: ["Riyaz"],
+					hasTimer: true,
+					caller: null,
+				}),
+			];
+			expect(headers).toEqual([
+				"Vote for Best Speaker",
+				"Vote for Best Table Topic",
+				"Vote for Best Evaluator",
+			]);
+			expect(new Set(headers).size).toBe(3);
+		});
+
+		it("does not let the Best-Evaluator vote borrow the evaluation's header", () => {
+			const evaluation = header({
+				kind: "evaluation",
+				label: "Evaluation 1",
+				evaluator: "Sudheer",
+				speaker: "Jagpal",
+				time: "3 minutes",
+			});
+			const vote = header({
+				kind: "voteEvaluator",
+				names: ["Riyaz"],
+				hasTimer: true,
+				caller: null,
+			});
+			expect(evaluation).toBe("Speech Evaluation");
+			expect(vote).not.toBe(evaluation);
+		});
+	});
+
 	describe("handoff layout (#363)", () => {
 		const centered = (slide: Slide) => {
 			const l = slideLayout(slide);
