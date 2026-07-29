@@ -229,6 +229,54 @@ spec claimed it would, which was wrong. No role row does: `expandRunSheet`
 labels every row with the beat's canonical `owner.roleName`. See the
 rename-inconsistency follow-up below.
 
+### The Toastmaster covers the General Evaluator's whole role
+
+Added after the eight tasks landed, on the product owner's call.
+
+A club running evaluators but no General Evaluator used to lose FIVE beats and
+gain one nonsense row: the Best-Evaluator vote printed the bare string "General
+Evaluator" via `renderUnowned` — a role nobody holds — while the adjacent
+hand-off correctly relocated to the Toastmaster. Same missing role, adjacent
+beats, two different answers. Worse, the GE's closing sequence vanished
+entirely, so **a club with functionaries but no GE never called for the
+functionary reports** and its Timer, Ah-Counter and Grammarian were never cued.
+
+The cause was that `BeatFallback` was **singular**: the vote beats had already
+spent their one fallback on `unless: TIMER_ROLE` to drop the timer's-report
+clause, so they could not also relocate their owner. `fallback` is now
+`fallbacks: BeatFallback[]`, applied in array order with `owner` and `detail`
+resolved independently per field, so a detail-only entry can never shadow an
+earlier entry's owner.
+
+(An earlier suggestion was to express the Timer clause as a token like
+`ROLES_TOKEN` instead. That fails on capitalisation — with a Timer the row reads
+"…report · **o**pens voting", without one "**O**pens voting" — and plural
+fallbacks match the actual diagnosis rather than working around it.)
+
+All five GE-owned beats now share one `GE_COVERED_BY_TOASTMASTER` constant so
+the five answers cannot drift apart again. The deck mirrors it: the three
+GE-owned slides gained an `owner` field — following `functionaryIntro`, which
+already carries one because its owner varies by club config — because
+`slide-layout.ts` hardcoded the literal "General Evaluator" and would otherwise
+announce a Toastmaster-covered slide as the GE's.
+
+The overall-evaluation beat drops its "returns control to the Toastmaster"
+clause when the Toastmaster is the one covering, via a single fallback entry
+setting both `owner` and `detail` — one question with one answer, so splitting
+it would let a future edit fire the owner swap without the clause drop.
+
+### This reverses #367 on the evaluator evaluation
+
+"Evaluates the evaluators" is now gated on `EVALUATOR_ROLE`. #367 deliberately
+gated it on the General Evaluator and NOT on the evaluators, so a GE with no
+evaluators still got the beat.
+
+That was wrong: a row reading "Evaluates the evaluators" when the club runs none
+is wrong copy whoever owns it. Letting the Toastmaster cover the role did not
+create that bug — it made it reachable by a second route, and visible enough to
+notice. The gate is the segment, not the owner, so it drops for a covering
+Toastmaster too.
+
 ### Print: hand-off rows render as a compact band
 
 `AgendaRow` gains `handoff?: true`. The four print layouts render those rows as
@@ -278,6 +326,13 @@ President beats project nothing today either.
 - `meeting-agenda-print.test.tsx` — band rendering and unique row keys.
 
 ## Accepted trade-offs
+
+**A club with neither a General Evaluator nor a Toastmaster still prints two
+unattributed vote rows.** With no role left to relocate to, the Best-Speaker and
+Best-Evaluator votes fall back to `renderUnowned` and print bare role names.
+That is the intended last resort — losing a vote is worse than an unattributed
+row, and the deck still projects the vote slide — and it matches the awards row,
+which already behaves that way.
 
 **A leadership role with two slots duplicates its rows.** `expandRunSheet`'s
 plain-role branch emits one row per matching slot, while the deck takes
