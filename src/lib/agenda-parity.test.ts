@@ -587,6 +587,16 @@ const CASES: { name: string; slots: AgendaSlot[] }[] = [
 		name: "functionaries only (no leadership roles at all)",
 		slots: [timer, grammarian],
 	},
+	{
+		// The club the functionary intro's own GE cover decides (#363): that beat
+		// is GE-owned under MCF's variant, so with functionaries, a Toastmaster and
+		// no General Evaluator it is the Toastmaster who introduces them — and who
+		// then calls for their reports. Both surfaces used to drop the intro here
+		// and AGREE about it, which is why the section is also asserted PRESENT
+		// below rather than left to this matrix.
+		name: "Toastmaster and functionaries only, no General Evaluator",
+		slots: [tmod, timer, grammarian],
+	},
 	{ name: "no slots at all", slots: [] },
 	{
 		// A club-invented role flagged as a speaker role but carrying no standard
@@ -784,6 +794,24 @@ describe("run-sheet ⇄ deck section-order parity (#367)", () => {
 			// Not vacuous: the same club WITH evaluators has the section.
 			expect(printSections(FULL, config)).toContain("evaluatorEvaluation");
 			expect(deckSections(FULL, config)).toContain("evaluatorEvaluation");
+		}
+	});
+
+	it("keeps the functionary intro on BOTH surfaces when the Toastmaster covers for a missing General Evaluator (#363)", () => {
+		// The defect a parity suite structurally cannot see: the matrix says the
+		// two surfaces AGREE, and they agreed while both dropped this section under
+		// MCF's variant — the functionary intro is GE-owned there, and it was the
+		// one GE-owned beat without the shared cover. The club introduced nobody
+		// and then called for their reports anyway. So the section is asserted
+		// PRESENT, not merely mutual.
+		const slots = [tmod, timer, grammarian];
+		for (const config of CONFIGS) {
+			expect(printSections(slots, config)).toContain("functionaryIntro");
+			expect(deckSections(slots, config)).toContain("functionaryIntro");
+			// The section it cues, which always had the cover — the mismatch between
+			// the two is what made the gap visible.
+			expect(printSections(slots, config)).toContain("functionaryReports");
+			expect(deckSections(slots, config)).toContain("functionaryReports");
 		}
 	});
 });

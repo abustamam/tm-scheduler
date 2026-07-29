@@ -794,16 +794,41 @@ describe("buildSlideDeck functionary intro (#367)", () => {
 		});
 	});
 
-	it("is omitted when the owning role has no slot", () => {
+	it("is omitted when neither the owning role nor its cover has a slot", () => {
 		// Default owner is the Toastmaster of the Day: a GE + functionaries is
 		// not enough under the standard flow.
 		expect(kinds([ge, grammarian])).not.toContain("functionaryIntro");
-		// …and symmetrically, under MCF's variant a Toastmaster is not enough.
+		// Under MCF's variant the owner is the General Evaluator — but the
+		// Toastmaster covers that whole role (#363), so it takes losing BOTH.
 		const mcf = build({
-			slots: [tmod, grammarian],
+			slots: [grammarian],
 			geIntroducesFunctionaries: true,
 		}).map((s) => s.kind);
 		expect(mcf).not.toContain("functionaryIntro");
+	});
+
+	it("is covered by the Toastmaster under MCF's variant when the club runs no General Evaluator (#363)", () => {
+		// This slide is GE-owned under the variant, so it needs the same cover as
+		// the GE's other slides. Without it a club with functionaries and no GE
+		// projected no intro at all — and then projected the reports slide cueing
+		// the very functionaries nobody had introduced.
+		const deck = build({
+			slots: [tmod, timer, grammarian],
+			geIntroducesFunctionaries: true,
+		});
+		expect(deck.find((s) => s.kind === "functionaryIntro")).toMatchObject({
+			owner: "Toastmaster of the Day",
+			name: "Schinthia",
+			team: [
+				{ role: "Timer", name: "Bilal" },
+				{ role: "Grammarian", name: "Mona" },
+			],
+		});
+		// The slide it cues is owned by the same person, on the same deck.
+		expect(deck.find((s) => s.kind === "functionaryReports")).toMatchObject({
+			owner: "Toastmaster of the Day",
+			name: "Schinthia",
+		});
 	});
 
 	it("binds the owner by role key, so a renamed role still owns it (#368)", () => {

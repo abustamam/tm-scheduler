@@ -1526,6 +1526,36 @@ describe("expandRunSheet — the functionary-intro and functionary-reports beats
 		expect(timed[speakersHandoff].time).toBe(timed[geHandoff].time);
 	});
 
+	it("MCF variant: the Toastmaster covers the functionary intro when the club runs no General Evaluator (#363)", () => {
+		// The intro beat is GE-owned under this variant, so it needs the same
+		// cover as the GE's other beats. Without it a club with functionaries and
+		// no GE was never told to introduce them — while the next GE-owned beat,
+		// which DID have the cover, still called for their reports.
+		const template = buildRunOfShow({ geIntroducesFunctionaries: true });
+		const rows = expandRunSheet([totd, timer, grammarian], template);
+		expect(introRow(rows)).toEqual({
+			who: "Toastmaster of the Day · Dana",
+			detail: "Introduces the Timer & Grammarian; each explains their role",
+			minutes: 3,
+			marks: null,
+		});
+		// …and the same Toastmaster then cues those reports, so the two rows agree
+		// about who is running the room.
+		expect(
+			rows.find((r) => r.detail === "Calls for the functionary reports")?.who,
+		).toBe("Toastmaster of the Day · Dana");
+	});
+
+	it("MCF variant: the functionary intro still goes when there is no General Evaluator AND no Toastmaster to cover", () => {
+		// The cover has nowhere to land, so the beat drops — the same way the GE's
+		// other non-`renderUnowned` beats do. Pins that the fallback added above
+		// did not turn the beat unconditional.
+		const template = buildRunOfShow({ geIntroducesFunctionaries: true });
+		expect(
+			introRow(expandRunSheet([timer, grammarian], template)),
+		).toBeUndefined();
+	});
+
 	it("MCF variant: the functionary intro renders owned by the General Evaluator when GE and a functionary both exist", () => {
 		const template = buildRunOfShow({ geIntroducesFunctionaries: true });
 		const rows = expandRunSheet([totd, ge, grammarian], template);

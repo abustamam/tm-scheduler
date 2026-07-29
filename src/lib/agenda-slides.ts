@@ -430,13 +430,14 @@ export function buildSlideDeck({
 	/**
 	 * Whoever is actually doing the General Evaluator's job this meeting (#363).
 	 *
-	 * The `??` IS the run sheet's `GE_COVERED_BY_TOASTMASTER` fallback, which the
-	 * five GE-owned beats share: at a club that runs no General Evaluator the
+	 * The `??` IS the run sheet's `GE_COVERED_BY_TOASTMASTER` fallback, which
+	 * every GE-owned beat shares: at a club that runs no General Evaluator the
 	 * Toastmaster of the Day covers the whole role — introduces the evaluators,
 	 * calls the Best-Evaluator vote, evaluates the evaluators, calls for the
-	 * functionary reports, gives the overall evaluation. Read once here so the
-	 * five places below cannot answer it five ways; the printed rows resolve the
-	 * same question through one shared constant for the same reason.
+	 * functionary reports, gives the overall evaluation, and under MCF's variant
+	 * introduces the functionaries too. Read once here so the places below cannot
+	 * answer it several ways; the printed rows resolve the same question through
+	 * one shared constant for the same reason.
 	 *
 	 * `null` only when neither role has a slot — then the beats have nowhere to
 	 * fall back to and both surfaces drop the section together.
@@ -444,10 +445,12 @@ export function buildSlideDeck({
 	const geOwner = holder(slots, ROLE.generalEvaluator) ?? tmOwner;
 	// The functionary intro. Gated exactly as the run sheet gates it: the owning
 	// role has a slot AND the club runs at least one functionary to introduce.
-	const introOwner = geIntroducesFunctionaries
-		? ROLE.generalEvaluator
-		: ROLE.toastmaster;
-	const introOwnerSlots = byRole(slots, introOwner);
+	// Under MCF's variant the owner IS the General Evaluator, so it resolves
+	// through `geOwner` and inherits that role's cover — the beat's own
+	// `GE_COVERED_BY_TOASTMASTER` fallback (#363). Without it a club on that
+	// variant with functionaries but no GE projected no intro slide while still
+	// projecting the reports slide that cues those same functionaries.
+	const introOwner = geIntroducesFunctionaries ? geOwner : tmOwner;
 	const anyFunctionary = hasAnyFunctionaryRole(slots);
 	// MCF's variant only, and only when there is a General Evaluator to introduce
 	// (#363): the Toastmaster hands the room to the GE, who then runs the
@@ -461,11 +464,15 @@ export function buildSlideDeck({
 			generalEvaluator.length > 0,
 		);
 	}
-	if (introOwnerSlots.length > 0 && anyFunctionary) {
+	if (introOwner != null && anyFunctionary) {
 		deck.push({
 			kind: "functionaryIntro",
-			owner: introOwner.name,
-			name: assigneeDisplay(introOwnerSlots[0]),
+			// The CLUB's name for the role, per `holder` — the same rule the deck's
+			// other owner-carrying slides follow. Resolving the owner through
+			// `geOwner` forces the choice: the canonical constant would announce
+			// "General Evaluator" over the Toastmaster who is covering.
+			owner: introOwner.role,
+			name: introOwner.name,
 			team: buildLegend(slots),
 		});
 	}

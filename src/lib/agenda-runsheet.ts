@@ -408,7 +408,9 @@ const GENERAL_EVALUATOR_ROLE: BeatRole = {
  * The product decision for a club that runs no General Evaluator (#363): the
  * Toastmaster of the Day covers the WHOLE role, not a piece of it.
  *
- * Written once and shared by all five GE-owned beats, because the alternative
+ * Written once and shared by every GE-owned beat — the five the GE owns in both
+ * flows, plus the functionary intro, which is GE-owned only under MCF's variant
+ * — because the alternative
  * is what shipped before: the Best-Evaluator vote printed the bare string
  * "General Evaluator" (via `renderUnowned`) while the hand-off one row above it
  * relocated to the Toastmaster, and the GE's other three beats — including
@@ -536,6 +538,12 @@ export function buildRunOfShow({
 			minutes: 3,
 			requiresAnyOf: FUNCTIONARY_ROLES,
 			requiresGroup: "functionaries",
+			// GE-owned under MCF's variant, so it needs the same cover as the GE's
+			// other beats: without it a club on that variant with functionaries but
+			// no General Evaluator never introduced them, yet still called for their
+			// reports. A no-op in the standard flow, where the owner is already the
+			// Toastmaster and the swap sets what is already set.
+			fallbacks: [GE_COVERED_BY_TOASTMASTER],
 		},
 		{
 			// Universal since #363. #438 added this for MCF only, reasoning that in
