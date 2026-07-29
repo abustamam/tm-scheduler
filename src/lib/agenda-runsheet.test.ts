@@ -20,6 +20,7 @@ import {
 	TABLE_TOPICS_MAX,
 	TABLE_TOPICS_MIN,
 } from "./agenda-runsheet";
+import { buildTimeline } from "./agenda-timing";
 
 function slot(over: Partial<AgendaSlot>): AgendaSlot {
 	return {
@@ -1220,6 +1221,46 @@ describe("expandRunSheet — the functionary-intro and functionary-reports beats
 	it("MCF variant: the GE-owned functionary intro is still omitted when there are no functionary slots, despite a GE slot existing", () => {
 		const template = buildRunOfShow({ geIntroducesFunctionaries: true });
 		expect(introRow(expandRunSheet([totd, ge], template))).toBeUndefined();
+	});
+
+	// The motivating case for the render-side hand-off band (#363): with the
+	// functionary intro dropped (no functionary slots, previous test), the GE
+	// hand-off and the speakers hand-off — both owned by the Toastmaster — become
+	// ADJACENT rows, and `buildTimeline` gives 0-minute rows the same clock stamp
+	// as whatever follows them. `meeting-agenda-print.test.tsx`'s guard against
+	// that collision (unique React keys, a compact band instead of a duplicate
+	// block) is only worth having while this stays reachable — if a future change
+	// separates these two beats, this test should fail first.
+	it("MCF variant: with a GE and speakers but no functionaries, the GE and speakers hand-offs land adjacent, same owner, same stamp", () => {
+		const template = buildRunOfShow({ geIntroducesFunctionaries: true });
+		const rows = expandRunSheet([totd, ge, speaker], template);
+
+		const geHandoff = rows.findIndex(
+			(r) => r.detail === "Introduces the General Evaluator",
+		);
+		const speakersHandoff = rows.findIndex(
+			(r) => r.detail === "Introduces the speakers",
+		);
+		expect(geHandoff).toBeGreaterThanOrEqual(0);
+		// Adjacent: the functionary-intro beat between them contributed no row.
+		expect(speakersHandoff).toBe(geHandoff + 1);
+		expect(rows[geHandoff]).toMatchObject({
+			who: "Toastmaster of the Day · Dana",
+			handoff: true,
+			minutes: 0,
+		});
+		expect(rows[speakersHandoff]).toMatchObject({
+			who: "Toastmaster of the Day · Dana",
+			handoff: true,
+			minutes: 0,
+		});
+
+		const timed = buildTimeline(
+			rows,
+			"2026-07-07T23:45:00Z",
+			"America/Chicago",
+		);
+		expect(timed[speakersHandoff].time).toBe(timed[geHandoff].time);
 	});
 
 	it("MCF variant: the functionary intro renders owned by the General Evaluator when GE and a functionary both exist", () => {

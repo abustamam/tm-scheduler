@@ -328,23 +328,28 @@ function OfficerGrid({
  *  on one line keeps the holder's name without needing the beat's copy to be
  *  recased.
  *
- *  `fontSize`, `padding` and `style` come from the call site: the four layouts
+ *  `fontSize`, `padding` and `chrome` come from the call site: the four layouts
  *  have different type scales, gutters and row rules, and a band that ignores
- *  them reads as a broken row rather than a quieter one. */
+ *  them reads as a broken row rather than a quieter one. `chrome` is narrowed
+ *  to exactly the two properties every call site actually passes — background
+ *  and borderBottom — and spreads FIRST, so a call site can vary the layout's
+ *  own chrome but can never override the semantics (color, italics, layout)
+ *  this component owns. */
 function HandoffBand({
 	row,
 	fontSize,
 	padding,
-	style,
+	chrome,
 }: {
 	row: TimelineRow;
 	fontSize: number;
 	padding: string;
-	style?: React.CSSProperties;
+	chrome?: Pick<React.CSSProperties, "background" | "borderBottom">;
 }) {
 	return (
 		<div
 			style={{
+				...chrome,
 				display: "flex",
 				gap: 6,
 				padding,
@@ -352,7 +357,6 @@ function HandoffBand({
 				lineHeight: 1.35,
 				color: MUTED,
 				fontStyle: "italic",
-				...style,
 			}}
 		>
 			<span aria-hidden>↳</span>
@@ -420,7 +424,7 @@ function RunNarrative({
 						}}
 					>
 						<div
-							data-row-time
+							data-row-time={r.time}
 							style={{
 								flex: "none",
 								width: lg ? 64 : 54,
@@ -827,7 +831,7 @@ function GridLayout({
 								row={r}
 								fontSize={9.5}
 								padding="2px 12px 2px 68px"
-								style={{
+								chrome={{
 									background: i % 2 === 1 ? "#fafdfb" : "#fff",
 									borderBottom: i < rows.length - 1 ? HAIR : undefined,
 								}}
@@ -846,7 +850,7 @@ function GridLayout({
 								}}
 							>
 								<div
-									data-row-time
+									data-row-time={r.time}
 									style={{
 										flex: "none",
 										width: 60,
@@ -1573,7 +1577,7 @@ function TimingLayout({
 										row={r}
 										fontSize={10}
 										padding="3px 12px 3px 58px"
-										style={{
+										chrome={{
 											background: i % 2 === 1 ? "#fafdfb" : "#fff",
 											borderBottom: i < rows.length - 1 ? HAIR : undefined,
 										}}
@@ -1597,7 +1601,7 @@ function TimingLayout({
 									}}
 								>
 									<div
-										data-row-time
+										data-row-time={r.time}
 										style={{
 											flex: "none",
 											width: 46,

@@ -332,4 +332,39 @@ describe("MeetingAgendaPrint hand-off band", () => {
 			}
 		});
 	}
+
+	// Review fix (#363): the tests above are layout-agnostic — every one would
+	// still pass if all four call sites pasted identical styling. This pins the
+	// one requirement that had zero coverage: the band must respect each
+	// layout's own visual language (type scale + gutter) rather than one style
+	// copied three times. Values read off the component's own call sites, not
+	// asserted from spec.
+	const BAND_STYLE: Record<
+		AgendaLayout,
+		{ paddingLeft: string; fontSize: string }
+	> = {
+		editorial: { paddingLeft: "69px", fontSize: "10px" }, // RunNarrative sm
+		spacious: { paddingLeft: "83px", fontSize: "11.5px" }, // RunNarrative lg
+		grid: { paddingLeft: "68px", fontSize: "9.5px" },
+		timing: { paddingLeft: "58px", fontSize: "10px" },
+	};
+
+	for (const layout of ["grid", "editorial", "spacious", "timing"] as const) {
+		it(`${layout}: the hand-off band uses this layout's own paddingLeft/fontSize`, () => {
+			renderHandoffs(layout);
+			const band = screen.getByText(
+				"Toastmaster · Lee P. · Introduces the General Evaluator",
+			).parentElement as HTMLElement;
+			expect(band.style.paddingLeft).toBe(BAND_STYLE[layout].paddingLeft);
+			expect(band.style.fontSize).toBe(BAND_STYLE[layout].fontSize);
+		});
+	}
+
+	it("renders the ↳ affordance as a decorative, screen-reader-hidden cue", () => {
+		renderHandoffs("editorial");
+		// Four hand-offs in this fixture, each with its own "↳" — any one proves
+		// the affordance renders and carries aria-hidden.
+		const [affordance] = screen.getAllByText("↳");
+		expect(affordance.getAttribute("aria-hidden")).toBe("true");
+	});
 });
