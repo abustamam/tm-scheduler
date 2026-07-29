@@ -938,11 +938,13 @@ export function expandRunSheet(
 
 	for (const beat of template) {
 		const startLen = rows.length;
-		const detail = resolveDetail(beat, slots);
 		// The beat is about OTHER roles than its owner (the functionary beats) or
 		// belongs to a segment (the vote beats), and the club runs none of them —
 		// nothing to introduce, nobody to call for a report, no segment to vote on.
-		const missingRequired = !requirementsMet(beat, slots);
+		// Early-out rather than an empty first arm, so nothing below is resolved
+		// for a beat that emits no rows (the two post-loop markers are already
+		// no-ops on an empty range).
+		if (!requirementsMet(beat, slots)) continue;
 
 		// `fallbacks` live on the shared half of `Beat` (#363), so this is computed
 		// once for both arms below — the event arm only needs `who`, the role arm
@@ -969,15 +971,15 @@ export function expandRunSheet(
 		// `resolveDetail` only reads `detail`/`requiresAnyOf`/`requiresGroup`, all
 		// of which the fallback inherits from its beat, so this borrows the same
 		// resolution rather than substituting the fallback's `detail` verbatim and
-		// risking a literal "{roles}" on the printed agenda.
+		// risking a literal "{roles}" on the printed agenda. Either way the beat's
+		// own `detail` is resolved at most once — a fired fallback replaces it
+		// outright, so resolving both would throw one of the two away.
 		const beatDetail =
 			fallbackDetail != null
 				? resolveDetail({ ...beat, detail: fallbackDetail }, slots)
-				: detail;
+				: resolveDetail(beat, slots);
 
-		if (missingRequired) {
-			// omitted
-		} else if (beat.kind === "event") {
+		if (beat.kind === "event") {
 			rows.push({
 				who: fallbackOwner?.roleName ?? beat.who,
 				detail: beatDetail,

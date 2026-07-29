@@ -4,7 +4,7 @@
 
 import type { LegendEntry } from "./agenda-runsheet";
 import { OPEN_LABEL } from "./agenda-runsheet";
-import type { Slide } from "./agenda-slides";
+import type { HandoffTarget, Slide } from "./agenda-slides";
 
 export type LineRole = "head" | "name" | "strong" | "muted" | "spacer";
 /** One rendered line. `text` is absent for `spacer`. */
@@ -85,18 +85,23 @@ const callerLine = (caller: LegendEntry): Line =>
 /**
  * A hand-off's header, by the segment it hands to (#363).
  *
- * The overview grid names a slide by its header — `slideName` in
+ * The overview grid names a slide by its header — `slideLabel` in
  * meeting-present.tsx returns it verbatim — so one shared "Hand-off" would put
  * five indistinguishable rows in the one place a jump grid exists to help, in
  * an issue whose whole point is removing ambiguity about who does what. The
  * suffix names the SEGMENT, short enough to read in a grid cell; the body still
  * spells out the full prose target.
  *
- * Keyed on `to`, the only thing that tells the five apart. An unmapped target
- * falls back to the bare header rather than throwing: a worse grid label is not
- * worth a deck that will not render.
+ * Keyed on `to`, which is what tells them apart — four targets covering five
+ * hand-offs. The two INTO the General Evaluator (MCF's opening one and the one
+ * out of Table Topics) are deliberately indistinguishable here: they are the
+ * same transition, and the run sheet concedes it by minting separate
+ * `geOpeningHandoff`/`geEvaluationHandoff` ids for the beats instead. An
+ * unmapped target falls back to the bare header rather than throwing —
+ * `HandoffTarget` makes that unreachable through the type, but a worse grid
+ * label is still not worth a deck that will not render mid-meeting.
  */
-const HANDOFF_HEADER: Record<string, string> = {
+const HANDOFF_HEADER: Record<HandoffTarget, string> = {
 	"the speakers": "Hand-off — Speakers",
 	"the Table Topics Master": "Hand-off — Table Topics",
 	"the General Evaluator": "Hand-off — General Evaluator",

@@ -293,20 +293,20 @@ describe("MeetingAgendaPrint hand-off band", () => {
 			renderHandoffs(layout);
 			expect(
 				screen.getByText(
-					"Toastmaster · Lee P. · Introduces the General Evaluator",
+					"Toastmaster · Lee P. — Introduces the General Evaluator",
 				),
 			).toBeTruthy();
 			expect(
-				screen.getByText("Toastmaster · Lee P. · Introduces the speakers"),
+				screen.getByText("Toastmaster · Lee P. — Introduces the speakers"),
 			).toBeTruthy();
 			expect(
 				screen.getByText(
-					"Table Topics Master · Rasheed · Introduces the General Evaluator",
+					"Table Topics Master · Rasheed — Introduces the General Evaluator",
 				),
 			).toBeTruthy();
 			expect(
 				screen.getByText(
-					"General Evaluator · Riyaz · Introduces the speech evaluators",
+					"General Evaluator · Riyaz — Introduces the speech evaluators",
 				),
 			).toBeTruthy();
 		});
@@ -345,7 +345,7 @@ describe("MeetingAgendaPrint hand-off band", () => {
 	> = {
 		editorial: { paddingLeft: "69px", fontSize: "10px" }, // RunNarrative sm
 		spacious: { paddingLeft: "83px", fontSize: "11.5px" }, // RunNarrative lg
-		grid: { paddingLeft: "68px", fontSize: "9.5px" },
+		grid: { paddingLeft: "68px", fontSize: "10px" },
 		timing: { paddingLeft: "58px", fontSize: "10px" },
 	};
 
@@ -353,7 +353,7 @@ describe("MeetingAgendaPrint hand-off band", () => {
 		it(`${layout}: the hand-off band uses this layout's own paddingLeft/fontSize`, () => {
 			renderHandoffs(layout);
 			const band = screen.getByText(
-				"Toastmaster · Lee P. · Introduces the General Evaluator",
+				"Toastmaster · Lee P. — Introduces the General Evaluator",
 			).parentElement as HTMLElement;
 			expect(band.style.paddingLeft).toBe(BAND_STYLE[layout].paddingLeft);
 			expect(band.style.fontSize).toBe(BAND_STYLE[layout].fontSize);
@@ -385,9 +385,9 @@ describe("MeetingAgendaPrint hand-off band", () => {
 			// Rows 1 and 2 of the fixture: adjacent hand-offs, so one lands on each
 			// side of the zebra.
 			const odd = bandFor(
-				"Toastmaster · Lee P. · Introduces the General Evaluator",
+				"Toastmaster · Lee P. — Introduces the General Evaluator",
 			);
-			const even = bandFor("Toastmaster · Lee P. · Introduces the speakers");
+			const even = bandFor("Toastmaster · Lee P. — Introduces the speakers");
 
 			if (BANDS_IN_THE_TABLE[layout]) {
 				expect(odd.style.background).not.toBe("");
@@ -407,11 +407,19 @@ describe("MeetingAgendaPrint hand-off band", () => {
 		});
 	}
 
-	it("renders the ↳ affordance as a decorative, screen-reader-hidden cue", () => {
+	it("renders the elbow affordance as a decorative, screen-reader-hidden cue", () => {
 		renderHandoffs("editorial");
-		// Four hand-offs in this fixture, each with its own "↳" — any one proves
-		// the affordance renders and carries aria-hidden.
-		const [affordance] = screen.getAllByText("↳");
+		// It is a bordered box, not a glyph (see `HandoffBand`): "↳" is outside
+		// Manrope's served unicode-range, so it always fell back to another face
+		// and the band's italic synthesised an oblique on it. Asserting the
+		// borders is what would catch a revert to a text glyph.
+		const band = screen.getByText(
+			"Toastmaster · Lee P. — Introduces the General Evaluator",
+		).parentElement as HTMLElement;
+		const affordance = band.firstElementChild as HTMLElement;
 		expect(affordance.getAttribute("aria-hidden")).toBe("true");
+		expect(affordance.textContent).toBe("");
+		expect(affordance.style.borderLeftStyle).toBe("solid");
+		expect(affordance.style.borderBottomStyle).toBe("solid");
 	});
 });

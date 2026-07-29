@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Slide } from "./agenda-slides";
+import type { HandoffTarget, Slide } from "./agenda-slides";
 import { slideLayout } from "./slide-layout";
 
 const contentHeader = (slide: Slide) => {
@@ -243,11 +243,14 @@ describe("slideLayout bodies", () => {
 			});
 		});
 
-		it("names the segment in the header, so the jump grid can tell the five apart", () => {
-			// `slideName` (meeting-present.tsx) labels the overview grid with the
+		it("names the segment in the header — four targets covering five hand-offs", () => {
+			// `slideLabel` (meeting-present.tsx) labels the overview grid with the
 			// header verbatim. One shared "Hand-off" would put five identical rows in
-			// the one place a jump grid exists to help.
-			const header = (to: string) =>
+			// the one place a jump grid exists to help. Four headers, not five: the
+			// two hand-offs INTO the General Evaluator are deliberately
+			// indistinguishable here — they are the same transition, and the run
+			// sheet separates them by beat id instead (#363).
+			const header = (to: HandoffTarget) =>
 				contentHeader({
 					kind: "handoff",
 					from: { role: "Toastmaster of the Day", name: "Faisal" },
@@ -267,13 +270,17 @@ describe("slideLayout bodies", () => {
 		});
 
 		it("falls back to the bare header for an unmapped target", () => {
-			// A new hand-off target should get a grid label, but a missing one must
-			// not take the deck down mid-meeting.
+			// `HandoffTarget` makes an unmapped target unconstructible through the
+			// type — adding one is now a compile error in `HANDOFF_HEADER` — so this
+			// case is reachable only by casting past it. The cast IS the point: the
+			// runtime `??` is a mid-meeting safety net for a target that arrives some
+			// other way (stale serialized deck, a `to` widened in a later refactor).
+			// A worse grid label must never take the deck down. Keep both.
 			expect(
 				contentHeader({
 					kind: "handoff",
 					from: { role: "Toastmaster of the Day", name: "Faisal" },
-					to: "the Joke Master",
+					to: "the Joke Master" as HandoffTarget,
 				}),
 			).toBe("Hand-off");
 		});

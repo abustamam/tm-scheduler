@@ -28,6 +28,7 @@ import {
 import {
 	buildSlideDeck,
 	type ClubForDeck,
+	type HandoffTarget,
 	type MeetingForDeck,
 	type Slide,
 } from "./agenda-slides";
@@ -78,8 +79,11 @@ type Section =
  * meeting. A club running none of those collapses them on BOTH surfaces, since
  * both read the same gates, so nothing asymmetric can hide there. The
  * full-club sequence test below pins each of them by position anyway.
+ *
+ * Keyed by `HandoffTarget`, not `string`: a fifth target added to the deck is a
+ * compile error here rather than a silent `unmapped-handoff:` row.
  */
-const HANDOFF_SECTION: Record<string, Section> = {
+const HANDOFF_SECTION: Record<HandoffTarget, Section> = {
 	"the speakers": "handoffSpeakers",
 	"the Table Topics Master": "handoffTableTopics",
 	"the General Evaluator": "handoffGeneralEvaluator",

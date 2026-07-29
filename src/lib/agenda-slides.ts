@@ -43,7 +43,7 @@ export type ClubForDeck = {
 /** Carried by all three vote slides — the ends of the speech, Table Topics and
  *  evaluation segments. True when the club runs a Timer, so the slide asks for
  *  the timer's report before the vote. Each of those beats' run-sheet
- *  `fallback` drops its timer's-report clause on exactly the same signal
+ *  `fallbacks` drop the timer's-report clause on exactly the same signal
  *  (#367): a club with no Timer still votes, it just has no report to call for
  *  and nobody to call on for it. */
 type VoteTiming = {
@@ -56,6 +56,24 @@ type VoteTiming = {
 	 *  nobody holds. The vote still happens either way. */
 	caller: LegendEntry | null;
 };
+
+/**
+ * Every segment a hand-off can hand to (#363). Prose rather than a role
+ * reference, because a hand-off's target is sometimes a group.
+ *
+ * A closed union, not `string`, because the four values are duplicated as
+ * lookup keys in two other places — `HANDOFF_HEADER` (slide-layout.ts), which
+ * names the slide in the projector's jump grid, and `HANDOFF_SECTION`
+ * (agenda-parity.test.ts), which gives it a parity identity. Nothing else
+ * type-checks that coupling: with a bare `string`, a fifth target added later
+ * would compile fine and silently take the bare "Hand-off" grid label. Now it
+ * is a compile error in both maps.
+ */
+export type HandoffTarget =
+	| "the speakers"
+	| "the Table Topics Master"
+	| "the General Evaluator"
+	| "the speech evaluators";
 
 /** One projected slide. Date formatting is deferred to the renderer. */
 export type Slide =
@@ -72,12 +90,11 @@ export type Slide =
 	| { kind: "toastmaster"; name: string }
 	| {
 			/** A 0-minute hand-off beat (#363), projected so the person on deck has
-			 *  the cue on screen at the moment they need it. `to` is prose ("the
-			 *  General Evaluator", "the speakers") rather than a role reference,
-			 *  because a hand-off's target is sometimes a group. */
+			 *  the cue on screen at the moment they need it. See `HandoffTarget`
+			 *  for why `to` is a closed union of prose rather than a role. */
 			kind: "handoff";
 			from: LegendEntry;
-			to: string;
+			to: HandoffTarget;
 	  }
 	| { kind: "toastmasterIntro"; theme: string | null; word: string | null }
 	| {
@@ -283,7 +300,7 @@ function holder(slots: AgendaSlot[], role: RoleRef): LegendEntry | null {
  * Push a hand-off slide when both the introducer and the target exist.
  *
  * The two conditions are the run sheet's two, in the same order: `from` is the
- * beat's resolved owner (already through its `fallback`, at the call site), and
+ * beat's resolved owner (already through its `fallbacks`, at the call site), and
  * `present` is its `requiresAnyOf` gate — a hand-off must never promise the room
  * someone the club is not running, and carries no `renderUnowned`, so an
  * unowned hand-off is dropped rather than projected against a bare role name.
@@ -291,7 +308,7 @@ function holder(slots: AgendaSlot[], role: RoleRef): LegendEntry | null {
 function pushHandoff(
 	deck: Slide[],
 	from: LegendEntry | null,
-	to: string,
+	to: HandoffTarget,
 	present: boolean,
 ): void {
 	if (from != null && present) deck.push({ kind: "handoff", from, to });
@@ -400,6 +417,11 @@ export function buildSlideDeck({
 	}
 
 	const generalEvaluator = byRole(slots, ROLE.generalEvaluator);
+	/** The two other owners the slides below resolve, hoisted for the same reason
+	 *  `geOwner` is: they are each read from four or five places, and a re-derived
+	 *  `holder()` is a place that can start answering differently. */
+	const tmOwner = holder(slots, ROLE.toastmaster);
+	const ttOwner = holder(slots, ROLE.tableTopicsMaster);
 	/**
 	 * Whoever is actually doing the General Evaluator's job this meeting (#363).
 	 *
@@ -414,8 +436,7 @@ export function buildSlideDeck({
 	 * `null` only when neither role has a slot — then the beats have nowhere to
 	 * fall back to and both surfaces drop the section together.
 	 */
-	const geOwner =
-		holder(slots, ROLE.generalEvaluator) ?? holder(slots, ROLE.toastmaster);
+	const geOwner = holder(slots, ROLE.generalEvaluator) ?? tmOwner;
 	// The functionary intro. Gated exactly as the run sheet gates it: the owning
 	// role has a slot AND the club runs at least one functionary to introduce.
 	const introOwner = geIntroducesFunctionaries
@@ -430,7 +451,7 @@ export function buildSlideDeck({
 	if (geIntroducesFunctionaries) {
 		pushHandoff(
 			deck,
-			holder(slots, ROLE.toastmaster),
+			tmOwner,
 			"the General Evaluator",
 			generalEvaluator.length > 0,
 		);
@@ -451,12 +472,7 @@ export function buildSlideDeck({
 	const speakers = byRole(slots, ROLE.speaker).sort(
 		(a, b) => a.slotIndex - b.slotIndex,
 	);
-	pushHandoff(
-		deck,
-		holder(slots, ROLE.toastmaster),
-		"the speakers",
-		speakers.length > 0,
-	);
+	pushHandoff(deck, tmOwner, "the speakers", speakers.length > 0);
 	if (speakers.length > 0) {
 		const multi = speakers.length > 1;
 		speakers.forEach((s, i) => {
@@ -474,17 +490,12 @@ export function buildSlideDeck({
 			kind: "voteSpeaker",
 			names: assignedNames(speakers),
 			hasTimer,
-			caller: holder(slots, ROLE.toastmaster),
+			caller: tmOwner,
 		});
 	}
 
 	const tableTopics = byRole(slots, ROLE.tableTopicsMaster);
-	pushHandoff(
-		deck,
-		holder(slots, ROLE.toastmaster),
-		"the Table Topics Master",
-		tableTopics.length > 0,
-	);
+	pushHandoff(deck, tmOwner, "the Table Topics Master", tableTopics.length > 0);
 	if (tableTopics.length > 0) {
 		deck.push({
 			kind: "tableTopics",
@@ -499,18 +510,18 @@ export function buildSlideDeck({
 		deck.push({
 			kind: "voteTableTopics",
 			hasTimer,
-			caller: holder(slots, ROLE.tableTopicsMaster),
+			caller: ttOwner,
 		});
 	}
 
 	// The Table Topics Master is holding the room when the segment ends, so they
-	// hand it to the General Evaluator. The `??` is the beat's `fallback: { unless:
-	// TABLE_TOPICS_ROLE, owner: TOASTMASTER_ROLE }`: with no Table Topics segment
-	// the Toastmaster never gave the room away, so the hand-off stays on them
-	// rather than disappearing (#363).
+	// hand it to the General Evaluator. The `??` is the beat's `fallbacks: [{
+	// unless: TABLE_TOPICS_ROLE, owner: TOASTMASTER_ROLE }]`: with no Table Topics
+	// segment the Toastmaster never gave the room away, so the hand-off stays on
+	// them rather than disappearing (#363).
 	pushHandoff(
 		deck,
-		holder(slots, ROLE.tableTopicsMaster) ?? holder(slots, ROLE.toastmaster),
+		ttOwner ?? tmOwner,
 		"the General Evaluator",
 		generalEvaluator.length > 0,
 	);

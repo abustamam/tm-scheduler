@@ -324,9 +324,31 @@ function OfficerGrid({
  *  segment block: `buildTimeline` gives it the clock time of the row it
  *  introduces, so an equally-weighted block reads as a duplicate of that row.
  *  The band drops the repeated stamp and is indented past its layout's time
- *  column, leaving the clock gutter a clean ruler down the page. `who · detail`
+ *  column, leaving the clock gutter a clean ruler down the page. `who — detail`
  *  on one line keeps the holder's name without needing the beat's copy to be
  *  recased.
+ *
+ *  The separator is an EM DASH, not the middot the rest of the sheet uses,
+ *  because `row.who` ALREADY carries one ("Toastmaster · Lee P." — the timing
+ *  layout splits on it). Joining with a second middot printed `Role · Name ·
+ *  Detail`: three peers, two identical separators, and at this size there is no
+ *  weight or colour headroom to carry the boundary instead. Worst on the timing
+ *  layout, whose literal Role / Segment column headers promise exactly that
+ *  boundary. Every other row site differentiates it (narrative: `who` at 700
+ *  with `detail` on its own muted line; grid: bold `who` then smaller muted
+ *  `detail`; timing: separate cells), so the band was the one place it read
+ *  flat. Italicising `detail` alone was the alternative, but the whole-band
+ *  italic is a semantic this component owns and a call site cannot reach.
+ *
+ *  The leading elbow is drawn with BORDERS, not "↳" (U+21B3): Manrope is served
+ *  over the Google Fonts css2 API with a unicode-range that excludes it
+ *  (src/styles.css), so the glyph always fell through to ui-sans-serif — a
+ *  different face, weight and baseline from every character beside it — and the
+ *  band's `fontStyle: italic` then synthesised an oblique on top, so it printed
+ *  visibly slanted and read as an artifact. In a PDF pipeline whose fallback
+ *  chain lacks the glyph it degrades to tofu. A 5px box with two borders is
+ *  font-independent, and stays `aria-hidden`: the band's own text carries the
+ *  meaning.
  *
  *  `fontSize`, `padding` and `chrome` come from the call site: the four layouts
  *  have different type scales, gutters and row rules, and a band that ignores
@@ -359,8 +381,21 @@ function HandoffBand({
 				fontStyle: "italic",
 			}}
 		>
-			<span aria-hidden>↳</span>
-			<span>{`${row.who} · ${row.detail}`}</span>
+			<span
+				aria-hidden
+				style={{
+					flex: "none",
+					width: 5,
+					height: 5,
+					borderLeft: `1px solid ${MUTED}`,
+					borderBottom: `1px solid ${MUTED}`,
+					// Sits the elbow's foot on the text's baseline at any of the four
+					// call sites' sizes: half-leading (fontSize × .175 at lineHeight
+					// 1.35) plus the face's ascent (≈ .78em), less the box's own height.
+					marginTop: fontSize * 0.955 - 5,
+				}}
+			/>
+			<span>{`${row.who} — ${row.detail}`}</span>
 		</div>
 	);
 }
@@ -423,6 +458,13 @@ function RunNarrative({
 							borderBottom: i < rows.length - 1 ? HAIR : undefined,
 						}}
 					>
+						{/* Test hook only — nothing renders off it. It marks the clock-stamp
+						    cells so the suite can assert "a hand-off repeats no clock stamp"
+						    (#363) by collecting every stamp on the page: a `HandoffBand` has
+						    no such cell, so a band that started printing one would show up
+						    as an extra entry. Matching the stamps as text instead would pass
+						    on a band that echoed the row below it. All three row-rendering
+						    sites carry it; keep them in sync. */}
 						<div
 							data-row-time={r.time}
 							style={{
@@ -734,6 +776,32 @@ function EditorialLayout({
 // reduction. The cheap inventory, when it is needed: ~16px across the three
 // section gaps and the footer margin, plus ~10px from halving the band's
 // padding. Past that it means re-tuning the row rhythm.
+//
+// ALL FOUR LAYOUTS, measured in Chromium after webfonts settled, on the same
+// 23-row MCF agenda — grid came out at 1114px here against the 1108px above, so
+// these are the same sheet. Each figure is for the RUN-OF-SHOW page (page 2 on
+// the two-page layouts); `band` is what the hand-off band's italic actually
+// lands at once FitPage has scaled the page:
+//
+//   timing     1056px  scale 1.000  band 7.50pt
+//   grid       1114px  scale 0.946  band 7.10pt
+//   editorial  1299px  scale 0.811  band 6.09pt
+//   spacious   1500px  scale 0.703  band 6.06pt
+//
+// Editorial, not grid, is the tight one: it carries header, roles roster,
+// officers, meets/location, mission, announcements AND the run of show on one
+// FitPage. Two things follow. (1) Its height is set ENTIRELY by the main
+// column — 1198px of roster + run of show against a 394px left rail — so
+// trimming the rail (mission/announcements gaps) buys nothing; only the 18px
+// above Run of Show is in the tall column, and cutting it all is worth +0.07pt.
+// (2) The band is NOT the outlier there the way it was on grid: editorial's own
+// `detail` is 10.5px, so at 0.811 it prints 5.95pt against the band's 6.09pt.
+// Everything on that page is small together, which is a row-rhythm question for
+// editorial rather than anything the band introduced.
+//
+// A denser but ordinary agenda (3 speakers/3 evaluators, 25 rows) pushes
+// editorial to 1394px/0.756 and spacious to 1620px/0.651 — band 5.67pt and
+// 5.61pt. Neither has headroom for another full-height row either.
 // ---------------------------------------------------------------------------
 function GridLayout({
 	header,
@@ -836,13 +904,21 @@ function GridLayout({
 					{rows.map((r, i) =>
 						// This layout's language is a ruled, zebra-striped table, so the
 						// band keeps the stripe and the rule and goes quiet instead:
-						// no spine, no stamp, smaller italic type, half the row padding.
+						// no spine, no stamp, italic type, half the row padding.
 						// Indented to 68px, where the segment column starts.
+						//
+						// 10px, matching this layout's `detail` (the `who` beside it is
+						// 10.5) rather than dropping under it: at FitPage's ~0.951 the
+						// band was the smallest sustained prose on the sheet (~6.8pt),
+						// and it is running italic, which is the hardest thing on the
+						// page to read. Same argument `TimingLegend` makes above. The
+						// ~0.7px per band it costs comes out of the headroom inventory
+						// the header comment enumerates.
 						r.handoff ? (
 							<HandoffBand
 								key={rowKey(r, i)}
 								row={r}
-								fontSize={9.5}
+								fontSize={10}
 								padding="2px 12px 2px 68px"
 								chrome={{
 									background: i % 2 === 1 ? "#fafdfb" : "#fff",
@@ -862,6 +938,7 @@ function GridLayout({
 									borderBottom: i < rows.length - 1 ? HAIR : undefined,
 								}}
 							>
+								{/* Test hook — see `RunNarrative`'s note on `data-row-time`. */}
 								<div
 									data-row-time={r.time}
 									style={{
@@ -1613,6 +1690,7 @@ function TimingLayout({
 												: "#fff",
 									}}
 								>
+									{/* Test hook — see `RunNarrative`'s note on `data-row-time`. */}
 									<div
 										data-row-time={r.time}
 										style={{
