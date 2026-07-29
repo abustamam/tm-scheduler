@@ -332,3 +332,47 @@ findings. Running `/review` first mostly avoids this. If it still fires and the 
 all-informational, say so and proceed — offer that rather than waiting to be asked. Fixing
 informational findings is not free: one such fix in v1.1.0.0 introduced a user-visible regression
 that the next round had to catch.
+
+### Issue pipeline order
+
+The other, more common workflow: bugs are found during a live club meeting, filed as issues from the
+room, then `/triage` labels them at home and `ready-for-agent` ones run autonomously.
+
+```
+meeting → file issues → /triage → ready-for-agent → /investigate → implement → /qa → /ship
+                               └→ ready-for-human → /grilling → implement → /qa → /ship
+                               └→ needs-info → wait
+```
+
+**Do NOT run the feature pipeline on a single issue.** brainstorming → grilling → writing-plans →
+subagent-driven-development earns its cost on a cross-surface feature; on a 30-line bug fix it is
+pure overhead. Keep `/grilling` for `ready-for-human` issues, where the *shape* of the fix is the
+open question rather than its location.
+
+Two insertions, both on the agent path:
+
+- **`/investigate` before implementing a bug.** This is the failure mode of an autonomous
+  `ready-for-agent` run: given "the banner says the wrong thing", an agent patches the banner.
+  #448 is the worked example — the issue itself listed "soften the banner copy" as an option, and
+  the real cause was one line in a marker pass two functions away. Patching the copy would have
+  looked like success while leaving a 35-minute Table Topics segment running against a 25-minute cap.
+- **`/qa` after implementing, before the next meeting.** The loop's real defect is verification
+  latency: a bug found at meeting N is fixed at home and confirmed at meeting N+1, with a live club
+  as the only QA surface. `/qa` drives a real browser and collapses that to minutes. `/qa-only` for
+  a report without fixes. Note `/browse` needs `GSTACK_CHROMIUM_NO_SANDBOX=1` here.
+
+**`/ship` is cheap on a small diff — use it as-is.** It skips all specialists under 50 changed lines
+and the Codex structured review under 200. The three-run loop described above was a 1,400-line
+feature; the cost scales with the diff, not with the tool.
+
+**Batch a meeting's findings.** Five small fixes shipped separately means five version bumps and five
+PRs. Group related ones into one PR with a single PATCH or MICRO bump; `/ship` will not decide that.
+
+Two skills worth running periodically rather than per-issue:
+
+- **`/retro`** — `/ship` Step 20 already writes coverage and plan metrics to `~/.gstack/projects/`
+  for exactly this, and nothing has ever read them. Over a few meetings' issues it shows which
+  surfaces keep breaking.
+- **`/improve`** — the proactive complement to meeting QA: one finds what broke, the other what is
+  fragile. It produces self-contained plans for other agents to execute, which matches how work gets
+  done here.
