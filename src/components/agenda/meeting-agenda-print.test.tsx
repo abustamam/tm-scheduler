@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { TimelineRow } from "#/lib/agenda-timing";
 import {
 	type AgendaHeader,
@@ -196,6 +196,140 @@ describe("MeetingAgendaPrint announcements", () => {
 			expect(screen.getByText("Meeting Notes")).toBeTruthy();
 			expect(screen.queryByText("Bring a guest")).toBeNull();
 			expect(screen.getByText(/Tonight.s Votes/)).toBeTruthy();
+		});
+	}
+});
+
+// #363 — a hand-off books 0 minutes, so `buildTimeline` stamps it with the clock
+// time of the row it introduces. Rendered as a full segment block it reads as a
+// duplicate of that row, so every layout renders it as a compact band instead.
+describe("MeetingAgendaPrint hand-off band", () => {
+	// A real stretch of an MCF agenda: the opening pair of same-owner hand-offs
+	// (a club with a General Evaluator but no functionaries — the case the old
+	// `${time}-${who}` key collided on), then the Table Topics → General
+	// Evaluator → evaluators chain, where three rows share one stamp.
+	const handoffRows: TimelineRow[] = [
+		{
+			who: "Toastmaster · Lee P.",
+			detail: "Opens meeting · introduces the theme",
+			minutes: 3,
+			marks: null,
+			time: "7:03",
+		},
+		{
+			who: "Toastmaster · Lee P.",
+			detail: "Introduces the General Evaluator",
+			minutes: 0,
+			marks: null,
+			handoff: true,
+			time: "7:06",
+		},
+		{
+			who: "Toastmaster · Lee P.",
+			detail: "Introduces the speakers",
+			minutes: 0,
+			marks: null,
+			handoff: true,
+			time: "7:06",
+		},
+		{
+			who: "Speaker 1 · Jane Doe",
+			detail: "Prepared speech",
+			minutes: 6,
+			marks: { green: 4, yellow: 5, red: 6 },
+			time: "7:06",
+		},
+		{
+			who: "Table Topics Master · Rasheed",
+			detail:
+				"Calls for the Timer's report · opens voting for Best Table Topics",
+			minutes: 1,
+			marks: null,
+			time: "7:20",
+		},
+		{
+			who: "Table Topics Master · Rasheed",
+			detail: "Introduces the General Evaluator",
+			minutes: 0,
+			marks: null,
+			handoff: true,
+			time: "7:21",
+		},
+		{
+			who: "General Evaluator · Riyaz",
+			detail: "Introduces the speech evaluators",
+			minutes: 0,
+			marks: null,
+			handoff: true,
+			time: "7:21",
+		},
+		{
+			who: "Evaluator 1 · Sudheer",
+			detail: "Evaluates Jagpal Singh",
+			minutes: 3,
+			marks: null,
+			time: "7:21",
+		},
+	];
+
+	/** The stamps the four timed beats own; the four hand-offs print none. */
+	const TIMED_STAMPS = ["7:03", "7:06", "7:20", "7:21"];
+
+	function renderHandoffs(layout: AgendaLayout) {
+		return render(
+			<MeetingAgendaPrint
+				layout={layout}
+				header={header}
+				roles={[{ label: "Toastmaster", name: "Lee P." }]}
+				officers={[]}
+				explainers={[]}
+				rows={handoffRows}
+			/>,
+		);
+	}
+
+	for (const layout of ["grid", "editorial", "spacious", "timing"] as const) {
+		it(`${layout}: prints every hand-off, holder and cue on one line`, () => {
+			renderHandoffs(layout);
+			expect(
+				screen.getByText(
+					"Toastmaster · Lee P. · Introduces the General Evaluator",
+				),
+			).toBeTruthy();
+			expect(
+				screen.getByText("Toastmaster · Lee P. · Introduces the speakers"),
+			).toBeTruthy();
+			expect(
+				screen.getByText(
+					"Table Topics Master · Rasheed · Introduces the General Evaluator",
+				),
+			).toBeTruthy();
+			expect(
+				screen.getByText(
+					"General Evaluator · Riyaz · Introduces the speech evaluators",
+				),
+			).toBeTruthy();
+		});
+
+		it(`${layout}: repeats no clock stamp on a hand-off`, () => {
+			const { container } = renderHandoffs(layout);
+			const stamps = Array.from(
+				container.querySelectorAll("[data-row-time]"),
+			).map((el) => el.textContent);
+			expect(stamps).toEqual(TIMED_STAMPS);
+		});
+
+		it(`${layout}: keys the run-of-show rows uniquely`, () => {
+			const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+			try {
+				renderHandoffs(layout);
+				const dupes = spy.mock.calls.filter((call) =>
+					call.some((arg) => String(arg).includes("same key")),
+				);
+				expect(dupes).toEqual([]);
+			} finally {
+				spy.mockRestore();
+			}
 		});
 	}
 });

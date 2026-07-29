@@ -320,6 +320,62 @@ function OfficerGrid({
 	);
 }
 
+/** A 0-minute hand-off (#363), rendered as a thin band rather than a full
+ *  segment block: `buildTimeline` gives it the clock time of the row it
+ *  introduces, so an equally-weighted block reads as a duplicate of that row.
+ *  The band drops the repeated stamp and is indented past its layout's time
+ *  column, leaving the clock gutter a clean ruler down the page. `who · detail`
+ *  on one line keeps the holder's name without needing the beat's copy to be
+ *  recased.
+ *
+ *  `fontSize`, `padding` and `style` come from the call site: the four layouts
+ *  have different type scales, gutters and row rules, and a band that ignores
+ *  them reads as a broken row rather than a quieter one. */
+function HandoffBand({
+	row,
+	fontSize,
+	padding,
+	style,
+}: {
+	row: TimelineRow;
+	fontSize: number;
+	padding: string;
+	style?: React.CSSProperties;
+}) {
+	return (
+		<div
+			style={{
+				display: "flex",
+				gap: 6,
+				padding,
+				fontSize,
+				lineHeight: 1.35,
+				color: MUTED,
+				fontStyle: "italic",
+				...style,
+			}}
+		>
+			<span aria-hidden>↳</span>
+			<span>{`${row.who} · ${row.detail}`}</span>
+		</div>
+	);
+}
+
+/** A run-of-show row's React key, for all three places that render the rows.
+ *  Position IS the identity: the list is rebuilt wholesale and never reordered,
+ *  and no combination of fields is unique. `${time}-${who}` was, until #363 —
+ *  a hand-off books 0 minutes, so it carries the stamp of the beat it
+ *  introduces, and a club with a General Evaluator but no functionaries gets
+ *  two Toastmaster hand-offs back to back, identical in both fields.
+ *
+ *  The index is deliberate, not an oversight, and lives here rather than in six
+ *  `biome-ignore lint/suspicious/noArrayIndexKey` comments across the three
+ *  render sites — same reasoning the ignores elsewhere in this repo carry, said
+ *  once. Never call this on a list that reorders. */
+function rowKey(r: TimelineRow, i: number): string {
+	return `${i}-${r.time}-${r.who}`;
+}
+
 /** The narrative run-of-show (editorial / spacious): a colored-spine list.
  *  `timingColors` swaps the muted min–max range for the colored green·amber·red
  *  trio (used by the one-page editorial layout). */
@@ -336,11 +392,25 @@ function RunNarrative({
 	return (
 		<div>
 			{rows.map((r, i) => {
+				// No spine and no bottom rule: the hand-off sits under the hairline of
+				// the beat that hands over and runs straight into the beat it
+				// introduces, which is the grouping the room actually experiences.
+				// Indented past the 4px spine and the time column so the stamps stay a
+				// single unbroken column.
+				if (r.handoff)
+					return (
+						<HandoffBand
+							key={rowKey(r, i)}
+							row={r}
+							fontSize={lg ? 11.5 : 10}
+							padding={lg ? "4px 0 4px 83px" : "3px 0 3px 69px"}
+						/>
+					);
 				const color = beatColor(r.who);
 				const highlight = isHighlighted(r.who);
 				return (
 					<div
-						key={`${r.time}-${r.who}`}
+						key={rowKey(r, i)}
 						style={{
 							display: "flex",
 							borderLeft: `4px solid ${color}`,
@@ -350,6 +420,7 @@ function RunNarrative({
 						}}
 					>
 						<div
+							data-row-time
 							style={{
 								flex: "none",
 								width: lg ? 64 : 54,
@@ -745,52 +816,70 @@ function GridLayout({
 						overflow: "hidden",
 					}}
 				>
-					{rows.map((r, i) => (
-						<div
-							key={`${r.time}-${r.who}`}
-							style={{
-								display: "flex",
-								background: isHighlighted(r.who)
-									? MINT
-									: i % 2 === 1
-										? "#fafdfb"
-										: "#fff",
-								borderBottom: i < rows.length - 1 ? HAIR : undefined,
-							}}
-						>
-							<div
+					{rows.map((r, i) =>
+						// This layout's language is a ruled, zebra-striped table, so the
+						// band keeps the stripe and the rule and goes quiet instead:
+						// no spine, no stamp, smaller italic type, half the row padding.
+						// Indented to 68px, where the segment column starts.
+						r.handoff ? (
+							<HandoffBand
+								key={rowKey(r, i)}
+								row={r}
+								fontSize={9.5}
+								padding="2px 12px 2px 68px"
 								style={{
-									flex: "none",
-									width: 60,
-									borderLeft: `4px solid ${beatColor(r.who)}`,
-									padding: "4px 0 4px 10px",
-									fontSize: 10.5,
-									fontWeight: 700,
-									color: INK,
+									background: i % 2 === 1 ? "#fafdfb" : "#fff",
+									borderBottom: i < rows.length - 1 ? HAIR : undefined,
+								}}
+							/>
+						) : (
+							<div
+								key={rowKey(r, i)}
+								style={{
+									display: "flex",
+									background: isHighlighted(r.who)
+										? MINT
+										: i % 2 === 1
+											? "#fafdfb"
+											: "#fff",
+									borderBottom: i < rows.length - 1 ? HAIR : undefined,
 								}}
 							>
-								{r.time}
-							</div>
-							<div style={{ flex: 1, padding: "4px 12px 4px 8px" }}>
-								<span style={{ fontSize: 10.5, fontWeight: 700 }}>
-									{r.who}.
-								</span>{" "}
-								<span style={{ fontSize: 10, color: MUTED }}>{r.detail}</span>
-							</div>
-							{r.marks ? (
 								<div
+									data-row-time
 									style={{
 										flex: "none",
-										display: "flex",
-										alignItems: "center",
-										padding: "4px 12px 4px 0",
+										width: 60,
+										borderLeft: `4px solid ${beatColor(r.who)}`,
+										padding: "4px 0 4px 10px",
+										fontSize: 10.5,
+										fontWeight: 700,
+										color: INK,
 									}}
 								>
-									<TimingTrio marks={r.marks} size={9.5} />
+									{r.time}
 								</div>
-							) : null}
-						</div>
-					))}
+								<div style={{ flex: 1, padding: "4px 12px 4px 8px" }}>
+									<span style={{ fontSize: 10.5, fontWeight: 700 }}>
+										{r.who}.
+									</span>{" "}
+									<span style={{ fontSize: 10, color: MUTED }}>{r.detail}</span>
+								</div>
+								{r.marks ? (
+									<div
+										style={{
+											flex: "none",
+											display: "flex",
+											alignItems: "center",
+											padding: "4px 12px 4px 0",
+										}}
+									>
+										<TimingTrio marks={r.marks} size={9.5} />
+									</div>
+								) : null}
+							</div>
+						),
+					)}
 				</div>
 
 				<AnnouncementsBlock
@@ -1472,11 +1561,29 @@ function TimingLayout({
 						}}
 					>
 						{rows.map((r, i) => {
+							// The one place with a real column header, so the band keeps the
+							// table's stripe and rule and spans the Role + Segment columns
+							// as one line — starting at 58px, the Role column's own edge —
+							// rather than filling four cells with a stampless echo of the
+							// row below it.
+							if (r.handoff)
+								return (
+									<HandoffBand
+										key={rowKey(r, i)}
+										row={r}
+										fontSize={10}
+										padding="3px 12px 3px 58px"
+										style={{
+											background: i % 2 === 1 ? "#fafdfb" : "#fff",
+											borderBottom: i < rows.length - 1 ? HAIR : undefined,
+										}}
+									/>
+								);
 							const [role, ...rest] = r.who.split(" · ");
 							const name = rest.join(" · ");
 							return (
 								<div
-									key={`${r.time}-${r.who}`}
+									key={rowKey(r, i)}
 									style={{
 										display: "flex",
 										alignItems: "center",
@@ -1490,6 +1597,7 @@ function TimingLayout({
 									}}
 								>
 									<div
+										data-row-time
 										style={{
 											flex: "none",
 											width: 46,
