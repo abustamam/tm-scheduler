@@ -82,6 +82,12 @@ const filledTeam = (team: LegendEntry[]): LegendEntry[] =>
  *  still the Grammarian's, so the role is credited without the placeholder;
  *  a club that runs no Grammarian gets no line rather than a credit to a role
  *  it never configured. */
+/** The segment leader who calls a vote (#363), as the vote slides show them —
+ *  the same "Role · Name" the printed row's `who` column carries, so the two
+ *  surfaces credit the same person in the same words. */
+const callerLine = (caller: LegendEntry): Line =>
+	muted(`${caller.role} · ${caller.name}`);
+
 function presenterLine(presenter: LegendEntry | null): string | null {
 	if (presenter == null) return null;
 	return presenter.name === OPEN_LABEL
@@ -107,6 +113,19 @@ export function slideLayout(slide: Slide): SlideLayout {
 			return content("Toastmaster", {
 				form: "centered",
 				lines: [head(slide.name)],
+			});
+		case "handoff":
+			// Two lines, both `head`: the cue is the whole slide, so neither half is
+			// subordinate to the other. The holder is named the way the printed
+			// hand-off band names them — including the "— open —" placeholder for an
+			// enabled-but-unclaimed role, since suppressing it here would drop a cue
+			// the printed agenda keeps.
+			return content("Hand-off", {
+				form: "centered",
+				lines: [
+					head(`${slide.from.role} · ${slide.from.name}`),
+					head(`introduces ${slide.to}`),
+				],
 			});
 		case "toastmasterIntro": {
 			const lines: Line[] = [];
@@ -166,9 +185,12 @@ export function slideLayout(slide: Slide): SlideLayout {
 			// beat's fallback drops the same clause (#367), so a club with no Timer
 			// prints "Toastmaster · Opens voting for Best Speaker" and must not be
 			// told to call for a report from a role nobody holds.
-			const lines: Line[] = slide.hasTimer
-				? [head("Ask for speaking time.")]
-				: [];
+			const lines: Line[] = [];
+			// The segment leader who calls the report and the vote (#363), muted and
+			// first: it is attribution — whose cue this is — not one of the
+			// instructions the room is being read.
+			if (slide.caller) lines.push(callerLine(slide.caller));
+			if (slide.hasTimer) lines.push(head("Ask for speaking time."));
 			lines.push(
 				head("Please Vote for Best Speaker:"),
 				...slide.names.map(name),
@@ -196,9 +218,9 @@ export function slideLayout(slide: Slide): SlideLayout {
 		case "voteTableTopics": {
 			// The Best-Table-Topics vote beat's fallback drops the timer's-report
 			// clause on the same signal.
-			const lines: Line[] = slide.hasTimer
-				? [head("Ask for Table Topics times.")]
-				: [];
+			const lines: Line[] = [];
+			if (slide.caller) lines.push(callerLine(slide.caller));
+			if (slide.hasTimer) lines.push(head("Ask for Table Topics times."));
 			lines.push(head("Please Vote for Best Table Topic Speaker:"));
 			return content("Vote for Best Table Topic", {
 				form: "centered",
@@ -222,9 +244,9 @@ export function slideLayout(slide: Slide): SlideLayout {
 		}
 		case "voteEvaluator": {
 			// The Best-Evaluator vote beat's fallback, likewise.
-			const lines: Line[] = slide.hasTimer
-				? [head("Ask for timer’s report:")]
-				: [];
+			const lines: Line[] = [];
+			if (slide.caller) lines.push(callerLine(slide.caller));
+			if (slide.hasTimer) lines.push(head("Ask for timer’s report:"));
 			lines.push(
 				head("Please Vote for Best Evaluator:"),
 				...slide.names.map(name),

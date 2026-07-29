@@ -12,7 +12,13 @@
 // `geIntroducesFunctionaries` × role-set matrix.
 
 import { describe, expect, it } from "vitest";
-import type { AgendaSlot, RunOfShowConfig } from "./agenda-runsheet";
+import type {
+	AgendaRow,
+	AgendaSlot,
+	BeatId,
+	LegendEntry,
+	RunOfShowConfig,
+} from "./agenda-runsheet";
 import {
 	buildRunOfShow,
 	DEFAULT_SPEAKER_MINUTES,
@@ -30,10 +36,14 @@ import {
 type Section =
 	| "toastmasterOpens"
 	| "functionaryIntro"
+	| "handoffSpeakers"
 	| "speech"
 	| "voteSpeaker"
+	| "handoffTableTopics"
 	| "tableTopics"
 	| "voteTableTopics"
+	| "handoffGeneralEvaluator"
+	| "handoffEvaluators"
 	| "evaluation"
 	| "voteEvaluator"
 	| "evaluatorEvaluation"
@@ -49,22 +59,42 @@ type Section =
 // ---------------------------------------------------------------------------
 
 /**
- * A hand-off beat's section: none YET (#363). `buildSlideDeck` grows hand-off
- * slides in a later slice of the same issue, at which point these stop being
- * exclusions and become a compared section like any other. Until then they are
- * excluded exactly as every other slide-less beat is — named, with the reason —
- * and the run-sheet suite asserts their owner, gate and position directly.
+ * A hand-off's section is its TARGET, not merely its kind (#363).
+ *
+ * All five hand-off beats project the SAME slide kind, so a kind-keyed section
+ * would give every hand-off one identity — and two of them are ADJACENT in the
+ * template: the Table Topics Master handing to the General Evaluator, then the
+ * General Evaluator handing to the speech evaluators. `dedupeConsecutive` would
+ * collapse that pair into one entry on both surfaces, and the harness would
+ * silently stop comparing one of them. That is the worst place to lose the
+ * check: those two beats have DIFFERENT gates (a General Evaluator vs. any
+ * evaluators) and different fallbacks, so they are exactly the pair most likely
+ * to diverge. Keying on the target keeps them distinct.
+ *
+ * The two hand-offs INTO the General Evaluator — MCF's opening one and the one
+ * out of Table Topics — do share an identity, deliberately: they are the same
+ * transition, and every club that runs a segment between them (any club with
+ * functionaries, speakers or Table Topics) separates them by most of the
+ * meeting. A club running none of those collapses them on BOTH surfaces, since
+ * both read the same gates, so nothing asymmetric can hide there. The
+ * full-club sequence test below pins each of them by position anyway.
  */
-const HANDOFF: Section | null = null;
+const HANDOFF_SECTION: Record<string, Section> = {
+	"the speakers": "handoffSpeakers",
+	"the Table Topics Master": "handoffTableTopics",
+	"the General Evaluator": "handoffGeneralEvaluator",
+	"the speech evaluators": "handoffEvaluators",
+};
 
 /**
  * Section identity of each beat `buildRunOfShow` emits, IN ORDER (the spec's
  * table, plus the guest-comments beat #352 inserts and the hand-off beats #363
  * inserts). `detail` pins each entry to the actual beat, so a reworded or
  * reordered template fails here with a readable diff instead of silently
- * mislabelling a section.
+ * mislabelling a section — and `id`, where the beat carries one, pins the two
+ * beats whose detail is identical ("Introduces the General Evaluator").
  */
-const BEATS: { detail: string; section: Section | null }[] = [
+const BEATS: { detail: string; section: Section | null; id?: BeatId }[] = [
 	// Sergeant-at-Arms, Call to Order. A room-logistics event beat with no
 	// counterpart in the deck: nothing is projected while phones go silent.
 	{
@@ -81,13 +111,16 @@ const BEATS: { detail: string; section: Section | null }[] = [
 		detail: "Introduces the {roles}; each explains their role",
 		section: "functionaryIntro",
 	},
-	{ detail: "Introduces the speakers", section: HANDOFF },
+	{ detail: "Introduces the speakers", section: "handoffSpeakers" },
 	{ detail: "Prepared speech", section: "speech" },
 	{
 		detail: "Calls for the Timer's report · opens voting for Best Speaker",
 		section: "voteSpeaker",
 	},
-	{ detail: "Introduces the Table Topics Master", section: HANDOFF },
+	{
+		detail: "Introduces the Table Topics Master",
+		section: "handoffTableTopics",
+	},
 	{
 		detail: "Impromptu topics using the Word of the Day",
 		section: "tableTopics",
@@ -96,14 +129,22 @@ const BEATS: { detail: string; section: Section | null }[] = [
 		detail: "Calls for the Timer's report · opens voting for Best Table Topics",
 		section: "voteTableTopics",
 	},
-	{ detail: "Introduces the General Evaluator", section: HANDOFF },
-	{ detail: "Introduces the speech evaluators", section: HANDOFF },
-	{ detail: "Evaluates a speaker", section: "evaluation" },
+	{
+		detail: "Introduces the General Evaluator",
+		section: "handoffGeneralEvaluator",
+		id: "geEvaluationHandoff",
+	},
+	{ detail: "Introduces the speech evaluators", section: "handoffEvaluators" },
+	{ detail: "Evaluates a speaker", section: "evaluation", id: "evaluation" },
 	{
 		detail: "Calls for the Timer's report · opens voting for Best Evaluator",
 		section: "voteEvaluator",
 	},
-	{ detail: "Evaluates the evaluators", section: "evaluatorEvaluation" },
+	{
+		detail: "Evaluates the evaluators",
+		section: "evaluatorEvaluation",
+		id: "evaluatorEvaluation",
+	},
 	{
 		detail: "Calls for the functionary reports",
 		section: "functionaryReports",
@@ -111,6 +152,7 @@ const BEATS: { detail: string; section: Section | null }[] = [
 	{
 		detail: "Overall meeting evaluation · returns control to the Toastmaster",
 		section: "generalEvaluation",
+		id: "generalEvaluation",
 	},
 	// The Toastmaster's awards handout. Compared as of #372: the beat is now
 	// gated on the scored segments and names only those categories, which is
@@ -138,9 +180,10 @@ const BEATS: { detail: string; section: Section | null }[] = [
 /** The one beat only MCF's variant carries (#363): the Toastmaster introducing
  *  the General Evaluator before handing them the room for the functionary
  *  introductions. The standard flow has no early GE appearance. */
-const GE_OPENING_INTRO_BEAT: { detail: string; section: Section | null } = {
+const GE_OPENING_INTRO_BEAT: (typeof BEATS)[number] = {
 	detail: "Introduces the General Evaluator",
-	section: HANDOFF,
+	section: "handoffGeneralEvaluator",
+	id: "geOpeningHandoff",
 };
 
 /** `BEATS`, for the variant in play: MCF's inserts the opening GE introduction
@@ -197,7 +240,11 @@ const SECTION_BY_SLIDE = {
 	awards: "awards",
 	// Ungated on both surfaces (#352): every meeting can have guests.
 	guestComments: "guestComments",
-} satisfies Record<Slide["kind"], Section | null>;
+	// `handoff` is deliberately absent: one slide kind covers five beats, so its
+	// section comes from the slide's TARGET via `HANDOFF_SECTION` (see the
+	// comment there) rather than from this kind-keyed map. `Exclude` names the
+	// carve-out, so adding any OTHER slide kind is still a compile error here.
+} satisfies Record<Exclude<Slide["kind"], "handoff">, Section | null>;
 
 /**
  * Deck slide kinds that project a DURATION, and the section — hence the beat —
@@ -281,6 +328,10 @@ function deckSections(slots: AgendaSlot[], config: RunOfShowConfig): string[] {
 	const deck = buildSlideDeck({ meeting, club, slots, ...config });
 	const out: string[] = [];
 	for (const slide of deck) {
+		if (slide.kind === "handoff") {
+			out.push(HANDOFF_SECTION[slide.to] ?? `unmapped-handoff:${slide.to}`);
+			continue;
+		}
 		// A kind absent from the map is surfaced in the diff rather than thrown,
 		// so one red run shows every divergence at once. `satisfies` above is the
 		// real guard; this is for readability.
@@ -472,6 +523,30 @@ const CASES: { name: string; slots: AgendaSlot[] }[] = [
 	{ name: "no speakers", slots: without("sp1", "sp2") },
 	{ name: "no Table Topics Master", slots: without("tt") },
 	{
+		// Both hand-off fallbacks fire at once (#363): with no Table Topics Master
+		// the Toastmaster still holds the room, and with no General Evaluator the
+		// Toastmaster is also who introduces the evaluators. One of the two rows
+		// (the one INTO the General Evaluator) disappears entirely, since there is
+		// nobody to introduce.
+		name: "neither Table Topics Master nor General Evaluator",
+		slots: without("tt", "ge"),
+	},
+	{
+		// …and the case where a fallback has nowhere to fall back TO: the hand-off
+		// into the General Evaluator is owned by the Table Topics Master, falls
+		// back to the Toastmaster, and neither exists. The beat carries no
+		// `renderUnowned`, so print drops the row and the deck must drop the slide.
+		name: "no Toastmaster of the Day and no Table Topics Master",
+		slots: without("tm", "tt"),
+	},
+	{
+		// The two hand-offs into the General Evaluator become ADJACENT here —
+		// nothing the club runs sits between them. Both surfaces collapse them the
+		// same way (see `HANDOFF_SECTION`); this is the config that proves it.
+		name: "Toastmaster and General Evaluator only",
+		slots: [tmod, ge],
+	},
+	{
 		name: "functionaries only (no leadership roles at all)",
 		slots: [timer, grammarian],
 	},
@@ -566,6 +641,11 @@ describe("run-sheet ⇄ deck parity harness", () => {
 			const beats = beatsFor(config);
 			expect(template).toHaveLength(beats.length);
 			expect(template.map((b) => b.detail)).toEqual(beats.map((b) => b.detail));
+			// Details alone stopped being unique when #363 added a second
+			// "Introduces the General Evaluator" beat, so the ids ride along: this is
+			// what makes the two entries above provably the beats they claim to be
+			// rather than each other.
+			expect(template.map((b) => b.id)).toEqual(beats.map((b) => b.id));
 		}
 	});
 
@@ -597,14 +677,20 @@ describe("run-sheet ⇄ deck section-order parity (#367)", () => {
 
 	it("the full nine-role club runs the whole spec'd sequence, in order", () => {
 		// Pins the shared order absolutely, so the matrix above cannot pass by
-		// both sides being wrong in the same way.
+		// both sides being wrong in the same way — including each hand-off's own
+		// position, which is what keeps the two into the General Evaluator from
+		// being interchangeable here.
 		const expected: Section[] = [
 			"toastmasterOpens",
 			"functionaryIntro",
+			"handoffSpeakers",
 			"speech",
 			"voteSpeaker",
+			"handoffTableTopics",
 			"tableTopics",
 			"voteTableTopics",
+			"handoffGeneralEvaluator",
+			"handoffEvaluators",
 			"evaluation",
 			"voteEvaluator",
 			"evaluatorEvaluation",
@@ -614,8 +700,14 @@ describe("run-sheet ⇄ deck section-order parity (#367)", () => {
 			"guestComments",
 		];
 		for (const config of CONFIGS) {
-			expect(printSections(FULL, config)).toEqual(expected);
-			expect(deckSections(FULL, config)).toEqual(expected);
+			// MCF's variant adds the one hand-off its swap needs: the Toastmaster
+			// introduces the General Evaluator before handing them the functionary
+			// intro. Everything after is the standard sequence.
+			const want: Section[] = config.geIntroducesFunctionaries
+				? ["toastmasterOpens", "handoffGeneralEvaluator", ...expected.slice(1)]
+				: expected;
+			expect(printSections(FULL, config)).toEqual(want);
+			expect(deckSections(FULL, config)).toEqual(want);
 		}
 	});
 });
@@ -644,6 +736,139 @@ describe("run-sheet ⇄ deck duration parity (#356)", () => {
 			]);
 		}
 	});
+});
+
+// ---------------------------------------------------------------------------
+// Hand-off + vote-caller content agreement (#363)
+// ---------------------------------------------------------------------------
+
+/**
+ * Ordering parity says the two surfaces show the same sections in the same
+ * order. It does NOT say they name the same PEOPLE, and the hand-off beats are
+ * where that gap bites: their owner is resolved through a `fallback` on the
+ * print side and through a `??` on the deck side, written separately. Two
+ * expressions of one rule, which is the shape a divergence hides in — so this
+ * compares the resolved owner itself, across the whole degenerate-club matrix.
+ *
+ * A hand-off row's `who` is always "Role · Name": the beats carry no
+ * `renderUnowned`, so an unowned hand-off is dropped rather than printed as a
+ * bare role, and the slide's `from` therefore has a counterpart for every row.
+ */
+const handoffRows = (
+	slots: AgendaSlot[],
+	config: RunOfShowConfig,
+): AgendaRow[] =>
+	expandRunSheet(slots, buildRunOfShow(config)).filter((r) => r.handoff);
+
+const handoffSlides = (slots: AgendaSlot[], config: RunOfShowConfig) =>
+	buildSlideDeck({ meeting, club, slots, ...config }).filter(
+		(s): s is Extract<Slide, { kind: "handoff" }> => s.kind === "handoff",
+	);
+
+/**
+ * The holder out of a row's `who` ("Toastmaster of the Day · Dana" ⇒ "Dana").
+ *
+ * The two surfaces label the ROLE differently and always have: `expandRunSheet`
+ * prints the BEAT's canonical `roleName` for every role row, while the deck's
+ * `LegendEntry`s — the legend, the Word-of-the-Day presenter, and now a
+ * hand-off's `from` — carry the slot's own name, which is the club's if they
+ * renamed it (#368). That difference is surface-wide and predates #363, so it
+ * is not this suite's to settle; the "renamed standard roles" case pins it
+ * explicitly below rather than letting it hide inside a mismatch here.
+ */
+const holderOf = (who: string): string | null => who.split(" · ")[1] ?? null;
+
+describe("hand-off agreement — deck ⇄ run sheet (#363)", () => {
+	for (const { name, slots } of CASES) {
+		for (const config of CONFIGS) {
+			const flag = config.geIntroducesFunctionaries
+				? "MCF variant"
+				: "standard";
+			it(`${name} — ${flag}`, () => {
+				// `Introduces ${to}` IS the beat's detail, so this compares the copy as
+				// well as the cast: same person, same target, same order.
+				expect(
+					handoffSlides(slots, config).map((s) => ({
+						person: s.from.name,
+						detail: `Introduces ${s.to}`,
+					})),
+				).toEqual(
+					handoffRows(slots, config).map((r) => ({
+						person: holderOf(r.who),
+						detail: r.detail,
+					})),
+				);
+			});
+		}
+	}
+
+	it("the full club's hand-offs name the people the printed rows name", () => {
+		// Not vacuous: the matrix above would pass if BOTH surfaces emitted nothing.
+		expect(
+			handoffSlides(FULL, { geIntroducesFunctionaries: true }).map(
+				(s) => `${s.from.role} · ${s.from.name} → ${s.to}`,
+			),
+		).toEqual([
+			"Toastmaster of the Day · Schinthia → the General Evaluator",
+			"Toastmaster of the Day · Schinthia → the speakers",
+			"Toastmaster of the Day · Schinthia → the Table Topics Master",
+			"Table Topics Master · Rasheed → the General Evaluator",
+			"General Evaluator · Saiful → the speech evaluators",
+		]);
+	});
+
+	it("labels the role as the CLUB names it, where the printed row still quotes ours", () => {
+		// Not a #363 regression and not a licence: it is the standing #368 gap,
+		// recorded at the one place the two surfaces are compared person-for-person.
+		// The deck is the side that already honours the rename everywhere it builds
+		// a `LegendEntry`, so the hand-off follows the deck's rule; whoever closes
+		// the gap should be moving the PRINTED row onto the club's name, and this
+		// test is what will tell them the surfaces have converged.
+		const slots = [
+			{ ...tmod, roleName: "Master of Ceremonies" },
+			speaker1,
+			ge,
+			evaluator1,
+		];
+		const config: RunOfShowConfig = { geIntroducesFunctionaries: false };
+		expect(handoffSlides(slots, config)[0].from).toEqual({
+			role: "Master of Ceremonies",
+			name: "Schinthia",
+		});
+		expect(handoffRows(slots, config)[0].who).toBe(
+			"Toastmaster of the Day · Schinthia",
+		);
+	});
+});
+
+describe("vote-caller agreement — deck ⇄ run sheet (#363)", () => {
+	/** The three vote beats' rows, in order. */
+	const voteRows = (slots: AgendaSlot[], config: RunOfShowConfig) =>
+		expandRunSheet(slots, buildRunOfShow(config)).filter((r) =>
+			r.detail.includes("voting for Best"),
+		);
+
+	for (const { name, slots } of CASES) {
+		for (const config of CONFIGS) {
+			const flag = config.geIntroducesFunctionaries
+				? "MCF variant"
+				: "standard";
+			it(`${name} — ${flag}`, () => {
+				const callers = buildSlideDeck({ meeting, club, slots, ...config })
+					.filter((s) => s.kind.startsWith("vote"))
+					.map((s) => (s as { caller: LegendEntry | null }).caller)
+					.map((c) => c?.name ?? null);
+				// `renderUnowned` keeps the printed row and fills its `who` column with
+				// the bare role name; the slide has no column to fill and drops the
+				// attribution instead. So a row with no holder is a slide with no
+				// caller — the one place the two surfaces deliberately say different
+				// things, and this is where that is pinned rather than assumed.
+				expect(callers).toEqual(
+					voteRows(slots, config).map((r) => holderOf(r.who)),
+				);
+			});
+		}
+	}
 });
 
 // ---------------------------------------------------------------------------

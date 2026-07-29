@@ -46,7 +46,16 @@ export type ClubForDeck = {
  *  `fallback` drops its timer's-report clause on exactly the same signal
  *  (#367): a club with no Timer still votes, it just has no report to call for
  *  and nobody to call on for it. */
-type VoteTiming = { hasTimer: boolean };
+type VoteTiming = {
+	hasTimer: boolean;
+	/** Who calls for the report and the vote (#363) — the segment leader, the
+	 *  same owner the run sheet's vote beat resolves to. `null` when the club
+	 *  runs no such role: the printed row keeps its `who` column via
+	 *  `renderUnowned` and shows the bare role name, but a slide has no column to
+	 *  fill, so it drops the attribution line rather than crediting a role
+	 *  nobody holds. The vote still happens either way. */
+	caller: LegendEntry | null;
+};
 
 /** One projected slide. Date formatting is deferred to the renderer. */
 export type Slide =
@@ -61,6 +70,15 @@ export type Slide =
 			timezone: string;
 	  }
 	| { kind: "toastmaster"; name: string }
+	| {
+			/** A 0-minute hand-off beat (#363), projected so the person on deck has
+			 *  the cue on screen at the moment they need it. `to` is prose ("the
+			 *  General Evaluator", "the speakers") rather than a role reference,
+			 *  because a hand-off's target is sometimes a group. */
+			kind: "handoff";
+			from: LegendEntry;
+			to: string;
+	  }
 	| { kind: "toastmasterIntro"; theme: string | null; word: string | null }
 	| {
 			/** The Word of the Day in full — word, definition, example — projected
@@ -238,6 +256,33 @@ const assignedNames = (slots: AgendaSlot[]): string[] =>
 const byRole = (slots: AgendaSlot[], role: RoleRef) =>
 	slots.filter((s) => matchesRole(s, role.key, role.name));
 
+/** The role's holder as a `LegendEntry`, or null when the club runs no such
+ *  role — the deck's equivalent of the run sheet's owner resolution. The role
+ *  is named as the CLUB names it (`roleName`, not `role.name`), so a rename
+ *  follows through to the slide the way it follows through to the printed row. */
+function holder(slots: AgendaSlot[], role: RoleRef): LegendEntry | null {
+	const [s] = byRole(slots, role);
+	return s ? { role: s.roleName, name: assigneeDisplay(s) } : null;
+}
+
+/**
+ * Push a hand-off slide when both the introducer and the target exist.
+ *
+ * The two conditions are the run sheet's two, in the same order: `from` is the
+ * beat's resolved owner (already through its `fallback`, at the call site), and
+ * `present` is its `requiresAnyOf` gate — a hand-off must never promise the room
+ * someone the club is not running, and carries no `renderUnowned`, so an
+ * unowned hand-off is dropped rather than projected against a bare role name.
+ */
+function pushHandoff(
+	deck: Slide[],
+	from: LegendEntry | null,
+	to: string,
+	present: boolean,
+): void {
+	if (from != null && present) deck.push({ kind: "handoff", from, to });
+}
+
 const SPEECH_ORDINALS = [
 	"First",
 	"Second",
@@ -348,6 +393,18 @@ export function buildSlideDeck({
 		: ROLE.toastmaster;
 	const introOwnerSlots = byRole(slots, introOwner);
 	const anyFunctionary = hasAnyFunctionaryRole(slots);
+	// MCF's variant only, and only when there is a General Evaluator to introduce
+	// (#363): the Toastmaster hands the room to the GE, who then runs the
+	// functionary intro below. The standard flow has no early GE appearance, so
+	// `buildRunOfShow` emits no such beat there either.
+	if (geIntroducesFunctionaries) {
+		pushHandoff(
+			deck,
+			holder(slots, ROLE.toastmaster),
+			"the General Evaluator",
+			generalEvaluator.length > 0,
+		);
+	}
 	if (introOwnerSlots.length > 0 && anyFunctionary) {
 		deck.push({
 			kind: "functionaryIntro",
@@ -363,6 +420,12 @@ export function buildSlideDeck({
 	// slide and win no Best-Speaker vote either.
 	const speakers = byRole(slots, ROLE.speaker).sort(
 		(a, b) => a.slotIndex - b.slotIndex,
+	);
+	pushHandoff(
+		deck,
+		holder(slots, ROLE.toastmaster),
+		"the speakers",
+		speakers.length > 0,
 	);
 	if (speakers.length > 0) {
 		const multi = speakers.length > 1;
@@ -381,10 +444,17 @@ export function buildSlideDeck({
 			kind: "voteSpeaker",
 			names: assignedNames(speakers),
 			hasTimer,
+			caller: holder(slots, ROLE.toastmaster),
 		});
 	}
 
 	const tableTopics = byRole(slots, ROLE.tableTopicsMaster);
+	pushHandoff(
+		deck,
+		holder(slots, ROLE.toastmaster),
+		"the Table Topics Master",
+		tableTopics.length > 0,
+	);
 	if (tableTopics.length > 0) {
 		deck.push({
 			kind: "tableTopics",
@@ -396,10 +466,34 @@ export function buildSlideDeck({
 			word: wodWord,
 			definition: wodWord ? wodDefinition : null,
 		});
-		deck.push({ kind: "voteTableTopics", hasTimer });
+		deck.push({
+			kind: "voteTableTopics",
+			hasTimer,
+			caller: holder(slots, ROLE.tableTopicsMaster),
+		});
 	}
 
+	// The Table Topics Master is holding the room when the segment ends, so they
+	// hand it to the General Evaluator. The `??` is the beat's `fallback: { unless:
+	// TABLE_TOPICS_ROLE, owner: TOASTMASTER_ROLE }`: with no Table Topics segment
+	// the Toastmaster never gave the room away, so the hand-off stays on them
+	// rather than disappearing (#363).
+	pushHandoff(
+		deck,
+		holder(slots, ROLE.tableTopicsMaster) ?? holder(slots, ROLE.toastmaster),
+		"the General Evaluator",
+		generalEvaluator.length > 0,
+	);
+
 	const evaluators = orderEvaluators(byRole(slots, ROLE.evaluator), slots);
+	// Likewise the evaluators' hand-off falls back to the Toastmaster at a club
+	// with no General Evaluator — somebody still has to introduce them.
+	pushHandoff(
+		deck,
+		holder(slots, ROLE.generalEvaluator) ?? holder(slots, ROLE.toastmaster),
+		"the speech evaluators",
+		evaluators.length > 0,
+	);
 	if (evaluators.length > 0) {
 		const multi = evaluators.length > 1;
 		evaluators.forEach((s, i) => {
@@ -415,6 +509,7 @@ export function buildSlideDeck({
 			kind: "voteEvaluator",
 			names: assignedNames(evaluators),
 			hasTimer,
+			caller: holder(slots, ROLE.generalEvaluator),
 		});
 	}
 

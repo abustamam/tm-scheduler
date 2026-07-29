@@ -108,7 +108,9 @@ export type BeatRole = { roleKey: string; roleName: string };
  *   swaps `detail`, dropping the "Calls for the Timer's report" clause when
  *   there is no Timer; `owner` is for a beat whose usual owner isn't the one
  *   actually holding the room. See `BeatFallback`.
- * - `id` names a beat another surface has to quote (#356). See `BeatId`.
+ * - `id` names a beat another surface has to point at — because it quotes the
+ *   beat's duration (#356) or because its `detail` is shared with another beat
+ *   (#363). See `BeatId`.
  */
 export type Beat = (
 	| {
@@ -141,7 +143,9 @@ export type Beat = (
 	/** A 0-minute transition — "X introduces Y". Marks the row so the print
 	 *  layouts can render it as a compact band rather than a full segment
 	 *  block (#363), so a hand-off never reads as a duplicate of the row it
-	 *  precedes. Nothing reads the flag yet. */
+	 *  precedes. The deck projects a slide per hand-off beat; it reads the beats
+	 *  by position rather than this flag, and `agenda-parity.test.ts` compares
+	 *  the two resolutions row-for-slide. */
 	handoff?: true;
 };
 
@@ -171,7 +175,7 @@ export type BeatFallback = {
 
 /**
  * Stable identity of a beat whose DURATION another surface states verbatim
- * (#356) — currently the three projected slides that print a "Time:" line.
+ * (#356) — the three projected slides that print a "Time:" line.
  *
  * The deck used to carry its own timing constants, so the same beat could be
  * budgeted at one length on the printed agenda and announced as another on the
@@ -179,13 +183,36 @@ export type BeatFallback = {
  * said "2–3 minutes". They agreed everywhere else only because someone had just
  * set both by hand.
  *
- * An id is how a slide says WHICH beat it is speaking for, the way `roleKey`
- * is how a beat says which role it binds to — matching on `detail` would break
- * the first time a beat is reworded, and matching on position the first time
- * one is inserted (#352 inserts one). Only the beats something else quotes
- * carry an id; the rest are reached by iteration, in order.
+ * Separate from the rest of `BeatId` so `beatDuration` cannot be handed the id
+ * of a 0-minute hand-off and answer "0 minutes" for a slide that has no time to
+ * state.
  */
-export type BeatId = "evaluation" | "evaluatorEvaluation" | "generalEvaluation";
+export type TimedBeatId =
+	| "evaluation"
+	| "evaluatorEvaluation"
+	| "generalEvaluation";
+
+/**
+ * Stable identity of a beat something else has to point at.
+ *
+ * An id is how another surface says WHICH beat it means, the way `roleKey` is
+ * how a beat says which role it binds to — matching on `detail` breaks the
+ * first time a beat is reworded, and matching on position the first time one is
+ * inserted (#352 inserts one). Only the beats something else quotes carry an
+ * id; the rest are reached by iteration, in order.
+ *
+ * Two reasons a beat needs one, and both are live:
+ * - Its DURATION is restated elsewhere — see `TimedBeatId`.
+ * - Its `detail` does not identify it, because another beat shares that text.
+ *   The deck projects a slide per hand-off beat as of #363, which makes it one
+ *   of the surfaces that has to point at them — and TWO hand-off beats read
+ *   "Introduces the General Evaluator": MCF's opening one, and the Table Topics
+ *   Master's into the evaluation segment. Both are correct copy (the GE
+ *   genuinely is introduced twice in that flow), so the ambiguity will not
+ *   resolve itself by rewording, and a `find` on the detail silently takes
+ *   whichever comes first.
+ */
+export type BeatId = TimedBeatId | "geOpeningHandoff" | "geEvaluationHandoff";
 
 /** A beat's budget as the deck states it: "3 minutes", "1 minute". */
 export function formatBeatMinutes(minutes: number): string {
@@ -195,12 +222,13 @@ export function formatBeatMinutes(minutes: number): string {
 /**
  * The duration `id`'s beat budgets, ready to project.
  *
- * Throws rather than falling back: every id is emitted by `buildRunOfShow`, so
- * a miss means the template and the ids have been edited out of step, and a
- * silent default would put a made-up number on a projector — the exact failure
- * this seam exists to prevent. The unit tests cover both variants.
+ * Throws rather than falling back: every `TimedBeatId` is emitted by
+ * `buildRunOfShow` in both variants, so a miss means the template and the ids
+ * have been edited out of step, and a silent default would put a made-up number
+ * on a projector — the exact failure this seam exists to prevent. The unit tests
+ * cover both variants.
  */
-export function beatDuration(template: Beat[], id: BeatId): string {
+export function beatDuration(template: Beat[], id: TimedBeatId): string {
 	const beat = template.find((b) => b.id === id);
 	if (beat == null) throw new Error(`run-of-show has no "${id}" beat`);
 	return formatBeatMinutes(beat.minutes);
@@ -430,6 +458,9 @@ export function buildRunOfShow({
 				{
 					kind: "role",
 					...TOASTMASTER_ROLE,
+					// One of two beats whose detail is "Introduces the General
+					// Evaluator" — the id is what tells them apart (#363).
+					id: "geOpeningHandoff",
 					role: "plain",
 					detail: "Introduces the General Evaluator",
 					minutes: 0,
@@ -558,6 +589,8 @@ export function buildRunOfShow({
 			// rather than dropping it (#363).
 			kind: "role",
 			...TABLE_TOPICS_ROLE,
+			// The other beat reading "Introduces the General Evaluator" (#363).
+			id: "geEvaluationHandoff",
 			role: "plain",
 			detail: "Introduces the General Evaluator",
 			minutes: 0,

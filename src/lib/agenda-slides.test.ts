@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AgendaSlot } from "./agenda-runsheet";
+import type { AgendaSlot, LegendEntry } from "./agenda-runsheet";
 import { beatDuration, buildRunOfShow } from "./agenda-runsheet";
 import {
 	buildSlideDeck,
@@ -463,6 +463,204 @@ describe("buildSlideDeck vote slides (#367)", () => {
 	});
 });
 
+/**
+ * The deck's half of #363. The printed run sheet already says who hands the room
+ * to whom; these slides put the same cue on the wall at the moment the person on
+ * deck needs it, and name the segment leader who calls each vote.
+ *
+ * Every gate and every fallback here mirrors the run sheet's hand-off beats —
+ * `agenda-parity.test.ts` proves the two agree row-for-slide across the whole
+ * degenerate-club matrix; this suite pins the copy.
+ */
+describe("hand-off slides (#363)", () => {
+	const totd = slot({
+		id: "tm",
+		roleName: "Toastmaster of the Day",
+		category: "leadership",
+		assigneeName: "Faisal",
+	});
+	const ttMaster = slot({
+		id: "tt",
+		roleName: "Table Topics Master",
+		category: "leadership",
+		assigneeName: "Rasheed",
+	});
+	const genEval = slot({
+		id: "ge",
+		roleName: "General Evaluator",
+		category: "leadership",
+		assigneeName: "Riyaz",
+	});
+	const speaker = slot({
+		id: "sp1",
+		roleName: "Speaker",
+		category: "speaker",
+		isSpeakerRole: true,
+		assigneeName: "Jagpal",
+	});
+	const evaluator = slot({
+		id: "ev1",
+		roleName: "Evaluator",
+		category: "evaluator",
+		assigneeName: "Priya",
+		evaluatesSlotId: "sp1",
+		evaluates: { speakerName: "Jagpal" },
+	});
+	const CLUB = [totd, ttMaster, genEval, speaker, evaluator];
+
+	const handoffs = (over: Partial<SlideDeckInput> = {}) =>
+		build({ slots: CLUB, ...over }).filter((s) => s.kind === "handoff");
+
+	it("projects each hand-off, in run-sheet order, naming both parties", () => {
+		expect(handoffs({ geIntroducesFunctionaries: true })).toEqual([
+			{
+				kind: "handoff",
+				from: { role: "Toastmaster of the Day", name: "Faisal" },
+				to: "the General Evaluator",
+			},
+			{
+				kind: "handoff",
+				from: { role: "Toastmaster of the Day", name: "Faisal" },
+				to: "the speakers",
+			},
+			{
+				kind: "handoff",
+				from: { role: "Toastmaster of the Day", name: "Faisal" },
+				to: "the Table Topics Master",
+			},
+			{
+				kind: "handoff",
+				from: { role: "Table Topics Master", name: "Rasheed" },
+				to: "the General Evaluator",
+			},
+			{
+				kind: "handoff",
+				from: { role: "General Evaluator", name: "Riyaz" },
+				to: "the speech evaluators",
+			},
+		]);
+	});
+
+	it("has no opening GE hand-off in the standard flow — the GE is not introduced there", () => {
+		// The beat exists only under MCF's variant, where the swap puts the General
+		// Evaluator in front of the room at the top of the meeting.
+		expect(handoffs().map((s) => (s as { to: string }).to)).toEqual([
+			"the speakers",
+			"the Table Topics Master",
+			"the General Evaluator",
+			"the speech evaluators",
+		]);
+	});
+
+	it("names the caller on each vote slide", () => {
+		const deck = build({ slots: CLUB, geIntroducesFunctionaries: true });
+		const votes = deck.filter((s) => s.kind.startsWith("vote"));
+		expect(
+			votes.map((s) => (s as { caller: LegendEntry | null }).caller),
+		).toEqual([
+			{ role: "Toastmaster of the Day", name: "Faisal" },
+			{ role: "Table Topics Master", name: "Rasheed" },
+			{ role: "General Evaluator", name: "Riyaz" },
+		]);
+	});
+
+	it("leaves the caller null when the club runs no such role — the vote still happens", () => {
+		// The run sheet keeps the row via `renderUnowned` and prints the bare role
+		// name in its `who` column; the slide has no column to fill, so it drops the
+		// attribution line rather than crediting a role nobody holds.
+		const deck = build({ slots: [speaker, evaluator] });
+		expect(deck.find((s) => s.kind === "voteSpeaker")).toMatchObject({
+			caller: null,
+		});
+	});
+
+	it("hands the room back to the Toastmaster when the club runs no Table Topics Master", () => {
+		// Mirrors the beat's `fallback: { unless: TABLE_TOPICS_ROLE, owner:
+		// TOASTMASTER_ROLE }` — with no Table Topics segment the Toastmaster never
+		// gave the room away, so the hand-off stays on them rather than vanishing.
+		expect(handoffs({ slots: [totd, genEval, speaker, evaluator] })).toEqual([
+			{
+				kind: "handoff",
+				from: { role: "Toastmaster of the Day", name: "Faisal" },
+				to: "the speakers",
+			},
+			{
+				kind: "handoff",
+				from: { role: "Toastmaster of the Day", name: "Faisal" },
+				to: "the General Evaluator",
+			},
+			{
+				kind: "handoff",
+				from: { role: "General Evaluator", name: "Riyaz" },
+				to: "the speech evaluators",
+			},
+		]);
+	});
+
+	it("hands the evaluators to the Toastmaster when the club runs no General Evaluator", () => {
+		const tos = handoffs({ slots: [totd, ttMaster, speaker, evaluator] }).map(
+			(s) => s as { from: LegendEntry; to: string },
+		);
+		// No General Evaluator ⇒ nobody to introduce, so that hand-off is gone…
+		expect(tos.map((s) => s.to)).toEqual([
+			"the speakers",
+			"the Table Topics Master",
+			"the speech evaluators",
+		]);
+		// …and the Toastmaster introduces the evaluators instead.
+		expect(tos.at(-1)?.from).toEqual({
+			role: "Toastmaster of the Day",
+			name: "Faisal",
+		});
+	});
+
+	it("drops the hand-off when neither the owner nor the fallback owner exists", () => {
+		// No Table Topics Master AND no Toastmaster of the Day: the beat has nobody
+		// to own it and carries no `renderUnowned`, so print omits the row and the
+		// deck must omit the slide.
+		expect(handoffs({ slots: [genEval, speaker, evaluator] })).toEqual([
+			{
+				kind: "handoff",
+				from: { role: "General Evaluator", name: "Riyaz" },
+				to: "the speech evaluators",
+			},
+		]);
+	});
+
+	it("names an unclaimed role's placeholder, exactly as the printed row does", () => {
+		// An enabled-but-unclaimed role still has a slot, so both surfaces still
+		// render the hand-off — print as "Toastmaster of the Day · — open —", and
+		// the slide the same way. Suppressing it here would hide a cue the printed
+		// agenda keeps.
+		const open = handoffs({
+			slots: [{ ...totd, assigneeName: null }, speaker],
+		});
+		expect(open).toEqual([
+			{
+				kind: "handoff",
+				from: { role: "Toastmaster of the Day", name: "— open —" },
+				to: "the speakers",
+			},
+		]);
+	});
+
+	it("binds by role key, so a renamed role keeps its hand-offs under the club's name", () => {
+		const renamed = handoffs({
+			slots: [
+				{ ...totd, roleKey: "toastmaster_of_the_day", roleName: "Emcee" },
+				speaker,
+			],
+		});
+		expect(renamed).toEqual([
+			{
+				kind: "handoff",
+				from: { role: "Emcee", name: "Faisal" },
+				to: "the speakers",
+			},
+		]);
+	});
+});
+
 // Shared fixtures for the functionary + evaluation-session suites below.
 const tmod = slot({
 	id: "tm",
@@ -640,8 +838,15 @@ describe("buildSlideDeck functionary reports (#367 / #353)", () => {
 			"title",
 			"toastmaster",
 			"functionaryIntro",
+			// The Toastmaster introduces the speakers (#363).
+			"handoff",
 			"speech",
 			"voteSpeaker",
+			// No Table Topics segment, so the Toastmaster — who never gave the room
+			// away — introduces the General Evaluator, who then introduces the
+			// evaluators. Both hand-offs mirror their beats' fallbacks.
+			"handoff",
+			"handoff",
 			"evaluation",
 			"voteEvaluator",
 			"evaluatorEvaluation",
@@ -694,13 +899,22 @@ describe("buildSlideDeck functionary reports (#367 / #353)", () => {
 		expect(kinds([tmod, grammarian])).not.toContain("functionaryReports");
 	});
 
-	it("renders identically under MCF's variant — the flag moves the functionary intro only", () => {
+	it("renders identically under MCF's variant, apart from the opening GE hand-off the swap needs", () => {
 		const standard = kinds([tmod, ge, grammarian]);
 		const mcf = build({
 			slots: [tmod, ge, grammarian],
 			geIntroducesFunctionaries: true,
 		}).map((s) => s.kind);
-		expect(mcf).toEqual(standard);
+		// The flag adds exactly one slide — the Toastmaster introducing the General
+		// Evaluator before handing them the functionary intro (#363) — and moves
+		// nothing else. The functionary-reports stretch this suite is about is
+		// untouched.
+		expect(mcf.filter((k) => k !== "handoff")).toEqual(
+			standard.filter((k) => k !== "handoff"),
+		);
+		expect(mcf.filter((k) => k === "handoff")).toHaveLength(
+			standard.filter((k) => k === "handoff").length + 1,
+		);
 	});
 });
 
@@ -726,8 +940,13 @@ describe("buildSlideDeck evaluation session", () => {
 	it("orders the full evaluation session correctly", () => {
 		expect(kinds([ge, speaker, evaluator])).toEqual([
 			"title",
+			// No Toastmaster of the Day, so the speakers' hand-off has no owner and
+			// no `renderUnowned` — the printed row is dropped too (#363).
 			"speech",
 			"voteSpeaker",
+			// The General Evaluator introduces the evaluators. The hand-off INTO the
+			// GE is gone with the Toastmaster: its fallback owner is missing too.
+			"handoff",
 			"evaluation",
 			"voteEvaluator",
 			// The evaluator-evaluation beat — the GE evaluates the evaluators, AFTER
@@ -972,11 +1191,18 @@ describe("buildSlideDeck full meeting ordering", () => {
 			"toastmasterIntro",
 			"wordOfDay",
 			"functionaryIntro",
+			// Each 0-minute hand-off beat gets its slide (#363), in the run sheet's
+			// order: to the speakers, to the Table Topics Master, to the General
+			// Evaluator, to the speech evaluators.
+			"handoff",
 			"speech",
 			"speech",
 			"voteSpeaker",
+			"handoff",
 			"tableTopics",
 			"voteTableTopics",
+			"handoff",
+			"handoff",
 			"evaluation",
 			"evaluation",
 			"voteEvaluator",
@@ -992,14 +1218,24 @@ describe("buildSlideDeck full meeting ordering", () => {
 		]);
 	});
 
-	it("MCF's variant differs only in who owns the functionary intro", () => {
+	it("MCF's variant differs in who owns the functionary intro, plus the hand-off that swap needs", () => {
 		const standard = build({ meeting: full, slots });
 		const mcf = build({
 			meeting: full,
 			slots,
 			geIntroducesFunctionaries: true,
 		});
-		expect(mcf.map((s) => s.kind)).toEqual(standard.map((s) => s.kind));
+		// One extra slide, in one place: the Toastmaster introducing the General
+		// Evaluator immediately before the intro the swap handed them (#363).
+		const at = mcf.findIndex((s) => s.kind === "functionaryIntro");
+		expect(mcf[at - 1]).toEqual({
+			kind: "handoff",
+			from: { role: "Toastmaster of the Day", name: "Schinthia" },
+			to: "the General Evaluator",
+		});
+		expect(
+			[...mcf.slice(0, at - 1), ...mcf.slice(at)].map((s) => s.kind),
+		).toEqual(standard.map((s) => s.kind));
 		expect(mcf.find((s) => s.kind === "functionaryIntro")).toMatchObject({
 			owner: "General Evaluator",
 			name: "Saiful",

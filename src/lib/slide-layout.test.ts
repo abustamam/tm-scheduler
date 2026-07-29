@@ -146,6 +146,7 @@ describe("slideLayout bodies", () => {
 				kind: "voteSpeaker",
 				names: ["Jagpal", "Farhanaaz"],
 				hasTimer,
+				caller: null,
 			});
 			if (l.chrome !== "content" || l.body.form !== "centered")
 				throw new Error("expected centered");
@@ -170,7 +171,11 @@ describe("slideLayout bodies", () => {
 
 	it("vote-table-topics asks for the times only when the club runs a Timer (#367)", () => {
 		const lines = (hasTimer: boolean) => {
-			const l = slideLayout({ kind: "voteTableTopics", hasTimer });
+			const l = slideLayout({
+				kind: "voteTableTopics",
+				hasTimer,
+				caller: null,
+			});
 			if (l.chrome !== "content" || l.body.form !== "centered")
 				throw new Error("expected centered");
 			return l.body.lines;
@@ -192,6 +197,7 @@ describe("slideLayout bodies", () => {
 				kind: "voteEvaluator",
 				names: ["Riyaz"],
 				hasTimer,
+				caller: null,
 			});
 			if (l.chrome !== "content" || l.body.form !== "centered")
 				throw new Error("expected centered");
@@ -205,6 +211,96 @@ describe("slideLayout bodies", () => {
 		// The run sheet drops the timer's-report clause the same way (#367); the
 		// vote itself still happens.
 		expect(lines(false)).toEqual(["Please Vote for Best Evaluator:", "Riyaz"]);
+	});
+
+	describe("handoff layout (#363)", () => {
+		const centered = (slide: Slide) => {
+			const l = slideLayout(slide);
+			if (l.chrome !== "content" || l.body.form !== "centered")
+				throw new Error("expected a centered content body");
+			return l.body;
+		};
+
+		it("reads as a cue for the person handing over", () => {
+			expect(
+				slideLayout({
+					kind: "handoff",
+					from: { role: "Table Topics Master", name: "Rasheed" },
+					to: "the General Evaluator",
+				}),
+			).toEqual({
+				chrome: "content",
+				header: "Hand-off",
+				body: {
+					form: "centered",
+					lines: [
+						{ role: "head", text: "Table Topics Master · Rasheed" },
+						{ role: "head", text: "introduces the General Evaluator" },
+					],
+				},
+			});
+		});
+
+		it("reads the same for a group target — the target is prose, not a role", () => {
+			expect(
+				centered({
+					kind: "handoff",
+					from: { role: "Toastmaster of the Day", name: "Faisal" },
+					to: "the speakers",
+				}),
+			).toMatchObject({
+				lines: [
+					{ role: "head", text: "Toastmaster of the Day · Faisal" },
+					{ role: "head", text: "introduces the speakers" },
+				],
+			});
+		});
+
+		it("names the caller above the vote prompt", () => {
+			const layout = centered({
+				kind: "voteSpeaker",
+				names: ["Jagpal"],
+				hasTimer: true,
+				caller: { role: "Toastmaster of the Day", name: "Faisal" },
+			});
+			// The attribution comes first and muted; the instructions that follow are
+			// unchanged, which the two lines below the slice pin.
+			expect(layout.lines).toEqual([
+				{ role: "muted", text: "Toastmaster of the Day · Faisal" },
+				{ role: "head", text: "Ask for speaking time." },
+				{ role: "head", text: "Please Vote for Best Speaker:" },
+				{ role: "name", text: "Jagpal" },
+			]);
+		});
+
+		it("names the caller on the other two vote slides too", () => {
+			expect(
+				centered({
+					kind: "voteTableTopics",
+					hasTimer: false,
+					caller: { role: "Table Topics Master", name: "Rasheed" },
+				}),
+			).toMatchObject({
+				lines: [
+					{ role: "muted", text: "Table Topics Master · Rasheed" },
+					{ role: "head", text: "Please Vote for Best Table Topic Speaker:" },
+				],
+			});
+			expect(
+				centered({
+					kind: "voteEvaluator",
+					names: ["Riyaz"],
+					hasTimer: false,
+					caller: { role: "General Evaluator", name: "Priya" },
+				}),
+			).toMatchObject({
+				lines: [
+					{ role: "muted", text: "General Evaluator · Priya" },
+					{ role: "head", text: "Please Vote for Best Evaluator:" },
+					{ role: "name", text: "Riyaz" },
+				],
+			});
+		});
 	});
 
 	it("evaluation of the evaluators is the GE's evaluator-evaluation slide (#367)", () => {

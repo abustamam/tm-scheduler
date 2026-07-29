@@ -30,7 +30,12 @@ const deck: Slide[] = [
 		example: "Meeting my mentor was pure serendipity.",
 		presenter: { role: "Grammarian", name: "Mona" },
 	},
-	{ kind: "voteSpeaker", names: ["Jane Doe"], hasTimer: true },
+	{
+		kind: "voteSpeaker",
+		names: ["Jane Doe"],
+		hasTimer: true,
+		caller: { role: "Toastmaster of the Day", name: "Faisal" },
+	},
 	{
 		kind: "thankYou",
 		meetingSchedule: "2nd & 4th Thursday",
