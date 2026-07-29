@@ -292,3 +292,22 @@ leadership beats to one row) is a behaviour change of its own.
 vote-owner change apply to every club, not just MCF. This is intended — the
 who-leads confusion is not MCF-specific — but it means clubs that did not ask
 for it will see their printed agenda change.
+
+**The grid layout now has zero print headroom.** Measured in a browser on a
+23-row MCF agenda: the grid page's inner height is 1108px against a 1056px
+budget, so `FitPage` scales it to 0.951. Before the hand-off rows it was 1019px
+and fitted exactly. The compact band already halves the cost — as full rows it
+would be 1174px, a 10% shrink — and getting back under budget would need a
+~7.4px band, which is not a legible line. So the overshoot is those five rows
+existing, which is the point of the change, and a 5% auto-scale is the right
+price: nothing clips, and grid body text lands at ~7.5pt.
+
+What this costs is headroom. Grid is the DEFAULT print layout, and it is now
+52px over budget, so every future addition compounds into a deeper scale. **The
+next content change to the grid layout must arrive with a compensating
+reduction.** The cheap inventory, if it is ever needed: ~16px of pure whitespace
+across three section gaps and the footer margin, plus ~10px from halving the
+band's padding. Beyond that it means re-tuning the row rhythm.
+
+(The editorial layout measures 1349px and was already over budget before this
+work — ~1251px without hand-offs. Pre-existing, not caused here.)
