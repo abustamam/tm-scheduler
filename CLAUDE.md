@@ -56,6 +56,38 @@ Package manager is **Bun** (use `bun install`, `bun run <script>`).
   `check` job.
 - Run a single test with `bunx vitest run <path>` (or `bunx vitest <path>` to watch).
 
+**Integration suites need a database or they silently SKIP.** Export
+`TEST_DATABASE_URL="postgresql://dev:dev@localhost:5432/tm_test"` before `bun run test`, or ~630
+tests vanish from the run and the pass count still reads green. A plain `bun run test` masks stale
+assertions that CI catches. `tm_test` is push-synced, so after a schema change run
+`DATABASE_URL=…tm_test bun run db:push --force` — that is the one database `db:push` is for.
+
+**Read the lint gate with `--diagnostic-level=error`.** `src/db/seed.ts` carries ~118 pre-existing
+`noNonNullAssertion` warnings, which Biome does not fail on, so the tail of a `bun run check` run is
+a wall of noise and a single real error scrolls past. `bunx biome check --diagnostic-level=error` is
+the readable view. Run the gate LAST, before commit, with CI's bare invocation — `biome check src/`
+skips files a bare run includes.
+
+## Test Coverage
+
+Minimum: 60%
+Target: 85%
+
+Assessed against the diff, not the whole repo: every branch, error path and user flow the change
+introduces should have a test that exercises it. `/ship`'s coverage audit reads these numbers and
+gates on them.
+
+Two coverage traps this repo has actually hit, both worth checking when a number looks fine:
+
+- **A test can pin the wrong thing after a rename.** An assertion matching a role name by string
+  (`r.who === "Toastmaster of the Day"`) stopped being unique once a second beat rendered the same
+  owner, so it passed while the row it was written to protect could have been deleted. Assert on
+  something that identifies the row, not just its owner.
+- **A parity/agreement test cannot see a defect present on both sides.** `agenda-parity.test.ts`
+  proves the printed run sheet and the projected deck agree; a bug in both derivations passes, and
+  adding the failing club shape to its matrix passes too. Cross-surface comparisons need at least
+  one golden-output assertion per shape ("this section must exist for this club") alongside them.
+
 ## Environment
 
 Local env goes in `.env.local` (loaded by `drizzle.config.ts` via dotenv and by the dev script).
@@ -271,3 +303,32 @@ Repo-specific notes:
 - `/ship` reads `VERSION`, `CHANGELOG.md`, and `TODOS.md` at the repo root. `VERSION` and `package.json` carry the same 4-digit `MAJOR.MINOR.PATCH.MICRO` string — `/ship` writes both; do not hand-edit one without the other.
 - Issues are the canonical tracker (`abustamam/tm-scheduler` via `gh`), not `TODOS.md`. See `docs/agents/issue-tracker.md`.
 - Ship from a worktree, never the main checkout — see "Git worktree isolation" above.
+- Codex reviews are disabled (`gstack-config codex_reviews=disabled`) — there is no OpenAI subscription here. gstack's Claude adversarial and red-team passes still run; do not suggest installing the `codex` CLI, since it does nothing without credentials.
+
+### Feature pipeline order
+
+The maintainer does not write code. The spec is the artifact he steers, so weight review toward the
+spec and run the diff-level review exactly once:
+
+```
+brainstorming → /grilling → writing-plans → /plan-eng-review → subagent-driven-development → /review → /ship
+                                            ^^^^^^^^^^^^^^^^                                  ^^^^^^^
+```
+
+Both inserted steps exist for a specific reason:
+
+- **`/plan-eng-review` before implementing.** `subagent-driven-development` reviews code against the
+  plan, so a wrong plan propagates cleanly through every task and every review. v1.1.0.0 shipped a
+  spec that said "all five GE beats" where the variant has six; it survived 24 per-task reviews and
+  two full `/ship` runs. An independent read of the plan is the only step positioned to catch that.
+- **`/review` once, after implementation, before `/ship`.** It is the only WHOLE-DIFF look —
+  `subagent-driven-development`'s per-task reviews are scoped to one task and structurally cannot
+  see a cross-task interaction, which is what that bug was. It also logs a review so `/ship`'s
+  readiness dashboard reads CLEAR and `/ship` skips its own duplicate specialist pass.
+
+**`/ship`'s review gate does not converge on a large diff.** It applies fixes, then stops and asks
+for a re-run; the re-run reviews everything again and any large diff keeps producing informational
+findings. Running `/review` first mostly avoids this. If it still fires and the round is
+all-informational, say so and proceed — offer that rather than waiting to be asked. Fixing
+informational findings is not free: one such fix in v1.1.0.0 introduced a user-visible regression
+that the next round had to catch.
