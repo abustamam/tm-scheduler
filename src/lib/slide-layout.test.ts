@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Slide } from "./agenda-slides";
+import type { HandoffTarget, Slide } from "./agenda-slides";
 import { slideLayout } from "./slide-layout";
 
 const contentHeader = (slide: Slide) => {
@@ -21,6 +21,7 @@ describe("slideLayout headers (no 'Session', title-only)", () => {
 		expect(
 			contentHeader({
 				kind: "evaluatorEvaluation",
+				owner: "General Evaluator",
 				name: "Riyaz",
 				time: "2 minutes",
 			}),
@@ -28,7 +29,7 @@ describe("slideLayout headers (no 'Session', title-only)", () => {
 		expect(
 			contentHeader({
 				kind: "generalEvaluation",
-				name: "Riyaz",
+				owner: "General Evaluator",
 				time: "2 minutes",
 			}),
 		).toBe("General Evaluation");
@@ -146,6 +147,7 @@ describe("slideLayout bodies", () => {
 				kind: "voteSpeaker",
 				names: ["Jagpal", "Farhanaaz"],
 				hasTimer,
+				caller: null,
 			});
 			if (l.chrome !== "content" || l.body.form !== "centered")
 				throw new Error("expected centered");
@@ -157,10 +159,10 @@ describe("slideLayout bodies", () => {
 			{ role: "name", text: "Jagpal" },
 			{ role: "name", text: "Farhanaaz" },
 		]);
-		// The run sheet's beat-6 fallback drops the timer's-report clause on the
-		// same signal; the vote itself still happens. Without this, a club with no
-		// Timer prints "Toastmaster · Vote Best Speaker" while the deck tells the
-		// presenter to call for a report from a role nobody holds.
+		// The Best-Speaker vote beat's fallback drops the timer's-report clause on
+		// the same signal; the vote itself still happens. Without this, a club with
+		// no Timer prints "Toastmaster · Opens voting for Best Speaker" while the
+		// deck tells the presenter to call for a report from a role nobody holds.
 		expect(lines(false)).toEqual([
 			{ role: "head", text: "Please Vote for Best Speaker:" },
 			{ role: "name", text: "Jagpal" },
@@ -170,7 +172,11 @@ describe("slideLayout bodies", () => {
 
 	it("vote-table-topics asks for the times only when the club runs a Timer (#367)", () => {
 		const lines = (hasTimer: boolean) => {
-			const l = slideLayout({ kind: "voteTableTopics", hasTimer });
+			const l = slideLayout({
+				kind: "voteTableTopics",
+				hasTimer,
+				caller: null,
+			});
 			if (l.chrome !== "content" || l.body.form !== "centered")
 				throw new Error("expected centered");
 			return l.body.lines;
@@ -179,7 +185,8 @@ describe("slideLayout bodies", () => {
 			{ role: "head", text: "Ask for Table Topics times." },
 			{ role: "head", text: "Please Vote for Best Table Topic Speaker:" },
 		]);
-		// Beat 8's fallback drops the same clause when there is no Timer.
+		// The Best-Table-Topics vote beat's fallback drops the same clause when
+		// there is no Timer.
 		expect(lines(false)).toEqual([
 			{ role: "head", text: "Please Vote for Best Table Topic Speaker:" },
 		]);
@@ -191,6 +198,7 @@ describe("slideLayout bodies", () => {
 				kind: "voteEvaluator",
 				names: ["Riyaz"],
 				hasTimer,
+				caller: null,
 			});
 			if (l.chrome !== "content" || l.body.form !== "centered")
 				throw new Error("expected centered");
@@ -206,9 +214,144 @@ describe("slideLayout bodies", () => {
 		expect(lines(false)).toEqual(["Please Vote for Best Evaluator:", "Riyaz"]);
 	});
 
-	it("evaluation of the evaluators is the GE's beat-11 slide (#367)", () => {
+	describe("handoff layout (#363)", () => {
+		const centered = (slide: Slide) => {
+			const l = slideLayout(slide);
+			if (l.chrome !== "content" || l.body.form !== "centered")
+				throw new Error("expected a centered content body");
+			return l.body;
+		};
+
+		it("reads as a cue for the person handing over", () => {
+			expect(
+				slideLayout({
+					kind: "handoff",
+					from: { role: "Table Topics Master", name: "Rasheed" },
+					to: "the General Evaluator",
+				}),
+			).toEqual({
+				chrome: "content",
+				header: "Hand-off — General Evaluator",
+				body: {
+					form: "centered",
+					lines: [
+						{ role: "head", text: "Table Topics Master · Rasheed" },
+						{ role: "head", text: "Introduces the General Evaluator" },
+					],
+				},
+			});
+		});
+
+		it("names the segment in the header — four targets covering five hand-offs", () => {
+			// `slideLabel` (meeting-present.tsx) labels the overview grid with the
+			// header verbatim. One shared "Hand-off" would put five identical rows in
+			// the one place a jump grid exists to help. Four headers, not five: the
+			// two hand-offs INTO the General Evaluator are deliberately
+			// indistinguishable here — they are the same transition, and the run
+			// sheet separates them by beat id instead (#363).
+			const header = (to: HandoffTarget) =>
+				contentHeader({
+					kind: "handoff",
+					from: { role: "Toastmaster of the Day", name: "Faisal" },
+					to,
+				});
+			expect([
+				header("the speakers"),
+				header("the Table Topics Master"),
+				header("the General Evaluator"),
+				header("the speech evaluators"),
+			]).toEqual([
+				"Hand-off — Speakers",
+				"Hand-off — Table Topics",
+				"Hand-off — General Evaluator",
+				"Hand-off — Evaluators",
+			]);
+		});
+
+		it("falls back to the bare header for an unmapped target", () => {
+			// `HandoffTarget` makes an unmapped target unconstructible through the
+			// type — adding one is now a compile error in `HANDOFF_HEADER` — so this
+			// case is reachable only by casting past it. The cast IS the point: the
+			// runtime `??` is a mid-meeting safety net for a target that arrives some
+			// other way (stale serialized deck, a `to` widened in a later refactor).
+			// A worse grid label must never take the deck down. Keep both.
+			expect(
+				contentHeader({
+					kind: "handoff",
+					from: { role: "Toastmaster of the Day", name: "Faisal" },
+					to: "the Joke Master" as HandoffTarget,
+				}),
+			).toBe("Hand-off");
+		});
+
+		it("reads the same for a group target — the target is prose, not a role", () => {
+			expect(
+				centered({
+					kind: "handoff",
+					from: { role: "Toastmaster of the Day", name: "Faisal" },
+					to: "the speakers",
+				}),
+			).toMatchObject({
+				lines: [
+					{ role: "head", text: "Toastmaster of the Day · Faisal" },
+					{ role: "head", text: "Introduces the speakers" },
+				],
+			});
+		});
+
+		it("names the caller above the vote prompt", () => {
+			const layout = centered({
+				kind: "voteSpeaker",
+				names: ["Jagpal"],
+				hasTimer: true,
+				caller: { role: "Toastmaster of the Day", name: "Faisal" },
+			});
+			// The attribution comes first, at `strong` — below the `head`
+			// instructions it attributes, but never the smallest line on a slide
+			// read off a projector. The instructions that follow are unchanged,
+			// which the two lines below the slice pin.
+			expect(layout.lines).toEqual([
+				{ role: "strong", text: "Toastmaster of the Day · Faisal" },
+				{ role: "head", text: "Ask for speaking time." },
+				{ role: "head", text: "Please Vote for Best Speaker:" },
+				{ role: "name", text: "Jagpal" },
+			]);
+		});
+
+		it("names the caller on the other two vote slides too", () => {
+			expect(
+				centered({
+					kind: "voteTableTopics",
+					hasTimer: false,
+					caller: { role: "Table Topics Master", name: "Rasheed" },
+				}),
+			).toMatchObject({
+				lines: [
+					{ role: "strong", text: "Table Topics Master · Rasheed" },
+					{ role: "head", text: "Please Vote for Best Table Topic Speaker:" },
+				],
+			});
+			expect(
+				centered({
+					kind: "voteEvaluator",
+					names: ["Riyaz"],
+					hasTimer: false,
+					caller: { role: "General Evaluator", name: "Priya" },
+				}),
+			).toMatchObject({
+				lines: [
+					{ role: "strong", text: "General Evaluator · Priya" },
+					{ role: "head", text: "Please Vote for Best Evaluator:" },
+					{ role: "name", text: "Riyaz" },
+				],
+			});
+		});
+	});
+
+	it("evaluation of the evaluators is the GE's evaluator-evaluation slide (#367)", () => {
 		const l = slideLayout({
 			kind: "evaluatorEvaluation",
+			owner: "General Evaluator",
 			name: "Riyaz",
 			time: "2 minutes",
 		});
@@ -216,6 +359,66 @@ describe("slideLayout bodies", () => {
 			expect(l.body.lines.map((x) => x.text)).toEqual([
 				"General Evaluator:",
 				"Riyaz",
+				"Time: 2 minutes",
+			]);
+		} else throw new Error("expected centered");
+	});
+
+	/**
+	 * The three slides that used to hardcode the literal "General Evaluator"
+	 * (#363). At a club that runs no GE the Toastmaster of the Day covers the
+	 * role, so every one of them has to announce the role that is ACTUALLY
+	 * speaking — otherwise the wall credits somebody who does not exist.
+	 */
+	it("names the covering role on all three GE slides, never the literal 'General Evaluator'", () => {
+		const owner = "Toastmaster of the Day";
+		const texts = (slide: Slide) => {
+			const l = slideLayout(slide);
+			if (l.chrome !== "content" || l.body.form !== "centered")
+				throw new Error("expected centered");
+			return l.body.lines.map((x) => x.text);
+		};
+
+		expect(
+			texts({
+				kind: "evaluatorEvaluation",
+				owner,
+				name: "Schinthia",
+				time: "2 minutes",
+			}),
+		).toEqual(["Toastmaster of the Day:", "Schinthia", "Time: 2 minutes"]);
+
+		expect(
+			texts({
+				kind: "functionaryReports",
+				owner,
+				name: "Schinthia",
+				team: [{ role: "Timer", name: "Bilal" }],
+			}),
+		).toEqual(["Toastmaster of the Day:", "Schinthia", "Timer: Bilal"]);
+
+		// This one shows the role but not the holder, and always has — the header
+		// names the segment, the first line names the role giving it. The slide
+		// carries no holder at all, which is why there is no `name` to pass.
+		expect(
+			texts({
+				kind: "generalEvaluation",
+				owner,
+				time: "2 minutes",
+			}),
+		).toEqual(["Toastmaster of the Day", "Closing Remarks", "Time: 2 minutes"]);
+	});
+
+	it("keeps naming the General Evaluator on the general-evaluation slide when there is one", () => {
+		const l = slideLayout({
+			kind: "generalEvaluation",
+			owner: "General Evaluator",
+			time: "2 minutes",
+		});
+		if (l.chrome === "content" && l.body.form === "centered") {
+			expect(l.body.lines.map((x) => x.text)).toEqual([
+				"General Evaluator",
+				"Closing Remarks",
 				"Time: 2 minutes",
 			]);
 		} else throw new Error("expected centered");
@@ -259,6 +462,7 @@ describe("slideLayout bodies", () => {
 	it("functionary reports lists each reporter, skipping open roles (#353)", () => {
 		const l = slideLayout({
 			kind: "functionaryReports",
+			owner: "General Evaluator",
 			name: "Riyaz",
 			team: [
 				{ role: "Grammarian", name: "Priya" },

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { OPEN_LABEL } from "#/lib/agenda-runsheet";
 import type { TimelineRow } from "#/lib/agenda-timing";
 import {
 	type AgendaHeader,
@@ -198,4 +199,269 @@ describe("MeetingAgendaPrint announcements", () => {
 			expect(screen.getByText(/Tonight.s Votes/)).toBeTruthy();
 		});
 	}
+});
+
+// #363 — a hand-off books 0 minutes, so `buildTimeline` stamps it with the clock
+// time of the row it introduces. Rendered as a full segment block it reads as a
+// duplicate of that row, so every layout renders it as a compact band instead.
+describe("MeetingAgendaPrint hand-off band", () => {
+	// A real stretch of an MCF agenda: the opening pair of same-owner hand-offs
+	// (a club with a General Evaluator but no functionaries — the case the old
+	// `${time}-${who}` key collided on), then the Table Topics → General
+	// Evaluator → evaluators chain, where three rows share one stamp.
+	const handoffRows: TimelineRow[] = [
+		{
+			who: "Toastmaster · Lee P.",
+			detail: "Opens meeting · introduces the theme",
+			minutes: 3,
+			marks: null,
+			time: "7:03",
+		},
+		{
+			who: "Toastmaster · Lee P.",
+			detail: "Introduces the General Evaluator",
+			minutes: 0,
+			marks: null,
+			handoff: true,
+			time: "7:06",
+		},
+		{
+			who: "Toastmaster · Lee P.",
+			detail: "Introduces the speakers",
+			minutes: 0,
+			marks: null,
+			handoff: true,
+			time: "7:06",
+		},
+		{
+			who: "Speaker 1 · Jane Doe",
+			detail: "Prepared speech",
+			minutes: 6,
+			marks: { green: 4, yellow: 5, red: 6 },
+			time: "7:06",
+		},
+		{
+			who: "Table Topics Master · Rasheed",
+			detail:
+				"Calls for the Timer's report · opens voting for Best Table Topics",
+			minutes: 1,
+			marks: null,
+			time: "7:20",
+		},
+		{
+			who: "Table Topics Master · Rasheed",
+			detail: "Introduces the General Evaluator",
+			minutes: 0,
+			marks: null,
+			handoff: true,
+			time: "7:21",
+		},
+		{
+			who: "General Evaluator · Riyaz",
+			detail: "Introduces the speech evaluators",
+			minutes: 0,
+			marks: null,
+			handoff: true,
+			time: "7:21",
+		},
+		{
+			who: "Evaluator 1 · Sudheer",
+			detail: "Evaluates Jagpal Singh",
+			minutes: 3,
+			marks: null,
+			time: "7:21",
+		},
+	];
+
+	/** The stamps the four timed beats own; the four hand-offs print none. */
+	const TIMED_STAMPS = ["7:03", "7:06", "7:20", "7:21"];
+
+	/** The band a `detail` was rendered into. `who`, the separator and `detail`
+	 *  are three sibling nodes (see `HandoffBand`), so the whole line is the
+	 *  PARENT's text — and reading it there is what proves the three nodes
+	 *  compose into one readable sentence. */
+	const bandOf = (detailNode: HTMLElement) =>
+		detailNode.parentElement as HTMLElement;
+	const bandFor = (detail: string) => bandOf(screen.getByText(detail));
+
+	function renderHandoffs(layout: AgendaLayout) {
+		return render(
+			<MeetingAgendaPrint
+				layout={layout}
+				header={header}
+				roles={[{ label: "Toastmaster", name: "Lee P." }]}
+				officers={[]}
+				explainers={[]}
+				rows={handoffRows}
+			/>,
+		);
+	}
+
+	for (const layout of ["grid", "editorial", "spacious", "timing"] as const) {
+		it(`${layout}: prints every hand-off, holder and cue on one line`, () => {
+			renderHandoffs(layout);
+			// Both hand-offs into the General Evaluator, in page order — the pair the
+			// old `${time}-${who}` key could not tell apart.
+			expect(
+				screen
+					.getAllByText("Introduces the General Evaluator")
+					.map((el) => bandOf(el).textContent),
+			).toEqual([
+				"Toastmaster · Lee P. · Introduces the General Evaluator",
+				"Table Topics Master · Rasheed · Introduces the General Evaluator",
+			]);
+			expect(bandFor("Introduces the speakers").textContent).toBe(
+				"Toastmaster · Lee P. · Introduces the speakers",
+			);
+			expect(bandFor("Introduces the speech evaluators").textContent).toBe(
+				"General Evaluator · Riyaz · Introduces the speech evaluators",
+			);
+		});
+
+		it(`${layout}: repeats no clock stamp on a hand-off`, () => {
+			const { container } = renderHandoffs(layout);
+			const stamps = Array.from(
+				container.querySelectorAll("[data-row-time]"),
+			).map((el) => el.textContent);
+			expect(stamps).toEqual(TIMED_STAMPS);
+		});
+
+		it(`${layout}: keys the run-of-show rows uniquely`, () => {
+			const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+			try {
+				renderHandoffs(layout);
+				const dupes = spy.mock.calls.filter((call) =>
+					call.some((arg) => String(arg).includes("same key")),
+				);
+				expect(dupes).toEqual([]);
+			} finally {
+				spy.mockRestore();
+			}
+		});
+	}
+
+	// Review fix (#363): the tests above are layout-agnostic — every one would
+	// still pass if all four call sites pasted identical styling. This pins the
+	// one requirement that had zero coverage: the band must respect each
+	// layout's own visual language (type scale + gutter) rather than one style
+	// copied three times. Values read off the component's own call sites, not
+	// asserted from spec.
+	const BAND_STYLE: Record<
+		AgendaLayout,
+		{ paddingLeft: string; fontSize: string }
+	> = {
+		editorial: { paddingLeft: "69px", fontSize: "10px" }, // RunNarrative sm
+		spacious: { paddingLeft: "83px", fontSize: "11.5px" }, // RunNarrative lg
+		grid: { paddingLeft: "68px", fontSize: "10px" },
+		timing: { paddingLeft: "58px", fontSize: "10px" },
+	};
+
+	for (const layout of ["grid", "editorial", "spacious", "timing"] as const) {
+		it(`${layout}: the hand-off band uses this layout's own paddingLeft/fontSize`, () => {
+			renderHandoffs(layout);
+			const band = bandFor("Introduces the speakers");
+			expect(band.style.paddingLeft).toBe(BAND_STYLE[layout].paddingLeft);
+			expect(band.style.fontSize).toBe(BAND_STYLE[layout].fontSize);
+		});
+	}
+
+	// The other half of the same requirement. `BAND_STYLE` above pins the type
+	// scale and gutter each call site passes; `chrome` — the zebra stripe and the
+	// hairline rule — is the half that had none, and it is the whole reason the
+	// prop exists. The two table layouts hand the band the row chrome so it reads
+	// as a quiet row of the table; the two narrative layouts pass none, so the
+	// band has no spine and no rule and runs straight into the beat it
+	// introduces. Drop `chrome` from a grid call site and the band punches a
+	// white, ruleless hole through a striped table with nothing failing.
+	const BANDS_IN_THE_TABLE: Record<AgendaLayout, boolean> = {
+		grid: true,
+		timing: true,
+		editorial: false,
+		spacious: false,
+	};
+
+	for (const layout of ["grid", "editorial", "spacious", "timing"] as const) {
+		it(`${layout}: the hand-off band ${
+			BANDS_IN_THE_TABLE[layout] ? "keeps" : "drops"
+		} the row stripe and rule`, () => {
+			renderHandoffs(layout);
+			// Rows 1 and 2 of the fixture: adjacent hand-offs, so one lands on each
+			// side of the zebra.
+			const odd = bandOf(
+				screen.getAllByText("Introduces the General Evaluator")[0],
+			);
+			const even = bandFor("Introduces the speakers");
+
+			if (BANDS_IN_THE_TABLE[layout]) {
+				expect(odd.style.background).not.toBe("");
+				expect(even.style.background).not.toBe("");
+				// Striped WITH the table rather than painted one flat colour.
+				expect(odd.style.background).not.toBe(even.style.background);
+				expect(odd.style.borderBottom).not.toBe("");
+			} else {
+				expect(odd.style.background).toBe("");
+				expect(even.style.background).toBe("");
+				expect(odd.style.borderBottom).toBe("");
+			}
+			// Either way the band keeps the semantics `HandoffBand` owns — `chrome`
+			// spreads first precisely so a call site cannot reach them.
+			expect(odd.style.fontStyle).toBe("italic");
+			expect(odd.style.display).toBe("flex");
+		});
+	}
+
+	it("renders the elbow affordance as a decorative, screen-reader-hidden cue", () => {
+		renderHandoffs("editorial");
+		// It is a bordered box, not a glyph (see `HandoffBand`): "↳" is outside
+		// Manrope's served unicode-range, so it always fell back to another face
+		// and the band's italic synthesised an oblique on it. Asserting the
+		// borders is what would catch a revert to a text glyph.
+		const affordance = bandFor("Introduces the speakers")
+			.firstElementChild as HTMLElement;
+		expect(affordance.getAttribute("aria-hidden")).toBe("true");
+		expect(affordance.textContent).toBe("");
+		// The mark is the wrapper's inline-block child: the wrapper carries the
+		// band's type so the browser can sit the mark on the real text baseline
+		// (`verticalAlign: "baseline"`), instead of a hand-computed offset that was
+		// wrong at both of the sizes it claimed to cover.
+		const mark = affordance.firstElementChild as HTMLElement;
+		expect(mark.style.display).toBe("inline-block");
+		expect(mark.style.verticalAlign).toBe("baseline");
+		expect(mark.style.borderLeftStyle).toBe("solid");
+		expect(mark.style.borderBottomStyle).toBe("solid");
+	});
+
+	// The regression the em-dash separator shipped with: `who` carries the run
+	// sheet's own punctuation, and for an enabled-but-unclaimed role that is
+	// `OPEN_LABEL` — em dashes. Joined with an em dash the band printed
+	// "Toastmaster of the Day · — open — — Introduces the speakers". Three nodes
+	// with the separator in its own node is why no character choice can collide.
+	it("prints an unclaimed hand-off holder without doubling the separator", () => {
+		render(
+			<MeetingAgendaPrint
+				layout="editorial"
+				header={header}
+				roles={[]}
+				officers={[]}
+				explainers={[]}
+				rows={[
+					{
+						who: `Toastmaster of the Day · ${OPEN_LABEL}`,
+						detail: "Introduces the speakers",
+						minutes: 0,
+						marks: null,
+						handoff: true,
+						time: "7:06",
+					},
+				]}
+			/>,
+		);
+		const band = bandFor("Introduces the speakers");
+		// Spelled out rather than built from `OPEN_LABEL`: the literal IS the
+		// hazard, so a future change to the placeholder should land here.
+		expect(band.textContent).toBe(
+			"Toastmaster of the Day · — open — · Introduces the speakers",
+		);
+		expect(band.textContent).not.toContain("— —");
+	});
 });

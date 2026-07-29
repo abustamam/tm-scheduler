@@ -41,12 +41,39 @@ export type ClubForDeck = {
 };
 
 /** Carried by all three vote slides — the ends of the speech, Table Topics and
- *  evaluation segments (beats 6, 8 and 10). True when the club runs a Timer, so
- *  the slide asks for the timer's report before the vote. Each of those beats'
- *  run-sheet `fallback` drops its timer's-report clause on exactly the same
- *  signal (#367): a club with no Timer still votes, it just has no report to
- *  call for and nobody to call on for it. */
-type VoteTiming = { hasTimer: boolean };
+ *  evaluation segments. True when the club runs a Timer, so the slide asks for
+ *  the timer's report before the vote. Each of those beats' run-sheet
+ *  `fallbacks` drop the timer's-report clause on exactly the same signal
+ *  (#367): a club with no Timer still votes, it just has no report to call for
+ *  and nobody to call on for it. */
+type VoteTiming = {
+	hasTimer: boolean;
+	/** Who calls for the report and the vote (#363) — the segment leader, the
+	 *  same owner the run sheet's vote beat resolves to. `null` when the club
+	 *  runs no such role: the printed row keeps its `who` column via
+	 *  `renderUnowned` and shows the bare role name, but a slide has no column to
+	 *  fill, so it drops the attribution line rather than crediting a role
+	 *  nobody holds. The vote still happens either way. */
+	caller: LegendEntry | null;
+};
+
+/**
+ * Every segment a hand-off can hand to (#363). Prose rather than a role
+ * reference, because a hand-off's target is sometimes a group.
+ *
+ * A closed union, not `string`, because the four values are duplicated as
+ * lookup keys in two other places — `HANDOFF_HEADER` (slide-layout.ts), which
+ * names the slide in the projector's jump grid, and `HANDOFF_SECTION`
+ * (agenda-parity.test.ts), which gives it a parity identity. Nothing else
+ * type-checks that coupling: with a bare `string`, a fifth target added later
+ * would compile fine and silently take the bare "Hand-off" grid label. Now it
+ * is a compile error in both maps.
+ */
+export type HandoffTarget =
+	| "the speakers"
+	| "the Table Topics Master"
+	| "the General Evaluator"
+	| "the speech evaluators";
 
 /** One projected slide. Date formatting is deferred to the renderer. */
 export type Slide =
@@ -61,6 +88,14 @@ export type Slide =
 			timezone: string;
 	  }
 	| { kind: "toastmaster"; name: string }
+	| {
+			/** A 0-minute hand-off beat (#363), projected so the person on deck has
+			 *  the cue on screen at the moment they need it. See `HandoffTarget`
+			 *  for why `to` is a closed union of prose rather than a role. */
+			kind: "handoff";
+			from: LegendEntry;
+			to: HandoffTarget;
+	  }
 	| { kind: "toastmasterIntro"; theme: string | null; word: string | null }
 	| {
 			/** The Word of the Day in full — word, definition, example — projected
@@ -81,9 +116,9 @@ export type Slide =
 			presenter: LegendEntry | null;
 	  }
 	| {
-			/** Beat 4 of the run-of-show (#367): the functionaries are introduced
-			 *  and each explains their own role. Owned by the Toastmaster of the
-			 *  Day in the standard flow, by the General Evaluator under MCF's
+			/** The functionary-intro beat of the run-of-show (#367): they are
+			 *  introduced and each explains their own role. Owned by the Toastmaster
+			 *  of the Day in the standard flow, by the General Evaluator under MCF's
 			 *  variant — this slide was `geIntro`, which hardcoded the latter. */
 			kind: "functionaryIntro";
 			/** Display name of the role that introduces them. */
@@ -93,12 +128,18 @@ export type Slide =
 			team: LegendEntry[];
 	  }
 	| {
-			/** Beat 12 (#367, absorbs #353): the General Evaluator calls for the
-			 *  functionary reports, between evaluating the evaluators and the
-			 *  overall meeting evaluation. Not affected by the flag — MCF's
-			 *  closing sequence is the same as everyone else's. */
+			/** The functionary-reports beat (#367, absorbs #353): the GE calls for
+			 *  the functionary reports, between evaluating the evaluators and the
+			 *  overall meeting evaluation. Not affected by the flag — MCF's closing
+			 *  sequence is the same as everyone else's. */
 			kind: "functionaryReports";
-			/** Who holds the General Evaluator role, or the open placeholder. */
+			/** Display name of the role calling for them — the General Evaluator,
+			 *  or the Toastmaster of the Day covering for a club that runs no GE
+			 *  (#363). Carried for the same reason `functionaryIntro` carries one:
+			 *  the owner varies by club, so the layout cannot hardcode it. Without
+			 *  it a Toastmaster-covered slide announced "General Evaluator: Alice". */
+			owner: string;
+			/** Who holds that role, or the open placeholder. */
 			name: string;
 			team: LegendEntry[];
 	  }
@@ -117,12 +158,13 @@ export type Slide =
 			master: string;
 			timing: string;
 			/** The Word of the Day, kept on screen for the segment that exists to
-			 *  use it — beat 7 is literally "Impromptu topics using the Word of the
-			 *  Day" (#355). A REMINDER, not a second presentation: the standalone
-			 *  `wordOfDay` slide (#354) is where the Grammarian presents the word
-			 *  in full, a dozen slides earlier. Hence no example and no presenter
-			 *  credit here — nobody is delivering it at this point, they are
-			 *  working it into an answer. `null` when the meeting has no word. */
+			 *  use it — the Table Topics beat is literally "Impromptu topics using
+			 *  the Word of the Day" (#355). A REMINDER, not a second presentation:
+			 *  the standalone `wordOfDay` slide (#354) is where the Grammarian
+			 *  presents the word in full, a dozen slides earlier. Hence no example
+			 *  and no presenter credit here — nobody is delivering it at this point,
+			 *  they are working it into an answer. `null` when the meeting has no
+			 *  word. */
 			word: string | null;
 			/** The word's definition, when the meeting records one. A narrower gate
 			 *  than the standalone slide's, which needs a definition or an example
@@ -142,23 +184,34 @@ export type Slide =
 	  }
 	| ({ kind: "voteEvaluator"; names: string[] } & VoteTiming)
 	| {
-			/** Beat 11 (#367): the General Evaluator evaluates the evaluators,
-			 *  after the Best-Evaluator vote and before the functionary reports.
-			 *  Gated on the GE role having a slot, exactly as the run sheet gates
-			 *  beat 11 — a club with no General Evaluator loses beats 11–13 and
-			 *  nothing replaces them. This slide was `evalIntro`, which sat before
-			 *  the evaluations (matching no beat), was gated on EVALUATORS rather
-			 *  than the GE, and printed the literal words "General Evaluator" as a
-			 *  name when the club had no GE. */
+			/** The evaluator-evaluation beat (#367): the General Evaluator evaluates
+			 *  the evaluators, after the Best-Evaluator vote and before the
+			 *  functionary reports. Gated exactly as the run sheet gates it — the GE
+			 *  role has a slot, OR the Toastmaster of the Day has one to cover with
+			 *  (#363) — AND the club runs evaluators to evaluate. That last clause
+			 *  reverses #367, which gated the slide on the GE alone; see the beat.
+			 *  This slide was `evalIntro`, which sat before the evaluations (matching
+			 *  no beat) and printed the literal words "General Evaluator" as a name
+			 *  when the club had no GE. */
 			kind: "evaluatorEvaluation";
-			/** Who holds the General Evaluator role, or the open placeholder. */
+			/** Display name of the role giving it — see `functionaryReports.owner`. */
+			owner: string;
+			/** Who holds that role, or the open placeholder. */
 			name: string;
 			time: string;
 	  }
-	| { kind: "generalEvaluation"; name: string; time: string }
+	| {
+			kind: "generalEvaluation";
+			/** Display name of the role giving it — see `functionaryReports.owner`.
+			 *  No `name`: unlike the other two owner-carrying slides, this one has
+			 *  never named the holder (`slideLayout` says why), so carrying one made
+			 *  it write-only. */
+			owner: string;
+			time: string;
+	  }
 	| { kind: "awards"; categories: string[] }
 	| {
-			/** Beat 15 (#352): the President invites the guests to comment, between
+			/** The guest-comments beat (#352): the President invites them, between
 			 *  the awards and the closing announcements. Carries no data — a first
 			 *  cut that prompts the room generically rather than reading the
 			 *  meeting's recorded guests, since guests who were never booked in are
@@ -202,13 +255,13 @@ const ROLE = {
 /**
  * The one duration on the deck that is NOT a beat's budget (#356), and the
  * reason it is exempt: this is the limit on a SINGLE impromptu answer, while
- * beat 7 books the whole Table Topics SEGMENT. Deriving it would project
+ * the Table Topics beat books the whole SEGMENT. Deriving it would project
  * "Speaker time: 10 minutes" at a speaker who has one to two — a per-speaker
  * versus per-segment difference, not a disagreement.
  *
  * The segment number is also the one the deck could never state honestly:
- * `applyFlex` resizes beat 7 at render time to whatever makes the meeting come
- * out to its scheduled length, and the deck is not given that length.
+ * `applyFlex` resizes that beat at render time to whatever makes the meeting
+ * come out to its scheduled length, and the deck is not given that length.
  */
 export const TABLE_TOPICS_TIMING = "1–2 minutes per speaker";
 
@@ -235,6 +288,33 @@ const assignedNames = (slots: AgendaSlot[]): string[] =>
 
 const byRole = (slots: AgendaSlot[], role: RoleRef) =>
 	slots.filter((s) => matchesRole(s, role.key, role.name));
+
+/** The role's holder as a `LegendEntry`, or null when the club runs no such
+ *  role — the deck's equivalent of the run sheet's owner resolution. The role
+ *  is named as the CLUB names it (`roleName`, not `role.name`), so a rename
+ *  follows through to the slide the way it follows through to the printed row. */
+function holder(slots: AgendaSlot[], role: RoleRef): LegendEntry | null {
+	const [s] = byRole(slots, role);
+	return s ? { role: s.roleName, name: assigneeDisplay(s) } : null;
+}
+
+/**
+ * Push a hand-off slide when both the introducer and the target exist.
+ *
+ * The two conditions are the run sheet's two, in the same order: `from` is the
+ * beat's resolved owner (already through its `fallbacks`, at the call site), and
+ * `present` is its `requiresAnyOf` gate — a hand-off must never promise the room
+ * someone the club is not running, and carries no `renderUnowned`, so an
+ * unowned hand-off is dropped rather than projected against a bare role name.
+ */
+function pushHandoff(
+	deck: Slide[],
+	from: LegendEntry | null,
+	to: HandoffTarget,
+	present: boolean,
+): void {
+	if (from != null && present) deck.push({ kind: "handoff", from, to });
+}
 
 const SPEECH_ORDINALS = [
 	"First",
@@ -294,14 +374,22 @@ export function buildSlideDeck({
 		timezone: club.timezone,
 	});
 
-	// Beat 3: the Toastmaster of the Day opens the meeting. Gated on the role
-	// having a slot, exactly as `expandRunSheet` gates the beat — a club that
-	// does not run a Toastmaster of the Day (#368) neither prints the row nor
-	// projects the slide. An enabled-but-unclaimed role still has a slot and
-	// still renders, as the open placeholder.
-	const toastmaster = byRole(slots, ROLE.toastmaster);
-	if (toastmaster.length > 0) {
-		deck.push({ kind: "toastmaster", name: assigneeDisplay(toastmaster[0]) });
+	/** The two segment owners the slides below resolve, hoisted for the same
+	 *  reason `geOwner` is: they are each read from four or five places, and a
+	 *  re-derived `holder()`/`byRole()` is a place that can start answering
+	 *  differently. Non-null IS the "the club runs this role" gate — `holder`
+	 *  returns an entry for an enabled-but-unclaimed slot too, carrying the open
+	 *  placeholder as its name. */
+	const tmOwner = holder(slots, ROLE.toastmaster);
+	const ttOwner = holder(slots, ROLE.tableTopicsMaster);
+
+	// The Toastmaster of the Day opens the meeting. Gated on the role having a
+	// slot, exactly as `expandRunSheet` gates the beat — a club that does not run
+	// a Toastmaster of the Day (#368) neither prints the row nor projects the
+	// slide. An enabled-but-unclaimed role still has a slot and still renders, as
+	// the open placeholder.
+	if (tmOwner) {
+		deck.push({ kind: "toastmaster", name: tmOwner.name });
 	}
 
 	const themeText = meeting.theme?.trim() || null;
@@ -339,18 +427,52 @@ export function buildSlideDeck({
 	}
 
 	const generalEvaluator = byRole(slots, ROLE.generalEvaluator);
-	// Beat 4. Gated exactly as the run sheet gates it: the owning role has a
-	// slot AND the club runs at least one functionary to introduce.
-	const introOwner = geIntroducesFunctionaries
-		? ROLE.generalEvaluator
-		: ROLE.toastmaster;
-	const introOwnerSlots = byRole(slots, introOwner);
+	/**
+	 * Whoever is actually doing the General Evaluator's job this meeting (#363).
+	 *
+	 * The `??` IS the run sheet's `GE_COVERED_BY_TOASTMASTER` fallback, which
+	 * every GE-owned beat shares: at a club that runs no General Evaluator the
+	 * Toastmaster of the Day covers the whole role — introduces the evaluators,
+	 * calls the Best-Evaluator vote, evaluates the evaluators, calls for the
+	 * functionary reports, gives the overall evaluation, and under MCF's variant
+	 * introduces the functionaries too. Read once here so the places below cannot
+	 * answer it several ways; the printed rows resolve the same question through
+	 * one shared constant for the same reason.
+	 *
+	 * `null` only when neither role has a slot — then the beats have nowhere to
+	 * fall back to and both surfaces drop the section together.
+	 */
+	const geOwner = holder(slots, ROLE.generalEvaluator) ?? tmOwner;
+	// The functionary intro. Gated exactly as the run sheet gates it: the owning
+	// role has a slot AND the club runs at least one functionary to introduce.
+	// Under MCF's variant the owner IS the General Evaluator, so it resolves
+	// through `geOwner` and inherits that role's cover — the beat's own
+	// `GE_COVERED_BY_TOASTMASTER` fallback (#363). Without it a club on that
+	// variant with functionaries but no GE projected no intro slide while still
+	// projecting the reports slide that cues those same functionaries.
+	const introOwner = geIntroducesFunctionaries ? geOwner : tmOwner;
 	const anyFunctionary = hasAnyFunctionaryRole(slots);
-	if (introOwnerSlots.length > 0 && anyFunctionary) {
+	// MCF's variant only, and only when there is a General Evaluator to introduce
+	// (#363): the Toastmaster hands the room to the GE, who then runs the
+	// functionary intro below. The standard flow has no early GE appearance, so
+	// `buildRunOfShow` emits no such beat there either.
+	if (geIntroducesFunctionaries) {
+		pushHandoff(
+			deck,
+			tmOwner,
+			"the General Evaluator",
+			generalEvaluator.length > 0,
+		);
+	}
+	if (introOwner != null && anyFunctionary) {
 		deck.push({
 			kind: "functionaryIntro",
-			owner: introOwner.name,
-			name: assigneeDisplay(introOwnerSlots[0]),
+			// The CLUB's name for the role, per `holder` — the same rule the deck's
+			// other owner-carrying slides follow. Resolving the owner through
+			// `geOwner` forces the choice: the canonical constant would announce
+			// "General Evaluator" over the Toastmaster who is covering.
+			owner: introOwner.role,
+			name: introOwner.name,
 			team: buildLegend(slots),
 		});
 	}
@@ -362,6 +484,7 @@ export function buildSlideDeck({
 	const speakers = byRole(slots, ROLE.speaker).sort(
 		(a, b) => a.slotIndex - b.slotIndex,
 	);
+	pushHandoff(deck, tmOwner, "the speakers", speakers.length > 0);
 	if (speakers.length > 0) {
 		const multi = speakers.length > 1;
 		speakers.forEach((s, i) => {
@@ -379,14 +502,15 @@ export function buildSlideDeck({
 			kind: "voteSpeaker",
 			names: assignedNames(speakers),
 			hasTimer,
+			caller: tmOwner,
 		});
 	}
 
-	const tableTopics = byRole(slots, ROLE.tableTopicsMaster);
-	if (tableTopics.length > 0) {
+	pushHandoff(deck, tmOwner, "the Table Topics Master", ttOwner != null);
+	if (ttOwner) {
 		deck.push({
 			kind: "tableTopics",
-			master: assigneeDisplay(tableTopics[0]),
+			master: ttOwner.name,
 			timing: TABLE_TOPICS_TIMING,
 			// Gated on the word alone (#355) — the definition rides along when the
 			// meeting has one. Read from the same trimmed values the opening slides
@@ -394,10 +518,29 @@ export function buildSlideDeck({
 			word: wodWord,
 			definition: wodWord ? wodDefinition : null,
 		});
-		deck.push({ kind: "voteTableTopics", hasTimer });
+		deck.push({
+			kind: "voteTableTopics",
+			hasTimer,
+			caller: ttOwner,
+		});
 	}
 
+	// The Table Topics Master is holding the room when the segment ends, so they
+	// hand it to the General Evaluator. The `??` is the beat's `fallbacks: [{
+	// unless: TABLE_TOPICS_ROLE, owner: TOASTMASTER_ROLE }]`: with no Table Topics
+	// segment the Toastmaster never gave the room away, so the hand-off stays on
+	// them rather than disappearing (#363).
+	pushHandoff(
+		deck,
+		ttOwner ?? tmOwner,
+		"the General Evaluator",
+		generalEvaluator.length > 0,
+	);
+
 	const evaluators = orderEvaluators(byRole(slots, ROLE.evaluator), slots);
+	// Likewise the evaluators' hand-off falls back to the Toastmaster at a club
+	// with no General Evaluator — somebody still has to introduce them.
+	pushHandoff(deck, geOwner, "the speech evaluators", evaluators.length > 0);
 	if (evaluators.length > 0) {
 		const multi = evaluators.length > 1;
 		evaluators.forEach((s, i) => {
@@ -413,50 +556,63 @@ export function buildSlideDeck({
 			kind: "voteEvaluator",
 			names: assignedNames(evaluators),
 			hasTimer,
+			// The Best-Evaluator vote beat carries TWO fallbacks (#363); this is the
+			// second one — the Toastmaster calls the vote at a club with no General
+			// Evaluator. The first only rewrites copy (`hasTimer`, above).
+			caller: geOwner,
 		});
 	}
 
-	// Beats 11, 12 then 13: the GE evaluates the evaluators, calls for the
-	// functionary reports, then gives the overall meeting evaluation. All three
-	// need a General Evaluator and nothing replaces them when the club has none;
-	// the reports beat additionally needs functionaries to call for.
-	if (generalEvaluator.length > 0) {
+	// The General Evaluator's closing sequence: evaluate the evaluators, call for
+	// the functionary reports, then give the overall meeting evaluation. All
+	// three follow `geOwner`, so the Toastmaster covers them at a club that runs
+	// no GE and they disappear only when there is nobody to cover either; the
+	// reports slide additionally needs functionaries to call for.
+	// Gated on the EVALUATORS as well as the owner, mirroring the beat's
+	// `requiresAnyOf: [EVALUATOR_ROLE]` — which reverses #367's call that this
+	// slide follows the General Evaluator alone (#363). There is nothing to
+	// evaluate at a club that runs no evaluators, whoever is holding the room.
+	if (geOwner != null && evaluators.length > 0) {
 		deck.push({
 			kind: "evaluatorEvaluation",
-			name: assigneeDisplay(generalEvaluator[0]),
+			owner: geOwner.role,
+			name: geOwner.name,
 			time: beatDuration(runOfShow, "evaluatorEvaluation"),
 		});
 	}
 
-	// Beat 12's gate is functionaries who REPORT (#371), not functionaries: a club
-	// whose only functionary is a Vote Counter has nobody to call on, and the
-	// team lists the same subset so the slide never names someone with no report.
-	if (generalEvaluator.length > 0 && hasAnyReportingFunctionaryRole(slots)) {
+	// The functionary-reports gate is functionaries who REPORT (#371), not
+	// functionaries: a club whose only functionary is a Vote Counter has nobody
+	// to call on, and the team lists the same subset so the slide never names
+	// someone with no report.
+	if (geOwner != null && hasAnyReportingFunctionaryRole(slots)) {
 		deck.push({
 			kind: "functionaryReports",
-			name: assigneeDisplay(generalEvaluator[0]),
+			owner: geOwner.role,
+			name: geOwner.name,
 			team: buildReportingLegend(slots),
 		});
 	}
 
-	if (generalEvaluator.length > 0) {
+	if (geOwner != null) {
 		deck.push({
 			kind: "generalEvaluation",
-			name: assigneeDisplay(generalEvaluator[0]),
+			owner: geOwner.role,
 			time: beatDuration(runOfShow, "generalEvaluation"),
 		});
 	}
 
 	const awardCategories: string[] = [];
-	if (tableTopics.length > 0) awardCategories.push("Best Table Topic");
+	if (ttOwner) awardCategories.push("Best Table Topic");
 	if (evaluators.length > 0) awardCategories.push("Best Evaluator");
 	if (speakers.length > 0) awardCategories.push("Best Speaker");
 	if (awardCategories.length > 0) {
 		deck.push({ kind: "awards", categories: awardCategories });
 	}
 
-	// Beat 15 (#352), between the awards and the announcements. Ungated, like the
-	// beat: the club cannot know in advance whether guests will be in the room.
+	// Guest comments (#352), between the awards and the announcements. Ungated,
+	// like the beat: the club cannot know in advance whether guests will be in
+	// the room.
 	deck.push({ kind: "guestComments" });
 
 	if (meeting.reminders?.trim()) {

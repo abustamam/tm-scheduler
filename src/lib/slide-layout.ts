@@ -4,7 +4,7 @@
 
 import type { LegendEntry } from "./agenda-runsheet";
 import { OPEN_LABEL } from "./agenda-runsheet";
-import type { Slide } from "./agenda-slides";
+import type { HandoffTarget, Slide } from "./agenda-slides";
 
 export type LineRole = "head" | "name" | "strong" | "muted" | "spacer";
 /** One rendered line. `text` is absent for `spacer`. */
@@ -76,6 +76,44 @@ const content = (header: string, body: Body): SlideLayout => ({
 const filledTeam = (team: LegendEntry[]): LegendEntry[] =>
 	team.filter((t) => t.name !== OPEN_LABEL);
 
+/** The segment leader who calls a vote (#363), as the vote slides show them —
+ *  the same "Role · Name" the printed row's `who` column carries, so the two
+ *  surfaces credit the same person in the same words.
+ *
+ *  `strong`, not `muted`: it is the only place a human's name leads a slide, and
+ *  `muted` (2.5cqw) would make it the smallest line on a deck read off a
+ *  projector. `strong` (2.8cqw semibold) keeps it subordinate to the `head`
+ *  instructions it attributes without making the name the hardest thing to
+ *  read. */
+const callerLine = (caller: LegendEntry): Line =>
+	strong(`${caller.role} · ${caller.name}`);
+
+/**
+ * A hand-off's header, by the segment it hands to (#363).
+ *
+ * The overview grid names a slide by its header — `slideLabel` in
+ * meeting-present.tsx returns it verbatim — so one shared "Hand-off" would put
+ * five indistinguishable rows in the one place a jump grid exists to help, in
+ * an issue whose whole point is removing ambiguity about who does what. The
+ * suffix names the SEGMENT, short enough to read in a grid cell; the body still
+ * spells out the full prose target.
+ *
+ * Keyed on `to`, which is what tells them apart — four targets covering five
+ * hand-offs. The two INTO the General Evaluator (MCF's opening one and the one
+ * out of Table Topics) are deliberately indistinguishable here: they are the
+ * same transition, and the run sheet concedes it by minting separate
+ * `geOpeningHandoff`/`geEvaluationHandoff` ids for the beats instead. An
+ * unmapped target falls back to the bare header rather than throwing —
+ * `HandoffTarget` makes that unreachable through the type, but a worse grid
+ * label is still not worth a deck that will not render mid-meeting.
+ */
+const HANDOFF_HEADER: Record<HandoffTarget, string> = {
+	"the speakers": "Hand-off — Speakers",
+	"the Table Topics Master": "Hand-off — Table Topics",
+	"the General Evaluator": "Hand-off — General Evaluator",
+	"the speech evaluators": "Hand-off — Evaluators",
+};
+
 /** Credit for the Word of the Day (#354). The slide sits inside the
  *  Toastmaster's opening, so it names the role that actually presents it — the
  *  Grammarian, under the club's own name for it. An unclaimed Grammarian is
@@ -108,6 +146,23 @@ export function slideLayout(slide: Slide): SlideLayout {
 				form: "centered",
 				lines: [head(slide.name)],
 			});
+		case "handoff":
+			// Two lines, both `head`: the cue is the whole slide, so neither half is
+			// subordinate to the other. The holder is named the way the printed
+			// hand-off band names them — including the "— open —" placeholder for an
+			// enabled-but-unclaimed role, since suppressing it here would drop a cue
+			// the printed agenda keeps.
+			return content(HANDOFF_HEADER[slide.to] ?? "Hand-off", {
+				form: "centered",
+				lines: [
+					head(`${slide.from.role} · ${slide.from.name}`),
+					// Capital I: the centered body separates the two lines with the gap
+					// it gives independent statements, so a lower-case second line reads
+					// as a sentence broken in half. It also matches the printed band,
+					// which prints the run sheet's own "Introduces the speakers".
+					head(`Introduces ${slide.to}`),
+				],
+			});
 		case "toastmasterIntro": {
 			const lines: Line[] = [];
 			if (slide.theme)
@@ -133,10 +188,15 @@ export function slideLayout(slide: Slide): SlideLayout {
 			return content("Functionaries", { form: "centered", lines });
 		}
 		case "functionaryReports":
+			// The owner comes off the slide, exactly as `functionaryIntro`'s does:
+			// it is the General Evaluator at most clubs and the Toastmaster of the
+			// Day at a club that runs no GE (#363). Hardcoding "General Evaluator:"
+			// here is what made a Toastmaster-covered slide announce a role nobody
+			// in the room held.
 			return content("Functionary Reports", {
 				form: "centered",
 				lines: [
-					head("General Evaluator:"),
+					head(`${slide.owner}:`),
 					head(slide.name),
 					...filledTeam(slide.team).map((t) => name(`${t.role}: ${t.name}`)),
 				],
@@ -162,13 +222,16 @@ export function slideLayout(slide: Slide): SlideLayout {
 			});
 		}
 		case "voteSpeaker": {
-			// Timer-aware like the other two vote slides: the run sheet's beat-6
-			// fallback drops the same clause (#367), so a club with no Timer prints
-			// "Toastmaster · Vote Best Speaker" and must not be told to call for a
-			// report from a role nobody holds.
-			const lines: Line[] = slide.hasTimer
-				? [head("Ask for speaking time.")]
-				: [];
+			// Timer-aware like the other two vote slides: the Best-Speaker vote
+			// beat's fallback drops the same clause (#367), so a club with no Timer
+			// prints "Toastmaster · Opens voting for Best Speaker" and must not be
+			// told to call for a report from a role nobody holds.
+			const lines: Line[] = [];
+			// The segment leader who calls the report and the vote (#363), first and
+			// below `head`: it is attribution — whose cue this is — not one of the
+			// instructions the room is being read.
+			if (slide.caller) lines.push(callerLine(slide.caller));
+			if (slide.hasTimer) lines.push(head("Ask for speaking time."));
 			lines.push(
 				head("Please Vote for Best Speaker:"),
 				...slide.names.map(name),
@@ -194,10 +257,11 @@ export function slideLayout(slide: Slide): SlideLayout {
 			});
 		}
 		case "voteTableTopics": {
-			// Beat 8's fallback drops the timer's-report clause on the same signal.
-			const lines: Line[] = slide.hasTimer
-				? [head("Ask for Table Topics times.")]
-				: [];
+			// The Best-Table-Topics vote beat's fallback drops the timer's-report
+			// clause on the same signal.
+			const lines: Line[] = [];
+			if (slide.caller) lines.push(callerLine(slide.caller));
+			if (slide.hasTimer) lines.push(head("Ask for Table Topics times."));
 			lines.push(head("Please Vote for Best Table Topic Speaker:"));
 			return content("Vote for Best Table Topic", {
 				form: "centered",
@@ -205,10 +269,11 @@ export function slideLayout(slide: Slide): SlideLayout {
 			});
 		}
 		case "evaluatorEvaluation":
+			// Owner off the slide, for the same reason as the reports slide above.
 			return content("Evaluation of the Evaluators", {
 				form: "centered",
 				lines: [
-					head("General Evaluator:"),
+					head(`${slide.owner}:`),
 					head(slide.name),
 					strong(`Time: ${slide.time}`),
 				],
@@ -220,10 +285,10 @@ export function slideLayout(slide: Slide): SlideLayout {
 			return content("Speech Evaluation", { form: "centered", lines });
 		}
 		case "voteEvaluator": {
-			// Beat 10's fallback, likewise.
-			const lines: Line[] = slide.hasTimer
-				? [head("Ask for timer’s report:")]
-				: [];
+			// The Best-Evaluator vote beat's fallback, likewise.
+			const lines: Line[] = [];
+			if (slide.caller) lines.push(callerLine(slide.caller));
+			if (slide.hasTimer) lines.push(head("Ask for timer’s report:"));
 			lines.push(
 				head("Please Vote for Best Evaluator:"),
 				...slide.names.map(name),
@@ -231,10 +296,15 @@ export function slideLayout(slide: Slide): SlideLayout {
 			return content("Speech Evaluation", { form: "centered", lines });
 		}
 		case "generalEvaluation":
+			// The header names the SEGMENT; this line names the ROLE giving it — the
+			// General Evaluator, or the Toastmaster of the Day covering it at a club
+			// that runs no GE (#363). The holder's name is deliberately not shown:
+			// this slide has never named them, and the run sheet's matching row
+			// already does — so the slide carries no `name` to show.
 			return content("General Evaluation", {
 				form: "centered",
 				lines: [
-					head("General Evaluator"),
+					head(slide.owner),
 					head("Closing Remarks"),
 					strong(`Time: ${slide.time}`),
 				],

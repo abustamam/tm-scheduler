@@ -320,6 +320,120 @@ function OfficerGrid({
 	);
 }
 
+/** The hand-off elbow's leg length, in px. Fixed across the four layouts: it is
+ *  a hairline affordance drawn at rule weight, not type that scales with them. */
+const ELBOW = 5;
+
+/** A 0-minute hand-off (#363), rendered as a thin band rather than a full
+ *  segment block: `buildTimeline` gives it the clock time of the row it
+ *  introduces, so an equally-weighted block reads as a duplicate of that row.
+ *  The band drops the repeated stamp and is indented past its layout's time
+ *  column, leaving the clock gutter a clean ruler down the page. `who · detail`
+ *  on one line keeps the holder's name without needing the beat's copy to be
+ *  recased.
+ *
+ *  `who`, the separator and `detail` are THREE nodes — no separator character is
+ *  ever joined into a string. Both halves carry run-sheet copy that punctuates
+ *  itself: `who` is `Role · Name`, and an enabled-but-unclaimed role makes that
+ *  `Role · — open —`. Any literal join collides with one of those — the middot
+ *  the rest of the sheet uses printed `Role · Name · Detail` (three peers, two
+ *  identical separators), and the em dash that replaced it printed `Role · —
+ *  open — — Introduces the speakers`. As its own node the separator gets the
+ *  differentiation a character could not: reduced opacity, so the boundary reads
+ *  lighter than the middot inside `who`. Every other row site differentiates it
+ *  structurally too (narrative: `who` at 700 with `detail` on its own muted
+ *  line; grid: bold `who` then smaller muted `detail`; timing: separate cells),
+ *  so the band was the one place it read flat. The spaces around the separator
+ *  are collapsed away in the flex line (`gap` does the spacing) and exist so the
+ *  band's text stream still reads as a sentence when copied or spoken.
+ *
+ *  The leading elbow is drawn with BORDERS, not "↳" (U+21B3): Manrope is served
+ *  over the Google Fonts css2 API with a unicode-range that excludes it
+ *  (src/styles.css), so the glyph always fell through to ui-sans-serif — a
+ *  different face, weight and baseline from every character beside it — and the
+ *  band's `fontStyle: italic` then synthesised an oblique on top, so it printed
+ *  visibly slanted and read as an artifact. In a PDF pipeline whose fallback
+ *  chain lacks the glyph it degrades to tofu. An `ELBOW`-sized box with two
+ *  borders is font-independent, and stays `aria-hidden`: the band's own text
+ *  carries the meaning.
+ *
+ *  `fontSize`, `padding` and `chrome` come from the call site: the four layouts
+ *  have different type scales, gutters and row rules, and a band that ignores
+ *  them reads as a broken row rather than a quieter one. `chrome` is narrowed
+ *  to exactly the two properties every call site actually passes — background
+ *  and borderBottom — and spreads FIRST, so a call site can vary the layout's
+ *  own chrome but can never override the semantics (color, italics, layout)
+ *  this component owns. */
+function HandoffBand({
+	row,
+	fontSize,
+	padding,
+	chrome,
+}: {
+	row: TimelineRow;
+	fontSize: number;
+	padding: string;
+	chrome?: Pick<React.CSSProperties, "background" | "borderBottom">;
+}) {
+	return (
+		<div
+			style={{
+				...chrome,
+				display: "flex",
+				gap: 6,
+				padding,
+				fontSize,
+				lineHeight: 1.35,
+				color: MUTED,
+				fontStyle: "italic",
+			}}
+		>
+			{/* The elbow's foot sits ON the band's baseline, and the browser is what
+			    puts it there: an inline-block with no in-flow content takes its
+			    bottom margin edge as its baseline, so a `verticalAlign: "baseline"`
+			    box aligns to the text baseline exactly, at every one of the four
+			    call sites' sizes and in whatever face the PDF pipeline resolves. The
+			    wrapper is the flex item and carries the band's own type so the line
+			    box it establishes matches its neighbours'. (Computing the offset by
+			    hand needs the face's real ascent and the sign of the half-leading —
+			    it was off by ~0.5px at 10 and ~1px at 11.5, and no single constant
+			    fixes both because Chrome rounds the ascent. `alignSelf: "baseline"`
+			    on the bare box does not work either: with no text in it Chrome
+			    synthesises the baseline from its top edge.) */}
+			<span aria-hidden style={{ flex: "none", fontSize, lineHeight: 1.35 }}>
+				<span
+					style={{
+						display: "inline-block",
+						width: ELBOW,
+						height: ELBOW,
+						borderLeft: `1px solid ${MUTED}`,
+						borderBottom: `1px solid ${MUTED}`,
+						verticalAlign: "baseline",
+					}}
+				/>
+			</span>
+			<span>{row.who}</span>
+			<span style={{ flex: "none", opacity: 0.55 }}>{" · "}</span>
+			<span>{row.detail}</span>
+		</div>
+	);
+}
+
+/** A run-of-show row's React key, for all three places that render the rows.
+ *  Position IS the identity: the list is rebuilt wholesale and never reordered,
+ *  and no combination of fields is unique. `${time}-${who}` was, until #363 —
+ *  a hand-off books 0 minutes, so it carries the stamp of the beat it
+ *  introduces, and a club with a General Evaluator but no functionaries gets
+ *  two Toastmaster hand-offs back to back, identical in both fields.
+ *
+ *  The index is deliberate, not an oversight, and lives here rather than in six
+ *  `biome-ignore lint/suspicious/noArrayIndexKey` comments across the three
+ *  render sites — same reasoning the ignores elsewhere in this repo carry, said
+ *  once. Never call this on a list that reorders. */
+function rowKey(r: TimelineRow, i: number): string {
+	return `${i}-${r.time}-${r.who}`;
+}
+
 /** The narrative run-of-show (editorial / spacious): a colored-spine list.
  *  `timingColors` swaps the muted min–max range for the colored green·amber·red
  *  trio (used by the one-page editorial layout). */
@@ -336,11 +450,25 @@ function RunNarrative({
 	return (
 		<div>
 			{rows.map((r, i) => {
+				// No spine and no bottom rule: the hand-off sits under the hairline of
+				// the beat that hands over and runs straight into the beat it
+				// introduces, which is the grouping the room actually experiences.
+				// Indented past the 4px spine and the time column so the stamps stay a
+				// single unbroken column.
+				if (r.handoff)
+					return (
+						<HandoffBand
+							key={rowKey(r, i)}
+							row={r}
+							fontSize={lg ? 11.5 : 10}
+							padding={lg ? "4px 0 4px 83px" : "3px 0 3px 69px"}
+						/>
+					);
 				const color = beatColor(r.who);
 				const highlight = isHighlighted(r.who);
 				return (
 					<div
-						key={`${r.time}-${r.who}`}
+						key={rowKey(r, i)}
 						style={{
 							display: "flex",
 							borderLeft: `4px solid ${color}`,
@@ -349,7 +477,15 @@ function RunNarrative({
 							borderBottom: i < rows.length - 1 ? HAIR : undefined,
 						}}
 					>
+						{/* Test hook only — nothing renders off it. It marks the clock-stamp
+						    cells so the suite can assert "a hand-off repeats no clock stamp"
+						    (#363) by collecting every stamp on the page: a `HandoffBand` has
+						    no such cell, so a band that started printing one would show up
+						    as an extra entry. Matching the stamps as text instead would pass
+						    on a band that echoed the row below it. All three row-rendering
+						    sites carry it; keep them in sync. */}
 						<div
+							data-row-time={r.time}
 							style={{
 								flex: "none",
 								width: lg ? 64 : 54,
@@ -646,6 +782,45 @@ function EditorialLayout({
 
 // ---------------------------------------------------------------------------
 // GRID — one page
+//
+// NO HEADROOM LEFT. Measured on a 23-row MCF agenda (#363): 1108px of content
+// against a 1056px page, so `FitPage` scales this layout to ~0.951. It fitted
+// exactly at 1019px before the hand-off rows; rendering those as full rows
+// instead of `HandoffBand`s would cost 1174px, so the band already absorbs
+// half the overrun and no legible band closes the rest.
+//
+// The 5% scale is accepted — nothing clips and body text lands around 7.5pt —
+// but grid is the DEFAULT print layout and every further addition compounds
+// into a deeper shrink. Anything added here should arrive with a compensating
+// reduction. The cheap inventory, when it is needed: ~16px across the three
+// section gaps and the footer margin, plus ~10px from halving the band's
+// padding. Past that it means re-tuning the row rhythm.
+//
+// ALL FOUR LAYOUTS, measured in Chromium after webfonts settled, on the same
+// 23-row MCF agenda — grid came out at 1114px here against the 1108px above, so
+// these are the same sheet. Each figure is for the RUN-OF-SHOW page (page 2 on
+// the two-page layouts); `band` is what the hand-off band's italic actually
+// lands at once FitPage has scaled the page:
+//
+//   timing     1056px  scale 1.000  band 7.50pt
+//   grid       1114px  scale 0.946  band 7.10pt
+//   editorial  1299px  scale 0.811  band 6.09pt
+//   spacious   1500px  scale 0.703  band 6.06pt
+//
+// Editorial, not grid, is the tight one: it carries header, roles roster,
+// officers, meets/location, mission, announcements AND the run of show on one
+// FitPage. Two things follow. (1) Its height is set ENTIRELY by the main
+// column — 1198px of roster + run of show against a 394px left rail — so
+// trimming the rail (mission/announcements gaps) buys nothing; only the 18px
+// above Run of Show is in the tall column, and cutting it all is worth +0.07pt.
+// (2) The band is NOT the outlier there the way it was on grid: editorial's own
+// `detail` is 10.5px, so at 0.811 it prints 5.95pt against the band's 6.09pt.
+// Everything on that page is small together, which is a row-rhythm question for
+// editorial rather than anything the band introduced.
+//
+// A denser but ordinary agenda (3 speakers/3 evaluators, 25 rows) pushes
+// editorial to 1394px/0.756 and spacious to 1620px/0.651 — band 5.67pt and
+// 5.61pt. Neither has headroom for another full-height row either.
 // ---------------------------------------------------------------------------
 function GridLayout({
 	header,
@@ -745,52 +920,79 @@ function GridLayout({
 						overflow: "hidden",
 					}}
 				>
-					{rows.map((r, i) => (
-						<div
-							key={`${r.time}-${r.who}`}
-							style={{
-								display: "flex",
-								background: isHighlighted(r.who)
-									? MINT
-									: i % 2 === 1
-										? "#fafdfb"
-										: "#fff",
-								borderBottom: i < rows.length - 1 ? HAIR : undefined,
-							}}
-						>
+					{rows.map((r, i) =>
+						// This layout's language is a ruled, zebra-striped table, so the
+						// band keeps the stripe and the rule and goes quiet instead:
+						// no spine, no stamp, italic type, half the row padding.
+						// Indented to 68px, where the segment column starts.
+						//
+						// 10px, matching this layout's `detail` (the `who` beside it is
+						// 10.5) rather than dropping under it: at FitPage's ~0.951 the
+						// band was the smallest sustained prose on the sheet (~6.8pt),
+						// and it is running italic, which is the hardest thing on the
+						// page to read. Same argument `TimingLegend` makes above. The
+						// ~0.7px per band it costs comes out of the headroom inventory
+						// the header comment enumerates.
+						r.handoff ? (
+							<HandoffBand
+								key={rowKey(r, i)}
+								row={r}
+								fontSize={10}
+								padding="2px 12px 2px 68px"
+								chrome={{
+									background: i % 2 === 1 ? "#fafdfb" : "#fff",
+									borderBottom: i < rows.length - 1 ? HAIR : undefined,
+								}}
+							/>
+						) : (
 							<div
+								key={rowKey(r, i)}
 								style={{
-									flex: "none",
-									width: 60,
-									borderLeft: `4px solid ${beatColor(r.who)}`,
-									padding: "4px 0 4px 10px",
-									fontSize: 10.5,
-									fontWeight: 700,
-									color: INK,
+									display: "flex",
+									background: isHighlighted(r.who)
+										? MINT
+										: i % 2 === 1
+											? "#fafdfb"
+											: "#fff",
+									borderBottom: i < rows.length - 1 ? HAIR : undefined,
 								}}
 							>
-								{r.time}
-							</div>
-							<div style={{ flex: 1, padding: "4px 12px 4px 8px" }}>
-								<span style={{ fontSize: 10.5, fontWeight: 700 }}>
-									{r.who}.
-								</span>{" "}
-								<span style={{ fontSize: 10, color: MUTED }}>{r.detail}</span>
-							</div>
-							{r.marks ? (
+								{/* Test hook — see `RunNarrative`'s note on `data-row-time`. */}
 								<div
+									data-row-time={r.time}
 									style={{
 										flex: "none",
-										display: "flex",
-										alignItems: "center",
-										padding: "4px 12px 4px 0",
+										width: 60,
+										borderLeft: `4px solid ${beatColor(r.who)}`,
+										padding: "4px 0 4px 10px",
+										fontSize: 10.5,
+										fontWeight: 700,
+										color: INK,
 									}}
 								>
-									<TimingTrio marks={r.marks} size={9.5} />
+									{r.time}
 								</div>
-							) : null}
-						</div>
-					))}
+								<div style={{ flex: 1, padding: "4px 12px 4px 8px" }}>
+									<span style={{ fontSize: 10.5, fontWeight: 700 }}>
+										{r.who}.
+									</span>{" "}
+									<span style={{ fontSize: 10, color: MUTED }}>{r.detail}</span>
+								</div>
+								{r.marks ? (
+									<div
+										style={{
+											flex: "none",
+											display: "flex",
+											alignItems: "center",
+											padding: "4px 12px 4px 0",
+										}}
+									>
+										<TimingTrio marks={r.marks} size={9.5} />
+									</div>
+								) : null}
+							</div>
+						),
+					)}
 				</div>
 
 				<AnnouncementsBlock
@@ -1472,11 +1674,29 @@ function TimingLayout({
 						}}
 					>
 						{rows.map((r, i) => {
+							// The one place with a real column header, so the band keeps the
+							// table's stripe and rule and spans the Role + Segment columns
+							// as one line — starting at 58px, the Role column's own edge —
+							// rather than filling four cells with a stampless echo of the
+							// row below it.
+							if (r.handoff)
+								return (
+									<HandoffBand
+										key={rowKey(r, i)}
+										row={r}
+										fontSize={10}
+										padding="3px 12px 3px 58px"
+										chrome={{
+											background: i % 2 === 1 ? "#fafdfb" : "#fff",
+											borderBottom: i < rows.length - 1 ? HAIR : undefined,
+										}}
+									/>
+								);
 							const [role, ...rest] = r.who.split(" · ");
 							const name = rest.join(" · ");
 							return (
 								<div
-									key={`${r.time}-${r.who}`}
+									key={rowKey(r, i)}
 									style={{
 										display: "flex",
 										alignItems: "center",
@@ -1489,7 +1709,9 @@ function TimingLayout({
 												: "#fff",
 									}}
 								>
+									{/* Test hook — see `RunNarrative`'s note on `data-row-time`. */}
 									<div
+										data-row-time={r.time}
 										style={{
 											flex: "none",
 											width: 46,

@@ -8,12 +8,13 @@
 
 ## Agenda
 
-- The MCF handback beat ("Toastmaster of the Day · Introduces the speakers") has no counterpart slide in the projected deck, so a Toastmaster running the meeting off the projector alone does not see the cue. Deliberate for now — the deck's next slide already names the speaker being introduced. Revisit if anyone reports missing it.
-  **Priority:** P4
-
-- Confirm the handback row on a real MCF agenda after it deploys, and that Table Topics absorbs the extra minute rather than pushing the end time.
+- Confirm the hand-off rows on a real MCF agenda after it deploys — that the four print layouts read right in the room and the projected deck's hand-off slides land where the cue is needed.
   **Priority:** P3
 
 ## Completed
 
 <!-- Items move here with: **Completed:** vX.Y.Z.W (YYYY-MM-DD) -->
+
+- The MCF handback beat ("Toastmaster of the Day · Introduces the speakers") has no counterpart slide in the projected deck, so a Toastmaster running the meeting off the projector alone does not see the cue.
+  **Priority:** P4
+  **Completed:** v1.1.0.0 (2026-07-29) — every hand-off now has a matching slide, labelled by target.
