@@ -2069,6 +2069,43 @@ describe("BeatFallback — owner and detail swap (#363)", () => {
 		]);
 	});
 
+	// `fallbacks` moved onto the SHARED half of `Beat` (#363), so an event beat
+	// carries them too and `expandRunSheet` resolves the owner once for both
+	// arms. The event arm reads that owner as `who`, and only its `detail` half
+	// had coverage — which is the half that cannot drift, since both arms share
+	// one `beatDetail`. This is the arm-specific line: `fallbackOwner?.roleName
+	// ?? beat.who`, the thing the old event-only `fallback` did with a bare
+	// string that named a role which did not exist.
+	it("replaces an event beat's `who` with the fallback owner's role name", () => {
+		const SAA = { roleKey: "sergeant_at_arms", roleName: "Sergeant-at-Arms" };
+		const event: Beat = {
+			kind: "event",
+			who: "Sergeant-at-Arms",
+			detail: "Call to Order · phones silent · introduces the President",
+			minutes: 1,
+			fallbacks: [
+				{ unless: SAA, owner: { roleKey: "president", roleName: "President" } },
+			],
+		};
+		// No Sergeant-at-Arms slot ⇒ the fallback fires and the President calls
+		// the room to order instead.
+		expect(expandRunSheet([], [event])[0]).toMatchObject({
+			who: "President",
+			detail: "Call to Order · phones silent · introduces the President",
+		});
+		// …and the beat's own `who` survives when the role IS run. An event beat
+		// is not slot-bound, so it never gains a "· Name" the way a role row does.
+		const saa = slot({
+			roleKey: "sergeant_at_arms",
+			roleName: "Sergeant-at-Arms",
+			category: "leadership",
+			assigneeName: "Bilal",
+		});
+		expect(expandRunSheet([saa], [event])[0]).toMatchObject({
+			who: "Sergeant-at-Arms",
+		});
+	});
+
 	it("a degenerate fallback (`unless` only, no owner or detail) changes nothing when it fires", () => {
 		const noOp: Beat = {
 			...beat,

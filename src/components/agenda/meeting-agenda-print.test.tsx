@@ -360,6 +360,53 @@ describe("MeetingAgendaPrint hand-off band", () => {
 		});
 	}
 
+	// The other half of the same requirement. `BAND_STYLE` above pins the type
+	// scale and gutter each call site passes; `chrome` — the zebra stripe and the
+	// hairline rule — is the half that had none, and it is the whole reason the
+	// prop exists. The two table layouts hand the band the row chrome so it reads
+	// as a quiet row of the table; the two narrative layouts pass none, so the
+	// band has no spine and no rule and runs straight into the beat it
+	// introduces. Drop `chrome` from a grid call site and the band punches a
+	// white, ruleless hole through a striped table with nothing failing.
+	const BANDS_IN_THE_TABLE: Record<AgendaLayout, boolean> = {
+		grid: true,
+		timing: true,
+		editorial: false,
+		spacious: false,
+	};
+
+	for (const layout of ["grid", "editorial", "spacious", "timing"] as const) {
+		it(`${layout}: the hand-off band ${
+			BANDS_IN_THE_TABLE[layout] ? "keeps" : "drops"
+		} the row stripe and rule`, () => {
+			renderHandoffs(layout);
+			const bandFor = (text: string) =>
+				screen.getByText(text).parentElement as HTMLElement;
+			// Rows 1 and 2 of the fixture: adjacent hand-offs, so one lands on each
+			// side of the zebra.
+			const odd = bandFor(
+				"Toastmaster · Lee P. · Introduces the General Evaluator",
+			);
+			const even = bandFor("Toastmaster · Lee P. · Introduces the speakers");
+
+			if (BANDS_IN_THE_TABLE[layout]) {
+				expect(odd.style.background).not.toBe("");
+				expect(even.style.background).not.toBe("");
+				// Striped WITH the table rather than painted one flat colour.
+				expect(odd.style.background).not.toBe(even.style.background);
+				expect(odd.style.borderBottom).not.toBe("");
+			} else {
+				expect(odd.style.background).toBe("");
+				expect(even.style.background).toBe("");
+				expect(odd.style.borderBottom).toBe("");
+			}
+			// Either way the band keeps the semantics `HandoffBand` owns — `chrome`
+			// spreads first precisely so a call site cannot reach them.
+			expect(odd.style.fontStyle).toBe("italic");
+			expect(odd.style.display).toBe("flex");
+		});
+	}
+
 	it("renders the ↳ affordance as a decorative, screen-reader-hidden cue", () => {
 		renderHandoffs("editorial");
 		// Four hand-offs in this fixture, each with its own "↳" — any one proves

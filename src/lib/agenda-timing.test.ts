@@ -47,6 +47,30 @@ describe("buildTimeline", () => {
 		expect(timed.map((r) => r.time)).toEqual(["6:45", "6:48", "6:48"]);
 	});
 
+	// The seam between the two halves of #363: `expandRunSheet` sets `handoff`
+	// and the four print layouts read it off a TimelineRow, but nothing pinned
+	// the step in between. `TimelineRow = AgendaRow & { time }` does not help —
+	// both markers are OPTIONAL, so a rewrite that built the row field-by-field
+	// instead of spreading would drop them and still type-check, and every
+	// hand-off would silently render as a full segment block again.
+	it("carries the hand-off and flex markers onto the timed row", () => {
+		const timed = buildTimeline(
+			[
+				{ ...row(0), handoff: true },
+				{ ...row(10), flex: true },
+			],
+			new Date("2026-07-07T23:45:00Z"),
+			"America/Chicago",
+		);
+		expect(timed[0].handoff).toBe(true);
+		expect(timed[1].flex).toBe(true);
+		// …and an unmarked row stays unmarked, so the assertions above are not
+		// passing off a blanket default as the flag.
+		expect(
+			buildTimeline([row(1)], new Date(), "UTC")[0].handoff,
+		).toBeUndefined();
+	});
+
 	it("formats in the club timezone (not the host timezone)", () => {
 		const start = new Date("2026-07-07T23:45:00Z");
 		// Same instant is 19:45 in New York (EDT, UTC-4).
