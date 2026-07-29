@@ -267,6 +267,132 @@ describe("slideLayout bodies", () => {
 			expect(evaluation).toBe("Speech Evaluation");
 			expect(vote).not.toBe(evaluation);
 		});
+
+		// The two tests above pin the one collision #446 was about. This one closes
+		// the CLASS: every kind gets the name the jump grid will show it under, and
+		// no two may agree. Keyed by `Slide["kind"]`, so a new slide kind does not
+		// compile until it is listed here and its name is checked against all the
+		// others — the check that was missing when `voteEvaluator` was written.
+		// `slide-layout.ts` already relies on this informally: `functionaryIntro`
+		// carries a comment explaining its header avoids colliding with
+		// "Toastmaster Intro", with nothing enforcing it until now.
+		it("gives every slide kind a name no other kind shares", () => {
+			// `slideLabel` (meeting-present.tsx) resolves exactly this way, and the
+			// grid cell is that string verbatim.
+			const label = (slide: Slide) => {
+				const l = slideLayout(slide);
+				return l.chrome === "content" ? l.header : l.headline;
+			};
+			const team = [{ role: "Timer", name: "Riyaz" }];
+			const oneOfEach: Record<Slide["kind"], Slide> = {
+				title: {
+					kind: "title",
+					clubName: "MCF Toastmasters Club",
+					district: "District 39",
+					clubNumber: "28677176",
+					meetingNumber: 55,
+					scheduledAt: new Date("2026-07-09T02:00:00Z"),
+					timezone: "America/Chicago",
+				},
+				toastmaster: { kind: "toastmaster", name: "Faisal" },
+				handoff: {
+					kind: "handoff",
+					from: { role: "Toastmaster of the Day", name: "Faisal" },
+					to: "the speakers",
+				},
+				toastmasterIntro: {
+					kind: "toastmasterIntro",
+					theme: "Momentum",
+					word: "Synergy",
+				},
+				wordOfDay: {
+					kind: "wordOfDay",
+					word: "Synergy",
+					definition: "combined action",
+					example: null,
+					presenter: null,
+				},
+				functionaryIntro: {
+					kind: "functionaryIntro",
+					owner: "General Evaluator",
+					name: "Sudheer",
+					team,
+				},
+				functionaryReports: {
+					kind: "functionaryReports",
+					owner: "General Evaluator",
+					name: "Sudheer",
+					team,
+				},
+				speech: {
+					kind: "speech",
+					label: "First Speech",
+					speaker: "Jagpal",
+					title: "On Momentum",
+					projectLevel: null,
+					time: "5–7 minutes",
+					link: null,
+				},
+				voteSpeaker: {
+					kind: "voteSpeaker",
+					names: ["Jagpal"],
+					hasTimer: true,
+					caller: null,
+				},
+				tableTopics: {
+					kind: "tableTopics",
+					master: "Mona",
+					timing: "1–2 minutes per speaker",
+					word: null,
+					definition: null,
+				},
+				voteTableTopics: {
+					kind: "voteTableTopics",
+					hasTimer: true,
+					caller: null,
+				},
+				evaluation: {
+					kind: "evaluation",
+					label: "Evaluation 1",
+					evaluator: "Sudheer",
+					speaker: "Jagpal",
+					time: "3 minutes",
+				},
+				voteEvaluator: {
+					kind: "voteEvaluator",
+					names: ["Riyaz"],
+					hasTimer: true,
+					caller: null,
+				},
+				evaluatorEvaluation: {
+					kind: "evaluatorEvaluation",
+					owner: "General Evaluator",
+					name: "Sudheer",
+					time: "3 minutes",
+				},
+				generalEvaluation: {
+					kind: "generalEvaluation",
+					owner: "General Evaluator",
+					time: "5 minutes",
+				},
+				awards: { kind: "awards", categories: ["Best Speaker"] },
+				guestComments: { kind: "guestComments" },
+				reminders: { kind: "reminders", text: "Dues are due." },
+				thankYou: {
+					kind: "thankYou",
+					meetingSchedule: "2nd & 4th Thursday",
+					nextMeetingAt: null,
+					timezone: "America/Chicago",
+				},
+			};
+
+			const labels = Object.values(oneOfEach).map(label);
+			// Report the offenders, not just a count — a bare size mismatch sends
+			// the next person hunting through nineteen cases by hand.
+			const duplicated = labels.filter((l, i) => labels.indexOf(l) !== i);
+			expect(duplicated).toEqual([]);
+			expect(new Set(labels).size).toBe(labels.length);
+		});
 	});
 
 	describe("handoff layout (#363)", () => {

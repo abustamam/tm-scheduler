@@ -177,6 +177,49 @@ describe("MeetingPresent", () => {
 			]);
 		});
 
+		// #446. The test above pins the whole label list, which looks like it
+		// covers this — but its four-slide deck has no evaluation and no
+		// evaluator vote, so it passed while the bug was live. The grid is the
+		// only place the collision is visible: three evaluators legitimately
+		// produce three identical "Speech Evaluation" cells, and the vote used to
+		// return that same header, making a fourth. Find-the-vote became counting.
+		it("does not add the evaluator vote to the run of Speech Evaluations (#446)", () => {
+			const evaluators = ["Ana", "Ben", "Cara"];
+			render(
+				<MeetingPresent
+					deck={[
+						...evaluators.map(
+							(evaluator, n): Slide => ({
+								kind: "evaluation",
+								label: `Evaluation ${n + 1}`,
+								evaluator,
+								speaker: "Jane Doe",
+								time: "2–3 min",
+							}),
+						),
+						{
+							kind: "voteEvaluator",
+							names: evaluators,
+							hasTimer: true,
+							caller: { role: "General Evaluator", name: "Faisal" },
+						},
+					]}
+					clubName={CLUB_NAME}
+				/>,
+			);
+			press("b");
+
+			const items = within(overview() as HTMLElement).getAllByRole("button", {
+				name: /^Slide \d+:/,
+			});
+			expect(items.map((b) => b.getAttribute("aria-label"))).toEqual([
+				"Slide 1: Speech Evaluation",
+				"Slide 2: Speech Evaluation",
+				"Slide 3: Speech Evaluation",
+				"Slide 4: Vote for Best Evaluator",
+			]);
+		});
+
 		it("also opens on `o` and from the slide counter", () => {
 			render(<MeetingPresent deck={deck} clubName={CLUB_NAME} />);
 			press("o");
