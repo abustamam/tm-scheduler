@@ -1094,6 +1094,41 @@ describe("hand-off beats — who introduces whom (#363)", () => {
 			),
 		);
 	});
+
+	// The print route runs `expandRunSheet` → `applyFlex` → `buildTimeline` before
+	// the four layouts ever see a row, and each link is pinned on its own: this
+	// file for the marker, `agenda-timing.test.ts` for `buildTimeline` carrying
+	// it, `meeting-agenda-print.test.tsx` for the band. `applyFlex` is the link in
+	// the middle with nothing on it. It rebuilds the list — the flex row through
+	// `{ ...r, minutes }`, the rest by reference — so `handoff` survives only
+	// because both arms preserve the whole row; an edit that assembled rows
+	// field-by-field (the same hazard `buildTimeline`'s test names) would strip
+	// every hand-off back to a full segment block with the suite still green.
+	// `flex` is already safe there — `flexBannerMessage` reads it off the result —
+	// which is exactly why `handoff` can rot alone.
+	it("keeps the hand-off markers through applyFlex, the print route's own pipeline", () => {
+		const rows = expandRunSheet(sixRoleClub(), RUN_OF_SHOW);
+		const flexed = applyFlex(rows, 90);
+		// The Table Topics row really was resized (10 ⇒ its 25-min cap), so this
+		// exercises the rebuilding arm rather than `applyFlex`'s no-flex-row
+		// shortcut, which returns the input array untouched.
+		expect(flexed.rows.find((r) => r.flex === true)?.minutes).toBe(
+			TABLE_TOPICS_MAX,
+		);
+		const timed = buildTimeline(
+			flexed.rows,
+			"2026-07-07T23:45:00Z",
+			"America/Chicago",
+		);
+		expect(
+			timed.filter((r) => r.handoff === true).map((r) => r.detail),
+		).toEqual([
+			"Introduces the speakers",
+			"Introduces the Table Topics Master",
+			"Introduces the General Evaluator",
+			"Introduces the speech evaluators",
+		]);
+	});
 });
 
 /**
