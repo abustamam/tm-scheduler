@@ -268,7 +268,7 @@ describe("buildRunOfShow", () => {
 			expect(beats[beats.length - 1]).toMatchObject({
 				kind: "event",
 				who: "President",
-				detail: "Club business · announcements · adjourn",
+				detail: "Club business · announcements · adjourns",
 			});
 			// Exactly one beat asks for guest comments.
 			expect(
@@ -399,13 +399,12 @@ describe("functionarySlots (#371)", () => {
 /**
  * The functionary-reports gate is "functionaries who REPORT", not
  * "functionaries" (#371). A Vote Counter is a functionary — introduced at the
- * functionary-intro beat, listed in the legend —
- * but tallies votes rather than giving a report, so a Vote-Counter-only club
- * must not get a "Calls for the functionary reports" beat naming only them.
- * Vote Counter is excluded by IDENTITY (its key), which is what keys are for;
- * a club-invented functionary is presumed to report, since we cannot know
- * otherwise and an extra name in a list the GE reads out is a smaller error
- * than silently deleting the beat.
+ * functionary-intro beat, listed in the legend — but tallies votes rather than
+ * giving a report, so a Vote-Counter-only club must not get a "Calls for the
+ * functionary reports" beat naming only them. Vote Counter is excluded by
+ * IDENTITY (its key), which is what keys are for; a club-invented functionary
+ * is presumed to report, since we cannot know otherwise and an extra name in a
+ * list the GE reads out is a smaller error than silently deleting the beat.
  */
 describe("reportingFunctionarySlots (#371)", () => {
 	it("drops the Vote Counter and keeps the three that report", () => {
@@ -957,7 +956,7 @@ describe("closing and opening hand-off clauses (#363)", () => {
 	it("closes on announcements, not elections", () => {
 		expect(
 			detailFor(expandRunSheet(club(), RUN_OF_SHOW), "President"),
-		).toContain("Club business · announcements · adjourn");
+		).toContain("Club business · announcements · adjourns");
 	});
 });
 
@@ -989,13 +988,7 @@ describe("expandRunSheet — vote beats are gated on their segment (#367)", () =
 
 	it("prints no vote at all for a club that runs none of the three segments", () => {
 		const rows = expandRunSheet([timer]);
-		// Both wordings: the with-Timer detail and the no-Timer fallback. Since the
-		// reword they share "voting for Best", so the second no longer covers a case
-		// the first misses — kept as the statement of intent.
 		expect(rows.some((r) => r.detail.includes("voting for Best"))).toBe(false);
-		expect(rows.some((r) => r.detail.startsWith("Opens voting for"))).toBe(
-			false,
-		);
 	});
 
 	it("prints only the votes whose segment is on the agenda", () => {
@@ -1131,9 +1124,9 @@ describe("expandRunSheet — the functionary-intro and functionary-reports beats
 
 	it("the functionary intro names a club-invented functionary, and renders for a club that runs ONLY custom ones (#371)", () => {
 		// #368's disable lifecycle lets a club turn off all four standard
-		// functionaries and run its own. Before #371 that lost both functionary beats
-		// from the printed agenda and both slides from the deck, while the legend
-		// still listed the very same people.
+		// functionaries and run its own. Before #371 that lost both functionary
+		// beats from the printed agenda and both slides from the deck, while the
+		// legend still listed the very same people.
 		const jokeMaster = slot({
 			id: "jm",
 			roleKey: null,
@@ -1361,8 +1354,7 @@ describe("hasAnyFunctionaryRole", () => {
 
 // The functionary-reports beat's gate, and the deck's matching slide (#371).
 // Narrower than `hasAnyFunctionaryRole` by exactly one standard role: the Vote
-// Counter,
-// who is a functionary but gives no report.
+// Counter, who is a functionary but gives no report.
 describe("hasAnyReportingFunctionaryRole (#371)", () => {
 	it("is false for no slots and for a leadership-only crew", () => {
 		expect(hasAnyReportingFunctionaryRole([])).toBe(false);

@@ -176,8 +176,8 @@ export type BeatFallback = {
  * The deck used to carry its own timing constants, so the same beat could be
  * budgeted at one length on the printed agenda and announced as another on the
  * wall, and was: the speech-evaluation beat booked 3 minutes while the deck
- * said "2–3 minutes".
- * They agreed everywhere else only because someone had just set both by hand.
+ * said "2–3 minutes". They agreed everywhere else only because someone had just
+ * set both by hand.
  *
  * An id is how a slide says WHICH beat it is speaking for, the way `roleKey`
  * is how a beat says which role it binds to — matching on `detail` would break
@@ -340,8 +340,8 @@ const FUNCTIONARY_ROLES: BeatRole[] = [
 ];
 
 /** What the functionary-reports beat is nominally about: the standard
- *  functionaries MINUS the Vote Counter, who gives no report. Same
- *  relationship to `reportingFunctionarySlots` as `FUNCTIONARY_ROLES` has to
+ *  functionaries MINUS the Vote Counter, who gives no report. Same relationship
+ *  to `reportingFunctionarySlots` as `FUNCTIONARY_ROLES` has to
  *  `functionarySlots`. */
 const REPORTING_FUNCTIONARY_ROLES: BeatRole[] = FUNCTIONARY_ROLES.filter(
 	(r) => r.roleKey !== NON_REPORTING_FUNCTIONARY.roleKey,
@@ -394,11 +394,10 @@ const AWARD_CATEGORIES: { role: BeatRole; label: string }[] = [
  * The corrected default flow: the Toastmaster of the Day introduces the
  * functionaries at the top (naming the ones this club runs) — each explains
  * their own role, which is when the Grammarian gives the Word of the Day — and
- * the General Evaluator's work happens at the end: evaluate the
- * evaluators, call for the functionary reports, then evaluate the meeting
- * overall. The three vote beats each belong to a segment and are gated on it,
- * so a club with no Table Topics Master never prints a vote for a segment it
- * does not run.
+ * the General Evaluator's work happens at the end: evaluate the evaluators,
+ * call for the functionary reports, then evaluate the meeting overall. The
+ * three vote beats each belong to a segment and are gated on it, so a club with
+ * no Table Topics Master never prints a vote for a segment it does not run.
  *
  * The 0-minute `handoff` beats between segments say who introduces whom (#363),
  * so nobody has to guess whose cue it is mid-meeting.
@@ -443,7 +442,7 @@ export function buildRunOfShow({
 	return [
 		{
 			// The club states this hand-off as a trailing clause, not a row of its
-			// own (#363). "exits noted" is gone: the club does not brief exits.
+			// own (#363).
 			kind: "event",
 			who: "Sergeant-at-Arms",
 			detail: "Call to Order · phones silent · introduces the President",
@@ -640,8 +639,6 @@ export function buildRunOfShow({
 			kind: "role",
 			...TOASTMASTER_ROLE,
 			role: "plain",
-			// Trailing clause again (#363): the awards are the Toastmaster's last
-			// act, and the President closes the meeting.
 			detail: `Awards · ${AWARDS_TOKEN} · hands over to the President`,
 			minutes: 2,
 			renderUnowned: true,
@@ -673,7 +670,7 @@ export function buildRunOfShow({
 			// both would have the agenda invite the same guests to speak twice.
 			// "elections" is gone too (#363): the club holds none at a regular
 			// meeting — announcements are what actually happens here.
-			detail: "Club business · announcements · adjourn",
+			detail: "Club business · announcements · adjourns",
 			minutes: 3,
 		},
 	];
@@ -758,8 +755,8 @@ const GROUP_SLOTS: Record<RoleGroup, (slots: AgendaSlot[]) => AgendaSlot[]> = {
 };
 
 /** True when the club runs at least one functionary role this meeting — the
- *  functionary-intro beat's gate (#367). Exported so the deck
- *  (`buildSlideDeck`) gates its functionary-intro slide on the SAME signal the
+ *  functionary-intro beat's gate (#367). Exported so the deck's
+ *  `buildSlideDeck` gates its functionary-intro slide on the SAME signal the
  *  run sheet does, rather than a second rule that could drift: there is nothing
  *  to introduce when a club runs no functionaries at all. */
 export function hasAnyFunctionaryRole(slots: AgendaSlot[]): boolean {

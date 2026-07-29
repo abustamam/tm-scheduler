@@ -60,8 +60,8 @@ const kinds = (slots: AgendaSlot[] = []) => build({ slots }).map((s) => s.kind);
 describe("buildSlideDeck anchors", () => {
 	it("always emits title and thankYou — even with no slots", () => {
 		// The Toastmaster slide is NOT an anchor: it is the Toastmaster's opening
-		// beat in slide form and
-		// is gated on the role, like every other section (#367).
+		// beat in slide form and is gated on the role, like every other section
+		// (#367).
 		expect(kinds([])).toEqual(["title", "guestComments", "thankYou"]);
 	});
 
@@ -492,10 +492,10 @@ const timer = slot({
 /**
  * The functionary-intro slide (#367) — that beat of the run-of-show in slide
  * form: whoever owns it introduces the functionaries and each explains their
- * role.
- * The default owner is the Toastmaster of the Day — the standard flow — and the
- * `geIntroducesFunctionaries` flag hands it to the General Evaluator (MCF).
- * This is the slide that used to be `geIntro`, which hardcoded MCF's variant.
+ * role. The default owner is the Toastmaster of the Day — the standard flow —
+ * and the `geIntroducesFunctionaries` flag hands it to the General Evaluator
+ * (MCF). This is the slide that used to be `geIntro`, which hardcoded MCF's
+ * variant.
  */
 describe("buildSlideDeck functionary intro (#367)", () => {
 	it("is owned by the Toastmaster of the Day by default", () => {
@@ -594,10 +594,10 @@ describe("buildSlideDeck functionary intro (#367)", () => {
 });
 
 /**
- * The functionary-reports slide (#367, absorbs #353). The General
- * Evaluator calls for the functionary reports, between evaluating the
- * evaluators and the overall meeting evaluation. Unaffected by
- * `geIntroducesFunctionaries` — MCF's closing sequence is everyone else's.
+ * The functionary-reports slide (#367, absorbs #353). The General Evaluator
+ * calls for the functionary reports, between evaluating the evaluators and the
+ * overall meeting evaluation. Unaffected by `geIntroducesFunctionaries` — MCF's
+ * closing sequence is everyone else's.
  */
 describe("buildSlideDeck functionary reports (#367 / #353)", () => {
 	it("lists the functionary roles that report and who holds each", () => {
@@ -731,9 +731,8 @@ describe("buildSlideDeck evaluation session", () => {
 			"evaluation",
 			"voteEvaluator",
 			// The evaluator-evaluation beat — the GE evaluates the evaluators, AFTER
-			// the Best-Evaluator
-			// vote, where the run sheet puts it. The old `evalIntro` slide sat
-			// before the evaluations, matching no beat at all.
+			// the Best-Evaluator vote, where the run sheet puts it. The old
+			// `evalIntro` slide sat before the evaluations, matching no beat at all.
 			"evaluatorEvaluation",
 			"generalEvaluation",
 			"awards",
@@ -750,8 +749,8 @@ describe("buildSlideDeck evaluation session", () => {
 			evaluator: "Faisal Ali",
 			speaker: "Rehanna Khan",
 			// The speech-evaluation beat's budget, not a second opinion about it
-			// (#356). The deck used
-			// to hardcode "2–3 minutes" while the run sheet booked 3.
+			// (#356). The deck used to hardcode "2–3 minutes" while the run sheet
+			// booked 3.
 			time: "3 minutes",
 		});
 	});
@@ -777,12 +776,11 @@ describe("buildSlideDeck evaluation session", () => {
 	});
 
 	it("gates the evaluator evaluation on the General Evaluator, NOT on the evaluators (#367)", () => {
-		// Spec: no General Evaluator ⇒ the GE's whole closing sequence vanishes
-		// and nothing
-		// replaces the overall meeting evaluation. Before this fix the deck gated
-		// the slide on the EVALUATORS and fell back to the literal role name, so a
-		// club with evaluators and no GE projected "General Evaluator: General
-		// Evaluator".
+		// Spec: no General Evaluator ⇒ the evaluator evaluation, the functionary
+		// reports and the overall evaluation all vanish, and nothing replaces the
+		// overall meeting evaluation. Before this fix the deck gated the slide on
+		// the EVALUATORS and fell back to the literal role name, so a club with
+		// evaluators and no GE projected "General Evaluator: General Evaluator".
 		const noGe = build({ slots: [speaker, evaluator] });
 		expect(noGe.map((s) => s.kind)).not.toContain("evaluatorEvaluation");
 		expect(JSON.stringify(noGe)).not.toContain("General Evaluator");

@@ -211,11 +211,11 @@ function RoleCard({
 					roleId: role.id,
 					name: String(form.get("name") ?? "").trim(),
 					category: String(
-						// Fall back to the role's CURRENT category, never a literal:
-						// since #371 the category decides whether a role is
-						// introduced with the functionaries and called on for a
-						// report by the General Evaluator, so
-						// a missing field must not silently recategorise the role.
+						// Fall back to the role's CURRENT category, never a literal: since
+						// #371 the category decides whether a role is introduced with the
+						// functionaries and called on for a report by the General
+						// Evaluator, so a missing field must not silently recategorise the
+						// role.
 						form.get("category") ?? role.category,
 					) as RoleDefinitionRow["category"],
 					defaultCount: Number(form.get("defaultCount") ?? 1),
@@ -499,13 +499,12 @@ function AddRoleForm({
 					    category is load-bearing: a functionary-category role is
 					    introduced with the functionaries and called on for a report by
 					    the General Evaluator, on the printed agenda AND the projected
-					    deck. That rule is
-					    defensible only if "functionary" is something a club CHOSE —
-					    as a default it would be the value they never touched. A club
-					    adding Sergeant-at-Arms (who calls the meeting to order, and not in
-					    ROLE_TEMPLATE, so it can only be added here) or a Zoom Host
-					    would otherwise find them listed among the functionaries the
-					    General Evaluator calls on for a report. */}
+					    deck. That rule is defensible only if "functionary" is something
+					    a club CHOSE — as a default it would be the value they never
+					    touched. A club adding Sergeant-at-Arms (who calls the meeting to
+					    order, and not in ROLE_TEMPLATE, so it can only be added here) or
+					    a Zoom Host would otherwise find them listed among the
+					    functionaries the General Evaluator calls on for a report. */}
 					<select
 						id="new-category"
 						name="category"

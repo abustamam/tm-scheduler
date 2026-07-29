@@ -41,11 +41,11 @@ export type ClubForDeck = {
 };
 
 /** Carried by all three vote slides — the ends of the speech, Table Topics and
- *  evaluation segments. True when the club runs a Timer, so
- *  the slide asks for the timer's report before the vote. Each of those beats'
- *  run-sheet `fallback` drops its timer's-report clause on exactly the same
- *  signal (#367): a club with no Timer still votes, it just has no report to
- *  call for and nobody to call on for it. */
+ *  evaluation segments. True when the club runs a Timer, so the slide asks for
+ *  the timer's report before the vote. Each of those beats' run-sheet
+ *  `fallback` drops its timer's-report clause on exactly the same signal
+ *  (#367): a club with no Timer still votes, it just has no report to call for
+ *  and nobody to call on for it. */
 type VoteTiming = { hasTimer: boolean };
 
 /** One projected slide. Date formatting is deferred to the renderer. */
@@ -81,9 +81,9 @@ export type Slide =
 			presenter: LegendEntry | null;
 	  }
 	| {
-			/** The functionary-intro beat of the run-of-show (#367): they are introduced
-			 *  and each explains their own role. Owned by the Toastmaster of the
-			 *  Day in the standard flow, by the General Evaluator under MCF's
+			/** The functionary-intro beat of the run-of-show (#367): they are
+			 *  introduced and each explains their own role. Owned by the Toastmaster
+			 *  of the Day in the standard flow, by the General Evaluator under MCF's
 			 *  variant — this slide was `geIntro`, which hardcoded the latter. */
 			kind: "functionaryIntro";
 			/** Display name of the role that introduces them. */
@@ -93,10 +93,10 @@ export type Slide =
 			team: LegendEntry[];
 	  }
 	| {
-			/** The functionary-reports beat (#367, absorbs #353): the GE calls for the
-			 *  functionary reports, between evaluating the evaluators and the
-			 *  overall meeting evaluation. Not affected by the flag — MCF's
-			 *  closing sequence is the same as everyone else's. */
+			/** The functionary-reports beat (#367, absorbs #353): the GE calls for
+			 *  the functionary reports, between evaluating the evaluators and the
+			 *  overall meeting evaluation. Not affected by the flag — MCF's closing
+			 *  sequence is the same as everyone else's. */
 			kind: "functionaryReports";
 			/** Who holds the General Evaluator role, or the open placeholder. */
 			name: string;
@@ -119,11 +119,11 @@ export type Slide =
 			/** The Word of the Day, kept on screen for the segment that exists to
 			 *  use it — the Table Topics beat is literally "Impromptu topics using
 			 *  the Word of the Day" (#355). A REMINDER, not a second presentation:
-			 *  the standalone
-			 *  `wordOfDay` slide (#354) is where the Grammarian presents the word
-			 *  in full, a dozen slides earlier. Hence no example and no presenter
-			 *  credit here — nobody is delivering it at this point, they are
-			 *  working it into an answer. `null` when the meeting has no word. */
+			 *  the standalone `wordOfDay` slide (#354) is where the Grammarian
+			 *  presents the word in full, a dozen slides earlier. Hence no example
+			 *  and no presenter credit here — nobody is delivering it at this point,
+			 *  they are working it into an answer. `null` when the meeting has no
+			 *  word. */
 			word: string | null;
 			/** The word's definition, when the meeting records one. A narrower gate
 			 *  than the standalone slide's, which needs a definition or an example
@@ -145,10 +145,10 @@ export type Slide =
 	| {
 			/** The evaluator-evaluation beat (#367): the General Evaluator evaluates
 			 *  the evaluators, after the Best-Evaluator vote and before the
-			 *  functionary reports. Gated on the GE role having a slot, exactly as the
-			 *  run sheet gates it — a club with no General Evaluator loses the GE's
-			 *  whole closing sequence and nothing replaces it. This slide was
-			 *  `evalIntro`, which sat before
+			 *  functionary reports. Gated on the GE role having a slot, exactly as
+			 *  the run sheet gates it — a club with no General Evaluator loses this
+			 *  beat, the functionary reports and the overall meeting evaluation, and
+			 *  nothing replaces them. This slide was `evalIntro`, which sat before
 			 *  the evaluations (matching no beat), was gated on EVALUATORS rather
 			 *  than the GE, and printed the literal words "General Evaluator" as a
 			 *  name when the club had no GE. */
@@ -296,11 +296,11 @@ export function buildSlideDeck({
 		timezone: club.timezone,
 	});
 
-	// The Toastmaster of the Day opens the meeting. Gated on the role
-	// having a slot, exactly as `expandRunSheet` gates the beat — a club that
-	// does not run a Toastmaster of the Day (#368) neither prints the row nor
-	// projects the slide. An enabled-but-unclaimed role still has a slot and
-	// still renders, as the open placeholder.
+	// The Toastmaster of the Day opens the meeting. Gated on the role having a
+	// slot, exactly as `expandRunSheet` gates the beat — a club that does not run
+	// a Toastmaster of the Day (#368) neither prints the row nor projects the
+	// slide. An enabled-but-unclaimed role still has a slot and still renders, as
+	// the open placeholder.
 	const toastmaster = byRole(slots, ROLE.toastmaster);
 	if (toastmaster.length > 0) {
 		deck.push({ kind: "toastmaster", name: assigneeDisplay(toastmaster[0]) });
@@ -431,9 +431,9 @@ export function buildSlideDeck({
 	}
 
 	// The functionary-reports gate is functionaries who REPORT (#371), not
-	// functionaries: a club whose only functionary is a Vote Counter has nobody to
-	// call on, and the team lists the same subset so the slide never names someone
-	// with no report.
+	// functionaries: a club whose only functionary is a Vote Counter has nobody
+	// to call on, and the team lists the same subset so the slide never names
+	// someone with no report.
 	if (generalEvaluator.length > 0 && hasAnyReportingFunctionaryRole(slots)) {
 		deck.push({
 			kind: "functionaryReports",
@@ -459,8 +459,8 @@ export function buildSlideDeck({
 	}
 
 	// Guest comments (#352), between the awards and the announcements. Ungated,
-	// like the beat: the club cannot know in advance whether guests will be in the
-	// room.
+	// like the beat: the club cannot know in advance whether guests will be in
+	// the room.
 	deck.push({ kind: "guestComments" });
 
 	if (meeting.reminders?.trim()) {

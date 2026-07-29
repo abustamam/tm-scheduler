@@ -65,8 +65,8 @@ const HANDOFF: Section | null = null;
  * mislabelling a section.
  */
 const BEATS: { detail: string; section: Section | null }[] = [
-	// Sergeant-at-Arms, Call to Order. A room-logistics event beat with
-	// no counterpart in the deck: nothing is projected while phones go silent.
+	// Sergeant-at-Arms, Call to Order. A room-logistics event beat with no
+	// counterpart in the deck: nothing is projected while phones go silent.
 	{
 		detail: "Call to Order · phones silent · introduces the President",
 		section: null,
@@ -112,27 +112,27 @@ const BEATS: { detail: string; section: Section | null }[] = [
 		detail: "Overall meeting evaluation · returns control to the Toastmaster",
 		section: "generalEvaluation",
 	},
-	// The Toastmaster's awards handout. Compared as of #372: the beat
-	// is now gated on the scored segments and names only those categories, which
-	// is exactly how the deck's `awards` slide was already built, so the two are
+	// The Toastmaster's awards handout. Compared as of #372: the beat is now
+	// gated on the scored segments and names only those categories, which is
+	// exactly how the deck's `awards` slide was already built, so the two are
 	// comparable rather than a standing content difference.
 	{
 		detail: "Awards · {awards} · hands over to the President",
 		section: "awards",
 	},
-	// Guest comments (#352), carved out of the President's closing so
-	// they get a row to point at and minutes on the clock. Ungated, like the
-	// opening remarks: every meeting can have guests, and the spec rules out a
-	// per-club toggle. It is a SECTION, not an exclusion — #352 adds it to both
-	// surfaces, so it has to be compared.
+	// Guest comments (#352), carved out of the President's closing so they get a
+	// row to point at and minutes on the clock. Ungated, like the opening
+	// remarks: every meeting can have guests, and the spec rules out a per-club
+	// toggle. It is a SECTION, not an exclusion — #352 adds it to both surfaces,
+	// so it has to be compared.
 	{
 		detail: "Guest Comments · invites our guests to share their thoughts",
 		section: "guestComments",
 	},
-	// President's club business / adjourn. Event beat, no slide. It no
-	// longer mentions guest comments: the beat above is the replacement the
-	// clause was waiting for, and prompting for them twice is worse than once.
-	{ detail: "Club business · announcements · adjourn", section: null },
+	// President's club business / adjourn. Event beat, no slide. It no longer
+	// mentions guest comments: the beat above is the replacement the clause was
+	// waiting for, and prompting for them twice is worse than once.
+	{ detail: "Club business · announcements · adjourns", section: null },
 ];
 
 /** The one beat only MCF's variant carries (#363): the Toastmaster introducing
@@ -206,10 +206,9 @@ const SECTION_BY_SLIDE = {
  * Ordering parity alone let the two surfaces state different minutes for the
  * same beat, and they did: the speech-evaluation beat budgeted 3 minutes while
  * the deck's `EVALUATION_TIMING` said "2–3 minutes". Deriving the deck's
- * timings from the
- * beat makes that unrepresentable, and makes this assertion cheap — the check
- * is just "the slide says what its beat budgets", with no minute values
- * restated here to drift in their turn.
+ * timings from the beat makes that unrepresentable, and makes this assertion
+ * cheap — the check is just "the slide says what its beat budgets", with no
+ * minute values restated here to drift in their turn.
  *
  * `satisfies` keeps it exhaustive over the slides that carry a `time`: a new
  * timed slide has to be classified or this stops compiling. The `tableTopics`
@@ -499,25 +498,24 @@ const CASES: { name: string; slots: AgendaSlot[] }[] = [
 		// the projected `functionaryIntro` slide (whose team came from
 		// `buildLegend`, a category filter) but not in the printed
 		// functionary-intro row (whose `{roles}` resolved against the four standard
-		// keys) — a CONTENT
-		// divergence this ordering test cannot see, which is why the run-sheet and
-		// deck suites assert the lists directly. What it can see is the gate.
+		// keys) — a CONTENT divergence this ordering test cannot see, which is why
+		// the run-sheet and deck suites assert the lists directly. What it can see
+		// is the gate.
 		name: "custom functionary-category role alongside the standard four",
 		slots: [...FULL, jokeMaster],
 	},
 	{
 		// The all-custom club: #368's disable lifecycle turns off all four standard
 		// functionaries and the club runs its own. The functionary-intro and
-		// functionary-reports beats used to vanish
-		// from print AND deck together — consistent, and consistently wrong.
+		// functionary-reports beats used to vanish from print AND deck together —
+		// consistent, and consistently wrong.
 		name: "all-custom functionaries (standard four disabled)",
 		slots: [tmod, ttm, ge, speaker1, evaluator1, jokeMaster],
 	},
 	{
 		// The functionary-reports gate decision (#371): a Vote Counter is a
 		// functionary, so they are INTRODUCED, but they give no report — so the
-		// reports section is
-		// absent from both surfaces.
+		// reports section is absent from both surfaces.
 		name: "Vote Counter is the club's only functionary",
 		slots: [tmod, ttm, ge, speaker1, evaluator1, voteCounter],
 	},
@@ -526,8 +524,8 @@ const CASES: { name: string; slots: AgendaSlot[] }[] = [
 		// standard KEY under a non-functionary category is reachable. The category
 		// is the definition (#371), so this club runs no functionaries and both
 		// surfaces must drop the functionary-intro and functionary-reports beats
-		// together — the case where a key-based
-		// gating fallback would have made print render a beat the deck omits.
+		// together — the case where a key-based gating fallback would have made
+		// print render a beat the deck omits.
 		name: "standard functionary key recategorised out of the functionaries",
 		slots: [
 			tmod,
