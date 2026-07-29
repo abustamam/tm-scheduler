@@ -78,9 +78,15 @@ const filledTeam = (team: LegendEntry[]): LegendEntry[] =>
 
 /** The segment leader who calls a vote (#363), as the vote slides show them —
  *  the same "Role · Name" the printed row's `who` column carries, so the two
- *  surfaces credit the same person in the same words. */
+ *  surfaces credit the same person in the same words.
+ *
+ *  `strong`, not `muted`: it is the only place a human's name leads a slide, and
+ *  `muted` (2.5cqw) would make it the smallest line on a deck read off a
+ *  projector. `strong` (2.8cqw semibold) keeps it subordinate to the `head`
+ *  instructions it attributes without making the name the hardest thing to
+ *  read. */
 const callerLine = (caller: LegendEntry): Line =>
-	muted(`${caller.role} · ${caller.name}`);
+	strong(`${caller.role} · ${caller.name}`);
 
 /**
  * A hand-off's header, by the segment it hands to (#363).
@@ -150,7 +156,11 @@ export function slideLayout(slide: Slide): SlideLayout {
 				form: "centered",
 				lines: [
 					head(`${slide.from.role} · ${slide.from.name}`),
-					head(`introduces ${slide.to}`),
+					// Capital I: the centered body separates the two lines with the gap
+					// it gives independent statements, so a lower-case second line reads
+					// as a sentence broken in half. It also matches the printed band,
+					// which prints the run sheet's own "Introduces the speakers".
+					head(`Introduces ${slide.to}`),
 				],
 			});
 		case "toastmasterIntro": {
@@ -217,8 +227,8 @@ export function slideLayout(slide: Slide): SlideLayout {
 			// prints "Toastmaster · Opens voting for Best Speaker" and must not be
 			// told to call for a report from a role nobody holds.
 			const lines: Line[] = [];
-			// The segment leader who calls the report and the vote (#363), muted and
-			// first: it is attribution — whose cue this is — not one of the
+			// The segment leader who calls the report and the vote (#363), first and
+			// below `head`: it is attribution — whose cue this is — not one of the
 			// instructions the room is being read.
 			if (slide.caller) lines.push(callerLine(slide.caller));
 			if (slide.hasTimer) lines.push(head("Ask for speaking time."));
@@ -286,11 +296,11 @@ export function slideLayout(slide: Slide): SlideLayout {
 			return content("Speech Evaluation", { form: "centered", lines });
 		}
 		case "generalEvaluation":
-			// The header names the SEGMENT; this line names whoever is giving it —
-			// the General Evaluator, or the Toastmaster of the Day covering the role
-			// at a club that runs no GE (#363). `slide.name` is deliberately not
-			// shown: this slide has never named the holder, and the run sheet's
-			// matching row already does.
+			// The header names the SEGMENT; this line names the ROLE giving it — the
+			// General Evaluator, or the Toastmaster of the Day covering it at a club
+			// that runs no GE (#363). The holder's name is deliberately not shown:
+			// this slide has never named them, and the run sheet's matching row
+			// already does — so the slide carries no `name` to show.
 			return content("General Evaluation", {
 				form: "centered",
 				lines: [

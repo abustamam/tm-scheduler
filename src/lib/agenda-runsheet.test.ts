@@ -1325,6 +1325,28 @@ describe("expandRunSheet — the functionary-intro and functionary-reports beats
 		);
 	});
 
+	it("substitutes a club's role name LITERALLY, dollar signs and all", () => {
+		// `String.replace` reads `$&`, "$`", `$'` and `$n` in a REPLACEMENT STRING
+		// as back-references, and `roleName` is typed verbatim by an admin with no
+		// character validation. Joined as a string, "Timer $`" spliced the copy
+		// BEFORE the token back into the row ("Introduces the Timer Introduces the
+		// ; each explains their role") on the printed agenda, the projected deck
+		// and the .pptx alike. A replacer function is what makes it literal.
+		const rows = expandRunSheet([
+			totd,
+			slot({
+				id: "tm",
+				roleName: "Timer $` $& $'",
+				roleKey: "timer",
+				category: "functionary",
+				assigneeName: "Bilal",
+			}),
+		]);
+		expect(introRow(rows)?.detail).toBe(
+			"Introduces the Timer $` $& $'; each explains their role",
+		);
+	});
+
 	it("omits the functionary reports when there are no functionary slots, even with a GE slot", () => {
 		// An evaluator rides along so the evaluator-evaluation beat's own gate
 		// (#363) is satisfied — this test is about the FUNCTIONARY gate, and

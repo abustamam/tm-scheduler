@@ -202,9 +202,11 @@ export type Slide =
 	  }
 	| {
 			kind: "generalEvaluation";
-			/** Display name of the role giving it — see `functionaryReports.owner`. */
+			/** Display name of the role giving it — see `functionaryReports.owner`.
+			 *  No `name`: unlike the other two owner-carrying slides, this one has
+			 *  never named the holder (`slideLayout` says why), so carrying one made
+			 *  it write-only. */
 			owner: string;
-			name: string;
 			time: string;
 	  }
 	| { kind: "awards"; categories: string[] }
@@ -372,14 +374,22 @@ export function buildSlideDeck({
 		timezone: club.timezone,
 	});
 
+	/** The two segment owners the slides below resolve, hoisted for the same
+	 *  reason `geOwner` is: they are each read from four or five places, and a
+	 *  re-derived `holder()`/`byRole()` is a place that can start answering
+	 *  differently. Non-null IS the "the club runs this role" gate — `holder`
+	 *  returns an entry for an enabled-but-unclaimed slot too, carrying the open
+	 *  placeholder as its name. */
+	const tmOwner = holder(slots, ROLE.toastmaster);
+	const ttOwner = holder(slots, ROLE.tableTopicsMaster);
+
 	// The Toastmaster of the Day opens the meeting. Gated on the role having a
 	// slot, exactly as `expandRunSheet` gates the beat — a club that does not run
 	// a Toastmaster of the Day (#368) neither prints the row nor projects the
 	// slide. An enabled-but-unclaimed role still has a slot and still renders, as
 	// the open placeholder.
-	const toastmaster = byRole(slots, ROLE.toastmaster);
-	if (toastmaster.length > 0) {
-		deck.push({ kind: "toastmaster", name: assigneeDisplay(toastmaster[0]) });
+	if (tmOwner) {
+		deck.push({ kind: "toastmaster", name: tmOwner.name });
 	}
 
 	const themeText = meeting.theme?.trim() || null;
@@ -417,11 +427,6 @@ export function buildSlideDeck({
 	}
 
 	const generalEvaluator = byRole(slots, ROLE.generalEvaluator);
-	/** The two other owners the slides below resolve, hoisted for the same reason
-	 *  `geOwner` is: they are each read from four or five places, and a re-derived
-	 *  `holder()` is a place that can start answering differently. */
-	const tmOwner = holder(slots, ROLE.toastmaster);
-	const ttOwner = holder(slots, ROLE.tableTopicsMaster);
 	/**
 	 * Whoever is actually doing the General Evaluator's job this meeting (#363).
 	 *
@@ -494,12 +499,11 @@ export function buildSlideDeck({
 		});
 	}
 
-	const tableTopics = byRole(slots, ROLE.tableTopicsMaster);
-	pushHandoff(deck, tmOwner, "the Table Topics Master", tableTopics.length > 0);
-	if (tableTopics.length > 0) {
+	pushHandoff(deck, tmOwner, "the Table Topics Master", ttOwner != null);
+	if (ttOwner) {
 		deck.push({
 			kind: "tableTopics",
-			master: assigneeDisplay(tableTopics[0]),
+			master: ttOwner.name,
 			timing: TABLE_TOPICS_TIMING,
 			// Gated on the word alone (#355) — the definition rides along when the
 			// meeting has one. Read from the same trimmed values the opening slides
@@ -587,13 +591,12 @@ export function buildSlideDeck({
 		deck.push({
 			kind: "generalEvaluation",
 			owner: geOwner.role,
-			name: geOwner.name,
 			time: beatDuration(runOfShow, "generalEvaluation"),
 		});
 	}
 
 	const awardCategories: string[] = [];
-	if (tableTopics.length > 0) awardCategories.push("Best Table Topic");
+	if (ttOwner) awardCategories.push("Best Table Topic");
 	if (evaluators.length > 0) awardCategories.push("Best Evaluator");
 	if (speakers.length > 0) awardCategories.push("Best Speaker");
 	if (awardCategories.length > 0) {

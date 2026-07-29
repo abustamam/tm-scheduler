@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { OPEN_LABEL } from "#/lib/agenda-runsheet";
 import type { TimelineRow } from "#/lib/agenda-timing";
 import {
 	type AgendaHeader,
@@ -275,6 +276,14 @@ describe("MeetingAgendaPrint hand-off band", () => {
 	/** The stamps the four timed beats own; the four hand-offs print none. */
 	const TIMED_STAMPS = ["7:03", "7:06", "7:20", "7:21"];
 
+	/** The band a `detail` was rendered into. `who`, the separator and `detail`
+	 *  are three sibling nodes (see `HandoffBand`), so the whole line is the
+	 *  PARENT's text — and reading it there is what proves the three nodes
+	 *  compose into one readable sentence. */
+	const bandOf = (detailNode: HTMLElement) =>
+		detailNode.parentElement as HTMLElement;
+	const bandFor = (detail: string) => bandOf(screen.getByText(detail));
+
 	function renderHandoffs(layout: AgendaLayout) {
 		return render(
 			<MeetingAgendaPrint
@@ -291,24 +300,22 @@ describe("MeetingAgendaPrint hand-off band", () => {
 	for (const layout of ["grid", "editorial", "spacious", "timing"] as const) {
 		it(`${layout}: prints every hand-off, holder and cue on one line`, () => {
 			renderHandoffs(layout);
+			// Both hand-offs into the General Evaluator, in page order — the pair the
+			// old `${time}-${who}` key could not tell apart.
 			expect(
-				screen.getByText(
-					"Toastmaster · Lee P. — Introduces the General Evaluator",
-				),
-			).toBeTruthy();
-			expect(
-				screen.getByText("Toastmaster · Lee P. — Introduces the speakers"),
-			).toBeTruthy();
-			expect(
-				screen.getByText(
-					"Table Topics Master · Rasheed — Introduces the General Evaluator",
-				),
-			).toBeTruthy();
-			expect(
-				screen.getByText(
-					"General Evaluator · Riyaz — Introduces the speech evaluators",
-				),
-			).toBeTruthy();
+				screen
+					.getAllByText("Introduces the General Evaluator")
+					.map((el) => bandOf(el).textContent),
+			).toEqual([
+				"Toastmaster · Lee P. · Introduces the General Evaluator",
+				"Table Topics Master · Rasheed · Introduces the General Evaluator",
+			]);
+			expect(bandFor("Introduces the speakers").textContent).toBe(
+				"Toastmaster · Lee P. · Introduces the speakers",
+			);
+			expect(bandFor("Introduces the speech evaluators").textContent).toBe(
+				"General Evaluator · Riyaz · Introduces the speech evaluators",
+			);
 		});
 
 		it(`${layout}: repeats no clock stamp on a hand-off`, () => {
@@ -352,9 +359,7 @@ describe("MeetingAgendaPrint hand-off band", () => {
 	for (const layout of ["grid", "editorial", "spacious", "timing"] as const) {
 		it(`${layout}: the hand-off band uses this layout's own paddingLeft/fontSize`, () => {
 			renderHandoffs(layout);
-			const band = screen.getByText(
-				"Toastmaster · Lee P. — Introduces the General Evaluator",
-			).parentElement as HTMLElement;
+			const band = bandFor("Introduces the speakers");
 			expect(band.style.paddingLeft).toBe(BAND_STYLE[layout].paddingLeft);
 			expect(band.style.fontSize).toBe(BAND_STYLE[layout].fontSize);
 		});
@@ -380,14 +385,12 @@ describe("MeetingAgendaPrint hand-off band", () => {
 			BANDS_IN_THE_TABLE[layout] ? "keeps" : "drops"
 		} the row stripe and rule`, () => {
 			renderHandoffs(layout);
-			const bandFor = (text: string) =>
-				screen.getByText(text).parentElement as HTMLElement;
 			// Rows 1 and 2 of the fixture: adjacent hand-offs, so one lands on each
 			// side of the zebra.
-			const odd = bandFor(
-				"Toastmaster · Lee P. — Introduces the General Evaluator",
+			const odd = bandOf(
+				screen.getAllByText("Introduces the General Evaluator")[0],
 			);
-			const even = bandFor("Toastmaster · Lee P. — Introduces the speakers");
+			const even = bandFor("Introduces the speakers");
 
 			if (BANDS_IN_THE_TABLE[layout]) {
 				expect(odd.style.background).not.toBe("");
@@ -413,13 +416,52 @@ describe("MeetingAgendaPrint hand-off band", () => {
 		// Manrope's served unicode-range, so it always fell back to another face
 		// and the band's italic synthesised an oblique on it. Asserting the
 		// borders is what would catch a revert to a text glyph.
-		const band = screen.getByText(
-			"Toastmaster · Lee P. — Introduces the General Evaluator",
-		).parentElement as HTMLElement;
-		const affordance = band.firstElementChild as HTMLElement;
+		const affordance = bandFor("Introduces the speakers")
+			.firstElementChild as HTMLElement;
 		expect(affordance.getAttribute("aria-hidden")).toBe("true");
 		expect(affordance.textContent).toBe("");
-		expect(affordance.style.borderLeftStyle).toBe("solid");
-		expect(affordance.style.borderBottomStyle).toBe("solid");
+		// The mark is the wrapper's inline-block child: the wrapper carries the
+		// band's type so the browser can sit the mark on the real text baseline
+		// (`verticalAlign: "baseline"`), instead of a hand-computed offset that was
+		// wrong at both of the sizes it claimed to cover.
+		const mark = affordance.firstElementChild as HTMLElement;
+		expect(mark.style.display).toBe("inline-block");
+		expect(mark.style.verticalAlign).toBe("baseline");
+		expect(mark.style.borderLeftStyle).toBe("solid");
+		expect(mark.style.borderBottomStyle).toBe("solid");
+	});
+
+	// The regression the em-dash separator shipped with: `who` carries the run
+	// sheet's own punctuation, and for an enabled-but-unclaimed role that is
+	// `OPEN_LABEL` — em dashes. Joined with an em dash the band printed
+	// "Toastmaster of the Day · — open — — Introduces the speakers". Three nodes
+	// with the separator in its own node is why no character choice can collide.
+	it("prints an unclaimed hand-off holder without doubling the separator", () => {
+		render(
+			<MeetingAgendaPrint
+				layout="editorial"
+				header={header}
+				roles={[]}
+				officers={[]}
+				explainers={[]}
+				rows={[
+					{
+						who: `Toastmaster of the Day · ${OPEN_LABEL}`,
+						detail: "Introduces the speakers",
+						minutes: 0,
+						marks: null,
+						handoff: true,
+						time: "7:06",
+					},
+				]}
+			/>,
+		);
+		const band = bandFor("Introduces the speakers");
+		// Spelled out rather than built from `OPEN_LABEL`: the literal IS the
+		// hazard, so a future change to the placeholder should land here.
+		expect(band.textContent).toBe(
+			"Toastmaster of the Day · — open — · Introduces the speakers",
+		);
+		expect(band.textContent).not.toContain("— —");
 	});
 });

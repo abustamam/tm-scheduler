@@ -885,7 +885,12 @@ function resolveDetail(beat: Beat, slots: AgendaSlot[]): string {
 		const labels = AWARD_CATEGORIES.filter((a) =>
 			hasRole(slots, a.role.roleKey, a.role.roleName),
 		).map((a) => a.label);
-		return beat.detail.replace(AWARDS_TOKEN, joinRoleNames(labels));
+		// Replacer FUNCTION, not a string: `String.replace` reads `$&`, "$`", `$'`
+		// and `$n` in a replacement string as back-references, so a club role
+		// literally named "Timer $`" would splice the copy before the token back
+		// into the row. The awards labels are hardcoded, so this site is safe today
+		// — but it is the same call as the `ROLES_TOKEN` one below, which is not.
+		return beat.detail.replace(AWARDS_TOKEN, () => joinRoleNames(labels));
 	}
 	if (!beat.detail.includes(ROLES_TOKEN)) return beat.detail;
 	// A group beat names the group's members (#371) — the functionary-intro beat
@@ -901,7 +906,14 @@ function resolveDetail(beat: Beat, slots: AgendaSlot[]): string {
 					required.some((r) => matchesRole(s, r.roleKey, r.roleName)),
 				);
 	const names = matched.map((s) => s.roleName);
-	return beat.detail.replace(ROLES_TOKEN, joinRoleNames([...new Set(names)]));
+	// Replacer function ⇒ the club's role names are substituted LITERALLY. An
+	// admin types `roleName` verbatim (admin/roles.tsx applies no character
+	// validation to it),
+	// so a role named "Timer $`" would otherwise corrupt the printed row, the
+	// projected slide and the .pptx alike.
+	return beat.detail.replace(ROLES_TOKEN, () =>
+		joinRoleNames([...new Set(names)]),
+	);
 }
 
 /**

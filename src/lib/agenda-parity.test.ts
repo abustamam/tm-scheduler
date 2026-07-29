@@ -333,7 +333,7 @@ function deckSections(slots: AgendaSlot[], config: RunOfShowConfig): string[] {
 	const out: string[] = [];
 	for (const slide of deck) {
 		if (slide.kind === "handoff") {
-			out.push(HANDOFF_SECTION[slide.to] ?? `unmapped-handoff:${slide.to}`);
+			out.push(HANDOFF_SECTION[slide.to]);
 			continue;
 		}
 		// A kind absent from the map is surfaced in the diff rather than thrown,

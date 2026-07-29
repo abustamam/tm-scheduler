@@ -30,7 +30,6 @@ describe("slideLayout headers (no 'Session', title-only)", () => {
 			contentHeader({
 				kind: "generalEvaluation",
 				owner: "General Evaluator",
-				name: "Riyaz",
 				time: "2 minutes",
 			}),
 		).toBe("General Evaluation");
@@ -237,7 +236,7 @@ describe("slideLayout bodies", () => {
 					form: "centered",
 					lines: [
 						{ role: "head", text: "Table Topics Master · Rasheed" },
-						{ role: "head", text: "introduces the General Evaluator" },
+						{ role: "head", text: "Introduces the General Evaluator" },
 					],
 				},
 			});
@@ -295,7 +294,7 @@ describe("slideLayout bodies", () => {
 			).toMatchObject({
 				lines: [
 					{ role: "head", text: "Toastmaster of the Day · Faisal" },
-					{ role: "head", text: "introduces the speakers" },
+					{ role: "head", text: "Introduces the speakers" },
 				],
 			});
 		});
@@ -307,10 +306,12 @@ describe("slideLayout bodies", () => {
 				hasTimer: true,
 				caller: { role: "Toastmaster of the Day", name: "Faisal" },
 			});
-			// The attribution comes first and muted; the instructions that follow are
-			// unchanged, which the two lines below the slice pin.
+			// The attribution comes first, at `strong` — below the `head`
+			// instructions it attributes, but never the smallest line on a slide
+			// read off a projector. The instructions that follow are unchanged,
+			// which the two lines below the slice pin.
 			expect(layout.lines).toEqual([
-				{ role: "muted", text: "Toastmaster of the Day · Faisal" },
+				{ role: "strong", text: "Toastmaster of the Day · Faisal" },
 				{ role: "head", text: "Ask for speaking time." },
 				{ role: "head", text: "Please Vote for Best Speaker:" },
 				{ role: "name", text: "Jagpal" },
@@ -326,7 +327,7 @@ describe("slideLayout bodies", () => {
 				}),
 			).toMatchObject({
 				lines: [
-					{ role: "muted", text: "Table Topics Master · Rasheed" },
+					{ role: "strong", text: "Table Topics Master · Rasheed" },
 					{ role: "head", text: "Please Vote for Best Table Topic Speaker:" },
 				],
 			});
@@ -339,7 +340,7 @@ describe("slideLayout bodies", () => {
 				}),
 			).toMatchObject({
 				lines: [
-					{ role: "muted", text: "General Evaluator · Priya" },
+					{ role: "strong", text: "General Evaluator · Priya" },
 					{ role: "head", text: "Please Vote for Best Evaluator:" },
 					{ role: "name", text: "Riyaz" },
 				],
@@ -397,12 +398,12 @@ describe("slideLayout bodies", () => {
 		).toEqual(["Toastmaster of the Day:", "Schinthia", "Timer: Bilal"]);
 
 		// This one shows the role but not the holder, and always has — the header
-		// names the segment, the first line names who is giving it.
+		// names the segment, the first line names the role giving it. The slide
+		// carries no holder at all, which is why there is no `name` to pass.
 		expect(
 			texts({
 				kind: "generalEvaluation",
 				owner,
-				name: "Schinthia",
 				time: "2 minutes",
 			}),
 		).toEqual(["Toastmaster of the Day", "Closing Remarks", "Time: 2 minutes"]);
@@ -412,7 +413,6 @@ describe("slideLayout bodies", () => {
 		const l = slideLayout({
 			kind: "generalEvaluation",
 			owner: "General Evaluator",
-			name: "Riyaz",
 			time: "2 minutes",
 		});
 		if (l.chrome === "content" && l.body.form === "centered") {

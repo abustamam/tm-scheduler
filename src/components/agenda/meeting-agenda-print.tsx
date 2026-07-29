@@ -320,25 +320,32 @@ function OfficerGrid({
 	);
 }
 
+/** The hand-off elbow's leg length, in px. Fixed across the four layouts: it is
+ *  a hairline affordance drawn at rule weight, not type that scales with them. */
+const ELBOW = 5;
+
 /** A 0-minute hand-off (#363), rendered as a thin band rather than a full
  *  segment block: `buildTimeline` gives it the clock time of the row it
  *  introduces, so an equally-weighted block reads as a duplicate of that row.
  *  The band drops the repeated stamp and is indented past its layout's time
- *  column, leaving the clock gutter a clean ruler down the page. `who — detail`
+ *  column, leaving the clock gutter a clean ruler down the page. `who · detail`
  *  on one line keeps the holder's name without needing the beat's copy to be
  *  recased.
  *
- *  The separator is an EM DASH, not the middot the rest of the sheet uses,
- *  because `row.who` ALREADY carries one ("Toastmaster · Lee P." — the timing
- *  layout splits on it). Joining with a second middot printed `Role · Name ·
- *  Detail`: three peers, two identical separators, and at this size there is no
- *  weight or colour headroom to carry the boundary instead. Worst on the timing
- *  layout, whose literal Role / Segment column headers promise exactly that
- *  boundary. Every other row site differentiates it (narrative: `who` at 700
- *  with `detail` on its own muted line; grid: bold `who` then smaller muted
- *  `detail`; timing: separate cells), so the band was the one place it read
- *  flat. Italicising `detail` alone was the alternative, but the whole-band
- *  italic is a semantic this component owns and a call site cannot reach.
+ *  `who`, the separator and `detail` are THREE nodes — no separator character is
+ *  ever joined into a string. Both halves carry run-sheet copy that punctuates
+ *  itself: `who` is `Role · Name`, and an enabled-but-unclaimed role makes that
+ *  `Role · — open —`. Any literal join collides with one of those — the middot
+ *  the rest of the sheet uses printed `Role · Name · Detail` (three peers, two
+ *  identical separators), and the em dash that replaced it printed `Role · —
+ *  open — — Introduces the speakers`. As its own node the separator gets the
+ *  differentiation a character could not: reduced opacity, so the boundary reads
+ *  lighter than the middot inside `who`. Every other row site differentiates it
+ *  structurally too (narrative: `who` at 700 with `detail` on its own muted
+ *  line; grid: bold `who` then smaller muted `detail`; timing: separate cells),
+ *  so the band was the one place it read flat. The spaces around the separator
+ *  are collapsed away in the flex line (`gap` does the spacing) and exist so the
+ *  band's text stream still reads as a sentence when copied or spoken.
  *
  *  The leading elbow is drawn with BORDERS, not "↳" (U+21B3): Manrope is served
  *  over the Google Fonts css2 API with a unicode-range that excludes it
@@ -346,9 +353,9 @@ function OfficerGrid({
  *  different face, weight and baseline from every character beside it — and the
  *  band's `fontStyle: italic` then synthesised an oblique on top, so it printed
  *  visibly slanted and read as an artifact. In a PDF pipeline whose fallback
- *  chain lacks the glyph it degrades to tofu. A 5px box with two borders is
- *  font-independent, and stays `aria-hidden`: the band's own text carries the
- *  meaning.
+ *  chain lacks the glyph it degrades to tofu. An `ELBOW`-sized box with two
+ *  borders is font-independent, and stays `aria-hidden`: the band's own text
+ *  carries the meaning.
  *
  *  `fontSize`, `padding` and `chrome` come from the call site: the four layouts
  *  have different type scales, gutters and row rules, and a band that ignores
@@ -381,21 +388,33 @@ function HandoffBand({
 				fontStyle: "italic",
 			}}
 		>
-			<span
-				aria-hidden
-				style={{
-					flex: "none",
-					width: 5,
-					height: 5,
-					borderLeft: `1px solid ${MUTED}`,
-					borderBottom: `1px solid ${MUTED}`,
-					// Sits the elbow's foot on the text's baseline at any of the four
-					// call sites' sizes: half-leading (fontSize × .175 at lineHeight
-					// 1.35) plus the face's ascent (≈ .78em), less the box's own height.
-					marginTop: fontSize * 0.955 - 5,
-				}}
-			/>
-			<span>{`${row.who} — ${row.detail}`}</span>
+			{/* The elbow's foot sits ON the band's baseline, and the browser is what
+			    puts it there: an inline-block with no in-flow content takes its
+			    bottom margin edge as its baseline, so a `verticalAlign: "baseline"`
+			    box aligns to the text baseline exactly, at every one of the four
+			    call sites' sizes and in whatever face the PDF pipeline resolves. The
+			    wrapper is the flex item and carries the band's own type so the line
+			    box it establishes matches its neighbours'. (Computing the offset by
+			    hand needs the face's real ascent and the sign of the half-leading —
+			    it was off by ~0.5px at 10 and ~1px at 11.5, and no single constant
+			    fixes both because Chrome rounds the ascent. `alignSelf: "baseline"`
+			    on the bare box does not work either: with no text in it Chrome
+			    synthesises the baseline from its top edge.) */}
+			<span aria-hidden style={{ flex: "none", fontSize, lineHeight: 1.35 }}>
+				<span
+					style={{
+						display: "inline-block",
+						width: ELBOW,
+						height: ELBOW,
+						borderLeft: `1px solid ${MUTED}`,
+						borderBottom: `1px solid ${MUTED}`,
+						verticalAlign: "baseline",
+					}}
+				/>
+			</span>
+			<span>{row.who}</span>
+			<span style={{ flex: "none", opacity: 0.55 }}>{" · "}</span>
+			<span>{row.detail}</span>
 		</div>
 	);
 }

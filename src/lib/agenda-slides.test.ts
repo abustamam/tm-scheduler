@@ -1161,9 +1161,10 @@ describe("the Toastmaster covers the General Evaluator's role — deck (#363)", 
 			name: "Schinthia",
 			team: [{ role: "Grammarian", name: "Mona" }, { role: "Timer" }],
 		});
+		// No `name` on this one: the slide names the ROLE only (`slideLayout` has
+		// never shown the holder), so it carries no holder to assert.
 		expect(deck.find((s) => s.kind === "generalEvaluation")).toMatchObject({
 			owner: "Toastmaster of the Day",
-			name: "Schinthia",
 		});
 	});
 
