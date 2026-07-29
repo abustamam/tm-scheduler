@@ -916,9 +916,11 @@ function resolveDetail(beat: Beat, slots: AgendaSlot[]): string {
 	const names = matched.map((s) => s.roleName);
 	// Replacer function ⇒ the club's role names are substituted LITERALLY. An
 	// admin types `roleName` verbatim (admin/roles.tsx applies no character
-	// validation to it),
-	// so a role named "Timer $`" would otherwise corrupt the printed row, the
-	// projected slide and the .pptx alike.
+	// validation), so a role named "Timer $`" would otherwise splice a
+	// back-reference into the printed row. Only the printed row: tokens are
+	// resolved nowhere but here, and `expandRunSheet` is the sole caller, so the
+	// deck and the .pptx never saw this — they build their functionary and
+	// awards copy from `buildLegend`/`AWARD_CATEGORIES` directly.
 	return beat.detail.replace(ROLES_TOKEN, () =>
 		joinRoleNames([...new Set(names)]),
 	);
