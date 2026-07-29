@@ -124,16 +124,16 @@ describe("buildRunOfShow", () => {
 		expect(roleKeys).toContain("general_evaluator");
 	});
 
-	it("beat 4 (functionary intro) is owned by the Toastmaster of the Day by default", () => {
+	it("the functionary intro is owned by the Toastmaster of the Day by default", () => {
 		const beats = buildRunOfShow({ geIntroducesFunctionaries: false });
-		const beat4 = beats[3];
-		expect(beat4.kind).toBe("role");
-		expect((beat4 as { roleKey: string }).roleKey).toBe(
+		const functionaryIntro = beats[3];
+		expect(functionaryIntro.kind).toBe("role");
+		expect((functionaryIntro as { roleKey: string }).roleKey).toBe(
 			"toastmaster_of_the_day",
 		);
 		// The detail names the club's own functionaries at expansion time (#367),
 		// so the beat carries the token rather than a fixed "the functionaries".
-		expect(beat4.detail).toBe(
+		expect(functionaryIntro.detail).toBe(
 			`Introduces the ${ROLES_TOKEN}; each explains their role`,
 		);
 	});
@@ -158,14 +158,16 @@ describe("buildRunOfShow", () => {
 			beats
 				.find((b) => b.detail === detail)
 				?.requiresAnyOf?.map((r) => r.roleKey);
-		expect(gateOf("Calls for the Timer's report · vote Best Speaker")).toEqual([
-			"speaker",
-		]);
 		expect(
-			gateOf("Calls for the Timer's report · vote Best Table Topics"),
+			gateOf("Calls for the Timer's report · opens voting for Best Speaker"),
+		).toEqual(["speaker"]);
+		expect(
+			gateOf(
+				"Calls for the Timer's report · opens voting for Best Table Topics",
+			),
 		).toEqual(["table_topics_master"]);
 		expect(
-			gateOf("Calls for the Timer's report · vote Best Evaluator"),
+			gateOf("Calls for the Timer's report · opens voting for Best Evaluator"),
 		).toEqual(["evaluator"]);
 	});
 
@@ -232,7 +234,7 @@ describe("buildRunOfShow", () => {
 		const closing = [
 			"Evaluates the evaluators",
 			"Calls for the functionary reports",
-			"Overall meeting evaluation",
+			"Overall meeting evaluation · returns control to the Toastmaster",
 		];
 		for (const detail of closing) {
 			const i = withoutGe.findIndex((b) => b.detail === detail);
@@ -260,11 +262,13 @@ describe("buildRunOfShow", () => {
 			// already spending off-book.
 			expect(guests.minutes).toBeGreaterThan(0);
 			// Directly after the awards, and directly before the closing.
-			expect(beats[beats.length - 3].detail).toBe(`Awards · ${AWARDS_TOKEN}`);
+			expect(beats[beats.length - 3].detail).toBe(
+				`Awards · ${AWARDS_TOKEN} · hands over to the President`,
+			);
 			expect(beats[beats.length - 1]).toMatchObject({
 				kind: "event",
 				who: "President",
-				detail: "Club business · elections · adjourn",
+				detail: "Club business · announcements · adjourn",
 			});
 			// Exactly one beat asks for guest comments.
 			expect(
@@ -345,8 +349,8 @@ describe("buildLegend", () => {
  * legend filtered on `category === "functionary"` while the beat gates and the
  * `{roles}` token resolved against the four standard keys — so a club's own
  * "Joke Master" appeared on the projected slide but not in the printed row, and
- * a club that disabled all four standard functionaries lost beats 4 and 12 from
- * both surfaces while the legend still listed its people.
+ * a club that disabled all four standard functionaries lost both functionary
+ * beats from both surfaces while the legend still listed its people.
  *
  * The call: the CATEGORY is the definition. Keys are for identity — they make a
  * beat rename-proof (#368) — not for membership. A club marking a role
@@ -393,8 +397,9 @@ describe("functionarySlots (#371)", () => {
 });
 
 /**
- * Beat 12's gate is "functionaries who REPORT", not "functionaries" (#371).
- * A Vote Counter is a functionary — introduced at beat 4, listed in the legend —
+ * The functionary-reports gate is "functionaries who REPORT", not
+ * "functionaries" (#371). A Vote Counter is a functionary — introduced at the
+ * functionary-intro beat, listed in the legend —
  * but tallies votes rather than giving a report, so a Vote-Counter-only club
  * must not get a "Calls for the functionary reports" beat naming only them.
  * Vote Counter is excluded by IDENTITY (its key), which is what keys are for;
@@ -633,9 +638,13 @@ describe("expandRunSheet — role-key matching (#368)", () => {
 		expect(rows.some((r) => r.detail === "Evaluates the evaluators")).toBe(
 			false,
 		);
-		expect(rows.some((r) => r.detail === "Overall meeting evaluation")).toBe(
-			false,
-		);
+		expect(
+			rows.some(
+				(r) =>
+					r.detail ===
+					"Overall meeting evaluation · returns control to the Toastmaster",
+			),
+		).toBe(false);
 	});
 });
 
@@ -660,39 +669,42 @@ describe("expandRunSheet — omission of no-slot beats (#367)", () => {
 		).toBe(true);
 	});
 
-	it("omits both General Evaluator closing beats (11 & 13) when there's no GE slot", () => {
+	it("omits the GE's evaluator-evaluation and overall-evaluation beats when there's no GE slot", () => {
 		const rows = expandRunSheet([]);
 		expect(rows.some((r) => r.detail === "Evaluates the evaluators")).toBe(
 			false,
 		);
-		expect(rows.some((r) => r.detail === "Overall meeting evaluation")).toBe(
-			false,
-		);
+		expect(
+			rows.some(
+				(r) =>
+					r.detail ===
+					"Overall meeting evaluation · returns control to the Toastmaster",
+			),
+		).toBe(false);
 	});
 });
 
 describe("expandRunSheet — vote beats are owned by the segment leader (#363)", () => {
-	// "Best" narrows to the three scored-segment votes: beat 4's functionary
-	// intro can interpolate "Vote Counter" — a standard functionary role name —
-	// into its `{roles}` list, and a looser `/vote /i` would swallow that row
-	// too the first time a fixture includes one (Task 4's do).
+	// "voting for Best" narrows to the three scored-segment votes and keeps the
+	// functionary intro out of them: its `{roles}` list can name a Vote Counter,
+	// which a looser `/vot/i` would swallow.
 	const voteRows = (rows: AgendaRow[]) =>
-		rows.filter((r) => /vote Best/i.test(r.detail));
+		rows.filter((r) => /voting for Best/i.test(r.detail));
 
 	it("attributes each vote to the leader running that segment", () => {
 		const rows = voteRows(expandRunSheet(sixRoleClub(), RUN_OF_SHOW));
 		expect(rows.map((r) => [r.who, r.detail])).toEqual([
 			[
 				"Toastmaster of the Day · Faisal",
-				"Calls for the Timer's report · vote Best Speaker",
+				"Calls for the Timer's report · opens voting for Best Speaker",
 			],
 			[
 				"Table Topics Master · Rasheed",
-				"Calls for the Timer's report · vote Best Table Topics",
+				"Calls for the Timer's report · opens voting for Best Table Topics",
 			],
 			[
 				"General Evaluator · Riyaz",
-				"Calls for the Timer's report · vote Best Evaluator",
+				"Calls for the Timer's report · opens voting for Best Evaluator",
 			],
 		]);
 	});
@@ -705,9 +717,9 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 				r.detail,
 			]),
 		).toEqual([
-			["Toastmaster of the Day · Faisal", "Vote Best Speaker"],
-			["Table Topics Master · Rasheed", "Vote Best Table Topics"],
-			["General Evaluator · Riyaz", "Vote Best Evaluator"],
+			["Toastmaster of the Day · Faisal", "Opens voting for Best Speaker"],
+			["Table Topics Master · Rasheed", "Opens voting for Best Table Topics"],
+			["General Evaluator · Riyaz", "Opens voting for Best Evaluator"],
 		]);
 	});
 
@@ -722,7 +734,7 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 		);
 		expect(voteRows(expandRunSheet(noTm, RUN_OF_SHOW))[0]).toMatchObject({
 			who: "Toastmaster of the Day",
-			detail: "Calls for the Timer's report · vote Best Speaker",
+			detail: "Calls for the Timer's report · opens voting for Best Speaker",
 		});
 	});
 
@@ -733,8 +745,8 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 		expect(
 			voteRows(expandRunSheet(noTopics, RUN_OF_SHOW)).map((r) => r.detail),
 		).toEqual([
-			"Calls for the Timer's report · vote Best Speaker",
-			"Calls for the Timer's report · vote Best Evaluator",
+			"Calls for the Timer's report · opens voting for Best Speaker",
+			"Calls for the Timer's report · opens voting for Best Evaluator",
 		]);
 	});
 
@@ -750,7 +762,7 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 		const rows = voteRows(expandRunSheet(noTmNoTimer, RUN_OF_SHOW));
 		expect(rows[0]).toEqual({
 			who: "Toastmaster of the Day",
-			detail: "Vote Best Speaker",
+			detail: "Opens voting for Best Speaker",
 			minutes: 1,
 			marks: null,
 		});
@@ -765,10 +777,12 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 		const noGe = sixRoleClub().filter((s) => s.roleKey !== "general_evaluator");
 		const rows = expandRunSheet(noGe, RUN_OF_SHOW);
 		expect(
-			voteRows(rows).find((r) => r.detail.endsWith("vote Best Evaluator")),
+			voteRows(rows).find((r) =>
+				r.detail.endsWith("voting for Best Evaluator"),
+			),
 		).toEqual({
 			who: "General Evaluator",
-			detail: "Calls for the Timer's report · vote Best Evaluator",
+			detail: "Calls for the Timer's report · opens voting for Best Evaluator",
 			minutes: 1,
 			marks: null,
 		});
@@ -778,9 +792,13 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 		expect(
 			rows.some((r) => r.detail === "Calls for the functionary reports"),
 		).toBe(false);
-		expect(rows.some((r) => r.detail === "Overall meeting evaluation")).toBe(
-			false,
-		);
+		expect(
+			rows.some(
+				(r) =>
+					r.detail ===
+					"Overall meeting evaluation · returns control to the Toastmaster",
+			),
+		).toBe(false);
 	});
 });
 
@@ -882,6 +900,67 @@ describe("hand-off beats — who introduces whom (#363)", () => {
 	});
 });
 
+/**
+ * The three hand-offs the club's own agenda states as a TRAILING CLAUSE on an
+ * existing row rather than as a row of its own (#363), plus the two places we
+ * printed something the club does not do (noting exits, holding elections).
+ */
+describe("closing and opening hand-off clauses (#363)", () => {
+	const detailFor = (rows: AgendaRow[], who: string) =>
+		rows.filter((r) => r.who.startsWith(who)).map((r) => r.detail);
+
+	const club = () => [
+		slot({
+			id: "tm",
+			roleKey: "toastmaster_of_the_day",
+			roleName: "Toastmaster of the Day",
+			category: "leadership",
+			assigneeName: "Faisal",
+		}),
+		slot({
+			id: "sp",
+			roleKey: "speaker",
+			roleName: "Speaker",
+			category: "speaker",
+			isSpeakerRole: true,
+		}),
+		slot({
+			id: "ge",
+			roleKey: "general_evaluator",
+			roleName: "General Evaluator",
+			category: "leadership",
+			assigneeName: "Riyaz",
+		}),
+	];
+
+	it("has the Sergeant-at-Arms introduce the President, and does not mention exits", () => {
+		expect(
+			detailFor(expandRunSheet(club(), RUN_OF_SHOW), "Sergeant-at-Arms"),
+		).toEqual(["Call to Order · phones silent · introduces the President"]);
+	});
+
+	it("has the General Evaluator return control to the Toastmaster", () => {
+		expect(
+			detailFor(expandRunSheet(club(), RUN_OF_SHOW), "General Evaluator"),
+		).toContain(
+			"Overall meeting evaluation · returns control to the Toastmaster",
+		);
+	});
+
+	it("has the Toastmaster hand over to the President after the awards", () => {
+		const rows = expandRunSheet(club(), RUN_OF_SHOW);
+		expect(rows.find((r) => r.detail.startsWith("Awards"))?.detail).toBe(
+			"Awards · Best Speaker · hands over to the President",
+		);
+	});
+
+	it("closes on announcements, not elections", () => {
+		expect(
+			detailFor(expandRunSheet(club(), RUN_OF_SHOW), "President"),
+		).toContain("Club business · announcements · adjourn");
+	});
+});
+
 describe("expandRunSheet — vote beats are gated on their segment (#367)", () => {
 	const timer = slot({
 		roleName: "Timer",
@@ -910,8 +989,13 @@ describe("expandRunSheet — vote beats are gated on their segment (#367)", () =
 
 	it("prints no vote at all for a club that runs none of the three segments", () => {
 		const rows = expandRunSheet([timer]);
-		expect(rows.some((r) => r.detail.includes("vote Best"))).toBe(false);
-		expect(rows.some((r) => r.detail.startsWith("Vote Best"))).toBe(false);
+		// Both wordings: the with-Timer detail and the no-Timer fallback. Since the
+		// reword they share "voting for Best", so the second no longer covers a case
+		// the first misses — kept as the statement of intent.
+		expect(rows.some((r) => r.detail.includes("voting for Best"))).toBe(false);
+		expect(rows.some((r) => r.detail.startsWith("Opens voting for"))).toBe(
+			false,
+		);
 	});
 
 	it("prints only the votes whose segment is on the agenda", () => {
@@ -919,11 +1003,11 @@ describe("expandRunSheet — vote beats are gated on their segment (#367)", () =
 		// Table Topic — the segment is not on its agenda.
 		const rows = expandRunSheet([timer, speaker, evaluator]);
 		const votes = rows
-			.filter((r) => r.detail.includes("vote Best"))
+			.filter((r) => r.detail.includes("voting for Best"))
 			.map((r) => r.detail);
 		expect(votes).toEqual([
-			"Calls for the Timer's report · vote Best Speaker",
-			"Calls for the Timer's report · vote Best Evaluator",
+			"Calls for the Timer's report · opens voting for Best Speaker",
+			"Calls for the Timer's report · opens voting for Best Evaluator",
 		]);
 	});
 
@@ -932,13 +1016,14 @@ describe("expandRunSheet — vote beats are gated on their segment (#367)", () =
 		expect(
 			rows.some(
 				(r) =>
-					r.detail === "Calls for the Timer's report · vote Best Table Topics",
+					r.detail ===
+					"Calls for the Timer's report · opens voting for Best Table Topics",
 			),
 		).toBe(true);
 	});
 });
 
-describe("expandRunSheet — functionary-dependent beats 4 & 12 (#367)", () => {
+describe("expandRunSheet — the functionary-intro and functionary-reports beats (#367)", () => {
 	const totd = slot({
 		roleName: "Toastmaster of the Day",
 		category: "leadership",
@@ -973,11 +1058,11 @@ describe("expandRunSheet — functionary-dependent beats 4 & 12 (#367)", () => {
 	const introRow = (rows: { detail: string }[]) =>
 		rows.find((r) => r.detail.endsWith("; each explains their role"));
 
-	it("omits beat 4 (functionary intro) when there are no functionary slots, even with a Toastmaster slot", () => {
+	it("omits the functionary intro when there are no functionary slots, even with a Toastmaster slot", () => {
 		expect(introRow(expandRunSheet([totd]))).toBeUndefined();
 	});
 
-	it("renders beat 4 when at least one functionary slot exists", () => {
+	it("renders the functionary intro when at least one functionary slot exists", () => {
 		const rows = expandRunSheet([totd, grammarian]);
 		expect(
 			rows.some(
@@ -988,7 +1073,7 @@ describe("expandRunSheet — functionary-dependent beats 4 & 12 (#367)", () => {
 		).toBe(true);
 	});
 
-	it("beat 4 names ONLY the functionaries the club actually runs (#367)", () => {
+	it("the functionary intro names ONLY the functionaries the club actually runs (#367)", () => {
 		// Two of the four standard functionaries ⇒ both named, in slot order,
 		// and the two the club does not run are not mentioned.
 		expect(introRow(expandRunSheet([totd, timer, grammarian]))?.detail).toBe(
@@ -999,7 +1084,7 @@ describe("expandRunSheet — functionary-dependent beats 4 & 12 (#367)", () => {
 		);
 	});
 
-	it("beat 4 uses the club's OWN name for a renamed functionary (#368)", () => {
+	it("the functionary intro uses the club's OWN name for a renamed functionary (#368)", () => {
 		const rows = expandRunSheet([
 			totd,
 			slot({
@@ -1015,7 +1100,7 @@ describe("expandRunSheet — functionary-dependent beats 4 & 12 (#367)", () => {
 		);
 	});
 
-	it("omits beat 12 (functionary reports) when there are no functionary slots, even with a GE slot", () => {
+	it("omits the functionary reports when there are no functionary slots, even with a GE slot", () => {
 		const rows = expandRunSheet([ge]);
 		expect(
 			rows.some((r) => r.detail === "Calls for the functionary reports"),
@@ -1024,12 +1109,16 @@ describe("expandRunSheet — functionary-dependent beats 4 & 12 (#367)", () => {
 		expect(rows.some((r) => r.detail === "Evaluates the evaluators")).toBe(
 			true,
 		);
-		expect(rows.some((r) => r.detail === "Overall meeting evaluation")).toBe(
-			true,
-		);
+		expect(
+			rows.some(
+				(r) =>
+					r.detail ===
+					"Overall meeting evaluation · returns control to the Toastmaster",
+			),
+		).toBe(true);
 	});
 
-	it("renders beat 12 when the GE slot exists and at least one functionary slot exists", () => {
+	it("renders the functionary reports when the GE slot exists and at least one functionary slot exists", () => {
 		const rows = expandRunSheet([ge, grammarian]);
 		expect(
 			rows.some(
@@ -1040,9 +1129,9 @@ describe("expandRunSheet — functionary-dependent beats 4 & 12 (#367)", () => {
 		).toBe(true);
 	});
 
-	it("beat 4 names a club-invented functionary, and renders for a club that runs ONLY custom ones (#371)", () => {
+	it("the functionary intro names a club-invented functionary, and renders for a club that runs ONLY custom ones (#371)", () => {
 		// #368's disable lifecycle lets a club turn off all four standard
-		// functionaries and run its own. Before #371 that lost beats 4 and 12
+		// functionaries and run its own. Before #371 that lost both functionary beats
 		// from the printed agenda and both slides from the deck, while the legend
 		// still listed the very same people.
 		const jokeMaster = slot({
@@ -1066,7 +1155,7 @@ describe("expandRunSheet — functionary-dependent beats 4 & 12 (#367)", () => {
 		);
 	});
 
-	it("beat 4 names a custom functionary ALONGSIDE the standard ones — the same list the slide shows (#371)", () => {
+	it("the functionary intro names a custom functionary ALONGSIDE the standard ones — the same list the slide shows (#371)", () => {
 		const jokeMaster = slot({
 			id: "jm",
 			roleKey: null,
@@ -1081,7 +1170,7 @@ describe("expandRunSheet — functionary-dependent beats 4 & 12 (#367)", () => {
 		);
 	});
 
-	it("beat 12 is omitted for a Vote-Counter-only club — a Vote Counter gives no report (#371)", () => {
+	it("the functionary reports are omitted for a Vote-Counter-only club — a Vote Counter gives no report (#371)", () => {
 		const voteCounter = slot({
 			id: "vc",
 			roleName: "Vote Counter",
@@ -1092,13 +1181,13 @@ describe("expandRunSheet — functionary-dependent beats 4 & 12 (#367)", () => {
 		expect(
 			rows.some((r) => r.detail === "Calls for the functionary reports"),
 		).toBe(false);
-		// The Vote Counter is still a functionary: beat 4 introduces them.
+		// The Vote Counter is still a functionary: the intro beat introduces them.
 		expect(introRow(rows)?.detail).toBe(
 			"Introduces the Vote Counter; each explains their role",
 		);
 	});
 
-	it("beats 4 & 12 are omitted when the only candidate is a standard KEY recategorised out of the functionaries (#371)", () => {
+	it("both functionary beats are omitted when the only candidate is a standard KEY recategorised out of the functionaries (#371)", () => {
 		// `applyRoleDefinitionUpdate` lets an admin change a role's category, so a
 		// timer-keyed slot filed under "leadership" is reachable. The category is
 		// the definition, so this club runs no functionaries — and crucially the
@@ -1119,7 +1208,7 @@ describe("expandRunSheet — functionary-dependent beats 4 & 12 (#367)", () => {
 		).toBe(false);
 	});
 
-	it("beat 12 renders for a club whose only functionary is a custom one (#371)", () => {
+	it("the functionary reports render for a club whose only functionary is a custom one (#371)", () => {
 		const rows = expandRunSheet([
 			ge,
 			slot({
@@ -1135,12 +1224,12 @@ describe("expandRunSheet — functionary-dependent beats 4 & 12 (#367)", () => {
 		).toBe(true);
 	});
 
-	it("MCF variant: beat 4 (GE-owned) is still omitted when there are no functionary slots, despite a GE slot existing", () => {
+	it("MCF variant: the GE-owned functionary intro is still omitted when there are no functionary slots, despite a GE slot existing", () => {
 		const template = buildRunOfShow({ geIntroducesFunctionaries: true });
 		expect(introRow(expandRunSheet([totd, ge], template))).toBeUndefined();
 	});
 
-	it("MCF variant: beat 4 renders owned by the General Evaluator when GE and a functionary both exist", () => {
+	it("MCF variant: the functionary intro renders owned by the General Evaluator when GE and a functionary both exist", () => {
 		const template = buildRunOfShow({ geIntroducesFunctionaries: true });
 		const rows = expandRunSheet([totd, ge, grammarian], template);
 		expect(introRow(rows)).toMatchObject({
@@ -1270,8 +1359,9 @@ describe("hasAnyFunctionaryRole", () => {
 	});
 });
 
-// Beat 12's gate, and the deck's functionary-REPORTS slide (#371). Narrower
-// than `hasAnyFunctionaryRole` by exactly one standard role: the Vote Counter,
+// The functionary-reports beat's gate, and the deck's matching slide (#371).
+// Narrower than `hasAnyFunctionaryRole` by exactly one standard role: the Vote
+// Counter,
 // who is a functionary but gives no report.
 describe("hasAnyReportingFunctionaryRole (#371)", () => {
 	it("is false for no slots and for a leadership-only crew", () => {
@@ -1288,7 +1378,7 @@ describe("hasAnyReportingFunctionaryRole (#371)", () => {
 			expect(hasAnyReportingFunctionaryRole([slot({ roleName })])).toBe(true);
 	});
 
-	it("is FALSE for a Vote-Counter-only club, though beat 4 still introduces them", () => {
+	it("is FALSE for a Vote-Counter-only club, though the intro beat still introduces them", () => {
 		const voteCounter = slot({ roleName: "Vote Counter" });
 		expect(hasAnyReportingFunctionaryRole([voteCounter])).toBe(false);
 		expect(hasAnyFunctionaryRole([voteCounter])).toBe(true);
@@ -1526,18 +1616,20 @@ describe("expandRunSheet — awards beat adapts to the scored segments (#372)", 
 
 	it("lists every category when the club runs all three scored segments", () => {
 		expect(awardsRow([speaker, ttm, evaluator])?.detail).toBe(
-			"Awards · Best Table Topic, Best Evaluator & Best Speaker",
+			"Awards · Best Table Topic, Best Evaluator & Best Speaker · hands over to the President",
 		);
 	});
 
 	it("omits Best Table Topic for a club with no Table Topics Master", () => {
 		expect(awardsRow([speaker, evaluator])?.detail).toBe(
-			"Awards · Best Evaluator & Best Speaker",
+			"Awards · Best Evaluator & Best Speaker · hands over to the President",
 		);
 	});
 
 	it("names a single category without a conjunction", () => {
-		expect(awardsRow([speaker])?.detail).toBe("Awards · Best Speaker");
+		expect(awardsRow([speaker])?.detail).toBe(
+			"Awards · Best Speaker · hands over to the President",
+		);
 	});
 
 	it("omits the beat entirely when the club scores nothing", () => {
@@ -1552,7 +1644,9 @@ describe("expandRunSheet — awards beat adapts to the scored segments (#372)", 
 			category: "leadership",
 			assigneeName: "M",
 		});
-		expect(awardsRow([renamed])?.detail).toBe("Awards · Best Table Topic");
+		expect(awardsRow([renamed])?.detail).toBe(
+			"Awards · Best Table Topic · hands over to the President",
+		);
 	});
 });
 
@@ -1679,7 +1773,7 @@ describe("BeatFallback — owner and detail swap (#363)", () => {
 			...beat,
 			fallback: {
 				unless: { roleKey: "timer", roleName: "Timer" },
-				detail: "Vote Best Speaker",
+				detail: "Opens voting for Best Speaker",
 			},
 		};
 		const slots = [
@@ -1692,7 +1786,7 @@ describe("BeatFallback — owner and detail swap (#363)", () => {
 		];
 		expect(expandRunSheet(slots, [withDetail])[0]).toMatchObject({
 			who: "Table Topics Master · Rasheed",
-			detail: "Vote Best Speaker",
+			detail: "Opens voting for Best Speaker",
 		});
 	});
 
@@ -1760,14 +1854,14 @@ describe("renderUnowned (#363)", () => {
 			roleKey: "toastmaster_of_the_day",
 			roleName: "Toastmaster of the Day",
 			role: "plain",
-			detail: "Vote Best Speaker",
+			detail: "Opens voting for Best Speaker",
 			minutes: 1,
 			renderUnowned: true,
 		};
 		expect(expandRunSheet([], [beat])).toEqual([
 			{
 				who: "Toastmaster of the Day",
-				detail: "Vote Best Speaker",
+				detail: "Opens voting for Best Speaker",
 				minutes: 1,
 				marks: null,
 			},
@@ -1780,7 +1874,7 @@ describe("renderUnowned (#363)", () => {
 			roleKey: "toastmaster_of_the_day",
 			roleName: "Toastmaster of the Day",
 			role: "plain",
-			detail: "Vote Best Speaker",
+			detail: "Opens voting for Best Speaker",
 			minutes: 1,
 			renderUnowned: true,
 		};
@@ -1815,7 +1909,7 @@ describe("renderUnowned (#363)", () => {
 			roleKey: "toastmaster_of_the_day",
 			roleName: "Toastmaster of the Day",
 			role: "plain",
-			detail: "Vote Best Speaker",
+			detail: "Opens voting for Best Speaker",
 			minutes: 1,
 			renderUnowned: true,
 			requiresAnyOf: [{ roleKey: "speaker", roleName: "Speaker" }],

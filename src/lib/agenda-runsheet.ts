@@ -89,7 +89,7 @@ export type BeatRole = { roleKey: string; roleName: string };
  *   roles besides its owner: the functionary-intro and functionary-reports
  *   beats (nothing to introduce, nobody to call for a report), the three
  *   vote beats, and the awards beat, all of which belong to a segment — a
- *   club with no Table Topics Master must not print "vote Best Table Topics"
+ *   club with no Table Topics Master must not print "Best Table Topics" voting
  *   for a segment not on its agenda. A beat is omitted unless at least one of
  *   these roles has a slot.
  * - `requiresGroup` gates on a role GROUP the club defines rather than a fixed
@@ -175,7 +175,8 @@ export type BeatFallback = {
  *
  * The deck used to carry its own timing constants, so the same beat could be
  * budgeted at one length on the printed agenda and announced as another on the
- * wall, and was: beat 9 booked 3 minutes while the deck said "2–3 minutes".
+ * wall, and was: the speech-evaluation beat booked 3 minutes while the deck
+ * said "2–3 minutes".
  * They agreed everywhere else only because someone had just set both by hand.
  *
  * An id is how a slide says WHICH beat it is speaking for, the way `roleKey`
@@ -220,9 +221,10 @@ export const OPEN_LABEL = "— open —";
 
 /** Token in a beat's `detail`, replaced at expansion time by the roles from
  *  the beat's `requiresAnyOf` that the club actually runs, under the club's OWN
- *  display names (#367). Beat 4 uses it so the printed row names only the
- *  functionaries this club has — the same list the deck's `functionaryIntro`
- *  slide enumerates — rather than a fixed "the functionaries". */
+ *  display names (#367). The functionary-intro beat uses it so the row names
+ *  only the functionaries this club has — the same list the deck's
+ *  `functionaryIntro` slide enumerates — rather than a fixed
+ *  "the functionaries". */
 export const ROLES_TOKEN = "{roles}";
 
 /** Token in a beat's `detail`, replaced at expansion time by the award
@@ -234,8 +236,9 @@ export const AWARDS_TOKEN = "{awards}";
 
 /**
  * THE definition of "this club's functionaries" (#371) — the one every surface
- * reads: the legend, the beat-4/12 gates, the deck's two functionary slides,
- * and the `ROLES_TOKEN` list in beat 4's printed detail.
+ * reads: the legend, the functionary-intro and functionary-reports gates, the
+ * deck's two functionary slides, and the `ROLES_TOKEN` list in the
+ * functionary-intro beat's printed detail.
  *
  * Membership is the **category**. Keys are for IDENTITY — they make a beat
  * rename-proof (#368) and let us say which specific role something is — never
@@ -247,7 +250,8 @@ export const AWARDS_TOKEN = "{awards}";
  * and `ROLES_TOKEN` resolved against the four standard keys, so a club's own
  * "Joke Master" was projected on the functionary slide but missing from the
  * printed row, and a club that disabled all four standard functionaries lost
- * beats 4 and 12 from both surfaces while the legend still listed its people.
+ * the functionary-intro and functionary-reports beats from both surfaces while
+ * the legend still listed its people.
  */
 export function functionarySlots(slots: AgendaSlot[]): AgendaSlot[] {
 	return slots.filter((s) => s.category === "functionary");
@@ -262,16 +266,17 @@ const NON_REPORTING_FUNCTIONARY: BeatRole = {
 };
 
 /**
- * The functionaries who actually give a report — beat 12's subject, and the
- * deck's `functionaryReports` team (#371).
+ * The functionaries who actually give a report — the functionary-reports beat's
+ * subject, and the deck's `functionaryReports` team (#371).
  *
  * Widening "functionary" to the category makes the Vote-Counter-only club more
- * reachable, not less, so beat 12 is gated on "functionaries who REPORT" rather
- * than "functionaries": otherwise a club running a Vote Counter and nothing
- * else gets "General Evaluator · Calls for the functionary reports" naming only
- * the person with no report to give. They are still introduced at beat 4 and
- * still in the legend — being a functionary and having a report are different
- * questions, and only the second one gates beat 12.
+ * reachable, not less, so that beat is gated on "functionaries who REPORT"
+ * rather than "functionaries": otherwise a club running a Vote Counter and
+ * nothing else gets "General Evaluator · Calls for the functionary reports"
+ * naming only the person with no report to give. They are still introduced at
+ * the functionary-intro beat and still in the legend — being a functionary and
+ * having a report are different questions, and only the second one gates the
+ * reports beat.
  *
  * A club-invented functionary is presumed TO report. We cannot know, and an
  * extra name in a list the General Evaluator reads out is a smaller error than
@@ -301,7 +306,7 @@ export function buildLegend(slots: AgendaSlot[]): LegendEntry[] {
 }
 
 /** The subset that reports, for the deck's functionary-reports slide — the same
- *  list beat 12's gate is computed from, so the slide never names someone the
+ *  list that beat's gate is computed from, so the slide never names someone the
  *  printed beat implies has a report when they do not (#371). */
 export function buildReportingLegend(slots: AgendaSlot[]): LegendEntry[] {
 	return reportingFunctionarySlots(slots).map(toLegendEntry);
@@ -324,8 +329,8 @@ export type RunOfShowConfig = { geIntroducesFunctionaries: boolean };
 const TIMER_ROLE: BeatRole = { roleKey: "timer", roleName: "Timer" };
 
 /** The 4 standard functionary roles we ship (`ROLE_TEMPLATE`). Since #371 these
- *  DECLARE which standard roles beat 4 is nominally about; they are no longer
- *  the definition of a functionary, which is the category
+ *  DECLARE which standard roles the functionary-intro beat is nominally about;
+ *  they are no longer the definition of a functionary, which is the category
  *  (`functionarySlots`), nor the beat's gate — see `requirementsMet`. */
 const FUNCTIONARY_ROLES: BeatRole[] = [
 	{ roleKey: "grammarian", roleName: "Grammarian" },
@@ -334,9 +339,9 @@ const FUNCTIONARY_ROLES: BeatRole[] = [
 	NON_REPORTING_FUNCTIONARY,
 ];
 
-/** What beat 12 is nominally about: the standard functionaries MINUS the Vote
- *  Counter, who gives no report. Same relationship to
- *  `reportingFunctionarySlots` as `FUNCTIONARY_ROLES` has to
+/** What the functionary-reports beat is nominally about: the standard
+ *  functionaries MINUS the Vote Counter, who gives no report. Same
+ *  relationship to `reportingFunctionarySlots` as `FUNCTIONARY_ROLES` has to
  *  `functionarySlots`. */
 const REPORTING_FUNCTIONARY_ROLES: BeatRole[] = FUNCTIONARY_ROLES.filter(
 	(r) => r.roleKey !== NON_REPORTING_FUNCTIONARY.roleKey,
@@ -387,9 +392,9 @@ const AWARD_CATEGORIES: { role: BeatRole; label: string }[] = [
  * function or its caller special-casing any one role by name.
  *
  * The corrected default flow: the Toastmaster of the Day introduces the
- * functionaries at the top (beat 4, naming the ones this club runs) — each
- * explains their own role, which is when the Grammarian gives the Word of the
- * Day — and the General Evaluator's work happens at the end: evaluate the
+ * functionaries at the top (naming the ones this club runs) — each explains
+ * their own role, which is when the Grammarian gives the Word of the Day — and
+ * the General Evaluator's work happens at the end: evaluate the
  * evaluators, call for the functionary reports, then evaluate the meeting
  * overall. The three vote beats each belong to a segment and are gated on it,
  * so a club with no Table Topics Master never prints a vote for a segment it
@@ -398,11 +403,12 @@ const AWARD_CATEGORIES: { role: BeatRole; label: string }[] = [
  * The 0-minute `handoff` beats between segments say who introduces whom (#363),
  * so nobody has to guess whose cue it is mid-meeting.
  *
- * `geIntroducesFunctionaries: true` is MCF's variant: beat 4 changes owner to
- * the General Evaluator, and gains the hand-off that introduces them first,
- * which exists only because of that swap. Durations are tunable constants
- * approximating templates/meeting-agenda/MeetingAgenda.dc.html; per-beat
- * durations and arbitrary reordering are deliberately out of scope.
+ * `geIntroducesFunctionaries: true` is MCF's variant: the functionary-intro
+ * beat changes owner to the General Evaluator, and gains the hand-off that
+ * introduces them first, which exists only because of that swap. Durations are
+ * tunable constants approximating
+ * templates/meeting-agenda/MeetingAgenda.dc.html; per-beat durations and
+ * arbitrary reordering are deliberately out of scope.
  */
 export function buildRunOfShow({
 	geIntroducesFunctionaries,
@@ -436,9 +442,11 @@ export function buildRunOfShow({
 
 	return [
 		{
+			// The club states this hand-off as a trailing clause, not a row of its
+			// own (#363). "exits noted" is gone: the club does not brief exits.
 			kind: "event",
 			who: "Sergeant-at-Arms",
-			detail: "Call to Order · phones silent, exits noted",
+			detail: "Call to Order · phones silent · introduces the President",
 			minutes: 1,
 		},
 		{
@@ -501,12 +509,12 @@ export function buildRunOfShow({
 			kind: "role",
 			...TOASTMASTER_ROLE,
 			role: "plain",
-			detail: "Calls for the Timer's report · vote Best Speaker",
+			detail: "Calls for the Timer's report · opens voting for Best Speaker",
 			minutes: 1,
 			renderUnowned: true,
 			fallback: {
 				unless: TIMER_ROLE,
-				detail: "Vote Best Speaker",
+				detail: "Opens voting for Best Speaker",
 			},
 			requiresAnyOf: [SPEAKER_ROLE],
 		},
@@ -534,12 +542,13 @@ export function buildRunOfShow({
 			kind: "role",
 			...TABLE_TOPICS_ROLE,
 			role: "plain",
-			detail: "Calls for the Timer's report · vote Best Table Topics",
+			detail:
+				"Calls for the Timer's report · opens voting for Best Table Topics",
 			minutes: 1,
 			renderUnowned: true,
 			fallback: {
 				unless: TIMER_ROLE,
-				detail: "Vote Best Table Topics",
+				detail: "Opens voting for Best Table Topics",
 			},
 			requiresAnyOf: [TABLE_TOPICS_ROLE],
 		},
@@ -585,12 +594,12 @@ export function buildRunOfShow({
 			kind: "role",
 			...GENERAL_EVALUATOR_ROLE,
 			role: "plain",
-			detail: "Calls for the Timer's report · vote Best Evaluator",
+			detail: "Calls for the Timer's report · opens voting for Best Evaluator",
 			minutes: 1,
 			renderUnowned: true,
 			fallback: {
 				unless: TIMER_ROLE,
-				detail: "Vote Best Evaluator",
+				detail: "Opens voting for Best Evaluator",
 			},
 			requiresAnyOf: [EVALUATOR_ROLE],
 		},
@@ -618,7 +627,9 @@ export function buildRunOfShow({
 			...GENERAL_EVALUATOR_ROLE,
 			id: "generalEvaluation",
 			role: "plain",
-			detail: "Overall meeting evaluation",
+			// Trailing clause, per the club's agenda (#363): the GE's last act is
+			// giving the room back. `beatDuration` matches on `id`, not `detail`.
+			detail: "Overall meeting evaluation · returns control to the Toastmaster",
 			minutes: 2,
 		},
 		{
@@ -629,7 +640,9 @@ export function buildRunOfShow({
 			kind: "role",
 			...TOASTMASTER_ROLE,
 			role: "plain",
-			detail: `Awards · ${AWARDS_TOKEN}`,
+			// Trailing clause again (#363): the awards are the Toastmaster's last
+			// act, and the President closes the meeting.
+			detail: `Awards · ${AWARDS_TOKEN} · hands over to the President`,
 			minutes: 2,
 			renderUnowned: true,
 			requiresAnyOf: AWARD_CATEGORIES.map((a) => a.role),
@@ -646,7 +659,7 @@ export function buildRunOfShow({
 			// The President owns it because the beat is carved out of the
 			// President's closing — this gives the responsibility its own row, it
 			// does not move it to somebody else — and because the President is who
-			// welcomed those guests at beat 2.
+			// welcomed those guests in the opening remarks.
 			kind: "event",
 			who: "President",
 			detail: "Guest Comments · invites our guests to share their thoughts",
@@ -658,7 +671,9 @@ export function buildRunOfShow({
 			// The ", guest comments" clause that used to live here is gone: it was
 			// kept only because the dedicated beat above was deferred, and leaving
 			// both would have the agenda invite the same guests to speak twice.
-			detail: "Club business · elections · adjourn",
+			// "elections" is gone too (#363): the club holds none at a regular
+			// meeting — announcements are what actually happens here.
+			detail: "Club business · announcements · adjourn",
 			minutes: 3,
 		},
 	];
@@ -742,18 +757,18 @@ const GROUP_SLOTS: Record<RoleGroup, (slots: AgendaSlot[]) => AgendaSlot[]> = {
 	reportingFunctionaries: reportingFunctionarySlots,
 };
 
-/** True when the club runs at least one functionary role this meeting — beat
- *  4's gate (#367). Exported so the deck (`buildSlideDeck`) gates its
- *  functionary-intro slide on the SAME signal the run sheet does, rather than a
- *  second rule that could drift: there is nothing to introduce when a club runs
- *  no functionaries at all. */
+/** True when the club runs at least one functionary role this meeting — the
+ *  functionary-intro beat's gate (#367). Exported so the deck
+ *  (`buildSlideDeck`) gates its functionary-intro slide on the SAME signal the
+ *  run sheet does, rather than a second rule that could drift: there is nothing
+ *  to introduce when a club runs no functionaries at all. */
 export function hasAnyFunctionaryRole(slots: AgendaSlot[]): boolean {
 	return functionarySlots(slots).length > 0;
 }
 
-/** True when at least one of those functionaries gives a report — beat 12's
- *  gate, and the deck's functionary-reports slide (#371). Narrower than
- *  `hasAnyFunctionaryRole` by exactly the Vote Counter. */
+/** True when at least one of those functionaries gives a report — the
+ *  functionary-reports beat's gate, and the deck's matching slide (#371).
+ *  Narrower than `hasAnyFunctionaryRole` by exactly the Vote Counter. */
 export function hasAnyReportingFunctionaryRole(slots: AgendaSlot[]): boolean {
 	return reportingFunctionarySlots(slots).length > 0;
 }
@@ -778,10 +793,11 @@ function resolveDetail(beat: Beat, slots: AgendaSlot[]): string {
 		return beat.detail.replace(AWARDS_TOKEN, joinRoleNames(labels));
 	}
 	if (!beat.detail.includes(ROLES_TOKEN)) return beat.detail;
-	// A group beat names the group's members (#371) — beat 4 lists exactly the
-	// functionaries `buildLegend` puts on the projected slide, including any the
-	// club invented. The group also gates the beat (`requirementsMet`), so this
-	// list is never empty. Without a group, resolve the beat's own key list.
+	// A group beat names the group's members (#371) — the functionary-intro beat
+	// lists exactly the functionaries `buildLegend` puts on the projected slide,
+	// including any the club invented. The group also gates the beat
+	// (`requirementsMet`), so this list is never empty. Without a group, resolve
+	// the beat's own key list.
 	const required = beat.requiresAnyOf ?? [];
 	const matched =
 		beat.requiresGroup != null

@@ -126,7 +126,7 @@ async function seedClub(opts: {
 	mission?: string;
 	meetingSchedule?: string;
 	/** #367 — TRUE puts the General Evaluator, not the Toastmaster of the Day, on
-	 *  beat 4 (introducing the functionaries). Omitted ⇒ the column default
+	 *  the functionary-intro beat. Omitted ⇒ the column default
 	 *  (false), i.e. the standard flow. Set it here so at least one seeded club
 	 *  exercises the MCF variant locally and in CI. */
 	geIntroducesFunctionaries?: boolean;
@@ -484,7 +484,8 @@ async function main() {
 		mission:
 			"We provide a supportive and positive learning experience in which members are empowered to develop communication and leadership skills, resulting in greater self-confidence and personal growth.",
 		meetingSchedule: "2nd & 4th Wednesday, 7:00–8:30 PM",
-		// The real MCF runs the General Evaluator variant of beat 4 (#367) — the
+		// The real MCF runs the General Evaluator variant of the functionary
+		// intro (#367) — the
 		// data migration flips it by slug in every deployed environment, and this
 		// keeps a freshly seeded dev/CI database matching.
 		geIntroducesFunctionaries: true,

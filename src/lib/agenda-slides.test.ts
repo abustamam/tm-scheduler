@@ -59,7 +59,8 @@ const kinds = (slots: AgendaSlot[] = []) => build({ slots }).map((s) => s.kind);
 
 describe("buildSlideDeck anchors", () => {
 	it("always emits title and thankYou — even with no slots", () => {
-		// The Toastmaster slide is NOT an anchor: it is beat 3 in slide form and
+		// The Toastmaster slide is NOT an anchor: it is the Toastmaster's opening
+		// beat in slide form and
 		// is gated on the role, like every other section (#367).
 		expect(kinds([])).toEqual(["title", "guestComments", "thankYou"]);
 	});
@@ -101,7 +102,7 @@ describe("buildSlideDeck anchors", () => {
 
 	it("omits the toastmaster slide when the club does not run the role (#367)", () => {
 		// No Toastmaster-of-the-Day slot at all (the role is disabled, #368) ⇒ the
-		// run sheet omits beat 3, so the deck must omit the slide rather than
+		// run sheet omits that beat, so the deck must omit the slide rather than
 		// projecting "— open —" for a role the club never configured.
 		expect(kinds([slot({ roleName: "Grammarian" })])).not.toContain(
 			"toastmaster",
@@ -489,8 +490,9 @@ const timer = slot({
 });
 
 /**
- * The functionary-intro slide (#367). Beat 4 of the run-of-show in slide form:
- * whoever owns it introduces the functionaries and each explains their role.
+ * The functionary-intro slide (#367) — that beat of the run-of-show in slide
+ * form: whoever owns it introduces the functionaries and each explains their
+ * role.
  * The default owner is the Toastmaster of the Day — the standard flow — and the
  * `geIntroducesFunctionaries` flag hands it to the General Evaluator (MCF).
  * This is the slide that used to be `geIntro`, which hardcoded MCF's variant.
@@ -592,7 +594,7 @@ describe("buildSlideDeck functionary intro (#367)", () => {
 });
 
 /**
- * The functionary-reports slide (#367, absorbs #353). Beat 12: the General
+ * The functionary-reports slide (#367, absorbs #353). The General
  * Evaluator calls for the functionary reports, between evaluating the
  * evaluators and the overall meeting evaluation. Unaffected by
  * `geIntroducesFunctionaries` — MCF's closing sequence is everyone else's.
@@ -668,7 +670,7 @@ describe("buildSlideDeck functionary reports (#367 / #353)", () => {
 			team: [{ role: "Grammarian", name: "Mona" }],
 		});
 		// …and with nobody else to report, the slide goes away entirely — the same
-		// signal beat 12's gate reads, so print and deck can't disagree.
+		// signal that beat's gate reads, so print and deck can't disagree.
 		expect(kinds([tmod, ge, voteCounter])).not.toContain("functionaryReports");
 		// The Vote Counter is still introduced: they ARE a functionary.
 		expect(kinds([tmod, ge, voteCounter])).toContain("functionaryIntro");
@@ -692,7 +694,7 @@ describe("buildSlideDeck functionary reports (#367 / #353)", () => {
 		expect(kinds([tmod, grammarian])).not.toContain("functionaryReports");
 	});
 
-	it("renders identically under MCF's variant — the flag moves beat 4 only", () => {
+	it("renders identically under MCF's variant — the flag moves the functionary intro only", () => {
 		const standard = kinds([tmod, ge, grammarian]);
 		const mcf = build({
 			slots: [tmod, ge, grammarian],
@@ -728,7 +730,8 @@ describe("buildSlideDeck evaluation session", () => {
 			"voteSpeaker",
 			"evaluation",
 			"voteEvaluator",
-			// Beat 11 — the GE evaluates the evaluators, AFTER the Best-Evaluator
+			// The evaluator-evaluation beat — the GE evaluates the evaluators, AFTER
+			// the Best-Evaluator
 			// vote, where the run sheet puts it. The old `evalIntro` slide sat
 			// before the evaluations, matching no beat at all.
 			"evaluatorEvaluation",
@@ -746,7 +749,8 @@ describe("buildSlideDeck evaluation session", () => {
 		expect(slide).toMatchObject({
 			evaluator: "Faisal Ali",
 			speaker: "Rehanna Khan",
-			// Beat 9's budget, not a second opinion about it (#356). The deck used
+			// The speech-evaluation beat's budget, not a second opinion about it
+			// (#356). The deck used
 			// to hardcode "2–3 minutes" while the run sheet booked 3.
 			time: "3 minutes",
 		});
@@ -772,8 +776,9 @@ describe("buildSlideDeck evaluation session", () => {
 		expect(kinds([])).not.toContain("evaluatorEvaluation");
 	});
 
-	it("gates beat 11 on the General Evaluator, NOT on the evaluators (#367)", () => {
-		// Spec: no General Evaluator ⇒ beats 11–13 all vanish and nothing
+	it("gates the evaluator evaluation on the General Evaluator, NOT on the evaluators (#367)", () => {
+		// Spec: no General Evaluator ⇒ the GE's whole closing sequence vanishes
+		// and nothing
 		// replaces the overall meeting evaluation. Before this fix the deck gated
 		// the slide on the EVALUATORS and fell back to the literal role name, so a
 		// club with evaluators and no GE projected "General Evaluator: General
@@ -782,11 +787,11 @@ describe("buildSlideDeck evaluation session", () => {
 		expect(noGe.map((s) => s.kind)).not.toContain("evaluatorEvaluation");
 		expect(JSON.stringify(noGe)).not.toContain("General Evaluator");
 
-		// …and symmetrically, a GE with no evaluators still gives beat 11.
+		// …and symmetrically, a GE with no evaluators still gives the slide.
 		expect(kinds([ge])).toContain("evaluatorEvaluation");
 	});
 
-	it("beat 11 names the GE holder, or the open placeholder when unclaimed", () => {
+	it("the evaluator-evaluation slide names the GE holder, or the open placeholder when unclaimed", () => {
 		const openGe = slot({
 			id: "ge",
 			roleName: "General Evaluator",
@@ -802,8 +807,8 @@ describe("buildSlideDeck evaluation session", () => {
 	});
 
 	it("the Best-Evaluator vote carries whether the club runs a Timer (#367)", () => {
-		// The run sheet's beat-10 fallback drops the timer's-report clause when
-		// there is no Timer; the slide's copy has to adapt on the same signal.
+		// The Best-Evaluator vote beat's fallback drops the timer's-report clause
+		// when there is no Timer; the slide's copy has to adapt on the same signal.
 		const voteOf = (slots: AgendaSlot[]) =>
 			build({ slots }).find((s) => s.kind === "voteEvaluator");
 		expect(voteOf([speaker, evaluator])).toMatchObject({ hasTimer: false });

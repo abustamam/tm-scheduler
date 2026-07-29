@@ -157,10 +157,10 @@ describe("slideLayout bodies", () => {
 			{ role: "name", text: "Jagpal" },
 			{ role: "name", text: "Farhanaaz" },
 		]);
-		// The run sheet's beat-6 fallback drops the timer's-report clause on the
-		// same signal; the vote itself still happens. Without this, a club with no
-		// Timer prints "Toastmaster · Vote Best Speaker" while the deck tells the
-		// presenter to call for a report from a role nobody holds.
+		// The Best-Speaker vote beat's fallback drops the timer's-report clause on
+		// the same signal; the vote itself still happens. Without this, a club with
+		// no Timer prints "Toastmaster · Opens voting for Best Speaker" while the
+		// deck tells the presenter to call for a report from a role nobody holds.
 		expect(lines(false)).toEqual([
 			{ role: "head", text: "Please Vote for Best Speaker:" },
 			{ role: "name", text: "Jagpal" },
@@ -179,7 +179,8 @@ describe("slideLayout bodies", () => {
 			{ role: "head", text: "Ask for Table Topics times." },
 			{ role: "head", text: "Please Vote for Best Table Topic Speaker:" },
 		]);
-		// Beat 8's fallback drops the same clause when there is no Timer.
+		// The Best-Table-Topics vote beat's fallback drops the same clause when
+		// there is no Timer.
 		expect(lines(false)).toEqual([
 			{ role: "head", text: "Please Vote for Best Table Topic Speaker:" },
 		]);
@@ -206,7 +207,7 @@ describe("slideLayout bodies", () => {
 		expect(lines(false)).toEqual(["Please Vote for Best Evaluator:", "Riyaz"]);
 	});
 
-	it("evaluation of the evaluators is the GE's beat-11 slide (#367)", () => {
+	it("evaluation of the evaluators is the GE's evaluator-evaluation slide (#367)", () => {
 		const l = slideLayout({
 			kind: "evaluatorEvaluation",
 			name: "Riyaz",

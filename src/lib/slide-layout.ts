@@ -162,10 +162,10 @@ export function slideLayout(slide: Slide): SlideLayout {
 			});
 		}
 		case "voteSpeaker": {
-			// Timer-aware like the other two vote slides: the run sheet's beat-6
-			// fallback drops the same clause (#367), so a club with no Timer prints
-			// "Toastmaster · Vote Best Speaker" and must not be told to call for a
-			// report from a role nobody holds.
+			// Timer-aware like the other two vote slides: the Best-Speaker vote
+			// beat's fallback drops the same clause (#367), so a club with no Timer
+			// prints "Toastmaster · Opens voting for Best Speaker" and must not be
+			// told to call for a report from a role nobody holds.
 			const lines: Line[] = slide.hasTimer
 				? [head("Ask for speaking time.")]
 				: [];
@@ -194,7 +194,8 @@ export function slideLayout(slide: Slide): SlideLayout {
 			});
 		}
 		case "voteTableTopics": {
-			// Beat 8's fallback drops the timer's-report clause on the same signal.
+			// The Best-Table-Topics vote beat's fallback drops the timer's-report
+			// clause on the same signal.
 			const lines: Line[] = slide.hasTimer
 				? [head("Ask for Table Topics times.")]
 				: [];
@@ -220,7 +221,7 @@ export function slideLayout(slide: Slide): SlideLayout {
 			return content("Speech Evaluation", { form: "centered", lines });
 		}
 		case "voteEvaluator": {
-			// Beat 10's fallback, likewise.
+			// The Best-Evaluator vote beat's fallback, likewise.
 			const lines: Line[] = slide.hasTimer
 				? [head("Ask for timer’s report:")]
 				: [];

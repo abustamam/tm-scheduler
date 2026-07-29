@@ -41,7 +41,7 @@ export type ClubForDeck = {
 };
 
 /** Carried by all three vote slides — the ends of the speech, Table Topics and
- *  evaluation segments (beats 6, 8 and 10). True when the club runs a Timer, so
+ *  evaluation segments. True when the club runs a Timer, so
  *  the slide asks for the timer's report before the vote. Each of those beats'
  *  run-sheet `fallback` drops its timer's-report clause on exactly the same
  *  signal (#367): a club with no Timer still votes, it just has no report to
@@ -81,7 +81,7 @@ export type Slide =
 			presenter: LegendEntry | null;
 	  }
 	| {
-			/** Beat 4 of the run-of-show (#367): the functionaries are introduced
+			/** The functionary-intro beat of the run-of-show (#367): they are introduced
 			 *  and each explains their own role. Owned by the Toastmaster of the
 			 *  Day in the standard flow, by the General Evaluator under MCF's
 			 *  variant — this slide was `geIntro`, which hardcoded the latter. */
@@ -93,7 +93,7 @@ export type Slide =
 			team: LegendEntry[];
 	  }
 	| {
-			/** Beat 12 (#367, absorbs #353): the General Evaluator calls for the
+			/** The functionary-reports beat (#367, absorbs #353): the GE calls for the
 			 *  functionary reports, between evaluating the evaluators and the
 			 *  overall meeting evaluation. Not affected by the flag — MCF's
 			 *  closing sequence is the same as everyone else's. */
@@ -117,8 +117,9 @@ export type Slide =
 			master: string;
 			timing: string;
 			/** The Word of the Day, kept on screen for the segment that exists to
-			 *  use it — beat 7 is literally "Impromptu topics using the Word of the
-			 *  Day" (#355). A REMINDER, not a second presentation: the standalone
+			 *  use it — the Table Topics beat is literally "Impromptu topics using
+			 *  the Word of the Day" (#355). A REMINDER, not a second presentation:
+			 *  the standalone
 			 *  `wordOfDay` slide (#354) is where the Grammarian presents the word
 			 *  in full, a dozen slides earlier. Hence no example and no presenter
 			 *  credit here — nobody is delivering it at this point, they are
@@ -142,11 +143,12 @@ export type Slide =
 	  }
 	| ({ kind: "voteEvaluator"; names: string[] } & VoteTiming)
 	| {
-			/** Beat 11 (#367): the General Evaluator evaluates the evaluators,
-			 *  after the Best-Evaluator vote and before the functionary reports.
-			 *  Gated on the GE role having a slot, exactly as the run sheet gates
-			 *  beat 11 — a club with no General Evaluator loses beats 11–13 and
-			 *  nothing replaces them. This slide was `evalIntro`, which sat before
+			/** The evaluator-evaluation beat (#367): the General Evaluator evaluates
+			 *  the evaluators, after the Best-Evaluator vote and before the
+			 *  functionary reports. Gated on the GE role having a slot, exactly as the
+			 *  run sheet gates it — a club with no General Evaluator loses the GE's
+			 *  whole closing sequence and nothing replaces it. This slide was
+			 *  `evalIntro`, which sat before
 			 *  the evaluations (matching no beat), was gated on EVALUATORS rather
 			 *  than the GE, and printed the literal words "General Evaluator" as a
 			 *  name when the club had no GE. */
@@ -158,7 +160,7 @@ export type Slide =
 	| { kind: "generalEvaluation"; name: string; time: string }
 	| { kind: "awards"; categories: string[] }
 	| {
-			/** Beat 15 (#352): the President invites the guests to comment, between
+			/** The guest-comments beat (#352): the President invites them, between
 			 *  the awards and the closing announcements. Carries no data — a first
 			 *  cut that prompts the room generically rather than reading the
 			 *  meeting's recorded guests, since guests who were never booked in are
@@ -202,13 +204,13 @@ const ROLE = {
 /**
  * The one duration on the deck that is NOT a beat's budget (#356), and the
  * reason it is exempt: this is the limit on a SINGLE impromptu answer, while
- * beat 7 books the whole Table Topics SEGMENT. Deriving it would project
+ * the Table Topics beat books the whole SEGMENT. Deriving it would project
  * "Speaker time: 10 minutes" at a speaker who has one to two — a per-speaker
  * versus per-segment difference, not a disagreement.
  *
  * The segment number is also the one the deck could never state honestly:
- * `applyFlex` resizes beat 7 at render time to whatever makes the meeting come
- * out to its scheduled length, and the deck is not given that length.
+ * `applyFlex` resizes that beat at render time to whatever makes the meeting
+ * come out to its scheduled length, and the deck is not given that length.
  */
 export const TABLE_TOPICS_TIMING = "1–2 minutes per speaker";
 
@@ -294,7 +296,7 @@ export function buildSlideDeck({
 		timezone: club.timezone,
 	});
 
-	// Beat 3: the Toastmaster of the Day opens the meeting. Gated on the role
+	// The Toastmaster of the Day opens the meeting. Gated on the role
 	// having a slot, exactly as `expandRunSheet` gates the beat — a club that
 	// does not run a Toastmaster of the Day (#368) neither prints the row nor
 	// projects the slide. An enabled-but-unclaimed role still has a slot and
@@ -339,8 +341,8 @@ export function buildSlideDeck({
 	}
 
 	const generalEvaluator = byRole(slots, ROLE.generalEvaluator);
-	// Beat 4. Gated exactly as the run sheet gates it: the owning role has a
-	// slot AND the club runs at least one functionary to introduce.
+	// The functionary intro. Gated exactly as the run sheet gates it: the owning
+	// role has a slot AND the club runs at least one functionary to introduce.
 	const introOwner = geIntroducesFunctionaries
 		? ROLE.generalEvaluator
 		: ROLE.toastmaster;
@@ -416,7 +418,7 @@ export function buildSlideDeck({
 		});
 	}
 
-	// Beats 11, 12 then 13: the GE evaluates the evaluators, calls for the
+	// The GE's closing sequence: the GE evaluates the evaluators, calls for the
 	// functionary reports, then gives the overall meeting evaluation. All three
 	// need a General Evaluator and nothing replaces them when the club has none;
 	// the reports beat additionally needs functionaries to call for.
@@ -428,9 +430,10 @@ export function buildSlideDeck({
 		});
 	}
 
-	// Beat 12's gate is functionaries who REPORT (#371), not functionaries: a club
-	// whose only functionary is a Vote Counter has nobody to call on, and the
-	// team lists the same subset so the slide never names someone with no report.
+	// The functionary-reports gate is functionaries who REPORT (#371), not
+	// functionaries: a club whose only functionary is a Vote Counter has nobody to
+	// call on, and the team lists the same subset so the slide never names someone
+	// with no report.
 	if (generalEvaluator.length > 0 && hasAnyReportingFunctionaryRole(slots)) {
 		deck.push({
 			kind: "functionaryReports",
@@ -455,8 +458,9 @@ export function buildSlideDeck({
 		deck.push({ kind: "awards", categories: awardCategories });
 	}
 
-	// Beat 15 (#352), between the awards and the announcements. Ungated, like the
-	// beat: the club cannot know in advance whether guests will be in the room.
+	// Guest comments (#352), between the awards and the announcements. Ungated,
+	// like the beat: the club cannot know in advance whether guests will be in the
+	// room.
 	deck.push({ kind: "guestComments" });
 
 	if (meeting.reminders?.trim()) {

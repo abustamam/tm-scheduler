@@ -65,10 +65,13 @@ const HANDOFF: Section | null = null;
  * mislabelling a section.
  */
 const BEATS: { detail: string; section: Section | null }[] = [
-	// Beat 1 — Sergeant-at-Arms, Call to Order. A room-logistics event beat with
+	// Sergeant-at-Arms, Call to Order. A room-logistics event beat with
 	// no counterpart in the deck: nothing is projected while phones go silent.
-	{ detail: "Call to Order · phones silent, exits noted", section: null },
-	// Beat 2 — President's opening remarks. Likewise an event beat with no slide.
+	{
+		detail: "Call to Order · phones silent · introduces the President",
+		section: null,
+	},
+	// President's opening remarks. Likewise an event beat with no slide.
 	{ detail: "Opening remarks; welcomes guests", section: null },
 	{
 		detail: "Opens meeting · introduces the theme",
@@ -81,7 +84,7 @@ const BEATS: { detail: string; section: Section | null }[] = [
 	{ detail: "Introduces the speakers", section: HANDOFF },
 	{ detail: "Prepared speech", section: "speech" },
 	{
-		detail: "Calls for the Timer's report · vote Best Speaker",
+		detail: "Calls for the Timer's report · opens voting for Best Speaker",
 		section: "voteSpeaker",
 	},
 	{ detail: "Introduces the Table Topics Master", section: HANDOFF },
@@ -90,14 +93,14 @@ const BEATS: { detail: string; section: Section | null }[] = [
 		section: "tableTopics",
 	},
 	{
-		detail: "Calls for the Timer's report · vote Best Table Topics",
+		detail: "Calls for the Timer's report · opens voting for Best Table Topics",
 		section: "voteTableTopics",
 	},
 	{ detail: "Introduces the General Evaluator", section: HANDOFF },
 	{ detail: "Introduces the speech evaluators", section: HANDOFF },
 	{ detail: "Evaluates a speaker", section: "evaluation" },
 	{
-		detail: "Calls for the Timer's report · vote Best Evaluator",
+		detail: "Calls for the Timer's report · opens voting for Best Evaluator",
 		section: "voteEvaluator",
 	},
 	{ detail: "Evaluates the evaluators", section: "evaluatorEvaluation" },
@@ -105,13 +108,19 @@ const BEATS: { detail: string; section: Section | null }[] = [
 		detail: "Calls for the functionary reports",
 		section: "functionaryReports",
 	},
-	{ detail: "Overall meeting evaluation", section: "generalEvaluation" },
-	// Beat 14 — the Toastmaster's awards handout. Compared as of #372: the beat
+	{
+		detail: "Overall meeting evaluation · returns control to the Toastmaster",
+		section: "generalEvaluation",
+	},
+	// The Toastmaster's awards handout. Compared as of #372: the beat
 	// is now gated on the scored segments and names only those categories, which
 	// is exactly how the deck's `awards` slide was already built, so the two are
 	// comparable rather than a standing content difference.
-	{ detail: "Awards · {awards}", section: "awards" },
-	// Beat 15 (#352) — guest comments, carved out of the President's closing so
+	{
+		detail: "Awards · {awards} · hands over to the President",
+		section: "awards",
+	},
+	// Guest comments (#352), carved out of the President's closing so
 	// they get a row to point at and minutes on the clock. Ungated, like the
 	// opening remarks: every meeting can have guests, and the spec rules out a
 	// per-club toggle. It is a SECTION, not an exclusion — #352 adds it to both
@@ -120,10 +129,10 @@ const BEATS: { detail: string; section: Section | null }[] = [
 		detail: "Guest Comments · invites our guests to share their thoughts",
 		section: "guestComments",
 	},
-	// Beat 16 — President's club business / adjourn. Event beat, no slide. It no
+	// President's club business / adjourn. Event beat, no slide. It no
 	// longer mentions guest comments: the beat above is the replacement the
 	// clause was waiting for, and prompting for them twice is worse than once.
-	{ detail: "Club business · elections · adjourn", section: null },
+	{ detail: "Club business · announcements · adjourn", section: null },
 ];
 
 /** The one beat only MCF's variant carries (#363): the Toastmaster introducing
@@ -153,8 +162,8 @@ const SECTION_BY_SLIDE = {
 	// is the Call to Order.
 	title: null,
 	// Theme + Word of the Day. Gated on MEETING CONTENT (theme/word set), not on
-	// which roles the club runs, so it has no beat of its own; beat 3 is the
-	// Toastmaster opening, which maps to the `toastmaster` slide below.
+	// which roles the club runs, so it has no beat of its own; the Toastmaster's
+	// opening beat maps to the `toastmaster` slide below.
 	toastmasterIntro: null,
 	// The standalone Word-of-the-Day slide. #354 moved it out of the General
 	// Evaluator's stretch and into the Toastmaster's opening, immediately after
@@ -163,8 +172,9 @@ const SECTION_BY_SLIDE = {
 	// which roles the club runs, so no beat corresponds to it. The Grammarian it
 	// now credits changes the slide's COPY, never whether it exists, so the
 	// exclusion still holds after the move. What the run sheet does say about
-	// the word is beat 4's "each explains their role" and beat 7's Table Topics
-	// detail — neither is a Word-of-the-Day section of its own.
+	// the word is the functionary-intro beat's "each explains their role" and the
+	// Table Topics beat's detail — neither is a Word-of-the-Day section of its
+	// own.
 	wordOfDay: null,
 	// Free-text per-meeting announcements (#349). No beat.
 	reminders: null,
@@ -182,7 +192,8 @@ const SECTION_BY_SLIDE = {
 	evaluatorEvaluation: "evaluatorEvaluation",
 	functionaryReports: "functionaryReports",
 	generalEvaluation: "generalEvaluation",
-	// Gated on which scored segments exist — and so is beat 14, as of #372.
+	// Gated on which scored segments exist — and so is the awards beat, as of
+	// #372.
 	awards: "awards",
 	// Ungated on both surfaces (#352): every meeting can have guests.
 	guestComments: "guestComments",
@@ -193,8 +204,9 @@ const SECTION_BY_SLIDE = {
  * whose budget that duration has to be (#356).
  *
  * Ordering parity alone let the two surfaces state different minutes for the
- * same beat, and they did: beat 9 budgeted 3 minutes while the deck's
- * `EVALUATION_TIMING` said "2–3 minutes". Deriving the deck's timings from the
+ * same beat, and they did: the speech-evaluation beat budgeted 3 minutes while
+ * the deck's `EVALUATION_TIMING` said "2–3 minutes". Deriving the deck's
+ * timings from the
  * beat makes that unrepresentable, and makes this assertion cheap — the check
  * is just "the slide says what its beat budgets", with no minute values
  * restated here to drift in their turn.
@@ -202,7 +214,8 @@ const SECTION_BY_SLIDE = {
  * `satisfies` keeps it exhaustive over the slides that carry a `time`: a new
  * timed slide has to be classified or this stops compiling. The `tableTopics`
  * slide is outside it by construction — its `timing` is a PER-SPEAKER limit,
- * not the segment budget beat 7 books, so there is nothing to compare.
+ * not the segment budget the Table Topics beat books, so there is nothing to
+ * compare.
  *
  * The exhaustiveness has a shape requirement worth knowing: `Extract<Slide,
  * { time: string }>` selects only slides whose duration is a REQUIRED `string`
@@ -484,8 +497,9 @@ const CASES: { name: string; slots: AgendaSlot[] }[] = [
 	{
 		// #371: a club-invented functionary is a functionary. It used to appear on
 		// the projected `functionaryIntro` slide (whose team came from
-		// `buildLegend`, a category filter) but not in the printed beat-4 row
-		// (whose `{roles}` resolved against the four standard keys) — a CONTENT
+		// `buildLegend`, a category filter) but not in the printed
+		// functionary-intro row (whose `{roles}` resolved against the four standard
+		// keys) — a CONTENT
 		// divergence this ordering test cannot see, which is why the run-sheet and
 		// deck suites assert the lists directly. What it can see is the gate.
 		name: "custom functionary-category role alongside the standard four",
@@ -493,14 +507,16 @@ const CASES: { name: string; slots: AgendaSlot[] }[] = [
 	},
 	{
 		// The all-custom club: #368's disable lifecycle turns off all four standard
-		// functionaries and the club runs its own. Beats 4 and 12 used to vanish
+		// functionaries and the club runs its own. The functionary-intro and
+		// functionary-reports beats used to vanish
 		// from print AND deck together — consistent, and consistently wrong.
 		name: "all-custom functionaries (standard four disabled)",
 		slots: [tmod, ttm, ge, speaker1, evaluator1, jokeMaster],
 	},
 	{
-		// The beat-12 gate decision (#371): a Vote Counter is a functionary, so
-		// they are INTRODUCED, but they give no report — so the reports section is
+		// The functionary-reports gate decision (#371): a Vote Counter is a
+		// functionary, so they are INTRODUCED, but they give no report — so the
+		// reports section is
 		// absent from both surfaces.
 		name: "Vote Counter is the club's only functionary",
 		slots: [tmod, ttm, ge, speaker1, evaluator1, voteCounter],
@@ -509,7 +525,8 @@ const CASES: { name: string; slots: AgendaSlot[] }[] = [
 		// An admin can change a role's category (`applyRoleDefinitionUpdate`), so a
 		// standard KEY under a non-functionary category is reachable. The category
 		// is the definition (#371), so this club runs no functionaries and both
-		// surfaces must drop beats 4 and 12 together — the case where a key-based
+		// surfaces must drop the functionary-intro and functionary-reports beats
+		// together — the case where a key-based
 		// gating fallback would have made print render a beat the deck omits.
 		name: "standard functionary key recategorised out of the functionaries",
 		slots: [
