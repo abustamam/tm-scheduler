@@ -8,6 +8,7 @@ import {
 	type Slide,
 	type SlideDeckInput,
 } from "./agenda-slides";
+import { slideLayout } from "./slide-layout";
 
 function slot(over: Partial<AgendaSlot>): AgendaSlot {
 	return {
@@ -654,6 +655,27 @@ describe("hand-off slides (#363)", () => {
 				to: "the speakers",
 			},
 		]);
+	});
+
+	it("gives every hand-off it projects its own label in the jump grid", () => {
+		// `slideLayout`'s HANDOFF_HEADER is keyed on `to` and falls back to a bare
+		// "Hand-off" for an unmapped target — deliberately, so a new one cannot take
+		// the deck down mid-meeting. Nothing tied that map to the targets this
+		// function actually emits, though: slide-layout.test.ts asserts the four
+		// keys as literals, the tests above assert the four `to` values as literals,
+		// and neither notices the other. Add a fifth hand-off here and both lists
+		// fail, both get updated, and the new slide lands in the overview grid as a
+		// second row reading "Hand-off" — the exact ambiguity #363 exists to remove,
+		// arriving silently. This is the assertion that says the fallback is
+		// defensive rather than load-bearing.
+		const headers = handoffs({ geIntroducesFunctionaries: true }).map((s) => {
+			const layout = slideLayout(s);
+			return layout.chrome === "content" ? layout.header : "splash";
+		});
+		expect(headers).not.toContain("Hand-off");
+		// Four labels for five slides: the two hand-offs INTO the General Evaluator
+		// are the same transition and share one, which is why this is not 5.
+		expect(new Set(headers).size).toBe(4);
 	});
 
 	it("binds by role key, so a renamed role keeps its hand-offs under the club's name", () => {

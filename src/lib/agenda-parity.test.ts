@@ -23,6 +23,7 @@ import {
 	DEFAULT_SPEAKER_MINUTES,
 	expandRunSheet,
 	formatBeatMinutes,
+	OPEN_LABEL,
 } from "./agenda-runsheet";
 import {
 	buildSlideDeck,
@@ -498,6 +499,17 @@ const FULL: AgendaSlot[] = [
 
 const without = (...ids: string[]) => FULL.filter((s) => !ids.includes(s.id));
 
+/** Every role that owns a hand-off or calls a vote, enabled but unclaimed —
+ *  see the `CASES` entry below, and the test that pins it non-vacuously. */
+const UNCLAIMED: AgendaSlot[] = [
+	{ ...tmod, assigneeName: null },
+	{ ...ttm, assigneeName: null },
+	{ ...ge, assigneeName: null },
+	speaker1,
+	evaluator1,
+	timer,
+];
+
 const CASES: { name: string; slots: AgendaSlot[] }[] = [
 	{ name: "full nine-role club", slots: FULL },
 	{
@@ -609,6 +621,19 @@ const CASES: { name: string; slots: AgendaSlot[] }[] = [
 			evaluator1,
 			{ ...timer, category: "leadership" },
 		],
+	},
+	{
+		// Enabled but UNCLAIMED (#363). Every other case in this matrix assigns
+		// every slot, so the placeholder path is unexercised here — and it is the
+		// one where the two surfaces resolve a hand-off's cast through genuinely
+		// different code. The printed row builds "Role · — open —" from
+		// `assigneeDisplay`; the slide's `from` and the vote slides' `caller` come
+		// from `holder`, whose `??` fallbacks key on slot ABSENCE and so must NOT
+		// fire for a slot that exists with nobody in it. `agenda-slides.test.ts`
+		// asserts the deck half and says it matches "exactly as the printed row
+		// does" — this is where that claim meets the printed row.
+		name: "leadership roles enabled but unclaimed",
+		slots: UNCLAIMED,
 	},
 	{
 		// Renaming a role never changes its key (#368), so both renderings must
@@ -813,6 +838,32 @@ describe("hand-off agreement — deck ⇄ run sheet (#363)", () => {
 			"Toastmaster of the Day · Schinthia → the Table Topics Master",
 			"Table Topics Master · Rasheed → the General Evaluator",
 			"General Evaluator · Saiful → the speech evaluators",
+		]);
+	});
+
+	it("keeps the cue for a role that is enabled but unclaimed", () => {
+		// The `UNCLAIMED` matrix entry proves the two surfaces AGREE; it would still
+		// agree if both had dropped the hand-offs, which is a single conceptual
+		// change ("an unassigned role is a role the club doesn't run") applied to
+		// both. An enabled-but-unclaimed role IS one the club runs — whoever fills
+		// it on the day needs the cue as much as anyone — so this pins the copy each
+		// surface keeps, placeholder and all.
+		const config: RunOfShowConfig = { geIntroducesFunctionaries: false };
+		expect(
+			handoffSlides(UNCLAIMED, config).map(
+				(s) => `${s.from.role} · ${s.from.name} → ${s.to}`,
+			),
+		).toEqual([
+			`Toastmaster of the Day · ${OPEN_LABEL} → the speakers`,
+			`Toastmaster of the Day · ${OPEN_LABEL} → the Table Topics Master`,
+			`Table Topics Master · ${OPEN_LABEL} → the General Evaluator`,
+			`General Evaluator · ${OPEN_LABEL} → the speech evaluators`,
+		]);
+		expect(handoffRows(UNCLAIMED, config).map((r) => r.who)).toEqual([
+			`Toastmaster of the Day · ${OPEN_LABEL}`,
+			`Toastmaster of the Day · ${OPEN_LABEL}`,
+			`Table Topics Master · ${OPEN_LABEL}`,
+			`General Evaluator · ${OPEN_LABEL}`,
 		]);
 	});
 
