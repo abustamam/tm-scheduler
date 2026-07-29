@@ -204,13 +204,17 @@ export type TimedBeatId =
  * Two reasons a beat needs one, and both are live:
  * - Its DURATION is restated elsewhere — see `TimedBeatId`.
  * - Its `detail` does not identify it, because another beat shares that text.
- *   The deck projects a slide per hand-off beat as of #363, which makes it one
- *   of the surfaces that has to point at them — and TWO hand-off beats read
- *   "Introduces the General Evaluator": MCF's opening one, and the Table Topics
- *   Master's into the evaluation segment. Both are correct copy (the GE
- *   genuinely is introduced twice in that flow), so the ambiguity will not
- *   resolve itself by rewording, and a `find` on the detail silently takes
- *   whichever comes first.
+ *   TWO hand-off beats read "Introduces the General Evaluator" (#363): MCF's
+ *   opening one, and the Table Topics Master's into the evaluation segment.
+ *   Both are correct copy — the GE genuinely is introduced twice in that flow —
+ *   so the ambiguity will not resolve itself by rewording, and a `find` on the
+ *   detail silently takes whichever comes first.
+ *
+ * The consumer of the two hand-off ids is `agenda-parity.test.ts`, whose beat
+ * table pins each entry to the beat it claims to be. `buildSlideDeck` does NOT
+ * read them: it emits its hand-off slides positionally (see `Beat.handoff`).
+ * So renaming one is a change to that harness, not to the deck — and the ids
+ * are not load-bearing in production.
  */
 export type BeatId = TimedBeatId | "geOpeningHandoff" | "geEvaluationHandoff";
 

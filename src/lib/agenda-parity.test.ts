@@ -16,7 +16,6 @@ import type {
 	AgendaRow,
 	AgendaSlot,
 	BeatId,
-	LegendEntry,
 	RunOfShowConfig,
 } from "./agenda-runsheet";
 import {
@@ -841,6 +840,19 @@ describe("hand-off agreement — deck ⇄ run sheet (#363)", () => {
 	});
 });
 
+/**
+ * The three vote slides, named rather than matched on a `"vote"` prefix: a
+ * future kind whose name starts with "vote" but carries no caller would slip
+ * through a prefix filter and read `undefined`, which `toEqual` against a
+ * printed row would then report as a divergence in the wrong place — or hide
+ * one. Naming them keeps the type system in the loop.
+ */
+const VOTE_KINDS = ["voteSpeaker", "voteTableTopics", "voteEvaluator"] as const;
+const isVoteSlide = (
+	s: Slide,
+): s is Extract<Slide, { kind: (typeof VOTE_KINDS)[number] }> =>
+	(VOTE_KINDS as readonly string[]).includes(s.kind);
+
 describe("vote-caller agreement — deck ⇄ run sheet (#363)", () => {
 	/** The three vote beats' rows, in order. */
 	const voteRows = (slots: AgendaSlot[], config: RunOfShowConfig) =>
@@ -855,9 +867,8 @@ describe("vote-caller agreement — deck ⇄ run sheet (#363)", () => {
 				: "standard";
 			it(`${name} — ${flag}`, () => {
 				const callers = buildSlideDeck({ meeting, club, slots, ...config })
-					.filter((s) => s.kind.startsWith("vote"))
-					.map((s) => (s as { caller: LegendEntry | null }).caller)
-					.map((c) => c?.name ?? null);
+					.filter(isVoteSlide)
+					.map((s) => s.caller?.name ?? null);
 				// `renderUnowned` keeps the printed row and fills its `who` column with
 				// the bare role name; the slide has no column to fill and drops the
 				// attribution instead. So a row with no holder is a slide with no

@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { AgendaSlot, LegendEntry } from "./agenda-runsheet";
+import type { AgendaSlot } from "./agenda-runsheet";
 import { beatDuration, buildRunOfShow } from "./agenda-runsheet";
 import {
 	buildSlideDeck,
 	type ClubForDeck,
 	type MeetingForDeck,
+	type Slide,
 	type SlideDeckInput,
 } from "./agenda-slides";
 
@@ -509,7 +510,22 @@ describe("hand-off slides (#363)", () => {
 	const CLUB = [totd, ttMaster, genEval, speaker, evaluator];
 
 	const handoffs = (over: Partial<SlideDeckInput> = {}) =>
-		build({ slots: CLUB, ...over }).filter((s) => s.kind === "handoff");
+		build({ slots: CLUB, ...over }).filter(
+			(s): s is Extract<Slide, { kind: "handoff" }> => s.kind === "handoff",
+		);
+
+	/** The three vote slides, named rather than matched on a `"vote"` prefix — a
+	 *  future kind starting with "vote" but carrying no caller would otherwise
+	 *  slip through and read `undefined` instead of failing to compile. */
+	const VOTE_KINDS = [
+		"voteSpeaker",
+		"voteTableTopics",
+		"voteEvaluator",
+	] as const;
+	const isVoteSlide = (
+		s: Slide,
+	): s is Extract<Slide, { kind: (typeof VOTE_KINDS)[number] }> =>
+		(VOTE_KINDS as readonly string[]).includes(s.kind);
 
 	it("projects each hand-off, in run-sheet order, naming both parties", () => {
 		expect(handoffs({ geIntroducesFunctionaries: true })).toEqual([
@@ -544,7 +560,7 @@ describe("hand-off slides (#363)", () => {
 	it("has no opening GE hand-off in the standard flow — the GE is not introduced there", () => {
 		// The beat exists only under MCF's variant, where the swap puts the General
 		// Evaluator in front of the room at the top of the meeting.
-		expect(handoffs().map((s) => (s as { to: string }).to)).toEqual([
+		expect(handoffs().map((s) => s.to)).toEqual([
 			"the speakers",
 			"the Table Topics Master",
 			"the General Evaluator",
@@ -554,10 +570,8 @@ describe("hand-off slides (#363)", () => {
 
 	it("names the caller on each vote slide", () => {
 		const deck = build({ slots: CLUB, geIntroducesFunctionaries: true });
-		const votes = deck.filter((s) => s.kind.startsWith("vote"));
-		expect(
-			votes.map((s) => (s as { caller: LegendEntry | null }).caller),
-		).toEqual([
+		const votes = deck.filter(isVoteSlide);
+		expect(votes.map((s) => s.caller)).toEqual([
 			{ role: "Toastmaster of the Day", name: "Faisal" },
 			{ role: "Table Topics Master", name: "Rasheed" },
 			{ role: "General Evaluator", name: "Riyaz" },
@@ -598,9 +612,7 @@ describe("hand-off slides (#363)", () => {
 	});
 
 	it("hands the evaluators to the Toastmaster when the club runs no General Evaluator", () => {
-		const tos = handoffs({ slots: [totd, ttMaster, speaker, evaluator] }).map(
-			(s) => s as { from: LegendEntry; to: string },
-		);
+		const tos = handoffs({ slots: [totd, ttMaster, speaker, evaluator] });
 		// No General Evaluator ⇒ nobody to introduce, so that hand-off is gone…
 		expect(tos.map((s) => s.to)).toEqual([
 			"the speakers",

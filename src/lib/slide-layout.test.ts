@@ -230,7 +230,7 @@ describe("slideLayout bodies", () => {
 				}),
 			).toEqual({
 				chrome: "content",
-				header: "Hand-off",
+				header: "Hand-off — General Evaluator",
 				body: {
 					form: "centered",
 					lines: [
@@ -239,6 +239,41 @@ describe("slideLayout bodies", () => {
 					],
 				},
 			});
+		});
+
+		it("names the segment in the header, so the jump grid can tell the five apart", () => {
+			// `slideName` (meeting-present.tsx) labels the overview grid with the
+			// header verbatim. One shared "Hand-off" would put five identical rows in
+			// the one place a jump grid exists to help.
+			const header = (to: string) =>
+				contentHeader({
+					kind: "handoff",
+					from: { role: "Toastmaster of the Day", name: "Faisal" },
+					to,
+				});
+			expect([
+				header("the speakers"),
+				header("the Table Topics Master"),
+				header("the General Evaluator"),
+				header("the speech evaluators"),
+			]).toEqual([
+				"Hand-off — Speakers",
+				"Hand-off — Table Topics",
+				"Hand-off — General Evaluator",
+				"Hand-off — Evaluators",
+			]);
+		});
+
+		it("falls back to the bare header for an unmapped target", () => {
+			// A new hand-off target should get a grid label, but a missing one must
+			// not take the deck down mid-meeting.
+			expect(
+				contentHeader({
+					kind: "handoff",
+					from: { role: "Toastmaster of the Day", name: "Faisal" },
+					to: "the Joke Master",
+				}),
+			).toBe("Hand-off");
 		});
 
 		it("reads the same for a group target — the target is prose, not a role", () => {

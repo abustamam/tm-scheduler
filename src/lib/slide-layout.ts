@@ -76,18 +76,39 @@ const content = (header: string, body: Body): SlideLayout => ({
 const filledTeam = (team: LegendEntry[]): LegendEntry[] =>
 	team.filter((t) => t.name !== OPEN_LABEL);
 
-/** Credit for the Word of the Day (#354). The slide sits inside the
- *  Toastmaster's opening, so it names the role that actually presents it — the
- *  Grammarian, under the club's own name for it. An unclaimed Grammarian is
- *  still the Grammarian's, so the role is credited without the placeholder;
- *  a club that runs no Grammarian gets no line rather than a credit to a role
- *  it never configured. */
 /** The segment leader who calls a vote (#363), as the vote slides show them —
  *  the same "Role · Name" the printed row's `who` column carries, so the two
  *  surfaces credit the same person in the same words. */
 const callerLine = (caller: LegendEntry): Line =>
 	muted(`${caller.role} · ${caller.name}`);
 
+/**
+ * A hand-off's header, by the segment it hands to (#363).
+ *
+ * The overview grid names a slide by its header — `slideName` in
+ * meeting-present.tsx returns it verbatim — so one shared "Hand-off" would put
+ * five indistinguishable rows in the one place a jump grid exists to help, in
+ * an issue whose whole point is removing ambiguity about who does what. The
+ * suffix names the SEGMENT, short enough to read in a grid cell; the body still
+ * spells out the full prose target.
+ *
+ * Keyed on `to`, the only thing that tells the five apart. An unmapped target
+ * falls back to the bare header rather than throwing: a worse grid label is not
+ * worth a deck that will not render.
+ */
+const HANDOFF_HEADER: Record<string, string> = {
+	"the speakers": "Hand-off — Speakers",
+	"the Table Topics Master": "Hand-off — Table Topics",
+	"the General Evaluator": "Hand-off — General Evaluator",
+	"the speech evaluators": "Hand-off — Evaluators",
+};
+
+/** Credit for the Word of the Day (#354). The slide sits inside the
+ *  Toastmaster's opening, so it names the role that actually presents it — the
+ *  Grammarian, under the club's own name for it. An unclaimed Grammarian is
+ *  still the Grammarian's, so the role is credited without the placeholder;
+ *  a club that runs no Grammarian gets no line rather than a credit to a role
+ *  it never configured. */
 function presenterLine(presenter: LegendEntry | null): string | null {
 	if (presenter == null) return null;
 	return presenter.name === OPEN_LABEL
@@ -120,7 +141,7 @@ export function slideLayout(slide: Slide): SlideLayout {
 			// hand-off band names them — including the "— open —" placeholder for an
 			// enabled-but-unclaimed role, since suppressing it here would drop a cue
 			// the printed agenda keeps.
-			return content("Hand-off", {
+			return content(HANDOFF_HEADER[slide.to] ?? "Hand-off", {
 				form: "centered",
 				lines: [
 					head(`${slide.from.role} · ${slide.from.name}`),
