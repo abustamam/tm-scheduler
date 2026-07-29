@@ -37,7 +37,7 @@ EOF
 echo "BETTER_AUTH_SECRET=$(bunx @better-auth/cli secret)" >> .env.local
 
 # 3. Apply schema and seed sample data:
-bun run db:push
+bun run db:migrate
 bun run db:seed
 
 # 4. Run it:
@@ -73,13 +73,20 @@ your own account email).
 | `bun run build` | Production build (self-contained Node server via Nitro) |
 | `bun run check` | Biome lint + format (also `lint` / `format` individually) |
 | `bun run test` | Vitest |
-| `bun run db:push` | Sync schema to the DB (quick dev path) |
+| `bun run typecheck` | `tsc --noEmit` — the only thing that type-checks |
 | `bun run db:generate` / `db:migrate` | Generate / apply SQL migrations |
 | `bun run db:seed` | Seed a sample club, roles, meetings, and members |
 | `bun run db:studio` | Browse the DB in Drizzle Studio |
+| `bun run db:push` | Sync schema without a migration. For throwaway DBs only — see below |
 
-There's no dedicated typecheck script; `bun run build` (or `bunx tsc --noEmit`) surfaces type
-errors.
+Run `bun run typecheck` before claiming a change is green. `bun run build` and `bun run test`
+both transpile without type-checking, so both pass on type-broken code. CI runs `typecheck` in
+the `check` job.
+
+Use `db:migrate`, not `db:push`, on your dev database. It runs automatically as a `predev` step
+and via the `.githooks/post-merge` hook, so the dev DB mirrors the migration path production
+takes. Mixing in `db:push` diverges the migration-tracking table and breaks replay. Reserve
+`db:push` for throwaway or test databases such as `tm_test`.
 
 ## Project layout
 
