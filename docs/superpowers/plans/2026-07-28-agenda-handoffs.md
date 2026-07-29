@@ -859,10 +859,47 @@ In `buildRunOfShow`, make these four edits:
 Run: `bunx vitest run src/lib/agenda-runsheet.test.ts`
 Expected: PASS. The `generalEvaluation` `BeatId` still resolves — `beatDuration` matches on `id`, not on `detail`.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Retire the "beat N" comment convention**
+
+Added after Task 4's review. Inserting hand-off beats invalidated ~30 numeric
+comment references across five files — `agenda-runsheet.ts`,
+`agenda-runsheet.test.ts`, `agenda-parity.test.ts`, and (untouched by Task 4)
+`agenda-slides.ts` and `agenda-slides.test.ts`. `agenda-slides.ts:44` calls the
+vote beats "beats 6, 8 and 10"; they are now 7, 10 and 14.
+
+Do **not** renumber. Replace indices with prose names: "the functionary-intro
+beat", "the functionary-reports beat", "the Table Topics beat", "the three vote
+beats", "the GE's closing sequence". This is grep-able and survives insertion.
+
+The module argues this itself — `BeatId`'s docblock says matching on position
+"would break the first time one is inserted", in the same file that then used
+position in ~9 prose comments. It has now broken twice in one plan. Task 4
+already made this substitution in three places and it reads better.
+
+Do this now rather than later: the numbering is final as of Task 4 (Tasks 5–8
+add and remove no beats), so deferring ships more slices of wrong comments for
+no risk reduction.
+
+Do NOT extend `BeatId` for this — its doc deliberately scopes ids to "only the
+beats something else quotes". Task 7 adds two ids on that charter.
+
+- [ ] **Step 6: Reconsider the vote beats' copy register**
+
+Flagged in Task 2's review. `"Calls for the Timer's report"` matches its
+neighbours — third person, describing what the owner does, like "Calls for the
+functionary reports". The second clause does not: `"· vote Best Speaker"` is an
+imperative to the room, left over from when the row belonged to the Timer. It
+reads worst on the no-Timer fallback rows, where the whole row becomes
+`Toastmaster of the Day · Faisal | Vote Best Speaker` — an order in a column
+that otherwise narrates. `"· opens voting for Best Speaker"` matches.
+
+Apply to all six strings (three details, three fallback details) and update the
+tests that pin them, including `agenda-parity.test.ts`'s `BEATS` table.
+
+- [ ] **Step 7: Commit**
 
 ```bash
-git add src/lib/agenda-runsheet.ts src/lib/agenda-runsheet.test.ts
+git add src/lib/agenda-runsheet.ts src/lib/agenda-runsheet.test.ts src/lib/agenda-parity.test.ts src/lib/agenda-slides.ts src/lib/agenda-slides.test.ts
 git commit -m "fix(agenda): state the opening and closing hand-offs; drop exits and elections (#363)"
 ```
 
@@ -1144,10 +1181,30 @@ Do the same in `voteTableTopics` and `voteEvaluator`.
 Run: `bunx vitest run src/lib/agenda-slides.test.ts src/lib/slide-layout.test.ts src/lib/deck-to-pptx.test.ts src/components/agenda/meeting-present.test.tsx`
 Expected: PASS. `meeting-present.tsx` and `deck-to-pptx.ts` need no edits — both consume only `SlideLayout`. Existing test fixtures that construct vote slides will need `caller` added.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 7: Two carried-forward items from Task 4's review**
+
+**Give the two GE-introduction hand-offs a `BeatId`.** `"Introduces the General
+Evaluator"` is the detail of TWO beats — the MCF opening hand-off and the Table
+Topics Master's hand-off into the evaluation segment. Both are semantically
+correct copy that should not be reworded (the GE genuinely is introduced twice
+in MCF's flow), so the ambiguity will not go away on its own, and a test in Task
+4 was already rewritten to locate beats *by detail*. Adding ids here is
+on-charter rather than a special case: `BeatId` exists for "beats another
+surface has to quote", and this task makes the deck exactly that. Task 7's
+slide-to-beat mapping needs a stable key anyway.
+
+**`dedupeConsecutive` will silently collapse two hand-offs.** If `HANDOFF`
+becomes a single shared section name in `agenda-parity.test.ts`, `BEATS` holds
+five entries with the same section and `dedupeConsecutive` (`:244`) collapses
+the two ADJACENT hand-offs — the Table Topics Master's and the General
+Evaluator's, which sit next to each other. Either give each hand-off a distinct
+section name, or decide deliberately to accept the collapse and say so in a
+comment. Do not discover this by watching a test go green.
+
+- [ ] **Step 8: Commit**
 
 ```bash
-git add src/lib/agenda-slides.ts src/lib/slide-layout.ts src/lib/agenda-slides.test.ts src/lib/slide-layout.test.ts src/lib/deck-to-pptx.test.ts src/components/agenda/meeting-present.test.tsx
+git add src/lib/agenda-slides.ts src/lib/slide-layout.ts src/lib/agenda-slides.test.ts src/lib/slide-layout.test.ts src/lib/deck-to-pptx.test.ts src/lib/agenda-parity.test.ts src/components/agenda/meeting-present.test.tsx
 git commit -m "feat(agenda): project hand-offs and name the vote caller on the deck (#363)"
 ```
 
@@ -1231,6 +1288,8 @@ git commit -m "test(agenda): parity covers hand-off slides and the vote caller (
 
 **Spec coverage:** A→Task 5, B→Task 4, B2→Task 4, C→Task 4, D→Task 4, E→Task 5, F→Task 5 (clause) + Task 3 (owner), G→Task 2, L/M→Task 5, print band→Task 6, deck→Task 7, parity→Task 8. The `BeatFallback` and `renderUnowned` mechanics land in Task 1.
 
-**Deliberately not covered:** the multi-slot leadership duplication recorded as an accepted trade-off in the spec, and the four deferred follow-ups (J, K, H, role-description drift), which are issues rather than tasks.
+**Deliberately not covered:** the multi-slot leadership duplication recorded as an accepted trade-off in the spec, and the five deferred follow-ups (J, K, H, role-description drift, and the rename inconsistency), which are issues rather than tasks.
+
+**Deferred to after Task 8:** extracting `expandBeat(beat, slots): AgendaRow[]` so `expandRunSheet` becomes `template.flatMap(...)`. Raised in Task 4's review; `agenda-parity.test.ts:557` already asserts that per-beat expansion equals whole-template expansion, so the extraction is a pure move with a green test guaranteeing it, and it dissolves the `startLen` index bookkeeping the two marking passes rely on. Held back only because it would conflict with queued task diffs. The same review also proposed splitting this file along a data/engine seam (`buildRunOfShow` + constants out, types + `expandRunSheet` + matchers stay) — likewise after Task 8, if at all.
 
 **Type consistency:** `BeatFallback.unless/owner/detail`, `Beat.renderUnowned`, `Beat.handoff`, `AgendaRow.handoff`, `Slide.handoff.from/to` and `VoteTiming.caller` are each defined once in the task that introduces them and used with the same names thereafter.
