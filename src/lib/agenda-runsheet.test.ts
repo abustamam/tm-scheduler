@@ -948,6 +948,56 @@ describe("the Toastmaster covers the General Evaluator's role (#363)", () => {
 	});
 });
 
+/**
+ * "Evaluates the evaluators" is gated on the EVALUATORS as of #363, reversing
+ * #367's decision that it followed the General Evaluator alone.
+ *
+ * #367's argument was symmetry — the beat is the GE's, so it should live and
+ * die with the GE — but that defended wrong copy: a row reading "Evaluates the
+ * evaluators" at a club that runs none is nonsense no matter who owns it. The
+ * Toastmaster covering the role (above) did not create that, it just made it
+ * reachable by a second route and put it in front of more clubs.
+ */
+describe("the evaluator evaluation needs evaluators (#363, reverses #367)", () => {
+	const evaluatorEvaluation = (slots: AgendaSlot[]) =>
+		expandRunSheet(slots, RUN_OF_SHOW).find(
+			(r) => r.detail === "Evaluates the evaluators",
+		);
+	const noEvaluators = () =>
+		sixRoleClub().filter((s) => s.roleKey !== "evaluator");
+
+	it("drops the beat at a club with a General Evaluator but no evaluators", () => {
+		expect(evaluatorEvaluation(noEvaluators())).toBeUndefined();
+	});
+
+	it("drops it for a covering Toastmaster too — the gate is the segment, not the owner", () => {
+		expect(
+			evaluatorEvaluation(
+				noEvaluators().filter((s) => s.roleKey !== "general_evaluator"),
+			),
+		).toBeUndefined();
+	});
+
+	it("keeps the GE's other closing beats, which are not evaluator-gated", () => {
+		const rows = expandRunSheet(noEvaluators(), RUN_OF_SHOW);
+		expect(rows.map((r) => r.detail)).toContain(
+			"Calls for the functionary reports",
+		);
+		expect(rows.map((r) => r.detail)).toContain(
+			"Overall meeting evaluation · returns control to the Toastmaster",
+		);
+	});
+
+	it("still renders it when the club DOES run evaluators", () => {
+		// Not vacuous: the three negatives above would pass if the beat had simply
+		// been deleted from the template.
+		expect(evaluatorEvaluation(sixRoleClub())).toMatchObject({
+			who: "General Evaluator · Riyaz",
+			detail: "Evaluates the evaluators",
+		});
+	});
+});
+
 describe("hand-off beats — who introduces whom (#363)", () => {
 	const handoffs = (rows: AgendaRow[]) =>
 		rows.filter((r) => r.handoff === true);
@@ -1241,7 +1291,17 @@ describe("expandRunSheet — the functionary-intro and functionary-reports beats
 	});
 
 	it("omits the functionary reports when there are no functionary slots, even with a GE slot", () => {
-		const rows = expandRunSheet([ge]);
+		// An evaluator rides along so the evaluator-evaluation beat's own gate
+		// (#363) is satisfied — this test is about the FUNCTIONARY gate, and
+		// without one it would pass for the wrong reason.
+		const evaluator = slot({
+			id: "ev",
+			roleKey: "evaluator",
+			roleName: "Evaluator",
+			category: "evaluator",
+			assigneeName: "Sudheer",
+		});
+		const rows = expandRunSheet([ge, evaluator]);
 		expect(
 			rows.some((r) => r.detail === "Calls for the functionary reports"),
 		).toBe(false);

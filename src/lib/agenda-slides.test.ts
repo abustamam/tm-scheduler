@@ -171,8 +171,8 @@ describe("buildSlideDeck toastmaster intro + word of the day", () => {
 			"functionaryIntro",
 			// No General Evaluator at this club, so the Toastmaster covers the GE's
 			// closing slides (#363). They sit AFTER the functionary intro, which is
-			// what this test is about.
-			"evaluatorEvaluation",
+			// what this test is about. No `evaluatorEvaluation`: the club runs no
+			// evaluators, and that slide is gated on them.
 			"functionaryReports",
 			"generalEvaluation",
 			"guestComments",
@@ -826,9 +826,9 @@ describe("buildSlideDeck functionary intro (#367)", () => {
 			"toastmaster",
 			"functionaryIntro",
 			// This club runs no General Evaluator, so the Toastmaster covers the
-			// role's three closing slides (#363) — including the functionary reports,
-			// which is what cues the Grammarian introduced two slides earlier.
-			"evaluatorEvaluation",
+			// role's closing slides (#363) — including the functionary reports, which
+			// is what cues the Grammarian introduced one slide earlier. No
+			// `evaluatorEvaluation`: the club runs no evaluators to evaluate.
 			"functionaryReports",
 			"generalEvaluation",
 			"guestComments",
@@ -1056,19 +1056,32 @@ describe("buildSlideDeck evaluation session", () => {
 		expect(kinds([])).not.toContain("evaluatorEvaluation");
 	});
 
-	it("gates the evaluator evaluation on the General Evaluator, NOT on the evaluators (#367)", () => {
-		// Spec: the slide follows the GE role, not the evaluators. With nobody to
-		// run it and nobody to cover — no General Evaluator AND no Toastmaster of
-		// the Day (#363) — it vanishes, and it never names a role the club does not
-		// run. Before this fix the deck gated the slide on the EVALUATORS and fell
-		// back to the literal role name, so a club with evaluators and no GE
-		// projected "General Evaluator: General Evaluator".
-		const noGe = build({ slots: [speaker, evaluator] });
-		expect(noGe.map((s) => s.kind)).not.toContain("evaluatorEvaluation");
-		expect(JSON.stringify(noGe)).not.toContain("General Evaluator");
+	/**
+	 * This replaces "gates the evaluator evaluation on the General Evaluator, NOT
+	 * on the evaluators (#367)", which pinned the decision #363 reverses. The
+	 * slide needs BOTH: somebody to give it (the GE, or the Toastmaster covering
+	 * the role) and somebody to have evaluated. #367's symmetry argument — a GE
+	 * with no evaluators still gets the slide — was defending wrong copy: there
+	 * is nothing to evaluate, whoever is holding the room.
+	 */
+	it("needs an owner AND evaluators, and never names a role the club does not run", () => {
+		// Evaluators but nobody to run it: no General Evaluator and no Toastmaster
+		// of the Day to cover. The deck used to gate this slide on the EVALUATORS
+		// and fall back to the literal role name, projecting "General Evaluator:
+		// General Evaluator".
+		const noOwner = build({ slots: [speaker, evaluator] });
+		expect(noOwner.map((s) => s.kind)).not.toContain("evaluatorEvaluation");
+		expect(JSON.stringify(noOwner)).not.toContain("General Evaluator");
 
-		// …and symmetrically, a GE with no evaluators still gives the slide.
-		expect(kinds([ge])).toContain("evaluatorEvaluation");
+		// An owner but nothing to evaluate — the case #367 kept and #363 drops.
+		expect(kinds([ge])).not.toContain("evaluatorEvaluation");
+		expect(kinds([tmod])).not.toContain("evaluatorEvaluation");
+
+		// Both present ⇒ the slide is there. Not vacuous: the two negatives above
+		// would pass if the slide never rendered at all.
+		expect(kinds([ge, speaker, evaluator])).toContain("evaluatorEvaluation");
+		// …and the Toastmaster covering the role satisfies the owner half (#363).
+		expect(kinds([tmod, speaker, evaluator])).toContain("evaluatorEvaluation");
 	});
 
 	it("the evaluator-evaluation slide names the GE holder, or the open placeholder when unclaimed", () => {
@@ -1079,14 +1092,18 @@ describe("buildSlideDeck evaluation session", () => {
 			assigneeName: null,
 		});
 		expect(
-			build({ slots: [ge] }).find((s) => s.kind === "evaluatorEvaluation"),
+			build({ slots: [ge, speaker, evaluator] }).find(
+				(s) => s.kind === "evaluatorEvaluation",
+			),
 		).toMatchObject({
 			owner: "General Evaluator",
 			name: "Saiful Haque",
 			time: "2 minutes",
 		});
 		expect(
-			build({ slots: [openGe] }).find((s) => s.kind === "evaluatorEvaluation"),
+			build({ slots: [openGe, speaker, evaluator] }).find(
+				(s) => s.kind === "evaluatorEvaluation",
+			),
 		).toMatchObject({ owner: "General Evaluator", name: "— open —" });
 	});
 

@@ -676,12 +676,21 @@ export function buildRunOfShow({
 			requiresAnyOf: [EVALUATOR_ROLE],
 		},
 		{
+			// Gated on the EVALUATORS, which deliberately reverses #367's call that
+			// this beat follows the General Evaluator alone (#363). Do not "restore"
+			// it: #367's symmetry argument — a GE with no evaluators still gets the
+			// beat — was defending the wrong thing. "Evaluates the evaluators" is
+			// wrong copy at a club that runs none no matter WHO owns the row, and
+			// having the Toastmaster cover the role only made that reachable by a
+			// second route. Every other beat about a segment is gated on that
+			// segment; this one now is too.
 			kind: "role",
 			...GENERAL_EVALUATOR_ROLE,
 			id: "evaluatorEvaluation",
 			role: "plain",
 			detail: "Evaluates the evaluators",
 			minutes: 2,
+			requiresAnyOf: [EVALUATOR_ROLE],
 			fallbacks: [GE_COVERED_BY_TOASTMASTER],
 		},
 		{

@@ -169,11 +169,12 @@ export type Slide =
 	| {
 			/** The evaluator-evaluation beat (#367): the General Evaluator evaluates
 			 *  the evaluators, after the Best-Evaluator vote and before the
-			 *  functionary reports. Gated exactly as the run sheet gates it — on the
-			 *  GE role having a slot, OR on the Toastmaster of the Day having one to
-			 *  cover with (#363). This slide was `evalIntro`, which sat before the
-			 *  evaluations (matching no beat), was gated on EVALUATORS rather than
-			 *  the GE, and printed the literal words "General Evaluator" as a name
+			 *  functionary reports. Gated exactly as the run sheet gates it — the GE
+			 *  role has a slot, OR the Toastmaster of the Day has one to cover with
+			 *  (#363) — AND the club runs evaluators to evaluate. That last clause
+			 *  reverses #367, which gated the slide on the GE alone; see the beat.
+			 *  This slide was `evalIntro`, which sat before the evaluations (matching
+			 *  no beat) and printed the literal words "General Evaluator" as a name
 			 *  when the club had no GE. */
 			kind: "evaluatorEvaluation";
 			/** Display name of the role giving it — see `functionaryReports.owner`. */
@@ -545,7 +546,11 @@ export function buildSlideDeck({
 	// three follow `geOwner`, so the Toastmaster covers them at a club that runs
 	// no GE and they disappear only when there is nobody to cover either; the
 	// reports slide additionally needs functionaries to call for.
-	if (geOwner != null) {
+	// Gated on the EVALUATORS as well as the owner, mirroring the beat's
+	// `requiresAnyOf: [EVALUATOR_ROLE]` — which reverses #367's call that this
+	// slide follows the General Evaluator alone (#363). There is nothing to
+	// evaluate at a club that runs no evaluators, whoever is holding the room.
+	if (geOwner != null && evaluators.length > 0) {
 		deck.push({
 			kind: "evaluatorEvaluation",
 			owner: geOwner.role,

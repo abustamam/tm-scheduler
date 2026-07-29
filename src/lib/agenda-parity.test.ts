@@ -544,6 +544,11 @@ const CASES: { name: string; slots: AgendaSlot[] }[] = [
 		slots: without("ge", "ah", "vc"),
 	},
 	{
+		// Since #363 this is the club that has somebody to give the evaluator
+		// evaluation and nothing for them to evaluate, so BOTH surfaces drop that
+		// section — reversing #367, which gated it on the General Evaluator alone
+		// and kept the beat. It stays in the matrix precisely because it is where
+		// print and deck would diverge if only one of them were re-gated.
 		name: "General Evaluator but no evaluators",
 		slots: without("ev1", "ev2"),
 	},
@@ -749,6 +754,32 @@ describe("run-sheet ⇄ deck section-order parity (#367)", () => {
 				: expected;
 			expect(printSections(FULL, config)).toEqual(want);
 			expect(deckSections(FULL, config)).toEqual(want);
+		}
+	});
+
+	it("drops the evaluator evaluation from BOTH surfaces when the club runs no evaluators (#363)", () => {
+		// The matrix above only says the two surfaces agree — it would still pass
+		// if both kept the section, which is what #367 had them do. This pins the
+		// reversal: a club with a General Evaluator and nothing to evaluate has no
+		// evaluator-evaluation section on either surface.
+		const noEvaluators = without("ev1", "ev2");
+		for (const config of CONFIGS) {
+			expect(printSections(noEvaluators, config)).not.toContain(
+				"evaluatorEvaluation",
+			);
+			expect(deckSections(noEvaluators, config)).not.toContain(
+				"evaluatorEvaluation",
+			);
+			// The GE's other closing sections are NOT evaluator-gated and stay.
+			expect(printSections(noEvaluators, config)).toContain(
+				"functionaryReports",
+			);
+			expect(printSections(noEvaluators, config)).toContain(
+				"generalEvaluation",
+			);
+			// Not vacuous: the same club WITH evaluators has the section.
+			expect(printSections(FULL, config)).toContain("evaluatorEvaluation");
+			expect(deckSections(FULL, config)).toContain("evaluatorEvaluation");
 		}
 	});
 });
