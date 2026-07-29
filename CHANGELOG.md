@@ -2,6 +2,31 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.1.0.0] - 2026-07-29
+
+The agenda now tells the room who hands off to whom. Running a meeting off it, nobody had to guess whose cue it was.
+
+### Added
+
+- **Hand-off rows.** The agenda states every transition: the Sergeant-at-Arms introduces the President, the Toastmaster introduces the speakers and the Table Topics Master, the Table Topics Master hands over to the General Evaluator, and the General Evaluator introduces the speech evaluators. Each row names the person doing it. They cost no clock time, because the time was always inside the segment either side of them.
+- **Hand-offs on the projected deck.** Every hand-off row has a matching slide, so whoever is on deck sees their cue on the wall at the moment they need it. The jump-to-slide grid labels them by target rather than five identical rows.
+- **Cover for a missing General Evaluator.** A club that runs no General Evaluator now has the Toastmaster of the Day take the whole role: introducing the functionaries, calling for the Timer's report, evaluating the evaluators, calling for the functionary reports, and giving the overall evaluation. Before this, a club with functionaries but no General Evaluator never called for the functionary reports at all, so the Timer, Ah-Counter and Grammarian were never cued to report.
+
+### Changed
+
+- **The segment leader calls for the vote, not the Timer.** Every "call for the Timer's report and open voting" row now belongs to whoever is running that segment, with their name on it. It used to name the Timer, so the person who actually had to ask for the report got no cue.
+- **The awards row names who presents them.** It was an unattributed "Toastmaster", a role that does not exist under that name.
+- **Closing hand-offs are stated.** The General Evaluator returns control to the Toastmaster, and the Toastmaster hands over to the President after the awards.
+- **Wording.** The Call to Order no longer mentions exits, the President's closing reads "announcements" rather than "elections" because clubs hold no elections at a regular meeting, and vote rows read "opens voting for Best Speaker" to match the third-person narration of every other row.
+- **The evaluator evaluation needs evaluators.** "Evaluates the evaluators" no longer prints for a club that runs none. This reverses an earlier decision that gated it on the General Evaluator instead.
+- **Print layout.** Hand-offs render as a compact transition band rather than a full row, so the agenda gains the cues without gaining a page. On the grid layout the sheet now scales to about 95% to fit.
+
+### Fixed
+
+- An unclaimed hand-off role printed a doubled separator on the agenda.
+- A club whose role name contained certain punctuation could corrupt the surrounding text on the printed agenda, the deck and the PowerPoint export.
+- The hand-off marker on the printed agenda sat a fraction above the text baseline at every type size.
+
 ## [1.0.0.0] - 2026-07-28
 
 The first tracked version. GavelUp has been live with real clubs since June 2026 — this entry describes what it does today rather than replaying the ~440 pull requests that got it here, which stay in git history. Everything after this line is a change against this baseline.
