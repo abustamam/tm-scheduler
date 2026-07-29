@@ -39,6 +39,59 @@ function slot(over: Partial<AgendaSlot>): AgendaSlot {
 	};
 }
 
+/**
+ * A club running all six roles the segment-ownership and hand-off beats care
+ * about: the three segment leaders, a speaker, an evaluator, and the Timer
+ * whose absence drives the vote beats' fallback. Every slot defaults to
+ * `slotIndex: 0`, so the order of this array carries no meaning — callers
+ * `.filter()` a role out to build the "club that does not run X" cases.
+ */
+const sixRoleClub = (): AgendaSlot[] => [
+	slot({
+		id: "tm",
+		roleKey: "toastmaster_of_the_day",
+		roleName: "Toastmaster of the Day",
+		category: "leadership",
+		assigneeName: "Faisal",
+	}),
+	slot({
+		id: "ttm",
+		roleKey: "table_topics_master",
+		roleName: "Table Topics Master",
+		category: "leadership",
+		assigneeName: "Rasheed",
+	}),
+	slot({
+		id: "sp",
+		roleKey: "speaker",
+		roleName: "Speaker",
+		category: "speaker",
+		isSpeakerRole: true,
+		assigneeName: "Jagpal",
+	}),
+	slot({
+		id: "ev",
+		roleKey: "evaluator",
+		roleName: "Evaluator",
+		category: "evaluator",
+		assigneeName: "Sudheer",
+	}),
+	slot({
+		id: "ge",
+		roleKey: "general_evaluator",
+		roleName: "General Evaluator",
+		category: "leadership",
+		assigneeName: "Riyaz",
+	}),
+	slot({
+		id: "ti",
+		roleKey: "timer",
+		roleName: "Timer",
+		category: "functionary",
+		assigneeName: "Muhammad",
+	}),
+];
+
 describe("buildRunOfShow", () => {
 	it("returns 20 ordered beats for the corrected default (non-MCF) variant", () => {
 		const beats = buildRunOfShow({ geIntroducesFunctionaries: false });
@@ -85,14 +138,16 @@ describe("buildRunOfShow", () => {
 		);
 	});
 
-	it("beat 4 is owned by the General Evaluator when geIntroducesFunctionaries is true (MCF)", () => {
+	it("the functionary intro is owned by the General Evaluator under MCF's variant", () => {
 		const beats = buildRunOfShow({ geIntroducesFunctionaries: true });
 		// One index later than the default variant: the opening GE introduction
 		// (#363) precedes it here.
-		const beat4 = beats[4];
-		expect(beat4.kind).toBe("role");
-		expect((beat4 as { roleKey: string }).roleKey).toBe("general_evaluator");
-		expect(beat4.detail).toBe(
+		const functionaryIntroBeat = beats[4];
+		expect(functionaryIntroBeat.kind).toBe("role");
+		expect((functionaryIntroBeat as { roleKey: string }).roleKey).toBe(
+			"general_evaluator",
+		);
+		expect(functionaryIntroBeat.detail).toBe(
 			`Introduces the ${ROLES_TOKEN}; each explains their role`,
 		);
 	});
@@ -617,52 +672,6 @@ describe("expandRunSheet — omission of no-slot beats (#367)", () => {
 });
 
 describe("expandRunSheet — vote beats are owned by the segment leader (#363)", () => {
-	const full = () => [
-		slot({
-			id: "tm",
-			roleKey: "toastmaster_of_the_day",
-			roleName: "Toastmaster of the Day",
-			category: "leadership",
-			assigneeName: "Faisal",
-		}),
-		slot({
-			id: "sp",
-			roleKey: "speaker",
-			roleName: "Speaker",
-			category: "speaker",
-			isSpeakerRole: true,
-			assigneeName: "Jagpal",
-		}),
-		slot({
-			id: "ttm",
-			roleKey: "table_topics_master",
-			roleName: "Table Topics Master",
-			category: "leadership",
-			assigneeName: "Rasheed",
-		}),
-		slot({
-			id: "ev",
-			roleKey: "evaluator",
-			roleName: "Evaluator",
-			category: "evaluator",
-			assigneeName: "Sudheer",
-		}),
-		slot({
-			id: "ge",
-			roleKey: "general_evaluator",
-			roleName: "General Evaluator",
-			category: "leadership",
-			assigneeName: "Riyaz",
-		}),
-		slot({
-			id: "ti",
-			roleKey: "timer",
-			roleName: "Timer",
-			category: "functionary",
-			assigneeName: "Muhammad",
-		}),
-	];
-
 	// "Best" narrows to the three scored-segment votes: beat 4's functionary
 	// intro can interpolate "Vote Counter" — a standard functionary role name —
 	// into its `{roles}` list, and a looser `/vote /i` would swallow that row
@@ -671,7 +680,7 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 		rows.filter((r) => /vote Best/i.test(r.detail));
 
 	it("attributes each vote to the leader running that segment", () => {
-		const rows = voteRows(expandRunSheet(full(), RUN_OF_SHOW));
+		const rows = voteRows(expandRunSheet(sixRoleClub(), RUN_OF_SHOW));
 		expect(rows.map((r) => [r.who, r.detail])).toEqual([
 			[
 				"Toastmaster of the Day · Faisal",
@@ -689,7 +698,7 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 	});
 
 	it("drops the timer's-report clause, keeping the leader, when there is no Timer", () => {
-		const noTimer = full().filter((s) => s.roleKey !== "timer");
+		const noTimer = sixRoleClub().filter((s) => s.roleKey !== "timer");
 		expect(
 			voteRows(expandRunSheet(noTimer, RUN_OF_SHOW)).map((r) => [
 				r.who,
@@ -703,12 +712,14 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 	});
 
 	it("never gives the Timer a row of its own — the report is the leader's cue", () => {
-		const rows = expandRunSheet(full(), RUN_OF_SHOW);
+		const rows = expandRunSheet(sixRoleClub(), RUN_OF_SHOW);
 		expect(rows.filter((r) => r.who.startsWith("Timer"))).toEqual([]);
 	});
 
 	it("still prints the vote, unattributed, at a club that disabled its Toastmaster", () => {
-		const noTm = full().filter((s) => s.roleKey !== "toastmaster_of_the_day");
+		const noTm = sixRoleClub().filter(
+			(s) => s.roleKey !== "toastmaster_of_the_day",
+		);
 		expect(voteRows(expandRunSheet(noTm, RUN_OF_SHOW))[0]).toMatchObject({
 			who: "Toastmaster of the Day",
 			detail: "Calls for the Timer's report · vote Best Speaker",
@@ -716,7 +727,9 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 	});
 
 	it("omits a vote whose segment the club does not run", () => {
-		const noTopics = full().filter((s) => s.roleKey !== "table_topics_master");
+		const noTopics = sixRoleClub().filter(
+			(s) => s.roleKey !== "table_topics_master",
+		);
 		expect(
 			voteRows(expandRunSheet(noTopics, RUN_OF_SHOW)).map((r) => r.detail),
 		).toEqual([
@@ -731,7 +744,7 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 	// combination works; an edit that moved detail resolution inside the
 	// `matching.length > 0` arm would break it silently.
 	it("renders the bare role name AND drops the timer's-report clause when both the owner and the Timer are missing", () => {
-		const noTmNoTimer = full().filter(
+		const noTmNoTimer = sixRoleClub().filter(
 			(s) => s.roleKey !== "toastmaster_of_the_day" && s.roleKey !== "timer",
 		);
 		const rows = voteRows(expandRunSheet(noTmNoTimer, RUN_OF_SHOW));
@@ -749,7 +762,7 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 	// still projects the Best-Evaluator slide, and an unattributed cue beats no
 	// cue at all. The GE's other three beats carry no such flag and vanish.
 	it("prints the Best-Evaluator vote unattributed, and drops the GE's other three beats, when there is no General Evaluator", () => {
-		const noGe = full().filter((s) => s.roleKey !== "general_evaluator");
+		const noGe = sixRoleClub().filter((s) => s.roleKey !== "general_evaluator");
 		const rows = expandRunSheet(noGe, RUN_OF_SHOW);
 		expect(
 			voteRows(rows).find((r) => r.detail.endsWith("vote Best Evaluator")),
@@ -772,58 +785,13 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 });
 
 describe("hand-off beats — who introduces whom (#363)", () => {
-	const nine = () => [
-		slot({
-			id: "tm",
-			roleKey: "toastmaster_of_the_day",
-			roleName: "Toastmaster of the Day",
-			category: "leadership",
-			assigneeName: "Faisal",
-		}),
-		slot({
-			id: "ttm",
-			roleKey: "table_topics_master",
-			roleName: "Table Topics Master",
-			category: "leadership",
-			assigneeName: "Rasheed",
-		}),
-		slot({
-			id: "sp",
-			roleKey: "speaker",
-			roleName: "Speaker",
-			category: "speaker",
-			isSpeakerRole: true,
-			assigneeName: "Jagpal",
-		}),
-		slot({
-			id: "ev",
-			roleKey: "evaluator",
-			roleName: "Evaluator",
-			category: "evaluator",
-			assigneeName: "Sudheer",
-		}),
-		slot({
-			id: "ge",
-			roleKey: "general_evaluator",
-			roleName: "General Evaluator",
-			category: "leadership",
-			assigneeName: "Riyaz",
-		}),
-		slot({
-			id: "ti",
-			roleKey: "timer",
-			roleName: "Timer",
-			category: "functionary",
-			assigneeName: "Muhammad",
-		}),
-	];
 	const handoffs = (rows: AgendaRow[]) =>
 		rows.filter((r) => r.handoff === true);
 
 	it("every hand-off books zero minutes", () => {
 		for (const flag of [true, false]) {
 			const rows = expandRunSheet(
-				nine(),
+				sixRoleClub(),
 				buildRunOfShow({ geIntroducesFunctionaries: flag }),
 			);
 			expect(handoffs(rows).every((r) => r.minutes === 0)).toBe(true);
@@ -832,7 +800,7 @@ describe("hand-off beats — who introduces whom (#363)", () => {
 
 	it("states the full MCF chain, in order", () => {
 		const rows = expandRunSheet(
-			nine(),
+			sixRoleClub(),
 			buildRunOfShow({ geIntroducesFunctionaries: true }),
 		);
 		expect(handoffs(rows).map((r) => [r.who, r.detail])).toEqual([
@@ -846,7 +814,7 @@ describe("hand-off beats — who introduces whom (#363)", () => {
 
 	it("omits the opening GE introduction in the standard flow, where the GE has no early appearance", () => {
 		const rows = expandRunSheet(
-			nine(),
+			sixRoleClub(),
 			buildRunOfShow({ geIntroducesFunctionaries: false }),
 		);
 		expect(handoffs(rows).map((r) => [r.who, r.detail])).toEqual([
@@ -858,7 +826,9 @@ describe("hand-off beats — who introduces whom (#363)", () => {
 	});
 
 	it("hands to the GE from the Toastmaster when the club runs no Table Topics", () => {
-		const noTopics = nine().filter((s) => s.roleKey !== "table_topics_master");
+		const noTopics = sixRoleClub().filter(
+			(s) => s.roleKey !== "table_topics_master",
+		);
 		const rows = expandRunSheet(noTopics, RUN_OF_SHOW);
 		expect(handoffs(rows).map((r) => [r.who, r.detail])).toEqual([
 			["Toastmaster of the Day · Faisal", "Introduces the speakers"],
@@ -868,11 +838,14 @@ describe("hand-off beats — who introduces whom (#363)", () => {
 	});
 
 	it("has the Toastmaster introduce the evaluators when the club runs no General Evaluator", () => {
-		const noGe = nine().filter((s) => s.roleKey !== "general_evaluator");
+		const noGe = sixRoleClub().filter((s) => s.roleKey !== "general_evaluator");
 		const rows = expandRunSheet(noGe, RUN_OF_SHOW);
-		expect(handoffs(rows).map((r) => [r.who, r.detail])).toContainEqual([
-			"Toastmaster of the Day · Faisal",
-			"Introduces the speech evaluators",
+		// The full list, not just the rebound row: it also pins that a club with no
+		// General Evaluator is never told to introduce one.
+		expect(handoffs(rows).map((r) => [r.who, r.detail])).toEqual([
+			["Toastmaster of the Day · Faisal", "Introduces the speakers"],
+			["Toastmaster of the Day · Faisal", "Introduces the Table Topics Master"],
+			["Toastmaster of the Day · Faisal", "Introduces the speech evaluators"],
 		]);
 	});
 
@@ -894,14 +867,14 @@ describe("hand-off beats — who introduces whom (#363)", () => {
 		expect(
 			total(
 				expandRunSheet(
-					nine(),
+					sixRoleClub(),
 					buildRunOfShow({ geIntroducesFunctionaries: true }),
 				),
 			),
 		).toBe(
 			total(
 				expandRunSheet(
-					nine(),
+					sixRoleClub(),
 					buildRunOfShow({ geIntroducesFunctionaries: false }),
 				),
 			),

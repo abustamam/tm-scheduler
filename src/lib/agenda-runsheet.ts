@@ -62,9 +62,7 @@ export type AgendaRow = {
 	marks: TimingMarks | null;
 	/** True on the single squishy row (Table Topics). `applyFlex` resizes it. */
 	flex?: boolean;
-	/** True on a 0-minute transition row — "X introduces Y" (#363). The print
-	 *  layouts render these as a compact band rather than a full segment block,
-	 *  so a hand-off never reads as a duplicate of the row it precedes. */
+	/** Set from the beat's own `handoff` — see `Beat` for what it is for. */
 	handoff?: boolean;
 };
 
@@ -142,7 +140,8 @@ export type Beat = (
 	flex?: true;
 	/** A 0-minute transition — "X introduces Y". Marks the row so the print
 	 *  layouts can render it as a compact band rather than a full segment
-	 *  block (#363). */
+	 *  block (#363), so a hand-off never reads as a duplicate of the row it
+	 *  precedes. Nothing reads the flag yet. */
 	handoff?: true;
 };
 
@@ -469,9 +468,10 @@ export function buildRunOfShow({
 		{
 			// Universal since #363. #438 added this for MCF only, reasoning that in
 			// the standard flow the Toastmaster is already holding the room — but the
-			// Table Topics hand-off below is added on exactly that reasoning, so
-			// being explicit in both flows is the consistent choice. Gated on the
-			// SPEAKERS: a row must never promise speakers a club is not running.
+			// Table Topics hand-off below is added even though that is equally true
+			// there, so being explicit in both flows is the consistent choice. Gated
+			// on the SPEAKERS: a row must never promise speakers a club is not
+			// running.
 			kind: "role",
 			...TOASTMASTER_ROLE,
 			role: "plain",
@@ -930,15 +930,17 @@ export function expandRunSheet(
 			}
 		}
 
-		// A hand-off beat marks every row it produced (a leadership role has one
-		// slot in practice, but the loop above does not assume that).
+		// A hand-off beat marks every row it produced.
 		if (beat.handoff) {
 			for (let i = startLen; i < rows.length; i++) {
 				rows[i] = { ...rows[i], handoff: true };
 			}
 		}
 
-		// Mark the first row this beat produced as the squishy one.
+		// Mark the FIRST row this beat produced as the squishy one — unlike
+		// `handoff` above, which is a rendering hint any number of rows may carry,
+		// `flex` is singular by contract: `applyFlex` finds it with `findIndex` and
+		// resizes exactly that one row.
 		if (beat.flex && rows.length > startLen) {
 			rows[startLen] = { ...rows[startLen], flex: true };
 		}

@@ -34,6 +34,19 @@ describe("buildTimeline", () => {
 		expect(first.marks).toEqual({ green: 5, yellow: 6, red: 7 });
 	});
 
+	// The invariant the hand-off band is built on (#363): a 0-minute row does not
+	// advance the clock, so it and the row it introduces start at the same time.
+	// Task 6's compact band prints the stamp once rather than twice.
+	it("gives a 0-minute row and the row after it the same stamp", () => {
+		const start = new Date("2026-07-07T23:45:00Z");
+		const timed = buildTimeline(
+			[row(3), row(0), row(7)],
+			start,
+			"America/Chicago",
+		);
+		expect(timed.map((r) => r.time)).toEqual(["6:45", "6:48", "6:48"]);
+	});
+
 	it("formats in the club timezone (not the host timezone)", () => {
 		const start = new Date("2026-07-07T23:45:00Z");
 		// Same instant is 19:45 in New York (EDT, UTC-4).
