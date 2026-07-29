@@ -1085,12 +1085,21 @@ export function expandRunSheet(
 			}
 		}
 
-		// Mark the FIRST row this beat produced as the squishy one — unlike
-		// `handoff` above, which is a rendering hint any number of rows may carry,
-		// `flex` is singular by contract: `applyFlex` finds it with `findIndex` and
-		// resizes exactly that one row.
-		if (beat.flex && rows.length > startLen) {
-			rows[startLen] = { ...rows[startLen], flex: true };
+		// Mark EVERY row this beat produced, like `handoff` above. The bound the
+		// flex beat carries is on the SEGMENT — Table Topics runs 5-25 minutes —
+		// not on one speaker, so when a club runs two Table Topics Masters the two
+		// rows are one squishy segment and `applyFlex` resizes them together.
+		//
+		// Marking only `rows[startLen]` (before #448) left every sibling row inside
+		// the `fixed` total, so the cap was unenforceable: two masters at 10 minutes
+		// each ran a 35-minute segment against the 25-minute cap while `status` read
+		// "exact" and no banner fired. It also made `flexBannerMessage` lie in the
+		// other direction — "Table Topics is at its 5-min floor" printed with a full
+		// 10-minute Table Topics row directly below the row that had been floored.
+		if (beat.flex) {
+			for (let i = startLen; i < rows.length; i++) {
+				rows[i] = { ...rows[i], flex: true };
+			}
 		}
 	}
 	return rows;
@@ -1110,32 +1119,52 @@ export type FlexResult = {
 };
 
 /**
- * Resize the single `flex`-marked row (Table Topics) so the run-of-show totals
- * `targetMinutes`, clamped to [TABLE_TOPICS_MIN, TABLE_TOPICS_MAX]. The flex row
- * absorbs the exact remainder, so `deltaMinutes` is nonzero only when clamping
- * makes the target unreachable. `status` applies the ±FLEX_TOLERANCE_MINUTES
- * deadband to gate the banner; the computed duration is never deadbanded.
+ * Resize the `flex`-marked SEGMENT (Table Topics) so the run-of-show totals
+ * `targetMinutes`, with the segment clamped to
+ * [TABLE_TOPICS_MIN, TABLE_TOPICS_MAX]. The segment absorbs the exact remainder,
+ * so `deltaMinutes` is nonzero only when clamping makes the target unreachable.
+ * `status` applies the ±FLEX_TOLERANCE_MINUTES deadband to gate the banner; the
+ * computed duration is never deadbanded.
+ *
+ * The bound is on the segment, not on a row (#448). Usually that is the same
+ * thing — one Table Topics Master, one row. A club running two produces two
+ * rows from one beat, and they are still one stretch of impromptu speaking, so
+ * the cap applies to their sum. The clamped total is then split across them,
+ * remainder to the earliest rows, which leaves the one-row case arithmetically
+ * identical to what it was before.
  */
 export function applyFlex(
 	rows: AgendaRow[],
 	targetMinutes: number,
 ): FlexResult {
 	const total = rows.reduce((sum, r) => sum + r.minutes, 0);
-	const flexIndex = rows.findIndex((r) => r.flex === true);
+	const flexIndices = rows.reduce<number[]>((acc, r, i) => {
+		if (r.flex === true) acc.push(i);
+		return acc;
+	}, []);
 
 	let out = rows;
 	let projectedMinutes = total;
 
-	if (flexIndex !== -1) {
-		const fixed = total - rows[flexIndex].minutes;
-		const flexMinutes = Math.min(
+	if (flexIndices.length > 0) {
+		const flexTotal = flexIndices.reduce((n, i) => n + rows[i].minutes, 0);
+		const fixed = total - flexTotal;
+		const segmentMinutes = Math.min(
 			TABLE_TOPICS_MAX,
 			Math.max(TABLE_TOPICS_MIN, targetMinutes - fixed),
 		);
-		out = rows.map((r, i) =>
-			i === flexIndex ? { ...r, minutes: flexMinutes } : r,
+		// Integer split: `buildTimeline` advances a minutes-since-midnight cursor,
+		// so a fractional row would print a clock nobody can read. The remainder
+		// goes to the earliest rows, and the sum is exactly `segmentMinutes`.
+		const base = Math.floor(segmentMinutes / flexIndices.length);
+		const remainder = segmentMinutes - base * flexIndices.length;
+		const share = new Map(
+			flexIndices.map((i, n) => [i, base + (n < remainder ? 1 : 0)]),
 		);
-		projectedMinutes = fixed + flexMinutes;
+		out = rows.map((r, i) =>
+			share.has(i) ? { ...r, minutes: share.get(i) as number } : r,
+		);
+		projectedMinutes = fixed + segmentMinutes;
 	}
 
 	const deltaMinutes = projectedMinutes - targetMinutes;

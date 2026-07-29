@@ -1811,6 +1811,74 @@ describe("applyFlex", () => {
 	});
 });
 
+describe("applyFlex — a flex beat that produced several rows (#448)", () => {
+	/** `fixed` minutes of non-flex rows, plus one flex row per entry in `flex`. */
+	function multiFixture(fixed: number, flex: number[]): AgendaRow[] {
+		return [
+			{ who: "Fixed", detail: "", minutes: fixed, marks: null },
+			...flex.map((minutes, i) => ({
+				who: `Table Topics ${i + 1}`,
+				detail: "",
+				minutes,
+				marks: null,
+				flex: true as const,
+			})),
+		];
+	}
+	const seg = (r: AgendaRow[]) =>
+		r.filter((x) => x.flex === true).reduce((n, x) => n + x.minutes, 0);
+
+	it("clamps the SEGMENT, not one row — the bound is per segment, not per speaker", () => {
+		// Pre-#448 only rows[1] resized, so the segment could reach 35 against a
+		// 25-min cap while `status` read "exact" and no banner fired at all.
+		const res = applyFlex(multiFixture(20, [10, 10]), 100); // wants 80, capped
+		expect(seg(res.rows)).toBe(TABLE_TOPICS_MAX);
+		expect(res.projectedMinutes).toBe(45);
+		expect(res.status).toBe("under");
+		expect(res.deltaMinutes).toBe(-55);
+	});
+
+	it("reaches the segment floor, so the banner's floor claim is true of every row", () => {
+		const res = applyFlex(multiFixture(40, [10, 10]), 40); // wants 0, floored
+		expect(seg(res.rows)).toBe(TABLE_TOPICS_MIN);
+		expect(res.projectedMinutes).toBe(45);
+		expect(res.deltaMinutes).toBe(5);
+	});
+
+	it("absorbs an in-bounds remainder across the rows", () => {
+		const res = applyFlex(multiFixture(40, [10, 10]), 60); // segment wants 20
+		expect(res.rows.filter((r) => r.flex).map((r) => r.minutes)).toEqual([
+			10, 10,
+		]);
+		expect(res.projectedMinutes).toBe(60);
+		expect(res.status).toBe("exact");
+	});
+
+	it("keeps the total exact when the segment does not divide evenly", () => {
+		const res = applyFlex(multiFixture(40, [10, 10]), 61); // segment wants 21
+		expect(res.rows.filter((r) => r.flex).map((r) => r.minutes)).toEqual([
+			11, 10,
+		]);
+		expect(seg(res.rows)).toBe(21);
+		expect(res.projectedMinutes).toBe(61);
+	});
+
+	it("splits three ways without losing or inventing a minute", () => {
+		const res = applyFlex(multiFixture(40, [10, 10, 10]), 60); // wants 20
+		expect(res.rows.filter((r) => r.flex).map((r) => r.minutes)).toEqual([
+			7, 7, 6,
+		]);
+		expect(res.projectedMinutes).toBe(60);
+	});
+
+	it("is byte-identical to the single-row path when only one row is marked", () => {
+		const one = applyFlex(multiFixture(50, [10]), 63);
+		expect(one.rows[1].minutes).toBe(13);
+		expect(one.projectedMinutes).toBe(63);
+		expect(one.status).toBe("exact");
+	});
+});
+
 describe("flexBannerMessage (#395)", () => {
 	function rowsFixture(fixed: number, flexMin: number): AgendaRow[] {
 		return [
@@ -1913,6 +1981,98 @@ describe("flexBannerMessage (#395)", () => {
 			"Agenda ends 62 min early — consider shortening the meeting length.",
 		);
 		expect(msg).not.toMatch(/table topics/i);
+	});
+});
+
+describe("a club running two Table Topics Masters (#448)", () => {
+	// `defaultCount` is admin-editable 0-20 on ANY role, and `addRoleSlot` adds an
+	// arbitrary extra slot to one meeting, so a second Table Topics Master is
+	// reachable. It was in no test fixture before this.
+	const twoMasters = () => [
+		slot({
+			id: "tm",
+			roleKey: "toastmaster_of_the_day",
+			roleName: "Toastmaster of the Day",
+			category: "leadership",
+			assigneeName: "Alice",
+		}),
+		slot({
+			id: "t1",
+			roleKey: "table_topics_master",
+			roleName: "Table Topics Master",
+			category: "leadership",
+			assigneeName: "T1",
+			slotIndex: 0,
+		}),
+		slot({
+			id: "t2",
+			roleKey: "table_topics_master",
+			roleName: "Table Topics Master",
+			category: "leadership",
+			assigneeName: "T2",
+			slotIndex: 1,
+		}),
+		slot({
+			id: "sp",
+			roleKey: "speaker",
+			roleName: "Speaker",
+			category: "speaker",
+			isSpeakerRole: true,
+			assigneeName: "Jagpal",
+		}),
+	];
+	const ttSegment = (rows: AgendaRow[]) =>
+		rows.filter((r) => r.flex === true).reduce((n, r) => n + r.minutes, 0);
+
+	it("marks every row the flex beat produced, not just the first", () => {
+		const rows = expandRunSheet(twoMasters(), RUN_OF_SHOW);
+		const flexed = rows.filter((r) => r.flex === true);
+		expect(flexed).toHaveLength(2);
+		expect(flexed.map((r) => r.who)).toEqual([
+			"Table Topics Master · T1",
+			"Table Topics Master · T2",
+		]);
+	});
+
+	it("fits a short meeting instead of reporting it over by 9 minutes", () => {
+		// Pre-#448: only the first row shrank, to its 5-min floor, while the second
+		// held 10 — so the banner said "runs 9 min long … Table Topics is at its
+		// 5-min floor" with a full 10-minute Table Topics row directly below it,
+		// and named the wrong remedy ("trim a speech"). The agenda fits.
+		const flex = applyFlex(expandRunSheet(twoMasters(), RUN_OF_SHOW), 30);
+		expect(ttSegment(flex.rows)).toBe(6);
+		expect(flex.projectedMinutes).toBe(30);
+		expect(flex.deltaMinutes).toBe(0);
+		expect(flexBannerMessage(flex)).toBeNull();
+	});
+
+	it("honours the segment cap instead of silently running 35 minutes of it", () => {
+		// Pre-#448: the first row capped at 25 and the second held 10, so the
+		// segment ran 35 against a 25-min cap while `status` read "exact" — no
+		// banner at all, and the printed end time was 10 minutes optimistic.
+		const flex = applyFlex(expandRunSheet(twoMasters(), RUN_OF_SHOW), 60);
+		expect(ttSegment(flex.rows)).toBe(TABLE_TOPICS_MAX);
+		expect(flex.status).toBe("under");
+		expect(flexBannerMessage(flex)).toBe(
+			"Agenda ends 11 min early — Table Topics is at its 25-min cap.",
+		);
+	});
+
+	it("keeps buildTimeline's clock consistent with the resized rows", () => {
+		const flex = applyFlex(expandRunSheet(twoMasters(), RUN_OF_SHOW), 30);
+		const timed = buildTimeline(
+			flex.rows,
+			new Date("2026-07-09T18:45:00.000Z"),
+			"UTC",
+		);
+		const last = timed[timed.length - 1];
+		const end =
+			timed.reduce((n, r) => n + r.minutes, 0) + 18 * 60 + 45 - last.minutes;
+		expect(flex.projectedMinutes).toBe(30);
+		expect(end).toBeGreaterThan(0); // clock advanced by the resized minutes
+		expect(timed.filter((r) => r.flex === true).map((r) => r.minutes)).toEqual([
+			3, 3,
+		]);
 	});
 });
 
