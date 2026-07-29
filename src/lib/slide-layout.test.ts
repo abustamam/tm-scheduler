@@ -21,6 +21,7 @@ describe("slideLayout headers (no 'Session', title-only)", () => {
 		expect(
 			contentHeader({
 				kind: "evaluatorEvaluation",
+				owner: "General Evaluator",
 				name: "Riyaz",
 				time: "2 minutes",
 			}),
@@ -28,6 +29,7 @@ describe("slideLayout headers (no 'Session', title-only)", () => {
 		expect(
 			contentHeader({
 				kind: "generalEvaluation",
+				owner: "General Evaluator",
 				name: "Riyaz",
 				time: "2 minutes",
 			}),
@@ -341,6 +343,7 @@ describe("slideLayout bodies", () => {
 	it("evaluation of the evaluators is the GE's evaluator-evaluation slide (#367)", () => {
 		const l = slideLayout({
 			kind: "evaluatorEvaluation",
+			owner: "General Evaluator",
 			name: "Riyaz",
 			time: "2 minutes",
 		});
@@ -348,6 +351,67 @@ describe("slideLayout bodies", () => {
 			expect(l.body.lines.map((x) => x.text)).toEqual([
 				"General Evaluator:",
 				"Riyaz",
+				"Time: 2 minutes",
+			]);
+		} else throw new Error("expected centered");
+	});
+
+	/**
+	 * The three slides that used to hardcode the literal "General Evaluator"
+	 * (#363). At a club that runs no GE the Toastmaster of the Day covers the
+	 * role, so every one of them has to announce the role that is ACTUALLY
+	 * speaking — otherwise the wall credits somebody who does not exist.
+	 */
+	it("names the covering role on all three GE slides, never the literal 'General Evaluator'", () => {
+		const owner = "Toastmaster of the Day";
+		const texts = (slide: Slide) => {
+			const l = slideLayout(slide);
+			if (l.chrome !== "content" || l.body.form !== "centered")
+				throw new Error("expected centered");
+			return l.body.lines.map((x) => x.text);
+		};
+
+		expect(
+			texts({
+				kind: "evaluatorEvaluation",
+				owner,
+				name: "Schinthia",
+				time: "2 minutes",
+			}),
+		).toEqual(["Toastmaster of the Day:", "Schinthia", "Time: 2 minutes"]);
+
+		expect(
+			texts({
+				kind: "functionaryReports",
+				owner,
+				name: "Schinthia",
+				team: [{ role: "Timer", name: "Bilal" }],
+			}),
+		).toEqual(["Toastmaster of the Day:", "Schinthia", "Timer: Bilal"]);
+
+		// This one shows the role but not the holder, and always has — the header
+		// names the segment, the first line names who is giving it.
+		expect(
+			texts({
+				kind: "generalEvaluation",
+				owner,
+				name: "Schinthia",
+				time: "2 minutes",
+			}),
+		).toEqual(["Toastmaster of the Day", "Closing Remarks", "Time: 2 minutes"]);
+	});
+
+	it("keeps naming the General Evaluator on the general-evaluation slide when there is one", () => {
+		const l = slideLayout({
+			kind: "generalEvaluation",
+			owner: "General Evaluator",
+			name: "Riyaz",
+			time: "2 minutes",
+		});
+		if (l.chrome === "content" && l.body.form === "centered") {
+			expect(l.body.lines.map((x) => x.text)).toEqual([
+				"General Evaluator",
+				"Closing Remarks",
 				"Time: 2 minutes",
 			]);
 		} else throw new Error("expected centered");
@@ -391,6 +455,7 @@ describe("slideLayout bodies", () => {
 	it("functionary reports lists each reporter, skipping open roles (#353)", () => {
 		const l = slideLayout({
 			kind: "functionaryReports",
+			owner: "General Evaluator",
 			name: "Riyaz",
 			team: [
 				{ role: "Grammarian", name: "Priya" },

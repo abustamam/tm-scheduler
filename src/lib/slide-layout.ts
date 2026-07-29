@@ -173,10 +173,15 @@ export function slideLayout(slide: Slide): SlideLayout {
 			return content("Functionaries", { form: "centered", lines });
 		}
 		case "functionaryReports":
+			// The owner comes off the slide, exactly as `functionaryIntro`'s does:
+			// it is the General Evaluator at most clubs and the Toastmaster of the
+			// Day at a club that runs no GE (#363). Hardcoding "General Evaluator:"
+			// here is what made a Toastmaster-covered slide announce a role nobody
+			// in the room held.
 			return content("Functionary Reports", {
 				form: "centered",
 				lines: [
-					head("General Evaluator:"),
+					head(`${slide.owner}:`),
 					head(slide.name),
 					...filledTeam(slide.team).map((t) => name(`${t.role}: ${t.name}`)),
 				],
@@ -249,10 +254,11 @@ export function slideLayout(slide: Slide): SlideLayout {
 			});
 		}
 		case "evaluatorEvaluation":
+			// Owner off the slide, for the same reason as the reports slide above.
 			return content("Evaluation of the Evaluators", {
 				form: "centered",
 				lines: [
-					head("General Evaluator:"),
+					head(`${slide.owner}:`),
 					head(slide.name),
 					strong(`Time: ${slide.time}`),
 				],
@@ -275,10 +281,15 @@ export function slideLayout(slide: Slide): SlideLayout {
 			return content("Speech Evaluation", { form: "centered", lines });
 		}
 		case "generalEvaluation":
+			// The header names the SEGMENT; this line names whoever is giving it —
+			// the General Evaluator, or the Toastmaster of the Day covering the role
+			// at a club that runs no GE (#363). `slide.name` is deliberately not
+			// shown: this slide has never named the holder, and the run sheet's
+			// matching row already does.
 			return content("General Evaluation", {
 				form: "centered",
 				lines: [
-					head("General Evaluator"),
+					head(slide.owner),
 					head("Closing Remarks"),
 					strong(`Time: ${slide.time}`),
 				],

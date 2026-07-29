@@ -517,6 +517,23 @@ const CASES: { name: string; slots: AgendaSlot[] }[] = [
 		slots: [tmod, speaker1, evaluator1, ttm],
 	},
 	{ name: "no General Evaluator", slots: without("ge") },
+	{
+		// Both of the Best-Evaluator vote beat's `fallbacks` fire at once (#363):
+		// no Timer drops the timer's-report clause, no General Evaluator moves the
+		// row to the Toastmaster. Two independent triggers on one beat — the
+		// combination a singular fallback could not express, so it is the one the
+		// matrix has to carry.
+		name: "no General Evaluator and no Timer",
+		slots: without("ge", "ti"),
+	},
+	{
+		// …and the case where the GE-coverage fallback has nowhere to land: the
+		// Toastmaster is gone too, so the four beats with no `renderUnowned` drop
+		// on both surfaces and the fifth prints unattributed on one and
+		// uncredited on the other.
+		name: "neither General Evaluator nor Toastmaster of the Day",
+		slots: without("ge", "tm"),
+	},
 	{ name: "no Timer", slots: without("ti") },
 	{
 		name: "no functionaries at all",

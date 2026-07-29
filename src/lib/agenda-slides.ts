@@ -116,7 +116,13 @@ export type Slide =
 			 *  overall meeting evaluation. Not affected by the flag — MCF's closing
 			 *  sequence is the same as everyone else's. */
 			kind: "functionaryReports";
-			/** Who holds the General Evaluator role, or the open placeholder. */
+			/** Display name of the role calling for them — the General Evaluator,
+			 *  or the Toastmaster of the Day covering for a club that runs no GE
+			 *  (#363). Carried for the same reason `functionaryIntro` carries one:
+			 *  the owner varies by club, so the layout cannot hardcode it. Without
+			 *  it a Toastmaster-covered slide announced "General Evaluator: Alice". */
+			owner: string;
+			/** Who holds that role, or the open placeholder. */
 			name: string;
 			team: LegendEntry[];
 	  }
@@ -163,19 +169,26 @@ export type Slide =
 	| {
 			/** The evaluator-evaluation beat (#367): the General Evaluator evaluates
 			 *  the evaluators, after the Best-Evaluator vote and before the
-			 *  functionary reports. Gated on the GE role having a slot, exactly as
-			 *  the run sheet gates it — a club with no General Evaluator loses this
-			 *  beat, the functionary reports and the overall meeting evaluation, and
-			 *  nothing replaces them. This slide was `evalIntro`, which sat before
-			 *  the evaluations (matching no beat), was gated on EVALUATORS rather
-			 *  than the GE, and printed the literal words "General Evaluator" as a
-			 *  name when the club had no GE. */
+			 *  functionary reports. Gated exactly as the run sheet gates it — on the
+			 *  GE role having a slot, OR on the Toastmaster of the Day having one to
+			 *  cover with (#363). This slide was `evalIntro`, which sat before the
+			 *  evaluations (matching no beat), was gated on EVALUATORS rather than
+			 *  the GE, and printed the literal words "General Evaluator" as a name
+			 *  when the club had no GE. */
 			kind: "evaluatorEvaluation";
-			/** Who holds the General Evaluator role, or the open placeholder. */
+			/** Display name of the role giving it — see `functionaryReports.owner`. */
+			owner: string;
+			/** Who holds that role, or the open placeholder. */
 			name: string;
 			time: string;
 	  }
-	| { kind: "generalEvaluation"; name: string; time: string }
+	| {
+			kind: "generalEvaluation";
+			/** Display name of the role giving it — see `functionaryReports.owner`. */
+			owner: string;
+			name: string;
+			time: string;
+	  }
 	| { kind: "awards"; categories: string[] }
 	| {
 			/** The guest-comments beat (#352): the President invites them, between
@@ -386,6 +399,22 @@ export function buildSlideDeck({
 	}
 
 	const generalEvaluator = byRole(slots, ROLE.generalEvaluator);
+	/**
+	 * Whoever is actually doing the General Evaluator's job this meeting (#363).
+	 *
+	 * The `??` IS the run sheet's `GE_COVERED_BY_TOASTMASTER` fallback, which the
+	 * five GE-owned beats share: at a club that runs no General Evaluator the
+	 * Toastmaster of the Day covers the whole role — introduces the evaluators,
+	 * calls the Best-Evaluator vote, evaluates the evaluators, calls for the
+	 * functionary reports, gives the overall evaluation. Read once here so the
+	 * five places below cannot answer it five ways; the printed rows resolve the
+	 * same question through one shared constant for the same reason.
+	 *
+	 * `null` only when neither role has a slot — then the beats have nowhere to
+	 * fall back to and both surfaces drop the section together.
+	 */
+	const geOwner =
+		holder(slots, ROLE.generalEvaluator) ?? holder(slots, ROLE.toastmaster);
 	// The functionary intro. Gated exactly as the run sheet gates it: the owning
 	// role has a slot AND the club runs at least one functionary to introduce.
 	const introOwner = geIntroducesFunctionaries
@@ -488,12 +517,7 @@ export function buildSlideDeck({
 	const evaluators = orderEvaluators(byRole(slots, ROLE.evaluator), slots);
 	// Likewise the evaluators' hand-off falls back to the Toastmaster at a club
 	// with no General Evaluator — somebody still has to introduce them.
-	pushHandoff(
-		deck,
-		holder(slots, ROLE.generalEvaluator) ?? holder(slots, ROLE.toastmaster),
-		"the speech evaluators",
-		evaluators.length > 0,
-	);
+	pushHandoff(deck, geOwner, "the speech evaluators", evaluators.length > 0);
 	if (evaluators.length > 0) {
 		const multi = evaluators.length > 1;
 		evaluators.forEach((s, i) => {
@@ -509,18 +533,23 @@ export function buildSlideDeck({
 			kind: "voteEvaluator",
 			names: assignedNames(evaluators),
 			hasTimer,
-			caller: holder(slots, ROLE.generalEvaluator),
+			// The Best-Evaluator vote beat carries TWO fallbacks (#363); this is the
+			// second one — the Toastmaster calls the vote at a club with no General
+			// Evaluator. The first only rewrites copy (`hasTimer`, above).
+			caller: geOwner,
 		});
 	}
 
-	// The GE's closing sequence: the GE evaluates the evaluators, calls for the
-	// functionary reports, then gives the overall meeting evaluation. All three
-	// need a General Evaluator and nothing replaces them when the club has none;
-	// the reports beat additionally needs functionaries to call for.
-	if (generalEvaluator.length > 0) {
+	// The General Evaluator's closing sequence: evaluate the evaluators, call for
+	// the functionary reports, then give the overall meeting evaluation. All
+	// three follow `geOwner`, so the Toastmaster covers them at a club that runs
+	// no GE and they disappear only when there is nobody to cover either; the
+	// reports slide additionally needs functionaries to call for.
+	if (geOwner != null) {
 		deck.push({
 			kind: "evaluatorEvaluation",
-			name: assigneeDisplay(generalEvaluator[0]),
+			owner: geOwner.role,
+			name: geOwner.name,
 			time: beatDuration(runOfShow, "evaluatorEvaluation"),
 		});
 	}
@@ -529,18 +558,20 @@ export function buildSlideDeck({
 	// functionaries: a club whose only functionary is a Vote Counter has nobody
 	// to call on, and the team lists the same subset so the slide never names
 	// someone with no report.
-	if (generalEvaluator.length > 0 && hasAnyReportingFunctionaryRole(slots)) {
+	if (geOwner != null && hasAnyReportingFunctionaryRole(slots)) {
 		deck.push({
 			kind: "functionaryReports",
-			name: assigneeDisplay(generalEvaluator[0]),
+			owner: geOwner.role,
+			name: geOwner.name,
 			team: buildReportingLegend(slots),
 		});
 	}
 
-	if (generalEvaluator.length > 0) {
+	if (geOwner != null) {
 		deck.push({
 			kind: "generalEvaluation",
-			name: assigneeDisplay(generalEvaluator[0]),
+			owner: geOwner.role,
+			name: geOwner.name,
 			time: beatDuration(runOfShow, "generalEvaluation"),
 		});
 	}

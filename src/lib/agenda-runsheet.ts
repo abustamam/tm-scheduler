@@ -83,8 +83,8 @@ export type BeatRole = { roleKey: string; roleName: string };
  *
  * - A `role` beat's own `roleKey`/`roleName` gate it directly: no slots for
  *   that role this meeting ⇒ the beat is omitted — unless `renderUnowned`
- *   says to print the bare role name anyway, or `fallback.owner` has
- *   relocated the lookup to a different role that DOES have a slot.
+ *   says to print the bare role name anyway, or a `fallbacks` entry's `owner`
+ *   has relocated the lookup to a different role that DOES have a slot.
  * - `requiresAnyOf` is an ADDITIONAL gate for a beat that is about OTHER
  *   roles besides its owner: the functionary-intro and functionary-reports
  *   beats (nothing to introduce, nobody to call for a report), the three
@@ -101,13 +101,13 @@ export type BeatRole = { roleKey: string; roleName: string };
  * - `detail` may contain `ROLES_TOKEN`, replaced at expansion time by the roles
  *   the club actually runs, under their own names — the beat's `requiresGroup`
  *   members when it has one, else its `requiresAnyOf` matches.
- * - `fallback` reassigns a beat to a different owner and/or detail when its
- *   `unless` role has no slots, instead of disappearing (#363). On the three
- *   vote beats the owner is ALREADY the segment leader — Toastmaster of the
- *   Day, Table Topics Master, General Evaluator — so `unless: TIMER_ROLE` only
- *   swaps `detail`, dropping the "Calls for the Timer's report" clause when
- *   there is no Timer; `owner` is for a beat whose usual owner isn't the one
- *   actually holding the room. See `BeatFallback`.
+ * - `fallbacks` reassign a beat to a different owner and/or detail when their
+ *   `unless` role has no slots, instead of the beat disappearing (#363). On the
+ *   three vote beats the owner is ALREADY the segment leader — Toastmaster of
+ *   the Day, Table Topics Master, General Evaluator — so `unless: TIMER_ROLE`
+ *   only swaps `detail`, dropping the "Calls for the Timer's report" clause
+ *   when there is no Timer; `owner` is for a beat whose usual owner isn't the
+ *   one actually holding the room. See `BeatFallback`.
  * - `id` names a beat another surface has to point at — because it quotes the
  *   beat's duration (#356) or because its `detail` is shared with another beat
  *   (#363). See `BeatId`.
@@ -138,7 +138,14 @@ export type Beat = (
 	id?: BeatId;
 	requiresAnyOf?: BeatRole[];
 	requiresGroup?: RoleGroup;
-	fallback?: BeatFallback;
+	/** Alternative owners/details, each used when its `unless` role has no slots
+	 *  this meeting (#363). PLURAL because one beat can need two independent
+	 *  answers: a vote beat drops its timer's-report clause when the club runs no
+	 *  Timer AND moves to the Toastmaster when it runs no General Evaluator, and
+	 *  those are different questions with different triggers.
+	 *
+	 *  Applied in array order; a later entry that sets the same field wins. */
+	fallbacks?: BeatFallback[];
 	flex?: true;
 	/** A 0-minute transition — "X introduces Y". Marks the row so the print
 	 *  layouts can render it as a compact band rather than a full segment
@@ -163,6 +170,11 @@ export type Beat = (
  *   whoever is actually holding the room: with no Table Topics segment, the
  *   Toastmaster never gave the room away, so the Toastmaster introduces the
  *   General Evaluator rather than the row vanishing.
+ *
+ * A beat carries a LIST of these (`Beat.fallbacks`), because the two jobs are
+ * two questions and one beat can need both answered: the Best-Evaluator vote
+ * asks "is there a Timer to call on?" and "is there a General Evaluator to run
+ * this?" independently, and a single fallback could only answer one of them.
  */
 export type BeatFallback = {
 	/** The role whose ABSENCE triggers the fallback. */
@@ -355,9 +367,9 @@ export function buildReportingLegend(slots: AgendaSlot[]): LegendEntry[] {
 export type RunOfShowConfig = { geIntroducesFunctionaries: boolean };
 
 /** The Timer — one of the four standard functionaries, and the role whose
- *  ABSENCE (not presence) drives the three vote beats' `fallback` (#363): the
- *  vote is already owned by the segment leader, so losing the Timer only
- *  drops the "Calls for the Timer's report" clause, never the row. */
+ *  ABSENCE (not presence) drives one of the three vote beats' `fallbacks`
+ *  (#363): the vote is already owned by the segment leader, so losing the Timer
+ *  only drops the "Calls for the Timer's report" clause, never the row. */
 const TIMER_ROLE: BeatRole = { roleKey: "timer", roleName: "Timer" };
 
 /** The 4 standard functionary roles we ship (`ROLE_TEMPLATE`). Since #371 these
@@ -392,6 +404,24 @@ const GENERAL_EVALUATOR_ROLE: BeatRole = {
 	roleName: "General Evaluator",
 };
 
+/**
+ * The product decision for a club that runs no General Evaluator (#363): the
+ * Toastmaster of the Day covers the WHOLE role, not a piece of it.
+ *
+ * Written once and shared by all five GE-owned beats, because the alternative
+ * is what shipped before: the Best-Evaluator vote printed the bare string
+ * "General Evaluator" (via `renderUnowned`) while the hand-off one row above it
+ * relocated to the Toastmaster, and the GE's other three beats — including
+ * "Calls for the functionary reports" — vanished outright, so a club with a
+ * Timer, an Ah-Counter and a Grammarian but no GE never cued a single
+ * functionary report. Same absent role, adjacent beats, three different
+ * answers. One constant makes that unrepresentable.
+ */
+const GE_COVERED_BY_TOASTMASTER: BeatFallback = {
+	unless: GENERAL_EVALUATOR_ROLE,
+	owner: TOASTMASTER_ROLE,
+};
+
 /** The three segments that each end in a vote. Single-sourced so a vote beat's
  *  `requiresAnyOf` gate can never drift from the segment beat it follows. */
 const SPEAKER_ROLE: BeatRole = { roleKey: "speaker", roleName: "Speaker" };
@@ -419,7 +449,7 @@ const AWARD_CATEGORIES: { role: BeatRole; label: string }[] = [
 /**
  * Build the standard Toastmasters run-of-show (#367). Pure, no db — every
  * beat declares which role(s) it depends on as data (`roleKey`,
- * `requiresAnyOf`, an event's `fallback`), so `expandRunSheet` can adapt the
+ * `requiresAnyOf`, `fallbacks`), so `expandRunSheet` can adapt the
  * printed beats to whichever roles a club actually runs without this
  * function or its caller special-casing any one role by name.
  *
@@ -538,18 +568,17 @@ export function buildRunOfShow({
 			// leader) but gated on the Speaker (the segment itself), so a club that
 			// disables Toastmaster of the Day still runs the vote — `renderUnowned`
 			// prints the bare role name rather than losing the row. Only the
-			// timer's-report clause is conditional — `fallback` drops it, and it
-			// alone, when there is no Timer to report.
+			// timer's-report clause is conditional — a `fallbacks` entry drops it,
+			// and it alone, when there is no Timer to report.
 			kind: "role",
 			...TOASTMASTER_ROLE,
 			role: "plain",
 			detail: "Calls for the Timer's report · opens voting for Best Speaker",
 			minutes: 1,
 			renderUnowned: true,
-			fallback: {
-				unless: TIMER_ROLE,
-				detail: "Opens voting for Best Speaker",
-			},
+			fallbacks: [
+				{ unless: TIMER_ROLE, detail: "Opens voting for Best Speaker" },
+			],
 			requiresAnyOf: [SPEAKER_ROLE],
 		},
 		{
@@ -580,10 +609,9 @@ export function buildRunOfShow({
 				"Calls for the Timer's report · opens voting for Best Table Topics",
 			minutes: 1,
 			renderUnowned: true,
-			fallback: {
-				unless: TIMER_ROLE,
-				detail: "Opens voting for Best Table Topics",
-			},
+			fallbacks: [
+				{ unless: TIMER_ROLE, detail: "Opens voting for Best Table Topics" },
+			],
 			requiresAnyOf: [TABLE_TOPICS_ROLE],
 		},
 		{
@@ -600,7 +628,7 @@ export function buildRunOfShow({
 			minutes: 0,
 			handoff: true,
 			requiresAnyOf: [GENERAL_EVALUATOR_ROLE],
-			fallback: { unless: TABLE_TOPICS_ROLE, owner: TOASTMASTER_ROLE },
+			fallbacks: [{ unless: TABLE_TOPICS_ROLE, owner: TOASTMASTER_ROLE }],
 		},
 		{
 			kind: "role",
@@ -610,7 +638,7 @@ export function buildRunOfShow({
 			minutes: 0,
 			handoff: true,
 			requiresAnyOf: [EVALUATOR_ROLE],
-			fallback: { unless: GENERAL_EVALUATOR_ROLE, owner: TOASTMASTER_ROLE },
+			fallbacks: [GE_COVERED_BY_TOASTMASTER],
 		},
 		{
 			kind: "role",
@@ -621,22 +649,30 @@ export function buildRunOfShow({
 			minutes: 3,
 		},
 		{
-			// The General Evaluator, per the same club agenda. A club that runs
-			// evaluators but no General Evaluator still gets this row: `renderUnowned`
-			// prints "General Evaluator" unattributed rather than losing the vote —
-			// deliberately, since the deck still projects the Best-Evaluator slide
-			// and an unattributed cue beats no cue at all. The GE's other three
-			// closing beats carry no such flag and vanish outright without a GE.
+			// The General Evaluator, per the same club agenda. THE beat that proves
+			// `fallbacks` has to be plural (#363): it asks two independent questions
+			// of the club's roster. Is there a Timer to call on? — if not, the
+			// timer's-report clause goes. Is there a General Evaluator to run this? —
+			// if not, the Toastmaster covers, exactly as they do for the GE's other
+			// four beats. One fallback could only ever answer one of them, and the
+			// one it answered was the Timer's, which is why this row used to print
+			// the bare, unheld "General Evaluator" while the hand-off directly above
+			// it relocated to the Toastmaster.
+			//
+			// `renderUnowned` still backstops the case where the fallback has nowhere
+			// to fall back TO (no GE and no Toastmaster of the Day): the vote belongs
+			// to the segment, so an unattributed cue beats no cue at all, and the deck
+			// still projects the Best-Evaluator slide.
 			kind: "role",
 			...GENERAL_EVALUATOR_ROLE,
 			role: "plain",
 			detail: "Calls for the Timer's report · opens voting for Best Evaluator",
 			minutes: 1,
 			renderUnowned: true,
-			fallback: {
-				unless: TIMER_ROLE,
-				detail: "Opens voting for Best Evaluator",
-			},
+			fallbacks: [
+				{ unless: TIMER_ROLE, detail: "Opens voting for Best Evaluator" },
+				GE_COVERED_BY_TOASTMASTER,
+			],
 			requiresAnyOf: [EVALUATOR_ROLE],
 		},
 		{
@@ -646,6 +682,7 @@ export function buildRunOfShow({
 			role: "plain",
 			detail: "Evaluates the evaluators",
 			minutes: 2,
+			fallbacks: [GE_COVERED_BY_TOASTMASTER],
 		},
 		{
 			kind: "role",
@@ -657,6 +694,11 @@ export function buildRunOfShow({
 			// club whose only functionary is a Vote Counter has nobody to call on.
 			requiresAnyOf: REPORTING_FUNCTIONARY_ROLES,
 			requiresGroup: "reportingFunctionaries",
+			// The most consequential of the five relocations (#363): without it a
+			// club that runs functionaries but no General Evaluator never calls for
+			// the functionary reports at all — the Timer, Ah-Counter and Grammarian
+			// are introduced at the top of the meeting and then never cued to speak.
+			fallbacks: [GE_COVERED_BY_TOASTMASTER],
 		},
 		{
 			kind: "role",
@@ -667,6 +709,16 @@ export function buildRunOfShow({
 			// giving the room back. `beatDuration` matches on `id`, not `detail`.
 			detail: "Overall meeting evaluation · returns control to the Toastmaster",
 			minutes: 2,
+			// ONE entry setting BOTH fields, not two entries — the plural mechanism
+			// is for independent triggers, and here there is only one: with no
+			// General Evaluator the Toastmaster gives the overall evaluation AND has
+			// nobody to return control to, having never given it away. Splitting it
+			// in two would let a future edit fire the owner swap without the clause
+			// drop and print "Toastmaster of the Day · Alice | Overall meeting
+			// evaluation · returns control to the Toastmaster".
+			fallbacks: [
+				{ ...GE_COVERED_BY_TOASTMASTER, detail: "Overall meeting evaluation" },
+			],
 		},
 		{
 			// Same move as the three vote beats (#363): name the Toastmaster who
@@ -883,29 +935,42 @@ export function expandRunSheet(
 		// nothing to introduce, nobody to call for a report, no segment to vote on.
 		const missingRequired = !requirementsMet(beat, slots);
 
-		// `fallback` lives on the shared half of `Beat` (#363), so this is computed
+		// `fallbacks` live on the shared half of `Beat` (#363), so this is computed
 		// once for both arms below — the event arm only needs `who`, the role arm
-		// only needs `owner`, but "did the fallback fire, and what does it say"
+		// only needs `owner`, but "did a fallback fire, and what does it say"
 		// must answer the same way in both or the two arms can silently drift.
-		const fb = beat.fallback;
-		const useFallback =
-			fb != null && !hasRole(slots, fb.unless.roleKey, fb.unless.roleName);
+		//
+		// Resolved PER FIELD rather than per entry: the entries answer independent
+		// questions (see `Beat.fallbacks`), so an entry that names only a `detail`
+		// must not shadow an earlier entry's `owner`. Later wins within a field,
+		// which is what makes the array order documented rather than incidental.
+		const fired = (beat.fallbacks ?? []).filter(
+			(fb) => !hasRole(slots, fb.unless.roleKey, fb.unless.roleName),
+		);
+		const fallbackOwner = fired.reduce<BeatRole | undefined>(
+			(owner, fb) => fb.owner ?? owner,
+			undefined,
+		);
+		const fallbackDetail = fired.reduce<string | undefined>(
+			(text, fb) => fb.detail ?? text,
+			undefined,
+		);
 		// A fallback's own detail can carry the same `ROLES_TOKEN`/`AWARDS_TOKEN`
 		// the beat's detail can (nothing stops a later beat from writing one) —
 		// `resolveDetail` only reads `detail`/`requiresAnyOf`/`requiresGroup`, all
 		// of which the fallback inherits from its beat, so this borrows the same
-		// resolution rather than substituting `fb.detail` verbatim and risking a
-		// literal "{roles}" on the printed agenda.
+		// resolution rather than substituting the fallback's `detail` verbatim and
+		// risking a literal "{roles}" on the printed agenda.
 		const beatDetail =
-			useFallback && fb.detail != null
-				? resolveDetail({ ...beat, detail: fb.detail }, slots)
+			fallbackDetail != null
+				? resolveDetail({ ...beat, detail: fallbackDetail }, slots)
 				: detail;
 
 		if (missingRequired) {
 			// omitted
 		} else if (beat.kind === "event") {
 			rows.push({
-				who: useFallback ? (fb.owner?.roleName ?? beat.who) : beat.who,
+				who: fallbackOwner?.roleName ?? beat.who,
 				detail: beatDetail,
 				minutes: beat.minutes,
 				marks: null,
@@ -913,10 +978,10 @@ export function expandRunSheet(
 		} else {
 			// A fallback may move the beat to a different owner (#363) — resolve the
 			// owner BEFORE looking up slots, so the row binds to the right role.
-			const owner =
-				useFallback && fb.owner != null
-					? fb.owner
-					: { roleKey: beat.roleKey, roleName: beat.roleName };
+			const owner = fallbackOwner ?? {
+				roleKey: beat.roleKey,
+				roleName: beat.roleName,
+			};
 			const matching = slotsForRole(slots, owner.roleKey, owner.roleName);
 
 			if (beat.role === "speaker") {

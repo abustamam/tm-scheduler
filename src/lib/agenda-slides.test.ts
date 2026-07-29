@@ -169,6 +169,12 @@ describe("buildSlideDeck toastmaster intro + word of the day", () => {
 			"toastmasterIntro",
 			"wordOfDay",
 			"functionaryIntro",
+			// No General Evaluator at this club, so the Toastmaster covers the GE's
+			// closing slides (#363). They sit AFTER the functionary intro, which is
+			// what this test is about.
+			"evaluatorEvaluation",
+			"functionaryReports",
+			"generalEvaluation",
 			"guestComments",
 			"thankYou",
 		]);
@@ -819,6 +825,12 @@ describe("buildSlideDeck functionary intro (#367)", () => {
 			"title",
 			"toastmaster",
 			"functionaryIntro",
+			// This club runs no General Evaluator, so the Toastmaster covers the
+			// role's three closing slides (#363) — including the functionary reports,
+			// which is what cues the Grammarian introduced two slides earlier.
+			"evaluatorEvaluation",
+			"functionaryReports",
+			"generalEvaluation",
 			"guestComments",
 			"thankYou",
 		]);
@@ -929,8 +941,24 @@ describe("buildSlideDeck functionary reports (#367 / #353)", () => {
 		});
 	});
 
-	it("is omitted when there is no General Evaluator", () => {
-		expect(kinds([tmod, grammarian])).not.toContain("functionaryReports");
+	it("moves to the Toastmaster when there is no General Evaluator (#363)", () => {
+		// This used to assert the slide was OMITTED — which meant a club running a
+		// Grammarian and no GE introduced them at the top of the meeting and never
+		// called for their report. The Toastmaster covers the role instead, and the
+		// slide says so rather than announcing "General Evaluator: Schinthia".
+		const slide = build({ slots: [tmod, grammarian] }).find(
+			(s) => s.kind === "functionaryReports",
+		);
+		expect(slide).toMatchObject({
+			owner: "Toastmaster of the Day",
+			name: "Schinthia",
+			team: [{ role: "Grammarian", name: "Mona" }],
+		});
+	});
+
+	it("is omitted when there is neither a General Evaluator nor a Toastmaster", () => {
+		// The fallback has nowhere to fall back to, so both surfaces drop it.
+		expect(kinds([grammarian])).not.toContain("functionaryReports");
 	});
 
 	it("renders identically under MCF's variant, apart from the opening GE hand-off the swap needs", () => {
@@ -1029,11 +1057,12 @@ describe("buildSlideDeck evaluation session", () => {
 	});
 
 	it("gates the evaluator evaluation on the General Evaluator, NOT on the evaluators (#367)", () => {
-		// Spec: no General Evaluator ⇒ the evaluator evaluation, the functionary
-		// reports and the overall evaluation all vanish, and nothing replaces the
-		// overall meeting evaluation. Before this fix the deck gated the slide on
-		// the EVALUATORS and fell back to the literal role name, so a club with
-		// evaluators and no GE projected "General Evaluator: General Evaluator".
+		// Spec: the slide follows the GE role, not the evaluators. With nobody to
+		// run it and nobody to cover — no General Evaluator AND no Toastmaster of
+		// the Day (#363) — it vanishes, and it never names a role the club does not
+		// run. Before this fix the deck gated the slide on the EVALUATORS and fell
+		// back to the literal role name, so a club with evaluators and no GE
+		// projected "General Evaluator: General Evaluator".
 		const noGe = build({ slots: [speaker, evaluator] });
 		expect(noGe.map((s) => s.kind)).not.toContain("evaluatorEvaluation");
 		expect(JSON.stringify(noGe)).not.toContain("General Evaluator");
@@ -1051,10 +1080,14 @@ describe("buildSlideDeck evaluation session", () => {
 		});
 		expect(
 			build({ slots: [ge] }).find((s) => s.kind === "evaluatorEvaluation"),
-		).toMatchObject({ name: "Saiful Haque", time: "2 minutes" });
+		).toMatchObject({
+			owner: "General Evaluator",
+			name: "Saiful Haque",
+			time: "2 minutes",
+		});
 		expect(
 			build({ slots: [openGe] }).find((s) => s.kind === "evaluatorEvaluation"),
-		).toMatchObject({ name: "— open —" });
+		).toMatchObject({ owner: "General Evaluator", name: "— open —" });
 	});
 
 	it("the Best-Evaluator vote carries whether the club runs a Timer (#367)", () => {
@@ -1066,6 +1099,103 @@ describe("buildSlideDeck evaluation session", () => {
 		expect(voteOf([speaker, evaluator, timer])).toMatchObject({
 			hasTimer: true,
 		});
+	});
+});
+
+/**
+ * The Toastmaster of the Day covers the whole General Evaluator role at a club
+ * that runs no GE (#363). The deck has to mirror the run sheet's five relocated
+ * beats exactly — `agenda-parity.test.ts` proves the SEQUENCES match; this suite
+ * is about the COPY, which ordering parity cannot see.
+ *
+ * The failure it guards against is specific: three of these slides used to carry
+ * only a `name`, and `slide-layout.ts` hardcoded the literal "General Evaluator"
+ * beside it. Rendering them for a covering Toastmaster without an `owner` would
+ * have projected "General Evaluator: Schinthia" — a role nobody in the room
+ * holds, which is the exact defect on the printed side that started #363.
+ */
+describe("the Toastmaster covers the General Evaluator's role — deck (#363)", () => {
+	const speaker = slot({
+		id: "sp1",
+		roleName: "Speaker",
+		category: "speaker",
+		isSpeakerRole: true,
+		assigneeName: "Rehanna Khan",
+	});
+	const evaluator = slot({
+		id: "ev1",
+		roleName: "Evaluator",
+		category: "evaluator",
+		assigneeName: "Faisal Ali",
+		evaluatesSlotId: "sp1",
+		evaluates: { speakerName: "Rehanna Khan" },
+	});
+	/** A full club minus its General Evaluator. */
+	const noGe = [tmod, grammarian, timer, speaker, evaluator];
+
+	it("gives all three closing slides to the Toastmaster, naming the right role", () => {
+		const deck = build({ slots: noGe });
+		expect(deck.find((s) => s.kind === "evaluatorEvaluation")).toMatchObject({
+			owner: "Toastmaster of the Day",
+			name: "Schinthia",
+		});
+		expect(deck.find((s) => s.kind === "functionaryReports")).toMatchObject({
+			owner: "Toastmaster of the Day",
+			name: "Schinthia",
+			team: [{ role: "Grammarian", name: "Mona" }, { role: "Timer" }],
+		});
+		expect(deck.find((s) => s.kind === "generalEvaluation")).toMatchObject({
+			owner: "Toastmaster of the Day",
+			name: "Schinthia",
+		});
+	});
+
+	it("hands the Best-Evaluator vote to the Toastmaster too", () => {
+		expect(
+			build({ slots: noGe }).find((s) => s.kind === "voteEvaluator"),
+		).toMatchObject({
+			caller: { role: "Toastmaster of the Day", name: "Schinthia" },
+			hasTimer: true,
+		});
+	});
+
+	it("never projects the words 'General Evaluator' at a club that runs none", () => {
+		// Through `slideLayout`, i.e. the text actually rendered on the wall and
+		// exported to .pptx — not just the slide data. This is the assertion that
+		// would have caught a hardcoded header.
+		const rendered = build({ slots: noGe }).map((s) =>
+			JSON.stringify(slideLayout(s)),
+		);
+		expect(rendered.filter((t) => t.includes("General Evaluator"))).toEqual([]);
+		// Not vacuous: the same club WITH a General Evaluator says it plenty.
+		const withGe = build({ slots: [...noGe, ge] }).map((s) =>
+			JSON.stringify(slideLayout(s)),
+		);
+		expect(
+			withGe.filter((t) => t.includes("General Evaluator")).length,
+		).toBeGreaterThan(0);
+	});
+
+	it("drops all three when there is no Toastmaster to cover either", () => {
+		const ks = kinds([grammarian, timer, speaker, evaluator]);
+		expect(ks).not.toContain("evaluatorEvaluation");
+		expect(ks).not.toContain("functionaryReports");
+		expect(ks).not.toContain("generalEvaluation");
+	});
+
+	it("names the covering role as the CLUB names it (#368)", () => {
+		const renamed = slot({
+			id: "tm",
+			roleKey: "toastmaster_of_the_day",
+			roleName: "Master of Ceremonies",
+			category: "leadership",
+			assigneeName: "Schinthia",
+		});
+		expect(
+			build({ slots: [renamed, grammarian] }).find(
+				(s) => s.kind === "functionaryReports",
+			),
+		).toMatchObject({ owner: "Master of Ceremonies", name: "Schinthia" });
 	});
 });
 

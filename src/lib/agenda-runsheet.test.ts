@@ -768,37 +768,183 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 		});
 	});
 
-	// A deliberate, user-visible consequence of `renderUnowned` (see the beat's
-	// own comment): a club with evaluators but no General Evaluator gets a vote
-	// row naming a role nobody holds, rather than losing the vote — the deck
-	// still projects the Best-Evaluator slide, and an unattributed cue beats no
-	// cue at all. The GE's other three beats carry no such flag and vanish.
-	it("prints the Best-Evaluator vote unattributed, and drops the GE's other three beats, when there is no General Evaluator", () => {
+	// The Toastmaster of the Day covers the WHOLE General Evaluator role at a
+	// club that runs no GE (#363). Before that decision this row printed the bare
+	// string "General Evaluator" — a role nobody in the room held — while the
+	// hand-off directly above it had already relocated to the Toastmaster.
+	it("moves the Best-Evaluator vote to the Toastmaster when there is no General Evaluator", () => {
 		const noGe = sixRoleClub().filter((s) => s.roleKey !== "general_evaluator");
-		const rows = expandRunSheet(noGe, RUN_OF_SHOW);
 		expect(
-			voteRows(rows).find((r) =>
+			voteRows(expandRunSheet(noGe, RUN_OF_SHOW)).find((r) =>
 				r.detail.endsWith("voting for Best Evaluator"),
 			),
 		).toEqual({
-			who: "General Evaluator",
+			who: "Toastmaster of the Day · Faisal",
 			detail: "Calls for the Timer's report · opens voting for Best Evaluator",
 			minutes: 1,
 			marks: null,
 		});
-		expect(rows.some((r) => r.detail === "Evaluates the evaluators")).toBe(
-			false,
+	});
+
+	// THE beat that proves `fallbacks` had to become plural: two independent
+	// triggers on one row. A singular fallback was already spent on the Timer, so
+	// the owner could not also relocate.
+	it("fires BOTH of the Best-Evaluator vote's fallbacks at a club with neither a General Evaluator nor a Timer", () => {
+		const neither = sixRoleClub().filter(
+			(s) => s.roleKey !== "general_evaluator" && s.roleKey !== "timer",
 		);
 		expect(
-			rows.some((r) => r.detail === "Calls for the functionary reports"),
-		).toBe(false);
-		expect(
-			rows.some(
-				(r) =>
-					r.detail ===
-					"Overall meeting evaluation · returns control to the Toastmaster",
+			voteRows(expandRunSheet(neither, RUN_OF_SHOW)).find((r) =>
+				r.detail.endsWith("voting for Best Evaluator"),
 			),
-		).toBe(false);
+		).toEqual({
+			who: "Toastmaster of the Day · Faisal",
+			detail: "Opens voting for Best Evaluator",
+			minutes: 1,
+			marks: null,
+		});
+	});
+
+	// The vote beat keeps `renderUnowned` as the backstop for the club where the
+	// fallback has nowhere to fall back TO. The bare role name is now the
+	// Toastmaster's, because that is the role the beat resolved to.
+	it("still prints the Best-Evaluator vote unattributed when neither the GE nor the Toastmaster exists", () => {
+		const neither = sixRoleClub().filter(
+			(s) =>
+				s.roleKey !== "general_evaluator" &&
+				s.roleKey !== "toastmaster_of_the_day",
+		);
+		expect(
+			voteRows(expandRunSheet(neither, RUN_OF_SHOW)).find((r) =>
+				r.detail.endsWith("voting for Best Evaluator"),
+			),
+		).toEqual({
+			who: "Toastmaster of the Day",
+			detail: "Calls for the Timer's report · opens voting for Best Evaluator",
+			minutes: 1,
+			marks: null,
+		});
+	});
+});
+
+/**
+ * The Toastmaster of the Day covers the whole General Evaluator role at a club
+ * that runs no GE (#363) — all five GE-owned beats, not the one the old
+ * `renderUnowned` flag happened to keep.
+ *
+ * The functionary-reports beat is the one with teeth: without this, a club that
+ * runs a Timer, an Ah-Counter and a Grammarian but no General Evaluator
+ * introduced all three at the top of the meeting and then never cued a single
+ * one to report.
+ */
+describe("the Toastmaster covers the General Evaluator's role (#363)", () => {
+	const noGe = () =>
+		sixRoleClub().filter((s) => s.roleKey !== "general_evaluator");
+
+	/** The five beats the General Evaluator owns, as they read once relocated. */
+	const GE_STRETCH = [
+		"Introduces the speech evaluators",
+		"Calls for the Timer's report · opens voting for Best Evaluator",
+		"Evaluates the evaluators",
+		"Calls for the functionary reports",
+		"Overall meeting evaluation",
+	];
+
+	it("puts all five of the GE's beats on the Toastmaster, in order", () => {
+		const rows = expandRunSheet(noGe(), RUN_OF_SHOW);
+		expect(
+			rows
+				.filter((r) => GE_STRETCH.includes(r.detail))
+				.map((r) => [r.who, r.detail]),
+		).toEqual(GE_STRETCH.map((d) => ["Toastmaster of the Day · Faisal", d]));
+	});
+
+	it("never names the General Evaluator anywhere on the printed agenda", () => {
+		const rows = expandRunSheet(noGe(), RUN_OF_SHOW);
+		expect(rows.filter((r) => r.who.includes("General Evaluator"))).toEqual([]);
+		expect(
+			rows.filter((r) => r.detail.includes("the General Evaluator")),
+		).toEqual([]);
+	});
+
+	it("calls for the functionary reports, which a no-GE club used to lose entirely", () => {
+		// The regression this whole change exists for: the Timer is introduced at
+		// the top of the meeting, so somebody has to cue the report.
+		const rows = expandRunSheet(noGe(), RUN_OF_SHOW);
+		expect(
+			rows.find((r) => r.detail === "Calls for the functionary reports"),
+		).toEqual({
+			who: "Toastmaster of the Day · Faisal",
+			detail: "Calls for the functionary reports",
+			minutes: 3,
+			marks: null,
+		});
+	});
+
+	it("drops the 'returns control to the Toastmaster' clause when the Toastmaster is the one giving it", () => {
+		// The clause is correct when the General Evaluator hands the room back and
+		// nonsense when the Toastmaster never gave it away, so the same fallback
+		// entry that moves the owner also rewrites the detail.
+		const withGe = expandRunSheet(sixRoleClub(), RUN_OF_SHOW);
+		expect(withGe.find((r) => r.detail.startsWith("Overall meeting"))).toEqual({
+			who: "General Evaluator · Riyaz",
+			detail: "Overall meeting evaluation · returns control to the Toastmaster",
+			minutes: 2,
+			marks: null,
+		});
+		const covered = expandRunSheet(noGe(), RUN_OF_SHOW);
+		expect(covered.find((r) => r.detail.startsWith("Overall meeting"))).toEqual(
+			{
+				who: "Toastmaster of the Day · Faisal",
+				detail: "Overall meeting evaluation",
+				minutes: 2,
+				marks: null,
+			},
+		);
+	});
+
+	it("keeps the whole run-of-show the same length — a covered beat is still the same beat", () => {
+		const total = (rs: AgendaRow[]) => rs.reduce((n, r) => n + r.minutes, 0);
+		expect(total(expandRunSheet(noGe(), RUN_OF_SHOW))).toBe(
+			total(expandRunSheet(sixRoleClub(), RUN_OF_SHOW)),
+		);
+	});
+
+	it("degrades to nothing — not to ghost rows — when there is no Toastmaster either", () => {
+		// Nobody to cover, so four of the five beats go. The Best-Evaluator vote is
+		// the exception BY DESIGN (`renderUnowned`): it belongs to the evaluation
+		// segment, which the club still runs, so the cue survives unattributed.
+		const rows = expandRunSheet(
+			sixRoleClub().filter(
+				(s) =>
+					s.roleKey !== "general_evaluator" &&
+					s.roleKey !== "toastmaster_of_the_day",
+			),
+			RUN_OF_SHOW,
+		);
+		expect(
+			rows.filter((r) => GE_STRETCH.includes(r.detail)).map((r) => r.detail),
+		).toEqual([
+			"Calls for the Timer's report · opens voting for Best Evaluator",
+		]);
+		// …and that one row names a role, never a person who does not exist.
+		expect(rows.find((r) => GE_STRETCH.includes(r.detail))?.who).toBe(
+			"Toastmaster of the Day",
+		);
+	});
+
+	it("leaves a club that DOES run a General Evaluator untouched", () => {
+		const rows = expandRunSheet(sixRoleClub(), RUN_OF_SHOW);
+		expect(
+			rows
+				.filter((r) =>
+					[
+						...GE_STRETCH.slice(0, 4),
+						"Overall meeting evaluation · returns control to the Toastmaster",
+					].includes(r.detail),
+				)
+				.map((r) => r.who),
+		).toEqual(Array(5).fill("General Evaluator · Riyaz"));
 	});
 });
 
@@ -1604,15 +1750,20 @@ describe("flexBannerMessage (#395)", () => {
 		expect(rows.some((r) => /table topics/i.test(r.who))).toBe(false);
 
 		const flex = applyFlex(rows, 90);
-		// …so the whole shortfall survives: a 24-minute agenda in a 90-minute
+		// …so the whole shortfall survives: a 28-minute agenda in a 90-minute
 		// booking. The banner is NOT suppressed — it is the prompt that gets
 		// `lengthMinutes` corrected; it just stops naming a segment the club does
 		// not run.
-		expect(flex.projectedMinutes).toBe(24);
+		//
+		// 28, not the 24 this asserted before #363 had the Toastmaster cover the
+		// General Evaluator's role: this club runs no GE, so the Toastmaster picks
+		// up "Evaluates the evaluators" (2 min) and the overall meeting evaluation
+		// (2 min). Both beats are now ON the agenda, so the clock has to book them.
+		expect(flex.projectedMinutes).toBe(28);
 		expect(flex.status).toBe("under");
 		const msg = flexBannerMessage(flex);
 		expect(msg).toBe(
-			"Agenda ends 66 min early — consider shortening the meeting length.",
+			"Agenda ends 62 min early — consider shortening the meeting length.",
 		);
 		expect(msg).not.toMatch(/table topics/i);
 	});
@@ -1760,7 +1911,7 @@ describe("BeatFallback — owner and detail swap (#363)", () => {
 		role: "plain",
 		detail: "Introduces the General Evaluator",
 		minutes: 0,
-		fallback: { unless: TTM, owner: TM },
+		fallbacks: [{ unless: TTM, owner: TM }],
 	};
 
 	it("keeps the beat's own owner when the `unless` role has a slot", () => {
@@ -1804,10 +1955,12 @@ describe("BeatFallback — owner and detail swap (#363)", () => {
 	it("swaps only the detail when the fallback names no owner", () => {
 		const withDetail: Beat = {
 			...beat,
-			fallback: {
-				unless: { roleKey: "timer", roleName: "Timer" },
-				detail: "Opens voting for Best Speaker",
-			},
+			fallbacks: [
+				{
+					unless: { roleKey: "timer", roleName: "Timer" },
+					detail: "Opens voting for Best Speaker",
+				},
+			],
 		};
 		const slots = [
 			slot({
@@ -1830,11 +1983,13 @@ describe("BeatFallback — owner and detail swap (#363)", () => {
 	it("swaps both owner and detail when the fallback names both", () => {
 		const both: Beat = {
 			...beat,
-			fallback: {
-				unless: TTM,
-				owner: TM,
-				detail: "Hands off directly to the General Evaluator",
-			},
+			fallbacks: [
+				{
+					unless: TTM,
+					owner: TM,
+					detail: "Hands off directly to the General Evaluator",
+				},
+			],
 		};
 		const slots = [
 			slot({
@@ -1857,7 +2012,7 @@ describe("BeatFallback — owner and detail swap (#363)", () => {
 	it("a degenerate fallback (`unless` only, no owner or detail) changes nothing when it fires", () => {
 		const noOp: Beat = {
 			...beat,
-			fallback: { unless: { roleKey: "timer", roleName: "Timer" } },
+			fallbacks: [{ unless: { roleKey: "timer", roleName: "Timer" } }],
 		};
 		const slots = [
 			slot({
@@ -1877,6 +2032,121 @@ describe("BeatFallback — owner and detail swap (#363)", () => {
 				marks: null,
 			},
 		]);
+	});
+});
+
+/**
+ * `fallbacks` is a LIST because one beat can need two independent answers
+ * (#363): the Best-Evaluator vote drops its timer's-report clause when the club
+ * runs no Timer AND moves to the Toastmaster when it runs no General Evaluator.
+ * A singular fallback could only ever answer one, and the one it answered was
+ * the Timer's — which is why that row used to print the bare, unheld role name.
+ *
+ * The mechanics are pinned here on synthetic beats; the real template's use of
+ * them is pinned by the no-GE suites above.
+ */
+describe("BeatFallback — plural, per-field resolution (#363)", () => {
+	const TM = {
+		roleKey: "toastmaster_of_the_day",
+		roleName: "Toastmaster of the Day",
+	};
+	const GE = { roleKey: "general_evaluator", roleName: "General Evaluator" };
+	const TIMER = { roleKey: "timer", roleName: "Timer" };
+
+	/** A miniature of the Best-Evaluator vote beat: one entry rewrites the copy,
+	 *  the other relocates the owner, and they trigger on different roles. */
+	const twoFallbacks: Beat = {
+		kind: "role",
+		...GE,
+		role: "plain",
+		detail: "Calls for the Timer's report · opens voting for Best Evaluator",
+		minutes: 1,
+		fallbacks: [
+			{ unless: TIMER, detail: "Opens voting for Best Evaluator" },
+			{ unless: GE, owner: TM },
+		],
+	};
+
+	const tm = slot({
+		id: "tm",
+		roleKey: "toastmaster_of_the_day",
+		roleName: "Toastmaster of the Day",
+		category: "leadership",
+		assigneeName: "Faisal",
+	});
+	const ge = slot({
+		id: "ge",
+		roleKey: "general_evaluator",
+		roleName: "General Evaluator",
+		category: "leadership",
+		assigneeName: "Riyaz",
+	});
+	const timer = slot({
+		id: "ti",
+		roleKey: "timer",
+		roleName: "Timer",
+		category: "functionary",
+		assigneeName: "Muhammad",
+	});
+
+	it("applies neither entry when both `unless` roles have slots", () => {
+		expect(expandRunSheet([tm, ge, timer], [twoFallbacks])[0]).toMatchObject({
+			who: "General Evaluator · Riyaz",
+			detail: "Calls for the Timer's report · opens voting for Best Evaluator",
+		});
+	});
+
+	it("applies only the entry whose `unless` role is missing — the Timer's", () => {
+		expect(expandRunSheet([tm, ge], [twoFallbacks])[0]).toMatchObject({
+			who: "General Evaluator · Riyaz",
+			detail: "Opens voting for Best Evaluator",
+		});
+	});
+
+	it("applies only the entry whose `unless` role is missing — the GE's", () => {
+		expect(expandRunSheet([tm, timer], [twoFallbacks])[0]).toMatchObject({
+			who: "Toastmaster of the Day · Faisal",
+			detail: "Calls for the Timer's report · opens voting for Best Evaluator",
+		});
+	});
+
+	it("applies BOTH when both `unless` roles are missing — the case a singular fallback could not express", () => {
+		expect(expandRunSheet([tm], [twoFallbacks])[0]).toMatchObject({
+			who: "Toastmaster of the Day · Faisal",
+			detail: "Opens voting for Best Evaluator",
+		});
+	});
+
+	it("resolves per FIELD, so a later detail-only entry keeps an earlier entry's owner", () => {
+		// The ordering hazard a naive "last fired entry wins" would hit: entry 2
+		// names no owner, so entry 1's must survive it.
+		const detailAfterOwner: Beat = {
+			...twoFallbacks,
+			fallbacks: [
+				{ unless: GE, owner: TM },
+				{ unless: TIMER, detail: "Opens voting for Best Evaluator" },
+			],
+		};
+		expect(expandRunSheet([tm], [detailAfterOwner])[0]).toMatchObject({
+			who: "Toastmaster of the Day · Faisal",
+			detail: "Opens voting for Best Evaluator",
+		});
+	});
+
+	it("lets a later entry win when two fired entries set the SAME field", () => {
+		// Owned by the Toastmaster, so the row survives with no GE slot: this test
+		// is about which detail wins, not about owner relocation.
+		const clashing: Beat = {
+			...twoFallbacks,
+			...TM,
+			fallbacks: [
+				{ unless: TIMER, detail: "First" },
+				{ unless: GE, detail: "Second" },
+			],
+		};
+		expect(expandRunSheet([tm], [clashing])[0]).toMatchObject({
+			detail: "Second",
+		});
 	});
 });
 
@@ -1976,17 +2246,19 @@ describe("BeatFallback — fb.detail resolves through resolveDetail (#363)", () 
 			detail: "Own detail, unused once the fallback fires",
 			minutes: 1,
 			requiresAnyOf: [{ roleKey: "timer", roleName: "Timer" }],
-			fallback: {
-				unless: {
-					roleKey: "table_topics_master",
-					roleName: "Table Topics Master",
+			fallbacks: [
+				{
+					unless: {
+						roleKey: "table_topics_master",
+						roleName: "Table Topics Master",
+					},
+					owner: {
+						roleKey: "toastmaster_of_the_day",
+						roleName: "Toastmaster of the Day",
+					},
+					detail: `Introduces the ${ROLES_TOKEN}`,
 				},
-				owner: {
-					roleKey: "toastmaster_of_the_day",
-					roleName: "Toastmaster of the Day",
-				},
-				detail: `Introduces the ${ROLES_TOKEN}`,
-			},
+			],
 		};
 		const slots = [
 			slot({
@@ -2022,10 +2294,12 @@ describe("BeatFallback — fb.detail resolves through resolveDetail (#363)", () 
 			detail: "Own detail, unused once the fallback fires",
 			minutes: 1,
 			requiresAnyOf: [{ roleKey: "grammarian", roleName: "Grammarian" }],
-			fallback: {
-				unless: { roleKey: "timer", roleName: "Timer" },
-				detail: `Introduces the ${ROLES_TOKEN}`,
-			},
+			fallbacks: [
+				{
+					unless: { roleKey: "timer", roleName: "Timer" },
+					detail: `Introduces the ${ROLES_TOKEN}`,
+				},
+			],
 		};
 		const slots = [
 			slot({
