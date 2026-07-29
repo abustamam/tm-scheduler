@@ -721,6 +721,19 @@ function EditorialLayout({
 
 // ---------------------------------------------------------------------------
 // GRID — one page
+//
+// NO HEADROOM LEFT. Measured on a 23-row MCF agenda (#363): 1108px of content
+// against a 1056px page, so `FitPage` scales this layout to ~0.951. It fitted
+// exactly at 1019px before the hand-off rows; rendering those as full rows
+// instead of `HandoffBand`s would cost 1174px, so the band already absorbs
+// half the overrun and no legible band closes the rest.
+//
+// The 5% scale is accepted — nothing clips and body text lands around 7.5pt —
+// but grid is the DEFAULT print layout and every further addition compounds
+// into a deeper shrink. Anything added here should arrive with a compensating
+// reduction. The cheap inventory, when it is needed: ~16px across the three
+// section gaps and the footer margin, plus ~10px from halving the band's
+// padding. Past that it means re-tuning the row rhythm.
 // ---------------------------------------------------------------------------
 function GridLayout({
 	header,
