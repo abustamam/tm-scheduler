@@ -190,23 +190,47 @@ describe("capability roles are identified by key, not by name (#464)", () => {
 		});
 	});
 
-	it("does not hand the meeting to a club-invented role that merely reads like one", () => {
-		// `/^toastmaster\b/` matches far more than the TMOD. A club inventing
-		// "Toastmaster Evaluator" gave its holder the whole agenda — and because
-		// the server runs the same check, the mutation was granted, not just the
-		// button shown.
+	// THE shape production actually produces. `createClubRole`
+	// (role-definitions-logic.ts) never writes `key`, so every club-invented role
+	// has `key = NULL` and reaches the NAME fallback. Keying off the key alone did
+	// not close the escalation for them — narrowing the fallback to exact
+	// canonical names is what closes it. Seeding a made-up key here instead (the
+	// first version of this test did) passes against a row nothing can create.
+	it.each([
+		null,
+		undefined,
+		"club_invented",
+	])("denies a look-alike role name with roleKey %p", (roleKey) => {
 		for (const roleName of [
 			"Toastmaster Evaluator",
 			"Toastmaster Assistant",
 			"Toastmaster's Helper",
+			"Toastmaster Trainee",
 		]) {
 			expect(
-				deriveMeetingRoleFlags(
-					[{ roleName, roleKey: "club_invented", assigneeId: "c" }],
-					"c",
-				),
+				deriveMeetingRoleFlags([{ roleName, roleKey, assigneeId: "c" }], "c"),
 			).toEqual({ isTmod: false, isGrammarian: false });
 		}
+		for (const roleName of ["Grammarian Assistant", "Grammarian Trainee"]) {
+			expect(
+				deriveMeetingRoleFlags([{ roleName, roleKey, assigneeId: "c" }], "c"),
+			).toEqual({ isTmod: false, isGrammarian: false });
+		}
+	});
+
+	// The worst real shape: a club that renamed its TMOD before drizzle/0044 (key
+	// still NULL, name now "MC") AND invented a look-alike. Neither is keyed, so
+	// the key cannot separate them — only the exact-name fallback can, and it must
+	// hand the capability to NEITHER rather than to the impostor.
+	it("gives a null-key look-alike nothing, even when the real TMOD is also keyless", () => {
+		const slots = [
+			{ roleName: "MC", roleKey: null, assigneeId: "real" },
+			{ roleName: "Toastmaster Assistant", roleKey: null, assigneeId: "alike" },
+		];
+		expect(deriveMeetingRoleFlags(slots, "alike").isTmod).toBe(false);
+		// The renamed one gets nothing either — it carries no key to be found by,
+		// which is the #368 backfill gap and not this fix's to close.
+		expect(deriveMeetingRoleFlags(slots, "real").isTmod).toBe(false);
 	});
 
 	it("prefers the keyed slot over a name-alike, whatever the order", () => {
@@ -229,6 +253,27 @@ describe("capability roles are identified by key, not by name (#464)", () => {
 			expect(findTmodSlot(slots)?.assigneeId).toBe("real");
 			expect(deriveMeetingRoleFlags(slots, "real").isTmod).toBe(true);
 			expect(deriveMeetingRoleFlags(slots, "alike").isTmod).toBe(false);
+		}
+	});
+
+	it("prefers the keyed Grammarian slot over a name-alike too", () => {
+		const real = {
+			roleName: "Word Master",
+			roleKey: "grammarian",
+			assigneeId: "real",
+		};
+		const alike = {
+			roleName: "Grammarian",
+			roleKey: null,
+			assigneeId: "alike",
+		};
+		for (const slots of [
+			[real, alike],
+			[alike, real],
+		]) {
+			expect(findGrammarianSlot(slots)?.assigneeId).toBe("real");
+			expect(deriveMeetingRoleFlags(slots, "real").isGrammarian).toBe(true);
+			expect(deriveMeetingRoleFlags(slots, "alike").isGrammarian).toBe(false);
 		}
 	});
 

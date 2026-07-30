@@ -111,8 +111,12 @@ describe.skipIf(!hasTestDb)("resolveWordOfTheDayAuthz", () => {
 		expect(authz.grammarianMemberId).toBe(club.memberId);
 	});
 
+	// NULL key: `createClubRole` never writes one, so this is the shape a real club
+	// produces. Keying off `key` alone left it granting, because the row falls
+	// through to the NAME fallback — which is why that fallback now matches the
+	// canonical name EXACTLY rather than by prefix.
 	it("rejects a club-invented role whose NAME merely looks like the Grammarian (#464)", async () => {
-		await addRoleSlot(club, "Grammarian Assistant", club.memberId, "club_made");
+		await addRoleSlot(club, "Grammarian Assistant", club.memberId, null);
 		const authz = await resolveWordOfTheDayAuthz({
 			meetingId: club.meetingId,
 			selfMemberId: club.memberId,

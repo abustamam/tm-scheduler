@@ -175,12 +175,14 @@ describe.skipIf(!hasTestDb)("meeting agenda authorization", () => {
 		expect(authz.tmodMemberId).toBe(club.memberId);
 	});
 
+	// NULL key, which is what `createClubRole` actually writes — it never sets one.
+	// So this is the shape a real club produces, and keying off `key` alone did not
+	// close it: the row falls through to the NAME fallback, which is why that
+	// fallback matches canonical names EXACTLY rather than by prefix.
 	it("rejects a club-invented role whose NAME merely looks like the TMOD (#464)", async () => {
-		// `/^toastmaster\b/` matched this, so its holder was handed the whole
-		// agenda — server-side, not just in the UI.
 		await addTmodSlot(club, club.memberId, {
 			name: "Toastmaster Evaluator",
-			key: "club_invented",
+			key: null,
 		});
 		const authz = await resolveMeetingAgendaAuthz({
 			meetingId: club.meetingId,
@@ -189,6 +191,35 @@ describe.skipIf(!hasTestDb)("meeting agenda authorization", () => {
 		expect(authz.allowed).toBe(false);
 		expect(authz.via).toBe(null);
 		expect(authz.tmodMemberId).toBe(null);
+	});
+
+	// The unordered-SQL defect. Two candidates in one meeting and a single `find`
+	// would answer with whichever row Postgres returned first, so the same meeting
+	// could grant the impostor on one request and the real TMOD on the next.
+	it("picks the keyed TMOD over a keyless look-alike in the same meeting (#464)", async () => {
+		const impostor = await addRosterMember(club.clubId, "Impostor");
+		await addTmodSlot(club, impostor, {
+			name: "Toastmaster Assistant",
+			key: null,
+		});
+		await addTmodSlot(club, club.memberId, {
+			name: "MC",
+			key: "toastmaster_of_the_day",
+		});
+		const real = await resolveMeetingAgendaAuthz({
+			meetingId: club.meetingId,
+			selfMemberId: club.memberId,
+		});
+		expect(real.allowed).toBe(true);
+		expect(real.via).toBe("tmod-self-assert");
+		// Credited to the verified holder, which is what lands in activity_log (#396).
+		expect(real.actorMemberId).toBe(club.memberId);
+		const fake = await resolveMeetingAgendaAuthz({
+			meetingId: club.meetingId,
+			selfMemberId: impostor,
+		});
+		expect(fake.allowed).toBe(false);
+		expect(fake.via).toBe(null);
 	});
 
 	it("rejects a non-TMOD, non-admin roster member", async () => {

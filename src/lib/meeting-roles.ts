@@ -17,44 +17,50 @@ const GRAMMARIAN_ROLE_KEY = "grammarian";
 export type RoleIdentity = { roleName: string; roleKey?: string | null };
 
 /**
- * True when a role-definition name is the Toastmaster of the Day (TMOD) role.
- * Matches the standard-template name ("Toastmaster of the Day") and the bare
- * "Toastmaster", case-insensitively — but NOT "Table Topics Master" (different
- * prefix) or the plural "Toastmasters" (no word boundary).
+ * The name fallback matches the CANONICAL names EXACTLY (trimmed, case-folded),
+ * never a prefix.
  *
- * NAME-ONLY, so it is the fallback rather than the rule: prefer `isTmodRole`,
- * which reads the key when there is one. This still runs for a slot whose
- * `role_definitions.key` is NULL — a club-invented role, or a standard role
- * renamed before the #368 backfill, which matched on the canonical name and so
- * left the key NULL for anything already renamed.
+ * A prefix match is unsafe here because of what actually carries a NULL key.
+ * `createClubRole` (role-definitions-logic.ts) never writes one, so EVERY
+ * club-invented role has `key = NULL` — and `/^toastmaster\b/` matched
+ * "Toastmaster Assistant", "Toastmaster Evaluator", "Toastmaster's Helper".
+ * Keying off `role_definitions.key` alone did not close that, because those rows
+ * fall through to exactly this fallback (#464).
+ *
+ * Narrowing costs nothing real. The case the fallback exists for is a standard
+ * role whose key is still NULL — `drizzle/0044` backfilled by exact canonical
+ * name, so anything already renamed at that point kept NULL. But a RENAMED role
+ * carries the club's own name, which never matched the prefix regex either. So
+ * the only rows the fallback ever helped are the ones still literally named
+ * canonically, which exact matching keeps.
+ */
+const TMOD_CANONICAL_NAMES = ["toastmaster of the day", "toastmaster"];
+const GRAMMARIAN_CANONICAL_NAMES = ["grammarian"];
+
+const matchesCanonical = (names: string[], name: string): boolean =>
+	names.includes(name.trim().toLowerCase());
+
+/**
+ * True when a role-definition name is EXACTLY the Toastmaster of the Day (TMOD)
+ * role's canonical name, or the bare "Toastmaster" the standard template also
+ * answers to. NOT "Table Topics Master", not "Toastmasters", and — since #464 —
+ * not "Toastmaster Assistant".
+ *
+ * NAME-ONLY, so it is the fallback rather than the rule: it runs only for a slot
+ * whose `role_definitions.key` is NULL. Prefer `findTmodSlot`, which reads the
+ * key when there is one.
  */
 export function isTmodRoleName(name: string): boolean {
-	return /^toastmaster\b/.test(name.trim().toLowerCase());
+	return matchesCanonical(TMOD_CANONICAL_NAMES, name);
 }
 
 /**
- * True when a role-definition name is the Grammarian role. Matches the
- * standard-template name ("Grammarian"), case-insensitively — but NOT the plural
- * "Grammarians" (no word boundary) or "Grammar". Name-only; prefer
- * `isGrammarianRole` for the same reason as `isTmodRoleName`.
+ * True when a role-definition name is EXACTLY the Grammarian role's canonical
+ * name. NOT the plural "Grammarians", not "Grammar", and not "Grammarian
+ * Assistant". Name-only, for the same reason as `isTmodRoleName`.
  */
 export function isGrammarianRoleName(name: string): boolean {
-	return /^grammarian\b/.test(name.trim().toLowerCase());
-}
-
-/** The TMOD, by key where the slot has one. Mirrors `matchesRole`
- *  (agenda-runsheet.ts), which is how agenda beats have bound since #368. */
-export function isTmodRole(role: RoleIdentity): boolean {
-	return role.roleKey != null
-		? role.roleKey === TMOD_ROLE_KEY
-		: isTmodRoleName(role.roleName);
-}
-
-/** The Grammarian, by key where the slot has one. */
-export function isGrammarianRole(role: RoleIdentity): boolean {
-	return role.roleKey != null
-		? role.roleKey === GRAMMARIAN_ROLE_KEY
-		: isGrammarianRoleName(role.roleName);
+	return matchesCanonical(GRAMMARIAN_CANONICAL_NAMES, name);
 }
 
 /**
