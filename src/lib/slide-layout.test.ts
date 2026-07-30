@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { HandoffTarget, Slide } from "./agenda-slides";
-import { slideLayout } from "./slide-layout";
+import { slideLayout, slideName } from "./slide-layout";
 
 const contentHeader = (slide: Slide) => {
 	const l = slideLayout(slide);
@@ -215,27 +215,28 @@ describe("slideLayout bodies", () => {
 	});
 
 	describe("slide headers name their own segment (#446)", () => {
-		// Nothing asserted a `header` before this, only `lines` — which is how
-		// `voteEvaluator` came to reuse the `evaluation` slide's header. The header
-		// is not decoration: `slideLabel` (meeting-present.tsx) returns it verbatim
-		// for the jump-to-slide grid, so two slides sharing one make that grid
-		// unusable for the segment they collide on.
-		const header = (slide: Slide) => {
-			const l = slideLayout(slide);
-			if (l.chrome !== "content") throw new Error("expected content chrome");
-			return l.header;
-		};
-
+		// Headers were already asserted for seven kinds via `contentHeader` above,
+		// and for distinctness across hand-off targets (#363) — but never for a
+		// vote slide, and never ACROSS kinds. The vote slides' BODIES were pinned
+		// in full, down to the correct "Please Vote for Best Evaluator:" head line,
+		// so the slide read as well covered while the one field nobody checked was
+		// the one the grid uses: `slideName` returns `header` verbatim for the
+		// jump-to-slide grid, so two kinds sharing one make that grid unusable for
+		// the segment they collide on.
 		it("gives each of the three votes its own header", () => {
 			const headers = [
-				header({
+				contentHeader({
 					kind: "voteSpeaker",
 					names: ["Jagpal"],
 					hasTimer: true,
 					caller: null,
 				}),
-				header({ kind: "voteTableTopics", hasTimer: true, caller: null }),
-				header({
+				contentHeader({
+					kind: "voteTableTopics",
+					hasTimer: true,
+					caller: null,
+				}),
+				contentHeader({
 					kind: "voteEvaluator",
 					names: ["Riyaz"],
 					hasTimer: true,
@@ -251,14 +252,14 @@ describe("slideLayout bodies", () => {
 		});
 
 		it("does not let the Best-Evaluator vote borrow the evaluation's header", () => {
-			const evaluation = header({
+			const evaluation = contentHeader({
 				kind: "evaluation",
 				label: "Evaluation 1",
 				evaluator: "Sudheer",
 				speaker: "Jagpal",
 				time: "3 minutes",
 			});
-			const vote = header({
+			const vote = contentHeader({
 				kind: "voteEvaluator",
 				names: ["Riyaz"],
 				hasTimer: true,
@@ -269,22 +270,29 @@ describe("slideLayout bodies", () => {
 		});
 
 		// The two tests above pin the one collision #446 was about. This one closes
-		// the CLASS: every kind gets the name the jump grid will show it under, and
-		// no two may agree. Keyed by `Slide["kind"]`, so a new slide kind does not
-		// compile until it is listed here and its name is checked against all the
-		// others — the check that was missing when `voteEvaluator` was written.
-		// `slide-layout.ts` already relies on this informally: `functionaryIntro`
+		// the CROSS-KIND class: every kind gets the name the jump grid will show it
+		// under, and no two KINDS may agree — read through `slideName`, the same
+		// function the grid calls, so this binds to the real derivation and not a
+		// copy of it. Keyed by `Slide["kind"]`, so a new slide kind does not compile
+		// until it is listed here and its own name is checked against all the others
+		// — the check that was missing when `voteEvaluator` was written.
+		// `slide-layout.ts` already relied on this informally: `functionaryIntro`
 		// carries a comment explaining its header avoids colliding with
 		// "Toastmaster Intro", with nothing enforcing it until now.
+		//
+		// It samples ONE slide per kind, so it is deliberately blind to WITHIN-kind
+		// repeats, of which the deck has two by design: one `evaluation` per
+		// evaluator, and the two hand-offs into the General Evaluator, pinned at
+		// agenda-slides.test.ts:683 as four distinct labels across five slides. The
+		// property the grid really wants is that no two ADJACENT slides share a
+		// name; that test is not here because it does not pass yet (see #458).
 		it("gives every slide kind a name no other kind shares", () => {
-			// `slideLabel` (meeting-present.tsx) resolves exactly this way, and the
-			// grid cell is that string verbatim.
-			const label = (slide: Slide) => {
-				const l = slideLayout(slide);
-				return l.chrome === "content" ? l.header : l.headline;
-			};
 			const team = [{ role: "Timer", name: "Riyaz" }];
-			const oneOfEach: Record<Slide["kind"], Slide> = {
+			// Mapped rather than `Record<Slide["kind"], Slide>`: a Record only demands
+			// the KEY exist, so a new kind could be satisfied with some other kind's
+			// slide — listed, but with its real header never resolved or compared.
+			// `Extract` pins each value to its own discriminant.
+			const oneOfEach: { [K in Slide["kind"]]: Extract<Slide, { kind: K }> } = {
 				title: {
 					kind: "title",
 					clubName: "MCF Toastmasters Club",
@@ -386,7 +394,7 @@ describe("slideLayout bodies", () => {
 				},
 			};
 
-			const labels = Object.values(oneOfEach).map(label);
+			const labels = Object.values(oneOfEach).map(slideName);
 			// Report the offenders, not just a count — a bare size mismatch sends
 			// the next person hunting through nineteen cases by hand.
 			const duplicated = labels.filter((l, i) => labels.indexOf(l) !== i);
