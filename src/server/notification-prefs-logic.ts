@@ -150,9 +150,15 @@ export async function getReminderOptOutForUser(
 }
 
 /**
- * Set the opt-out for the Person linked to a signed-in user (people.user_id).
- * Returns whether a linked person existed (a signed-in user with no roster
+ * Set the opt-out for EVERY Person linked to a signed-in user (people.user_id).
+ * Returns whether any linked person existed (a signed-in user with no roster
  * Person has no reminders to control — a graceful no-op).
+ *
+ * The fan-out is load-bearing, not incidental (#437): `people.user_id` is not
+ * unique, and the paired reader `getReminderOptOutForUser` reports opted-out
+ * only when ALL linked Persons are. Narrowing this to one row — a `.limit(1)`,
+ * or resolving through `resolveUserPersonId` — would leave the toggle unable
+ * to reach the state it displays, so a user could never turn reminders off.
  */
 export async function setReminderOptOutForUser(
 	userId: string,

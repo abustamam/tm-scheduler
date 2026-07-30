@@ -482,7 +482,14 @@ export const listMyCommitments = createServerFn({ method: "GET" }).handler(
 );
 
 /** A member's upcoming claimed roles by memberId. PUBLIC — no session required.
- *  Mirrors `listMyCommitments` but keyed to the member param instead of the session. */
+ *  Mirrors `listMyCommitments` but keyed to the member param instead of the session.
+ *
+ *  NOTE: the select+where below duplicates `loadMyCommitments`
+ *  (`my-activity-logic.ts`), which this file already imports — the only real
+ *  difference is that this one decorates rows with `urlKey` afterwards. A third
+ *  hand-copy lives in `public-reads.integration.test.ts` as its ONLY test, and
+ *  it has already drifted (it omits `lengthMinutes`), so that test cannot see a
+ *  defect present in both production copies. Unifying them is #473.  */
 export const listMemberCommitments = createServerFn({ method: "GET" })
 	.validator((memberId: unknown) => uuid.parse(memberId))
 	.handler(async ({ data: memberId }) => {
