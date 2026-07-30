@@ -48,12 +48,15 @@ using the **same self-assert trust level as claiming** — no token, no session.
 - The self-assert trust boundary widens from claiming to full agenda editing. The accepted
   residual risk: anyone who claims an *open* TMOD slot can then edit that meeting's agenda —
   tolerated in the self-serve model, mitigated by logging + admin override.
-- **The gate fails closed on an unbackfilled rename.** Because the name fallback is exact, a
-  club that renamed its TMOD role *before* `key` existed to something still containing the
-  canonical word ("Toastmaster of the Evening") has no self-serve editor until its `key` is
-  backfilled. Deliberate: handing an impostor the agenda is worse than a club losing a button
-  an `admin`/`vpe` can still cover. Transitional, tracked as #466 — do not "fix" it by
-  widening the fallback back to a prefix.
+- **The gate fails closed on an unbackfilled rename, and no club is in that state.** Because
+  the name fallback is exact, a club that renamed its TMOD role *before* `key` existed to
+  something still containing the canonical word ("Toastmaster of the Evening") would have no
+  self-serve editor until its `key` was backfilled. That population is empty — nothing was
+  ever renamed before `drizzle/0044` ran — and it cannot grow, because
+  `applyRoleDefinitionUpdate` never touches `key`, so every later rename keeps it. #466 was
+  filed for a backfill migration and closed as unnecessary. If such a club ever appears, fix
+  it by backfilling that row's `key`; do **not** widen the fallback back to a prefix, which is
+  the exact hole #464 closed.
 - **Interim by design.** When real per-member auth lands (ADR-0008 convergence), the
   self-assert gate should be replaced by an authenticated identity check; this ADR is the
   marker for that follow-up.
