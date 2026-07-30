@@ -19,7 +19,9 @@ the nouns in `src/db/schema.ts`.
   unique when present, with email as a fallback match key). Holds the facts that are the same
   across *every* club a person belongs to: name, contact, `original_join_date` (first-ever TM
   join), enrolled Pathways paths, and the optional link to their sign-in account (`user_id`).
-  See ADR-0008 / #64.
+  `user_id` is **not unique**: one account can link several Person rows (duplicates predate the
+  #329 dedupe-on-write and are merged by hand), so resolving a signed-in user to a Person is a
+  deliberate choice, not a lookup — see **Invariants**. See ADR-0008 / #64.
 - **Membership** — a Person's participation in one Club (`members`; one row per person per
   club). Holds the *per-club* facts: role (`club_role` — `admin`/`vpe`/`member`; only
   `admin`/`vpe` may create meetings), `joined_at` ("member of *this* club since"), office
@@ -210,10 +212,12 @@ detail capture, `/me` commitments with release, admin meeting creation with slot
 seed data.
 
 **Out of scope (schema must not block, but build no logic):** swap matching, role-rotation
-fairness, Pathways progress dashboards, multi-club switching UI, calendar export. These are the
-later phases. (Reminder **delivery** is now built — the `notifications` table is drained by an
-in-process poller, #271 / ADR-0023 — but the **producers** that enqueue rows, #272, and
-notification **preferences/unsubscribe**, #274, are still later phases.)
+fairness, Pathways progress dashboards, calendar export. These are the later phases.
+
+**Reminders are fully built.** The `notifications` table is drained by an in-process poller
+(#271 / ADR-0023), the role-assignment producer enqueues rows (#272), and the control layer —
+per-Person opt-out, the no-auth `/unsubscribe` link, and per-club settings — ships alongside it
+(#274, `notification-prefs-logic.ts`). Multi-club switching is built too (`club-switcher.tsx`).
 
 ## Invariants
 
@@ -244,6 +248,29 @@ notification **preferences/unsubscribe**, #274, are still later phases.)
 - A `notifications` row is delivered **at most once**: the poller claims it with a conditional
   update (bump `attempts` / stamp `last_attempted_at` `WHERE sent_at IS NULL AND attempts = <read>`)
   before sending, then sets `sent_at` on success. Never send without claiming first (ADR-0023).
+- A signed-in user may map to **several Person rows** (`people.user_id` is not unique — ADR-0008).
+  Never resolve one with a bare `where(eq(people.userId, …))`: with no `ORDER BY` and no `LIMIT`
+  that returns an ARBITRARY row, and two such queries in one request can disagree. Three
+  resolvers in `src/server/person-identity-logic.ts` answer three different questions — pick the
+  one that matches yours:
+  - `resolveUserPersonId` — the ONE canonical Person (most memberships, then oldest, then id).
+    For a person-level write that must land on a single record, e.g. declaring a Pathways path.
+  - `userPersonIds` — EVERY linked Person. For self-checks ("is this roster row me?"), which a
+    single arbitrary Person can answer "no" about the user's own record.
+  - `userMemberIds` — EVERY roster membership across every linked Person and every club (#437).
+    For "what have *I* got?" surfaces: the speech log, upcoming commitments.
+  `userMemberIds` deliberately OMITS the `members.status = 'active'` filter that `auth-context.ts`
+  applies to the club switcher, so it is a strict **superset** of the switcher, not a match for
+  it: leaving a club does not un-give the speeches you gave there. Do not "reconcile" the two by
+  adding a status filter — that silently re-breaks #437 for anyone whose old membership lapsed.
+- A reminder email is addressed to the **account** (`notifications.user_id`), never to the Person,
+  so duplicate Persons on one account mail the identical inbox. Any per-Person reminder preference
+  must therefore converge across EVERY Person on the account: both writers do
+  (`setReminderOptOutForUser` from the `/me` toggle, `setPersonReminderOptOut` from the no-auth
+  `/unsubscribe` link), and the reader `getReminderOptOutForUser` reports opted-out only when every
+  **mailable** Person is — mailable meaning one holding a roster membership, matching the join the
+  #272 producer builds its recipients from. A membership-less Person is structurally unreachable by
+  mail and must not vote. See #437 / #472.
 
 ## Where decisions live
 

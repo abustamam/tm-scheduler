@@ -3,7 +3,7 @@
 A mobile-first web app for scheduling Toastmasters club meetings. Members claim meeting
 roles from their phone in one tap; a VP Education / admin creates meetings, which auto-
 generate the roles to be filled. It replaces a shared spreadsheet — the wins over the sheet
-are at-a-glance "what's still open," one-tap claiming, and (soon) automatic reminders.
+are at-a-glance "what's still open," one-tap claiming, and automatic role reminders.
 
 For the domain model and the reasoning behind the architecture, read `CONTEXT.md` and
 `docs/adr/`. Agent/contributor guidance is in `CLAUDE.md`.
