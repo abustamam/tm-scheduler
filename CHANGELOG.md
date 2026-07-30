@@ -2,6 +2,13 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.1.5.0] - 2026-07-30
+
+### Fixed
+
+- Clubs on the MCF variant that run no functionaries no longer see "Introduces the General Evaluator" on the agenda. The room was handed to the General Evaluator and taken straight back, for introductions that never happened — and at a club with nothing scheduled in between, the line printed twice in a row with the same start time. #449, #458
+- A club with no Toastmaster of the Day no longer prints "returns control to the Toastmaster" at the end of the general evaluation. There was nobody to return control to, and no club has a role by that name. The projected slide already said something different. #449
+
 ## [1.1.4.3] - 2026-07-30
 
 Test coverage only; no behaviour change.

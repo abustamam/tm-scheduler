@@ -151,6 +151,17 @@ export type Beat = (
 	id?: BeatId;
 	requiresAnyOf?: BeatRole[];
 	requiresGroup?: RoleGroup;
+	/**
+	 * An ADDITIONAL group gate that ANDs with whatever else the beat sets,
+	 * instead of replacing it the way `requiresGroup` does (#449).
+	 *
+	 * The MCF opening hand-off needs BOTH conditions: a General Evaluator to
+	 * introduce, AND functionaries for them to introduce afterwards. It exists
+	 * only to set up the functionary intro that follows, so without the second
+	 * gate a club with a GE and no functionaries was handed the room and given
+	 * it straight back.
+	 */
+	alsoRequiresGroup?: RoleGroup;
 	/** Alternative owners/details, each used when its `unless` role has no slots
 	 *  this meeting (#363). PLURAL because one beat can need two independent
 	 *  answers: a vote beat drops its timer's-report clause when the club runs no
@@ -543,6 +554,14 @@ export function buildRunOfShow({
 					minutes: 0,
 					handoff: true,
 					requiresAnyOf: [GENERAL_EVALUATOR_ROLE],
+					// Gated on the functionaries as well as the GE (#449). This row
+					// exists only to hand the room over for the functionary intro that
+					// follows, so a club with a General Evaluator and no functionaries
+					// handed the room over and took it straight back, with the GE
+					// doing nothing until the evaluation segment where they are
+					// introduced again. `alsoRequiresGroup` ANDs — plain
+					// `requiresGroup` would REPLACE the General-Evaluator gate above.
+					alsoRequiresGroup: "functionaries",
 				},
 			]
 		: [];
@@ -766,15 +785,25 @@ export function buildRunOfShow({
 			// giving the room back. `beatDuration` matches on `id`, not `detail`.
 			detail: "Overall meeting evaluation · returns control to the Toastmaster",
 			minutes: 2,
-			// ONE entry setting BOTH fields, not two entries — the plural mechanism
-			// is for independent triggers, and here there is only one: with no
-			// General Evaluator the Toastmaster gives the overall evaluation AND has
-			// nobody to return control to, having never given it away. Splitting it
-			// in two would let a future edit fire the owner swap without the clause
-			// drop and print "Toastmaster of the Day · Alice | Overall meeting
-			// evaluation · returns control to the Toastmaster".
+			// TWO independent triggers, which is exactly what the plural mechanism is
+			// for (#449):
+			//
+			// 1. No General Evaluator — the Toastmaster gives the overall evaluation
+			//    AND has nobody to return control to, having never given it away.
+			//    ONE entry sets both fields, so a future edit cannot fire the owner
+			//    swap without the clause drop and print "Toastmaster of the Day ·
+			//    Alice | Overall meeting evaluation · returns control to the
+			//    Toastmaster".
+			// 2. No Toastmaster of the Day — the clause promises to return control
+			//    to somebody who is not at the meeting, and names a role that does
+			//    not exist under that name ("the Toastmaster"; the role is
+			//    "Toastmaster of the Day"). That is the phantom-role-name mistake
+			//    `BeatFallback`'s own docblock criticises the pre-#363 code for.
+			//    The deck's matching slide already said "Closing Remarks" here, so
+			//    the two surfaces were stating different closing instructions.
 			fallbacks: [
 				{ ...GE_COVERED_BY_TOASTMASTER, detail: "Overall meeting evaluation" },
+				{ unless: TOASTMASTER_ROLE, detail: "Overall meeting evaluation" },
 			],
 		},
 		{
@@ -1013,7 +1042,26 @@ function resolveDetail(beat: Beat, slots: AgendaSlot[]): string {
  * the awards beat, which are about fixed standard roles rather than a group the
  * club composes. An ungated beat always renders.
  */
+/**
+ * `alsoRequiresGroup` ANDs; the other two keep their existing precedence.
+ *
+ * The obvious refactor — make `requiresGroup` AND with `requiresAnyOf` instead
+ * of returning on its own — is WRONG, and the parity matrix says so: the
+ * functionary-intro beat sets both, and they do NOT ask the same question.
+ * `requiresAnyOf: FUNCTIONARY_ROLES` names the standard four; `requiresGroup:
+ * "functionaries"` is every role the club has put in that category, including
+ * ones it invented. ANDing them drops the intro for a club running all-custom
+ * functionaries, which `all-custom functionaries (standard four disabled)`
+ * catches. Hence a separate additive gate rather than a change to the existing
+ * one (#449).
+ */
 function requirementsMet(beat: Beat, slots: AgendaSlot[]): boolean {
+	if (
+		beat.alsoRequiresGroup != null &&
+		GROUP_SLOTS[beat.alsoRequiresGroup](slots).length === 0
+	) {
+		return false;
+	}
 	if (beat.requiresGroup != null)
 		return GROUP_SLOTS[beat.requiresGroup](slots).length > 0;
 	if (beat.requiresAnyOf == null) return true;

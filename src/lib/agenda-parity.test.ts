@@ -960,9 +960,11 @@ const holderOf = (who: string): string | null => labelOf(who).person;
  * "consistent wrongness" blind spot #450 exists to close.
  */
 const KNOWN_DUPLICATE_HANDOFFS: Record<string, string[]> = {
-	"Toastmaster and General Evaluator only — MCF variant": [
-		"Toastmaster of the Day · Schinthia → Introduces the General Evaluator",
-	],
+	// EMPTY as of #449/#458 — `expandRunSheet` and `pushHandoff` now suppress a
+	// hand-off identical to the one immediately before it, so no club shape emits
+	// one. The table stays because the assertion reads it: a future shape that
+	// grows a duplicate has to be listed here deliberately, in a diff, rather
+	// than sliding in behind a green suite.
 };
 
 describe("golden output — properties of the run sheet itself (#450)", () => {

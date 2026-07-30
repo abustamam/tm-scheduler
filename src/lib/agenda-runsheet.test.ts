@@ -1573,13 +1573,19 @@ describe("expandRunSheet — the functionary-intro and functionary-reports beats
 		expect(rows.some((r) => r.detail === "Evaluates the evaluators")).toBe(
 			true,
 		);
+		// WITHOUT the trailing clause: this club has no Toastmaster of the Day, so
+		// there is nobody to return control to, and "the Toastmaster" is a role
+		// name that exists at no club under that spelling (#449).
+		expect(rows.some((r) => r.detail === "Overall meeting evaluation")).toBe(
+			true,
+		);
 		expect(
 			rows.some(
 				(r) =>
 					r.detail ===
 					"Overall meeting evaluation · returns control to the Toastmaster",
 			),
-		).toBe(true);
+		).toBe(false);
 	});
 
 	it("renders the functionary reports when the GE slot exists and at least one functionary slot exists", () => {
@@ -1693,44 +1699,55 @@ describe("expandRunSheet — the functionary-intro and functionary-reports beats
 		expect(introRow(expandRunSheet([totd, ge], template))).toBeUndefined();
 	});
 
-	// The motivating case for the render-side hand-off band (#363): with the
-	// functionary intro dropped (no functionary slots, previous test), the GE
-	// hand-off and the speakers hand-off — both owned by the Toastmaster — become
-	// ADJACENT rows, and `buildTimeline` gives 0-minute rows the same clock stamp
-	// as whatever follows them. `meeting-agenda-print.test.tsx`'s guard against
-	// that collision (unique React keys, a compact band instead of a duplicate
-	// block) is only worth having while this stays reachable — if a future change
-	// separates these two beats, this test should fail first.
-	it("MCF variant: with a GE and speakers but no functionaries, the GE and speakers hand-offs land adjacent, same owner, same stamp", () => {
+	// This used to pin the defect rather than the fix (#449): with no
+	// functionaries the opening hand-off into the General Evaluator still fired,
+	// landing adjacent to the speakers hand-off under the same owner and the same
+	// clock stamp — the room handed over and taken straight back, for an intro
+	// that never happened. The beat now carries `alsoRequiresGroup:
+	// "functionaries"`, so it does not fire at all here.
+	//
+	// The render-side hand-off band this motivated (#363) is still worth having:
+	// `meeting-agenda-print.test.tsx` guards adjacent 0-minute rows generally,
+	// and other shapes still produce them.
+	it("MCF variant: with a GE and speakers but no functionaries, the opening GE hand-off does not fire", () => {
 		const template = buildRunOfShow({ geIntroducesFunctionaries: true });
 		const rows = expandRunSheet([totd, ge, speaker], template);
 
-		const geHandoff = rows.findIndex(
-			(r) => r.detail === "Introduces the General Evaluator",
-		);
+		// ONE, not zero: two beats carry this detail. The OPENING hand-off is gone
+		// (nothing to hand over for), while the post-Table-Topics one still fires
+		// and falls back to the Toastmaster because the club runs no Table Topics
+		// Master — that hand-back is real, the room does have to reach the GE for
+		// the evaluation segment.
+		expect(
+			rows.filter((r) => r.detail === "Introduces the General Evaluator"),
+		).toHaveLength(1);
+
+		// The speakers hand-off is unaffected — this is a narrowing of one beat's
+		// gate, not a change to the hand-off mechanism.
 		const speakersHandoff = rows.findIndex(
 			(r) => r.detail === "Introduces the speakers",
 		);
-		expect(geHandoff).toBeGreaterThanOrEqual(0);
-		// Adjacent: the functionary-intro beat between them contributed no row.
-		expect(speakersHandoff).toBe(geHandoff + 1);
-		expect(rows[geHandoff]).toMatchObject({
-			who: "Toastmaster of the Day · Dana",
-			handoff: true,
-			minutes: 0,
-		});
+		expect(speakersHandoff).toBeGreaterThanOrEqual(0);
 		expect(rows[speakersHandoff]).toMatchObject({
 			who: "Toastmaster of the Day · Dana",
 			handoff: true,
 			minutes: 0,
 		});
+	});
 
-		const timed = buildTimeline(
-			rows,
-			"2026-07-07T23:45:00Z",
-			"America/Chicago",
-		);
-		expect(timed[speakersHandoff].time).toBe(timed[geHandoff].time);
+	// The GE is still introduced when there IS something to hand over for, which
+	// is what keeps the fix above a narrowing rather than a removal.
+	it("MCF variant: with a GE AND functionaries, the opening hand-off fires", () => {
+		const template = buildRunOfShow({ geIntroducesFunctionaries: true });
+		const rows = expandRunSheet([totd, ge, grammarian, speaker], template);
+
+		// BOTH now: the opening hand-off (there are functionaries to introduce)
+		// and the evaluation one. They are far apart — the functionary intro, the
+		// speakers hand-off and the speech all sit between them — so the adjacency
+		// suppression does not apply and both are genuinely needed.
+		expect(
+			rows.filter((r) => r.detail === "Introduces the General Evaluator"),
+		).toHaveLength(2);
 	});
 
 	it("MCF variant: the Toastmaster covers the functionary intro when the club runs no General Evaluator (#363)", () => {

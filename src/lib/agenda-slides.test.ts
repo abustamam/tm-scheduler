@@ -534,13 +534,13 @@ describe("hand-off slides (#363)", () => {
 	): s is Extract<Slide, { kind: (typeof VOTE_KINDS)[number] }> =>
 		(VOTE_KINDS as readonly string[]).includes(s.kind);
 
+	// `CLUB` runs no functionary, so the OPENING hand-off into the General
+	// Evaluator no longer fires (#449): it exists only to set up the functionary
+	// intro, which this club has nothing to fill. The post-Table-Topics hand-off
+	// into the GE is unaffected and still appears below, from the Table Topics
+	// Master. The next test covers the club that does run functionaries.
 	it("projects each hand-off, in run-sheet order, naming both parties", () => {
 		expect(handoffs({ geIntroducesFunctionaries: true })).toEqual([
-			{
-				kind: "handoff",
-				from: { role: "Toastmaster of the Day", name: "Faisal" },
-				to: "the General Evaluator",
-			},
 			{
 				kind: "handoff",
 				from: { role: "Toastmaster of the Day", name: "Faisal" },
@@ -561,6 +561,31 @@ describe("hand-off slides (#363)", () => {
 				from: { role: "General Evaluator", name: "Riyaz" },
 				to: "the speech evaluators",
 			},
+		]);
+	});
+
+	// The other half of the narrowing above: with functionaries present the
+	// opening hand-off is back, so #449 gated the beat rather than removing it.
+	it("MCF variant: the opening GE hand-off returns once the club runs functionaries", () => {
+		const timer = {
+			...totd,
+			id: "ti",
+			roleKey: "timer",
+			roleName: "Timer",
+			category: "functionary" as const,
+			assigneeName: "Tara",
+		};
+		expect(
+			handoffs({
+				geIntroducesFunctionaries: true,
+				slots: [...CLUB, timer],
+			}).map((s) => s.to),
+		).toEqual([
+			"the General Evaluator",
+			"the speakers",
+			"the Table Topics Master",
+			"the General Evaluator",
+			"the speech evaluators",
 		]);
 	});
 
