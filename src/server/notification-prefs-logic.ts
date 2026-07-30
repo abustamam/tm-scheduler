@@ -13,7 +13,7 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
-import { clubs, people } from "#/db/schema";
+import { clubs, members, people } from "#/db/schema";
 
 // ---------------------------------------------------------------------------
 // Club-level reminder settings
@@ -105,40 +105,110 @@ export async function getPersonReminderOptOut(
 	return row?.optOut ?? false;
 }
 
-/** Flip a person's opt-out preference. Used by the no-auth /unsubscribe route
- *  (personId recovered from the signed token) and re-subscribe. Returns whether
- *  a matching person row was updated. */
+/**
+ * Flip a person's opt-out preference. Used by the no-auth /unsubscribe route
+ * (personId recovered from the signed token) and re-subscribe. Returns whether
+ * any matching person row was updated.
+ *
+ * Applies to EVERY Person on the same account, not just the one named by the
+ * token (#437 / #472). Reminder mail is addressed per-ACCOUNT, not per-Person —
+ * `selectDueNotifications` reads the recipient from `user` via
+ * `notifications.user_id`, which the #272 producer stamps from
+ * `people.user_id`. With duplicate Persons (ADR-0008: `people.user_id` is not
+ * unique, and the #329 merge is a manual step) two Person rows therefore mail
+ * the IDENTICAL inbox, so flipping one row let mail keep arriving at the
+ * address that had just asked it to stop.
+ *
+ * A Person with no `user_id` is a roster row that never signed in: it has no
+ * siblings to converge, so it flips alone. That is also why the account lookup
+ * runs first rather than joining — `eq(people.userId, null)` is never true in
+ * SQL, and widening it would sweep in unrelated unlinked Persons.
+ */
 export async function setPersonReminderOptOut(
 	personId: string,
 	optedOut: boolean,
 ): Promise<{ ok: true; updated: boolean }> {
+	const [target] = await db
+		.select({ userId: people.userId })
+		.from(people)
+		.where(eq(people.id, personId))
+		.limit(1);
+	if (!target) return { ok: true as const, updated: false };
+
 	const rows = await db
 		.update(people)
 		.set({ reminderOptOut: optedOut })
-		.where(eq(people.id, personId))
+		.where(
+			target.userId == null
+				? eq(people.id, personId)
+				: eq(people.userId, target.userId),
+		)
 		.returning({ id: people.id });
 	return { ok: true as const, updated: rows.length > 0 };
 }
 
 /**
- * Resolve a signed-in user → their Person (people.user_id) and read the opt-out.
- * Powers the /me toggle. Missing person ⇒ opted-in (`false`).
+ * Whether the signed-in user is opted OUT of reminder emails. Powers the /me
+ * toggle. No linked Person ⇒ opted-in (`false`).
+ *
+ * Reports opted-out only when every linked Person that can ACTUALLY BE MAILED
+ * is opted out (#437). `people.user_id` is not unique, and the suppression this
+ * reads is enforced per-Person by the #272 producer (`listOptedOutPersonIds`,
+ * keyed on `members.person_id`) — so if one mailable Person is still opted in,
+ * the user still receives reminders and "opted out" would be a lie on a
+ * preference screen. Reading one arbitrary row could tell that lie in either
+ * direction.
+ *
+ * "Mailable" means holding a roster membership, because the producer builds its
+ * recipients by joining `roleSlots → members → people`. A membership-less
+ * linked Person is structurally unreachable by mail, and counting it was a real
+ * defect rather than a theoretical one: in the current dev database EIGHT
+ * accounts carry 5-6 linked Persons of which exactly ONE holds a membership, so
+ * the orphans dominate. Since they arrive with the opted-in column default,
+ * counting them meant one newly-linked orphan flipped a user's screen back to
+ * "reminders on" without changing a single thing they receive.
+ *
+ * The fallback matters: an account with linked Persons but NO membership keeps
+ * being judged on all of them, so its toggle still round-trips instead of
+ * sticking. Such a user receives nothing either way — the toggle is recording a
+ * preference, not predicting mail.
+ *
+ * Both writers converge every Person on the account — `setReminderOptOutForUser`
+ * from the toggle and `setPersonReminderOptOut` from the no-auth /unsubscribe
+ * link — so the reader and the writers share one domain. The remaining way to
+ * observe a split is a duplicate Person minted AFTER an opt-out (create-club and
+ * roster-paste mint a fresh Person per club, #329), which arrives carrying the
+ * opted-in column default. Reading that state as "opted in" is correct rather
+ * than unfortunate: reminders really are reaching the inbox again, and one use
+ * of the toggle re-converges every row.
  */
 export async function getReminderOptOutForUser(
 	userId: string,
 ): Promise<boolean> {
-	const [row] = await db
-		.select({ optOut: people.reminderOptOut })
+	const rows = await db
+		.select({ optOut: people.reminderOptOut, memberId: members.id })
 		.from(people)
-		.where(eq(people.userId, userId))
-		.limit(1);
-	return row?.optOut ?? false;
+		.leftJoin(members, eq(members.personId, people.id))
+		.where(eq(people.userId, userId));
+	if (rows.length === 0) return false;
+
+	// A Person holding several memberships appears once per membership; harmless
+	// under `every`, and cheaper than a DISTINCT.
+	const mailable = rows.filter((r) => r.memberId != null);
+	const domain = mailable.length > 0 ? mailable : rows;
+	return domain.every((r) => r.optOut);
 }
 
 /**
- * Set the opt-out for the Person linked to a signed-in user (people.user_id).
- * Returns whether a linked person existed (a signed-in user with no roster
+ * Set the opt-out for EVERY Person linked to a signed-in user (people.user_id).
+ * Returns whether any linked person existed (a signed-in user with no roster
  * Person has no reminders to control — a graceful no-op).
+ *
+ * The fan-out is load-bearing, not incidental (#437): `people.user_id` is not
+ * unique, and the paired reader `getReminderOptOutForUser` reports opted-out
+ * only when ALL linked Persons are. Narrowing this to one row — a `.limit(1)`,
+ * or resolving through `resolveUserPersonId` — would leave the toggle unable
+ * to reach the state it displays, so a user could never turn reminders off.
  */
 export async function setReminderOptOutForUser(
 	userId: string,

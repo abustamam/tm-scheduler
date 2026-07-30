@@ -80,3 +80,15 @@ scope per `CONTEXT.md`); we only decline to model them onto a membership.
 - Until Phase B, `club_role` still resolves via `club_memberships`; a reader must know the
   Membership glossary term describes the *target* home of `club_role`, which Phase A does not
   yet move.
+- **"One row per human" is the target, not an enforced constraint — and the gap is load-bearing.**
+  `people.user_id` carries no unique index, and the dedupe above is precedence for *writes*: #329
+  added dedupe-on-write plus a superadmin merge, but the merge is a manual, post-deploy action, so
+  duplicates minted before it (and by any path that still mints a fresh Person per club) survive in
+  production. One account therefore links several Person rows in the wild. Every caller that
+  resolved a user with `where(eq(people.userId, …))` and took the first row was picking an
+  arbitrary one; #437 replaced that with three explicit resolvers in
+  `src/server/person-identity-logic.ts` — `resolveUserPersonId` (one canonical Person),
+  `userPersonIds` (all linked Persons), `userMemberIds` (all memberships, status-agnostic) — each
+  scoped to a different question. Adding a unique constraint on `user_id` would be a data
+  migration, not a schema tweak, and would change the meaning of all three. See `CONTEXT.md`
+  **Invariants**.

@@ -12,7 +12,8 @@
 import { randomUUID } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { notifications, people } from "#/db/schema";
+import { user } from "#/db/auth-schema";
+import { members, notifications, people } from "#/db/schema";
 import type { SendEmailParams } from "#/lib/email";
 import {
 	createUnsubscribeToken,
@@ -108,6 +109,222 @@ describe.skipIf(!hasTestDb)("reminder control layer (#274)", () => {
 	it("setReminderOptOutForUser is a graceful no-op for a user with no linked person", async () => {
 		const res = await setReminderOptOutForUser(randomUUID(), true);
 		expect(res).toEqual({ ok: true, updated: false });
+	});
+
+	// --- Duplicate Persons on one account (#437) ------------------------------
+	//
+	// `people.user_id` is not unique, and the #272 producer suppresses per-Person
+	// (listOptedOutPersonIds, keyed on members.person_id). So the /me toggle can
+	// only honestly say "opted out" when every MAILABLE linked Person is — one
+	// arbitrary row could report either answer wrongly, and a Person holding no
+	// roster membership can never be mailed at all, so it does not get a vote.
+
+	/**
+	 * A second Person on the same account — the duplicate #329 has not merged.
+	 *
+	 * It carries its OWN roster membership, which is what makes it mailable: the
+	 * #272 producer reaches recipients through roleSlots→members→people, so a
+	 * membership-less duplicate could never receive a reminder and deliberately
+	 * does not count toward the toggle (see the membership-less test below).
+	 */
+	async function addDuplicatePerson(): Promise<string> {
+		const personId = await seedPerson({
+			name: "Duplicate Member",
+			userId: club.memberUserId,
+		});
+		await testDb.insert(members).values({
+			clubId: club.clubId,
+			personId,
+			name: "Duplicate Member",
+			clubRole: "member",
+			status: "active",
+		});
+		return personId;
+	}
+
+	it("reports opted-in while ANY linked Person still receives reminders", async () => {
+		// Both writers now converge every row on the account, so the split state
+		// is reached the one way that remains: the account opts out, and a NEW
+		// duplicate Person is minted afterwards (create-club / roster-paste mints
+		// a fresh Person per club, #329) carrying the opted-IN column default.
+		await setReminderOptOutForUser(club.memberUserId, true);
+		const dupe = await addDuplicatePerson();
+		try {
+			expect(await listOptedOutPersonIds([club.personId, dupe])).toEqual(
+				new Set([club.personId]),
+			);
+			// Reminders are genuinely still being sent via the newcomer, so
+			// "opted out" would be a lie on a preference screen.
+			expect(await getReminderOptOutForUser(club.memberUserId)).toBe(false);
+		} finally {
+			await testDb.delete(people).where(eq(people.id, dupe));
+		}
+	});
+
+	// The gap #472 reported: reminder mail is addressed per-ACCOUNT
+	// (selectDueNotifications joins `user` via notifications.user_id), so two
+	// linked Persons mail the same inbox. Flipping one row let mail keep
+	// arriving at the address that had just asked it to stop.
+	it("one-click unsubscribe suppresses EVERY Person on the account", async () => {
+		const dupe = await addDuplicatePerson();
+		try {
+			// Exactly what the no-auth route does with a verified signed token.
+			const token = createUnsubscribeToken(club.personId);
+			const personId = verifyUnsubscribeToken(token) as string;
+			await setPersonReminderOptOut(personId, true);
+
+			expect(await listOptedOutPersonIds([club.personId, dupe])).toEqual(
+				new Set([club.personId, dupe]),
+			);
+			expect(await getReminderOptOutForUser(club.memberUserId)).toBe(true);
+		} finally {
+			await testDb.delete(people).where(eq(people.id, dupe));
+		}
+	});
+
+	// ...but a Person that never signed in has no account to converge, and must
+	// not drag along every other unlinked roster Person in the database.
+	it("unsubscribe for an unlinked roster Person flips only that row", async () => {
+		const loner = await seedPerson({ name: "Never Signed In" });
+		const bystander = await seedPerson({ name: "Unrelated Roster Person" });
+		try {
+			await setPersonReminderOptOut(loner, true);
+			expect(await listOptedOutPersonIds([loner, bystander])).toEqual(
+				new Set([loner]),
+			);
+		} finally {
+			await testDb.delete(people).where(inArray(people.id, [loner, bystander]));
+		}
+	});
+
+	it("reports opted-out once every linked Person is opted out", async () => {
+		const dupe = await addDuplicatePerson();
+		try {
+			// One use of the /me toggle converges every row — that is why the
+			// writer fans out while the reader aggregates.
+			await setReminderOptOutForUser(club.memberUserId, true);
+
+			expect(await listOptedOutPersonIds([club.personId, dupe])).toEqual(
+				new Set([club.personId, dupe]),
+			);
+			expect(await getReminderOptOutForUser(club.memberUserId)).toBe(true);
+
+			// ...and toggling back releases both, not just one.
+			await setReminderOptOutForUser(club.memberUserId, false);
+			expect(await listOptedOutPersonIds([club.personId, dupe])).toEqual(
+				new Set(),
+			);
+			expect(await getReminderOptOutForUser(club.memberUserId)).toBe(false);
+		} finally {
+			await testDb.delete(people).where(eq(people.id, dupe));
+		}
+	});
+
+	// The two tests above assert the CONTRACT but cannot, on their own, catch a
+	// reader that takes one arbitrary row: when the answer is false, at least one
+	// row is false, so an arbitrary pick is often right by accident. Worse, an
+	// UPDATE relocates a row to the end of the heap, so an unordered LIMIT 1
+	// reliably returns the row that was NOT just flipped — which is the opted-in
+	// one, making a broken reader agree with the fixture every time.
+	//
+	// This fixture removes that luck: the opted-out Person is written FIRST and
+	// never updated, so it is the row an unordered scan hands back.
+	it("reports opted-in even when the FIRST linked Person is the opted-out one", async () => {
+		const soloUserId = randomUUID();
+		await testDb.insert(user).values({
+			id: soloUserId,
+			name: "Split Prefs",
+			email: `${soloUserId}@test.example`,
+		});
+		// Inserted (not updated) with the flag already set, so the row keeps its
+		// original heap position: insert order is the scan order.
+		const [first] = await testDb
+			.insert(people)
+			.values({
+				name: "Opted Out (first)",
+				email: `${randomUUID()}@test.example`,
+				userId: soloUserId,
+				reminderOptOut: true,
+			})
+			.returning({ id: people.id });
+		const [second] = await testDb
+			.insert(people)
+			.values({
+				name: "Opted In (second)",
+				email: `${randomUUID()}@test.example`,
+				userId: soloUserId,
+			})
+			.returning({ id: people.id });
+		const optedOut = first.id;
+		const stillOptedIn = second.id;
+		try {
+			expect(await listOptedOutPersonIds([optedOut, stillOptedIn])).toEqual(
+				new Set([optedOut]),
+			);
+			// One row says "suppressed", the account is not.
+			expect(await getReminderOptOutForUser(soloUserId)).toBe(false);
+		} finally {
+			await testDb
+				.delete(people)
+				.where(inArray(people.id, [optedOut, stillOptedIn]));
+			await testDb.delete(user).where(eq(user.id, soloUserId));
+		}
+	});
+
+	// A linked Person holding no roster membership can never be mailed — the
+	// producer builds recipients through roleSlots→members→people. Counting it
+	// let one newly-linked orphan flip the screen back to "reminders on" with no
+	// change in what arrives. This is the dominant real shape: eight accounts in
+	// the dev database carry 5-6 linked Persons of which exactly one is rostered.
+	it("ignores membership-less Persons when deciding the toggle", async () => {
+		const orphan = await seedPerson({
+			name: "Linked But Unrostered",
+			userId: club.memberUserId,
+		});
+		try {
+			// The ROSTERED Person opts out; the orphan keeps the opted-in default.
+			await setPersonReminderOptOut(club.personId, true);
+			await testDb
+				.update(people)
+				.set({ reminderOptOut: false })
+				.where(eq(people.id, orphan));
+
+			// The orphan cannot receive anything, so it must not veto the answer.
+			expect(await getReminderOptOutForUser(club.memberUserId)).toBe(true);
+		} finally {
+			await testDb.delete(people).where(eq(people.id, orphan));
+		}
+	});
+
+	// ...but an account with NO rostered Person at all still has to be able to
+	// work its own toggle, rather than reading a stuck value forever.
+	it("an account with only membership-less Persons still round-trips", async () => {
+		const soloUserId = randomUUID();
+		await testDb.insert(user).values({
+			id: soloUserId,
+			name: "No Roster Yet",
+			email: `${soloUserId}@test.example`,
+		});
+		const orphan = await seedPerson({
+			name: "Unrostered",
+			userId: soloUserId,
+		});
+		try {
+			expect(await getReminderOptOutForUser(soloUserId)).toBe(false);
+			await setReminderOptOutForUser(soloUserId, true);
+			expect(await getReminderOptOutForUser(soloUserId)).toBe(true);
+			await setReminderOptOutForUser(soloUserId, false);
+			expect(await getReminderOptOutForUser(soloUserId)).toBe(false);
+		} finally {
+			await testDb.delete(people).where(eq(people.id, orphan));
+			await testDb.delete(user).where(eq(user.id, soloUserId));
+		}
+	});
+
+	it("a user with no linked Person reads as opted-in, not opted-out", async () => {
+		// `every` over an empty set is vacuously true — the row count guard is
+		// what keeps a person-less account from reading as suppressed.
+		expect(await getReminderOptOutForUser(randomUUID())).toBe(false);
 	});
 
 	// --- No-auth unsubscribe token -------------------------------------------

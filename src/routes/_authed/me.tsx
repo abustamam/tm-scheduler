@@ -174,7 +174,14 @@ function MyCommitments() {
 										className="mt-1 flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
 									>
 										<CalendarDays className="size-4" aria-hidden />
-										{formatMeetingDate(c.scheduledAt, c.timezone)} ·{" "}
+										{/* Club first: this list spans every club the user belongs
+										    to (#437), while the shell header names only the active
+										    one. Without it a two-club member sees two rows that
+										    differ by date alone — each with its own Release. */}
+										<span className="font-medium text-foreground">
+											{c.clubName}
+										</span>{" "}
+										· {formatMeetingDate(c.scheduledAt, c.timezone)} ·{" "}
 										{formatMeetingTimeRange(
 											c.scheduledAt,
 											c.lengthMinutes,

@@ -10,7 +10,6 @@ import {
 	meetings,
 	memberAvailability,
 	members,
-	people,
 	roleDefinitions,
 	roleSlots,
 	speeches,
@@ -47,6 +46,7 @@ import {
 	applyReopenMeeting,
 	applyWordOfTheDayUpdate,
 } from "./meetings-logic";
+import { loadMyCommitments } from "./my-activity-logic";
 import { currentOfficersForClub } from "./officer-terms-logic";
 import { loadPastMeetings } from "./past-meetings-logic";
 import { listRoleDefinitions } from "./role-definitions-logic";
@@ -477,58 +477,19 @@ export const getNextMeeting = createServerFn({ method: "GET" })
 export const listMyCommitments = createServerFn({ method: "GET" }).handler(
 	async () => {
 		const currentUser = await requireUser();
-
-		// Resolve the signed-in user → Person (people.user_id) → their roster
-		// member(s) (ADR-0008 Phase B).
-		const myMembers = await db
-			.select({ id: members.id })
-			.from(members)
-			.innerJoin(people, eq(people.id, members.personId))
-			.where(eq(people.userId, currentUser.id));
-
-		if (myMembers.length === 0) {
-			return [];
-		}
-
-		// Use the first linked member (typical: one user = one member).
-		const memberId = myMembers[0].id;
-
-		return db
-			.select({
-				slotId: roleSlots.id,
-				status: roleSlots.status,
-				meetingId: meetings.id,
-				scheduledAt: meetings.scheduledAt,
-				lengthMinutes: meetings.lengthMinutes,
-				theme: meetings.theme,
-				location: meetings.location,
-				clubName: clubs.name,
-				timezone: clubs.timezone,
-				roleName: roleDefinitions.name,
-				isSpeakerRole: roleDefinitions.isSpeakerRole,
-				speechTitle: speeches.title,
-			})
-			.from(roleSlots)
-			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
-			.innerJoin(clubs, eq(clubs.id, meetings.clubId))
-			.innerJoin(
-				roleDefinitions,
-				eq(roleDefinitions.id, roleSlots.roleDefinitionId),
-			)
-			.leftJoin(speeches, eq(speeches.id, roleSlots.speechId))
-			.where(
-				and(
-					eq(roleSlots.assignedMemberId, memberId),
-					gte(meetings.scheduledAt, new Date()),
-					ne(meetings.status, "cancelled"),
-				),
-			)
-			.orderBy(asc(meetings.scheduledAt));
+		return loadMyCommitments(currentUser.id);
 	},
 );
 
 /** A member's upcoming claimed roles by memberId. PUBLIC — no session required.
- *  Mirrors `listMyCommitments` but keyed to the member param instead of the session. */
+ *  Mirrors `listMyCommitments` but keyed to the member param instead of the session.
+ *
+ *  NOTE: the select+where below duplicates `loadMyCommitments`
+ *  (`my-activity-logic.ts`), which this file already imports — the only real
+ *  difference is that this one decorates rows with `urlKey` afterwards. A third
+ *  hand-copy lives in `public-reads.integration.test.ts` as its ONLY test, and
+ *  it has already drifted (it omits `lengthMinutes`), so that test cannot see a
+ *  defect present in both production copies. Unifying them is #473.  */
 export const listMemberCommitments = createServerFn({ method: "GET" })
 	.validator((memberId: unknown) => uuid.parse(memberId))
 	.handler(async ({ data: memberId }) => {

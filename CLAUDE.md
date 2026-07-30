@@ -77,7 +77,7 @@ Assessed against the diff, not the whole repo: every branch, error path and user
 introduces should have a test that exercises it. `/ship`'s coverage audit reads these numbers and
 gates on them.
 
-Two coverage traps this repo has actually hit, both worth checking when a number looks fine:
+Three coverage traps this repo has actually hit, all worth checking when a number looks fine:
 
 - **A test can pin the wrong thing after a rename.** An assertion matching a role name by string
   (`r.who === "Toastmaster of the Day"`) stopped being unique once a second beat rendered the same
@@ -87,6 +87,12 @@ Two coverage traps this repo has actually hit, both worth checking when a number
   proves the printed run sheet and the projected deck agree; a bug in both derivations passes, and
   adding the failing club shape to its matrix passes too. Cross-surface comparisons need at least
   one golden-output assertion per shape ("this section must exist for this club") alongside them.
+- **An empty-list guard is invisible to a result assertion.** Drizzle compiles an empty
+  `inArray(col, [])` to `false`, so a `if (ids.length === 0) return []` short-circuit returns the
+  same value whether it runs or not — a test asserting the RESULT passes with the guard deleted and
+  cannot fail. Assert the observable the guard actually controls: that the round-trip was skipped
+  (`vi.spyOn(testDb, "select")` + `not.toHaveBeenCalled()`). Same shape for any guard whose only
+  effect is avoiding work. See `my-activity.integration.test.ts`.
 
 ## Environment
 
@@ -116,8 +122,8 @@ people/members (Person vs Membership, ADR-0008), officer_terms, meetings,
 role_definitions/role_slots (ADR-0005), member_availability, speeches
 (ADR-0009), the Pathways model (pathways_paths, path_enrollments,
 path_level_progress, pathways_projects, pathways_path_levels,
-bcm_project_progress — ADR-0011), sync_tokens, activity_log, and a
-notifications table (schema only). Better-Auth's tables live in
+bcm_project_progress — ADR-0011), sync_tokens, activity_log, and
+notifications (drained by an in-process poller, ADR-0023). Better-Auth's tables live in
 `src/db/auth-schema.ts`. See `CONTEXT.md` for the glossary.
 The `db` client (`src/db/index.ts`) is `drizzle(process.env.DATABASE_URL!, { schema })`.
 Migrations are generated to `./drizzle` (`drizzle.config.ts`); edit the schema, then

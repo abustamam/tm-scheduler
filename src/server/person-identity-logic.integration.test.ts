@@ -18,7 +18,7 @@ import { hasTestDb, testDb } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
-const { resolveUserPersonId, userPersonIds } = await import(
+const { resolveUserPersonId, userMemberIds, userPersonIds } = await import(
 	"./person-identity-logic"
 );
 
@@ -120,6 +120,125 @@ describe.skipIf(!hasTestDb)(
 			expect(all).toContain(a);
 			expect(all).toContain(b);
 			expect(all).toContain((await resolveUserPersonId(userId)) as string);
+		});
+
+		// #437: the membership-level resolver. A user with duplicate Persons holds
+		// memberships under BOTH, and a personal cross-club view that took one of
+		// them showed a subset of the clubs the switcher lists.
+		it("userMemberIds spans every club, across duplicate Persons", async () => {
+			const userId = await makeUser();
+			const p1 = await makePerson(userId, new Date("2021-01-01"));
+			const p2 = await makePerson(userId, new Date("2022-01-01"));
+
+			const madeMembers: string[] = [];
+			for (const [i, personId] of [p1, p2].entries()) {
+				const [club] = await testDb
+					.insert(clubs)
+					.values({
+						name: `Multi ${SUITE_TAG}-${i}`,
+						slug: `multi-${SUITE_TAG}-${i}`,
+					})
+					.returning({ id: clubs.id });
+				createdClubIds.push(club.id);
+				const [m] = await testDb
+					.insert(members)
+					.values({ clubId: club.id, personId, name: "Dup Human" })
+					.returning({ id: members.id });
+				madeMembers.push(m.id);
+			}
+
+			const ids = await userMemberIds(userId);
+			expect(ids).toHaveLength(2);
+			expect(ids).toEqual(expect.arrayContaining(madeMembers));
+			// Both memberships hang off DIFFERENT Persons — the case a
+			// single-Person resolver cannot see.
+			expect(p1).not.toBe(p2);
+		});
+
+		// Needs MORE THAN ONE membership to mean anything: with a single row
+		// every ordering is trivially stable, so the `.orderBy(members.id)` the
+		// resolver documents would go unverified.
+		//
+		// The ids are EXPLICIT and descending, inserted in that order, so heap
+		// order is guaranteed to be the reverse of id order. With random uuids
+		// this detected a missing ORDER BY only ~5 runs in 6 — three random ids
+		// already happen to be sorted one time in six, which is a flaky test
+		// that green-lights the mutation on that run.
+		it("userMemberIds is stable across calls, and sorted by id", async () => {
+			const userId = await makeUser();
+			const personId = await makePerson(userId, new Date("2023-01-01"));
+			const descendingIds = [
+				"00000000-0000-4000-8000-000000000003",
+				"00000000-0000-4000-8000-000000000002",
+				"00000000-0000-4000-8000-000000000001",
+			];
+			for (const [i, memberId] of descendingIds.entries()) {
+				const [club] = await testDb
+					.insert(clubs)
+					.values({
+						name: `Stable ${SUITE_TAG}-${i}`,
+						slug: `stable-${SUITE_TAG}-${i}`,
+					})
+					.returning({ id: clubs.id });
+				createdClubIds.push(club.id);
+				await testDb.insert(members).values({
+					id: memberId,
+					clubId: club.id,
+					personId,
+					name: "Dup Human",
+				});
+			}
+
+			const first = await userMemberIds(userId);
+			expect(first).toHaveLength(3);
+			// Ascending — the exact reverse of the order they were written in.
+			expect(first).toEqual([...descendingIds].reverse());
+
+			const answers = new Set([
+				JSON.stringify(first),
+				JSON.stringify(await userMemberIds(userId)),
+				JSON.stringify(await userMemberIds(userId)),
+			]);
+			expect(answers.size).toBe(1);
+		});
+
+		// The resolver's docstring forbids adding a `members.status` filter here,
+		// on the grounds that a lapsed membership does not un-give the speeches.
+		// Without this test that instruction is unenforced: every other fixture
+		// seeds an ACTIVE membership, so adding `eq(members.status, "active")`
+		// passed the entire 2352-test suite.
+		it("userMemberIds includes LAPSED memberships — history is not un-given", async () => {
+			const userId = await makeUser();
+			const personId = await makePerson(userId, new Date("2023-06-01"));
+			const [club] = await testDb
+				.insert(clubs)
+				.values({
+					name: `Lapsed ${SUITE_TAG}`,
+					slug: `lapsed-${SUITE_TAG}`,
+				})
+				.returning({ id: clubs.id });
+			createdClubIds.push(club.id);
+			const [m] = await testDb
+				.insert(members)
+				.values({
+					clubId: club.id,
+					personId,
+					name: "Dup Human",
+					status: "inactive",
+				})
+				.returning({ id: members.id });
+
+			// The club switcher (auth-context) hides this club; the personal
+			// history views must still show what happened there.
+			expect(await userMemberIds(userId)).toEqual([m.id]);
+		});
+
+		it("userMemberIds returns empty for an account with no membership", async () => {
+			const userId = await makeUser();
+			// A linked Person exists, but it holds no roster row — the membership-
+			// less duplicate that #436 found on the dashboard.
+			await makePerson(userId, new Date("2024-01-01"));
+			expect(await userMemberIds(userId)).toEqual([]);
 		});
 	},
 );
