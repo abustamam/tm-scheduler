@@ -72,17 +72,19 @@ export async function userPersonIds(userId: string): Promise<string[]> {
  *
  * The membership-level counterpart to `userPersonIds`, and the right resolver
  * for a surface that asks "what have *I* got?" rather than "which record is
- * canonically me?". `auth-context.ts` already resolves a user's club list this
- * way — unioning over the join rather than picking one Person — so this makes
- * the personal cross-club views agree with the club switcher instead of
- * silently showing a subset of it.
+ * canonically me?". `auth-context.ts` resolves the club switcher by unioning
+ * over this same people→members join rather than picking one Person; this
+ * follows that shape but deliberately DROPS its `members.status = 'active'`
+ * filter, so it is a strict SUPERSET of the switcher, not a match for it. A
+ * lapsed membership does not un-give the speeches, so a user can see history
+ * from a club the switcher no longer lists. Do not "reconcile" the two by
+ * adding a status filter here — that silently re-breaks #437 for anyone whose
+ * old membership went inactive.
  *
  * Callers that took `[0]` of this set had two defects, not one: the pick was
  * arbitrary (no ORDER BY), AND a member of two clubs saw exactly one club's
  * data from a query documented as covering all of them.
  *
- * Deliberately NOT filtered by `members.status`: these views show the signed-in
- * user their own history, and a lapsed membership does not un-give the speeches.
  * Ordered by id purely so the result is stable to assert against.
  */
 export async function userMemberIds(userId: string): Promise<string[]> {

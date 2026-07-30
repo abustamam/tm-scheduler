@@ -166,7 +166,10 @@ async function attachToClub(
 		// name cannot be confused with the speaker's.
 		assignedMemberId: club.memberId,
 		evaluatesSlotId: speechSlot.id,
-		status: "confirmed",
+		// Deliberately NOT "confirmed": the speaker slot is, so a select that
+		// read `status` off the evaluator alias instead of the speaker would
+		// otherwise return an identical value and pass.
+		status: "claimed",
 	});
 
 	// --- upcoming: one claimed role ---
@@ -182,12 +185,19 @@ async function attachToClub(
 		.returning({ id: roleDefinitions.id });
 
 	const upcomingAt = new Date(Date.now() + (3 + dayOffset) * DAY);
+	// theme / location / lengthMinutes are set to DISTINCT non-default values so
+	// the golden-row assertion pins real columns. Left at their defaults they
+	// were three interchangeable nulls plus a default 90, and a select that
+	// swapped one for another still matched.
 	const [upcomingMeeting] = await testDb
 		.insert(meetings)
 		.values({
 			clubId: club.clubId,
 			scheduledAt: upcomingAt,
 			status: "scheduled",
+			theme: `Theme ${label}`,
+			location: `Location ${label}`,
+			lengthMinutes: 75 + dayOffset,
 		})
 		.returning({ id: meetings.id });
 
@@ -248,9 +258,13 @@ describe.skipIf(!hasTestDb)("my cross-club activity (#437)", () => {
 			name: "Dup Human",
 			email: `${userId}@test.example`,
 		});
-		// A is the nearer club in both directions (offset 0 vs 7).
-		inA = await attachToClub(clubA, userId, "A", 0);
+		// A is the nearer club in both directions (offset 0 vs 7), but B is
+		// seeded FIRST on purpose: insert order must be the OPPOSITE of the
+		// expected output order. Seeded A-first, Postgres's natural scan order
+		// already equalled the wanted order, so DELETING either `ORDER BY`
+		// outright still passed — only a direction FLIP was caught.
 		inB = await attachToClub(clubB, userId, "B", 7);
+		inA = await attachToClub(clubA, userId, "A", 0);
 	});
 
 	afterEach(async () => {
@@ -342,6 +356,8 @@ describe.skipIf(!hasTestDb)("my cross-club activity (#437)", () => {
 		expect(meetingIds).toEqual([inA.upcomingMeetingId, inB.upcomingMeetingId]);
 	});
 
+	// Every field pinned to a LITERAL. `expect.any(Number)`/`expect.any(String)`
+	// let a select swap one column for another of the same type and still pass.
 	it("commitment row carries every rendered field", async () => {
 		const commitments = await loadMyCommitments(userId);
 		expect(commitments[0]).toEqual({
@@ -349,13 +365,15 @@ describe.skipIf(!hasTestDb)("my cross-club activity (#437)", () => {
 			status: "confirmed",
 			meetingId: inA.upcomingMeetingId,
 			scheduledAt: inA.upcomingAt,
-			lengthMinutes: expect.any(Number),
-			theme: null,
-			location: null,
+			lengthMinutes: 75,
+			theme: "Theme A",
+			location: "Location A",
 			clubName: "Test Club",
-			timezone: expect.any(String),
+			timezone: "America/Chicago",
 			roleName: inA.roleName,
 			isSpeakerRole: false,
+			// Null here is meaningful (a functionary role has no speech) and is
+			// now distinguishable from theme/location, which carry real values.
 			speechTitle: null,
 		});
 	});
