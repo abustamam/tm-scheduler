@@ -18,7 +18,7 @@ import { hasTestDb, testDb } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
-const { resolveUserPersonId, userPersonIds } = await import(
+const { resolveUserPersonId, userMemberIds, userPersonIds } = await import(
 	"./person-identity-logic"
 );
 
@@ -120,6 +120,70 @@ describe.skipIf(!hasTestDb)(
 			expect(all).toContain(a);
 			expect(all).toContain(b);
 			expect(all).toContain((await resolveUserPersonId(userId)) as string);
+		});
+
+		// #437: the membership-level resolver. A user with duplicate Persons holds
+		// memberships under BOTH, and a personal cross-club view that took one of
+		// them showed a subset of the clubs the switcher lists.
+		it("userMemberIds spans every club, across duplicate Persons", async () => {
+			const userId = await makeUser();
+			const p1 = await makePerson(userId, new Date("2021-01-01"));
+			const p2 = await makePerson(userId, new Date("2022-01-01"));
+
+			const madeMembers: string[] = [];
+			for (const [i, personId] of [p1, p2].entries()) {
+				const [club] = await testDb
+					.insert(clubs)
+					.values({
+						name: `Multi ${SUITE_TAG}-${i}`,
+						slug: `multi-${SUITE_TAG}-${i}`,
+					})
+					.returning({ id: clubs.id });
+				createdClubIds.push(club.id);
+				const [m] = await testDb
+					.insert(members)
+					.values({ clubId: club.id, personId, name: "Dup Human" })
+					.returning({ id: members.id });
+				madeMembers.push(m.id);
+			}
+
+			const ids = await userMemberIds(userId);
+			expect(ids).toHaveLength(2);
+			expect(ids).toEqual(expect.arrayContaining(madeMembers));
+			// Both memberships hang off DIFFERENT Persons — the case a
+			// single-Person resolver cannot see.
+			expect(p1).not.toBe(p2);
+		});
+
+		it("userMemberIds is stable across calls", async () => {
+			const userId = await makeUser();
+			const personId = await makePerson(userId, new Date("2023-01-01"));
+			const [club] = await testDb
+				.insert(clubs)
+				.values({
+					name: `Stable ${SUITE_TAG}`,
+					slug: `stable-${SUITE_TAG}`,
+				})
+				.returning({ id: clubs.id });
+			createdClubIds.push(club.id);
+			await testDb
+				.insert(members)
+				.values({ clubId: club.id, personId, name: "Dup Human" });
+
+			const answers = new Set([
+				JSON.stringify(await userMemberIds(userId)),
+				JSON.stringify(await userMemberIds(userId)),
+				JSON.stringify(await userMemberIds(userId)),
+			]);
+			expect(answers.size).toBe(1);
+		});
+
+		it("userMemberIds returns empty for an account with no membership", async () => {
+			const userId = await makeUser();
+			// A linked Person exists, but it holds no roster row — the membership-
+			// less duplicate that #436 found on the dashboard.
+			await makePerson(userId, new Date("2024-01-01"));
+			expect(await userMemberIds(userId)).toEqual([]);
 		});
 	},
 );

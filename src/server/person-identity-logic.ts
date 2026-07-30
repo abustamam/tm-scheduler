@@ -65,3 +65,32 @@ export async function userPersonIds(userId: string): Promise<string[]> {
 		.where(eq(people.userId, userId));
 	return rows.map((r) => r.id);
 }
+
+/**
+ * EVERY roster membership this user holds, across every Person linked to them
+ * and every club (#437).
+ *
+ * The membership-level counterpart to `userPersonIds`, and the right resolver
+ * for a surface that asks "what have *I* got?" rather than "which record is
+ * canonically me?". `auth-context.ts` already resolves a user's club list this
+ * way — unioning over the join rather than picking one Person — so this makes
+ * the personal cross-club views agree with the club switcher instead of
+ * silently showing a subset of it.
+ *
+ * Callers that took `[0]` of this set had two defects, not one: the pick was
+ * arbitrary (no ORDER BY), AND a member of two clubs saw exactly one club's
+ * data from a query documented as covering all of them.
+ *
+ * Deliberately NOT filtered by `members.status`: these views show the signed-in
+ * user their own history, and a lapsed membership does not un-give the speeches.
+ * Ordered by id purely so the result is stable to assert against.
+ */
+export async function userMemberIds(userId: string): Promise<string[]> {
+	const rows = await db
+		.select({ id: members.id })
+		.from(members)
+		.innerJoin(people, eq(people.id, members.personId))
+		.where(eq(people.userId, userId))
+		.orderBy(members.id);
+	return rows.map((r) => r.id);
+}

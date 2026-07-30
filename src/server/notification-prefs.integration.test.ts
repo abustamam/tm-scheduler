@@ -12,6 +12,7 @@
 import { randomUUID } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { user } from "#/db/auth-schema";
 import { notifications, people } from "#/db/schema";
 import type { SendEmailParams } from "#/lib/email";
 import {
@@ -108,6 +109,130 @@ describe.skipIf(!hasTestDb)("reminder control layer (#274)", () => {
 	it("setReminderOptOutForUser is a graceful no-op for a user with no linked person", async () => {
 		const res = await setReminderOptOutForUser(randomUUID(), true);
 		expect(res).toEqual({ ok: true, updated: false });
+	});
+
+	// --- Duplicate Persons on one account (#437) ------------------------------
+	//
+	// `people.user_id` is not unique, and the #272 producer suppresses per-Person
+	// (listOptedOutPersonIds, keyed on members.person_id). So the /me toggle can
+	// only honestly say "opted out" when EVERY linked Person is opted out —
+	// reading one arbitrary row could report either answer wrongly.
+
+	/** A second Person on the same account — the duplicate #329 has not merged. */
+	async function addDuplicatePerson(): Promise<string> {
+		return seedPerson({
+			name: "Duplicate Member",
+			userId: club.memberUserId,
+		});
+	}
+
+	it("reports opted-in while ANY linked Person still receives reminders", async () => {
+		const dupe = await addDuplicatePerson();
+		try {
+			// Assert BOTH halves of the split, so no row order can make this pass
+			// by luck: a reader that returns one arbitrary row gets the answer
+			// wrong in exactly one of these two cases, whichever row it favors.
+			//
+			// The no-auth unsubscribe link flips exactly ONE Person (personId from
+			// a signed token) — the realistic way the rows diverge.
+			await setPersonReminderOptOut(club.personId, true);
+			expect(await listOptedOutPersonIds([club.personId, dupe])).toEqual(
+				new Set([club.personId]),
+			);
+			// Reminders are genuinely still being sent via the duplicate, so
+			// "opted out" would be a lie on a preference screen.
+			expect(await getReminderOptOutForUser(club.memberUserId)).toBe(false);
+
+			// Now mirror it: the OTHER Person is the opted-out one.
+			await setPersonReminderOptOut(club.personId, false);
+			await setPersonReminderOptOut(dupe, true);
+			expect(await listOptedOutPersonIds([club.personId, dupe])).toEqual(
+				new Set([dupe]),
+			);
+			expect(await getReminderOptOutForUser(club.memberUserId)).toBe(false);
+		} finally {
+			await testDb.delete(people).where(eq(people.id, dupe));
+		}
+	});
+
+	it("reports opted-out once every linked Person is opted out", async () => {
+		const dupe = await addDuplicatePerson();
+		try {
+			// One use of the /me toggle converges every row — that is why the
+			// writer fans out while the reader aggregates.
+			await setReminderOptOutForUser(club.memberUserId, true);
+
+			expect(await listOptedOutPersonIds([club.personId, dupe])).toEqual(
+				new Set([club.personId, dupe]),
+			);
+			expect(await getReminderOptOutForUser(club.memberUserId)).toBe(true);
+
+			// ...and toggling back releases both, not just one.
+			await setReminderOptOutForUser(club.memberUserId, false);
+			expect(await listOptedOutPersonIds([club.personId, dupe])).toEqual(
+				new Set(),
+			);
+			expect(await getReminderOptOutForUser(club.memberUserId)).toBe(false);
+		} finally {
+			await testDb.delete(people).where(eq(people.id, dupe));
+		}
+	});
+
+	// The two tests above assert the CONTRACT but cannot, on their own, catch a
+	// reader that takes one arbitrary row: when the answer is false, at least one
+	// row is false, so an arbitrary pick is often right by accident. Worse, an
+	// UPDATE relocates a row to the end of the heap, so an unordered LIMIT 1
+	// reliably returns the row that was NOT just flipped — which is the opted-in
+	// one, making a broken reader agree with the fixture every time.
+	//
+	// This fixture removes that luck: the opted-out Person is written FIRST and
+	// never updated, so it is the row an unordered scan hands back.
+	it("reports opted-in even when the FIRST linked Person is the opted-out one", async () => {
+		const soloUserId = randomUUID();
+		await testDb.insert(user).values({
+			id: soloUserId,
+			name: "Split Prefs",
+			email: `${soloUserId}@test.example`,
+		});
+		// Inserted (not updated) with the flag already set, so the row keeps its
+		// original heap position: insert order is the scan order.
+		const [first] = await testDb
+			.insert(people)
+			.values({
+				name: "Opted Out (first)",
+				email: `${randomUUID()}@test.example`,
+				userId: soloUserId,
+				reminderOptOut: true,
+			})
+			.returning({ id: people.id });
+		const [second] = await testDb
+			.insert(people)
+			.values({
+				name: "Opted In (second)",
+				email: `${randomUUID()}@test.example`,
+				userId: soloUserId,
+			})
+			.returning({ id: people.id });
+		const optedOut = first.id;
+		const stillOptedIn = second.id;
+		try {
+			expect(await listOptedOutPersonIds([optedOut, stillOptedIn])).toEqual(
+				new Set([optedOut]),
+			);
+			// One row says "suppressed", the account is not.
+			expect(await getReminderOptOutForUser(soloUserId)).toBe(false);
+		} finally {
+			await testDb
+				.delete(people)
+				.where(inArray(people.id, [optedOut, stillOptedIn]));
+			await testDb.delete(user).where(eq(user.id, soloUserId));
+		}
+	});
+
+	it("a user with no linked Person reads as opted-in, not opted-out", async () => {
+		// `every` over an empty set is vacuously true — the row count guard is
+		// what keeps a person-less account from reading as suppressed.
+		expect(await getReminderOptOutForUser(randomUUID())).toBe(false);
 	});
 
 	// --- No-auth unsubscribe token -------------------------------------------

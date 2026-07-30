@@ -1,6 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
 import { and, asc, desc, eq, gte, sql } from "drizzle-orm";
-import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { db } from "#/db";
 import {
@@ -9,9 +8,9 @@ import {
 	people,
 	roleDefinitions,
 	roleSlots,
-	speeches,
 } from "#/db/schema";
 import { requireClubViewAccess, requireUser } from "./guards";
+import { loadMySpeechLog, loadSpeechLog } from "./my-activity-logic";
 import {
 	currentOfficersByMember,
 	currentOfficersFor,
@@ -101,62 +100,6 @@ export const listClubMembers = createServerFn({ method: "GET" })
 		}));
 	});
 
-export interface SpeechLogRow {
-	slotId: string;
-	scheduledAt: Date;
-	roleName: string;
-	speechTitle: string | null;
-	projectName: string | null;
-	pathwayPath: string | null;
-	projectLevel: string | null;
-	evaluatorName: string | null;
-	status: "open" | "claimed" | "confirmed";
-}
-
-/** A member's speaker-slot history (most recent first), with the evaluator resolved. */
-async function loadSpeechLog(
-	memberId: string,
-	clubId: string | null,
-	limit: number,
-): Promise<SpeechLogRow[]> {
-	const evaluatorSlot = alias(roleSlots, "evaluator_slot");
-	const evaluatorMember = alias(members, "evaluator_member");
-
-	return db
-		.select({
-			slotId: roleSlots.id,
-			scheduledAt: meetings.scheduledAt,
-			roleName: roleDefinitions.name,
-			speechTitle: speeches.title,
-			projectName: speeches.projectName,
-			pathwayPath: speeches.pathwayPath,
-			projectLevel: speeches.projectLevel,
-			evaluatorName: evaluatorMember.name,
-			status: roleSlots.status,
-		})
-		.from(roleSlots)
-		.innerJoin(
-			roleDefinitions,
-			eq(roleDefinitions.id, roleSlots.roleDefinitionId),
-		)
-		.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
-		.leftJoin(speeches, eq(speeches.id, roleSlots.speechId))
-		.leftJoin(evaluatorSlot, eq(evaluatorSlot.evaluatesSlotId, roleSlots.id))
-		.leftJoin(
-			evaluatorMember,
-			eq(evaluatorMember.id, evaluatorSlot.assignedMemberId),
-		)
-		.where(
-			and(
-				eq(roleSlots.assignedMemberId, memberId),
-				eq(roleDefinitions.isSpeakerRole, true),
-				clubId ? eq(meetings.clubId, clubId) : undefined,
-			),
-		)
-		.orderBy(desc(meetings.scheduledAt))
-		.limit(limit);
-}
-
 /** Roles a member has served (any role), grouped by role name, for the current calendar year. */
 async function loadRolesServed(memberId: string, clubId: string) {
 	const yearStart = new Date(new Date().getFullYear(), 0, 1);
@@ -231,7 +174,7 @@ export const getMemberProfile = createServerFn({ method: "GET" })
 		const officerPositions = await currentOfficersFor(member.id);
 
 		// History keys directly to the member row — no user bridge needed.
-		const speechLog = await loadSpeechLog(member.id, data.clubId, 6);
+		const speechLog = await loadSpeechLog([member.id], data.clubId, 6);
 		const rolesServed = await loadRolesServed(member.id, data.clubId);
 		// The Person's unscheduled speeches (derived from slot linkage, ADR-0009 /
 		// #102) + the club's open speaker slots to reschedule them into. Archived
@@ -269,21 +212,6 @@ export const getMemberProfile = createServerFn({ method: "GET" })
 export const listMySpeeches = createServerFn({ method: "GET" }).handler(
 	async () => {
 		const currentUser = await requireUser();
-
-		// Resolve the signed-in user → Person → a linked roster member (ADR-0008
-		// Phase B: the auth link is on people.user_id). A person may belong to
-		// several clubs; pick any one membership to seed their cross-club log.
-		const [myMember] = await db
-			.select({ id: members.id })
-			.from(members)
-			.innerJoin(people, eq(people.id, members.personId))
-			.where(eq(people.userId, currentUser.id))
-			.limit(1);
-
-		if (!myMember) {
-			return [];
-		}
-
-		return loadSpeechLog(myMember.id, null, 6);
+		return loadMySpeechLog(currentUser.id, 6);
 	},
 );

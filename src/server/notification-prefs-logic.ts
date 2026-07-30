@@ -121,18 +121,32 @@ export async function setPersonReminderOptOut(
 }
 
 /**
- * Resolve a signed-in user → their Person (people.user_id) and read the opt-out.
- * Powers the /me toggle. Missing person ⇒ opted-in (`false`).
+ * Whether the signed-in user is opted OUT of reminder emails. Powers the /me
+ * toggle. No linked Person ⇒ opted-in (`false`).
+ *
+ * Reports opted-out only when EVERY Person linked to the account is opted out
+ * (#437). `people.user_id` is not unique, and the suppression this reads is
+ * enforced per-Person by the #272 producer (`listOptedOutPersonIds`, keyed on
+ * `members.person_id`) — so if even one linked Person is still opted in, the
+ * user still receives reminders and "opted out" would be a lie on a preference
+ * screen. Reading one arbitrary row could tell that lie in either direction.
+ *
+ * The asymmetry with `setReminderOptOutForUser` is deliberate, not an
+ * oversight: the writer flips every linked Person, so the two agree the moment
+ * the toggle is used. They can only disagree when something else wrote a SINGLE
+ * Person — which is exactly what the no-auth /unsubscribe link does
+ * (`setPersonReminderOptOut`, personId from a signed token). After a partial
+ * unsubscribe this correctly still reads "opted in", because reminders are
+ * genuinely still being sent, and one use of the toggle converges every row.
  */
 export async function getReminderOptOutForUser(
 	userId: string,
 ): Promise<boolean> {
-	const [row] = await db
+	const rows = await db
 		.select({ optOut: people.reminderOptOut })
 		.from(people)
-		.where(eq(people.userId, userId))
-		.limit(1);
-	return row?.optOut ?? false;
+		.where(eq(people.userId, userId));
+	return rows.length > 0 && rows.every((r) => r.optOut);
 }
 
 /**
