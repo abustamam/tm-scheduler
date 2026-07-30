@@ -2,6 +2,14 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.1.3.1] - 2026-07-30
+
+Documentation only; no behaviour change.
+
+### Changed
+
+- Dropped the "Known" note from v1.1.3.0 about renamed roles losing self-serve editing. It described a state no club is in: nothing was ever renamed before role identity was introduced, and every rename since keeps its identity, so the case cannot arise. #466, filed to backfill those rows, is closed as unnecessary.
+
 ## [1.1.3.0] - 2026-07-30
 
 ### Fixed
@@ -9,10 +17,6 @@ Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO`
 - **Renaming a role no longer takes away what that role can do.** Two roles carry a permission as well as a name: the Toastmaster of the Day can edit the agenda without being a club admin, and the Grammarian can edit the Word of the Day. Both were recognised by their name, so a club that renamed "Toastmaster of the Day" to "MC" quietly lost the self-serve editing, and one that renamed "Grammarian" lost the Word-of-the-Day edit. Both are recognised by the role itself now, so a rename keeps the permission with it.
 - **A role that merely sounds like the Toastmaster no longer gets the Toastmaster's powers.** Any role whose name began with "Toastmaster" — an assistant, a trainee, a second evaluator your club invented — handed whoever held it the ability to edit the whole meeting agenda, and the server allowed the change rather than just showing the button. Only the actual Toastmaster of the Day role does now. The same applied to roles beginning with "Grammarian" and the Word of the Day.
 - **The answer no longer depends on which order the roles come back in.** A club with two roles that both looked like the Toastmaster could get a different answer on different page loads, and the page could disagree with what the server would allow.
-
-### Known
-
-- A club whose Toastmaster or Grammarian role was renamed *before* role identity was introduced, to something that still starts with the original word ("Toastmaster of the Evening"), loses the self-serve editing until its role identity is filled in. An admin can still edit the meeting, and renaming the role back restores it. Tracked as #466.
 
 ## [1.1.2.0] - 2026-07-30
 

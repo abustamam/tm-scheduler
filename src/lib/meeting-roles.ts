@@ -27,20 +27,22 @@ export type RoleIdentity = { roleName: string; roleKey?: string | null };
  * Keying off `role_definitions.key` alone did not close that, because those rows
  * fall through to exactly this fallback (#464).
  *
- * Narrowing is a deliberate FAIL-CLOSED trade, not a free win. The case the
- * fallback exists for is a standard role whose key is still NULL — `drizzle/0044`
- * backfilled by exact canonical name, so anything already renamed at that point
- * kept NULL. Most such renames drop the canonical word entirely ("MC") and never
- * matched the prefix regex either, so they lose nothing here. But a rename that
- * KEEPS it — "Toastmaster of the Evening", "Toastmaster (TMOD)", "Grammarian /
- * Word of the Day" — did match the prefix and no longer matches, so that club
- * loses self-serve editing until its key is backfilled.
+ * Narrowing costs nothing here, and that is a settled question rather than an
+ * optimistic one. A key is NULL for exactly two populations:
  *
- * Shipped that way on purpose: silently handing an impostor the agenda is worse
- * than a club losing a self-serve button it can restore by naming the role
- * canonically, and an admin can still edit either way. The real close is a
- * migration that backfills `key` for prefix-matching rows so nothing depends on
- * the name at all — tracked separately.
+ *   1. Club-invented roles — `createClubRole` never writes one. These SHOULD be
+ *      denied the capability; denying them is the point.
+ *   2. Standard roles already renamed when `drizzle/0044` ran, since it
+ *      backfilled by exact canonical name.
+ *
+ * Population 2 is empty (confirmed with the club owner: nothing was ever
+ * renamed), and it cannot grow — `applyRoleDefinitionUpdate` never touches
+ * `key`, so every rename from here carries its key and resolves by (1) above.
+ *
+ * So the fallback protects nobody and exists only to reject look-alikes. If a
+ * club ever DOES turn up with a key-NULL standard role, the fix is to backfill
+ * its key, never to widen this back to a prefix match — that is the exact hole
+ * #464 closed.
  */
 const TMOD_CANONICAL_NAMES = ["toastmaster of the day", "toastmaster"];
 const GRAMMARIAN_CANONICAL_NAMES = ["grammarian"];
