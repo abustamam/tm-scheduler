@@ -465,3 +465,62 @@ describe("MeetingAgendaPrint hand-off band", () => {
 		expect(band.textContent).not.toContain("— —");
 	});
 });
+
+// #445. `who` used to be OUR canonical role name on every row, and the spine
+// colour was picked by matching English substrings of it ("speaker" -> teal).
+// Once the label follows a club rename, that match silently stops firing and the
+// club loses the colour coding — a regression invisible to every test here,
+// because they all use canonical names. The row carries `roleKey` now and the
+// colour reads that; this pins it on a club that renamed the role.
+describe("spine colour follows the ROLE, not its name (#445)", () => {
+	const speechRow = (over: Partial<TimelineRow>): TimelineRow => ({
+		who: "Speaker · Jagpal",
+		roleKey: "speaker",
+		detail: "Prepared speech",
+		minutes: 6,
+		marks: null,
+		time: "7:10",
+		...over,
+	});
+
+	// Selected through `data-row-time`, the layout's own test hook: it is the exact
+	// element carrying `borderLeft: 4px solid ${beatColor(r)}`. A looser
+	// `[style*="border-left"]` matched chrome elsewhere on the sheet and returned
+	// the same colour for both clubs, so the test passed with the fix disabled.
+	const spineOf = (row: TimelineRow): string => {
+		const { container } = render(
+			<MeetingAgendaPrint
+				layout="grid"
+				header={header}
+				roles={[]}
+				officers={[]}
+				explainers={[]}
+				rows={[row]}
+			/>,
+		);
+		const spine = container.querySelector<HTMLElement>("[data-row-time]");
+		if (spine == null) throw new Error("no spine element rendered");
+		return spine.style.borderLeftColor;
+	};
+
+	it("keeps a renamed speaker role's colour", () => {
+		const canonical = spineOf(speechRow({}));
+		const renamed = spineOf(speechRow({ who: "Presenter · Jagpal" }));
+		expect(renamed).toBe(canonical);
+		expect(renamed).not.toBe("");
+	});
+
+	it("still colours an event row, which carries no roleKey", () => {
+		// Sergeant-at-Arms and President are officer positions, not meeting roles,
+		// so their rows have no key and the name match is the only thing available.
+		expect(
+			spineOf(
+				speechRow({
+					who: "Sergeant-at-Arms",
+					roleKey: undefined,
+					detail: "Call to Order",
+				}),
+			),
+		).not.toBe("");
+	});
+});
