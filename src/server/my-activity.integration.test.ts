@@ -12,6 +12,11 @@
  * membership each in two different clubs. Before the fix both surfaces returned
  * exactly one club's rows, and which club was down to Postgres row order.
  *
+ * Club A is seeded NEARER in both directions (its speech is more recent, its
+ * upcoming meeting sooner) so ordering is observable rather than incidental,
+ * and each club's rows carry per-club-unique strings so an assertion cannot
+ * pass by matching the wrong row.
+ *
  * Run with:
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test \
  *     bunx vitest run src/server/my-activity.integration.test.ts
@@ -51,17 +56,31 @@ interface Attached {
 	speechTitle: string;
 	/** Name of the upcoming role seeded for this club. */
 	roleName: string;
+	/** Slot id of the past speaker slot. */
+	speechSlotId: string;
+	/** Slot id of the upcoming claimed role. */
+	upcomingSlotId: string;
+	/** When the past speech happened. */
+	speechAt: Date;
+	/** When the upcoming meeting is. */
+	upcomingAt: Date;
+	/** Meeting id of the upcoming (non-cancelled) meeting. */
+	upcomingMeetingId: string;
 }
 
 /**
  * Link `userId` to `club` via a NEW Person + roster member, then give that
  * member one past speech and one upcoming role. Called twice with the same
  * userId to build the duplicate-Person, two-club shape.
+ *
+ * `dayOffset` staggers both dates so the two clubs are strictly orderable:
+ * club A (offset 0) is the more recent speech AND the sooner meeting.
  */
 async function attachToClub(
 	club: SeededClub,
 	userId: string,
 	label: string,
+	dayOffset: number,
 ): Promise<Attached> {
 	const [personRow] = await testDb
 		.insert(people)
@@ -95,11 +114,12 @@ async function attachToClub(
 		.returning({ id: roleDefinitions.id });
 
 	// --- past: one delivered speech ---
+	const speechAt = new Date(Date.now() - (7 + dayOffset) * DAY);
 	const [pastMeeting] = await testDb
 		.insert(meetings)
 		.values({
 			clubId: club.clubId,
-			scheduledAt: new Date(Date.now() - 7 * DAY),
+			scheduledAt: speechAt,
 			status: "completed",
 		})
 		.returning({ id: meetings.id });
@@ -107,18 +127,49 @@ async function attachToClub(
 	const speechTitle = `Speech in ${label}`;
 	const [speech] = await testDb
 		.insert(speeches)
-		.values({ personId: personRow.id, title: speechTitle })
+		.values({
+			personId: personRow.id,
+			title: speechTitle,
+			pathwayPath: `Path ${label}`,
+			projectName: `Project ${label}`,
+			projectLevel: `Level ${label}`,
+		})
 		.returning({ id: speeches.id });
+
+	const [speechSlot] = await testDb
+		.insert(roleSlots)
+		.values({
+			meetingId: pastMeeting.id,
+			roleDefinitionId: speakerRole.id,
+			assignedMemberId: memberRow.id,
+			speechId: speech.id,
+			status: "confirmed",
+		})
+		.returning({ id: roleSlots.id });
+
+	// An evaluator for that speech, so `evaluatorName` (rendered on both the
+	// dashboard log and the member profile) has a value to assert.
+	const [evaluatorRole] = await testDb
+		.insert(roleDefinitions)
+		.values({
+			clubId: club.clubId,
+			name: `Evaluator ${label}`,
+			category: "evaluator",
+			isSpeakerRole: false,
+		})
+		.returning({ id: roleDefinitions.id });
 
 	await testDb.insert(roleSlots).values({
 		meetingId: pastMeeting.id,
-		roleDefinitionId: speakerRole.id,
-		assignedMemberId: memberRow.id,
-		speechId: speech.id,
+		roleDefinitionId: evaluatorRole.id,
+		// The club's own seeded member evaluates — a DIFFERENT human, so the
+		// name cannot be confused with the speaker's.
+		assignedMemberId: club.memberId,
+		evaluatesSlotId: speechSlot.id,
 		status: "confirmed",
 	});
 
-	// --- upcoming: one claimed role, on the club's seeded future meeting ---
+	// --- upcoming: one claimed role ---
 	const roleName = `Timer ${label}`;
 	const [upcomingRole] = await testDb
 		.insert(roleDefinitions)
@@ -130,8 +181,39 @@ async function attachToClub(
 		})
 		.returning({ id: roleDefinitions.id });
 
+	const upcomingAt = new Date(Date.now() + (3 + dayOffset) * DAY);
+	const [upcomingMeeting] = await testDb
+		.insert(meetings)
+		.values({
+			clubId: club.clubId,
+			scheduledAt: upcomingAt,
+			status: "scheduled",
+		})
+		.returning({ id: meetings.id });
+
+	const [upcomingSlot] = await testDb
+		.insert(roleSlots)
+		.values({
+			meetingId: upcomingMeeting.id,
+			roleDefinitionId: upcomingRole.id,
+			assignedMemberId: memberRow.id,
+			status: "confirmed",
+		})
+		.returning({ id: roleSlots.id });
+
+	// A CANCELLED upcoming meeting holding a claimed role. It must never show
+	// up as a commitment — a cancelled meeting is not something you owe.
+	const [cancelledMeeting] = await testDb
+		.insert(meetings)
+		.values({
+			clubId: club.clubId,
+			scheduledAt: new Date(Date.now() + 1 * DAY),
+			status: "cancelled",
+		})
+		.returning({ id: meetings.id });
+
 	await testDb.insert(roleSlots).values({
-		meetingId: club.meetingId,
+		meetingId: cancelledMeeting.id,
 		roleDefinitionId: upcomingRole.id,
 		assignedMemberId: memberRow.id,
 		status: "confirmed",
@@ -142,6 +224,11 @@ async function attachToClub(
 		memberId: memberRow.id,
 		speechTitle,
 		roleName,
+		speechSlotId: speechSlot.id,
+		upcomingSlotId: upcomingSlot.id,
+		speechAt,
+		upcomingAt,
+		upcomingMeetingId: upcomingMeeting.id,
 	};
 }
 
@@ -161,8 +248,9 @@ describe.skipIf(!hasTestDb)("my cross-club activity (#437)", () => {
 			name: "Dup Human",
 			email: `${userId}@test.example`,
 		});
-		inA = await attachToClub(clubA, userId, "A");
-		inB = await attachToClub(clubB, userId, "B");
+		// A is the nearer club in both directions (offset 0 vs 7).
+		inA = await attachToClub(clubA, userId, "A", 0);
+		inB = await attachToClub(clubB, userId, "B", 7);
 	});
 
 	afterEach(async () => {
@@ -174,6 +262,7 @@ describe.skipIf(!hasTestDb)("my cross-club activity (#437)", () => {
 			clubB.memberUserId,
 			userId,
 		]);
+		vi.restoreAllMocks();
 	});
 
 	// The fixture is only meaningful if the two Persons really are distinct rows
@@ -191,12 +280,84 @@ describe.skipIf(!hasTestDb)("my cross-club activity (#437)", () => {
 		expect(log).toHaveLength(2);
 	});
 
+	// Ordering is a documented promise of this query ("most recent first") and
+	// the dashboard renders it in the returned order.
+	it("speech log returns most-recent first, across clubs", async () => {
+		const log = await loadMySpeechLog(userId, 6);
+		expect(log.map((r) => r.speechTitle)).toEqual([
+			inA.speechTitle, // now - 7d
+			inB.speechTitle, // now - 14d
+		]);
+	});
+
+	it("speech log honours the limit, keeping the newest", async () => {
+		const log = await loadMySpeechLog(userId, 1);
+		expect(log).toHaveLength(1);
+		expect(log[0].speechTitle).toBe(inA.speechTitle);
+	});
+
+	// Golden output for the whole row shape. Every field the dashboard and the
+	// member profile render is pinned here — a broken join or a dropped column
+	// shows up as a diff instead of passing unnoticed (CLAUDE.md coverage trap #2).
+	it("speech log row carries every rendered field", async () => {
+		const log = await loadMySpeechLog(userId, 6);
+		expect(log[0]).toEqual({
+			slotId: inA.speechSlotId,
+			scheduledAt: inA.speechAt,
+			roleName: "Speaker A",
+			speechTitle: "Speech in A",
+			projectName: "Project A",
+			pathwayPath: "Path A",
+			projectLevel: "Level A",
+			// Resolved through the evaluator self-join, not the speaker's row.
+			evaluatorName: "Member User",
+			status: "confirmed",
+		});
+	});
+
 	it("commitments cover every club, not one arbitrary membership", async () => {
 		const commitments = await loadMyCommitments(userId);
 		const roles = commitments.map((r) => r.roleName);
 		expect(roles).toContain(inA.roleName);
 		expect(roles).toContain(inB.roleName);
 		expect(commitments).toHaveLength(2);
+	});
+
+	it("commitments are soonest-first, across clubs", async () => {
+		const commitments = await loadMyCommitments(userId);
+		expect(commitments.map((r) => r.roleName)).toEqual([
+			inA.roleName, // now + 3d
+			inB.roleName, // now + 10d
+		]);
+	});
+
+	// A cancelled meeting is seeded SOONER than either real one, so if the
+	// status filter were dropped it would sort to the front and break both the
+	// length and the ordering assertions.
+	it("commitments exclude cancelled meetings", async () => {
+		const commitments = await loadMyCommitments(userId);
+		expect(commitments).toHaveLength(2);
+		expect(commitments.every((c) => c.meetingId !== null)).toBe(true);
+		const meetingIds = commitments.map((c) => c.meetingId);
+		expect(meetingIds).toEqual([inA.upcomingMeetingId, inB.upcomingMeetingId]);
+	});
+
+	it("commitment row carries every rendered field", async () => {
+		const commitments = await loadMyCommitments(userId);
+		expect(commitments[0]).toEqual({
+			slotId: inA.upcomingSlotId,
+			status: "confirmed",
+			meetingId: inA.upcomingMeetingId,
+			scheduledAt: inA.upcomingAt,
+			lengthMinutes: expect.any(Number),
+			theme: null,
+			location: null,
+			clubName: "Test Club",
+			timezone: expect.any(String),
+			roleName: inA.roleName,
+			isSpeakerRole: false,
+			speechTitle: null,
+		});
 	});
 
 	// The defect was not only "too few rows" — it was that WHICH rows you got
@@ -207,8 +368,10 @@ describe.skipIf(!hasTestDb)("my cross-club activity (#437)", () => {
 			loadMySpeechLog(userId, 6),
 			loadMySpeechLog(userId, 6),
 		]);
+		// Compare the ORDERED slot ids: sorting first would hide an unstable
+		// ORDER BY, which is the very thing this test exists to catch.
 		const shapes = new Set(
-			runs.map((r) => JSON.stringify(r.map((x) => x.slotId).sort())),
+			runs.map((r) => JSON.stringify(r.map((x) => x.slotId))),
 		);
 		expect(shapes.size).toBe(1);
 	});
@@ -239,7 +402,31 @@ describe.skipIf(!hasTestDb)("my cross-club activity (#437)", () => {
 		expect(await loadSpeechLog([inA.memberId], clubB.clubId, 6)).toEqual([]);
 	});
 
-	it("empty member list short-circuits without hitting the db", async () => {
+	// The empty-list guards are an optimization, not a correctness fix: drizzle
+	// compiles an empty `inArray` to `false`, so removing them still returns [].
+	// Asserting the RESULT therefore cannot fail. Assert the round-trip is
+	// skipped instead — that is the only observable the guard actually controls.
+	it("empty member list short-circuits without querying the db", async () => {
+		const selectSpy = vi.spyOn(testDb, "select");
 		expect(await loadSpeechLog([], null, 6)).toEqual([]);
+		expect(selectSpy).not.toHaveBeenCalled();
+	});
+
+	it("a membership-less account short-circuits the commitments query", async () => {
+		const strangerId = randomUUID();
+		await testDb.insert(user).values({
+			id: strangerId,
+			name: "No Roster",
+			email: `${strangerId}@test.example`,
+		});
+		try {
+			// One select resolves the (empty) member ids; the commitments query
+			// itself must never run.
+			const selectSpy = vi.spyOn(testDb, "select");
+			expect(await loadMyCommitments(strangerId)).toEqual([]);
+			expect(selectSpy).toHaveBeenCalledTimes(1);
+		} finally {
+			await testDb.delete(user).where(eq(user.id, strangerId));
+		}
 	});
 });

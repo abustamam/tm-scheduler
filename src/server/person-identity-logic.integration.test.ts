@@ -155,23 +155,37 @@ describe.skipIf(!hasTestDb)(
 			expect(p1).not.toBe(p2);
 		});
 
-		it("userMemberIds is stable across calls", async () => {
+		// Needs MORE THAN ONE membership to mean anything: with a single row
+		// every ordering is trivially stable, so the `.orderBy(members.id)` the
+		// resolver documents would go unverified.
+		it("userMemberIds is stable across calls, and sorted by id", async () => {
 			const userId = await makeUser();
 			const personId = await makePerson(userId, new Date("2023-01-01"));
-			const [club] = await testDb
-				.insert(clubs)
-				.values({
-					name: `Stable ${SUITE_TAG}`,
-					slug: `stable-${SUITE_TAG}`,
-				})
-				.returning({ id: clubs.id });
-			createdClubIds.push(club.id);
-			await testDb
-				.insert(members)
-				.values({ clubId: club.id, personId, name: "Dup Human" });
+			const made: string[] = [];
+			for (let i = 0; i < 3; i++) {
+				const [club] = await testDb
+					.insert(clubs)
+					.values({
+						name: `Stable ${SUITE_TAG}-${i}`,
+						slug: `stable-${SUITE_TAG}-${i}`,
+					})
+					.returning({ id: clubs.id });
+				createdClubIds.push(club.id);
+				const [m] = await testDb
+					.insert(members)
+					.values({ clubId: club.id, personId, name: "Dup Human" })
+					.returning({ id: members.id });
+				made.push(m.id);
+			}
+
+			const first = await userMemberIds(userId);
+			expect(first).toHaveLength(3);
+			// Sorted, not merely repeatable — insertion order is deliberately
+			// not id order (uuids are random), so this pins the ORDER BY.
+			expect(first).toEqual([...made].sort());
 
 			const answers = new Set([
-				JSON.stringify(await userMemberIds(userId)),
+				JSON.stringify(first),
 				JSON.stringify(await userMemberIds(userId)),
 				JSON.stringify(await userMemberIds(userId)),
 			]);
