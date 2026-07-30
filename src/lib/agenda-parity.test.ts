@@ -124,7 +124,7 @@ const BEATS: { detail: string; section: Section | null; id?: BeatId }[] = [
 		section: "voteSpeaker",
 	},
 	{
-		detail: "Introduces the Table Topics Master",
+		detail: "Introduces the {role:table_topics_master}",
 		section: "handoffTableTopics",
 	},
 	{
@@ -137,7 +137,7 @@ const BEATS: { detail: string; section: Section | null; id?: BeatId }[] = [
 		section: "voteTableTopics",
 	},
 	{
-		detail: "Introduces the General Evaluator",
+		detail: "Introduces the {role:general_evaluator}",
 		section: "handoffGeneralEvaluator",
 		id: "geEvaluationHandoff",
 	},
@@ -189,7 +189,7 @@ const BEATS: { detail: string; section: Section | null; id?: BeatId }[] = [
  *  the General Evaluator before handing them the room for the functionary
  *  introductions. The standard flow has no early GE appearance. */
 const GE_OPENING_INTRO_BEAT: (typeof BEATS)[number] = {
-	detail: "Introduces the General Evaluator",
+	detail: "Introduces the {role:general_evaluator}",
 	section: "handoffGeneralEvaluator",
 	id: "geOpeningHandoff",
 };
@@ -1068,7 +1068,11 @@ describe("hand-off agreement — deck ⇄ run sheet (#363)", () => {
 					handoffSlides(slots, config).map((s) => ({
 						role: s.from.role,
 						person: s.from.name,
-						detail: `Introduces ${s.to}`,
+						// `toLabel`, not `to` (#462): the printed detail resolves the
+						// club's own name for the target, so comparing against the
+						// canonical identity would fail for a renamed role — which is
+						// exactly the divergence #462 removes.
+						detail: `Introduces ${s.toLabel}`,
 					})),
 				).toEqual(
 					handoffRows(slots, config).map((r) => ({
@@ -1079,6 +1083,65 @@ describe("hand-off agreement — deck ⇄ run sheet (#363)", () => {
 			});
 		}
 	}
+
+	// #462: the TARGET of a hand-off, not just its owner. #445 fixed the `who`
+	// column, leaving the printed detail two rows above still saying OUR name for
+	// a role the club had renamed — the page contradicting itself.
+	//
+	// Asserted on BOTH surfaces from one fixture, because the deck was the reason
+	// this was deferred: its `to` is an identity key (it names the jump-grid cell
+	// and gives the parity comparison its section), so the rename had to land on
+	// a separate rendered label rather than on the key.
+	it("names the hand-off TARGET as the club does, on both surfaces (#462)", () => {
+		const renamed = [
+			{ ...tmod, roleName: "Master of Ceremonies" },
+			{ ...ge, roleName: "Chief Evaluator" },
+			{ ...ttm, roleName: "Topics Chief" },
+			speaker1,
+			evaluator1,
+			timer,
+		];
+		const config = { geIntroducesFunctionaries: false };
+
+		const details = handoffRows(renamed, config).map((r) => r.detail);
+		expect(details).toContain("Introduces the Chief Evaluator");
+		expect(details).toContain("Introduces the Topics Chief");
+		// The canonical names are gone from the printed page entirely.
+		expect(details).not.toContain("Introduces the General Evaluator");
+		expect(details).not.toContain("Introduces the Table Topics Master");
+
+		const slides = handoffSlides(renamed, config);
+		expect(slides.map((s) => s.toLabel)).toEqual(
+			expect.arrayContaining(["the Chief Evaluator", "the Topics Chief"]),
+		);
+		// ...while the IDENTITY stays canonical, so the jump grid and the parity
+		// sections keep working. This is the split the fix turns on: if `to` ever
+		// followed the rename, `HANDOFF_HEADER` would miss and the grid would fall
+		// back to a bare "Hand-off".
+		expect(slides.map((s) => s.to)).toEqual(
+			expect.arrayContaining([
+				"the General Evaluator",
+				"the Table Topics Master",
+			]),
+		);
+	});
+
+	// The two GROUP targets stay English on purpose: they name a set, not a role,
+	// and pluralising an arbitrary club-chosen name ("Speech Giver" → ?) is worse
+	// than leaving prose that is already correct for every club.
+	it("leaves the group targets as prose even when the roles are renamed (#462)", () => {
+		const renamed = [
+			{ ...tmod, roleName: "Master of Ceremonies" },
+			{ ...ge, roleName: "Chief Evaluator" },
+			{ ...speaker1, roleName: "Presenter" },
+			{ ...evaluator1, roleName: "Reviewer" },
+		];
+		const details = handoffRows(renamed, {
+			geIntroducesFunctionaries: false,
+		}).map((r) => r.detail);
+		expect(details).toContain("Introduces the speakers");
+		expect(details).toContain("Introduces the speech evaluators");
+	});
 
 	it("the full club's hand-offs name the people the printed rows name", () => {
 		// Not vacuous: the matrix above would pass if BOTH surfaces emitted nothing.

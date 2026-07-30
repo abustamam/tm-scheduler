@@ -307,6 +307,7 @@ describe("slideLayout bodies", () => {
 					kind: "handoff",
 					from: { role: "Toastmaster of the Day", name: "Faisal" },
 					to: "the speakers",
+					toLabel: "the speakers",
 				},
 				toastmasterIntro: {
 					kind: "toastmasterIntro",
@@ -411,12 +412,38 @@ describe("slideLayout bodies", () => {
 			return l.body;
 		};
 
+		// #462 turns on `to` and `toLabel` being used for DIFFERENT things, and
+		// nothing else pins it: the parity suite reads the slide OBJECT, so the
+		// layout could render either field and stay green there. Both mutations —
+		// rendering `to` in the body, and keying the grid off `toLabel` — survived
+		// the whole suite until this test existed.
+		it("renders the club's name in the body and the canonical one in the grid (#462)", () => {
+			const renamed: Slide = {
+				kind: "handoff",
+				from: { role: "Master of Ceremonies", name: "Rasheed" },
+				// identity stays canonical…
+				to: "the General Evaluator",
+				// …display follows the club
+				toLabel: "the Chief Evaluator",
+			};
+
+			// The room reads the club's own name.
+			expect(centered(renamed).lines).toContainEqual(
+				expect.objectContaining({ text: "Introduces the Chief Evaluator" }),
+			);
+			// The jump grid still resolves through the canonical identity — keying it
+			// off the label would miss `HANDOFF_HEADER` and fall back to a bare
+			// "Hand-off", losing the cell's name for exactly the clubs this fixes.
+			expect(contentHeader(renamed)).toBe("Hand-off — General Evaluator");
+		});
+
 		it("reads as a cue for the person handing over", () => {
 			expect(
 				slideLayout({
 					kind: "handoff",
 					from: { role: "Table Topics Master", name: "Rasheed" },
 					to: "the General Evaluator",
+					toLabel: "the General Evaluator",
 				}),
 			).toEqual({
 				chrome: "content",
@@ -443,6 +470,7 @@ describe("slideLayout bodies", () => {
 					kind: "handoff",
 					from: { role: "Toastmaster of the Day", name: "Faisal" },
 					to,
+					toLabel: to,
 				});
 			expect([
 				header("the speakers"),
@@ -469,6 +497,7 @@ describe("slideLayout bodies", () => {
 					kind: "handoff",
 					from: { role: "Toastmaster of the Day", name: "Faisal" },
 					to: "the Joke Master" as HandoffTarget,
+					toLabel: "the Joke Master",
 				}),
 			).toBe("Hand-off");
 		});
@@ -479,6 +508,7 @@ describe("slideLayout bodies", () => {
 					kind: "handoff",
 					from: { role: "Toastmaster of the Day", name: "Faisal" },
 					to: "the speakers",
+					toLabel: "the speakers",
 				}),
 			).toMatchObject({
 				lines: [

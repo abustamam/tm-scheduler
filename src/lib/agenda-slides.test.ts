@@ -545,21 +545,25 @@ describe("hand-off slides (#363)", () => {
 				kind: "handoff",
 				from: { role: "Toastmaster of the Day", name: "Faisal" },
 				to: "the speakers",
+				toLabel: "the speakers",
 			},
 			{
 				kind: "handoff",
 				from: { role: "Toastmaster of the Day", name: "Faisal" },
 				to: "the Table Topics Master",
+				toLabel: "the Table Topics Master",
 			},
 			{
 				kind: "handoff",
 				from: { role: "Table Topics Master", name: "Rasheed" },
 				to: "the General Evaluator",
+				toLabel: "the General Evaluator",
 			},
 			{
 				kind: "handoff",
 				from: { role: "General Evaluator", name: "Riyaz" },
 				to: "the speech evaluators",
+				toLabel: "the speech evaluators",
 			},
 		]);
 	});
@@ -629,16 +633,19 @@ describe("hand-off slides (#363)", () => {
 				kind: "handoff",
 				from: { role: "Toastmaster of the Day", name: "Faisal" },
 				to: "the speakers",
+				toLabel: "the speakers",
 			},
 			{
 				kind: "handoff",
 				from: { role: "Toastmaster of the Day", name: "Faisal" },
 				to: "the General Evaluator",
+				toLabel: "the General Evaluator",
 			},
 			{
 				kind: "handoff",
 				from: { role: "General Evaluator", name: "Riyaz" },
 				to: "the speech evaluators",
+				toLabel: "the speech evaluators",
 			},
 		]);
 	});
@@ -667,6 +674,7 @@ describe("hand-off slides (#363)", () => {
 				kind: "handoff",
 				from: { role: "General Evaluator", name: "Riyaz" },
 				to: "the speech evaluators",
+				toLabel: "the speech evaluators",
 			},
 		]);
 	});
@@ -684,6 +692,7 @@ describe("hand-off slides (#363)", () => {
 				kind: "handoff",
 				from: { role: "Toastmaster of the Day", name: "— open —" },
 				to: "the speakers",
+				toLabel: "the speakers",
 			},
 		]);
 	});
@@ -725,6 +734,7 @@ describe("hand-off slides (#363)", () => {
 				kind: "handoff",
 				from: { role: "Emcee", name: "Faisal" },
 				to: "the speakers",
+				toLabel: "the speakers",
 			},
 		]);
 	});
@@ -1468,6 +1478,7 @@ describe("buildSlideDeck full meeting ordering", () => {
 			kind: "handoff",
 			from: { role: "Toastmaster of the Day", name: "Schinthia" },
 			to: "the General Evaluator",
+			toLabel: "the General Evaluator",
 		});
 		expect(
 			[...mcf.slice(0, at - 1), ...mcf.slice(at)].map((s) => s.kind),
