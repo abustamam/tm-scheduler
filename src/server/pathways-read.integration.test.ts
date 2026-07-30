@@ -292,7 +292,7 @@ describe.skipIf(!hasTestDb)("pathwaysForPerson / pathwaysForMember", () => {
 		expect(paths).toEqual(await pathwaysForMember(clubId, enrolled.memberId));
 	});
 
-	it("a delivered speech becomes a named win and drops out of upNext", async () => {
+	it("a delivered speech becomes a named win, and up-next stays empty (#456)", async () => {
 		const { personId } = await makeMember({ email: "wins-basic@example.com" });
 		const { pathId } = await enrollInPath(personId, {
 			courseCode: code("8701"),
@@ -329,19 +329,11 @@ describe.skipIf(!hasTestDb)("pathwaysForPerson / pathwaysForMember", () => {
 			speechTitle: "My Feedback Speech",
 		});
 		expect(vm.wins[0].deliveredAt).toBeInstanceOf(Date);
-		expect(
-			vm.upNext.map(({ level, name, isRequired }) => ({
-				level,
-				name,
-				isRequired,
-			})),
-		).toEqual([
-			{
-				level: 2,
-				name: "Understanding Your Communication Style",
-				isRequired: false,
-			},
-		]);
+		// This club summary-synced but never /detail-synced, so nothing here knows
+		// the completion rule for a project. Publishing "what's left" from
+		// delivered-speech names over-credited multi-assignment projects and could
+		// never evidence a leadership one at all (#456).
+		expect(vm.upNext).toEqual([]);
 	});
 
 	it("a future, unlinked, or cancelled-meeting speech is NOT a win", async () => {
@@ -408,27 +400,10 @@ describe.skipIf(!hasTestDb)("pathwaysForPerson / pathwaysForMember", () => {
 		const [vm] = await pathwaysForPerson(personId);
 
 		expect(vm.wins).toEqual([]);
-		expect(
-			vm.upNext.map(({ level, name, isRequired }) => ({
-				level,
-				name,
-				isRequired,
-			})),
-		).toEqual(
-			expect.arrayContaining([
-				{
-					level: 2,
-					name: "Leading in Your Volunteer Organization",
-					isRequired: false,
-				},
-				{
-					level: 2,
-					name: "Managing Complexity",
-					isRequired: true,
-				},
-			]),
-		);
-		expect(vm.upNext).toHaveLength(2);
+		// Up-next is empty on this branch regardless (#456); what this test is
+		// about is that a cancelled, future, or unlinked speech never becomes a
+		// win in the first place.
+		expect(vm.upNext).toEqual([]);
 	});
 
 	it("sources wins from the /detail mirror when bcm_project_progress rows exist", async () => {

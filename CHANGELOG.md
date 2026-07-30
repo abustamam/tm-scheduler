@@ -2,6 +2,12 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.1.7.1] - 2026-07-30
+
+### Fixed
+
+- Your Pathways panel no longer treats a project as finished just because you gave one speech for it. Level 1's "Evaluation and Feedback" takes three assignments — speak, evaluate someone else, then speak again applying the feedback — and delivering the first made it disappear from what's left. If your club has never done a full Base Camp sync, the panel now shows the speeches you have delivered and stops guessing at what remains, rather than guessing wrong. Clubs with a full sync are unaffected: Base Camp knows the real completion rule. #456
+
 ## [1.1.7.0] - 2026-07-30
 
 ### Fixed

@@ -106,8 +106,14 @@ export interface PathViewModel {
 	hasBasecamp: boolean;
 	/** This person's delivered speeches whose project is in this path. */
 	wins: Win[];
-	/** Current-level catalog projects not already a win. Empty when complete.
-	 * On the bcm branch this is required-only (electives live in `upNextElectives`). */
+	/**
+	 * What the member still has to do at the current level. Empty when complete.
+	 *
+	 * Required-only on the Base Camp branch (electives live in
+	 * `upNextElectives`), and ALWAYS EMPTY on the inference fallback — delivered
+	 * speeches cannot tell a multi-assignment project from a finished one, nor
+	 * evidence a leadership project at all (#456).
+	 */
 	upNext: UpNextProject[];
 	/** Current-level elective choice, when the mirror is present and the level's
 	 * elective requirement isn't met yet. Null on the inference fallback path. */
@@ -290,22 +296,40 @@ export function buildPathViewModel(path: SyncedPath): PathViewModel {
 		return { ...base, wins, upNext, upNextElectives };
 	}
 
-	// Inference fallback (unchanged): wins from the member's own delivered
-	// speeches, up-next = current-level catalog minus win-names.
-	const winNames = new Set(path.wins.map((w) => w.name));
-	const upNext =
-		complete || currentLevel === null
-			? []
-			: path.catalogProjects
-					.filter((cp) => cp.level === currentLevel && !winNames.has(cp.name))
-					.map((cp) => ({
-						projectId: cp.projectId,
-						level: cp.level,
-						name: cp.name,
-						isRequired: cp.isRequired,
-					}));
-
-	return { ...base, wins: path.wins, upNext, upNextElectives: null };
+	// Inference fallback — a club that summary-synced but never `/detail`-synced.
+	//
+	// `wins` STAYS: it is a list of speeches this member actually delivered whose
+	// project is on this path, and every row of it is true.
+	//
+	// `upNext` is deliberately EMPTY here, and that is a fix rather than a gap
+	// (#456). It used to be "current-level catalog minus the names in `wins`",
+	// which answers "has this project been touched at all", not "is it finished":
+	//
+	//   - Level 1's `Evaluation and Feedback` takes THREE assignments — give a
+	//     speech, evaluate someone else's, then give the speech again applying
+	//     the feedback. A member who has delivered only the first saw the project
+	//     disappear from "Up next" with two assignments outstanding, while `wins`
+	//     legitimately listed it, so the screen read as complete.
+	//   - Later levels contain projects that are not speeches at all
+	//     (`Introduction to Toastmasters Mentoring`, `High Performance
+	//     Leadership`, `Manage Successful Events`). Delivered speeches can never
+	//     evidence those, so subtracting speech names from the catalog is not an
+	//     approximation of progress — it is unrelated to it.
+	//
+	// Inferring BETTER is not the fix. #420's D2 settled the direction: completion
+	// is marked by the member or their VPE, never derived from speeches, because
+	// derivation is wrong low (the case above) AND wrong high (someone working
+	// ahead has Level 2 speeches delivered while Level 1 sits unapproved). The
+	// per-project assignment multiset that would be needed lives only in the Base
+	// Camp UI behind a login — the `/detail` payload does not carry it (#409).
+	//
+	// So this branch now shows only what it knows: the speeches you have
+	// delivered. `PathwaysProgress` renders nothing for an empty `upNext` with no
+	// electives, so the section disappears rather than making a claim. The
+	// `bcm_project_progress` branch above is unaffected — Base Camp applies the
+	// real completion rule there, which is what makes its `completeIds`
+	// authoritative and its `upNext` honest.
+	return { ...base, wins: path.wins, upNext: [], upNextElectives: null };
 }
 
 interface WinRow {
