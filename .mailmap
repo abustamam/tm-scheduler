@@ -1,0 +1,12 @@
+# Canonical author identity.
+#
+# Two names, one person, one email. `Rasheed Bustamam` is the GitHub profile
+# display name, which GitHub stamps as the author on every squash-merge it
+# creates (committer: GitHub <noreply@github.com>). `rasheed` was this machine's
+# local git config, so it appears on commits pushed directly rather than merged.
+#
+# Without this file `git shortlog -sn` reports two contributors for a solo repo,
+# and any tool that groups by author NAME splits the history. Mapping them here
+# fixes that in git itself — log, shortlog, blame and `--author` all honour a
+# .mailmap — with no history rewrite.
+Rasheed Bustamam <rasheed.bustamam@gmail.com> rasheed <rasheed.bustamam@gmail.com>
