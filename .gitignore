@@ -12,6 +12,13 @@ dist-ssr
 __unconfig*
 todos.json
 .gstack/
+# /retro writes its weekly snapshots here. Same class as .gstack/ above: local
+# telemetry about how the work went, not about the product. Every other gstack
+# per-project artifact (ship metrics, decision log, design archives) already
+# lives in ~/.gstack/projects/<slug>/, so committing these would split that data
+# across two homes. Note the tradeoff: ignored files do not reach worktrees, so
+# run /retro from the main checkout or it reports "first retro" every time.
+.context/
 .claude/*
 
 # design-sync (claude.ai/design) build artifacts — durable inputs live in .design-sync/ and ARE committed
