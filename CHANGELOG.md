@@ -2,6 +2,12 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.1.4.2] - 2026-07-30
+
+### Fixed
+
+- If your name ended up on a club's roster twice, whether the app treated you as an admin could change from one page load to the next. It now consistently uses your strongest current standing in that club — an active membership over a lapsed one, an admin role over a plain one, and an open officer term over neither. #471
+
 ## [1.1.4.1] - 2026-07-30
 
 Performance only; no behaviour change.

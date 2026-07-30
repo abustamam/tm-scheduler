@@ -1,7 +1,7 @@
 import { getRequest } from "@tanstack/react-start/server";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { db } from "#/db";
-import { clubs, members, people, user } from "#/db/schema";
+import { clubs, members, officerTerms, people, user } from "#/db/schema";
 import { auth } from "#/lib/auth";
 import { isClubArchived } from "#/lib/club-archive";
 import { markImpersonatedWrite } from "./impersonation-actor";
@@ -50,6 +50,35 @@ export async function requireUser() {
  * user → Person (`people.user_id`) → the `members` row for that person in this
  * club. Returns the membership's id, role and status, or null when the user has
  * no linked person or no membership in the club.
+ *
+ * Returns the STRONGEST membership, deterministically (#471). `people.user_id`
+ * is not unique — ADR-0008 makes one human one Person, but duplicates predate
+ * #329's dedupe-on-write and its merge is a manual superadmin step — so one
+ * human can hold two `members` rows in the SAME club through two Person rows.
+ * This used to take whatever an unordered `.limit(1)` returned first.
+ *
+ * That is worse here than at the read surfaces #437 fixed. Every caller below
+ * branches on the row's `status`, `clubRole`, or `id`, so an arbitrary pick
+ * could flip an authorization answer between two requests for one user. The
+ * ordering is therefore both deterministic AND privilege-conservative:
+ *
+ *   1. ACTIVE first — a lapsed membership must never out-rank a current one,
+ *      which also closes the gap where `canManageClub` (which does not check
+ *      status) could grant management off an inactive admin row.
+ *   2. ADMIN next — the human genuinely holds an admin membership here, so
+ *      denying it because the other duplicate was returned first is the bug.
+ *      This grants nothing new: `people.user_id` is written only by
+ *      `linkPersonToUser`, under `isNull(people.userId)` plus a match on the
+ *      magic-link-verified email, so every linked Person is the same human.
+ *   3. Open OFFICER TERM next — effective-admin (#202) is granted by
+ *      `getOpenOfficerPositions(membership.id)`, which reads ONE membership.
+ *      Without this, two non-admin duplicates could hide the officer term on
+ *      the row that was not picked, and the holder would silently lose
+ *      effective-admin. Ordering by it makes the single-row pick correct for
+ *      that consumer too, rather than fixing the pick and leaving the grant
+ *      looking at the wrong row.
+ *   4. Then oldest, then id — a total order, so two queries in one request can
+ *      never disagree.
  */
 export async function getMembership(userId: string, clubId: string) {
 	const [membership] = await db
@@ -62,7 +91,25 @@ export async function getMembership(userId: string, clubId: string) {
 		})
 		.from(members)
 		.innerJoin(people, eq(people.id, members.personId))
+		// Open terms only; `officer_terms_open_idx` covers (membership_id, term_end).
+		.leftJoin(
+			officerTerms,
+			and(
+				eq(officerTerms.membershipId, members.id),
+				isNull(officerTerms.termEnd),
+			),
+		)
 		.where(and(eq(people.userId, userId), eq(members.clubId, clubId)))
+		// `members.id` is the primary key, so every selected column is
+		// functionally dependent on it and needs no explicit grouping.
+		.groupBy(members.id)
+		.orderBy(
+			sql`(${members.status} = 'active') desc`,
+			sql`(${members.clubRole} = 'admin') desc`,
+			desc(sql`count(${officerTerms.id})`),
+			members.createdAt,
+			members.id,
+		)
 		.limit(1);
 	return membership ?? null;
 }
