@@ -2,6 +2,14 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.1.4.1] - 2026-07-30
+
+Performance only; no behaviour change.
+
+### Changed
+
+- Added a database index behind the lookup that turns your sign-in into your member record. Every signed-in page does it, and on a growing members table it was scanning the whole table each time. #474
+
 ## [1.1.4.0] - 2026-07-30
 
 ### Fixed
