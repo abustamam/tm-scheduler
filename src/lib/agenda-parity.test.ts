@@ -12,6 +12,7 @@
 // `geIntroducesFunctionaries` × role-set matrix.
 
 import { describe, expect, it } from "vitest";
+import { assigneeDisplayName } from "./agenda";
 import type {
 	AgendaRow,
 	AgendaSlot,
@@ -686,6 +687,25 @@ const CASES: { name: string; slots: AgendaSlot[] }[] = [
 			evaluator1,
 		],
 	},
+	{
+		// GUEST assignees (#151/#450). `assigneeDisplayName` appends " · Guest",
+		// so the printed `who` for these rows has three " · " segments instead of
+		// two. Until #450 the harness could not hold this shape at all: `labelOf`
+		// destructured only the first two, so it compared "Schinthia" against the
+		// deck's "Schinthia · Guest" and reported a divergence that was not there.
+		// Guests hold hand-off-owning roles here on purpose — a visiting
+		// Toastmaster and a guest Table Topics Master are both ordinary, and they
+		// are the roles whose names the comparison actually parses.
+		name: "guest assignees on hand-off-owning roles",
+		slots: [
+			{ ...tmod, assigneeName: "Schinthia", assigneeIsGuest: true },
+			{ ...ttm, assigneeName: "Rasheed", assigneeIsGuest: true },
+			ge,
+			speaker1,
+			evaluator1,
+			timer,
+		],
+	},
 ];
 
 const CONFIGS: RunOfShowConfig[] = [
@@ -889,8 +909,14 @@ const handoffSlides = (slots: AgendaSlot[], config: RunOfShowConfig) =>
  * the one suite built to catch cross-surface drift.
  */
 const labelOf = (who: string): { role: string; person: string | null } => {
-	const [role, person] = who.split(" · ");
-	return { role, person: person ?? null };
+	// Rejoin everything after the role. A guest assignee's display name is itself
+	// `${name} · Guest` (#151, `assigneeDisplayName`), so the printed `who` has
+	// THREE segments and a plain destructure kept only the first — reporting
+	// "Schinthia" against the deck's "Schinthia · Guest" and inventing a
+	// divergence that does not exist. `TimingLayout` already reconstructs the
+	// same way with `rest.join(" · ")`; this matches it deliberately. #450
+	const [role, ...rest] = who.split(" · ");
+	return { role, person: rest.length > 0 ? rest.join(" · ") : null };
 };
 
 /** Just the person. Still the right comparison for the vote-caller suite below,
@@ -898,6 +924,133 @@ const labelOf = (who: string): { role: string; person: string | null } => {
  *  fills its `who` column with the bare role name while the slide drops the
  *  attribution entirely, so comparing labels there would fail on purpose. */
 const holderOf = (who: string): string | null => labelOf(who).person;
+
+/**
+ * GOLDEN OUTPUT — properties of what each surface EMITS, asserted directly
+ * against every club shape (#450).
+ *
+ * Everything else in this file compares the two surfaces to each other, which
+ * structurally cannot see a defect present in BOTH. That is not a hypothetical
+ * limitation: the functionary-intro beat shipped without its General-Evaluator
+ * cover fallback, so at an MCF-variant club with no GE the functionaries were
+ * never introduced on EITHER surface while the Toastmaster still called for
+ * their reports. The 24-shape matrix stayed green, and adding the club shape to
+ * `CASES` ALSO passed — only a direct "this section must exist" assertion
+ * caught it (d8a8f9a).
+ *
+ * So these assert truths about a single surface. They are the half of the suite
+ * that can fail when both derivations are wrong together.
+ */
+/**
+ * Shapes that currently DO emit a duplicate adjacent hand-off — a known open
+ * defect (#449), not an accepted behaviour.
+ *
+ * Keyed `"<case name> — <flag>"`, each value is the exact duplicate emitted
+ * today, so this is a characterization rather than a blanket exemption: the
+ * assertion fails if the duplicate changes, if another shape grows one, AND
+ * when #449 lands and it disappears. Fixing the bug is therefore forced to
+ * shrink this table rather than being able to ignore it.
+ *
+ * Under MCF's variant a club with only a Toastmaster and a General Evaluator
+ * runs nothing between the opening hand-off into the GE and the post-Table-
+ * Topics one, and the latter falls back to the Toastmaster — so the same owner
+ * hands to the same target twice in a row. The section-level comparison cannot
+ * see it: `HANDOFF_SECTION` gives both the same identity and
+ * `dedupeConsecutive` collapses them on BOTH surfaces, which is precisely the
+ * "consistent wrongness" blind spot #450 exists to close.
+ */
+const KNOWN_DUPLICATE_HANDOFFS: Record<string, string[]> = {
+	"Toastmaster and General Evaluator only — MCF variant": [
+		"Toastmaster of the Day · Schinthia → Introduces the General Evaluator",
+	],
+};
+
+describe("golden output — properties of the run sheet itself (#450)", () => {
+	/** Everyone the club actually rostered, as the sheet would render them. */
+	const rostered = (slots: AgendaSlot[]): Set<string> =>
+		new Set(
+			slots
+				.map((s) => assigneeDisplayName(s.assigneeName, s.assigneeIsGuest))
+				.filter((n): n is string => n !== null),
+		);
+
+	for (const { name, slots } of CASES) {
+		for (const config of CONFIGS) {
+			const flag = config.geIntroducesFunctionaries
+				? "MCF variant"
+				: "standard";
+
+			// A name on the sheet that nobody on the roster carries means the row
+			// was built from the wrong slot, or a display string was mis-parsed.
+			// Catches an invented holder on either surface, which no cross-surface
+			// comparison can — both could invent the same one.
+			it(`${name} — ${flag}: every printed holder is on the roster`, () => {
+				const roster = rostered(slots);
+				const printed = expandRunSheet(slots, buildRunOfShow(config))
+					// A ROLE row is one carrying `roleKey` (#445); event beats have
+					// none, and it may legitimately be null for a custom club role.
+					.filter((r) => r.roleKey !== undefined)
+					.map((r) => labelOf(r.who).person)
+					.filter((p): p is string => p !== null && p !== OPEN_LABEL);
+
+				// Not vacuous for any shape that has a claimed role.
+				for (const person of printed) {
+					expect(roster).toContain(person);
+				}
+			});
+
+			// Two hand-offs in a row that resolve to the same owner AND target are
+			// always wrong — the second is a duplicate, whoever emitted it. Both
+			// surfaces collapse adjacent hand-offs (`HANDOFF_SECTION`), so a
+			// comparison of the two agrees happily when both fail to collapse.
+			it(`${name} — ${flag}: no two consecutive hand-offs repeat owner and target`, () => {
+				const pairs = handoffRows(slots, config).map(
+					(r) => `${r.who} → ${r.detail}`,
+				);
+				const repeats = pairs.filter((p, i) => i > 0 && pairs[i - 1] === p);
+				expect(repeats).toEqual(
+					KNOWN_DUPLICATE_HANDOFFS[`${name} — ${flag}`] ?? [],
+				);
+			});
+
+			// The exact defect that shipped. A club running functionaries must be
+			// told to introduce them, on both surfaces, under BOTH configs — the
+			// beat is GE-owned under the MCF variant, which is where it broke.
+			it(`${name} — ${flag}: a club with functionaries introduces them`, () => {
+				const hasFunctionaries = slots.some(
+					(s) => s.category === "functionary",
+				);
+				const has = (key: string) => slots.some((s) => s.roleKey === key);
+				// Ownership is config-dependent, and the fallback only runs one way.
+				// Standard: the beat is Toastmaster-owned outright, so no Toastmaster
+				// means nobody to deliver it and no row is CORRECT. MCF variant: it is
+				// GE-owned with `GE_COVERED_BY_TOASTMASTER`, so either role suffices.
+				const hasOwner = config.geIntroducesFunctionaries
+					? has("general_evaluator") || has("toastmaster_of_the_day")
+					: has("toastmaster_of_the_day");
+				if (!hasFunctionaries || !hasOwner) return;
+
+				expect(printSections(slots, config)).toContain("functionaryIntro");
+				expect(deckSections(slots, config)).toContain("functionaryIntro");
+			});
+		}
+	}
+
+	// Guards the guard: if the fixtures stopped containing functionaries, the
+	// section assertion above would early-return everywhere and prove nothing.
+	it("the matrix actually exercises the functionary-intro assertion", () => {
+		const exercised = CASES.filter(
+			({ slots }) =>
+				slots.some((s) => s.category === "functionary") &&
+				slots.some(
+					(s) =>
+						s.roleKey === "toastmaster_of_the_day" ||
+						s.roleKey === "general_evaluator",
+				),
+		);
+		expect(exercised.length).toBeGreaterThan(2);
+	});
+});
 
 describe("hand-off agreement — deck ⇄ run sheet (#363)", () => {
 	for (const { name, slots } of CASES) {

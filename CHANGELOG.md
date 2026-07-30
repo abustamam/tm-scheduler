@@ -2,6 +2,14 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.1.4.3] - 2026-07-30
+
+Test coverage only; no behaviour change.
+
+### Changed
+
+- The agenda parity suite can now catch a mistake that appears identically on the printed run sheet AND the projected deck. It previously only checked that the two matched each other, so a defect present in both passed — which is how a missing functionary introduction shipped. It also covers guest role-holders for the first time. #450
+
 ## [1.1.4.2] - 2026-07-30
 
 ### Fixed
