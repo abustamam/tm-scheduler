@@ -165,6 +165,28 @@ path stays a deferred future option only.
 
 Issues and PRDs live as GitHub issues in `abustamam/tm-scheduler` (managed via the `gh` CLI); external PRs are not a triage surface. See `docs/agents/issue-tracker.md`.
 
+#### What earns an issue
+
+File one only when it is (a) a correctness or security bug a user can actually hit, or (b) work
+you would genuinely schedule. Everything else becomes a comment at the call site or a line in
+`TODOS.md`, and is reported in the PR body or the session summary instead.
+
+This exists because the default pulls the other way. `/ship` runs six reviewers whose job is to
+find things, so every run surfaces more than one PR can absorb; filing each leftover finding is a
+ratchet that grows the backlog by construction. One session closed 2 issues and opened 5 — of which
+exactly one was a real bug. The other four were a two-line index, a debt note already recorded in a
+code comment, and an edge case needing a three-step repro.
+
+Two second-order costs make the bar higher than it looks:
+
+- Labelling review residue `ready-for-agent` inflates the queue that implies real work, which is
+  the number you actually plan against.
+- A filed issue has a maintenance tail. Closing one as noise leaves any code comment that
+  references it pointing at a dead number.
+
+`TODOS.md` already states the boundary: it is for in-flight debt not worth an issue yet, and
+anything outliving its branch becomes an issue. Respect that direction rather than inverting it.
+
 ### Triage labels
 
 Canonical label vocabulary, unchanged: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
