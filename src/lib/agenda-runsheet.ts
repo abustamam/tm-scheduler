@@ -422,7 +422,6 @@ const TIMER_ROLE: BeatRole = { roleKey: "timer", roleName: "Timer" };
  *  that same prose as BOTH its rendered line and its `HANDOFF_HEADER` key, so
  *  making those follow a rename means splitting one field into two and is
  *  tracked as #462 (which waits on #458, queued to touch the same union). */
-const NAMEABLE_ROLES: BeatRole[] = [TIMER_ROLE];
 
 /** The 4 standard functionary roles we ship (`ROLE_TEMPLATE`). Since #371 these
  *  DECLARE which standard roles the functionary-intro beat is nominally about;
@@ -483,6 +482,16 @@ const TABLE_TOPICS_ROLE: BeatRole = {
 	roleKey: "table_topics_master",
 	roleName: "Table Topics Master",
 };
+
+const NAMEABLE_ROLES: BeatRole[] = [
+	TIMER_ROLE,
+	// #462: the two hand-off targets that name ONE specific role holder, so a
+	// club that renamed them stops seeing our name for them two rows above their
+	// own. The other two targets ("the speakers", "the speech evaluators") stay
+	// English deliberately — see the hand-off beats.
+	GENERAL_EVALUATOR_ROLE,
+	TABLE_TOPICS_ROLE,
+];
 const EVALUATOR_ROLE: BeatRole = {
 	roleKey: "evaluator",
 	roleName: "Evaluator",
@@ -550,7 +559,7 @@ export function buildRunOfShow({
 					// Evaluator" — the id is what tells them apart (#363).
 					id: "geOpeningHandoff",
 					role: "plain",
-					detail: "Introduces the General Evaluator",
+					detail: `Introduces the ${roleNameToken(GENERAL_EVALUATOR_ROLE)}`,
 					minutes: 0,
 					handoff: true,
 					requiresAnyOf: [GENERAL_EVALUATOR_ROLE],
@@ -653,7 +662,7 @@ export function buildRunOfShow({
 			kind: "role",
 			...TOASTMASTER_ROLE,
 			role: "plain",
-			detail: "Introduces the Table Topics Master",
+			detail: `Introduces the ${roleNameToken(TABLE_TOPICS_ROLE)}`,
 			minutes: 0,
 			handoff: true,
 			requiresAnyOf: [TABLE_TOPICS_ROLE],
@@ -691,7 +700,7 @@ export function buildRunOfShow({
 			// The other beat reading "Introduces the General Evaluator" (#363).
 			id: "geEvaluationHandoff",
 			role: "plain",
-			detail: "Introduces the General Evaluator",
+			detail: `Introduces the ${roleNameToken(GENERAL_EVALUATOR_ROLE)}`,
 			minutes: 0,
 			handoff: true,
 			requiresAnyOf: [GENERAL_EVALUATOR_ROLE],
@@ -953,7 +962,7 @@ function joinRoleNames(names: string[]): string {
 
 /** Resolve one role's name per `roleNameToken` (#445): the club's own name for
  *  it, else the canonical one. */
-function clubRoleName(key: string, slots: AgendaSlot[]): string | null {
+export function clubRoleName(key: string, slots: AgendaSlot[]): string | null {
 	const role = NAMEABLE_ROLES.find((r) => r.roleKey === key);
 	if (role == null) return null;
 	const slot = slots.find((s) => matchesRole(s, role.roleKey, role.roleName));

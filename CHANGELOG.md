@@ -2,6 +2,12 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.1.7.0] - 2026-07-30
+
+### Fixed
+
+- If your club renamed General Evaluator or Table Topics Master, the agenda no longer contradicts itself. The hand-off rows said "Introduces the General Evaluator" two lines above a row already labelled "Chief Evaluator"; both the printed sheet and the projected slide now use your club's name. Group hand-offs ("the speakers", "the speech evaluators") stay as-is — they name a set of people, not a role. #462
+
 ## [1.1.6.0] - 2026-07-30
 
 ### Changed

@@ -9,6 +9,7 @@ import {
 	buildLegend,
 	buildReportingLegend,
 	buildRunOfShow,
+	clubRoleName,
 	hasAnyFunctionaryRole,
 	hasAnyReportingFunctionaryRole,
 	matchesRole,
@@ -94,7 +95,14 @@ export type Slide =
 			 *  for why `to` is a closed union of prose rather than a role. */
 			kind: "handoff";
 			from: LegendEntry;
+			/** IDENTITY. Stays canonical English: it keys `HANDOFF_HEADER` (the
+			 *  jump-grid label) and `HANDOFF_SECTION` (the parity identity). */
 			to: HandoffTarget;
+			/** DISPLAY. What the slide actually reads, so a club that renamed the
+			 *  target sees ITS name (#462). Equals `to` unless the club renamed the
+			 *  role, and only the two singular-role targets can differ — "the
+			 *  speakers" and "the speech evaluators" name a group, not a role. */
+			toLabel: string;
 	  }
 	| { kind: "toastmasterIntro"; theme: string | null; word: string | null }
 	| {
@@ -312,8 +320,10 @@ function pushHandoff(
 	from: LegendEntry | null,
 	to: HandoffTarget,
 	present: boolean,
+	toLabel: string = to,
 ): void {
-	if (from != null && present) deck.push({ kind: "handoff", from, to });
+	if (from != null && present)
+		deck.push({ kind: "handoff", from, to, toLabel });
 }
 
 const SPEECH_ORDINALS = [
@@ -450,6 +460,13 @@ export function buildSlideDeck({
 	// `GE_COVERED_BY_TOASTMASTER` fallback (#363). Without it a club on that
 	// variant with functionaries but no GE projected no intro slide while still
 	// projecting the reports slide that cues those same functionaries.
+	// The CLUB's name for the two hand-off targets that name ONE role (#462), so
+	// the slide stops showing our word for a role the club renamed. Falls back to
+	// the canonical name, which is exactly what `to` already is.
+	const geLabel =
+		clubRoleName("general_evaluator", slots) ?? "General Evaluator";
+	const ttmLabel =
+		clubRoleName("table_topics_master", slots) ?? "Table Topics Master";
 	const introOwner = geIntroducesFunctionaries ? geOwner : tmOwner;
 	const anyFunctionary = hasAnyFunctionaryRole(slots);
 	// MCF's variant only, and only when there is a General Evaluator to introduce
@@ -469,6 +486,7 @@ export function buildSlideDeck({
 			tmOwner,
 			"the General Evaluator",
 			generalEvaluator.length > 0 && anyFunctionary,
+			`the ${geLabel}`,
 		);
 	}
 	if (introOwner != null && anyFunctionary) {
@@ -513,7 +531,13 @@ export function buildSlideDeck({
 		});
 	}
 
-	pushHandoff(deck, tmOwner, "the Table Topics Master", ttOwner != null);
+	pushHandoff(
+		deck,
+		tmOwner,
+		"the Table Topics Master",
+		ttOwner != null,
+		`the ${ttmLabel}`,
+	);
 	if (ttOwner) {
 		deck.push({
 			kind: "tableTopics",
@@ -542,6 +566,7 @@ export function buildSlideDeck({
 		ttOwner ?? tmOwner,
 		"the General Evaluator",
 		generalEvaluator.length > 0,
+		`the ${geLabel}`,
 	);
 
 	const evaluators = orderEvaluators(byRole(slots, ROLE.evaluator), slots);

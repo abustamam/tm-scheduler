@@ -175,7 +175,7 @@ describe("buildRunOfShow", () => {
 		// and the beat after it is the functionary intro the swap moved to them.
 		expect(withGe[3]).toMatchObject({
 			roleKey: "toastmaster_of_the_day",
-			detail: "Introduces the General Evaluator",
+			detail: "Introduces the {role:general_evaluator}",
 			handoff: true,
 		});
 		expect(withGe[4]).toMatchObject({

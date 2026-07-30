@@ -171,7 +171,10 @@ export function slideLayout(slide: Slide): SlideLayout {
 					// it gives independent statements, so a lower-case second line reads
 					// as a sentence broken in half. It also matches the printed band,
 					// which prints the run sheet's own "Introduces the speakers".
-					head(`Introduces ${slide.to}`),
+					// `toLabel`, not `to`: `to` is the identity that keys the jump grid
+					// above and must stay canonical, while this line is what the room
+					// reads and follows the club's own name for the role (#462).
+					head(`Introduces ${slide.toLabel}`),
 				],
 			});
 		case "toastmasterIntro": {
