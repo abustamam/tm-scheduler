@@ -118,7 +118,8 @@ const BEATS: { detail: string; section: Section | null; id?: BeatId }[] = [
 	{ detail: "Introduces the speakers", section: "handoffSpeakers" },
 	{ detail: "Prepared speech", section: "speech" },
 	{
-		detail: "Calls for the Timer's report · opens voting for Best Speaker",
+		detail:
+			"Calls for the {role:timer}'s report · opens voting for Best Speaker",
 		section: "voteSpeaker",
 	},
 	{
@@ -130,7 +131,8 @@ const BEATS: { detail: string; section: Section | null; id?: BeatId }[] = [
 		section: "tableTopics",
 	},
 	{
-		detail: "Calls for the Timer's report · opens voting for Best Table Topics",
+		detail:
+			"Calls for the {role:timer}'s report · opens voting for Best Table Topics",
 		section: "voteTableTopics",
 	},
 	{
@@ -141,7 +143,8 @@ const BEATS: { detail: string; section: Section | null; id?: BeatId }[] = [
 	{ detail: "Introduces the speech evaluators", section: "handoffEvaluators" },
 	{ detail: "Evaluates a speaker", section: "evaluation", id: "evaluation" },
 	{
-		detail: "Calls for the Timer's report · opens voting for Best Evaluator",
+		detail:
+			"Calls for the {role:timer}'s report · opens voting for Best Evaluator",
 		section: "voteEvaluator",
 	},
 	{
@@ -870,17 +873,31 @@ const handoffSlides = (slots: AgendaSlot[], config: RunOfShowConfig) =>
 	);
 
 /**
- * The holder out of a row's `who` ("Toastmaster of the Day · Dana" ⇒ "Dana").
+ * The role and holder out of a row's `who` ("Toastmaster of the Day · Dana" ⇒ "Dana").
  *
  * The two surfaces label the ROLE differently and always have: `expandRunSheet`
- * prints the BEAT's canonical `roleName` for every role row, while the deck's
- * `LegendEntry`s — the legend, the Word-of-the-Day presenter, and now a
- * hand-off's `from` — carry the slot's own name, which is the club's if they
- * renamed it (#368). That difference is surface-wide and predates #363, so it
- * is not this suite's to settle; the "renamed standard roles" case pins it
- * explicitly below rather than letting it hide inside a mismatch here.
+ * USED to print the BEAT's canonical `roleName` for every role row, while the
+ * deck's `LegendEntry`s — the legend, the Word-of-the-Day presenter, and a
+ * hand-off's `from` — carried the slot's own name, which is the club's if they
+ * renamed it (#368). This helper existed to split that difference off so it could
+ * not hide inside a mismatch here.
+ *
+ * #445 closed the gap: `expandRunSheet` reads the matched slot's `roleName` too,
+ * so both surfaces name a role the same way and the hand-off comparison below
+ * takes the WHOLE label. Splitting the string was the only thing hiding the
+ * divergence, so keeping it split would have kept a rename mismatch invisible in
+ * the one suite built to catch cross-surface drift.
  */
-const holderOf = (who: string): string | null => who.split(" · ")[1] ?? null;
+const labelOf = (who: string): { role: string; person: string | null } => {
+	const [role, person] = who.split(" · ");
+	return { role, person: person ?? null };
+};
+
+/** Just the person. Still the right comparison for the vote-caller suite below,
+ *  which pins a deliberate difference in the ROLE half: a `renderUnowned` row
+ *  fills its `who` column with the bare role name while the slide drops the
+ *  attribution entirely, so comparing labels there would fail on purpose. */
+const holderOf = (who: string): string | null => labelOf(who).person;
 
 describe("hand-off agreement — deck ⇄ run sheet (#363)", () => {
 	for (const { name, slots } of CASES) {
@@ -890,15 +907,17 @@ describe("hand-off agreement — deck ⇄ run sheet (#363)", () => {
 				: "standard";
 			it(`${name} — ${flag}`, () => {
 				// `Introduces ${to}` IS the beat's detail, so this compares the copy as
-				// well as the cast: same person, same target, same order.
+				// well as the cast: same ROLE LABEL, same person, same target, same
+				// order. The role label is in scope since #445 — see `labelOf`.
 				expect(
 					handoffSlides(slots, config).map((s) => ({
+						role: s.from.role,
 						person: s.from.name,
 						detail: `Introduces ${s.to}`,
 					})),
 				).toEqual(
 					handoffRows(slots, config).map((r) => ({
-						person: holderOf(r.who),
+						...labelOf(r.who),
 						detail: r.detail,
 					})),
 				);
@@ -947,13 +966,14 @@ describe("hand-off agreement — deck ⇄ run sheet (#363)", () => {
 		]);
 	});
 
-	it("labels the role as the CLUB names it, where the printed row still quotes ours", () => {
-		// Not a #363 regression and not a licence: it is the standing #368 gap,
-		// recorded at the one place the two surfaces are compared person-for-person.
-		// The deck is the side that already honours the rename everywhere it builds
-		// a `LegendEntry`, so the hand-off follows the deck's rule; whoever closes
-		// the gap should be moving the PRINTED row onto the club's name, and this
-		// test is what will tell them the surfaces have converged.
+	it("labels the role as the CLUB names it, on BOTH surfaces (#445)", () => {
+		// The #368 gap this used to pin is closed. It read: "whoever closes the gap
+		// should be moving the PRINTED row onto the club's name, and this test is
+		// what will tell them the surfaces have converged." They have converged —
+		// `expandRunSheet` reads the matched slot's `roleName` now instead of the
+		// beat's constant, which is the rule the deck already followed everywhere it
+		// builds a `LegendEntry`. Kept pointing at the same club shape so the
+		// convergence is asserted where the divergence was recorded.
 		const slots = [
 			{ ...tmod, roleName: "Master of Ceremonies" },
 			speaker1,
@@ -966,7 +986,7 @@ describe("hand-off agreement — deck ⇄ run sheet (#363)", () => {
 			name: "Schinthia",
 		});
 		expect(handoffRows(slots, config)[0].who).toBe(
-			"Toastmaster of the Day · Schinthia",
+			"Master of Ceremonies · Schinthia",
 		);
 	});
 });

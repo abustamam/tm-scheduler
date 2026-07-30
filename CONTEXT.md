@@ -100,7 +100,7 @@ the nouns in `src/db/schema.ts`.
     live").
 - **Provisioned onboarding** — a new club is created only by a **superadmin** through the
   console (`/superadmin`, #182), never self-serve: one atomic transaction writes the club (unique
-  number + derived slug) + the 8 standard role definitions + a first admin (a Person with
+  number + derived slug) + the 9 standard role definitions + a first admin (a Person with
   `user_id` NULL and an `admin` Membership); the admin's account links on their first sign-in
   (#188), and their email is editable in the console only while still unclaimed. See ADR-0016.
 - **Dues period** — a club-defined membership-billing window (`dues_periods`): a `label`, a
@@ -123,7 +123,16 @@ the nouns in `src/db/schema.ts`.
   "This meeting is locked." banner. Speech-delivered stays date-derived (ADR-0009). See ADR-0012.
 - **Role definition** — a club's template for a fillable role (`role_definitions`), e.g.
   Toastmaster of the Day (TMOD), Speaker, Evaluator, Table Topics Master, General Evaluator
-  (GE), Timer, Ah-Counter, Grammarian. Carries `default_count` and `sort_order`.
+  (GE), Timer, Ah-Counter, Grammarian, Vote Counter. Carries `default_count`, `sort_order`, and
+  `enabled` — false means new meetings generate no slot for it (a "skeleton crew" club retiring
+  a role it doesn't run); already-generated slots are untouched. See #368.
+- **Role name vs role key** — a club renames any role freely (`role_definitions.name`, via
+  `updateClubRole`); identity lives in `role_definitions.key`, the immutable snake_case handle
+  for one of the 9 standard roles (`ROLE_TEMPLATE`), NULL for a club-invented one. Agenda beats
+  bind to roles by `key` (`matchesRole`), so a rename never breaks the binding — and every
+  surface DISPLAYS the club's own `name`: the roster, the projected legend, and every row of the
+  printed run sheet. Our canonical name survives in one spot only, a beat for a role the club
+  runs none of, where there is no club name to read. See #367 / #368 / #445.
 - **Role slot** — one concrete, claimable agenda row for a meeting (`role_slots`). Generated
   from role definitions when a meeting is created. THE source of truth and history — see
   ADR-0005. A slot is `open`, `claimed`, or `confirmed`.

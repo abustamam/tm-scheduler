@@ -657,9 +657,11 @@ export const roleDefinitions = pgTable(
 		enabled: boolean("enabled").notNull().default(true),
 		// Stable, immutable identity for one of the 9 standard roles (ROLE_TEMPLATE,
 		// src/lib/role-template.ts), independent of the human-editable `name` a club
-		// can rename via updateClubRole. A later feature binds agenda beats to
-		// roles by this key so a rename never breaks the binding. NULL for a
-		// club-invented custom role, which has no canonical identity to key on.
+		// can rename via updateClubRole. Agenda beats BIND by this key (#368,
+		// `matchesRole`) so a rename never breaks the binding, and every surface
+		// LABELS with the club's `name` — including every row of the printed run
+		// sheet since #445. NULL for a club-invented custom role, which has no
+		// canonical identity to key on; those bind by name instead.
 		key: text("key"),
 	},
 	(t) => [

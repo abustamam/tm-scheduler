@@ -465,3 +465,126 @@ describe("MeetingAgendaPrint hand-off band", () => {
 		expect(band.textContent).not.toContain("— —");
 	});
 });
+
+// #445. `who` used to be OUR canonical role name on every row, and the spine
+// colour was picked by matching English substrings of it ("speaker" -> teal).
+// Once the label follows a club rename, that match silently stops firing and the
+// club loses the colour coding — a regression invisible to every test here,
+// because they all use canonical names. The row carries `roleKey` now and the
+// colour reads that; this pins it on a club that renamed the role.
+describe("spine colour follows the ROLE, not its name (#445)", () => {
+	const speechRow = (over: Partial<TimelineRow>): TimelineRow => ({
+		who: "Speaker · Jagpal",
+		roleKey: "speaker",
+		detail: "Prepared speech",
+		minutes: 6,
+		marks: null,
+		time: "7:10",
+		...over,
+	});
+
+	// Selected through `data-row-time`, the layout's own test hook: it is the exact
+	// element carrying `borderLeft: 4px solid ${beatColor(r)}`. A looser
+	// `[style*="border-left"]` matched chrome elsewhere on the sheet and returned
+	// the same colour for both clubs, so the test passed with the fix disabled.
+	const spineOf = (row: TimelineRow): string => {
+		const { container } = render(
+			<MeetingAgendaPrint
+				layout="grid"
+				header={header}
+				roles={[]}
+				officers={[]}
+				explainers={[]}
+				rows={[row]}
+			/>,
+		);
+		const spine = container.querySelector<HTMLElement>("[data-row-time]");
+		if (spine == null) throw new Error("no spine element rendered");
+		return spine.style.borderLeftColor;
+	};
+
+	// Every key `expandRunSheet` actually emits, each paired with the name the old
+	// match keyed off. Only `speaker` was pinned at first, which left a typo in any
+	// of the other four able to re-ship #445's exact regression: silent grey for a
+	// renamed club, green suite for a canonical one.
+	it.each([
+		["toastmaster_of_the_day", "Toastmaster of the Day · Faisal"],
+		["table_topics_master", "Table Topics Master · Rasheed"],
+		["general_evaluator", "General Evaluator · Riyaz"],
+		["evaluator", "Evaluator 1 · Sudheer"],
+		["speaker", "Speaker 1 · Jagpal"],
+	])("colours %s from the key, not the name", (roleKey, canonicalWho) => {
+		const canonical = spineOf(speechRow({ roleKey, who: canonicalWho }));
+		const renamed = spineOf(speechRow({ roleKey, who: "Renamed · Somebody" }));
+		expect(renamed).toBe(canonical);
+		expect(renamed).not.toBe("");
+	});
+
+	// The pair-agreement above proves the colour is KEYED, and nothing more: both
+	// sides read the same `ROLE_KEY_COLOR` entry, so they agree for any value it
+	// holds. Collapsing every entry to MUTED leaves it green — the exact trap
+	// CLAUDE.md records, that an agreement test cannot see a defect present on both
+	// sides. Distinctness is the half that pins the mapping, and it still hardcodes
+	// no hex, since `print-theme.tsx` owns those.
+	it("gives the segment roles visibly different spines", () => {
+		const colourOf = (roleKey: string) =>
+			spineOf(speechRow({ roleKey, who: "Renamed · Somebody" }));
+		expect(
+			new Set([
+				colourOf("speaker"),
+				colourOf("table_topics_master"),
+				colourOf("evaluator"),
+				colourOf("toastmaster_of_the_day"),
+			]).size,
+		).toBe(4);
+		// The one pair that shares a colour on purpose: the Toastmaster covers the
+		// General Evaluator's role at a club that runs none (#363), so the two read
+		// as one voice down the page.
+		expect(colourOf("toastmaster_of_the_day")).toBe(
+			colourOf("general_evaluator"),
+		);
+	});
+
+	it("highlights a speech row by its key, not its name", () => {
+		// Every row gets a background (mint when highlighted, else the zebra
+		// stripe), so "has one" proves nothing — compare rows against each other.
+		const bgOf = (row: TimelineRow): string => {
+			const { container } = render(
+				<MeetingAgendaPrint
+					layout="grid"
+					header={header}
+					roles={[]}
+					officers={[]}
+					explainers={[]}
+					rows={[row]}
+				/>,
+			);
+			const spine = container.querySelector<HTMLElement>("[data-row-time]");
+			// The highlight sits on the row wrapper, the spine's parent.
+			return (spine?.parentElement as HTMLElement).style.backgroundColor;
+		};
+		const speakerCanonical = bgOf(speechRow({ who: "Speaker 1 · Jagpal" }));
+		const speakerRenamed = bgOf(speechRow({ who: "Presenter 1 · Jagpal" }));
+		const notASpeaker = bgOf(
+			speechRow({
+				who: "Table Topics Master · Rasheed",
+				roleKey: "table_topics_master",
+			}),
+		);
+		// The rename must not change it, and a non-speaker must not get it.
+		expect(speakerRenamed).toBe(speakerCanonical);
+		expect(speakerRenamed).not.toBe(notASpeaker);
+	});
+
+	// Event beats own no role, so their rows carry no key and the name match is the
+	// only thing left to colour them. Asserted as President vs Sergeant-at-Arms
+	// rather than "is non-empty": MUTED is BOTH the sergeant branch's colour and
+	// the function's default, so a non-empty check on the sergeant alone stays
+	// green with the entire fallback deleted. President returns INK, so the pair
+	// differing is the one thing that proves the fallback still runs.
+	it("still colours event rows, which carry no roleKey", () => {
+		const eventRow = (who: string) =>
+			spineOf(speechRow({ who, roleKey: undefined, detail: "Call to Order" }));
+		expect(eventRow("President")).not.toBe(eventRow("Sergeant-at-Arms"));
+	});
+});

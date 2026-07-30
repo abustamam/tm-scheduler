@@ -179,9 +179,43 @@ function TimingLegend({ rows }: { rows: TimelineRow[] }) {
 	);
 }
 
-/** The colored spine for a run-of-show beat, keyed off the role/segment name. */
-function beatColor(who: string): string {
-	const w = who.toLowerCase();
+/**
+ * The colored spine for a run-of-show beat, by the role that owns it.
+ *
+ * Keyed on the row's `roleKey` first (#445). The name match below it used to be
+ * the whole implementation, and it worked only because `who` always carried OUR
+ * canonical English — it now carries the club's own name, so a club that renamed
+ * Speaker to Presenter would have silently lost every speech row's colour.
+ *
+ * The name match stays as the fallback for the ONE kind of row that carries no
+ * key: an event beat, whose `who` is a hardcoded string in `buildRunOfShow`
+ * (Sergeant-at-Arms, President) and so is not renameable at all. Every role row
+ * carries a key — `roleKey: s.roleKey ?? owner.roleKey`, and the beat's own key is
+ * non-nullable — including a club-invented role, which either fails `matchesRole`
+ * and emits no row or matches by name and inherits the beat's key. Only the
+ * `sergeant` and `president` branches below are reachable in production; the rest
+ * are kept for callers that hand-build rows, which the tests do.
+ */
+const ROLE_KEY_COLOR: Record<string, string> = {
+	table_topics_master: FOREST,
+	general_evaluator: LAGOON,
+	speaker: TEAL,
+	evaluator: AMBER,
+	toastmaster_of_the_day: LAGOON,
+};
+
+type RoleIdentified = { who: string; roleKey?: string | null };
+
+function beatColor(row: RoleIdentified): string {
+	// The key is AUTHORITATIVE once present, even if it is unmapped. Falling
+	// through to the name match for a keyed-but-unmapped row would read
+	// club-typed free text: the first beat owned by a functionary would let a club
+	// that renamed Grammarian to "Speaker Coach" pick up the speaker's teal from
+	// `startsWith("speaker")` below, which is #445's regression in reverse. Also
+	// keeps this the same shape as `isHighlighted`, which already branches on
+	// presence alone.
+	if (row.roleKey != null) return ROLE_KEY_COLOR[row.roleKey] ?? MUTED;
+	const w = row.who.toLowerCase();
 	if (w.startsWith("sergeant")) return MUTED;
 	if (w.startsWith("president")) return INK;
 	if (w.includes("table topics")) return FOREST;
@@ -192,9 +226,12 @@ function beatColor(who: string): string {
 	return MUTED;
 }
 
-/** A speaker beat gets the faint mint highlight in the narrative layouts. */
-function isHighlighted(who: string): boolean {
-	return who.toLowerCase().startsWith("speaker");
+/** A speaker beat gets the faint mint highlight in the narrative layouts. Keyed
+ *  on the role, not its name, for the reason `beatColor` explains (#445). */
+function isHighlighted(row: RoleIdentified): boolean {
+	return row.roleKey != null
+		? row.roleKey === "speaker"
+		: row.who.toLowerCase().startsWith("speaker");
 }
 
 /** The "Meeting Roles" roster, either boxed (grid/timing) or plain (editorial/spacious). */
@@ -464,8 +501,8 @@ function RunNarrative({
 							padding={lg ? "4px 0 4px 83px" : "3px 0 3px 69px"}
 						/>
 					);
-				const color = beatColor(r.who);
-				const highlight = isHighlighted(r.who);
+				const color = beatColor(r);
+				const highlight = isHighlighted(r);
 				return (
 					<div
 						key={rowKey(r, i)}
@@ -949,7 +986,7 @@ function GridLayout({
 								key={rowKey(r, i)}
 								style={{
 									display: "flex",
-									background: isHighlighted(r.who)
+									background: isHighlighted(r)
 										? MINT
 										: i % 2 === 1
 											? "#fafdfb"
@@ -963,7 +1000,7 @@ function GridLayout({
 									style={{
 										flex: "none",
 										width: 60,
-										borderLeft: `4px solid ${beatColor(r.who)}`,
+										borderLeft: `4px solid ${beatColor(r)}`,
 										padding: "4px 0 4px 10px",
 										fontSize: 10.5,
 										fontWeight: 700,
@@ -1692,6 +1729,12 @@ function TimingLayout({
 										}}
 									/>
 								);
+							// `who` joins the role and the holder with " · ", and since #445 the
+							// role half is the club's own free text — so a role literally named
+							// "Chief · Evaluator" shifts text into the name column. First-split, not
+							// last, because the HOLDER half also carries the separator on a guest row
+							// ("Speaker 1 · Jane · Guest"). Neither direction is right in general;
+							// the real fix is carrying the two as separate fields (#463).
 							const [role, ...rest] = r.who.split(" · ");
 							const name = rest.join(" · ");
 							return (
@@ -1702,7 +1745,7 @@ function TimingLayout({
 										alignItems: "center",
 										padding: "6px 12px",
 										borderBottom: i < rows.length - 1 ? HAIR : undefined,
-										background: isHighlighted(r.who)
+										background: isHighlighted(r)
 											? MINT
 											: i % 2 === 1
 												? "#fafdfb"

@@ -57,6 +57,19 @@ export function assigneeDisplay(slot: {
 /** One rendered agenda row (no clock time yet — buildTimeline adds it). */
 export type AgendaRow = {
 	who: string; // "Speaker 1 · Rehanna Khan", "Sergeant-at-Arms", "Timer"
+	/** The owning role's stable `role_definitions.key` (#445), for consumers that
+	 *  need to know WHICH role this row belongs to rather than what it is called.
+	 *  ABSENT on an event beat (Sergeant-at-Arms, President — officer positions,
+	 *  not meeting roles, and their `who` is a hardcoded string). Every ROLE row
+	 *  carries one, and it is the BEAT's: `matchesRole` admits a slot only when its
+	 *  key equals the beat's or is null, so a matched slot can never disagree.
+	 *
+	 *  Exists because `who` stopped being canonical: the print layouts colour a
+	 *  row's spine by role, and they used to get away with matching English
+	 *  substrings of `who` precisely BECAUSE it ignored club renames. Once the
+	 *  label follows the club, a club that renamed Speaker to Presenter would
+	 *  silently lose the colour. Identity belongs in a field, not in prose. */
+	roleKey?: string | null;
 	detail: string;
 	minutes: number; // duration this row contributes to the running clock
 	marks: TimingMarks | null;
@@ -279,6 +292,23 @@ export const ROLES_TOKEN = "{roles}";
 export const AWARDS_TOKEN = "{awards}";
 
 /**
+ * Token for ONE named role inside a beat's `detail`, by key (#445) — the club's
+ * own name for that role, or the canonical name when the club runs none.
+ *
+ * `ROLES_TOKEN` answers "which of these roles does the club run", as a list. This
+ * answers "what does this club call that one role", which is what a detail needs
+ * when it names a role OTHER than the row's owner: the three vote beats say
+ * "Calls for the Timer's report", and a club that renamed Timer to Timekeeper had
+ * its legend say Timekeeper while every vote row still said Timer.
+ *
+ * Only roles in `NAMEABLE_ROLES` resolve. An unknown key is left verbatim rather
+ * than silently blanked, so a typo shows up on the page as `{role:tymer}` instead
+ * of quietly dropping the cue.
+ */
+export const roleNameToken = (role: BeatRole): string =>
+	`{role:${role.roleKey}}`;
+
+/**
  * THE definition of "this club's functionaries" (#371) — the one every surface
  * reads: the legend, the functionary-intro and functionary-reports gates, the
  * deck's two functionary slides, and the `ROLES_TOKEN` list in the
@@ -371,6 +401,17 @@ export type RunOfShowConfig = { geIntroducesFunctionaries: boolean };
  *  (#363): the vote is already owned by the segment leader, so losing the Timer
  *  only drops the "Calls for the Timer's report" clause, never the row. */
 const TIMER_ROLE: BeatRole = { roleKey: "timer", roleName: "Timer" };
+
+/** Roles a beat's `detail` may name via `roleNameToken` (#445). The canonical
+ *  `roleName` here is the fallback for a club that runs no such role; the club's
+ *  own slot name wins whenever there is one.
+ *
+ *  Only the Timer today. The hand-off beats also name their target canonically
+ *  ("Introduces the Table Topics Master"), but the deck's `handoff` slide reuses
+ *  that same prose as BOTH its rendered line and its `HANDOFF_HEADER` key, so
+ *  making those follow a rename means splitting one field into two and is
+ *  tracked as #462 (which waits on #458, queued to touch the same union). */
+const NAMEABLE_ROLES: BeatRole[] = [TIMER_ROLE];
 
 /** The 4 standard functionary roles we ship (`ROLE_TEMPLATE`). Since #371 these
  *  DECLARE which standard roles the functionary-intro beat is nominally about;
@@ -581,7 +622,7 @@ export function buildRunOfShow({
 			kind: "role",
 			...TOASTMASTER_ROLE,
 			role: "plain",
-			detail: "Calls for the Timer's report · opens voting for Best Speaker",
+			detail: `Calls for the ${roleNameToken(TIMER_ROLE)}'s report · opens voting for Best Speaker`,
 			minutes: 1,
 			renderUnowned: true,
 			fallbacks: [
@@ -613,8 +654,7 @@ export function buildRunOfShow({
 			kind: "role",
 			...TABLE_TOPICS_ROLE,
 			role: "plain",
-			detail:
-				"Calls for the Timer's report · opens voting for Best Table Topics",
+			detail: `Calls for the ${roleNameToken(TIMER_ROLE)}'s report · opens voting for Best Table Topics`,
 			minutes: 1,
 			renderUnowned: true,
 			fallbacks: [
@@ -674,7 +714,7 @@ export function buildRunOfShow({
 			kind: "role",
 			...GENERAL_EVALUATOR_ROLE,
 			role: "plain",
-			detail: "Calls for the Timer's report · opens voting for Best Evaluator",
+			detail: `Calls for the ${roleNameToken(TIMER_ROLE)}'s report · opens voting for Best Evaluator`,
 			minutes: 1,
 			renderUnowned: true,
 			fallbacks: [
@@ -882,30 +922,29 @@ function joinRoleNames(names: string[]): string {
 	return `${names.slice(0, -1).join(", ")} & ${names[names.length - 1]}`;
 }
 
-/** Resolve `ROLES_TOKEN` in a beat's detail against the roles the club runs
- *  (#367), in slot order and under the club's own display names — the same
- *  order and names the deck's functionary slides list. */
-function resolveDetail(beat: Beat, slots: AgendaSlot[]): string {
-	if (beat.detail.includes(AWARDS_TOKEN)) {
-		// Fixed labels in a fixed order (not the club's role names, and not slot
-		// order) — the awards are the club's, the role names only decide WHICH
-		// are handed out.
-		const labels = AWARD_CATEGORIES.filter((a) =>
-			hasRole(slots, a.role.roleKey, a.role.roleName),
-		).map((a) => a.label);
-		// Replacer FUNCTION, not a string: `String.replace` reads `$&`, "$`", `$'`
-		// and `$n` in a replacement string as back-references, so a club role
-		// literally named "Timer $`" would splice the copy before the token back
-		// into the row. The awards labels are hardcoded, so this site is safe today
-		// — but it is the same call as the `ROLES_TOKEN` one below, which is not.
-		return beat.detail.replace(AWARDS_TOKEN, () => joinRoleNames(labels));
-	}
-	if (!beat.detail.includes(ROLES_TOKEN)) return beat.detail;
-	// A group beat names the group's members (#371) — the functionary-intro beat
-	// lists exactly the functionaries `buildLegend` puts on the projected slide,
-	// including any the club invented. The group also gates the beat
-	// (`requirementsMet`), so this list is never empty. Without a group, resolve
-	// the beat's own key list.
+/** Resolve one role's name per `roleNameToken` (#445): the club's own name for
+ *  it, else the canonical one. */
+function clubRoleName(key: string, slots: AgendaSlot[]): string | null {
+	const role = NAMEABLE_ROLES.find((r) => r.roleKey === key);
+	if (role == null) return null;
+	const slot = slots.find((s) => matchesRole(s, role.roleKey, role.roleName));
+	return slot?.roleName ?? role.roleName;
+}
+
+/** The award categories this club scores. FIXED labels in a FIXED order — not the
+ *  club's role names, and not slot order. The roles only decide WHICH are handed
+ *  out. */
+function awardLabels(slots: AgendaSlot[]): string[] {
+	return AWARD_CATEGORIES.filter((a) =>
+		hasRole(slots, a.role.roleKey, a.role.roleName),
+	).map((a) => a.label);
+}
+
+/** A group beat's members (#371) — the functionary-intro beat lists exactly the
+ *  functionaries `buildLegend` puts on the projected slide, including any the club
+ *  invented. The group also gates the beat (`requirementsMet`), so this is never
+ *  empty. Without a group, resolve the beat's own key list. */
+function groupRoleNames(beat: Beat, slots: AgendaSlot[]): string[] {
 	const required = beat.requiresAnyOf ?? [];
 	const matched =
 		beat.requiresGroup != null
@@ -913,17 +952,46 @@ function resolveDetail(beat: Beat, slots: AgendaSlot[]): string {
 			: slots.filter((s) =>
 					required.some((r) => matchesRole(s, r.roleKey, r.roleName)),
 				);
-	const names = matched.map((s) => s.roleName);
-	// Replacer function ⇒ the club's role names are substituted LITERALLY. An
-	// admin types `roleName` verbatim (admin/roles.tsx applies no character
-	// validation), so a role named "Timer $`" would otherwise splice a
-	// back-reference into the printed row. Only the printed row: tokens are
-	// resolved nowhere but here, and `expandRunSheet` is the sole caller, so the
-	// deck and the .pptx never saw this — they build their functionary and
-	// awards copy from `buildLegend`/`AWARD_CATEGORIES` directly.
-	return beat.detail.replace(ROLES_TOKEN, () =>
-		joinRoleNames([...new Set(names)]),
-	);
+	return [...new Set(matched.map((s) => s.roleName))];
+}
+
+/** Every token a beat's `detail` can carry, in ONE alternation so they resolve in
+ *  ONE pass. Order inside the alternation is irrelevant; what matters is that
+ *  there is only one pass. */
+const DETAIL_TOKEN_RE = /\{roles\}|\{awards\}|\{role:([a-z_]+)\}/g;
+
+/**
+ * Resolve a beat's detail tokens against the roles the club runs (#367, #372,
+ * #445), under the club's own display names where the token asks for one.
+ *
+ * SINGLE PASS, deliberately. Two things make that load-bearing:
+ *
+ * 1. Replacement text is never rescanned by `String.replace`, so a club role
+ *    named literally "{awards}" is inserted and left alone. Resolving the role
+ *    name first and the lists second — which is what this did when `{role:}`
+ *    was added — spliced the awards list into the row for that club. An admin
+ *    types `roleName` verbatim (`role-definitions-logic.ts` validates only
+ *    non-empty), so it is reachable, and it is the same hostile-input class as
+ *    the `$&` case below.
+ * 2. A replacer FUNCTION, not a string: `String.replace` reads `$&`, "$`", `$'`
+ *    and `$n` in a replacement STRING as back-references, so a role named
+ *    "Timer $`" would splice surrounding copy into the printed row.
+ *
+ * Only the printed row: tokens resolve nowhere but here and `expandRunSheet` is
+ * the sole caller, so the deck and the .pptx never saw either hazard — they build
+ * their functionary and awards copy from `buildLegend`/`AWARD_CATEGORIES` direct.
+ *
+ * An unrecognised role key is left VERBATIM rather than blanked, so a typo shows
+ * up on the page as `{role:tymer}` instead of quietly dropping the cue.
+ */
+function resolveDetail(beat: Beat, slots: AgendaSlot[]): string {
+	if (!beat.detail.includes("{")) return beat.detail;
+	return beat.detail.replace(DETAIL_TOKEN_RE, (whole, roleKey?: string) => {
+		if (whole === AWARDS_TOKEN) return joinRoleNames(awardLabels(slots));
+		if (whole === ROLES_TOKEN)
+			return joinRoleNames(groupRoleNames(beat, slots));
+		return roleKey != null ? (clubRoleName(roleKey, slots) ?? whole) : whole;
+	});
 }
 
 /**
@@ -1032,7 +1100,14 @@ export function expandRunSheet(
 						? { green: w.min, yellow: (w.min + w.max) / 2, red: w.max }
 						: null;
 					rows.push({
-						who: `${numbered(owner.roleName, i, multi)} · ${assigneeDisplay(s)}`,
+						// The SLOT's name, not the beat's canonical one (#445). Binding is
+						// by key, so the beat found this slot through a rename (#368) —
+						// labelling it with the beat's constant then printed the canonical
+						// name in the `who` column while the header legend and
+						// `ROLES_TOKEN` printed the club's, two names for one role on one
+						// page. Identical output for a club that never renamed anything.
+						who: `${numbered(s.roleName, i, multi)} · ${assigneeDisplay(s)}`,
+						roleKey: owner.roleKey,
 						detail: s.speechTitle
 							? `"${s.speechTitle}"${s.projectLevel ? ` · ${s.projectLevel}` : ""}`
 							: beatDetail,
@@ -1045,7 +1120,9 @@ export function expandRunSheet(
 				const multi = ordered.length > 1;
 				ordered.forEach((s, i) => {
 					rows.push({
-						who: `${numbered(owner.roleName, i, multi)} · ${assigneeDisplay(s)}`,
+						// The slot's name, per the speaker arm above (#445).
+						who: `${numbered(s.roleName, i, multi)} · ${assigneeDisplay(s)}`,
+						roleKey: owner.roleKey,
 						detail: s.evaluates?.speakerName
 							? `Evaluates ${s.evaluates.speakerName}`
 							: beatDetail,
@@ -1058,9 +1135,20 @@ export function expandRunSheet(
 				// slots generated). Normally omit rather than printing a ghost row —
 				// unless the beat is about a SEGMENT rather than its owner (#363), in
 				// which case the bare role name still carries the instruction.
+				//
+				// The one label that stays CANONICAL (#445): no slot MATCHED this beat,
+				// so there is no club name to read. When the club disabled the role
+				// nothing else on the page names it either, and the canonical name is
+				// the only thing left carrying the cue. One case does still diverge — a
+				// standard role renamed while its `role_definitions.key` is NULL (a
+				// rename predating the #368 backfill) has a slot that fails
+				// `matchesRole`, so this prints ours while the roster prints theirs.
+				// That is the binding gap, not the labelling one, and it needs the key
+				// backfilled rather than anything here.
 				if (beat.renderUnowned) {
 					rows.push({
 						who: owner.roleName,
+						roleKey: owner.roleKey,
 						detail: beatDetail,
 						minutes: beat.minutes,
 						marks: null,
@@ -1069,7 +1157,9 @@ export function expandRunSheet(
 			} else {
 				for (const s of matching) {
 					rows.push({
-						who: `${owner.roleName} · ${assigneeDisplay(s)}`,
+						// The slot's name, per the speaker arm above (#445).
+						who: `${s.roleName} · ${assigneeDisplay(s)}`,
+						roleKey: owner.roleKey,
 						detail: beatDetail,
 						minutes: beat.minutes,
 						marks: null,

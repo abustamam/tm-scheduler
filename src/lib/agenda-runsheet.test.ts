@@ -155,21 +155,16 @@ describe("buildRunOfShow", () => {
 
 	it("gates each vote beat on the segment it belongs to", () => {
 		const beats = buildRunOfShow({ geIntroducesFunctionaries: false });
-		const gateOf = (detail: string) =>
+		// Matched on the segment the vote is FOR, not the whole detail: this test is
+		// about the gate, and the rest of the copy carries a `{role:timer}` token
+		// since #445, which would make the lookup a copy assertion in disguise.
+		const gateOf = (segment: string) =>
 			beats
-				.find((b) => b.detail === detail)
+				.find((b) => b.detail.endsWith(`opens voting for ${segment}`))
 				?.requiresAnyOf?.map((r) => r.roleKey);
-		expect(
-			gateOf("Calls for the Timer's report · opens voting for Best Speaker"),
-		).toEqual(["speaker"]);
-		expect(
-			gateOf(
-				"Calls for the Timer's report · opens voting for Best Table Topics",
-			),
-		).toEqual(["table_topics_master"]);
-		expect(
-			gateOf("Calls for the Timer's report · opens voting for Best Evaluator"),
-		).toEqual(["evaluator"]);
+		expect(gateOf("Best Speaker")).toEqual(["speaker"]);
+		expect(gateOf("Best Table Topics")).toEqual(["table_topics_master"]);
+		expect(gateOf("Best Evaluator")).toEqual(["evaluator"]);
 	});
 
 	it("the MCF variant differs from the default ONLY in the functionary intro's owner and the opening GE introduction that precedes it", () => {
@@ -609,7 +604,15 @@ describe("expandRunSheet — role-key matching (#368)", () => {
 				assigneeName: "Priya",
 			}),
 		]);
-		expect(rows.some((r) => r.who === "General Evaluator · Priya")).toBe(true);
+		// The row EXISTING is what proves the key matched — a beat bound by display
+		// name would have found nothing here.
+		expect(rows.some((r) => r.who === "Chief Evaluator · Priya")).toBe(true);
+		// And it is labelled the way the CLUB names it (#445), which is the other
+		// half of the #368 promise: binding through a rename was never enough on its
+		// own, because the row still printed our canonical name, so a renaming club
+		// read one name in the header legend and another on every row that role
+		// owned. Same page, same role, two names.
+		expect(rows.some((r) => r.who.startsWith("General Evaluator"))).toBe(false);
 	});
 
 	it("falls back to matching by name when the slot carries no roleKey", () => {
@@ -709,6 +712,203 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 		]);
 	});
 
+	// #445. The clause names a role OTHER than the row's owner, so it cannot come
+	// from the matched slot the way the `who` label does — it reads a
+	// `roleNameToken`. Before that, a club that renamed Timer to Timekeeper had a
+	// header legend saying "Timekeeper · Riyaz" and three vote rows saying "Calls
+	// for the Timer's report", which is the same page contradicting itself.
+	it("calls for the report under the club's name for the Timer (#445)", () => {
+		const renamed = sixRoleClub().map((s) =>
+			s.roleKey === "timer" ? { ...s, roleName: "Timekeeper" } : s,
+		);
+		const details = voteRows(expandRunSheet(renamed, RUN_OF_SHOW)).map(
+			(r) => r.detail,
+		);
+		expect(details).toEqual([
+			"Calls for the Timekeeper's report · opens voting for Best Speaker",
+			"Calls for the Timekeeper's report · opens voting for Best Table Topics",
+			"Calls for the Timekeeper's report · opens voting for Best Evaluator",
+		]);
+		// The legend the club reads at the top of the same page. Asserted here rather
+		// than trusted, because agreeing with it IS the fix.
+		expect(buildLegend(renamed).map((l) => l.role)).toContain("Timekeeper");
+		expect(details.join(" ")).not.toContain("Timer's");
+	});
+
+	// The speaker and evaluator arms label rows through `numbered(s.roleName, …)`
+	// rather than the shared plain arm, so they need their own club. Nothing
+	// covered them before: the coverage audit found that reverting BOTH arms to
+	// `owner.roleName` left all 2302 tests green, because no fixture anywhere
+	// pairs a non-canonical `roleName` with a `roleKey` that still binds.
+	it("numbers the speaker and evaluator rows under the club's names (#445)", () => {
+		const renamed = [
+			...sixRoleClub().map((s) =>
+				s.roleKey === "speaker"
+					? { ...s, roleName: "Presenter" }
+					: s.roleKey === "evaluator"
+						? { ...s, roleName: "Reviewer" }
+						: s,
+			),
+			slot({
+				id: "sp2",
+				roleKey: "speaker",
+				roleName: "Presenter",
+				category: "speaker",
+				isSpeakerRole: true,
+				assigneeName: "Farhanaaz",
+				slotIndex: 9,
+			}),
+		];
+		const rows = expandRunSheet(renamed, RUN_OF_SHOW);
+		const who = rows.map((r) => r.who);
+		// Two speakers ⇒ `multi` ⇒ the ordinal suffix rides the CLUB's name.
+		expect(who).toContain("Presenter 1 · Jagpal");
+		expect(who).toContain("Presenter 2 · Farhanaaz");
+		expect(who).toContain("Reviewer · Sudheer");
+		expect(who.filter((w) => w.startsWith("Speaker"))).toEqual([]);
+		expect(who.filter((w) => w.startsWith("Evaluator"))).toEqual([]);
+	});
+
+	// The print colour fix depends on a speech row carrying `roleKey: "speaker"`.
+	// The print test that looks like it covers that hand-builds its row, so the
+	// producer side was unasserted — a speech row emitted with no key would fall
+	// back to matching "presenter" against English and silently lose its colour.
+	it("stamps the owning role's key on speaker and evaluator rows (#445)", () => {
+		const renamed = sixRoleClub().map((s) =>
+			s.roleKey === "speaker"
+				? { ...s, roleName: "Presenter" }
+				: s.roleKey === "evaluator"
+					? { ...s, roleName: "Reviewer" }
+					: s,
+		);
+		const rows = expandRunSheet(renamed, RUN_OF_SHOW);
+		expect(rows.find((r) => r.who.startsWith("Presenter"))?.roleKey).toBe(
+			"speaker",
+		);
+		expect(rows.find((r) => r.who.startsWith("Reviewer"))?.roleKey).toBe(
+			"evaluator",
+		);
+		// Event beats own no role, so they carry no key and the print layer's name
+		// fallback is what colours them. Pin the ROW first: `find(...)?.roleKey ??
+		// null` reads `null` whether the row is keyless or absent entirely, so
+		// deleting the beat outright would have left this green.
+		const soa = rows.find((r) => r.who === "Sergeant-at-Arms");
+		expect(soa).toBeDefined();
+		expect(soa).not.toHaveProperty("roleKey");
+	});
+
+	// A slot with no `roleKey` reaches a beat only by matching its canonical NAME
+	// (`matchesRole`), so the row genuinely belongs to that role — the club's data
+	// just predates the #368 backfill. The row still gets the BEAT's key, which is
+	// what the print layer colours by, so a pre-backfill club is not a grey page.
+	it("keys a row whose slot carries no roleKey (#445)", () => {
+		const rows = expandRunSheet([
+			slot({
+				roleKey: undefined,
+				roleName: "General Evaluator",
+				category: "leadership",
+				assigneeName: "Priya",
+			}),
+		]);
+		const row = rows.find((r) => r.who === "General Evaluator · Priya");
+		expect(row?.roleKey).toBe("general_evaluator");
+	});
+
+	// A club role name is admin-typed free text with no character validation, and
+	// `String.replace` reads `$&` / "$`" / `$'` in a REPLACEMENT STRING as
+	// back-references. The token resolver passes a function instead, so the name
+	// substitutes literally. Without that, this club prints its own copy back into
+	// the row. Same guard the `ROLES_TOKEN` site documents.
+	it("substitutes a role name containing $-sequences literally (#445)", () => {
+		// Sequences kept away from the ends so the expectation stays readable: a name
+		// ending in `$'` would legitimately double the possessive into `$''s`.
+		const hostile = sixRoleClub().map((s) =>
+			s.roleKey === "timer" ? { ...s, roleName: "Timer $& $` $' Squad" } : s,
+		);
+		expect(voteRows(expandRunSheet(hostile, RUN_OF_SHOW))[0].detail).toBe(
+			"Calls for the Timer $& $` $' Squad's report · opens voting for Best Speaker",
+		);
+	});
+
+	// The bug the single-pass rewrite fixed. Resolving the role name first and the
+	// LIST tokens second meant a club role named literally "{awards}" had the
+	// awards list spliced into its row: "Calls for the Best Table Topic, Best
+	// Evaluator & Best Speaker's report". `role-definitions-logic.ts` validates
+	// only non-empty, so an admin can type it. One `String.replace` pass never
+	// rescans what it substituted, which is what makes this inert by construction
+	// rather than by a blocklist.
+	it("does not re-resolve a club role name that is itself a token (#445)", () => {
+		for (const hostileName of ["{awards}", "{roles}", "{role:timer}"]) {
+			const club = sixRoleClub().map((s) =>
+				s.roleKey === "timer" ? { ...s, roleName: hostileName } : s,
+			);
+			const detail = voteRows(expandRunSheet(club, RUN_OF_SHOW))[0].detail;
+			expect(detail).toBe(
+				`Calls for the ${hostileName}'s report · opens voting for Best Speaker`,
+			);
+			// The tell: no award label and no second role name leaked in.
+			expect(detail).not.toContain("Best Table Topic,");
+			expect(detail).not.toContain("Timer");
+		}
+	});
+
+	it("leaves an unrecognised role key verbatim rather than blanking it (#445)", () => {
+		// Documented contract: a typo must show up on the page, not silently drop
+		// the cue. Reached through a hand-written beat, since no shipped beat has one.
+		const typo: Beat = {
+			kind: "role",
+			roleKey: "toastmaster_of_the_day",
+			roleName: "Toastmaster of the Day",
+			role: "plain",
+			detail: "Calls for the {role:tymer}'s report",
+			minutes: 1,
+		};
+		expect(expandRunSheet(sixRoleClub(), [typo])[0].detail).toBe(
+			"Calls for the {role:tymer}'s report",
+		);
+	});
+
+	// `roleNameToken` builds `{role:<key>}` and the resolver's regex accepts only
+	// lower-snake, so a key like `timer2` or `Timer` would produce a token nothing
+	// resolves and the row would print `{role:…}` to the room mid-meeting.
+	//
+	// Asserted over the SHIPPED templates rather than by re-checking the regex's
+	// character class in the test: a copy of that class here false-fails the moment
+	// someone legitimately widens both ends together, and it says nothing about
+	// whether a real beat resolves. A leftover `{` on any real row is the actual
+	// defect, and this also catches a mistyped `{roles}`/`{awards}`.
+	it("leaves no unresolved token on any row of any shipped beat (#445)", () => {
+		for (const geIntroducesFunctionaries of [true, false]) {
+			const rows = expandRunSheet(
+				sixRoleClub(),
+				buildRunOfShow({ geIntroducesFunctionaries }),
+			);
+			expect(rows.length).toBeGreaterThan(0);
+			for (const r of rows) expect(r.detail).not.toContain("{");
+		}
+	});
+
+	// `applyFlex` rebuilds the row list, so a field-by-field reassembly there would
+	// strip `roleKey` and every renamed club would silently lose its spine colour
+	// with the suite green. The repo already has this exact test for the `handoff`
+	// marker; `roleKey` is the second field with the same exposure.
+	it("keeps roleKey through applyFlex and buildTimeline (#445)", () => {
+		const flexed = applyFlex(expandRunSheet(sixRoleClub(), RUN_OF_SHOW), 90);
+		const timed = buildTimeline(
+			flexed.rows,
+			"2026-07-07T23:45:00Z",
+			"America/Chicago",
+		);
+		expect(timed.find((r) => r.who.startsWith("Speaker"))?.roleKey).toBe(
+			"speaker",
+		);
+		// The resized row too — that is the arm that rebuilds rather than passes by
+		// reference.
+		expect(timed.find((r) => r.flex === true)?.roleKey).toBe(
+			"table_topics_master",
+		);
+	});
+
 	it("drops the timer's-report clause, keeping the leader, when there is no Timer", () => {
 		const noTimer = sixRoleClub().filter((s) => s.roleKey !== "timer");
 		expect(
@@ -762,6 +962,7 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 		const rows = voteRows(expandRunSheet(noTmNoTimer, RUN_OF_SHOW));
 		expect(rows[0]).toEqual({
 			who: "Toastmaster of the Day",
+			roleKey: "toastmaster_of_the_day",
 			detail: "Opens voting for Best Speaker",
 			minutes: 1,
 			marks: null,
@@ -780,6 +981,7 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 			),
 		).toEqual({
 			who: "Toastmaster of the Day · Faisal",
+			roleKey: "toastmaster_of_the_day",
 			detail: "Calls for the Timer's report · opens voting for Best Evaluator",
 			minutes: 1,
 			marks: null,
@@ -799,6 +1001,7 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 			),
 		).toEqual({
 			who: "Toastmaster of the Day · Faisal",
+			roleKey: "toastmaster_of_the_day",
 			detail: "Opens voting for Best Evaluator",
 			minutes: 1,
 			marks: null,
@@ -820,6 +1023,7 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 			),
 		).toEqual({
 			who: "Toastmaster of the Day",
+			roleKey: "toastmaster_of_the_day",
 			detail: "Calls for the Timer's report · opens voting for Best Evaluator",
 			minutes: 1,
 			marks: null,
@@ -875,6 +1079,7 @@ describe("the Toastmaster covers the General Evaluator's role (#363)", () => {
 			rows.find((r) => r.detail === "Calls for the functionary reports"),
 		).toEqual({
 			who: "Toastmaster of the Day · Faisal",
+			roleKey: "toastmaster_of_the_day",
 			detail: "Calls for the functionary reports",
 			minutes: 3,
 			marks: null,
@@ -888,6 +1093,7 @@ describe("the Toastmaster covers the General Evaluator's role (#363)", () => {
 		const withGe = expandRunSheet(sixRoleClub(), RUN_OF_SHOW);
 		expect(withGe.find((r) => r.detail.startsWith("Overall meeting"))).toEqual({
 			who: "General Evaluator · Riyaz",
+			roleKey: "general_evaluator",
 			detail: "Overall meeting evaluation · returns control to the Toastmaster",
 			minutes: 2,
 			marks: null,
@@ -896,6 +1102,7 @@ describe("the Toastmaster covers the General Evaluator's role (#363)", () => {
 		expect(covered.find((r) => r.detail.startsWith("Overall meeting"))).toEqual(
 			{
 				who: "Toastmaster of the Day · Faisal",
+				roleKey: "toastmaster_of_the_day",
 				detail: "Overall meeting evaluation",
 				minutes: 2,
 				marks: null,
@@ -1535,6 +1742,7 @@ describe("expandRunSheet — the functionary-intro and functionary-reports beats
 		const rows = expandRunSheet([totd, timer, grammarian], template);
 		expect(introRow(rows)).toEqual({
 			who: "Toastmaster of the Day · Dana",
+			roleKey: "toastmaster_of_the_day",
 			detail: "Introduces the Timer & Grammarian; each explains their role",
 			minutes: 3,
 			marks: null,
@@ -1617,6 +1825,7 @@ describe("expandRunSheet — the functionary-intro and functionary-reports beats
 			speakersHandoffRow(expandRunSheet([totd, ge, grammarian, speaker])),
 		).toEqual({
 			who: "Toastmaster of the Day · Dana",
+			roleKey: "toastmaster_of_the_day",
 			detail: "Introduces the speakers",
 			minutes: 0,
 			marks: null,
@@ -2162,7 +2371,7 @@ describe("awards beat is role-bound (#363)", () => {
 		expect(awardsRow(slots)?.who).toBe("Toastmaster of the Day · Faisal");
 	});
 
-	it("binds by key through a club rename, and labels the row with the canonical role name", () => {
+	it("binds by key through a club rename, and labels the row with the CLUB's name", () => {
 		const slots = [
 			slot({
 				id: "tm",
@@ -2180,12 +2389,12 @@ describe("awards beat is role-bound (#363)", () => {
 			}),
 		];
 		// The beat still FINDS the renamed slot (#368 — binding is by key), so the
-		// awards row exists and names its holder. The label is the beat's canonical
-		// role name, not the club's rename: every role row in `expandRunSheet` reads
-		// `owner.roleName`, while the header legend and `ROLES_TOKEN` read the slot's
-		// own name. That inconsistency is pre-existing and tracked separately — this
-		// test pins today's behaviour so a future change to it is deliberate.
-		expect(awardsRow(slots)?.who).toBe("Toastmaster of the Day · Faisal");
+		// awards row exists and names its holder. It now also LABELS it the way the
+		// club does (#445): `expandRunSheet` reads the matched slot's `roleName`,
+		// the same source the header legend and `ROLES_TOKEN` always read. The
+		// inconsistency this test was written to pin is closed, and inverting it is
+		// the deliberate change its old comment asked for.
+		expect(awardsRow(slots)?.who).toBe("Master of Ceremonies · Faisal");
 	});
 
 	it("still hands out awards at a club with no Toastmaster of the Day", () => {
@@ -2233,6 +2442,7 @@ describe("BeatFallback — owner and detail swap (#363)", () => {
 		expect(expandRunSheet(slots, [beat])).toEqual([
 			{
 				who: "Table Topics Master · Rasheed",
+				roleKey: "table_topics_master",
 				detail: "Introduces the General Evaluator",
 				minutes: 0,
 				marks: null,
@@ -2252,6 +2462,7 @@ describe("BeatFallback — owner and detail swap (#363)", () => {
 		expect(expandRunSheet(slots, [beat])).toEqual([
 			{
 				who: "Toastmaster of the Day · Faisal",
+				roleKey: "toastmaster_of_the_day",
 				detail: "Introduces the General Evaluator",
 				minutes: 0,
 				marks: null,
@@ -2309,6 +2520,7 @@ describe("BeatFallback — owner and detail swap (#363)", () => {
 		expect(expandRunSheet(slots, [both])).toEqual([
 			{
 				who: "Toastmaster of the Day · Faisal",
+				roleKey: "toastmaster_of_the_day",
 				detail: "Hands off directly to the General Evaluator",
 				minutes: 0,
 				marks: null,
@@ -2371,6 +2583,7 @@ describe("BeatFallback — owner and detail swap (#363)", () => {
 		expect(expandRunSheet(slots, [noOp])).toEqual([
 			{
 				who: "Table Topics Master · Rasheed",
+				roleKey: "table_topics_master",
 				detail: "Introduces the General Evaluator",
 				minutes: 0,
 				marks: null,
@@ -2508,6 +2721,7 @@ describe("renderUnowned (#363)", () => {
 		expect(expandRunSheet([], [beat])).toEqual([
 			{
 				who: "Toastmaster of the Day",
+				roleKey: "toastmaster_of_the_day",
 				detail: "Opens voting for Best Speaker",
 				minutes: 1,
 				marks: null,
@@ -2624,6 +2838,7 @@ describe("BeatFallback — fb.detail resolves through resolveDetail (#363)", () 
 		expect(expandRunSheet(slots, [beat])).toEqual([
 			{
 				who: "Toastmaster of the Day · Faisal",
+				roleKey: "toastmaster_of_the_day",
 				detail: "Introduces the Timer",
 				minutes: 1,
 				marks: null,
