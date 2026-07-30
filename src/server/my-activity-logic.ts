@@ -58,39 +58,46 @@ export async function loadSpeechLog(
 	const evaluatorSlot = alias(roleSlots, "evaluator_slot");
 	const evaluatorMember = alias(members, "evaluator_member");
 
-	return db
-		.select({
-			slotId: roleSlots.id,
-			scheduledAt: meetings.scheduledAt,
-			roleName: roleDefinitions.name,
-			speechTitle: speeches.title,
-			projectName: speeches.projectName,
-			pathwayPath: speeches.pathwayPath,
-			projectLevel: speeches.projectLevel,
-			evaluatorName: evaluatorMember.name,
-			status: roleSlots.status,
-		})
-		.from(roleSlots)
-		.innerJoin(
-			roleDefinitions,
-			eq(roleDefinitions.id, roleSlots.roleDefinitionId),
-		)
-		.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
-		.leftJoin(speeches, eq(speeches.id, roleSlots.speechId))
-		.leftJoin(evaluatorSlot, eq(evaluatorSlot.evaluatesSlotId, roleSlots.id))
-		.leftJoin(
-			evaluatorMember,
-			eq(evaluatorMember.id, evaluatorSlot.assignedMemberId),
-		)
-		.where(
-			and(
-				inArray(roleSlots.assignedMemberId, memberIds),
-				eq(roleDefinitions.isSpeakerRole, true),
-				clubId ? eq(meetings.clubId, clubId) : undefined,
-			),
-		)
-		.orderBy(desc(meetings.scheduledAt))
-		.limit(limit);
+	return (
+		db
+			.select({
+				slotId: roleSlots.id,
+				scheduledAt: meetings.scheduledAt,
+				roleName: roleDefinitions.name,
+				speechTitle: speeches.title,
+				projectName: speeches.projectName,
+				pathwayPath: speeches.pathwayPath,
+				projectLevel: speeches.projectLevel,
+				evaluatorName: evaluatorMember.name,
+				status: roleSlots.status,
+			})
+			.from(roleSlots)
+			.innerJoin(
+				roleDefinitions,
+				eq(roleDefinitions.id, roleSlots.roleDefinitionId),
+			)
+			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+			.leftJoin(speeches, eq(speeches.id, roleSlots.speechId))
+			.leftJoin(evaluatorSlot, eq(evaluatorSlot.evaluatesSlotId, roleSlots.id))
+			.leftJoin(
+				evaluatorMember,
+				eq(evaluatorMember.id, evaluatorSlot.assignedMemberId),
+			)
+			.where(
+				and(
+					inArray(roleSlots.assignedMemberId, memberIds),
+					eq(roleDefinitions.isSpeakerRole, true),
+					clubId ? eq(meetings.clubId, clubId) : undefined,
+				),
+			)
+			// `roleSlots.id` breaks ties: two meetings sharing a `scheduled_at` (two
+			// clubs on one night, or a duplicated/rescheduled meeting) otherwise made
+			// the `limit` window's MEMBERSHIP arbitrary — a row could enter or leave
+			// the dashboard between loader runs. That is the same nondeterminism
+			// class #437 exists to remove.
+			.orderBy(desc(meetings.scheduledAt), desc(roleSlots.id))
+			.limit(limit)
+	);
 }
 
 /**
@@ -112,35 +119,39 @@ export async function loadMyCommitments(userId: string) {
 	const memberIds = await userMemberIds(userId);
 	if (memberIds.length === 0) return [];
 
-	return db
-		.select({
-			slotId: roleSlots.id,
-			status: roleSlots.status,
-			meetingId: meetings.id,
-			scheduledAt: meetings.scheduledAt,
-			lengthMinutes: meetings.lengthMinutes,
-			theme: meetings.theme,
-			location: meetings.location,
-			clubName: clubs.name,
-			timezone: clubs.timezone,
-			roleName: roleDefinitions.name,
-			isSpeakerRole: roleDefinitions.isSpeakerRole,
-			speechTitle: speeches.title,
-		})
-		.from(roleSlots)
-		.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
-		.innerJoin(clubs, eq(clubs.id, meetings.clubId))
-		.innerJoin(
-			roleDefinitions,
-			eq(roleDefinitions.id, roleSlots.roleDefinitionId),
-		)
-		.leftJoin(speeches, eq(speeches.id, roleSlots.speechId))
-		.where(
-			and(
-				inArray(roleSlots.assignedMemberId, memberIds),
-				gte(meetings.scheduledAt, new Date()),
-				ne(meetings.status, "cancelled"),
-			),
-		)
-		.orderBy(asc(meetings.scheduledAt));
+	return (
+		db
+			.select({
+				slotId: roleSlots.id,
+				status: roleSlots.status,
+				meetingId: meetings.id,
+				scheduledAt: meetings.scheduledAt,
+				lengthMinutes: meetings.lengthMinutes,
+				theme: meetings.theme,
+				location: meetings.location,
+				clubName: clubs.name,
+				timezone: clubs.timezone,
+				roleName: roleDefinitions.name,
+				isSpeakerRole: roleDefinitions.isSpeakerRole,
+				speechTitle: speeches.title,
+			})
+			.from(roleSlots)
+			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+			.innerJoin(clubs, eq(clubs.id, meetings.clubId))
+			.innerJoin(
+				roleDefinitions,
+				eq(roleDefinitions.id, roleSlots.roleDefinitionId),
+			)
+			.leftJoin(speeches, eq(speeches.id, roleSlots.speechId))
+			.where(
+				and(
+					inArray(roleSlots.assignedMemberId, memberIds),
+					gte(meetings.scheduledAt, new Date()),
+					ne(meetings.status, "cancelled"),
+				),
+			)
+			// Tiebreaker as above — a tie reordering an unlabelled list is how a
+			// wrong Release click happens.
+			.orderBy(asc(meetings.scheduledAt), asc(roleSlots.id))
+	);
 }

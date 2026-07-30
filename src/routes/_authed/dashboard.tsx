@@ -184,7 +184,12 @@ function Dashboard() {
 								return (
 									<Link
 										key={r.slotId}
-										to="/next"
+										// The row's OWN meeting, not `/next` — that resolves the
+										// ACTIVE club's soonest meeting, so once this list went
+										// cross-club (#437) a club-B commitment navigated to
+										// club-A's agenda. `meetingId` is already on the payload.
+										to="/meetings/$id"
+										params={{ id: r.meetingId }}
 										className="flex items-center gap-3 border-t border-[var(--line)] px-5 py-3 no-underline transition-colors hover:bg-[var(--foam)]"
 									>
 										<span
@@ -196,8 +201,15 @@ function Dashboard() {
 												{r.roleName}
 											</div>
 											<div className="text-xs text-[var(--sea-ink-soft)]">
-												{formatMeetingDate(r.scheduledAt, r.timezone)} ·{" "}
-												{r.speechTitle ?? r.theme ?? r.clubName}
+												{/* Club is unconditional, not the last fallback: as a
+												    third fallback it showed up only on the sparsest
+												    rows — never on the speech/theme rows most likely
+												    to collide across clubs. */}
+												{r.clubName} ·{" "}
+												{formatMeetingDate(r.scheduledAt, r.timezone)}
+												{(r.speechTitle ?? r.theme)
+													? ` · ${r.speechTitle ?? r.theme}`
+													: null}
 											</div>
 										</div>
 										<span

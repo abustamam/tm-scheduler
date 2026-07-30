@@ -13,7 +13,7 @@ import { randomUUID } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { user } from "#/db/auth-schema";
-import { notifications, people } from "#/db/schema";
+import { members, notifications, people } from "#/db/schema";
 import type { SendEmailParams } from "#/lib/email";
 import {
 	createUnsubscribeToken,
@@ -115,15 +115,31 @@ describe.skipIf(!hasTestDb)("reminder control layer (#274)", () => {
 	//
 	// `people.user_id` is not unique, and the #272 producer suppresses per-Person
 	// (listOptedOutPersonIds, keyed on members.person_id). So the /me toggle can
-	// only honestly say "opted out" when EVERY linked Person is opted out —
-	// reading one arbitrary row could report either answer wrongly.
+	// only honestly say "opted out" when every MAILABLE linked Person is — one
+	// arbitrary row could report either answer wrongly, and a Person holding no
+	// roster membership can never be mailed at all, so it does not get a vote.
 
-	/** A second Person on the same account — the duplicate #329 has not merged. */
+	/**
+	 * A second Person on the same account — the duplicate #329 has not merged.
+	 *
+	 * It carries its OWN roster membership, which is what makes it mailable: the
+	 * #272 producer reaches recipients through roleSlots→members→people, so a
+	 * membership-less duplicate could never receive a reminder and deliberately
+	 * does not count toward the toggle (see the membership-less test below).
+	 */
 	async function addDuplicatePerson(): Promise<string> {
-		return seedPerson({
+		const personId = await seedPerson({
 			name: "Duplicate Member",
 			userId: club.memberUserId,
 		});
+		await testDb.insert(members).values({
+			clubId: club.clubId,
+			personId,
+			name: "Duplicate Member",
+			clubRole: "member",
+			status: "active",
+		});
+		return personId;
 	}
 
 	it("reports opted-in while ANY linked Person still receives reminders", async () => {
@@ -251,6 +267,56 @@ describe.skipIf(!hasTestDb)("reminder control layer (#274)", () => {
 			await testDb
 				.delete(people)
 				.where(inArray(people.id, [optedOut, stillOptedIn]));
+			await testDb.delete(user).where(eq(user.id, soloUserId));
+		}
+	});
+
+	// A linked Person holding no roster membership can never be mailed — the
+	// producer builds recipients through roleSlots→members→people. Counting it
+	// let one newly-linked orphan flip the screen back to "reminders on" with no
+	// change in what arrives. This is the dominant real shape: eight accounts in
+	// the dev database carry 5-6 linked Persons of which exactly one is rostered.
+	it("ignores membership-less Persons when deciding the toggle", async () => {
+		const orphan = await seedPerson({
+			name: "Linked But Unrostered",
+			userId: club.memberUserId,
+		});
+		try {
+			// The ROSTERED Person opts out; the orphan keeps the opted-in default.
+			await setPersonReminderOptOut(club.personId, true);
+			await testDb
+				.update(people)
+				.set({ reminderOptOut: false })
+				.where(eq(people.id, orphan));
+
+			// The orphan cannot receive anything, so it must not veto the answer.
+			expect(await getReminderOptOutForUser(club.memberUserId)).toBe(true);
+		} finally {
+			await testDb.delete(people).where(eq(people.id, orphan));
+		}
+	});
+
+	// ...but an account with NO rostered Person at all still has to be able to
+	// work its own toggle, rather than reading a stuck value forever.
+	it("an account with only membership-less Persons still round-trips", async () => {
+		const soloUserId = randomUUID();
+		await testDb.insert(user).values({
+			id: soloUserId,
+			name: "No Roster Yet",
+			email: `${soloUserId}@test.example`,
+		});
+		const orphan = await seedPerson({
+			name: "Unrostered",
+			userId: soloUserId,
+		});
+		try {
+			expect(await getReminderOptOutForUser(soloUserId)).toBe(false);
+			await setReminderOptOutForUser(soloUserId, true);
+			expect(await getReminderOptOutForUser(soloUserId)).toBe(true);
+			await setReminderOptOutForUser(soloUserId, false);
+			expect(await getReminderOptOutForUser(soloUserId)).toBe(false);
+		} finally {
+			await testDb.delete(people).where(eq(people.id, orphan));
 			await testDb.delete(user).where(eq(user.id, soloUserId));
 		}
 	});
