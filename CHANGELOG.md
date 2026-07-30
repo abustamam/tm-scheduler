@@ -2,6 +2,19 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.1.4.0] - 2026-07-30
+
+### Fixed
+
+- Your speech log and your upcoming roles now cover **every club you belong to**. If you are a member of two clubs, both pages promised a cross-club view and quietly showed you one club's rows — and which club could change between page loads.
+- Both lists now name the club on every row, so two "Timer" bookings a week apart are no longer told apart by date alone. On the dashboard, clicking an upcoming role opens that role's own meeting instead of whichever meeting was next in the club you happened to have selected.
+- Clicking **unsubscribe** in a reminder email now stops reminders for good. Reminder mail is addressed to your account, so if your name appeared on more than one club roster the link switched off only one of them and mail kept arriving at the same inbox.
+- The reminder-emails switch on **Me** now reflects your whole account rather than one record picked at random, and no longer counts records that could never have emailed you — so it stops flipping itself back on after an admin adds you to a roster.
+
+### Changed
+
+- Speech history deliberately includes clubs you have left. Leaving a club does not un-give the speeches you gave there, even though the club switcher stops listing it.
+
 ## [1.1.3.1] - 2026-07-30
 
 Documentation only; no behaviour change.
