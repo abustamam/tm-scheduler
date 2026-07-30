@@ -276,42 +276,57 @@ export const clubMeetingRecurrence = pgTable(
 // NOT modeled here (out of scope).
 // ---------------------------------------------------------------------------
 
-export const people = pgTable("people", {
-	id: uuid("id").defaultRandom().primaryKey(),
-	// Toastmasters Customer ID (PN-…). Nullable; Postgres treats NULLs as
-	// distinct, so the unique constraint is "unique-when-present".
-	customerId: text("customer_id").unique(),
-	// Durable Base Camp/edX user id (from /api/bcm/progress `user.id`), captured on
-	// first email match and used as the join key for Pathways sync thereafter.
-	// Nullable + unique-when-present (Postgres treats NULLs as distinct).
-	basecampUserId: text("basecamp_user_id").unique(),
-	name: text("name").notNull(),
-	email: text("email"),
-	phone: text("phone"),
-	// First-ever Toastmasters join date — a person-level fact (identical across
-	// every club), moved off the per-club members row (ADR-0008).
-	originalJoinDate: timestamp("original_join_date"),
-	// The canonical link to a Better-Auth sign-in account (one login spans all
-	// their clubs). The auth path resolves a signed-in user to this Person, then
-	// to their per-club memberships and roles (ADR-0008 Phase B / #99).
-	userId: text("user_id").references(() => user.id, { onDelete: "set null" }),
-	// Account-invite tracking (#266). Stamped when an admin sends this person a
-	// magic-link account invite (or a self-claim link is initiated) that will link
-	// them on acceptance. Person-level (one human, all clubs) like `user_id`.
-	// Drives the roster's per-row invite state: `invited_at` set + `user_id` NULL =
-	// "invited, not joined"; `user_id` set = "joined" (supersedes the invite).
-	// Never cleared — a linked account (`user_id`) makes it moot.
-	invitedAt: timestamp("invited_at"),
-	// Reminder-email opt-out (#274 — the reminders control layer, member level).
-	// Keyed per Person, so it governs this human's inbox GLOBALLY across every club
-	// they belong to (a reminder is a self-regarding nudge about a role they
-	// claimed — one preference per person, not per membership). Default false =
-	// opted IN: members receive reminders unless they turn them off (the product
-	// decision, matching #272). Flipped from /me (member settings) or the no-auth
-	// one-click /unsubscribe link every reminder email carries.
-	reminderOptOut: boolean("reminder_opt_out").notNull().default(false),
-	createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+export const people = pgTable(
+	"people",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		// Toastmasters Customer ID (PN-…). Nullable; Postgres treats NULLs as
+		// distinct, so the unique constraint is "unique-when-present".
+		customerId: text("customer_id").unique(),
+		// Durable Base Camp/edX user id (from /api/bcm/progress `user.id`), captured on
+		// first email match and used as the join key for Pathways sync thereafter.
+		// Nullable + unique-when-present (Postgres treats NULLs as distinct).
+		basecampUserId: text("basecamp_user_id").unique(),
+		name: text("name").notNull(),
+		email: text("email"),
+		phone: text("phone"),
+		// First-ever Toastmasters join date — a person-level fact (identical across
+		// every club), moved off the per-club members row (ADR-0008).
+		originalJoinDate: timestamp("original_join_date"),
+		// The canonical link to a Better-Auth sign-in account (one login spans all
+		// their clubs). The auth path resolves a signed-in user to this Person, then
+		// to their per-club memberships and roles (ADR-0008 Phase B / #99).
+		userId: text("user_id").references(() => user.id, { onDelete: "set null" }),
+		// Account-invite tracking (#266). Stamped when an admin sends this person a
+		// magic-link account invite (or a self-claim link is initiated) that will link
+		// them on acceptance. Person-level (one human, all clubs) like `user_id`.
+		// Drives the roster's per-row invite state: `invited_at` set + `user_id` NULL =
+		// "invited, not joined"; `user_id` set = "joined" (supersedes the invite).
+		// Never cleared — a linked account (`user_id`) makes it moot.
+		invitedAt: timestamp("invited_at"),
+		// Reminder-email opt-out (#274 — the reminders control layer, member level).
+		// Keyed per Person, so it governs this human's inbox GLOBALLY across every club
+		// they belong to (a reminder is a self-regarding nudge about a role they
+		// claimed — one preference per person, not per membership). Default false =
+		// opted IN: members receive reminders unless they turn them off (the product
+		// decision, matching #272). Flipped from /me (member settings) or the no-auth
+		// one-click /unsubscribe link every reminder email carries.
+		reminderOptOut: boolean("reminder_opt_out").notNull().default(false),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+	},
+	(t) => [
+		// Postgres does NOT auto-index a foreign-key referencing column, and
+		// EVERY signed-in-user resolution starts from `where(eq(people.userId, …))`
+		// — resolveUserPersonId, userPersonIds, userMemberIds (#437) and
+		// getReminderOptOutForUser, the last two on the /dashboard and /me SSR
+		// loaders. Without this each was a sequential scan of a table that grows
+		// with total app adoption rather than with one club's size. #437 also
+		// (correctly) dropped a `.limit(1)` that had been letting the executor
+		// abort that scan early, which made the index load-bearing rather than
+		// merely nice. #474.
+		index("people_user_idx").on(t.userId),
+	],
+);
 
 // ---------------------------------------------------------------------------
 // Roster members (self-serve MVP — auth-decoupled identities).

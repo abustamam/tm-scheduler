@@ -489,7 +489,8 @@ export const listMyCommitments = createServerFn({ method: "GET" }).handler(
  *  difference is that this one decorates rows with `urlKey` afterwards. A third
  *  hand-copy lives in `public-reads.integration.test.ts` as its ONLY test, and
  *  it has already drifted (it omits `lengthMinutes`), so that test cannot see a
- *  defect present in both production copies. Unifying them is #473.  */
+ *  defect present in both production copies. Worth unifying if a third caller
+ *  ever lands; deliberately not tracked as an issue. */
 export const listMemberCommitments = createServerFn({ method: "GET" })
 	.validator((memberId: unknown) => uuid.parse(memberId))
 	.handler(async ({ data: memberId }) => {
