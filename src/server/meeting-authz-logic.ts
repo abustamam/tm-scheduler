@@ -2,7 +2,7 @@
 // session-aware guard in `guards.ts` so the db-touching branch logic is
 // directly integration-testable by mocking `#/db`. This module must never be
 // imported by client components (it touches `db`/`pg`).
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { db } from "#/db";
 import {
 	meetings,
@@ -125,7 +125,15 @@ async function loadRoleSlotAssignees(meetingId: string): Promise<{
 			roleDefinitions,
 			eq(roleDefinitions.id, roleSlots.roleDefinitionId),
 		)
-		.where(eq(roleSlots.meetingId, meetingId));
+		.where(eq(roleSlots.meetingId, meetingId))
+		// Deterministic, and the SAME order the route sees (`loadMeetingDetail`
+		// orders by these two). The keyed pass makes the common tie irrelevant, but
+		// two KEYLESS rows both named canonically are still separated by order
+		// alone — `role_definitions` has no unique constraint on (club_id, name) and
+		// the Add Role form posts free text, so that pair is constructible. Without
+		// this the same meeting could grant a different member between requests, and
+		// the server could disagree with the button the client rendered.
+		.orderBy(asc(roleDefinitions.sortOrder), asc(roleSlots.slotIndex));
 	return {
 		tmodMemberId: findTmodSlot(slotRows)?.assignedMemberId ?? null,
 		grammarianMemberId: findGrammarianSlot(slotRows)?.assignedMemberId ?? null,

@@ -27,12 +27,20 @@ export type RoleIdentity = { roleName: string; roleKey?: string | null };
  * Keying off `role_definitions.key` alone did not close that, because those rows
  * fall through to exactly this fallback (#464).
  *
- * Narrowing costs nothing real. The case the fallback exists for is a standard
- * role whose key is still NULL — `drizzle/0044` backfilled by exact canonical
- * name, so anything already renamed at that point kept NULL. But a RENAMED role
- * carries the club's own name, which never matched the prefix regex either. So
- * the only rows the fallback ever helped are the ones still literally named
- * canonically, which exact matching keeps.
+ * Narrowing is a deliberate FAIL-CLOSED trade, not a free win. The case the
+ * fallback exists for is a standard role whose key is still NULL — `drizzle/0044`
+ * backfilled by exact canonical name, so anything already renamed at that point
+ * kept NULL. Most such renames drop the canonical word entirely ("MC") and never
+ * matched the prefix regex either, so they lose nothing here. But a rename that
+ * KEEPS it — "Toastmaster of the Evening", "Toastmaster (TMOD)", "Grammarian /
+ * Word of the Day" — did match the prefix and no longer matches, so that club
+ * loses self-serve editing until its key is backfilled.
+ *
+ * Shipped that way on purpose: silently handing an impostor the agenda is worse
+ * than a club losing a self-serve button it can restore by naming the role
+ * canonically, and an admin can still edit either way. The real close is a
+ * migration that backfills `key` for prefix-matching rows so nothing depends on
+ * the name at all — tracked separately.
  */
 const TMOD_CANONICAL_NAMES = ["toastmaster of the day", "toastmaster"];
 const GRAMMARIAN_CANONICAL_NAMES = ["grammarian"];
@@ -64,38 +72,55 @@ export function isGrammarianRoleName(name: string): boolean {
 }
 
 /**
- * The one slot holding a capability role, keyed match preferred over a named one.
+ * The one slot holding a capability role, resolved so the answer never depends on
+ * what order the caller happens to hold the slots in.
  *
- * Two passes rather than a single `find`, because the two kinds of match are not
- * equally trustworthy: a keyed slot IS the role, a name-matched one merely looks
- * like it. A club running both a renamed TMOD (key intact) and an invented
- * "Toastmaster Assistant" (no key) has two candidates, and a single `find` would
- * pick whichever the caller's array happened to order first — for the server that
- * is an unordered SQL result, so the answer could differ between requests.
+ * Passes, in priority order:
+ *   1. the KEY — a keyed slot IS the role; a name-matched one merely looks like
+ *      it, so a renamed-but-keyed TMOD must beat an invented "Toastmaster
+ *      Assistant" whichever comes first in the array.
+ *   2. each canonical name in turn, MOST SPECIFIC first — "Toastmaster of the
+ *      Day" before the bare "Toastmaster". Nothing stops a club having both
+ *      (`role_definitions` has no unique constraint on (club_id, name) and the
+ *      Add Role form posts free text), and both are canonical, so the key cannot
+ *      separate them and only a stated precedence can.
+ *
+ * Without (2) the answer came from array order, which on the server is a SQL
+ * result: the same meeting could grant a different member between two requests,
+ * and the server could disagree with the button the client rendered.
  */
 function findCapabilityRole<T extends RoleIdentity>(
 	slots: T[],
 	key: string,
-	matchesName: (name: string) => boolean,
+	canonicalNames: string[],
 ): T | undefined {
-	return (
-		slots.find((s) => s.roleKey === key) ??
-		slots.find((s) => s.roleKey == null && matchesName(s.roleName))
-	);
+	const keyed = slots.find((s) => s.roleKey === key);
+	if (keyed) return keyed;
+	for (const canonical of canonicalNames) {
+		const named = slots.find(
+			(s) => s.roleKey == null && s.roleName.trim().toLowerCase() === canonical,
+		);
+		if (named) return named;
+	}
+	return undefined;
 }
 
 /** The meeting's TMOD slot, or undefined. */
 export function findTmodSlot<T extends RoleIdentity>(
 	slots: T[],
 ): T | undefined {
-	return findCapabilityRole(slots, TMOD_ROLE_KEY, isTmodRoleName);
+	return findCapabilityRole(slots, TMOD_ROLE_KEY, TMOD_CANONICAL_NAMES);
 }
 
 /** The meeting's Grammarian slot, or undefined. */
 export function findGrammarianSlot<T extends RoleIdentity>(
 	slots: T[],
 ): T | undefined {
-	return findCapabilityRole(slots, GRAMMARIAN_ROLE_KEY, isGrammarianRoleName);
+	return findCapabilityRole(
+		slots,
+		GRAMMARIAN_ROLE_KEY,
+		GRAMMARIAN_CANONICAL_NAMES,
+	);
 }
 
 /**

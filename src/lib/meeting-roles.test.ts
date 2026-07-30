@@ -277,6 +277,21 @@ describe("capability roles are identified by key, not by name (#464)", () => {
 		}
 	});
 
+	// Two KEYLESS rows both named canonically. The keyed pass cannot separate them,
+	// so only array order can — and on the server that order is a SQL result, which
+	// is why `loadRoleSlotAssignees` now carries an explicit ORDER BY. `Toastmaster`
+	// and `Toastmaster of the Day` are both canonical, and nothing stops a club
+	// having both: `role_definitions` has no unique constraint on (club_id, name).
+	it("answers the same way whichever order two keyless canonical rows arrive in", () => {
+		const rows = [
+			{ roleName: "Toastmaster", roleKey: null, assigneeId: "one" },
+			{ roleName: "Toastmaster of the Day", roleKey: null, assigneeId: "two" },
+		];
+		expect(findTmodSlot(rows)?.assigneeId).toBe(
+			findTmodSlot([...rows].reverse())?.assigneeId,
+		);
+	});
+
 	it("still matches by name for a slot with no key", () => {
 		// `drizzle/0044` backfilled keys by exact canonical NAME, so a club that
 		// renamed before it ran still has NULL there. Those clubs keep working the
