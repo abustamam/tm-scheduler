@@ -412,7 +412,7 @@ const TIMER_ROLE: BeatRole = { roleKey: "timer", roleName: "Timer" };
  *  ("Introduces the Table Topics Master"), but the deck's `handoff` slide reuses
  *  that same prose as BOTH its rendered line and its `HANDOFF_HEADER` key, so
  *  making those follow a rename means splitting one field into two and is
- *  tracked separately — see the follow-up filed with this change. */
+ *  tracked as #462 (which waits on #458, queued to touch the same union). */
 const NAMEABLE_ROLES: BeatRole[] = [TIMER_ROLE];
 
 /** The 4 standard functionary roles we ship (`ROLE_TEMPLATE`). Since #371 these
