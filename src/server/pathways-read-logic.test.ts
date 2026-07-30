@@ -133,7 +133,11 @@ describe("buildPathViewModel", () => {
 		expect(vm.wins).toEqual(wins);
 	});
 
-	it("upNext = current-level catalog projects minus wins (by name)", () => {
+	// Was "upNext = current-level catalog projects minus wins (by name)" until
+	// #456 removed that inference. `currentLevel` is still derived and still
+	// asserted; what changed is that this branch no longer publishes a
+	// "what's left" list it has no basis for.
+	it("still resolves the current level, but publishes no up-next (#456)", () => {
 		const vm = buildPathViewModel({
 			courseCode: "8701",
 			pathName: "Presentation Mastery",
@@ -147,14 +151,7 @@ describe("buildPathViewModel", () => {
 			],
 		});
 		expect(vm.currentLevel).toBe(2);
-		expect(vm.upNext).toEqual([
-			{
-				projectId: pid(2, "Understanding Your Communication Style"),
-				level: 2,
-				name: "Understanding Your Communication Style",
-				isRequired: true,
-			},
-		]);
+		expect(vm.upNext).toEqual([]);
 	});
 
 	it("upNext is empty when the path is complete", () => {
@@ -285,7 +282,7 @@ describe("buildPathViewModel", () => {
 		});
 	});
 
-	it("fallback branch (no detailProjects) sets upNextElectives null and keeps inference wins", () => {
+	it("fallback branch keeps inference wins but presents NO up-next (#456)", () => {
 		const vm = buildPathViewModel({
 			courseCode: "8701",
 			pathName: "Presentation Mastery",
@@ -298,8 +295,53 @@ describe("buildPathViewModel", () => {
 			// no detailProjects
 		});
 		expect(vm.upNextElectives).toBeNull();
+		// Wins stay: every row is a speech this member really delivered.
 		expect(vm.wins.map((w) => w.name)).toEqual(["Ice Breaker"]); // inference passthrough
-		expect(vm.upNext.map((p) => p.name)).toEqual(["Speaking to Inform"]); // today's logic
+		// Up-next does NOT: "catalog minus delivered speech names" answers "has
+		// this been touched", not "is it finished" (#456).
+		expect(vm.upNext).toEqual([]);
+	});
+
+	// The motivating case. `Evaluation and Feedback` takes three assignments —
+	// speak, evaluate someone else, speak again applying the feedback — so one
+	// delivered speech used to make it vanish from up-next with two outstanding,
+	// while `wins` listed it and the screen read as complete.
+	it("does not present a multi-assignment project as finished after one speech (#456)", () => {
+		const vm = buildPathViewModel({
+			courseCode: "8701",
+			pathName: "Presentation Mastery",
+			levels: [lv(1, 1, 4, false)],
+			wins: [win(1, "Evaluation and Feedback")],
+			catalogProjects: [
+				project(1, "Ice Breaker"),
+				project(1, "Evaluation and Feedback"),
+			],
+			// no detailProjects — the summary-only club this branch serves
+		});
+
+		// It is listed as a delivered speech…
+		expect(vm.wins.map((w) => w.name)).toEqual(["Evaluation and Feedback"]);
+		// …and NOT silently dropped from a "what's left" list that cannot know.
+		// Before #456 this asserted ["Ice Breaker"], i.e. the project with two
+		// assignments outstanding had disappeared.
+		expect(vm.upNext).toEqual([]);
+	});
+
+	// A leadership project is not a speech, so no amount of speech data can
+	// evidence it — subtracting win names from the catalog is not a weak signal
+	// here, it is an unrelated one.
+	it("never infers up-next for non-speech projects (#456)", () => {
+		const vm = buildPathViewModel({
+			courseCode: "8701",
+			pathName: "Presentation Mastery",
+			levels: [lv(3, 0, 4, false)],
+			wins: [win(3, "Ice Breaker")],
+			catalogProjects: [
+				project(3, "High Performance Leadership"),
+				project(3, "Manage Successful Events"),
+			],
+		});
+		expect(vm.upNext).toEqual([]);
 	});
 });
 
