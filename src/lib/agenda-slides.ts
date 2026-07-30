@@ -456,12 +456,19 @@ export function buildSlideDeck({
 	// (#363): the Toastmaster hands the room to the GE, who then runs the
 	// functionary intro below. The standard flow has no early GE appearance, so
 	// `buildRunOfShow` emits no such beat there either.
+	//
+	// Also gated on the functionaries (#449): this hand-off exists solely to set
+	// up the functionary intro immediately below, which has its own
+	// `anyFunctionary` gate. Without the same gate a club with a GE and no
+	// functionaries was handed the room and given it straight back. The printed
+	// beat carries `requiresGroup: "functionaries"` for the same reason — both
+	// surfaces read the same signal, so both must read this one.
 	if (geIntroducesFunctionaries) {
 		pushHandoff(
 			deck,
 			tmOwner,
 			"the General Evaluator",
-			generalEvaluator.length > 0,
+			generalEvaluator.length > 0 && anyFunctionary,
 		);
 	}
 	if (introOwner != null && anyFunctionary) {
