@@ -2,7 +2,7 @@
 // session-aware guard in `guards.ts` so the db-touching branch logic is
 // directly integration-testable by mocking `#/db`. This module must never be
 // imported by client components (it touches `db`/`pg`).
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { db } from "#/db";
 import {
 	meetings,
@@ -15,7 +15,7 @@ import {
 	isMeetingLocked,
 	MEETING_LOCKED_MESSAGE,
 } from "#/lib/meeting-lifecycle";
-import { isGrammarianRoleName, isTmodRoleName } from "#/lib/meeting-roles";
+import { findGrammarianSlot, findTmodSlot } from "#/lib/meeting-roles";
 import { markImpersonatedWrite } from "./impersonation-actor";
 import { getActiveImpersonation } from "./impersonation-logic";
 
@@ -101,8 +101,14 @@ async function resolveAdminGrant(
 
 /**
  * Resolve the meeting's TMOD and Grammarian slot assignees (each null when the
- * slot is unassigned or absent). Matches roles by name the same way the rest of
- * the app identifies the Toastmaster and Grammarian roles.
+ * slot is unassigned or absent). Identifies roles the same way the rest of the
+ * app does — by `role_definitions.key`, with the name only as the fallback for a
+ * slot that carries no key (#464).
+ *
+ * `key` is selected, not just `name`: this is the SERVER side of the capability,
+ * so matching on the display name did not merely hide a button. A club that
+ * renamed its Toastmaster of the Day had the mutation itself refused, and a club
+ * that invented any role starting with "Toastmaster" had it granted.
  */
 async function loadRoleSlotAssignees(meetingId: string): Promise<{
 	tmodMemberId: string | null;
@@ -110,7 +116,8 @@ async function loadRoleSlotAssignees(meetingId: string): Promise<{
 }> {
 	const slotRows = await db
 		.select({
-			name: roleDefinitions.name,
+			roleName: roleDefinitions.name,
+			roleKey: roleDefinitions.key,
 			assignedMemberId: roleSlots.assignedMemberId,
 		})
 		.from(roleSlots)
@@ -118,13 +125,18 @@ async function loadRoleSlotAssignees(meetingId: string): Promise<{
 			roleDefinitions,
 			eq(roleDefinitions.id, roleSlots.roleDefinitionId),
 		)
-		.where(eq(roleSlots.meetingId, meetingId));
+		.where(eq(roleSlots.meetingId, meetingId))
+		// Deterministic, and the SAME order the route sees (`loadMeetingDetail`
+		// orders by these two). The keyed pass makes the common tie irrelevant, but
+		// two KEYLESS rows both named canonically are still separated by order
+		// alone — `role_definitions` has no unique constraint on (club_id, name) and
+		// the Add Role form posts free text, so that pair is constructible. Without
+		// this the same meeting could grant a different member between requests, and
+		// the server could disagree with the button the client rendered.
+		.orderBy(asc(roleDefinitions.sortOrder), asc(roleSlots.slotIndex));
 	return {
-		tmodMemberId:
-			slotRows.find((r) => isTmodRoleName(r.name))?.assignedMemberId ?? null,
-		grammarianMemberId:
-			slotRows.find((r) => isGrammarianRoleName(r.name))?.assignedMemberId ??
-			null,
+		tmodMemberId: findTmodSlot(slotRows)?.assignedMemberId ?? null,
+		grammarianMemberId: findGrammarianSlot(slotRows)?.assignedMemberId ?? null,
 	};
 }
 

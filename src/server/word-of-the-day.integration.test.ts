@@ -31,12 +31,16 @@ async function addRoleSlot(
 	club: SeededClub,
 	name: string,
 	assignedMemberId: string | null,
+	/** `role_definitions.key`. Defaults to NULL, the pre-#368-backfill shape these
+	 *  tests were written against, so they keep exercising the name fallback. */
+	key: string | null = null,
 ): Promise<string> {
 	const [def] = await testDb
 		.insert(roleDefinitions)
 		.values({
 			clubId: club.clubId,
 			name,
+			key,
 			category: "functionary",
 			isSpeakerRole: false,
 			sortOrder: 50,
@@ -91,6 +95,35 @@ describe.skipIf(!hasTestDb)("resolveWordOfTheDayAuthz", () => {
 		});
 		expect(authz.allowed).toBe(true);
 		expect(authz.via).toBe("tmod-self-assert");
+	});
+
+	// #464 — the capability #464's body leads with. A club that renamed its
+	// Grammarian kept the key and lost the Word-of-the-Day edit; the server refused
+	// the write, so this was never just a hidden button.
+	it("allows the Grammarian self-assert after the club RENAMES the role (#464)", async () => {
+		await addRoleSlot(club, "Word Master", club.memberId, "grammarian");
+		const authz = await resolveWordOfTheDayAuthz({
+			meetingId: club.meetingId,
+			selfMemberId: club.memberId,
+		});
+		expect(authz.allowed).toBe(true);
+		expect(authz.via).toBe("grammarian-self-assert");
+		expect(authz.grammarianMemberId).toBe(club.memberId);
+	});
+
+	// NULL key: `createClubRole` never writes one, so this is the shape a real club
+	// produces. Keying off `key` alone left it granting, because the row falls
+	// through to the NAME fallback — which is why that fallback now matches the
+	// canonical name EXACTLY rather than by prefix.
+	it("rejects a club-invented role whose NAME merely looks like the Grammarian (#464)", async () => {
+		await addRoleSlot(club, "Grammarian Assistant", club.memberId, null);
+		const authz = await resolveWordOfTheDayAuthz({
+			meetingId: club.meetingId,
+			selfMemberId: club.memberId,
+		});
+		expect(authz.allowed).toBe(false);
+		expect(authz.via).toBe(null);
+		expect(authz.grammarianMemberId).toBe(null);
 	});
 
 	it("allows the meeting's Grammarian self-assert — via grammarian-self-assert", async () => {

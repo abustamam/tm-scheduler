@@ -25,6 +25,14 @@ using the **same self-assert trust level as claiming** — no token, no session.
   meeting's **TMOD slot**. This is *tighter* than claiming: you must already hold the TMOD
   role, not merely pick a name. If the TMOD slot is unassigned, there is no self-serve
   editor and editing falls back to `admin`/`vpe` only.
+- **Which slot is the TMOD slot is decided by `role_definitions.key`
+  (`toastmaster_of_the_day`), not by the role's display name.** Clubs rename roles freely
+  (#368), so a name match got it wrong in both directions: renaming "Toastmaster of the Day"
+  to "MC" silently revoked the capability, and any club-invented role whose name merely began
+  with "Toastmaster" — an assistant, a trainee — was granted it, server-side. A row whose
+  `key` is still NULL falls back to an **exact** canonical-name match, never a prefix. One
+  resolver (`findTmodSlot`, `src/lib/meeting-roles.ts`) backs both the client affordance and
+  this gate. See #464.
 - **Scope — TMOD may:** edit meta (theme, Word of the Day, notes, location); assign a member
   to any slot; unassign a member; and add/remove slots (change the speaker count). Everything
   is activity-logged via `actorMemberId`.
@@ -40,6 +48,12 @@ using the **same self-assert trust level as claiming** — no token, no session.
 - The self-assert trust boundary widens from claiming to full agenda editing. The accepted
   residual risk: anyone who claims an *open* TMOD slot can then edit that meeting's agenda —
   tolerated in the self-serve model, mitigated by logging + admin override.
+- **The gate fails closed on an unbackfilled rename.** Because the name fallback is exact, a
+  club that renamed its TMOD role *before* `key` existed to something still containing the
+  canonical word ("Toastmaster of the Evening") has no self-serve editor until its `key` is
+  backfilled. Deliberate: handing an impostor the agenda is worse than a club losing a button
+  an `admin`/`vpe` can still cover. Transitional, tracked as #466 — do not "fix" it by
+  widening the fallback back to a prefix.
 - **Interim by design.** When real per-member auth lands (ADR-0008 convergence), the
   self-assert gate should be replaced by an authenticated identity check; this ADR is the
   marker for that follow-up.

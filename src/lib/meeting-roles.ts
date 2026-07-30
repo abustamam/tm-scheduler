@@ -1,22 +1,126 @@
 /**
- * True when a role-definition name is the Toastmaster of the Day (TMOD) role.
- * Matches the standard-template name ("Toastmaster of the Day") and the bare
- * "Toastmaster", case-insensitively — but NOT "Table Topics Master" (different
- * prefix) or the plural "Toastmasters" (no word boundary). This is how the app
- * identifies the meeting's TMOD slot for self-serve editing (ADR-0010).
+ * `role_definitions.key` for the two roles that carry a CAPABILITY: the
+ * Toastmaster of the Day runs the meeting (self-serve agenda editing, ADR-0010)
+ * and the Grammarian owns the Word of the Day (#296).
+ *
+ * The key is identity and the name is a label (#368/#445). Matching on the name
+ * got all three answers wrong: a club that renamed "Toastmaster of the Day" to
+ * "MC" lost self-serve editing with its key fully intact, a club that invented a
+ * role called "Toastmaster Evaluator" HANDED that member the whole meeting, and
+ * with two names matching, `find` picked between them arbitrarily.
+ */
+const TMOD_ROLE_KEY = "toastmaster_of_the_day";
+const GRAMMARIAN_ROLE_KEY = "grammarian";
+
+/** A role identified the way the rest of the app identifies one: key first, with
+ *  the name as the fallback for a slot that carries no key. */
+export type RoleIdentity = { roleName: string; roleKey?: string | null };
+
+/**
+ * The name fallback matches the CANONICAL names EXACTLY (trimmed, case-folded),
+ * never a prefix.
+ *
+ * A prefix match is unsafe here because of what actually carries a NULL key.
+ * `createClubRole` (role-definitions-logic.ts) never writes one, so EVERY
+ * club-invented role has `key = NULL` — and `/^toastmaster\b/` matched
+ * "Toastmaster Assistant", "Toastmaster Evaluator", "Toastmaster's Helper".
+ * Keying off `role_definitions.key` alone did not close that, because those rows
+ * fall through to exactly this fallback (#464).
+ *
+ * Narrowing is a deliberate FAIL-CLOSED trade, not a free win. The case the
+ * fallback exists for is a standard role whose key is still NULL — `drizzle/0044`
+ * backfilled by exact canonical name, so anything already renamed at that point
+ * kept NULL. Most such renames drop the canonical word entirely ("MC") and never
+ * matched the prefix regex either, so they lose nothing here. But a rename that
+ * KEEPS it — "Toastmaster of the Evening", "Toastmaster (TMOD)", "Grammarian /
+ * Word of the Day" — did match the prefix and no longer matches, so that club
+ * loses self-serve editing until its key is backfilled.
+ *
+ * Shipped that way on purpose: silently handing an impostor the agenda is worse
+ * than a club losing a self-serve button it can restore by naming the role
+ * canonically, and an admin can still edit either way. The real close is a
+ * migration that backfills `key` for prefix-matching rows so nothing depends on
+ * the name at all — tracked separately.
+ */
+const TMOD_CANONICAL_NAMES = ["toastmaster of the day", "toastmaster"];
+const GRAMMARIAN_CANONICAL_NAMES = ["grammarian"];
+
+const matchesCanonical = (names: string[], name: string): boolean =>
+	names.includes(name.trim().toLowerCase());
+
+/**
+ * True when a role-definition name is EXACTLY the Toastmaster of the Day (TMOD)
+ * role's canonical name, or the bare "Toastmaster" the standard template also
+ * answers to. NOT "Table Topics Master", not "Toastmasters", and — since #464 —
+ * not "Toastmaster Assistant".
+ *
+ * NAME-ONLY, so it is the fallback rather than the rule: it runs only for a slot
+ * whose `role_definitions.key` is NULL. Prefer `findTmodSlot`, which reads the
+ * key when there is one.
  */
 export function isTmodRoleName(name: string): boolean {
-	return /^toastmaster\b/.test(name.trim().toLowerCase());
+	return matchesCanonical(TMOD_CANONICAL_NAMES, name);
 }
 
 /**
- * True when a role-definition name is the Grammarian role. Matches the
- * standard-template name ("Grammarian"), case-insensitively — but NOT the plural
- * "Grammarians" (no word boundary) or "Grammar". This is how the app identifies
- * the meeting's Grammarian slot for self-serve Word-of-the-Day editing (#296).
+ * True when a role-definition name is EXACTLY the Grammarian role's canonical
+ * name. NOT the plural "Grammarians", not "Grammar", and not "Grammarian
+ * Assistant". Name-only, for the same reason as `isTmodRoleName`.
  */
 export function isGrammarianRoleName(name: string): boolean {
-	return /^grammarian\b/.test(name.trim().toLowerCase());
+	return matchesCanonical(GRAMMARIAN_CANONICAL_NAMES, name);
+}
+
+/**
+ * The one slot holding a capability role, resolved so the answer never depends on
+ * what order the caller happens to hold the slots in.
+ *
+ * Passes, in priority order:
+ *   1. the KEY — a keyed slot IS the role; a name-matched one merely looks like
+ *      it, so a renamed-but-keyed TMOD must beat an invented "Toastmaster
+ *      Assistant" whichever comes first in the array.
+ *   2. each canonical name in turn, MOST SPECIFIC first — "Toastmaster of the
+ *      Day" before the bare "Toastmaster". Nothing stops a club having both
+ *      (`role_definitions` has no unique constraint on (club_id, name) and the
+ *      Add Role form posts free text), and both are canonical, so the key cannot
+ *      separate them and only a stated precedence can.
+ *
+ * Without (2) the answer came from array order, which on the server is a SQL
+ * result: the same meeting could grant a different member between two requests,
+ * and the server could disagree with the button the client rendered.
+ */
+function findCapabilityRole<T extends RoleIdentity>(
+	slots: T[],
+	key: string,
+	canonicalNames: string[],
+): T | undefined {
+	const keyed = slots.find((s) => s.roleKey === key);
+	if (keyed) return keyed;
+	for (const canonical of canonicalNames) {
+		const named = slots.find(
+			(s) => s.roleKey == null && s.roleName.trim().toLowerCase() === canonical,
+		);
+		if (named) return named;
+	}
+	return undefined;
+}
+
+/** The meeting's TMOD slot, or undefined. */
+export function findTmodSlot<T extends RoleIdentity>(
+	slots: T[],
+): T | undefined {
+	return findCapabilityRole(slots, TMOD_ROLE_KEY, TMOD_CANONICAL_NAMES);
+}
+
+/** The meeting's Grammarian slot, or undefined. */
+export function findGrammarianSlot<T extends RoleIdentity>(
+	slots: T[],
+): T | undefined {
+	return findCapabilityRole(
+		slots,
+		GRAMMARIAN_ROLE_KEY,
+		GRAMMARIAN_CANONICAL_NAMES,
+	);
 }
 
 /**
@@ -25,14 +129,12 @@ export function isGrammarianRoleName(name: string): boolean {
  * surfaces so the TMOD/Grammarian derivation can't drift between them.
  */
 export function deriveMeetingRoleFlags(
-	slots: { roleName: string; assigneeId: string | null }[],
+	slots: (RoleIdentity & { assigneeId: string | null })[],
 	memberId: string | null,
 ): { isTmod: boolean; isGrammarian: boolean } {
 	if (memberId === null) return { isTmod: false, isGrammarian: false };
-	const tmod =
-		slots.find((s) => isTmodRoleName(s.roleName))?.assigneeId ?? null;
-	const gram =
-		slots.find((s) => isGrammarianRoleName(s.roleName))?.assigneeId ?? null;
+	const tmod = findTmodSlot(slots)?.assigneeId ?? null;
+	const gram = findGrammarianSlot(slots)?.assigneeId ?? null;
 	return { isTmod: memberId === tmod, isGrammarian: memberId === gram };
 }
 
