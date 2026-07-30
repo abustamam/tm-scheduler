@@ -132,7 +132,10 @@ the nouns in `src/db/schema.ts`.
   bind to roles by `key` (`matchesRole`), so a rename never breaks the binding — and every
   surface DISPLAYS the club's own `name`: the roster, the projected legend, and every row of the
   printed run sheet. Our canonical name survives in one spot only, a beat for a role the club
-  runs none of, where there is no club name to read. See #367 / #368 / #445.
+  runs none of, where there is no club name to read. **Two roles' PERMISSIONS key off it too** —
+  the TMOD's self-serve agenda editing (ADR-0010) and the Grammarian's Word-of-the-Day edit
+  (#296) — so a rename never moves a capability and a club-invented role that merely *sounds*
+  like one never gains it. See #367 / #368 / #445 / #464.
 - **Role slot** — one concrete, claimable agenda row for a meeting (`role_slots`). Generated
   from role definitions when a meeting is created. THE source of truth and history — see
   ADR-0005. A slot is `open`, `claimed`, or `confirmed`.
@@ -223,6 +226,15 @@ notification **preferences/unsubscribe**, #274, are still later phases.)
   member holding that meeting's Toastmaster (TMOD) slot. **Reschedule, cancel, and status
   stay `admin`/`vpe`-only.** TMOD self-serve editing is an interim self-assert measure pending
   real auth (ADR-0010).
+- A meeting's **Word of the Day** alone may also be edited by the self-asserted member holding
+  that meeting's **Grammarian** slot — a narrower capability than the TMOD's, on the same
+  self-assert trust (#296).
+- Both capability slots are resolved by `role_definitions.key`, **never by the club's display
+  name**: renaming a role must not move a capability, and a club-invented role whose name merely
+  resembles one must not gain it. A row whose `key` is still NULL falls back to an **exact**
+  canonical-name match, never a prefix. One resolver (`findTmodSlot` / `findGrammarianSlot`,
+  `src/lib/meeting-roles.ts`) serves both the route affordance and the server check, so the
+  button and the mutation cannot disagree (#464).
 - A **completed** meeting is **locked**: every agenda mutation (assign/claim/takeover,
   confirm/unconfirm, move/add/remove role/speaker, availability toggle, meta edit) is rejected
   server-side, regardless of surface or capability. Only an admin **Reopen** (→ `scheduled`)
