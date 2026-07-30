@@ -127,31 +127,57 @@ describe.skipIf(!hasTestDb)("reminder control layer (#274)", () => {
 	}
 
 	it("reports opted-in while ANY linked Person still receives reminders", async () => {
+		// Both writers now converge every row on the account, so the split state
+		// is reached the one way that remains: the account opts out, and a NEW
+		// duplicate Person is minted afterwards (create-club / roster-paste mints
+		// a fresh Person per club, #329) carrying the opted-IN column default.
+		await setReminderOptOutForUser(club.memberUserId, true);
 		const dupe = await addDuplicatePerson();
 		try {
-			// Assert BOTH halves of the split, so no row order can make this pass
-			// by luck: a reader that returns one arbitrary row gets the answer
-			// wrong in exactly one of these two cases, whichever row it favors.
-			//
-			// The no-auth unsubscribe link flips exactly ONE Person (personId from
-			// a signed token) — the realistic way the rows diverge.
-			await setPersonReminderOptOut(club.personId, true);
 			expect(await listOptedOutPersonIds([club.personId, dupe])).toEqual(
 				new Set([club.personId]),
 			);
-			// Reminders are genuinely still being sent via the duplicate, so
+			// Reminders are genuinely still being sent via the newcomer, so
 			// "opted out" would be a lie on a preference screen.
-			expect(await getReminderOptOutForUser(club.memberUserId)).toBe(false);
-
-			// Now mirror it: the OTHER Person is the opted-out one.
-			await setPersonReminderOptOut(club.personId, false);
-			await setPersonReminderOptOut(dupe, true);
-			expect(await listOptedOutPersonIds([club.personId, dupe])).toEqual(
-				new Set([dupe]),
-			);
 			expect(await getReminderOptOutForUser(club.memberUserId)).toBe(false);
 		} finally {
 			await testDb.delete(people).where(eq(people.id, dupe));
+		}
+	});
+
+	// The gap #472 reported: reminder mail is addressed per-ACCOUNT
+	// (selectDueNotifications joins `user` via notifications.user_id), so two
+	// linked Persons mail the same inbox. Flipping one row let mail keep
+	// arriving at the address that had just asked it to stop.
+	it("one-click unsubscribe suppresses EVERY Person on the account", async () => {
+		const dupe = await addDuplicatePerson();
+		try {
+			// Exactly what the no-auth route does with a verified signed token.
+			const token = createUnsubscribeToken(club.personId);
+			const personId = verifyUnsubscribeToken(token) as string;
+			await setPersonReminderOptOut(personId, true);
+
+			expect(await listOptedOutPersonIds([club.personId, dupe])).toEqual(
+				new Set([club.personId, dupe]),
+			);
+			expect(await getReminderOptOutForUser(club.memberUserId)).toBe(true);
+		} finally {
+			await testDb.delete(people).where(eq(people.id, dupe));
+		}
+	});
+
+	// ...but a Person that never signed in has no account to converge, and must
+	// not drag along every other unlinked roster Person in the database.
+	it("unsubscribe for an unlinked roster Person flips only that row", async () => {
+		const loner = await seedPerson({ name: "Never Signed In" });
+		const bystander = await seedPerson({ name: "Unrelated Roster Person" });
+		try {
+			await setPersonReminderOptOut(loner, true);
+			expect(await listOptedOutPersonIds([loner, bystander])).toEqual(
+				new Set([loner]),
+			);
+		} finally {
+			await testDb.delete(people).where(inArray(people.id, [loner, bystander]));
 		}
 	});
 

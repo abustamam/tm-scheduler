@@ -105,17 +105,44 @@ export async function getPersonReminderOptOut(
 	return row?.optOut ?? false;
 }
 
-/** Flip a person's opt-out preference. Used by the no-auth /unsubscribe route
- *  (personId recovered from the signed token) and re-subscribe. Returns whether
- *  a matching person row was updated. */
+/**
+ * Flip a person's opt-out preference. Used by the no-auth /unsubscribe route
+ * (personId recovered from the signed token) and re-subscribe. Returns whether
+ * any matching person row was updated.
+ *
+ * Applies to EVERY Person on the same account, not just the one named by the
+ * token (#437 / #472). Reminder mail is addressed per-ACCOUNT, not per-Person —
+ * `selectDueNotifications` reads the recipient from `user` via
+ * `notifications.user_id`, which the #272 producer stamps from
+ * `people.user_id`. With duplicate Persons (ADR-0008: `people.user_id` is not
+ * unique, and the #329 merge is a manual step) two Person rows therefore mail
+ * the IDENTICAL inbox, so flipping one row let mail keep arriving at the
+ * address that had just asked it to stop.
+ *
+ * A Person with no `user_id` is a roster row that never signed in: it has no
+ * siblings to converge, so it flips alone. That is also why the account lookup
+ * runs first rather than joining — `eq(people.userId, null)` is never true in
+ * SQL, and widening it would sweep in unrelated unlinked Persons.
+ */
 export async function setPersonReminderOptOut(
 	personId: string,
 	optedOut: boolean,
 ): Promise<{ ok: true; updated: boolean }> {
+	const [target] = await db
+		.select({ userId: people.userId })
+		.from(people)
+		.where(eq(people.id, personId))
+		.limit(1);
+	if (!target) return { ok: true as const, updated: false };
+
 	const rows = await db
 		.update(people)
 		.set({ reminderOptOut: optedOut })
-		.where(eq(people.id, personId))
+		.where(
+			target.userId == null
+				? eq(people.id, personId)
+				: eq(people.userId, target.userId),
+		)
 		.returning({ id: people.id });
 	return { ok: true as const, updated: rows.length > 0 };
 }
@@ -131,13 +158,14 @@ export async function setPersonReminderOptOut(
  * user still receives reminders and "opted out" would be a lie on a preference
  * screen. Reading one arbitrary row could tell that lie in either direction.
  *
- * The asymmetry with `setReminderOptOutForUser` is deliberate, not an
- * oversight: the writer flips every linked Person, so the two agree the moment
- * the toggle is used. They can only disagree when something else wrote a SINGLE
- * Person — which is exactly what the no-auth /unsubscribe link does
- * (`setPersonReminderOptOut`, personId from a signed token). After a partial
- * unsubscribe this correctly still reads "opted in", because reminders are
- * genuinely still being sent, and one use of the toggle converges every row.
+ * Both writers converge every Person on the account — `setReminderOptOutForUser`
+ * from the toggle and `setPersonReminderOptOut` from the no-auth /unsubscribe
+ * link — so the reader and the writers share one domain. The remaining way to
+ * observe a split is a duplicate Person minted AFTER an opt-out (create-club and
+ * roster-paste mint a fresh Person per club, #329), which arrives carrying the
+ * opted-in column default. Reading that state as "opted in" is correct rather
+ * than unfortunate: reminders really are reaching the inbox again, and one use
+ * of the toggle re-converges every row.
  */
 export async function getReminderOptOutForUser(
 	userId: string,
