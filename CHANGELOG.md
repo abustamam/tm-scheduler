@@ -2,6 +2,12 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.1.6.0] - 2026-07-30
+
+### Changed
+
+- Three role sheets now describe what the agenda actually asks. The Timer's sheet said the report goes to the General Evaluator "at the end of the meeting", which describes the closing summary and misses the timings called for before each vote; it now says a report is presented whenever the meeting leader calls for one. The General Evaluator's mentions introducing the speech evaluators, and the Table Topics Master's mentions handing the meeting back at the end of the segment. Existing clubs are updated too — but only where the text is still exactly as seeded, so anything a club wrote for itself is kept. #444
+
 ## [1.1.5.0] - 2026-07-30
 
 ### Fixed

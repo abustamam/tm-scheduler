@@ -40,7 +40,7 @@ export const ROLE_TEMPLATE: RoleSeed[] = [
 		sortOrder: 20,
 		isSpeakerRole: false,
 		description:
-			"Leads the impromptu speaking segment by preparing 8–10 questions or scenarios and calling on members or guests to respond on the spot.",
+			"Leads the impromptu speaking segment by preparing 8–10 questions or scenarios and calling on members or guests to respond on the spot, then hands the meeting back over.",
 		key: "table_topics_master",
 	},
 	{
@@ -73,7 +73,7 @@ export const ROLE_TEMPLATE: RoleSeed[] = [
 		sortOrder: 50,
 		isSpeakerRole: false,
 		description:
-			"Oversees meeting quality by evaluating all roles (except speakers) and summarizing feedback from the Timer, Ah-Counter, and Grammarian.",
+			"Oversees meeting quality by evaluating all roles (except speakers) and summarizing feedback from the Timer, Ah-Counter, and Grammarian; introduces the speech evaluators.",
 		key: "general_evaluator",
 	},
 	{
@@ -83,7 +83,7 @@ export const ROLE_TEMPLATE: RoleSeed[] = [
 		sortOrder: 60,
 		isSpeakerRole: false,
 		description:
-			"Tracks and displays time signals for every speaker and evaluator, then reports any overtime violations to the General Evaluator at the end of the meeting.",
+			"Tracks and displays time signals for every speaker and evaluator, and presents a report whenever the meeting leader calls for one.",
 		key: "timer",
 	},
 	{

@@ -365,6 +365,13 @@
       "when": 1785442208562,
       "tag": "0051_clumsy_peter_parker",
       "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1785442209562,
+      "tag": "0052_refresh_role_descriptions",
+      "breakpoints": true
     }
   ]
 }
