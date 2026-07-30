@@ -510,6 +510,57 @@ describe("spine colour follows the ROLE, not its name (#445)", () => {
 		expect(renamed).not.toBe("");
 	});
 
+	// Every key `expandRunSheet` actually emits, each paired with the colour the
+	// old name match produced. Only `speaker` was pinned at first, which left a
+	// typo in any of the other four able to re-ship #445's exact regression —
+	// silent grey for a renamed club, green suite for a canonical one.
+	it.each([
+		["toastmaster_of_the_day", "Toastmaster of the Day · Faisal"],
+		["table_topics_master", "Table Topics Master · Rasheed"],
+		["general_evaluator", "General Evaluator · Riyaz"],
+		["evaluator", "Evaluator 1 · Sudheer"],
+		["speaker", "Speaker 1 · Jagpal"],
+	])("colours %s from the key, not the name", (roleKey, canonicalWho) => {
+		const canonical = spineOf(speechRow({ roleKey, who: canonicalWho }));
+		const renamed = spineOf(speechRow({ roleKey, who: "Renamed · Somebody" }));
+		expect(renamed).toBe(canonical);
+		// Not the default. MUTED is what a missed key falls through to, and it is
+		// also legitimately Sergeant-at-Arms' colour, so this asserts the pair
+		// AGREE rather than hardcoding a hex the theme owns.
+		expect(renamed).not.toBe("");
+	});
+
+	it("highlights a speech row by its key, not its name", () => {
+		// Every row gets a background (mint when highlighted, else the zebra
+		// stripe), so "has one" proves nothing — compare rows against each other.
+		const bgOf = (row: TimelineRow): string => {
+			const { container } = render(
+				<MeetingAgendaPrint
+					layout="grid"
+					header={header}
+					roles={[]}
+					officers={[]}
+					explainers={[]}
+					rows={[row]}
+				/>,
+			);
+			const spine = container.querySelector<HTMLElement>("[data-row-time]");
+			// The highlight sits on the row wrapper, the spine's parent.
+			return (spine?.parentElement as HTMLElement).style.backgroundColor;
+		};
+		const speakerCanonical = bgOf(speechRow({ who: "Speaker 1 · Jagpal" }));
+		const speakerRenamed = bgOf(speechRow({ who: "Presenter 1 · Jagpal" }));
+		const notASpeaker = bgOf(
+			speechRow({
+				who: "Table Topics Master · Rasheed",
+				roleKey: "table_topics_master",
+			}),
+		);
+		// The rename must not change it, and a non-speaker must not get it.
+		expect(speakerRenamed).toBe(speakerCanonical);
+		expect(speakerRenamed).not.toBe(notASpeaker);
+	});
+
 	it("still colours an event row, which carries no roleKey", () => {
 		// Sergeant-at-Arms and President are officer positions, not meeting roles,
 		// so their rows have no key and the name match is the only thing available.

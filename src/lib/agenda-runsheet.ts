@@ -306,9 +306,12 @@ export const AWARDS_TOKEN = "{awards}";
 export const roleNameToken = (role: BeatRole): string =>
 	`{role:${role.roleKey}}`;
 
-/** Matches `roleNameToken`. Keys are `role_definitions.key` values, so the
- *  character class is the same lower-snake shape those use. */
-const ROLE_NAME_TOKEN_RE = /\{role:([a-z_]+)\}/g;
+/** The keys `roleNameToken` may name. Exported for the test that pins every one
+ *  of them against `DETAIL_TOKEN_RE`: the regex accepts only lower-snake, so a
+ *  key like `timer2` or `Timer` would produce a token nothing ever resolves and
+ *  the row would print `{role:…}` verbatim to the room. */
+export const nameableRoleKeys = (): string[] =>
+	NAMEABLE_ROLES.map((r) => r.roleKey);
 
 /**
  * THE definition of "this club's functionaries" (#371) — the one every surface
@@ -925,47 +928,28 @@ function joinRoleNames(names: string[]): string {
 }
 
 /** Resolve one role's name per `roleNameToken` (#445): the club's own name for
- *  it, else the canonical one. Runs before the list tokens below because the two
- *  are independent — a detail may carry either, and the `ROLES_TOKEN` branch
- *  returns early. */
-function resolveRoleNames(detail: string, slots: AgendaSlot[]): string {
-	if (!detail.includes("{role:")) return detail;
-	// Replacer function, for the reason spelled out at the `ROLES_TOKEN` call
-	// below: the substituted text is a club-typed `roleName`, and a name
-	// containing `$&` or "$`" would otherwise splice surrounding copy into the row.
-	return detail.replace(ROLE_NAME_TOKEN_RE, (whole, key: string) => {
-		const role = NAMEABLE_ROLES.find((r) => r.roleKey === key);
-		if (role == null) return whole;
-		const slot = slots.find((s) => matchesRole(s, role.roleKey, role.roleName));
-		return slot?.roleName ?? role.roleName;
-	});
+ *  it, else the canonical one. */
+function clubRoleName(key: string, slots: AgendaSlot[]): string | null {
+	const role = NAMEABLE_ROLES.find((r) => r.roleKey === key);
+	if (role == null) return null;
+	const slot = slots.find((s) => matchesRole(s, role.roleKey, role.roleName));
+	return slot?.roleName ?? role.roleName;
 }
 
-/** Resolve `ROLES_TOKEN` in a beat's detail against the roles the club runs
- *  (#367), in slot order and under the club's own display names — the same
- *  order and names the deck's functionary slides list. */
-function resolveDetail(beat: Beat, slots: AgendaSlot[]): string {
-	const detail = resolveRoleNames(beat.detail, slots);
-	if (detail.includes(AWARDS_TOKEN)) {
-		// Fixed labels in a fixed order (not the club's role names, and not slot
-		// order) — the awards are the club's, the role names only decide WHICH
-		// are handed out.
-		const labels = AWARD_CATEGORIES.filter((a) =>
-			hasRole(slots, a.role.roleKey, a.role.roleName),
-		).map((a) => a.label);
-		// Replacer FUNCTION, not a string: `String.replace` reads `$&`, "$`", `$'`
-		// and `$n` in a replacement string as back-references, so a club role
-		// literally named "Timer $`" would splice the copy before the token back
-		// into the row. The awards labels are hardcoded, so this site is safe today
-		// — but it is the same call as the `ROLES_TOKEN` one below, which is not.
-		return detail.replace(AWARDS_TOKEN, () => joinRoleNames(labels));
-	}
-	if (!detail.includes(ROLES_TOKEN)) return detail;
-	// A group beat names the group's members (#371) — the functionary-intro beat
-	// lists exactly the functionaries `buildLegend` puts on the projected slide,
-	// including any the club invented. The group also gates the beat
-	// (`requirementsMet`), so this list is never empty. Without a group, resolve
-	// the beat's own key list.
+/** The award categories this club scores. FIXED labels in a FIXED order — not the
+ *  club's role names, and not slot order. The roles only decide WHICH are handed
+ *  out. */
+function awardLabels(slots: AgendaSlot[]): string[] {
+	return AWARD_CATEGORIES.filter((a) =>
+		hasRole(slots, a.role.roleKey, a.role.roleName),
+	).map((a) => a.label);
+}
+
+/** A group beat's members (#371) — the functionary-intro beat lists exactly the
+ *  functionaries `buildLegend` puts on the projected slide, including any the club
+ *  invented. The group also gates the beat (`requirementsMet`), so this is never
+ *  empty. Without a group, resolve the beat's own key list. */
+function groupRoleNames(beat: Beat, slots: AgendaSlot[]): string[] {
 	const required = beat.requiresAnyOf ?? [];
 	const matched =
 		beat.requiresGroup != null
@@ -973,15 +957,46 @@ function resolveDetail(beat: Beat, slots: AgendaSlot[]): string {
 			: slots.filter((s) =>
 					required.some((r) => matchesRole(s, r.roleKey, r.roleName)),
 				);
-	const names = matched.map((s) => s.roleName);
-	// Replacer function ⇒ the club's role names are substituted LITERALLY. An
-	// admin types `roleName` verbatim (admin/roles.tsx applies no character
-	// validation), so a role named "Timer $`" would otherwise splice a
-	// back-reference into the printed row. Only the printed row: tokens are
-	// resolved nowhere but here, and `expandRunSheet` is the sole caller, so the
-	// deck and the .pptx never saw this — they build their functionary and
-	// awards copy from `buildLegend`/`AWARD_CATEGORIES` directly.
-	return detail.replace(ROLES_TOKEN, () => joinRoleNames([...new Set(names)]));
+	return [...new Set(matched.map((s) => s.roleName))];
+}
+
+/** Every token a beat's `detail` can carry, in ONE alternation so they resolve in
+ *  ONE pass. Order inside the alternation is irrelevant; what matters is that
+ *  there is only one pass. */
+const DETAIL_TOKEN_RE = /\{roles\}|\{awards\}|\{role:([a-z_]+)\}/g;
+
+/**
+ * Resolve a beat's detail tokens against the roles the club runs (#367, #372,
+ * #445), under the club's own display names where the token asks for one.
+ *
+ * SINGLE PASS, deliberately. Two things make that load-bearing:
+ *
+ * 1. Replacement text is never rescanned by `String.replace`, so a club role
+ *    named literally "{awards}" is inserted and left alone. Resolving the role
+ *    name first and the lists second — which is what this did when `{role:}`
+ *    was added — spliced the awards list into the row for that club. An admin
+ *    types `roleName` verbatim (`role-definitions-logic.ts` validates only
+ *    non-empty), so it is reachable, and it is the same hostile-input class as
+ *    the `$&` case below.
+ * 2. A replacer FUNCTION, not a string: `String.replace` reads `$&`, "$`", `$'`
+ *    and `$n` in a replacement STRING as back-references, so a role named
+ *    "Timer $`" would splice surrounding copy into the printed row.
+ *
+ * Only the printed row: tokens resolve nowhere but here and `expandRunSheet` is
+ * the sole caller, so the deck and the .pptx never saw either hazard — they build
+ * their functionary and awards copy from `buildLegend`/`AWARD_CATEGORIES` direct.
+ *
+ * An unrecognised role key is left VERBATIM rather than blanked, so a typo shows
+ * up on the page as `{role:tymer}` instead of quietly dropping the cue.
+ */
+function resolveDetail(beat: Beat, slots: AgendaSlot[]): string {
+	if (!beat.detail.includes("{")) return beat.detail;
+	return beat.detail.replace(DETAIL_TOKEN_RE, (whole, roleKey?: string) => {
+		if (whole === AWARDS_TOKEN) return joinRoleNames(awardLabels(slots));
+		if (whole === ROLES_TOKEN)
+			return joinRoleNames(groupRoleNames(beat, slots));
+		return roleKey != null ? (clubRoleName(roleKey, slots) ?? whole) : whole;
+	});
 }
 
 /**
