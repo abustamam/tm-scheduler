@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { HandoffTarget, Slide } from "./agenda-slides";
-import { slideLayout } from "./slide-layout";
+import { slideLayout, slideName } from "./slide-layout";
 
 const contentHeader = (slide: Slide) => {
 	const l = slideLayout(slide);
@@ -212,6 +212,195 @@ describe("slideLayout bodies", () => {
 		// The run sheet drops the timer's-report clause the same way (#367); the
 		// vote itself still happens.
 		expect(lines(false)).toEqual(["Please Vote for Best Evaluator:", "Riyaz"]);
+	});
+
+	describe("slide headers name their own segment (#446)", () => {
+		// Headers were already asserted for seven kinds via `contentHeader` above,
+		// and for distinctness across hand-off targets (#363) — but never for a
+		// vote slide, and never ACROSS kinds. The vote slides' BODIES were pinned
+		// in full, down to the correct "Please Vote for Best Evaluator:" head line,
+		// so the slide read as well covered while the one field nobody checked was
+		// the one the grid uses: `slideName` returns `header` verbatim for the
+		// jump-to-slide grid, so two kinds sharing one make that grid unusable for
+		// the segment they collide on.
+		it("gives each of the three votes its own header", () => {
+			const headers = [
+				contentHeader({
+					kind: "voteSpeaker",
+					names: ["Jagpal"],
+					hasTimer: true,
+					caller: null,
+				}),
+				contentHeader({
+					kind: "voteTableTopics",
+					hasTimer: true,
+					caller: null,
+				}),
+				contentHeader({
+					kind: "voteEvaluator",
+					names: ["Riyaz"],
+					hasTimer: true,
+					caller: null,
+				}),
+			];
+			expect(headers).toEqual([
+				"Vote for Best Speaker",
+				"Vote for Best Table Topic",
+				"Vote for Best Evaluator",
+			]);
+			expect(new Set(headers).size).toBe(3);
+		});
+
+		it("does not let the Best-Evaluator vote borrow the evaluation's header", () => {
+			const evaluation = contentHeader({
+				kind: "evaluation",
+				label: "Evaluation 1",
+				evaluator: "Sudheer",
+				speaker: "Jagpal",
+				time: "3 minutes",
+			});
+			const vote = contentHeader({
+				kind: "voteEvaluator",
+				names: ["Riyaz"],
+				hasTimer: true,
+				caller: null,
+			});
+			expect(evaluation).toBe("Speech Evaluation");
+			expect(vote).not.toBe(evaluation);
+		});
+
+		// The two tests above pin the one collision #446 was about. This one closes
+		// the CROSS-KIND class: every kind gets the name the jump grid will show it
+		// under, and no two KINDS may agree — read through `slideName`, the same
+		// function the grid calls, so this binds to the real derivation and not a
+		// copy of it. Keyed by `Slide["kind"]`, so a new slide kind does not compile
+		// until it is listed here and its own name is checked against all the others
+		// — the check that was missing when `voteEvaluator` was written.
+		// `slide-layout.ts` already relied on this informally: `functionaryIntro`
+		// carries a comment explaining its header avoids colliding with
+		// "Toastmaster Intro", with nothing enforcing it until now.
+		//
+		// It samples ONE slide per kind, so it is deliberately blind to WITHIN-kind
+		// repeats, of which the deck has two by design: one `evaluation` per
+		// evaluator, and the two hand-offs into the General Evaluator, pinned at
+		// agenda-slides.test.ts:683 as four distinct labels across five slides. The
+		// property the grid really wants is that no two ADJACENT slides share a
+		// name; that test is not here because it does not pass yet (see #458).
+		it("gives every slide kind a name no other kind shares", () => {
+			const team = [{ role: "Timer", name: "Riyaz" }];
+			// Mapped rather than `Record<Slide["kind"], Slide>`: a Record only demands
+			// the KEY exist, so a new kind could be satisfied with some other kind's
+			// slide — listed, but with its real header never resolved or compared.
+			// `Extract` pins each value to its own discriminant.
+			const oneOfEach: { [K in Slide["kind"]]: Extract<Slide, { kind: K }> } = {
+				title: {
+					kind: "title",
+					clubName: "MCF Toastmasters Club",
+					district: "District 39",
+					clubNumber: "28677176",
+					meetingNumber: 55,
+					scheduledAt: new Date("2026-07-09T02:00:00Z"),
+					timezone: "America/Chicago",
+				},
+				toastmaster: { kind: "toastmaster", name: "Faisal" },
+				handoff: {
+					kind: "handoff",
+					from: { role: "Toastmaster of the Day", name: "Faisal" },
+					to: "the speakers",
+				},
+				toastmasterIntro: {
+					kind: "toastmasterIntro",
+					theme: "Momentum",
+					word: "Synergy",
+				},
+				wordOfDay: {
+					kind: "wordOfDay",
+					word: "Synergy",
+					definition: "combined action",
+					example: null,
+					presenter: null,
+				},
+				functionaryIntro: {
+					kind: "functionaryIntro",
+					owner: "General Evaluator",
+					name: "Sudheer",
+					team,
+				},
+				functionaryReports: {
+					kind: "functionaryReports",
+					owner: "General Evaluator",
+					name: "Sudheer",
+					team,
+				},
+				speech: {
+					kind: "speech",
+					label: "First Speech",
+					speaker: "Jagpal",
+					title: "On Momentum",
+					projectLevel: null,
+					time: "5–7 minutes",
+					link: null,
+				},
+				voteSpeaker: {
+					kind: "voteSpeaker",
+					names: ["Jagpal"],
+					hasTimer: true,
+					caller: null,
+				},
+				tableTopics: {
+					kind: "tableTopics",
+					master: "Mona",
+					timing: "1–2 minutes per speaker",
+					word: null,
+					definition: null,
+				},
+				voteTableTopics: {
+					kind: "voteTableTopics",
+					hasTimer: true,
+					caller: null,
+				},
+				evaluation: {
+					kind: "evaluation",
+					label: "Evaluation 1",
+					evaluator: "Sudheer",
+					speaker: "Jagpal",
+					time: "3 minutes",
+				},
+				voteEvaluator: {
+					kind: "voteEvaluator",
+					names: ["Riyaz"],
+					hasTimer: true,
+					caller: null,
+				},
+				evaluatorEvaluation: {
+					kind: "evaluatorEvaluation",
+					owner: "General Evaluator",
+					name: "Sudheer",
+					time: "3 minutes",
+				},
+				generalEvaluation: {
+					kind: "generalEvaluation",
+					owner: "General Evaluator",
+					time: "5 minutes",
+				},
+				awards: { kind: "awards", categories: ["Best Speaker"] },
+				guestComments: { kind: "guestComments" },
+				reminders: { kind: "reminders", text: "Dues are due." },
+				thankYou: {
+					kind: "thankYou",
+					meetingSchedule: "2nd & 4th Thursday",
+					nextMeetingAt: null,
+					timezone: "America/Chicago",
+				},
+			};
+
+			const labels = Object.values(oneOfEach).map(slideName);
+			// Report the offenders, not just a count — a bare size mismatch sends
+			// the next person hunting through nineteen cases by hand.
+			const duplicated = labels.filter((l, i) => labels.indexOf(l) !== i);
+			expect(duplicated).toEqual([]);
+			expect(new Set(labels).size).toBe(labels.length);
+		});
 	});
 
 	describe("handoff layout (#363)", () => {

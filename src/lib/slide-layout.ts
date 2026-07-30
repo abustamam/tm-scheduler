@@ -91,10 +91,10 @@ const callerLine = (caller: LegendEntry): Line =>
 /**
  * A hand-off's header, by the segment it hands to (#363).
  *
- * The overview grid names a slide by its header — `slideLabel` in
- * meeting-present.tsx returns it verbatim — so one shared "Hand-off" would put
- * five indistinguishable rows in the one place a jump grid exists to help, in
- * an issue whose whole point is removing ambiguity about who does what. The
+ * The overview grid names a slide by its header — `slideName` above returns it
+ * verbatim — so one shared "Hand-off" would put five indistinguishable rows in
+ * the one place a jump grid exists to help, in an issue whose whole point is
+ * removing ambiguity about who does what. The
  * suffix names the SEGMENT, short enough to read in a grid cell; the body still
  * spells out the full prose target.
  *
@@ -125,6 +125,17 @@ function presenterLine(presenter: LegendEntry | null): string | null {
 	return presenter.name === OPEN_LABEL
 		? `Presented by the ${presenter.role}`
 		: `Presented by the ${presenter.role} · ${presenter.name}`;
+}
+
+/** The one name a slide answers to outside the slide itself: what the audience
+ *  reads off it, reused verbatim for the jump-to-slide grid's cells (#360) and
+ *  for anything else that has to refer to a slide in one line. Lives here beside
+ *  `slideLayout` rather than in the presenter, so the cross-kind uniqueness the
+ *  grid depends on can be asserted against the real derivation instead of a copy
+ *  of it (#446). Splash slides carry no header, so they answer to their headline. */
+export function slideName(slide: Slide): string {
+	const layout = slideLayout(slide);
+	return layout.chrome === "content" ? layout.header : layout.headline;
 }
 
 export function slideLayout(slide: Slide): SlideLayout {
@@ -293,7 +304,12 @@ export function slideLayout(slide: Slide): SlideLayout {
 				head("Please Vote for Best Evaluator:"),
 				...slide.names.map(name),
 			);
-			return content("Speech Evaluation", { form: "centered", lines });
+			// Names its own segment, like its two sibling votes (#446). It used to
+			// return the `evaluation` slide's "Speech Evaluation", so a meeting with
+			// three evaluators put four consecutive identical cells in the
+			// jump-to-slide grid — `slideName` renders this header verbatim — and
+			// the one that was actually the vote could only be found by counting.
+			return content("Vote for Best Evaluator", { form: "centered", lines });
 		}
 		case "generalEvaluation":
 			// The header names the SEGMENT; this line names the ROLE giving it — the

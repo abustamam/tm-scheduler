@@ -16,6 +16,7 @@ import {
 	type Line,
 	type SlideLayout,
 	slideLayout,
+	slideName,
 } from "#/lib/slide-layout";
 
 // Official brand palette (sampled from the wordmark) so chrome matches the logo.
@@ -35,12 +36,11 @@ const NAVY_GRADIENT_BOTTOM = "#002a41";
 const OVERVIEW_COLUMNS = 4;
 
 /** The name a slide answers to in the overview: the same header the audience
- *  reads off it, straight from `slideLayout` — never a parallel naming scheme
- *  that could drift from what is projected. */
-function slideLabel(slide: Slide): string {
-	const layout = slideLayout(slide);
-	return layout.chrome === "content" ? layout.header : layout.headline;
-}
+ *  reads off it, straight from `slideName` — never a parallel naming scheme that
+ *  could drift from what is projected. Re-exported under the local name the JSX
+ *  reads by; the derivation itself lives with `slideLayout` so the cross-kind
+ *  uniqueness this grid depends on is asserted against it, not a copy (#446). */
+const slideLabel = slideName;
 
 /** Full-screen, keyboard-driven slideshow. Read-only; position is local state. */
 export function MeetingPresent({
@@ -296,7 +296,7 @@ function SlideOverview({
 			>
 				{labels.map((label, idx) => (
 					<button
-						// biome-ignore lint/suspicious/noArrayIndexKey: position IS the identity here — headers repeat (two "Speech Evaluation" slides)
+						// biome-ignore lint/suspicious/noArrayIndexKey: position IS the identity here — headers legitimately repeat, one "Speech Evaluation" per evaluator
 						key={idx}
 						ref={idx === cursor ? cursorRef : null}
 						type="button"

@@ -674,6 +674,10 @@ describe("hand-off slides (#363)", () => {
 		// second row reading "Hand-off" — the exact ambiguity #363 exists to remove,
 		// arriving silently. This is the assertion that says the fallback is
 		// defensive rather than load-bearing.
+		// Deliberately NOT `slideName` (#446), though the shape is the same: this maps
+		// splash to the literal "splash" so an accidentally-splash hand-off trips the
+		// `not.toContain("Hand-off")` check below, whereas `slideName` would return
+		// the headline and hide it. Keep the copy; it is load-bearing here.
 		const headers = handoffs({ geIntroducesFunctionaries: true }).map((s) => {
 			const layout = slideLayout(s);
 			return layout.chrome === "content" ? layout.header : "splash";
