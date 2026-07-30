@@ -15,7 +15,7 @@ import {
 	isMeetingLocked,
 	MEETING_LOCKED_MESSAGE,
 } from "#/lib/meeting-lifecycle";
-import { isGrammarianRoleName, isTmodRoleName } from "#/lib/meeting-roles";
+import { findGrammarianSlot, findTmodSlot } from "#/lib/meeting-roles";
 import { markImpersonatedWrite } from "./impersonation-actor";
 import { getActiveImpersonation } from "./impersonation-logic";
 
@@ -101,8 +101,14 @@ async function resolveAdminGrant(
 
 /**
  * Resolve the meeting's TMOD and Grammarian slot assignees (each null when the
- * slot is unassigned or absent). Matches roles by name the same way the rest of
- * the app identifies the Toastmaster and Grammarian roles.
+ * slot is unassigned or absent). Identifies roles the same way the rest of the
+ * app does — by `role_definitions.key`, with the name only as the fallback for a
+ * slot that carries no key (#464).
+ *
+ * `key` is selected, not just `name`: this is the SERVER side of the capability,
+ * so matching on the display name did not merely hide a button. A club that
+ * renamed its Toastmaster of the Day had the mutation itself refused, and a club
+ * that invented any role starting with "Toastmaster" had it granted.
  */
 async function loadRoleSlotAssignees(meetingId: string): Promise<{
 	tmodMemberId: string | null;
@@ -110,7 +116,8 @@ async function loadRoleSlotAssignees(meetingId: string): Promise<{
 }> {
 	const slotRows = await db
 		.select({
-			name: roleDefinitions.name,
+			roleName: roleDefinitions.name,
+			roleKey: roleDefinitions.key,
 			assignedMemberId: roleSlots.assignedMemberId,
 		})
 		.from(roleSlots)
@@ -120,11 +127,8 @@ async function loadRoleSlotAssignees(meetingId: string): Promise<{
 		)
 		.where(eq(roleSlots.meetingId, meetingId));
 	return {
-		tmodMemberId:
-			slotRows.find((r) => isTmodRoleName(r.name))?.assignedMemberId ?? null,
-		grammarianMemberId:
-			slotRows.find((r) => isGrammarianRoleName(r.name))?.assignedMemberId ??
-			null,
+		tmodMemberId: findTmodSlot(slotRows)?.assignedMemberId ?? null,
+		grammarianMemberId: findGrammarianSlot(slotRows)?.assignedMemberId ?? null,
 	};
 }
 

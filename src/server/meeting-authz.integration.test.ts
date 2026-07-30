@@ -28,16 +28,23 @@ const { applyMeetingUpdate } = await import("./meetings-logic");
 const { startImpersonation } = await import("./impersonation-logic");
 
 /** Add a Toastmaster of the Day role def + slot to the meeting; optionally
- *  assign a roster member. Returns the slot id. */
+ *  assign a roster member. Returns the slot id.
+ *
+ *  Defaults to the canonical name with NO key, which is the pre-#368-backfill
+ *  shape every test here was written against and which must keep working.
+ *  `role` overrides both so #464's cases can seed a renamed TMOD (key intact) or
+ *  a club-invented role whose NAME merely looks like one. */
 async function addTmodSlot(
 	club: SeededClub,
 	assignedMemberId: string | null,
+	role: { name?: string; key?: string | null } = {},
 ): Promise<string> {
 	const [def] = await testDb
 		.insert(roleDefinitions)
 		.values({
 			clubId: club.clubId,
-			name: "Toastmaster of the Day",
+			name: role.name ?? "Toastmaster of the Day",
+			key: role.key ?? null,
 			category: "leadership",
 			isSpeakerRole: false,
 			sortOrder: 1,
@@ -147,6 +154,41 @@ describe.skipIf(!hasTestDb)("meeting agenda authorization", () => {
 		expect(authz.allowed).toBe(true);
 		expect(authz.via).toBe("tmod-self-assert");
 		expect(authz.tmodMemberId).toBe(club.memberId);
+	});
+
+	// #464 — the SERVER half. These two roles carry a capability, so identifying
+	// them by display name was not an affordance bug: the mutation itself was
+	// refused for a club that renamed, and granted to a club that invented a
+	// look-alike. Both directions are exercised here rather than only in the pure
+	// unit test, because this is the decision that actually gates the write.
+	it("allows the TMOD self-assert after the club RENAMES the role (#464)", async () => {
+		await addTmodSlot(club, club.memberId, {
+			name: "MC",
+			key: "toastmaster_of_the_day",
+		});
+		const authz = await resolveMeetingAgendaAuthz({
+			meetingId: club.meetingId,
+			selfMemberId: club.memberId,
+		});
+		expect(authz.allowed).toBe(true);
+		expect(authz.via).toBe("tmod-self-assert");
+		expect(authz.tmodMemberId).toBe(club.memberId);
+	});
+
+	it("rejects a club-invented role whose NAME merely looks like the TMOD (#464)", async () => {
+		// `/^toastmaster\b/` matched this, so its holder was handed the whole
+		// agenda — server-side, not just in the UI.
+		await addTmodSlot(club, club.memberId, {
+			name: "Toastmaster Evaluator",
+			key: "club_invented",
+		});
+		const authz = await resolveMeetingAgendaAuthz({
+			meetingId: club.meetingId,
+			selfMemberId: club.memberId,
+		});
+		expect(authz.allowed).toBe(false);
+		expect(authz.via).toBe(null);
+		expect(authz.tmodMemberId).toBe(null);
 	});
 
 	it("rejects a non-TMOD, non-admin roster member", async () => {

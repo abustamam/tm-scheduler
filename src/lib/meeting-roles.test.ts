@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
 	deriveMeetingRoleFlags,
+	findGrammarianSlot,
+	findTmodSlot,
 	isGrammarianRoleName,
 	isTmodRoleName,
 	pairedRoleIds,
@@ -164,5 +166,92 @@ describe("deriveMeetingRoleFlags", () => {
 			isTmod: false,
 			isGrammarian: false,
 		});
+	});
+});
+
+// #464. These two roles carry a CAPABILITY, not a label: the TMOD gets self-serve
+// agenda editing (ADR-0010) and the Grammarian owns the Word of the Day (#296).
+// Resolving them by display name got all three answers wrong, and the same
+// predicates back the SERVER authz, so none of this was only an affordance.
+describe("capability roles are identified by key, not by name (#464)", () => {
+	it("keeps the capability when the club renames the role", () => {
+		// The exact shape #368 promised was safe: rename the label, keep the key.
+		const renamed = [
+			{ roleName: "MC", roleKey: "toastmaster_of_the_day", assigneeId: "a" },
+			{ roleName: "Word Master", roleKey: "grammarian", assigneeId: "b" },
+		];
+		expect(deriveMeetingRoleFlags(renamed, "a")).toEqual({
+			isTmod: true,
+			isGrammarian: false,
+		});
+		expect(deriveMeetingRoleFlags(renamed, "b")).toEqual({
+			isTmod: false,
+			isGrammarian: true,
+		});
+	});
+
+	it("does not hand the meeting to a club-invented role that merely reads like one", () => {
+		// `/^toastmaster\b/` matches far more than the TMOD. A club inventing
+		// "Toastmaster Evaluator" gave its holder the whole agenda — and because
+		// the server runs the same check, the mutation was granted, not just the
+		// button shown.
+		for (const roleName of [
+			"Toastmaster Evaluator",
+			"Toastmaster Assistant",
+			"Toastmaster's Helper",
+		]) {
+			expect(
+				deriveMeetingRoleFlags(
+					[{ roleName, roleKey: "club_invented", assigneeId: "c" }],
+					"c",
+				),
+			).toEqual({ isTmod: false, isGrammarian: false });
+		}
+	});
+
+	it("prefers the keyed slot over a name-alike, whatever the order", () => {
+		// The server reads an unordered SQL result, so a single `find` across both
+		// candidates could answer differently between two requests for one meeting.
+		const real = {
+			roleName: "MC",
+			roleKey: "toastmaster_of_the_day",
+			assigneeId: "real",
+		};
+		const alike = {
+			roleName: "Toastmaster Assistant",
+			roleKey: null,
+			assigneeId: "alike",
+		};
+		for (const slots of [
+			[real, alike],
+			[alike, real],
+		]) {
+			expect(findTmodSlot(slots)?.assigneeId).toBe("real");
+			expect(deriveMeetingRoleFlags(slots, "real").isTmod).toBe(true);
+			expect(deriveMeetingRoleFlags(slots, "alike").isTmod).toBe(false);
+		}
+	});
+
+	it("still matches by name for a slot with no key", () => {
+		// `drizzle/0044` backfilled keys by exact canonical NAME, so a club that
+		// renamed before it ran still has NULL there. Those clubs keep working the
+		// way they always did rather than losing the capability to this fix.
+		const preBackfill = [
+			{ roleName: "Toastmaster of the Day", roleKey: null, assigneeId: "a" },
+			{ roleName: "Grammarian", assigneeId: "b" },
+		];
+		expect(deriveMeetingRoleFlags(preBackfill, "a").isTmod).toBe(true);
+		expect(deriveMeetingRoleFlags(preBackfill, "b").isGrammarian).toBe(true);
+	});
+
+	it("exposes the same answer through the slot finders", () => {
+		const slots = [
+			{ roleName: "MC", roleKey: "toastmaster_of_the_day", assigneeId: "a" },
+			{ roleName: "Word Master", roleKey: "grammarian", assigneeId: "b" },
+			{ roleName: "Timer", roleKey: "timer", assigneeId: "c" },
+		];
+		expect(findTmodSlot(slots)?.assigneeId).toBe("a");
+		expect(findGrammarianSlot(slots)?.assigneeId).toBe("b");
+		expect(findTmodSlot([slots[2]])).toBeUndefined();
 	});
 });
