@@ -158,11 +158,21 @@ describe.skipIf(!hasTestDb)(
 		// Needs MORE THAN ONE membership to mean anything: with a single row
 		// every ordering is trivially stable, so the `.orderBy(members.id)` the
 		// resolver documents would go unverified.
+		//
+		// The ids are EXPLICIT and descending, inserted in that order, so heap
+		// order is guaranteed to be the reverse of id order. With random uuids
+		// this detected a missing ORDER BY only ~5 runs in 6 — three random ids
+		// already happen to be sorted one time in six, which is a flaky test
+		// that green-lights the mutation on that run.
 		it("userMemberIds is stable across calls, and sorted by id", async () => {
 			const userId = await makeUser();
 			const personId = await makePerson(userId, new Date("2023-01-01"));
-			const made: string[] = [];
-			for (let i = 0; i < 3; i++) {
+			const descendingIds = [
+				"00000000-0000-4000-8000-000000000003",
+				"00000000-0000-4000-8000-000000000002",
+				"00000000-0000-4000-8000-000000000001",
+			];
+			for (const [i, memberId] of descendingIds.entries()) {
 				const [club] = await testDb
 					.insert(clubs)
 					.values({
@@ -171,18 +181,18 @@ describe.skipIf(!hasTestDb)(
 					})
 					.returning({ id: clubs.id });
 				createdClubIds.push(club.id);
-				const [m] = await testDb
-					.insert(members)
-					.values({ clubId: club.id, personId, name: "Dup Human" })
-					.returning({ id: members.id });
-				made.push(m.id);
+				await testDb.insert(members).values({
+					id: memberId,
+					clubId: club.id,
+					personId,
+					name: "Dup Human",
+				});
 			}
 
 			const first = await userMemberIds(userId);
 			expect(first).toHaveLength(3);
-			// Sorted, not merely repeatable — insertion order is deliberately
-			// not id order (uuids are random), so this pins the ORDER BY.
-			expect(first).toEqual([...made].sort());
+			// Ascending — the exact reverse of the order they were written in.
+			expect(first).toEqual([...descendingIds].reverse());
 
 			const answers = new Set([
 				JSON.stringify(first),
@@ -190,6 +200,37 @@ describe.skipIf(!hasTestDb)(
 				JSON.stringify(await userMemberIds(userId)),
 			]);
 			expect(answers.size).toBe(1);
+		});
+
+		// The resolver's docstring forbids adding a `members.status` filter here,
+		// on the grounds that a lapsed membership does not un-give the speeches.
+		// Without this test that instruction is unenforced: every other fixture
+		// seeds an ACTIVE membership, so adding `eq(members.status, "active")`
+		// passed the entire 2352-test suite.
+		it("userMemberIds includes LAPSED memberships — history is not un-given", async () => {
+			const userId = await makeUser();
+			const personId = await makePerson(userId, new Date("2023-06-01"));
+			const [club] = await testDb
+				.insert(clubs)
+				.values({
+					name: `Lapsed ${SUITE_TAG}`,
+					slug: `lapsed-${SUITE_TAG}`,
+				})
+				.returning({ id: clubs.id });
+			createdClubIds.push(club.id);
+			const [m] = await testDb
+				.insert(members)
+				.values({
+					clubId: club.id,
+					personId,
+					name: "Dup Human",
+					status: "inactive",
+				})
+				.returning({ id: members.id });
+
+			// The club switcher (auth-context) hides this club; the personal
+			// history views must still show what happened there.
+			expect(await userMemberIds(userId)).toEqual([m.id]);
 		});
 
 		it("userMemberIds returns empty for an account with no membership", async () => {

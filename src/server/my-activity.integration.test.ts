@@ -26,6 +26,7 @@ import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { user } from "#/db/auth-schema";
 import {
+	clubs,
 	meetings,
 	members,
 	people,
@@ -82,6 +83,24 @@ async function attachToClub(
 	label: string,
 	dayOffset: number,
 ): Promise<Attached> {
+	// `seedClub()` hardcodes the club name "Test Club" and the member name
+	// "Member User" for EVERY club, and both clubs take the same `clubs.timezone`
+	// default. A golden-row literal like `clubName: "Test Club"` would therefore
+	// still match if the join had resolved the OTHER club's row — which is
+	// exactly the cross-club defect this file exists to catch. Give each club
+	// discriminating values first.
+	await testDb
+		.update(clubs)
+		.set({
+			name: `Club ${label}`,
+			timezone: label === "A" ? "America/Chicago" : "Europe/London",
+		})
+		.where(eq(clubs.id, club.clubId));
+	await testDb
+		.update(members)
+		.set({ name: `Evaluator Human ${label}` })
+		.where(eq(members.id, club.memberId));
+
 	const [personRow] = await testDb
 		.insert(people)
 		.values({
@@ -324,7 +343,7 @@ describe.skipIf(!hasTestDb)("my cross-club activity (#437)", () => {
 			pathwayPath: "Path A",
 			projectLevel: "Level A",
 			// Resolved through the evaluator self-join, not the speaker's row.
-			evaluatorName: "Member User",
+			evaluatorName: "Evaluator Human A",
 			status: "confirmed",
 		});
 	});
@@ -351,7 +370,9 @@ describe.skipIf(!hasTestDb)("my cross-club activity (#437)", () => {
 	it("commitments exclude cancelled meetings", async () => {
 		const commitments = await loadMyCommitments(userId);
 		expect(commitments).toHaveLength(2);
-		expect(commitments.every((c) => c.meetingId !== null)).toBe(true);
+		// `meetingId` is a NOT NULL primary key reached through an innerJoin, so
+		// a null-check there could never fail; the identity + length assertions
+		// below are what actually pin the cancelled row out of the result.
 		const meetingIds = commitments.map((c) => c.meetingId);
 		expect(meetingIds).toEqual([inA.upcomingMeetingId, inB.upcomingMeetingId]);
 	});
@@ -368,7 +389,7 @@ describe.skipIf(!hasTestDb)("my cross-club activity (#437)", () => {
 			lengthMinutes: 75,
 			theme: "Theme A",
 			location: "Location A",
-			clubName: "Test Club",
+			clubName: "Club A",
 			timezone: "America/Chicago",
 			roleName: inA.roleName,
 			isSpeakerRole: false,
@@ -386,12 +407,14 @@ describe.skipIf(!hasTestDb)("my cross-club activity (#437)", () => {
 			loadMySpeechLog(userId, 6),
 			loadMySpeechLog(userId, 6),
 		]);
-		// Compare the ORDERED slot ids: sorting first would hide an unstable
-		// ORDER BY, which is the very thing this test exists to catch.
-		const shapes = new Set(
-			runs.map((r) => JSON.stringify(r.map((x) => x.slotId))),
-		);
-		expect(shapes.size).toBe(1);
+		// Agreement alone proves nothing: three sequential scans of a two-row
+		// result never diverge in one Postgres process, so this passed even with
+		// the ORDER BY deleted outright. Pin the EXPECTED sequence on every run
+		// instead — then agreement and correctness are the same assertion.
+		const expected = [inA.speechSlotId, inB.speechSlotId];
+		for (const run of runs) {
+			expect(run.map((r) => r.slotId)).toEqual(expected);
+		}
 	});
 
 	it("an account with no linked membership gets empty results", async () => {
