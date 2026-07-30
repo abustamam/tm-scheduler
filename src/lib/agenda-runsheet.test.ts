@@ -798,9 +798,10 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 	});
 
 	// A slot with no `roleKey` reaches a beat only by matching its canonical NAME
-	// (`matchesRole`), so inheriting the beat's key is right — the row genuinely
-	// belongs to that role, the club's data just predates the #368 backfill.
-	it("inherits the beat's key for a slot that carries none (#445)", () => {
+	// (`matchesRole`), so the row genuinely belongs to that role — the club's data
+	// just predates the #368 backfill. The row still gets the BEAT's key, which is
+	// what the print layer colours by, so a pre-backfill club is not a grey page.
+	it("keys a row whose slot carries no roleKey (#445)", () => {
 		const rows = expandRunSheet([
 			slot({
 				roleKey: undefined,

@@ -61,7 +61,8 @@ export type AgendaRow = {
 	 *  need to know WHICH role this row belongs to rather than what it is called.
 	 *  ABSENT on an event beat (Sergeant-at-Arms, President — officer positions,
 	 *  not meeting roles, and their `who` is a hardcoded string). Every ROLE row
-	 *  carries one, inherited from the beat when the slot has none.
+	 *  carries one, and it is the BEAT's: `matchesRole` admits a slot only when its
+	 *  key equals the beat's or is null, so a matched slot can never disagree.
 	 *
 	 *  Exists because `who` stopped being canonical: the print layouts colour a
 	 *  row's spine by role, and they used to get away with matching English
@@ -1106,7 +1107,7 @@ export function expandRunSheet(
 						// `ROLES_TOKEN` printed the club's, two names for one role on one
 						// page. Identical output for a club that never renamed anything.
 						who: `${numbered(s.roleName, i, multi)} · ${assigneeDisplay(s)}`,
-						roleKey: s.roleKey ?? owner.roleKey,
+						roleKey: owner.roleKey,
 						detail: s.speechTitle
 							? `"${s.speechTitle}"${s.projectLevel ? ` · ${s.projectLevel}` : ""}`
 							: beatDetail,
@@ -1121,7 +1122,7 @@ export function expandRunSheet(
 					rows.push({
 						// The slot's name, per the speaker arm above (#445).
 						who: `${numbered(s.roleName, i, multi)} · ${assigneeDisplay(s)}`,
-						roleKey: s.roleKey ?? owner.roleKey,
+						roleKey: owner.roleKey,
 						detail: s.evaluates?.speakerName
 							? `Evaluates ${s.evaluates.speakerName}`
 							: beatDetail,
@@ -1158,7 +1159,7 @@ export function expandRunSheet(
 					rows.push({
 						// The slot's name, per the speaker arm above (#445).
 						who: `${s.roleName} · ${assigneeDisplay(s)}`,
-						roleKey: s.roleKey ?? owner.roleKey,
+						roleKey: owner.roleKey,
 						detail: beatDetail,
 						minutes: beat.minutes,
 						marks: null,

@@ -207,9 +207,14 @@ const ROLE_KEY_COLOR: Record<string, string> = {
 type RoleIdentified = { who: string; roleKey?: string | null };
 
 function beatColor(row: RoleIdentified): string {
-	if (row.roleKey != null && row.roleKey in ROLE_KEY_COLOR) {
-		return ROLE_KEY_COLOR[row.roleKey];
-	}
+	// The key is AUTHORITATIVE once present, even if it is unmapped. Falling
+	// through to the name match for a keyed-but-unmapped row would read
+	// club-typed free text: the first beat owned by a functionary would let a club
+	// that renamed Grammarian to "Speaker Coach" pick up the speaker's teal from
+	// `startsWith("speaker")` below, which is #445's regression in reverse. Also
+	// keeps this the same shape as `isHighlighted`, which already branches on
+	// presence alone.
+	if (row.roleKey != null) return ROLE_KEY_COLOR[row.roleKey] ?? MUTED;
 	const w = row.who.toLowerCase();
 	if (w.startsWith("sergeant")) return MUTED;
 	if (w.startsWith("president")) return INK;
