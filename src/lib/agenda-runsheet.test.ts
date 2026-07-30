@@ -14,11 +14,9 @@ import {
 	functionarySlots,
 	hasAnyFunctionaryRole,
 	hasAnyReportingFunctionaryRole,
-	nameableRoleKeys,
 	ROLES_TOKEN,
 	RUN_OF_SHOW,
 	reportingFunctionarySlots,
-	roleNameToken,
 	TABLE_TOPICS_MAX,
 	TABLE_TOPICS_MIN,
 } from "./agenda-runsheet";
@@ -607,24 +605,13 @@ describe("expandRunSheet — role-key matching (#368)", () => {
 			}),
 		]);
 		// The row EXISTING is what proves the key matched — a beat bound by display
-		// name would have found nothing here. Its label is the club's name since
-		// #445, which is the separate question the next test covers.
+		// name would have found nothing here.
 		expect(rows.some((r) => r.who === "Chief Evaluator · Priya")).toBe(true);
-	});
-
-	it("labels the row with the club's name for the role, not ours (#445)", () => {
-		// The other half of the #368 promise. Binding through a rename was never
-		// enough on its own: the row still printed the canonical name, so a club that
-		// renamed a role read one name in the header legend and another on every row
-		// that role owned. Same page, same role, two names.
-		const rows = expandRunSheet([
-			slot({
-				roleName: "Chief Evaluator",
-				roleKey: "general_evaluator",
-				category: "leadership",
-				assigneeName: "Priya",
-			}),
-		]);
+		// And it is labelled the way the CLUB names it (#445), which is the other
+		// half of the #368 promise: binding through a rename was never enough on its
+		// own, because the row still printed our canonical name, so a renaming club
+		// read one name in the header legend and another on every row that role
+		// owned. Same page, same role, two names.
 		expect(rows.some((r) => r.who.startsWith("General Evaluator"))).toBe(false);
 	});
 
@@ -748,11 +735,6 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 		expect(details.join(" ")).not.toContain("Timer's");
 	});
 
-	// A club role name is admin-typed free text with no character validation, and
-	// `String.replace` reads `$&` / "$`" / `$'` in a REPLACEMENT STRING as
-	// back-references. The token resolver passes a function instead, so the name
-	// substitutes literally. Without that, this club prints its own copy back into
-	// the row. Same guard the `ROLES_TOKEN` site documents.
 	// The speaker and evaluator arms label rows through `numbered(s.roleName, …)`
 	// rather than the shared plain arm, so they need their own club. Nothing
 	// covered them before: the coverage audit found that reverting BOTH arms to
@@ -807,10 +789,12 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 			"evaluator",
 		);
 		// Event beats own no role, so they carry no key and the print layer's name
-		// fallback is what colours them.
-		expect(
-			rows.find((r) => r.who === "Sergeant-at-Arms")?.roleKey ?? null,
-		).toBe(null);
+		// fallback is what colours them. Pin the ROW first: `find(...)?.roleKey ??
+		// null` reads `null` whether the row is keyless or absent entirely, so
+		// deleting the beat outright would have left this green.
+		const soa = rows.find((r) => r.who === "Sergeant-at-Arms");
+		expect(soa).toBeDefined();
+		expect(soa).not.toHaveProperty("roleKey");
 	});
 
 	// A slot with no `roleKey` reaches a beat only by matching its canonical NAME
@@ -829,6 +813,11 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 		expect(row?.roleKey).toBe("general_evaluator");
 	});
 
+	// A club role name is admin-typed free text with no character validation, and
+	// `String.replace` reads `$&` / "$`" / `$'` in a REPLACEMENT STRING as
+	// back-references. The token resolver passes a function instead, so the name
+	// substitutes literally. Without that, this club prints its own copy back into
+	// the row. Same guard the `ROLES_TOKEN` site documents.
 	it("substitutes a role name containing $-sequences literally (#445)", () => {
 		// Sequences kept away from the ends so the expectation stays readable: a name
 		// ending in `$'` would legitimately double the possessive into `$''s`.
@@ -879,25 +868,22 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 	});
 
 	// `roleNameToken` builds `{role:<key>}` and the resolver's regex accepts only
-	// lower-snake. A key like `timer2` or `Timer` would produce a token nothing
-	// resolves, and the row would print `{role:…}` to the room. Pins the two ends
-	// against each other so adding a role to NAMEABLE_ROLES cannot break it.
-	it("every nameable role key is resolvable by the token regex (#445)", () => {
-		const keys = nameableRoleKeys();
-		expect(keys.length).toBeGreaterThan(0);
-		for (const key of keys) {
-			expect(key).toMatch(/^[a-z_]+$/);
-			const beat: Beat = {
-				kind: "role",
-				roleKey: "toastmaster_of_the_day",
-				roleName: "Toastmaster of the Day",
-				role: "plain",
-				detail: `owner=${roleNameToken({ roleKey: key, roleName: "x" })}`,
-				minutes: 1,
-			};
-			expect(expandRunSheet(sixRoleClub(), [beat])[0].detail).not.toContain(
-				"{role:",
+	// lower-snake, so a key like `timer2` or `Timer` would produce a token nothing
+	// resolves and the row would print `{role:…}` to the room mid-meeting.
+	//
+	// Asserted over the SHIPPED templates rather than by re-checking the regex's
+	// character class in the test: a copy of that class here false-fails the moment
+	// someone legitimately widens both ends together, and it says nothing about
+	// whether a real beat resolves. A leftover `{` on any real row is the actual
+	// defect, and this also catches a mistyped `{roles}`/`{awards}`.
+	it("leaves no unresolved token on any row of any shipped beat (#445)", () => {
+		for (const geIntroducesFunctionaries of [true, false]) {
+			const rows = expandRunSheet(
+				sixRoleClub(),
+				buildRunOfShow({ geIntroducesFunctionaries }),
 			);
+			expect(rows.length).toBeGreaterThan(0);
+			for (const r of rows) expect(r.detail).not.toContain("{");
 		}
 	});
 

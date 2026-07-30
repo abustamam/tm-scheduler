@@ -873,21 +873,20 @@ const handoffSlides = (slots: AgendaSlot[], config: RunOfShowConfig) =>
 	);
 
 /**
- * The holder out of a row's `who` ("Toastmaster of the Day · Dana" ⇒ "Dana").
+ * The role and holder out of a row's `who` ("Toastmaster of the Day · Dana" ⇒ "Dana").
  *
  * The two surfaces label the ROLE differently and always have: `expandRunSheet`
- * prints the BEAT's canonical `roleName` for every role row, while the deck's
- * `LegendEntry`s — the legend, the Word-of-the-Day presenter, and now a
- * hand-off's `from` — carry the slot's own name, which is the club's if they
- * renamed it (#368). That difference is surface-wide and predates #363, so it
- * is not this suite's to settle; the "renamed standard roles" case pins it
- * explicitly below rather than letting it hide inside a mismatch here.
+ * USED to print the BEAT's canonical `roleName` for every role row, while the
+ * deck's `LegendEntry`s — the legend, the Word-of-the-Day presenter, and a
+ * hand-off's `from` — carried the slot's own name, which is the club's if they
+ * renamed it (#368). This helper existed to split that difference off so it could
+ * not hide inside a mismatch here.
  *
- * #445 CLOSED that gap: `expandRunSheet` reads the matched slot's `roleName`
- * too, so both surfaces now name a role the same way and the comparison below
- * takes the WHOLE label rather than just the person. Splitting the string was
- * the only thing hiding the divergence, so keeping it split would have kept a
- * rename mismatch invisible in the one suite built to catch cross-surface drift.
+ * #445 closed the gap: `expandRunSheet` reads the matched slot's `roleName` too,
+ * so both surfaces name a role the same way and the hand-off comparison below
+ * takes the WHOLE label. Splitting the string was the only thing hiding the
+ * divergence, so keeping it split would have kept a rename mismatch invisible in
+ * the one suite built to catch cross-surface drift.
  */
 const labelOf = (who: string): { role: string; person: string | null } => {
 	const [role, person] = who.split(" · ");

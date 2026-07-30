@@ -187,10 +187,14 @@ function TimingLegend({ rows }: { rows: TimelineRow[] }) {
  * canonical English — it now carries the club's own name, so a club that renamed
  * Speaker to Presenter would have silently lost every speech row's colour.
  *
- * The name match stays as the fallback, for the two kinds of row that carry no
- * key: event beats (Sergeant-at-Arms, President) and a club-invented role with
- * no `role_definitions.key`. Neither is renameable through the roles admin, so
- * matching their English is safe.
+ * The name match stays as the fallback for the ONE kind of row that carries no
+ * key: an event beat, whose `who` is a hardcoded string in `buildRunOfShow`
+ * (Sergeant-at-Arms, President) and so is not renameable at all. Every role row
+ * carries a key — `roleKey: s.roleKey ?? owner.roleKey`, and the beat's own key is
+ * non-nullable — including a club-invented role, which either fails `matchesRole`
+ * and emits no row or matches by name and inherits the beat's key. Only the
+ * `sergeant` and `president` branches below are reachable in production; the rest
+ * are kept for callers that hand-build rows, which the tests do.
  */
 const ROLE_KEY_COLOR: Record<string, string> = {
 	table_topics_master: FOREST,
@@ -198,7 +202,6 @@ const ROLE_KEY_COLOR: Record<string, string> = {
 	speaker: TEAL,
 	evaluator: AMBER,
 	toastmaster_of_the_day: LAGOON,
-	timer: MUTED,
 };
 
 type RoleIdentified = { who: string; roleKey?: string | null };
@@ -1721,6 +1724,12 @@ function TimingLayout({
 										}}
 									/>
 								);
+							// `who` joins the role and the holder with " · ", and since #445 the
+							// role half is the club's own free text — so a role literally named
+							// "Chief · Evaluator" shifts text into the name column. First-split, not
+							// last, because the HOLDER half also carries the separator on a guest row
+							// ("Speaker 1 · Jane · Guest"). Neither direction is right in general;
+							// the real fix is carrying the two as separate fields (#463).
 							const [role, ...rest] = r.who.split(" · ");
 							const name = rest.join(" · ");
 							return (

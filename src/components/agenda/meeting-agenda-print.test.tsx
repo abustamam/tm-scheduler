@@ -503,17 +503,10 @@ describe("spine colour follows the ROLE, not its name (#445)", () => {
 		return spine.style.borderLeftColor;
 	};
 
-	it("keeps a renamed speaker role's colour", () => {
-		const canonical = spineOf(speechRow({}));
-		const renamed = spineOf(speechRow({ who: "Presenter · Jagpal" }));
-		expect(renamed).toBe(canonical);
-		expect(renamed).not.toBe("");
-	});
-
-	// Every key `expandRunSheet` actually emits, each paired with the colour the
-	// old name match produced. Only `speaker` was pinned at first, which left a
-	// typo in any of the other four able to re-ship #445's exact regression —
-	// silent grey for a renamed club, green suite for a canonical one.
+	// Every key `expandRunSheet` actually emits, each paired with the name the old
+	// match keyed off. Only `speaker` was pinned at first, which left a typo in any
+	// of the other four able to re-ship #445's exact regression: silent grey for a
+	// renamed club, green suite for a canonical one.
 	it.each([
 		["toastmaster_of_the_day", "Toastmaster of the Day · Faisal"],
 		["table_topics_master", "Table Topics Master · Rasheed"],
@@ -524,10 +517,32 @@ describe("spine colour follows the ROLE, not its name (#445)", () => {
 		const canonical = spineOf(speechRow({ roleKey, who: canonicalWho }));
 		const renamed = spineOf(speechRow({ roleKey, who: "Renamed · Somebody" }));
 		expect(renamed).toBe(canonical);
-		// Not the default. MUTED is what a missed key falls through to, and it is
-		// also legitimately Sergeant-at-Arms' colour, so this asserts the pair
-		// AGREE rather than hardcoding a hex the theme owns.
 		expect(renamed).not.toBe("");
+	});
+
+	// The pair-agreement above proves the colour is KEYED, and nothing more: both
+	// sides read the same `ROLE_KEY_COLOR` entry, so they agree for any value it
+	// holds. Collapsing every entry to MUTED leaves it green — the exact trap
+	// CLAUDE.md records, that an agreement test cannot see a defect present on both
+	// sides. Distinctness is the half that pins the mapping, and it still hardcodes
+	// no hex, since `print-theme.tsx` owns those.
+	it("gives the segment roles visibly different spines", () => {
+		const colourOf = (roleKey: string) =>
+			spineOf(speechRow({ roleKey, who: "Renamed · Somebody" }));
+		expect(
+			new Set([
+				colourOf("speaker"),
+				colourOf("table_topics_master"),
+				colourOf("evaluator"),
+				colourOf("toastmaster_of_the_day"),
+			]).size,
+		).toBe(4);
+		// The one pair that shares a colour on purpose: the Toastmaster covers the
+		// General Evaluator's role at a club that runs none (#363), so the two read
+		// as one voice down the page.
+		expect(colourOf("toastmaster_of_the_day")).toBe(
+			colourOf("general_evaluator"),
+		);
 	});
 
 	it("highlights a speech row by its key, not its name", () => {
@@ -561,17 +576,15 @@ describe("spine colour follows the ROLE, not its name (#445)", () => {
 		expect(speakerRenamed).not.toBe(notASpeaker);
 	});
 
-	it("still colours an event row, which carries no roleKey", () => {
-		// Sergeant-at-Arms and President are officer positions, not meeting roles,
-		// so their rows have no key and the name match is the only thing available.
-		expect(
-			spineOf(
-				speechRow({
-					who: "Sergeant-at-Arms",
-					roleKey: undefined,
-					detail: "Call to Order",
-				}),
-			),
-		).not.toBe("");
+	// Event beats own no role, so their rows carry no key and the name match is the
+	// only thing left to colour them. Asserted as President vs Sergeant-at-Arms
+	// rather than "is non-empty": MUTED is BOTH the sergeant branch's colour and
+	// the function's default, so a non-empty check on the sergeant alone stays
+	// green with the entire fallback deleted. President returns INK, so the pair
+	// differing is the one thing that proves the fallback still runs.
+	it("still colours event rows, which carry no roleKey", () => {
+		const eventRow = (who: string) =>
+			spineOf(speechRow({ who, roleKey: undefined, detail: "Call to Order" }));
+		expect(eventRow("President")).not.toBe(eventRow("Sergeant-at-Arms"));
 	});
 });

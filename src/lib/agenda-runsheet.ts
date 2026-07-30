@@ -59,8 +59,9 @@ export type AgendaRow = {
 	who: string; // "Speaker 1 · Rehanna Khan", "Sergeant-at-Arms", "Timer"
 	/** The owning role's stable `role_definitions.key` (#445), for consumers that
 	 *  need to know WHICH role this row belongs to rather than what it is called.
-	 *  `null` on an event beat (Sergeant-at-Arms, President — officer positions,
-	 *  not meeting roles) and on a club-invented role with no key.
+	 *  ABSENT on an event beat (Sergeant-at-Arms, President — officer positions,
+	 *  not meeting roles, and their `who` is a hardcoded string). Every ROLE row
+	 *  carries one, inherited from the beat when the slot has none.
 	 *
 	 *  Exists because `who` stopped being canonical: the print layouts colour a
 	 *  row's spine by role, and they used to get away with matching English
@@ -305,13 +306,6 @@ export const AWARDS_TOKEN = "{awards}";
  */
 export const roleNameToken = (role: BeatRole): string =>
 	`{role:${role.roleKey}}`;
-
-/** The keys `roleNameToken` may name. Exported for the test that pins every one
- *  of them against `DETAIL_TOKEN_RE`: the regex accepts only lower-snake, so a
- *  key like `timer2` or `Timer` would produce a token nothing ever resolves and
- *  the row would print `{role:…}` verbatim to the room. */
-export const nameableRoleKeys = (): string[] =>
-	NAMEABLE_ROLES.map((r) => r.roleKey);
 
 /**
  * THE definition of "this club's functionaries" (#371) — the one every surface
@@ -1141,11 +1135,15 @@ export function expandRunSheet(
 				// unless the beat is about a SEGMENT rather than its owner (#363), in
 				// which case the bare role name still carries the instruction.
 				//
-				// The one label that stays CANONICAL (#445): there is no slot here, so
-				// there is no club name to read. A club that renamed this role also has
-				// no slot for it — the rename lives on the role definition the slot
-				// would have come from — so nothing else on the page names it either,
-				// and the canonical name is the only thing left that carries the cue.
+				// The one label that stays CANONICAL (#445): no slot MATCHED this beat,
+				// so there is no club name to read. When the club disabled the role
+				// nothing else on the page names it either, and the canonical name is
+				// the only thing left carrying the cue. One case does still diverge — a
+				// standard role renamed while its `role_definitions.key` is NULL (a
+				// rename predating the #368 backfill) has a slot that fails
+				// `matchesRole`, so this prints ours while the roster prints theirs.
+				// That is the binding gap, not the labelling one, and it needs the key
+				// backfilled rather than anything here.
 				if (beat.renderUnowned) {
 					rows.push({
 						who: owner.roleName,
