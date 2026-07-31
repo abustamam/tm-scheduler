@@ -120,10 +120,13 @@ the page's own check must use the same trimmed test so they cannot disagree.
 
 ## Offline
 
-`public/sw.js:59` precaches full-page loads by path suffix, matching `/present`
-and `/print` explicitly. Add `/word` to that same OR-chain and bump the service
-worker version. Printing at the venue on unreliable wifi is exactly the case
-that caching already exists for.
+No change needed. `isOfflineRoute` in `public/sw.js` names `/present` and
+`/print` explicitly, but it also matches `/^\/club\/[^/]+\/meeting\//` — and
+`/club/:slug/meeting/:key/word` already satisfies that regex. The poster lands
+in the navigation cache for free, with no service worker version bump.
+
+The page deliberately does not show the "Available offline" badge the print
+route carries; see "Page chrome" above.
 
 ## Testing
 
