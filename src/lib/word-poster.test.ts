@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { posterWordSize } from "./word-poster";
+import { hasWordOfTheDay, posterWordSize } from "./word-poster";
 
 describe("posterWordSize", () => {
 	it("steps down at each bucket boundary", () => {
@@ -54,5 +54,33 @@ describe("posterWordSize", () => {
 	// condition "1234" would be sized as shouted text.
 	it("sizes letterless input from the normal table", () => {
 		expect(posterWordSize("1234")).toBe(173); // 4, no letters
+	});
+});
+
+describe("hasWordOfTheDay", () => {
+	it("is true for a real word", () => {
+		expect(hasWordOfTheDay("Ephemeral")).toBe(true);
+	});
+
+	it("is false for null and undefined", () => {
+		expect(hasWordOfTheDay(null)).toBe(false);
+		expect(hasWordOfTheDay(undefined)).toBe(false);
+	});
+
+	it("is false for empty and whitespace-only", () => {
+		expect(hasWordOfTheDay("")).toBe(false);
+		expect(hasWordOfTheDay("   ")).toBe(false);
+		expect(hasWordOfTheDay("\t\n")).toBe(false);
+	});
+
+	// The poster route feeds `meeting.wordOfTheDay` (string | null) straight into
+	// a `word: string` prop after this check, so the predicate has to do the
+	// narrowing — otherwise the call site needs an `as string` cast, which would
+	// silently outlive any later weakening of this function. This test fails at
+	// TYPECHECK (not at runtime) if the return type stops being `word is string`.
+	it("narrows its argument to a string, so callers need no cast", () => {
+		const maybe = "Ephemeral" as string | null;
+		if (!hasWordOfTheDay(maybe)) throw new Error("expected a word");
+		expect(maybe.trim()).toBe("Ephemeral");
 	});
 });

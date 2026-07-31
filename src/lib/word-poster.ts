@@ -183,3 +183,18 @@ export function posterWordSize(word: string): number {
 	const trimmed = word.trim();
 	return sizeFrom(isAllCaps(trimmed) ? ALL_CAPS : NORMAL, trimmed.length);
 }
+
+/**
+ * Does this meeting have a Word of the Day to print? Whitespace-only counts as
+ * unset. The poster route and the "Word poster" button both call this so they
+ * cannot disagree about whether there is anything to show.
+ *
+ * A type predicate, not a plain boolean: the route hands the word straight to
+ * the poster's `word: string` prop, and narrowing here is what lets it do that
+ * honestly instead of casting away a `string | null` at the call site.
+ */
+export function hasWordOfTheDay(
+	word: string | null | undefined,
+): word is string {
+	return Boolean(word?.trim());
+}
