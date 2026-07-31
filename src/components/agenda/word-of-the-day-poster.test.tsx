@@ -33,10 +33,10 @@ describe("WordOfTheDayPoster", () => {
 
 	it("sizes the word from its length", () => {
 		const { unmount } = render(<WordOfTheDayPoster {...base} word="Apt" />);
-		expect(screen.getByText("Apt").style.fontSize).toBe("200px");
+		expect(screen.getByText("Apt").style.fontSize).toBe("190px");
 		unmount();
 		render(<WordOfTheDayPoster {...base} word="Circumlocution!" />);
-		expect(screen.getByText("Circumlocution!").style.fontSize).toBe("88px");
+		expect(screen.getByText("Circumlocution!").style.fontSize).toBe("80px");
 	});
 
 	it("omits the definition block when there is no definition", () => {
@@ -63,5 +63,10 @@ describe("WordOfTheDayPoster", () => {
 	it("treats a whitespace-only definition as absent", () => {
 		render(<WordOfTheDayPoster {...base} definition="   " />);
 		expect(screen.queryByTestId("wod-definition")).toBeNull();
+	});
+
+	it("treats a whitespace-only example as absent", () => {
+		render(<WordOfTheDayPoster {...base} example="   " />);
+		expect(screen.queryByTestId("wod-example")).toBeNull();
 	});
 });

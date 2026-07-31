@@ -74,8 +74,10 @@ export function WordOfTheDayPoster({
 							lineHeight: 1.4,
 							fontWeight: 500,
 							margin: 0,
-							// ~55 characters, so lines don't run the full page width.
-							maxWidth: "26em",
+							// 23em = 690px at 30px, just inside the 704px content box, so
+							// the definition is measurably narrower than full width rather
+							// than filling it. 26em (780px) never bound and did nothing.
+							maxWidth: "23em",
 						}}
 					>
 						{def}
@@ -92,6 +94,7 @@ export function WordOfTheDayPoster({
 							fontStyle: "italic",
 							color: MUTED,
 							margin: def ? "34px 0 0" : 0,
+							// 26em = 598px at 23px, which genuinely binds inside the box.
 							maxWidth: "26em",
 						}}
 					>
