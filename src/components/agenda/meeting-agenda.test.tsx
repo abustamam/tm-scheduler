@@ -548,6 +548,26 @@ describe("tap-to-nudge confirm gate (#37)", () => {
 		expect(emailLink.href.startsWith("mailto:other@example.com")).toBe(true);
 	});
 
+	it("passes the holder's goes-by name into the nudge draft", () => {
+		// Guards the agenda→NudgeButtons wiring (#486): without this, dropping
+		// `preferredName={slot.holderPreferredName}` leaves every other test green.
+		renderAgenda(manager(), [
+			slot({
+				status: "claimed",
+				assigneeId: "other",
+				assigneeName: "Abdul-Rasheed Bustamam",
+				holderPreferredName: "Rasheed",
+				holderEmail: "r@example.com",
+			}),
+		]);
+		const emailLink = screen.getByRole("link", {
+			name: /email/i,
+		}) as HTMLAnchorElement;
+		const body = decodeURIComponent(emailLink.href.split("&body=")[1] ?? "");
+		expect(body).toContain("Hi Rasheed,");
+		expect(body).not.toContain("Abdul-Rasheed");
+	});
+
 	it("renders the recruit picker for a manager on an open slot", () => {
 		renderAgenda(manager(), [slot({ status: "open" })]);
 		expect(screen.getByRole("button", { name: /nudge someone/i })).toBeTruthy();

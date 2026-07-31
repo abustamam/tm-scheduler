@@ -4,6 +4,7 @@ import { OnboardingChecklist } from "#/components/club/onboarding-checklist";
 import { PageContainer } from "#/components/page-container";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { buildOfficerHome, type OfficerTask } from "#/lib/officer-tasks";
+import { firstNameOf } from "#/lib/person-name";
 import { getOnboardingChecklist } from "#/server/onboarding-checklist";
 
 export const Route = createFileRoute("/_authed/officers")({
@@ -34,7 +35,7 @@ function OfficerHome() {
 	const { authUser, officerPositions, adminClub } = Route.useRouteContext();
 	const { checklist } = Route.useLoaderData();
 	const { common, sections } = buildOfficerHome([...officerPositions]);
-	const firstName = (authUser.name || authUser.email).split(/\s+/)[0];
+	const firstName = firstNameOf(authUser.name || authUser.email);
 
 	return (
 		<PageContainer className="space-y-8">

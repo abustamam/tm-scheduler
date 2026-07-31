@@ -680,6 +680,63 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			expect(g).toMatchObject({ email: null, phone: null });
 		});
 
+		it("stores a goes-by name, and stores a blank one as NULL (#486)", async () => {
+			// Guests get nudged like anyone else, so the draft greeting needs the
+			// same "goes by" escape hatch. Blank must land as NULL, not "" —
+			// `greetingName` has to see "nobody told us" and fall back.
+			const guestId = await seedGuest(seed.clubId, "Robert Smith");
+			await applyUpdateGuest({
+				clubId: seed.clubId,
+				guestId,
+				name: "Robert Smith",
+				preferredName: "  Bob  ",
+			});
+			const [set] = await testDb
+				.select({ preferredName: guests.preferredName })
+				.from(guests)
+				.where(eq(guests.id, guestId));
+			expect(set?.preferredName).toBe("Bob");
+
+			await applyUpdateGuest({
+				clubId: seed.clubId,
+				guestId,
+				name: "Robert Smith",
+				preferredName: "   ",
+			});
+			const [cleared] = await testDb
+				.select({ preferredName: guests.preferredName })
+				.from(guests)
+				.where(eq(guests.id, guestId));
+			expect(cleared?.preferredName).toBeNull();
+		});
+
+		it("serves the stored goes-by name back to the pipeline view (#486)", async () => {
+			// The WRITE half above asserts the column; this is the READ half, and
+			// the only thing standing between it and the VP Membership edit form,
+			// whose "Goes by" input renders `guest.preferredName`. Without this the
+			// loader could select the wrong column (or map null) and the field
+			// would render permanently blank — which then SAVES as null, silently
+			// wiping the name on the next edit. The write tests all read the row
+			// straight off `testDb`, so none of them see this hop.
+			const namedId = await seedGuest(seed.clubId, "Robert Smith");
+			await applyUpdateGuest({
+				clubId: seed.clubId,
+				guestId: namedId,
+				name: "Robert Smith",
+				preferredName: "Bob",
+			});
+			const plainId = await seedGuest(seed.clubId, "Plain Guest");
+
+			expect((await pipelineRow(seed.clubId, namedId)).preferredName).toBe(
+				"Bob",
+			);
+			// Nobody recorded one ⇒ null, so `greetingName` falls back to the first
+			// token. The loader must not invent a value here.
+			expect(
+				(await pipelineRow(seed.clubId, plainId)).preferredName,
+			).toBeNull();
+		});
+
 		it("rejects an empty name, and a guest outside the caller's club", async () => {
 			const guestId = await seedGuest(seed.clubId, "Real Guest");
 			await expect(
@@ -992,6 +1049,99 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 	});
 
 	describe("convert to member", () => {
+		it("carries a goes-by name onto both the Person and the Membership (#486)", async () => {
+			// Recorded while they were a guest, but true of the human — it has to
+			// survive the promotion. Assert BOTH inserts: a single-table assertion
+			// passes while the other one silently drops it.
+			const guestId = await seedGuest(seed.clubId, "Robert Smith");
+			await applyUpdateGuest({
+				clubId: seed.clubId,
+				guestId,
+				name: "Robert Smith",
+				preferredName: "Bob",
+			});
+
+			const res = await applyConvertGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+
+			const [p] = await testDb
+				.select({ preferredName: people.preferredName })
+				.from(people)
+				.where(eq(people.id, res.personId));
+			expect(p?.preferredName).toBe("Bob");
+			const [m] = await testDb
+				.select({ preferredName: members.preferredName })
+				.from(members)
+				.where(eq(members.id, res.membershipId));
+			expect(m?.preferredName).toBe("Bob");
+		});
+
+		it("seeds the goes-by name when the guest dedupes onto an EXISTING Person", async () => {
+			// The Person INSERT never runs on this branch, so without an explicit
+			// seed the person-level value is lost — and with the cross-club read
+			// being a coalesce onto people.preferred_name, losing it means every
+			// OTHER club greets them wrong (#486).
+			const email = `dedupe-${randomUUID()}@example.com`;
+			const [existing] = await testDb
+				.insert(people)
+				.values({ name: "Robert Smith", email, preferredName: null })
+				.returning({ id: people.id });
+
+			const guestId = await seedGuest(seed.clubId, "Robert Smith");
+			await applyUpdateGuest({
+				clubId: seed.clubId,
+				guestId,
+				name: "Robert Smith",
+				email,
+				preferredName: "Bob",
+			});
+
+			const res = await applyConvertGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+			expect(res.personId).toBe(existing?.id);
+
+			const [p] = await testDb
+				.select({ preferredName: people.preferredName })
+				.from(people)
+				.where(eq(people.id, res.personId));
+			expect(p?.preferredName).toBe("Bob");
+		});
+
+		it("does not overwrite a goes-by name the matched Person already has", async () => {
+			const email = `keep-${randomUUID()}@example.com`;
+			const [existing] = await testDb
+				.insert(people)
+				.values({ name: "Robert Smith", email, preferredName: "Rob" })
+				.returning({ id: people.id });
+
+			const guestId = await seedGuest(seed.clubId, "Robert Smith");
+			await applyUpdateGuest({
+				clubId: seed.clubId,
+				guestId,
+				name: "Robert Smith",
+				email,
+				preferredName: "Bob",
+			});
+
+			await applyConvertGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+
+			const [p] = await testDb
+				.select({ preferredName: people.preferredName })
+				.from(people)
+				.where(eq(people.id, existing?.id ?? ""));
+			expect(p?.preferredName).toBe("Rob");
+		});
+
 		it("creates a membership, re-points slots, joins the guest, and logs it", async () => {
 			// A guest holding a role slot.
 			const { guestId } = await captureGuestVisit({

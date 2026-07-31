@@ -2,6 +2,7 @@ import { Mail, MessageCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "#/components/ui/button";
 import { buildNudge, type NudgeMode } from "#/lib/nudge";
+import { detectPlatform } from "#/lib/platform";
 
 /**
  * WhatsApp/Email tap-to-nudge affordances (#37). Renders only the channels the
@@ -10,6 +11,7 @@ import { buildNudge, type NudgeMode } from "#/lib/nudge";
  */
 export function NudgeButtons({
 	name,
+	preferredName,
 	phone,
 	email,
 	roleName,
@@ -19,6 +21,9 @@ export function NudgeButtons({
 	onContacted,
 }: {
 	name: string;
+	/** What to call them in the draft, when it isn't the first token of `name`
+	 *  (#486). Absent/null falls back to that first token. */
+	preferredName?: string | null;
 	phone: string | null;
 	email: string | null;
 	roleName: string;
@@ -37,14 +42,22 @@ export function NudgeButtons({
 	const [mounted, setMounted] = useState(false);
 	useEffect(() => setMounted(true), []);
 
+	// `navigator` does not exist during SSR, so the detection is deferred to the
+	// post-mount render; the server pass falls back to "mobile", the historical
+	// `wa.me` behavior (#485). The `mounted` guard is load-bearing — reading
+	// `navigator` unconditionally here would throw on the server.
+	const platform = mounted ? detectPlatform(navigator) : "mobile";
+
 	const nudge = buildNudge({
 		name,
+		preferredName,
 		phone,
 		email,
 		roleName,
 		meetingDate,
 		shareUrl,
 		mode,
+		platform,
 	});
 
 	if (!nudge.whatsappUrl && !nudge.mailtoUrl) {

@@ -3,15 +3,36 @@
 // never fetched for a public caller. In a `*-logic.ts` (never imported by
 // client) per the server-bundle rule; exported so integration tests call the
 // real code. See `docs/superpowers/specs/2026-07-20-tap-to-nudge-design.md`.
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "#/db";
-import { guests, members } from "#/db/schema";
+import { guests, members, people } from "#/db/schema";
 import { toE164 } from "#/lib/phone";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
+
+/**
+ * The goes-by name to greet a member by (#486): this club's membership value,
+ * falling back to the Person's.
+ *
+ * The fallback is what makes `people.preferred_name` a person-level fact rather
+ * than dead data (ADR-0008). Someone who records "goes by Rasheed" in club A
+ * then joins club B gets a membership row with a NULL `preferred_name` — the
+ * paths that create a membership for an EXISTING Person (the CSV importer,
+ * club onboarding) have no such field to copy. Resolving it at READ time covers
+ * every one of those paths at once, and keeps working for any added later.
+ *
+ * Membership wins when set, so a club that records a different name for the
+ * same human keeps its own.
+ */
+const memberGoesBy = sql<
+	string | null
+>`coalesce(${members.preferredName}, ${people.preferredName})`;
 
 export interface Contact {
 	phone: string | null;
 	email: string | null;
+	/** What to call them in a nudge draft, when it isn't the first token of
+	 *  their stored name (#486). Null ⇒ nobody recorded one. */
+	preferredName: string | null;
 }
 
 export interface RosterContact extends Contact {
@@ -36,10 +57,12 @@ export async function loadRosterWithContact(
 			.select({
 				id: members.id,
 				name: members.name,
+				preferredName: memberGoesBy,
 				phone: members.phone,
 				email: members.email,
 			})
 			.from(members)
+			.innerJoin(people, eq(people.id, members.personId))
 			.where(and(eq(members.clubId, clubId), eq(members.status, "active")))
 			.orderBy(members.name),
 		loadClubDefaultCountryCode(clubId),
@@ -67,26 +90,39 @@ export async function loadHolderContacts(
 
 	if (memberIds.length > 0) {
 		const rows = await db
-			.select({ id: members.id, phone: members.phone, email: members.email })
+			.select({
+				id: members.id,
+				phone: members.phone,
+				email: members.email,
+				preferredName: memberGoesBy,
+			})
 			.from(members)
+			.innerJoin(people, eq(people.id, members.personId))
 			.where(and(eq(members.clubId, clubId), inArray(members.id, memberIds)));
 		for (const r of rows) {
 			map.set(contactKey("member", r.id), {
 				phone: toE164(r.phone, cc),
 				email: r.email,
+				preferredName: r.preferredName,
 			});
 		}
 	}
 
 	if (guestIds.length > 0) {
 		const rows = await db
-			.select({ id: guests.id, phone: guests.phone, email: guests.email })
+			.select({
+				id: guests.id,
+				phone: guests.phone,
+				email: guests.email,
+				preferredName: guests.preferredName,
+			})
 			.from(guests)
 			.where(and(eq(guests.clubId, clubId), inArray(guests.id, guestIds)));
 		for (const r of rows) {
 			map.set(contactKey("guest", r.id), {
 				phone: toE164(r.phone, cc),
 				email: r.email,
+				preferredName: r.preferredName,
 			});
 		}
 	}

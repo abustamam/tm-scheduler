@@ -18,7 +18,8 @@ the nouns in `src/db/schema.ts`.
 - **Person** — a human (`people`), keyed by their Toastmasters Customer ID (`PN-…`, nullable;
   unique when present, with email as a fallback match key). Holds the facts that are the same
   across *every* club a person belongs to: name, contact, `original_join_date` (first-ever TM
-  join), enrolled Pathways paths, and the optional link to their sign-in account (`user_id`).
+  join), `preferred_name` (what they go by — see **Goes-by name**), enrolled Pathways paths, and
+  the optional link to their sign-in account (`user_id`).
   `user_id` is **not unique**: one account can link several Person rows (duplicates predate the
   #329 dedupe-on-write and are merged by hand), so resolving a signed-in user to a Person is a
   deliberate choice, not a lookup — see **Invariants**. See ADR-0008 / #64.
@@ -27,6 +28,17 @@ the nouns in `src/db/schema.ts`.
   `admin`/`vpe` may create meetings), `joined_at` ("member of *this* club since"), office
   (see #63), and status. This roster row is what meeting roles are claimed against. See
   ADR-0008.
+- **Goes-by name** (`preferred_name`, #486) — what a human is actually CALLED, when it isn't the
+  first token of their stored `name`. Every intake path gives one full-name string (the
+  Toastmasters export has a single `Name` column, in both "First Last" and "Last, First" shapes),
+  so "Abdul-Rasheed Bustamam" who goes by Rasheed cannot be greeted right by splitting. Nullable
+  on `people`, `members` and `guests`. The **membership is authoritative for its club**; the
+  read is `coalesce(members.preferred_name, people.preferred_name)`, so a value recorded in one
+  club follows the human into the next unless that club records its own. Replication upward is
+  one-way and NULL-guarded (a membership edit seeds the Person only when the Person has none);
+  clearing a membership's value also clears the Person copy it seeded, or the coalesce would
+  resurrect it. Resolved for display by `greetingName` (`#/lib/person-name`), which falls back to
+  the first token. Used only to address people in nudge drafts — never as a display name.
 - **Guest** — a club-scoped visitor (`guests`) who can be assigned to a role slot as an
   alternative to a member (real case: a visitor served as evaluator). A lightweight, durable
   identity (name + optional contact), **not** a Person and **not** a Membership: no login, no

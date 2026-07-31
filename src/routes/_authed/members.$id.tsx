@@ -41,6 +41,7 @@ import {
 	type OfficerPosition,
 	officerPositionLabel,
 } from "#/lib/officers";
+import { firstNameOf } from "#/lib/person-name";
 import { getMemberProfile } from "#/server/club";
 import {
 	editMember,
@@ -568,6 +569,7 @@ function UnscheduledSpeeches({
 type ProfileMember = {
 	id: string;
 	name: string;
+	preferredName: string | null;
 	email: string | null;
 	phone: string | null;
 	officerPositions: OfficerPosition[];
@@ -630,6 +632,7 @@ function MemberActions({
 					clubId,
 					memberId: member.id,
 					name,
+					preferredName: String(form.get("preferredName") ?? "").trim() || null,
 					email: String(form.get("email") ?? "").trim() || null,
 					phone: String(form.get("phone") ?? "").trim() || null,
 					officerPositions,
@@ -707,6 +710,23 @@ function MemberActions({
 								defaultValue={member.name}
 								autoFocus
 							/>
+						</div>
+						<div className="space-y-2">
+							<Label htmlFor="edit-preferred-name">Goes by</Label>
+							<Input
+								id="edit-preferred-name"
+								name="preferredName"
+								defaultValue={member.preferredName ?? ""}
+								placeholder={firstNameOf(member.name)}
+								aria-describedby="edit-preferred-name-hint"
+							/>
+							<p
+								id="edit-preferred-name-hint"
+								className="text-xs text-[var(--sea-ink-soft)]"
+							>
+								Used to greet them in WhatsApp and email drafts. Leave blank to
+								use their first name.
+							</p>
 						</div>
 						<div className="space-y-2">
 							<Label htmlFor="edit-email">Email</Label>

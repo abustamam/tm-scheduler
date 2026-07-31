@@ -18,6 +18,9 @@ import {
 export interface RecruitTarget {
 	id: string;
 	name: string;
+	/** What to call them in a draft, when it isn't the first token of `name`
+	 *  (#486). Null ⇒ fall back to that first token. */
+	preferredName: string | null;
 	phone: string | null;
 	email: string | null;
 	/** Member has marked themselves Not Available for this meeting. */
@@ -38,6 +41,7 @@ export function buildRecruitTargets(
 	roster: {
 		id: string;
 		name: string;
+		preferredName?: string | null;
 		phone?: string | null;
 		email?: string | null;
 	}[],
@@ -48,6 +52,7 @@ export function buildRecruitTargets(
 	return roster.map((m) => ({
 		id: m.id,
 		name: m.name,
+		preferredName: m.preferredName ?? null,
 		phone: m.phone ?? null,
 		email: m.email ?? null,
 		notAvailable: unavailableIds.has(m.id),
@@ -115,6 +120,7 @@ export function NudgeRecruitPicker({
 						<div className="text-sm font-semibold">{livePicked.name}</div>
 						<NudgeButtons
 							name={livePicked.name}
+							preferredName={livePicked.preferredName}
 							phone={livePicked.phone}
 							email={livePicked.email}
 							roleName={roleName}

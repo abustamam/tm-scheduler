@@ -54,7 +54,8 @@ async function getMeetingPublic(meetingId: string) {
 	});
 
 	// Slot query (simplified — we just need to verify it works). Public path
-	// never carries holder contact (#37): holderPhone/holderEmail are always null.
+	// never carries holder contact (#37): holderPhone/holderEmail/
+	// holderPreferredName are always null.
 	const rawSlots = await testDb
 		.select({ id: roleSlots.id, status: roleSlots.status })
 		.from(roleSlots)
@@ -63,6 +64,7 @@ async function getMeetingPublic(meetingId: string) {
 		...s,
 		holderPhone: null as string | null,
 		holderEmail: null as string | null,
+		holderPreferredName: null as string | null,
 	}));
 
 	const unavailableMembers = await testDb
@@ -235,6 +237,11 @@ describe.skipIf(!hasTestDb)("public reads (no session)", () => {
 			).toBeNull();
 			expect(
 				(slot as { holderEmail?: unknown }).holderEmail ?? null,
+			).toBeNull();
+			// A person's chosen nickname rides the same gated channel (#486) and
+			// must not surface on a page anyone can open.
+			expect(
+				(slot as { holderPreferredName?: unknown }).holderPreferredName ?? null,
 			).toBeNull();
 		}
 	});

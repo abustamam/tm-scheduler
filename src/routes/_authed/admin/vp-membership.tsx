@@ -20,6 +20,7 @@ import { Label } from "#/components/ui/label";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { formatShortDate } from "#/lib/format";
+import { firstNameOf } from "#/lib/person-name";
 import { cn } from "#/lib/utils";
 import { getClubByIdentifier } from "#/server/clubs";
 import {
@@ -423,6 +424,7 @@ function GuestEditDelete({
 					clubId,
 					guestId: guest.id,
 					name,
+					preferredName: String(form.get("preferredName") ?? "").trim() || null,
 					email: String(form.get("email") ?? "").trim() || null,
 					phone: String(form.get("phone") ?? "").trim() || null,
 				},
@@ -503,6 +505,23 @@ function GuestEditDelete({
 								defaultValue={guest.name}
 								autoFocus
 							/>
+						</div>
+						<div className="space-y-2">
+							<Label htmlFor={`guest-preferred-${guest.id}`}>Goes by</Label>
+							<Input
+								id={`guest-preferred-${guest.id}`}
+								name="preferredName"
+								defaultValue={guest.preferredName ?? ""}
+								placeholder={firstNameOf(guest.name)}
+								aria-describedby={`guest-preferred-hint-${guest.id}`}
+							/>
+							<p
+								id={`guest-preferred-hint-${guest.id}`}
+								className="text-xs text-[var(--sea-ink-soft)]"
+							>
+								Used to greet them in WhatsApp and email drafts. Leave blank to
+								use their first name.
+							</p>
 						</div>
 						<div className="space-y-2">
 							<Label htmlFor={`guest-email-${guest.id}`}>Email</Label>

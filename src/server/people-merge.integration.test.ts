@@ -98,12 +98,14 @@ describe.skipIf(!hasTestDb)("mergePeople", () => {
 		basecampUserId?: string | null;
 		userId?: string | null;
 		originalJoinDate?: Date | null;
+		preferredName?: string | null;
 	}): Promise<string> {
 		const [row] = await testDb
 			.insert(people)
 			.values({
 				name: overrides?.name ?? "Merge Person",
 				email: overrides?.email ?? null,
+				preferredName: overrides?.preferredName ?? null,
 				customerId: overrides?.customerId ?? null,
 				basecampUserId: overrides?.basecampUserId ?? null,
 				userId: overrides?.userId ?? null,
@@ -275,6 +277,34 @@ describe.skipIf(!hasTestDb)("mergePeople", () => {
 			.from(people)
 			.where(inArray(people.id, [keeper, absorbed]));
 		expect(rows).toHaveLength(2);
+	});
+
+	it("adopts the absorbed's goes-by name when the keeper has none", async () => {
+		// mergePeople is IRREVERSIBLE and deletes the absorbed row, so a recorded
+		// goes-by name (a human typed it) has to be adopted, not dropped (#486).
+		const keeper = await makePerson({ preferredName: null });
+		const absorbed = await makePerson({ preferredName: "Rasheed" });
+
+		await mergePeople({ keeperPersonId: keeper, absorbedPersonId: absorbed });
+
+		const [keeperAfter] = await testDb
+			.select()
+			.from(people)
+			.where(eq(people.id, keeper));
+		expect(keeperAfter?.preferredName).toBe("Rasheed");
+	});
+
+	it("keeps the keeper's own goes-by name over the absorbed's", async () => {
+		const keeper = await makePerson({ preferredName: "Bob" });
+		const absorbed = await makePerson({ preferredName: "Rob" });
+
+		await mergePeople({ keeperPersonId: keeper, absorbedPersonId: absorbed });
+
+		const [keeperAfter] = await testDb
+			.select()
+			.from(people)
+			.where(eq(people.id, keeper));
+		expect(keeperAfter?.preferredName).toBe("Bob");
 	});
 
 	it("adopts the absorbed's customer_id when the keeper has none", async () => {

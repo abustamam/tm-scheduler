@@ -60,6 +60,252 @@ describe.skipIf(!hasTestDb)("roster management", () => {
 		await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
 	});
 
+	it("editMember round-trips the goes-by name and seeds it onto the Person", async () => {
+		const { applyMemberEdit } = await import("#/server/members-logic");
+		const [before] = await testDb
+			.select({ personId: members.personId })
+			.from(members)
+			.where(eq(members.id, seed.memberId));
+
+		await applyMemberEdit({
+			clubId: seed.clubId,
+			actorMemberId: seed.memberId,
+			memberId: seed.memberId,
+			name: "Abdul-Rasheed Bustamam",
+			preferredName: "Rasheed",
+			email: null,
+			phone: null,
+		});
+
+		const [m] = await testDb
+			.select()
+			.from(members)
+			.where(eq(members.id, seed.memberId));
+		expect(m.preferredName).toBe("Rasheed");
+		// Person-level fact (ADR-0008): seeded UP so it travels to other clubs.
+		const [p] = await testDb
+			.select({ preferredName: people.preferredName })
+			.from(people)
+			.where(eq(people.id, before.personId));
+		expect(p.preferredName).toBe("Rasheed");
+	});
+
+	it("editMember stores a cleared goes-by name as NULL, not an empty string", async () => {
+		// A cleared text input submits "". `greetingName` must see "nobody told
+		// us" and fall back to the first token, not greet with a blank.
+		const { applyMemberEdit } = await import("#/server/members-logic");
+		const base = {
+			clubId: seed.clubId,
+			actorMemberId: seed.memberId,
+			memberId: seed.memberId,
+			name: "Jane Doe",
+			email: null,
+			phone: null,
+		};
+		await applyMemberEdit({ ...base, preferredName: "Janey" });
+		await applyMemberEdit({ ...base, preferredName: "" });
+
+		const [m] = await testDb
+			.select()
+			.from(members)
+			.where(eq(members.id, seed.memberId));
+		expect(m.preferredName).toBeNull();
+	});
+
+	it("clearing the goes-by name clears the Person copy too, so it stays cleared", async () => {
+		// Regression: the read is a coalesce onto people.preferred_name and NOTHING
+		// in the codebase ever set that column back to NULL, so clearing the field
+		// left the old name to be resurrected on the very next draft — forever, with
+		// no UI able to remove it. The form promises "leave blank to use their
+		// first name".
+		const { applyMemberEdit } = await import("#/server/members-logic");
+		const { loadHolderContacts } = await import(
+			"#/server/meeting-contacts-logic"
+		);
+		const [row] = await testDb
+			.select({ personId: members.personId })
+			.from(members)
+			.where(eq(members.id, seed.memberId));
+		const base = {
+			clubId: seed.clubId,
+			actorMemberId: seed.memberId,
+			memberId: seed.memberId,
+			name: "Jane Doe",
+			email: null,
+			phone: null,
+		};
+
+		await applyMemberEdit({ ...base, preferredName: "Janey" });
+		await applyMemberEdit({ ...base, preferredName: "" });
+
+		const [p] = await testDb
+			.select({ preferredName: people.preferredName })
+			.from(people)
+			.where(eq(people.id, row.personId));
+		expect(p.preferredName).toBeNull();
+		// The observable that actually matters: what the draft will greet them by.
+		const map = await loadHolderContacts(seed.clubId, [seed.memberId], []);
+		expect(map.get(`member:${seed.memberId}`)?.preferredName).toBeNull();
+	});
+
+	it("clearing does not wipe a goes-by name another club recorded", async () => {
+		// The clear is scoped to the value THIS membership seeded, so a different
+		// answer on the Person survives.
+		const { applyMemberEdit } = await import("#/server/members-logic");
+		const [row] = await testDb
+			.select({ personId: members.personId })
+			.from(members)
+			.where(eq(members.id, seed.memberId));
+		await testDb
+			.update(people)
+			.set({ preferredName: "Rasheed" })
+			.where(eq(people.id, row.personId));
+
+		await applyMemberEdit({
+			clubId: seed.clubId,
+			actorMemberId: seed.memberId,
+			memberId: seed.memberId,
+			name: "Abdul-Rasheed Bustamam",
+			preferredName: "",
+			email: null,
+			phone: null,
+		});
+
+		const [p] = await testDb
+			.select({ preferredName: people.preferredName })
+			.from(people)
+			.where(eq(people.id, row.personId));
+		expect(p.preferredName).toBe("Rasheed");
+	});
+
+	it("trims in the logic layer, not just the validator", async () => {
+		// `applyMemberEdit` is exported and called directly, bypassing the zod
+		// `.trim()`. A whitespace-only value must not be stored — and must not
+		// seed onto people.preferred_name, where it would permanently defeat the
+		// isNull guard and block the real name from ever seeding up.
+		const { applyMemberEdit } = await import("#/server/members-logic");
+		const [row] = await testDb
+			.select({ personId: members.personId })
+			.from(members)
+			.where(eq(members.id, seed.memberId));
+
+		await applyMemberEdit({
+			clubId: seed.clubId,
+			actorMemberId: seed.memberId,
+			memberId: seed.memberId,
+			name: "Jane Doe",
+			preferredName: "   ",
+			email: null,
+			phone: null,
+		});
+
+		const [m] = await testDb
+			.select()
+			.from(members)
+			.where(eq(members.id, seed.memberId));
+		expect(m.preferredName).toBeNull();
+		const [p] = await testDb
+			.select({ preferredName: people.preferredName })
+			.from(people)
+			.where(eq(people.id, row.personId));
+		expect(p.preferredName).toBeNull();
+	});
+
+	it("editMember does not overwrite a goes-by name already on the Person", async () => {
+		// Guarded on NULL so a second club's admin cannot clobber what this
+		// person recorded elsewhere; the membership row still updates.
+		const { applyMemberEdit } = await import("#/server/members-logic");
+		const [row] = await testDb
+			.select({ personId: members.personId })
+			.from(members)
+			.where(eq(members.id, seed.memberId));
+		await testDb
+			.update(people)
+			.set({ preferredName: "Rasheed" })
+			.where(eq(people.id, row.personId));
+
+		await applyMemberEdit({
+			clubId: seed.clubId,
+			actorMemberId: seed.memberId,
+			memberId: seed.memberId,
+			name: "Abdul-Rasheed Bustamam",
+			preferredName: "Abdul",
+			email: null,
+			phone: null,
+		});
+
+		const [p] = await testDb
+			.select({ preferredName: people.preferredName })
+			.from(people)
+			.where(eq(people.id, row.personId));
+		expect(p.preferredName).toBe("Rasheed");
+		const [m] = await testDb
+			.select()
+			.from(members)
+			.where(eq(members.id, seed.memberId));
+		expect(m.preferredName).toBe("Abdul");
+	});
+
+	it("records the previous goes-by name in the member_edit audit detail", async () => {
+		// The `before` block is what an officer reads to see what an edit changed
+		// — and this is the one field an edit can also push onto the shared
+		// `people` row, so "what was it before?" is the only record of the
+		// pre-edit state. Asserting the log ROW exists (as the test below does)
+		// passes with the field missing from `detail.before`.
+		const { applyMemberEdit } = await import("#/server/members-logic");
+		const base = {
+			clubId: seed.clubId,
+			actorMemberId: seed.memberId,
+			memberId: seed.memberId,
+			name: "Robert Smith",
+			email: null,
+			phone: null,
+		};
+		await applyMemberEdit({ ...base, preferredName: "Bob" });
+		await applyMemberEdit({ ...base, preferredName: "Rob" });
+
+		const [log] = await testDb
+			.select()
+			.from(activityLog)
+			.where(
+				and(
+					eq(activityLog.action, "member_edit"),
+					eq(activityLog.targetId, seed.memberId),
+				),
+			)
+			.orderBy(desc(activityLog.createdAt))
+			.limit(1);
+		const before = (log?.detail as { before?: { preferredName?: unknown } })
+			?.before;
+		expect(before?.preferredName).toBe("Bob");
+	});
+
+	it("editSchema caps the goes-by name so one club can't write junk onto the shared Person", async () => {
+		// This is the only field on the member edit form that seeds UP onto the
+		// cross-club `people` row, so an uncapped value is one club's admin
+		// writing unbounded text into a record other clubs read (#486). The cap
+		// lives in the validator, which `applyMemberEdit` never runs.
+		const { editSchema } = await import("#/server/members-logic");
+		const base = {
+			clubId: seed.clubId,
+			memberId: seed.memberId,
+			name: "Robert Smith",
+		};
+		expect(
+			editSchema.safeParse({ ...base, preferredName: "x".repeat(80) }).success,
+		).toBe(true);
+		expect(
+			editSchema.safeParse({ ...base, preferredName: "x".repeat(81) }).success,
+		).toBe(false);
+		// Trimmed BEFORE the cap, so trailing spaces can't spend the budget.
+		expect(
+			editSchema.safeParse({
+				...base,
+				preferredName: `  ${"x".repeat(80)}  `,
+			}).success,
+		).toBe(true);
+	});
+
 	it("editMember updates fields + reconciles offices + logs member_edit", async () => {
 		const { applyMemberEdit } = await import("#/server/members-logic");
 		const { currentOfficersFor } = await import("#/server/officer-terms-logic");
