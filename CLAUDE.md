@@ -40,6 +40,15 @@ Package manager is **Bun** (use `bun install`, `bun run <script>`).
 
 - `bun run dev` — dev server on port 3000.
 - `bun run check` — Biome lint + format gate. (`bun run lint` / `bun run format` individually.)
+  **All three only report — none of them write.** `bun run fix` (`biome check --write`) applies
+  the auto-fixable part: formatting, import organization, and lint rules that carry a safe fix. It
+  does not clear everything — the ~120 `seed.ts` warnings noted below, and any rule with no safe
+  fix, survive it. Reach for `fix`, not `format`: `organizeImports` is an assist action rather than
+  a formatter rule, so `biome format --write` leaves those violations and the gate still fails.
+  Two cautions. `fix` writes the whole tree and writes *even when it exits non-zero*, so do not run
+  it mid-merge — it will reorder imports inside an unresolved conflict hunk and leave the file
+  matching neither side. And do not reach for `--unsafe`: on this repo it rewrites ~90 lines across
+  12 files, turning `!` into `?.` and converting fail-fast into `undefined` flowing into DB writes.
 - `bun run test` — Vitest (uses Vitest, NOT `bun test`).
 - `bun run db:generate` — generate Drizzle migrations from `src/db/schema.ts`.
 - `bun run db:migrate` — apply migrations. Use this (NOT `db:push`) to keep the local dev DB

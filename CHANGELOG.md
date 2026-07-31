@@ -2,6 +2,12 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.3.0.1] - 2026-07-31
+
+### Added
+
+- `bun run fix` actually fixes what the lint gate flags. `check`, `lint` and `format` all only ever reported — there was no command that wrote anything, so a failing gate had no documented recovery and `bun run format` looked like one while changing nothing. `fix` runs `biome check --write`, which covers formatting, import organization, and lint rules that carry a safe fix. README and CLAUDE.md now say plainly which commands report and which one writes, and warn off the two ways it can bite: it writes the whole tree even when it exits non-zero (so not mid-merge), and `--unsafe` would rewrite `!` into `?.` across the codebase. #491
+
 ## [1.3.0.0] - 2026-07-31
 
 ### Added
