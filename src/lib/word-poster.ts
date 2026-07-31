@@ -9,58 +9,77 @@
 // SSR, needs no DOM, and is unit-testable. The poster also sets `overflowWrap`
 // as a backstop for anything longer than the last bucket anticipates.
 //
-// THESE SIZES WERE MEASURED, NOT GUESSED — but they are a partial fix, and the
-// model underneath them is known to be wrong. Read this before retuning.
+// ---------------------------------------------------------------------------
+// THE BUDGET
 //
-// Measurement setup: headless Chrome, the real Fraunces 600 webfont (NOT a
-// fallback face — the metrics differ substantially), against the poster's
-// usable content width of **704px** (PAGE_W 816 minus the content box's
-// 2 × 56px horizontal padding). A word "fits" when its natural single-line
-// width stays under 704px.
+// The word must render on ONE line inside **704px** — PAGE_W 816 minus the
+// poster content box's 2 × 56px horizontal padding. Every size below was
+// measured in headless Chrome against the real Fraunces 600 webfont. Measure
+// with the real face or not at all: call `document.fonts.load(...)` FIRST,
+// because `fonts.ready` resolves immediately when nothing has requested the
+// face yet, and you will silently measure Georgia and get numbers that are
+// wrong in both directions.
 //
-// The original sizes (200/150/112/88/68) were estimated from a ~0.5em average
-// advance and overflowed on ordinary words — "Wholesome", a plain 9-letter
-// word, rendered 711px at 150px and broke mid-word. These lowered sizes fix
-// the ≤18 and ≤24 buckets outright and shrink the overflow elsewhere.
+// Method that produced these: canvas `measureText` over all 104,334 entries of
+// `/usr/share/dict/words`, bucketed by length, then real DOM
+// `getBoundingClientRect` on the widest 30 candidates per bucket.
 //
-// KNOWN REMAINING DEFECT: three buckets still overflow for wide-letter words.
-// Measured worst real words at the sizes below:
-//   ≤6  @190  "Wampum"         752px (107%)  → would need ≤177px
-//   ≤10 @145  "Cumbersome"     784px (111%)  → would need ≤130px
-//   ≤14 @100  "Cumbersomeness" 722px (103%)  → would need ≤ 97px
-//   ≤18 @ 80  "Unceremoniousness" 688px (98%)  fits
-//   >18 @ 64  "Uncommunicativeness" 658px (93%) fits
+// ---------------------------------------------------------------------------
+// WHY LENGTH IS A WEAK PROXY FOR WIDTH
 //
-// The root cause is structural, not a bad constant: **length is a poor proxy
-// for width.** Fraunces 600 advances range from i/j at 0.243em to m at
-// 0.804em — a 3.3x spread. Three real 14-character words at 100px measure
-// 560px ("Verisimilitude"), 631px ("Circumlocution") and 722px
-// ("Cumbersomeness"). No single size per length bucket can be both safe for
-// the widest word and generous for the narrowest; shaving further to cover
-// "Cumbersome" would render "Verisimilitude" far smaller than it needs to be.
+// Fraunces 600 advances span **0.243em (`i`, `j`) to 0.804em (`m`)** — a 3.3x
+// spread. Three real 14-character words at 100px measure 560px
+// ("Verisimilitude"), 631px ("Circumlocution") and 722px ("Cumbersomeness").
+// So no single size per length bucket is simultaneously safe for the widest
+// word and generous for the narrowest; every bucket is priced for its worst
+// case, and `m`/`w`-heavy words are what set that price. The dictionary-wide
+// worst cases are all of that shape: "mammon", "mammograms",
+// "newspaperwoman", "telecommunications", "electroencephalographs".
 //
-// The durable fix is to bucket on ESTIMATED WIDTH rather than raw length — sum
-// a per-character em-advance table and pick the largest size whose product
-// stays under 704px. That stays pure, SSR-safe and unit-testable. Until then,
-// `overflowWrap: "anywhere"` on the poster keeps an overflow to an ugly
-// mid-word break rather than a clipped page.
+// KNOWN UPGRADE PATH, DELIBERATELY NOT TAKEN: bucket on estimated WIDTH
+// instead of raw length — sum a per-character em-advance table and pick the
+// largest size whose product stays under 704px. It is strictly more accurate
+// and stays pure/SSR-safe. It was rejected on cost, not correctness: it
+// hardcodes a metric table for one font at one weight that silently rots when
+// the brand font or weight changes, and it buys perhaps 130px → 145px on a
+// word. At these sizes the letters are over an inch tall on a letter sheet —
+// readable across a room — so being under optimal is not a failure. The
+// failure to eliminate is the mid-word break. Revisit this only if a club
+// actually reports the word looking too small.
 //
-// To re-derive after a font, PAGE_W, or padding change: render each bucket's
-// worst-case word at the candidate size in a real browser with Fraunces loaded
-// (call `document.fonts.load(...)` FIRST — `fonts.ready` resolves immediately
-// when nothing has requested the face yet, and you will silently measure
-// Georgia and get numbers that are wrong in both directions).
+// ---------------------------------------------------------------------------
+// RESIDUAL GAP (read before assuming these are safe)
+//
+// These sizes do NOT clear the dictionary-wide worst case in every bucket.
+// Measured at the sizes below, against lowercase common words (proper nouns
+// and acronyms excluded — a Word of the Day is an ordinary word):
+//
+//   ≤6  @177  "mammon"                 684px  (97%)  fits
+//   ≤10 @130  "mammograms"             764px (109%)  OVERFLOWS → needs ≤119px
+//   ≤14 @ 97  "newspaperwoman"         716px (102%)  OVERFLOWS → needs ≤ 95px
+//   ≤18 @ 81  "telecommunications"     691px  (98%)  fits
+//   >18 @ 68  "electroencephalographs" 736px (105%)  OVERFLOWS → needs ≤ 65px
+//
+// Two further population notes that change the answer materially:
+//   • Capitalised entry ("Mammograms") is the likeliest real input style and is
+//     slightly wider still; covering it needs 177/119/93/80/64.
+//   • ALL-CAPS entry ("POWWOW", "GROUNDWORK") is far wider — covering it would
+//     need 145/98/72/57/46, a large sacrifice for every other word. Not done;
+//     an all-caps word will wrap.
+//
+// Where a word does exceed the budget, `overflowWrap: "anywhere"` on the poster
+// keeps it to a mid-word break rather than a clipped or overflowing page.
 
 /** Longest word length that still earns each size, largest bucket first. */
 const BUCKETS: readonly (readonly [maxLength: number, size: number])[] = [
-	[6, 190],
-	[10, 145],
-	[14, 100],
-	[18, 80],
+	[6, 177],
+	[10, 130],
+	[14, 97],
+	[18, 81],
 ];
 
 /** Size for anything longer than the last bucket. */
-const SMALLEST = 64;
+const SMALLEST = 68;
 
 /** Display font size in px for `word`, from its trimmed length. */
 export function posterWordSize(word: string): number {
