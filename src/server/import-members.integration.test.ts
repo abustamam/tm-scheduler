@@ -289,7 +289,7 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		const running = importPeopleAndMembers(clubId, [
 			row({ customerId: "PN-RACE", name: "Racing Member" }),
 		]);
-		await waitForLockWait();
+		await waitForLockWait('insert into "members"', winner.pid);
 		await winner.commit();
 
 		// The import completes instead of throwing "Failed to insert member", and

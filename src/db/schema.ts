@@ -410,6 +410,13 @@ export const members = pgTable(
 		// transaction (`pg-core/dialect.ts`) and Postgres rejects CONCURRENTLY
 		// inside a transaction block — and `scripts/migrate.ts` exits non-zero from
 		// the Dockerfile CMD, so that would fail the deploy closed.
+		//
+		// What makes that acceptable is the table SIZE, so state it: a plain build
+		// holds a SHARE lock that blocks every write to `members` for its duration,
+		// and on Railway the old container still serves traffic while the new one
+		// runs the migration. At the current few-dozen rows that is sub-millisecond.
+		// At six figures it would be a visible roster write-stall, and the index
+		// would have to be built CONCURRENTLY outside the drizzle migrator instead.
 		uniqueIndex("members_club_person_unique").on(t.clubId, t.personId),
 	],
 );

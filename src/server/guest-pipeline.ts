@@ -23,11 +23,20 @@ export type {
 
 const uuid = z.string().uuid();
 
+// Bounds on a PUBLIC, session-less write. `name` reaches `namesAgree`, whose
+// pairing search is bounded separately (`MAX_MATCH_TOKENS`) — this is the second
+// layer, and also what stops an unauthenticated POST writing an arbitrarily long
+// value into an unbounded `text` column. The admin edit path already caps its
+// own fields; the public front door was the one that didn't.
 const guestBookSchema = z.object({
 	clubId: uuid,
-	name: z.string().trim().min(1, "Please enter your name."),
-	email: z.string().trim().email().optional().or(z.literal("")),
-	phone: z.string().trim().optional().or(z.literal("")),
+	name: z
+		.string()
+		.trim()
+		.min(1, "Please enter your name.")
+		.max(120, "That name is too long."),
+	email: z.string().trim().email().max(200).optional().or(z.literal("")),
+	phone: z.string().trim().max(40).optional().or(z.literal("")),
 });
 
 /**

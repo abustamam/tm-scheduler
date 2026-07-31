@@ -57,6 +57,18 @@ export function normalizePhone(phone: string | null | undefined): string {
 	return (phone ?? "").replace(/\D/g, "");
 }
 
+/**
+ * How many same-phone rows a dedup scan will consider.
+ *
+ * Qualifying a phone match by name (#488) means reading every row that shares
+ * the number instead of one — and on the Person side that table is global, not
+ * club-scoped. A number shared by more than a handful of humans is a shared
+ * line or bad data, not a dedup signal, so the tail is worthless anyway. Rows
+ * are ordered oldest-first, and overrunning the cap only ever means "no match"
+ * — which creates a fresh Person, the recoverable direction (ADR-0008).
+ */
+const PHONE_CANDIDATE_LIMIT = 50;
+
 /** Either the main db client or a drizzle transaction (see `activity.ts`). */
 type DbOrTx =
 	| typeof db
@@ -136,7 +148,8 @@ async function findGuestByContact(
 					sql`regexp_replace(coalesce(${guests.phone}, ''), '[^0-9]', '', 'g') = ${opts.digits}`,
 				),
 			)
-			.orderBy(...order);
+			.orderBy(...order)
+			.limit(PHONE_CANDIDATE_LIMIT);
 		const match = byPhone.find((g) => namesAgree(g.name, opts.name));
 		if (match) return match;
 	}
@@ -747,7 +760,8 @@ export async function applyConvertGuestToMember(
 				.where(
 					sql`regexp_replace(coalesce(${people.phone}, ''), '[^0-9]', '', 'g') = ${digits}`,
 				)
-				.orderBy(...order);
+				.orderBy(...order)
+				.limit(PHONE_CANDIDATE_LIMIT);
 			const match = candidates.find((p) => namesAgree(p.name, name));
 			if (match) personId = match.id;
 		}

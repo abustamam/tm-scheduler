@@ -99,11 +99,35 @@ function tokensMatch(a: string, b: string): boolean {
 }
 
 /**
+ * Above this many tokens on either side, skip the pairing search entirely and
+ * demand exact equality.
+ *
+ * `everyTokenPairs` backtracks, so its cost is FACTORIAL in the token count when
+ * no complete pairing exists. That is fine for names and catastrophic for input
+ * built to abuse it: `captureGuestVisit` is the public, unauthenticated guest
+ * book, and measured on this code a pair of ~40-character names made of one
+ * repeated token plus one that cannot pair costs 39ms at 10 tokens, 391ms at 11,
+ * and 4.8s at 12 — synchronous, on the single Node event loop, inside an open
+ * transaction. Two guest-book POSTs sharing a phone number reach it.
+ *
+ * 8 is far past any real name (the longest in the roster is 4 tokens) and caps
+ * the search at 8! ≈ 40k steps, which is microseconds. Beyond it the comparison
+ * gets STRICTER, not looser — exact match only — so the cap can never invent an
+ * agreement that fuses two people.
+ */
+const MAX_MATCH_TOKENS = 8;
+
+/** Sorted token lists compared element-wise. Bounded, and stricter than pairing. */
+function tokensIdentical(a: string[], b: string[]): boolean {
+	return a.length === b.length && a.every((t, i) => t === b[i]);
+}
+
+/**
  * Whether every token of `shorter` can be paired with a DISTINCT token of
  * `longer`. Backtracks rather than matching greedily: pairing ["j","jane"]
  * against ["jane","john"] greedily burns `jane` on `j` and then fails, though a
- * valid pairing exists. Name token counts are tiny, so the exhaustive search is
- * free.
+ * valid pairing exists. Callers MUST bound the token count first — see
+ * `MAX_MATCH_TOKENS` for why this is not free.
  */
 function everyTokenPairs(shorter: string[], longer: string[]): boolean {
 	const used = Array.from({ length: longer.length }, () => false);
@@ -157,6 +181,9 @@ export function namesAgree(a: string, b: string): boolean {
 	const ta = nameTokens(a);
 	const tb = nameTokens(b);
 	if (ta.length === 0 || tb.length === 0) return false;
+	if (ta.length > MAX_MATCH_TOKENS || tb.length > MAX_MATCH_TOKENS) {
+		return tokensIdentical(ta, tb);
+	}
 	return ta.length <= tb.length
 		? everyTokenPairs(ta, tb)
 		: everyTokenPairs(tb, ta);

@@ -180,14 +180,32 @@ export async function importPeopleAndMembers(
 				membershipId = created.id;
 				stats.membersCreated++;
 			} else {
+				// Lost the race. Reconcile against the winner's row exactly as the
+				// non-raced branch above would — re-classifying is the whole point.
+				// Taking only the id would silently drop this CSV row's name/email/
+				// phone while still reporting the member as "updated", and the
+				// overlapping-import case this branch exists for is precisely when
+				// the two admins' files do NOT carry identical data.
 				const [raced] = await db
-					.select({ id: members.id })
+					.select({
+						id: members.id,
+						name: members.name,
+						email: members.email,
+						phone: members.phone,
+					})
 					.from(members)
 					.where(
 						and(eq(members.clubId, clubId), eq(members.personId, personId)),
 					)
 					.limit(1);
 				if (!raced) throw new Error("Failed to insert member");
+				const racedMd = classifyMembership(row, raced);
+				if (racedMd.kind === "update") {
+					await db
+						.update(members)
+						.set(racedMd.set)
+						.where(eq(members.id, raced.id));
+				}
 				membershipId = raced.id;
 				stats.membersUpdated++;
 			}

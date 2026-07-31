@@ -79,6 +79,30 @@ describe("namesAgree", () => {
 		expect(namesAgree("Sam Doe", "Sandra Doe")).toBe(false);
 	});
 
+	it("stays fast on a name built to abuse the pairing search", () => {
+		// The pairing search backtracks, so its cost is factorial in the token
+		// count when no complete pairing exists. `captureGuestVisit` is the PUBLIC
+		// unauthenticated guest book with no max length on the name, and two POSTs
+		// sharing a phone number reach this comparison — so an attacker picks the
+		// input. Unbounded, ~40 characters cost 4.8s of synchronous event-loop time
+		// at 12 tokens and hours at 15.
+		const stored = Array.from({ length: 24 }, () => "ab").join(" ");
+		const attack = `${Array.from({ length: 23 }, () => "ab").join(" ")} zz`;
+		const started = Date.now();
+		expect(namesAgree(stored, attack)).toBe(false);
+		expect(Date.now() - started).toBeLessThan(50);
+	});
+
+	it("compares long names exactly, never more loosely", () => {
+		// Past the cap the pairing search is skipped. That must make the comparison
+		// STRICTER — an over-cap name that would have "paired" must not agree, or
+		// the bound would become a way to fuse two people.
+		const nine = Array.from({ length: 9 }, (_, i) => `tok${i}`).join(" ");
+		expect(namesAgree(nine, nine)).toBe(true);
+		expect(namesAgree(nine, `${nine} extra`)).toBe(false);
+		expect(namesAgree(nine, nine.replace("tok8", "t"))).toBe(false);
+	});
+
 	it("treats an empty or punctuation-only name as no match", () => {
 		expect(namesAgree("", "Jane Doe")).toBe(false);
 		expect(namesAgree("Jane Doe", "   ")).toBe(false);

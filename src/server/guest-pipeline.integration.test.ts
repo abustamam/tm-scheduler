@@ -9,7 +9,7 @@
  * that env is unset.
  */
 import { randomUUID } from "node:crypto";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
@@ -162,13 +162,37 @@ async function pipelineRow(clubId: string, guestId: string) {
 
 describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 	let seed: SeededClub;
+	// People inserted DIRECTLY by a test (not via a membership). `cleanup` only
+	// removes people reachable from this club's members, so without this these
+	// rows outlive the run and accumulate in tm_test forever — and a stale row
+	// sharing a phone silently changes which Person the oldest-first dedup picks.
+	let strayPeople: string[] = [];
+
+	/** Insert a Person for a test and register it for teardown. */
+	async function trackedPerson(values: {
+		name: string;
+		email?: string | null;
+		phone?: string | null;
+	}): Promise<string> {
+		const [p] = await testDb
+			.insert(people)
+			.values(values)
+			.returning({ id: people.id });
+		if (!p) throw new Error("Failed to insert person");
+		strayPeople.push(p.id);
+		return p.id;
+	}
 
 	beforeEach(async () => {
 		seed = await seedClub();
+		strayPeople = [];
 	});
 
 	afterEach(async () => {
 		await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
+		if (strayPeople.length > 0) {
+			await testDb.delete(people).where(inArray(people.id, strayPeople));
+		}
 	});
 
 	describe("capture (guest book)", () => {
@@ -897,7 +921,7 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			});
 			pending.catch(() => {});
 			try {
-				await waitForLockWait();
+				await waitForLockWait('update "role_slots"', writer.pid);
 			} finally {
 				await writer.commit();
 			}
@@ -958,7 +982,10 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			});
 			pending.catch(() => {});
 			try {
-				await waitForLockWait();
+				// This writer holds the GUESTS row lock, so the delete parks on its
+				// opening `select ... from "guests" ... for update`, not on the
+				// role_slots sweep (this guest holds no slot).
+				await waitForLockWait("for update", writer.pid);
 			} finally {
 				await writer.commit();
 			}
@@ -1061,6 +1088,36 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			expect(res.personId).toBe(self?.id);
 		});
 
+		it("scans PAST an older phone match whose name disagrees", async () => {
+			// The heart of the fix, and previously unpinned: every fixture seeded
+			// exactly ONE row per phone, so `candidates.find(namesAgree)` could have
+			// been `candidates[0]` and the oldest-first ordering could have been
+			// deleted, with the whole suite still green.
+			const shared = uniquePhone();
+			const older = await trackedPerson({
+				name: "Jane Doe",
+				phone: toStoredPhone(shared, "1"),
+			});
+			const newer = await trackedPerson({
+				name: "John Doe",
+				phone: toStoredPhone(shared, "1"),
+			});
+
+			const { guestId } = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "John Doe",
+				phone: shared,
+			});
+			const res = await applyConvertGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+
+			expect(res.personId).toBe(newer);
+			expect(res.personId).not.toBe(older);
+		});
+
 		it("prefers an email match over a phone match", async () => {
 			// Email identifies one human; a phone is a household fact. When they
 			// disagree the email is the one to trust.
@@ -1089,6 +1146,79 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 
 			expect(res.personId).toBe(byEmail?.id);
 			expect(res.personId).not.toBe(byPhone?.id);
+		});
+
+		it("reuses the EMAIL match even when a phone match also exists", async () => {
+			// Pins the email-leads-over-phone reorder inside `findGuestByContact`.
+			// Swapping the two blocks back to phone-first must break something.
+			const shared = uniquePhone();
+			const email = `lead-${randomUUID()}@example.com`;
+			const byPhone = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Alex Stone",
+				phone: shared,
+			});
+			const byEmail = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Alex Stone",
+				email,
+			});
+			expect(byEmail.guestId).not.toBe(byPhone.guestId);
+
+			// Carries BOTH keys: the older row matches on phone, the newer on email.
+			const both = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Alex Stone",
+				email,
+				phone: shared,
+			});
+			expect(both.created).toBe(false);
+			expect(both.guestId).toBe(byEmail.guestId);
+		});
+
+		it("lets an admin move a guest onto a shared phone when names disagree", async () => {
+			// User-visible behaviour change: this edit used to be refused outright.
+			const shared = uniquePhone();
+			await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Jane Roe",
+				phone: shared,
+			});
+			const otherId = await seedGuest(seed.clubId, "John Roe");
+
+			await expect(
+				applyUpdateGuest({
+					clubId: seed.clubId,
+					guestId: otherId,
+					name: "John Roe",
+					phone: shared,
+				}),
+			).resolves.toMatchObject({ ok: true });
+
+			const [g] = await testDb
+				.select({ phone: guests.phone })
+				.from(guests)
+				.where(eq(guests.id, otherId));
+			expect(g?.phone).toBe(toStoredPhone(shared, "1"));
+		});
+
+		it("still refuses the edit when the names DO agree", async () => {
+			const shared = uniquePhone();
+			await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Jamie Rivera",
+				phone: shared,
+			});
+			const otherId = await seedGuest(seed.clubId, "Jamie Rivera");
+
+			await expect(
+				applyUpdateGuest({
+					clubId: seed.clubId,
+					guestId: otherId,
+					name: "Jamie R.",
+					phone: shared,
+				}),
+			).rejects.toThrow(/already/i);
 		});
 
 		it("keeps two guests on one phone as two separate prospects", async () => {
@@ -1229,7 +1359,7 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			});
 			// Poll for the real thing rather than sleeping a guessed interval: the
 			// convert has passed its SELECT and is now parked on the unique index.
-			await waitForLockWait();
+			await waitForLockWait('insert into "members"', winner.pid);
 			await winner.commit();
 
 			const res = await convert;
