@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { hasWordOfTheDay, posterWordSize } from "./word-poster";
+import {
+	BUCKET_BOUNDARIES,
+	hasWordOfTheDay,
+	posterWordSize,
+} from "./word-poster";
 
 describe("posterWordSize", () => {
 	it("steps down at each bucket boundary", () => {
@@ -54,6 +58,20 @@ describe("posterWordSize", () => {
 	// condition "1234" would be sized as shouted text.
 	it("sizes letterless input from the normal table", () => {
 		expect(posterWordSize("1234")).toBe(173); // 4, no letters
+	});
+
+	// The measurement harness sweeps length ranges built from BUCKET_BOUNDARIES
+	// and applies the all-caps sizes within them. If the two tables stepped at
+	// different lengths, the harness would measure an all-caps bucket over the
+	// wrong range and still report PASS.
+	it("steps both tables at the same lengths", () => {
+		for (const boundary of BUCKET_BOUNDARIES) {
+			const at = posterWordSize("A".repeat(boundary));
+			const past = posterWordSize("A".repeat(boundary + 1));
+			expect(at).not.toBe(past);
+		}
+		// And the boundaries really are the normal table's, not a stale copy.
+		expect([...BUCKET_BOUNDARIES]).toEqual([6, 10, 14, 18]);
 	});
 });
 

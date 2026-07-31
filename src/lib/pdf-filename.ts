@@ -1,4 +1,8 @@
-/** The printables this basename can name. Add a case when you add a printable. */
+/**
+ * The printables this basename can name. Add a case when you add a print route
+ * that relies on `<title>` for its saved filename — the minutes and role-sheet
+ * PDF routes build their own `content-disposition` names and never call this.
+ */
 export type PdfArtifact = "meeting" | "word-of-the-day";
 
 /**

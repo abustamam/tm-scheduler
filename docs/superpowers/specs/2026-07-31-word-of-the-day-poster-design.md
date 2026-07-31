@@ -42,7 +42,7 @@ its current output.
 `MeetingViewActions` (`src/components/club/meeting-view-actions.tsx`) gains an
 optional `wordOfTheDay?: string | null` prop and renders a "Word poster" button
 only when that value is non-blank. Its single caller,
-`src/routes/club.$clubId.meeting.$meetingId.tsx:615`, passes
+`src/routes/club.$clubId.meeting.$meetingId.tsx:619`, passes
 `meeting.wordOfTheDay`.
 
 ## The poster component
@@ -81,10 +81,13 @@ its toolbar is a single `.no-print` Print button calling `window.print()`,
 reusing that route's button styling. No layout tabs, no share button, no offline
 badge.
 
-The page carries the same inline `<style>` block the print route uses, minus the
-multi-page rules it does not need: a tinted screen background, white on print,
-`.no-print { display: none !important }`, and
-`@page { size: letter portrait; margin: 0 }`.
+The page carries the same inline `<style>` block the print route uses — a
+tinted screen background, white on print, `.no-print { display: none
+!important }`, and `@page { size: letter portrait; margin: 0 }` — plus one rule
+the print route does not have. Inside `@media print` it must reset
+`.pgwrap { padding: 0 !important }`, overriding the `28px 0` screen padding.
+That reset is load-bearing: without it the wrapper's padding pushes the
+single sheet past one page and the browser emits a blank second page.
 
 ## Sizing the word
 
@@ -95,11 +98,37 @@ it from length:
 export function posterWordSize(word: string): number; // px
 ```
 
-Buckets: `≤6 → 200`, `≤10 → 150`, `≤14 → 112`, `≤18 → 88`, else `68`. The word
-element also carries `overflow-wrap` as a backstop for anything pathological.
+There are **two** bucket tables, because capitals run 20–30% wider than
+lowercase and no single table can serve both — at the ordinary sizes `POWWOW`
+reaches 122% of the usable width and `GROUNDWORK` 132%, each breaking mid-word.
+Sizing the ordinary table down far enough to absorb that would shrink every
+normal word to pay for a styling choice, so an all-caps word (contains a letter
+and equals its own uppercase) selects its own smaller table instead.
+
+| length | ordinary | ALL CAPS |
+| ------ | -------- | -------- |
+| ≤6     | 173      | 141      |
+| ≤10    | 116      | 94       |
+| ≤14    | 90       | 65       |
+| ≤18    | 74       | 52       |
+| else   | 61       | 44       |
+
+Both tables are derived against a **685px** target rather than the **704px**
+true content width (`PAGE_W` 816 less 2 × 56px padding). The ~19px difference
+is deliberate slack for cross-browser rendering variance: these were measured
+in one headless Chrome, and hinting, subpixel positioning and font-version
+differences move text width by fractions of a percent elsewhere. Every size is
+the largest that clears the target against every lowercase common word in
+`/usr/share/dict/words` (~64k), in lowercase, Capitalised and ALL-CAPS forms.
+
+The word element also carries `overflow-wrap` as a backstop for anything
+pathological.
 
 This is deterministic, SSR-safe, and unit-testable, with no measurement pass and
-no layout thrash.
+no layout thrash at render time. The derivation itself is a committed harness,
+`scripts/measure-word-poster.ts`, which reads the sizes, boundaries, weight and
+font family from source and re-verifies them against a real browser; the numbers
+above are not maintained by hand.
 
 Rejected alternative: an SVG `viewBox` auto-fitting the word to the page width
 regardless of glyph metrics. More robust in the extreme case, but it puts

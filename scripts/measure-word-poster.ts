@@ -3,10 +3,18 @@
  * (`src/lib/word-poster.ts`) against a real browser and a real dictionary.
  *
  * Run this whenever something invalidates those tables: a change to `PAGE_W`,
- * to `POSTER_PAD_X`, or to the display font family or weight. The tables are
- * each the largest size that clears the target, so any of those changes can
+ * `POSTER_PAD_X`, the display font family or weight, or a bucket boundary. The
+ * tables are each the largest size that clears the target, so any of those can
  * push a bucket over and reintroduce the mid-word break they exist to prevent
  * — with no test able to notice, because the failure is font rendering.
+ *
+ * Everything that defines the measurement is READ FROM SOURCE, never copied
+ * here: the sizes via `posterWordSize`, the length ranges via
+ * `BUCKET_BOUNDARIES`, the weight via `POSTER_FONT_WEIGHT`, and the face via
+ * `SERIF` in `print-theme.tsx`. A harness holding its own copy of any of them
+ * reports PASS while measuring something the poster no longer renders, which
+ * is worse than no harness. It also refuses to report PASS if the browser fell
+ * back to a different face than the one it set out to measure.
  *
  * Two modes:
  *
@@ -46,18 +54,40 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CONTENT_W, TARGET_W, posterWordSize } from "#/lib/word-poster";
+import { SERIF } from "#/components/agenda/print-theme";
+import {
+	BUCKET_BOUNDARIES,
+	CONTENT_W,
+	POSTER_FONT_WEIGHT,
+	TARGET_W,
+	posterWordSize,
+} from "#/lib/word-poster";
 
 const WORDS_FILE = process.env.WORDS_FILE ?? "/usr/share/dict/words";
 const MODE = process.argv[2] === "derive" ? "derive" : "verify";
 
-/** Length ranges matching the buckets in `word-poster.ts`. */
+/**
+ * The display face actually used by the poster, taken from `SERIF` in
+ * `print-theme.tsx` (e.g. `'Fraunces', Georgia, serif` → `Fraunces`). Read
+ * from source rather than hardcoded: a harness that measured a face the poster
+ * no longer uses would report PASS on sizes derived for the wrong font, which
+ * is precisely the failure the invalidation note tells you to run this to
+ * catch.
+ */
+const FONT_FAMILY = SERIF.split(",")[0]?.trim().replace(/^['"]|['"]$/g, "") ?? "";
+if (!FONT_FAMILY) {
+	throw new Error(`Could not parse a font family from SERIF: ${SERIF}`);
+}
+
+/**
+ * Length ranges DERIVED from the bucket boundaries, so moving a boundary moves
+ * what gets swept. 99 is an open-ended upper bound for the final bucket.
+ */
 const RANGES: readonly (readonly [lo: number, hi: number])[] = [
-	[1, 6],
-	[7, 10],
-	[11, 14],
-	[15, 18],
-	[19, 99],
+	...BUCKET_BOUNDARIES.map(
+		(hi, i) => [(BUCKET_BOUNDARIES[i - 1] ?? 0) + 1, hi] as const,
+	),
+	[(BUCKET_BOUNDARIES[BUCKET_BOUNDARIES.length - 1] ?? 0) + 1, 99] as const,
 ];
 
 function findChrome(): string {
@@ -104,15 +134,22 @@ function loadWords(): string[] {
  * because it executes in the browser, not here.
  */
 function buildPage(words: string[], sizes: number[][], mode: string): string {
+	// Fraunces carries an optical-size axis; the `opsz` range is harmless for a
+	// family that has none, and requesting the real weight matters either way.
+	const fontUrl =
+		`https://fonts.googleapis.com/css2?family=${encodeURIComponent(FONT_FAMILY)}` +
+		`:opsz,wght@9..144,${POSTER_FONT_WEIGHT}&display=swap`;
 	return `<!doctype html><html><head><meta charset="utf-8">
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&display=swap" rel="stylesheet">
-<style>.probe{font-family:'Fraunces',Georgia,serif;font-weight:600;line-height:1.05;
+<link href="${fontUrl}" rel="stylesheet">
+<style>.probe{font-family:${SERIF};font-weight:${POSTER_FONT_WEIGHT};line-height:1.05;
 white-space:nowrap;display:inline-block}#out{font-family:monospace;white-space:pre;font-size:12px}</style>
 </head><body><div id="host" style="position:absolute;left:-99999px;top:0"></div>
 <div id="out">PENDING</div><script>
 const WORDS = ${JSON.stringify(words)};
 const SIZES = ${JSON.stringify(sizes)};
 const RANGES = ${JSON.stringify(RANGES)};
+const FONT_FAMILY = ${JSON.stringify(FONT_FAMILY)};
+const WEIGHT = ${POSTER_FONT_WEIGHT};
 const CONTENT_W = ${CONTENT_W}, TARGET_W = ${TARGET_W}, MODE = ${JSON.stringify(mode)};
 const host = document.getElementById("host");
 
@@ -129,11 +166,34 @@ function worstAt(cands, size) {
 // Canvas pre-rank is only a cheap shortlist; every reported number is DOM-measured.
 function shortlist(words, lo, hi, atSize, n) {
   const ctx = document.createElement("canvas").getContext("2d");
-  ctx.font = "600 " + atSize + "px Fraunces, Georgia, serif";
+  ctx.font = WEIGHT + " " + atSize + "px " + FONT_FAMILY + ", serif";
   return words.filter((w) => w.length >= lo && w.length <= hi)
     .map((w) => [w, ctx.measureText(w).width])
     .sort((a, b) => b[1] - a[1]).slice(0, n).map(([w]) => w);
 }
+// Is FONT_FAMILY actually rendering, or did the browser silently fall back?
+// document.fonts.check() cannot answer this: it returns TRUE for a family with
+// no matching @font-face rule at all (the fallback is "available"), so a
+// typo'd or unpublished family reports loaded while Georgia does the drawing.
+// Compare metrics instead — render a width-sensitive string in "<family>,
+// <base>" against "<base>" alone. If the family is applied, at least one base
+// disagrees; if it never applies, every comparison is identical.
+function fontIsReallyApplied() {
+  const sample = "mmmwwwiiiMMMWWWlll123";
+  const measureIn = (stack) => {
+    const p = document.createElement("span");
+    p.style.cssText = "position:absolute;left:-99999px;white-space:nowrap;font-size:120px;font-weight:" + WEIGHT;
+    p.style.fontFamily = stack;
+    p.textContent = sample;
+    document.body.appendChild(p);
+    const w = p.getBoundingClientRect().width;
+    p.remove();
+    return w;
+  };
+  return ["monospace", "serif", "sans-serif"].some((base) =>
+    Math.abs(measureIn("'" + FONT_FAMILY + "', " + base) - measureIn(base)) > 0.5);
+}
+
 function largestFitting(cands) {
   for (let s = 220; s >= 8; s--) {
     const [w, width] = worstAt(cands, s);
@@ -187,13 +247,15 @@ function run() {
       lines.push("");
     }
   }
-  lines.push("fraunces_loaded=" + document.fonts.check("600 100px Fraunces"));
-  lines.push("STATUS=" + (failed ? "FAIL" : "PASS"));
+  lines.push("measured_family=" + FONT_FAMILY);
+  lines.push("measured_weight=" + WEIGHT);
+  lines.push("font_loaded=" + fontIsReallyApplied());
+  lines.push("STATUS=" + (failed || !fontIsReallyApplied() ? "FAIL" : "PASS"));
   document.getElementById("out").textContent = "BEGIN\\n" + lines.join("\\n") + "\\nEND";
 }
 
 const faces = [];
-for (let s = 8; s <= 220; s++) faces.push("600 " + s + "px Fraunces");
+for (let s = 8; s <= 220; s++) faces.push(WEIGHT + " " + s + "px " + FONT_FAMILY);
 Promise.all(faces.map((f) => document.fonts.load(f, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")))
   .then(() => document.fonts.ready).then(() => setTimeout(run, 800))
   .catch((e) => { document.getElementById("out").textContent = "BEGIN\\nFONT LOAD FAILED: " + e + "\\nSTATUS=FAIL\\nEND"; });
@@ -240,14 +302,24 @@ function main(): void {
 			.replace(/&amp;/g, "&")
 			.trim();
 		console.log(text);
-		if (text.includes("fraunces_loaded=false")) {
+
+		// Refuse to report success on a font we did not actually measure. The
+		// browser falls back silently, so without this a brand-font change would
+		// print PASS from fallback metrics while the poster renders something
+		// else — the exact drift this script documents itself as catching.
+		if (text.includes("font_loaded=false")) {
 			console.error(
-				"\nFraunces did NOT load — these numbers are the fallback face. Check network access.",
+				`\n"${FONT_FAMILY}" did NOT load — every number above is the fallback face and is WRONG.\n` +
+					"Check network access to fonts.googleapis.com, and that the family is published there.\n" +
+					"Refusing to report PASS on a font that was not measured.",
 			);
 			process.exit(1);
 		}
 		if (text.includes("STATUS=FAIL")) {
-			console.error("\nA bucket exceeds TARGET_W. Re-derive with: … derive");
+			console.error(
+				"\nA bucket exceeds TARGET_W. Re-derive with:\n" +
+					"  bun run scripts/measure-word-poster.ts derive",
+			);
 			process.exit(1);
 		}
 	} finally {

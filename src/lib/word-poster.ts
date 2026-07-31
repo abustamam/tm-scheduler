@@ -81,9 +81,10 @@
 // ---------------------------------------------------------------------------
 // VERIFIED COVERAGE
 //
-// Both tables were checked against all 63,993 lowercase common words in
-// `/usr/share/dict/words` (proper nouns, acronyms and possessives excluded — a
-// Word of the Day is an ordinary word), in each realistic input style.
+// Both tables were checked against every lowercase common word in
+// `/usr/share/dict/words` — roughly 64k of them, proper nouns, acronyms and
+// possessives excluded, since a Word of the Day is an ordinary word — in each
+// realistic input style.
 //
 // The word that BINDS each bucket — i.e. the widest in the dictionary at that
 // length, and so the one that set the size. Re-deriving by hand can start from
@@ -96,9 +97,11 @@
 //   ≤18      telecommunications                 CHLOROFLUOROCARBON
 //   >18      electroencephalographs             ELECTROENCEPHALOGRAPHS
 //
-// Each size is the largest that clears the target, so ANY change to PAGE_W,
-// POSTER_PAD_X, the font family, or the font weight invalidates both tables
-// and they must be re-derived.
+// Each size is the largest that clears the target, so ALL of these invalidate
+// both tables and require re-deriving: PAGE_W, POSTER_PAD_X, the font family
+// (`SERIF` in `print-theme.tsx`), POSTER_FONT_WEIGHT, and the bucket length
+// boundaries. The harness reads every one of those from source rather than
+// copying them, so it measures what actually ships.
 //
 // Longer-than-dictionary or non-English input can still exceed the budget;
 // `overflowWrap: "anywhere"` on the poster keeps that to a mid-word break
@@ -121,6 +124,15 @@ export const CONTENT_W = 704;
 
 /** The width sizes are derived against — CONTENT_W less the safety margin. */
 export const TARGET_W = 685;
+
+/**
+ * The display weight both tables were derived at. Exported for the same reason
+ * as POSTER_PAD_X: the poster consumes it instead of a literal, and the
+ * measurement harness measures at it, so a weight change cannot leave the
+ * poster rendering at one weight and the sizes derived at another. Weight
+ * moves advance widths, so changing it invalidates every size here.
+ */
+export const POSTER_FONT_WEIGHT = 600;
 
 /**
  * A length→size table: buckets largest-first, plus the floor for anything
@@ -161,6 +173,17 @@ const ALL_CAPS: SizeTable = {
 	smallest: 44,
 };
 
+/**
+ * The lengths at which the size steps down, ascending — DERIVED from the
+ * table, not a second copy of it. The measurement harness sweeps these ranges,
+ * so moving a boundary moves what gets measured; a hardcoded copy would let
+ * the harness sweep the old ranges at the new sizes and still report PASS.
+ * (A unit test pins ALL_CAPS to the same boundaries.)
+ */
+export const BUCKET_BOUNDARIES: readonly number[] = NORMAL.buckets.map(
+	([maxLength]) => maxLength,
+);
+
 /** Shared lookup so the two tables cannot drift apart in behaviour. */
 function sizeFrom(table: SizeTable, length: number): number {
 	for (const [maxLength, size] of table.buckets) {
@@ -186,13 +209,21 @@ export function posterWordSize(word: string): number {
 
 /**
  * Does this meeting have a Word of the Day to print? Whitespace-only counts as
- * unset. The poster route calls this, and the "Word poster" button that links to
- * it will call it too, so the two cannot disagree about whether there is
- * anything to show.
+ * unset. Three callers share it — the poster route, the "Word poster" button
+ * that links there, and the meeting page — so none of them can disagree about
+ * whether there is anything to show.
  *
  * A type predicate, not a plain boolean: the route hands the word straight to
  * the poster's `word: string` prop, and narrowing here is what lets it do that
  * honestly instead of casting away a `string | null` at the call site.
+ *
+ * The print layouts (`meeting-agenda-print.tsx`, `minutes-pdf-logic.ts`,
+ * `role-sheets-pdf-logic.ts`, `recurrence-rule-logic.ts`, `agenda-slides.ts`)
+ * deliberately keep bare truthiness instead of calling this. That is a
+ * decision, not an oversight: every write path trims before storing, so a
+ * blank-but-present word cannot exist in the database, and converting five
+ * cross-surface layouts to guard against input that cannot occur would be risk
+ * without benefit.
  */
 export function hasWordOfTheDay(
 	word: string | null | undefined,

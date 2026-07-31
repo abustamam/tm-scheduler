@@ -12,7 +12,11 @@
 // Deliberately does NOT credit the Grammarian, unlike the Present-mode Word of
 // the Day slide: this hangs for the whole meeting, where attribution reads as
 // clutter and goes stale if the role is reassigned after printing.
-import { POSTER_PAD_X, posterWordSize } from "#/lib/word-poster";
+import {
+	POSTER_FONT_WEIGHT,
+	POSTER_PAD_X,
+	posterWordSize,
+} from "#/lib/word-poster";
 import { DarkFooter, FitPage, Kick, MUTED, SANS, SERIF } from "./print-theme";
 
 export function WordOfTheDayPoster({
@@ -56,7 +60,8 @@ export function WordOfTheDayPoster({
 					style={{
 						fontFamily: SERIF,
 						fontSize: posterWordSize(w),
-						fontWeight: 600,
+						// Not a literal: the sizes above were derived at this weight.
+						fontWeight: POSTER_FONT_WEIGHT,
 						lineHeight: 1.05,
 						margin: "40px 0",
 						// Backstop for a word longer than the smallest bucket expects.
