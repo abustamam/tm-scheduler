@@ -379,6 +379,13 @@
       "when": 1785473647144,
       "tag": "0053_slow_omega_sentinel",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1785537988448,
+      "tag": "0054_light_pretty_boy",
+      "breakpoints": true
     }
   ]
 }

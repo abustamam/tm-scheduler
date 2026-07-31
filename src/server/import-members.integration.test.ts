@@ -13,7 +13,13 @@ import { and, eq, isNull } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clubs, members, officerTerms, people } from "#/db/schema";
 import type { MappedMember } from "#/lib/members-csv";
-import { cleanup, hasTestDb, testDb } from "#/test/db";
+import {
+	cleanup,
+	hasTestDb,
+	openBlockingTx,
+	testDb,
+	waitForLockWait,
+} from "#/test/db";
 
 /** Open (current) officer positions for a membership, for assertions. */
 async function openOffices(membershipId: string): Promise<string[]> {
@@ -255,6 +261,49 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		]);
 		expect(stats.membersUpdated).toBe(1);
 		expect(await openOffices(m.id)).toEqual(["secretary"]);
+	});
+
+	it("recovers when a concurrent writer takes the membership first (#489)", async () => {
+		// The importer runs on the bare `db` handle with NO transaction, so its
+		// membership SELECT and INSERT are separated by an arbitrary gap — the
+		// widest double-add window in the app, and two admins importing overlapping
+		// rosters is an ordinary Tuesday. Drive the real interleaving: a concurrent
+		// writer inserts the membership and holds it uncommitted, so the import
+		// reads "no membership", then parks on the unique index.
+		const clubId = await club();
+		const [person] = await testDb
+			.insert(people)
+			.values({ customerId: "PN-RACE", name: "Racing Member" })
+			.returning({ id: people.id });
+		const personId = person?.id ?? "";
+
+		let winnerId = "";
+		const winner = await openBlockingTx(async (tx) => {
+			const [row] = await tx
+				.insert(members)
+				.values({ clubId, personId, name: "Racing Member" })
+				.returning({ id: members.id });
+			winnerId = row?.id ?? "";
+		});
+
+		const running = importPeopleAndMembers(clubId, [
+			row({ customerId: "PN-RACE", name: "Racing Member" }),
+		]);
+		await waitForLockWait();
+		await winner.commit();
+
+		// The import completes instead of throwing "Failed to insert member", and
+		// counts the row as an update — it did not create anything.
+		const stats = await running;
+		expect(stats.membersCreated).toBe(0);
+		expect(stats.membersUpdated).toBe(1);
+
+		const rows = await testDb
+			.select({ id: members.id })
+			.from(members)
+			.where(and(eq(members.clubId, clubId), eq(members.personId, personId)));
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.id).toBe(winnerId);
 	});
 
 	it("counts an unparseable non-blank position without opening a term", async () => {

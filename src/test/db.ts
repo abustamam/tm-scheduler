@@ -5,7 +5,7 @@
  * `TEST_DATABASE_URL` so tests never accidentally touch dev/prod data.
  */
 import { randomUUID } from "node:crypto";
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import * as schema from "#/db/schema";
 import {
@@ -232,4 +232,76 @@ export async function cleanup(
 	if (userIds.length > 0) {
 		await testDb.delete(user).where(inArray(user.id, userIds));
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Concurrency helpers — for testing check-then-write races against real
+// Postgres. A serial test cannot distinguish a correct guard from a missing
+// one: check-then-insert always looks right when nothing else is running.
+// ---------------------------------------------------------------------------
+
+/** A drizzle transaction handle for the test client. */
+export type TestTx = Parameters<
+	Parameters<(typeof testDb)["transaction"]>[0]
+>[0];
+
+/**
+ * Run `work` in a transaction that STAYS OPEN — holding its row locks, and
+ * invisible to READ COMMITTED readers — until the returned `commit()` is
+ * called. Lets a test drive a real interleaving: the concurrent writer takes
+ * the lock, the code under test reads stale state and then blocks on its own
+ * write, and only then does the writer commit.
+ */
+export async function openBlockingTx(
+	work: (tx: TestTx) => Promise<void>,
+): Promise<{ commit: () => Promise<void> }> {
+	let release!: () => void;
+	const gate = new Promise<void>((r) => {
+		release = r;
+	});
+	let ready!: () => void;
+	let failed!: (e: unknown) => void;
+	const started = new Promise<void>((res, rej) => {
+		ready = res;
+		failed = rej;
+	});
+	const done = testDb.transaction(async (tx) => {
+		try {
+			await work(tx);
+		} catch (e) {
+			failed(e);
+			throw e;
+		}
+		ready();
+		await gate;
+	});
+	// Claim the rejection now so a failure inside `work` never surfaces as an
+	// unhandled rejection; `commit()` still re-throws it.
+	done.catch(() => {});
+	await started;
+	return {
+		commit: async () => {
+			release();
+			await done;
+		},
+	};
+}
+
+/**
+ * Wait until some backend on THIS database is blocked waiting for a lock —
+ * i.e. the code under test has reached its write and parked behind
+ * `openBlockingTx`. Polling the real wait state beats sleeping a guessed
+ * interval, which either flakes under load or wastes time when idle.
+ */
+export async function waitForLockWait(timeoutMs = 10_000): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		const res = await testDb.execute(sql`
+			select count(*)::int as n from pg_stat_activity
+			where datname = current_database()
+			  and state = 'active' and wait_event_type = 'Lock'`);
+		if (Number((res.rows[0] as { n: number }).n) > 0) return;
+		await new Promise((r) => setTimeout(r, 25));
+	}
+	throw new Error("timed out waiting for a statement to block on a row lock");
 }

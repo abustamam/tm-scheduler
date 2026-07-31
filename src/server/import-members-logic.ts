@@ -165,13 +165,32 @@ export async function importPeopleAndMembers(
 			membershipId = existingMember.id;
 			stats.membersUpdated++;
 		} else if (md.kind === "insert") {
+			// This loop runs on the bare `db` handle with NO transaction, so the
+			// SELECT above and this INSERT are separated by an arbitrary gap — two
+			// admins importing overlapping rosters is the widest window in the app
+			// for a double-add. The unique index (#489) closes it; DO NOTHING plus a
+			// re-read turns losing that race into a no-op update instead of a 500
+			// that strands the import partway through a file.
 			const [created] = await db
 				.insert(members)
 				.values({ clubId, personId, ...md.values })
+				.onConflictDoNothing({ target: [members.clubId, members.personId] })
 				.returning({ id: members.id });
-			if (!created) throw new Error("Failed to insert member");
-			membershipId = created.id;
-			stats.membersCreated++;
+			if (created) {
+				membershipId = created.id;
+				stats.membersCreated++;
+			} else {
+				const [raced] = await db
+					.select({ id: members.id })
+					.from(members)
+					.where(
+						and(eq(members.clubId, clubId), eq(members.personId, personId)),
+					)
+					.limit(1);
+				if (!raced) throw new Error("Failed to insert member");
+				membershipId = raced.id;
+				stats.membersUpdated++;
+			}
 		} else {
 			continue; // unreachable — update ⟺ existingMember present
 		}

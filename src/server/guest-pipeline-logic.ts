@@ -25,6 +25,7 @@ import {
 	roleSlots,
 	tableTopicsSpeakers,
 } from "#/db/schema";
+import { namesAgree } from "#/lib/person-name";
 import { toStoredPhone } from "#/lib/phone";
 import { logActivity } from "./activity";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
@@ -70,10 +71,17 @@ type GuestContactRow = {
 };
 
 /**
- * The club guest matching a phone (digits) or email — the ONE dedup key for
- * guests, used both by guest-book capture (to reuse the row) and by the edit
- * path (to refuse creating a second row that would match). Phone wins over
- * email, mirroring `applyConvertGuestToMember`'s Person dedup.
+ * The club guest matching an email, or a phone whose name also agrees — the ONE
+ * dedup key for guests, used both by guest-book capture (to reuse the row) and
+ * by the edit path (to refuse creating a second row that would match). Email
+ * leads over phone, mirroring `applyConvertGuestToMember`'s Person dedup.
+ *
+ * The name check on the phone branch is the same guard as the Person dedup, for
+ * the same reason (#488): a spouse or coworker signing the guest book with the
+ * shared number they already gave is TWO prospects, and collapsing them into one
+ * row silently merges their attendance and understates the VP-Membership funnel.
+ * `opts.name` is the name the caller is presenting; a phone hit whose stored
+ * name disagrees is passed over, not returned.
  *
  * `opts.digits` is the caller's number in E.164 digits; the SQL compares it
  * against the STORED phone's digits. Both sides therefore have to be E.164 for
@@ -88,7 +96,12 @@ type GuestContactRow = {
 async function findGuestByContact(
 	conn: DbOrTx,
 	clubId: string,
-	opts: { digits: string; email: string | null; excludeGuestId?: string },
+	opts: {
+		digits: string;
+		email: string | null;
+		name: string;
+		excludeGuestId?: string;
+	},
 ): Promise<GuestContactRow | undefined> {
 	const cols = {
 		id: guests.id,
@@ -101,20 +114,6 @@ async function findGuestByContact(
 		: eq(guests.clubId, clubId);
 	const order = [asc(guests.createdAt), asc(guests.id)] as const;
 
-	if (opts.digits) {
-		const [byPhone] = await conn
-			.select(cols)
-			.from(guests)
-			.where(
-				and(
-					scope,
-					sql`regexp_replace(coalesce(${guests.phone}, ''), '[^0-9]', '', 'g') = ${opts.digits}`,
-				),
-			)
-			.orderBy(...order)
-			.limit(1);
-		if (byPhone) return byPhone;
-	}
 	if (opts.email) {
 		const [byEmail] = await conn
 			.select(cols)
@@ -125,6 +124,21 @@ async function findGuestByContact(
 			.orderBy(...order)
 			.limit(1);
 		if (byEmail) return byEmail;
+	}
+	if (opts.digits) {
+		// Candidates, not a result: take the oldest whose name agrees.
+		const byPhone = await conn
+			.select(cols)
+			.from(guests)
+			.where(
+				and(
+					scope,
+					sql`regexp_replace(coalesce(${guests.phone}, ''), '[^0-9]', '', 'g') = ${opts.digits}`,
+				),
+			)
+			.orderBy(...order);
+		const match = byPhone.find((g) => namesAgree(g.name, opts.name));
+		if (match) return match;
 	}
 	return undefined;
 }
@@ -226,10 +240,11 @@ export async function captureGuestVisit(
 	const meetingId = await resolveCurrentMeetingId(input.clubId);
 
 	return db.transaction(async (tx) => {
-		// 1. Dedup, club-scoped: phone (digits) → email → none.
+		// 1. Dedup, club-scoped: email → phone-with-name-agreement → none.
 		const existing = await findGuestByContact(tx, input.clubId, {
 			digits,
 			email,
+			name,
 		});
 
 		let guestId: string;
@@ -482,6 +497,7 @@ export async function applyUpdateGuest(
 	const clash = await findGuestByContact(db, input.clubId, {
 		digits: normalizePhone(phone),
 		email,
+		name,
 		excludeGuestId: input.guestId,
 	});
 	if (clash) {
@@ -658,8 +674,9 @@ export interface ConvertGuestResult {
 /**
  * Convert-to-member (ADR-0018): promote a guest into a club Membership.
  *
- * Transactional: (1) dedup the Person by phone→email (link an existing Person,
- * else create one); (2) create the Membership for this club (`clubRole: member`,
+ * Transactional: (1) dedup the Person by email→phone-with-name-agreement (link
+ * an existing Person, else create one — see the step-1 comment for why a bare
+ * phone match is not enough); (2) create the Membership for this club (`clubRole: member`,
  * `joinedAt: today`) — or reuse the person's existing membership so we never
  * violate one-membership-per-person-per-club; (3) re-point every role slot the
  * guest holds to the new member (member-XOR-guest holds — set member + clear
@@ -692,25 +709,47 @@ export async function applyConvertGuestToMember(
 	const digits = normalizePhone(phone);
 
 	return db.transaction(async (tx) => {
-		// 1. Person dedup (phone → email → create). People are global (club-less).
+		// 1. Person dedup (email → phone+name → create). People are global
+		//    (club-less), so a wrong match here reaches across every club.
+		//
+		//    Email leads because it identifies ONE human. Phone does not: a shared
+		//    household or work number is ordinary in a guest book (a member brings
+		//    their spouse, both write the same mobile), and matching on it alone
+		//    fused the two — taking the newcomer's future speeches and Pathways
+		//    enrollments onto the wrong Person, since all three FKs are
+		//    Person-scoped. So a phone match must also agree on the name (#488).
+		//
+		//    When neither qualifies, a FRESH Person is the right answer rather than
+		//    a best guess: ADR-0008 treats dedupe/merge as a later deliberate
+		//    action (`applySelfAdd` says the same), and the superadmin merge tool
+		//    exists to fuse two Persons after the fact. Under-matching is visible
+		//    and reversible; over-matching is neither.
 		let personId: string | null = null;
-		if (digits) {
-			const [p] = await tx
-				.select({ id: people.id })
-				.from(people)
-				.where(
-					sql`regexp_replace(coalesce(${people.phone}, ''), '[^0-9]', '', 'g') = ${digits}`,
-				)
-				.limit(1);
-			if (p) personId = p.id;
-		}
-		if (!personId && email) {
+		// Oldest-first and tie-broken on id: a bare `limit(1)` over two matching
+		// rows is a Postgres coin flip, so which human a guest converted onto was
+		// not even stable across runs. `findGuestByContact` already does this.
+		const order = [asc(people.createdAt), asc(people.id)] as const;
+		if (email) {
 			const [p] = await tx
 				.select({ id: people.id })
 				.from(people)
 				.where(sql`lower(${people.email}) = ${email.toLowerCase()}`)
+				.orderBy(...order)
 				.limit(1);
 			if (p) personId = p.id;
+		}
+		if (!personId && digits) {
+			// Every phone match is a CANDIDATE, not a result — scan them for one
+			// whose name agrees rather than taking the first row and hoping.
+			const candidates = await tx
+				.select({ id: people.id, name: people.name })
+				.from(people)
+				.where(
+					sql`regexp_replace(coalesce(${people.phone}, ''), '[^0-9]', '', 'g') = ${digits}`,
+				)
+				.orderBy(...order);
+			const match = candidates.find((p) => namesAgree(p.name, name));
+			if (match) personId = match.id;
 		}
 		if (!personId) {
 			const [p] = await tx
@@ -742,6 +781,17 @@ export async function applyConvertGuestToMember(
 		if (existingMembership) {
 			membershipId = existingMembership.id;
 		} else {
+			// The SELECT above is the fast path, not the guarantee: it runs under
+			// READ COMMITTED with no row to lock, so a concurrent convert of a second
+			// guest that deduped onto this same Person can pass it too. The unique
+			// index (#489) is what actually holds the line.
+			//
+			// DO NOTHING rather than a caught error: inside a transaction a raw
+			// constraint violation poisons the whole tx (every later statement fails
+			// with "current transaction is aborted"), so there would be nothing left
+			// to recover with. On conflict we get zero rows back and re-read — under
+			// READ COMMITTED the next statement takes a fresh snapshot, so the row
+			// the winning transaction committed is visible.
 			const [m] = await tx
 				.insert(members)
 				.values({
@@ -755,9 +805,26 @@ export async function applyConvertGuestToMember(
 					status: "active",
 					joinedAt: new Date(),
 				})
+				.onConflictDoNothing({
+					target: [members.clubId, members.personId],
+				})
 				.returning({ id: members.id });
-			if (!m) throw new Error("Failed to create membership.");
-			membershipId = m.id;
+			if (m) {
+				membershipId = m.id;
+			} else {
+				const [raced] = await tx
+					.select({ id: members.id })
+					.from(members)
+					.where(
+						and(
+							eq(members.personId, personId),
+							eq(members.clubId, input.clubId),
+						),
+					)
+					.limit(1);
+				if (!raced) throw new Error("Failed to create membership.");
+				membershipId = raced.id;
+			}
 		}
 
 		// 3. Re-point the guest's role slots to the new member (XOR constraint holds).

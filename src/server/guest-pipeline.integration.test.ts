@@ -22,15 +22,32 @@ import {
 	roleSlots,
 	tableTopicsSpeakers,
 } from "#/db/schema";
+import { toStoredPhone } from "#/lib/phone";
 import {
 	cleanup,
 	hasTestDb,
+	openBlockingTx,
 	type SeededClub,
 	seedClub,
 	testDb,
+	waitForLockWait,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
+
+/**
+ * A phone number no other test run has used.
+ *
+ * `cleanup` only deletes `people` rows that ended up with a membership, so a
+ * test whose convert links somewhere unexpected leaves an orphan behind. Person
+ * dedup is now deterministic (oldest-first, #488), which means a stale row
+ * sharing a hard-coded number wins every LATER run — a fixture that poisons
+ * itself. Unique digits per run keep each test's Person its own.
+ */
+function uniquePhone(): string {
+	const digits = randomUUID().replace(/\D/g, "").slice(0, 7).padEnd(7, "0");
+	return `555${digits}`;
+}
 
 const {
 	applyConvertGuestToMember,
@@ -99,64 +116,6 @@ async function seedMeetingLaterToday(clubId: string): Promise<string> {
 		.returning({ id: meetings.id });
 	if (!m) throw new Error("Failed to seed meeting");
 	return m.id;
-}
-
-/** A drizzle transaction handle for the test client. */
-type Tx = Parameters<Parameters<(typeof testDb)["transaction"]>[0]>[0];
-
-/**
- * Run `work` in a transaction that STAYS OPEN — holding its row locks — until
- * the returned `commit()` is called. Lets a test drive a real interleaving: the
- * concurrent writer takes the lock, the code under test reads stale state and
- * then blocks on the write, and only then does the writer commit.
- */
-async function openBlockingTx(
-	work: (tx: Tx) => Promise<void>,
-): Promise<{ commit: () => Promise<void> }> {
-	let release!: () => void;
-	const gate = new Promise<void>((r) => {
-		release = r;
-	});
-	let ready!: () => void;
-	let failed!: (e: unknown) => void;
-	const started = new Promise<void>((res, rej) => {
-		ready = res;
-		failed = rej;
-	});
-	const done = testDb.transaction(async (tx) => {
-		try {
-			await work(tx);
-		} catch (e) {
-			failed(e);
-			throw e;
-		}
-		ready();
-		await gate;
-	});
-	// Claim the rejection now so a failure inside `work` never surfaces as an
-	// unhandled rejection; `commit()` still re-throws it.
-	done.catch(() => {});
-	await started;
-	return {
-		commit: async () => {
-			release();
-			await done;
-		},
-	};
-}
-
-/** Wait until a backend on THIS database is blocked waiting for a row lock. */
-async function waitForLockWait(timeoutMs = 10_000): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		const res = await testDb.execute(sql`
-			select count(*)::int as n from pg_stat_activity
-			where datname = current_database()
-			  and state = 'active' and wait_event_type = 'Lock'`);
-		if (Number((res.rows[0] as { n: number }).n) > 0) return;
-		await new Promise((r) => setTimeout(r, 25));
-	}
-	throw new Error("timed out waiting for a statement to block on a row lock");
 }
 
 /** A bare club guest — no attendance, no participation anywhere. */
@@ -1045,6 +1004,245 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			await expect(
 				applySetGuestStage({ clubId: seed.clubId, guestId, stage: "lost" }),
 			).rejects.toThrow(/already joined/i);
+		});
+	});
+
+	describe("Person dedup on convert (#488)", () => {
+		it("does NOT fuse two humans who share a phone number", async () => {
+			// The bug: a member brings their spouse, both write the household mobile
+			// in the guest book. Matching on digits alone converted the guest onto
+			// the member's Person — and `members`/`speeches`/`path_enrollments` are
+			// all Person-scoped, so every speech and Pathways enrollment the newcomer
+			// ever records would have filed under the wrong human.
+			const shared = uniquePhone();
+			const [spouse] = await testDb
+				.insert(people)
+				.values({ name: "Jane Doe", phone: toStoredPhone(shared, "1") })
+				.returning({ id: people.id });
+
+			const { guestId } = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "John Doe",
+				phone: shared,
+			});
+			const res = await applyConvertGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+
+			expect(res.personId).not.toBe(spouse?.id);
+			const [p] = await testDb
+				.select({ name: people.name })
+				.from(people)
+				.where(eq(people.id, res.personId));
+			expect(p?.name).toBe("John Doe");
+		});
+
+		it("still fuses onto a phone match when the name agrees", async () => {
+			// The guard must not cost us the dedupe it qualifies.
+			const shared = uniquePhone();
+			const [self] = await testDb
+				.insert(people)
+				.values({ name: "Jamie Rivera", phone: toStoredPhone(shared, "1") })
+				.returning({ id: people.id });
+
+			const { guestId } = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Jamie R.",
+				phone: shared,
+			});
+			const res = await applyConvertGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+
+			expect(res.personId).toBe(self?.id);
+		});
+
+		it("prefers an email match over a phone match", async () => {
+			// Email identifies one human; a phone is a household fact. When they
+			// disagree the email is the one to trust.
+			const shared = uniquePhone();
+			const email = `both-${randomUUID()}@example.com`;
+			const [byPhone] = await testDb
+				.insert(people)
+				.values({ name: "Pat Doe", phone: toStoredPhone(shared, "1") })
+				.returning({ id: people.id });
+			const [byEmail] = await testDb
+				.insert(people)
+				.values({ name: "Pat Doe", email })
+				.returning({ id: people.id });
+
+			const { guestId } = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Pat Doe",
+				phone: shared,
+				email,
+			});
+			const res = await applyConvertGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+
+			expect(res.personId).toBe(byEmail?.id);
+			expect(res.personId).not.toBe(byPhone?.id);
+		});
+
+		it("keeps two guests on one phone as two separate prospects", async () => {
+			// Same root cause on the guest side: collapsing them into one row merges
+			// their attendance and undercounts the VP-Membership funnel.
+			const shared = uniquePhone();
+			const first = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Jane Roe",
+				phone: shared,
+			});
+			const second = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "John Roe",
+				phone: shared,
+			});
+
+			expect(second.created).toBe(true);
+			expect(second.guestId).not.toBe(first.guestId);
+		});
+	});
+
+	describe("one membership per person per club (#489)", () => {
+		it("rejects a second membership for the same person and club", async () => {
+			const [person] = await testDb
+				.insert(people)
+				.values({ name: "Solo Member" })
+				.returning({ id: people.id });
+			const personId = person?.id ?? "";
+			await testDb
+				.insert(members)
+				.values({ clubId: seed.clubId, personId, name: "Solo Member" });
+
+			await expect(
+				testDb
+					.insert(members)
+					.values({ clubId: seed.clubId, personId, name: "Solo Member" }),
+			).rejects.toThrow();
+		});
+
+		it("survives two concurrent converts that resolve to the same Person", async () => {
+			// The race the issue describes: both transactions read "no membership",
+			// both insert. Before the unique index the club ended up with two roster
+			// rows for one human — the duplicate class #329 built `mergePeople` to
+			// unpick by hand. Run for real rather than asserting the SELECT, because
+			// a check-then-insert always LOOKS correct when run serially.
+			const shared = uniquePhone();
+			const email = `race-${randomUUID()}@example.com`;
+			const [person] = await testDb
+				.insert(people)
+				.values({
+					name: "Casey Lane",
+					email,
+					phone: toStoredPhone(shared, "1"),
+				})
+				.returning({ id: people.id });
+
+			// Two distinct guest rows (one carries only email, the other only phone)
+			// that both dedupe onto that one Person.
+			const byEmail = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Casey Lane",
+				email,
+			});
+			const byPhone = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Casey Lane",
+				phone: shared,
+			});
+			expect(byPhone.guestId).not.toBe(byEmail.guestId);
+
+			const results = await Promise.all([
+				applyConvertGuestToMember({
+					clubId: seed.clubId,
+					guestId: byEmail.guestId,
+					actorMemberId: seed.adminMemberId,
+				}),
+				applyConvertGuestToMember({
+					clubId: seed.clubId,
+					guestId: byPhone.guestId,
+					actorMemberId: seed.adminMemberId,
+				}),
+			]);
+
+			// Both callers succeed and agree on one membership — the loser of the
+			// race re-reads the winner's row instead of erroring or double-adding.
+			expect(results[0].personId).toBe(person?.id);
+			expect(results[1].personId).toBe(person?.id);
+			expect(results[0].membershipId).toBe(results[1].membershipId);
+
+			const rows = await testDb
+				.select({ id: members.id })
+				.from(members)
+				.where(
+					and(
+						eq(members.clubId, seed.clubId),
+						eq(members.personId, person?.id ?? ""),
+					),
+				);
+			expect(rows).toHaveLength(1);
+		});
+
+		it("re-reads the winner's row when it LOSES the insert race", async () => {
+			// The `Promise.all` case above happens to serialize, so it never reaches
+			// the recovery branch. Force it: hold a transaction open that has already
+			// inserted the membership, let the convert's SELECT miss it (READ
+			// COMMITTED can't see an uncommitted row), then commit. The convert's
+			// INSERT is parked on the unique index at that moment; it wakes to a
+			// conflict, gets zero rows from DO NOTHING, and must recover by reading
+			// rather than throwing "Failed to create membership".
+			const email = `loser-${randomUUID()}@example.com`;
+			const [person] = await testDb
+				.insert(people)
+				.values({ name: "Robin Park", email })
+				.returning({ id: people.id });
+			const personId = person?.id ?? "";
+			const { guestId } = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Robin Park",
+				email,
+			});
+
+			// The winner: inserts the membership, then holds the transaction open so
+			// its row lock — and its invisibility to READ COMMITTED — both persist.
+			let winnerId = "";
+			const winner = await openBlockingTx(async (tx) => {
+				const [row] = await tx
+					.insert(members)
+					.values({ clubId: seed.clubId, personId, name: "Robin Park" })
+					.returning({ id: members.id });
+				winnerId = row?.id ?? "";
+			});
+
+			const convert = applyConvertGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+			// Poll for the real thing rather than sleeping a guessed interval: the
+			// convert has passed its SELECT and is now parked on the unique index.
+			await waitForLockWait();
+			await winner.commit();
+
+			const res = await convert;
+			expect(res.personId).toBe(personId);
+			expect(res.membershipId).toBe(winnerId);
+
+			const rows = await testDb
+				.select({ id: members.id })
+				.from(members)
+				.where(
+					and(eq(members.clubId, seed.clubId), eq(members.personId, personId)),
+				);
+			expect(rows).toHaveLength(1);
 		});
 	});
 
