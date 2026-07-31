@@ -52,24 +52,17 @@ describe("meetingPdfBasename", () => {
 		);
 	});
 
-	it("defaults to the meeting segment", () => {
-		expect(
-			meetingPdfBasename(
-				"Downtown Toastmasters",
-				"2026-07-31T18:45:00Z",
-				"UTC",
-			),
-		).toBe("Downtown-Toastmasters-meeting-2026-07-31");
-	});
-
-	it("accepts a custom segment for other printables", () => {
-		expect(
-			meetingPdfBasename(
-				"Downtown Toastmasters",
-				"2026-07-31T18:45:00Z",
-				"UTC",
-				"word-of-the-day",
-			),
-		).toBe("Downtown-Toastmasters-word-of-the-day-2026-07-31");
+	it("names the artifact segment, defaulting to 'meeting'", () => {
+		const args = [
+			"Downtown Toastmasters",
+			"2026-07-31T18:45:00Z",
+			"UTC",
+		] as const;
+		expect(meetingPdfBasename(...args)).toBe(
+			"Downtown-Toastmasters-meeting-2026-07-31",
+		);
+		expect(meetingPdfBasename(...args, "word-of-the-day")).toBe(
+			"Downtown-Toastmasters-word-of-the-day-2026-07-31",
+		);
 	});
 });
