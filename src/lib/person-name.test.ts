@@ -16,6 +16,23 @@ describe("firstNameOf", () => {
 		expect(firstNameOf("  Jane   Doe  ")).toBe("Jane");
 	});
 
+	it("reads the given name out of a `Last, First` row", () => {
+		// The Toastmasters export carries this shape too (members-csv.test.ts has
+		// `Name: "Khan, Mois"`). Splitting on whitespace alone returns "Khan,",
+		// which greets the person by their FAMILY name with a doubled comma.
+		expect(firstNameOf("Khan, Mois")).toBe("Mois");
+		expect(firstNameOf("Bustamam, Abdul-Rasheed")).toBe("Abdul-Rasheed");
+		expect(firstNameOf("Watson, Mary Jane")).toBe("Mary");
+	});
+
+	it("never returns a token with trailing punctuation welded on", () => {
+		// Belt to the suspenders above: a stray trailing comma with nothing after
+		// it must not reach the greeting.
+		expect(firstNameOf("Khan,")).toBe("Khan");
+		expect(firstNameOf("Prince;")).toBe("Prince");
+		expect(firstNameOf("Khan, ")).toBe("Khan");
+	});
+
 	it("returns empty for a blank name rather than throwing", () => {
 		expect(firstNameOf("")).toBe("");
 		expect(firstNameOf("   ")).toBe("");

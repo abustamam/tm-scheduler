@@ -212,6 +212,22 @@ export async function applyMemberEdit(input: EditInput) {
 				.where(
 					and(eq(people.id, current.personId), isNull(people.preferredName)),
 				);
+		} else if (current.preferredName !== null) {
+			// CLEARING has to clear both, or it does nothing at all. The read is a
+			// coalesce onto `people.preferred_name`, so leaving the Person copy
+			// behind resurrects the exact name the admin just deleted — and the form
+			// promises "leave blank to use their first name". Scoped to the value
+			// this membership seeded, so a different answer recorded by another club
+			// survives untouched.
+			await tx
+				.update(people)
+				.set({ preferredName: null })
+				.where(
+					and(
+						eq(people.id, current.personId),
+						eq(people.preferredName, current.preferredName),
+					),
+				);
 		}
 		// Reconcile the office set only when the caller sent one (undefined = leave
 		// terms alone). Dedupe first so a repeated office can't open two terms.

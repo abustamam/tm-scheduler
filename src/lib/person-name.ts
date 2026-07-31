@@ -14,14 +14,32 @@ export interface NamedPerson {
 	preferredName?: string | null;
 }
 
-/** Whitespace-separated parts, with surrounding and repeated whitespace gone. */
-function parts(name: string): string[] {
-	return name.trim().split(/\s+/).filter(Boolean);
+/** The first whitespace-separated token, or `""`. */
+function firstToken(s: string): string {
+	return s.trim().split(/\s+/).filter(Boolean)[0] ?? "";
 }
 
-/** The first token of a full name. `""` for a blank name. */
+/**
+ * The name to greet someone by, read off a single stored full name.
+ *
+ * Handles both shapes the Toastmasters export actually emits. Most rows are
+ * "First Last", but the CSV also carries "Last, First" (see
+ * `members-csv.test.ts`) — for those, the given name is what FOLLOWS the comma.
+ * Splitting on whitespace alone returns `"Khan,"` there, which produces
+ * "Hi Khan,, just confirming…": a doubled comma, addressing the person by their
+ * family name, in a message a human is about to send to another human.
+ *
+ * The trailing-punctuation strip is the belt to that suspenders: a name ending
+ * in a stray comma with nothing after it still greets cleanly.
+ */
 export function firstNameOf(name: string): string {
-	return parts(name)[0] ?? "";
+	const trimmed = name.trim();
+	const comma = trimmed.indexOf(",");
+	if (comma !== -1) {
+		const given = firstToken(trimmed.slice(comma + 1));
+		if (given) return given.replace(/[,;]+$/, "");
+	}
+	return firstToken(trimmed).replace(/[,;]+$/, "");
 }
 
 /**

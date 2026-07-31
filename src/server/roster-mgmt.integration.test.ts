@@ -112,6 +112,72 @@ describe.skipIf(!hasTestDb)("roster management", () => {
 		expect(m.preferredName).toBeNull();
 	});
 
+	it("clearing the goes-by name clears the Person copy too, so it stays cleared", async () => {
+		// Regression: the read is a coalesce onto people.preferred_name and NOTHING
+		// in the codebase ever set that column back to NULL, so clearing the field
+		// left the old name to be resurrected on the very next draft — forever, with
+		// no UI able to remove it. The form promises "leave blank to use their
+		// first name".
+		const { applyMemberEdit } = await import("#/server/members-logic");
+		const { loadHolderContacts } = await import(
+			"#/server/meeting-contacts-logic"
+		);
+		const [row] = await testDb
+			.select({ personId: members.personId })
+			.from(members)
+			.where(eq(members.id, seed.memberId));
+		const base = {
+			clubId: seed.clubId,
+			actorMemberId: seed.memberId,
+			memberId: seed.memberId,
+			name: "Jane Doe",
+			email: null,
+			phone: null,
+		};
+
+		await applyMemberEdit({ ...base, preferredName: "Janey" });
+		await applyMemberEdit({ ...base, preferredName: "" });
+
+		const [p] = await testDb
+			.select({ preferredName: people.preferredName })
+			.from(people)
+			.where(eq(people.id, row.personId));
+		expect(p.preferredName).toBeNull();
+		// The observable that actually matters: what the draft will greet them by.
+		const map = await loadHolderContacts(seed.clubId, [seed.memberId], []);
+		expect(map.get(`member:${seed.memberId}`)?.preferredName).toBeNull();
+	});
+
+	it("clearing does not wipe a goes-by name another club recorded", async () => {
+		// The clear is scoped to the value THIS membership seeded, so a different
+		// answer on the Person survives.
+		const { applyMemberEdit } = await import("#/server/members-logic");
+		const [row] = await testDb
+			.select({ personId: members.personId })
+			.from(members)
+			.where(eq(members.id, seed.memberId));
+		await testDb
+			.update(people)
+			.set({ preferredName: "Rasheed" })
+			.where(eq(people.id, row.personId));
+
+		await applyMemberEdit({
+			clubId: seed.clubId,
+			actorMemberId: seed.memberId,
+			memberId: seed.memberId,
+			name: "Abdul-Rasheed Bustamam",
+			preferredName: "",
+			email: null,
+			phone: null,
+		});
+
+		const [p] = await testDb
+			.select({ preferredName: people.preferredName })
+			.from(people)
+			.where(eq(people.id, row.personId));
+		expect(p.preferredName).toBe("Rasheed");
+	});
+
 	it("trims in the logic layer, not just the validator", async () => {
 		// `applyMemberEdit` is exported and called directly, bypassing the zod
 		// `.trim()`. A whitespace-only value must not be stored — and must not

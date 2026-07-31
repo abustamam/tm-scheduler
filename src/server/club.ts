@@ -140,7 +140,14 @@ export const getMemberProfile = createServerFn({ method: "GET" })
 				personId: members.personId,
 				name: members.name,
 				// What they're called, when it isn't the first token of `name` (#486).
-				preferredName: members.preferredName,
+				// Coalesced the same way the nudge draft reads it, so the edit form
+				// shows the name that will ACTUALLY be used. Binding to the raw
+				// membership column would render a blank field for a member whose
+				// value lives on their Person (the cross-club case) while every draft
+				// greeted them by it.
+				preferredName: sql<
+					string | null
+				>`coalesce(${members.preferredName}, ${people.preferredName})`,
 				email: members.email,
 				phone: members.phone,
 				// "Signed-in account?" is now a Person-level fact (ADR-0008 Phase B):

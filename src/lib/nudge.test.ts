@@ -34,6 +34,21 @@ describe("buildNudge", () => {
 		expect(r.message).not.toContain("Kogyani");
 	});
 
+	it("greets a `Last, First` name correctly, with no doubled comma", () => {
+		// Regression: the whitespace split returned "Khan," and the template adds
+		// its own comma, producing "Hi Khan,, just confirming…" — addressing the
+		// member by their family name, in a message a human is about to send.
+		const r = buildNudge({
+			...base,
+			name: "Khan, Mois",
+			email: "k@x.io",
+			mode: "confirm",
+		});
+		expect(r.message).toMatch(/^Hi Mois, just confirming/);
+		expect(r.message).not.toContain(",,");
+		expect(r.message).not.toContain("Khan");
+	});
+
 	it("greets by the recorded name when the first token is wrong", () => {
 		// The first token of the stored name is not what this person is called.
 		const r = buildNudge({
