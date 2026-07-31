@@ -1,9 +1,10 @@
 import { Link } from "@tanstack/react-router";
-import { ClipboardList, Presentation, Printer } from "lucide-react";
+import { ClipboardList, Presentation, Printer, Type } from "lucide-react";
 import type { AgendaLayout } from "#/components/agenda/meeting-agenda-print";
 import { PptxDownloadButton } from "#/components/club/pptx-download-button";
 import { Button } from "#/components/ui/button";
 import type { Slide } from "#/lib/agenda-slides";
+import { hasWordOfTheDay } from "#/lib/word-poster";
 
 /**
  * Print + Present launch buttons for a meeting. Both open the public,
@@ -14,6 +15,9 @@ import type { Slide } from "#/lib/agenda-slides";
  * When a built `deck` (+ club name) is supplied, a "Download .pptx" action
  * appears beside Present/Print (issue #147) — same ungated visibility. The deck
  * is the same `buildSlideDeck` output present mode renders.
+ *
+ * The "Word poster" action is the one gated affordance: it appears only when the
+ * meeting has a Word of the Day, because with no word there is nothing to print.
  */
 export function MeetingViewActions({
 	clubSlug,
@@ -21,12 +25,14 @@ export function MeetingViewActions({
 	printLayout = "grid",
 	deck,
 	clubName,
+	wordOfTheDay,
 }: {
 	clubSlug: string;
 	meetingId: string;
 	printLayout?: AgendaLayout;
 	deck?: Slide[];
 	clubName?: string;
+	wordOfTheDay?: string | null;
 }) {
 	return (
 		<>
@@ -65,6 +71,22 @@ export function MeetingViewActions({
 					Role sheet
 				</Link>
 			</Button>
+			{/* Word of the Day wall poster. Hidden when the meeting has no word —
+			    there would be nothing to print. Shares `hasWordOfTheDay` with the
+			    poster route so the two cannot disagree about whether there is one. */}
+			{hasWordOfTheDay(wordOfTheDay) ? (
+				<Button asChild variant="outline" size="sm">
+					<Link
+						to="/club/$clubId/meeting/$meetingId/word"
+						params={{ clubId: clubSlug, meetingId }}
+						target="_blank"
+						rel="noopener noreferrer"
+					>
+						<Type />
+						Word poster
+					</Link>
+				</Button>
+			) : null}
 			{deck && clubName ? (
 				<PptxDownloadButton deck={deck} clubName={clubName} />
 			) : null}
