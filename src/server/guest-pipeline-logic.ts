@@ -2,7 +2,17 @@
 // createServerFn wrappers in `guest-pipeline.ts` (a client-imported module the
 // guard test forbids from exporting db-touching functions). Integration-testable
 // by mocking `#/db`. See the header of `members-logic.ts` for the why.
-import { and, asc, count, eq, isNotNull, min, ne, sql } from "drizzle-orm";
+import {
+	and,
+	asc,
+	count,
+	eq,
+	isNotNull,
+	isNull,
+	min,
+	ne,
+	sql,
+} from "drizzle-orm";
 import { union } from "drizzle-orm/pg-core";
 import { db } from "#/db";
 import {
@@ -709,6 +719,15 @@ export async function applyConvertGuestToMember(
 				.returning({ id: people.id });
 			if (!p) throw new Error("Failed to create person.");
 			personId = p.id;
+		} else if (preferredName) {
+			// Deduped onto an EXISTING Person: the insert above never ran, so seed
+			// the goes-by name here too or it is lost at the person level (#486).
+			// Guarded on NULL, same as the membership-edit seed-up — whatever this
+			// human already recorded in another club wins over a guest-book entry.
+			await tx
+				.update(people)
+				.set({ preferredName })
+				.where(and(eq(people.id, personId), isNull(people.preferredName)));
 		}
 
 		// 2. Membership — reuse the person's existing one in this club, else create.

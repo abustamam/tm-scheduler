@@ -180,6 +180,66 @@ describe.skipIf(!hasTestDb)("roster management", () => {
 		expect(m.preferredName).toBe("Abdul");
 	});
 
+	it("records the previous goes-by name in the member_edit audit detail", async () => {
+		// The `before` block is what an officer reads to see what an edit changed
+		// — and this is the one field an edit can also push onto the shared
+		// `people` row, so "what was it before?" is the only record of the
+		// pre-edit state. Asserting the log ROW exists (as the test below does)
+		// passes with the field missing from `detail.before`.
+		const { applyMemberEdit } = await import("#/server/members-logic");
+		const base = {
+			clubId: seed.clubId,
+			actorMemberId: seed.memberId,
+			memberId: seed.memberId,
+			name: "Robert Smith",
+			email: null,
+			phone: null,
+		};
+		await applyMemberEdit({ ...base, preferredName: "Bob" });
+		await applyMemberEdit({ ...base, preferredName: "Rob" });
+
+		const [log] = await testDb
+			.select()
+			.from(activityLog)
+			.where(
+				and(
+					eq(activityLog.action, "member_edit"),
+					eq(activityLog.targetId, seed.memberId),
+				),
+			)
+			.orderBy(desc(activityLog.createdAt))
+			.limit(1);
+		const before = (log?.detail as { before?: { preferredName?: unknown } })
+			?.before;
+		expect(before?.preferredName).toBe("Bob");
+	});
+
+	it("editSchema caps the goes-by name so one club can't write junk onto the shared Person", async () => {
+		// This is the only field on the member edit form that seeds UP onto the
+		// cross-club `people` row, so an uncapped value is one club's admin
+		// writing unbounded text into a record other clubs read (#486). The cap
+		// lives in the validator, which `applyMemberEdit` never runs.
+		const { editSchema } = await import("#/server/members-logic");
+		const base = {
+			clubId: seed.clubId,
+			memberId: seed.memberId,
+			name: "Robert Smith",
+		};
+		expect(
+			editSchema.safeParse({ ...base, preferredName: "x".repeat(80) }).success,
+		).toBe(true);
+		expect(
+			editSchema.safeParse({ ...base, preferredName: "x".repeat(81) }).success,
+		).toBe(false);
+		// Trimmed BEFORE the cap, so trailing spaces can't spend the budget.
+		expect(
+			editSchema.safeParse({
+				...base,
+				preferredName: `  ${"x".repeat(80)}  `,
+			}).success,
+		).toBe(true);
+	});
+
 	it("editMember updates fields + reconciles offices + logs member_edit", async () => {
 		const { applyMemberEdit } = await import("#/server/members-logic");
 		const { currentOfficersFor } = await import("#/server/officer-terms-logic");
