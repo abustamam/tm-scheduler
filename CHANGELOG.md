@@ -2,6 +2,17 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.3.0.0] - 2026-07-31
+
+### Added
+
+- A **Word of the Day poster** you can print and tape to the wall. Open any meeting that has a word and hit **Word poster** — you get one letter-portrait page with the word in large type and its definition and example usage beneath, sized to be read from any seat in the room. Until now the word only appeared as a line in the agenda header, a slide in Present mode, or a note on a role sheet, so a club that doesn't project its agenda had no way to keep the word visible for the hour members are meant to be using it. The button only appears when the meeting actually has a word. Saving the page as a PDF names the file after the club and date, so it won't be mistaken for an agenda.
+- The poster fits on one page for any real word, in any capitalisation. Font sizes are derived from real browser measurements of the brand typeface across the full system dictionary — capitals run about a quarter wider than lowercase, so `EPHEMERAL` gets its own smaller scale than `Ephemeral`, and nothing breaks mid-word. `scripts/measure-word-poster.ts` re-derives and re-checks those sizes on demand, reading the fonts and page geometry from the app itself so it can't drift.
+
+### Fixed
+
+- A stale or mistyped meeting link now shows a proper "not found" page instead of a generic error. Meeting URLs are keyed by date, so an old link that has aged out is the normal way to hit this. Applies to the print, present, and Word of the Day pages, matching what the meeting page already did.
+
 ## [1.2.0.0] - 2026-07-31
 
 ### Added

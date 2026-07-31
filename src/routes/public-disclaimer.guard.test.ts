@@ -19,7 +19,20 @@ import { describe, expect, it } from "vitest";
 const ROUTES = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(ROUTES, "../..");
 const read = (rel: string) => readFileSync(resolve(ROOT, rel), "utf8");
-const readRoute = (file: string) => readFileSync(resolve(ROUTES, file), "utf8");
+
+/**
+ * Strip comments before matching. These assertions are source greps, so a route
+ * that merely MENTIONS `<PublicFooter />` in a comment explaining its footer
+ * satisfies them exactly as well as the element does — leaving the real footer
+ * deletable with this file still green. That is not hypothetical: it happened
+ * while adding the Word of the Day poster route, and a mutation check (delete
+ * the element, keep the comment) is what surfaced it. Stripping makes the guard
+ * immune structurally, rather than asking every future author to remember.
+ */
+const stripComments = (s: string) =>
+	s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+const readRoute = (file: string) =>
+	stripComments(readFileSync(resolve(ROUTES, file), "utf8"));
 
 /** The shared footer every public club surface should reach for. */
 const FOOTER_COMPONENT = "src/components/public-footer.tsx";
@@ -44,10 +57,30 @@ const RENDERS_DISCLAIMER_VIA: Record<
 		renders: "MeetingAgendaPrint",
 		disclaimerIn: "src/components/agenda/print-theme.tsx",
 	},
+	// NOT listed: club.$clubId_.meeting.$meetingId.word.tsx. It is hybrid — a
+	// poster branch that carries the disclaimer via <DarkFooter />, and a no-word
+	// fallback branch that renders <PublicFooter />. Mapping it here would check
+	// only the poster branch and stop pinning the fallback's footer, which is the
+	// one at risk of silent deletion; the default `else` below pins that instead.
+	// The poster branch is pinned by render assertions in
+	// components/agenda/word-of-the-day-poster.test.tsx.
 };
 
+/**
+ * Enrol by CONTENT, not by filename: a file is a route iff it exports a Route,
+ * which is the same rule the TanStack generator applies when it builds the
+ * route tree. The previous `!f.includes(".test.")` filter excluded the test
+ * files that sit beside these routes (a render test named after its route is
+ * not a surface and must not be required to render <PublicFooter />) — but as a
+ * substring test it would also have silently dropped a future public club route
+ * whose name happened to contain ".test.", removing it from this guard with
+ * nothing failing.
+ */
+const exportsRoute = (file: string) =>
+	/export const Route\b/.test(readFileSync(resolve(ROUTES, file), "utf8"));
+
 const clubRoutes = readdirSync(ROUTES)
-	.filter((f) => f.startsWith("club.") && f.endsWith(".tsx"))
+	.filter((f) => f.startsWith("club.") && f.endsWith(".tsx") && exportsRoute(f))
 	.sort();
 
 /** `club.$clubId_.*` escapes the layout; `club.$clubId.*` nests inside it. */

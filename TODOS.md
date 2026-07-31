@@ -16,6 +16,20 @@
 - Confirm the hand-off rows on a real MCF agenda after it deploys — that the four print layouts read right in the room and the projected deck's hand-off slides land where the cue is needed.
   **Priority:** P3
 
+- Print chrome is duplicated across three routes: `toolbarStyle` and `printBtnStyle` are near-identical in the agenda print route, the club role sheet, and the Word of the Day poster, and the `@media print` block is a near-copy in all three. That duplication is not cosmetic — it caused a real defect. The poster shipped without the `.pgwrap { padding: 0 !important }` reset the other two carry, emitting a blank second page on every print. `print-page-reset.guard.test.ts` now pins that rule by source grep across all print routes, so the specific bug cannot recur, but the duplication remains. Extracting a shared `PRINT_PAGE_CSS` and a `<PrintToolbar>` into `print-theme.tsx` would collapse three copies to one and let the guard assert against one constant.
+
+  **They are NOT interchangeable copies — an extraction must be the union, not whichever one you open first.** Three known divergences:
+  - The agenda print route's `toolbarStyle` alone carries `flexWrap: "wrap"` and `justifyContent: "flex-end"`. Load-bearing, with a comment saying so: that toolbar holds four layout tabs plus Share and Print, and anchored right with no width an unwrapped row grows leftward off the viewport on a phone, where a `position: fixed` toolbar cannot be scrolled back to. Extracting from the role sheet's or the poster's copy would silently reintroduce that.
+  - The poster's `printBtnStyle` uses the `LAGOON` token from `print-theme.tsx`; the other two hardcode `#328f97`. The token is the direction to keep.
+  - The `@media print` blocks differ in body too. All three reset `.pgwrap` padding, but the agenda route also zeroes `gap`, and the poster omits the `break-after: page` / `.agenda-page:last-child` pair the multi-sheet routes need — it prints exactly one sheet. A shared constant has to keep the pagination rules harmless for a one-sheet page. Diff all three before assuming one covers them.
+  **Priority:** P3
+
+- Print output is grep-verified, never page-count-verified. `print-page-reset.guard.test.ts` checks that the reset rule is present in the source; nothing checks that a rendered page is actually one page. The blank-second-page bug was found by extracting the CSS and counting pages in headless Chrome, which is the real check. Worth wiring once `PRINT_PAGE_CSS` is extracted — one extract-and-count assertion would then cover every print route.
+  **Priority:** P4
+
+- `scripts/measure-word-poster.ts` has no tests because `main()` runs at import, so nothing is reachable. It is the harness that derives the Word of the Day poster's font-size tables, and a wrong result there ships mid-word breaks on a wall poster. `scripts/import-agendas-logic.ts` is the repo's precedent for extracting a testable `*-logic.ts` alongside an entry-point script.
+  **Priority:** P4
+
 ## Completed
 
 <!-- Items move here with: **Completed:** vX.Y.Z.W (YYYY-MM-DD) -->
