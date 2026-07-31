@@ -2,6 +2,12 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.3.0.2] - 2026-07-31
+
+### Changed
+
+- Seed data can now express a meeting with **no** Word of the Day, and Harbor City Speakers gained three fixtures that reach the awkward shapes: no word, a long word, and an all-caps word. Nothing user-facing changes — this is so the poster, print layouts and projected deck can be checked in a browser without hand-editing the database, which is how the previous release had to be verified. `MeetingSpec.wordOfTheDay` became optional; the column was already nullable, so the insert needed no change. #492
+
 ## [1.3.0.1] - 2026-07-31
 
 ### Added
