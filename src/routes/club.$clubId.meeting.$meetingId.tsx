@@ -617,6 +617,7 @@ function MeetingView() {
 						meetingId={urlKey}
 						deck={deck}
 						clubName={clubName}
+						wordOfTheDay={meeting.wordOfTheDay}
 					/>
 					{/* Public prep material — role-sheet PDFs hold only public-agenda
 					    data, so every audience gets the download menu (#365). */}
