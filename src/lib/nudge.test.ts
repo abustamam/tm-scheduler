@@ -23,14 +23,114 @@ describe("buildNudge", () => {
 		);
 	});
 
+	it("greets by first name, not the full stored name (#486)", () => {
+		const r = buildNudge({
+			...base,
+			name: "Zabihullah Kogyani",
+			email: "z@x.io",
+			mode: "confirm",
+		});
+		expect(r.message).toMatch(/^Hi Zabihullah, just confirming/);
+		expect(r.message).not.toContain("Kogyani");
+	});
+
+	it("greets a `Last, First` name correctly, with no doubled comma", () => {
+		// Regression: the whitespace split returned "Khan," and the template adds
+		// its own comma, producing "Hi Khan,, just confirming…" — addressing the
+		// member by their family name, in a message a human is about to send.
+		const r = buildNudge({
+			...base,
+			name: "Khan, Mois",
+			email: "k@x.io",
+			mode: "confirm",
+		});
+		expect(r.message).toMatch(/^Hi Mois, just confirming/);
+		expect(r.message).not.toContain(",,");
+		expect(r.message).not.toContain("Khan");
+	});
+
+	it("greets by the recorded name when the first token is wrong", () => {
+		// The first token of the stored name is not what this person is called.
+		const r = buildNudge({
+			...base,
+			name: "Abdul-Rasheed Bustamam",
+			preferredName: "Rasheed",
+			email: "r@x.io",
+			mode: "recruit",
+		});
+		expect(r.message).toMatch(/^Hi Rasheed, would you be open/);
+		expect(r.message).not.toContain("Abdul-Rasheed");
+	});
+
+	it("carries the greeting into both channel payloads", () => {
+		const r = buildNudge({
+			...base,
+			name: "Abdul-Rasheed Bustamam",
+			preferredName: "Rasheed",
+			phone: "14155552671",
+			email: "r@x.io",
+			mode: "confirm",
+			platform: "desktop",
+		});
+		const waText = decodeURIComponent(
+			new URL(r.whatsappUrl ?? "").searchParams.get("text") ?? "",
+		);
+		expect(waText).toContain("Hi Rasheed,");
+		const mailBody = decodeURIComponent(r.mailtoUrl?.split("&body=")[1] ?? "");
+		expect(mailBody).toContain("Hi Rasheed,");
+	});
+
 	it("builds a wa.me link from a phone, stripping +, spaces, dashes", () => {
 		const r = buildNudge({
 			...base,
 			phone: "+1 (415) 555-2671",
 			mode: "confirm",
+			platform: "mobile",
 		});
 		expect(r.whatsappUrl).toBe(
 			`https://wa.me/14155552671?text=${encodeURIComponent(r.message)}`,
+		);
+	});
+
+	it("defaults to the mobile wa.me link when no platform is given", () => {
+		const r = buildNudge({ ...base, phone: "14155552671", mode: "confirm" });
+		expect(r.whatsappUrl).toBe(
+			`https://wa.me/14155552671?text=${encodeURIComponent(r.message)}`,
+		);
+	});
+
+	it("sends desktop straight to WhatsApp Web, not the wa.me interstitial", () => {
+		// `wa.me` on a desktop dead-ends on "open in app" (#485).
+		const r = buildNudge({
+			...base,
+			phone: "+1 (415) 555-2671",
+			mode: "confirm",
+			platform: "desktop",
+		});
+		expect(r.whatsappUrl).toBe(
+			`https://web.whatsapp.com/send/?phone=14155552671&text=${encodeURIComponent(
+				r.message,
+			)}&type=phone_number&app_absent=0`,
+		);
+		expect(r.whatsappUrl).not.toContain("wa.me");
+	});
+
+	it("carries the same digits and message on both platforms", () => {
+		const args = {
+			...base,
+			phone: "+1 (415) 555-2671",
+			mode: "confirm" as const,
+		};
+		const mobile = buildNudge({ ...args, platform: "mobile" });
+		const desktop = buildNudge({ ...args, platform: "desktop" });
+		expect(desktop.message).toBe(mobile.message);
+		const text = (u: string) =>
+			decodeURIComponent(new URL(u).searchParams.get("text") ?? "");
+		expect(text(desktop.whatsappUrl ?? "")).toBe(
+			text(mobile.whatsappUrl ?? ""),
+		);
+		expect(new URL(desktop.whatsappUrl ?? "").searchParams.get("phone")).toBe(
+			"14155552671",
 		);
 	});
 

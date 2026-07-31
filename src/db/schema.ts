@@ -288,6 +288,20 @@ export const people = pgTable(
 		// Nullable + unique-when-present (Postgres treats NULLs as distinct).
 		basecampUserId: text("basecamp_user_id").unique(),
 		name: text("name").notNull(),
+		// What this person is actually CALLED, when it isn't the first token of
+		// `name` (#486). The Toastmasters export carries one full-name string, so
+		// a member stored as "Abdul-Rasheed Bustamam" who goes by Rasheed — or as
+		// Robert but called Bob — cannot be greeted correctly by splitting. Null
+		// means nobody has told us; `greetingName` (#/lib/person-name) then falls
+		// back to the first token.
+		//
+		// The FALLBACK, not the source of truth: a membership's own value wins
+		// (see `members.preferred_name`). This row is what a second club reads
+		// when its membership has none, which is how the name follows the human
+		// across clubs (ADR-0008). Written only by seeding UP from a membership
+		// edit (guarded on NULL, so one club can't overwrite another's) and by
+		// merge/convert; read via COALESCE in `meeting-contacts-logic.ts`.
+		preferredName: text("preferred_name"),
 		email: text("email"),
 		phone: text("phone"),
 		// First-ever Toastmasters join date — a person-level fact (identical across
@@ -348,6 +362,13 @@ export const members = pgTable(
 			.notNull()
 			.references(() => people.id, { onDelete: "cascade" }),
 		name: text("name").notNull(),
+		// AUTHORITATIVE for this club (#486), denormalized like `name`/`email`/
+		// `phone`. Null does NOT mean "no name recorded" — the read falls back to
+		// `people.preferred_name` (COALESCE in `meeting-contacts-logic.ts`), which
+		// is what lets a member who set it in another club be greeted correctly
+		// here. Replication is one-way and one-shot: a membership edit seeds the
+		// Person when the Person has none. Nothing ever copies Person → membership.
+		preferredName: text("preferred_name"),
 		email: text("email"),
 		phone: text("phone"),
 		// Authorization role for this membership (ADR-0008 Phase B / #99). The auth
@@ -570,6 +591,9 @@ export const guests = pgTable(
 			.notNull()
 			.references(() => clubs.id, { onDelete: "cascade" }),
 		name: text("name").notNull(),
+		// A guest has no Person, so their "goes by" name lives here (#486). Guests
+		// hold role slots and get nudged like anyone else.
+		preferredName: text("preferred_name"),
 		// Optional contact — a guest may be assigned with just a name.
 		email: text("email"),
 		phone: text("phone"),

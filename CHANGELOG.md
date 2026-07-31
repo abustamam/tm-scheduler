@@ -2,6 +2,20 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.2.0.0] - 2026-07-31
+
+### Added
+
+- Members and guests now have a **"Goes by"** field, on the member page and the VP-Membership guest editor. Leave it blank and nudge drafts greet people by their first name; fill it in when that's wrong. The Toastmasters export gives us one name string, so "Abdul-Rasheed Bustamam" who goes by Rasheed, or a Robert everyone calls Bob, had no way to be addressed properly. It follows the person between clubs: record it once and every club you belong to greets you the same way, unless that club records its own answer. #486
+
+### Changed
+
+- Nudge drafts open with a first name instead of the full roster name. "Hi Zabihullah Kogyani, just confirming you're our Speaker" read like a mail merge, which undercut a message whose whole point is that a human wrote it. Rosters stored family-name-first ("Khan, Mois") are handled too — you'll be greeted "Hi Mois", not "Hi Khan,". #486
+
+### Fixed
+
+- Tapping WhatsApp on a laptop no longer dead-ends. The link went through `wa.me`, which is a phone redirector: on a desktop it lands on an "open in app" page you can't get past without the WhatsApp desktop client, so the pre-written message had to be retyped by hand. Desktops now go straight to WhatsApp Web with the draft filled in; phones still hand off to the app as before. #485
+
 ## [1.1.7.1] - 2026-07-30
 
 ### Fixed
