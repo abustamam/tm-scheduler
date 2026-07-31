@@ -112,6 +112,39 @@ describe.skipIf(!hasTestDb)("roster management", () => {
 		expect(m.preferredName).toBeNull();
 	});
 
+	it("trims in the logic layer, not just the validator", async () => {
+		// `applyMemberEdit` is exported and called directly, bypassing the zod
+		// `.trim()`. A whitespace-only value must not be stored — and must not
+		// seed onto people.preferred_name, where it would permanently defeat the
+		// isNull guard and block the real name from ever seeding up.
+		const { applyMemberEdit } = await import("#/server/members-logic");
+		const [row] = await testDb
+			.select({ personId: members.personId })
+			.from(members)
+			.where(eq(members.id, seed.memberId));
+
+		await applyMemberEdit({
+			clubId: seed.clubId,
+			actorMemberId: seed.memberId,
+			memberId: seed.memberId,
+			name: "Jane Doe",
+			preferredName: "   ",
+			email: null,
+			phone: null,
+		});
+
+		const [m] = await testDb
+			.select()
+			.from(members)
+			.where(eq(members.id, seed.memberId));
+		expect(m.preferredName).toBeNull();
+		const [p] = await testDb
+			.select({ preferredName: people.preferredName })
+			.from(people)
+			.where(eq(people.id, row.personId));
+		expect(p.preferredName).toBeNull();
+	});
+
 	it("editMember does not overwrite a goes-by name already on the Person", async () => {
 		// Guarded on NULL so a second club's admin cannot clobber what this
 		// person recorded elsewhere; the membership row still updates.

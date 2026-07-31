@@ -55,6 +55,28 @@ describe("detectPlatform", () => {
 		).toBe("mobile");
 	});
 
+	it("keeps the client-hint check on `mobile` being a boolean, not truthy", () => {
+		// `userAgentData` can exist without `mobile`. Relaxing the guard to
+		// `if (nav.userAgentData)` would return desktop for an iPhone here.
+		expect(
+			detectPlatform(nav({ userAgent: UA.iphoneSafari, userAgentData: {} })),
+		).toBe("mobile");
+		expect(
+			detectPlatform(nav({ userAgent: UA.linuxChrome, userAgentData: {} })),
+		).toBe("desktop");
+	});
+
+	it("pins the touch-point boundary at more-than-one", () => {
+		// A single touch point is not a tablet; the check is `> 1`, and this
+		// catches a slip to `> 0` / `>= 1`.
+		expect(
+			detectPlatform(nav({ userAgent: UA.macSafari, maxTouchPoints: 1 })),
+		).toBe("desktop");
+		expect(
+			detectPlatform(nav({ userAgent: UA.macSafari, maxTouchPoints: 2 })),
+		).toBe("mobile");
+	});
+
 	it("catches iPadOS masquerading as a Mac via touch points", () => {
 		// iPadOS 13+ requests desktop sites by default and reports a Macintosh UA;
 		// only maxTouchPoints separates it from a real Mac.

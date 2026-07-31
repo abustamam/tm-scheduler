@@ -49,6 +49,46 @@ describe("NudgeButtons", () => {
 		expect(mail.getAttribute("href")).toContain("mailto:j@x.io");
 	});
 
+	/** Guards the prop→draft wiring (#486). Without these, dropping
+	 *  `preferredName` from the `buildNudge` call leaves every other test green. */
+	function draftText(link: Element): string {
+		const href = link.getAttribute("href") ?? "";
+		const params = new URL(href.replace(/^mailto:/, "https://x/")).searchParams;
+		return decodeURIComponent(params.get("text") ?? params.get("body") ?? "");
+	}
+
+	it("greets by first name when no goes-by name is recorded", () => {
+		render(
+			<NudgeButtons
+				{...base}
+				name="Zabihullah Kogyani"
+				phone="14155552671"
+				email={null}
+			/>,
+		);
+		const draft = draftText(screen.getByRole("link", { name: /whatsapp/i }));
+		expect(draft).toContain("Hi Zabihullah,");
+		expect(draft).not.toContain("Kogyani");
+	});
+
+	it("greets by the recorded goes-by name on both channels", () => {
+		render(
+			<NudgeButtons
+				{...base}
+				name="Abdul-Rasheed Bustamam"
+				preferredName="Rasheed"
+				phone="14155552671"
+				email="r@x.io"
+			/>,
+		);
+		expect(
+			draftText(screen.getByRole("link", { name: /whatsapp/i })),
+		).toContain("Hi Rasheed,");
+		expect(draftText(screen.getByRole("link", { name: /email/i }))).toContain(
+			"Hi Rasheed,",
+		);
+	});
+
 	it("shows only the present channel, not a disabled placeholder", () => {
 		render(<NudgeButtons {...base} phone={null} email="j@x.io" />);
 		expect(screen.queryByRole("link", { name: /whatsapp/i })).toBeNull();

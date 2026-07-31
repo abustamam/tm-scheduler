@@ -96,6 +96,10 @@ export interface MeetingAgendaProps {
 		// `viewer.canManage` (#37).
 		phone?: string | null;
 		email?: string | null;
+		// Declared so the recruit draft's greeting is a typed contract rather than
+		// a field that happens to survive on the object (#486). The public route
+		// omits it and `greetingName` falls back to the first token.
+		preferredName?: string | null;
 	}[];
 	roleRecency: RoleRecency;
 	unavailableMemberIds: string[];

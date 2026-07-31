@@ -680,6 +680,36 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			expect(g).toMatchObject({ email: null, phone: null });
 		});
 
+		it("stores a goes-by name, and stores a blank one as NULL (#486)", async () => {
+			// Guests get nudged like anyone else, so the draft greeting needs the
+			// same "goes by" escape hatch. Blank must land as NULL, not "" —
+			// `greetingName` has to see "nobody told us" and fall back.
+			const guestId = await seedGuest(seed.clubId, "Robert Smith");
+			await applyUpdateGuest({
+				clubId: seed.clubId,
+				guestId,
+				name: "Robert Smith",
+				preferredName: "  Bob  ",
+			});
+			const [set] = await testDb
+				.select({ preferredName: guests.preferredName })
+				.from(guests)
+				.where(eq(guests.id, guestId));
+			expect(set?.preferredName).toBe("Bob");
+
+			await applyUpdateGuest({
+				clubId: seed.clubId,
+				guestId,
+				name: "Robert Smith",
+				preferredName: "   ",
+			});
+			const [cleared] = await testDb
+				.select({ preferredName: guests.preferredName })
+				.from(guests)
+				.where(eq(guests.id, guestId));
+			expect(cleared?.preferredName).toBeNull();
+		});
+
 		it("rejects an empty name, and a guest outside the caller's club", async () => {
 			const guestId = await seedGuest(seed.clubId, "Real Guest");
 			await expect(
@@ -992,6 +1022,36 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 	});
 
 	describe("convert to member", () => {
+		it("carries a goes-by name onto both the Person and the Membership (#486)", async () => {
+			// Recorded while they were a guest, but true of the human — it has to
+			// survive the promotion. Assert BOTH inserts: a single-table assertion
+			// passes while the other one silently drops it.
+			const guestId = await seedGuest(seed.clubId, "Robert Smith");
+			await applyUpdateGuest({
+				clubId: seed.clubId,
+				guestId,
+				name: "Robert Smith",
+				preferredName: "Bob",
+			});
+
+			const res = await applyConvertGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+
+			const [p] = await testDb
+				.select({ preferredName: people.preferredName })
+				.from(people)
+				.where(eq(people.id, res.personId));
+			expect(p?.preferredName).toBe("Bob");
+			const [m] = await testDb
+				.select({ preferredName: members.preferredName })
+				.from(members)
+				.where(eq(members.id, res.membershipId));
+			expect(m?.preferredName).toBe("Bob");
+		});
+
 		it("creates a membership, re-points slots, joins the guest, and logs it", async () => {
 			// A guest holding a role slot.
 			const { guestId } = await captureGuestVisit({

@@ -293,8 +293,14 @@ export const people = pgTable(
 		// a member stored as "Abdul-Rasheed Bustamam" who goes by Rasheed — or as
 		// Robert but called Bob — cannot be greeted correctly by splitting. Null
 		// means nobody has told us; `greetingName` (#/lib/person-name) then falls
-		// back to the first token. A person-level fact: it travels with them into
-		// every club (ADR-0008).
+		// back to the first token.
+		//
+		// The FALLBACK, not the source of truth: a membership's own value wins
+		// (see `members.preferred_name`). This row is what a second club reads
+		// when its membership has none, which is how the name follows the human
+		// across clubs (ADR-0008). Written only by seeding UP from a membership
+		// edit (guarded on NULL, so one club can't overwrite another's) and by
+		// merge/convert; read via COALESCE in `meeting-contacts-logic.ts`.
 		preferredName: text("preferred_name"),
 		email: text("email"),
 		phone: text("phone"),
@@ -356,9 +362,12 @@ export const members = pgTable(
 			.notNull()
 			.references(() => people.id, { onDelete: "cascade" }),
 		name: text("name").notNull(),
-		// Mirrors `people.preferred_name` (#486), the same way `name`/`email`/
-		// `phone` are already denormalized onto the membership. The nudge path
-		// reads the membership, not the Person.
+		// AUTHORITATIVE for this club (#486), denormalized like `name`/`email`/
+		// `phone`. Null does NOT mean "no name recorded" — the read falls back to
+		// `people.preferred_name` (COALESCE in `meeting-contacts-logic.ts`), which
+		// is what lets a member who set it in another club be greeted correctly
+		// here. Replication is one-way and one-shot: a membership edit seeds the
+		// Person when the Person has none. Nothing ever copies Person → membership.
 		preferredName: text("preferred_name"),
 		email: text("email"),
 		phone: text("phone"),

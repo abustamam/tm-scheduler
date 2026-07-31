@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-	firstNameOf,
-	greetingName,
-	lastNameOf,
-	sortKeyOf,
-} from "./person-name";
+import { firstNameOf, greetingName } from "./person-name";
 
 describe("firstNameOf", () => {
 	it("takes the first token", () => {
@@ -24,18 +19,6 @@ describe("firstNameOf", () => {
 	it("returns empty for a blank name rather than throwing", () => {
 		expect(firstNameOf("")).toBe("");
 		expect(firstNameOf("   ")).toBe("");
-	});
-});
-
-describe("lastNameOf", () => {
-	it("takes the last token", () => {
-		expect(lastNameOf("Zabihullah Kogyani")).toBe("Kogyani");
-		expect(lastNameOf("Mary Jane Watson")).toBe("Watson");
-	});
-
-	it("returns empty for a mononym, not a copy of the first name", () => {
-		expect(lastNameOf("Prince")).toBe("");
-		expect(lastNameOf("")).toBe("");
 	});
 });
 
@@ -78,34 +61,5 @@ describe("greetingName", () => {
 
 	it("keeps a mononym intact", () => {
 		expect(greetingName({ name: "Prince" })).toBe("Prince");
-	});
-});
-
-describe("sortKeyOf", () => {
-	it("files under the family name", () => {
-		expect(sortKeyOf({ name: "Zabihullah Kogyani" })).toBe(
-			"kogyani zabihullah",
-		);
-		expect(sortKeyOf({ name: "Mary Jane Watson" })).toBe("watson mary");
-	});
-
-	it("sorts a mononym by its only token", () => {
-		expect(sortKeyOf({ name: "Prince" })).toBe("prince");
-	});
-
-	it("orders a roster by family name, not given name", () => {
-		const roster = [
-			{ name: "Zabihullah Kogyani" },
-			{ name: "Abdul-Rasheed Bustamam" },
-			{ name: "Jane Adams" },
-		];
-		const sorted = [...roster].sort((a, b) =>
-			sortKeyOf(a).localeCompare(sortKeyOf(b)),
-		);
-		expect(sorted.map((m) => m.name)).toEqual([
-			"Jane Adams",
-			"Abdul-Rasheed Bustamam",
-			"Zabihullah Kogyani",
-		]);
 	});
 });

@@ -144,7 +144,12 @@ export const editSchema = z.object({
 	// What this member is actually called, when it isn't the first token of
 	// `name` (#486). Trimmed-empty is stored as NULL, not "" — a cleared input
 	// submits "" and `greetingName` must see "nobody told us", not a blank.
-	preferredName: z.string().trim().nullable().optional(),
+	// OMITTING it clears it, same as `email`/`phone` above and UNLIKE
+	// `officerPositions` below (whose `undefined` means "leave untouched").
+	// Capped because this value is the one field here that seeds UP onto the
+	// cross-club `people` row, so one club's admin writes it into a record other
+	// clubs share. Matches the public self-add cap in `members.ts`.
+	preferredName: z.string().trim().max(80).nullable().optional(),
 	email: z.string().trim().email().nullable().optional(),
 	phone: z.string().trim().nullable().optional(),
 	// The full set of offices this membership should currently hold (#100). The
@@ -170,7 +175,12 @@ export async function applyMemberEdit(input: EditInput) {
 	const cc = await loadClubDefaultCountryCode(input.clubId);
 	const next = {
 		name: input.name,
-		preferredName: input.preferredName || null,
+		// Trim HERE, not only in the zod schema: `applyMemberEdit` is exported and
+		// called directly (tests, and any future server-side caller) with the
+		// validator bypassed. A whitespace-only value would otherwise store "   "
+		// AND seed "   " onto people.preferred_name, permanently defeating the
+		// isNull guard below so the real name could never seed up.
+		preferredName: input.preferredName?.trim() || null,
 		email: input.email ?? null,
 		phone: toStoredPhone(input.phone, cc),
 	};

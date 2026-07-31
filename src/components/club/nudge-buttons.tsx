@@ -42,9 +42,10 @@ export function NudgeButtons({
 	const [mounted, setMounted] = useState(false);
 	useEffect(() => setMounted(true), []);
 
-	// Safe to read `navigator` unconditionally: the links are not rendered until
-	// `mounted`, so this value is only ever USED on the client. Computing it
-	// before that gate keeps the hook order stable (#485).
+	// `navigator` does not exist during SSR, so the detection is deferred to the
+	// post-mount render; the server pass falls back to "mobile", the historical
+	// `wa.me` behavior (#485). The `mounted` guard is load-bearing — reading
+	// `navigator` unconditionally here would throw on the server.
 	const platform = mounted ? detectPlatform(navigator) : "mobile";
 
 	const nudge = buildNudge({

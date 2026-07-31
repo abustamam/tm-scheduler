@@ -83,6 +83,7 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 		status?: "active" | "inactive";
 		email?: string | null;
 		joinedAt?: Date | null;
+		preferredName?: string | null;
 	}): Promise<string> {
 		const personId = await seedPerson({ name: opts.name });
 		extraPersonIds.push(personId);
@@ -96,6 +97,7 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 				status: opts.status ?? "active",
 				email: opts.email ?? null,
 				joinedAt: opts.joinedAt ?? null,
+				preferredName: opts.preferredName ?? null,
 			})
 			.returning({ id: members.id });
 		if (!m) throw new Error("Failed to insert membership");
@@ -194,6 +196,41 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 		expect(keeper?.status).toBe("active"); // active if either is active
 		expect(keeper?.email).toBe("absorbed@example.com"); // null filled from absorbed
 		expect(keeper?.joinedAt?.getTime()).toBe(older.getTime()); // earliest known
+	});
+
+	it("fills a null goes-by name from the absorbed, but never overwrites one", async () => {
+		// A collapse is irreversible and a recorded goes-by name is scarce — a
+		// human had to type it — so it must survive when the keeper lacks one
+		// and must not be clobbered when the keeper has one (#486).
+		const keeperId = await addMembership({
+			name: "Abdul-Rasheed Bustamam",
+			preferredName: null,
+		});
+		const absorbedId = await addMembership({
+			name: "Abdul-Rasheed Bustamam",
+			preferredName: "Rasheed",
+		});
+		await collapse(keeperId, absorbedId);
+		const [filled] = await testDb
+			.select()
+			.from(members)
+			.where(eq(members.id, keeperId));
+		expect(filled?.preferredName).toBe("Rasheed");
+
+		const ownerId = await addMembership({
+			name: "Robert Smith",
+			preferredName: "Bob",
+		});
+		const otherId = await addMembership({
+			name: "Robert Smith",
+			preferredName: "Rob",
+		});
+		await collapse(ownerId, otherId);
+		const [kept] = await testDb
+			.select()
+			.from(members)
+			.where(eq(members.id, ownerId));
+		expect(kept?.preferredName).toBe("Bob");
 	});
 
 	it("survives a same-meeting availability + same-period dues collision", async () => {

@@ -25,15 +25,6 @@ export function firstNameOf(name: string): string {
 }
 
 /**
- * The last token of a full name. `""` for a mononym or a blank name — callers
- * get "no family name recorded" rather than a duplicate of the first name.
- */
-export function lastNameOf(name: string): string {
-	const p = parts(name);
-	return p.length > 1 ? (p[p.length - 1] ?? "") : "";
-}
-
-/**
  * What to call this person in a message. The recorded `preferredName` wins;
  * otherwise the first token of their full name.
  *
@@ -43,20 +34,4 @@ export function lastNameOf(name: string): string {
  */
 export function greetingName(p: NamedPerson): string {
 	return p.preferredName?.trim() || firstNameOf(p.name);
-}
-
-/**
- * Sort key for roster-style ordering: family name first, then given name, so
- * "Zabihullah Kogyani" files under K. Lowercased for case-insensitive
- * comparison. A mononym sorts by its only token.
- *
- * Derived rather than stored — nothing has to be migrated if a surface adopts
- * it later. Note this is a heuristic on a single stored string, so it files a
- * family-name-first name under the wrong letter; that is the same tradeoff the
- * roster makes today by sorting on the raw `name`.
- */
-export function sortKeyOf(p: { name: string }): string {
-	const last = lastNameOf(p.name);
-	const first = firstNameOf(p.name);
-	return (last ? `${last} ${first}` : first).toLowerCase();
 }
