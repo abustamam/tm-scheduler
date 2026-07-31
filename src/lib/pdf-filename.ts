@@ -8,6 +8,9 @@
  * - Club name is slugified: case preserved, runs of non-alphanumerics collapse
  *   to a single "-", leading/trailing "-" trimmed. Empty/punctuation-only ⇒
  *   "agenda".
+ * - `segment` names the artifact between the club slug and the date (defaults to
+ *   "meeting" for agendas). Pass "word-of-the-day" for the Word of the Day poster
+ *   so its saved file is not mistaken for an agenda.
  * - Date is the meeting's calendar day in the club's timezone, ISO "YYYY-MM-DD"
  *   (sortable and locale-independent).
  */
@@ -15,8 +18,9 @@ export function meetingPdfBasename(
 	clubName: string,
 	scheduledAt: Date | string,
 	timeZone?: string,
+	segment = "meeting",
 ): string {
-	return `${slugifyClubName(clubName)}-meeting-${isoDateInTimeZone(scheduledAt, timeZone)}`;
+	return `${slugifyClubName(clubName)}-${segment}-${isoDateInTimeZone(scheduledAt, timeZone)}`;
 }
 
 /** Collapse anything that isn't a letter or number (any script) to a single "-". */

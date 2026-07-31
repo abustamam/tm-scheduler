@@ -51,4 +51,25 @@ describe("meetingPdfBasename", () => {
 			"agenda-meeting-2026-07-22",
 		);
 	});
+
+	it("defaults to the meeting segment", () => {
+		expect(
+			meetingPdfBasename(
+				"Downtown Toastmasters",
+				"2026-07-31T18:45:00Z",
+				"UTC",
+			),
+		).toBe("Downtown-Toastmasters-meeting-2026-07-31");
+	});
+
+	it("accepts a custom segment for other printables", () => {
+		expect(
+			meetingPdfBasename(
+				"Downtown Toastmasters",
+				"2026-07-31T18:45:00Z",
+				"UTC",
+				"word-of-the-day",
+			),
+		).toBe("Downtown-Toastmasters-word-of-the-day-2026-07-31");
+	});
 });
