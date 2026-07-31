@@ -71,7 +71,8 @@ your own account email).
 | --- | --- |
 | `bun run dev` | Dev server on port 3000 |
 | `bun run build` | Production build (self-contained Node server via Nitro) |
-| `bun run check` | Biome lint + format (also `lint` / `format` individually) |
+| `bun run check` | Biome lint + format gate — **reports only**, as do `lint` / `format` |
+| `bun run fix` | Applies what the gate can fix automatically (`biome check --write`) |
 | `bun run test` | Vitest |
 | `bun run typecheck` | `tsc --noEmit` — the only thing that type-checks |
 | `bun run db:generate` / `db:migrate` | Generate / apply SQL migrations |
