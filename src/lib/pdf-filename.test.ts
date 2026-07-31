@@ -39,17 +39,30 @@ describe("meetingPdfBasename", () => {
 		).toBe("Club-meeting-2026-01-05");
 	});
 
-	it("falls back to 'agenda' for empty or punctuation-only names", () => {
+	it("falls back to 'club' for empty or punctuation-only names", () => {
 		const iso = "2026-07-22T12:00:00Z";
-		expect(meetingPdfBasename("", iso, "UTC")).toBe(
-			"agenda-meeting-2026-07-22",
-		);
+		expect(meetingPdfBasename("", iso, "UTC")).toBe("club-meeting-2026-07-22");
 		expect(meetingPdfBasename("   ", iso, "UTC")).toBe(
-			"agenda-meeting-2026-07-22",
+			"club-meeting-2026-07-22",
 		);
 		expect(meetingPdfBasename("!!!", iso, "UTC")).toBe(
-			"agenda-meeting-2026-07-22",
+			"club-meeting-2026-07-22",
 		);
+	});
+
+	// The fallback names the CLUB slot, so it must not name an artifact: an
+	// "agenda" fallback made a nameless club's poster save as
+	// "agenda-word-of-the-day-…", which is the confusion the artifact segment
+	// exists to prevent.
+	it("keeps a nameless club's poster from reading as an agenda", () => {
+		const name = meetingPdfBasename(
+			"!!!",
+			"2026-07-22T12:00:00Z",
+			"UTC",
+			"word-of-the-day",
+		);
+		expect(name).toBe("club-word-of-the-day-2026-07-22");
+		expect(name).not.toContain("agenda");
 	});
 
 	it("names the artifact segment, defaulting to 'meeting'", () => {

@@ -266,10 +266,16 @@ function main(): void {
 	const chrome = findChrome();
 	const words = loadWords();
 	// Current tables, read through the real function so they cannot drift.
-	const normal = RANGES.map(([, hi]) => posterWordSize("a".repeat(Math.min(hi, 22))));
-	const allCaps = RANGES.map(([, hi]) =>
-		posterWordSize("A".repeat(Math.min(hi, 22))),
-	);
+	//
+	// Probed at each range's LOW end, which is in-range BY CONSTRUCTION for every
+	// range including the open-ended last one. The high end needed a `Math.min(hi,
+	// 22)` cap to keep the final range's 99 from probing the floor — a literal
+	// that silently assumed the last boundary stays ≤21, in the one file whose
+	// contract is that nothing defining the measurement is copied. Move a boundary
+	// past 21 and that cap swept the final range at the wrong size, never measured
+	// the floor at all, and still reported PASS.
+	const normal = RANGES.map(([lo]) => posterWordSize("a".repeat(lo)));
+	const allCaps = RANGES.map(([lo]) => posterWordSize("A".repeat(lo)));
 
 	console.log(`chrome:     ${chrome}`);
 	console.log(`dictionary: ${WORDS_FILE} (${words.length} lowercase words)`);

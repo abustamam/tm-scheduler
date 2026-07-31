@@ -13,8 +13,10 @@
 // the Day slide: this hangs for the whole meeting, where attribution reads as
 // clutter and goes stale if the role is reassigned after printing.
 import {
+	CONTENT_W,
 	POSTER_FONT_WEIGHT,
 	POSTER_PAD_X,
+	posterBodySize,
 	posterWordSize,
 } from "#/lib/word-poster";
 import { DarkFooter, FitPage, Kick, MUTED, SANS, SERIF } from "./print-theme";
@@ -65,6 +67,12 @@ export function WordOfTheDayPoster({
 						lineHeight: 1.05,
 						margin: "40px 0",
 						// Backstop for a word longer than the smallest bucket expects.
+						// `hyphens` first, so a fired backstop breaks at a real
+						// hyphenation point ("obstreperous-ness") rather than mid-syllable
+						// ("OBSTREPEROUSN / ESS"), which reads as a typo on a wall.
+						// <html lang="en"> (__root.tsx) is what gives the browser a
+						// language to hyphenate in.
+						hyphens: "auto",
 						overflowWrap: "anywhere",
 						maxWidth: "100%",
 					}}
@@ -77,14 +85,17 @@ export function WordOfTheDayPoster({
 						data-testid="wod-definition"
 						style={{
 							fontFamily: SANS,
-							fontSize: 30,
+							// A third of the word's size, clamped — so the word keeps the
+							// same dominance whether it is "Apt" or a 22-letter mouthful.
+							fontSize: posterBodySize(w),
 							lineHeight: 1.4,
 							fontWeight: 500,
 							margin: 0,
-							// 23em = 690px at 30px, just inside the 704px content box, so
-							// the definition is measurably narrower than full width rather
-							// than filling it. 26em (780px) never bound and did nothing.
-							maxWidth: "23em",
+							// 23em is the measure (~65 characters) this is set to; the cap
+							// is what keeps that intent from exceeding the content box now
+							// that the size varies — 23em is 690px at 30px but 736px at the
+							// 32px ceiling, wider than the 704px box.
+							maxWidth: `min(23em, ${CONTENT_W}px)`,
 						}}
 					>
 						{def}
@@ -96,13 +107,16 @@ export function WordOfTheDayPoster({
 						data-testid="wod-example"
 						style={{
 							fontFamily: SANS,
-							fontSize: 23,
+							// Same size as the definition, as in Present mode: the example
+							// is set apart by italics, the muted colour and the quotes, not
+							// by being smaller.
+							fontSize: posterBodySize(w),
 							lineHeight: 1.5,
 							fontStyle: "italic",
 							color: MUTED,
 							margin: def ? "34px 0 0" : 0,
-							// 26em = 598px at 23px, which genuinely binds inside the box.
-							maxWidth: "26em",
+							// Same measure and the same cap as the definition above.
+							maxWidth: `min(23em, ${CONTENT_W}px)`,
 						}}
 					>
 						{`“${ex}”`}

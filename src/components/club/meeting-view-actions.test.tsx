@@ -15,7 +15,7 @@ afterEach(cleanup);
  * MeetingViewActions renders <Link>s, so mount it under a minimal router —
  * mirrors the pattern in onboarding-checklist.test.tsx / guest-resources.test.tsx.
  */
-async function renderActions(props: { wordOfTheDay?: string | null } = {}) {
+async function renderActions(props: { wordOfTheDay: string | null }) {
 	const rootRoute = createRootRoute({
 		component: () => (
 			<MeetingViewActions
@@ -54,9 +54,12 @@ describe("MeetingViewActions", () => {
 	// The whitespace row is the one that earns its keep: it is the only case that
 	// fails if someone swaps `hasWordOfTheDay` for a bare `Boolean(...)`, which
 	// would show a button leading to a poster with nothing on it.
-	it.each([
+	//
+	// No `undefined` row: `wordOfTheDay` is a REQUIRED `string | null` prop, so
+	// the compiler rules that input out at the one call site. `hasWordOfTheDay`
+	// still handles it, and word-poster.test.ts covers that directly.
+	it.each<[string, string | null]>([
 		["null", null],
-		["undefined", undefined],
 		["an empty string", ""],
 		["whitespace only", "   "],
 	])("hides the Word poster button for %s", async (_label, word) => {

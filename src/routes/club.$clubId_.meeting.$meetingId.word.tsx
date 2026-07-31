@@ -7,6 +7,13 @@
 // public agenda already shows. The `$clubId_` escape renders it standalone,
 // outside the club shell.
 //
+// The URL segment is deliberately the short `/word`, not `/word-of-the-day`:
+// it is shorter to share and to say aloud in a meeting ("slash word"), and it
+// matches the single-word `/print` and `/present` siblings. The `PdfArtifact`
+// key below spells out `word-of-the-day` because that one is read off a saved
+// file long after the fact, where the extra length is what disambiguates it
+// from an agenda. The mismatch is intentional, not an oversight.
+//
 // Offline works for free: `isOfflineRoute` in public/sw.js matches
 // /^\/club\/[^/]+\/meeting\//, which this path already satisfies.
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
@@ -14,6 +21,7 @@ import { LAGOON, SANS } from "#/components/agenda/print-theme";
 import { WordOfTheDayPoster } from "#/components/agenda/word-of-the-day-poster";
 import { PublicFooter } from "#/components/public-footer";
 import { resolveClubOrRedirect } from "#/lib/club-route";
+import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import { meetingPdfBasename } from "#/lib/pdf-filename";
 import { hasWordOfTheDay } from "#/lib/word-poster";
 import { getPublicMeetingByKey } from "#/server/meetings";
@@ -21,8 +29,15 @@ import { getPublicMeetingByKey } from "#/server/meetings";
 export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/word")({
 	loader: async ({ params, location }) => {
 		const club = await resolveClubOrRedirect(params.clubId, location);
+		// An unknown meeting key is a 404, not a 500: `getPublicMeetingByKey`
+		// signals it by throwing, and without this the visitor gets the error
+		// boundary instead of the router's not-found page. Same translation the
+		// canonical meeting route does.
 		const data = await getPublicMeetingByKey({
 			data: { clubId: club.id, key: params.meetingId },
+		}).catch((err) => {
+			if (isMeetingNotFoundError(err)) throw notFound();
+			throw err;
 		});
 		if (data.meeting.clubId !== club.id) throw notFound();
 		return data;
@@ -67,6 +82,25 @@ function WordPoster() {
 	if (!hasWordOfTheDay(word)) {
 		return (
 			<>
+				{/* The back link is the one control that gets a stranded visitor off a
+				    dead-end page, so it has to answer the pointer. It cannot do that
+				    from an inline style — `:hover` has no inline form, and an inline
+				    colour outranks the stylesheet — and it cannot do it from a Tailwind
+				    utility either: styles.css's bare `a` rule is UNLAYERED, so it beats
+				    any layered utility. Hence an unlayered rule of the same specificity,
+				    later in the document, which wins on source order.
+
+				    Resting stays `--lagoon-ink` (measured 5.49:1 light / 12.75:1 dark);
+				    hover goes to `--sea-ink`, which is a visible move in BOTH themes —
+				    `--lagoon-ink` and `--lagoon-deep` are the same value in dark mode,
+				    so the global rule's own hover would have been a no-op there. */}
+				<style>{`
+					a.wod-back { color: var(--lagoon-ink); }
+					a.wod-back:hover {
+						color: var(--sea-ink);
+						text-decoration-color: currentColor;
+					}
+				`}</style>
 				<div style={emptyWrapStyle}>
 					{/* The only content on the page, so it is the page's heading. */}
 					<h1 style={{ fontSize: 17, fontWeight: 600, margin: 0 }}>
@@ -75,11 +109,8 @@ function WordPoster() {
 					<Link
 						to="/club/$clubId/meeting/$meetingId"
 						params={{ clubId: clubIdParam, meetingId }}
-						style={{
-							color: "var(--lagoon-ink)",
-							fontWeight: 700,
-							fontSize: 14,
-						}}
+						className="wod-back"
+						style={{ fontWeight: 700, fontSize: 14 }}
 					>
 						← Back to the meeting
 					</Link>
@@ -140,8 +171,9 @@ function WordPoster() {
 	);
 }
 
-// The no-word branch is a SCREEN surface, not a sheet: it renders no <style>
-// block, so it keeps the app's background and must use the app's theme tokens.
+// The no-word branch is a SCREEN surface, not a sheet: its <style> block only
+// carries the back link's hover state, so it keeps the app's background and
+// must use the app's theme tokens throughout — no print-page CSS here.
 // The print palette's INK is a fixed near-black meant for white paper — on the
 // dark-mode background it lands at 1.52:1 and is effectively invisible, while
 // the public footer right below it (which does use tokens) stays readable.

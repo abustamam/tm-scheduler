@@ -2,7 +2,13 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
-import { CONTENT_W, POSTER_PAD_X, posterWordSize } from "#/lib/word-poster";
+import {
+	CONTENT_W,
+	POSTER_FONT_WEIGHT,
+	POSTER_PAD_X,
+	posterBodySize,
+	posterWordSize,
+} from "#/lib/word-poster";
 import { PAGE_W } from "./print-theme";
 import { WordOfTheDayPoster } from "./word-of-the-day-poster";
 
@@ -82,6 +88,62 @@ describe("WordOfTheDayPoster", () => {
 	// what the tables assume and reintroduce mid-word breaks.
 	it("keeps the measured content width equal to the real page geometry", () => {
 		expect(PAGE_W - 2 * POSTER_PAD_X).toBe(CONTENT_W);
+	});
+
+	// ...and the identity above is worth nothing on its own: it relates three
+	// constants while saying nothing about what the poster RENDERS. Padding of
+	// `POSTER_PAD_X + 24` narrows the real box to 656px — under the 685px target
+	// the tables were derived against — with every other test in this file still
+	// green. These two pin the geometry to the constants it was measured with.
+	it("pads the content box by exactly POSTER_PAD_X on both sides", () => {
+		render(<WordOfTheDayPoster {...base} />);
+		const box = screen.getByText("Ephemeral").parentElement;
+		expect(box?.style.paddingLeft).toBe(`${POSTER_PAD_X}px`);
+		expect(box?.style.paddingRight).toBe(`${POSTER_PAD_X}px`);
+	});
+
+	it("sets the word at the weight the sizes were derived at", () => {
+		render(<WordOfTheDayPoster {...base} />);
+		expect(screen.getByText("Ephemeral").style.fontWeight).toBe(
+			String(POSTER_FONT_WEIGHT),
+		);
+	});
+
+	// The body copy is sized FROM the word, so the word keeps the same dominance
+	// at every length. A fixed body size made "Apt" 5.8x the definition and a
+	// 22-letter word only 1.5x. Definition and example share the size; the
+	// example is set apart by italics, colour and quotes.
+	it("sizes the definition and example from the word", () => {
+		const { unmount } = render(<WordOfTheDayPoster {...base} word="Apt" />);
+		expect(screen.getByTestId("wod-definition").style.fontSize).toBe(
+			`${posterBodySize("Apt")}px`,
+		);
+		expect(screen.getByTestId("wod-example").style.fontSize).toBe(
+			`${posterBodySize("Apt")}px`,
+		);
+		unmount();
+
+		const long = "Electroencephalographs";
+		render(<WordOfTheDayPoster {...base} word={long} />);
+		expect(screen.getByTestId("wod-definition").style.fontSize).toBe(
+			`${posterBodySize(long)}px`,
+		);
+		expect(screen.getByTestId("wod-example").style.fontSize).toBe(
+			`${posterBodySize(long)}px`,
+		);
+		// The two words must really resolve to different body sizes, or the
+		// assertions above would hold for a hardcoded size too.
+		expect(posterBodySize("Apt")).not.toBe(posterBodySize(long));
+	});
+
+	// 23em is the measure, but at the 32px body ceiling that is 736px — wider
+	// than the 704px content box. The cap is what keeps the intent from
+	// overflowing now that the size varies.
+	it("caps the body measure at the content width", () => {
+		render(<WordOfTheDayPoster {...base} word="Apt" />);
+		const expected = `min(23em, ${CONTENT_W}px)`;
+		expect(screen.getByTestId("wod-definition").style.maxWidth).toBe(expected);
+		expect(screen.getByTestId("wod-example").style.maxWidth).toBe(expected);
 	});
 
 	it("omits the definition block when there is no definition", () => {

@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
 	BUCKET_BOUNDARIES,
+	CONTENT_W,
 	hasWordOfTheDay,
+	posterBodySize,
 	posterWordSize,
+	SAFETY_MARGIN,
+	TARGET_W,
 } from "./word-poster";
 
 describe("posterWordSize", () => {
@@ -72,6 +76,62 @@ describe("posterWordSize", () => {
 		}
 		// And the boundaries really are the normal table's, not a stale copy.
 		expect([...BUCKET_BOUNDARIES]).toEqual([6, 10, 14, 18]);
+	});
+});
+
+describe("posterBodySize", () => {
+	// A third of the word size at every bucket in BOTH tables, so the definition
+	// keeps a constant relationship to the word instead of a fixed size the word
+	// drifts away from. Spelled out per bucket because the clamp makes the
+	// mapping non-obvious at the ends.
+	it("is a third of the word size at each normal bucket", () => {
+		expect(posterBodySize("apt")).toBe(32); // 173/3 = 58 → clamped
+		expect(posterBodySize("ephemeral!")).toBe(32); // 116/3 = 39 → clamped
+		expect(posterBodySize("ephemerally")).toBe(30); // 90/3
+		expect(posterBodySize("circumlocution!")).toBe(25); // 74/3 = 24.7
+		expect(posterBodySize("a".repeat(19))).toBe(20); // 61/3 = 20.3
+	});
+
+	it("is a third of the word size at each all-caps bucket", () => {
+		expect(posterBodySize("CANDID")).toBe(32); // 141/3 = 47 → clamped
+		expect(posterBodySize("EPHEMERAL!")).toBe(31); // 94/3 = 31.3
+		expect(posterBodySize("EPHEMERALLY")).toBe(22); // 65/3 = 21.7
+		expect(posterBodySize("A".repeat(18))).toBe(20); // 52/3 = 17.3 → clamped
+		expect(posterBodySize("A".repeat(19))).toBe(20); // 44/3 = 14.7 → clamped
+	});
+
+	// Both ends of the clamp, from the sizes that actually reach them.
+	it("floors at 20px so the body stays legible from the back of the room", () => {
+		// 52/3 and 44/3 are both under 20 and both land on the floor.
+		expect(Math.round(posterWordSize("A".repeat(18)) / 3)).toBeLessThan(20);
+		expect(posterBodySize("A".repeat(18))).toBe(20);
+		expect(posterBodySize("A".repeat(40))).toBe(20);
+	});
+
+	it("ceilings at 32px so a short word's definition cannot balloon", () => {
+		// 173/3 is 58 — nearly double the cap, and would compete with the word.
+		expect(Math.round(posterWordSize("apt") / 3)).toBeGreaterThan(32);
+		expect(posterBodySize("apt")).toBe(32);
+	});
+
+	// The ceiling is also what the poster's `min(23em, CONTENT_W px)` cap is
+	// priced against: 23em only stays inside the content box up to ~30px.
+	it("keeps the ceiling at a size where 23em still needs the width cap", () => {
+		expect(23 * 32).toBeGreaterThan(CONTENT_W);
+	});
+
+	it("measures the trimmed word, like the word size it is derived from", () => {
+		expect(posterBodySize("   apt   ")).toBe(posterBodySize("apt"));
+	});
+});
+
+describe("the width budget", () => {
+	// TARGET_W is DERIVED, so a change to the page geometry cannot silently
+	// re-price the safety margin the sizes were measured with.
+	it("keeps the safety margin between the content box and the target", () => {
+		expect(TARGET_W).toBe(CONTENT_W - SAFETY_MARGIN);
+		expect(SAFETY_MARGIN).toBeGreaterThan(0);
+		expect(TARGET_W).toBeLessThan(CONTENT_W);
 	});
 });
 

@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { ClipboardList, Presentation, Printer, Type } from "lucide-react";
+import { ClipboardList, Presentation, Printer, Sparkles } from "lucide-react";
 import type { AgendaLayout } from "#/components/agenda/meeting-agenda-print";
 import { PptxDownloadButton } from "#/components/club/pptx-download-button";
 import { Button } from "#/components/ui/button";
@@ -18,6 +18,11 @@ import { hasWordOfTheDay } from "#/lib/word-poster";
  *
  * The "Word poster" action is the one gated affordance: it appears only when the
  * meeting has a Word of the Day, because with no word there is nothing to print.
+ * `wordOfTheDay` is REQUIRED (`string | null`, not optional) for exactly that
+ * reason: with one call site, optionality bought nothing and let the whole
+ * button disappear for every user if the prop were dropped from the wiring —
+ * silently, with typecheck and the full suite green. Required, the compiler
+ * pins it.
  */
 export function MeetingViewActions({
 	clubSlug,
@@ -32,7 +37,7 @@ export function MeetingViewActions({
 	printLayout?: AgendaLayout;
 	deck?: Slide[];
 	clubName?: string;
-	wordOfTheDay?: string | null;
+	wordOfTheDay: string | null;
 }) {
 	return (
 		<>
@@ -82,7 +87,9 @@ export function MeetingViewActions({
 						target="_blank"
 						rel="noopener noreferrer"
 					>
-						<Type />
+						{/* Same glyph as the Word of the Day chip on the meeting page —
+						    one concept, one icon. */}
+						<Sparkles />
 						Word poster
 					</Link>
 				</Button>

@@ -122,8 +122,19 @@ export const POSTER_PAD_X = 56;
  */
 export const CONTENT_W = 704;
 
-/** The width sizes are derived against — CONTENT_W less the safety margin. */
-export const TARGET_W = 685;
+/**
+ * The slack between the true content width and what the sizes are derived
+ * against — see THE BUDGET above for why it exists and must not be reclaimed.
+ */
+export const SAFETY_MARGIN = 19;
+
+/**
+ * The width sizes are derived against — CONTENT_W less the safety margin.
+ * DERIVED, not a literal: as a bare number the "less the safety margin"
+ * relationship was a claim in a comment that nothing enforced, so a change to
+ * PAGE_W or POSTER_PAD_X would have re-priced the margin silently.
+ */
+export const TARGET_W = CONTENT_W - SAFETY_MARGIN;
 
 /**
  * The display weight both tables were derived at. Exported for the same reason
@@ -205,6 +216,29 @@ function isAllCaps(word: string): boolean {
 export function posterWordSize(word: string): number {
 	const trimmed = word.trim();
 	return sizeFrom(isAllCaps(trimmed) ? ALL_CAPS : NORMAL, trimmed.length);
+}
+
+/**
+ * Body-copy size in px for the poster's definition and example, derived from
+ * the word's size so the two keep a CONSTANT relationship instead of the word
+ * drifting away from a fixed body size.
+ *
+ * A pinned body size does not survive a display size that ranges 44–173px: at
+ * 30px flat, "Apt" set the word 5.8x the body while "ELECTROENCEPHALOGRAPHS"
+ * set it 1.5x, so the longest words stopped dominating the sheet and the poster
+ * read as a paragraph with a heading. A third of the word size holds the
+ * hierarchy at every length.
+ *
+ * The clamp is what keeps that ratio honest at both extremes:
+ *   • 20px floor — the wall-legibility limit. This is read from the back of a
+ *     room, so the definition cannot follow a small word down indefinitely.
+ *   • 32px ceiling — stops the definition ballooning under a SHORT word, where
+ *     a third of 173px would be 58px and the body would compete with the word
+ *     it is explaining. It is also what the poster's `maxWidth` is capped
+ *     against, since 23em at 32px exceeds CONTENT_W.
+ */
+export function posterBodySize(word: string): number {
+	return Math.min(32, Math.max(20, Math.round(posterWordSize(word) / 3)));
 }
 
 /**

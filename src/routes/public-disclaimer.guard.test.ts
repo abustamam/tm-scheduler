@@ -66,13 +66,21 @@ const RENDERS_DISCLAIMER_VIA: Record<
 	// components/agenda/word-of-the-day-poster.test.tsx.
 };
 
+/**
+ * Enrol by CONTENT, not by filename: a file is a route iff it exports a Route,
+ * which is the same rule the TanStack generator applies when it builds the
+ * route tree. The previous `!f.includes(".test.")` filter excluded the test
+ * files that sit beside these routes (a render test named after its route is
+ * not a surface and must not be required to render <PublicFooter />) — but as a
+ * substring test it would also have silently dropped a future public club route
+ * whose name happened to contain ".test.", removing it from this guard with
+ * nothing failing.
+ */
+const exportsRoute = (file: string) =>
+	/export const Route\b/.test(readFileSync(resolve(ROUTES, file), "utf8"));
+
 const clubRoutes = readdirSync(ROUTES)
-	// `.test.tsx` files sit beside the routes they cover and are not surfaces —
-	// a route render test named after its route would otherwise be required to
-	// render <PublicFooter />, which is nonsense.
-	.filter(
-		(f) => f.startsWith("club.") && f.endsWith(".tsx") && !f.includes(".test."),
-	)
+	.filter((f) => f.startsWith("club.") && f.endsWith(".tsx") && exportsRoute(f))
 	.sort();
 
 /** `club.$clubId_.*` escapes the layout; `club.$clubId.*` nests inside it. */

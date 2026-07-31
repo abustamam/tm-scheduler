@@ -44,6 +44,10 @@ afterEach(() => {
 	// restoreAllMocks does not clear the `vi.fn()`s created by the module
 	// factories above, so call history would leak between loader tests.
 	vi.clearAllMocks();
+	// UNCONDITIONAL, and none of the three calls above do it: a `vi.stubGlobal`
+	// undone at the end of a test body is skipped when an assertion before it
+	// throws, leaking a stubbed `window.print` into every later test in the file.
+	vi.unstubAllGlobals();
 });
 
 const CLUB_ID = "11111111-1111-4111-8111-111111111111";
@@ -208,7 +212,7 @@ describe("Word of the Day poster route — poster branch", () => {
 		expect(button.closest(".no-print")).toBeTruthy();
 		button.click();
 		expect(print).toHaveBeenCalledTimes(1);
-		vi.unstubAllGlobals();
+		// The stub is undone in afterEach, not here — see the note there.
 	});
 
 	it("treats a whitespace-padded word as a word, trimmed by the poster", async () => {
@@ -309,6 +313,48 @@ describe("Word of the Day poster route — loader", () => {
 				location,
 			}),
 		).rejects.toSatisfy(isNotFound);
+	});
+
+	// An unknown meeting key must be a 404, not the error boundary: the server fn
+	// signals "no such meeting" by throwing, and the loader has to translate it
+	// the way the canonical meeting route does. Asserted through
+	// `isMeetingNotFoundError`'s real input — the thrown Error's message — so a
+	// change to that wording fails here rather than silently reverting to a 500.
+	it("404s when the meeting key does not exist", async () => {
+		vi.mocked(resolveClubOrRedirect).mockResolvedValue({
+			id: CLUB_ID,
+			slug: "downtown",
+			// biome-ignore lint/suspicious/noExplicitAny: partial club is enough
+		} as any);
+		vi.mocked(getPublicMeetingByKey).mockRejectedValue(
+			new Error("Meeting not found."),
+		);
+
+		await expect(
+			runLoader({
+				params: { clubId: "downtown", meetingId: "2026-01-01" },
+				location,
+			}),
+		).rejects.toSatisfy(isNotFound);
+	});
+
+	// ...but only that error. Anything else is a real failure and must reach the
+	// error boundary rather than being disguised as a missing page.
+	it("propagates a non-not-found failure from the meeting read", async () => {
+		vi.mocked(resolveClubOrRedirect).mockResolvedValue({
+			id: CLUB_ID,
+			slug: "downtown",
+			// biome-ignore lint/suspicious/noExplicitAny: partial club is enough
+		} as any);
+		const boom = new Error("connection terminated");
+		vi.mocked(getPublicMeetingByKey).mockRejectedValue(boom);
+
+		await expect(
+			runLoader({
+				params: { clubId: "downtown", meetingId: "2026-07-31" },
+				location,
+			}),
+		).rejects.toBe(boom);
 	});
 
 	// Archived / unknown clubs and wrong-case slugs are `resolveClubOrRedirect`'s
