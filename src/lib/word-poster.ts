@@ -24,6 +24,12 @@
 // `/usr/share/dict/words`, bucketed by length, then real DOM
 // `getBoundingClientRect` on the widest 30 candidates per bucket.
 //
+// There are TWO tables. Capitals run ~20–30% wider than lowercase, so one
+// table cannot serve both: at the normal sizes "POWWOW" is 122% of the budget
+// and "GROUNDWORK" is 132%, both breaking mid-word. Shrinking the normal table
+// far enough to absorb that would tax every ordinary word to pay for a styling
+// choice, so all-caps input gets its own smaller table instead.
+//
 // ---------------------------------------------------------------------------
 // WHY LENGTH IS A WEAK PROXY FOR WIDTH
 //
@@ -48,44 +54,107 @@
 // actually reports the word looking too small.
 //
 // ---------------------------------------------------------------------------
-// RESIDUAL GAP (read before assuming these are safe)
+// NEVER EXTRAPOLATE A SIZE — MEASURE AT THE SIZE YOU INTEND TO USE
 //
-// These sizes do NOT clear the dictionary-wide worst case in every bucket.
-// Measured at the sizes below, against lowercase common words (proper nouns
-// and acronyms excluded — a Word of the Day is an ordinary word):
+// Fraunces is a VARIABLE font with an optical-size axis (opsz 9..144), and CSS
+// `font-optical-sizing` defaults to `auto`. The letterforms therefore change
+// shape with font-size, and width is NOT proportional to size: smaller sizes
+// render relatively WIDER. "Telecommunications" measures 8.30 px of width per
+// px of font-size at 120px, but 9.84 at 46px — an 18% swing.
 //
-//   ≤6  @177  "mammon"                 684px  (97%)  fits
-//   ≤10 @130  "mammograms"             764px (109%)  OVERFLOWS → needs ≤119px
-//   ≤14 @ 97  "newspaperwoman"         716px (102%)  OVERFLOWS → needs ≤ 95px
-//   ≤18 @ 81  "telecommunications"     691px  (98%)  fits
-//   >18 @ 68  "electroencephalographs" 736px (105%)  OVERFLOWS → needs ≤ 65px
+// Consequence: `newSize = size × budget / measuredWidth` is systematically
+// optimistic and will leave you just over the line. Three successive retunes
+// missed for exactly this reason. To find a size, render at each candidate
+// size and take the largest one that fits.
 //
-// Two further population notes that change the answer materially:
-//   • Capitalised entry ("Mammograms") is the likeliest real input style and is
-//     slightly wider still; covering it needs 177/119/93/80/64.
-//   • ALL-CAPS entry ("POWWOW", "GROUNDWORK") is far wider — covering it would
-//     need 145/98/72/57/46, a large sacrifice for every other word. Not done;
-//     an all-caps word will wrap.
+// ---------------------------------------------------------------------------
+// VERIFIED COVERAGE
 //
-// Where a word does exceed the budget, `overflowWrap: "anywhere"` on the poster
-// keeps it to a mid-word break rather than a clipped or overflowing page.
+// Both tables were checked against all 63,993 lowercase common words in
+// `/usr/share/dict/words` (proper nouns, acronyms and possessives excluded — a
+// Word of the Day is an ordinary word), in each realistic input style. Widest
+// word per bucket, all inside the 704px budget:
+//
+//   NORMAL, lowercase          NORMAL, Capitalised
+//   ≤6  @177 mammon      683px   ≤6  @177 Wampum                 700px
+//   ≤10 @119 mammograms  700px   ≤10 @119 Mammograms             702px
+//   ≤14 @ 93 newspaper…  689px   ≤14 @ 93 Newspaperwoman         703px
+//   ≤18 @ 79 telecomms…  684px   ≤18 @ 79 Telecommunications     704px
+//   >18 @ 63 electroen…  689px   >18 @ 63 Electroencephalographs 698px
+//
+//   ALL_CAPS
+//   ≤6  @145 POWWOW                 704px
+//   ≤10 @ 97 GROUNDWORK             700px
+//   ≤14 @ 67 NEWSPAPERWOMAN         695px
+//   ≤18 @ 54 CHLOROFLUOROCARBON     702px
+//   >18 @ 45 ELECTROENCEPHALOGRAPHS 700px
+//
+// Several buckets sit within a few px of the budget. That is deliberate — each
+// size is the largest that fits — but it means ANY change to PAGE_W, the
+// poster's padding, the font, or the weight invalidates the whole table.
+//
+// Longer-than-dictionary or non-English input can still exceed the budget;
+// `overflowWrap: "anywhere"` on the poster keeps that to a mid-word break
+// rather than a clipped or overflowing page.
 
-/** Longest word length that still earns each size, largest bucket first. */
-const BUCKETS: readonly (readonly [maxLength: number, size: number])[] = [
-	[6, 177],
-	[10, 130],
-	[14, 97],
-	[18, 81],
-];
+/**
+ * A length→size table: buckets largest-first, plus the floor for anything
+ * longer than the last bucket.
+ */
+type SizeTable = {
+	buckets: readonly (readonly [maxLength: number, size: number])[];
+	smallest: number;
+};
 
-/** Size for anything longer than the last bucket. */
-const SMALLEST = 68;
+/** Ordinary words — lowercase or Capitalised. */
+const NORMAL: SizeTable = {
+	buckets: [
+		[6, 177],
+		[10, 119],
+		[14, 93],
+		[18, 79],
+	],
+	smallest: 63,
+};
 
-/** Display font size in px for `word`, from its trimmed length. */
-export function posterWordSize(word: string): number {
-	const length = word.trim().length;
-	for (const [maxLength, size] of BUCKETS) {
+/**
+ * ALL-CAPS words, which need their own table: capitals run ~20–30% wider than
+ * lowercase, so a single table cannot serve both. "POWWOW" is 122% of the
+ * budget at the normal ≤6 size and "GROUNDWORK" is 132% at the normal ≤10 size
+ * — both would break mid-word. Sizing the normal table down far enough to
+ * absorb that would shrink every ordinary word to pay for a styling choice, so
+ * the all-caps case gets its own (much smaller) sizes instead and ordinary
+ * words pay nothing.
+ */
+const ALL_CAPS: SizeTable = {
+	buckets: [
+		[6, 145],
+		[10, 97],
+		[14, 67],
+		[18, 54],
+	],
+	smallest: 45,
+};
+
+/** Shared lookup so the two tables cannot drift apart in behaviour. */
+function sizeFrom(table: SizeTable, length: number): number {
+	for (const [maxLength, size] of table.buckets) {
 		if (length <= maxLength) return size;
 	}
-	return SMALLEST;
+	return table.smallest;
+}
+
+/**
+ * True when the word is written entirely in capitals — it must contain at
+ * least one letter, so digit-only input like "1234" falls through to the
+ * normal table rather than being sized as shouted text.
+ */
+function isAllCaps(word: string): boolean {
+	return /\p{L}/u.test(word) && word === word.toUpperCase();
+}
+
+/** Display font size in px for `word`, from its trimmed length and case. */
+export function posterWordSize(word: string): number {
+	const trimmed = word.trim();
+	return sizeFrom(isAllCaps(trimmed) ? ALL_CAPS : NORMAL, trimmed.length);
 }
