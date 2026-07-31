@@ -33,10 +33,10 @@ describe("WordOfTheDayPoster", () => {
 
 	it("sizes the word from its length", () => {
 		const { unmount } = render(<WordOfTheDayPoster {...base} word="Apt" />);
-		expect(screen.getByText("Apt").style.fontSize).toBe("177px");
+		expect(screen.getByText("Apt").style.fontSize).toBe("173px");
 		unmount();
 		render(<WordOfTheDayPoster {...base} word="Circumlocution!" />);
-		expect(screen.getByText("Circumlocution!").style.fontSize).toBe("79px");
+		expect(screen.getByText("Circumlocution!").style.fontSize).toBe("74px");
 	});
 
 	it("omits the definition block when there is no definition", () => {
