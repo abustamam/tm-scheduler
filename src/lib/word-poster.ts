@@ -14,37 +14,31 @@
 //
 // Two numbers, and the difference between them is deliberate:
 //
-//   704px = the TRUE content width — PAGE_W 816 minus the poster content
-//           box's 2 × 56px horizontal padding. Exceed this and the word
-//           breaks mid-word.
-//   685px = the TARGET every size below was derived against, ~2.7% narrower.
+//   CONTENT_W (704px) = the TRUE content width, PAGE_W minus the poster's
+//                       horizontal padding. Exceed it and the word breaks
+//                       mid-word. A test pins it to the real values.
+//   TARGET_W  (685px) = what every size below was derived against, ~2.7%
+//                       narrower.
 //
 // THE ~19px GAP IS NOT WASTE — DO NOT RECLAIM IT. It is slack for rendering
 // variance we cannot measure here. These sizes were derived in one headless
 // Chrome on one machine; members print from Chrome, Firefox and Safari across
 // platforms, where hinting, subpixel positioning and font-version differences
-// each move text width by fractions of a percent. Sizing to exactly 704 would
-// mean betting on zero difference, and an earlier revision of this table did
-// exactly that — "POWWOW" landed at 704.0px, 100.0% of budget. Any browser
+// each move text width by fractions of a percent. Sizing to exactly CONTENT_W
+// would mean betting on zero difference, and an earlier revision of this table
+// did exactly that — "POWWOW" landed at 704.0px, 100.0% of budget. Any browser
 // rendering a hair wider reintroduces the mid-word break these tables exist to
 // prevent. Bumping a size up "because it still fits" spends that insurance.
 //
-// Every size was measured in headless Chrome against the real Fraunces 600
-// webfont. Measure with the real face or not at all: call
-// `document.fonts.load(...)` FIRST, because `fonts.ready` resolves immediately
-// when nothing has requested the face yet, and you will silently measure
-// Georgia and get numbers that are wrong in both directions.
+// TWO TABLES, because capitals are far wider — see the `ALL_CAPS` docblock.
 //
-// Method that produced these: canvas `measureText` over all 104,334 entries of
-// `/usr/share/dict/words`, bucketed by length, then real DOM
-// `getBoundingClientRect` on the widest 30 candidates per bucket.
+// To re-derive after any invalidating change, run the harness that produced
+// these numbers; do not reconstruct one:
 //
-// There are TWO tables. Capitals run ~20–30% wider than lowercase, so one
-// table cannot serve both: at the normal sizes "POWWOW" reached 122% of the
-// content width and "GROUNDWORK" 132%, both breaking mid-word. Shrinking the
-// normal table
-// far enough to absorb that would tax every ordinary word to pay for a styling
-// choice, so all-caps input gets its own smaller table instead.
+//     bun run scripts/measure-word-poster.ts
+//
+// It reports the widest word and its width per bucket, and will tell you if a
+// size no longer clears the target.
 //
 // ---------------------------------------------------------------------------
 // WHY LENGTH IS A WEAK PROXY FOR WIDTH
@@ -60,7 +54,8 @@
 //
 // KNOWN UPGRADE PATH, DELIBERATELY NOT TAKEN: bucket on estimated WIDTH
 // instead of raw length — sum a per-character em-advance table and pick the
-// largest size whose product stays under 704px. It is strictly more accurate
+// largest size whose product stays under the target. It is strictly more
+// accurate
 // and stays pure/SSR-safe. It was rejected on cost, not correctness: it
 // hardcodes a metric table for one font at one weight that silently rots when
 // the brand font or weight changes, and it buys perhaps 130px → 145px on a
@@ -88,32 +83,44 @@
 //
 // Both tables were checked against all 63,993 lowercase common words in
 // `/usr/share/dict/words` (proper nouns, acronyms and possessives excluded — a
-// Word of the Day is an ordinary word), in each realistic input style. Widest
-// word per bucket, with its width and share of the 704px content width:
+// Word of the Day is an ordinary word), in each realistic input style.
 //
-//   NORMAL — lowercase                          NORMAL — Capitalised
-//   ≤6  @173 mammon                 668px 95%   Wampum                 684px 97%
-//   ≤10 @116 mammograms             683px 97%   Mammograms             684px 97%
-//   ≤14 @ 90 newspaperwoman         669px 95%   Newspaperwoman         682px 97%
-//   ≤18 @ 74 telecommunications     661px 94%   Telecommunications     680px 97%
-//   >18 @ 61 electroencephalographs 670px 95%   Electroencephalographs 679px 96%
+// The word that BINDS each bucket — i.e. the widest in the dictionary at that
+// length, and so the one that set the size. Re-deriving by hand can start from
+// these instead of repeating the sweep; the script reports current widths.
 //
-//   ALL_CAPS — ALL CAPS
-//   ≤6  @141 POWWOW                 685px 97%
-//   ≤10 @ 94 MAMMOGRAMS             679px 97%
-//   ≤14 @ 65 NEWSPAPERWOMAN         676px 96%
-//   ≤18 @ 52 CHLOROFLUOROCARBON     677px 96%
-//   >18 @ 44 ELECTROENCEPHALOGRAPHS 685px 97%
+//   bucket   NORMAL (lowercase / Capitalised)   ALL_CAPS
+//   ≤6       mammon / Wampum                    POWWOW
+//   ≤10      mammograms                         MAMMOGRAMS
+//   ≤14      newspaperwoman                     NEWSPAPERWOMAN
+//   ≤18      telecommunications                 CHLOROFLUOROCARBON
+//   >18      electroencephalographs             ELECTROENCEPHALOGRAPHS
 //
-// Worst case across all 15 buckets is 97.2% of the content width — i.e. at
-// least 19px of real slack everywhere. Each size is nonetheless the largest
-// that clears the 685px target, so ANY change to PAGE_W, the poster's 56px
-// padding, the font family, or the font weight invalidates both tables and
-// they must be re-derived.
+// Each size is the largest that clears the target, so ANY change to PAGE_W,
+// POSTER_PAD_X, the font family, or the font weight invalidates both tables
+// and they must be re-derived.
 //
 // Longer-than-dictionary or non-English input can still exceed the budget;
 // `overflowWrap: "anywhere"` on the poster keeps that to a mid-word break
 // rather than a clipped or overflowing page.
+
+/**
+ * The poster content box's horizontal padding, in px. Exported so the poster
+ * consumes this exact value rather than repeating a literal: widening the
+ * padding narrows the box below the width these sizes were derived against,
+ * which would reintroduce mid-word breaks with nothing failing.
+ */
+export const POSTER_PAD_X = 56;
+
+/**
+ * The true usable width, `PAGE_W - 2 * POSTER_PAD_X`. Not derived from
+ * `PAGE_W` here because that lives in a React module and this one is
+ * deliberately React-free; a unit test asserts the arithmetic instead.
+ */
+export const CONTENT_W = 704;
+
+/** The width sizes are derived against — CONTENT_W less the safety margin. */
+export const TARGET_W = 685;
 
 /**
  * A length→size table: buckets largest-first, plus the floor for anything
@@ -138,11 +145,11 @@ const NORMAL: SizeTable = {
 /**
  * ALL-CAPS words, which need their own table: capitals run ~20–30% wider than
  * lowercase, so a single table cannot serve both. "POWWOW" is 122% of the
- * budget at the normal ≤6 size and "GROUNDWORK" is 132% at the normal ≤10 size
- * — both would break mid-word. Sizing the normal table down far enough to
- * absorb that would shrink every ordinary word to pay for a styling choice, so
- * the all-caps case gets its own (much smaller) sizes instead and ordinary
- * words pay nothing.
+ * content width at the normal ≤6 size and "GROUNDWORK" is 132% at the normal
+ * ≤10 size — both would break mid-word. Sizing the normal table down far
+ * enough to absorb that would shrink every ordinary word to pay for a styling
+ * choice, so the all-caps case gets its own (much smaller) sizes instead and
+ * ordinary words pay nothing.
  */
 const ALL_CAPS: SizeTable = {
 	buckets: [

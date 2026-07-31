@@ -12,7 +12,7 @@
 // Deliberately does NOT credit the Grammarian, unlike the Present-mode Word of
 // the Day slide: this hangs for the whole meeting, where attribution reads as
 // clutter and goes stale if the role is reassigned after printing.
-import { posterWordSize } from "#/lib/word-poster";
+import { POSTER_PAD_X, posterWordSize } from "#/lib/word-poster";
 import { DarkFooter, FitPage, Kick, MUTED, SANS, SERIF } from "./print-theme";
 
 export function WordOfTheDayPoster({
@@ -29,7 +29,9 @@ export function WordOfTheDayPoster({
 	dateLong: string;
 }) {
 	// Whitespace-only is absent: an all-spaces definition must not print an empty
-	// block, and the route's "is there a word" check trims the same way.
+	// block, and the route's "is there a word" check trims the same way. The word
+	// is trimmed for both sizing and rendering, so padding can never widen it.
+	const w = word.trim();
 	const def = definition?.trim() || null;
 	const ex = example?.trim() || null;
 
@@ -42,7 +44,7 @@ export function WordOfTheDayPoster({
 					flexDirection: "column",
 					alignItems: "center",
 					justifyContent: "center",
-					padding: "64px 56px",
+					padding: `64px ${POSTER_PAD_X}px`,
 					textAlign: "center",
 				}}
 			>
@@ -53,7 +55,7 @@ export function WordOfTheDayPoster({
 				<div
 					style={{
 						fontFamily: SERIF,
-						fontSize: posterWordSize(word),
+						fontSize: posterWordSize(w),
 						fontWeight: 600,
 						lineHeight: 1.05,
 						margin: "40px 0",
@@ -62,7 +64,7 @@ export function WordOfTheDayPoster({
 						maxWidth: "100%",
 					}}
 				>
-					{word}
+					{w}
 				</div>
 
 				{def ? (
