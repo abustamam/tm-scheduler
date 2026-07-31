@@ -28,9 +28,52 @@ describe("buildNudge", () => {
 			...base,
 			phone: "+1 (415) 555-2671",
 			mode: "confirm",
+			platform: "mobile",
 		});
 		expect(r.whatsappUrl).toBe(
 			`https://wa.me/14155552671?text=${encodeURIComponent(r.message)}`,
+		);
+	});
+
+	it("defaults to the mobile wa.me link when no platform is given", () => {
+		const r = buildNudge({ ...base, phone: "14155552671", mode: "confirm" });
+		expect(r.whatsappUrl).toBe(
+			`https://wa.me/14155552671?text=${encodeURIComponent(r.message)}`,
+		);
+	});
+
+	it("sends desktop straight to WhatsApp Web, not the wa.me interstitial", () => {
+		// `wa.me` on a desktop dead-ends on "open in app" (#485).
+		const r = buildNudge({
+			...base,
+			phone: "+1 (415) 555-2671",
+			mode: "confirm",
+			platform: "desktop",
+		});
+		expect(r.whatsappUrl).toBe(
+			`https://web.whatsapp.com/send/?phone=14155552671&text=${encodeURIComponent(
+				r.message,
+			)}&type=phone_number&app_absent=0`,
+		);
+		expect(r.whatsappUrl).not.toContain("wa.me");
+	});
+
+	it("carries the same digits and message on both platforms", () => {
+		const args = {
+			...base,
+			phone: "+1 (415) 555-2671",
+			mode: "confirm" as const,
+		};
+		const mobile = buildNudge({ ...args, platform: "mobile" });
+		const desktop = buildNudge({ ...args, platform: "desktop" });
+		expect(desktop.message).toBe(mobile.message);
+		const text = (u: string) =>
+			decodeURIComponent(new URL(u).searchParams.get("text") ?? "");
+		expect(text(desktop.whatsappUrl ?? "")).toBe(
+			text(mobile.whatsappUrl ?? ""),
+		);
+		expect(new URL(desktop.whatsappUrl ?? "").searchParams.get("phone")).toBe(
+			"14155552671",
 		);
 	});
 

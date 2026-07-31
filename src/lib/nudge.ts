@@ -3,6 +3,8 @@
 // edits and sends. NO `#/db` here so the meeting-detail client route can call it.
 // The app only ever DRAFTS; the human sends.
 
+import type { Platform } from "#/lib/platform";
+
 export type NudgeMode = "confirm" | "recruit";
 
 export interface NudgeInput {
@@ -16,6 +18,13 @@ export interface NudgeInput {
 	/** Absolute public meeting URL (caller prepends window.location.origin). */
 	shareUrl: string;
 	mode: NudgeMode;
+	/**
+	 * Which WhatsApp entry point to link (#485). Defaults to `"mobile"` — the
+	 * historical `wa.me` behavior — so a caller that cannot detect the platform
+	 * is no worse off than before. `detectPlatform` (`#/lib/platform`) supplies
+	 * it in the browser.
+	 */
+	platform?: Platform;
 }
 
 export interface Nudge {
@@ -49,13 +58,34 @@ function waDigits(phone: string): string {
 	return phone.replace(/\D/g, "");
 }
 
+/**
+ * The WhatsApp entry point for a platform (#485). `wa.me` is a device
+ * redirector that hands off to the installed app — right on a phone, but on a
+ * desktop it stops at an "open in app" interstitial the VPE cannot get past
+ * without the desktop client. Desktop therefore goes straight to WhatsApp Web.
+ */
+function whatsappUrlFor(
+	digits: string,
+	message: string,
+	platform: Platform,
+): string {
+	const text = encodeURIComponent(message);
+	return platform === "desktop"
+		? `https://web.whatsapp.com/send/?phone=${digits}&text=${text}&type=phone_number&app_absent=0`
+		: `https://wa.me/${digits}?text=${text}`;
+}
+
 export function buildNudge(input: NudgeInput): Nudge {
 	const message = messageFor(input);
 	const nudge: Nudge = { message };
 
 	const digits = input.phone ? waDigits(input.phone) : "";
 	if (digits) {
-		nudge.whatsappUrl = `https://wa.me/${digits}?text=${encodeURIComponent(message)}`;
+		nudge.whatsappUrl = whatsappUrlFor(
+			digits,
+			message,
+			input.platform ?? "mobile",
+		);
 	}
 
 	if (input.email) {

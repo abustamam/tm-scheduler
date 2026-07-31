@@ -12,14 +12,35 @@ const base = {
 	mode: "confirm" as const,
 };
 
-describe("NudgeButtons", () => {
-	afterEach(() => cleanup());
+/** jsdom's own UA is desktop-shaped, so tests that want the mobile branch have
+ *  to say so. Restored by `vi.restoreAllMocks` in afterEach. */
+function pretendUserAgent(ua: string) {
+	vi.spyOn(window.navigator, "userAgent", "get").mockReturnValue(ua);
+}
 
-	it("shows a WhatsApp link when the target has a phone", () => {
+describe("NudgeButtons", () => {
+	afterEach(() => {
+		cleanup();
+		vi.restoreAllMocks();
+	});
+
+	it("links a desktop viewer to WhatsApp Web, not the wa.me interstitial", () => {
+		// jsdom reports a desktop UA, which is the case being asserted (#485).
+		render(<NudgeButtons {...base} phone="14155552671" email={null} />);
+		const wa = screen.getByRole("link", { name: /whatsapp/i });
+		const href = wa.getAttribute("href") ?? "";
+		expect(href).toContain("https://web.whatsapp.com/send/?phone=14155552671");
+		expect(href).not.toContain("wa.me");
+		expect(wa.getAttribute("target")).toBe("_blank");
+	});
+
+	it("links a mobile viewer to wa.me so the app takes over", () => {
+		pretendUserAgent(
+			"Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36",
+		);
 		render(<NudgeButtons {...base} phone="14155552671" email={null} />);
 		const wa = screen.getByRole("link", { name: /whatsapp/i });
 		expect(wa.getAttribute("href")).toContain("https://wa.me/14155552671");
-		expect(wa.getAttribute("target")).toBe("_blank");
 	});
 
 	it("shows an Email link when the target has an email", () => {

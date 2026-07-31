@@ -2,6 +2,7 @@ import { Mail, MessageCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "#/components/ui/button";
 import { buildNudge, type NudgeMode } from "#/lib/nudge";
+import { detectPlatform } from "#/lib/platform";
 
 /**
  * WhatsApp/Email tap-to-nudge affordances (#37). Renders only the channels the
@@ -37,6 +38,11 @@ export function NudgeButtons({
 	const [mounted, setMounted] = useState(false);
 	useEffect(() => setMounted(true), []);
 
+	// Safe to read `navigator` unconditionally: the links are not rendered until
+	// `mounted`, so this value is only ever USED on the client. Computing it
+	// before that gate keeps the hook order stable (#485).
+	const platform = mounted ? detectPlatform(navigator) : "mobile";
+
 	const nudge = buildNudge({
 		name,
 		phone,
@@ -45,6 +51,7 @@ export function NudgeButtons({
 		meetingDate,
 		shareUrl,
 		mode,
+		platform,
 	});
 
 	if (!nudge.whatsappUrl && !nudge.mailtoUrl) {
