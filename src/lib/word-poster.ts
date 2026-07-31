@@ -1,6 +1,6 @@
 // src/lib/word-poster.ts
 //
-// Display sizing for the Word of the Day poster
+// Sizing and presence helpers for the Word of the Day poster
 // (`components/agenda/word-of-the-day-poster.tsx`). "Apt" and
 // "obstreperousness" cannot share a font size, and the poster's whole job is to
 // be readable from the back of the room, so the word is sized from its length.
@@ -186,8 +186,9 @@ export function posterWordSize(word: string): number {
 
 /**
  * Does this meeting have a Word of the Day to print? Whitespace-only counts as
- * unset. The poster route and the "Word poster" button both call this so they
- * cannot disagree about whether there is anything to show.
+ * unset. The poster route calls this, and the "Word poster" button that links to
+ * it will call it too, so the two cannot disagree about whether there is
+ * anything to show.
  *
  * A type predicate, not a plain boolean: the route hands the word straight to
  * the poster's `word: string` prop, and narrowing here is what lets it do that

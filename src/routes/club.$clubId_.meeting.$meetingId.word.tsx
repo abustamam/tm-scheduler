@@ -10,7 +10,7 @@
 // Offline works for free: `isOfflineRoute` in public/sw.js matches
 // /^\/club\/[^/]+\/meeting\//, which this path already satisfies.
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
-import { INK, LAGOON, SANS } from "#/components/agenda/print-theme";
+import { LAGOON, SANS } from "#/components/agenda/print-theme";
 import { WordOfTheDayPoster } from "#/components/agenda/word-of-the-day-poster";
 import { PublicFooter } from "#/components/public-footer";
 import { resolveClubOrRedirect } from "#/lib/club-route";
@@ -52,34 +52,34 @@ function WordPoster() {
 	const { clubId: clubIdParam, meetingId } = Route.useParams();
 	const { meeting, timezone, clubName } = Route.useLoaderData();
 
-	// `hasWordOfTheDay` is a type predicate, so this guard narrows `word` to
-	// `string` for the poster's `word` prop — no cast — while the button that
-	// links here calls the same function, so the two cannot disagree about
-	// whether this meeting has anything to print.
 	const word = meeting.wordOfTheDay;
 
-	// Reached only by a typed or shared URL — the button is hidden when there is
-	// no word. Offer the way back rather than a blank sheet to print.
+	// Reached only by a typed or shared URL — the button will be hidden when there
+	// is no word. Offer the way back rather than a blank sheet to print.
 	//
 	// This branch renders no poster, and so none of the poster's dark footer
-	// either. It is still a public club surface, so it renders PublicFooter to
-	// carry the TI non-affiliation disclaimer (#381).
+	// either. It is still a public club surface, so it renders <PublicFooter /> to
+	// carry the TI non-affiliation disclaimer (#381) — pinned by
+	// public-disclaimer.guard.test.ts, which strips comments before matching.
 	//
-	// Do NOT write that component's name as a JSX tag in a comment in this file:
-	// public-disclaimer.guard.test.ts is a source grep, and a mention in prose
-	// satisfies it just as well as the real element — which would leave the
-	// footer below deletable with the guard still green.
+	// `hasWordOfTheDay` is a type predicate, so this narrows `word` to `string`
+	// for the poster's `word` prop below — no cast.
 	if (!hasWordOfTheDay(word)) {
 		return (
 			<>
 				<div style={emptyWrapStyle}>
-					<p style={{ fontSize: 17, fontWeight: 600, margin: 0 }}>
+					{/* The only content on the page, so it is the page's heading. */}
+					<h1 style={{ fontSize: 17, fontWeight: 600, margin: 0 }}>
 						No Word of the Day set for this meeting yet.
-					</p>
+					</h1>
 					<Link
 						to="/club/$clubId/meeting/$meetingId"
 						params={{ clubId: clubIdParam, meetingId }}
-						style={{ color: LAGOON, fontWeight: 700, fontSize: 14 }}
+						style={{
+							color: "var(--lagoon-ink)",
+							fontWeight: 700,
+							fontSize: 14,
+						}}
 					>
 						← Back to the meeting
 					</Link>
@@ -114,6 +114,12 @@ function WordPoster() {
 				@media print {
 					.no-print { display: none !important; }
 					body { background: #fff; }
+					/* Required, not cosmetic: @page has margin 0, so the screen-only
+					   28px padding would push 28 + 1056 + 28 = 1112px into a 1056px
+					   page box and emit a blank second sheet. body has margin 0
+					   (styles.css) and nothing else absorbs it. Both sibling print
+					   routes carry this same reset. */
+					.pgwrap { padding: 0 !important; }
 					.agenda-page { box-shadow: none !important; }
 					@page { size: letter portrait; margin: 0; }
 				}
@@ -134,6 +140,13 @@ function WordPoster() {
 	);
 }
 
+// The no-word branch is a SCREEN surface, not a sheet: it renders no <style>
+// block, so it keeps the app's background and must use the app's theme tokens.
+// The print palette's INK is a fixed near-black meant for white paper — on the
+// dark-mode background it lands at 1.52:1 and is effectively invisible, while
+// the public footer right below it (which does use tokens) stays readable.
+// Dark mode auto-applies from prefers-color-scheme for a visitor with no stored
+// preference, which is most of this public route's audience.
 const emptyWrapStyle: React.CSSProperties = {
 	minHeight: "60vh",
 	display: "flex",
@@ -141,7 +154,7 @@ const emptyWrapStyle: React.CSSProperties = {
 	alignItems: "center",
 	justifyContent: "center",
 	gap: 12,
-	color: INK,
+	color: "var(--sea-ink)",
 	fontFamily: SANS,
 	textAlign: "center",
 	padding: 24,
