@@ -67,7 +67,12 @@ const RENDERS_DISCLAIMER_VIA: Record<
 };
 
 const clubRoutes = readdirSync(ROUTES)
-	.filter((f) => f.startsWith("club.") && f.endsWith(".tsx"))
+	// `.test.tsx` files sit beside the routes they cover and are not surfaces —
+	// a route render test named after its route would otherwise be required to
+	// render <PublicFooter />, which is nonsense.
+	.filter(
+		(f) => f.startsWith("club.") && f.endsWith(".tsx") && !f.includes(".test."),
+	)
 	.sort();
 
 /** `club.$clubId_.*` escapes the layout; `club.$clubId.*` nests inside it. */
