@@ -12,6 +12,9 @@ import { loadClubDefaultCountryCode } from "./clubs-logic";
 export interface Contact {
 	phone: string | null;
 	email: string | null;
+	/** What to call them in a nudge draft, when it isn't the first token of
+	 *  their stored name (#486). Null ⇒ nobody recorded one. */
+	preferredName: string | null;
 }
 
 export interface RosterContact extends Contact {
@@ -36,6 +39,7 @@ export async function loadRosterWithContact(
 			.select({
 				id: members.id,
 				name: members.name,
+				preferredName: members.preferredName,
 				phone: members.phone,
 				email: members.email,
 			})
@@ -67,26 +71,38 @@ export async function loadHolderContacts(
 
 	if (memberIds.length > 0) {
 		const rows = await db
-			.select({ id: members.id, phone: members.phone, email: members.email })
+			.select({
+				id: members.id,
+				phone: members.phone,
+				email: members.email,
+				preferredName: members.preferredName,
+			})
 			.from(members)
 			.where(and(eq(members.clubId, clubId), inArray(members.id, memberIds)));
 		for (const r of rows) {
 			map.set(contactKey("member", r.id), {
 				phone: toE164(r.phone, cc),
 				email: r.email,
+				preferredName: r.preferredName,
 			});
 		}
 	}
 
 	if (guestIds.length > 0) {
 		const rows = await db
-			.select({ id: guests.id, phone: guests.phone, email: guests.email })
+			.select({
+				id: guests.id,
+				phone: guests.phone,
+				email: guests.email,
+				preferredName: guests.preferredName,
+			})
 			.from(guests)
 			.where(and(eq(guests.clubId, clubId), inArray(guests.id, guestIds)));
 		for (const r of rows) {
 			map.set(contactKey("guest", r.id), {
 				phone: toE164(r.phone, cc),
 				email: r.email,
+				preferredName: r.preferredName,
 			});
 		}
 	}

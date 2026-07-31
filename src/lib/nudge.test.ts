@@ -23,6 +23,48 @@ describe("buildNudge", () => {
 		);
 	});
 
+	it("greets by first name, not the full stored name (#486)", () => {
+		const r = buildNudge({
+			...base,
+			name: "Zabihullah Kogyani",
+			email: "z@x.io",
+			mode: "confirm",
+		});
+		expect(r.message).toMatch(/^Hi Zabihullah, just confirming/);
+		expect(r.message).not.toContain("Kogyani");
+	});
+
+	it("greets by the recorded name when the first token is wrong", () => {
+		// The first token of the stored name is not what this person is called.
+		const r = buildNudge({
+			...base,
+			name: "Abdul-Rasheed Bustamam",
+			preferredName: "Rasheed",
+			email: "r@x.io",
+			mode: "recruit",
+		});
+		expect(r.message).toMatch(/^Hi Rasheed, would you be open/);
+		expect(r.message).not.toContain("Abdul-Rasheed");
+	});
+
+	it("carries the greeting into both channel payloads", () => {
+		const r = buildNudge({
+			...base,
+			name: "Abdul-Rasheed Bustamam",
+			preferredName: "Rasheed",
+			phone: "14155552671",
+			email: "r@x.io",
+			mode: "confirm",
+			platform: "desktop",
+		});
+		const waText = decodeURIComponent(
+			new URL(r.whatsappUrl ?? "").searchParams.get("text") ?? "",
+		);
+		expect(waText).toContain("Hi Rasheed,");
+		const mailBody = decodeURIComponent(r.mailtoUrl?.split("&body=")[1] ?? "");
+		expect(mailBody).toContain("Hi Rasheed,");
+	});
+
 	it("builds a wa.me link from a phone, stripping +, spaces, dashes", () => {
 		const r = buildNudge({
 			...base,

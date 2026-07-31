@@ -11,6 +11,7 @@ import { detectPlatform } from "#/lib/platform";
  */
 export function NudgeButtons({
 	name,
+	preferredName,
 	phone,
 	email,
 	roleName,
@@ -20,6 +21,9 @@ export function NudgeButtons({
 	onContacted,
 }: {
 	name: string;
+	/** What to call them in the draft, when it isn't the first token of `name`
+	 *  (#486). Absent/null falls back to that first token. */
+	preferredName?: string | null;
 	phone: string | null;
 	email: string | null;
 	roleName: string;
@@ -45,6 +49,7 @@ export function NudgeButtons({
 
 	const nudge = buildNudge({
 		name,
+		preferredName,
 		phone,
 		email,
 		roleName,

@@ -76,6 +76,8 @@ const updateGuestSchema = z.object({
 	clubId: uuid,
 	guestId: uuid,
 	name: z.string().trim().min(1, "A guest name is required."),
+	// What they're called, when it isn't the first token of `name` (#486).
+	preferredName: z.string().trim().nullable().optional(),
 	email: z.string().trim().email().nullable().optional(),
 	phone: z.string().trim().nullable().optional(),
 });

@@ -60,6 +60,93 @@ describe.skipIf(!hasTestDb)("roster management", () => {
 		await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
 	});
 
+	it("editMember round-trips the goes-by name and seeds it onto the Person", async () => {
+		const { applyMemberEdit } = await import("#/server/members-logic");
+		const [before] = await testDb
+			.select({ personId: members.personId })
+			.from(members)
+			.where(eq(members.id, seed.memberId));
+
+		await applyMemberEdit({
+			clubId: seed.clubId,
+			actorMemberId: seed.memberId,
+			memberId: seed.memberId,
+			name: "Abdul-Rasheed Bustamam",
+			preferredName: "Rasheed",
+			email: null,
+			phone: null,
+		});
+
+		const [m] = await testDb
+			.select()
+			.from(members)
+			.where(eq(members.id, seed.memberId));
+		expect(m.preferredName).toBe("Rasheed");
+		// Person-level fact (ADR-0008): seeded UP so it travels to other clubs.
+		const [p] = await testDb
+			.select({ preferredName: people.preferredName })
+			.from(people)
+			.where(eq(people.id, before.personId));
+		expect(p.preferredName).toBe("Rasheed");
+	});
+
+	it("editMember stores a cleared goes-by name as NULL, not an empty string", async () => {
+		// A cleared text input submits "". `greetingName` must see "nobody told
+		// us" and fall back to the first token, not greet with a blank.
+		const { applyMemberEdit } = await import("#/server/members-logic");
+		const base = {
+			clubId: seed.clubId,
+			actorMemberId: seed.memberId,
+			memberId: seed.memberId,
+			name: "Jane Doe",
+			email: null,
+			phone: null,
+		};
+		await applyMemberEdit({ ...base, preferredName: "Janey" });
+		await applyMemberEdit({ ...base, preferredName: "" });
+
+		const [m] = await testDb
+			.select()
+			.from(members)
+			.where(eq(members.id, seed.memberId));
+		expect(m.preferredName).toBeNull();
+	});
+
+	it("editMember does not overwrite a goes-by name already on the Person", async () => {
+		// Guarded on NULL so a second club's admin cannot clobber what this
+		// person recorded elsewhere; the membership row still updates.
+		const { applyMemberEdit } = await import("#/server/members-logic");
+		const [row] = await testDb
+			.select({ personId: members.personId })
+			.from(members)
+			.where(eq(members.id, seed.memberId));
+		await testDb
+			.update(people)
+			.set({ preferredName: "Rasheed" })
+			.where(eq(people.id, row.personId));
+
+		await applyMemberEdit({
+			clubId: seed.clubId,
+			actorMemberId: seed.memberId,
+			memberId: seed.memberId,
+			name: "Abdul-Rasheed Bustamam",
+			preferredName: "Abdul",
+			email: null,
+			phone: null,
+		});
+
+		const [p] = await testDb
+			.select({ preferredName: people.preferredName })
+			.from(people)
+			.where(eq(people.id, row.personId));
+		expect(p.preferredName).toBe("Rasheed");
+		const [m] = await testDb
+			.select()
+			.from(members)
+			.where(eq(members.id, seed.memberId));
+		expect(m.preferredName).toBe("Abdul");
+	});
+
 	it("editMember updates fields + reconciles offices + logs member_edit", async () => {
 		const { applyMemberEdit } = await import("#/server/members-logic");
 		const { currentOfficersFor } = await import("#/server/officer-terms-logic");

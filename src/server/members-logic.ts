@@ -141,6 +141,10 @@ export const editSchema = z.object({
 	clubId: z.string().uuid(),
 	memberId: z.string().uuid(),
 	name: z.string().trim().min(1),
+	// What this member is actually called, when it isn't the first token of
+	// `name` (#486). Trimmed-empty is stored as NULL, not "" — a cleared input
+	// submits "" and `greetingName` must see "nobody told us", not a blank.
+	preferredName: z.string().trim().nullable().optional(),
 	email: z.string().trim().email().nullable().optional(),
 	phone: z.string().trim().nullable().optional(),
 	// The full set of offices this membership should currently hold (#100). The
@@ -166,6 +170,7 @@ export async function applyMemberEdit(input: EditInput) {
 	const cc = await loadClubDefaultCountryCode(input.clubId);
 	const next = {
 		name: input.name,
+		preferredName: input.preferredName || null,
 		email: input.email ?? null,
 		phone: toStoredPhone(input.phone, cc),
 	};
@@ -184,6 +189,19 @@ export async function applyMemberEdit(input: EditInput) {
 				.update(people)
 				.set({ email: next.email })
 				.where(and(eq(people.id, current.personId), isNull(people.email)));
+		}
+		// Same shape for the "goes by" name (#486): it is a person-level fact
+		// (ADR-0008) that should travel with them, so seed it UP when the Person
+		// has none. Guarded on NULL so a second club's admin can't overwrite what
+		// this person recorded elsewhere — the membership row is always authoritative
+		// for THIS club either way.
+		if (next.preferredName !== null) {
+			await tx
+				.update(people)
+				.set({ preferredName: next.preferredName })
+				.where(
+					and(eq(people.id, current.personId), isNull(people.preferredName)),
+				);
 		}
 		// Reconcile the office set only when the caller sent one (undefined = leave
 		// terms alone). Dedupe first so a repeated office can't open two terms.
@@ -205,6 +223,7 @@ export async function applyMemberEdit(input: EditInput) {
 			detail: {
 				before: {
 					name: current.name,
+					preferredName: current.preferredName,
 					email: current.email,
 					phone: current.phone,
 					officerPositions: beforeOffices,

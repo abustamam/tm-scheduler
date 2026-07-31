@@ -586,6 +586,7 @@ export function MeetingAgenda({
 												{viewer.canManage && !isOpen && slot.assigneeName ? (
 													<NudgeButtons
 														name={slot.assigneeName}
+														preferredName={slot.holderPreferredName}
 														phone={slot.holderPhone}
 														email={slot.holderEmail}
 														roleName={slot.roleName}

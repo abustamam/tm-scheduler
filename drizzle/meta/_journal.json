@@ -372,6 +372,13 @@
       "when": 1785442209562,
       "tag": "0052_refresh_role_descriptions",
       "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1785473647144,
+      "tag": "0053_slow_omega_sentinel",
+      "breakpoints": true
     }
   ]
 }

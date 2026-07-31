@@ -23,6 +23,7 @@ async function addMember(
 		phone?: string | null;
 		email?: string | null;
 		status?: "active" | "inactive";
+		preferredName?: string | null;
 	} = {},
 ): Promise<string> {
 	const personId = await seedPerson({ name });
@@ -36,6 +37,7 @@ async function addMember(
 			status: opts.status ?? "active",
 			phone: opts.phone ?? null,
 			email: opts.email ?? null,
+			preferredName: opts.preferredName ?? null,
 		})
 		.returning({ id: members.id });
 	if (!row) throw new Error("member insert failed");
@@ -45,7 +47,11 @@ async function addMember(
 async function addGuest(
 	clubId: string,
 	name: string,
-	opts: { phone?: string | null; email?: string | null } = {},
+	opts: {
+		phone?: string | null;
+		email?: string | null;
+		preferredName?: string | null;
+	} = {},
 ): Promise<string> {
 	const [row] = await testDb
 		.insert(guests)
@@ -54,6 +60,7 @@ async function addGuest(
 			name,
 			phone: opts.phone ?? null,
 			email: opts.email ?? null,
+			preferredName: opts.preferredName ?? null,
 		})
 		.returning({ id: guests.id });
 	if (!row) throw new Error("guest insert failed");
@@ -131,11 +138,48 @@ describe.skipIf(!hasTestDb)("meeting contacts (integration)", () => {
 		expect(map.get(`member:${memberId}`)).toEqual({
 			phone: "+14155550003",
 			email: "m@x.io",
+			preferredName: null,
 		});
 		expect(map.get(`guest:${guestId}`)).toEqual({
 			phone: null,
 			email: "g@x.io",
+			preferredName: null,
 		});
+	});
+
+	it("carries the goes-by name for a member and a guest holder (#486)", async () => {
+		// The nudge greeting reads this off the holder contact, so it has to
+		// survive the same query that fetches phone/email.
+		const memberId = await addMember(seeded.clubId, "Abdul-Rasheed Bustamam", {
+			phone: "+14155550004",
+			preferredName: "Rasheed",
+		});
+		const guestId = await addGuest(seeded.clubId, "Robert Smith", {
+			email: "bob@x.io",
+			preferredName: "Bob",
+		});
+
+		const map = await loadHolderContacts(seeded.clubId, [memberId], [guestId]);
+		expect(map.get(`member:${memberId}`)?.preferredName).toBe("Rasheed");
+		expect(map.get(`guest:${guestId}`)?.preferredName).toBe("Bob");
+	});
+
+	it("loadRosterWithContact carries the goes-by name for the recruit picker", async () => {
+		await addMember(seeded.clubId, "Abdul-Rasheed Bustamam", {
+			phone: "+14155550005",
+			preferredName: "Rasheed",
+		});
+		await addMember(seeded.clubId, "Plain Member", { phone: "+14155550006" });
+
+		const roster = await loadRosterWithContact(seeded.clubId);
+		expect(
+			roster.find((r) => r.name === "Abdul-Rasheed Bustamam")?.preferredName,
+		).toBe("Rasheed");
+		// Nobody recorded one ⇒ null, and `greetingName` falls back to the first
+		// token. The loader must not invent a value here.
+		expect(roster.find((r) => r.name === "Plain Member")?.preferredName).toBe(
+			null,
+		);
 	});
 
 	it("loadHolderContacts excludes ids from a different club (PII scope)", async () => {

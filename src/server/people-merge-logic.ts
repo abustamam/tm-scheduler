@@ -160,6 +160,10 @@ export async function mergePeople(
 			.set({
 				email: keeper.email ?? absorbed.email,
 				phone: keeper.phone ?? absorbed.phone,
+				// A recorded "goes by" name is scarce (someone had to type it) and
+				// the merge is irreversible, so adopt the absorbed's rather than
+				// lose it (#486).
+				preferredName: keeper.preferredName ?? absorbed.preferredName,
 				customerId: keeper.customerId ?? absorbed.customerId,
 				basecampUserId: keeper.basecampUserId ?? absorbed.basecampUserId,
 				userId: keeper.userId ?? absorbed.userId,

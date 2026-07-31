@@ -268,6 +268,8 @@ export async function captureGuestVisit(
 export interface PipelineGuestRow {
 	id: string;
 	name: string;
+	/** What they're called, when it isn't the first token of `name` (#486). */
+	preferredName: string | null;
 	email: string | null;
 	phone: string | null;
 	stage: GuestStage;
@@ -369,6 +371,7 @@ export async function loadGuestPipeline(
 			.select({
 				id: guests.id,
 				name: guests.name,
+				preferredName: guests.preferredName,
 				email: guests.email,
 				phone: guests.phone,
 				stage: guests.stage,
@@ -407,6 +410,7 @@ export async function loadGuestPipeline(
 		return {
 			id: r.id,
 			name: r.name,
+			preferredName: r.preferredName,
 			email: r.email,
 			phone: r.phone,
 			stage: r.stage,
@@ -423,6 +427,9 @@ export interface UpdateGuestInput {
 	clubId: string;
 	guestId: string;
 	name: string;
+	/** What they're called, when it isn't the first token of `name` (#486).
+	 *  Blank is stored as NULL so `greetingName` falls back. */
+	preferredName?: string | null;
 	email?: string | null;
 	phone?: string | null;
 }
@@ -475,7 +482,13 @@ export async function applyUpdateGuest(
 
 	await db
 		.update(guests)
-		.set({ name, email, phone, updatedAt: new Date() })
+		.set({
+			name,
+			preferredName: input.preferredName?.trim() || null,
+			email,
+			phone,
+			updatedAt: new Date(),
+		})
 		.where(eq(guests.id, input.guestId));
 	return { ok: true as const };
 }
@@ -658,6 +671,9 @@ export async function applyConvertGuestToMember(
 	}
 
 	const name = guest.name.trim();
+	// A "goes by" name recorded while they were a guest survives the promotion
+	// (#486) — it was true of the human, not of the guest row.
+	const preferredName = guest.preferredName?.trim() || null;
 	const email = guest.email?.trim() || null;
 	// Re-standardize to E.164 on the way into people/members (#295) — the guest
 	// row may predate normalize-on-write; the digits form (dedup) follows it.
@@ -689,7 +705,7 @@ export async function applyConvertGuestToMember(
 		if (!personId) {
 			const [p] = await tx
 				.insert(people)
-				.values({ name, email, phone })
+				.values({ name, preferredName, email, phone })
 				.returning({ id: people.id });
 			if (!p) throw new Error("Failed to create person.");
 			personId = p.id;
@@ -713,6 +729,7 @@ export async function applyConvertGuestToMember(
 					clubId: input.clubId,
 					personId,
 					name,
+					preferredName,
 					email,
 					phone,
 					clubRole: "member",

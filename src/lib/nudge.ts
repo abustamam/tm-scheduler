@@ -3,12 +3,18 @@
 // edits and sends. NO `#/db` here so the meeting-detail client route can call it.
 // The app only ever DRAFTS; the human sends.
 
+import { greetingName } from "#/lib/person-name";
 import type { Platform } from "#/lib/platform";
 
 export type NudgeMode = "confirm" | "recruit";
 
 export interface NudgeInput {
 	name: string;
+	/**
+	 * What this person is actually called, when it isn't the first token of
+	 * `name` (#486). Absent/null/blank falls back to that first token.
+	 */
+	preferredName?: string | null;
 	/** E.164-ish free text; may be null/absent. */
 	phone?: string | null;
 	email?: string | null;
@@ -36,9 +42,12 @@ export interface Nudge {
 }
 
 function messageFor(i: NudgeInput): string {
+	// Greet by first/preferred name — "Hi Zabihullah Kogyani," reads like a mail
+	// merge, which undercuts a draft whose whole point is that a human wrote it.
+	const who = greetingName(i);
 	return i.mode === "confirm"
-		? `Hi ${i.name}, just confirming you're our ${i.roleName} for the ${i.meetingDate} meeting. Details: ${i.shareUrl}`
-		: `Hi ${i.name}, would you be open to taking ${i.roleName} at our ${i.meetingDate} meeting? Info here: ${i.shareUrl}`;
+		? `Hi ${who}, just confirming you're our ${i.roleName} for the ${i.meetingDate} meeting. Details: ${i.shareUrl}`
+		: `Hi ${who}, would you be open to taking ${i.roleName} at our ${i.meetingDate} meeting? Info here: ${i.shareUrl}`;
 }
 
 function subjectFor(i: NudgeInput): string {

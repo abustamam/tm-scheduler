@@ -288,6 +288,14 @@ export const people = pgTable(
 		// Nullable + unique-when-present (Postgres treats NULLs as distinct).
 		basecampUserId: text("basecamp_user_id").unique(),
 		name: text("name").notNull(),
+		// What this person is actually CALLED, when it isn't the first token of
+		// `name` (#486). The Toastmasters export carries one full-name string, so
+		// a member stored as "Abdul-Rasheed Bustamam" who goes by Rasheed — or as
+		// Robert but called Bob — cannot be greeted correctly by splitting. Null
+		// means nobody has told us; `greetingName` (#/lib/person-name) then falls
+		// back to the first token. A person-level fact: it travels with them into
+		// every club (ADR-0008).
+		preferredName: text("preferred_name"),
 		email: text("email"),
 		phone: text("phone"),
 		// First-ever Toastmasters join date — a person-level fact (identical across
@@ -348,6 +356,10 @@ export const members = pgTable(
 			.notNull()
 			.references(() => people.id, { onDelete: "cascade" }),
 		name: text("name").notNull(),
+		// Mirrors `people.preferred_name` (#486), the same way `name`/`email`/
+		// `phone` are already denormalized onto the membership. The nudge path
+		// reads the membership, not the Person.
+		preferredName: text("preferred_name"),
 		email: text("email"),
 		phone: text("phone"),
 		// Authorization role for this membership (ADR-0008 Phase B / #99). The auth
@@ -570,6 +582,9 @@ export const guests = pgTable(
 			.notNull()
 			.references(() => clubs.id, { onDelete: "cascade" }),
 		name: text("name").notNull(),
+		// A guest has no Person, so their "goes by" name lives here (#486). Guests
+		// hold role slots and get nudged like anyone else.
+		preferredName: text("preferred_name"),
 		// Optional contact — a guest may be assigned with just a name.
 		email: text("email"),
 		phone: text("phone"),

@@ -139,6 +139,8 @@ export const getMemberProfile = createServerFn({ method: "GET" })
 				id: members.id,
 				personId: members.personId,
 				name: members.name,
+				// What they're called, when it isn't the first token of `name` (#486).
+				preferredName: members.preferredName,
 				email: members.email,
 				phone: members.phone,
 				// "Signed-in account?" is now a Person-level fact (ADR-0008 Phase B):
@@ -190,6 +192,7 @@ export const getMemberProfile = createServerFn({ method: "GET" })
 			member: {
 				id: member.id,
 				name: member.name,
+				preferredName: member.preferredName,
 				email: member.email,
 				phone: member.phone,
 				officerPositions,
