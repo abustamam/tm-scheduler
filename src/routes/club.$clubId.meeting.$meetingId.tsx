@@ -67,6 +67,7 @@ import { deriveMeetingNavItems } from "#/lib/meeting-nav";
 import { deriveMeetingRoleFlags, pairedRoleIds } from "#/lib/meeting-roles";
 import { useEffectiveMember } from "#/lib/member-identity";
 import { footerDate } from "#/lib/slide-layout";
+import { hasWordOfTheDay } from "#/lib/word-poster";
 import { clearAvailability, setAvailability } from "#/server/availability";
 import {
 	completeMeeting,
@@ -571,7 +572,10 @@ function MeetingView() {
 					) : null}
 				</div>
 				<MeetingNavStrip clubId={clubId} items={navItems} />
-				{meeting.wordOfTheDay ? (
+				{/* Same predicate the "Word poster" button below uses, so the chip
+				    and the button agree about whether there is a word. Consistency,
+				    not a fix: the write paths trim, so blank cannot be stored. */}
+				{hasWordOfTheDay(meeting.wordOfTheDay) ? (
 					<p className="flex items-center gap-1.5 text-sm">
 						<Sparkles className="size-4 text-primary" aria-hidden />
 						<span className="text-muted-foreground">Word of the day:</span>

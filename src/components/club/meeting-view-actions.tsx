@@ -7,10 +7,10 @@ import type { Slide } from "#/lib/agenda-slides";
 import { hasWordOfTheDay } from "#/lib/word-poster";
 
 /**
- * Print + Present launch buttons for a meeting. Both open the public,
- * auth-agnostic standalone pages (which take a club slug + meeting id) in a new
- * tab. Shared by the signed-in agenda and meeting-detail views so their
- * external-launch affordances can't re-diverge (issue #140).
+ * Launch buttons for a meeting. They open the public, auth-agnostic standalone
+ * pages (which take a club slug + meeting id) in a new tab. Shared by the
+ * signed-in agenda and meeting-detail views so their external-launch
+ * affordances can't re-diverge (issue #140).
  *
  * When a built `deck` (+ club name) is supplied, a "Download .pptx" action
  * appears beside Present/Print (issue #147) — same ungated visibility. The deck

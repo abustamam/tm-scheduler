@@ -51,19 +51,12 @@ describe("MeetingViewActions", () => {
 		);
 	});
 
-	it("hides the Word poster button when the word is null", async () => {
-		await renderActions({ wordOfTheDay: null });
-		expect(screen.queryByText("Word poster")).toBeNull();
-	});
-
-	it("hides the Word poster button when no word prop is passed", async () => {
-		await renderActions();
-		expect(screen.queryByText("Word poster")).toBeNull();
-	});
-
-	// Whitespace-only is what an admin leaves behind after clearing the field, so
-	// it has to read as "no word" the same way the poster route treats it.
+	// The whitespace row is the one that earns its keep: it is the only case that
+	// fails if someone swaps `hasWordOfTheDay` for a bare `Boolean(...)`, which
+	// would show a button leading to a poster with nothing on it.
 	it.each([
+		["null", null],
+		["undefined", undefined],
 		["an empty string", ""],
 		["whitespace only", "   "],
 	])("hides the Word poster button for %s", async (_label, word) => {
