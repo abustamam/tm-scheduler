@@ -61,9 +61,14 @@ function WordPoster() {
 	// Reached only by a typed or shared URL — the button is hidden when there is
 	// no word. Offer the way back rather than a blank sheet to print.
 	//
-	// This branch renders no poster, so it renders no <DarkFooter /> either; it is
-	// still a public club surface, so it carries the disclaimer via
-	// <PublicFooter /> like the other shell-escaped routes (#381).
+	// This branch renders no poster, and so none of the poster's dark footer
+	// either. It is still a public club surface, so it renders PublicFooter to
+	// carry the TI non-affiliation disclaimer (#381).
+	//
+	// Do NOT write that component's name as a JSX tag in a comment in this file:
+	// public-disclaimer.guard.test.ts is a source grep, and a mention in prose
+	// satisfies it just as well as the real element — which would leave the
+	// footer below deletable with the guard still green.
 	if (!hasWordOfTheDay(word)) {
 		return (
 			<>

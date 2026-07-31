@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
+import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
 import { CONTENT_W, POSTER_PAD_X, posterWordSize } from "#/lib/word-poster";
 import { PAGE_W } from "./print-theme";
 import { WordOfTheDayPoster } from "./word-of-the-day-poster";
@@ -31,6 +32,24 @@ describe("WordOfTheDayPoster", () => {
 		render(<WordOfTheDayPoster {...base} />);
 		expect(screen.getByText("Downtown Toastmasters")).toBeTruthy();
 		expect(screen.getByText("Friday, July 31, 2026")).toBeTruthy();
+	});
+
+	// Trademark guard (#381 / ADR-0024) pinned where it belongs: this poster is a
+	// PUBLIC printable that hangs on a wall for a whole meeting, so it must carry
+	// the TI non-affiliation disclaimer. It gets it from print-theme's
+	// <DarkFooter />, and asserting it HERE — on the rendered artifact rather than
+	// on the route's source — survives any future change to how routes are
+	// registered, and holds for every surface that mounts this component.
+	it("carries the Toastmasters non-affiliation disclaimer", () => {
+		render(<WordOfTheDayPoster {...base} />);
+		expect(screen.getByText(TOASTMASTERS_DISCLAIMER)).toBeTruthy();
+	});
+
+	// The disclaimer is not conditional on the optional blocks: a word-only poster
+	// is the sparsest thing this component renders, and still a public surface.
+	it("carries the disclaimer even with no definition or example", () => {
+		render(<WordOfTheDayPoster {...base} definition={null} example={null} />);
+		expect(screen.getByText(TOASTMASTERS_DISCLAIMER)).toBeTruthy();
 	});
 
 	// Asserted against `posterWordSize` rather than literal px: the behaviour

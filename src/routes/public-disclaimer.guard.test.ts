@@ -44,14 +44,6 @@ const RENDERS_DISCLAIMER_VIA: Record<
 		renders: "MeetingAgendaPrint",
 		disclaimerIn: "src/components/agenda/print-theme.tsx",
 	},
-	"club.$clubId_.meeting.$meetingId.word.tsx": {
-		// WordOfTheDayPoster ends in print-theme's <DarkFooter />. Mapped rather
-		// than matched on <PublicFooter /> — which the route's no-word branch does
-		// render — so this still verifies the disclaimer on the branch that
-		// actually prints.
-		renders: "WordOfTheDayPoster",
-		disclaimerIn: "src/components/agenda/print-theme.tsx",
-	},
 };
 
 const clubRoutes = readdirSync(ROUTES)
