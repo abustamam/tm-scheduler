@@ -227,7 +227,7 @@ export interface CaptureGuestResult {
  * Guest-book capture (the public #239 front door). Create-or-find a club guest,
  * then record a visit against the club's current/nearest meeting.
  *
- * Dedup key is PHONE (normalized to digits) first, then EMAIL — a phone/email
+ * Dedup key is EMAIL first, then a PHONE whose name also agrees (#488) — a
  * match reuses the existing club guest (filling in any newly-supplied missing
  * contact); no match creates a fresh guest at `stage: prospect`. Returning
  * visitors thus get a NEW attendance row (a later meeting) rather than a
@@ -700,28 +700,39 @@ export interface ConvertGuestResult {
 export async function applyConvertGuestToMember(
 	input: ConvertGuestInput,
 ): Promise<ConvertGuestResult> {
-	const [guest] = await db
-		.select()
-		.from(guests)
-		.where(and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)))
-		.limit(1);
-	if (!guest) throw new Error("Guest not found in this club.");
-	if (guest.stage === "joined") {
-		throw new Error("This guest has already been converted to a member.");
-	}
-
-	const name = guest.name.trim();
-	// A "goes by" name recorded while they were a guest survives the promotion
-	// (#486) — it was true of the human, not of the guest row.
-	const preferredName = guest.preferredName?.trim() || null;
-	const email = guest.email?.trim() || null;
-	// Re-standardize to E.164 on the way into people/members (#295) — the guest
-	// row may predate normalize-on-write; the digits form (dedup) follows it.
 	const cc = await loadClubDefaultCountryCode(input.clubId);
-	const phone = toStoredPhone(guest.phone, cc);
-	const digits = normalizePhone(phone);
 
 	return db.transaction(async (tx) => {
+		// Lock the guest row FIRST, and re-check `stage` under that lock.
+		//
+		// The unique index (#489) only catches a double-add once both racers have
+		// resolved the SAME Person. Two concurrent converts of one CONTACTLESS
+		// guest — email and phone are both optional on the public book — each fall
+		// through to "create a fresh Person", so the two membership inserts carry
+		// DIFFERENT person_ids, the index never fires, and the club gets two roster
+		// rows plus two Person rows for one human. Serializing on the guest row is
+		// what actually closes that, and it is also what makes the `stage` check
+		// mean anything: read outside the transaction it was a stale snapshot.
+		const [guest] = await tx
+			.select()
+			.from(guests)
+			.where(and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)))
+			.limit(1)
+			.for("update");
+		if (!guest) throw new Error("Guest not found in this club.");
+		if (guest.stage === "joined") {
+			throw new Error("This guest has already been converted to a member.");
+		}
+
+		const name = guest.name.trim();
+		// A "goes by" name recorded while they were a guest survives the promotion
+		// (#486) — it was true of the human, not of the guest row.
+		const preferredName = guest.preferredName?.trim() || null;
+		const email = guest.email?.trim() || null;
+		// Re-standardize to E.164 on the way into people/members (#295) — the guest
+		// row may predate normalize-on-write; the digits form (dedup) follows it.
+		const phone = toStoredPhone(guest.phone, cc);
+		const digits = normalizePhone(phone);
 		// 1. Person dedup (email → phone+name → create). People are global
 		//    (club-less), so a wrong match here reaches across every club.
 		//

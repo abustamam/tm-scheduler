@@ -27,7 +27,8 @@ const uuid = z.string().uuid();
 /**
  * Guest-book capture (the public #239 front door). PUBLIC — no session required,
  * mirroring `addMember`/`getPublicSeasonGrid`: anyone at the meeting with the
- * club link may self-register. Create-or-find by phone→email + record a visit
+ * club link may self-register. Create-or-find by email→name-qualified phone
+ * (#488) + record a visit
  * against the club's current/nearest meeting.
  */
 export const submitGuestBook = createServerFn({ method: "POST" })

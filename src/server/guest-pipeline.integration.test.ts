@@ -1377,6 +1377,53 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			expect(rows).toHaveLength(1);
 		});
 
+		it("does not double-add a CONTACTLESS guest converted twice at once", async () => {
+			// The unique index only bites once both racers resolve the SAME Person.
+			// A guest with neither email nor phone (both optional on the public book)
+			// makes each racer mint a FRESH Person, so the two membership inserts
+			// carry different person_ids and the index never fires. Serializing on
+			// the guest row is what actually closes it.
+			const guestId = await seedGuest(seed.clubId, "No Contact At All");
+
+			const results = await Promise.allSettled([
+				applyConvertGuestToMember({
+					clubId: seed.clubId,
+					guestId,
+					actorMemberId: seed.adminMemberId,
+				}),
+				applyConvertGuestToMember({
+					clubId: seed.clubId,
+					guestId,
+					actorMemberId: seed.adminMemberId,
+				}),
+			]);
+
+			// Exactly one caller wins; the loser is told the guest already joined.
+			const ok = results.filter((r) => r.status === "fulfilled");
+			expect(ok).toHaveLength(1);
+			const rejected = results.find((r) => r.status === "rejected");
+			expect(String((rejected as PromiseRejectedResult).reason)).toMatch(
+				/already been converted/i,
+			);
+
+			// And the club has ONE roster row for that human, not two.
+			const [g] = await testDb
+				.select({ membershipId: guests.convertedMembershipId })
+				.from(guests)
+				.where(eq(guests.id, guestId));
+			const rows = await testDb
+				.select({ id: members.id })
+				.from(members)
+				.where(
+					and(
+						eq(members.clubId, seed.clubId),
+						eq(members.name, "No Contact At All"),
+					),
+				);
+			expect(rows).toHaveLength(1);
+			expect(rows[0]?.id).toBe(g?.membershipId);
+		});
+
 		it("re-reads the winner's row when it LOSES the insert race", async () => {
 			// The `Promise.all` case above happens to serialize, so it never reaches
 			// the recovery branch. Force it: hold a transaction open that has already

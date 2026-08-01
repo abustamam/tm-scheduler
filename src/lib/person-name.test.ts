@@ -114,6 +114,56 @@ describe("namesAgree", () => {
 		expect(namesAgree(nine, nine.replace("india", "i"))).toBe(false);
 	});
 
+	it("refuses a bare initial as a wildcard", () => {
+		// The hole that defeated the whole guard: a single letter matched ANY token,
+		// so a guest-book row named "J" carrying a member's household phone
+		// converted straight onto that member. Guest names have a 1-char minimum,
+		// so this was reachable by typing one character.
+		expect(namesAgree("Jane Doe", "j")).toBe(false);
+		expect(namesAgree("Jane Doe", "J.")).toBe(false);
+		expect(namesAgree("John Doe", "j")).toBe(false);
+	});
+
+	it("does not let a name particle absorb a different given name", () => {
+		// Real names, not adversarial input: a standalone particle is a token, and
+		// as an unguarded initial it matched any word starting with that letter.
+		expect(namesAgree("Ana Silva e Costa", "Eduardo Silva Costa")).toBe(false);
+		expect(namesAgree("Maria Garcia y Lopez", "Yolanda Garcia Lopez")).toBe(
+			false,
+		);
+	});
+
+	it("treats an apostrophe as part of the word, not a separator", () => {
+		// Splitting on all punctuation made "D'Angelo" into ["d","angelo"], and that
+		// stray "d" matched any D-name.
+		expect(namesAgree("David Russo", "D'Angelo Russo")).toBe(false);
+		expect(namesAgree("D'Angelo Russo", "DAngelo Russo")).toBe(true);
+		expect(namesAgree("O'Brien, Sean", "Sean O'Brien")).toBe(true);
+	});
+
+	it("does not read an email address as a name", () => {
+		expect(namesAgree("Jane Doe", "jane@doe.com")).toBe(false);
+	});
+
+	it("stays fast when no pairing exists, at any token count", () => {
+		// Kuhn's matching is O(V*E); the backtracking it replaced was factorial and
+		// reachable from the public guest book.
+		const stored = Array.from({ length: 8 }, () => "ab").join(" ");
+		const attack = `${Array.from({ length: 7 }, () => "ab").join(" ")} zz`;
+		const started = Date.now();
+		expect(namesAgree(stored, attack)).toBe(false);
+		expect(Date.now() - started).toBeLessThan(20);
+	});
+
+	it("bounds a pathologically long stored name", () => {
+		// The other side of the comparison comes from stored rows, and not every
+		// write path caps its input.
+		const huge = "ab ".repeat(50_000);
+		const started = Date.now();
+		expect(namesAgree(huge, "Jane Doe")).toBe(false);
+		expect(Date.now() - started).toBeLessThan(50);
+	});
+
 	it("treats an empty or punctuation-only name as no match", () => {
 		expect(namesAgree("", "Jane Doe")).toBe(false);
 		expect(namesAgree("Jane Doe", "   ")).toBe(false);
