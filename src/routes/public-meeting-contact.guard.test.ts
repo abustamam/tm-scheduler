@@ -1,6 +1,6 @@
-import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { readSource } from "#/test/guard-source";
 
 // PII guard (#37 / PR #284, updated #317, #meeting-key resolver): the PUBLIC
 // meeting surfaces must never ship member/guest CONTACT to a visitor not
@@ -8,7 +8,13 @@ import { describe, expect, it } from "vitest";
 // session-based `getMeetingByKey` ships contact only when canManage (admin).
 // A source-grep guard (like meetings-contact-gate.guard.test.ts) because the
 // leak is in what the loader SHIPS, which a render test can't see.
-const read = (rel: string) => readFileSync(resolve(__dirname, rel), "utf8");
+//
+// Comment-blind (see `#/test/guard-source`): the positive halves below ("loads
+// via getPublicMeetingByKey", "gates getMeetingByKey behind context.shell") are
+// "must BE present" assertions, and these routes carry comments that name both
+// loaders — so unstripped, a route could swap to the leaking loader and stay
+// green off its own explanatory comment.
+const read = (rel: string) => readSource(resolve(__dirname, rel));
 
 describe("public meeting routes never ship contact (#37 PII)", () => {
 	// Present/print are ALWAYS public (no signed-in shell) — strict: they may load

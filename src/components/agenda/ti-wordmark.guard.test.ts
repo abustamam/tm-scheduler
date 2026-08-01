@@ -99,6 +99,10 @@ describe("ADR-0024/#380: no vendored TI mark, anywhere in the shipped tree", () 
 		const offenders: string[] = [];
 		for (const abs of sourceFiles) {
 			if (!SCANNED.test(abs)) continue;
+			// Deliberately NOT `#/test/guard-source` (which blanks comments). This
+			// asserts an offender list is EMPTY, so a comment can only ever add a
+			// false offender — stripping would LOOSEN the guard, not harden it. That
+			// is the opposite direction from the "pattern must BE present" guards.
 			if (TI_MARK.test(readFileSync(abs, "utf8"))) {
 				offenders.push(relative(ROOT, abs));
 			}

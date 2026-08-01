@@ -43,6 +43,10 @@ describe("server-fn modules keep db logic out of the client bundle", () => {
 	);
 
 	for (const file of files) {
+		// Deliberately NOT `#/test/guard-source` (which blanks comments). This
+		// asserts an offender list is EMPTY, so a comment can only ever add a false
+		// offender — stripping would LOOSEN the guard, not harden it. That is the
+		// opposite direction from the "pattern must BE present" guards.
 		const src = readFileSync(join(serverDir, file), "utf8");
 		if (!src.includes("createServerFn")) continue; // pure helper module — exempt
 

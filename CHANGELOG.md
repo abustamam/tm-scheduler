@@ -2,6 +2,12 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.3.1.0] - 2026-07-31
+
+### Fixed
+
+- Several guard tests could be satisfied by a comment rather than by the code they exist to protect. They assert on raw file text, so a file that merely *mentioned* the required pattern in a comment passed exactly as well as one that implemented it — leaving the real code deletable with the guard still green. That was not hypothetical: it happened while adding the Word of the Day poster, where a comment naming `<PublicFooter />` kept the disclaimer guard passing after the element was removed. Seven guards now read their sources through a shared stripper that blanks comments while preserving line numbers and offsets. Each bypass was reproduced before the fix and confirmed to fail after it. Two guards that match in the opposite direction — where a comment can only cause a false failure, never a pass — deliberately keep reading raw source, and now say so. Nothing user-facing changes.
+
 ## [1.3.0.2] - 2026-07-31
 
 ### Changed
