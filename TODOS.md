@@ -4,18 +4,7 @@
 >
 > This file is for in-flight work that is not worth an issue yet: follow-ups noticed mid-branch, deferred pieces of something currently being built. Anything that outlives the branch it was noticed on should become an issue, and the entry here should be deleted rather than mirrored.
 >
-> Format: group under `## <Component>`, one `**Priority:**` (P0-P4) per item, completed items move to `## Guests & identity
-
-- `findBestPersonByEmail` (`people-logic.ts`, used by create-club) ranks candidates with `pickKeeper` — account-linked first, then history, then oldest — while the convert path's inline email lookup takes plain oldest-first. Same input, two different answers to "which Person owns this email", in a codebase whose `person-identity-logic.ts` header argues against exactly that divergence. Calling the shared helper is a one-line change; it was left out of the #488/#489 branch to keep an already-large diff from growing an unreviewed behaviour change.
-  **Priority:** P3
-
-- `members_club_idx` is now a strict prefix of `members_club_person_unique` and serves no query the composite cannot, so it is dead weight on every members write. Dropping it is a follow-up migration; `members_person_idx` must stay (person_id is the trailing column and `people-merge-logic.ts` looks up by person alone).
-  **Priority:** P4
-
-- `PHONE_CANDIDATE_LIMIT = 50` is untested on both dedup scans — shrinking it to 3 is invisible to the suite. Pinning it needs 51 same-phone rows with the only agreeing row sorting last, which is a slow fixture for a documented-and-safe overrun (the cap can only ever mean "no match", which creates a fresh Person).
-  **Priority:** P4
-
-## Completed` with the version that shipped them. `/ship` reads this file and moves items itself when the diff shows the work is done.
+> Format: group under `## <Component>`, one `**Priority:**` (P0-P4) per item, completed items move to `## Completed` with the version that shipped them. `/ship` reads this file and moves items itself when the diff shows the work is done.
 
 ## Meetings
 
@@ -47,6 +36,17 @@
   **Priority:** P4
 
 - `scripts/measure-word-poster.ts` has no tests because `main()` runs at import, so nothing is reachable. It is the harness that derives the Word of the Day poster's font-size tables, and a wrong result there ships mid-word breaks on a wall poster. `scripts/import-agendas-logic.ts` is the repo's precedent for extracting a testable `*-logic.ts` alongside an entry-point script.
+  **Priority:** P4
+
+## Guests & identity
+
+- `findBestPersonByEmail` (`people-logic.ts`, used by create-club) ranks candidates with `pickKeeper` — account-linked first, then history, then oldest — while the convert path's inline email lookup takes plain oldest-first. Same input, two different answers to "which Person owns this email", in a codebase whose `person-identity-logic.ts` header argues against exactly that divergence. Calling the shared helper is a one-line change; it was left out of the #488/#489 branch to keep an already-large diff from growing an unreviewed behaviour change.
+  **Priority:** P3
+
+- `members_club_idx` is now a strict prefix of `members_club_person_unique` and serves no query the composite cannot, so it is dead weight on every members write. Dropping it is a follow-up migration; `members_person_idx` must stay (person_id is the trailing column and `people-merge-logic.ts` looks up by person alone).
+  **Priority:** P4
+
+- `PHONE_CANDIDATE_LIMIT = 50` is untested on both dedup scans — shrinking it to 3 is invisible to the suite. Pinning it needs 51 same-phone rows with the only agreeing row sorting last, which is a slow fixture for a documented-and-safe overrun (the cap can only ever mean "no match", which creates a fresh Person).
   **Priority:** P4
 
 ## Completed
