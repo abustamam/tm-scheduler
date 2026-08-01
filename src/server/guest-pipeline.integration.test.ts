@@ -1277,6 +1277,37 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			expect(res.personId).not.toBe(newer);
 		});
 
+		it("does NOT fuse onto an email shared by two people (ADR-0008)", async () => {
+			// A family address is real, and ADR-0008 is explicit: match on email only
+			// when it resolves to exactly one person, never auto-merge on an email
+			// shared by 2+. Otherwise promoting email to the FIRST key would just
+			// move the household fusion from the phone branch to the email branch.
+			const shared = `family-${randomUUID()}@example.com`;
+			const one = await trackedPerson({ name: "Pat Family", email: shared });
+			const two = await trackedPerson({ name: "Sam Family", email: shared });
+
+			const { guestId } = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Sam Family",
+				email: shared,
+			});
+			const res = await applyConvertGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+
+			// Neither existing Person is claimed — a fresh one is minted, which the
+			// superadmin merge tool can fuse deliberately later.
+			expect(res.personId).not.toBe(one);
+			expect(res.personId).not.toBe(two);
+			const [p] = await testDb
+				.select({ name: people.name })
+				.from(people)
+				.where(eq(people.id, res.personId));
+			expect(p?.name).toBe("Sam Family");
+		});
+
 		it("keeps two guests on one phone as two separate prospects", async () => {
 			// Same root cause on the guest side: collapsing them into one row merges
 			// their attendance and undercounts the VP-Membership funnel.

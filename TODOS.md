@@ -6,9 +6,6 @@
 >
 > Format: group under `## <Component>`, one `**Priority:**` (P0-P4) per item, completed items move to `## Guests & identity
 
-- Two Persons sharing one email still fuse on convert. `people.email` has no unique constraint and `listDuplicatePeople()` exists precisely because a family address is real, so the household case #488 fixed for phone numbers remains open on the email branch — which the same change promoted to run FIRST. Not a regression (no case fuses that phone-first did not), but it is the same threat sitting in the branch that claims to fix it. Applying `namesAgree` to email would split "Bob Smith"/"Robert Smith", which this codebase explicitly declines to model, so it needs a product call rather than a patch.
-  **Priority:** P3
-
 - `findBestPersonByEmail` (`people-logic.ts`, used by create-club) ranks candidates with `pickKeeper` — account-linked first, then history, then oldest — while the convert path's inline email lookup takes plain oldest-first. Same input, two different answers to "which Person owns this email", in a codebase whose `person-identity-logic.ts` header argues against exactly that divergence. Calling the shared helper is a one-line change; it was left out of the #488/#489 branch to keep an already-large diff from growing an unreviewed behaviour change.
   **Priority:** P3
 

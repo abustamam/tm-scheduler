@@ -754,13 +754,21 @@ export async function applyConvertGuestToMember(
 		// not even stable across runs. `findGuestByContact` already does this.
 		const order = [asc(people.createdAt), asc(people.id)] as const;
 		if (email) {
-			const [p] = await tx
+			// Take TWO, not one. ADR-0008's precedence says to match on email only
+			// when it "resolves to exactly one person", and to "never auto-merge on
+			// an email shared by 2+ distinct people (guards against fusing spouses /
+			// shared family emails)". A family address is real — `listDuplicatePeople`
+			// exists because of it — and matching the oldest of two would be the same
+			// household fusion #488 fixes for phone numbers, just on the key this
+			// change promoted to go first. The CSV importer already honours this
+			// (its `ambiguous` stat); the convert path did not.
+			const candidates = await tx
 				.select({ id: people.id })
 				.from(people)
 				.where(sql`lower(${people.email}) = ${email.toLowerCase()}`)
 				.orderBy(...order)
-				.limit(1);
-			if (p) personId = p.id;
+				.limit(2);
+			if (candidates.length === 1) personId = candidates[0]?.id ?? null;
 		}
 		if (!personId && digits) {
 			// Every phone match is a CANDIDATE, not a result — scan them for one
