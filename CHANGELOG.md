@@ -2,6 +2,17 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.3.2.0] - 2026-07-31
+
+### Fixed
+
+- **A guest who shares a phone number with a member no longer converts onto that member's record.** A shared household or work number is ordinary in a guest book — a member brings their spouse, both write the same mobile — and the convert step matched on the digits alone, so the newcomer was filed as the person they came with. `members`, `speeches` and `path_enrollments` all hang off the Person, which means every speech that guest went on to deliver and their whole Pathways progress would have accrued to the wrong human, silently and across every club they belong to. Production already had one number shared by two people; nothing had tripped it only because neither had been converted from a guest row. Matching now leads with email, which identifies one human, and accepts a phone match only when the names also agree. When neither qualifies it creates a new Person rather than guessing: a missed match is visible and the superadmin merge tool fixes it, where a wrong match is neither. The same guard applies to the guest book itself, so two people on one number stay two prospects instead of merging their attendance. #488
+- **A club can no longer end up with two roster rows for one person.** Several paths asserted one-membership-per-person-per-club in a comment and enforced it with a read followed by a write, so two admins converting guests at the same moment — or two overlapping CSV imports, which share no transaction at all — could both see "no membership" and both insert. That is the duplicate class the superadmin merge tool exists to unpick by hand. The database now enforces it, and the convert and import paths recover by reading the winning row instead of failing. Converting the same guest twice at once is also serialized now, which the constraint alone could not cover: a guest with neither email nor phone made each attempt mint its own Person, so the two rows never collided. #489
+
+### Notes for this club
+
+- A returning guest who writes their name differently enough will now be recorded as a new prospect rather than merged into the earlier row. Abbreviations are handled ("Jamie R." still matches "Jamie Rivera"), but nicknames deliberately are not — this codebase holds that "Bob" is not derivable from "Robert", which is why the *Goes by* field exists. Visit counts on the VP-Membership funnel may split for anyone who signs in inconsistently.
+
 ## [1.3.1.0] - 2026-07-31
 
 ### Fixed

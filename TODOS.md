@@ -4,7 +4,21 @@
 >
 > This file is for in-flight work that is not worth an issue yet: follow-ups noticed mid-branch, deferred pieces of something currently being built. Anything that outlives the branch it was noticed on should become an issue, and the entry here should be deleted rather than mirrored.
 >
-> Format: group under `## <Component>`, one `**Priority:**` (P0-P4) per item, completed items move to `## Completed` with the version that shipped them. `/ship` reads this file and moves items itself when the diff shows the work is done.
+> Format: group under `## <Component>`, one `**Priority:**` (P0-P4) per item, completed items move to `## Guests & identity
+
+- Two Persons sharing one email still fuse on convert. `people.email` has no unique constraint and `listDuplicatePeople()` exists precisely because a family address is real, so the household case #488 fixed for phone numbers remains open on the email branch — which the same change promoted to run FIRST. Not a regression (no case fuses that phone-first did not), but it is the same threat sitting in the branch that claims to fix it. Applying `namesAgree` to email would split "Bob Smith"/"Robert Smith", which this codebase explicitly declines to model, so it needs a product call rather than a patch.
+  **Priority:** P3
+
+- `findBestPersonByEmail` (`people-logic.ts`, used by create-club) ranks candidates with `pickKeeper` — account-linked first, then history, then oldest — while the convert path's inline email lookup takes plain oldest-first. Same input, two different answers to "which Person owns this email", in a codebase whose `person-identity-logic.ts` header argues against exactly that divergence. Calling the shared helper is a one-line change; it was left out of the #488/#489 branch to keep an already-large diff from growing an unreviewed behaviour change.
+  **Priority:** P3
+
+- `members_club_idx` is now a strict prefix of `members_club_person_unique` and serves no query the composite cannot, so it is dead weight on every members write. Dropping it is a follow-up migration; `members_person_idx` must stay (person_id is the trailing column and `people-merge-logic.ts` looks up by person alone).
+  **Priority:** P4
+
+- `PHONE_CANDIDATE_LIMIT = 50` is untested on both dedup scans — shrinking it to 3 is invisible to the suite. Pinning it needs 51 same-phone rows with the only agreeing row sorting last, which is a slow fixture for a documented-and-safe overrun (the cap can only ever mean "no match", which creates a fresh Person).
+  **Priority:** P4
+
+## Completed` with the version that shipped them. `/ship` reads this file and moves items itself when the diff shows the work is done.
 
 ## Meetings
 
