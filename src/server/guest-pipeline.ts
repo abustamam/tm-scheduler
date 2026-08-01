@@ -9,6 +9,7 @@ import {
 	captureGuestVisit,
 	loadGuestPipeline,
 } from "./guest-pipeline-logic";
+import { guestBookSchema } from "./guest-pipeline-schemas";
 
 // The db-touching logic lives in `guest-pipeline-logic.ts` (never imported by
 // client routes) so it can't drag `#/db` → `pg` into the browser bundle. This
@@ -22,22 +23,6 @@ export type {
 } from "./guest-pipeline-logic";
 
 const uuid = z.string().uuid();
-
-// Bounds on a PUBLIC, session-less write. `name` reaches `namesAgree`, whose
-// pairing search is bounded separately (`MAX_MATCH_TOKENS`) — this is the second
-// layer, and also what stops an unauthenticated POST writing an arbitrarily long
-// value into an unbounded `text` column. The admin edit path already caps its
-// own fields; the public front door was the one that didn't.
-const guestBookSchema = z.object({
-	clubId: uuid,
-	name: z
-		.string()
-		.trim()
-		.min(1, "Please enter your name.")
-		.max(120, "That name is too long."),
-	email: z.string().trim().email().max(200).optional().or(z.literal("")),
-	phone: z.string().trim().max(40).optional().or(z.literal("")),
-});
 
 /**
  * Guest-book capture (the public #239 front door). PUBLIC — no session required,

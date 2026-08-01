@@ -1042,10 +1042,10 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			// all Person-scoped, so every speech and Pathways enrollment the newcomer
 			// ever records would have filed under the wrong human.
 			const shared = uniquePhone();
-			const [spouse] = await testDb
-				.insert(people)
-				.values({ name: "Jane Doe", phone: toStoredPhone(shared, "1") })
-				.returning({ id: people.id });
+			const spouse = await trackedPerson({
+				name: "Jane Doe",
+				phone: toStoredPhone(shared, "1"),
+			});
 
 			const { guestId } = await captureGuestVisit({
 				clubId: seed.clubId,
@@ -1058,7 +1058,7 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 				actorMemberId: seed.adminMemberId,
 			});
 
-			expect(res.personId).not.toBe(spouse?.id);
+			expect(res.personId).not.toBe(spouse);
 			const [p] = await testDb
 				.select({ name: people.name })
 				.from(people)
@@ -1069,10 +1069,10 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 		it("still fuses onto a phone match when the name agrees", async () => {
 			// The guard must not cost us the dedupe it qualifies.
 			const shared = uniquePhone();
-			const [self] = await testDb
-				.insert(people)
-				.values({ name: "Jamie Rivera", phone: toStoredPhone(shared, "1") })
-				.returning({ id: people.id });
+			const self = await trackedPerson({
+				name: "Jamie Rivera",
+				phone: toStoredPhone(shared, "1"),
+			});
 
 			const { guestId } = await captureGuestVisit({
 				clubId: seed.clubId,
@@ -1085,7 +1085,7 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 				actorMemberId: seed.adminMemberId,
 			});
 
-			expect(res.personId).toBe(self?.id);
+			expect(res.personId).toBe(self);
 		});
 
 		it("scans PAST an older phone match whose name disagrees", async () => {
@@ -1123,14 +1123,11 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			// disagree the email is the one to trust.
 			const shared = uniquePhone();
 			const email = `both-${randomUUID()}@example.com`;
-			const [byPhone] = await testDb
-				.insert(people)
-				.values({ name: "Pat Doe", phone: toStoredPhone(shared, "1") })
-				.returning({ id: people.id });
-			const [byEmail] = await testDb
-				.insert(people)
-				.values({ name: "Pat Doe", email })
-				.returning({ id: people.id });
+			const byPhone = await trackedPerson({
+				name: "Pat Doe",
+				phone: toStoredPhone(shared, "1"),
+			});
+			const byEmail = await trackedPerson({ name: "Pat Doe", email });
 
 			const { guestId } = await captureGuestVisit({
 				clubId: seed.clubId,
@@ -1144,8 +1141,8 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 				actorMemberId: seed.adminMemberId,
 			});
 
-			expect(res.personId).toBe(byEmail?.id);
-			expect(res.personId).not.toBe(byPhone?.id);
+			expect(res.personId).toBe(byEmail);
+			expect(res.personId).not.toBe(byPhone);
 		});
 
 		it("reuses the EMAIL match even when a phone match also exists", async () => {
@@ -1219,6 +1216,65 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 					phone: shared,
 				}),
 			).rejects.toThrow(/already/i);
+		});
+
+		it("scans PAST an older same-phone GUEST whose name disagrees", async () => {
+			// Mirror of the Person-side scan test. Without it the guest-side
+			// `byPhone.find(...)` could be `byPhone[0]` and the suite stays green.
+			const shared = uniquePhone();
+			const jane = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Jane Roe",
+				phone: shared,
+			});
+			const john = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "John Roe",
+				phone: shared,
+			});
+			expect(john.guestId).not.toBe(jane.guestId);
+
+			// "John R." agrees with John only — Jane is the OLDER row on that phone.
+			const again = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "John R.",
+				phone: shared,
+			});
+			expect(again.created).toBe(false);
+			expect(again.guestId).toBe(john.guestId);
+			expect(again.guestId).not.toBe(jane.guestId);
+		});
+
+		it("links the OLDEST agreeing Person when two share a phone", async () => {
+			// Pins the deterministic ORDER BY. Insert the newer row FIRST and then
+			// backdate the other, so heap order disagrees with createdAt order —
+			// otherwise a seq scan returns the right answer without any ORDER BY.
+			const shared = uniquePhone();
+			const newer = await trackedPerson({
+				name: "Jamie Rivera",
+				phone: toStoredPhone(shared, "1"),
+			});
+			const older = await trackedPerson({
+				name: "Jamie Rivera",
+				phone: toStoredPhone(shared, "1"),
+			});
+			await testDb
+				.update(people)
+				.set({ createdAt: new Date("2020-01-01T00:00:00Z") })
+				.where(eq(people.id, older));
+
+			const { guestId } = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Jamie Rivera",
+				phone: shared,
+			});
+			const res = await applyConvertGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+			expect(res.personId).toBe(older);
+			expect(res.personId).not.toBe(newer);
 		});
 
 		it("keeps two guests on one phone as two separate prospects", async () => {

@@ -286,8 +286,18 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 			winnerId = row?.id ?? "";
 		});
 
+		// The CSV row carries contact the winner's row does NOT have. Without that,
+		// `classifyMembership` yields a byte-identical `set` and the re-classify
+		// below is a provable no-op — the test would pass with the fix deleted,
+		// which is exactly the trap CLAUDE.md warns about for guard-only code.
 		const running = importPeopleAndMembers(clubId, [
-			row({ customerId: "PN-RACE", name: "Racing Member" }),
+			row({
+				customerId: "PN-RACE",
+				name: "Racing Member",
+				email: "race@x.io",
+				phone: "5551230000",
+				joinedAt: new Date("2020-01-02T00:00:00Z"),
+			}),
 		]);
 		await waitForLockWait('insert into "members"', winner.pid);
 		await winner.commit();
@@ -299,11 +309,59 @@ describe.skipIf(!hasTestDb)("importPeopleAndMembers (ADR-0008 dedupe)", () => {
 		expect(stats.membersUpdated).toBe(1);
 
 		const rows = await testDb
-			.select({ id: members.id })
+			.select({
+				id: members.id,
+				email: members.email,
+				phone: members.phone,
+				joinedAt: members.joinedAt,
+			})
 			.from(members)
 			.where(and(eq(members.clubId, clubId), eq(members.personId, personId)));
 		expect(rows).toHaveLength(1);
 		expect(rows[0]?.id).toBe(winnerId);
+		// The losing row's data landed instead of being dropped on the floor.
+		expect(rows[0]?.email).toBe("race@x.io");
+		expect(rows[0]?.phone).toBe("+15551230000");
+		expect(rows[0]?.joinedAt?.toISOString()).toBe("2020-01-02T00:00:00.000Z");
+	});
+
+	it("keeps the winner's values on the raced path (fill-only, #489)", async () => {
+		// The recovery reconciles, but must not CLOBBER: fill-only means the row
+		// already present wins on any field it has.
+		const clubId = await club();
+		const [person] = await testDb
+			.insert(people)
+			.values({ customerId: "PN-FILL", name: "Fill Only" })
+			.returning({ id: people.id });
+		const personId = person?.id ?? "";
+
+		const winner = await openBlockingTx(async (tx) => {
+			await tx.insert(members).values({
+				clubId,
+				personId,
+				name: "Fill Only",
+				email: "winner@x.io",
+			});
+		});
+
+		const running = importPeopleAndMembers(clubId, [
+			row({
+				customerId: "PN-FILL",
+				name: "Fill Only",
+				email: "csv@x.io",
+				phone: "5559990000",
+			}),
+		]);
+		await waitForLockWait('insert into "members"', winner.pid);
+		await winner.commit();
+		await running;
+
+		const [m] = await testDb
+			.select({ email: members.email, phone: members.phone })
+			.from(members)
+			.where(and(eq(members.clubId, clubId), eq(members.personId, personId)));
+		expect(m?.email).toBe("winner@x.io"); // not clobbered
+		expect(m?.phone).toBe("+15559990000"); // empty slot filled
 	});
 
 	it("counts an unparseable non-blank position without opening a term", async () => {

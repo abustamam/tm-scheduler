@@ -103,6 +103,17 @@ describe("namesAgree", () => {
 		expect(namesAgree(nine, nine.replace("tok8", "t"))).toBe(false);
 	});
 
+	it("still pairs at exactly the cap", () => {
+		// Boundary: MAX_MATCH_TOKENS is 8, and the check is `> MAX`. An 8-token pair
+		// must still go through the pairing search (so an initial matches), or a
+		// `>` → `>=` slip would silently switch real names to exact-only.
+		const eight = "alpha bravo charlie delta echo foxtrot golf hotel";
+		expect(namesAgree(eight, eight.replace("hotel", "h"))).toBe(true);
+		// Nine tokens is over the cap: exact only, so the initial no longer matches.
+		const nine = `${eight} india`;
+		expect(namesAgree(nine, nine.replace("india", "i"))).toBe(false);
+	});
+
 	it("treats an empty or punctuation-only name as no match", () => {
 		expect(namesAgree("", "Jane Doe")).toBe(false);
 		expect(namesAgree("Jane Doe", "   ")).toBe(false);
