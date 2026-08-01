@@ -13,6 +13,22 @@ checkout corrupt each other's work. Before any file edit or commit, create
 and enter a dedicated git worktree (`git worktree add`). Exceptions:
 read-only/inspection tasks, or when the human explicitly says to edit in place.
 
+**Then bootstrap it — this is not optional:**
+
+```bash
+bun run worktree:setup "what you are building"
+```
+
+A worktree shares git history and nothing else. It starts with no
+`node_modules`, no `.env.local`, no `ref/`, and no CodeLedger index — so
+`db:*`, `dev` and the seed all fail, and CodeLedger silently returns empty
+bundles reporting 0% recall rather than erroring. Four releases shipped from
+worktrees on 2026-07-31 with CodeLedger contributing nothing for exactly that
+reason. The script is idempotent, so re-run it whenever you are unsure. Pass a
+task description to also get a task-scoped bundle; omit it for deps and env
+only. Afterwards `git status` should be empty — if it is not, something in the
+bootstrap wrote a tracked file and that is a bug worth chasing.
+
 ## Stack
 
 - **TanStack Start** (React 19, SSR via Nitro), file-based routing under `src/routes/`.
