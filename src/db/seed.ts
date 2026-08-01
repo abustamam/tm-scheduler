@@ -82,7 +82,11 @@ interface MeetingSpec {
 	scheduledAt: Date;
 	theme: string;
 	location: string;
-	wordOfTheDay: string;
+	// Optional so a meeting can be seeded with NO Word of the Day. The column is
+	// nullable and the insert passes this straight through, so `undefined` lands
+	// as NULL — which is the only way to reach the empty state on the poster,
+	// print and present surfaces from seed data (#492).
+	wordOfTheDay?: string;
 	wodDefinition?: string;
 	wodExample?: string;
 	reminders?: string;
@@ -978,6 +982,40 @@ async function main() {
 				theme: "Tides of Change",
 				location: "Harbor Library, Meeting Room 2",
 				wordOfTheDay: "Momentum",
+			},
+			// QA fixtures (#492). Harbor is the sparse club — its first two meetings
+			// already carry a word with no definition or example, which is why the
+			// awkward shapes live here rather than in MCF, whose data should stay
+			// realistic for demos. These three exist so the Word of the Day poster,
+			// the print layouts and the projected deck can be checked in a browser
+			// without hand-editing the database. Do not "tidy" them into ordinary
+			// meetings; each one is the only seed route to a branch.
+			{
+				// No Word of the Day at all → the poster's empty state, and the
+				// meeting page's "Word poster" button must NOT render.
+				scheduledAt: dayAt(17, 18),
+				theme: "Open Floor",
+				location: "Harbor Library, Meeting Room 2",
+			},
+			{
+				// 14 characters, and the widest real word measured at that length —
+				// exercises the third size bucket near its limit.
+				scheduledAt: dayAt(24, 18),
+				theme: "Saying Less",
+				location: "Harbor Library, Meeting Room 2",
+				wordOfTheDay: "Cumbersomeness",
+				wodDefinition: "the quality of being awkward to carry, use, or say",
+				wodExample: "He trimmed the cumbersomeness out of his opening line.",
+			},
+			{
+				// All caps routes to the second size table, which is ~20-30% smaller
+				// because capitals run wider. Members really do type words this way.
+				scheduledAt: dayAt(31, 18),
+				theme: "Fleeting Moments",
+				location: "Harbor Library, Meeting Room 2",
+				wordOfTheDay: "EPHEMERAL",
+				wodDefinition: "lasting for a very short time",
+				wodExample: "The applause was ephemeral; the lesson was not.",
 			},
 		],
 	});

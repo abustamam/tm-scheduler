@@ -3,6 +3,7 @@ import { MeetingPresent } from "#/components/agenda/meeting-present";
 import { OfflineBadge } from "#/components/agenda/offline-badge";
 import { buildSlideDeck } from "#/lib/agenda-slides";
 import { resolveClubOrRedirect } from "#/lib/club-route";
+import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import { getPublicMeetingByKey } from "#/server/meetings";
 
 export const Route = createFileRoute(
@@ -10,8 +11,15 @@ export const Route = createFileRoute(
 )({
 	loader: async ({ params, location }) => {
 		const club = await resolveClubOrRedirect(params.clubId, location);
+		// An unknown meeting key is a 404, not a 500: `getPublicMeetingByKey`
+		// signals it by throwing, and without this the visitor gets the error
+		// boundary instead of the router's not-found page. Same translation the
+		// canonical meeting route does.
 		const data = await getPublicMeetingByKey({
 			data: { clubId: club.id, key: params.meetingId },
+		}).catch((err) => {
+			if (isMeetingNotFoundError(err)) throw notFound();
+			throw err;
 		});
 		if (data.meeting.clubId !== club.id) throw notFound();
 		return data;

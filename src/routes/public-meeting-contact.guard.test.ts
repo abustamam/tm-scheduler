@@ -17,6 +17,7 @@ describe("public meeting routes never ship contact (#37 PII)", () => {
 	for (const rel of [
 		"club.$clubId_.meeting.$meetingId.present.tsx",
 		"club.$clubId_.meeting.$meetingId.print.tsx",
+		"club.$clubId_.meeting.$meetingId.word.tsx",
 	]) {
 		it(`${rel} loads via getPublicMeetingByKey only`, () => {
 			const src = read(rel);
