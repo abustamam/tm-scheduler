@@ -56,7 +56,7 @@ vi.mock("sonner", () => ({
 }));
 
 import { toast } from "sonner";
-import { Route } from "./club-settings";
+import { CLUB_LOGO_COPY, Route } from "./club-settings";
 
 afterEach(() => {
 	cleanup();
@@ -72,8 +72,6 @@ const ADMIN_CLUB = {
 	clubNumber: "123456",
 	clubRole: "admin" as const,
 };
-
-const ATTESTATION_LABEL = "I confirm my club is authorized to use this image.";
 
 /** The loader payload shape the component reads, with only what it touches. */
 function loaderData(
@@ -120,20 +118,20 @@ function pngFile(name = "logo.png", size = 4) {
 
 function saveButton() {
 	return screen.getByRole("button", {
-		name: "Save club logo",
+		name: CLUB_LOGO_COPY.saveCta,
 	}) as HTMLButtonElement;
 }
 
 function attestationCheckbox() {
 	return screen.getByRole("checkbox", {
-		name: ATTESTATION_LABEL,
+		name: CLUB_LOGO_COPY.attestationLabel,
 	}) as HTMLInputElement;
 }
 
 describe("Club settings — Club logo preview", () => {
 	it("shows the empty state when no logo is set", async () => {
 		await renderRoute(loaderData({ logoMeta: null }));
-		expect(screen.getByText("No logo set yet.")).toBeTruthy();
+		expect(screen.getByText(CLUB_LOGO_COPY.emptyState)).toBeTruthy();
 		expect(screen.queryByTestId("club-logo-preview")).toBeNull();
 	});
 
@@ -145,21 +143,25 @@ describe("Club settings — Club logo preview", () => {
 		expect(img.getAttribute("src")).toBe(
 			`/api/club/${ADMIN_CLUB.clubId}/logo?v=${new Date("2026-07-31T00:00:00Z").getTime()}`,
 		);
-		expect(screen.queryByText("No logo set yet.")).toBeNull();
+		expect(screen.queryByText(CLUB_LOGO_COPY.emptyState)).toBeNull();
 	});
 });
 
 describe("Club settings — Remove logo button gate", () => {
 	it("is absent when no logo is set", async () => {
 		await renderRoute(loaderData({ logoMeta: null }));
-		expect(screen.queryByRole("button", { name: "Remove logo" })).toBeNull();
+		expect(
+			screen.queryByRole("button", { name: CLUB_LOGO_COPY.removeCta }),
+		).toBeNull();
 	});
 
 	it("is present when a logo is set", async () => {
 		await renderRoute(
 			loaderData({ logoMeta: { updatedAt: "2026-07-31T00:00:00Z" } }),
 		);
-		expect(screen.getByRole("button", { name: "Remove logo" })).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: CLUB_LOGO_COPY.removeCta }),
+		).toBeTruthy();
 	});
 });
 
@@ -212,11 +214,11 @@ describe("Club settings — client-side pre-checks", () => {
 		const fileInput = document.getElementById("logoFile") as HTMLInputElement;
 		await user.upload(fileInput, oversized);
 
-		expect(toast.error).toHaveBeenCalledWith(
-			"Club logo must be 256KB or smaller.",
-		);
+		expect(toast.error).toHaveBeenCalledWith(CLUB_LOGO_COPY.sizeError);
 		// The file must not become the pending upload: no filename echoed...
-		expect(screen.queryByText("Selected: big.png")).toBeNull();
+		expect(
+			screen.queryByText(`${CLUB_LOGO_COPY.selectedFilePrefix}big.png`),
+		).toBeNull();
 		// ...and checking attestation still can't enable submit.
 		await user.click(attestationCheckbox());
 		expect(saveButton().disabled).toBe(true);
@@ -236,10 +238,10 @@ describe("Club settings — client-side pre-checks", () => {
 		const fileInput = document.getElementById("logoFile") as HTMLInputElement;
 		await user.upload(fileInput, svg);
 
-		expect(toast.error).toHaveBeenCalledWith(
-			"Club logo must be a PNG or JPEG image.",
-		);
-		expect(screen.queryByText("Selected: logo.svg")).toBeNull();
+		expect(toast.error).toHaveBeenCalledWith(CLUB_LOGO_COPY.typeError);
+		expect(
+			screen.queryByText(`${CLUB_LOGO_COPY.selectedFilePrefix}logo.svg`),
+		).toBeNull();
 		await user.click(attestationCheckbox());
 		expect(saveButton().disabled).toBe(true);
 	});
@@ -251,6 +253,8 @@ describe("Club settings — client-side pre-checks", () => {
 		await user.upload(fileInput, pngFile("good.png", 256 * 1024));
 
 		expect(toast.error).not.toHaveBeenCalled();
-		expect(screen.getByText("Selected: good.png")).toBeTruthy();
+		expect(
+			screen.getByText(`${CLUB_LOGO_COPY.selectedFilePrefix}good.png`),
+		).toBeTruthy();
 	});
 });

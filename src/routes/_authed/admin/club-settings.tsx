@@ -43,6 +43,37 @@ async function fileToBase64(file: File): Promise<string> {
 	return btoa(binary);
 }
 
+/**
+ * Every user-visible string in the Club logo section, in one place.
+ *
+ * ADR-0024 constraint 1 forbids naming any trademark in this feature's copy.
+ * `club-logo-copy.guard.test.ts` greps THIS BLOCK rather than the whole file,
+ * because the file legitimately says "Toastmaster of the Day" elsewhere
+ * (nominative use, ADR-0024 decision 2). Keep all logo copy here so the guard
+ * stays enforceable — a string inlined in JSX escapes it.
+ */
+export const CLUB_LOGO_COPY = {
+	sectionTitle: "Club logo",
+	sectionDescription: "Shown on the printed meeting agenda.",
+	currentLabel: "Current logo",
+	uploadCta: "Upload a logo",
+	replaceCta: "Replace logo",
+	emptyState: "No logo set yet.",
+	selectedFilePrefix: "Selected: ",
+	helpText: "PNG or JPEG, up to 256KB.",
+	attestationLabel: "I confirm my club is authorized to use this image.",
+	responsibilityNote:
+		"Your club is responsible for the image it uploads. Questions?",
+	contactLinkText: "Contact us.",
+	saveCta: "Save club logo",
+	removeCta: "Remove logo",
+	uploadSuccess: "Club logo saved.",
+	removeSuccess: "Club logo removed.",
+	typeError: "Club logo must be a PNG or JPEG image.",
+	sizeError: "Club logo must be 256KB or smaller.",
+	genericError: "Something went wrong.",
+} as const;
+
 export const Route = createFileRoute("/_authed/admin/club-settings")({
 	beforeLoad: ({ context }) => {
 		const adminClub = effectiveAdminClub(context);
@@ -165,11 +196,11 @@ function ClubSettings() {
 		// magic-byte check this client can't do), so a check removed here can
 		// only make the error slower to surface, never let a bad file through.
 		if (!ALLOWED_LOGO_TYPES.has(file.type)) {
-			toast.error("Club logo must be a PNG or JPEG image.");
+			toast.error(CLUB_LOGO_COPY.typeError);
 			return;
 		}
 		if (file.size > MAX_LOGO_BYTES) {
-			toast.error("Club logo must be 256KB or smaller.");
+			toast.error(CLUB_LOGO_COPY.sizeError);
 			return;
 		}
 		setLogoFile(file);
@@ -191,12 +222,14 @@ function ClubSettings() {
 					attested: logoAttested,
 				},
 			});
-			toast.success("Club logo saved.");
+			toast.success(CLUB_LOGO_COPY.uploadSuccess);
 			setLogoFile(null);
 			setLogoAttested(false);
 			await router.invalidate();
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+			toast.error(
+				err instanceof Error ? err.message : CLUB_LOGO_COPY.genericError,
+			);
 		} finally {
 			setUploadingLogo(false);
 		}
@@ -206,10 +239,12 @@ function ClubSettings() {
 		setRemovingLogo(true);
 		try {
 			await removeClubLogoFn({ data: { clubId: adminClub.clubId } });
-			toast.success("Club logo removed.");
+			toast.success(CLUB_LOGO_COPY.removeSuccess);
 			await router.invalidate();
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+			toast.error(
+				err instanceof Error ? err.message : CLUB_LOGO_COPY.genericError,
+			);
 		} finally {
 			setRemovingLogo(false);
 		}
@@ -370,16 +405,16 @@ function ClubSettings() {
 
 			<div className="pt-2">
 				<h2 className="font-display text-xl font-semibold tracking-[-0.01em]">
-					Club logo
+					{CLUB_LOGO_COPY.sectionTitle}
 				</h2>
 				<p className="text-sm text-muted-foreground">
-					Shown on the printed meeting agenda.
+					{CLUB_LOGO_COPY.sectionDescription}
 				</p>
 			</div>
 
 			<form onSubmit={onUploadLogo} className="max-w-xl space-y-4">
 				<div className="space-y-2">
-					<Label>Current logo</Label>
+					<Label>{CLUB_LOGO_COPY.currentLabel}</Label>
 					{logoSrc ? (
 						<img
 							src={logoSrc}
@@ -388,13 +423,15 @@ function ClubSettings() {
 							className="h-16 w-auto max-w-[12rem] rounded-md border border-input object-contain p-2"
 						/>
 					) : (
-						<p className="text-sm text-muted-foreground">No logo set yet.</p>
+						<p className="text-sm text-muted-foreground">
+							{CLUB_LOGO_COPY.emptyState}
+						</p>
 					)}
 				</div>
 
 				<div className="space-y-2">
 					<Label htmlFor="logoFile">
-						{logoSrc ? "Replace logo" : "Upload a logo"}
+						{logoSrc ? CLUB_LOGO_COPY.replaceCta : CLUB_LOGO_COPY.uploadCta}
 					</Label>
 					<Input
 						id="logoFile"
@@ -405,11 +442,12 @@ function ClubSettings() {
 					/>
 					{logoFile ? (
 						<p className="text-xs text-muted-foreground">
-							Selected: {logoFile.name}
+							{CLUB_LOGO_COPY.selectedFilePrefix}
+							{logoFile.name}
 						</p>
 					) : null}
 					<p className="text-xs text-muted-foreground">
-						PNG or JPEG, up to 256KB.
+						{CLUB_LOGO_COPY.helpText}
 					</p>
 				</div>
 
@@ -419,15 +457,14 @@ function ClubSettings() {
 						checked={logoAttested}
 						onChange={(e) => setLogoAttested(e.target.checked)}
 					/>
-					I confirm my club is authorized to use this image.
+					{CLUB_LOGO_COPY.attestationLabel}
 				</label>
 
 				<p className="text-xs text-muted-foreground">
-					Your club is responsible for the image it uploads. Questions?{" "}
+					{CLUB_LOGO_COPY.responsibilityNote}{" "}
 					<a href={ACCESS_REQUEST_MAILTO} className="underline">
-						Contact us
+						{CLUB_LOGO_COPY.contactLinkText}
 					</a>
-					.
 				</p>
 
 				<div className="flex gap-2">
@@ -439,7 +476,7 @@ function ClubSettings() {
 						{uploadingLogo ? (
 							<Loader2 className="size-4 animate-spin" />
 						) : (
-							"Save club logo"
+							CLUB_LOGO_COPY.saveCta
 						)}
 					</Button>
 					{logoSrc ? (
@@ -452,7 +489,7 @@ function ClubSettings() {
 							{removingLogo ? (
 								<Loader2 className="size-4 animate-spin" />
 							) : (
-								"Remove logo"
+								CLUB_LOGO_COPY.removeCta
 							)}
 						</Button>
 					) : null}
