@@ -1,7 +1,8 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { readSource } from "#/test/guard-source";
 
 /**
  * Guard against re-introducing the forgeable audit trail of #396.
@@ -47,6 +48,18 @@ import { describe, expect, it } from "vitest";
  * no-auth write endpoint is human review of `PUBLIC_ACTOR_MODULES` below; the
  * size assertion at the bottom of this file makes widening that allowlist show
  * up in the diff instead of landing as a silently-green one-line edit.
+ *
+ * ## Comment-blind source
+ *
+ * Every read goes through `#/test/guard-source`, which blanks comments. The
+ * driving reason is the "public no-auth write paths" test at the bottom: it is a
+ * "must BE present" assertion (`from "./write-actor-logic"`), the shape a
+ * comment satisfies for free, and these modules discuss their own actor
+ * resolution in prose. It also makes the two offender sweeps more accurate in
+ * both directions — a commented-out `actorMemberId:` is not a declaration, a
+ * commented-out `claimedActorMemberId: data.actorMemberId` is not a resolution
+ * to be counted, and a `}` inside a comment can no longer end a `z.object({ … })`
+ * span early and hide the fields after it.
  */
 const serverDir = dirname(fileURLToPath(import.meta.url));
 
@@ -139,7 +152,7 @@ describe("activity_log actors are derived, not client-supplied (#396)", () => {
 	});
 
 	for (const file of files) {
-		const src = readFileSync(join(serverDir, file), "utf8");
+		const src = readSource(join(serverDir, file));
 
 		it(`${file} does not accept an actor in a validated payload`, () => {
 			if (PUBLIC_ACTOR_MODULES.has(file) || ACTOR_FILTER_MODULES.has(file)) {
@@ -178,7 +191,7 @@ describe("activity_log actors are derived, not client-supplied (#396)", () => {
 		// must actually be resolving it, so relaxing the resolver back into a bare
 		// pass-through can't slip past rule 2 by simply deleting the read.
 		for (const file of PUBLIC_ACTOR_MODULES) {
-			const src = readFileSync(join(serverDir, file), "utf8");
+			const src = readSource(join(serverDir, file));
 			expect(
 				src,
 				`${file} accepts an asserted actor but never resolves it`,

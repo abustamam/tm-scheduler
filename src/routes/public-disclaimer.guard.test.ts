@@ -11,28 +11,33 @@
 // test, because the thing being protected is *coverage of a route set*: a NEW
 // public club route added a year from now must not be able to ship without a
 // footer, and no render test of today's routes can assert that.
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { readSource } from "#/test/guard-source";
 
 const ROUTES = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(ROUTES, "../..");
-const read = (rel: string) => readFileSync(resolve(ROOT, rel), "utf8");
 
 /**
- * Strip comments before matching. These assertions are source greps, so a route
- * that merely MENTIONS `<PublicFooter />` in a comment explaining its footer
- * satisfies them exactly as well as the element does — leaving the real footer
- * deletable with this file still green. That is not hypothetical: it happened
- * while adding the Word of the Day poster route, and a mutation check (delete
- * the element, keep the comment) is what surfaced it. Stripping makes the guard
- * immune structurally, rather than asking every future author to remember.
+ * Every read here is comment-blind (see `#/test/guard-source`). These
+ * assertions are source greps, so a route that merely MENTIONS
+ * `<PublicFooter />` in a comment explaining its footer satisfies them exactly
+ * as well as the element does — leaving the real footer deletable with this
+ * file still green. That is not hypothetical: it happened while adding the Word
+ * of the Day poster route, and a mutation check (delete the element, keep the
+ * comment) is what surfaced it. Stripping makes the guard immune structurally,
+ * rather than asking every future author to remember.
+ *
+ * The shared helper replaced a local stripper that had two holes of its own: it
+ * deleted block comments outright (shifting every offset after one, which the
+ * `indexOf("</AppShell>")` slice below depends on) and only removed FULL-LINE
+ * `//` comments, so a trailing `<div /> // <PublicFooter />` still satisfied a
+ * grep.
  */
-const stripComments = (s: string) =>
-	s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-const readRoute = (file: string) =>
-	stripComments(readFileSync(resolve(ROUTES, file), "utf8"));
+const read = (rel: string) => readSource(resolve(ROOT, rel));
+const readRoute = (file: string) => readSource(resolve(ROUTES, file));
 
 /** The shared footer every public club surface should reach for. */
 const FOOTER_COMPONENT = "src/components/public-footer.tsx";
@@ -75,9 +80,15 @@ const RENDERS_DISCLAIMER_VIA: Record<
  * substring test it would also have silently dropped a future public club route
  * whose name happened to contain ".test.", removing it from this guard with
  * nothing failing.
+ *
+ * Comment-blind like every other read here — this one was reading the raw file
+ * while every assertion below read the stripped one, so the guard's route SET
+ * and its checks disagreed about what a file contains. A file that only
+ * discusses `export const Route` in a comment enrolled and then had to satisfy
+ * the footer assertions on text that no longer included that comment.
  */
 const exportsRoute = (file: string) =>
-	/export const Route\b/.test(readFileSync(resolve(ROUTES, file), "utf8"));
+	/export const Route\b/.test(readRoute(file));
 
 const clubRoutes = readdirSync(ROUTES)
 	.filter((f) => f.startsWith("club.") && f.endsWith(".tsx") && exportsRoute(f))

@@ -1,6 +1,7 @@
 # ADR-0024: Toastmasters trademarks — remove the official wordmark, keep nominative word use
 
-Status: Accepted (decision 3 revisited 2026-07-26 — see "Revisited" below)
+Status: Accepted (decision 3 revisited 2026-07-26; decisions 1 and 4 revisited 2026-07-31 against
+Brand Manual v2.0 — see both "Revisited" sections below)
 
 ## Context
 
@@ -96,6 +97,12 @@ a lawyer's read until commercialization") were both explicitly conditioned on th
 undecided. It no longer is — monetization is on the table, which fires decision 4's own trigger and
 invalidates the premise decision 3 rested on.
 
+> **Correction (2026-07-31):** "fires decision 4's own trigger" overstates it, and this sentence has
+> since been read literally as "counsel is due now." Monetization was, and remains, *intent* —
+> GavelUp is not charging. Decision 4's trigger is **money changing hands**, which has not happened;
+> see the 2026-07-31 revisit. Decision 3 (delete the vendored assets) is unaffected and stands: that
+> call turns on git history being permanent, not on the timing of revenue.
+
 **What changes: decision 3 is reversed.** The ten vendored official TI mark assets
 (`src/assets/ToastmastersWordmark*.{png,svg}`, `ToastmastersLogo3Color.{png,svg}`) are **deleted**
 from the repository.
@@ -113,9 +120,80 @@ renderers to (a) a grep of the whole `src/` + `extension/` tree for the asset-re
 
 **Not changed.** Decisions 1 (no reproduced mark in rendered/exported output) and 2 (the word
 "Toastmasters" under nominative fair use) stand as written; the #256 non-affiliation disclaimer
-still does not license the marks. Decision 4's deferral has now fired: counsel's read on the
-nominative-use posture is due at commercialization, tracked separately.
+still does not license the marks. Decision 4's deferral stands, with commercialization as the
+trigger. *(2026-07-31: the original wording here said the deferral "has now fired," which was wrong
+on the facts — see the correction above and the 2026-07-31 revisit.)*
 
 **Deliberately out of scope: git history is not rewritten.** The assets remain in earlier commits.
 That is expected and proportionate — a force-push across a repo with this much branch history costs
 more than it buys, and deleting from `HEAD` is what the due-diligence posture actually turns on.
+
+## Revisited — 2026-07-31 (Brand Manual v2.0, rev. 07/2026)
+
+**Trigger: reading the actual source.** Every prior decision here was made against TI's Trademark &
+Copyright FAQ. The Brand Manual itself (v2.0, 41pp,
+`content.toastmasters.org/image/upload/02330-001-0001-brand-manual.pdf`) is more specific, and it
+moves the line.
+
+**p.32 explicitly authorizes agendas.** The Trademark Use Request chart is keyed on *who the user
+is*, and the first row reads:
+
+> **Clubs, Areas, Divisions, and Districts** — Authorized: "Stationery, business cards, bulletins,
+> newsletters, electronic media, websites, program covers, **agendas**, and similar items, only if
+> directly related to, and focused on, the mission." **Responsible: Club President.**
+
+So a club putting the TI logo on its own agenda is the *sanctioned* case, needs no Trademark Use
+Request, and has a named responsible party. Decision 1 was written as "no reproduced mark in
+rendered output" on the assumption that any mark on an agenda was exposure. That assumption was
+wrong.
+
+**What changes: decision 1 narrows from "no mark" to "GavelUp does not supply the mark."**
+The exposure was never the logo appearing on an agenda — it is *GavelUp hosting and distributing
+the asset*. Two things make that distinct from the club's own authorized use:
+
+- **p.34** — TI materials "may not be reuploaded, rehosted, or otherwise made available in any
+  other format on any other website."
+- **Every agenda surface here is public and un-authed** (`club.$clubId_.meeting.$meetingId.{print,
+  present,word}`, `club.$clubId_.roles`, `club.$clubId.meeting.$meetingId`). A Word document goes
+  to whoever the author sends it to; these are URLs anyone can fetch.
+
+Ship the asset and GavelUp made every copy, with no authorized user anywhere in the chain. Let the
+club supply it and an authorized user made one copy of a mark it may use on exactly this material,
+with GavelUp as the tool — the Word/Canva model, neither of which bundles TI's logo. Same pixels
+rendered, materially different position. This holds even when the file a club uploads *is* the
+official TI wordmark: that is the p.32 case, not a loophole.
+
+**Constraints for the club-supplied implementation.** These are what keep the above true, and they
+are not obvious from the feature description — an implementer gets them wrong by default:
+
+1. **Do not induce the use.** Label the field **"Club logo."** Never name the mark in UI copy,
+   placeholder, help text, onboarding, or docs; ship no TM example image and no preseeded default.
+   Third-party protection for user uploads (*Tiffany v. eBay*, 2d Cir. 2010 — no contributory
+   liability absent specific knowledge of particular infringing instances) is forfeited by
+   soliciting the specific use. This rule is free and is the highest-leverage one.
+2. **Scope uploads strictly per-club.** No shared asset library, template gallery, "logos other
+   clubs use," or cross-club reuse of an uploaded image — that makes GavelUp the distributor and
+   collapses the whole posture. This is the constraint most likely to be violated later as an
+   obvious convenience.
+3. **Attestation at upload** — one checkbox, "I confirm my club is authorized to use this image,"
+   putting the representation on the party p.32 already names.
+4. **A removal path** plus a contact route, so specific knowledge can be acted on.
+
+**Enforcement gap, stated explicitly.** `ti-wordmark.guard.test.ts` does **not** cover this. It
+matches filenames like `ToastmastersWordmark*.{png,svg}` in `src/` and `extension/`; a club upload
+named `logo.png` living in object storage is invisible to it. That is correct — the guard's job is
+to stop the repo from re-vendoring the mark, which decision 3 still forbids — but it means
+constraints 1 and 2 above have **no automated backstop** and must be held by review.
+
+**Decision 4 (counsel) has NOT fired.** GavelUp is not charging as of 2026-07-31; monetization is
+intent, not fact. The trigger is money changing hands. Paying a trademark attorney pre-revenue to
+answer "don't host the file yourself" is bad sequencing.
+
+**Not changed.** Decision 2 (nominative use of the word "Toastmasters") and decision 3 (no vendored
+TI assets in the repo) stand as written. Decision 3 in particular does **not** relax: this revisit
+permits a *club-uploaded* image at runtime, never a TI mark committed to the tree.
+
+**On the brand palette.** Adopting TI's colors is a bad trade in both directions and is not
+proposed: p.12 forbids placing the logo on colors outside the brand palette (so the mark *costs*
+palette freedom rather than granting it), and using TI's palette *without* the mark only increases
+the affiliation confusion the #256 disclaimer exists to manage. GavelUp keeps its own palette.

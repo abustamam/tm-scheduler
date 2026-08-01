@@ -18,15 +18,22 @@
 // are covered by integration tests that call `applyMemberEdit`/
 // `applyUpdateGuest` directly, and this wiring sits between the two where no
 // existing test can see it.
-import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { readSource } from "#/test/guard-source";
 
 const ROUTES = dirname(fileURLToPath(import.meta.url));
-// Whitespace-stripped so Biome's line-wrapping can't fool the matches.
+/**
+ * Comments are blanked FIRST (see `#/test/guard-source`), then whitespace is
+ * collapsed so Biome's line-wrapping can't fool the matches. The order is
+ * load-bearing in both directions: these are "must BE present" assertions that
+ * a comment would otherwise satisfy, and collapsing whitespace first would fuse
+ * comment prose into the surrounding code text and manufacture matches that
+ * exist in neither.
+ */
 const read = (rel: string) =>
-	readFileSync(resolve(ROUTES, rel), "utf8").replace(/\s+/g, "");
+	readSource(resolve(ROUTES, rel)).replace(/\s+/g, "");
 
 /** The two forms that let a human record what someone is called. */
 const FORMS = [
