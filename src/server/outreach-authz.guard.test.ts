@@ -1,6 +1,6 @@
-import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { readSource } from "#/test/guard-source";
 
 // Structural authz guard (#340): setContacted/clearContacted are officer-only
 // writes to meeting_outreach and must stay gated admin-only + meeting-not-locked
@@ -13,7 +13,11 @@ import { describe, expect, it } from "vitest";
 // silent weakening (e.g. downgraded to ["member"], or the lock check dropped)
 // that the integration test would never surface.
 describe("outreach write-fn authz gating (#340)", () => {
-	const src = readFileSync(resolve(__dirname, "outreach.ts"), "utf8");
+	// Comment-blind (see `#/test/guard-source`): "the gate must BE present" is
+	// exactly the assertion shape a comment satisfies for free. outreach.ts
+	// documents its own gating in prose, so unstripped, deleting
+	// `assertMeetingNotLocked(` or the requireClubRole call could leave this green.
+	const src = readSource(resolve(__dirname, "outreach.ts"));
 
 	function handlerBody(exportName: string): string {
 		const start = src.indexOf(`export const ${exportName}`);

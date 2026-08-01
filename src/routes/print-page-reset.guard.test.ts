@@ -18,13 +18,22 @@
 //
 // If `PRINT_PAGE_CSS` is ever extracted into a shared primitive (TODOS.md), the
 // right move is to delete this and assert the primitive once.
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { readSource } from "#/test/guard-source";
 
 const ROUTES = dirname(fileURLToPath(import.meta.url));
-const read = (file: string) => readFileSync(resolve(ROUTES, file), "utf8");
+/**
+ * Comment-blind (see `#/test/guard-source`): these are "the rule must BE
+ * present" assertions, so a route that only MENTIONS
+ * `.pgwrap { padding: 0 !important }` in a comment explaining its reset would
+ * satisfy them with the real rule deleted. Blanking comments also protects
+ * `printBlock` below — a stray `}` in a comment inside the `@media print` block
+ * would otherwise close the block early and hide the rules after it.
+ */
+const read = (file: string) => readSource(resolve(ROUTES, file));
 
 /**
  * The `@media print { … }` body, brace-matched rather than regex-matched: the
