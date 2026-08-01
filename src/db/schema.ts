@@ -3,6 +3,7 @@ import {
 	type AnyPgColumn,
 	boolean,
 	check,
+	customType,
 	index,
 	integer,
 	jsonb,
@@ -29,6 +30,15 @@ export {
 // user is re-exported above for Better-Auth; imported here for people.userId and
 // notifications foreign keys (the person-level auth link — ADR-0008 Phase B).
 import { user } from "./auth-schema";
+
+// drizzle-orm 0.45.1 has no built-in `bytea` type and the repo has no prior
+// precedent for one — define it once (#495, `club_logos.bytes`). Buffer in,
+// Buffer out; no text/base64 encoding at the db layer.
+export const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+	dataType() {
+		return "bytea";
+	},
+});
 
 // ---------------------------------------------------------------------------
 // Enums
@@ -267,6 +277,47 @@ export const clubMeetingRecurrence = pgTable(
 		),
 	],
 );
+
+// ---------------------------------------------------------------------------
+// Club logo (#495) — the club-uploaded image shown on the printed agenda.
+// Deliberately a SEPARATE 1:1 table, NOT columns on `clubs`: ~35 call sites
+// read a club row with `SELECT *`/no column list (including the authorization
+// path in `guards.ts`), and a 256 KB `bytea` on `clubs` would be dragged
+// through every one of them for a feature that renders on a single page.
+// `club_meeting_recurrence` above is the repo's existing precedent for 1:1
+// club data that is not a simple scalar.
+//
+// PK is `club_id` itself (not a synthetic id) — a club has at most one logo,
+// and the PK enforces that without a separate unique index; it also makes
+// `onConflictDoUpdate` on the PK a natural upsert for "replace or insert".
+//
+// Every column is NOT NULL, deliberately: a partial write (bytes with no
+// `updated_at`) would produce a URL with no version, and the serving route's
+// `Cache-Control: immutable` would then pin that image in every client's
+// cache with no way to bust it. `onDelete: "cascade"` — deleting a club takes
+// its logo with it.
+//
+// `attested_by` / `attested_at` record who confirmed the club is authorized
+// to use the uploaded image (ADR-0024 trademark posture) — persisted, not
+// merely shown at upload time.
+//
+// The header-build read path (agenda print SSR) must select only `club_id`
+// and `updated_at` — never `bytes` — see `loadClubLogoMeta` in
+// `src/server/club-logo-logic.ts`.
+// ---------------------------------------------------------------------------
+
+export const clubLogos = pgTable("club_logos", {
+	clubId: uuid("club_id")
+		.primaryKey()
+		.references(() => clubs.id, { onDelete: "cascade" }),
+	bytes: bytea("bytes").notNull(),
+	mime: text("mime").notNull(), // "image/png" | "image/jpeg" only
+	updatedAt: timestamp("updated_at").notNull(), // cache-buster source for ?v=
+	attestedBy: text("attested_by")
+		.notNull()
+		.references(() => user.id),
+	attestedAt: timestamp("attested_at").notNull(),
+});
 
 // ---------------------------------------------------------------------------
 // People — one row per human, above per-club membership (ADR-0008 / #64).
@@ -1394,6 +1445,7 @@ export const clubsRelations = relations(clubs, ({ one, many }) => ({
 	members: many(members),
 	guests: many(guests),
 	recurrence: one(clubMeetingRecurrence),
+	logo: one(clubLogos),
 }));
 
 export const clubMeetingRecurrenceRelations = relations(
@@ -1405,6 +1457,13 @@ export const clubMeetingRecurrenceRelations = relations(
 		}),
 	}),
 );
+
+export const clubLogosRelations = relations(clubLogos, ({ one }) => ({
+	club: one(clubs, {
+		fields: [clubLogos.clubId],
+		references: [clubs.id],
+	}),
+}));
 
 export const guestsRelations = relations(guests, ({ one, many }) => ({
 	club: one(clubs, { fields: [guests.clubId], references: [clubs.id] }),
