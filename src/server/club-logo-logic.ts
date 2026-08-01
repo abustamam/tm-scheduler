@@ -14,6 +14,7 @@ import { eq } from "drizzle-orm";
 import { db } from "#/db";
 import { clubLogos, clubs } from "#/db/schema";
 import { isClubArchived } from "#/lib/club-archive";
+import { logActivity } from "./activity";
 
 /** Matches `clubs-logic.ts`'s `UUID_RE` — comparing a non-UUID string against
  *  a `uuid` column makes Postgres throw ("invalid input syntax for type
@@ -63,6 +64,37 @@ function isAllowedMime(mime: string): mime is AllowedMime {
 export type ClubLogoMeta = { updatedAt: Date };
 
 /**
+ * Is this club id one a PUBLIC caller may read logo data for at all?
+ *
+ * Both logo read paths funnel through here, deliberately. `src/lib/club-archive.ts`
+ * states the repo-wide invariant: "every public no-auth club loader must treat
+ * [an archived club] as not-found... ANY new public club loader MUST call it
+ * too." Both `loadClubLogoMeta` (public via `getClubLogoMeta`) and
+ * `loadClubLogoForServing` (public via the GET route) are such loaders.
+ *
+ * This is ONE function rather than the same two lines in both, because they
+ * previously disagreed: the serving path checked archived and the meta path
+ * did not, so an archived club's logo 404'd from the route while
+ * `getClubLogoMeta` still reported it existed — an anonymous metadata leak,
+ * and a broken `<img>` on the admin page for an archived club (whose admin
+ * can still reach `/admin/club-settings`, since `effectiveAdminClub` has no
+ * archive check). Sharing the gate is what stops them drifting apart again.
+ *
+ * Archiving is also this feature's takedown lever (ADR-0024 constraint 4), so
+ * a read path that ignores it defeats the mechanism the trademark posture
+ * leans on.
+ */
+async function isReadableClub(clubId: string): Promise<boolean> {
+	if (!UUID_RE.test(clubId)) return false;
+	const [club] = await db
+		.select({ archivedAt: clubs.archivedAt })
+		.from(clubs)
+		.where(eq(clubs.id, clubId))
+		.limit(1);
+	return Boolean(club) && !isClubArchived(club);
+}
+
+/**
  * Existence + version for a club's logo — enough to build the versioned
  * `<img src>` URL, nothing more. Deliberately does NOT select `bytes`: this
  * runs on every printed-agenda SSR render, and a 256 KB pull per render would
@@ -73,7 +105,7 @@ export type ClubLogoMeta = { updatedAt: Date };
 export async function loadClubLogoMeta(
 	clubId: string,
 ): Promise<ClubLogoMeta | null> {
-	if (!UUID_RE.test(clubId)) return null;
+	if (!(await isReadableClub(clubId))) return null;
 	const [row] = await db
 		.select({ updatedAt: clubLogos.updatedAt })
 		.from(clubLogos)
@@ -96,18 +128,19 @@ export async function loadClubLogoMeta(
  */
 export async function loadClubLogoForServing(
 	clubId: string,
-): Promise<{ bytes: Buffer; mime: string } | null> {
-	if (!UUID_RE.test(clubId)) return null;
-
-	const [club] = await db
-		.select({ archivedAt: clubs.archivedAt })
-		.from(clubs)
-		.where(eq(clubs.id, clubId))
-		.limit(1);
-	if (!club || isClubArchived(club)) return null;
+): Promise<{ bytes: Buffer; mime: string; updatedAt: Date } | null> {
+	if (!(await isReadableClub(clubId))) return null;
 
 	const [row] = await db
-		.select({ bytes: clubLogos.bytes, mime: clubLogos.mime })
+		.select({
+			bytes: clubLogos.bytes,
+			mime: clubLogos.mime,
+			// Returned so the route can compare the caller's `?v=` against the
+			// real version: only a matching one earns the 1-year `immutable`
+			// directive. Without that, a bare or stale URL pins bytes in shared
+			// caches for a year and a replacement never reaches them.
+			updatedAt: clubLogos.updatedAt,
+		})
 		.from(clubLogos)
 		.where(eq(clubLogos.clubId, clubId))
 		.limit(1);
@@ -133,6 +166,10 @@ export interface ApplyClubLogoUploadInput {
 	attested: boolean;
 	/** Session user id — persisted as `attestedBy`. */
 	userId: string;
+	/** The acting member row for the activity log. Null for a superadmin
+	 *  acting via impersonation (memberless in the club) — `logActivity`
+	 *  attributes that case to the real superadmin instead. */
+	actorMemberId: string | null;
 }
 
 /**
@@ -173,29 +210,67 @@ export async function applyClubLogoUpload(
 	}
 
 	const now = new Date();
-	await db
-		.insert(clubLogos)
-		.values({
-			clubId: input.clubId,
-			bytes,
-			mime: input.mime,
-			updatedAt: now,
-			attestedBy: input.userId,
-			attestedAt: now,
-		})
-		.onConflictDoUpdate({
-			target: clubLogos.clubId,
-			set: {
+	await db.transaction(async (tx) => {
+		await tx
+			.insert(clubLogos)
+			.values({
+				clubId: input.clubId,
 				bytes,
 				mime: input.mime,
 				updatedAt: now,
 				attestedBy: input.userId,
 				attestedAt: now,
-			},
+			})
+			.onConflictDoUpdate({
+				target: clubLogos.clubId,
+				set: {
+					bytes,
+					mime: input.mime,
+					updatedAt: now,
+					attestedBy: input.userId,
+					attestedAt: now,
+				},
+			});
+		// Same transaction as the write: an audit entry that can disagree with
+		// the row it describes is worse than none. `detail` carries shape only,
+		// never the image bytes.
+		await logActivity(tx, {
+			clubId: input.clubId,
+			actorMemberId: input.actorMemberId,
+			action: "club_logo_set",
+			targetType: "club",
+			targetId: input.clubId,
+			detail: { mime: input.mime, bytes: bytes.length },
 		});
+	});
 }
 
-/** Delete a club's logo. A no-op (not an error) when none exists. */
-export async function removeClubLogo(clubId: string): Promise<void> {
-	await db.delete(clubLogos).where(eq(clubLogos.clubId, clubId));
+/**
+ * Delete a club's logo. A no-op (not an error) when none exists.
+ *
+ * Logged even though the row is gone: `club_logos.attested_by`/`attested_at`
+ * are destroyed by this delete, so without an activity entry a removal leaves
+ * no record of who did it — the one moment ADR-0024's "act on a complaint"
+ * story most needs one.
+ */
+export async function removeClubLogo(
+	clubId: string,
+	actorMemberId: string | null,
+): Promise<void> {
+	await db.transaction(async (tx) => {
+		const removed = await tx
+			.delete(clubLogos)
+			.where(eq(clubLogos.clubId, clubId))
+			.returning({ clubId: clubLogos.clubId });
+		// Only log a removal that actually removed something, so a repeated
+		// no-op click doesn't pad the club's activity feed.
+		if (removed.length === 0) return;
+		await logActivity(tx, {
+			clubId,
+			actorMemberId,
+			action: "club_logo_removed",
+			targetType: "club",
+			targetId: clubId,
+		});
+	});
 }

@@ -33,8 +33,11 @@ const uploadSchema = z.object({
 	// base64 inflates size ~33% — the two numbers are deliberately different.
 	base64: z.string().min(1).max(350_000),
 	// Client-declared MIME — validated (allow-list + magic-byte sniff) server
-	// side in club-logo-logic.ts, never trusted here.
-	mime: z.string(),
+	// side in club-logo-logic.ts, never trusted here. Bounded so a padded
+	// value can't ride in the payload as far as the logic layer; the friendly
+	// "Only PNG or JPEG" message still comes from that allow-list, so the
+	// bound deliberately isn't a `z.enum`.
+	mime: z.string().max(64),
 	// The required "I confirm my club is authorized to use this image"
 	// checkbox. Re-validated server-side in the logic layer — the disabled
 	// submit button on the client is not the gate (ADR-0024 constraint 3).
@@ -46,13 +49,18 @@ export const uploadClubLogo = createServerFn({ method: "POST" })
 	.validator((i: unknown) => uploadSchema.parse(i))
 	.handler(async ({ data }) => {
 		const sessionUser = await requireUser();
-		await requireClubRole(sessionUser.id, data.clubId, ["admin"]);
+		const membership = await requireClubRole(sessionUser.id, data.clubId, [
+			"admin",
+		]);
 		await applyClubLogoUpload({
 			clubId: data.clubId,
 			base64: data.base64,
 			mime: data.mime,
 			attested: data.attested,
 			userId: sessionUser.id,
+			// Null for a read-write impersonating superadmin (memberless in the
+			// club) — `logActivity` attributes that write to the real superadmin.
+			actorMemberId: membership.id,
 		});
 	});
 
@@ -61,8 +69,10 @@ export const removeClubLogoFn = createServerFn({ method: "POST" })
 	.validator((i: unknown) => clubIdSchema.parse(i))
 	.handler(async ({ data }) => {
 		const sessionUser = await requireUser();
-		await requireClubRole(sessionUser.id, data.clubId, ["admin"]);
-		await removeClubLogo(data.clubId);
+		const membership = await requireClubRole(sessionUser.id, data.clubId, [
+			"admin",
+		]);
+		await removeClubLogo(data.clubId, membership.id);
 	});
 
 /**

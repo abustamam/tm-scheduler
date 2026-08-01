@@ -20,16 +20,37 @@ import { loadClubLogoForServing } from "#/server/club-logo-logic";
 export const Route = createFileRoute("/api/club/$clubId/logo")({
 	server: {
 		handlers: {
-			GET: async ({ params }) => {
+			GET: async ({ params, request }) => {
 				const logo = await loadClubLogoForServing(params.clubId);
 				if (!logo) {
 					return new Response("Not found.", { status: 404 });
 				}
+
+				// `immutable` is only sound for a URL that actually names a
+				// version. A bare `/api/club/:id/logo`, or a stale `?v=`, would
+				// otherwise be pinned in browser and proxy caches for a year —
+				// a replaced logo would never reach anyone holding that URL, and
+				// an archive-takedown could not reach already-cached copies
+				// either. Mismatches still SERVE (a stale link keeps rendering,
+				// which the offline print flow depends on) but revalidate soon.
+				const requestedVersion = new URL(request.url).searchParams.get("v");
+				const isCurrentVersion =
+					requestedVersion === String(logo.updatedAt.getTime());
+
 				return new Response(new Uint8Array(logo.bytes), {
 					status: 200,
 					headers: {
 						"content-type": logo.mime,
-						"cache-control": "public, max-age=31536000, immutable",
+						"cache-control": isCurrentVersion
+							? "public, max-age=31536000, immutable"
+							: "public, max-age=300, must-revalidate",
+						// Defense in depth. `mime` can only ever be one of the two
+						// values the upload allow-list permits, and an <img> load
+						// never executes its response as script — but this URL can
+						// also be navigated to directly, and sniffing a polyglot
+						// whose bytes start with a valid PNG/JPEG signature is the
+						// edge this closes.
+						"x-content-type-options": "nosniff",
 					},
 				});
 			},

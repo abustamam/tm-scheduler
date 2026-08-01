@@ -107,6 +107,13 @@ export const activityActionEnum = pgEnum("activity_action", [
 	// club (ADR-0020 / #246). Like `superadmin_viewed`, actor is null and the real
 	// superadmin identity + the required access reason are carried in `detail`.
 	"superadmin_acted",
+	// Club logo set/replaced and removed (#495). Both are logged because the
+	// row-level `attested_by`/`attested_at` on `club_logos` dies with the row
+	// on removal — which is exactly the moment a trail matters, since ADR-0024's
+	// posture rests on showing who represented authorization and acting on a
+	// complaint. `detail` carries the mime and byte length, never the bytes.
+	"club_logo_set",
+	"club_logo_removed",
 	// Officer outreach tracking (#340): a member was marked "contacted" for a
 	// meeting (or the mark was cleared). `detail = { memberId, via }`.
 	"outreach_set",

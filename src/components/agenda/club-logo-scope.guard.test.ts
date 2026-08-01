@@ -44,14 +44,21 @@ const LOGIC_FILE = "src/server/club-logo-logic.ts";
 const ROUTE_FILE = "src/routes/api/club.$clubId.logo.ts";
 
 /**
- * Every `.from(clubLogos)` call, sliced from the call site up to its
- * terminating `;` (or EOF if none). Statement-scoped rather than
- * whole-file so one correctly-scoped read can't paper over a second,
- * unscoped one elsewhere in the same file.
+ * Every statement that TOUCHES `club_logos` — `.from(clubLogos)` for reads and
+ * `.delete(clubLogos)` for removals — sliced from the call site up to its
+ * terminating `;` (or EOF if none). Statement-scoped rather than whole-file so
+ * one correctly-scoped access can't paper over a second, unscoped one
+ * elsewhere in the same file.
+ *
+ * Deletes are included deliberately. This guard originally matched only
+ * `.from(`, because #495 specified it as covering "the logo READ path" — and a
+ * delete is not a read. That left the worst case unguarded: dropping the
+ * `WHERE` from `removeClubLogo` would erase EVERY club's logo, and neither
+ * this guard nor the integration suite caught it (every test seeded one club).
  */
-function fromClubLogosStatements(src: string): string[] {
+function clubLogosStatements(src: string): string[] {
 	const out: string[] = [];
-	const re = /\.from\(clubLogos\)/g;
+	const re = /\.(?:from|delete)\(clubLogos\)/g;
 	let m: RegExpExecArray | null = re.exec(src);
 	while (m !== null) {
 		const end = src.indexOf(";", m.index);
@@ -62,22 +69,25 @@ function fromClubLogosStatements(src: string): string[] {
 }
 
 describe("club logo reads are scoped per-club (#495, ADR-0024 constraint 2)", () => {
-	it("finds more than zero club_logos reads to check (so a rewrite can't go vacuous)", () => {
-		const statements = fromClubLogosStatements(read(LOGIC_FILE));
-		expect(statements.length).toBeGreaterThanOrEqual(2);
+	it("finds every club_logos access to check (so a rewrite can't go vacuous)", () => {
+		const statements = clubLogosStatements(read(LOGIC_FILE));
+		// 3 = two reads (meta, serving) + one delete (remove). A floor of 2
+		// would still pass if the `.delete(` half of the matcher were lost,
+		// which is precisely the hole this guard was widened to close.
+		expect(statements.length).toBeGreaterThanOrEqual(3);
 	});
 
-	it("every SELECT ... FROM club_logos in the logic layer filters on eq(clubLogos.clubId, …)", () => {
-		const statements = fromClubLogosStatements(read(LOGIC_FILE));
+	it("every club_logos read AND delete in the logic layer filters on eq(clubLogos.clubId, …)", () => {
+		const statements = clubLogosStatements(read(LOGIC_FILE));
 		const unscoped = statements.filter(
 			(stmt) => !/eq\(clubLogos\.clubId,/.test(stmt),
 		);
 		expect(
 			unscoped,
-			`${LOGIC_FILE} reads club_logos without a clubId-scoped predicate: ` +
-				`${JSON.stringify(unscoped)}. Every read must filter with ` +
-				"eq(clubLogos.clubId, <the requested club's id>) — an unscoped read " +
-				"can serve one club's logo to another (ADR-0024 constraint 2).",
+			`${LOGIC_FILE} reads or deletes club_logos without a clubId-scoped predicate: ` +
+				`${JSON.stringify(unscoped)}. Every read AND delete must filter with ` +
+				"eq(clubLogos.clubId, <the requested club's id>) — an unscoped read serves one club to another; an unscoped DELETE " +
+				"erases every club's logo (ADR-0024 constraint 2).",
 		).toEqual([]);
 	});
 

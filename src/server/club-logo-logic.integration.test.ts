@@ -86,6 +86,7 @@ function svgBytes(size = 128): Buffer {
 
 type LogoGetHandler = (input: {
 	params: { clubId: string };
+	request: Request;
 }) => Promise<Response>;
 
 function logoRouteGet(): LogoGetHandler {
@@ -94,6 +95,19 @@ function logoRouteGet(): LogoGetHandler {
 			options: { server: { handlers: { GET: LogoGetHandler } } };
 		}
 	).options.server.handlers.GET;
+}
+
+/**
+ * Call the route the way a browser would. `v` is the `?v=` cache-buster:
+ * pass the row's real `updatedAt.getTime()` for a current URL, anything else
+ * (or omit it) for a stale/bare one — the two get DIFFERENT `Cache-Control`.
+ */
+function fetchLogo(clubId: string, v?: string | number) {
+	const url =
+		v === undefined
+			? `https://gavelup.app/api/club/${clubId}/logo`
+			: `https://gavelup.app/api/club/${clubId}/logo?v=${v}`;
+	return logoRouteGet()({ params: { clubId }, request: new Request(url) });
 }
 
 describe.skipIf(!hasTestDb)("club logo (#495)", () => {
@@ -135,6 +149,7 @@ describe.skipIf(!hasTestDb)("club logo (#495)", () => {
 				mime: "image/png",
 				attested: true,
 				userId: s.adminUserId,
+				actorMemberId: s.adminMemberId,
 			});
 
 			const rows = await rowFor(s.clubId);
@@ -159,6 +174,7 @@ describe.skipIf(!hasTestDb)("club logo (#495)", () => {
 				mime: "image/png",
 				attested: true,
 				userId: s.adminUserId,
+				actorMemberId: s.adminMemberId,
 			});
 			await applyClubLogoUpload({
 				clubId: s.clubId,
@@ -166,6 +182,7 @@ describe.skipIf(!hasTestDb)("club logo (#495)", () => {
 				mime: "image/jpeg",
 				attested: true,
 				userId: s.adminUserId,
+				actorMemberId: s.adminMemberId,
 			});
 
 			const rows = await rowFor(s.clubId);
@@ -184,18 +201,48 @@ describe.skipIf(!hasTestDb)("club logo (#495)", () => {
 				mime: "image/png",
 				attested: true,
 				userId: s.adminUserId,
+				actorMemberId: s.adminMemberId,
 			});
 			expect(await rowFor(s.clubId)).toHaveLength(1);
 
-			await removeClubLogo(s.clubId);
+			await removeClubLogo(s.clubId, s.adminMemberId);
 			expect(await rowFor(s.clubId)).toHaveLength(0);
 		});
 
 		it("remove-when-absent is a no-op (no error, still zero rows)", async () => {
 			const s = await seed();
 			expect(await rowFor(s.clubId)).toHaveLength(0);
-			await expect(removeClubLogo(s.clubId)).resolves.toBeUndefined();
+			await expect(
+				removeClubLogo(s.clubId, s.adminMemberId),
+			).resolves.toBeUndefined();
 			expect(await rowFor(s.clubId)).toHaveLength(0);
+		});
+
+		// Two clubs, both with logos. Every other test in this file seeds ONE
+		// club, which means dropping the `WHERE clubId = …` from removeClubLogo
+		// — an unconditional delete that would erase EVERY club's logo — left
+		// the whole suite green. Mutation-verified: with the predicate removed,
+		// this is the test that goes red.
+		it("remove is scoped to ONE club — a second club's logo survives", async () => {
+			const a = await seed();
+			const b = await seed();
+			for (const club of [a, b]) {
+				await applyClubLogoUpload({
+					clubId: club.clubId,
+					base64: pngBytes().toString("base64"),
+					mime: "image/png",
+					attested: true,
+					userId: club.adminUserId,
+					actorMemberId: club.adminMemberId,
+				});
+			}
+			expect(await rowFor(a.clubId)).toHaveLength(1);
+			expect(await rowFor(b.clubId)).toHaveLength(1);
+
+			await removeClubLogo(a.clubId, a.adminMemberId);
+
+			expect(await rowFor(a.clubId)).toHaveLength(0);
+			expect(await rowFor(b.clubId)).toHaveLength(1);
 		});
 
 		it("concurrent upsert: two simultaneous uploads leave exactly ONE row", async () => {
@@ -210,6 +257,7 @@ describe.skipIf(!hasTestDb)("club logo (#495)", () => {
 				mime: "image/png",
 				attested: true,
 				userId: s.adminUserId,
+				actorMemberId: s.adminMemberId,
 			});
 			const uploadB = applyClubLogoUpload({
 				clubId: s.clubId,
@@ -217,6 +265,7 @@ describe.skipIf(!hasTestDb)("club logo (#495)", () => {
 				mime: "image/png",
 				attested: true,
 				userId: s.adminUserId,
+				actorMemberId: s.adminMemberId,
 			});
 
 			await Promise.all([uploadA, uploadB]);
@@ -241,6 +290,7 @@ describe.skipIf(!hasTestDb)("club logo (#495)", () => {
 	describe("applyClubLogoUpload validation", () => {
 		const clubId = randomUUID();
 		const userId = randomUUID();
+		const actorMemberId = randomUUID();
 
 		it("rejects when attested is false, even with otherwise-valid PNG bytes", async () => {
 			await expect(
@@ -250,6 +300,7 @@ describe.skipIf(!hasTestDb)("club logo (#495)", () => {
 					mime: "image/png",
 					attested: false,
 					userId,
+					actorMemberId,
 				}),
 			).rejects.toThrow(/authorized/i);
 		});
@@ -262,6 +313,7 @@ describe.skipIf(!hasTestDb)("club logo (#495)", () => {
 					mime: "image/svg+xml",
 					attested: true,
 					userId,
+					actorMemberId,
 				}),
 			).rejects.toThrow(/PNG or JPEG/i);
 		});
@@ -277,6 +329,7 @@ describe.skipIf(!hasTestDb)("club logo (#495)", () => {
 					mime: "image/png",
 					attested: true,
 					userId,
+					actorMemberId,
 				}),
 			).rejects.toThrow(/too large/i);
 		});
@@ -300,6 +353,7 @@ describe.skipIf(!hasTestDb)("club logo (#495)", () => {
 					mime: "image/png",
 					attested: true,
 					userId,
+					actorMemberId,
 				}),
 			).rejects.toThrow(/256 KB/);
 		});
@@ -314,6 +368,7 @@ describe.skipIf(!hasTestDb)("club logo (#495)", () => {
 					mime: "image/png",
 					attested: true,
 					userId,
+					actorMemberId,
 				}),
 			).rejects.toThrow(/doesn't look like/i);
 		});
@@ -326,8 +381,13 @@ describe.skipIf(!hasTestDb)("club logo (#495)", () => {
 					mime: "image/png",
 					attested: true,
 					userId,
+					actorMemberId,
 				}),
-			).rejects.toThrow();
+				// Message-specific on purpose. A bare `.rejects.toThrow()` passes
+				// even with the `bytes.length === 0` guard deleted, because the
+				// magic-byte check then throws its own (different) error on an
+				// empty buffer — the guard becomes invisible to its own test.
+			).rejects.toThrow(/could not be read/i);
 		});
 	});
 
@@ -343,6 +403,36 @@ describe.skipIf(!hasTestDb)("club logo (#495)", () => {
 			expect(await loadClubLogoMeta(s.clubId)).toBeNull();
 		});
 
+		// `getClubLogoMeta` is a PUBLIC, unauthenticated server fn wrapping this.
+		// `src/lib/club-archive.ts` states that ANY new public no-auth club
+		// loader must treat an archived club as not-found, and this one didn't:
+		// the binary route 404'd an archived club while this still reported the
+		// logo's existence and version to anyone. Archiving is also this
+		// feature's takedown lever (ADR-0024 constraint 4), so a read path that
+		// ignores it defeats the mechanism. Both paths now share `isReadableClub`.
+		it("returns null for an ARCHIVED club, matching loadClubLogoForServing", async () => {
+			const s = await seed();
+			await applyClubLogoUpload({
+				clubId: s.clubId,
+				base64: pngBytes().toString("base64"),
+				mime: "image/png",
+				attested: true,
+				userId: s.adminUserId,
+				actorMemberId: s.adminMemberId,
+			});
+			// Pin the pre-archive state first, so this can't pass just because
+			// the logo was never there.
+			expect(await loadClubLogoMeta(s.clubId)).not.toBeNull();
+
+			await testDb
+				.update(clubs)
+				.set({ archivedAt: new Date() })
+				.where(eq(clubs.id, s.clubId));
+
+			expect(await loadClubLogoMeta(s.clubId)).toBeNull();
+			expect(await loadClubLogoForServing(s.clubId)).toBeNull();
+		});
+
 		it("returns ONLY updatedAt — the returned object has no `bytes` key", async () => {
 			const s = await seed();
 			await applyClubLogoUpload({
@@ -351,6 +441,7 @@ describe.skipIf(!hasTestDb)("club logo (#495)", () => {
 				mime: "image/png",
 				attested: true,
 				userId: s.adminUserId,
+				actorMemberId: s.adminMemberId,
 			});
 
 			const meta = await loadClubLogoMeta(s.clubId);
@@ -386,6 +477,7 @@ describe.skipIf(!hasTestDb)("club logo (#495)", () => {
 				mime: "image/png",
 				attested: true,
 				userId: s.adminUserId,
+				actorMemberId: s.adminMemberId,
 			});
 			await testDb
 				.update(clubs)
@@ -404,6 +496,7 @@ describe.skipIf(!hasTestDb)("club logo (#495)", () => {
 				mime: "image/png",
 				attested: true,
 				userId: s.adminUserId,
+				actorMemberId: s.adminMemberId,
 			});
 
 			const logo = await loadClubLogoForServing(s.clubId);
@@ -452,14 +545,12 @@ describe.skipIf(!hasTestDb)("club logo (#495)", () => {
 
 	describe("GET /api/club/$clubId/logo", () => {
 		it("404s for an unknown club", async () => {
-			const res = await logoRouteGet()({ params: { clubId: randomUUID() } });
+			const res = await fetchLogo(randomUUID());
 			expect(res.status).toBe(404);
 		});
 
 		it("404s for a malformed club id (never a 500 from a bad uuid literal)", async () => {
-			const res = await logoRouteGet()({
-				params: { clubId: "not-a-uuid" },
-			});
+			const res = await fetchLogo("not-a-uuid");
 			expect(res.status).toBe(404);
 		});
 
@@ -471,20 +562,48 @@ describe.skipIf(!hasTestDb)("club logo (#495)", () => {
 				mime: "image/png",
 				attested: true,
 				userId: s.adminUserId,
+				actorMemberId: s.adminMemberId,
 			});
 			await testDb
 				.update(clubs)
 				.set({ archivedAt: new Date() })
 				.where(eq(clubs.id, s.clubId));
 
-			const res = await logoRouteGet()({ params: { clubId: s.clubId } });
+			const res = await fetchLogo(s.clubId);
 			expect(res.status).toBe(404);
 		});
 
 		it("404s for an active club with no logo uploaded", async () => {
 			const s = await seed();
-			const res = await logoRouteGet()({ params: { clubId: s.clubId } });
+			const res = await fetchLogo(s.clubId);
 			expect(res.status).toBe(404);
+		});
+
+		// `immutable` is only sound for a URL that names the CURRENT version.
+		// A bare or stale URL still serves (a cached agenda holding an older
+		// ?v= must keep rendering — that is the offline print flow) but must
+		// not be pinned for a year, or a replaced logo never reaches whoever
+		// holds it and an archive-takedown can't reach already-cached copies.
+		it.each([
+			["no ?v= at all", undefined],
+			["a stale ?v=", 1],
+			["a garbage ?v=", "not-a-number"],
+		])("serves the bytes but WITHOUT the year-long immutable directive for %s", async (_label, v) => {
+			const s = await seed();
+			await applyClubLogoUpload({
+				clubId: s.clubId,
+				base64: pngBytes().toString("base64"),
+				mime: "image/png",
+				attested: true,
+				userId: s.adminUserId,
+				actorMemberId: s.adminMemberId,
+			});
+
+			const res = await fetchLogo(s.clubId, v);
+			expect(res.status).toBe(200);
+			const cacheControl = res.headers.get("cache-control");
+			expect(cacheControl).not.toContain("immutable");
+			expect(cacheControl).toBe("public, max-age=300, must-revalidate");
 		});
 
 		it("happy path: 200 with the stored bytes, Content-Type, and an immutable Cache-Control", async () => {
@@ -496,11 +615,14 @@ describe.skipIf(!hasTestDb)("club logo (#495)", () => {
 				mime: "image/jpeg",
 				attested: true,
 				userId: s.adminUserId,
+				actorMemberId: s.adminMemberId,
 			});
+			const meta = await loadClubLogoMeta(s.clubId);
 
-			const res = await logoRouteGet()({ params: { clubId: s.clubId } });
+			const res = await fetchLogo(s.clubId, meta?.updatedAt.getTime());
 			expect(res.status).toBe(200);
 			expect(res.headers.get("content-type")).toBe("image/jpeg");
+			expect(res.headers.get("x-content-type-options")).toBe("nosniff");
 			expect(res.headers.get("cache-control")).toBe(
 				"public, max-age=31536000, immutable",
 			);
