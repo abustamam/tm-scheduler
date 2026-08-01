@@ -2,6 +2,16 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.3.3.0] - 2026-07-31
+
+### Added
+
+- `bun run worktree:setup` bootstraps a fresh worktree in one command: dependencies, `.env.local` copied from the main checkout, `ref/` symlinked, and CodeLedger initialised (optionally with a task-scoped bundle). This repo requires a worktree per change, but a worktree shares git history and nothing else — so `db:*`, `dev` and the seed all failed until three things were remembered by hand, and CodeLedger silently returned empty bundles reporting 0% recall rather than erroring. Four releases shipped from worktrees today with it contributing nothing for exactly that reason. The script is idempotent and leaves the tree clean.
+
+### Fixed
+
+- **`ref/` was not fully ignored, and it holds member PII.** The rule carried a trailing slash, which matches directories only — a plain file or symlink named `ref` was tracked as normal. That mattered the moment the new bootstrap started symlinking it into every worktree, which would have left a Toastmasters membership CSV one `git add` away from being committed. The pattern is now `ref`, covering file, directory and symlink alike.
+
 ## [1.3.2.0] - 2026-07-31
 
 ### Fixed
