@@ -5,7 +5,7 @@
  * `TEST_DATABASE_URL` so tests never accidentally touch dev/prod data.
  */
 import { randomUUID } from "node:crypto";
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import * as schema from "#/db/schema";
 import {
@@ -232,4 +232,109 @@ export async function cleanup(
 	if (userIds.length > 0) {
 		await testDb.delete(user).where(inArray(user.id, userIds));
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Concurrency helpers — for testing check-then-write races against real
+// Postgres. A serial test cannot distinguish a correct guard from a missing
+// one: check-then-insert always looks right when nothing else is running.
+// ---------------------------------------------------------------------------
+
+/** A drizzle transaction handle for the test client. */
+export type TestTx = Parameters<
+	Parameters<(typeof testDb)["transaction"]>[0]
+>[0];
+
+/**
+ * Run `work` in a transaction that STAYS OPEN — holding its row locks, and
+ * invisible to READ COMMITTED readers — until the returned `commit()` is
+ * called. Lets a test drive a real interleaving: the concurrent writer takes
+ * the lock, the code under test reads stale state and then blocks on its own
+ * write, and only then does the writer commit.
+ */
+export async function openBlockingTx(
+	work: (tx: TestTx) => Promise<void>,
+): Promise<{ commit: () => Promise<void>; pid: number }> {
+	let release!: () => void;
+	const gate = new Promise<void>((r) => {
+		release = r;
+	});
+	let ready!: (pid: number) => void;
+	let failed!: (e: unknown) => void;
+	const started = new Promise<number>((res, rej) => {
+		ready = res;
+		failed = rej;
+	});
+	const done = testDb.transaction(async (tx) => {
+		let pid: number;
+		try {
+			// The backend holding this transaction's locks. Callers pass it to
+			// `waitForLockWait` to prove the subject is blocked BY THIS writer and
+			// not merely blocked by something, somewhere, on a busy shared database.
+			const res = await tx.execute(sql`select pg_backend_pid() as pid`);
+			pid = Number((res.rows[0] as { pid: number }).pid);
+			await work(tx);
+		} catch (e) {
+			failed(e);
+			throw e;
+		}
+		ready(pid);
+		await gate;
+	});
+	// Claim the rejection now so a failure inside `work` never surfaces as an
+	// unhandled rejection; `commit()` still re-throws it.
+	done.catch(() => {});
+	const pid = await started;
+	return {
+		pid,
+		commit: async () => {
+			release();
+			await done;
+		},
+	};
+}
+
+/**
+ * Block until the code under test is provably parked behind `blockedBy` — a
+ * backend running a statement matching `match`, whose `pg_blocking_pids` include
+ * the writer's backend. Returns the blocked pid.
+ *
+ * Both arguments are load-bearing, and neither is paranoia:
+ *
+ * - `match` — ~50 DB-backed suites run in parallel against ONE Postgres (see
+ *   `vitest.config.ts`). A bare "is anything waiting?" poll is satisfied by an
+ *   unrelated suite's lock.
+ * - `blockedBy` — even a matching statement could belong to another suite
+ *   running the same code. `pg_blocking_pids` closes it: the subject must be
+ *   waiting on THIS test's writer.
+ *
+ * Get this wrong and the blocking transaction commits before the subject has
+ * blocked; the race test then exercises the uncontended fast path and still
+ * passes, because every assertion in it holds on both paths. A green run that
+ * proves nothing is the exact failure these tests exist to rule out — note that
+ * asserting the subject promise is merely "not settled yet" does NOT catch it
+ * (it is legitimately still in flight), which is why this waits on the lock
+ * graph instead.
+ */
+export async function waitForLockWait(
+	match: string,
+	blockedBy: number,
+	timeoutMs = 10_000,
+): Promise<number> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		const res = await testDb.execute(sql`
+			select pid from pg_stat_activity
+			where datname = current_database()
+			  and state = 'active' and wait_event_type = 'Lock'
+			  and query ilike ${`%${match}%`}
+			  and ${blockedBy} = any(pg_blocking_pids(pid))
+			limit 1`);
+		const pid = (res.rows[0] as { pid?: number } | undefined)?.pid;
+		if (pid) return pid;
+		await new Promise((r) => setTimeout(r, 25));
+	}
+	throw new Error(
+		`timed out waiting for a statement matching ${match} to block on pid ${blockedBy}`,
+	);
 }

@@ -394,6 +394,30 @@ export const members = pgTable(
 	(t) => [
 		index("members_club_idx").on(t.clubId),
 		index("members_person_idx").on(t.personId),
+		// One membership per person per club (#489). Several paths assert this in
+		// a doc comment and enforce it with a bare SELECT-then-INSERT under READ
+		// COMMITTED — two concurrent converts (or two overlapping CSV imports, which
+		// don't even share a transaction) both read "no membership", both insert,
+		// and the club gets two roster rows for one human. That is the duplicate
+		// class #329 built `mergePeople`/`collapseMemberships` to unpick by hand.
+		//
+		// Also load-bearing for `mergePeople`: its `keeperByClub` map is built once
+		// before the re-point loop, so an absorbed Person holding two memberships in
+		// one club would re-point BOTH onto the keeper. This constraint makes that
+		// precondition unreachable rather than merely unlikely.
+		//
+		// NOT created CONCURRENTLY: drizzle wraps the whole migration run in one
+		// transaction (`pg-core/dialect.ts`) and Postgres rejects CONCURRENTLY
+		// inside a transaction block — and `scripts/migrate.ts` exits non-zero from
+		// the Dockerfile CMD, so that would fail the deploy closed.
+		//
+		// What makes that acceptable is the table SIZE, so state it: a plain build
+		// holds a SHARE lock that blocks every write to `members` for its duration,
+		// and on Railway the old container still serves traffic while the new one
+		// runs the migration. At the current few-dozen rows that is sub-millisecond.
+		// At six figures it would be a visible roster write-stall, and the index
+		// would have to be built CONCURRENTLY outside the drizzle migrator instead.
+		uniqueIndex("members_club_person_unique").on(t.clubId, t.personId),
 	],
 );
 

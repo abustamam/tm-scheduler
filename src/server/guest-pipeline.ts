@@ -9,6 +9,7 @@ import {
 	captureGuestVisit,
 	loadGuestPipeline,
 } from "./guest-pipeline-logic";
+import { guestBookSchema } from "./guest-pipeline-schemas";
 
 // The db-touching logic lives in `guest-pipeline-logic.ts` (never imported by
 // client routes) so it can't drag `#/db` → `pg` into the browser bundle. This
@@ -23,17 +24,11 @@ export type {
 
 const uuid = z.string().uuid();
 
-const guestBookSchema = z.object({
-	clubId: uuid,
-	name: z.string().trim().min(1, "Please enter your name."),
-	email: z.string().trim().email().optional().or(z.literal("")),
-	phone: z.string().trim().optional().or(z.literal("")),
-});
-
 /**
  * Guest-book capture (the public #239 front door). PUBLIC — no session required,
  * mirroring `addMember`/`getPublicSeasonGrid`: anyone at the meeting with the
- * club link may self-register. Create-or-find by phone→email + record a visit
+ * club link may self-register. Create-or-find by email→name-qualified phone
+ * (#488) + record a visit
  * against the club's current/nearest meeting.
  */
 export const submitGuestBook = createServerFn({ method: "POST" })
