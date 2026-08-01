@@ -40,12 +40,6 @@
 
 ## Guests & identity
 
-- `findBestPersonByEmail` (`people-logic.ts`, used by create-club) auto-merges on a shared email, which ADR-0008 says never to do. When 2+ people carry one address it does not bail — it ranks them with `pickKeeper` (account-linked, then history, then oldest) and returns a winner. ADR-0008's precedence is explicit: match on email only when it "resolves to exactly one person", and "never auto-merge on an email shared by 2+ distinct people (guards against fusing spouses / shared family emails)". v1.3.2.0 brought the guest-convert path into line; the CSV importer was already there (its `ambiguous` stat). This is the last of the three that still fuses a family address, and it is the create-club path, so it is the first thing a new club does. Fix is the same shape: bail on 2+ rather than rank them.
-  **Priority:** P2
-
-- Converting a guest onto a LAPSED membership silently produces an invisible member. The reuse branch of `applyConvertGuestToMember` takes the existing membership id without touching `status`, and `inactive` is "hidden from sign-up / roster / season / picker views" per the schema. So an ex-member who returns as a guest, gets converted by an admin, and is deduped back onto their old Person keeps a membership nobody can see: the admin gets a success, and the member never appears on the roster. Pre-existing, and the raced re-read added in v1.3.2.0 inherits it. Reactivating on convert is probably right, but it is a product call about whether convert should silently resurrect a lapsed membership or say so.
-  **Priority:** P3
-
 - `members_club_idx` is now a strict prefix of `members_club_person_unique` and serves no query the composite cannot, so it is dead weight on every members write. Dropping it is a follow-up migration; `members_person_idx` must stay (person_id is the trailing column and `people-merge-logic.ts` looks up by person alone).
   **Priority:** P4
 
