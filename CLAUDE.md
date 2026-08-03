@@ -142,13 +142,14 @@ Optional (platform superadmin): `SUPERADMIN_EMAILS` — a comma-separated, case-
 
 ## Data layer
 
-Schema is `src/db/schema.ts` — the full domain model (~19 tables): clubs,
+Schema is `src/db/schema.ts` — the full domain model (~31 tables): clubs,
 people/members (Person vs Membership, ADR-0008), officer_terms, meetings,
 role_definitions/role_slots (ADR-0005), member_availability, speeches
 (ADR-0009), the Pathways model (pathways_paths, path_enrollments,
 path_level_progress, pathways_projects, pathways_path_levels,
-bcm_project_progress — ADR-0011), sync_tokens, activity_log, and
-notifications (drained by an in-process poller, ADR-0023). Better-Auth's tables live in
+bcm_project_progress — ADR-0011), sync_tokens, activity_log, club_logos (a
+club's own uploaded agenda logo, bytea, ADR-0024), and notifications
+(drained by an in-process poller, ADR-0023). Better-Auth's tables live in
 `src/db/auth-schema.ts`. See `CONTEXT.md` for the glossary.
 The `db` client (`src/db/index.ts`) is `drizzle(process.env.DATABASE_URL!, { schema })`.
 Migrations are generated to `./drizzle` (`drizzle.config.ts`); edit the schema, then
@@ -156,6 +157,8 @@ Migrations are generated to `./drizzle` (`drizzle.config.ts`); edit the schema, 
 note above). CI fails if
 `schema.ts` drifts from the committed migrations (a generate that produces a diff) and applies
 migrations (not `push`) so the migration files are exercised the same way prod runs them.
+`drizzle-orm` 0.45.1 has no built-in `bytea` type; `schema.ts` defines one once via `customType`
+(`export const bytea`, used by `club_logos.bytes`) — reuse that export, don't redefine it.
 
 **Server modules must keep `pg` out of the client bundle.** A `src/server/*.ts` module that
 defines a `createServerFn` gets imported by client route files; the Start compiler strips the

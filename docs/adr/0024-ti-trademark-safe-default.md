@@ -1,7 +1,8 @@
 # ADR-0024: Toastmasters trademarks — remove the official wordmark, keep nominative word use
 
 Status: Accepted (decision 3 revisited 2026-07-26; decisions 1 and 4 revisited 2026-07-31 against
-Brand Manual v2.0 — see both "Revisited" sections below)
+Brand Manual v2.0 — see both "Revisited" sections below). The club-supplied logo the second
+revisit describes shipped 2026-08-03 (#495).
 
 ## Context
 
@@ -179,11 +180,16 @@ are not obvious from the feature description — an implementer gets them wrong 
    putting the representation on the party p.32 already names.
 4. **A removal path** plus a contact route, so specific knowledge can be acted on.
 
-**Enforcement gap, stated explicitly.** `ti-wordmark.guard.test.ts` does **not** cover this. It
-matches filenames like `ToastmastersWordmark*.{png,svg}` in `src/` and `extension/`; a club upload
-named `logo.png` living in object storage is invisible to it. That is correct — the guard's job is
-to stop the repo from re-vendoring the mark, which decision 3 still forbids — but it means
-constraints 1 and 2 above have **no automated backstop** and must be held by review.
+**Enforcement gap — closed 2026-08-03 (#495).** `ti-wordmark.guard.test.ts` still does **not**
+cover this: it matches filenames like `ToastmastersWordmark*.{png,svg}` in `src/` and
+`extension/`, and a club upload named `logo.png` living in the `club_logos` table (a `bytea`
+column, not object storage) is invisible to it. That remains correct — its job is to stop the repo
+from re-vendoring the mark, which decision 3 still forbids. Constraints 1 and 2 now have their own
+automated backstop instead of relying on review alone:
+`src/components/agenda/club-logo-copy.guard.test.ts` (constraint 1 — no shipped copy names the
+mark) and `src/components/agenda/club-logo-scope.guard.test.ts` (constraint 2 — every `club_logos`
+read is scoped to the requesting club, and no cross-club "shared library" concept exists in
+source).
 
 **Decision 4 (counsel) has NOT fired.** GavelUp is not charging as of 2026-07-31; monetization is
 intent, not fact. The trigger is money changing hands. Paying a trademark attorney pre-revenue to
