@@ -332,7 +332,6 @@ Session bundle: `.codeledger/sessions/{session-id}/active-bundle.md`.
 Do NOT start the server manually via Bash first — let `preview_start` own the process.
 
 <!-- CODELEDGER:END -->
-
 ## Skill routing
 
 When the user's request matches an available skill, invoke it via the Skill tool. When in doubt, invoke the skill.
