@@ -23,7 +23,7 @@
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { clubLogos, clubs } from "#/db/schema";
+import { activityLog, clubLogos, clubs } from "#/db/schema";
 import {
 	cleanup,
 	hasTestDb,
@@ -130,6 +130,13 @@ describe.skipIf(!hasTestDb)("club logo (#495)", () => {
 		return s;
 	}
 
+	async function activityRowsFor(clubId: string) {
+		return testDb
+			.select()
+			.from(activityLog)
+			.where(eq(activityLog.clubId, clubId));
+	}
+
 	async function rowFor(clubId: string) {
 		return testDb.select().from(clubLogos).where(eq(clubLogos.clubId, clubId));
 	}
@@ -216,6 +223,68 @@ describe.skipIf(!hasTestDb)("club logo (#495)", () => {
 				removeClubLogo(s.clubId, s.adminMemberId),
 			).resolves.toBeUndefined();
 			expect(await rowFor(s.clubId)).toHaveLength(0);
+		});
+
+		// CLAUDE.md's documented coverage trap: "an empty-list guard is invisible
+		// to a result assertion." `removeClubLogo`'s `if (removed.length === 0)
+		// return;` guards the `logActivity` call, but `removeClubLogo` always
+		// returns `undefined` and the row count is 0 either way — so the test
+		// above passes identically whether that guard runs or is deleted
+		// outright (which would log a `club_logo_removed` entry for a club that
+		// never had a logo). This asserts the actual observable the guard
+		// controls: whether the activity round-trip happened at all.
+		it("remove-when-absent logs NOTHING — the guard actually skips the activity write", async () => {
+			const s = await seed();
+			expect(await rowFor(s.clubId)).toHaveLength(0);
+
+			await removeClubLogo(s.clubId, s.adminMemberId);
+
+			const rows = await activityRowsFor(s.clubId);
+			expect(rows.filter((r) => r.action === "club_logo_removed")).toEqual([]);
+		});
+
+		it("insert logs a club_logo_set activity entry, in the same transaction, with mime + byte length in detail", async () => {
+			const s = await seed();
+			const png = pngBytes(222);
+
+			await applyClubLogoUpload({
+				clubId: s.clubId,
+				base64: png.toString("base64"),
+				mime: "image/png",
+				attested: true,
+				userId: s.adminUserId,
+				actorMemberId: s.adminMemberId,
+			});
+
+			const rows = await activityRowsFor(s.clubId);
+			const logged = rows.filter((r) => r.action === "club_logo_set");
+			expect(logged).toHaveLength(1);
+			expect(logged[0]?.targetType).toBe("club");
+			expect(logged[0]?.targetId).toBe(s.clubId);
+			expect(logged[0]?.actorMemberId).toBe(s.adminMemberId);
+			// Shape only, never the image bytes.
+			expect(logged[0]?.detail).toEqual({ mime: "image/png", bytes: 222 });
+		});
+
+		it("remove (after an upload) logs exactly one club_logo_removed activity entry", async () => {
+			const s = await seed();
+			await applyClubLogoUpload({
+				clubId: s.clubId,
+				base64: pngBytes().toString("base64"),
+				mime: "image/png",
+				attested: true,
+				userId: s.adminUserId,
+				actorMemberId: s.adminMemberId,
+			});
+
+			await removeClubLogo(s.clubId, s.adminMemberId);
+
+			const rows = await activityRowsFor(s.clubId);
+			const logged = rows.filter((r) => r.action === "club_logo_removed");
+			expect(logged).toHaveLength(1);
+			expect(logged[0]?.targetType).toBe("club");
+			expect(logged[0]?.targetId).toBe(s.clubId);
+			expect(logged[0]?.actorMemberId).toBe(s.adminMemberId);
 		});
 
 		// Two clubs, both with logos. Every other test in this file seeds ONE

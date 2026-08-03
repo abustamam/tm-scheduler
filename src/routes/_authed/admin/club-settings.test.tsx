@@ -56,6 +56,7 @@ vi.mock("sonner", () => ({
 }));
 
 import { toast } from "sonner";
+import { removeClubLogoFn, uploadClubLogo } from "#/server/club-logo";
 import { CLUB_LOGO_COPY, Route } from "./club-settings";
 
 afterEach(() => {
@@ -108,6 +109,7 @@ async function renderRoute(data: ReturnType<typeof loaderData>) {
 	});
 	render(<RouterProvider router={router} />);
 	await waitFor(() => expect(router.state.status).toBe("idle"));
+	return router;
 }
 
 function pngFile(name = "logo.png", size = 4) {
@@ -256,5 +258,126 @@ describe("Club settings — client-side pre-checks", () => {
 		expect(
 			screen.getByText(`${CLUB_LOGO_COPY.selectedFilePrefix}good.png`),
 		).toBeTruthy();
+	});
+});
+
+// The tests above only ever assert the button's `disabled` state — none of them
+// actually submits the form or clicks "Remove logo", so `onUploadLogo` /
+// `onRemoveLogo` (the payload shape sent to the server fns, the success/error
+// toasts, and the `router.invalidate()` refresh) had zero coverage. These
+// close that gap by actually driving the interaction through to the mocked
+// server fn.
+describe("Club settings — upload write path (onUploadLogo)", () => {
+	it("submits the exact payload shape on Save (clubId, base64, mime, attested), shows a success toast, and invalidates the router", async () => {
+		const user = userEvent.setup();
+		vi.mocked(uploadClubLogo).mockResolvedValue(undefined);
+		const router = await renderRoute(loaderData());
+		const invalidateSpy = vi
+			.spyOn(router, "invalidate")
+			.mockResolvedValue(undefined);
+
+		const fileInput = document.getElementById("logoFile") as HTMLInputElement;
+		await user.upload(fileInput, pngFile("logo.png", 4));
+		await user.click(attestationCheckbox());
+		await user.click(saveButton());
+
+		await waitFor(() => expect(uploadClubLogo).toHaveBeenCalledTimes(1));
+		// biome-ignore lint/suspicious/noExplicitAny: server-fn call signature
+		const { data } = vi.mocked(uploadClubLogo).mock.calls[0][0] as any;
+		expect(data.clubId).toBe(ADMIN_CLUB.clubId);
+		expect(data.mime).toBe("image/png");
+		expect(data.attested).toBe(true);
+		// The base64-encoded bytes, not the File object itself — this is the
+		// transport `fileToBase64` produces and the zod validator on the server
+		// fn expects.
+		expect(typeof data.base64).toBe("string");
+		expect(data.base64.length).toBeGreaterThan(0);
+
+		expect(toast.success).toHaveBeenCalledWith(CLUB_LOGO_COPY.uploadSuccess);
+		expect(invalidateSpy).toHaveBeenCalled();
+	});
+
+	it("shows an error toast with the thrown message when the upload rejects, and does not invalidate the router", async () => {
+		const user = userEvent.setup();
+		vi.mocked(uploadClubLogo).mockRejectedValue(
+			new Error("That file doesn't look like a valid PNG or JPEG image."),
+		);
+		const router = await renderRoute(loaderData());
+		const invalidateSpy = vi
+			.spyOn(router, "invalidate")
+			.mockResolvedValue(undefined);
+
+		const fileInput = document.getElementById("logoFile") as HTMLInputElement;
+		await user.upload(fileInput, pngFile());
+		await user.click(attestationCheckbox());
+		await user.click(saveButton());
+
+		await waitFor(() =>
+			expect(toast.error).toHaveBeenCalledWith(
+				"That file doesn't look like a valid PNG or JPEG image.",
+			),
+		);
+		expect(invalidateSpy).not.toHaveBeenCalled();
+	});
+
+	// The `err instanceof Error ? err.message : CLUB_LOGO_COPY.genericError`
+	// fallback branch — a rejection that ISN'T an Error instance must still
+	// surface a readable toast, not "[object Object]" or an unhandled crash.
+	it("falls back to the generic error message when the rejection isn't an Error instance", async () => {
+		const user = userEvent.setup();
+		vi.mocked(uploadClubLogo).mockRejectedValue("not an Error object");
+		await renderRoute(loaderData());
+
+		const fileInput = document.getElementById("logoFile") as HTMLInputElement;
+		await user.upload(fileInput, pngFile());
+		await user.click(attestationCheckbox());
+		await user.click(saveButton());
+
+		await waitFor(() =>
+			expect(toast.error).toHaveBeenCalledWith(CLUB_LOGO_COPY.genericError),
+		);
+	});
+});
+
+describe("Club settings — remove write path (onRemoveLogo)", () => {
+	it("calls removeClubLogoFn with only the clubId, shows a success toast, and invalidates the router", async () => {
+		const user = userEvent.setup();
+		vi.mocked(removeClubLogoFn).mockResolvedValue(undefined);
+		const router = await renderRoute(
+			loaderData({ logoMeta: { updatedAt: "2026-07-31T00:00:00Z" } }),
+		);
+		const invalidateSpy = vi
+			.spyOn(router, "invalidate")
+			.mockResolvedValue(undefined);
+
+		await user.click(
+			screen.getByRole("button", { name: CLUB_LOGO_COPY.removeCta }),
+		);
+
+		await waitFor(() =>
+			expect(removeClubLogoFn).toHaveBeenCalledWith({
+				data: { clubId: ADMIN_CLUB.clubId },
+			}),
+		);
+		expect(toast.success).toHaveBeenCalledWith(CLUB_LOGO_COPY.removeSuccess);
+		expect(invalidateSpy).toHaveBeenCalled();
+	});
+
+	it("shows an error toast with the thrown message when remove rejects, and does not invalidate the router", async () => {
+		const user = userEvent.setup();
+		vi.mocked(removeClubLogoFn).mockRejectedValue(new Error("permission"));
+		const router = await renderRoute(
+			loaderData({ logoMeta: { updatedAt: "2026-07-31T00:00:00Z" } }),
+		);
+		const invalidateSpy = vi
+			.spyOn(router, "invalidate")
+			.mockResolvedValue(undefined);
+
+		await user.click(
+			screen.getByRole("button", { name: CLUB_LOGO_COPY.removeCta }),
+		);
+
+		await waitFor(() => expect(toast.error).toHaveBeenCalledWith("permission"));
+		expect(invalidateSpy).not.toHaveBeenCalled();
 	});
 });
