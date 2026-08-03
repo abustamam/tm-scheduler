@@ -63,7 +63,12 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/print")(
 					if (isMeetingNotFoundError(err)) throw notFound();
 					throw err;
 				}),
-				getClubLogoMeta({ data: { clubId: club.id } }),
+				// Degrade, never take the page down. The logo is decorative and
+				// this fetch runs in the same Promise.all as the meeting itself,
+				// so an unhandled rejection here would fail the whole printed
+				// agenda — the one page an officer needs the morning of a
+				// meeting — over a missing image.
+				getClubLogoMeta({ data: { clubId: club.id } }).catch(() => null),
 			]);
 			if (data.meeting.clubId !== club.id) throw notFound();
 			return { ...data, logoUrl: clubLogoUrl(club.id, logoMeta?.updatedAt) };

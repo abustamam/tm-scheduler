@@ -99,6 +99,15 @@ export function formatActivity(entry: ActivityEntry): FormattedActivity {
 					summary = "updated the meeting";
 			}
 			break;
+		// Club-level actions (#495) — the first `targetType: "club"` entries an
+		// ordinary admin can produce. Without these cases the `default` below
+		// renders the raw enum string ("club_logo_set") on the Activity page.
+		case "club_logo_set":
+			summary = "updated the club logo";
+			break;
+		case "club_logo_removed":
+			summary = "removed the club logo";
+			break;
 		default:
 			summary = entry.action;
 	}
