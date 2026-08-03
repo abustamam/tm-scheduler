@@ -2,6 +2,24 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.4.0.0] - 2026-08-03
+
+### Added
+
+- **A club can put its own logo on the printed agenda.** An admin uploads a PNG or JPEG on Club settings and it appears in the header of all four print layouts, for anyone who opens the agenda — signed in or not, online or off. Replacing it takes effect immediately; removing it leaves the page exactly as it printed before, with no gap or broken image. Clubs with no logo are entirely unaffected.
+
+  The upload is deliberately club-supplied rather than something GavelUp ships. Toastmasters' Brand Manual authorises a *club* to put the mark on its own agenda and names the Club President as the responsible party, but that permission does not extend to a third party hosting the mark on the club's behalf. So the app renders whatever a club uploads and never bundles, seeds, or suggests an image of its own — the field is called "Club logo" and names no trademark anywhere. Uploading records who confirmed the club is authorised to use the image, and archiving a club now also pulls its logo from public view, so there is a working way to act on a complaint.
+
+- Uploads are checked on the server, not just in the browser: PNG and JPEG only, 256 KB maximum, and the file's actual leading bytes must match what it claims to be — an SVG renamed to `.png` is rejected. The confirmation checkbox is re-checked server-side, so a disabled button is not the only thing standing between a mistake and the page.
+
+- Setting or removing a club logo now appears in the club's activity log, so a change has a record even after the image itself is gone.
+
+### Changed
+
+- Logo images are served with a year-long cache only when the address names the current version. A stale or address-less request still returns the image — a cached agenda keeps rendering offline — but revalidates within minutes, so a replaced logo actually reaches everyone rather than being pinned in browser and proxy caches.
+
+- A failure fetching the logo can no longer take down the printed agenda. The image is decorative; the page an officer needs on meeting morning now degrades to no-logo instead of erroring.
+
 ## [1.3.3.0] - 2026-07-31
 
 ### Added
