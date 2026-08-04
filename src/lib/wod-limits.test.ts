@@ -209,5 +209,14 @@ describe("meetings.ts composes the Word-of-the-Day caps (#519)", () => {
 		for (const v of ["word", "definition", "example"]) {
 			expect(updateBlock).toContain(`WOD_UPDATE_FIELDS.${v}`);
 		}
+
+		// The WOD-only editor REJECTS: it touches nothing else, so an error costs
+		// the author one field, while truncating would silently destroy a legacy
+		// definition on a path reachable with no session.
+		const wodBlock = src.slice(src.indexOf("const updateWordOfTheDaySchema"));
+		expect(wodBlock).toContain("WOD_FIELDS.definition");
+		expect(wodBlock.slice(0, wodBlock.indexOf("});"))).not.toContain(
+			"WOD_UPDATE_FIELDS",
+		);
 	});
 });

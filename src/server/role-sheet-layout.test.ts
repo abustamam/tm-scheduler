@@ -678,6 +678,30 @@ describe("render caps bound what a public request can make us lay out (#519)", (
 		expect(capped.speakers.at(-1)).toBe("Speaker 7");
 	});
 
+	it("costs time proportional to the CAP, not to the input", () => {
+		// The one assertion here that is about WALL CLOCK, and deliberately so:
+		// the defect it guards has no other observable. `cap` used to spread the
+		// whole string (`[...value]`) BEFORE deciding to truncate, so an 8MB
+		// speech title cost 473ms and tens of MB of heap to produce a 160-char
+		// output — the same DoS this file exists to stop, moved inside the fix.
+		// `speeches.title` is unbounded and written by PUBLIC no-session paths
+		// (`claimSlot`, `updateSpeakerDetails`), so it is reachable.
+		//
+		// The margin makes it non-flaky: 8MB now takes ~2ms, the bug took ~473ms,
+		// and the threshold sits at 150ms — 75x headroom under the fix, 3x under
+		// the bug.
+		const huge = "a".repeat(8_000_000);
+		const started = performance.now();
+		const capped = capFill({
+			club: "c",
+			date: "d",
+			speakers: Array.from({ length: 8 }, () => huge),
+		} as RoleSheetFill);
+		const elapsed = performance.now() - started;
+		expect(capped.speakers[0].length).toBe(RENDER_CAPS.speakerLabel);
+		expect(elapsed).toBeLessThan(150);
+	});
+
 	it("keeps the row cap inside the one-page guarantee, logo included", () => {
 		// The cap exists to bound cost, but it must not permit a shape that breaks
 		// the one-page promise. A club logo (#496) costs about two rows, so the

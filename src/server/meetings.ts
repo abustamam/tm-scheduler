@@ -600,9 +600,9 @@ const updateWordOfTheDaySchema = z.object({
 	meetingId: uuid,
 	/** Self-asserted TMOD/Grammarian member id (public page). Null for authed admin. */
 	selfMemberId: uuid.nullable().optional(),
-	wordOfTheDay: WOD_UPDATE_FIELDS.word.optional(),
-	wodDefinition: WOD_UPDATE_FIELDS.definition.optional(),
-	wodExample: WOD_UPDATE_FIELDS.example.optional(),
+	wordOfTheDay: WOD_FIELDS.word.optional(),
+	wodDefinition: WOD_FIELDS.definition.optional(),
+	wodExample: WOD_FIELDS.example.optional(),
 });
 
 /** Edit only a meeting's Word of the Day (word + definition + example). Admin OR

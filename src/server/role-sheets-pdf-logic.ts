@@ -15,6 +15,8 @@ import {
 } from "#/server/minutes-logic";
 import {
 	buildRoleSheetDoc,
+	cap,
+	RENDER_CAPS,
 	type RoleSheetFill,
 	type RoleSheetKey,
 } from "#/server/role-sheet-layout";
@@ -169,7 +171,13 @@ export async function renderRoleSheetPdf(
 	);
 	return {
 		bytes: new Uint8Array(buf),
-		clubName: fill.clubName,
-		date: fill.date,
+		// CAPPED, like everything else. This value does not go into the PDF — the
+		// route interpolates it into the `content-disposition` filename — so it
+		// was the one string on this public route that reached a response without
+		// passing a bound, and `clubs.name` has no write-side max. That made the
+		// claim "the bound lives at the single entry point" false for this
+		// consumer, which reads the fill rather than the doc.
+		clubName: cap(fill.clubName, RENDER_CAPS.club),
+		date: cap(fill.date, RENDER_CAPS.date),
 	};
 }

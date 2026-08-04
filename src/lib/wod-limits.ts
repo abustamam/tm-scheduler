@@ -36,10 +36,17 @@ export const WOD_LIMITS = {
 /**
  * The three field validators, exported so they can be TESTED.
  *
- * `server/meetings.ts` composes these into its three schemas. It cannot export
- * them itself — it is a server-fn module, which may export only server-fns and
- * types (`server-modules.guard.test.ts` enforces that, and caught the first
- * attempt at this). Keeping the validators beside the limits is the same shape
+ * `server/meetings.ts` composes these. It cannot export them itself — it is a
+ * server-fn module, which may export only server-fns and types
+ * (`server-modules.guard.test.ts` enforces that, and caught the first attempt
+ * at this).
+ *
+ * Only `word` is composed today: `createMeetingSchema` accepts a Word of the
+ * Day but not its definition or example, which are set later through the edit
+ * paths. `definition` and `example` are kept for symmetry with
+ * `WOD_UPDATE_FIELDS` and are tested, but nothing on the create side reads them
+ * yet — worth knowing before treating their presence as evidence a create path
+ * is guarded. Keeping the validators beside the limits is the same shape
  * as `guest-pipeline-schemas.ts`, and means the write cap has a direct test
  * rather than being reachable only through a `createServerFn` that tests here
  * cannot invoke.
@@ -56,13 +63,21 @@ export const WOD_FIELDS = {
 /**
  * The same caps for the UPDATE paths, which TRUNCATE instead of rejecting.
  *
- * A hard `.max()` is right on create: the value is new, and a validation error
- * tells the author to shorten it. On an edit it is a trap. The edit-meeting
- * form prefills all three fields from the stored row and resubmits all three on
- * every save, so a single row written before this cap existed would fail
- * `.parse()` and block saving the meeting's theme, location, notes and date
- * too — an admin locked out of a meeting by text they cannot see is a worse
- * outcome than a trimmed definition.
+ * Used by `updateMeetingSchema` ONLY, and the boundary is deliberate.
+ *
+ * A hard `.max()` is right when a failure costs only the field being edited.
+ * The whole-meeting form is the case where it does not: it prefills all three
+ * Word-of-the-Day fields from the stored row and resubmits them on every save,
+ * so a single row written before this cap existed would fail `.parse()` and
+ * block saving the meeting's theme, location, notes and date too — an admin
+ * locked out of a meeting by text they cannot see.
+ *
+ * `updateWordOfTheDaySchema` deliberately does NOT use these. It touches
+ * nothing but the Word of the Day, so rejecting there locks nobody out of
+ * anything, while truncating would silently destroy the tail of a legacy
+ * definition the moment someone opened that editor and pressed Save without
+ * editing — on a path reachable with a self-asserted member id and no session.
+ * Silent data loss is the worse failure when a clear error is available.
  *
  * The columns are unbounded `text` and this change ships no backfill, so such a
  * row is possible. Dev data maxes at 50 characters and production was not

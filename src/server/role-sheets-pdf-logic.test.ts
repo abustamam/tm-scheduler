@@ -8,6 +8,7 @@
  * stubbed rather than bypassed — see the second describe.
  */
 import { describe, expect, it, vi } from "vitest";
+import { RENDER_CAPS } from "#/server/role-sheet-layout";
 
 /** What the stubbed database is holding for the current test. */
 const stored = vi.hoisted(() => ({
@@ -135,5 +136,13 @@ describe("renderRoleSheetPdf bounds what the public route renders (#519)", () =>
 		expect(pageCount(timer.bytes)).toBe(1);
 		const grammarian = await renderRoleSheetPdf("meeting-1", "grammarian");
 		expect(pageCount(grammarian.bytes)).toBe(1);
+
+		// The RETURNED club name is capped too. It never enters the PDF — the route
+		// interpolates it into the `content-disposition` filename — so it was the
+		// one value on this public route reaching a response without a bound, and
+		// `clubs.name` has no write-side max. Asserting the bytes alone cannot see
+		// it: reverting this cap leaves every page-count assertion above green.
+		expect(timer.clubName.length).toBeLessThanOrEqual(RENDER_CAPS.club);
+		expect(timer.date.length).toBeLessThanOrEqual(RENDER_CAPS.date);
 	});
 });

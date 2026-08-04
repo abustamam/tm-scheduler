@@ -816,6 +816,13 @@ export const RENDER_CAPS = {
 	 * measurement only). The logo is not an edge case — it is a shipped feature
 	 * any club can turn on, so the bound has to hold with it present.
 	 *
+	 * The measurement above uses realistic labels. It does NOT hold for labels
+	 * near `speakerLabel` (160): a long WRAPPABLE title takes two lines, so three
+	 * such speakers can spill the sheet even at this cap. That is pre-existing —
+	 * `cap` is a no-op below 160 and those rows rendered identically before this
+	 * fix — and it is the row-height problem tracked for the print surface, not
+	 * something a smaller row cap can solve.
+	 *
 	 * No meeting on record books more than 3 prepared speakers, so 8 is still
 	 * ~2.7x the observed maximum; beyond it the Timer writes the remaining items
 	 * in as they happen, which is how the log already works.
@@ -826,13 +833,29 @@ export const RENDER_CAPS = {
 /**
  * Truncate with an ellipsis, or return the value unchanged when it fits.
  *
+ * Exported because the download FILENAME needs the same bound as the document:
+ * `renderRoleSheetPdf` returns the club name for `content-disposition`, which
+ * never passes through `capFill`.
+ *
  * Slices by CODE POINT, not UTF-16 code unit: `"…".slice()` on a string whose
  * emoji straddles the cut emits a lone surrogate, which react-pdf renders as a
  * tombstone glyph. Reachable through a speaker label, since speech titles and
  * member names carry no write-side length cap.
  */
-function cap(value: string, max: number): string {
-	const points = [...value];
+export function cap(value: string, max: number): string {
+	// Cost must scale with `max`, NOT with the input. The first version of this
+	// spread the whole string (`[...value]`) before deciding whether to truncate,
+	// which recreated the exact DoS this file exists to stop: 8MB of speech title
+	// cost 473ms and tens of MB of heap per unauthenticated GET, for a 160-char
+	// output. Found by the adversarial pass.
+	//
+	// Two bounds do it. A UTF-16 `.length` is always >= the code-point count, so
+	// a value that fits by that measure fits by any, and returns untouched with
+	// no allocation. Otherwise spread only a PREFIX: a code point is at most two
+	// UTF-16 units, so `max * 2` units always contains at least `max` code
+	// points — enough to slice from, and bounded.
+	if (value.length <= max) return value;
+	const points = [...value.slice(0, max * 2)];
 	return points.length <= max ? value : `${points.slice(0, max - 1).join("")}…`;
 }
 
