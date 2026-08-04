@@ -1,12 +1,19 @@
 import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
 import { Loader2 } from "lucide-react";
-import { useState } from "react";
+import { type ChangeEvent, useState } from "react";
 import { toast } from "sonner";
 import { PageContainer } from "#/components/page-container";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
+import { ACCESS_REQUEST_MAILTO } from "#/lib/brand";
+import { clubLogoUrl } from "#/lib/club-logo-url";
 import { effectiveAdminClub } from "#/lib/effective-admin";
+import {
+	getClubLogoMeta,
+	removeClubLogoFn,
+	uploadClubLogo,
+} from "#/server/club-logo";
 import {
 	getClubProfileSettings,
 	loadClubAgendaSettings,
@@ -18,6 +25,55 @@ import {
 	updateClubReminderSettings,
 } from "#/server/notification-prefs";
 
+// Client-side pre-checks only — fast feedback before the upload round-trip.
+// The server (`src/server/club-logo-logic.ts`, Lane A) is the authoritative
+// check: same 256 KB decoded-byte cap, same MIME allowlist, plus a magic-byte
+// check this client can't do. Keep these two numbers in sync with the server.
+const MAX_LOGO_BYTES = 256 * 1024;
+const ALLOWED_LOGO_TYPES = new Set(["image/png", "image/jpeg"]);
+
+/** Read a File into the base64 string the upload server fn expects (no data: prefix). */
+async function fileToBase64(file: File): Promise<string> {
+	const buffer = await file.arrayBuffer();
+	const bytes = new Uint8Array(buffer);
+	let binary = "";
+	for (let i = 0; i < bytes.length; i++) {
+		binary += String.fromCharCode(bytes[i]);
+	}
+	return btoa(binary);
+}
+
+/**
+ * Every user-visible string in the Club logo section, in one place.
+ *
+ * ADR-0024 constraint 1 forbids naming any trademark in this feature's copy.
+ * `club-logo-copy.guard.test.ts` greps THIS BLOCK rather than the whole file,
+ * because the file legitimately says "Toastmaster of the Day" elsewhere
+ * (nominative use, ADR-0024 decision 2). Keep all logo copy here so the guard
+ * stays enforceable — a string inlined in JSX escapes it.
+ */
+export const CLUB_LOGO_COPY = {
+	sectionTitle: "Club logo",
+	sectionDescription: "Shown on the printed meeting agenda.",
+	currentLabel: "Current logo",
+	uploadCta: "Upload a logo",
+	replaceCta: "Replace logo",
+	emptyState: "No logo set yet.",
+	selectedFilePrefix: "Selected: ",
+	helpText: "PNG or JPEG, up to 256KB.",
+	attestationLabel: "I confirm my club is authorized to use this image.",
+	responsibilityNote:
+		"Your club is responsible for the image it uploads. Questions?",
+	contactLinkText: "Contact us.",
+	saveCta: "Save club logo",
+	removeCta: "Remove logo",
+	uploadSuccess: "Club logo saved.",
+	removeSuccess: "Club logo removed.",
+	typeError: "Club logo must be a PNG or JPEG image.",
+	sizeError: "Club logo must be 256KB or smaller.",
+	genericError: "Something went wrong.",
+} as const;
+
 export const Route = createFileRoute("/_authed/admin/club-settings")({
 	beforeLoad: ({ context }) => {
 		const adminClub = effectiveAdminClub(context);
@@ -27,12 +83,13 @@ export const Route = createFileRoute("/_authed/admin/club-settings")({
 		return { adminClub };
 	},
 	loader: async ({ context }) => {
-		const [profile, reminders, agenda] = await Promise.all([
+		const [profile, reminders, agenda, logoMeta] = await Promise.all([
 			getClubProfileSettings({ data: context.adminClub.clubId }),
 			loadClubReminderSettings({ data: context.adminClub.clubId }),
 			loadClubAgendaSettings({ data: context.adminClub.clubId }),
+			getClubLogoMeta({ data: { clubId: context.adminClub.clubId } }),
 		]);
-		return { profile, reminders, agenda };
+		return { profile, reminders, agenda, logoMeta };
 	},
 	component: ClubSettings,
 });
@@ -42,7 +99,7 @@ const textareaClass =
 
 function ClubSettings() {
 	const { adminClub } = Route.useRouteContext();
-	const { profile, reminders, agenda } = Route.useLoaderData();
+	const { profile, reminders, agenda, logoMeta } = Route.useLoaderData();
 	const router = useRouter();
 	const [submitting, setSubmitting] = useState(false);
 	const [remindersEnabled, setRemindersEnabled] = useState(reminders.enabled);
@@ -54,6 +111,14 @@ function ClubSettings() {
 		agenda.geIntroducesFunctionaries,
 	);
 	const [savingAgenda, setSavingAgenda] = useState(false);
+	const [logoFile, setLogoFile] = useState<File | null>(null);
+	const [logoAttested, setLogoAttested] = useState(false);
+	const [uploadingLogo, setUploadingLogo] = useState(false);
+	const [removingLogo, setRemovingLogo] = useState(false);
+
+	const logoSrc = logoMeta
+		? clubLogoUrl(adminClub.clubId, logoMeta.updatedAt)
+		: null;
 
 	async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
 		e.preventDefault();
@@ -119,6 +184,69 @@ function ClubSettings() {
 			toast.error(err instanceof Error ? err.message : "Something went wrong.");
 		} finally {
 			setSavingAgenda(false);
+		}
+	}
+
+	function onLogoFileChange(e: ChangeEvent<HTMLInputElement>) {
+		const file = e.target.files?.[0] ?? null;
+		// Allow re-selecting the same file later (onChange won't fire otherwise).
+		e.target.value = "";
+		if (!file) return;
+		// Fast client-side feedback only — the server re-checks both (and adds a
+		// magic-byte check this client can't do), so a check removed here can
+		// only make the error slower to surface, never let a bad file through.
+		if (!ALLOWED_LOGO_TYPES.has(file.type)) {
+			toast.error(CLUB_LOGO_COPY.typeError);
+			return;
+		}
+		if (file.size > MAX_LOGO_BYTES) {
+			toast.error(CLUB_LOGO_COPY.sizeError);
+			return;
+		}
+		setLogoFile(file);
+		// Re-required for the new file, including a replacement of an existing logo.
+		setLogoAttested(false);
+	}
+
+	async function onUploadLogo(e: React.FormEvent<HTMLFormElement>) {
+		e.preventDefault();
+		if (!logoFile || !logoAttested) return;
+		setUploadingLogo(true);
+		try {
+			const base64 = await fileToBase64(logoFile);
+			await uploadClubLogo({
+				data: {
+					clubId: adminClub.clubId,
+					base64,
+					mime: logoFile.type,
+					attested: logoAttested,
+				},
+			});
+			toast.success(CLUB_LOGO_COPY.uploadSuccess);
+			setLogoFile(null);
+			setLogoAttested(false);
+			await router.invalidate();
+		} catch (err) {
+			toast.error(
+				err instanceof Error ? err.message : CLUB_LOGO_COPY.genericError,
+			);
+		} finally {
+			setUploadingLogo(false);
+		}
+	}
+
+	async function onRemoveLogo() {
+		setRemovingLogo(true);
+		try {
+			await removeClubLogoFn({ data: { clubId: adminClub.clubId } });
+			toast.success(CLUB_LOGO_COPY.removeSuccess);
+			await router.invalidate();
+		} catch (err) {
+			toast.error(
+				err instanceof Error ? err.message : CLUB_LOGO_COPY.genericError,
+			);
+		} finally {
+			setRemovingLogo(false);
 		}
 	}
 
@@ -273,6 +401,99 @@ function ClubSettings() {
 						"Save agenda settings"
 					)}
 				</Button>
+			</form>
+
+			<div className="pt-2">
+				<h2 className="font-display text-xl font-semibold tracking-[-0.01em]">
+					{CLUB_LOGO_COPY.sectionTitle}
+				</h2>
+				<p className="text-sm text-muted-foreground">
+					{CLUB_LOGO_COPY.sectionDescription}
+				</p>
+			</div>
+
+			<form onSubmit={onUploadLogo} className="max-w-xl space-y-4">
+				<div className="space-y-2">
+					<Label>{CLUB_LOGO_COPY.currentLabel}</Label>
+					{logoSrc ? (
+						<img
+							src={logoSrc}
+							alt=""
+							data-testid="club-logo-preview"
+							className="h-16 w-auto max-w-[12rem] rounded-md border border-input object-contain p-2"
+						/>
+					) : (
+						<p className="text-sm text-muted-foreground">
+							{CLUB_LOGO_COPY.emptyState}
+						</p>
+					)}
+				</div>
+
+				<div className="space-y-2">
+					<Label htmlFor="logoFile">
+						{logoSrc ? CLUB_LOGO_COPY.replaceCta : CLUB_LOGO_COPY.uploadCta}
+					</Label>
+					<Input
+						id="logoFile"
+						name="logoFile"
+						type="file"
+						accept="image/png,image/jpeg"
+						onChange={onLogoFileChange}
+					/>
+					{logoFile ? (
+						<p className="text-xs text-muted-foreground">
+							{CLUB_LOGO_COPY.selectedFilePrefix}
+							{logoFile.name}
+						</p>
+					) : null}
+					<p className="text-xs text-muted-foreground">
+						{CLUB_LOGO_COPY.helpText}
+					</p>
+				</div>
+
+				<label className="flex items-center gap-2 text-sm font-medium">
+					<input
+						type="checkbox"
+						checked={logoAttested}
+						onChange={(e) => setLogoAttested(e.target.checked)}
+					/>
+					{CLUB_LOGO_COPY.attestationLabel}
+				</label>
+
+				<p className="text-xs text-muted-foreground">
+					{CLUB_LOGO_COPY.responsibilityNote}{" "}
+					<a href={ACCESS_REQUEST_MAILTO} className="underline">
+						{CLUB_LOGO_COPY.contactLinkText}
+					</a>
+				</p>
+
+				<div className="flex gap-2">
+					<Button
+						type="submit"
+						disabled={!logoFile || !logoAttested || uploadingLogo}
+						className="flex-1"
+					>
+						{uploadingLogo ? (
+							<Loader2 className="size-4 animate-spin" />
+						) : (
+							CLUB_LOGO_COPY.saveCta
+						)}
+					</Button>
+					{logoSrc ? (
+						<Button
+							type="button"
+							variant="outline"
+							onClick={onRemoveLogo}
+							disabled={removingLogo}
+						>
+							{removingLogo ? (
+								<Loader2 className="size-4 animate-spin" />
+							) : (
+								CLUB_LOGO_COPY.removeCta
+							)}
+						</Button>
+					) : null}
+				</div>
 			</form>
 		</PageContainer>
 	);

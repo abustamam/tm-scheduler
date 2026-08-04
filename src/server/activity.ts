@@ -15,13 +15,17 @@ type ActivityAction =
 	| "meeting_create"
 	| "meeting_edit"
 	| "outreach_set"
-	| "outreach_clear";
+	| "outreach_clear"
+	| "club_logo_set"
+	| "club_logo_removed";
 
 export interface ActivityInput {
 	clubId: string;
 	actorMemberId: string | null;
 	action: ActivityAction;
-	targetType: "slot" | "meeting" | "member";
+	// "club" is for changes to club-level state that aren't tied to a slot,
+	// meeting or member — the club logo (#495) is the first.
+	targetType: "slot" | "meeting" | "member" | "club";
 	targetId?: string | null;
 	detail?: unknown;
 	/**

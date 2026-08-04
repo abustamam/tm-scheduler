@@ -14,6 +14,26 @@ const base = {
 } satisfies Partial<ActivityEntry> as ActivityEntry;
 
 describe("formatActivity", () => {
+	// #495 added two `activity_action` enum values. `formatActivity`'s outer
+	// switch has a `default: summary = entry.action` fallback, so an unhandled
+	// action does not throw — it silently renders the raw enum string
+	// ("club_logo_set") on the Activity page. These assert the human text, and
+	// the raw-string check is what actually fails if the cases are deleted.
+	it.each([
+		["club_logo_set", /updated the club logo/i],
+		["club_logo_removed", /removed the club logo/i],
+	])("%s renders human-readable text, not the raw enum", (action, expected) => {
+		const e = {
+			...base,
+			targetType: "club",
+			action,
+			actorName: "Faisal",
+		} as unknown as ActivityEntry;
+		const { summary } = formatActivity(e);
+		expect(summary).toMatch(expected);
+		expect(summary).not.toBe(action);
+	});
+
 	it("claim names the role", () => {
 		const e = {
 			...base,
