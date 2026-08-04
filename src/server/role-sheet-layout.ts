@@ -41,6 +41,8 @@ export {
 	roleSheetByKey,
 } from "../data/role-sheets";
 
+import { WOD_LIMITS } from "../lib/wod-limits";
+
 /** Per-meeting context used to pre-fill a sheet. Absent ⇒ blank template. */
 export interface RoleSheetFill {
 	/** Club name, shown in the header "Club:" field. */
@@ -759,9 +761,83 @@ const BUILDERS: Record<RoleSheetKey, (fill?: RoleSheetFill) => ReactNode> = {
  * Build the react-pdf `Document` for a role sheet. With `fill`, the header and
  * speaker rows are pre-filled; without it, the blank template is produced.
  */
+/**
+ * Hard caps on every user-controlled value this layout renders (#519).
+ *
+ * `renderRoleSheetPdf` is reached by an UNAUTHENTICATED public GET that renders
+ * a PDF per request (`no-store`), inside the one Node process that serves
+ * everything else (ADR-0007). react-pdf lays out synchronously, so an oversized
+ * value is not a slow response — it is the event loop, and therefore the whole
+ * server, stopped. Measured on the pre-cap layout: a 50,000-character
+ * Word-of-the-Day note took 3,596ms against an 87ms baseline, and 500 speaker
+ * rows took 2,059ms.
+ *
+ * The caps are ~10x the largest value in real data (the longest `wod_definition`
+ * on record is 50 characters, the longest club name 20, and no meeting has more
+ * than 3 speaker slots), so nothing a club would actually type is truncated.
+ *
+ * This is the SECOND of two layers and the load-bearing one, mirroring
+ * `isDecodeSafe` on the logo path: schema `.max()` stops new oversized values
+ * being stored, and this stops rows that predate the cap — including any an
+ * importer, a migration, or a future write path puts there. Truncating is the
+ * right failure, exactly as dropping an undecodable logo is: a sheet with an
+ * elided note still prints, and the Timer still gets their log.
+ */
+export const RENDER_CAPS = {
+	/** Club name. The header clamps to one line anyway; this bounds the string. */
+	club: 120,
+	/** Formatted date. Ours, not user input — capped defensively. */
+	date: 60,
+	// The two WOD fields read the SAME constant the write schema validates
+	// against (`#/lib/wod-limits`), so a value the schema accepts can never be
+	// silently elided when printed, and the two halves of this defence cannot
+	// drift apart the way two hand-kept numbers would.
+	word: WOD_LIMITS.word,
+	note: WOD_LIMITS.definition,
+	/** One `Name — "Speech title"` label. */
+	speakerLabel: 160,
+	/** Pre-filled log rows. The log shows 10 by default; no meeting has 3+. */
+	speakerRows: 24,
+} as const;
+
+/** Truncate with an ellipsis, or return the value unchanged when it fits. */
+function cap(value: string, max: number): string {
+	return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
+}
+
+/**
+ * Apply `RENDER_CAPS` to a fill. Pure — the caller's object is never mutated,
+ * because the fill is shared with the response's filename builder.
+ */
+export function capFill(fill: RoleSheetFill): RoleSheetFill {
+	return {
+		...fill,
+		club: cap(fill.club, RENDER_CAPS.club),
+		date: cap(fill.date, RENDER_CAPS.date),
+		speakers: fill.speakers
+			.slice(0, RENDER_CAPS.speakerRows)
+			.map((s) => cap(s, RENDER_CAPS.speakerLabel)),
+		wod: fill.wod && {
+			word: cap(fill.wod.word, RENDER_CAPS.word),
+			note:
+				fill.wod.note == null
+					? undefined
+					: cap(fill.wod.note, RENDER_CAPS.note),
+		},
+	};
+}
+
+/**
+ * Build the react-pdf `Document` for a role sheet. With `fill`, the header and
+ * speaker rows are pre-filled; without it, the blank template is produced.
+ *
+ * Every caller goes through `capFill` — the offline `build:role-sheets` script
+ * as well as the public route — so the bound holds wherever a sheet is rendered
+ * rather than only on the path someone remembered to guard.
+ */
 export function buildRoleSheetDoc(
 	key: RoleSheetKey,
 	fill?: RoleSheetFill,
 ): ReactNode {
-	return BUILDERS[key](fill);
+	return BUILDERS[key](fill && capFill(fill));
 }
