@@ -112,9 +112,16 @@ export function readImageDimensions(
 
 	// JPEG: walk the marker segments from just past the SOI until a start-of-frame.
 	let pos = 2;
-	while (pos + 9 < bytes.length) {
+	while (pos + 1 < bytes.length) {
 		if (bytes[pos] !== 0xff) return null;
-		const marker = bytes[pos + 1];
+		// A marker may be preceded by ANY number of 0xFF fill bytes — that is
+		// legal JPEG, and assuming exactly one rejected valid files: the second
+		// 0xFF was read as the marker, failed the frame test, and then the next
+		// two bytes were read as a segment length, jumping to a garbage offset.
+		while (pos < bytes.length && bytes[pos] === 0xff) pos++;
+		if (pos >= bytes.length) return null;
+		const marker = bytes[pos];
+		pos++; // now at the segment's length field, for markers that carry one
 		// SOF0-SOF15 carry the frame size. DHT (0xc4), JPG (0xc8) and DAC (0xcc)
 		// share the range but are not frame headers.
 		const isFrameHeader =
@@ -125,15 +132,26 @@ export function readImageDimensions(
 			marker !== 0xcc;
 		if (isFrameHeader) {
 			// segment: length(2), precision(1), height(2), width(2)
-			const height = bytes.readUInt16BE(pos + 5);
-			const width = bytes.readUInt16BE(pos + 7);
+			if (pos + 7 > bytes.length) return null;
+			const height = bytes.readUInt16BE(pos + 3);
+			const width = bytes.readUInt16BE(pos + 5);
 			if (width === 0 || height === 0) return null;
 			return { width, height };
 		}
-		const segmentLength = bytes.readUInt16BE(pos + 2);
-		// A zero/negative-length segment would loop forever.
+		// Standalone markers carry no length field at all: SOI, EOI, TEM and the
+		// eight restart markers. Reading two bytes of entropy data as a length is
+		// how a walker desynchronises.
+		const isStandalone =
+			marker === 0xd8 ||
+			marker === 0xd9 ||
+			marker === 0x01 ||
+			(marker >= 0xd0 && marker <= 0xd7);
+		if (isStandalone) continue;
+		if (pos + 2 > bytes.length) return null;
+		const segmentLength = bytes.readUInt16BE(pos);
+		// The length counts itself, so anything under 2 would not advance `pos`.
 		if (segmentLength < 2) return null;
-		pos += 2 + segmentLength;
+		pos += segmentLength;
 	}
 	return null;
 }

@@ -118,8 +118,11 @@ async function loadRoleSheetFill(
 		// Only assigned speaker slots are pre-filled; open slots leave blank rows.
 		loadMinutesProgram(meetingId),
 		// Same non-fatal posture as every other surface: a logo that fails to
-		// load must never cost someone their role sheet.
-		loadRoleSheetLogo(meetingId),
+		// load must never cost someone their role sheet. The `.catch` is what
+		// implements that — without it this comment was aspirational, since a
+		// rejection here rejects the whole `Promise.all` and takes the PDF with
+		// it. Every route loader that reads the logo has the same guard.
+		loadRoleSheetLogo(meetingId).catch(() => null),
 	]);
 	if (!row) throw new Error(`meeting ${meetingId} not found`);
 

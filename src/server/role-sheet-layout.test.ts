@@ -141,6 +141,34 @@ describe("club logo on the role sheet (#496)", () => {
 		);
 		expect(ok).toBe(true);
 	});
+
+	// #496 AC5: "Page counts unchanged on the WOD poster and role sheets, with
+	// and without a logo — counted from rendered PDF output, not eyeballed."
+	// `isPdf` above only checks the %PDF- magic bytes, so a logo that pushed the
+	// header tall enough to spill onto page 2 would still read as "a valid PDF".
+	// This repo has shipped exactly that failure before: a missing print reset
+	// added a blank second page and got past 6 test files, typecheck, lint and
+	// two reviews, because print CSS has no gate here. Count the pages.
+	async function pageCount(doc: ReturnType<typeof buildRoleSheetDoc>) {
+		const buf = await renderToBuffer(
+			doc as Parameters<typeof renderToBuffer>[0],
+		);
+		// Page objects are `/Type /Page`; the tree root is `/Type /Pages`, so the
+		// negative lookahead is what keeps this from counting the container.
+		return (buf.toString("latin1").match(/\/Type\s*\/Page(?![s])/g) ?? [])
+			.length;
+	}
+
+	for (const { key } of ROLE_SHEETS) {
+		it(`"${key}" stays one page whether or not the club has a logo`, async () => {
+			const without = await pageCount(buildRoleSheetDoc(key, fill));
+			const withLogo = await pageCount(
+				buildRoleSheetDoc(key, { ...fill, logoDataUri: LOGO }),
+			);
+			expect(without).toBe(1);
+			expect(withLogo).toBe(without);
+		});
+	}
 });
 
 // #507 — the agenda now prints the same windows as coloured marks, so the two
