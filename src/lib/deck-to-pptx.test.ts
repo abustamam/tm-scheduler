@@ -232,3 +232,82 @@ describe("pptx via slideLayout", () => {
 		expect(text).toContain("impetus gained by a moving object");
 	});
 });
+
+describe("club logo on the title splash (#496)", () => {
+	// A 1x1 transparent PNG. Only its shape matters here; the bytes are never
+	// decoded by these assertions.
+	const LOGO_DATA_URI =
+		"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
+	/** Image objects pptxgenjs recorded on a built slide. */
+	function slideImages(pptx: PptxGenJS, i: number) {
+		// biome-ignore lint/suspicious/noExplicitAny: reaching into pptxgenjs internals, same as slideText above
+		const objects = (pptx as any).slides[i]._slideObjects as any[];
+		return objects.filter((o) => o.image);
+	}
+
+	const withLogo: ClubForDeck = { ...club, logoUrl: "/api/club/abc/logo?v=1" };
+
+	it("embeds the image on the title slide when bytes are supplied", () => {
+		const deck = buildSlideDeck({
+			meeting,
+			club: withLogo,
+			slots: fullSlots,
+			geIntroducesFunctionaries: false,
+		});
+		const pptx = deckToPptx(PptxGenJS, deck, LOGO_DATA_URI);
+		expect(slideImages(pptx, 0)).toHaveLength(1);
+	});
+
+	// The whole reason the bytes are a separate argument: this runs in the
+	// browser and cannot read the database, so a caller that fails to fetch
+	// them must still get a working deck.
+	it("omits the image when the club has a logo but the bytes could not be fetched", () => {
+		const deck = buildSlideDeck({
+			meeting,
+			club: withLogo,
+			slots: fullSlots,
+			geIntroducesFunctionaries: false,
+		});
+		const pptx = deckToPptx(PptxGenJS, deck, null);
+		expect(slideImages(pptx, 0)).toHaveLength(0);
+	});
+
+	it("omits the image when the club has no logo, even if bytes are passed", () => {
+		const deck = buildSlideDeck({
+			meeting,
+			club,
+			slots: fullSlots,
+			geIntroducesFunctionaries: false,
+		});
+		const pptx = deckToPptx(PptxGenJS, deck, LOGO_DATA_URI);
+		expect(slideImages(pptx, 0)).toHaveLength(0);
+	});
+
+	it("puts the logo ONLY on the title slide, not on every splash", () => {
+		const deck = buildSlideDeck({
+			meeting,
+			club: withLogo,
+			slots: fullSlots,
+			geIntroducesFunctionaries: false,
+		});
+		const pptx = deckToPptx(PptxGenJS, deck, LOGO_DATA_URI);
+		// biome-ignore lint/suspicious/noExplicitAny: pptxgenjs internals
+		const total = ((pptx as any).slides as any[]).reduce(
+			(n, _s, i) => n + slideImages(pptx, i).length,
+			0,
+		);
+		expect(total).toBe(1);
+	});
+
+	it("keeps the club name on the title slide alongside the logo", () => {
+		const deck = buildSlideDeck({
+			meeting,
+			club: withLogo,
+			slots: fullSlots,
+			geIntroducesFunctionaries: false,
+		});
+		const pptx = deckToPptx(PptxGenJS, deck, LOGO_DATA_URI);
+		expect(slideText(pptx, 0)).toContain("MCF Toastmasters Club");
+	});
+});

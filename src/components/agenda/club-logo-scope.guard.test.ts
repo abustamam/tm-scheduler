@@ -40,25 +40,31 @@ const read = (rel: string) => readSource(resolve(ROOT, rel));
 // Check 1 — every club_logos read is scoped to the requested club.
 // ---------------------------------------------------------------------------
 
-const LOGIC_FILE = "src/server/club-logo-logic.ts";
 const ROUTE_FILE = "src/routes/api/club.$clubId.logo.ts";
 
 /**
- * Every statement that TOUCHES `club_logos` — `.from(clubLogos)` for reads and
- * `.delete(clubLogos)` for removals — sliced from the call site up to its
- * terminating `;` (or EOF if none). Statement-scoped rather than whole-file so
- * one correctly-scoped access can't paper over a second, unscoped one
- * elsewhere in the same file.
+ * Every statement that TOUCHES `club_logos`, sliced from the call site up to
+ * its terminating `;` (or EOF). Statement-scoped rather than whole-file so one
+ * correctly-scoped access can't paper over a second, unscoped one in the same
+ * file.
  *
- * Deletes are included deliberately. This guard originally matched only
- * `.from(`, because #495 specified it as covering "the logo READ path" — and a
- * delete is not a read. That left the worst case unguarded: dropping the
- * `WHERE` from `removeClubLogo` would erase EVERY club's logo, and neither
- * this guard nor the integration suite caught it (every test seeded one club).
+ * Scoped by TABLE AND VERB, not by a prose phrase, because this guard has now
+ * been too narrow twice:
+ *   · It first matched only `.from(`, since #495 described it as covering "the
+ *     logo READ path" — and a delete is not a read. That left the worst case
+ *     unguarded: dropping the `WHERE` from `removeClubLogo` erases EVERY club's
+ *     logo, and neither this guard nor the suite caught it.
+ *   · It then matched only a hardcoded `club-logo-logic.ts`, so the `innerJoin`
+ *     added in #496 to build the role-sheet PDF was invisible to it purely
+ *     because it lived in a different file.
+ *
+ * Hence: every verb, and every file under `src/` (see `sourceFiles`). A new
+ * call site is covered the moment it is written, without anyone remembering to
+ * enroll it here.
  */
-function clubLogosStatements(src: string): string[] {
+function clubLogosStatements(src: string, verbs: string[]): string[] {
 	const out: string[] = [];
-	const re = /\.(?:from|delete)\(clubLogos\)/g;
+	const re = new RegExp(`\\.(?:${verbs.join("|")})\\(\\s*clubLogos\\b`, "g");
 	let m: RegExpExecArray | null = re.exec(src);
 	while (m !== null) {
 		const end = src.indexOf(";", m.index);
@@ -68,26 +74,65 @@ function clubLogosStatements(src: string): string[] {
 	return out;
 }
 
-describe("club logo reads are scoped per-club (#495, ADR-0024 constraint 2)", () => {
-	it("finds every club_logos access to check (so a rewrite can't go vacuous)", () => {
-		const statements = clubLogosStatements(read(LOGIC_FILE));
-		// 3 = two reads (meta, serving) + one delete (remove). A floor of 2
-		// would still pass if the `.delete(` half of the matcher were lost,
-		// which is precisely the hole this guard was widened to close.
-		expect(statements.length).toBeGreaterThanOrEqual(3);
+/**
+ * Verbs that SELECT existing rows. These are the ones the per-club predicate
+ * rule applies to: without `eq(clubLogos.clubId, …)` they can read another
+ * club's logo, or delete every club's.
+ */
+const ROW_SELECTING_VERBS = [
+	"from",
+	"delete",
+	"update",
+	"innerJoin",
+	"leftJoin",
+	"rightJoin",
+];
+
+/**
+ * `insert` selects nothing, so the predicate rule is meaningless for it — it is
+ * scoped by the `clubId` it WRITES (plus `requireClubRole` upstream), and it
+ * cannot serve one club's bytes to another. Counted toward the floor so losing
+ * the sweep is still detectable, but exempt from the predicate assertion.
+ */
+const ALL_VERBS = [...ROW_SELECTING_VERBS, "insert"];
+
+function accessWith(verbs: string[]): { file: string; stmt: string }[] {
+	return sourceFiles.flatMap((abs) => {
+		const rel = relative(ROOT, abs);
+		return clubLogosStatements(read(rel), verbs).map((stmt) => ({
+			file: rel,
+			stmt,
+		}));
+	});
+}
+
+describe("club logo access is scoped per-club (#495/#496, ADR-0024 constraint 2)", () => {
+	it("finds every club_logos access across src/ (so a rewrite can't go vacuous)", () => {
+		const found = accessWith(ALL_VERBS);
+		// 5 = two reads, one insert and one delete in the logic layer, plus the
+		// role-sheet PDF join added by #496. A floor set to one file's count would
+		// pass again if the file sweep or a verb were lost from the matcher —
+		// both of which have already happened once each.
+		expect(
+			found.length,
+			`Expected at least 5 club_logos access statements across src/, found ${found.length}: ` +
+				`${JSON.stringify(found.map((f) => f.file))}. If this dropped, the ` +
+				"matcher lost a verb or the file sweep broke — fix that rather than " +
+				"lowering the floor.",
+		).toBeGreaterThanOrEqual(5);
 	});
 
-	it("every club_logos read AND delete in the logic layer filters on eq(clubLogos.clubId, …)", () => {
-		const statements = clubLogosStatements(read(LOGIC_FILE));
-		const unscoped = statements.filter(
-			(stmt) => !/eq\(clubLogos\.clubId,/.test(stmt),
+	it("every club_logos access anywhere in src/ filters on eq(clubLogos.clubId, …)", () => {
+		const unscoped = accessWith(ROW_SELECTING_VERBS).filter(
+			({ stmt }) => !/eq\(clubLogos\.clubId,/.test(stmt),
 		);
 		expect(
 			unscoped,
-			`${LOGIC_FILE} reads or deletes club_logos without a clubId-scoped predicate: ` +
-				`${JSON.stringify(unscoped)}. Every read AND delete must filter with ` +
-				"eq(clubLogos.clubId, <the requested club's id>) — an unscoped read serves one club to another; an unscoped DELETE " +
-				"erases every club's logo (ADR-0024 constraint 2).",
+			"These statements touch club_logos without a clubId-scoped predicate: " +
+				`${JSON.stringify(unscoped)}. Every read, join and delete must filter ` +
+				"with eq(clubLogos.clubId, <this club's id>) — an unscoped read serves " +
+				"one club's logo to another; an unscoped DELETE erases every club's " +
+				"(ADR-0024 constraint 2).",
 		).toEqual([]);
 	});
 
