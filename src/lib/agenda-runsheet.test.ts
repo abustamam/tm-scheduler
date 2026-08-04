@@ -7,6 +7,7 @@ import {
 	buildLegend,
 	buildReportingLegend,
 	buildRunOfShow,
+	EVALUATION_MARKS,
 	expandRunSheet,
 	FLEX_TOLERANCE_MINUTES,
 	flexBannerMessage,
@@ -17,6 +18,7 @@ import {
 	ROLES_TOKEN,
 	RUN_OF_SHOW,
 	reportingFunctionarySlots,
+	TABLE_TOPICS_MARKS,
 	TABLE_TOPICS_MAX,
 	TABLE_TOPICS_MIN,
 } from "./agenda-runsheet";
@@ -591,6 +593,63 @@ describe("expandRunSheet", () => {
 		expect(evalRows[0].who).toBe("Evaluator 1 · EvalA");
 		expect(evalRows[0].detail).toBe("Evaluates A");
 		expect(evalRows[1].who).toBe("Evaluator 2 · EvalB");
+	});
+});
+
+describe("timing marks beyond the speaker (#507)", () => {
+	// Speakers got the green/yellow/red trio from their speech's own min/max;
+	// every other row printed a bare minute count. Evaluations and Table Topics
+	// are timed off the same card, so they need the same three numbers.
+	it("gives evaluator rows the evaluation window", () => {
+		const rows = expandRunSheet(sixRoleClub());
+		const evaluator = rows.find((r) => r.roleKey === "evaluator");
+		expect(evaluator).toBeDefined();
+		expect(evaluator?.marks).toEqual(EVALUATION_MARKS);
+	});
+
+	it("gives the Table Topics segment the per-topic window", () => {
+		const rows = expandRunSheet(sixRoleClub());
+		const segment = rows.find((r) => r.detail.startsWith("Impromptu topics"));
+		expect(segment).toBeDefined();
+		expect(segment?.marks).toEqual(TABLE_TOPICS_MARKS);
+	});
+
+	// The guard that rules out keying marks off the ROLE. The Table Topics
+	// Master owns four beats — two hand-offs, the segment, and the vote — and
+	// only the segment is timed. A per-role lookup would stamp 1:00/1:30/2:00
+	// onto "Introduces the General Evaluator".
+	it("leaves the Table Topics Master's OTHER beats unmarked", () => {
+		const rows = expandRunSheet(sixRoleClub());
+		const owned = rows.filter((r) => r.roleKey === "table_topics_master");
+		expect(owned.length).toBeGreaterThan(1);
+		for (const row of owned) {
+			if (row.detail.startsWith("Impromptu topics")) continue;
+			expect(row.marks).toBeNull();
+		}
+	});
+
+	it("leaves hand-off and functionary rows unmarked", () => {
+		const rows = expandRunSheet(sixRoleClub());
+		expect(rows.find((r) => r.handoff)?.marks ?? null).toBeNull();
+		expect(rows.find((r) => r.roleKey === "timer")?.marks ?? null).toBeNull();
+	});
+
+	it("still reads a speaker's marks off their own speech, not a constant", () => {
+		// Regression: the speaker path is per-slot and must not collapse into the
+		// shared constants.
+		const rows = expandRunSheet([
+			...sixRoleClub().filter((s) => s.roleName !== "Speaker"),
+			slot({
+				id: "sp",
+				roleName: "Speaker",
+				isSpeakerRole: true,
+				assigneeName: "Dana",
+				minMinutes: 5,
+				maxMinutes: 7,
+			}),
+		]);
+		const speaker = rows.find((r) => r.roleKey === "speaker");
+		expect(speaker?.marks).toEqual({ green: 5, yellow: 6, red: 7 });
 	});
 });
 

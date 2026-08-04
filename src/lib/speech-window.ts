@@ -17,7 +17,7 @@
 // The temptation is to collapse them: have one "is this slot configured?" rule
 // and let the booked duration fall back to the house default whenever it says
 // no. **The max-only slot is why not.** A club that typed Max 6 and left Min
-// blank has no range — nothing to signal green·amber·red against, nothing for
+// blank has no range — nothing to signal green·yellow·red against, nothing for
 // the grace window to bracket — but it has said exactly how much of the meeting
 // this speech gets. Booking `DEFAULT_SPEAKER_MINUTES` there would discard a
 // number the club typed and reserve more time than they asked for, which is the
@@ -45,7 +45,7 @@ export type SpeechWindowInput = {
  *
  * `null` unless BOTH ends are present, finite and ordered. A range has two
  * edges: a slot with only a minimum, only a maximum, or a max below its min has
- * no range, and the surfaces that need one — the Timer's green·amber·red marks,
+ * no range, and the surfaces that need one — the Timer's green·yellow·red marks,
  * #357's qualifying window, the agenda card's "· 5–7 min" chip — must render
  * nothing rather than invent the missing edge. Filling a blank max with
  * `min + span` is exactly the kind of number-nobody-typed this issue is about.

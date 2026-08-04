@@ -87,7 +87,7 @@ type Props = {
  *  window (#357) so a mark and its window always read in the same units. */
 const mark = formatTimingClock;
 
-/** The green·amber·red timing marks for one beat, rendered inline and colored.
+/** The green·yellow·red timing marks for one beat, rendered inline and colored.
  *  Shared by the one-page layouts (editorial + grid) so their per-speaker
  *  timing reads the same as the detailed timing table's Green·Amber·Red column. */
 function TimingTrio({
@@ -116,7 +116,7 @@ function TimingTrio({
 	);
 }
 
-/** The compact green/amber/red key for the one-page layouts (the full "Timing
+/** The compact green/yellow/red key for the one-page layouts (the full "Timing
  *  Signals" callout only exists on the 2-page timing layout).
  *
  *  Second line (#357) states the 30-second grace period — the window the Timer
@@ -472,7 +472,7 @@ function rowKey(r: TimelineRow, i: number): string {
 }
 
 /** The narrative run-of-show (editorial / spacious): a colored-spine list.
- *  `timingColors` swaps the muted min–max range for the colored green·amber·red
+ *  `timingColors` swaps the muted min–max range for the colored green·yellow·red
  *  trio (used by the one-page editorial layout). */
 function RunNarrative({
 	rows,

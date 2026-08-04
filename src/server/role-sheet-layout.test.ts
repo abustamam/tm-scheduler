@@ -8,6 +8,7 @@
 import { renderToBuffer } from "@react-pdf/renderer";
 import { describe, expect, it } from "vitest";
 import { ROLE_SHEETS } from "#/data/role-sheets";
+import { EVALUATION_MARKS, TABLE_TOPICS_MARKS } from "#/lib/agenda-runsheet";
 import {
 	buildRoleSheetDoc,
 	type RoleSheetFill,
@@ -60,11 +61,43 @@ describe("role-sheet layout (#311)", () => {
 	});
 });
 
+// #507 — the agenda now prints the same windows as coloured marks, so the two
+// surfaces hold the same numbers in two places. Pin them together: whoever
+// changes one gets a failure naming the other, instead of a Timer signalling at
+// 2:30 while the agenda beside them prints something else.
+describe("agenda marks agree with the Timer sheet's published windows (#507)", () => {
+	const rows = standardTimingRows();
+	const published = (assignment: string) =>
+		rows.find((r) => r[0] === assignment);
+
+	const clock = (m: number) => {
+		const mins = Math.floor(m);
+		const secs = Math.round((m - mins) * 60);
+		return `${mins}:${String(secs).padStart(2, "0")}`;
+	};
+
+	it("evaluation", () => {
+		expect(published("Evaluation")?.slice(1, 4)).toEqual([
+			clock(EVALUATION_MARKS.green),
+			clock(EVALUATION_MARKS.yellow),
+			clock(EVALUATION_MARKS.red),
+		]);
+	});
+
+	it("table topics", () => {
+		expect(published("Table Topics")?.slice(1, 4)).toEqual([
+			clock(TABLE_TOPICS_MARKS.green),
+			clock(TABLE_TOPICS_MARKS.yellow),
+			clock(TABLE_TOPICS_MARKS.red),
+		]);
+	});
+});
+
 // #357 — the Timer needs the qualifying window, not just the signal times.
 describe("Timer sheet standard timing windows (#357)", () => {
 	const rows = standardTimingRows();
 
-	it("keeps the published green/amber/red times, deriving amber as the midpoint", () => {
+	it("keeps the published green/yellow/red times, deriving yellow as the midpoint", () => {
 		expect(rows).toContainEqual([
 			"Prepared speech",
 			"5:00",

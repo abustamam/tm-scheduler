@@ -54,9 +54,9 @@ const C = {
 	soft: "#52606d",
 	line: "#b8c1cc",
 	faint: "#eef1f4",
-	// Signal colors, mirroring the Timer's green / amber / red cards.
+	// Signal colors, mirroring the Timer's green / yellow / red cards.
 	green: "#1b7f3b",
-	amber: "#b45309",
+	yellow: "#b45309",
 	red: "#c0392b",
 };
 
@@ -278,7 +278,7 @@ function sheet(
 
 /**
  * The standard assignment windows printed on the Timer's sheet, held as MINUTES
- * so every printed column is derived rather than transcribed (#357): amber is
+ * so every printed column is derived rather than transcribed (#357): yellow is
  * the midpoint, and the qualifying window is the 30-second grace either side.
  */
 const STANDARD_TIMING_WINDOWS: {
@@ -293,7 +293,7 @@ const STANDARD_TIMING_WINDOWS: {
 ];
 
 /** The Timer sheet's "Standard timing windows" table rows, as printed:
- *  assignment · green · amber · red · qualifying window. */
+ *  assignment · green · yellow · red · qualifying window. */
 export function standardTimingRows(): string[][] {
 	return STANDARD_TIMING_WINDOWS.map(({ assignment, min, max }) => [
 		assignment,
@@ -307,7 +307,7 @@ export function standardTimingRows(): string[][] {
 function timer(fill?: RoleSheetFill): ReactNode {
 	return sheet(
 		"Timer's log",
-		"Time each speaker and signal green / amber / red at their windows.",
+		"Time each speaker and signal green / yellow / red at their windows.",
 		[
 			h(Text, { key: "a", style: s.sectionTitle }, "Standard timing windows"),
 			h(
@@ -322,7 +322,7 @@ function timer(fill?: RoleSheetFill): ReactNode {
 					[
 						{ label: "Assignment", flex: 2 },
 						{ label: "Green (min)", flex: 1, color: C.green },
-						{ label: "Amber", flex: 1, color: C.amber },
+						{ label: "Yellow", flex: 1, color: C.yellow },
 						{ label: "Red (max)", flex: 1, color: C.red },
 						{ label: "Qualifies", flex: 1.6 },
 					],

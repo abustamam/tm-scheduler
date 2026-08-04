@@ -27,7 +27,7 @@ const header: AgendaHeader = {
 	meetingNumber: null,
 };
 
-// One timed speaker beat (has green/amber/red marks) + one plain beat (no marks).
+// One timed speaker beat (has green/yellow/red marks) + one plain beat (no marks).
 const rows: TimelineRow[] = [
 	{
 		who: "Toastmaster",
@@ -60,9 +60,9 @@ function renderLayout(layout: AgendaLayout) {
 
 describe("MeetingAgendaPrint one-page timing", () => {
 	for (const layout of ["grid", "editorial"] as const) {
-		it(`shows the color-coded green/amber/red trio on the ${layout} one-pager`, () => {
+		it(`shows the color-coded green/yellow/red trio on the ${layout} one-pager`, () => {
 			renderLayout(layout);
-			// green = 4:00, amber = 5:00, red = 6:00 for the timed speaker beat.
+			// green = 4:00, yellow = 5:00, red = 6:00 for the timed speaker beat.
 			expect(screen.getByText("4:00")).toBeTruthy();
 			expect(screen.getByText("5:00")).toBeTruthy();
 			expect(screen.getByText("6:00")).toBeTruthy();

@@ -146,6 +146,18 @@ export type Beat = (
 			 *  would lose the Best-Speaker vote from the printed agenda while
 			 *  `buildSlideDeck` still projected the slide. */
 			renderUnowned?: true;
+			/**
+			 * Timer-card marks for a beat timed by convention (#507) — the
+			 * evaluation and Table Topics segments.
+			 *
+			 * On the BEAT, not derived from the role, because a role owns several
+			 * beats and only some are timed: the Table Topics Master owns two
+			 * hand-offs, the segment and the vote, and a per-role lookup would
+			 * print "green 1:00 · yellow 1:30 · red 2:00" against "Introduces the
+			 * General Evaluator". Speaker beats ignore this and read their own
+			 * speech instead, since that window is per-slot.
+			 */
+			marks?: TimingMarks;
 	  }
 ) & {
 	id?: BeatId;
@@ -283,6 +295,28 @@ export type RoleGroup = "functionaries" | "reportingFunctionaries";
 export const TABLE_TOPICS_MIN = 5;
 export const TABLE_TOPICS_MAX = 25;
 export const FLEX_TOLERANCE_MINUTES = 2;
+
+/**
+ * Timer-card marks for the two segments that are timed by CONVENTION rather
+ * than per-slot (#507).
+ *
+ * A speaker's trio comes from their own speech (`speechWindow` reads the
+ * `min_minutes`/`max_minutes` recorded against it), because a speech's length
+ * is a property of that speech. An evaluation and a Table Topics response have
+ * no such per-slot record — `speeches` is the only table carrying a range — and
+ * their windows are the same every week, so they are constants here rather than
+ * a schema column nobody would ever vary.
+ *
+ * These are the standard Toastmasters windows. If a club ever needs its own,
+ * the upgrade is a per-club override that falls back to these, which is why the
+ * numbers sit behind a name instead of inline in the beat table.
+ */
+export const EVALUATION_MARKS: TimingMarks = { green: 2, yellow: 2.5, red: 3 };
+export const TABLE_TOPICS_MARKS: TimingMarks = {
+	green: 1,
+	yellow: 1.5,
+	red: 2,
+};
 
 /** Placeholder shown for an open (unassigned) slot. */
 export const OPEN_LABEL = "— open —";
@@ -674,6 +708,7 @@ export function buildRunOfShow({
 			detail: "Impromptu topics using the Word of the Day",
 			minutes: 10,
 			flex: true,
+			marks: TABLE_TOPICS_MARKS,
 		},
 		{
 			// Owner and gate are the same role here, so `renderUnowned` can never
@@ -723,6 +758,7 @@ export function buildRunOfShow({
 			role: "evaluator",
 			detail: "Evaluates a speaker",
 			minutes: 3,
+			marks: EVALUATION_MARKS,
 		},
 		{
 			// The General Evaluator, per the same club agenda. THE beat that proves
@@ -1184,7 +1220,7 @@ export function expandRunSheet(
 							? `Evaluates ${s.evaluates.speakerName}`
 							: beatDetail,
 						minutes: beat.minutes,
-						marks: null,
+						marks: beat.marks ?? null,
 					});
 				});
 			} else if (matching.length === 0) {
@@ -1208,7 +1244,7 @@ export function expandRunSheet(
 						roleKey: owner.roleKey,
 						detail: beatDetail,
 						minutes: beat.minutes,
-						marks: null,
+						marks: beat.marks ?? null,
 					});
 				}
 			} else {
@@ -1219,7 +1255,7 @@ export function expandRunSheet(
 						roleKey: owner.roleKey,
 						detail: beatDetail,
 						minutes: beat.minutes,
-						marks: null,
+						marks: beat.marks ?? null,
 					});
 				}
 			}

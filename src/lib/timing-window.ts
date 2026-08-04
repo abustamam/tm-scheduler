@@ -2,7 +2,7 @@
 //
 // The 30-second grace period and the qualifying window it implies (#357).
 //
-// The timing marks themselves are unchanged: green = min, amber = midpoint,
+// The timing marks themselves are unchanged: green = min, yellow = midpoint,
 // red = max (`TimingMarks`, agenda-runsheet.ts). The grace period is a separate
 // Toastmasters rule about QUALIFICATION, not about the signals — a speech
 // qualifies from 30 s before green through 30 s after red. That window is what
@@ -74,7 +74,7 @@ export function qualifyingWindow(
 	};
 }
 
-/** The qualifying window behind a beat's green·amber·red marks (green = min,
+/** The qualifying window behind a beat's green·yellow·red marks (green = min,
  *  red = max), or `null` for an untimed beat. */
 export function qualifyingWindowForMarks(
 	marks: TimingMarks | null | undefined,
