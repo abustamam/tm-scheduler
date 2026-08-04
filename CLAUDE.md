@@ -102,7 +102,7 @@ Assessed against the diff, not the whole repo: every branch, error path and user
 introduces should have a test that exercises it. `/ship`'s coverage audit reads these numbers and
 gates on them.
 
-Three coverage traps this repo has actually hit, all worth checking when a number looks fine:
+Five coverage traps this repo has actually hit, all worth checking when a number looks fine:
 
 - **A test can pin the wrong thing after a rename.** An assertion matching a role name by string
   (`r.who === "Toastmaster of the Day"`) stopped being unique once a second beat rendered the same
@@ -118,6 +118,27 @@ Three coverage traps this repo has actually hit, all worth checking when a numbe
   cannot fail. Assert the observable the guard actually controls: that the round-trip was skipped
   (`vi.spyOn(testDb, "select")` + `not.toHaveBeenCalled()`). Same shape for any guard whose only
   effect is avoiding work. See `my-activity.integration.test.ts`.
+
+- **A fixture that spans ONE axis is not a guarantee.** When the thing you are protecting is a
+  property of rendered output — a page count, a printed word, a render cost — the test is only as
+  good as the widest fixture it runs. On 2026-08-04 the role sheets' one-page promise was wrong
+  **four times in a row**, each time with a green suite: 24 log rows (chosen against cost only),
+  10 rows (measured without a club logo), 8 rows (measured with short speaker labels), and a
+  34-character club name that nothing had varied. Before writing the test, LIST every field that
+  is unbounded user data and build the fixture matrix from that list — including all of them at
+  once, which is the case no single-variable fixture catches. A merge makes this worse: two
+  branches touching the same output each test their own axis, and the cross-product is tested by
+  neither, so re-derive the list after merging.
+
+- **A test stated RELATIVE to the constant it guards cannot fail.** When the fix IS a number — a
+  cap, a limit, a timeout — `expect(x.length).toBeLessThanOrEqual(CAP)` passes for every value of
+  CAP, including one that reintroduces the bug. On #519 raising `speakerRows` to 5,000 kept 90/90
+  green while one public request cost 129 seconds of blocked event loop, and raising the
+  Word-of-the-Day limits to 49,999 kept 103/103 green at 3.7 seconds. Assert an ABSOLUTE ceiling on
+  the constant, picked by measuring the cost curve (500 and 5,000 characters both rendered in 39ms;
+  49,999 took 3,707ms — so the ceiling goes far below that knee). Corollary: a schema private to a
+  server-fn module is invisible to vitest, so its whole layer can be deleted with the suite green —
+  that needs a comment-blind source guard via `#/test/guard-source`.
 
 ## Environment
 
@@ -378,7 +399,13 @@ Both inserted steps exist for a specific reason:
   plan, so a wrong plan propagates cleanly through every task and every review. v1.1.0.0 shipped a
   spec that said "all five GE beats" where the variant has six; it survived 24 per-task reviews and
   two full `/ship` runs. An independent read of the plan is the only step positioned to catch that.
-- **`/review` once, after implementation, before `/ship`.** It is the only WHOLE-DIFF look —
+- **`/review` once, after implementation, before `/ship`.** Ask it for the ADVERSARIAL pass, not
+  just the specialists — `/review` dispatches specialists by default and `/ship` runs the
+  adversarial subagent, which puts the harshest reader LAST. On 2026-08-04 that ordering turned one
+  round into four on #519: the adversarial pass found that the cap function spread its whole input
+  before deciding to truncate, recreating the very DoS the PR existed to close, and everything it
+  found had to re-run three gates behind it. The adversarial pass is free and fast; running it
+  early is the single biggest lever on churn. It is the only WHOLE-DIFF look —
   `subagent-driven-development`'s per-task reviews are scoped to one task and structurally cannot
   see a cross-task interaction, which is what that bug was. It also logs a review so `/ship`'s
   readiness dashboard reads CLEAR and `/ship` skips its own duplicate specialist pass.
