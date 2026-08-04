@@ -2,6 +2,27 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.5.1.0] - 2026-08-04
+
+### Added
+
+- **The agenda now says what to say, not just who is next.** Three moments that everyone in the room knew but the page never stated. The functionary introduction cues the Word of the Day, so a first-time Grammarian reads that delivering it is their job right then — the code already knew this and only the page did not. The Table Topics Master asks the Timer to explain the timing as the segment opens, printed beside the green/yellow/red numbers being explained. And a new row before the evaluations has the General Evaluator ask the Timer to explain how an evaluation is timed, which is different from a speech and was never announced. Each cue appears only for a club that runs the role it names: no Grammarian, no Word-of-the-Day line; no Timer, no timing cue, and the row stays. A club that renamed a role sees its own name in the cue. #508
+
+- **Every printed role sheet now carries the words to read aloud.** The Timer's, Grammarian's, Ah-Counter's, Ballot Counter's and General Evaluator's sheets each gained a "What to say" block: the moment, and the line. They were logs before — a grid to tally into, with nothing for the moment the holder is handed the floor, which is exactly what a first-timer does not already know. The Timer's spoken times come from the same table printed above them on the same sheet, so the two can never disagree, and the General Evaluator's ask for the evaluation timing is the same sentence the agenda prints in that officer's row. #509
+
+### Changed
+
+- **The Ah-Counter's sheet no longer arrives pre-filled with the booked speakers.** That role listens to everyone who takes the floor — Table Topics respondents, evaluators, the Toastmaster, the other functionaries — so three printed names invited three rows of tallies and quietly excluded most of the meeting. The column now asks "Who spoke" and the sheet says plainly that it covers everyone. The Timer's log keeps its pre-fill, because those rows are assignments with booked times to compare against, which is a different job.
+
+### Fixed
+
+- **Role sheets stay on one page.** Adding the script pushed three of the five onto a second sheet, and then a further two ways of spilling turned up: an ordinary club name of 34 characters ("Sunrise Speakers Toastmasters Club"), and five prepared speakers. These are handheld sheets, so one page each is the point. Each sheet now holds one page with a long club name, a full Word-of-the-Day note, and up to ten booked speakers. The Timer's log went from twelve rows to ten to pay for the script, which is the cheapest part of that sheet — the Timer writes the rest of the meeting's items in as they happen.
+
+### Notes for this club
+
+- Two of #508's five requests are **not** in this release, and could not be. They wanted the speaker introduction to name that speaker's evaluator, and the evaluator's row to read "Evaluate Dana" rather than "Evaluates a speaker". Both read a column that nothing in the app can set: evaluator-to-speaker pairing is written only by a one-off import script, so on any meeting created here it is empty and the wording would never appear. Tracked separately, along with a third thing it turned out to disable — the code that orders evaluators to match their speakers has never once run.
+
+- If your club has moved a standard role out of its usual category, the Word-of-the-Day cue follows the category rather than the name. A Grammarian filed under Leadership is not introduced with the functionaries, so the cue does not appear in that row either — the page no longer names a role it just declined to introduce.
 ## [1.5.0.0] - 2026-08-04
 
 ### Added

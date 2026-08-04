@@ -113,7 +113,8 @@ const BEATS: { detail: string; section: Section | null; id?: BeatId }[] = [
 		section: "toastmasterOpens",
 	},
 	{
-		detail: "Introduces the {roles}; each explains their role",
+		detail:
+			"Introduces the {roles}; each explains their role · the {role:grammarian} gives the Word of the Day",
 		section: "functionaryIntro",
 	},
 	{ detail: "Introduces the speakers", section: "handoffSpeakers" },
@@ -128,7 +129,8 @@ const BEATS: { detail: string; section: Section | null; id?: BeatId }[] = [
 		section: "handoffTableTopics",
 	},
 	{
-		detail: "Impromptu topics using the Word of the Day",
+		detail:
+			"Impromptu topics using the Word of the Day · asks the {role:timer} to explain the timing",
 		section: "tableTopics",
 	},
 	{
@@ -142,6 +144,19 @@ const BEATS: { detail: string; section: Section | null; id?: BeatId }[] = [
 		id: "geEvaluationHandoff",
 	},
 	{ detail: "Introduces the speech evaluators", section: "handoffEvaluators" },
+	// The evaluation-timing cue (#508). Excluded, by name, with the reason: it is
+	// a STAGE DIRECTION — the General Evaluator asking the Timer to explain how an
+	// evaluation is timed — and the deck has no counterpart because the room is
+	// already shown the number, on each `evaluation` slide's "Time:" line. What
+	// the deck lacks is the instruction to say it out loud, which is what a run
+	// sheet is for and what a projected slide is not.
+	//
+	// So this is a genuine one-surface beat, not an oversight: adding a slide
+	// would project a cue at the audience that is addressed to one officer.
+	{
+		detail: "Asks the {role:timer} to explain the timing for an evaluation",
+		section: null,
+	},
 	{ detail: "Evaluates a speaker", section: "evaluation", id: "evaluation" },
 	{
 		detail:
