@@ -55,10 +55,30 @@ export async function fetchClubLogo(
 	logoUrl: string | null,
 ): Promise<ClubLogoAsset | null> {
 	if (!logoUrl) return null;
+	const url = logoUrl; // narrowed once, so the nested helper keeps the type
 	const controller = new AbortController();
-	const timer = setTimeout(() => controller.abort(), LOGO_FETCH_TIMEOUT_MS);
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	// The deadline covers the WHOLE operation, not just the network call. The
+	// signal only aborts `fetch`; `createImageBitmap` and `FileReader` run after
+	// it and are bounded by nothing, so a decode that never settles would leave
+	// the caller's `finally { setBusy(false) }` unreached and the button stuck —
+	// exactly the failure the timeout exists to prevent.
+	const deadline = new Promise<null>((resolve) => {
+		timer = setTimeout(() => {
+			controller.abort();
+			resolve(null);
+		}, LOGO_FETCH_TIMEOUT_MS);
+	});
 	try {
-		const res = await fetch(logoUrl, { signal: controller.signal });
+		return await Promise.race([deadline, measure()]);
+	} catch {
+		return null;
+	} finally {
+		clearTimeout(timer);
+	}
+
+	async function measure(): Promise<ClubLogoAsset | null> {
+		const res = await fetch(url, { signal: controller.signal });
 		if (!res.ok) return null;
 		const blob = await res.blob();
 		// No measurement, no logo: a stretched crest is worse than none, and
@@ -70,10 +90,6 @@ export async function fetchClubLogo(
 		if (!width || !height) return null;
 		const dataUri = await blobToDataUri(blob);
 		return dataUri ? { dataUri, width, height } : null;
-	} catch {
-		return null;
-	} finally {
-		clearTimeout(timer);
 	}
 }
 

@@ -134,6 +134,27 @@ describe("fetchClubLogo (#496)", () => {
 		await expect(pending).resolves.toBeNull();
 	});
 
+	// The abort signal only reaches `fetch`. `createImageBitmap` runs after it and
+	// is bounded by nothing, so before the deadline wrapped the WHOLE operation a
+	// decode that never settled left the button stuck just as surely as a stalled
+	// network call — the same failure, one step later.
+	it("gives up when the image decode never settles, not just the fetch", async () => {
+		vi.useFakeTimers();
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => okResponse()),
+		);
+		vi.stubGlobal(
+			"createImageBitmap",
+			vi.fn(() => new Promise(() => {})), // never resolves, never rejects
+		);
+
+		const pending = fetchClubLogo(URL_);
+		await vi.advanceTimersByTimeAsync(LOGO_FETCH_TIMEOUT_MS + 1);
+
+		await expect(pending).resolves.toBeNull();
+	});
+
 	// Real timers here: this path reaches FileReader, and jsdom's implementation
 	// never completes while vitest's fake timers are installed.
 	it("does not leave the abort timer armed after a successful fetch", async () => {

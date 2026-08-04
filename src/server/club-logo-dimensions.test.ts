@@ -1,12 +1,23 @@
 /**
- * Unit tests for the image-header parsers behind the pixel-dimension cap (#496).
+ * Unit tests for the image-header validators behind the pixel-dimension cap (#496).
  *
- * These are pure functions, but until now they were only reachable through the
+ * These are pure functions, but they were originally reachable only through the
  * DB-gated integration suite — which SKIPS entirely without `TEST_DATABASE_URL`,
- * so on a plain `bun run test` nothing exercised them at all. That gap is not
- * theoretical: the JPEG walker rejected valid files with fill bytes, and the
- * integration fixtures could not see it because they place SOF0 immediately
- * after SOI, which is the one layout that needs no walking.
+ * so on a plain `bun run test` nothing exercised them at all. That gap hid two
+ * separate bugs, the second of which was worse than the one the cap was added
+ * to fix:
+ *
+ *   1. The JPEG walker mis-parsed marker segments.
+ *   2. The PNG side was a fixed-offset PEEK, not a validator. It read bytes
+ *      16-24 and returned them, while the decoder that actually runs (`png-js`)
+ *      walks the whole chunk list — with a signed length read, a skip that can
+ *      move backwards, and last-IHDR-wins. A 45-byte file passed the gate as
+ *      1x1 and made the decoder loop forever on a public endpoint.
+ *
+ * So the assertions here are about STRUCTURE, not just about dimensions: a file
+ * whose chunk list we cannot read the same way the decoder will must be
+ * rejected, even when a plausible width and height are sitting at the right
+ * offsets.
  *
  * `#/db` is stubbed rather than pointed at a test database: nothing here touches
  * it, and the stub keeps these runnable in the default suite.
@@ -20,35 +31,53 @@ const { isDecodeSafe, readImageDimensions } = await import(
 );
 
 // ---------------------------------------------------------------------------
-// Builders — real header bytes, not fixtures with a magic prefix and zero fill.
+// Builders — real files with real chunk structure, not a magic prefix and fill.
 // ---------------------------------------------------------------------------
 
-const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+const PNG_SIGNATURE = Buffer.from([
+	0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+]);
 
-function png(
-	width: number,
-	height: number,
-	opts: { chunkType?: string; size?: number } = {},
+/** length(4) + type(4) + data + crc(4). `declaredLength` overrides the real one. */
+function chunk(
+	type: string,
+	data: Buffer = Buffer.alloc(0),
+	declaredLength?: number,
 ): Buffer {
-	// Always build at full size, then truncate — a caller asking for a short
-	// buffer wants a TRUNCATED png, not a write past the end of a small one.
-	const buf = Buffer.alloc(64, 0);
-	buf.set(PNG_SIGNATURE, 0);
-	buf.writeUInt32BE(13, 8); // IHDR payload length
-	buf.write(opts.chunkType ?? "IHDR", 12, "ascii");
-	buf.writeUInt32BE(width, 16);
-	buf.writeUInt32BE(height, 20);
-	return opts.size === undefined ? buf : buf.subarray(0, opts.size);
+	const len = Buffer.alloc(4);
+	len.writeUInt32BE((declaredLength ?? data.length) >>> 0);
+	return Buffer.concat([
+		len,
+		Buffer.from(type, "ascii"),
+		data,
+		Buffer.alloc(4), // CRC — never checked by us or by png-js
+	]);
 }
 
-/** A marker segment: 0xFF, marker, 2-byte self-inclusive length, payload. */
+function ihdrData(width: number, height: number): Buffer {
+	const d = Buffer.alloc(13);
+	d.writeUInt32BE(width, 0);
+	d.writeUInt32BE(height, 4);
+	d[8] = 8; // bit depth
+	d[9] = 6; // colour type (RGBA)
+	return d;
+}
+
+function png(width: number, height: number, ...extra: Buffer[]): Buffer {
+	return Buffer.concat([
+		PNG_SIGNATURE,
+		chunk("IHDR", ihdrData(width, height)),
+		...extra,
+		chunk("IEND"),
+	]);
+}
+
 function segment(marker: number, payload: Buffer): Buffer {
 	const length = Buffer.alloc(2);
 	length.writeUInt16BE(payload.length + 2);
 	return Buffer.concat([Buffer.from([0xff, marker]), length, payload]);
 }
 
-/** A start-of-frame: precision(1), height(2), width(2), then component data. */
 function sof(width: number, height: number, marker = 0xc0): Buffer {
 	const payload = Buffer.alloc(9);
 	payload[0] = 8; // sample precision
@@ -62,34 +91,130 @@ function jpeg(...parts: Buffer[]): Buffer {
 	return Buffer.concat([Buffer.from([0xff, 0xd8]), ...parts]);
 }
 
-describe("readImageDimensions — PNG", () => {
-	it("reads width and height from the IHDR chunk", () => {
+describe("readImageDimensions — PNG structure", () => {
+	it("reads width and height from a well-formed file", () => {
 		expect(readImageDimensions(png(1200, 300), "image/png")).toEqual({
 			width: 1200,
 			height: 300,
 		});
 	});
 
-	it("returns null when the buffer is too short to hold an IHDR", () => {
-		expect(
-			readImageDimensions(png(64, 64, { size: 20 }), "image/png"),
-		).toBeNull();
+	it("walks past ancillary chunks to the IEND", () => {
+		const withExtras = png(
+			640,
+			480,
+			chunk("gAMA", Buffer.alloc(4)),
+			chunk("IDAT", Buffer.alloc(32)),
+		);
+		expect(readImageDimensions(withExtras, "image/png")).toEqual({
+			width: 640,
+			height: 480,
+		});
 	});
 
-	it("returns null when the first chunk is not IHDR", () => {
-		// The spec requires IHDR first; anything else means we cannot trust the
-		// offsets, so we must not guess.
-		expect(
-			readImageDimensions(png(64, 64, { chunkType: "gAMA" }), "image/png"),
-		).toBeNull();
+	// THE EXPLOIT. png-js reads chunk lengths with `|`, so >= 0x80000000 is
+	// negative; its skip is `pos += chunkSize` bounded only by
+	// `pos > data.length`, so a negative length walks backwards and the bound
+	// never trips. This exact file hung the decoder's constructor forever, on a
+	// public unauthenticated endpoint, while the old peek certified it as 1x1.
+	it("rejects a chunk whose declared length has the high bit set", () => {
+		const evil = Buffer.concat([
+			PNG_SIGNATURE,
+			chunk("IHDR", ihdrData(1, 1)),
+			chunk("aaaa", Buffer.alloc(0), 0x80000000),
+		]);
+		expect(evil.length).toBeLessThan(64); // tiny — the byte caps see nothing
+		expect(readImageDimensions(evil, "image/png")).toBeNull();
+		expect(isDecodeSafe(evil, "image/png")).toBe(false);
 	});
 
-	it("returns null on zero dimensions", () => {
+	// Which invariant actually rejects the file above: mutation testing showed it
+	// is the IEND requirement, not the fits-inside-the-file check. Reading the
+	// length UNSIGNED sends `pos` far past the end, the walk exits, and a file
+	// that never reached IEND is refused. Worth stating, because the obvious
+	// reading is wrong and the next person will assume the fit check did it.
+	it("rejects a bogus-length chunk even when an IEND follows it", () => {
+		const evilThenEnd = Buffer.concat([
+			PNG_SIGNATURE,
+			chunk("IHDR", ihdrData(1, 1)),
+			chunk("aaaa", Buffer.alloc(0), 0x80000000),
+			chunk("IEND"),
+		]);
+		expect(readImageDimensions(evilThenEnd, "image/png")).toBeNull();
+	});
+
+	// The fits-inside-the-file check earns its keep here: without it, these
+	// offsets read past the end of the buffer and throw a RangeError out of the
+	// upload handler instead of failing validation cleanly.
+	it("returns null, not a thrown RangeError, on an IHDR truncated mid-field", () => {
+		const truncated = Buffer.concat([
+			PNG_SIGNATURE,
+			Buffer.from([0x00, 0x00, 0x00, 0x0d]), // declares 13 bytes
+			Buffer.from("IHDR", "ascii"),
+			Buffer.alloc(6), // only 6 of them present
+		]);
+		expect(truncated.length).toBe(22);
+		expect(() => readImageDimensions(truncated, "image/png")).not.toThrow();
+		expect(readImageDimensions(truncated, "image/png")).toBeNull();
+	});
+
+	it("rejects any chunk that claims more bytes than the file holds", () => {
+		const overrun = Buffer.concat([
+			PNG_SIGNATURE,
+			chunk("IHDR", ihdrData(1, 1)),
+			chunk("IDAT", Buffer.alloc(8), 0x7fffffff),
+		]);
+		expect(readImageDimensions(overrun, "image/png")).toBeNull();
+	});
+
+	// png-js assigns width/height on EVERY IHDR, so a trailing one wins. We read
+	// the first. Rather than pick a side, refuse the file: the two parsers would
+	// disagree by construction.
+	it("rejects a second IHDR, which the decoder would prefer over the first", () => {
+		const twoHeaders = Buffer.concat([
+			PNG_SIGNATURE,
+			chunk("IHDR", ihdrData(1, 1)),
+			chunk("IHDR", ihdrData(20000, 20000)),
+			chunk("IEND"),
+		]);
+		expect(readImageDimensions(twoHeaders, "image/png")).toBeNull();
+		expect(isDecodeSafe(twoHeaders, "image/png")).toBe(false);
+	});
+
+	it("requires the full 8-byte signature, not just the first four", () => {
+		const short = png(64, 64);
+		short[6] = 0x00; // corrupt byte 7 of the signature
+		expect(readImageDimensions(short, "image/png")).toBeNull();
+	});
+
+	it("requires IHDR to come first and be exactly 13 bytes", () => {
+		const wrongFirst = Buffer.concat([
+			PNG_SIGNATURE,
+			chunk("gAMA", Buffer.alloc(4)),
+			chunk("IHDR", ihdrData(1, 1)),
+			chunk("IEND"),
+		]);
+		expect(readImageDimensions(wrongFirst, "image/png")).toBeNull();
+
+		const wrongLength = Buffer.concat([
+			PNG_SIGNATURE,
+			chunk("IHDR", Buffer.alloc(12)),
+			chunk("IEND"),
+		]);
+		expect(readImageDimensions(wrongLength, "image/png")).toBeNull();
+	});
+
+	it("rejects a file that never reaches IEND", () => {
+		const noEnd = Buffer.concat([PNG_SIGNATURE, chunk("IHDR", ihdrData(1, 1))]);
+		expect(readImageDimensions(noEnd, "image/png")).toBeNull();
+	});
+
+	it("rejects zero dimensions", () => {
 		expect(readImageDimensions(png(0, 64), "image/png")).toBeNull();
 		expect(readImageDimensions(png(64, 0), "image/png")).toBeNull();
 	});
 
-	it("reads a dimension at the cap and one over it (the parser does not clamp)", () => {
+	it("reads an over-cap size rather than clamping it — the cap is isDecodeSafe's job", () => {
 		expect(readImageDimensions(png(8000, 8000), "image/png")).toEqual({
 			width: 8000,
 			height: 8000,
@@ -106,10 +231,8 @@ describe("readImageDimensions — JPEG", () => {
 	});
 
 	it("walks past earlier segments to reach the frame header", () => {
-		// The realistic layout: JFIF APP0, a comment, a quantisation table, then
-		// the frame. The integration fixtures never exercised this.
 		const withPreamble = jpeg(
-			segment(0xe0, Buffer.from("JFIF\0\0\0\0\0\0")),
+			segment(0xe0, Buffer.from("JFIF\0\0\0\0\0\0")),
 			segment(0xfe, Buffer.from("a comment")),
 			segment(0xdb, Buffer.alloc(65)),
 			sof(1024, 768),
@@ -120,37 +243,7 @@ describe("readImageDimensions — JPEG", () => {
 		});
 	});
 
-	it("tolerates 0xFF fill bytes before a marker", () => {
-		// Legal JPEG. Assuming exactly one 0xFF read the second one as the marker,
-		// then read entropy data as a segment length and desynchronised — so a
-		// valid file was rejected as "not a valid PNG or JPEG image".
-		const padded = Buffer.concat([
-			Buffer.from([0xff, 0xd8]),
-			Buffer.from([0xff, 0xff, 0xff]), // fill
-			sof(800, 600),
-		]);
-		expect(readImageDimensions(padded, "image/jpeg")).toEqual({
-			width: 800,
-			height: 600,
-		});
-	});
-
-	it("skips standalone markers, which carry no length field", () => {
-		const withStandalone = Buffer.concat([
-			Buffer.from([0xff, 0xd8]),
-			Buffer.from([0xff, 0xd0]), // RST0 — no length
-			Buffer.from([0xff, 0x01]), // TEM — no length
-			sof(320, 240),
-		]);
-		expect(readImageDimensions(withStandalone, "image/jpeg")).toEqual({
-			width: 320,
-			height: 240,
-		});
-	});
-
 	it("does not mistake DHT, JPG or DAC for a frame header", () => {
-		// All three sit inside 0xC0-0xCF but are not frames. Treating one as a
-		// frame would read table bytes as the image size.
 		for (const impostor of [0xc4, 0xc8, 0xcc]) {
 			const buf = jpeg(segment(impostor, Buffer.alloc(20, 0x7f)), sof(50, 25));
 			expect(readImageDimensions(buf, "image/jpeg")).toEqual({
@@ -168,39 +261,61 @@ describe("readImageDimensions — JPEG", () => {
 		}
 	});
 
-	it("returns null on a zero-length segment instead of looping forever", () => {
-		const bad = Buffer.concat([
+	// The decoder react-pdf uses (`jay-peg`) gives every marker in 0xFFC0-0xFFFE
+	// a length field and does not collapse 0xFF fill runs. Both shapes below are
+	// legal JPEG, but we would read them differently than the decoder does, so
+	// they are refused at upload rather than accepted and rendered as nothing.
+	it("rejects fill bytes, which the decoder does not handle either", () => {
+		const padded = Buffer.concat([
 			Buffer.from([0xff, 0xd8]),
-			Buffer.from([0xff, 0xe0, 0x00, 0x00]), // length 0 — cannot advance
+			Buffer.from([0xff, 0xff, 0xff]),
+			sof(800, 600),
+		]);
+		expect(readImageDimensions(padded, "image/jpeg")).toBeNull();
+	});
+
+	it("rejects a segment claiming more bytes than the file holds", () => {
+		const overrun = Buffer.concat([
+			Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x7f, 0xff]),
+			Buffer.alloc(10),
+		]);
+		expect(readImageDimensions(overrun, "image/jpeg")).toBeNull();
+	});
+
+	it("rejects a zero-length segment instead of looping forever", () => {
+		const bad = Buffer.concat([
+			Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x00]),
 			Buffer.alloc(40),
 		]);
 		expect(readImageDimensions(bad, "image/jpeg")).toBeNull();
 	});
 
-	it("returns null when a marker position does not start with 0xFF", () => {
-		const bad = Buffer.concat([
-			Buffer.from([0xff, 0xd8]),
-			Buffer.from([0x42, 0x43, 0x00, 0x04]),
-			Buffer.alloc(40),
-		]);
-		expect(readImageDimensions(bad, "image/jpeg")).toBeNull();
+	it("rejects a missing SOI, a stray non-marker, and a truncated frame", () => {
+		expect(readImageDimensions(Buffer.alloc(40), "image/jpeg")).toBeNull();
+		expect(
+			readImageDimensions(
+				Buffer.concat([
+					Buffer.from([0xff, 0xd8, 0x42, 0x43]),
+					Buffer.alloc(40),
+				]),
+				"image/jpeg",
+			),
+		).toBeNull();
+		expect(
+			readImageDimensions(
+				Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x04, 0x08]),
+				"image/jpeg",
+			),
+		).toBeNull();
 	});
 
-	it("returns null when the frame header is truncated", () => {
-		const truncated = Buffer.concat([
-			Buffer.from([0xff, 0xd8]),
-			Buffer.from([0xff, 0xc0, 0x00, 0x0b, 0x08]), // stops mid-frame
-		]);
-		expect(readImageDimensions(truncated, "image/jpeg")).toBeNull();
-	});
-
-	it("returns null when no frame header is ever reached", () => {
+	it("rejects a file with no frame header at all", () => {
 		expect(
 			readImageDimensions(jpeg(segment(0xe0, Buffer.alloc(10))), "image/jpeg"),
 		).toBeNull();
 	});
 
-	it("returns null on zero dimensions", () => {
+	it("rejects zero dimensions", () => {
 		expect(readImageDimensions(jpeg(sof(0, 480)), "image/jpeg")).toBeNull();
 	});
 });
@@ -216,13 +331,11 @@ describe("isDecodeSafe", () => {
 	});
 
 	it("rejects a mime outside the allow-list, whatever the bytes say", () => {
-		// The stored row's mime is what gets echoed into the data URI, so a type
-		// we never validated must not reach a decoder even if the header parses.
 		expect(isDecodeSafe(png(64, 64), "image/svg+xml")).toBe(false);
 		expect(isDecodeSafe(png(64, 64), "image/gif")).toBe(false);
 	});
 
-	it("rejects bytes whose header cannot be parsed", () => {
+	it("rejects bytes whose structure cannot be validated", () => {
 		expect(isDecodeSafe(Buffer.alloc(64, 0), "image/png")).toBe(false);
 	});
 });

@@ -58,22 +58,34 @@ const { Route } = await import("#/routes/api/club.$clubId.logo");
  * bitmap inside the PDF renderer.
  */
 function pngBytes(size = 128, width = 64, height = 64): Buffer {
-	const buf = Buffer.alloc(Math.max(size, 24), 0);
-	// Signature.
-	buf[0] = 0x89;
-	buf[1] = 0x50;
-	buf[2] = 0x4e;
-	buf[3] = 0x47;
-	buf[4] = 0x0d;
-	buf[5] = 0x0a;
-	buf[6] = 0x1a;
-	buf[7] = 0x0a;
-	// IHDR: length, type, width, height.
-	buf.writeUInt32BE(13, 8);
-	buf.write("IHDR", 12, "ascii");
-	buf.writeUInt32BE(width, 16);
-	buf.writeUInt32BE(height, 20);
-	return buf;
+	// A REAL png: full signature, a 13-byte IHDR, a padding IDAT sized to reach
+	// the requested byte length, and an IEND. The validator walks the whole chunk
+	// list now (a fixed-offset peek let a 45-byte file hang the decoder), so a
+	// fixture that is only a magic prefix would be rejected — correctly.
+	const sig = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+	const mkChunk = (type: string, data: Buffer): Buffer => {
+		const len = Buffer.alloc(4);
+		len.writeUInt32BE(data.length);
+		return Buffer.concat([
+			len,
+			Buffer.from(type, "ascii"),
+			data,
+			Buffer.alloc(4),
+		]);
+	};
+	const ihdr = Buffer.alloc(13);
+	ihdr.writeUInt32BE(width, 0);
+	ihdr.writeUInt32BE(height, 4);
+	ihdr[8] = 8;
+	ihdr[9] = 6;
+	const fixed = sig.length + 25 + 12; // signature + IHDR chunk + IEND chunk
+	const padBytes = Math.max(0, size - fixed - 12); // 12 = IDAT chunk overhead
+	return Buffer.concat([
+		sig,
+		mkChunk("IHDR", ihdr),
+		...(padBytes > 0 ? [mkChunk("IDAT", Buffer.alloc(padBytes))] : []),
+		mkChunk("IEND", Buffer.alloc(0)),
+	]);
 }
 
 /** A JPEG whose SOF0 frame header carries the dimensions, same reason. */
@@ -343,7 +355,10 @@ describe.skipIf(!hasTestDb)("club logo (#495)", () => {
 			const s = await seed();
 			const a = pngBytes(100);
 			const b = pngBytes(400); // different length so we can tell which "won"
-			b[10] = 0xaa;
+			// Byte 50 is inside the IDAT payload. NOT byte 10: that is the IHDR
+			// chunk's length field, and the validator now walks the chunk list, so
+			// corrupting a declared length makes the whole upload (correctly) fail.
+			b[50] = 0xaa;
 
 			const uploadA = applyClubLogoUpload({
 				clubId: s.clubId,

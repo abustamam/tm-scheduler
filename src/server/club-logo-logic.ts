@@ -85,43 +85,119 @@ function isAllowedMime(mime: string): mime is AllowedMime {
 const MAX_LOGO_DIMENSION = 2000;
 
 /**
- * Intrinsic pixel size, read from the file header without decoding the image —
- * the whole point is to decide whether decoding is safe, so this must not
- * decode. PNG carries it in the IHDR chunk, which the spec requires to be
- * first; JPEG carries it in whichever SOFn frame header appears, so segments
- * are walked until one turns up.
+ * Intrinsic pixel size, established by STRUCTURALLY VALIDATING the file — not by
+ * peeking at fixed offsets.
  *
- * Returns null when the dimensions cannot be established. Callers treat that as
- * a rejection: an image whose header we cannot parse is precisely the one not
- * to hand to a decoder.
+ * The distinction is the whole point, and getting it wrong shipped a worse bug
+ * than the one the cap was added to fix. The first version of this read bytes
+ * 16-24 of a PNG and returned them. That is not validation: the decoder that
+ * actually runs is `png-js` (reached via `@react-pdf/image`, which dispatches on
+ * the DECLARED mime and never sniffs), and it walks the whole chunk list with
+ * three behaviours a fixed-offset peek cannot see:
+ *
+ *   · `readUInt32` composes with `|`, so a declared chunk length >= 0x80000000
+ *     is NEGATIVE. Its skip is `pos += chunkSize` and its only bound is
+ *     `if (pos > data.length) throw`, so a negative length walks `pos` BACKWARDS
+ *     and the bound never trips. A 45-byte file built this way makes the
+ *     constructor loop forever — synchronously, on a public unauthenticated
+ *     endpoint, in a single-process server. Verified: it never returns.
+ *   · `case 'IDAT'` copies `chunkSize` bytes one push at a time BEFORE that
+ *     bound is checked.
+ *   · `case 'IHDR'` assigns width/height on EVERY IHDR chunk, so a trailing
+ *     second IHDR wins. The old peek read the first and certified 1x1 for a file
+ *     the decoder saw as 20000x20000.
+ *
+ * So the rule this now enforces is not "find the dimensions" but "prove the
+ * structure is one the decoder will read the same way we did". Every chunk
+ * length is read UNSIGNED and must fit inside the file. That single invariant
+ * removes the negative-length class entirely: a length that fits in a <=256 KB
+ * upload is necessarily far below 0x80000000, so `png-js`'s signed read and ours
+ * cannot disagree.
+ *
+ * Returns null whenever the structure is anything other than plainly sound.
+ * Callers treat null as rejection: a file we cannot parse confidently is exactly
+ * the file not to hand to a decoder.
  */
+const PNG_SIGNATURE_FULL = Buffer.from([
+	0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+]);
+
 export function readImageDimensions(
 	bytes: Buffer,
 	mime: AllowedMime,
 ): { width: number; height: number } | null {
-	if (mime === "image/png") {
-		// 8-byte signature, then the IHDR chunk: 4-byte length, 4-byte type,
-		// then width and height as big-endian uint32.
-		if (bytes.length < 24) return null;
-		if (bytes.subarray(12, 16).toString("ascii") !== "IHDR") return null;
-		const width = bytes.readUInt32BE(16);
-		const height = bytes.readUInt32BE(20);
-		if (width === 0 || height === 0) return null;
-		return { width, height };
-	}
+	return mime === "image/png"
+		? readPngDimensions(bytes)
+		: readJpegDimensions(bytes);
+}
 
-	// JPEG: walk the marker segments from just past the SOI until a start-of-frame.
+function readPngDimensions(
+	bytes: Buffer,
+): { width: number; height: number } | null {
+	// The FULL 8-byte signature. `matchesMagicBytes` checks only the first four,
+	// which is looser than every real decoder.
+	if (!bytes.subarray(0, 8).equals(PNG_SIGNATURE_FULL)) return null;
+
+	let pos = 8;
+	let dimensions: { width: number; height: number } | null = null;
+
+	// Chunk: length(4) + type(4) + data(length) + crc(4).
+	while (pos + 8 <= bytes.length) {
+		const length = bytes.readUInt32BE(pos); // UNSIGNED — see the doc comment
+		const type = bytes.subarray(pos + 4, pos + 8).toString("ascii");
+		const next = pos + 8 + length + 4;
+		// Every chunk must fit. This is the invariant that makes our read and the
+		// decoder's agree, so it must reject rather than clamp.
+		if (next > bytes.length) return null;
+
+		if (dimensions === null) {
+			// The spec requires IHDR first, and exactly 13 bytes of it.
+			if (type !== "IHDR" || length !== 13) return null;
+			const width = bytes.readUInt32BE(pos + 8);
+			const height = bytes.readUInt32BE(pos + 12);
+			if (width === 0 || height === 0) return null;
+			dimensions = { width, height };
+		} else if (type === "IHDR") {
+			// A second IHDR: the decoder would keep THIS one while we returned the
+			// first, so the two would disagree by construction. Refuse.
+			return null;
+		}
+
+		if (type === "IEND") return dimensions;
+		pos = next;
+	}
+	// Ran off the end without an IEND.
+	return null;
+}
+
+/**
+ * JPEG frame size, walked under the SAME rule the decoder uses.
+ *
+ * react-pdf decodes JPEG with `jay-peg`, whose marker table assigns a length
+ * field to every marker in 0xFFC0-0xFFFE. An earlier version of this walker
+ * special-cased RST/TEM as standalone and collapsed 0xFF fill runs; both are
+ * legal JPEG, but `jay-peg` does neither, so the two parsers could land on
+ * different frame headers and the cap would be measuring an image nobody
+ * decodes. Matching the decoder matters more than accepting every legal file:
+ * a shape we read differently is rejected at upload with a clear message rather
+ * than accepted and rendered as nothing.
+ */
+function readJpegDimensions(
+	bytes: Buffer,
+): { width: number; height: number } | null {
+	if (bytes.length < 4) return null;
+	if (bytes[0] !== 0xff || bytes[1] !== 0xd8) return null; // SOI
+
 	let pos = 2;
-	while (pos + 1 < bytes.length) {
+	while (pos + 4 <= bytes.length) {
 		if (bytes[pos] !== 0xff) return null;
-		// A marker may be preceded by ANY number of 0xFF fill bytes — that is
-		// legal JPEG, and assuming exactly one rejected valid files: the second
-		// 0xFF was read as the marker, failed the frame test, and then the next
-		// two bytes were read as a segment length, jumping to a garbage offset.
-		while (pos < bytes.length && bytes[pos] === 0xff) pos++;
-		if (pos >= bytes.length) return null;
-		const marker = bytes[pos];
-		pos++; // now at the segment's length field, for markers that carry one
+		const marker = bytes[pos + 1];
+		if (marker === 0xd9) return null; // EOI before any frame
+		const segmentLength = bytes.readUInt16BE(pos + 2);
+		// The length counts itself, so under 2 cannot advance.
+		if (segmentLength < 2) return null;
+		if (pos + 2 + segmentLength > bytes.length) return null;
+
 		// SOF0-SOF15 carry the frame size. DHT (0xc4), JPG (0xc8) and DAC (0xcc)
 		// share the range but are not frame headers.
 		const isFrameHeader =
@@ -131,27 +207,14 @@ export function readImageDimensions(
 			marker !== 0xc8 &&
 			marker !== 0xcc;
 		if (isFrameHeader) {
-			// segment: length(2), precision(1), height(2), width(2)
-			if (pos + 7 > bytes.length) return null;
-			const height = bytes.readUInt16BE(pos + 3);
-			const width = bytes.readUInt16BE(pos + 5);
+			// length(2), precision(1), height(2), width(2)
+			if (segmentLength < 7) return null;
+			const height = bytes.readUInt16BE(pos + 5);
+			const width = bytes.readUInt16BE(pos + 7);
 			if (width === 0 || height === 0) return null;
 			return { width, height };
 		}
-		// Standalone markers carry no length field at all: SOI, EOI, TEM and the
-		// eight restart markers. Reading two bytes of entropy data as a length is
-		// how a walker desynchronises.
-		const isStandalone =
-			marker === 0xd8 ||
-			marker === 0xd9 ||
-			marker === 0x01 ||
-			(marker >= 0xd0 && marker <= 0xd7);
-		if (isStandalone) continue;
-		if (pos + 2 > bytes.length) return null;
-		const segmentLength = bytes.readUInt16BE(pos);
-		// The length counts itself, so anything under 2 would not advance `pos`.
-		if (segmentLength < 2) return null;
-		pos += segmentLength;
+		pos += 2 + segmentLength;
 	}
 	return null;
 }

@@ -89,7 +89,18 @@ export async function loadRoleSheetLogo(
 		.limit(1);
 	if (!row) return null;
 	if (!(await isReadableClub(row.clubId))) return null;
-	if (!isDecodeSafe(row.bytes, row.mime)) return null;
+	if (!isDecodeSafe(row.bytes, row.mime)) {
+		// Loud, because it is otherwise invisible: the club sees its logo on all
+		// four HTML surfaces and silently missing from this PDF, and an operator
+		// has no signal at all. This is also the only observable a genuinely
+		// malformed stored image would produce.
+		console.warn("club logo skipped as unsafe to decode", {
+			clubId: row.clubId,
+			mime: row.mime,
+			bytes: row.bytes.length,
+		});
+		return null;
+	}
 	return `data:${row.mime};base64,${row.bytes.toString("base64")}`;
 }
 
