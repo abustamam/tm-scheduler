@@ -5,8 +5,11 @@ import { renderRoleSheetPdf } from "#/server/role-sheets-pdf-logic";
 
 /**
  * GET /api/meetings/$id/role-sheets/$sheet/pdf — download a meeting-aware role
- * sheet, pre-filled with the club name, meeting date, and scheduled speakers
- * (#311). Generated server-side via `@react-pdf/renderer` (no Chromium),
+ * sheet, pre-filled with the club name and meeting date, plus the scheduled
+ * speakers on the Timer's log and the Word of the Day on the Grammarian's
+ * (#311, narrowed by #509 — the Ah-Counter's sheet deliberately no longer takes
+ * the speaker list, because that role listens to everyone who speaks).
+ * Generated server-side via `@react-pdf/renderer` (no Chromium),
  * mirroring the minutes-PDF route. PUBLIC (#317/#365): the sheet contains only
  * what the public agenda already shows — club, date, scheduled speaker names,
  * and the Word of the Day — no member contact or private minutes, so anyone
