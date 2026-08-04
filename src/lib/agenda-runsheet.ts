@@ -184,9 +184,12 @@ export type Beat = (
 	 * express the pair: `[EVALUATOR_ROLE, TIMER_ROLE]` would print the cue for a
 	 * club with evaluators and no Timer, naming a Timer it does not run.
 	 *
-	 * Semantically ANY-of within the list, ALL-of across the two fields — the same
-	 * contract `alsoRequiresGroup` has, so the two compose without a precedence
-	 * rule to remember.
+	 * Semantically ANY-of within the list, and ALL-of against whichever gate below
+	 * actually applies — which is `requiresAnyOf` only when the beat declares no
+	 * `requiresGroup`, since `requirementsMet` returns on the group and never
+	 * reaches the key list (#371). The one beat setting this field declares no
+	 * group, so the two AND as written; a future beat that sets BOTH a group and
+	 * this field would silently ignore its `requiresAnyOf`.
 	 */
 	alsoRequiresAnyOf?: BeatRole[];
 	/** Alternative owners/details, each used when its `unless` role has no slots
@@ -234,6 +237,24 @@ export type BeatFallback = {
 	owner?: BeatRole;
 	/** Detail for the fallback row; omitted ⇒ keep the beat's own detail. */
 	detail?: string;
+	/**
+	 * Look for `unless` only among the beat's `requiresGroup` slots, instead of
+	 * anywhere on the roster (#508 review).
+	 *
+	 * Needed when the clause it guards names a role that the SAME row already
+	 * lists via `ROLES_TOKEN`, because those two answer different questions by
+	 * default: the list is the club's `functionaries` CATEGORY, while a plain
+	 * `unless` is `hasRole` — a key/name match that ignores category. An admin
+	 * can move a standard role out of its category (`applyRoleDefinitionUpdate`,
+	 * and `agenda-parity.test.ts` already carries that shape for the Timer), and
+	 * the functionary intro then printed "Introduces the Timer; each explains
+	 * their role · the Grammarian gives the Word of the Day" — cueing a role the
+	 * same row had just declined to introduce.
+	 *
+	 * Ignored when the beat declares no `requiresGroup`, since there is no group
+	 * to look inside.
+	 */
+	withinGroup?: true;
 };
 
 /**
@@ -457,10 +478,31 @@ export function buildReportingLegend(slots: AgendaSlot[]): LegendEntry[] {
 export type RunOfShowConfig = { geIntroducesFunctionaries: boolean };
 
 /** The Timer — one of the four standard functionaries, and the role whose
- *  ABSENCE (not presence) drives one of the three vote beats' `fallbacks`
- *  (#363): the vote is already owned by the segment leader, so losing the Timer
- *  only drops the "Calls for the Timer's report" clause, never the row. */
+ *  ABSENCE (not presence) drives the most beats.
+ *
+ *  Two different effects, and the distinction matters when adding a clause that
+ *  names the Timer:
+ *  - `fallbacks` swap the DETAIL and keep the row — the three vote beats' "Calls
+ *    for the Timer's report" clause (#363) and the Table Topics segment's timing
+ *    cue (#508). Those rows belong to the segment leader, who is still there.
+ *  - `alsoRequiresAnyOf` drops the ROW — the evaluation-timing beat (#508),
+ *    which exists only to ask the Timer something and has nothing to say
+ *    without one. */
 const TIMER_ROLE: BeatRole = { roleKey: "timer", roleName: "Timer" };
+
+/**
+ * The words the General Evaluator uses to hand the room to the Timer before the
+ * evaluations, shared verbatim with the Timer's and the GE's printed role sheets
+ * (#509, `SHEET_SCRIPTS` in `role-sheet-layout.ts`).
+ *
+ * A CONSTANT rather than two copies of the same English, because the review
+ * found the test that claimed to pin the pair compared two hardcoded literals
+ * and never read this beat: rewording the agenda left the suite green while the
+ * run sheet and the sheet in the GE's hand gave one officer two different lines.
+ * Sharing the string makes that divergence unrepresentable instead of merely
+ * detected.
+ */
+export const EVALUATION_TIMING_ASK = "explain the timing for an evaluation";
 
 /** The Grammarian — a standard functionary, and the second role whose ABSENCE
  *  drives a `fallbacks` entry rather than a gate (#508): the functionary-intro
@@ -540,8 +582,16 @@ const TABLE_TOPICS_ROLE: BeatRole = {
  * A role belongs here as soon as a beat names it in prose, or the row prints the
  * literal token. `clubRoleName` returns the canonical name for a club that runs
  * the role but has not renamed it — it does NOT decide whether the clause
- * appears at all. That is a `fallbacks` question, and every entry below is named
- * by a clause that a `{ unless: … }` entry drops when the role is absent.
+ * appears at all.
+ *
+ * That second question is answered per clause, by ONE of two mechanisms — not
+ * only by a fallback, which an earlier version of this comment claimed:
+ * - a `{ unless: … }` fallback swaps the detail, keeping the row (the Grammarian
+ *   here, and the Timer on the three vote beats and the Table Topics segment);
+ * - a beat-level gate drops the whole row (the General Evaluator and Table
+ *   Topics hand-offs, and the Timer on the evaluation-timing beat via
+ *   `alsoRequiresAnyOf`).
+ * Either is fine. What is NOT fine is naming a role in prose with neither.
  */
 const NAMEABLE_ROLES: BeatRole[] = [
 	TIMER_ROLE,
@@ -692,6 +742,9 @@ export function buildRunOfShow({
 				// (owner vs detail), which is why both can fire without either winning.
 				{
 					unless: GRAMMARIAN_ROLE,
+					// Scoped to the group, so the cue and the list it follows always
+					// answer the same question — see `BeatFallback.withinGroup`.
+					withinGroup: true,
 					detail: `Introduces the ${ROLES_TOKEN}; each explains their role`,
 				},
 			],
@@ -831,7 +884,7 @@ export function buildRunOfShow({
 			kind: "role",
 			...GENERAL_EVALUATOR_ROLE,
 			role: "plain",
-			detail: `Asks the ${roleNameToken(TIMER_ROLE)} to explain the timing for an evaluation`,
+			detail: `Asks the ${roleNameToken(TIMER_ROLE)} to ${EVALUATION_TIMING_ASK}`,
 			minutes: 1,
 			// BOTH conditions, independently: evaluators to time, and a Timer to
 			// explain it. `requiresAnyOf` ORs, so it cannot express the pair on its
@@ -1235,8 +1288,12 @@ export function expandRunSheet(
 		// questions (see `Beat.fallbacks`), so an entry that names only a `detail`
 		// must not shadow an earlier entry's `owner`. Later wins within a field,
 		// which is what makes the array order documented rather than incidental.
-		const fired = (beat.fallbacks ?? []).filter(
-			(fb) => !hasRole(slots, fb.unless.roleKey, fb.unless.roleName),
+		const fired = (beat.fallbacks ?? []).filter((fb) =>
+			fb.withinGroup === true && beat.requiresGroup != null
+				? !GROUP_SLOTS[beat.requiresGroup](slots).some((s) =>
+						matchesRole(s, fb.unless.roleKey, fb.unless.roleName),
+					)
+				: !hasRole(slots, fb.unless.roleKey, fb.unless.roleName),
 		);
 		const fallbackOwner = fired.reduce<BeatRole | undefined>(
 			(owner, fb) => fb.owner ?? owner,

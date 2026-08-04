@@ -3042,6 +3042,33 @@ describe("meeting-script cues (#508)", () => {
 				"Introduces the Timer & Wordsmith; each explains their role · the Wordsmith gives the Word of the Day",
 			);
 		});
+
+		// Found in review. The cue and the {roles} list it follows must answer the
+		// SAME question. They did not: the list is the club's `functionaries`
+		// CATEGORY, while a plain `unless` is `hasRole` — key/name, category-blind.
+		// An admin can move a standard role out of its category
+		// (`applyRoleDefinitionUpdate`; `agenda-parity.test.ts` already carries that
+		// shape for the Timer), and the row then introduced only the Timer while
+		// still cueing a Grammarian it had just declined to introduce.
+		it("drops the cue for a Grammarian recategorised OUT of the functionaries", () => {
+			const detail = introDetail([
+				...sixRoleClub(),
+				grammarian({ category: "leadership" }),
+			]);
+			// The row is unchanged from a club with no Grammarian at all, which is
+			// the point: this club runs no Grammarian *as a functionary*.
+			expect(detail).toBe("Introduces the Timer; each explains their role");
+			expect(detail).not.toContain("Word of the Day");
+		});
+
+		// The other side of the same gate: a Grammarian INSIDE the group still
+		// earns the cue. Without this, scoping the fallback to the group could be
+		// over-tightened to "never fire" and the test above would not notice.
+		it("keeps the cue for a Grammarian inside the functionaries", () => {
+			expect(introDetail([...sixRoleClub(), grammarian()])).toContain(
+				"the Grammarian gives the Word of the Day",
+			);
+		});
 	});
 
 	describe("the Timer explains Table Topics timing as the segment opens", () => {

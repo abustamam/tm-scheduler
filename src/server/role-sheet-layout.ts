@@ -17,6 +17,7 @@
 import { Document, Page, StyleSheet, Text, View } from "@react-pdf/renderer";
 import { createElement as h, type ReactNode } from "react";
 import type { RoleSheetKey } from "../data/role-sheets";
+import { EVALUATION_TIMING_ASK } from "../lib/agenda-runsheet";
 import { TOASTMASTERS_DISCLAIMER } from "../lib/brand";
 import {
 	formatTimingClock,
@@ -66,6 +67,12 @@ const C = {
 	red: "#c0392b",
 };
 
+// PAGE BUDGET. Several values below (title/metaRow/sectionTitle/note margins,
+// `th`/`td` padding, `td.minHeight`, `blankLine` height) were tightened in #509
+// because the "What to say" block pushed three of the five sheets onto a second
+// page. They are load-bearing, not cosmetic: relaxing one can silently spill a
+// sheet. The constraint is pinned by "every role sheet fits on one page" in
+// role-sheet-layout.test.ts — a different file, which is why it is restated here.
 const s = StyleSheet.create({
 	page: {
 		paddingTop: 40,
@@ -282,17 +289,41 @@ function script(cues: ScriptCue[]): ReactNode[] {
 	];
 }
 
-/** A header meta field: `label` with an optional filled `value`, else a blank
- *  underline to write on. */
-function metaField(label: string, value?: string): ReactNode {
+/**
+ * A header meta field: `label` with an optional filled `value`, else a blank
+ * underline to write on.
+ *
+ * `flex` exists because the three header fields hold very different amounts of
+ * text and equal thirds made the widest one wrap (review finding). A club named
+ * "Sunrise Speakers Toastmasters Club" — 34 characters, an ordinary length —
+ * took a second line, and that one line was enough to push the Timer's sheet
+ * onto a second page. The club name gets the room; the date needs almost none.
+ */
+function metaField(label: string, value?: string, flex = 1): ReactNode {
+	// Two separate jobs, and only one of them is a guarantee.
+	//
+	// `maxLines`/`textOverflow` make the header's HEIGHT independent of what the
+	// club is called. A wrapped header adds one line, and one line is enough to
+	// push the Timer's sheet — the densest of the five — onto a second page.
+	// This half is pinned by "every role sheet fits on one page"; removing it
+	// fails that suite on the long-club-name fills.
+	//
+	// `flex` only decides how much text fits BEFORE the ellipsis, so the club
+	// name (much the longest of the three fields) prints in full for realistic
+	// names instead of truncating at an equal third. Legibility, not page count:
+	// reverting it leaves the page-count suite green, so it is deliberately not
+	// claimed as load-bearing.
+	//
+	// NOTE: both are STYLE properties in react-pdf, not props. The first attempt
+	// passed them as props, which silently does nothing and measured as no change
+	// at all.
+	const style = [
+		s.metaField,
+		{ flexGrow: flex, maxLines: 1, textOverflow: "ellipsis" as const },
+	];
 	return value
-		? h(
-				Text,
-				{ style: s.metaField },
-				`${label} `,
-				h(Text, { style: s.metaValue }, value),
-			)
-		: h(Text, { style: s.metaField }, label);
+		? h(Text, { style }, `${label} `, h(Text, { style: s.metaValue }, value))
+		: h(Text, { style }, label);
 }
 
 function header(
@@ -309,10 +340,10 @@ function header(
 		h(
 			View,
 			{ style: s.metaRow },
-			metaField("Club:", fill?.club),
-			metaField("Date:", fill?.date),
+			metaField("Club:", fill?.club, 1.7),
+			metaField("Date:", fill?.date, 0.7),
 			// The role-taker always writes their own name.
-			metaField("Your name:"),
+			metaField("Your name:", undefined, 1.1),
 		),
 	);
 }
@@ -642,7 +673,9 @@ export const SHEET_SCRIPTS: Record<RoleSheetKey, ScriptCue[]> = {
 		},
 		{
 			when: "When you introduce the speech evaluators",
-			say: "Our evaluators will each give a spoken evaluation. Timer, would you explain the timing for an evaluation?",
+			// Same string the printed agenda puts in this officer's row — see
+			// `EVALUATION_TIMING_ASK`. Not a copy of it.
+			say: `Our evaluators will each give a spoken evaluation. Timer, would you ${EVALUATION_TIMING_ASK}?`,
 		},
 		{
 			when: "When you call for the functionary reports",

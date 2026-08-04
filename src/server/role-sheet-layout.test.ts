@@ -8,7 +8,14 @@
 import { renderToBuffer } from "@react-pdf/renderer";
 import { describe, expect, it } from "vitest";
 import { ROLE_SHEETS } from "#/data/role-sheets";
-import { EVALUATION_MARKS, TABLE_TOPICS_MARKS } from "#/lib/agenda-runsheet";
+import type { AgendaSlot } from "#/lib/agenda-runsheet";
+import {
+	buildRunOfShow,
+	EVALUATION_MARKS,
+	EVALUATION_TIMING_ASK,
+	expandRunSheet,
+	TABLE_TOPICS_MARKS,
+} from "#/lib/agenda-runsheet";
 import { formatTimingClock } from "#/lib/timing-window";
 import {
 	buildRoleSheetDoc,
@@ -199,25 +206,90 @@ describe("role sheets carry a spoken script (#509)", () => {
 
 	// #508 put these cues on the printed agenda. The sheet in the holder's hand
 	// has to say the same thing, or one person is told two different things.
+	// #508 put these cues on the printed agenda. The sheet in the holder's hand
+	// has to say the same thing, or one person is told two different things.
+	//
+	// These read the REAL run sheet. The first version compared `SHEET_SCRIPTS`
+	// to hardcoded literals — two copies of the same English, one surface checked
+	// against itself — and review caught it by rewording the agenda cue and
+	// watching all 41 tests stay green. Beats are located STRUCTURALLY (by the
+	// gate they set, by their marks) rather than by matching their prose, so the
+	// lookup itself cannot go stale when the wording changes.
 	describe("agrees with the agenda cues it answers (#508)", () => {
-		it("the General Evaluator asks the Timer to explain evaluation timing", () => {
+		const template = buildRunOfShow({ geIntroducesFunctionaries: false });
+
+		it("speaks the same evaluation-timing ask the agenda prints", () => {
+			// The only beat carrying `alsoRequiresAnyOf` is the evaluation-timing
+			// cue — a structural handle, so this does not break on a reword.
+			const beat = template.filter((b) => b.alsoRequiresAnyOf != null);
+			expect(beat).toHaveLength(1);
+			expect(beat[0].detail).toContain(EVALUATION_TIMING_ASK);
+
+			// The GE's sheet and the agenda row read the SAME exported constant, so a
+			// reword moves both together or fails to compile.
 			const ge = SHEET_SCRIPTS["general-evaluator"].map((c) => c.say).join(" ");
-			expect(ge).toContain("explain the timing for an evaluation");
+			expect(ge).toContain(EVALUATION_TIMING_ASK);
+
+			// The Timer answers that ask. Its cue is deliberately merged (it also
+			// covers the Table Topics Master's ask), so it carries the shared verb
+			// phrase rather than the whole constant.
+			const timerWhen = SHEET_SCRIPTS.timer.map((c) => c.when).join(" | ");
+			expect(timerWhen).toContain("explain the timing");
+			expect(SHEET_SCRIPTS.timer.map((c) => c.say).join(" | ")).toContain(
+				"For each evaluation:",
+			);
 		});
 
-		it("the Timer has an answer ready for that ask, and for Table Topics", () => {
-			// Merged into one cue, so assert the Timer can answer BOTH asks — the
-			// General Evaluator's and the Table Topics Master's — not that it has two
-			// separate lines.
-			const whens = SHEET_SCRIPTS.timer.map((c) => c.when).join(" | ");
-			expect(whens).toContain("Table Topics Master or the General Evaluator");
-			expect(whens).toContain("explain the timing");
+		it("has the Timer ready for the Table Topics ask the agenda makes", () => {
+			// The flex segment carrying the Table Topics marks — again structural.
+			const [segment] = template.filter(
+				(b) =>
+					b.kind === "role" &&
+					b.flex === true &&
+					b.marks === TABLE_TOPICS_MARKS,
+			);
+			expect(segment).toBeDefined();
+			expect(segment.detail).toContain("to explain the timing");
+
 			const says = SHEET_SCRIPTS.timer.map((c) => c.say).join(" | ");
 			expect(says).toContain("For Table Topics:");
 			expect(says).toContain("For each evaluation:");
 		});
 
-		it("the Grammarian gives the Word of the Day when introduced", () => {
+		it("has the Grammarian give the Word of the Day where the agenda says", () => {
+			// Expand against a real club so this reads the RESOLVED row, tokens and
+			// fallbacks included, not the template string.
+			const club: AgendaSlot[] = [
+				{
+					id: "tm",
+					roleKey: "toastmaster_of_the_day",
+					roleName: "Toastmaster of the Day",
+					category: "leadership",
+					assigneeName: "Faisal",
+				},
+				{
+					id: "gr",
+					roleKey: "grammarian",
+					roleName: "Grammarian",
+					category: "functionary",
+					assigneeName: "Gina",
+				},
+			].map((x) => ({
+				isSpeakerRole: false,
+				slotIndex: 0,
+				speechTitle: null,
+				projectLevel: null,
+				minMinutes: null,
+				maxMinutes: null,
+				evaluatesSlotId: null,
+				evaluates: null,
+				...x,
+			})) as AgendaSlot[];
+			const intro = expandRunSheet(club).find((r) =>
+				r.detail.includes("; each explains their role"),
+			);
+			expect(intro?.detail).toContain("Word of the Day");
+
 			const [first] = SHEET_SCRIPTS.grammarian;
 			expect(first.when).toContain("Word of the Day");
 			expect(first.say).toContain("Word of the Day");
@@ -283,15 +355,61 @@ describe("every role sheet fits on one page", () => {
 		return Number(m[1]);
 	}
 
-	for (const { key } of ROLE_SHEETS) {
-		it(`"${key}" is one page blank`, async () => {
-			expect(await pageCount(buildRoleSheetDoc(key))).toBe(1);
-		});
+	// Fills chosen for the values that are USER DATA and therefore unbounded.
+	// The first version of this suite ran only the narrow `fill` above (24-char
+	// club) and reported green while a 34-character club name — "Sunrise
+	// Speakers Toastmasters Club", an ordinary length — already put the Timer's
+	// sheet on two pages. A one-page guarantee tested at one width is not a
+	// guarantee.
+	const FILLS: { label: string; fill?: RoleSheetFill }[] = [
+		{ label: "blank template", fill: undefined },
+		{ label: "typical fill", fill },
+		{
+			label: "long club name",
+			fill: { ...fill, club: "Sunrise Speakers Toastmasters Club" },
+		},
+		{
+			label: "absurd club name",
+			fill: { ...fill, club: "C".repeat(80) },
+		},
+		{
+			label: "four speakers with speech titles",
+			fill: {
+				...fill,
+				speakers: [
+					'Alice — "My Icebreaker"',
+					'Bob — "Why We Run"',
+					'Cara — "The Long Road Home"',
+					'Dev — "Ten Minutes"',
+				],
+			},
+		},
+		{
+			// Every unbounded field at once, which is the case no single-variable
+			// fixture catches.
+			label: "everything at once",
+			fill: {
+				club: "C".repeat(80),
+				date: "Wednesday, July 22, 2026",
+				speakers: [
+					'Alice — "My Icebreaker"',
+					'Bob — "Why We Run"',
+					'Cara — "The Long Road Home"',
+					'Dev — "Ten Minutes"',
+				],
+				wod: {
+					word: "ebullient",
+					note: "cheerful and full of energy, used well by three speakers today",
+				},
+			},
+		},
+	];
 
-		it(`"${key}" is one page pre-filled`, async () => {
-			// The filled path is the one a club actually downloads, and the Timer's
-			// fill adds rows, so blank-only coverage would miss a spill there.
-			expect(await pageCount(buildRoleSheetDoc(key, fill))).toBe(1);
-		});
+	for (const { key } of ROLE_SHEETS) {
+		for (const { label, fill: f } of FILLS) {
+			it(`"${key}" is one page — ${label}`, async () => {
+				expect(await pageCount(buildRoleSheetDoc(key, f))).toBe(1);
+			});
+		}
 	}
 });
