@@ -40,7 +40,7 @@
 
 ## Print & artifacts
 
-- `public/role-sheets/*.pdf` are committed artifacts rendered from `src/server/role-sheet-layout.ts`, and nothing regenerates or verifies them. `scripts/build-role-sheets.ts` claims the shared layout means the blank and pre-filled sheets "can't drift" — they did: the amber to yellow rename (#507) changed the live sheet and left the committed PDFs printing "Amber" until a reviewer read the bytes. `build:role-sheets` exists but is not in CI. A CI step that re-renders and diffs the committed bytes would make the claim true.
+- `public/role-sheets/*.pdf` are committed artifacts rendered from `src/server/role-sheet-layout.ts`, and nothing regenerates or verifies them. `scripts/build-role-sheets.ts` claims the shared layout means the blank and pre-filled sheets "can't drift" — they did: the amber to yellow rename (#507) changed the live sheet and left the committed PDFs printing "Amber" until a reviewer read the bytes. `build:role-sheets` exists but is not in CI. v1.4.1.0 added tests that assert the printed WORDS on both the agenda and the Timer sheet, so a rename can no longer pass silently — but nothing still re-renders the committed PDFs, so a layout change that does not touch wording can still leave them stale. A CI step that re-renders and diffs the committed bytes would make the claim true.
   **Priority:** P3
 
 ## Guests & identity

@@ -547,7 +547,15 @@ function RunNarrative({
 										<span style={{ marginLeft: 8 }}>
 											<TimingTrio marks={r.marks} size={lg ? 11 : 10} />
 										</span>
-									) : (
+									) : r.flex ? null : (
+										// A RANGE in this position reads as "this row lasts this
+										// long", which is only true when the marks describe the
+										// row's own duration. On the squishy Table Topics segment
+										// they describe ONE response (1:00–2:00) while the row is
+										// booked for the whole segment (5–25 min after applyFlex),
+										// so the range would label a 20-minute segment "1:00–2:00".
+										// The colour trio above is fine — it reads as timer-card
+										// signals, not a duration — so only this branch opts out.
 										<span style={{ fontWeight: 600, color: MUTED }}>
 											{" · "}
 											{mark(r.marks.green)}–{mark(r.marks.red)}

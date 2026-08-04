@@ -62,6 +62,31 @@ describe("role-sheet layout (#311)", () => {
 	});
 });
 
+// #507 — the Timer's sheet is the surface that shipped saying "Amber" while the
+// live layout said "Yellow", because every test asserted `standardTimingRows()`
+// DATA and none asserted the printed words. Walk the doc tree for them.
+describe("Timer sheet prints yellow, never amber (#507)", () => {
+	/** Every string in a react-pdf element tree. */
+	function textOf(node: unknown): string[] {
+		if (node == null || node === false) return [];
+		if (typeof node === "string") return [node];
+		if (Array.isArray(node)) return node.flatMap(textOf);
+		const el = node as { props?: { children?: unknown } };
+		return el.props ? textOf(el.props.children) : [];
+	}
+
+	const words = textOf(buildRoleSheetDoc("timer")).join(" | ");
+
+	it("uses yellow in the column header and the instruction", () => {
+		expect(words).toContain("Yellow");
+		expect(words).toContain("green / yellow / red");
+	});
+
+	it("says amber nowhere", () => {
+		expect(words.toLowerCase()).not.toContain("amber");
+	});
+});
+
 // #507 — the agenda now prints the same windows as coloured marks, so the two
 // surfaces hold the same numbers in two places. Pin them together: whoever
 // changes one gets a failure naming the other, instead of a Timer signalling at

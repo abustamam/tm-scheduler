@@ -2,6 +2,17 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.4.1.0] - 2026-08-03
+
+### Fixed
+
+- **The agenda now colour-codes evaluations and Table Topics, not just speeches.** Only speakers got the green/yellow/red trio, so an evaluator reading the run sheet saw a bare minute count and Table Topics showed nothing, even though the Timer signals all three off the same card. Evaluations print 2:00 / 2:30 / 3:00 and Table Topics 1:00 / 1:30 / 2:00 — the standard windows, and the same ones the Timer's own sheet has always published. A guard test now pins the two sources together, so a Timer signalling at 2:30 can no longer end up beside an agenda printing something else. #507
+- **It is called yellow everywhere now, not amber.** The agenda's timing key and column header, the Timer's printed sheet, the public timing-card and meeting-roles articles, and the five downloadable role-sheet PDFs. The PDFs are committed artifacts rendered from the same layout as the live sheet, and nothing regenerates or checks them — they had been printing "Amber" while the live sheet said "Yellow". Tests now assert the printed words, not just the underlying data, on both surfaces.
+
+### Notes for this club
+
+- The Table Topics trio is the window for **one response**, not for the whole segment. On the spacious print layout that number was briefly shown where a row's own duration goes, which would have labelled a 20-minute segment "1:00–2:00"; it is suppressed there now. The other three layouts show it as signal marks, where it reads correctly.
+
 ## [1.3.3.0] - 2026-07-31
 
 ### Added
