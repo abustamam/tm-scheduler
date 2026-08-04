@@ -276,6 +276,30 @@ per-Person opt-out, the no-auth `/unsubscribe` link, and per-club settings — s
   PDF endpoint is public and `no-store`. `club-logo-scope.guard.test.ts` sweeps `src/` for the
   cheap regressions, but it is a lexical net, not a proof — the real guarantee is the two-club
   seeding in `club-logo-logic.integration.test.ts`. See #495 / #496.
+- Every user-controlled value that reaches the **role-sheet PDF** passes a cap. Its route
+  (`/api/meetings/:id/role-sheets/:sheet/pdf`) is public and `no-store`, and react-pdf lays the
+  document out **synchronously** inside the one Node process that serves everything else
+  (ADR-0007) — so an oversized value is not a slow download, it is the event loop and therefore
+  every other request stopped. Two layers, the same shape as the logo's byte cap plus
+  `isDecodeSafe`: the write schemas bound what can be **stored** (`WOD_LIMITS` / `WOD_FIELDS`,
+  `src/lib/wod-limits.ts`), and `capFill` bounds what is **laid out** (`RENDER_CAPS`,
+  `src/server/role-sheet-layout.ts`), so a row predating the cap — or arriving by import,
+  migration, or a future write path — is truncated rather than fatal. `buildRoleSheetDoc` applies
+  `capFill` at the single entry point, so a new field on `RoleSheetFill` needs a cap there; a
+  consumer reading the **fill** instead of the document does NOT get one, which is why
+  `renderRoleSheetPdf` separately caps the club name and date it hands back for the
+  `content-disposition` filename. `cap` itself must stay bounded by its `max`, not by its input —
+  spreading the whole string before deciding whether to truncate recreates the same DoS. See
+  #519 / #496.
+- The Word-of-the-Day write caps **reject** on the narrow paths and **truncate** on the wide one;
+  reconciling them re-breaks one of the two. `createMeetingSchema` (word only — it accepts no
+  definition or example) and `updateWordOfTheDaySchema` reject (`WOD_FIELDS`): those edits touch
+  nothing else, so the error costs only the field being typed, and truncating there would silently
+  drop the tail of a legacy definition the moment someone opened the editor and pressed Save.
+  `updateMeetingSchema` truncates (`WOD_UPDATE_FIELDS`), because the whole-meeting form prefills
+  and resubmits all three fields — rejecting would lock an admin out of saving the meeting's theme,
+  date and location over text they cannot see. The columns are unbounded `text` and no backfill
+  shipped, so such a row is possible. See #519.
 - A `notifications` row is delivered **at most once**: the poller claims it with a conditional
   update (bump `attempts` / stamp `last_attempted_at` `WHERE sent_at IS NULL AND attempts = <read>`)
   before sending, then sets `sent_at` on success. Never send without claiming first (ADR-0023).
