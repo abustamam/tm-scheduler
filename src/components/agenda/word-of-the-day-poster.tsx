@@ -12,6 +12,7 @@
 // Deliberately does NOT credit the Grammarian, unlike the Present-mode Word of
 // the Day slide: this hangs for the whole meeting, where attribution reads as
 // clutter and goes stale if the role is reassigned after printing.
+
 import {
 	CONTENT_W,
 	POSTER_FONT_WEIGHT,
@@ -19,6 +20,7 @@ import {
 	posterBodySize,
 	posterWordSize,
 } from "#/lib/word-poster";
+import { ClubLogo } from "./club-logo";
 import { DarkFooter, FitPage, Kick, MUTED, SANS, SERIF } from "./print-theme";
 
 export function WordOfTheDayPoster({
@@ -27,12 +29,15 @@ export function WordOfTheDayPoster({
 	example,
 	clubName,
 	dateLong,
+	logoUrl = null,
 }: {
 	word: string;
 	definition: string | null;
 	example: string | null;
 	clubName: string;
 	dateLong: string;
+	/** Versioned logo URL, or null. */
+	logoUrl?: string | null;
 }) {
 	// Whitespace-only is absent: an all-spaces definition must not print an empty
 	// block, and the route's "is there a word" check trims the same way. The word
@@ -124,7 +129,20 @@ export function WordOfTheDayPoster({
 				) : null}
 			</div>
 
-			<DarkFooter left={clubName} right={dateLong} />
+			{/* Logo in the footer beside the club name, NOT in the body: the word's
+			    font size is derived from a measured table and the page must stay
+			    exactly one sheet — a blank second page shipped from this component
+			    once already. 20px matches the footer's text line, so the band's
+			    height is unchanged whether or not a club has a logo. */}
+			<DarkFooter
+				left={
+					<span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+						<ClubLogo logoUrl={logoUrl} height={20} maxWidth={72} />
+						{clubName}
+					</span>
+				}
+				right={dateLong}
+			/>
 		</FitPage>
 	);
 }

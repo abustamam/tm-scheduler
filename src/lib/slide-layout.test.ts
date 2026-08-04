@@ -296,6 +296,7 @@ describe("slideLayout bodies", () => {
 				title: {
 					kind: "title",
 					clubName: "MCF Toastmasters Club",
+					logoUrl: null,
 					district: "District 39",
 					clubNumber: "28677176",
 					meetingNumber: 55,
@@ -709,6 +710,7 @@ describe("slideLayout bodies", () => {
 		const l = slideLayout({
 			kind: "title",
 			clubName: "MCF",
+			logoUrl: null,
 			district: "District 39",
 			clubNumber: "28677176",
 			meetingNumber: 56,
@@ -725,6 +727,7 @@ describe("slideLayout bodies", () => {
 		const l = slideLayout({
 			kind: "title",
 			clubName: "MCF",
+			logoUrl: null,
 			district: null,
 			clubNumber: null,
 			meetingNumber: null,
@@ -743,6 +746,7 @@ describe("slideLayout bodies", () => {
 		const l = slideLayout({
 			kind: "title",
 			clubName: "MCF",
+			logoUrl: null,
 			district: "District 39",
 			clubNumber: "28677176",
 			meetingNumber: null,

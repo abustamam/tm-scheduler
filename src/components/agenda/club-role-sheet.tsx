@@ -8,6 +8,7 @@
 //
 // Shares the print aesthetic (brand tokens, one-page FitPage, Kick, DarkFooter)
 // with the meeting agenda layouts via `./print-theme` (#345).
+import { ClubLogo } from "./club-logo";
 import {
 	DarkFooter,
 	FitPage,
@@ -49,10 +50,13 @@ export function ClubRoleSheet({
 	clubName,
 	clubNumber,
 	roles,
+	logoUrl = null,
 }: {
 	clubName: string;
 	clubNumber: string | null;
 	roles: RoleSheetEntry[];
+	/** Versioned logo URL, or null. */
+	logoUrl?: string | null;
 }) {
 	const byCategory = CATEGORY_ORDER.map((cat) => ({
 		cat,
@@ -71,22 +75,31 @@ export function ClubRoleSheet({
 						background: `linear-gradient(125deg, ${LAGOON}, ${INK})`,
 						color: "#fff",
 						padding: "26px 44px",
+						// Row so the logo sits beside the name rather than above it:
+						// this sheet is a one-page FitPage, and stacking would grow the
+						// band and eat body height the role list needs.
+						display: "flex",
+						alignItems: "center",
+						gap: 18,
 					}}
 				>
-					<div style={{ font: `600 26px ${SERIF}`, lineHeight: 1.05 }}>
-						{clubName}
-					</div>
-					<div
-						style={{
-							fontSize: 11,
-							color: "rgba(255,255,255,.82)",
-							marginTop: 4,
-							letterSpacing: ".02em",
-						}}
-					>
-						{[meta, "Meeting Roles & Responsibilities"]
-							.filter(Boolean)
-							.join("  ·  ")}
+					<ClubLogo logoUrl={logoUrl} height={40} maxWidth={130} />
+					<div>
+						<div style={{ font: `600 26px ${SERIF}`, lineHeight: 1.05 }}>
+							{clubName}
+						</div>
+						<div
+							style={{
+								fontSize: 11,
+								color: "rgba(255,255,255,.82)",
+								marginTop: 4,
+								letterSpacing: ".02em",
+							}}
+						>
+							{[meta, "Meeting Roles & Responsibilities"]
+								.filter(Boolean)
+								.join("  ·  ")}
+						</div>
 					</div>
 				</div>
 

@@ -6,7 +6,7 @@
 import { renderToBuffer } from "@react-pdf/renderer";
 import { eq } from "drizzle-orm";
 import { db } from "#/db";
-import { clubs, meetings } from "#/db/schema";
+import { clubLogos, clubs, meetings } from "#/db/schema";
 import { formatShortDate } from "#/lib/format";
 import {
 	loadMinutesProgram,
@@ -48,6 +48,25 @@ export interface RenderedRoleSheet {
 	date: string;
 }
 
+/**
+ * The meeting's club logo as a base64 data URI, or null.
+ *
+ * Joins through `meetings` so the caller needs only a meeting id, and reads
+ * `club_logos` scoped to that meeting's own club — the same per-club scoping
+ * every other logo read uses (ADR-0024 constraint 2). Returns null rather than
+ * throwing: a missing logo is the common case, not an error.
+ */
+async function loadRoleSheetLogo(meetingId: string): Promise<string | null> {
+	const [row] = await db
+		.select({ bytes: clubLogos.bytes, mime: clubLogos.mime })
+		.from(meetings)
+		.innerJoin(clubLogos, eq(clubLogos.clubId, meetings.clubId))
+		.where(eq(meetings.id, meetingId))
+		.limit(1);
+	if (!row) return null;
+	return `data:${row.mime};base64,${row.bytes.toString("base64")}`;
+}
+
 /** Build the per-meeting fill context (club, date, prepared speakers, WOD). */
 async function loadRoleSheetFill(
 	meetingId: string,
@@ -71,6 +90,10 @@ async function loadRoleSheetFill(
 	const program = await loadMinutesProgram(meetingId);
 	const speakers = speakerLabels(program);
 
+	// Same non-fatal posture as every other surface: a logo that fails to load
+	// must never cost someone their role sheet.
+	const logoDataUri = await loadRoleSheetLogo(meetingId);
+
 	const date = formatShortDate(row.scheduledAt, row.timezone);
 	const wod = row.wordOfTheDay
 		? { word: row.wordOfTheDay, note: row.wodDefinition ?? undefined }
@@ -82,6 +105,7 @@ async function loadRoleSheetFill(
 		date,
 		speakers,
 		wod,
+		logoDataUri,
 	};
 }
 

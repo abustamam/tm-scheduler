@@ -29,7 +29,21 @@ const W = 13.33;
 const H = 7.5;
 const FOOT_H = 1.13; // ~8.5% of width
 
-export function deckToPptx(Pptx: PptxCtor, deck: Slide[]): Presentation {
+/**
+ * @param logoDataUri Base64 data URI for the club's logo, or null. Passed in
+ *   rather than read from the deck because this runs ENTIRELY IN THE BROWSER
+ *   (see `pptx-download-button.tsx`) and so cannot reach the database, and
+ *   because carrying ~340 KB of base64 on the deck descriptor would put it in
+ *   the SSR payload of every present and meeting page — the exact cost the
+ *   separate `club_logos` table exists to avoid. The caller fetches the same
+ *   public URL the projected deck already displays, so the service worker has
+ *   usually cached it and the export works offline too.
+ */
+export function deckToPptx(
+	Pptx: PptxCtor,
+	deck: Slide[],
+	logoDataUri: string | null = null,
+): Presentation {
 	const pptx = new Pptx();
 	pptx.layout = "LAYOUT_WIDE";
 	const title = deck.find((s) => s.kind === "title");
@@ -39,7 +53,7 @@ export function deckToPptx(Pptx: PptxCtor, deck: Slide[]): Presentation {
 	for (const slide of deck) {
 		const layout = slideLayout(slide);
 		const s = pptx.addSlide();
-		if (layout.chrome === "splash") renderSplash(pptx, s, layout);
+		if (layout.chrome === "splash") renderSplash(pptx, s, layout, logoDataUri);
 		else renderContent(pptx, s, layout, club, fdate);
 	}
 	return pptx;
@@ -49,9 +63,29 @@ function renderSplash(
 	pptx: Presentation,
 	s: PptxSlide,
 	layout: Extract<SlideLayout, { chrome: "splash" }>,
+	logoDataUri: string | null = null,
 ) {
 	const dark = layout.tone === "dark";
 	s.background = { color: dark ? NAVY : GROUND };
+
+	// The club's own logo, only on the opening title splash (`layout.logoUrl` is
+	// set there and nowhere else) and only when the caller actually resolved the
+	// bytes. Placed in the empty headroom ABOVE the program name at y=1.35 so
+	// nothing else on the slide moves: a deck with a logo and one without are
+	// identical below y=1.2. `sizing: contain` preserves aspect ratio, since a
+	// club's image is either a wide wordmark or a square crest and pptxgenjs
+	// stretches to fit when given both w and h without it.
+	if (layout.logoUrl && logoDataUri) {
+		const logoW = 4;
+		s.addImage({
+			data: logoDataUri,
+			x: (W - logoW) / 2,
+			y: 0.35,
+			w: logoW,
+			h: 0.85,
+			sizing: { type: "contain", w: logoW, h: 0.85 },
+		});
+	}
 	// Nominative word use, not the official wordmark image (ADR-0024).
 	s.addText("Toastmasters", {
 		x: 0.8,

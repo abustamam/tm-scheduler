@@ -35,6 +35,8 @@ export type MeetingForDeck = {
 /** The club fields the deck needs. */
 export type ClubForDeck = {
 	name: string;
+	/** Versioned logo URL, or null. Built by the caller via `clubLogoUrl`. */
+	logoUrl?: string | null;
 	clubNumber: string | null;
 	district: string | null;
 	timezone: string;
@@ -81,6 +83,13 @@ export type Slide =
 	| {
 			kind: "title";
 			clubName: string;
+			/** Versioned `/api/club/:id/logo?v=` URL, or null when the club has
+			 *  none. Carried on the descriptor so BOTH renderers place the logo
+			 *  from one source of truth — the HTML deck uses this URL directly;
+			 *  the PPTX export cannot (it runs in the browser and embeds bytes),
+			 *  so `deckToPptx` takes the encoded image separately and uses this
+			 *  only as the has-a-logo signal. */
+			logoUrl: string | null;
 			district: string | null;
 			clubNumber: string | null;
 			/** The club's own meeting number ("Meeting #56", #358); null ⇒ omitted. */
@@ -377,6 +386,7 @@ export function buildSlideDeck({
 	deck.push({
 		kind: "title",
 		clubName: club.name,
+		logoUrl: club.logoUrl ?? null,
 		district: club.district,
 		clubNumber: club.clubNumber,
 		meetingNumber,

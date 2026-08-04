@@ -14,7 +14,9 @@ import {
 import { INK, MUTED } from "#/components/agenda/print-theme";
 import { PublicFooter } from "#/components/public-footer";
 import { ShareLinkButton } from "#/components/share-link-button";
+import { clubLogoUrl } from "#/lib/club-logo-url";
 import { resolveClubOrRedirect } from "#/lib/club-route";
+import { getClubLogoMeta } from "#/server/club-logo";
 import { getPublicClubRoles } from "#/server/role-definitions";
 
 export const Route = createFileRoute("/club/$clubId_/roles")({
@@ -24,8 +26,16 @@ export const Route = createFileRoute("/club/$clubId_/roles")({
 	}),
 	loader: async ({ params, location }) => {
 		const club = await resolveClubOrRedirect(params.clubId, location);
-		const roles = await getPublicClubRoles({ data: club.id });
-		return { club, roles };
+		// Parallel + non-fatal, matching the other public print surfaces.
+		const [roles, logoMeta] = await Promise.all([
+			getPublicClubRoles({ data: club.id }),
+			getClubLogoMeta({ data: { clubId: club.id } }).catch(() => null),
+		]);
+		return {
+			club,
+			roles,
+			logoUrl: clubLogoUrl(club.id, logoMeta?.updatedAt),
+		};
 	},
 	component: RoleSheet,
 	// The <title> becomes the browser's default "Save as PDF" filename.
@@ -44,7 +54,7 @@ export const Route = createFileRoute("/club/$clubId_/roles")({
 function RoleSheet() {
 	const { chrome } = Route.useSearch();
 	const { clubId: clubIdParam } = Route.useParams();
-	const { club, roles } = Route.useLoaderData();
+	const { club, roles, logoUrl } = Route.useLoaderData();
 	const bare = chrome === "none";
 
 	const entries: RoleSheetEntry[] = roles.map((r) => ({
@@ -87,6 +97,7 @@ function RoleSheet() {
 				clubName={club.name}
 				clubNumber={club.clubNumber}
 				roles={entries}
+				logoUrl={logoUrl}
 			/>
 			{/* This route escapes the `/club/$clubId` shell, so it carries its own
 			    disclaimer (#381). `no-print` because the printed sheet already ends

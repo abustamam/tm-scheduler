@@ -17,6 +17,7 @@ const deck: Slide[] = [
 	{
 		kind: "title",
 		clubName: CLUB_NAME,
+		logoUrl: null,
 		district: "District 39",
 		clubNumber: "28677176",
 		meetingNumber: null,

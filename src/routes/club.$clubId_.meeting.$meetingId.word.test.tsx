@@ -27,16 +27,30 @@ import {
 	RouterProvider,
 } from "@tanstack/react-router";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
 import { meetingPdfBasename } from "#/lib/pdf-filename";
 
 vi.mock("#/server/meetings", () => ({ getPublicMeetingByKey: vi.fn() }));
 vi.mock("#/lib/club-route", () => ({ resolveClubOrRedirect: vi.fn() }));
+// The poster route now fetches the club logo. Mocked for the same reason as
+// the two above: the real module reaches `#/db`, which throws without a
+// DATABASE_URL in this unit-test environment.
+vi.mock("#/server/club-logo", () => ({ getClubLogoMeta: vi.fn() }));
 
 import { resolveClubOrRedirect } from "#/lib/club-route";
+import { getClubLogoMeta } from "#/server/club-logo";
 import { getPublicMeetingByKey } from "#/server/meetings";
 import { Route } from "./club.$clubId_.meeting.$meetingId.word";
+
+// afterEach below calls restoreAllMocks + clearAllMocks, which wipes any
+// implementation set in the `vi.mock` factory. The loader awaits this call and
+// chains `.catch()`, so a bare `vi.fn()` returning undefined would throw before
+// the assertion under test ever runs. Re-establish the no-logo default per
+// test; the tests that care about a logo override it.
+beforeEach(() => {
+	vi.mocked(getClubLogoMeta).mockResolvedValue(null);
+});
 
 afterEach(() => {
 	cleanup();
@@ -286,7 +300,12 @@ describe("Word of the Day poster route — loader", () => {
 			location,
 		});
 
-		expect(result).toBe(data);
+		// Not `toBe(data)` any more: the loader spreads the meeting read and adds
+		// `logoUrl`, so identity no longer holds. Assert the contract instead —
+		// every field of the meeting read survives, and the logo field is present
+		// (null here, since this club has no logo).
+		expect(result).toMatchObject(data);
+		expect(result.logoUrl).toBeNull();
 		// The RESOLVED club id, not the raw URL segment — the segment may be a
 		// club number or a UUID.
 		expect(getPublicMeetingByKey).toHaveBeenCalledWith({
