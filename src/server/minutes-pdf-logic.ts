@@ -23,6 +23,7 @@ import { createElement as h } from "react";
 import { db } from "#/db";
 import { clubs, meetings } from "#/db/schema";
 import { formatMeetingDate } from "#/lib/format";
+import { SPEAKER_LIMITS } from "#/lib/speaker-limits";
 import {
 	type AttendanceStatus,
 	type AwardCategory,
@@ -30,6 +31,45 @@ import {
 	loadMinutesProgram,
 	type MinutesData,
 } from "./minutes-logic";
+// The ONE audited `cap` (#519). It is deliberately not reimplemented here: the
+// first version of that function spread its whole input before deciding whether
+// to truncate, which recreated the very DoS it existed to close, so a second
+// `slice` written from scratch is exactly the wrong kind of duplication.
+import { cap } from "./role-sheet-layout";
+
+/**
+ * Render-side caps for the program list (#522).
+ *
+ * This PDF is gated — session, club membership, AND published minutes — so it
+ * is not the unauthenticated surface #519 closed. It still renders synchronously
+ * in the single Node process (ADR-0007), so an oversized value is a stall for
+ * every other request, and any club member can reach it.
+ *
+ * These bound the RENDER rather than the write, which is the half that matters
+ * for rows already in the database: the speaker-detail write caps added in #522
+ * cannot retroactively shorten a value stored before them, and this change ships
+ * no backfill.
+ *
+ * `speechTitle` reuses `SPEAKER_LIMITS.speechTitle` rather than declaring its
+ * own number, so the write cap and the render cap cannot drift apart.
+ *
+ * `name` and `roleName` are capped here but NOT on write, and that is a
+ * deliberate defence-in-depth choice rather than a hole being patched. The
+ * PUBLIC guest self-add is already bounded — `guestBookSchema` caps a name at
+ * 120, an email at 200 and a phone at 40 — and `members.ts` bounds a member
+ * name at 80. The name writes that remain unbounded (`guests.ts`,
+ * `minutes.ts`, `guest-pipeline.ts`'s `updateGuest`, and the role-definition
+ * paths) are all ADMIN-only, so none of them is reachable the way the speaker
+ * details above are. They are not worth their own change on that basis.
+ *
+ * Capping them here anyway costs one call each and covers the two things a
+ * write cap cannot: a row written before any cap existed, and a future write
+ * path added without one.
+ */
+const MINUTES_RENDER_CAPS = {
+	name: 120,
+	roleName: 120,
+} as const;
 
 const AWARD_LABELS: Record<AwardCategory, string> = {
 	best_speaker: "Best Speaker",
@@ -222,11 +262,17 @@ export async function renderMinutesPdf(meetingId: string): Promise<Uint8Array> {
 							h(
 								Text,
 								{ key: p.slotId, style: styles.listItem },
-								`${p.roleName}: ${
+								`${cap(p.roleName, MINUTES_RENDER_CAPS.roleName)}: ${
 									p.assigneeName
-										? `${p.assigneeName}${p.isGuest ? " (Guest)" : ""}`
+										? `${cap(p.assigneeName, MINUTES_RENDER_CAPS.name)}${
+												p.isGuest ? " (Guest)" : ""
+											}`
 										: "—"
-								}${p.speechTitle ? ` — “${p.speechTitle}”` : ""}`,
+								}${
+									p.speechTitle
+										? ` — “${cap(p.speechTitle, SPEAKER_LIMITS.speechTitle)}”`
+										: ""
+								}`,
 							),
 						)
 					: h(Text, { style: styles.muted }, "No program recorded."),
