@@ -439,7 +439,16 @@ function timer(fill?: RoleSheetFill): ReactNode {
 						{ label: "Actual time", flex: 2 },
 						{ label: "Color", flex: 1 },
 					],
-					filledRows(fill?.speakers ?? [], 12, 4),
+					// TEN rows, not the twelve this had before #509 (review finding).
+					// A FILLED cell is ~2pt taller than a blank one (its line box
+					// exceeds `td.minHeight`), so every pre-filled speaker eats
+					// headroom, and the script block left almost none: five prepared
+					// speakers — an ordinary meeting — spilled the sheet onto a second
+					// page. Two fewer blank rows buys back enough for ten filled ones.
+					// Rows are the right thing to spend: they are the cheapest part of
+					// this sheet, and the Timer writes the rest of the meeting's items
+					// in as they happen anyway.
+					filledRows(fill?.speakers ?? [], 10, 4),
 				),
 			),
 		],

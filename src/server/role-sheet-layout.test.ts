@@ -373,6 +373,20 @@ describe("every role sheet fits on one page", () => {
 			fill: { ...fill, club: "C".repeat(80) },
 		},
 		{
+			// The speaker COUNT axis, added after the adversarial pass found the
+			// original matrix stopped at four and the sheet spilled at five. The
+			// driver is not label width — five single-letter names spilled it too —
+			// it is that a filled cell is taller than a blank one.
+			label: "ten speakers with speech titles",
+			fill: {
+				...fill,
+				speakers: Array.from(
+					{ length: 10 },
+					(_, i) => `Speaker ${i + 1} — "A Speech Title"`,
+				),
+			},
+		},
+		{
 			label: "four speakers with speech titles",
 			fill: {
 				...fill,
