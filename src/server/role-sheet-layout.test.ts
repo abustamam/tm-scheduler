@@ -17,8 +17,11 @@ import {
 	TABLE_TOPICS_MARKS,
 } from "#/lib/agenda-runsheet";
 import { formatTimingClock } from "#/lib/timing-window";
+import { WOD_LIMITS } from "#/lib/wod-limits";
 import {
 	buildRoleSheetDoc,
+	capFill,
+	RENDER_CAPS,
 	type RoleSheetFill,
 	type RoleSheetKey,
 	roleSheetByKey,
@@ -620,5 +623,242 @@ describe("role-sheet header meta fields (#509)", () => {
 		expect(yourName.label).toContain("Your name");
 		expect(Number(club.flexGrow)).toBeGreaterThan(Number(yourName.flexGrow));
 		expect(Number(yourName.flexGrow)).toBeGreaterThan(Number(date.flexGrow));
+	});
+});
+
+// ---------------------------------------------------------------------------
+// #519 — the public role-sheet PDF route renders user text synchronously inside
+// the single Node process, so an unbounded value is the whole server stopped,
+// not a slow download. Measured on the pre-cap layout: a 50,000-character
+// Word-of-the-Day note took 3,596ms against an 87ms baseline, and 500 speaker
+// rows took 2,059ms.
+//
+// These assert the OBSERVABLE the cap controls — what actually reaches the
+// document — rather than wall-clock time, which would be flaky on CI and would
+// pass for the wrong reason on a fast machine.
+// ---------------------------------------------------------------------------
+describe("render caps bound what a public request can make us lay out (#519)", () => {
+	function textOf(node: unknown): string[] {
+		if (node == null || node === false) return [];
+		if (typeof node === "string") return [node];
+		if (Array.isArray(node)) return node.flatMap(textOf);
+		const el = node as { props?: { children?: unknown } };
+		return el.props ? textOf(el.props.children) : [];
+	}
+	const hostile = (over: Partial<RoleSheetFill> = {}): RoleSheetFill => ({
+		club: "Harborlight Toastmasters",
+		date: "Jul 22",
+		speakers: [],
+		...over,
+	});
+
+	it("truncates a Word-of-the-Day note far beyond the cap", () => {
+		const note = "a".repeat(50_000);
+		const words = textOf(
+			buildRoleSheetDoc("grammarian", hostile({ wod: { word: "x", note } })),
+		).join(" | ");
+		expect(words).not.toContain(note);
+		// The longest single string in the doc is bounded, not merely "shorter".
+		const longest = Math.max(
+			...textOf(
+				buildRoleSheetDoc("grammarian", hostile({ wod: { word: "x", note } })),
+			).map((t) => t.length),
+		);
+		expect(longest).toBeLessThanOrEqual(RENDER_CAPS.note);
+	});
+
+	it("caps the number of pre-filled log rows", () => {
+		const many = Array.from({ length: 5_000 }, (_, i) => `Speaker ${i}`);
+		const capped = capFill(hostile({ speakers: many }));
+		expect(capped.speakers).toHaveLength(RENDER_CAPS.speakerRows);
+		// The survivors are the FIRST 24 of the input, in order — a Timer reading
+		// the log needs the meeting's own order, so a `.slice(-24)` regression
+		// that kept the TAIL has to fail here. Pin both ends.
+		expect(capped.speakers[0]).toBe("Speaker 0");
+		expect(capped.speakers.at(-1)).toBe("Speaker 7");
+	});
+
+	it("costs time proportional to the CAP, not to the input", () => {
+		// The one assertion here that is about WALL CLOCK, and deliberately so:
+		// the defect it guards has no other observable. `cap` used to spread the
+		// whole string (`[...value]`) BEFORE deciding to truncate, so an 8MB
+		// speech title cost 473ms and tens of MB of heap to produce a 160-char
+		// output — the same DoS this file exists to stop, moved inside the fix.
+		// `speeches.title` is unbounded and written by PUBLIC no-session paths
+		// (`claimSlot`, `updateSpeakerDetails`), so it is reachable.
+		//
+		// The margin makes it non-flaky: 8MB now takes ~2ms, the bug took ~473ms,
+		// and the threshold sits at 150ms — 75x headroom under the fix, 3x under
+		// the bug.
+		const huge = "a".repeat(8_000_000);
+		const started = performance.now();
+		const capped = capFill({
+			club: "c",
+			date: "d",
+			speakers: Array.from({ length: 8 }, () => huge),
+		} as RoleSheetFill);
+		const elapsed = performance.now() - started;
+		expect(capped.speakers[0].length).toBe(RENDER_CAPS.speakerLabel);
+		expect(elapsed).toBeLessThan(150);
+	});
+
+	it("keeps the row cap inside the one-page guarantee, logo included", () => {
+		// The cap exists to bound cost, but it must not permit a shape that breaks
+		// the one-page promise. A club logo (#496) costs about two rows, so the
+		// binding case is WITH a logo — measured: 8 holds one page, 9 spills.
+		// Two earlier values (24, then 10) were set without this case and both
+		// were wrong. Assert the relationship, not just the number.
+		expect(RENDER_CAPS.speakerRows).toBeLessThanOrEqual(8);
+	});
+
+	it("caps a single absurd speaker label", () => {
+		const [label] = capFill(
+			hostile({ speakers: [`Ann — "${"z".repeat(50_000)}"`] }),
+		).speakers;
+		expect(label.length).toBeLessThanOrEqual(RENDER_CAPS.speakerLabel);
+	});
+
+	it("caps the club name and the date", () => {
+		const capped = capFill(
+			hostile({ club: "c".repeat(50_000), date: "d".repeat(50_000) }),
+		);
+		expect(capped.club.length).toBeLessThanOrEqual(RENDER_CAPS.club);
+		expect(capped.date.length).toBeLessThanOrEqual(RENDER_CAPS.date);
+	});
+
+	it("caps the Word of the Day itself, not only its note", () => {
+		// Every other WOD assertion here passes `word: "x"` and pushes the hostile
+		// payload through `note`, so `word: fill.wod.word` — the cap deleted from
+		// the word alone — left the FULL suite green (3,023 tests, verified by
+		// mutation). The word is not the harmless half: `metaField` clamps it to
+		// one line so it costs no PAGES, but react-pdf still measures every glyph
+		// synchronously, which is the cost #519 is about. It is also the field the
+		// public Grammarian edit path (#296) writes, and the only WOD value that
+		// reaches this document by any route other than the note.
+		const capped = capFill(
+			hostile({ wod: { word: "w".repeat(50_000), note: "fine" } }),
+		);
+		expect(capped.wod?.word.length).toBeLessThanOrEqual(RENDER_CAPS.word);
+		expect(capped.wod?.note).toBe("fine");
+	});
+
+	it("truncates on a code-point boundary, never mid-surrogate-pair", () => {
+		// `cap` slices `[...value]`, not `value.slice()`, and the reason is stated
+		// in its doc comment — a UTF-16 slice through an astral character emits a
+		// LONE SURROGATE, which react-pdf renders as a tombstone. Nothing asserted
+		// it: swapping `[...value]` for `value.split("")` left the full suite
+		// green. Reachable through a speaker label, since member names and speech
+		// titles carry no write-side cap and emoji in a speech title are ordinary.
+		//
+		// The fixture has to put the cut INSIDE a pair or it proves nothing: `cap`
+		// keeps `max - 1` units and appends "…", so the ASCII run is two short of
+		// the cap and the emoji run starts exactly on the unit a UTF-16 slice would
+		// bisect. A first attempt padded to the full cap, which lands the cut in
+		// the ASCII prefix — both implementations agree there, and the mutation
+		// survived.
+		const label = `${"a".repeat(RENDER_CAPS.speakerLabel - 2)}${"🎤".repeat(20)}`;
+		const [capped] = capFill(hostile({ speakers: [label] })).speakers;
+		// No unpaired surrogate anywhere in the result.
+		expect(capped).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+		expect(capped).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+		// ...and the cap is still measured in code points, so an emoji-heavy label
+		// is bounded by the same count a plain one is.
+		expect([...capped].length).toBeLessThanOrEqual(RENDER_CAPS.speakerLabel);
+	});
+
+	it("leaves realistic values completely untouched", () => {
+		// The bound is only useful if it never fires in practice. These are
+		// realistic values — a little above the largest on record (longest club
+		// name 20, longest note 50) and comfortably inside every cap.
+		const real = hostile({
+			club: "Mission City Flyers Toastmasters",
+			date: "Wednesday, July 22, 2026",
+			speakers: ['Alice — "My Icebreaker"', "Bob", "Cara"],
+			wod: {
+				word: "Cumbersomeness",
+				note: "clumsy or unwieldy; used well by three speakers today",
+			},
+		});
+		expect(capFill(real)).toEqual(real);
+	});
+
+	it("accounts for every field of the fill, so a new one cannot slip in uncapped", () => {
+		// `capFill` spreads `...fill` and then overrides four keys, so a FIFTH key
+		// added to `RoleSheetFill` later reaches react-pdf uncapped and nothing
+		// else in this file notices — every other assertion is written against the
+		// fields that exist today. This is the canary. `Required<RoleSheetFill>`
+		// makes `tsc` demand the new key here, and the key comparison then forces
+		// whoever added it to classify it rather than default to "unbounded".
+		//
+		// `logoDataUri` is exempt on purpose: it is bounded upstream by
+		// `isDecodeSafe`/`MAX_LOGO_DIMENSION`, a pixel bound rather than a string
+		// one, and truncating base64 here would only corrupt a valid image.
+		const CAPPED = ["club", "date", "speakers", "wod"];
+		const BOUNDED_ELSEWHERE = ["logoDataUri"];
+		const every: Required<RoleSheetFill> = {
+			club: "Harborlight Toastmasters",
+			date: "Jul 22",
+			logoDataUri: null,
+			speakers: ["Ann"],
+			wod: { word: "Cumbersomeness", note: "clumsy or unwieldy" },
+		};
+		expect(Object.keys(capFill(every)).sort()).toEqual(
+			[...CAPPED, ...BOUNDED_ELSEWHERE].sort(),
+		);
+	});
+
+	it("never mutates the caller's fill", () => {
+		// The route reuses the fill to build the download filename after rendering.
+		const original = hostile({
+			club: "c".repeat(50_000),
+			speakers: ["A", "B"],
+		});
+		const snapshot = { ...original, speakers: [...original.speakers] };
+		capFill(original);
+		expect(original).toEqual(snapshot);
+	});
+
+	it("applies through buildRoleSheetDoc, so every caller is bounded", () => {
+		// Not just the public route — `scripts/build-role-sheets.ts` renders through
+		// the same entry point, and a future caller will too.
+		const note = "q".repeat(50_000);
+		const words = textOf(
+			buildRoleSheetDoc("grammarian", hostile({ wod: { word: "w", note } })),
+		).join(" ");
+		expect(words).not.toContain(note);
+	});
+
+	it("keeps every cap at a value that actually bounds the layout cost", () => {
+		// EVERY other assertion in this describe is stated relative to
+		// `RENDER_CAPS` itself — `toHaveLength(RENDER_CAPS.speakerRows)`,
+		// `<= RENDER_CAPS.club` — so all of them pass for ANY cap value. Setting
+		// `speakerRows: 5_000` leaves all 90 tests in this file green (verified by
+		// mutation) while one public request costs 129,433ms of blocked event
+		// loop; `club`/`date`/`speakerLabel` at 5_000_000 are green too. A test
+		// that only proves "capFill applies RENDER_CAPS" cannot see the number
+		// being wrong, and the number is the whole fix.
+		//
+		// Absolute ceilings instead, generous enough that no realistic value or
+		// future tweak trips them (~4x the shipped caps; the longest club name on
+		// record is 20 characters and no meeting has more than 3 speakers), and
+		// tight enough to stay on the flat part of the cost curve. Measured on the
+		// shipped layout: 24 rows of 160-character labels renders in 146ms against
+		// a 23ms baseline; 500 rows takes 2,087ms.
+		expect(RENDER_CAPS.club).toBeLessThanOrEqual(500);
+		expect(RENDER_CAPS.date).toBeLessThanOrEqual(240);
+		expect(RENDER_CAPS.speakerLabel).toBeLessThanOrEqual(640);
+		expect(RENDER_CAPS.speakerRows).toBeLessThanOrEqual(60);
+		// The two WOD caps are pinned by `wod-limits.test.ts`, which they derive
+		// from; restate them here so deriving them from something else later is
+		// still bounded at this end.
+		expect(RENDER_CAPS.word).toBeLessThanOrEqual(240);
+		expect(RENDER_CAPS.note).toBeLessThanOrEqual(2_000);
+	});
+
+	it("keeps the write cap inside the render cap, so nothing valid is elided", () => {
+		// Both halves read `#/lib/wod-limits`, so this cannot drift — the assertion
+		// documents the invariant and fails loudly if someone splits them again.
+		expect(WOD_LIMITS.word).toBeLessThanOrEqual(RENDER_CAPS.word);
+		expect(WOD_LIMITS.definition).toBeLessThanOrEqual(RENDER_CAPS.note);
 	});
 });

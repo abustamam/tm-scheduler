@@ -2,6 +2,22 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.5.2.0] - 2026-08-04
+
+### Fixed
+
+- **A single anonymous request could stall the whole site.** The printed role sheets download as PDFs from a public link, and the server builds each one on the spot, in the one process that serves everything else. Nothing limited how much text it would lay out — so a Word of the Day definition pasted long enough took over three and a half seconds of solid work, and a meeting with hundreds of speaker rows took two. During either, nobody else's page loaded.
+
+  Everything a club can type into those sheets is now bounded before it reaches the renderer: the club name, the date, each speaker line, how many speaker lines are pre-filled, and the Word of the Day with its definition. The limits are roughly ten times the longest values any club has actually entered, so nothing anyone would really write is affected. The worst request that used to take 3,596ms now takes 40ms.
+
+  The Word of the Day fields are also capped when they are saved. Creating a meeting rejects text over the limit with a clear message; editing one trims it instead, so a value written before the limit existed can never leave someone unable to save the rest of the meeting. The Word-of-the-Day editor on its own rejects rather than trimming, because losing the end of a definition silently is worse than being told it is too long.
+
+### Notes for this club
+
+- Nothing you have entered is affected. The longest Word of the Day definition on record is 50 characters against a 500 limit, the longest club name 20 against 120, and no meeting has ever booked more than 3 speakers against a limit of 8.
+
+- The Timer's log now pre-fills up to 8 speakers rather than 10. Past that the sheet ran onto a second page for any club using a logo, and these are meant to be one page in the hand. The Timer writes the rest of the meeting's items in as they happen, which is how the log already worked.
+
 ## [1.5.1.0] - 2026-08-04
 
 ### Added

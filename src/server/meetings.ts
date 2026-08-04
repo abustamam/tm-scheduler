@@ -22,6 +22,7 @@ import {
 	urlKeysForMeetings,
 } from "#/lib/meeting-url";
 import { officerPositionLabel } from "#/lib/officers";
+import { WOD_FIELDS, WOD_UPDATE_FIELDS } from "#/lib/wod-limits";
 import {
 	canManageClub,
 	getSessionUser,
@@ -546,7 +547,7 @@ const createMeetingSchema = z.object({
 	scheduledAt: z.string().min(1),
 	location: z.string().trim().optional(),
 	theme: z.string().trim().optional(),
-	wordOfTheDay: z.string().trim().optional(),
+	wordOfTheDay: WOD_FIELDS.word.optional(),
 	notes: z.string().trim().optional(),
 });
 
@@ -570,9 +571,9 @@ const updateMeetingSchema = z.object({
 	lengthMinutes: z.number().int().positive().optional(),
 	location: z.string().trim().optional(),
 	theme: z.string().trim().optional(),
-	wordOfTheDay: z.string().trim().optional(),
-	wodDefinition: z.string().trim().optional(),
-	wodExample: z.string().trim().optional(),
+	wordOfTheDay: WOD_UPDATE_FIELDS.word.optional(),
+	wodDefinition: WOD_UPDATE_FIELDS.definition.optional(),
+	wodExample: WOD_UPDATE_FIELDS.example.optional(),
 	notes: z.string().trim().optional(),
 	reminders: z.string().trim().optional(),
 	// The club's meeting number (#358). Nullable = cleared back to derived.
@@ -599,9 +600,9 @@ const updateWordOfTheDaySchema = z.object({
 	meetingId: uuid,
 	/** Self-asserted TMOD/Grammarian member id (public page). Null for authed admin. */
 	selfMemberId: uuid.nullable().optional(),
-	wordOfTheDay: z.string().trim().optional(),
-	wodDefinition: z.string().trim().optional(),
-	wodExample: z.string().trim().optional(),
+	wordOfTheDay: WOD_FIELDS.word.optional(),
+	wodDefinition: WOD_FIELDS.definition.optional(),
+	wodExample: WOD_FIELDS.example.optional(),
 });
 
 /** Edit only a meeting's Word of the Day (word + definition + example). Admin OR
