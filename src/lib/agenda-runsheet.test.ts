@@ -3146,3 +3146,134 @@ describe("meeting-script cues (#508)", () => {
 		});
 	});
 });
+
+// ---------------------------------------------------------------------------
+// The two GATE MECHANISMS #508 added, exercised as mechanisms rather than
+// through their single production caller.
+//
+// Both were invisible to the suite that shipped them, and a mutation run proved
+// it: the only beat setting `alsoRequiresAnyOf` passes a ONE-element list, so
+// swapping `.some` for `.every` changed nothing; and the only fallback setting
+// `withinGroup` also declares a `requiresGroup`, so deleting the
+// `beat.requiresGroup != null` guard — which makes the lookup crash on a beat
+// without one — also changed nothing. Both mutants passed all 644 tests.
+//
+// These use hand-built beats deliberately. The production template cannot
+// express either case, so testing through it is not an option, and a generic
+// mechanism whose contract is stated in its doc comment should be pinned at the
+// mechanism.
+// ---------------------------------------------------------------------------
+describe("Beat.alsoRequiresAnyOf — ANY within the list, ALL against the gate", () => {
+	/** A beat needing an evaluator (base gate) AND someone to keep time, where
+	 *  the club may staff that second job under either of two roles. */
+	const beat: Beat = {
+		kind: "event",
+		who: "General Evaluator",
+		detail: "Asks for the timing",
+		minutes: 1,
+		requiresAnyOf: [{ roleKey: "evaluator", roleName: "Evaluator" }],
+		alsoRequiresAnyOf: [
+			{ roleKey: "timer", roleName: "Timer" },
+			{ roleKey: "grammarian", roleName: "Grammarian" },
+		],
+	};
+	const evaluator = slot({
+		id: "ev",
+		roleKey: "evaluator",
+		roleName: "Evaluator",
+		category: "evaluator",
+		assigneeName: "Sudheer",
+	});
+	const timer = slot({
+		id: "ti",
+		roleKey: "timer",
+		roleName: "Timer",
+		category: "functionary",
+		assigneeName: "Muhammad",
+	});
+	const grammarian = slot({
+		id: "gr",
+		roleKey: "grammarian",
+		roleName: "Grammarian",
+		category: "functionary",
+		assigneeName: "Gina",
+	});
+
+	// The ANY-of half. Each of these fails if the list is read as ALL-of, which
+	// is exactly the mutant the production one-element caller cannot catch.
+	it("renders when only the FIRST role of the list is present", () => {
+		expect(expandRunSheet([evaluator, timer], [beat])).toHaveLength(1);
+	});
+
+	it("renders when only the SECOND role of the list is present", () => {
+		expect(expandRunSheet([evaluator, grammarian], [beat])).toHaveLength(1);
+	});
+
+	// The ALL-of half: the list ANDs with the beat's own gate, so losing either
+	// side drops the row.
+	it("is dropped when the base gate is met but NO role in the list is", () => {
+		expect(expandRunSheet([evaluator], [beat])).toEqual([]);
+	});
+
+	it("is dropped when a role in the list is present but the base gate is not", () => {
+		expect(expandRunSheet([timer], [beat])).toEqual([]);
+	});
+});
+
+describe("BeatFallback.withinGroup — ignored on a beat that declares no group", () => {
+	/** The documented carve-out: "Ignored when the beat declares no
+	 *  `requiresGroup`, since there is no group to look inside." A beat setting
+	 *  `withinGroup` without a group must fall back to the roster-wide `hasRole`
+	 *  — not consult a group that does not exist. */
+	const beat: Beat = {
+		kind: "event",
+		who: "Toastmaster of the Day",
+		detail: "Introduces the functionaries · the Grammarian gives the word",
+		minutes: 3,
+		fallbacks: [
+			{
+				unless: { roleKey: "grammarian", roleName: "Grammarian" },
+				withinGroup: true,
+				detail: "Introduces the functionaries",
+			},
+		],
+	};
+
+	it("keeps the clause for a Grammarian OUTSIDE any functionary group", () => {
+		// Category-blind on purpose: with no group to scope to, `withinGroup` has
+		// nothing to mean, so this resolves through `hasRole` and the Grammarian
+		// counts wherever the admin filed them. Deleting the
+		// `beat.requiresGroup != null` guard makes this throw instead.
+		const rows = expandRunSheet(
+			[
+				slot({
+					id: "gr",
+					roleKey: "grammarian",
+					roleName: "Grammarian",
+					category: "leadership",
+					assigneeName: "Gina",
+				}),
+			],
+			[beat],
+		);
+		expect(rows[0]?.detail).toBe(
+			"Introduces the functionaries · the Grammarian gives the word",
+		);
+	});
+
+	it("still fires the fallback when the club runs no Grammarian at all", () => {
+		const rows = expandRunSheet(
+			[
+				slot({
+					id: "ti",
+					roleKey: "timer",
+					roleName: "Timer",
+					category: "functionary",
+					assigneeName: "Muhammad",
+				}),
+			],
+			[beat],
+		);
+		expect(rows[0]?.detail).toBe("Introduces the functionaries");
+	});
+});
