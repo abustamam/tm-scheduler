@@ -8,6 +8,7 @@ import { eq } from "drizzle-orm";
 import { db } from "#/db";
 import { clubLogos, clubs, meetings } from "#/db/schema";
 import { formatShortDate } from "#/lib/format";
+import { isDecodeSafe, isReadableClub } from "#/server/club-logo-logic";
 import {
 	loadMinutesProgram,
 	type MinutesProgramRow,
@@ -55,15 +56,40 @@ export interface RenderedRoleSheet {
  * `club_logos` scoped to that meeting's own club — the same per-club scoping
  * every other logo read uses (ADR-0024 constraint 2). Returns null rather than
  * throwing: a missing logo is the common case, not an error.
+ *
+ * Two gates run after the read, and both are load-bearing:
+ *
+ *  · `isReadableClub` — the SAME gate the other two read paths use, not a
+ *    reimplementation. Archiving a club is this feature's takedown lever
+ *    (ADR-0024 constraint 4), and this route is public, so without it an
+ *    archived club's logo kept shipping inside downloadable PDFs and the lever
+ *    did nothing. That is the exact defect #495's review caught on
+ *    `loadClubLogoMeta`; it came back here because this path was written fresh
+ *    and forgot it, which is precisely why `isReadableClub` is shared rather
+ *    than copied.
+ *
+ *  · `isDecodeSafe` — react-pdf decodes this data URI inside the Node process,
+ *    so an over-large image is an availability problem on a public endpoint
+ *    (see `MAX_LOGO_DIMENSION`). The upload gate stops new ones; this stops
+ *    rows that predate the cap. Dropping the logo is the right failure: a role
+ *    sheet without a logo still prints.
  */
-async function loadRoleSheetLogo(meetingId: string): Promise<string | null> {
+export async function loadRoleSheetLogo(
+	meetingId: string,
+): Promise<string | null> {
 	const [row] = await db
-		.select({ bytes: clubLogos.bytes, mime: clubLogos.mime })
+		.select({
+			clubId: meetings.clubId,
+			bytes: clubLogos.bytes,
+			mime: clubLogos.mime,
+		})
 		.from(meetings)
 		.innerJoin(clubLogos, eq(clubLogos.clubId, meetings.clubId))
 		.where(eq(meetings.id, meetingId))
 		.limit(1);
 	if (!row) return null;
+	if (!(await isReadableClub(row.clubId))) return null;
+	if (!isDecodeSafe(row.bytes, row.mime)) return null;
 	return `data:${row.mime};base64,${row.bytes.toString("base64")}`;
 }
 
@@ -71,28 +97,33 @@ async function loadRoleSheetLogo(meetingId: string): Promise<string | null> {
 async function loadRoleSheetFill(
 	meetingId: string,
 ): Promise<RoleSheetFill & { clubName: string }> {
-	const [row] = await db
-		.select({
-			clubName: clubs.name,
-			scheduledAt: meetings.scheduledAt,
-			timezone: clubs.timezone,
-			wordOfTheDay: meetings.wordOfTheDay,
-			wodDefinition: meetings.wodDefinition,
-		})
-		.from(meetings)
-		.innerJoin(clubs, eq(clubs.id, meetings.clubId))
-		.where(eq(meetings.id, meetingId))
-		.limit(1);
+	// All three reads key off `meetingId` alone and none feeds another, so they
+	// go out together: this route renders a PDF on every request (`no-store`),
+	// and three sequential round-trips is three times the latency floor for no
+	// reason.
+	const [[row], program, logoDataUri] = await Promise.all([
+		db
+			.select({
+				clubName: clubs.name,
+				scheduledAt: meetings.scheduledAt,
+				timezone: clubs.timezone,
+				wordOfTheDay: meetings.wordOfTheDay,
+				wodDefinition: meetings.wodDefinition,
+			})
+			.from(meetings)
+			.innerJoin(clubs, eq(clubs.id, meetings.clubId))
+			.where(eq(meetings.id, meetingId))
+			.limit(1),
+		// Prepared speakers in agenda order, with their speech title when set.
+		// Only assigned speaker slots are pre-filled; open slots leave blank rows.
+		loadMinutesProgram(meetingId),
+		// Same non-fatal posture as every other surface: a logo that fails to
+		// load must never cost someone their role sheet.
+		loadRoleSheetLogo(meetingId),
+	]);
 	if (!row) throw new Error(`meeting ${meetingId} not found`);
 
-	// Prepared speakers in agenda order, with their speech title when set. Only
-	// assigned speaker slots are pre-filled; open slots leave blank rows.
-	const program = await loadMinutesProgram(meetingId);
 	const speakers = speakerLabels(program);
-
-	// Same non-fatal posture as every other surface: a logo that fails to load
-	// must never cost someone their role sheet.
-	const logoDataUri = await loadRoleSheetLogo(meetingId);
 
 	const date = formatShortDate(row.scheduledAt, row.timezone);
 	const wod = row.wordOfTheDay

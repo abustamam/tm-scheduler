@@ -35,8 +35,16 @@ export type MeetingForDeck = {
 /** The club fields the deck needs. */
 export type ClubForDeck = {
 	name: string;
-	/** Versioned logo URL, or null. Built by the caller via `clubLogoUrl`. */
-	logoUrl?: string | null;
+	/**
+	 * Versioned logo URL, or null. Built by the caller via `clubLogoUrl`.
+	 *
+	 * Required rather than optional, matching `clubNumber`/`district` below: a
+	 * new deck caller that omits it should get a type error, not a silently
+	 * logo-less deck. The whole point of this feature is that the logo appears
+	 * on every surface, and an optional field is how those surfaces drift apart
+	 * again. Both existing callers already pass it, so this costs nothing.
+	 */
+	logoUrl: string | null;
 	clubNumber: string | null;
 	district: string | null;
 	timezone: string;

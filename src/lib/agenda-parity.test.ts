@@ -396,6 +396,7 @@ const club: ClubForDeck = {
 	district: "District 39",
 	timezone: "America/Chicago",
 	meetingSchedule: "2nd & 4th Thursday",
+	logoUrl: null,
 };
 
 const tmod = slot({

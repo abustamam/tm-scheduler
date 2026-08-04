@@ -270,11 +270,26 @@ function header(
 				},
 			},
 			h(Text, { style: s.brand }, "GAVELUP"),
+			// Same light plate the HTML surfaces put behind the logo (see
+			// `club-logo.tsx`), so the treatment is identical everywhere a club's
+			// image appears. This page is white, so here it is invisible — it is
+			// kept for consistency rather than effect, and so that a future dark
+			// header on this sheet does not silently swallow a dark logo.
 			fill?.logoDataUri
-				? h(Image, {
-						src: fill.logoDataUri,
-						style: { height: 26, maxWidth: 110, objectFit: "contain" },
-					})
+				? h(
+						View,
+						{
+							style: {
+								backgroundColor: "#fff",
+								borderRadius: 3,
+								padding: 3,
+							},
+						},
+						h(Image, {
+							src: fill.logoDataUri,
+							style: { height: 26, maxWidth: 110, objectFit: "contain" },
+						}),
+					)
 				: null,
 		),
 		h(Text, { style: s.title }, title),

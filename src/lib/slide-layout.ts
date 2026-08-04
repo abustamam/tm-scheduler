@@ -39,8 +39,9 @@ export type SlideLayout =
 			headline: string;
 			sub: Line[];
 			/** Only the opening title splash carries one; every other splash
-			 *  (thank-you, section breaks) leaves it null. */
-			logoUrl?: string | null;
+			 *  (currently just the closing thank-you) sets it null. Required so a
+			 *  new splash kind has to make that choice explicitly. */
+			logoUrl: string | null;
 	  }
 	| { chrome: "content"; header: string; body: Body };
 
@@ -372,6 +373,9 @@ export function slideLayout(slide: Slide): SlideLayout {
 				tone: "dark",
 				headline: "Thank You",
 				sub: thankYouSub(slide),
+				// The club's logo opens the deck; repeating it on the closing slide
+				// would be branding for its own sake.
+				logoUrl: null,
 			};
 	}
 	return ((_x: never): never => {

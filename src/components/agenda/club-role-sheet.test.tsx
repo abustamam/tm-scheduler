@@ -138,7 +138,13 @@ describe("club logo (#496)", () => {
 			/>,
 		);
 		const img = document.querySelector<HTMLImageElement>(`img[src="${LOGO}"]`);
-		const headerRow = img?.parentElement;
+		// The image's immediate parent is the light plate `ClubLogo` renders
+		// behind it (a dark logo on this dark header band would otherwise be
+		// invisible); the header row is one level above that.
+		const plate = img?.parentElement;
+		// jsdom normalizes #fff to its rgb() form.
+		expect(plate?.style.background).toBe("rgb(255, 255, 255)");
+		const headerRow = plate?.parentElement;
 		expect(headerRow).not.toBeNull();
 		expect(headerRow?.textContent).toContain("Downtown Toastmasters");
 		expect(headerRow?.textContent).toContain("Club #1234567");

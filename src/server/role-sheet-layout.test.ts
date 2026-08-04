@@ -87,6 +87,62 @@ describe("Timer sheet prints yellow, never amber (#507)", () => {
 	});
 });
 
+// The club logo shipped on this sheet with NO coverage: deleting the whole
+// `fill?.logoDataUri ? Image : null` branch from header() left all 22 tests in
+// this file green, because every one of them asserts either DATA or "is it a
+// PDF" — the same blind spot #507 above was written for. These assert the
+// rendered element tree.
+describe("club logo on the role sheet (#496)", () => {
+	/** Every element in a react-pdf tree, flattened. */
+	function nodesOf(node: unknown): { props?: Record<string, unknown> }[] {
+		if (node == null || node === false || typeof node === "string") return [];
+		if (Array.isArray(node)) return node.flatMap(nodesOf);
+		const el = node as { props?: Record<string, unknown> };
+		if (!el.props) return [];
+		return [el, ...nodesOf(el.props.children)];
+	}
+
+	const LOGO = "data:image/png;base64,AAAA";
+
+	function nodes(withFill?: RoleSheetFill) {
+		return nodesOf(buildRoleSheetDoc("timer", withFill));
+	}
+
+	function imageSources(withFill?: RoleSheetFill) {
+		return nodes(withFill)
+			.map((n) => n.props?.src)
+			.filter((src): src is string => typeof src === "string");
+	}
+
+	function plates(withFill?: RoleSheetFill) {
+		return nodes(withFill).filter((n) => {
+			const style = n.props?.style as { backgroundColor?: string } | undefined;
+			return style?.backgroundColor === "#fff";
+		});
+	}
+
+	it("renders the club's logo when the fill carries one", () => {
+		expect(imageSources({ ...fill, logoDataUri: LOGO })).toContain(LOGO);
+	});
+
+	it("renders no image at all when the fill has no logo", () => {
+		expect(imageSources(fill)).toHaveLength(0);
+		expect(imageSources()).toHaveLength(0);
+	});
+
+	it("backs the logo with a light plate, and only when there is a logo", () => {
+		expect(plates({ ...fill, logoDataUri: LOGO })).toHaveLength(1);
+		expect(plates(fill)).toHaveLength(0);
+	});
+
+	it("still renders a valid PDF with a logo present", async () => {
+		const { ok } = await isPdf(
+			buildRoleSheetDoc("timer", { ...fill, logoDataUri: LOGO }),
+		);
+		expect(ok).toBe(true);
+	});
+});
+
 // #507 — the agenda now prints the same windows as coloured marks, so the two
 // surfaces hold the same numbers in two places. Pin them together: whoever
 // changes one gets a failure naming the other, instead of a Timer signalling at

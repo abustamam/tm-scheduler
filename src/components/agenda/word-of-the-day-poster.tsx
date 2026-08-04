@@ -132,8 +132,14 @@ export function WordOfTheDayPoster({
 			{/* Logo in the footer beside the club name, NOT in the body: the word's
 			    font size is derived from a measured table and the page must stay
 			    exactly one sheet — a blank second page shipped from this component
-			    once already. 20px matches the footer's text line, so the band's
-			    height is unchanged whether or not a club has a logo. */}
+			    once already.
+
+			    The footer band DOES grow by a few px when a club has a logo (a 20px
+			    image plus its plate against an 11px text line), which is safe here
+			    only because `FitPage` measures the composed page and scales it to
+			    `PAGE_H - 2` when it overflows. Verified at one page with and
+			    without a logo — do not restate this as "the height is unchanged",
+			    which is what this comment used to claim. */}
 			<DarkFooter
 				left={
 					<span style={{ display: "flex", alignItems: "center", gap: 10 }}>

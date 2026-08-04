@@ -30,19 +30,30 @@ const H = 7.5;
 const FOOT_H = 1.13; // ~8.5% of width
 
 /**
- * @param logoDataUri Base64 data URI for the club's logo, or null. Passed in
- *   rather than read from the deck because this runs ENTIRELY IN THE BROWSER
- *   (see `pptx-download-button.tsx`) and so cannot reach the database, and
- *   because carrying ~340 KB of base64 on the deck descriptor would put it in
- *   the SSR payload of every present and meeting page — the exact cost the
- *   separate `club_logos` table exists to avoid. The caller fetches the same
- *   public URL the projected deck already displays, so the service worker has
- *   usually cached it and the export works offline too.
+ * A resolved club logo: the encoded bytes plus the image's INTRINSIC pixel
+ * size. The dimensions are not decoration — `renderSplash` needs them to
+ * preserve aspect ratio, because pptxgenjs cannot do it for us (see there).
+ */
+export type ClubLogoAsset = {
+	dataUri: string;
+	width: number;
+	height: number;
+};
+
+/**
+ * @param logo The club's resolved logo, or null. Passed in rather than read
+ *   from the deck because this runs ENTIRELY IN THE BROWSER (see
+ *   `pptx-download-button.tsx`) and so cannot reach the database, and because
+ *   carrying ~340 KB of base64 on the deck descriptor would put it in the SSR
+ *   payload of every present and meeting page — the exact cost the separate
+ *   `club_logos` table exists to avoid. The caller fetches the same public URL
+ *   the projected deck already displays, so it is normally warm in the HTTP
+ *   cache and the export works offline too.
  */
 export function deckToPptx(
 	Pptx: PptxCtor,
 	deck: Slide[],
-	logoDataUri: string | null = null,
+	logo: ClubLogoAsset | null = null,
 ): Presentation {
 	const pptx = new Pptx();
 	pptx.layout = "LAYOUT_WIDE";
@@ -53,7 +64,7 @@ export function deckToPptx(
 	for (const slide of deck) {
 		const layout = slideLayout(slide);
 		const s = pptx.addSlide();
-		if (layout.chrome === "splash") renderSplash(pptx, s, layout, logoDataUri);
+		if (layout.chrome === "splash") renderSplash(pptx, s, layout, logo);
 		else renderContent(pptx, s, layout, club, fdate);
 	}
 	return pptx;
@@ -63,7 +74,7 @@ function renderSplash(
 	pptx: Presentation,
 	s: PptxSlide,
 	layout: Extract<SlideLayout, { chrome: "splash" }>,
-	logoDataUri: string | null = null,
+	logo: ClubLogoAsset | null = null,
 ) {
 	const dark = layout.tone === "dark";
 	s.background = { color: dark ? NAVY : GROUND };
@@ -72,19 +83,37 @@ function renderSplash(
 	// set there and nowhere else) and only when the caller actually resolved the
 	// bytes. Placed in the empty headroom ABOVE the program name at y=1.35 so
 	// nothing else on the slide moves: a deck with a logo and one without are
-	// identical below y=1.2. `sizing: contain` preserves aspect ratio, since a
-	// club's image is either a wide wordmark or a square crest and pptxgenjs
-	// stretches to fit when given both w and h without it.
-	if (layout.logoUrl && logoDataUri) {
-		const logoW = 4;
-		s.addImage({
-			data: logoDataUri,
-			x: (W - logoW) / 2,
-			y: 0.35,
-			w: logoW,
-			h: 0.85,
-			sizing: { type: "contain", w: logoW, h: 0.85 },
+	// identical below y=1.2.
+	if (layout.logoUrl && logo) {
+		const BOX_W = 4;
+		const BOX_H = 0.85;
+		// Contain the image by hand. `sizing: { type: "contain" }` does NOT do
+		// this: pptxgenjs derives its crop math from the w/h passed alongside it,
+		// not from the image's intrinsic size, so a box and a sizing hint of the
+		// same 4 x 0.85 compute a zero crop and emit `<a:stretch/>` into a
+		// 4in x 0.85in frame — a square club crest came out smeared to 4.7:1 in
+		// the downloaded file while rendering correctly on the projected splash.
+		// Hence `ClubLogoAsset` carrying the intrinsic size.
+		const scale = Math.min(BOX_W / logo.width, BOX_H / logo.height);
+		const w = logo.width * scale;
+		const h = logo.height * scale;
+		const x = (W - w) / 2;
+		const y = 0.35 + (BOX_H - h) / 2;
+		// Light plate behind it, the same treatment every other surface gives the
+		// logo: an uploaded image is arbitrary, and a dark logo on this deck's
+		// dark tone would otherwise be invisible. On the light tone the plate is
+		// very nearly the ground colour, so it costs nothing there.
+		const pad = 0.08;
+		s.addShape(pptx.ShapeType.roundRect, {
+			x: x - pad,
+			y: y - pad,
+			w: w + pad * 2,
+			h: h + pad * 2,
+			fill: { color: "FFFFFF" },
+			line: { type: "none" },
+			rectRadius: 0.06,
 		});
+		s.addImage({ data: logo.dataUri, x, y, w, h });
 	}
 	// Nominative word use, not the official wordmark image (ADR-0024).
 	s.addText("Toastmasters", {
