@@ -17,6 +17,7 @@ const deck: Slide[] = [
 	{
 		kind: "title",
 		clubName: CLUB_NAME,
+		logoUrl: null,
 		district: "District 39",
 		clubNumber: "28677176",
 		meetingNumber: null,
@@ -375,5 +376,41 @@ describe("MeetingPresent", () => {
 			press("Enter");
 			expect(screen.getByText("1 / 10")).toBeTruthy();
 		});
+	});
+});
+
+describe("club logo on the projected splash (#496)", () => {
+	afterEach(() => cleanup());
+
+	const LOGO = "/api/club/abc/logo?v=1754000000000";
+	const withLogo: Slide[] = deck.map((s) =>
+		s.kind === "title" ? { ...s, logoUrl: LOGO } : s,
+	);
+
+	it("renders the logo on the opening splash when the club has one", () => {
+		render(<MeetingPresent deck={withLogo} clubName={CLUB_NAME} />);
+		const img = document.querySelector<HTMLImageElement>(`img[src="${LOGO}"]`);
+		expect(img).not.toBeNull();
+		expect(img?.getAttribute("alt")).toBe("");
+	});
+
+	// Everything on a slide is sized in cqw so it scales to whatever the deck is
+	// projected onto. A px height here would be a postage stamp on a projector,
+	// which is the whole reason ClubLogo takes a size at all.
+	it("sizes the projected logo in container units, not pixels", () => {
+		render(<MeetingPresent deck={withLogo} clubName={CLUB_NAME} />);
+		const img = document.querySelector<HTMLImageElement>(`img[src="${LOGO}"]`);
+		expect(img?.style.height).toContain("cqw");
+		expect(img?.style.height).not.toContain("px");
+	});
+
+	it("renders no image at all when the club has no logo", () => {
+		render(<MeetingPresent deck={deck} clubName={CLUB_NAME} />);
+		expect(document.querySelector(`img[src^="/api/club/"]`)).toBeNull();
+	});
+
+	it("still shows the club name as the splash headline beside the logo", () => {
+		render(<MeetingPresent deck={withLogo} clubName={CLUB_NAME} />);
+		expect(screen.getByText(CLUB_NAME)).toBeTruthy();
 	});
 });

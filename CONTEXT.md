@@ -15,6 +15,14 @@ the nouns in `src/db/schema.ts`.
   that blocks all access — authed (`requireMembership` rejects) and public (loaders return
   not-found) — except the superadmin console, retaining every row and keeping the slug reserved.
   See ADR-0016 / #186.
+- **Club logo** — one image a club uploads for itself (`club_logos`; at most one row per club,
+  bytes stored inline as `bytea`). PNG or JPEG, ≤256 KB **and** ≤2000px on each side — the pixel
+  cap bounds DECODE cost, which the byte cap does not, and it matters because the role-sheet PDF
+  decodes the image server-side on a public endpoint. Rendered on the four print layouts, the
+  projected deck, the `.pptx` export, the Word of the Day poster and the club role sheets (HTML
+  and PDF); a club with no logo sees every surface exactly as before. GavelUp supplies no image
+  of its own and never shares one club's upload with another — see ADR-0024 and **Invariants**.
+  Shipped #495 (print), extended to the remaining surfaces #496.
 - **Person** — a human (`people`), keyed by their Toastmasters Customer ID (`PN-…`, nullable;
   unique when present, with email as a fallback match key). Holds the facts that are the same
   across *every* club a person belongs to: name, contact, `original_join_date` (first-ever TM
@@ -257,6 +265,17 @@ per-Person opt-out, the no-auth `/unsubscribe` link, and per-club settings — s
   lifts the lock. Enforced at `resolveMeetingAgendaAuthz` / `assertMeetingNotLocked`, not the UI
   (ADR-0012).
 - `src/server/*` touches `db`/`pg` and must never be imported by client components.
+- Every `club_logos` access — read, join, update or delete — is scoped to one club with
+  `eq(clubLogos.clubId, <this club's id>)`. There is no shared library, template gallery or
+  cross-club reuse of an upload, and adding one collapses ADR-0024's whole posture (constraint 2).
+  A join condition is not scoping: `.innerJoin(clubLogos, eq(clubLogos.clubId, clubs.id))` with no
+  `WHERE` returns an arbitrary club's bytes. Two further rules ride on every *public* read: it
+  passes `isReadableClub` (archiving is the takedown lever, ADR-0024 constraint 4 — a read that
+  skips it makes the lever do nothing), and any path that decodes the bytes **inside the Node
+  process** passes `isDecodeSafe` first, since compression ratio is unbounded and the role-sheet
+  PDF endpoint is public and `no-store`. `club-logo-scope.guard.test.ts` sweeps `src/` for the
+  cheap regressions, but it is a lexical net, not a proof — the real guarantee is the two-club
+  seeding in `club-logo-logic.integration.test.ts`. See #495 / #496.
 - A `notifications` row is delivered **at most once**: the poller claims it with a conditional
   update (bump `attempts` / stamp `last_attempted_at` `WHERE sent_at IS NULL AND attempts = <read>`)
   before sending, then sets `sent_at` on success. Never send without claiming first (ADR-0023).

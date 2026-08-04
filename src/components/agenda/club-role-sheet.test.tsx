@@ -91,3 +91,64 @@ describe("ClubRoleSheet", () => {
 		).toBeTruthy();
 	});
 });
+
+describe("club logo (#496)", () => {
+	const LOGO =
+		"/api/club/11111111-1111-4111-8111-111111111111/logo?v=1754000000000";
+
+	it("renders the club's logo in the header band when one is set", () => {
+		render(
+			<ClubRoleSheet
+				clubName="Downtown Toastmasters"
+				clubNumber="1234567"
+				roles={roles}
+				logoUrl={LOGO}
+			/>,
+		);
+		const img = document.querySelector<HTMLImageElement>(`img[src="${LOGO}"]`);
+		expect(img).not.toBeNull();
+		expect(img?.style.height).toBe("40px");
+		expect(img?.getAttribute("alt")).toBe("");
+	});
+
+	it("renders no image element at all when the club has no logo", () => {
+		render(
+			<ClubRoleSheet
+				clubName="Downtown Toastmasters"
+				clubNumber="1234567"
+				roles={roles}
+				logoUrl={null}
+			/>,
+		);
+		expect(document.querySelector("img")).toBeNull();
+	});
+
+	// NOT getByText("Downtown Toastmasters"): this sheet prints the club name
+	// TWICE — once in the header band and again in the DarkFooter — so matching
+	// by owner alone is ambiguous AND cannot tell the two apart. Assert the
+	// header ROW instead: the logo and the name must sit in the same container,
+	// which is the thing this layout change actually claims.
+	it("puts the logo and the club name in the same header row", () => {
+		render(
+			<ClubRoleSheet
+				clubName="Downtown Toastmasters"
+				clubNumber="1234567"
+				roles={roles}
+				logoUrl={LOGO}
+			/>,
+		);
+		const img = document.querySelector<HTMLImageElement>(`img[src="${LOGO}"]`);
+		// The image's immediate parent is the light plate `ClubLogo` renders
+		// behind it (a dark logo on this dark header band would otherwise be
+		// invisible); the header row is one level above that.
+		const plate = img?.parentElement;
+		// jsdom normalizes #fff to its rgb() form.
+		expect(plate?.style.background).toBe("rgb(255, 255, 255)");
+		const headerRow = plate?.parentElement;
+		expect(headerRow).not.toBeNull();
+		expect(headerRow?.textContent).toContain("Downtown Toastmasters");
+		expect(headerRow?.textContent).toContain("Club #1234567");
+		// And the footer copy is a genuinely separate element, not this one.
+		expect(screen.getAllByText("Downtown Toastmasters").length).toBe(2);
+	});
+});

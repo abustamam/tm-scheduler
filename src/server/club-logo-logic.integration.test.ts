@@ -41,6 +41,7 @@ const {
 	removeClubLogo,
 } = await import("#/server/club-logo-logic");
 const { requireClubRole } = await import("#/server/guards");
+const { loadRoleSheetLogo } = await import("#/server/role-sheets-pdf-logic");
 const { Route } = await import("#/routes/api/club.$clubId.logo");
 
 // ---------------------------------------------------------------------------
@@ -48,20 +49,56 @@ const { Route } = await import("#/routes/api/club.$clubId.logo");
 // filler so the buffer exercises a non-trivial size.
 // ---------------------------------------------------------------------------
 
-function pngBytes(size = 128): Buffer {
-	const buf = Buffer.alloc(size, 0);
-	buf[0] = 0x89;
-	buf[1] = 0x50;
-	buf[2] = 0x4e;
-	buf[3] = 0x47;
-	return buf;
+/**
+ * A PNG whose header is REAL: the 8-byte signature plus a well-formed IHDR
+ * carrying the requested pixel dimensions. The pixel data stays filler —
+ * nothing here decodes it — but the IHDR must parse, because the upload gate
+ * now reads it to enforce `MAX_LOGO_DIMENSION`. Byte size does not bound
+ * decode cost: an 8000x8000 PNG fits in 243 KB and expands to ~256 MB of
+ * bitmap inside the PDF renderer.
+ */
+function pngBytes(size = 128, width = 64, height = 64): Buffer {
+	// A REAL png: full signature, a 13-byte IHDR, a padding IDAT sized to reach
+	// the requested byte length, and an IEND. The validator walks the whole chunk
+	// list now (a fixed-offset peek let a 45-byte file hang the decoder), so a
+	// fixture that is only a magic prefix would be rejected — correctly.
+	const sig = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+	const mkChunk = (type: string, data: Buffer): Buffer => {
+		const len = Buffer.alloc(4);
+		len.writeUInt32BE(data.length);
+		return Buffer.concat([
+			len,
+			Buffer.from(type, "ascii"),
+			data,
+			Buffer.alloc(4),
+		]);
+	};
+	const ihdr = Buffer.alloc(13);
+	ihdr.writeUInt32BE(width, 0);
+	ihdr.writeUInt32BE(height, 4);
+	ihdr[8] = 8;
+	ihdr[9] = 6;
+	const fixed = sig.length + 25 + 12; // signature + IHDR chunk + IEND chunk
+	const padBytes = Math.max(0, size - fixed - 12); // 12 = IDAT chunk overhead
+	return Buffer.concat([
+		sig,
+		mkChunk("IHDR", ihdr),
+		...(padBytes > 0 ? [mkChunk("IDAT", Buffer.alloc(padBytes))] : []),
+		mkChunk("IEND", Buffer.alloc(0)),
+	]);
 }
 
-function jpegBytes(size = 128): Buffer {
-	const buf = Buffer.alloc(size, 0);
-	buf[0] = 0xff;
+/** A JPEG whose SOF0 frame header carries the dimensions, same reason. */
+function jpegBytes(size = 128, width = 64, height = 64): Buffer {
+	const buf = Buffer.alloc(Math.max(size, 32), 0);
+	buf[0] = 0xff; // SOI
 	buf[1] = 0xd8;
-	buf[2] = 0xff;
+	buf[2] = 0xff; // SOF0
+	buf[3] = 0xc0;
+	buf.writeUInt16BE(17, 4); // segment length
+	buf[6] = 8; // sample precision
+	buf.writeUInt16BE(height, 7);
+	buf.writeUInt16BE(width, 9);
 	return buf;
 }
 
@@ -318,7 +355,10 @@ describe.skipIf(!hasTestDb)("club logo (#495)", () => {
 			const s = await seed();
 			const a = pngBytes(100);
 			const b = pngBytes(400); // different length so we can tell which "won"
-			b[10] = 0xaa;
+			// Byte 50 is inside the IDAT payload. NOT byte 10: that is the IHDR
+			// chunk's length field, and the validator now walks the chunk list, so
+			// corrupting a declared length makes the whole upload (correctly) fail.
+			b[50] = 0xaa;
 
 			const uploadA = applyClubLogoUpload({
 				clubId: s.clubId,
@@ -697,6 +737,165 @@ describe.skipIf(!hasTestDb)("club logo (#495)", () => {
 			);
 			const body = Buffer.from(await res.arrayBuffer());
 			expect(body.equals(jpeg)).toBe(true);
+		});
+	});
+
+	// -------------------------------------------------------------------------
+	// Pixel-dimension cap (#496).
+	//
+	// The byte caps above do NOT bound decode cost. #496 made that reachable
+	// from a public endpoint by decoding uploaded bytes inside the Node process
+	// (react-pdf renders the role-sheet PDF server-side), where an 8000x8000
+	// PNG that compresses to 243 KB expands to ~1.1 GB RSS.
+	// -------------------------------------------------------------------------
+
+	describe("applyClubLogoUpload dimension cap (#496)", () => {
+		async function upload(s: SeededClub, bytes: Buffer, mime = "image/png") {
+			return applyClubLogoUpload({
+				clubId: s.clubId,
+				base64: bytes.toString("base64"),
+				mime,
+				attested: true,
+				userId: s.adminUserId,
+				actorMemberId: s.adminMemberId,
+			});
+		}
+
+		it("accepts an image at the limit on both axes", async () => {
+			const s = await seed();
+			await upload(s, pngBytes(128, 2000, 2000));
+			expect(await rowFor(s.clubId)).toHaveLength(1);
+		});
+
+		it("rejects a small-BYTE image with huge pixel dimensions", async () => {
+			const s = await seed();
+			// 243 KB on disk, a quarter-gigabyte decoded — passes every byte check.
+			const huge = pngBytes(128, 8000, 8000);
+			expect(huge.length).toBeLessThan(256 * 1024);
+			await expect(upload(s, huge)).rejects.toThrow(/2000px or smaller/);
+			expect(await rowFor(s.clubId)).toHaveLength(0);
+		});
+
+		it("rejects an over-wide image even when its height is fine", async () => {
+			const s = await seed();
+			await expect(upload(s, pngBytes(128, 4000, 10))).rejects.toThrow(
+				/2000px or smaller/,
+			);
+		});
+
+		it("applies the same cap to JPEG, read from its SOF0 header", async () => {
+			const s = await seed();
+			await expect(
+				upload(s, jpegBytes(128, 5000, 5000), "image/jpeg"),
+			).rejects.toThrow(/2000px or smaller/);
+			await upload(s, jpegBytes(128, 400, 300), "image/jpeg");
+			expect(await rowFor(s.clubId)).toHaveLength(1);
+		});
+
+		it("rejects a file whose header cannot be parsed at all", async () => {
+			const s = await seed();
+			// Correct PNG magic bytes, no IHDR — passes the sniff, but we cannot
+			// establish what it would decode to, so it must not be stored.
+			const noHeader = Buffer.alloc(128, 0);
+			noHeader[0] = 0x89;
+			noHeader[1] = 0x50;
+			noHeader[2] = 0x4e;
+			noHeader[3] = 0x47;
+			await expect(upload(s, noHeader)).rejects.toThrow(/valid PNG or JPEG/);
+			expect(await rowFor(s.clubId)).toHaveLength(0);
+		});
+	});
+
+	// -------------------------------------------------------------------------
+	// The role-sheet PDF logo read (#496).
+	//
+	// This path shipped with NO coverage, and that is exactly where the archive
+	// bypass came back: `loadRoleSheetLogo` was written fresh and did not call
+	// the shared `isReadableClub` gate, so archiving a club — this feature's
+	// takedown lever (ADR-0024 constraint 4) — stopped removing its logo from a
+	// PUBLIC, downloadable PDF.
+	//
+	// The cross-club case below is here rather than left to
+	// `club-logo-scope.guard.test.ts` because that guard structurally cannot see
+	// it: this query's per-club scoping is `eq(meetings.id, …)`, and the guard
+	// only inspects `eq(clubLogos.clubId, …)` — which here is a column-to-column
+	// JOIN CONDITION that scopes nothing. Deleting the `.where` would leak an
+	// arbitrary club's logo with the guard still green.
+	// -------------------------------------------------------------------------
+
+	describe("loadRoleSheetLogo (#496)", () => {
+		async function seedWithLogo(bytes = pngBytes(128, 100, 50)) {
+			const s = await seed();
+			await applyClubLogoUpload({
+				clubId: s.clubId,
+				base64: bytes.toString("base64"),
+				mime: "image/png",
+				attested: true,
+				userId: s.adminUserId,
+				actorMemberId: s.adminMemberId,
+			});
+			return s;
+		}
+
+		it("returns the club's own logo as a data URI for its meeting", async () => {
+			const s = await seedWithLogo();
+			const uri = await loadRoleSheetLogo(s.meetingId);
+			expect(uri).toMatch(/^data:image\/png;base64,/);
+		});
+
+		it("returns null when the club has no logo", async () => {
+			const s = await seed();
+			expect(await loadRoleSheetLogo(s.meetingId)).toBeNull();
+		});
+
+		it("returns null for an unknown meeting", async () => {
+			expect(await loadRoleSheetLogo(randomUUID())).toBeNull();
+		});
+
+		it("returns null once the club is archived (the takedown lever)", async () => {
+			const s = await seedWithLogo();
+			expect(await loadRoleSheetLogo(s.meetingId)).not.toBeNull();
+
+			await testDb
+				.update(clubs)
+				.set({ archivedAt: new Date() })
+				.where(eq(clubs.id, s.clubId));
+
+			expect(await loadRoleSheetLogo(s.meetingId)).toBeNull();
+		});
+
+		it("never serves another club's logo for this club's meeting", async () => {
+			// A has a logo, B does not. B's meeting must resolve to nothing —
+			// not to A's bytes.
+			const a = await seedWithLogo();
+			const b = await seed();
+			expect(await loadRoleSheetLogo(a.meetingId)).not.toBeNull();
+			expect(await loadRoleSheetLogo(b.meetingId)).toBeNull();
+		});
+
+		it("gives each club its own distinct logo, never the other's", async () => {
+			const a = await seedWithLogo(pngBytes(128, 100, 50));
+			const b = await seedWithLogo(pngBytes(256, 100, 50));
+			const [uriA, uriB] = await Promise.all([
+				loadRoleSheetLogo(a.meetingId),
+				loadRoleSheetLogo(b.meetingId),
+			]);
+			expect(uriA).not.toBeNull();
+			expect(uriB).not.toBeNull();
+			// Different byte lengths in, different payloads out.
+			expect(uriA).not.toBe(uriB);
+		});
+
+		it("drops a logo too large to decode safely, rather than rendering it", async () => {
+			const s = await seedWithLogo();
+			// Write an over-dimension row directly: the upload gate rejects these
+			// now, but rows predating the cap can still exist in a live database.
+			await testDb
+				.update(clubLogos)
+				.set({ bytes: pngBytes(128, 9000, 9000) })
+				.where(eq(clubLogos.clubId, s.clubId));
+
+			expect(await loadRoleSheetLogo(s.meetingId)).toBeNull();
 		});
 	});
 });

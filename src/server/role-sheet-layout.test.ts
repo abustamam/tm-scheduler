@@ -96,6 +96,90 @@ describe("Timer sheet prints yellow, never amber (#507)", () => {
 	});
 });
 
+// The club logo shipped on this sheet with NO coverage: deleting the whole
+// `fill?.logoDataUri ? Image : null` branch from header() left all 22 tests in
+// this file green, because every one of them asserts either DATA or "is it a
+// PDF" — the same blind spot #507 above was written for. These assert the
+// rendered element tree.
+describe("club logo on the role sheet (#496)", () => {
+	/** Every element in a react-pdf tree, flattened. */
+	function nodesOf(node: unknown): { props?: Record<string, unknown> }[] {
+		if (node == null || node === false || typeof node === "string") return [];
+		if (Array.isArray(node)) return node.flatMap(nodesOf);
+		const el = node as { props?: Record<string, unknown> };
+		if (!el.props) return [];
+		return [el, ...nodesOf(el.props.children)];
+	}
+
+	const LOGO = "data:image/png;base64,AAAA";
+
+	function nodes(withFill?: RoleSheetFill) {
+		return nodesOf(buildRoleSheetDoc("timer", withFill));
+	}
+
+	function imageSources(withFill?: RoleSheetFill) {
+		return nodes(withFill)
+			.map((n) => n.props?.src)
+			.filter((src): src is string => typeof src === "string");
+	}
+
+	function plates(withFill?: RoleSheetFill) {
+		return nodes(withFill).filter((n) => {
+			const style = n.props?.style as { backgroundColor?: string } | undefined;
+			return style?.backgroundColor === "#fff";
+		});
+	}
+
+	it("renders the club's logo when the fill carries one", () => {
+		expect(imageSources({ ...fill, logoDataUri: LOGO })).toContain(LOGO);
+	});
+
+	it("renders no image at all when the fill has no logo", () => {
+		expect(imageSources(fill)).toHaveLength(0);
+		expect(imageSources()).toHaveLength(0);
+	});
+
+	it("backs the logo with a light plate, and only when there is a logo", () => {
+		expect(plates({ ...fill, logoDataUri: LOGO })).toHaveLength(1);
+		expect(plates(fill)).toHaveLength(0);
+	});
+
+	it("still renders a valid PDF with a logo present", async () => {
+		const { ok } = await isPdf(
+			buildRoleSheetDoc("timer", { ...fill, logoDataUri: LOGO }),
+		);
+		expect(ok).toBe(true);
+	});
+
+	// #496 AC5: "Page counts unchanged on the WOD poster and role sheets, with
+	// and without a logo — counted from rendered PDF output, not eyeballed."
+	// `isPdf` above only checks the %PDF- magic bytes, so a logo that pushed the
+	// header tall enough to spill onto page 2 would still read as "a valid PDF".
+	// This repo has shipped exactly that failure before: a missing print reset
+	// added a blank second page and got past 6 test files, typecheck, lint and
+	// two reviews, because print CSS has no gate here. Count the pages.
+	async function pageCount(doc: ReturnType<typeof buildRoleSheetDoc>) {
+		const buf = await renderToBuffer(
+			doc as Parameters<typeof renderToBuffer>[0],
+		);
+		// Page objects are `/Type /Page`; the tree root is `/Type /Pages`, so the
+		// negative lookahead is what keeps this from counting the container.
+		return (buf.toString("latin1").match(/\/Type\s*\/Page(?![s])/g) ?? [])
+			.length;
+	}
+
+	for (const { key } of ROLE_SHEETS) {
+		it(`"${key}" stays one page whether or not the club has a logo`, async () => {
+			const without = await pageCount(buildRoleSheetDoc(key, fill));
+			const withLogo = await pageCount(
+				buildRoleSheetDoc(key, { ...fill, logoDataUri: LOGO }),
+			);
+			expect(without).toBe(1);
+			expect(withLogo).toBe(without);
+		});
+	}
+});
+
 // #507 — the agenda now prints the same windows as coloured marks, so the two
 // surfaces hold the same numbers in two places. Pin them together: whoever
 // changes one gets a failure naming the other, instead of a Timer signalling at
@@ -396,6 +480,34 @@ describe("every role sheet fits on one page", () => {
 					'Cara — "The Long Road Home"',
 					'Dev — "Ten Minutes"',
 				],
+			},
+		},
+		{
+			// Every unbounded field at once, PLUS the club logo #496 added to these
+			// sheets. Landing #496 and #509 in either order leaves this cross-product
+			// untested by both sides: #496's logo tests use a three-speaker fixture,
+			// and #509's hostile fills carried no logo. The combination spilled the
+			// Timer's sheet, and neither suite saw it.
+			//
+			// EIGHT speakers here, not ten, and that is the honest bound: the logo
+			// costs roughly two log rows of headroom, and past eight the rows come
+			// from the speakers themselves so no blank-row budget can absorb them.
+			// Eight booked prepared speeches is already past any real meeting; the
+			// ten-speaker fill below still pins the no-logo case.
+			label: "everything at once, with a club logo",
+			fill: {
+				club: "C".repeat(80),
+				date: "Wednesday, July 22, 2026",
+				logoDataUri:
+					"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+				speakers: Array.from(
+					{ length: 8 },
+					(_, i) => `Speaker ${i + 1} — "A Speech Title"`,
+				),
+				wod: {
+					word: "ebullient",
+					note: "cheerful and full of energy, used well by three speakers today",
+				},
 			},
 		},
 		{

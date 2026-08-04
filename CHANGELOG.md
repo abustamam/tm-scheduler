@@ -23,6 +23,27 @@ Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO`
 - Two of #508's five requests are **not** in this release, and could not be. They wanted the speaker introduction to name that speaker's evaluator, and the evaluator's row to read "Evaluate Dana" rather than "Evaluates a speaker". Both read a column that nothing in the app can set: evaluator-to-speaker pairing is written only by a one-off import script, so on any meeting created here it is empty and the wording would never appear. Tracked separately, along with a third thing it turned out to disable — the code that orders evaluators to match their speakers has never once run.
 
 - If your club has moved a standard role out of its usual category, the Word-of-the-Day cue follows the category rather than the name. A Grammarian filed under Leadership is not introduced with the functionaries, so the cue does not appear in that row either — the page no longer names a role it just declined to introduce.
+## [1.5.0.0] - 2026-08-04
+
+### Added
+
+- **Your club's logo now appears everywhere the agenda goes, not just on the printed page.** It shows on the projected deck's opening slide, in the downloadable PowerPoint, on the Word of the Day poster, and on the club role sheets — both the on-screen version and the five downloadable PDFs. Upload it once in club settings and every surface picks it up. #496
+
+### Changed
+
+- **The logo sits on a light backing wherever it appears.** The poster footer and the role-sheet header band are dark, so a dark logo on a transparent background — the most common thing a club has to hand — simply vanished on them, with no hint as to why. On the white printed pages the backing is invisible, so those look exactly as they did.
+- **Uploads are now capped at 2000 pixels on each side, alongside the existing 256 KB limit.** File size alone does not bound what an image costs to draw: an 8000×8000 logo can compress to comfortably under the size limit and still expand to roughly a quarter of a gigabyte when a role-sheet PDF is generated. A handful of people downloading role sheets at once was enough to take the server down for every club.
+
+### Fixed
+
+- **A square club crest no longer comes out stretched in the PowerPoint export.** The exporter was asked to preserve the shape, but the setting had no effect the way it was being called, so a square logo was smeared to roughly 4.7:1 in the downloaded file while looking correct on the projected slide.
+- **Archiving a club now removes its logo from the downloadable role sheets too.** Archiving is how a logo gets taken down, and it already worked everywhere else; the role-sheet PDF was reading the logo without that check.
+- **The "Download .pptx" button can no longer get stuck.** If fetching the logo stalled, the button stayed disabled behind a spinner with no way back short of reloading the page. It now gives up after five seconds and exports without the logo.
+- **Some valid JPEGs are no longer rejected as invalid images.** Encoders may pad a file with filler bytes before each internal marker, which is perfectly legal; the new size check misread those files and refused the upload.
+
+### Notes for this club
+
+- If you already uploaded a logo larger than 2000 pixels on a side, it will stop appearing on the role sheets until you replace it with a smaller one. The image itself is still stored, and every other surface is unaffected.
 
 ## [1.4.1.0] - 2026-08-03
 

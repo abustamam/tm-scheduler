@@ -7,7 +7,7 @@ import {
 	type MeetingForDeck,
 } from "./agenda-slides";
 import { TOASTMASTERS_DISCLAIMER } from "./brand";
-import { deckToPptx, pptxFileName } from "./deck-to-pptx";
+import { type ClubLogoAsset, deckToPptx, pptxFileName } from "./deck-to-pptx";
 
 function slot(over: Partial<AgendaSlot>): AgendaSlot {
 	return {
@@ -42,6 +42,7 @@ const club: ClubForDeck = {
 	district: "District 39",
 	timezone: "America/Chicago",
 	meetingSchedule: "2nd & 4th Thursday",
+	logoUrl: null,
 };
 
 // A representative full meeting exercising every slide kind.
@@ -230,5 +231,159 @@ describe("pptx via slideLayout", () => {
 		const text = slideText(pptx, idx);
 		expect(text).toContain("Word of the Day: “Momentum”");
 		expect(text).toContain("impetus gained by a moving object");
+	});
+});
+
+describe("club logo on the title splash (#496)", () => {
+	// A 1x1 transparent PNG. Only its shape matters here; the bytes are never
+	// decoded by these assertions — the intrinsic size is carried alongside on
+	// `ClubLogoAsset`, because that is how the real caller supplies it.
+	const LOGO_DATA_URI =
+		"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
+	/** A square crest — the shape that was being stretched to 4.7:1. */
+	const LOGO: ClubLogoAsset = {
+		dataUri: LOGO_DATA_URI,
+		width: 512,
+		height: 512,
+	};
+
+	/** Image objects pptxgenjs recorded on a built slide. */
+	function slideImages(pptx: PptxGenJS, i: number) {
+		// biome-ignore lint/suspicious/noExplicitAny: reaching into pptxgenjs internals, same as slideText above
+		const objects = (pptx as any).slides[i]._slideObjects as any[];
+		return objects.filter((o) => o.image);
+	}
+
+	const withLogo: ClubForDeck = { ...club, logoUrl: "/api/club/abc/logo?v=1" };
+
+	it("embeds the image on the title slide when bytes are supplied", () => {
+		const deck = buildSlideDeck({
+			meeting,
+			club: withLogo,
+			slots: fullSlots,
+			geIntroducesFunctionaries: false,
+		});
+		const pptx = deckToPptx(PptxGenJS, deck, LOGO);
+		expect(slideImages(pptx, 0)).toHaveLength(1);
+	});
+
+	// The whole reason the bytes are a separate argument: this runs in the
+	// browser and cannot read the database, so a caller that fails to fetch
+	// them must still get a working deck.
+	it("omits the image when the club has a logo but the bytes could not be fetched", () => {
+		const deck = buildSlideDeck({
+			meeting,
+			club: withLogo,
+			slots: fullSlots,
+			geIntroducesFunctionaries: false,
+		});
+		const pptx = deckToPptx(PptxGenJS, deck, null);
+		expect(slideImages(pptx, 0)).toHaveLength(0);
+	});
+
+	it("omits the image when the club has no logo, even if bytes are passed", () => {
+		const deck = buildSlideDeck({
+			meeting,
+			club,
+			slots: fullSlots,
+			geIntroducesFunctionaries: false,
+		});
+		const pptx = deckToPptx(PptxGenJS, deck, LOGO);
+		expect(slideImages(pptx, 0)).toHaveLength(0);
+	});
+
+	it("puts the logo ONLY on the title slide, not on every splash", () => {
+		const deck = buildSlideDeck({
+			meeting,
+			club: withLogo,
+			slots: fullSlots,
+			geIntroducesFunctionaries: false,
+		});
+		const pptx = deckToPptx(PptxGenJS, deck, LOGO);
+		// biome-ignore lint/suspicious/noExplicitAny: pptxgenjs internals
+		const total = ((pptx as any).slides as any[]).reduce(
+			(n, _s, i) => n + slideImages(pptx, i).length,
+			0,
+		);
+		expect(total).toBe(1);
+	});
+
+	it("keeps the club name on the title slide alongside the logo", () => {
+		const deck = buildSlideDeck({
+			meeting,
+			club: withLogo,
+			slots: fullSlots,
+			geIntroducesFunctionaries: false,
+		});
+		const pptx = deckToPptx(PptxGenJS, deck, LOGO);
+		expect(slideText(pptx, 0)).toContain("MCF Toastmasters Club");
+	});
+
+	// The four assertions above all count image OBJECTS, which is structurally
+	// blind to how the image is SHAPED — a stretched logo and a correct one are
+	// both "one image". The .pptx really did emit `<a:stretch/>` into a
+	// 4in x 0.85in frame, smearing a square crest to 4.7:1, while every one of
+	// those tests passed. These assert the geometry instead.
+	function titleImage(logo: ClubLogoAsset) {
+		const deck = buildSlideDeck({
+			meeting,
+			club: withLogo,
+			slots: fullSlots,
+			geIntroducesFunctionaries: false,
+		});
+		const [img] = slideImages(deckToPptx(PptxGenJS, deck, logo), 0);
+		return img.options as { x: number; y: number; w: number; h: number };
+	}
+
+	it("keeps a square crest square instead of stretching it to the box", () => {
+		const { w, h } = titleImage({ ...LOGO, width: 512, height: 512 });
+		expect(w).toBeCloseTo(h, 5);
+	});
+
+	it("fits a wide wordmark to the box without exceeding either dimension", () => {
+		const { w, h } = titleImage({ ...LOGO, width: 1200, height: 300 });
+		// 4:1 source stays 4:1, and is height-limited inside the 4 x 0.85 box.
+		expect(w / h).toBeCloseTo(4, 3);
+		expect(w).toBeLessThanOrEqual(4 + 1e-6);
+		expect(h).toBeLessThanOrEqual(0.85 + 1e-6);
+	});
+
+	it("scales a tall crest to the box height, not its width", () => {
+		const { w, h } = titleImage({ ...LOGO, width: 300, height: 1200 });
+		expect(h).toBeCloseTo(0.85, 5);
+		expect(w).toBeCloseTo(0.2125, 4);
+	});
+
+	it("centres the logo horizontally on the slide", () => {
+		const { x, w } = titleImage({ ...LOGO, width: 512, height: 512 });
+		// 13.33in slide width — equal margins either side.
+		expect(x + w / 2).toBeCloseTo(13.33 / 2, 5);
+	});
+
+	it("puts a light plate behind the logo so a dark one stays visible", () => {
+		const deck = buildSlideDeck({
+			meeting,
+			club: withLogo,
+			slots: fullSlots,
+			geIntroducesFunctionaries: false,
+		});
+		const pptx = deckToPptx(PptxGenJS, deck, LOGO);
+		// biome-ignore lint/suspicious/noExplicitAny: pptxgenjs internals
+		const objects = (pptx as any).slides[0]._slideObjects as any[];
+		const plate = objects.find(
+			(o) => o.options?.fill?.color === "FFFFFF" && o.options?.w,
+		);
+		expect(plate).toBeTruthy();
+		const [img] = slideImages(pptx, 0);
+		// The plate must fully contain the image, or it is not backing anything.
+		expect(plate.options.x).toBeLessThan(img.options.x);
+		expect(plate.options.y).toBeLessThan(img.options.y);
+		expect(plate.options.x + plate.options.w).toBeGreaterThan(
+			img.options.x + img.options.w,
+		);
+		expect(plate.options.y + plate.options.h).toBeGreaterThan(
+			img.options.y + img.options.h,
+		);
 	});
 });

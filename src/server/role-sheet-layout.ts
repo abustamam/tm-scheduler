@@ -14,7 +14,14 @@
  * the server-only render logic import it), so react-pdf never reaches the
  * browser bundle.
  */
-import { Document, Page, StyleSheet, Text, View } from "@react-pdf/renderer";
+import {
+	Document,
+	Image,
+	Page,
+	StyleSheet,
+	Text,
+	View,
+} from "@react-pdf/renderer";
 import { createElement as h, type ReactNode } from "react";
 import type { RoleSheetKey } from "../data/role-sheets";
 import { EVALUATION_TIMING_ASK } from "../lib/agenda-runsheet";
@@ -38,6 +45,15 @@ export {
 export interface RoleSheetFill {
 	/** Club name, shown in the header "Club:" field. */
 	club: string;
+	/**
+	 * The club's own logo as a base64 data URI, or absent.
+	 *
+	 * A data URI rather than the public `/api/club/:id/logo` URL because
+	 * `@react-pdf/renderer` runs server-side here and would have to make a real
+	 * HTTP request back into this app to resolve one — the bytes are already in
+	 * the database this process is talking to.
+	 */
+	logoDataUri?: string | null;
 	/** Formatted meeting date, shown in the header "Date:" field. */
 	date: string;
 	/**
@@ -334,7 +350,41 @@ function header(
 	return h(
 		View,
 		{},
-		h(Text, { style: s.brand }, "GAVELUP"),
+		// Brand line as a row so the club's own logo can sit opposite the product
+		// name rather than stacking and pushing the form fields down — these
+		// sheets are one page by design.
+		h(
+			View,
+			{
+				style: {
+					flexDirection: "row",
+					alignItems: "center",
+					justifyContent: "space-between",
+				},
+			},
+			h(Text, { style: s.brand }, "GAVELUP"),
+			// Same light plate the HTML surfaces put behind the logo (see
+			// `club-logo.tsx`), so the treatment is identical everywhere a club's
+			// image appears. This page is white, so here it is invisible — it is
+			// kept for consistency rather than effect, and so that a future dark
+			// header on this sheet does not silently swallow a dark logo.
+			fill?.logoDataUri
+				? h(
+						View,
+						{
+							style: {
+								backgroundColor: "#fff",
+								borderRadius: 3,
+								padding: 3,
+							},
+						},
+						h(Image, {
+							src: fill.logoDataUri,
+							style: { height: 26, maxWidth: 110, objectFit: "contain" },
+						}),
+					)
+				: null,
+		),
 		h(Text, { style: s.title }, title),
 		h(Text, { style: s.subtitle }, subtitle),
 		h(
