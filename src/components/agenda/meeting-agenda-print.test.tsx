@@ -28,7 +28,7 @@ const header: AgendaHeader = {
 	meetingNumber: null,
 };
 
-// One timed speaker beat (has green/amber/red marks) + one plain beat (no marks).
+// One timed speaker beat (has green/yellow/red marks) + one plain beat (no marks).
 const rows: TimelineRow[] = [
 	{
 		who: "Toastmaster",
@@ -59,11 +59,77 @@ function renderLayout(layout: AgendaLayout) {
 	);
 }
 
+describe("MeetingAgendaPrint prints yellow, never amber (#507)", () => {
+	// The rename shipped once already with the committed PDFs still printing
+	// "Amber", because every test asserted DATA and none asserted the printed
+	// words. These pin the words.
+	it("labels the timing signal Yellow", () => {
+		const { getByText, queryByText } = renderLayout("timing");
+		expect(getByText("Yellow")).toBeTruthy();
+		expect(queryByText(/Amber/)).toBeNull();
+	});
+
+	it("heads the marks column Green · Yellow · Red", () => {
+		const { getByText } = renderLayout("timing");
+		expect(getByText("Green · Yellow · Red")).toBeTruthy();
+	});
+});
+
+describe("MeetingAgendaPrint — a flex segment's marks are per-response (#507)", () => {
+	// The spacious layout renders marks as a muted `green–red` RANGE after the
+	// name, and a range in that position reads as "this row lasts this long".
+	// True for a speaker and an evaluator, whose marks describe their own
+	// duration. FALSE for the squishy Table Topics segment: its marks are one
+	// response (1:00–2:00) while the row is booked for the whole segment, so the
+	// range labelled a 20-minute segment "1:00–2:00".
+	const flexRows: TimelineRow[] = [
+		{
+			who: "Table Topics Master · Rasheed",
+			detail: "Impromptu topics using the Word of the Day",
+			minutes: 20,
+			flex: true,
+			marks: { green: 1, yellow: 1.5, red: 2 },
+			time: "7:20",
+		},
+		{
+			who: "Evaluator 1 · Sudheer",
+			detail: "Evaluate Jane Doe",
+			minutes: 3,
+			marks: { green: 2, yellow: 2.5, red: 3 },
+			time: "7:45",
+		},
+	];
+
+	function renderSpacious() {
+		return render(
+			<MeetingAgendaPrint
+				layout="spacious"
+				header={header}
+				roles={[]}
+				officers={[]}
+				explainers={[]}
+				rows={flexRows}
+			/>,
+		);
+	}
+
+	it("does not print the per-response window as the segment's duration", () => {
+		const { queryByText } = renderSpacious();
+		expect(queryByText(/1:00–2:00/)).toBeNull();
+	});
+
+	it("still prints the range for a NON-flex timed row", () => {
+		// The evaluator's 2:00–3:00 IS that row's duration, so it stays.
+		const { getByText } = renderSpacious();
+		expect(getByText(/2:00–3:00/)).toBeTruthy();
+	});
+});
+
 describe("MeetingAgendaPrint one-page timing", () => {
 	for (const layout of ["grid", "editorial"] as const) {
-		it(`shows the color-coded green/amber/red trio on the ${layout} one-pager`, () => {
+		it(`shows the color-coded green/yellow/red trio on the ${layout} one-pager`, () => {
 			renderLayout(layout);
-			// green = 4:00, amber = 5:00, red = 6:00 for the timed speaker beat.
+			// green = 4:00, yellow = 5:00, red = 6:00 for the timed speaker beat.
 			expect(screen.getByText("4:00")).toBeTruthy();
 			expect(screen.getByText("5:00")).toBeTruthy();
 			expect(screen.getByText("6:00")).toBeTruthy();

@@ -88,6 +88,38 @@ describe("qualifyingWindowForMarks", () => {
 	});
 });
 
+describe("firstQualifyingWindow teaches a SPEECH window (#507)", () => {
+	// #507 gave evaluations and Table Topics marks. Before it, "first marked
+	// row" and "first speech" were the same row, and the printed grace line
+	// silently started teaching "e.g. a 1:00–2:00 speech" — the Table Topics
+	// window — to any club whose speakers carry no min/max, which is the default.
+	it("skips non-speaker marked rows", () => {
+		const w = firstQualifyingWindow([
+			{
+				roleKey: "table_topics_master",
+				marks: { green: 1, yellow: 1.5, red: 2 },
+			},
+			{ roleKey: "evaluator", marks: { green: 2, yellow: 2.5, red: 3 } },
+			{ roleKey: "speaker", marks: { green: 5, yellow: 6, red: 7 } },
+		]);
+		expect(w?.assigned).toBe("5:00–7:00");
+	});
+
+	it("states the bare rule when no SPEECH has a window", () => {
+		// The club runs Table Topics and evaluations but nobody typed a speech
+		// range. Teaching a number here would teach the wrong one.
+		expect(
+			firstQualifyingWindow([
+				{
+					roleKey: "table_topics_master",
+					marks: { green: 1, yellow: 1.5, red: 2 },
+				},
+				{ roleKey: "speaker", marks: null },
+			]),
+		).toBeNull();
+	});
+});
+
 describe("firstQualifyingWindow", () => {
 	it("picks the first timed beat on the agenda", () => {
 		const w = firstQualifyingWindow([

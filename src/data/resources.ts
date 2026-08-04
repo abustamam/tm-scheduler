@@ -126,7 +126,7 @@ export const resources: Resource[] = [
 		icon: "clock",
 		tone: "palm",
 		title: "Timing color-card reference",
-		desc: "What green, amber, and red mean — plus the usual timing windows.",
+		desc: "What green, yellow, and red mean — plus the usual timing windows.",
 	},
 	{
 		slug: "glossary",

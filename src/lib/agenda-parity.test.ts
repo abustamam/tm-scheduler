@@ -1288,7 +1288,7 @@ const WINDOW_CASES: {
 	time: string;
 	/** What the printed run sheet books for the row. */
 	minutes: number;
-	/** Whether the Timer gets green·amber·red marks. */
+	/** Whether the Timer gets green·yellow·red marks. */
 	marks: boolean;
 }[] = [
 	{

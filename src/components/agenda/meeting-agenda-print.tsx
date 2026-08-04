@@ -16,7 +16,6 @@ import {
 } from "#/lib/timing-window";
 import { ClubLogo } from "./club-logo";
 import {
-	AMBER,
 	DarkFooter,
 	FitPage,
 	FOREST,
@@ -32,6 +31,7 @@ import {
 	SEAFOAM,
 	SERIF,
 	TEAL,
+	YELLOW,
 } from "./print-theme";
 
 export type AgendaLayout = "timing" | "spacious" | "editorial" | "grid";
@@ -88,9 +88,10 @@ type Props = {
  *  window (#357) so a mark and its window always read in the same units. */
 const mark = formatTimingClock;
 
-/** The green·amber·red timing marks for one beat, rendered inline and colored.
- *  Shared by the one-page layouts (editorial + grid) so their per-speaker
- *  timing reads the same as the detailed timing table's Green·Amber·Red column. */
+/** The green·yellow·red timing marks for one beat, rendered inline and colored.
+ *  Shared by the one-page layouts (editorial + grid) so their per-beat timing
+ *  reads the same as the detailed timing table's Green·Yellow·Red column. Since
+ *  #507 this renders on evaluator and Table Topics rows too, not only speakers. */
 function TimingTrio({
 	marks,
 	size = 10,
@@ -104,7 +105,12 @@ function TimingTrio({
 				{mark(marks.green)}
 			</span>
 			<span
-				style={{ fontSize: size, color: AMBER, fontWeight: 700, marginLeft: 6 }}
+				style={{
+					fontSize: size,
+					color: YELLOW,
+					fontWeight: 700,
+					marginLeft: 6,
+				}}
 			>
 				{mark(marks.yellow)}
 			</span>
@@ -117,7 +123,7 @@ function TimingTrio({
 	);
 }
 
-/** The compact green/amber/red key for the one-page layouts (the full "Timing
+/** The compact green/yellow/red key for the one-page layouts (the full "Timing
  *  Signals" callout only exists on the 2-page timing layout).
  *
  *  Second line (#357) states the 30-second grace period — the window the Timer
@@ -154,7 +160,7 @@ function TimingLegend({ rows }: { rows: TimelineRow[] }) {
 		>
 			<div style={{ display: "flex", gap: 14, alignItems: "center" }}>
 				{dot(GREEN, "Min reached")}
-				{dot(AMBER, "Approaching")}
+				{dot(YELLOW, "Approaching")}
 				{dot(RED, "Wrap up")}
 			</div>
 			<div
@@ -201,7 +207,7 @@ const ROLE_KEY_COLOR: Record<string, string> = {
 	table_topics_master: FOREST,
 	general_evaluator: LAGOON,
 	speaker: TEAL,
-	evaluator: AMBER,
+	evaluator: YELLOW,
 	toastmaster_of_the_day: LAGOON,
 };
 
@@ -222,7 +228,7 @@ function beatColor(row: RoleIdentified): string {
 	if (w.includes("table topics")) return FOREST;
 	if (w.includes("general evaluator")) return LAGOON;
 	if (w.startsWith("speaker")) return TEAL;
-	if (w.startsWith("evaluator")) return AMBER;
+	if (w.startsWith("evaluator")) return YELLOW;
 	if (w.includes("award") || w.startsWith("toastmaster")) return LAGOON;
 	return MUTED;
 }
@@ -473,7 +479,7 @@ function rowKey(r: TimelineRow, i: number): string {
 }
 
 /** The narrative run-of-show (editorial / spacious): a colored-spine list.
- *  `timingColors` swaps the muted min–max range for the colored green·amber·red
+ *  `timingColors` swaps the muted min–max range for the colored green·yellow·red
  *  trio (used by the one-page editorial layout). */
 function RunNarrative({
 	rows,
@@ -542,7 +548,15 @@ function RunNarrative({
 										<span style={{ marginLeft: 8 }}>
 											<TimingTrio marks={r.marks} size={lg ? 11 : 10} />
 										</span>
-									) : (
+									) : r.flex ? null : (
+										// A RANGE in this position reads as "this row lasts this
+										// long", which is only true when the marks describe the
+										// row's own duration. On the squishy Table Topics segment
+										// they describe ONE response (1:00–2:00) while the row is
+										// booked for the whole segment (5–25 min after applyFlex),
+										// so the range would label a 20-minute segment "1:00–2:00".
+										// The colour trio above is fine — it reads as timer-card
+										// signals, not a duration — so only this branch opts out.
 										<span style={{ fontWeight: 600, color: MUTED }}>
 											{" · "}
 											{mark(r.marks.green)}–{mark(r.marks.red)}
@@ -1549,8 +1563,8 @@ function TimingLayout({
 						<div style={{ display: "flex", gap: 22 }}>
 							<Signal color={GREEN} label="Green" text="minimum time reached" />
 							<Signal
-								color={AMBER}
-								label="Amber"
+								color={YELLOW}
+								label="Yellow"
 								text="approaching the target"
 							/>
 							<Signal color={RED} label="Red" text="maximum; please conclude" />
@@ -1703,7 +1717,7 @@ function TimingLayout({
 						<div style={{ flex: "none", width: 150 }}>Role</div>
 						<div style={{ flex: 1 }}>Segment</div>
 						<div style={{ flex: "none", width: 150, textAlign: "center" }}>
-							Green · Amber · Red
+							Green · Yellow · Red
 						</div>
 					</div>
 
@@ -1813,7 +1827,7 @@ function TimingLayout({
 												<span
 													style={{
 														fontSize: 10,
-														color: AMBER,
+														color: YELLOW,
 														fontWeight: 700,
 													}}
 												>
