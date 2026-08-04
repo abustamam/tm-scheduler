@@ -31,6 +31,7 @@ import {
 	graceSentence,
 	qualifyingWindow,
 } from "../lib/timing-window";
+import { WOD_LIMITS } from "../lib/wod-limits";
 
 // Re-export the client-safe registry so `scripts/build-role-sheets.ts` (which
 // renders every sheet) can pull the list + builder from one import.
@@ -40,8 +41,6 @@ export {
 	type RoleSheetKey,
 	roleSheetByKey,
 } from "../data/role-sheets";
-
-import { WOD_LIMITS } from "../lib/wod-limits";
 
 /** Per-meeting context used to pre-fill a sheet. Absent ⇒ blank template. */
 export interface RoleSheetFill {
@@ -758,11 +757,7 @@ const BUILDERS: Record<RoleSheetKey, (fill?: RoleSheetFill) => ReactNode> = {
 };
 
 /**
- * Build the react-pdf `Document` for a role sheet. With `fill`, the header and
- * speaker rows are pre-filled; without it, the blank template is produced.
- */
-/**
- * Hard caps on every user-controlled value this layout renders (#519).
+ * Hard caps on the user-controlled values this layout renders (#519).
  *
  * `renderRoleSheetPdf` is reached by an UNAUTHENTICATED public GET that renders
  * a PDF per request (`no-store`), inside the one Node process that serves
@@ -775,6 +770,13 @@ const BUILDERS: Record<RoleSheetKey, (fill?: RoleSheetFill) => ReactNode> = {
  * The caps are ~10x the largest value in real data (the longest `wod_definition`
  * on record is 50 characters, the longest club name 20, and no meeting has more
  * than 3 speaker slots), so nothing a club would actually type is truncated.
+ *
+ * `logoDataUri` is deliberately NOT capped here — it is bounded upstream by
+ * `isDecodeSafe`/`MAX_LOGO_DIMENSION` in `role-sheets-pdf-logic.ts`, which is a
+ * pixel bound rather than a string one. After this fix the logo decode is the
+ * dominant per-request cost on this route (~130-160ms, re-decoded every time
+ * because the route is `no-store`), so it is the next thing to look at if this
+ * endpoint ever needs a lower floor.
  *
  * This is the SECOND of two layers and the load-bearing one, mirroring
  * `isDecodeSafe` on the logo path: schema `.max()` stops new oversized values
@@ -796,13 +798,33 @@ export const RENDER_CAPS = {
 	note: WOD_LIMITS.definition,
 	/** One `Name — "Speech title"` label. */
 	speakerLabel: 160,
-	/** Pre-filled log rows. The log shows 10 by default; no meeting has 3+. */
-	speakerRows: 24,
+	/**
+	 * Pre-filled log rows — TEN, matching the number the log itself renders.
+	 *
+	 * Chosen against the one-page guarantee, not just against cost. `filledRows`
+	 * pads to 10 but does not truncate, so an 11th pre-filled speaker adds an
+	 * 11th row and spills the Timer's sheet onto a second page — breaking the
+	 * product promise v1.5.1.0 shipped. A larger cap (24 was the first choice)
+	 * bounds the DoS just as well and quietly permits that shape.
+	 *
+	 * No meeting on record books more than 3 prepared speakers, so this is still
+	 * 3x the observed maximum; beyond it the Timer writes the remaining items in
+	 * as they happen, which is how the log already works.
+	 */
+	speakerRows: 10,
 } as const;
 
-/** Truncate with an ellipsis, or return the value unchanged when it fits. */
+/**
+ * Truncate with an ellipsis, or return the value unchanged when it fits.
+ *
+ * Slices by CODE POINT, not UTF-16 code unit: `"…".slice()` on a string whose
+ * emoji straddles the cut emits a lone surrogate, which react-pdf renders as a
+ * tombstone glyph. Reachable through a speaker label, since speech titles and
+ * member names carry no write-side length cap.
+ */
 function cap(value: string, max: number): string {
-	return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
+	const points = [...value];
+	return points.length <= max ? value : `${points.slice(0, max - 1).join("")}…`;
 }
 
 /**
@@ -831,9 +853,10 @@ export function capFill(fill: RoleSheetFill): RoleSheetFill {
  * Build the react-pdf `Document` for a role sheet. With `fill`, the header and
  * speaker rows are pre-filled; without it, the blank template is produced.
  *
- * Every caller goes through `capFill` — the offline `build:role-sheets` script
- * as well as the public route — so the bound holds wherever a sheet is rendered
- * rather than only on the path someone remembered to guard.
+ * Any caller that passes a `fill` gets it capped here, so the bound lives at the
+ * single entry point rather than on whichever path someone remembered to guard.
+ * `scripts/build-role-sheets.ts` passes no fill at all (the blank template), so
+ * `capFill` correctly never runs there and the committed PDFs are unaffected.
  */
 export function buildRoleSheetDoc(
 	key: RoleSheetKey,

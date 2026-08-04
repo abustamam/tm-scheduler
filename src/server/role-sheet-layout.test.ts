@@ -671,9 +671,11 @@ describe("render caps bound what a public request can make us lay out (#519)", (
 		const many = Array.from({ length: 5_000 }, (_, i) => `Speaker ${i}`);
 		const capped = capFill(hostile({ speakers: many }));
 		expect(capped.speakers).toHaveLength(RENDER_CAPS.speakerRows);
-		// The last one that survives is the FIRST of the input, not an arbitrary
-		// slice — a Timer reading the log needs the meeting's own order.
+		// The survivors are the FIRST 24 of the input, in order — a Timer reading
+		// the log needs the meeting's own order, so a `.slice(-24)` regression
+		// that kept the TAIL has to fail here. Pin both ends.
 		expect(capped.speakers[0]).toBe("Speaker 0");
+		expect(capped.speakers.at(-1)).toBe("Speaker 9");
 	});
 
 	it("caps a single absurd speaker label", () => {
@@ -692,8 +694,9 @@ describe("render caps bound what a public request can make us lay out (#519)", (
 	});
 
 	it("leaves realistic values completely untouched", () => {
-		// The bound is only useful if it never fires in practice. These are the
-		// largest values in the real database, an order of magnitude under the cap.
+		// The bound is only useful if it never fires in practice. These are
+		// realistic values — a little above the largest on record (longest club
+		// name 20, longest note 50) and comfortably inside every cap.
 		const real = hostile({
 			club: "Mission City Flyers Toastmasters",
 			date: "Wednesday, July 22, 2026",
@@ -725,6 +728,33 @@ describe("render caps bound what a public request can make us lay out (#519)", (
 			buildRoleSheetDoc("grammarian", hostile({ wod: { word: "w", note } })),
 		).join(" ");
 		expect(words).not.toContain(note);
+	});
+
+	it("keeps every cap at a value that actually bounds the layout cost", () => {
+		// EVERY other assertion in this describe is stated relative to
+		// `RENDER_CAPS` itself — `toHaveLength(RENDER_CAPS.speakerRows)`,
+		// `<= RENDER_CAPS.club` — so all of them pass for ANY cap value. Setting
+		// `speakerRows: 5_000` leaves all 90 tests in this file green (verified by
+		// mutation) while one public request costs 129,433ms of blocked event
+		// loop; `club`/`date`/`speakerLabel` at 5_000_000 are green too. A test
+		// that only proves "capFill applies RENDER_CAPS" cannot see the number
+		// being wrong, and the number is the whole fix.
+		//
+		// Absolute ceilings instead, generous enough that no realistic value or
+		// future tweak trips them (~4x the shipped caps; the longest club name on
+		// record is 20 characters and no meeting has more than 3 speakers), and
+		// tight enough to stay on the flat part of the cost curve. Measured on the
+		// shipped layout: 24 rows of 160-character labels renders in 146ms against
+		// a 23ms baseline; 500 rows takes 2,087ms.
+		expect(RENDER_CAPS.club).toBeLessThanOrEqual(500);
+		expect(RENDER_CAPS.date).toBeLessThanOrEqual(240);
+		expect(RENDER_CAPS.speakerLabel).toBeLessThanOrEqual(640);
+		expect(RENDER_CAPS.speakerRows).toBeLessThanOrEqual(60);
+		// The two WOD caps are pinned by `wod-limits.test.ts`, which they derive
+		// from; restate them here so deriving them from something else later is
+		// still bounded at this end.
+		expect(RENDER_CAPS.word).toBeLessThanOrEqual(240);
+		expect(RENDER_CAPS.note).toBeLessThanOrEqual(2_000);
 	});
 
 	it("keeps the write cap inside the render cap, so nothing valid is elided", () => {

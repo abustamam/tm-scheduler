@@ -52,3 +52,37 @@ export const WOD_FIELDS = {
 	definition: z.string().trim().max(WOD_LIMITS.definition),
 	example: z.string().trim().max(WOD_LIMITS.example),
 } as const;
+
+/**
+ * The same caps for the UPDATE paths, which TRUNCATE instead of rejecting.
+ *
+ * A hard `.max()` is right on create: the value is new, and a validation error
+ * tells the author to shorten it. On an edit it is a trap. The edit-meeting
+ * form prefills all three fields from the stored row and resubmits all three on
+ * every save, so a single row written before this cap existed would fail
+ * `.parse()` and block saving the meeting's theme, location, notes and date
+ * too — an admin locked out of a meeting by text they cannot see is a worse
+ * outcome than a trimmed definition.
+ *
+ * The columns are unbounded `text` and this change ships no backfill, so such a
+ * row is possible. Dev data maxes at 50 characters and production was not
+ * checked, which is exactly why this path degrades instead of failing closed.
+ *
+ * Truncation is already the documented failure mode one layer down
+ * (`RENDER_CAPS`/`capFill`), so the two halves now agree: over-long text is
+ * shortened, never fatal.
+ */
+export const WOD_UPDATE_FIELDS = {
+	word: z
+		.string()
+		.trim()
+		.transform((v) => v.slice(0, WOD_LIMITS.word)),
+	definition: z
+		.string()
+		.trim()
+		.transform((v) => v.slice(0, WOD_LIMITS.definition)),
+	example: z
+		.string()
+		.trim()
+		.transform((v) => v.slice(0, WOD_LIMITS.example)),
+} as const;
