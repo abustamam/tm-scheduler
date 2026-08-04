@@ -41,8 +41,14 @@ export interface RoleSheetFill {
 	date: string;
 	/**
 	 * Ordered, display-ready speaker labels (assignee name, optionally with the
-	 * speech title). Pre-fills the first column of the sheets that have a speaker
-	 * table (Timer, Ah-Counter); blank rows remain for unfilled slots.
+	 * speech title). Pre-fills the first column of the **Timer's** log only;
+	 * blank rows remain for unfilled slots.
+	 *
+	 * The Ah-Counter's sheet used to take these too and no longer does (#509):
+	 * that role listens to everyone who takes the floor, so a pre-printed list of
+	 * the three booked speakers described the wrong job. The Timer's rows are
+	 * assignments with booked times to compare against, which is a different
+	 * thing, so they keep the fill.
 	 */
 	speakers: string[];
 	/** The meeting's Word of the Day, pre-filled on the Grammarian's sheet. */
@@ -82,11 +88,11 @@ const s = StyleSheet.create({
 		fontSize: 20,
 		fontFamily: "Helvetica-Bold",
 		lineHeight: 1.3,
-		marginTop: 4,
-		marginBottom: 6,
+		marginTop: 2,
+		marginBottom: 4,
 	},
 	subtitle: { fontSize: 10, color: C.soft },
-	metaRow: { flexDirection: "row", gap: 18, marginTop: 14 },
+	metaRow: { flexDirection: "row", gap: 18, marginTop: 10 },
 	wodRow: { flexDirection: "row", gap: 18 },
 	winnerRow: { flexDirection: "row", gap: 18, marginTop: 6 },
 	metaField: {
@@ -103,10 +109,10 @@ const s = StyleSheet.create({
 	sectionTitle: {
 		fontSize: 12,
 		fontFamily: "Helvetica-Bold",
-		marginTop: 14,
-		marginBottom: 6,
+		marginTop: 8,
+		marginBottom: 4,
 	},
-	note: { fontSize: 9, color: C.soft, marginBottom: 6 },
+	note: { fontSize: 9, color: C.soft, marginBottom: 4 },
 	thRow: {
 		flexDirection: "row",
 		borderTopWidth: 1,
@@ -116,14 +122,14 @@ const s = StyleSheet.create({
 	th: {
 		fontSize: 9,
 		fontFamily: "Helvetica-Bold",
-		padding: 5,
+		padding: 4,
 		borderRightWidth: 1,
 		borderColor: C.line,
 	},
 	tr: { flexDirection: "row" },
 	td: {
-		minHeight: 22,
-		padding: 5,
+		minHeight: 18,
+		padding: 4,
 		borderBottomWidth: 1,
 		borderRightWidth: 1,
 		borderColor: C.line,
@@ -132,10 +138,29 @@ const s = StyleSheet.create({
 	blankLine: {
 		borderBottomWidth: 1,
 		borderColor: C.line,
-		height: 20,
-		marginTop: 6,
+		height: 17,
+		marginTop: 5,
 	},
 	box: { borderWidth: 1, borderColor: C.line, padding: 10, marginTop: 8 },
+	// The "What to say" block (#509). A left rule rather than a full border, so it
+	// reads as speech pulled out of the page rather than another field to fill in
+	// — every other bordered box on these sheets is somewhere you WRITE.
+	scriptBox: {
+		borderLeftWidth: 3,
+		borderLeftColor: C.line,
+		paddingLeft: 10,
+		marginTop: 2,
+		marginBottom: 2,
+	},
+	/** The moment a line belongs to: "When you are introduced". */
+	cueWhen: {
+		fontSize: 8.5,
+		fontFamily: "Helvetica-Bold",
+		color: C.soft,
+		marginTop: 4,
+	},
+	/** The words to read aloud. Italic is the signal that this IS the speech. */
+	cueSay: { fontSize: 9, fontFamily: "Helvetica-Oblique", marginTop: 0.5 },
 	footer: {
 		position: "absolute",
 		left: 44,
@@ -218,6 +243,43 @@ function lines(n: number): ReactNode[] {
 	return Array.from({ length: n }, (_, i) =>
 		h(View, { key: i, style: s.blankLine }),
 	);
+}
+
+/** One scripted moment: when it happens, and the words to read (#509). */
+export interface ScriptCue {
+	/** The moment — "When you are introduced". */
+	when: string;
+	/** The words, written to be read aloud verbatim by someone who has never
+	 *  held the role. */
+	say: string;
+}
+
+/**
+ * The "What to say" block (#509).
+ *
+ * These sheets were logs: a grid to tally into, with no wording for the moment
+ * the holder is handed the floor. That asks a first-timer — the person most
+ * likely to be holding a functionary sheet — to already know the words.
+ *
+ * The lines are ORIGINAL, like everything else here: no Toastmasters
+ * International material (see the module header). They are deliberately plain
+ * and short, because they are meant to be read aloud by someone nervous, and
+ * they say what the printed agenda's cue says, so the run sheet and the sheet in
+ * the holder's hand never give one person two different instructions — the
+ * cross-surface agreement #509 asked for and `role-sheet-layout.test.ts` pins.
+ */
+function script(cues: ScriptCue[]): ReactNode[] {
+	return [
+		h(Text, { key: "script-t", style: s.sectionTitle }, "What to say"),
+		h(
+			View,
+			{ key: "script-b", style: s.scriptBox },
+			...cues.flatMap((c, i) => [
+				h(Text, { key: `w${i}`, style: s.cueWhen }, c.when),
+				h(Text, { key: `s${i}`, style: s.cueSay }, `“${c.say}”`),
+			]),
+		),
+	];
 }
 
 /** A header meta field: `label` with an optional filled `value`, else a blank
@@ -309,6 +371,7 @@ function timer(fill?: RoleSheetFill): ReactNode {
 		"Timer's log",
 		"Time each speaker and signal green / yellow / red at their windows.",
 		[
+			...script(SHEET_SCRIPTS.timer),
 			h(Text, { key: "a", style: s.sectionTitle }, "Standard timing windows"),
 			h(
 				Text,
@@ -358,12 +421,27 @@ function ahCounter(fill?: RoleSheetFill): ReactNode {
 		"Ah-Counter's log",
 		"Tally filler words and crutch phrases; report totals at the end.",
 		[
+			...script(SHEET_SCRIPTS["ah-counter"]),
+			// Deliberately NOT pre-filled with the booked speakers (#509), and the
+			// only sheet where that changed. The Ah-Counter listens to EVERYONE who
+			// takes the floor — Table Topics respondents, evaluators, the Toastmaster,
+			// the other functionaries — so three printed names invited three rows of
+			// tallies and quietly excluded most of the meeting. Blank rows and a
+			// column that says "Who spoke" ask the right question instead.
+			//
+			// The Timer's log keeps its pre-fill: those rows are ASSIGNMENTS with
+			// booked times to compare against, not an audit of who talked.
+			h(
+				Text,
+				{ key: "a-note", style: s.note },
+				"Everyone who speaks, not just the prepared speakers — Table Topics, evaluations, and your fellow functionaries all count.",
+			),
 			h(
 				View,
 				{ key: "a" },
 				table(
 					[
-						{ label: "Speaker", flex: 2 },
+						{ label: "Who spoke", flex: 2 },
 						{ label: "Um / Ah", flex: 1 },
 						{ label: "So", flex: 1 },
 						{ label: "Like", flex: 1 },
@@ -372,7 +450,7 @@ function ahCounter(fill?: RoleSheetFill): ReactNode {
 						{ label: "Other", flex: 1 },
 						{ label: "Total", flex: 1 },
 					],
-					filledRows(fill?.speakers ?? [], 12, 8),
+					blank(12, 8),
 				),
 			),
 		],
@@ -385,6 +463,7 @@ function grammarian(fill?: RoleSheetFill): ReactNode {
 		"Grammarian's log",
 		"Introduce the Word of the Day and note memorable language.",
 		[
+			...script(SHEET_SCRIPTS.grammarian),
 			h(Text, { key: "a", style: s.sectionTitle }, "Word of the Day"),
 			h(
 				View,
@@ -442,6 +521,7 @@ function ballotCounter(fill?: RoleSheetFill): ReactNode {
 		"Ballot / Vote Counter tally",
 		"Collect and tally the votes for each award.",
 		[
+			...script(SHEET_SCRIPTS["ballot-counter"]),
 			...award("Best Speaker"),
 			...award("Best Evaluator"),
 			...award("Best Table Topics"),
@@ -455,8 +535,9 @@ function generalEvaluator(fill?: RoleSheetFill): ReactNode {
 		"General Evaluator notes",
 		"Evaluate the meeting as a whole and lead the evaluation team.",
 		[
+			...script(SHEET_SCRIPTS["general-evaluator"]),
 			h(Text, { key: "a", style: s.sectionTitle }, "Meeting flow & timing"),
-			h(View, { key: "a-lines" }, ...lines(3)),
+			h(View, { key: "a-lines" }, ...lines(2)),
 			h(
 				Text,
 				{ key: "b", style: s.sectionTitle },
@@ -468,7 +549,7 @@ function generalEvaluator(fill?: RoleSheetFill): ReactNode {
 				{ key: "d", style: s.sectionTitle },
 				"Environment & Sergeant at Arms",
 			),
-			h(View, { key: "d-lines" }, ...lines(3)),
+			h(View, { key: "d-lines" }, ...lines(2)),
 			h(Text, { key: "e", style: s.sectionTitle }, "Overall commendations"),
 			h(View, { key: "e-lines" }, ...lines(3)),
 			h(Text, { key: "f", style: s.sectionTitle }, "Overall recommendations"),
@@ -477,6 +558,102 @@ function generalEvaluator(fill?: RoleSheetFill): ReactNode {
 		fill,
 	);
 }
+
+/**
+ * "green at 2:00, yellow at 2:30, red at 3:00" for a standard assignment.
+ *
+ * DERIVED from `STANDARD_TIMING_WINDOWS`, never transcribed — the same rule
+ * #357 set for the printed columns, and it matters more here: the Timer reads
+ * these numbers aloud while the table stating them sits on the same sheet, so a
+ * transcribed copy would have one page contradicting itself. Throws on an
+ * unknown assignment rather than defaulting, because a silent miss would put an
+ * invented time in someone's mouth.
+ */
+function signalSentence(assignment: string): string {
+	const w = STANDARD_TIMING_WINDOWS.find((x) => x.assignment === assignment);
+	if (w == null)
+		throw new Error(`role-sheet script: no standard window for ${assignment}`);
+	return `green at ${formatTimingClock(w.min)}, yellow at ${formatTimingClock(
+		(w.min + w.max) / 2,
+	)}, red at ${formatTimingClock(w.max)}`;
+}
+
+/**
+ * What each sheet's holder says, and when (#509).
+ *
+ * Exported so the tests can pin each line against the agenda cue it has to
+ * agree with (#508). The pairs are the point: a Timer told one thing by the run
+ * sheet and another by the paper in their hand is worse off than one told
+ * nothing.
+ */
+export const SHEET_SCRIPTS: Record<RoleSheetKey, ScriptCue[]> = {
+	timer: [
+		{
+			when: "When you are introduced with the other functionaries",
+			say: "I'm your Timer. I show a green card at your minimum time, yellow at the midpoint, and red at your maximum. When you see red, please begin to close.",
+		},
+		{
+			// One cue, not two. #508 has the Table Topics Master and the General
+			// Evaluator each ask this at their own segment, but the Timer is looking
+			// at ONE sheet in the moment and wants one place to read from — and the
+			// merged form is what kept this sheet to a single page.
+			when: "When the Table Topics Master or the General Evaluator asks you to explain the timing",
+			say: `For Table Topics: ${signalSentence("Table Topics")}. For each evaluation: ${signalSentence("Evaluation")}.`,
+		},
+		{
+			when: "When you are called for your report",
+			say: "Here are the times. Anyone outside their qualifying window is not eligible for the vote.",
+		},
+	],
+	"ah-counter": [
+		{
+			when: "When you are introduced with the other functionaries",
+			say: "I'm your Ah-Counter. I listen for filler words — um, ah, so, like, you know — and for repeated words, from everyone who speaks today, not just our prepared speakers.",
+		},
+		{
+			when: "When you are called for your report",
+			say: "Here is what I counted. This is not a criticism — a pause is stronger than a filler, and noticing them is how we lose them.",
+		},
+	],
+	grammarian: [
+		{
+			when: "When you are introduced, this is your moment to give the Word of the Day",
+			say: "I'm your Grammarian. Our Word of the Day is on the board — please use it when you speak today. I'll also be listening for language worth repeating.",
+		},
+		{
+			when: "When you are called for your report",
+			say: "Here is who used the Word of the Day, and some of the language that stood out.",
+		},
+	],
+	"ballot-counter": [
+		{
+			when: "When you are introduced with the other functionaries",
+			say: "I'm your Ballot Counter. I'll collect your ballots after each voting segment — please write clearly, and hand them to me rather than calling out a name.",
+		},
+		{
+			when: "When you hand the results back",
+			say: "The results are counted and sealed. I'll pass them to the Toastmaster for the awards.",
+		},
+	],
+	"general-evaluator": [
+		{
+			when: "When you take the room for the evaluation segment",
+			say: "Thank you. I'm your General Evaluator. I lead the evaluation team, and at the end I'll evaluate the meeting as a whole.",
+		},
+		{
+			when: "When you introduce the speech evaluators",
+			say: "Our evaluators will each give a spoken evaluation. Timer, would you explain the timing for an evaluation?",
+		},
+		{
+			when: "When you call for the functionary reports",
+			say: "Now the reports from our functionaries.",
+		},
+		{
+			when: "When you give the overall evaluation",
+			say: "Here is how the meeting ran overall — what worked, and one thing we can each take into next time.",
+		},
+	],
+};
 
 const BUILDERS: Record<RoleSheetKey, (fill?: RoleSheetFill) => ReactNode> = {
 	timer,
