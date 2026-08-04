@@ -17,12 +17,22 @@ import { WOD_FIELDS, WOD_LIMITS, WOD_UPDATE_FIELDS } from "./wod-limits";
 
 describe("Word-of-the-Day write caps (#519)", () => {
 	const cases = [
-		["word", WOD_FIELDS.word, WOD_LIMITS.word],
-		["definition", WOD_FIELDS.definition, WOD_LIMITS.definition],
-		["example", WOD_FIELDS.example, WOD_LIMITS.example],
+		["word", WOD_FIELDS.word, WOD_UPDATE_FIELDS.word, WOD_LIMITS.word],
+		[
+			"definition",
+			WOD_FIELDS.definition,
+			WOD_UPDATE_FIELDS.definition,
+			WOD_LIMITS.definition,
+		],
+		[
+			"example",
+			WOD_FIELDS.example,
+			WOD_UPDATE_FIELDS.example,
+			WOD_LIMITS.example,
+		],
 	] as const;
 
-	for (const [name, field, limit] of cases) {
+	for (const [name, field, updateField, limit] of cases) {
 		it(`accepts a ${name} exactly at the cap`, () => {
 			// Boundary on the ALLOWED side: an off-by-one that rejected the limit
 			// itself would be invisible to a test that only tries obvious values.
@@ -47,6 +57,27 @@ describe("Word-of-the-Day write caps (#519)", () => {
 			const parsed = field.safeParse(padded);
 			expect(parsed.success).toBe(true);
 			expect(parsed.success && parsed.data.length).toBe(limit);
+		});
+
+		// The UPDATE family, per field. The only behavioural assertion on it below
+		// runs `definition` alone, so deleting the `.transform` from `word` and
+		// `example` — leaving them bare `z.string().trim()` — left the FULL suite
+		// green (3,023 tests, verified by mutation) with the write cap gone from
+		// two of the three fields. `wordOfTheDay` is the one of those two that
+		// reaches the PDF, and the public Grammarian edit path (#296) writes it.
+		// The source guard cannot see this: it reads `meetings.ts`, which still
+		// says `WOD_UPDATE_FIELDS.word` whatever that validator does.
+		it(`truncates a ${name} one character over the cap on the update paths`, () => {
+			const parsed = updateField.safeParse("a".repeat(limit + 1));
+			expect(parsed.success).toBe(true);
+			expect(parsed.success && parsed.data.length).toBe(limit);
+		});
+
+		it(`leaves a ${name} exactly at the cap untouched on the update paths`, () => {
+			// The boundary on the other side: an off-by-one that shaved a character
+			// off every legal value would be invisible to an over-cap test alone.
+			const exact = "a".repeat(limit);
+			expect(updateField.parse(exact)).toBe(exact);
 		});
 	}
 

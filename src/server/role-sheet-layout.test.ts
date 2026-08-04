@@ -675,7 +675,16 @@ describe("render caps bound what a public request can make us lay out (#519)", (
 		// the log needs the meeting's own order, so a `.slice(-24)` regression
 		// that kept the TAIL has to fail here. Pin both ends.
 		expect(capped.speakers[0]).toBe("Speaker 0");
-		expect(capped.speakers.at(-1)).toBe("Speaker 9");
+		expect(capped.speakers.at(-1)).toBe("Speaker 7");
+	});
+
+	it("keeps the row cap inside the one-page guarantee, logo included", () => {
+		// The cap exists to bound cost, but it must not permit a shape that breaks
+		// the one-page promise. A club logo (#496) costs about two rows, so the
+		// binding case is WITH a logo — measured: 8 holds one page, 9 spills.
+		// Two earlier values (24, then 10) were set without this case and both
+		// were wrong. Assert the relationship, not just the number.
+		expect(RENDER_CAPS.speakerRows).toBeLessThanOrEqual(8);
 	});
 
 	it("caps a single absurd speaker label", () => {
@@ -693,6 +702,46 @@ describe("render caps bound what a public request can make us lay out (#519)", (
 		expect(capped.date.length).toBeLessThanOrEqual(RENDER_CAPS.date);
 	});
 
+	it("caps the Word of the Day itself, not only its note", () => {
+		// Every other WOD assertion here passes `word: "x"` and pushes the hostile
+		// payload through `note`, so `word: fill.wod.word` — the cap deleted from
+		// the word alone — left the FULL suite green (3,023 tests, verified by
+		// mutation). The word is not the harmless half: `metaField` clamps it to
+		// one line so it costs no PAGES, but react-pdf still measures every glyph
+		// synchronously, which is the cost #519 is about. It is also the field the
+		// public Grammarian edit path (#296) writes, and the only WOD value that
+		// reaches this document by any route other than the note.
+		const capped = capFill(
+			hostile({ wod: { word: "w".repeat(50_000), note: "fine" } }),
+		);
+		expect(capped.wod?.word.length).toBeLessThanOrEqual(RENDER_CAPS.word);
+		expect(capped.wod?.note).toBe("fine");
+	});
+
+	it("truncates on a code-point boundary, never mid-surrogate-pair", () => {
+		// `cap` slices `[...value]`, not `value.slice()`, and the reason is stated
+		// in its doc comment — a UTF-16 slice through an astral character emits a
+		// LONE SURROGATE, which react-pdf renders as a tombstone. Nothing asserted
+		// it: swapping `[...value]` for `value.split("")` left the full suite
+		// green. Reachable through a speaker label, since member names and speech
+		// titles carry no write-side cap and emoji in a speech title are ordinary.
+		//
+		// The fixture has to put the cut INSIDE a pair or it proves nothing: `cap`
+		// keeps `max - 1` units and appends "…", so the ASCII run is two short of
+		// the cap and the emoji run starts exactly on the unit a UTF-16 slice would
+		// bisect. A first attempt padded to the full cap, which lands the cut in
+		// the ASCII prefix — both implementations agree there, and the mutation
+		// survived.
+		const label = `${"a".repeat(RENDER_CAPS.speakerLabel - 2)}${"🎤".repeat(20)}`;
+		const [capped] = capFill(hostile({ speakers: [label] })).speakers;
+		// No unpaired surrogate anywhere in the result.
+		expect(capped).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+		expect(capped).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+		// ...and the cap is still measured in code points, so an emoji-heavy label
+		// is bounded by the same count a plain one is.
+		expect([...capped].length).toBeLessThanOrEqual(RENDER_CAPS.speakerLabel);
+	});
+
 	it("leaves realistic values completely untouched", () => {
 		// The bound is only useful if it never fires in practice. These are
 		// realistic values — a little above the largest on record (longest club
@@ -707,6 +756,31 @@ describe("render caps bound what a public request can make us lay out (#519)", (
 			},
 		});
 		expect(capFill(real)).toEqual(real);
+	});
+
+	it("accounts for every field of the fill, so a new one cannot slip in uncapped", () => {
+		// `capFill` spreads `...fill` and then overrides four keys, so a FIFTH key
+		// added to `RoleSheetFill` later reaches react-pdf uncapped and nothing
+		// else in this file notices — every other assertion is written against the
+		// fields that exist today. This is the canary. `Required<RoleSheetFill>`
+		// makes `tsc` demand the new key here, and the key comparison then forces
+		// whoever added it to classify it rather than default to "unbounded".
+		//
+		// `logoDataUri` is exempt on purpose: it is bounded upstream by
+		// `isDecodeSafe`/`MAX_LOGO_DIMENSION`, a pixel bound rather than a string
+		// one, and truncating base64 here would only corrupt a valid image.
+		const CAPPED = ["club", "date", "speakers", "wod"];
+		const BOUNDED_ELSEWHERE = ["logoDataUri"];
+		const every: Required<RoleSheetFill> = {
+			club: "Harborlight Toastmasters",
+			date: "Jul 22",
+			logoDataUri: null,
+			speakers: ["Ann"],
+			wod: { word: "Cumbersomeness", note: "clumsy or unwieldy" },
+		};
+		expect(Object.keys(capFill(every)).sort()).toEqual(
+			[...CAPPED, ...BOUNDED_ELSEWHERE].sort(),
+		);
 	});
 
 	it("never mutates the caller's fill", () => {

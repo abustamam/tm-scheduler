@@ -799,19 +799,28 @@ export const RENDER_CAPS = {
 	/** One `Name — "Speech title"` label. */
 	speakerLabel: 160,
 	/**
-	 * Pre-filled log rows — TEN, matching the number the log itself renders.
+	 * Pre-filled log rows — EIGHT, the largest value that holds the one-page
+	 * guarantee in BOTH the logo and no-logo cases.
 	 *
-	 * Chosen against the one-page guarantee, not just against cost. `filledRows`
-	 * pads to 10 but does not truncate, so an 11th pre-filled speaker adds an
-	 * 11th row and spills the Timer's sheet onto a second page — breaking the
-	 * product promise v1.5.1.0 shipped. A larger cap (24 was the first choice)
-	 * bounds the DoS just as well and quietly permits that shape.
+	 * Chosen against that guarantee, not just against cost. `filledRows` pads to
+	 * 10 but does not truncate, so each pre-filled speaker past the fold adds a
+	 * row. Measured on the Timer's sheet, which is the densest of the five:
 	 *
-	 * No meeting on record books more than 3 prepared speakers, so this is still
-	 * 3x the observed maximum; beyond it the Timer writes the remaining items in
-	 * as they happen, which is how the log already works.
+	 *   speakers   no logo   with logo
+	 *      8         1 page    1 page
+	 *      9         1 page    2 pages   <- the club logo (#496) costs ~2 rows
+	 *     10         1 page    2 pages
+	 *
+	 * Two earlier values were wrong for the same reason, each caught one review
+	 * later: 24 (chosen for cost alone) and 10 (chosen against the no-logo
+	 * measurement only). The logo is not an edge case — it is a shipped feature
+	 * any club can turn on, so the bound has to hold with it present.
+	 *
+	 * No meeting on record books more than 3 prepared speakers, so 8 is still
+	 * ~2.7x the observed maximum; beyond it the Timer writes the remaining items
+	 * in as they happen, which is how the log already works.
 	 */
-	speakerRows: 10,
+	speakerRows: 8,
 } as const;
 
 /**
