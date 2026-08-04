@@ -9,6 +9,7 @@ import { renderToBuffer } from "@react-pdf/renderer";
 import { describe, expect, it } from "vitest";
 import { ROLE_SHEETS } from "#/data/role-sheets";
 import { EVALUATION_MARKS, TABLE_TOPICS_MARKS } from "#/lib/agenda-runsheet";
+import { formatTimingClock } from "#/lib/timing-window";
 import {
 	buildRoleSheetDoc,
 	type RoleSheetFill,
@@ -70,25 +71,19 @@ describe("agenda marks agree with the Timer sheet's published windows (#507)", (
 	const published = (assignment: string) =>
 		rows.find((r) => r[0] === assignment);
 
-	const clock = (m: number) => {
-		const mins = Math.floor(m);
-		const secs = Math.round((m - mins) * 60);
-		return `${mins}:${String(secs).padStart(2, "0")}`;
-	};
-
 	it("evaluation", () => {
 		expect(published("Evaluation")?.slice(1, 4)).toEqual([
-			clock(EVALUATION_MARKS.green),
-			clock(EVALUATION_MARKS.yellow),
-			clock(EVALUATION_MARKS.red),
+			formatTimingClock(EVALUATION_MARKS.green),
+			formatTimingClock(EVALUATION_MARKS.yellow),
+			formatTimingClock(EVALUATION_MARKS.red),
 		]);
 	});
 
 	it("table topics", () => {
 		expect(published("Table Topics")?.slice(1, 4)).toEqual([
-			clock(TABLE_TOPICS_MARKS.green),
-			clock(TABLE_TOPICS_MARKS.yellow),
-			clock(TABLE_TOPICS_MARKS.red),
+			formatTimingClock(TABLE_TOPICS_MARKS.green),
+			formatTimingClock(TABLE_TOPICS_MARKS.yellow),
+			formatTimingClock(TABLE_TOPICS_MARKS.red),
 		]);
 	});
 });

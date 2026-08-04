@@ -630,8 +630,21 @@ describe("timing marks beyond the speaker (#507)", () => {
 
 	it("leaves hand-off and functionary rows unmarked", () => {
 		const rows = expandRunSheet(sixRoleClub());
-		expect(rows.find((r) => r.handoff)?.marks ?? null).toBeNull();
-		expect(rows.find((r) => r.roleKey === "timer")?.marks ?? null).toBeNull();
+		// EVERY hand-off, not just the first — sixRoleClub emits four, and
+		// checking one would miss a change that marked the other three. The
+		// `?? null` is gone on purpose: it made the assertion pass vacuously if
+		// hand-off rows ever stopped being emitted at all.
+		const handoffs = rows.filter((r) => r.handoff);
+		expect(handoffs.length).toBeGreaterThan(1);
+		for (const row of handoffs) expect(row.marks).toBeNull();
+		// A functionary-facing row that actually EXISTS. `roleKey === "timer"`
+		// matched nothing — no beat is owned by the Timer, it only appears in
+		// `requiresAnyOf`/`fallbacks` — so that assertion could never fail.
+		const reports = rows.find((r) =>
+			r.detail.startsWith("Calls for the functionary reports"),
+		);
+		expect(reports).toBeDefined();
+		expect(reports?.marks).toBeNull();
 	});
 
 	it("still reads a speaker's marks off their own speech, not a constant", () => {

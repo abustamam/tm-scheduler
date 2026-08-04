@@ -18,7 +18,7 @@ roles at the bottom.
 
 ## Functionary roles
 
-- **Timer** — times every speaker and signals green / amber / red as they reach their timing windows.
+- **Timer** — times every speaker and signals green / yellow / red as they reach their timing windows.
 - **Ah-Counter** — notes filler words ("um", "ah", "so", "like") and crutch phrases to help members speak more cleanly.
 - **Grammarian** — introduces the Word of the Day and notes memorable language, both good and improvable.
 - **Ballot / Vote Counter** — collects and tallies the votes for the meeting's awards.

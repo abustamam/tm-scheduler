@@ -83,15 +83,25 @@ export function qualifyingWindowForMarks(
 }
 
 /**
- * The window a printed agenda should teach: the first timed beat's. Only
- * speaker beats carry marks, so this is the first prepared speech — the
- * segment the grace rule matters most for, and a real number off this agenda
- * rather than a hardcoded example.
+ * The window a printed agenda should teach: the first SPEECH's — the segment
+ * the grace rule matters most for, and a real number off this agenda rather
+ * than a hardcoded example.
+ *
+ * The speaker filter used to be implicit: only speaker beats carried marks, so
+ * "first marked row" and "first speech" were the same row. #507 gave evaluations
+ * and Table Topics marks too, and the implicit version then taught the wrong
+ * window — a club whose speakers have no recorded min/max (the AgendaSlot
+ * default) got "e.g. a 1:00–2:00 speech qualifies 0:30–2:30", which is the Table
+ * Topics window presented as a speech. A Timer reading that would disqualify a
+ * prepared speech that actually qualifies, which is the exact error #357 exists
+ * to prevent. Rows without a `roleKey` are treated as speeches so the older
+ * call shape keeps working (event rows have a null roleKey and no marks).
  */
 export function firstQualifyingWindow(
-	rows: readonly { marks: TimingMarks | null }[],
+	rows: readonly { marks: TimingMarks | null; roleKey?: string | null }[],
 ): QualifyingWindow | null {
 	for (const row of rows) {
+		if (row.roleKey != null && row.roleKey !== "speaker") continue;
 		const w = qualifyingWindowForMarks(row.marks);
 		if (w) return w;
 	}

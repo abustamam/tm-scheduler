@@ -16,7 +16,6 @@ import {
 	graceSentence,
 } from "#/lib/timing-window";
 import {
-	AMBER,
 	DarkFooter,
 	FitPage,
 	FOREST,
@@ -32,6 +31,7 @@ import {
 	SEAFOAM,
 	SERIF,
 	TEAL,
+	YELLOW,
 } from "./print-theme";
 
 export type AgendaLayout = "timing" | "spacious" | "editorial" | "grid";
@@ -88,8 +88,9 @@ type Props = {
 const mark = formatTimingClock;
 
 /** The green·yellow·red timing marks for one beat, rendered inline and colored.
- *  Shared by the one-page layouts (editorial + grid) so their per-speaker
- *  timing reads the same as the detailed timing table's Green·Amber·Red column. */
+ *  Shared by the one-page layouts (editorial + grid) so their per-beat timing
+ *  reads the same as the detailed timing table's Green·Yellow·Red column. Since
+ *  #507 this renders on evaluator and Table Topics rows too, not only speakers. */
 function TimingTrio({
 	marks,
 	size = 10,
@@ -103,7 +104,12 @@ function TimingTrio({
 				{mark(marks.green)}
 			</span>
 			<span
-				style={{ fontSize: size, color: AMBER, fontWeight: 700, marginLeft: 6 }}
+				style={{
+					fontSize: size,
+					color: YELLOW,
+					fontWeight: 700,
+					marginLeft: 6,
+				}}
 			>
 				{mark(marks.yellow)}
 			</span>
@@ -153,7 +159,7 @@ function TimingLegend({ rows }: { rows: TimelineRow[] }) {
 		>
 			<div style={{ display: "flex", gap: 14, alignItems: "center" }}>
 				{dot(GREEN, "Min reached")}
-				{dot(AMBER, "Approaching")}
+				{dot(YELLOW, "Approaching")}
 				{dot(RED, "Wrap up")}
 			</div>
 			<div
@@ -200,7 +206,7 @@ const ROLE_KEY_COLOR: Record<string, string> = {
 	table_topics_master: FOREST,
 	general_evaluator: LAGOON,
 	speaker: TEAL,
-	evaluator: AMBER,
+	evaluator: YELLOW,
 	toastmaster_of_the_day: LAGOON,
 };
 
@@ -221,7 +227,7 @@ function beatColor(row: RoleIdentified): string {
 	if (w.includes("table topics")) return FOREST;
 	if (w.includes("general evaluator")) return LAGOON;
 	if (w.startsWith("speaker")) return TEAL;
-	if (w.startsWith("evaluator")) return AMBER;
+	if (w.startsWith("evaluator")) return YELLOW;
 	if (w.includes("award") || w.startsWith("toastmaster")) return LAGOON;
 	return MUTED;
 }
@@ -1544,8 +1550,8 @@ function TimingLayout({
 						<div style={{ display: "flex", gap: 22 }}>
 							<Signal color={GREEN} label="Green" text="minimum time reached" />
 							<Signal
-								color={AMBER}
-								label="Amber"
+								color={YELLOW}
+								label="Yellow"
 								text="approaching the target"
 							/>
 							<Signal color={RED} label="Red" text="maximum; please conclude" />
@@ -1698,7 +1704,7 @@ function TimingLayout({
 						<div style={{ flex: "none", width: 150 }}>Role</div>
 						<div style={{ flex: 1 }}>Segment</div>
 						<div style={{ flex: "none", width: 150, textAlign: "center" }}>
-							Green · Amber · Red
+							Green · Yellow · Red
 						</div>
 					</div>
 
@@ -1808,7 +1814,7 @@ function TimingLayout({
 												<span
 													style={{
 														fontSize: 10,
-														color: AMBER,
+														color: YELLOW,
 														fontWeight: 700,
 													}}
 												>
