@@ -6,7 +6,6 @@
 // slots, officers, and run-of-show. The club's district, mission, and
 // meeting-schedule are optional free-text profile fields: each renders in its
 // designated slot when set and is omitted gracefully (no empty label) when not.
-// Logo upload remains a tracked follow-up (#83).
 import type { TimelineRow } from "#/lib/agenda-timing";
 import { announcementLines } from "#/lib/announcement-lines";
 import {
@@ -15,6 +14,7 @@ import {
 	graceNote,
 	graceSentence,
 } from "#/lib/timing-window";
+import { ClubLogo } from "./club-logo";
 import {
 	DarkFooter,
 	FitPage,
@@ -38,6 +38,7 @@ export type AgendaLayout = "timing" | "spacious" | "editorial" | "grid";
 
 export type AgendaHeader = {
 	clubName: string;
+	logoUrl: string | null; // already versioned; null ⇒ render nothing
 	clubNumber: string | null;
 	district: string | null; // "District 39"
 	mission: string | null; // free text, may be multi-line
@@ -594,6 +595,7 @@ function HeaderBand({ header }: { header: AgendaHeader }) {
 			}}
 		>
 			<div style={{ display: "flex", alignItems: "center", gap: 18 }}>
+				<ClubLogo logoUrl={header.logoUrl} />
 				<div style={{ flex: 1, minWidth: 0 }}>
 					<div
 						style={{
@@ -891,6 +893,7 @@ function GridLayout({
 					borderBottom: `3px solid ${TEAL}`,
 				}}
 			>
+				<ClubLogo logoUrl={header.logoUrl} />
 				<div style={{ flex: 1, minWidth: 0 }}>
 					<div
 						style={{
@@ -1208,6 +1211,7 @@ function SpaciousLayout({
 					}}
 				>
 					<div style={{ display: "flex", alignItems: "center", gap: 20 }}>
+						<ClubLogo logoUrl={header.logoUrl} />
 						<div style={{ flex: 1, minWidth: 0 }}>
 							<div
 								style={{
@@ -1462,6 +1466,7 @@ function TimingLayout({
 						borderBottom: `3px solid ${TEAL}`,
 					}}
 				>
+					<ClubLogo logoUrl={header.logoUrl} />
 					<div style={{ flex: 1, minWidth: 0 }}>
 						<div
 							style={{

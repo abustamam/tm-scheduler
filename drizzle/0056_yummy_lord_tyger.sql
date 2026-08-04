@@ -1,0 +1,2 @@
+ALTER TYPE "public"."activity_action" ADD VALUE 'club_logo_set' BEFORE 'outreach_set';--> statement-breakpoint
+ALTER TYPE "public"."activity_action" ADD VALUE 'club_logo_removed' BEFORE 'outreach_set';

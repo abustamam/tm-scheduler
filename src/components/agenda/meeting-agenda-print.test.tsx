@@ -13,6 +13,7 @@ afterEach(cleanup);
 
 const header: AgendaHeader = {
 	clubName: "Downtown Toastmasters",
+	logoUrl: null,
 	clubNumber: "1234",
 	district: "District 5",
 	mission: null,
@@ -652,5 +653,64 @@ describe("spine colour follows the ROLE, not its name (#445)", () => {
 		const eventRow = (who: string) =>
 			spineOf(speechRow({ who, roleKey: undefined, detail: "Call to Order" }));
 		expect(eventRow("President")).not.toBe(eventRow("Sergeant-at-Arms"));
+	});
+});
+
+// #495 — the club's own uploaded logo, left of the club name on all four
+// print header sites (never on TimingLayout's running footer — that one
+// stays text-only on purpose).
+describe("MeetingAgendaPrint club logo", () => {
+	const LOGO_URL = "/api/club/abc-123/logo?v=1690000000000";
+
+	function renderWithLogo(layout: AgendaLayout, logoUrl: string | null) {
+		return render(
+			<MeetingAgendaPrint
+				layout={layout}
+				header={{ ...header, logoUrl }}
+				roles={[{ label: "Toastmaster", name: "Lee P." }]}
+				officers={[]}
+				explainers={[]}
+				rows={rows}
+			/>,
+		);
+	}
+
+	for (const layout of ["grid", "editorial", "spacious", "timing"] as const) {
+		it(`${layout}: renders the club's own logo, immediately left of the club name, in a vertically-centered row`, () => {
+			const { container } = renderWithLogo(layout, LOGO_URL);
+			// Identified by ITS OWN url, not just "an img exists" — a stale/wrong
+			// logoUrl plumbed through would still satisfy a bare presence check.
+			const img = container.querySelector("img");
+			expect(img).not.toBeNull();
+			expect(img?.getAttribute("src")).toBe(LOGO_URL);
+			// Decorative — never names a mark in text a screen reader announces.
+			expect(img?.getAttribute("alt")).toBe("");
+			// "Left of the club name, vertically centered": the image's own flex
+			// row centers its children, and the club-name block is the very next
+			// sibling — not merely present somewhere on the page.
+			const row = img?.parentElement as HTMLElement;
+			expect(row.style.alignItems).toBe("center");
+			expect(img?.nextElementSibling?.textContent).toContain(header.clubName);
+		});
+
+		it(`${layout}: renders no image and no gap when the club has no logo`, () => {
+			const { container } = renderWithLogo(layout, null);
+			expect(container.querySelector("img")).toBeNull();
+			// Club name still renders exactly where it always has — no leftover
+			// spacer from a null-rendering ClubLogo. `getAllByText`, not
+			// `getByText`: TimingLayout's page-2 running footer also names the
+			// club (deliberately, per #495 — that site keeps no logo), so a
+			// single-match query is unsound on that one layout.
+			expect(screen.getAllByText(header.clubName).length).toBeGreaterThan(0);
+		});
+	}
+
+	// TimingLayout's running footer (page 2) names the club again — pinned as
+	// the ONE header-adjacent site that must NOT gain a logo (an image there
+	// fights the running-footer layout; deliberate, not an oversight).
+	it("timing: the page-2 running footer keeps no image even when the club has a logo", () => {
+		const { container } = renderWithLogo("timing", LOGO_URL);
+		// Exactly one image on the whole two-page sheet — the page-1 header's.
+		expect(container.querySelectorAll("img").length).toBe(1);
 	});
 });

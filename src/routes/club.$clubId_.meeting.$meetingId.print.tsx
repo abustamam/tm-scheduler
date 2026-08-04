@@ -17,9 +17,11 @@ import {
 } from "#/lib/agenda-runsheet";
 import { buildAgendaSharePath } from "#/lib/agenda-share-url";
 import { buildTimeline } from "#/lib/agenda-timing";
+import { clubLogoUrl } from "#/lib/club-logo-url";
 import { resolveClubOrRedirect } from "#/lib/club-route";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import { meetingPdfBasename } from "#/lib/pdf-filename";
+import { getClubLogoMeta } from "#/server/club-logo";
 import { getPublicMeetingByKey } from "#/server/meetings";
 
 // One-page layouts lead: we prefer single-page agendas, and both one-pagers now
@@ -52,15 +54,24 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/print")(
 			// An unknown meeting key is a 404, not a 500: `getPublicMeetingByKey`
 			// signals it by throwing, and without this the visitor gets the error
 			// boundary instead of the router's not-found page. Same translation the
-			// canonical meeting route does.
-			const data = await getPublicMeetingByKey({
-				data: { clubId: club.id, key: params.meetingId },
-			}).catch((err) => {
-				if (isMeetingNotFoundError(err)) throw notFound();
-				throw err;
-			});
+			// canonical meeting route does. The logo lookup is independent of the
+			// meeting fetch — both need only `club.id` — so they run in parallel.
+			const [data, logoMeta] = await Promise.all([
+				getPublicMeetingByKey({
+					data: { clubId: club.id, key: params.meetingId },
+				}).catch((err) => {
+					if (isMeetingNotFoundError(err)) throw notFound();
+					throw err;
+				}),
+				// Degrade, never take the page down. The logo is decorative and
+				// this fetch runs in the same Promise.all as the meeting itself,
+				// so an unhandled rejection here would fail the whole printed
+				// agenda — the one page an officer needs the morning of a
+				// meeting — over a missing image.
+				getClubLogoMeta({ data: { clubId: club.id } }).catch(() => null),
+			]);
 			if (data.meeting.clubId !== club.id) throw notFound();
-			return data;
+			return { ...data, logoUrl: clubLogoUrl(club.id, logoMeta?.updatedAt) };
 		},
 		component: PrintAgenda,
 		// The <title> becomes the browser's default "Save as PDF" filename, so we
@@ -118,6 +129,7 @@ function PrintAgenda() {
 		meetingNumber,
 		officers,
 		geIntroducesFunctionaries,
+		logoUrl,
 	} = Route.useLoaderData();
 
 	const runRows = expandRunSheet(
@@ -168,6 +180,7 @@ function PrintAgenda() {
 
 	const header = {
 		clubName,
+		logoUrl,
 		clubNumber,
 		district: clubDistrict,
 		mission: clubMission,
