@@ -95,10 +95,16 @@ const sixRoleClub = (): AgendaSlot[] => [
 	}),
 ];
 
+/** The functionary-intro beat's TEMPLATE detail — tokens unresolved. Named once
+ *  because five assertions pin it, and #508 appended the Word-of-the-Day cue to
+ *  it: five copies would mean five places to miss on the next wording change. */
+const FUNCTIONARY_INTRO_DETAIL = `Introduces the ${ROLES_TOKEN}; each explains their role · the {role:grammarian} gives the Word of the Day`;
+
 describe("buildRunOfShow", () => {
-	it("returns 20 ordered beats for the corrected default (non-MCF) variant", () => {
+	it("returns 21 ordered beats for the corrected default (non-MCF) variant", () => {
 		const beats = buildRunOfShow({ geIntroducesFunctionaries: false });
-		expect(beats).toHaveLength(20);
+		// 21 since #508 added the evaluation-timing cue.
+		expect(beats).toHaveLength(21);
 	});
 
 	// Was "every beat has a positive duration". The 0-minute hand-off beats
@@ -136,9 +142,7 @@ describe("buildRunOfShow", () => {
 		);
 		// The detail names the club's own functionaries at expansion time (#367),
 		// so the beat carries the token rather than a fixed "the functionaries".
-		expect(functionaryIntro.detail).toBe(
-			`Introduces the ${ROLES_TOKEN}; each explains their role`,
-		);
+		expect(functionaryIntro.detail).toBe(FUNCTIONARY_INTRO_DETAIL);
 	});
 
 	it("the functionary intro is owned by the General Evaluator under MCF's variant", () => {
@@ -150,9 +154,7 @@ describe("buildRunOfShow", () => {
 		expect((functionaryIntroBeat as { roleKey: string }).roleKey).toBe(
 			"general_evaluator",
 		);
-		expect(functionaryIntroBeat.detail).toBe(
-			`Introduces the ${ROLES_TOKEN}; each explains their role`,
-		);
+		expect(functionaryIntroBeat.detail).toBe(FUNCTIONARY_INTRO_DETAIL);
 	});
 
 	it("gates each vote beat on the segment it belongs to", () => {
@@ -182,7 +184,7 @@ describe("buildRunOfShow", () => {
 		});
 		expect(withGe[4]).toMatchObject({
 			roleKey: "general_evaluator",
-			detail: `Introduces the ${ROLES_TOKEN}; each explains their role`,
+			detail: FUNCTIONARY_INTRO_DETAIL,
 		});
 		// Every other beat is the default template's, in the default order.
 		expect(withGe.filter((_, i) => i !== 3 && i !== 4)).toEqual(
@@ -217,9 +219,7 @@ describe("buildRunOfShow", () => {
 			]);
 			expect(beats[i].requiresGroup).toBeUndefined();
 			// Directly after the functionary intro and directly before the speeches.
-			expect(beats[i - 1].detail).toBe(
-				`Introduces the ${ROLES_TOKEN}; each explains their role`,
-			);
+			expect(beats[i - 1].detail).toBe(FUNCTIONARY_INTRO_DETAIL);
 			expect(beats[i + 1]).toMatchObject({ detail: "Prepared speech" });
 		}
 	});
@@ -1559,8 +1559,10 @@ describe("expandRunSheet — the functionary-intro and functionary-reports beats
 	});
 	// The functionary intro specifically — the hand-off rows (#363) also start
 	// "Introduces the", so the beat is identified by the clause only it carries.
+	// `includes`, not `endsWith`: since #508 the clause is no longer last, because
+	// a club with a Grammarian appends the Word-of-the-Day cue after it.
 	const introRow = (rows: { detail: string }[]) =>
-		rows.find((r) => r.detail.endsWith("; each explains their role"));
+		rows.find((r) => r.detail.includes("; each explains their role"));
 
 	it("omits the functionary intro when there are no functionary slots, even with a Toastmaster slot", () => {
 		expect(introRow(expandRunSheet([totd]))).toBeUndefined();
@@ -1572,7 +1574,8 @@ describe("expandRunSheet — the functionary-intro and functionary-reports beats
 			rows.some(
 				(r) =>
 					r.who === "Toastmaster of the Day · Dana" &&
-					r.detail === "Introduces the Grammarian; each explains their role",
+					r.detail ===
+						"Introduces the Grammarian; each explains their role · the Grammarian gives the Word of the Day",
 			),
 		).toBe(true);
 	});
@@ -1581,10 +1584,10 @@ describe("expandRunSheet — the functionary-intro and functionary-reports beats
 		// Two of the four standard functionaries ⇒ both named, in slot order,
 		// and the two the club does not run are not mentioned.
 		expect(introRow(expandRunSheet([totd, timer, grammarian]))?.detail).toBe(
-			"Introduces the Timer & Grammarian; each explains their role",
+			"Introduces the Timer & Grammarian; each explains their role · the Grammarian gives the Word of the Day",
 		);
 		expect(introRow(expandRunSheet([totd, grammarian]))?.detail).toBe(
-			"Introduces the Grammarian; each explains their role",
+			"Introduces the Grammarian; each explains their role · the Grammarian gives the Word of the Day",
 		);
 	});
 
@@ -1600,7 +1603,7 @@ describe("expandRunSheet — the functionary-intro and functionary-reports beats
 			}),
 		]);
 		expect(introRow(rows)?.detail).toBe(
-			"Introduces the Wordsmith; each explains their role",
+			"Introduces the Wordsmith; each explains their role · the Wordsmith gives the Word of the Day",
 		);
 	});
 
@@ -1708,7 +1711,7 @@ describe("expandRunSheet — the functionary-intro and functionary-reports beats
 		expect(
 			introRow(expandRunSheet([totd, timer, grammarian, jokeMaster]))?.detail,
 		).toBe(
-			"Introduces the Timer, Grammarian & Joke Master; each explains their role",
+			"Introduces the Timer, Grammarian & Joke Master; each explains their role · the Grammarian gives the Word of the Day",
 		);
 	});
 
@@ -1832,7 +1835,8 @@ describe("expandRunSheet — the functionary-intro and functionary-reports beats
 		expect(introRow(rows)).toEqual({
 			who: "Toastmaster of the Day · Dana",
 			roleKey: "toastmaster_of_the_day",
-			detail: "Introduces the Timer & Grammarian; each explains their role",
+			detail:
+				"Introduces the Timer & Grammarian; each explains their role · the Grammarian gives the Word of the Day",
 			minutes: 3,
 			marks: null,
 		});
@@ -1858,7 +1862,8 @@ describe("expandRunSheet — the functionary-intro and functionary-reports beats
 		const rows = expandRunSheet([totd, ge, grammarian], template);
 		expect(introRow(rows)).toMatchObject({
 			who: "General Evaluator · Priya",
-			detail: "Introduces the Grammarian; each explains their role",
+			detail:
+				"Introduces the Grammarian; each explains their role · the Grammarian gives the Word of the Day",
 		});
 		// It is NOT owned by the Toastmaster in this variant.
 		expect(
@@ -2967,5 +2972,150 @@ describe("BeatFallback — fb.detail resolves through resolveDetail (#363)", () 
 				marks: null,
 			},
 		]);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// #508 — the three cues the agenda was missing. All from the 2026-08-01 meeting:
+// the page knew the order but not always what to SAY, which is what a
+// first-timer holding it needs.
+//
+// Items 1 and 5 of that issue are NOT here: they need evaluator→speaker pairing,
+// which nothing in the app can set (#512), so "Evaluate {speaker}" would have
+// been copy over a column that is always null.
+// ---------------------------------------------------------------------------
+describe("meeting-script cues (#508)", () => {
+	const grammarian = (over: Partial<AgendaSlot> = {}) =>
+		slot({
+			id: "gr",
+			roleKey: "grammarian",
+			roleName: "Grammarian",
+			category: "functionary",
+			assigneeName: "Gina",
+			...over,
+		});
+
+	/** The functionary-intro row — identified by the clause only it carries. */
+	const introDetail = (slots: AgendaSlot[]) =>
+		expandRunSheet(slots).find((r) =>
+			r.detail.includes("; each explains their role"),
+		)?.detail;
+
+	const tableTopicsDetail = (slots: AgendaSlot[]) =>
+		expandRunSheet(slots).find((r) => r.detail.startsWith("Impromptu topics"))
+			?.detail;
+
+	const evalTimingRow = (
+		slots: AgendaSlot[],
+		geIntroducesFunctionaries = false,
+	) =>
+		expandRunSheet(slots, buildRunOfShow({ geIntroducesFunctionaries })).find(
+			(r) => r.detail.includes("timing for an evaluation"),
+		);
+
+	describe("the Grammarian's Word of the Day is cued where it happens", () => {
+		it("names it on the functionary intro when the club runs a Grammarian", () => {
+			expect(introDetail([...sixRoleClub(), grammarian()])).toBe(
+				"Introduces the Timer & Grammarian; each explains their role · the Grammarian gives the Word of the Day",
+			);
+		});
+
+		it("drops the cue but KEEPS the row for a club with functionaries and no Grammarian", () => {
+			// sixRoleClub runs a Timer, so the intro still has someone to introduce.
+			// The row surviving is the point: the `unless` fallback replaces the
+			// detail, it does not gate the beat.
+			const detail = introDetail(sixRoleClub());
+			expect(detail).toBe("Introduces the Timer; each explains their role");
+			expect(detail).not.toContain("Word of the Day");
+		});
+
+		it("uses the club's OWN name for the role in the cue, not ours", () => {
+			// The cue and the list it follows must agree: a club that renamed
+			// Grammarian would otherwise read "Introduces the Wordsmith … the
+			// Grammarian gives the Word of the Day" — one row contradicting itself.
+			expect(
+				introDetail([
+					...sixRoleClub(),
+					grammarian({ roleName: "Wordsmith", assigneeName: "Gina" }),
+				]),
+			).toBe(
+				"Introduces the Timer & Wordsmith; each explains their role · the Wordsmith gives the Word of the Day",
+			);
+		});
+	});
+
+	describe("the Timer explains Table Topics timing as the segment opens", () => {
+		it("asks the Timer on the Table Topics row", () => {
+			expect(tableTopicsDetail(sixRoleClub())).toBe(
+				"Impromptu topics using the Word of the Day · asks the Timer to explain the timing",
+			);
+		});
+
+		it("drops the cue but KEEPS the segment for a club with no Timer", () => {
+			const noTimer = sixRoleClub().filter((s) => s.roleKey !== "timer");
+			expect(tableTopicsDetail(noTimer)).toBe(
+				"Impromptu topics using the Word of the Day",
+			);
+		});
+
+		it("is carried by the Table Topics Master, who owns the segment", () => {
+			const row = expandRunSheet(sixRoleClub()).find((r) =>
+				r.detail.startsWith("Impromptu topics"),
+			);
+			expect(row?.who).toBe("Table Topics Master · Rasheed");
+		});
+	});
+
+	describe("the Timer explains evaluation timing before the evaluations", () => {
+		it("is asked by the General Evaluator", () => {
+			expect(evalTimingRow(sixRoleClub())).toMatchObject({
+				who: "General Evaluator · Riyaz",
+				detail: "Asks the Timer to explain the timing for an evaluation",
+			});
+		});
+
+		it("falls to the Toastmaster at a club with no General Evaluator", () => {
+			const noGe = sixRoleClub().filter(
+				(s) => s.roleKey !== "general_evaluator",
+			);
+			expect(evalTimingRow(noGe)?.who).toBe("Toastmaster of the Day · Faisal");
+		});
+
+		// The two halves of `alsoRequiresAnyOf`. Each asserts the row is ABSENT for
+		// a club missing one of the pair, which is the only observable the gate has
+		// — and each fails if its half of the AND is dropped.
+		it("is omitted for a club with evaluators but no Timer", () => {
+			const noTimer = sixRoleClub().filter((s) => s.roleKey !== "timer");
+			expect(evalTimingRow(noTimer)).toBeUndefined();
+		});
+
+		it("is omitted for a club with a Timer but no evaluators", () => {
+			const noEvaluators = sixRoleClub().filter(
+				(s) => s.roleKey !== "evaluator",
+			);
+			expect(evalTimingRow(noEvaluators)).toBeUndefined();
+		});
+
+		// Position is the whole point: the room needs the constraint BEFORE the
+		// first evaluator stands up. A cue that lands after them is decoration.
+		it("sits after the evaluators hand-off and before the first evaluation", () => {
+			const details = expandRunSheet(sixRoleClub()).map((r) => r.detail);
+			const handoff = details.indexOf("Introduces the speech evaluators");
+			const cue = details.indexOf(
+				"Asks the Timer to explain the timing for an evaluation",
+			);
+			const firstEvaluation = details.findIndex((d) =>
+				d.startsWith("Evaluates a speaker"),
+			);
+			expect(handoff).toBeGreaterThanOrEqual(0);
+			expect(cue).toBe(handoff + 1);
+			expect(cue).toBeLessThan(firstEvaluation);
+		});
+
+		it("appears in both club variants, since neither changes the evaluation segment", () => {
+			for (const mcf of [false, true]) {
+				expect(evalTimingRow(sixRoleClub(), mcf)).toBeDefined();
+			}
+		});
 	});
 });

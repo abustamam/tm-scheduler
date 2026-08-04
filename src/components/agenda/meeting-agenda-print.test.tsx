@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { OPEN_LABEL } from "#/lib/agenda-runsheet";
+import type { AgendaSlot } from "#/lib/agenda-runsheet";
+import { expandRunSheet, OPEN_LABEL } from "#/lib/agenda-runsheet";
 import type { TimelineRow } from "#/lib/agenda-timing";
+import { buildTimeline } from "#/lib/agenda-timing";
 import {
 	type AgendaHeader,
 	type AgendaLayout,
@@ -713,4 +715,110 @@ describe("MeetingAgendaPrint club logo", () => {
 		// Exactly one image on the whole two-page sheet — the page-1 header's.
 		expect(container.querySelectorAll("img").length).toBe(1);
 	});
+});
+
+// ---------------------------------------------------------------------------
+// #508 — the three meeting-script cues must reach the PAGE, on every layout.
+//
+// Built from the real pipeline (`expandRunSheet` → `buildTimeline`) rather than
+// hand-written fixtures, deliberately: a fixture that hardcodes the cue text
+// proves only that the renderer can print a string it was handed, and would keep
+// passing if `buildRunOfShow` stopped emitting the cue entirely. This is the
+// assertion class #507 shipped without — every test checked DATA, none checked
+// the printed words, and five PDFs went out saying "Amber".
+// ---------------------------------------------------------------------------
+describe("MeetingAgendaPrint — the meeting-script cues reach the page (#508)", () => {
+	const club: AgendaSlot[] = [
+		{
+			id: "tm",
+			roleKey: "toastmaster_of_the_day",
+			roleName: "Toastmaster of the Day",
+			category: "leadership",
+			assigneeName: "Faisal",
+		},
+		{
+			id: "ttm",
+			roleKey: "table_topics_master",
+			roleName: "Table Topics Master",
+			category: "leadership",
+			assigneeName: "Rasheed",
+		},
+		{
+			id: "sp",
+			roleKey: "speaker",
+			roleName: "Speaker",
+			category: "speaker",
+			assigneeName: "Jagpal",
+			isSpeakerRole: true,
+		},
+		{
+			id: "ev",
+			roleKey: "evaluator",
+			roleName: "Evaluator",
+			category: "evaluator",
+			assigneeName: "Sudheer",
+		},
+		{
+			id: "ge",
+			roleKey: "general_evaluator",
+			roleName: "General Evaluator",
+			category: "leadership",
+			assigneeName: "Riyaz",
+		},
+		{
+			id: "ti",
+			roleKey: "timer",
+			roleName: "Timer",
+			category: "functionary",
+			assigneeName: "Muhammad",
+		},
+		{
+			id: "gr",
+			roleKey: "grammarian",
+			roleName: "Grammarian",
+			category: "functionary",
+			assigneeName: "Gina",
+		},
+	].map((s) => ({
+		isSpeakerRole: false,
+		slotIndex: 0,
+		speechTitle: null,
+		projectLevel: null,
+		minMinutes: null,
+		maxMinutes: null,
+		evaluatesSlotId: null,
+		evaluates: null,
+		...s,
+	})) as AgendaSlot[];
+
+	const realRows = buildTimeline(
+		expandRunSheet(club),
+		new Date("2026-08-08T19:00:00Z"),
+		"UTC",
+	);
+
+	const CUES = [
+		"the Grammarian gives the Word of the Day",
+		"asks the Timer to explain the timing",
+		"Asks the Timer to explain the timing for an evaluation",
+	];
+
+	// Every layout, because the four render rows through different components and
+	// a cue that reaches one is not evidence it reaches the rest.
+	for (const layout of ["grid", "spacious", "timing", "editorial"] as const) {
+		it(`prints all three cues on the ${layout} layout`, () => {
+			const { container } = render(
+				<MeetingAgendaPrint
+					layout={layout as AgendaLayout}
+					header={header}
+					roles={[]}
+					officers={[]}
+					explainers={[]}
+					rows={realRows}
+				/>,
+			);
+			const text = container.textContent ?? "";
+			for (const cue of CUES) expect(text).toContain(cue);
+		});
+	}
 });

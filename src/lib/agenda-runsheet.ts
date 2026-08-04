@@ -174,6 +174,21 @@ export type Beat = (
 	 * it straight back.
 	 */
 	alsoRequiresGroup?: RoleGroup;
+	/**
+	 * An ADDITIONAL role gate that ANDs with whatever else the beat sets (#508) —
+	 * the role-list twin of `alsoRequiresGroup`, for a beat that needs two
+	 * independent role questions answered rather than a role and a group.
+	 *
+	 * The evaluation-timing cue needs BOTH evaluators (something to time) and a
+	 * Timer (someone to explain it). `requiresAnyOf` ORs its list, so it cannot
+	 * express the pair: `[EVALUATOR_ROLE, TIMER_ROLE]` would print the cue for a
+	 * club with evaluators and no Timer, naming a Timer it does not run.
+	 *
+	 * Semantically ANY-of within the list, ALL-of across the two fields — the same
+	 * contract `alsoRequiresGroup` has, so the two compose without a precedence
+	 * rule to remember.
+	 */
+	alsoRequiresAnyOf?: BeatRole[];
 	/** Alternative owners/details, each used when its `unless` role has no slots
 	 *  this meeting (#363). PLURAL because one beat can need two independent
 	 *  answers: a vote beat drops its timer's-report clause when the club runs no
@@ -447,22 +462,22 @@ export type RunOfShowConfig = { geIntroducesFunctionaries: boolean };
  *  only drops the "Calls for the Timer's report" clause, never the row. */
 const TIMER_ROLE: BeatRole = { roleKey: "timer", roleName: "Timer" };
 
-/** Roles a beat's `detail` may name via `roleNameToken` (#445). The canonical
- *  `roleName` here is the fallback for a club that runs no such role; the club's
- *  own slot name wins whenever there is one.
- *
- *  Only the Timer today. The hand-off beats also name their target canonically
- *  ("Introduces the Table Topics Master"), but the deck's `handoff` slide reuses
- *  that same prose as BOTH its rendered line and its `HANDOFF_HEADER` key, so
- *  making those follow a rename means splitting one field into two and is
- *  tracked as #462 (which waits on #458, queued to touch the same union). */
+/** The Grammarian — a standard functionary, and the second role whose ABSENCE
+ *  drives a `fallbacks` entry rather than a gate (#508): the functionary-intro
+ *  beat cues the Word of the Day, which is the Grammarian's to give, so a club
+ *  running no Grammarian loses that clause and keeps the row. Named here rather
+ *  than inline in `FUNCTIONARY_ROLES` because the beat now has to point at it. */
+const GRAMMARIAN_ROLE: BeatRole = {
+	roleKey: "grammarian",
+	roleName: "Grammarian",
+};
 
 /** The 4 standard functionary roles we ship (`ROLE_TEMPLATE`). Since #371 these
  *  DECLARE which standard roles the functionary-intro beat is nominally about;
  *  they are no longer the definition of a functionary, which is the category
  *  (`functionarySlots`), nor the beat's gate — see `requirementsMet`. */
 const FUNCTIONARY_ROLES: BeatRole[] = [
-	{ roleKey: "grammarian", roleName: "Grammarian" },
+	GRAMMARIAN_ROLE,
 	{ roleKey: "ah_counter", roleName: "Ah-Counter" },
 	TIMER_ROLE,
 	NON_REPORTING_FUNCTIONARY,
@@ -517,6 +532,17 @@ const TABLE_TOPICS_ROLE: BeatRole = {
 	roleName: "Table Topics Master",
 };
 
+/**
+ * Roles a beat's `detail` may name via `roleNameToken` (#445). The canonical
+ * `roleName` here is the fallback for a club that runs no such role; the club's
+ * own slot name wins whenever there is one.
+ *
+ * A role belongs here as soon as a beat names it in prose, or the row prints the
+ * literal token. `clubRoleName` returns the canonical name for a club that runs
+ * the role but has not renamed it — it does NOT decide whether the clause
+ * appears at all. That is a `fallbacks` question, and every entry below is named
+ * by a clause that a `{ unless: … }` entry drops when the role is absent.
+ */
 const NAMEABLE_ROLES: BeatRole[] = [
 	TIMER_ROLE,
 	// #462: the two hand-off targets that name ONE specific role holder, so a
@@ -525,6 +551,9 @@ const NAMEABLE_ROLES: BeatRole[] = [
 	// English deliberately — see the hand-off beats.
 	GENERAL_EVALUATOR_ROLE,
 	TABLE_TOPICS_ROLE,
+	// #508: the functionary-intro beat cues the Word of the Day by name, so a
+	// club that renamed Grammarian sees its own name in the cue.
+	GRAMMARIAN_ROLE,
 ];
 const EVALUATOR_ROLE: BeatRole = {
 	roleKey: "evaluator",
@@ -637,16 +666,35 @@ export function buildRunOfShow({
 			roleKey: functionaryIntroOwner.roleKey,
 			roleName: functionaryIntroOwner.roleName,
 			role: "plain",
-			detail: `Introduces the ${ROLES_TOKEN}; each explains their role`,
+			// "each explains their role" was the ONLY cue here, and it does not tell
+			// the Grammarian that delivering the Word of the Day is their job at this
+			// moment (#508). The code already knew — `buildRunOfShow`'s own doc
+			// comment says "which is when the Grammarian gives the Word of the Day" —
+			// the knowledge just never reached the page, which is where a
+			// first-time Grammarian is reading.
+			detail: `Introduces the ${ROLES_TOKEN}; each explains their role · the ${roleNameToken(GRAMMARIAN_ROLE)} gives the Word of the Day`,
 			minutes: 3,
 			requiresAnyOf: FUNCTIONARY_ROLES,
 			requiresGroup: "functionaries",
-			// GE-owned under MCF's variant, so it needs the same cover as the GE's
-			// other beats: without it a club on that variant with functionaries but
-			// no General Evaluator never introduced them, yet still called for their
-			// reports. A no-op in the standard flow, where the owner is already the
-			// Toastmaster and the swap sets what is already set.
-			fallbacks: [GE_COVERED_BY_TOASTMASTER],
+			fallbacks: [
+				// GE-owned under MCF's variant, so it needs the same cover as the GE's
+				// other beats: without it a club on that variant with functionaries but
+				// no General Evaluator never introduced them, yet still called for their
+				// reports. A no-op in the standard flow, where the owner is already the
+				// Toastmaster and the swap sets what is already set.
+				GE_COVERED_BY_TOASTMASTER,
+				// The Word-of-the-Day clause is the Grammarian's, so a club running no
+				// Grammarian drops the clause and keeps the row — the vote beats' Timer
+				// pattern exactly. Conditional rather than hard-coded, because the beat
+				// is role-set-driven: `ROLES_TOKEN` already names only the functionaries
+				// this club runs, and a cue naming a role absent from that list would
+				// contradict the same row. Note the two fallbacks set DIFFERENT fields
+				// (owner vs detail), which is why both can fire without either winning.
+				{
+					unless: GRAMMARIAN_ROLE,
+					detail: `Introduces the ${ROLES_TOKEN}; each explains their role`,
+				},
+			],
 		},
 		{
 			// Universal since #363. #438 added this for MCF only, reasoning that in
@@ -705,10 +753,25 @@ export function buildRunOfShow({
 			kind: "role",
 			...TABLE_TOPICS_ROLE,
 			role: "plain",
-			detail: "Impromptu topics using the Word of the Day",
+			// The segment opens with the timing explained (#508). On THIS beat rather
+			// than the hand-off above it, because the hand-off is the Toastmaster's
+			// and the cue is the Table Topics Master's — they ask, as the segment
+			// opens. #507 put the green/yellow/red marks on this same row, so the
+			// numbers being explained are printed alongside the cue to explain them.
+			//
+			// No gate needed for the segment itself: a plain role beat carries no
+			// `renderUnowned`, so a club with no Table Topics Master never emits this
+			// row at all — the same way the vote beats are gated.
+			detail: `Impromptu topics using the Word of the Day · asks the ${roleNameToken(TIMER_ROLE)} to explain the timing`,
 			minutes: 10,
 			flex: true,
 			marks: TABLE_TOPICS_MARKS,
+			fallbacks: [
+				{
+					unless: TIMER_ROLE,
+					detail: "Impromptu topics using the Word of the Day",
+				},
+			],
 		},
 		{
 			// Owner and gate are the same role here, so `renderUnowned` can never
@@ -749,6 +812,33 @@ export function buildRunOfShow({
 			minutes: 0,
 			handoff: true,
 			requiresAnyOf: [EVALUATOR_ROLE],
+			fallbacks: [GE_COVERED_BY_TOASTMASTER],
+		},
+		{
+			// An evaluation is timed differently from a speech, and the room was not
+			// told so before the evaluators stood up (#508).
+			//
+			// A beat of its own rather than a clause on the hand-off above, which was
+			// the first attempt: a hand-off row's detail is structurally
+			// `Introduces ${target}` — `agenda-parity.test.ts` derives the deck's
+			// hand-off line from the TARGET and compares it to the printed detail, so
+			// any extra clause makes the two surfaces disagree by construction. That
+			// is a contract, not an incidental assertion.
+			//
+			// Owned like every other GE beat, so a club with no General Evaluator has
+			// the Toastmaster ask — the ownership #508 asked for, obtained by reusing
+			// the existing constant rather than re-deriving it.
+			kind: "role",
+			...GENERAL_EVALUATOR_ROLE,
+			role: "plain",
+			detail: `Asks the ${roleNameToken(TIMER_ROLE)} to explain the timing for an evaluation`,
+			minutes: 1,
+			// BOTH conditions, independently: evaluators to time, and a Timer to
+			// explain it. `requiresAnyOf` ORs, so it cannot express the pair on its
+			// own — hence the additive gate, the role-list twin of the
+			// `alsoRequiresGroup` #449 added for exactly this shape of problem.
+			requiresAnyOf: [EVALUATOR_ROLE],
+			alsoRequiresAnyOf: [TIMER_ROLE],
 			fallbacks: [GE_COVERED_BY_TOASTMASTER],
 		},
 		{
@@ -1104,6 +1194,13 @@ function requirementsMet(beat: Beat, slots: AgendaSlot[]): boolean {
 	if (
 		beat.alsoRequiresGroup != null &&
 		GROUP_SLOTS[beat.alsoRequiresGroup](slots).length === 0
+	) {
+		return false;
+	}
+	// Same additive contract as the group gate above, over a role list (#508).
+	if (
+		beat.alsoRequiresAnyOf != null &&
+		!beat.alsoRequiresAnyOf.some((r) => hasRole(slots, r.roleKey, r.roleName))
 	) {
 		return false;
 	}
