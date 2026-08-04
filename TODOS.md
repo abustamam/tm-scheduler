@@ -29,8 +29,11 @@
 
 ## Print & artifacts
 
-- `public/role-sheets/*.pdf` are committed artifacts rendered from `src/server/role-sheet-layout.ts`, and nothing regenerates or verifies them. `scripts/build-role-sheets.ts` claims the shared layout means the blank and pre-filled sheets "can't drift" — they did: the amber to yellow rename (#507) changed the live sheet and left the committed PDFs printing "Amber" until a reviewer read the bytes. `build:role-sheets` exists but is not in CI. v1.4.1.0 added tests that assert the printed WORDS on both the agenda and the Timer sheet, so a rename can no longer pass silently — but nothing still re-renders the committed PDFs, so a layout change that does not touch wording can still leave them stale. A CI step that re-renders and diffs the committed bytes would make the claim true.
+- `public/role-sheets/*.pdf` are committed artifacts rendered from `src/server/role-sheet-layout.ts`, and nothing regenerates or verifies them. `scripts/build-role-sheets.ts` claims the shared layout means the blank and pre-filled sheets "can't drift" — they did: the amber to yellow rename (#507) changed the live sheet and left the committed PDFs printing "Amber" until a reviewer read the bytes. `build:role-sheets` exists but is not in CI. v1.4.1.0 added tests that assert the printed WORDS on both the agenda and the Timer sheet, so a rename can no longer pass silently — but nothing still re-renders the committed PDFs, so a layout change that does not touch wording can still leave them stale. A CI step that re-renders and diffs the committed bytes would make the claim true. v1.5.0.0 added a page-COUNT gate (`role-sheet-layout.test.ts` re-renders each sheet with and without a logo and asserts one page, verified by forcing a 900pt logo to two pages), which closes the overflow case specifically — a byte-diff against the committed artifacts is still the open half.
   **Priority:** P3
+
+- The canonical meeting page (`club.$clubId.meeting.$meetingId.tsx`) is the one logo-supplying loader with no test on its `logoUrl` wiring. v1.5.0.0 covered the two standalone public print routes after a coverage audit forced all four loaders to null and the whole suite stayed green; this one was left because the route imports enough that isolating it needs more mocking than the other two. Its only logo consumer is the `.pptx` button, so the blast radius is one surface — but it is the same seam, untested.
+  **Priority:** P4
 
 ## Guests & identity
 

@@ -39,6 +39,9 @@ export function MeetingViewActions({
 	clubName?: string;
 	wordOfTheDay: string | null;
 }) {
+	// Derived from the deck, not a separate prop — the deck's title slide is
+	// already the single source of truth for the club's logo URL.
+	const logoUrl = deck?.find((s) => s.kind === "title")?.logoUrl ?? null;
 	return (
 		<>
 			<Button asChild variant="outline" size="sm">
@@ -95,7 +98,7 @@ export function MeetingViewActions({
 				</Button>
 			) : null}
 			{deck && clubName ? (
-				<PptxDownloadButton deck={deck} clubName={clubName} />
+				<PptxDownloadButton deck={deck} clubName={clubName} logoUrl={logoUrl} />
 			) : null}
 		</>
 	);

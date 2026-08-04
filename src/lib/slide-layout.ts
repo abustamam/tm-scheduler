@@ -33,7 +33,16 @@ export type Body =
 	  };
 
 export type SlideLayout =
-	| { chrome: "splash"; tone: "light" | "dark"; headline: string; sub: Line[] }
+	| {
+			chrome: "splash";
+			tone: "light" | "dark";
+			headline: string;
+			sub: Line[];
+			/** Only the opening title splash carries one; every other splash
+			 *  (currently just the closing thank-you) sets it null. Required so a
+			 *  new splash kind has to make that choice explicitly. */
+			logoUrl: string | null;
+	  }
 	| { chrome: "content"; header: string; body: Body };
 
 const head = (text: string): Line => ({ role: "head", text });
@@ -150,7 +159,13 @@ export function slideLayout(slide: Slide): SlideLayout {
 			sub.push(
 				muted(`Start time: ${fmtTime(slide.scheduledAt, slide.timezone)}`),
 			);
-			return { chrome: "splash", tone: "light", headline: slide.clubName, sub };
+			return {
+				chrome: "splash",
+				tone: "light",
+				headline: slide.clubName,
+				sub,
+				logoUrl: slide.logoUrl,
+			};
 		}
 		case "toastmaster":
 			return content("Toastmaster", {
@@ -358,6 +373,9 @@ export function slideLayout(slide: Slide): SlideLayout {
 				tone: "dark",
 				headline: "Thank You",
 				sub: thankYouSub(slide),
+				// The club's logo opens the deck; repeating it on the closing slide
+				// would be branding for its own sake.
+				logoUrl: null,
 			};
 	}
 	return ((_x: never): never => {

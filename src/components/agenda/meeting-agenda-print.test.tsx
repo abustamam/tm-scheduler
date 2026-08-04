@@ -685,12 +685,17 @@ describe("MeetingAgendaPrint club logo", () => {
 			expect(img?.getAttribute("src")).toBe(LOGO_URL);
 			// Decorative — never names a mark in text a screen reader announces.
 			expect(img?.getAttribute("alt")).toBe("");
-			// "Left of the club name, vertically centered": the image's own flex
+			// The image sits inside the light plate `ClubLogo` renders behind it
+			// (invisible on these white pages, load-bearing on the dark surfaces).
+			const plate = img?.parentElement as HTMLElement;
+			// jsdom normalizes #fff to its rgb() form.
+			expect(plate.style.background).toBe("rgb(255, 255, 255)");
+			// "Left of the club name, vertically centered": the plate's own flex
 			// row centers its children, and the club-name block is the very next
 			// sibling — not merely present somewhere on the page.
-			const row = img?.parentElement as HTMLElement;
+			const row = plate.parentElement as HTMLElement;
 			expect(row.style.alignItems).toBe("center");
-			expect(img?.nextElementSibling?.textContent).toContain(header.clubName);
+			expect(plate.nextElementSibling?.textContent).toContain(header.clubName);
 		});
 
 		it(`${layout}: renders no image and no gap when the club has no logo`, () => {

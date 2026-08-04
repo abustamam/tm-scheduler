@@ -148,7 +148,9 @@ role_definitions/role_slots (ADR-0005), member_availability, speeches
 (ADR-0009), the Pathways model (pathways_paths, path_enrollments,
 path_level_progress, pathways_projects, pathways_path_levels,
 bcm_project_progress — ADR-0011), sync_tokens, activity_log, club_logos (a
-club's own uploaded agenda logo, bytea, ADR-0024), and notifications
+club's own uploaded logo, bytea, ADR-0024 — rendered on the four print
+layouts, the projected deck, the `.pptx` export, the Word of the Day poster
+and the club role sheets, HTML and PDF), and notifications
 (drained by an in-process poller, ADR-0023). Better-Auth's tables live in
 `src/db/auth-schema.ts`. See `CONTEXT.md` for the glossary.
 The `db` client (`src/db/index.ts`) is `drizzle(process.env.DATABASE_URL!, { schema })`.

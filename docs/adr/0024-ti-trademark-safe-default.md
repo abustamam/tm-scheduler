@@ -2,7 +2,9 @@
 
 Status: Accepted (decision 3 revisited 2026-07-26; decisions 1 and 4 revisited 2026-07-31 against
 Brand Manual v2.0 — see both "Revisited" sections below). The club-supplied logo the second
-revisit describes shipped 2026-08-03 (#495).
+revisit describes shipped 2026-08-03 on the printed agenda (#495) and reached the remaining
+agenda surfaces 2026-08-04 (#496): the projected deck, the `.pptx` export, the Word of the Day
+poster and the club role sheets (HTML and PDF).
 
 ## Context
 
@@ -190,6 +192,25 @@ automated backstop instead of relying on review alone:
 mark) and `src/components/agenda/club-logo-scope.guard.test.ts` (constraint 2 — every `club_logos`
 read is scoped to the requesting club, and no cross-club "shared library" concept exists in
 source).
+
+**Widened 2026-08-04 (#496).** The scope guard was rewritten when the logo reached five more
+surfaces. It had been scoped to one hardcoded file and to the verbs `.from(` / `.delete(`, so the
+role-sheet PDF's `innerJoin` was invisible to it purely by living elsewhere; it now sweeps all of
+`src/`, covers every row-selecting verb, rejects a join condition offered as scoping (that shape
+picks an *arbitrary* club), and bans the shapes a regex cannot inspect at all (`db.query`, a
+relational `with: { logo }` include, `alias()`, raw `club_logos` SQL). Read the guard as "nothing
+obviously wrong", never as proof: the actual guarantee for constraint 2 is
+`club-logo-logic.integration.test.ts`, which seeds two clubs and asserts one never receives the
+other's bytes. Constraint 4's removal path grew a second enforcement point too — the role-sheet
+PDF read now goes through the shared `isReadableClub`, after shipping without it and continuing to
+serve an archived club's logo inside a downloadable file.
+
+**On the `.pptx` export.** Decision 1 removed the *vendored TI wordmark* from `deck-to-pptx.ts`,
+and that removal stands — the repo ships no mark. What #496 inlines there is the club's own
+upload, which is the p.32 case: an authorized user putting its mark on its own agenda material,
+with GavelUp as the tool. The exported file is also the one surface a club member downloads
+deliberately rather than a URL anyone can fetch, so it sits closer to the Word/Canva model than
+the public routes do, not further from it.
 
 **Decision 4 (counsel) has NOT fired.** GavelUp is not charging as of 2026-07-31; monetization is
 intent, not fact. The trigger is money changing hands. Paying a trademark attorney pre-revenue to

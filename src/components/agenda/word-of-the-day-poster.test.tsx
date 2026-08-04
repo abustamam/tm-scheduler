@@ -189,3 +189,31 @@ describe("WordOfTheDayPoster", () => {
 		expect(screen.queryByTestId("wod-example")).toBeNull();
 	});
 });
+
+describe("club logo (#496)", () => {
+	const LOGO =
+		"/api/club/11111111-1111-4111-8111-111111111111/logo?v=1754000000000";
+
+	it("renders the club's logo in the footer when one is set", () => {
+		render(<WordOfTheDayPoster {...base} logoUrl={LOGO} />);
+		const img = document.querySelector<HTMLImageElement>(`img[src="${LOGO}"]`);
+		expect(img).not.toBeNull();
+		// Sized to the footer's text line, NOT the print default of 48px: this
+		// component's word size comes from a measured table and the sheet must
+		// stay one page. A taller band would eat body height.
+		expect(img?.style.height).toBe("20px");
+		// Decorative — the club name is the adjacent text (ADR-0024 constraint 1
+		// also forbids naming a mark in text a screen reader would announce).
+		expect(img?.getAttribute("alt")).toBe("");
+	});
+
+	it("renders no image element at all when the club has no logo", () => {
+		render(<WordOfTheDayPoster {...base} logoUrl={null} />);
+		expect(document.querySelector("img")).toBeNull();
+	});
+
+	it("still shows the club name beside the logo", () => {
+		render(<WordOfTheDayPoster {...base} logoUrl={LOGO} />);
+		expect(screen.getByText(base.clubName)).toBeTruthy();
+	});
+});

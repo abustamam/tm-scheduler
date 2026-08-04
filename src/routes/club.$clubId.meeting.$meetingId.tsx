@@ -49,6 +49,7 @@ import {
 	expandRunSheet,
 } from "#/lib/agenda-runsheet";
 import { buildSlideDeck } from "#/lib/agenda-slides";
+import { clubLogoUrl } from "#/lib/club-logo-url";
 import {
 	formatMeetingDate,
 	formatMeetingTime,
@@ -69,6 +70,7 @@ import { useEffectiveMember } from "#/lib/member-identity";
 import { footerDate } from "#/lib/slide-layout";
 import { hasWordOfTheDay } from "#/lib/word-poster";
 import { clearAvailability, setAvailability } from "#/server/availability";
+import { getClubLogoMeta } from "#/server/club-logo";
 import {
 	completeMeeting,
 	getMeetingByKey,
@@ -122,6 +124,12 @@ export const Route = createFileRoute("/club/$clubId/meeting/$meetingId")({
 		const upcomingPromise = listUpcomingMeetings({
 			data: context.clubUuid,
 		}).catch(() => [] as Awaited<ReturnType<typeof listUpcomingMeetings>>);
+		// Needs only the club id, so it starts here alongside the other
+		// non-fatal parallel loads. Degrades to no-logo rather than failing the
+		// page — same treatment as `upcomingPromise` above.
+		const logoPromise = getClubLogoMeta({
+			data: { clubId: context.clubUuid },
+		}).catch(() => null);
 
 		const data = await meetingPromise;
 		// Guard against a meetingId that belongs to a different club than the URL.
@@ -167,7 +175,14 @@ export const Route = createFileRoute("/club/$clubId/meeting/$meetingId")({
 					}).catch(() => null)
 				: null;
 
-		return { ...data, navItems, minutes, minutesEmail };
+		const logoMeta = await logoPromise;
+		return {
+			...data,
+			navItems,
+			minutes,
+			minutesEmail,
+			logoUrl: clubLogoUrl(context.clubUuid, logoMeta?.updatedAt),
+		};
 	},
 	component: MeetingView,
 	notFoundComponent: MeetingNotFound,
@@ -225,6 +240,7 @@ function MeetingView() {
 		nextMeetingAt,
 		urlKey,
 		geIntroducesFunctionaries,
+		logoUrl,
 	} = Route.useLoaderData();
 	const router = useRouter();
 	const online = useOnlineStatus();
@@ -267,6 +283,7 @@ function MeetingView() {
 			district: clubDistrict,
 			timezone,
 			meetingSchedule: clubMeetingSchedule,
+			logoUrl,
 		},
 		slots,
 		nextMeetingAt,

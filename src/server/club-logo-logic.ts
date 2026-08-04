@@ -57,6 +57,183 @@ function isAllowedMime(mime: string): mime is AllowedMime {
 	return (ALLOWED_MIME_TYPES as readonly string[]).includes(mime);
 }
 
+/**
+ * Pixel-dimension cap, enforced ALONGSIDE `MAX_LOGO_BYTES` rather than instead
+ * of it. The two bound different costs and neither implies the other.
+ *
+ * A byte cap bounds storage and transfer. It does NOT bound the cost of
+ * DECODING, because compression ratio is unbounded: an 8000x8000 RGBA PNG of a
+ * mostly-transparent logo compresses to ~243 KB — comfortably under the 256 KiB
+ * cap, correct magic bytes, entirely well-formed — and decodes to ~256 MB of
+ * raw bitmap.
+ *
+ * That became reachable in #496. Before it, uploaded bytes were only ever
+ * served verbatim to a browser (the GET route) — the decode happened on the
+ * visitor's machine. #496 is the first path that decodes them INSIDE the Node
+ * process: `@react-pdf/renderer` decodes the data URI server-side while
+ * rendering the role-sheet PDF, and that endpoint is public, unauthenticated
+ * and `no-store`, so every request re-renders. Measured on this code: the
+ * 8000x8000 case drives the process from 151 MB to 1.1 GB RSS at 1.3 s CPU per
+ * request, and an ordinary 4000x4000 transparent-PNG club logo weighing 61 KB
+ * already costs +240 MB. A handful of concurrent anonymous GETs would OOM the
+ * container for every club, so this is an availability bug, not a hardening
+ * nicety — and it needs no malice to trigger.
+ *
+ * 2000px is far above what any surface asks for (the largest consumers are a
+ * 26pt PDF header and a 4in PPTX frame) and far below where decode cost bites.
+ */
+const MAX_LOGO_DIMENSION = 2000;
+
+/**
+ * Intrinsic pixel size, established by STRUCTURALLY VALIDATING the file — not by
+ * peeking at fixed offsets.
+ *
+ * The distinction is the whole point, and getting it wrong shipped a worse bug
+ * than the one the cap was added to fix. The first version of this read bytes
+ * 16-24 of a PNG and returned them. That is not validation: the decoder that
+ * actually runs is `png-js` (reached via `@react-pdf/image`, which dispatches on
+ * the DECLARED mime and never sniffs), and it walks the whole chunk list with
+ * three behaviours a fixed-offset peek cannot see:
+ *
+ *   · `readUInt32` composes with `|`, so a declared chunk length >= 0x80000000
+ *     is NEGATIVE. Its skip is `pos += chunkSize` and its only bound is
+ *     `if (pos > data.length) throw`, so a negative length walks `pos` BACKWARDS
+ *     and the bound never trips. A 45-byte file built this way makes the
+ *     constructor loop forever — synchronously, on a public unauthenticated
+ *     endpoint, in a single-process server. Verified: it never returns.
+ *   · `case 'IDAT'` copies `chunkSize` bytes one push at a time BEFORE that
+ *     bound is checked.
+ *   · `case 'IHDR'` assigns width/height on EVERY IHDR chunk, so a trailing
+ *     second IHDR wins. The old peek read the first and certified 1x1 for a file
+ *     the decoder saw as 20000x20000.
+ *
+ * So the rule this now enforces is not "find the dimensions" but "prove the
+ * structure is one the decoder will read the same way we did". Every chunk
+ * length is read UNSIGNED and must fit inside the file. That single invariant
+ * removes the negative-length class entirely: a length that fits in a <=256 KB
+ * upload is necessarily far below 0x80000000, so `png-js`'s signed read and ours
+ * cannot disagree.
+ *
+ * Returns null whenever the structure is anything other than plainly sound.
+ * Callers treat null as rejection: a file we cannot parse confidently is exactly
+ * the file not to hand to a decoder.
+ */
+const PNG_SIGNATURE_FULL = Buffer.from([
+	0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+]);
+
+export function readImageDimensions(
+	bytes: Buffer,
+	mime: AllowedMime,
+): { width: number; height: number } | null {
+	return mime === "image/png"
+		? readPngDimensions(bytes)
+		: readJpegDimensions(bytes);
+}
+
+function readPngDimensions(
+	bytes: Buffer,
+): { width: number; height: number } | null {
+	// The FULL 8-byte signature. `matchesMagicBytes` checks only the first four,
+	// which is looser than every real decoder.
+	if (!bytes.subarray(0, 8).equals(PNG_SIGNATURE_FULL)) return null;
+
+	let pos = 8;
+	let dimensions: { width: number; height: number } | null = null;
+
+	// Chunk: length(4) + type(4) + data(length) + crc(4).
+	while (pos + 8 <= bytes.length) {
+		const length = bytes.readUInt32BE(pos); // UNSIGNED — see the doc comment
+		const type = bytes.subarray(pos + 4, pos + 8).toString("ascii");
+		const next = pos + 8 + length + 4;
+		// Every chunk must fit. This is the invariant that makes our read and the
+		// decoder's agree, so it must reject rather than clamp.
+		if (next > bytes.length) return null;
+
+		if (dimensions === null) {
+			// The spec requires IHDR first, and exactly 13 bytes of it.
+			if (type !== "IHDR" || length !== 13) return null;
+			const width = bytes.readUInt32BE(pos + 8);
+			const height = bytes.readUInt32BE(pos + 12);
+			if (width === 0 || height === 0) return null;
+			dimensions = { width, height };
+		} else if (type === "IHDR") {
+			// A second IHDR: the decoder would keep THIS one while we returned the
+			// first, so the two would disagree by construction. Refuse.
+			return null;
+		}
+
+		if (type === "IEND") return dimensions;
+		pos = next;
+	}
+	// Ran off the end without an IEND.
+	return null;
+}
+
+/**
+ * JPEG frame size, walked under the SAME rule the decoder uses.
+ *
+ * react-pdf decodes JPEG with `jay-peg`, whose marker table assigns a length
+ * field to every marker in 0xFFC0-0xFFFE. An earlier version of this walker
+ * special-cased RST/TEM as standalone and collapsed 0xFF fill runs; both are
+ * legal JPEG, but `jay-peg` does neither, so the two parsers could land on
+ * different frame headers and the cap would be measuring an image nobody
+ * decodes. Matching the decoder matters more than accepting every legal file:
+ * a shape we read differently is rejected at upload with a clear message rather
+ * than accepted and rendered as nothing.
+ */
+function readJpegDimensions(
+	bytes: Buffer,
+): { width: number; height: number } | null {
+	if (bytes.length < 4) return null;
+	if (bytes[0] !== 0xff || bytes[1] !== 0xd8) return null; // SOI
+
+	let pos = 2;
+	while (pos + 4 <= bytes.length) {
+		if (bytes[pos] !== 0xff) return null;
+		const marker = bytes[pos + 1];
+		if (marker === 0xd9) return null; // EOI before any frame
+		const segmentLength = bytes.readUInt16BE(pos + 2);
+		// The length counts itself, so under 2 cannot advance.
+		if (segmentLength < 2) return null;
+		if (pos + 2 + segmentLength > bytes.length) return null;
+
+		// SOF0-SOF15 carry the frame size. DHT (0xc4), JPG (0xc8) and DAC (0xcc)
+		// share the range but are not frame headers.
+		const isFrameHeader =
+			marker >= 0xc0 &&
+			marker <= 0xcf &&
+			marker !== 0xc4 &&
+			marker !== 0xc8 &&
+			marker !== 0xcc;
+		if (isFrameHeader) {
+			// length(2), precision(1), height(2), width(2)
+			if (segmentLength < 7) return null;
+			const height = bytes.readUInt16BE(pos + 5);
+			const width = bytes.readUInt16BE(pos + 7);
+			if (width === 0 || height === 0) return null;
+			return { width, height };
+		}
+		pos += 2 + segmentLength;
+	}
+	return null;
+}
+
+/**
+ * Is this image safe to hand to a server-side decoder?
+ *
+ * Shared by the upload gate and the PDF render path on purpose. The upload gate
+ * stops NEW oversized images; this also lets the render path skip rows that
+ * predate the cap, so an image already in the database cannot trigger the
+ * blow-up described on `MAX_LOGO_DIMENSION`.
+ */
+export function isDecodeSafe(bytes: Buffer, mime: string): boolean {
+	if (!isAllowedMime(mime)) return false;
+	const dims = readImageDimensions(bytes, mime);
+	if (!dims) return false;
+	return dims.width <= MAX_LOGO_DIMENSION && dims.height <= MAX_LOGO_DIMENSION;
+}
+
 // ---------------------------------------------------------------------------
 // Metadata read — the SSR agenda-header path. Selects `updatedAt` only.
 // ---------------------------------------------------------------------------
@@ -84,7 +261,7 @@ export type ClubLogoMeta = { updatedAt: Date };
  * a read path that ignores it defeats the mechanism the trademark posture
  * leans on.
  */
-async function isReadableClub(clubId: string): Promise<boolean> {
+export async function isReadableClub(clubId: string): Promise<boolean> {
 	if (!UUID_RE.test(clubId)) return false;
 	const [club] = await db
 		.select({ archivedAt: clubs.archivedAt })
@@ -207,6 +384,21 @@ export async function applyClubLogoUpload(
 	}
 	if (!matchesMagicBytes(bytes, input.mime)) {
 		throw new Error("That file doesn't look like a valid PNG or JPEG image.");
+	}
+	// Bytes alone do not bound decode cost — see `MAX_LOGO_DIMENSION`. This is
+	// the gate that keeps a 243 KB / 8000x8000 PNG out of a public, server-side
+	// PDF render.
+	const dimensions = readImageDimensions(bytes, input.mime);
+	if (!dimensions) {
+		throw new Error("That file doesn't look like a valid PNG or JPEG image.");
+	}
+	if (
+		dimensions.width > MAX_LOGO_DIMENSION ||
+		dimensions.height > MAX_LOGO_DIMENSION
+	) {
+		throw new Error(
+			`Logo must be ${MAX_LOGO_DIMENSION}px or smaller on each side (this one is ${dimensions.width}x${dimensions.height}).`,
+		);
 	}
 
 	const now = new Date();

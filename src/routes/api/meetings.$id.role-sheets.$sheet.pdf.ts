@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { roleSheetByKey } from "#/data/role-sheets";
+import { isReadableClub } from "#/server/club-logo-logic";
 import { getMeetingClubId } from "#/server/minutes-logic";
 import { renderRoleSheetPdf } from "#/server/role-sheets-pdf-logic";
 
@@ -24,17 +25,39 @@ export const Route = createFileRoute(
 					return new Response("Unknown role sheet.", { status: 404 });
 				}
 
-				// Validate the meeting exists (clean 404 instead of a render 500).
+				// Validate the meeting exists (clean 404 instead of a render 500),
+				// and that its club is one a public caller may read at all.
+				//
+				// The archive check is on the WHOLE sheet, not just its logo. An
+				// earlier pass gated only `loadRoleSheetLogo`, which meant archiving
+				// a club — the documented takedown lever — removed its crest from
+				// this PDF and left the club name, meeting date, Word of the Day and
+				// every scheduled speaker's name still being served to anonymous
+				// callers. `src/lib/club-archive.ts` states the repo-wide rule:
+				// every public no-auth club loader must treat an archived club as
+				// not-found. This is such a loader.
+				let clubId: string;
 				try {
-					await getMeetingClubId(meetingId);
+					clubId = await getMeetingClubId(meetingId);
 				} catch {
 					return new Response("Meeting not found.", { status: 404 });
 				}
+				if (!(await isReadableClub(clubId))) {
+					return new Response("Meeting not found.", { status: 404 });
+				}
 
-				const { bytes, clubName, date } = await renderRoleSheetPdf(
-					meetingId,
-					info.key,
-				);
+				// A render failure is a 500 either way, but an unshaped framework
+				// stack trace on a public route is not the 500 we want.
+				let rendered: Awaited<ReturnType<typeof renderRoleSheetPdf>>;
+				try {
+					rendered = await renderRoleSheetPdf(meetingId, info.key);
+				} catch (err) {
+					console.error("role-sheet PDF render failed", { meetingId, err });
+					return new Response("Could not build that role sheet.", {
+						status: 500,
+					});
+				}
+				const { bytes, clubName, date } = rendered;
 
 				// Friendly filename: "<Sheet> - <Club> - <Date>.pdf".
 				const safe = `${info.title} - ${clubName} - ${date}`

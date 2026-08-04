@@ -8,6 +8,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { ClubLogo } from "#/components/agenda/club-logo";
 import { PptxDownloadButton } from "#/components/club/pptx-download-button";
 import type { Slide } from "#/lib/agenda-slides";
 import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
@@ -153,12 +154,16 @@ export function MeetingPresent({
 	const layout = slideLayout(slide);
 	const title = deck.find((s) => s.kind === "title");
 	const fdate = title ? footerDate(title.scheduledAt, title.timezone) : "";
+	// Read off the deck rather than taken as a prop: the splash already renders
+	// from `layout.logoUrl`, and a second prop carrying the same value is a
+	// place the two can disagree.
+	const logoUrl = title?.logoUrl ?? null;
 
 	return (
 		<div className="fixed inset-0 flex items-center justify-center bg-black">
 			<div className="absolute top-[2vmin] right-[2vmin] z-20 flex items-center gap-[1.2vmin]">
 				{offlineBadge}
-				<PptxDownloadButton deck={deck} clubName={clubName} />
+				<PptxDownloadButton deck={deck} clubName={clubName} logoUrl={logoUrl} />
 			</div>
 			<button
 				type="button"
@@ -370,10 +375,23 @@ function Splash({
 					: { background: GROUND, color: INK }
 			}
 		>
+			{/* The club's OWN uploaded logo, above the program name it belongs to.
+			    Sized in cqw like everything else on a slide, so it scales with
+			    whatever this is projected onto. Renders nothing when the club has
+			    no logo, leaving the splash exactly as it was. */}
+			<ClubLogo
+				logoUrl={layout.logoUrl ?? null}
+				height="9cqw"
+				maxWidth="46cqw"
+			/>
 			{/* Nominative word use, not the official wordmark image (ADR-0024). */}
 			<div
 				className="font-display font-semibold tracking-[-0.01em]"
-				style={{ fontSize: "6cqw", color: dark ? "#ffffff" : NAVY }}
+				style={{
+					fontSize: "6cqw",
+					color: dark ? "#ffffff" : NAVY,
+					marginTop: layout.logoUrl ? "2.2cqw" : undefined,
+				}}
 			>
 				Toastmasters
 			</div>

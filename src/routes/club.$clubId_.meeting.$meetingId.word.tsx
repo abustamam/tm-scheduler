@@ -20,10 +20,12 @@ import { createFileRoute, Link, notFound } from "@tanstack/react-router";
 import { LAGOON, SANS } from "#/components/agenda/print-theme";
 import { WordOfTheDayPoster } from "#/components/agenda/word-of-the-day-poster";
 import { PublicFooter } from "#/components/public-footer";
+import { clubLogoUrl } from "#/lib/club-logo-url";
 import { resolveClubOrRedirect } from "#/lib/club-route";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import { meetingPdfBasename } from "#/lib/pdf-filename";
 import { hasWordOfTheDay } from "#/lib/word-poster";
+import { getClubLogoMeta } from "#/server/club-logo";
 import { getPublicMeetingByKey } from "#/server/meetings";
 
 export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/word")({
@@ -33,14 +35,19 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/word")({
 		// signals it by throwing, and without this the visitor gets the error
 		// boundary instead of the router's not-found page. Same translation the
 		// canonical meeting route does.
-		const data = await getPublicMeetingByKey({
-			data: { clubId: club.id, key: params.meetingId },
-		}).catch((err) => {
-			if (isMeetingNotFoundError(err)) throw notFound();
-			throw err;
-		});
+		// Parallel + non-fatal, same treatment as the print and present routes:
+		// the logo is decorative and must never cost someone the poster.
+		const [data, logoMeta] = await Promise.all([
+			getPublicMeetingByKey({
+				data: { clubId: club.id, key: params.meetingId },
+			}).catch((err) => {
+				if (isMeetingNotFoundError(err)) throw notFound();
+				throw err;
+			}),
+			getClubLogoMeta({ data: { clubId: club.id } }).catch(() => null),
+		]);
 		if (data.meeting.clubId !== club.id) throw notFound();
-		return data;
+		return { ...data, logoUrl: clubLogoUrl(club.id, logoMeta?.updatedAt) };
 	},
 	component: WordPoster,
 	// The <title> becomes the browser's default "Save as PDF" filename. The
@@ -65,7 +72,7 @@ export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/word")({
 
 function WordPoster() {
 	const { clubId: clubIdParam, meetingId } = Route.useParams();
-	const { meeting, timezone, clubName } = Route.useLoaderData();
+	const { meeting, timezone, clubName, logoUrl } = Route.useLoaderData();
 
 	const word = meeting.wordOfTheDay;
 
@@ -165,6 +172,7 @@ function WordPoster() {
 					example={meeting.wodExample}
 					clubName={clubName}
 					dateLong={dateLong}
+					logoUrl={logoUrl}
 				/>
 			</div>
 		</div>
