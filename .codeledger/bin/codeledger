@@ -34,11 +34,18 @@ if [ -n "$GLOBAL_CMD" ]; then
         fi
       done
       if [ -n "$GLOBAL_STANDALONE" ]; then
-        # Atomic copy via temp file to avoid a partial-write race with concurrent readers.
+        # Atomic synchronous copy — exec local after update so reproducibility
+        # is restored immediately and version reporting stays consistent.
         _tmp="$SCRIPT_DIR/codeledger-standalone.cjs.$$"
-        (cp "$GLOBAL_STANDALONE" "$_tmp" 2>/dev/null && mv -f "$_tmp" "$SCRIPT_DIR/codeledger-standalone.cjs" 2>/dev/null || rm -f "$_tmp" 2>/dev/null &)
+        if cp "$GLOBAL_STANDALONE" "$_tmp" 2>/dev/null && mv -f "$_tmp" "$SCRIPT_DIR/codeledger-standalone.cjs" 2>/dev/null; then
+          exec node "$SCRIPT_DIR/codeledger-standalone.cjs" "$@"
+        else
+          rm -f "$_tmp" 2>/dev/null || true
+          exec "$GLOBAL_CMD" "$@"
+        fi
+      else
+        exec "$GLOBAL_CMD" "$@"
       fi
-      exec "$GLOBAL_CMD" "$@"
     else
       if [ -z "$CODELEDGER_QUIET" ] && [ -z "$CODELEDGER_SKIP_AMBIENT_ACTIVATION" ]; then
         echo "⚠️  Repo-local codeledger v$LOCAL_VER is newer than global v$GLOBAL_VER — using repo-local." >&2
