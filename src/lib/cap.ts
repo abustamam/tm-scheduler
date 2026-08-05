@@ -29,6 +29,14 @@ export function cap(value: string, max: number): string {
 	// no allocation. Otherwise spread only a PREFIX: a code point is at most two
 	// UTF-16 units, so `max * 2` units always contains at least `max` code
 	// points — enough to slice from, and bounded.
+	// A non-positive budget has no sensible truncation: `points.slice(0, -1)` on
+	// an empty array yields `[]`, so the function would return a bare "…" — one
+	// code point OVER its own bound — and a negative `max` would make
+	// `value.slice(0, -n)` quietly drop the LAST n units instead of erroring.
+	// Unreachable from today's call sites (all pass >= 8), but this is now shared
+	// across three layers and the natural next caller is a remaining-budget
+	// `cap(x, budget - used)`.
+	if (max <= 0) return "";
 	if (value.length <= max) return value;
 	const points = [...value.slice(0, max * 2)];
 	// BOTH clauses are load-bearing, and the `value.length <= max * 2` one was

@@ -52,6 +52,30 @@ describe("cap", () => {
 		}
 	});
 
+	/**
+	 * The OTHER direction, and the one an upper bound cannot see.
+	 *
+	 * `[...out].length <= 200` is satisfied by truncating a value that already
+	 * fits, so the assertions above pass with the `value.length <= max * 2`
+	 * clause DELETED — the fix over-truncates instead of over-returning, and
+	 * every test stays green. Verified by mutation during #522's ship audit.
+	 * Pin the outcome, not just the bound.
+	 */
+	it("returns an astral value that FITS completely unchanged", () => {
+		const fits = "😀".repeat(199); // 199 code points, 398 UTF-16 units
+		expect(cap(fits, 200)).toBe(fits);
+		expect(cap("😀".repeat(200), 200)).toBe("😀".repeat(200));
+	});
+
+	it("truncates ASCII in the max < length <= 2*max window", () => {
+		// The window where the prefix spread is the whole value for ASCII. Without
+		// a fixture here, `cap.test.ts` jumps from 11 characters to 1,000 and the
+		// `points.length <= max` half is only caught incidentally elsewhere.
+		const out = cap("a".repeat(300), 200);
+		expect(out).toHaveLength(200);
+		expect(out.endsWith("…")).toBe(true);
+	});
+
 	it("never emits a lone surrogate", () => {
 		for (const input of [
 			`a${"🎤".repeat(300)}`,
