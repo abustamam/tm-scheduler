@@ -6,15 +6,21 @@
 // speaker queue, overdue list, and per-member Pathways surface are all derived
 // from `role_slots` joined to `meetings` / `role_definitions` / `members` /
 // `speeches`. No schema changes.
-import { and, asc, eq, inArray, lt, max, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, lt, max, ne, sql } from "drizzle-orm";
 import { db } from "#/db";
 import {
+	meetingAttendance,
 	meetings,
 	members,
 	roleDefinitions,
 	roleSlots,
 	speeches,
 } from "#/db/schema";
+import {
+	ATTENDANCE_LAPSE,
+	type AttendanceLapseRow,
+	scoreAttendanceLapse,
+} from "#/lib/attendance-lapse";
 
 /** A slot only counts as "held" once it's claimed or confirmed. */
 const HELD_SLOT_STATUSES = ["claimed", "confirmed"] as const;
@@ -243,5 +249,92 @@ export async function loadOverdueMembers(
 			daysSinceLastRole,
 			isOverdue,
 		};
+	});
+}
+
+/**
+ * Attendance lapse for a club (#530) — who has stopped turning up.
+ *
+ * This complements `loadOverdueMembers` rather than duplicating it, and the
+ * distinction is the point of the feature: "overdue for a role" cannot tell a
+ * member who attends every week but never volunteers from one who has stopped
+ * coming altogether. Both simply have no claimed role. Attendance is the only
+ * signal that separates a nudge-to-volunteer from a retention risk.
+ *
+ * SQL owns the window; `scoreAttendanceLapse` (pure, client-safe) owns the
+ * maths. A meeting joins the window when it is in the past, not cancelled, and
+ * somebody actually took the register — that last clause is what stops a
+ * meeting nobody recorded reading as a club-wide absence.
+ *
+ * "Past and not cancelled" deliberately matches `loadOverdueMembers`,
+ * `loadSpeakerRotation` and `loadPastMeetings` rather than testing for
+ * `status = 'completed'`. A club that takes attendance but never formally
+ * closes meetings out would otherwise have a permanently empty window and a
+ * feature that silently does nothing.
+ */
+export async function loadAttendanceLapse(
+	clubId: string,
+): Promise<AttendanceLapseRow[]> {
+	const now = new Date();
+
+	// DISTINCT over the join: a meeting qualifies once it has ANY attendance
+	// row, and the join would otherwise repeat it per attendee.
+	const windowMeetings = await db
+		.selectDistinct({
+			meetingId: meetings.id,
+			scheduledAt: meetings.scheduledAt,
+		})
+		.from(meetings)
+		.innerJoin(meetingAttendance, eq(meetingAttendance.meetingId, meetings.id))
+		.where(
+			and(
+				eq(meetings.clubId, clubId),
+				lt(meetings.scheduledAt, now),
+				ne(meetings.status, "cancelled"),
+			),
+		)
+		.orderBy(desc(meetings.scheduledAt))
+		.limit(ATTENDANCE_LAPSE.windowMeetings);
+
+	// No early return when the window is empty. Drizzle compiles an empty
+	// `inArray` to `false`, so the mark query returns nothing either way and a
+	// short-circuit guard would produce an identical result — making it
+	// impossible to write a test that fails when the guard is deleted. One
+	// cheap round-trip is worth more than an unfalsifiable branch.
+	const [memberRows, markRows] = await Promise.all([
+		db
+			.select({
+				memberId: members.id,
+				name: members.name,
+				joinedAt: members.joinedAt,
+			})
+			.from(members)
+			.where(and(eq(members.clubId, clubId), eq(members.status, "active")))
+			.orderBy(asc(members.name)),
+		db
+			.select({
+				meetingId: meetingAttendance.meetingId,
+				memberId: meetingAttendance.memberId,
+				status: meetingAttendance.status,
+			})
+			.from(meetingAttendance)
+			.where(
+				inArray(
+					meetingAttendance.meetingId,
+					windowMeetings.map((m) => m.meetingId),
+				),
+			),
+	]);
+
+	return scoreAttendanceLapse({
+		meetings: windowMeetings,
+		members: memberRows,
+		// Guest attendance rows carry a null `member_id` and are dropped here —
+		// a guest's presence is not a member's.
+		marks: markRows.flatMap((r) =>
+			r.memberId
+				? [{ meetingId: r.meetingId, memberId: r.memberId, status: r.status }]
+				: [],
+		),
 	});
 }
