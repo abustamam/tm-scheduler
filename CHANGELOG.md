@@ -2,6 +2,34 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.7.0.0] - 2026-08-05
+
+### Added
+
+- **Club action items — a standing list that stays until somebody closes it.** The club already had a
+  place to type "bring a guest" or "renew dues": the Announcements box on a meeting. What it lacked
+  was everything that makes an action item an action item — an owner, a due date, a done/dropped
+  state, and carry-forward — so those notes were retyped each meeting or quietly forgotten. Officers
+  now keep a real list under **Manage › Action items**: add an item, optionally give it an owner and
+  a target date, and close it as **done** or **dropped** when it is finished. Nothing expires on its
+  own; that is the point. Announcements stay exactly as they are, which is still the right shape for
+  a one-off notice like "no meeting next week". #529
+
+  Every signed-in club member can read the list, and an open item now shows on the meeting page
+  **before** the meeting rather than only after it is marked completed — which is when knowing what
+  the club still owes itself actually helps.
+
+  Each meeting's minutes show what was open **as of that meeting**, reconstructed from when items
+  were raised and closed rather than from today's state, plus a short "closed since the last meeting"
+  list. So March's minutes still read as March's, whether you print them in March or next year. The
+  emailed copy deliberately leaves action items out: its recipient list includes guests who signed
+  the guest book, and this is club-internal business.
+
+  Only club admins can add, edit or close an item, enforced on the server rather than by hiding
+  buttons. An item with no owner belongs to the club and is shown with no name against it — not a
+  placeholder. A due date is stored as a calendar day, so it reads back as the day that was picked
+  no matter what time zone the reader is in.
+
 ## [1.5.6.0] - 2026-08-05
 
 ### Fixed
