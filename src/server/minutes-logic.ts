@@ -6,9 +6,11 @@
 // speakers, and awards. Every assignee is a member XOR a guest (mirroring
 // `role_slots`), enforced by DB check constraints. All mutations here trust the
 // caller's admin gate (the server fn calls `requireClubRole(..., ["admin"])`).
-import { and, asc, eq, isNotNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNotNull, lt, ne, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { db } from "#/db";
+import type { MinutesActionItems } from "./action-items-logic";
+import { loadActionItemsForMinutes } from "./action-items-logic";
 import {
 	guests,
 	meetingAttendance,
@@ -119,6 +121,14 @@ export interface MinutesData {
 	 * recorded" and the UI falls back to the full roster.
 	 */
 	awardEligible: Record<AwardCategory, AwardEligible>;
+	/**
+	 * Club action items as of THIS meeting (#529) — open at the meeting instant,
+	 * plus what closed since the previous one. Reconstructed from timestamps, so
+	 * a past meeting's minutes render identically however long afterwards they
+	 * are generated. Never reaches an anonymous visitor: the whole `MinutesData`
+	 * is null unless the loader ran behind the shell gate.
+	 */
+	actionItems: MinutesActionItems;
 	counts: {
 		present: number;
 		absent: number;
@@ -389,9 +399,37 @@ export async function loadMinutes(meetingId: string): Promise<MinutesData> {
 		else unmarked++;
 	}
 
+	// Action items pinned to this meeting's instant (#529). `previousMeetingAt`
+	// bounds the "closed since we last met" list; null for a club's first
+	// minutes, which opens that window at the beginning of time.
+	const [thisMeeting] = await db
+		.select({ scheduledAt: meetings.scheduledAt })
+		.from(meetings)
+		.where(eq(meetings.id, meetingId))
+		.limit(1);
+	const meetingAt = thisMeeting?.scheduledAt ?? new Date();
+	const [previous] = await db
+		.select({ scheduledAt: meetings.scheduledAt })
+		.from(meetings)
+		.where(
+			and(
+				eq(meetings.clubId, clubId),
+				ne(meetings.status, "cancelled"),
+				lt(meetings.scheduledAt, meetingAt),
+			),
+		)
+		.orderBy(desc(meetings.scheduledAt))
+		.limit(1);
+	const actionItems = await loadActionItemsForMinutes({
+		clubId,
+		meetingAt,
+		previousMeetingAt: previous?.scheduledAt ?? null,
+	});
+
 	return {
 		meetingId,
 		clubId,
+		actionItems,
 		members: memberList,
 		guests: guestList,
 		tableTopicsSpeakers: ttList,

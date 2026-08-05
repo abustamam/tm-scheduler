@@ -31,6 +31,8 @@ import { formatMeetingDate } from "#/lib/format";
 // The caps live in `#/lib` so their VALUES are assertable — this module imports
 // `#/db`, so a unit test importing it throws `DATABASE_URL is not set`. See the
 // trap-5 note in that file.
+import { ACTION_ITEM_LIMITS } from "#/lib/action-item-limits";
+import { ACTION_ITEM_RENDER_CAPS } from "#/lib/action-item-limits";
 import { MINUTES_RENDER_CAPS } from "#/lib/minutes-render-caps";
 import { SPEAKER_LIMITS } from "#/lib/speaker-limits";
 import {
@@ -266,6 +268,49 @@ export async function renderMinutesPdf(meetingId: string): Promise<Uint8Array> {
 				elided(
 					minutes.tableTopicsSpeakers.length,
 					MINUTES_RENDER_CAPS.tableTopicsRows,
+				),
+			),
+			// Action items (#529). Reconstructed from timestamps upstream, so this
+			// block renders identically however long after the meeting the PDF is
+			// generated. Row-capped: react-pdf's cost is super-linear in ROW COUNT
+			// even when every row is short, and the count is user-controlled here
+			// because an item never auto-expires.
+			h(
+				View,
+				{ style: styles.section },
+				h(Text, { style: styles.sectionTitle }, "Action Items"),
+				minutes.actionItems.open.length
+					? minutes.actionItems.open
+							.slice(0, ACTION_ITEM_RENDER_CAPS.rows)
+							.map((a) =>
+								h(
+									Text,
+									{ key: a.id, style: styles.listItem },
+									`${cap(a.text, ACTION_ITEM_LIMITS.text)} — ${cap(
+										a.ownerName ?? "The club",
+										ACTION_ITEM_RENDER_CAPS.ownerName,
+									)}`,
+								),
+							)
+					: h(Text, { style: styles.muted }, "Nothing outstanding."),
+				elided(minutes.actionItems.open.length, ACTION_ITEM_RENDER_CAPS.rows),
+				minutes.actionItems.resolved.length
+					? minutes.actionItems.resolved
+							.slice(0, ACTION_ITEM_RENDER_CAPS.rows)
+							.map((a) =>
+								h(
+									Text,
+									{ key: a.id, style: styles.listItem },
+									`Closed (${a.resolution}): ${cap(
+										a.text,
+										ACTION_ITEM_LIMITS.text,
+									)}`,
+								),
+							)
+					: null,
+				elided(
+					minutes.actionItems.resolved.length,
+					ACTION_ITEM_RENDER_CAPS.rows,
 				),
 			),
 			// Awards

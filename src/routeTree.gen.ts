@@ -47,6 +47,7 @@ import { Route as AuthedAdminPathwaysSyncRouteImport } from './routes/_authed/ad
 import { Route as AuthedAdminDuesRouteImport } from './routes/_authed/admin/dues'
 import { Route as AuthedAdminDcpRouteImport } from './routes/_authed/admin/dcp'
 import { Route as AuthedAdminClubSettingsRouteImport } from './routes/_authed/admin/club-settings'
+import { Route as AuthedAdminActionItemsRouteImport } from './routes/_authed/admin/action-items'
 import { Route as ClubClubIdMeetingMeetingIdRouteImport } from './routes/club.$clubId.meeting.$meetingId'
 import { Route as ApiClubClubIdLogoRouteImport } from './routes/api/club.$clubId.logo'
 import { Route as AuthedAdminMeetingsNewRouteImport } from './routes/_authed/admin/meetings.new'
@@ -247,6 +248,11 @@ const AuthedAdminClubSettingsRoute = AuthedAdminClubSettingsRouteImport.update({
   path: '/admin/club-settings',
   getParentRoute: () => AuthedRoute,
 } as any)
+const AuthedAdminActionItemsRoute = AuthedAdminActionItemsRouteImport.update({
+  id: '/admin/action-items',
+  path: '/admin/action-items',
+  getParentRoute: () => AuthedRoute,
+} as any)
 const ClubClubIdMeetingMeetingIdRoute =
   ClubClubIdMeetingMeetingIdRouteImport.update({
     id: '/meeting/$meetingId',
@@ -317,6 +323,7 @@ export interface FileRoutesByFullPath {
   '/club/$clubId': typeof ClubClubIdRouteWithChildren
   '/resources/$slug': typeof ResourcesSlugRoute
   '/resources/': typeof ResourcesIndexRoute
+  '/admin/action-items': typeof AuthedAdminActionItemsRoute
   '/admin/club-settings': typeof AuthedAdminClubSettingsRoute
   '/admin/dcp': typeof AuthedAdminDcpRoute
   '/admin/dues': typeof AuthedAdminDuesRoute
@@ -363,6 +370,7 @@ export interface FileRoutesByTo {
   '/api/health': typeof ApiHealthRoute
   '/resources/$slug': typeof ResourcesSlugRoute
   '/resources': typeof ResourcesIndexRoute
+  '/admin/action-items': typeof AuthedAdminActionItemsRoute
   '/admin/club-settings': typeof AuthedAdminClubSettingsRoute
   '/admin/dcp': typeof AuthedAdminDcpRoute
   '/admin/dues': typeof AuthedAdminDuesRoute
@@ -413,6 +421,7 @@ export interface FileRoutesById {
   '/club/$clubId': typeof ClubClubIdRouteWithChildren
   '/resources/$slug': typeof ResourcesSlugRoute
   '/resources/': typeof ResourcesIndexRoute
+  '/_authed/admin/action-items': typeof AuthedAdminActionItemsRoute
   '/_authed/admin/club-settings': typeof AuthedAdminClubSettingsRoute
   '/_authed/admin/dcp': typeof AuthedAdminDcpRoute
   '/_authed/admin/dues': typeof AuthedAdminDuesRoute
@@ -463,6 +472,7 @@ export interface FileRouteTypes {
     | '/club/$clubId'
     | '/resources/$slug'
     | '/resources/'
+    | '/admin/action-items'
     | '/admin/club-settings'
     | '/admin/dcp'
     | '/admin/dues'
@@ -509,6 +519,7 @@ export interface FileRouteTypes {
     | '/api/health'
     | '/resources/$slug'
     | '/resources'
+    | '/admin/action-items'
     | '/admin/club-settings'
     | '/admin/dcp'
     | '/admin/dues'
@@ -558,6 +569,7 @@ export interface FileRouteTypes {
     | '/club/$clubId'
     | '/resources/$slug'
     | '/resources/'
+    | '/_authed/admin/action-items'
     | '/_authed/admin/club-settings'
     | '/_authed/admin/dcp'
     | '/_authed/admin/dues'
@@ -880,6 +892,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedAdminClubSettingsRouteImport
       parentRoute: typeof AuthedRoute
     }
+    '/_authed/admin/action-items': {
+      id: '/_authed/admin/action-items'
+      path: '/admin/action-items'
+      fullPath: '/admin/action-items'
+      preLoaderRoute: typeof AuthedAdminActionItemsRouteImport
+      parentRoute: typeof AuthedRoute
+    }
     '/club/$clubId/meeting/$meetingId': {
       id: '/club/$clubId/meeting/$meetingId'
       path: '/meeting/$meetingId'
@@ -970,6 +989,7 @@ interface AuthedRouteChildren {
   AuthedRosterRoute: typeof AuthedRosterRoute
   AuthedScheduleRoute: typeof AuthedScheduleRoute
   AuthedSuperadminRoute: typeof AuthedSuperadminRouteWithChildren
+  AuthedAdminActionItemsRoute: typeof AuthedAdminActionItemsRoute
   AuthedAdminClubSettingsRoute: typeof AuthedAdminClubSettingsRoute
   AuthedAdminDcpRoute: typeof AuthedAdminDcpRoute
   AuthedAdminDuesRoute: typeof AuthedAdminDuesRoute
@@ -995,6 +1015,7 @@ const AuthedRouteChildren: AuthedRouteChildren = {
   AuthedRosterRoute: AuthedRosterRoute,
   AuthedScheduleRoute: AuthedScheduleRoute,
   AuthedSuperadminRoute: AuthedSuperadminRouteWithChildren,
+  AuthedAdminActionItemsRoute: AuthedAdminActionItemsRoute,
   AuthedAdminClubSettingsRoute: AuthedAdminClubSettingsRoute,
   AuthedAdminDcpRoute: AuthedAdminDcpRoute,
   AuthedAdminDuesRoute: AuthedAdminDuesRoute,

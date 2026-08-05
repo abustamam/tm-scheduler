@@ -13,6 +13,7 @@ vi.mock("#/db", () => ({ db: {} }));
 type MinutesData = NonNullable<MinutesResult["data"]>;
 
 const emptyMinutes: MinutesData = {
+	actionItems: { open: [], resolved: [] },
 	meetingId: "m1",
 	clubId: "c1",
 	members: [],

@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import type { MinutesActionItems } from "#/server/action-items-logic";
 import { SendMinutesDialog } from "#/components/minutes/send-minutes-dialog";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
@@ -334,6 +335,7 @@ export function MeetingMinutes({
 					justSynced={justSynced}
 					onRetry={() => runDrain(queue)}
 				/>
+				<ActionItemsSection items={displayMinutes.actionItems} />
 				<AttendanceSection
 					minutes={displayMinutes}
 					canEdit={canEdit}
@@ -1126,5 +1128,66 @@ function AssigneePicker({
 				</form>
 			</PopoverContent>
 		</Popover>
+	);
+}
+
+/**
+ * Club action items as of THIS meeting (#529) — read-only here.
+ *
+ * Read-only is load-bearing rather than a shortcut: writes live only on the
+ * admin route, which keeps action items OUT of the offline minutes queue. That
+ * is what lets their write validator REJECT over-long input, where a rejecting
+ * cap on a queued op would freeze every later write for the meeting (#525/#526).
+ *
+ * The lists are reconstructed from timestamps upstream, so this renders the
+ * same thing for a past meeting no matter when it is viewed.
+ */
+function ActionItemsSection({ items }: { items: MinutesActionItems }) {
+	if (items.open.length === 0 && items.resolved.length === 0) return null;
+	return (
+		<section className="space-y-3">
+			<div>
+				<h3 className="text-sm font-bold tracking-[-0.01em]">Action items</h3>
+				<p className="text-xs text-[var(--sea-ink-soft)]">
+					What the club had outstanding at this meeting. Managed under Manage
+					&rsaquo; Action items.
+				</p>
+			</div>
+			{items.open.length > 0 ? (
+				<ul className="space-y-1.5">
+					{items.open.map((i) => (
+						<li key={i.id} className="text-sm">
+							<span className="font-medium">{i.text}</span>
+							<span className="text-xs text-[var(--sea-ink-soft)]">
+								{" · "}
+								{/* Null owner means the club collectively — a real shape,
+								    never a placeholder person. */}
+								{i.ownerName ?? "The club"}
+							</span>
+						</li>
+					))}
+				</ul>
+			) : (
+				<p className="text-sm text-[var(--sea-ink-soft)]">
+					Nothing was outstanding.
+				</p>
+			)}
+			{items.resolved.length > 0 ? (
+				<div className="space-y-1.5">
+					<h4 className="text-xs font-bold tracking-[0.04em] text-[var(--sea-ink-soft)] uppercase">
+						Closed since the last meeting
+					</h4>
+					<ul className="space-y-1">
+						{items.resolved.map((i) => (
+							<li key={i.id} className="text-sm text-[var(--sea-ink-soft)]">
+								<span className="line-through">{i.text}</span>
+								{" · "}
+								{i.resolution}
+							</li>
+						))}
+					</ul>
+				</div>
+			) : null}
+		</section>
 	);
 }
