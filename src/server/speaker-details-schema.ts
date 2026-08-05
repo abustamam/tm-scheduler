@@ -12,6 +12,7 @@
 // is the point (the public no-auth path can skip the client entirely).
 import { z } from "zod";
 import {
+	clampSpeechWindow,
 	SPEAKER_FIELDS,
 	SPEAKER_UPDATE_FIELDS,
 	speechMinutesField,
@@ -94,6 +95,9 @@ export const speakerDetailsSchema = buildSpeakerDetailsSchema(
 export const speakerDetailsUpdateSchema = buildSpeakerDetailsSchema(
 	SPEAKER_UPDATE_FIELDS,
 	speechMinutesUpdateField,
-);
+	// Clamped AFTER the refinement, never inside the field. Clamping first let
+	// `{minMinutes: 700, maxMinutes: 650}` collapse to `{600, 600}` and pass the
+	// order check — see `clampSpeechWindow` in `#/lib/speaker-limits`.
+).transform(clampSpeechWindow);
 
 export type SpeakerDetailsInput = z.infer<typeof speakerDetailsSchema>;

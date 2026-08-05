@@ -1,4 +1,25 @@
 import { z } from "zod";
+import { cap } from "./cap";
+
+/**
+ * A truncating string validator, built once rather than spelled out per field.
+ *
+ * Truncation goes through the audited `cap` (#/lib/cap), NOT a bare
+ * `.slice()`. A UTF-16 slice cuts surrogate pairs in half: #522's review
+ * measured `"a" + "🎤".repeat(150)` truncating to a 200-unit string ending in a
+ * lone high surrogate, which react-pdf renders as a tombstone glyph and which
+ * is invalid in a PDF text string. `cap` slices by code point and bounds its
+ * own cost by `max` rather than by input length.
+ *
+ * Consequence worth knowing: the bound is `max` CODE POINTS, so an all-astral
+ * value can still be up to `2 * max` UTF-16 units. That is bounded, which is
+ * what matters here; assert on code points, not `.length`.
+ */
+const truncating = (max: number) =>
+	z
+		.string()
+		.trim()
+		.transform((v) => cap(v, max));
 
 /**
  * Length caps on the speaker-detail fields (#522).
@@ -74,14 +95,25 @@ export const SPEAKER_LIMITS = {
  *
  * `.trim()` runs BEFORE `.max()`, so trailing whitespace can never push an
  * otherwise-valid value over the cap.
+ *
+ * Every cap carries a HUMAN message. Without one, zod's default surfaces as
+ * `ZodError.message`, which is `JSON.stringify(issues)` — and the claim sheet
+ * renders exactly that string in a toast (`toast.error(errMessage(err))`).
+ * Before #522 these fields had no `.max()` at all, so a ZodError was
+ * effectively unreachable from that form; adding the cap without a message
+ * would have made a raw multi-line JSON dump one paste away on a public
+ * no-auth page.
  */
+const rejecting = (max: number, label: string) =>
+	z.string().trim().max(max, `Keep the ${label} under ${max} characters.`);
+
 export const SPEAKER_FIELDS = {
-	speechTitle: z.string().trim().max(SPEAKER_LIMITS.speechTitle),
-	introduction: z.string().trim().max(SPEAKER_LIMITS.introduction),
-	pathwayPath: z.string().trim().max(SPEAKER_LIMITS.pathwayPath),
-	projectName: z.string().trim().max(SPEAKER_LIMITS.projectName),
-	projectLevel: z.string().trim().max(SPEAKER_LIMITS.projectLevel),
-	presentationUrl: z.string().trim().max(SPEAKER_LIMITS.presentationUrl),
+	speechTitle: rejecting(SPEAKER_LIMITS.speechTitle, "speech title"),
+	introduction: rejecting(SPEAKER_LIMITS.introduction, "introduction"),
+	pathwayPath: rejecting(SPEAKER_LIMITS.pathwayPath, "path name"),
+	projectName: rejecting(SPEAKER_LIMITS.projectName, "project name"),
+	projectLevel: rejecting(SPEAKER_LIMITS.projectLevel, "project level"),
+	presentationUrl: rejecting(SPEAKER_LIMITS.presentationUrl, "slides link"),
 } as const;
 
 /**
@@ -93,13 +125,20 @@ export const SPEAKER_FIELDS = {
  * would block saving unrelated fields on the same form.
  *
  * `updateSpeakerDetails` is squarely the second case. `edit-speech-sheet.tsx`
- * prefills EVERY speaker field with `defaultValue` from the stored row and
- * resubmits all of them on save, so one value written before this cap existed
- * would fail `.parse()` and block editing the speech title, the pathway, the
- * timing and the slides link too. Worse, the row would be unrepairable through
- * the UI: the only way to shorten the offending value is to save the form, and
- * the form is what the value blocks. Truncating instead makes opening and
- * saving the form the repair.
+ * prefills `speechTitle` and `presentationUrl` with `defaultValue` from the
+ * stored row and resubmits them on every save, so one value written before this
+ * cap existed would fail `.parse()` and block editing the pathway, the timing
+ * and the slides link too. Worse, the row would be unrepairable through the UI:
+ * the only way to shorten the offending value is to save the form, and the form
+ * is what the value blocks. Truncating instead makes opening and saving the
+ * form the repair.
+ *
+ * Two caveats worth knowing before treating this list as uniform. The three
+ * Pathways fields are rendered by `ProjectPicker`, which only emits them from
+ * its free-text fallback — with a picked project they arrive `undefined` and
+ * are overwritten from the catalog anyway. And `introduction` appears in no
+ * form at all; it is here for symmetry with the create side, the same caveat
+ * [[wod-limits]] already makes for its `definition`/`example`.
  *
  * `claimSlot` deliberately does NOT use these. Nothing is prefilled there — the
  * person just typed the value — so rejecting locks nobody out of anything,
@@ -111,49 +150,57 @@ export const SPEAKER_FIELDS = {
  * failing closed.
  */
 export const SPEAKER_UPDATE_FIELDS = {
-	speechTitle: z
-		.string()
-		.trim()
-		.transform((v) => v.slice(0, SPEAKER_LIMITS.speechTitle)),
-	introduction: z
-		.string()
-		.trim()
-		.transform((v) => v.slice(0, SPEAKER_LIMITS.introduction)),
-	pathwayPath: z
-		.string()
-		.trim()
-		.transform((v) => v.slice(0, SPEAKER_LIMITS.pathwayPath)),
-	projectName: z
-		.string()
-		.trim()
-		.transform((v) => v.slice(0, SPEAKER_LIMITS.projectName)),
-	projectLevel: z
-		.string()
-		.trim()
-		.transform((v) => v.slice(0, SPEAKER_LIMITS.projectLevel)),
-	presentationUrl: z
-		.string()
-		.trim()
-		.transform((v) => v.slice(0, SPEAKER_LIMITS.presentationUrl)),
+	speechTitle: truncating(SPEAKER_LIMITS.speechTitle),
+	introduction: truncating(SPEAKER_LIMITS.introduction),
+	pathwayPath: truncating(SPEAKER_LIMITS.pathwayPath),
+	projectName: truncating(SPEAKER_LIMITS.projectName),
+	projectLevel: truncating(SPEAKER_LIMITS.projectLevel),
+	presentationUrl: truncating(SPEAKER_LIMITS.presentationUrl),
 } as const;
 
 /**
- * A speech-window bound, rejecting (create) or clamping (update).
+ * A speech-window bound, rejecting (create) or clamped later (update).
  *
- * Clamping rather than truncating on update for the same lockout reason as the
- * strings: an out-of-range number stored before this cap must not be the thing
- * that stops an admin fixing it. Clamping preserves the both-or-neither
- * refinement downstream, since clamping both ends of an inverted pair leaves
- * `min <= max` intact.
+ * The update variant deliberately does NOT clamp here, and that ordering is the
+ * whole point. Clamping inside the field runs BEFORE the object's
+ * both-or-neither refinement, which sees only post-transform values — so an
+ * inverted pair whose ends BOTH exceed the cap collapsed into a valid-looking
+ * one. Measured in #522's review: `{minMinutes: 700, maxMinutes: 650}` was
+ * accepted and rewritten to `{600, 600}`, a window nobody typed, which is
+ * exactly what `speech-window.ts` exists to prevent. The original test used
+ * `{999_999, 5}`, where only one end is over the cap, so it rejected either way
+ * and could not see this.
+ *
+ * `clampSpeechWindow` below therefore runs AFTER the refinement, so the order
+ * check reads the values the caller actually sent.
  */
 export const speechMinutesField = z
 	.number()
 	.int()
 	.positive()
-	.max(SPEAKER_LIMITS.maxSpeechMinutes);
+	.max(
+		SPEAKER_LIMITS.maxSpeechMinutes,
+		`A speech can run at most ${SPEAKER_LIMITS.maxSpeechMinutes} minutes.`,
+	);
 
-export const speechMinutesUpdateField = z
-	.number()
-	.int()
-	.positive()
-	.transform((v) => Math.min(v, SPEAKER_LIMITS.maxSpeechMinutes));
+export const speechMinutesUpdateField = z.number().int().positive();
+
+/**
+ * Clamp an already-VALIDATED speech window onto the cap.
+ *
+ * Applied as an object-level transform after `superRefine`, so it can never
+ * manufacture a passing pair out of a rejected one. Clamping (not rejecting)
+ * for the same lockout reason as the strings: a number stored before this cap
+ * must not be the thing that stops an admin fixing the row.
+ */
+export function clampSpeechWindow<
+	T extends { minMinutes?: number; maxMinutes?: number },
+>(value: T): T {
+	const clamp = (n: number | undefined) =>
+		n == null ? n : Math.min(n, SPEAKER_LIMITS.maxSpeechMinutes);
+	return {
+		...value,
+		minMinutes: clamp(value.minMinutes),
+		maxMinutes: clamp(value.maxMinutes),
+	};
+}

@@ -150,4 +150,28 @@ describe("the two variants handle over-long input differently (#522)", () => {
 		});
 		expect(r.success).toBe(false);
 	});
+
+	it("rejects an inverted pair when BOTH ends are over the cap", () => {
+		// The case the fixture above cannot see. `{999_999, 5}` rejects whether or
+		// not clamping happens, because only one end is over. With both ends over,
+		// clamping-before-refining collapsed them to an equal, valid-looking pair:
+		// #522's review measured `{700, 650}` being accepted as `{600, 600}`, a
+		// window nobody typed. `clampSpeechWindow` now runs AFTER the refinement.
+		const r = speakerDetailsUpdateSchema.safeParse({
+			minMinutes: 700,
+			maxMinutes: 650,
+		});
+		expect(r.success).toBe(false);
+	});
+
+	it("still clamps a valid over-cap window down to the cap", () => {
+		const r = speakerDetailsUpdateSchema.safeParse({
+			minMinutes: 700,
+			maxMinutes: 900,
+		});
+		expect(r.success).toBe(true);
+		if (!r.success) return;
+		expect(r.data.minMinutes).toBe(SPEAKER_LIMITS.maxSpeechMinutes);
+		expect(r.data.maxMinutes).toBe(SPEAKER_LIMITS.maxSpeechMinutes);
+	});
 });

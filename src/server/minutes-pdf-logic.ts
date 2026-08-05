@@ -22,7 +22,16 @@ import { eq } from "drizzle-orm";
 import { createElement as h } from "react";
 import { db } from "#/db";
 import { clubs, meetings } from "#/db/schema";
+// The ONE audited `cap`. It is deliberately not reimplemented here: that
+// function has now had TWO cost/correctness defects found in it by review (a
+// full-input spread in #519, an astral-plane bypass in #522), so a second
+// `slice` written from scratch is exactly the wrong kind of duplication.
+import { cap } from "#/lib/cap";
 import { formatMeetingDate } from "#/lib/format";
+// The caps live in `#/lib` so their VALUES are assertable — this module imports
+// `#/db`, so a unit test importing it throws `DATABASE_URL is not set`. See the
+// trap-5 note in that file.
+import { MINUTES_RENDER_CAPS } from "#/lib/minutes-render-caps";
 import { SPEAKER_LIMITS } from "#/lib/speaker-limits";
 import {
 	type AttendanceStatus,
@@ -31,45 +40,6 @@ import {
 	loadMinutesProgram,
 	type MinutesData,
 } from "./minutes-logic";
-// The ONE audited `cap` (#519). It is deliberately not reimplemented here: the
-// first version of that function spread its whole input before deciding whether
-// to truncate, which recreated the very DoS it existed to close, so a second
-// `slice` written from scratch is exactly the wrong kind of duplication.
-import { cap } from "./role-sheet-layout";
-
-/**
- * Render-side caps for the program list (#522).
- *
- * This PDF is gated — session, club membership, AND published minutes — so it
- * is not the unauthenticated surface #519 closed. It still renders synchronously
- * in the single Node process (ADR-0007), so an oversized value is a stall for
- * every other request, and any club member can reach it.
- *
- * These bound the RENDER rather than the write, which is the half that matters
- * for rows already in the database: the speaker-detail write caps added in #522
- * cannot retroactively shorten a value stored before them, and this change ships
- * no backfill.
- *
- * `speechTitle` reuses `SPEAKER_LIMITS.speechTitle` rather than declaring its
- * own number, so the write cap and the render cap cannot drift apart.
- *
- * `name` and `roleName` are capped here but NOT on write, and that is a
- * deliberate defence-in-depth choice rather than a hole being patched. The
- * PUBLIC guest self-add is already bounded — `guestBookSchema` caps a name at
- * 120, an email at 200 and a phone at 40 — and `members.ts` bounds a member
- * name at 80. The name writes that remain unbounded (`guests.ts`,
- * `minutes.ts`, `guest-pipeline.ts`'s `updateGuest`, and the role-definition
- * paths) are all ADMIN-only, so none of them is reachable the way the speaker
- * details above are. They are not worth their own change on that basis.
- *
- * Capping them here anyway costs one call each and covers the two things a
- * write cap cannot: a row written before any cap existed, and a future write
- * path added without one.
- */
-const MINUTES_RENDER_CAPS = {
-	name: 120,
-	roleName: 120,
-} as const;
 
 const AWARD_LABELS: Record<AwardCategory, string> = {
 	best_speaker: "Best Speaker",
@@ -175,9 +145,11 @@ export async function renderMinutesPdf(meetingId: string): Promise<Uint8Array> {
 
 	const attendance = buildAttendanceSection(minutes);
 
+	const clubName = cap(club?.name ?? "Meeting", MINUTES_RENDER_CAPS.club);
+
 	const doc = h(
 		Document,
-		{ title: `Minutes — ${club?.name ?? "Meeting"}` },
+		{ title: `Minutes — ${clubName}` },
 		h(
 			Page,
 			{ size: "LETTER", style: styles.page },
@@ -185,20 +157,31 @@ export async function renderMinutesPdf(meetingId: string): Promise<Uint8Array> {
 			h(
 				View,
 				null,
-				h(Text, { style: styles.title }, club?.name ?? "Meeting Minutes"),
+				h(
+					Text,
+					{ style: styles.title },
+					club?.name ? clubName : "Meeting Minutes",
+				),
 				h(
 					Text,
 					{ style: styles.subtitle },
 					formatMeetingDate(meeting.scheduledAt, club?.timezone ?? "UTC"),
 				),
 				meeting.theme
-					? h(Text, { style: styles.headerMeta }, `Theme: ${meeting.theme}`)
+					? h(
+							Text,
+							{ style: styles.headerMeta },
+							`Theme: ${cap(meeting.theme, MINUTES_RENDER_CAPS.theme)}`,
+						)
 					: null,
 				meeting.wordOfTheDay
 					? h(
 							Text,
 							{ style: styles.headerMeta },
-							`Word of the Day: ${meeting.wordOfTheDay}`,
+							`Word of the Day: ${cap(
+								meeting.wordOfTheDay,
+								MINUTES_RENDER_CAPS.word,
+							)}`,
 						)
 					: null,
 			),
@@ -213,7 +196,11 @@ export async function renderMinutesPdf(meetingId: string): Promise<Uint8Array> {
 						View,
 						{ key: r.label, style: styles.row },
 						h(Text, { style: styles.rowLabel }, r.label),
-						h(Text, { style: styles.rowValue }, r.names),
+						h(
+							Text,
+							{ style: styles.rowValue },
+							cap(r.names, MINUTES_RENDER_CAPS.namesLine),
+						),
 					),
 				),
 			),
@@ -223,15 +210,21 @@ export async function renderMinutesPdf(meetingId: string): Promise<Uint8Array> {
 				{ style: styles.section },
 				h(Text, { style: styles.sectionTitle }, "Table Topics Speakers"),
 				minutes.tableTopicsSpeakers.length
-					? minutes.tableTopicsSpeakers.map((s, i) =>
-							h(
-								Text,
-								{ key: s.id, style: styles.listItem },
-								`${i + 1}. ${s.name}${s.isGuest ? " (Guest)" : ""}${
-									s.topic ? ` — ${s.topic}` : ""
-								}`,
-							),
-						)
+					? minutes.tableTopicsSpeakers
+							.slice(0, MINUTES_RENDER_CAPS.tableTopicsRows)
+							.map((s, i) =>
+								h(
+									Text,
+									{ key: s.id, style: styles.listItem },
+									`${i + 1}. ${cap(s.name, MINUTES_RENDER_CAPS.name)}${
+										s.isGuest ? " (Guest)" : ""
+									}${
+										s.topic
+											? ` — ${cap(s.topic, MINUTES_RENDER_CAPS.topic)}`
+											: ""
+									}`,
+								),
+							)
 					: h(Text, { style: styles.muted }, "No Table Topics recorded."),
 			),
 			// Awards
@@ -239,18 +232,24 @@ export async function renderMinutesPdf(meetingId: string): Promise<Uint8Array> {
 				View,
 				{ style: styles.section },
 				h(Text, { style: styles.sectionTitle }, "Awards"),
-				minutes.awards.map((a) =>
-					h(
-						View,
-						{ key: a.category, style: styles.row },
-						h(Text, { style: styles.rowLabel }, AWARD_LABELS[a.category]),
+				minutes.awards
+					.slice(0, MINUTES_RENDER_CAPS.awardRows)
+					.map((a) =>
 						h(
-							Text,
-							{ style: a.name ? styles.rowValue : styles.muted },
-							a.name ? `${a.name}${a.isGuest ? " (Guest)" : ""}` : "—",
+							View,
+							{ key: a.category, style: styles.row },
+							h(Text, { style: styles.rowLabel }, AWARD_LABELS[a.category]),
+							h(
+								Text,
+								{ style: a.name ? styles.rowValue : styles.muted },
+								a.name
+									? `${cap(a.name, MINUTES_RENDER_CAPS.name)}${
+											a.isGuest ? " (Guest)" : ""
+										}`
+									: "—",
+							),
 						),
 					),
-				),
 			),
 			// Program
 			h(
@@ -258,23 +257,25 @@ export async function renderMinutesPdf(meetingId: string): Promise<Uint8Array> {
 				{ style: styles.section },
 				h(Text, { style: styles.sectionTitle }, "Program"),
 				program.length
-					? program.map((p) =>
-							h(
-								Text,
-								{ key: p.slotId, style: styles.listItem },
-								`${cap(p.roleName, MINUTES_RENDER_CAPS.roleName)}: ${
-									p.assigneeName
-										? `${cap(p.assigneeName, MINUTES_RENDER_CAPS.name)}${
-												p.isGuest ? " (Guest)" : ""
-											}`
-										: "—"
-								}${
-									p.speechTitle
-										? ` — “${cap(p.speechTitle, SPEAKER_LIMITS.speechTitle)}”`
-										: ""
-								}`,
-							),
-						)
+					? program
+							.slice(0, MINUTES_RENDER_CAPS.programRows)
+							.map((p) =>
+								h(
+									Text,
+									{ key: p.slotId, style: styles.listItem },
+									`${cap(p.roleName, MINUTES_RENDER_CAPS.roleName)}: ${
+										p.assigneeName
+											? `${cap(p.assigneeName, MINUTES_RENDER_CAPS.name)}${
+													p.isGuest ? " (Guest)" : ""
+												}`
+											: "—"
+									}${
+										p.speechTitle
+											? ` — “${cap(p.speechTitle, SPEAKER_LIMITS.speechTitle)}”`
+											: ""
+									}`,
+								),
+							)
 					: h(Text, { style: styles.muted }, "No program recorded."),
 			),
 		),

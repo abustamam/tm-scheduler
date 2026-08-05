@@ -26,6 +26,7 @@ import { createElement as h, type ReactNode } from "react";
 import type { RoleSheetKey } from "../data/role-sheets";
 import { EVALUATION_TIMING_ASK } from "../lib/agenda-runsheet";
 import { TOASTMASTERS_DISCLAIMER } from "../lib/brand";
+import { cap } from "../lib/cap";
 import {
 	formatTimingClock,
 	graceSentence,
@@ -831,33 +832,17 @@ export const RENDER_CAPS = {
 } as const;
 
 /**
- * Truncate with an ellipsis, or return the value unchanged when it fits.
+ * Re-exported so this module's existing callers keep importing `cap` from here.
  *
- * Exported because the download FILENAME needs the same bound as the document:
- * `renderRoleSheetPdf` returns the club name for `content-disposition`, which
- * never passes through `capFill`.
+ * The implementation moved to `#/lib/cap` in #522: the speaker-detail write
+ * caps need the same code-point-safe truncation, and `#/lib/speaker-limits` is
+ * client-safe — importing this `@react-pdf/renderer` module into it would pull
+ * the PDF stack into the browser bundle.
  *
- * Slices by CODE POINT, not UTF-16 code unit: `"…".slice()` on a string whose
- * emoji straddles the cut emits a lone surrogate, which react-pdf renders as a
- * tombstone glyph. Reachable through a speaker label, since speech titles and
- * member names carry no write-side length cap.
+ * `renderRoleSheetPdf` uses it for the download FILENAME, which never passes
+ * through `capFill`.
  */
-export function cap(value: string, max: number): string {
-	// Cost must scale with `max`, NOT with the input. The first version of this
-	// spread the whole string (`[...value]`) before deciding whether to truncate,
-	// which recreated the exact DoS this file exists to stop: 8MB of speech title
-	// cost 473ms and tens of MB of heap per unauthenticated GET, for a 160-char
-	// output. Found by the adversarial pass.
-	//
-	// Two bounds do it. A UTF-16 `.length` is always >= the code-point count, so
-	// a value that fits by that measure fits by any, and returns untouched with
-	// no allocation. Otherwise spread only a PREFIX: a code point is at most two
-	// UTF-16 units, so `max * 2` units always contains at least `max` code
-	// points — enough to slice from, and bounded.
-	if (value.length <= max) return value;
-	const points = [...value.slice(0, max * 2)];
-	return points.length <= max ? value : `${points.slice(0, max - 1).join("")}…`;
-}
+export { cap };
 
 /**
  * Apply `RENDER_CAPS` to a fill. Pure — the caller's object is never mutated,
