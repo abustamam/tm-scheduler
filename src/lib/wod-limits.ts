@@ -1,4 +1,26 @@
 import { z } from "zod";
+import { cap } from "./cap";
+
+/**
+ * A truncating string validator, going through the audited `cap` (#/lib/cap).
+ *
+ * NOT a bare `.slice()`, which is what this file shipped until #522's
+ * adversarial pass. A UTF-16 slice cuts surrogate pairs in half: measured here,
+ * `("a" + "🎤".repeat(30)).slice(0, 60)` ends in a lone HIGH surrogate, which
+ * node-postgres then UTF-8-encodes to U+FFFD — silently corrupting the stored
+ * row. Worse, the corrupted value sits exactly AT the cap, so the render-side
+ * `cap()` passes it through untouched onto the PUBLIC no-session
+ * `/api/meetings/:id/role-sheets/:sheet/pdf`, producing the tombstone glyph and
+ * invalid PDF text string this file's own comments exist to prevent.
+ *
+ * `speaker-limits.ts` copied this module's reject/truncate split but not this
+ * bug; the two now do the same job the same way.
+ */
+const truncating = (max: number) =>
+	z
+		.string()
+		.trim()
+		.transform((v) => cap(v, max));
 
 /**
  * Length caps on the Word-of-the-Day fields (#519).
@@ -88,16 +110,7 @@ export const WOD_FIELDS = {
  * shortened, never fatal.
  */
 export const WOD_UPDATE_FIELDS = {
-	word: z
-		.string()
-		.trim()
-		.transform((v) => v.slice(0, WOD_LIMITS.word)),
-	definition: z
-		.string()
-		.trim()
-		.transform((v) => v.slice(0, WOD_LIMITS.definition)),
-	example: z
-		.string()
-		.trim()
-		.transform((v) => v.slice(0, WOD_LIMITS.example)),
+	word: truncating(WOD_LIMITS.word),
+	definition: truncating(WOD_LIMITS.definition),
+	example: truncating(WOD_LIMITS.example),
 } as const;

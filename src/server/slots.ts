@@ -22,7 +22,10 @@ import {
 	editSlotSpeech,
 	reassignSlotCore,
 } from "./slots-logic";
-import { speakerDetailsSchema } from "./speaker-details-schema";
+import {
+	speakerDetailsSchema,
+	speakerDetailsUpdateSchema,
+} from "./speaker-details-schema";
 import { requestWriteActor } from "./write-actor-logic";
 
 const claimSchema = z.object({
@@ -363,7 +366,10 @@ export const reassignSlot = createServerFn({ method: "POST" })
 const updateSpeakerDetailsSchema = z.object({
 	slotId: z.string().uuid(),
 	actorMemberId: z.string().uuid(),
-	speakerDetails: speakerDetailsSchema,
+	// The TRUNCATING variant, not the rejecting one `claimSlot` uses. The edit
+	// sheet prefills and resubmits every field, so a value stored before #522's
+	// caps must not block edits to the others — see `#/lib/speaker-limits`.
+	speakerDetails: speakerDetailsUpdateSchema,
 });
 
 /** Edit a speaker slot's speech details (trust-based). Blank title → "TBA".

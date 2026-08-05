@@ -2,6 +2,26 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.5.3.0] - 2026-08-04
+
+### Fixed
+
+- **An emoji could get past the limits added last release, and stall the site anyway.** Those limits worked by counting characters, and the check that decided "this one is short enough, leave it alone" only ever looked at the beginning of the text. For ordinary writing that is the same thing. For text made entirely of emoji it is not, and the check waved the whole thing through no matter how long it was. A club name of twenty thousand emoji took nearly eight seconds of solid work on the public role-sheet link, against a sixth of a second for the same length of ordinary text. Fixed, with the emoji case now part of the tests.
+
+- **Speech details had no limits at all.** Anyone who can sign up for a speaking slot — which on a public club page is anyone who picks their name — could save a speech title, introduction, pathway, project or slides link of unlimited length. Those fields are now bounded. Signing up for a slot rejects anything over the limit and says which field and by how much; editing an existing speech shortens it instead, so a value saved before the limits existed can never leave someone unable to fix the rest of the row. A slides link is the exception and is rejected rather than shortened, because a shortened link still looks like a link and simply does not work.
+
+- **A speech could be booked for two million minutes.** The minimum and maximum minutes had no upper bound, which made the agenda's running times nonsense and, past a certain size, failed the save with an unexplained error instead of a message. Capped at ten hours, and an impossible window like "at least 700, at most 650 minutes" is now refused rather than quietly rewritten into something the speaker never asked for.
+
+- **The minutes PDF had no limits of its own.** It is a smaller audience than the role sheets — you need to be signed in and a member of the club — but it is built the same way, in the same single process, and it printed the meeting theme, the Word of the Day, the club name, every attendee's name, the Table Topics list, the awards and the whole program with nothing bounding any of it. A meeting stuffed with entries took over a minute. Everything it prints is now bounded, and where a list is too long to print in full it says how many entries were left out rather than stopping silently.
+
+- **Editing a Word of the Day could corrupt it.** Shortening text by cutting at a fixed character count can slice an emoji in half. The leftover half was written to the database, where it became a question-mark box, and it then printed as a blank tombstone on the role sheets. The same flaw was in the speech-detail limits above. Both now shorten whole characters at a time.
+
+### Notes for this club
+
+- Nothing you have entered is affected. The longest speech title on record is 23 characters against a 200 limit, the longest project name 38 against 120, and the longest speech booked is 7 minutes against a 600 limit.
+
+- Minutes now print at most 60 program rows and 40 Table Topics speakers per meeting, with a "+N more not shown" line when there are more. No meeting on record comes close to either.
+
 ## [1.5.2.0] - 2026-08-04
 
 ### Fixed

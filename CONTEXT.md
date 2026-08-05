@@ -282,15 +282,24 @@ per-Person opt-out, the no-auth `/unsubscribe` link, and per-club settings — s
   (ADR-0007) — so an oversized value is not a slow download, it is the event loop and therefore
   every other request stopped. Two layers, the same shape as the logo's byte cap plus
   `isDecodeSafe`: the write schemas bound what can be **stored** (`WOD_LIMITS` / `WOD_FIELDS`,
-  `src/lib/wod-limits.ts`), and `capFill` bounds what is **laid out** (`RENDER_CAPS`,
+  `src/lib/wod-limits.ts`, plus `SPEAKER_LIMITS` for the speech title — see below), and `capFill`
+  bounds what is **laid out** (`RENDER_CAPS`,
   `src/server/role-sheet-layout.ts`), so a row predating the cap — or arriving by import,
   migration, or a future write path — is truncated rather than fatal. `buildRoleSheetDoc` applies
   `capFill` at the single entry point, so a new field on `RoleSheetFill` needs a cap there; a
   consumer reading the **fill** instead of the document does NOT get one, which is why
   `renderRoleSheetPdf` separately caps the club name and date it hands back for the
-  `content-disposition` filename. `cap` itself must stay bounded by its `max`, not by its input —
-  spreading the whole string before deciding whether to truncate recreates the same DoS. See
-  #519 / #496.
+  `content-disposition` filename. `cap` itself lives in `src/lib/cap.ts` (re-exported from
+  `role-sheet-layout.ts` for its existing callers) because three layers now need it and two of
+  them are client-safe. Two invariants hold it together, and #522 broke on the second. Its cost
+  must stay bounded by its `max`, not by its input — spreading the whole string before deciding
+  whether to truncate recreates the same DoS. And it must bound CODE POINTS, not UTF-16 units:
+  slicing by unit cuts a surrogate pair in half and emits a lone surrogate, which react-pdf draws
+  as a tombstone and which is invalid in a PDF text string. Those two pull against each other, so
+  the fit check reads a bounded PREFIX **and** the raw length. Dropping the length half passes an
+  all-astral value of any size straight through — a 20,000-emoji club name cost 7,848ms of blocked
+  event loop on the public role-sheets GET, against 156ms for the same length in ASCII. See
+  #519 / #522 / #496.
 - The Word-of-the-Day write caps **reject** on the narrow paths and **truncate** on the wide one;
   reconciling them re-breaks one of the two. `createMeetingSchema` (word only — it accepts no
   definition or example) and `updateWordOfTheDaySchema` reject (`WOD_FIELDS`): those edits touch
@@ -300,6 +309,32 @@ per-Person opt-out, the no-auth `/unsubscribe` link, and per-club settings — s
   and resubmits all three fields — rejecting would lock an admin out of saving the meeting's theme,
   date and location over text they cannot see. The columns are unbounded `text` and no backfill
   shipped, so such a row is possible. See #519.
+- The **speaker-detail** fields (`SPEAKER_LIMITS` / `SPEAKER_FIELDS` / `SPEAKER_UPDATE_FIELDS`,
+  `src/lib/speaker-limits.ts`) follow that same reject/truncate split, for the same reason.
+  `claimSlot` **rejects**: nothing is prefilled there, so an error costs only what was just typed,
+  and truncating would silently drop the tail. `updateSpeakerDetails` **truncates**, because
+  `edit-speech-sheet.tsx` resubmits every field it renders, so one pre-cap value would block edits
+  to the rest of the row — and that form is the only way to repair it. `presentationUrl` rejects on
+  **both** paths: `normalizePresentationUrl` checks only scheme and hostname, so a cut link still
+  validates and still looks like a link while 404ing. Two sizing constraints are not obvious from
+  the speeches table: `projectName` must clear the Pathways catalog's widest project name (56),
+  because `applyProjectDisplay` overwrites that field from the catalog *after* this schema runs;
+  and the speech window is clamped only **after** the both-or-neither refinement, since clamping
+  inside the field turns an inverted pair like `{700, 650}` into a valid-looking `{600, 600}`
+  nobody typed. Every cap carries a human message — the claim sheet renders `ZodError.message`
+  straight into a toast, and zod's default is a JSON dump of its issues. See #522.
+- The **minutes PDF** (`/api/meetings/:id/minutes/pdf`) is the second synchronous react-pdf surface
+  and is bounded the same two ways (`MINUTES_RENDER_CAPS`, `src/lib/minutes-render-caps.ts`). It
+  needs a session and club membership, so it is narrower than the public role sheets, but it lays
+  out in the same one process, so any club member can stall every other request. Both halves are
+  load-bearing: per-string caps, **and** ROW-COUNT caps (`programRows` 60, `tableTopicsRows` 40,
+  `nameRows` 100). react-pdf's cost is super-linear in row count even when every row is short
+  (40 rows → 112ms, 500 → 285ms, 5,000 → 19,581ms), and the count is attacker-controlled with no
+  session — `addSpeakerSlot` inserts two `role_slots` per call with no ceiling. The row caps are
+  sized against ASTRAL text rather than ASCII, which is why they are tens and not hundreds. A cap
+  that hides data prints `+N more` rather than stopping silently. Several of the fields it caps
+  (`theme`, `topic`, `roleName`) are still unbounded on write, which is the point of a render cap:
+  see #525.
 - A `notifications` row is delivered **at most once**: the poller claims it with a conditional
   update (bump `attempts` / stamp `last_attempted_at` `WHERE sent_at IS NULL AND attempts = <read>`)
   before sending, then sets `sent_at` on success. Never send without claiming first (ADR-0023).
