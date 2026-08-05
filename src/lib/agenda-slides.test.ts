@@ -1320,17 +1320,26 @@ describe("buildSlideDeck awards + reminders", () => {
 		expect(kinds([])).not.toContain("awards");
 	});
 
-	it("projects guest comments between the awards and the announcements (#352)", () => {
+	/**
+	 * The deck half of #442's golden order. `agenda-parity.test.ts` cannot pin
+	 * this: `SECTION_BY_SLIDE` maps `reminders` to `null`, so announcements are
+	 * excluded from the run-sheet/deck comparison entirely and parity stays
+	 * green whichever order they sit in. `agenda-runsheet.test.ts` carries the
+	 * matching assertion for the printed side.
+	 */
+	it("projects awards → announcements → guest comments (#352, reordered #442)", () => {
 		const deck = build({
 			slots: [speaker, tt, evaluator],
 			meeting: { ...meeting, reminders: "Choose a learning path." },
 		});
 		const kindsOf = deck.map((s) => s.kind);
+		expect(kindsOf.indexOf("reminders")).toBe(kindsOf.indexOf("awards") + 1);
 		expect(kindsOf.indexOf("guestComments")).toBe(
-			kindsOf.indexOf("awards") + 1,
+			kindsOf.indexOf("reminders") + 1,
 		);
-		expect(kindsOf.indexOf("reminders")).toBe(
-			kindsOf.indexOf("guestComments") + 1,
+		// And the deck ends on the guests, not on the club talking to itself.
+		expect(kindsOf.indexOf("guestComments")).toBeLessThan(
+			kindsOf.indexOf("thankYou"),
 		);
 	});
 
@@ -1340,18 +1349,19 @@ describe("buildSlideDeck awards + reminders", () => {
 		expect(kinds([])).toEqual(["title", "guestComments", "thankYou"]);
 	});
 
-	it("reminders slide only when reminders non-blank, just before thankYou", () => {
+	it("reminders slide only when reminders non-blank, before guest comments", () => {
 		expect(kinds([])).not.toContain("reminders");
 		const deck = build({
 			meeting: { ...meeting, reminders: "Choose a learning path." },
 		});
+		// #442 moved announcements ahead of guest comments on both surfaces.
 		expect(deck.map((s) => s.kind)).toEqual([
 			"title",
-			"guestComments",
 			"reminders",
+			"guestComments",
 			"thankYou",
 		]);
-		expect(deck[2]).toMatchObject({
+		expect(deck[1]).toMatchObject({
 			kind: "reminders",
 			text: "Choose a learning path.",
 		});
@@ -1457,10 +1467,11 @@ describe("buildSlideDeck full meeting ordering", () => {
 			"functionaryReports",
 			"generalEvaluation",
 			"awards",
-			// #352: guest comments come between the awards and the closing
-			// announcements, where the room actually takes them.
-			"guestComments",
+			// #442 reordered these two: the club finishes its own business, then
+			// hands the floor to visitors and ends on that. Guest comments were
+			// added by #352; they were briefly before the announcements.
 			"reminders",
+			"guestComments",
 			"thankYou",
 		]);
 	});

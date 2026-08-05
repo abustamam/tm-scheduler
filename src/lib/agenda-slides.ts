@@ -660,14 +660,17 @@ export function buildSlideDeck({
 		deck.push({ kind: "awards", categories: awardCategories });
 	}
 
-	// Guest comments (#352), between the awards and the announcements. Ungated,
-	// like the beat: the club cannot know in advance whether guests will be in
-	// the room.
-	deck.push({ kind: "guestComments" });
-
+	// Announcements before guest comments (#442), matching the run sheet's
+	// closing order: the club finishes its own business, then hands the floor to
+	// visitors and ends on that.
 	if (meeting.reminders?.trim()) {
 		deck.push({ kind: "reminders", text: meeting.reminders.trim() });
 	}
+
+	// Guest comments (#352), after the announcements and before the closing
+	// splash. Ungated, like the beat: the club cannot know in advance whether
+	// guests will be in the room.
+	deck.push({ kind: "guestComments" });
 
 	deck.push({
 		kind: "thankYou",
