@@ -126,7 +126,12 @@ Five coverage traps this repo has actually hit, all worth checking when a number
   10 rows (measured without a club logo), 8 rows (measured with short speaker labels), and a
   34-character club name that nothing had varied. Before writing the test, LIST every field that
   is unbounded user data and build the fixture matrix from that list — including all of them at
-  once, which is the case no single-variable fixture catches. A merge makes this worse: two
+  once, which is the case no single-variable fixture catches. The list includes each field's
+  CHARACTER CLASS, not only which fields are unbounded: a length cap bounds code points, not cost,
+  and #522 measured emoji rows costing ~13x ASCII rows through the same renderer at the same
+  capped size (200 rows x 440 ASCII chars → 217ms; 200 rows x 200 emoji points → 2,778ms). An
+  all-ASCII fixture sized the minutes row caps 3x too high, and the all-axes-hostile version still
+  took 8.9 seconds with every string cap correctly applied. A merge makes this worse: two
   branches touching the same output each test their own axis, and the cross-product is tested by
   neither, so re-derive the list after merging.
 
@@ -138,7 +143,13 @@ Five coverage traps this repo has actually hit, all worth checking when a number
   the constant, picked by measuring the cost curve (500 and 5,000 characters both rendered in 39ms;
   49,999 took 3,707ms — so the ceiling goes far below that knee). Corollary: a schema private to a
   server-fn module is invisible to vitest, so its whole layer can be deleted with the suite green —
-  that needs a comment-blind source guard via `#/test/guard-source`.
+  that needs a comment-blind source guard via `#/test/guard-source`. Second corollary, same effect
+  by a different mechanism: a constant defined in a module that imports `#/db` at load is equally
+  unassertable, because a unit test importing it throws `DATABASE_URL is not set`. #522 shipped its
+  minutes render caps inside `minutes-pdf-logic.ts` first, where they could have been raised to
+  5,000,000 with the whole suite green — inside the very change that cites this trap. Put the
+  NUMBERS in `lib/` (`src/lib/minutes-render-caps.ts`, `src/lib/speaker-limits.ts`) and let the
+  renderer import them.
 
 ## Environment
 
