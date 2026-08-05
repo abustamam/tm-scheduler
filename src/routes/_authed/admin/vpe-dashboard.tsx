@@ -2,12 +2,20 @@ import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import { ChevronRight } from "lucide-react";
 import { MemberAvatar } from "#/components/club/member-avatar";
 import { PageContainer } from "#/components/page-container";
+import {
+	ATTENDANCE_LAPSE,
+	type AttendanceLapseRow,
+} from "#/lib/attendance-lapse";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { formatShortDate } from "#/lib/format";
 import { formatTenure } from "#/lib/members";
 import { cn } from "#/lib/utils";
-import { getOverdueMembers, getSpeakerRotation } from "#/server/reporting";
+import {
+	getAttendanceLapse,
+	getOverdueMembers,
+	getSpeakerRotation,
+} from "#/server/reporting";
 import type {
 	OverdueMemberRow,
 	SpeakerRotationRow,
@@ -21,12 +29,13 @@ export const Route = createFileRoute("/_authed/admin/vpe-dashboard")({
 	},
 	loader: async ({ context }) => {
 		const club = effectiveAdminClub(context);
-		if (!club) return { rotation: [], overdue: [], clubName: "" };
-		const [rotation, overdue] = await Promise.all([
+		if (!club) return { rotation: [], overdue: [], lapse: [], clubName: "" };
+		const [rotation, overdue, lapse] = await Promise.all([
 			getSpeakerRotation({ data: { clubId: club.clubId } }),
 			getOverdueMembers({ data: { clubId: club.clubId } }),
+			getAttendanceLapse({ data: { clubId: club.clubId } }),
 		]);
-		return { rotation, overdue, clubName: club.name };
+		return { rotation, overdue, lapse, clubName: club.name };
 	},
 	component: VpeDashboard,
 });
@@ -42,13 +51,20 @@ function pathwaySummary(row: SpeakerRotationRow): string | null {
 }
 
 function VpeDashboard() {
-	const { rotation, overdue } = Route.useLoaderData();
+	const { rotation, overdue, lapse } = Route.useLoaderData();
 
 	const overdueMembers = overdue.filter((m) => m.isOverdue);
 	const neverSpoken = rotation.filter((r) => r.lastSpokenAt === null).length;
+	const lapsed = lapse.filter((m) => m.isLapsed);
 
 	const stats = [
 		{ label: "Active members", value: String(rotation.length), note: "roster" },
+		{
+			label: "Stopped attending",
+			value: String(lapsed.length),
+			note: `${ATTENDANCE_LAPSE.streakThreshold}+ meetings missed`,
+			amber: lapsed.length > 0,
+		},
 		{
 			label: "Overdue members",
 			value: String(overdueMembers.length),
@@ -104,6 +120,23 @@ function VpeDashboard() {
 					</div>
 				))}
 			</div>
+
+			{/* Attendance lapse (#530). Sits ABOVE "Overdue for a role" on purpose:
+			    the two look alike but mean different things, and this is the more
+			    urgent one. A member who comes every week and never volunteers is
+			    a nudge; a member who has stopped coming is a resignation in
+			    progress. Both show as having no claimed role, so the section
+			    below cannot tell them apart — only attendance can. */}
+			<Section
+				title="Stopped attending"
+				subtitle={`Active members not recorded present at the last ${ATTENDANCE_LAPSE.streakThreshold}+ meetings — longest absence first. Excused meetings don't count against anyone.`}
+			>
+				{lapsed.length === 0 ? (
+					<EmptyRow>Nobody has dropped off the radar. 🎉</EmptyRow>
+				) : (
+					lapsed.map((m) => <LapseRow key={m.memberId} member={m} />)
+				)}
+			</Section>
 
 			{/* Overdue */}
 			<Section
@@ -220,6 +253,43 @@ function OverdueRow({ member }: { member: OverdueMemberRow }) {
 					{member.lastAnyRoleAt
 						? `last: ${formatShortDate(member.lastAnyRoleAt)}`
 						: "no role history"}
+				</div>
+			</div>
+			<Chevron />
+		</Link>
+	);
+}
+
+function LapseRow({ member }: { member: AttendanceLapseRow }) {
+	// `rate` is null when nothing in the window was eligible for this member —
+	// they joined after all of it, or every meeting was excused. Render a dash
+	// rather than NaN%.
+	const rate =
+		member.rate === null ? "—" : `${Math.round(member.rate * 100)}% attendance`;
+	return (
+		<Link
+			to="/members/$id"
+			params={{ id: member.memberId }}
+			className={cn(
+				ROW_CLASS,
+				"grid-cols-[1fr_112px_28px] sm:grid-cols-[1fr_150px_34px]",
+			)}
+		>
+			<MemberIdentity
+				memberId={member.memberId}
+				name={member.name}
+				joinedAt={member.joinedAt}
+			/>
+			<div className="text-sm">
+				<span className="font-bold text-[var(--warning-strong)]">
+					{member.streak} missed
+				</span>
+				<div className="text-xs text-[var(--sea-ink-soft)]">
+					{member.lastSeenAt
+						? `last seen ${formatShortDate(member.lastSeenAt)}`
+						: rate === "—"
+							? "never recorded"
+							: rate}
 				</div>
 			</div>
 			<Chevron />

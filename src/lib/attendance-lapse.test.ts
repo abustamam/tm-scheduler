@@ -64,7 +64,13 @@ describe("scoreAttendanceLapse — the streak trigger", () => {
 		const [row] = scoreAttendanceLapse({
 			meetings: meetingsNewestFirst(5),
 			members: [ALICE],
-			marks: marks("alice", ["present", "absent", "absent", "absent", "absent"]),
+			marks: marks("alice", [
+				"present",
+				"absent",
+				"absent",
+				"absent",
+				"absent",
+			]),
 		});
 		expect(row.streak).toBe(0);
 		expect(row.isLapsed).toBe(false);
@@ -146,7 +152,9 @@ describe("scoreAttendanceLapse — join date bounds the window", () => {
 		// leaves only the two newest eligible.
 		const [row] = scoreAttendanceLapse({
 			meetings: meetingsNewestFirst(4),
-			members: [{ memberId: "alice", name: "Alice", joinedAt: new Date(2026, 0, 90) }],
+			members: [
+				{ memberId: "alice", name: "Alice", joinedAt: new Date(2026, 0, 90) },
+			],
 			marks: marks("alice", ["absent", "absent", "absent", "absent"]),
 		});
 		expect(row.eligibleCount).toBe(2);
@@ -211,7 +219,13 @@ describe("scoreAttendanceLapse — reported figures", () => {
 			marks: [
 				...marks("alice", ["absent", "absent", "absent", "present", "present"]),
 				...marks("bob", ["absent", "absent", "absent", "absent", "absent"]),
-				...marks("cara", ["present", "present", "present", "present", "present"]),
+				...marks("cara", [
+					"present",
+					"present",
+					"present",
+					"present",
+					"present",
+				]),
 			],
 		});
 		expect(rows.map((r) => r.memberId)).toEqual(["bob", "alice", "cara"]);

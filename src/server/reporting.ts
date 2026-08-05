@@ -8,7 +8,11 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireClubAdminView, requireUser } from "./guards";
-import { loadOverdueMembers, loadSpeakerRotation } from "./reporting-logic";
+import {
+	loadAttendanceLapse,
+	loadOverdueMembers,
+	loadSpeakerRotation,
+} from "./reporting-logic";
 
 const clubScoped = z.object({ clubId: z.string().uuid() });
 
@@ -32,4 +36,19 @@ export const getOverdueMembers = createServerFn({ method: "GET" })
 		const user = await requireUser();
 		await requireClubAdminView(user.id, data.clubId);
 		return loadOverdueMembers(data.clubId, data.thresholdDays);
+	});
+
+/**
+ * Members whose attendance has lapsed (#530).
+ *
+ * Admin-gated like its neighbours, and for a sharper reason: this reports, for
+ * every active member, how many meetings in a row they have missed. That is
+ * officer information and must never reach a public or member-facing surface.
+ */
+export const getAttendanceLapse = createServerFn({ method: "GET" })
+	.validator((input: unknown) => clubScoped.parse(input))
+	.handler(async ({ data }) => {
+		const user = await requireUser();
+		await requireClubAdminView(user.id, data.clubId);
+		return loadAttendanceLapse(data.clubId);
 	});
