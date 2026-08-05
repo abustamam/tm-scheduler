@@ -104,23 +104,32 @@ describe("VPE dashboard — Stopped attending (#530)", () => {
 		expect(stoppedAttendingCount()).toBe("1");
 	});
 
-	it("shows the streak and the date last seen", async () => {
-		await renderRoute([lapseRow({ streak: 4 })]);
+	it("shows the streak, the date last seen and the rate together", async () => {
+		// A rate of 2/6 rather than a terminating one: the window holds at most 8
+		// meetings, so thirds and sixths are ordinary, and without the rounding
+		// the row reads "33.33333333333333% attended".
+		await renderRoute([
+			lapseRow({ streak: 4, presentCount: 2, eligibleCount: 6, rate: 2 / 6 }),
+		]);
 		expect(screen.getByText("4 missed")).toBeTruthy();
-		expect(screen.getByText(/^last seen /)).toBeTruthy();
+		expect(screen.getByText(/^last seen .+ · 33% attended$/)).toBeTruthy();
 	});
 
-	it("says so when a member was never recorded present", async () => {
+	it("appends NO rate when nothing in the window was eligible", async () => {
 		// rate null ⇒ no eligible meeting (joined after the window, or every
-		// meeting excused). Must not render "NaN%".
+		// meeting excused). Asserted as the WHOLE line, not a substring: JS makes
+		// `null * 100` zero rather than NaN, so dropping the null guard prints a
+		// confident "0% attended" for a member nobody could have marked, and a
+		// substring match on "never recorded present" still passes.
 		await renderRoute([
 			lapseRow({ lastSeenAt: null, rate: null, eligibleCount: 0, streak: 3 }),
 		]);
-		expect(screen.getByText(/never recorded present/)).toBeTruthy();
+		expect(screen.getByText("never recorded present")).toBeTruthy();
+		expect(screen.queryByText(/attended/)).toBeNull();
 		expect(screen.queryByText(/NaN/)).toBeNull();
 	});
 
-	it("shows an attendance rate for a member never once recorded present", async () => {
+	it("shows a 0% rate for a member with eligible meetings but no presence", async () => {
 		await renderRoute([
 			lapseRow({
 				lastSeenAt: null,
@@ -130,7 +139,9 @@ describe("VPE dashboard — Stopped attending (#530)", () => {
 				streak: 8,
 			}),
 		]);
-		expect(screen.getByText(/0% attended/)).toBeTruthy();
+		expect(
+			screen.getByText("never recorded present · 0% attended"),
+		).toBeTruthy();
 	});
 
 	it("links each lapsed member to their profile", async () => {
