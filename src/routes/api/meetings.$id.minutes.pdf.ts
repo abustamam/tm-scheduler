@@ -2,7 +2,9 @@ import { createFileRoute } from "@tanstack/react-router";
 import { eq } from "drizzle-orm";
 import { db } from "#/db";
 import { clubs, meetings } from "#/db/schema";
+import { cap } from "#/lib/cap";
 import { formatShortDate } from "#/lib/format";
+import { MINUTES_RENDER_CAPS } from "#/lib/minutes-render-caps";
 import { getMembership, getSessionUser } from "#/server/guards";
 import { getMeetingClubId, getMeetingStatus } from "#/server/minutes-logic";
 import { renderMinutesPdf } from "#/server/minutes-pdf-logic";
@@ -55,7 +57,18 @@ export const Route = createFileRoute("/api/meetings/$id/minutes/pdf")({
 				const date = row
 					? formatShortDate(row.scheduledAt, row.timezone)
 					: "meeting";
-				const safe = `Minutes - ${row?.name ?? "Club"} - ${date}`
+				// CAPPED before it reaches the header, for the same reason
+				// `renderRoleSheetPdf` caps its own filename (#522). This value
+				// never enters the PDF, so the render caps do not cover it, and
+				// `clubs.name` has no write-side max. Uncapped, a megabyte club
+				// name becomes a megabyte response header — Node emits it and
+				// every proxy in front of it rejects the response at 8-32KB, so
+				// the member gets a 502 with nothing logged server-side. The
+				// regex would also scan the whole megabyte per request.
+				const safe = `Minutes - ${cap(
+					row?.name ?? "Club",
+					MINUTES_RENDER_CAPS.club,
+				)} - ${date}`
 					.replace(/[^\w\-. ]+/g, "")
 					.trim();
 

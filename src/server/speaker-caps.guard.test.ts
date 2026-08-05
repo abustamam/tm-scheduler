@@ -9,9 +9,17 @@
  * context. Swapping the truncating schema back for the rejecting one — or
  * dropping both for `z.any()` — leaves every other test in this repo green.
  *
- * `minutes-pdf-logic.ts` has the same hole for a different reason:
- * `renderMinutesPdf` needs a database and a published meeting, so the one line
- * that lays out the program list is not reachable from a unit test at all.
+ * `minutes-pdf-logic.ts` is grepped for a WEAKER reason, and an earlier version
+ * of this comment overstated it. It claimed `renderMinutesPdf` was "not
+ * reachable from a unit test at all". That is false — `minutes-pdf-bounds.test.ts`
+ * mocks `#/db` and `./minutes-logic` and renders the real entry point, the same
+ * way `role-sheets-pdf-logic.test.ts` already did. That behavioural test is the
+ * real defence and it is where the bound is proven.
+ *
+ * These greps still earn their place beside it: a behavioural test proves the
+ * OUTPUT is bounded, but cannot say WHICH cap did it, so a `cap()` call left
+ * with the wrong argument on a rarely-rendered section can hide behind a
+ * bounded total. The grep pins each call site by name.
  *
  * ## Two source reads, deliberately
  *
@@ -73,10 +81,12 @@ describe("minutes-pdf-logic.ts bounds every list it renders", () => {
 	// count even when every row is short (5,000 short rows = 19.6s measured),
 	// and `addSpeakerSlot` grows the program with no session via the
 	// `tmod-self-assert` path.
+	// `minutes.awards` is deliberately absent: `loadMinutes` builds it from the
+	// fixed AWARD_CATEGORIES enum, so it is always exactly three rows and a cap
+	// there could never fire.
 	it.each([
 		["program", "programRows"],
 		["minutes.tableTopicsSpeakers", "tableTopicsRows"],
-		["minutes.awards", "awardRows"],
 	])("slices %s before mapping it", (list, capKey) => {
 		expect(minutesPdf()).toMatch(
 			new RegExp(
@@ -117,7 +127,6 @@ describe("minutes-pdf-logic.ts caps the program-list strings", () => {
 		for (const [expr, capKey] of [
 			["meeting.theme", "theme"],
 			["meeting.wordOfTheDay", "word"],
-			["r.names", "namesLine"],
 			["s.name", "name"],
 			["s.topic", "topic"],
 			["a.name", "name"],
@@ -130,6 +139,15 @@ describe("minutes-pdf-logic.ts caps the program-list strings", () => {
 				),
 			);
 		}
+		// The attendance roster is bounded BEFORE it is joined, inside `names()`,
+		// rather than by capping the joined line afterwards — capping after the
+		// join leaves the build cost scaling with the input.
+		expect(src).toMatch(/\.slice\(0,\s*MINUTES_RENDER_CAPS\.nameRows\)/);
+		expect(src).toMatch(/cap\(x\.name, MINUTES_RENDER_CAPS\.name\)/);
+		// …and the joined result is capped too, which is cheap because the slice
+		// above already bounded its input.
+		expect(src).toMatch(/MINUTES_RENDER_CAPS\.namesLine/);
+
 		// The club name is capped ONCE into a local, then reused for both the
 		// document title and the header.
 		expect(src).toMatch(

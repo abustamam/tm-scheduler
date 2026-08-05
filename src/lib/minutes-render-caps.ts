@@ -50,8 +50,6 @@ export const MINUTES_RENDER_CAPS = {
 	word: 120,
 	/** A Table Topics topic. Unbounded on write in `minutes.ts`. */
 	topic: 200,
-	/** One attendance row's joined names — a concatenation of a whole club. */
-	namesLine: 2_000,
 
 	/**
 	 * ROW-COUNT caps. The per-row string caps above bound each item; these bound
@@ -67,12 +65,43 @@ export const MINUTES_RENDER_CAPS = {
 	 *    200 rows →   102 ms      5,000 rows → 19,581 ms
 	 *    500 rows →   285 ms
 	 *
-	 * Flat to ~500, then super-linear. No real meeting books more than a few
-	 * dozen program rows, so 200 is ~5x the plausible maximum and still an order
-	 * of magnitude under the knee. The role sheets bound the same way
+	 * Flat to ~500, then super-linear. The role sheets bound the same way
 	 * (`RENDER_CAPS.speakerRows`).
+	 *
+	 * Sized against ASTRAL text, not ASCII, and that is why these are tens
+	 * rather than hundreds. A length cap bounds code points, not cost, and cost
+	 * per code point is not constant: at the SAME capped sizes, emoji rows cost
+	 * about 13x ASCII rows, because each one needs font fallback and shaping.
+	 *
+	 *    200 rows x 440 ASCII chars  →   217 ms
+	 *    200 rows x 200 emoji points → 2,778 ms
+	 *
+	 * A first pass at #522 used 200/100 here, and the all-axes-hostile fixture
+	 * in `minutes-pdf-bounds.test.ts` still took 8.9 SECONDS with every string
+	 * cap correctly applied. That fixture is what forced these numbers down.
+	 *
+	 * 60 is still ~3x the largest program any real meeting books, and the role
+	 * sheets get by on 8.
 	 */
-	programRows: 200,
-	tableTopicsRows: 100,
-	awardRows: 50,
+	programRows: 60,
+	tableTopicsRows: 40,
+	/**
+	 * How many attendee names one roster line prints before it says "+N more".
+	 *
+	 * Bounds the JOIN, not just the joined string. `names()` used to concatenate
+	 * the whole roster and cap the result, which left the build cost scaling
+	 * with the input — the #519 shape, one frame up from the fix. The roster is
+	 * anonymously growable: `submitGuestBook` is public, unthrottled, and each
+	 * distinct guest becomes an attendance row.
+	 */
+	nameRows: 100,
+	/**
+	 * And how long the JOINED roster line may be.
+	 *
+	 * Both bounds are needed. `nameRows` stops the build cost scaling with the
+	 * input; this stops the RESULT being huge, since 100 names at `name` code
+	 * points each is 12,000. Capping the join is cheap only because `nameRows`
+	 * already ran — that ordering is the whole lesson of the #519 defect.
+	 */
+	namesLine: 2_000,
 } as const;

@@ -77,8 +77,45 @@ const styles = StyleSheet.create({
 	muted: { color: "#7b8794", fontStyle: "italic" },
 });
 
+/**
+ * A trailing "+N more" line when a list was cut, or nothing when it was not.
+ *
+ * The row caps keep the render bounded; this keeps the DOCUMENT honest about
+ * it. Minutes are the club's official record, and a section that silently stops
+ * at 60 rows reads as complete.
+ */
+function elided(total: number, shown: number) {
+	if (total <= shown) return null;
+	return h(Text, { style: styles.muted }, `+${total - shown} more not shown`);
+}
+
+/**
+ * Join a roster into one display line, bounded BEFORE the join (#522).
+ *
+ * Capping the joined string afterwards would be the #519 defect one frame up:
+ * the cost of building it still scales with the input, so `cap(names(list))`
+ * materialises the whole megabyte and only then shortens it. The list is
+ * anonymously growable — `submitGuestBook` is public with no session, and each
+ * distinct guest becomes an attendance row — so the bound has to come first.
+ *
+ * Elision is COUNTED, not silent. These are the club's record of who was in the
+ * room; a bare "…" loses names with no indication how many.
+ */
 function names(list: { name: string }[]): string {
-	return list.length ? list.map((x) => x.name).join(", ") : "—";
+	if (!list.length) return "—";
+	const shown = list.slice(0, MINUTES_RENDER_CAPS.nameRows);
+	const hidden = list.length - shown.length;
+	// BOTH bounds, and both are load-bearing. Slicing the list first is what
+	// stops the build cost scaling with the input. Capping the JOINED result is
+	// what stops the line itself being huge — 100 names at 120 code points each
+	// is 12,000, well past what one wrapped line should lay out. The second cap
+	// is cheap precisely because the first one already ran: its input is bounded
+	// before it sees it, which is the ordering the #519 defect got backwards.
+	const line = cap(
+		shown.map((x) => cap(x.name, MINUTES_RENDER_CAPS.name)).join(", "),
+		MINUTES_RENDER_CAPS.namesLine,
+	);
+	return hidden > 0 ? `${line} (+${hidden} more)` : line;
 }
 
 /**
@@ -196,11 +233,11 @@ export async function renderMinutesPdf(meetingId: string): Promise<Uint8Array> {
 						View,
 						{ key: r.label, style: styles.row },
 						h(Text, { style: styles.rowLabel }, r.label),
-						h(
-							Text,
-							{ style: styles.rowValue },
-							cap(r.names, MINUTES_RENDER_CAPS.namesLine),
-						),
+						// `names()` already bounds both the row count and each name,
+						// so the line arrives capped. Capping it again here would
+						// re-add the very post-join pass that made the cost scale
+						// with the input.
+						h(Text, { style: styles.rowValue }, r.names),
 					),
 				),
 			),
@@ -226,30 +263,36 @@ export async function renderMinutesPdf(meetingId: string): Promise<Uint8Array> {
 								),
 							)
 					: h(Text, { style: styles.muted }, "No Table Topics recorded."),
+				elided(
+					minutes.tableTopicsSpeakers.length,
+					MINUTES_RENDER_CAPS.tableTopicsRows,
+				),
 			),
 			// Awards
 			h(
 				View,
 				{ style: styles.section },
 				h(Text, { style: styles.sectionTitle }, "Awards"),
-				minutes.awards
-					.slice(0, MINUTES_RENDER_CAPS.awardRows)
-					.map((a) =>
+				// No row cap: `loadMinutes` builds this from the fixed
+				// `AWARD_CATEGORIES` enum, so it is always exactly three rows. A
+				// slice here would be a constant that can never fire, and an
+				// absolute-ceiling test on it could never fail.
+				minutes.awards.map((a) =>
+					h(
+						View,
+						{ key: a.category, style: styles.row },
+						h(Text, { style: styles.rowLabel }, AWARD_LABELS[a.category]),
 						h(
-							View,
-							{ key: a.category, style: styles.row },
-							h(Text, { style: styles.rowLabel }, AWARD_LABELS[a.category]),
-							h(
-								Text,
-								{ style: a.name ? styles.rowValue : styles.muted },
-								a.name
-									? `${cap(a.name, MINUTES_RENDER_CAPS.name)}${
-											a.isGuest ? " (Guest)" : ""
-										}`
-									: "—",
-							),
+							Text,
+							{ style: a.name ? styles.rowValue : styles.muted },
+							a.name
+								? `${cap(a.name, MINUTES_RENDER_CAPS.name)}${
+										a.isGuest ? " (Guest)" : ""
+									}`
+								: "—",
 						),
 					),
+				),
 			),
 			// Program
 			h(
@@ -277,6 +320,7 @@ export async function renderMinutesPdf(meetingId: string): Promise<Uint8Array> {
 								),
 							)
 					: h(Text, { style: styles.muted }, "No program recorded."),
+				elided(program.length, MINUTES_RENDER_CAPS.programRows),
 			),
 		),
 	);
