@@ -101,16 +101,31 @@ export async function applyAddSpeakerSlot(input: {
 		);
 
 	await db.transaction(async (tx) => {
-		await tx.insert(roleSlots).values({
-			meetingId: input.meetingId,
-			roleDefinitionId: speakerRoleId,
-			slotIndex: idxFor(speakerRoleId),
-		});
+		// `returning` so the evaluator can point at this speaker (#512). The pair
+		// is already established here — the "+ Add speaker" button creates both
+		// rows in this one transaction — but until now the link was never written
+		// down, so `role_slots.evaluates_slot_id` was NULL on every meeting made
+		// through the app and five readers of it silently did nothing.
+		const [speaker] = await tx
+			.insert(roleSlots)
+			.values({
+				meetingId: input.meetingId,
+				roleDefinitionId: speakerRoleId,
+				slotIndex: idxFor(speakerRoleId),
+			})
+			.returning({ id: roleSlots.id });
 		if (evaluatorRoleId && evaluatorEnabled) {
 			await tx.insert(roleSlots).values({
 				meetingId: input.meetingId,
 				roleDefinitionId: evaluatorRoleId,
 				slotIndex: idxFor(evaluatorRoleId),
+				// Recorded rather than inferred from matching slotIndex, because the
+				// indices can legitimately drift apart: `applyRemoveSpeakerSlot`
+				// removes the highest UNCLAIMED slot of each role independently, so
+				// a claimed evaluator paired with an unclaimed speaker desyncs them,
+				// and `applyMoveSpeakerSlot` reorders speakers without touching
+				// evaluators. An explicit FK survives both.
+				evaluatesSlotId: speaker.id,
 			});
 		}
 		await logActivity(tx, {

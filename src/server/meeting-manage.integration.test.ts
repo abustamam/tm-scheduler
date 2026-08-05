@@ -84,6 +84,7 @@ async function slotsFor(meetingId: string, roleId: string) {
 			slotIndex: roleSlots.slotIndex,
 			status: roleSlots.status,
 			assignedMemberId: roleSlots.assignedMemberId,
+			evaluatesSlotId: roleSlots.evaluatesSlotId,
 		})
 		.from(roleSlots)
 		.where(
@@ -177,6 +178,86 @@ describe.skipIf(!hasTestDb)("meeting management", () => {
 		});
 		expect(await slotsFor(club.meetingId, speakerRoleId)).toHaveLength(1);
 		expect(await slotsFor(club.meetingId, evaluatorRoleId)).toHaveLength(1);
+	});
+
+	/**
+	 * #512: the pair was always created here, in one transaction, but the link
+	 * was never written — so `evaluates_slot_id` was NULL on every meeting made
+	 * through the app and five readers of it silently did nothing (the run
+	 * sheet's "Evaluates {speaker}" branch, the speaker intro, `orderEvaluators`,
+	 * the member activity dashboard's `evaluatorName`, and `agenda.ts`).
+	 *
+	 * Asserted against the speaker's actual id rather than just non-null: a bare
+	 * non-null check would pass if the evaluator pointed at the wrong slot.
+	 */
+	it("addSpeakerSlot links the evaluator to the speaker it evaluates (#512)", async () => {
+		await applyAddSpeakerSlot({
+			meetingId: club.meetingId,
+			actorMemberId: club.memberId,
+		});
+		const [speaker] = await slotsFor(club.meetingId, speakerRoleId);
+		const [evaluator] = await slotsFor(club.meetingId, evaluatorRoleId);
+		expect(evaluator.evaluatesSlotId).toBe(speaker.id);
+		// The speaker is the target, never itself a source.
+		expect(speaker.evaluatesSlotId).toBeNull();
+	});
+
+	/**
+	 * The dominant path (#512). Speaker and Evaluator both default to a count of
+	 * 3, so almost every slot in the app is created here by the club template,
+	 * not by the "+ Add speaker" button — a fix that covered only the button
+	 * would leave most meetings unlinked.
+	 *
+	 * Positional pairing is sound at creation specifically because
+	 * `generateSlotRows` has just emitted contiguous 0..n-1 indices per role in
+	 * one insert. It is NOT sound later, which is why the link is persisted here
+	 * rather than inferred on read.
+	 */
+	it("createMeeting links each template evaluator to its speaker (#512)", async () => {
+		const { meetingId } = await applyCreateMeeting({
+			clubId: club.clubId,
+			scheduledAt: "2026-09-08T18:30",
+		});
+		const speakers = await slotsFor(meetingId, speakerRoleId);
+		const evaluators = await slotsFor(meetingId, evaluatorRoleId);
+		expect(speakers.length).toBeGreaterThan(1);
+		expect(evaluators).toHaveLength(speakers.length);
+
+		// Every evaluator is linked, one-to-one, to the speaker at its own index.
+		expect(evaluators.every((e) => e.evaluatesSlotId !== null)).toBe(true);
+		const speakerIdByIndex = new Map(speakers.map((s) => [s.slotIndex, s.id]));
+		for (const evaluator of evaluators) {
+			expect(evaluator.evaluatesSlotId).toBe(
+				speakerIdByIndex.get(evaluator.slotIndex),
+			);
+		}
+		expect(new Set(evaluators.map((e) => e.evaluatesSlotId)).size).toBe(
+			evaluators.length,
+		);
+	});
+
+	/**
+	 * The regression that a single-speaker test cannot see: every evaluator
+	 * pointing at the FIRST speaker would satisfy the test above. Pairing has to
+	 * be one-to-one, in creation order.
+	 */
+	it("each added speaker gets its own evaluator, not a shared one (#512)", async () => {
+		await applyAddSpeakerSlot({
+			meetingId: club.meetingId,
+			actorMemberId: club.memberId,
+		});
+		await applyAddSpeakerSlot({
+			meetingId: club.meetingId,
+			actorMemberId: club.memberId,
+		});
+		const speakers = await slotsFor(club.meetingId, speakerRoleId);
+		const evaluators = await slotsFor(club.meetingId, evaluatorRoleId);
+		expect(speakers).toHaveLength(2);
+		expect(evaluators).toHaveLength(2);
+		// Two distinct targets, and together they cover exactly the two speakers.
+		const targets = evaluators.map((e) => e.evaluatesSlotId);
+		expect(new Set(targets).size).toBe(2);
+		expect([...targets].sort()).toEqual(speakers.map((s) => s.id).sort());
 	});
 
 	it("removeSpeakerSlot removes the top unclaimed speaker + an evaluator", async () => {

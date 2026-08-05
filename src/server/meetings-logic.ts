@@ -8,6 +8,7 @@ import { generateSlotRows } from "#/lib/agenda";
 import { zonedWallTimeToUtc } from "#/lib/datetime";
 import { meetingDateReached } from "#/lib/meeting-lifecycle";
 import { logActivity } from "./activity";
+import { linkEvaluatorsToSpeakers } from "./meeting-create-logic";
 import { freezeMeetingNumber } from "./meeting-number-logic";
 
 export interface MeetingCreateInput {
@@ -55,7 +56,14 @@ export async function applyCreateMeeting(input: MeetingCreateInput) {
 
 		const slotRows = generateSlotRows(defs, meeting.id);
 		if (slotRows.length > 0) {
-			await tx.insert(roleSlots).values(slotRows);
+			const inserted = await tx.insert(roleSlots).values(slotRows).returning({
+				id: roleSlots.id,
+				roleDefinitionId: roleSlots.roleDefinitionId,
+				slotIndex: roleSlots.slotIndex,
+			});
+			// Same linking as the batch/top-up path (#512) — shared rather than
+			// reimplemented, so the two creation routes cannot drift.
+			await linkEvaluatorsToSpeakers(tx, inserted, defs);
 		}
 		return { meetingId: meeting.id };
 	});
