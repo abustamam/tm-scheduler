@@ -14,7 +14,13 @@
  */
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { guests, meetingAttendance, meetings, members } from "#/db/schema";
+import {
+	guests,
+	meetingAttendance,
+	meetings,
+	members,
+	roleSlots,
+} from "#/db/schema";
 import {
 	cleanup,
 	hasTestDb,
@@ -74,6 +80,14 @@ describe.skipIf(!hasTestDb)("loadAttendanceLapse (#530)", () => {
 
 	beforeEach(async () => {
 		seed = await seedClub();
+		// Members are scored from `joined_at ?? created_at`. seedClub creates them
+		// NOW while these fixtures backdate meetings into the past — an ordering
+		// that cannot occur in production, where a member exists before the
+		// meetings they are scored on. Backdate so the fixtures are realistic.
+		await testDb
+			.update(members)
+			.set({ createdAt: new Date(Date.now() - 400 * DAY) })
+			.where(eq(members.clubId, seed.clubId));
 	});
 
 	afterEach(async () => {
@@ -285,6 +299,67 @@ describe.skipIf(!hasTestDb)("loadAttendanceLapse (#530)", () => {
 			expect(row.lastSeenAt).toBeNull();
 			expect(row.isLapsed).toBe(false);
 		}
+	});
+
+	it("does not flag a brand-new member added through the app", async () => {
+		// `joined_at` is written ONLY by the CSV import; every member created
+		// through the app has it NULL. Treating NULL as "has always been here"
+		// flagged a newcomer as having missed the whole window on day one.
+		for (let i = 1; i <= 8; i++) {
+			const id = await addMeeting(seed.clubId, i * 7);
+			await mark(id, seed.memberId, "present");
+		}
+		const fresh = await addMember(seed.clubId, "Brand New");
+		const [raw] = await testDb
+			.select({ joinedAt: members.joinedAt })
+			.from(members)
+			.where(eq(members.id, fresh));
+		expect(raw?.joinedAt).toBeNull(); // the shape production actually creates
+
+		const rows = await loadAttendanceLapse(seed.clubId);
+		const newcomer = rows.find((r) => r.memberId === fresh);
+		expect(newcomer).toBeDefined();
+		expect(newcomer?.streak).toBe(0);
+		expect(newcomer?.isLapsed).toBe(false);
+	});
+
+	it("treats holding a role as being there", async () => {
+		// #218 decoupled role-holding from attendance, so running the meeting as
+		// Toastmaster writes NO attendance row. Without corroboration the member
+		// who ran every recent meeting reads as "never recorded present" while the
+		// Overdue-for-a-role panel below correctly shows them as engaged.
+		for (const d of [21, 14, 7]) {
+			const id = await addMeeting(seed.clubId, d);
+			await mark(id, seed.adminMemberId, "present"); // register was taken
+			await testDb.insert(roleSlots).values({
+				meetingId: id,
+				roleDefinitionId: seed.roleDefinitionId,
+				assignedMemberId: seed.memberId,
+				status: "confirmed",
+			});
+		}
+
+		const row = await memberRow();
+		expect(row.streak).toBe(0);
+		expect(row.isLapsed).toBe(false);
+	});
+
+	it("lets an explicit absent record beat the role inference", async () => {
+		// A human saying "they were not here" outranks the inference.
+		for (const d of [21, 14, 7]) {
+			const id = await addMeeting(seed.clubId, d);
+			await mark(id, seed.memberId, "absent");
+			await testDb.insert(roleSlots).values({
+				meetingId: id,
+				roleDefinitionId: seed.roleDefinitionId,
+				assignedMemberId: seed.memberId,
+				status: "confirmed",
+			});
+		}
+
+		const row = await memberRow();
+		expect(row.streak).toBe(3);
+		expect(row.isLapsed).toBe(true);
 	});
 
 	it("scores a member only from their join date", async () => {

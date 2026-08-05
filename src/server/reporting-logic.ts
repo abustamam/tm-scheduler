@@ -332,6 +332,7 @@ export async function loadAttendanceLapse(
 				memberId: members.id,
 				name: members.name,
 				joinedAt: members.joinedAt,
+				createdAt: members.createdAt,
 			})
 			.from(members)
 			.where(and(eq(members.clubId, clubId), eq(members.status, "active")))
@@ -351,15 +352,65 @@ export async function loadAttendanceLapse(
 			),
 	]);
 
+	// Holding a role at a meeting counts as being there. #218 deliberately
+	// decoupled the two — claiming a slot never writes an attendance row — so a
+	// member who RAN the meeting as Toastmaster has no record of presence and
+	// would read as "never recorded present" while the Overdue-for-a-role panel
+	// directly below correctly shows them as engaged. Two adjacent panels
+	// contradicting each other, with this one wrong. An explicit attendance row
+	// still wins: if somebody marked them absent, that is a human statement and
+	// beats the inference.
+	const roleRows = await db
+		.select({
+			meetingId: roleSlots.meetingId,
+			memberId: roleSlots.assignedMemberId,
+		})
+		.from(roleSlots)
+		.where(
+			and(
+				inArray(
+					roleSlots.meetingId,
+					windowMeetings.map((m) => m.meetingId),
+				),
+				inArray(roleSlots.status, [...HELD_SLOT_STATUSES]),
+				isNotNull(roleSlots.assignedMemberId),
+			),
+		);
+
+	// Guest attendance rows carry a null `member_id` and are dropped here —
+	// a guest's presence is not a member's.
+	const explicit = markRows.flatMap((r) =>
+		r.memberId
+			? [{ meetingId: r.meetingId, memberId: r.memberId, status: r.status }]
+			: [],
+	);
+	const explicitKeys = new Set(
+		explicit.map((m) => `${m.meetingId}:${m.memberId}`),
+	);
+	const fromRoles = roleRows.flatMap((r) =>
+		r.memberId && !explicitKeys.has(`${r.meetingId}:${r.memberId}`)
+			? [
+					{
+						meetingId: r.meetingId,
+						memberId: r.memberId,
+						status: "present" as const,
+					},
+				]
+			: [],
+	);
+
 	return scoreAttendanceLapse({
 		meetings: windowMeetings,
-		members: memberRows,
-		// Guest attendance rows carry a null `member_id` and are dropped here —
-		// a guest's presence is not a member's.
-		marks: markRows.flatMap((r) =>
-			r.memberId
-				? [{ meetingId: r.meetingId, memberId: r.memberId, status: r.status }]
-				: [],
-		),
+		// `joined_at` is populated ONLY by the Toastmasters CSV import — every
+		// member added through the app has it NULL. Treating NULL as "has always
+		// been here" flagged a brand-new member as having missed the whole window
+		// on the day they were added. `created_at` is the same fallback the roster
+		// and the member profile already display.
+		members: memberRows.map((m) => ({
+			memberId: m.memberId,
+			name: m.name,
+			joinedAt: m.joinedAt ?? m.createdAt,
+		})),
+		marks: [...explicit, ...fromRoles],
 	});
 }
