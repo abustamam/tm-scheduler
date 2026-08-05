@@ -30,6 +30,7 @@ import { MeetingMinutes } from "#/components/club/meeting-minutes";
 import { MeetingNavStrip } from "#/components/club/meeting-nav-strip";
 import { MeetingRoleSheets } from "#/components/club/meeting-role-sheets";
 import { MeetingViewActions } from "#/components/club/meeting-view-actions";
+import { OpenActionItems } from "#/components/club/open-action-items";
 import { ViewingAs } from "#/components/club/viewing-as";
 import { ShareLinkButton } from "#/components/share-link-button";
 import { Button } from "#/components/ui/button";
@@ -69,6 +70,7 @@ import { deriveMeetingRoleFlags, pairedRoleIds } from "#/lib/meeting-roles";
 import { useEffectiveMember } from "#/lib/member-identity";
 import { footerDate } from "#/lib/slide-layout";
 import { hasWordOfTheDay } from "#/lib/word-poster";
+import { getOpenActionItems } from "#/server/action-items";
 import { clearAvailability, setAvailability } from "#/server/availability";
 import { getClubLogoMeta } from "#/server/club-logo";
 import {
@@ -164,6 +166,25 @@ export const Route = createFileRoute("/club/$clubId/meeting/$meetingId")({
 		const minutes = context.shell
 			? await getMinutes({ data: data.meeting.id }).catch(() => EMPTY_MINUTES)
 			: EMPTY_MINUTES;
+		// Open action items (#529) for a signed-in member, loaded SEPARATELY from
+		// the minutes on purpose.
+		//
+		// `getMinutes` hides everything behind `visible = canEdit || completed`, so
+		// riding inside `MinutesData` would hide open items from a non-admin member
+		// until after the meeting finished — exactly backwards, since an open item
+		// is most useful BEFORE the meeting, and exactly the inherited completion
+		// gate the issue told us not to inherit. Only fetched when the minutes
+		// section will not already be showing its own pinned list, so the page
+		// never renders two action-item lists or pays for two queries.
+		//
+		// Still member-only: anonymous visitors have `context.shell === false` and
+		// never reach this call, the same gate the minutes use.
+		const openActionItems =
+			context.shell && !minutes.visible
+				? await getOpenActionItems({
+						data: { clubId: data.meeting.clubId },
+					}).catch(() => [])
+				: [];
 		// Default email recipients (#165) — admins on a completed meeting only.
 		const minutesEmail =
 			context.shell &&
@@ -180,6 +201,7 @@ export const Route = createFileRoute("/club/$clubId/meeting/$meetingId")({
 			...data,
 			navItems,
 			minutes,
+			openActionItems,
 			minutesEmail,
 			logoUrl: clubLogoUrl(context.clubUuid, logoMeta?.updatedAt),
 		};
@@ -235,6 +257,7 @@ function MeetingView() {
 		roster: loaderRoster,
 		contactedMemberIds,
 		minutes,
+		openActionItems,
 		minutesEmail,
 		meetingNumber,
 		nextMeetingAt,
@@ -742,6 +765,8 @@ function MeetingView() {
 					}
 				}}
 			/>
+
+			<OpenActionItems items={openActionItems} />
 
 			{minutes.visible && minutes.data ? (
 				<MeetingMinutes

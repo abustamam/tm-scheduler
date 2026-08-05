@@ -2,6 +2,7 @@ import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
 import {
 	CheckCircle2,
 	Loader2,
+	Pencil,
 	Plus,
 	Trash2,
 	Undo2,
@@ -23,11 +24,12 @@ import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { ACTION_ITEM_LIMITS } from "#/lib/action-item-limits";
 import { effectiveAdminClub } from "#/lib/effective-admin";
-import { formatShortDate } from "#/lib/format";
+import { formatCalendarDay } from "#/lib/format";
 import { cn } from "#/lib/utils";
 import {
 	addActionItem,
 	closeActionItem,
+	editActionItem,
 	getActionItems,
 	removeActionItem,
 	restoreActionItem,
@@ -58,6 +60,8 @@ function ActionItems() {
 	const router = useRouter();
 	const [busy, setBusy] = useState(false);
 	const [adding, setAdding] = useState(false);
+	/** The open item being edited, or null when the dialog is adding a new one. */
+	const [editing, setEditing] = useState<ActionItemRow | null>(null);
 	const [text, setText] = useState("");
 	const [ownerMemberId, setOwnerMemberId] = useState("");
 	const [dueDate, setDueDate] = useState("");
@@ -78,21 +82,49 @@ function ActionItems() {
 		}
 	}
 
+	function openAdd() {
+		setEditing(null);
+		setText("");
+		setOwnerMemberId("");
+		setDueDate("");
+		setAdding(true);
+	}
+
+	function openEdit(item: ActionItemRow) {
+		setEditing(item);
+		setText(item.text);
+		setOwnerMemberId(item.ownerMemberId ?? "");
+		// Already a "YYYY-MM-DD" string, which is exactly what the date input wants.
+		setDueDate(item.dueDate ?? "");
+		setAdding(true);
+	}
+
 	async function submit() {
-		await run(async () => {
-			await addActionItem({
-				data: {
-					clubId,
-					text,
-					ownerMemberId: ownerMemberId || null,
-					dueDate: dueDate ? new Date(dueDate).toISOString() : null,
-				},
-			});
-			setText("");
-			setOwnerMemberId("");
-			setDueDate("");
-			setAdding(false);
-		}, "Action item added.");
+		// The date input's own "YYYY-MM-DD", sent through untouched. Going via
+		// `new Date(...).toISOString()` would pin it to UTC midnight and read back
+		// a day early for every club west of UTC.
+		const fields = {
+			clubId,
+			text,
+			ownerMemberId: ownerMemberId || null,
+			dueDate: dueDate || null,
+		};
+		const target = editing;
+		await run(
+			async () => {
+				if (target) {
+					await editActionItem({ data: { ...fields, id: target.id } });
+				} else {
+					await addActionItem({ data: fields });
+				}
+				setText("");
+				setOwnerMemberId("");
+				setDueDate("");
+				setEditing(null);
+				setAdding(false);
+			},
+			target ? "Action item updated." : "Action item added.",
+		);
 	}
 
 	return (
@@ -107,7 +139,7 @@ function ActionItems() {
 						closes them, and they appear on every meeting's minutes until then.
 					</p>
 				</div>
-				<Button onClick={() => setAdding(true)} disabled={busy}>
+				<Button onClick={openAdd} disabled={busy}>
 					<Plus className="mr-1.5 size-4" aria-hidden />
 					Add item
 				</Button>
@@ -124,6 +156,15 @@ function ActionItems() {
 						<Row key={item.id}>
 							<ItemBody item={item} />
 							<div className="flex shrink-0 gap-1.5">
+								<Button
+									size="sm"
+									variant="ghost"
+									disabled={busy}
+									onClick={() => openEdit(item)}
+								>
+									<Pencil className="mr-1 size-3.5" aria-hidden />
+									Edit
+								</Button>
 								<Button
 									size="sm"
 									variant="outline"
@@ -194,12 +235,23 @@ function ActionItems() {
 									size="sm"
 									variant="ghost"
 									disabled={busy}
-									onClick={() =>
+									onClick={() => {
+										// Deleting erases the item from every minutes document
+										// that ever listed it, and this button sits beside
+										// Reopen in a section headed "Kept as history". Same
+										// confirm gate the other destructive actions use.
+										if (
+											!window.confirm(
+												`Delete "${item.text}"? This removes it from the club's history, including minutes already issued.`,
+											)
+										) {
+											return;
+										}
 										run(
 											() => removeActionItem({ data: { clubId, id: item.id } }),
 											"Deleted.",
-										)
-									}
+										);
+									}}
 								>
 									<Trash2 className="size-3.5" aria-hidden />
 									<span className="sr-only">Delete</span>
@@ -210,12 +262,24 @@ function ActionItems() {
 				)}
 			</Section>
 
-			<Dialog open={adding} onOpenChange={setAdding}>
+			<Dialog
+				open={adding}
+				onOpenChange={(o) => {
+					// Not dismissable mid-submit: the toast would arrive with no
+					// context, and on failure the typed text is off-screen but still in
+					// state.
+					if (!busy) setAdding(o);
+				}}
+			>
 				<DialogContent>
 					<DialogHeader>
-						<DialogTitle>Add an action item</DialogTitle>
+						<DialogTitle>
+							{editing ? "Edit action item" : "Add an action item"}
+						</DialogTitle>
 						<DialogDescription>
-							Leave the owner blank if it's something the whole club does.
+							{editing
+								? "Only open items can be edited — a closed one is already printed in minutes that have gone out."
+								: "Leave the owner blank if it's something the whole club does."}
 						</DialogDescription>
 					</DialogHeader>
 					<div className="space-y-3">
@@ -237,7 +301,7 @@ function ActionItems() {
 								value={ownerMemberId}
 								onChange={(e) => setOwnerMemberId(e.target.value)}
 							>
-								<option value="">The club</option>
+								<option value="">No owner (the whole club)</option>
 								{members.map((m) => (
 									<option key={m.id} value={m.id}>
 										{m.name}
@@ -256,7 +320,11 @@ function ActionItems() {
 						</div>
 					</div>
 					<DialogFooter>
-						<Button variant="ghost" onClick={() => setAdding(false)}>
+						<Button
+							variant="ghost"
+							disabled={busy}
+							onClick={() => setAdding(false)}
+						>
 							Cancel
 						</Button>
 						<Button
@@ -266,7 +334,7 @@ function ActionItems() {
 							{busy ? (
 								<Loader2 className="mr-1.5 size-4 animate-spin" aria-hidden />
 							) : null}
-							Add
+							{editing ? "Save" : "Add"}
 						</Button>
 					</DialogFooter>
 				</DialogContent>
@@ -287,10 +355,13 @@ function ItemBody({ item }: { item: ActionItemRow }) {
 				{item.text}
 			</div>
 			<div className="mt-0.5 text-xs text-[var(--sea-ink-soft)]">
-				{/* A null owner is the club collectively — never a placeholder name. */}
-				{item.ownerName ?? "The club"}
-				{item.dueDate ? ` · due ${formatShortDate(item.dueDate)}` : ""}
-				{item.resolution ? ` · ${item.resolution}` : ""}
+				{/* An unowned item shows no owner at all — inventing one here would
+				    read as an assignment nobody made. */}
+				{item.ownerName ?? "No owner"}
+				{item.dueDate ? ` · due ${formatCalendarDay(item.dueDate)}` : ""}
+				{item.resolution
+					? ` · ${item.resolution === "dropped" ? "Dropped" : "Done"}`
+					: ""}
 			</div>
 		</div>
 	);

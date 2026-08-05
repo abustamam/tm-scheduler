@@ -1,5 +1,5 @@
 {
-  "id": "e520932b-a3ed-4783-895d-6438f0697158",
+  "id": "9472b2c5-2814-4309-9f8a-8032c3267c5c",
   "prevId": "eeebcd85-e91d-45e3-89ca-1497290d849b",
   "version": "7",
   "dialect": "postgresql",
@@ -388,7 +388,7 @@
         },
         "due_date": {
           "name": "due_date",
-          "type": "timestamp with time zone",
+          "type": "date",
           "primaryKey": false,
           "notNull": false
         },
@@ -432,6 +432,21 @@
             },
             {
               "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "club_action_items_owner_idx": {
+          "name": "club_action_items_owner_idx",
+          "columns": [
+            {
+              "expression": "owner_member_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"

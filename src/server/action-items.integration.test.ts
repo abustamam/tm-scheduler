@@ -30,6 +30,9 @@ const {
 	updateActionItem,
 	deleteActionItem,
 } = await import("#/server/action-items-logic");
+const { requireClubRole, requireClubViewAccess } = await import(
+	"#/server/guards"
+);
 
 const AT = (iso: string) => new Date(iso);
 
@@ -87,12 +90,13 @@ describe.skipIf(!hasTestDb)("club action items (#529)", () => {
 				clubId: seed.clubId,
 				text: "Order ribbons",
 				ownerMemberId: seed.memberId,
-				dueDate: AT("2026-05-01T00:00:00Z"),
+				dueDate: "2026-05-01",
 			});
 			const [row] = await listActionItems(seed.clubId);
 			expect(row.ownerMemberId).toBe(seed.memberId);
 			expect(row.ownerName).toBe("Member User");
-			expect(row.dueDate).toEqual(AT("2026-05-01T00:00:00Z"));
+			// A calendar day round-trips as the SAME string — no Date, so no zone to shift it.
+			expect(row.dueDate).toBe("2026-05-01");
 		});
 
 		it("rejects an item for a member of a different club", async () => {
@@ -320,12 +324,12 @@ describe.skipIf(!hasTestDb)("club action items (#529)", () => {
 				id,
 				text: "New",
 				ownerMemberId: seed.memberId,
-				dueDate: AT("2026-07-01T00:00:00Z"),
+				dueDate: "2026-07-01",
 			});
 			const [row] = await listActionItems(seed.clubId);
 			expect(row.text).toBe("New");
 			expect(row.ownerMemberId).toBe(seed.memberId);
-			expect(row.dueDate).toEqual(AT("2026-07-01T00:00:00Z"));
+			expect(row.dueDate).toBe("2026-07-01");
 		});
 
 		it("clears an owner back to the club collectively", async () => {
@@ -362,6 +366,139 @@ describe.skipIf(!hasTestDb)("club action items (#529)", () => {
 					deleteActionItem({ clubId: other.clubId, id }),
 				).rejects.toThrow();
 				expect(await listActionItems(seed.clubId)).toHaveLength(1);
+			} finally {
+				await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+			}
+		});
+	});
+	// -------------------------------------------------------------------------
+	// Authorization, behaviorally.
+	//
+	// `action-items-authz.guard.test.ts` asserts the WIRING (that each server fn
+	// awaits the right guard) by reading source, because a `createServerFn`
+	// handler cannot be invoked outside a request context. These assert the
+	// guards themselves actually reject, which the source grep cannot: together
+	// they cover "the server rejects the write, not just the UI".
+	// -------------------------------------------------------------------------
+
+	describe("authorization", () => {
+		it("the club's own admin passes (positive control for the rejections below)", async () => {
+			await expect(
+				requireClubRole(seed.adminUserId, seed.clubId, ["admin"]),
+			).resolves.toMatchObject({ clubRole: "admin" });
+		});
+
+		it("rejects a signed-in NON-ADMIN member from the write gate", async () => {
+			await expect(
+				requireClubRole(seed.memberUserId, seed.clubId, ["admin"]),
+			).rejects.toThrow(/permission/i);
+		});
+
+		it("still lets that same member READ — action items are club business", async () => {
+			// The split is the point: hiding an open item from the people who have
+			// to act on it would defeat the feature.
+			await expect(
+				requireClubViewAccess(seed.memberUserId, seed.clubId),
+			).resolves.toBeDefined();
+		});
+
+		it("rejects an admin of a DIFFERENT club", async () => {
+			const other = await seedClub();
+			try {
+				await expect(
+					requireClubRole(other.adminUserId, seed.clubId, ["admin"]),
+				).rejects.toThrow(/permission|not a member/i);
+			} finally {
+				await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+			}
+		});
+	});
+
+	describe("guarding the historical record", () => {
+		it("refuses to re-close an item, so its resolution date cannot be rewritten", async () => {
+			// The DATE is what is under protection. A second close that stamped
+			// today would flip this item from resolved back to OPEN in every set of
+			// minutes issued between the two closes — the exact instability the
+			// whole feature exists to prevent, through the one path nobody used.
+			const id = await createActionItem({
+				clubId: seed.clubId,
+				text: "Book the venue",
+			});
+			await resolveActionItem({ clubId: seed.clubId, id, resolution: "done" });
+			const [before] = await listActionItems(seed.clubId);
+
+			await expect(
+				resolveActionItem({ clubId: seed.clubId, id, resolution: "dropped" }),
+			).rejects.toThrow(/already resolved/i);
+
+			const [after] = await listActionItems(seed.clubId);
+			expect(after.resolvedAt).toEqual(before.resolvedAt);
+			expect(after.resolution).toBe("done");
+		});
+
+		it("refuses to edit a CLOSED item", async () => {
+			// Its old text is already printed in every set of minutes issued since
+			// it closed. Reopen it first if it genuinely needs correcting.
+			const id = await createActionItem({ clubId: seed.clubId, text: "Old" });
+			await resolveActionItem({ clubId: seed.clubId, id, resolution: "done" });
+
+			await expect(
+				updateActionItem({
+					clubId: seed.clubId,
+					id,
+					text: "Rewritten",
+					ownerMemberId: null,
+					dueDate: null,
+				}),
+			).rejects.toThrow(/already closed/i);
+
+			const [row] = await listActionItems(seed.clubId);
+			expect(row.text).toBe("Old");
+		});
+
+		it("cannot be reopened through another club", async () => {
+			const other = await seedClub();
+			try {
+				const id = await createActionItem({
+					clubId: seed.clubId,
+					text: "Mine",
+				});
+				await resolveActionItem({
+					clubId: seed.clubId,
+					id,
+					resolution: "done",
+				});
+				await expect(
+					reopenActionItem({ clubId: other.clubId, id }),
+				).rejects.toThrow();
+				// Assert the row too: a version that threw AFTER writing would pass a
+				// throw-only assertion.
+				const [row] = await listActionItems(seed.clubId);
+				expect(row.resolvedAt).not.toBeNull();
+				expect(row.resolution).toBe("done");
+			} finally {
+				await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+			}
+		});
+
+		it("cannot be edited through another club", async () => {
+			const other = await seedClub();
+			try {
+				const id = await createActionItem({
+					clubId: seed.clubId,
+					text: "Mine",
+				});
+				await expect(
+					updateActionItem({
+						clubId: other.clubId,
+						id,
+						text: "Theirs",
+						ownerMemberId: null,
+						dueDate: null,
+					}),
+				).rejects.toThrow();
+				const [row] = await listActionItems(seed.clubId);
+				expect(row.text).toBe("Mine");
 			} finally {
 				await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
 			}

@@ -41,6 +41,7 @@ import {
 	drainMinutesQueue,
 	type MinutesServerFns,
 } from "#/lib/drain-minutes";
+import { formatCalendarDay } from "#/lib/format";
 import {
 	enqueue,
 	type MinutesOp,
@@ -1142,12 +1143,19 @@ function AssigneePicker({
  * The lists are reconstructed from timestamps upstream, so this renders the
  * same thing for a past meeting no matter when it is viewed.
  */
-function ActionItemsSection({ items }: { items: MinutesActionItems }) {
+function ActionItemsSection({ items }: { items?: MinutesActionItems }) {
+	// `items` is typed required on `MinutesData`, but the offline snapshot in
+	// IndexedDB is an unversioned `MinutesData` that a PREVIOUS deploy wrote, and
+	// `readSnapshot` hands it back without a shape check. Without this guard, the
+	// first offline load after this release dereferences `items.open` and
+	// white-screens the whole minutes page — for the secretary who just lost
+	// signal mid-meeting, which is the one case the offline queue exists for.
+	if (!items) return null;
 	if (items.open.length === 0 && items.resolved.length === 0) return null;
 	return (
 		<section className="space-y-3">
 			<div>
-				<h3 className="text-sm font-bold tracking-[-0.01em]">Action items</h3>
+				<h3 className="font-semibold text-sm">Action items</h3>
 				<p className="text-xs text-[var(--sea-ink-soft)]">
 					What the club had outstanding at this meeting. Managed under Manage
 					&rsaquo; Action items.
@@ -1158,14 +1166,18 @@ function ActionItemsSection({ items }: { items: MinutesActionItems }) {
 					{items.open.map((i) => (
 						<li key={i.id} className="text-sm">
 							<span className="font-medium">{i.text}</span>
-							<span className="text-xs text-[var(--sea-ink-soft)]">
-								{" · "}
-								{/* Null owner means the club collectively — a real shape,
-								    never a placeholder person. */}
-								{i.ownerName ?? "The club"}
-							</span>
+							{/* An unowned item shows NO owner run. Substituting a name here
+							    would read as an owner, and would quietly reassign a departed
+							    owner's commitment to the whole club. */}
+							{i.ownerName || i.dueDate ? (
+								<span className="text-xs text-[var(--sea-ink-soft)]">
+									{i.ownerName ? ` · ${i.ownerName}` : ""}
+									{i.dueDate ? ` · due ${formatCalendarDay(i.dueDate)}` : ""}
+								</span>
+							) : null}
 						</li>
 					))}
+					<ElidedNote total={items.openTotal} shown={items.open.length} />
 				</ul>
 			) : (
 				<p className="text-sm text-[var(--sea-ink-soft)]">
@@ -1174,20 +1186,37 @@ function ActionItemsSection({ items }: { items: MinutesActionItems }) {
 			)}
 			{items.resolved.length > 0 ? (
 				<div className="space-y-1.5">
-					<h4 className="text-xs font-bold tracking-[0.04em] text-[var(--sea-ink-soft)] uppercase">
-						Closed since the last meeting
-					</h4>
+					<h4 className="font-medium text-sm">Closed since the last meeting</h4>
 					<ul className="space-y-1">
 						{items.resolved.map((i) => (
 							<li key={i.id} className="text-sm text-[var(--sea-ink-soft)]">
 								<span className="line-through">{i.text}</span>
 								{" · "}
-								{i.resolution}
+								{i.resolution === "dropped" ? "Dropped" : "Done"}
 							</li>
 						))}
+						<ElidedNote
+							total={items.resolvedTotal}
+							shown={items.resolved.length}
+						/>
 					</ul>
 				</div>
 			) : null}
 		</section>
+	);
+}
+
+/**
+ * "+N more not shown" when a list was cut, mirroring the minutes PDF.
+ *
+ * The lists arrive already capped from `loadActionItemsForMinutes`, so this is
+ * what stops a bounded render from reading as a complete record.
+ */
+function ElidedNote({ total, shown }: { total: number; shown: number }) {
+	if (total <= shown) return null;
+	return (
+		<li className="text-xs text-[var(--sea-ink-soft)]">
+			+{total - shown} more not shown
+		</li>
 	);
 }

@@ -4,6 +4,7 @@ import {
 	boolean,
 	check,
 	customType,
+	date,
 	index,
 	integer,
 	jsonb,
@@ -1451,8 +1452,20 @@ export const clubActionItems = pgTable(
 		ownerMemberId: uuid("owner_member_id").references(() => members.id, {
 			onDelete: "set null",
 		}),
-		/** Optional target date. Follow-up comes from persistence, not deadlines. */
-		dueDate: timestamp("due_date", { withTimezone: true }),
+		/**
+		 * Optional target date. Follow-up comes from persistence, not deadlines.
+		 *
+		 * A `date`, NOT a `timestamptz`, and the distinction is user-visible. This
+		 * is a CALENDAR DAY picked in an `<input type="date">`, never an instant:
+		 * it is only ever displayed, never compared against `meetings.scheduled_at`
+		 * the way `created_at`/`resolved_at` are. Stored as a timestamp it would go
+		 * in as UTC midnight and render in the viewer's zone, so every club west of
+		 * UTC — America/Chicago is this app's default — would read back the day
+		 * BEFORE the one the officer typed, and SSR (UTC container) would disagree
+		 * with the hydrated client. `mode: "string"` keeps it a "YYYY-MM-DD" string
+		 * end to end, with no Date to shift.
+		 */
+		dueDate: date("due_date", { mode: "string" }),
 		/**
 		 * When the item was raised, and when it closed (null = still open).
 		 *
@@ -1478,6 +1491,13 @@ export const clubActionItems = pgTable(
 	(t) => [
 		// The open-list read is per club, ordered by age.
 		index("club_action_items_club_idx").on(t.clubId, t.createdAt),
+		// The owner FK is written far more often than it is read: every member
+		// delete fires the `set null` above, and `collapseMemberships` re-points
+		// owners once per absorbed membership — and `mergePeople` calls that in a
+		// loop, so an unindexed column costs one sequential scan per absorbed
+		// membership. Plain CREATE INDEX only: `CONCURRENTLY` cannot run inside the
+		// transaction the startup migrator uses and fails the Railway deploy closed.
+		index("club_action_items_owner_idx").on(t.ownerMemberId),
 		// Resolution timestamp and reason are set together or not at all. Without
 		// this, a half-closed row renders in neither the open list nor the
 		// resolved list and simply vanishes from the record.

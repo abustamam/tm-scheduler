@@ -40,11 +40,36 @@ export const ACTION_ITEM_LIMITS = {
  * that says "+N more" is honest signal rather than a defect.
  */
 export const ACTION_ITEM_RENDER_CAPS = {
-	/** How many action-item rows the minutes PDF prints before "+N more". */
+	/**
+	 * How many action-item rows a minutes surface shows before "+N more".
+	 *
+	 * Applied ONCE, in `loadActionItemsForMinutes`, to the open list and to the
+	 * resolved list separately — so the section's real budget is 2 x this. It is
+	 * applied there rather than in each renderer on purpose: capping in the
+	 * renderer alone bounds the PDF while leaving the wire payload, the DOM and
+	 * the offline IndexedDB snapshot unbounded, which is the same
+	 * bounded-render/unbounded-pipeline shape #519 shipped.
+	 */
 	rows: 40,
 	/** An owner's name beside an item. Defence in depth — names are capped on write elsewhere. */
 	ownerName: 120,
 } as const;
+
+/**
+ * How many rows a single club's action-item read may return.
+ *
+ * Nothing prunes this table — an item never auto-expires and resolved ones are
+ * kept as history — so the row count is user-controlled and grows forever. The
+ * render cap above bounds what is DISPLAYED; this bounds what Postgres returns,
+ * what is serialized over the server-fn boundary, and what `saveSnapshot` writes
+ * into IndexedDB on a phone at a meeting.
+ *
+ * Deliberately far above the render cap so the "+N more" count stays meaningful
+ * for any real club, and far below the point where the payload matters: 500 rows
+ * at the 300-character text cap is ~150KB of text, against 27.9MB measured for
+ * an uncapped 20,000-row club.
+ */
+export const ACTION_ITEM_READ_CAP = 500;
 
 /**
  * A rejecting validator with a human message.

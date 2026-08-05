@@ -60,3 +60,27 @@ export function formatShortDate(value: Date | string, timeZone?: string) {
 		timeZone,
 	}).format(d);
 }
+
+/**
+ * Format a CALENDAR DAY ("YYYY-MM-DD") as e.g. "Aug 10".
+ *
+ * Deliberately not `formatShortDate`, which would take the same string through
+ * `new Date("2026-08-10")` — UTC midnight — and then format it in the runtime's
+ * zone, printing "Aug 9" for every club west of UTC and disagreeing between the
+ * SSR pass (UTC container) and the hydrated client. Pinning both the
+ * construction and the formatting to UTC makes the day survive the round trip
+ * unchanged, whoever is looking and wherever the process runs.
+ *
+ * Returns the input unchanged if it is not a plain date, so a bad value shows up
+ * rather than becoming "Invalid Date".
+ */
+export function formatCalendarDay(ymd: string) {
+	const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd);
+	if (!m) return ymd;
+	const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+	return new Intl.DateTimeFormat(undefined, {
+		month: "short",
+		day: "numeric",
+		timeZone: "UTC",
+	}).format(d);
+}

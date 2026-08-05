@@ -27,15 +27,39 @@ const clubScoped = z.object({ clubId: z.string().uuid() });
 
 /** An optional owner: a member uuid, or null for "the club collectively". */
 const ownerMemberId = z.string().uuid().nullish();
-/** An optional target date, arriving as an ISO string from the form. */
+/**
+ * An optional target date, as the calendar day the form's date input produced.
+ *
+ * A bare "YYYY-MM-DD" string all the way to a `date` column — deliberately NOT
+ * parsed into a `Date`. `new Date("2026-08-10")` is UTC midnight, which renders
+ * as the 9th for every club west of UTC and disagrees between the SSR pass and
+ * the hydrated client. A due date is a day, not an instant.
+ */
 const dueDate = z
 	.string()
-	.datetime()
+	.regex(/^\d{4}-\d{2}-\d{2}$/, "Pick a due date from the calendar.")
 	.nullish()
-	.transform((v) => (v ? new Date(v) : null));
+	.transform((v) => v ?? null);
+
+/**
+ * Parse, but fail with a sentence a club officer can read.
+ *
+ * A raw `ZodError` reaching the client is not the human-readable rejection this
+ * feature promises: `ZodError.message` is `JSON.stringify(issues, null, 2)`, so
+ * the admin form's toast would show a multi-line dump of `code`/`origin`/`path`
+ * — and for a bad uuid, the internal validation regex. The per-field messages
+ * are already written; this is what actually surfaces them.
+ */
+function parse<T>(schema: z.ZodType<T>, input: unknown): T {
+	const result = schema.safeParse(input);
+	if (result.success) return result.data;
+	throw new Error(
+		result.error.issues[0]?.message ?? "That action item could not be saved.",
+	);
+}
 
 export const getActionItems = createServerFn({ method: "GET" })
-	.validator((input: unknown) => clubScoped.parse(input))
+	.validator((input: unknown) => parse(clubScoped, input))
 	.handler(async ({ data }) => {
 		const user = await requireUser();
 		await requireClubViewAccess(user.id, data.clubId);
@@ -43,7 +67,7 @@ export const getActionItems = createServerFn({ method: "GET" })
 	});
 
 export const getOpenActionItems = createServerFn({ method: "GET" })
-	.validator((input: unknown) => clubScoped.parse(input))
+	.validator((input: unknown) => parse(clubScoped, input))
 	.handler(async ({ data }) => {
 		const user = await requireUser();
 		await requireClubViewAccess(user.id, data.clubId);
@@ -52,13 +76,14 @@ export const getOpenActionItems = createServerFn({ method: "GET" })
 
 export const addActionItem = createServerFn({ method: "POST" })
 	.validator((input: unknown) =>
-		clubScoped
-			.extend({
+		parse(
+			clubScoped.extend({
 				text: ACTION_ITEM_FIELDS.text,
 				ownerMemberId,
 				dueDate,
-			})
-			.parse(input),
+			}),
+			input,
+		),
 	)
 	.handler(async ({ data }) => {
 		const user = await requireUser();
@@ -73,14 +98,15 @@ export const addActionItem = createServerFn({ method: "POST" })
 
 export const editActionItem = createServerFn({ method: "POST" })
 	.validator((input: unknown) =>
-		clubScoped
-			.extend({
+		parse(
+			clubScoped.extend({
 				id: z.string().uuid(),
 				text: ACTION_ITEM_FIELDS.text,
 				ownerMemberId,
 				dueDate,
-			})
-			.parse(input),
+			}),
+			input,
+		),
 	)
 	.handler(async ({ data }) => {
 		const user = await requireUser();
@@ -96,12 +122,13 @@ export const editActionItem = createServerFn({ method: "POST" })
 
 export const closeActionItem = createServerFn({ method: "POST" })
 	.validator((input: unknown) =>
-		clubScoped
-			.extend({
+		parse(
+			clubScoped.extend({
 				id: z.string().uuid(),
 				resolution: z.enum(["done", "dropped"]),
-			})
-			.parse(input),
+			}),
+			input,
+		),
 	)
 	.handler(async ({ data }) => {
 		const user = await requireUser();
@@ -115,7 +142,7 @@ export const closeActionItem = createServerFn({ method: "POST" })
 
 export const restoreActionItem = createServerFn({ method: "POST" })
 	.validator((input: unknown) =>
-		clubScoped.extend({ id: z.string().uuid() }).parse(input),
+		parse(clubScoped.extend({ id: z.string().uuid() }), input),
 	)
 	.handler(async ({ data }) => {
 		const user = await requireUser();
@@ -125,7 +152,7 @@ export const restoreActionItem = createServerFn({ method: "POST" })
 
 export const removeActionItem = createServerFn({ method: "POST" })
 	.validator((input: unknown) =>
-		clubScoped.extend({ id: z.string().uuid() }).parse(input),
+		parse(clubScoped.extend({ id: z.string().uuid() }), input),
 	)
 	.handler(async ({ data }) => {
 		const user = await requireUser();

@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { readSource } from "#/test/guard-source";
@@ -32,15 +32,52 @@ describe("action items stay off every anonymous surface (#529)", () => {
 		expect(meetingRoute).toMatch(/const EMPTY_MINUTES = \{[\s\S]*?data: null,/);
 	});
 
-	// The standalone print/present/word routes are PUBLIC — fully anonymous, no
-	// shell. None of them may mention action items at all.
-	const PUBLIC_ROUTES = [
-		"club.$clubId_.meeting.$meetingId.print.tsx",
-		"club.$clubId_.meeting.$meetingId.present.tsx",
-		"club.$clubId_.meeting.$meetingId.word.tsx",
-		"club.$clubId.index.tsx",
-		"club.$clubId_.roles.tsx",
-	];
+	it("gates its own action-item fetch on the shell too", () => {
+		// The meeting route is the ONE public-facing route allowed to mention
+		// action items, because it also serves signed-in members. That exemption is
+		// what made the earlier version of this guard blind: it asserted the
+		// minutes fork and then ran the absence greps over OTHER files only, so an
+		// unconditional `getOpenActionItems(...)` added to this loader — reachable
+		// by an anonymous visitor — passed. Every fetch here must be shell-gated.
+		const calls = [...meetingRoute.matchAll(/getOpenActionItems\(/g)];
+		expect(calls.length).toBeGreaterThan(0);
+		for (const call of calls) {
+			const preceding = meetingRoute.slice(
+				Math.max(0, (call.index ?? 0) - 200),
+				call.index ?? 0,
+			);
+			expect(preceding).toMatch(/context\.shell\s*&&/);
+		}
+	});
+
+	// Every OTHER `club.*` route is PUBLIC — fully anonymous, no shell. None of
+	// them may mention action items at all.
+	//
+	// Enumerated from the filesystem rather than hand-listed. The hand-written
+	// version omitted `club.$clubId.tsx` (the anonymous layout, which runs its own
+	// loader for signed-out visitors) and `club.$clubId_.guest-book.tsx`, so a
+	// leak in either was invisible — and any public route added later would have
+	// been uncovered by default, which is the wrong direction for a guard.
+	const PUBLIC_ROUTES = readdirSync(__dirname)
+		.filter(
+			(f) =>
+				f.startsWith("club.") &&
+				f.endsWith(".tsx") &&
+				!f.includes(".test.") &&
+				f !== "club.$clubId.meeting.$meetingId.tsx",
+		)
+		.sort();
+
+	it("enumerates the public club routes, so a rename cannot make this vacuous", () => {
+		expect(PUBLIC_ROUTES).toContain("club.$clubId.tsx");
+		expect(PUBLIC_ROUTES).toContain("club.$clubId_.guest-book.tsx");
+		expect(PUBLIC_ROUTES).toContain(
+			"club.$clubId_.meeting.$meetingId.print.tsx",
+		);
+		// Absolute floor: if a refactor collapses these files, the drop is loud
+		// rather than silently shrinking the guard to nothing.
+		expect(PUBLIC_ROUTES.length).toBeGreaterThanOrEqual(7);
+	});
 
 	for (const file of PUBLIC_ROUTES) {
 		it(`${file} carries no action-item data`, () => {

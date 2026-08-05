@@ -19,9 +19,17 @@ import { renderMinutesPdf } from "./minutes-pdf-logic";
 
 export function createMinutesEmailPort(): MinutesEmailPort {
 	return {
-		// #152's real renderer — byte-identical to the PDF download.
+		// #152's real renderer, asked for the GUEST view.
+		//
+		// The emailed copy is not byte-identical to the member download any more,
+		// and that is the point: `loadRecipients` below puts every guest marked
+		// present on the default to-list, and a guest can add themselves through
+		// `submitGuestBook`, which takes no session at all. One PDF goes to that
+		// whole mixed list, so it must be the copy that carries no club-internal
+		// action items (#529). Members still see them on the meeting page and in
+		// the membership-gated download.
 		renderMinutesPdf(meetingId: string): Promise<Uint8Array> {
-			return renderMinutesPdf(meetingId);
+			return renderMinutesPdf(meetingId, "guests");
 		},
 
 		// Default recipients: every active roster member + every guest marked

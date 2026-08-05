@@ -10,6 +10,10 @@ import { and, asc, eq, isNull } from "drizzle-orm";
 import { db } from "#/db";
 import { clubActionItems, members } from "#/db/schema";
 import {
+	ACTION_ITEM_READ_CAP,
+	ACTION_ITEM_RENDER_CAPS,
+} from "#/lib/action-item-limits";
+import {
 	type ActionItemFact,
 	openAsOf,
 	resolvedBetween,
@@ -23,11 +27,18 @@ export interface ActionItemRow extends ActionItemFact {
 	ownerMemberId: string | null;
 	/** Joined for display; null for an unowned item OR a departed owner. */
 	ownerName: string | null;
-	dueDate: Date | null;
+	/** A calendar day ("YYYY-MM-DD"), not an instant — see the schema comment. */
+	dueDate: string | null;
 	resolution: ActionItemResolution | null;
 }
 
-/** Every action item for a club, oldest first. */
+/**
+ * Action items for a club, oldest first, bounded by `ACTION_ITEM_READ_CAP`.
+ *
+ * The bound is not optional politeness: nothing prunes this table, so without it
+ * every meeting-page load and every PDF render fetches and serializes a club's
+ * entire history.
+ */
 export async function listActionItems(
 	clubId: string,
 ): Promise<ActionItemRow[]> {
@@ -43,19 +54,38 @@ export async function listActionItems(
 			resolution: clubActionItems.resolution,
 		})
 		.from(clubActionItems)
-		.leftJoin(members, eq(members.id, clubActionItems.ownerMemberId))
+		// Scoped on the JOIN as well as the WHERE. `assertOwnerInClub` already
+		// stops a cross-club owner being written, but a join condition that only
+		// matches on id would happily print another club's member name if any
+		// future writer, backfill or merge ever got it wrong.
+		.leftJoin(
+			members,
+			and(
+				eq(members.id, clubActionItems.ownerMemberId),
+				eq(members.clubId, clubId),
+			),
+		)
 		.where(eq(clubActionItems.clubId, clubId))
-		.orderBy(asc(clubActionItems.createdAt));
+		.orderBy(asc(clubActionItems.createdAt))
+		.limit(ACTION_ITEM_READ_CAP);
 
 	return rows;
 }
 
-/** The open items only — what the meeting page and the admin route lead with. */
+/**
+ * The items open RIGHT NOW — what the meeting page shows before a meeting has
+ * been completed, when "what do we still owe the club" is the live question.
+ *
+ * Goes through `openAsOf` rather than a second hand-written predicate so
+ * "which items are open" has exactly one definition. Two copies of that rule is
+ * the shape that makes a cross-surface disagreement invisible to any test which
+ * compares the surfaces to each other.
+ */
 export async function listOpenActionItems(
 	clubId: string,
 ): Promise<ActionItemRow[]> {
 	const rows = await listActionItems(clubId);
-	return rows.filter((r) => r.resolvedAt === null);
+	return openAsOf(rows, new Date()).slice(0, ACTION_ITEM_RENDER_CAPS.rows);
 }
 
 /** Reject an owner who is not a member of this club. */
@@ -72,7 +102,7 @@ export async function createActionItem(input: {
 	clubId: string;
 	text: string;
 	ownerMemberId?: string | null;
-	dueDate?: Date | null;
+	dueDate?: string | null;
 }): Promise<string> {
 	if (input.ownerMemberId) {
 		await assertOwnerInClub(input.clubId, input.ownerMemberId);
@@ -95,7 +125,7 @@ export async function updateActionItem(input: {
 	id: string;
 	text: string;
 	ownerMemberId: string | null;
-	dueDate: Date | null;
+	dueDate: string | null;
 }): Promise<void> {
 	if (input.ownerMemberId) {
 		await assertOwnerInClub(input.clubId, input.ownerMemberId);
@@ -112,10 +142,17 @@ export async function updateActionItem(input: {
 			and(
 				eq(clubActionItems.id, input.id),
 				eq(clubActionItems.clubId, input.clubId),
+				// Open items only. A closed item's text is already printed in every
+				// minutes document issued since it closed, so editing it in place
+				// rewrites history the same way a moved `resolvedAt` would. Reopen it
+				// first if it genuinely needs correcting.
+				isNull(clubActionItems.resolvedAt),
 			),
 		)
 		.returning({ id: clubActionItems.id });
-	if (updated.length === 0) throw new Error("Action item not found.");
+	if (updated.length === 0) {
+		throw new Error("Action item not found, or already closed.");
+	}
 }
 
 /**
@@ -148,7 +185,12 @@ export async function resolveActionItem(input: {
 	}
 }
 
-/** Reopen a closed item, clearing both fields together. */
+/**
+ * Reopen a closed item, clearing both fields together.
+ *
+ * Club-scoped in the WHERE like every other mutation here, so an admin of one
+ * club cannot reach another club's item with a guessed id.
+ */
 export async function reopenActionItem(input: {
 	clubId: string;
 	id: string;
@@ -183,10 +225,18 @@ export async function deleteActionItem(input: {
 }
 
 export interface MinutesActionItems {
-	/** Open as of the meeting instant, oldest first. */
+	/** Open as of the meeting instant, oldest first. Capped — see `openTotal`. */
 	open: ActionItemRow[];
-	/** Resolved since the previous meeting, most recent first. */
+	/** Resolved since the previous meeting, most recent first. Capped. */
 	resolved: ActionItemRow[];
+	/**
+	 * How many items each list would hold uncapped, so a renderer can say
+	 * "+N more" honestly without being handed the rows to count.
+	 *
+	 * Saturates at `ACTION_ITEM_READ_CAP`, which is the point of that cap.
+	 */
+	openTotal: number;
+	resolvedTotal: number;
 }
 
 /**
@@ -202,6 +252,11 @@ export interface MinutesActionItems {
  *
  * `previousMeetingAt` is null for a club's first minutes, which opens the
  * resolved window at the beginning of time rather than returning nothing.
+ *
+ * Both lists are row-capped HERE rather than in each renderer, so the PDF, the
+ * meeting page, the server-fn payload and the offline snapshot all inherit one
+ * bound. Capping in the renderer alone leaves the pipeline feeding it unbounded,
+ * which is the shape that made #519's cap fail to bound anything.
  */
 export async function loadActionItemsForMinutes(input: {
 	clubId: string;
@@ -209,8 +264,16 @@ export async function loadActionItemsForMinutes(input: {
 	previousMeetingAt: Date | null;
 }): Promise<MinutesActionItems> {
 	const all = await listActionItems(input.clubId);
+	const open = openAsOf(all, input.meetingAt);
+	const resolved = resolvedBetween(
+		all,
+		input.previousMeetingAt,
+		input.meetingAt,
+	);
 	return {
-		open: openAsOf(all, input.meetingAt),
-		resolved: resolvedBetween(all, input.previousMeetingAt, input.meetingAt),
+		open: open.slice(0, ACTION_ITEM_RENDER_CAPS.rows),
+		resolved: resolved.slice(0, ACTION_ITEM_RENDER_CAPS.rows),
+		openTotal: open.length,
+		resolvedTotal: resolved.length,
 	};
 }

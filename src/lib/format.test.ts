@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+	formatCalendarDay,
 	formatMeetingTime,
 	formatMeetingTimeRange,
 	formatShortDate,
@@ -52,6 +53,70 @@ describe("formatMeetingTimeRange", () => {
 	it("accepts an ISO string input", () => {
 		expect(formatMeetingTimeRange(start.toISOString(), 60, "UTC")).toBe(
 			formatMeetingTimeRange(start, 60, "UTC"),
+		);
+	});
+});
+
+describe("formatCalendarDay (#529)", () => {
+	// The regression test for a bug that shipped past five reviewers: an action
+	// item's due date is a CALENDAR DAY, and putting one through
+	// `new Date("2026-08-10")` yields UTC midnight, which formats as the 9th
+	// anywhere west of UTC. This repo's default club timezone is America/Chicago,
+	// so that was very nearly every user — and the SSR container (UTC) disagreed
+	// with the hydrated client, so the string changed under the reader.
+	//
+	// The zone is injected rather than taken from `process.env.TZ`, which Node
+	// only reads at startup: a TZ assigned inside the test would be ignored, the
+	// suite would run in CI's UTC where the bug does not manifest at all, and the
+	// test could never fail. Stubbing the DEFAULT zone instead makes it
+	// deterministic everywhere — the correct implementation pins `timeZone: "UTC"`
+	// explicitly and is unaffected, the buggy one inherits the stub and shifts.
+	const RealDateTimeFormat = Intl.DateTimeFormat;
+
+	function withDefaultZone(timeZone: string, run: () => void) {
+		// Must be constructible — `formatCalendarDay` calls `new Intl.DateTimeFormat`.
+		function Stub(locale?: string, options?: Intl.DateTimeFormatOptions) {
+			return new RealDateTimeFormat(locale ?? "en-US", {
+				...options,
+				timeZone: options?.timeZone ?? timeZone,
+			});
+		}
+		const stub = Stub as unknown as typeof Intl.DateTimeFormat;
+		vi.spyOn(Intl, "DateTimeFormat").mockImplementation(stub);
+		try {
+			run();
+		} finally {
+			vi.mocked(Intl.DateTimeFormat).mockRestore();
+		}
+	}
+
+	it("shows the day that was picked, whatever zone the viewer is in", () => {
+		// Both sides of UTC. An implementation that inherits the ambient zone
+		// cannot pass the west-of-UTC cases.
+		for (const tz of [
+			"America/Chicago",
+			"America/Los_Angeles",
+			"UTC",
+			"Asia/Tokyo",
+		]) {
+			withDefaultZone(tz, () => {
+				expect(formatCalendarDay("2026-08-10")).toBe("Aug 10");
+			});
+		}
+	});
+
+	it("does not shift a day across a month boundary", () => {
+		withDefaultZone("America/Chicago", () => {
+			expect(formatCalendarDay("2026-09-01")).toBe("Sep 1");
+			expect(formatCalendarDay("2026-01-01")).toBe("Jan 1");
+		});
+	});
+
+	it("hands back anything that is not a plain calendar day", () => {
+		// Better a visibly wrong value than a confident "Invalid Date".
+		expect(formatCalendarDay("")).toBe("");
+		expect(formatCalendarDay("2026-08-10T00:00:00Z")).toBe(
+			"2026-08-10T00:00:00Z",
 		);
 	});
 });

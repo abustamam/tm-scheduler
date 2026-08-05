@@ -407,7 +407,14 @@ export async function loadMinutes(meetingId: string): Promise<MinutesData> {
 		.from(meetings)
 		.where(eq(meetings.id, meetingId))
 		.limit(1);
-	const meetingAt = thisMeeting?.scheduledAt ?? new Date();
+	// Throw rather than defaulting. `new Date()` here would silently turn the
+	// pinned reconstruction back into the live query this feature exists to
+	// remove — a past meeting would render today's open list — and it would do it
+	// without any test noticing. Unreachable today (`scheduled_at` is NOT NULL and
+	// `getMeetingClubId` already resolved this row), which is exactly why the
+	// failure mode has to be loud if a refactor ever makes it reachable.
+	if (!thisMeeting) throw new Error("Meeting not found.");
+	const meetingAt = thisMeeting.scheduledAt;
 	const [previous] = await db
 		.select({ scheduledAt: meetings.scheduledAt })
 		.from(meetings)

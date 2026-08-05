@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { readSource } from "#/test/guard-source";
@@ -6,11 +7,18 @@ import { readSource } from "#/test/guard-source";
 // open to any signed-in club member — but every WRITE must stay admin-gated,
 // and nothing here may be reachable without a session.
 //
-// A behavioral test is not possible: a createServerFn handler cannot be invoked
+// This is the STRUCTURAL half. A `createServerFn` handler cannot be invoked
 // outside a request context in vitest, and the integration tests exercise
-// `action-items-logic.ts` directly, bypassing these guards entirely. So this
-// reads the REAL source and asserts the wiring, catching a silent weakening the
-// integration suite would never surface.
+// `action-items-logic.ts` directly, bypassing these guards entirely — so this
+// reads the REAL source and asserts the wiring. The behavioral half, which
+// calls `requireClubRole` itself and proves a plain member is actually rejected,
+// lives in `action-items.integration.test.ts`; neither one alone is enough.
+//
+// Every gate assertion below requires `await`. Without it the source still reads
+// as gated, biome and tsc stay clean, and the handler runs to completion while
+// the rejection surfaces as nothing but an unhandled promise — i.e. every write
+// silently open to any signed-in member. That is the exact mutation this file
+// exists to catch, so it is asserted rather than assumed.
 describe("action-item fn authz gating (#529)", () => {
 	// Comment-blind (see `#/test/guard-source`). "The gate must BE present" is
 	// precisely the shape a prose comment satisfies for free, and this module
@@ -36,28 +44,35 @@ describe("action-item fn authz gating (#529)", () => {
 	const READS = ["getActionItems", "getOpenActionItems"];
 
 	for (const fn of WRITES) {
-		it(`${fn} requires the admin club role`, () => {
+		it(`${fn} AWAITS the admin club role`, () => {
 			// Whitespace-tolerant: the formatter wraps the call across lines.
+			// `await` is load-bearing — see the header.
 			expect(handlerBody(fn)).toMatch(
-				/requireClubRole\([^)]*\[\s*["']admin["'],?\s*\]/,
+				/await\s+requireClubRole\([^)]*\[\s*["']admin["'],?\s*\]/,
 			);
 		});
 	}
 
 	for (const fn of READS) {
-		it(`${fn} requires club view access`, () => {
-			expect(handlerBody(fn)).toContain("requireClubViewAccess(");
+		it(`${fn} AWAITS club view access`, () => {
+			expect(handlerBody(fn)).toMatch(/await\s+requireClubViewAccess\(/);
 		});
 	}
 
 	for (const fn of [...WRITES, ...READS]) {
-		it(`${fn} requires a signed-in user`, () => {
-			expect(handlerBody(fn)).toContain("requireUser(");
+		it(`${fn} AWAITS a signed-in user`, () => {
+			expect(handlerBody(fn)).toMatch(/await\s+requireUser\(/);
 		});
 	}
 
 	it("never gates a write on the member role", () => {
-		expect(src).not.toContain('["member"]');
+		// RAW source, not the comment-stripped copy. This is an "offender must be
+		// ABSENT" assertion, and stripping can only LOOSEN one: comments are blanked
+		// to spaces, so live code written as `["member" /* for now */]` would stop
+		// containing the forbidden text and pass. The direction is the opposite of
+		// the must-BE-present assertions above, which is why they read `src`.
+		const raw = readFileSync(resolve(__dirname, "action-items.ts"), "utf8");
+		expect(raw).not.toMatch(/requireClubRole\([^)]*\[\s*["']member["']/);
 	});
 
 	it("leaves no exported fn ungated", () => {
@@ -69,8 +84,8 @@ describe("action-item fn authz gating (#529)", () => {
 		for (const name of exports) {
 			const body = handlerBody(name);
 			expect(
-				body.includes("requireClubRole(") ||
-					body.includes("requireClubViewAccess("),
+				/await\s+requireClubRole\(/.test(body) ||
+					/await\s+requireClubViewAccess\(/.test(body),
 			).toBe(true);
 		}
 	});
