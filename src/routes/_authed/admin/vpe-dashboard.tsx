@@ -86,8 +86,8 @@ function VpeDashboard() {
 					VP Education
 				</h1>
 				<p className="mt-1 text-sm text-[var(--sea-ink-soft)]">
-					Speaker rotation and role fairness at a glance — who's up next to
-					speak and who's overdue for a role.
+					Attendance, speaker rotation and role fairness at a glance — who has
+					stopped coming, who's overdue for a role, and who's up next to speak.
 				</p>
 			</div>
 
@@ -261,11 +261,17 @@ function OverdueRow({ member }: { member: OverdueMemberRow }) {
 }
 
 function LapseRow({ member }: { member: AttendanceLapseRow }) {
-	// `rate` is null when nothing in the window was eligible for this member —
-	// they joined after all of it, or every meeting was excused. Render a dash
-	// rather than NaN%.
+	// The rate is CONTEXT beside the streak, not a substitute for it — an
+	// officer wants to know whether this is someone who was always patchy or
+	// someone reliable who just stopped. Rendering it only when lastSeenAt is
+	// null (the previous shape) made it dead: lastSeenAt is null exactly when
+	// presentCount is 0, so the percentage could only ever print "0%".
+	// Null rate means nothing in the window was eligible for them.
 	const rate =
-		member.rate === null ? "—" : `${Math.round(member.rate * 100)}% attendance`;
+		member.rate === null ? null : `${Math.round(member.rate * 100)}% attended`;
+	const seen = member.lastSeenAt
+		? `last seen ${formatShortDate(member.lastSeenAt)}`
+		: "never recorded present";
 	return (
 		<Link
 			to="/members/$id"
@@ -285,11 +291,7 @@ function LapseRow({ member }: { member: AttendanceLapseRow }) {
 					{member.streak} missed
 				</span>
 				<div className="text-xs text-[var(--sea-ink-soft)]">
-					{member.lastSeenAt
-						? `last seen ${formatShortDate(member.lastSeenAt)}`
-						: rate === "—"
-							? "never recorded"
-							: rate}
+					{rate ? `${seen} · ${rate}` : seen}
 				</div>
 			</div>
 			<Chevron />

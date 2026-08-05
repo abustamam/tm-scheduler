@@ -110,13 +110,13 @@ describe("VPE dashboard — Stopped attending (#530)", () => {
 		expect(screen.getByText(/^last seen /)).toBeTruthy();
 	});
 
-	it("says 'never recorded' when nothing in the window was eligible", async () => {
+	it("says so when a member was never recorded present", async () => {
 		// rate null ⇒ no eligible meeting (joined after the window, or every
 		// meeting excused). Must not render "NaN%".
 		await renderRoute([
 			lapseRow({ lastSeenAt: null, rate: null, eligibleCount: 0, streak: 3 }),
 		]);
-		expect(screen.getByText("never recorded")).toBeTruthy();
+		expect(screen.getByText(/never recorded present/)).toBeTruthy();
 		expect(screen.queryByText(/NaN/)).toBeNull();
 	});
 
@@ -130,7 +130,7 @@ describe("VPE dashboard — Stopped attending (#530)", () => {
 				streak: 8,
 			}),
 		]);
-		expect(screen.getByText("0% attendance")).toBeTruthy();
+		expect(screen.getByText(/0% attended/)).toBeTruthy();
 	});
 
 	it("links each lapsed member to their profile", async () => {
