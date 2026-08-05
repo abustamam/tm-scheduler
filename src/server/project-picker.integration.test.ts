@@ -352,7 +352,13 @@ describe.skipIf(!hasTestDb)("project picker (#418)", () => {
 		it("clamps a catalog name that exceeds the speaker-detail cap", async () => {
 			const id = await addProject(realPathId, 1, "z".repeat(5_000), false);
 			const display = await resolveProjectDisplay(id);
-			expect(display.projectName.length).toBeLessThanOrEqual(200);
+			// CODE POINTS, not `.length` — `cap` bounds code points, so an
+			// all-astral name legitimately returns up to 2x that in UTF-16 units
+			// and a `.length` assertion would be measuring the wrong thing.
+			// The ceiling is ABSOLUTE (120, the shipped cap) rather than
+			// `<= SPEAKER_LIMITS.projectName`, which passes for every value of
+			// that constant including one that reopens the bypass.
+			expect([...display.projectName].length).toBeLessThanOrEqual(120);
 			expect(display.projectName.length).toBeGreaterThan(0);
 			// Truncated by CODE POINT, so it can never emit a lone surrogate.
 			expect(
@@ -360,6 +366,33 @@ describe.skipIf(!hasTestDb)("project picker (#418)", () => {
 					display.projectName,
 				),
 			).toBe(false);
+		});
+
+		/**
+		 * The READ half. `getProjectOptions` is PUBLIC/no-session, and clamping
+		 * only where a picked project is WRITTEN would still let an oversized
+		 * catalog name be materialised into an anonymous JSON payload.
+		 *
+		 * Without this the write-side clamp can be deleted from the option list
+		 * and every other test stays green — verified by mutation.
+		 */
+		it("caps catalog names on the PUBLIC option list too", async () => {
+			await addProject(realPathId, 1, "q".repeat(5_000), false);
+			const paths = await listProjectOptions(personId, {
+				includeProgress: false,
+			});
+			const names = paths.flatMap((p) => [
+				p.name,
+				...p.projects.map((x) => x.name),
+			]);
+			expect(names.length).toBeGreaterThan(0);
+			for (const n of names) {
+				// ABSOLUTE ceilings (the shipped caps), by CODE POINT.
+				expect([...n].length).toBeLessThanOrEqual(120);
+			}
+			// And the hostile one really is in this payload, so the loop is not
+			// passing over an empty or unrelated set.
+			expect(names.some((n) => n.startsWith("qqq"))).toBe(true);
 		});
 
 		it("leaves an ordinary catalog name untouched", async () => {

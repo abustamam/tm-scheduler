@@ -160,14 +160,19 @@ export async function listProjectOptions(
 			.map((p) => ({
 				id: p.id,
 				level: p.level,
-				name: p.name,
+				// Capped on the way OUT as well as where a picked project is written
+				// onto a speech. `getProjectOptions` is explicitly PUBLIC/no-session
+				// and the catalog is unbounded at its own ingest, so an oversized
+				// name would otherwise be materialised into an anonymous,
+				// unthrottled JSON payload — the read half of #526.
+				name: cap(p.name, SPEAKER_LIMITS.projectName),
 				isRequired: p.isRequired,
 				complete: completeIds.has(p.id),
 			}));
 		return {
 			pathId: e.pathId,
 			courseCode: e.courseCode,
-			name: e.name,
+			name: cap(e.name, SPEAKER_LIMITS.pathwayPath),
 			status: e.status,
 			defaultLevel: defaultOpenLevel(
 				projects,
@@ -290,6 +295,12 @@ export async function resolveProjectDisplay(
 	return {
 		pathwayPath: cap(row.pathName, SPEAKER_LIMITS.pathwayPath),
 		projectName: cap(row.projectName, SPEAKER_LIMITS.projectName),
-		projectLevel: cap(levelLabel(row.level), SPEAKER_LIMITS.projectLevel),
+		// NOT capped: `levelLabel` is derived from an integer column, so it is at
+		// most "Path Completion" (15) or "Level -2147483648" (17) — never user
+		// text. Capping it would be a call that can never fire, and worse: the
+		// lower bound on `projectLevel` only asserts >= 7, so tightening that
+		// constant to anything in [7,14] would silently rewrite every
+		// Path-Completion speech to "Path C…" with the suite green.
+		projectLevel: levelLabel(row.level),
 	};
 }

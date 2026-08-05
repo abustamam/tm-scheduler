@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { MEETING_FIELDS } from "#/lib/meeting-limits";
 import { MAX_BATCH } from "#/lib/meeting-recurrence";
 import {
 	applyBatchCreateMeetings,
@@ -16,7 +17,12 @@ const batchCreateSchema = z.object({
 		.array(z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/))
 		.min(1)
 		.max(MAX_BATCH),
-	location: z.string().trim().optional(),
+	// CAPPED like every other meeting write (#525). Missed on the first pass:
+	// this path writes one row per date, up to `MAX_BATCH` (52) in a single
+	// transaction, and the value is then served to ANONYMOUS readers on the
+	// public meeting page. Rejecting is right here — a batch create prefills
+	// nothing, so an error costs only the field being typed.
+	location: MEETING_FIELDS.location.optional(),
 });
 
 /** Admin only: create many meetings from a recurrence in one transaction, each

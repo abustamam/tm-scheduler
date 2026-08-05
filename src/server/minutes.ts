@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { MEETING_FIELDS } from "#/lib/meeting-limits";
+import { MEETING_UPDATE_FIELDS } from "#/lib/meeting-limits";
 import {
 	getMembership,
 	getSessionUser,
@@ -152,7 +152,7 @@ const addSpeakerSchema = z
 		memberId: uuid.optional(),
 		guestId: uuid.optional(),
 		newGuest: newGuestSchema.optional(),
-		topic: MEETING_FIELDS.topic.optional(),
+		topic: MEETING_UPDATE_FIELDS.topic.optional(),
 	})
 	.refine(
 		(d) => Boolean(d.memberId) || Boolean(d.guestId) || Boolean(d.newGuest),

@@ -1,4 +1,5 @@
 // The meeting free-text write caps (#525).
+import { readdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -18,6 +19,8 @@ const REJECT_KEYS = [
 	"topic",
 ] as const;
 const TRUNCATE_KEYS = ["theme", "location", "notes", "reminders"] as const;
+
+const here = () => dirname(fileURLToPath(import.meta.url));
 
 const LONE_SURROGATE =
 	/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
@@ -142,8 +145,17 @@ describe("the caps stay inside an absolute, measured range", () => {
 	 * row gets from `SPEAKER_LIMITS.speechTitle`.
 	 */
 	it("renders every value it accepts on write", () => {
-		expect(MINUTES_RENDER_CAPS.theme).toBe(MEETING_LIMITS.theme);
-		expect(MINUTES_RENDER_CAPS.topic).toBe(MEETING_LIMITS.topic);
+		// `minutes-render-caps.ts` is literally `theme: MEETING_LIMITS.theme`, so
+		// comparing the two VALUES is a tautology that cannot fail. What can fail
+		// is someone replacing the import with a hardcoded number, so assert the
+		// WIRING at the source instead. Comment-blind, because a comment naming
+		// `MEETING_LIMITS.theme` would satisfy a raw read just as well.
+		const src = readSource(resolve(here(), "./minutes-render-caps.ts"));
+		expect(src).toMatch(/theme:\s*MEETING_LIMITS\.theme/);
+		expect(src).toMatch(/topic:\s*MEETING_LIMITS\.topic/);
+		// And the numbers still have to sit under the render knee on their own.
+		expect(MINUTES_RENDER_CAPS.theme).toBeLessThanOrEqual(500);
+		expect(MINUTES_RENDER_CAPS.topic).toBeLessThanOrEqual(500);
 	});
 });
 
@@ -164,13 +176,12 @@ describe("the caps stay inside an absolute, measured range", () => {
  * read through it.
  */
 describe("the server modules compose the meeting caps (#525)", () => {
-	const here = dirname(fileURLToPath(import.meta.url));
-	const meetings = readSource(resolve(here, "../server/meetings.ts"));
-	const minutes = readSource(resolve(here, "../server/minutes.ts"));
+	const meetings = readSource(resolve(here(), "../server/meetings.ts"));
+	const minutes = readSource(resolve(here(), "../server/minutes.ts"));
 
 	// Keyed on the FIELD, so a new schema that adds `theme` with a bare
 	// `z.string()` is caught rather than slipping past a per-name check.
-	for (const field of TRUNCATE_KEYS) {
+	for (const field of ["theme", "location", "notes", "reminders"] as const) {
 		it(`declares every ${field} from a capped validator`, () => {
 			const declarations =
 				meetings.match(
@@ -207,7 +218,41 @@ describe("the server modules compose the meeting caps (#525)", () => {
 		expect(updateBlock).not.toMatch(/theme: MEETING_FIELDS\.theme/);
 	});
 
-	it("caps the Table Topics topic on its admin-only create path", () => {
-		expect(minutes).toMatch(/topic: MEETING_FIELDS\.topic/);
+	// TRUNCATES, and the reason is the offline queue rather than a prefilled
+	// form — see `MEETING_UPDATE_FIELDS`. Rejecting here would let one over-long
+	// topic freeze every later minutes write for that meeting.
+	it("truncates the Table Topics topic rather than rejecting it", () => {
+		expect(minutes).toMatch(/topic: MEETING_UPDATE_FIELDS\.topic/);
+		expect(minutes).not.toMatch(/topic: MEETING_FIELDS\.topic/);
+	});
+
+	/**
+	 * The offender sweep, and the one that actually earns its place.
+	 *
+	 * The first version of this guard read ONLY `meetings.ts` and `minutes.ts`,
+	 * and the adversarial pass found a live counterexample it could not see:
+	 * `batch-meetings.ts` declared `location: z.string().trim().optional()` and
+	 * wrote up to 52 rows per request. A per-file guard cannot prove a negative
+	 * about files it never opens, so this sweeps every server module.
+	 *
+	 * Reads RAW, not comment-blind. This is the "offender list must be EMPTY"
+	 * shape, where stripping comments can only DELETE text a match might have
+	 * needed — it loosens the guard. `guard-source.ts` documents the split; the
+	 * "must BE present" assertions above are the ones that read through it.
+	 */
+	it("leaves no meeting free-text field on a bare z.string() anywhere in src/server", () => {
+		const dir = resolve(here(), "../server");
+		const offenders: string[] = [];
+		for (const file of readdirSync(dir)) {
+			if (!file.endsWith(".ts") || file.includes(".test.")) continue;
+			const raw = readFileSync(resolve(dir, file), "utf8");
+			for (const field of REJECT_KEYS) {
+				const m = raw.match(
+					new RegExp(`\\b${field}\\s*:\\s*z\\.string\\(`, "g"),
+				);
+				if (m) offenders.push(`${file}: ${field} (${m.length})`);
+			}
+		}
+		expect(offenders).toEqual([]);
 	});
 });

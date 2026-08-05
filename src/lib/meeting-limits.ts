@@ -102,12 +102,25 @@ export const MEETING_FIELDS = {
  * composes `WOD_UPDATE_FIELDS` while `createMeetingSchema` composes
  * `WOD_FIELDS`. These sit directly beside them.
  *
- * `topic` is absent: `addTableTopics` CREATES one speaker row and prefills
- * nothing, so rejecting there locks nobody out of anything.
+ * `topic` is here too, and the reason is stronger than the others rather than
+ * weaker. `addTableTopics` creates one row and prefills nothing, so on the face
+ * of it rejecting costs only the field being typed. But that op is QUEUED when
+ * minutes are taken offline, and `drainMinutesQueue` stops at the FIRST failing
+ * op and returns it plus every successor as still-queued
+ * (`drain-minutes.ts:216`), while the auto-drain effect then bails for as long
+ * as `syncError` is set. There is no UI to drop the offending op. So a single
+ * over-long topic typed offline would freeze attendance, guests, awards and
+ * every later minutes write for that meeting, permanently.
+ *
+ * That is the reject/truncate rule pointing the other way: the failure does not
+ * cost the field, it costs the queue. Before this change `topic` had no
+ * `.max()` at all, so a ZodError was unreachable from that form — adding one
+ * without this would have INTRODUCED the lockout, not closed it.
  */
 export const MEETING_UPDATE_FIELDS = {
 	theme: truncating(MEETING_LIMITS.theme),
 	location: truncating(MEETING_LIMITS.location),
 	notes: truncating(MEETING_LIMITS.notes),
 	reminders: truncating(MEETING_LIMITS.reminders),
+	topic: truncating(MEETING_LIMITS.topic),
 } as const;
