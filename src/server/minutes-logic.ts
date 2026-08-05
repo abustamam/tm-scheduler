@@ -9,8 +9,6 @@
 import { and, asc, desc, eq, isNotNull, lt, ne, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { db } from "#/db";
-import type { MinutesActionItems } from "./action-items-logic";
-import { loadActionItemsForMinutes } from "./action-items-logic";
 import {
 	guests,
 	meetingAttendance,
@@ -23,6 +21,8 @@ import {
 	tableTopicsSpeakers,
 } from "#/db/schema";
 import { toStoredPhone } from "#/lib/phone";
+import type { MinutesActionItems } from "./action-items-logic";
+import { loadActionItemsForMinutes } from "./action-items-logic";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 
 export type AttendanceStatus = "present" | "absent" | "excused";

@@ -22,17 +22,19 @@ import { eq } from "drizzle-orm";
 import { createElement as h } from "react";
 import { db } from "#/db";
 import { clubs, meetings } from "#/db/schema";
+// The caps live in `#/lib` so their VALUES are assertable — this module imports
+// `#/db`, so a unit test importing it throws `DATABASE_URL is not set`. See the
+// trap-5 note in that file.
+import {
+	ACTION_ITEM_LIMITS,
+	ACTION_ITEM_RENDER_CAPS,
+} from "#/lib/action-item-limits";
 // The ONE audited `cap`. It is deliberately not reimplemented here: that
 // function has now had TWO cost/correctness defects found in it by review (a
 // full-input spread in #519, an astral-plane bypass in #522), so a second
 // `slice` written from scratch is exactly the wrong kind of duplication.
 import { cap } from "#/lib/cap";
 import { formatMeetingDate } from "#/lib/format";
-// The caps live in `#/lib` so their VALUES are assertable — this module imports
-// `#/db`, so a unit test importing it throws `DATABASE_URL is not set`. See the
-// trap-5 note in that file.
-import { ACTION_ITEM_LIMITS } from "#/lib/action-item-limits";
-import { ACTION_ITEM_RENDER_CAPS } from "#/lib/action-item-limits";
 import { MINUTES_RENDER_CAPS } from "#/lib/minutes-render-caps";
 import { SPEAKER_LIMITS } from "#/lib/speaker-limits";
 import {

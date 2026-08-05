@@ -10,7 +10,6 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import type { MinutesActionItems } from "#/server/action-items-logic";
 import { SendMinutesDialog } from "#/components/minutes/send-minutes-dialog";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
@@ -50,6 +49,7 @@ import {
 	removeOp,
 	saveSnapshot,
 } from "#/lib/offline-minutes-queue";
+import type { MinutesActionItems } from "#/server/action-items-logic";
 import {
 	addMinutesGuest,
 	addTableTopics,

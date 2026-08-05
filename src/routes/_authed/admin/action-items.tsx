@@ -1,5 +1,12 @@
 import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
-import { CheckCircle2, Loader2, Plus, Trash2, Undo2, XCircle } from "lucide-react";
+import {
+	CheckCircle2,
+	Loader2,
+	Plus,
+	Trash2,
+	Undo2,
+	XCircle,
+} from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { PageContainer } from "#/components/page-container";
@@ -252,7 +259,10 @@ function ActionItems() {
 						<Button variant="ghost" onClick={() => setAdding(false)}>
 							Cancel
 						</Button>
-						<Button onClick={submit} disabled={busy || text.trim().length === 0}>
+						<Button
+							onClick={submit}
+							disabled={busy || text.trim().length === 0}
+						>
 							{busy ? (
 								<Loader2 className="mr-1.5 size-4 animate-spin" aria-hidden />
 							) : null}

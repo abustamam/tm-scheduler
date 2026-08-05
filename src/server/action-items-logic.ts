@@ -109,7 +109,10 @@ export async function updateActionItem(input: {
 			updatedAt: new Date(),
 		})
 		.where(
-			and(eq(clubActionItems.id, input.id), eq(clubActionItems.clubId, input.clubId)),
+			and(
+				eq(clubActionItems.id, input.id),
+				eq(clubActionItems.clubId, input.clubId),
+			),
 		)
 		.returning({ id: clubActionItems.id });
 	if (updated.length === 0) throw new Error("Action item not found.");
@@ -154,7 +157,10 @@ export async function reopenActionItem(input: {
 		.update(clubActionItems)
 		.set({ resolvedAt: null, resolution: null, updatedAt: new Date() })
 		.where(
-			and(eq(clubActionItems.id, input.id), eq(clubActionItems.clubId, input.clubId)),
+			and(
+				eq(clubActionItems.id, input.id),
+				eq(clubActionItems.clubId, input.clubId),
+			),
 		)
 		.returning({ id: clubActionItems.id });
 	if (updated.length === 0) throw new Error("Action item not found.");
@@ -167,7 +173,10 @@ export async function deleteActionItem(input: {
 	const deleted = await db
 		.delete(clubActionItems)
 		.where(
-			and(eq(clubActionItems.id, input.id), eq(clubActionItems.clubId, input.clubId)),
+			and(
+				eq(clubActionItems.id, input.id),
+				eq(clubActionItems.clubId, input.clubId),
+			),
 		)
 		.returning({ id: clubActionItems.id });
 	if (deleted.length === 0) throw new Error("Action item not found.");

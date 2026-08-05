@@ -21,7 +21,9 @@ describe("action items stay off every anonymous surface (#529)", () => {
 	);
 
 	it("loads minutes only behind the signed-in-member shell gate", () => {
-		expect(meetingRoute).toMatch(/context\.shell\s*\n?\s*\?\s*await getMinutes\(/);
+		expect(meetingRoute).toMatch(
+			/context\.shell\s*\n?\s*\?\s*await getMinutes\(/,
+		);
 	});
 
 	it("hands an anonymous visitor a null minutes payload", () => {

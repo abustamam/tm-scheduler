@@ -132,7 +132,11 @@ describe.skipIf(!hasTestDb)("club action items (#529)", () => {
 				clubId: seed.clubId,
 				text: "Order custom banners",
 			});
-			await resolveActionItem({ clubId: seed.clubId, id, resolution: "dropped" });
+			await resolveActionItem({
+				clubId: seed.clubId,
+				id,
+				resolution: "dropped",
+			});
 			const [row] = await listActionItems(seed.clubId);
 			expect(row.resolution).toBe("dropped");
 		});
@@ -350,7 +354,10 @@ describe.skipIf(!hasTestDb)("club action items (#529)", () => {
 		it("cannot delete through another club", async () => {
 			const other = await seedClub();
 			try {
-				const id = await createActionItem({ clubId: seed.clubId, text: "Mine" });
+				const id = await createActionItem({
+					clubId: seed.clubId,
+					text: "Mine",
+				});
 				await expect(
 					deleteActionItem({ clubId: other.clubId, id }),
 				).rejects.toThrow();
