@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { readSource } from "#/test/guard-source";
@@ -41,7 +42,19 @@ describe("action items stay off every anonymous surface (#529)", () => {
 
 	for (const file of PUBLIC_ROUTES) {
 		it(`${file} carries no action-item data`, () => {
-			const src = readSource(resolve(__dirname, file));
+			// RAW source on purpose — NOT the comment-stripped `readSource`.
+			//
+			// These guards split into two classes that comment-stripping moves in
+			// OPPOSITE directions. The two assertions above are "the gate must BE
+			// present", where a comment naming the gate is a real bypass, so they
+			// read stripped. This one is "the offender must be ABSENT", where
+			// stripping only LOOSENS the check — it would let a leak hide inside a
+			// comment, and worse, a commented-out reference is a sign somebody is
+			// mid-way through adding exactly the leak this forbids.
+			//
+			// Caught by mutation: injecting `// actionItems` into the public print
+			// route left this green while it read through `readSource`.
+			const src = readFileSync(resolve(__dirname, file), "utf8");
 			expect(src).not.toContain("actionItems");
 			expect(src).not.toContain("action-items-logic");
 			expect(src).not.toContain("ActionItem");
