@@ -1,3 +1,5 @@
+import { MEETING_LIMITS } from "./meeting-limits";
+
 /**
  * Render-side caps for the minutes PDF's program list (#522).
  *
@@ -39,17 +41,18 @@ export const MINUTES_RENDER_CAPS = {
 	/** The club's name, in the document title and the header. */
 	club: 120,
 	/**
-	 * The meeting theme. Unbounded on write (`meetings.ts` declares
-	 * `theme: z.string().trim().optional()`) and reachable with NO session: the
-	 * `tmod-self-assert` branch of `resolveMeetingAgendaAuthz` grants the write
-	 * on a self-asserted `selfMemberId` alone. Bounding the write is filed
-	 * separately; this is what stops it reaching the renderer meanwhile.
+	 * The meeting theme, and a Table Topics topic below it.
+	 *
+	 * Both now read the WRITE cap rather than declaring a number, so the two
+	 * cannot drift — the same reason the program row reads
+	 * `SPEAKER_LIMITS.speechTitle`. #525 bounded them on write; until then the
+	 * render cap was the only thing stopping a no-session `theme` from reaching
+	 * the renderer, and it still covers rows written before that landed.
 	 */
-	theme: 200,
+	theme: MEETING_LIMITS.theme,
 	/** Word of the Day. Already write-capped by #519; this covers older rows. */
 	word: 120,
-	/** A Table Topics topic. Unbounded on write in `minutes.ts`. */
-	topic: 200,
+	topic: MEETING_LIMITS.topic,
 
 	/**
 	 * ROW-COUNT caps. The per-row string caps above bound each item; these bound

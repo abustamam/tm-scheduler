@@ -336,5 +336,40 @@ describe.skipIf(!hasTestDb)("project picker (#418)", () => {
 				resolveProjectDisplay(projectIds["Mentor Orientation"]),
 			).rejects.toThrow("no longer exists");
 		});
+
+		/**
+		 * #526. `applyProjectDisplay` writes these three onto the speech AFTER
+		 * `speakerDetailsSchema` has run, so an unbounded catalog name is a way
+		 * around a cap the schema advertises. The catalog is genuinely unbounded
+		 * at ingest — `pathways-ingest-logic.ts` types the payload as
+		 * `z.array(z.unknown())`, so only the array LENGTHS are checked and the
+		 * name strings inside are not.
+		 *
+		 * Asserts the ABSOLUTE cap, not `<= SPEAKER_LIMITS.projectName`, which
+		 * would pass for every value of that constant including one that
+		 * reintroduces the bypass.
+		 */
+		it("clamps a catalog name that exceeds the speaker-detail cap", async () => {
+			const id = await addProject(realPathId, 1, "z".repeat(5_000), false);
+			const display = await resolveProjectDisplay(id);
+			expect(display.projectName.length).toBeLessThanOrEqual(200);
+			expect(display.projectName.length).toBeGreaterThan(0);
+			// Truncated by CODE POINT, so it can never emit a lone surrogate.
+			expect(
+				/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(
+					display.projectName,
+				),
+			).toBe(false);
+		});
+
+		it("leaves an ordinary catalog name untouched", async () => {
+			// The clamp must not shorten anything real — the longest name in the
+			// live catalog is 56 characters against a 120 cap. Without this, a cap
+			// of 1 would satisfy the bound above and silently elide every project
+			// name in the app.
+			const display = await resolveProjectDisplay(projectIds["Managing Time"]);
+			expect(display.projectName).toBe(`Managing Time ${SUITE_TAG}`);
+			expect(display.projectName).not.toContain("…");
+		});
 	});
 });
