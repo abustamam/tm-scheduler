@@ -21,7 +21,9 @@ import {
 	people,
 } from "#/db/schema";
 import { PATHWAYS_COURSE_CODES } from "#/lib/basecamp-progress";
+import { cap } from "#/lib/cap";
 import { defaultOpenLevel, levelLabel } from "#/lib/pathways-catalog";
+import { SPEAKER_LIMITS } from "#/lib/speaker-limits";
 import { userPersonIds } from "./person-identity-logic";
 
 export interface PickerProject {
@@ -158,14 +160,19 @@ export async function listProjectOptions(
 			.map((p) => ({
 				id: p.id,
 				level: p.level,
-				name: p.name,
+				// Capped on the way OUT as well as where a picked project is written
+				// onto a speech. `getProjectOptions` is explicitly PUBLIC/no-session
+				// and the catalog is unbounded at its own ingest, so an oversized
+				// name would otherwise be materialised into an anonymous,
+				// unthrottled JSON payload — the read half of #526.
+				name: cap(p.name, SPEAKER_LIMITS.projectName),
 				isRequired: p.isRequired,
 				complete: completeIds.has(p.id),
 			}));
 		return {
 			pathId: e.pathId,
 			courseCode: e.courseCode,
-			name: e.name,
+			name: cap(e.name, SPEAKER_LIMITS.pathwayPath),
 			status: e.status,
 			defaultLevel: defaultOpenLevel(
 				projects,
@@ -268,9 +275,32 @@ export async function resolveProjectDisplay(
 		throw new Error("That Pathways project no longer exists.");
 	}
 
+	// CLAMPED to the same caps the typed values get (#526).
+	//
+	// `applyProjectDisplay` writes these three straight onto the speech AFTER
+	// `speakerDetailsSchema` has run, so without this the catalog is a way
+	// around a cap the schema advertises. And the catalog is not bounded at its
+	// own ingest: `pathways-ingest-logic.ts` types the payload as
+	// `z.array(z.unknown())`, bounding only the array LENGTHS, so the name
+	// strings inside are unvalidated and a club sync-token holder can store one
+	// of any size.
+	//
+	// Clamping here rather than at ingest because this is the ONE choke point —
+	// `applyProjectDisplay` is the only non-test caller — whereas the ingest
+	// side has several entry points and legitimately mirrors data we do not
+	// control. It also makes the guarantee true for catalog rows already stored.
+	//
+	// `cap` truncates by code point, so a clamped name can never emit the lone
+	// surrogate that a `.slice()` would.
 	return {
-		pathwayPath: row.pathName,
-		projectName: row.projectName,
+		pathwayPath: cap(row.pathName, SPEAKER_LIMITS.pathwayPath),
+		projectName: cap(row.projectName, SPEAKER_LIMITS.projectName),
+		// NOT capped: `levelLabel` is derived from an integer column, so it is at
+		// most "Path Completion" (15) or "Level -2147483648" (17) — never user
+		// text. Capping it would be a call that can never fire, and worse: the
+		// lower bound on `projectLevel` only asserts >= 7, so tightening that
+		// constant to anything in [7,14] would silently rewrite every
+		// Path-Completion speech to "Path C…" with the suite green.
 		projectLevel: levelLabel(row.level),
 	};
 }

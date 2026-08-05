@@ -15,6 +15,7 @@ import {
 	speeches,
 } from "#/db/schema";
 import { resolveEvaluatorLinks } from "#/lib/agenda";
+import { MEETING_FIELDS, MEETING_UPDATE_FIELDS } from "#/lib/meeting-limits";
 import {
 	localDateKey,
 	localDayRange,
@@ -545,10 +546,10 @@ const createMeetingSchema = z.object({
 	clubId: uuid,
 	// HTML datetime-local value, interpreted in the club's timezone.
 	scheduledAt: z.string().min(1),
-	location: z.string().trim().optional(),
-	theme: z.string().trim().optional(),
+	location: MEETING_FIELDS.location.optional(),
+	theme: MEETING_FIELDS.theme.optional(),
 	wordOfTheDay: WOD_FIELDS.word.optional(),
-	notes: z.string().trim().optional(),
+	notes: MEETING_FIELDS.notes.optional(),
 });
 
 /** Admin/VPE only: create a meeting and auto-generate its slots from the club's template.
@@ -569,13 +570,13 @@ const updateMeetingSchema = z.object({
 	selfMemberId: uuid.nullable().optional(),
 	scheduledAt: z.string().min(1),
 	lengthMinutes: z.number().int().positive().optional(),
-	location: z.string().trim().optional(),
-	theme: z.string().trim().optional(),
+	location: MEETING_UPDATE_FIELDS.location.optional(),
+	theme: MEETING_UPDATE_FIELDS.theme.optional(),
 	wordOfTheDay: WOD_UPDATE_FIELDS.word.optional(),
 	wodDefinition: WOD_UPDATE_FIELDS.definition.optional(),
 	wodExample: WOD_UPDATE_FIELDS.example.optional(),
-	notes: z.string().trim().optional(),
-	reminders: z.string().trim().optional(),
+	notes: MEETING_UPDATE_FIELDS.notes.optional(),
+	reminders: MEETING_UPDATE_FIELDS.reminders.optional(),
 	// The club's meeting number (#358). Nullable = cleared back to derived.
 	meetingNumber: z.number().int().positive().nullable().optional(),
 });

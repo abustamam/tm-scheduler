@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { MEETING_FIELDS } from "#/lib/meeting-limits";
 import { requireClubRole, requireUser } from "./guards";
 import {
 	deleteRecurrenceRule,
@@ -22,7 +23,10 @@ const saveSchema = z
 			.nullable(),
 		ordinals: z.array(z.enum(["1", "2", "3", "4", "5", "last"])).nullable(),
 		timeOfDay: z.string().regex(/^\d{2}:\d{2}$/),
-		location: z.string().trim().max(200).nullable().default(null),
+		// Reads the shared cap rather than repeating 200 — `schedule-topup-logic`
+		// copies this into every auto-created meeting, so a literal here is a
+		// third source of truth for one number (#525).
+		location: MEETING_FIELDS.location.nullable().default(null),
 		// Config form bound: 1..12 (the DB check allows up to MAX_BATCH=52).
 		keepAhead: z.number().int().min(1).max(12),
 		enabled: z.boolean(),
