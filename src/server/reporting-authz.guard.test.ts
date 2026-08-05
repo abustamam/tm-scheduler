@@ -35,11 +35,19 @@ describe("VPE reporting fn authz gating (#530)", () => {
 		"getAttendanceLapse",
 	]) {
 		it(`${fn} requires a signed-in user`, () => {
-			expect(handlerBody(fn)).toContain("requireUser(");
+			expect(handlerBody(fn)).toMatch(/await\s+requireUser\(/);
 		});
 
-		it(`${fn} gates on club admin`, () => {
-			expect(handlerBody(fn)).toContain("requireClubAdminView(");
+		it(`${fn} AWAITS the club-admin gate before loading anything`, () => {
+			// Asserting the bare substring is not enough: dropping the `await`
+			// leaves this green, typecheck clean and lint clean, while the handler
+			// returns roster-wide attendance history before the gate can reject and
+			// the rejection becomes an unhandled promise. The `await` IS the gate.
+			const body = handlerBody(fn);
+			expect(body).toMatch(/await\s+requireClubAdminView\(/);
+			expect(body.indexOf("requireClubAdminView")).toBeLessThan(
+				body.search(/return\s+load/),
+			);
 		});
 	}
 

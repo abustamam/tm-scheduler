@@ -6,7 +6,18 @@
 // speaker queue, overdue list, and per-member Pathways surface are all derived
 // from `role_slots` joined to `meetings` / `role_definitions` / `members` /
 // `speeches`. No schema changes.
-import { and, asc, desc, eq, inArray, lt, max, ne, sql } from "drizzle-orm";
+import {
+	and,
+	asc,
+	desc,
+	eq,
+	inArray,
+	isNotNull,
+	lt,
+	max,
+	ne,
+	sql,
+} from "drizzle-orm";
 import { db } from "#/db";
 import {
 	meetingAttendance,
@@ -277,15 +288,29 @@ export async function loadAttendanceLapse(
 ): Promise<AttendanceLapseRow[]> {
 	const now = new Date();
 
-	// DISTINCT over the join: a meeting qualifies once it has ANY attendance
-	// row, and the join would otherwise repeat it per attendee.
+	// DISTINCT over the join: a meeting qualifies once it has any MEMBER
+	// attendance row, and the join would otherwise repeat it per attendee —
+	// which at real club size (15-25 marked per meeting) would let one meeting
+	// eat the whole LIMIT and collapse the window.
+	//
+	// `isNotNull(memberId)` is load-bearing, not tidiness. Guest attendance rows
+	// carry a NULL member_id (ADR-0013), so a meeting where only VISITORS were
+	// logged would otherwise satisfy this join, enter the window, and score
+	// every member as not-present — a false "stopped attending" flag on the one
+	// surface whose whole job is spotting people who quietly left.
 	const windowMeetings = await db
 		.selectDistinct({
 			meetingId: meetings.id,
 			scheduledAt: meetings.scheduledAt,
 		})
 		.from(meetings)
-		.innerJoin(meetingAttendance, eq(meetingAttendance.meetingId, meetings.id))
+		.innerJoin(
+			meetingAttendance,
+			and(
+				eq(meetingAttendance.meetingId, meetings.id),
+				isNotNull(meetingAttendance.memberId),
+			),
+		)
 		.where(
 			and(
 				eq(meetings.clubId, clubId),

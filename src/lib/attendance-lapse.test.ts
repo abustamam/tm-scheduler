@@ -175,6 +175,26 @@ describe("scoreAttendanceLapse — join date bounds the window", () => {
 		expect(row.streak).toBe(0);
 		expect(row.isLapsed).toBe(false);
 	});
+
+	it("counts the meeting held exactly ON the join date", () => {
+		// The bound is `>=`, not `>`. A member who joined the morning of a
+		// meeting and did not come must have that meeting count against them, or
+		// a `>` typo silently drops one meeting from every joiner's window and
+		// nothing in a coarser fixture can tell.
+		const meetings = meetingsNewestFirst(4);
+		const joinMeeting = meetings[2];
+		if (!joinMeeting) throw new Error("fixture");
+		const [row] = scoreAttendanceLapse({
+			meetings,
+			members: [
+				{ memberId: "alice", name: "Alice", joinedAt: joinMeeting.scheduledAt },
+			],
+			marks: marks("alice", ["absent", "absent", "absent", "absent"]),
+		});
+		expect(row.eligibleCount).toBe(3);
+		expect(row.streak).toBe(3);
+		expect(row.isLapsed).toBe(true);
+	});
 });
 
 describe("scoreAttendanceLapse — reported figures", () => {
@@ -229,6 +249,25 @@ describe("scoreAttendanceLapse — reported figures", () => {
 			],
 		});
 		expect(rows.map((r) => r.memberId)).toEqual(["bob", "alice", "cara"]);
+	});
+
+	it("breaks a streak tie by name rather than by input order", () => {
+		// Members are handed in REVERSE alphabetical order with identical
+		// streaks. Without the `localeCompare` tiebreak a stable sort returns
+		// them in input order, so this is the only assertion that can see the
+		// tiebreak exist — the ordering test above varies streak alone and
+		// passes with the tiebreak deleted.
+		const rows = scoreAttendanceLapse({
+			meetings: meetingsNewestFirst(3),
+			members: [
+				{ memberId: "z", name: "Zoe", joinedAt: null },
+				{ memberId: "m", name: "Mia", joinedAt: null },
+				{ memberId: "a", name: "Ana", joinedAt: null },
+			],
+			marks: [],
+		});
+		expect(rows.map((r) => r.streak)).toEqual([3, 3, 3]);
+		expect(rows.map((r) => r.name)).toEqual(["Ana", "Mia", "Zoe"]);
 	});
 
 	it("returns a row for every member, lapsed or not", () => {

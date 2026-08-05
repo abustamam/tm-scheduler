@@ -14,12 +14,13 @@
  */
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { meetingAttendance, meetings, members } from "#/db/schema";
+import { guests, meetingAttendance, meetings, members } from "#/db/schema";
 import {
 	cleanup,
 	hasTestDb,
 	type SeededClub,
 	seedClub,
+	seedPerson,
 	testDb,
 } from "#/test/db";
 
@@ -55,6 +56,17 @@ async function mark(
 	await testDb
 		.insert(meetingAttendance)
 		.values({ meetingId, memberId, status });
+}
+
+/** An extra active roster member (every member needs a Person, ADR-0008). */
+async function addMember(clubId: string, name: string): Promise<string> {
+	const personId = await seedPerson({ name });
+	const [row] = await testDb
+		.insert(members)
+		.values({ clubId, personId, name, clubRole: "member", status: "active" })
+		.returning({ id: members.id });
+	if (!row) throw new Error("member insert failed");
+	return row.id;
 }
 
 describe.skipIf(!hasTestDb)("loadAttendanceLapse (#530)", () => {
@@ -173,6 +185,105 @@ describe.skipIf(!hasTestDb)("loadAttendanceLapse (#530)", () => {
 			expect(row.streak).toBe(0);
 		} finally {
 			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+		}
+	});
+
+	it("ignores a meeting where only guests were logged", async () => {
+		// Guest attendance rows carry a NULL member_id (ADR-0013). Without the
+		// isNotNull(member_id) clause on the window join, a visitors-only night
+		// enters the window and scores EVERY member not-present — flagging the
+		// whole club as "stopped attending" on the strength of a guest register.
+		const [g] = await testDb
+			.insert(guests)
+			.values({ clubId: seed.clubId, name: "Visitor" })
+			.returning({ id: guests.id });
+		if (!g) throw new Error("guest insert failed");
+
+		const held = await addMeeting(seed.clubId, 40);
+		await mark(held, seed.memberId, "present");
+		for (const d of [21, 14, 7]) {
+			const id = await addMeeting(seed.clubId, d);
+			await testDb
+				.insert(meetingAttendance)
+				.values({ meetingId: id, guestId: g.id, status: "present" });
+		}
+
+		const row = await memberRow();
+		expect(row.eligibleCount).toBe(1);
+		expect(row.streak).toBe(0);
+		expect(row.isLapsed).toBe(false);
+	});
+
+	it("does not report another club's members", async () => {
+		// The window query's club scope is covered above; this pins the scope on
+		// the MEMBERS query, which is a separate predicate. Without it, one club's
+		// dashboard lists another club's roster and their attendance history.
+		const other = await seedClub();
+		try {
+			const held = await addMeeting(seed.clubId, 7);
+			await mark(held, seed.memberId, "present");
+			const theirs = await addMeeting(other.clubId, 7);
+			await mark(theirs, other.memberId, "absent");
+
+			const rows = await loadAttendanceLapse(seed.clubId);
+			const ids = rows.map((r) => r.memberId);
+			expect(ids).not.toContain(other.memberId);
+			expect(ids).not.toContain(other.adminMemberId);
+			expect(ids).toHaveLength(2); // this club's admin + member, nobody else
+		} finally {
+			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+		}
+	});
+
+	it("counts a meeting ONCE however many people were marked at it", async () => {
+		// Every other fixture in this file marks exactly ONE person per meeting,
+		// so the window join returns one row per meeting whether or not it is
+		// DISTINCT — the whole file passes with `selectDistinct` downgraded to
+		// `select`. A real club marks its entire roster, and the duplicate rows
+		// then eat the LIMIT: six attendees would collapse an 8-meeting window
+		// to a single meeting counted eight times, and every absent member would
+		// read as an 8-meeting lapse on their first missed week.
+		const others = await Promise.all([
+			addMember(seed.clubId, "Bea Roster"),
+			addMember(seed.clubId, "Cal Roster"),
+			addMember(seed.clubId, "Dee Roster"),
+			addMember(seed.clubId, "Eli Roster"),
+		]);
+		const roster = [seed.memberId, seed.adminMemberId, ...others];
+
+		// Three held meetings, the whole roster marked at each. The seeded member
+		// came to the oldest and has missed the two since — a streak of 2, below
+		// the threshold.
+		const ids = [];
+		for (const d of [21, 14, 7]) ids.push(await addMeeting(seed.clubId, d));
+		for (const [i, meetingId] of ids.entries()) {
+			for (const memberId of roster) {
+				const absentee = memberId === seed.memberId && i > 0;
+				await mark(meetingId, memberId, absentee ? "absent" : "present");
+			}
+		}
+
+		const row = await memberRow();
+		expect(row.eligibleCount).toBe(3);
+		expect(row.streak).toBe(2);
+		expect(row.isLapsed).toBe(false);
+	});
+
+	it("returns a row per member for a club with no attendance history", async () => {
+		// A brand-new club: the window query returns nothing, so the mark query
+		// runs `inArray(meeting_id, [])`. Every active member must still come
+		// back — scored against an empty window, nobody lapsed — rather than the
+		// VPE dashboard 500ing on its first load.
+		const rows = await loadAttendanceLapse(seed.clubId);
+		expect(rows.map((r) => r.memberId).sort()).toEqual(
+			[seed.memberId, seed.adminMemberId].sort(),
+		);
+		for (const row of rows) {
+			expect(row.eligibleCount).toBe(0);
+			expect(row.streak).toBe(0);
+			expect(row.rate).toBeNull();
+			expect(row.lastSeenAt).toBeNull();
+			expect(row.isLapsed).toBe(false);
 		}
 	});
 
