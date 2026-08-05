@@ -185,19 +185,31 @@ const BEATS: { detail: string; section: Section | null; id?: BeatId }[] = [
 		detail: "Awards · {awards} · hands over to the President",
 		section: "awards",
 	},
+	// President's club business. Event beat, no slide — the announcements SLIDE
+	// exists but maps to `null` in SECTION_BY_SLIDE, so announcements are absent
+	// from this comparison on both sides. That is why #442's ordering is pinned
+	// by golden assertions in agenda-runsheet.test.ts and agenda-slides.test.ts
+	// rather than here: this harness cannot see it.
+	//
+	// It no longer mentions guest comments: the beat below is the replacement
+	// the clause was waiting for, and prompting for them twice is worse than
+	// once.
+	{ detail: "Club business · announcements", section: null },
 	// Guest comments (#352), carved out of the President's closing so they get a
 	// row to point at and minutes on the clock. Ungated, like the opening
 	// remarks: every meeting can have guests, and the spec rules out a per-club
 	// toggle. It is a SECTION, not an exclusion — #352 adds it to both surfaces,
 	// so it has to be compared.
+	//
+	// Sits AFTER the announcements since #442: the club finishes its own
+	// business, then hands the floor to visitors and closes on that.
 	{
 		detail: "Guest Comments · invites our guests to share their thoughts",
 		section: "guestComments",
 	},
-	// President's club business / adjourn. Event beat, no slide. It no longer
-	// mentions guest comments: the beat above is the replacement the clause was
-	// waiting for, and prompting for them twice is worse than once.
-	{ detail: "Club business · announcements · adjourns", section: null },
+	// The gavel, split out by #442 so guest comments can sit between the club's
+	// business and the end of the meeting. Event beat, no slide.
+	{ detail: "Adjourns", section: null },
 ];
 
 /** The one beat only MCF's variant carries (#363): the Toastmaster introducing

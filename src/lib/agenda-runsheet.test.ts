@@ -101,10 +101,11 @@ const sixRoleClub = (): AgendaSlot[] => [
 const FUNCTIONARY_INTRO_DETAIL = `Introduces the ${ROLES_TOKEN}; each explains their role · the {role:grammarian} gives the Word of the Day`;
 
 describe("buildRunOfShow", () => {
-	it("returns 21 ordered beats for the corrected default (non-MCF) variant", () => {
+	it("returns 22 ordered beats for the corrected default (non-MCF) variant", () => {
 		const beats = buildRunOfShow({ geIntroducesFunctionaries: false });
-		// 21 since #508 added the evaluation-timing cue.
-		expect(beats).toHaveLength(21);
+		// 21 since #508 added the evaluation-timing cue; 22 since #442 split the
+		// President's closing into announcements / guest comments / adjourn.
+		expect(beats).toHaveLength(22);
 	});
 
 	// Was "every beat has a positive duration". The 0-minute hand-off beats
@@ -259,15 +260,6 @@ describe("buildRunOfShow", () => {
 			// Its own minutes, so the timeline accounts for time the meeting was
 			// already spending off-book.
 			expect(guests.minutes).toBeGreaterThan(0);
-			// Directly after the awards, and directly before the closing.
-			expect(beats[beats.length - 3].detail).toBe(
-				`Awards · ${AWARDS_TOKEN} · hands over to the President`,
-			);
-			expect(beats[beats.length - 1]).toMatchObject({
-				kind: "event",
-				who: "President",
-				detail: "Club business · announcements · adjourns",
-			});
 			// Exactly one beat asks for guest comments.
 			expect(
 				beats.filter(
@@ -275,6 +267,50 @@ describe("buildRunOfShow", () => {
 				),
 			).toHaveLength(1);
 		}
+	});
+
+	/**
+	 * The closing ORDER is the whole of #442, and `agenda-parity.test.ts` cannot
+	 * see it: that suite compares the run sheet against the deck by shared
+	 * section identity, and `SECTION_BY_SLIDE` maps the `reminders` slide to
+	 * `null` — announcements are excluded from the comparison on the deck side
+	 * entirely. So parity stays green whichever order announcements sit in, on
+	 * BOTH surfaces. This is the golden assertion that actually pins it, and
+	 * `agenda-slides.test.ts` carries the matching one for the deck.
+	 *
+	 * Asserted as a contiguous slice rather than three separate index lookups so
+	 * that inserting a beat between any two of them fails here.
+	 */
+	it("closes announcements → guest comments → adjourn (#442)", () => {
+		for (const geIntroducesFunctionaries of [false, true]) {
+			const beats = buildRunOfShow({ geIntroducesFunctionaries });
+			expect(beats.slice(-4).map((b) => b.detail)).toEqual([
+				`Awards · ${AWARDS_TOKEN} · hands over to the President`,
+				"Club business · announcements",
+				"Guest Comments · invites our guests to share their thoughts",
+				"Adjourns",
+			]);
+			// The club's own business finishes before the floor goes to visitors,
+			// and the meeting ends on the guests rather than on ourselves.
+			const detail = beats.map((b) => b.detail);
+			expect(detail.indexOf("Club business · announcements")).toBeLessThan(
+				detail.findIndex((d) => d.startsWith("Guest Comments")),
+			);
+			expect(
+				detail.findIndex((d) => d.startsWith("Guest Comments")),
+			).toBeLessThan(detail.indexOf("Adjourns"));
+		}
+	});
+
+	/**
+	 * Splitting the closing must not move the meeting's end time. The old
+	 * combined beat was 3 minutes; the split is 2 + 1 with guest comments' 2
+	 * unchanged between them.
+	 */
+	it("#442's split leaves the closing's total minutes unchanged", () => {
+		const beats = buildRunOfShow({ geIntroducesFunctionaries: false });
+		const closing = beats.slice(-3);
+		expect(closing.reduce((n, b) => n + b.minutes, 0)).toBe(5);
 	});
 
 	it("RUN_OF_SHOW is the corrected default variant, kept exported for existing callers", () => {
@@ -458,10 +494,11 @@ describe("expandRunSheet", () => {
 	it("renders ungated event beats unconditionally, even with no slots at all", () => {
 		const rows = expandRunSheet([]);
 		expect(rows.some((r) => r.who === "Sergeant-at-Arms")).toBe(true);
-		// Opening remarks, guest comments (#352) and the closing. Guest comments is
-		// unconditional by design: every meeting can have guests, and the spec rules
-		// out a per-club toggle.
-		expect(rows.filter((r) => r.who === "President")).toHaveLength(3);
+		// Opening remarks, announcements, guest comments (#352) and the adjourn.
+		// Guest comments is unconditional by design: every meeting can have guests,
+		// and the spec rules out a per-club toggle. The closing is three rows since
+		// #442 split it so the guests speak between the business and the gavel.
+		expect(rows.filter((r) => r.who === "President")).toHaveLength(4);
 	});
 
 	it("drops the awards beat with no slots — it is gated, not ungated (#372)", () => {
@@ -1465,9 +1502,10 @@ describe("closing and opening hand-off clauses (#363)", () => {
 	});
 
 	it("closes on announcements, not elections", () => {
-		expect(
-			detailFor(expandRunSheet(club(), RUN_OF_SHOW), "President"),
-		).toContain("Club business · announcements · adjourns");
+		const details = detailFor(expandRunSheet(club(), RUN_OF_SHOW), "President");
+		expect(details).toContain("Club business · announcements");
+		expect(details).toContain("Adjourns");
+		expect(details.join(" ")).not.toMatch(/election/i);
 	});
 });
 

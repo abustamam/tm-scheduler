@@ -1008,10 +1008,24 @@ export function buildRunOfShow({
 			requiresAnyOf: AWARD_CATEGORIES.map((a) => a.role),
 		},
 		{
-			// Guest comments (#352). They happen every meeting, right after the
-			// awards, and until now were a clause inside the President's closing —
-			// no row the Toastmaster could point at and no minutes on the clock, so
-			// the agenda ran late by however long they took.
+			kind: "event",
+			who: "President",
+			// The ", guest comments" clause that used to live here is gone: it was
+			// kept only because the dedicated beat below was deferred, and leaving
+			// both would have the agenda invite the same guests to speak twice.
+			// "elections" is gone too (#363): the club holds none at a regular
+			// meeting — announcements are what actually happens here.
+			//
+			// "adjourns" moved out to its own beat (#442) so guest comments can sit
+			// between the two, which is the order clubs actually close in.
+			detail: "Club business · announcements",
+			minutes: 2,
+		},
+		{
+			// Guest comments (#352). They happen every meeting and until now were a
+			// clause inside the President's closing — no row the Toastmaster could
+			// point at and no minutes on the clock, so the agenda ran late by
+			// however long they took.
 			//
 			// Ungated on purpose. Every meeting can have guests, the club cannot
 			// know in advance, and a segment that is skipped when the room is empty
@@ -1020,21 +1034,26 @@ export function buildRunOfShow({
 			// President's closing — this gives the responsibility its own row, it
 			// does not move it to somebody else — and because the President is who
 			// welcomed those guests in the opening remarks.
+			//
+			// AFTER the announcements, not before (#442). MCF's printed agenda
+			// closes announcements → guest comments → adjourn: the club gets its
+			// own business out of the way, then hands the floor to visitors and
+			// ends on that. Inviting guests to speak and then talking amongst
+			// ourselves is the wrong note to finish on.
 			kind: "event",
 			who: "President",
 			detail: "Guest Comments · invites our guests to share their thoughts",
 			minutes: 2,
 		},
 		{
+			// Its own row so the meeting visibly ends after the guests have spoken.
+			// The minute is real — thanks, closing remarks, gavel — and was already
+			// being spent inside the old combined beat, so the total is unchanged
+			// (2 + 3 became 2 + 2 + 1) and no downstream timing shifts.
 			kind: "event",
 			who: "President",
-			// The ", guest comments" clause that used to live here is gone: it was
-			// kept only because the dedicated beat above was deferred, and leaving
-			// both would have the agenda invite the same guests to speak twice.
-			// "elections" is gone too (#363): the club holds none at a regular
-			// meeting — announcements are what actually happens here.
-			detail: "Club business · announcements · adjourns",
-			minutes: 3,
+			detail: "Adjourns",
+			minutes: 1,
 		},
 	];
 }

@@ -2,6 +2,12 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.5.4.0] - 2026-08-04
+
+### Changed
+
+- The meeting now closes the way clubs actually close it: **announcements, then guest comments, then adjourn**. Previously the agenda invited guests to speak and then had the club talk amongst itself before ending — so the last thing visitors heard was internal business. The President's closing is now three rows instead of one bundled row, which also gives the adjournment its own line on the printed agenda. The projected deck was reordered to match. Total time is unchanged: the old three-minute closing became two plus one, with guest comments' two minutes sitting between them, so nothing downstream shifts. #442
+
 ## [1.5.3.0] - 2026-08-04
 
 ### Fixed
