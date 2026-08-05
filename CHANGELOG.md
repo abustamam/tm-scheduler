@@ -2,6 +2,16 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.5.6.0] - 2026-08-05
+
+### Fixed
+
+- **The agenda now says which speaker each evaluator is evaluating.** It always could — the wording, the ordering and the member dashboard were all written for it — but nothing in the app ever recorded the pairing, so on every meeting created through the UI the link was empty and five separate features quietly fell back: the run sheet printed a generic "Evaluates a speaker", the speaker's introduction couldn't name their evaluator, evaluators were listed in slot order rather than speaker order, a member's own activity page never showed who evaluated them, and the paired speaker/evaluator row never rendered. The link is now written where the pair is created — both when a meeting is generated from the club's role template and when a speaker is added with the "+ Add speaker" button. #512
+
+  Existing meetings are unaffected: this fills the link in going forward rather than backfilling, because a meeting that has been edited since can no longer be paired reliably by position.
+
+- A roster test counted merge-audit rows across the whole test database instead of its own club, so it could read rows written concurrently by another test file. It passed only by timing luck; adding one unrelated test was enough to break it.
+
 ## [1.5.5.0] - 2026-08-05
 
 ### Fixed

@@ -412,11 +412,22 @@ describe.skipIf(!hasTestDb)("roster management", () => {
 		expect((reassign.detail as { fromMemberId?: string }).fromMemberId).toBe(
 			keeper,
 		);
-		// member_merge logged.
+		// member_merge logged. Scoped to THIS club: `people-merge.integration.test.ts`
+		// writes `member_merge` rows too, and vitest runs the files concurrently
+		// against one database, so an unscoped count reads the other file's rows
+		// and fails with a count of 3. It only passed before by luck of timing —
+		// adding a single test elsewhere was enough to make the two overlap.
+		// `people-merge`'s equivalent query has always scoped by club; this one
+		// was the outlier.
 		const merge = await testDb
 			.select()
 			.from(activityLog)
-			.where(eq(activityLog.action, "member_merge"));
+			.where(
+				and(
+					eq(activityLog.clubId, seed.clubId),
+					eq(activityLog.action, "member_merge"),
+				),
+			);
 		expect(merge.length).toBe(1);
 	});
 
