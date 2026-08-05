@@ -23,6 +23,13 @@ const STRING_KEYS = [
 	"presentationUrl",
 ] as const;
 
+/**
+ * The five fields the UPDATE path truncates. `presentationUrl` is deliberately
+ * absent: it REJECTS on both paths, because a shortened URL is a dead link that
+ * still looks live, not a degraded-but-usable value.
+ */
+const TRUNCATING_KEYS = STRING_KEYS.filter((k) => k !== "presentationUrl");
+
 describe("SPEAKER_FIELDS — the create path REJECTS over-long input", () => {
 	it.each(STRING_KEYS)("rejects a %s one character over the cap", (key) => {
 		const over = "x".repeat(SPEAKER_LIMITS[key] + 1);
@@ -61,7 +68,7 @@ describe("SPEAKER_FIELDS — the create path REJECTS over-long input", () => {
 });
 
 describe("SPEAKER_UPDATE_FIELDS — the update path TRUNCATES instead", () => {
-	it.each(STRING_KEYS)("truncates an over-long %s to the cap", (key) => {
+	it.each(TRUNCATING_KEYS)("truncates an over-long %s to the cap", (key) => {
 		const over = "x".repeat(SPEAKER_LIMITS[key] * 2);
 		const r = SPEAKER_UPDATE_FIELDS[key].safeParse(over);
 		expect(r.success).toBe(true);
@@ -69,7 +76,7 @@ describe("SPEAKER_UPDATE_FIELDS — the update path TRUNCATES instead", () => {
 		expect(r.data).toHaveLength(SPEAKER_LIMITS[key]);
 	});
 
-	it.each(STRING_KEYS)("leaves a %s that is already short alone", (key) => {
+	it.each(TRUNCATING_KEYS)("leaves a %s that is already short alone", (key) => {
 		const r = SPEAKER_UPDATE_FIELDS[key].safeParse("Ice Breaker");
 		expect(r.success && r.data).toBe("Ice Breaker");
 	});
@@ -82,7 +89,9 @@ describe("SPEAKER_UPDATE_FIELDS — the update path TRUNCATES instead", () => {
 	 * as a tombstone and which is invalid in a PDF text string. Truncation now
 	 * goes through the audited `cap`.
 	 */
-	it.each(STRING_KEYS)("never splits a surrogate pair truncating %s", (key) => {
+	it.each(
+		TRUNCATING_KEYS,
+	)("never splits a surrogate pair truncating %s", (key) => {
 		const r = SPEAKER_UPDATE_FIELDS[key].safeParse(
 			`a${"🎤".repeat(SPEAKER_LIMITS[key])}`,
 		);
@@ -98,7 +107,9 @@ describe("SPEAKER_UPDATE_FIELDS — the update path TRUNCATES instead", () => {
 		).toBe(false);
 	});
 
-	it.each(STRING_KEYS)("bounds %s by CODE POINTS on astral input", (key) => {
+	it.each(
+		TRUNCATING_KEYS,
+	)("bounds %s by CODE POINTS on astral input", (key) => {
 		// The bound is code points, so an all-astral value can still reach
 		// `2 * max` UTF-16 units. That is bounded, which is what matters — but it
 		// means `.length` is the wrong thing to assert.
@@ -106,6 +117,22 @@ describe("SPEAKER_UPDATE_FIELDS — the update path TRUNCATES instead", () => {
 		expect(r.success).toBe(true);
 		if (!r.success) return;
 		expect([...r.data].length).toBeLessThanOrEqual(SPEAKER_LIMITS[key]);
+	});
+
+	it("REJECTS an over-long presentationUrl instead of truncating it", () => {
+		// Truncating a URL produces a valid-looking dead link: the speaker sees it
+		// on the agenda, clicks it, gets a 404, and the original is gone.
+		const over = `https://example.com/${"a".repeat(SPEAKER_LIMITS.presentationUrl)}`;
+		expect(SPEAKER_UPDATE_FIELDS.presentationUrl.safeParse(over).success).toBe(
+			false,
+		);
+		// A normal link still saves.
+		const ok = SPEAKER_UPDATE_FIELDS.presentationUrl.safeParse(
+			"https://docs.google.com/presentation/d/abc123",
+		);
+		expect(ok.success && ok.data).toBe(
+			"https://docs.google.com/presentation/d/abc123",
+		);
 	});
 
 	it("truncates a hostile 8MB value without rejecting it", () => {
@@ -238,8 +265,10 @@ describe("the caps stay inside an absolute, measured range", () => {
 		] as const) {
 			expect(MINUTES_RENDER_CAPS[key]).toBeLessThanOrEqual(500);
 		}
-		// The joined attendance line is one string holding a whole club's names,
-		// so it gets more room than a single name — still far under the knee.
+		// The attendance roster is bounded by ROW COUNT before it is joined, not
+		// by the length of the joined string — capping after the join would leave
+		// the build cost scaling with the input.
+		expect(MINUTES_RENDER_CAPS.nameRows).toBeLessThanOrEqual(500);
 		expect(MINUTES_RENDER_CAPS.namesLine).toBeLessThanOrEqual(5_000);
 	});
 
@@ -254,7 +283,9 @@ describe("the caps stay inside an absolute, measured range", () => {
 	it("bounds how many rows the minutes PDF will lay out", () => {
 		expect(MINUTES_RENDER_CAPS.programRows).toBeLessThanOrEqual(500);
 		expect(MINUTES_RENDER_CAPS.tableTopicsRows).toBeLessThanOrEqual(500);
-		expect(MINUTES_RENDER_CAPS.awardRows).toBeLessThanOrEqual(500);
+		// No `awardRows`: `loadMinutes` builds that list from the fixed
+		// AWARD_CATEGORIES enum, so it is always exactly three rows. A cap there
+		// could never fire, and an absolute ceiling on it could never fail.
 		// …and still leaves room for any meeting a club would really hold.
 		expect(MINUTES_RENDER_CAPS.programRows).toBeGreaterThanOrEqual(40);
 	});

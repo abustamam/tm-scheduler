@@ -155,7 +155,23 @@ export const SPEAKER_UPDATE_FIELDS = {
 	pathwayPath: truncating(SPEAKER_LIMITS.pathwayPath),
 	projectName: truncating(SPEAKER_LIMITS.projectName),
 	projectLevel: truncating(SPEAKER_LIMITS.projectLevel),
-	presentationUrl: truncating(SPEAKER_LIMITS.presentationUrl),
+	/**
+	 * The ONE field that rejects on the update path too, because truncation is
+	 * not graceful degradation for a URL — it is a broken value that still looks
+	 * correct.
+	 *
+	 * `normalizePresentationUrl` only checks the scheme and a dotted hostname, so
+	 * a cut link passes validation and is stored as a live-looking one that 404s.
+	 * The speaker sees a link on the agenda, clicks it, gets nothing, and the
+	 * original is gone. A shortened speech TITLE is still a title; a shortened
+	 * URL is not a URL.
+	 *
+	 * The lockout risk this trades against is small: 500 characters is far past
+	 * any real link (the longest on record is 0 — the field is unused so far), so
+	 * a legacy value above the cap is close to hypothetical, and the error names
+	 * the field.
+	 */
+	presentationUrl: SPEAKER_FIELDS.presentationUrl,
 } as const;
 
 /**
