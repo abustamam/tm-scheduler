@@ -2,6 +2,22 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.5.5.0] - 2026-08-05
+
+### Fixed
+
+- **The meeting theme, location, notes and announcements had no length limit.** The theme is the one that mattered: it can be saved by anyone holding the meeting's Toastmaster slot, which on a public club page needs no sign-in, and it prints into the minutes PDF that the server builds on the spot. Last release stopped an oversized theme reaching the printer; this stops it being saved at all, which also keeps it out of every other page that reads it. The other three are capped alongside it. Creating a meeting now rejects text over the limit and says which field; editing one shortens it instead, so a value saved before the limits existed can never leave someone unable to save the meeting's date.
+
+- **The same fields were unlimited when creating a whole term of meetings at once.** That form writes up to 52 meetings in one go and its location field was missed by the first pass. Capped, along with the saved recurrence rule that copies a location into every meeting it creates.
+
+- **A Pathways project name could get around the speech limits.** Picking a real project overwrites the typed path, project and level with the catalog's own text, and that happens after the limits are checked — so a long enough catalog entry went straight past them. The catalog is now shortened to the same limits on the way in, and on the public project picker, which was handing the same unlimited text to anyone browsing a club page.
+
+- **A long Table Topics question could have frozen offline minutes.** Found while adding the limit above, before it shipped: rejecting an over-long question would have left it stuck at the front of the offline queue, blocking attendance, guests, awards and every later change to that meeting's minutes with no way to clear it. It shortens the question instead.
+
+### Notes for this club
+
+- Nothing you have entered is affected. The longest theme on record is 20 characters against a 200 limit, the longest location 30, and the longest announcements 62 against 2,000.
+
 ## [1.5.4.0] - 2026-08-04
 
 ### Changed
