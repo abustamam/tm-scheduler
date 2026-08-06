@@ -345,7 +345,10 @@ function ActionItems() {
 
 function ItemBody({ item }: { item: ActionItemRow }) {
 	return (
-		<div className="min-w-0">
+		// `basis-56` gives the text a floor so the row wraps on a narrow screen
+		// instead of squeezing it into a one-word-per-line column beside three
+		// buttons. `min-w-0` still lets a long item shrink rather than overflow.
+		<div className="min-w-0 flex-1 basis-56">
 			<div
 				className={cn(
 					"text-sm font-medium",
@@ -391,7 +394,7 @@ function Section({
 
 function Row({ children }: { children: React.ReactNode }) {
 	return (
-		<div className="flex items-center justify-between gap-3 border-b border-[var(--line)] px-5 py-3 last:border-b-0">
+		<div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-[var(--line)] px-5 py-3 last:border-b-0">
 			{children}
 		</div>
 	);
