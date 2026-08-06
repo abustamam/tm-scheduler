@@ -105,6 +105,32 @@ describe("renderMinutesPdf bounds what it lays out (#522)", () => {
 			})),
 			guests: [{ name: long }],
 			counts: { present: 400, absent: 0, excused: 0, unmarked: 0, guests: 1 },
+			// Action items (#529) are the newest unbounded list to reach this
+			// renderer, so they belong in the all-axes-hostile fixture rather than
+			// beside it — a merge that adds a list and tests it separately leaves
+			// the cross-product tested by neither (CLAUDE.md trap 4).
+			actionItems: {
+				open: Array.from({ length: 2_000 }, (_, i) => ({
+					id: `ai-${i}`,
+					text: long,
+					ownerName: long,
+					ownerMemberId: null,
+					dueDate: null,
+					createdAt: new Date("2026-01-01T00:00:00Z"),
+					resolvedAt: null,
+					resolution: null,
+				})),
+				resolved: Array.from({ length: 2_000 }, (_, i) => ({
+					id: `air-${i}`,
+					text: long,
+					ownerName: long,
+					ownerMemberId: null,
+					dueDate: null,
+					createdAt: new Date("2026-01-01T00:00:00Z"),
+					resolvedAt: new Date("2026-02-01T00:00:00Z"),
+					resolution: "done" as const,
+				})),
+			},
 			tableTopicsSpeakers: Array.from({ length: 2_000 }, (_, i) => ({
 				id: `tt-${i}`,
 				name: long,
@@ -170,6 +196,21 @@ describe("renderMinutesPdf bounds what it lays out (#522)", () => {
 			members: [{ name: "Jane Doe", status: "present" as const }],
 			guests: [],
 			counts: { present: 1, absent: 0, excused: 0, unmarked: 0, guests: 0 },
+			actionItems: {
+				open: [
+					{
+						id: "ai-1",
+						text: "Book the venue",
+						ownerName: null,
+						ownerMemberId: null,
+						dueDate: null,
+						createdAt: new Date("2026-01-01T00:00:00Z"),
+						resolvedAt: null,
+						resolution: null,
+					},
+				],
+				resolved: [],
+			},
 			tableTopicsSpeakers: [
 				{ id: "tt-1", name: "Ann Lee", isGuest: false, topic: "Travel" },
 			],

@@ -21,6 +21,7 @@ function op(overrides: Partial<MinutesOp> & { opId: string }): MinutesOp {
 
 function makeSnapshot(): MinutesData {
 	return {
+		actionItems: { open: [], resolved: [], openTotal: 0, resolvedTotal: 0 },
 		meetingId: M,
 		clubId: "club-1",
 		members: [{ memberId: "m-1", name: "Alice", status: null, hasRole: false }],

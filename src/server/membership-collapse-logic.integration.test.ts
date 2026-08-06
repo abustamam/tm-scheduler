@@ -15,7 +15,7 @@
  *      table_topics_speakers, and activity_log (actor + jsonb detail refs +
  *      member-target deletion) all move to the keeper.
  *   6. FK drift-guard: the DB's set of foreign keys referencing `members`
- *      exactly matches the 11 this primitive re-points.
+ *      exactly matches the 12 this primitive re-points.
  *
  * Run with:
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test \
@@ -25,6 +25,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
+	clubActionItems,
 	duesPeriods,
 	meetingAttendance,
 	meetingAwards,
@@ -431,6 +432,35 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 		expect(absorbedNotifs).toHaveLength(0);
 	});
 
+	it("re-points an action item's owner to the keeper", async () => {
+		// The FK drift-guard below proves this FK is DECLARED as handled; it
+		// cannot prove the re-point actually runs. Verified by mutation: deleting
+		// the clubActionItems update left every other test in this file green.
+		const keeperId = await addMembership({ name: "Keeper" });
+		const absorbedId = await addMembership({ name: "Absorbed" });
+
+		const [item] = await testDb
+			.insert(clubActionItems)
+			.values({
+				clubId: seed.clubId,
+				text: "Book the venue",
+				ownerMemberId: absorbedId,
+			})
+			.returning({ id: clubActionItems.id });
+		if (!item) throw new Error("Failed to insert action item");
+
+		await collapse(keeperId, absorbedId);
+
+		const [row] = await testDb
+			.select({ ownerMemberId: clubActionItems.ownerMemberId })
+			.from(clubActionItems)
+			.where(eq(clubActionItems.id, item.id));
+		// Pin the row first: asserting the field alone passes when the row is
+		// gone entirely (CLAUDE.md coverage trap 1).
+		expect(row).toBeDefined();
+		expect(row?.ownerMemberId).toBe(keeperId);
+	});
+
 	it("re-points set-null FKs + activity_log (actor + jsonb detail) to the keeper", async () => {
 		const keeperId = await addMembership({ name: "Keeper" });
 		const absorbedId = await addMembership({ name: "Absorbed" });
@@ -572,6 +602,8 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 			"project_completion_marks.marked_by_member_id",
 			"role_slots.assigned_member_id",
 			"table_topics_speakers.member_id",
+			// #529 — who owns a club action item.
+			"club_action_items.owner_member_id",
 			"guests.converted_membership_id",
 			"activity_log.actor_member_id",
 		]);

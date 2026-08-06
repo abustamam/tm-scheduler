@@ -4,6 +4,7 @@ import {
 	boolean,
 	check,
 	customType,
+	date,
 	index,
 	integer,
 	jsonb,
@@ -1398,6 +1399,112 @@ export const notifications = pgTable(
 		uniqueIndex("notifications_slot_member_unique")
 			.on(t.slotId, t.assignedMemberId)
 			.where(sql`${t.assignedMemberId} is not null`),
+	],
+);
+
+// ---------------------------------------------------------------------------
+// Club action items (#529) — things the CLUB must do, standing until resolved.
+//
+// NOT officer-meeting minutes, and deliberately NOT owned by a meeting. An
+// action item's real fields are what, who, by when and whether it is done; only
+// provenance wants a meeting, and provenance is not worth a foreign key. Having
+// no meeting reference is what lets an item raised between meetings land
+// correctly on the timeline.
+//
+// This is the missing half of a concept the app already ships: `meetings.
+// reminders` (the Announcements field, #349) carries exactly this content as
+// free text — its own test fixture is "Bring a guest / Renew dues" — but with no
+// owner, no due date, no resolved state and no carry-forward, so items get
+// retyped each meeting or forgotten. An action item is an announcement that
+// persists until it is resolved. Announcements stay as they are, for one-off
+// notices that have no owner and never complete.
+// ---------------------------------------------------------------------------
+
+/**
+ * Why a resolved item closed. `done` and `dropped` are materially different in
+ * a permanent record: without the distinction, the minutes claim credit for
+ * work the club actually abandoned.
+ *
+ * Deliberately NOT `in_progress` / `blocked` — project-management states a club
+ * does not run on, and they make "what is open" ambiguous.
+ */
+export const actionItemResolutionEnum = pgEnum("action_item_resolution", [
+	"done",
+	"dropped",
+]);
+
+export const clubActionItems = pgTable(
+	"club_action_items",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		clubId: uuid("club_id")
+			.notNull()
+			.references(() => clubs.id, { onDelete: "cascade" }),
+		/** What must be done. Capped on write by `ACTION_ITEM_LIMITS.text`. */
+		text: text("text").notNull(),
+		/**
+		 * Who owns it. OPTIONAL — null means the club collectively ("everyone
+		 * bring a guest"), which is a real shape and must not be forced onto one
+		 * person. `set null` rather than cascade: a member leaving the club must
+		 * not delete the record that the venue got booked. Mirrors how
+		 * `meeting_attendance` and `meeting_awards` reference members.
+		 */
+		ownerMemberId: uuid("owner_member_id").references(() => members.id, {
+			onDelete: "set null",
+		}),
+		/**
+		 * Optional target date. Follow-up comes from persistence, not deadlines.
+		 *
+		 * A `date`, NOT a `timestamptz`, and the distinction is user-visible. This
+		 * is a CALENDAR DAY picked in an `<input type="date">`, never an instant:
+		 * it is only ever displayed, never compared against `meetings.scheduled_at`
+		 * the way `created_at`/`resolved_at` are. Stored as a timestamp it would go
+		 * in as UTC midnight and render in the viewer's zone, so every club west of
+		 * UTC — America/Chicago is this app's default — would read back the day
+		 * BEFORE the one the officer typed, and SSR (UTC container) would disagree
+		 * with the hydrated client. `mode: "string"` keeps it a "YYYY-MM-DD" string
+		 * end to end, with no Date to shift.
+		 */
+		dueDate: date("due_date", { mode: "string" }),
+		/**
+		 * When the item was raised, and when it closed (null = still open).
+		 *
+		 * There is no status column: open vs resolved is DERIVED from
+		 * `resolved_at`, the same way speeches store no status (ADR-0009).
+		 *
+		 * Both are `timestamptz` on purpose. They are compared against
+		 * `meetings.scheduled_at`, which is `timestamptz`, to reconstruct what was
+		 * open at a past meeting. Storing them naive would make that comparison
+		 * depend on the session time zone and silently shift which items appear in
+		 * a past meeting's minutes — the exact instability this design exists to
+		 * prevent.
+		 */
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+		resolution: actionItemResolutionEnum("resolution"),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(t) => [
+		// The open-list read is per club, ordered by age.
+		index("club_action_items_club_idx").on(t.clubId, t.createdAt),
+		// The owner FK is written far more often than it is read: every member
+		// delete fires the `set null` above, and `collapseMemberships` re-points
+		// owners once per absorbed membership — and `mergePeople` calls that in a
+		// loop, so an unindexed column costs one sequential scan per absorbed
+		// membership. Plain CREATE INDEX only: `CONCURRENTLY` cannot run inside the
+		// transaction the startup migrator uses and fails the Railway deploy closed.
+		index("club_action_items_owner_idx").on(t.ownerMemberId),
+		// Resolution timestamp and reason are set together or not at all. Without
+		// this, a half-closed row renders in neither the open list nor the
+		// resolved list and simply vanishes from the record.
+		check(
+			"club_action_items_resolution_paired",
+			sql`(${t.resolvedAt} is null) = (${t.resolution} is null)`,
+		),
 	],
 );
 
