@@ -80,12 +80,22 @@ export async function listActionItems(
  * "which items are open" has exactly one definition. Two copies of that rule is
  * the shape that makes a cross-surface disagreement invisible to any test which
  * compares the surfaces to each other.
+ *
+ * Returns `total` alongside the capped rows for the same reason the minutes
+ * payload does: a list cut at the cap with nothing to say so reads as the
+ * club's complete outstanding work. Caught by QA against a club with 47 open
+ * items, where this surface showed 40 and said nothing about the other 7.
  */
-export async function listOpenActionItems(
-	clubId: string,
-): Promise<ActionItemRow[]> {
+export async function listOpenActionItems(clubId: string): Promise<{
+	items: ActionItemRow[];
+	total: number;
+}> {
 	const rows = await listActionItems(clubId);
-	return openAsOf(rows, new Date()).slice(0, ACTION_ITEM_RENDER_CAPS.rows);
+	const open = openAsOf(rows, new Date());
+	return {
+		items: open.slice(0, ACTION_ITEM_RENDER_CAPS.rows),
+		total: open.length,
+	};
 }
 
 /** Reject an owner who is not a member of this club. */

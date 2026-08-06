@@ -183,8 +183,8 @@ export const Route = createFileRoute("/club/$clubId/meeting/$meetingId")({
 			context.shell && !minutes.visible
 				? await getOpenActionItems({
 						data: { clubId: data.meeting.clubId },
-					}).catch(() => [])
-				: [];
+					}).catch(() => ({ items: [], total: 0 }))
+				: { items: [], total: 0 };
 		// Default email recipients (#165) — admins on a completed meeting only.
 		const minutesEmail =
 			context.shell &&
@@ -766,7 +766,10 @@ function MeetingView() {
 				}}
 			/>
 
-			<OpenActionItems items={openActionItems} />
+			<OpenActionItems
+				items={openActionItems.items}
+				total={openActionItems.total}
+			/>
 
 			{minutes.visible && minutes.data ? (
 				<MeetingMinutes

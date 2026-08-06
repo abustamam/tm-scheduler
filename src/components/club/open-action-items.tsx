@@ -17,7 +17,14 @@ import type { ActionItemRow } from "#/server/action-items-logic";
  * version is "what was open at that meeting's instant", reconstructed from
  * timestamps so it stays stable forever.
  */
-export function OpenActionItems({ items }: { items: ActionItemRow[] }) {
+export function OpenActionItems({
+	items,
+	total,
+}: {
+	items: ActionItemRow[];
+	/** How many are open in total, so a capped list can say what it hid. */
+	total: number;
+}) {
 	if (items.length === 0) return null;
 	return (
 		<section className="rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)] p-5">
@@ -42,6 +49,11 @@ export function OpenActionItems({ items }: { items: ActionItemRow[] }) {
 						) : null}
 					</li>
 				))}
+				{total > items.length ? (
+					<li className="text-xs text-[var(--sea-ink-soft)]">
+						+{total - items.length} more not shown
+					</li>
+				) : null}
 			</ul>
 		</section>
 	);
