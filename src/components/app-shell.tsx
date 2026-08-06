@@ -4,6 +4,7 @@ import {
 	CalendarDays,
 	CalendarPlus,
 	CalendarRange,
+	ClipboardCheck,
 	ClipboardPaste,
 	Compass,
 	GraduationCap,
@@ -189,6 +190,8 @@ function crumbFor(pathname: string): string {
 	if (pathname.startsWith("/admin/vp-membership"))
 		return "Manage · VP Membership";
 	if (pathname.startsWith("/admin/dues")) return "Manage · Dues";
+	if (pathname.startsWith("/admin/action-items"))
+		return "Manage · Action items";
 	if (pathname.startsWith("/admin")) return "Manage · Admin";
 	if (pathname.startsWith("/superadmin")) return "Platform · Superadmin";
 	return "Workspace";
@@ -443,6 +446,12 @@ function SidebarInner({
 							to="/admin/dues"
 							icon={Wallet}
 							label="Dues"
+							onNavigate={onNavigate}
+						/>
+						<NavItem
+							to="/admin/action-items"
+							icon={ClipboardCheck}
+							label="Action items"
 							onNavigate={onNavigate}
 						/>
 						<NavItem

@@ -13,6 +13,7 @@ function meta() {
 /** A fresh, internally-consistent snapshot for each test. */
 function makeSnapshot(): MinutesData {
 	return {
+		actionItems: { open: [], resolved: [], openTotal: 0, resolvedTotal: 0 },
 		meetingId: "meeting-1",
 		clubId: "club-1",
 		members: [

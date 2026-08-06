@@ -22,15 +22,19 @@ import { eq } from "drizzle-orm";
 import { createElement as h } from "react";
 import { db } from "#/db";
 import { clubs, meetings } from "#/db/schema";
+// The caps live in `#/lib` so their VALUES are assertable — this module imports
+// `#/db`, so a unit test importing it throws `DATABASE_URL is not set`. See the
+// trap-5 note in that file.
+import {
+	ACTION_ITEM_LIMITS,
+	ACTION_ITEM_RENDER_CAPS,
+} from "#/lib/action-item-limits";
 // The ONE audited `cap`. It is deliberately not reimplemented here: that
 // function has now had TWO cost/correctness defects found in it by review (a
 // full-input spread in #519, an astral-plane bypass in #522), so a second
 // `slice` written from scratch is exactly the wrong kind of duplication.
 import { cap } from "#/lib/cap";
 import { formatMeetingDate } from "#/lib/format";
-// The caps live in `#/lib` so their VALUES are assertable — this module imports
-// `#/db`, so a unit test importing it throws `DATABASE_URL is not set`. See the
-// trap-5 note in that file.
 import { MINUTES_RENDER_CAPS } from "#/lib/minutes-render-caps";
 import { SPEAKER_LIMITS } from "#/lib/speaker-limits";
 import {
@@ -87,6 +91,69 @@ const styles = StyleSheet.create({
 function elided(total: number, shown: number) {
 	if (total <= shown) return null;
 	return h(Text, { style: styles.muted }, `+${total - shown} more not shown`);
+}
+
+/** The "+N more not shown" sentence, or null when nothing was cut. */
+function elidedLine(total: number, shown: number): string | null {
+	if (total <= shown) return null;
+	return `+${total - shown} more not shown`;
+}
+
+/**
+ * The action-item block of the minutes, as plain strings (#529).
+ *
+ * Pure and exported so the three rules that matter here are ordinary
+ * assertions instead of PDF archaeology — a rendered PDF's content streams are
+ * compressed, so a byte search cannot see any of them:
+ *
+ *  - an UNOWNED item carries no owner run at all (a placeholder in a permanent
+ *    record reads as an owner named "The club", and would silently convert a
+ *    departed owner's personal commitment into a club-wide one)
+ *  - a list cut by the row cap says so, rather than reading as complete
+ *  - the whole block is absent for the `guests` audience
+ *
+ * Row-capped here as well as in `loadActionItemsForMinutes`. That is deliberate
+ * duplication: the upstream cap bounds the payload, the DOM and the offline
+ * snapshot, while this one bounds the RENDER for any caller that hands over an
+ * uncapped list — react-pdf lays out synchronously in the single Node process
+ * and its cost is super-linear in row count. `*Total` carries the true count, so
+ * the tails stay honest through both caps.
+ */
+export function buildActionItemsSection(
+	actionItems: MinutesData["actionItems"] | undefined,
+	audience: "members" | "guests",
+): {
+	openRows: string[];
+	openTail: string | null;
+	resolvedRows: string[];
+	resolvedTail: string | null;
+} | null {
+	if (audience === "guests" || !actionItems) return null;
+	const openRows = actionItems.open
+		.slice(0, ACTION_ITEM_RENDER_CAPS.rows)
+		.map((a) =>
+			a.ownerName
+				? `${cap(a.text, ACTION_ITEM_LIMITS.text)} — ${cap(
+						a.ownerName,
+						ACTION_ITEM_RENDER_CAPS.ownerName,
+					)}`
+				: cap(a.text, ACTION_ITEM_LIMITS.text),
+		);
+	const resolvedRows = actionItems.resolved
+		.slice(0, ACTION_ITEM_RENDER_CAPS.rows)
+		.map(
+			(a) =>
+				`Closed (${a.resolution}): ${cap(a.text, ACTION_ITEM_LIMITS.text)}`,
+		);
+	return {
+		openRows,
+		openTail: elidedLine(actionItems.openTotal, ACTION_ITEM_RENDER_CAPS.rows),
+		resolvedRows,
+		resolvedTail: elidedLine(
+			actionItems.resolvedTotal,
+			ACTION_ITEM_RENDER_CAPS.rows,
+		),
+	};
 }
 
 /**
@@ -155,8 +222,20 @@ export function buildAttendanceSection(minutes: {
  * excused/unmarked counts + names + the guest list), Table Topics speakers +
  * topics, awards, and a compact program section (roles + speeches,
  * summary-level).
+ *
+ * `audience` decides whether the club's action items are included, and it
+ * defaults to the narrow answer. The download route is gated on club
+ * membership, but `createMinutesEmailPort` attaches these same bytes to the
+ * minutes email, whose default recipient list includes every guest marked
+ * present — and a guest can add themselves through `submitGuestBook`, which is
+ * a public endpoint with no session. Action items are club-internal ("chase the
+ * lapsed members", "drop the venue"), so the emailed copy asks for "guests" and
+ * gets a PDF without them.
  */
-export async function renderMinutesPdf(meetingId: string): Promise<Uint8Array> {
+export async function renderMinutesPdf(
+	meetingId: string,
+	audience: "members" | "guests" = "members",
+): Promise<Uint8Array> {
 	const [meeting] = await db
 		.select({
 			clubId: meetings.clubId,
@@ -184,6 +263,10 @@ export async function renderMinutesPdf(meetingId: string): Promise<Uint8Array> {
 
 	const clubName = cap(club?.name ?? "Meeting", MINUTES_RENDER_CAPS.club);
 
+	const actionItemsSection = buildActionItemsSection(
+		minutes.actionItems,
+		audience,
+	);
 	const doc = h(
 		Document,
 		{ title: `Minutes — ${clubName}` },
@@ -268,6 +351,40 @@ export async function renderMinutesPdf(meetingId: string): Promise<Uint8Array> {
 					MINUTES_RENDER_CAPS.tableTopicsRows,
 				),
 			),
+			// Action items (#529) — the section model is built by the pure
+			// `buildActionItemsSection` above so every rule in it (the omitted owner,
+			// the "+N more" tails, the guest omission) is a plain string assertion
+			// rather than something you would have to extract from compressed PDF
+			// content streams. Same split `buildAttendanceSection` already uses.
+			actionItemsSection === null
+				? null
+				: h(
+						View,
+						{ style: styles.section },
+						h(Text, { style: styles.sectionTitle }, "Action Items"),
+						actionItemsSection.openRows.length
+							? actionItemsSection.openRows.map((line, i) =>
+									h(
+										Text,
+										{ key: `ai-open-${i}`, style: styles.listItem },
+										line,
+									),
+								)
+							: h(Text, { style: styles.muted }, "Nothing outstanding."),
+						actionItemsSection.openTail
+							? h(Text, { style: styles.muted }, actionItemsSection.openTail)
+							: null,
+						actionItemsSection.resolvedRows.map((line, i) =>
+							h(Text, { key: `ai-closed-${i}`, style: styles.listItem }, line),
+						),
+						actionItemsSection.resolvedTail
+							? h(
+									Text,
+									{ style: styles.muted },
+									actionItemsSection.resolvedTail,
+								)
+							: null,
+					),
 			// Awards
 			h(
 				View,

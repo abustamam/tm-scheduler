@@ -15,6 +15,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import type { db } from "#/db";
 import {
 	activityLog,
+	clubActionItems,
 	guests,
 	meetingAttendance,
 	meetingAwards,
@@ -196,6 +197,16 @@ export async function collapseMemberships(
 		.update(tableTopicsSpeakers)
 		.set({ memberId: keeperId })
 		.where(eq(tableTopicsSpeakers.memberId, absorbedId));
+
+	// 8b. club_action_items.owner_member_id (#529) — nullable, no member-unique
+	//    constraint, so re-point all. Without this the absorbed membership's
+	//    action items lose "whose job this was" on every merge. The FK
+	//    drift-guard in this module's integration test is what caught the
+	//    omission; the behavioural test beside it is what proves the fix runs.
+	await tx
+		.update(clubActionItems)
+		.set({ ownerMemberId: keeperId })
+		.where(eq(clubActionItems.ownerMemberId, absorbedId));
 
 	// 9. project_completion_marks.marked_by_member_id — attribution only, and
 	//    nullable. No member-unique constraint (the mark's uniqueness is on
