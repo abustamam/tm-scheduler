@@ -631,6 +631,101 @@ describe("expandRunSheet", () => {
 		expect(evalRows[0].detail).toBe("Evaluates A");
 		expect(evalRows[1].who).toBe("Evaluator 2 · EvalB");
 	});
+
+	/**
+	 * The three states an evaluator row can be in, pinned together so the middle
+	 * one cannot silently collapse into the last (#512).
+	 *
+	 * Before this, a linked evaluator whose speaker was not yet assigned printed
+	 * the same "Evaluates a speaker" as an evaluator with no link at all — so an
+	 * agenda printed ahead of the roster told the evaluator nothing, and the two
+	 * states were indistinguishable on the page. That ambiguity is what kept the
+	 * NULL-column bug invisible.
+	 */
+	it("names the speaking slot when the speaker is not assigned yet (#512)", () => {
+		const slots = [
+			slot({
+				id: "spA",
+				roleName: "Speaker",
+				category: "speaker",
+				isSpeakerRole: true,
+				slotIndex: 0,
+				assigneeName: "Rehanna Khan",
+			}),
+			// Speaker 2 exists but nobody has claimed it.
+			slot({
+				id: "spB",
+				roleName: "Speaker",
+				category: "speaker",
+				isSpeakerRole: true,
+				slotIndex: 1,
+				assigneeName: null,
+			}),
+			slot({
+				id: "e1",
+				roleName: "Evaluator",
+				category: "evaluator",
+				slotIndex: 0,
+				assigneeName: "EvalA",
+				evaluatesSlotId: "spA",
+				evaluates: { speakerName: "Rehanna Khan" },
+			}),
+			slot({
+				id: "e2",
+				roleName: "Evaluator",
+				category: "evaluator",
+				slotIndex: 1,
+				assigneeName: "EvalB",
+				evaluatesSlotId: "spB",
+				evaluates: { speakerName: null },
+			}),
+			// No link at all — the pre-#512 shape, and every meeting created before
+			// the fix. Must still get the beat's generic wording.
+			slot({
+				id: "e3",
+				roleName: "Evaluator",
+				category: "evaluator",
+				slotIndex: 2,
+				assigneeName: "EvalC",
+				evaluatesSlotId: null,
+				evaluates: null,
+			}),
+		];
+		const detail = expandRunSheet(slots)
+			.filter((r) => r.who.startsWith("Evaluator"))
+			.map((r) => r.detail);
+		expect(detail).toContain("Evaluates Rehanna Khan");
+		expect(detail).toContain("Evaluates Speaker 2");
+		expect(detail).toContain("Evaluates a speaker");
+		// All three are distinct — the point of the change.
+		expect(new Set(detail).size).toBe(3);
+	});
+
+	it("does not number a lone speaker — 'Evaluates Speaker', not 'Speaker 1'", () => {
+		const slots = [
+			slot({
+				id: "spOnly",
+				roleName: "Speaker",
+				category: "speaker",
+				isSpeakerRole: true,
+				slotIndex: 0,
+				assigneeName: null,
+			}),
+			slot({
+				id: "e1",
+				roleName: "Evaluator",
+				category: "evaluator",
+				slotIndex: 0,
+				assigneeName: "EvalA",
+				evaluatesSlotId: "spOnly",
+				evaluates: { speakerName: null },
+			}),
+		];
+		const [row] = expandRunSheet(slots).filter((r) =>
+			r.who.startsWith("Evaluator"),
+		);
+		expect(row.detail).toBe("Evaluates Speaker");
+	});
 });
 
 describe("timing marks beyond the speaker (#507)", () => {

@@ -2,6 +2,16 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.8.1.0] - 2026-08-07
+
+### Changed
+
+- An evaluator whose speaker isn't assigned yet now reads **"Evaluates Speaker 2"** instead of the generic "Evaluates a speaker". On an agenda printed before the roster is filled, that tells the evaluator which speaking slot they're on — and it makes "linked, speaker still open" visibly different from "not linked at all", which previously looked identical on the page. A club running a single speaker gets "Evaluates Speaker", unnumbered, matching how the speaker's own row is labelled. #512
+
+### Added
+
+- `scripts/backfill-evaluator-pairing.ts` links evaluators to their speaker on meetings that already existed before that link started being recorded. Dry-run by default; `--apply` writes. It pairs only where the evidence is unambiguous — equal speaker and evaluator counts, contiguous slot numbering, nothing already linked — and reports everything it skips with the reason instead of guessing. A wrong link is worse than none: a blank row reads as "not filled in yet", while the wrong name next to an evaluator is a confident error on a printed agenda. #512
+
 ## [1.8.0.0] - 2026-08-06
 
 ### Added
