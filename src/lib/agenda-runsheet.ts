@@ -1119,6 +1119,43 @@ function slotsForRole(
 	return slots.filter((s) => matchesRole(s, roleKey, roleName));
 }
 
+/**
+ * What an evaluator row says it evaluates, best available (#512).
+ *
+ * Three states, and they must stay distinguishable:
+ *   - linked, speaker assigned   → "Evaluates Rehanna Khan"
+ *   - linked, speaker still open → "Evaluates Speaker 2"
+ *   - not linked at all          → null, so the caller prints the beat's own
+ *                                  generic wording
+ *
+ * The middle case is why this exists. Falling through to "Evaluates a speaker"
+ * made an agenda printed BEFORE the roster is filled useless to the evaluator —
+ * it never said which speaking slot they were on — and, worse, made "linked but
+ * unassigned" indistinguishable from "not linked", which is precisely what hid
+ * the NULL-column bug for so long.
+ *
+ * The label is built the same way the speaker's own row builds it: the role's
+ * slots in `slotIndex` order, numbered only when the role repeats. Deriving it
+ * rather than storing it keeps the two in step through a role rename (#368) —
+ * `slotsForRole` matches on the stable key first.
+ */
+function evaluatedSpeakerLabel(
+	evaluator: AgendaSlot,
+	slots: AgendaSlot[],
+): string | null {
+	if (evaluator.evaluates?.speakerName) return evaluator.evaluates.speakerName;
+	if (!evaluator.evaluatesSlotId) return null;
+	const target = slots.find((s) => s.id === evaluator.evaluatesSlotId);
+	// A link pointing at a slot that is no longer in this meeting's set (the FK
+	// is ON DELETE SET NULL, but a stale in-memory row can still arrive here).
+	if (!target) return null;
+	const group = [
+		...slotsForRole(slots, target.roleKey ?? "", target.roleName),
+	].sort((a, b) => a.slotIndex - b.slotIndex);
+	const position = group.findIndex((s) => s.id === target.id);
+	return numbered(target.roleName, Math.max(position, 0), group.length > 1);
+}
+
 function hasRole(
 	slots: AgendaSlot[],
 	roleKey: string,
@@ -1389,9 +1426,13 @@ export function expandRunSheet(
 						// The slot's name, per the speaker arm above (#445).
 						who: `${numbered(s.roleName, i, multi)} · ${assigneeDisplay(s)}`,
 						roleKey: owner.roleKey,
-						detail: s.evaluates?.speakerName
-							? `Evaluates ${s.evaluates.speakerName}`
-							: beatDetail,
+						// Names the speaker when known, else the speaking SLOT ("Speaker
+						// 2"), else the beat's generic wording (#512). See
+						// `evaluatedSpeakerLabel` for why the middle case matters.
+						detail: (() => {
+							const label = evaluatedSpeakerLabel(s, slots);
+							return label ? `Evaluates ${label}` : beatDetail;
+						})(),
 						minutes: beat.minutes,
 						marks: beat.marks ?? null,
 					});
