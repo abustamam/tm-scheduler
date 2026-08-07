@@ -1,20 +1,31 @@
 /**
  * Page counts for every print surface (#502).
  *
- * This is the gate the repo has never had. Print CSS is invisible to typecheck,
- * to lint, and to every component test, because those assert the DOM and a
- * blank second sheet is not in the DOM — it is a consequence of geometry that
- * only exists once a browser paginates the page. A missing `.pgwrap` reset
- * shipped exactly that in v1.3.0.0, past six test files and two reviews.
+ * Print CSS is invisible to typecheck, to lint, and to every component test,
+ * because those assert the DOM and a blank second sheet is not in the DOM — it
+ * is a consequence of geometry that only exists once a browser paginates the
+ * page. A missing `.pgwrap` reset shipped exactly that in v1.3.0.0, past six
+ * test files and two reviews.
  *
- * These assertions are a BASELINE first and a gate second. They were recorded
- * against the three style blocks as the routes served them before
- * `PRINT_PAGE_CSS` was extracted, so the extraction has something to be checked
- * against rather than a promise that a union of five divergent copies is
- * harmless. If a number here changes, a print surface gained or lost a sheet.
+ * WHAT THIS GATE ACTUALLY PINS, measured rather than assumed. Every sheet is a
+ * `.agenda-page`, which is `height: PAGE_H; overflow: hidden` (`PAGE_OUTER`),
+ * and `FitPage`'s scale-to-fit is a `useEffect` that neither
+ * `renderToStaticMarkup` nor a JS-free `file://` page ever runs. So a sheet is
+ * exactly one page REGARDLESS of how much content it holds, and content volume
+ * cannot move any number here. What can move a number is height contributed
+ * OUTSIDE the clipped sheet: the wrapper's padding, its gap, and anything the
+ * print stylesheet fails to hide.
+ *
+ * That makes the honest claim narrow: a review mutation sweep showed 7 of the 8
+ * rules in `PRINT_PAGE_CSS` can be deleted with all six counts unchanged. The
+ * padding reset is pinned here; `.no-print` is pinned only because the fixtures
+ * below reproduce the route's toolbar and footer; the rest are pinned by the
+ * greps in `print-page-reset.guard.test.ts`, which is why both files exist.
+ * Do not read a passing count as evidence for a rule this cannot see.
  */
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { PublicFooter } from "#/components/public-footer";
 import {
 	findChrome,
 	printableDocument,
@@ -26,23 +37,27 @@ import {
 	type AgendaLayout,
 	MeetingAgendaPrint,
 } from "./meeting-agenda-print";
-import { PRINT_PAGE_CSS } from "./print-theme";
+import {
+	INK,
+	MUTED,
+	PRINT_PAGE_CSS,
+	PrintButton,
+	PrintToolbar,
+} from "./print-theme";
 import { WordOfTheDayPoster } from "./word-of-the-day-poster";
 
 // ---------------------------------------------------------------------------
-// Every surface now serves the SAME constant. These three bindings are what
-// makes that claim checkable rather than asserted: the page counts below were
-// recorded against the three divergent copies the routes carried before the
-// extraction, and they must not move now that one constant replaces them.
+// The counts below were recorded against the three divergent copies the routes
+// carried BEFORE the extraction, and must not move now one constant replaces
+// them. The agenda and poster surfaces serve `PRINT_PAGE_CSS` unmodified, so
+// they use it directly — an alias per surface would only look like three
+// stylesheets under test when there is one.
 //
-// The roles route is the one surface that could not be fully unioned. It centres
+// The roles route is the one surface that could not be fully unioned: it centres
 // its single sheet on screen, and flex defaults to a row, so hoisting that rule
-// into the shared constant would lay the agenda's two stacked sheets side by
-// side. It keeps the rule as an override, exactly as the route does.
+// would lay the agenda's two stacked sheets side by side.
 // ---------------------------------------------------------------------------
 
-const CSS_AGENDA_PRINT = PRINT_PAGE_CSS;
-const CSS_WORD = PRINT_PAGE_CSS;
 const CSS_ROLES = `${PRINT_PAGE_CSS}
 	@media screen {
 		.pgwrap { display: flex; justify-content: center; }
@@ -50,14 +65,23 @@ const CSS_ROLES = `${PRINT_PAGE_CSS}
 `;
 
 // ---------------------------------------------------------------------------
-// Fixtures. Deliberately a FULL meeting, not the two-row fixture the component
-// tests use: the pagination rules only engage on a surface that fills a sheet,
-// so a small fixture would make this gate vacuous for the exact CSS it guards.
+// Fixtures. A full meeting WITH a logo and a long club name — not because
+// volume changes the count (it provably does not; see the header), but because
+// the logo is the axis that produced the one real multi-page spill this repo
+// has had (#496 + #509, where each side's fixtures tested its own axis and the
+// cross-product was tested by neither). Keeping it here records that the
+// cross-product was considered rather than leaving the next reader to wonder.
 // ---------------------------------------------------------------------------
 
+/** A 1x1 PNG. Presence is the axis that matters, not the pixels. */
+const LOGO =
+	"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+const LONG_CLUB =
+	"Downtown Metropolitan Professional Speakers Toastmasters Club";
+
 const header: AgendaHeader = {
-	clubName: "Downtown Toastmasters",
-	logoUrl: null,
+	clubName: LONG_CLUB,
+	logoUrl: LOGO,
 	clubNumber: "1234",
 	district: "District 5",
 	mission: null,
@@ -133,7 +157,7 @@ describe.skipIf(!hasChrome)("printed page counts", () => {
 		["grid", 1],
 		["editorial", 1],
 	] as const)("agenda · %s prints %i page(s)", (layout, expected) => {
-		expect(pages(CSS_AGENDA_PRINT, agendaHtml(layout))).toBe(expected);
+		expect(pages(PRINT_PAGE_CSS, agendaHtml(layout))).toBe(expected);
 	});
 
 	// Two sheets each, structurally: both wrap their content in `TwoPage`, which
@@ -142,15 +166,16 @@ describe.skipIf(!hasChrome)("printed page counts", () => {
 		["spacious", 2],
 		["timing", 2],
 	] as const)("agenda · %s prints %i page(s)", (layout, expected) => {
-		expect(pages(CSS_AGENDA_PRINT, agendaHtml(layout))).toBe(expected);
+		expect(pages(PRINT_PAGE_CSS, agendaHtml(layout))).toBe(expected);
 	});
 
 	it("the Word of the Day poster prints exactly one page", () => {
 		// The surface that shipped a blank second sheet in v1.3.0.0.
 		//
 		// The `.pgwrap` wrapper is reproduced from the ROUTE, not the component.
-		// `WordOfTheDayPoster` does not carry the class — `word.tsx:166` does —
-		// and rendering the component alone makes every `.pgwrap` rule inert,
+		// `WordOfTheDayPoster` does not carry the class — the word route's page
+		// component does — and rendering the component alone makes every
+		// `.pgwrap` rule inert,
 		// which silently turns this assertion into a measurement of a page the
 		// club never prints. Verified: without this wrapper, deleting the
 		// `padding: 0 !important` reset (the actual v1.3.0.0 defect) does not
@@ -166,22 +191,57 @@ describe.skipIf(!hasChrome)("printed page counts", () => {
 					word="Ephemeral"
 					definition="Lasting for a very short time; fleeting."
 					example="The applause was ephemeral, but the lesson stayed."
-					clubName="Downtown Toastmasters"
+					clubName={LONG_CLUB}
 					dateLong="Friday, July 31, 2026"
+					logoUrl={LOGO}
 				/>
 			</div>,
 		);
-		expect(pages(CSS_WORD, html)).toBe(1);
+		expect(pages(PRINT_PAGE_CSS, html)).toBe(1);
 	});
 
 	it("the club role sheet prints exactly one page", () => {
+		// The full route shell, not a bare sheet. `.no-print` is the rule that
+		// hides the toolbar and the on-screen footer when printing, and it is
+		// UNCOVERABLE without them: with a bare `<ClubRoleSheet>` fixture,
+		// deleting `.no-print { display: none !important }` from PRINT_PAGE_CSS
+		// changes nothing; with the route's own toolbar and footer present, the
+		// same deletion pushes this surface to two pages and fails here.
+		//
+		// This is the same lesson as the `.pgwrap` wrapper one line of reasoning
+		// up, one element further out: a fixture that stops short of the route's
+		// DOM silently narrows what the gate can see.
 		const html = renderToStaticMarkup(
-			<ClubRoleSheet
-				clubName="Downtown Toastmasters"
-				clubNumber="1234567"
-				roles={roleSheetRoles}
-			/>,
+			<div>
+				<PrintToolbar>
+					<PrintButton />
+				</PrintToolbar>
+				<ClubRoleSheet
+					clubName={LONG_CLUB}
+					clubNumber="1234567"
+					roles={roleSheetRoles}
+					logoUrl={LOGO}
+				/>
+				<PublicFooter
+					className="no-print"
+					style={{ color: MUTED, borderColor: `${INK}24` }}
+				/>
+			</div>,
 		);
 		expect(pages(CSS_ROLES, html)).toBe(1);
+	});
+
+	// A control, not a surface. Chrome exits 0 and writes a VALID ONE-PAGE PDF
+	// for a page that rendered nothing at all — an empty body, or even a
+	// file:// URL that does not exist. Four of the assertions above are
+	// `toBe(1)`, so on their own they cannot tell "this surface prints one
+	// sheet" from "this surface produced nothing": a component that starts
+	// returning null, markup that fails to serialise, or a stylesheet that
+	// fails to parse would all read as PASS.
+	//
+	// Recording the empty case makes that ambiguity explicit rather than
+	// leaving every 1 to be read against an unstated zero.
+	it("an empty document also prints one page — so 1 is not proof of content", () => {
+		expect(pages(PRINT_PAGE_CSS, "")).toBe(1);
 	});
 });

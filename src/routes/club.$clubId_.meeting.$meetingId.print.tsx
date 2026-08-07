@@ -8,6 +8,8 @@ import {
 } from "#/components/agenda/meeting-agenda-print";
 import { OfflineBadge } from "#/components/agenda/offline-badge";
 import {
+	INK,
+	MUTED,
 	PRINT_PAGE_CSS,
 	PrintButton,
 	PrintToolbar,
@@ -274,11 +276,11 @@ const tabStyle: React.CSSProperties = {
 	borderRadius: 7,
 	fontSize: 13,
 	fontWeight: 600,
-	color: "#416166",
+	color: MUTED,
 	textDecoration: "none",
 };
 
 const tabActiveStyle: React.CSSProperties = {
-	background: "#173a40",
+	background: INK,
 	color: "#fff",
 };

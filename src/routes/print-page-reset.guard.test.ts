@@ -27,30 +27,41 @@
 // honest about that: it pins the RULE, the page-count harness pins the RESULT.
 // Both are kept because they fail for different reasons — the grep catches a
 // deletion in review, the harness catches a geometry change no grep can see.
-import { readdirSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { PRINT_PAGE_CSS } from "#/components/agenda/print-theme";
-import { readSource } from "#/test/guard-source";
 
 const ROUTES = dirname(fileURLToPath(import.meta.url));
 /**
- * Comment-blind (see `#/test/guard-source`): these are "the rule must BE
- * present" assertions, so a file that only MENTIONS
- * `.pgwrap { padding: 0 !important }` in a comment explaining its reset would
- * satisfy them with the real rule deleted. Blanking comments also protects
- * `printBlock` below — a stray `}` in a comment inside the `@media print` block
- * would otherwise close the block early and hide the rules after it.
+ * RAW source, deliberately not comment-blind.
+ *
+ * After the rewrite every assertion over route files below is of the
+ * "offender list must be EMPTY" form (`.not.toMatch(...)`), and
+ * `#/test/guard-source` states outright that those must NOT read through it:
+ * stripping can only DELETE text, which for a negative assertion is a false
+ * PASS. That is not theoretical here — the stripper is lexical and does not
+ * track template literals, and these routes carry CSS comments inside their
+ * `<style>` templates, so a `/* … *\/` pair could blank a real hand-rolled
+ * rule and let it through. `ti-wordmark` and `server-modules` read raw for the
+ * same reason.
+ *
+ * The positive assertions in this file read the imported `PRINT_PAGE_CSS`
+ * constant directly, so they never touch source at all and need no stripping.
  */
-const read = (file: string) => readSource(resolve(ROUTES, file));
+const read = (file: string) => readFileSync(resolve(ROUTES, file), "utf8");
 
 /**
  * The `@media print { … }` body, brace-matched rather than regex-matched: the
  * block contains a nested `@page { … }`, so a lazy `[^}]*` would stop early and
  * a greedy one would run past the end of the block.
  */
-function printBlock(src: string): string | null {
+function printBlock(raw: string): string | null {
+	// Strip CSS comments first: PRINT_PAGE_CSS carries one inside its
+	// `@media print` block, and a `}` added to it would end the block early and
+	// hide every rule after it.
+	const src = raw.replace(/\/\*[\s\S]*?\*\//g, " ");
 	const at = src.indexOf("@media print");
 	if (at === -1) return null;
 	const open = src.indexOf("{", at);
@@ -92,36 +103,87 @@ describe("the shared print stylesheet keeps a sheet to one page", () => {
 	});
 
 	it("pairs a forced page break with a cancel on the last sheet", () => {
-		// Half of this pair is how you get a trailing blank page. The poster used
-		// to carry neither, which was safe; carrying only the first would not be.
+		// The cancel is DEFENSIVE, not a demonstrated fix. It is worth stating
+		// plainly because the opposite was claimed here first: Chrome discards a
+		// forced break after the last box, so removing the `:last-child` rule
+		// produces no trailing blank page on any of the six surfaces — verified
+		// by mutation, and reproducible in thirty seconds with the harness next
+		// door. It stays because paged-media backends differ and the rule costs
+		// nothing, not because this repo has ever seen it bite.
 		expect(block).toMatch(/\.agenda-page\s*\{[^}]*break-after:\s*page/);
 		expect(block).toMatch(
 			/\.agenda-page:last-child\s*\{[^}]*break-after:\s*auto/,
 		);
 	});
+
+	// The rules below are pinned HERE and nowhere else. A review mutation sweep
+	// showed the page-count harness keeps all six counts unchanged when each of
+	// them is deleted, so these greps are their only coverage. Deleting a grep
+	// because "the harness covers it" would silently uncover the rule.
+	it("cancels the agenda's inter-sheet gap when printing", () => {
+		// `TwoPage` sets an inline `gap: 26` to space its two sheets on screen.
+		// Unreset, that becomes a 26px band between printed pages.
+		expect(block).toMatch(/\.pgwrap\s*\{[^}]*gap:\s*0\s*!important/);
+	});
+
+	it("keeps a sheet from being split across pages", () => {
+		expect(block).toMatch(/\.agenda-page\s*\{[^}]*break-inside:\s*avoid/);
+	});
+
+	it("drops the on-screen sheet shadow when printing", () => {
+		expect(block).toMatch(
+			/\.agenda-page\s*\{[^}]*box-shadow:\s*none\s*!important/,
+		);
+	});
 });
 
 /**
- * Routes that render a print sheet, discovered by scanning rather than listed,
- * so a new one is enrolled the moment it is written.
+ * Every route file, walked RECURSIVELY.
+ *
+ * The previous version used a flat `readdirSync`, which was blind to the 26
+ * route files under `_authed/**` — including `_authed/admin/vp-membership.tsx`,
+ * which serves its own `@media print` block today. That route is deliberately a
+ * different shape (it hides everything except a QR tent and uses
+ * `@page { margin: 24px }`, not a full-bleed letter sheet), so it does not want
+ * the shared constant; the check below is a negative assertion, so it passes
+ * cleanly while the walk stops claiming a coverage it did not have.
  */
-const printRoutes = readdirSync(ROUTES)
-	.filter((f) => f.endsWith(".tsx") && !f.includes(".test."))
-	.filter((f) => read(f).includes("PRINT_PAGE_CSS"))
-	.sort();
+function routeFiles(dir: string = ROUTES): string[] {
+	return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+		const abs = join(dir, e.name);
+		if (e.isDirectory()) return routeFiles(abs);
+		if (!e.name.endsWith(".tsx") || e.name.includes(".test.")) return [];
+		return [relative(ROUTES, abs)];
+	});
+}
+
+const ALL_ROUTES = routeFiles().sort();
+
+/** The routes that opted into the shared stylesheet. */
+const routesUsingSharedCss = ALL_ROUTES.filter((f) =>
+	read(f).includes("PRINT_PAGE_CSS"),
+);
 
 describe("no print route hand-rolls its own page CSS", () => {
-	// Without this the suite passes vacuously if the constant is renamed or the
-	// scan stops matching — which is exactly how the original bug survived.
-	it("finds the print routes (so a rename can't make this vacuous)", () => {
-		expect(printRoutes).toContain("club.$clubId_.meeting.$meetingId.word.tsx");
-		expect(printRoutes).toContain("club.$clubId_.meeting.$meetingId.print.tsx");
-		expect(printRoutes).toContain("club.$clubId_.roles.tsx");
+	// Pins that the three known sheet routes really do consume the shared
+	// constant. Not a vacuity guard for the loop below — that iterates every
+	// route file regardless — but it catches a rename or a route quietly
+	// dropping the import.
+	it("the three sheet routes consume the shared stylesheet", () => {
+		expect(routesUsingSharedCss).toContain(
+			"club.$clubId_.meeting.$meetingId.word.tsx",
+		);
+		expect(routesUsingSharedCss).toContain(
+			"club.$clubId_.meeting.$meetingId.print.tsx",
+		);
+		expect(routesUsingSharedCss).toContain("club.$clubId_.roles.tsx");
 	});
 
-	for (const file of readdirSync(ROUTES).filter(
-		(f) => f.endsWith(".tsx") && !f.includes(".test."),
-	)) {
+	it("walks a non-trivial route tree (so a broken walk can't pass vacuously)", () => {
+		expect(ALL_ROUTES.length).toBeGreaterThan(20);
+	});
+
+	for (const file of ALL_ROUTES) {
 		it(`${file} does not declare its own .pgwrap padding`, () => {
 			// Padding belongs to PRINT_PAGE_CSS alone now. A route that sets its own
 			// is either a copy that will drift, or a new print surface that skipped

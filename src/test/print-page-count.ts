@@ -27,47 +27,80 @@ const CHROME_BINARIES = [
 	"chromium-browser",
 ];
 
+/** Memoized: `findChrome` is called once per surface and the answer cannot change. */
+let cachedChrome: string | null | undefined;
+
 /**
  * The first usable Chrome on PATH, or null.
  *
  * Exported so the suite can distinguish "no browser here" from "the browser
- * disagreed" — see `describeIfChrome`, which refuses to let the second hide
- * behind the first in CI.
+ * disagreed" — see the `print page-count harness availability` describe in
+ * `print-page-count.test.tsx`, which fails rather than skips when CI has no
+ * browser, so the second can never hide behind the first.
+ *
+ * Runs the binary rather than probing with `command -v` through a shell. That
+ * proves it is both on PATH and executable in one step, and avoids passing an
+ * args array alongside `shell`, which Node deprecates (DEP0190) and which
+ * printed a warning above every `bun run test` in this repo.
  */
 export function findChrome(): string | null {
+	if (cachedChrome !== undefined) return cachedChrome;
 	for (const bin of CHROME_BINARIES) {
 		try {
-			execFileSync("command", ["-v", bin], {
-				shell: "/bin/sh",
-				stdio: "pipe",
-			});
+			execFileSync(bin, ["--version"], { stdio: "pipe", timeout: 10_000 });
+			cachedChrome = bin;
 			return bin;
 		} catch {
-			// not on PATH; try the next one
+			// not on PATH, or not runnable; try the next one
 		}
 	}
+	cachedChrome = null;
 	return null;
 }
 
 /**
- * Page objects in a PDF.
+ * How many pages a PDF has, read from the page tree.
  *
- * `/Type /Page` with a negative lookahead for the `s`: the document's page-tree
- * root is `/Type /Pages`, and counting it would report every one-page sheet as
- * two. Same technique the react-pdf role-sheet assertions use.
+ * Reads `/Count` off the `/Type /Pages` root rather than counting `/Type /Page`
+ * objects, because CONTENT CAN FORGE THE LATTER. Chrome writes the document
+ * title into `/Info` and link hrefs into `/Annots /URI` UNCOMPRESSED, so a page
+ * whose title contains the literal `/Type /Page` inflates the count: measured 4
+ * on a genuinely 2-page document. Body text is safe (content streams are Flate-
+ * compressed), which is exactly why the flaw would survive casual testing and
+ * surface later, on the first fixture built from real content.
+ *
+ * The failure is not one-directional either — a spurious +1 reads as a failure
+ * on the surfaces baselined at 1 page, but would MASK a real drop from 2 to 1.
+ *
+ * Takes the maximum across matches: a nested page tree gives intermediate nodes
+ * their own `/Count`, and the root's is the total.
  */
 export function countPdfPages(pdf: Buffer): number {
-	return (pdf.toString("latin1").match(/\/Type\s*\/Page(?![s])/g) ?? []).length;
+	const counts = [
+		...pdf
+			.toString("latin1")
+			.matchAll(/\/Type\s*\/Pages\b[^>]*?\/Count\s+(\d+)/gs),
+	].map((m) => Number(m[1]));
+	if (counts.length === 0) {
+		throw new Error(
+			"No /Type /Pages ... /Count found — the PDF is malformed, or Chrome " +
+				"changed its writer. Refusing to guess a page count.",
+		);
+	}
+	return Math.max(...counts);
 }
 
 /**
  * Wrap rendered markup in a minimal document.
  *
- * `body { margin: 0 }` is NOT cosmetic and must not be dropped: the real app
- * gets it from `styles.css`, `@page` sets `margin: 0`, and the print surfaces
- * are sized to exactly one letter page. A default 8px body margin pushes
- * 1056px of content past the page box and emits a blank second sheet — which
- * is the v1.3.0.0 bug, reproduced by omission.
+ * `body { margin: 0 }` is NOT cosmetic and must not be dropped. `@page` sets
+ * `margin: 0` and the print surfaces are sized to exactly one letter page, so a
+ * default 8px body margin pushes 1056px of content past the page box and emits a
+ * blank second sheet — the v1.3.0.0 bug, reproduced by omission.
+ *
+ * `src/styles.css` is the source of truth for that reset in the real app; this
+ * is a copy. If a body margin or padding is ever added there, this must follow,
+ * or the harness measures a document the app does not serve.
  */
 export function printableDocument(css: string, bodyHtml: string): string {
 	return `<!doctype html>
@@ -109,10 +142,22 @@ export function printedPageCount(html: string): number {
 				// Otherwise Chrome stamps a URL and page number into the margin,
 				// which is not what the club prints.
 				"--no-pdf-header-footer",
+				// Hermetic, and isolated from the developer's real browser. Without
+				// an explicit profile dir Chrome touches the default one; without the
+				// resolver rule a fixture that ever gained a remote URL would make
+				// the suite hit the network from a --no-sandbox browser.
+				`--user-data-dir=${dir}`,
+				"--disable-extensions",
+				"--host-resolver-rules=MAP * ~NOTFOUND",
 				`--print-to-pdf=${pdfPath}`,
 				`file://${htmlPath}`,
 			],
-			{ stdio: "pipe", timeout: 60_000 },
+			// Below vitest's 15s testTimeout (vitest.config.ts). execFileSync is
+			// SYNCHRONOUS, so vitest's own timer cannot fire until it returns — a
+			// larger value here means a hung browser blocks the worker past the
+			// point vitest would have reported, and the failure names the wrong
+			// cause. Normal cost is ~360ms per surface.
+			{ stdio: "pipe", timeout: 10_000 },
 		);
 		return countPdfPages(readFileSync(pdfPath));
 	} finally {

@@ -53,10 +53,19 @@ export const PAGE_H = 1056;
  *     last child. Keep them together — half of this pair is how you get a
  *     trailing blank page.
  *
- * What is deliberately NOT here: the roles route's screen-only
- * `display: flex; justify-content: center` on `.pgwrap`. Flex defaults to a row,
- * and the agenda's `.pgwrap` holds two stacked sheets, so hoisting that rule
- * would lay them out side by side. It stays a per-surface override.
+ * What is deliberately NOT here: centring the sheet. Both single-sheet surfaces
+ * centre — the roles route through a `.pgwrap` rule, the poster route through an
+ * inline style on the same wrapper — but the agenda cannot, because `TwoPage`
+ * stacks two sheets inside one `.pgwrap` and flex defaults to a row, which would
+ * print them side by side. Two surfaces expressing one intent through two
+ * mechanisms is exactly the drift this constant exists to end, so it is worth
+ * knowing they are both still out here.
+ *
+ * The roles rule also used to apply when PRINTING (it sat outside any media
+ * query); it is now scoped to `@media screen`. That is safe only because the
+ * sheet is 816px and the letter page box is 816px, so block layout and centred
+ * flex land on the same pixel — verified by rasterising both and diffing. It
+ * stops being safe the moment those two numbers diverge.
  */
 export const PRINT_PAGE_CSS = `
 	@media screen { body { background: #d8e6dd; } }
@@ -84,7 +93,9 @@ export const PRINT_PAGE_CSS = `
  * toolbars there is nothing to wrap and no free space to justify, so both are
  * no-ops there.
  */
-export const PRINT_TOOLBAR_STYLE: React.CSSProperties = {
+// Module-private: `PrintToolbar` is the surface, so a route cannot go back to
+// hand-assembling a toolbar from the raw style object.
+const PRINT_TOOLBAR_STYLE: React.CSSProperties = {
 	position: "fixed",
 	top: 12,
 	right: 12,
@@ -110,7 +121,7 @@ export function PrintToolbar({ children }: { children: React.ReactNode }) {
 }
 
 /** Brand button style, tokenised — two routes hardcoded LAGOON's hex. */
-export const PRINT_BUTTON_STYLE: React.CSSProperties = {
+const PRINT_BUTTON_STYLE: React.CSSProperties = {
 	padding: "6px 14px",
 	background: LAGOON,
 	color: "#fff",

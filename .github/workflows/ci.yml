@@ -48,6 +48,13 @@ jobs:
       # fails to apply, and keeps the test schema honest to the migration history.
       - name: Apply migrations
         run: DATABASE_URL=$TEST_DATABASE_URL bun run db:migrate
+      # The print page-count suite (src/components/agenda/print-page-count.test.tsx)
+      # drives headless Chrome to count printed sheets, and FAILS rather than
+      # skips when no browser is present in CI. ubuntu-latest ships
+      # google-chrome-stable today, so no install step is needed — but that is an
+      # image detail outside this repo, so the dependency is named here. If this
+      # job starts failing with "CI has no Chrome on PATH", add a browser setup
+      # step; the gate is not optional.
       - name: Test
         run: bun run test
       - name: Build (client bundle + migrate runner)
@@ -81,6 +88,13 @@ jobs:
         run: bunx wxt prepare
       - name: Typecheck
         run: bunx tsc --noEmit
+      # The print page-count suite (src/components/agenda/print-page-count.test.tsx)
+      # drives headless Chrome to count printed sheets, and FAILS rather than
+      # skips when no browser is present in CI. ubuntu-latest ships
+      # google-chrome-stable today, so no install step is needed — but that is an
+      # image detail outside this repo, so the dependency is named here. If this
+      # job starts failing with "CI has no Chrome on PATH", add a browser setup
+      # step; the gate is not optional.
       - name: Test
         run: bun run test
       # WXT_GAVELUP_URL unset → production default (https://gavelup.app),
