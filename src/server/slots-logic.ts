@@ -542,7 +542,8 @@ function topUnclaimed(
 	return open[0]?.id ?? null;
 }
 
-/** Remove one unclaimed Speaker slot (+ one unclaimed Evaluator, best-effort). */
+/** Remove one unclaimed Speaker slot together with the evaluator paired to THAT
+ *  speaker (#512). */
 export async function applyRemoveSpeakerSlot(input: {
 	meetingId: string;
 	actorMemberId: string | null;
@@ -560,6 +561,8 @@ export async function applyRemoveSpeakerSlot(input: {
 			slotIndex: roleSlots.slotIndex,
 			status: roleSlots.status,
 			assignedMemberId: roleSlots.assignedMemberId,
+			assignedGuestId: roleSlots.assignedGuestId,
+			evaluatesSlotId: roleSlots.evaluatesSlotId,
 		})
 		.from(roleSlots)
 		.where(eq(roleSlots.meetingId, input.meetingId));
@@ -568,9 +571,61 @@ export async function applyRemoveSpeakerSlot(input: {
 
 	const speakerId = topUnclaimed(slots, speakerRoleId, roleOf);
 	if (!speakerId) throw new Error("Release a speaker before removing a slot.");
-	const evaluatorId = evaluatorRoleId
-		? topUnclaimed(slots, evaluatorRoleId, roleOf)
-		: null;
+
+	/**
+	 * Remove the evaluator paired to THIS speaker, not the highest unclaimed one.
+	 *
+	 * Picking each role's top unclaimed slot independently looks equivalent and
+	 * is not: the two picks diverge the moment a claimed speaker and a claimed
+	 * evaluator sit at different positions. Proven case — Speaker 1 claimed,
+	 * Evaluator 2 claimed:
+	 *
+	 *   before  Sp1 claimed · Sp2 open · Ev1 open→Sp1 · Ev2 claimed→Sp2
+	 *   after   Sp2 and Ev1 deleted — so the removed speaker's OWN evaluator
+	 *           (Ev2) survived pointing at nothing (the FK is ON DELETE SET
+	 *           NULL), while an evaluator whose speaker is still present was
+	 *           destroyed instead.
+	 *
+	 * The link only became available with #512; before it there was no way to
+	 * know which evaluator belonged to which speaker, which is why the original
+	 * picked by index.
+	 */
+	const claimed = (s: {
+		status: string;
+		assignedMemberId: string | null;
+		assignedGuestId: string | null;
+	}) => s.status !== "open" || !!s.assignedMemberId || !!s.assignedGuestId;
+
+	const pairedEvaluator = evaluatorRoleId
+		? slots.find(
+				(s) =>
+					s.roleDefinitionId === evaluatorRoleId &&
+					s.evaluatesSlotId === speakerId,
+			)
+		: undefined;
+
+	let evaluatorId: string | null;
+	if (pairedEvaluator) {
+		// Never destroy an assignment — the same stance as "Release the role
+		// before removing it" and "Release a speaker before removing a slot".
+		// Someone claimed this evaluator slot to evaluate THAT speaker; deleting
+		// the speaker under them would leave them evaluating nobody, and they
+		// would not find out until the agenda printed.
+		if (claimed(pairedEvaluator)) {
+			const speaker = slots.find((s) => s.id === speakerId);
+			throw new Error(
+				`Release the evaluator for Speaker ${(speaker?.slotIndex ?? 0) + 1} before removing that speaker.`,
+			);
+		}
+		evaluatorId = pairedEvaluator.id;
+	} else {
+		// No recorded pairing: a meeting created before #512 and not backfilled,
+		// or a club whose evaluator count never matched its speaker count. Fall
+		// back to the historical behaviour rather than removing nothing.
+		evaluatorId = evaluatorRoleId
+			? topUnclaimed(slots, evaluatorRoleId, roleOf)
+			: null;
+	}
 
 	await db.transaction(async (tx) => {
 		await tx.delete(roleSlots).where(eq(roleSlots.id, speakerId));

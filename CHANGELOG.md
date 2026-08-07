@@ -2,6 +2,29 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.8.3.0] - 2026-08-07
+
+### Changed
+
+- **The Speaker and Evaluator roles can no longer be turned off.** Their Disable button is now inert, with a note explaining why, and the server refuses the change even if something else asks for it. Disabling Speaker used to delete every open speaker slot across upcoming meetings while leaving the evaluators behind with nothing to evaluate — the same silent breakage that "− Remove speaker" was just fixed for, reached another way. Every meeting needs speakers and their evaluators; a meeting that genuinely has none is expressed by setting the count to 0 on that meeting, not by switching the role off for the whole club. Re-enabling still works, so any club that had already turned one off can put it back. #512
+
+## [1.8.2.0] - 2026-08-07
+
+### Fixed
+
+- **"− Remove speaker" now removes that speaker's own evaluator.** It used to remove the last speaker and the last evaluator as two separate decisions, which look the same until a claimed speaker and a claimed evaluator sit at different positions — then it deleted an evaluator whose speaker was still on the agenda, and left the removed speaker's evaluator behind with nothing to evaluate. Nothing errored; the agenda just quietly went wrong. #512
+- If the evaluator paired to that speaker has already been claimed, removal is now refused with a message naming which speaker to free up first, rather than pulling the speech out from under whoever volunteered to evaluate it. That matches how the rest of the app behaves — it never deletes a role someone has taken.
+
+## [1.8.1.0] - 2026-08-07
+
+### Changed
+
+- An evaluator whose speaker isn't assigned yet now reads **"Evaluates Speaker 2"** instead of the generic "Evaluates a speaker". On an agenda printed before the roster is filled, that tells the evaluator which speaking slot they're on — and it makes "linked, speaker still open" visibly different from "not linked at all", which previously looked identical on the page. A club running a single speaker gets "Evaluates Speaker", unnumbered, matching how the speaker's own row is labelled. #512
+
+### Added
+
+- `scripts/backfill-evaluator-pairing.ts` links evaluators to their speaker on meetings that already existed before that link started being recorded. Dry-run by default; `--apply` writes. It pairs only where the evidence is unambiguous — equal speaker and evaluator counts, contiguous slot numbering, nothing already linked — and reports everything it skips with the reason instead of guessing. A wrong link is worse than none: a blank row reads as "not filled in yet", while the wrong name next to an evaluator is a confident error on a printed agenda. #512
+
 ## [1.8.0.0] - 2026-08-06
 
 ### Added

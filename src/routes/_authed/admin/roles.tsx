@@ -15,6 +15,7 @@ import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { effectiveAdminClub } from "#/lib/effective-admin";
+import { pairedRoleIds } from "#/lib/meeting-roles";
 import {
 	createClubRole,
 	deleteClubRole,
@@ -56,6 +57,10 @@ const selectClass =
 function RolesManager() {
 	const { adminClub } = Route.useRouteContext();
 	const { roles } = Route.useLoaderData();
+	// Speaker + its paired Evaluator can't be turned off (#512) — the server
+	// refuses it, so don't render a button that only errors. Same helper the
+	// +/- speaker controls use, so "paired" means one thing across the app.
+	const paired = pairedRoleIds(roles);
 	const router = useRouter();
 	const clubId = adminClub.clubId;
 
@@ -133,6 +138,7 @@ function RolesManager() {
 						key={role.id}
 						clubId={clubId}
 						role={role}
+						isPaired={paired.has(role.id)}
 						isFirst={i === 0}
 						isLast={i === roles.length - 1}
 						onMoveUp={() => reorder(i, -1)}
@@ -182,6 +188,7 @@ function toggleToastMessage(
 function RoleCard({
 	clubId,
 	role,
+	isPaired,
 	isFirst,
 	isLast,
 	onMoveUp,
@@ -190,6 +197,8 @@ function RoleCard({
 }: {
 	clubId: string;
 	role: RoleDefinitionRow;
+	/** Speaker or its paired Evaluator — cannot be disabled (#512). */
+	isPaired: boolean;
 	isFirst: boolean;
 	isLast: boolean;
 	onMoveUp: () => void;
@@ -378,12 +387,14 @@ function RoleCard({
 								type="button"
 								size="sm"
 								variant="outline"
-								disabled={toggling}
+								disabled={toggling || (isPaired && role.enabled)}
 								onClick={onToggleEnabled}
 								title={
-									role.enabled
-										? "Stop offering this role on future meetings, without deleting it"
-										: "Start offering this role on future meetings again"
+									isPaired && role.enabled
+										? "Every meeting needs speakers and their evaluators. Set the count to 0 on a meeting instead."
+										: role.enabled
+											? "Stop offering this role on future meetings, without deleting it"
+											: "Start offering this role on future meetings again"
 								}
 							>
 								{toggling ? (
