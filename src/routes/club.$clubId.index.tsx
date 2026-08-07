@@ -8,6 +8,7 @@ import { GuestResources } from "#/components/club/guest-resources";
 import { useRequireIdentity } from "#/components/club/identity-gate";
 import { SeasonGrid } from "#/components/club/season-grid";
 import { ViewingAs } from "#/components/club/viewing-as";
+import { VisitCta } from "#/components/club/visit-cta";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
@@ -54,7 +55,7 @@ export const Route = createFileRoute("/club/$clubId/")({
 
 function ClubHome() {
 	const { clubId } = Route.useParams();
-	const { clubUuid, clubName, effectiveMemberId, authCtx } =
+	const { clubUuid, clubName, shell, effectiveMemberId, authCtx } =
 		Route.useRouteContext();
 	const { grid, profile } = Route.useLoaderData();
 	const { view, count } = Route.useSearch();
@@ -115,6 +116,12 @@ function ClubHome() {
 			<AboutClub clubName={clubName} profile={profile} />
 
 			<GuestResources clubId={clubId} />
+
+			{/* The visit funnel (#319). `shell` is true for a signed-in member of
+			    THIS club, who is not planning a visit; VisitCta renders nothing for
+			    them. The guest book itself was previously reachable only via the
+			    printed QR code an officer generates on /admin/vp-membership. */}
+			<VisitCta clubId={clubId} clubName={clubName} isMember={shell} />
 
 			{/* "This is me" — graduate a public picker into a real account (#266). */}
 			{member && source === "anon" ? (

@@ -99,8 +99,13 @@ function GuestBook() {
 							<h1 className="font-display text-2xl font-semibold text-foreground">
 								Welcome to {clubName} 👋
 							</h1>
+							{/* Not "today": since #319 this page is also reachable from a
+							    call-to-action on the public club page, so a guest can arrive
+							    days before the meeting they plan to attend. Still reads
+							    correctly for the day-of QR scan, which remains the primary
+							    path. */}
 							<p className="text-sm text-muted-foreground">
-								Visiting us today? Sign our guest book so we can say hello.
+								Visiting us soon? Sign our guest book so we can say hello.
 							</p>
 						</header>
 
