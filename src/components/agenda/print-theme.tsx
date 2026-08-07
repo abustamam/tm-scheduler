@@ -29,6 +29,111 @@ export const HAIR = "1px solid rgba(23,58,64,.08)";
 export const PAGE_W = 816;
 export const PAGE_H = 1056;
 
+/**
+ * The stylesheet every print route serves. One copy, because three diverged.
+ *
+ * The rules are not cosmetic and the reset is the load-bearing one: `@page` sets
+ * `margin: 0` and each sheet is exactly `PAGE_H` tall, so leaving the screen-only
+ * 28px `.pgwrap` padding in place pushes 28 + 1056 + 28 = 1112px into a 1056px
+ * page box and emits a blank second sheet. That shipped once (v1.3.0.0) and got
+ * past six test files, typecheck, lint and two reviews, because nothing in this
+ * repo rendered a page and counted it. `print-page-count.test.tsx` does now, and
+ * deleting the reset below fails it.
+ *
+ * This is the UNION of what the three routes carried, and each addition is inert
+ * where it is not needed:
+ *
+ *   · `gap: 0 !important` exists for the agenda alone. `TwoPage` sets an inline
+ *     `gap: 26` to space its two sheets on screen; unreset, that gap becomes a
+ *     26px band between printed pages. The other surfaces have no `.pgwrap` gap
+ *     for it to touch.
+ *   · `break-after: page` paired with `.agenda-page:last-child { break-after:
+ *     auto }` is the multi-sheet pagination the poster used to omit. The pair is
+ *     harmless on a one-sheet page precisely because the only sheet is also the
+ *     last child. Keep them together — half of this pair is how you get a
+ *     trailing blank page.
+ *
+ * What is deliberately NOT here: the roles route's screen-only
+ * `display: flex; justify-content: center` on `.pgwrap`. Flex defaults to a row,
+ * and the agenda's `.pgwrap` holds two stacked sheets, so hoisting that rule
+ * would lay them out side by side. It stays a per-surface override.
+ */
+export const PRINT_PAGE_CSS = `
+	@media screen { body { background: #d8e6dd; } }
+	.pgwrap { padding: 28px 0; }
+	@media print {
+		.no-print { display: none !important; }
+		body { background: #fff; }
+		.pgwrap { padding: 0 !important; gap: 0 !important; }
+		/* Every sheet is an .agenda-page — covers the single-page editorial and
+		   grid layouts too, which aren't wrapped in .pgwrap at all. */
+		.agenda-page { box-shadow: none !important; break-after: page; break-inside: avoid; }
+		.agenda-page:last-child { break-after: auto; }
+		@page { size: letter portrait; margin: 0; }
+	}
+`;
+
+/**
+ * The floating screen-only toolbar each print route pins top-right.
+ *
+ * `flexWrap` and `justifyContent` are load-bearing for the agenda and inert
+ * elsewhere, which is why they are safe to share. The agenda's toolbar carries
+ * four layout tabs plus Share and Print; anchored right with no width, an
+ * unwrapped row grows leftward off the viewport on a phone, and a
+ * `position: fixed` toolbar cannot be scrolled back to. On the two-control
+ * toolbars there is nothing to wrap and no free space to justify, so both are
+ * no-ops there.
+ */
+export const PRINT_TOOLBAR_STYLE: React.CSSProperties = {
+	position: "fixed",
+	top: 12,
+	right: 12,
+	zIndex: 10,
+	display: "flex",
+	flexWrap: "wrap",
+	justifyContent: "flex-end",
+	gap: 8,
+	alignItems: "center",
+	background: "#fff",
+	borderRadius: 10,
+	padding: 6,
+	boxShadow: "0 6px 20px rgba(23,58,64,.18)",
+};
+
+/** The screen-only toolbar wrapper. `no-print` is what `PRINT_PAGE_CSS` hides. */
+export function PrintToolbar({ children }: { children: React.ReactNode }) {
+	return (
+		<div className="no-print" style={PRINT_TOOLBAR_STYLE}>
+			{children}
+		</div>
+	);
+}
+
+/** Brand button style, tokenised — two routes hardcoded LAGOON's hex. */
+export const PRINT_BUTTON_STYLE: React.CSSProperties = {
+	padding: "6px 14px",
+	background: LAGOON,
+	color: "#fff",
+	border: 0,
+	borderRadius: 7,
+	fontSize: 13,
+	fontWeight: 700,
+	cursor: "pointer",
+};
+
+/** The Print button. Identical at all three call sites before this existed. */
+export function PrintButton() {
+	return (
+		<button
+			type="button"
+			onClick={() => window.print()}
+			style={PRINT_BUTTON_STYLE}
+		>
+			Print
+		</button>
+	);
+}
+
 /** The letter-sized sheet: fixed size, clipped, prints its background fills. */
 export const PAGE_OUTER: React.CSSProperties = {
 	width: PAGE_W,

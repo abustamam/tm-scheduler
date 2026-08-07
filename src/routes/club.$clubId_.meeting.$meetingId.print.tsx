@@ -7,6 +7,11 @@ import {
 	MeetingAgendaPrint,
 } from "#/components/agenda/meeting-agenda-print";
 import { OfflineBadge } from "#/components/agenda/offline-badge";
+import {
+	PRINT_PAGE_CSS,
+	PrintButton,
+	PrintToolbar,
+} from "#/components/agenda/print-theme";
 import { ShareLinkButton } from "#/components/share-link-button";
 import { buildRosterEntries } from "#/lib/agenda";
 import {
@@ -197,7 +202,7 @@ function PrintAgenda() {
 
 	return (
 		<div>
-			<div className="no-print" style={toolbarStyle}>
+			<PrintToolbar>
 				{bare ? null : (
 					<div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
 						{LAYOUTS.map((l) => (
@@ -222,13 +227,7 @@ function PrintAgenda() {
 						label="Copy shareable link"
 					/>
 				)}
-				<button
-					type="button"
-					onClick={() => window.print()}
-					style={printBtnStyle}
-				>
-					Print
-				</button>
+				<PrintButton />
 				{/* The "Available offline" pill lives in the toolbar, not over the
 				    agenda (#361). Mounted here it also gives the genuinely-offline
 				    banner — which pins itself top-center — the toolbar's stacking
@@ -239,7 +238,7 @@ function PrintAgenda() {
 				    phone. This pill is passive reassurance and the cheapest thing to
 				    demote; the layout tabs and Print are why the toolbar exists. */}
 				{bare ? null : <OfflineBadge id={meetingId} />}
-			</div>
+			</PrintToolbar>
 			{!bare && flexBanner ? (
 				<div
 					className="no-print"
@@ -257,20 +256,7 @@ function PrintAgenda() {
 					{flexBanner}
 				</div>
 			) : null}
-			<style>{`
-				@media screen { body { background: #d8e6dd; } }
-				.pgwrap { padding: 28px 0; }
-				@media print {
-					.no-print { display: none !important; }
-					body { background: #fff; }
-					.pgwrap { padding: 0 !important; gap: 0 !important; }
-					/* Every sheet is an .agenda-page — covers the single-page
-					   editorial/grid layouts too, which aren't wrapped in .pgwrap. */
-					.agenda-page { box-shadow: none !important; break-after: page; break-inside: avoid; }
-					.agenda-page:last-child { break-after: auto; }
-					@page { size: letter portrait; margin: 0; }
-				}
-			`}</style>
+			<style>{PRINT_PAGE_CSS}</style>
 			<MeetingAgendaPrint
 				layout={layout}
 				header={header}
@@ -282,26 +268,6 @@ function PrintAgenda() {
 		</div>
 	);
 }
-
-const toolbarStyle: React.CSSProperties = {
-	position: "fixed",
-	top: 12,
-	right: 12,
-	zIndex: 10,
-	display: "flex",
-	// Wrap, don't overflow. Anchored to the right with no width, an unwrapped row
-	// grows leftward off the viewport on a phone and the lost controls cannot be
-	// scrolled back to (the toolbar is `position: fixed`). Right-justified so the
-	// wrapped rows stay stacked under the anchor.
-	flexWrap: "wrap",
-	justifyContent: "flex-end",
-	gap: 8,
-	alignItems: "center",
-	background: "#fff",
-	borderRadius: 10,
-	padding: 6,
-	boxShadow: "0 6px 20px rgba(23,58,64,.18)",
-};
 
 const tabStyle: React.CSSProperties = {
 	padding: "6px 12px",
@@ -315,15 +281,4 @@ const tabStyle: React.CSSProperties = {
 const tabActiveStyle: React.CSSProperties = {
 	background: "#173a40",
 	color: "#fff",
-};
-
-const printBtnStyle: React.CSSProperties = {
-	padding: "6px 14px",
-	background: "#328f97",
-	color: "#fff",
-	border: 0,
-	borderRadius: 7,
-	fontSize: 13,
-	fontWeight: 700,
-	cursor: "pointer",
 };

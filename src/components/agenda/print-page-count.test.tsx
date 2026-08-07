@@ -26,48 +26,26 @@ import {
 	type AgendaLayout,
 	MeetingAgendaPrint,
 } from "./meeting-agenda-print";
+import { PRINT_PAGE_CSS } from "./print-theme";
 import { WordOfTheDayPoster } from "./word-of-the-day-poster";
 
 // ---------------------------------------------------------------------------
-// The style blocks, verbatim from the routes. Replaced by the shared constant
-// once the extraction lands; the numbers below must not move when that happens.
+// Every surface now serves the SAME constant. These three bindings are what
+// makes that claim checkable rather than asserted: the page counts below were
+// recorded against the three divergent copies the routes carried before the
+// extraction, and they must not move now that one constant replaces them.
+//
+// The roles route is the one surface that could not be fully unioned. It centres
+// its single sheet on screen, and flex defaults to a row, so hoisting that rule
+// into the shared constant would lay the agenda's two stacked sheets side by
+// side. It keeps the rule as an override, exactly as the route does.
 // ---------------------------------------------------------------------------
 
-const CSS_AGENDA_PRINT = `
-	@media screen { body { background: #d8e6dd; } }
-	.pgwrap { padding: 28px 0; }
-	@media print {
-		.no-print { display: none !important; }
-		body { background: #fff; }
-		.pgwrap { padding: 0 !important; gap: 0 !important; }
-		.agenda-page { box-shadow: none !important; break-after: page; break-inside: avoid; }
-		.agenda-page:last-child { break-after: auto; }
-		@page { size: letter portrait; margin: 0; }
-	}
-`;
-
-const CSS_WORD = `
-	@media screen { body { background: #d8e6dd; } }
-	.pgwrap { padding: 28px 0; }
-	@media print {
-		.no-print { display: none !important; }
-		body { background: #fff; }
-		.pgwrap { padding: 0 !important; }
-		.agenda-page { box-shadow: none !important; }
-		@page { size: letter portrait; margin: 0; }
-	}
-`;
-
-const CSS_ROLES = `
-	@media screen { body { background: #d8e6dd; } }
-	.pgwrap { padding: 28px 0; display: flex; justify-content: center; }
-	@media print {
-		.no-print { display: none !important; }
-		body { background: #fff; }
-		.pgwrap { padding: 0 !important; }
-		.agenda-page { box-shadow: none !important; break-after: page; break-inside: avoid; }
-		.agenda-page:last-child { break-after: auto; }
-		@page { size: letter portrait; margin: 0; }
+const CSS_AGENDA_PRINT = PRINT_PAGE_CSS;
+const CSS_WORD = PRINT_PAGE_CSS;
+const CSS_ROLES = `${PRINT_PAGE_CSS}
+	@media screen {
+		.pgwrap { display: flex; justify-content: center; }
 	}
 `;
 
