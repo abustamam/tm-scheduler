@@ -7,6 +7,7 @@ import {
 	clubProfileSchema,
 	getClubAgendaSettings,
 	getClubProfile,
+	getPublicClubProfile,
 	resolveClubByIdentifier,
 } from "./clubs-logic";
 import { requireClubRole, requireClubViewAccess, requireUser } from "./guards";
@@ -28,6 +29,14 @@ export const getClubProfileSettings = createServerFn({ method: "GET" })
 		await requireClubViewAccess(currentUser.id, clubId);
 		return getClubProfile(clubId);
 	});
+
+/** The club's public-facing profile (district / mission / meeting schedule) for
+ *  the "About this club" block a guest sees on the public club page (#318).
+ *  PUBLIC — no session required, mirroring `getPublicClubRoles`. Returns a
+ *  narrower shape than `getClubProfileSettings`; see `getPublicClubProfile`. */
+export const getPublicClubProfileFn = createServerFn({ method: "GET" })
+	.validator((clubId: unknown) => uuid.parse(clubId))
+	.handler(async ({ data: clubId }) => getPublicClubProfile(clubId));
 
 /** Set/clear the club's district, mission, and meeting schedule.
  *  AUTHED — requires admin club role. */

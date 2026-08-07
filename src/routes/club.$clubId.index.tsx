@@ -3,6 +3,7 @@ import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { CalendarDays, Loader2, MailCheck, Mic, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { AboutClub } from "#/components/club/about-club";
 import { GuestResources } from "#/components/club/guest-resources";
 import { useRequireIdentity } from "#/components/club/identity-gate";
 import { SeasonGrid } from "#/components/club/season-grid";
@@ -15,6 +16,7 @@ import { authClient } from "#/lib/auth-client";
 import { formatMeetingDate, formatMeetingTimeRange } from "#/lib/format";
 import { type StoredMember, useEffectiveMember } from "#/lib/member-identity";
 import type { Orientation } from "#/lib/season-grid-view";
+import { getPublicClubProfileFn } from "#/server/clubs";
 import { listMemberCommitments } from "#/server/meetings";
 import {
 	getPublicSeasonGrid,
@@ -36,17 +38,25 @@ export const Route = createFileRoute("/club/$clubId/")({
 					: 8,
 	}),
 	loaderDeps: ({ search }) => ({ count: search.count }),
-	loader: ({ context, deps }) =>
-		getPublicSeasonGrid({
-			data: { clubId: context.clubUuid, count: deps.count },
-		}),
+	loader: async ({ context, deps }) => {
+		// Parallel — the profile is decorative and must not delay the sign-up
+		// sheet, which is the primary surface.
+		const [grid, profile] = await Promise.all([
+			getPublicSeasonGrid({
+				data: { clubId: context.clubUuid, count: deps.count },
+			}),
+			getPublicClubProfileFn({ data: context.clubUuid }),
+		]);
+		return { grid, profile };
+	},
 	component: ClubHome,
 });
 
 function ClubHome() {
 	const { clubId } = Route.useParams();
-	const { clubUuid, effectiveMemberId, authCtx } = Route.useRouteContext();
-	const grid = Route.useLoaderData();
+	const { clubUuid, clubName, effectiveMemberId, authCtx } =
+		Route.useRouteContext();
+	const { grid, profile } = Route.useLoaderData();
 	const { view, count } = Route.useSearch();
 	// Shell-wrapped signed-in member → session identity; anonymous → localStorage
 	// pick (#317). `source` hides the anon-only "not you?" + claim affordances.
@@ -100,7 +110,11 @@ function ClubHome() {
 				<ViewingAs member={member} promptIdentity={promptIdentity} />
 			) : null}
 
-			<GuestResources />
+			{/* The club's own basics — when it meets, which district, its mission
+			    (#318). Renders nothing when all three are unset. */}
+			<AboutClub clubName={clubName} profile={profile} />
+
+			<GuestResources clubId={clubId} />
 
 			{/* "This is me" — graduate a public picker into a real account (#266). */}
 			{member && source === "anon" ? (

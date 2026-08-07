@@ -111,6 +111,44 @@ export async function getClubProfile(
 	return row ?? null;
 }
 
+/** The subset of the club profile shown to ANONYMOUS visitors on the public
+ *  club page (#318) — what the club is and when it meets. */
+export type PublicClubProfile = {
+	district: string | null;
+	mission: string | null;
+	meetingSchedule: string | null;
+};
+
+/**
+ * The club's public-facing profile. PUBLIC — no session, so the column list is
+ * deliberately narrow and spelled out rather than reusing `getClubProfile`.
+ *
+ * `getClubProfile` also returns `defaultCountryCode`, which is internal dialing
+ * config for the WhatsApp nudge links (#295) and has no business on an
+ * unauthenticated payload. Adding a column to `clubs` must not silently widen
+ * what an anonymous visitor can read, so this query names its three columns and
+ * nothing else. The public club surfaces are a SOFT gate — never put anything
+ * member-identifying on their payload.
+ *
+ * All three fields are already normalized on write (`emptyToNull` below), so a
+ * stored value is either null or non-blank; callers still guard on whitespace
+ * for rows that predate that normalization.
+ */
+export async function getPublicClubProfile(
+	clubId: string,
+): Promise<PublicClubProfile | null> {
+	const [row] = await db
+		.select({
+			district: clubs.district,
+			mission: clubs.mission,
+			meetingSchedule: clubs.meetingSchedule,
+		})
+		.from(clubs)
+		.where(eq(clubs.id, clubId))
+		.limit(1);
+	return row ?? null;
+}
+
 // Empty strings collapse to null so cleared fields disappear from the agenda
 // (no empty labels/artifacts) rather than persisting a blank value.
 const emptyToNull = z

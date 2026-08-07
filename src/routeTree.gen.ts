@@ -32,6 +32,7 @@ import { Route as AuthedSuperadminIndexRouteImport } from './routes/_authed/supe
 import { Route as AuthedMeetingsIndexRouteImport } from './routes/_authed/meetings.index'
 import { Route as ClubClubIdRolesRouteImport } from './routes/club.$clubId_.roles'
 import { Route as ClubClubIdGuestBookRouteImport } from './routes/club.$clubId_.guest-book'
+import { Route as ClubClubIdRolesGuideRouteImport } from './routes/club.$clubId.roles-guide'
 import { Route as ApiPathwaysIngestRouteImport } from './routes/api/pathways/ingest'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as AuthedSuperadminDuplicatePeopleRouteImport } from './routes/_authed/superadmin/duplicate-people'
@@ -171,6 +172,11 @@ const ClubClubIdGuestBookRoute = ClubClubIdGuestBookRouteImport.update({
   id: '/club/$clubId_/guest-book',
   path: '/club/$clubId/guest-book',
   getParentRoute: () => rootRouteImport,
+} as any)
+const ClubClubIdRolesGuideRoute = ClubClubIdRolesGuideRouteImport.update({
+  id: '/roles-guide',
+  path: '/roles-guide',
+  getParentRoute: () => ClubClubIdRoute,
 } as any)
 const ApiPathwaysIngestRoute = ApiPathwaysIngestRouteImport.update({
   id: '/api/pathways/ingest',
@@ -339,6 +345,7 @@ export interface FileRoutesByFullPath {
   '/superadmin/duplicate-people': typeof AuthedSuperadminDuplicatePeopleRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/pathways/ingest': typeof ApiPathwaysIngestRoute
+  '/club/$clubId/roles-guide': typeof ClubClubIdRolesGuideRoute
   '/club/$clubId/guest-book': typeof ClubClubIdGuestBookRoute
   '/club/$clubId/roles': typeof ClubClubIdRolesRoute
   '/meetings/': typeof AuthedMeetingsIndexRoute
@@ -386,6 +393,7 @@ export interface FileRoutesByTo {
   '/superadmin/duplicate-people': typeof AuthedSuperadminDuplicatePeopleRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/pathways/ingest': typeof ApiPathwaysIngestRoute
+  '/club/$clubId/roles-guide': typeof ClubClubIdRolesGuideRoute
   '/club/$clubId/guest-book': typeof ClubClubIdGuestBookRoute
   '/club/$clubId/roles': typeof ClubClubIdRolesRoute
   '/meetings': typeof AuthedMeetingsIndexRoute
@@ -437,6 +445,7 @@ export interface FileRoutesById {
   '/_authed/superadmin/duplicate-people': typeof AuthedSuperadminDuplicatePeopleRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/pathways/ingest': typeof ApiPathwaysIngestRoute
+  '/club/$clubId/roles-guide': typeof ClubClubIdRolesGuideRoute
   '/club/$clubId_/guest-book': typeof ClubClubIdGuestBookRoute
   '/club/$clubId_/roles': typeof ClubClubIdRolesRoute
   '/_authed/meetings/': typeof AuthedMeetingsIndexRoute
@@ -488,6 +497,7 @@ export interface FileRouteTypes {
     | '/superadmin/duplicate-people'
     | '/api/auth/$'
     | '/api/pathways/ingest'
+    | '/club/$clubId/roles-guide'
     | '/club/$clubId/guest-book'
     | '/club/$clubId/roles'
     | '/meetings/'
@@ -535,6 +545,7 @@ export interface FileRouteTypes {
     | '/superadmin/duplicate-people'
     | '/api/auth/$'
     | '/api/pathways/ingest'
+    | '/club/$clubId/roles-guide'
     | '/club/$clubId/guest-book'
     | '/club/$clubId/roles'
     | '/meetings'
@@ -585,6 +596,7 @@ export interface FileRouteTypes {
     | '/_authed/superadmin/duplicate-people'
     | '/api/auth/$'
     | '/api/pathways/ingest'
+    | '/club/$clubId/roles-guide'
     | '/club/$clubId_/guest-book'
     | '/club/$clubId_/roles'
     | '/_authed/meetings/'
@@ -786,6 +798,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/club/$clubId/guest-book'
       preLoaderRoute: typeof ClubClubIdGuestBookRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/club/$clubId/roles-guide': {
+      id: '/club/$clubId/roles-guide'
+      path: '/roles-guide'
+      fullPath: '/club/$clubId/roles-guide'
+      preLoaderRoute: typeof ClubClubIdRolesGuideRouteImport
+      parentRoute: typeof ClubClubIdRoute
     }
     '/api/pathways/ingest': {
       id: '/api/pathways/ingest'
@@ -1036,11 +1055,13 @@ const AuthedRouteWithChildren =
   AuthedRoute._addFileChildren(AuthedRouteChildren)
 
 interface ClubClubIdRouteChildren {
+  ClubClubIdRolesGuideRoute: typeof ClubClubIdRolesGuideRoute
   ClubClubIdIndexRoute: typeof ClubClubIdIndexRoute
   ClubClubIdMeetingMeetingIdRoute: typeof ClubClubIdMeetingMeetingIdRoute
 }
 
 const ClubClubIdRouteChildren: ClubClubIdRouteChildren = {
+  ClubClubIdRolesGuideRoute: ClubClubIdRolesGuideRoute,
   ClubClubIdIndexRoute: ClubClubIdIndexRoute,
   ClubClubIdMeetingMeetingIdRoute: ClubClubIdMeetingMeetingIdRoute,
 }
