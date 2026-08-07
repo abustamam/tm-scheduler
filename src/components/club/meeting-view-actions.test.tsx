@@ -39,7 +39,11 @@ describe("MeetingViewActions", () => {
 		await renderActions({ wordOfTheDay: null });
 		expect(screen.getByText("Print agenda")).toBeTruthy();
 		expect(screen.getByText("Present")).toBeTruthy();
-		expect(screen.getByText("Role sheet")).toBeTruthy();
+		// #542: "All role sheets" (was "Role sheet") — the club-level printable,
+		// disambiguated from the meeting-specific "This meeting's role sheets"
+		// download menu that renders beside this component on the meeting page.
+		const link = screen.getByText("All role sheets").closest("a");
+		expect(link?.getAttribute("href")).toBe("/club/downtown/roles");
 	});
 
 	it("shows the Word poster button when the meeting has a word", async () => {

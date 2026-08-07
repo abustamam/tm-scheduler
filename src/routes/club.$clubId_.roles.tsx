@@ -6,7 +6,7 @@
 // Pathless-escaped (`$clubId_`) so it renders OUTSIDE the club chrome, exactly
 // like the sibling print/present routes, and carries the same `?chrome=none`
 // clean/shareable mode.
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import {
 	ClubRoleSheet,
 	type RoleSheetEntry,
@@ -57,6 +57,35 @@ export const Route = createFileRoute("/club/$clubId_/roles")({
 	}),
 });
 
+/**
+ * Screen-only wayfinding pill (#542, F-009): this print-styled page has no
+ * header/nav, and guests arriving via shared links dead-ended on it. Mirrors
+ * the `PrintToolbar` chrome, pinned top-LEFT; hidden when printing by the
+ * shared `.no-print` rule in `PRINT_PAGE_CSS` (the print page-count suite
+ * reproduces it in the roles fixture). Truncates so a long club name cannot
+ * collide with the toolbar on a phone. Shown in `chrome=none` mode too — the
+ * shared link IS that mode, and its recipients are exactly who dead-ends.
+ */
+const BACK_LINK_STYLE: React.CSSProperties = {
+	position: "fixed",
+	top: 12,
+	left: 12,
+	zIndex: 10,
+	display: "block",
+	maxWidth: "min(48vw, 320px)",
+	overflow: "hidden",
+	textOverflow: "ellipsis",
+	whiteSpace: "nowrap",
+	background: "#fff",
+	borderRadius: 10,
+	padding: "9px 14px",
+	boxShadow: "0 6px 20px rgba(23,58,64,.18)",
+	color: INK,
+	fontSize: 13,
+	fontWeight: 700,
+	textDecoration: "none",
+};
+
 function RoleSheet() {
 	const { chrome } = Route.useSearch();
 	const { clubId: clubIdParam } = Route.useParams();
@@ -72,6 +101,15 @@ function RoleSheet() {
 
 	return (
 		<div>
+			<Link
+				to="/club/$clubId"
+				params={{ clubId: clubIdParam }}
+				search={{ view: "roles", count: 8 }}
+				className="no-print"
+				style={BACK_LINK_STYLE}
+			>
+				← {club.name}
+			</Link>
 			<PrintToolbar>
 				{bare ? null : (
 					<ShareLinkButton

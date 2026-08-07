@@ -194,6 +194,37 @@ describe("SeasonGrid prospective claim + undo", () => {
 	});
 });
 
+describe("SeasonGrid legend (#542, F-008)", () => {
+	// Matches one <span> whose full normalized text is `text` — the legend
+	// entries pair a short code with its decoded label in a single span. The
+	// matcher reads `el.textContent` (not the `content` arg): testing-library
+	// hands the matcher only the element's DIRECT text nodes, and the short
+	// code sits in a nested <span>.
+	const normalized = (el: Element | null) =>
+		el?.textContent?.replace(/\s+/g, " ").trim();
+	const legendEntry = (text: string) =>
+		screen.getByText(
+			(_, el) => el?.tagName === "SPAN" && normalized(el) === text,
+		);
+
+	it("decodes the Members × Meetings short codes under the grid", async () => {
+		await renderMembersGrid();
+		expect(legendEntry("Time Timer")).toBeTruthy();
+		expect(legendEntry("NA Not available")).toBeTruthy();
+		expect(legendEntry("· Free")).toBeTruthy();
+	});
+
+	it("shows no legend in the roles orientation — cells spell out full names there", async () => {
+		await renderGrid(vi.fn(async () => null));
+		expect(
+			screen.queryByText(
+				(_, el) =>
+					el?.tagName === "SPAN" && normalized(el) === "NA Not available",
+			),
+		).toBeNull();
+	});
+});
+
 describe("SeasonGrid contacted marker (#340)", () => {
 	it("surfaces the contacted state on an editable free member cell, reachably and accessibly", async () => {
 		await renderMembersGrid();

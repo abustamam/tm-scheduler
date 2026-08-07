@@ -487,3 +487,38 @@ a {
 	padding: 0.1rem 0.3rem;
 	border-radius: 4px;
 }
+
+/* Horizontal-scroll edge fade (#542, F-006). The sign-up grid's scroll
+   container hides columns past the right edge with no visual hint on a phone.
+   Applied to the SCROLL CONTAINER itself (keep the border on a wrapper — the
+   mask would fade the container's own border). CSS-only: a scroll-driven
+   animation retracts the fade as you approach the end, so the last column is
+   never washed once fully scrolled. Wrapped in @supports so browsers without
+   scroll-driven animations get today's behavior (no fade) rather than a fade
+   that lies at the end of the scroll range. The left edge needs no fade: the
+   sticky label column already casts a shadow over columns sliding beneath it. */
+@property --scroll-fade-r {
+	syntax: '<length>';
+	inherits: false;
+	initial-value: 0px;
+}
+@supports (animation-timeline: scroll(self x)) {
+	.scroll-fade-r {
+		mask-image: linear-gradient(
+			to right,
+			#000 calc(100% - var(--scroll-fade-r)),
+			transparent 100%
+		);
+		animation: scroll-fade-r linear both;
+		animation-timeline: scroll(self x);
+	}
+	@keyframes scroll-fade-r {
+		0%,
+		92% {
+			--scroll-fade-r: 32px;
+		}
+		100% {
+			--scroll-fade-r: 0px;
+		}
+	}
+}
