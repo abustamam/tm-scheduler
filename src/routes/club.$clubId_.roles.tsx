@@ -11,7 +11,13 @@ import {
 	ClubRoleSheet,
 	type RoleSheetEntry,
 } from "#/components/agenda/club-role-sheet";
-import { INK, MUTED } from "#/components/agenda/print-theme";
+import {
+	INK,
+	MUTED,
+	PRINT_PAGE_CSS,
+	PrintButton,
+	PrintToolbar,
+} from "#/components/agenda/print-theme";
 import { PublicFooter } from "#/components/public-footer";
 import { ShareLinkButton } from "#/components/share-link-button";
 import { clubLogoUrl } from "#/lib/club-logo-url";
@@ -66,31 +72,22 @@ function RoleSheet() {
 
 	return (
 		<div>
-			<div className="no-print" style={toolbarStyle}>
+			<PrintToolbar>
 				{bare ? null : (
 					<ShareLinkButton
 						path={`/club/${clubIdParam}/roles?chrome=none`}
 						label="Copy shareable link"
 					/>
 				)}
-				<button
-					type="button"
-					onClick={() => window.print()}
-					style={printBtnStyle}
-				>
-					Print
-				</button>
-			</div>
-			<style>{`
-				@media screen { body { background: #d8e6dd; } }
-				.pgwrap { padding: 28px 0; display: flex; justify-content: center; }
-				@media print {
-					.no-print { display: none !important; }
-					body { background: #fff; }
-					.pgwrap { padding: 0 !important; }
-					.agenda-page { box-shadow: none !important; break-after: page; break-inside: avoid; }
-					.agenda-page:last-child { break-after: auto; }
-					@page { size: letter portrait; margin: 0; }
+				<PrintButton />
+			</PrintToolbar>
+			{/* The shared sheet, plus the one rule that cannot be shared: this
+			    page centres its single sheet on screen. Flex defaults to a row,
+			    and the agenda's .pgwrap stacks two sheets, so hoisting this into
+			    PRINT_PAGE_CSS would lay those out side by side. */}
+			<style>{`${PRINT_PAGE_CSS}
+				@media screen {
+					.pgwrap { display: flex; justify-content: center; }
 				}
 			`}</style>
 			<ClubRoleSheet
@@ -114,28 +111,3 @@ function RoleSheet() {
 		</div>
 	);
 }
-
-const toolbarStyle: React.CSSProperties = {
-	position: "fixed",
-	top: 12,
-	right: 12,
-	zIndex: 10,
-	display: "flex",
-	gap: 8,
-	alignItems: "center",
-	background: "#fff",
-	borderRadius: 10,
-	padding: 6,
-	boxShadow: "0 6px 20px rgba(23,58,64,.18)",
-};
-
-const printBtnStyle: React.CSSProperties = {
-	padding: "6px 14px",
-	background: "#328f97",
-	color: "#fff",
-	border: 0,
-	borderRadius: 7,
-	fontSize: 13,
-	fontWeight: 700,
-	cursor: "pointer",
-};

@@ -87,6 +87,18 @@ tests vanish from the run and the pass count still reads green. A plain `bun run
 assertions that CI catches. `tm_test` is push-synced, so after a schema change run
 `DATABASE_URL=…tm_test bun run db:push --force` — that is the one database `db:push` is for.
 
+**The print page-count suite needs Chrome on `PATH`.**
+`src/components/agenda/print-page-count.test.tsx` renders each print surface, inlines the stylesheet
+the route serves, and drives headless Chrome (`--print-to-pdf`) to count the sheets it produces — the
+only gate here that can see print CSS at all. No new dependency: the harness
+(`src/test/print-page-count.ts`) shells out to `google-chrome` / `google-chrome-stable` / `chromium` /
+`chromium-browser`, whichever runs first. With none of them present those tests **skip locally**, so
+`bun run test` still works for someone without a browser; **in CI they fail** instead
+(`CI has no Chrome on PATH`), because a silently absent print gate reads exactly like a passing one —
+the same failure shape as the DB-backed suites above. `ubuntu-latest` ships Chrome, so CI needs no
+install step; the dependency is named in `.github/workflows/ci.yml` beside both `Test` steps so a
+runner-image change is diagnosable.
+
 **Read the lint gate with `--diagnostic-level=error`.** `src/db/seed.ts` carries ~118 pre-existing
 `noNonNullAssertion` warnings, which Biome does not fail on, so the tail of a `bun run check` run is
 a wall of noise and a single real error scrolls past. `bunx biome check --diagnostic-level=error` is
@@ -102,7 +114,7 @@ Assessed against the diff, not the whole repo: every branch, error path and user
 introduces should have a test that exercises it. `/ship`'s coverage audit reads these numbers and
 gates on them.
 
-Five coverage traps this repo has actually hit, all worth checking when a number looks fine:
+Six coverage traps this repo has actually hit, all worth checking when a number looks fine:
 
 - **A test can pin the wrong thing after a rename.** An assertion matching a role name by string
   (`r.who === "Toastmaster of the Day"`) stopped being unique once a second beat rendered the same
@@ -151,6 +163,24 @@ Five coverage traps this repo has actually hit, all worth checking when a number
   NUMBERS in `lib/` (`src/lib/minutes-render-caps.ts`, `src/lib/speaker-limits.ts`) and let the
   renderer import them.
 
+- **jsdom performs no layout, so a property of rendered GEOMETRY is untestable in process.** Print CSS
+  was invisible to every gate here for exactly that reason: a missing `.pgwrap { padding: 0 !important }`
+  reset put a blank second sheet on every Word of the Day poster and got past six test files, typecheck,
+  lint and two reviews (v1.3.0.0). The component tests were not weak — they asserted the DOM, and the DOM
+  was right. The defect only exists inside a paginating engine. So when the thing you are protecting is a
+  page count, a wrap point, an overflow, or a `@media print` rule, the test has to run a real engine:
+  `src/test/print-page-count.ts` prints the surface through headless Chrome and counts sheets, and
+  deleting that reset now fails with `expected 2 to be 1`. Two things that harness learned the hard way
+  generalise to any such test. The fixture must reproduce the **route's** wrapper elements, not just the
+  component — `.pgwrap` lives on the word route's page component, not on `WordOfTheDayPoster`, and
+  without it the reset can be deleted with the count unchanged; the same for `.no-print`, which needs the
+  route's toolbar and footer present or nothing observes it. And `toBe(1)` is not proof of content:
+  Chrome exits 0 and writes a valid one-page PDF for an empty body or a missing file, so a component that
+  starts returning null reads as PASS — which is why an empty-document control sits beside the real
+  assertions, making the unstated zero explicit. Source greps still earn their place next to it: the grep
+  pins the RULE and catches a deletion in review, the render pins the RESULT and catches a geometry change
+  no grep can see. See #502.
+
 ## Environment
 
 Local env goes in `.env.local` (loaded by `drizzle.config.ts` via dotenv and by the dev script).
@@ -171,6 +201,14 @@ Optional (platform superadmin): `SUPERADMIN_EMAILS` — a comma-separated, case-
 - API routes use the `server.handlers` pattern (see `src/routes/api/auth/$.ts`).
 - Strict TS includes no-unused-locals/params — unused symbols fail the build.
 - Biome formats with **tabs** and **double quotes**, with import organization on.
+- **Print routes share one stylesheet — do not hand-roll page CSS.** `PRINT_PAGE_CSS` in
+  `src/components/agenda/print-theme.tsx` is the single copy of the `@page` / `.pgwrap` / `.no-print`
+  rules that keep a print surface to its sheet count, and `PrintToolbar` / `PrintButton` are the shared
+  toolbar. The agenda print route, the Word of the Day poster and the club role sheets all inject it; it
+  was three divergent copies until v1.8.4.0, so a print fix meant finding all three and guessing which
+  differences were deliberate. A new print route imports the constant. `print-page-reset.guard.test.ts`
+  walks `src/routes/` recursively and fails on a route that defines its own `.pgwrap` padding, so the
+  next print route is enrolled automatically rather than remembered.
 
 ## Data layer
 

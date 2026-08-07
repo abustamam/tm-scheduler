@@ -18,6 +18,10 @@ manager: Bun.
 
 - [Bun](https://bun.sh)
 - A PostgreSQL instance for development (Docker is easiest — see below)
+- Chrome or Chromium on `PATH`, for the print page-count tests. Optional locally — without a
+  browser those tests skip and the rest of the suite still runs. CI requires it (and
+  `ubuntu-latest` already ships it), because a print gate that skips itself looks identical to
+  one that passed.
 
 ## Setup
 
@@ -73,7 +77,7 @@ your own account email).
 | `bun run build` | Production build (self-contained Node server via Nitro) |
 | `bun run check` | Biome lint + format gate — **reports only**, as do `lint` / `format` |
 | `bun run fix` | Applies what the gate can fix automatically (`biome check --write`) |
-| `bun run test` | Vitest |
+| `bun run test` | Vitest. The print page-count tests drive headless Chrome — see Prerequisites |
 | `bun run typecheck` | `tsc --noEmit` — the only thing that type-checks |
 | `bun run db:generate` / `db:migrate` | Generate / apply SQL migrations |
 | `bun run db:seed` | Seed a sample club, roles, meetings, and members |

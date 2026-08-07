@@ -17,7 +17,12 @@
 // Offline works for free: `isOfflineRoute` in public/sw.js matches
 // /^\/club\/[^/]+\/meeting\//, which this path already satisfies.
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
-import { LAGOON, SANS } from "#/components/agenda/print-theme";
+import {
+	PRINT_PAGE_CSS,
+	PrintButton,
+	PrintToolbar,
+	SANS,
+} from "#/components/agenda/print-theme";
 import { WordOfTheDayPoster } from "#/components/agenda/word-of-the-day-poster";
 import { PublicFooter } from "#/components/public-footer";
 import { clubLogoUrl } from "#/lib/club-logo-url";
@@ -137,31 +142,10 @@ function WordPoster() {
 
 	return (
 		<div>
-			<div className="no-print" style={toolbarStyle}>
-				<button
-					type="button"
-					onClick={() => window.print()}
-					style={printBtnStyle}
-				>
-					Print
-				</button>
-			</div>
-			<style>{`
-				@media screen { body { background: #d8e6dd; } }
-				.pgwrap { padding: 28px 0; }
-				@media print {
-					.no-print { display: none !important; }
-					body { background: #fff; }
-					/* Required, not cosmetic: @page has margin 0, so the screen-only
-					   28px padding would push 28 + 1056 + 28 = 1112px into a 1056px
-					   page box and emit a blank second sheet. body has margin 0
-					   (styles.css) and nothing else absorbs it. Both sibling print
-					   routes carry this same reset. */
-					.pgwrap { padding: 0 !important; }
-					.agenda-page { box-shadow: none !important; }
-					@page { size: letter portrait; margin: 0; }
-				}
-			`}</style>
+			<PrintToolbar>
+				<PrintButton />
+			</PrintToolbar>
+			<style>{PRINT_PAGE_CSS}</style>
 			<div
 				className="pgwrap"
 				style={{ display: "flex", justifyContent: "center" }}
@@ -198,29 +182,4 @@ const emptyWrapStyle: React.CSSProperties = {
 	fontFamily: SANS,
 	textAlign: "center",
 	padding: 24,
-};
-
-const toolbarStyle: React.CSSProperties = {
-	position: "fixed",
-	top: 12,
-	right: 12,
-	zIndex: 10,
-	display: "flex",
-	gap: 8,
-	alignItems: "center",
-	background: "#fff",
-	borderRadius: 10,
-	padding: 6,
-	boxShadow: "0 6px 20px rgba(23,58,64,.18)",
-};
-
-const printBtnStyle: React.CSSProperties = {
-	padding: "6px 14px",
-	background: LAGOON,
-	color: "#fff",
-	border: 0,
-	borderRadius: 7,
-	fontSize: 13,
-	fontWeight: 700,
-	cursor: "pointer",
 };

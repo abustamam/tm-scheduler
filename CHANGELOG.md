@@ -2,6 +2,16 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.8.4.0] - 2026-08-07
+
+### Changed
+
+- **Nothing a club prints looks any different, and that is the point of this release.** Every printed page was rendered before and after these changes and compared pixel by pixel: the agendas, the Word of the Day poster and the role sheets are identical. What changed is underneath. The stylesheet that keeps each of those pages to the right number of sheets used to exist as three separate copies that had quietly drifted apart, so fixing a printing problem meant finding all three and knowing which differences were deliberate. There is one copy now.
+
+### Notes for this club
+
+- The reason this was worth doing: printing is the part of GavelUp that has broken most quietly. A missing line of CSS once added a blank second page to every Word of the Day poster, and it got past six test files, the type checker, the linter and two reviews, because nothing in the project ever printed a page and counted the sheets. Something does now — on every change, automatically. It caught that exact bug on demand while being built.
+
 ## [1.8.3.0] - 2026-08-07
 
 ### Changed
