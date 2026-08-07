@@ -32,25 +32,32 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { PRINT_PAGE_CSS } from "#/components/agenda/print-theme";
+import { readSource } from "#/test/guard-source";
 
 const ROUTES = dirname(fileURLToPath(import.meta.url));
 /**
- * RAW source, deliberately not comment-blind.
+ * TWO readers, because this file now holds BOTH guard classes and
+ * `#/test/guard-source` moves them in OPPOSITE directions. Blanket-applying
+ * either one is a bypass, and this file has now made that mistake in both
+ * directions — the first version read everything comment-BLIND, which let a
+ * comment satisfy a negative assertion; the fix over-corrected to raw for
+ * everything, which let a comment satisfy a POSITIVE one. The roles route
+ * mentions `PRINT_PAGE_CSS` in a comment explaining what cannot be hoisted
+ * into it, so with a raw read that route could serve no print stylesheet at
+ * all and every assertion here still passed. Verified.
  *
- * After the rewrite every assertion over route files below is of the
- * "offender list must be EMPTY" form (`.not.toMatch(...)`), and
- * `#/test/guard-source` states outright that those must NOT read through it:
- * stripping can only DELETE text, which for a negative assertion is a false
- * PASS. That is not theoretical here — the stripper is lexical and does not
- * track template literals, and these routes carry CSS comments inside their
- * `<style>` templates, so a `/* … *\/` pair could blank a real hand-rolled
- * rule and let it through. `ti-wordmark` and `server-modules` read raw for the
- * same reason.
+ * `readRaw` — for "the offender list must be EMPTY" (`.not.toMatch`).
+ * Stripping can only DELETE text, which for a negative assertion is a false
+ * PASS, and the stripper is lexical and does not track the template literals
+ * these routes carry their CSS in. Same reason `ti-wordmark` and
+ * `server-modules` read raw.
  *
- * The positive assertions in this file read the imported `PRINT_PAGE_CSS`
- * constant directly, so they never touch source at all and need no stripping.
+ * `readStripped` — for "this pattern must BE present". There a comment
+ * mentioning the pattern is the bypass, which is the case this module exists
+ * to close.
  */
-const read = (file: string) => readFileSync(resolve(ROUTES, file), "utf8");
+const readRaw = (file: string) => readFileSync(resolve(ROUTES, file), "utf8");
+const readStripped = (file: string) => readSource(resolve(ROUTES, file));
 
 /**
  * The `@media print { … }` body, brace-matched rather than regex-matched: the
@@ -160,8 +167,10 @@ function routeFiles(dir: string = ROUTES): string[] {
 const ALL_ROUTES = routeFiles().sort();
 
 /** The routes that opted into the shared stylesheet. */
+// Comment-BLIND: this is a "must BE present" check, so a route that merely
+// MENTIONS the constant in a comment must not satisfy it.
 const routesUsingSharedCss = ALL_ROUTES.filter((f) =>
-	read(f).includes("PRINT_PAGE_CSS"),
+	readStripped(f).includes("PRINT_PAGE_CSS"),
 );
 
 describe("no print route hand-rolls its own page CSS", () => {
@@ -189,7 +198,7 @@ describe("no print route hand-rolls its own page CSS", () => {
 			// is either a copy that will drift, or a new print surface that skipped
 			// the shared constant — the two ways this regression comes back.
 			expect(
-				read(file),
+				readRaw(file),
 				`${file} sets a .pgwrap padding of its own. Import PRINT_PAGE_CSS from ` +
 					"#/components/agenda/print-theme instead; it carries the padding and " +
 					"the print reset together, which is the pairing that matters.",
