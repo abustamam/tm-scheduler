@@ -2,6 +2,12 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.8.3.0] - 2026-08-07
+
+### Changed
+
+- **The Speaker and Evaluator roles can no longer be turned off.** Their Disable button is now inert, with a note explaining why, and the server refuses the change even if something else asks for it. Disabling Speaker used to delete every open speaker slot across upcoming meetings while leaving the evaluators behind with nothing to evaluate — the same silent breakage that "− Remove speaker" was just fixed for, reached another way. Every meeting needs speakers and their evaluators; a meeting that genuinely has none is expressed by setting the count to 0 on that meeting, not by switching the role off for the whole club. Re-enabling still works, so any club that had already turned one off can put it back. #512
+
 ## [1.8.2.0] - 2026-08-07
 
 ### Fixed

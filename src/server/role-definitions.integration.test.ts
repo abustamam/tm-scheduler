@@ -167,6 +167,113 @@ describe.skipIf(!hasTestDb)("role-definition management", () => {
 		expect(list[0].sortOrder).toBeLessThan(list[1].sortOrder);
 	});
 
+	/**
+	 * Speaker and its paired Evaluator cannot be disabled (#512).
+	 *
+	 * Not a preference — disabling Speaker sends `removeOpenRoleSlots` to delete
+	 * every open speaker slot for that one role, touching no other, so each
+	 * evaluator linked to one has its `evaluates_slot_id` nulled by the FK and is
+	 * left evaluating nobody. That is the orphaning `applyRemoveSpeakerSlot` was
+	 * just fixed for, reached by a different path. The rest of the app already
+	 * fences this pair off from generic controls (`applyAddRoleSlot` /
+	 * `applyRemoveRoleSlot` both refuse them); this toggle was the last way in.
+	 */
+	describe("the Speaker/Evaluator pair cannot be disabled (#512)", () => {
+		async function seedPair() {
+			const speaker = await applyRoleDefinitionCreate({
+				clubId: seed.clubId,
+				name: "Speaker",
+				category: "speaker",
+				defaultCount: 2,
+				isSpeakerRole: true,
+			});
+			const evaluator = await applyRoleDefinitionCreate({
+				clubId: seed.clubId,
+				name: "Evaluator",
+				category: "evaluator",
+				defaultCount: 2,
+			});
+			return { speaker, evaluator };
+		}
+
+		it("refuses to disable the Speaker role", async () => {
+			const { speaker } = await seedPair();
+			await expect(
+				applyRoleDefinitionSetEnabled({
+					actorMemberId: null,
+					clubId: seed.clubId,
+					roleId: speaker.id,
+					enabled: false,
+				}),
+			).rejects.toThrow(/can't be disabled/);
+			// And the flag really is untouched — a thrown error that still wrote
+			// would be the worst outcome.
+			const [row] = await testDb
+				.select({ enabled: roleDefinitions.enabled })
+				.from(roleDefinitions)
+				.where(eq(roleDefinitions.id, speaker.id));
+			expect(row.enabled).toBe(true);
+		});
+
+		it("refuses to disable the paired Evaluator role", async () => {
+			const { evaluator } = await seedPair();
+			await expect(
+				applyRoleDefinitionSetEnabled({
+					actorMemberId: null,
+					clubId: seed.clubId,
+					roleId: evaluator.id,
+					enabled: false,
+				}),
+			).rejects.toThrow(/can't be disabled/);
+		});
+
+		it("still allows disabling an ordinary role", async () => {
+			await seedPair();
+			const other = await applyRoleDefinitionCreate({
+				clubId: seed.clubId,
+				name: "Ah-Counter",
+				category: "functionary",
+				defaultCount: 1,
+			});
+			await applyRoleDefinitionSetEnabled({
+				actorMemberId: null,
+				clubId: seed.clubId,
+				roleId: other.id,
+				enabled: false,
+			});
+			const [row] = await testDb
+				.select({ enabled: roleDefinitions.enabled })
+				.from(roleDefinitions)
+				.where(eq(roleDefinitions.id, other.id));
+			expect(row.enabled).toBe(false);
+		});
+
+		/**
+		 * The guard is DISABLE-only. A club that turned one of these off before
+		 * this existed must be able to put it back, or the protection becomes a
+		 * trap rather than a guard.
+		 */
+		it("still allows RE-enabling a paired role that is already off", async () => {
+			const { speaker } = await seedPair();
+			await testDb
+				.update(roleDefinitions)
+				.set({ enabled: false })
+				.where(eq(roleDefinitions.id, speaker.id));
+
+			await applyRoleDefinitionSetEnabled({
+				actorMemberId: null,
+				clubId: seed.clubId,
+				roleId: speaker.id,
+				enabled: true,
+			});
+			const [row] = await testDb
+				.select({ enabled: roleDefinitions.enabled })
+				.from(roleDefinitions)
+				.where(eq(roleDefinitions.id, speaker.id));
+			expect(row.enabled).toBe(true);
+		});
+	});
+
 	it("reorderRoles rewrites sortOrder to match the given order", async () => {
 		const a = await applyRoleDefinitionCreate({
 			clubId: seed.clubId,

@@ -12,6 +12,7 @@ import { and, asc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import { roleDefinitions, roleSlots } from "#/db/schema";
+import { pairedRoleIds } from "#/lib/meeting-roles";
 import { syncSlotsForRoleEnabledChange } from "./slots-logic";
 
 const roleCategory = z.enum([
@@ -227,6 +228,52 @@ export async function applyRoleDefinitionSetEnabled(
 		)
 		.limit(1);
 	if (!current) throw new Error("Role not found.");
+
+	/**
+	 * The Speaker role and its paired Evaluator cannot be disabled (#512).
+	 *
+	 * They are not optional the way the `enabled` flag's other subjects are: a
+	 * meeting without prepared speeches is not a meeting, and the run of show
+	 * hangs beats off them — speeches, best-speaker voting, evaluations,
+	 * best-evaluator voting. A club running one meeting without speeches
+	 * expresses that per meeting, with zero speaker slots, not by turning the
+	 * role off club-wide.
+	 *
+	 * The rest of the app already treats this pair as special and off-limits to
+	 * generic controls: `applyAddRoleSlot` and `applyRemoveRoleSlot` both refuse
+	 * them outright ("Remove speakers with the speaker controls") because they
+	 * belong to the dedicated +/− buttons. This toggle was the one remaining way
+	 * to mutate their slots without going through those buttons — an
+	 * inconsistency, not a capability.
+	 *
+	 * And it orphaned pairings. Disabling Speaker sends `removeOpenRoleSlots` to
+	 * delete every open speaker slot for one `role_definition_id`, touching no
+	 * other role, so every evaluator linked to one of them has its
+	 * `evaluates_slot_id` silently nulled by the FK and is left evaluating
+	 * nobody. That is the same defect `applyRemoveSpeakerSlot` was just fixed
+	 * for, reached by a different path.
+	 *
+	 * Only DISABLING is blocked. Re-enabling stays allowed so a club that turned
+	 * one off before this existed can put it back.
+	 */
+	if (!input.enabled) {
+		const defs = await db
+			.select({
+				id: roleDefinitions.id,
+				category: roleDefinitions.category,
+				defaultCount: roleDefinitions.defaultCount,
+				sortOrder: roleDefinitions.sortOrder,
+				isSpeakerRole: roleDefinitions.isSpeakerRole,
+			})
+			.from(roleDefinitions)
+			.where(eq(roleDefinitions.clubId, input.clubId));
+		if (pairedRoleIds(defs).has(input.roleId)) {
+			throw new Error(
+				`${current.name} can't be disabled — every meeting needs speakers and their evaluators. ` +
+					`Set its count to 0 on a meeting instead.`,
+			);
+		}
+	}
 
 	await db
 		.update(roleDefinitions)
