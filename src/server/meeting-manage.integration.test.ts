@@ -277,6 +277,121 @@ describe.skipIf(!hasTestDb)("meeting management", () => {
 		expect(await slotsFor(club.meetingId, evaluatorRoleId)).toHaveLength(1);
 	});
 
+	/**
+	 * Removing a speaker must delete the evaluator paired to THAT speaker, not
+	 * whichever evaluator happens to sit at the highest index (#512).
+	 *
+	 * The links are deliberately CROSSED here so the two rules disagree: the
+	 * removable speaker is the high-index one, but its evaluator is the
+	 * low-index one. Under the old index-based rule the wrong evaluator was
+	 * destroyed and the removed speaker's own evaluator survived pointing at
+	 * nothing — the FK is ON DELETE SET NULL, so nothing errors, it just
+	 * silently goes wrong.
+	 */
+	it("removeSpeakerSlot deletes the speaker's OWN evaluator, not the top one (#512)", async () => {
+		await applyAddSpeakerSlot({
+			meetingId: club.meetingId,
+			actorMemberId: club.memberId,
+		});
+		await applyAddSpeakerSlot({
+			meetingId: club.meetingId,
+			actorMemberId: club.memberId,
+		});
+		const speakers = await slotsFor(club.meetingId, speakerRoleId);
+		const evaluators = await slotsFor(club.meetingId, evaluatorRoleId);
+		const [sp0, sp1] = speakers;
+		const [ev0, ev1] = evaluators;
+		// Cross them: ev0 -> sp1 (the one that will be removed), ev1 -> sp0.
+		await testDb
+			.update(roleSlots)
+			.set({ evaluatesSlotId: sp1.id })
+			.where(eq(roleSlots.id, ev0.id));
+		await testDb
+			.update(roleSlots)
+			.set({ evaluatesSlotId: sp0.id })
+			.where(eq(roleSlots.id, ev1.id));
+
+		await applyRemoveSpeakerSlot({
+			meetingId: club.meetingId,
+			actorMemberId: club.memberId,
+		});
+
+		const speakersAfter = await slotsFor(club.meetingId, speakerRoleId);
+		const evaluatorsAfter = await slotsFor(club.meetingId, evaluatorRoleId);
+		// sp1 removed (top unclaimed speaker, unchanged behaviour)...
+		expect(speakersAfter.map((s) => s.id)).toEqual([sp0.id]);
+		// ...and ITS evaluator ev0 went with it, NOT the higher-indexed ev1.
+		expect(evaluatorsAfter.map((e) => e.id)).toEqual([ev1.id]);
+		// The survivor still points at a speaker that still exists.
+		expect(evaluatorsAfter[0].evaluatesSlotId).toBe(sp0.id);
+	});
+
+	/**
+	 * The exact state that proved the original bug: a claimed speaker and a
+	 * claimed evaluator at mismatched positions. Removing used to silently
+	 * orphan the claimed evaluator; it now refuses, consistent with "Release the
+	 * role before removing it" elsewhere in this module.
+	 */
+	it("removeSpeakerSlot refuses when the paired evaluator is claimed (#512)", async () => {
+		await applyAddSpeakerSlot({
+			meetingId: club.meetingId,
+			actorMemberId: club.memberId,
+		});
+		await applyAddSpeakerSlot({
+			meetingId: club.meetingId,
+			actorMemberId: club.memberId,
+		});
+		const [sp0] = await slotsFor(club.meetingId, speakerRoleId);
+		const evaluators = await slotsFor(club.meetingId, evaluatorRoleId);
+		// Speaker 1 claimed, so the removable speaker is Speaker 2 — whose own
+		// evaluator is also claimed.
+		await testDb
+			.update(roleSlots)
+			.set({ status: "claimed", assignedMemberId: club.memberId })
+			.where(eq(roleSlots.id, sp0.id));
+		await testDb
+			.update(roleSlots)
+			.set({ status: "claimed", assignedMemberId: club.memberId })
+			.where(eq(roleSlots.id, evaluators[1].id));
+
+		await expect(
+			applyRemoveSpeakerSlot({
+				meetingId: club.meetingId,
+				actorMemberId: club.memberId,
+			}),
+		).rejects.toThrow(/Release the evaluator/);
+
+		// Nothing was destroyed.
+		expect(await slotsFor(club.meetingId, speakerRoleId)).toHaveLength(2);
+		expect(await slotsFor(club.meetingId, evaluatorRoleId)).toHaveLength(2);
+	});
+
+	/**
+	 * Pre-#512 meetings have no links at all. Removing must still work rather
+	 * than refusing or removing nothing.
+	 */
+	it("removeSpeakerSlot falls back to index order when nothing is linked (#512)", async () => {
+		await applyAddSpeakerSlot({
+			meetingId: club.meetingId,
+			actorMemberId: club.memberId,
+		});
+		await applyAddSpeakerSlot({
+			meetingId: club.meetingId,
+			actorMemberId: club.memberId,
+		});
+		await testDb
+			.update(roleSlots)
+			.set({ evaluatesSlotId: null })
+			.where(eq(roleSlots.meetingId, club.meetingId));
+
+		await applyRemoveSpeakerSlot({
+			meetingId: club.meetingId,
+			actorMemberId: club.memberId,
+		});
+		expect(await slotsFor(club.meetingId, speakerRoleId)).toHaveLength(1);
+		expect(await slotsFor(club.meetingId, evaluatorRoleId)).toHaveLength(1);
+	});
+
 	it("removeSpeakerSlot errors when every speaker is claimed", async () => {
 		await applyAddSpeakerSlot({
 			meetingId: club.meetingId,
