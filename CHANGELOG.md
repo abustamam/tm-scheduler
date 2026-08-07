@@ -2,6 +2,13 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.8.2.0] - 2026-08-07
+
+### Fixed
+
+- **"− Remove speaker" now removes that speaker's own evaluator.** It used to remove the last speaker and the last evaluator as two separate decisions, which look the same until a claimed speaker and a claimed evaluator sit at different positions — then it deleted an evaluator whose speaker was still on the agenda, and left the removed speaker's evaluator behind with nothing to evaluate. Nothing errored; the agenda just quietly went wrong. #512
+- If the evaluator paired to that speaker has already been claimed, removal is now refused with a message naming which speaker to free up first, rather than pulling the speech out from under whoever volunteered to evaluate it. That matches how the rest of the app behaves — it never deletes a role someone has taken.
+
 ## [1.8.1.0] - 2026-08-07
 
 ### Changed
