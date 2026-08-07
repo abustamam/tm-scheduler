@@ -6,15 +6,32 @@
 // speaker queue, overdue list, and per-member Pathways surface are all derived
 // from `role_slots` joined to `meetings` / `role_definitions` / `members` /
 // `speeches`. No schema changes.
-import { and, asc, eq, inArray, lt, max, ne, sql } from "drizzle-orm";
+import {
+	and,
+	asc,
+	desc,
+	eq,
+	inArray,
+	isNotNull,
+	lt,
+	max,
+	ne,
+	sql,
+} from "drizzle-orm";
 import { db } from "#/db";
 import {
+	meetingAttendance,
 	meetings,
 	members,
 	roleDefinitions,
 	roleSlots,
 	speeches,
 } from "#/db/schema";
+import {
+	ATTENDANCE_LAPSE,
+	type AttendanceLapseRow,
+	scoreAttendanceLapse,
+} from "#/lib/attendance-lapse";
 
 /** A slot only counts as "held" once it's claimed or confirmed. */
 const HELD_SLOT_STATUSES = ["claimed", "confirmed"] as const;
@@ -243,5 +260,157 @@ export async function loadOverdueMembers(
 			daysSinceLastRole,
 			isOverdue,
 		};
+	});
+}
+
+/**
+ * Attendance lapse for a club (#530) — who has stopped turning up.
+ *
+ * This complements `loadOverdueMembers` rather than duplicating it, and the
+ * distinction is the point of the feature: "overdue for a role" cannot tell a
+ * member who attends every week but never volunteers from one who has stopped
+ * coming altogether. Both simply have no claimed role. Attendance is the only
+ * signal that separates a nudge-to-volunteer from a retention risk.
+ *
+ * SQL owns the window; `scoreAttendanceLapse` (pure, client-safe) owns the
+ * maths. A meeting joins the window when it is in the past, not cancelled, and
+ * somebody actually took the register — that last clause is what stops a
+ * meeting nobody recorded reading as a club-wide absence.
+ *
+ * "Past and not cancelled" deliberately matches `loadOverdueMembers`,
+ * `loadSpeakerRotation` and `loadPastMeetings` rather than testing for
+ * `status = 'completed'`. A club that takes attendance but never formally
+ * closes meetings out would otherwise have a permanently empty window and a
+ * feature that silently does nothing.
+ */
+export async function loadAttendanceLapse(
+	clubId: string,
+): Promise<AttendanceLapseRow[]> {
+	const now = new Date();
+
+	// DISTINCT over the join: a meeting qualifies once it has any MEMBER
+	// attendance row, and the join would otherwise repeat it per attendee —
+	// which at real club size (15-25 marked per meeting) would let one meeting
+	// eat the whole LIMIT and collapse the window.
+	//
+	// `isNotNull(memberId)` is load-bearing, not tidiness. Guest attendance rows
+	// carry a NULL member_id (ADR-0013), so a meeting where only VISITORS were
+	// logged would otherwise satisfy this join, enter the window, and score
+	// every member as not-present — a false "stopped attending" flag on the one
+	// surface whose whole job is spotting people who quietly left.
+	const windowMeetings = await db
+		.selectDistinct({
+			meetingId: meetings.id,
+			scheduledAt: meetings.scheduledAt,
+		})
+		.from(meetings)
+		.innerJoin(
+			meetingAttendance,
+			and(
+				eq(meetingAttendance.meetingId, meetings.id),
+				isNotNull(meetingAttendance.memberId),
+			),
+		)
+		.where(
+			and(
+				eq(meetings.clubId, clubId),
+				lt(meetings.scheduledAt, now),
+				ne(meetings.status, "cancelled"),
+			),
+		)
+		.orderBy(desc(meetings.scheduledAt))
+		.limit(ATTENDANCE_LAPSE.windowMeetings);
+
+	// No early return when the window is empty. Drizzle compiles an empty
+	// `inArray` to `false`, so the mark query returns nothing either way and a
+	// short-circuit guard would produce an identical result — making it
+	// impossible to write a test that fails when the guard is deleted. One
+	// cheap round-trip is worth more than an unfalsifiable branch.
+	const [memberRows, markRows] = await Promise.all([
+		db
+			.select({
+				memberId: members.id,
+				name: members.name,
+				joinedAt: members.joinedAt,
+				createdAt: members.createdAt,
+			})
+			.from(members)
+			.where(and(eq(members.clubId, clubId), eq(members.status, "active")))
+			.orderBy(asc(members.name)),
+		db
+			.select({
+				meetingId: meetingAttendance.meetingId,
+				memberId: meetingAttendance.memberId,
+				status: meetingAttendance.status,
+			})
+			.from(meetingAttendance)
+			.where(
+				inArray(
+					meetingAttendance.meetingId,
+					windowMeetings.map((m) => m.meetingId),
+				),
+			),
+	]);
+
+	// Holding a role at a meeting counts as being there. #218 deliberately
+	// decoupled the two — claiming a slot never writes an attendance row — so a
+	// member who RAN the meeting as Toastmaster has no record of presence and
+	// would read as "never recorded present" while the Overdue-for-a-role panel
+	// directly below correctly shows them as engaged. Two adjacent panels
+	// contradicting each other, with this one wrong. An explicit attendance row
+	// still wins: if somebody marked them absent, that is a human statement and
+	// beats the inference.
+	const roleRows = await db
+		.select({
+			meetingId: roleSlots.meetingId,
+			memberId: roleSlots.assignedMemberId,
+		})
+		.from(roleSlots)
+		.where(
+			and(
+				inArray(
+					roleSlots.meetingId,
+					windowMeetings.map((m) => m.meetingId),
+				),
+				inArray(roleSlots.status, [...HELD_SLOT_STATUSES]),
+				isNotNull(roleSlots.assignedMemberId),
+			),
+		);
+
+	// Guest attendance rows carry a null `member_id` and are dropped here —
+	// a guest's presence is not a member's.
+	const explicit = markRows.flatMap((r) =>
+		r.memberId
+			? [{ meetingId: r.meetingId, memberId: r.memberId, status: r.status }]
+			: [],
+	);
+	const explicitKeys = new Set(
+		explicit.map((m) => `${m.meetingId}:${m.memberId}`),
+	);
+	const fromRoles = roleRows.flatMap((r) =>
+		r.memberId && !explicitKeys.has(`${r.meetingId}:${r.memberId}`)
+			? [
+					{
+						meetingId: r.meetingId,
+						memberId: r.memberId,
+						status: "present" as const,
+					},
+				]
+			: [],
+	);
+
+	return scoreAttendanceLapse({
+		meetings: windowMeetings,
+		// `joined_at` is populated ONLY by the Toastmasters CSV import — every
+		// member added through the app has it NULL. Treating NULL as "has always
+		// been here" flagged a brand-new member as having missed the whole window
+		// on the day they were added. `created_at` is the same fallback the roster
+		// and the member profile already display.
+		members: memberRows.map((m) => ({
+			memberId: m.memberId,
+			name: m.name,
+			joinedAt: m.joinedAt ?? m.createdAt,
+		})),
+		marks: [...explicit, ...fromRoles],
 	});
 }

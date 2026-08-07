@@ -2,6 +2,16 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.8.0.0] - 2026-08-06
+
+### Added
+
+- **The VP Education dashboard now shows who has stopped coming.** The app has recorded attendance at every meeting since minutes shipped, and nothing has ever read it across meetings — so a member could quietly drift away and the first anyone knew was when they failed to renew. A new "Stopped attending" section lists active members not recorded present at the last 3 or more held meetings, longest absence first, with their attendance rate and the date they were last seen. It reads the attendance already being captured; there is no schema change and nothing new to fill in. #530
+
+  It sits above "Overdue for a role" deliberately, because the two look alike and mean different things. A member who comes every week and never volunteers needs a nudge; a member who has stopped coming is a resignation in progress. Both show as having no claimed role, so the older section cannot tell them apart — only attendance can.
+
+  Excused meetings do not count against anyone, and holding a role counts as being there even when nobody ticked the register.
+
 ## [1.7.0.0] - 2026-08-05
 
 ### Added
