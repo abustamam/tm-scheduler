@@ -76,13 +76,36 @@ async function captureAtTodaysMeeting(
 	meetingId: string;
 	res: Awaited<ReturnType<typeof captureGuestVisit>>;
 }> {
-	const meetingId = await seedMeetingLaterToday(input.clubId);
+	const meetingId = await seedMeetingInProgress(input.clubId);
 	const res = await captureGuestVisit(input);
 	await testDb
 		.update(meetings)
 		.set({ scheduledAt: new Date(Date.now() - 24 * 60 * 60 * 1000) })
 		.where(eq(meetings.id, meetingId));
 	return { meetingId, res };
+}
+
+/**
+ * Insert a meeting that is IN PROGRESS right now — started 10 minutes ago.
+ *
+ * Since #319 this is the only shape that produces an attendance row:
+ * `captureGuestVisit` writes `status: "present"` only when the resolved meeting
+ * is inside `isAtMeetingNow`'s absolute window, because the guest book is now
+ * linked from the public club page and a sign-up outside the meeting must not
+ * enter its minutes as a person present. The seeded club meeting is 7 days out,
+ * so a fixture that wants attendance has to say so explicitly.
+ */
+async function seedMeetingInProgress(clubId: string): Promise<string> {
+	const [m] = await testDb
+		.insert(meetings)
+		.values({
+			clubId,
+			scheduledAt: new Date(Date.now() - 10 * 60 * 1000),
+			status: "scheduled",
+		})
+		.returning({ id: meetings.id });
+	if (!m) throw new Error("Failed to seed in-progress meeting");
+	return m.id;
 }
 
 /** Insert a second, sooner meeting so the next capture resolves against IT. */
@@ -122,6 +145,10 @@ async function seedPastMeeting(
  * derivation compares club-local DATES, so this counts as having happened even
  * though the wall clock hasn't reached it — the "VPM opens the minutes at 18:45
  * for a 19:00 meeting" case from #374.
+ *
+ * NOTE: this is for the READ-side derivation. It is NOT "in progress" for the
+ * guest-book write gate, which since #319 uses an absolute window around the
+ * meeting (`isAtMeetingNow`) — use `seedMeetingInProgress` for that.
  */
 async function seedMeetingLaterToday(clubId: string): Promise<string> {
 	const [club] = await testDb
@@ -223,7 +250,7 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 		it("creates a prospect + an attendance row against TODAY's meeting", async () => {
 			// Attendance is only written for a meeting happening today (#319), so
 			// the fixture must schedule one — the seeded club meeting is 7 days out.
-			const today = await seedMeetingLaterToday(seed.clubId);
+			const today = await seedMeetingInProgress(seed.clubId);
 			const res = await captureGuestVisit({
 				clubId: seed.clubId,
 				name: "  Jamie Rivera  ",

@@ -7,6 +7,7 @@ import {
 	asc,
 	count,
 	eq,
+	gte,
 	isNotNull,
 	isNull,
 	min,
@@ -25,6 +26,7 @@ import {
 	roleSlots,
 	tableTopicsSpeakers,
 } from "#/db/schema";
+import { isAtMeetingNow } from "#/lib/guest-book-window";
 import { namesAgree } from "#/lib/person-name";
 import { toStoredPhone } from "#/lib/phone";
 import { logActivity } from "./activity";
@@ -156,16 +158,6 @@ async function findGuestByContact(
 	return undefined;
 }
 
-/** `YYYY-MM-DD` for an instant in a timezone (locale `en-CA` yields ISO order). */
-function localDateKey(instant: Date, timeZone: string): string {
-	return new Intl.DateTimeFormat("en-CA", {
-		timeZone,
-		year: "numeric",
-		month: "2-digit",
-		day: "2-digit",
-	}).format(instant);
-}
-
 /** A club's IANA timezone (the schema default when the club is missing). Every
  *  "has this meeting happened?" question is answered in the CLUB's local day —
  *  see `guestVisits` — so the zone is read once and threaded through. */
@@ -179,35 +171,51 @@ async function loadClubTimeZone(clubId: string): Promise<string> {
 }
 
 /**
- * The club's current/nearest meeting for guest-book capture: a non-cancelled
- * meeting scheduled for TODAY in the club's timezone (even earlier today — the
- * guest is at it now), else the next upcoming scheduled meeting. Returns null
- * when neither exists (capture then records the guest with no attendance row).
+ * The club's current/nearest meeting for guest-book capture: the meeting
+ * HAPPENING NOW (within the grace window either side of it — the guest is at
+ * it), else the next upcoming scheduled meeting. Returns null when neither
+ * exists (capture then records the guest with no attendance row).
  *
- * `isToday` distinguishes the two, and callers MUST NOT treat them alike when
+ * `atMeeting` distinguishes the two, and callers MUST NOT treat them alike when
  * writing attendance — see `captureGuestVisit`.
+ *
+ * The window is ABSOLUTE time (`isAtMeetingNow`), not a club-local calendar-day
+ * comparison. See `#/lib/guest-book-window` for why the date-key version was
+ * wrong in both directions.
  */
 export async function resolveCurrentMeeting(
 	clubId: string,
-): Promise<{ meetingId: string; isToday: boolean } | null> {
-	const timeZone = await loadClubTimeZone(clubId);
+): Promise<{ meetingId: string; atMeeting: boolean } | null> {
+	const now = new Date();
 
+	// Bounded to meetings that could plausibly be "now" or next, rather than
+	// every meeting the club has ever held: this runs on an unauthenticated
+	// POST, and the old unbounded scan grew with the club's whole history.
+	const horizon = new Date(now.getTime() - 24 * 60 * 60 * 1000);
 	const rows = await db
-		.select({ id: meetings.id, scheduledAt: meetings.scheduledAt })
+		.select({
+			id: meetings.id,
+			scheduledAt: meetings.scheduledAt,
+			lengthMinutes: meetings.lengthMinutes,
+		})
 		.from(meetings)
-		.where(and(eq(meetings.clubId, clubId), ne(meetings.status, "cancelled")))
+		.where(
+			and(
+				eq(meetings.clubId, clubId),
+				ne(meetings.status, "cancelled"),
+				gte(meetings.scheduledAt, horizon),
+			),
+		)
 		.orderBy(asc(meetings.scheduledAt));
 	if (rows.length === 0) return null;
 
-	const now = new Date();
-	const todayKey = localDateKey(now, timeZone);
-	const todays = rows.find(
-		(r) => localDateKey(r.scheduledAt, timeZone) === todayKey,
+	const here = rows.find((r) =>
+		isAtMeetingNow(r.scheduledAt, r.lengthMinutes, now),
 	);
-	if (todays) return { meetingId: todays.id, isToday: true };
+	if (here) return { meetingId: here.id, atMeeting: true };
 
 	const upcoming = rows.find((r) => r.scheduledAt.getTime() >= now.getTime());
-	return upcoming ? { meetingId: upcoming.id, isToday: false } : null;
+	return upcoming ? { meetingId: upcoming.id, atMeeting: false } : null;
 }
 
 export interface CaptureGuestInput {
@@ -253,18 +261,18 @@ export async function captureGuestVisit(
 	const phone = toStoredPhone(input.phone, cc);
 	const digits = normalizePhone(phone);
 
-	// Attendance is only written for a meeting happening TODAY. Since #319 the
+	// Attendance is only written for a meeting HAPPENING NOW. Since #319 the
 	// guest book is linked from the public club page ("Planning a visit?"), not
 	// just the printed QR code handed out AT a meeting, so an advance sign-up is
 	// now the expected flow rather than an edge case. `resolveCurrentMeeting`
-	// falls back to the NEXT upcoming meeting when nothing is scheduled today —
-	// writing `status: "present"` against that would put a guest who has not
-	// arrived (and may never) into that meeting's official minutes
-	// (`minutes-logic.ts` reads `meeting_attendance` with no date gate) and email
-	// them to the club. The guest row itself is still created, so the VPE sees
-	// the prospect either way.
+	// falls back to the NEXT upcoming meeting when none is in progress — writing
+	// `status: "present"` against that would put a guest who has not arrived
+	// (and may never) into that meeting's official minutes (`minutes-logic.ts`
+	// reads `meeting_attendance` with no date gate) and email them to the club.
+	// The guest row itself is still created, so the VPE sees the prospect either
+	// way.
 	const current = await resolveCurrentMeeting(input.clubId);
-	const meetingId = current?.isToday ? current.meetingId : null;
+	const meetingId = current?.atMeeting ? current.meetingId : null;
 
 	return db.transaction(async (tx) => {
 		// 1. Dedup, club-scoped: email → phone-with-name-agreement → none.
@@ -355,13 +363,18 @@ export interface PipelineGuestRow {
  *     minutes for a 19:00 meeting; the guest already down for Timer would read
  *     "No recorded visits" until the meeting's own start time passed. Today's
  *     meeting is today's meeting from midnight.
- *   - Too loose for later. `resolveCurrentMeetingId` falls back to the NEXT
- *     upcoming meeting when none is scheduled today, so a guest-book submission
- *     on 25 Jul writes attendance against 1 Aug. Ungated, that renders as
- *     "1 visit · first Aug 1" — a visit dated a week in the future. It starts
+ *   - Too loose for later. A slot claimed or a Table Topics turn recorded
+ *     against a FUTURE meeting is a plan, not a visit; ungated it would render
+ *     as "1 visit · first Aug 1" — a visit dated a week ahead. It starts
  *     counting on 1 Aug, like every other source.
- * Same reasoning as `resolveCurrentMeetingId`'s own `localDateKey` compare: a
- * club's day is the day it is in the club's town.
+ * A club's day is the day it is in the club's town, so the compare is
+ * club-local.
+ *
+ * The third source, guest-book attendance, no longer needs this gate to be
+ * correct: since #319 `captureGuestVisit` writes an attendance row ONLY for a
+ * meeting in progress (`isAtMeetingNow`), so a future-dated attendance row is
+ * not produced in the first place. The gate stays because it costs nothing and
+ * still protects the other two sources — and any rows written before #319.
  *
  * `union` (not `union all`) de-dupes the pairs, so a guest with an attendance
  * row AND a role slot AND a Table Topics turn at one meeting counts once.
