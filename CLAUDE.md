@@ -195,9 +195,10 @@ Seven coverage traps this repo has actually hit, all worth checking when a numbe
   tests, LIST the props that are COMPUTED rather than passed through: those are untested by
   construction, and each one is a place this trap fits. And a prop named for the NARROWER of two
   identities invites the narrower read — `isMember` was renamed `hasIdentity` in the fix, which is
-  why the guard also fails on the old name. Note the guard's direction: both assertions are the
-  "this pattern must BE present" form, which a comment naming the pattern would falsely pass, so
-  they read through `readSource`. See the directional rule in `src/test/guard-source.ts`.
+  why the guard also fails on the old name. That guard reads comment-blind (`readSource`) for both
+  of the reasons in `src/test/guard-source.ts` at once: its "this pattern must BE present"
+  assertions would falsely PASS on a comment merely naming the pattern, and its own file header
+  quotes `isMember={shell}`, which would falsely FAIL the one negative assertion read raw.
 
 ## Environment
 
