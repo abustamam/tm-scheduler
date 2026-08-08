@@ -148,6 +148,27 @@ describe("MeetingAgenda capability gating", () => {
 		expect(screen.getByRole("button", { name: /Reassign/ })).toBeTruthy();
 	});
 
+	it("keeps the manager stats strip free of the removed 'Remind unfilled' placeholder (#542, F-010)", () => {
+		renderAgenda(
+			meetingViewer({
+				currentMemberId: "me",
+				canManage: true,
+				isTmod: false,
+				isGrammarian: false,
+				isEditableWindow: true,
+			}),
+			[slot({})],
+		);
+		// Anchor first: the SECTION the placeholder lived in is rendered — an
+		// absence assertion against an unrendered section passes vacuously.
+		expect(screen.getByText("Roles filled")).toBeTruthy();
+		// The disabled "(soon)" button (#7) was removed by #542/F-010; this fails
+		// if it — or any premature "Remind" control — comes back before reminder
+		// sending actually exists.
+		expect(screen.queryByRole("button", { name: /remind/i })).toBeNull();
+		expect(screen.queryByText(/remind unfilled/i)).toBeNull();
+	});
+
 	it("shows a guest speaker's name (not 'Open') on a claimed slot", () => {
 		// A guest (e.g. a club mentor) is assigned to a speaker slot: the slot
 		// carries assigneeGuestId/assigneeName but no member id. Regression:
