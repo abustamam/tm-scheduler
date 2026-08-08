@@ -14,15 +14,17 @@ describe("homeRedirectTarget", () => {
 		);
 	});
 
-	it("sends a plain member to the roster", () => {
+	// #542: members used to land on /roster ("Manage · Roster", Export CSV,
+	// Merge duplicates in view). Their dashboard is the member home.
+	it("sends a plain member to their dashboard", () => {
 		expect(homeRedirectTarget({ clubRole: "member", officerCount: 0 })).toBe(
-			"/roster",
+			"/dashboard",
 		);
 	});
 
-	it("defaults a member with no known role to the roster", () => {
+	it("defaults a member with no known role to the dashboard", () => {
 		expect(homeRedirectTarget({ clubRole: null, officerCount: 0 })).toBe(
-			"/roster",
+			"/dashboard",
 		);
 	});
 });

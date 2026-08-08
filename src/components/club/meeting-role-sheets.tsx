@@ -23,9 +23,12 @@ export function MeetingRoleSheets({ meetingId }: { meetingId: string }) {
 	return (
 		<Popover>
 			<PopoverTrigger asChild>
+				{/* "This meeting's role sheets" (#542): disambiguates from the
+				    club-level "All role sheets" link rendered beside it — these PDFs
+				    are pre-filled with THIS meeting's club, date and speakers. */}
 				<Button variant="outline" size="sm">
 					<FileDown />
-					Role sheets
+					This meeting's role sheets
 				</Button>
 			</PopoverTrigger>
 			<PopoverContent align="start" className="w-64 p-2">

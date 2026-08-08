@@ -67,7 +67,9 @@ export function MeetingViewActions({
 					Present
 				</Link>
 			</Button>
-			{/* Club-level, meeting-agnostic printable of the club's roles (#341). */}
+			{/* Club-level, meeting-agnostic printable of the club's roles (#341).
+			    "All role sheets" (#542): it used to say "Role sheet", one letter away
+			    from the meeting-specific "Role sheets" download menu beside it. */}
 			<Button asChild variant="outline" size="sm">
 				<Link
 					to="/club/$clubId/roles"
@@ -76,7 +78,7 @@ export function MeetingViewActions({
 					rel="noopener noreferrer"
 				>
 					<ClipboardList />
-					Role sheet
+					All role sheets
 				</Link>
 			</Button>
 			{/* Word of the Day wall poster. Hidden when the meeting has no word —

@@ -213,6 +213,16 @@ describe.skipIf(!hasChrome)("printed page counts", () => {
 		// DOM silently narrows what the gate can see.
 		const html = renderToStaticMarkup(
 			<div>
+				{/* The route's screen-only back link (#542) — reproduced here for the
+				    same reason as the toolbar and footer: the fixture is the route's
+				    DOM, and `.no-print` is only covered by the chrome it hides. */}
+				<a
+					className="no-print roles-back"
+					href="/club/downtown"
+					style={{ position: "fixed", top: 12, left: 12 }}
+				>
+					← {LONG_CLUB}
+				</a>
 				<PrintToolbar>
 					<PrintButton />
 				</PrintToolbar>

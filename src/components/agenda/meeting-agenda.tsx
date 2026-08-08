@@ -399,17 +399,9 @@ export function MeetingAgenda({
 								</span>
 							</span>
 						</div>
-						{/* Reminder sending isn't built yet (#7) — a live-looking button
-						    that only apologizes on click erodes trust, so it's disabled
-						    with the status in plain sight until the feature lands. */}
-						<Button
-							size="sm"
-							variant="outline"
-							disabled
-							title="Coming soon — reminder sending isn't built yet"
-						>
-							Remind unfilled (soon)
-						</Button>
+						{/* No "Remind unfilled" control until reminder sending is actually
+						    built (#7) — even a disabled "(soon)" placeholder was dead
+						    weight two audits flagged (#542, F-010). */}
 					</div>
 					<div className="mt-3">
 						<div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">

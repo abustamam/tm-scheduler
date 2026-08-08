@@ -652,10 +652,10 @@ function MeetingView() {
 					</Button>
 				)}
 				<div className="flex flex-wrap items-center gap-2 pt-1">
-					<ShareLinkButton
-						path={`/club/${clubId}/meeting/${urlKey}`}
-						label={canManage ? "Copy member link" : undefined}
-					/>
+					{/* One label for the SAME action on every audience (#542): officers
+					    used to see "Copy member link" here while everyone else saw
+					    "Copy share link" — the copied URL is identical. */}
+					<ShareLinkButton path={`/club/${clubId}/meeting/${urlKey}`} />
 					<MeetingViewActions
 						clubSlug={clubId}
 						meetingId={urlKey}
