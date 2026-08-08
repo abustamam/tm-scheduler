@@ -15,8 +15,10 @@ import { formatMeetingDate } from "#/lib/format";
 import type { StoredMember } from "#/lib/member-identity";
 import { meetingRoleOptions } from "#/lib/member-role-picker";
 import {
+	FREE_CELL,
 	type MemberMeetingStatus,
 	memberMeetingStatus,
+	NA_CELL,
 	type Orientation,
 	projectGrid,
 } from "#/lib/season-grid-view";
@@ -724,10 +726,12 @@ export function SeasonGrid({
 						</span>
 					))}
 					<span className="mr-3 inline-block whitespace-nowrap">
-						<span className="font-semibold">NA</span> Not available
+						<span className="font-semibold">{NA_CELL.text}</span>{" "}
+						{NA_CELL.label}
 					</span>
 					<span className="inline-block whitespace-nowrap">
-						<span className="font-semibold">·</span> Free
+						<span className="font-semibold">{FREE_CELL.text}</span>{" "}
+						{FREE_CELL.label}
 					</span>
 				</p>
 			) : null}

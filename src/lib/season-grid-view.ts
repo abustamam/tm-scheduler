@@ -2,6 +2,15 @@ import type { SeasonGridData } from "#/server/season-grid";
 
 export type CellKind = "assigned" | "open" | "free" | "na" | "blank";
 
+/**
+ * Cell text/label pairs for the two non-role cell kinds. The SeasonGrid legend
+ * decodes exactly these strings, so they are shared constants — a reword here
+ * updates the cells AND the legend together, and divergence (the legend
+ * "decoding" a code the cells no longer render) is unrepresentable (#542).
+ */
+export const NA_CELL = { text: "NA", label: "Not available" } as const;
+export const FREE_CELL = { text: "·", label: "Free" } as const;
+
 export interface ViewCell {
 	meetingId: string;
 	kind: CellKind;
@@ -154,18 +163,18 @@ export function projectGrid(
 				return {
 					meetingId: m.id,
 					kind: "na" as const,
-					text: "NA",
-					title: "Not available",
+					text: NA_CELL.text,
+					title: NA_CELL.label,
 					slotId: null,
 					memberId: null,
 				};
 			return {
 				meetingId: m.id,
 				kind: "free" as const,
-				text: "·",
+				text: FREE_CELL.text,
 				title: contactedSet.has(`${member.id}:${m.id}`)
-					? "Free · contacted"
-					: "Free",
+					? `${FREE_CELL.label} · contacted`
+					: FREE_CELL.label,
 				slotId: null,
 				memberId: null,
 				contacted: contactedSet.has(`${member.id}:${m.id}`),

@@ -217,7 +217,7 @@ describe.skipIf(!hasChrome)("printed page counts", () => {
 				    same reason as the toolbar and footer: the fixture is the route's
 				    DOM, and `.no-print` is only covered by the chrome it hides. */}
 				<a
-					className="no-print"
+					className="no-print roles-back"
 					href="/club/downtown"
 					style={{ position: "fixed", top: 12, left: 12 }}
 				>

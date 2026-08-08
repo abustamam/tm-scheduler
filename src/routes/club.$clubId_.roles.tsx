@@ -105,7 +105,7 @@ function RoleSheet() {
 				to="/club/$clubId"
 				params={{ clubId: clubIdParam }}
 				search={{ view: "roles", count: 8 }}
-				className="no-print"
+				className="no-print roles-back"
 				style={BACK_LINK_STYLE}
 			>
 				← {club.name}
@@ -126,6 +126,16 @@ function RoleSheet() {
 			<style>{`${PRINT_PAGE_CSS}
 				@media screen {
 					.pgwrap { display: flex; justify-content: center; }
+					/* Inline styles can't express :hover — the pill is the page's
+					   primary wayfinding control and needs pointer feedback. */
+					.roles-back:hover { text-decoration: underline; }
+					/* Below ~600px the pill (maxWidth 48vw, top-left) and the fixed
+					   PrintToolbar (top-right) share a row and a long club name slides
+					   under the toolbar card — drop the pill onto its own row there.
+					   !important: top is set inline by BACK_LINK_STYLE. */
+					@media (max-width: 600px) {
+						.roles-back { top: 64px !important; }
+					}
 				}
 			`}</style>
 			<ClubRoleSheet
