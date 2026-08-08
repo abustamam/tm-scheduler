@@ -43,7 +43,7 @@ describe("club index → guest surface wiring (#318 / #319)", () => {
 	 * `hasIdentity={shell}` reintroduces the bug, and before this guard existed
 	 * it did so with the entire 3,437-test suite green.
 	 */
-	it("passes BOTH shell and the anon-picked member into VisitCta", () => {
+	it("passes BOTH shell and the anon-picked member into GuestOnboarding", () => {
 		const m = src.match(/hasIdentity=\{([^}]*)\}/);
 		expect(m, `no hasIdentity= prop found in ${ROUTE}`).toBeTruthy();
 		const expr = m?.[1] ?? "";
@@ -64,24 +64,38 @@ describe("club index → guest surface wiring (#318 / #319)", () => {
 	});
 
 	/**
+	 * The three guest cards are gated as ONE block. If a future change renders
+	 * any of them directly from the route again, it escapes the gate — which is
+	 * how "About this club" and "New to Toastmasters?" ended up in a member's
+	 * way in the first place.
+	 */
+	it("renders the guest cards only through GuestOnboarding", () => {
+		expect(src).toMatch(/<GuestOnboarding/);
+		for (const card of ["AboutClub", "GuestResources", "VisitCta"]) {
+			expect(
+				src,
+				`${card} is rendered directly, escaping the gate`,
+			).not.toMatch(new RegExp(`<${card}[\\s/>]`));
+		}
+	});
+
+	/**
 	 * `AboutClub` renders nothing for a null profile, so dropping the prop from
 	 * the JSX — as opposed to from the loader, which the loader test covers —
 	 * silently removes the block from every public club page with no failure.
 	 */
-	it("passes the loader's profile into AboutClub", () => {
-		const m = src.match(/<AboutClub[^>]*>/);
-		expect(m, `no <AboutClub> element found in ${ROUTE}`).toBeTruthy();
+	/**
+	 * `AboutClub` renders nothing for a null profile, so dropping the prop from
+	 * the JSX — as opposed to from the loader, which the loader test covers —
+	 * silently removes the block from every public club page with no failure.
+	 * `clubId` is what makes "Meeting roles" resolve to THIS club's guide rather
+	 * than the generic article.
+	 */
+	it("passes the loader's profile and the club through to the block", () => {
+		const m = src.match(/<GuestOnboarding[\s\S]*?\/>/);
+		expect(m, `no <GuestOnboarding> element found in ${ROUTE}`).toBeTruthy();
 		expect(m?.[0]).toMatch(/profile=\{profile\}/);
 		expect(m?.[0]).toMatch(/clubName=\{clubName\}/);
-	});
-
-	/**
-	 * The guest strip's `clubId` is what makes "Meeting roles" resolve to THIS
-	 * club's guide rather than the generic article (#318).
-	 */
-	it("passes clubId into GuestResources", () => {
-		const m = src.match(/<GuestResources[^>]*>/);
-		expect(m, `no <GuestResources> element found in ${ROUTE}`).toBeTruthy();
 		expect(m?.[0]).toMatch(/clubId=\{clubId\}/);
 	});
 });

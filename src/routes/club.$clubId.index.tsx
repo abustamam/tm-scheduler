@@ -3,13 +3,11 @@ import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { CalendarDays, Loader2, MailCheck, Mic, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
-import { AboutClub } from "#/components/club/about-club";
 import { ClubHomeHeader } from "#/components/club/club-home-header";
-import { GuestResources } from "#/components/club/guest-resources";
+import { GuestOnboarding } from "#/components/club/guest-onboarding";
 import { useRequireIdentity } from "#/components/club/identity-gate";
 import { SeasonGrid } from "#/components/club/season-grid";
 import { ViewingAs } from "#/components/club/viewing-as";
-import { VisitCta } from "#/components/club/visit-cta";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
@@ -112,22 +110,18 @@ function ClubHome() {
 				<ViewingAs member={member} promptIdentity={promptIdentity} />
 			) : null}
 
-			{/* The club's own basics — when it meets, which district, its mission
-			    (#318). Renders nothing when all three are unset. */}
-			<AboutClub clubName={clubName} profile={profile} />
-
-			<GuestResources clubId={clubId} />
-
-			{/* The visit funnel (#319). Hidden from anyone who already belongs
-			    here: `shell` covers a signed-in member, and `member` covers the
-			    anonymous roster pick — the dominant path in this no-auth product,
-			    and the one a `shell`-only gate would have missed. The guest book
-			    itself was previously reachable only via the printed QR code an
-			    officer generates on /admin/vp-membership. */}
-			<VisitCta
+			{/* Guest onboarding — the club's basics, the "New to Toastmasters?"
+			    strip and the visit funnel (#318 / #319). Hidden from anyone who
+			    already belongs here: `shell` covers a signed-in member, `member`
+			    the anonymous roster pick — the dominant path in this no-auth
+			    product, and the one a `shell`-only gate misses. A member who just
+			    picked their own name came for the sign-up sheet, not for their
+			    own club's meeting time explained back to them. */}
+			<GuestOnboarding
+				hasIdentity={shell || member !== null}
 				clubId={clubId}
 				clubName={clubName}
-				hasIdentity={shell || member !== null}
+				profile={profile}
 			/>
 
 			{/* "This is me" — graduate a public picker into a real account (#266). */}

@@ -20,29 +20,17 @@ import { ArrowRight, HandHeart } from "lucide-react";
  * job is to convert someone who is already curious, which is why it points at
  * the guest book rather than at a contact form.
  *
- * Hidden from anyone who already belongs here. The prop is `hasIdentity`, NOT
- * "is signed in": this product's dominant path is the no-auth roster model,
- * where a member identifies by picking their name and is held in localStorage
- * (`useEffectiveMember`, #317). Gating on the signed-in `shell` alone showed
- * "Planning a visit? Guests are always welcome" to a member who had just
- * self-identified, on their own club's sign-up sheet.
- *
- * The gate lives HERE rather than in the route's JSX so the branch is
- * unit-testable — same reason `AboutClub` owns its own all-unset check.
+ * Rendered only for a visitor who does not already belong to this club — that
+ * gate lives on `GuestOnboarding`, which owns this whole block, rather than
+ * being re-expressed here where it could drift from its two siblings.
  */
 export function VisitCta({
 	clubId,
 	clubName,
-	hasIdentity,
 }: {
 	clubId: string;
 	clubName: string;
-	/** True when the viewer already belongs to this club — either a signed-in
-	 *  member (`shell`) or an anonymous visitor who picked their name. */
-	hasIdentity: boolean;
 }) {
-	if (hasIdentity) return null;
-
 	return (
 		<section className="rounded-xl border border-[var(--line)] bg-card p-4">
 			<div className="flex items-start gap-3">
