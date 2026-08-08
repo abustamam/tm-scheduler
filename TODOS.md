@@ -43,6 +43,12 @@
 - `PHONE_CANDIDATE_LIMIT = 50` is untested on both dedup scans — shrinking it to 3 is invisible to the suite. Pinning it needs 51 same-phone rows with the only agreeing row sorting last, which is a slow fixture for a documented-and-safe overrun (the cap can only ever mean "no match", which creates a fresh Person).
   **Priority:** P4
 
+- Two meetings on the same club-local day: `resolveCurrentMeeting` takes the FIRST row in `asc(scheduledAt)` order that is in progress, so a club running an 08:00 special session and its regular 19:00 meeting could file a 19:15 guest-book signature against the 08:00 one. Narrowed a lot by v1.9.0.0 — the window is now `[start − 90min, end + 60min]` rather than the whole calendar day, so the two meetings must be within ~2.5h to overlap at all — but not closed. Fix is to pick the CLOSEST in-progress meeting rather than the earliest. Silent when it happens: the row looks identical to a correct one afterwards.
+  **Priority:** P3
+
+- `submitGuestBook` is an unauthenticated, unrate-limited POST that writes a `guests` row and (during a meeting) a `meeting_attendance` row that reaches the official minutes. Deliberate since #239 — the club link is the credential — but v1.9.0.0 removed its obscurity by linking the guest book from the public club page, where before the URL appeared only on the officer's printed QR code. Club numbers are public and `resolveClubByIdentifier` accepts them, so the surface is guessable. Worth deciding explicitly whether to add a rate limit before this gets traffic.
+  **Priority:** P3
+
 ## Completed
 
 <!-- Items move here with: **Completed:** vX.Y.Z.W (YYYY-MM-DD) -->

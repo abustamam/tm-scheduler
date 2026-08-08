@@ -2,6 +2,24 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.9.0.0] - 2026-08-08
+
+### Added
+
+- **A guest on your club's page can now read your club's actual meeting roles.** The "Meeting roles" link in the "New to Toastmasters?" strip used to open a generic article about roles in the abstract — while a page listing your club's own roles, with the descriptions your officers wrote, sat one link away with nothing pointing at it. It now opens your club's roles, in a readable page with the club header and a way back. The printable one-pager is still there, one click on from it.
+- **Your club page tells a guest when you meet.** The meeting schedule, district and mission your officers already filled in — the ones that print on the agenda — never appeared anywhere a guest could see. They now sit at the top of the public club page. Nothing shows if you haven't filled them in.
+- **Guests can tell you they're coming.** The guest book was reachable only by scanning the QR code an officer prints and puts on the table, so the only way to be recorded was to already be in the room. The club page now invites a visitor to sign it before they arrive. Members don't see the invitation.
+
+### Fixed
+
+- **A guest who signs the guest book early is no longer marked present at a meeting they haven't attended.** Signing in recorded attendance against the club's next meeting whatever the date, so someone signing a week ahead was written into that meeting's minutes as present and emailed them. Attendance is now recorded only while the meeting is actually happening; signing early still tells the VP Membership someone is interested.
+- **A guest who signs in at a real meeting is recorded, wherever your club is.** The same check used the club's stored timezone, which every club silently inherits as US Central because nothing in the app ever sets it. For a club outside that zone, a meeting and a signature minutes apart could land on different dates, and the visit vanished — the member's card read "No recorded visits" for someone who was in the room. It no longer consults a timezone at all.
+- **Meeting roles are grouped the same way on screen and on paper.** The readable page and the printed sheet now derive their grouping from one place, so they cannot drift apart.
+
+### Changed
+
+- **The public club page loads a little lighter.** Opening the roles page — or just hovering the link to it — used to run a query that counted every meeting slot in the database to produce a number the page never showed. It doesn't anymore. A club's own page also no longer fails outright if the "about this club" details can't be loaded; the rest of the page still works.
+
 ## [1.8.5.0] - 2026-08-07
 
 ### Changed
