@@ -81,8 +81,8 @@ describe("VisitCta", () => {
 
 	// NOTE: the bug this rename exists to prevent lives at the ROUTE, not here —
 	// `hasIdentity={shell || member !== null}` in club.$clubId.index.tsx. A prop
-	// test cannot see that expression, so it is covered in
-	// club.$clubId.index.test.tsx instead.
+	// test cannot see that expression; it is pinned by
+	// `src/routes/club-index-wiring.guard.test.ts`.
 
 	it("does not link to the guest book at all for a member", async () => {
 		await renderCta({ hasIdentity: true });
