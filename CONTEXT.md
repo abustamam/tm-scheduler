@@ -66,11 +66,20 @@ the nouns in `src/db/schema.ts`.
   and `lost` guests (`stage in (prospect, following_up)`).
 - **Guest book** — the public, no-auth capture front door (ADR-0018, absorbing #239):
   `/club/:clubId/guest-book`, escaping the member-identity shell. A visitor self-enters
-  name + optional email/phone; the server **creates-or-finds** the guest (dedup by phone → email,
-  club-scoped, phone normalized to digits) and records a `meeting_attendance` visit against the
-  club's **current/nearest meeting** (today's, else the next scheduled; none ⇒ no attendance
-  row). Reached via a **stable per-club QR** on the VP-Membership view (printable table-tent);
-  the QR never needs regenerating because the route resolves the current meeting itself.
+  name + optional email/phone; the server **creates-or-finds** the guest (dedup club-scoped, by
+  email, then by phone whose stored name AGREES — `namesAgree`, since a household sharing a
+  number is two prospects; phone normalized to E.164 digits on both sides).
+  A `meeting_attendance` visit is recorded **only while a meeting is in progress** — an
+  ABSOLUTE-time window, `[scheduledAt − 90 min, end + 60 min]` (`isAtMeetingNow` /
+  `GUEST_BOOK_GRACE_*`, `src/lib/guest-book-window.ts`), never a club-local calendar-day compare.
+  Signing outside the window (or with no meeting at all) still creates the guest at `prospect`,
+  so the VP Membership sees the prospect; there is simply no visit to count until they turn up.
+  **Attendance means "was in the room"** — the row reaches the meeting's official minutes, which
+  read `meeting_attendance` with no date gate. See ADR-0018's amendment / #319.
+  **Two front doors:** a **stable per-club QR** on the VP-Membership view (printable table-tent),
+  and the "Planning a visit?" invitation on the public club page (#319), which is hidden from
+  anyone who already has a club identity — signed-in **or** anonymous roster pick. The QR never
+  needs regenerating because the route resolves the current meeting itself.
 - **Convert-to-member** — the admin action that promotes a guest into a Membership (ADR-0018):
   dedup/link the Person (phone → email), create the club Membership (`clubRole: member`,
   `joinedAt` today) or reuse the person's existing one, re-point the guest's role-slot
