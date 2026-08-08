@@ -15,15 +15,15 @@ afterEach(cleanup);
 async function renderCta({
 	clubId = "harbor-city",
 	clubName = "Harbor City Speakers",
-	isMember = false,
+	hasIdentity = false,
 }: {
 	clubId?: string;
 	clubName?: string;
-	isMember?: boolean;
+	hasIdentity?: boolean;
 } = {}) {
 	const rootRoute = createRootRoute({
 		component: () => (
-			<VisitCta clubId={clubId} clubName={clubName} isMember={isMember} />
+			<VisitCta clubId={clubId} clubName={clubName} hasIdentity={hasIdentity} />
 		),
 	});
 	rootRoute.addChildren([
@@ -71,16 +71,21 @@ describe("VisitCta", () => {
 		expect(screen.getByText(/Harbor City Speakers/)).toBeTruthy();
 	});
 
-	// A signed-in member of this club is not planning a visit. Asserting on the
+	// Someone who already belongs here is not planning a visit. Asserting on the
 	// rendered output being EMPTY (not on a flag) is what makes deleting the
 	// guard fail.
-	it("renders nothing for a signed-in member of this club", async () => {
-		const container = await renderCta({ isMember: true });
+	it("renders nothing for someone who already belongs to this club", async () => {
+		const container = await renderCta({ hasIdentity: true });
 		expect(container.innerHTML).toBe("");
 	});
 
+	// NOTE: the bug this rename exists to prevent lives at the ROUTE, not here —
+	// `hasIdentity={shell || member !== null}` in club.$clubId.index.tsx. A prop
+	// test cannot see that expression, so it is covered in
+	// club.$clubId.index.test.tsx instead.
+
 	it("does not link to the guest book at all for a member", async () => {
-		await renderCta({ isMember: true });
+		await renderCta({ hasIdentity: true });
 		expect(screen.queryByRole("link", { name: /guest book/i })).toBeNull();
 	});
 });

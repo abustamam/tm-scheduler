@@ -270,7 +270,10 @@ function RoleCard({
 		}
 	}
 
-	const referenced = role.slotCount > 0;
+	// `slotCount` is only computed for callers that ask (this page's
+	// `listClubRoles` does); treat an unasked count as "not referenced".
+	const slotCount = role.slotCount ?? 0;
+	const referenced = slotCount > 0;
 
 	return (
 		<form
@@ -428,8 +431,8 @@ function RoleCard({
 					</div>
 					{referenced ? (
 						<p className="text-xs text-muted-foreground">
-							Used by {role.slotCount} existing meeting slot
-							{role.slotCount === 1 ? "" : "s"} — can't be deleted. Disable it
+							Used by {slotCount} existing meeting slot
+							{slotCount === 1 ? "" : "s"} — can't be deleted. Disable it
 							instead to stop offering it on future meetings; its history stays
 							intact.
 						</p>

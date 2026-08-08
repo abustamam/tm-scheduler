@@ -183,10 +183,13 @@ async function loadClubTimeZone(clubId: string): Promise<string> {
  * meeting scheduled for TODAY in the club's timezone (even earlier today — the
  * guest is at it now), else the next upcoming scheduled meeting. Returns null
  * when neither exists (capture then records the guest with no attendance row).
+ *
+ * `isToday` distinguishes the two, and callers MUST NOT treat them alike when
+ * writing attendance — see `captureGuestVisit`.
  */
-export async function resolveCurrentMeetingId(
+export async function resolveCurrentMeeting(
 	clubId: string,
-): Promise<string | null> {
+): Promise<{ meetingId: string; isToday: boolean } | null> {
 	const timeZone = await loadClubTimeZone(clubId);
 
 	const rows = await db
@@ -201,10 +204,10 @@ export async function resolveCurrentMeetingId(
 	const todays = rows.find(
 		(r) => localDateKey(r.scheduledAt, timeZone) === todayKey,
 	);
-	if (todays) return todays.id;
+	if (todays) return { meetingId: todays.id, isToday: true };
 
 	const upcoming = rows.find((r) => r.scheduledAt.getTime() >= now.getTime());
-	return upcoming?.id ?? null;
+	return upcoming ? { meetingId: upcoming.id, isToday: false } : null;
 }
 
 export interface CaptureGuestInput {
@@ -250,7 +253,18 @@ export async function captureGuestVisit(
 	const phone = toStoredPhone(input.phone, cc);
 	const digits = normalizePhone(phone);
 
-	const meetingId = await resolveCurrentMeetingId(input.clubId);
+	// Attendance is only written for a meeting happening TODAY. Since #319 the
+	// guest book is linked from the public club page ("Planning a visit?"), not
+	// just the printed QR code handed out AT a meeting, so an advance sign-up is
+	// now the expected flow rather than an edge case. `resolveCurrentMeeting`
+	// falls back to the NEXT upcoming meeting when nothing is scheduled today —
+	// writing `status: "present"` against that would put a guest who has not
+	// arrived (and may never) into that meeting's official minutes
+	// (`minutes-logic.ts` reads `meeting_attendance` with no date gate) and email
+	// them to the club. The guest row itself is still created, so the VPE sees
+	// the prospect either way.
+	const current = await resolveCurrentMeeting(input.clubId);
+	const meetingId = current?.isToday ? current.meetingId : null;
 
 	return db.transaction(async (tx) => {
 		// 1. Dedup, club-scoped: email → phone-with-name-agreement → none.

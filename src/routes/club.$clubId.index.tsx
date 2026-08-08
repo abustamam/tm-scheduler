@@ -41,12 +41,16 @@ export const Route = createFileRoute("/club/$clubId/")({
 	loaderDeps: ({ search }) => ({ count: search.count }),
 	loader: async ({ context, deps }) => {
 		// Parallel — the profile is decorative and must not delay the sign-up
-		// sheet, which is the primary surface.
+		// sheet, which is the primary surface. It must not be able to BREAK it
+		// either: `Promise.all` rejects on the first rejection, so without the
+		// catch a profile query failure would 500 the whole public club page.
+		// `AboutClub` already renders nothing for a null profile, so degrading
+		// to "no About block" is free.
 		const [grid, profile] = await Promise.all([
 			getPublicSeasonGrid({
 				data: { clubId: context.clubUuid, count: deps.count },
 			}),
-			getPublicClubProfileFn({ data: context.clubUuid }),
+			getPublicClubProfileFn({ data: context.clubUuid }).catch(() => null),
 		]);
 		return { grid, profile };
 	},
@@ -117,11 +121,17 @@ function ClubHome() {
 
 			<GuestResources clubId={clubId} />
 
-			{/* The visit funnel (#319). `shell` is true for a signed-in member of
-			    THIS club, who is not planning a visit; VisitCta renders nothing for
-			    them. The guest book itself was previously reachable only via the
-			    printed QR code an officer generates on /admin/vp-membership. */}
-			<VisitCta clubId={clubId} clubName={clubName} isMember={shell} />
+			{/* The visit funnel (#319). Hidden from anyone who already belongs
+			    here: `shell` covers a signed-in member, and `member` covers the
+			    anonymous roster pick — the dominant path in this no-auth product,
+			    and the one a `shell`-only gate would have missed. The guest book
+			    itself was previously reachable only via the printed QR code an
+			    officer generates on /admin/vp-membership. */}
+			<VisitCta
+				clubId={clubId}
+				clubName={clubName}
+				hasIdentity={shell || member !== null}
+			/>
 
 			{/* "This is me" — graduate a public picker into a real account (#266). */}
 			{member && source === "anon" ? (

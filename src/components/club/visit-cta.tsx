@@ -20,22 +20,28 @@ import { ArrowRight, HandHeart } from "lucide-react";
  * job is to convert someone who is already curious, which is why it points at
  * the guest book rather than at a contact form.
  *
- * Shown to anonymous visitors only. A signed-in member of this club is not
- * planning a visit, and telling them so would be noise on their own club's page.
- * That gate lives HERE rather than in the route's JSX so the branch is
+ * Hidden from anyone who already belongs here. The prop is `hasIdentity`, NOT
+ * "is signed in": this product's dominant path is the no-auth roster model,
+ * where a member identifies by picking their name and is held in localStorage
+ * (`useEffectiveMember`, #317). Gating on the signed-in `shell` alone showed
+ * "Planning a visit? Guests are always welcome" to a member who had just
+ * self-identified, on their own club's sign-up sheet.
+ *
+ * The gate lives HERE rather than in the route's JSX so the branch is
  * unit-testable — same reason `AboutClub` owns its own all-unset check.
  */
 export function VisitCta({
 	clubId,
 	clubName,
-	isMember,
+	hasIdentity,
 }: {
 	clubId: string;
 	clubName: string;
-	/** True when the viewer is a signed-in member of THIS club (`shell`). */
-	isMember: boolean;
+	/** True when the viewer already belongs to this club — either a signed-in
+	 *  member (`shell`) or an anonymous visitor who picked their name. */
+	hasIdentity: boolean;
 }) {
-	if (isMember) return null;
+	if (hasIdentity) return null;
 
 	return (
 		<section className="rounded-xl border border-[var(--line)] bg-card p-4">
@@ -55,7 +61,7 @@ export function VisitCta({
 					<Link
 						to="/club/$clubId/guest-book"
 						params={{ clubId }}
-						className="mt-2 inline-flex items-center gap-1 text-sm font-medium text-[var(--lagoon-deep)] no-underline hover:underline"
+						className="mt-2 inline-flex items-center gap-1 text-sm font-medium text-primary no-underline hover:underline"
 					>
 						Sign the guest book
 						<ArrowRight className="size-3.5" aria-hidden />

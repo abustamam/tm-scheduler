@@ -34,12 +34,23 @@ function RolesGuide() {
 	const byCategory = groupRolesByCategory(roles);
 
 	return (
-		<div className="mx-auto w-full max-w-public space-y-6 p-4 pb-8 md:p-6">
+		// `max-w-reading` (48rem), not the sign-up sheet's `max-w-public` (64rem):
+		// this page is prose, and at 64rem a 14px description line runs well past
+		// a comfortable measure. Matches the public meeting page.
+		<div className="mx-auto w-full max-w-reading space-y-6 p-4 pb-8 md:p-6">
 			<div className="pt-2">
 				<Link
 					to="/club/$clubId"
 					params={{ clubId }}
-					search={{ view: "roles", count: 8 }}
+					// Carry the visitor's grid state back rather than resetting it —
+					// they may have switched to the members view or `count=all`.
+					// The target's `validateSearch` owns these defaults; `Link`
+					// requires the full shape, so they are restated only as the
+					// fallback for a visitor who arrived here directly.
+					search={(prev) => ({
+						view: prev.view ?? "roles",
+						count: prev.count ?? 8,
+					})}
 					className="inline-flex items-center gap-1 text-sm font-medium text-muted-foreground no-underline hover:text-foreground"
 				>
 					<ArrowLeft className="size-3.5" aria-hidden />
@@ -61,7 +72,7 @@ function RolesGuide() {
 			) : (
 				byCategory.map((group) => (
 					<section key={group.category} className="space-y-2">
-						<h2 className="text-[11px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">
+						<h2 className="text-[11px] font-semibold tracking-[0.04em] text-muted-foreground uppercase">
 							{group.label}
 						</h2>
 						<ul className="divide-y divide-[var(--line)] overflow-hidden rounded-xl border border-[var(--line)] bg-card">
@@ -83,14 +94,18 @@ function RolesGuide() {
 			)}
 
 			{/* The printable one-pager, for a club that wants to hand these out.
-			    Full page load (not a <Link>): the target escapes this shell. */}
-			<a
-				href={`/club/${clubId}/roles`}
-				className="inline-flex items-center gap-1.5 text-sm font-medium text-[var(--lagoon-deep)] no-underline hover:underline"
+			    `reloadDocument` forces the full page load the target wants (it
+			    escapes this shell), while keeping the typed route so a rename of
+			    club.$clubId_.roles.tsx fails typecheck instead of shipping a 404. */}
+			<Link
+				to="/club/$clubId/roles"
+				params={{ clubId }}
+				reloadDocument
+				className="inline-flex items-center gap-1.5 text-sm font-medium text-primary no-underline hover:underline"
 			>
 				<Printer className="size-3.5" aria-hidden />
 				Printable version
-			</a>
+			</Link>
 		</div>
 	);
 }

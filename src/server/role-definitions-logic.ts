@@ -30,8 +30,11 @@ export interface RoleDefinitionRow {
 	sortOrder: number;
 	isSpeakerRole: boolean;
 	description: string | null;
-	/** Number of existing slots referencing this role (blocks deletion when > 0). */
-	slotCount: number;
+	/** Number of existing slots referencing this role (blocks deletion when > 0).
+	 *  `undefined` unless the caller asked for it — computing it costs an
+	 *  aggregate join over `role_slots`, which only the admin roles page needs.
+	 *  See `listRoleDefinitions`'s `withSlotCounts`. */
+	slotCount?: number;
 	/** Whether new meetings generate slots for this role (#368). Disabled roles
 	 *  stay in this list — never deleted, never hidden from admin — they just
 	 *  stop being offered anywhere a role is filled. */
@@ -49,29 +52,50 @@ export interface RoleDefinitionRow {
  *  call site where it could drift. */
 export async function listRoleDefinitions(
 	clubId: string,
-	opts?: { onlyEnabled?: boolean },
+	opts?: { onlyEnabled?: boolean; withSlotCounts?: boolean },
 ): Promise<RoleDefinitionRow[]> {
 	const where = [eq(roleDefinitions.clubId, clubId)];
 	if (opts?.onlyEnabled) where.push(eq(roleDefinitions.enabled, true));
 
-	const rows = await db
-		.select({
-			id: roleDefinitions.id,
-			name: roleDefinitions.name,
-			category: roleDefinitions.category,
-			defaultCount: roleDefinitions.defaultCount,
-			sortOrder: roleDefinitions.sortOrder,
-			isSpeakerRole: roleDefinitions.isSpeakerRole,
-			description: roleDefinitions.description,
-			slotCount: sql<number>`count(${roleSlots.id})::int`,
-			enabled: roleDefinitions.enabled,
-		})
+	const base = {
+		id: roleDefinitions.id,
+		name: roleDefinitions.name,
+		category: roleDefinitions.category,
+		defaultCount: roleDefinitions.defaultCount,
+		sortOrder: roleDefinitions.sortOrder,
+		isSpeakerRole: roleDefinitions.isSpeakerRole,
+		description: roleDefinitions.description,
+		enabled: roleDefinitions.enabled,
+	};
+	const order = [
+		asc(roleDefinitions.sortOrder),
+		asc(roleDefinitions.name),
+	] as const;
+
+	// `slotCount` costs a leftJoin + groupBy across `role_slots` — a table that
+	// grows with every meeting of EVERY club, not just this one. Only the admin
+	// roles page reads it (to block deleting a role already in use), so the
+	// aggregate is opt-in. The PUBLIC readers (`getPublicClubRoles`, which now
+	// serves both the printed sheet and the roles guide, and the "+ Add role"
+	// picker) skip it and stay a plain indexed lookup on `role_definitions_club_idx`
+	// — they are reachable unauthenticated and the router preloads on hover
+	// (`defaultPreload: "intent"`, `preloadStaleTime: 0`), so a hover would
+	// otherwise fire the aggregate.
+	if (!opts?.withSlotCounts) {
+		return db
+			.select(base)
+			.from(roleDefinitions)
+			.where(and(...where))
+			.orderBy(...order);
+	}
+
+	return db
+		.select({ ...base, slotCount: sql<number>`count(${roleSlots.id})::int` })
 		.from(roleDefinitions)
 		.leftJoin(roleSlots, eq(roleSlots.roleDefinitionId, roleDefinitions.id))
 		.where(and(...where))
 		.groupBy(roleDefinitions.id)
-		.orderBy(asc(roleDefinitions.sortOrder), asc(roleDefinitions.name));
-	return rows;
+		.orderBy(...order);
 }
 
 // Empty/whitespace-only descriptions collapse to null so a cleared field

@@ -1,4 +1,4 @@
-import { CalendarClock, MapPin } from "lucide-react";
+import { CalendarDays, Landmark } from "lucide-react";
 import type { PublicClubProfile } from "#/server/clubs-logic";
 
 /**
@@ -38,25 +38,35 @@ export function AboutClub({
 				About {clubName}
 			</h2>
 			{meetingSchedule || district ? (
+				// A `dl > div` may contain only dt/dd (plus script-supporting
+				// elements), so the icons live INSIDE the `dd` rather than beside
+				// it — same rendering, valid content model.
 				<dl className="mt-2 flex flex-wrap gap-x-5 gap-y-1.5 text-sm">
 					{meetingSchedule ? (
-						<div className="flex items-center gap-1.5">
-							<CalendarClock
-								className="size-3.5 shrink-0 text-muted-foreground"
-								aria-hidden
-							/>
+						<div className="min-w-0">
 							<dt className="sr-only">Meets</dt>
-							<dd className="text-foreground">{meetingSchedule}</dd>
+							<dd className="flex items-center gap-1.5 break-words text-foreground">
+								<CalendarDays
+									className="size-3.5 shrink-0 text-muted-foreground"
+									aria-hidden
+								/>
+								{meetingSchedule}
+							</dd>
 						</div>
 					) : null}
 					{district ? (
-						<div className="flex items-center gap-1.5">
-							<MapPin
-								className="size-3.5 shrink-0 text-muted-foreground"
-								aria-hidden
-							/>
+						<div className="min-w-0">
 							<dt className="sr-only">District</dt>
-							<dd className="text-foreground">{district}</dd>
+							<dd className="flex items-center gap-1.5 break-words text-foreground">
+								{/* Not MapPin — a district is an organizational grouping,
+								    and MapPin already marks the physical `meeting.location`
+								    on the agenda a guest reads right after this. */}
+								<Landmark
+									className="size-3.5 shrink-0 text-muted-foreground"
+									aria-hidden
+								/>
+								{district}
+							</dd>
 						</div>
 					) : null}
 				</dl>
@@ -64,7 +74,9 @@ export function AboutClub({
 			{mission ? (
 				// `mission` is free text and may be multi-line (see the schema comment
 				// on `clubs.mission`), so preserve the author's line breaks.
-				<p className="mt-2 whitespace-pre-line text-sm text-muted-foreground">
+				// `break-words` because a length cap bounds code points, not line-break
+				// opportunities — one pasted URL would otherwise scroll the page.
+				<p className="mt-2 break-words whitespace-pre-line text-sm text-muted-foreground">
 					{mission}
 				</p>
 			) : null}

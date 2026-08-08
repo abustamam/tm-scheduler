@@ -15,9 +15,10 @@ export const GUEST_LINKS: { slug: string; label: string }[] = [
  * Compact "New to Toastmasters?" strip shown on both public club surfaces (spec
  * decision #4).
  *
- * Club-aware since #318. The generic articles above stay generic — they are the
- * only search-indexable surface in the product, since every `/club/$clubId/*`
- * route is `noindex, nofollow` via the shell. But "Meeting roles" now points at
+ * Club-aware since #318. The generic articles above stay generic — every
+ * `/club/$clubId/*` route is `noindex, nofollow` via the shell, so these
+ * articles are the only role/meeting content search can reach. But "Meeting
+ * roles" now points at
  * `/club/$clubId/roles-guide`, which lists THIS club's roles and
  * responsibilities rather than a generic article about roles in the abstract.
  * Before #318 a guest standing on a club's own page was routed away from the
@@ -41,7 +42,7 @@ export function GuestResources({ clubId }: { clubId: string }) {
 						<Link
 							to="/resources/$slug"
 							params={{ slug: r.slug }}
-							className="inline-flex items-center gap-1 text-sm font-medium text-[var(--lagoon-deep)] no-underline hover:underline"
+							className="inline-flex items-center gap-1 text-sm font-medium text-primary no-underline hover:underline"
 						>
 							{r.label}
 							<ArrowRight className="size-3.5" aria-hidden />
@@ -52,7 +53,7 @@ export function GuestResources({ clubId }: { clubId: string }) {
 					<Link
 						to="/club/$clubId/roles-guide"
 						params={{ clubId }}
-						className="inline-flex items-center gap-1 text-sm font-medium text-[var(--lagoon-deep)] no-underline hover:underline"
+						className="inline-flex items-center gap-1 text-sm font-medium text-primary no-underline hover:underline"
 					>
 						Meeting roles
 						<ArrowRight className="size-3.5" aria-hidden />
