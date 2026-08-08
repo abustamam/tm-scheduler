@@ -8,6 +8,7 @@
 //
 // Shares the print aesthetic (brand tokens, one-page FitPage, Kick, DarkFooter)
 // with the meeting agenda layouts via `./print-theme` (#345).
+import { groupRolesByCategory, type RoleCategory } from "#/lib/role-categories";
 import { ClubLogo } from "./club-logo";
 import {
 	DarkFooter,
@@ -23,22 +24,8 @@ import {
 export type RoleSheetEntry = {
 	id: string;
 	name: string;
-	category: "leadership" | "speaker" | "evaluator" | "functionary";
+	category: RoleCategory;
 	description: string | null;
-};
-
-// Categories render top-to-bottom in this order; empty ones are skipped.
-const CATEGORY_ORDER = [
-	"leadership",
-	"speaker",
-	"evaluator",
-	"functionary",
-] as const;
-const CATEGORY_LABEL: Record<RoleSheetEntry["category"], string> = {
-	leadership: "Leadership",
-	speaker: "Speaking Roles",
-	evaluator: "Evaluation",
-	functionary: "Functionary Roles",
 };
 
 /** "Club #NNN" — empty string when the club has no number. */
@@ -58,11 +45,9 @@ export function ClubRoleSheet({
 	/** Versioned logo URL, or null. */
 	logoUrl?: string | null;
 }) {
-	const byCategory = CATEGORY_ORDER.map((cat) => ({
-		cat,
-		label: CATEGORY_LABEL[cat],
-		items: roles.filter((r) => r.category === cat),
-	})).filter((g) => g.items.length > 0);
+	// Shared with the in-chrome guide at /club/$clubId/roles-guide (#318) so both
+	// surfaces order and label categories identically.
+	const byCategory = groupRolesByCategory(roles);
 
 	const meta = clubLine(clubNumber);
 
@@ -118,7 +103,7 @@ export function ClubRoleSheet({
 						</div>
 					) : (
 						byCategory.map((group) => (
-							<div key={group.cat}>
+							<div key={group.category}>
 								<Kick style={{ marginBottom: 9 }}>{group.label}</Kick>
 								<div
 									style={{
@@ -127,13 +112,13 @@ export function ClubRoleSheet({
 										overflow: "hidden",
 									}}
 								>
-									{group.items.map((r, i) => (
+									{group.roles.map((r, i) => (
 										<div
 											key={r.id}
 											style={{
 												padding: "11px 16px",
 												borderBottom:
-													i < group.items.length - 1 ? HAIR : undefined,
+													i < group.roles.length - 1 ? HAIR : undefined,
 												background: i % 2 === 1 ? "#fafdfb" : "#fff",
 											}}
 										>

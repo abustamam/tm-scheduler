@@ -114,7 +114,7 @@ Assessed against the diff, not the whole repo: every branch, error path and user
 introduces should have a test that exercises it. `/ship`'s coverage audit reads these numbers and
 gates on them.
 
-Six coverage traps this repo has actually hit, all worth checking when a number looks fine:
+Seven coverage traps this repo has actually hit, all worth checking when a number looks fine:
 
 - **A test can pin the wrong thing after a rename.** An assertion matching a role name by string
   (`r.who === "Toastmaster of the Day"`) stopped being unique once a second beat rendered the same
@@ -180,6 +180,25 @@ Six coverage traps this repo has actually hit, all worth checking when a number 
   assertions, making the unstated zero explicit. Source greps still earn their place next to it: the grep
   pins the RULE and catches a deletion in review, the render pins the RESULT and catches a geometry change
   no grep can see. See #502.
+
+- **A component tested through its props cannot see a WRONG prop.** The props are the fixture, so a
+  thorough component suite says nothing about the expression that computes them at the call site.
+  #319 shipped exactly there: `VisitCta` and `AboutClub` were both well covered, and the bug was in
+  neither — the route wired `isMember={shell}`, true only for a SIGNED-IN member, so a member who
+  identified through the anonymous roster pick (the dominant path in this no-auth product) was shown
+  "Planning a visit? Guests are always welcome" on their own club's sign-up sheet. The whole
+  3,437-test suite was green. Rendering `club.$clubId.index.tsx` to observe that boolean means
+  standing up a QueryClientProvider, the identity gate, the commitments query and the entire
+  SeasonGrid — a large brittle fixture for one expression — so the reachable gate is a comment-blind
+  source guard on the JSX (`club-index-wiring.guard.test.ts` via `#/test/guard-source`), pinning the
+  prop expression and the elements that carry it. Two generalisations. When you finish a component's
+  tests, LIST the props that are COMPUTED rather than passed through: those are untested by
+  construction, and each one is a place this trap fits. And a prop named for the NARROWER of two
+  identities invites the narrower read — `isMember` was renamed `hasIdentity` in the fix, which is
+  why the guard also fails on the old name. That guard reads comment-blind (`readSource`) for both
+  of the reasons in `src/test/guard-source.ts` at once: its "this pattern must BE present"
+  assertions would falsely PASS on a comment merely naming the pattern, and its own file header
+  quotes `isMember={shell}`, which would falsely FAIL the one negative assertion read raw.
 
 ## Environment
 

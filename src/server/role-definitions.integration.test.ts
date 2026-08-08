@@ -147,7 +147,7 @@ describe.skipIf(!hasTestDb)("role-definition management", () => {
 		expect(rows.length).toBe(3);
 	});
 
-	it("listRoleDefinitions returns roles ordered by sortOrder with a slotCount", async () => {
+	it("listRoleDefinitions({ withSlotCounts: true }) returns roles ordered by sortOrder with a slotCount", async () => {
 		await applyRoleDefinitionCreate({
 			clubId: seed.clubId,
 			name: "Speaker",
@@ -155,7 +155,9 @@ describe.skipIf(!hasTestDb)("role-definition management", () => {
 			defaultCount: 2,
 			isSpeakerRole: true,
 		});
-		const list = await listRoleDefinitions(seed.clubId);
+		const list = await listRoleDefinitions(seed.clubId, {
+			withSlotCounts: true,
+		});
 		expect(list.length).toBe(2);
 		// Seeded Timer (with a slot) first, then the new Speaker (no slots).
 		expect(list[0].name).toBe("Timer");
@@ -165,6 +167,27 @@ describe.skipIf(!hasTestDb)("role-definition management", () => {
 		expect(speaker?.isSpeakerRole).toBe(true);
 		// Ordered ascending by sortOrder.
 		expect(list[0].sortOrder).toBeLessThan(list[1].sortOrder);
+	});
+
+	/**
+	 * `slotCount` is opt-in (#318). Computing it costs a leftJoin + groupBy over
+	 * `role_slots` — a table that grows with every meeting of EVERY club — and
+	 * the public readers (the printed sheet and the roles guide, both reachable
+	 * unauthenticated and PRELOADED ON HOVER) never read it.
+	 *
+	 * Asserting the ABSENCE of the key, not just "the query still works": the
+	 * whole point is that the aggregate did not run, and a result-shaped
+	 * assertion would pass either way.
+	 */
+	it("omits slotCount — and its join — unless the caller asks", async () => {
+		const list = await listRoleDefinitions(seed.clubId);
+		expect(list.length).toBeGreaterThan(0);
+		for (const r of list) {
+			expect(r).not.toHaveProperty("slotCount");
+		}
+		// The rest of the row is unchanged, so callers that ignore slotCount
+		// (the public sheet, the "+ Add role" picker) see the same data.
+		expect(list[0]).toMatchObject({ name: "Timer", enabled: true });
 	});
 
 	/**

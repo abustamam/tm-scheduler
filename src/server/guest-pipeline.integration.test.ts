@@ -61,6 +61,53 @@ const { applyAssignGuestToSlot, listClubGuests } = await import(
 	"#/server/guests-logic"
 );
 
+/**
+ * A guest signing the book AT a meeting, then that meeting receding into the
+ * past — i.e. one real visit.
+ *
+ * Since #319 an attendance row is written ONLY for a meeting happening today,
+ * so two visits necessarily happen on two different DAYS. Aging the meeting
+ * after the capture lets one test simulate that without touching the clock; the
+ * attendance row it wrote is untouched and still points at that meeting.
+ */
+async function captureAtTodaysMeeting(
+	input: Parameters<typeof captureGuestVisit>[0],
+): Promise<{
+	meetingId: string;
+	res: Awaited<ReturnType<typeof captureGuestVisit>>;
+}> {
+	const meetingId = await seedMeetingInProgress(input.clubId);
+	const res = await captureGuestVisit(input);
+	await testDb
+		.update(meetings)
+		.set({ scheduledAt: new Date(Date.now() - 24 * 60 * 60 * 1000) })
+		.where(eq(meetings.id, meetingId));
+	return { meetingId, res };
+}
+
+/**
+ * Insert a meeting that is IN PROGRESS right now — started 10 minutes ago.
+ *
+ * Since #319 this is the only shape that produces an attendance row:
+ * `captureGuestVisit` writes `status: "present"` only when the resolved meeting
+ * is inside `isAtMeetingNow`'s absolute window, because the guest book is now
+ * linked from the public club page and a sign-up outside the meeting must not
+ * enter its minutes as a person present. The seeded club meeting is 7 days out,
+ * so a fixture that wants attendance has to say so explicitly.
+ */
+async function seedMeetingInProgress(clubId: string): Promise<string> {
+	const [m] = await testDb
+		.insert(meetings)
+		.values({
+			clubId,
+			scheduledAt: new Date(Date.now() - 10 * 60 * 1000),
+			status: "scheduled",
+		})
+		.returning({ id: meetings.id });
+	if (!m) throw new Error("Failed to seed in-progress meeting");
+	return m.id;
+}
+
 /** Insert a second, sooner meeting so the next capture resolves against IT. */
 async function seedSoonerMeeting(clubId: string, daysOut = 1): Promise<string> {
 	const [m] = await testDb
@@ -98,6 +145,10 @@ async function seedPastMeeting(
  * derivation compares club-local DATES, so this counts as having happened even
  * though the wall clock hasn't reached it — the "VPM opens the minutes at 18:45
  * for a 19:00 meeting" case from #374.
+ *
+ * NOTE: this is for the READ-side derivation. It is NOT "in progress" for the
+ * guest-book write gate, which since #319 uses an absolute window around the
+ * meeting (`isAtMeetingNow`) — use `seedMeetingInProgress` for that.
  */
 async function seedMeetingLaterToday(clubId: string): Promise<string> {
 	const [club] = await testDb
@@ -196,7 +247,10 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 	});
 
 	describe("capture (guest book)", () => {
-		it("creates a prospect + an attendance row against the current meeting", async () => {
+		it("creates a prospect + an attendance row against TODAY's meeting", async () => {
+			// Attendance is only written for a meeting happening today (#319), so
+			// the fixture must schedule one — the seeded club meeting is 7 days out.
+			const today = await seedMeetingInProgress(seed.clubId);
 			const res = await captureGuestVisit({
 				clubId: seed.clubId,
 				name: "  Jamie Rivera  ",
@@ -204,7 +258,7 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			});
 			expect(res.created).toBe(true);
 			expect(res.attendanceRecorded).toBe(true);
-			expect(res.meetingId).toBe(seed.meetingId);
+			expect(res.meetingId).toBe(today);
 
 			const [g] = await testDb
 				.select()
@@ -222,18 +276,18 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 
 			const att = await attendanceForGuest(res.guestId);
 			expect(att).toHaveLength(1);
-			expect(att[0]!.meetingId).toBe(seed.meetingId);
+			expect(att[0]!.meetingId).toBe(today);
 		});
 
 		it("dedups by PHONE across formats — reuses the guest, adds a new visit", async () => {
-			const first = await captureGuestVisit({
+			// Two visits on two different days — only a same-day meeting yields an
+			// attendance row (#319).
+			const { meetingId: m1, res: first } = await captureAtTodaysMeeting({
 				clubId: seed.clubId,
 				name: "Jamie Rivera",
 				phone: "555-123-4567",
 			});
-			// A sooner meeting becomes the nearest for the next visit.
-			const m2 = await seedSoonerMeeting(seed.clubId);
-			const second = await captureGuestVisit({
+			const { meetingId: m2, res: second } = await captureAtTodaysMeeting({
 				clubId: seed.clubId,
 				name: "Jamie R.",
 				phone: "(555) 123.4567",
@@ -250,9 +304,7 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			expect(clubGuests).toHaveLength(1);
 
 			const att = await attendanceForGuest(first.guestId);
-			expect(att.map((a) => a.meetingId).sort()).toEqual(
-				[seed.meetingId, m2].sort(),
-			);
+			expect(att.map((a) => a.meetingId).sort()).toEqual([m1, m2].sort());
 		});
 
 		it("dedups by EMAIL when phone differs; a total mismatch creates a new guest", async () => {
@@ -309,7 +361,10 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 	describe("phone dedup across +country-code spellings (#397)", () => {
 		/** The issue's own acceptance test, end to end. */
 		it("one guest with 2 visits when the same number is typed with and without +1", async () => {
-			const first = await captureGuestVisit({
+			// Two visits on two days; `captureAtTodaysMeeting` ages each meeting
+			// after the capture, so both are already past and the derivation
+			// counts them (#374).
+			const { res: first } = await captureAtTodaysMeeting({
 				clubId: seed.clubId,
 				name: "Jamie Rivera",
 				phone: "(555) 123-4567",
@@ -317,8 +372,7 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			expect(first.created).toBe(true);
 
 			// Second visit, a different meeting — an officer types the country code.
-			const m2 = await seedSoonerMeeting(seed.clubId);
-			const second = await captureGuestVisit({
+			const { res: second } = await captureAtTodaysMeeting({
 				clubId: seed.clubId,
 				name: "Jamie Rivera",
 				phone: "+1 (555) 123-4567",
@@ -331,16 +385,6 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 				.from(guests)
 				.where(eq(guests.clubId, seed.clubId));
 			expect(clubGuests).toHaveLength(1);
-
-			// Both meetings in the past so the derivation counts them (#374).
-			await testDb
-				.update(meetings)
-				.set({ scheduledAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000) })
-				.where(eq(meetings.id, seed.meetingId));
-			await testDb
-				.update(meetings)
-				.set({ scheduledAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000) })
-				.where(eq(meetings.id, m2));
 
 			const row = await pipelineRow(seed.clubId, first.guestId);
 			expect(row.visitCount).toBe(2);
@@ -441,42 +485,22 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 
 	describe("derived visits", () => {
 		it("computes visitCount + firstVisitAt from attendance (no stored counter)", async () => {
-			const first = await captureGuestVisit({
+			// Two visits on two different days. `captureAtTodaysMeeting` ages each
+			// meeting after the capture, so both are past by the time we read.
+			const { res: first } = await captureAtTodaysMeeting({
 				clubId: seed.clubId,
 				name: "Repeat Visitor",
 				phone: "555-777-8888",
 			});
-			const m2 = await seedSoonerMeeting(seed.clubId);
-			await captureGuestVisit({
+			await captureAtTodaysMeeting({
 				clubId: seed.clubId,
 				name: "Repeat Visitor",
 				phone: "555-777-8888",
 			});
 
-			// Both meetings are still ahead of us. `resolveCurrentMeetingId` falls
-			// back to the UPCOMING meeting when none is scheduled today, so these
-			// attendance rows are dated in the future — a plan, not a visit. They
-			// must not render as "1 visit · first Aug 1" a week early (#374).
-			const early = await pipelineRow(seed.clubId, first.guestId);
-			expect(early.visitCount).toBe(0);
-			expect(early.firstVisitAt).toBeNull();
-
-			// Once those meeting DATES have passed, the very same attendance rows
-			// count — nothing was rewritten, the derivation just re-reads the dates.
-			await testDb
-				.update(meetings)
-				.set({ scheduledAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000) })
-				.where(eq(meetings.id, seed.meetingId));
-			await testDb
-				.update(meetings)
-				.set({ scheduledAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000) })
-				.where(eq(meetings.id, m2));
-
-			const pipeline = await loadGuestPipeline(seed.clubId);
-			const row = pipeline.find((g) => g.id === first.guestId);
-			expect(row).toBeDefined();
-			expect(row!.visitCount).toBe(2);
-			expect(row!.firstVisitAt).toBeInstanceOf(Date);
+			const row = await pipelineRow(seed.clubId, first.guestId);
+			expect(row.visitCount).toBe(2);
+			expect(row.firstVisitAt).toBeInstanceOf(Date);
 
 			// A guest with no attendance derives zero visits / null first-visit.
 			const [orphan] = await testDb
@@ -487,6 +511,52 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			const orphanRow = pipeline2.find((g) => g.id === orphan!.id);
 			expect(orphanRow!.visitCount).toBe(0);
 			expect(orphanRow!.firstVisitAt).toBeNull();
+		});
+
+		/**
+		 * The #319 rule, stated directly.
+		 *
+		 * Before it, `resolveCurrentMeeting`'s fallback to the NEXT upcoming
+		 * meeting meant an advance sign-up wrote `status: "present"` against a
+		 * meeting the guest had not attended. `guestVisits` date-gates its own
+		 * derivation, so the VP-Membership pipeline hid it — but `minutes-logic`
+		 * reads `meeting_attendance` with NO date gate, so the guest appeared in
+		 * that meeting's official minutes as present and was emailed them.
+		 *
+		 * Linking the guest book from the public club page turned that from an edge
+		 * case into the expected flow, so the row is no longer written at all.
+		 */
+		it("an advance sign-up creates the guest but NO attendance row", async () => {
+			// The seeded club meeting is 7 days out and nothing is scheduled today.
+			const res = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Plans To Visit",
+				phone: uniquePhone(),
+			});
+
+			// The prospect still exists — the VPE must see who is coming.
+			expect(res.created).toBe(true);
+			expect(res.attendanceRecorded).toBe(false);
+			expect(res.meetingId).toBeNull();
+			const [g] = await testDb
+				.select()
+				.from(guests)
+				.where(eq(guests.id, res.guestId))
+				.limit(1);
+			expect(g?.stage).toBe("prospect");
+
+			// ...but nothing claims they attended anything.
+			expect(await attendanceForGuest(res.guestId)).toHaveLength(0);
+
+			// And the row does NOT appear once that meeting's date passes — the
+			// defect was that it started counting as a real visit on the day.
+			await testDb
+				.update(meetings)
+				.set({ scheduledAt: new Date(Date.now() - 24 * 60 * 60 * 1000) })
+				.where(eq(meetings.id, seed.meetingId));
+			const row = await pipelineRow(seed.clubId, res.guestId);
+			expect(row.visitCount).toBe(0);
+			expect(row.firstVisitAt).toBeNull();
 		});
 	});
 

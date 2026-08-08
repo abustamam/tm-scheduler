@@ -4,7 +4,7 @@ import { CalendarDays, Loader2, MailCheck, Mic, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { ClubHomeHeader } from "#/components/club/club-home-header";
-import { GuestResources } from "#/components/club/guest-resources";
+import { GuestOnboarding } from "#/components/club/guest-onboarding";
 import { useRequireIdentity } from "#/components/club/identity-gate";
 import { SeasonGrid } from "#/components/club/season-grid";
 import { ViewingAs } from "#/components/club/viewing-as";
@@ -16,6 +16,7 @@ import { authClient } from "#/lib/auth-client";
 import { formatMeetingDate, formatMeetingTimeRange } from "#/lib/format";
 import { type StoredMember, useEffectiveMember } from "#/lib/member-identity";
 import type { Orientation } from "#/lib/season-grid-view";
+import { getPublicClubProfileFn } from "#/server/clubs";
 import { listMemberCommitments } from "#/server/meetings";
 import {
 	getPublicSeasonGrid,
@@ -37,18 +38,29 @@ export const Route = createFileRoute("/club/$clubId/")({
 					: 8,
 	}),
 	loaderDeps: ({ search }) => ({ count: search.count }),
-	loader: ({ context, deps }) =>
-		getPublicSeasonGrid({
-			data: { clubId: context.clubUuid, count: deps.count },
-		}),
+	loader: async ({ context, deps }) => {
+		// Parallel — the profile is decorative and must not delay the sign-up
+		// sheet, which is the primary surface. It must not be able to BREAK it
+		// either: `Promise.all` rejects on the first rejection, so without the
+		// catch a profile query failure would 500 the whole public club page.
+		// `AboutClub` already renders nothing for a null profile, so degrading
+		// to "no About block" is free.
+		const [grid, profile] = await Promise.all([
+			getPublicSeasonGrid({
+				data: { clubId: context.clubUuid, count: deps.count },
+			}),
+			getPublicClubProfileFn({ data: context.clubUuid }).catch(() => null),
+		]);
+		return { grid, profile };
+	},
 	component: ClubHome,
 });
 
 function ClubHome() {
 	const { clubId } = Route.useParams();
-	const { clubUuid, clubName, effectiveMemberId, authCtx } =
+	const { clubUuid, clubName, shell, effectiveMemberId, authCtx } =
 		Route.useRouteContext();
-	const grid = Route.useLoaderData();
+	const { grid, profile } = Route.useLoaderData();
 	const { view, count } = Route.useSearch();
 	// Shell-wrapped signed-in member → session identity; anonymous → localStorage
 	// pick (#317). `source` hides the anon-only "not you?" + claim affordances.
@@ -98,7 +110,19 @@ function ClubHome() {
 				<ViewingAs member={member} promptIdentity={promptIdentity} />
 			) : null}
 
-			<GuestResources />
+			{/* Guest onboarding — the club's basics, the "New to Toastmasters?"
+			    strip and the visit funnel (#318 / #319). Hidden from anyone who
+			    already belongs here: `shell` covers a signed-in member, `member`
+			    the anonymous roster pick — the dominant path in this no-auth
+			    product, and the one a `shell`-only gate misses. A member who just
+			    picked their own name came for the sign-up sheet, not for their
+			    own club's meeting time explained back to them. */}
+			<GuestOnboarding
+				hasIdentity={shell || member !== null}
+				clubId={clubId}
+				clubName={clubName}
+				profile={profile}
+			/>
 
 			{/* "This is me" — graduate a public picker into a real account (#266). */}
 			{member && source === "anon" ? (
