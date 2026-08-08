@@ -20,8 +20,9 @@ export function ClubHomeHeader({
 				{clubName}
 			</h1>
 			<p className="mt-0.5 text-sm text-muted-foreground">
-				Hi {memberName ?? "there"} — claim a role below, or check the ones you
-				already hold.
+				{/* `?.trim() ||`, not `??`: an empty-string name would greet "Hi  —". */}
+				Hi {memberName?.trim() || "there"} — claim a role below, or check the
+				ones you already hold.
 			</p>
 		</div>
 	);

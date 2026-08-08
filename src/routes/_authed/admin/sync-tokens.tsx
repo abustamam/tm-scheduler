@@ -17,7 +17,7 @@ import {
 export const Route = createFileRoute("/_authed/admin/sync-tokens")({
 	beforeLoad: ({ context }) => {
 		const adminClub = effectiveAdminClub(context);
-		if (!adminClub) throw redirect({ to: "/roster" });
+		if (!adminClub) throw redirect({ to: "/dashboard" });
 		return { adminClub };
 	},
 	component: SyncTokens,
