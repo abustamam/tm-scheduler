@@ -15,8 +15,10 @@ import { formatMeetingDate } from "#/lib/format";
 import type { StoredMember } from "#/lib/member-identity";
 import { meetingRoleOptions } from "#/lib/member-role-picker";
 import {
+	FREE_CELL,
 	type MemberMeetingStatus,
 	memberMeetingStatus,
+	NA_CELL,
 	type Orientation,
 	projectGrid,
 } from "#/lib/season-grid-view";
@@ -363,324 +365,376 @@ export function SeasonGrid({
 				</div>
 			</div>
 
-			<div className="overflow-auto rounded-xl border">
-				<table className="border-separate border-spacing-1">
-					<thead>
-						<tr>
-							{/* shadow on the sticky label column: without an edge, columns
+			{/* Border on the wrapper, scroll + fade on the inner div (#542, F-006):
+			    `scroll-fade-r` masks the scroll container's right edge as a "more
+			    columns this way" hint (retracting at scroll end), and a mask on the
+			    bordered element would fade the border itself. */}
+			<div className="rounded-xl border">
+				<div className="scroll-fade-r overflow-auto rounded-xl">
+					<table className="border-separate border-spacing-1">
+						<thead>
+							<tr>
+								{/* shadow on the sticky label column: without an edge, columns
 						    sliding beneath it read as clipped/broken instead of
 						    scrolled (the grid auto-scrolls to the upcoming meeting). */}
-							<th className="sticky top-0 left-0 z-20 bg-card px-3 py-2 text-left text-xs font-semibold shadow-[4px_0_6px_-4px_rgba(0,0,0,0.35)]">
-								{labelHead}
-							</th>
-							{data.meetings.map((m) => {
-								const status = meetingStatus.get(m.id);
-								const chipVisible =
-									!!currentMemberId && !!clubId && !m.isPast && !m.isCompleted;
-								const header = (
-									<>
-										<div>{formatMeetingDate(m.scheduledAt, m.timezone)}</div>
-										{m.isCompleted ? (
-											<div className="flex items-center justify-center gap-0.5 text-[10px] font-semibold text-muted-foreground">
-												<Lock className="size-2.5" aria-hidden />
-												locked
-											</div>
-										) : (
-											// "ended", not "done": a past meeting still accepts
-											// late sign-ups (recording who stepped in), so the
-											// label shouldn't read as closed.
-											<div className="text-[10px] font-medium text-warning-foreground">
-												{m.isPast
-													? "ended"
-													: m.openCount === 0
-														? "full"
-														: `${m.openCount} open`}
-											</div>
-										)}
-									</>
-								);
-								return (
-									<th
-										key={m.id}
-										ref={m.isAnchor ? anchorRef : undefined}
-										className={cn(
-											"sticky top-0 min-w-[3.5rem] bg-card px-2 py-2 text-center text-xs font-semibold",
-											m.isPast && !m.isCompleted && "opacity-45",
-											m.isCompleted && "bg-muted/60",
-											m.isAnchor && "rounded-md ring-2 ring-primary",
-										)}
-									>
-										{/* py-2 below md: the date link + the chip below can't both
+								<th className="sticky top-0 left-0 z-20 bg-card px-3 py-2 text-left text-xs font-semibold shadow-[4px_0_6px_-4px_rgba(0,0,0,0.35)]">
+									{labelHead}
+								</th>
+								{data.meetings.map((m) => {
+									const status = meetingStatus.get(m.id);
+									const chipVisible =
+										!!currentMemberId &&
+										!!clubId &&
+										!m.isPast &&
+										!m.isCompleted;
+									const header = (
+										<>
+											<div>{formatMeetingDate(m.scheduledAt, m.timezone)}</div>
+											{m.isCompleted ? (
+												<div className="flex items-center justify-center gap-0.5 text-[10px] font-semibold text-muted-foreground">
+													<Lock className="size-2.5" aria-hidden />
+													locked
+												</div>
+											) : (
+												// "ended", not "done": a past meeting still accepts
+												// late sign-ups (recording who stepped in), so the
+												// label shouldn't read as closed.
+												<div className="text-[10px] font-medium text-warning-foreground">
+													{m.isPast
+														? "ended"
+														: m.openCount === 0
+															? "full"
+															: `${m.openCount} open`}
+												</div>
+											)}
+										</>
+									);
+									return (
+										<th
+											key={m.id}
+											ref={m.isAnchor ? anchorRef : undefined}
+											className={cn(
+												"sticky top-0 min-w-[3.5rem] bg-card px-2 py-2 text-center text-xs font-semibold",
+												m.isPast && !m.isCompleted && "opacity-45",
+												m.isCompleted && "bg-muted/60",
+												m.isAnchor && "rounded-md ring-2 ring-primary",
+											)}
+										>
+											{/* py-2 below md: the date link + the chip below can't both
 										    reach 44px inside today's ~60px header, so the link gets
 										    real padding (the header grows a little on the phone);
 										    md+ is py-0 — unchanged (#224). */}
-										<MeetingLink
-											clubSlug={clubSlug}
-											meetingId={m.id}
-											meetingKey={m.urlKey}
-											className="block py-2 md:py-0"
-										>
-											{header}
-										</MeetingLink>
-										{chipVisible ? (
-											<button
-												type="button"
-												disabled={busyMeetingId === m.id}
-												onClick={() => onHeaderAvailability(m, status)}
-												title={
-													status?.declined
-														? "Tap if you can make it after all"
-														: "Mark yourself unavailable — I can't make this one"
-												}
-												aria-label={`${
-													status?.declined ? "Not going" : "Can't go"
-												} — ${formatMeetingDate(m.scheduledAt, m.timezone)}`}
-												className={cn(
-													// px-2.5/py-1/11px (was px-1.5/py-0.5/10px): the chip is a
-													// primary mobile action — 19px tall was too small to tap.
-													"mx-auto mt-1 flex cursor-pointer items-center gap-0.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold whitespace-nowrap transition-colors disabled:opacity-50",
-													// Below md the pill gets a bit more padding (~33px) and an
-													// invisible ::after pad tops it up to a ≥44px hit area:
-													// 4px up (exactly the mt-1 gap, so it never covers the
-													// date link) + 12px down (exactly the th padding + row
-													// gap, so it never covers the first grid row) (#224).
-													"max-md:relative max-md:py-2 max-md:after:absolute max-md:after:inset-x-0 max-md:after:-top-1 max-md:after:-bottom-3 max-md:after:content-['']",
-													status?.declined
-														? // Same fill recipe as the destructive Button variant, so
-															// white text stays AA in dark (destructive/60 ⇒ 6.0:1).
-															"border-destructive bg-destructive text-white hover:opacity-80 dark:border-destructive/60 dark:bg-destructive/60"
-														: "border-border text-muted-foreground/70 hover:border-destructive/50 hover:text-destructive",
-												)}
+											<MeetingLink
+												clubSlug={clubSlug}
+												meetingId={m.id}
+												meetingKey={m.urlKey}
+												className="block py-2 md:py-0"
 											>
-												{busyMeetingId === m.id ? (
-													<Loader2
-														className="size-2.5 animate-spin"
-														aria-hidden
-													/>
-												) : status?.declined ? (
-													<>
-														Not going
-														<X className="size-2.5" aria-hidden />
-													</>
-												) : (
-													"Can't go"
-												)}
-											</button>
-										) : null}
-									</th>
+												{header}
+											</MeetingLink>
+											{chipVisible ? (
+												<button
+													type="button"
+													disabled={busyMeetingId === m.id}
+													onClick={() => onHeaderAvailability(m, status)}
+													title={
+														status?.declined
+															? "Tap if you can make it after all"
+															: "Mark yourself unavailable — I can't make this one"
+													}
+													aria-label={`${
+														status?.declined ? "Not going" : "Can't go"
+													} — ${formatMeetingDate(m.scheduledAt, m.timezone)}`}
+													className={cn(
+														// px-2.5/py-1/11px (was px-1.5/py-0.5/10px): the chip is a
+														// primary mobile action — 19px tall was too small to tap.
+														"mx-auto mt-1 flex cursor-pointer items-center gap-0.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold whitespace-nowrap transition-colors disabled:opacity-50",
+														// Below md the pill gets a bit more padding (~33px) and an
+														// invisible ::after pad tops it up to a ≥44px hit area:
+														// 4px up (exactly the mt-1 gap, so it never covers the
+														// date link) + 12px down (exactly the th padding + row
+														// gap, so it never covers the first grid row) (#224).
+														"max-md:relative max-md:py-2 max-md:after:absolute max-md:after:inset-x-0 max-md:after:-top-1 max-md:after:-bottom-3 max-md:after:content-['']",
+														status?.declined
+															? // Same fill recipe as the destructive Button variant, so
+																// white text stays AA in dark (destructive/60 ⇒ 6.0:1).
+																"border-destructive bg-destructive text-white hover:opacity-80 dark:border-destructive/60 dark:bg-destructive/60"
+															: "border-border text-muted-foreground/70 hover:border-destructive/50 hover:text-destructive",
+													)}
+												>
+													{busyMeetingId === m.id ? (
+														<Loader2
+															className="size-2.5 animate-spin"
+															aria-hidden
+														/>
+													) : status?.declined ? (
+														<>
+															Not going
+															<X className="size-2.5" aria-hidden />
+														</>
+													) : (
+														"Can't go"
+													)}
+												</button>
+											) : null}
+										</th>
+									);
+								})}
+								{showContactCols ? (
+									<>
+										<th className="sticky top-0 bg-card px-3 py-2 text-left text-xs font-semibold">
+											Email
+										</th>
+										<th className="sticky top-0 bg-card px-3 py-2 text-left text-xs font-semibold">
+											Phone
+										</th>
+									</>
+								) : null}
+							</tr>
+						</thead>
+						<tbody>
+							{rows.map((row) => {
+								const isMemberView = orientation === "members";
+								const isSelfRow =
+									isMemberView &&
+									!!currentMemberId &&
+									row.memberId === currentMemberId;
+								// Recede OTHER members only on the self-serve sheet. The officer
+								// schedule (canManageOthers) manages everyone, so nothing dims
+								// there — every row stays full-strength.
+								const dimRow =
+									isMemberView &&
+									!!row.memberId &&
+									!isSelfRow &&
+									!!currentMemberId &&
+									!canManageOthers;
+								// Dimmed cells brighten when the row is hovered (`group`), so any
+								// member can still be traced across the meeting columns.
+								const tdClass = cn(
+									"p-0",
+									dimRow &&
+										"opacity-55 transition-opacity group-hover:opacity-100",
 								);
-							})}
-							{showContactCols ? (
-								<>
-									<th className="sticky top-0 bg-card px-3 py-2 text-left text-xs font-semibold">
-										Email
-									</th>
-									<th className="sticky top-0 bg-card px-3 py-2 text-left text-xs font-semibold">
-										Phone
-									</th>
-								</>
-							) : null}
-						</tr>
-					</thead>
-					<tbody>
-						{rows.map((row) => {
-							const isMemberView = orientation === "members";
-							const isSelfRow =
-								isMemberView &&
-								!!currentMemberId &&
-								row.memberId === currentMemberId;
-							// Recede OTHER members only on the self-serve sheet. The officer
-							// schedule (canManageOthers) manages everyone, so nothing dims
-							// there — every row stays full-strength.
-							const dimRow =
-								isMemberView &&
-								!!row.memberId &&
-								!isSelfRow &&
-								!!currentMemberId &&
-								!canManageOthers;
-							// Dimmed cells brighten when the row is hovered (`group`), so any
-							// member can still be traced across the meeting columns.
-							const tdClass = cn(
-								"p-0",
-								dimRow &&
-									"opacity-55 transition-opacity group-hover:opacity-100",
-							);
-							const contact = row.memberId
-								? contactByMember.get(row.memberId)
-								: undefined;
-							return (
-								<tr
-									key={row.id}
-									ref={isSelfRow ? selfRowRef : undefined}
-									className={cn(
-										"group transition-colors",
-										isSelfRow ? "bg-primary/[0.07]" : "hover:bg-muted/40",
-									)}
-								>
-									<th
+								const contact = row.memberId
+									? contactByMember.get(row.memberId)
+									: undefined;
+								return (
+									<tr
+										key={row.id}
+										ref={isSelfRow ? selfRowRef : undefined}
 										className={cn(
-											"sticky left-0 z-10 px-3 py-1 text-right text-xs font-semibold whitespace-nowrap",
-											isSelfRow
-												? // Opaque tinted fill (color-mix stays opaque, so nothing
-													// bleeds under the sticky column) + a 3px inset accent bar.
-													"bg-[color-mix(in_oklab,var(--card),var(--primary)_8%)] shadow-[inset_3px_0_0_0_var(--primary),4px_0_6px_-4px_rgba(0,0,0,0.35)]"
-												: "bg-card group-hover:bg-muted shadow-[4px_0_6px_-4px_rgba(0,0,0,0.35)]",
+											"group transition-colors",
+											isSelfRow ? "bg-primary/[0.07]" : "hover:bg-muted/40",
 										)}
 									>
-										{row.memberId ? (
-											// Below md the row is already 44px tall (the cells grew),
-											// so an invisible ::before pad stretches this ~17px text
-											// link over the whole row height (±14px) and into the th
-											// side padding (±8px) without moving a pixel visually;
-											// md+ renders exactly as before (#224).
-											<Link
-												to="/members/$id"
-												params={{ id: row.memberId }}
-												className="hover:underline max-md:relative max-md:before:absolute max-md:before:-inset-x-2 max-md:before:-inset-y-3.5 max-md:before:content-['']"
-											>
-												{row.label}
-											</Link>
-										) : (
-											row.label
-										)}
-										{isSelfRow ? (
-											<span className="ml-1.5 inline-flex items-center rounded-full bg-primary px-1.5 py-0.5 align-middle text-[10px] font-semibold leading-none text-primary-foreground">
-												You
-											</span>
-										) : null}
-									</th>
-									{row.cells.map((cell, i) => {
-										const m = data.meetings[i];
-										const isOwnRow =
-											!!currentMemberId && row.memberId === currentMemberId;
-										const targetMemberId = row.memberId;
-										// Members × Meetings, an upcoming (not past/locked) meeting →
-										// the cell opens the role picker: your own row for anyone, or
-										// ANY member's row for an officer (canManageOthers).
-										const editable =
-											orientation === "members" &&
-											!!targetMemberId &&
-											!!currentMemberId &&
-											!!clubId &&
-											!!m &&
-											!m.isCompleted &&
-											!m.isPast &&
-											(isOwnRow || canManageOthers);
-										if (editable && m && targetMemberId && currentMemberId) {
-											const label = row.label;
-											const date = formatMeetingDate(m.scheduledAt, m.timezone);
-											return (
-												<td key={`${row.id}:${m.id}`} className={tdClass}>
-													<MemberRolePicker
-														data={data}
-														meetingId={m.id}
-														meetingDate={date}
-														targetMemberId={targetMemberId}
-														targetName={label}
-														isOwnRow={isOwnRow}
-														canReassign={canManageOthers}
-														actorMemberId={currentMemberId}
-														declined={cell.kind === "na"}
-														onMarkUnavailable={() =>
-															requestUnavailable(
-																targetMemberId,
-																m.id,
-																label,
-																isOwnRow,
-															)
-														}
-														onMarkAvailable={() =>
-															clearUnavailable(targetMemberId, m.id)
-														}
-														onChanged={() => onChanged?.()}
-													>
-														<button
-															type="button"
-															disabled={busyMeetingId === m.id}
-															title={cell.title || "Assign a role"}
-															aria-label={`Edit ${label} — ${date}${cell.contacted ? " — contacted" : ""}`}
-															className={cn(
-																CELL_BASE,
-																CELL_KIND_CLASS[cell.kind],
-																"w-full cursor-pointer transition-[filter,border-color] hover:brightness-95 disabled:opacity-50",
-																cell.kind === "free" &&
-																	"hover:border-[var(--lagoon-deep)] hover:text-[var(--lagoon-deep)]",
-															)}
+										<th
+											className={cn(
+												"sticky left-0 z-10 px-3 py-1 text-right text-xs font-semibold whitespace-nowrap",
+												isSelfRow
+													? // Opaque tinted fill (color-mix stays opaque, so nothing
+														// bleeds under the sticky column) + a 3px inset accent bar.
+														"bg-[color-mix(in_oklab,var(--card),var(--primary)_8%)] shadow-[inset_3px_0_0_0_var(--primary),4px_0_6px_-4px_rgba(0,0,0,0.35)]"
+													: "bg-card group-hover:bg-muted shadow-[4px_0_6px_-4px_rgba(0,0,0,0.35)]",
+											)}
+										>
+											{row.memberId ? (
+												// Below md the row is already 44px tall (the cells grew),
+												// so an invisible ::before pad stretches this ~17px text
+												// link over the whole row height (±14px) and into the th
+												// side padding (±8px) without moving a pixel visually;
+												// md+ renders exactly as before (#224).
+												<Link
+													to="/members/$id"
+													params={{ id: row.memberId }}
+													className="hover:underline max-md:relative max-md:before:absolute max-md:before:-inset-x-2 max-md:before:-inset-y-3.5 max-md:before:content-['']"
+												>
+													{row.label}
+												</Link>
+											) : (
+												row.label
+											)}
+											{isSelfRow ? (
+												<span className="ml-1.5 inline-flex items-center rounded-full bg-primary px-1.5 py-0.5 align-middle text-[10px] font-semibold leading-none text-primary-foreground">
+													You
+												</span>
+											) : null}
+										</th>
+										{row.cells.map((cell, i) => {
+											const m = data.meetings[i];
+											const isOwnRow =
+												!!currentMemberId && row.memberId === currentMemberId;
+											const targetMemberId = row.memberId;
+											// Members × Meetings, an upcoming (not past/locked) meeting →
+											// the cell opens the role picker: your own row for anyone, or
+											// ANY member's row for an officer (canManageOthers).
+											const editable =
+												orientation === "members" &&
+												!!targetMemberId &&
+												!!currentMemberId &&
+												!!clubId &&
+												!!m &&
+												!m.isCompleted &&
+												!m.isPast &&
+												(isOwnRow || canManageOthers);
+											if (editable && m && targetMemberId && currentMemberId) {
+												const label = row.label;
+												const date = formatMeetingDate(
+													m.scheduledAt,
+													m.timezone,
+												);
+												return (
+													<td key={`${row.id}:${m.id}`} className={tdClass}>
+														<MemberRolePicker
+															data={data}
+															meetingId={m.id}
+															meetingDate={date}
+															targetMemberId={targetMemberId}
+															targetName={label}
+															isOwnRow={isOwnRow}
+															canReassign={canManageOthers}
+															actorMemberId={currentMemberId}
+															declined={cell.kind === "na"}
+															onMarkUnavailable={() =>
+																requestUnavailable(
+																	targetMemberId,
+																	m.id,
+																	label,
+																	isOwnRow,
+																)
+															}
+															onMarkAvailable={() =>
+																clearUnavailable(targetMemberId, m.id)
+															}
+															onChanged={() => onChanged?.()}
 														>
-															{cell.text || (
-																<Plus
-																	className="size-3.5 opacity-40"
-																	aria-hidden
-																/>
-															)}
-															{cell.contacted ? (
-																<span
-																	aria-hidden
-																	className="ml-1 inline-block size-1.5 rounded-full bg-[var(--success-strong)]"
-																/>
-															) : null}
-														</button>
-													</MemberRolePicker>
+															<button
+																type="button"
+																disabled={busyMeetingId === m.id}
+																title={cell.title || "Assign a role"}
+																aria-label={`Edit ${label} — ${date}${cell.contacted ? " — contacted" : ""}`}
+																className={cn(
+																	CELL_BASE,
+																	CELL_KIND_CLASS[cell.kind],
+																	"w-full cursor-pointer transition-[filter,border-color] hover:brightness-95 disabled:opacity-50",
+																	cell.kind === "free" &&
+																		"group/cell hover:border-[var(--lagoon-deep)] hover:text-[var(--lagoon-deep)] focus-visible:border-[var(--lagoon-deep)] focus-visible:text-[var(--lagoon-deep)]",
+																)}
+															>
+																{cell.kind === "free" ? (
+																	// A free cell is a bare "·" — on hover/focus it
+																	// becomes a "+" so the open slot reads as
+																	// actionable (#542, F-008).
+																	<>
+																		<span className="group-hover/cell:hidden group-focus-visible/cell:hidden">
+																			{cell.text}
+																		</span>
+																		<Plus
+																			className="hidden size-3.5 group-hover/cell:inline group-focus-visible/cell:inline"
+																			aria-hidden
+																		/>
+																	</>
+																) : (
+																	cell.text || (
+																		<Plus
+																			className="size-3.5 opacity-40"
+																			aria-hidden
+																		/>
+																	)
+																)}
+																{cell.contacted ? (
+																	<span
+																		aria-hidden
+																		className="ml-1 inline-block size-1.5 rounded-full bg-[var(--success-strong)]"
+																	/>
+																) : null}
+															</button>
+														</MemberRolePicker>
+													</td>
+												);
+											}
+											return (
+												<td key={`${row.id}:${m?.id}`} className={tdClass}>
+													<GridCell
+														cell={cell}
+														currentMemberId={actingMemberId}
+														prospectiveClaim={prospectiveClaim}
+														busy={
+															(!!cell.slotId && busySlotId === cell.slotId) ||
+															busyMeetingId === cell.meetingId
+														}
+														onClaim={claim}
+														onRelease={release}
+														clubSlug={clubSlug}
+														meetingKey={m?.urlKey}
+														meetingLabel={
+															m
+																? formatMeetingDate(m.scheduledAt, m.timezone)
+																: undefined
+														}
+													/>
 												</td>
 											);
-										}
-										return (
-											<td key={`${row.id}:${m?.id}`} className={tdClass}>
-												<GridCell
-													cell={cell}
-													currentMemberId={actingMemberId}
-													prospectiveClaim={prospectiveClaim}
-													busy={
-														(!!cell.slotId && busySlotId === cell.slotId) ||
-														busyMeetingId === cell.meetingId
-													}
-													onClaim={claim}
-													onRelease={release}
-													clubSlug={clubSlug}
-													meetingKey={m?.urlKey}
-													meetingLabel={
-														m
-															? formatMeetingDate(m.scheduledAt, m.timezone)
-															: undefined
-													}
-												/>
-											</td>
-										);
-									})}
-									{showContactCols ? (
-										<>
-											<td className="px-3 py-1 text-left text-xs whitespace-nowrap">
-												{contact?.email ? (
-													<a
-														href={`mailto:${contact.email}`}
-														className="text-primary hover:underline"
-													>
-														{contact.email}
-													</a>
-												) : (
-													<span className="text-muted-foreground">—</span>
-												)}
-											</td>
-											<td className="px-3 py-1 text-left text-xs whitespace-nowrap">
-												{contact?.phone ? (
-													<a
-														href={`tel:${contact.phone}`}
-														className="text-primary hover:underline"
-													>
-														{contact.phone}
-													</a>
-												) : (
-													<span className="text-muted-foreground">—</span>
-												)}
-											</td>
-										</>
-									) : null}
-								</tr>
-							);
-						})}
-					</tbody>
-				</table>
+										})}
+										{showContactCols ? (
+											<>
+												<td className="px-3 py-1 text-left text-xs whitespace-nowrap">
+													{contact?.email ? (
+														<a
+															href={`mailto:${contact.email}`}
+															className="text-primary hover:underline"
+														>
+															{contact.email}
+														</a>
+													) : (
+														<span className="text-muted-foreground">—</span>
+													)}
+												</td>
+												<td className="px-3 py-1 text-left text-xs whitespace-nowrap">
+													{contact?.phone ? (
+														<a
+															href={`tel:${contact.phone}`}
+															className="text-primary hover:underline"
+														>
+															{contact.phone}
+														</a>
+													) : (
+														<span className="text-muted-foreground">—</span>
+													)}
+												</td>
+											</>
+										) : null}
+									</tr>
+								);
+							})}
+						</tbody>
+					</table>
+				</div>
 			</div>
+
+			{/* Legend for the Members × Meetings chips (#542, F-008): the cells
+			    speak in role short-codes (TD, SP1, …), a bare "·" for free and "NA"
+			    for unavailable — compact on purpose, decoded here once. Quiet: one
+			    wrapping muted line under the grid. */}
+			{orientation === "members" && data.rows.length > 0 ? (
+				<p className="text-[11px] leading-relaxed text-muted-foreground">
+					{data.rows.map((r) => (
+						<span
+							key={`${r.roleDefinitionId}:${r.slotIndex}`}
+							className="mr-3 inline-block whitespace-nowrap"
+						>
+							<span className="font-semibold">{r.shortCode}</span> {r.label}
+						</span>
+					))}
+					<span className="mr-3 inline-block whitespace-nowrap">
+						<span className="font-semibold">{NA_CELL.text}</span>{" "}
+						{NA_CELL.label}
+					</span>
+					<span className="inline-block whitespace-nowrap">
+						<span className="font-semibold">{FREE_CELL.text}</span>{" "}
+						{FREE_CELL.label}
+					</span>
+				</p>
+			) : null}
 
 			<Dialog
 				open={confirm !== null}

@@ -194,6 +194,75 @@ describe("SeasonGrid prospective claim + undo", () => {
 	});
 });
 
+describe("SeasonGrid legend (#542, F-008)", () => {
+	// Matches one <span> whose full normalized text is `text` — the legend
+	// entries pair a short code with its decoded label in a single span. The
+	// matcher reads `el.textContent` (not the `content` arg): testing-library
+	// hands the matcher only the element's DIRECT text nodes, and the short
+	// code sits in a nested <span>.
+	const normalized = (el: Element | null) =>
+		el?.textContent?.replace(/\s+/g, " ").trim();
+	const legendEntry = (text: string) =>
+		screen.getByText(
+			(_, el) => el?.tagName === "SPAN" && normalized(el) === text,
+		);
+
+	it("decodes the Members × Meetings short codes under the grid", async () => {
+		await renderMembersGrid();
+		expect(legendEntry("Time Timer")).toBeTruthy();
+		expect(legendEntry("NA Not available")).toBeTruthy();
+		expect(legendEntry("· Free")).toBeTruthy();
+	});
+
+	it("shows no legend in the roles orientation — cells spell out full names there", async () => {
+		await renderGrid(vi.fn(async () => null));
+		expect(
+			screen.queryByText(
+				(_, el) =>
+					el?.tagName === "SPAN" && normalized(el) === "NA Not available",
+			),
+		).toBeNull();
+	});
+});
+
+describe("SeasonGrid open-cell hover affordance (#542, F-008)", () => {
+	it("keeps both the resting '·' and the hover '+' in an editable free cell, swapped by the cell group", async () => {
+		await renderMembersGrid();
+		// Carla's cell for the upcoming meeting is the editable free-cell branch
+		// (same cell the #340 test reaches).
+		const cell = screen.getByRole("button", { name: /Edit Carla Nguyen/ });
+		// The swap is CSS-only (group-hover), so jsdom can assert structure, not
+		// paint: both elements must be in the DOM, wired to the SAME cell group.
+		expect(cell.classList.contains("group/cell")).toBe(true);
+		const dot = Array.from(cell.querySelectorAll("span")).find(
+			(s) => s.textContent === "·",
+		);
+		expect(dot?.className).toContain("group-hover/cell:hidden");
+		const plus = cell.querySelector("svg");
+		expect(plus).toBeTruthy();
+		expect(plus?.getAttribute("class") ?? "").toContain(
+			"group-hover/cell:inline",
+		);
+	});
+});
+
+describe("SeasonGrid scroll-fade container split (#542, F-006)", () => {
+	// jsdom performs no layout or paint, so the fade itself (mask + scroll-driven
+	// animation in styles.css) is eyeball-QA at a phone width. What IS assertable
+	// is the load-bearing structure: the mask class sits on the SCROLL container
+	// and the border on a wrapper OUTSIDE it — a mask on the bordered element
+	// would fade the border away, which is the exact bug the split avoids.
+	it("puts the fade mask on the scroll container and the border on its wrapper", async () => {
+		await renderMembersGrid();
+		const scroller = document.querySelector(".scroll-fade-r");
+		expect(scroller).toBeTruthy();
+		expect(scroller?.classList.contains("overflow-auto")).toBe(true);
+		expect(scroller?.querySelector("table")).toBeTruthy();
+		expect(scroller?.classList.contains("border")).toBe(false);
+		expect(scroller?.parentElement?.classList.contains("border")).toBe(true);
+	});
+});
+
 describe("SeasonGrid contacted marker (#340)", () => {
 	it("surfaces the contacted state on an editable free member cell, reachably and accessibly", async () => {
 		await renderMembersGrid();

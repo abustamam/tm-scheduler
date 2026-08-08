@@ -12,13 +12,15 @@ export const Route = createFileRoute("/_authed/officers")({
 	// anyone holding an elected office — mirrors `isOfficer` in `_authed.tsx` and
 	// `homeRedirectTarget` (`#/lib/home-route`). A freshly-provisioned first admin
 	// has no elected office yet, so gating on `officerPositions` alone bounced
-	// them straight back to `/roster` before they ever saw the setup checklist
+	// them straight back out before they ever saw the setup checklist
 	// (#265) — `effectiveAdminClub` is the fix, consistent with every other
-	// admin-gated route (club-settings, schedule, …).
+	// admin-gated route (club-settings, schedule, …). Non-officers go to their
+	// dashboard (#542), the member home — this is also the default post-sign-in
+	// path (signin.tsx sends everyone here first).
 	beforeLoad: ({ context }) => {
 		const adminClub = effectiveAdminClub(context);
 		if (!adminClub) {
-			throw redirect({ to: "/roster" });
+			throw redirect({ to: "/dashboard" });
 		}
 		return { adminClub };
 	},

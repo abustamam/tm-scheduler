@@ -13,7 +13,7 @@ export const Route = createFileRoute("/_authed/admin/meetings/new")({
 	beforeLoad: ({ context }) => {
 		const adminClub = effectiveAdminClub(context);
 		if (!adminClub) {
-			throw redirect({ to: "/roster" });
+			throw redirect({ to: "/dashboard" });
 		}
 		return { adminClub };
 	},

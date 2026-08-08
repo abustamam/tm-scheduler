@@ -4,6 +4,7 @@ import { CalendarDays, Loader2, MailCheck, Mic, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { AboutClub } from "#/components/club/about-club";
+import { ClubHomeHeader } from "#/components/club/club-home-header";
 import { GuestResources } from "#/components/club/guest-resources";
 import { useRequireIdentity } from "#/components/club/identity-gate";
 import { SeasonGrid } from "#/components/club/season-grid";
@@ -105,12 +106,8 @@ function ClubHome() {
 
 	return (
 		<div className="mx-auto w-full max-w-public space-y-6 p-4 pb-8 md:p-6">
-			{/* Header */}
-			<div className="flex items-center justify-between pt-2">
-				<h1 className="font-display text-2xl font-semibold tracking-tight">
-					Hi {member?.name ?? "there"} 👋
-				</h1>
-			</div>
+			{/* Header — the club name is the H1 (#542, F-005). */}
+			<ClubHomeHeader clubName={clubName} memberName={member?.name ?? null} />
 			{source === "anon" ? (
 				<ViewingAs member={member} promptIdentity={promptIdentity} />
 			) : null}

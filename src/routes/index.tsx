@@ -17,7 +17,7 @@ const DESCRIPTION =
 
 export const Route = createFileRoute("/")({
 	// Public front door. Signed-in visitors are sent into the app, role-aware:
-	// officers to the officer home, everyone else to the roster.
+	// officers to the officer home, everyone else to their dashboard.
 	beforeLoad: async () => {
 		const ctx = await getAuthContext();
 		if (ctx.user) {

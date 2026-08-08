@@ -206,3 +206,23 @@ describe("no print route hand-rolls its own page CSS", () => {
 		});
 	}
 });
+
+describe("the roles route keeps .no-print on its screen-only chrome", () => {
+	// The page-count harness CANNOT catch this one: the back-link pill (#542)
+	// is position:fixed, so it is out of flow and never moves the sheet count —
+	// Chrome repeats an un-hidden fixed box on every printed page instead of
+	// adding one. Losing `no-print` on it (or on the screen-only disclaimer
+	// footer) prints the white pill ON the paper with every gate green, so the
+	// class is pinned here at the source. Comment-blind (`readStripped`): this
+	// is a "must BE present" check, and the route mentions `.no-print` in two
+	// comments that must not satisfy it.
+	it("club.$clubId_.roles.tsx carries no-print on both screen-only elements", () => {
+		const src = readStripped("club.$clubId_.roles.tsx");
+		expect(
+			src.match(/className="no-print\b/g)?.length ?? 0,
+			"the roles route's back-link pill and screen-only footer must both " +
+				"keep `no-print` — a fixed-position element that loses it prints on " +
+				"the sheet without changing the page count.",
+		).toBeGreaterThanOrEqual(2);
+	});
+});

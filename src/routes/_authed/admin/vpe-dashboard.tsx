@@ -24,7 +24,7 @@ import type {
 export const Route = createFileRoute("/_authed/admin/vpe-dashboard")({
 	beforeLoad: ({ context }) => {
 		if (!effectiveAdminClub(context)) {
-			throw redirect({ to: "/roster" });
+			throw redirect({ to: "/dashboard" });
 		}
 	},
 	loader: async ({ context }) => {

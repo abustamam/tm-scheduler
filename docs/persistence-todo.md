@@ -58,7 +58,9 @@ design's RSVP count and duration have no model.
 
 ### 5. Reminders / notifications sending
 A `notifications` table exists but sending is not built yet.
-- **Stubbed by:** the agenda "Remind unfilled" button (toast only).
+- **Stubbed by:** nothing in the UI anymore — the agenda's disabled "Remind
+  unfilled (soon)" placeholder was removed in v1.8.5.0 (#542). A working
+  "Remind unfilled" control returns when the on-demand send path (#7) exists.
 - **To add:** wire the notification poller (#7) + a send path. The email gate is
   now cleared (`src/lib/email.ts`, Resend), so the build is unblocked — see
   `plans/020-reminders-build.md`.

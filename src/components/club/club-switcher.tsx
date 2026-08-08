@@ -60,7 +60,7 @@ export function ClubSwitcher({
 			await setActiveClub({ data: { clubId } });
 			setOpen(false);
 			// `/` owns the role-aware landing decision (officer → /officers, else
-			// → /roster, #255) — don't duplicate it here. `replace` keeps Back from
+			// → /dashboard, #255/#542) — don't duplicate it here. `replace` keeps Back from
 			// bouncing the user onto the previous club's page with the new club
 			// active, which is the same bug via history.
 			await router.navigate({ to: "/", replace: true });

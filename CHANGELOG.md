@@ -2,6 +2,20 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.8.5.0] - 2026-08-07
+
+### Changed
+
+- **The public club page now leads with the club's name.** Guests arrive here from shared links, and the page used to greet them with "Hi there 👋" while the club's identity sat in tiny truncated capitals in the corner. The club name is the headline now; the greeting moved underneath it.
+- **Members land on their own dashboard after signing in.** The old landing was the club roster — a management surface with export and merge buttons — while the personal dashboard (your upcoming roles, your speeches, your Pathways) sat unused in the menu. Officers still land on Officer home. The same rule now applies everywhere: any members-only bounce off an officer page lands on the dashboard too, so the answer to "where do I go when this page isn't mine" is the same on all fourteen doors.
+- **The meeting-page buttons say what they open.** "Role sheet" and "Role sheets" were one letter apart and opened different things; they are now "All role sheets" (the club's printable) and "This meeting's role sheets" (PDFs pre-filled for that meeting). The share button says "Copy share link" for everyone — officers used to see a different name for the same link.
+- **The sign-up sheet reads better on a phone.** When more meeting columns hide past the right edge, the edge now fades to say so — and the fade retracts once you've scrolled to the end. The member view's short codes (TD, SP1, NA…) get a legend under the grid, and an open cell shows a plus when you point at or tab to it, so free slots read as claimable.
+- **The printable role-sheet page has a way back in.** It used to be a dead end for guests opening a shared link — no header, no navigation. A small "← club name" pill now returns to the club page; it stays off the printed sheet.
+
+### Removed
+
+- **The "Remind unfilled (soon)" button is gone.** It promised a feature that isn't built yet (#7) and had been flagged in two audits. The open-roles count it sat beside remains; the button returns when reminders actually send.
+
 ## [1.8.4.0] - 2026-08-07
 
 ### Changed

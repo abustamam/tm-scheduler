@@ -22,7 +22,7 @@ export const Route = createFileRoute("/_authed/admin/schedule")({
 	beforeLoad: ({ context }) => {
 		const adminClub = effectiveAdminClub(context);
 		if (!adminClub) {
-			throw redirect({ to: "/roster" });
+			throw redirect({ to: "/dashboard" });
 		}
 		return { adminClub };
 	},
