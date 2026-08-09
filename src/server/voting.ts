@@ -8,6 +8,7 @@ import {
 import {
 	castVote,
 	closeVote,
+	joinBallotAsGuest,
 	loadBallot,
 	loadParticipation,
 	loadTally,
@@ -87,6 +88,16 @@ export const submitVote = createServerFn({ method: "POST" })
 		await castVote(data);
 		return { ok: true as const };
 	});
+
+/** Register a visitor so they can vote. PUBLIC — bounded inside
+ *  `joinBallotAsGuest` on both name length and rows-per-meeting. */
+export const joinBallot = createServerFn({ method: "POST" })
+	.validator((input: unknown) =>
+		z
+			.object({ meetingId: uuid, name: z.string().min(1).max(400) })
+			.parse(input),
+	)
+	.handler(async ({ data }) => joinBallotAsGuest(data));
 
 const operateSchema = z.object({
 	meetingId: uuid,

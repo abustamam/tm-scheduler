@@ -14,10 +14,12 @@ import { db } from "#/db";
 import {
 	guests,
 	meetingAttendance,
+	meetingBallotGuests,
 	meetingVoteSessions,
 	meetingVotes,
 	members,
 } from "#/db/schema";
+import { cap } from "#/lib/cap";
 import { logActivity } from "./activity";
 import {
 	type AwardCandidate,
@@ -483,4 +485,51 @@ export async function loadParticipation(
 		categories,
 		presentCount: (attendance?.marked ?? 0) > 0 ? attendance.present : null,
 	};
+}
+
+/** Longest guest name the ballot will store, in CODE POINTS. */
+const MAX_GUEST_NAME = 80;
+/**
+ * Most guests one meeting's ballot may create. The ballot is an unauthenticated
+ * public POST that inserts rows, so it needs a ceiling — without one, a script
+ * fills `guests` for any club whose meeting URL it can guess. Set far above any
+ * real club meeting; a club that genuinely exceeds it adds the rest from the
+ * minutes UI, which is gated.
+ */
+const MAX_BALLOT_GUESTS_PER_MEETING = 60;
+
+/**
+ * Register a visitor as a guest so they can vote (#510). PUBLIC and therefore
+ * bounded on both axes: name length and how many rows one meeting can mint.
+ *
+ * The name is capped with `cap`, which counts CODE POINTS. Do not replace it
+ * with `.slice()`: the truncation added to close a DoS in #522 WAS a DoS,
+ * because slicing UTF-16 splits a surrogate pair and emits a lone surrogate.
+ */
+export async function joinBallotAsGuest(input: {
+	meetingId: string;
+	name: string;
+}): Promise<{ id: string; name: string }> {
+	const name = cap(input.name.trim(), MAX_GUEST_NAME);
+	if (!name) throw new Error("A name is required to vote.");
+	const clubId = await getMeetingClubId(input.meetingId);
+
+	const [{ count } = { count: 0 }] = await db
+		.select({ count: sql<number>`count(*)::int` })
+		.from(meetingBallotGuests)
+		.where(eq(meetingBallotGuests.meetingId, input.meetingId));
+	if (count >= MAX_BALLOT_GUESTS_PER_MEETING) {
+		throw new Error("Too many guests have joined this ballot.");
+	}
+
+	return db.transaction(async (tx) => {
+		const [created] = await tx
+			.insert(guests)
+			.values({ clubId, name })
+			.returning({ id: guests.id, name: guests.name });
+		await tx
+			.insert(meetingBallotGuests)
+			.values({ meetingId: input.meetingId, guestId: created.id });
+		return created;
+	});
 }

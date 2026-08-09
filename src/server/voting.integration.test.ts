@@ -33,6 +33,7 @@ vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 const {
 	castVote,
 	closeVote,
+	joinBallotAsGuest,
 	listVoteSessions,
 	loadBallot,
 	loadParticipation,
@@ -740,5 +741,57 @@ describe.skipIf(!hasTestDb)("completing a meeting closes voting (#510)", () => {
 		// The lock assert lives in the server fn, not in `openVote`, so assert it
 		// where it actually is.
 		expect(() => assertMeetingNotLocked("completed")).toThrow();
+	});
+});
+
+describe.skipIf(!hasTestDb)("joinBallotAsGuest (#510)", () => {
+	let seed: SeededClub;
+
+	beforeEach(async () => {
+		seed = await seedClub();
+	});
+
+	afterEach(async () => {
+		await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
+	});
+
+	it("creates a guest and returns its id and name", async () => {
+		const g = await joinBallotAsGuest({
+			meetingId: seed.meetingId,
+			name: "  Osei, Kwame  ",
+		});
+		expect(g.name).toBe("Osei, Kwame");
+		const [row] = await testDb.select().from(guests).where(eq(guests.id, g.id));
+		expect(row.clubId).toBe(seed.clubId);
+	});
+
+	it("rejects an empty name", async () => {
+		await expect(
+			joinBallotAsGuest({ meetingId: seed.meetingId, name: "   " }),
+		).rejects.toThrow(/name/i);
+	});
+
+	it("caps a very long name by CODE POINT, not by UTF-16 unit", async () => {
+		// Every one of these is a surrogate pair. A `.slice(0, 200)` would cut one
+		// in half and emit a lone surrogate; `cap` counts code points (#522).
+		const g = await joinBallotAsGuest({
+			meetingId: seed.meetingId,
+			name: "😀".repeat(500),
+		});
+		const [row] = await testDb.select().from(guests).where(eq(guests.id, g.id));
+		expect([...row.name]).toHaveLength(80);
+		expect(row.name).not.toMatch(/[\uD800-\uDFFF]$/);
+	});
+
+	it("refuses to create more than the per-meeting guest cap", async () => {
+		for (let i = 0; i < 60; i++) {
+			await joinBallotAsGuest({
+				meetingId: seed.meetingId,
+				name: `Visitor ${i}`,
+			});
+		}
+		await expect(
+			joinBallotAsGuest({ meetingId: seed.meetingId, name: "One too many" }),
+		).rejects.toThrow(/too many/i);
 	});
 });

@@ -10,6 +10,7 @@ import {
 	jsonb,
 	pgEnum,
 	pgTable,
+	primaryKey,
 	text,
 	timestamp,
 	uniqueIndex,
@@ -1105,6 +1106,27 @@ export const meetingVotes = pgTable(
 			"meeting_votes_single_candidate",
 			sql`${t.candidateMemberId} is null or ${t.candidateGuestId} is null`,
 		),
+	],
+);
+
+// Which guests THIS meeting's public ballot created (#510). Exists only so the
+// per-meeting creation cap has something to count: `guests` is club-scoped, so
+// counting there would throttle a club with years of visitors rather than a
+// script hammering one meeting.
+export const meetingBallotGuests = pgTable(
+	"meeting_ballot_guests",
+	{
+		meetingId: uuid("meeting_id")
+			.notNull()
+			.references(() => meetings.id, { onDelete: "cascade" }),
+		guestId: uuid("guest_id")
+			.notNull()
+			.references(() => guests.id, { onDelete: "cascade" }),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+	},
+	(t) => [
+		primaryKey({ columns: [t.meetingId, t.guestId] }),
+		index("meeting_ballot_guests_meeting_idx").on(t.meetingId),
 	],
 );
 
