@@ -196,10 +196,11 @@ describe("fetchClubLogo (#496)", () => {
 
 describe("downloadDeckPptx (#541)", () => {
 	beforeEach(() => {
-		// The outer `afterEach` above calls `restoreAllMocks()`, which wipes the
-		// implementation off every `vi.fn()` in the file — including these two
-		// module-level mocks set up once via `vi.hoisted`. Put the baseline back
-		// before each test rather than relying on it surviving from module load.
+		// Belt-and-braces, not a repair: under this repo's Vitest 4,
+		// `restoreAllMocks()` does NOT wipe a `vi.fn(impl)`'s implementation
+		// (that behavior changed from earlier majors), so these mocks would
+		// survive without this block. It stays so a future test that uses
+		// `mockImplementation` (not `…Once`) can't leak into the next one.
 		deckToPptx.mockImplementation(() => ({ writeFile }));
 		writeFile.mockImplementation(async () => "ok");
 	});
@@ -225,6 +226,26 @@ describe("downloadDeckPptx (#541)", () => {
 	it("falls back when the deck has no title slide", async () => {
 		await downloadDeckPptx({ deck: [], clubName: "HCS" });
 		expect(writeFile).toHaveBeenCalledWith({ fileName: "HCS Agenda.pptx" });
+	});
+
+	it("embeds the logo the deck's title slide names", async () => {
+		// Pins the derivation that moved INSIDE this function: with the URL read
+		// from the title slide, hardcoding `null` there passes every other test
+		// in this describe (the fixture above has no logo) while silently
+		// dropping the crest from every exported deck.
+		const fetchSpy = vi.fn(async () => okResponse());
+		vi.stubGlobal("fetch", fetchSpy);
+		stubBitmap(1200, 300);
+		await downloadDeckPptx({
+			deck: [{ ...titleSlide, logoUrl: URL_ } as unknown as Slide],
+			clubName: "HCS",
+		});
+		expect(fetchSpy).toHaveBeenCalledWith(URL_, expect.anything());
+		expect(deckToPptx).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.anything(),
+			expect.objectContaining({ width: 1200, height: 300 }),
+		);
 	});
 
 	it("resolves (never rejects) and toasts when the build throws", async () => {
