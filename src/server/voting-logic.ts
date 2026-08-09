@@ -11,9 +11,16 @@
  */
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { db } from "#/db";
-import { guests, meetingVoteSessions, meetingVotes } from "#/db/schema";
+import {
+	guests,
+	meetingAttendance,
+	meetingVoteSessions,
+	meetingVotes,
+	members,
+} from "#/db/schema";
 import { logActivity } from "./activity";
 import {
+	type AwardCandidate,
 	isEligibleCandidate,
 	loadAwardCandidates,
 } from "./award-candidates-logic";
@@ -261,4 +268,170 @@ async function requireGuestInClub(guestId: string, clubId: string) {
 		.where(and(eq(guests.id, guestId), eq(guests.clubId, clubId)))
 		.limit(1);
 	if (!row) throw new Error("Guest not found in this club.");
+}
+
+export interface BallotCategory {
+	isOpen: boolean;
+	candidates: AwardCandidate[];
+}
+
+export interface BallotData {
+	meetingId: string;
+	categories: Record<AwardCategory, BallotCategory>;
+}
+
+/**
+ * What a phone sees. PUBLIC — names and ids only, never contact details: this
+ * renders on a fully public route, and `voting.integration.test.ts` asserts the
+ * payload directly rather than trusting the select list to stay narrow.
+ *
+ * Candidates are withheld for a closed category. There is no reason for a
+ * closed ballot to ship a candidate list, and shipping one would let a phone
+ * cast into a category the operator has not opened yet if the client were ever
+ * wrong.
+ */
+export async function loadBallot(meetingId: string): Promise<BallotData> {
+	const [sessions, candidates] = await Promise.all([
+		listVoteSessions(meetingId),
+		loadAwardCandidates(meetingId),
+	]);
+	const categories = {} as Record<AwardCategory, BallotCategory>;
+	for (const category of AWARD_CATEGORIES) {
+		const isOpen = sessions[category].isOpen;
+		categories[category] = {
+			isOpen,
+			candidates: isOpen ? candidates[category] : [],
+		};
+	}
+	return { meetingId, categories };
+}
+
+export interface TallyResult {
+	kind: "member" | "guest";
+	id: string;
+	name: string;
+	count: number;
+}
+
+export interface CategoryTally {
+	isOpen: boolean;
+	results: TallyResult[];
+	/** Who has voted — names only. Participation, never preference: it lets the
+	 *  Ballot Counter spot a ballot from someone who went home, and it cannot
+	 *  reveal a choice because no id or candidate travels with it. */
+	voterNames: string[];
+}
+
+/** The Ballot Counter's view. GATED — never reachable from the public route. */
+export async function loadTally(
+	meetingId: string,
+): Promise<Record<AwardCategory, CategoryTally>> {
+	const [sessions, candidates] = await Promise.all([
+		listVoteSessions(meetingId),
+		loadAwardCandidates(meetingId),
+	]);
+	const rows = await db
+		.select({
+			category: meetingVoteSessions.category,
+			candidateMemberId: meetingVotes.candidateMemberId,
+			candidateGuestId: meetingVotes.candidateGuestId,
+			voterMemberName: members.name,
+			voterGuestName: guests.name,
+		})
+		.from(meetingVotes)
+		.innerJoin(
+			meetingVoteSessions,
+			eq(meetingVoteSessions.id, meetingVotes.sessionId),
+		)
+		.leftJoin(members, eq(members.id, meetingVotes.voterMemberId))
+		.leftJoin(guests, eq(guests.id, meetingVotes.voterGuestId))
+		.where(eq(meetingVoteSessions.meetingId, meetingId));
+
+	const out = {} as Record<AwardCategory, CategoryTally>;
+	for (const category of AWARD_CATEGORIES) {
+		const mine = rows.filter((r) => r.category === category);
+		const counts = new Map<string, number>();
+		for (const r of mine) {
+			const key = r.candidateMemberId
+				? `member:${r.candidateMemberId}`
+				: r.candidateGuestId
+					? `guest:${r.candidateGuestId}`
+					: null;
+			// A removed member's vote survives with a null candidate (FK set null)
+			// and is dropped from the tally rather than counted for nobody.
+			if (!key) continue;
+			counts.set(key, (counts.get(key) ?? 0) + 1);
+		}
+		out[category] = {
+			isOpen: sessions[category].isOpen,
+			results: candidates[category]
+				.map((c) => ({
+					kind: c.kind,
+					id: c.id,
+					name: c.name,
+					count: counts.get(`${c.kind}:${c.id}`) ?? 0,
+				}))
+				.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name)),
+			voterNames: mine
+				.map((r) => r.voterMemberName ?? r.voterGuestName ?? "")
+				.filter(Boolean)
+				.sort((a, b) => a.localeCompare(b)),
+		};
+	}
+	return out;
+}
+
+export interface Participation {
+	categories: Record<AwardCategory, { ballotsIn: number }>;
+	/**
+	 * How many people are marked present, or NULL when nobody has marked
+	 * attendance yet.
+	 *
+	 * Null is the honest answer and the UI must render it as one ("7 votes in",
+	 * not "7 of 0"). The server cannot know who is in the room: the ballot's
+	 * name-pick identity lives in localStorage and is invisible until someone
+	 * actually votes. Making the name pick write an attendance row would give a
+	 * real denominator — and is deliberately NOT v1, because it is a public
+	 * unauthenticated write into a table that means something, and anyone could
+	 * mark anyone present.
+	 */
+	presentCount: number | null;
+}
+
+/**
+ * How many ballots are in, per category. PUBLIC — this is what the projector
+ * shows. Deliberately a bare count: per-candidate numbers stay in `loadTally`,
+ * because a live leaderboard on the projector produces bandwagon voting and
+ * kills the reveal.
+ */
+export async function loadParticipation(
+	meetingId: string,
+): Promise<Participation> {
+	const rows = await db
+		.select({
+			category: meetingVoteSessions.category,
+			ballotsIn: sql<number>`count(${meetingVotes.id})::int`,
+		})
+		.from(meetingVoteSessions)
+		.leftJoin(meetingVotes, eq(meetingVotes.sessionId, meetingVoteSessions.id))
+		.where(eq(meetingVoteSessions.meetingId, meetingId))
+		.groupBy(meetingVoteSessions.category);
+	const byCategory = new Map(rows.map((r) => [r.category, r.ballotsIn]));
+	const categories = {} as Record<AwardCategory, { ballotsIn: number }>;
+	for (const category of AWARD_CATEGORIES) {
+		categories[category] = { ballotsIn: byCategory.get(category) ?? 0 };
+	}
+
+	const [attendance] = await db
+		.select({
+			marked: sql<number>`count(*)::int`,
+			present: sql<number>`count(*) filter (where ${meetingAttendance.status} = 'present')::int`,
+		})
+		.from(meetingAttendance)
+		.where(eq(meetingAttendance.meetingId, meetingId));
+
+	return {
+		categories,
+		presentCount: (attendance?.marked ?? 0) > 0 ? attendance.present : null,
+	};
 }

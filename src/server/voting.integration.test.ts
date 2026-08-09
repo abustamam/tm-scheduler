@@ -10,6 +10,7 @@ import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	guests,
+	meetingAttendance,
 	meetingVoteSessions,
 	meetingVotes,
 	roleDefinitions,
@@ -25,9 +26,15 @@ import {
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
-const { castVote, closeVote, listVoteSessions, openVote } = await import(
-	"#/server/voting-logic"
-);
+const {
+	castVote,
+	closeVote,
+	listVoteSessions,
+	loadBallot,
+	loadParticipation,
+	loadTally,
+	openVote,
+} = await import("#/server/voting-logic");
 
 describe.skipIf(!hasTestDb)("vote table constraints (#510)", () => {
 	let seed: SeededClub;
@@ -350,5 +357,118 @@ describe.skipIf(!hasTestDb)("castVote (#510)", () => {
 			ballot({ voter: { kind: "member", id: seed.adminMemberId } }),
 		);
 		expect(await testDb.select().from(meetingVotes)).toHaveLength(1);
+	});
+});
+
+describe.skipIf(!hasTestDb)("ballot and tally reads (#510)", () => {
+	let seed: SeededClub;
+
+	beforeEach(async () => {
+		seed = await seedClub();
+		const [def] = await testDb
+			.insert(roleDefinitions)
+			.values({
+				clubId: seed.clubId,
+				name: "Speaker",
+				category: "speaker",
+				sortOrder: 99,
+			})
+			.returning({ id: roleDefinitions.id });
+		await testDb.insert(roleSlots).values({
+			meetingId: seed.meetingId,
+			roleDefinitionId: def.id,
+			slotIndex: 0,
+			assignedMemberId: seed.adminMemberId,
+		});
+	});
+
+	afterEach(async () => {
+		await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
+	});
+
+	const open = (category: "best_speaker" | "best_evaluator") =>
+		openVote({
+			meetingId: seed.meetingId,
+			category,
+			actorMemberId: seed.adminMemberId,
+			clubId: seed.clubId,
+		});
+
+	it("offers candidates only for OPEN categories", async () => {
+		await open("best_speaker");
+		const b = await loadBallot(seed.meetingId);
+		expect(b.categories.best_speaker.isOpen).toBe(true);
+		expect(b.categories.best_speaker.candidates).toHaveLength(1);
+		expect(b.categories.best_evaluator.isOpen).toBe(false);
+		expect(b.categories.best_evaluator.candidates).toEqual([]);
+	});
+
+	it("carries no contact details", async () => {
+		await testDb.insert(guests).values({
+			clubId: seed.clubId,
+			name: "Haddad, Layla",
+			email: "layla@example.com",
+			phone: "+15559876543",
+		});
+		await open("best_speaker");
+		const b = await loadBallot(seed.meetingId);
+		expect(JSON.stringify(b)).not.toContain("layla@example.com");
+		expect(JSON.stringify(b)).not.toContain("5559876543");
+	});
+
+	it("tallies counts per candidate", async () => {
+		await open("best_speaker");
+		await castVote({
+			meetingId: seed.meetingId,
+			category: "best_speaker",
+			voter: { kind: "member", id: seed.memberId },
+			candidate: { kind: "member", id: seed.adminMemberId },
+		});
+		const t = await loadTally(seed.meetingId);
+		expect(t.best_speaker.results[0]).toMatchObject({
+			id: seed.adminMemberId,
+			count: 1,
+		});
+		expect(t.best_speaker.voterNames).toHaveLength(1);
+	});
+
+	it("the tally reports WHO voted but never WHAT they voted for", async () => {
+		await open("best_speaker");
+		await castVote({
+			meetingId: seed.meetingId,
+			category: "best_speaker",
+			voter: { kind: "member", id: seed.memberId },
+			candidate: { kind: "member", id: seed.adminMemberId },
+		});
+		const t = await loadTally(seed.meetingId);
+		const serialized = JSON.stringify(t.best_speaker.voterNames);
+		expect(serialized).not.toContain(seed.adminMemberId);
+		expect(serialized).not.toContain(seed.memberId);
+	});
+
+	it("participation reports a bare count, never per-candidate numbers", async () => {
+		await open("best_speaker");
+		await castVote({
+			meetingId: seed.meetingId,
+			category: "best_speaker",
+			voter: { kind: "member", id: seed.memberId },
+			candidate: { kind: "member", id: seed.adminMemberId },
+		});
+		const p = await loadParticipation(seed.meetingId);
+		expect(p.categories.best_speaker).toEqual({ ballotsIn: 1 });
+	});
+
+	it("has no denominator until attendance is actually marked", async () => {
+		await open("best_speaker");
+		const before = await loadParticipation(seed.meetingId);
+		expect(before.presentCount).toBeNull();
+
+		await testDb.insert(meetingAttendance).values({
+			meetingId: seed.meetingId,
+			memberId: seed.memberId,
+			status: "present",
+		});
+		const after = await loadParticipation(seed.meetingId);
+		expect(after.presentCount).toBe(1);
 	});
 });
