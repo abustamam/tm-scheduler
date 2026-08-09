@@ -231,7 +231,7 @@ Optional (platform superadmin): `SUPERADMIN_EMAILS` — a comma-separated, case-
 
 ## Data layer
 
-Schema is `src/db/schema.ts` — the full domain model (~31 tables): clubs,
+Schema is `src/db/schema.ts` — the full domain model (~35 tables): clubs,
 people/members (Person vs Membership, ADR-0008), officer_terms, meetings,
 role_definitions/role_slots (ADR-0005), member_availability, speeches
 (ADR-0009), the Pathways model (pathways_paths, path_enrollments,
@@ -239,9 +239,11 @@ path_level_progress, pathways_projects, pathways_path_levels,
 bcm_project_progress — ADR-0011), sync_tokens, activity_log, club_logos (a
 club's own uploaded logo, bytea, ADR-0024 — rendered on the four print
 layouts, the projected deck, the `.pptx` export, the Word of the Day poster
-and the club role sheets, HTML and PDF), and notifications
-(drained by an in-process poller, ADR-0023). Better-Auth's tables live in
-`src/db/auth-schema.ts`. See `CONTEXT.md` for the glossary.
+and the club role sheets, HTML and PDF), digital voting (`meeting_vote_sessions`
+/ `meeting_votes` / `meeting_ballot_guests`, #510 — see `CONTEXT.md`'s
+**Digital vote** entry), and notifications (drained by an in-process poller,
+ADR-0023). Better-Auth's tables live in `src/db/auth-schema.ts`. See
+`CONTEXT.md` for the glossary.
 The `db` client (`src/db/index.ts`) is `drizzle(process.env.DATABASE_URL!, { schema })`.
 Migrations are generated to `./drizzle` (`drizzle.config.ts`); edit the schema, then
 `bun run db:generate` + `bun run db:migrate` (do NOT `db:push` the dev DB — see the `db:migrate`
