@@ -23,14 +23,14 @@ Read these, in this order. The plan assumes you have:
 
 **Three project rules this plan depends on. Violating any of them produces a green test suite over broken code.**
 
-- **Integration tests need a database.** `bun run test` alone silently skips ~630 integration tests and still reports success. Always run integration tests as `TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/tm_test bun run test <path>`. Every "Expected: PASS" in this plan assumes that variable is set.
+- **Integration tests need a database.** `bun run test` alone silently skips ~630 integration tests and still reports success. Always run integration tests as `TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test bun run test <path>`. Every "Expected: PASS" in this plan assumes that variable is set.
 - **`bun run test` and `bun run build` do not type-check.** Run `bun run typecheck` (which is `tsc --noEmit`) separately.
 - **Server module split.** `src/server/voting.ts` may export *only* `createServerFn`s and types. All database access lives in `src/server/voting-logic.ts`. `src/server/server-modules.guard.test.ts` enforces this; violating it puts `pg` in the client bundle and produces "Buffer is not defined" at runtime, which no test catches.
 
 **Two more, less obvious:**
 
 - `bun run dev` and `bun run build` both append an SSR Register block to `src/routeTree.gen.ts`. Run `git checkout src/routeTree.gen.ts` before committing if it shows as modified and you did not intend to change routing.
-- After any schema change, sync the test database: `DATABASE_URL=postgres://postgres:postgres@localhost:5432/tm_test bun run db:push --force`. The dev database auto-migrates via `predev`; never `db:push` the dev database.
+- After any schema change, sync the test database: `DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test bun run db:push --force`. The dev database auto-migrates via `predev`; never `db:push` the dev database.
 
 ---
 
@@ -217,7 +217,7 @@ Open the generated SQL and confirm two things:
 
 - [ ] **Step 5: Sync the test database**
 
-Run: `DATABASE_URL=postgres://postgres:postgres@localhost:5432/tm_test bun run db:push --force`
+Run: `DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test bun run db:push --force`
 
 Expected: `[✓] Changes applied`.
 
@@ -330,7 +330,7 @@ The guest fixture is deliberately `"Nguyen, Thanh"` — the Toastmasters export 
 
 - [ ] **Step 7: Run the tests**
 
-Run: `TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/tm_test bun run test src/server/voting.integration.test.ts`
+Run: `TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test bun run test src/server/voting.integration.test.ts`
 
 Expected: PASS, 5 tests. If it reports "0 tests" the database URL is not set and the suite skipped — fix that before continuing.
 
@@ -474,7 +474,7 @@ describe.skipIf(!hasTestDb)("loadAwardCandidates (#510)", () => {
 
 - [ ] **Step 2: Run it and watch it fail**
 
-Run: `TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/tm_test bun run test src/server/award-candidates.integration.test.ts`
+Run: `TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test bun run test src/server/award-candidates.integration.test.ts`
 
 Expected: FAIL — `Cannot find module '#/server/award-candidates-logic'`.
 
@@ -615,7 +615,7 @@ If `roleSlots` has no `assignedGuestId` column, read `src/db/schema.ts:805-860` 
 
 - [ ] **Step 4: Run the tests**
 
-Run: `TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/tm_test bun run test src/server/award-candidates.integration.test.ts`
+Run: `TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test bun run test src/server/award-candidates.integration.test.ts`
 
 Expected: PASS, 5 tests.
 
@@ -663,7 +663,7 @@ export async function requireMemberInMeetingClub(
 
 - [ ] **Step 7: Verify nothing regressed**
 
-Run: `TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/tm_test bun run test src/server/minutes.integration.test.ts src/server/award-candidates.integration.test.ts`
+Run: `TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test bun run test src/server/minutes.integration.test.ts src/server/award-candidates.integration.test.ts`
 
 Expected: PASS, all tests. The minutes suite covers `awardEligible` already; if any of it fails, the refactor changed behaviour and must be fixed rather than the test adjusted.
 
@@ -891,7 +891,7 @@ export async function resolveVoteCounterAuthz(
 
 - [ ] **Step 6: Verify the existing authz tests still pass**
 
-Run: `TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/tm_test bun run test src/server/meeting-authz.integration.test.ts`
+Run: `TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test bun run test src/server/meeting-authz.integration.test.ts`
 
 Expected: PASS.
 
@@ -1007,7 +1007,7 @@ describe.skipIf(!hasTestDb)("open and close a vote (#510)", () => {
 
 - [ ] **Step 2: Run and watch it fail**
 
-Run: `TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/tm_test bun run test src/server/voting.integration.test.ts`
+Run: `TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test bun run test src/server/voting.integration.test.ts`
 
 Expected: FAIL — `Cannot find module '#/server/voting-logic'`.
 
@@ -1161,7 +1161,7 @@ export async function closeAllVotesTx(
 
 - [ ] **Step 4: Run the tests**
 
-Run: `TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/tm_test bun run test src/server/voting.integration.test.ts`
+Run: `TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test bun run test src/server/voting.integration.test.ts`
 
 Expected: PASS, 10 tests (5 from Task 1 plus 5 here).
 
@@ -1309,7 +1309,7 @@ Add `roleDefinitions` and `roleSlots` to the `#/db/schema` import at the top of 
 
 - [ ] **Step 2: Run and watch it fail**
 
-Run: `TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/tm_test bun run test src/server/voting.integration.test.ts`
+Run: `TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test bun run test src/server/voting.integration.test.ts`
 
 Expected: FAIL — `castVote is not a function`.
 
@@ -1437,7 +1437,7 @@ If drizzle's `.insert().select()` builder is unavailable in the installed versio
 
 - [ ] **Step 4: Run the tests**
 
-Run: `TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/tm_test bun run test src/server/voting.integration.test.ts`
+Run: `TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test bun run test src/server/voting.integration.test.ts`
 
 Expected: PASS, 18 tests.
 
@@ -1447,7 +1447,7 @@ A passing test proves nothing if the assertion never ran. **Do not verify this w
 
 In `castVote`, temporarily delete the `isNull(meetingVoteSessions.closedAt)` line from the `.where(...)`.
 
-Run: `TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/tm_test bun run test src/server/voting.integration.test.ts`
+Run: `TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test bun run test src/server/voting.integration.test.ts`
 
 Expected: **FAIL** on "REJECTS a vote once the window is closed". If it still passes, the conditional insert is not doing the work and must be fixed before continuing.
 
@@ -1598,7 +1598,7 @@ describe.skipIf(!hasTestDb)("ballot and tally reads (#510)", () => {
 
 - [ ] **Step 2: Run and watch it fail**
 
-Run: `TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/tm_test bun run test src/server/voting.integration.test.ts`
+Run: `TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test bun run test src/server/voting.integration.test.ts`
 
 Expected: FAIL — `loadBallot is not a function`.
 
@@ -1780,7 +1780,7 @@ Add `meetingAttendance` to the `#/db/schema` import in the test file too.
 
 - [ ] **Step 4: Run the tests**
 
-Run: `TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/tm_test bun run test src/server/voting.integration.test.ts`
+Run: `TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test bun run test src/server/voting.integration.test.ts`
 
 Expected: PASS, 24 tests.
 
@@ -1901,7 +1901,7 @@ const { assertMeetingNotLocked } = await import(
 
 - [ ] **Step 2: Run and watch it fail**
 
-Run: `TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/tm_test bun run test src/server/voting.integration.test.ts`
+Run: `TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test bun run test src/server/voting.integration.test.ts`
 
 Expected: FAIL on "force-closes an open vote" — `isOpen` is still `true`.
 
@@ -1939,7 +1939,7 @@ import { closeAllVotesTx } from "./voting-logic";
 
 - [ ] **Step 4: Run the tests**
 
-Run: `TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/tm_test bun run test src/server/voting.integration.test.ts src/server/meeting-lifecycle.integration.test.ts`
+Run: `TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test bun run test src/server/voting.integration.test.ts src/server/meeting-lifecycle.integration.test.ts`
 
 Expected: PASS.
 
@@ -2540,7 +2540,7 @@ describe.skipIf(!hasTestDb)("joinBallotAsGuest (#510)", () => {
 });
 ```
 
-Run it: `TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/tm_test bun run test src/server/voting.integration.test.ts`
+Run it: `TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test bun run test src/server/voting.integration.test.ts`
 
 Expected: FAIL — `joinBallotAsGuest is not a function`.
 
@@ -2626,7 +2626,7 @@ Regenerate and sync:
 
 ```bash
 bun run db:generate
-DATABASE_URL=postgres://postgres:postgres@localhost:5432/tm_test bun run db:push --force
+DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test bun run db:push --force
 ```
 
 Run the tests again. Expected: PASS, 4 new tests.
@@ -3191,7 +3191,7 @@ git commit -m "feat(print): scan-to-vote QR in the agenda footer (#510)"
 - [ ] **Full suite with the database**
 
 ```bash
-TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/tm_test bun run test
+TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test bun run test
 ```
 
 Expected: PASS. Check the reported test count is in the thousands, not the hundreds — a count near ~2,600 means the integration suite skipped and the run is meaningless.
