@@ -72,8 +72,9 @@ only so a phone left open on the ballot page flips to the next vote by itself.
 
 ## Data model
 
-Two new tables. No change to `meeting_awards`, `table_topics_speakers` or
-`role_slots`.
+Three new tables — two carrying the feature, one existing only to bound the
+public guest-creation path. No change to `meeting_awards`,
+`table_topics_speakers` or `role_slots`.
 
 ### `meeting_vote_sessions`
 
@@ -123,6 +124,16 @@ Following the `meeting_attendance` precedent exactly:
 
 Changing your mind is an upsert on the voter arbiter, so re-voting inside an
 open window replaces the pick instead of adding a second row.
+
+### `meeting_ballot_guests`
+
+Which guests this meeting's public ballot created: `(meeting_id, guest_id)`
+composite primary key, both cascading, plus `created_at`.
+
+It exists for one reason — the per-meeting creation cap needs something to count
+against, and `guests` is club-scoped. Counting club guests would throttle a club
+with years of visitors instead of a script hammering one meeting URL. Nothing
+reads it except the cap.
 
 ### Enum additions
 
@@ -278,9 +289,17 @@ break the feature in three separate places, so it is applied deliberately:
 
 Five things the server must not trust the client for.
 
-1. **Candidate validity.** The candidate is re-derived server-side from
-   `awardEligible` and the vote rejected if it is not in that set. A
-   hand-crafted POST cannot vote for someone who never spoke.
+1. **Candidate validity.** The candidate is re-derived server-side and the vote
+   rejected if it is not in the eligible set. A hand-crafted POST cannot vote
+   for someone who never spoke.
+
+   The derivation is extracted out of `loadMinutes` into a shared
+   `loadAwardCandidates`, read by **both** the ballot and this validator.
+   `loadMinutes` keeps its existing id-only `awardEligible` shape by mapping
+   from it. Two copies of this rule would eventually disagree, and the failure
+   would be a ballot offering a candidate the server rejects — visible only
+   mid-meeting. It also cannot be called from a public route in its old form:
+   `loadMinutes` loads attendance, action items and guest contact details.
 2. **Voter scope.** `voter_member_id` must belong to the meeting's club;
    `voter_guest_id` likewise. Reuse `requireMemberInMeetingClub`, the helper
    `setAward` already calls, rather than inventing a second scoping path. Scope
