@@ -1061,8 +1061,10 @@ Replace the region from the `{over ? (` availability/attendance block (route ~li
 					availBusy={availBusy}
 					canToggleAvailability={viewer.canToggleAvailability}
 					onToggleAvailability={toggleAvailability}
-					hasIdentity={!!myId}
 				/>
+				{/* Task 6 review dropped the hasIdentity prop — the strip derives
+				    identity from `member !== null` (two flags no caller could
+				    diverge). The TOOLBAR still takes hasIdentity={!!myId}. */}
 				<MeetingToolbar
 					phase={phase}
 					clubSlug={clubId}
