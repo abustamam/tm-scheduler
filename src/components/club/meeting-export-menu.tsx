@@ -1,20 +1,22 @@
 import { Link } from "@tanstack/react-router";
 import {
+	ChevronDown,
 	ClipboardList,
 	Download,
 	FileDown,
-	Loader2,
 	Presentation,
 	Printer,
 	Sparkles,
 } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { toast } from "sonner";
 import type { AgendaLayout } from "#/components/agenda/meeting-agenda-print";
 import { downloadDeckPptx } from "#/components/club/pptx-download-button";
 import { Button } from "#/components/ui/button";
 import {
 	Dialog,
 	DialogContent,
+	DialogDescription,
 	DialogHeader,
 	DialogTitle,
 } from "#/components/ui/dialog";
@@ -59,15 +61,16 @@ export function MeetingExportMenu({
 	presentIsPrimary: boolean;
 }) {
 	const [sheetsOpen, setSheetsOpen] = useState(false);
-	const [pptxBusy, setPptxBusy] = useState(false);
+	const triggerRef = useRef<HTMLButtonElement>(null);
 
 	return (
 		<>
 			<DropdownMenu>
 				<DropdownMenuTrigger asChild>
-					<Button variant="outline" size="sm">
+					<Button ref={triggerRef} variant="outline" size="sm">
 						<Printer />
 						Print & export
+						<ChevronDown className="opacity-60" />
 					</Button>
 				</DropdownMenuTrigger>
 				<DropdownMenuContent align="start">
@@ -133,35 +136,44 @@ export function MeetingExportMenu({
 					) : null}
 					{deck && clubName ? (
 						<DropdownMenuItem
-							disabled={pptxBusy}
-							onSelect={(e) => {
-								// Keep the menu open while the export runs so the busy
-								// spinner is visible; the busy flag guards re-entry.
-								e.preventDefault();
-								if (pptxBusy) return;
-								setPptxBusy(true);
+							onSelect={() => {
+								// The menu closes on select (Radix default) — a modal menu
+								// would hold the whole page pointer-inert for the seconds
+								// the ~1MB library download + logo fetch take. Progress
+								// lives in a toast instead; downloadDeckPptx surfaces its
+								// own failure toast and never rejects.
+								const id = toast.loading("Building the PowerPoint file…");
 								downloadDeckPptx({ deck, clubName }).finally(() =>
-									setPptxBusy(false),
+									toast.dismiss(id),
 								);
 							}}
 						>
-							{pptxBusy ? <Loader2 className="animate-spin" /> : <Download />}
+							<Download />
 							Download .pptx
 						</DropdownMenuItem>
 					) : null}
 				</DropdownMenuContent>
 			</DropdownMenu>
 			<Dialog open={sheetsOpen} onOpenChange={setSheetsOpen}>
-				<DialogContent className="max-w-sm">
+				<DialogContent
+					className="sm:max-w-sm"
+					onCloseAutoFocus={(e) => {
+						// State-controlled dialog has no DialogTrigger, so Radix's
+						// default focus-return is a silent no-op that dumps focus on
+						// <body>. Return it to the menu trigger ourselves.
+						e.preventDefault();
+						triggerRef.current?.focus();
+					}}
+				>
 					<DialogHeader>
 						<DialogTitle>This meeting's role sheets</DialogTitle>
 					</DialogHeader>
 					{/* Same public PDF links the retired MeetingRoleSheets popover
 					    served (#365: role-sheet PDFs hold only public-agenda data). */}
-					<p className="px-2 pt-1 pb-1.5 text-xs text-muted-foreground">
+					<DialogDescription className="px-2 pt-1 pb-1.5 text-xs">
 						Pre-filled with your club and this meeting's date. Each sheet
 						includes what to say.
-					</p>
+					</DialogDescription>
 					<div className="flex flex-col">
 						{ROLE_SHEETS.map((sheet) => (
 							<Button
