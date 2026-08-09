@@ -8,7 +8,7 @@ import {
 	within,
 } from "@testing-library/react";
 import type { ComponentProps } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Slide } from "#/lib/agenda-slides";
 import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
 import { MeetingPresent } from "./meeting-present";
@@ -18,16 +18,31 @@ import { MeetingPresent } from "./meeting-present";
 // about slide navigation and content, not the participation query, and an
 // unmocked call would hang every one of these renders on a network request
 // jsdom cannot make.
-vi.mock("#/server/voting", () => ({
-	getVoteParticipation: vi.fn().mockResolvedValue({
+//
+// `getVoteParticipation` itself has to come from `vi.hoisted` (the factory
+// below is hoisted above this file's own imports, same reason
+// `club-switcher.test.tsx` uses the pattern) so the participation-badge tests
+// can point it at their own fixture with `mockResolvedValue`, rather than
+// every test in this file being stuck with one shared canned response.
+const { getVoteParticipation } = vi.hoisted(() => ({
+	getVoteParticipation: vi.fn(),
+}));
+vi.mock("#/server/voting", () => ({ getVoteParticipation }));
+
+/** The default every test gets unless it overrides — zero ballots, no
+ *  attendance marked yet. Reset in `beforeEach` rather than set once, so a
+ *  participation-badge test's override never leaks into the next test. */
+function defaultParticipation() {
+	getVoteParticipation.mockResolvedValue({
 		categories: {
 			best_speaker: { ballotsIn: 0 },
 			best_evaluator: { ballotsIn: 0 },
 			best_table_topics: { ballotsIn: 0 },
 		},
 		presentCount: null,
-	}),
-}));
+	});
+}
+beforeEach(() => defaultParticipation());
 
 const CLUB_NAME = "MCF Toastmasters Club";
 const MEETING_ID = "11111111-1111-4111-8111-111111111111";
@@ -175,6 +190,90 @@ describe("MeetingPresent", () => {
 		clickNext(); // -> voteSpeaker
 
 		expect(screen.getByText("Please Vote for Best Speaker:")).toBeTruthy();
+	});
+
+	// #510 review finding 1. The QR is the feature's entire entry point — the
+	// room has no other way to reach the ballot — and a reviewer proved it had
+	// no regression net at all: disabling BOTH QR renderings (this one and the
+	// printed footer's) left the full 230-file suite green. These assertions,
+	// and their print-surface counterpart in `print-page-count.test.tsx`, close
+	// that gap.
+	it("renders the vote slide's QR inside its white plate, with a scan-to-vote label", () => {
+		const { container } = renderPresent();
+		clickNext(); // -> wordOfDay
+		clickNext(); // -> voteSpeaker
+
+		// The fixture's `ballotUrl` is non-empty from the very first render (no
+		// async origin-effect gap in this deck), so unlike the badge below this
+		// needs no `findBy` wait.
+		const plate = container.querySelector('[data-testid="vote-qr"]');
+		expect(plate).toBeTruthy();
+		expect(plate?.querySelector("svg")).toBeTruthy();
+		expect(screen.getByText("Scan to vote")).toBeTruthy();
+	});
+
+	it("renders no QR plate at all on a non-vote content slide", () => {
+		const { container } = renderPresent();
+		clickNext(); // -> wordOfDay: a content slide, but not a vote slide
+
+		expect(container.querySelector('[data-testid="vote-qr"]')).toBeNull();
+	});
+
+	describe("the participation badge (#510 review finding 1)", () => {
+		it('reads "N votes in" (singular) when attendance has not been marked', async () => {
+			getVoteParticipation.mockResolvedValue({
+				categories: {
+					best_speaker: { ballotsIn: 1 },
+					best_evaluator: { ballotsIn: 0 },
+					best_table_topics: { ballotsIn: 0 },
+				},
+				presentCount: null,
+			});
+			renderPresent();
+			clickNext(); // -> wordOfDay
+			clickNext(); // -> voteSpeaker
+
+			expect(await screen.findByText("1 vote in")).toBeTruthy();
+		});
+
+		it('reads "N votes in" (plural) for zero, never fabricating "0 of 0"', async () => {
+			// `presentCount` stays null until attendance is marked — the server
+			// cannot know who is in the room until someone votes. Zero ballots
+			// with a null `presentCount` must read as "0 votes in", not
+			// "0 of 0 present have voted".
+			getVoteParticipation.mockResolvedValue({
+				categories: {
+					best_speaker: { ballotsIn: 0 },
+					best_evaluator: { ballotsIn: 0 },
+					best_table_topics: { ballotsIn: 0 },
+				},
+				presentCount: null,
+			});
+			renderPresent();
+			clickNext();
+			clickNext();
+
+			expect(await screen.findByText("0 votes in")).toBeTruthy();
+			expect(screen.queryByText(/of 0/)).toBeNull();
+		});
+
+		it('reads "N of M present have voted" once attendance IS marked', async () => {
+			getVoteParticipation.mockResolvedValue({
+				categories: {
+					best_speaker: { ballotsIn: 7 },
+					best_evaluator: { ballotsIn: 0 },
+					best_table_topics: { ballotsIn: 0 },
+				},
+				presentCount: 12,
+			});
+			renderPresent();
+			clickNext();
+			clickNext();
+
+			expect(
+				await screen.findByText("7 of 12 present have voted"),
+			).toBeTruthy();
+		});
 	});
 
 	it("shows Thank You on the closing splash slide", () => {

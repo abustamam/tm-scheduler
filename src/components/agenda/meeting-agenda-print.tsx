@@ -6,6 +6,7 @@
 // slots, officers, and run-of-show. The club's district, mission, and
 // meeting-schedule are optional free-text profile fields: each renders in its
 // designated slot when set and is omitted gracefully (no empty label) when not.
+import { QRCodeSVG } from "qrcode.react";
 import type { TimelineRow } from "#/lib/agenda-timing";
 import { announcementLines } from "#/lib/announcement-lines";
 import {
@@ -83,9 +84,12 @@ type Props = {
 	explainers: AgendaExplainer[];
 	rows: TimelineRow[];
 	// The absolute scan-to-vote ballot URL (#510), or undefined before the print
-	// route's client-side origin effect fires. Threaded only to the layouts
-	// that carry a `DarkFooter` — see that component's doc comment for why
-	// `GridLayout` opts out.
+	// route's client-side origin effect fires. Threaded to every layout,
+	// including `GridLayout` — the default layout, so the club that prints
+	// instead of projecting is exactly the club this QR is for. Three layouts
+	// put it in their shared `DarkFooter`; `GridLayout` has no `DarkFooter`
+	// (see its own file-header note) and renders a smaller copy inline in its
+	// hand-rolled officer footer instead.
 	ballotUrl?: string;
 };
 
@@ -881,12 +885,25 @@ function EditorialLayout({
 // A denser but ordinary agenda (3 speakers/3 evaluators, 25 rows) pushes
 // editorial to 1394px/0.756 and spacious to 1620px/0.651 — band 5.67pt and
 // 5.61pt. Neither has headroom for another full-height row either.
+//
+// THE BALLOT QR (#510) is the addition this comment warned about, and it paid
+// for itself out of the inventory above rather than compounding the shrink.
+// Measured with real headless Chrome against the print-page-count fixture
+// (`--dump-dom` reading the FitPage inner div's `scrollHeight`, since
+// `renderToStaticMarkup` never runs FitPage's own measuring `useEffect`):
+// the 32px QR inline in the officer-footer row costs +19px (that row was
+// ~13px of text before it), and trimming the three section gaps and the
+// footer margin 4px apiece — exactly the ~16px this comment already
+// earmarked — brings the net cost to +3px over the whole sheet. `FitPage`
+// absorbs 3px silently; the printed page count does not move (verified via
+// `print-page-count.test.tsx`, both before and after).
 // ---------------------------------------------------------------------------
 function GridLayout({
 	header,
 	roles,
 	officers,
 	rows,
+	ballotUrl,
 }: Omit<Props, "layout" | "explainers">) {
 	return (
 		<FitPage>
@@ -940,7 +957,9 @@ function GridLayout({
 				}}
 			>
 				{(header.theme || header.wordOfTheDay) && (
-					<div style={{ display: "flex", gap: 12, marginBottom: 13 }}>
+					// marginBottom trimmed 13 → 9 (#510): one of the three section gaps
+					// this file's own header earmarks to pay for the footer QR below.
+					<div style={{ display: "flex", gap: 12, marginBottom: 9 }}>
 						{header.theme ? (
 							<ThemeCard
 								label="Meeting Theme"
@@ -959,7 +978,8 @@ function GridLayout({
 				)}
 
 				<Kick style={{ marginBottom: 6 }}>Meeting Roles</Kick>
-				<div style={{ marginBottom: 14 }}>
+				{/* marginBottom trimmed 14 → 10 (#510) — same inventory as above. */}
+				<div style={{ marginBottom: 10 }}>
 					<RolesRoster roles={roles} variant="boxed" />
 				</div>
 
@@ -1056,28 +1076,40 @@ function GridLayout({
 					)}
 				</div>
 
+				{/* marginTop trimmed 14 → 10 (#510) — same inventory as above. */}
 				<AnnouncementsBlock
 					text={header.announcements}
-					style={{ marginTop: 14 }}
+					style={{ marginTop: 10 }}
 				/>
 
 				{/* officer footer (also carries the club's meets schedule + mission) */}
-				{officers.length > 0 || header.meetingSchedule || header.mission ? (
+				{officers.length > 0 ||
+				header.meetingSchedule ||
+				header.mission ||
+				ballotUrl ? (
 					<div
 						style={{
 							marginTop: "auto",
 							background: INK,
-							margin: "14px -36px 0",
+							// Top margin trimmed 14 → 10 (#510) — the fourth and last piece
+							// of the inventory this file's header earmarks: three section
+							// gaps above plus this footer margin, ~16px total, spent to pay
+							// for the ~19px the QR costs the row just below.
+							margin: "10px -36px 0",
 							padding: "13px 36px 16px",
 							color: "#fff",
 						}}
 					>
-						{officers.length > 0 || header.meetingSchedule ? (
+						{officers.length > 0 || header.meetingSchedule || ballotUrl ? (
 							<div
 								style={{
 									display: "flex",
 									justifyContent: "space-between",
-									alignItems: "baseline",
+									// `center`, not the original `baseline`: this row can now
+									// carry a 32px QR beside its text, and centering the two
+									// is the shape that reads right — baseline would sit the
+									// square against the text's cap-height instead.
+									alignItems: "center",
 									gap: 16,
 									marginBottom: officers.length > 0 ? 8 : 0,
 								}}
@@ -1097,17 +1129,54 @@ function GridLayout({
 								) : (
 									<span />
 								)}
-								{header.meetingSchedule ? (
-									<span
-										style={{
-											fontSize: 9.5,
-											color: "rgba(255,255,255,.7)",
-											textAlign: "right",
-										}}
-									>
-										Meets {header.meetingSchedule}
-									</span>
-								) : null}
+								<span
+									style={{
+										display: "inline-flex",
+										alignItems: "center",
+										gap: 8,
+									}}
+								>
+									{header.meetingSchedule ? (
+										<span
+											style={{
+												fontSize: 9.5,
+												color: "rgba(255,255,255,.7)",
+												textAlign: "right",
+											}}
+										>
+											Meets {header.meetingSchedule}
+										</span>
+									) : null}
+									{ballotUrl ? (
+										// Grid has no headroom (see the file-header note above),
+										// so this is the smallest legible copy of the QR rather
+										// than `DarkFooter`'s: one caption line, not two, and 5px
+										// of gap instead of 6 — every point here was taken out of
+										// the layout's own inventory, not left on the table.
+										<span
+											className="footer-qr"
+											style={{
+												display: "inline-flex",
+												alignItems: "center",
+												gap: 5,
+											}}
+										>
+											<QRCodeSVG value={ballotUrl} size={32} marginSize={0} />
+											<span
+												style={{
+													fontSize: 6,
+													lineHeight: 1.15,
+													color: "rgba(255,255,255,.85)",
+													fontWeight: 700,
+												}}
+											>
+												Scan to
+												<br />
+												vote
+											</span>
+										</span>
+									) : null}
+								</span>
 							</div>
 						) : null}
 						{officers.length > 0 ? (
@@ -2078,14 +2147,13 @@ export function MeetingAgendaPrint({
 				/>
 			);
 		case "grid":
-			// No `ballotUrl` — `GridLayout` has no `DarkFooter` to put it in. See
-			// that component's file-header note ("NO HEADROOM LEFT").
 			return (
 				<GridLayout
 					header={header}
 					roles={roles}
 					officers={officers}
 					rows={rows}
+					ballotUrl={ballotUrl}
 				/>
 			);
 		case "spacious":

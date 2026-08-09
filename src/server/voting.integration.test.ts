@@ -589,6 +589,28 @@ describe.skipIf(!hasTestDb)("ballot and tally reads (#510)", () => {
 		expect(b.categories.best_evaluator.candidates).toEqual([]);
 	});
 
+	// #510 review finding 2. `isOpen` alone cannot tell a category the Ballot
+	// Counter has just closed apart from one nobody has ever touched — both
+	// read `false` — and the public ballot used that alone to decide whether to
+	// show a category at all, so the room's phones fell back to "Voting isn't
+	// open yet" the moment the last vote closed. `hasOpened` is the signal that
+	// lets the client say "Voting closed" instead.
+	it("marks a closed category hasOpened, distinct from one never opened", async () => {
+		await open("best_speaker");
+		await closeVote({
+			meetingId: seed.meetingId,
+			category: "best_speaker",
+			actorMemberId: seed.adminMemberId,
+			clubId: seed.clubId,
+		});
+		const b = await loadBallot(seed.meetingId);
+		expect(b.categories.best_speaker.isOpen).toBe(false);
+		expect(b.categories.best_speaker.hasOpened).toBe(true);
+		// best_table_topics was never opened at all in this test.
+		expect(b.categories.best_table_topics.isOpen).toBe(false);
+		expect(b.categories.best_table_topics.hasOpened).toBe(false);
+	});
+
 	it("carries no contact details", async () => {
 		await testDb.insert(guests).values({
 			clubId: seed.clubId,

@@ -532,7 +532,15 @@ function ContentSlide({
 								    enough" — pure white is the one background guaranteed to
 								    scan, the same reasoning the guest-book QR (VP Membership)
 								    already pins its own paper to. */}
-								<div className="rounded-[1.2cqw] bg-white p-[1.2cqw]">
+								<div
+									className="rounded-[1.2cqw] bg-white p-[1.2cqw]"
+									// Test hook only (#510 review finding 1) — nothing else on a
+									// vote slide identifies the QR's own plate uniquely: the top
+									// chrome cluster already renders an unrelated `<svg>` icon
+									// (the .pptx download button), so a bare `svg` query cannot
+									// tell "the QR rendered" from "some icon rendered".
+									data-testid="vote-qr"
+								>
 									{/* `ballotUrl` is `""` for one render on mount, before the
 									    present route's origin effect fires (#510) — an empty
 									    value QR-encodes without error but scans to nothing, so

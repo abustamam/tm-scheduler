@@ -64,11 +64,19 @@ export function Ballot({
 		);
 	}
 
-	const open = Object.entries(ballot.data?.categories ?? {}).filter(
-		([, c]) => c.isOpen,
-	);
+	// A category earns a card once it has been touched — currently open
+	// (interactive) or closed after being open ("Voting closed", per the spec:
+	// "the card flips to 'Voting closed' on the next poll"). A category that
+	// has never been opened is omitted entirely, exactly as before this fix —
+	// the only change is that CLOSING a vote no longer looks the same as never
+	// having opened one (#510 review finding 2).
+	type CategoryKey = keyof typeof CATEGORY_LABELS;
+	type Category = BallotData["categories"][CategoryKey];
+	const visible = (
+		Object.entries(ballot.data?.categories ?? {}) as [CategoryKey, Category][]
+	).filter(([, c]) => c.isOpen || c.hasOpened);
 
-	if (open.length === 0) {
+	if (visible.length === 0) {
 		return (
 			<div className="rounded-2xl border border-border bg-card px-6 py-10 text-center">
 				<h2 className="font-display text-xl font-semibold">
@@ -84,8 +92,26 @@ export function Ballot({
 
 	return (
 		<div className="flex flex-col gap-5">
-			{open.map(([category, c]) => {
-				const key = category as keyof typeof CATEGORY_LABELS;
+			{visible.map(([category, c]) => {
+				const key = category;
+				if (!c.isOpen) {
+					// Closed after being open. `getBallot` withholds candidates for a
+					// closed category by design (see its own doc comment) — there is
+					// nothing to list here even if this card wanted to.
+					return (
+						<section
+							key={key}
+							className="rounded-2xl border border-border bg-card p-5"
+						>
+							<h2 className="font-display text-lg font-semibold">
+								{CATEGORY_LABELS[key]}
+							</h2>
+							<p className="mt-3 text-sm text-muted-foreground">
+								Voting closed
+							</p>
+						</section>
+					);
+				}
 				const chosen = picked[key];
 				return (
 					<section
@@ -139,5 +165,3 @@ export function Ballot({
 		</div>
 	);
 }
-
-export type { BallotData };

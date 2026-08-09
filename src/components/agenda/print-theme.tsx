@@ -252,9 +252,9 @@ export function Kick({
  * `ballotUrl`, when set, adds a small scan-to-vote QR (#510) beside `right` —
  * for clubs that print the agenda instead of projecting present mode. It is
  * optional and threaded only to the LAST sheet of a layout (the one still on
- * the table when voting happens), and only on the layouts that already carry
- * a `DarkFooter`: `GridLayout` hand-rolls its own tight officer footer instead
- * of this component (see its "NO HEADROOM LEFT" note) and does not get one.
+ * the table when voting happens). `GridLayout` hand-rolls its own tight
+ * officer footer instead of this component (see its "NO HEADROOM LEFT" note)
+ * and carries its own, smaller copy of the same QR rather than one here.
  *
  * The QR renders INLINE (`display: inline-flex`), sharing the same row as
  * `right`, not as its own block below — a block-level addition here is the

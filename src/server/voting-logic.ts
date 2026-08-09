@@ -325,6 +325,14 @@ async function requireActiveMember(memberId: string) {
 
 export interface BallotCategory {
 	isOpen: boolean;
+	/** True once this category's vote has been opened at least once — a
+	 *  currently-open category is also `hasOpened`. Lets the phone tell a
+	 *  category that WAS open and has since closed ("Voting closed") apart
+	 *  from one that has never been touched (rendered as nothing), which
+	 *  `isOpen` alone cannot do: both read `false` (#510 review finding 2).
+	 *  Derived from `openedAt`, not `closedAt` — never null once a session
+	 *  row exists at all, open or closed. */
+	hasOpened: boolean;
 	candidates: AwardCandidate[];
 }
 
@@ -350,10 +358,11 @@ export async function loadBallot(meetingId: string): Promise<BallotData> {
 	]);
 	const categories = {} as Record<AwardCategory, BallotCategory>;
 	for (const category of AWARD_CATEGORIES) {
-		const isOpen = sessions[category].isOpen;
+		const session = sessions[category];
 		categories[category] = {
-			isOpen,
-			candidates: isOpen ? candidates[category] : [],
+			isOpen: session.isOpen,
+			hasOpened: session.openedAt != null,
+			candidates: session.isOpen ? candidates[category] : [],
 		};
 	}
 	return { meetingId, categories };
