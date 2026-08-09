@@ -911,9 +911,12 @@ function MeetingView() {
 				// The wrapper exists because <MeetingMinutes> renders a <Card> and
 				// takes no id/className. `scroll-mt-24` (not 20) clears the sticky
 				// header at its TALLEST — it grows under the impersonation banner.
-				// Co-gated with the primary: the toolbar only offers the Minutes CTA
-				// to an officer, and an officer's `getMinutes` is always visible
-				// (canEdit ⇒ visible), so the link never points at a missing target.
+				// NOT co-gated with the primary: the toolbar's CTA is `phase ===
+				// "completed" && canManage`, but the loader degrades ANY getMinutes
+				// failure to EMPTY_MINUTES (visible=false) regardless of canManage —
+				// so this branch alone left a completed-phase admin with a Minutes
+				// primary and no `id` to scroll to on a transient load failure. The
+				// degrade branch below keeps the anchor real in that case.
 				<section id={MINUTES_ANCHOR_ID} className="scroll-mt-24">
 					<MeetingMinutes
 						meetingId={meeting.id}
@@ -935,6 +938,17 @@ function MeetingView() {
 								: null
 						}
 					/>
+				</section>
+			) : phase === "completed" && effectiveCanManage ? (
+				/* getMinutes degraded (loader `.catch(() => EMPTY_MINUTES)`) while the
+				   toolbar still offers the Minutes primary — keep the anchor target real
+				   and say why the section is empty instead of letting the CTA click do
+				   nothing (spec review of aa106b3). Doubles as the first visible signal
+				   of a minutes load failure, which was previously swallowed silently. */
+				<section id={MINUTES_ANCHOR_ID} className="scroll-mt-24">
+					<p className="text-sm text-muted-foreground">
+						Minutes couldn't load — refresh to try again.
+					</p>
 				</section>
 			) : null}
 

@@ -64,4 +64,23 @@ describe("the Minutes jump anchor (#541 D2)", () => {
 				"MINUTES_ANCHOR_ID so it cannot drift from the route's section id.",
 		).toContain("MINUTES_ANCHOR_ID");
 	});
+
+	it("both the loaded-minutes branch AND the degrade fallback carry the anchor", () => {
+		// The toolbar's Minutes primary is gated on `phase === "completed" &&
+		// canManage`, but the loader degrades ANY getMinutes failure to
+		// EMPTY_MINUTES (visible=false) independent of canManage — so an admin
+		// on a completed meeting can hold the CTA while `minutes.visible` is
+		// false. The route renders a second section (with an explanatory line)
+		// for exactly that state, and it must carry the SAME id, or the CTA
+		// click goes dead again the moment the primary render swallows a
+		// getMinutes failure (spec review of aa106b3, #541).
+		const matches = readSource(ROUTE).match(/id=\{MINUTES_ANCHOR_ID\}/g) ?? [];
+		expect(
+			matches.length,
+			"expected `id={MINUTES_ANCHOR_ID}` on both the loaded-minutes " +
+				"section and the getMinutes-degrade fallback section — found " +
+				`${matches.length} occurrence(s). Dropping the fallback's id ` +
+				"re-opens the dead-CTA-on-degrade hole invisibly to every other gate.",
+		).toBeGreaterThanOrEqual(2);
+	});
 });
