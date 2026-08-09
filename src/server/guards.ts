@@ -379,14 +379,18 @@ export async function requireWordOfTheDayEditor(input: {
  * directly rather than through here, for a guard-test slice-ordering reason
  * documented on that module's own local `requireVoteCounter`.
  *
- * Deliberately NOT a replacement for `requireClubRole(..., ["admin"])`
- * (`gateAdmin` in `minutes.ts`): a club admin who holds their seat only
- * through an elected officer's open term (#202 effective-admin) is not
- * `clubRole === "admin"`, and `resolveVoteCounterAuthz`'s admin check — shared
- * with the TMOD/Grammarian self-assert authz above — does not see that term.
- * `setAttendance` / `addMinutesGuest` / `removeMinutesGuest` keep calling
- * `gateAdmin` UNCHANGED so that gap can never reach them; only the five
- * capabilities named above run through this narrower gate.
+ * A strict SUPERSET of the `requireClubRole(..., ["admin"])` gate it replaced on
+ * those five, and it has to be. `resolveVoteCounterAuthz`'s admin check reads
+ * `clubRole === "admin"` only, while `requireClubRole` ALSO grants to an elected
+ * officer holding an open term (#202 effective-admin). Swapping one for the
+ * other would therefore have quietly REVOKED award-setting and Table Topics
+ * capture from officers who hold their seat that way — a privilege loss nobody
+ * asked for, and the mirror image of the unmentioned privilege GAIN #464 closed.
+ * So the officer path is retried explicitly below.
+ *
+ * `setAttendance` / `addMinutesGuest` / `removeMinutesGuest` deliberately do NOT
+ * come through here — they stay `gateAdmin`-only. A Ballot Counter has no
+ * business editing the roster's attendance or the club's guest records.
  */
 export async function requireVoteCounterCapability(input: {
 	meetingId: string;
@@ -398,10 +402,25 @@ export async function requireVoteCounterCapability(input: {
 		sessionUserId: sessionUser?.id ?? null,
 		selfMemberId: input.selfMemberId ?? null,
 	});
-	if (!authz.allowed) {
-		throw new Error("Only the Ballot Counter or a club admin can do that.");
+	if (authz.allowed) return authz;
+
+	// Not a `clubRole` admin and not the Vote Counter — but possibly an elected
+	// officer with an open term, which is what the gate this replaced accepted.
+	// Only worth retrying for a caller who actually has a session: a self-asserted
+	// visitor has no membership to find, and `requireUser`'s "you need to be
+	// signed in" would be a misleading answer to "you are not the Ballot Counter".
+	if (sessionUser) {
+		const membership = await requireClubRole(sessionUser.id, authz.clubId, [
+			"admin",
+		]);
+		return {
+			...authz,
+			allowed: true,
+			via: "admin",
+			actorMemberId: membership.id,
+		};
 	}
-	return authz;
+	throw new Error("Only the Ballot Counter or a club admin can do that.");
 }
 
 /** Fetch a roster member by id (server-only, no auth check). */
