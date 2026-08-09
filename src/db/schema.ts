@@ -119,6 +119,12 @@ export const activityActionEnum = pgEnum("activity_action", [
 	// meeting (or the mark was cleared). `detail = { memberId, via }`.
 	"outreach_set",
 	"outreach_clear",
+	// Digital voting (#510): a vote window opened or closed. Deliberately NOT
+	// `vote_cast` — logging every ballot would put voter identity into a feed the
+	// club can read, exposing the electorate for no benefit. The tally is the
+	// record. `detail = { category }`.
+	"vote_open",
+	"vote_close",
 ]);
 
 // Impersonation session mode (ADR-0020 / #185, #246). `read_only` = "View as this
@@ -1014,6 +1020,95 @@ export const meetingAwards = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// Digital voting (#510). A vote SESSION is the window for one award category on
+// one meeting; a VOTE is one ballot cast into it. The winner does not live here
+// — it lives in `meeting_awards`, which is already what the minutes, the minutes
+// PDF and the printed awards beat read. The Ballot Counter confirms it there.
+// ---------------------------------------------------------------------------
+
+export const meetingVoteSessions = pgTable(
+	"meeting_vote_sessions",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		meetingId: uuid("meeting_id")
+			.notNull()
+			.references(() => meetings.id, { onDelete: "cascade" }),
+		category: awardCategoryEnum("category").notNull(),
+		openedAt: timestamp("opened_at").defaultNow().notNull(),
+		// NULL means OPEN. Re-opening a closed vote sets this back to null on the
+		// same row rather than inserting a second one; the open/close history lives
+		// in `activity_log`.
+		closedAt: timestamp("closed_at"),
+		openedByMemberId: uuid("opened_by_member_id").references(() => members.id, {
+			onDelete: "set null",
+		}),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+		updatedAt: timestamp("updated_at").defaultNow().notNull(),
+	},
+	(t) => [
+		index("meeting_vote_sessions_meeting_idx").on(t.meetingId),
+		// Mirrors `meeting_awards_meeting_category_unique` so sessions, awards and
+		// categories line up 1:1:1, and doubles as the ON CONFLICT arbiter for the
+		// open/re-open upsert.
+		uniqueIndex("meeting_vote_sessions_meeting_category_unique").on(
+			t.meetingId,
+			t.category,
+		),
+	],
+);
+
+export const meetingVotes = pgTable(
+	"meeting_votes",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		sessionId: uuid("session_id")
+			.notNull()
+			.references(() => meetingVoteSessions.id, { onDelete: "cascade" }),
+		voterMemberId: uuid("voter_member_id").references(() => members.id, {
+			onDelete: "set null",
+		}),
+		voterGuestId: uuid("voter_guest_id").references(() => guests.id, {
+			onDelete: "cascade",
+		}),
+		candidateMemberId: uuid("candidate_member_id").references(
+			() => members.id,
+			{
+				onDelete: "set null",
+			},
+		),
+		candidateGuestId: uuid("candidate_guest_id").references(() => guests.id, {
+			onDelete: "cascade",
+		}),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+		updatedAt: timestamp("updated_at").defaultNow().notNull(),
+	},
+	(t) => [
+		index("meeting_votes_session_idx").on(t.sessionId),
+		// One vote per person per category, enforced HERE rather than in
+		// application code. Plain (non-partial) unique indexes so ON CONFLICT can
+		// infer them as arbiters; Postgres treats NULLs as distinct, so the member
+		// rows (guest null) never collide with the guest rows (member null). Same
+		// construction as `meeting_attendance`.
+		uniqueIndex("meeting_votes_voter_member_unique").on(
+			t.sessionId,
+			t.voterMemberId,
+		),
+		uniqueIndex("meeting_votes_voter_guest_unique").on(
+			t.sessionId,
+			t.voterGuestId,
+		),
+		check(
+			"meeting_votes_single_voter",
+			sql`${t.voterMemberId} is null or ${t.voterGuestId} is null`,
+		),
+		check(
+			"meeting_votes_single_candidate",
+			sql`${t.candidateMemberId} is null or ${t.candidateGuestId} is null`,
+		),
+	],
+);
+
+// ---------------------------------------------------------------------------
 // Speeches — first-class, Person-owned content (ADR-0009 / #79).
 //
 // A speech is durable and independent of the schedule: it belongs to a Person
@@ -1643,6 +1738,24 @@ export const meetingAwardsRelations = relations(meetingAwards, ({ one }) => ({
 	guest: one(guests, {
 		fields: [meetingAwards.guestId],
 		references: [guests.id],
+	}),
+}));
+
+export const meetingVoteSessionsRelations = relations(
+	meetingVoteSessions,
+	({ one, many }) => ({
+		meeting: one(meetings, {
+			fields: [meetingVoteSessions.meetingId],
+			references: [meetings.id],
+		}),
+		votes: many(meetingVotes),
+	}),
+);
+
+export const meetingVotesRelations = relations(meetingVotes, ({ one }) => ({
+	session: one(meetingVoteSessions, {
+		fields: [meetingVotes.sessionId],
+		references: [meetingVoteSessions.id],
 	}),
 }));
 
