@@ -7,12 +7,10 @@ import {
 } from "@tanstack/react-router";
 import {
 	CalendarDays,
-	CheckCircle2,
 	Clock,
 	Eye,
 	Loader2,
 	Lock,
-	LockOpen,
 	MapPin,
 	Sparkles,
 	WifiOff,
@@ -28,13 +26,11 @@ import { GuestResources } from "#/components/club/guest-resources";
 import { useRequireIdentity } from "#/components/club/identity-gate";
 import { MeetingMinutes } from "#/components/club/meeting-minutes";
 import { MeetingNavStrip } from "#/components/club/meeting-nav-strip";
-import { MeetingRoleSheets } from "#/components/club/meeting-role-sheets";
-import { MeetingViewActions } from "#/components/club/meeting-view-actions";
+import { MeetingPersonalStrip } from "#/components/club/meeting-personal-strip";
+import { MeetingToolbar } from "#/components/club/meeting-toolbar";
 import { OpenActionItems } from "#/components/club/open-action-items";
 import { TableTopicsCapture } from "#/components/club/table-topics-capture";
-import { ViewingAs } from "#/components/club/viewing-as";
 import { VoteCounterPanel } from "#/components/club/vote-counter-panel";
-import { ShareLinkButton } from "#/components/share-link-button";
 import { Button } from "#/components/ui/button";
 import {
 	Dialog,
@@ -58,6 +54,7 @@ import {
 	formatMeetingTime,
 	formatMeetingTimeRange,
 } from "#/lib/format";
+import { MINUTES_ANCHOR_ID } from "#/lib/meeting-anchors";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import {
 	isMeetingLocked,
@@ -65,6 +62,7 @@ import {
 	MEETING_LOCKED_MESSAGE,
 	meetingDatePassed,
 	meetingDateReached,
+	meetingPhase,
 	resolveMeetingViewer,
 } from "#/lib/meeting-lifecycle";
 import { deriveMeetingNavItems } from "#/lib/meeting-nav";
@@ -343,20 +341,31 @@ function MeetingView() {
 		slots,
 		myId,
 	);
+	// ONE clock for the whole render (spec D1): every phase/freeze/completability
+	// consumer on this page reads the same instant, so a render can't straddle
+	// midnight and show a "today" toolbar over an already-frozen agenda.
+	const now = new Date();
+	const phase = meetingPhase({
+		status: meeting.status,
+		scheduledAt: meeting.scheduledAt,
+		timezone,
+		now,
+	});
 	const locked = isMeetingLocked(meeting.status);
 	// Its own fact, not a step toward `over`: it drives the "already taken place"
 	// notice, which a manager (still editing) must not see.
-	const datePassed = meetingDatePassed(meeting.scheduledAt, timezone);
+	const datePassed = meetingDatePassed(meeting.scheduledAt, timezone, now);
 	// The one "is it over?" rule (#393) — shared with `resolveMeetingViewer` and
 	// handed to <MeetingAgenda> rather than recomputed there.
 	const over = isMeetingOver({
 		status: meeting.status,
 		scheduledAt: meeting.scheduledAt,
 		timezone,
+		now,
 	});
 	// #320: previewing-as-member drops management everywhere it gates admin UI.
 	const effectiveCanManage = canManage && !previewAsMember;
-	const canComplete = meetingDateReached(meeting.scheduledAt, timezone);
+	const canComplete = meetingDateReached(meeting.scheduledAt, timezone, now);
 
 	// One viewer for all audiences: an admin keeps editing a past-but-open meeting
 	// until Complete; a member/anon agenda freezes once the date passes; a locked
@@ -370,6 +379,7 @@ function MeetingView() {
 		isTmod,
 		isGrammarian,
 		isSignedIn,
+		now,
 	});
 
 	// Roster for the assign picker: a manager already has it (with contact) from
@@ -786,85 +796,46 @@ function MeetingView() {
 						<span className="font-medium">{meeting.wordOfTheDay}</span>
 					</p>
 				) : null}
-				{source === "anon" ? (
-					<ViewingAs member={member} promptIdentity={promptIdentity} />
-				) : null}
-				{over ? (
-					myId ? (
-						<p className="mt-1 text-sm font-medium text-muted-foreground">
-							{myUnavailable
-								? "You did not attend this meeting."
-								: "You attended this meeting."}
-						</p>
-					) : null
-				) : (
-					<Button
-						type="button"
-						variant={myUnavailable ? "default" : "outline"}
-						size="sm"
-						onClick={toggleAvailability}
-						disabled={!viewer.canToggleAvailability || availBusy}
-						className="mt-1"
-					>
-						{availBusy ? (
-							<Loader2 className="size-4 animate-spin" />
-						) : myUnavailable ? (
-							"You can't make this one — undo?"
-						) : (
-							"I can't make this one"
-						)}
-					</Button>
-				)}
-				<div className="flex flex-wrap items-center gap-2 pt-1">
-					{/* One label for the SAME action on every audience (#542): officers
-					    used to see "Copy member link" here while everyone else saw
-					    "Copy share link" — the copied URL is identical. */}
-					<ShareLinkButton path={`/club/${clubId}/meeting/${urlKey}`} />
-					<MeetingViewActions
-						clubSlug={clubId}
-						meetingId={urlKey}
-						deck={deck}
-						clubName={clubName}
-						wordOfTheDay={meeting.wordOfTheDay}
-					/>
-					{/* Public prep material — role-sheet PDFs hold only public-agenda
-					    data, so every audience gets the download menu (#365). */}
-					<MeetingRoleSheets meetingId={meeting.id} />
-					{effectiveCanManage && !locked && addableRoles.length > 0 ? (
-						<Button
-							size="sm"
-							variant="outline"
-							onClick={() => setAddRoleOpen(true)}
-						>
-							+ Add role
-						</Button>
-					) : null}
-					{effectiveCanManage && locked ? (
-						<Button
-							size="sm"
-							variant="outline"
-							onClick={doReopen}
-							disabled={lifecycleBusy}
-						>
-							{lifecycleBusy ? (
-								<Loader2 className="size-4 animate-spin" />
-							) : (
-								<LockOpen className="size-4" />
-							)}
-							Reopen meeting
-						</Button>
-					) : null}
-					{effectiveCanManage && !locked && canComplete ? (
-						<Button size="sm" onClick={doComplete} disabled={lifecycleBusy}>
-							{lifecycleBusy ? (
-								<Loader2 className="size-4 animate-spin" />
-							) : (
-								<CheckCircle2 className="size-4" />
-							)}
-							Complete meeting
-						</Button>
-					) : null}
-					{canManage && !previewAsMember ? (
+				<MeetingPersonalStrip
+					source={source}
+					member={member}
+					promptIdentity={promptIdentity}
+					over={over}
+					myUnavailable={myUnavailable}
+					availBusy={availBusy}
+					canToggleAvailability={viewer.canToggleAvailability}
+					onToggleAvailability={toggleAvailability}
+				/>
+				{/* The strip derives identity from `member !== null`; the TOOLBAR
+				    still takes an explicit hasIdentity, because its gate is the
+				    session-or-anon id the route resolved (#541 D2/D3). */}
+				<MeetingToolbar
+					phase={phase}
+					clubSlug={clubId}
+					meetingId={urlKey}
+					dbMeetingId={meeting.id}
+					sharePath={`/club/${clubId}/meeting/${urlKey}`}
+					deck={deck}
+					clubName={clubName}
+					wordOfTheDay={meeting.wordOfTheDay}
+					hasIdentity={!!myId}
+					canManage={effectiveCanManage}
+					locked={locked}
+					canComplete={canComplete}
+					hasAddableRoles={addableRoles.length > 0}
+					lifecycleBusy={lifecycleBusy}
+					onAddRole={() => setAddRoleOpen(true)}
+					onComplete={doComplete}
+					onReopen={doReopen}
+				/>
+				{/* Preview-as-member survives as a SIBLING of the toolbar (review
+				    decision): capability preserved, not folded into the toolbar's
+				    props — PR 2 reshapes the officer surface and will revisit.
+				    Gated on the RAW canManage, not effectiveCanManage: this toggle
+				    is what TURNS preview on, so gating it on the previewed value
+				    would make it vanish exactly when it is usable. */}
+				{canManage && !previewAsMember ? (
+					<div className="flex flex-wrap items-center gap-2 pt-1">
 						<Button
 							size="sm"
 							variant="ghost"
@@ -873,8 +844,8 @@ function MeetingView() {
 							<Eye className="size-4" />
 							Preview as member
 						</Button>
-					) : null}
-				</div>
+					</div>
+				) : null}
 			</header>
 
 			<MeetingAnnouncements text={meeting.reminders} />
@@ -936,26 +907,35 @@ function MeetingView() {
 			/>
 
 			{minutes.visible && minutes.data ? (
-				<MeetingMinutes
-					meetingId={meeting.id}
-					minutes={minutes.data}
-					program={minutes.program}
-					meetingPast={over}
-					canEdit={effectiveCanManage && minutes.canEdit}
-					clubGuests={clubGuests}
-					onMutated={() => router.invalidate()}
-					email={
-						minutesEmail
-							? {
-									clubId: meeting.clubId,
-									clubName,
-									meetingDate: meeting.scheduledAt,
-									recipients: minutesEmail.recipients,
-									skipped: minutesEmail.skipped,
-								}
-							: null
-					}
-				/>
+				// Anchor target for the toolbar's completed-phase primary (#541 D2).
+				// The wrapper exists because <MeetingMinutes> renders a <Card> and
+				// takes no id/className. `scroll-mt-24` (not 20) clears the sticky
+				// header at its TALLEST — it grows under the impersonation banner.
+				// Co-gated with the primary: the toolbar only offers the Minutes CTA
+				// to an officer, and an officer's `getMinutes` is always visible
+				// (canEdit ⇒ visible), so the link never points at a missing target.
+				<section id={MINUTES_ANCHOR_ID} className="scroll-mt-24">
+					<MeetingMinutes
+						meetingId={meeting.id}
+						minutes={minutes.data}
+						program={minutes.program}
+						meetingPast={over}
+						canEdit={effectiveCanManage && minutes.canEdit}
+						clubGuests={clubGuests}
+						onMutated={() => router.invalidate()}
+						email={
+							minutesEmail
+								? {
+										clubId: meeting.clubId,
+										clubName,
+										meetingDate: meeting.scheduledAt,
+										recipients: minutesEmail.recipients,
+										skipped: minutesEmail.skipped,
+									}
+								: null
+						}
+					/>
+				</section>
 			) : null}
 
 			{isVoteCounter || effectiveCanManage ? (

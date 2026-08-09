@@ -17,8 +17,9 @@
 //     call `head`/`loader` directly, render `component`.
 //   • The component reads `Route.useParams()` / `Route.useLoaderData()`, which
 //     need a real match. Spy on those two instead of standing up a full router
-//     with a loader, and mount under the same minimal memory router that
-//     `meeting-view-actions.test.tsx` uses so `<Link>` resolves an href.
+//     with a loader, and mount under a minimal memory router so `<Link>`
+//     resolves an href — that pattern is packaged as `renderUnderMemoryRouter`
+//     in `src/test/router-harness.tsx`; the inline copy below predates it.
 import {
 	createMemoryHistory,
 	createRootRoute,
