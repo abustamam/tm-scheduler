@@ -9,7 +9,9 @@ import { getActiveImpersonation } from "./impersonation-logic";
 import {
 	type MeetingAgendaAuthz,
 	resolveMeetingAgendaAuthz,
+	resolveVoteCounterAuthz,
 	resolveWordOfTheDayAuthz,
+	type VoteCounterAuthz,
 	type WordOfTheDayAuthz,
 } from "./meeting-authz-logic";
 import { getOpenOfficerPositions } from "./officers-logic";
@@ -359,6 +361,45 @@ export async function requireWordOfTheDayEditor(input: {
 	});
 	if (!authz.allowed) {
 		throw new Error("You don't have permission to edit the Word of the Day.");
+	}
+	return authz;
+}
+
+/**
+ * Gate a Ballot Counter capability (#510): the meeting's Table Topics capture
+ * (add/remove/move) and its award set/clear — exactly the FIVE capabilities
+ * `docs/superpowers/specs/2026-08-08-digital-voting-design.md` hands the
+ * Ballot Counter, and no more. Allowed when the current session is a club
+ * `admin`, OR the self-asserted `selfMemberId` holds the meeting's
+ * `vote_counter` slot. Throws when neither applies.
+ *
+ * Wraps `resolveVoteCounterAuthz` the same way `requireMeetingAgendaEditor` /
+ * `requireWordOfTheDayEditor` wrap their own resolvers — the one exception is
+ * `voting.ts`'s open/close/tally calls, which call `resolveVoteCounterAuthz`
+ * directly rather than through here, for a guard-test slice-ordering reason
+ * documented on that module's own local `requireVoteCounter`.
+ *
+ * Deliberately NOT a replacement for `requireClubRole(..., ["admin"])`
+ * (`gateAdmin` in `minutes.ts`): a club admin who holds their seat only
+ * through an elected officer's open term (#202 effective-admin) is not
+ * `clubRole === "admin"`, and `resolveVoteCounterAuthz`'s admin check — shared
+ * with the TMOD/Grammarian self-assert authz above — does not see that term.
+ * `setAttendance` / `addMinutesGuest` / `removeMinutesGuest` keep calling
+ * `gateAdmin` UNCHANGED so that gap can never reach them; only the five
+ * capabilities named above run through this narrower gate.
+ */
+export async function requireVoteCounterCapability(input: {
+	meetingId: string;
+	selfMemberId?: string | null;
+}): Promise<VoteCounterAuthz> {
+	const sessionUser = await getSessionUser();
+	const authz = await resolveVoteCounterAuthz({
+		meetingId: input.meetingId,
+		sessionUserId: sessionUser?.id ?? null,
+		selfMemberId: input.selfMemberId ?? null,
+	});
+	if (!authz.allowed) {
+		throw new Error("Only the Ballot Counter or a club admin can do that.");
 	}
 	return authz;
 }

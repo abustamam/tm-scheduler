@@ -11,6 +11,7 @@ import {
 	joinBallotAsGuest,
 	loadBallot,
 	loadParticipation,
+	loadTableTopicsForConsole,
 	loadTally,
 	openVote,
 } from "./voting-logic";
@@ -21,6 +22,7 @@ import {
 export type {
 	BallotData,
 	CategoryTally,
+	TableTopicsSpeakerRef,
 	TallyResult,
 	VoterRef,
 } from "./voting-logic";
@@ -135,9 +137,14 @@ export const closeVoteFn = createServerFn({ method: "POST" })
 		return { ok: true as const };
 	});
 
-/** The running count. GATED — Ballot Counter or club admin. Deliberately does
- *  NOT assert the lock: the tally must stay readable after the meeting is
- *  completed, which is exactly when the winner gets confirmed. */
+/** The running count, plus the meeting's Table Topics speakers (#510) — the
+ *  Ballot Counter console's ONE source for that list, since `getMinutes` hides
+ *  it from a non-admin Vote Counter until the meeting completes and widening
+ *  `getMinutes` instead would hand over attendance and guest contact data to
+ *  get at it (see `loadTableTopicsForConsole`). GATED — Ballot Counter or club
+ *  admin. Deliberately does NOT assert the lock: the tally must stay readable
+ *  after the meeting is completed, which is exactly when the winner gets
+ *  confirmed. */
 export const getVoteTally = createServerFn({ method: "GET" })
 	.validator((input: unknown) =>
 		z
@@ -146,5 +153,9 @@ export const getVoteTally = createServerFn({ method: "GET" })
 	)
 	.handler(async ({ data }) => {
 		await requireVoteCounter(data);
-		return loadTally(data.meetingId);
+		const [categories, tableTopicsSpeakers] = await Promise.all([
+			loadTally(data.meetingId),
+			loadTableTopicsForConsole(data.meetingId),
+		]);
+		return { categories, tableTopicsSpeakers };
 	});

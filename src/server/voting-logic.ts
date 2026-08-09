@@ -9,7 +9,7 @@
  * Authorization is the caller's job (`resolveVoteCounterAuthz`), matching how
  * `minutes-logic.ts` trusts its server fn's admin gate.
  */
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import { db } from "#/db";
 import {
 	guests,
@@ -18,6 +18,7 @@ import {
 	meetingVoteSessions,
 	meetingVotes,
 	members,
+	tableTopicsSpeakers,
 } from "#/db/schema";
 import { cap } from "#/lib/cap";
 import { logActivity } from "./activity";
@@ -430,6 +431,54 @@ export async function loadTally(
 		};
 	}
 	return out;
+}
+
+/** One Table Topics speaker, for the Ballot Counter console (#510). */
+export interface TableTopicsSpeakerRef {
+	id: string;
+	kind: "member" | "guest";
+	name: string;
+	sortOrder: number;
+}
+
+/**
+ * The meeting's Table Topics speakers, for the Ballot Counter console. GATED —
+ * folded into `getVoteTally` (`voting.ts`) rather than exposed on its own, so
+ * it is reachable ONLY through that gate.
+ *
+ * This exists because `getMinutes`' visibility gate is `canEdit || completed`
+ * (`canEdit` meaning admin), so a non-admin Vote Counter's console gets an
+ * EMPTY speaker list from `getMinutes` on any meeting that has not been
+ * completed yet — the exact bug #510 shipped with. Widening `getMinutes`
+ * instead would hand a Vote Counter full attendance and guest contact data to
+ * get at this one list — precisely the over-grant the capability boundary
+ * exists to avoid (#464 is the standing reminder that grants get enumerated,
+ * not widened). So this is its own narrow query: names and ids only, no topic
+ * and no contact details — `voting-payload.guard.test.ts` covers this module
+ * for exactly that.
+ */
+export async function loadTableTopicsForConsole(
+	meetingId: string,
+): Promise<TableTopicsSpeakerRef[]> {
+	const rows = await db
+		.select({
+			id: tableTopicsSpeakers.id,
+			guestId: tableTopicsSpeakers.guestId,
+			memberName: members.name,
+			guestName: guests.name,
+			sortOrder: tableTopicsSpeakers.sortOrder,
+		})
+		.from(tableTopicsSpeakers)
+		.leftJoin(members, eq(members.id, tableTopicsSpeakers.memberId))
+		.leftJoin(guests, eq(guests.id, tableTopicsSpeakers.guestId))
+		.where(eq(tableTopicsSpeakers.meetingId, meetingId))
+		.orderBy(asc(tableTopicsSpeakers.sortOrder), asc(tableTopicsSpeakers.id));
+	return rows.map((r) => ({
+		id: r.id,
+		kind: r.guestId ? ("guest" as const) : ("member" as const),
+		name: (r.guestId ? r.guestName : r.memberName) ?? "Unknown",
+		sortOrder: r.sortOrder,
+	}));
 }
 
 export interface Participation {

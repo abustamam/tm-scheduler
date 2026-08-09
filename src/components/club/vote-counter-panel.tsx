@@ -21,11 +21,21 @@ const CATEGORIES = Object.keys(CATEGORY_LABELS) as AwardCategory[];
  * an explicit human tap, so a tie, a winner who left early, or a late paper
  * slip are all handled by the person running the room rather than a rule that
  * has to anticipate them.
+ *
+ * `onClearWinner` is the undo for a mis-tapped `onSetWinner` (#510): the only
+ * other reachable "Clear" control lives in the admin-only minutes AwardsSection
+ * (`meeting-minutes.tsx`), which a non-admin Vote Counter never sees — this
+ * console is otherwise their only avenue to `clearMinutesAward`, so without a
+ * button here the grant would be real server-side but unreachable in practice.
+ * Shown whenever the category is closed, independent of the tally: a mistaken
+ * award can exist even with zero votes recorded (e.g. set from a previous
+ * session), and `clearMinutesAward` is a harmless no-op when nothing is set.
  */
 export function VoteCounterPanel({
 	meetingId,
 	selfMemberId,
 	onSetWinner,
+	onClearWinner,
 }: {
 	meetingId: string;
 	selfMemberId: string | null;
@@ -35,6 +45,8 @@ export function VoteCounterPanel({
 		category: AwardCategory,
 		winner: { kind: "member" | "guest"; id: string },
 	) => void;
+	/** Calls the EXISTING clearAward path — see the doc comment above. */
+	onClearWinner: (category: AwardCategory) => void;
 }) {
 	const qc = useQueryClient();
 	const tally = useQuery({
@@ -59,7 +71,10 @@ export function VoteCounterPanel({
 	return (
 		<div className="flex flex-col gap-4">
 			{CATEGORIES.map((category) => {
-				const t = tally.data?.[category];
+				// `getVoteTally` now also carries the Table Topics speaker list
+				// (#510) alongside the per-category tally, so the counts live one
+				// level down under `categories`.
+				const t = tally.data?.categories[category];
 				const total = t?.results.reduce((n, r) => n + r.count, 0) ?? 0;
 				const top = t?.results[0]?.count ?? 0;
 				const tied = (t?.results ?? []).filter(
@@ -97,32 +112,45 @@ export function VoteCounterPanel({
 						{/* Counts are visible HERE and nowhere else. The projector gets a
 						    participation badge only — a live leaderboard in the room
 						    produces bandwagon voting and kills the reveal. */}
-						{t && !t.isOpen && total > 0 ? (
+						{t && !t.isOpen ? (
 							<div className="mt-3 flex flex-col gap-2">
-								{tied.length > 1 ? (
-									<p className="text-sm font-medium text-warning-foreground">
-										{tied.length} tied on {top} — pick the winner.
-									</p>
+								{total > 0 ? (
+									<>
+										{tied.length > 1 ? (
+											<p className="text-sm font-medium text-warning-foreground">
+												{tied.length} tied on {top} — pick the winner.
+											</p>
+										) : null}
+										{t.results.map((r) => (
+											<div
+												key={`${r.kind}:${r.id}`}
+												className="flex items-center justify-between gap-3"
+											>
+												<span className="text-sm">
+													{r.name} — {r.count}
+												</span>
+												<Button
+													size="sm"
+													variant="outline"
+													onClick={() =>
+														onSetWinner(category, { kind: r.kind, id: r.id })
+													}
+												>
+													Set winner
+												</Button>
+											</div>
+										))}
+									</>
 								) : null}
-								{t.results.map((r) => (
-									<div
-										key={`${r.kind}:${r.id}`}
-										className="flex items-center justify-between gap-3"
-									>
-										<span className="text-sm">
-											{r.name} — {r.count}
-										</span>
-										<Button
-											size="sm"
-											variant="outline"
-											onClick={() =>
-												onSetWinner(category, { kind: r.kind, id: r.id })
-											}
-										>
-											Set winner
-										</Button>
-									</div>
-								))}
+								<Button
+									type="button"
+									size="sm"
+									variant="ghost"
+									className="self-start text-muted-foreground"
+									onClick={() => onClearWinner(category)}
+								>
+									Clear winner
+								</Button>
 							</div>
 						) : null}
 
