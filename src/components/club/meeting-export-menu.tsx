@@ -143,9 +143,12 @@ export function MeetingExportMenu({
 								// lives in a toast instead; downloadDeckPptx surfaces its
 								// own failure toast and never rejects.
 								const id = toast.loading("Building the PowerPoint file…");
-								downloadDeckPptx({ deck, clubName }).finally(() =>
-									toast.dismiss(id),
-								);
+								downloadDeckPptx({ deck, clubName })
+									// The helper contractually never rejects (it toasts its own
+									// failures); the catch is insurance so a future contract
+									// breach can't become an unhandled rejection here.
+									.catch(() => {})
+									.finally(() => toast.dismiss(id));
 							}}
 						>
 							<Download />

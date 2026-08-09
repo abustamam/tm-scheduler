@@ -146,6 +146,25 @@ describe("MeetingExportMenu (#541 D2)", () => {
 		]);
 	});
 
+	it("keeps the gated items in spec order too: Word poster then Download .pptx last", async () => {
+		// Spec D2 names all six; the ungated test above can't see a swap of the
+		// two gated items (e.g. Word poster drifting above All role sheets).
+		await openMenu({
+			wordOfTheDay: "Buoyant",
+			deck: [{ kind: "title" }] as unknown as Slide[],
+			clubName: "HCS",
+		});
+		const items = screen.getAllByRole("menuitem").map((el) => el.textContent);
+		expect(items).toEqual([
+			"Print agenda",
+			"Present",
+			"This meeting's role sheets…",
+			"All role sheets",
+			"Word poster",
+			"Download .pptx",
+		]);
+	});
+
 	it("shows Download .pptx only when a deck and club name exist", async () => {
 		await openMenu();
 		expect(
