@@ -26,7 +26,9 @@ export const listClubRoles = createServerFn({ method: "GET" })
 	.handler(async ({ data: clubId }) => {
 		const currentUser = await requireUser();
 		await requireClubViewAccess(currentUser.id, clubId);
-		return listRoleDefinitions(clubId);
+		// The one caller that reads `slotCount` — the admin page disables deleting
+		// a role that existing meeting slots reference.
+		return listRoleDefinitions(clubId, { withSlotCounts: true });
 	});
 
 /** The club's role template (ordered), for the PUBLIC printable role sheet
@@ -36,7 +38,13 @@ export const listClubRoles = createServerFn({ method: "GET" })
  *  `listClubRoles` minus disabled ones (#368, via `onlyEnabled`) — this sheet
  *  OFFERS the club's roles, which a "skeleton crew" club turned some off to
  *  stop offering; the admin-only `listClubRoles` is where a disabled role
- *  stays visible. The extra `slotCount` is harmless here. */
+ *  stays visible.
+ *
+ *  Since #318 this serves TWO surfaces — the printed sheet and the in-chrome
+ *  roles guide — and the guide is linked from the public club page, which the
+ *  router preloads on hover. It therefore skips `slotCount`: nothing here reads
+ *  it, and computing it would put an aggregate join over the multi-tenant
+ *  `role_slots` table behind an unauthenticated hover. */
 export const getPublicClubRoles = createServerFn({ method: "GET" })
 	.validator((clubId: unknown) => uuid.parse(clubId))
 	.handler(async ({ data: clubId }) =>

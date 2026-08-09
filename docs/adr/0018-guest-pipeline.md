@@ -87,3 +87,46 @@ prospect list → convert-to-member** — adding the minimum durable state.
   reminder poller #7); a follow-up contact-log table or per-guest notes (only the current
   `stage`); an admin merge/dedup UI for name-only collisions (phone/email dedup only); member
   retention/renewal (that is dues territory, #206). This ticket is guest → member only.
+
+## Amendment — attendance means "was in the room" (#319, v1.9.0.0)
+
+Status: Accepted. Narrows the **capture** bullet's meeting resolution only. The stage model,
+convert-to-member, the picker exclusion and the stable QR are unchanged.
+
+The original rule wrote a `meeting_attendance` row against the club's **current/nearest** meeting
+— today's in the club's timezone, else the next upcoming one. That was right while the QR code an
+officer prints and puts on the table was the guest book's ONLY front door: to reach the form you
+were already in the room, so "nearest meeting" and "the meeting I am at" were the same thing.
+#319 added a second front door — a "Planning a visit?" invitation on the public club page — which
+makes an **advance** sign-up the expected flow rather than an edge case. The fallback then stamped
+`status: present` against a meeting the guest had not attended and might never attend, and
+`minutes-logic.ts` reads `meeting_attendance` with no date gate, so that reached the meeting's
+official minutes and was emailed to the club.
+
+1. **Attendance is written only for a meeting IN PROGRESS.** `resolveCurrentMeeting` (renamed from
+   `resolveCurrentMeetingId`) returns `{ meetingId, atMeeting }`; `captureGuestVisit` writes the
+   attendance row only when `atMeeting` is true. The guest row is still created-or-found either
+   way, at `prospect` — an advance sign-up is a prospect the VP Membership can act on, just not a
+   visit to count.
+2. **The window is absolute time, not the club's calendar day.** `isAtMeetingNow` over
+   `[scheduledAt − 90 min, scheduledAt + lengthMinutes + 60 min]`; the constants live in
+   `src/lib/guest-book-window.ts` (a `lib/` module, so a unit test can assert them without a
+   database). The before-grace covers the officer opening the book to set up and guests arriving
+   early; the after-grace is deliberately shorter, since a signature hours after the room emptied
+   is far more likely to be the public CTA than someone still standing there.
+3. **Why the calendar-day compare had to go, rather than just be gated.** It was wrong in both
+   directions. `clubs.timezone` defaults to `America/Chicago` and NOTHING in the product ever
+   writes it, so a Pacific club's 19:00 meeting and a 22:10 signature fall on different Chicago
+   dates and the visit vanished — VP Membership showed "No recorded visits" for someone who was in
+   the room. And a date-key match ignores the clock, so a 21:35 signature was stamped `present` at
+   a meeting that ended at 21:00. A window keyed on the meeting's own start and length depends on
+   neither the timezone nor the calendar.
+4. **The scan is bounded.** `resolveCurrentMeeting` runs on an unauthenticated POST and used to
+   scan every meeting the club had ever held; it now reads only meetings from the last 24 hours
+   onward.
+
+Consequences: a guest-book row is now evidence of attendance rather than of intent, so the derived
+visit count and first-visit date mean what the VP Membership reads them as. Rows written before
+this amendment may still be future-dated, which is why `guestVisits` keeps its own club-local
+"has this meeting happened?" gate. One known gap remains (`TODOS.md`, P3): with two meetings inside
+one window, the earliest in-progress meeting wins rather than the closest.

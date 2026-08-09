@@ -879,7 +879,7 @@ function MeetingView() {
 
 			<MeetingAnnouncements text={meeting.reminders} />
 
-			{effectiveCanManage ? null : <GuestResources />}
+			{effectiveCanManage ? null : <GuestResources clubId={clubId} />}
 
 			<MeetingAgenda
 				slots={slots}

@@ -15,6 +15,7 @@ import {
 	clubProfileSchema,
 	getClubAgendaSettings,
 	getClubProfile,
+	getPublicClubProfile,
 } from "./clubs-logic";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -181,3 +182,88 @@ describe.skipIf(!hasTestDb)("club agenda settings logic (#367)", () => {
 		).rejects.toThrow("Club not found.");
 	});
 });
+
+/**
+ * The PUBLIC reader (#318). `getPublicClubProfile` exists only to be narrower
+ * than `getClubProfile`: it feeds the "About this club" block on the
+ * unauthenticated club page, and `getClubProfile` also returns
+ * `defaultCountryCode` — internal dialing config for the WhatsApp nudge links
+ * (#295) with no business on an anonymous payload.
+ *
+ * That narrowness is invisible to TypeScript. `row` is assigned to a declared
+ * return type rather than passed as a fresh object literal, so excess-property
+ * checking never fires: adding `defaultCountryCode` to the select — or
+ * collapsing the body to `return getClubProfile(clubId)` — compiles clean and
+ * ships the column to every anonymous visitor. So the assertion is an ABSOLUTE
+ * key list, not `toMatchObject`, which would pass on a widened row.
+ */
+describe.skipIf(!hasTestDb)(
+	"getPublicClubProfile (PUBLIC payload, #318)",
+	() => {
+		let seed: SeededClub;
+
+		beforeEach(async () => {
+			seed = await seedClub();
+		});
+		afterEach(async () => {
+			await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
+		});
+
+		it("returns EXACTLY the three public columns, never defaultCountryCode", async () => {
+			await applyClubProfileUpdate(
+				clubProfileSchema.parse({
+					clubId: seed.clubId,
+					district: "District 206",
+					mission: "Building leaders.",
+					meetingSchedule: "2nd & 4th Thursday, 6:45 PM",
+					defaultCountryCode: "1",
+				}),
+			);
+
+			const pub = await getPublicClubProfile(seed.clubId);
+			expect(Object.keys(pub ?? {}).sort()).toEqual([
+				"district",
+				"meetingSchedule",
+				"mission",
+			]);
+			expect(pub).not.toHaveProperty("defaultCountryCode");
+			expect(pub).not.toHaveProperty("name");
+
+			// Positive control: the column really is set on this club, so the
+			// assertion above is about THIS query's projection and not about the
+			// value happening to be absent.
+			const priv = await getClubProfile(seed.clubId);
+			expect(priv?.defaultCountryCode).toBeTruthy();
+		});
+
+		it("returns the values a guest needs", async () => {
+			await applyClubProfileUpdate(
+				clubProfileSchema.parse({
+					clubId: seed.clubId,
+					district: "District 206",
+					mission: "Building leaders.",
+					meetingSchedule: "Thursdays",
+				}),
+			);
+			expect(await getPublicClubProfile(seed.clubId)).toEqual({
+				district: "District 206",
+				mission: "Building leaders.",
+				meetingSchedule: "Thursdays",
+			});
+		});
+
+		it("returns nulls for an unset profile, not a missing row", async () => {
+			expect(await getPublicClubProfile(seed.clubId)).toEqual({
+				district: null,
+				mission: null,
+				meetingSchedule: null,
+			});
+		});
+
+		it("returns null for a club that does not exist", async () => {
+			expect(
+				await getPublicClubProfile("00000000-0000-4000-8000-000000000000"),
+			).toBeNull();
+		});
+	},
+);
