@@ -252,6 +252,28 @@ describe("MeetingToolbar (#541 D2)", () => {
 		).toBe("/club/downtown/meeting/2026-08-10/print?layout=editorial");
 	});
 
+	it("passes dbMeetingId through — the per-meeting PDFs must name THIS meeting", async () => {
+		// dbMeetingId is a DIFFERENT id from meetingId two props above (uuid vs
+		// URL key); wiring the wrong one serves another meeting's role sheets.
+		await renderToolbar({ hasIdentity: true });
+		await userEvent.click(
+			screen.getByRole("button", { name: /print & export/i }),
+		);
+		await userEvent.click(
+			screen.getByRole("menuitem", { name: /this meeting's role sheets/i }),
+		);
+		const pdf = document.querySelector('a[href*="/role-sheets/"]');
+		expect(pdf?.getAttribute("href")).toContain(BASE.dbMeetingId);
+	});
+
+	it("passes sharePath through — the share chip copies the meeting URL", async () => {
+		const user = userEvent.setup();
+		await renderToolbar({ hasIdentity: true });
+		await user.click(screen.getByRole("button", { name: /copy share link/i }));
+		const copied = await window.navigator.clipboard.readText();
+		expect(copied).toContain("/club/downtown/meeting/2026-08-10");
+	});
+
 	it("orders the toolbar: primary, then share, then the export menu trigger", async () => {
 		await renderToolbar({ phase: "today", hasIdentity: true });
 		const primary = screen.getByTestId("toolbar-primary");
