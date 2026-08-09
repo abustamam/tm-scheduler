@@ -2,7 +2,24 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
-## [1.9.0.0] - 2026-08-08
+## [1.10.0.0] - 2026-08-09
+
+### Added
+
+- **The room can now vote from their phones.** A QR code on the projector and in the printed agenda opens a ballot for Best Speaker, Best Evaluator and Best Table Topics. Members pick their name; visitors add themselves. No account, no app, no slips of paper to count by hand.
+- **The Vote Counter runs it, and the app only does the arithmetic.** They open and close each vote when the segment ends, watch the count come in, and tap the winner. Nothing is decided automatically — a tie, a winner who left early, or a late paper ballot is still a judgement call, and the winner reaches the minutes only when a person confirms it.
+- **The count stays with the Vote Counter.** The projector shows how many ballots are in, never who is ahead. A leaderboard on the wall changes how the last few people vote.
+- **Table Topics speakers get captured as they speak.** The Vote Counter taps each name as they're called, which is what puts them on the ballot — and it fills in the minutes and the minutes PDF at the same time, instead of someone reconstructing the list afterwards.
+- **Voting closes when the meeting does.** Completing a meeting shuts any open ballot, so nobody votes from the car park an hour later.
+
+### Changed
+
+- **Vote Counter is now a role that carries a capability**, alongside Toastmaster of the Day and Grammarian. A club that renamed it keeps the capability — the role's identity is its key, not its label.
+- **The printed agenda and the projected deck both carry a scan-to-vote code**, on every layout including the default one.
+
+### Fixed
+
+- **Merging two duplicate members no longer fails when both have voted.** Their ballots collapse to one, which is what merging two records of one person means.
 
 ### Added
 

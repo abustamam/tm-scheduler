@@ -76,7 +76,7 @@ Read these, in this order. The plan assumes you have:
 - Modify: `src/db/schema.ts:91-122` (the `activityActionEnum`)
 - Create: `src/server/voting.integration.test.ts`
 
-- [ ] **Step 1: Add the two enum values**
+- [x] **Step 1: Add the two enum values**
 
 In `src/db/schema.ts`, at the end of the `activityActionEnum` list (currently ending with `"outreach_clear"` at line 121), add:
 
@@ -89,7 +89,7 @@ In `src/db/schema.ts`, at the end of the `activityActionEnum` list (currently en
 	"vote_close",
 ```
 
-- [ ] **Step 2: Add the two tables**
+- [x] **Step 2: Add the two tables**
 
 In `src/db/schema.ts`, immediately after the `meetingAwards` table (line 1014) and before the `speeches` section comment:
 
@@ -181,7 +181,7 @@ export const meetingVotes = pgTable(
 );
 ```
 
-- [ ] **Step 3: Add the relations**
+- [x] **Step 3: Add the relations**
 
 After `meetingAwardsRelations` (around line 1634):
 
@@ -205,7 +205,7 @@ export const meetingVotesRelations = relations(meetingVotes, ({ one }) => ({
 }));
 ```
 
-- [ ] **Step 4: Generate the migration**
+- [x] **Step 4: Generate the migration**
 
 Run: `bun run db:generate`
 
@@ -215,13 +215,13 @@ Open the generated SQL and confirm two things:
 - There is **no `CREATE INDEX CONCURRENTLY`**. Drizzle migrations run inside a transaction and `CONCURRENTLY` cannot; it deploys fine locally and fails closed on Railway.
 - The `ALTER TYPE ... ADD VALUE` statements exist. Postgres 12+ permits these in a transaction as long as the new value is not *used* in the same transaction — this migration only adds them, so it is fine.
 
-- [ ] **Step 5: Sync the test database**
+- [x] **Step 5: Sync the test database**
 
 Run: `DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test bun run db:push --force`
 
 Expected: `[✓] Changes applied`.
 
-- [ ] **Step 6: Write the constraint test**
+- [x] **Step 6: Write the constraint test**
 
 Create `src/server/voting.integration.test.ts`:
 
@@ -328,13 +328,13 @@ describe.skipIf(!hasTestDb)("vote table constraints (#510)", () => {
 
 The guest fixture is deliberately `"Nguyen, Thanh"` — the Toastmasters export emits both `"First Last"` and `"Last, First"`, and single-shape fixtures have previously hidden a real bug from six reviewers.
 
-- [ ] **Step 7: Run the tests**
+- [x] **Step 7: Run the tests**
 
 Run: `TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test bun run test src/server/voting.integration.test.ts`
 
 Expected: PASS, 5 tests. If it reports "0 tests" the database URL is not set and the suite skipped — fix that before continuing.
 
-- [ ] **Step 8: Typecheck and commit**
+- [x] **Step 8: Typecheck and commit**
 
 ```bash
 bun run typecheck
@@ -356,7 +356,7 @@ Extract the derivation so **the list the ballot renders and the list the server 
 - Create: `src/server/award-candidates.integration.test.ts`
 - Modify: `src/server/minutes-logic.ts`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `src/server/award-candidates.integration.test.ts`:
 
@@ -472,13 +472,13 @@ describe.skipIf(!hasTestDb)("loadAwardCandidates (#510)", () => {
 });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test bun run test src/server/award-candidates.integration.test.ts`
 
 Expected: FAIL — `Cannot find module '#/server/award-candidates-logic'`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Create `src/server/award-candidates-logic.ts`:
 
@@ -613,13 +613,13 @@ export { AWARD_CATEGORIES };
 
 If `roleSlots` has no `assignedGuestId` column, read `src/db/schema.ts:805-860` and use the actual column name; the rest of the function is unchanged.
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test bun run test src/server/award-candidates.integration.test.ts`
 
 Expected: PASS, 5 tests.
 
-- [ ] **Step 5: Point `loadMinutes` at the shared derivation**
+- [x] **Step 5: Point `loadMinutes` at the shared derivation**
 
 In `src/server/minutes-logic.ts`, replace the `awardEligible` construction (the block starting `const speakerMemberIds = new Set<string>();` and ending with the `awardEligible` object literal, around lines 356-400) with:
 
@@ -648,7 +648,7 @@ import {
 } from "./award-candidates-logic";
 ```
 
-- [ ] **Step 6: Export the club-scoping helper**
+- [x] **Step 6: Export the club-scoping helper**
 
 Still in `src/server/minutes-logic.ts`, change line 552 from `async function requireMemberInMeetingClub` to:
 
@@ -661,13 +661,13 @@ export async function requireMemberInMeetingClub(
 ) {
 ```
 
-- [ ] **Step 7: Verify nothing regressed**
+- [x] **Step 7: Verify nothing regressed**
 
 Run: `TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test bun run test src/server/minutes.integration.test.ts src/server/award-candidates.integration.test.ts`
 
 Expected: PASS, all tests. The minutes suite covers `awardEligible` already; if any of it fails, the refactor changed behaviour and must be fixed rather than the test adjusted.
 
-- [ ] **Step 8: Typecheck and commit**
+- [x] **Step 8: Typecheck and commit**
 
 ```bash
 bun run typecheck
@@ -687,7 +687,7 @@ git commit -m "refactor(minutes): one derivation of award eligibility, with name
 
 Read `src/lib/meeting-roles.ts` first. The rule it encodes: **the key is identity, the name is a label.** Matching on name once handed a member the whole meeting because their invented role was called "Toastmaster Evaluator". Do not widen the name fallback to a prefix match.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `src/lib/meeting-roles.vote-counter.test.ts`:
 
@@ -736,13 +736,13 @@ describe("findVoteCounterSlot (#510)", () => {
 });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `bun run test src/lib/meeting-roles.vote-counter.test.ts`
 
 Expected: FAIL — `findVoteCounterSlot is not a function`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `src/lib/meeting-roles.ts`, beside `TMOD_ROLE_KEY` and `GRAMMARIAN_ROLE_KEY`:
 
@@ -780,13 +780,13 @@ export function findVoteCounterSlot<T extends RoleIdentity>(
 }
 ```
 
-- [ ] **Step 4: Run the test**
+- [x] **Step 4: Run the test**
 
 Run: `bun run test src/lib/meeting-roles.vote-counter.test.ts`
 
 Expected: PASS, 5 tests.
 
-- [ ] **Step 5: Add `resolveVoteCounterAuthz`**
+- [x] **Step 5: Add `resolveVoteCounterAuthz`**
 
 In `src/server/meeting-authz-logic.ts`, extend `loadRoleSlotAssignees` (line 113) to also return the vote counter:
 
@@ -889,13 +889,13 @@ export async function resolveVoteCounterAuthz(
 }
 ```
 
-- [ ] **Step 6: Verify the existing authz tests still pass**
+- [x] **Step 6: Verify the existing authz tests still pass**
 
 Run: `TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test bun run test src/server/meeting-authz.integration.test.ts`
 
 Expected: PASS.
 
-- [ ] **Step 7: Typecheck and commit**
+- [x] **Step 7: Typecheck and commit**
 
 ```bash
 bun run typecheck
@@ -912,7 +912,7 @@ git commit -m "feat(voting): vote-counter capability, keyed not named (#510)"
 - Create: `src/server/voting-logic.ts`
 - Modify: `src/server/voting.integration.test.ts`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `src/server/voting.integration.test.ts`. Add the imports it needs at the top of the file:
 
@@ -1005,13 +1005,13 @@ describe.skipIf(!hasTestDb)("open and close a vote (#510)", () => {
 });
 ```
 
-- [ ] **Step 2: Run and watch it fail**
+- [x] **Step 2: Run and watch it fail**
 
 Run: `TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test bun run test src/server/voting.integration.test.ts`
 
 Expected: FAIL — `Cannot find module '#/server/voting-logic'`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Create `src/server/voting-logic.ts`:
 
@@ -1159,13 +1159,13 @@ export async function closeAllVotesTx(
 }
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test bun run test src/server/voting.integration.test.ts`
 
 Expected: PASS, 10 tests (5 from Task 1 plus 5 here).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 bun run typecheck
@@ -1184,7 +1184,7 @@ This is the security-critical task. Three separate things must hold, and each ha
 - Modify: `src/server/voting-logic.ts`
 - Modify: `src/server/voting.integration.test.ts`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add `castVote` to the `voting-logic` import block at the top of the test file, then append:
 
@@ -1307,13 +1307,13 @@ describe.skipIf(!hasTestDb)("castVote (#510)", () => {
 
 Add `roleDefinitions` and `roleSlots` to the `#/db/schema` import at the top of the test file.
 
-- [ ] **Step 2: Run and watch it fail**
+- [x] **Step 2: Run and watch it fail**
 
 Run: `TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test bun run test src/server/voting.integration.test.ts`
 
 Expected: FAIL — `castVote is not a function`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Append to `src/server/voting-logic.ts`:
 
@@ -1435,13 +1435,13 @@ import {
 
 If drizzle's `.insert().select()` builder is unavailable in the installed version, use `db.execute(sql\`...\`)` with the same `INSERT INTO meeting_votes (...) SELECT ... FROM meeting_vote_sessions WHERE ... AND closed_at IS NULL ON CONFLICT ... DO UPDATE ...` statement. The requirement is that the window predicate and the write are **one statement** — do not fall back to a read-then-write.
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test bun run test src/server/voting.integration.test.ts`
 
 Expected: PASS, 18 tests.
 
-- [ ] **Step 5: Verify the window check is real, by breaking it**
+- [x] **Step 5: Verify the window check is real, by breaking it**
 
 A passing test proves nothing if the assertion never ran. **Do not verify this with a `console.log` — vitest swallows console output in this repo, which has previously made a live branch look dead.** Mutate the code instead:
 
@@ -1453,7 +1453,7 @@ Expected: **FAIL** on "REJECTS a vote once the window is closed". If it still pa
 
 Restore the line and re-run. Expected: PASS.
 
-- [ ] **Step 6: Verify the club scoping is real, the same way**
+- [x] **Step 6: Verify the club scoping is real, the same way**
 
 Temporarily delete the `await requireMemberInMeetingClub(...)` call.
 
@@ -1463,7 +1463,7 @@ This check matters more than it looks: a scope guard on this codebase has previo
 
 Restore the line and re-run. Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 bun run typecheck
@@ -1480,7 +1480,7 @@ git commit -m "feat(voting): cast a ballot, with atomic window and candidate che
 - Modify: `src/server/voting-logic.ts`
 - Modify: `src/server/voting.integration.test.ts`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add `loadBallot`, `loadTally` and `loadParticipation` to the `voting-logic` import block, then append:
 
@@ -1596,13 +1596,13 @@ describe.skipIf(!hasTestDb)("ballot and tally reads (#510)", () => {
 });
 ```
 
-- [ ] **Step 2: Run and watch it fail**
+- [x] **Step 2: Run and watch it fail**
 
 Run: `TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test bun run test src/server/voting.integration.test.ts`
 
 Expected: FAIL — `loadBallot is not a function`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Append to `src/server/voting-logic.ts`:
 
@@ -1778,13 +1778,13 @@ Add `meetingAttendance` and `members` to the `#/db/schema` import and `type Awar
 
 Add `meetingAttendance` to the `#/db/schema` import in the test file too.
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test bun run test src/server/voting.integration.test.ts`
 
 Expected: PASS, 24 tests.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 bun run typecheck
@@ -1801,7 +1801,7 @@ git commit -m "feat(voting): ballot, tally and participation reads (#510)"
 - Modify: `src/server/meetings-logic.ts:249-262`
 - Modify: `src/server/voting.integration.test.ts`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `src/server/voting.integration.test.ts`:
 
@@ -1899,13 +1899,13 @@ const { assertMeetingNotLocked } = await import(
 
 `seedClub` creates the meeting in the past, so the `meetingDateReached` guard in `applyCompleteMeeting` passes. If it does not, update the seeded meeting's `scheduledAt` to a past date in `beforeEach` before completing.
 
-- [ ] **Step 2: Run and watch it fail**
+- [x] **Step 2: Run and watch it fail**
 
 Run: `TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test bun run test src/server/voting.integration.test.ts`
 
 Expected: FAIL on "force-closes an open vote" — `isOpen` is still `true`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `src/server/meetings-logic.ts`, inside the `applyCompleteMeeting` transaction (line 249), add the close between the status update and the activity log:
 
@@ -1937,17 +1937,17 @@ Add the import:
 import { closeAllVotesTx } from "./voting-logic";
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test bun run test src/server/voting.integration.test.ts src/server/meeting-lifecycle.integration.test.ts`
 
 Expected: PASS.
 
-- [ ] **Step 5: Verify the close is inside the transaction**
+- [x] **Step 5: Verify the close is inside the transaction**
 
 Temporarily move the `closeAllVotesTx(tx, ...)` call to *after* the `db.transaction(...)` block, changing `tx` to `db`. Run the suite — it still passes, which is the point: **the test cannot see the transaction boundary.** Read the code and confirm the call sits inside the callback, then restore it. Note in your commit that transactional placement is verified by reading, not by test.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 bun run typecheck
@@ -1967,7 +1967,7 @@ git commit -m "feat(voting): completing a meeting force-closes its open votes (#
 
 Read `src/server/outreach-authz.guard.test.ts` and `src/server/guards.ts` before writing this. Note the direction rule for source-grep guards on this codebase: a guard asserting a pattern **must be present** is bypassed by a comment that merely names the pattern, so it must read the source via `readSource`; a guard asserting a set of offenders **must be empty** only ever fails falsely, so it may be written raw.
 
-- [ ] **Step 1: Write `voting.ts`**
+- [x] **Step 1: Write `voting.ts`**
 
 ```ts
 import { createServerFn } from "@tanstack/react-start";
@@ -2103,7 +2103,7 @@ async function requireVoteCounter(data: {
 
 Check `src/server/guards.ts` for the actual name of the "session user if any, else null" helper. If it is not `getOptionalUser`, use the real one and import it at the top of the file rather than dynamically. `resolveMeetingAgendaAuthz`'s existing callers show the established pattern — follow it.
 
-- [ ] **Step 2: Write the authz guard**
+- [x] **Step 2: Write the authz guard**
 
 Create `src/server/voting-authz.guard.test.ts`:
 
@@ -2148,7 +2148,7 @@ describe("voting server fns are gated (#510)", () => {
 });
 ```
 
-- [ ] **Step 3: Write the payload guard**
+- [x] **Step 3: Write the payload guard**
 
 Create `src/server/voting-payload.guard.test.ts`:
 
@@ -2189,13 +2189,13 @@ describe("public voting payloads carry no PII (#510)", () => {
 });
 ```
 
-- [ ] **Step 4: Run the guards and the module split test**
+- [x] **Step 4: Run the guards and the module split test**
 
 Run: `bun run test src/server/voting-authz.guard.test.ts src/server/voting-payload.guard.test.ts src/server/server-modules.guard.test.ts`
 
 Expected: PASS. If `server-modules.guard.test.ts` fails, `voting.ts` is exporting something that touches the database — move it to `voting-logic.ts`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 bun run typecheck
@@ -2214,7 +2214,7 @@ git commit -m "feat(voting): server functions, gated, with payload and authz gua
 
 Read `src/routes/club.$clubId_.guest-book.tsx` and `src/components/club/pick-name-form.tsx` first — this route follows the former's structure exactly.
 
-- [ ] **Step 1: Write the ballot component**
+- [x] **Step 1: Write the ballot component**
 
 Create `src/components/club/ballot.tsx`:
 
@@ -2364,7 +2364,7 @@ export function Ballot({
 export type { BallotData };
 ```
 
-- [ ] **Step 2: Write the route**
+- [x] **Step 2: Write the route**
 
 Create `src/routes/club.$clubId_.meeting.$meetingId.vote.tsx`:
 
@@ -2477,7 +2477,7 @@ function VotePage() {
 }
 ```
 
-- [ ] **Step 3: Write the capped guest-join path (server side)**
+- [x] **Step 3: Write the capped guest-join path (server side)**
 
 The ballot lets a visitor create a guest row from a fully public, unauthenticated endpoint. That is the feature's abuse surface, so it gets its own bounded entry point rather than reusing `submitGuestBook` (whose return shape carries no guest id, and whose semantics are pipeline capture, not voting).
 
@@ -2631,7 +2631,7 @@ DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test bun run db:push --force
 
 Run the tests again. Expected: PASS, 4 new tests.
 
-- [ ] **Step 4: Expose it as a server fn**
+- [x] **Step 4: Expose it as a server fn**
 
 Add to `src/server/voting.ts`:
 
@@ -2649,7 +2649,7 @@ export const joinBallot = createServerFn({ method: "POST" })
 
 The zod `.max(400)` is a cheap early reject on obvious junk; the real, code-point-correct cap is `joinBallotAsGuest`'s. Import `joinBallotAsGuest` from `./voting-logic`.
 
-- [ ] **Step 5: Write the `VoterPicker`**
+- [x] **Step 5: Write the `VoterPicker`**
 
 Add to `src/routes/club.$clubId_.meeting.$meetingId.vote.tsx`:
 
@@ -2725,7 +2725,7 @@ import { joinBallot } from "#/server/voting";
 
 Read `src/components/club/pick-name-form.tsx` and match its actual prop names — if the callback is not `onPicked`, use the real one. Everything else here is unchanged.
 
-- [ ] **Step 6: Run the app and vote**
+- [x] **Step 6: Run the app and vote**
 
 ```bash
 bun run dev
@@ -2735,7 +2735,7 @@ Open `http://localhost:3000/club/<club-slug>/meeting/<yyyy-mm-dd>/vote`. Use a d
 
 Expected: the "Who are you?" picker, then "Voting isn't open yet." Open a vote directly in the database (`INSERT INTO meeting_vote_sessions (meeting_id, category) VALUES ('<id>', 'best_speaker')`), wait five seconds, and the page should flip to a ballot with no reload.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git checkout src/routeTree.gen.ts 2>/dev/null || true
@@ -2755,19 +2755,19 @@ git commit -m "feat(voting): the public QR-reachable ballot, with a bounded gues
 - Modify: `src/components/club/meeting-minutes.tsx:794` (the Table Topics section)
 - Modify: `src/routes/club.$clubId.meeting.$meetingId.tsx`
 
-- [ ] **Step 1: Extract the Table Topics picker**
+- [x] **Step 1: Extract the Table Topics picker**
 
 Read `src/components/club/meeting-minutes.tsx` around line 794 (`const speakers = minutes.tableTopicsSpeakers;`). Lift that section — the list, the add-picker, the remove and reorder controls — into `src/components/club/table-topics-capture.tsx` as a component taking the speaker list plus `onAdd` / `onRemove` / `onMove` callbacks. Have `meeting-minutes.tsx` render it with its existing handlers.
 
 This is a pure move. No behaviour changes.
 
-- [ ] **Step 2: Verify the move changed nothing**
+- [x] **Step 2: Verify the move changed nothing**
 
 Run: `bun run test src/components/club/meeting-minutes.test.tsx`
 
 Expected: PASS, unchanged count. If any test needed editing, the move was not pure — revert and redo it.
 
-- [ ] **Step 3: Commit the extraction separately**
+- [x] **Step 3: Commit the extraction separately**
 
 ```bash
 bun run typecheck
@@ -2776,7 +2776,7 @@ git add src/components/club/table-topics-capture.tsx src/components/club/meeting
 git commit -m "refactor(minutes): extract the Table Topics capture component (#510)"
 ```
 
-- [ ] **Step 4: Write the panel**
+- [x] **Step 4: Write the panel**
 
 Create `src/components/club/vote-counter-panel.tsx`:
 
@@ -2917,7 +2917,7 @@ export function VoteCounterPanel({
 
 Note the deliberate absence: **no auto-write.** Closing a vote never sets an award. `onSetWinner` is always an explicit tap, so a tie, a winner who left early, or a late paper slip are all handled by the human rather than by a rule that has to anticipate them.
 
-- [ ] **Step 5: Mount it**
+- [x] **Step 5: Mount it**
 
 In `src/routes/club.$clubId.meeting.$meetingId.tsx`, add the vote-counter flag to the existing role derivation rather than building a parallel one. In `src/lib/meeting-roles.ts`, extend `deriveMeetingRoleFlags`:
 
@@ -2970,7 +2970,7 @@ Match `handleAdd…`/`setAwardMutation` to the real handler names on that route;
 
 Run `bun run test src/lib/meeting-roles.test.ts` after changing `deriveMeetingRoleFlags` — existing callers destructure two fields and adding a third is additive, but the test file asserts the returned object and may need the new key.
 
-- [ ] **Step 6: Verify end to end in the browser**
+- [x] **Step 6: Verify end to end in the browser**
 
 ```bash
 GSTACK_CHROMIUM_NO_SANDBOX=1 bun run dev
@@ -2980,7 +2980,7 @@ Sign in via `/api/dev-login` (needs `ENABLE_DEV_LOGIN=1`). Assign yourself the V
 
 Do not use `mcp__claude-in-chrome__*` tools for this — use the `/browse` skill or the `$B` binary.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git checkout src/routeTree.gen.ts 2>/dev/null || true
@@ -2999,7 +2999,7 @@ git commit -m "feat(voting): the Ballot Counter panel (#510)"
 - Modify: `src/routes/club.$clubId_.meeting.$meetingId.present.tsx`
 - Modify: `src/lib/agenda-slides.test.ts`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `src/lib/agenda-slides.test.ts`:
 
@@ -3017,13 +3017,13 @@ it("carries the ballot URL on every vote slide (#510)", () => {
 
 Match `meeting`, `club` and `slots` to the fixtures already in that file.
 
-- [ ] **Step 2: Run and watch it fail**
+- [x] **Step 2: Run and watch it fail**
 
 Run: `bun run test src/lib/agenda-slides.test.ts`
 
 Expected: FAIL — no `ballotUrl` property.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `src/lib/agenda-slides.ts`, add the field to the `VoteTiming` type that all three vote slide kinds intersect (lines 180, 202, 210):
 
@@ -3055,7 +3055,7 @@ and the equivalent for `voteTableTopics` (line 571) and `voteEvaluator` (line 60
 
 At the call site, build the URL with the helper in `src/lib/presentation-url.ts` rather than concatenating a path — read that file and follow its pattern, appending the `/vote` segment.
 
-- [ ] **Step 4: Render it**
+- [x] **Step 4: Render it**
 
 In `src/routes/club.$clubId_.meeting.$meetingId.present.tsx`, in the branch that renders the three vote slide kinds:
 
@@ -3108,13 +3108,13 @@ function participationLabel(kind: string): string {
 
 The white padded wrapper is not decoration — a QR rendered dark-on-dark in the projector's dark theme will not scan.
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: `bun run test src/lib/agenda-slides.test.ts src/lib/slide-layout.test.ts`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 bun run typecheck
@@ -3133,11 +3133,11 @@ git commit -m "feat(present): QR and participation badge on the vote slides (#51
 - Modify: `src/routes/club.$clubId_.meeting.$meetingId.print.tsx`
 - Modify: `src/routes/club.$clubId_.meeting.$meetingId.print.test.tsx`
 
-- [ ] **Step 1: Read the page-count gate first**
+- [x] **Step 1: Read the page-count gate first**
 
 Read `src/routes/print-page-reset.guard.test.ts` and `src/routes/club.$clubId_.meeting.$meetingId.print.test.tsx` before writing any markup. Understand what the gate counts and how, then write the QR into the footer in a way that gate can see.
 
-- [ ] **Step 2: Add the QR**
+- [x] **Step 2: Add the QR**
 
 Add the QR **inside the existing footer element**, not as a new top-level block — a new top-level block is what pushes a page.
 
@@ -3161,13 +3161,13 @@ Two print-specific requirements, both invisible to the browser preview:
 
 Replace `pg-novoid` with whatever the repo's print stylesheet actually calls its no-break utility — read `src/styles/print-theme.tsx` (or the file `print-page-reset.guard.test.ts` points at) and use the real class. Do not invent one.
 
-- [ ] **Step 3: Run the print gates**
+- [x] **Step 3: Run the print gates**
 
 Run: `bun run test src/routes/club.\$clubId_.meeting.\$meetingId.print.test.tsx src/routes/print-page-reset.guard.test.ts`
 
 Expected: PASS, with the page count unchanged from before your edit. If the count went from 1 to 2, the footer block is breaking the page — fix the CSS, do not update the expected count.
 
-- [ ] **Step 4: Verify by counting pages in a real PDF**
+- [x] **Step 4: Verify by counting pages in a real PDF**
 
 ```bash
 bun run dev
@@ -3175,7 +3175,7 @@ bun run dev
 
 Open the print route, print to PDF, and **count the pages**. The gate asserts a number; your eyes confirm the number is the right one.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 bun run typecheck
