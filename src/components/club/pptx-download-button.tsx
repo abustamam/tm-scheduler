@@ -93,6 +93,38 @@ export async function fetchClubLogo(
 	}
 }
 
+/**
+ * The .pptx export action, extracted from the button so the meeting toolbar's
+ * export menu (#541) can invoke it too. Returns after the file is written or
+ * the failure toast is shown — callers only manage their own busy state.
+ */
+export async function downloadDeckPptx({
+	deck,
+	clubName,
+	logoUrl,
+}: {
+	deck: Slide[];
+	clubName: string;
+	logoUrl: string | null;
+}): Promise<void> {
+	try {
+		const [[{ default: PptxGenJS }, { deckToPptx, pptxFileName }], logo] =
+			await Promise.all([
+				Promise.all([import("pptxgenjs"), import("#/lib/deck-to-pptx")]),
+				fetchClubLogo(logoUrl),
+			]);
+		const title = deck.find((s) => s.kind === "title");
+		const fileName = title
+			? pptxFileName(clubName, title.scheduledAt, title.timezone)
+			: `${clubName} Agenda.pptx`;
+		const pptx = deckToPptx(PptxGenJS, deck, logo);
+		await pptx.writeFile({ fileName });
+	} catch (err) {
+		console.error("pptx export failed", err);
+		toast.error("Could not build the PowerPoint file.");
+	}
+}
+
 export function PptxDownloadButton({
 	deck,
 	clubName,
@@ -113,23 +145,7 @@ export function PptxDownloadButton({
 		if (busy) return;
 		setBusy(true);
 		try {
-			// Dynamic import keeps pptxgenjs + our builder off the main chunk. The
-			// logo fetch is independent of it, so both go out at once rather than
-			// the ~1 MB library download gating the start of a network round trip.
-			const [[{ default: PptxGenJS }, { deckToPptx, pptxFileName }], logo] =
-				await Promise.all([
-					Promise.all([import("pptxgenjs"), import("#/lib/deck-to-pptx")]),
-					fetchClubLogo(logoUrl),
-				]);
-			const title = deck.find((s) => s.kind === "title");
-			const fileName = title
-				? pptxFileName(clubName, title.scheduledAt, title.timezone)
-				: `${clubName} Agenda.pptx`;
-			const pptx = deckToPptx(PptxGenJS, deck, logo);
-			await pptx.writeFile({ fileName });
-		} catch (err) {
-			console.error("pptx export failed", err);
-			toast.error("Could not build the PowerPoint file.");
+			await downloadDeckPptx({ deck, clubName, logoUrl });
 		} finally {
 			setBusy(false);
 		}
