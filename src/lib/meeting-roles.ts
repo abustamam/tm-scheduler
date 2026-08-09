@@ -1,7 +1,8 @@
 /**
- * `role_definitions.key` for the two roles that carry a CAPABILITY: the
- * Toastmaster of the Day runs the meeting (self-serve agenda editing, ADR-0010)
- * and the Grammarian owns the Word of the Day (#296).
+ * `role_definitions.key` for the three roles that carry a CAPABILITY: the
+ * Toastmaster of the Day runs the meeting (self-serve agenda editing, ADR-0010),
+ * the Grammarian owns the Word of the Day (#296), and the Vote Counter operates
+ * the digital votes (#510).
  *
  * The key is identity and the name is a label (#368/#445). Matching on the name
  * got all three answers wrong: a club that renamed "Toastmaster of the Day" to
