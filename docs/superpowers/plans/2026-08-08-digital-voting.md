@@ -3188,7 +3188,7 @@ git commit -m "feat(print): scan-to-vote QR in the agenda footer (#510)"
 
 ## Final verification
 
-- [ ] **Full suite with the database**
+- [x] **Full suite with the database**
 
 ```bash
 TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test bun run test
@@ -3196,14 +3196,14 @@ TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test bun run test
 
 Expected: PASS. Check the reported test count is in the thousands, not the hundreds — a count near ~2,600 means the integration suite skipped and the run is meaningless.
 
-- [ ] **Typecheck and lint**
+- [x] **Typecheck and lint**
 
 ```bash
 bun run typecheck
 bun run check
 ```
 
-- [ ] **Confirm the routeTree is clean**
+- [x] **Confirm the routeTree is clean**
 
 ```bash
 git status --short src/routeTree.gen.ts
@@ -3211,7 +3211,7 @@ git status --short src/routeTree.gen.ts
 
 If it shows modified and you did not intend a routing change beyond the new vote route, run `git checkout src/routeTree.gen.ts`.
 
-- [ ] **Ship**
+- [x] **Ship**
 
 Use the `/ship` skill: it merges the base branch, runs the tests, reviews the diff, bumps `VERSION`, updates `CHANGELOG.md`, commits, pushes and opens the PR. Reference #510 in the PR body.
 
