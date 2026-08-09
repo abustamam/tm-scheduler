@@ -1,4 +1,6 @@
+import { useQuery } from "@tanstack/react-query";
 import { X } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
 import {
 	type ReactNode,
 	useCallback,
@@ -19,6 +21,7 @@ import {
 	slideLayout,
 	slideName,
 } from "#/lib/slide-layout";
+import { getVoteParticipation } from "#/server/voting";
 
 // Official brand palette (sampled from the wordmark) so chrome matches the logo.
 const INK = "#2b2b2b";
@@ -43,15 +46,49 @@ const OVERVIEW_COLUMNS = 4;
  *  uniqueness this grid depends on is asserted against it, not a copy (#446). */
 const slideLabel = slideName;
 
+/** The three vote slide kinds (#510). Named rather than matched on a "vote"
+ *  prefix — `agenda-parity.test.ts` draws the same line for the same reason:
+ *  a future kind starting with "vote" but carrying no ballot would otherwise
+ *  slip through and read `undefined` instead of failing to compile. */
+type VoteSlide = Extract<
+	Slide,
+	{ kind: "voteSpeaker" | "voteTableTopics" | "voteEvaluator" }
+>;
+const isVoteSlide = (s: Slide): s is VoteSlide =>
+	s.kind === "voteSpeaker" ||
+	s.kind === "voteTableTopics" ||
+	s.kind === "voteEvaluator";
+
+/** The award category `getVoteParticipation` keys its bare counts by, for one
+ *  vote slide kind. A string-literal union rather than the server's own
+ *  `AwardCategory` (`#/server/minutes-logic`, a `*-logic.ts` db module) —
+ *  structurally identical, so it types the same `categories` lookup, without a
+ *  client component reaching past `voting.ts`'s own re-exported types into the
+ *  db-logic module those exist to keep out of the bundle (see
+ *  `server-modules.guard.test.ts` and the comment atop `voting.ts`). */
+function voteCategory(
+	kind: VoteSlide["kind"],
+): "best_speaker" | "best_evaluator" | "best_table_topics" {
+	if (kind === "voteSpeaker") return "best_speaker";
+	if (kind === "voteEvaluator") return "best_evaluator";
+	return "best_table_topics";
+}
+
 /** Full-screen, keyboard-driven slideshow. Read-only; position is local state. */
 export function MeetingPresent({
 	deck,
 	clubName,
+	meetingId,
 	onExit,
 	offlineBadge,
 }: {
 	deck: Slide[];
 	clubName: string;
+	/** The meeting's real DB id (#510) — distinct from the pretty URL key the
+	 *  route resolves. Used only to poll `getVoteParticipation` for the
+	 *  projector's bare-count badge, the same id the Ballot Counter console
+	 *  keys its own (gated, per-candidate) tally query on. */
+	meetingId: string;
 	onExit?: () => void;
 	/** Connectivity indicator, rendered in the top-right chrome cluster beside
 	 *  the .pptx button rather than over the slide (#361). */
@@ -64,6 +101,28 @@ export function MeetingPresent({
 	// the presenter commits.
 	const [overview, setOverview] = useState(false);
 	const [cursor, setCursor] = useState(0);
+	// A BARE COUNT, never per-candidate numbers (#510): a live leaderboard on
+	// the projector produces bandwagon voting and destroys the reveal —
+	// per-candidate tallies exist only behind the gated `getVoteTally`. Polls
+	// regardless of which slide is showing, the same steady background
+	// presence `OfflineBadge` keeps, so the count is current the moment the
+	// presenter flips to a vote slide rather than one 5-second beat late.
+	const participation = useQuery({
+		queryKey: ["vote-participation", meetingId],
+		queryFn: () => getVoteParticipation({ data: { meetingId } }),
+		refetchInterval: 5000,
+	});
+	/** "7 votes in", or "7 of 12 present have voted" once attendance is marked.
+	 *  `presentCount` is null until then — the server cannot know who is in the
+	 *  room until someone votes, so the honest denominator is none; rendering
+	 *  it anyway would show "7 of 0". */
+	function participationLabel(kind: VoteSlide["kind"]): string {
+		const p = participation.data;
+		const n = p?.categories[voteCategory(kind)]?.ballotsIn ?? 0;
+		return p?.presentCount != null
+			? `${n} of ${p.presentCount} present have voted`
+			: `${n} ${n === 1 ? "vote" : "votes"} in`;
+	}
 	const last = deck.length - 1;
 	const next = useCallback(() => setI((n) => Math.min(n + 1, last)), [last]);
 	const prev = useCallback(() => setI((n) => Math.max(n - 1, 0)), []);
@@ -158,6 +217,11 @@ export function MeetingPresent({
 	// from `layout.logoUrl`, and a second prop carrying the same value is a
 	// place the two can disagree.
 	const logoUrl = title?.logoUrl ?? null;
+	// The QR + badge (#510) — null on every non-vote slide, which `ContentSlide`
+	// reads as "render the body alone, exactly as before".
+	const vote = isVoteSlide(slide)
+		? { ballotUrl: slide.ballotUrl, label: participationLabel(slide.kind) }
+		: null;
 
 	return (
 		<div className="fixed inset-0 flex items-center justify-center bg-black">
@@ -190,7 +254,12 @@ export function MeetingPresent({
 				{layout.chrome === "splash" ? (
 					<Splash layout={layout} />
 				) : (
-					<ContentSlide layout={layout} clubName={clubName} date={fdate} />
+					<ContentSlide
+						layout={layout}
+						clubName={clubName}
+						date={fdate}
+						vote={vote}
+					/>
 				)}
 			</div>
 
@@ -419,10 +488,14 @@ function ContentSlide({
 	layout,
 	clubName,
 	date,
+	vote,
 }: {
 	layout: Extract<SlideLayout, { chrome: "content" }>;
 	clubName: string;
 	date: string;
+	/** Non-null only on the three vote slides (#510). `null` renders the body
+	 *  exactly as every other content slide always has. */
+	vote: { ballotUrl: string; label: string } | null;
 }) {
 	const { outer, inner } = useFitTransform([layout]);
 	return (
@@ -444,7 +517,45 @@ function ContentSlide({
 				className="flex min-h-0 flex-1 flex-col justify-center overflow-hidden px-[7cqw] py-[2.5cqw]"
 			>
 				<div ref={inner} className="w-full">
-					<BodyView body={layout.body} />
+					{vote ? (
+						<div className="flex items-center gap-[4cqw]">
+							<div className="flex-1">
+								<BodyView body={layout.body} />
+							</div>
+							<div className="flex flex-col items-center gap-[1cqw]">
+								{/* White padded — NOT decoration. This chrome's own background
+								    (`GROUND`, off-white) already gives the QR's black modules
+								    contrast, but the room around a projector is dark for
+								    exactly the vote beat this slide is for, and the exported
+								    .pptx or a phone's camera under low ambient light shouldn't
+								    have to rely on a screen calibrating `#f3f4f4` as "light
+								    enough" — pure white is the one background guaranteed to
+								    scan, the same reasoning the guest-book QR (VP Membership)
+								    already pins its own paper to. */}
+								<div className="rounded-[1.2cqw] bg-white p-[1.2cqw]">
+									{/* `ballotUrl` is `""` for one render on mount, before the
+									    present route's origin effect fires (#510) — an empty
+									    value QR-encodes without error but scans to nothing, so
+									    it's withheld rather than shown and immediately swapped. */}
+									{vote.ballotUrl ? (
+										<QRCodeSVG
+											value={vote.ballotUrl}
+											size={220}
+											marginSize={0}
+										/>
+									) : (
+										<div style={{ width: 220, height: 220 }} />
+									)}
+								</div>
+								<p className="text-[2.2cqw] font-semibold">Scan to vote</p>
+								{/* A BARE COUNT. Never per-candidate numbers on the projector
+								    (#510) — see `MeetingPresent`'s own comment on `participation`. */}
+								<p className="text-[1.7cqw] opacity-70">{vote.label}</p>
+							</div>
+						</div>
+					) : (
+						<BodyView body={layout.body} />
+					)}
 				</div>
 			</div>
 			<footer

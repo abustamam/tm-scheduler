@@ -45,6 +45,10 @@ const club: ClubForDeck = {
 	logoUrl: null,
 };
 
+// This suite exercises pptx export, never ballot content, so one fixture
+// value stands in everywhere `buildSlideDeck` requires it (#510).
+const BALLOT_URL = "https://gavelup.test/club/mcf/meeting/2026-06-25/vote";
+
 // A representative full meeting exercising every slide kind.
 const fullSlots: AgendaSlot[] = [
 	slot({ roleName: "Toastmaster of the Day", assigneeName: "Schinthia" }),
@@ -111,6 +115,7 @@ describe("deckToPptx", () => {
 			meeting,
 			club,
 			slots: fullSlots,
+			ballotUrl: BALLOT_URL,
 			geIntroducesFunctionaries: false,
 		});
 		const pptx = deckToPptx(PptxGenJS, deck);
@@ -123,6 +128,7 @@ describe("deckToPptx", () => {
 			meeting,
 			club,
 			slots: fullSlots,
+			ballotUrl: BALLOT_URL,
 			geIntroducesFunctionaries: false,
 		});
 		const pptx = deckToPptx(PptxGenJS, deck);
@@ -138,6 +144,7 @@ describe("deckToPptx", () => {
 			meeting,
 			club,
 			slots: fullSlots,
+			ballotUrl: BALLOT_URL,
 			geIntroducesFunctionaries: false,
 		});
 		const pptx = deckToPptx(PptxGenJS, deck);
@@ -150,6 +157,7 @@ describe("deckToPptx", () => {
 			meeting,
 			club,
 			slots: [],
+			ballotUrl: BALLOT_URL,
 			geIntroducesFunctionaries: false,
 		});
 		const pptx = deckToPptx(PptxGenJS, deck);
@@ -184,6 +192,7 @@ describe("pptx via slideLayout", () => {
 			meeting,
 			club,
 			slots: fullSlots,
+			ballotUrl: BALLOT_URL,
 			nextMeetingAt: new Date("2026-07-23T23:45:00Z"),
 			geIntroducesFunctionaries: false,
 		});
@@ -200,6 +209,7 @@ describe("pptx via slideLayout", () => {
 				meeting,
 				club,
 				slots: fullSlots,
+				ballotUrl: BALLOT_URL,
 				geIntroducesFunctionaries,
 			});
 			const pptx = deckToPptx(PptxGenJS, deck);
@@ -223,6 +233,7 @@ describe("pptx via slideLayout", () => {
 			meeting,
 			club,
 			slots: fullSlots,
+			ballotUrl: BALLOT_URL,
 			geIntroducesFunctionaries: false,
 		});
 		const pptx = deckToPptx(PptxGenJS, deck);
@@ -262,6 +273,7 @@ describe("club logo on the title splash (#496)", () => {
 			meeting,
 			club: withLogo,
 			slots: fullSlots,
+			ballotUrl: BALLOT_URL,
 			geIntroducesFunctionaries: false,
 		});
 		const pptx = deckToPptx(PptxGenJS, deck, LOGO);
@@ -276,6 +288,7 @@ describe("club logo on the title splash (#496)", () => {
 			meeting,
 			club: withLogo,
 			slots: fullSlots,
+			ballotUrl: BALLOT_URL,
 			geIntroducesFunctionaries: false,
 		});
 		const pptx = deckToPptx(PptxGenJS, deck, null);
@@ -287,6 +300,7 @@ describe("club logo on the title splash (#496)", () => {
 			meeting,
 			club,
 			slots: fullSlots,
+			ballotUrl: BALLOT_URL,
 			geIntroducesFunctionaries: false,
 		});
 		const pptx = deckToPptx(PptxGenJS, deck, LOGO);
@@ -298,6 +312,7 @@ describe("club logo on the title splash (#496)", () => {
 			meeting,
 			club: withLogo,
 			slots: fullSlots,
+			ballotUrl: BALLOT_URL,
 			geIntroducesFunctionaries: false,
 		});
 		const pptx = deckToPptx(PptxGenJS, deck, LOGO);
@@ -314,6 +329,7 @@ describe("club logo on the title splash (#496)", () => {
 			meeting,
 			club: withLogo,
 			slots: fullSlots,
+			ballotUrl: BALLOT_URL,
 			geIntroducesFunctionaries: false,
 		});
 		const pptx = deckToPptx(PptxGenJS, deck, LOGO);
@@ -330,6 +346,7 @@ describe("club logo on the title splash (#496)", () => {
 			meeting,
 			club: withLogo,
 			slots: fullSlots,
+			ballotUrl: BALLOT_URL,
 			geIntroducesFunctionaries: false,
 		});
 		const [img] = slideImages(deckToPptx(PptxGenJS, deck, logo), 0);
@@ -366,6 +383,7 @@ describe("club logo on the title splash (#496)", () => {
 			meeting,
 			club: withLogo,
 			slots: fullSlots,
+			ballotUrl: BALLOT_URL,
 			geIntroducesFunctionaries: false,
 		});
 		const pptx = deckToPptx(PptxGenJS, deck, LOGO);

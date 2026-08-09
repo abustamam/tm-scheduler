@@ -314,6 +314,14 @@ function MeetingView() {
 	const projectedEnd = new Date(
 		new Date(meeting.scheduledAt).getTime() + flex.projectedMinutes * 60_000,
 	);
+	// Absolute so a QR built from it resolves without the app's own origin
+	// (#510) — same relative-during-SSR/absolute-after-hydrate split as
+	// `nudgeShareUrl` below, computed here because `buildSlideDeck` (unlike
+	// that share link) needs it up front to stamp onto every vote slide.
+	const ballotUrl =
+		typeof window === "undefined"
+			? `/club/${clubId}/meeting/${urlKey}/vote`
+			: `${window.location.origin}/club/${clubId}/meeting/${urlKey}/vote`;
 	const deck = buildSlideDeck({
 		meeting,
 		club: {
@@ -328,6 +336,7 @@ function MeetingView() {
 		nextMeetingAt,
 		meetingNumber,
 		geIntroducesFunctionaries,
+		ballotUrl,
 	});
 
 	const { isTmod, isGrammarian, isVoteCounter } = deriveMeetingRoleFlags(

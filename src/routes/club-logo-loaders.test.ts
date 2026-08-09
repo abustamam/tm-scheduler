@@ -23,6 +23,12 @@ vi.mock("#/lib/club-route", () => ({ resolveClubOrRedirect: vi.fn() }));
 vi.mock("#/server/club-logo", () => ({ getClubLogoMeta: vi.fn() }));
 vi.mock("#/server/role-definitions", () => ({ getPublicClubRoles: vi.fn() }));
 vi.mock("#/server/meetings", () => ({ getPublicMeetingByKey: vi.fn() }));
+// The present route's component tree now reaches `getVoteParticipation`
+// (#510, the projector's participation badge) — never called from this
+// loader-only suite, but importing the route module still eagerly imports
+// `MeetingPresent`, which imports this, which reaches `#/db` → `pg` at
+// module load time just like the four mocks above.
+vi.mock("#/server/voting", () => ({ getVoteParticipation: vi.fn() }));
 
 import { resolveClubOrRedirect } from "#/lib/club-route";
 import { getClubLogoMeta } from "#/server/club-logo";
