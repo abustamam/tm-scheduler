@@ -23,6 +23,10 @@ import {
 import { toStoredPhone } from "#/lib/phone";
 import type { MinutesActionItems } from "./action-items-logic";
 import { loadActionItemsForMinutes } from "./action-items-logic";
+import {
+	type AwardCandidate,
+	loadAwardCandidates,
+} from "./award-candidates-logic";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 
 export type AttendanceStatus = "present" | "absent" | "excused";
@@ -351,41 +355,18 @@ export async function loadMinutes(meetingId: string): Promise<MinutesData> {
 		};
 	});
 
-	// Award eligibility (#170): speaker/evaluator sets come from role slots by
-	// category; Table Topics from the recorded speakers. De-duped (a member may
-	// hold two speaker slots) and insertion-ordered.
-	const speakerMemberIds = new Set<string>();
-	const speakerGuestIds = new Set<string>();
-	const evaluatorMemberIds = new Set<string>();
-	const evaluatorGuestIds = new Set<string>();
-	for (const r of slotRows) {
-		if (r.category === "speaker") {
-			if (r.memberId) speakerMemberIds.add(r.memberId);
-			if (r.guestId) speakerGuestIds.add(r.guestId);
-		} else if (r.category === "evaluator") {
-			if (r.memberId) evaluatorMemberIds.add(r.memberId);
-			if (r.guestId) evaluatorGuestIds.add(r.guestId);
-		}
-	}
-	const ttMemberIds = new Set<string>();
-	const ttGuestIds = new Set<string>();
-	for (const t of ttList) {
-		if (t.memberId) ttMemberIds.add(t.memberId);
-		if (t.guestId) ttGuestIds.add(t.guestId);
-	}
+	// Award eligibility (#170) now comes from the ONE derivation the public
+	// ballot also reads (#510), so the two can't drift. Mapped back to the id-only
+	// shape this payload has always exposed.
+	const candidates = await loadAwardCandidates(meetingId);
+	const toEligible = (list: AwardCandidate[]): AwardEligible => ({
+		memberIds: list.filter((c) => c.kind === "member").map((c) => c.id),
+		guestIds: list.filter((c) => c.kind === "guest").map((c) => c.id),
+	});
 	const awardEligible: Record<AwardCategory, AwardEligible> = {
-		best_speaker: {
-			memberIds: [...speakerMemberIds],
-			guestIds: [...speakerGuestIds],
-		},
-		best_evaluator: {
-			memberIds: [...evaluatorMemberIds],
-			guestIds: [...evaluatorGuestIds],
-		},
-		best_table_topics: {
-			memberIds: [...ttMemberIds],
-			guestIds: [...ttGuestIds],
-		},
+		best_speaker: toEligible(candidates.best_speaker),
+		best_evaluator: toEligible(candidates.best_evaluator),
+		best_table_topics: toEligible(candidates.best_table_topics),
 	};
 
 	let present = 0;
@@ -548,8 +529,12 @@ async function resolveGuestId(
 	throw new Error("Provide a guest to add.");
 }
 
-/** Validate a member belongs to the meeting's club. */
-async function requireMemberInMeetingClub(memberId: string, clubId: string) {
+/** Throws unless `memberId` is on `clubId`'s roster. Exported for the voting
+ *  logic (#510), which must scope voters the same way awards scope winners. */
+export async function requireMemberInMeetingClub(
+	memberId: string,
+	clubId: string,
+) {
 	const [row] = await db
 		.select({ id: members.id })
 		.from(members)
