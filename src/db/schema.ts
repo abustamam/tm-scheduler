@@ -1688,6 +1688,7 @@ export const meetingsRelations = relations(meetings, ({ one, many }) => ({
 	attendance: many(meetingAttendance),
 	tableTopicsSpeakers: many(tableTopicsSpeakers),
 	awards: many(meetingAwards),
+	voteSessions: many(meetingVoteSessions),
 }));
 
 export const meetingAttendanceRelations = relations(
@@ -1752,6 +1753,12 @@ export const meetingVoteSessionsRelations = relations(
 	}),
 );
 
+// Only the parent link. The four member/guest FKs (voter × candidate) carry NO
+// declared relation on purpose: two point at `members` and two at `guests`, so
+// each would need a `relationName` to disambiguate — and nothing reads them.
+// Every voting query joins explicitly (see `voting-logic.ts`), because the
+// tally needs aggregates the relational query API would not give us anyway.
+// Add them here only if a consumer actually appears.
 export const meetingVotesRelations = relations(meetingVotes, ({ one }) => ({
 	session: one(meetingVoteSessions, {
 		fields: [meetingVotes.sessionId],
