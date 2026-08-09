@@ -283,8 +283,11 @@ describe("meetingPhase (#541 D1)", () => {
 	});
 
 	it("is 'today' even when the UTC calendar already flipped to the next day", () => {
-		// Mon Aug 10, 6pm PT == Tue Aug 11, 01:00 UTC. A UTC-day comparison
-		// would call this 'completed'; club-local must call it 'today'.
+		// Mon Aug 10, 6pm PT == Tue Aug 11, 01:00 UTC. This is the only fixture
+		// that catches a HALF-converted implementation — one that resolves the
+		// meeting's own day in club time but reads `now`'s day in UTC — the
+		// likelier real mistake than a fully-UTC implementation, which would
+		// still call this 'today' too.
 		expect(
 			meetingPhase({
 				status: "scheduled",
@@ -329,5 +332,36 @@ describe("meetingPhase (#541 D1)", () => {
 				now: new Date("2026-08-09T20:00:00.000Z"), // day before, club time
 			}),
 		).toBe("upcoming");
+	});
+
+	it("defaults `now` to the live clock (a long-past meeting reads completed)", () => {
+		expect(
+			meetingPhase({
+				status: "scheduled",
+				scheduledAt: "2020-01-08T04:00:00.000Z",
+				timezone,
+			}),
+		).toBe("completed");
+	});
+
+	it("a passed-but-open meeting is phase 'completed' yet still admin-editable", () => {
+		const input = {
+			status: "scheduled",
+			scheduledAt,
+			timezone,
+			now: new Date("2026-08-11T20:00:00.000Z"),
+		};
+		expect(meetingPhase(input)).toBe("completed");
+		expect(isMeetingOver(input)).toBe(true);
+		expect(
+			resolveMeetingViewer({
+				...input,
+				currentMemberId: "m1",
+				canManage: true,
+				isTmod: false,
+				isGrammarian: false,
+				isSignedIn: true,
+			}).canManage,
+		).toBe(true);
 	});
 });
