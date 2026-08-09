@@ -177,7 +177,17 @@ export interface VoterRef {
  *     `setAward` and `addTableTopicsSpeaker`, where a departed member
  *     legitimately can still be recorded as a past meeting's award winner or
  *     Table Topics speaker — tightening it there would be a regression. A
- *     guest carries a `club_id` and is checked directly.
+ *     guest carries a `club_id` and is checked directly — AND, guest voters
+ *     only, must have actually joined THIS MEETING's ballot (a
+ *     `meeting_ballot_guests` link). Club membership alone is not enough: a
+ *     guest row minted by some OTHER surface — the public guest book (no
+ *     session, no throttle), an officer's manual add, a prior meeting's
+ *     ballot — is club-scoped but was never counted against
+ *     `joinBallotAsGuest`'s per-meeting cap, so accepting it directly as a
+ *     voter here would let that cap bound nothing (#510 follow-up review
+ *     finding 1a — the exploit that actually broke it: 70 public guest-book
+ *     posts, then 70 `joinBallot` reuse-path calls that skipped the cap, then
+ *     70 votes, against a cap of 60).
  *  3. The WINDOW is checked inside the INSERT rather than before it, and the
  *     session sub-select takes a `FOR SHARE` lock. Reading `closed_at` and then
  *     inserting leaves a gap in which the Ballot Counter closes the vote and a
@@ -219,6 +229,7 @@ export async function castVote(input: {
 		await requireActiveMember(input.voter.id);
 	} else {
 		await requireGuestInClub(input.voter.id, clubId);
+		await requireGuestJoinedBallot(input.voter.id, input.meetingId);
 	}
 
 	const voterMemberId = input.voter.kind === "member" ? input.voter.id : null;
@@ -301,6 +312,38 @@ async function requireGuestInClub(guestId: string, clubId: string) {
 		.where(and(eq(guests.id, guestId), eq(guests.clubId, clubId)))
 		.limit(1);
 	if (!row) throw new Error("Guest not found in this club.");
+}
+
+/**
+ * Throws unless `guestId` has joined THIS meeting's ballot — i.e. has a
+ * `meeting_ballot_guests` row for `meetingId` (#510 follow-up review finding
+ * 1a). Club membership (`requireGuestInClub`) is necessary but not
+ * sufficient: a `guests` row can exist for reasons that have nothing to do
+ * with this meeting's ballot — the public guest book (no session, no
+ * throttle), an officer manually adding a guest to a role slot, a PRIOR
+ * meeting's ballot. None of those write `meeting_ballot_guests`, and
+ * `joinBallotAsGuest` — the only path that does, and the only path
+ * `MAX_BALLOT_GUESTS_PER_MEETING` counts against — must be the sole way to
+ * become a voter here. Skip this check and the cap bounds nothing: any guest
+ * id from any other surface would still work as a voter, uncapped and
+ * invisible to the count. This is exactly how the proven exploit worked — 70
+ * public guest-book posts, then 70 `joinBallot` calls that all took the
+ * reuse path, then 70 `castVote` calls, against a cap of 60.
+ */
+async function requireGuestJoinedBallot(guestId: string, meetingId: string) {
+	const [row] = await db
+		.select({ guestId: meetingBallotGuests.guestId })
+		.from(meetingBallotGuests)
+		.where(
+			and(
+				eq(meetingBallotGuests.meetingId, meetingId),
+				eq(meetingBallotGuests.guestId, guestId),
+			),
+		)
+		.limit(1);
+	if (!row) {
+		throw new Error("Guest has not joined this meeting's ballot.");
+	}
 }
 
 /**
@@ -494,14 +537,23 @@ export async function loadTableTopicsForConsole(
 export interface Participation {
 	categories: Record<AwardCategory, { ballotsIn: number }>;
 	/**
-	 * How many people are marked present, or NULL when nobody has marked
-	 * attendance yet.
+	 * How many people are marked present, or NULL when there is no honest
+	 * POSITIVE count yet.
 	 *
 	 * Null is the honest answer and the UI must render it as one ("7 votes in",
-	 * not "7 of 0"). The server cannot know who is in the room: the ballot's
-	 * name-pick identity lives in localStorage and is invisible until someone
-	 * actually votes. Making the name pick write an attendance row would give a
-	 * real denominator — and is deliberately NOT v1, because it is a public
+	 * not "7 of 0"). This is deliberately NOT "does any `meeting_attendance` row
+	 * exist" — `setMemberPresence` upserts per toggle, so the instant an officer
+	 * marks the FIRST member ABSENT (before marking anyone present), a row
+	 * already exists with `present = 0`, and gating on row-existence alone
+	 * rendered that as a real denominator: "7 of 0 present have voted" — the
+	 * exact string this design otherwise avoids (#510 follow-up review finding
+	 * 3). Only a count that is actually POSITIVE is a denominator worth
+	 * showing.
+	 *
+	 * The server cannot know who is in the room: the ballot's name-pick
+	 * identity lives in localStorage and is invisible until someone actually
+	 * votes. Making the name pick write an attendance row would give a real
+	 * denominator — and is deliberately NOT v1, because it is a public
 	 * unauthenticated write into a table that means something, and anyone could
 	 * mark anyone present.
 	 */
@@ -532,9 +584,13 @@ export async function loadParticipation(
 		categories[category] = { ballotsIn: byCategory.get(category) ?? 0 };
 	}
 
+	// Only `present` is needed now — see the doc comment on `presentCount`. An
+	// earlier version also selected a `marked` (any-row-exists) count and gated
+	// on THAT being positive, which is exactly how "7 of 0" happened: a
+	// mark-absent-only meeting has a marked row but zero present, and that read
+	// as a real, if zero, denominator instead of "no honest denominator yet".
 	const [attendance] = await db
 		.select({
-			marked: sql<number>`count(*)::int`,
 			present: sql<number>`count(*) filter (where ${meetingAttendance.status} = 'present')::int`,
 		})
 		.from(meetingAttendance)
@@ -542,24 +598,34 @@ export async function loadParticipation(
 
 	return {
 		categories,
-		presentCount: (attendance?.marked ?? 0) > 0 ? attendance.present : null,
+		presentCount: (attendance?.present ?? 0) > 0 ? attendance.present : null,
 	};
 }
 
 /** Longest guest name the ballot will store, in CODE POINTS. */
 const MAX_GUEST_NAME = 80;
 /**
- * Most guests one meeting's ballot may create. The ballot is an unauthenticated
- * public POST that inserts rows, so it needs a ceiling — without one, a script
- * fills `guests` for any club whose meeting URL it can guess. Set far above any
- * real club meeting; a club that genuinely exceeds it adds the rest from the
- * minutes UI, which is gated.
+ * Most ballot IDENTITIES one meeting's guest ballot may mint — a count of
+ * `meeting_ballot_guests` LINKS, not of `guests` rows created (#510 follow-up
+ * review finding 1). The ballot is an unauthenticated public POST, so it needs
+ * a ceiling — without one, a script fills `guests` for any club whose meeting
+ * URL it can guess, and worse, every guest LINKED to a meeting is a distinct
+ * voter under `meeting_votes_voter_guest_unique`, so an unbounded number of
+ * links is an unbounded number of ballots in every open category. What must
+ * be bounded is therefore "how many voters can this meeting mint", not "how
+ * many fresh rows landed in the club-scoped `guests` table" — a reuse match
+ * (an existing club guest linking to THIS meeting for the first time, e.g.
+ * someone captured by the public guest book) is just as much a new voter as a
+ * brand-new row, and must count the same way. Set far above any real club
+ * meeting; a club that genuinely exceeds it adds the rest from the minutes
+ * UI, which is gated.
  */
 const MAX_BALLOT_GUESTS_PER_MEETING = 60;
 
 /**
  * Register a visitor as a guest so they can vote (#510). PUBLIC and therefore
- * bounded on both axes: name length and how many rows one meeting can mint.
+ * bounded on multiple axes: name length, and — what actually matters — how
+ * many ballot IDENTITIES this meeting's guest ballot can mint in total.
  *
  * The name is capped with `cap`, which counts CODE POINTS. Do not replace it
  * with `.slice()`: the truncation added to close a DoS in #522 WAS a DoS,
@@ -574,30 +640,53 @@ const MAX_BALLOT_GUESTS_PER_MEETING = 60;
  * window plus the same name is a second ballot identity with no unique index
  * to stop it. The match is club-scoped on normalized (trimmed, case-folded)
  * name, the same shape `findGuestByContact` (`guest-pipeline-logic.ts`) uses
- * for its email/phone dedup, just on the one signal this endpoint collects.
+ * for its email/phone dedup, just on the one signal this endpoint collects —
+ * and it EXCLUDES guests with `converted_membership_id` set (#510 follow-up
+ * review finding 2). ADR-0018's picker exclusion (`listClubGuests`) already
+ * settled that "a joined guest is a member"; without the same filter here, the
+ * member that guest became could type their OWN former guest name into this
+ * box, get the retired guest row handed back, and cast a SECOND ballot under
+ * it — the member and guest arbiters are separate unique indexes
+ * (`meeting_votes_voter_member_unique` / `..._voter_guest_unique`), so nothing
+ * else catches that. A converted guest's name typed here still mints a FRESH
+ * guest row rather than silently failing — that fresh row is a normal new
+ * ballot identity, capped and counted like any other; what it must not do is
+ * hand back the retired one.
  *
- * The cap gates NEW `guests` rows only — reusing an existing guest must NOT
- * consume headroom, or a club that already has 60 people on its guest roster
- * could never let its own returning guests vote through this endpoint.
- * `meetingBallotGuests` is still written (idempotently) on the reuse path, so
- * the Ballot Counter's guest count reflects everyone actually on the ballot.
+ * The cap counts `meeting_ballot_guests` LINKS, not `guests` row creation
+ * (#510 follow-up review finding 1b — the previous framing, "gate NEW rows
+ * only", was itself the hole: the reuse path skipped the count entirely, so
+ * 70 names already sitting in `guests` from the public guest book — a surface
+ * with no session and no throttle — all took the reuse path, all skipped the
+ * cap, and all linked, landing 70 ballot identities against a cap of 60). What
+ * must be bounded is ballot identities per meeting: a reuse match consumes
+ * headroom exactly when it is this guest's FIRST link to THIS meeting,
+ * regardless of whether it minted a `guests` row or reused one. The one case
+ * that must stay free is an ALREADY-linked guest re-identifying — a
+ * legitimate returning voter re-submitting the join form, not a new identity
+ * — so the count only gates when no `meeting_ballot_guests` row for (this
+ * meeting, this guest) exists yet; a club that already has 60 people on its
+ * guest roster can still let its OWN returning ballot voters back in.
+ * `meetingBallotGuests` is still written (idempotently) either way, so the
+ * Ballot Counter's guest count reflects everyone actually on the ballot.
  *
  * LOCKED, not just wrapped in a transaction (#510 review finding 1 — the
- * BLOCKING one). The old code read the `meetingBallotGuests` count OUTSIDE any
- * transaction and took no lock, so every concurrent request read the same
- * pre-insert count under READ COMMITTED's snapshot-at-statement-start — a
- * reviewer fired 200 concurrent calls against a cap of 60 and all 200 landed.
- * That is not just row spam on this PUBLIC unauthenticated endpoint: every
- * minted guest is a distinct voter under `meeting_votes_voter_guest_unique`,
- * so one burst buys N ballots in every open category, defeating one-vote-per-
- * person without ever touching that index. `SELECT ... FOR UPDATE` on the
- * meeting row is taken as the FIRST statement, before the name lookup and the
- * count, so every concurrent join for THIS meeting serializes behind one
- * writer at a time — mirroring the `.for("share")` idiom `castVote` uses for
- * the same class of read-then-write gap. See the concurrent-burst regression
- * test in `voting.integration.test.ts`, verified by mutation (revert the lock,
- * watch it fail — vitest swallows console output here, so a logging probe
- * would not have caught this the first time either).
+ * BLOCKING one from the FIRST review). The old code read the
+ * `meetingBallotGuests` count OUTSIDE any transaction and took no lock, so
+ * every concurrent request read the same pre-insert count under READ
+ * COMMITTED's snapshot-at-statement-start — a reviewer fired 200 concurrent
+ * calls against a cap of 60 and all 200 landed. That is not just row spam on
+ * this PUBLIC unauthenticated endpoint: every guest LINKED to a meeting is a
+ * distinct voter under `meeting_votes_voter_guest_unique`, so one burst buys N
+ * ballots in every open category, defeating one-vote-per-person without ever
+ * touching that index. `SELECT ... FOR UPDATE` on the meeting row is taken as
+ * the FIRST statement, before the name lookup, the link check and the count,
+ * so every concurrent join for THIS meeting serializes behind one writer at a
+ * time — mirroring the `.for("share")` idiom `castVote` uses for the same
+ * class of read-then-write gap. See the concurrent-burst regression test in
+ * `voting.integration.test.ts`, verified by mutation (revert the lock, watch
+ * it fail — vitest swallows console output here, so a logging probe would not
+ * have caught this the first time either).
  */
 export async function joinBallotAsGuest(input: {
 	meetingId: string;
@@ -610,9 +699,9 @@ export async function joinBallotAsGuest(input: {
 
 	return db.transaction(async (tx) => {
 		// The lock. Every later statement in this transaction — the name lookup,
-		// the cap count, the inserts — runs only after this resolves, so two
-		// concurrent joins for the same meeting can never both observe "room for
-		// one more" and both write.
+		// the link check, the cap count, the inserts — runs only after this
+		// resolves, so two concurrent joins for the same meeting can never both
+		// observe "room for one more" and both write.
 		await tx
 			.select({ id: meetings.id })
 			.from(meetings)
@@ -620,21 +709,48 @@ export async function joinBallotAsGuest(input: {
 			.limit(1)
 			.for("update");
 
+		// Excludes converted guests (`converted_membership_id` set) — ADR-0018's
+		// "a joined guest is a member" rule, applied the same way `listClubGuests`
+		// applies it to the assign picker (#510 follow-up review finding 2). A
+		// converted guest's row is retired as a guest identity; typing their name
+		// here must mint a fresh one rather than hand the old one back.
 		const [existing] = await tx
 			.select({ id: guests.id, name: guests.name })
 			.from(guests)
 			.where(
 				and(
 					eq(guests.clubId, clubId),
+					isNull(guests.convertedMembershipId),
 					sql`lower(trim(${guests.name})) = ${normalizedName}`,
 				),
 			)
 			.limit(1);
 
-		let guest: { id: string; name: string };
+		// Is this guest already linked to THIS meeting's ballot? Only relevant
+		// when a match was found — a brand-new guest can never already be linked.
+		// This, not "was a `guests` row just created", is what decides whether the
+		// cap check below applies (#510 follow-up review finding 1b).
+		let alreadyLinked = false;
 		if (existing) {
-			guest = existing;
-		} else {
+			const [link] = await tx
+				.select({ guestId: meetingBallotGuests.guestId })
+				.from(meetingBallotGuests)
+				.where(
+					and(
+						eq(meetingBallotGuests.meetingId, input.meetingId),
+						eq(meetingBallotGuests.guestId, existing.id),
+					),
+				)
+				.limit(1);
+			alreadyLinked = Boolean(link);
+		}
+
+		// The cap bounds NEW links only. An already-linked guest re-identifying
+		// consumes no headroom — a returning voter, not a new ballot identity —
+		// but everything else does: a brand-new name, AND a club guest reused for
+		// the first time on THIS meeting (e.g. one the public guest book already
+		// created), both mint a NEW link and both count.
+		if (!alreadyLinked) {
 			const [{ count } = { count: 0 }] = await tx
 				.select({ count: sql<number>`count(*)::int` })
 				.from(meetingBallotGuests)
@@ -642,6 +758,12 @@ export async function joinBallotAsGuest(input: {
 			if (count >= MAX_BALLOT_GUESTS_PER_MEETING) {
 				throw new Error("Too many guests have joined this ballot.");
 			}
+		}
+
+		let guest: { id: string; name: string };
+		if (existing) {
+			guest = existing;
+		} else {
 			const [created] = await tx
 				.insert(guests)
 				.values({ clubId, name })

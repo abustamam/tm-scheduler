@@ -127,13 +127,23 @@ open window replaces the pick instead of adding a second row.
 
 ### `meeting_ballot_guests`
 
-Which guests this meeting's public ballot created: `(meeting_id, guest_id)`
-composite primary key, both cascading, plus `created_at`.
+Which guests are LINKED to this meeting's public ballot: `(meeting_id,
+guest_id)` composite primary key, both cascading, plus `created_at`.
 
-It exists for one reason — the per-meeting creation cap needs something to count
-against, and `guests` is club-scoped. Counting club guests would throttle a club
-with years of visitors instead of a script hammering one meeting URL. Nothing
-reads it except the cap.
+It exists for one reason — the per-meeting cap needs something to count against
+that means "ballot identity", and `guests` is club-scoped, so counting there
+would throttle a club with years of visitors instead of a script hammering one
+meeting URL. **The cap counts LINKS here, not `guests` row creation** — a
+find-or-create reuse match still mints a NEW link (and consumes headroom) the
+first time it joins THIS meeting, exactly the same as a brand-new row; only a
+guest ALREADY linked to this meeting is free to re-join. An earlier version of
+this table counted only fresh `guests` inserts, which counted nothing on the
+reuse path — a review proved that let 70 names already sitting in `guests`
+from the public guest book (no session, no throttle) all link here uncapped.
+`castVote` also reads this table directly: a guest voter is rejected unless
+they have a row here for the meeting they are voting on, so a guest id from
+any other surface (the guest book, an officer's manual add) is never itself a
+ballot identity.
 
 ### Enum additions
 
@@ -237,8 +247,14 @@ change re-runs that gate rather than being eyeballed.
 
 Server-side we cannot know who is in the room: the name-pick identity lives in
 localStorage and is invisible until someone actually votes. So the badge reads
-**"7 votes in"**, and **"7 of 12 present"** only when attendance has already
-been marked. No new write path, no fabricated denominator.
+**"7 votes in"**, and **"7 of 12 present"** only once attendance shows a
+POSITIVE present count — not merely "some attendance row exists". A follow-up
+review proved the distinction matters: `setMemberPresence` upserts per toggle,
+so the instant an officer marks the FIRST member absent, an attendance row
+exists with zero present, and gating on row-existence alone rendered "7 of 0
+present have voted" — the exact fabricated-looking denominator this design set
+out to avoid. `presentCount` is therefore null until it is a real positive
+number. No new write path, no fabricated denominator.
 
 Rejected for v1: making the name pick write a `meeting_attendance` row. It would
 give a real denominator and fill in attendance for free — genuinely valuable,
@@ -328,10 +344,39 @@ Five things the server must not trust the client for.
    Regression-tested with the repo's `openBlockingTx` / `waitForLockWait`
    helpers, verified in both directions.
 4. **Guest self-add is the abuse surface.** The public ballot can create guest
-   rows, the same exposure the guest book already carries. v1 caps
-   guests-per-meeting and caps the submitted name by **code-point count** — and
-   does nothing clever with truncation on render, because the truncation added
-   to close a DoS in #522 *was* a DoS for astral characters.
+   rows, the same exposure the guest book already carries. v1 caps the
+   submitted name by **code-point count** — and does nothing clever with
+   truncation on render, because the truncation added to close a DoS in #522
+   *was* a DoS for astral characters — and caps ballot IDENTITIES per meeting,
+   not guest-row creation.
+
+   **The cap bounds `meeting_ballot_guests` LINKS, not `guests` inserts.** A
+   follow-up review proved the first version bounded nothing: it counted only
+   brand-new `guests` rows, so the find-or-create reuse path (finding 4 in
+   the original review, above) skipped the count outright, and `castVote`
+   validated a guest voter against club membership alone, never against
+   having actually joined this meeting's ballot. Chained together — 70 public
+   guest-book posts (no session, no throttle), then 70 reuse-path `joinBallot`
+   calls, then 70 votes — landed 70 ballot identities against a cap of 60 in
+   one open category. The fix has two halves that only work together:
+
+   - `joinBallotAsGuest` counts a NEW link — whether it mints a fresh `guests`
+     row or reuses an existing one — against the cap, inside the same locked
+     transaction that closed the original concurrency hole. The one exception
+     is a guest ALREADY linked to this meeting re-identifying: that consumes
+     no headroom, because it is a returning voter, not a new identity.
+   - `castVote` REQUIRES the link: a guest with no `meeting_ballot_guests` row
+     for this meeting is rejected regardless of club membership, so a guest
+     row minted by any other surface (the guest book, an officer's manual
+     add, a prior meeting) can never be used directly as a ballot identity.
+
+   Separately, the reuse match also now excludes a CONVERTED guest
+   (`converted_membership_id` set) — the same `stage`/pointer rule
+   `listClubGuests` already applies (ADR-0018: "a joined guest is a member").
+   Without it, the member that guest became could type their own former guest
+   name into the join box, get the retired guest id back, and cast a SECOND
+   ballot under it — the member and guest voter arbiters are separate unique
+   indexes, so nothing else would catch that.
 5. **Auto-close is transactional.** Completing the meeting closes open sessions
    in the same transaction as the status change, or a vote slips through the
    gap.

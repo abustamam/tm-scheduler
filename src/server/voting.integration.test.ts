@@ -388,12 +388,41 @@ describe.skipIf(!hasTestDb)("castVote (#510)", () => {
 			.insert(guests)
 			.values({ clubId: seed.clubId, name: "Silva, Marco" })
 			.returning({ id: guests.id });
+		// castVote now requires the guest to have actually joined THIS meeting's
+		// ballot (#510 follow-up review finding 1a) — a bare club-scoped guest row
+		// is not enough. Link it directly rather than routing through
+		// `joinBallotAsGuest`, so this test stays scoped to castVote's own check.
+		await testDb
+			.insert(meetingBallotGuests)
+			.values({ meetingId: seed.meetingId, guestId: g.id });
 		await castVote(ballot({ voter: { kind: "guest", id: g.id } }));
 		const rows = await testDb
 			.select()
 			.from(meetingVotes)
 			.where(eq(meetingVotes.sessionId, sessionId));
 		expect(rows[0].voterGuestId).toBe(g.id);
+	});
+
+	it("REJECTS a guest voter who has not joined this meeting's ballot (#510 follow-up review finding 1a)", async () => {
+		// A guest row that exists and is club-scoped — e.g. minted by the public
+		// guest book, or by an officer manually assigning a guest to a role slot —
+		// but was never run through `joinBallotAsGuest` for THIS meeting. Proven
+		// exploit: `castVote` used to validate club membership only, so a guest id
+		// from ANY surface worked as a voter, and `joinBallotAsGuest`'s per-meeting
+		// cap bounded nothing as a result.
+		const [g] = await testDb
+			.insert(guests)
+			.values({ clubId: seed.clubId, name: "Haddad, Layla" })
+			.returning({ id: guests.id });
+		await expect(
+			castVote(ballot({ voter: { kind: "guest", id: g.id } })),
+		).rejects.toThrow(/has not joined/i);
+		expect(
+			await testDb
+				.select()
+				.from(meetingVotes)
+				.where(eq(meetingVotes.sessionId, sessionId)),
+		).toHaveLength(0);
 	});
 
 	it("REJECTS a guest voter from a DIFFERENT club", async () => {
@@ -679,6 +708,24 @@ describe.skipIf(!hasTestDb)("ballot and tally reads (#510)", () => {
 		const after = await loadParticipation(seed.meetingId);
 		expect(after.presentCount).toBe(1);
 	});
+
+	// #510 follow-up review finding 3 — `setMemberPresence` upserts per toggle,
+	// so the FIRST attendance row a meeting ever gets can just as easily be an
+	// ABSENT mark as a present one. The old code gated the denominator on "does
+	// any attendance row exist", so this exact state — one row, marked absent —
+	// rendered as `presentCount: 0` and the badge read "7 of 0 present have
+	// voted". `presentCount` must stay null until there is an actual positive
+	// count, matching the documented "null means no honest denominator yet".
+	it('stays null when the only marked attendance is ABSENT — never "N of 0"', async () => {
+		await open("best_speaker");
+		await testDb.insert(meetingAttendance).values({
+			meetingId: seed.meetingId,
+			memberId: seed.memberId,
+			status: "absent",
+		});
+		const p = await loadParticipation(seed.meetingId);
+		expect(p.presentCount).toBeNull();
+	});
 });
 
 describe.skipIf(!hasTestDb)("completing a meeting closes voting (#510)", () => {
@@ -927,7 +974,12 @@ describe.skipIf(!hasTestDb)("joinBallotAsGuest (#510)", () => {
 			expect(linkRows).toHaveLength(1);
 		});
 
-		it("reusing an existing guest does not consume cap headroom", async () => {
+		// The ALREADY-linked case: "Visitor 0" was created AND linked to this
+		// meeting by the fill loop below, so re-identifying as them must stay free
+		// even once the cap is full — that is a returning voter, not a new
+		// identity. Contrast with the NOT-yet-linked case right after this test,
+		// which the cap must still catch (#510 follow-up review finding 1b).
+		it("re-joining as an ALREADY-linked guest does not consume cap headroom", async () => {
 			for (let i = 0; i < 60; i++) {
 				await joinBallotAsGuest({
 					meetingId: seed.meetingId,
@@ -935,7 +987,7 @@ describe.skipIf(!hasTestDb)("joinBallotAsGuest (#510)", () => {
 				});
 			}
 			// The cap is full. Re-identifying as someone already on the ballot must
-			// still succeed — reuse is not gated by the cap.
+			// still succeed — an already-linked reuse is not gated by the cap.
 			await expect(
 				joinBallotAsGuest({ meetingId: seed.meetingId, name: "Visitor 0" }),
 			).resolves.toMatchObject({ name: "Visitor 0" });
@@ -943,6 +995,90 @@ describe.skipIf(!hasTestDb)("joinBallotAsGuest (#510)", () => {
 			await expect(
 				joinBallotAsGuest({ meetingId: seed.meetingId, name: "One too many" }),
 			).rejects.toThrow(/too many/i);
+		});
+
+		// #510 follow-up review finding 1b — the proven hole. The OLD code counted
+		// the cap only against brand-new `guests` inserts, so the reuse path
+		// (any match against an EXISTING club guest, e.g. one the public guest
+		// book already created) skipped the count entirely. That is exactly how
+		// 70 public guest-book posts became 70 accepted `joinBallot` calls against
+		// a cap of 60: every one of those 70 names already existed in `guests`
+		// with no link to this meeting yet, so every one took the reuse path.
+		// This guest is club-scoped and pre-existing but has NEVER been linked to
+		// THIS meeting — the fix must count it exactly like a brand-new name.
+		it("a reuse match NOT yet linked to this meeting still consumes cap headroom, and is refused once full", async () => {
+			const [preexisting] = await testDb
+				.insert(guests)
+				.values({ clubId: seed.clubId, name: "Okonkwo, Chidi" })
+				.returning({ id: guests.id, name: guests.name });
+
+			for (let i = 0; i < 60; i++) {
+				await joinBallotAsGuest({
+					meetingId: seed.meetingId,
+					name: `Visitor ${i}`,
+				});
+			}
+			// The cap is full with 60 links. This guest exists but is not yet ON
+			// this meeting's ballot — under the fix, that is a NEW link, so it must
+			// be refused exactly like a brand-new name would be.
+			await expect(
+				joinBallotAsGuest({
+					meetingId: seed.meetingId,
+					name: "okonkwo, chidi",
+				}),
+			).rejects.toThrow(/too many/i);
+
+			// No link was created for the reuse attempt that was refused — the cap
+			// stayed at exactly 60, not 61.
+			const linkRows = await testDb
+				.select()
+				.from(meetingBallotGuests)
+				.where(eq(meetingBallotGuests.meetingId, seed.meetingId));
+			expect(linkRows).toHaveLength(60);
+			const linkedGuestIds = new Set(linkRows.map((r) => r.guestId));
+			expect(linkedGuestIds.has(preexisting.id)).toBe(false);
+		});
+
+		// #510 follow-up review finding 2 (ADR-0018). `listClubGuests` already
+		// excludes a converted guest (`stage: joined`, `converted_membership_id`
+		// set) from the assign picker because "a joined guest is a member"; the
+		// ballot's reuse match must apply the same rule, or the member that guest
+		// became can type their OWN former guest name into the join box, get the
+		// retired guest id handed back, and cast a SECOND ballot under it — the
+		// member and guest voter arbiters are separate unique indexes, so nothing
+		// else would catch that.
+		it("does not reuse a CONVERTED guest — typing their name mints a fresh identity instead", async () => {
+			const [converted] = await testDb
+				.insert(guests)
+				.values({
+					clubId: seed.clubId,
+					name: "Fischer, Anna",
+					stage: "joined",
+					convertedMembershipId: seed.adminMemberId,
+				})
+				.returning({ id: guests.id });
+
+			const joined = await joinBallotAsGuest({
+				meetingId: seed.meetingId,
+				name: "fischer, anna",
+			});
+			// A DIFFERENT id — the converted row was never eligible for reuse, so
+			// this minted a brand-new guest rather than handing the old one back.
+			expect(joined.id).not.toBe(converted.id);
+
+			const guestRows = await testDb
+				.select()
+				.from(guests)
+				.where(eq(guests.clubId, seed.clubId));
+			expect(guestRows).toHaveLength(2);
+
+			// The new identity IS linked to this meeting's ballot — it is a normal
+			// new voter, just not the converted one.
+			const linkRows = await testDb
+				.select()
+				.from(meetingBallotGuests)
+				.where(eq(meetingBallotGuests.meetingId, seed.meetingId));
+			expect(linkRows.map((r) => r.guestId)).toEqual([joined.id]);
 		});
 	});
 });

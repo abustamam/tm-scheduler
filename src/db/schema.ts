@@ -1109,10 +1109,17 @@ export const meetingVotes = pgTable(
 	],
 );
 
-// Which guests THIS meeting's public ballot created (#510). Exists only so the
-// per-meeting creation cap has something to count: `guests` is club-scoped, so
-// counting there would throttle a club with years of visitors rather than a
-// script hammering one meeting.
+// Which guests are LINKED to THIS meeting's public ballot (#510) — i.e. have
+// actually joined it via `joinBallotAsGuest`, whether that minted a fresh
+// `guests` row or reused an existing club guest. Exists so the per-meeting cap
+// has something to count that means "ballot identity", not "row insert":
+// counting `guests` itself would throttle a club with years of visitors rather
+// than a script hammering one meeting, and counting only NEW row inserts (the
+// original version of this cap) counted nothing on the reuse path, so guests
+// already sitting in `guests` from the public guest book could all link here
+// uncapped (#510 follow-up review finding 1). `castVote` also REQUIRES this
+// link before accepting a guest voter — a guest row reachable from any other
+// surface is not, by itself, a ballot identity.
 export const meetingBallotGuests = pgTable(
 	"meeting_ballot_guests",
 	{
