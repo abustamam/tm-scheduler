@@ -1,15 +1,10 @@
 // @vitest-environment jsdom
-import {
-	createMemoryHistory,
-	createRootRoute,
-	createRouter,
-	RouterProvider,
-} from "@tanstack/react-router";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ROLE_SHEETS } from "#/data/role-sheets";
 import type { Slide } from "#/lib/agenda-slides";
+import { renderUnderMemoryRouter } from "#/test/router-harness";
 import { MeetingExportMenu } from "./meeting-export-menu";
 
 // downloadDeckPptx (#541) is mocked file-wide — this file only cares that the
@@ -40,20 +35,11 @@ const BASE = {
 
 /**
  * MeetingExportMenu renders <Link>s, so mount it under a minimal router —
- * mirrors the pattern in meeting-view-actions.test.tsx.
+ * shared with meeting-toolbar.test.tsx via src/test/router-harness.tsx.
  */
 async function openMenu(overrides: Partial<typeof BASE> = {}) {
 	const props = { ...BASE, ...overrides };
-	const rootRoute = createRootRoute({
-		component: () => <MeetingExportMenu {...props} />,
-	});
-	const router = createRouter({
-		routeTree: rootRoute,
-		history: createMemoryHistory({ initialEntries: ["/"] }),
-	});
-	render(<RouterProvider router={router} />);
-	// Let the router finish its first render pass.
-	await waitFor(() => expect(router.state.status).toBe("idle"));
+	await renderUnderMemoryRouter(<MeetingExportMenu {...props} />);
 	await userEvent.click(
 		screen.getByRole("button", { name: /print & export/i }),
 	);

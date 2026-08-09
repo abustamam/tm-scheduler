@@ -11,7 +11,34 @@ import { MeetingExportMenu } from "#/components/club/meeting-export-menu";
 import { ShareLinkButton } from "#/components/share-link-button";
 import { Button } from "#/components/ui/button";
 import type { Slide } from "#/lib/agenda-slides";
+import { MINUTES_ANCHOR_ID } from "#/lib/meeting-anchors";
 import type { MeetingPhase } from "#/lib/meeting-lifecycle";
+
+export type MeetingToolbarProps = {
+	phase: MeetingPhase;
+	clubSlug: string;
+	/** URL key (date or uuid) — used by the Present/print links. */
+	meetingId: string;
+	/** Database uuid — used by the per-meeting role-sheet PDF endpoints. */
+	dbMeetingId: string;
+	sharePath: string;
+	printLayout?: AgendaLayout;
+	deck?: Slide[];
+	clubName?: string;
+	wordOfTheDay: string | null;
+	/** Session member OR picked anon identity. Gates the phase primary:
+	 *  spec D2 keeps guest chrome quiet (review decision 1A) — guests reach
+	 *  Present via the export menu instead. */
+	hasIdentity: boolean;
+	canManage: boolean;
+	locked: boolean;
+	canComplete: boolean;
+	hasAddableRoles: boolean;
+	lifecycleBusy: boolean;
+	onAddRole: () => void;
+	onComplete: () => void;
+	onReopen: () => void;
+};
 
 /**
  * The meeting view's toolbar (#541 D2): at most four top-level things —
@@ -40,31 +67,7 @@ export function MeetingToolbar({
 	onAddRole,
 	onComplete,
 	onReopen,
-}: {
-	phase: MeetingPhase;
-	clubSlug: string;
-	/** URL key (date or uuid) — used by the Present/print links. */
-	meetingId: string;
-	/** Database uuid — used by the per-meeting role-sheet PDF endpoints. */
-	dbMeetingId: string;
-	sharePath: string;
-	printLayout?: AgendaLayout;
-	deck?: Slide[];
-	clubName?: string;
-	wordOfTheDay: string | null;
-	/** Session member OR picked anon identity. Gates the phase primary:
-	 *  spec D2 keeps guest chrome quiet (review decision 1A) — guests reach
-	 *  Present via the export menu instead. */
-	hasIdentity: boolean;
-	canManage: boolean;
-	locked: boolean;
-	canComplete: boolean;
-	hasAddableRoles: boolean;
-	lifecycleBusy: boolean;
-	onAddRole: () => void;
-	onComplete: () => void;
-	onReopen: () => void;
-}) {
+}: MeetingToolbarProps) {
 	// Spec D2 primary matrix: guests never get a primary; members get Present
 	// on meeting day; only officers get the completed-phase Minutes primary.
 	const presentIsPrimary = phase === "today" && (hasIdentity || canManage);
@@ -86,12 +89,17 @@ export function MeetingToolbar({
 			) : null}
 			{minutesIsPrimary ? (
 				<Button asChild size="sm" data-testid="toolbar-primary">
-					{/* In-page anchor: the minutes section carries id="minutes"
-					    (wired in the route in this same PR). */}
-					<a href="#minutes">
+					{/* Router-owned hash link, not a raw <a href="#…">: a raw anchor
+					    creates a history entry TanStack Router doesn't own — the
+					    router's location goes stale and its back/forward index math
+					    (and scroll restoration keys) degrade afterward. `Link hash`
+					    keeps the navigation inside the router and uses its own hash
+					    scrolling. The minutes section carries
+					    id={MINUTES_ANCHOR_ID} (wired in the route in this same PR). */}
+					<Link to="." hash={MINUTES_ANCHOR_ID}>
 						<ClipboardList />
 						Minutes
-					</a>
+					</Link>
 				</Button>
 			) : null}
 			{/* One label for the SAME action on every audience (#542): officers
