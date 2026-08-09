@@ -56,6 +56,10 @@ export function MeetingExportMenu({
 	printLayout?: AgendaLayout;
 	deck?: Slide[];
 	clubName?: string;
+	// required (not optional) on purpose — optional would let the Word poster
+	// affordance vanish for every user if the wiring dropped the prop,
+	// silently, with typecheck and suite green (rationale carried from the
+	// retired MeetingViewActions).
 	wordOfTheDay: string | null;
 	/** True when the toolbar already renders Present as the phase primary. */
 	presentIsPrimary: boolean;

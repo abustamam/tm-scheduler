@@ -7,6 +7,7 @@ import {
 } from "@tanstack/react-router";
 import {
 	CalendarDays,
+	ClipboardList,
 	Clock,
 	Eye,
 	Loader2,
@@ -54,7 +55,7 @@ import {
 	formatMeetingTime,
 	formatMeetingTimeRange,
 } from "#/lib/format";
-import { MINUTES_ANCHOR_ID } from "#/lib/meeting-anchors";
+import { MINUTES_ANCHOR_ID, showsMinutesPrimary } from "#/lib/meeting-anchors";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import {
 	isMeetingLocked,
@@ -343,7 +344,13 @@ function MeetingView() {
 	);
 	// ONE clock for the whole render (spec D1): every phase/freeze/completability
 	// consumer on this page reads the same instant, so a render can't straddle
-	// midnight and show a "today" toolbar over an already-frozen agenda.
+	// midnight and show a "today" toolbar over an already-frozen agenda. There
+	// is deliberately no timer re-deriving `now` on an interval: a tab left
+	// open across club-local midnight keeps whatever phase it had until the
+	// next render or navigation. That staleness is accepted, not a bug — it
+	// self-heals on the next interaction, and a live timer would add
+	// re-render churn to every open tab for a case (a meeting page open past
+	// midnight, unattended) that is rare and low-stakes.
 	const now = new Date();
 	const phase = meetingPhase({
 		status: meeting.status,
@@ -911,8 +918,8 @@ function MeetingView() {
 				// The wrapper exists because <MeetingMinutes> renders a <Card> and
 				// takes no id/className. `scroll-mt-24` (not 20) clears the sticky
 				// header at its TALLEST — it grows under the impersonation banner.
-				// NOT co-gated with the primary: the toolbar's CTA is `phase ===
-				// "completed" && canManage`, but the loader degrades ANY getMinutes
+				// NOT co-gated with the primary: the toolbar's CTA is gated on
+				// `showsMinutesPrimary`, but the loader degrades ANY getMinutes
 				// failure to EMPTY_MINUTES (visible=false) regardless of canManage —
 				// so this branch alone left a completed-phase admin with a Minutes
 				// primary and no `id` to scroll to on a transient load failure. The
@@ -939,16 +946,17 @@ function MeetingView() {
 						}
 					/>
 				</section>
-			) : phase === "completed" && effectiveCanManage ? (
+			) : showsMinutesPrimary(phase, effectiveCanManage) ? (
 				/* getMinutes degraded (loader `.catch(() => EMPTY_MINUTES)`) while the
 				   toolbar still offers the Minutes primary — keep the anchor target real
 				   and say why the section is empty instead of letting the CTA click do
 				   nothing (spec review of aa106b3). Doubles as the first visible signal
 				   of a minutes load failure, which was previously swallowed silently. */
 				<section id={MINUTES_ANCHOR_ID} className="scroll-mt-24">
-					<p className="text-sm text-muted-foreground">
+					<div className="flex items-center gap-2 rounded-xl border border-border bg-muted/60 px-4 py-3 text-sm font-medium text-muted-foreground">
+						<ClipboardList className="size-4 shrink-0" aria-hidden />
 						Minutes couldn't load — refresh to try again.
-					</p>
+					</div>
 				</section>
 			) : null}
 

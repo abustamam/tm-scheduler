@@ -11,7 +11,7 @@ import { MeetingExportMenu } from "#/components/club/meeting-export-menu";
 import { ShareLinkButton } from "#/components/share-link-button";
 import { Button } from "#/components/ui/button";
 import type { Slide } from "#/lib/agenda-slides";
-import { MINUTES_ANCHOR_ID } from "#/lib/meeting-anchors";
+import { MINUTES_ANCHOR_ID, showsMinutesPrimary } from "#/lib/meeting-anchors";
 import type { MeetingPhase } from "#/lib/meeting-lifecycle";
 
 export type MeetingToolbarProps = {
@@ -25,6 +25,10 @@ export type MeetingToolbarProps = {
 	printLayout?: AgendaLayout;
 	deck?: Slide[];
 	clubName?: string;
+	// required (not optional) on purpose — optional would let the Word poster
+	// affordance vanish for every user if the wiring dropped the prop,
+	// silently, with typecheck and suite green (rationale carried from the
+	// retired MeetingViewActions).
 	wordOfTheDay: string | null;
 	/** Session member OR picked anon identity. Gates the phase primary:
 	 *  spec D2 keeps guest chrome quiet (review decision 1A) — guests reach
@@ -71,7 +75,7 @@ export function MeetingToolbar({
 	// Spec D2 primary matrix: guests never get a primary; members get Present
 	// on meeting day; only officers get the completed-phase Minutes primary.
 	const presentIsPrimary = phase === "today" && (hasIdentity || canManage);
-	const minutesIsPrimary = phase === "completed" && canManage;
+	const minutesIsPrimary = showsMinutesPrimary(phase, canManage);
 	return (
 		<div className="flex flex-wrap items-center gap-2 pt-1">
 			{presentIsPrimary ? (
