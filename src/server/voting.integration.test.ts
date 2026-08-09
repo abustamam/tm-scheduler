@@ -19,6 +19,10 @@ import {
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
+const { closeVote, listVoteSessions, openVote } = await import(
+	"#/server/voting-logic"
+);
+
 describe.skipIf(!hasTestDb)("vote table constraints (#510)", () => {
 	let seed: SeededClub;
 	let sessionId: string;
@@ -112,5 +116,84 @@ describe.skipIf(!hasTestDb)("vote table constraints (#510)", () => {
 				.insert(meetingVoteSessions)
 				.values({ meetingId: seed.meetingId, category: "best_speaker" }),
 		).rejects.toThrow();
+	});
+});
+
+describe.skipIf(!hasTestDb)("open and close a vote (#510)", () => {
+	let seed: SeededClub;
+
+	beforeEach(async () => {
+		seed = await seedClub();
+	});
+
+	afterEach(async () => {
+		await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
+	});
+
+	it("opens a vote and reports it open", async () => {
+		await openVote({
+			meetingId: seed.meetingId,
+			category: "best_speaker",
+			actorMemberId: seed.adminMemberId,
+			clubId: seed.clubId,
+		});
+		const sessions = await listVoteSessions(seed.meetingId);
+		expect(sessions.best_speaker).toMatchObject({ isOpen: true });
+	});
+
+	it("closing sets closedAt and reports it closed", async () => {
+		await openVote({
+			meetingId: seed.meetingId,
+			category: "best_speaker",
+			actorMemberId: seed.adminMemberId,
+			clubId: seed.clubId,
+		});
+		await closeVote({
+			meetingId: seed.meetingId,
+			category: "best_speaker",
+			actorMemberId: seed.adminMemberId,
+			clubId: seed.clubId,
+		});
+		const sessions = await listVoteSessions(seed.meetingId);
+		expect(sessions.best_speaker).toMatchObject({ isOpen: false });
+	});
+
+	it("re-opening a closed vote reuses the SAME row", async () => {
+		const args = {
+			meetingId: seed.meetingId,
+			category: "best_speaker" as const,
+			actorMemberId: seed.adminMemberId,
+			clubId: seed.clubId,
+		};
+		await openVote(args);
+		await closeVote(args);
+		await openVote(args);
+		const rows = await testDb
+			.select()
+			.from(meetingVoteSessions)
+			.where(eq(meetingVoteSessions.meetingId, seed.meetingId));
+		expect(rows).toHaveLength(1);
+		expect(rows[0].closedAt).toBeNull();
+	});
+
+	it("opening twice is idempotent, not an error", async () => {
+		const args = {
+			meetingId: seed.meetingId,
+			category: "best_speaker" as const,
+			actorMemberId: seed.adminMemberId,
+			clubId: seed.clubId,
+		};
+		await openVote(args);
+		await expect(openVote(args)).resolves.toBeUndefined();
+	});
+
+	it("reports every category, open or not", async () => {
+		const sessions = await listVoteSessions(seed.meetingId);
+		expect(Object.keys(sessions).sort()).toEqual([
+			"best_evaluator",
+			"best_speaker",
+			"best_table_topics",
+		]);
+		expect(sessions.best_evaluator.isOpen).toBe(false);
 	});
 });

@@ -17,7 +17,9 @@ type ActivityAction =
 	| "outreach_set"
 	| "outreach_clear"
 	| "club_logo_set"
-	| "club_logo_removed";
+	| "club_logo_removed"
+	| "vote_open"
+	| "vote_close";
 
 export interface ActivityInput {
 	clubId: string;
