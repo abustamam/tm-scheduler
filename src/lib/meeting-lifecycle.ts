@@ -134,3 +134,29 @@ export function resolveMeetingViewer(input: {
 	});
 	return editable ? base : lockedViewer(base);
 }
+
+/**
+ * The meeting's UI phase (#541 D1). Phases re-weight the chrome (which action
+ * is primary, how loud Confirm is, whether Minutes starts expanded) — they
+ * NEVER hide a capability. Same club-local day granularity and injectable
+ * `now` as every helper above; a passed-but-never-completed meeting is
+ * "completed" (recording what happened is the page's job there), while
+ * `resolveMeetingViewer` still lets an admin edit it until they press
+ * Complete — weight and capability are deliberately separate axes.
+ */
+export type MeetingPhase = "upcoming" | "today" | "completed";
+
+export function meetingPhase(input: {
+	status: string;
+	scheduledAt: Date | string;
+	timezone: string;
+	now?: Date;
+}): MeetingPhase {
+	if (isMeetingLocked(input.status)) return "completed";
+	const now = input.now ?? new Date();
+	if (meetingDatePassed(input.scheduledAt, input.timezone, now))
+		return "completed";
+	if (meetingDateReached(input.scheduledAt, input.timezone, now))
+		return "today";
+	return "upcoming";
+}
