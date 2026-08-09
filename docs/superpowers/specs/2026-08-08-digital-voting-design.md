@@ -308,8 +308,25 @@ Five things the server must not trust the client for.
    test**, written first, not a guard test alone.
 3. **The close/cast race.** Reading `closed_at` and then inserting lets a vote
    land after the vote closed. The insert is conditional in a single statement
-   (`INSERT ... SELECT ... WHERE closed_at IS NULL`) so the window check and the
-   write are atomic.
+   (`INSERT ... SELECT ... WHERE closed_at IS NULL ... FOR SHARE`).
+
+   **One statement is necessary but NOT sufficient.** An adversarial review
+   proved this with a failing test rather than an argument. The `SELECT`'s
+   snapshot is taken when the statement begins, *before* it acquires the row
+   lock for `ON CONFLICT DO UPDATE`. A voter whose client retries — which this
+   design explicitly does on bad wifi — can have one cast parked on another
+   cast's row lock. A Close committing during that park touches only
+   `meeting_vote_sessions`, so it never blocks; the parked cast then wakes and
+   mutates the ballot after the vote is closed.
+
+   `FOR SHARE` on the sub-select closes it: the cast locks the session row, a
+   concurrent Close blocks on that lock, and on release Postgres' EvalPlanQual
+   re-evaluates `closed_at IS NULL` against the fresh row version and filters
+   the cast out. No deadlock — casts lock the session then write votes, Close
+   locks only the session, so there is no cycle.
+
+   Regression-tested with the repo's `openBlockingTx` / `waitForLockWait`
+   helpers, verified in both directions.
 4. **Guest self-add is the abuse surface.** The public ballot can create guest
    rows, the same exposure the guest book already carries. v1 caps
    guests-per-meeting and caps the submitted name by **code-point count** — and
@@ -318,6 +335,12 @@ Five things the server must not trust the client for.
 5. **Auto-close is transactional.** Completing the meeting closes open sessions
    in the same transaction as the status change, or a vote slips through the
    gap.
+6. **An inactive member must not vote.** `requireMemberInMeetingClub` checks
+   club membership only, and stays that way on purpose — it is shared with
+   `setAward` and `addTableTopicsSpeaker`, where a departed member legitimately
+   remains a past meeting's award winner or speaker. The voter path adds its own
+   active-status check instead, so this public endpoint is never more permissive
+   than the roster the ballot renders.
 
 ## Error handling
 
