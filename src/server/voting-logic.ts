@@ -166,12 +166,34 @@ export interface VoterRef {
  *  1. The CANDIDATE is re-derived server-side from `loadAwardCandidates`, so a
  *     hand-crafted POST cannot vote for someone who never spoke.
  *  2. The VOTER is scoped to the meeting's club, the same way `setAward` scopes
- *     a winner. A guest carries a `club_id` and is checked directly.
- *  3. The WINDOW is checked inside the INSERT rather than before it. Reading
- *     `closed_at` and then inserting leaves a gap in which the Ballot Counter
- *     closes the vote and a ballot still lands; the conditional insert closes
- *     it, because the session row must still satisfy `closed_at IS NULL` at
- *     write time.
+ *     a winner, AND — member voters only — must hold an ACTIVE membership. A
+ *     departed member's id must not be able to cast a NEW ballot on this
+ *     public, unauthenticated endpoint. This check lives HERE, not in
+ *     `requireMemberInMeetingClub` itself: that helper is shared with
+ *     `setAward` and `addTableTopicsSpeaker`, where a departed member
+ *     legitimately can still be recorded as a past meeting's award winner or
+ *     Table Topics speaker — tightening it there would be a regression. A
+ *     guest carries a `club_id` and is checked directly.
+ *  3. The WINDOW is checked inside the INSERT rather than before it, and the
+ *     session sub-select takes a `FOR SHARE` lock. Reading `closed_at` and then
+ *     inserting leaves a gap in which the Ballot Counter closes the vote and a
+ *     ballot still lands — but a bare `INSERT ... SELECT ... WHERE closed_at IS
+ *     NULL` does NOT close that gap by itself: its source SELECT is evaluated
+ *     once, at statement start. A re-vote (or a retried double-fire — the
+ *     client explicitly retries on bad wifi) that parks on another writer's
+ *     lock for the SAME voter row never re-runs that SELECT, so a Close that
+ *     commits while the statement is parked is invisible when it wakes, and it
+ *     applies its `ON CONFLICT DO UPDATE` anyway. `FOR SHARE` closes the actual
+ *     gap: it makes the cast hold a share lock on the session row for the life
+ *     of its statement, so `closeVote`'s UPDATE — which needs an exclusive lock
+ *     on that SAME row — cannot commit while a cast is still in flight; it
+ *     blocks until the cast finishes, and Postgres' EvalPlanQual re-checks
+ *     `closed_at IS NULL` against the row's latest committed version before a
+ *     parked cast is allowed to proceed. Either way, whichever of the two
+ *     commits SECOND is forced to see the other's effect: no ballot can ever
+ *     land after Close is observably closed. Do NOT remove `.for("share")` as
+ *     apparent boilerplate — it is the entire fix for #510's cast-after-close
+ *     race (see the race test in `voting.integration.test.ts`).
  */
 export async function castVote(input: {
 	meetingId: string;
@@ -190,6 +212,7 @@ export async function castVote(input: {
 	// (2) Voter scoping.
 	if (input.voter.kind === "member") {
 		await requireMemberInMeetingClub(input.voter.id, clubId);
+		await requireActiveMember(input.voter.id);
 	} else {
 		await requireGuestInClub(input.voter.id, clubId);
 	}
@@ -201,8 +224,13 @@ export async function castVote(input: {
 	const candidateGuestId =
 		input.candidate.kind === "guest" ? input.candidate.id : null;
 
-	// (3) Window check and write, atomically. `INSERT ... SELECT ... WHERE` means
-	// the session must still be open at the instant the row lands.
+	// (3) Window check and write, atomically. `.for("share")` on the session
+	// sub-select is load-bearing, not decoration: without it, a cast that parks
+	// on another writer's row lock (e.g. a retried double-fire hitting the SAME
+	// voter row) evaluates `closed_at IS NULL` once at statement start and never
+	// re-checks it, so a Close that commits while the statement is parked is
+	// invisible when the cast wakes. The doc comment above has the full
+	// mechanism; see the race test in `voting.integration.test.ts`.
 	//
 	// drizzle's `.insert().select()` requires the selected keys to exactly match
 	// the target table's columns (`haveSameKeys` in drizzle-orm/utils, checked at
@@ -240,7 +268,8 @@ export async function castVote(input: {
 						eq(meetingVoteSessions.category, input.category),
 						isNull(meetingVoteSessions.closedAt),
 					),
-				),
+				)
+				.for("share"),
 		)
 		.onConflictDoUpdate({
 			target: voterMemberId
@@ -268,6 +297,26 @@ async function requireGuestInClub(guestId: string, clubId: string) {
 		.where(and(eq(guests.id, guestId), eq(guests.clubId, clubId)))
 		.limit(1);
 	if (!row) throw new Error("Guest not found in this club.");
+}
+
+/**
+ * Throws unless `memberId`'s membership is ACTIVE. Voting-only: deliberately
+ * NOT folded into `requireMemberInMeetingClub`, which is shared with
+ * `setAward` and `addTableTopicsSpeaker` and stays permissive on status there
+ * on purpose (a departed member can still be a past meeting's award winner or
+ * Table Topics speaker). But a departed member's id must not be able to cast a
+ * NEW ballot through this public, unauthenticated endpoint — the roster
+ * surfaces already filter them out, and the ballot must match that.
+ */
+async function requireActiveMember(memberId: string) {
+	const [row] = await db
+		.select({ status: members.status })
+		.from(members)
+		.where(eq(members.id, memberId))
+		.limit(1);
+	if (row?.status !== "active") {
+		throw new Error("Member is not active in this club.");
+	}
 }
 
 export interface BallotCategory {

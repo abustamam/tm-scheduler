@@ -6,7 +6,7 @@
  * and the member-XOR-guest shape by check constraints. Exercised against a live
  * Postgres identified by TEST_DATABASE_URL; the whole suite skips when unset.
  */
-import { eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	guests,
@@ -14,15 +14,18 @@ import {
 	meetings,
 	meetingVoteSessions,
 	meetingVotes,
+	members,
 	roleDefinitions,
 	roleSlots,
 } from "#/db/schema";
 import {
 	cleanup,
 	hasTestDb,
+	openBlockingTx,
 	type SeededClub,
 	seedClub,
 	testDb,
+	waitForLockWait,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -218,6 +221,12 @@ describe.skipIf(!hasTestDb)("open and close a vote (#510)", () => {
 describe.skipIf(!hasTestDb)("castVote (#510)", () => {
 	let seed: SeededClub;
 	let speakerRoleId: string;
+	// The best_speaker session's id, captured once per test so vote assertions
+	// can scope to `eq(meetingVotes.sessionId, sessionId)` instead of reading the
+	// whole `meeting_votes` table — ~50 DB-backed suites share one Postgres, and
+	// an unscoped select risks asserting on another suite's rows (#510 review
+	// finding 3).
+	let sessionId: string;
 
 	beforeEach(async () => {
 		seed = await seedClub();
@@ -245,6 +254,16 @@ describe.skipIf(!hasTestDb)("castVote (#510)", () => {
 			actorMemberId: seed.adminMemberId,
 			clubId: seed.clubId,
 		});
+		const [session] = await testDb
+			.select({ id: meetingVoteSessions.id })
+			.from(meetingVoteSessions)
+			.where(
+				and(
+					eq(meetingVoteSessions.meetingId, seed.meetingId),
+					eq(meetingVoteSessions.category, "best_speaker"),
+				),
+			);
+		sessionId = session.id;
 	});
 
 	afterEach(async () => {
@@ -261,7 +280,10 @@ describe.skipIf(!hasTestDb)("castVote (#510)", () => {
 
 	it("records a vote", async () => {
 		await castVote(ballot());
-		const rows = await testDb.select().from(meetingVotes);
+		const rows = await testDb
+			.select()
+			.from(meetingVotes)
+			.where(eq(meetingVotes.sessionId, sessionId));
 		expect(rows).toHaveLength(1);
 		expect(rows[0].candidateMemberId).toBe(seed.adminMemberId);
 	});
@@ -280,7 +302,10 @@ describe.skipIf(!hasTestDb)("castVote (#510)", () => {
 		await castVote(
 			ballot({ candidate: { kind: "member", id: seed.memberId } }),
 		);
-		const rows = await testDb.select().from(meetingVotes);
+		const rows = await testDb
+			.select()
+			.from(meetingVotes)
+			.where(eq(meetingVotes.sessionId, sessionId));
 		expect(rows).toHaveLength(1);
 		expect(rows[0].candidateMemberId).toBe(seed.memberId);
 	});
@@ -293,7 +318,12 @@ describe.skipIf(!hasTestDb)("castVote (#510)", () => {
 			clubId: seed.clubId,
 		});
 		await expect(castVote(ballot())).rejects.toThrow(/not open/i);
-		expect(await testDb.select().from(meetingVotes)).toHaveLength(0);
+		expect(
+			await testDb
+				.select()
+				.from(meetingVotes)
+				.where(eq(meetingVotes.sessionId, sessionId)),
+		).toHaveLength(0);
 	});
 
 	it("REJECTS a vote for someone who is not an eligible candidate", async () => {
@@ -309,7 +339,12 @@ describe.skipIf(!hasTestDb)("castVote (#510)", () => {
 			await expect(
 				castVote(ballot({ voter: { kind: "member", id: other.memberId } })),
 			).rejects.toThrow(/not found in this club/i);
-			expect(await testDb.select().from(meetingVotes)).toHaveLength(0);
+			expect(
+				await testDb
+					.select()
+					.from(meetingVotes)
+					.where(eq(meetingVotes.sessionId, sessionId)),
+			).toHaveLength(0);
 		} finally {
 			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
 		}
@@ -352,15 +387,160 @@ describe.skipIf(!hasTestDb)("castVote (#510)", () => {
 			.values({ clubId: seed.clubId, name: "Silva, Marco" })
 			.returning({ id: guests.id });
 		await castVote(ballot({ voter: { kind: "guest", id: g.id } }));
-		const rows = await testDb.select().from(meetingVotes);
+		const rows = await testDb
+			.select()
+			.from(meetingVotes)
+			.where(eq(meetingVotes.sessionId, sessionId));
 		expect(rows[0].voterGuestId).toBe(g.id);
+	});
+
+	it("REJECTS a guest voter from a DIFFERENT club", async () => {
+		// The guest-side twin of "REJECTS a voter from a DIFFERENT club" above —
+		// the design spec requires the two-club scoping test for BOTH voter paths,
+		// and only the member path had one (#510 review finding 4).
+		const other = await seedClub();
+		try {
+			const [otherGuest] = await testDb
+				.insert(guests)
+				.values({ clubId: other.clubId, name: "Silva, Marco" })
+				.returning({ id: guests.id });
+			await expect(
+				castVote(ballot({ voter: { kind: "guest", id: otherGuest.id } })),
+			).rejects.toThrow(/not found in this club/i);
+			expect(
+				await testDb
+					.select()
+					.from(meetingVotes)
+					.where(eq(meetingVotes.sessionId, sessionId)),
+			).toHaveLength(0);
+		} finally {
+			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+		}
 	});
 
 	it("allows a self-vote — deliberately not blocked", async () => {
 		await castVote(
 			ballot({ voter: { kind: "member", id: seed.adminMemberId } }),
 		);
-		expect(await testDb.select().from(meetingVotes)).toHaveLength(1);
+		expect(
+			await testDb
+				.select()
+				.from(meetingVotes)
+				.where(eq(meetingVotes.sessionId, sessionId)),
+		).toHaveLength(1);
+	});
+
+	it("REJECTS a voter whose membership is INACTIVE", async () => {
+		// requireMemberInMeetingClub (shared with setAward / addTableTopicsSpeaker)
+		// deliberately checks club membership only, never status — a departed
+		// member legitimately can still be a past meeting's award winner. The
+		// voter path adds its OWN active-status check on top (#510 review
+		// finding 2): a departed member's id must not be able to cast a NEW
+		// ballot through this public, unauthenticated endpoint.
+		await testDb
+			.update(members)
+			.set({ status: "inactive" })
+			.where(eq(members.id, seed.memberId));
+		await expect(castVote(ballot())).rejects.toThrow(/not active/i);
+		expect(
+			await testDb
+				.select()
+				.from(meetingVotes)
+				.where(eq(meetingVotes.sessionId, sessionId)),
+		).toHaveLength(0);
+	});
+
+	it("does not let a cast parked on a lock apply a stale write after Close commits (race, #510)", async () => {
+		// The reviewer's exploit needs an EXISTING ballot to contend on: V has
+		// already voted, and their client double-fires a retry (the design
+		// explicitly retries on bad wifi). seed.memberId also needs to be an
+		// eligible best_speaker candidate (the shared beforeEach only staffs
+		// seed.adminMemberId), so the in-flight cast below can pick a DIFFERENT
+		// candidate than the one already on file — otherwise a stale write and a
+		// correct no-op would be indistinguishable at the end.
+		await testDb.insert(roleSlots).values({
+			meetingId: seed.meetingId,
+			roleDefinitionId: speakerRoleId,
+			slotIndex: 1,
+			assignedMemberId: seed.memberId,
+		});
+
+		// V's first cast: candidate = adminMemberId. This is the row the
+		// double-fire below contends on.
+		await castVote(ballot());
+		const [{ id: voteRowId }] = await testDb
+			.select({ id: meetingVotes.id })
+			.from(meetingVotes)
+			.where(eq(meetingVotes.sessionId, sessionId));
+
+		// Cast #2 — the double-fire. Simulated directly with a raw UPDATE rather
+		// than a second `castVote` call: all it needs to contribute to the race is
+		// "holds V's row lock", which this gives without a second real ballot's
+		// worth of setup.
+		const writer = await openBlockingTx(async (tx) => {
+			await tx
+				.update(meetingVotes)
+				.set({ updatedAt: sql`now()` })
+				.where(eq(meetingVotes.id, voteRowId));
+		});
+
+		// Cast #3 — the real code under test. Its `INSERT ... SELECT` reads the
+		// session as open (it genuinely still is, at this instant), then tries to
+		// lock V's row for the `ON CONFLICT DO UPDATE` and parks behind cast #2.
+		const pending = castVote(
+			ballot({ candidate: { kind: "member", id: seed.memberId } }),
+		);
+		pending.catch(() => {});
+		const cast3Pid = await waitForLockWait('"meeting_votes"', writer.pid);
+
+		// The Ballot Counter taps Close while cast #3 is parked — exactly the
+		// window the exploit needs. Fired, not awaited: with `.for("share")` in
+		// place this now blocks on cast #3's held share lock on the session row,
+		// and awaiting it directly here would deadlock against `writer.commit()`
+		// below.
+		const closePending = closeVote({
+			meetingId: seed.meetingId,
+			category: "best_speaker",
+			actorMemberId: seed.adminMemberId,
+			clubId: seed.clubId,
+		});
+		closePending.catch(() => {});
+
+		// THE assertion: with `.for("share")`, Close cannot commit while cast #3
+		// is still in flight — it has to park behind cast #3's share lock on the
+		// session row. Without the fix, Close's UPDATE touches only
+		// `meeting_vote_sessions`, which nothing locks, so it commits immediately
+		// and this call times out (10s) waiting for a block that never happens —
+		// the test fails right here.
+		await waitForLockWait('"meeting_vote_sessions"', cast3Pid);
+
+		// Release cast #2. Cast #3 wakes and finishes; only then can Close's
+		// parked UPDATE proceed.
+		await writer.commit();
+		await Promise.all([pending, closePending]);
+
+		const [session] = await testDb
+			.select({ closedAt: meetingVoteSessions.closedAt })
+			.from(meetingVoteSessions)
+			.where(eq(meetingVoteSessions.id, sessionId));
+		const [vote] = await testDb
+			.select({
+				updatedAt: meetingVotes.updatedAt,
+				candidateMemberId: meetingVotes.candidateMemberId,
+			})
+			.from(meetingVotes)
+			.where(eq(meetingVotes.id, voteRowId));
+
+		// Cast #3 legitimately lands — it read "open" before Close even started,
+		// and `.for("share")` makes Close wait for it rather than race past it.
+		// What must NEVER happen is the reviewer's finding: a write timestamped
+		// AFTER the session's own close. That is the literal shape of "a ballot
+		// mutated after the vote closed."
+		expect(session.closedAt).not.toBeNull();
+		expect(vote.candidateMemberId).toBe(seed.memberId);
+		expect(vote.updatedAt.getTime()).toBeLessThanOrEqual(
+			session.closedAt?.getTime() ?? Number.POSITIVE_INFINITY,
+		);
 	});
 });
 
