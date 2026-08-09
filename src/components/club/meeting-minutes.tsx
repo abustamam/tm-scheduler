@@ -1,8 +1,6 @@
 import {
 	AlertTriangle,
 	CheckCircle2,
-	ChevronDown,
-	ChevronUp,
 	Download,
 	Loader2,
 	WifiOff,
@@ -10,6 +8,10 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import {
+	AssigneePicker,
+	TableTopicsCapture,
+} from "#/components/club/table-topics-capture";
 import { SendMinutesDialog } from "#/components/minutes/send-minutes-dialog";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
@@ -376,8 +378,8 @@ export function MeetingMinutes({
 					}
 				/>
 
-				<TableTopicsSection
-					minutes={displayMinutes}
+				<TableTopicsCapture
+					speakers={displayMinutes.tableTopicsSpeakers}
 					canEdit={canEdit}
 					busy={busy}
 					// Only present members can be added as Table Topics speakers (#170);
@@ -763,126 +765,6 @@ function GuestAdder({
 }
 
 // ---------------------------------------------------------------------------
-// Table Topics
-// ---------------------------------------------------------------------------
-
-function TableTopicsSection({
-	minutes,
-	canEdit,
-	busy,
-	roster,
-	clubGuests,
-	onAdd,
-	onRemove,
-	onMove,
-}: {
-	minutes: MinutesData;
-	canEdit: boolean;
-	busy: boolean;
-	roster: { memberId: string; name: string }[];
-	clubGuests: { id: string; name: string }[];
-	onAdd: (payload: {
-		memberId?: string;
-		guestId?: string;
-		newGuest?: { name: string };
-		topic?: string;
-	}) => void;
-	onRemove: (id: string) => void;
-	onMove: (id: string, direction: "up" | "down") => void;
-}) {
-	const [topic, setTopic] = useState("");
-	const speakers = minutes.tableTopicsSpeakers;
-	return (
-		<section className="space-y-3">
-			<h3 className="font-semibold text-sm">Table Topics speakers</h3>
-			<ol className="space-y-1">
-				{speakers.map((s, i) => (
-					<li
-						key={s.id}
-						className="flex items-center justify-between gap-3 rounded-md border px-3 py-2"
-					>
-						<span className="text-sm">
-							<span className="text-muted-foreground">{i + 1}.</span> {s.name}
-							{s.isGuest ? (
-								<Badge variant="outline" className="ml-2">
-									Guest
-								</Badge>
-							) : null}
-							{s.topic ? (
-								<span className="text-muted-foreground"> — {s.topic}</span>
-							) : null}
-						</span>
-						{canEdit ? (
-							<div className="flex items-center gap-1">
-								<Button
-									type="button"
-									size="icon"
-									variant="ghost"
-									className="size-7"
-									aria-label="Move up"
-									disabled={busy || i === 0}
-									onClick={() => onMove(s.id, "up")}
-								>
-									<ChevronUp className="size-4" />
-								</Button>
-								<Button
-									type="button"
-									size="icon"
-									variant="ghost"
-									className="size-7"
-									aria-label="Move down"
-									disabled={busy || i === speakers.length - 1}
-									onClick={() => onMove(s.id, "down")}
-								>
-									<ChevronDown className="size-4" />
-								</Button>
-								<Button
-									type="button"
-									size="icon"
-									variant="ghost"
-									className="size-7"
-									aria-label="Remove speaker"
-									disabled={busy}
-									onClick={() => onRemove(s.id)}
-								>
-									<X className="size-4" />
-								</Button>
-							</div>
-						) : null}
-					</li>
-				))}
-				{speakers.length === 0 ? (
-					<li className="text-muted-foreground text-sm">
-						No Table Topics speakers recorded.
-					</li>
-				) : null}
-			</ol>
-			{canEdit ? (
-				<div className="flex flex-wrap items-center gap-2">
-					<Input
-						value={topic}
-						onChange={(e) => setTopic(e.target.value)}
-						placeholder="Topic (optional)"
-						aria-label="Table Topics topic"
-						className="max-w-xs"
-					/>
-					<AssigneePicker
-						label="+ Add speaker"
-						roster={roster}
-						clubGuests={clubGuests}
-						busy={busy}
-						onPick={(payload) => {
-							onAdd({ ...payload, topic: topic.trim() || undefined });
-							setTopic("");
-						}}
-					/>
-				</div>
-			) : null}
-		</section>
-	);
-}
-
-// ---------------------------------------------------------------------------
 // Awards
 // ---------------------------------------------------------------------------
 
@@ -1026,109 +908,6 @@ function ProgramSection({
 				))}
 			</ul>
 		</section>
-	);
-}
-
-// ---------------------------------------------------------------------------
-// Shared member-or-guest picker (a Popover with a searchable member list + a
-// guest section, mirroring the assign-slot sheet).
-// ---------------------------------------------------------------------------
-
-function AssigneePicker({
-	label,
-	roster,
-	clubGuests,
-	busy,
-	onPick,
-}: {
-	label: string;
-	roster: { memberId: string; name: string }[];
-	clubGuests: { id: string; name: string }[];
-	busy: boolean;
-	onPick: (payload: {
-		memberId?: string;
-		guestId?: string;
-		newGuest?: { name: string };
-	}) => void;
-}) {
-	const [open, setOpen] = useState(false);
-	return (
-		<Popover open={open} onOpenChange={setOpen}>
-			<PopoverTrigger asChild>
-				<Button type="button" size="sm" variant="outline" disabled={busy}>
-					{label}
-				</Button>
-			</PopoverTrigger>
-			<PopoverContent className="w-72 space-y-3">
-				<Command>
-					<CommandInput placeholder="Search members…" />
-					<CommandList>
-						<CommandEmpty>No matching people.</CommandEmpty>
-						<CommandGroup heading="Members">
-							{roster.map((m) => (
-								<CommandItem
-									key={m.memberId}
-									value={`m ${m.name} ${m.memberId}`}
-									disabled={busy}
-									onSelect={() => {
-										onPick({ memberId: m.memberId });
-										setOpen(false);
-									}}
-								>
-									{m.name}
-								</CommandItem>
-							))}
-						</CommandGroup>
-						{clubGuests.length > 0 ? (
-							<CommandGroup heading="Guests">
-								{clubGuests.map((g) => (
-									<CommandItem
-										key={g.id}
-										value={`g ${g.name} ${g.id}`}
-										disabled={busy}
-										onSelect={() => {
-											onPick({ guestId: g.id });
-											setOpen(false);
-										}}
-									>
-										{g.name}
-										<Badge variant="outline" className="ml-auto">
-											Guest
-										</Badge>
-									</CommandItem>
-								))}
-							</CommandGroup>
-						) : null}
-					</CommandList>
-				</Command>
-				<form
-					onSubmit={(e) => {
-						e.preventDefault();
-						const name = String(
-							new FormData(e.currentTarget).get("newGuestName") ?? "",
-						).trim();
-						if (!name) {
-							toast.error("A guest name is required.");
-							return;
-						}
-						onPick({ newGuest: { name } });
-						setOpen(false);
-						e.currentTarget.reset();
-					}}
-					className="flex gap-2 border-t pt-2"
-				>
-					<Input
-						name="newGuestName"
-						placeholder="New guest name"
-						aria-label="New guest name"
-						className="h-8"
-					/>
-					<Button type="submit" size="sm" variant="secondary" disabled={busy}>
-						Add
-					</Button>
-				</form>
-			</PopoverContent>
-		</Popover>
 	);
 }
 
