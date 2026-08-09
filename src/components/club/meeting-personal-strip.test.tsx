@@ -4,7 +4,10 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MeetingPersonalStrip } from "./meeting-personal-strip";
 
-afterEach(cleanup);
+afterEach(() => {
+	cleanup();
+	vi.clearAllMocks();
+});
 
 const MEMBER = { id: "m1", name: "Nina Petrov" };
 
@@ -17,7 +20,6 @@ const BASE = {
 	availBusy: false,
 	canToggleAvailability: true,
 	onToggleAvailability: vi.fn(),
-	hasIdentity: false,
 };
 
 function renderStrip(overrides: Partial<typeof BASE> = {}) {
@@ -25,22 +27,28 @@ function renderStrip(overrides: Partial<typeof BASE> = {}) {
 }
 
 describe("MeetingPersonalStrip (#541 D3)", () => {
-	it("guest without identity: viewing-as line, NO availability control", () => {
+	it("guest without identity: viewing-as line, NO availability control", async () => {
 		renderStrip();
 		expect(screen.getByText(/viewing as guest/i)).toBeTruthy();
 		expect(screen.queryByRole("button", { name: /can't make/i })).toBeNull();
+		await userEvent.click(
+			screen.getByRole("button", { name: /i'm a member/i }),
+		);
+		expect(BASE.promptIdentity).toHaveBeenCalledOnce();
 	});
 
 	it("anon with identity: signing-up-as line AND the availability chip", () => {
-		renderStrip({ member: MEMBER, hasIdentity: true });
+		renderStrip({ member: MEMBER });
 		expect(screen.getByText("Nina Petrov")).toBeTruthy();
-		expect(
-			screen.getByRole("button", { name: /i can't make this one/i }),
-		).toBeTruthy();
+		const chip = screen.getByRole("button", {
+			name: /i can't make this one/i,
+		});
+		expect(chip).toBeTruthy();
+		expect(chip.dataset.variant).toBe("outline");
 	});
 
 	it("signed-in member: chip only, no redundant identity line", () => {
-		renderStrip({ source: "session", member: MEMBER, hasIdentity: true });
+		renderStrip({ source: "session", member: MEMBER });
 		expect(screen.queryByText(/signing up as/i)).toBeNull();
 		expect(
 			screen.getByRole("button", { name: /i can't make this one/i }),
@@ -51,12 +59,12 @@ describe("MeetingPersonalStrip (#541 D3)", () => {
 		const onToggle = vi.fn();
 		renderStrip({
 			member: MEMBER,
-			hasIdentity: true,
 			myUnavailable: true,
 			onToggleAvailability: onToggle,
 		});
 		const chip = screen.getByRole("button", { name: /undo/i });
 		expect(chip.textContent).toMatch(/can't make this one — undo\?/i);
+		expect(chip.dataset.variant).toBe("default");
 		await userEvent.click(chip);
 		expect(onToggle).toHaveBeenCalledOnce();
 	});
@@ -64,7 +72,6 @@ describe("MeetingPersonalStrip (#541 D3)", () => {
 	it("meeting over: attendance statement replaces the chip", () => {
 		renderStrip({
 			member: MEMBER,
-			hasIdentity: true,
 			over: true,
 			myUnavailable: false,
 		});
@@ -75,7 +82,6 @@ describe("MeetingPersonalStrip (#541 D3)", () => {
 	it("meeting over + marked unavailable: did-not-attend statement", () => {
 		renderStrip({
 			member: MEMBER,
-			hasIdentity: true,
 			over: true,
 			myUnavailable: true,
 		});
@@ -83,7 +89,7 @@ describe("MeetingPersonalStrip (#541 D3)", () => {
 	});
 
 	it("meeting over + NO identity: viewing-as line only — no attendance claim about nobody (review 3A)", () => {
-		renderStrip({ over: true, member: null, hasIdentity: false });
+		renderStrip({ over: true, member: null });
 		expect(screen.getByText(/viewing as guest/i)).toBeTruthy();
 		expect(screen.queryByText(/attended this meeting/i)).toBeNull();
 		expect(screen.queryByRole("button", { name: /can't make/i })).toBeNull();
@@ -92,24 +98,26 @@ describe("MeetingPersonalStrip (#541 D3)", () => {
 	it("respects canToggleAvailability=false by disabling, not hiding", () => {
 		renderStrip({
 			member: MEMBER,
-			hasIdentity: true,
 			canToggleAvailability: false,
 		});
 		const chip = screen.getByRole("button", { name: /i can't make this one/i });
 		expect((chip as HTMLButtonElement).disabled).toBe(true);
 	});
 
-	it("busy: chip shows the spinner and ignores clicks", async () => {
+	it("busy: spinner shows, name survives, clicks are inert", async () => {
 		const onToggle = vi.fn();
 		renderStrip({
 			member: MEMBER,
-			hasIdentity: true,
 			availBusy: true,
 			onToggleAvailability: onToggle,
 		});
-		// disabled while busy; no accessible name change assertions beyond disabled
-		const buttons = screen.getAllByRole("button");
-		const chip = buttons.find((b) => (b as HTMLButtonElement).disabled);
-		expect(chip).toBeTruthy();
+		const chip = screen.getByRole("button", {
+			name: /i can't make this one/i,
+		});
+		expect(chip.getAttribute("aria-busy")).toBe("true");
+		expect(chip.querySelector(".animate-spin")).toBeTruthy();
+		expect((chip as HTMLButtonElement).disabled).toBe(true);
+		await userEvent.click(chip);
+		expect(onToggle).not.toHaveBeenCalled();
 	});
 });
