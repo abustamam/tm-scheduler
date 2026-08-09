@@ -8,7 +8,13 @@
  */
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { guests, meetingVoteSessions, meetingVotes } from "#/db/schema";
+import {
+	guests,
+	meetingVoteSessions,
+	meetingVotes,
+	roleDefinitions,
+	roleSlots,
+} from "#/db/schema";
 import {
 	cleanup,
 	hasTestDb,
@@ -19,7 +25,7 @@ import {
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
-const { closeVote, listVoteSessions, openVote } = await import(
+const { castVote, closeVote, listVoteSessions, openVote } = await import(
 	"#/server/voting-logic"
 );
 
@@ -195,5 +201,154 @@ describe.skipIf(!hasTestDb)("open and close a vote (#510)", () => {
 			"best_table_topics",
 		]);
 		expect(sessions.best_evaluator.isOpen).toBe(false);
+	});
+});
+
+describe.skipIf(!hasTestDb)("castVote (#510)", () => {
+	let seed: SeededClub;
+	let speakerRoleId: string;
+
+	beforeEach(async () => {
+		seed = await seedClub();
+		const [def] = await testDb
+			.insert(roleDefinitions)
+			.values({
+				clubId: seed.clubId,
+				name: "Speaker",
+				category: "speaker",
+				sortOrder: 99,
+			})
+			.returning({ id: roleDefinitions.id });
+		speakerRoleId = def.id;
+		// The admin member is the meeting's speaker, so they are the one eligible
+		// candidate for best_speaker.
+		await testDb.insert(roleSlots).values({
+			meetingId: seed.meetingId,
+			roleDefinitionId: speakerRoleId,
+			slotIndex: 0,
+			assignedMemberId: seed.adminMemberId,
+		});
+		await openVote({
+			meetingId: seed.meetingId,
+			category: "best_speaker",
+			actorMemberId: seed.adminMemberId,
+			clubId: seed.clubId,
+		});
+	});
+
+	afterEach(async () => {
+		await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
+	});
+
+	const ballot = (over: Record<string, unknown> = {}) => ({
+		meetingId: seed.meetingId,
+		category: "best_speaker" as const,
+		voter: { kind: "member" as const, id: seed.memberId },
+		candidate: { kind: "member" as const, id: seed.adminMemberId },
+		...over,
+	});
+
+	it("records a vote", async () => {
+		await castVote(ballot());
+		const rows = await testDb.select().from(meetingVotes);
+		expect(rows).toHaveLength(1);
+		expect(rows[0].candidateMemberId).toBe(seed.adminMemberId);
+	});
+
+	it("re-voting while open REPLACES the pick, it does not add a row", async () => {
+		// seed.memberId needs to be an eligible best_speaker candidate too (the
+		// shared beforeEach only staffs seed.adminMemberId), otherwise switching
+		// the pick to them would be rejected as ineligible rather than replaced.
+		await testDb.insert(roleSlots).values({
+			meetingId: seed.meetingId,
+			roleDefinitionId: speakerRoleId,
+			slotIndex: 1,
+			assignedMemberId: seed.memberId,
+		});
+		await castVote(ballot());
+		await castVote(
+			ballot({ candidate: { kind: "member", id: seed.memberId } }),
+		);
+		const rows = await testDb.select().from(meetingVotes);
+		expect(rows).toHaveLength(1);
+		expect(rows[0].candidateMemberId).toBe(seed.memberId);
+	});
+
+	it("REJECTS a vote once the window is closed", async () => {
+		await closeVote({
+			meetingId: seed.meetingId,
+			category: "best_speaker",
+			actorMemberId: seed.adminMemberId,
+			clubId: seed.clubId,
+		});
+		await expect(castVote(ballot())).rejects.toThrow(/not open/i);
+		expect(await testDb.select().from(meetingVotes)).toHaveLength(0);
+	});
+
+	it("REJECTS a vote for someone who is not an eligible candidate", async () => {
+		// seed.memberId holds no speaker slot, so they cannot win best_speaker.
+		await expect(
+			castVote(ballot({ candidate: { kind: "member", id: seed.memberId } })),
+		).rejects.toThrow(/not eligible/i);
+	});
+
+	it("REJECTS a voter from a DIFFERENT club", async () => {
+		const other = await seedClub();
+		try {
+			await expect(
+				castVote(ballot({ voter: { kind: "member", id: other.memberId } })),
+			).rejects.toThrow(/not found in this club/i);
+			expect(await testDb.select().from(meetingVotes)).toHaveLength(0);
+		} finally {
+			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+		}
+	});
+
+	it("REJECTS a vote into a category that was never opened", async () => {
+		// The candidate must be ELIGIBLE for best_evaluator, or the eligibility
+		// check (which runs before the window check — see castVote's doc comment)
+		// would reject this ballot as "not eligible" and never exercise the window
+		// check this test targets. So seed.adminMemberId is staffed as an
+		// evaluator too, isolated to this test.
+		const [evalDef] = await testDb
+			.insert(roleDefinitions)
+			.values({
+				clubId: seed.clubId,
+				name: "Evaluator",
+				category: "evaluator",
+				sortOrder: 98,
+			})
+			.returning({ id: roleDefinitions.id });
+		await testDb.insert(roleSlots).values({
+			meetingId: seed.meetingId,
+			roleDefinitionId: evalDef.id,
+			slotIndex: 0,
+			assignedMemberId: seed.adminMemberId,
+		});
+		await expect(
+			castVote(
+				ballot({
+					category: "best_evaluator",
+					candidate: { kind: "member", id: seed.adminMemberId },
+				}),
+			),
+		).rejects.toThrow(/not open/i);
+	});
+
+	it("lets a guest vote", async () => {
+		const [g] = await testDb
+			.insert(guests)
+			.values({ clubId: seed.clubId, name: "Silva, Marco" })
+			.returning({ id: guests.id });
+		await castVote(ballot({ voter: { kind: "guest", id: g.id } }));
+		const rows = await testDb.select().from(meetingVotes);
+		expect(rows[0].voterGuestId).toBe(g.id);
+	});
+
+	it("allows a self-vote — deliberately not blocked", async () => {
+		await castVote(
+			ballot({ voter: { kind: "member", id: seed.adminMemberId } }),
+		);
+		expect(await testDb.select().from(meetingVotes)).toHaveLength(1);
 	});
 });
