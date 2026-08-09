@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	guests,
 	meetingAttendance,
+	meetings,
 	meetingVoteSessions,
 	meetingVotes,
 	roleDefinitions,
@@ -35,6 +36,9 @@ const {
 	loadTally,
 	openVote,
 } = await import("#/server/voting-logic");
+const { applyCompleteMeeting } = await import("#/server/meetings-logic");
+const { setAward } = await import("#/server/minutes-logic");
+const { assertMeetingNotLocked } = await import("#/server/meeting-authz-logic");
 
 describe.skipIf(!hasTestDb)("vote table constraints (#510)", () => {
 	let seed: SeededClub;
@@ -470,5 +474,91 @@ describe.skipIf(!hasTestDb)("ballot and tally reads (#510)", () => {
 		});
 		const after = await loadParticipation(seed.meetingId);
 		expect(after.presentCount).toBe(1);
+	});
+});
+
+describe.skipIf(!hasTestDb)("completing a meeting closes voting (#510)", () => {
+	let seed: SeededClub;
+
+	beforeEach(async () => {
+		seed = await seedClub();
+		// seedClub schedules the meeting 7 days in the future; applyCompleteMeeting
+		// guards on meetingDateReached, so pull it into the past before completing.
+		await testDb
+			.update(meetings)
+			.set({ scheduledAt: new Date(Date.now() - 24 * 60 * 60 * 1000) })
+			.where(eq(meetings.id, seed.meetingId));
+	});
+
+	afterEach(async () => {
+		await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
+	});
+
+	it("force-closes an open vote", async () => {
+		await openVote({
+			meetingId: seed.meetingId,
+			category: "best_speaker",
+			actorMemberId: seed.adminMemberId,
+			clubId: seed.clubId,
+		});
+		await applyCompleteMeeting({
+			meetingId: seed.meetingId,
+			actorMemberId: seed.adminMemberId,
+		});
+		const sessions = await listVoteSessions(seed.meetingId);
+		expect(sessions.best_speaker.isOpen).toBe(false);
+	});
+
+	it("completing a meeting with no votes at all does not throw", async () => {
+		await expect(
+			applyCompleteMeeting({
+				meetingId: seed.meetingId,
+				actorMemberId: seed.adminMemberId,
+			}),
+		).resolves.toMatchObject({ clubId: seed.clubId });
+	});
+
+	it("the tally is STILL readable once the meeting is completed", async () => {
+		await openVote({
+			meetingId: seed.meetingId,
+			category: "best_speaker",
+			actorMemberId: seed.adminMemberId,
+			clubId: seed.clubId,
+		});
+		await applyCompleteMeeting({
+			meetingId: seed.meetingId,
+			actorMemberId: seed.adminMemberId,
+		});
+		const t = await loadTally(seed.meetingId);
+		expect(t.best_speaker.isOpen).toBe(false);
+		expect(Array.isArray(t.best_speaker.results)).toBe(true);
+	});
+
+	it("the winner can STILL be confirmed after the meeting is locked", async () => {
+		// This is the whole reason `resolveVoteCounterAuthz` does not assert the
+		// meeting lock. `setAward` is deliberately unlocked (minutes are written up
+		// afterwards); if the authz layer asserted, the Ballot Counter could never
+		// set a winner from the final tally.
+		await applyCompleteMeeting({
+			meetingId: seed.meetingId,
+			actorMemberId: seed.adminMemberId,
+		});
+		await expect(
+			setAward({
+				meetingId: seed.meetingId,
+				category: "best_speaker",
+				memberId: seed.adminMemberId,
+			}),
+		).resolves.toBeUndefined();
+	});
+
+	it("REJECTS opening a vote on a completed meeting", async () => {
+		await applyCompleteMeeting({
+			meetingId: seed.meetingId,
+			actorMemberId: seed.adminMemberId,
+		});
+		// The lock assert lives in the server fn, not in `openVote`, so assert it
+		// where it actually is.
+		expect(() => assertMeetingNotLocked("completed")).toThrow();
 	});
 });

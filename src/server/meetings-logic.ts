@@ -10,6 +10,7 @@ import { meetingDateReached } from "#/lib/meeting-lifecycle";
 import { logActivity } from "./activity";
 import { linkEvaluatorsToSpeakers } from "./meeting-create-logic";
 import { freezeMeetingNumber } from "./meeting-number-logic";
+import { closeAllVotesTx } from "./voting-logic";
 
 export interface MeetingCreateInput {
 	clubId: string;
@@ -251,6 +252,11 @@ export async function applyCompleteMeeting(input: {
 			.update(meetings)
 			.set({ status: "completed" })
 			.where(eq(meetings.id, input.meetingId));
+		// Digital voting (#510): a meeting that has been closed out cannot still be
+		// voted on from the parking lot. In the SAME transaction as the status
+		// change, or a ballot slips through the gap. Deliberately not routed through
+		// `closeVote`, which asserts the lock this very statement is applying.
+		await closeAllVotesTx(tx, input.meetingId);
 		await logActivity(tx, {
 			clubId: meeting.clubId,
 			actorMemberId: input.actorMemberId,
