@@ -149,18 +149,25 @@ export function findVoteCounterSlot<T extends RoleIdentity>(
 }
 
 /**
- * The current member's role flags for a meeting, from its slots. Both `false`
+ * The current member's role flags for a meeting, from its slots. All `false`
  * when `memberId` is null (no identity holds a role). Shared by both meeting
- * surfaces so the TMOD/Grammarian derivation can't drift between them.
+ * surfaces so the TMOD/Grammarian/Vote Counter derivation can't drift between
+ * them.
  */
 export function deriveMeetingRoleFlags(
 	slots: (RoleIdentity & { assigneeId: string | null })[],
 	memberId: string | null,
-): { isTmod: boolean; isGrammarian: boolean } {
-	if (memberId === null) return { isTmod: false, isGrammarian: false };
+): { isTmod: boolean; isGrammarian: boolean; isVoteCounter: boolean } {
+	if (memberId === null)
+		return { isTmod: false, isGrammarian: false, isVoteCounter: false };
 	const tmod = findTmodSlot(slots)?.assigneeId ?? null;
 	const gram = findGrammarianSlot(slots)?.assigneeId ?? null;
-	return { isTmod: memberId === tmod, isGrammarian: memberId === gram };
+	const vote = findVoteCounterSlot(slots)?.assigneeId ?? null;
+	return {
+		isTmod: memberId === tmod,
+		isGrammarian: memberId === gram,
+		isVoteCounter: memberId === vote,
+	};
 }
 
 /** Minimal role-definition shape needed to choose speaker/evaluator roles. */

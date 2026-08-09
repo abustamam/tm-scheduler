@@ -144,6 +144,7 @@ describe("deriveMeetingRoleFlags", () => {
 		expect(deriveMeetingRoleFlags(slots, "tmod-m")).toEqual({
 			isTmod: true,
 			isGrammarian: false,
+			isVoteCounter: false,
 		});
 	});
 
@@ -151,6 +152,7 @@ describe("deriveMeetingRoleFlags", () => {
 		expect(deriveMeetingRoleFlags(slots, "gram-m")).toEqual({
 			isTmod: false,
 			isGrammarian: true,
+			isVoteCounter: false,
 		});
 	});
 
@@ -158,6 +160,7 @@ describe("deriveMeetingRoleFlags", () => {
 		expect(deriveMeetingRoleFlags(slots, "other-m")).toEqual({
 			isTmod: false,
 			isGrammarian: false,
+			isVoteCounter: false,
 		});
 	});
 
@@ -165,6 +168,7 @@ describe("deriveMeetingRoleFlags", () => {
 		expect(deriveMeetingRoleFlags(slots, null)).toEqual({
 			isTmod: false,
 			isGrammarian: false,
+			isVoteCounter: false,
 		});
 	});
 });
@@ -183,10 +187,12 @@ describe("capability roles are identified by key, not by name (#464)", () => {
 		expect(deriveMeetingRoleFlags(renamed, "a")).toEqual({
 			isTmod: true,
 			isGrammarian: false,
+			isVoteCounter: false,
 		});
 		expect(deriveMeetingRoleFlags(renamed, "b")).toEqual({
 			isTmod: false,
 			isGrammarian: true,
+			isVoteCounter: false,
 		});
 	});
 
@@ -209,12 +215,12 @@ describe("capability roles are identified by key, not by name (#464)", () => {
 		]) {
 			expect(
 				deriveMeetingRoleFlags([{ roleName, roleKey, assigneeId: "c" }], "c"),
-			).toEqual({ isTmod: false, isGrammarian: false });
+			).toEqual({ isTmod: false, isGrammarian: false, isVoteCounter: false });
 		}
 		for (const roleName of ["Grammarian Assistant", "Grammarian Trainee"]) {
 			expect(
 				deriveMeetingRoleFlags([{ roleName, roleKey, assigneeId: "c" }], "c"),
-			).toEqual({ isTmod: false, isGrammarian: false });
+			).toEqual({ isTmod: false, isGrammarian: false, isVoteCounter: false });
 		}
 	});
 
