@@ -12,6 +12,10 @@
 
 **Ground rules for every task:** work in this worktree only; run `export TEST_DATABASE_URL="postgresql://dev:dev@localhost:5432/tm_test"` once per shell before any `bun run test`; `bun run typecheck` is the only type gate; commit after each task with the shown message + trailer `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`.
 
+**Before Task 1 (review 4A):** `git fetch origin main && git merge origin/main --no-edit` — main moved to v1.9.0.0 (PR #546, guest-resources/roles-guide work) after this plan was written, and #546 touches club-page surfaces near this plan's edit regions. Re-verify Task 7's quoted route anchors against the merged file before editing; the plan anchors by code content, not line numbers, but the content may have shifted.
+
+**Timezone constraint (review 4A, spec D1):** `clubs.timezone` is `notNull default "America/Chicago"` with NO writer anywhere in the app. `meetingPhase` deliberately shares it with `isMeetingOver`/`meetingDatePassed` — a wrong club timezone shifts phase and the agenda freeze IDENTICALLY, so the page never self-contradicts; do NOT "fix" phase to instant-based math (that would make chrome disagree with the freeze at day boundaries). The settable-timezone gap is tracked separately (see #541 thread).
+
 ---
 
 ### Task 1: `meetingPhase()` in the lifecycle module
@@ -87,6 +91,20 @@ describe("meetingPhase (#541 D1)", () => {
 				now: new Date("2026-08-01T00:00:00.000Z"), // long before the meeting
 			}),
 		).toBe("completed");
+	});
+
+	it("does NOT special-case 'cancelled' — phase stays date-based (review 2A)", () => {
+		// Deliberate: the spec scopes cancelled rendering to the route, and the
+		// phase model must not silently start treating cancelled as completed —
+		// that would flip the toolbar on cancelled-meeting pages.
+		expect(
+			meetingPhase({
+				status: "cancelled",
+				scheduledAt,
+				timezone,
+				now: new Date("2026-08-09T20:00:00.000Z"), // day before, club time
+			}),
+		).toBe("upcoming");
 	});
 });
 ```
@@ -579,6 +597,7 @@ const BASE = {
 	wordOfTheDay: null as string | null,
 	deck: undefined,
 	clubName: undefined,
+	hasIdentity: false,
 	canManage: false,
 	locked: false,
 	canComplete: false,
@@ -595,14 +614,14 @@ async function renderToolbar(overrides: Partial<typeof BASE> = {}) {
 
 describe("MeetingToolbar (#541 D2)", () => {
 	it("upcoming: no primary — just share and the export menu", async () => {
-		await renderToolbar({ phase: "upcoming" });
+		await renderToolbar({ phase: "upcoming", hasIdentity: true });
 		expect(screen.getByRole("button", { name: /copy share link/i })).toBeTruthy();
 		expect(screen.getByRole("button", { name: /print & export/i })).toBeTruthy();
 		expect(screen.queryByTestId("toolbar-primary")).toBeNull();
 	});
 
-	it("today: Present is the filled primary, pinned to the present route", async () => {
-		await renderToolbar({ phase: "today" });
+	it("today + identity: Present is the filled primary, pinned to the present route", async () => {
+		await renderToolbar({ phase: "today", hasIdentity: true });
 		const primary = screen.getByTestId("toolbar-primary");
 		expect(primary.textContent).toMatch(/present/i);
 		expect(primary.closest("a")?.getAttribute("href")).toContain(
@@ -610,11 +629,23 @@ describe("MeetingToolbar (#541 D2)", () => {
 		);
 	});
 
-	it("completed: Minutes is the primary and anchors to the minutes section", async () => {
-		await renderToolbar({ phase: "completed" });
+	it("today + GUEST (no identity): no primary — spec D2 keeps guest chrome quiet (review 1A)", async () => {
+		await renderToolbar({ phase: "today", hasIdentity: false });
+		expect(screen.queryByTestId("toolbar-primary")).toBeNull();
+		// Present stays one tap away for guests: the export menu lists it
+		// whenever it is not the primary (asserted in meeting-export-menu.test).
+	});
+
+	it("completed + officer: Minutes is the primary and anchors to the minutes section", async () => {
+		await renderToolbar({ phase: "completed", canManage: true });
 		const primary = screen.getByTestId("toolbar-primary");
 		expect(primary.textContent).toMatch(/minutes/i);
 		expect(primary.closest("a")?.getAttribute("href")).toContain("#minutes");
+	});
+
+	it("completed + member/guest: no primary — Minutes primary is officer-only per the spec table", async () => {
+		await renderToolbar({ phase: "completed", hasIdentity: true, canManage: false });
+		expect(screen.queryByTestId("toolbar-primary")).toBeNull();
 	});
 
 	it("officer edit group renders only for canManage", async () => {
@@ -681,6 +712,7 @@ export function MeetingToolbar({
 	deck,
 	clubName,
 	wordOfTheDay,
+	hasIdentity,
 	canManage,
 	locked,
 	canComplete,
@@ -699,6 +731,10 @@ export function MeetingToolbar({
 	deck?: Slide[];
 	clubName?: string;
 	wordOfTheDay: string | null;
+	/** Session member OR picked anon identity. Gates the phase primary:
+	 *  spec D2 keeps guest chrome quiet (review decision 1A) — guests reach
+	 *  Present via the export menu instead. */
+	hasIdentity: boolean;
 	canManage: boolean;
 	locked: boolean;
 	canComplete: boolean;
@@ -708,7 +744,10 @@ export function MeetingToolbar({
 	onComplete: () => void;
 	onReopen: () => void;
 }) {
-	const presentIsPrimary = phase === "today";
+	// Spec D2 primary matrix: guests never get a primary; members get Present
+	// on meeting day; only officers get the completed-phase Minutes primary.
+	const presentIsPrimary = phase === "today" && (hasIdentity || canManage);
+	const minutesIsPrimary = phase === "completed" && canManage;
 	return (
 		<div className="flex flex-wrap items-center gap-2 pt-1">
 			{presentIsPrimary ? (
@@ -724,7 +763,7 @@ export function MeetingToolbar({
 					</Link>
 				</Button>
 			) : null}
-			{phase === "completed" ? (
+			{minutesIsPrimary ? (
 				<Button asChild size="sm" data-testid="toolbar-primary">
 					{/* In-page anchor: the minutes section carries id="minutes"
 					    (wired in the route in this same PR). */}
@@ -888,6 +927,13 @@ describe("MeetingPersonalStrip (#541 D3)", () => {
 			screen.getByRole("button", { name: /i can't make this one/i }),
 		).toHaveProperty("disabled", true);
 	});
+
+	it("meeting over + NO identity: viewing-as line only — no attendance claim about nobody (review 3A)", () => {
+		renderStrip({ over: true, member: null, hasIdentity: false });
+		expect(screen.getByText(/viewing as guest/i)).toBeTruthy();
+		expect(screen.queryByText(/attended this meeting/i)).toBeNull();
+		expect(screen.queryByRole("button", { name: /can't make/i })).toBeNull();
+	});
 });
 ```
 
@@ -1026,6 +1072,7 @@ Replace the region from the `{over ? (` availability/attendance block (route ~li
 					deck={deck}
 					clubName={clubName}
 					wordOfTheDay={meeting.wordOfTheDay}
+					hasIdentity={!!myId}
 					canManage={effectiveCanManage}
 					locked={locked}
 					canComplete={canComplete}
@@ -1090,3 +1137,17 @@ git commit -m "feat(agenda): wire phase toolbar + personal strip into the meetin
 - Spec coverage: D1 → Task 1; D2 → Tasks 2–5, 7; D3 → Tasks 6–7; D7 staging → this plan is PR 1 only. D4/D5/D6 are PR 2/3 and deliberately absent.
 - Placeholders: none — every code step shows the code; the two "reconcile against the file" notes are verification instructions with named symbols, not deferred design.
 - Type consistency: `MeetingPhase` exported once (Task 1) and imported in Task 5; `downloadDeckPptx` signature (Task 3) matches its Task 4 call; `dbMeetingId` vs URL-key `meetingId` distinction is explicit in both components' props.
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | — |
+| Codex Review | `/codex review` | Independent 2nd opinion | 0 | SKIPPED (codex_reviews disabled) | — |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR (PLAN, 2026-08-08, commit 3bc6d0a) | 4 issues, 0 critical gaps — all folded into this plan (1A primary gating, 2A cancelled pin, 3A over+guest pin, 4A timezone constraint + rebase rule; follow-up filed as #547) |
+| Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | — |
+| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | — |
+
+- **VERDICT:** ENG CLEARED — ready to implement (subagent-driven-development in this worktree, after merging origin/main per the 4A ground rule).
+
+NO UNRESOLVED DECISIONS

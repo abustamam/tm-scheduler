@@ -49,6 +49,16 @@ phase model does not special-case them.
 date is one day later than the club-local date. Phase tests must include a fixture
 where UTC-now and club-now disagree on what "today" is.
 
+**Timezone source constraint (eng review 4A):** the `timezone` these helpers use is
+`clubs.timezone` — `notNull default "America/Chicago"`, and no code path writes it.
+Phase inherits this deliberately: meeting creation, URL date keys, the agenda freeze
+and Complete gating all already run on the same column, so a wrong value shifts
+phase and freeze *together* and the page stays self-consistent. Do not convert phase
+to instant-based math to dodge the column (chrome would then disagree with the
+freeze at day boundaries). The real gap — no way to SET a club's timezone — is a
+separate, small club-settings feature tracked on the #541 thread; guest chrome
+gating additionally follows review 1A (guests get no phase primary at all).
+
 ### D2 — Toolbar: at most four top-level things
 
 | Slot | Guest (no identity) | Member (identity/session) | Officer |
