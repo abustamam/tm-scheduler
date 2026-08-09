@@ -11,6 +11,7 @@
  */
 const TMOD_ROLE_KEY = "toastmaster_of_the_day";
 const GRAMMARIAN_ROLE_KEY = "grammarian";
+const VOTE_COUNTER_ROLE_KEY = "vote_counter";
 
 /** A role identified the way the rest of the app identifies one: key first, with
  *  the name as the fallback for a slot that carries no key. */
@@ -46,6 +47,7 @@ export type RoleIdentity = { roleName: string; roleKey?: string | null };
  */
 const TMOD_CANONICAL_NAMES = ["toastmaster of the day", "toastmaster"];
 const GRAMMARIAN_CANONICAL_NAMES = ["grammarian"];
+const VOTE_COUNTER_CANONICAL_NAMES = ["vote counter"];
 
 const matchesCanonical = (names: string[], name: string): boolean =>
 	names.includes(name.trim().toLowerCase());
@@ -122,6 +124,26 @@ export function findGrammarianSlot<T extends RoleIdentity>(
 		slots,
 		GRAMMARIAN_ROLE_KEY,
 		GRAMMARIAN_CANONICAL_NAMES,
+	);
+}
+
+/**
+ * The meeting's Vote Counter slot, or undefined. The third capability role
+ * (#510): its holder opens and closes the digital votes, sees the running
+ * count, and confirms the winner.
+ *
+ * Same key-first construction as the other two, and the same deliberately
+ * narrow name fallback — "Ballot Counter" is NOT canonical, so a club that
+ * renamed the role keeps the capability through its key, while a club-invented
+ * "Ballot Counter" with a NULL key is correctly denied it (#464).
+ */
+export function findVoteCounterSlot<T extends RoleIdentity>(
+	slots: T[],
+): T | undefined {
+	return findCapabilityRole(
+		slots,
+		VOTE_COUNTER_ROLE_KEY,
+		VOTE_COUNTER_CANONICAL_NAMES,
 	);
 }
 
