@@ -10,8 +10,33 @@
  * never resolved left the button spinning and permanently disabled with no way
  * back short of a page reload.
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchClubLogo, LOGO_FETCH_TIMEOUT_MS } from "./pptx-download-button";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// downloadDeckPptx (#541) dynamic-imports pptxgenjs + deck-to-pptx and shows a
+// sonner toast on failure. Mocked file-wide so its tests never touch the real
+// ~1 MB library — harmless to the fetchClubLogo tests above, which never
+// import sonner, deck-to-pptx or pptxgenjs.
+const { toastError, writeFile, deckToPptx } = vi.hoisted(() => {
+	const writeFile = vi.fn(async () => "ok");
+	return {
+		toastError: vi.fn(),
+		writeFile,
+		deckToPptx: vi.fn(() => ({ writeFile })),
+	};
+});
+vi.mock("sonner", () => ({ toast: { error: toastError } }));
+vi.mock("#/lib/deck-to-pptx", () => ({
+	deckToPptx,
+	pptxFileName: (club: string) => `${club} - 2026-08-10 Agenda.pptx`,
+}));
+vi.mock("pptxgenjs", () => ({ default: class Fake {} }));
+
+import type { Slide } from "#/lib/agenda-slides";
+import {
+	downloadDeckPptx,
+	fetchClubLogo,
+	LOGO_FETCH_TIMEOUT_MS,
+} from "./pptx-download-button";
 
 const URL_ = "/api/club/abc/logo?v=1";
 
@@ -166,5 +191,49 @@ describe("fetchClubLogo (#496)", () => {
 		stubBitmap(64, 64);
 		await fetchClubLogo(URL_);
 		expect(clearSpy).toHaveBeenCalled();
+	});
+});
+
+describe("downloadDeckPptx (#541)", () => {
+	beforeEach(() => {
+		// The outer `afterEach` above calls `restoreAllMocks()`, which wipes the
+		// implementation off every `vi.fn()` in the file — including these two
+		// module-level mocks set up once via `vi.hoisted`. Put the baseline back
+		// before each test rather than relying on it surviving from module load.
+		deckToPptx.mockImplementation(() => ({ writeFile }));
+		writeFile.mockImplementation(async () => "ok");
+	});
+
+	const titleSlide = {
+		kind: "title",
+		clubName: "Harbor City Speakers",
+		logoUrl: null,
+		district: null,
+		clubNumber: null,
+		meetingNumber: null,
+		scheduledAt: new Date("2026-08-11T03:00:00.000Z"),
+		timezone: "America/Los_Angeles",
+	} as unknown as Slide;
+
+	it("names the file from the title slide", async () => {
+		await downloadDeckPptx({ deck: [titleSlide], clubName: "HCS" });
+		expect(writeFile).toHaveBeenCalledWith({
+			fileName: "HCS - 2026-08-10 Agenda.pptx",
+		});
+	});
+
+	it("falls back when the deck has no title slide", async () => {
+		await downloadDeckPptx({ deck: [], clubName: "HCS" });
+		expect(writeFile).toHaveBeenCalledWith({ fileName: "HCS Agenda.pptx" });
+	});
+
+	it("resolves (never rejects) and toasts when the build throws", async () => {
+		deckToPptx.mockImplementationOnce(() => {
+			throw new Error("boom");
+		});
+		await expect(
+			downloadDeckPptx({ deck: [titleSlide], clubName: "HCS" }),
+		).resolves.toBeUndefined();
+		expect(toastError).toHaveBeenCalled();
 	});
 });

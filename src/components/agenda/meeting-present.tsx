@@ -213,10 +213,6 @@ export function MeetingPresent({
 	const layout = slideLayout(slide);
 	const title = deck.find((s) => s.kind === "title");
 	const fdate = title ? footerDate(title.scheduledAt, title.timezone) : "";
-	// Read off the deck rather than taken as a prop: the splash already renders
-	// from `layout.logoUrl`, and a second prop carrying the same value is a
-	// place the two can disagree.
-	const logoUrl = title?.logoUrl ?? null;
 	// The QR + badge (#510) — null on every non-vote slide, which `ContentSlide`
 	// reads as "render the body alone, exactly as before".
 	const vote = isVoteSlide(slide)
@@ -227,7 +223,7 @@ export function MeetingPresent({
 		<div className="fixed inset-0 flex items-center justify-center bg-black">
 			<div className="absolute top-[2vmin] right-[2vmin] z-20 flex items-center gap-[1.2vmin]">
 				{offlineBadge}
-				<PptxDownloadButton deck={deck} clubName={clubName} logoUrl={logoUrl} />
+				<PptxDownloadButton deck={deck} clubName={clubName} />
 			</div>
 			<button
 				type="button"

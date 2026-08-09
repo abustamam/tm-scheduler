@@ -8,12 +8,6 @@ import type { Slide } from "#/lib/agenda-slides";
 import type { ClubLogoAsset } from "#/lib/deck-to-pptx";
 
 /**
- * Downloads the present-mode deck as an editable `.pptx`. Same ungated
- * visibility as Present/Print. Generation happens entirely client-side and the
- * ~1 MB `pptxgenjs` library is dynamic-`import()`ed only on click, so it is
- * code-split out of the main bundle (see `deck-to-pptx.ts`).
- */
-/**
  * How long to wait for the logo before exporting without it. The deck is the
  * deliverable; the logo is decoration, and `finally { setBusy(false) }` only
  * runs once this settles — an unbounded fetch that never resolves would leave
@@ -94,26 +88,34 @@ export async function fetchClubLogo(
 }
 
 /**
- * The .pptx export action, extracted from the button so the meeting toolbar's
- * export menu (#541) can invoke it too. Returns after the file is written or
- * the failure toast is shown — callers only manage their own busy state.
+ * Downloads the present-mode deck as an editable `.pptx`. Same ungated
+ * visibility as Present/Print. Generation happens entirely client-side (see
+ * `deck-to-pptx.ts`).
+ *
+ * Extracted from the button so the meeting toolbar's export menu (#541) can
+ * invoke it too. Returns after the file is written or the failure toast is
+ * shown — callers only manage their own busy state.
+ *
+ * Re-entrant — nothing is shared between calls; a double invoke just
+ * downloads twice, so a caller's busy flag is for UI, not correctness.
  */
 export async function downloadDeckPptx({
 	deck,
 	clubName,
-	logoUrl,
 }: {
 	deck: Slide[];
 	clubName: string;
-	logoUrl: string | null;
 }): Promise<void> {
 	try {
+		const title = deck.find((s) => s.kind === "title");
+		// Dynamic import keeps pptxgenjs + the builder off the main chunk; the
+		// logo fetch is independent, so both go out at once rather than the
+		// ~1 MB library download gating a network round trip.
 		const [[{ default: PptxGenJS }, { deckToPptx, pptxFileName }], logo] =
 			await Promise.all([
 				Promise.all([import("pptxgenjs"), import("#/lib/deck-to-pptx")]),
-				fetchClubLogo(logoUrl),
+				fetchClubLogo(title?.logoUrl ?? null),
 			]);
-		const title = deck.find((s) => s.kind === "title");
 		const fileName = title
 			? pptxFileName(clubName, title.scheduledAt, title.timezone)
 			: `${clubName} Agenda.pptx`;
@@ -128,14 +130,11 @@ export async function downloadDeckPptx({
 export function PptxDownloadButton({
 	deck,
 	clubName,
-	logoUrl = null,
 	variant = "outline",
 	size = "sm",
 }: {
 	deck: Slide[];
 	clubName: string;
-	/** Versioned logo URL, or null. Fetched on click, never at render. */
-	logoUrl?: string | null;
 	variant?: "outline" | "secondary" | "ghost";
 	size?: "sm" | "default";
 }) {
@@ -145,7 +144,7 @@ export function PptxDownloadButton({
 		if (busy) return;
 		setBusy(true);
 		try {
-			await downloadDeckPptx({ deck, clubName, logoUrl });
+			await downloadDeckPptx({ deck, clubName });
 		} finally {
 			setBusy(false);
 		}
