@@ -5,6 +5,7 @@
 // (with the non-affiliation disclaimer). Extracted per #345 so the meeting
 // agenda print layouts (`meeting-agenda-print.tsx`) and the club role sheet
 // (`club-role-sheet.tsx`) share one copy instead of each carrying their own.
+import { QRCodeSVG } from "qrcode.react";
 import { useEffect, useRef, useState } from "react";
 import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
 
@@ -52,6 +53,11 @@ export const PAGE_H = 1056;
  *     harmless on a one-sheet page precisely because the only sheet is also the
  *     last child. Keep them together — half of this pair is how you get a
  *     trailing blank page.
+ *   · `.footer-qr { break-inside: avoid }` (#510) keeps the scan-to-vote QR and
+ *     its caption from splitting apart. `.agenda-page` is already a fixed
+ *     `overflow: hidden` box, so nothing here can add a page — this only
+ *     protects against a paged-media backend fragmenting the QR internally,
+ *     the same defensive reasoning as the `break-after` pair above.
  *
  * What is deliberately NOT here: centring the sheet. Both single-sheet surfaces
  * centre — the roles route through a `.pgwrap` rule, the poster route through an
@@ -78,6 +84,7 @@ export const PRINT_PAGE_CSS = `
 		   grid layouts too, which aren't wrapped in .pgwrap at all. */
 		.agenda-page { box-shadow: none !important; break-after: page; break-inside: avoid; }
 		.agenda-page:last-child { break-after: auto; }
+		.footer-qr { break-inside: avoid; }
 		@page { size: letter portrait; margin: 0; }
 	}
 `;
@@ -239,13 +246,28 @@ export function Kick({
 	);
 }
 
-/** The dark page footer: a left/right line plus the non-affiliation disclaimer. */
+/**
+ * The dark page footer: a left/right line plus the non-affiliation disclaimer.
+ *
+ * `ballotUrl`, when set, adds a small scan-to-vote QR (#510) beside `right` —
+ * for clubs that print the agenda instead of projecting present mode. It is
+ * optional and threaded only to the LAST sheet of a layout (the one still on
+ * the table when voting happens), and only on the layouts that already carry
+ * a `DarkFooter`: `GridLayout` hand-rolls its own tight officer footer instead
+ * of this component (see its "NO HEADROOM LEFT" note) and does not get one.
+ *
+ * The QR renders INLINE (`display: inline-flex`), sharing the same row as
+ * `right`, not as its own block below — a block-level addition here is the
+ * shape of change that pushes a printed page (`print-page-reset.guard.test.ts`).
+ */
 export function DarkFooter({
 	left,
 	right,
+	ballotUrl,
 }: {
 	left: React.ReactNode;
 	right: React.ReactNode;
+	ballotUrl?: string;
 }) {
 	return (
 		<div
@@ -260,20 +282,43 @@ export function DarkFooter({
 					display: "flex",
 					justifyContent: "space-between",
 					alignItems: "center",
+					gap: 12,
 				}}
 			>
 				<span style={{ fontSize: 11, fontWeight: 600, color: "#fff" }}>
 					{left}
 				</span>
-				<span
-					style={{
-						fontSize: 11,
-						fontWeight: 700,
-						color: SEAFOAM,
-						letterSpacing: ".03em",
-					}}
-				>
-					{right}
+				<span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
+					<span
+						style={{
+							fontSize: 11,
+							fontWeight: 700,
+							color: SEAFOAM,
+							letterSpacing: ".03em",
+						}}
+					>
+						{right}
+					</span>
+					{ballotUrl ? (
+						<span
+							className="footer-qr"
+							style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+						>
+							<QRCodeSVG value={ballotUrl} size={32} marginSize={0} />
+							<span
+								style={{
+									fontSize: 6.5,
+									lineHeight: 1.2,
+									color: "rgba(255,255,255,.85)",
+									fontWeight: 700,
+								}}
+							>
+								Scan to vote
+								<br />
+								Best Speaker · Evaluator · Table Topics
+							</span>
+						</span>
+					) : null}
 				</span>
 			</div>
 			<p

@@ -1,5 +1,6 @@
 // src/routes/club.$clubId_.meeting.$meetingId.print.tsx
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
 import {
 	type AgendaExplainer,
 	type AgendaLayout,
@@ -124,6 +125,17 @@ function PrintAgenda() {
 	const { clubId: clubIdParam, meetingId } = Route.useParams();
 	// Clean shareable view: hide the editing chrome, keep only the Print button.
 	const bare = chrome === "none";
+	// The absolute ballot URL is derived in the browser (#510), same as the
+	// present route's own QR and the guest-book QR on the VP Membership page:
+	// this route renders on the server first, where `window` doesn't exist, and
+	// a QR baked from a relative path is not a URL a phone's camera can resolve.
+	// Blank until the effect fires, which is why `DarkFooter` treats an empty
+	// `ballotUrl` as "no QR yet" rather than rendering one that can't scan.
+	const [origin, setOrigin] = useState("");
+	useEffect(() => setOrigin(window.location.origin), []);
+	const ballotUrl = origin
+		? `${origin}/club/${clubIdParam}/meeting/${meetingId}/vote`
+		: "";
 	const {
 		meeting,
 		slots,
@@ -266,6 +278,7 @@ function PrintAgenda() {
 				officers={officers}
 				explainers={explainers}
 				rows={rows}
+				ballotUrl={ballotUrl}
 			/>
 		</div>
 	);

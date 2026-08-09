@@ -82,6 +82,11 @@ type Props = {
 	officers: AgendaOfficer[];
 	explainers: AgendaExplainer[];
 	rows: TimelineRow[];
+	// The absolute scan-to-vote ballot URL (#510), or undefined before the print
+	// route's client-side origin effect fires. Threaded only to the layouts
+	// that carry a `DarkFooter` — see that component's doc comment for why
+	// `GridLayout` opts out.
+	ballotUrl?: string;
 };
 
 /** minutes (e.g. 6.5) → "6:30" for the timing marks. Shared with the grace
@@ -670,6 +675,7 @@ function EditorialLayout({
 	roles,
 	officers,
 	rows,
+	ballotUrl,
 }: Omit<Props, "layout" | "explainers">) {
 	return (
 		<FitPage>
@@ -828,6 +834,7 @@ function EditorialLayout({
 			<DarkFooter
 				left="Guests are always welcome — speak to any officer about getting involved."
 				right="toastmasters.org"
+				ballotUrl={ballotUrl}
 			/>
 		</FitPage>
 	);
@@ -1198,6 +1205,7 @@ function SpaciousLayout({
 	roles,
 	officers,
 	rows,
+	ballotUrl,
 }: Omit<Props, "layout" | "explainers">) {
 	return (
 		<TwoPage>
@@ -1410,6 +1418,7 @@ function SpaciousLayout({
 				<DarkFooter
 					left="Guests are always welcome — speak to any officer about getting involved."
 					right="toastmasters.org"
+					ballotUrl={ballotUrl}
 				/>
 			</FitPage>
 		</TwoPage>
@@ -1452,6 +1461,7 @@ function TimingLayout({
 	officers,
 	explainers,
 	rows,
+	ballotUrl,
 }: Omit<Props, "layout">) {
 	return (
 		<TwoPage>
@@ -1862,6 +1872,7 @@ function TimingLayout({
 				<DarkFooter
 					left="Page 2 of 2 · Detailed run of show"
 					right={`${header.clubName}`}
+					ballotUrl={ballotUrl}
 				/>
 			</FitPage>
 		</TwoPage>
@@ -2053,6 +2064,7 @@ export function MeetingAgendaPrint({
 	officers,
 	explainers,
 	rows,
+	ballotUrl,
 }: Props) {
 	switch (layout) {
 		case "editorial":
@@ -2062,9 +2074,12 @@ export function MeetingAgendaPrint({
 					roles={roles}
 					officers={officers}
 					rows={rows}
+					ballotUrl={ballotUrl}
 				/>
 			);
 		case "grid":
+			// No `ballotUrl` — `GridLayout` has no `DarkFooter` to put it in. See
+			// that component's file-header note ("NO HEADROOM LEFT").
 			return (
 				<GridLayout
 					header={header}
@@ -2080,6 +2095,7 @@ export function MeetingAgendaPrint({
 					roles={roles}
 					officers={officers}
 					rows={rows}
+					ballotUrl={ballotUrl}
 				/>
 			);
 		default:
@@ -2090,6 +2106,7 @@ export function MeetingAgendaPrint({
 					officers={officers}
 					explainers={explainers}
 					rows={rows}
+					ballotUrl={ballotUrl}
 				/>
 			);
 	}
