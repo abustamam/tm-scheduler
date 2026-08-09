@@ -374,10 +374,13 @@ export async function requireWordOfTheDayEditor(input: {
  * `vote_counter` slot. Throws when neither applies.
  *
  * Wraps `resolveVoteCounterAuthz` the same way `requireMeetingAgendaEditor` /
- * `requireWordOfTheDayEditor` wrap their own resolvers — the one exception is
- * `voting.ts`'s open/close/tally calls, which call `resolveVoteCounterAuthz`
- * directly rather than through here, for a guard-test slice-ordering reason
- * documented on that module's own local `requireVoteCounter`.
+ * `requireWordOfTheDayEditor` wrap their own resolvers. `voting.ts`'s
+ * open/close/tally calls delegate here too (#510 review finding 4 — they used
+ * to call `resolveVoteCounterAuthz` directly and skip the officer retry below,
+ * so an elected officer could reach `setMinutesAward` through this gate but
+ * not open/close/read the tally through the other one); they keep their own
+ * local `requireVoteCounter` wrapper purely for a guard-test slice-ordering
+ * reason documented there, not for a different authorization decision.
  *
  * A strict SUPERSET of the `requireClubRole(..., ["admin"])` gate it replaced on
  * those five, and it has to be. `resolveVoteCounterAuthz`'s admin check reads

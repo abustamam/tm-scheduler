@@ -25,6 +25,7 @@ describe("public voting payloads carry no PII (#510)", () => {
 				"people.email",
 				"people.phone",
 				"members.email",
+				"members.phone",
 			]) {
 				if (src.includes(column)) offenders.push(`${file}: ${column}`);
 			}

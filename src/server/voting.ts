@@ -1,10 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { getSessionUser } from "./guards";
-import {
-	assertMeetingNotLocked,
-	resolveVoteCounterAuthz,
-} from "./meeting-authz-logic";
+import { requireVoteCounterCapability } from "./guards";
+import { assertMeetingNotLocked } from "./meeting-authz-logic";
 import {
 	castVote,
 	closeVote,
@@ -19,13 +16,11 @@ import {
 // The db-touching logic lives in `voting-logic.ts` (never imported by client
 // routes) so it can't drag `#/db` → `pg` into the browser bundle. This module
 // exports ONLY createServerFns + types — see `server-modules.guard.test.ts`.
-export type {
-	BallotData,
-	CategoryTally,
-	TableTopicsSpeakerRef,
-	TallyResult,
-	VoterRef,
-} from "./voting-logic";
+// `CategoryTally` / `TableTopicsSpeakerRef` / `TallyResult` / `VoterRef` are
+// NOT re-exported (#510 review finding 5): nothing outside this module and
+// `voting-logic.ts` imports them, and `noUnusedLocals` does not catch a dead
+// re-export the way it catches a dead local.
+export type { BallotData } from "./voting-logic";
 
 const uuid = z.string().uuid();
 const category = z.enum([
@@ -44,21 +39,24 @@ const voterRef = z.object({ kind: z.enum(["member", "guest"]), id: uuid });
  * substring the guard asserts on). With the helper below `getVoteTally`, that
  * boundary swallowed the declaration and the guard could not fail even when
  * the real call was removed from the handler — caught by mutation testing.
+ *
+ * Delegates to `requireVoteCounterCapability` (`guards.ts`) rather than
+ * calling `resolveVoteCounterAuthz` directly (#510 review finding 4). This
+ * function used to skip the elected-officer retry that capability wraps
+ * around the resolver, so an officer with an open term could `setMinutesAward`
+ * (gated by `requireVoteCounterCapability` in `minutes.ts`) but not
+ * `openVote`/`closeVote`/read the tally — two gates disagreeing about the same
+ * person for the same feature. This wrapper stays (rather than every export
+ * below calling `requireVoteCounterCapability` directly) purely for the
+ * guard-test slice-ordering reason above: the source-grep needs ONE stable
+ * substring, `requireVoteCounter(`, that cannot bleed into a neighboring
+ * export's body.
  */
 async function requireVoteCounter(data: {
 	meetingId: string;
 	selfMemberId?: string | null;
 }) {
-	const sessionUser = await getSessionUser();
-	const authz = await resolveVoteCounterAuthz({
-		meetingId: data.meetingId,
-		sessionUserId: sessionUser?.id ?? null,
-		selfMemberId: data.selfMemberId ?? null,
-	});
-	if (!authz.allowed) {
-		throw new Error("Only the Vote Counter can do that.");
-	}
-	return authz;
+	return requireVoteCounterCapability(data);
 }
 
 /** The public ballot (#510). PUBLIC — no session, mirroring `submitGuestBook`.

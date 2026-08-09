@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	guests,
 	meetingAttendance,
+	meetingBallotGuests,
 	meetings,
 	meetingVoteSessions,
 	meetingVotes,
@@ -793,5 +794,133 @@ describe.skipIf(!hasTestDb)("joinBallotAsGuest (#510)", () => {
 		await expect(
 			joinBallotAsGuest({ meetingId: seed.meetingId, name: "One too many" }),
 		).rejects.toThrow(/too many/i);
+	});
+
+	// #510 review finding 1 (BLOCKING) — a serial loop, including the test right
+	// above this one, cannot distinguish a real cap from a TOCTOU: check-then-write
+	// always looks right when nothing else is running. The old code read the
+	// pre-insert count OUTSIDE any transaction and took no lock, so 200 concurrent
+	// requests all read the same count and all landed. This fires a real burst.
+	it("a concurrent burst cannot exceed the cap (race, #510 review finding 1)", async () => {
+		const attempts = Array.from({ length: 120 }, (_, i) =>
+			joinBallotAsGuest({ meetingId: seed.meetingId, name: `Burst ${i}` }),
+		);
+		const results = await Promise.allSettled(attempts);
+		const accepted = results.filter((r) => r.status === "fulfilled").length;
+		const rejected = results.filter((r) => r.status === "rejected").length;
+		// Every rejection must be the cap's own message — a connection error or an
+		// unrelated throw here would make "accepted <= 60" true for the wrong
+		// reason.
+		for (const r of results) {
+			if (r.status === "rejected") {
+				expect((r.reason as Error).message).toMatch(/too many/i);
+			}
+		}
+		expect(accepted + rejected).toBe(120);
+		// The lock makes this deterministic, not just bounded: with 120 distinct
+		// names against a cap of 60, exactly 60 must win.
+		expect(accepted).toBe(60);
+
+		const rows = await testDb
+			.select()
+			.from(meetingBallotGuests)
+			.where(eq(meetingBallotGuests.meetingId, seed.meetingId));
+		expect(rows).toHaveLength(60);
+	});
+
+	// #510 review finding 2 (HIGH) — the spec's "Identify" surface has a guest
+	// pick from the meeting's existing guest list or add themselves; this
+	// endpoint only implements the free-text add half, so it must at least
+	// find-or-create rather than always-create, or a repeat submission (a second
+	// tab, a retried request on bad wifi, an incognito window) mints a second
+	// ballot identity with no unique index to stop it.
+	describe("find-or-create (#510 review finding 2)", () => {
+		it("joining twice with the same name reuses the guest — one row, one ballot identity", async () => {
+			const first = await joinBallotAsGuest({
+				meetingId: seed.meetingId,
+				name: "Nguyen, Thanh",
+			});
+			const second = await joinBallotAsGuest({
+				meetingId: seed.meetingId,
+				name: "Nguyen, Thanh",
+			});
+			expect(second.id).toBe(first.id);
+
+			const guestRows = await testDb
+				.select()
+				.from(guests)
+				.where(eq(guests.clubId, seed.clubId));
+			expect(guestRows).toHaveLength(1);
+
+			const linkRows = await testDb
+				.select()
+				.from(meetingBallotGuests)
+				.where(eq(meetingBallotGuests.meetingId, seed.meetingId));
+			expect(linkRows).toHaveLength(1);
+		});
+
+		it("reuses a match that differs only in case or surrounding whitespace", async () => {
+			const first = await joinBallotAsGuest({
+				meetingId: seed.meetingId,
+				name: "Nguyen, Thanh",
+			});
+			const second = await joinBallotAsGuest({
+				meetingId: seed.meetingId,
+				name: "  nguyen, THANH  ",
+			});
+			expect(second.id).toBe(first.id);
+			// The originally-stored casing wins — the second submission does not
+			// overwrite the guest's display name.
+			expect(second.name).toBe(first.name);
+
+			const guestRows = await testDb
+				.select()
+				.from(guests)
+				.where(eq(guests.clubId, seed.clubId));
+			expect(guestRows).toHaveLength(1);
+		});
+
+		it("reuses a club guest not yet on this meeting's ballot — e.g. one recorded from Table Topics", async () => {
+			const [preexisting] = await testDb
+				.insert(guests)
+				.values({ clubId: seed.clubId, name: "Silva, Marco" })
+				.returning({ id: guests.id, name: guests.name });
+
+			const joined = await joinBallotAsGuest({
+				meetingId: seed.meetingId,
+				name: "silva, marco",
+			});
+			expect(joined.id).toBe(preexisting.id);
+
+			const guestRows = await testDb
+				.select()
+				.from(guests)
+				.where(eq(guests.clubId, seed.clubId));
+			expect(guestRows).toHaveLength(1);
+
+			const linkRows = await testDb
+				.select()
+				.from(meetingBallotGuests)
+				.where(eq(meetingBallotGuests.meetingId, seed.meetingId));
+			expect(linkRows).toHaveLength(1);
+		});
+
+		it("reusing an existing guest does not consume cap headroom", async () => {
+			for (let i = 0; i < 60; i++) {
+				await joinBallotAsGuest({
+					meetingId: seed.meetingId,
+					name: `Visitor ${i}`,
+				});
+			}
+			// The cap is full. Re-identifying as someone already on the ballot must
+			// still succeed — reuse is not gated by the cap.
+			await expect(
+				joinBallotAsGuest({ meetingId: seed.meetingId, name: "Visitor 0" }),
+			).resolves.toMatchObject({ name: "Visitor 0" });
+			// A genuinely new name is still refused.
+			await expect(
+				joinBallotAsGuest({ meetingId: seed.meetingId, name: "One too many" }),
+			).rejects.toThrow(/too many/i);
+		});
 	});
 });

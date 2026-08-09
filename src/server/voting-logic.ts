@@ -15,6 +15,7 @@ import {
 	guests,
 	meetingAttendance,
 	meetingBallotGuests,
+	meetings,
 	meetingVoteSessions,
 	meetingVotes,
 	members,
@@ -554,6 +555,40 @@ const MAX_BALLOT_GUESTS_PER_MEETING = 60;
  * The name is capped with `cap`, which counts CODE POINTS. Do not replace it
  * with `.slice()`: the truncation added to close a DoS in #522 WAS a DoS,
  * because slicing UTF-16 splits a surrogate pair and emits a lone surrogate.
+ *
+ * FIND-OR-CREATE, not always-create (#510 review finding 2). The spec's
+ * "Identify" surface says a guest picks from the meeting's existing guest list
+ * or adds themselves; this endpoint only offers the free-text add half, so
+ * without a server-side match a guest already on the club's roster — including
+ * one who just spoke at Table Topics and is therefore a ballot CANDIDATE —
+ * would mint a second `guests` row to vote as themselves, and an incognito
+ * window plus the same name is a second ballot identity with no unique index
+ * to stop it. The match is club-scoped on normalized (trimmed, case-folded)
+ * name, the same shape `findGuestByContact` (`guest-pipeline-logic.ts`) uses
+ * for its email/phone dedup, just on the one signal this endpoint collects.
+ *
+ * The cap gates NEW `guests` rows only — reusing an existing guest must NOT
+ * consume headroom, or a club that already has 60 people on its guest roster
+ * could never let its own returning guests vote through this endpoint.
+ * `meetingBallotGuests` is still written (idempotently) on the reuse path, so
+ * the Ballot Counter's guest count reflects everyone actually on the ballot.
+ *
+ * LOCKED, not just wrapped in a transaction (#510 review finding 1 — the
+ * BLOCKING one). The old code read the `meetingBallotGuests` count OUTSIDE any
+ * transaction and took no lock, so every concurrent request read the same
+ * pre-insert count under READ COMMITTED's snapshot-at-statement-start — a
+ * reviewer fired 200 concurrent calls against a cap of 60 and all 200 landed.
+ * That is not just row spam on this PUBLIC unauthenticated endpoint: every
+ * minted guest is a distinct voter under `meeting_votes_voter_guest_unique`,
+ * so one burst buys N ballots in every open category, defeating one-vote-per-
+ * person without ever touching that index. `SELECT ... FOR UPDATE` on the
+ * meeting row is taken as the FIRST statement, before the name lookup and the
+ * count, so every concurrent join for THIS meeting serializes behind one
+ * writer at a time — mirroring the `.for("share")` idiom `castVote` uses for
+ * the same class of read-then-write gap. See the concurrent-burst regression
+ * test in `voting.integration.test.ts`, verified by mutation (revert the lock,
+ * watch it fail — vitest swallows console output here, so a logging probe
+ * would not have caught this the first time either).
  */
 export async function joinBallotAsGuest(input: {
 	meetingId: string;
@@ -561,24 +596,59 @@ export async function joinBallotAsGuest(input: {
 }): Promise<{ id: string; name: string }> {
 	const name = cap(input.name.trim(), MAX_GUEST_NAME);
 	if (!name) throw new Error("A name is required to vote.");
+	const normalizedName = name.toLowerCase();
 	const clubId = await getMeetingClubId(input.meetingId);
 
-	const [{ count } = { count: 0 }] = await db
-		.select({ count: sql<number>`count(*)::int` })
-		.from(meetingBallotGuests)
-		.where(eq(meetingBallotGuests.meetingId, input.meetingId));
-	if (count >= MAX_BALLOT_GUESTS_PER_MEETING) {
-		throw new Error("Too many guests have joined this ballot.");
-	}
-
 	return db.transaction(async (tx) => {
-		const [created] = await tx
-			.insert(guests)
-			.values({ clubId, name })
-			.returning({ id: guests.id, name: guests.name });
+		// The lock. Every later statement in this transaction — the name lookup,
+		// the cap count, the inserts — runs only after this resolves, so two
+		// concurrent joins for the same meeting can never both observe "room for
+		// one more" and both write.
+		await tx
+			.select({ id: meetings.id })
+			.from(meetings)
+			.where(eq(meetings.id, input.meetingId))
+			.limit(1)
+			.for("update");
+
+		const [existing] = await tx
+			.select({ id: guests.id, name: guests.name })
+			.from(guests)
+			.where(
+				and(
+					eq(guests.clubId, clubId),
+					sql`lower(trim(${guests.name})) = ${normalizedName}`,
+				),
+			)
+			.limit(1);
+
+		let guest: { id: string; name: string };
+		if (existing) {
+			guest = existing;
+		} else {
+			const [{ count } = { count: 0 }] = await tx
+				.select({ count: sql<number>`count(*)::int` })
+				.from(meetingBallotGuests)
+				.where(eq(meetingBallotGuests.meetingId, input.meetingId));
+			if (count >= MAX_BALLOT_GUESTS_PER_MEETING) {
+				throw new Error("Too many guests have joined this ballot.");
+			}
+			const [created] = await tx
+				.insert(guests)
+				.values({ clubId, name })
+				.returning({ id: guests.id, name: guests.name });
+			guest = created;
+		}
+
+		// Idempotent: `meeting_ballot_guests`'s primary key is the (meeting, guest)
+		// pair, so a repeat join by the same person — or a reuse match against a
+		// guest not yet linked to THIS meeting's ballot — must not throw a
+		// duplicate-key error.
 		await tx
 			.insert(meetingBallotGuests)
-			.values({ meetingId: input.meetingId, guestId: created.id });
-		return created;
+			.values({ meetingId: input.meetingId, guestId: guest.id })
+			.onConflictDoNothing();
+
+		return guest;
 	});
 }
