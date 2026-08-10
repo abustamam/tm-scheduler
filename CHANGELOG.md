@@ -2,6 +2,12 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.10.2.0] - 2026-08-10
+
+### Fixed
+
+- **A mistyped meeting date no longer opens a different meeting.** A date that doesn't exist — September 31st, say — used to roll forward and quietly show you October 1st's meeting instead, with no sign anything was wrong. On the ballot that meant a vote could land in a meeting nobody chose. Impossible dates and times are now rejected outright, so the link says "not found" rather than showing the wrong week. Affects the agenda, the projected deck, the Word of the Day poster and the ballot alike.
+
 ## [1.10.1.0] - 2026-08-10
 
 ### Fixed

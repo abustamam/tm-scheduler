@@ -10,12 +10,46 @@ export type ParsedMeetingKey =
 	| { kind: "uuid"; id: string }
 	| { kind: "invalid" };
 
-/** Classify a `$meetingId` URL segment: a club-local date, a date+HHmm instant,
- *  a raw uuid, or invalid. Shape-only — validity is decided by resolution. */
+/**
+ * True when `YYYY-MM-DD` names a date that actually exists on the calendar.
+ *
+ * The shape regex cannot do this: `\d{2}` matches `31` in a 30-day month and
+ * `99` in any month. `Date.UTC` then OVERFLOW-ROLLS the excess instead of
+ * rejecting it, so the impossible label silently becomes a real instant —
+ * `2026-09-31` → 2026-10-01. Round-tripping through `Date.UTC` and comparing
+ * the rendered label back to the input is what catches that: a rolled date
+ * renders as a DIFFERENT label than the one supplied.
+ */
+function isRealCalendarDate(date: string): boolean {
+	const [y, m, d] = date.split("-").map(Number);
+	const t = Date.UTC(y, m - 1, d);
+	return Number.isFinite(t) && new Date(t).toISOString().slice(0, 10) === date;
+}
+
+/**
+ * Classify a `$meetingId` URL segment: a club-local date, a date+HHmm instant,
+ * a raw uuid, or invalid.
+ *
+ * Shape AND calendar validity. The original design (#336) made this shape-only,
+ * on the recorded reasoning that an impossible date would simply "find no
+ * meeting → notFound()". That premise was false: `localDayRange` feeds the
+ * label to `Date.UTC`, which rolls `2026-09-31` to October 1 and happily
+ * resolves OCTOBER'S meeting. A wrong-but-plausible date is a realistic typo
+ * (September has 30 days), and the failure was silent — a working page for a
+ * meeting the visitor did not ask for, which on the ballot means voting in it.
+ * Rejecting here fixes every caller at once rather than each resolution site.
+ */
 export function parseMeetingKey(key: string): ParsedMeetingKey {
 	const m = key.match(DATE_KEY_RE);
 	if (m) {
 		const [, date, hh, mm] = m;
+		if (!isRealCalendarDate(date)) return { kind: "invalid" };
+		// Same reasoning one level down: `-2599` is shape-valid and would be fed
+		// to `zonedWallTimeToUtc`, which rolls 25:99 into the next day rather
+		// than rejecting it.
+		if (hh && mm && (Number(hh) > 23 || Number(mm) > 59)) {
+			return { kind: "invalid" };
+		}
 		return hh && mm
 			? { kind: "instant", date, hh, mm }
 			: { kind: "date", date };
