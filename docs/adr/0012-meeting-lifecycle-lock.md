@@ -58,8 +58,10 @@ A direct server-fn call — not just a hidden button — therefore fails on a co
 
 - The meeting view (both signed-in and public) shows a banner reading exactly
   **"This meeting is locked."** and hides all mutation controls when completed.
-- The **Complete / Reopen** control sits with the meeting-view admin actions (alongside
-  Present / Print), admin-only. Complete appears only once the date is reached.
+- The **Complete / Reopen** control sits in the meeting view's toolbar, admin-only, beside the
+  phase primary and the **Print & export** menu. Complete appears only once the date is reached.
+  (The flat Present / Print action row this originally described was replaced by the phase-driven
+  toolbar in v1.11.0.0, #541; the lock decision itself is unchanged.)
 - The season grid marks a completed meeting distinctly (a "locked" indicator) so a finished
   meeting reads differently from a scheduled one.
 
