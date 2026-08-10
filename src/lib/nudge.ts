@@ -5,6 +5,7 @@
 
 import { greetingName } from "#/lib/person-name";
 import type { Platform } from "#/lib/platform";
+import { whatsappHref } from "#/lib/whatsapp";
 
 export type NudgeMode = "confirm" | "recruit";
 
@@ -56,46 +57,18 @@ function subjectFor(i: NudgeInput): string {
 		: `Open ${i.roleName} role — ${i.meetingDate} meeting?`;
 }
 
-/**
- * `wa.me` needs full international digits (country code, no `+`). We strip to
- * digits best-effort — a number stored without a country code produces a link
- * WhatsApp rejects VISIBLY, and the caller always offers Email as a fallback.
- * Reliable normalization is tracked as a follow-up (club default country code
- * + E.164 input standardization).
- */
-function waDigits(phone: string): string {
-	return phone.replace(/\D/g, "");
-}
-
-/**
- * The WhatsApp entry point for a platform (#485). `wa.me` is a device
- * redirector that hands off to the installed app — right on a phone, but on a
- * desktop it stops at an "open in app" interstitial the VPE cannot get past
- * without the desktop client. Desktop therefore goes straight to WhatsApp Web.
- */
-function whatsappUrlFor(
-	digits: string,
-	message: string,
-	platform: Platform,
-): string {
-	const text = encodeURIComponent(message);
-	return platform === "desktop"
-		? `https://web.whatsapp.com/send/?phone=${digits}&text=${text}&type=phone_number&app_absent=0`
-		: `https://wa.me/${digits}?text=${text}`;
-}
-
 export function buildNudge(input: NudgeInput): Nudge {
 	const message = messageFor(input);
 	const nudge: Nudge = { message };
 
-	const digits = input.phone ? waDigits(input.phone) : "";
-	if (digits) {
-		nudge.whatsappUrl = whatsappUrlFor(
-			digits,
-			message,
-			input.platform ?? "mobile",
-		);
-	}
+	// `whatsappHref` returns null when there is no number, which is exactly when
+	// `whatsappUrl` should be absent from the result.
+	const whatsappUrl = whatsappHref(
+		input.phone,
+		input.platform ?? "mobile",
+		message,
+	);
+	if (whatsappUrl) nudge.whatsappUrl = whatsappUrl;
 
 	if (input.email) {
 		nudge.mailtoUrl = `mailto:${input.email}?subject=${encodeURIComponent(
