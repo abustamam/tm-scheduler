@@ -2,6 +2,12 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.10.1.0] - 2026-08-10
+
+### Fixed
+
+- **A mistyped or stale ballot link now says "not found" instead of erroring.** Scanning a QR for a meeting that no longer resolves showed the app's error screen; it shows the normal not-found page, the way the projected deck and the Word of the Day poster already did. This is the link printed on a QR and handed to a room, so a wrong key is the ordinary case rather than the exotic one.
+
 ## [1.10.0.0] - 2026-08-09
 
 ### Added

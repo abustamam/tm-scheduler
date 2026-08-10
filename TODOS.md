@@ -8,6 +8,9 @@
 
 ## Meetings
 
+- A date-SHAPED but invalid meeting key (`9999-99-99` — passes the date regex, fails the calendar) still returns 500 on all four public meeting routes (`print`, `present`, `word`, `vote`). It throws `"Invalid date/time."` from inside `resolveMeetingKey`, which `isMeetingNotFoundError` does not match, so the `.catch` that translates a missing meeting into a 404 (v1.10.1.0) lets it through. Pre-existing and identical across all four, so it is not a ballot-specific gap — but these are public unauthenticated routes and the ballot one is printed on a QR code, so a fat-fingered date is reachable. Fix is one more predicate, or making `resolveMeetingKey` return null for an unparseable date rather than throwing.
+  **Priority:** P3
+
 - An ex-member can still see a departed club's forward schedule. `userMemberIds` deliberately ignores `members.status`, and the deactivation sweep in `members-logic.ts` skips slots on CANCELLED meetings, while `applyReopenMeeting` restores a meeting without clearing assignments. Cancel a meeting, deactivate a member, reopen it, and their `/me` shows that club's date, theme and location with a Release button that dead-ends. Needs all three steps, so it is debt rather than scheduled work.
   **Priority:** P4
 
