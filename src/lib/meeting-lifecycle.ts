@@ -80,6 +80,36 @@ export function isMeetingOver(input: {
 	);
 }
 
+/** The meeting's UI phase (#541 D1): upcoming, today, or completed. */
+export type MeetingPhase = "upcoming" | "today" | "completed";
+
+/**
+ * The meeting's UI phase (#541 D1). Phases re-weight the chrome — they NEVER
+ * hide a capability. In PR 1 the only weighting wired up is WHICH ACTION IS
+ * PRIMARY (`MeetingToolbar`), plus the Minutes anchor gate. The spec's other
+ * two phase effects are NOT implemented yet and there is no code to find:
+ * Confirm loudness / `CONFIRM_WINDOW_HOURS` (D5) lands in PR 2, and
+ * minutes/outreach phase gating (D6) in PR 3. Delegates its completed arm to `isMeetingOver`
+ * (#393) rather than re-deriving locked-or-passed, so chrome phase cannot
+ * desync from the agenda freeze. Same club-local day granularity and
+ * injectable `now` as every helper above; a passed-but-never-completed
+ * meeting is "completed" (recording what happened is the page's job there),
+ * while `resolveMeetingViewer` still lets an admin edit it until they press
+ * Complete — weight and capability are deliberately separate axes.
+ */
+export function meetingPhase(input: {
+	status: string;
+	scheduledAt: Date | string;
+	timezone: string;
+	now?: Date;
+}): MeetingPhase {
+	const now = input.now ?? new Date();
+	if (isMeetingOver({ ...input, now })) return "completed";
+	if (meetingDateReached(input.scheduledAt, input.timezone, now))
+		return "today";
+	return "upcoming";
+}
+
 /**
  * A locked meeting's viewer (#150): keep the member identity but deny every
  * mutation capability, so the shared `<MeetingAgenda>` renders read-only. Used

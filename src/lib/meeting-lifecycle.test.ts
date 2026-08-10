@@ -5,6 +5,7 @@ import {
 	lockedViewer,
 	meetingDatePassed,
 	meetingDateReached,
+	meetingPhase,
 	resolveMeetingViewer,
 } from "./meeting-lifecycle";
 import { meetingViewer } from "./meeting-viewer";
@@ -249,5 +250,118 @@ describe("resolveMeetingViewer", () => {
 			isSignedIn: false,
 		});
 		expect(v.canClaim).toBe(false);
+	});
+});
+
+describe("meetingPhase (#541 D1)", () => {
+	// HCS shape: 2026-08-11T03:00:00Z is Mon Aug 10, 8:00 PM in Los Angeles —
+	// the UTC date is one day AHEAD of the club-local date. Every case below
+	// must resolve phase in CLUB time, never UTC.
+	const scheduledAt = "2026-08-11T03:00:00.000Z";
+	const timezone = "America/Los_Angeles";
+
+	it("is 'upcoming' the club-local day before", () => {
+		expect(
+			meetingPhase({
+				status: "scheduled",
+				scheduledAt,
+				timezone,
+				now: new Date("2026-08-09T20:00:00.000Z"), // Sun Aug 9, 1pm PT
+			}),
+		).toBe("upcoming");
+	});
+
+	it("is 'today' on the club-local meeting day", () => {
+		expect(
+			meetingPhase({
+				status: "scheduled",
+				scheduledAt,
+				timezone,
+				now: new Date("2026-08-10T16:00:00.000Z"), // Mon Aug 10, 9am PT
+			}),
+		).toBe("today");
+	});
+
+	it("is 'today' even when the UTC calendar already flipped to the next day", () => {
+		// Mon Aug 10, 6pm PT == Tue Aug 11, 01:00 UTC. This is the only fixture
+		// that catches a HALF-converted implementation — one that resolves the
+		// meeting's own day in club time but reads `now`'s day in UTC — the
+		// likelier real mistake than a fully-UTC implementation, which would
+		// still call this 'today' too.
+		expect(
+			meetingPhase({
+				status: "scheduled",
+				scheduledAt,
+				timezone,
+				now: new Date("2026-08-11T01:00:00.000Z"),
+			}),
+		).toBe("today");
+	});
+
+	it("is 'completed' the club-local day after, even if nobody pressed Complete", () => {
+		expect(
+			meetingPhase({
+				status: "scheduled",
+				scheduledAt,
+				timezone,
+				now: new Date("2026-08-11T20:00:00.000Z"), // Tue Aug 11, 1pm PT
+			}),
+		).toBe("completed");
+	});
+
+	it("is 'completed' whenever the meeting is locked, regardless of date", () => {
+		expect(
+			meetingPhase({
+				status: "completed",
+				scheduledAt,
+				timezone,
+				now: new Date("2026-08-01T00:00:00.000Z"), // long before the meeting
+			}),
+		).toBe("completed");
+	});
+
+	it("does NOT special-case 'cancelled' — phase stays date-based (review 2A)", () => {
+		// Deliberate: the spec scopes cancelled rendering to the route, and the
+		// phase model must not silently start treating cancelled as completed —
+		// that would flip the toolbar on cancelled-meeting pages.
+		expect(
+			meetingPhase({
+				status: "cancelled",
+				scheduledAt,
+				timezone,
+				now: new Date("2026-08-09T20:00:00.000Z"), // day before, club time
+			}),
+		).toBe("upcoming");
+	});
+
+	it("defaults `now` to the live clock (a long-past meeting reads completed)", () => {
+		expect(
+			meetingPhase({
+				status: "scheduled",
+				scheduledAt: "2020-01-08T04:00:00.000Z",
+				timezone,
+			}),
+		).toBe("completed");
+	});
+
+	it("a passed-but-open meeting is phase 'completed' yet still admin-editable", () => {
+		const input = {
+			status: "scheduled",
+			scheduledAt,
+			timezone,
+			now: new Date("2026-08-11T20:00:00.000Z"),
+		};
+		expect(meetingPhase(input)).toBe("completed");
+		expect(isMeetingOver(input)).toBe(true);
+		expect(
+			resolveMeetingViewer({
+				...input,
+				currentMemberId: "m1",
+				canManage: true,
+				isTmod: false,
+				isGrammarian: false,
+				isSignedIn: true,
+			}).canManage,
+		).toBe(true);
 	});
 });

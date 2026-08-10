@@ -228,6 +228,21 @@ Optional (platform superadmin): `SUPERADMIN_EMAILS` — a comma-separated, case-
   differences were deliberate. A new print route imports the constant. `print-page-reset.guard.test.ts`
   walks `src/routes/` recursively and fails on a route that defines its own `.pgwrap` padding, so the
   next print route is enrolled automatically rather than remembered.
+- **The global text-link rule is UNLAYERED — it beats any layered Tailwind utility.**
+  `src/styles.css` styles bare `a` outside `@layer`, so it wins over the color a component sets
+  on its own anchors and repaints them link-teal. Any component that colors anchors must be
+  added to the exclusion list, currently
+  `a:not([data-slot="button"]):not([data-slot^="dropdown-menu-"])`. It has cost two bugs:
+  `<Button asChild>` made the landing "Sign in" button read teal-on-teal in dark mode, and
+  `<DropdownMenuItem asChild>` split the meeting Print & export menu into link-colored `<Link>`
+  items sitting beside foreground `<button>` items (#541). Exclude by `data-slot` PREFIX when a
+  primitive has several `asChild` slots — naming only `dropdown-menu-item` left the same split
+  reachable through the checkbox/radio/sub-trigger slots. Nothing here can see the cascade —
+  jsdom loads no stylesheet, the print page-count harness inlines only `PRINT_PAGE_CSS`, and
+  typecheck and lint have no view of it — so the gate is a source grep
+  (`export-menu-link-color.guard.test.ts`, comment-blind via `#/test/guard-source`). That guard
+  pins the CURRENT selector only; unlike `print-page-reset.guard.test.ts` it does not enroll the
+  next component for you.
 
 ## Data layer
 

@@ -153,6 +153,12 @@ the nouns in `src/db/schema.ts`.
   meeting is **locked** — read-only, every agenda mutation is rejected server-side and shows a
   "This meeting is locked." banner. Speech-delivered stays date-derived (ADR-0009). Completing a
   meeting also force-closes any open **Digital vote** session (#510). See ADR-0012.
+- **Meeting phase** — a *separate axis* from `status`, and UI-only: `upcoming` / `today` /
+  `completed` (`meetingPhase`, `src/lib/meeting-lifecycle.ts`, #541), at club-local day
+  granularity. It re-weights the meeting view's chrome — which action is primary — and never
+  grants or removes a capability. The overlap is deliberate but confusing: a meeting whose day
+  has passed that nobody pressed **Complete** on is phase `completed` while its status is still
+  `scheduled`, unlocked, and an admin may still edit it. Phase `completed` ≠ locked.
 - **Role definition** — a club's template for a fillable role (`role_definitions`), e.g.
   Toastmaster of the Day (TMOD), Speaker, Evaluator, Table Topics Master, General Evaluator
   (GE), Timer, Ah-Counter, Grammarian, Vote Counter. Carries `default_count`, `sort_order`, and

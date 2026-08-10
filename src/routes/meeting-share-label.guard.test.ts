@@ -15,11 +15,37 @@ import { readSource } from "#/test/guard-source";
 
 const ROUTES = dirname(fileURLToPath(import.meta.url));
 
+// #541 moved the share chip OUT of the route and into `MeetingToolbar`, which
+// stranded this guard: it kept reading the route, where the chip no longer is,
+// and passed vacuously. The plan even cited it staying green as evidence the
+// single label survived — it stayed green because its subject had left the
+// file. Both files are read now, so re-introducing the override in EITHER place
+// turns it red (red-team review).
+const SUBJECTS = [
+	resolve(ROUTES, "club.$clubId.meeting.$meetingId.tsx"),
+	resolve(ROUTES, "../components/club/meeting-toolbar.tsx"),
+];
+
 describe("meeting share chip label (#542)", () => {
-	it("has no audience-dependent 'Copy member link' override left in the meeting route", () => {
-		const src = readSource(
-			resolve(ROUTES, "club.$clubId.meeting.$meetingId.tsx"),
+	it.each(
+		SUBJECTS,
+	)("has no audience-dependent 'Copy member link' override in %s", (subject) => {
+		expect(readSource(subject)).not.toContain("Copy member link");
+	});
+
+	// Vacuity check: an "offenders must be absent" guard passes just as happily
+	// when its subject stops rendering the thing at all — which is exactly how
+	// this guard died the first time. Pin that the chip is still HERE, so the
+	// next move strands it loudly instead of silently.
+	it("the share chip still renders where this guard is looking", () => {
+		const rendered = SUBJECTS.filter((s) =>
+			readSource(s).includes("<ShareLinkButton"),
 		);
-		expect(src).not.toContain("Copy member link");
+		expect(
+			rendered.length,
+			"no file this guard reads renders <ShareLinkButton> any more — the chip " +
+				"moved again and this guard is protecting nothing. Point it at the " +
+				"new home rather than deleting it.",
+		).toBeGreaterThanOrEqual(1);
 	});
 });

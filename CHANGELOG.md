@@ -2,6 +2,27 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.11.0.0] - 2026-08-10
+
+### Changed
+
+- **The meeting page now leads with the one thing you came to do.** It used to open with a row of eight equally-shouty buttons plus a full-width "I can't make this one" bar, and you had to read all of them every visit. Now there is a single emphasized action that follows the meeting through its life — **Present** on the day, **Minutes** once it is over (officers) — next to a share button and one **Print & export** menu. Nothing was taken away: the agenda print-out, present mode, this meeting's role sheets, the club's role sheets, the Word of the Day poster and the PowerPoint export all live in that menu, one tap in.
+- **Everything about you is one line.** Who you are, whether you can make it, and — after the meeting — whether you were there, all read left to right in a single row instead of being scattered through the page.
+- **Guests are not shown controls they cannot use.** The availability button used to appear before the page knew who you were, so a first-time visitor was invited to decline a meeting they had never signed up for. It now appears once you have identified yourself, which the sign-up flow does for you.
+
+### Fixed
+
+- **Two buttons no longer compete to be "the" button.** On meeting day an officer saw "Present" and "Complete meeting" in identical filled styling, and anyone who had marked themselves unavailable got a third. The emphasized action is now the one that matches the phase; the rest step back.
+- **Jumping to the minutes lands on the minutes.** The Minutes shortcut scrolled to a point 9px too high, tucking the top of the card under the sticky header — visible when a superadmin is acting on a club's behalf, where the header is taller.
+- **A failed minutes load says so instead of disappearing.** If the minutes could not be fetched, the whole card — attendance, awards, Table Topics — silently vanished, most consequentially for an officer on meeting night. It now shows a short "couldn't load, refresh to try again" line, and the Minutes shortcut still has somewhere to land.
+- **The export menu reads as one menu.** Half its entries rendered in link-teal and half in the normal text colour, so two neighbouring items that do the same kind of thing looked like different kinds of thing.
+- **Building a PowerPoint twice at once is no longer possible.** The menu closes when you pick an export, so clicking again started a second build over the top of the first.
+- Officers keep every control they had — add a role, complete, reopen, and preview-as-member — and the in-progress state of the lifecycle buttons is now announced to screen readers rather than shown only as a spinner.
+
+### Removed
+
+- The eight-button action row and the floating availability bar on the meeting page, replaced by the toolbar and personal strip above.
+
 ## [1.10.3.1] - 2026-08-10
 
 ### Changed
