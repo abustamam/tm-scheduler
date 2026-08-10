@@ -6,7 +6,7 @@
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test \
  *     bunx vitest run src/server/members-selfadd.integration.test.ts
  */
-import { eq } from "drizzle-orm";
+import { count, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { members, people } from "#/db/schema";
 import {
@@ -105,5 +105,28 @@ describe.skipIf(!hasTestDb)("public self-add throttle (#326)", () => {
 			name: "Fresh Club",
 		});
 		expect(res.id).toBeTruthy();
+	});
+
+	// The case a sequential loop cannot see. #326 originally counted OUTSIDE any
+	// transaction, so every concurrent request read the same pre-insert total and
+	// they all passed — the cap above would stay green while the cap itself did
+	// nothing. Two sibling caps in this repo were proved broken exactly this way
+	// (the voting guest cap let 200 concurrent calls clear 60; the guest book let
+	// 33 clear 30), which is why this one is asserted rather than trusted.
+	it("holds under a CONCURRENT burst, not just a sequential loop", async () => {
+		const burst = SELF_ADD_MAX_PER_WINDOW * 3;
+		const results = await Promise.allSettled(
+			Array.from({ length: burst }, (_, i) =>
+				applySelfAdd({ clubId: club.clubId, name: `Burst ${i}` }),
+			),
+		);
+		const accepted = results.filter((r) => r.status === "fulfilled").length;
+		const [row] = await testDb
+			.select({ n: count() })
+			.from(members)
+			.where(eq(members.clubId, club.clubId));
+		expect(accepted).toBeLessThanOrEqual(SELF_ADD_MAX_PER_WINDOW);
+		// The seeded club starts with its own members, so bound the DELTA.
+		expect(row.n).toBeLessThanOrEqual(SELF_ADD_MAX_PER_WINDOW + 5);
 	});
 });

@@ -183,6 +183,30 @@ async function loadClubTimeZone(clubId: string): Promise<string> {
  * comparison. See `#/lib/guest-book-window` for why the date-key version was
  * wrong in both directions.
  */
+// Public guest-book throttle. `submitGuestBook` is a session-less public write
+// (the club link is the credential, #239), and since v1.9.0.0 it is linked from
+// the public club page rather than only appearing on a printed QR — so the
+// surface is now guessable as well as unauthenticated. Uncapped it could mint
+// `guests` rows without limit, and DURING a meeting each new guest also becomes
+// a `meeting_attendance` row with `status: "present"` that reaches the official
+// minutes and the minutes email.
+//
+// Capping NEW guests therefore caps fabricated attendance too: attendance is
+// unique per (meeting, guest), so one guest can only ever produce one row.
+//
+// Why 30 rather than the 15 `applySelfAdd` uses for members: a member self-add
+// is a rare individual event, while guests arrive in BATCHES — an open house is
+// exactly when a club most wants the form working and most wants to impress
+// visitors. 30 new guests in one club in one hour clears any real meeting and
+// still bounds abuse to a number an officer can delete by hand.
+//
+// A RETURNING guest (matched by email or phone) does not consume the cap: only
+// the create path counts, so regulars are never throttled.
+export const GUEST_BOOK_WINDOW_MS = 60 * 60 * 1000; // 1h
+export const GUEST_BOOK_MAX_NEW_PER_WINDOW = 30;
+export const GUEST_BOOK_THROTTLED_MESSAGE =
+	"Too many guests have just signed in for this club — please ask an officer to add you.";
+
 export async function resolveCurrentMeeting(
 	clubId: string,
 ): Promise<{ meetingId: string; atMeeting: boolean } | null> {
@@ -298,6 +322,27 @@ export async function captureGuestVisit(
 				})
 				.where(eq(guests.id, guestId));
 		} else {
+			// Throttle the CREATE path only. Both statements run inside this
+			// transaction, behind a lock on the club row — a count taken OUTSIDE
+			// the transaction is not a cap at all: every concurrent request reads
+			// the same pre-insert total and they all pass. That exact bypass was
+			// proved on the voting guest cap (#510), where 200 concurrent calls
+			// cleared a limit of 60. `FOR UPDATE` serialises signups per club, and
+			// under READ COMMITTED the COUNT below takes a fresh snapshot once the
+			// lock is granted, so it sees the rows the requests ahead committed.
+			await tx.execute(
+				sql`SELECT id FROM clubs WHERE id = ${input.clubId} FOR UPDATE`,
+			);
+			const since = new Date(Date.now() - GUEST_BOOK_WINDOW_MS);
+			const [recent] = await tx
+				.select({ n: count() })
+				.from(guests)
+				.where(
+					and(eq(guests.clubId, input.clubId), gte(guests.createdAt, since)),
+				);
+			if ((recent?.n ?? 0) >= GUEST_BOOK_MAX_NEW_PER_WINDOW) {
+				throw new Error(GUEST_BOOK_THROTTLED_MESSAGE);
+			}
 			const [row] = await tx
 				.insert(guests)
 				.values({ clubId: input.clubId, name, email, phone, stage: "prospect" })
