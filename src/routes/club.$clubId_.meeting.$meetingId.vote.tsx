@@ -9,6 +9,7 @@ import { PublicFooter } from "#/components/public-footer";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { resolveClubOrRedirect } from "#/lib/club-route";
+import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import { readStoredMember } from "#/lib/member-identity";
 import { getPublicMeetingByKey } from "#/server/meetings";
 import { joinBallot } from "#/server/voting";
@@ -20,8 +21,17 @@ import { joinBallot } from "#/server/voting";
 export const Route = createFileRoute("/club/$clubId_/meeting/$meetingId/vote")({
 	loader: async ({ params, location }) => {
 		const club = await resolveClubOrRedirect(params.clubId, location);
+		// An unknown meeting key is a 404, not a 500: `getPublicMeetingByKey`
+		// signals it by throwing, and without this the visitor gets the error
+		// boundary. Same translation `present` and `word` already do — and it
+		// matters more here, because this URL is the one printed on a QR code
+		// and handed to a room full of people, so a mistyped or stale key is
+		// the expected case rather than the exotic one.
 		const detail = await getPublicMeetingByKey({
 			data: { clubId: club.id, key: params.meetingId },
+		}).catch((err) => {
+			if (isMeetingNotFoundError(err)) throw notFound();
+			throw err;
 		});
 		if (detail.meeting.clubId !== club.id) throw notFound();
 		return {
