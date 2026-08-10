@@ -2,6 +2,12 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.10.3.1] - 2026-08-10
+
+### Changed
+
+- **Nothing user-facing.** The check that counts how many sheets each printed page produces was timing out intermittently on CI and passing on re-run, because the first page measured absorbed the browser's startup cost. The browser is now started once up front. This gate is the only thing in the project that can see a printing regression, so a red light nobody trusts is worse than no light at all.
+
 ## [1.10.3.0] - 2026-08-10
 
 ### Fixed

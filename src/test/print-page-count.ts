@@ -112,6 +112,69 @@ ${css}
 }
 
 /**
+ * Whether the one-off Chrome warm-up below has already run this process.
+ * Module-level so every consumer of `printedPageCount` gets it without having
+ * to remember a `beforeAll`.
+ */
+let warmed = false;
+
+/**
+ * Pay Chrome's cold start ONCE, on a trivial document, outside any measured
+ * call's budget.
+ *
+ * Why this exists. The first surface measured absorbs Chrome's first-run cost —
+ * profile creation, font config, sandbox setup — which on a CI runner is ~7s,
+ * against ~880ms for every surface after it. With `printedPageCount`'s 10s
+ * ceiling that left ~30% headroom, and a slow runner ate it: `agenda · grid`
+ * failed with `spawnSync google-chrome ETIMEDOUT` on two of three consecutive
+ * PRs (#550 at ~10.0s, #552 at 10117ms), passing unchanged on re-run both
+ * times. The cost of that is not the re-runs, it is that a red gate people
+ * expect to be spurious stops being read — and this is the ONLY gate in the
+ * repo that can see a print regression at all.
+ *
+ * Deliberately not fixed by raising the ceiling: `execFileSync` is synchronous,
+ * so vitest's own `testTimeout` cannot fire until Chrome returns, and a larger
+ * value means a genuinely hung browser blocks the worker past the point vitest
+ * would have reported — the failure would then name the wrong cause. See the
+ * comment on the `timeout` option below.
+ *
+ * Best-effort by design: a generous timeout of its own, and any failure is
+ * swallowed. If the warm-up cannot run, the measured call still runs and still
+ * reports the real result — this only ever moves cost, never hides an outcome.
+ */
+function warmChrome(chrome: string): void {
+	if (warmed) return;
+	warmed = true;
+	const dir = mkdtempSync(join(tmpdir(), "print-warmup-"));
+	try {
+		const htmlPath = join(dir, "warm.html");
+		writeFileSync(htmlPath, "<!doctype html><html><body>warm</body></html>");
+		execFileSync(
+			chrome,
+			[
+				"--headless",
+				"--disable-gpu",
+				"--no-sandbox",
+				"--no-pdf-header-footer",
+				`--user-data-dir=${dir}`,
+				"--disable-extensions",
+				"--host-resolver-rules=MAP * ~NOTFOUND",
+				`--print-to-pdf=${join(dir, "warm.pdf")}`,
+				`file://${htmlPath}`,
+			],
+			// Generous: this is the call that pays the first-run cost, and it is
+			// allowed to be slow precisely so the measured ones are not.
+			{ stdio: "pipe", timeout: 60_000 },
+		);
+	} catch {
+		// Swallowed on purpose — see the doc comment. A failed warm-up must never
+		// turn into a failed page-count assertion.
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+}
+
+/**
  * Render `html` through headless Chrome and return how many sheets it prints.
  *
  * Synchronous on purpose. Each call costs roughly a second, the suite makes one
@@ -126,6 +189,7 @@ export function printedPageCount(html: string): number {
 				CHROME_BINARIES.join(", "),
 		);
 	}
+	warmChrome(chrome);
 	const dir = mkdtempSync(join(tmpdir(), "print-page-count-"));
 	try {
 		const htmlPath = join(dir, "page.html");
