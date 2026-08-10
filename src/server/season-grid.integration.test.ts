@@ -10,6 +10,7 @@ import {
 	meetingOutreach,
 	meetings,
 	memberAvailability,
+	members,
 	roleDefinitions,
 	roleSlots,
 } from "#/db/schema";
@@ -171,6 +172,24 @@ describe.skipIf(!hasTestDb)("loadSeasonGrid", () => {
 		expect(member?.email).toBe(`member-${seed.memberUserId}@test.example`);
 		expect(member).toHaveProperty("phone");
 		expect(member?.phone).toBeNull();
+	});
+
+	it("coalesces a pre-#397 national number to E.164 on the contact axis", async () => {
+		const { loadSeasonGrid } = await import("#/server/season-grid-logic");
+		// A row as it was stored BEFORE normalize-on-write (#295/#397): no country
+		// code. The club has no `default_country_code`, so `+1` applies.
+		await testDb
+			.update(members)
+			.set({ phone: "(415) 555-2671" })
+			.where(eq(members.id, seed.memberId));
+
+		const grid = await loadSeasonGrid({
+			clubId: seed.clubId,
+			count: 8,
+			includeContact: true,
+		});
+		const member = grid.members.find((m) => m.id === seed.memberId);
+		expect(member?.phone).toBe("+14155552671");
 	});
 
 	it("includeContact omitted (default) leaves contact off the member axis", async () => {

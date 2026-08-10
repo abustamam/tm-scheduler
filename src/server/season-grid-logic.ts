@@ -13,6 +13,8 @@ import {
 } from "#/db/schema";
 import { buildRoleCounts, buildShortCodes, slotLabel } from "#/lib/agenda";
 import { urlKeysForMeetings } from "#/lib/meeting-url";
+import { toE164 } from "#/lib/phone";
+import { loadClubDefaultCountryCode } from "./clubs-logic";
 
 export type SeasonGridCount = 4 | 8 | "all";
 export type SlotStatus = (typeof slotStatusEnum.enumValues)[number];
@@ -266,11 +268,24 @@ export async function loadSeasonGrid(input: {
 		.from(members)
 		.where(eq(members.clubId, input.clubId))
 		.orderBy(asc(members.name));
+	// Coalesce phone to E.164 with the club default country code (#295) so the
+	// rendered WhatsApp link is a valid full number even for rows stored before
+	// normalize-on-write. Mirrors `meeting-contacts-logic.ts`. Loaded ONLY on the
+	// contact path — the public grid runs this same function and must not pay for
+	// a query whose result it is forbidden to use.
+	const cc = input.includeContact
+		? await loadClubDefaultCountryCode(input.clubId)
+		: null;
 	const memberRows: SeasonGridMember[] = allMemberRows
 		.filter((m) => m.status !== "inactive")
 		.map((m) =>
 			input.includeContact
-				? { id: m.id, name: m.name, email: m.email, phone: m.phone }
+				? {
+						id: m.id,
+						name: m.name,
+						email: m.email,
+						phone: toE164(m.phone, cc),
+					}
 				: { id: m.id, name: m.name },
 		);
 	const memberNames: SeasonGridMember[] = allMemberRows.map((m) => ({
