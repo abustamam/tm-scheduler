@@ -920,7 +920,7 @@ and replace the phone cell (lines 692-703):
 														fallback={
 															<span className="text-muted-foreground">—</span>
 														}
-														className="text-primary hover:underline"
+														className="text-primary"
 													/>
 												</td>
 ```
@@ -959,7 +959,7 @@ In `src/routes/_authed/members.$id.tsx`, replace lines 211-219:
 								<WhatsAppPhoneLink
 									phone={member.phone}
 									name={member.name}
-									className="hover:text-[var(--sea-ink)] hover:underline"
+									className="hover:text-[var(--sea-ink)]"
 								/>
 							) : null}
 ```
@@ -1023,7 +1023,6 @@ and replace the contact block (lines 314-318) with:
 							<WhatsAppPhoneLink
 								phone={guest.phone}
 								name={guest.name}
-								className="hover:underline"
 							/>
 							{guest.phone && guest.email ? <span>·</span> : null}
 							{guest.email ? (
@@ -1123,7 +1122,6 @@ After the Pathway cell (lines 390-393):
 									phone={m.phone}
 									name={m.name}
 									fallback="—"
-									className="hover:underline"
 								/>
 							</div>
 ```
