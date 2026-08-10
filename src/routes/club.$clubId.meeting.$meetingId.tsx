@@ -838,10 +838,15 @@ function MeetingView() {
 				{/* Preview-as-member survives as a SIBLING of the toolbar (review
 				    decision): capability preserved, not folded into the toolbar's
 				    props — PR 2 reshapes the officer surface and will revisit.
-				    Gated on the RAW canManage, not effectiveCanManage: this toggle
-				    is what TURNS preview on, so gating it on the previewed value
-				    would make it vanish exactly when it is usable. */}
-				{canManage && !previewAsMember ? (
+				    Gated on `effectiveCanManage`, the same flag the toolbar gets, so
+				    the toggle hides itself once preview is on — the way back out is
+				    the "Exit preview" control in the banner above (line ~726), not
+				    this button. This used to spell the condition out as
+				    `canManage && !previewAsMember` under a comment claiming it was
+				    deliberately NOT effectiveCanManage; that is the verbatim
+				    definition of effectiveCanManage (line 374), so the comment
+				    described a distinction the code never made. */}
+				{effectiveCanManage ? (
 					<div className="flex flex-wrap items-center gap-2 pt-1">
 						<Button
 							size="sm"

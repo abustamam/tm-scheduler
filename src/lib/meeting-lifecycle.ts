@@ -84,9 +84,12 @@ export function isMeetingOver(input: {
 export type MeetingPhase = "upcoming" | "today" | "completed";
 
 /**
- * The meeting's UI phase (#541 D1). Phases re-weight the chrome (which action
- * is primary, how loud Confirm is, whether Minutes starts expanded) — they
- * NEVER hide a capability. Delegates its completed arm to `isMeetingOver`
+ * The meeting's UI phase (#541 D1). Phases re-weight the chrome — they NEVER
+ * hide a capability. In PR 1 the only weighting wired up is WHICH ACTION IS
+ * PRIMARY (`MeetingToolbar`), plus the Minutes anchor gate. The spec's other
+ * two phase effects are NOT implemented yet and there is no code to find:
+ * Confirm loudness / `CONFIRM_WINDOW_HOURS` (D5) lands in PR 2, and
+ * minutes/outreach phase gating (D6) in PR 3. Delegates its completed arm to `isMeetingOver`
  * (#393) rather than re-deriving locked-or-passed, so chrome phase cannot
  * desync from the agenda freeze. Same club-local day granularity and
  * injectable `now` as every helper above; a passed-but-never-completed

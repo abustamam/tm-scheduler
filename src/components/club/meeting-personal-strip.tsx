@@ -13,8 +13,10 @@ import type { StoredMember } from "#/lib/member-identity";
  *
  * The attendance statement below reads the pre-meeting AVAILABILITY
  * declaration (`myUnavailable`), NOT `meeting_attendance` rows — relocated
- * verbatim from the route (#541 D3). Whether that derivation should instead
- * be backed by real attendance records is tracked separately (#541 follow-up).
+ * verbatim from the route (#541 D3). So it says "You attended this meeting"
+ * to anyone who never declared themselves unavailable, whether or not they
+ * turned up. Pre-existing, deliberately not fixed here (the fix is in the
+ * loader, not the chrome), and tracked as issue #548.
  */
 export function MeetingPersonalStrip({
 	source,
@@ -53,7 +55,16 @@ export function MeetingPersonalStrip({
 			) : (
 				<Button
 					type="button"
-					variant={myUnavailable ? "default" : "outline"}
+					// `secondary`, NOT `default`, for the marked-unavailable state. This
+					// strip renders directly above the toolbar, so a `default` chip wore
+					// the same `bg-primary` fill as the phase primary and put TWO filled
+					// controls in the header on meeting day — the exact collision the
+					// /qa pass had just fixed by outlining `Complete meeting`, recreated
+					// across the component boundary. `secondary` still reads as an
+					// engaged toggle against the `outline` not-marked state without
+					// competing for the one emphasis D2 reserves for the phase primary.
+					// Neither component's own test can see this: each renders alone.
+					variant={myUnavailable ? "secondary" : "outline"}
 					size="sm"
 					onClick={onToggleAvailability}
 					disabled={!canToggleAvailability || availBusy}

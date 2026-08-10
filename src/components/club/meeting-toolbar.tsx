@@ -131,6 +131,12 @@ export function MeetingToolbar({
 					variant="outline"
 					onClick={onReopen}
 					disabled={lifecycleBusy}
+					// The spinner below is a childless lucide icon, which lucide-react
+					// marks aria-hidden — so without this a screen-reader user gets NO
+					// signal the mutation is in flight, and `disabled` has already
+					// pulled the button out of the focus order. Matches the
+					// availability chip in MeetingPersonalStrip, which already does it.
+					aria-busy={lifecycleBusy}
 				>
 					{lifecycleBusy ? (
 						<Loader2 className="size-4 animate-spin" />
@@ -152,6 +158,7 @@ export function MeetingToolbar({
 					variant="outline"
 					onClick={onComplete}
 					disabled={lifecycleBusy}
+					aria-busy={lifecycleBusy}
 				>
 					{lifecycleBusy ? (
 						<Loader2 className="size-4 animate-spin" />
