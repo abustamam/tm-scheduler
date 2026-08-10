@@ -916,15 +916,18 @@ function MeetingView() {
 			{minutes.visible && minutes.data ? (
 				// Anchor target for the toolbar's completed-phase primary (#541 D2).
 				// The wrapper exists because <MeetingMinutes> renders a <Card> and
-				// takes no id/className. `scroll-mt-24` (not 20) clears the sticky
-				// header at its TALLEST — it grows under the impersonation banner.
+				// takes no id/className. `scroll-mt-28` (112px) clears the sticky header
+				// at its TALLEST: 69px normally, but 105px while impersonating, because
+				// `app-shell` stacks the 36px banner (h-9) above it and moves the header
+				// to `top-9`. Measured in a browser, not derived — `scroll-mt-24` (96px)
+				// was 9px short and tucked the card's top edge under the header.
 				// NOT co-gated with the primary: the toolbar's CTA is gated on
 				// `showsMinutesPrimary`, but the loader degrades ANY getMinutes
 				// failure to EMPTY_MINUTES (visible=false) regardless of canManage —
 				// so this branch alone left a completed-phase admin with a Minutes
 				// primary and no `id` to scroll to on a transient load failure. The
 				// degrade branch below keeps the anchor real in that case.
-				<section id={MINUTES_ANCHOR_ID} className="scroll-mt-24">
+				<section id={MINUTES_ANCHOR_ID} className="scroll-mt-28">
 					<MeetingMinutes
 						meetingId={meeting.id}
 						minutes={minutes.data}
@@ -952,7 +955,7 @@ function MeetingView() {
 				   and say why the section is empty instead of letting the CTA click do
 				   nothing (spec review of aa106b3). Doubles as the first visible signal
 				   of a minutes load failure, which was previously swallowed silently. */
-				<section id={MINUTES_ANCHOR_ID} className="scroll-mt-24">
+				<section id={MINUTES_ANCHOR_ID} className="scroll-mt-28">
 					<div className="flex items-center gap-2 rounded-xl border border-border bg-muted/60 px-4 py-3 text-sm font-medium text-muted-foreground">
 						<ClipboardList className="size-4 shrink-0" aria-hidden />
 						Minutes couldn't load — refresh to try again.

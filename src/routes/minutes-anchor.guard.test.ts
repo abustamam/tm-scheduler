@@ -43,15 +43,25 @@ describe("the Minutes jump anchor (#541 D2)", () => {
 		).toContain("id={MINUTES_ANCHOR_ID}");
 	});
 
-	it("the anchored section reserves room for the sticky header", () => {
+	it("the anchored section reserves room for the sticky header at its TALLEST", () => {
 		// Without a scroll margin the sticky header lands ON the section heading
 		// after the jump. jsdom performs no layout, so nothing else can see this.
+		//
+		// Pinned to the EXACT utility, not the `scroll-mt-` prefix: the prefix
+		// passes for every value including the one that shipped the bug. /qa
+		// measured the real geometry in a browser on 2026-08-10 — the header is
+		// 69px normally but 105px while impersonating (app-shell stacks a 36px
+		// h-9 banner above it and moves the header to `top-9`), and the original
+		// `scroll-mt-24` (96px) landed 9px short, tucking the card's top edge
+		// under the header. `scroll-mt-28` is 112px, clearing 105px by 7px.
+		// Raising the banner's height or the header's padding invalidates this
+		// number — re-measure rather than bumping it blind.
 		expect(
 			readSource(ROUTE),
-			"the anchored minutes section needs a `scroll-mt-*` utility so the " +
-				"sticky header (taller under the impersonation banner) does not cover " +
-				"it once the primary scrolls there.",
-		).toContain("scroll-mt-");
+			"the anchored minutes section needs `scroll-mt-28` (112px) to clear " +
+				"the 105px impersonation-tall sticky header; `scroll-mt-24` (96px) " +
+				"is 9px short and any smaller utility silently re-opens that gap.",
+		).toContain("scroll-mt-28");
 	});
 
 	it("the toolbar links to the constant, not a raw '#minutes' string", () => {
