@@ -1,6 +1,7 @@
 # WhatsApp click-to-message on every rendered phone — design
 
 **Status:** approved (brainstormed 2026-08-10)
+**Line citations verified against:** `b5709ff` (v1.11.0.0) — re-check them if this spec is picked up after main has moved.
 **Builds on:** #37 (tap-to-nudge), #295 / #397 (E.164 normalization + club default country code), #485 (`wa.me` dead-ends on desktop).
 
 ## Problem
@@ -44,7 +45,7 @@ Accepted cost: on mobile, long-pressing the link offers "copy link address" (the
 
 Considered and rejected: sending each club's `defaultCountryCode` to the client and normalizing at render. It touches the *same* read paths (so it saves no plumbing) while creating a second copy of a normalization decision that is also the **dedup key for guests and people** (#397). Two implementations of that rule drifting is a real hazard.
 
-`src/server/meeting-contacts-logic.ts:70` and `:105` already do it the right way — `toE164(r.phone, cc)` with `loadClubDefaultCountryCode`. This design extends that existing pattern to the read paths that never got it, rather than inventing a second one.
+`src/server/meeting-contacts-logic.ts:70`, `:104` and `:123` already do it the right way — `toE164(r.phone, cc)` with `loadClubDefaultCountryCode`. This design extends that existing pattern to the read paths that never got it, rather than inventing a second one.
 
 Also rejected: a client-side `+1` fallback. It produces a *wrong* link for a club that set another country code, and a working chat with a stranger's number is worse than no link.
 
@@ -140,7 +141,7 @@ Coverage is assessed against the diff. The repo's documented traps that apply he
 - **A component tested through its props cannot see a wrong prop** (#319). All four call sites *compute* the prop they pass. `SeasonGrid` takes its data as props, so it gets a real component test with a raw-phone fixture asserting the rendered `href`. The two routes and the guest card are not cheaply renderable, so they get a source guard instead.
 - **A source guard that no `` href={`tel: `` survives** under `src/routes/` and `src/components/`. This is an "offenders must be EMPTY" guard, so it reads source **raw**, not comment-blind — the comment-blind `readSource` read is for "this pattern must BE present" guards, where a comment naming the pattern would falsely pass.
 - **Golden-output test on the extraction.** `buildNudge`'s WhatsApp URL, mobile and desktop, pinned as exact strings so moving `whatsappUrlFor` into `lib/whatsapp.ts` cannot silently change what #485 fixed.
-- **Integration.** The existing season-grid PII assertion (`season-grid.integration.test.ts:242`) stays green untouched; new assertions that a raw stored phone comes back E.164 from each of the four read paths.
+- **Integration.** The existing season-grid PII assertions (`season-grid.integration.test.ts:182` for `includeContact: false`, `:242` for the public grid) stay green untouched; new assertions that a raw stored phone comes back E.164 from each of the four read paths.
 
   Note on the access test: `requireClubViewAccess` **throws** rather than returning a reduced payload, so the right assertion for `listClubMembers`' new field is that the call *rejects* for a non-member — not that the response lacks `phone`. An assertion written the second way would pass for the wrong reason and keep passing if the guard were removed.
 
