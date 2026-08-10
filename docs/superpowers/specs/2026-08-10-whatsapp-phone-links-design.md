@@ -79,7 +79,7 @@ whatsappHref(
 
 `nudge.ts`'s private `waDigits` and `whatsappUrlFor` are **deleted** and their call sites re-pointed here, so the #485 rule has one copy. This is the only part of the change that touches working code, so it is pinned by a golden-output test (below).
 
-### `src/components/contact/whatsapp-phone-link.tsx`
+### `src/components/whatsapp-phone-link.tsx`
 
 ```tsx
 <WhatsAppPhoneLink phone={contact.phone} name={row.name} fallback="—" />
