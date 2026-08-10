@@ -15,7 +15,11 @@ import {
 	isMeetingLocked,
 	MEETING_LOCKED_MESSAGE,
 } from "#/lib/meeting-lifecycle";
-import { findGrammarianSlot, findTmodSlot } from "#/lib/meeting-roles";
+import {
+	findGrammarianSlot,
+	findTmodSlot,
+	findVoteCounterSlot,
+} from "#/lib/meeting-roles";
 import { markImpersonatedWrite } from "./impersonation-actor";
 import { getActiveImpersonation } from "./impersonation-logic";
 
@@ -113,6 +117,7 @@ async function resolveAdminGrant(
 async function loadRoleSlotAssignees(meetingId: string): Promise<{
 	tmodMemberId: string | null;
 	grammarianMemberId: string | null;
+	voteCounterMemberId: string | null;
 }> {
 	const slotRows = await db
 		.select({
@@ -137,6 +142,8 @@ async function loadRoleSlotAssignees(meetingId: string): Promise<{
 	return {
 		tmodMemberId: findTmodSlot(slotRows)?.assignedMemberId ?? null,
 		grammarianMemberId: findGrammarianSlot(slotRows)?.assignedMemberId ?? null,
+		voteCounterMemberId:
+			findVoteCounterSlot(slotRows)?.assignedMemberId ?? null,
 	};
 }
 
@@ -282,5 +289,79 @@ export async function resolveWordOfTheDayAuthz(
 		tmodMemberId,
 		grammarianMemberId,
 		actorMemberId: null,
+	};
+}
+
+export interface VoteCounterAuthz {
+	clubId: string;
+	allowed: boolean;
+	via: "admin" | "vote-counter-self-assert" | null;
+	voteCounterMemberId: string | null;
+	/** The member to credit in `activity_log` (null for an impersonated admin). */
+	actorMemberId: string | null;
+	/** The meeting's status, so the caller can decide about the lock itself. */
+	meetingStatus: string;
+}
+
+/**
+ * Decide whether a caller may operate a meeting's digital votes (#510): open
+ * and close the windows, read the running tally, and confirm the winner.
+ * Allowed for a club `admin` (session), or when the self-asserted `memberId`
+ * holds the meeting's `vote_counter` slot.
+ *
+ * UNLIKE `resolveMeetingAgendaAuthz` and `resolveWordOfTheDayAuthz`, this does
+ * NOT call `assertMeetingNotLocked`, and that is deliberate. Completing a
+ * meeting is what force-closes voting, so a uniform lock check here would (a)
+ * make the tally unreadable on exactly the meetings whose tally matters, and
+ * (b) block the Ballot Counter from confirming a winner afterwards — which
+ * `setAward` explicitly permits, because minutes are written up after the
+ * meeting. Callers that MUTATE the vote window call `assertMeetingNotLocked`
+ * on the returned `meetingStatus` themselves.
+ */
+export async function resolveVoteCounterAuthz(
+	input: MeetingAgendaAuthzInput,
+): Promise<VoteCounterAuthz> {
+	const meeting = await db.query.meetings.findFirst({
+		where: eq(meetings.id, input.meetingId),
+	});
+	if (!meeting) throw new Error("Meeting not found.");
+	const clubId = meeting.clubId;
+	const { voteCounterMemberId } = await loadRoleSlotAssignees(input.meetingId);
+
+	const admin = await resolveAdminGrant(input.sessionUserId, clubId);
+	if (admin.granted) {
+		return {
+			clubId,
+			allowed: true,
+			via: "admin",
+			voteCounterMemberId,
+			actorMemberId: admin.memberId,
+			meetingStatus: meeting.status,
+		};
+	}
+
+	if (
+		input.selfMemberId &&
+		voteCounterMemberId &&
+		input.selfMemberId === voteCounterMemberId
+	) {
+		return {
+			clubId,
+			allowed: true,
+			via: "vote-counter-self-assert",
+			voteCounterMemberId,
+			// Verified against the slot above, so it is safe to credit.
+			actorMemberId: voteCounterMemberId,
+			meetingStatus: meeting.status,
+		};
+	}
+
+	return {
+		clubId,
+		allowed: false,
+		via: null,
+		voteCounterMemberId,
+		actorMemberId: null,
+		meetingStatus: meeting.status,
 	};
 }

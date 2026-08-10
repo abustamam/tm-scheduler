@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
 	cleanup,
 	fireEvent,
@@ -6,12 +7,45 @@ import {
 	screen,
 	within,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ComponentProps } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Slide } from "#/lib/agenda-slides";
 import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
 import { MeetingPresent } from "./meeting-present";
 
+// `MeetingPresent` polls `getVoteParticipation` for the bare-count badge
+// (#510). Stubbed rather than left to hit a real server fn: this suite is
+// about slide navigation and content, not the participation query, and an
+// unmocked call would hang every one of these renders on a network request
+// jsdom cannot make.
+//
+// `getVoteParticipation` itself has to come from `vi.hoisted` (the factory
+// below is hoisted above this file's own imports, same reason
+// `club-switcher.test.tsx` uses the pattern) so the participation-badge tests
+// can point it at their own fixture with `mockResolvedValue`, rather than
+// every test in this file being stuck with one shared canned response.
+const { getVoteParticipation } = vi.hoisted(() => ({
+	getVoteParticipation: vi.fn(),
+}));
+vi.mock("#/server/voting", () => ({ getVoteParticipation }));
+
+/** The default every test gets unless it overrides — zero ballots, no
+ *  attendance marked yet. Reset in `beforeEach` rather than set once, so a
+ *  participation-badge test's override never leaks into the next test. */
+function defaultParticipation() {
+	getVoteParticipation.mockResolvedValue({
+		categories: {
+			best_speaker: { ballotsIn: 0 },
+			best_evaluator: { ballotsIn: 0 },
+			best_table_topics: { ballotsIn: 0 },
+		},
+		presentCount: null,
+	});
+}
+beforeEach(() => defaultParticipation());
+
 const CLUB_NAME = "MCF Toastmasters Club";
+const MEETING_ID = "11111111-1111-4111-8111-111111111111";
 
 const deck: Slide[] = [
 	{
@@ -36,6 +70,7 @@ const deck: Slide[] = [
 		names: ["Jane Doe"],
 		hasTimer: true,
 		caller: { role: "Toastmaster of the Day", name: "Faisal" },
+		ballotUrl: "https://gavelup.test/club/mcf/meeting/2026-06-25/vote",
 	},
 	{
 		kind: "thankYou",
@@ -56,6 +91,26 @@ const longDeck: Slide[] = Array.from({ length: 10 }, (_, n) => ({
 	link: null,
 }));
 
+/** Wraps `MeetingPresent` in the `QueryClientProvider` its participation
+ *  query needs (#510) — absent before this feature, so no render in this
+ *  file had one — and defaults `deck`/`clubName`/`meetingId` to the standard
+ *  fixtures, matching `renderSearch` in `global-search.test.tsx`. */
+function renderPresent(
+	props: Partial<ComponentProps<typeof MeetingPresent>> = {},
+) {
+	const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	return render(
+		<QueryClientProvider client={qc}>
+			<MeetingPresent
+				deck={deck}
+				clubName={CLUB_NAME}
+				meetingId={MEETING_ID}
+				{...props}
+			/>
+		</QueryClientProvider>,
+	);
+}
+
 function clickNext() {
 	fireEvent.click(screen.getByLabelText("Next slide"));
 }
@@ -73,17 +128,17 @@ describe("MeetingPresent", () => {
 	afterEach(() => cleanup());
 
 	it("renders the title slide's club name as the splash headline", () => {
-		render(<MeetingPresent deck={deck} clubName={CLUB_NAME} />);
+		renderPresent();
 		expect(screen.getByText(CLUB_NAME)).toBeTruthy();
 	});
 
 	it("shows a slide position indicator", () => {
-		render(<MeetingPresent deck={deck} clubName={CLUB_NAME} />);
+		renderPresent();
 		expect(screen.getByText("1 / 4")).toBeTruthy();
 	});
 
 	it("shows the section-title header on a content slide, unprefixed by the club name, while the club name still appears in the footer", () => {
-		render(<MeetingPresent deck={deck} clubName={CLUB_NAME} />);
+		renderPresent();
 		clickNext(); // -> wordOfDay
 
 		// Exact match proves the header is just the section title, not
@@ -95,7 +150,7 @@ describe("MeetingPresent", () => {
 	});
 
 	it("credits the Grammarian on the Word of the Day slide (#354)", () => {
-		render(<MeetingPresent deck={deck} clubName={CLUB_NAME} />);
+		renderPresent();
 		clickNext(); // -> wordOfDay
 
 		expect(screen.getByText("Presented by the Grammarian · Mona")).toBeTruthy();
@@ -106,42 +161,123 @@ describe("MeetingPresent", () => {
 	// here is a reminder, not a second presentation — hence no Grammarian credit
 	// and no example, both of which belong to the slide #354 moved up front.
 	it("keeps the Word of the Day on screen through Table Topics (#355)", () => {
-		render(
-			<MeetingPresent
-				deck={[
-					{
-						kind: "tableTopics",
-						master: "Rasheed",
-						timing: "1–2 minutes per speaker",
-						word: "Momentum",
-						definition: "impetus gained by a moving object",
-					},
-				]}
-				clubName={CLUB_NAME}
-			/>,
-		);
+		renderPresent({
+			deck: [
+				{
+					kind: "tableTopics",
+					master: "Rasheed",
+					timing: "1–2 minutes per speaker",
+					word: "Momentum",
+					definition: "impetus gained by a moving object",
+				},
+			],
+		});
 
 		expect(screen.getByText("Word of the Day: “Momentum”")).toBeTruthy();
 		expect(screen.getByText("impetus gained by a moving object")).toBeTruthy();
 	});
 
 	it("shows the Toastmasters non-affiliation disclaimer in the content-slide footer", () => {
-		render(<MeetingPresent deck={deck} clubName={CLUB_NAME} />);
+		renderPresent();
 		clickNext(); // -> wordOfDay (content slide with footer)
 
 		expect(screen.getByText(TOASTMASTERS_DISCLAIMER)).toBeTruthy();
 	});
 
 	it("renders the vote prompt on a vote slide", () => {
-		render(<MeetingPresent deck={deck} clubName={CLUB_NAME} />);
+		renderPresent();
 		clickNext(); // -> wordOfDay
 		clickNext(); // -> voteSpeaker
 
 		expect(screen.getByText("Please Vote for Best Speaker:")).toBeTruthy();
 	});
 
+	// #510 review finding 1. The QR is the feature's entire entry point — the
+	// room has no other way to reach the ballot — and a reviewer proved it had
+	// no regression net at all: disabling BOTH QR renderings (this one and the
+	// printed footer's) left the full 230-file suite green. These assertions,
+	// and their print-surface counterpart in `print-page-count.test.tsx`, close
+	// that gap.
+	it("renders the vote slide's QR inside its white plate, with a scan-to-vote label", () => {
+		const { container } = renderPresent();
+		clickNext(); // -> wordOfDay
+		clickNext(); // -> voteSpeaker
+
+		// The fixture's `ballotUrl` is non-empty from the very first render (no
+		// async origin-effect gap in this deck), so unlike the badge below this
+		// needs no `findBy` wait.
+		const plate = container.querySelector('[data-testid="vote-qr"]');
+		expect(plate).toBeTruthy();
+		expect(plate?.querySelector("svg")).toBeTruthy();
+		expect(screen.getByText("Scan to vote")).toBeTruthy();
+	});
+
+	it("renders no QR plate at all on a non-vote content slide", () => {
+		const { container } = renderPresent();
+		clickNext(); // -> wordOfDay: a content slide, but not a vote slide
+
+		expect(container.querySelector('[data-testid="vote-qr"]')).toBeNull();
+	});
+
+	describe("the participation badge (#510 review finding 1)", () => {
+		it('reads "N votes in" (singular) when attendance has not been marked', async () => {
+			getVoteParticipation.mockResolvedValue({
+				categories: {
+					best_speaker: { ballotsIn: 1 },
+					best_evaluator: { ballotsIn: 0 },
+					best_table_topics: { ballotsIn: 0 },
+				},
+				presentCount: null,
+			});
+			renderPresent();
+			clickNext(); // -> wordOfDay
+			clickNext(); // -> voteSpeaker
+
+			expect(await screen.findByText("1 vote in")).toBeTruthy();
+		});
+
+		it('reads "N votes in" (plural) for zero, never fabricating "0 of 0"', async () => {
+			// `presentCount` stays null until attendance is marked — the server
+			// cannot know who is in the room until someone votes. Zero ballots
+			// with a null `presentCount` must read as "0 votes in", not
+			// "0 of 0 present have voted".
+			getVoteParticipation.mockResolvedValue({
+				categories: {
+					best_speaker: { ballotsIn: 0 },
+					best_evaluator: { ballotsIn: 0 },
+					best_table_topics: { ballotsIn: 0 },
+				},
+				presentCount: null,
+			});
+			renderPresent();
+			clickNext();
+			clickNext();
+
+			expect(await screen.findByText("0 votes in")).toBeTruthy();
+			expect(screen.queryByText(/of 0/)).toBeNull();
+		});
+
+		it('reads "N of M present have voted" once attendance IS marked', async () => {
+			getVoteParticipation.mockResolvedValue({
+				categories: {
+					best_speaker: { ballotsIn: 7 },
+					best_evaluator: { ballotsIn: 0 },
+					best_table_topics: { ballotsIn: 0 },
+				},
+				presentCount: 12,
+			});
+			renderPresent();
+			clickNext();
+			clickNext();
+
+			expect(
+				await screen.findByText("7 of 12 present have voted"),
+			).toBeTruthy();
+		});
+	});
+
 	it("shows Thank You on the closing splash slide", () => {
-		render(<MeetingPresent deck={deck} clubName={CLUB_NAME} />);
+		renderPresent();
 		clickNext(); // -> wordOfDay
 		clickNext(); // -> voteSpeaker
 		clickNext(); // -> thankYou
@@ -154,7 +290,7 @@ describe("MeetingPresent", () => {
 	// projection is unchanged during normal use.
 	describe("slide overview (#360)", () => {
 		it("is hidden until it is invoked", () => {
-			render(<MeetingPresent deck={deck} clubName={CLUB_NAME} />);
+			renderPresent();
 
 			expect(overview()).toBeNull();
 			// Nothing from a later slide is on screen either.
@@ -162,7 +298,7 @@ describe("MeetingPresent", () => {
 		});
 
 		it("opens on `b` and lists every slide by its header", () => {
-			render(<MeetingPresent deck={deck} clubName={CLUB_NAME} />);
+			renderPresent();
 			press("b");
 
 			const panel = overview();
@@ -186,28 +322,26 @@ describe("MeetingPresent", () => {
 		// return that same header, making a fourth. Find-the-vote became counting.
 		it("does not add the evaluator vote to the run of Speech Evaluations (#446)", () => {
 			const evaluators = ["Ana", "Ben", "Cara"];
-			render(
-				<MeetingPresent
-					deck={[
-						...evaluators.map(
-							(evaluator, n): Slide => ({
-								kind: "evaluation",
-								label: `Evaluation ${n + 1}`,
-								evaluator,
-								speaker: "Jane Doe",
-								time: "2–3 min",
-							}),
-						),
-						{
-							kind: "voteEvaluator",
-							names: evaluators,
-							hasTimer: true,
-							caller: { role: "General Evaluator", name: "Faisal" },
-						},
-					]}
-					clubName={CLUB_NAME}
-				/>,
-			);
+			renderPresent({
+				deck: [
+					...evaluators.map(
+						(evaluator, n): Slide => ({
+							kind: "evaluation",
+							label: `Evaluation ${n + 1}`,
+							evaluator,
+							speaker: "Jane Doe",
+							time: "2–3 min",
+						}),
+					),
+					{
+						kind: "voteEvaluator",
+						names: evaluators,
+						hasTimer: true,
+						caller: { role: "General Evaluator", name: "Faisal" },
+						ballotUrl: "https://gavelup.test/club/mcf/meeting/2026-06-25/vote",
+					},
+				],
+			});
 			press("b");
 
 			const items = within(overview() as HTMLElement).getAllByRole("button", {
@@ -222,7 +356,7 @@ describe("MeetingPresent", () => {
 		});
 
 		it("also opens on `o` and from the slide counter", () => {
-			render(<MeetingPresent deck={deck} clubName={CLUB_NAME} />);
+			renderPresent();
 			press("o");
 			expect(overview()).toBeTruthy();
 			press("Escape");
@@ -233,7 +367,7 @@ describe("MeetingPresent", () => {
 		});
 
 		it("jumps straight to a chosen slide and closes", () => {
-			render(<MeetingPresent deck={deck} clubName={CLUB_NAME} />);
+			renderPresent();
 			press("b");
 			fireEvent.click(
 				screen.getByRole("button", { name: "Slide 3: Vote for Best Speaker" }),
@@ -246,9 +380,7 @@ describe("MeetingPresent", () => {
 
 		it("closes on Escape without changing position or exiting present mode", () => {
 			const onExit = vi.fn();
-			render(
-				<MeetingPresent deck={deck} clubName={CLUB_NAME} onExit={onExit} />,
-			);
+			renderPresent({ onExit });
 			clickNext(); // -> wordOfDay
 			press("b");
 			// Move the highlight around; Escape must still discard it.
@@ -264,7 +396,7 @@ describe("MeetingPresent", () => {
 		});
 
 		it("navigates the overview with the arrow keys and commits on Enter", () => {
-			render(<MeetingPresent deck={deck} clubName={CLUB_NAME} />);
+			renderPresent();
 			press("b");
 			press("ArrowRight");
 			press("ArrowRight");
@@ -278,9 +410,7 @@ describe("MeetingPresent", () => {
 
 		it("still exits present mode on Escape when the overview is closed", () => {
 			const onExit = vi.fn();
-			render(
-				<MeetingPresent deck={deck} clubName={CLUB_NAME} onExit={onExit} />,
-			);
+			renderPresent({ onExit });
 			press("Escape");
 
 			expect(onExit).toHaveBeenCalledTimes(1);
@@ -293,7 +423,7 @@ describe("MeetingPresent", () => {
 		// failure #360 exists to eliminate.
 		describe("driven from a presenter remote", () => {
 			it("moves the highlight one slide on PageDown/PageUp, not one row", () => {
-				render(<MeetingPresent deck={longDeck} clubName={CLUB_NAME} />);
+				renderPresent({ deck: longDeck });
 				press("b");
 				press("PageDown");
 				press("PageDown");
@@ -308,7 +438,7 @@ describe("MeetingPresent", () => {
 			});
 
 			it("commits on `b` — the only button the remote has left", () => {
-				render(<MeetingPresent deck={longDeck} clubName={CLUB_NAME} />);
+				renderPresent({ deck: longDeck });
 				press("b");
 				press("PageDown");
 				press("PageDown");
@@ -319,7 +449,7 @@ describe("MeetingPresent", () => {
 			});
 
 			it("is an unchanged close when `b` is pressed without moving the highlight", () => {
-				render(<MeetingPresent deck={deck} clubName={CLUB_NAME} />);
+				renderPresent();
 				clickNext(); // -> slide 2
 				press("b");
 				press("b");
@@ -331,7 +461,7 @@ describe("MeetingPresent", () => {
 			});
 
 			it("keeps Space, PageDown and PageUp off the deck while the overview is open", () => {
-				render(<MeetingPresent deck={deck} clubName={CLUB_NAME} />);
+				renderPresent();
 				press("b");
 				press("PageDown");
 				press("PageUp"); // net zero on the cursor
@@ -347,7 +477,7 @@ describe("MeetingPresent", () => {
 			});
 
 			it("never tells the presenter to press Escape — that drops the projector out of fullscreen", () => {
-				render(<MeetingPresent deck={deck} clubName={CLUB_NAME} />);
+				renderPresent();
 				press("b");
 
 				const panel = overview() as HTMLElement;
@@ -357,7 +487,7 @@ describe("MeetingPresent", () => {
 		});
 
 		it("moves the highlight one whole row at a time on ↑/↓", () => {
-			render(<MeetingPresent deck={longDeck} clubName={CLUB_NAME} />);
+			renderPresent({ deck: longDeck });
 			press("b");
 			press("ArrowDown");
 			press("Enter");
@@ -388,7 +518,7 @@ describe("club logo on the projected splash (#496)", () => {
 	);
 
 	it("renders the logo on the opening splash when the club has one", () => {
-		render(<MeetingPresent deck={withLogo} clubName={CLUB_NAME} />);
+		renderPresent({ deck: withLogo });
 		const img = document.querySelector<HTMLImageElement>(`img[src="${LOGO}"]`);
 		expect(img).not.toBeNull();
 		expect(img?.getAttribute("alt")).toBe("");
@@ -398,19 +528,19 @@ describe("club logo on the projected splash (#496)", () => {
 	// projected onto. A px height here would be a postage stamp on a projector,
 	// which is the whole reason ClubLogo takes a size at all.
 	it("sizes the projected logo in container units, not pixels", () => {
-		render(<MeetingPresent deck={withLogo} clubName={CLUB_NAME} />);
+		renderPresent({ deck: withLogo });
 		const img = document.querySelector<HTMLImageElement>(`img[src="${LOGO}"]`);
 		expect(img?.style.height).toContain("cqw");
 		expect(img?.style.height).not.toContain("px");
 	});
 
 	it("renders no image at all when the club has no logo", () => {
-		render(<MeetingPresent deck={deck} clubName={CLUB_NAME} />);
+		renderPresent();
 		expect(document.querySelector(`img[src^="/api/club/"]`)).toBeNull();
 	});
 
 	it("still shows the club name as the splash headline beside the logo", () => {
-		render(<MeetingPresent deck={withLogo} clubName={CLUB_NAME} />);
+		renderPresent({ deck: withLogo });
 		expect(screen.getByText(CLUB_NAME)).toBeTruthy();
 	});
 });

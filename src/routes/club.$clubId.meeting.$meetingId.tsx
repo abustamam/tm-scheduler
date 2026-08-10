@@ -31,7 +31,9 @@ import { MeetingNavStrip } from "#/components/club/meeting-nav-strip";
 import { MeetingRoleSheets } from "#/components/club/meeting-role-sheets";
 import { MeetingViewActions } from "#/components/club/meeting-view-actions";
 import { OpenActionItems } from "#/components/club/open-action-items";
+import { TableTopicsCapture } from "#/components/club/table-topics-capture";
 import { ViewingAs } from "#/components/club/viewing-as";
+import { VoteCounterPanel } from "#/components/club/vote-counter-panel";
 import { ShareLinkButton } from "#/components/share-link-button";
 import { Button } from "#/components/ui/button";
 import {
@@ -82,8 +84,16 @@ import {
 	reopenMeeting,
 } from "#/server/meetings";
 import { listMembers } from "#/server/members";
-import { getMinutes } from "#/server/minutes";
+import {
+	addTableTopics,
+	clearMinutesAward,
+	getMinutes,
+	moveTableTopics,
+	removeTableTopics,
+	setMinutesAward,
+} from "#/server/minutes";
 import { getMinutesRecipients } from "#/server/minutes-email";
+import type { AwardCategory } from "#/server/minutes-logic";
 import { clearContacted, setContacted } from "#/server/outreach";
 import {
 	addRoleSlot,
@@ -97,6 +107,7 @@ import {
 	removeSpeakerSlot,
 	unconfirmSlot,
 } from "#/server/slots";
+import { getVoteTally } from "#/server/voting";
 
 // Anonymous (non-shell) visitors never load minutes — this hidden default keeps
 // the loader's return shape uniform without a server call or any PII fetch.
@@ -289,6 +300,11 @@ function MeetingView() {
 	const [lifecycleBusy, setLifecycleBusy] = useState(false);
 	// #320: an admin can preview the page as a non-admin member sees it.
 	const [previewAsMember, setPreviewAsMember] = useState(false);
+	// Ballot Counter console (#510 Task 10) — its own Table Topics edits, kept
+	// separate from `MeetingMinutes`'s offline queue: the console is reachable
+	// even when `minutes.visible` is false (a non-admin Vote Counter on a
+	// not-yet-completed meeting), so it cannot ride that component's queue.
+	const [voteConsoleBusy, setVoteConsoleBusy] = useState(false);
 
 	// One club config drives both renderings of this meeting (#367).
 	const flex = applyFlex(
@@ -298,6 +314,14 @@ function MeetingView() {
 	const projectedEnd = new Date(
 		new Date(meeting.scheduledAt).getTime() + flex.projectedMinutes * 60_000,
 	);
+	// Absolute so a QR built from it resolves without the app's own origin
+	// (#510) — same relative-during-SSR/absolute-after-hydrate split as
+	// `nudgeShareUrl` below, computed here because `buildSlideDeck` (unlike
+	// that share link) needs it up front to stamp onto every vote slide.
+	const ballotUrl =
+		typeof window === "undefined"
+			? `/club/${clubId}/meeting/${urlKey}/vote`
+			: `${window.location.origin}/club/${clubId}/meeting/${urlKey}/vote`;
 	const deck = buildSlideDeck({
 		meeting,
 		club: {
@@ -312,9 +336,13 @@ function MeetingView() {
 		nextMeetingAt,
 		meetingNumber,
 		geIntroducesFunctionaries,
+		ballotUrl,
 	});
 
-	const { isTmod, isGrammarian } = deriveMeetingRoleFlags(slots, myId);
+	const { isTmod, isGrammarian, isVoteCounter } = deriveMeetingRoleFlags(
+		slots,
+		myId,
+	);
 	const locked = isMeetingLocked(meeting.status);
 	// Its own fact, not a step toward `over`: it drives the "already taken place"
 	// notice, which a manager (still editing) must not see.
@@ -350,9 +378,50 @@ function MeetingView() {
 	const { data: fetchedRoster = [] } = useQuery({
 		queryKey: ["members", clubUuid],
 		queryFn: () => listMembers({ data: clubUuid }),
-		enabled: !canManage && isTmod,
+		// A non-admin TMOD fetches it for the self-serve assign picker (as before);
+		// a non-admin Vote Counter needs the same list for the Ballot Counter
+		// console's "+ Add speaker" picker (#510 Task 10).
+		enabled: !canManage && (isTmod || isVoteCounter),
 	});
 	const roster = canManage ? loaderRoster : fetchedRoster;
+	// The assign-slot roster above is `{ id, name, ... }`; the minutes-style
+	// picker `TableTopicsCapture` uses (`AssigneePicker`) expects `{ memberId,
+	// name }` — the same shape `MeetingMinutes` gets from `MinutesData["members"]`.
+	// Mapped once here rather than changing either shape, since `roster` is also
+	// handed to `<MeetingAgenda>` verbatim, unchanged.
+	const voteCounterRoster = roster.map((r) => ({
+		memberId: r.id,
+		name: r.name,
+	}));
+
+	// The Ballot Counter console's Table Topics list (#510). `getMinutes`'
+	// visibility gate is `canEdit || completed`, so it hands back `data: null` —
+	// and this list along with it — to a non-admin Vote Counter on any meeting
+	// that has not been completed yet. `getVoteTally` is already gated to
+	// admin-or-Vote-Counter and now carries the same speaker list (names only,
+	// no topic), so that is the source for anyone who cannot read the full
+	// minutes. Shares its query key with `VoteCounterPanel`'s own poll below —
+	// mounting both costs one request, not two.
+	const { data: voteTally } = useQuery({
+		queryKey: ["vote-tally", meeting.id],
+		queryFn: () =>
+			getVoteTally({ data: { meetingId: meeting.id, selfMemberId: myId } }),
+		enabled: isVoteCounter || effectiveCanManage,
+		refetchInterval: 5000,
+	});
+	// Same predicate `<MeetingMinutes>` uses for its own `canEdit` prop below —
+	// true exactly when `minutes.data` is populated and carries the full,
+	// topic-included row (including while an admin is "previewing as member",
+	// so the preview reflects what a non-admin Vote Counter would actually see).
+	const canReadFullMinutesSpeakers = effectiveCanManage && minutes.canEdit;
+	const consoleSpeakers = canReadFullMinutesSpeakers
+		? (minutes.data?.tableTopicsSpeakers ?? [])
+		: (voteTally?.tableTopicsSpeakers ?? []).map((s) => ({
+				id: s.id,
+				name: s.name,
+				isGuest: s.kind === "guest",
+				topic: null,
+			}));
 
 	const pairedIds = pairedRoleIds(clubRoles);
 	const addableRoles = clubRoles.filter((r) => !pairedIds.has(r.id));
@@ -537,6 +606,101 @@ function MeetingView() {
 			toast.error(errMessage(err));
 		} finally {
 			setLifecycleBusy(false);
+		}
+	}
+
+	// Ballot Counter console handlers (#510 Task 10). These call the SAME
+	// server fns the minutes-edit UI uses (`addTableTopics` / `removeTableTopics`
+	// / `moveTableTopics` / `setMinutesAward` / `clearMinutesAward`) — there is
+	// no separate voting-aware write path for Table Topics speakers or award
+	// winners; only the vote open/close/tally calls (inside `VoteCounterPanel`)
+	// go through `voting.ts`. Each now carries `selfMemberId: myId` so a
+	// non-admin Vote Counter — who may not even be signed in, per the design's
+	// "pick your name" self-assert — reaches `requireVoteCounterCapability`'s
+	// self-assert path instead of the admin-only `gateAdmin` these five used to
+	// share with `setAttendance` / `addMinutesGuest` / `removeMinutesGuest`
+	// (still admin-only, unchanged). Harmless for an admin: their session grants
+	// first, before `selfMemberId` is even consulted.
+	async function handleAddTableTopicsSpeaker(payload: {
+		memberId?: string;
+		guestId?: string;
+		newGuest?: { name: string };
+		topic?: string;
+	}) {
+		setVoteConsoleBusy(true);
+		try {
+			await addTableTopics({
+				data: { meetingId: meeting.id, selfMemberId: myId, ...payload },
+			});
+			await router.invalidate();
+		} catch (err) {
+			toast.error(errMessage(err));
+		} finally {
+			setVoteConsoleBusy(false);
+		}
+	}
+
+	async function handleRemoveTableTopicsSpeaker(id: string) {
+		setVoteConsoleBusy(true);
+		try {
+			await removeTableTopics({
+				data: { meetingId: meeting.id, id, selfMemberId: myId },
+			});
+			await router.invalidate();
+		} catch (err) {
+			toast.error(errMessage(err));
+		} finally {
+			setVoteConsoleBusy(false);
+		}
+	}
+
+	async function handleMoveTableTopicsSpeaker(
+		id: string,
+		direction: "up" | "down",
+	) {
+		setVoteConsoleBusy(true);
+		try {
+			await moveTableTopics({
+				data: { meetingId: meeting.id, id, direction, selfMemberId: myId },
+			});
+			await router.invalidate();
+		} catch (err) {
+			toast.error(errMessage(err));
+		} finally {
+			setVoteConsoleBusy(false);
+		}
+	}
+
+	async function handleSetVoteWinner(
+		category: AwardCategory,
+		winner: { kind: "member" | "guest"; id: string },
+	) {
+		try {
+			await setMinutesAward({
+				data: {
+					meetingId: meeting.id,
+					category,
+					memberId: winner.kind === "member" ? winner.id : undefined,
+					guestId: winner.kind === "guest" ? winner.id : undefined,
+					selfMemberId: myId,
+				},
+			});
+			toast.success("Winner set.");
+			await router.invalidate();
+		} catch (err) {
+			toast.error(errMessage(err));
+		}
+	}
+
+	async function handleClearVoteWinner(category: AwardCategory) {
+		try {
+			await clearMinutesAward({
+				data: { meetingId: meeting.id, category, selfMemberId: myId },
+			});
+			toast.success("Winner cleared.");
+			await router.invalidate();
+		} catch (err) {
+			toast.error(errMessage(err));
 		}
 	}
 
@@ -792,6 +956,37 @@ function MeetingView() {
 							: null
 					}
 				/>
+			) : null}
+
+			{isVoteCounter || effectiveCanManage ? (
+				<section className="space-y-4 rounded-xl border border-border bg-card p-4">
+					<div>
+						<h2 className="font-display font-semibold text-lg">
+							Ballot Counter console
+						</h2>
+						<p className="text-muted-foreground text-sm">
+							Only visible to you. Add Table Topics speakers so they're eligible
+							for Best Table Topics, then open a category, watch the count, and
+							confirm the winner once it closes.
+						</p>
+					</div>
+					<TableTopicsCapture
+						speakers={consoleSpeakers}
+						canEdit={true}
+						busy={voteConsoleBusy}
+						roster={voteCounterRoster}
+						clubGuests={clubGuests}
+						onAdd={handleAddTableTopicsSpeaker}
+						onRemove={handleRemoveTableTopicsSpeaker}
+						onMove={handleMoveTableTopicsSpeaker}
+					/>
+					<VoteCounterPanel
+						meetingId={meeting.id}
+						selfMemberId={myId}
+						onSetWinner={handleSetVoteWinner}
+						onClearWinner={handleClearVoteWinner}
+					/>
+				</section>
 			) : null}
 
 			<Dialog open={addRoleOpen} onOpenChange={setAddRoleOpen}>

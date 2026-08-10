@@ -827,3 +827,54 @@ describe("MeetingAgendaPrint — the meeting-script cues reach the page (#508)",
 		});
 	}
 });
+
+// #510 review finding 1. The printed footer QR is the ballot's entry point for
+// a club that prints instead of projecting, and a reviewer proved it had NO
+// regression net: disabling `DarkFooter`'s `ballotUrl` branch left the whole
+// suite green. These assertions close that gap on the DOM side — the real-PDF
+// page-count gate in `print-page-count.test.tsx` covers the printed-page shape
+// separately and does not itself look for the `<svg>`.
+describe("MeetingAgendaPrint — the scan-to-vote QR (#510)", () => {
+	const BALLOT_URL = "https://gavelup.test/club/mcf/meeting/2026-06-25/vote";
+
+	// All four, not just the three that route through `DarkFooter`: `GridLayout`
+	// carries its own smaller copy in its hand-rolled officer footer (see that
+	// component's file-header note on why it can't share `DarkFooter`), and a
+	// per-layout loop is the only way a broken wire on ONE layout can't hide
+	// behind the other three passing.
+	for (const layout of ["editorial", "grid", "spacious", "timing"] as const) {
+		it(`renders a real QR svg in .footer-qr on the ${layout} layout`, () => {
+			const { container } = render(
+				<MeetingAgendaPrint
+					layout={layout}
+					header={header}
+					roles={[{ label: "Toastmaster", name: "Lee P." }]}
+					officers={[{ office: "President", name: "Pat Lee" }]}
+					explainers={[]}
+					rows={rows}
+					ballotUrl={BALLOT_URL}
+				/>,
+			);
+			const qr = container.querySelector(".footer-qr");
+			expect(qr).not.toBeNull();
+			expect(qr?.querySelector("svg")).not.toBeNull();
+			expect(qr?.textContent?.toLowerCase()).toContain("scan to");
+		});
+
+		it(`renders no QR at all on the ${layout} layout when ballotUrl is undefined`, () => {
+			// The pre-origin-effect gap (#510): the print route's client-side
+			// effect hasn't computed an absolute URL yet on the very first render.
+			const { container } = render(
+				<MeetingAgendaPrint
+					layout={layout}
+					header={header}
+					roles={[{ label: "Toastmaster", name: "Lee P." }]}
+					officers={[{ office: "President", name: "Pat Lee" }]}
+					explainers={[]}
+					rows={rows}
+				/>,
+			);
+			expect(container.querySelector(".footer-qr")).toBeNull();
+		});
+	}
+});

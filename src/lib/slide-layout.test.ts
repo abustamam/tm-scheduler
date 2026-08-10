@@ -2,6 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { HandoffTarget, Slide } from "./agenda-slides";
 import { slideLayout, slideName } from "./slide-layout";
 
+// `slideLayout` maps `ballotUrl` straight through without reading it — this
+// suite is about the resulting header/body, never the QR (#510), so one
+// fixture value stands in on every vote-slide literal `buildSlideDeck` now
+// requires it to have.
+const BALLOT_URL = "https://gavelup.test/club/mcf/meeting/2026-06-25/vote";
+
 const contentHeader = (slide: Slide) => {
 	const l = slideLayout(slide);
 	return l.chrome === "content" ? l.header : `splash:${l.tone}`;
@@ -148,6 +154,7 @@ describe("slideLayout bodies", () => {
 				names: ["Jagpal", "Farhanaaz"],
 				hasTimer,
 				caller: null,
+				ballotUrl: BALLOT_URL,
 			});
 			if (l.chrome !== "content" || l.body.form !== "centered")
 				throw new Error("expected centered");
@@ -176,6 +183,7 @@ describe("slideLayout bodies", () => {
 				kind: "voteTableTopics",
 				hasTimer,
 				caller: null,
+				ballotUrl: BALLOT_URL,
 			});
 			if (l.chrome !== "content" || l.body.form !== "centered")
 				throw new Error("expected centered");
@@ -199,6 +207,7 @@ describe("slideLayout bodies", () => {
 				names: ["Riyaz"],
 				hasTimer,
 				caller: null,
+				ballotUrl: BALLOT_URL,
 			});
 			if (l.chrome !== "content" || l.body.form !== "centered")
 				throw new Error("expected centered");
@@ -230,17 +239,20 @@ describe("slideLayout bodies", () => {
 					names: ["Jagpal"],
 					hasTimer: true,
 					caller: null,
+					ballotUrl: BALLOT_URL,
 				}),
 				contentHeader({
 					kind: "voteTableTopics",
 					hasTimer: true,
 					caller: null,
+					ballotUrl: BALLOT_URL,
 				}),
 				contentHeader({
 					kind: "voteEvaluator",
 					names: ["Riyaz"],
 					hasTimer: true,
 					caller: null,
+					ballotUrl: BALLOT_URL,
 				}),
 			];
 			expect(headers).toEqual([
@@ -264,6 +276,7 @@ describe("slideLayout bodies", () => {
 				names: ["Riyaz"],
 				hasTimer: true,
 				caller: null,
+				ballotUrl: BALLOT_URL,
 			});
 			expect(evaluation).toBe("Speech Evaluation");
 			expect(vote).not.toBe(evaluation);
@@ -348,6 +361,7 @@ describe("slideLayout bodies", () => {
 					names: ["Jagpal"],
 					hasTimer: true,
 					caller: null,
+					ballotUrl: BALLOT_URL,
 				},
 				tableTopics: {
 					kind: "tableTopics",
@@ -360,6 +374,7 @@ describe("slideLayout bodies", () => {
 					kind: "voteTableTopics",
 					hasTimer: true,
 					caller: null,
+					ballotUrl: BALLOT_URL,
 				},
 				evaluation: {
 					kind: "evaluation",
@@ -373,6 +388,7 @@ describe("slideLayout bodies", () => {
 					names: ["Riyaz"],
 					hasTimer: true,
 					caller: null,
+					ballotUrl: BALLOT_URL,
 				},
 				evaluatorEvaluation: {
 					kind: "evaluatorEvaluation",
@@ -525,6 +541,7 @@ describe("slideLayout bodies", () => {
 				names: ["Jagpal"],
 				hasTimer: true,
 				caller: { role: "Toastmaster of the Day", name: "Faisal" },
+				ballotUrl: BALLOT_URL,
 			});
 			// The attribution comes first, at `strong` — below the `head`
 			// instructions it attributes, but never the smallest line on a slide
@@ -544,6 +561,7 @@ describe("slideLayout bodies", () => {
 					kind: "voteTableTopics",
 					hasTimer: false,
 					caller: { role: "Table Topics Master", name: "Rasheed" },
+					ballotUrl: BALLOT_URL,
 				}),
 			).toMatchObject({
 				lines: [
@@ -557,6 +575,7 @@ describe("slideLayout bodies", () => {
 					names: ["Riyaz"],
 					hasTimer: false,
 					caller: { role: "General Evaluator", name: "Priya" },
+					ballotUrl: BALLOT_URL,
 				}),
 			).toMatchObject({
 				lines: [

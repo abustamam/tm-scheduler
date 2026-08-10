@@ -20,6 +20,8 @@ import {
 	meetingAttendance,
 	meetingAwards,
 	meetingOutreach,
+	meetingVoteSessions,
+	meetingVotes,
 	memberAvailability,
 	memberDues,
 	members,
@@ -262,6 +264,40 @@ export async function collapseMemberships(
 		.update(meetingOutreach)
 		.set({ memberId: keeperId })
 		.where(eq(meetingOutreach.memberId, absorbedId));
+
+	// 12. meeting_vote_sessions.opened_by_member_id (#510) — nullable attribution
+	//     ("who opened this vote"). The table's unique is (meeting, category),
+	//     which does not include the member, so a plain re-point cannot collide.
+	await tx
+		.update(meetingVoteSessions)
+		.set({ openedByMemberId: keeperId })
+		.where(eq(meetingVoteSessions.openedByMemberId, absorbedId));
+
+	// 13. meeting_votes.voter_member_id (#510) — unique (session, voter). If ONE
+	//     human held both memberships and each cast a ballot in the same session,
+	//     re-pointing would violate that index. Drop the absorbed ballot and keep
+	//     the keeper's, which is also the right answer on the merits: the whole
+	//     point of the unique index is one vote per person, and a merge is the
+	//     assertion that these two rows were always one person.
+	await tx.execute(sql`
+		DELETE FROM meeting_votes
+		WHERE voter_member_id = ${absorbedId}
+			AND session_id IN (
+				SELECT session_id FROM meeting_votes WHERE voter_member_id = ${keeperId}
+			)`);
+	await tx
+		.update(meetingVotes)
+		.set({ voterMemberId: keeperId })
+		.where(eq(meetingVotes.voterMemberId, absorbedId));
+
+	// 14. meeting_votes.candidate_member_id (#510) — no member-unique on the
+	//     candidate side (a session legitimately holds many ballots naming the
+	//     same person), so re-point all. Ballots cast for either membership now
+	//     count toward the one surviving person, which is what a merge means.
+	await tx
+		.update(meetingVotes)
+		.set({ candidateMemberId: keeperId })
+		.where(eq(meetingVotes.candidateMemberId, absorbedId));
 
 	// --- Delete the now-empty absorbed membership --------------------------
 	await tx.delete(members).where(eq(members.id, absorbedId));

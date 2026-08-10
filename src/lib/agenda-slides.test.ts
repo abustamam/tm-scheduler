@@ -46,6 +46,10 @@ const club: ClubForDeck = {
 	logoUrl: null,
 };
 
+/** A fixture ballot URL (#510) — no test but the one below cares about its
+ *  exact value, only that every vote slide carries one. */
+const BALLOT_URL = "https://gavelup.test/club/mcf/meeting/2026-06-25/vote";
+
 /** `buildSlideDeck` with the standard fixtures, overridden per test. The club
  *  config is required (#367), so the helper pins the standard flow and each
  *  test opts into MCF's variant explicitly. */
@@ -55,6 +59,7 @@ const build = (over: Partial<SlideDeckInput> = {}) =>
 		club,
 		slots: [],
 		geIntroducesFunctionaries: false,
+		ballotUrl: BALLOT_URL,
 		...over,
 	});
 
@@ -469,6 +474,16 @@ describe("buildSlideDeck vote slides (#367)", () => {
 		expect(noTimer.speaker).toMatchObject({ hasTimer: false });
 		expect(noTimer.tableTopics).toMatchObject({ hasTimer: false });
 		expect(noTimer.evaluator).toMatchObject({ hasTimer: false });
+	});
+
+	it("carries the ballot URL on every vote slide (#510)", () => {
+		const deck = build({ slots: [speaker, ttm, evaluator] });
+		const voteSlides = deck.filter((s) => s.kind.startsWith("vote"));
+		expect(voteSlides.length).toBeGreaterThan(0);
+		for (const s of voteSlides) {
+			expect(s).toHaveProperty("ballotUrl");
+			expect((s as { ballotUrl: string }).ballotUrl).toContain("/vote");
+		}
 	});
 });
 

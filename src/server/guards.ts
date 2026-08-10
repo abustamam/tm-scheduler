@@ -9,7 +9,9 @@ import { getActiveImpersonation } from "./impersonation-logic";
 import {
 	type MeetingAgendaAuthz,
 	resolveMeetingAgendaAuthz,
+	resolveVoteCounterAuthz,
 	resolveWordOfTheDayAuthz,
+	type VoteCounterAuthz,
 	type WordOfTheDayAuthz,
 } from "./meeting-authz-logic";
 import { getOpenOfficerPositions } from "./officers-logic";
@@ -361,6 +363,67 @@ export async function requireWordOfTheDayEditor(input: {
 		throw new Error("You don't have permission to edit the Word of the Day.");
 	}
 	return authz;
+}
+
+/**
+ * Gate a Ballot Counter capability (#510): the meeting's Table Topics capture
+ * (add/remove/move) and its award set/clear — exactly the FIVE capabilities
+ * `docs/superpowers/specs/2026-08-08-digital-voting-design.md` hands the
+ * Ballot Counter, and no more. Allowed when the current session is a club
+ * `admin`, OR the self-asserted `selfMemberId` holds the meeting's
+ * `vote_counter` slot. Throws when neither applies.
+ *
+ * Wraps `resolveVoteCounterAuthz` the same way `requireMeetingAgendaEditor` /
+ * `requireWordOfTheDayEditor` wrap their own resolvers. `voting.ts`'s
+ * open/close/tally calls delegate here too (#510 review finding 4 — they used
+ * to call `resolveVoteCounterAuthz` directly and skip the officer retry below,
+ * so an elected officer could reach `setMinutesAward` through this gate but
+ * not open/close/read the tally through the other one); they keep their own
+ * local `requireVoteCounter` wrapper purely for a guard-test slice-ordering
+ * reason documented there, not for a different authorization decision.
+ *
+ * A strict SUPERSET of the `requireClubRole(..., ["admin"])` gate it replaced on
+ * those five, and it has to be. `resolveVoteCounterAuthz`'s admin check reads
+ * `clubRole === "admin"` only, while `requireClubRole` ALSO grants to an elected
+ * officer holding an open term (#202 effective-admin). Swapping one for the
+ * other would therefore have quietly REVOKED award-setting and Table Topics
+ * capture from officers who hold their seat that way — a privilege loss nobody
+ * asked for, and the mirror image of the unmentioned privilege GAIN #464 closed.
+ * So the officer path is retried explicitly below.
+ *
+ * `setAttendance` / `addMinutesGuest` / `removeMinutesGuest` deliberately do NOT
+ * come through here — they stay `gateAdmin`-only. A Ballot Counter has no
+ * business editing the roster's attendance or the club's guest records.
+ */
+export async function requireVoteCounterCapability(input: {
+	meetingId: string;
+	selfMemberId?: string | null;
+}): Promise<VoteCounterAuthz> {
+	const sessionUser = await getSessionUser();
+	const authz = await resolveVoteCounterAuthz({
+		meetingId: input.meetingId,
+		sessionUserId: sessionUser?.id ?? null,
+		selfMemberId: input.selfMemberId ?? null,
+	});
+	if (authz.allowed) return authz;
+
+	// Not a `clubRole` admin and not the Vote Counter — but possibly an elected
+	// officer with an open term, which is what the gate this replaced accepted.
+	// Only worth retrying for a caller who actually has a session: a self-asserted
+	// visitor has no membership to find, and `requireUser`'s "you need to be
+	// signed in" would be a misleading answer to "you are not the Ballot Counter".
+	if (sessionUser) {
+		const membership = await requireClubRole(sessionUser.id, authz.clubId, [
+			"admin",
+		]);
+		return {
+			...authz,
+			allowed: true,
+			via: "admin",
+			actorMemberId: membership.id,
+		};
+	}
+	throw new Error("Only the Ballot Counter or a club admin can do that.");
 }
 
 /** Fetch a roster member by id (server-only, no auth check). */

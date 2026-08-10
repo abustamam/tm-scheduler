@@ -6,6 +6,7 @@ import {
 	getSessionUser,
 	requireClubRole,
 	requireUser,
+	requireVoteCounterCapability,
 } from "./guards";
 import { getActiveImpersonation } from "./impersonation-logic";
 import {
@@ -98,7 +99,9 @@ const setPresenceSchema = z.object({
 	status: attendanceStatus,
 });
 
-/** Set a member's presence status. ADMIN-ONLY. */
+/** Set a member's presence status. ADMIN-ONLY — stays this way after #510: a
+ *  Ballot Counter has no business editing the roster's attendance. Capability
+ *  grants get enumerated, not widened (#464). */
 export const setAttendance = createServerFn({ method: "POST" })
 	.validator((input: unknown) => setPresenceSchema.parse(input))
 	.handler(async ({ data }) => {
@@ -120,7 +123,8 @@ const addGuestSchema = z
 		message: "Provide an existing guest or a new guest.",
 	});
 
-/** Add a present guest (existing or new). ADMIN-ONLY. */
+/** Add a present guest (existing or new). ADMIN-ONLY — stays this way after
+ *  #510: a Ballot Counter has no business editing the club's guest records. */
 export const addMinutesGuest = createServerFn({ method: "POST" })
 	.validator((input: unknown) => addGuestSchema.parse(input))
 	.handler(async ({ data }) => {
@@ -130,7 +134,8 @@ export const addMinutesGuest = createServerFn({ method: "POST" })
 
 const removeGuestSchema = z.object({ meetingId: uuid, guestId: uuid });
 
-/** Remove a present guest. ADMIN-ONLY. */
+/** Remove a present guest. ADMIN-ONLY — stays this way after #510, same reason
+ *  as `addMinutesGuest`. */
 export const removeMinutesGuest = createServerFn({ method: "POST" })
 	.validator((input: unknown) => removeGuestSchema.parse(input))
 	.handler(async ({ data }) => {
@@ -153,6 +158,9 @@ const addSpeakerSchema = z
 		guestId: uuid.optional(),
 		newGuest: newGuestSchema.optional(),
 		topic: MEETING_UPDATE_FIELDS.topic.optional(),
+		// Self-asserted Ballot Counter identity (#510) — see
+		// `requireVoteCounterCapability`. Omitted (or ignored) on the admin path.
+		selfMemberId: uuid.nullable().optional(),
 	})
 	.refine(
 		(d) => Boolean(d.memberId) || Boolean(d.guestId) || Boolean(d.newGuest),
@@ -162,21 +170,28 @@ const addSpeakerSchema = z
 		message: "A speaker is a member OR a guest, not both.",
 	});
 
-/** Add a Table Topics speaker. ADMIN-ONLY. */
+/** Add a Table Topics speaker. ADMIN, or the meeting's self-asserted Ballot
+ *  Counter (#510) — one of the five capabilities that role gets; see
+ *  `requireVoteCounterCapability`. */
 export const addTableTopics = createServerFn({ method: "POST" })
 	.validator((input: unknown) => addSpeakerSchema.parse(input))
 	.handler(async ({ data }) => {
-		await gateAdmin(data.meetingId);
+		await requireVoteCounterCapability(data);
 		return addTableTopicsSpeaker(data);
 	});
 
-const removeSpeakerSchema = z.object({ meetingId: uuid, id: uuid });
+const removeSpeakerSchema = z.object({
+	meetingId: uuid,
+	id: uuid,
+	selfMemberId: uuid.nullable().optional(),
+});
 
-/** Remove a Table Topics speaker. ADMIN-ONLY. */
+/** Remove a Table Topics speaker. ADMIN, or the meeting's self-asserted Ballot
+ *  Counter (#510). */
 export const removeTableTopics = createServerFn({ method: "POST" })
 	.validator((input: unknown) => removeSpeakerSchema.parse(input))
 	.handler(async ({ data }) => {
-		await gateAdmin(data.meetingId);
+		await requireVoteCounterCapability(data);
 		await removeTableTopicsSpeaker(data);
 		return { ok: true as const };
 	});
@@ -185,13 +200,15 @@ const moveSpeakerSchema = z.object({
 	meetingId: uuid,
 	id: uuid,
 	direction: z.enum(["up", "down"]),
+	selfMemberId: uuid.nullable().optional(),
 });
 
-/** Reorder a Table Topics speaker. ADMIN-ONLY. */
+/** Reorder a Table Topics speaker. ADMIN, or the meeting's self-asserted
+ *  Ballot Counter (#510). */
 export const moveTableTopics = createServerFn({ method: "POST" })
 	.validator((input: unknown) => moveSpeakerSchema.parse(input))
 	.handler(async ({ data }) => {
-		await gateAdmin(data.meetingId);
+		await requireVoteCounterCapability(data);
 		await moveTableTopicsSpeaker(data);
 		return { ok: true as const };
 	});
@@ -206,6 +223,7 @@ const setAwardSchema = z
 		memberId: uuid.optional(),
 		guestId: uuid.optional(),
 		newGuest: newGuestSchema.optional(),
+		selfMemberId: uuid.nullable().optional(),
 	})
 	.refine(
 		(d) => Boolean(d.memberId) || Boolean(d.guestId) || Boolean(d.newGuest),
@@ -215,22 +233,30 @@ const setAwardSchema = z
 		message: "An award winner is a member OR a guest, not both.",
 	});
 
-/** Set an award winner. ADMIN-ONLY. */
+/** Set an award winner. ADMIN, or the meeting's self-asserted Ballot Counter
+ *  (#510) confirming the tally they alone can see — the whole point of the
+ *  feature (`docs/superpowers/specs/2026-08-08-digital-voting-design.md`). */
 export const setMinutesAward = createServerFn({ method: "POST" })
 	.validator((input: unknown) => setAwardSchema.parse(input))
 	.handler(async ({ data }) => {
-		await gateAdmin(data.meetingId);
+		await requireVoteCounterCapability(data);
 		await setAward(data);
 		return { ok: true as const };
 	});
 
-const clearAwardSchema = z.object({ meetingId: uuid, category: awardCategory });
+const clearAwardSchema = z.object({
+	meetingId: uuid,
+	category: awardCategory,
+	selfMemberId: uuid.nullable().optional(),
+});
 
-/** Clear an award. ADMIN-ONLY. */
+/** Clear an award — the undo for a mis-tapped winner. ADMIN, or the meeting's
+ *  self-asserted Ballot Counter (#510): whoever may set a winner must also be
+ *  able to take one back. */
 export const clearMinutesAward = createServerFn({ method: "POST" })
 	.validator((input: unknown) => clearAwardSchema.parse(input))
 	.handler(async ({ data }) => {
-		await gateAdmin(data.meetingId);
+		await requireVoteCounterCapability(data);
 		await clearAward(data);
 		return { ok: true as const };
 	});

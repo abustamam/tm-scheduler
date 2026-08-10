@@ -151,7 +151,8 @@ the nouns in `src/db/schema.ts`.
   Its `status` follows a lifecycle: `scheduled → completed` (admin **Complete**, only on/after
   the meeting date) and `completed → scheduled` (admin **Reopen**, any time). A **completed**
   meeting is **locked** — read-only, every agenda mutation is rejected server-side and shows a
-  "This meeting is locked." banner. Speech-delivered stays date-derived (ADR-0009). See ADR-0012.
+  "This meeting is locked." banner. Speech-delivered stays date-derived (ADR-0009). Completing a
+  meeting also force-closes any open **Digital vote** session (#510). See ADR-0012.
 - **Role definition** — a club's template for a fillable role (`role_definitions`), e.g.
   Toastmaster of the Day (TMOD), Speaker, Evaluator, Table Topics Master, General Evaluator
   (GE), Timer, Ah-Counter, Grammarian, Vote Counter. Carries `default_count`, `sort_order`, and
@@ -163,10 +164,11 @@ the nouns in `src/db/schema.ts`.
   bind to roles by `key` (`matchesRole`), so a rename never breaks the binding — and every
   surface DISPLAYS the club's own `name`: the roster, the projected legend, and every row of the
   printed run sheet. Our canonical name survives in one spot only, a beat for a role the club
-  runs none of, where there is no club name to read. **Two roles' PERMISSIONS key off it too** —
-  the TMOD's self-serve agenda editing (ADR-0010) and the Grammarian's Word-of-the-Day edit
-  (#296) — so a rename never moves a capability and a club-invented role that merely *sounds*
-  like one never gains it. See #367 / #368 / #445 / #464.
+  runs none of, where there is no club name to read. **Three roles' PERMISSIONS key off it too** —
+  the TMOD's self-serve agenda editing (ADR-0010), the Grammarian's Word-of-the-Day edit (#296),
+  and the Vote Counter's control of the digital ballot (#510, see **Digital vote**) — so a rename
+  never moves a capability and a club-invented role that merely *sounds* like one never gains it.
+  See #367 / #368 / #445 / #464 / #510.
 - **Role slot** — one concrete, claimable agenda row for a meeting (`role_slots`). Generated
   from role definitions when a meeting is created. THE source of truth and history — see
   ADR-0005. A slot is `open`, `claimed`, or `confirmed`.
@@ -194,7 +196,26 @@ the nouns in `src/db/schema.ts`.
   topic text. Distinct from the **Table Topics Master** role (the role definition that runs the
   segment). See ADR-0014.
 - **Award** — a meeting's ribbon winner (`meeting_awards`): Best Speaker, Best Evaluator, or Best
-  Table Topics, each an optional member-or-guest (XOR). See ADR-0014.
+  Table Topics, each an optional member-or-guest (XOR). Set directly by an admin, or confirmed by
+  the Ballot Counter from a **Digital vote**. See ADR-0014.
+- **Digital vote** — the QR-reachable public ballot (#510) for Best Speaker, Best Evaluator and
+  Best Table Topics, run by whoever holds the meeting's **Vote Counter** slot (the "Ballot
+  Counter" in the UI — the third capability role, see **Role name vs role key**). A **vote
+  session** (`meeting_vote_sessions`, one row per `(meeting, category)`) is the open/close window:
+  `closed_at IS NULL` means open, and re-opening a closed vote clears it on the same row rather
+  than inserting a second one. A **ballot** (`meeting_votes`) is one vote per voter per category —
+  member-or-guest voter XOR, member-or-guest candidate XOR — enforced by a pair of plain
+  (non-partial) unique indexes, so re-voting inside an open window upserts the pick instead of
+  duplicating. The Ballot Counter alone sees the running count; everyone else sees only that a
+  vote is open. Nothing writes `meeting_awards` automatically — the Ballot Counter taps the winner
+  in, the same table the minutes and printed awards beat already read. Completing a meeting
+  force-closes any open vote session. A guest may vote only after joining THIS meeting's ballot
+  (`meeting_ballot_guests`, a `(meeting_id, guest_id)` link) — a guest id from any other surface
+  (the guest book, an officer's manual add) is not itself a ballot identity, which is what bounds
+  the public per-meeting guest cap to actual ballot joins rather than `guests` row inserts.
+  Reached from a QR on the present-mode vote slides and all four printed agenda layouts, or
+  directly at `/club/:clubId/meeting/:key/vote`. See
+  `docs/superpowers/specs/2026-08-08-digital-voting-design.md`.
 - **Pathways** — Toastmasters' education program. A **path** (e.g. *Presentation Mastery*) is
   enrolled and owned by a **Person**, independent of any club; a person may work several paths
   at once. When a path **level** is completed, the credit is attributed to *one* of the
@@ -262,12 +283,18 @@ per-Person opt-out, the no-auth `/unsubscribe` link, and per-club settings — s
 - A meeting's **Word of the Day** alone may also be edited by the self-asserted member holding
   that meeting's **Grammarian** slot — a narrower capability than the TMOD's, on the same
   self-assert trust (#296).
-- Both capability slots are resolved by `role_definitions.key`, **never by the club's display
+- All three capability slots are resolved by `role_definitions.key`, **never by the club's display
   name**: renaming a role must not move a capability, and a club-invented role whose name merely
   resembles one must not gain it. A row whose `key` is still NULL falls back to an **exact**
-  canonical-name match, never a prefix. One resolver (`findTmodSlot` / `findGrammarianSlot`,
-  `src/lib/meeting-roles.ts`) serves both the route affordance and the server check, so the
-  button and the mutation cannot disagree (#464).
+  canonical-name match, never a prefix. One resolver family (`findTmodSlot` / `findGrammarianSlot`
+  / `findVoteCounterSlot`, `src/lib/meeting-roles.ts`) serves both the route affordance and the
+  server check for all three, so the button and the mutation cannot disagree (#464 / #510).
+- A **Digital vote** ballot is not anonymous in the database — `meeting_votes` stores the voter,
+  because the voter is exactly what the one-vote-per-person-per-category unique index enforces.
+  Secrecy is a query-shape property only: `loadTally` (`src/server/voting-logic.ts`) returns
+  counts, never rows, and the Ballot Counter is the only reader of even that. Paper slips are
+  genuinely anonymous; this trades that for enforceability — a deliberate, stated property of the
+  design, not an oversight. See #510.
 - A **completed** meeting is **locked**: every agenda mutation (assign/claim/takeover,
   confirm/unconfirm, move/add/remove role/speaker, availability toggle, meta edit) is rejected
   server-side, regardless of surface or capability. Only an admin **Reopen** (→ `scheduled`)

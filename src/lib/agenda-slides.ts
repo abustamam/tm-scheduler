@@ -66,6 +66,10 @@ type VoteTiming = {
 	 *  fill, so it drops the attribution line rather than crediting a role
 	 *  nobody holds. The vote still happens either way. */
 	caller: LegendEntry | null;
+	/** Absolute URL of this meeting's public ballot (#510), rendered as a QR on
+	 *  the slide. The projector is already showing "Vote for Best Speaker" at
+	 *  exactly the moment people need to scan, which beats a printed footer. */
+	ballotUrl: string;
 };
 
 /**
@@ -375,6 +379,12 @@ export type SlideDeckInput = RunOfShowConfig & {
 	nextMeetingAt?: Date | null;
 	/** The club's effective meeting number (#358) — stored or derived upstream. */
 	meetingNumber?: number | null;
+	/** Absolute URL of this meeting's public ballot (#510), carried onto every
+	 *  vote slide. Required rather than defaulted: building it needs the
+	 *  request's origin, which this pure deck builder has no business knowing —
+	 *  a caller that forgot it should get a type error, not a QR that renders
+	 *  a relative path nobody's camera can scan. */
+	ballotUrl: string;
 };
 
 export function buildSlideDeck({
@@ -384,6 +394,7 @@ export function buildSlideDeck({
 	nextMeetingAt = null,
 	meetingNumber = null,
 	geIntroducesFunctionaries,
+	ballotUrl,
 }: SlideDeckInput): Slide[] {
 	const deck: Slide[] = [];
 	// The same run-of-show the printed agenda expands, built from the same club
@@ -546,6 +557,7 @@ export function buildSlideDeck({
 			names: assignedNames(speakers),
 			hasTimer,
 			caller: tmOwner,
+			ballotUrl,
 		});
 	}
 
@@ -571,6 +583,7 @@ export function buildSlideDeck({
 			kind: "voteTableTopics",
 			hasTimer,
 			caller: ttOwner,
+			ballotUrl,
 		});
 	}
 
@@ -610,6 +623,7 @@ export function buildSlideDeck({
 			// second one — the Toastmaster calls the vote at a club with no General
 			// Evaluator. The first only rewrites copy (`hasTimer`, above).
 			caller: geOwner,
+			ballotUrl,
 		});
 	}
 

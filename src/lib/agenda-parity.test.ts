@@ -360,7 +360,13 @@ function printSections(slots: AgendaSlot[], config: RunOfShowConfig): string[] {
 
 /** The projected deck's section sequence. */
 function deckSections(slots: AgendaSlot[], config: RunOfShowConfig): string[] {
-	const deck = buildSlideDeck({ meeting, club, slots, ...config });
+	const deck = buildSlideDeck({
+		meeting,
+		club,
+		slots,
+		ballotUrl: BALLOT_URL,
+		...config,
+	});
 	const out: string[] = [];
 	for (const slide of deck) {
 		if (slide.kind === "handoff") {
@@ -425,6 +431,10 @@ const club: ClubForDeck = {
 	meetingSchedule: "2nd & 4th Thursday",
 	logoUrl: null,
 };
+
+// This suite compares SECTION ORDER, never ballot content, so one fixture
+// value stands in everywhere `buildSlideDeck` requires it (#510).
+const BALLOT_URL = "https://gavelup.test/club/parity/meeting/2026-06-25/vote";
 
 const tmod = slot({
 	id: "tm",
@@ -871,7 +881,13 @@ describe("run-sheet ⇄ deck duration parity (#356)", () => {
 	it("projects each timed beat's own budgeted duration", () => {
 		for (const config of CONFIGS) {
 			const template = buildRunOfShow(config);
-			const deck = buildSlideDeck({ meeting, club, slots: FULL, ...config });
+			const deck = buildSlideDeck({
+				meeting,
+				club,
+				slots: FULL,
+				ballotUrl: BALLOT_URL,
+				...config,
+			});
 			const checked: Section[] = [];
 			for (const slide of deck) {
 				if (!("time" in slide)) continue;
@@ -916,7 +932,13 @@ const handoffRows = (
 	expandRunSheet(slots, buildRunOfShow(config)).filter((r) => r.handoff);
 
 const handoffSlides = (slots: AgendaSlot[], config: RunOfShowConfig) =>
-	buildSlideDeck({ meeting, club, slots, ...config }).filter(
+	buildSlideDeck({
+		meeting,
+		club,
+		slots,
+		ballotUrl: BALLOT_URL,
+		...config,
+	}).filter(
 		(s): s is Extract<Slide, { kind: "handoff" }> => s.kind === "handoff",
 	);
 
@@ -1263,7 +1285,13 @@ describe("vote-caller agreement — deck ⇄ run sheet (#363)", () => {
 				? "MCF variant"
 				: "standard";
 			it(`${name} — ${flag}`, () => {
-				const callers = buildSlideDeck({ meeting, club, slots, ...config })
+				const callers = buildSlideDeck({
+					meeting,
+					club,
+					slots,
+					ballotUrl: BALLOT_URL,
+					...config,
+				})
 					.filter(isVoteSlide)
 					.map((s) => s.caller?.name ?? null);
 				// `renderUnowned` keeps the printed row and fills its `who` column with
@@ -1389,6 +1417,7 @@ describe("speech-slot time agreement — deck ⇄ run sheet (#394)", () => {
 					meeting,
 					club,
 					slots,
+					ballotUrl: BALLOT_URL,
 					...config,
 				}).filter(
 					(s): s is Extract<Slide, { kind: "speech" }> => s.kind === "speech",

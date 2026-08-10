@@ -113,6 +113,13 @@ const roleSheetRoles: RoleSheetEntry[] = Array.from({ length: 12 }, (_, i) => ({
 	description: "What this role does, in a sentence that wraps a little.",
 }));
 
+// Exercised on every layout, not just the ones that render it (#510): passing
+// it unconditionally proves `GridLayout` really does ignore it (no DarkFooter
+// to put it in) rather than that omission being untested by accident, and
+// proves the QR itself — present on editorial/spacious/timing's `DarkFooter` —
+// does not move any of the counts below.
+const BALLOT_URL = "https://gavelup.app/club/downtown/meeting/2026-07-22/vote";
+
 function agendaHtml(layout: AgendaLayout): string {
 	return renderToStaticMarkup(
 		<MeetingAgendaPrint
@@ -122,6 +129,7 @@ function agendaHtml(layout: AgendaLayout): string {
 			officers={[]}
 			explainers={[]}
 			rows={rows}
+			ballotUrl={BALLOT_URL}
 		/>,
 	);
 }

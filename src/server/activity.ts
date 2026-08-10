@@ -1,23 +1,20 @@
 import type { db } from "#/db";
-import { activityLog } from "#/db/schema";
+import { activityActionEnum, activityLog } from "#/db/schema";
 import { getImpersonatedWriteActor } from "./impersonation-actor";
 
-type ActivityAction =
-	| "claim"
-	| "release"
-	| "reassign"
-	| "availability_set"
-	| "availability_clear"
-	| "member_add"
-	| "member_edit"
-	| "member_merge"
-	| "member_remove"
-	| "meeting_create"
-	| "meeting_edit"
-	| "outreach_set"
-	| "outreach_clear"
-	| "club_logo_set"
-	| "club_logo_removed";
+/**
+ * DERIVED from the Postgres enum, never hand-listed.
+ *
+ * This was a hand-maintained union that duplicated `activity_action`, and it had
+ * already drifted: `superadmin_viewed` and `superadmin_acted` existed in the
+ * database and not here. #510 hit the same trap from the other side — adding
+ * `vote_open`/`vote_close` to the enum left `logActivity` unable to accept them,
+ * and only `tsc` caught it.
+ *
+ * Deriving makes the database the single source of truth, so a new enum value is
+ * usable the moment it is added and the two can never disagree again.
+ */
+type ActivityAction = (typeof activityActionEnum.enumValues)[number];
 
 export interface ActivityInput {
 	clubId: string;

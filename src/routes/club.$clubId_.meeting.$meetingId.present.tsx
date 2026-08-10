@@ -1,4 +1,5 @@
 import { createFileRoute, notFound, useNavigate } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
 import { MeetingPresent } from "#/components/agenda/meeting-present";
 import { OfflineBadge } from "#/components/agenda/offline-badge";
 import { buildSlideDeck } from "#/lib/agenda-slides";
@@ -43,6 +44,17 @@ function PresentPage() {
 	const data = Route.useLoaderData();
 	const { clubId, meetingId } = Route.useParams();
 	const navigate = useNavigate();
+	// The absolute ballot URL is derived in the browser (#510), same as the
+	// guest-book QR on the VP Membership page: SSR has no origin, and a QR
+	// baked from a relative path is not a URL a phone's camera can resolve.
+	// Blank until the effect fires, which is why every vote slide's `ballotUrl`
+	// is `""` for that first render — `MeetingPresent` shows a loading state
+	// rather than a QR that can't scan.
+	const [origin, setOrigin] = useState("");
+	useEffect(() => setOrigin(window.location.origin), []);
+	const ballotUrl = origin
+		? `${origin}/club/${clubId}/meeting/${meetingId}/vote`
+		: "";
 	const deck = buildSlideDeck({
 		meeting: data.meeting,
 		club: {
@@ -57,11 +69,15 @@ function PresentPage() {
 		nextMeetingAt: data.nextMeetingAt,
 		meetingNumber: data.meetingNumber,
 		geIntroducesFunctionaries: data.geIntroducesFunctionaries,
+		ballotUrl,
 	});
 	return (
 		<MeetingPresent
 			deck={deck}
 			clubName={data.clubName}
+			// The real DB id, not the pretty URL key above — `getVoteParticipation`
+			// keys on it (#510), matching the Ballot Counter console's own query.
+			meetingId={data.meeting.id}
 			// Rendered inside the deck's top-right chrome instead of floating over
 			// the slide (#361); the offline banner still pins itself top-center.
 			offlineBadge={<OfflineBadge id={meetingId} />}

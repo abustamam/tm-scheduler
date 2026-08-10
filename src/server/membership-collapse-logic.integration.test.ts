@@ -30,6 +30,8 @@ import {
 	meetingAttendance,
 	meetingAwards,
 	meetingOutreach,
+	meetingVoteSessions,
+	meetingVotes,
 	memberAvailability,
 	memberDues,
 	members,
@@ -606,6 +608,12 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 			"club_action_items.owner_member_id",
 			"guests.converted_membership_id",
 			"activity_log.actor_member_id",
+			// #510 — digital voting. `meeting_votes.voter_member_id` carries a
+			// unique (session, voter), so it re-points via the delete-then-update
+			// pattern; the other two re-point plainly.
+			"meeting_vote_sessions.opened_by_member_id",
+			"meeting_votes.voter_member_id",
+			"meeting_votes.candidate_member_id",
 		]);
 
 		const result = await testDb.execute(sql`
@@ -622,6 +630,79 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 		);
 
 		expect([...actual].sort()).toEqual([...HANDLED].sort());
+	});
+
+	it("collapses two ballots by one human into one, and re-points the rest (#510)", async () => {
+		// The FK drift-guard above only proves the columns are NAMED. This proves
+		// the re-point actually runs — and that the unique (session, voter) index
+		// does not blow the merge up when both memberships voted in one session.
+		const keeperId = await addMembership({ name: "Keeper" });
+		const absorbedId = await addMembership({ name: "Absorbed" });
+		const [session] = await testDb
+			.insert(meetingVoteSessions)
+			.values({
+				meetingId: seed.meetingId,
+				category: "best_speaker",
+				openedByMemberId: absorbedId,
+			})
+			.returning({ id: meetingVoteSessions.id });
+
+		// Both memberships voted in the SAME session — only possible because they
+		// were, wrongly, two rows for one person. That is what the merge asserts.
+		await testDb.insert(meetingVotes).values([
+			{
+				sessionId: session.id,
+				voterMemberId: keeperId,
+				candidateMemberId: seed.memberId,
+			},
+			{
+				sessionId: session.id,
+				voterMemberId: absorbedId,
+				candidateMemberId: absorbedId,
+			},
+		]);
+
+		await collapse(keeperId, absorbedId);
+
+		const votes = await testDb
+			.select()
+			.from(meetingVotes)
+			.where(eq(meetingVotes.sessionId, session.id));
+		// One human, one vote: the absorbed ballot is dropped, the keeper's stands.
+		expect(votes).toHaveLength(1);
+		expect(votes[0].voterMemberId).toBe(keeperId);
+
+		// "Who opened this vote" survives the merge rather than going null.
+		const [sessionAfter] = await testDb
+			.select()
+			.from(meetingVoteSessions)
+			.where(eq(meetingVoteSessions.id, session.id));
+		expect(sessionAfter.openedByMemberId).toBe(keeperId);
+	});
+
+	it("re-points a ballot CAST FOR the absorbed membership to the keeper (#510)", async () => {
+		// The candidate side has no member-unique, so it re-points plainly — but
+		// if it were skipped the vote would silently point at a deleted member.
+		const keeperId = await addMembership({ name: "Keeper" });
+		const absorbedId = await addMembership({ name: "Absorbed" });
+		const [session] = await testDb
+			.insert(meetingVoteSessions)
+			.values({ meetingId: seed.meetingId, category: "best_evaluator" })
+			.returning({ id: meetingVoteSessions.id });
+		await testDb.insert(meetingVotes).values({
+			sessionId: session.id,
+			voterMemberId: seed.memberId,
+			candidateMemberId: absorbedId,
+		});
+
+		await collapse(keeperId, absorbedId);
+
+		const votes = await testDb
+			.select()
+			.from(meetingVotes)
+			.where(eq(meetingVotes.sessionId, session.id));
+		expect(votes).toHaveLength(1);
+		expect(votes[0].candidateMemberId).toBe(keeperId);
 	});
 
 	it("is a no-op when keeper === absorbed", async () => {
