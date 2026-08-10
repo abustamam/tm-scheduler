@@ -65,6 +65,14 @@ export function MeetingExportMenu({
 	presentIsPrimary: boolean;
 }) {
 	const [sheetsOpen, setSheetsOpen] = useState(false);
+	// Re-entrancy guard for the .pptx export. The retired `PptxDownloadButton`
+	// held one (`if (busy) return` + `disabled={busy}`); porting the action into
+	// a menu item dropped it, and the menu CLOSES on select, so the obvious way
+	// to double-fire — reopen, click again — is one tap away. Each concurrent
+	// run re-fetches the club logo (up to a 5s timeout) and re-runs pptxgenjs
+	// over the whole deck. `downloadDeckPptx`'s own doc says a caller's busy
+	// flag is for UI, not correctness; this caller had none.
+	const [pptxBusy, setPptxBusy] = useState(false);
 	const triggerRef = useRef<HTMLButtonElement>(null);
 
 	return (
@@ -140,19 +148,29 @@ export function MeetingExportMenu({
 					) : null}
 					{deck && clubName ? (
 						<DropdownMenuItem
+							disabled={pptxBusy}
 							onSelect={() => {
 								// The menu closes on select (Radix default) — a modal menu
 								// would hold the whole page pointer-inert for the seconds
 								// the ~1MB library download + logo fetch take. Progress
 								// lives in a toast instead; downloadDeckPptx surfaces its
 								// own failure toast and never rejects.
+								//
+								// `disabled` above only covers the menu being OPEN; because
+								// select closes it, the guard that actually matters is this
+								// early return on reopen-and-click-again.
+								if (pptxBusy) return;
+								setPptxBusy(true);
 								const id = toast.loading("Building the PowerPoint file…");
 								downloadDeckPptx({ deck, clubName })
 									// The helper contractually never rejects (it toasts its own
 									// failures); the catch is insurance so a future contract
 									// breach can't become an unhandled rejection here.
 									.catch(() => {})
-									.finally(() => toast.dismiss(id));
+									.finally(() => {
+										toast.dismiss(id);
+										setPptxBusy(false);
+									});
 							}}
 						>
 							<Download />

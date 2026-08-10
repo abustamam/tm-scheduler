@@ -274,14 +274,14 @@ body::after {
    items in link-teal beside its two <button> items in foreground, splitting one
    menu of peer actions into two apparent classes. Any new dropdown with link
    items inherits the fix. */
-a:not([data-slot="button"]):not([data-slot="dropdown-menu-item"]) {
+a:not([data-slot="button"]):not([data-slot^="dropdown-menu-"]) {
   color: var(--lagoon-deep);
   text-decoration-color: rgba(50, 143, 151, 0.4);
   text-decoration-thickness: 1px;
   text-underline-offset: 2px;
 }
 
-a:not([data-slot="button"]):not([data-slot="dropdown-menu-item"]):hover {
+a:not([data-slot="button"]):not([data-slot^="dropdown-menu-"]):hover {
   color: var(--lagoon-ink);
 }
 

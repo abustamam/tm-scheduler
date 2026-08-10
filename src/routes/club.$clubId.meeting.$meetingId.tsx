@@ -55,7 +55,7 @@ import {
 	formatMeetingTime,
 	formatMeetingTimeRange,
 } from "#/lib/format";
-import { MINUTES_ANCHOR_ID, showsMinutesPrimary } from "#/lib/meeting-anchors";
+import { MINUTES_ANCHOR_ID } from "#/lib/meeting-anchors";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import {
 	isMeetingLocked,
@@ -954,12 +954,24 @@ function MeetingView() {
 						}
 					/>
 				</section>
-			) : showsMinutesPrimary(phase, effectiveCanManage) ? (
-				/* getMinutes degraded (loader `.catch(() => EMPTY_MINUTES)`) while the
-				   toolbar still offers the Minutes primary — keep the anchor target real
-				   and say why the section is empty instead of letting the CTA click do
-				   nothing (spec review of aa106b3). Doubles as the first visible signal
-				   of a minutes load failure, which was previously swallowed silently. */
+			) : effectiveCanManage ? (
+				/* getMinutes degraded (loader `.catch(() => EMPTY_MINUTES)`) — say so
+				   instead of silently deleting the card, and keep the toolbar's Minutes
+				   primary pointing at something real (spec review of aa106b3).
+
+				   Gated on `effectiveCanManage`, NOT on `showsMinutesPrimary`. Those
+				   differ everywhere except the completed phase, and the difference is
+				   the case that matters most: `getMinutes` returns `visible: true` for
+				   an admin on ANY status (`canEdit || status === "completed"`), so an
+				   officer on MEETING NIGHT normally has the full card — attendance,
+				   awards, Table Topics capture. Keyed on showsMinutesPrimary, a
+				   transient throw made all of that vanish with no message at the single
+				   highest-stakes moment for it, and the page still looked intact because
+				   the Ballot Counter console is gated separately (red-team review).
+
+				   `effectiveCanManage` is a strict SUPERSET of the CTA's gate, so the
+				   primary can never point at a section that is not here — and it is the
+				   preview-aware flag, so the two still flip together in preview mode. */
 				<section id={MINUTES_ANCHOR_ID} className="scroll-mt-28">
 					<div className="flex items-center gap-2 rounded-xl border border-border bg-muted/60 px-4 py-3 text-sm font-medium text-muted-foreground">
 						<ClipboardList className="size-4 shrink-0" aria-hidden />

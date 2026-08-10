@@ -36,8 +36,12 @@ describe("the unlayered text-link rule leaves component-colored anchors alone", 
 	// prefix, so deleting the base rule outright left both green — mutation-
 	// verified during the ship review. Anchoring each to its own line is what
 	// makes "the base rule exists" and "the hover rule exists" separable facts.
+	// PREFIX match, not the single `dropdown-menu-item` slot: four slots in
+	// dropdown-menu.tsx accept `asChild` and can become an anchor (item,
+	// checkbox-item, radio-item, sub-trigger). Naming one left the same
+	// link-teal/foreground split reachable one component away (red-team review).
 	const SELECTOR =
-		'a:not([data-slot="button"]):not([data-slot="dropdown-menu-item"])';
+		'a:not([data-slot="button"]):not([data-slot^="dropdown-menu-"])';
 
 	/** Whole-line selector match, so a longer selector cannot satisfy a shorter one. */
 	function hasRule(selector: string): boolean {

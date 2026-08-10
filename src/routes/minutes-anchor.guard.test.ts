@@ -129,12 +129,22 @@ describe("the Minutes jump anchor (#541 D2)", () => {
 		).toContain("hasIdentity={!!myId}");
 	});
 
-	it("the degrade fallback keys on the same preview-aware flag as the CTA", () => {
+	it("the degrade fallback is at least as WIDE as the CTA, and preview-aware", () => {
+		// The fallback must cover every state in which the CTA can be offered, or
+		// a click lands on nothing. It is deliberately WIDER than
+		// `showsMinutesPrimary(phase, canManage)`: `getMinutes` returns
+		// `visible: true` for an admin on ANY status, so an officer on meeting
+		// night has the full card and a transient throw would otherwise delete it
+		// with no message (red-team review). `effectiveCanManage` is the superset
+		// — it implies the CTA's `phase === "completed" && canManage` — and it is
+		// the PREVIEW-AWARE flag, so the CTA and its target still flip together
+		// when an officer previews as a member.
 		expect(
 			readSource(ROUTE),
-			"the fallback section must render on `showsMinutesPrimary(phase, " +
-				"effectiveCanManage)` — the CTA and its anchor target must flip " +
-				"together in preview-as-member mode.",
-		).toContain("showsMinutesPrimary(phase, effectiveCanManage)");
+			"the degrade fallback must render on `effectiveCanManage` — the raw " +
+				"`canManage` re-opens #320 here, and a narrower gate (e.g. " +
+				"showsMinutesPrimary) leaves an officer on meeting night with the " +
+				"minutes card silently gone.",
+		).toContain(") : effectiveCanManage ? (");
 	});
 });
