@@ -141,7 +141,18 @@ export function MeetingToolbar({
 				</Button>
 			) : null}
 			{canManage && !locked && canComplete ? (
-				<Button size="sm" onClick={onComplete} disabled={lifecycleBusy}>
+				// `outline`, like every other button in this group: the phase primary
+				// is the ONLY filled control in the row (D2). Left at the default
+				// (filled) variant, an officer on meeting day saw TWO identically
+				// weighted CTAs — Present and Complete meeting — competing for the
+				// emphasis the phase primary exists to own. The completed phase
+				// already did this correctly (Minutes filled, Reopen outline).
+				<Button
+					size="sm"
+					variant="outline"
+					onClick={onComplete}
+					disabled={lifecycleBusy}
+				>
 					{lifecycleBusy ? (
 						<Loader2 className="size-4 animate-spin" />
 					) : (

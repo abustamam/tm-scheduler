@@ -274,6 +274,56 @@ describe("MeetingToolbar (#541 D2)", () => {
 		expect(copied).toContain("/club/downtown/meeting/2026-08-10");
 	});
 
+	// Regression: /qa 2026-08-10 — Complete meeting shipped at the DEFAULT
+	// (filled) variant while every other edit-group button was `outline`, so an
+	// officer on meeting day saw two identically weighted filled CTAs (Present
+	// and Complete meeting) and the phase primary stopped reading as primary.
+	// Found by /qa on 2026-08-10 · report: .gstack/qa-reports/
+	//
+	// These assert the COUNT of filled controls, not Complete's own variant: the
+	// invariant D2 actually promises is "exactly one emphasized action in the
+	// row", so a future button added at the wrong weight fails here too. Both
+	// phases that HAVE a primary are covered — `completed` was already correct
+	// and is pinned so the fix can't be applied by inverting the two.
+	it.each([
+		{
+			label: "today + officer: Present filled, Complete meeting outline",
+			props: {
+				phase: "today" as MeetingPhase,
+				hasIdentity: true,
+				canManage: true,
+				canComplete: true,
+				hasAddableRoles: true,
+			},
+			expected: /present/i,
+		},
+		{
+			label: "completed + officer: Minutes filled, Reopen meeting outline",
+			props: {
+				phase: "completed" as MeetingPhase,
+				hasIdentity: true,
+				canManage: true,
+				locked: true,
+				canComplete: true,
+			},
+			expected: /minutes/i,
+		},
+	])("the phase primary is the ONLY filled control — $label", async ({
+		props,
+		expected,
+	}) => {
+		await renderToolbar(props);
+		// Queried by attribute rather than by role: the primary renders as an
+		// <a data-slot="button">, so getAllByRole("button") would miss it and the
+		// count would be wrong in the direction that passes.
+		const filled = [...document.querySelectorAll('[data-variant="default"]')];
+		expect(
+			filled.map((el) => el.textContent?.trim()),
+			"expected exactly one filled control in the toolbar — the phase primary",
+		).toHaveLength(1);
+		expect(filled[0].textContent).toMatch(expected);
+	});
+
 	it("orders the toolbar: primary, then share, then the export menu trigger", async () => {
 		await renderToolbar({ phase: "today", hasIdentity: true });
 		const primary = screen.getByTestId("toolbar-primary");
