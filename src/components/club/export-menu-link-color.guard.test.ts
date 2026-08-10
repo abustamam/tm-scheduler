@@ -30,17 +30,30 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const STYLES = resolve(HERE, "../../styles.css");
 
 describe("the unlayered text-link rule leaves component-colored anchors alone", () => {
+	// Both rules are matched as WHOLE selector lines (anchored `^…{$`), not with
+	// `toContain`. The two substring assertions this replaces were NOT
+	// independent: the `:hover` selector string contains the base selector as a
+	// prefix, so deleting the base rule outright left both green — mutation-
+	// verified during the ship review. Anchoring each to its own line is what
+	// makes "the base rule exists" and "the hover rule exists" separable facts.
+	const SELECTOR =
+		'a:not([data-slot="button"]):not([data-slot="dropdown-menu-item"])';
+
+	/** Whole-line selector match, so a longer selector cannot satisfy a shorter one. */
+	function hasRule(selector: string): boolean {
+		const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+		return new RegExp(`^${escaped}\\s*\\{$`, "m").test(readSource(STYLES));
+	}
+
 	it("excludes dropdown menu items, so a <Link> item matches its <button> peers", () => {
 		expect(
-			readSource(STYLES),
+			hasRule(SELECTOR),
 			'the global `a:not([data-slot="button"])` rule must ALSO exclude ' +
 				'[data-slot="dropdown-menu-item"] — without it every <Link> rendered ' +
 				"through `<DropdownMenuItem asChild>` takes link-teal while its " +
 				"button siblings keep the foreground color, splitting one menu into " +
-				"two visual classes (#541, found by /qa 2026-08-10).",
-		).toContain(
-			'a:not([data-slot="button"]):not([data-slot="dropdown-menu-item"])',
-		);
+				`two visual classes (#541, found by /qa 2026-08-10). Expected a line \`${SELECTOR} {\`.`,
+		).toBe(true);
 	});
 
 	it("applies the same exclusion to the :hover rule", () => {
@@ -48,11 +61,9 @@ describe("the unlayered text-link rule leaves component-colored anchors alone", 
 		// leaves the teal reappearing under the cursor, which reads as a
 		// different kind of item exactly when the user is about to click it.
 		expect(
-			readSource(STYLES),
+			hasRule(`${SELECTOR}:hover`),
 			"the :hover half of the text-link rule needs the same exclusion, or " +
 				"menu items flip to link-teal on hover.",
-		).toContain(
-			'a:not([data-slot="button"]):not([data-slot="dropdown-menu-item"]):hover',
-		);
+		).toBe(true);
 	});
 });

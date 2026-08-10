@@ -56,12 +56,20 @@ describe("the Minutes jump anchor (#541 D2)", () => {
 		// under the header. `scroll-mt-28` is 112px, clearing 105px by 7px.
 		// Raising the banner's height or the header's padding invalidates this
 		// number — re-measure rather than bumping it blind.
+		//
+		// Counted, not `toContain`: one occurrence anywhere in a 1000-line route
+		// satisfies a substring check, and the anchor is rendered TWICE (the
+		// loaded-minutes section and the getMinutes-degrade fallback). Mutation-
+		// verified during the ship review — dropping `scroll-mt-28` from the
+		// fallback alone left this file 7/7 green, re-opening the measured
+		// geometry defect on exactly the path that is hardest to reach by hand.
+		const margins = readSource(ROUTE).match(/scroll-mt-28/g) ?? [];
 		expect(
-			readSource(ROUTE),
-			"the anchored minutes section needs `scroll-mt-28` (112px) to clear " +
-				"the 105px impersonation-tall sticky header; `scroll-mt-24` (96px) " +
-				"is 9px short and any smaller utility silently re-opens that gap.",
-		).toContain("scroll-mt-28");
+			margins.length,
+			"expected `scroll-mt-28` on BOTH anchored sections (loaded minutes and " +
+				`the degrade fallback) — found ${margins.length}. The section that ` +
+				"loses it lands 9px under the impersonation-tall sticky header.",
+		).toBeGreaterThanOrEqual(2);
 	});
 
 	it("the toolbar links to the constant, not a raw '#minutes' string", () => {

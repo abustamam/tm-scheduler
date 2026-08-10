@@ -64,7 +64,16 @@ describe("MeetingPersonalStrip (#541 D3)", () => {
 		});
 		const chip = screen.getByRole("button", { name: /undo/i });
 		expect(chip.textContent).toMatch(/can't make this one — undo\?/i);
-		expect(chip.dataset.variant).toBe("default");
+		// `secondary`, not `default`: the marked state must read as an engaged
+		// toggle WITHOUT wearing `bg-primary`, because this strip renders directly
+		// above the toolbar and `default` put a second filled control in the
+		// header next to the phase primary. See the composition test in
+		// meeting-chrome-composition.test.tsx, which is the only gate that can
+		// see that — each component alone looks fine.
+		expect(chip.dataset.variant).toBe("secondary");
+		// And it must stay visually distinct from the unmarked state, or the
+		// fix above would have silently deleted the state signal.
+		expect(chip.dataset.variant).not.toBe("outline");
 		await userEvent.click(chip);
 		expect(onToggle).toHaveBeenCalledOnce();
 	});

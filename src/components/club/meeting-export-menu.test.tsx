@@ -158,6 +158,65 @@ describe("MeetingExportMenu (#541 D2)", () => {
 		).toBeNull();
 	});
 
+	// Both props are optional and the gate is `deck && clubName`, so each half
+	// alone must not offer the item: `deckToPptx` would be handed an empty deck
+	// or the file named `undefined Agenda.pptx`. The neither-case above cannot
+	// distinguish a two-sided gate from a one-sided one.
+	it.each<[string, Partial<typeof BASE>]>([
+		[
+			"a deck but no club name",
+			{ deck: [{ kind: "title" }] as unknown as Slide[] },
+		],
+		["a club name but no deck", { clubName: "HCS" }],
+	])("hides Download .pptx with %s", async (_label, props) => {
+		await openMenu(props);
+		expect(
+			screen.queryByRole("menuitem", { name: /download \.pptx/i }),
+		).toBeNull();
+	});
+
+	// The `.catch(() => {})` in the onSelect handler is insurance against a
+	// future contract breach in `downloadDeckPptx` (which today toasts its own
+	// failures and never rejects). Every other test in this file mocks the
+	// helper as resolving, so this is the ONLY one that makes it reject — and
+	// therefore the only one that can observe the `.catch` at all.
+	//
+	// Honest about the mechanism: the explicit assertion below pins the toast
+	// dismissal (which `.finally` does either way). Deleting the `.catch` is
+	// caught one step over — the rejection escapes and Vitest fails the RUN on
+	// the unhandled rejection. Verified by mutation: removing the `.catch` turns
+	// this file red, and removing this test makes that mutation invisible.
+	it("a REJECTING exporter still dismisses the loading toast and never propagates", async () => {
+		toastDismiss.mockClear();
+		downloadDeckPptx.mockRejectedValueOnce(new Error("contract breach"));
+		const deck = [{ kind: "title" }] as unknown as Slide[];
+		await openMenu({ deck, clubName: "HCS" });
+		await userEvent.click(
+			screen.getByRole("menuitem", { name: /download \.pptx/i }),
+		);
+		await waitFor(() => expect(toastDismiss).toHaveBeenCalledWith(42));
+	});
+
+	// State-controlled dialog: it has no DialogTrigger, so Radix's default
+	// focus-return is a silent no-op that drops focus on <body>. The component
+	// preventDefaults `onCloseAutoFocus` and refocuses the menu trigger itself —
+	// remove that and a keyboard user is teleported to the top of the document
+	// after downloading a role sheet, with every other test still green.
+	it("closing the role-sheets dialog returns focus to the Print & export trigger", async () => {
+		await openMenu();
+		await userEvent.click(
+			screen.getByRole("menuitem", { name: /this meeting's role sheets/i }),
+		);
+		expect(screen.getByRole("dialog")).toBeTruthy();
+		await userEvent.keyboard("{Escape}");
+		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+		await waitFor(() =>
+			expect(document.activeElement).toBe(
+				screen.getByRole("button", { name: /print & export/i }),
+			),
+		);
+	});
+
 	it("closes the menu, toasts progress, and forwards deck/clubName to the pptx exporter", async () => {
 		const deck = [{ kind: "title" }] as unknown as Slide[];
 		await openMenu({ deck, clubName: "HCS" });

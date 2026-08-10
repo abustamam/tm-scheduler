@@ -13,7 +13,12 @@ const BASE = {
 	clubSlug: "downtown",
 	meetingId: "2026-08-10",
 	dbMeetingId: "11111111-2222-4333-8444-555555555555",
-	sharePath: "/club/downtown/meeting/2026-08-10",
+	// Deliberately NOT `/club/${clubSlug}/meeting/${meetingId}`. With the
+	// derivable value here, the "passes sharePath through" test below could not
+	// fail: replacing `path={sharePath}` with a locally-built template string
+	// kept all 22 tests green (mutation-verified in the ship review). The
+	// `?from=share` discriminator makes the prop observably the source.
+	sharePath: "/club/downtown/meeting/2026-08-10?from=share",
 	printLayout: undefined as AgendaLayout | undefined,
 	wordOfTheDay: null as string | null,
 	deck: undefined as Slide[] | undefined,
@@ -173,6 +178,38 @@ describe("MeetingToolbar (#541 D2)", () => {
 		expect(onComplete).toHaveBeenCalledTimes(1);
 	});
 
+	// Persona × phase cell the matrix above skips: every locked-meeting case
+	// sets canManage. `Reopen meeting` is gated on `canManage && locked`, and
+	// the only test that varies canManage does it on an UNLOCKED meeting — so
+	// dropping the canManage half of that condition passes the whole suite while
+	// handing a member (or an officer previewing as one, which is the same prop)
+	// a button that unlocks the club's completed minutes.
+	it("member/guest on a locked meeting gets NO officer controls at all", async () => {
+		await renderToolbar({
+			phase: "completed",
+			hasIdentity: true,
+			canManage: false,
+			locked: true,
+			canComplete: true,
+			hasAddableRoles: true,
+		});
+		expect(
+			screen.queryByRole("button", { name: /reopen meeting/i }),
+		).toBeNull();
+		expect(screen.queryByRole("button", { name: /add role/i })).toBeNull();
+		expect(
+			screen.queryByRole("button", { name: /complete meeting/i }),
+		).toBeNull();
+		// …but the read-only affordances stay: a locked meeting is still shareable
+		// and still printable by everyone (#365).
+		expect(
+			screen.getByRole("button", { name: /copy share link/i }),
+		).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: /print & export/i }),
+		).toBeTruthy();
+	});
+
 	it("wires the reopen handler", async () => {
 		const onReopen = vi.fn();
 		await renderToolbar({ canManage: true, locked: true, onReopen });
@@ -208,6 +245,32 @@ describe("MeetingToolbar (#541 D2)", () => {
 			name: /complete meeting/i,
 		}) as HTMLButtonElement;
 		expect(complete.disabled).toBe(true);
+	});
+
+	// `disabled` alone tells a screen-reader user nothing: the swapped-in spinner
+	// is a childless lucide icon, which lucide-react marks `aria-hidden`, and
+	// `disabled` has already removed the button from the focus order. So the
+	// only signal that a lifecycle mutation is in flight is the visual spin.
+	// MeetingPersonalStrip's availability chip already sets aria-busy; these two
+	// did not until the ship design review.
+	it.each([
+		{ name: /complete meeting/i, props: { canComplete: true } },
+		{ name: /reopen meeting/i, props: { locked: true } },
+	])("announces the in-flight mutation via aria-busy — $name", async ({
+		name,
+		props,
+	}) => {
+		await renderToolbar({ canManage: true, lifecycleBusy: true, ...props });
+		expect(screen.getByRole("button", { name }).getAttribute("aria-busy")).toBe(
+			"true",
+		);
+		cleanup();
+		// Not stuck on: it must be absent/false when idle, or it announces a
+		// permanent busy state and the assertion above proves nothing.
+		await renderToolbar({ canManage: true, lifecycleBusy: false, ...props });
+		expect(
+			screen.getByRole("button", { name }).getAttribute("aria-busy"),
+		).not.toBe("true");
 	});
 
 	it("lifecycle mutation in flight while locked: Reopen meeting disables instead of hiding", async () => {
@@ -271,7 +334,9 @@ describe("MeetingToolbar (#541 D2)", () => {
 		await renderToolbar({ hasIdentity: true });
 		await user.click(screen.getByRole("button", { name: /copy share link/i }));
 		const copied = await window.navigator.clipboard.readText();
-		expect(copied).toContain("/club/downtown/meeting/2026-08-10");
+		// The discriminator, not just the path: it exists nowhere the component
+		// could reconstruct, so this can only pass if the PROP was used.
+		expect(copied).toContain("/club/downtown/meeting/2026-08-10?from=share");
 	});
 
 	// Regression: /qa 2026-08-10 — Complete meeting shipped at the DEFAULT
@@ -316,7 +381,21 @@ describe("MeetingToolbar (#541 D2)", () => {
 		// Queried by attribute rather than by role: the primary renders as an
 		// <a data-slot="button">, so getAllByRole("button") would miss it and the
 		// count would be wrong in the direction that passes.
-		const filled = [...document.querySelectorAll('[data-variant="default"]')];
+		//
+		// Scoped to `[data-slot="button"]` because `DropdownMenuItem` ALSO stamps
+		// `data-variant="default"` — a bare attribute query starts counting menu
+		// items the moment any case opens the export menu, and the failure
+		// message would still say "filled control in the toolbar".
+		//
+		// NOTE: this counts within a render of the TOOLBAR ALONE, so it is blind
+		// to a filled control in the personal strip stacked above it in the real
+		// header — which is exactly how the second collision shipped. The
+		// composed count lives in meeting-chrome-composition.test.tsx.
+		const filled = [
+			...document.querySelectorAll(
+				'[data-slot="button"][data-variant="default"]',
+			),
+		];
 		expect(
 			filled.map((el) => el.textContent?.trim()),
 			"expected exactly one filled control in the toolbar — the phase primary",
