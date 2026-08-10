@@ -2,6 +2,13 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.10.3.0] - 2026-08-10
+
+### Fixed
+
+- **The guest book can no longer be used to stuff your minutes.** Signing the guest book during a meeting records the visitor as present, which reaches the official minutes and the email that goes out afterwards — and the form takes no account, by design. It now caps how many new guests one club can register in an hour, so the record cannot be filled with names nobody recognises. A returning visitor is never counted against the cap, and an officer can still add anyone by hand.
+- **The roster's "I'm new — add me" cap now works when several people tap at once.** It counted before inserting rather than as one step, so a burst of simultaneous sign-ups could all slip past the limit together. Both public forms now hold under real concurrency.
+
 ## [1.10.2.0] - 2026-08-10
 
 ### Fixed

@@ -9,7 +9,7 @@
  * that env is unset.
  */
 import { randomUUID } from "node:crypto";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, count, eq, inArray, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
@@ -55,6 +55,8 @@ const {
 	applySetGuestStage,
 	applyUpdateGuest,
 	captureGuestVisit,
+	GUEST_BOOK_MAX_NEW_PER_WINDOW,
+	GUEST_BOOK_THROTTLED_MESSAGE,
 	loadGuestPipeline,
 } = await import("#/server/guest-pipeline-logic");
 const { applyAssignGuestToSlot, listClubGuests } = await import(
@@ -1793,6 +1795,99 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 					actorMemberId: null,
 				}),
 			).rejects.toThrow(/already been converted/i);
+		});
+	});
+
+	// The guest book is a session-less public POST, and since v1.9.0.0 it is
+	// linked from the public club page rather than only living on a printed QR.
+	// Uncapped it mints `guests` rows without limit — and during a meeting each
+	// new guest ALSO becomes a `meeting_attendance` row with `status: "present"`
+	// that reaches the official minutes and the minutes email.
+	describe("public signup throttle", () => {
+		/** Fill the club's window to `n` new guests, bypassing the public path so
+		 *  the fixture itself is not throttled while building the precondition. */
+		async function seedGuests(clubId: string, n: number) {
+			if (n === 0) return;
+			await testDb.insert(guests).values(
+				Array.from({ length: n }, (_, i) => ({
+					clubId,
+					name: `Seeded Guest ${i}`,
+				})),
+			);
+		}
+
+		it("refuses a NEW guest once the club is over the window cap", async () => {
+			await seedGuests(seed.clubId, GUEST_BOOK_MAX_NEW_PER_WINDOW);
+			await expect(
+				captureGuestVisit({
+					clubId: seed.clubId,
+					name: "One Too Many",
+					email: null,
+					phone: null,
+				}),
+			).rejects.toThrow(GUEST_BOOK_THROTTLED_MESSAGE);
+		});
+
+		it("still lets a RETURNING guest sign in when the cap is full", async () => {
+			// The regular who comes every week must never be turned away because
+			// strangers filled the window: only the create path consumes the cap.
+			const phone = uniquePhone();
+			const first = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Regular Visitor",
+				email: null,
+				phone,
+			});
+			await seedGuests(seed.clubId, GUEST_BOOK_MAX_NEW_PER_WINDOW);
+			const again = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Regular Visitor",
+				email: null,
+				phone,
+			});
+			expect(again.created).toBe(false);
+			expect(again.guestId).toBe(first.guestId);
+		});
+
+		it("is scoped to ONE club — a busy club cannot throttle its neighbour", async () => {
+			const other = await seedClub();
+			try {
+				await seedGuests(seed.clubId, GUEST_BOOK_MAX_NEW_PER_WINDOW);
+				const res = await captureGuestVisit({
+					clubId: other.clubId,
+					name: "Unaffected Visitor",
+					email: null,
+					phone: null,
+				});
+				expect(res.created).toBe(true);
+			} finally {
+				await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+			}
+		});
+
+		it("holds under a CONCURRENT burst, not just a sequential loop", async () => {
+			// The case a sequential test cannot see. A count taken outside the
+			// transaction lets every concurrent request read the same pre-insert
+			// total and all pass — that exact bypass was proved on the voting guest
+			// cap (#510), where 200 concurrent calls cleared a limit of 60.
+			const burst = GUEST_BOOK_MAX_NEW_PER_WINDOW * 3;
+			const results = await Promise.allSettled(
+				Array.from({ length: burst }, (_, i) =>
+					captureGuestVisit({
+						clubId: seed.clubId,
+						name: `Burst Visitor ${i}`,
+						email: null,
+						phone: null,
+					}),
+				),
+			);
+			const accepted = results.filter((r) => r.status === "fulfilled").length;
+			const [row] = await testDb
+				.select({ n: count() })
+				.from(guests)
+				.where(eq(guests.clubId, seed.clubId));
+			expect(accepted).toBeLessThanOrEqual(GUEST_BOOK_MAX_NEW_PER_WINDOW);
+			expect(row.n).toBeLessThanOrEqual(GUEST_BOOK_MAX_NEW_PER_WINDOW);
 		});
 	});
 });

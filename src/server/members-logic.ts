@@ -7,7 +7,7 @@
 // that same module is NOT stripped and drags `pg` → `Buffer` into the browser
 // (ReferenceError: Buffer is not defined). Keeping the db logic in this
 // never-client-imported module keeps `pg` server-side. See `auth-context.ts`.
-import { and, count, eq, gte, inArray, isNull, ne } from "drizzle-orm";
+import { and, count, eq, gte, inArray, isNull, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import { meetings, members, people, roleSlots } from "#/db/schema";
@@ -47,36 +47,50 @@ export const SELF_ADD_THROTTLED_MESSAGE =
  * Extracted from `addMember`'s handler so the throttle is integration-testable.
  */
 export async function applySelfAdd(input: { clubId: string; name: string }) {
-	const since = new Date(Date.now() - SELF_ADD_WINDOW_MS);
-	const [recent] = await db
-		.select({ n: count() })
-		.from(members)
-		.where(
-			and(eq(members.clubId, input.clubId), gte(members.createdAt, since)),
+	// Count and insert in ONE transaction, behind a lock on the club row. The
+	// original #326 implementation counted outside any transaction, which is not
+	// a cap: every concurrent request reads the same pre-insert total and they
+	// all pass. Proved on two sibling caps in this repo — the voting guest cap
+	// (#510) let 200 concurrent calls clear a limit of 60, and the guest book let
+	// 33 clear 30 — so this one was assumed broken and confirmed by test rather
+	// than left on trust. `FOR UPDATE` serialises self-adds per club; under READ
+	// COMMITTED the COUNT takes a fresh snapshot once the lock is granted, so it
+	// sees what the requests ahead of it committed.
+	return db.transaction(async (tx) => {
+		await tx.execute(
+			sql`SELECT id FROM clubs WHERE id = ${input.clubId} FOR UPDATE`,
 		);
-	if ((recent?.n ?? 0) >= SELF_ADD_MAX_PER_WINDOW) {
-		throw new Error(SELF_ADD_THROTTLED_MESSAGE);
-	}
+		const since = new Date(Date.now() - SELF_ADD_WINDOW_MS);
+		const [recent] = await tx
+			.select({ n: count() })
+			.from(members)
+			.where(
+				and(eq(members.clubId, input.clubId), gte(members.createdAt, since)),
+			);
+		if ((recent?.n ?? 0) >= SELF_ADD_MAX_PER_WINDOW) {
+			throw new Error(SELF_ADD_THROTTLED_MESSAGE);
+		}
 
-	const [person] = await db
-		.insert(people)
-		.values({ name: input.name })
-		.returning({ id: people.id });
-	if (!person) throw new Error("Failed to insert person.");
-	const [m] = await db
-		.insert(members)
-		.values({ clubId: input.clubId, personId: person.id, name: input.name })
-		.returning({ id: members.id });
-	if (!m) throw new Error("Failed to insert member.");
-	await logActivity(db, {
-		clubId: input.clubId,
-		actorMemberId: m.id,
-		action: "member_add",
-		targetType: "member",
-		targetId: m.id,
-		detail: { name: input.name },
+		const [person] = await tx
+			.insert(people)
+			.values({ name: input.name })
+			.returning({ id: people.id });
+		if (!person) throw new Error("Failed to insert person.");
+		const [m] = await tx
+			.insert(members)
+			.values({ clubId: input.clubId, personId: person.id, name: input.name })
+			.returning({ id: members.id });
+		if (!m) throw new Error("Failed to insert member.");
+		await logActivity(tx, {
+			clubId: input.clubId,
+			actorMemberId: m.id,
+			action: "member_add",
+			targetType: "member",
+			targetId: m.id,
+			detail: { name: input.name },
+		});
+		return { id: m.id };
 	});
-	return { id: m.id };
 }
 
 /**
