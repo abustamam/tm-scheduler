@@ -17,6 +17,7 @@ import {
 } from "#/components/ui/dialog";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
+import { WhatsAppPhoneLink } from "#/components/whatsapp-phone-link";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { formatShortDate } from "#/lib/format";
@@ -299,7 +300,13 @@ function GuestRow({
 	const firstVisit = guest.firstVisitAt
 		? `first ${formatShortDate(guest.firstVisitAt)}`
 		: null;
-	const contact = [guest.phone, guest.email].filter(Boolean).join(" · ");
+	// Phone and email used to be joined into one string, which can't carry a
+	// link. They are elements now, so the "·" between them is an element too —
+	// and it must agree with what `WhatsAppPhoneLink` actually RENDERS (it trims
+	// and renders nothing for a blank value), not with the raw column, or a
+	// whitespace-only phone leaves a separator dangling in front of the email.
+	const hasPhone = (guest.phone ?? "").trim() !== "";
+	const hasEmail = (guest.email ?? "").trim() !== "";
 
 	return (
 		<div className="flex flex-col gap-3 border-b border-[var(--line)] px-5 py-3.5 last:border-b-0 sm:flex-row sm:items-center sm:justify-between">
@@ -311,9 +318,18 @@ function GuestRow({
 				/>
 				<div className="min-w-0 leading-[1.3]">
 					<div className="truncate text-sm font-bold">{guest.name}</div>
-					{contact ? (
-						<div className="truncate text-xs text-[var(--sea-ink-soft)]">
-							{contact}
+					{hasPhone || hasEmail ? (
+						<div className="flex min-w-0 flex-wrap items-center gap-x-2 text-xs text-[var(--sea-ink-soft)]">
+							<WhatsAppPhoneLink phone={guest.phone} name={guest.name} />
+							{hasPhone && hasEmail ? <span aria-hidden>·</span> : null}
+							{hasEmail ? (
+								<a
+									href={`mailto:${guest.email}`}
+									className="min-w-0 truncate hover:underline"
+								>
+									{guest.email}
+								</a>
+							) : null}
 						</div>
 					) : null}
 					<div className="text-xs text-[var(--sea-ink-soft)]">
