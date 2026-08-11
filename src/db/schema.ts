@@ -93,6 +93,9 @@ export const activityActionEnum = pgEnum("activity_action", [
 	"claim",
 	"release",
 	"reassign",
+	// LEGACY (2026-08-11): superseded by `plan_set` below, which covers the whole
+	// reached_out/coming/not_coming ladder. Kept — never remove — so historical
+	// activity_log rows written before the cutover keep rendering in the feed.
 	"availability_set",
 	"availability_clear",
 	"member_add",
@@ -118,6 +121,8 @@ export const activityActionEnum = pgEnum("activity_action", [
 	"club_logo_removed",
 	// Officer outreach tracking (#340): a member was marked "contacted" for a
 	// meeting (or the mark was cleared). `detail = { memberId, via }`.
+	// LEGACY (2026-08-11): superseded by `plan_set` below — kept for historical
+	// activity_log rows only.
 	"outreach_set",
 	"outreach_clear",
 	// Digital voting (#510): a vote window opened or closed. Deliberately NOT
@@ -126,6 +131,11 @@ export const activityActionEnum = pgEnum("activity_action", [
 	// record. `detail = { category }`.
 	"vote_open",
 	"vote_close",
+	// Planned attendance changed (spec 2026-08-11, D1). One action for every
+	// rung of the ladder; the rung is in the detail, not the action name.
+	// `detail = { memberId, status: "reached_out" | "coming" | "not_coming" | null, via }`
+	// where `status: null` means the row was cleared back to "no answer".
+	"plan_set",
 ]);
 
 // Impersonation session mode (ADR-0020 / #185, #246). `read_only` = "View as this
@@ -144,6 +154,19 @@ export const attendanceStatusEnum = pgEnum("attendance_status", [
 	"present",
 	"absent",
 	"excused",
+]);
+
+// Planned attendance for an UPCOMING meeting (D1 of the 2026-08-11 spec).
+// Replaces two disconnected booleans: `meeting_outreach` ("I asked them") and
+// `member_availability` ("not available"). Row ABSENT = "no answer" — silence
+// and a positive answer used to be indistinguishable, which is why `coming`
+// exists at all. Deliberately NOT `attendance_status`: that one is the RECORD
+// (present/absent/excused) written after the meeting, and a plan must never be
+// storable as a record. See `meeting_attendance` below.
+export const attendancePlanStatusEnum = pgEnum("attendance_plan_status", [
+	"reached_out",
+	"coming",
+	"not_coming",
 ]);
 
 // The three award/ribbon categories captured in the minutes (ADR-0014 / #152).
@@ -911,6 +934,38 @@ export const meetingOutreach = pgTable(
 		// index so ON CONFLICT can infer it (idempotent mark).
 		uniqueIndex("meeting_outreach_unique").on(t.memberId, t.meetingId),
 		index("meeting_outreach_meeting_idx").on(t.meetingId),
+	],
+);
+
+// ---------------------------------------------------------------------------
+// Planned attendance — one row per (member, meeting) carrying where the outreach
+// got to. Supersedes `member_availability` (row = not available) and
+// `meeting_outreach` (row = contacted), both dropped later in the same PR: they
+// answered overlapping questions and could disagree, and neither could express
+// "she replied, she's coming". `not_coming` is the ONLY encoding of "unavailable"
+// in the database — every reader that used to test for a `member_availability`
+// row now tests `status = 'not_coming'`.
+// ---------------------------------------------------------------------------
+
+export const meetingAttendancePlan = pgTable(
+	"meeting_attendance_plan",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		memberId: uuid("member_id")
+			.notNull()
+			.references(() => members.id, { onDelete: "cascade" }),
+		meetingId: uuid("meeting_id")
+			.notNull()
+			.references(() => meetings.id, { onDelete: "cascade" }),
+		status: attendancePlanStatusEnum("status").notNull(),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+		updatedAt: timestamp("updated_at").defaultNow().notNull(),
+	},
+	(t) => [
+		// Plain unique index (not a composite PK) so ON CONFLICT can infer it as
+		// an arbiter for the upsert in `setPlanStatus`.
+		uniqueIndex("meeting_attendance_plan_unique").on(t.memberId, t.meetingId),
+		index("meeting_attendance_plan_meeting_idx").on(t.meetingId),
 	],
 );
 

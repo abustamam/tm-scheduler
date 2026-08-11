@@ -421,6 +421,13 @@
       "when": 1786244210982,
       "tag": "0059_luxuriant_mole_man",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1786484720876,
+      "tag": "0060_orange_zzzax",
+      "breakpoints": true
     }
   ]
 }
