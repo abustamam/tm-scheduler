@@ -5,7 +5,13 @@ import {
 	createRouter,
 	RouterProvider,
 } from "@tanstack/react-router";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+	cleanup,
+	render,
+	screen,
+	waitFor,
+	within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { StoredMember } from "#/lib/member-identity";
@@ -322,10 +328,18 @@ describe("SeasonGrid contacted marker (#340)", () => {
 });
 
 describe("SeasonGrid contact column", () => {
+	// Scoped to the member's own <tr>. A grid-wide `getByText("—")` only proves
+	// an em dash exists SOMEWHERE — it would pass on the neighbouring Email cell
+	// while the Phone cell rendered blank.
+	const rowFor = (name: string | RegExp) =>
+		within(screen.getByRole("row", { name }));
+
 	it("renders the member's phone as a WhatsApp link, not a dialer link", async () => {
 		await renderContactGrid();
 
-		const link = screen.getByRole("link", { name: /\+14155552671/ });
+		const link = rowFor(/Carla Nguyen/).getByRole("link", {
+			name: /\+14155552671/,
+		});
 		const href = link.getAttribute("href") ?? "";
 		expect(href).toContain("whatsapp");
 		expect(href).not.toContain("tel:");
@@ -336,13 +350,34 @@ describe("SeasonGrid contact column", () => {
 
 	it("shows the em-dash fallback for a member with no number", async () => {
 		await renderContactGrid();
+		const row = rowFor(/Dev Patel/);
 
-		// Both fixture members carry an email, so the single em dash in the grid is
-		// Dev Patel's empty phone cell — an absent number must not leave the cell
-		// blank. `getByText` throws on more than one match, which is the point.
-		expect(screen.getByText("—")).toBeTruthy();
+		// Dev carries an email, so the one em dash in HIS row is the empty phone
+		// cell — an absent number must not leave the cell blank. `getByText` throws
+		// on more than one match, which is what pins it to the phone cell.
+		expect(row.getByText("—")).toBeTruthy();
+		expect(row.queryByRole("link", { name: /WhatsApp/i })).toBeNull();
+		// The email cell is still populated, so the em dash above cannot be it.
+		expect(row.getByRole("link", { name: "dev@example.com" })).toBeTruthy();
+	});
+
+	it("puts the number under the Phone header, not the Email one", async () => {
+		await renderContactGrid();
+
+		// Row scoping alone cannot see WHICH column a cell sits in: swapping the
+		// two <th> labels leaves every other assertion in this file green. Pin the
+		// last header to the last cell — Phone is the final contact column.
+		const headers = within(screen.getAllByRole("row")[0] as HTMLElement)
+			.getAllByRole("columnheader")
+			.map((h) => h.textContent);
+		expect(headers.at(-1)).toBe("Phone");
+		expect(headers.at(-2)).toBe("Email");
+
+		const cells = rowFor(/Carla Nguyen/).getAllByRole("cell");
 		expect(
-			screen.queryByRole("link", { name: /Dev Patel.*WhatsApp/ }),
-		).toBeNull();
+			within(cells.at(-1) as HTMLElement).getByRole("link", {
+				name: /\+14155552671/,
+			}),
+		).toBeTruthy();
 	});
 });
