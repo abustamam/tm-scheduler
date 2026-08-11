@@ -311,6 +311,72 @@ describe.skipIf(!hasTestDb)(
 			expect(await resolvePublicMeetingKey(s.clubId, s.meetingId)).toBe(
 				s.meetingId,
 			);
+			// The ballot rides the OTHER gate (`isReadableClubForMeeting`), whose
+			// restore path nothing above exercises: every assertion in this case
+			// resolves the club by id, so `isReadableClubForMeeting` could be left
+			// returning a stale `false` and the case would still read green.
+			expect(await loadBallot(s.meetingId)).toMatchObject({
+				meetingId: s.meetingId,
+			});
+			expect(await isReadableClubForMeeting(s.meetingId)).toBe(true);
+		});
+
+		/**
+		 * Both not-found values are built by a FUNCTION per call (`emptyGrid` in
+		 * `season-grid-logic.ts`, `closedBallotCategories` in `voting-logic.ts`),
+		 * and both carry a comment saying why: a module-level singleton would let
+		 * one archived-club caller's in-place `.push()` / `.sort()` reshape what
+		 * the NEXT one receives, because the real loaders hand every caller its
+		 * own arrays.
+		 *
+		 * Nothing asserted that. Verified by mutation: rewriting `emptyGrid` to
+		 * return a shared `const` left all 1,444 `src/server` tests green — the
+		 * documented reason was pure prose, which is the repo's "a test stated
+		 * relative to the thing it guards cannot fail" trap wearing a different
+		 * hat. Identity is the only observable that distinguishes the two designs,
+		 * so identity is what this asserts.
+		 */
+		it("hands each archived-club caller its own not-found value", async () => {
+			const s = await seedPublicClub();
+			await archive(s.clubId);
+
+			const first = await loadPublicSeasonGrid({
+				clubId: s.clubId,
+				count: 4,
+			});
+			const second = await loadPublicSeasonGrid({
+				clubId: s.clubId,
+				count: 4,
+			});
+			expect(first).not.toBe(second);
+			expect(first.members).not.toBe(second.members);
+			expect(first.cells).not.toBe(second.cells);
+
+			// The consequence the identity check exists to prevent, stated directly.
+			first.members.push({ id: "x", name: "Leaked" });
+			first.meetings.push({} as (typeof first.meetings)[number]);
+			expect(
+				(await loadPublicSeasonGrid({ clubId: s.clubId, count: 4 })).members,
+			).toEqual([]);
+			expect(
+				(await loadPublicSeasonGrid({ clubId: s.clubId, count: 4 })).meetings,
+			).toEqual([]);
+
+			const ballotA = await loadBallot(s.meetingId);
+			const ballotB = await loadBallot(s.meetingId);
+			expect(ballotA.categories).not.toBe(ballotB.categories);
+			expect(ballotA.categories.best_speaker.candidates).not.toBe(
+				ballotB.categories.best_speaker.candidates,
+			);
+
+			ballotA.categories.best_speaker.candidates.push({
+				id: "x",
+				name: "Leaked",
+				kind: "member",
+			});
+			expect(
+				(await loadBallot(s.meetingId)).categories.best_speaker.candidates,
+			).toEqual([]);
 		});
 	},
 );
