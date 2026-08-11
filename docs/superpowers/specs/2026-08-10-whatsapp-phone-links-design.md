@@ -119,7 +119,13 @@ Each normalizes with `toE164(raw, cc)` via `loadClubDefaultCountryCode`, matchin
 | `src/routes/_authed/admin/vp-membership.tsx:302` | split the joined `phone · email` string into elements; phone links, email keeps `mailto:` |
 | `src/routes/_authed/roster.tsx` | new Phone column |
 
-**Roster responsive behavior.** `TABLE_GRID` is `grid-cols-[1fr_34px] sm:grid-cols-[1fr_150px_170px_34px]` — below `sm` the roster shows only Member + chevron. The Phone column follows that existing pattern and is `sm`-and-up. This is knowingly backwards from where tap-to-message matters most; the mitigation is that mobile reaches the same link in one tap via member detail, and fighting the established responsive pattern for one column was judged the worse trade.
+**Roster responsive behavior.** `TABLE_GRID` is `grid-cols-[1fr_34px] sm:grid-cols-[1fr_150px_170px_34px]` — below `sm` the roster shows only Member + chevron.
+
+**Amended during implementation (2026-08-10): the Phone column ships at `xl`, not `sm`.** Measured in Chrome, a fifth fixed column at `sm` wants 570px in a 542px content box, collapsing the `1fr` Member track to **0px** — the member's name disappears entirely and the avatar overlaps Speeches. `lg` fails too: the 248px sidebar returns at exactly that tier and consumes the whole viewport gain (+8px of content box), leaving a 108px Member track that cannot fit the 138px "Officer · full admin" badge. `xl` is the first tier with room.
+
+The consequence is real and worth stating plainly: **below 1280px the roster has no phone column at all.** Nothing is unreachable — the same link sits on the member detail page and the sign-up sheet's Contact column, both one tap from a roster row — but the roster itself is desktop-only for this.
+
+If it is ever wanted on narrow screens, the lever is **not** trimming the officer badge (that costs ~170px and the admin signal on every screen below `xl`, and still truncates long names). It is an icon-only WhatsApp button in the trailing Account cluster, which is already `relative z-[2] justify-self-end` and hit-tests correctly: ~32px on the trailing track, the badge survives, and it works at *every* breakpoint including phones.
 
 ## Data
 

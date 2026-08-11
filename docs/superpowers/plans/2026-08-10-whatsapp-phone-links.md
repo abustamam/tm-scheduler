@@ -1120,14 +1120,14 @@ Line 79:
 
 ```tsx
 const TABLE_GRID =
-	"grid-cols-[1fr_34px] sm:grid-cols-[1fr_150px_170px_150px_34px]";
+	"grid-cols-[1fr_34px] sm:grid-cols-[1fr_150px_170px_34px] xl:grid-cols-[1fr_150px_170px_150px_34px]";
 ```
 
 Lines 141-143:
 
 ```tsx
 	const gridCols = canManage
-		? "grid-cols-[1fr_64px] sm:grid-cols-[1fr_140px_160px_150px_64px]"
+		? "grid-cols-[1fr_64px] sm:grid-cols-[1fr_140px_160px_64px] xl:grid-cols-[1fr_140px_160px_150px_64px]"
 		: TABLE_GRID;
 ```
 
@@ -1152,7 +1152,7 @@ In the `rows` map (after `email: m.email,` at line 159):
 After line 296 (`<div className="hidden sm:block">Pathway</div>`):
 
 ```tsx
-					<div className="hidden sm:block">Phone</div>
+					<div className="hidden xl:block">Phone</div>
 ```
 
 - [ ] **Step 4: Add the body cell**
