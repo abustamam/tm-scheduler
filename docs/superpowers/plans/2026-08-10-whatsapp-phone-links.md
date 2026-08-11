@@ -654,7 +654,13 @@ export async function loadClubMembers(
 			.orderBy(asc(members.name)),
 		loadClubDefaultCountryCode(clubId),
 	]);
-	return rows.map((r) => ({ ...r, phone: toE164(r.phone, cc) }));
+	// `?? r.phone` is load-bearing: `toE164` returns null for a value with no
+	// digits ("call the office"), which `toStoredPhone` DELIBERATELY stores
+	// verbatim so the user can still see and edit it. Dropping to null would make
+	// that text vanish from the UI, and it would also starve
+	// `WhatsAppPhoneLink`'s digit-less branch, which exists to render exactly
+	// this as plain text rather than a dead link.
+	return rows.map((r) => ({ ...r, phone: toE164(r.phone, cc) ?? r.phone }));
 }
 
 /** One member's normalized phone. Caller has already authorized. */
@@ -668,14 +674,20 @@ export async function loadMemberProfilePhone(
 		.where(and(eq(members.id, memberId), eq(members.clubId, clubId)))
 		.limit(1);
 	if (!row) return null;
-	return toE164(row.phone, await loadClubDefaultCountryCode(clubId));
+	// `?? row.phone` for the same reason as above — never turn a visible number
+	// into an absent one.
+	return (
+		toE164(row.phone, await loadClubDefaultCountryCode(clubId)) ?? row.phone
+	);
 }
 ```
 
 Then in `src/server/club.ts`:
 
 - `listClubMembers`'s handler replaces its inline `roster` query with `const roster = await loadClubMembers(clubId);` and adds `phone: m.phone,` to the returned object literal (after `email`).
-- `getMemberProfile`'s handler wraps its existing `phone` value: change `phone: member.phone,` to `phone: toE164(member.phone, await loadClubDefaultCountryCode(data.clubId)),`, importing `toE164` from `#/lib/phone` and `loadClubDefaultCountryCode` from `./clubs-logic`.
+- `getMemberProfile`'s handler wraps its existing `phone` value: change `phone: member.phone,` to `phone: toE164(member.phone, await loadClubDefaultCountryCode(data.clubId)) ?? member.phone,`, importing `toE164` from `#/lib/phone` and `loadClubDefaultCountryCode` from `./clubs-logic`. The `?? member.phone` is required for the reason given in `club-logic.ts` above.
+
+Add a test asserting a digit-less stored value (e.g. `"call the office"`) survives to the payload unchanged rather than becoming null.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -815,10 +827,14 @@ placed just before the `return rows.map((r) => {` block, and inside that block:
 ```ts
 			// Coalesced to E.164 (#295) so the pipeline card's WhatsApp link is a
 			// valid full number even for rows written before normalize-on-write.
-			phone: toE164(r.phone, cc),
+			// `?? r.phone` because `toE164` returns null for a digit-less value
+			// ("call the office"), which `toStoredPhone` deliberately stores
+			// verbatim — dropping it would erase a number the VP Membership can
+			// currently read, and starve `WhatsAppPhoneLink`'s plain-text branch.
+			phone: toE164(r.phone, cc) ?? r.phone,
 ```
 
-replacing `phone: r.phone,`.
+replacing `phone: r.phone,`. Add a test asserting a digit-less stored value survives unchanged.
 
 - [ ] **Step 4: Run the test to verify it passes**
 
