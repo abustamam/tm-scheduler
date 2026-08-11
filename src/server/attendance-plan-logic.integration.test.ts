@@ -8,7 +8,13 @@
 import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { meetingAttendancePlan } from "#/db/schema";
-import { cleanup, hasTestDb, type SeededClub, seedClub, testDb } from "#/test/db";
+import {
+	cleanup,
+	hasTestDb,
+	type SeededClub,
+	seedClub,
+	testDb,
+} from "#/test/db";
 
 describe.skipIf(!hasTestDb)("meeting_attendance_plan table", () => {
 	let club: SeededClub;
