@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_COUNTRY_CODE, toE164, toStoredPhone } from "./phone";
+import {
+	coalesceToE164,
+	DEFAULT_COUNTRY_CODE,
+	toE164,
+	toStoredPhone,
+} from "./phone";
 
 describe("toE164", () => {
 	it("keeps an already-international number, stripping formatting", () => {
@@ -30,6 +35,53 @@ describe("toE164", () => {
 
 	it("does not double-prefix a number already starting with +", () => {
 		expect(toE164("+14155552671", "+44")).toBe("+14155552671");
+	});
+});
+
+/**
+ * The read-side coalescer every payload that renders a phone goes through
+ * (season grid, club roster, guest pipeline). Its `?? raw` half is the whole
+ * reason it exists as a named function rather than an inline `toE164` call, so
+ * the digit-less case below is the load-bearing one.
+ */
+describe("coalesceToE164", () => {
+	it("passes an already-E.164 value through, stripping formatting", () => {
+		expect(coalesceToE164("+14155552671", "+1")).toBe("+14155552671");
+		expect(coalesceToE164("+1 (415) 555-2671", "+1")).toBe("+14155552671");
+	});
+
+	it("promotes a national number with the club's country code", () => {
+		expect(coalesceToE164("(415) 555-2671", "+1")).toBe("+14155552671");
+		expect(coalesceToE164("020 7946 0958", "+44")).toBe("+442079460958");
+	});
+
+	it("returns a digit-less value VERBATIM rather than dropping it", () => {
+		// `toE164` returns null here, and `toStoredPhone` deliberately stores such
+		// input as typed so the member can still read and edit it. Coalescing to
+		// null would erase it from the UI and starve `WhatsAppPhoneLink`'s
+		// plain-text branch, which renders exactly this case.
+		expect(coalesceToE164("call the office", "+1")).toBe("call the office");
+		expect(coalesceToE164("ask Dana", "+44")).toBe("ask Dana");
+	});
+
+	it("preserves a national number when there is no country code at all", () => {
+		// `loadClubDefaultCountryCode` never returns null (#397), but the helper is
+		// pure — with no default, the readable number still survives.
+		expect(coalesceToE164("415-555-2671", null)).toBe("415-555-2671");
+		expect(coalesceToE164("415-555-2671")).toBe("415-555-2671");
+	});
+
+	it("returns null for null / undefined", () => {
+		expect(coalesceToE164(null, "+1")).toBeNull();
+		expect(coalesceToE164(undefined, "+1")).toBeNull();
+	});
+
+	it("hands an empty string back unchanged, as the call sites already did", () => {
+		// Pins the one shape where `?? null` and `|| null` disagree. Both shipped
+		// call sites were `toE164(x, cc) ?? x`, which yields "" here — this helper
+		// replaces them, so it has to yield "" too or the refactor is a behavior
+		// change smuggled in as a hoist.
+		expect(coalesceToE164("", "+1")).toBe("");
 	});
 });
 

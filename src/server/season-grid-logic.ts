@@ -13,7 +13,7 @@ import {
 } from "#/db/schema";
 import { buildRoleCounts, buildShortCodes, slotLabel } from "#/lib/agenda";
 import { urlKeysForMeetings } from "#/lib/meeting-url";
-import { toE164 } from "#/lib/phone";
+import { coalesceToE164 } from "#/lib/phone";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 
 export type SeasonGridCount = 4 | 8 | "all";
@@ -270,16 +270,11 @@ export async function loadSeasonGrid(input: {
 		.orderBy(asc(members.name));
 	// Coalesce phone to E.164 with the club default country code (#295) so the
 	// rendered WhatsApp link is a valid full number even for rows stored before
-	// normalize-on-write. Same normalization pattern as `meeting-contacts-logic.ts`
-	// (which parallelizes its two loads; this one can't, being gated on the flag).
+	// normalize-on-write. `coalesceToE164` also preserves an un-normalizable value
+	// rather than dropping it — see its doc comment in `#/lib/phone`.
 	//
-	// `?? m.phone` preserves an un-normalizable value rather than dropping it.
-	// `toStoredPhone` deliberately stores input with no derivable country code
-	// verbatim, and the roster editor's phone field has no digit requirement, so
-	// "call the office" is a REACHABLE stored value, not just legacy data. Without
-	// the fallback it renders as an em-dash and the number is silently gone;
-	// `WhatsAppPhoneLink` already has the branch for it, showing a digit-less
-	// value as plain text instead of a dead link.
+	// The load is not parallelized with the member query the way
+	// `meeting-contacts-logic.ts` does it, because it is gated on the flag.
 	//
 	// The if/else (rather than a ternary sharing the flag with the row build)
 	// keeps the query structurally unreachable on the public path: the grid is
@@ -293,7 +288,7 @@ export async function loadSeasonGrid(input: {
 			id: m.id,
 			name: m.name,
 			email: m.email,
-			phone: toE164(m.phone, cc) ?? m.phone,
+			phone: coalesceToE164(m.phone, cc),
 		}));
 	} else {
 		memberRows = active.map((m) => ({ id: m.id, name: m.name }));

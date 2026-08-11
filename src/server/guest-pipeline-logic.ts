@@ -28,7 +28,7 @@ import {
 } from "#/db/schema";
 import { isAtMeetingNow } from "#/lib/guest-book-window";
 import { namesAgree } from "#/lib/person-name";
-import { toStoredPhone } from "#/lib/phone";
+import { coalesceToE164, toStoredPhone } from "#/lib/phone";
 import { logActivity } from "./activity";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 
@@ -473,9 +473,15 @@ function guestVisits(clubId: string, timeZone: string) {
 export async function loadGuestPipeline(
 	clubId: string,
 ): Promise<PipelineGuestRow[]> {
-	const visits = guestVisits(clubId, await loadClubTimeZone(clubId)).as(
-		"guest_visits",
-	);
+	// Both club-level facts, loaded together: the timezone has to resolve before
+	// the visits subquery can be built, so pairing the country code with it costs
+	// nothing — awaiting `cc` on its own would add a third sequential round-trip
+	// to a payload that already makes two.
+	const [tz, cc] = await Promise.all([
+		loadClubTimeZone(clubId),
+		loadClubDefaultCountryCode(clubId),
+	]);
+	const visits = guestVisits(clubId, tz).as("guest_visits");
 	const [rows, visitRows, slotRows] = await Promise.all([
 		db
 			.select({
@@ -522,7 +528,10 @@ export async function loadGuestPipeline(
 			name: r.name,
 			preferredName: r.preferredName,
 			email: r.email,
-			phone: r.phone,
+			// Coalesced to E.164 (#295) so the pipeline card's WhatsApp link is a
+			// valid full number even for rows written before normalize-on-write, and
+			// a digit-less value still reaches the UI — see `#/lib/phone`.
+			phone: coalesceToE164(r.phone, cc),
 			stage: r.stage,
 			convertedMembershipId: r.convertedMembershipId,
 			visitCount: Number(v?.visitCount ?? 0),

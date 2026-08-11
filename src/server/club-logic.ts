@@ -8,7 +8,7 @@
 import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "#/db";
 import { members, people } from "#/db/schema";
-import { toE164 } from "#/lib/phone";
+import { coalesceToE164 } from "#/lib/phone";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 
 export interface ClubMemberRow {
@@ -24,22 +24,6 @@ export interface ClubMemberRow {
 	createdAt: Date;
 	joinedAt: Date | null;
 	originalJoinDate: Date | null;
-}
-
-/**
- * Coalesce a stored phone to E.164 for a payload.
- *
- * `?? raw` is load-bearing: `toE164` returns null for a value with no digits
- * ("call the office"), which `toStoredPhone` DELIBERATELY stores verbatim so the
- * user can still see and edit it — and the roster editor validates phone as a
- * plain nullable string with no digit requirement, so such a value is reachable
- * in normal use, not just in legacy data. Dropping to null would make that text
- * vanish from the UI, and it would starve `WhatsAppPhoneLink`'s digit-less
- * branch, which exists to render exactly this as plain text rather than a dead
- * link.
- */
-function coalescePhone(raw: string | null, cc: string): string | null {
-	return toE164(raw, cc) ?? raw;
 }
 
 /**
@@ -75,7 +59,7 @@ export async function loadClubMembers(
 			.orderBy(asc(members.name)),
 		loadClubDefaultCountryCode(clubId),
 	]);
-	return rows.map((r) => ({ ...r, phone: coalescePhone(r.phone, cc) }));
+	return rows.map((r) => ({ ...r, phone: coalesceToE164(r.phone, cc) }));
 }
 
 /**
@@ -121,5 +105,5 @@ export async function loadMemberProfile(clubId: string, memberId: string) {
 		loadClubDefaultCountryCode(clubId),
 	]);
 	if (!row) return undefined;
-	return { ...row, phone: coalescePhone(row.phone, cc) };
+	return { ...row, phone: coalesceToE164(row.phone, cc) };
 }

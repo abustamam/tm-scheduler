@@ -1890,4 +1890,64 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			expect(row.n).toBeLessThanOrEqual(GUEST_BOOK_MAX_NEW_PER_WINDOW);
 		});
 	});
+
+	/**
+	 * Read-time phone coalescing on the pipeline payload (#295), the third path
+	 * through `coalesceToE164` after the season grid and the club roster.
+	 *
+	 * These insert into `guests` DIRECTLY, bypassing `toStoredPhone` — that is the
+	 * shape a row written before normalize-on-write (#397) actually has, and it is
+	 * the only way to produce one now that every write path normalizes. The
+	 * `uniquePhone` rule above does not apply: nothing here converts, so no
+	 * `people` row is created to collide with, and each assertion matches on the
+	 * returned guest id rather than on a name or a number.
+	 */
+	describe("loadGuestPipeline phone normalization", () => {
+		async function insertGuestWithPhone(phone: string): Promise<string> {
+			const [row] = await testDb
+				.insert(guests)
+				.values({ clubId: seed.clubId, name: "Sam Visitor", phone })
+				.returning({ id: guests.id });
+			if (!row) throw new Error("Failed to insert guest");
+			return row.id;
+		}
+
+		it("coalesces a pre-#397 national number to E.164", async () => {
+			const guestId = await insertGuestWithPhone("(415) 555-2671");
+			const rows = await loadGuestPipeline(seed.clubId);
+			expect(rows.find((r) => r.id === guestId)?.phone).toBe("+14155552671");
+		});
+
+		it("uses the CLUB's country code, not the app default", async () => {
+			// Pins that the loader is actually consulted rather than `+1` being
+			// hard-coded — the same number resolves differently under +44.
+			await testDb
+				.update(clubs)
+				.set({ defaultCountryCode: "+44" })
+				.where(eq(clubs.id, seed.clubId));
+			const guestId = await insertGuestWithPhone("020 7946 0958");
+			const rows = await loadGuestPipeline(seed.clubId);
+			expect(rows.find((r) => r.id === guestId)?.phone).toBe("+442079460958");
+		});
+
+		it("keeps an un-normalizable phone as stored rather than dropping it", async () => {
+			// `toStoredPhone` stores a digit-less value verbatim so the VPM can still
+			// read and edit it, and the guest editor's phone field has no digit
+			// requirement — so this is reachable in normal use, not just legacy data.
+			// The payload must still carry the text: `WhatsAppPhoneLink` renders it as
+			// plain text instead of a dead link.
+			const guestId = await insertGuestWithPhone("call the office");
+			const rows = await loadGuestPipeline(seed.clubId);
+			expect(rows.find((r) => r.id === guestId)?.phone).toBe("call the office");
+		});
+
+		it("leaves a guest with no phone at null", async () => {
+			const [row] = await testDb
+				.insert(guests)
+				.values({ clubId: seed.clubId, name: "Phoneless Visitor" })
+				.returning({ id: guests.id });
+			const rows = await loadGuestPipeline(seed.clubId);
+			expect(rows.find((r) => r.id === row!.id)?.phone).toBeNull();
+		});
+	});
 });
