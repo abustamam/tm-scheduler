@@ -13,11 +13,15 @@
 // prop and the phone gate in one edit left all 42 tests under `src/routes/
 // _authed` green before this file existed.
 //
-// The `className` assertion is the load-bearing one. `WhatsAppPhoneLink` owns
-// its own layout and `hover:underline`; every call site passes COLOUR and only
-// colour, and this route's is the hover colour that matches the email anchor
-// above it. Drop it and the number stops matching its neighbour on hover —
-// a difference no href/title assertion can see.
+// The `className` assertions are the load-bearing ones, and they are about the
+// contact PAIR rather than either link alone. `WhatsAppPhoneLink` owns its own
+// layout, `hover:underline` and colour — call sites pass no styling at all —
+// and the email anchor beside it has to carry the SAME `text-primary` and the
+// same kind of `data-slot` opt-out, or the two peer actions on one row render
+// in two different colours with the email below AA. That is the state this
+// route shipped in until the email half was escaped too. jsdom computes no
+// cascade, so what is checkable here is the class and the attribute;
+// `whatsapp-phone-link-color.guard.test.ts` holds the cascade half.
 //
 // Pattern follows vp-membership.test.tsx / roster.test.tsx: mock the server-fn
 // modules (they reach `#/db` → `pg`, which must not load under jsdom), stub
@@ -197,6 +201,28 @@ describe("member profile — contact row", () => {
 				.getByRole("link", { name: "ada@example.com" })
 				.getAttribute("href"),
 		).toBe("mailto:ada@example.com");
+	});
+
+	it("renders the email in the SAME colour as the phone beside it", async () => {
+		// The pair, asserted as a pair. Each half on its own looked fine in review
+		// — the phone had `text-primary` + its opt-out, the email had a colour
+		// class — and the row still shipped in two colours, because the email's
+		// class was overridden by the unlayered `a { color }` rule down to
+		// #328f97 (3.81:1 at 12px, below AA) while the phone's opted out and
+		// stayed at #246f76 (5.82:1). A single-link assertion cannot see that;
+		// comparing the two can.
+		await renderRoute();
+		const column = within(headerColumn("Ada Member"));
+		const email = column.getByRole("link", { name: "ada@example.com" });
+		const phone = column.getByRole("link", { name: /\+14155552671/ });
+
+		expect(email.getAttribute("data-slot")).toBe("wa-email");
+		expect(email.className).toContain("text-primary");
+		expect(phone.className).toContain("text-primary");
+		// And no leftover hover colour on one half only — that would resurrect
+		// the split under the cursor, which is when the user is about to click.
+		expect(email.className).not.toContain("hover:text-[");
+		expect(phone.className).not.toContain("hover:text-[");
 	});
 
 	it("renders no phone link for a member with no number, keeping the email", async () => {

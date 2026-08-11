@@ -92,6 +92,48 @@ describe("the unlayered text-link rule leaves component-colored anchors alone", 
 		).toContain(exclusion);
 	});
 
+	it.each([
+		["base", () => base[0]],
+		[":hover", () => hover[0]],
+	])("every exclusion on the %s rule is a data-slot opt-out", (_which, get) => {
+		// The assertions above are all of the form "these exclusions are still
+		// there", which is additive-safe but says nothing about what ELSE has been
+		// added. Appending `:not([class])` to both rules switches the whole
+		// text-link rule off for every real anchor in the app — every one of them
+		// carries Tailwind classes — while all three CSS guards stay green at
+		// 12/12, because the only anchors any of them tested against were bare.
+		// Demonstrated.
+		//
+		// So this pins the SHAPE: an exclusion may only ever name a `data-slot` a
+		// component deliberately stamps on itself. That is what makes the rule's
+		// escape hatch opt-in and greppable; `[class]`, `[href^="/"]`, a class arm
+		// or a bare tag arm are blanket escapes and fail here.
+		const selector = get();
+		expect(selector).toBeTruthy();
+		const arms = [...(selector as string).matchAll(/:not\(([^)]*)\)/g)].map(
+			(m) => (m[1] as string).trim(),
+		);
+		// Anti-vacuity: an extraction that matched nothing passes the loop below on
+		// an empty list. Deliberately `> 0` rather than a count — WHICH exclusions
+		// must survive is `REQUIRED`'s job above, and it names the missing one; a
+		// count here would fail the same regression with an arithmetic message.
+		expect(
+			arms.length,
+			`no :not() arms found in \`${selector}\` — the extraction has drifted ` +
+				"and this assertion is checking nothing",
+		).toBeGreaterThan(0);
+		for (const arm of arms) {
+			expect(
+				arm,
+				`\`:not(${arm})\` is not a [data-slot=…] opt-out. Exclusions here are ` +
+					"additive and that is fine, but each must name a marker a component " +
+					"asked for — an arm like `[class]` widens the exclusion past every " +
+					"component and silently turns the rule off, which no `toContain` " +
+					"assertion can see.",
+			).toMatch(/^\[data-slot[\^$*~|]?="[^"]+"\]$/);
+		}
+	});
+
 	it.each(REQUIRED)("the :hover rule still excludes %s", (exclusion) => {
 		// The hover rule is a SEPARATE selector; excluding only the base rule
 		// leaves the teal reappearing under the cursor, which reads as a

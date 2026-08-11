@@ -350,9 +350,16 @@ function GuestRow({
 									    private. The two free-text writers of `guests.email` are
 									    validated in the same change; rows written before that
 									    persist, so both halves are needed. */}
+									{/* `data-slot="wa-email"` + `text-primary`, matching the phone
+									    link beside it. Third instance of the same pair: the
+									    unlayered `a { color }` rule in styles.css beats any
+									    layered utility, so this address rendered --lagoon-deep
+									    (#328f97, 3.81:1) at 12px — under AA — while its peer
+									    rendered --lagoon-ink (5.82:1). */}
 									<a
 										href={mailtoHref(email)}
-										className="min-w-0 truncate hover:underline"
+										data-slot="wa-email"
+										className="min-w-0 truncate text-primary hover:underline"
 									>
 										{email}
 									</a>

@@ -91,8 +91,13 @@ export function WhatsAppPhoneLink({
 			// Colour lives HERE, not at the call sites. Four of them passed a colour
 			// utility that did nothing (see above), and the component is the only
 			// place that knows which of its three branches is rendering — the
-			// digit-less branch must NOT be painted like a link. `--primary` is
-			// `--lagoon-ink`, annotated AA-verified at 5.8:1 in `styles.css`.
+			// digit-less branch must NOT be painted like a link. In LIGHT mode
+			// `--primary` is `--lagoon-ink`, annotated AA-verified at 5.8:1 in
+			// `styles.css`; `.dark` rebinds `--primary` to `--lagoon`, a different
+			// value on a different background, so that figure is a light-mode
+			// number and not a claim about both themes. The `mailtoHref` anchor
+			// beside this one carries the same pair (`wa-email` + `text-primary`),
+			// because two peer actions on one row must not render in two colours.
 			// `hover:underline` is base for the same reason: the rest of the base is
 			// pure layout, so without it an anchor is indistinguishable from the
 			// plain text beside it.

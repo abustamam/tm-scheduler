@@ -684,8 +684,19 @@ export function SeasonGrid({
 														// `mailtoHref`: a stored "a@b.com?bcc=x" would
 														// otherwise become live mailto HEADERS. Same fix
 														// as the guest card and the member profile.
+														//
+														// `data-slot="wa-email"` for the same reason the
+														// phone link beside it carries `wa-phone`: the
+														// unlayered `a { color }` rule in styles.css beats
+														// this layered `text-primary`, so without the
+														// opt-out the class is DEAD and the address renders
+														// --lagoon-deep (#328f97, 3.81:1) at 12px — under AA,
+														// and a different colour from its own peer action one
+														// cell over (--lagoon-ink, 5.82:1). Two halves of one
+														// Contact pair are not allowed to disagree.
 														<a
 															href={mailtoHref(contact.email)}
+															data-slot="wa-email"
 															className="text-primary hover:underline"
 														>
 															{contact.email}

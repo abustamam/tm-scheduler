@@ -205,9 +205,20 @@ function MemberDetail() {
 								// "a@b.com?cc=x&subject=y" would otherwise become live mailto
 								// HEADERS. `bulkImportSchema` still validates member email as a
 								// plain string, so this is not only a legacy-row concern.
+								//
+								// `data-slot="wa-email"` + `text-primary` mirrors the phone link
+								// beside it exactly, and both halves are required. The unlayered
+								// `a { color }` rule in styles.css beats any layered utility, so
+								// this anchor rendered --lagoon-deep (#328f97, 3.81:1) — under AA
+								// — next to a phone link at --lagoon-ink (5.82:1): one Contact
+								// pair in two colours, one of them failing. The `hover:text-[var
+								// (--sea-ink)]` that used to sit here was inert for the same
+								// reason and is gone rather than revived: it would now WORK, and
+								// send the two halves back to different colours on hover.
 								<a
 									href={mailtoHref(member.email)}
-									className="inline-flex items-center gap-1.5 hover:text-[var(--sea-ink)] hover:underline"
+									data-slot="wa-email"
+									className="inline-flex items-center gap-1.5 text-primary hover:underline"
 								>
 									<Mail className="size-3.5" aria-hidden />
 									{member.email}
