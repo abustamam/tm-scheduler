@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * The WhatsApp phone link's colour is a TWO-FILE fix. This guard fails if either
  * half is edited away.
@@ -104,6 +105,48 @@ describe("WhatsAppPhoneLink colour survives the unlayered anchor rule", () => {
 					"--lagoon-deep (~3.8:1 on white, below AA at 12px). Fix it with " +
 					"another `:not()` — a class cannot beat an unlayered rule.",
 			).toContain('[data-slot="wa-phone"]');
+		}
+	});
+
+	it("neither rule SELECTS the anchor, evaluated as a real selector", () => {
+		// Stronger than the substring check above, and worth both: `toContain`
+		// passes on a selector that is present but wrong — a stray space in
+		// `[data-slot="wa-phone "]`, or an exclusion nested somewhere it does not
+		// apply — while this asks the engine the actual question. Same technique as
+		// `dropdown-menu.test.tsx`, which pins the same rule for menu items.
+		const rules = styles.match(ANCHOR_RULES) ?? [];
+		const selectors = rules.map((r) => r.replace(/\s*\{$/, "").trim());
+		expect(selectors).toHaveLength(2);
+
+		const link = document.createElement("a");
+		link.setAttribute("href", "https://wa.me/14155552671");
+		link.setAttribute("data-slot", "wa-phone");
+		document.body.appendChild(link);
+		try {
+			for (const selector of selectors) {
+				expect(
+					link.matches(selector),
+					`the shipped rule \`${selector}\` still selects the WhatsApp phone ` +
+						"anchor, so it overrides its `text-primary` down to " +
+						"--lagoon-deep (~3.8:1 on white, below AA at 12px).",
+				).toBe(false);
+			}
+
+			// The rule must still do its JOB — an exclusion broad enough to spare
+			// every anchor would pass everything above while silently un-styling
+			// every text link in the app.
+			const ordinary = document.createElement("a");
+			ordinary.setAttribute("href", "/resources");
+			document.body.appendChild(ordinary);
+			for (const selector of selectors) {
+				expect(
+					ordinary.matches(selector.replace(/:hover$/, "")),
+					`\`${selector}\` no longer selects an ordinary text link — the ` +
+						"exclusion has been widened until the rule styles nothing.",
+				).toBe(true);
+			}
+		} finally {
+			document.body.innerHTML = "";
 		}
 	});
 });

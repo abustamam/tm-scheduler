@@ -283,18 +283,14 @@ body::after {
    an unlayered rule; that is the same conclusion the two cases above reached.
    `whatsapp-phone-link-color.guard.test.ts` fails if either half of this pair
    loses its exclusion. */
-a:not([data-slot="button"]):not([data-slot^="dropdown-menu-"]):not(
-    [data-slot="wa-phone"]
-  ) {
+a:not([data-slot="button"]):not([data-slot^="dropdown-menu-"]):not([data-slot="wa-phone"]) {
   color: var(--lagoon-deep);
   text-decoration-color: rgba(50, 143, 151, 0.4);
   text-decoration-thickness: 1px;
   text-underline-offset: 2px;
 }
 
-a:not([data-slot="button"]):not([data-slot^="dropdown-menu-"]):not(
-    [data-slot="wa-phone"]
-  ):hover {
+a:not([data-slot="button"]):not([data-slot^="dropdown-menu-"]):not([data-slot="wa-phone"]):hover {
   color: var(--lagoon-ink);
 }
 
