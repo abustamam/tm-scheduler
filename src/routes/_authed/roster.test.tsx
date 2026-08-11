@@ -273,6 +273,25 @@ describe("roster table — phone column", () => {
 
 		// Stacked above the overlay Link (`z-0`), like the invite control.
 		expect(cell.className).toContain("z-[2]");
+
+		// The OTHER half of the same trade-off, and an intent pin for the same
+		// reason: jsdom performs no layout, so this asserts the class, not the
+		// geometry it buys. Keeping pointer events ON this cell makes its whole box
+		// live, and the box is a fixed 150px grid track — without `w-fit` the live
+		// area is the full column, so every click in the empty space to the RIGHT of
+		// a number is swallowed instead of falling through to the row's overlay
+		// Link, and that row can no longer be opened by clicking near its phone.
+		// `w-fit` shrinks the box to the number itself. Removing it left all 12
+		// tests in this file green; the assertion above cannot see it, because it
+		// walks UPWARD from the link and a wider cell is still not
+		// `pointer-events-none`. Real proof is a click in a browser, done by hand.
+		expect(
+			cell.className,
+			"The phone cell lost `w-fit`. It is NOT pointer-events-none, so its box " +
+				"is live — at the column's full width that box covers the empty space " +
+				"beside every number and swallows clicks meant for the row's overlay " +
+				"Link. See the comment on that cell in roster.tsx.",
+		).toContain("w-fit");
 	});
 
 	// The header and the body rows are INDEPENDENT grids that must carry the SAME

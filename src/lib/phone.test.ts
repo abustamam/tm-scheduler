@@ -83,6 +83,20 @@ describe("coalesceToE164", () => {
 		// change smuggled in as a hoist.
 		expect(coalesceToE164("", "+1")).toBe("");
 	});
+
+	it("returns a digit-less value BYTE-FOR-BYTE, padding included", () => {
+		// The doc says "unlike `toStoredPhone` it does not trim or collapse: the
+		// stored value comes back byte-for-byte". Every other fixture above is
+		// already trimmed, so `?? raw` and `?? raw?.trim()` agree on all of them —
+		// swapping one for the other left 139 tests green. This is the only shape
+		// where the two disagree, and the difference is real: `toStoredPhone` is
+		// what trims on WRITE, so a read path that trims again silently disagrees
+		// with the bytes in the column, and a legacy row stored before that write
+		// path existed would render differently than it edits.
+		expect(coalesceToE164("  call the office  ", "+1")).toBe(
+			"  call the office  ",
+		);
+	});
 });
 
 describe("toStoredPhone", () => {

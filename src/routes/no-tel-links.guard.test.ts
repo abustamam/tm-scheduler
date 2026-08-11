@@ -114,14 +114,14 @@ describe("no tel: links — phone numbers open WhatsApp", () => {
  * swapping `member.name` for the club name — or `member.phone` for
  * `member.email` — would ship past that whole suite.
  *
- * The coverage on the two sites is not equal, which is why both are pinned here:
- *
- *   - `members.$id.tsx` has NO render test at all. This guard is the only thing
- *     that sees its wiring.
- *   - `admin/vp-membership.tsx` does mount in jsdom (`vp-membership.test.tsx`
- *     renders `Route.options.component` over stubbed loader data) and that suite
- *     does observe the rendered href and title. The pin here is a cheap second
- *     net, and `vp-membership.test.tsx`'s own header points at it by name.
+ * Both routes now mount in jsdom over stubbed loader data — `members.$id.test.tsx`
+ * and `vp-membership.test.tsx` each render `Route.options.component` and observe
+ * the rendered href and title — so this guard is a cheap second net rather than
+ * the only reader of either call site. It still earns its place: a render test
+ * sees the RESULT and would pass on `name={member.preferredName ?? member.name}`
+ * or any other expression that happens to produce the same string for its
+ * fixture; the grep pins the EXPRESSION and fails in review. Both suites point
+ * back here by name.
  *
  * Read comment-blind via `readSource` — see the note at the top of this file.
  */
