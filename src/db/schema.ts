@@ -942,9 +942,12 @@ export const meetingOutreach = pgTable(
 // got to. Supersedes `member_availability` (row = not available) and
 // `meeting_outreach` (row = contacted), both dropped later in the same PR: they
 // answered overlapping questions and could disagree, and neither could express
-// "she replied, she's coming". `not_coming` is the ONLY encoding of "unavailable"
-// in the database — every reader that used to test for a `member_availability`
-// row now tests `status = 'not_coming'`.
+// "she replied, she's coming". `not_coming` WILL BE the only encoding of
+// "unavailable" once every reader is repointed later in this PR (Task 6) — but
+// as of THIS commit that repointing hasn't happened: this table is empty,
+// unread and unwritten outside `schema.ts` and its own test, and
+// `member_availability` / `meeting_outreach` remain the sole live source for
+// every consumer.
 // ---------------------------------------------------------------------------
 
 export const meetingAttendancePlan = pgTable(
