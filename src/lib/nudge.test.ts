@@ -154,6 +154,45 @@ describe("buildNudge", () => {
 		expect(noEmail.mailtoUrl).toBeUndefined();
 	});
 
+	it("escapes a stored address so it cannot inject its own mailto headers", () => {
+		// The worst of the four `mailto:` sinks, because this one is a draft the
+		// VPE TAPS TO SEND rather than an address they read first. Interpolated
+		// raw, this address opened a message that (a) blind-copied a third party
+		// and (b) lost this app's own subject line — everything after the FIRST
+		// `?` is headers, so the second `?subject=` became part of the injected
+		// `body` instead of a header of its own.
+		const r = buildNudge({
+			...base,
+			email: "ada@club.org?bcc=attacker@evil.com&body=I resign",
+			mode: "confirm",
+		});
+		const url = r.mailtoUrl ?? "";
+
+		// Exactly one header section: the one this module opened.
+		const sections = url.split("?");
+		expect(sections).toHaveLength(2);
+
+		// And it holds exactly this module's two headers, in its own order — no
+		// `bcc`, and the subject is still a SUBJECT rather than body text.
+		const params = new URLSearchParams(sections[1]);
+		expect([...params.keys()]).toEqual(["subject", "body"]);
+		expect(params.get("subject")).toBe(
+			"Confirming your Timer role — Thu, Jul 23",
+		);
+		expect(params.get("body")).toBe(r.message);
+		// Asserted on the header SECTION, not on the whole URL: the escaped
+		// address still contains the inert characters `bcc` (as `%3Fbcc%3D`),
+		// which is exactly right — they are recipient text now, not a header.
+		expect(sections[1]).not.toContain("bcc");
+
+		// The address itself is preserved, just escaped — the recipient a client
+		// parses is the whole stored string, not a truncation of it that could
+		// silently address someone else.
+		expect(decodeURIComponent(sections[0].slice("mailto:".length))).toBe(
+			"ada@club.org?bcc=attacker@evil.com&body=I resign",
+		);
+	});
+
 	it("recruit subject asks about the open role", () => {
 		const r = buildNudge({ ...base, email: "j@x.io", mode: "recruit" });
 		expect(r.mailtoUrl).toContain(

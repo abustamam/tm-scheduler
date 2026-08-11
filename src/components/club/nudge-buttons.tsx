@@ -42,10 +42,21 @@ export function NudgeButtons({
 	const [mounted, setMounted] = useState(false);
 	useEffect(() => setMounted(true), []);
 
-	// `navigator` does not exist during SSR, so the detection is deferred to the
-	// post-mount render; the server pass falls back to "mobile", the historical
-	// `wa.me` behavior (#485). The `mounted` guard is load-bearing — reading
-	// `navigator` unconditionally here would throw on the server.
+	// Detection is deferred to the post-mount render; the server pass falls back
+	// to "mobile", the historical `wa.me` behavior (#485).
+	//
+	// NOT because `navigator` is missing on the server — it is not. Node 21+ ships
+	// a global one, so on `node:22-slim` `detectPlatform(navigator)` returns
+	// "desktop" (UA `Node.js/24`) rather than throwing. That is the actual hazard:
+	// unguarded, the server would emit `web.whatsapp.com` while a phone's first
+	// client render emits `wa.me`, and the two disagree on an attribute React has
+	// to reconcile — a hydration MISMATCH, not a crash. The guard makes the server
+	// pass and every first client render agree.
+	//
+	// This comment claimed the opposite until `WhatsAppPhoneLink` was written and
+	// the claim was checked. Left uncorrected it invites the obvious cleanup:
+	// verify `navigator` exists, delete the "unnecessary" guard, ship the
+	// mismatch.
 	const platform = mounted ? detectPlatform(navigator) : "mobile";
 
 	const nudge = buildNudge({

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_COUNTRY_CODE, toE164, toStoredPhone } from "./phone";
+import {
+	coalesceToE164,
+	DEFAULT_COUNTRY_CODE,
+	toE164,
+	toStoredPhone,
+} from "./phone";
 
 describe("toE164", () => {
 	it("keeps an already-international number, stripping formatting", () => {
@@ -30,6 +35,67 @@ describe("toE164", () => {
 
 	it("does not double-prefix a number already starting with +", () => {
 		expect(toE164("+14155552671", "+44")).toBe("+14155552671");
+	});
+});
+
+/**
+ * The read-side coalescer every payload that renders a phone goes through
+ * (season grid, club roster, guest pipeline). Its `?? raw` half is the whole
+ * reason it exists as a named function rather than an inline `toE164` call, so
+ * the digit-less case below is the load-bearing one.
+ */
+describe("coalesceToE164", () => {
+	it("passes an already-E.164 value through, stripping formatting", () => {
+		expect(coalesceToE164("+14155552671", "+1")).toBe("+14155552671");
+		expect(coalesceToE164("+1 (415) 555-2671", "+1")).toBe("+14155552671");
+	});
+
+	it("promotes a national number with the club's country code", () => {
+		expect(coalesceToE164("(415) 555-2671", "+1")).toBe("+14155552671");
+		expect(coalesceToE164("020 7946 0958", "+44")).toBe("+442079460958");
+	});
+
+	it("returns a digit-less value VERBATIM rather than dropping it", () => {
+		// `toE164` returns null here, and `toStoredPhone` deliberately stores such
+		// input as typed so the member can still read and edit it. Coalescing to
+		// null would erase it from the UI and starve `WhatsAppPhoneLink`'s
+		// plain-text branch, which renders exactly this case.
+		expect(coalesceToE164("call the office", "+1")).toBe("call the office");
+		expect(coalesceToE164("ask Dana", "+44")).toBe("ask Dana");
+	});
+
+	it("preserves a national number when there is no country code at all", () => {
+		// `loadClubDefaultCountryCode` never returns null (#397), but the helper is
+		// pure — with no default, the readable number still survives.
+		expect(coalesceToE164("415-555-2671", null)).toBe("415-555-2671");
+		expect(coalesceToE164("415-555-2671")).toBe("415-555-2671");
+	});
+
+	it("returns null for null / undefined", () => {
+		expect(coalesceToE164(null, "+1")).toBeNull();
+		expect(coalesceToE164(undefined, "+1")).toBeNull();
+	});
+
+	it("hands an empty string back unchanged, as the call sites already did", () => {
+		// Pins the one shape where `?? null` and `|| null` disagree. Both shipped
+		// call sites were `toE164(x, cc) ?? x`, which yields "" here — this helper
+		// replaces them, so it has to yield "" too or the refactor is a behavior
+		// change smuggled in as a hoist.
+		expect(coalesceToE164("", "+1")).toBe("");
+	});
+
+	it("returns a digit-less value BYTE-FOR-BYTE, padding included", () => {
+		// The doc says "unlike `toStoredPhone` it does not trim or collapse: the
+		// stored value comes back byte-for-byte". Every other fixture above is
+		// already trimmed, so `?? raw` and `?? raw?.trim()` agree on all of them —
+		// swapping one for the other left 139 tests green. This is the only shape
+		// where the two disagree, and the difference is real: `toStoredPhone` is
+		// what trims on WRITE, so a read path that trims again silently disagrees
+		// with the bytes in the column, and a legacy row stored before that write
+		// path existed would render differently than it edits.
+		expect(coalesceToE164("  call the office  ", "+1")).toBe(
+			"  call the office  ",
+		);
 	});
 });
 
@@ -155,5 +221,56 @@ describe("dedup key: one number, one E.164 value (#397)", () => {
 			expect(toE164("+442079460958")).toBe("+442079460958");
 			expect(toE164("+819012345678")).toBe("+819012345678");
 		});
+	});
+});
+
+describe("toStoredPhone is a fixed point over coalesceToE164", () => {
+	// This property is the ONLY reason binding an edit form to the COALESCED
+	// phone (`club-logic.ts`'s `phone`, not `phoneRaw`) does not corrupt the
+	// column: every write path re-normalizes with `toStoredPhone`, and that
+	// re-derivation happens to absorb the country-code guess coalescing added.
+	//
+	// It is a coincidence of the current implementations, not a promise either
+	// function makes, and it is invisible at both call sites. Teach
+	// `coalesceToE164` to strip extensions, or `toStoredPhone` to preserve input
+	// it currently rewrites, and a coalesced prefill silently starts writing the
+	// guess over the stored digits on every save — including a name-only one.
+	//
+	// The edit dialogs bind to `phoneRaw` so they do not depend on this holding.
+	// It is pinned anyway, because the day it breaks is the day that decision
+	// stops being a nicety, and a failure here is the only warning available.
+	const RAWS = [
+		"415-555-2671 x12",
+		"(415) 555-2671",
+		"+14155552671",
+		"+1 916 555 0181",
+		"0044 20 7946 0958",
+		"020 7946 0018",
+		"1 555 123 4567",
+		"+1 1555 123 4567",
+		"00115551234567",
+		"ask at church",
+		"call the office",
+		"",
+		"   ",
+		"  (415) 555-2671  ",
+		"555.123.4567",
+		"+44 20 7946 0958",
+	];
+
+	it.each([
+		DEFAULT_COUNTRY_CODE,
+		"+44",
+		"+91",
+		"",
+		null,
+		undefined,
+	])("holds for every stored shape with cc=%p", (cc) => {
+		for (const raw of RAWS) {
+			expect(
+				toStoredPhone(coalesceToE164(raw, cc), cc),
+				`raw=${JSON.stringify(raw)}`,
+			).toBe(toStoredPhone(raw, cc));
+		}
 	});
 });

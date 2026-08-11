@@ -17,9 +17,11 @@ import {
 } from "#/components/ui/dialog";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
+import { WhatsAppPhoneLink } from "#/components/whatsapp-phone-link";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { formatShortDate } from "#/lib/format";
+import { mailtoHref } from "#/lib/mailto";
 import { firstNameOf } from "#/lib/person-name";
 import { cn } from "#/lib/utils";
 import { getClubByIdentifier } from "#/server/clubs";
@@ -299,7 +301,19 @@ function GuestRow({
 	const firstVisit = guest.firstVisitAt
 		? `first ${formatShortDate(guest.firstVisitAt)}`
 		: null;
-	const contact = [guest.phone, guest.email].filter(Boolean).join(" · ");
+	// Phone and email used to be joined into one string, which can't carry a
+	// link. They are elements now, so the "·" between them is an element too —
+	// and it must agree with what `WhatsAppPhoneLink` actually RENDERS (it trims
+	// and renders nothing for a blank value), not with the raw column, or a
+	// whitespace-only phone leaves a separator dangling in front of the email.
+	//
+	// A boolean for the phone but the VALUE for the email, because the two are
+	// rendered by different owners: `WhatsAppPhoneLink` trims the phone itself,
+	// so this call site only has to decide whether to render it, while the
+	// `mailto:` below is built here — and it must use the same trimmed string the
+	// gate tested, or `" a@b.com "` ships as `mailto: a@b.com `.
+	const hasPhone = (guest.phone ?? "").trim() !== "";
+	const email = (guest.email ?? "").trim();
 
 	return (
 		<div className="flex flex-col gap-3 border-b border-[var(--line)] px-5 py-3.5 last:border-b-0 sm:flex-row sm:items-center sm:justify-between">
@@ -311,9 +325,46 @@ function GuestRow({
 				/>
 				<div className="min-w-0 leading-[1.3]">
 					<div className="truncate text-sm font-bold">{guest.name}</div>
-					{contact ? (
-						<div className="truncate text-xs text-[var(--sea-ink-soft)]">
-							{contact}
+					{hasPhone || email ? (
+						// `gap-y-0.5`: this line could not wrap while it was one truncated
+						// string, and now it can — two elements with no leading between
+						// them read as one smudged block on a narrow card.
+						<div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-[var(--sea-ink-soft)]">
+							{hasPhone ? (
+								<WhatsAppPhoneLink phone={guest.phone} name={guest.name} />
+							) : null}
+							{email ? (
+								// The separator is BOUND to the email, not a sibling of it. As
+								// its own flex item in a wrappable container it could be pushed
+								// to the end of line 1 with the address starting line 2 —
+								// a dangling "·" reading as punctuation on the phone number.
+								// Wrapping the pair in one flex child makes them wrap together.
+								// `min-w-0` moves onto this child so the address can still
+								// truncate inside it.
+								<span className="flex min-w-0 items-center gap-x-2">
+									{hasPhone ? <span aria-hidden>·</span> : null}
+									{/* `mailtoHref`, not raw interpolation. A stored
+									    "a@b.com?bcc=x&subject=y" would otherwise become live
+									    mailto HEADERS — the reader's own client would silently
+									    blind-copy a third party on a message they thought was
+									    private. The two free-text writers of `guests.email` are
+									    validated in the same change; rows written before that
+									    persist, so both halves are needed. */}
+									{/* `data-slot="wa-email"` + `text-primary`, matching the phone
+									    link beside it. Third instance of the same pair: the
+									    unlayered `a { color }` rule in styles.css beats any
+									    layered utility, so this address rendered --lagoon-deep
+									    (#328f97, 3.81:1) at 12px — under AA — while its peer
+									    rendered --lagoon-ink (5.82:1). */}
+									<a
+										href={mailtoHref(email)}
+										data-slot="wa-email"
+										className="min-w-0 truncate text-primary hover:underline"
+									>
+										{email}
+									</a>
+								</span>
+							) : null}
 						</div>
 					) : null}
 					<div className="text-xs text-[var(--sea-ink-soft)]">
@@ -535,11 +586,16 @@ function GuestEditDelete({
 						</div>
 						<div className="space-y-2">
 							<Label htmlFor={`guest-phone-${guest.id}`}>Phone</Label>
+							{/* `phoneRaw`, NOT `phone`. `phone` is coalesced for display — a
+							    country-code guess — so a guest stored as "415-555-2671 x12"
+							    would prefill as "+1415555267112", a number the VPM never
+							    typed, in the dialog they opened to fix a name. See
+							    `PipelineGuestRow.phoneRaw`. */}
 							<Input
 								id={`guest-phone-${guest.id}`}
 								name="phone"
 								type="tel"
-								defaultValue={guest.phone ?? ""}
+								defaultValue={guest.phoneRaw ?? ""}
 							/>
 						</div>
 						<DialogFooter>

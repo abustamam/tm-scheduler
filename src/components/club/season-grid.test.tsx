@@ -5,11 +5,18 @@ import {
 	createRouter,
 	RouterProvider,
 } from "@tanstack/react-router";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+	cleanup,
+	render,
+	screen,
+	waitFor,
+	within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { StoredMember } from "#/lib/member-identity";
 import type { SeasonGridData } from "#/server/season-grid";
+import { renderUnderMemoryRouter } from "#/test/router-harness";
 
 // season-grid.tsx pulls in the availability + slots server-fn modules at
 // import time (they define createServerFns), which reach for #/db →
@@ -116,6 +123,44 @@ async function renderMembersGrid() {
 	});
 	render(<RouterProvider router={router} />);
 	await waitFor(() => expect(router.state.status).toBe("idle"));
+}
+
+// Members × Meetings with the signed-in Contact columns on (#198). `members`
+// carries the contact payload and also drives the member axis, so its `name` is
+// what `row.label` resolves to. Carla has a number and Dev has none — the two
+// states the phone cell renders. Both carry an email so the only em dash in the
+// grid is Dev's empty phone cell.
+const contactData: SeasonGridData = {
+	...data,
+	members: [
+		{
+			id: "c1",
+			name: "Carla Nguyen",
+			email: "carla@example.com",
+			phone: "+14155552671",
+		},
+		{ id: "c2", name: "Dev Patel", email: "dev@example.com", phone: null },
+	],
+	memberNames: [
+		{ id: "c1", name: "Carla Nguyen" },
+		{ id: "c2", name: "Dev Patel" },
+	],
+};
+
+// Same admin mount as `renderMembersGrid`, plus `showContact` — the Email and
+// Phone columns only render on the members axis for a signed-in viewer.
+async function renderContactGrid() {
+	await renderUnderMemoryRouter(
+		<SeasonGrid
+			data={contactData}
+			orientation="members"
+			count="all"
+			currentMemberId="admin-1"
+			canManageOthers
+			showContact
+			clubId="club-1"
+		/>,
+	);
 }
 
 // SeasonGrid renders <Link>s (meeting header, member row), so mount it under
@@ -272,5 +317,60 @@ describe("SeasonGrid contacted marker (#340)", () => {
 		// contacted state is folded into the button's aria-label, not just the
 		// aria-hidden dot.
 		expect(screen.getByRole("button", { name: /contacted/i })).toBeTruthy();
+	});
+});
+
+describe("SeasonGrid contact column", () => {
+	// Scoped to the member's own <tr>. A grid-wide `getByText("—")` only proves
+	// an em dash exists SOMEWHERE — it would pass on the neighbouring Email cell
+	// while the Phone cell rendered blank.
+	const rowFor = (name: string | RegExp) =>
+		within(screen.getByRole("row", { name }));
+
+	it("renders the member's phone as a WhatsApp link, not a dialer link", async () => {
+		await renderContactGrid();
+
+		const link = rowFor(/Carla Nguyen/).getByRole("link", {
+			name: /\+14155552671/,
+		});
+		const href = link.getAttribute("href") ?? "";
+		expect(href).toContain("whatsapp");
+		expect(href).not.toContain("tel:");
+		// Names the destination: the sign-up sheet is a wall of rows, so the number
+		// alone doesn't say whose chat is about to open.
+		expect(link.getAttribute("title")).toBe("Message Carla Nguyen on WhatsApp");
+	});
+
+	it("shows the em-dash fallback for a member with no number", async () => {
+		await renderContactGrid();
+		const row = rowFor(/Dev Patel/);
+
+		// Dev carries an email, so the one em dash in HIS row is the empty phone
+		// cell — an absent number must not leave the cell blank. `getByText` throws
+		// on more than one match, which is what pins it to the phone cell.
+		expect(row.getByText("—")).toBeTruthy();
+		expect(row.queryByRole("link", { name: /WhatsApp/i })).toBeNull();
+		// The email cell is still populated, so the em dash above cannot be it.
+		expect(row.getByRole("link", { name: "dev@example.com" })).toBeTruthy();
+	});
+
+	it("puts the number under the Phone header, not the Email one", async () => {
+		await renderContactGrid();
+
+		// Row scoping alone cannot see WHICH column a cell sits in: swapping the
+		// two <th> labels leaves every other assertion in this file green. Pin the
+		// last header to the last cell — Phone is the final contact column.
+		const headers = within(screen.getAllByRole("row")[0] as HTMLElement)
+			.getAllByRole("columnheader")
+			.map((h) => h.textContent);
+		expect(headers.at(-1)).toBe("Phone");
+		expect(headers.at(-2)).toBe("Email");
+
+		const cells = rowFor(/Carla Nguyen/).getAllByRole("cell");
+		expect(
+			within(cells.at(-1) as HTMLElement).getByRole("link", {
+				name: /\+14155552671/,
+			}),
+		).toBeTruthy();
 	});
 });

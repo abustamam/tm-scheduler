@@ -2,6 +2,21 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.12.0.0] - 2026-08-11
+
+### Changed
+
+- **Every phone number in GavelUp now opens WhatsApp.** Tapping a member's number used to open the phone dialer, which is not how this club actually talks to each other — and if you do want to call, the number is right there to copy. Numbers are now one tap to a WhatsApp conversation on the sign-up sheet, the member profile, the VP Membership guest cards, and the roster. The chat opens empty: these screens have no idea which role you are calling about, and the pre-written drafts already live on the meeting page where that context exists.
+- **The roster has a phone column.** It shows on wide screens only. A fifth column at tablet width squeezes the member-name column down to nothing, which defeats the point of a roster — so below 1280px the number stays one tap away on the member's profile, where it has always been.
+- **Guest phone numbers on the VP Membership board are clickable.** They used to be plain text glued to the email with a middot.
+- **A number typed without a country code still works.** The club's country code (set on Club settings, `+1` by default) is applied when the page loads, so numbers imported years ago link correctly without anyone editing them. A number nobody can dial — someone typed "call the office" into the phone field — still shows as readable text instead of a broken link.
+
+### Fixed
+
+- **Contact links now meet the accessibility contrast standard.** A site-wide styling rule was quietly overriding the colour these links asked for, painting them at a contrast ratio below the WCAG AA minimum at the size they render. The phone and email in a contact pair also render as the same colour again, instead of one of each.
+- **An email address can no longer smuggle extra headers into a message you send.** Addresses reach GavelUp from a few places, and one of them accepts any text at all. A crafted address could add a hidden recipient to the message your mail client opened — and on the meeting page, where the app writes the draft for you, it could also silently replace the subject and body. All four places that open an email now escape the address, and a new check fails the build if a fifth appears.
+- **Editing a member no longer shows a rewritten phone number.** Opening Edit on someone whose number was stored with an extension showed the reformatted version instead of what is actually on file.
+
 ## [1.11.1.0] - 2026-08-10
 
 ### Fixed

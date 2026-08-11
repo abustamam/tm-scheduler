@@ -11,6 +11,20 @@
 - An ex-member can still see a departed club's forward schedule. `userMemberIds` deliberately ignores `members.status`, and the deactivation sweep in `members-logic.ts` skips slots on CANCELLED meetings, while `applyReopenMeeting` restores a meeting without clearing assignments. Cancel a meeting, deactivate a member, reopen it, and their `/me` shows that club's date, theme and location with a Release button that dead-ends. Needs all three steps, so it is debt rather than scheduled work.
   **Priority:** P4
 
+## Contact links
+
+- Run `scripts/backfill-phone-e164.ts` against prod. Deferred from v1.12.0.0 by design — it writes to the production database, and the plan marks all four steps human-run. Not urgent: read-time coalescing already makes every rendered link correct, so this buys the #397 guest-collision report and stored-data hygiene rather than working links. Dry run first and **confirm the printed `host=` line is the Railway host** — `set -a; . ./.env.prod.local` is a zsh parse error on the connection string's unquoted `&`, so `DATABASE_URL` never gets set and Bun silently falls back to `.env.local`, running the whole thing against dev. Pass it inline instead. Then review the guest-collision report (those rows need a human merge; the script only reports them), apply, and re-run expecting `Would change 0 of N rows`.
+  **Priority:** P1
+
+- `/activity` fetches every member's phone to populate a filter dropdown that reads only `id` and `name`. Same auth gate as before, so not an exposure, but it serializes the phone into the SSR payload of a page that never renders it and makes that route pay a country-code round-trip for a field it discards. A narrow `listClubMemberNames` loader would drop both.
+  **Priority:** P4
+
+- The `no-tel-links` guard forbids `href="tel:"`, but the decision it enforces is "every rendered phone opens WhatsApp". A future surface doing `<span>{member.phone}</span>` passes the guard, every render test, and review. No present defect — swept the tree at v1.12.0.0 and the only remaining `phone` references are form inputs and the nudge picker's null check — but the guard enforces the narrower half.
+  **Priority:** P4
+
+- The SSR mount-gate dance (`useState(false)` + `useEffect` + `detectPlatform(navigator)`) is duplicated between `whatsapp-phone-link.tsx` and `nudge-buttons.tsx`, including the `"mobile"` default that has to match the server render. A shared `usePlatform()` in `#/lib/platform` would give that reasoning one home. Deliberately not done at v1.12.0.0: measured at 5.4ms over 200 rows in jsdom, and hoisting `mounted` to the list re-renders the whole table instead of the leaves, so it is a readability change, not an optimization.
+  **Priority:** P4
+
 ## Tooling
 
 - `bun run fix` writes the whole tree, and there is no scoped variant. Fine today (it is a verified no-op on a clean tree), but two things make a scoped one worth having before anyone wires it into a hook: `biome check --changed` hard-errors here because `biome.json`'s `vcs` block has no `defaultBranch`, and a `pre-commit` hook running the unscoped `fix` would sweep unrelated working-tree drift into the commit. `--staged` is verified working, so `"fix:staged": "biome check --write --staged"` plus `"defaultBranch": "main"` in the `vcs` block would close both.

@@ -11,7 +11,9 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "#/components/ui/dialog";
+import { WhatsAppPhoneLink } from "#/components/whatsapp-phone-link";
 import { formatMeetingDate } from "#/lib/format";
+import { mailtoHref } from "#/lib/mailto";
 import type { StoredMember } from "#/lib/member-identity";
 import { meetingRoleOptions } from "#/lib/member-role-picker";
 import {
@@ -679,8 +681,22 @@ export function SeasonGrid({
 											<>
 												<td className="px-3 py-1 text-left text-xs whitespace-nowrap">
 													{contact?.email ? (
+														// `mailtoHref`: a stored "a@b.com?bcc=x" would
+														// otherwise become live mailto HEADERS. Same fix
+														// as the guest card and the member profile.
+														//
+														// `data-slot="wa-email"` for the same reason the
+														// phone link beside it carries `wa-phone`: the
+														// unlayered `a { color }` rule in styles.css beats
+														// this layered `text-primary`, so without the
+														// opt-out the class is DEAD and the address renders
+														// --lagoon-deep (#328f97, 3.81:1) at 12px — under AA,
+														// and a different colour from its own peer action one
+														// cell over (--lagoon-ink, 5.82:1). Two halves of one
+														// Contact pair are not allowed to disagree.
 														<a
-															href={`mailto:${contact.email}`}
+															href={mailtoHref(contact.email)}
+															data-slot="wa-email"
 															className="text-primary hover:underline"
 														>
 															{contact.email}
@@ -690,16 +706,20 @@ export function SeasonGrid({
 													)}
 												</td>
 												<td className="px-3 py-1 text-left text-xs whitespace-nowrap">
-													{contact?.phone ? (
-														<a
-															href={`tel:${contact.phone}`}
-															className="text-primary hover:underline"
-														>
-															{contact.phone}
-														</a>
-													) : (
-														<span className="text-muted-foreground">—</span>
-													)}
+													{/* WhatsApp, not the dialer: nobody calls a club member
+													    from a sign-up sheet. `row.label` is this axis's
+													    display name for the member — it is what the row
+													    header renders — so it names the chat's destination.
+													    No colour class: the component owns colour, because the
+													    `data-slot` that escapes the unlayered `a { color }` rule
+													    has to travel with it. */}
+													<WhatsAppPhoneLink
+														phone={contact?.phone}
+														name={row.label}
+														fallback={
+															<span className="text-muted-foreground">—</span>
+														}
+													/>
 												</td>
 											</>
 										) : null}

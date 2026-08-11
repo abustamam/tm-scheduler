@@ -273,15 +273,36 @@ body::after {
    mode, and the meeting Print & export menu (#541) rendered its four <Link>
    items in link-teal beside its two <button> items in foreground, splitting one
    menu of peer actions into two apparent classes. Any new dropdown with link
-   items inherits the fix. */
-a:not([data-slot="button"]):not([data-slot^="dropdown-menu-"]) {
+   items inherits the fix.
+
+   `wa-phone` (`WhatsAppPhoneLink`) and `wa-email` (the `mailtoHref` anchor
+   beside it) are the third and fourth. Both set `text-primary` on themselves —
+   in LIGHT mode that is --lagoon-ink, AA-verified 5.8:1 on white; in dark
+   --primary resolves to --lagoon instead, a different and separately-checked
+   value, so 5.8:1 is not a claim about both themes. Without the exclusion this
+   rule overrode that down to --lagoon-deep — #328f97, 3.81:1 on white, rendered
+   at 12px on the sign-up sheet, the roster, the member profile and the guest
+   card, i.e. under AA on the surfaces that show it most.
+
+   They are named separately rather than folded into one `[data-slot^="wa-"]`
+   prefix so each opt-out stays greppable back to the component that asked for
+   it. The two are one CONTACT PAIR — peer actions on a single row — so they
+   must be excluded together or not at all: `wa-phone` alone shipped the pair in
+   two different colours, one of them failing AA, which is what a half-applied
+   fix looks like. Excluded here rather than fought with a class, because no
+   class can beat an unlayered rule; that is the same conclusion the two cases
+   above reached. `whatsapp-phone-link-color.guard.test.ts` fails if either rule
+   loses either exclusion, and if any `:not()` arm stops being a `data-slot`
+   opt-out (a `:not([class])` arm would switch this rule off for every anchor in
+   the app while every substring assertion stayed green). */
+a:not([data-slot="button"]):not([data-slot^="dropdown-menu-"]):not([data-slot="wa-phone"]):not([data-slot="wa-email"]) {
   color: var(--lagoon-deep);
   text-decoration-color: rgba(50, 143, 151, 0.4);
   text-decoration-thickness: 1px;
   text-underline-offset: 2px;
 }
 
-a:not([data-slot="button"]):not([data-slot^="dropdown-menu-"]):hover {
+a:not([data-slot="button"]):not([data-slot^="dropdown-menu-"]):not([data-slot="wa-phone"]):not([data-slot="wa-email"]):hover {
   color: var(--lagoon-ink);
 }
 

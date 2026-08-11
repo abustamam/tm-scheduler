@@ -26,6 +26,7 @@ import {
 } from "#/components/ui/dialog";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
+import { WhatsAppPhoneLink } from "#/components/whatsapp-phone-link";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { type InviteState, inviteStateOf } from "#/lib/invite-state";
@@ -74,9 +75,38 @@ export const Route = createFileRoute("/_authed/roster")({
 	component: Roster,
 });
 
-// Roster grid: on small screens only Member + chevron; Speeches/Pathway
-// (also hidden below) return at `sm`. Members can tap through for the detail.
-const TABLE_GRID = "grid-cols-[1fr_34px] sm:grid-cols-[1fr_150px_170px_34px]";
+// Roster grid: on small screens only Member + chevron (tap through for the
+// detail); Speeches/Pathway return at `sm`, Phone at `xl` — a fifth fixed column
+// can only take width FROM the `1fr` Member one, which carries the member's
+// NAME. Measured in the browser (manager grid, 18-member club), Member column
+// width with Phone gated at `sm` vs. shipped without the column at all:
+//
+//   viewport   at `sm`   without Phone
+//   640px        0px *      136px
+//   768px      100px        264px
+//   1024px     108px        272px
+//   1280px     364px        528px
+//
+//   * zero, not merely narrow: the name is gone entirely and the avatar overlaps
+//     the Speeches column. The four fixed columns also want 570px inside a 542px
+//     content box, so the card's `overflow-hidden` clips the trailing chevron
+//     and part of the invite button (32 of the Account column's 39 visible px
+//     survive).
+//
+// `lg` is no better — the 248px app sidebar returns at exactly that tier and
+// eats the viewport gain. `xl` is the first tier where the column is free: full
+// names, no clipping, every width below it laid out as it was before.
+const TABLE_GRID =
+	"grid-cols-[1fr_34px] sm:grid-cols-[1fr_150px_170px_34px] xl:grid-cols-[1fr_150px_170px_150px_34px]";
+
+// The same grid for a MANAGER, whose trailing Account column carries an invite
+// button beside the chevron (64px vs 34px) and pays for it out of Speeches and
+// Pathway. Named here rather than left inline at its use site 66 lines below, so
+// the measurement table above governs both templates — the measurements were
+// taken on THIS one, and the two have to grow a column together or the header
+// and body grids fall out of alignment (`roster.test.tsx` pins that).
+const MANAGER_TABLE_GRID =
+	"grid-cols-[1fr_64px] sm:grid-cols-[1fr_140px_160px_64px] xl:grid-cols-[1fr_140px_160px_150px_64px]";
 
 type SegKey = "all" | "active" | "inactive";
 const ROSTER_SEGMENTS: { key: SegKey; label: string }[] = [
@@ -94,6 +124,16 @@ interface RosterRow {
 	speeches: number;
 	/** Contact email on file — gates whether an invite can be sent (#266). */
 	email: string | null;
+	/**
+	 * Contact phone on file, server-coalesced: E.164 where it can be derived,
+	 * otherwise the stored value VERBATIM. Not a guarantee of E.164 —
+	 * `coalesceToE164` deliberately preserves a value it cannot normalize
+	 * ("ask at church"), which `WhatsAppPhoneLink` then renders as plain text
+	 * rather than a dead link. The cell's `pointer-events` keys off that same
+	 * distinction, so treating this as always-dialable is what put a live-but-dead
+	 * click box on those rows.
+	 */
+	phone: string | null;
 	/** Account-invite state: none / invited (link sent) / joined (linked) (#266). */
 	inviteState: InviteState;
 	/** Roster membership status (renewal): active vs unrenewed/inactive. */
@@ -106,6 +146,19 @@ interface RosterRow {
 	 * unchanged.
 	 */
 	holdsOffice: boolean;
+}
+
+/**
+ * Does this stored phone produce a CLICKABLE WhatsApp link?
+ *
+ * Mirrors `whatsappHref`'s own rule — it strips to digits and returns null when
+ * there are none — so the roster cell's `pointer-events` can follow whether an
+ * anchor actually renders. Deliberately not a truthiness check on the column:
+ * `WhatsAppPhoneLink` renders a digit-less value ("ask at church") as plain
+ * text, which is not clickable either.
+ */
+function hasDialablePhone(phone: string | null): boolean {
+	return /\d/.test(phone ?? "");
 }
 
 /** "PathName · L2 3/5" (or "· Path complete"), compact for a one-line roster cell. */
@@ -138,9 +191,7 @@ function Roster() {
 	// The invite control adds a wider trailing column (icon button + chevron) for
 	// managers; members see the original chevron-only layout. Fixed widths keep the
 	// header and rows (independent grids) column-aligned.
-	const gridCols = canManage
-		? "grid-cols-[1fr_64px] sm:grid-cols-[1fr_140px_160px_64px]"
-		: TABLE_GRID;
+	const gridCols = canManage ? MANAGER_TABLE_GRID : TABLE_GRID;
 
 	// Identity, tenure, speeches, membership status and Pathways progress are all real.
 	const rows: RosterRow[] = members.map((m) => {
@@ -157,6 +208,7 @@ function Roster() {
 				: formatTenure(joined),
 			speeches: m.speeches,
 			email: m.email,
+			phone: m.phone,
 			inviteState: inviteStateOf({ userId: m.userId, invitedAt: m.invitedAt }),
 			membershipStatus: m.status,
 			pathwayLabel: pathwayLabelFor(pathways[m.id] ?? []),
@@ -294,6 +346,7 @@ function Roster() {
 					<div>Member</div>
 					<div className="hidden sm:block">Speeches</div>
 					<div className="hidden sm:block">Pathway</div>
+					<div className="hidden xl:block">Phone</div>
 					<div className="justify-self-end">{canManage ? "Account" : ""}</div>
 				</div>
 
@@ -390,6 +443,38 @@ function Roster() {
 							{/* Pathway */}
 							<div className="pointer-events-none relative z-[1] hidden min-w-0 truncate text-xs text-[var(--sea-ink-soft)] sm:block">
 								{m.pathwayLabel ?? "—"}
+							</div>
+
+							{/* Phone. LIVE only when there is a link to click — the
+							    live-ness has to follow the anchor, not the column.
+							
+							    `z-[2]` and no `pointer-events-none` is what lets a tap reach
+							    the anchor at all: the row's overlay <Link> sits under every
+							    cell and would otherwise swallow it and open the profile
+							    instead of WhatsApp (same trick as the invite control below),
+							    and `w-fit` keeps that live box to the number itself so the
+							    rest of the column still falls through.
+							
+							    But TWO of the component's three branches render nothing
+							    clickable — the `fallback` dash, and a digit-less value like
+							    "ask at church" which renders as a plain <span>. Applied
+							    unconditionally, those rows get a box that is live and dead:
+							    the click is swallowed instead of falling through, so that
+							    patch of the row silently stops opening the profile.
+							
+							    Keyed on DIGITS, not on `m.phone` being non-empty, because
+							    `whatsappHref` returns null (⇒ no anchor) for anything with no
+							    digits — a truthiness check would leave the digit-less branch
+							    dead-but-live, which is the same bug on a narrower input. */}
+							<div
+								className={cn(
+									"relative hidden min-w-0 truncate text-xs text-[var(--sea-ink-soft)] xl:block",
+									hasDialablePhone(m.phone)
+										? "z-[2] w-fit max-w-full"
+										: "pointer-events-none",
+								)}
+							>
+								<WhatsAppPhoneLink phone={m.phone} name={m.name} fallback="—" />
 							</div>
 
 							{/* Invite control (managers) + chevron */}

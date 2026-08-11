@@ -28,7 +28,11 @@ import {
 } from "#/db/schema";
 import { isAtMeetingNow } from "#/lib/guest-book-window";
 import { namesAgree } from "#/lib/person-name";
-import { toStoredPhone } from "#/lib/phone";
+import {
+	coalesceToE164,
+	DEFAULT_COUNTRY_CODE,
+	toStoredPhone,
+} from "#/lib/phone";
 import { logActivity } from "./activity";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 
@@ -158,16 +162,36 @@ async function findGuestByContact(
 	return undefined;
 }
 
-/** A club's IANA timezone (the schema default when the club is missing). Every
- *  "has this meeting happened?" question is answered in the CLUB's local day —
- *  see `guestVisits` — so the zone is read once and threaded through. */
-async function loadClubTimeZone(clubId: string): Promise<string> {
+/**
+ * The two club-level facts `loadGuestPipeline` needs, in ONE round trip.
+ *
+ * They used to be two functions reading the SAME `clubs` row — a local
+ * `loadClubTimeZone` and `clubs-logic`'s `loadClubDefaultCountryCode` — issued
+ * together in a `Promise.all`, which made them concurrent but still two queries
+ * and two round trips for one row.
+ *
+ * Both fallbacks are preserved exactly, and they are not the same fallback:
+ *   - timezone: the schema default, used when the club ROW is missing.
+ *   - country code: `?.trim() || DEFAULT_COUNTRY_CODE` — also used when the
+ *     column is NULL or blank, because a club that never set one still has to
+ *     produce a dedup key (#397). `loadClubDefaultCountryCode`'s contract is
+ *     NEVER-NULL, so the `||` has to stay a `||` and not become a `??`.
+ */
+async function loadClubPipelineSettings(
+	clubId: string,
+): Promise<{ timeZone: string; countryCode: string }> {
 	const [club] = await db
-		.select({ timezone: clubs.timezone })
+		.select({
+			timezone: clubs.timezone,
+			defaultCountryCode: clubs.defaultCountryCode,
+		})
 		.from(clubs)
 		.where(eq(clubs.id, clubId))
 		.limit(1);
-	return club?.timezone ?? "America/Chicago";
+	return {
+		timeZone: club?.timezone ?? "America/Chicago",
+		countryCode: club?.defaultCountryCode?.trim() || DEFAULT_COUNTRY_CODE,
+	};
 }
 
 /**
@@ -376,7 +400,30 @@ export interface PipelineGuestRow {
 	/** What they're called, when it isn't the first token of `name` (#486). */
 	preferredName: string | null;
 	email: string | null;
+	/**
+	 * DISPLAY phone: E.164 where it can be derived, otherwise the stored value
+	 * verbatim (`coalesceToE164`) — what the card's WhatsApp link reads.
+	 *
+	 * Never bind the EDIT DIALOG to this; bind it to `phoneRaw`.
+	 */
 	phone: string | null;
+	/**
+	 * The `guests.phone` column byte-for-byte — what the edit dialog prefills.
+	 *
+	 * Coalescing is a country-code GUESS, so `"415-555-2671 x12"` displays as
+	 * `"+1415555267112"`. Prefilling the dialog with the guess shows the VPM a
+	 * number nobody typed, on the one screen that is supposed to show what is on
+	 * file — and it is the screen they open to fix a NAME.
+	 *
+	 * It does not currently corrupt the column, but only by coincidence:
+	 * `applyUpdateGuest` re-normalizes with `toStoredPhone`, which is a fixed point
+	 * over `coalesceToE164` (pinned in `phone.test.ts`), so the guess and the raw
+	 * value happen to store identically — and for the same reason the dedup clash
+	 * check compares the same digits either way. Neither function promises that.
+	 * Round-tripping the raw bytes is what makes the prefill correct rather than
+	 * accidentally harmless. See `loadMemberProfile` for the same split.
+	 */
+	phoneRaw: string | null;
 	stage: GuestStage;
 	convertedMembershipId: string | null;
 	/** Earliest visited meeting date (derived — see `loadGuestPipeline`); null if none. */
@@ -473,9 +520,13 @@ function guestVisits(clubId: string, timeZone: string) {
 export async function loadGuestPipeline(
 	clubId: string,
 ): Promise<PipelineGuestRow[]> {
-	const visits = guestVisits(clubId, await loadClubTimeZone(clubId)).as(
-		"guest_visits",
-	);
+	// Both club-level facts in ONE query. They live on the same `clubs` row, and
+	// the timezone has to resolve before the visits subquery can be built, so a
+	// `Promise.all` over two loaders bought concurrency for a round trip that did
+	// not need to exist at all.
+	const { timeZone: tz, countryCode: cc } =
+		await loadClubPipelineSettings(clubId);
+	const visits = guestVisits(clubId, tz).as("guest_visits");
 	const [rows, visitRows, slotRows] = await Promise.all([
 		db
 			.select({
@@ -522,7 +573,12 @@ export async function loadGuestPipeline(
 			name: r.name,
 			preferredName: r.preferredName,
 			email: r.email,
-			phone: r.phone,
+			// Coalesced to E.164 (#295) so the pipeline card's WhatsApp link is a
+			// valid full number even for rows written before normalize-on-write, and
+			// a digit-less value still reaches the UI — see `#/lib/phone`.
+			phone: coalesceToE164(r.phone, cc),
+			// The column verbatim, for the edit dialog. See `PipelineGuestRow.phoneRaw`.
+			phoneRaw: r.phone,
 			stage: r.stage,
 			convertedMembershipId: r.convertedMembershipId,
 			visitCount: Number(v?.visitCount ?? 0),

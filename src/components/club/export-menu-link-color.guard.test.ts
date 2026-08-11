@@ -30,44 +30,118 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const STYLES = resolve(HERE, "../../styles.css");
 
 describe("the unlayered text-link rule leaves component-colored anchors alone", () => {
-	// Both rules are matched as WHOLE selector lines (anchored `^…{$`), not with
-	// `toContain`. The two substring assertions this replaces were NOT
-	// independent: the `:hover` selector string contains the base selector as a
-	// prefix, so deleting the base rule outright left both green — mutation-
-	// verified during the ship review. Anchoring each to its own line is what
-	// makes "the base rule exists" and "the hover rule exists" separable facts.
-	// PREFIX match, not the single `dropdown-menu-item` slot: four slots in
-	// dropdown-menu.tsx accept `asChild` and can become an anchor (item,
-	// checkbox-item, radio-item, sub-trigger). Naming one left the same
-	// link-teal/foreground split reachable one component away (red-team review).
-	const SELECTOR =
-		'a:not([data-slot="button"]):not([data-slot^="dropdown-menu-"])';
+	// Matched as WHOLE selector LINES, then split into the base rule and its
+	// `:hover`. The two substring assertions this replaces were NOT independent —
+	// the `:hover` selector contains the base selector as a prefix, so deleting
+	// the base rule outright left both green (mutation-verified during the ship
+	// review). Separating the lines first is what makes "the base rule exists"
+	// and "the hover rule exists" separable facts.
+	//
+	// What is asserted about each line is that it CONTAINS the required
+	// exclusions, not that it equals a fixed string. An earlier version anchored
+	// the whole selector, which meant every NEW exclusion broke this file: the
+	// WhatsApp phone link became the third one (`wa-phone`), and a guard that
+	// fails whenever the rule is correctly extended trains people to edit the
+	// guard rather than read it. Exclusions are additive by nature — the property
+	// worth pinning is that these two have not been REMOVED.
+	const REQUIRED = [
+		// `<Button asChild>` → `<a data-slot="button">`. The first exclusion.
+		'[data-slot="button"]',
+		// PREFIX match, not the single `dropdown-menu-item` slot: four slots in
+		// dropdown-menu.tsx accept `asChild` and can become an anchor (item,
+		// checkbox-item, radio-item, sub-trigger). Naming one left the same
+		// link-teal/foreground split reachable one component away (red-team review).
+		'[data-slot^="dropdown-menu-"]',
+	];
 
-	/** Whole-line selector match, so a longer selector cannot satisfy a shorter one. */
-	function hasRule(selector: string): boolean {
-		const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-		return new RegExp(`^${escaped}\\s*\\{$`, "m").test(readSource(STYLES));
+	/** Every whole-line `a:not(…)` selector in the stylesheet. */
+	function selectorLines(): string[] {
+		return [...readSource(STYLES).matchAll(/^(a:not\([^{\n]*?)\s*\{$/gm)].map(
+			(m) => m[1] as string,
+		);
 	}
 
-	it("excludes dropdown menu items, so a <Link> item matches its <button> peers", () => {
+	const base = selectorLines().filter((sel) => !sel.includes(":hover"));
+	const hover = selectorLines().filter((sel) => sel.includes(":hover"));
+
+	it("has exactly one base text-link rule and one :hover rule", () => {
+		// Anti-vacuity, and the thing that keeps the two assertions below
+		// independent. If the extraction stops matching (a rename, a reformat that
+		// wraps the selector across lines — which is how this file first broke),
+		// both lists go empty and `every` passes vacuously on nothing.
 		expect(
-			hasRule(SELECTOR),
-			'the global `a:not([data-slot="button"])` rule must ALSO exclude ' +
-				'[data-slot="dropdown-menu-item"] — without it every <Link> rendered ' +
-				"through `<DropdownMenuItem asChild>` takes link-teal while its " +
-				"button siblings keep the foreground color, splitting one menu into " +
-				`two visual classes (#541, found by /qa 2026-08-10). Expected a line \`${SELECTOR} {\`.`,
-		).toBe(true);
+			base,
+			"could not find the base (non-:hover) `a:not(...) {` text-link rule in " +
+				"styles.css — if it was renamed or restructured, update this " +
+				"extraction; if it was DELETED, that is the bug, not the test.",
+		).toHaveLength(1);
+		expect(hover).toHaveLength(1);
 	});
 
-	it("applies the same exclusion to the :hover rule", () => {
-		// The hover rule is a separate selector; excluding only the base rule
+	it.each(
+		REQUIRED,
+	)("the base rule still excludes %s, so those anchors keep their own color", (exclusion) => {
+		expect(
+			base[0],
+			`the global text-link rule must exclude ${exclusion}. It is UNLAYERED, ` +
+				"so it beats any layered Tailwind utility a component sets — without " +
+				"the exclusion those anchors are repainted link-teal while their " +
+				"non-anchor peers keep the foreground color, splitting one set of " +
+				"peer actions into two apparent classes (#541, found by /qa " +
+				"2026-08-10).",
+		).toContain(exclusion);
+	});
+
+	it.each([
+		["base", () => base[0]],
+		[":hover", () => hover[0]],
+	])("every exclusion on the %s rule is a data-slot opt-out", (_which, get) => {
+		// The assertions above are all of the form "these exclusions are still
+		// there", which is additive-safe but says nothing about what ELSE has been
+		// added. Appending `:not([class])` to both rules switches the whole
+		// text-link rule off for every real anchor in the app — every one of them
+		// carries Tailwind classes — while all three CSS guards stay green at
+		// 12/12, because the only anchors any of them tested against were bare.
+		// Demonstrated.
+		//
+		// So this pins the SHAPE: an exclusion may only ever name a `data-slot` a
+		// component deliberately stamps on itself. That is what makes the rule's
+		// escape hatch opt-in and greppable; `[class]`, `[href^="/"]`, a class arm
+		// or a bare tag arm are blanket escapes and fail here.
+		const selector = get();
+		expect(selector).toBeTruthy();
+		const arms = [...(selector as string).matchAll(/:not\(([^)]*)\)/g)].map(
+			(m) => (m[1] as string).trim(),
+		);
+		// Anti-vacuity: an extraction that matched nothing passes the loop below on
+		// an empty list. Deliberately `> 0` rather than a count — WHICH exclusions
+		// must survive is `REQUIRED`'s job above, and it names the missing one; a
+		// count here would fail the same regression with an arithmetic message.
+		expect(
+			arms.length,
+			`no :not() arms found in \`${selector}\` — the extraction has drifted ` +
+				"and this assertion is checking nothing",
+		).toBeGreaterThan(0);
+		for (const arm of arms) {
+			expect(
+				arm,
+				`\`:not(${arm})\` is not a [data-slot=…] opt-out. Exclusions here are ` +
+					"additive and that is fine, but each must name a marker a component " +
+					"asked for — an arm like `[class]` widens the exclusion past every " +
+					"component and silently turns the rule off, which no `toContain` " +
+					"assertion can see.",
+			).toMatch(/^\[data-slot[\^$*~|]?="[^"]+"\]$/);
+		}
+	});
+
+	it.each(REQUIRED)("the :hover rule still excludes %s", (exclusion) => {
+		// The hover rule is a SEPARATE selector; excluding only the base rule
 		// leaves the teal reappearing under the cursor, which reads as a
 		// different kind of item exactly when the user is about to click it.
 		expect(
-			hasRule(`${SELECTOR}:hover`),
-			"the :hover half of the text-link rule needs the same exclusion, or " +
-				"menu items flip to link-teal on hover.",
-		).toBe(true);
+			hover[0],
+			"the :hover half of the text-link rule needs the same exclusions, or " +
+				"these anchors flip to link-teal on hover.",
+		).toContain(exclusion);
 	});
 });
