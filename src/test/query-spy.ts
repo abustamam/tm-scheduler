@@ -23,6 +23,23 @@
  * `db.$client` is the node-postgres Pool underneath drizzle, and drizzle calls
  * it as `query({ text, values })`. The string form is handled too, since
  * `db.execute("select 1")` takes that path.
+ *
+ * ## What it CANNOT see: anything inside a transaction
+ *
+ * The spy is on the POOL. `db.transaction()` checks a `PoolClient` out of the
+ * pool and issues every statement in the block — `BEGIN`, the body, `COMMIT` —
+ * on that client, whose `query` is a different function object the spy never
+ * wrapped. So a transactional loader reports ZERO statements here, and a "reads
+ * `clubs` exactly once" assertion written against one would pass whether it read
+ * the row once, twice or not at all.
+ *
+ * No caller is affected today: every test using this counts statements from
+ * read-only loaders, which drizzle issues straight on the pool. It is recorded
+ * because the failure is silent and reads exactly like success — which is the
+ * same shape as the empty-`readsOf` case the note below already warns about, and
+ * the reason that note says to assert non-emptiness before trusting a count.
+ * A transaction-aware version would have to spy on `Pool.connect` as well and
+ * fold in each client it hands out.
  */
 import { vi } from "vitest";
 import { testDb } from "./db";

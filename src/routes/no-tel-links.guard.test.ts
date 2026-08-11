@@ -137,7 +137,7 @@ describe("no tel: links — phone numbers open WhatsApp", () => {
 });
 
 /**
- * The prop EXPRESSIONS at the two route call sites.
+ * The prop EXPRESSIONS at every call site that renders the component.
  *
  * This is the #319 trap: a component tested through its props cannot see a
  * WRONG prop, because the props are the fixture. `WhatsAppPhoneLink` is
@@ -145,21 +145,36 @@ describe("no tel: links — phone numbers open WhatsApp", () => {
  * swapping `member.name` for the club name — or `member.phone` for
  * `member.email` — would ship past that whole suite.
  *
- * Both routes now mount in jsdom over stubbed loader data — `members.$id.test.tsx`
- * and `vp-membership.test.tsx` each render `Route.options.component` and observe
- * the rendered href and title — so this guard is a cheap second net rather than
- * the only reader of either call site. It still earns its place: a render test
- * sees the RESULT and would pass on `name={member.preferredName ?? member.name}`
- * or any other expression that happens to produce the same string for its
- * fixture; the grep pins the EXPRESSION and fails in review. Both suites point
- * back here by name.
+ * `members.$id.tsx` and `vp-membership.tsx` also mount in jsdom over stubbed
+ * loader data — `members.$id.test.tsx` and `vp-membership.test.tsx` each render
+ * `Route.options.component` and observe the rendered href and title — so for
+ * those two this guard is a cheap second net rather than the only reader. It
+ * still earns its place there: a render test sees the RESULT and would pass on
+ * `name={member.preferredName ?? member.name}` or any other expression that
+ * happens to produce the same string for its fixture; the grep pins the
+ * EXPRESSION and fails in review. Both suites point back here by name.
+ *
+ * ## Why the list is FOUR entries
+ *
+ * It was two, and the two it omitted were `roster.tsx` — named as the CANARY
+ * three lines above this block, i.e. the one file this guard already insists
+ * must be scanned — and `season-grid.tsx`. A list that enumerates half the call
+ * sites is worse than no list: it reads as complete. The rule is that every
+ * `<WhatsAppPhoneLink>` in the tree appears here, and a new one that does not is
+ * a wiring expression nothing reads.
+ *
+ * `season-grid.tsx` is a component rather than a route, so its path is not under
+ * `_authed/`; it is in this list all the same, because what makes a call site
+ * belong here is that it computes props, not where it lives.
  *
  * Read comment-blind via `readSource` — see the note at the top of this file.
  */
-describe("route wiring for WhatsAppPhoneLink", () => {
+describe("call-site wiring for WhatsAppPhoneLink", () => {
 	it.each([
 		["src/routes/_authed/members.$id.tsx", "member.phone", "member.name"],
 		["src/routes/_authed/admin/vp-membership.tsx", "guest.phone", "guest.name"],
+		["src/routes/_authed/roster.tsx", "m.phone", "m.name"],
+		["src/components/club/season-grid.tsx", "contact?.phone", "row.label"],
 	])("%s passes the right phone and name", (file, phoneExpr, nameExpr) => {
 		const src = readSource(resolve(ROOT, file));
 		expect(src, `${file} no longer renders <WhatsAppPhoneLink`).toContain(
