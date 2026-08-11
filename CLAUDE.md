@@ -114,7 +114,7 @@ Assessed against the diff, not the whole repo: every branch, error path and user
 introduces should have a test that exercises it. `/ship`'s coverage audit reads these numbers and
 gates on them.
 
-Seven coverage traps this repo has actually hit, all worth checking when a number looks fine:
+Eight coverage traps this repo has actually hit, all worth checking when a number looks fine:
 
 - **A test can pin the wrong thing after a rename.** An assertion matching a role name by string
   (`r.who === "Toastmaster of the Day"`) stopped being unique once a second beat rendered the same
@@ -130,6 +130,18 @@ Seven coverage traps this repo has actually hit, all worth checking when a numbe
   cannot fail. Assert the observable the guard actually controls: that the round-trip was skipped
   (`vi.spyOn(testDb, "select")` + `not.toHaveBeenCalled()`). Same shape for any guard whose only
   effect is avoiding work. See `my-activity.integration.test.ts`.
+- **A "no extra query" test that spies a NAMED loader stops being able to fail the moment that
+  query is inlined.** Same family as the bullet above — the observable is the QUERY, not the
+  result, because "reads the `clubs` row once, not twice" returns byte-identical data either way
+  — but WHICH seam you spy on decides whether the assertion survives the refactor it polices.
+  `season-grid-cc-query.integration.test.ts` asserted `loadClubDefaultCountryCode` was not called;
+  the fix folded that column into an existing `findFirst`, which DELETED the call, leaving a test
+  that could only pass. Count at the driver instead: `statementsDuring` / `readsOf`
+  (`src/test/query-spy.ts`) spy on `db.$client`, the node-postgres Pool under drizzle, so they are
+  indifferent to how the statement was built. Two blind spots there, both silent and both shaped
+  like success — statements issued inside `db.transaction()` run on a `PoolClient` the spy never
+  wrapped, so a transactional loader reports ZERO; and a driver change that broke `readsOf`'s
+  pattern reports zero too. Assert the list is non-empty before trusting a count.
 
 - **A fixture that spans ONE axis is not a guarantee.** When the thing you are protecting is a
   property of rendered output — a page count, a printed word, a render cost — the test is only as
@@ -232,17 +244,30 @@ Optional (platform superadmin): `SUPERADMIN_EMAILS` — a comma-separated, case-
   `src/styles.css` styles bare `a` outside `@layer`, so it wins over the color a component sets
   on its own anchors and repaints them link-teal. Any component that colors anchors must be
   added to the exclusion list, currently
-  `a:not([data-slot="button"]):not([data-slot^="dropdown-menu-"])`. It has cost two bugs:
-  `<Button asChild>` made the landing "Sign in" button read teal-on-teal in dark mode, and
-  `<DropdownMenuItem asChild>` split the meeting Print & export menu into link-colored `<Link>`
-  items sitting beside foreground `<button>` items (#541). Exclude by `data-slot` PREFIX when a
-  primitive has several `asChild` slots — naming only `dropdown-menu-item` left the same split
-  reachable through the checkbox/radio/sub-trigger slots. Nothing here can see the cascade —
-  jsdom loads no stylesheet, the print page-count harness inlines only `PRINT_PAGE_CSS`, and
-  typecheck and lint have no view of it — so the gate is a source grep
-  (`export-menu-link-color.guard.test.ts`, comment-blind via `#/test/guard-source`). That guard
-  pins the CURRENT selector only; unlike `print-page-reset.guard.test.ts` it does not enroll the
-  next component for you.
+  `a:not([data-slot="button"]):not([data-slot^="dropdown-menu-"]):not([data-slot="wa-phone"]):not([data-slot="wa-email"])`
+  — and to the `:hover` rule beside it, which is a SEPARATE selector, so excluding only the base
+  rule leaves the teal reappearing under the cursor. It has cost three bugs: `<Button asChild>`
+  made the landing "Sign in" button read teal-on-teal in dark mode, `<DropdownMenuItem asChild>`
+  split the meeting Print & export menu into link-colored `<Link>` items sitting beside
+  foreground `<button>` items (#541), and the WhatsApp phone link plus the `mailto:` link beside
+  it were repainted `--lagoon-deep` (#328f97, 3.81:1 on white, at `text-xs`) on the four surfaces
+  that render contact — under AA on the screens that show it most (v1.12.0.0). Three rules the
+  bugs taught. Exclude by `data-slot` PREFIX when a primitive has several `asChild` slots —
+  naming only `dropdown-menu-item` left the same split reachable through the
+  checkbox/radio/sub-trigger slots. Fix it with another `:not()`, never with a class: nothing
+  layered beats an unlayered rule, so a `text-primary` at the component or the call site loses
+  silently (four call sites passed a colour utility that did nothing). And exclude PEER actions
+  together — `wa-phone` shipped without `wa-email` and rendered one contact pair in two colours,
+  one of them failing AA, which is what a half-applied fix looks like. Nothing here can see the
+  cascade — jsdom loads no stylesheet, the print page-count harness inlines only
+  `PRINT_PAGE_CSS`, and typecheck and lint have no view of it — so the gates are source greps
+  (`export-menu-link-color.guard.test.ts`, `whatsapp-phone-link-color.guard.test.ts`,
+  comment-blind via `#/test/guard-source`). Since v1.12.0.0 they assert the required exclusions
+  are still PRESENT rather than pinning the whole selector, because an anchored whole-line match
+  fails every time the rule is correctly extended and that trains people to edit the guard
+  instead of reading it; they also require every `:not()` arm to be a `[data-slot=…]` opt-out,
+  since appending `:not([class])` would switch the rule off for every real anchor in the app
+  while every substring assertion stayed green. Neither guard enrolls the next component for you.
 
 ## Data layer
 
@@ -274,9 +299,20 @@ server-fn *handlers* (and their `#/db` imports) from the client bundle, but a pl
 db-touching export sitting in that same module is NOT stripped and drags `#/db` → `pg` →
 `Buffer` into the browser (`ReferenceError: Buffer is not defined`, which white-screens the
 page). So: **server-fn modules export only `createServerFn`s and types.** Put the directly
-testable db logic in a sibling `*-logic.ts` (see `members-logic.ts`, `activity-feed-logic.ts`)
-that client code never imports; the wrapper's handler calls it and gets stripped. The
-`server-modules.guard.test.ts` unit test enforces this — it would have caught both regressions.
+testable db logic in a sibling `*-logic.ts` (see `members-logic.ts`, `activity-feed-logic.ts`,
+`club-logic.ts`) that client code never imports; the wrapper's handler calls it and gets
+stripped. The `server-modules.guard.test.ts` unit test enforces this — it would have caught both
+regressions.
+
+The split has a SECOND, independent motive, and it is the one that usually applies: a
+`createServerFn` cannot be invoked from a test (no session, no RPC layer), so a query living
+only inside a handler is unreachable from vitest — it cannot be integration-tested, and a source
+guard cannot hold a gate on something with no seam to gate. `club-logic.ts` (v1.12.0.0) was
+extracted for that reason rather than for bundle safety: `loadClubMembers` / `loadMemberProfile`
+put member email and phone on their payloads, and lifting them out is what let
+`club-contact.integration.test.ts` reach them and let `club-contact-gate.guard.test.ts` require
+every `club.ts` server fn that calls one to gate on `requireClubViewAccess`. Extract the
+queries worth testing or guarding; leaving the rest inline is fine.
 
 **Public `createServerFn` readers gate on `clubs.archived_at` themselves.** Archiving is the
 platform takedown lever (ADR-0016 / ADR-0024) and it has **two** db-level enforcement points, not
