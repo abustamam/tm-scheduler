@@ -1361,7 +1361,11 @@ git commit -m "test(guard): no tel: links — phone numbers open WhatsApp"
 
 ## Task 11: Full gate run
 
-**Files:** none — this task only runs gates.
+**Files:** none — this task only runs gates, plus the one carried-forward polish item below.
+
+**Carried forward from the Task 6-8 review.** `WhatsAppPhoneLink`'s digit-less branch (`whatsapp-phone-link.tsx:54`) passes the caller's `className` straight to its `<span>`. The season grid's caller passes `text-primary`, so a stored value like `"ask at church"` renders in link colour with no link affordance — it looks clickable and isn't. Reachable, since `toStoredPhone` preserves un-normalizable values on purpose.
+
+Fix it in the component rather than at the call sites (there are four, and they'd each need to know). Either drop the caller class on the span branch, or add a separate `textClassName`. Whichever you pick, `whatsapp-phone-link.test.tsx:161` currently pins the existing behavior, so update that assertion in the same change and confirm it fails first.
 
 - [ ] **Step 1: Typecheck**
 
