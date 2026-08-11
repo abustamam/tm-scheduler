@@ -314,6 +314,29 @@ describe("roster table — phone column", () => {
 		const tier = widestGridTierOf(headerRow());
 		expect(tier, "widest `grid-cols-[…]` declares no tier").toBeTruthy();
 
+		// ABSOLUTE, and it earns its place NEXT TO the relative assertion below
+		// rather than instead of it. The relative one catches the two sides
+		// drifting apart; it cannot catch them moving TOGETHER, and moving them
+		// together is the regression that hurts. Dropping both to `sm:` keeps this
+		// test green while shipping the exact layout the measurements rejected —
+		// CLAUDE.md's "a test stated RELATIVE to the constant it guards cannot
+		// fail". So the measured value is pinned here as a number, not a comment.
+		expect(
+			tier,
+			"The Phone column's breakpoint moved off `xl`. The measurements in the " +
+				"comment above `TABLE_GRID` in roster.tsx are why it is `xl`, and a " +
+				"fifth fixed column can only take width from the `1fr` Member track " +
+				"that carries the member's NAME: at `sm` the four fixed columns want " +
+				"570px inside a 542px content box, so at 640px the Member track " +
+				"collapses to 0px — the name is gone entirely, the avatar overlaps " +
+				"Speeches, and the card's `overflow-hidden` clips the trailing " +
+				"chevron. `lg` is no better: the 248px app sidebar returns at exactly " +
+				"that tier and eats the viewport gain (108px of Member at 1024px). " +
+				"`xl` is the first tier where the column is free. Re-measure in a " +
+				"real browser before moving this — jsdom applies no CSS and cannot " +
+				"tell you.",
+		).toBe("xl");
+
 		const cells: [string, HTMLElement][] = [
 			["header", phoneHeaderCell()],
 			["body", phoneCellOf(rowFor("Ada Member"))],
