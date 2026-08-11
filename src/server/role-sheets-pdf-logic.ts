@@ -8,7 +8,8 @@ import { eq } from "drizzle-orm";
 import { db } from "#/db";
 import { clubLogos, clubs, meetings } from "#/db/schema";
 import { formatShortDate } from "#/lib/format";
-import { isDecodeSafe, isReadableClub } from "#/server/club-logo-logic";
+import { isDecodeSafe } from "#/server/club-logo-logic";
+import { isReadableClub } from "#/server/club-readable-logic";
 import {
 	loadMinutesProgram,
 	type MinutesProgramRow,
@@ -61,7 +62,7 @@ export interface RenderedRoleSheet {
  *
  * Two gates run after the read, and both are load-bearing:
  *
- *  · `isReadableClub` — the SAME gate the other two read paths use, not a
+ *  · `isReadableClub` — the SAME gate every public club reader uses, not a
  *    reimplementation. Archiving a club is this feature's takedown lever
  *    (ADR-0024 constraint 4), and this route is public, so without it an
  *    archived club's logo kept shipping inside downloadable PDFs and the lever

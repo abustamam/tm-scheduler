@@ -27,6 +27,11 @@
 - `scripts/measure-word-poster.ts` has no tests because `main()` runs at import, so nothing is reachable. It is the harness that derives the Word of the Day poster's font-size tables, and a wrong result there ships mid-word breaks on a wall poster. `scripts/import-agendas-logic.ts` is the repo's precedent for extracting a testable `*-logic.ts` alongside an entry-point script.
   **Priority:** P4
 
+## Testing
+
+- Two integration suites hand-copy queries that #544 turned into reachable seams, so they now assert against copies that can never fail when production changes. `public-reads.integration.test.ts` has `listUpcomingMeetingsPublic` (a verbatim mirror of what is now `loadPublicUpcomingMeetings`) and `getMeetingPublic` (a mirror of `loadMeetingDetail`); `member-status.integration.test.ts` has `listActiveMembers` (a mirror of what is now `loadPublicClubRoster`). The first two are the repo's "a parity test cannot see a defect present on both sides" trap with the twist that only one side is production code — and the mirrors carry no archive gate, so they have already diverged. Both files already `vi.mock("#/db")`, so re-pointing them at the real seams is a small edit. `getMeetingPublic` cannot be re-pointed until `loadMeetingDetail` is exported from a `*-logic` module.
+  **Priority:** P3
+
 ## Print & artifacts
 
 - The canonical meeting page (`club.$clubId.meeting.$meetingId.tsx`) is the one logo-supplying loader with no test on its `logoUrl` wiring. v1.5.0.0 covered the two standalone public print routes after a coverage audit forced all four loaders to null and the whole suite stayed green; this one was left because the route imports enough that isolating it needs more mocking than the other two. Its only logo consumer is still the `.pptx` export, so the blast radius is one surface — but the path moved in v1.11.0.0 (#541): `PptxDownloadButton`'s `logoUrl` prop is gone and `downloadDeckPptx` reads the logo off the deck's title slide, so the untested seam is now loader → `buildSlideDeck` → title slide. Same seam, still untested.

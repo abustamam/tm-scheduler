@@ -12,10 +12,13 @@ type ClubRouteLocation = { pathname: string; searchStr: string };
  *
  * Soft-archived clubs (ADR-0016 / #186) return `notFound()` here, so every
  * public no-auth club loader that funnels through this helper (landing, present,
- * print) treats an archived club as not-found. NEW public club loaders (e.g. the
- * #208 guest-book) MUST route through here — or call `isClubArchived` on their
- * own resolved club — so archived clubs stay inaccessible everywhere but the
- * superadmin console.
+ * print) treats an archived club as not-found.
+ *
+ * This helper covers ROUTER loaders only. A session-less `createServerFn` reader
+ * structurally cannot route through it — it has no router — and is addressable
+ * directly, so it must call `isReadableClub` (or the meeting/member variants) in
+ * `#/server/club-readable-logic` on its own. See #544, where nine such readers
+ * were open because this guidance was read as covering them.
  */
 export async function resolveClubOrRedirect(
 	identifier: string,

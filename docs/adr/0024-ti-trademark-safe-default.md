@@ -205,6 +205,18 @@ other's bytes. Constraint 4's removal path grew a second enforcement point too �
 PDF read now goes through the shared `isReadableClub`, after shipping without it and continuing to
 serve an archived club's logo inside a downloadable file.
 
+**Constraint 4 generalised 2026-08-10 (#544).** `isReadableClub` was never logo-specific, and
+keeping it in `club-logo-logic.ts` is precisely why it went unused: two public club readers added
+afterwards each re-implemented a bare `where(eq(clubs.id, …))`, because no one looks inside a LOGO
+module for a club-wide archive check. It now lives in `src/server/club-readable-logic.ts` with
+meeting- and member-keyed variants, and every public session-less reader calls one of them. So the
+removal path takes down the club's name, Toastmasters club number, roster, agenda and mission text
+— not just the image. That matters to this ADR specifically: the takedown promised in decision 4
+is only as strong as the readers that honour it, and a logo that 404s beside a fully readable club
+page is not a removal. The gate's enrollment is now derived rather than listed
+(`public-readers-archive-gate.guard.test.ts`), so a future reader cannot quietly reopen it.
+Still open on the write side: an archived club continues to accept anonymous writes (#555).
+
 **On the `.pptx` export.** Decision 1 removed the *vendored TI wordmark* from `deck-to-pptx.ts`,
 and that removal stands — the repo ships no mark. What #496 inlines there is the club's own
 upload, which is the p.32 case: an authorized user putting its mark on its own agenda material,
