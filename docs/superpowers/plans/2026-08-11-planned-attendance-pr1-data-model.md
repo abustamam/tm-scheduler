@@ -154,13 +154,13 @@ export const attendancePlanStatusEnum = pgEnum("attendance_plan_status", [
 
 - [ ] **Step 4: Add the table to `src/db/schema.ts`**
 
-Replace the whole `member_availability` block and the whole `meeting_outreach` block (currently lines ~864–915) with:
+**Add** this immediately after the existing `meetingOutreach` block (currently ending around line 915). **Leave `memberAvailability` and `meetingOutreach` exactly where they are** — eight modules still import them and every intermediate commit has to typecheck. They are removed in Task 7, once nothing references them.
 
 ```ts
 // ---------------------------------------------------------------------------
 // Planned attendance — one row per (member, meeting) carrying where the outreach
 // got to. Supersedes `member_availability` (row = not available) and
-// `meeting_outreach` (row = contacted), which were dropped in the same PR: they
+// `meeting_outreach` (row = contacted), both dropped later in the same PR: they
 // answered overlapping questions and could disagree, and neither could express
 // "she replied, she's coming". `not_coming` is the ONLY encoding of "unavailable"
 // in the database — every reader that used to test for a `member_availability`
@@ -216,7 +216,7 @@ In `activityActionEnum` (around line 92), replace the `availability_set` / `avai
 bun run db:generate
 ```
 
-Expected: one new file in `drizzle/` creating the `attendance_plan_status` enum, the `meeting_attendance_plan` table, adding `plan_set` to `activity_action`, and dropping the two old tables. **Open the generated file and DELETE the two `DROP TABLE` statements** — the drop happens in Task 7, after every reader has moved. Keep everything else.
+Expected: one new file in `drizzle/` creating the `attendance_plan_status` enum, the `meeting_attendance_plan` table, and adding `plan_set` to `activity_action`. It must contain **no** `DROP TABLE` — the old tables are still declared in `schema.ts` and stay until Task 7. If a `DROP TABLE` appears, Step 4 deleted a block it was told to leave; restore it and regenerate.
 
 - [ ] **Step 7: Apply the migration to both databases**
 
@@ -236,9 +236,15 @@ TEST_DATABASE_URL="postgresql://dev:dev@localhost:5432/tm_test" \
 
 Expected: PASS, 2 tests.
 
-Note: `bun run db:generate` will now report drift (schema.ts no longer declares the old tables but they still exist in the migration history as live tables). That is expected and resolves in Task 7. Do not "fix" it by re-adding the tables.
+- [ ] **Step 9: Verify nothing else broke**
 
-- [ ] **Step 9: Commit**
+```bash
+bun run typecheck
+```
+
+Expected: no errors. The old tables are still declared and still imported by eight modules, so this must stay clean at every commit in this PR.
+
+- [ ] **Step 10: Commit**
 
 ```bash
 git add src/db/schema.ts drizzle/ src/server/attendance-plan-logic.integration.test.ts
@@ -1378,13 +1384,15 @@ bunx vitest run src/server/attendance-plan-store.guard.test.ts
 
 Expected: FAIL — offenders listed.
 
-- [ ] **Step 3: Fix every offender, then generate the drop migration**
+- [ ] **Step 3: Fix every offender, then remove the tables from the schema**
 
-Once the guard passes on the first assertion, the schema is already clean (the tables were removed from `schema.ts` in Task 1 Step 4):
+Fix each file the guard named, then — and only once `bunx vitest run src/server/attendance-plan-store.guard.test.ts` passes its first assertion — delete the `memberAvailability` and `meetingOutreach` blocks from `src/db/schema.ts` (they have been left in place since Task 1 so every intermediate commit typechecks), along with any now-unused imports. Then:
 
 ```bash
-bun run db:generate
+bun run typecheck && bun run db:generate
 ```
+
+`typecheck` must pass **before** you generate: a lingering import of a deleted table is exactly what this step exists to surface.
 
 Expected: a new migration containing only `DROP TABLE "meeting_outreach";` and `DROP TABLE "member_availability";`.
 
