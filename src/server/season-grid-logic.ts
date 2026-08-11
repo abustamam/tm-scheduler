@@ -270,24 +270,34 @@ export async function loadSeasonGrid(input: {
 		.orderBy(asc(members.name));
 	// Coalesce phone to E.164 with the club default country code (#295) so the
 	// rendered WhatsApp link is a valid full number even for rows stored before
-	// normalize-on-write. Mirrors `meeting-contacts-logic.ts`. Loaded ONLY on the
-	// contact path — the public grid runs this same function and must not pay for
-	// a query whose result it is forbidden to use.
-	const cc = input.includeContact
-		? await loadClubDefaultCountryCode(input.clubId)
-		: null;
-	const memberRows: SeasonGridMember[] = allMemberRows
-		.filter((m) => m.status !== "inactive")
-		.map((m) =>
-			input.includeContact
-				? {
-						id: m.id,
-						name: m.name,
-						email: m.email,
-						phone: toE164(m.phone, cc),
-					}
-				: { id: m.id, name: m.name },
-		);
+	// normalize-on-write. Same normalization pattern as `meeting-contacts-logic.ts`
+	// (which parallelizes its two loads; this one can't, being gated on the flag).
+	//
+	// `?? m.phone` preserves an un-normalizable value rather than dropping it.
+	// `toStoredPhone` deliberately stores input with no derivable country code
+	// verbatim, and the roster editor's phone field has no digit requirement, so
+	// "call the office" is a REACHABLE stored value, not just legacy data. Without
+	// the fallback it renders as an em-dash and the number is silently gone;
+	// `WhatsAppPhoneLink` already has the branch for it, showing a digit-less
+	// value as plain text instead of a dead link.
+	//
+	// The if/else (rather than a ternary sharing the flag with the row build)
+	// keeps the query structurally unreachable on the public path: the grid is
+	// served unauthenticated and must not pay for a round-trip whose result it is
+	// forbidden to use. `season-grid-cc-query.integration.test.ts` pins that.
+	const active = allMemberRows.filter((m) => m.status !== "inactive");
+	let memberRows: SeasonGridMember[];
+	if (input.includeContact) {
+		const cc = await loadClubDefaultCountryCode(input.clubId);
+		memberRows = active.map((m) => ({
+			id: m.id,
+			name: m.name,
+			email: m.email,
+			phone: toE164(m.phone, cc) ?? m.phone,
+		}));
+	} else {
+		memberRows = active.map((m) => ({ id: m.id, name: m.name }));
+	}
 	const memberNames: SeasonGridMember[] = allMemberRows.map((m) => ({
 		id: m.id,
 		name: m.name,
