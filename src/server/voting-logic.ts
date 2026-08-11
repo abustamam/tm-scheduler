@@ -28,6 +28,7 @@ import {
 	isEligibleCandidate,
 	loadAwardCandidates,
 } from "./award-candidates-logic";
+import { isReadableClubForMeeting } from "./club-readable-logic";
 import {
 	AWARD_CATEGORIES,
 	type AwardCategory,
@@ -384,6 +385,19 @@ export interface BallotData {
 	categories: Record<AwardCategory, BallotCategory>;
 }
 
+/** Every category closed, nobody nominated — the not-found ballot. */
+function closedBallotCategories(): Record<AwardCategory, BallotCategory> {
+	const categories = {} as Record<AwardCategory, BallotCategory>;
+	for (const category of AWARD_CATEGORIES) {
+		categories[category] = {
+			isOpen: false,
+			hasOpened: false,
+			candidates: [],
+		};
+	}
+	return categories;
+}
+
 /**
  * What a phone sees. PUBLIC — names and ids only, never contact details: this
  * renders on a fully public route, and `voting.integration.test.ts` asserts the
@@ -395,6 +409,14 @@ export interface BallotData {
  * wrong.
  */
 export async function loadBallot(meetingId: string): Promise<BallotData> {
+	// PUBLIC read (#544): `getBallot` takes no session, and a ballot's candidate
+	// list is member and guest NAMES. An archived club answers as a ballot with
+	// every category closed and nobody on it — which is also what the voting UI
+	// already renders for a meeting whose sessions were never opened, so no
+	// caller needs a new branch.
+	if (!(await isReadableClubForMeeting(meetingId))) {
+		return { meetingId, categories: closedBallotCategories() };
+	}
 	const [sessions, candidates] = await Promise.all([
 		listVoteSessions(meetingId),
 		loadAwardCandidates(meetingId),

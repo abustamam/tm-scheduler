@@ -1,16 +1,56 @@
 // Meeting-management DB logic, split out from the createServerFn wrappers in
 // `meetings.ts` (which the server-modules guard test forbids from exporting
 // db-touching functions). Directly integration-testable by mocking `#/db`.
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq, gte, ne, sql } from "drizzle-orm";
 import { db } from "#/db";
 import { clubs, meetings, roleDefinitions, roleSlots } from "#/db/schema";
 import { generateSlotRows } from "#/lib/agenda";
 import { zonedWallTimeToUtc } from "#/lib/datetime";
 import { meetingDateReached } from "#/lib/meeting-lifecycle";
 import { logActivity } from "./activity";
+import { isReadableClub } from "./club-readable-logic";
 import { linkEvaluatorsToSpeakers } from "./meeting-create-logic";
 import { freezeMeetingNumber } from "./meeting-number-logic";
 import { closeAllVotesTx } from "./voting-logic";
+
+/**
+ * Upcoming, non-cancelled meetings for a club, each with an open-slot count —
+ * the seam behind the PUBLIC, session-less `listUpcomingMeetings`. The exact
+ * complement of `loadPastMeetings` on the instant axis (`gte(scheduledAt, now)`
+ * vs `lt(scheduledAt, before)`); see that module's header for why neither uses
+ * `isMeetingOver`.
+ *
+ * Returns `[]` for an archived (or unknown) club (#544). Lifted out of the
+ * `createServerFn` handler for the reason this module exists at all: a handler
+ * body is unreachable from a test, so the gate would have been unassertable
+ * where the query used to sit.
+ */
+export async function loadUpcomingMeetings(clubId: string) {
+	if (!(await isReadableClub(clubId))) return [];
+	return db
+		.select({
+			id: meetings.id,
+			scheduledAt: meetings.scheduledAt,
+			theme: meetings.theme,
+			location: meetings.location,
+			status: meetings.status,
+			timezone: clubs.timezone,
+			openSlots: sql<number>`count(*) filter (where ${roleSlots.status} = 'open')::int`,
+			totalSlots: sql<number>`count(${roleSlots.id})::int`,
+		})
+		.from(meetings)
+		.innerJoin(clubs, eq(clubs.id, meetings.clubId))
+		.leftJoin(roleSlots, eq(roleSlots.meetingId, meetings.id))
+		.where(
+			and(
+				eq(meetings.clubId, clubId),
+				gte(meetings.scheduledAt, new Date()),
+				ne(meetings.status, "cancelled"),
+			),
+		)
+		.groupBy(meetings.id, clubs.timezone)
+		.orderBy(asc(meetings.scheduledAt));
+}
 
 export interface MeetingCreateInput {
 	clubId: string;

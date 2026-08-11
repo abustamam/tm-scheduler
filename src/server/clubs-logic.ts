@@ -6,6 +6,7 @@ import { z } from "zod";
 import { db } from "#/db";
 import { clubs } from "#/db/schema";
 import { DEFAULT_COUNTRY_CODE } from "#/lib/phone";
+import { isReadableClub } from "./club-readable-logic";
 
 /**
  * The country code to normalize this club's phone numbers with (#295) — the
@@ -133,10 +134,18 @@ export type PublicClubProfile = {
  * All three fields are already normalized on write (`emptyToNull` below), so a
  * stored value is either null or non-blank; callers still guard on whitespace
  * for rows that predate that normalization.
+ *
+ * ARCHIVED CLUBS RETURN NULL (#544). The `/club/$clubId` shell 404s an archived
+ * club in `beforeLoad`, but that guards the CALLER: this is reachable as a bare
+ * `createServerFn` endpoint with no session, and the club UUID it needs is
+ * itself anonymously obtainable from `resolveClubByIdentifier`. `mission` is
+ * club-authored free text and archiving is the takedown lever (ADR-0016 /
+ * ADR-0024), so serving it here defeats the mechanism.
  */
 export async function getPublicClubProfile(
 	clubId: string,
 ): Promise<PublicClubProfile | null> {
+	if (!(await isReadableClub(clubId))) return null;
 	const [row] = await db
 		.select({
 			district: clubs.district,

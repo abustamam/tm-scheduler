@@ -12,16 +12,9 @@
  */
 import { eq } from "drizzle-orm";
 import { db } from "#/db";
-import { clubLogos, clubs } from "#/db/schema";
-import { isClubArchived } from "#/lib/club-archive";
+import { clubLogos } from "#/db/schema";
 import { logActivity } from "./activity";
-
-/** Matches `clubs-logic.ts`'s `UUID_RE` — comparing a non-UUID string against
- *  a `uuid` column makes Postgres throw ("invalid input syntax for type
- *  uuid") instead of returning zero rows, which would surface as a 500
- *  instead of the 404 an unknown/malformed club id should produce. */
-const UUID_RE =
-	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { isReadableClub } from "./club-readable-logic";
 
 /** 256 KiB — the decoded-bytes cap (separate from the encoded-string cap
  *  below; base64 inflates size ~33%, so the two numbers differ on purpose). */
@@ -239,37 +232,6 @@ export function isDecodeSafe(bytes: Buffer, mime: string): boolean {
 // ---------------------------------------------------------------------------
 
 export type ClubLogoMeta = { updatedAt: Date };
-
-/**
- * Is this club id one a PUBLIC caller may read logo data for at all?
- *
- * Both logo read paths funnel through here, deliberately. `src/lib/club-archive.ts`
- * states the repo-wide invariant: "every public no-auth club loader must treat
- * [an archived club] as not-found... ANY new public club loader MUST call it
- * too." Both `loadClubLogoMeta` (public via `getClubLogoMeta`) and
- * `loadClubLogoForServing` (public via the GET route) are such loaders.
- *
- * This is ONE function rather than the same two lines in both, because they
- * previously disagreed: the serving path checked archived and the meta path
- * did not, so an archived club's logo 404'd from the route while
- * `getClubLogoMeta` still reported it existed — an anonymous metadata leak,
- * and a broken `<img>` on the admin page for an archived club (whose admin
- * can still reach `/admin/club-settings`, since `effectiveAdminClub` has no
- * archive check). Sharing the gate is what stops them drifting apart again.
- *
- * Archiving is also this feature's takedown lever (ADR-0024 constraint 4), so
- * a read path that ignores it defeats the mechanism the trademark posture
- * leans on.
- */
-export async function isReadableClub(clubId: string): Promise<boolean> {
-	if (!UUID_RE.test(clubId)) return false;
-	const [club] = await db
-		.select({ archivedAt: clubs.archivedAt })
-		.from(clubs)
-		.where(eq(clubs.id, clubId))
-		.limit(1);
-	return Boolean(club) && !isClubArchived(club);
-}
 
 /**
  * Existence + version for a club's logo — enough to build the versioned

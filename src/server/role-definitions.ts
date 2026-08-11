@@ -10,6 +10,7 @@ import {
 	createRoleSchema,
 	deleteRoleSchema,
 	listRoleDefinitions,
+	loadPublicClubRoles,
 	reorderRolesSchema,
 	setRoleEnabledSchema,
 	updateRoleSchema,
@@ -44,12 +45,14 @@ export const listClubRoles = createServerFn({ method: "GET" })
  *  roles guide — and the guide is linked from the public club page, which the
  *  router preloads on hover. It therefore skips `slotCount`: nothing here reads
  *  it, and computing it would put an aggregate join over the multi-tenant
- *  `role_slots` table behind an unauthenticated hover. */
+ *  `role_slots` table behind an unauthenticated hover.
+ *
+ *  Ungated as to SESSION, not as to ARCHIVE: an archived club yields `[]`. The
+ *  gate lives in `loadPublicClubRoles` rather than in this handler, because a
+ *  `createServerFn` body is unreachable from a test (#544). */
 export const getPublicClubRoles = createServerFn({ method: "GET" })
 	.validator((clubId: unknown) => uuid.parse(clubId))
-	.handler(async ({ data: clubId }) =>
-		listRoleDefinitions(clubId, { onlyEnabled: true }),
-	);
+	.handler(async ({ data: clubId }) => loadPublicClubRoles(clubId));
 
 /** Add a custom role to the club template. AUTHED — requires admin. */
 export const createClubRole = createServerFn({ method: "POST" })

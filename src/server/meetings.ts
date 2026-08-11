@@ -40,13 +40,14 @@ import {
 	loadRosterWithContact,
 } from "./meeting-contacts-logic";
 import { resolveMeetingNumber } from "./meeting-number-logic";
-import { resolveMeetingKey } from "./meeting-resolve-logic";
+import { resolvePublicMeetingKey } from "./meeting-resolve-logic";
 import {
 	applyCompleteMeeting,
 	applyCreateMeeting,
 	applyMeetingUpdate,
 	applyReopenMeeting,
 	applyWordOfTheDayUpdate,
+	loadUpcomingMeetings,
 } from "./meetings-logic";
 import { loadMyCommitments } from "./my-activity-logic";
 import { currentOfficersForClub } from "./officer-terms-logic";
@@ -57,34 +58,12 @@ import { indexRoleRecency, loadRoleRecency } from "./role-recency-logic";
 const uuid = z.string().uuid();
 
 /** Upcoming, non-cancelled meetings for a club, each with an open-slot count.
- *  PUBLIC — no session required. */
+ *  PUBLIC — no session required, but NOT ungated: an archived club yields `[]`.
+ *  The query and its archive gate live in `loadUpcomingMeetings` because a
+ *  `createServerFn` body is unreachable from a test (#544). */
 export const listUpcomingMeetings = createServerFn({ method: "GET" })
 	.validator((clubId: unknown) => uuid.parse(clubId))
-	.handler(async ({ data: clubId }) => {
-		return db
-			.select({
-				id: meetings.id,
-				scheduledAt: meetings.scheduledAt,
-				theme: meetings.theme,
-				location: meetings.location,
-				status: meetings.status,
-				timezone: clubs.timezone,
-				openSlots: sql<number>`count(*) filter (where ${roleSlots.status} = 'open')::int`,
-				totalSlots: sql<number>`count(${roleSlots.id})::int`,
-			})
-			.from(meetings)
-			.innerJoin(clubs, eq(clubs.id, meetings.clubId))
-			.leftJoin(roleSlots, eq(roleSlots.meetingId, meetings.id))
-			.where(
-				and(
-					eq(meetings.clubId, clubId),
-					gte(meetings.scheduledAt, new Date()),
-					ne(meetings.status, "cancelled"),
-				),
-			)
-			.groupBy(meetings.id, clubs.timezone)
-			.orderBy(asc(meetings.scheduledAt));
-	});
+	.handler(async ({ data: clubId }) => loadUpcomingMeetings(clubId));
 
 const pastMeetingsInput = z.object({
 	clubId: uuid,
@@ -416,7 +395,7 @@ const meetingKeyInput = z.object({ clubId: uuid, key: z.string().min(1) });
 export const getMeetingByKey = createServerFn({ method: "GET" })
 	.validator((input: unknown) => meetingKeyInput.parse(input))
 	.handler(async ({ data }) => {
-		const meetingId = await resolveMeetingKey(data.clubId, data.key);
+		const meetingId = await resolvePublicMeetingKey(data.clubId, data.key);
 		if (!meetingId) throw new Error("Meeting not found.");
 		const sessionUser = await getSessionUser();
 		return loadMeetingDetail(meetingId, sessionUser?.id ?? null);
@@ -432,7 +411,7 @@ export const getMeetingByKey = createServerFn({ method: "GET" })
 export const getPublicMeetingByKey = createServerFn({ method: "GET" })
 	.validator((input: unknown) => meetingKeyInput.parse(input))
 	.handler(async ({ data }) => {
-		const meetingId = await resolveMeetingKey(data.clubId, data.key);
+		const meetingId = await resolvePublicMeetingKey(data.clubId, data.key);
 		if (!meetingId) throw new Error("Meeting not found.");
 		return loadMeetingDetail(meetingId, null);
 	});

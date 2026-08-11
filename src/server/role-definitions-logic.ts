@@ -13,6 +13,7 @@ import { z } from "zod";
 import { db } from "#/db";
 import { roleDefinitions, roleSlots } from "#/db/schema";
 import { pairedRoleIds } from "#/lib/meeting-roles";
+import { isReadableClub } from "./club-readable-logic";
 import { syncSlotsForRoleEnabledChange } from "./slots-logic";
 
 const roleCategory = z.enum([
@@ -96,6 +97,26 @@ export async function listRoleDefinitions(
 		.where(and(...where))
 		.groupBy(roleDefinitions.id)
 		.orderBy(...order);
+}
+
+/**
+ * PUBLIC (no-session) variant of {@link listRoleDefinitions} — the seam behind
+ * `getPublicClubRoles`, which serves both the printable role sheet (#341) and
+ * the in-chrome roles guide (#318).
+ *
+ * Returns `[]` for an archived (or unknown) club (#544). A separate named
+ * function rather than an `isPublic` flag on `listRoleDefinitions`, for two
+ * reasons: the authed caller (`listClubRoles`) is already archive-gated by
+ * `requireClubViewAccess` → `requireMembership`, so putting the check inside the
+ * shared function would bill every admin read for a second round trip it does
+ * not need; and — as with `loadPublicSeasonGrid` — a named seam is testable,
+ * whereas the `createServerFn` handler that used to hold this call is not.
+ */
+export async function loadPublicClubRoles(
+	clubId: string,
+): Promise<RoleDefinitionRow[]> {
+	if (!(await isReadableClub(clubId))) return [];
+	return listRoleDefinitions(clubId, { onlyEnabled: true });
 }
 
 // Empty/whitespace-only descriptions collapse to null so a cleared field

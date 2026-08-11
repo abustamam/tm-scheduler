@@ -7,25 +7,78 @@
 // that same module is NOT stripped and drags `pg` → `Buffer` into the browser
 // (ReferenceError: Buffer is not defined). Keeping the db logic in this
 // never-client-imported module keeps `pg` server-side. See `auth-context.ts`.
-import { and, count, eq, gte, inArray, isNull, ne, sql } from "drizzle-orm";
+import {
+	and,
+	asc,
+	count,
+	eq,
+	gte,
+	inArray,
+	isNull,
+	ne,
+	sql,
+} from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import { meetings, members, people, roleSlots } from "#/db/schema";
 import {
 	defaultClubRoleForOffices,
 	OFFICER_POSITIONS,
+	type OfficerPosition,
 	parseOfficerPosition,
 } from "#/lib/officers";
 import { toStoredPhone } from "#/lib/phone";
 import { buildImportPreview } from "#/lib/roster-import";
 import { logActivity } from "./activity";
+import { isReadableClub } from "./club-readable-logic";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 import { collapseMemberships } from "./membership-collapse-logic";
 import {
+	currentOfficersByMember,
 	currentOfficersFor,
 	openOfficerTermIfAbsent,
 	reconcileOfficerTerms,
 } from "./officer-terms-logic";
+
+/** One row of the public member picker. `officerPositions` keeps the NARROW
+ *  `OfficerPosition` union rather than `string[]` — the pickers feed it straight
+ *  into `officerPositionLabel`, which only accepts the union. */
+export interface PublicRosterMember {
+	id: string;
+	name: string;
+	officerPositions: OfficerPosition[];
+}
+
+/**
+ * The club's ACTIVE roster for the member-facing name picker — the seam behind
+ * the PUBLIC, session-less `listMembers`. Inactive members are hidden here; the
+ * VPE roster manager loads them separately. Each row carries its current
+ * office(s) derived from open officer terms (#100).
+ *
+ * Returns `[]` for an archived (or unknown) club (#544). Lifted out of the
+ * `createServerFn` handler in `members.ts` — where it was an inline query — for
+ * the reason the header above gives about `applyX`: a handler body cannot be
+ * reached from a test, so the gate would have been unassertable where it stood.
+ * That matters more here than at the other public readers, because this list is
+ * ROSTER NAMES: the takedown lever (ADR-0016) is worth little if an archived
+ * club's membership stays enumerable through a bare endpoint call.
+ */
+export async function loadPublicClubRoster(
+	clubId: string,
+): Promise<PublicRosterMember[]> {
+	if (!(await isReadableClub(clubId))) return [];
+	const roster = await db
+		.select({ id: members.id, name: members.name })
+		.from(members)
+		.where(and(eq(members.clubId, clubId), ne(members.status, "inactive")))
+		.orderBy(asc(members.name));
+	const officers = await currentOfficersByMember(roster.map((m) => m.id));
+	return roster.map((m) => ({
+		id: m.id,
+		name: m.name,
+		officerPositions: officers.get(m.id) ?? [],
+	}));
+}
 
 // Public self-add throttle (#326). `addMember` is a session-less public write
 // (the "I'm new — add me" name-pick path), so an unauthenticated actor with a

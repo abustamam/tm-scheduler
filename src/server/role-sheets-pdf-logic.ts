@@ -8,7 +8,8 @@ import { eq } from "drizzle-orm";
 import { db } from "#/db";
 import { clubLogos, clubs, meetings } from "#/db/schema";
 import { formatShortDate } from "#/lib/format";
-import { isDecodeSafe, isReadableClub } from "#/server/club-logo-logic";
+import { isDecodeSafe } from "#/server/club-logo-logic";
+import { isReadableClub } from "#/server/club-readable-logic";
 import {
 	loadMinutesProgram,
 	type MinutesProgramRow,
