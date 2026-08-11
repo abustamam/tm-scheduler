@@ -118,6 +118,52 @@ async function renderMembersGrid() {
 	await waitFor(() => expect(router.state.status).toBe("idle"));
 }
 
+// Members × Meetings with the signed-in Contact columns on (#198). `members`
+// carries the contact payload and also drives the member axis, so its `name` is
+// what `row.label` resolves to. Carla has a number and Dev has none — the two
+// states the phone cell renders. Both carry an email so the only em dash in the
+// grid is Dev's empty phone cell.
+const contactData: SeasonGridData = {
+	...data,
+	members: [
+		{
+			id: "c1",
+			name: "Carla Nguyen",
+			email: "carla@example.com",
+			phone: "+14155552671",
+		},
+		{ id: "c2", name: "Dev Patel", email: "dev@example.com", phone: null },
+	],
+	memberNames: [
+		{ id: "c1", name: "Carla Nguyen" },
+		{ id: "c2", name: "Dev Patel" },
+	],
+};
+
+// Same admin mount as `renderMembersGrid`, plus `showContact` — the Email and
+// Phone columns only render on the members axis for a signed-in viewer.
+async function renderContactGrid() {
+	const rootRoute = createRootRoute({
+		component: () => (
+			<SeasonGrid
+				data={contactData}
+				orientation="members"
+				count="all"
+				currentMemberId="admin-1"
+				canManageOthers
+				showContact
+				clubId="club-1"
+			/>
+		),
+	});
+	const router = createRouter({
+		routeTree: rootRoute,
+		history: createMemoryHistory({ initialEntries: ["/"] }),
+	});
+	render(<RouterProvider router={router} />);
+	await waitFor(() => expect(router.state.status).toBe("idle"));
+}
+
 // SeasonGrid renders <Link>s (meeting header, member row), so mount it under
 // a minimal router — mirrors the pattern in guest-resources.test.tsx.
 async function renderGrid(requireIdentity: () => Promise<StoredMember | null>) {
@@ -272,5 +318,31 @@ describe("SeasonGrid contacted marker (#340)", () => {
 		// contacted state is folded into the button's aria-label, not just the
 		// aria-hidden dot.
 		expect(screen.getByRole("button", { name: /contacted/i })).toBeTruthy();
+	});
+});
+
+describe("SeasonGrid contact column", () => {
+	it("renders the member's phone as a WhatsApp link, not a dialer link", async () => {
+		await renderContactGrid();
+
+		const link = screen.getByRole("link", { name: /\+14155552671/ });
+		const href = link.getAttribute("href") ?? "";
+		expect(href).toContain("whatsapp");
+		expect(href).not.toContain("tel:");
+		// Names the destination: the sign-up sheet is a wall of rows, so the number
+		// alone doesn't say whose chat is about to open.
+		expect(link.getAttribute("title")).toBe("Message Carla Nguyen on WhatsApp");
+	});
+
+	it("shows the em-dash fallback for a member with no number", async () => {
+		await renderContactGrid();
+
+		// Both fixture members carry an email, so the single em dash in the grid is
+		// Dev Patel's empty phone cell — an absent number must not leave the cell
+		// blank. `getByText` throws on more than one match, which is the point.
+		expect(screen.getByText("—")).toBeTruthy();
+		expect(
+			screen.queryByRole("link", { name: /Dev Patel.*WhatsApp/ }),
+		).toBeNull();
 	});
 });

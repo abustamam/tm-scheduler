@@ -11,6 +11,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "#/components/ui/dialog";
+import { WhatsAppPhoneLink } from "#/components/whatsapp-phone-link";
 import { formatMeetingDate } from "#/lib/format";
 import type { StoredMember } from "#/lib/member-identity";
 import { meetingRoleOptions } from "#/lib/member-role-picker";
@@ -690,16 +691,18 @@ export function SeasonGrid({
 													)}
 												</td>
 												<td className="px-3 py-1 text-left text-xs whitespace-nowrap">
-													{contact?.phone ? (
-														<a
-															href={`tel:${contact.phone}`}
-															className="text-primary hover:underline"
-														>
-															{contact.phone}
-														</a>
-													) : (
-														<span className="text-muted-foreground">—</span>
-													)}
+													{/* WhatsApp, not the dialer: nobody calls a club member
+													    from a sign-up sheet. `row.label` is this axis's
+													    display name for the member — it is what the row
+													    header renders — so it names the chat's destination. */}
+													<WhatsAppPhoneLink
+														phone={contact?.phone}
+														name={row.label}
+														fallback={
+															<span className="text-muted-foreground">—</span>
+														}
+														className="text-primary"
+													/>
 												</td>
 											</>
 										) : null}
