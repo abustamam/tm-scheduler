@@ -33,29 +33,86 @@ function nextTopLevel(from: number): number {
 	return re.exec(source)?.index ?? -1;
 }
 
-/** The body of a named `createServerFn` export, up to the next declaration. */
-function handlerOf(name: string): string {
-	const start = source.indexOf(`export const ${name} =`);
-	expect(start, `${name} not found in club.ts`).toBeGreaterThan(-1);
-	const next = nextTopLevel(start);
-	return source.slice(start, next === -1 ? undefined : next);
+/**
+ * Every `createServerFn` exported from `club.ts`, as (name, body) pairs.
+ *
+ * ENUMERATED, not listed. The first version of this guard hard-coded
+ * `["listClubMembers", "getMemberProfile"]`, which meant it only ever checked
+ * the two handlers that already had the gate — adding a THIRD server fn calling
+ * `loadClubMembers` without one published the whole roster's email and phone
+ * with the guard fully green. A gate test that cannot see a new ungated caller
+ * is testing the past.
+ *
+ * The body runs to the next top-level declaration, which is also what bounds a
+ * handler for the `requireClubViewAccess` check below.
+ */
+function serverFns(): { name: string; body: string }[] {
+	const re = /export const (\w+) = createServerFn/g;
+	const out: { name: string; body: string }[] = [];
+	for (const m of source.matchAll(re)) {
+		const next = nextTopLevel(m.index);
+		out.push({
+			name: m[1] as string,
+			body: source.slice(m.index, next === -1 ? undefined : next),
+		});
+	}
+	return out;
 }
 
+/**
+ * The ungated contact loaders in `club-logic.ts`. A handler that calls either
+ * one is serving member email + phone and must gate.
+ */
+const CONTACT_LOADERS = ["loadClubMembers", "loadMemberProfile"];
+
+const ALL_FNS = serverFns();
+const CONTACT_FNS = ALL_FNS.filter((fn) =>
+	CONTACT_LOADERS.some((loader) => fn.body.includes(loader)),
+);
+
 describe("club.ts contact payloads stay behind the club view gate", () => {
-	it.each([
-		"listClubMembers",
-		"getMemberProfile",
-	])("%s calls requireClubViewAccess", (name) => {
-		expect(handlerOf(name)).toContain("requireClubViewAccess");
+	it("finds the known contact handlers (so the enumeration can't pass vacuously)", () => {
+		// Anti-vacuity in BOTH directions. A regex that matched nothing — after a
+		// rename, a reformat, or a switch to another factory — would leave
+		// `CONTACT_FNS` empty and every `it.each` below silently vacuous, which is
+		// the failure mode that made the hard-coded version worth replacing in the
+		// first place. Naming the two handlers here (rather than driving the checks
+		// from them) keeps the enumeration honest without narrowing it.
+		expect(ALL_FNS.map((fn) => fn.name)).toEqual(
+			expect.arrayContaining(["listClubMembers", "getMemberProfile"]),
+		);
+		expect(CONTACT_FNS.map((fn) => fn.name).sort()).toEqual([
+			"getMemberProfile",
+			"listClubMembers",
+		]);
 	});
 
+	it.each(
+		CONTACT_FNS.map((fn) => fn.name),
+	)("%s calls requireClubViewAccess", (name) => {
+		const fn = CONTACT_FNS.find((f) => f.name === name);
+		expect(
+			fn?.body,
+			`${name} reads member contact through club-logic but does not call ` +
+				"requireClubViewAccess. Email and phone are for the club's own " +
+				"signed-in members, never a public caller.",
+		).toContain("requireClubViewAccess");
+	});
+
+	// Deliberately scoped to the two KNOWN handlers rather than to every entry in
+	// `CONTACT_FNS`. This is an anti-vacuity assertion — it proves the gate above
+	// is protecting real contact PII rather than two handlers that stopped serving
+	// any — and a future gated handler is free to return the loader's rows
+	// wholesale without ever spelling `phone: x.phone`. Enumerating here would
+	// fail that handler for a style choice; the GATE check is the one that must
+	// see everything.
 	it.each([
 		"listClubMembers",
 		"getMemberProfile",
-	])("%s is a payload the gate above is protecting — it carries phone", (name) => {
-		// Pins WHICH functions the gate protects — if phone moves to an ungated
-		// export, this fails rather than the gate silently covering nothing.
-		expect(handlerOf(name)).toMatch(/phone:\s*\w+\.phone/);
+	])("%s still carries phone, so the gate is protecting something", (name) => {
+		const fn = ALL_FNS.find((f) => f.name === name);
+		expect(fn, `${name} not found in club.ts`).toBeDefined();
+		expect(fn?.body).toMatch(/phone:\s*\w+\.phone/);
 	});
 });
 

@@ -21,6 +21,7 @@ import { WhatsAppPhoneLink } from "#/components/whatsapp-phone-link";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { formatShortDate } from "#/lib/format";
+import { mailtoHref } from "#/lib/mailto";
 import { firstNameOf } from "#/lib/person-name";
 import { cn } from "#/lib/utils";
 import { getClubByIdentifier } from "#/server/clubs";
@@ -334,8 +335,15 @@ function GuestRow({
 							) : null}
 							{hasPhone && email ? <span aria-hidden>·</span> : null}
 							{email ? (
+								// `mailtoHref`, not raw interpolation. A stored
+								// "a@b.com?bcc=x&subject=y" would otherwise become live mailto
+								// HEADERS — the reader's own client would silently blind-copy
+								// a third party on a message they thought was private. The two
+								// free-text writers of `guests.email` are validated in the same
+								// change; rows written before that persist, so both halves are
+								// needed.
 								<a
-									href={`mailto:${email}`}
+									href={mailtoHref(email)}
 									className="min-w-0 truncate hover:underline"
 								>
 									{email}

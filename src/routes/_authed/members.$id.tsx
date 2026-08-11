@@ -35,6 +35,7 @@ import { WhatsAppPhoneLink } from "#/components/whatsapp-phone-link";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { formatMeetingDate } from "#/lib/format";
+import { mailtoHref } from "#/lib/mailto";
 import { formatTenure } from "#/lib/members";
 import {
 	OFFICER_POSITIONS,
@@ -200,8 +201,12 @@ function MemberDetail() {
 					{member.email || member.phone ? (
 						<div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-[var(--sea-ink-soft)]">
 							{member.email ? (
+								// `mailtoHref`, not raw interpolation: a stored
+								// "a@b.com?cc=x&subject=y" would otherwise become live mailto
+								// HEADERS. `bulkImportSchema` still validates member email as a
+								// plain string, so this is not only a legacy-row concern.
 								<a
-									href={`mailto:${member.email}`}
+									href={mailtoHref(member.email)}
 									className="inline-flex items-center gap-1.5 hover:text-[var(--sea-ink)] hover:underline"
 								>
 									<Mail className="size-3.5" aria-hidden />

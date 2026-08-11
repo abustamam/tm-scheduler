@@ -13,6 +13,7 @@ import {
 } from "#/components/ui/dialog";
 import { WhatsAppPhoneLink } from "#/components/whatsapp-phone-link";
 import { formatMeetingDate } from "#/lib/format";
+import { mailtoHref } from "#/lib/mailto";
 import type { StoredMember } from "#/lib/member-identity";
 import { meetingRoleOptions } from "#/lib/member-role-picker";
 import {
@@ -680,8 +681,11 @@ export function SeasonGrid({
 											<>
 												<td className="px-3 py-1 text-left text-xs whitespace-nowrap">
 													{contact?.email ? (
+														// `mailtoHref`: a stored "a@b.com?bcc=x" would
+														// otherwise become live mailto HEADERS. Same fix
+														// as the guest card and the member profile.
 														<a
-															href={`mailto:${contact.email}`}
+															href={mailtoHref(contact.email)}
 															className="text-primary hover:underline"
 														>
 															{contact.email}

@@ -154,6 +154,31 @@ describe("VP Membership guest card — contact line", () => {
 		).toBe("mailto:ada@example.com");
 	});
 
+	it("escapes a stored email so it cannot inject mailto headers", async () => {
+		// Everything after the first `?` in a mailto URL is HEADERS the reader's
+		// mail client honours, so a stored "a@b.com?bcc=…" interpolated raw makes
+		// the VPM's own client blind-copy a third party on a message they believe
+		// is private. `newGuestSchema` and `assignGuestSchema` now validate this
+		// column as an email, but rows written before that persist — the write fix
+		// stops new values, this stops the stored ones.
+		const hostile = "ada@example.com?bcc=attacker@evil.com&subject=hi";
+		await renderRoute([guestRow({ email: hostile })]);
+		const card = within(cardTextColumn("Ada Guest"));
+		const href =
+			card.getByRole("link", { name: hostile }).getAttribute("href") ?? "";
+
+		// Structural, not an exact-string match: the assertion is "no live
+		// delimiter survives", which stays true under any correct escaping.
+		expect(href.startsWith("mailto:")).toBe(true);
+		expect(href.slice("mailto:".length)).not.toMatch(/[?&]/);
+		// And it still parses as one recipient with an empty header section —
+		// the property a partial escape would break.
+		expect(new URL(href).search).toBe("");
+		// The visible text is unchanged: escaping the href must not mangle what
+		// the officer reads, which is how they notice the address is wrong.
+		expect(card.getByRole("link", { name: hostile })).toBeTruthy();
+	});
+
 	it("renders no separator when the guest has a phone but no email", async () => {
 		await renderRoute([guestRow({ email: null })]);
 		const card = within(cardTextColumn("Ada Guest"));
