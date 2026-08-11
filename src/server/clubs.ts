@@ -8,7 +8,7 @@ import {
 	getClubAgendaSettings,
 	getClubProfile,
 	getPublicClubProfile,
-	resolveClubByIdentifier,
+	resolvePublicClubIdentifier,
 } from "./clubs-logic";
 import { requireClubRole, requireClubViewAccess, requireUser } from "./guards";
 
@@ -18,7 +18,7 @@ const uuid = z.string().uuid();
  *  PUBLIC — no session required. */
 export const getClubByIdentifier = createServerFn({ method: "GET" })
 	.validator((identifier: unknown) => z.string().min(1).parse(identifier))
-	.handler(async ({ data }) => resolveClubByIdentifier(data));
+	.handler(async ({ data }) => resolvePublicClubIdentifier(data));
 
 /** The club's free-text profile fields (district / mission / meeting schedule)
  *  for the settings form. AUTHED — any active member of the club. */

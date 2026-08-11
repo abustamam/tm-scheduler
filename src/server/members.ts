@@ -1,8 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
-import { and, asc, eq, ne } from "drizzle-orm";
 import { z } from "zod";
-import { db } from "#/db";
-import { members } from "#/db/schema";
 import { requireClubRole, requireUser } from "./guards";
 import {
 	applyBulkImport,
@@ -14,32 +11,22 @@ import {
 	applySetMemberStatus,
 	bulkImportSchema,
 	editSchema,
+	loadPublicClubRoster,
 	mergeSchema,
 	removeSchema,
 	setRoleSchema,
 	setStatusSchema,
 } from "./members-logic";
-import { currentOfficersByMember } from "./officer-terms-logic";
 
 /** List all ACTIVE roster members for a club (member-facing picker). Inactive
  *  members are hidden here; the VPE roster manager loads them separately. Each
  *  row carries its current office(s) derived from open officer terms (#100).
- *  PUBLIC — no session required. */
+ *  PUBLIC — no session required, but NOT ungated: an archived club yields `[]`.
+ *  The query and its archive gate live in `loadPublicClubRoster` because a
+ *  `createServerFn` body is unreachable from a test (#544). */
 export const listMembers = createServerFn({ method: "GET" })
 	.validator((clubId: unknown) => z.string().uuid().parse(clubId))
-	.handler(async ({ data: clubId }) => {
-		const roster = await db
-			.select({ id: members.id, name: members.name })
-			.from(members)
-			.where(and(eq(members.clubId, clubId), ne(members.status, "inactive")))
-			.orderBy(asc(members.name));
-		const officers = await currentOfficersByMember(roster.map((m) => m.id));
-		return roster.map((m) => ({
-			id: m.id,
-			name: m.name,
-			officerPositions: officers.get(m.id) ?? [],
-		}));
-	});
+	.handler(async ({ data: clubId }) => loadPublicClubRoster(clubId));
 
 const addMemberSchema = z.object({
 	clubId: z.string().uuid(),

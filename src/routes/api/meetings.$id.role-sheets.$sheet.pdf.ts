@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { roleSheetByKey } from "#/data/role-sheets";
-import { isReadableClub } from "#/server/club-logo-logic";
+import { isReadableClub } from "#/server/club-readable-logic";
 import { getMeetingClubId } from "#/server/minutes-logic";
 import { renderRoleSheetPdf } from "#/server/role-sheets-pdf-logic";
 

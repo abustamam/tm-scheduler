@@ -12,9 +12,11 @@ the nouns in `src/db/schema.ts`.
 
 - **Club** — a Toastmasters club (`clubs`). A person can belong to several (see ADR-0006). A club
   can be **soft-archived** by a superadmin (`clubs.archived_at`; NULL = active): a reversible flag
-  that blocks all access — authed (`requireMembership` rejects) and public (loaders return
-  not-found) — except the superadmin console, retaining every row and keeping the slug reserved.
-  See ADR-0016 / #186.
+  that blocks all reads — authed (`requireMembership` rejects) and public (every session-less
+  reader gates itself; see **Invariants**) — except the superadmin console, retaining every row and
+  keeping the slug reserved. Archiving is the platform **takedown** lever: it is how a club, and
+  with it the club's own name, roster and uploaded logo, comes off GavelUp (ADR-0024). Writes are
+  not yet blocked (#555). See ADR-0016 / #186 / #544.
 - **Club logo** — one image a club uploads for itself (`club_logos`; at most one row per club,
   bytes stored inline as `bytea`). PNG or JPEG, ≤256 KB **and** ≤2000px on each side — the pixel
   cap bounds DECODE cost, which the byte cap does not, and it matters because the role-sheet PDF
@@ -307,15 +309,26 @@ per-Person opt-out, the no-auth `/unsubscribe` link, and per-club settings — s
   lifts the lock. Enforced at `resolveMeetingAgendaAuthz` / `assertMeetingNotLocked`, not the UI
   (ADR-0012).
 - `src/server/*` touches `db`/`pg` and must never be imported by client components.
+- Every **public, session-less** club reader gates on `clubs.archived_at` **itself**, through
+  `isReadableClub` / `isReadableClubForMeeting` / `isReadableClubForMember`
+  (`src/server/club-readable-logic.ts`), and returns its own not-found shape — `null` for a row,
+  `[]` for a list — so an archived club answers exactly like one that never existed. Archiving is
+  the takedown lever (ADR-0016 / ADR-0024): a reader that skips the gate makes the lever do
+  nothing. The `/club/$clubId` shell's `beforeLoad` is **not** this gate — it guards the caller,
+  and a `createServerFn` is addressable with no session and no router. Reading it as coverage is
+  why fourteen readers stayed open, including three keyed by a meeting or member id rather than a
+  club id, so closing the club-keyed ones alone left a side door (#544).
+  `public-readers-archive-gate.guard.test.ts` derives its candidate set from `src/server/*.ts`
+  instead of listing one, so a new public reader must be gated or waived with a reason; the
+  wiring half reads comment-blind for "must call" and raw for "must not call" (`guard-source.ts`).
 - Every `club_logos` access — read, join, update or delete — is scoped to one club with
   `eq(clubLogos.clubId, <this club's id>)`. There is no shared library, template gallery or
   cross-club reuse of an upload, and adding one collapses ADR-0024's whole posture (constraint 2).
   A join condition is not scoping: `.innerJoin(clubLogos, eq(clubLogos.clubId, clubs.id))` with no
   `WHERE` returns an arbitrary club's bytes. Two further rules ride on every *public* read: it
-  passes `isReadableClub` (archiving is the takedown lever, ADR-0024 constraint 4 — a read that
-  skips it makes the lever do nothing), and any path that decodes the bytes **inside the Node
-  process** passes `isDecodeSafe` first, since compression ratio is unbounded and the role-sheet
-  PDF endpoint is public and `no-store`. `club-logo-scope.guard.test.ts` sweeps `src/` for the
+  passes `isReadableClub` (the archive-gate invariant above — ADR-0024 constraint 4), and any path
+  that decodes the bytes **inside the Node process** passes `isDecodeSafe` first, since compression
+  ratio is unbounded and the role-sheet PDF endpoint is public and `no-store`. `club-logo-scope.guard.test.ts` sweeps `src/` for the
   cheap regressions, but it is a lexical net, not a proof — the real guarantee is the two-club
   seeding in `club-logo-logic.integration.test.ts`. See #495 / #496.
 - Every user-controlled value that reaches the **role-sheet PDF** passes a cap. Its route

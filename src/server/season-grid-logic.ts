@@ -14,6 +14,7 @@ import {
 import { buildRoleCounts, buildShortCodes, slotLabel } from "#/lib/agenda";
 import { urlKeysForMeetings } from "#/lib/meeting-url";
 import { coalesceToE164 } from "#/lib/phone";
+import { isReadableClub } from "./club-readable-logic";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 
 export type SeasonGridCount = 4 | 8 | "all";
@@ -343,6 +344,27 @@ export async function loadSeasonGrid(input: {
 	};
 }
 
+/** A grid with nothing in it — the not-found answer for a club a public caller
+ *  may not read. Spelled out rather than built by filtering a loaded grid, so
+ *  no query runs at all for an archived club.
+ *
+ *  A FUNCTION, not a shared const: the real `loadSeasonGrid` hands every caller
+ *  its own arrays, and a singleton returned from a loader would let one caller's
+ *  in-place `.sort()` or `.push()` reshape what the next archived club gets. */
+function emptyGrid(): SeasonGridData {
+	return {
+		clubSlug: null,
+		meetings: [],
+		rows: [],
+		members: [],
+		memberNames: [],
+		guestNames: [],
+		cells: [],
+		unavailable: [],
+		contacted: [],
+	};
+}
+
 /**
  * Public (no-auth) variant of {@link loadSeasonGrid}. Hardcodes
  * `includeContact: false` so the sheet shared at `/club/:clubId` — which sits
@@ -350,10 +372,18 @@ export async function loadSeasonGrid(input: {
  * Keeping this a named seam (rather than a `false` literal inside the
  * un-testable `createServerFn` handler) lets the "public payload has no contact"
  * invariant be asserted in a unit test.
+ *
+ * ARCHIVED CLUBS GET AN EMPTY GRID (#544). This was the widest of the leaks that
+ * issue swept up, and the one that made the other two look mild: `members` /
+ * `memberNames` / `guestNames` are ROSTER NAMES, so an archived club's whole
+ * membership stayed anonymously enumerable through a bare endpoint call long
+ * after the club was taken down. `includeContact: false` bounds WHICH member
+ * fields ride along; it says nothing about WHETHER the club should answer.
  */
-export function loadPublicSeasonGrid(input: {
+export async function loadPublicSeasonGrid(input: {
 	clubId: string;
 	count: SeasonGridCount;
 }): Promise<SeasonGridData> {
+	if (!(await isReadableClub(input.clubId))) return emptyGrid();
 	return loadSeasonGrid({ ...input, includeContact: false });
 }

@@ -18,6 +18,7 @@ import { db } from "#/db";
 import { clubs, meetingAttendance, meetings, roleSlots } from "#/db/schema";
 import { deriveMeetingNumber } from "#/lib/meeting-number";
 import { urlKeysForMeetings } from "#/lib/meeting-url";
+import { isReadableClub } from "./club-readable-logic";
 
 /** Default rows per archive page. The route passes its own `limit`; this is the
  *  fallback for callers (e.g. the nav strip) that just want "a few". */
@@ -76,6 +77,13 @@ export async function loadPastMeetings(input: {
 	limit?: number;
 	offset?: number;
 }): Promise<PastMeetingsPage> {
+	// PUBLIC read (#544): `listPastMeetings` is its only caller and takes no
+	// session, so an archived club must answer as an empty archive — before any
+	// query runs, not by filtering rows out afterwards.
+	if (!(await isReadableClub(input.clubId))) {
+		return { meetings: [], hasMore: false, timezone: "UTC", clubSlug: null };
+	}
+
 	const before = input.before ?? new Date();
 	const limit = Math.min(
 		Math.max(input.limit ?? PAST_MEETINGS_DEFAULT_LIMIT, 1),

@@ -2,6 +2,17 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.11.1.0] - 2026-08-10
+
+### Fixed
+
+- **Archiving a club now actually takes it down.** Archiving is how a club is removed from GavelUp, and how a club's own logo and name come down if it ever needs to happen (ADR-0016 / ADR-0024). It did not work. The club page 404'd, which made it *look* like it worked — but the endpoints behind that page answer directly, with no sign-in and no browser, so anyone holding the club's link could still read back the roster, the meeting schedule, the past-meeting archive, the sign-up sheet, the role list, the club's own mission text, a full agenda with every assignee's name and speech title, and the live ballot. Fourteen of those endpoints now treat an archived club exactly like one that never existed.
+- **The takedown can't be walked around through a side door.** Several of the endpoints were reachable by a different key than the one the club page uses — a meeting's own id, a member's own id — so closing the front door left those open. The worst of them returned more than any of the others: the full agenda, the officer names and the club's mission, to anyone with an old `/meetings/…` bookmark. Those are closed too, and looking up a club by name no longer confirms that an archived club ever existed or hands back its Toastmasters club number.
+
+### Changed
+
+- **Nothing changes for a club that is not archived.** Every one of these endpoints returns exactly what it always did; the only difference is what an archived club answers.
+
 ## [1.11.0.0] - 2026-08-10
 
 ### Changed

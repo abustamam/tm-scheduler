@@ -3,12 +3,40 @@ import { db } from "#/db";
 import { clubs, meetings } from "#/db/schema";
 import { zonedWallTimeToUtc } from "#/lib/datetime";
 import { localDayRange, parseMeetingKey } from "#/lib/meeting-url";
+import { isReadableClub } from "./club-readable-logic";
+
+/**
+ * {@link resolveMeetingKey} for the two PUBLIC, session-less meeting readers
+ * (`getPublicMeetingByKey` and `getMeetingByKey` — the latter takes a session
+ * but does not REQUIRE one, so it is equally addressable anonymously).
+ *
+ * Returns null for an archived club (#544), which both callers already turn
+ * into their existing `"Meeting not found."` throw — so an archived club's
+ * agenda, roster of assignees and Word of the Day answer exactly like a key
+ * that never existed, with no new error path at any call site.
+ *
+ * Gating HERE rather than inside `resolveMeetingKey` keeps the authed callers
+ * (already archive-gated by `requireMembership`) from paying a second round
+ * trip, and — unlike the `createServerFn` handlers that hold these calls — this
+ * seam can actually be reached from a test.
+ */
+export async function resolvePublicMeetingKey(
+	clubId: string,
+	key: string,
+): Promise<string | null> {
+	if (!(await isReadableClub(clubId))) return null;
+	return resolveMeetingKey(clubId, key);
+}
 
 /**
  * Resolve a `$meetingId` URL segment (club-local date / date-HHmm / uuid) to a
  * meeting id, scoped to `clubId`. Returns null when nothing matches — including a
  * uuid that belongs to a different club (so callers get not-found, not a leak).
  * A bare-date double-header resolves to the earliest meeting that local day.
+ *
+ * Carries NO archive check: the authed callers are already gated by
+ * `requireMembership`, and public callers must come through
+ * {@link resolvePublicMeetingKey} instead.
  */
 export async function resolveMeetingKey(
 	clubId: string,
