@@ -1242,8 +1242,17 @@ import { describe, expect, it } from "vitest";
 const SELF = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(SELF), "../..");
 
-/** A `tel:` URL in an href or a template literal. */
-const TEL_LINK = /["'`]tel:|href=\{`tel:/;
+/**
+ * A `tel:` URL bound to an href — the thing being forbidden.
+ *
+ * Anchored on `href=` rather than on the bare scheme. A raw-read offender guard
+ * can only ever gain FALSE offenders from prose, and this one does: two innocent
+ * files name `tel:` today — `whatsapp-phone-link.tsx`'s doc comment ("WhatsApp,
+ * not `tel:`") and `season-grid.test.tsx`'s `expect(href).not.toContain("tel:")`
+ * assertion. Both are the guard working as intended somewhere else, so matching
+ * the bare scheme would fail on a clean tree.
+ */
+const TEL_LINK = /href=["'`]tel:|href=\{`tel:/;
 
 const SCAN_ROOTS = ["src"];
 const SKIP_DIRS = new Set(["node_modules", ".output", ".vite", "dist", "build"]);
@@ -1288,7 +1297,28 @@ describe("no tel: links — phone numbers open WhatsApp", () => {
 		).toEqual([]);
 	});
 });
+
+// The two ROUTE swaps (member detail, guest pipeline card) ship with no test of
+// their own: neither route mounts in jsdom, so the props they compute are
+// invisible to every gate. That is the #319 trap exactly — a component tested
+// through its props cannot see a WRONG prop, and `name` here is a computed
+// expression, not a pass-through. These read comment-blind via `readSource`,
+// because they assert a pattern must BE PRESENT: a comment merely quoting
+// `name={member.name}` would satisfy a raw read while the real JSX was gone.
+describe("route wiring for WhatsAppPhoneLink", () => {
+	it.each([
+		["src/routes/_authed/members.$id.tsx", "member.phone", "member.name"],
+		["src/routes/_authed/admin/vp-membership.tsx", "guest.phone", "guest.name"],
+	])("%s passes the right phone and name", (file, phoneExpr, nameExpr) => {
+		const src = readSource(resolve(ROOT, file));
+		expect(src).toContain("<WhatsAppPhoneLink");
+		expect(src).toContain(`phone={${phoneExpr}}`);
+		expect(src).toContain(`name={${nameExpr}}`);
+	});
+});
 ```
+
+Add `readSource` to the imports (`import { readSource } from "#/test/guard-source";`). Note this file now reads BOTH ways — raw for the offender list, comment-blind for the wiring — which is correct and worth a line of comment saying so, since mixing them in one file looks like an inconsistency until you know the rule.
 
 - [ ] **Step 2: Run it — expect PASS**
 
