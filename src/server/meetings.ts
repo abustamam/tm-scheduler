@@ -25,6 +25,10 @@ import {
 import { officerPositionLabel } from "#/lib/officers";
 import { WOD_FIELDS, WOD_UPDATE_FIELDS } from "#/lib/wod-limits";
 import {
+	isReadableClubForMeeting,
+	isReadableClubForMember,
+} from "./club-readable-logic";
+import {
 	canManageClub,
 	getSessionUser,
 	requireClubRole,
@@ -47,7 +51,7 @@ import {
 	applyMeetingUpdate,
 	applyReopenMeeting,
 	applyWordOfTheDayUpdate,
-	loadUpcomingMeetings,
+	loadPublicUpcomingMeetings,
 } from "./meetings-logic";
 import { loadMyCommitments } from "./my-activity-logic";
 import { currentOfficersForClub } from "./officer-terms-logic";
@@ -59,11 +63,11 @@ const uuid = z.string().uuid();
 
 /** Upcoming, non-cancelled meetings for a club, each with an open-slot count.
  *  PUBLIC — no session required, but NOT ungated: an archived club yields `[]`.
- *  The query and its archive gate live in `loadUpcomingMeetings` because a
+ *  The query and its archive gate live in `loadPublicUpcomingMeetings` because a
  *  `createServerFn` body is unreachable from a test (#544). */
 export const listUpcomingMeetings = createServerFn({ method: "GET" })
 	.validator((clubId: unknown) => uuid.parse(clubId))
-	.handler(async ({ data: clubId }) => loadUpcomingMeetings(clubId));
+	.handler(async ({ data: clubId }) => loadPublicUpcomingMeetings(clubId));
 
 const pastMeetingsInput = z.object({
 	clubId: uuid,
@@ -375,10 +379,20 @@ async function loadMeetingDetail(
 }
 
 /** A meeting plus its ordered slots, assignees, speaker details, and evaluator→speaker links.
- *  PUBLIC — uses an optional session only to resolve canManage. */
+ *  PUBLIC — uses an optional session only to resolve canManage.
+ *
+ *  Archive-gated by MEETING id (#544). This one is easy to miss and the most
+ *  costly to: it takes a bare `meetingId`, so the `resolvePublicMeetingKey` seam
+ *  that gates the two key-based readers never applies, and it calls the SAME
+ *  `loadMeetingDetail` they do. Leaving it open would have let the legacy
+ *  `/meetings/:id` UUID — every pre-takedown bookmark is a working key — serve
+ *  an archived club's full agenda straight around the gate on its sibling. */
 export const getMeeting = createServerFn({ method: "GET" })
 	.validator((meetingId: unknown) => uuid.parse(meetingId))
 	.handler(async ({ data: meetingId }) => {
+		if (!(await isReadableClubForMeeting(meetingId))) {
+			throw new Error("Meeting not found.");
+		}
 		// Optional session: may be null (no-session callers get canManage=false).
 		const sessionUser = await getSessionUser();
 		return loadMeetingDetail(meetingId, sessionUser?.id ?? null);
@@ -476,6 +490,10 @@ export const listMyCommitments = createServerFn({ method: "GET" }).handler(
 export const listMemberCommitments = createServerFn({ method: "GET" })
 	.validator((memberId: unknown) => uuid.parse(memberId))
 	.handler(async ({ data: memberId }) => {
+		// Archive-gated by MEMBER id (#544): this is public and keyed only by a
+		// roster member, and each row carries the club's NAME plus the meeting's
+		// date, theme and location.
+		if (!(await isReadableClubForMember(memberId))) return [];
 		const rows = await db
 			.select({
 				slotId: roleSlots.id,

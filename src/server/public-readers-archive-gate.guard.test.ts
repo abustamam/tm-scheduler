@@ -18,7 +18,7 @@
  * typechecks, passes lint, and leaves all 14 integration cases green — they
  * exercise the seam directly and never touch the handler. The same holds for
  * `listRoleDefinitions` vs `loadPublicClubRoles` and for the two extractions
- * this change made (`loadPublicClubRoster`, `loadUpcomingMeetings`), whose
+ * this change made (`loadPublicClubRoster`, `loadPublicUpcomingMeetings`), whose
  * whole point was to move a query somewhere a test can reach.
  *
  * So this guard pins the wiring: every PUBLIC server fn below must call its
@@ -38,11 +38,19 @@
  *     PASS on the half that exists to catch the regression.
  *
  * Blanket-applying either reader is the bypass #502 shipped twice in one branch,
- * in both directions. Verified here by mutating one assertion of EACH class (a
- * rewire to `resolveMeetingKey` for the negative, a deleted call for the
- * positive) and confirming each fails.
+ * in both directions.
+ *
+ * Mutation record, corrected. The first version of this note claimed a rewire to
+ * `resolveMeetingKey` verified the NEGATIVE class. It does not: that rewire also
+ * removes the gated call, so it trips the POSITIVE assertion first, and when both
+ * lived in one `it` the negative never ran. The note was demonstrating the
+ * positive class twice and calling it two. The classes now live in separate `it`
+ * cases so neither can mask the other, and the mutation that actually reaches
+ * the negative is a FALLBACK — a body that calls the gated seam and then falls
+ * back to the ungated sibling (`gated ?? await resolveMeetingKey(...)`), which
+ * satisfies the positive and must still fail.
  */
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -73,8 +81,23 @@ function serverFnBody(source: string, name: string): string {
 			`${name} not found — it was renamed or removed. Re-point this guard rather than deleting the case.`,
 		);
 	}
+	// End at the declaration's own terminating `);` at column 0, NOT at the next
+	// `export`. Slicing to the next export over-captures: it swallows every
+	// non-exported declaration in between plus the FOLLOWING export's JSDoc, and
+	// both directions of that are wrong. `listUpcomingMeetings` used to absorb
+	// `const pastMeetingsInput = …`, and `getMeetingByKey` absorbed
+	// `getPublicMeetingByKey`'s doc comment — so a positive assertion could be
+	// satisfied by a neighbour's code, and a negative one failed by a neighbour's
+	// prose.
+	const end = source.indexOf("\n});", start);
 	const next = source.indexOf("\nexport ", start + 1);
-	return source.slice(start, next === -1 ? source.length : next);
+	const stop =
+		end === -1
+			? next === -1
+				? source.length
+				: next
+			: Math.min(end + 4, next === -1 ? source.length : next);
+	return source.slice(start, stop);
 }
 
 interface Wiring {
@@ -121,7 +144,7 @@ const WIRINGS: Wiring[] = [
 	{
 		file: "server/meetings.ts",
 		fn: "listUpcomingMeetings",
-		mustCall: "loadUpcomingMeetings",
+		mustCall: "loadPublicUpcomingMeetings",
 		leaks: "the club's forward schedule",
 	},
 	{
@@ -152,26 +175,169 @@ const WIRINGS: Wiring[] = [
 		mustCall: "loadBallot",
 		leaks: "ballot candidate names (members and guests)",
 	},
+	{
+		// The bypass three reviewers found independently. Keyed by a bare meeting
+		// UUID, so the `resolvePublicMeetingKey` seam that gates the two key-based
+		// readers never applies — and it calls the SAME `loadMeetingDetail` they
+		// do. The legacy `/meetings/:id` URL means every pre-takedown bookmark is
+		// a working key straight past the gate on its siblings.
+		file: "server/meetings.ts",
+		fn: "getMeeting",
+		mustCall: "isReadableClubForMeeting",
+		leaks:
+			"the same full agenda getPublicMeetingByKey withholds — assignee names, speech titles, Word of the Day",
+	},
+	{
+		file: "server/meetings.ts",
+		fn: "listMemberCommitments",
+		mustCall: "isReadableClubForMember",
+		leaks:
+			"the club's NAME plus the date, theme, location and speech title of every meeting the member holds a slot in",
+	},
+	{
+		file: "server/voting.ts",
+		fn: "getVoteParticipation",
+		mustCall: "loadParticipation",
+		leaks:
+			"per-category ballot counts and the attendance headcount — thin, but a live existence oracle for a taken-down club",
+	},
+	{
+		file: "server/pathways-read.ts",
+		fn: "getMemberPathways",
+		mustCall: "pathwaysForMember",
+		leaks: "a member's Pathways progress",
+	},
+	{
+		// First link in the attack chain: slug → archived club's UUID + NAME +
+		// Toastmasters club number. The logic fn keeps returning archived rows on
+		// purpose (resolveClubOrRedirect needs them); the PUBLIC wrapper must not.
+		file: "server/clubs.ts",
+		fn: "getClubByIdentifier",
+		mustCall: "resolvePublicClubIdentifier",
+		mustNotCall: "resolveClubByIdentifier(",
+		leaks:
+			"an archived club's name and Toastmasters club number — the brand identity ADR-0024's takedown exists to remove",
+	},
 ];
 
 describe("public server fns are wired to their archive-gated seam (#544)", () => {
 	for (const w of WIRINGS) {
-		it(`${w.fn} routes through ${w.mustCall}`, () => {
-			const abs = resolve(ROOT, "src", w.file);
-
-			// Positive: comment-blind, so a comment naming the seam can't fake it.
+		// SEPARATE cases per assertion class, not two expects in one `it`. Sharing
+		// an `it` makes the second assertion unreachable whenever the first fails,
+		// so a mutation aimed at the negative silently demonstrates the positive
+		// twice — which is exactly what the first version of this file's own
+		// "verified by mutation" note claimed, wrongly.
+		it(`${w.fn} calls ${w.mustCall}`, () => {
 			expect(
-				serverFnBody(readStripped(abs), w.fn),
+				serverFnBody(readStripped(resolve(ROOT, "src", w.file)), w.fn),
 				`${w.fn} must call ${w.mustCall} — without it an ARCHIVED club still serves ${w.leaks}. Archiving is the takedown lever (ADR-0016 / ADR-0024).`,
 			).toContain(w.mustCall);
+		});
 
-			if (w.mustNotCall) {
-				// Negative: verbatim, so a stripper artifact can't erase a real call.
+		if (w.mustNotCall) {
+			const mustNotCall = w.mustNotCall;
+			it(`${w.fn} does not call ${mustNotCall}`, () => {
 				expect(
-					serverFnBody(readRaw(abs), w.fn),
-					`${w.fn} must not call ${w.mustNotCall} — it carries no archive check. Use ${w.mustCall}. The two have the same signature, so nothing else in the suite can tell them apart.`,
-				).not.toContain(w.mustNotCall);
-			}
+					serverFnBody(readRaw(resolve(ROOT, "src", w.file)), w.fn),
+					`${w.fn} must not call ${mustNotCall} — it carries no archive check. Use ${w.mustCall}. The two have the same signature, so nothing else in the suite can tell them apart.`,
+				).not.toContain(mustNotCall);
+			});
+		}
+	}
+});
+
+/**
+ * Session-less server fns that are NOT archive-gated club readers, each with the
+ * reason. Anything session-less and absent from both this map and `WIRINGS`
+ * fails the enrollment test below.
+ */
+const REVIEWED_UNGATED: Record<string, string> = {
+	// Auth/session plumbing — not club data.
+	getAuthContext: "resolves the session itself; returns no club-owned data",
+	setActiveClub: "writes a session preference",
+	// Gated, but through a different helper than a WIRINGS row can express.
+	getClubLogoMeta: "gated inside loadClubLogoMeta via isReadableClub (#495)",
+	getVoteTally: "gated by requireVoteCounterCapability, not by archive",
+	getProjectOptions:
+		"keyed by memberId; resolveMemberSubject returns null for an unknown member and the payload is the shared Pathways catalog, not club-owned data",
+	// Deliberately ungated — see resolveClubByIdentifier.
+	// WRITES. Out of scope for #544 (reads only) — tracked as a follow-up.
+	// An archived club still ACCEPTS these, which is its own defect: the three
+	// that mint rows (addMember, submitGuestBook, joinBallot) mean a taken-down
+	// club keeps accreting names while every read of it now returns empty.
+	addMember: "write — #544 follow-up",
+	submitGuestBook: "write — #544 follow-up",
+	submitVote: "write — #544 follow-up",
+	joinBallot: "write — #544 follow-up",
+	openVoteFn: "write — #544 follow-up",
+	closeVoteFn: "write — #544 follow-up",
+	releaseSlot: "write — #544 follow-up",
+	updateSpeakerDetails: "write — #544 follow-up",
+	setAttendance: "write — gated by gateAdmin",
+	addMinutesGuest: "write — gated by gateAdmin",
+	removeMinutesGuest: "write — gated by gateAdmin",
+	unsubscribeFromReminders: "write — gated by a signed unsubscribe token",
+};
+
+/** Calls that mean "this fn resolves a session", i.e. not an anonymous reader. */
+const SESSION_GUARDS =
+	/require(User|Membership|ClubRole|ClubViewAccess|ClubAdminView|Superadmin|MemberInClub|MeetingAgendaEditor|WordOfTheDayEditor|VoteCounterCapability)\w*\(/;
+
+describe("every session-less server fn is enrolled in the gate (#544)", () => {
+	/**
+	 * THE fix for the failure mode #544 itself is, one level up.
+	 *
+	 * `WIRINGS` is an allowlist. An allowlist cannot catch a reader nobody
+	 * remembered to add — and that is precisely how this bug arrived: #341 added
+	 * `getPublicClubRoles` ungated, #318 added `getPublicClubProfile` ungated, and
+	 * nothing failed either time. The first version of this very file listed nine
+	 * readers and called the surface closed while `getMeeting` sat ungated in a
+	 * file holding three enrolled entries; three independent reviewers found it.
+	 *
+	 * So the candidate set is DERIVED, not listed: walk `src/server/*.ts`, slice
+	 * every `createServerFn`, and treat a body with no `require*` call as
+	 * anonymous. Each one must be gated (`WIRINGS`) or consciously waived
+	 * (`REVIEWED_UNGATED`, with a reason). A new public reader then fails on the
+	 * day it is written rather than on the day someone sweeps again.
+	 *
+	 * Same shape as `print-page-reset.guard.test.ts`, which CLAUDE.md describes as
+	 * enrolling the next print route "automatically rather than remembered".
+	 *
+	 * Reads RAW: this is an offender-list assertion, and stripping could only hide
+	 * a real `createServerFn` from the sweep.
+	 */
+	const gated = new Set(WIRINGS.map((w) => w.fn));
+	const dir = resolve(ROOT, "src/server");
+	const files = readdirSync(dir).filter(
+		(f) => f.endsWith(".ts") && !f.includes(".test."),
+	);
+
+	// Vacuity check: a walk that finds nothing passes every assertion below.
+	it("finds the server-fn modules at all", () => {
+		expect(files.length).toBeGreaterThan(20);
+	});
+
+	const anonymous: { file: string; fn: string }[] = [];
+	for (const file of files) {
+		const src = readRaw(resolve(dir, file));
+		for (const m of src.matchAll(/^export const (\w+) = createServerFn/gm)) {
+			const fn = m[1];
+			if (!fn) continue;
+			if (SESSION_GUARDS.test(serverFnBody(src, fn))) continue;
+			anonymous.push({ file, fn });
+		}
+	}
+
+	it("finds session-less server fns to check", () => {
+		expect(anonymous.length).toBeGreaterThan(10);
+	});
+
+	for (const { file, fn } of anonymous) {
+		it(`${file}:${fn} is gated or consciously waived`, () => {
+			expect(
+				gated.has(fn) || fn in REVIEWED_UNGATED,
+				`${fn} (${file}) takes no session, so an anonymous caller reaches it directly. Either gate it on clubs.archived_at and add a WIRINGS row, or add it to REVIEWED_UNGATED with the reason it needs no gate. Do not delete this case.`,
+			).toBe(true);
 		});
 	}
 });

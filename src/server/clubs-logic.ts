@@ -5,6 +5,7 @@ import { eq, or, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import { clubs } from "#/db/schema";
+import { isClubArchived } from "#/lib/club-archive";
 import { DEFAULT_COUNTRY_CODE } from "#/lib/phone";
 import { isReadableClub } from "./club-readable-logic";
 
@@ -80,6 +81,31 @@ export async function resolveClubByIdentifier(
 		rows.find((r) => r.clubNumber === seg) ??
 		rows[0]
 	);
+}
+
+/**
+ * PUBLIC identifier resolution — {@link resolveClubByIdentifier} with archived
+ * rows redacted to null (#544).
+ *
+ * `resolveClubByIdentifier` itself MUST keep returning them: `resolveClubOrRedirect`
+ * reads `archivedAt` off the row to decide its own 404, and
+ * `archive-club.integration.test.ts` pins that. But the server fn wrapping it is
+ * a public GET, and returning the row there hands an anonymous caller the club's
+ * NAME and Toastmasters CLUB NUMBER after a takedown — for a lever whose stated
+ * purpose (ADR-0024) is removing exactly that brand identity. It was also the
+ * first link in an attack chain the adversarial review traced end to end: slug →
+ * club UUID + name here → meeting UUIDs → the full agenda.
+ *
+ * Redacting is behaviour-preserving for both callers. `resolveClubOrRedirect`
+ * already collapses null and archived to the same `notFound()`
+ * (`if (!club || isClubArchived(club))`), and the VP-membership loader reads
+ * `resolved?.slug ?? null`.
+ */
+export async function resolvePublicClubIdentifier(
+	identifier: string,
+): Promise<ResolvedClub | null> {
+	const club = await resolveClubByIdentifier(identifier);
+	return club && isClubArchived(club) ? null : club;
 }
 
 // ---------------------------------------------------------------------------

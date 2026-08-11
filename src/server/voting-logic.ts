@@ -385,6 +385,15 @@ export interface BallotData {
 	categories: Record<AwardCategory, BallotCategory>;
 }
 
+/** Every category at zero ballots — the not-found participation badge. */
+function zeroBallotCounts(): Record<AwardCategory, { ballotsIn: number }> {
+	const categories = {} as Record<AwardCategory, { ballotsIn: number }>;
+	for (const category of AWARD_CATEGORIES) {
+		categories[category] = { ballotsIn: 0 };
+	}
+	return categories;
+}
+
 /** Every category closed, nobody nominated — the not-found ballot. */
 function closedBallotCategories(): Record<AwardCategory, BallotCategory> {
 	const categories = {} as Record<AwardCategory, BallotCategory>;
@@ -591,6 +600,14 @@ export interface Participation {
 export async function loadParticipation(
 	meetingId: string,
 ): Promise<Participation> {
+	// PUBLIC read (#544), and the ungated sibling of `loadBallot` one function
+	// above until this landed. Bare counts are thin data, but an endpoint that
+	// keeps answering is a live existence oracle for a taken-down club — and an
+	// asymmetry between two neighbours in ONE file, keyed identically, is exactly
+	// how #544 happened in the first place.
+	if (!(await isReadableClubForMeeting(meetingId))) {
+		return { categories: zeroBallotCounts(), presentCount: null };
+	}
 	const rows = await db
 		.select({
 			category: meetingVoteSessions.category,

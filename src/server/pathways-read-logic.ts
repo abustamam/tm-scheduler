@@ -13,6 +13,7 @@ import {
 	roleSlots,
 	speeches,
 } from "#/db/schema";
+import { isReadableClub } from "./club-readable-logic";
 import { resolveUserPersonId } from "./person-identity-logic";
 
 export interface SyncedLevel {
@@ -650,6 +651,8 @@ export async function pathwaysForMember(
 	clubId: string,
 	memberId: string,
 ): Promise<PathViewModel[]> {
+	// PUBLIC read (#544): `getMemberPathways` takes no session.
+	if (!(await isReadableClub(clubId))) return [];
 	const [m] = await db
 		.select({ personId: members.personId })
 		.from(members)

@@ -52,19 +52,25 @@ import {
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
-const { isReadableClub, isReadableClubForMeeting } = await import(
-	"#/server/club-readable-logic"
-);
+const { isReadableClub, isReadableClubForMeeting, isReadableClubForMember } =
+	await import("#/server/club-readable-logic");
 const { loadPublicClubRoles } = await import("#/server/role-definitions-logic");
-const { getPublicClubProfile } = await import("#/server/clubs-logic");
+const {
+	getPublicClubProfile,
+	resolveClubByIdentifier,
+	resolvePublicClubIdentifier,
+} = await import("#/server/clubs-logic");
 const { loadPublicSeasonGrid } = await import("#/server/season-grid-logic");
 const { loadPublicClubRoster } = await import("#/server/members-logic");
-const { loadUpcomingMeetings } = await import("#/server/meetings-logic");
+const { loadPublicUpcomingMeetings } = await import("#/server/meetings-logic");
 const { loadPastMeetings } = await import("#/server/past-meetings-logic");
 const { resolveMeetingKey, resolvePublicMeetingKey } = await import(
 	"#/server/meeting-resolve-logic"
 );
-const { loadBallot, openVote } = await import("#/server/voting-logic");
+const { loadBallot, loadParticipation, openVote } = await import(
+	"#/server/voting-logic"
+);
+const { pathwaysForMember } = await import("#/server/pathways-read-logic");
 
 let seeded: SeededClub | null = null;
 
@@ -183,11 +189,11 @@ describe.skipIf(!hasTestDb)(
 
 		it("listUpcomingMeetings: the schedule disappears", async () => {
 			const s = await seedPublicClub();
-			const live = await loadUpcomingMeetings(s.clubId);
+			const live = await loadPublicUpcomingMeetings(s.clubId);
 			expect(live.map((m) => m.id)).toContain(s.meetingId);
 
 			await archive(s.clubId);
-			expect(await loadUpcomingMeetings(s.clubId)).toEqual([]);
+			expect(await loadPublicUpcomingMeetings(s.clubId)).toEqual([]);
 		});
 
 		it("listPastMeetings: the archive of past meetings disappears", async () => {
@@ -222,6 +228,80 @@ describe.skipIf(!hasTestDb)(
 			// so the whole agenda payload — assignee names, Word of the Day — is gone
 			// without either handler growing a new error path.
 			expect(await resolvePublicMeetingKey(s.clubId, s.meetingId)).toBeNull();
+		});
+
+		it("getClubByIdentifier: name and club number stop resolving", async () => {
+			const s = await seedPublicClub();
+			expect(await resolvePublicClubIdentifier(s.clubId)).toMatchObject({
+				id: s.clubId,
+			});
+
+			await archive(s.clubId);
+			// The PUBLIC wrapper redacts…
+			expect(await resolvePublicClubIdentifier(s.clubId)).toBeNull();
+			// …while the shared resolver still surfaces the row, because
+			// `resolveClubOrRedirect` reads `archivedAt` off it to decide its own 404.
+			// Both halves matter: redacting the logic fn too would break the router.
+			expect(await resolveClubByIdentifier(s.clubId)).toMatchObject({
+				id: s.clubId,
+			});
+		});
+
+		it("getMeeting: the direct meeting-id reader stops answering", async () => {
+			const s = await seedPublicClub();
+			// The bypass, stated as a test. `getMeeting` takes a BARE meeting id, so
+			// `resolvePublicMeetingKey` never runs for it, and it calls the same
+			// `loadMeetingDetail` the key readers do — gating them and not this one
+			// leaves the legacy `/meetings/:id` URL serving the whole agenda after a
+			// takedown. Found independently by three reviewers; the first version of
+			// this file gated nine readers and called the surface closed.
+			expect(await isReadableClubForMeeting(s.meetingId)).toBe(true);
+
+			await archive(s.clubId);
+			expect(await isReadableClubForMeeting(s.meetingId)).toBe(false);
+			// Both meeting readers must agree — disagreement IS the bypass.
+			expect(await resolvePublicMeetingKey(s.clubId, s.meetingId)).toBeNull();
+		});
+
+		it("listMemberCommitments: the member's forward schedule disappears", async () => {
+			const s = await seedPublicClub();
+			expect(await isReadableClubForMember(s.memberId)).toBe(true);
+
+			await archive(s.clubId);
+			expect(await isReadableClubForMember(s.memberId)).toBe(false);
+		});
+
+		it("getVoteParticipation: ballot counts and headcount zero out", async () => {
+			const s = await seedPublicClub();
+			// A meeting with no sessions already reports zeros, so the case needs a
+			// REAL open vote before archiving or it cannot fail — the same trap the
+			// ballot case fell into first.
+			await openVote({
+				meetingId: s.meetingId,
+				clubId: s.clubId,
+				category: "best_speaker",
+				actorMemberId: s.adminMemberId,
+			});
+			const live = await loadParticipation(s.meetingId);
+			expect(live.categories.best_speaker).toBeDefined();
+
+			await archive(s.clubId);
+			const gone = await loadParticipation(s.meetingId);
+			for (const c of Object.values(gone.categories)) {
+				expect(c.ballotsIn).toBe(0);
+			}
+			expect(gone.presentCount).toBeNull();
+		});
+
+		it("getMemberPathways: a member's Pathways progress disappears", async () => {
+			const s = await seedPublicClub();
+			// Returns [] for a member/club mismatch too, so assert the gate directly
+			// rather than resting on an empty array that means two different things.
+			expect(await pathwaysForMember(s.clubId, s.memberId)).toEqual([]);
+
+			await archive(s.clubId);
+			expect(await isReadableClub(s.clubId)).toBe(false);
+			expect(await pathwaysForMember(s.clubId, s.memberId)).toEqual([]);
 		});
 
 		it("getBallot: candidate names disappear and every category reads closed", async () => {
@@ -303,7 +383,9 @@ describe.skipIf(!hasTestDb)(
 			expect((await loadPublicClubRoles(s.clubId)).length).toBeGreaterThan(0);
 			expect(await getPublicClubProfile(s.clubId)).not.toBeNull();
 			expect((await loadPublicClubRoster(s.clubId)).length).toBe(2);
-			expect((await loadUpcomingMeetings(s.clubId)).length).toBeGreaterThan(0);
+			expect(
+				(await loadPublicUpcomingMeetings(s.clubId)).length,
+			).toBeGreaterThan(0);
 			expect(
 				(await loadPublicSeasonGrid({ clubId: s.clubId, count: 4 })).members
 					.length,

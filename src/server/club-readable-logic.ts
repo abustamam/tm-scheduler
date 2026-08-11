@@ -40,7 +40,7 @@
  */
 import { eq } from "drizzle-orm";
 import { db } from "#/db";
-import { clubs, meetings } from "#/db/schema";
+import { clubs, meetings, members } from "#/db/schema";
 import { isClubArchived } from "#/lib/club-archive";
 
 /** Matches `clubs-logic.ts`'s `UUID_RE` — comparing a non-UUID string against a
@@ -85,6 +85,27 @@ export async function isReadableClubForMeeting(
 		.from(meetings)
 		.innerJoin(clubs, eq(clubs.id, meetings.clubId))
 		.where(eq(meetings.id, meetingId))
+		.limit(1);
+	return Boolean(row) && !isClubArchived(row);
+}
+
+/**
+ * {@link isReadableClub} for a reader keyed by MEMBER — `listMemberCommitments`
+ * and `getMemberPathways`, which take a roster member id and never see a club id.
+ *
+ * Resolved through the member's own `club_id` FK for the same reason as the
+ * meeting variant: the caller cannot pair one club's member with another club's
+ * id. False for an unknown member, collapsing not-found the same way.
+ */
+export async function isReadableClubForMember(
+	memberId: string,
+): Promise<boolean> {
+	if (!UUID_RE.test(memberId)) return false;
+	const [row] = await db
+		.select({ archivedAt: clubs.archivedAt })
+		.from(members)
+		.innerJoin(clubs, eq(clubs.id, members.clubId))
+		.where(eq(members.id, memberId))
 		.limit(1);
 	return Boolean(row) && !isClubArchived(row);
 }
