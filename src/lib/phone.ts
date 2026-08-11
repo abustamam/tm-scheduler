@@ -118,7 +118,10 @@ export function toE164(
 /**
  * Normalize a stored phone for READING: E.164 when it can be derived, otherwise
  * the value exactly as stored. The read-side mirror of `toStoredPhone`, and the
- * one form every payload that renders a phone should use.
+ * one form every payload that renders a phone should use. Unlike `toStoredPhone`
+ * it does not trim or collapse: the stored value comes back byte-for-byte, so
+ * `""` stays `""` — which is what the inline call sites it replaces already did.
+ * The trailing `?? null` only normalizes `undefined`.
  *
  * The `?? raw` half is load-bearing, and it lives here so it is discoverable from
  * `toE164` rather than rediscovered at each call site. `toE164` returns null for

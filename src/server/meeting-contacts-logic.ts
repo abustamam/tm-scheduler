@@ -46,9 +46,23 @@ export function contactKey(kind: "member" | "guest", id: string): string {
 	return `${kind}:${id}`;
 }
 
-/** Active members of the club with contact — the recruiting pool. Phone is
- *  normalized to E.164 with the club default country code (#295) so the
- *  tap-to-nudge WhatsApp link is a valid full number. */
+/**
+ * Active members of the club with contact — the recruiting pool. Phone is
+ * normalized to E.164 with the club default country code (#295) so the
+ * tap-to-nudge WhatsApp link is a valid full number.
+ *
+ * Bare `toE164`, deliberately NOT `coalesceToE164`: this payload is a dialable
+ * target, never rendered text. A digit-less value yields no `whatsappHref`
+ * either way (it returns null on empty digits), so coalescing would not add a
+ * single working link — it would only make `nudge-recruit-picker`'s `!t.phone`
+ * test truthy and SUPPRESS the honest "no contact" badge for someone nobody can
+ * message. `NudgeButtons` lands on "No contact on file" through the null href
+ * regardless.
+ *
+ * The roster, profile and season-grid payloads DO use `coalesceToE164` — they
+ * DISPLAY the value, so preserving it is the point there. A difference in
+ * payload purpose, not an inconsistency to reconcile.
+ */
 export async function loadRosterWithContact(
 	clubId: string,
 ): Promise<RosterContact[]> {
@@ -101,6 +115,7 @@ export async function loadHolderContacts(
 			.where(and(eq(members.clubId, clubId), inArray(members.id, memberIds)));
 		for (const r of rows) {
 			map.set(contactKey("member", r.id), {
+				// Bare `toE164` on purpose — see `loadRosterWithContact`.
 				phone: toE164(r.phone, cc),
 				email: r.email,
 				preferredName: r.preferredName,
@@ -120,6 +135,7 @@ export async function loadHolderContacts(
 			.where(and(eq(guests.clubId, clubId), inArray(guests.id, guestIds)));
 		for (const r of rows) {
 			map.set(contactKey("guest", r.id), {
+				// Bare `toE164` on purpose — see `loadRosterWithContact`.
 				phone: toE164(r.phone, cc),
 				email: r.email,
 				preferredName: r.preferredName,
