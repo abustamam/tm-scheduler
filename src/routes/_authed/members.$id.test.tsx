@@ -32,21 +32,9 @@
 // input, and closing it would be a production change. Asserting the current
 // behaviour would PIN the asymmetry rather than record it, so this comment is
 // the record.
-import {
-	createMemoryHistory,
-	createRootRoute,
-	createRouter,
-	RouterProvider,
-} from "@tanstack/react-router";
-import {
-	cleanup,
-	fireEvent,
-	render,
-	screen,
-	waitFor,
-	within,
-} from "@testing-library/react";
+import { cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { renderUnderMemoryRouter } from "#/test/router-harness";
 
 vi.mock("#/server/club", () => ({
 	getMemberProfile: vi.fn(),
@@ -143,13 +131,7 @@ async function renderRoute(over: Record<string, unknown> = {}) {
 	} as any);
 
 	const Component = Route.options.component as () => React.ReactElement;
-	const rootRoute = createRootRoute({ component: () => <Component /> });
-	const router = createRouter({
-		routeTree: rootRoute,
-		history: createMemoryHistory({ initialEntries: ["/"] }),
-	});
-	render(<RouterProvider router={router} />);
-	await waitFor(() => expect(router.state.status).toBe("idle"));
+	await renderUnderMemoryRouter(<Component />);
 }
 
 /**

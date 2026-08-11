@@ -8,12 +8,20 @@ import { render, waitFor } from "@testing-library/react";
 import { expect } from "vitest";
 
 /**
- * Mounts `ui` under a minimal single-route router and waits for the
- * router's first render pass to go idle. Components under test render
- * `<Link>`s (Present/Minutes/export menu), which throw outside a router
- * context — this is the shared harness `meeting-toolbar.test.tsx` and
- * `meeting-export-menu.test.tsx` both need, extracted so the two copies
- * can't drift apart.
+ * Mounts `ui` under a minimal single-route router and waits for the router's
+ * first render pass to go idle.
+ *
+ * Anything rendering a `<Link>` throws outside a router context, which covers
+ * most of this app's surfaces — the meeting toolbar and export menu (the two
+ * copies this was first extracted from), the season grid, and any route
+ * component mounted over stubbed loader data.
+ *
+ * REACH FOR THIS rather than hand-rolling the four-line
+ * `createRootRoute`/`createRouter`/`render`/`waitFor` scaffold. The WhatsApp
+ * phone-links branch added four more inline copies before anyone noticed this
+ * file existed, which is exactly the drift it was extracted to prevent. Route
+ * tests keep only their own `vi.spyOn(Route, …)` stubs local and pass
+ * `<Component />` here.
  */
 export async function renderUnderMemoryRouter(
 	ui: React.ReactNode,

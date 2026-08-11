@@ -22,22 +22,10 @@
 // server-fn modules (they reach `#/db` → `pg`, which must not load under
 // jsdom), stub `Route.useLoaderData`, and render `Route.options.component`
 // directly rather than running the real loader.
-import {
-	createMemoryHistory,
-	createRootRoute,
-	createRouter,
-	RouterProvider,
-} from "@tanstack/react-router";
-import {
-	cleanup,
-	fireEvent,
-	render,
-	screen,
-	waitFor,
-	within,
-} from "@testing-library/react";
+import { cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PipelineGuestRow } from "#/server/guest-pipeline";
+import { renderUnderMemoryRouter } from "#/test/router-harness";
 
 vi.mock("#/server/guest-pipeline", () => ({
 	convertGuestToMember: vi.fn(),
@@ -95,13 +83,7 @@ async function renderRoute(guests: PipelineGuestRow[]) {
 	} as any);
 
 	const Component = Route.options.component as () => React.ReactElement;
-	const rootRoute = createRootRoute({ component: () => <Component /> });
-	const router = createRouter({
-		routeTree: rootRoute,
-		history: createMemoryHistory({ initialEntries: ["/"] }),
-	});
-	render(<RouterProvider router={router} />);
-	await waitFor(() => expect(router.state.status).toBe("idle"));
+	await renderUnderMemoryRouter(<Component />);
 }
 
 /**

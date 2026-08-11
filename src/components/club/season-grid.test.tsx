@@ -16,6 +16,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { StoredMember } from "#/lib/member-identity";
 import type { SeasonGridData } from "#/server/season-grid";
+import { renderUnderMemoryRouter } from "#/test/router-harness";
 
 // season-grid.tsx pulls in the availability + slots server-fn modules at
 // import time (they define createServerFns), which reach for #/db →
@@ -149,25 +150,17 @@ const contactData: SeasonGridData = {
 // Same admin mount as `renderMembersGrid`, plus `showContact` — the Email and
 // Phone columns only render on the members axis for a signed-in viewer.
 async function renderContactGrid() {
-	const rootRoute = createRootRoute({
-		component: () => (
-			<SeasonGrid
-				data={contactData}
-				orientation="members"
-				count="all"
-				currentMemberId="admin-1"
-				canManageOthers
-				showContact
-				clubId="club-1"
-			/>
-		),
-	});
-	const router = createRouter({
-		routeTree: rootRoute,
-		history: createMemoryHistory({ initialEntries: ["/"] }),
-	});
-	render(<RouterProvider router={router} />);
-	await waitFor(() => expect(router.state.status).toBe("idle"));
+	await renderUnderMemoryRouter(
+		<SeasonGrid
+			data={contactData}
+			orientation="members"
+			count="all"
+			currentMemberId="admin-1"
+			canManageOthers
+			showContact
+			clubId="club-1"
+		/>,
+	);
 }
 
 // SeasonGrid renders <Link>s (meeting header, member row), so mount it under

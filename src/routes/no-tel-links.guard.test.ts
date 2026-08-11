@@ -74,20 +74,51 @@ function walk(dir: string, out: string[] = []): string[] {
 	return out;
 }
 
-const sourceFiles = SCAN_ROOTS.filter((r) => existsSync(resolve(ROOT, r)))
+/**
+ * The files this guard ACTUALLY reads — walked, self-excluded, and filtered by
+ * `SCANNED`, in that order.
+ *
+ * The extension filter has to be applied HERE, not inside the loop. It used to
+ * run at the point of reading while the anti-vacuity count below measured the
+ * PRE-filter list — so narrowing `SCANNED` from `/\.(m?[jt]sx?)$/i` to
+ * `/\.(m?[jt]s)$/i` excluded every `.tsx` file in the repo, which is where every
+ * rendered phone number lives, and left the whole suite green with a live `tel:`
+ * link in `roster.tsx`. Demonstrated. An anti-vacuity assertion that counts a
+ * different set from the one the test iterates is not an anti-vacuity assertion.
+ */
+const scanned = SCAN_ROOTS.filter((r) => existsSync(resolve(ROOT, r)))
 	.flatMap((r) => walk(resolve(ROOT, r)))
 	// This guard states the pattern it forbids, so it can't be its own offender.
-	.filter((abs) => abs !== SELF);
+	.filter((abs) => abs !== SELF)
+	.filter((abs) => SCANNED.test(abs));
+
+/**
+ * A file that MUST be in the scanned set, named explicitly.
+ *
+ * A count cannot see a whole extension CLASS disappear: `src/` holds well over
+ * 100 `.ts` files, so dropping every `.tsx` still clears a `> 100` check
+ * comfortably. This names a `.tsx` route that renders a phone number, so the
+ * class the rule exists to protect cannot be silently excluded.
+ */
+const CANARY = "src/routes/_authed/roster.tsx";
 
 describe("no tel: links — phone numbers open WhatsApp", () => {
 	it("walks a non-trivial source tree (so a broken walk can't pass vacuously)", () => {
-		expect(sourceFiles.length).toBeGreaterThan(100);
+		expect(scanned.length).toBeGreaterThan(100);
+	});
+
+	it("scans the .tsx routes, where every rendered phone number lives", () => {
+		expect(
+			scanned.map((abs) => relative(ROOT, abs)),
+			`${CANARY} is not in the scanned set. A narrowed SCANNED pattern can ` +
+				"drop every .tsx file — the ones that actually render phone numbers " +
+				"— while the count above still passes on .ts files alone.",
+		).toContain(CANARY);
 	});
 
 	it("no source file links a phone number with the tel: scheme", () => {
 		const offenders: string[] = [];
-		for (const abs of sourceFiles) {
-			if (!SCANNED.test(abs)) continue;
+		for (const abs of scanned) {
 			// Deliberately NOT `#/test/guard-source` (which blanks comments). This
 			// asserts an offender list is EMPTY, so a comment can only ever add a
 			// false offender — stripping would LOOSEN the guard, not harden it. That
