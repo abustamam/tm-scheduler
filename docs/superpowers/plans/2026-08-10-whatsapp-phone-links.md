@@ -816,34 +816,64 @@ Expected: FAIL on the new test only — `expected '(415) 555-2671' to be '+14155
 
 - [ ] **Step 3: Write the implementation**
 
-In `src/server/guest-pipeline-logic.ts`, `loadGuestPipeline` already imports `loadClubDefaultCountryCode` (line 33) and `toStoredPhone` (line 31). Add `toE164` to the `#/lib/phone` import, load the country code alongside the existing `Promise.all`, and normalize in the final `rows.map`:
+**First, give the `?? raw` rule one home.** This task would otherwise create the THIRD inline copy of `toE164(x, cc) ?? x` — `season-grid-logic.ts:296` and `club-logic.ts:41` are the first two. Hoist it.
+
+Add to `src/lib/phone.ts`, beside `toE164` and `toStoredPhone`:
+
+```ts
+/**
+ * Normalize a stored phone for READING: E.164 when it can be derived, otherwise
+ * the value exactly as stored. The read-side mirror of `toStoredPhone`.
+ *
+ * The `?? raw` half is load-bearing, and it lives here so it is discoverable from
+ * `toE164` rather than rediscovered at each call site. `toE164` returns null for
+ * anything with no digits ("call the office"), and `toStoredPhone` DELIBERATELY
+ * stores such input verbatim so the member can still see and edit it. A read path
+ * using bare `toE164` therefore erases a number the user can currently read — and
+ * starves `WhatsAppPhoneLink`'s plain-text branch, which exists to render exactly
+ * that case as text rather than a dead link.
+ */
+export function coalesceToE164(
+	raw: string | null | undefined,
+	defaultCountryCode?: string | null,
+): string | null {
+	return toE164(raw, defaultCountryCode) ?? raw ?? null;
+}
+```
+
+Add unit tests to `src/lib/phone.test.ts`: an already-E.164 value passes through, a national number is promoted with the country code, a digit-less value comes back verbatim, and null/undefined return null.
+
+Then repoint the two existing read paths at it, deleting the inline expression in `src/server/season-grid-logic.ts` and the private `coalescePhone` helper in `src/server/club-logic.ts`. Keep the per-site comments SHORT now that the rationale lives in `#/lib/phone` — a pointer, not a restatement.
+
+**Do NOT** rewire `toStoredPhone` to delegate to the new helper. It is a write path with its own trimming and empty-string semantics, covered by its own tests, and changing it is risk this task does not need.
+
+**Then normalize the guest pipeline.** In `src/server/guest-pipeline-logic.ts`, `loadGuestPipeline` already imports `loadClubDefaultCountryCode` (line 33) and `toStoredPhone` (line 31). Add `coalesceToE164` to the `#/lib/phone` import, then add
 
 ```ts
 	const cc = await loadClubDefaultCountryCode(clubId);
 ```
 
-placed just before the `return rows.map((r) => {` block, and inside that block:
+just before the `return rows.map((r) => {` block, and inside that block replace `phone: r.phone,` with:
 
 ```ts
 			// Coalesced to E.164 (#295) so the pipeline card's WhatsApp link is a
 			// valid full number even for rows written before normalize-on-write.
-			// `?? r.phone` because `toE164` returns null for a digit-less value
-			// ("call the office"), which `toStoredPhone` deliberately stores
-			// verbatim — dropping it would erase a number the VP Membership can
-			// currently read, and starve `WhatsAppPhoneLink`'s plain-text branch.
-			phone: toE164(r.phone, cc) ?? r.phone,
+			phone: coalesceToE164(r.phone, cc),
 ```
 
-replacing `phone: r.phone,`. Add a test asserting a digit-less stored value survives unchanged.
+Add a test asserting a digit-less stored value survives unchanged.
 
 - [ ] **Step 4: Run the test to verify it passes**
 
 ```bash
 TEST_DATABASE_URL="postgresql://dev:dev@localhost:5432/tm_test" \
-  bunx vitest run src/server/guest-pipeline-phone.integration.test.ts
+  bunx vitest run src/server/guest-pipeline.integration.test.ts \
+    src/server/season-grid.integration.test.ts \
+    src/server/club-contact.integration.test.ts \
+    src/lib/phone.test.ts
 ```
 
-Expected: PASS, whole file green.
+Expected: PASS across all four — the three read paths now share one helper, so the two already-shipped ones are regression surface for this refactor.
 
 - [ ] **Step 5: Typecheck and commit**
 
