@@ -28,8 +28,14 @@ export function WhatsAppPhoneLink({
 	/**
 	 * Styling for the LINK only — it is merged onto the anchor and applies to
 	 * neither the `fallback` (the caller renders that node itself) nor the
-	 * digit-less text branch (see below). Callers pass colour; the base owns
-	 * layout and `hover:underline`.
+	 * digit-less text branch (see below).
+	 *
+	 * The base owns layout, `hover:underline` AND colour, so a caller normally
+	 * passes nothing. Colour is deliberately not a call-site concern: the anchor
+	 * carries `data-slot="wa-phone"` to escape the unlayered `a { color }` rule in
+	 * `styles.css`, and that escape has to travel with the colour that replaces
+	 * it. A caller can still override a base utility (`cn` merges last-wins), but
+	 * a colour passed here is a smell — put it in the base.
 	 */
 	className?: string;
 }) {
@@ -58,12 +64,12 @@ export function WhatsAppPhoneLink({
 	// A stored value with no digits ("ask at church") can't open a chat. Show it
 	// as text rather than swallowing it — the reader can still act on it.
 	//
-	// Deliberately WITHOUT `className`. Every call site passes an affordance class
-	// for the anchor (`season-grid.tsx` passes `text-primary`, `members.$id.tsx` a
-	// hover colour), and forwarding one here paints a plain string in link colour
-	// with nothing to click. Owned by the component rather than by the four call
-	// sites, none of which can know which branch will render. The text then
-	// inherits the surrounding cell's colour, which is what it is: prose.
+	// Deliberately WITHOUT `className`, and deliberately without the base's own
+	// `text-primary`: forwarding link styling here paints a plain string in link
+	// colour with nothing to click, an affordance that lies. This is why the
+	// colour decision belongs to the component and not to the call sites — none of
+	// them can know which of the three branches will render. The text inherits the
+	// surrounding cell's colour, which is what it is: prose.
 	if (!href) return <span>{trimmed}</span>;
 
 	return (
@@ -72,11 +78,26 @@ export function WhatsAppPhoneLink({
 			target="_blank"
 			rel="noopener noreferrer"
 			title={`Message ${name} on WhatsApp`}
-			// `hover:underline` belongs to the base rather than each call site: the
-			// rest of the base is pure layout, so without it an anchor is visually
-			// indistinguishable from the plain text beside it. Callers pass color.
+			// Opts this anchor OUT of the unlayered `a { color: … }` rule in
+			// `styles.css`. That rule is unlayered, so it beats anything Tailwind
+			// emits into `@layer utilities` — a `text-primary` here or at a call site
+			// loses to it silently and the link renders `--lagoon-deep` (#328f97,
+			// ~3.8:1 on white) at `text-xs`, under AA. The exclusion is another
+			// `:not()`, matching how the same collision was fixed for `<Button
+			// asChild>` and dropdown items; a class cannot win against an unlayered
+			// rule, which is the whole point. `whatsapp-phone-link-color.guard.test.ts`
+			// pins the attribute and both rules together.
+			data-slot="wa-phone"
+			// Colour lives HERE, not at the call sites. Four of them passed a colour
+			// utility that did nothing (see above), and the component is the only
+			// place that knows which of its three branches is rendering — the
+			// digit-less branch must NOT be painted like a link. `--primary` is
+			// `--lagoon-ink`, annotated AA-verified at 5.8:1 in `styles.css`.
+			// `hover:underline` is base for the same reason: the rest of the base is
+			// pure layout, so without it an anchor is indistinguishable from the
+			// plain text beside it.
 			className={cn(
-				"inline-flex items-center gap-1.5 hover:underline",
+				"inline-flex items-center gap-1.5 text-primary hover:underline",
 				className,
 			)}
 		>

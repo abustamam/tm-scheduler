@@ -177,24 +177,33 @@ describe("member profile — contact row", () => {
 		expect(phone.getAttribute("target")).toBe("_blank");
 	});
 
-	// The one prop no href/title assertion can reach, and the one this route
-	// contributes: `WhatsAppPhoneLink` supplies layout and `hover:underline`, so
-	// the call site passes COLOUR only — the same hover colour the `mailto:`
-	// anchor above it carries. Without it the two links in one row behave
-	// differently on hover.
-	it("passes its hover colour through to the anchor", async () => {
+	// This route used to pass `hover:text-[var(--sea-ink)]` here, and it never
+	// took effect: `styles.css`'s unlayered `a:not(…):hover` rule beats anything
+	// Tailwind puts in `@layer utilities`, so the class was dead the day it was
+	// written. Colour now lives in the component, together with the
+	// `data-slot="wa-phone"` that lets it survive that rule at all — the two
+	// cannot be split across files, which is why the call site passes no styling.
+	//
+	// Asserted from the RENDERED anchor rather than by grepping the call site, so
+	// re-adding a colour prop here fails loudly instead of quietly reintroducing
+	// a class that does nothing. `whatsapp-phone-link-color.guard.test.ts` holds
+	// the cascade half, which jsdom cannot see.
+	it("passes no styling — the component owns colour and the opt-out", async () => {
 		await renderRoute();
 		const column = within(headerColumn("Ada Member"));
 		const phone = column.getByRole("link", { name: /\+14155552671/ });
 
+		expect(phone.getAttribute("data-slot")).toBe("wa-phone");
+		expect(phone.className).toContain("text-primary");
+		expect(phone.className).toContain("hover:underline");
 		expect(
 			phone.className,
-			"The member profile's WhatsAppPhoneLink lost its `className`. The " +
-				"component owns layout and `hover:underline`; this call site owns the " +
-				"hover colour that matches the email anchor beside it.",
-		).toContain("hover:text-[var(--sea-ink)]");
-		// …merged onto the component's own base rather than replacing it.
-		expect(phone.className).toContain("hover:underline");
+			"The member profile must not pass a colour to WhatsAppPhoneLink. An " +
+				"unlayered `a { color }` rule in styles.css overrides any colour " +
+				"utility on this anchor, so the class would be inert; the component " +
+				"owns colour because it also owns the `data-slot` that escapes that " +
+				"rule.",
+		).not.toContain("hover:text-[var(--sea-ink)]");
 	});
 
 	it("keeps the email on mailto: beside it — only the phone changed scheme", async () => {

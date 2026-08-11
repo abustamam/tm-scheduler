@@ -115,12 +115,38 @@ describe("WhatsAppPhoneLink", () => {
 		expect(screen.getByText("ask at church").tagName).toBe("SPAN");
 	});
 
-	// Tasks 6-9 all place this inside a table cell or a flex row and lean on
-	// `className` to fit it there, so a dropped class would ship looking like a CSS
-	// problem rather than a component regression. Both rendering branches that
-	// accept one get pinned; the fallback branch deliberately does not take a
-	// class (callers wrap a styled node themselves), so there is nothing to pin.
-	it("merges the caller's className onto the link without losing its own base", () => {
+	// The COLOUR contract, which no call site can hold. `styles.css` has an
+	// unlayered `a:not(…) { color: var(--lagoon-deep) }` rule; unlayered beats
+	// Tailwind's `@layer utilities`, so a `text-primary` passed as a `className`
+	// by a caller loses to it silently and the link renders --lagoon-deep
+	// (~3.8:1 on white) at `text-xs` — under WCAG AA on both surfaces that show
+	// it most. The fix is the `data-slot` exclusion, which has to sit on the
+	// anchor, which means the colour has to sit here with it.
+	it("colours the link itself and opts out of the unlayered anchor rule", () => {
+		render(<WhatsAppPhoneLink phone="+14155552671" name="Jane Doe" />);
+		const link = screen.getByRole("link");
+		// --primary is --lagoon-ink, annotated AA-verified at 5.8:1 in styles.css.
+		expect(
+			link.className,
+			"WhatsAppPhoneLink must colour its own anchor — call sites no longer " +
+				"pass one, and a caller-supplied colour cannot beat the unlayered " +
+				"`a { color }` rule in styles.css.",
+		).toContain("text-primary");
+		// Without this the class above is dead CSS. The two are one fix, so they
+		// are asserted together; `whatsapp-phone-link-color.guard.test.ts` pins the
+		// other half of the pair, in styles.css.
+		expect(
+			link.getAttribute("data-slot"),
+			"the `text-primary` above is inert without this attribute",
+		).toBe("wa-phone");
+	});
+
+	// Tasks 6-9 all place this inside a table cell or a flex row, so a dropped
+	// base class would ship looking like a CSS problem rather than a component
+	// regression. Both rendering branches that accept a `className` get pinned;
+	// the fallback branch deliberately does not take one (callers wrap a styled
+	// node themselves), so there is nothing to pin.
+	it("merges a caller's className onto the link without losing its own base", () => {
 		render(
 			<WhatsAppPhoneLink
 				phone="+14155552671"
@@ -139,13 +165,16 @@ describe("WhatsAppPhoneLink", () => {
 		// of the base is pure layout, which would leave the anchor looking exactly
 		// like the plain text next to it.
 		expect(link.className).toContain("hover:underline");
+		// …and the colour survives a caller class that does not touch colour.
+		expect(link.className).toContain("text-primary");
 	});
 
 	it("lets a conflicting caller class win over the base", () => {
 		// The test above uses classes that collide with nothing in the base, so it
 		// only proves the base SURVIVES — reversing the `cn` arguments keeps it
-		// green. Reversal is the mutation that actually breaks Tasks 6-9, since all
-		// four call sites pass utilities that collide with the base's own.
+		// green. `gap-4` is deliberately NOT a colour: colour is the component's
+		// own decision now, so overriding it from a call site is the thing this
+		// change removed, and pinning that as supported would invite it back.
 		render(
 			<WhatsAppPhoneLink
 				phone="+14155552671"
@@ -158,25 +187,28 @@ describe("WhatsAppPhoneLink", () => {
 		expect(link.className).not.toContain("gap-1.5");
 	});
 
-	it("does not paint the digit-less branch with the caller's link styling", () => {
-		// `className` styles the LINK — every call site passes an affordance class
-		// and `season-grid.tsx` passes exactly this one. This branch renders no
-		// link, so leaking the class there shows a plain string in link colour with
-		// nothing to click: an affordance that lies. Reachable, not theoretical —
-		// `toStoredPhone` preserves an un-normalizable value on purpose, and the
-		// three read paths carry it through verbatim (`coalesceToE164`).
+	it("does not paint the digit-less branch with link styling", () => {
+		// This branch renders no link, so painting it in link colour shows a plain
+		// string that looks clickable and is not: an affordance that lies. It must
+		// escape BOTH the base's own `text-primary` and any caller class.
+		// Reachable, not theoretical — `toStoredPhone` preserves an un-normalizable
+		// value on purpose, and the read paths carry it through verbatim.
 		render(
 			<WhatsAppPhoneLink
 				phone="ask at church"
 				name="Jane Doe"
-				className="text-primary"
+				className="text-sm"
 			/>,
 		);
 		const span = screen.getByText("ask at church");
-		// The whole class list, not just that one utility. Asserting only
+		// The whole class list, not just one utility. Asserting only
 		// `not.toContain("text-primary")` would pass on a version that forwarded
-		// every OTHER caller class, which is the same bug with a different input.
+		// every OTHER class, which is the same bug with a different input.
 		expect(span.className).toBe("");
+		// It is also not the anchor, so it must not carry the anchor's escape
+		// hatch — a `data-slot` here would exempt plain prose from the site's link
+		// styling for no reason.
+		expect(span.getAttribute("data-slot")).toBeNull();
 	});
 
 	it.each([

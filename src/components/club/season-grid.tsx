@@ -694,14 +694,16 @@ export function SeasonGrid({
 													{/* WhatsApp, not the dialer: nobody calls a club member
 													    from a sign-up sheet. `row.label` is this axis's
 													    display name for the member — it is what the row
-													    header renders — so it names the chat's destination. */}
+													    header renders — so it names the chat's destination.
+													    No colour class: the component owns colour, because the
+													    `data-slot` that escapes the unlayered `a { color }` rule
+													    has to travel with it. */}
 													<WhatsAppPhoneLink
 														phone={contact?.phone}
 														name={row.label}
 														fallback={
 															<span className="text-muted-foreground">—</span>
 														}
-														className="text-primary"
 													/>
 												</td>
 											</>

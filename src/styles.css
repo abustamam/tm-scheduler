@@ -273,15 +273,28 @@ body::after {
    mode, and the meeting Print & export menu (#541) rendered its four <Link>
    items in link-teal beside its two <button> items in foreground, splitting one
    menu of peer actions into two apparent classes. Any new dropdown with link
-   items inherits the fix. */
-a:not([data-slot="button"]):not([data-slot^="dropdown-menu-"]) {
+   items inherits the fix.
+
+   `wa-phone` (`WhatsAppPhoneLink`) is the third: it sets `text-primary`
+   (= --lagoon-ink, AA-verified 5.8:1) on itself, and without the exclusion this
+   rule overrode it down to --lagoon-deep — ~3.8:1 on white, rendered at 12px on
+   the sign-up sheet and the roster, i.e. under AA on the surfaces that show it
+   most. Excluded here rather than fought with a class, because no class can beat
+   an unlayered rule; that is the same conclusion the two cases above reached.
+   `whatsapp-phone-link-color.guard.test.ts` fails if either half of this pair
+   loses its exclusion. */
+a:not([data-slot="button"]):not([data-slot^="dropdown-menu-"]):not(
+    [data-slot="wa-phone"]
+  ) {
   color: var(--lagoon-deep);
   text-decoration-color: rgba(50, 143, 151, 0.4);
   text-decoration-thickness: 1px;
   text-underline-offset: 2px;
 }
 
-a:not([data-slot="button"]):not([data-slot^="dropdown-menu-"]):hover {
+a:not([data-slot="button"]):not([data-slot^="dropdown-menu-"]):not(
+    [data-slot="wa-phone"]
+  ):hover {
   color: var(--lagoon-ink);
 }
 

@@ -209,14 +209,11 @@ function MemberDetail() {
 								</a>
 							) : null}
 							{/* WhatsApp, not the dialer. The component supplies its own icon,
-							    the base layout and `hover:underline`, so this passes colour
-							    only — matching the email anchor above it. */}
+							    layout, `hover:underline` and colour — including the
+							    `data-slot` that lets that colour survive the unlayered
+							    `a { color }` rule — so this passes no styling at all. */}
 							{member.phone ? (
-								<WhatsAppPhoneLink
-									phone={member.phone}
-									name={member.name}
-									className="hover:text-[var(--sea-ink)]"
-								/>
+								<WhatsAppPhoneLink phone={member.phone} name={member.name} />
 							) : null}
 						</div>
 					) : null}
