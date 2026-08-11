@@ -326,18 +326,24 @@ export async function loadSeasonGrid(input: {
 
 /** A grid with nothing in it — the not-found answer for a club a public caller
  *  may not read. Spelled out rather than built by filtering a loaded grid, so
- *  no query runs at all for an archived club. */
-const EMPTY_GRID: SeasonGridData = {
-	clubSlug: null,
-	meetings: [],
-	rows: [],
-	members: [],
-	memberNames: [],
-	guestNames: [],
-	cells: [],
-	unavailable: [],
-	contacted: [],
-};
+ *  no query runs at all for an archived club.
+ *
+ *  A FUNCTION, not a shared const: the real `loadSeasonGrid` hands every caller
+ *  its own arrays, and a singleton returned from a loader would let one caller's
+ *  in-place `.sort()` or `.push()` reshape what the next archived club gets. */
+function emptyGrid(): SeasonGridData {
+	return {
+		clubSlug: null,
+		meetings: [],
+		rows: [],
+		members: [],
+		memberNames: [],
+		guestNames: [],
+		cells: [],
+		unavailable: [],
+		contacted: [],
+	};
+}
 
 /**
  * Public (no-auth) variant of {@link loadSeasonGrid}. Hardcodes
@@ -358,6 +364,6 @@ export async function loadPublicSeasonGrid(input: {
 	clubId: string;
 	count: SeasonGridCount;
 }): Promise<SeasonGridData> {
-	if (!(await isReadableClub(input.clubId))) return EMPTY_GRID;
+	if (!(await isReadableClub(input.clubId))) return emptyGrid();
 	return loadSeasonGrid({ ...input, includeContact: false });
 }
