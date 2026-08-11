@@ -1,9 +1,13 @@
 // Pure, client-safe `mailto:` URL construction. One copy of the escaping rule,
 // for the same reason `whatsapp.ts` holds one copy of the #485 desktop/mobile
-// rule: there are three surfaces rendering a stored address as a link (the
-// sign-up sheet's Contact column, the member profile header, the VP-Membership
-// guest card), and an escaping rule with three copies has three chances to be
-// the one that gets forgotten.
+// rule: an escaping rule with N copies has N chances to be the one that gets
+// forgotten. There are FOUR sinks, not three — three display links (the sign-up
+// sheet's Contact column, the member profile header, the VP-Membership guest
+// card) and one pre-composed draft (`buildNudge`'s VPE nudge, the only one the
+// user TAPS TO SEND rather than reads first, and so the most exploitable). The
+// commit that introduced this module fixed the three and asserted in its own
+// comment that three was all of them; `mailto.guard.test.ts` is what makes the
+// count checkable instead of remembered.
 
 /**
  * A `mailto:` href for a stored address.

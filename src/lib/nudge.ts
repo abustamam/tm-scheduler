@@ -3,6 +3,7 @@
 // edits and sends. NO `#/db` here so the meeting-detail client route can call it.
 // The app only ever DRAFTS; the human sends.
 
+import { mailtoHref } from "#/lib/mailto";
 import { greetingName } from "#/lib/person-name";
 import type { Platform } from "#/lib/platform";
 import { whatsappHref } from "#/lib/whatsapp";
@@ -71,7 +72,23 @@ export function buildNudge(input: NudgeInput): Nudge {
 	if (whatsappUrl) nudge.whatsappUrl = whatsappUrl;
 
 	if (input.email) {
-		nudge.mailtoUrl = `mailto:${input.email}?subject=${encodeURIComponent(
+		// `mailtoHref` for the ADDRESS, then this module's own headers. Raw
+		// interpolation here was the fourth and worst `mailto:` sink: the three
+		// display links elsewhere are addresses a reader looks at, while this is a
+		// pre-composed draft a VPE taps to SEND. A stored
+		// `ada@club.org?bcc=attacker@evil.com` produced a live `bcc` header AND
+		// swallowed this app's own `subject=` into the injected `body`, so the
+		// message that opened was neither private nor the one it claimed to be.
+		//
+		// Reachable: `members.email` has a free-text writer (`bulkImportSchema` is
+		// `z.string()`, no `.email()`), and `NudgeButtons` is fed that column via
+		// `slot.holderEmail` on the meeting agenda and the recruit picker.
+		//
+		// `mailtoHref` escapes `?`, `&` and `#` and leaves `@` alone, so the `?`
+		// that opens the header section below is the FIRST one in the URL — which
+		// is the whole property this needs. `mailto.guard.test.ts` fails if a fifth
+		// sink appears.
+		nudge.mailtoUrl = `${mailtoHref(input.email)}?subject=${encodeURIComponent(
 			subjectFor(input),
 		)}&body=${encodeURIComponent(message)}`;
 	}
