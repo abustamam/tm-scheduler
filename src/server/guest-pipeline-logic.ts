@@ -28,7 +28,11 @@ import {
 } from "#/db/schema";
 import { isAtMeetingNow } from "#/lib/guest-book-window";
 import { namesAgree } from "#/lib/person-name";
-import { coalesceToE164, toStoredPhone } from "#/lib/phone";
+import {
+	coalesceToE164,
+	DEFAULT_COUNTRY_CODE,
+	toStoredPhone,
+} from "#/lib/phone";
 import { logActivity } from "./activity";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
 
@@ -158,16 +162,36 @@ async function findGuestByContact(
 	return undefined;
 }
 
-/** A club's IANA timezone (the schema default when the club is missing). Every
- *  "has this meeting happened?" question is answered in the CLUB's local day —
- *  see `guestVisits` — so the zone is read once and threaded through. */
-async function loadClubTimeZone(clubId: string): Promise<string> {
+/**
+ * The two club-level facts `loadGuestPipeline` needs, in ONE round trip.
+ *
+ * They used to be two functions reading the SAME `clubs` row — a local
+ * `loadClubTimeZone` and `clubs-logic`'s `loadClubDefaultCountryCode` — issued
+ * together in a `Promise.all`, which made them concurrent but still two queries
+ * and two round trips for one row.
+ *
+ * Both fallbacks are preserved exactly, and they are not the same fallback:
+ *   - timezone: the schema default, used when the club ROW is missing.
+ *   - country code: `?.trim() || DEFAULT_COUNTRY_CODE` — also used when the
+ *     column is NULL or blank, because a club that never set one still has to
+ *     produce a dedup key (#397). `loadClubDefaultCountryCode`'s contract is
+ *     NEVER-NULL, so the `||` has to stay a `||` and not become a `??`.
+ */
+async function loadClubPipelineSettings(
+	clubId: string,
+): Promise<{ timeZone: string; countryCode: string }> {
 	const [club] = await db
-		.select({ timezone: clubs.timezone })
+		.select({
+			timezone: clubs.timezone,
+			defaultCountryCode: clubs.defaultCountryCode,
+		})
 		.from(clubs)
 		.where(eq(clubs.id, clubId))
 		.limit(1);
-	return club?.timezone ?? "America/Chicago";
+	return {
+		timeZone: club?.timezone ?? "America/Chicago",
+		countryCode: club?.defaultCountryCode?.trim() || DEFAULT_COUNTRY_CODE,
+	};
 }
 
 /**
@@ -496,14 +520,12 @@ function guestVisits(clubId: string, timeZone: string) {
 export async function loadGuestPipeline(
 	clubId: string,
 ): Promise<PipelineGuestRow[]> {
-	// Both club-level facts, loaded together: the timezone has to resolve before
-	// the visits subquery can be built, so pairing the country code with it costs
-	// nothing — awaiting `cc` on its own would add a third sequential round-trip
-	// to a payload that already makes two.
-	const [tz, cc] = await Promise.all([
-		loadClubTimeZone(clubId),
-		loadClubDefaultCountryCode(clubId),
-	]);
+	// Both club-level facts in ONE query. They live on the same `clubs` row, and
+	// the timezone has to resolve before the visits subquery can be built, so a
+	// `Promise.all` over two loaders bought concurrency for a round trip that did
+	// not need to exist at all.
+	const { timeZone: tz, countryCode: cc } =
+		await loadClubPipelineSettings(clubId);
 	const visits = guestVisits(clubId, tz).as("guest_visits");
 	const [rows, visitRows, slotRows] = await Promise.all([
 		db

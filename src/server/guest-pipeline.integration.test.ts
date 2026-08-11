@@ -32,6 +32,7 @@ import {
 	testDb,
 	waitForLockWait,
 } from "#/test/db";
+import { readsOf, statementsDuring } from "#/test/query-spy";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
@@ -1965,6 +1966,35 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			expect(row?.phoneRaw).toBe("415-555-2671 x12");
 			expect(row?.phone).toBe("+1415555267112");
 			expect(row?.phoneRaw).not.toBe(row?.phone);
+		});
+
+		it("reads the clubs row ONCE for the timezone and the country code", async () => {
+			// Both are columns on the same `clubs` row. They used to be two loaders
+			// issued in a `Promise.all` — concurrent, but still two round trips for
+			// one row, on a payload that already makes several.
+			//
+			// Invisible to every other assertion in this file: the pipeline it
+			// returns is byte-identical either way, so the observable has to be the
+			// QUERY (CLAUDE.md, "assert the observable the guard actually
+			// controls"). Counted at the pg client rather than by spying on a named
+			// loader, because collapsing the two loaders DELETED the function a
+			// call-count spy would have watched.
+			const reads = readsOf(
+				await statementsDuring(() => loadGuestPipeline(seed.clubId)),
+				"clubs",
+			);
+
+			// Anti-vacuity: a spy that intercepted nothing, or a pattern that
+			// stopped matching, reports zero and makes the count below meaningless.
+			expect(
+				reads.length,
+				"no `clubs` read observed — the query spy has stopped working",
+			).toBeGreaterThan(0);
+			expect(reads).toHaveLength(1);
+			// …and that single read really does carry both columns, so "one query"
+			// was not achieved by dropping one of them.
+			expect(reads[0]).toContain("timezone");
+			expect(reads[0]).toContain("default_country_code");
 		});
 
 		it("phoneRaw is byte-exact, including surrounding whitespace", async () => {

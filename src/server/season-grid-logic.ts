@@ -13,9 +13,8 @@ import {
 } from "#/db/schema";
 import { buildRoleCounts, buildShortCodes, slotLabel } from "#/lib/agenda";
 import { urlKeysForMeetings } from "#/lib/meeting-url";
-import { coalesceToE164 } from "#/lib/phone";
+import { coalesceToE164, DEFAULT_COUNTRY_CODE } from "#/lib/phone";
 import { isReadableClub } from "./club-readable-logic";
-import { loadClubDefaultCountryCode } from "./clubs-logic";
 
 export type SeasonGridCount = 4 | 8 | "all";
 export type SlotStatus = (typeof slotStatusEnum.enumValues)[number];
@@ -102,9 +101,15 @@ export async function loadSeasonGrid(input: {
 	const now = new Date();
 
 	// 1. Columns: up to PAST_LOOKBACK most-recent past meetings + upcoming.
+	// `defaultCountryCode` rides along on the row this query already fetches. It
+	// is only USED on the contact path (below), but reading it here costs nothing
+	// — one more column on a single-row lookup — whereas loading it separately
+	// there cost a whole extra SERIALIZED round trip, since it sat behind every
+	// query above it. Fetching an unused column is strictly cheaper than the gate
+	// that avoided fetching it.
 	const club = await db.query.clubs.findFirst({
 		where: eq(clubs.id, input.clubId),
-		columns: { timezone: true, slug: true },
+		columns: { timezone: true, slug: true, defaultCountryCode: true },
 	});
 	const timezone = club?.timezone ?? "UTC";
 
@@ -274,17 +279,21 @@ export async function loadSeasonGrid(input: {
 	// normalize-on-write. `coalesceToE164` also preserves an un-normalizable value
 	// rather than dropping it — see its doc comment in `#/lib/phone`.
 	//
-	// The load is not parallelized with the member query the way
-	// `meeting-contacts-logic.ts` does it, because it is gated on the flag.
+	// The country code comes off the `clubs` row fetched at the top rather than
+	// from a second `loadClubDefaultCountryCode` call. That call was the thing the
+	// `includeContact` gate existed to avoid on the public path, and it was
+	// SERIALIZED behind everything above it — so the gate was saving a round trip
+	// that a single extra column removes for BOTH paths. The public grid still
+	// makes no extra `clubs` query; it just no longer needs a branch to say so.
+	// `season-grid-cc-query.integration.test.ts` pins the query COUNT.
 	//
-	// The if/else (rather than a ternary sharing the flag with the row build)
-	// keeps the query structurally unreachable on the public path: the grid is
-	// served unauthenticated and must not pay for a round-trip whose result it is
-	// forbidden to use. `season-grid-cc-query.integration.test.ts` pins that.
+	// `?.trim() || DEFAULT_COUNTRY_CODE` reproduces `loadClubDefaultCountryCode`'s
+	// never-null contract (#397): a club that never set a code still has to
+	// produce one, so this stays a `||` (blank ⇒ default), not a `??`.
 	const active = allMemberRows.filter((m) => m.status !== "inactive");
 	let memberRows: SeasonGridMember[];
 	if (input.includeContact) {
-		const cc = await loadClubDefaultCountryCode(input.clubId);
+		const cc = club?.defaultCountryCode?.trim() || DEFAULT_COUNTRY_CODE;
 		memberRows = active.map((m) => ({
 			id: m.id,
 			name: m.name,
