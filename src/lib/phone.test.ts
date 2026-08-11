@@ -223,3 +223,54 @@ describe("dedup key: one number, one E.164 value (#397)", () => {
 		});
 	});
 });
+
+describe("toStoredPhone is a fixed point over coalesceToE164", () => {
+	// This property is the ONLY reason binding an edit form to the COALESCED
+	// phone (`club-logic.ts`'s `phone`, not `phoneRaw`) does not corrupt the
+	// column: every write path re-normalizes with `toStoredPhone`, and that
+	// re-derivation happens to absorb the country-code guess coalescing added.
+	//
+	// It is a coincidence of the current implementations, not a promise either
+	// function makes, and it is invisible at both call sites. Teach
+	// `coalesceToE164` to strip extensions, or `toStoredPhone` to preserve input
+	// it currently rewrites, and a coalesced prefill silently starts writing the
+	// guess over the stored digits on every save — including a name-only one.
+	//
+	// The edit dialogs bind to `phoneRaw` so they do not depend on this holding.
+	// It is pinned anyway, because the day it breaks is the day that decision
+	// stops being a nicety, and a failure here is the only warning available.
+	const RAWS = [
+		"415-555-2671 x12",
+		"(415) 555-2671",
+		"+14155552671",
+		"+1 916 555 0181",
+		"0044 20 7946 0958",
+		"020 7946 0018",
+		"1 555 123 4567",
+		"+1 1555 123 4567",
+		"00115551234567",
+		"ask at church",
+		"call the office",
+		"",
+		"   ",
+		"  (415) 555-2671  ",
+		"555.123.4567",
+		"+44 20 7946 0958",
+	];
+
+	it.each([
+		DEFAULT_COUNTRY_CODE,
+		"+44",
+		"+91",
+		"",
+		null,
+		undefined,
+	])("holds for every stored shape with cc=%p", (cc) => {
+		for (const raw of RAWS) {
+			expect(
+				toStoredPhone(coalesceToE164(raw, cc), cc),
+				`raw=${JSON.stringify(raw)}`,
+			).toBe(toStoredPhone(raw, cc));
+		}
+	});
+});

@@ -376,7 +376,30 @@ export interface PipelineGuestRow {
 	/** What they're called, when it isn't the first token of `name` (#486). */
 	preferredName: string | null;
 	email: string | null;
+	/**
+	 * DISPLAY phone: E.164 where it can be derived, otherwise the stored value
+	 * verbatim (`coalesceToE164`) — what the card's WhatsApp link reads.
+	 *
+	 * Never bind the EDIT DIALOG to this; bind it to `phoneRaw`.
+	 */
 	phone: string | null;
+	/**
+	 * The `guests.phone` column byte-for-byte — what the edit dialog prefills.
+	 *
+	 * Coalescing is a country-code GUESS, so `"415-555-2671 x12"` displays as
+	 * `"+1415555267112"`. Prefilling the dialog with the guess shows the VPM a
+	 * number nobody typed, on the one screen that is supposed to show what is on
+	 * file — and it is the screen they open to fix a NAME.
+	 *
+	 * It does not currently corrupt the column, but only by coincidence:
+	 * `applyUpdateGuest` re-normalizes with `toStoredPhone`, which is a fixed point
+	 * over `coalesceToE164` (pinned in `phone.test.ts`), so the guess and the raw
+	 * value happen to store identically — and for the same reason the dedup clash
+	 * check compares the same digits either way. Neither function promises that.
+	 * Round-tripping the raw bytes is what makes the prefill correct rather than
+	 * accidentally harmless. See `loadMemberProfile` for the same split.
+	 */
+	phoneRaw: string | null;
 	stage: GuestStage;
 	convertedMembershipId: string | null;
 	/** Earliest visited meeting date (derived — see `loadGuestPipeline`); null if none. */
@@ -532,6 +555,8 @@ export async function loadGuestPipeline(
 			// valid full number even for rows written before normalize-on-write, and
 			// a digit-less value still reaches the UI — see `#/lib/phone`.
 			phone: coalesceToE164(r.phone, cc),
+			// The column verbatim, for the edit dialog. See `PipelineGuestRow.phoneRaw`.
+			phoneRaw: r.phone,
 			stage: r.stage,
 			convertedMembershipId: r.convertedMembershipId,
 			visitCount: Number(v?.visitCount ?? 0),

@@ -30,6 +30,7 @@ import {
 } from "@tanstack/react-router";
 import {
 	cleanup,
+	fireEvent,
 	render,
 	screen,
 	waitFor,
@@ -67,7 +68,13 @@ function guestRow(over: Partial<PipelineGuestRow> = {}): PipelineGuestRow {
 		name: "Ada Guest",
 		preferredName: null,
 		email: "ada@example.com",
+		// The DISPLAY value (server-coalesced to E.164) — what the card links to.
 		phone: "+14155552671",
+		// The stored column verbatim — what the edit dialog prefills. Deliberately
+		// a DIFFERENT string: both fields hold plausible numbers, so a dialog bound
+		// to `phone` by mistake would still show one, and identical fixtures would
+		// make the binding untestable.
+		phoneRaw: "415-555-2671 x12",
 		stage: "prospect",
 		convertedMembershipId: null,
 		firstVisitAt: null,
@@ -166,5 +173,61 @@ describe("VP Membership guest card — contact line", () => {
 		expect(column.children.length).toBe(2);
 		expect(within(column).queryByRole("link")).toBeNull();
 		expect(within(column).queryByText("·")).toBeNull();
+	});
+});
+
+/**
+ * The guest edit dialog prefills the STORED phone, not the coalesced one.
+ *
+ * `loadGuestPipeline` carries the number twice — `phone` coalesced to E.164 for
+ * the card's WhatsApp link, `phoneRaw` byte-for-byte for this form. Coalescing
+ * is a country-code GUESS, so a guest stored as "415-555-2671 x12" displays as
+ * "+1415555267112"; prefilling THAT shows the VPM a number nobody typed, in the
+ * dialog they opened to fix a name.
+ *
+ * Both fields are plausible numbers on the same object, so only an assertion on
+ * the VALUE separates the two bindings — hence a fixture where they differ.
+ */
+describe("VP Membership guest card — edit dialog phone prefill", () => {
+	async function openEditDialog(): Promise<HTMLInputElement> {
+		fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+		return (await screen.findByLabelText("Phone")) as HTMLInputElement;
+	}
+
+	it("prefills the stored value, not the E.164 the card links to", async () => {
+		await renderRoute([guestRow()]);
+
+		// The card is read FIRST: the dialog is modal, so opening it `aria-hidden`s
+		// the rest of the page. Asserting both in one test pins the SPLIT — display
+		// coalesced, form raw — which a prefill-only assertion would not, since
+		// reverting BOTH to the raw column would satisfy it.
+		expect(
+			within(cardTextColumn("Ada Guest"))
+				.getByRole("link", { name: /\+14155552671/ })
+				.getAttribute("href"),
+		).toContain("14155552671");
+
+		expect(
+			(await openEditDialog()).value,
+			"The guest edit dialog must prefill `guest.phoneRaw` (the stored " +
+				"column), not `guest.phone` (coalesced for display) — see " +
+				"PipelineGuestRow.phoneRaw.",
+		).toBe("415-555-2671 x12");
+	});
+
+	it("prefills a digit-less stored value verbatim", async () => {
+		// `toStoredPhone` preserves input it cannot normalize, and the guest
+		// editor's phone field has no digit requirement — reachable in normal use.
+		// Coalescing passes it through unchanged, so this case alone would pass on
+		// either binding; it is here for the branch, paired with the one above.
+		await renderRoute([
+			guestRow({ phone: "call the office", phoneRaw: "call the office" }),
+		]);
+		expect((await openEditDialog()).value).toBe("call the office");
+	});
+
+	it("prefills empty for a guest with no number on file", async () => {
+		await renderRoute([guestRow({ phone: null, phoneRaw: null })]);
+		expect((await openEditDialog()).value).toBe("");
 	});
 });

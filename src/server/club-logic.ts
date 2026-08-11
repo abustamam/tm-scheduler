@@ -15,8 +15,16 @@ export interface ClubMemberRow {
 	id: string;
 	name: string;
 	email: string | null;
-	/** Coalesced to E.164 with the club default country code (#295), so the
-	 *  roster's WhatsApp link is a valid full number even for pre-#397 rows. */
+	/**
+	 * DISPLAY phone: E.164 where it can be derived, otherwise the stored value
+	 * verbatim (`coalesceToE164`). Not a guarantee of E.164 — a digit-less value
+	 * like "ask at church" comes back unchanged, which is exactly what
+	 * `WhatsAppPhoneLink`'s plain-text branch exists to render.
+	 *
+	 * Never bind an EDIT FORM to this. Coalescing is a country-code GUESS, and a
+	 * form that round-trips the guess writes it back over the stored digits on
+	 * save — see `phoneRaw` on `loadMemberProfile`'s row.
+	 */
 	phone: string | null;
 	userId: string | null;
 	invitedAt: Date | null;
@@ -67,6 +75,30 @@ export async function loadClubMembers(
  * the member isn't in that club — the `clubId` predicate is the scope check, so
  * an authorized member of club A can't read club B's row by id. Caller has
  * already authorized (`getMemberProfile` gates on `requireClubViewAccess`).
+ *
+ * Carries the phone TWICE, on purpose:
+ *   - `phone` — coalesced for display, so the WhatsApp link is a full number.
+ *   - `phoneRaw` — the `members.phone` column byte-for-byte, for the edit form.
+ *
+ * One field cannot serve both, for two reasons of very different weight.
+ *
+ * The one that BITES TODAY is display. Coalescing is a country-code GUESS: it
+ * prepends the club default to anything not already `+`/`00`-prefixed, so
+ * `"415-555-2671 x12"` reads back as `"+1415555267112"`. An officer opening the
+ * dialog to fix a NAME is then shown a number nobody typed, in the only screen
+ * that shows what is actually on file, with no way to tell a stored value from a
+ * server-side rendering of it.
+ *
+ * The one that would bite LATER is data loss, and it is currently held off by an
+ * accident: `applyMemberEdit` normalizes on write with `toStoredPhone`, which
+ * happens to be a fixed point over `coalesceToE164` — `toStoredPhone(coalesce(x))
+ * === toStoredPhone(x)` for every input (pinned by
+ * `phone.test.ts`'s "toStoredPhone is a fixed point over coalesceToE164"). So the
+ * guess survives a round trip today only because the write path re-derives it.
+ * Nothing states that as a requirement of either function, and the moment one
+ * drifts — a `coalesceToE164` taught to strip extensions, say — a coalesced
+ * prefill starts writing the guess over the stored digits on every save.
+ * Round-tripping the raw bytes does not depend on that coincidence.
  */
 export async function loadMemberProfile(clubId: string, memberId: string) {
 	const [row, cc] = await Promise.all([
@@ -105,5 +137,9 @@ export async function loadMemberProfile(clubId: string, memberId: string) {
 		loadClubDefaultCountryCode(clubId),
 	]);
 	if (!row) return undefined;
-	return { ...row, phone: coalesceToE164(row.phone, cc) };
+	// `phone` is for DISPLAY (the WhatsApp link); `phoneRaw` is the column
+	// verbatim, for the edit form. See `ClubMemberRow.phoneRaw`'s comment — a
+	// dialog bound to `phone` writes the country-code GUESS back over the stored
+	// digits on any save, including a name-only one.
+	return { ...row, phone: coalesceToE164(row.phone, cc), phoneRaw: row.phone };
 }

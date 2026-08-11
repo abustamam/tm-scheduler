@@ -155,6 +155,11 @@ export const getMemberProfile = createServerFn({ method: "GET" })
 				preferredName: member.preferredName,
 				email: member.email,
 				phone: member.phone,
+				// Both spellings travel: `phone` is coalesced for the WhatsApp link,
+				// `phoneRaw` is the column verbatim for the edit dialog's prefill.
+				// Binding the dialog to `phone` writes the country-code guess back over
+				// the stored digits on save — see `loadMemberProfile`.
+				phoneRaw: member.phoneRaw,
 				officerPositions,
 				userId: member.userId,
 				status: member.status,

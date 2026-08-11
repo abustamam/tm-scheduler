@@ -40,6 +40,7 @@ import {
 } from "@tanstack/react-router";
 import {
 	cleanup,
+	fireEvent,
 	render,
 	screen,
 	waitFor,
@@ -94,8 +95,14 @@ function profileMember(over: Record<string, unknown> = {}) {
 		id: MEMBER_ID,
 		name: "Ada Member",
 		preferredName: null,
-		// Server-coalesced to E.164 before it ever reaches the view (#295).
+		// Server-coalesced to E.164 before it ever reaches the view (#295) — the
+		// DISPLAY value, which is what the WhatsApp link reads.
 		phone: "+14155552671",
+		// The stored column verbatim — what the edit dialog prefills. Deliberately
+		// a DIFFERENT string from `phone` in the default fixture: bound to `phone`
+		// by mistake, every prefill assertion below would still see a plausible
+		// number, so identical fixtures would make the binding untestable.
+		phoneRaw: "415-555-2671 x12",
 		email: "ada@example.com",
 		officerPositions: [] as string[],
 		userId: null,
@@ -231,5 +238,66 @@ describe("member profile — contact row", () => {
 		// while shipping a stray `mt-1.5` row of blank space under the name.
 		expect(column.children.length).toBe(2);
 		expect(within(column).queryByRole("link")).toBeNull();
+	});
+});
+
+/**
+ * The edit dialog prefills the STORED phone, not the coalesced one.
+ *
+ * `getMemberProfile` carries the number twice — `phone` coalesced to E.164 for
+ * the WhatsApp link, `phoneRaw` byte-for-byte for this form. Coalescing is a
+ * country-code GUESS, so a member stored as "415-555-2671 x12" displays as
+ * "+1415555267112"; putting THAT in the input shows an officer a number nobody
+ * typed, on the only screen that shows what is actually on file — and they
+ * opened it to fix a name.
+ *
+ * This is also the #319 trap in miniature: `phone` and `phoneRaw` are both
+ * plausible strings on the same object, so nothing except an assertion on the
+ * VALUE tells the two bindings apart. The fixture makes them differ for exactly
+ * that reason — with one number in both fields these tests could not fail.
+ */
+describe("member profile — edit dialog phone prefill", () => {
+	async function openEditDialog(): Promise<HTMLInputElement> {
+		fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+		return (await screen.findByLabelText("Phone")) as HTMLInputElement;
+	}
+
+	it("prefills the stored value, not the E.164 the header links to", async () => {
+		await renderRoute();
+
+		// Read the header FIRST: the dialog is modal, so opening it `aria-hidden`s
+		// the rest of the page and every role query below would miss the link.
+		// Asserting both in one test is the point — it pins the SPLIT (display
+		// coalesced, form raw) rather than a wholesale swap back to raw everywhere,
+		// which a prefill-only assertion would happily accept.
+		expect(
+			within(headerColumn("Ada Member"))
+				.getByRole("link", { name: /\+14155552671/ })
+				.getAttribute("href"),
+		).toContain("14155552671");
+
+		expect(
+			(await openEditDialog()).value,
+			"The edit dialog must prefill `member.phoneRaw` (the stored column), " +
+				"not `member.phone` (coalesced for display) — see loadMemberProfile.",
+		).toBe("415-555-2671 x12");
+	});
+
+	it("prefills a digit-less stored value verbatim", async () => {
+		// `toStoredPhone` preserves input it cannot normalize and the member
+		// editor's phone field has no digit requirement, so this is reachable in
+		// normal use. Coalescing passes it through unchanged — which is why it is
+		// paired with the case above rather than standing alone, where it would
+		// pass on either binding.
+		await renderRoute({
+			phone: "call the office",
+			phoneRaw: "call the office",
+		});
+		expect((await openEditDialog()).value).toBe("call the office");
+	});
+
+	it("prefills empty for a member with no number on file", async () => {
+		await renderRoute({ phone: null, phoneRaw: null });
+		expect((await openEditDialog()).value).toBe("");
 	});
 });

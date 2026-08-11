@@ -562,11 +562,16 @@ function GuestEditDelete({
 						</div>
 						<div className="space-y-2">
 							<Label htmlFor={`guest-phone-${guest.id}`}>Phone</Label>
+							{/* `phoneRaw`, NOT `phone`. `phone` is coalesced for display — a
+							    country-code guess — so a guest stored as "415-555-2671 x12"
+							    would prefill as "+1415555267112", a number the VPM never
+							    typed, in the dialog they opened to fix a name. See
+							    `PipelineGuestRow.phoneRaw`. */}
 							<Input
 								id={`guest-phone-${guest.id}`}
 								name="phone"
 								type="tel"
-								defaultValue={guest.phone ?? ""}
+								defaultValue={guest.phoneRaw ?? ""}
 							/>
 						</div>
 						<DialogFooter>

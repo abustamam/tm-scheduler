@@ -1949,5 +1949,33 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			const rows = await loadGuestPipeline(seed.clubId);
 			expect(rows.find((r) => r.id === row!.id)?.phone).toBeNull();
 		});
+
+		it("carries the STORED bytes as phoneRaw alongside the coalesced number", async () => {
+			// The edit dialog prefills from `phoneRaw`, so the two fields have to
+			// DIVERGE wherever coalescing changes anything — a `phoneRaw` that simply
+			// aliased `phone` would pass a bare "is it defined" check while putting
+			// the country-code guess back in the input.
+			//
+			// "x12" is an extension: coalescing welds it into the subscriber number,
+			// so the guess is visibly not a phone number the VPM ever typed.
+			const guestId = await insertGuestWithPhone("415-555-2671 x12");
+			const row = (await loadGuestPipeline(seed.clubId)).find(
+				(r) => r.id === guestId,
+			);
+			expect(row?.phoneRaw).toBe("415-555-2671 x12");
+			expect(row?.phone).toBe("+1415555267112");
+			expect(row?.phoneRaw).not.toBe(row?.phone);
+		});
+
+		it("phoneRaw is byte-exact, including surrounding whitespace", async () => {
+			// `coalesceToE164` does not trim but `toE164` does before parsing, so a
+			// padded value is the one shape where a `phoneRaw` implemented as
+			// "coalesce, then undo" would quietly differ from the column.
+			const guestId = await insertGuestWithPhone("  call the office  ");
+			const row = (await loadGuestPipeline(seed.clubId)).find(
+				(r) => r.id === guestId,
+			);
+			expect(row?.phoneRaw).toBe("  call the office  ");
+		});
 	});
 });

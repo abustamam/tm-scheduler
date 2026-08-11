@@ -572,7 +572,11 @@ type ProfileMember = {
 	name: string;
 	preferredName: string | null;
 	email: string | null;
+	/** Coalesced for DISPLAY — the WhatsApp link. Never a form prefill. */
 	phone: string | null;
+	/** The stored column verbatim — what the edit dialog prefills, so a save
+	 *  round-trips the bytes instead of the country-code guess. */
+	phoneRaw: string | null;
 	officerPositions: OfficerPosition[];
 	userId: string | null;
 	status: "active" | "inactive";
@@ -741,11 +745,17 @@ function MemberActions({
 						</div>
 						<div className="space-y-2">
 							<Label htmlFor="edit-phone">Phone</Label>
+							{/* `phoneRaw`, NOT `phone`. `phone` is coalesced for display — a
+							    country-code guess prepended to whatever is stored — so
+							    "415-555-2671 x12" would show here as "+1415555267112", a
+							    number nobody typed, on the one screen that shows what is on
+							    file. See `loadMemberProfile` for why the write path's
+							    re-normalization does not make that harmless. */}
 							<Input
 								id="edit-phone"
 								name="phone"
 								type="tel"
-								defaultValue={member.phone ?? ""}
+								defaultValue={member.phoneRaw ?? ""}
 							/>
 						</div>
 						<fieldset className="space-y-2">

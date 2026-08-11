@@ -50,6 +50,42 @@ describe.skipIf(!hasTestDb)("club payload phone normalization", () => {
 		expect(row?.phone).toBe("+14155552671");
 	});
 
+	it("getMemberProfile carries the STORED bytes alongside the coalesced number", async () => {
+		// The edit dialog prefills from `phoneRaw`, so the two fields must DIVERGE
+		// wherever coalescing changes anything — a `phoneRaw` that silently aliased
+		// `phone` would pass a bare "is it defined" assertion while putting the
+		// country-code guess straight back into the input.
+		//
+		// "x12" is an extension, so coalescing welds it into the subscriber number:
+		// the guess is visibly not a number anyone typed, which is the point. The
+		// member profile is the only screen showing what is actually on file.
+		const { loadMemberProfile } = await import("#/server/club-logic");
+		await testDb
+			.update(members)
+			.set({ phone: "415-555-2671 x12" })
+			.where(eq(members.id, seed.memberId));
+
+		const row = await loadMemberProfile(seed.clubId, seed.memberId);
+		expect(row?.phoneRaw).toBe("415-555-2671 x12");
+		expect(row?.phone).toBe("+1415555267112");
+		expect(row?.phoneRaw).not.toBe(row?.phone);
+	});
+
+	it("getMemberProfile's phoneRaw is byte-exact, including surrounding space", async () => {
+		// `coalesceToE164` does not trim, but `toE164` does before parsing, so a
+		// padded value is the one shape where a `phoneRaw` implemented as
+		// "coalesce, then undo" would diverge from the column.
+		const { loadMemberProfile } = await import("#/server/club-logic");
+		await testDb
+			.update(members)
+			.set({ phone: "  call the office  " })
+			.where(eq(members.id, seed.memberId));
+
+		expect(
+			(await loadMemberProfile(seed.clubId, seed.memberId))?.phoneRaw,
+		).toBe("  call the office  ");
+	});
+
 	it("both payloads normalize with the CLUB's country code, not the default", async () => {
 		// Pins that `loadClubDefaultCountryCode` is actually consulted: with the
 		// code hard-coded to the `+1` default this UK number normalizes to garbage.
