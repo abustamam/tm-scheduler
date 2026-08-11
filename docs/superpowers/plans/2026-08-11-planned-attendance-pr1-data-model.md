@@ -256,8 +256,12 @@ git commit -m "feat(db): add meeting_attendance_plan table and plan_set action"
 ## Task 2: Backfill the new table from the two old ones
 
 **Files:**
-- Modify: the migration file generated in Task 1
-- Test: `src/server/attendance-plan-backfill.integration.test.ts` (create)
+- Create: `drizzle/XXXX_backfill_attendance_plan.sql` via `drizzle-kit generate --custom`
+- Create: `src/server/attendance-plan-backfill.ts`, `src/server/attendance-plan-backfill.integration.test.ts`
+
+**Do not edit the Task 1 migration.** It has already been applied to the dev database and drizzle records applied migrations by file hash; editing it in place means the backfill never runs locally and the recorded hash no longer matches the file. The backfill goes in its own migration.
+
+**The test uses the real legacy tables, which still exist.** They are not dropped until Task 7, and a `CREATE TEMP TABLE` alternative would be worse than useless here: `testDb` is a node-postgres **pool**, so a temp table created on one connection is invisible to the next query, and an `IF EXISTS` drop in teardown would then hit the real table. Task 7 deletes this test file along with the tables it exercises — a backfill is a one-shot migration and its verification is one-shot too.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -266,9 +270,9 @@ Create `src/server/attendance-plan-backfill.integration.test.ts`:
 ```ts
 /**
  * Verifies the backfill SQL that moves member_availability + meeting_outreach
- * rows into meeting_attendance_plan. The test re-runs the backfill statements
- * against seeded legacy rows rather than replaying the migration, so it stays
- * meaningful after the old tables are dropped from schema.ts.
+ * rows into meeting_attendance_plan, by running the SHIPPED statements (imported
+ * from the same constant the migration was written from) against seeded legacy
+ * rows. Deleted in Task 7 with the tables it exercises.
  *
  * Run with:
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test \
@@ -277,29 +281,28 @@ Create `src/server/attendance-plan-backfill.integration.test.ts`:
 import { randomUUID } from "node:crypto";
 import { eq, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { meetingAttendancePlan } from "#/db/schema";
-import { cleanup, hasTestDb, type SeededClub, seedClub, seedPerson, testDb } from "#/test/db";
+import {
+	meetingAttendancePlan,
+	memberAvailability,
+	meetingOutreach,
+} from "#/db/schema";
+import {
+	cleanup,
+	hasTestDb,
+	type SeededClub,
+	seedClub,
+	seedPerson,
+	testDb,
+} from "#/test/db";
 import { BACKFILL_PLAN_SQL } from "#/server/attendance-plan-backfill";
 
 describe.skipIf(!hasTestDb)("planned-attendance backfill", () => {
 	let club: SeededClub;
 	beforeEach(async () => {
 		club = await seedClub();
-		// Recreate the legacy tables for the duration of this test; they are
-		// dropped in Task 7 but the backfill must stay verifiable.
-		await testDb.execute(sql`
-			CREATE TEMP TABLE member_availability (
-				member_id uuid NOT NULL, meeting_id uuid NOT NULL,
-				created_at timestamp NOT NULL DEFAULT now())`);
-		await testDb.execute(sql`
-			CREATE TEMP TABLE meeting_outreach (
-				member_id uuid NOT NULL, meeting_id uuid NOT NULL,
-				created_at timestamp NOT NULL DEFAULT now())`);
 	});
 	afterEach(async () => {
-		await testDb.execute(sql`DROP TABLE IF EXISTS member_availability`);
-		await testDb.execute(sql`DROP TABLE IF EXISTS meeting_outreach`);
-		await cleanup();
+		await cleanup(club.clubId, [club.adminUserId, club.memberUserId]);
 	});
 
 	async function planFor(memberId: string) {
@@ -319,12 +322,14 @@ describe.skipIf(!hasTestDb)("planned-attendance backfill", () => {
 			INSERT INTO members (id, club_id, person_id, name, status, club_role)
 			VALUES (${both}, ${club.clubId}, ${bothPersonId}, 'Both Member', 'active', 'member')`);
 
-		await testDb.execute(sql`
-			INSERT INTO member_availability (member_id, meeting_id)
-			VALUES (${onlyAvail}, ${club.meetingId}), (${both}, ${club.meetingId})`);
-		await testDb.execute(sql`
-			INSERT INTO meeting_outreach (member_id, meeting_id)
-			VALUES (${onlyOutreach}, ${club.meetingId}), (${both}, ${club.meetingId})`);
+		await testDb.insert(memberAvailability).values([
+			{ memberId: onlyAvail, meetingId: club.meetingId },
+			{ memberId: both, meetingId: club.meetingId },
+		]);
+		await testDb.insert(meetingOutreach).values([
+			{ memberId: onlyOutreach, meetingId: club.meetingId },
+			{ memberId: both, meetingId: club.meetingId },
+		]);
 
 		await testDb.execute(sql.raw(BACKFILL_PLAN_SQL));
 
@@ -364,11 +369,16 @@ Create `src/server/attendance-plan-backfill.ts`. It exports a string, imports no
  * Precedence: `not_coming` beats `reached_out`. A member who was contacted AND
  * marked unavailable loses the "we asked them" fact, which is invisible today —
  * the old `deriveOutreach` filtered unavailable members out of both its lists.
+ *
+ * Both statements are `ON CONFLICT DO NOTHING`, which makes the backfill
+ * idempotent (safe to re-run against a partially populated table) and keeps the
+ * precedence above from depending on statement order alone.
  */
 export const BACKFILL_PLAN_SQL = `
 INSERT INTO meeting_attendance_plan (member_id, meeting_id, status, created_at)
 SELECT a.member_id, a.meeting_id, 'not_coming', a.created_at
-FROM member_availability a;
+FROM member_availability a
+ON CONFLICT (member_id, meeting_id) DO NOTHING;
 
 INSERT INTO meeting_attendance_plan (member_id, meeting_id, status, created_at)
 SELECT o.member_id, o.meeting_id, 'reached_out', o.created_at
@@ -376,19 +386,24 @@ FROM meeting_outreach o
 WHERE NOT EXISTS (
   SELECT 1 FROM member_availability a
   WHERE a.member_id = o.member_id AND a.meeting_id = o.meeting_id
-);
+)
+ON CONFLICT (member_id, meeting_id) DO NOTHING;
 `;
 ```
 
-- [ ] **Step 4: Paste the backfill into the migration**
+- [ ] **Step 4: Create an empty migration and paste the backfill into it**
 
-Append the body of `BACKFILL_PLAN_SQL` to the migration file generated in Task 1, **after** the `CREATE TABLE`, separated by drizzle's statement breakpoint:
+```bash
+bunx drizzle-kit generate --custom --name backfill_attendance_plan
+```
+
+That writes an empty `drizzle/00XX_backfill_attendance_plan.sql` plus its journal entry. Paste the two statements from `BACKFILL_PLAN_SQL` into it, separated by drizzle's statement breakpoint:
 
 ```sql
---> statement-breakpoint
 INSERT INTO meeting_attendance_plan (member_id, meeting_id, status, created_at)
 SELECT a.member_id, a.meeting_id, 'not_coming', a.created_at
-FROM member_availability a;
+FROM member_availability a
+ON CONFLICT (member_id, meeting_id) DO NOTHING;
 --> statement-breakpoint
 INSERT INTO meeting_attendance_plan (member_id, meeting_id, status, created_at)
 SELECT o.member_id, o.meeting_id, 'reached_out', o.created_at
@@ -396,12 +411,30 @@ FROM meeting_outreach o
 WHERE NOT EXISTS (
   SELECT 1 FROM member_availability a
   WHERE a.member_id = o.member_id AND a.meeting_id = o.meeting_id
-);
+)
+ON CONFLICT (member_id, meeting_id) DO NOTHING;
 ```
+
+The SQL here must be byte-identical to `BACKFILL_PLAN_SQL` apart from the breakpoint marker — that identity is the entire reason the constant exists.
 
 Do **not** use `CREATE INDEX CONCURRENTLY` anywhere in this file — it cannot run inside drizzle's migration transaction and the deploy fails closed.
 
-- [ ] **Step 5: Run the test to verify it passes**
+- [ ] **Step 5: Apply it**
+
+```bash
+bun run db:migrate
+```
+
+Expected: the new migration applies. The dev database has real legacy rows, so confirm the backfill actually moved them:
+
+```bash
+docker exec dev-postgres psql -U dev -d tm_scheduler -c \
+  "select status, count(*) from meeting_attendance_plan group by status"
+```
+
+Compare against `select count(*) from member_availability` and `select count(*) from meeting_outreach` on the same database. The `not_coming` count must equal the availability count exactly; `reached_out` must equal the outreach count minus any rows that also had an availability row.
+
+- [ ] **Step 6: Run the test to verify it passes**
 
 ```bash
 TEST_DATABASE_URL="postgresql://dev:dev@localhost:5432/tm_test" \
@@ -410,7 +443,7 @@ TEST_DATABASE_URL="postgresql://dev:dev@localhost:5432/tm_test" \
 
 Expected: PASS, 2 tests.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add drizzle/ src/server/attendance-plan-backfill.ts src/server/attendance-plan-backfill.integration.test.ts
@@ -1386,7 +1419,7 @@ Expected: FAIL — offenders listed.
 
 - [ ] **Step 3: Fix every offender, then remove the tables from the schema**
 
-Fix each file the guard named, then — and only once `bunx vitest run src/server/attendance-plan-store.guard.test.ts` passes its first assertion — delete the `memberAvailability` and `meetingOutreach` blocks from `src/db/schema.ts` (they have been left in place since Task 1 so every intermediate commit typechecks), along with any now-unused imports. Then:
+Fix each file the guard named. Then delete `src/server/attendance-plan-backfill.integration.test.ts` and `src/server/attendance-plan-backfill.ts` — they exercise the legacy tables and cannot survive them; the backfill migration is the permanent artifact and it has already run. Only once the guard passes its first assertion, delete the `memberAvailability` and `meetingOutreach` blocks from `src/db/schema.ts` (left in place since Task 1 so every intermediate commit typechecks), along with any now-unused imports. Then:
 
 ```bash
 bun run typecheck && bun run db:generate
