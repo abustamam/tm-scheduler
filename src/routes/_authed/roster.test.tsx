@@ -164,6 +164,36 @@ function gridTemplatesOf(el: HTMLElement): string[] {
 }
 
 /**
+ * The responsive tier prefix on an element's WIDEST `grid-cols-[…]` — "xl" for a
+ * trailing `xl:grid-cols-[…]`, null when the widest one is unprefixed.
+ */
+function widestGridTierOf(el: HTMLElement): string | null {
+	const declared = [
+		...el.className.matchAll(/(?:^|\s)(?:([a-z0-9]+):)?grid-cols-\[/g),
+	];
+	return declared.at(-1)?.[1] ?? null;
+}
+
+/** The responsive tier prefix on an element's `…:block`, e.g. "xl". */
+function blockTierOf(el: HTMLElement): string | null {
+	return el.className.match(/(?:^|\s)([a-z0-9]+):block(?=\s|$)/)?.[1] ?? null;
+}
+
+/** Which grid column the "Phone" header label sits in. */
+function phoneColumn(): number {
+	const column = [...headerRow().children].findIndex(
+		(c) => c.textContent === "Phone",
+	);
+	expect(column, "no `Phone` column header").toBeGreaterThanOrEqual(0);
+	return column;
+}
+
+/** The "Phone" header cell. */
+function phoneHeaderCell(): HTMLElement {
+	return headerRow().children[phoneColumn()] as HTMLElement;
+}
+
+/**
  * One row's PHONE cell, located by the position of the "Phone" header label.
  *
  * Positional rather than by-content on purpose. The first draft asserted the
@@ -173,11 +203,7 @@ function gridTemplatesOf(el: HTMLElement): string[] {
  * cell has to actually be about the phone cell.
  */
 function phoneCellOf(row: HTMLElement): HTMLElement {
-	const column = [...headerRow().children].findIndex(
-		(c) => c.textContent === "Phone",
-	);
-	expect(column, "no `Phone` column header").toBeGreaterThanOrEqual(0);
-	const cell = cellsOf(row)[column];
+	const cell = cellsOf(row)[phoneColumn()];
 	expect(cell, "no body cell under the `Phone` header").toBeTruthy();
 	return cell as HTMLElement;
 }
@@ -271,5 +297,35 @@ describe("roster table — phone column", () => {
 		// `xl`) and a `display: none` grid item occupies no track.
 		const widest = gridTemplatesOf(header).at(-1);
 		expect(widest?.split("_").length).toBe(cells.length);
+	});
+
+	// …and the tier that REVEALS those cells has to be the tier that grew the
+	// track for them. jsdom applies no CSS, so `hidden xl:block` is invisible to
+	// every other assertion in this file: dropping BOTH phone cells to `lg:block`
+	// while the templates stay at `xl:grid-cols-…` leaves all six tests green,
+	// and renders five cells into a four-track grid between 1024px and 1279px —
+	// wrapping the Account cell onto a second row. The tier is read off the
+	// template rather than hard-coded, so moving the gate stays a one-place edit.
+	it.each([
+		false,
+		true,
+	])("reveals the Phone cells at the tier that grows the grid (canManage=%s)", async (canManage) => {
+		await renderRoute([memberRow()], { canManage });
+		const tier = widestGridTierOf(headerRow());
+		expect(tier, "widest `grid-cols-[…]` declares no tier").toBeTruthy();
+
+		const cells: [string, HTMLElement][] = [
+			["header", phoneHeaderCell()],
+			["body", phoneCellOf(rowFor("Ada Member"))],
+		];
+		for (const [which, cell] of cells) {
+			expect(
+				blockTierOf(cell),
+				`The ${which} Phone cell appears at a different breakpoint than the ` +
+					`one that adds its grid track (grid grows at \`${tier}\`). Between ` +
+					"the two tiers the row renders more cells than the template has " +
+					"tracks and the last column wraps onto a second row.",
+			).toBe(tier);
+		}
 	});
 });

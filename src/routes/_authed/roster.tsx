@@ -75,33 +75,27 @@ export const Route = createFileRoute("/_authed/roster")({
 	component: Roster,
 });
 
-// Roster grid: on small screens only Member + chevron; Speeches/Pathway return
-// at `sm`, Phone at `xl`. Members can tap through for the detail.
-//
-// Phone is gated three tiers higher than the other two because a fifth fixed
-// column does not fit below `xl`, and the only column it can take width FROM is
-// the `1fr` Member one — the member's NAME, which is what the roster is for.
-// Measured in the browser (manager grid, 18-member club), Member column width
-// with the Phone column gated at `sm` vs. shipped without it at all:
+// Roster grid: on small screens only Member + chevron (tap through for the
+// detail); Speeches/Pathway return at `sm`, Phone at `xl` — a fifth fixed column
+// can only take width FROM the `1fr` Member one, which carries the member's
+// NAME. Measured in the browser (manager grid, 18-member club), Member column
+// width with Phone gated at `sm` vs. shipped without the column at all:
 //
 //   viewport   at `sm`   without Phone
-//   640px       56px *      136px
+//   640px        0px *      136px
 //   768px      100px        264px
-//   1024px     108px        272px      (the app sidebar returns here)
+//   1024px     108px        272px
 //   1280px     364px        528px
 //
-//   * and the four fixed columns then want 573px inside a 542px content box, so
-//     the card's `overflow-hidden` clips the Account column off entirely.
+//   * zero, not merely narrow: the name is gone entirely and the avatar overlaps
+//     the Speeches column. The four fixed columns also want 570px inside a 542px
+//     content box, so the card's `overflow-hidden` clips the trailing chevron
+//     and part of the invite button (32 of the Account column's 39 visible px
+//     survive).
 //
-// Trimming the shared columns to their measured minimums (Speeches' widest
-// content is its own 71px header; a rendered E.164 number with its icon is
-// 96-107px) only buys the Member column back to 214px at 768px — still short of
-// the ~250px an officer row needs, because the "Officer · full admin" badge
-// shares that cell and a name truncates to "Bi…". `xl` is the first tier where
-// the column is free: 364px, full names, no clipping, and every width below it
-// laid out exactly as it did before this column existed. (If the column is
-// later wanted on narrower screens, the width to reclaim is the officer badge's,
-// not the name's.)
+// `lg` is no better — the 248px app sidebar returns at exactly that tier and
+// eats the viewport gain. `xl` is the first tier where the column is free: full
+// names, no clipping, every width below it laid out as it was before.
 const TABLE_GRID =
 	"grid-cols-[1fr_34px] sm:grid-cols-[1fr_150px_170px_34px] xl:grid-cols-[1fr_150px_170px_150px_34px]";
 
