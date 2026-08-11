@@ -305,8 +305,14 @@ function GuestRow({
 	// and it must agree with what `WhatsAppPhoneLink` actually RENDERS (it trims
 	// and renders nothing for a blank value), not with the raw column, or a
 	// whitespace-only phone leaves a separator dangling in front of the email.
+	//
+	// A boolean for the phone but the VALUE for the email, because the two are
+	// rendered by different owners: `WhatsAppPhoneLink` trims the phone itself,
+	// so this call site only has to decide whether to render it, while the
+	// `mailto:` below is built here — and it must use the same trimmed string the
+	// gate tested, or `" a@b.com "` ships as `mailto: a@b.com `.
 	const hasPhone = (guest.phone ?? "").trim() !== "";
-	const hasEmail = (guest.email ?? "").trim() !== "";
+	const email = (guest.email ?? "").trim();
 
 	return (
 		<div className="flex flex-col gap-3 border-b border-[var(--line)] px-5 py-3.5 last:border-b-0 sm:flex-row sm:items-center sm:justify-between">
@@ -318,16 +324,21 @@ function GuestRow({
 				/>
 				<div className="min-w-0 leading-[1.3]">
 					<div className="truncate text-sm font-bold">{guest.name}</div>
-					{hasPhone || hasEmail ? (
-						<div className="flex min-w-0 flex-wrap items-center gap-x-2 text-xs text-[var(--sea-ink-soft)]">
-							<WhatsAppPhoneLink phone={guest.phone} name={guest.name} />
-							{hasPhone && hasEmail ? <span aria-hidden>·</span> : null}
-							{hasEmail ? (
+					{hasPhone || email ? (
+						// `gap-y-0.5`: this line could not wrap while it was one truncated
+						// string, and now it can — two elements with no leading between
+						// them read as one smudged block on a narrow card.
+						<div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-[var(--sea-ink-soft)]">
+							{hasPhone ? (
+								<WhatsAppPhoneLink phone={guest.phone} name={guest.name} />
+							) : null}
+							{hasPhone && email ? <span aria-hidden>·</span> : null}
+							{email ? (
 								<a
-									href={`mailto:${guest.email}`}
+									href={`mailto:${email}`}
 									className="min-w-0 truncate hover:underline"
 								>
-									{guest.email}
+									{email}
 								</a>
 							) : null}
 						</div>
