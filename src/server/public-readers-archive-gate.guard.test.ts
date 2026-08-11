@@ -24,15 +24,25 @@
  * So this guard pins the wiring: every PUBLIC server fn below must call its
  * gated seam, and must not call the ungated sibling.
  *
- * READ MODE — comment-blind (`readSource`), deliberately. The load-bearing half
- * of each case is "this call must BE present", and per `src/test/guard-source.ts`
- * that form is BYPASSED by a comment merely naming the function: a handler could
- * be rewired to the ungated call while a comment above it still said
- * `loadPublicClubRoster`, and a raw read would report clean. The "must not call"
- * half then rides on the same stripped text, which costs only the ability to
- * fail on a comment — a real call is code, never a comment, so nothing that
- * matters goes unseen.
+ * READ MODE — TWO readers, one per assertion class. This file holds both, and
+ * `src/test/guard-source.ts` says each class needs the opposite reader:
+ *
+ *   · "must CALL x" (positive) → `readStripped`. A comment naming the function
+ *     satisfies a raw `toContain`, so a handler could be rewired to the ungated
+ *     call while a comment above it still said `loadPublicClubRoster` and a raw
+ *     read would report clean. Comment-blind closes that false PASS.
+ *   · "must NOT call y" (negative) → `readRaw`. Stripping only DELETES text, and
+ *     the stripper is a lexer, not a parser: it does not track string/template
+ *     literals, so a `//` inside one blanks the rest of that line and could
+ *     erase a real offending call from the text being searched. That is a false
+ *     PASS on the half that exists to catch the regression.
+ *
+ * Blanket-applying either reader is the bypass #502 shipped twice in one branch,
+ * in both directions. Verified here by mutating one assertion of EACH class (a
+ * rewire to `resolveMeetingKey` for the negative, a deleted call for the
+ * positive) and confirming each fails.
  */
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -40,6 +50,11 @@ import { readSource } from "#/test/guard-source";
 
 const SELF = fileURLToPath(import.meta.url);
 const ROOT = resolve(SELF, "../../..");
+
+/** Comment-blind — for "the call must BE present" assertions only. */
+const readStripped = (abs: string) => readSource(abs);
+/** Verbatim — for "the offending call must be ABSENT" assertions only. */
+const readRaw = (abs: string) => readFileSync(abs, "utf8");
 
 /**
  * The body of one `export const <name> = createServerFn…` declaration, sliced
@@ -142,16 +157,18 @@ const WIRINGS: Wiring[] = [
 describe("public server fns are wired to their archive-gated seam (#544)", () => {
 	for (const w of WIRINGS) {
 		it(`${w.fn} routes through ${w.mustCall}`, () => {
-			const body = serverFnBody(readSource(resolve(ROOT, "src", w.file)), w.fn);
+			const abs = resolve(ROOT, "src", w.file);
 
+			// Positive: comment-blind, so a comment naming the seam can't fake it.
 			expect(
-				body,
+				serverFnBody(readStripped(abs), w.fn),
 				`${w.fn} must call ${w.mustCall} — without it an ARCHIVED club still serves ${w.leaks}. Archiving is the takedown lever (ADR-0016 / ADR-0024).`,
 			).toContain(w.mustCall);
 
 			if (w.mustNotCall) {
+				// Negative: verbatim, so a stripper artifact can't erase a real call.
 				expect(
-					body,
+					serverFnBody(readRaw(abs), w.fn),
 					`${w.fn} must not call ${w.mustNotCall} — it carries no archive check. Use ${w.mustCall}. The two have the same signature, so nothing else in the suite can tell them apart.`,
 				).not.toContain(w.mustNotCall);
 			}
@@ -168,11 +185,14 @@ describe("the gate module stays the one home for the check (#544)", () => {
 	 * back into a feature module, the next reader will miss it the same way.
 	 */
 	it("defines isReadableClub in club-readable-logic.ts and nowhere else", () => {
-		const home = readSource(resolve(ROOT, "src/server/club-readable-logic.ts"));
+		// Positive → stripped; negative → raw. Same split as above.
+		const home = readStripped(
+			resolve(ROOT, "src/server/club-readable-logic.ts"),
+		);
 		expect(home).toContain("export async function isReadableClub(");
 		expect(home).toContain("export async function isReadableClubForMeeting(");
 
-		const logo = readSource(resolve(ROOT, "src/server/club-logo-logic.ts"));
+		const logo = readRaw(resolve(ROOT, "src/server/club-logo-logic.ts"));
 		expect(
 			logo,
 			"isReadableClub moved to club-readable-logic.ts (#544) so public readers can find it. Import it there rather than redefining it here.",
