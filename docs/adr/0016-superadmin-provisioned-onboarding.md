@@ -98,6 +98,31 @@ The "club deactivation" deferred above is now built as a **soft-archive**, exten
   helper `resolveClubOrRedirect` import it). Sign-in is untouched — auth is global; an archived club
   simply shows as inaccessible.
 
+**Corrected 2026-08-10 (#544).** The bullet above claimed "every public no-auth club loader …
+returns not-found". That described the **router** loaders only, and was read for two years as
+covering the whole public surface. It did not. A `createServerFn` endpoint is addressable directly
+— no session, no router — so `resolveClubOrRedirect` guards the *caller*, not the data, and
+fourteen public readers kept serving an archived club's roster, meeting schedule, past-meeting
+archive, sign-up sheet, role list, mission text, full agenda (assignee names and speech titles) and
+live ballot. Three of them were keyed by a **meeting** or **member** id rather than a club id, so
+closing the club-keyed readers alone would have left a side door — the legacy `/meetings/:id` URL
+meant every pre-takedown bookmark was a working key. Looking a club up by slug also still returned
+its name and Toastmasters club number, which is the brand identity ADR-0024's takedown exists to
+remove.
+
+The gate is now explicit and, more importantly, **findable**: `isReadableClub` (which had been
+buried in `club-logo-logic.ts` since #495, where nobody thought to look for a club-wide check)
+moved to `src/server/club-readable-logic.ts` alongside `isReadableClubForMeeting` and
+`isReadableClubForMember`. Every public session-less reader calls one, and returns its own
+not-found shape rather than throwing, so an archived club is indistinguishable from one that never
+existed. `public-readers-archive-gate.guard.test.ts` **derives** its candidate set by walking
+`src/server/*.ts` and treating any `createServerFn` with no `require*` call as anonymous, so the
+next public reader is enrolled automatically rather than remembered — the allowlist that preceded
+it is exactly how this ADR's claim went stale.
+
+Reads only. An archived club still **accepts** anonymous writes (#555), and a service worker can
+still serve its cached agenda after takedown (#556).
+
 Still deferred: superadmin impersonation / ambient cross-club access ("act as", #185).
 
 ## Deferred / out of scope

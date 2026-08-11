@@ -278,6 +278,28 @@ testable db logic in a sibling `*-logic.ts` (see `members-logic.ts`, `activity-f
 that client code never imports; the wrapper's handler calls it and gets stripped. The
 `server-modules.guard.test.ts` unit test enforces this — it would have caught both regressions.
 
+**Public `createServerFn` readers gate on `clubs.archived_at` themselves.** Archiving is the
+platform takedown lever (ADR-0016 / ADR-0024) and it has **two** db-level enforcement points, not
+one: `requireMembership` (`server/guards.ts`) covers every authed path, and
+`src/server/club-readable-logic.ts` — `isReadableClub`, `isReadableClubForMeeting`,
+`isReadableClubForMember` — covers every public, session-less one. A route guard is neither. The
+`/club/$clubId` shell's `beforeLoad` → `resolveClubOrRedirect` guards the **caller**, while a
+server fn is addressable directly with no session and no router; reading the shell as coverage is
+what left fourteen public readers serving an archived club's roster, agenda and live ballot until
+#544. Each gated seam returns its own not-found shape (`null` for a row, `[]` for a list) rather
+than throwing, so an archived club is indistinguishable from one that never existed and no call
+site needs new error handling. Gated seams carry `Public` in the NAME
+(`loadPublicClubRoster`, `loadPublicUpcomingMeetings`, `resolvePublicMeetingKey`,
+`resolvePublicClubIdentifier`, …): the gated and ungated siblings have identical signatures, so the
+name is the only signal that does not require opening the body, and an inline query in a handler
+must be lifted into a `*-logic.ts` seam before it can be gated *and* tested — a handler body is
+unreachable from vitest. `public-readers-archive-gate.guard.test.ts` **derives** its candidate set
+by walking `src/server/*.ts` and treating any `createServerFn` whose body calls no `require*` guard
+as anonymous, so the next public reader is enrolled automatically rather than remembered: it must
+be wired to a gated seam or waived in `REVIEWED_UNGATED` with a stated reason. Reads only so far —
+an archived club still accepts anonymous writes (#555) and a service worker can still serve its
+cached agenda (#556).
+
 ## Deployment target
 
 **Railway** (managed container PaaS) — see `docs/adr/0007-railway-managed-paas.md` (supersedes
