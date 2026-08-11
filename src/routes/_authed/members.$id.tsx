@@ -10,7 +10,6 @@ import {
 	CalendarPlus,
 	ChevronLeft,
 	Mail,
-	Phone,
 	ShieldCheck,
 } from "lucide-react";
 import { useState } from "react";
@@ -32,6 +31,7 @@ import {
 } from "#/components/ui/dialog";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
+import { WhatsAppPhoneLink } from "#/components/whatsapp-phone-link";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { formatMeetingDate } from "#/lib/format";
@@ -208,14 +208,15 @@ function MemberDetail() {
 									{member.email}
 								</a>
 							) : null}
+							{/* WhatsApp, not the dialer. The component supplies its own icon,
+							    the base layout and `hover:underline`, so this passes colour
+							    only — matching the email anchor above it. */}
 							{member.phone ? (
-								<a
-									href={`tel:${member.phone}`}
-									className="inline-flex items-center gap-1.5 hover:text-[var(--sea-ink)] hover:underline"
-								>
-									<Phone className="size-3.5" aria-hidden />
-									{member.phone}
-								</a>
+								<WhatsAppPhoneLink
+									phone={member.phone}
+									name={member.name}
+									className="hover:text-[var(--sea-ink)]"
+								/>
 							) : null}
 						</div>
 					) : null}
