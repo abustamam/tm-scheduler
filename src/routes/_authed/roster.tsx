@@ -99,6 +99,15 @@ export const Route = createFileRoute("/_authed/roster")({
 const TABLE_GRID =
 	"grid-cols-[1fr_34px] sm:grid-cols-[1fr_150px_170px_34px] xl:grid-cols-[1fr_150px_170px_150px_34px]";
 
+// The same grid for a MANAGER, whose trailing Account column carries an invite
+// button beside the chevron (64px vs 34px) and pays for it out of Speeches and
+// Pathway. Named here rather than left inline at its use site 66 lines below, so
+// the measurement table above governs both templates — the measurements were
+// taken on THIS one, and the two have to grow a column together or the header
+// and body grids fall out of alignment (`roster.test.tsx` pins that).
+const MANAGER_TABLE_GRID =
+	"grid-cols-[1fr_64px] sm:grid-cols-[1fr_140px_160px_64px] xl:grid-cols-[1fr_140px_160px_150px_64px]";
+
 type SegKey = "all" | "active" | "inactive";
 const ROSTER_SEGMENTS: { key: SegKey; label: string }[] = [
 	{ key: "all", label: "All members" },
@@ -115,8 +124,15 @@ interface RosterRow {
 	speeches: number;
 	/** Contact email on file — gates whether an invite can be sent (#266). */
 	email: string | null;
-	/** Contact phone on file, server-normalized to E.164 — renders as a
-	 *  WhatsApp link. */
+	/**
+	 * Contact phone on file, server-coalesced: E.164 where it can be derived,
+	 * otherwise the stored value VERBATIM. Not a guarantee of E.164 —
+	 * `coalesceToE164` deliberately preserves a value it cannot normalize
+	 * ("ask at church"), which `WhatsAppPhoneLink` then renders as plain text
+	 * rather than a dead link. The cell's `pointer-events` keys off that same
+	 * distinction, so treating this as always-dialable is what put a live-but-dead
+	 * click box on those rows.
+	 */
 	phone: string | null;
 	/** Account-invite state: none / invited (link sent) / joined (linked) (#266). */
 	inviteState: InviteState;
@@ -175,9 +191,7 @@ function Roster() {
 	// The invite control adds a wider trailing column (icon button + chevron) for
 	// managers; members see the original chevron-only layout. Fixed widths keep the
 	// header and rows (independent grids) column-aligned.
-	const gridCols = canManage
-		? "grid-cols-[1fr_64px] sm:grid-cols-[1fr_140px_160px_64px] xl:grid-cols-[1fr_140px_160px_150px_64px]"
-		: TABLE_GRID;
+	const gridCols = canManage ? MANAGER_TABLE_GRID : TABLE_GRID;
 
 	// Identity, tenure, speeches, membership status and Pathways progress are all real.
 	const rows: RosterRow[] = members.map((m) => {

@@ -1,10 +1,23 @@
-// Directly-testable db logic behind `club.ts`'s server fns. A `createServerFn`
-// cannot be called from a test (no session, no RPC layer), so the queries live
-// here and the wrappers' handlers call them — the same split as
-// `members-logic.ts`. Keeping them out of `club.ts` also keeps that module to
-// `createServerFn`s and types, which `server-modules.guard.test.ts` enforces:
-// a plain db-touching export there drags `#/db` → `pg` → `Buffer` into the
-// client bundle.
+// The two CONTACT queries behind `club.ts`'s server fns — `loadClubMembers` and
+// `loadMemberProfile`. A `createServerFn` cannot be called from a test (no
+// session, no RPC layer), so these live here and the wrappers' handlers call
+// them; the same split as `members-logic.ts`.
+//
+// Deliberately not "every query in `club.ts` moves here": the speech-count
+// aggregate and `loadRolesServed` are still inline there, and moving them was
+// never the point. What these two have that those do not is member EMAIL and
+// PHONE on the payload, which makes them worth reaching directly from an
+// integration test (`club-contact.integration.test.ts`) and worth guarding
+// (`club-contact-gate.guard.test.ts` requires every `club.ts` server fn that
+// calls one of them to gate on `requireClubViewAccess`, and holds this module to
+// exactly one importer).
+//
+// Neither function gates on its own — the gate is the caller's — so a new
+// importer is a new place the whole roster's contact can escape.
+//
+// Keeping them out of `club.ts` also keeps that module to `createServerFn`s and
+// types, which `server-modules.guard.test.ts` enforces: a plain db-touching
+// export there drags `#/db` → `pg` → `Buffer` into the client bundle.
 import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "#/db";
 import { members, people } from "#/db/schema";
