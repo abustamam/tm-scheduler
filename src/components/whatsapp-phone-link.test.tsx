@@ -158,17 +158,25 @@ describe("WhatsAppPhoneLink", () => {
 		expect(link.className).not.toContain("gap-1.5");
 	});
 
-	it("passes the caller's className through on the digit-less branch", () => {
+	it("does not paint the digit-less branch with the caller's link styling", () => {
+		// `className` styles the LINK — every call site passes an affordance class
+		// and `season-grid.tsx` passes exactly this one. This branch renders no
+		// link, so leaking the class there shows a plain string in link colour with
+		// nothing to click: an affordance that lies. Reachable, not theoretical —
+		// `toStoredPhone` preserves an un-normalizable value on purpose, and the
+		// three read paths carry it through verbatim (`coalesceToE164`).
 		render(
 			<WhatsAppPhoneLink
 				phone="ask at church"
 				name="Jane Doe"
-				className="text-sm tabular-nums"
+				className="text-primary"
 			/>,
 		);
 		const span = screen.getByText("ask at church");
-		expect(span.className).toContain("text-sm");
-		expect(span.className).toContain("tabular-nums");
+		// The whole class list, not just that one utility. Asserting only
+		// `not.toContain("text-primary")` would pass on a version that forwarded
+		// every OTHER caller class, which is the same bug with a different input.
+		expect(span.className).toBe("");
 	});
 
 	it.each([

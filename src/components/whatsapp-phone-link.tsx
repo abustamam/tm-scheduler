@@ -25,6 +25,12 @@ export function WhatsAppPhoneLink({
 	name: string;
 	/** Rendered when there is no number at all. */
 	fallback?: ReactNode;
+	/**
+	 * Styling for the LINK only — it is merged onto the anchor and applies to
+	 * neither the `fallback` (the caller renders that node itself) nor the
+	 * digit-less text branch (see below). Callers pass colour; the base owns
+	 * layout and `hover:underline`.
+	 */
 	className?: string;
 }) {
 	// Detection is deferred to the post-mount render — but NOT because `navigator`
@@ -51,7 +57,14 @@ export function WhatsAppPhoneLink({
 	const href = whatsappHref(trimmed, platform);
 	// A stored value with no digits ("ask at church") can't open a chat. Show it
 	// as text rather than swallowing it — the reader can still act on it.
-	if (!href) return <span className={className}>{trimmed}</span>;
+	//
+	// Deliberately WITHOUT `className`. Every call site passes an affordance class
+	// for the anchor (`season-grid.tsx` passes `text-primary`, `members.$id.tsx` a
+	// hover colour), and forwarding one here paints a plain string in link colour
+	// with nothing to click. Owned by the component rather than by the four call
+	// sites, none of which can know which branch will render. The text then
+	// inherits the surrounding cell's colour, which is what it is: prose.
+	if (!href) return <span>{trimmed}</span>;
 
 	return (
 		<a
