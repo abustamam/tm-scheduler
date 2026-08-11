@@ -26,6 +26,7 @@ import {
 } from "#/components/ui/dialog";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
+import { WhatsAppPhoneLink } from "#/components/whatsapp-phone-link";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { type InviteState, inviteStateOf } from "#/lib/invite-state";
@@ -74,9 +75,35 @@ export const Route = createFileRoute("/_authed/roster")({
 	component: Roster,
 });
 
-// Roster grid: on small screens only Member + chevron; Speeches/Pathway
-// (also hidden below) return at `sm`. Members can tap through for the detail.
-const TABLE_GRID = "grid-cols-[1fr_34px] sm:grid-cols-[1fr_150px_170px_34px]";
+// Roster grid: on small screens only Member + chevron; Speeches/Pathway return
+// at `sm`, Phone at `xl`. Members can tap through for the detail.
+//
+// Phone is gated three tiers higher than the other two because a fifth fixed
+// column does not fit below `xl`, and the only column it can take width FROM is
+// the `1fr` Member one — the member's NAME, which is what the roster is for.
+// Measured in the browser (manager grid, 18-member club), Member column width
+// with the Phone column gated at `sm` vs. shipped without it at all:
+//
+//   viewport   at `sm`   without Phone
+//   640px       56px *      136px
+//   768px      100px        264px
+//   1024px     108px        272px      (the app sidebar returns here)
+//   1280px     364px        528px
+//
+//   * and the four fixed columns then want 573px inside a 542px content box, so
+//     the card's `overflow-hidden` clips the Account column off entirely.
+//
+// Trimming the shared columns to their measured minimums (Speeches' widest
+// content is its own 71px header; a rendered E.164 number with its icon is
+// 96-107px) only buys the Member column back to 214px at 768px — still short of
+// the ~250px an officer row needs, because the "Officer · full admin" badge
+// shares that cell and a name truncates to "Bi…". `xl` is the first tier where
+// the column is free: 364px, full names, no clipping, and every width below it
+// laid out exactly as it did before this column existed. (If the column is
+// later wanted on narrower screens, the width to reclaim is the officer badge's,
+// not the name's.)
+const TABLE_GRID =
+	"grid-cols-[1fr_34px] sm:grid-cols-[1fr_150px_170px_34px] xl:grid-cols-[1fr_150px_170px_150px_34px]";
 
 type SegKey = "all" | "active" | "inactive";
 const ROSTER_SEGMENTS: { key: SegKey; label: string }[] = [
@@ -94,6 +121,9 @@ interface RosterRow {
 	speeches: number;
 	/** Contact email on file — gates whether an invite can be sent (#266). */
 	email: string | null;
+	/** Contact phone on file, server-normalized to E.164 — renders as a
+	 *  WhatsApp link. */
+	phone: string | null;
 	/** Account-invite state: none / invited (link sent) / joined (linked) (#266). */
 	inviteState: InviteState;
 	/** Roster membership status (renewal): active vs unrenewed/inactive. */
@@ -139,7 +169,7 @@ function Roster() {
 	// managers; members see the original chevron-only layout. Fixed widths keep the
 	// header and rows (independent grids) column-aligned.
 	const gridCols = canManage
-		? "grid-cols-[1fr_64px] sm:grid-cols-[1fr_140px_160px_64px]"
+		? "grid-cols-[1fr_64px] sm:grid-cols-[1fr_140px_160px_64px] xl:grid-cols-[1fr_140px_160px_150px_64px]"
 		: TABLE_GRID;
 
 	// Identity, tenure, speeches, membership status and Pathways progress are all real.
@@ -157,6 +187,7 @@ function Roster() {
 				: formatTenure(joined),
 			speeches: m.speeches,
 			email: m.email,
+			phone: m.phone,
 			inviteState: inviteStateOf({ userId: m.userId, invitedAt: m.invitedAt }),
 			membershipStatus: m.status,
 			pathwayLabel: pathwayLabelFor(pathways[m.id] ?? []),
@@ -294,6 +325,7 @@ function Roster() {
 					<div>Member</div>
 					<div className="hidden sm:block">Speeches</div>
 					<div className="hidden sm:block">Pathway</div>
+					<div className="hidden xl:block">Phone</div>
 					<div className="justify-self-end">{canManage ? "Account" : ""}</div>
 				</div>
 
@@ -390,6 +422,15 @@ function Roster() {
 							{/* Pathway */}
 							<div className="pointer-events-none relative z-[1] hidden min-w-0 truncate text-xs text-[var(--sea-ink-soft)] sm:block">
 								{m.pathwayLabel ?? "—"}
+							</div>
+
+							{/* Phone — z-[2] and NOT pointer-events-none, like the invite
+							    control below: the row's overlay Link would otherwise swallow
+							    the tap and open the profile instead of WhatsApp. `w-fit`
+							    keeps the live box to the number itself, so the rest of the
+							    column still falls through to the row link. */}
+							<div className="relative z-[2] hidden w-fit max-w-full min-w-0 truncate text-xs text-[var(--sea-ink-soft)] xl:block">
+								<WhatsAppPhoneLink phone={m.phone} name={m.name} fallback="—" />
 							</div>
 
 							{/* Invite control (managers) + chevron */}
