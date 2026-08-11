@@ -76,9 +76,22 @@ fi
 
 # 4. CodeLedger. Guarded end to end: this is an optional productivity tool and a
 #    broken or missing install must never block a worktree from being usable.
-#    `init` is idempotent and its agent-onboarding block is committed, so this
-#    leaves the tree clean.
+#
+#    `init` is NOT tree-clean. It appends a fixed
+#    `<!-- CODELEDGER:AGENT-ONBOARDING:BEGIN -->` block to two TRACKED,
+#    hand-curated agent-rule files. That block used to be committed, which is why
+#    the comment here previously claimed init left the tree clean — 6197f4b
+#    removed it deliberately: it duplicates the guidance those files already
+#    carry, and contradicts it on which binary to invoke (the block says the
+#    self-upgrading wrapper, the curated rules say the pinned standalone, and
+#    only the standalone is reproducible). `init` has no --no-onboarding flag, so
+#    the block is discarded here instead.
+#
+#    Scoped to exactly those two paths so nothing else init writes is lost. If a
+#    future release makes init edit them for a real reason, this will silently
+#    drop it — acceptable while the only edit is that one fixed block.
 CL="$HERE/.codeledger/bin/codeledger"
+ONBOARDING_FILES=(.cursor/rules/codeledger.mdc .kiro/steering/codeledger.md)
 if [ ! -x "$CL" ]; then
 	echo "→ CodeLedger wrapper not found, skipping"
 elif ! "$CL" init >/dev/null 2>&1; then
@@ -86,6 +99,9 @@ elif ! "$CL" init >/dev/null 2>&1; then
 	echo "  Bundles from here will be empty until it is initialised."
 else
 	echo "→ codeledger init"
+	for f in "${ONBOARDING_FILES[@]}"; do
+		[ -e "$f" ] && git checkout -- "$f" 2>/dev/null || true
+	done
 	if [ -n "$TASK" ]; then
 		if "$CL" activate --task "$TASK" >/dev/null 2>&1; then
 			echo "→ codeledger activate --task \"$TASK\""
