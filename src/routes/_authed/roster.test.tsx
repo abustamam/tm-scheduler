@@ -294,6 +294,42 @@ describe("roster table — phone column", () => {
 		).toContain("w-fit");
 	});
 
+	// The OTHER side of that trade-off, and the defect the version above shipped:
+	// the live box was applied to EVERY row, including the two branches that
+	// render nothing clickable. Those rows got a box that is live and dead — the
+	// click is swallowed by a `z-[2]` element with no anchor in it, instead of
+	// falling through to the row's overlay `<Link>`, so that patch of the row
+	// stopped opening the profile. Unlike the geometry above, jsdom CAN see this:
+	// it is a class on a cell, keyed on data.
+	it.each([
+		["no number on file", null],
+		["a digit-less value", "ask at church"],
+	])("makes the phone cell click-through for %s", async (_label, phone) => {
+		await renderRoute([
+			memberRow({
+				id: "33333333-3333-4333-8333-333333333333",
+				name: "No Link",
+				phone,
+			}),
+		]);
+		const cell = phoneCellOf(rowFor("No Link"));
+
+		// Both branches are covered because `whatsappHref` keys on DIGITS, not on
+		// the column being non-empty: gating the cell on `m.phone` alone would fix
+		// the dash row and leave the digit-less row exactly as broken.
+		expect(within(cell).queryByRole("link")).toBeNull();
+		expect(
+			cell.className,
+			"This row renders no clickable link, so its phone cell must be " +
+				"pointer-events-none — otherwise the live box swallows the click " +
+				"instead of letting it reach the row's overlay Link, and that part " +
+				"of the row stops opening the member's profile.",
+		).toContain("pointer-events-none");
+		// The live-box classes belong to the linked branch only; leaving them on
+		// here is what made the box swallow clicks in the first place.
+		expect(cell.className).not.toContain("z-[2]");
+	});
+
 	// The header and the body rows are INDEPENDENT grids that must carry the SAME
 	// `grid-cols-*` string. Adding a body cell without its header cell shifts
 	// every column label by one and nothing else notices — and BOTH templates

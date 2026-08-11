@@ -333,21 +333,30 @@ function GuestRow({
 							{hasPhone ? (
 								<WhatsAppPhoneLink phone={guest.phone} name={guest.name} />
 							) : null}
-							{hasPhone && email ? <span aria-hidden>·</span> : null}
 							{email ? (
-								// `mailtoHref`, not raw interpolation. A stored
-								// "a@b.com?bcc=x&subject=y" would otherwise become live mailto
-								// HEADERS — the reader's own client would silently blind-copy
-								// a third party on a message they thought was private. The two
-								// free-text writers of `guests.email` are validated in the same
-								// change; rows written before that persist, so both halves are
-								// needed.
-								<a
-									href={mailtoHref(email)}
-									className="min-w-0 truncate hover:underline"
-								>
-									{email}
-								</a>
+								// The separator is BOUND to the email, not a sibling of it. As
+								// its own flex item in a wrappable container it could be pushed
+								// to the end of line 1 with the address starting line 2 —
+								// a dangling "·" reading as punctuation on the phone number.
+								// Wrapping the pair in one flex child makes them wrap together.
+								// `min-w-0` moves onto this child so the address can still
+								// truncate inside it.
+								<span className="flex min-w-0 items-center gap-x-2">
+									{hasPhone ? <span aria-hidden>·</span> : null}
+									{/* `mailtoHref`, not raw interpolation. A stored
+									    "a@b.com?bcc=x&subject=y" would otherwise become live
+									    mailto HEADERS — the reader's own client would silently
+									    blind-copy a third party on a message they thought was
+									    private. The two free-text writers of `guests.email` are
+									    validated in the same change; rows written before that
+									    persist, so both halves are needed. */}
+									<a
+										href={mailtoHref(email)}
+										className="min-w-0 truncate hover:underline"
+									>
+										{email}
+									</a>
+								</span>
 							) : null}
 						</div>
 					) : null}

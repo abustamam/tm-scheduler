@@ -131,6 +131,33 @@ describe("VP Membership guest card — contact line", () => {
 		expect(card.getByText("·")).toBeTruthy();
 	});
 
+	it("keeps the separator bound to the email so they wrap together", async () => {
+		// The contact line became wrappable when phone and email stopped being one
+		// truncated string. As its own flex item the "·" could be pushed to the end
+		// of line 1 with the address starting line 2 — a dangling separator that
+		// reads as punctuation on the phone number instead of a divider.
+		//
+		// Structural, because jsdom performs no layout and cannot be asked where
+		// the line breaks. The property that MAKES it wrap correctly is that the
+		// two are one flex child, and that IS observable: same parent, and that
+		// parent is not the wrapping row itself.
+		await renderRoute([guestRow()]);
+		const card = within(cardTextColumn("Ada Guest"));
+		const sep = card.getByText("·");
+		const emailLink = card.getByRole("link", { name: "ada@example.com" });
+		const phone = card.getByRole("link", { name: /\+14155552671/ });
+
+		expect(
+			sep.parentElement,
+			"The separator must share a parent with the email anchor, or the flex " +
+				"container can wrap between them and strand the '·' at the end of " +
+				"the previous line.",
+		).toBe(emailLink.parentElement);
+		// …and that shared parent is a child of the wrapping row, not the row
+		// itself — otherwise "same parent" is trivially true and pins nothing.
+		expect(sep.parentElement).not.toBe(phone.parentElement);
+	});
+
 	it("renders no separator and no phone for a whitespace-only number", async () => {
 		// `WhatsAppPhoneLink` trims and renders NOTHING for this value, so a gate
 		// on the raw column would leave a "·" hanging in front of the email with

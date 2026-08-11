@@ -132,6 +132,19 @@ interface RosterRow {
 	holdsOffice: boolean;
 }
 
+/**
+ * Does this stored phone produce a CLICKABLE WhatsApp link?
+ *
+ * Mirrors `whatsappHref`'s own rule — it strips to digits and returns null when
+ * there are none — so the roster cell's `pointer-events` can follow whether an
+ * anchor actually renders. Deliberately not a truthiness check on the column:
+ * `WhatsAppPhoneLink` renders a digit-less value ("ask at church") as plain
+ * text, which is not clickable either.
+ */
+function hasDialablePhone(phone: string | null): boolean {
+	return /\d/.test(phone ?? "");
+}
+
 /** "PathName · L2 3/5" (or "· Path complete"), compact for a one-line roster cell. */
 function pathwayLabelFor(paths: PathViewModel[]): string | null {
 	const path = paths[0];
@@ -418,12 +431,35 @@ function Roster() {
 								{m.pathwayLabel ?? "—"}
 							</div>
 
-							{/* Phone — z-[2] and NOT pointer-events-none, like the invite
-							    control below: the row's overlay Link would otherwise swallow
-							    the tap and open the profile instead of WhatsApp. `w-fit`
-							    keeps the live box to the number itself, so the rest of the
-							    column still falls through to the row link. */}
-							<div className="relative z-[2] hidden w-fit max-w-full min-w-0 truncate text-xs text-[var(--sea-ink-soft)] xl:block">
+							{/* Phone. LIVE only when there is a link to click — the
+							    live-ness has to follow the anchor, not the column.
+							
+							    `z-[2]` and no `pointer-events-none` is what lets a tap reach
+							    the anchor at all: the row's overlay <Link> sits under every
+							    cell and would otherwise swallow it and open the profile
+							    instead of WhatsApp (same trick as the invite control below),
+							    and `w-fit` keeps that live box to the number itself so the
+							    rest of the column still falls through.
+							
+							    But TWO of the component's three branches render nothing
+							    clickable — the `fallback` dash, and a digit-less value like
+							    "ask at church" which renders as a plain <span>. Applied
+							    unconditionally, those rows get a box that is live and dead:
+							    the click is swallowed instead of falling through, so that
+							    patch of the row silently stops opening the profile.
+							
+							    Keyed on DIGITS, not on `m.phone` being non-empty, because
+							    `whatsappHref` returns null (⇒ no anchor) for anything with no
+							    digits — a truthiness check would leave the digit-less branch
+							    dead-but-live, which is the same bug on a narrower input. */}
+							<div
+								className={cn(
+									"relative hidden min-w-0 truncate text-xs text-[var(--sea-ink-soft)] xl:block",
+									hasDialablePhone(m.phone)
+										? "z-[2] w-fit max-w-full"
+										: "pointer-events-none",
+								)}
+							>
 								<WhatsAppPhoneLink phone={m.phone} name={m.name} fallback="—" />
 							</div>
 
