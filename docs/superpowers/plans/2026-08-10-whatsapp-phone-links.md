@@ -582,10 +582,9 @@ describe.skipIf(!hasTestDb)("club payload phone normalization", () => {
 	});
 
 	it("getMemberProfile returns phone, coalesced to E.164", async () => {
-		const { loadMemberProfilePhone } = await import("#/server/club-logic");
-		expect(await loadMemberProfilePhone(seed.clubId, seed.memberId)).toBe(
-			"+14155552671",
-		);
+		const { loadMemberProfile } = await import("#/server/club-logic");
+		const row = await loadMemberProfile(seed.clubId, seed.memberId);
+		expect(row?.phone).toBe("+14155552671");
 	});
 });
 ```
@@ -663,29 +662,34 @@ export async function loadClubMembers(
 	return rows.map((r) => ({ ...r, phone: toE164(r.phone, cc) ?? r.phone }));
 }
 
-/** One member's normalized phone. Caller has already authorized. */
-export async function loadMemberProfilePhone(
-	clubId: string,
-	memberId: string,
-): Promise<string | null> {
+/**
+ * One member's profile row, phone normalized. Caller has already authorized.
+ *
+ * Extract the WHOLE query, not just the phone column. A narrow
+ * `loadMemberProfilePhone` would leave `getMemberProfile` normalizing inline,
+ * so the test would assert on a function production never calls — a mirror that
+ * stays green when the shipped normalization is deleted.
+ */
+export async function loadMemberProfile(clubId: string, memberId: string) {
 	const [row] = await db
-		.select({ phone: members.phone })
+		.select({ /* … the profile columns … */ phone: members.phone })
 		.from(members)
 		.where(and(eq(members.id, memberId), eq(members.clubId, clubId)))
 		.limit(1);
-	if (!row) return null;
+	if (!row) return undefined;
 	// `?? row.phone` for the same reason as above — never turn a visible number
 	// into an absent one.
-	return (
-		toE164(row.phone, await loadClubDefaultCountryCode(clubId)) ?? row.phone
-	);
+	return {
+		...row,
+		phone: coalesceToE164(row.phone, await loadClubDefaultCountryCode(clubId)),
+	};
 }
 ```
 
 Then in `src/server/club.ts`:
 
 - `listClubMembers`'s handler replaces its inline `roster` query with `const roster = await loadClubMembers(clubId);` and adds `phone: m.phone,` to the returned object literal (after `email`).
-- `getMemberProfile`'s handler wraps its existing `phone` value: change `phone: member.phone,` to `phone: toE164(member.phone, await loadClubDefaultCountryCode(data.clubId)) ?? member.phone,`, importing `toE164` from `#/lib/phone` and `loadClubDefaultCountryCode` from `./clubs-logic`. The `?? member.phone` is required for the reason given in `club-logic.ts` above.
+- `getMemberProfile`'s handler replaces its inline query with `const member = await loadMemberProfile(data.clubId, data.memberId);`. Normalization lives in `club-logic.ts`, so the handler runs exactly the code the test exercises.
 
 Add a test asserting a digit-less stored value (e.g. `"call the office"`) survives to the payload unchanged rather than becoming null.
 
@@ -1195,7 +1199,7 @@ bun run dev
 
 Open `http://localhost:3000/roster`, then:
 
-1. Confirm a Phone column appears at `sm` and above with a WhatsApp icon beside each number.
+1. Confirm a Phone column appears at `xl` and above (see the measurement note above `TABLE_GRID`) with a WhatsApp icon beside each number.
 2. **Click a phone number.** It must open WhatsApp Web in a new tab. If it navigates to the member profile instead, the cell is still being swallowed by the row's overlay `<Link>` — re-check that the cell has `relative z-[2]` and does NOT have `pointer-events-none`.
 3. Click anywhere else in the row and confirm it still opens the profile.
 
