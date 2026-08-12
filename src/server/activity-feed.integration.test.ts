@@ -109,6 +109,31 @@ describe.skipIf(!hasTestDb)("loadActivity", () => {
 		expect(rows.some((r) => r.action === "reassign")).toBe(true);
 	});
 
+	it("surfaces plan_set's detail.status on the enriched row", async () => {
+		await logActivity(testDb, {
+			clubId: seed.clubId,
+			actorMemberId: seed.memberId,
+			action: "plan_set",
+			targetType: "meeting",
+			targetId: seed.meetingId,
+			detail: { memberId: seed.memberId, status: "coming", via: "manual" },
+		});
+		await logActivity(testDb, {
+			clubId: seed.clubId,
+			actorMemberId: seed.memberId,
+			action: "plan_set",
+			targetType: "meeting",
+			targetId: seed.meetingId,
+			detail: { memberId: seed.memberId, status: null },
+		});
+		const { loadActivity } = await import("#/server/activity-feed-logic");
+		const rows = await loadActivity({ clubId: seed.clubId });
+		const planRows = rows.filter((r) => r.action === "plan_set");
+		expect(planRows).toHaveLength(2);
+		expect(planRows.some((r) => r.status === "coming")).toBe(true);
+		expect(planRows.some((r) => r.status === null)).toBe(true);
+	});
+
 	it("actor filter returns only that member's actions", async () => {
 		await seedActivity();
 		const { loadActivity } = await import("#/server/activity-feed-logic");
