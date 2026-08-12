@@ -138,7 +138,7 @@ describe.skipIf(!hasTestDb)("attendance-plan seam", () => {
 		expect(rows).toHaveLength(0);
 	});
 
-	it("logs plan_set with the status in the detail", async () => {
+	it("logs plan_set with the status in the detail, attributed to the acting officer", async () => {
 		await setPlanStatus(testDb, {
 			memberId: club.memberId,
 			meetingId: club.meetingId,
@@ -148,10 +148,19 @@ describe.skipIf(!hasTestDb)("attendance-plan seam", () => {
 			via: "manual",
 		});
 		const [entry] = await testDb
-			.select({ action: activityLog.action, detail: activityLog.detail })
+			.select({
+				action: activityLog.action,
+				actorMemberId: activityLog.actorMemberId,
+				detail: activityLog.detail,
+			})
 			.from(activityLog)
 			.where(eq(activityLog.clubId, club.clubId));
 		expect(entry?.action).toBe("plan_set");
+		// Actor = the officer who acted; subject (detail.memberId) = the member
+		// whose plan changed. These must NOT collapse to the same thing — a
+		// regression that hardcoded or dropped actorMemberId would still pass an
+		// assertion that only looks at detail.
+		expect(entry?.actorMemberId).toBe(club.adminMemberId);
 		expect(entry?.detail).toMatchObject({
 			memberId: club.memberId,
 			status: "coming",
@@ -159,7 +168,7 @@ describe.skipIf(!hasTestDb)("attendance-plan seam", () => {
 		});
 	});
 
-	it("logs a clear as plan_set with a null status", async () => {
+	it("logs a clear as plan_set with a null status, attributed to the acting officer", async () => {
 		await clearPlanStatus(testDb, {
 			memberId: club.memberId,
 			meetingId: club.meetingId,
@@ -167,11 +176,41 @@ describe.skipIf(!hasTestDb)("attendance-plan seam", () => {
 			actorMemberId: club.adminMemberId,
 		});
 		const [entry] = await testDb
-			.select({ action: activityLog.action, detail: activityLog.detail })
+			.select({
+				action: activityLog.action,
+				actorMemberId: activityLog.actorMemberId,
+				detail: activityLog.detail,
+			})
 			.from(activityLog)
 			.where(eq(activityLog.clubId, club.clubId));
 		expect(entry?.action).toBe("plan_set");
+		expect(entry?.actorMemberId).toBe(club.adminMemberId);
 		expect(entry?.detail).toMatchObject({ status: null });
+	});
+
+	it("logs a null actor as null, not the subject — the impersonation path", async () => {
+		// actorMemberId: null is a decision, not an omission (see setPlanStatus's
+		// jsdoc): it's what an impersonated write resolves to before `logActivity`
+		// stamps the real superadmin via the request-scoped marker. Outside a
+		// request context (as in this test) that marker is unset, so the row
+		// should land with actor_member_id NULL rather than silently falling back
+		// to the subject member.
+		await setPlanStatus(testDb, {
+			memberId: club.memberId,
+			meetingId: club.meetingId,
+			clubId: club.clubId,
+			status: "not_coming",
+			actorMemberId: null,
+		});
+		const [entry] = await testDb
+			.select({
+				actorMemberId: activityLog.actorMemberId,
+				detail: activityLog.detail,
+			})
+			.from(activityLog)
+			.where(eq(activityLog.clubId, club.clubId));
+		expect(entry?.actorMemberId).toBe(null);
+		expect(entry?.detail).toMatchObject({ memberId: club.memberId });
 	});
 
 	it("listNotComingForMeetings returns ONLY not_coming rows", async () => {

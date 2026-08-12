@@ -1,6 +1,10 @@
 import { and, eq, inArray } from "drizzle-orm";
 import type { db } from "#/db";
-import { meetingAttendancePlan, members } from "#/db/schema";
+import {
+	attendancePlanStatusEnum,
+	meetingAttendancePlan,
+	members,
+} from "#/db/schema";
 import { logActivity } from "./activity";
 
 // Either the main db client or a drizzle transaction — so callers writing
@@ -10,7 +14,12 @@ type DbOrTx =
 	| typeof db
 	| Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
 
-export type AttendancePlanStatus = "reached_out" | "coming" | "not_coming";
+// DERIVED from the Postgres enum, never hand-listed — see the same warning in
+// `./activity.ts`. #510 hit exactly this from the other side: a hand-listed
+// union that duplicated `activity_action` drifted from the database, and only
+// `tsc` caught it once `vote_open`/`vote_close` were added to the enum.
+export type AttendancePlanStatus =
+	(typeof attendancePlanStatusEnum.enumValues)[number];
 
 /**
  * THE only module that reads or writes `meeting_attendance_plan`. Row absent =
