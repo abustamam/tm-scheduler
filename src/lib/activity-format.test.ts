@@ -267,6 +267,25 @@ describe("formatActivity", () => {
 			} as ActivityEntry;
 			expect(formatActivity(e).summary).toBe("said they can't make it");
 		});
+
+		// `entry.status` is `string | null` (loadActivity casts detail with no
+		// runtime validation — see activity-feed-logic.ts), so an unrecognized
+		// rung (e.g. a future ladder value not yet cased here) type-checks fine
+		// and must NOT fall into the null/"cleared" arm — that would say an
+		// officer cleared a row they actually just updated.
+		it("does not describe an unrecognized rung as a clear", () => {
+			const e = {
+				...base,
+				action: "plan_set",
+				actorName: "Dev Patel",
+				subjectName: "Ana Reyes",
+				status: "some_future_rung",
+			} as ActivityEntry;
+			expect(formatActivity(e).summary).not.toContain("cleared");
+			expect(formatActivity(e).summary).toBe(
+				"updated Ana Reyes's planned attendance",
+			);
+		});
 	});
 
 	it("formats meeting_edit variants from detail.change", () => {

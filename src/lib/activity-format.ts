@@ -75,11 +75,17 @@ export function formatActivity(entry: ActivityEntry): FormattedActivity {
 				case "reached_out":
 					summary = `reached out to ${entry.subjectName ?? "someone"}`;
 					break;
-				// null: cleared back to "no answer".
-				default:
+				case null:
 					summary = isOfficerForOther
 						? `cleared ${entry.subjectName}'s planned attendance`
 						: "cleared their planned attendance";
+					break;
+				default:
+					// Unrecognized rung (e.g. a future enum value not yet cased here) —
+					// say something true rather than mis-describing it as a clear.
+					summary = isOfficerForOther
+						? `updated ${entry.subjectName}'s planned attendance`
+						: "updated their planned attendance";
 			}
 			break;
 		}
