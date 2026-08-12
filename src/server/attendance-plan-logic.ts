@@ -102,6 +102,31 @@ export async function clearPlanStatus(
 	return { ok: true as const };
 }
 
+/**
+ * One member's rung for one meeting, or null for "no answer" (no row).
+ *
+ * Takes a `DbOrTx` like the writers so a caller inside a transaction reads its
+ * OWN uncommitted state — `markComingOnSelfClaim` runs inside the claim's
+ * transaction, and reading through the pool client there would see the world as
+ * it was before the claim and could act on it.
+ */
+export async function getPlanStatus(
+	database: DbOrTx,
+	args: { memberId: string; meetingId: string },
+): Promise<AttendancePlanStatus | null> {
+	const [row] = await database
+		.select({ status: meetingAttendancePlan.status })
+		.from(meetingAttendancePlan)
+		.where(
+			and(
+				eq(meetingAttendancePlan.memberId, args.memberId),
+				eq(meetingAttendancePlan.meetingId, args.meetingId),
+			),
+		)
+		.limit(1);
+	return row?.status ?? null;
+}
+
 /** Members marked `not_coming`, with names, for one meeting — ordered by name. */
 export async function listNotComingWithNames(
 	database: DbOrTx,

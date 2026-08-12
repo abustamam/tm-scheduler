@@ -76,16 +76,59 @@ describe("attendance-plan authz (D6)", () => {
 		it(`${fn} resolves the actor through the shared self-only gate`, () => {
 			expect(handlerBody(SRC, fn)).toContain("await resolveActor(");
 		});
+
+		it(`${fn} gates on the club's archived_at BEFORE any other check`, () => {
+			// The anonymous roster-pick identity is the dominant path here, so
+			// `requireMembership`'s archive check (#186) never runs for it (#555).
+			// Position matters as much as presence: run fourth, the membership and
+			// meeting-lock checks answer first and their differing errors make an
+			// archived club probeable — the existence oracle #544 exists to close.
+			const body = handlerBody(SRC, fn);
+			const archive = body.indexOf("assertClubNotArchived(meeting.clubId)");
+			expect(archive).toBeGreaterThan(-1);
+			for (const later of [
+				"assertMeetingNotLocked(",
+				"requireMemberInClub(",
+				"resolveActor(",
+			]) {
+				expect(
+					body.indexOf(later),
+					`${later} must not run before the archive gate`,
+				).toBeGreaterThan(archive);
+			}
+		});
 	}
 
 	it("rejects a member setting someone else's row", () => {
 		expect(SRC).toContain("throw new Error(SELF_ONLY_MESSAGE)");
 	});
 
-	it("gates the session-less path on the club's archived_at", () => {
-		// The anonymous roster-pick identity is the dominant path here, so
-		// `requireMembership`'s archive check (#186) never runs for it (#555).
-		expect(SRC).toContain("await assertClubNotArchived(args.clubId)");
+	it("lets only an officer record reaching out to someone", () => {
+		// The self-only arm admits the caller's own subject, and on the anonymous
+		// path that is ANY roster member (`claimedActorMemberId` defaults to the
+		// subject) — so without this an anonymous caller could mark someone else
+		// as already asked and get them skipped on the officer's outreach list.
+		expect(handlerBody(SRC, "setPlannedAttendance")).toContain(
+			'if (!viaOfficer && data.status === "reached_out")',
+		);
+	});
+
+	it("reports the officer branch rather than inferring it from a null actor", () => {
+		// A null actor means "impersonating superadmin" only because a read-only
+		// session falls through and is rejected below — an accident of ordering,
+		// not an invariant. So the branch is RETURNED by resolveActor, and the
+		// negative is scoped to the handler bodies, which is where a consumer
+		// would be tempted to re-derive it. (Module scope would false-FAIL on the
+		// prose above, which names the pattern to warn against it — the reason
+		// guard-source keeps negatives verbatim and positives comment-blind.)
+		expect(SRC).toContain("viaOfficer: true");
+		expect(SRC).toContain("viaOfficer: false");
+		for (const fn of HANDLERS) {
+			expect(
+				handlerBody(RAW, fn),
+				`${fn} must use the reported branch, not re-derive it from the actor id`,
+			).not.toContain("actorMemberId === null");
+		}
 	});
 
 	it("never reads the club from the request payload", () => {

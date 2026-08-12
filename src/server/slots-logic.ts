@@ -17,7 +17,7 @@ import {
 } from "#/lib/meeting-roles";
 import { normalizePresentationUrl } from "#/lib/presentation-url";
 import { logActivity } from "./activity";
-import { setPlanStatus } from "./attendance-plan-logic";
+import { getPlanStatus, setPlanStatus } from "./attendance-plan-logic";
 import { assertMeetingNotLocked } from "./meeting-authz-logic";
 import { resolveProjectDisplay } from "./project-picker-logic";
 
@@ -872,6 +872,13 @@ export async function reassignSlotSpeech(
  * information away — "no answer" and "coming" were the same absent row. The
  * ladder can hold the answer, so it does, and the planned-attendance panel
  * renders it (D6, 2026-08-11).
+ *
+ * Writes only when the answer actually CHANGES, which is what #211 was really
+ * about: claiming is the most common write in this product, and a member taking
+ * three roles in one meeting must not put three identical "said they're coming"
+ * rows in the feed. The equivalent guard does NOT belong in `setPlanStatus` —
+ * re-affirming "coming" through an explicit writer is a real user action worth
+ * logging; it is only the IMPLICIT answer inside a claim that is noise.
  */
 export async function markComingOnSelfClaim(
 	tx: DbOrTx,
@@ -884,6 +891,11 @@ export async function markComingOnSelfClaim(
 ): Promise<void> {
 	if (args.actorMemberId === null || args.memberId !== args.actorMemberId)
 		return;
+	const current = await getPlanStatus(tx, {
+		memberId: args.memberId,
+		meetingId: args.meetingId,
+	});
+	if (current === "coming") return;
 	await setPlanStatus(tx, {
 		memberId: args.memberId,
 		meetingId: args.meetingId,

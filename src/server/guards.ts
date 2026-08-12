@@ -24,6 +24,21 @@ import { getOpenOfficerPositions } from "./officers-logic";
 
 export type ClubRole = "admin" | "member";
 
+/**
+ * The two DENIAL messages the write guards throw, exported so a caller that has
+ * to tell a denial apart from an infrastructure failure compares against THIS
+ * string rather than a copy of it.
+ *
+ * `attendance-plan.ts` is that caller: it tries the officer path and falls
+ * through to a self-only one when the caller is not an admin here, and a bare
+ * `.catch(() => null)` would give a transient db error the same meaning as
+ * "you are not an admin" — silently demoting a real officer and answering a
+ * blip with a permission message. Anything NOT in this vocabulary is rethrown,
+ * so drift fails loudly instead of widening a fallback.
+ */
+export const NOT_A_MEMBER_MESSAGE = "You're not a member of this club.";
+export const NO_PERMISSION_MESSAGE = "You don't have permission to do that.";
+
 /** Raw session user (or null) for the current request. Server-only.
  *  Returns null when called outside a request context (e.g. integration tests
  *  or public server fns invoked without a session). */
@@ -181,7 +196,7 @@ async function requireReadWriteImpersonation(
 			impersonatedBy: userId,
 		};
 	}
-	throw new Error("You're not a member of this club.");
+	throw new Error(NOT_A_MEMBER_MESSAGE);
 }
 
 /** Any active member may view/claim. Rejects when the club is soft-archived
@@ -228,7 +243,7 @@ export async function requireClubRole(
 	) {
 		return membership;
 	}
-	throw new Error("You don't have permission to do that.");
+	throw new Error(NO_PERMISSION_MESSAGE);
 }
 
 /**

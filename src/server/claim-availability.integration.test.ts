@@ -155,6 +155,28 @@ describe.skipIf(!hasTestDb)("self-claim records the member as coming", () => {
 		expect(await planSetLogRows(seed.clubId, seed.meetingId)).toHaveLength(0);
 	});
 
+	it("a second self-claim in the same meeting logs nothing more", async () => {
+		const { markComingOnSelfClaim } = await import("./slots-logic");
+		// #211's real rule, kept: claiming is the most common write here, and a
+		// member taking three roles in one meeting must not put three identical
+		// "said they're coming" rows in the feed.
+		//
+		// Asserts the LOG COUNT, not the status. `expect(status).toBe("coming")`
+		// passes identically with and without the change-guard — the "empty-list
+		// guard is invisible to a result assertion" trap in CLAUDE.md — because
+		// the second write is an upsert to the value already there.
+		for (let i = 0; i < 2; i++) {
+			await markComingOnSelfClaim(testDb, {
+				memberId: seed.memberId,
+				actorMemberId: seed.memberId,
+				meetingId: seed.meetingId,
+				clubId: seed.clubId,
+			});
+		}
+		expect(await planStatus(seed.memberId, seed.meetingId)).toBe("coming");
+		expect(await planSetLogRows(seed.clubId, seed.meetingId)).toHaveLength(1);
+	});
+
 	it("self-claim with NO prior answer still records coming", async () => {
 		const { markComingOnSelfClaim } = await import("./slots-logic");
 		// DELIBERATE behaviour change (D6). The old code deleted the decline row

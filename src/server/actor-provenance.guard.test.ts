@@ -72,15 +72,22 @@ const serverDir = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_ACTOR_MODULES = new Set([
 	"slots.ts",
 	"availability.ts",
-	// D6 (2026-08-11): the planned-attendance ladder. NOT a new capability — it
-	// is `availability.ts`'s existing no-auth self-service write, widened from
-	// "not available" to the whole reached_out/coming/not_coming ladder, and the
-	// anonymous roster-pick identity is still the dominant path (there is no
-	// session to derive an actor from). The asserted actor is read only as
-	// `claimedActorMemberId`, and `resolveActor` additionally rejects anyone who
-	// resolves to somebody OTHER than the row's subject unless they are a real
-	// club admin. The entry is transitional: PR 2 repoints the panel here and
-	// deletes `availability.ts`, which takes this list back to two.
+	// D6 (2026-08-11): the planned-attendance ladder. It is here because this
+	// list INVENTORIES the session-less write endpoints, and
+	// `setPlannedAttendance` is a new one — that inventory is the control this
+	// guard actually provides.
+	//
+	// Be precise about what the payload field does here, because it is not what
+	// `availability.ts`'s reason says. It is currently INERT for attribution: no
+	// accepted write is credited differently for its presence, since the officer
+	// arm ignores it entirely and the self-only arm rejects anything that does
+	// not resolve to the subject. It earns its place by making an honest
+	// anonymous caller who asserts SOMEONE ELSE fail loudly, rather than having
+	// their write silently credited to the subject. Deleting the field would be
+	// a behaviour change, not a simplification.
+	//
+	// Transitional: PR 2 repoints the panel here and deletes `availability.ts`,
+	// which takes this list back to two.
 	"attendance-plan.ts",
 ]);
 

@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { activityLog, meetingAttendancePlan } from "#/db/schema";
 import {
 	clearPlanStatus,
+	getPlanStatus,
 	listNotComingForMeetings,
 	setPlanStatus,
 } from "#/server/attendance-plan-logic";
@@ -211,6 +212,49 @@ describe.skipIf(!hasTestDb)("attendance-plan seam", () => {
 			.where(eq(activityLog.clubId, club.clubId));
 		expect(entry?.actorMemberId).toBe(null);
 		expect(entry?.detail).toMatchObject({ memberId: club.memberId });
+	});
+
+	it("getPlanStatus returns null for no answer and the rung once set", async () => {
+		expect(
+			await getPlanStatus(testDb, {
+				memberId: club.memberId,
+				meetingId: club.meetingId,
+			}),
+		).toBe(null);
+		await setPlanStatus(testDb, {
+			memberId: club.memberId,
+			meetingId: club.meetingId,
+			clubId: club.clubId,
+			status: "not_coming",
+			actorMemberId: club.adminMemberId,
+		});
+		expect(
+			await getPlanStatus(testDb, {
+				memberId: club.memberId,
+				meetingId: club.meetingId,
+			}),
+		).toBe("not_coming");
+	});
+
+	it("getPlanStatus reads its own transaction's uncommitted write", async () => {
+		// It takes a DbOrTx for exactly this: `markComingOnSelfClaim` calls it
+		// inside the claim's transaction, and a read through the pool client there
+		// would see the world as it was before the claim.
+		await testDb.transaction(async (tx) => {
+			await setPlanStatus(tx, {
+				memberId: club.memberId,
+				meetingId: club.meetingId,
+				clubId: club.clubId,
+				status: "coming",
+				actorMemberId: club.memberId,
+			});
+			expect(
+				await getPlanStatus(tx, {
+					memberId: club.memberId,
+					meetingId: club.meetingId,
+				}),
+			).toBe("coming");
+		});
 	});
 
 	it("listNotComingForMeetings returns ONLY not_coming rows", async () => {

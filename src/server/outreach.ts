@@ -54,6 +54,14 @@ const contactedSchema = z.object({
  * impersonation session; `logActivity` attributes that case to the impersonating
  * superadmin automatically (via the request-scoped marker set by
  * `requireClubRole`), so passing it straight through as `actorMemberId` is safe.
+ *
+ * WIDER than it was: this used to INSERT into its own table, and it now upserts
+ * the one plan row, so ticking "contacted" on a member who is `not_coming`
+ * overwrites their decline. That is reachable through a stale list, not just in
+ * theory: the officer's page renders, the member declines from their phone, the
+ * officer ticks the checkbox that was already on screen, and the decline is
+ * gone. PR 2's panel replaces the checkbox with an explicit rung picker over
+ * live state.
  */
 export const setContacted = createServerFn({ method: "POST" })
 	.validator((i: unknown) => contactedSchema.parse(i))
