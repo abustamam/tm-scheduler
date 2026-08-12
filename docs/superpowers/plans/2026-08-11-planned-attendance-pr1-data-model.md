@@ -689,20 +689,6 @@ export async function clearPlanStatus(
 	return { ok: true as const };
 }
 
-/** Every plan row for one meeting. */
-export async function listPlanForMeeting(
-	database: DbOrTx,
-	meetingId: string,
-): Promise<{ memberId: string; status: AttendancePlanStatus }[]> {
-	return database
-		.select({
-			memberId: meetingAttendancePlan.memberId,
-			status: meetingAttendancePlan.status,
-		})
-		.from(meetingAttendancePlan)
-		.where(eq(meetingAttendancePlan.meetingId, meetingId));
-}
-
 /** Members marked `not_coming`, with names, for one meeting — ordered by name. */
 export async function listNotComingWithNames(
 	database: DbOrTx,
