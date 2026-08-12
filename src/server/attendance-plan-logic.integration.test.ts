@@ -12,6 +12,7 @@ import {
 	clearPlanStatus,
 	getPlanStatus,
 	listNotComingForMeetings,
+	listPlanForMeetings,
 	setPlanStatus,
 } from "#/server/attendance-plan-logic";
 import {
@@ -281,6 +282,19 @@ describe.skipIf(!hasTestDb)("attendance-plan seam", () => {
 	it("listNotComingForMeetings skips the round-trip on an empty id list", async () => {
 		const spy = vi.spyOn(testDb, "select");
 		const out = await listNotComingForMeetings(testDb, []);
+		expect(out).toEqual([]);
+		expect(spy).not.toHaveBeenCalled();
+		spy.mockRestore();
+	});
+
+	// Same shape, same reason: Drizzle compiles an empty `inArray` to `false`, so
+	// asserting the RESULT passes whether the guard runs or not. The observable
+	// the guard controls is the round-trip, so that is what gets asserted. The
+	// season grid calls this one unconditionally now — the `meetingIds.length`
+	// check that used to sit at the call site lives here instead.
+	it("listPlanForMeetings skips the round-trip on an empty id list", async () => {
+		const spy = vi.spyOn(testDb, "select");
+		const out = await listPlanForMeetings(testDb, []);
 		expect(out).toEqual([]);
 		expect(spy).not.toHaveBeenCalled();
 		spy.mockRestore();
