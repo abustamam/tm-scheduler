@@ -1316,6 +1316,8 @@ Replace step 3 of the merge (around line 136) — the `member_availability` de-d
 
 There is no separate `meeting_outreach` step to keep — one table, one step.
 
+**This suite is already RED and this step is what fixes it.** `membership-collapse-logic.integration.test.ts` (~line 591) carries an FK drift-guard: a hand-maintained `HANDLED` set of every `(table, column)` FK pointing at `members.id` that `collapseMemberships` re-points, asserted for exact equality against the live catalog, so a new FK "fails LOUDLY here — instead of silently cascade-deleting or orphaning that data on the next merge." Task 1 added `meeting_attendance_plan.member_id` and the guard has been failing ever since — correctly. Update the set: add `"meeting_attendance_plan.member_id"`, and remove `"member_availability.member_id"` and `"meeting_outreach.member_id"` **in Task 7**, when those tables are actually dropped, not here. The guard compares against the live database, so removing them early turns one red test into a differently-red test.
+
 - [ ] **Step 7: Run the suites to verify they pass**
 
 ```bash
