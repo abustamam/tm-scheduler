@@ -69,7 +69,20 @@ const serverDir = dirname(fileURLToPath(import.meta.url));
  * write endpoint — think hard before you do, and see the size assertion at the
  * bottom of this file.
  */
-const PUBLIC_ACTOR_MODULES = new Set(["slots.ts", "availability.ts"]);
+const PUBLIC_ACTOR_MODULES = new Set([
+	"slots.ts",
+	"availability.ts",
+	// D6 (2026-08-11): the planned-attendance ladder. NOT a new capability — it
+	// is `availability.ts`'s existing no-auth self-service write, widened from
+	// "not available" to the whole reached_out/coming/not_coming ladder, and the
+	// anonymous roster-pick identity is still the dominant path (there is no
+	// session to derive an actor from). The asserted actor is read only as
+	// `claimedActorMemberId`, and `resolveActor` additionally rejects anyone who
+	// resolves to somebody OTHER than the row's subject unless they are a real
+	// club admin. The entry is transitional: PR 2 repoints the panel here and
+	// deletes `availability.ts`, which takes this list back to two.
+	"attendance-plan.ts",
+]);
 
 /** Not an actor at all — a READ filter on the activity feed ("show me rows by
  *  this member"), already ANDed with the feed's own club. */
@@ -212,8 +225,9 @@ describe("activity_log actors are derived, not client-supplied (#396)", () => {
 		// and forces the change to be argued for in review. That review is also the
 		// real control on the shapes the regexes above cannot see (see the header)
 		// — a new no-auth write endpoint is the only way one of them lands.
-		expect(PUBLIC_ACTOR_MODULES.size).toBe(2);
+		expect(PUBLIC_ACTOR_MODULES.size).toBe(3);
 		expect([...PUBLIC_ACTOR_MODULES].sort()).toEqual([
+			"attendance-plan.ts",
 			"availability.ts",
 			"slots.ts",
 		]);

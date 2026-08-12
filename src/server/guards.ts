@@ -136,8 +136,15 @@ export type ResolvedMembership =
 	  };
 
 /** Reject when a club is soft-archived (ADR-0016 / #186) — archiving locks out
- *  every member and admin. Shared by the real and impersonated write paths. */
-async function assertClubNotArchived(clubId: string): Promise<void> {
+ *  every member and admin. Shared by the real and impersonated write paths.
+ *
+ *  EXPORTED for the session-less writers, which never reach `requireMembership`
+ *  and so never get this check for free: the anonymous roster-pick identity is
+ *  the dominant path in this product, and #555 records that an archived club
+ *  still accepts its writes. Import it from here rather than writing a second
+ *  copy — a duplicated archive check is how `isReadableClub` ended up
+ *  unreachable inside a logo module before #544 moved it. */
+export async function assertClubNotArchived(clubId: string): Promise<void> {
 	const [club] = await db
 		.select({ archivedAt: clubs.archivedAt })
 		.from(clubs)

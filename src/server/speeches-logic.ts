@@ -31,7 +31,7 @@ import {
 	speeches,
 } from "#/db/schema";
 import { logActivity } from "./activity";
-import { clearAvailabilityOnSelfClaim } from "./slots-logic";
+import { markComingOnSelfClaim } from "./slots-logic";
 
 // Either the main db client or a drizzle transaction — so these helpers can run
 // inside a caller's transaction and commit atomically with the slot change.
@@ -312,10 +312,9 @@ export async function attachSpeechToOpenSlot(
 
 	// Same self-only rule as claimSlot/reassignSlotCore (#212): scheduling a
 	// speech into an open slot for YOURSELF (actor === the speech owner's
-	// membership in this club) clears your own decline flag; an admin
-	// scheduling someone else's speech must not touch that member's absence
-	// statement.
-	await clearAvailabilityOnSelfClaim(conn, {
+	// membership in this club) records you as coming; an admin scheduling
+	// someone else's speech must not speak for that member.
+	await markComingOnSelfClaim(conn, {
 		memberId: membership.id,
 		actorMemberId: args.actorMemberId,
 		meetingId: slot.meetingId,

@@ -964,13 +964,18 @@ import {
 	clearPlanStatus,
 	setPlanStatus,
 } from "./attendance-plan-logic";
-import { assertClubNotArchived } from "./club-readable-logic";
-import { requireMemberInClub, requireUser } from "./guards";
+import {
+	assertClubNotArchived,
+	getSessionUser,
+	requireClubRole,
+	requireMemberInClub,
+} from "./guards";
 import { assertMeetingNotLocked } from "./meeting-authz-logic";
 import { requestWriteActor } from "./write-actor-logic";
 
-export const SELF_ONLY_MESSAGE =
-	"You can only change your own planned attendance.";
+// NOT exported: `server-modules.guard.test.ts` lets a server-fn module export
+// only `createServerFn`s and types.
+const SELF_ONLY_MESSAGE = "You can only change your own planned attendance.";
 
 /** Meeting status + OWNING club. The club comes from the meeting, never the
  *  payload (#396): gating on a client-supplied `clubId` would let an admin of
@@ -1011,8 +1016,13 @@ async function resolveActor(args: {
 	claimedActorMemberId?: string;
 }): Promise<string | null> {
 	await assertClubNotArchived(args.clubId);
-	const user = await requireUser().catch(() => null);
+	const user = await getSessionUser();
 	if (user) {
+		// Branch on whether the CALL succeeded, never on `membership.id` being
+		// truthy: `requireClubRole` already resolves the impersonation path, and a
+		// superadmin acting as admin comes back memberless with `id: null` (#246).
+		// `if (membership.id)` would drop that principal into the self-only branch
+		// below and reject the write.
 		const membership = await requireClubRole(user.id, args.clubId, [
 			"admin",
 		]).catch(() => null);
@@ -1069,7 +1079,12 @@ export const clearPlannedAttendance = createServerFn({ method: "POST" })
 	});
 ```
 
-Add `requireClubRole` to the `./guards` import. If `assertClubNotArchived` does not already exist in `src/server/club-readable-logic.ts`, add it there as a thin wrapper that throws when `clubs.archived_at` is non-null, and export it — the file already holds `isReadableClub` and friends.
+`assertClubNotArchived` ALREADY EXISTS, in `src/server/guards.ts` (~line 140) — correct, and already used by both authed write paths, but not exported. Export it there and import it from `./guards`. Do NOT add a second copy to `club-readable-logic.ts`: a duplicated archive check is how `isReadableClub` ended up unreachable inside a logo module before #544 moved it.
+
+Two guards this module trips that are not obvious from the code above:
+
+- `server-modules.guard.test.ts` — `SELF_ONLY_MESSAGE` must stay module-private (see the code block).
+- `actor-provenance.guard.test.ts` — `planSchema` declares `actorMemberId`, which rule 1 forbids outside `PUBLIC_ACTOR_MODULES`. That allowlist has a deliberate size assertion so widening it lands in review rather than silently. Add `"attendance-plan.ts"` with a stated reason and bump the assertion to 3 — PR 2 deletes `availability.ts` and takes it back to 2.
 
 - [ ] **Step 4: Run the authz test to verify it passes**
 
