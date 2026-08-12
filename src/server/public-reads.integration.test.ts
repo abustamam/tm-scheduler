@@ -17,15 +17,18 @@ import { and, asc, eq, gte, ne, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	clubs,
-	meetingOutreach,
+	meetingAttendancePlan,
 	meetings,
-	memberAvailability,
 	members,
 	people,
 	roleDefinitions,
 	roleSlots,
 	speeches,
 } from "#/db/schema";
+import {
+	listNotComingWithNames,
+	listReachedOutForMeeting,
+} from "#/server/attendance-plan-logic";
 import {
 	cleanup,
 	hasTestDb,
@@ -38,15 +41,22 @@ import {
 // Helpers — replicate the public query logic from meetings.ts using testDb
 // ---------------------------------------------------------------------------
 
-/** Mirror of loadMeetingDetail with no session (canManage=false). */
-async function getMeetingPublic(meetingId: string) {
+/**
+ * Mirror of loadMeetingDetail. Defaults to the no-session case (canManage =
+ * false); `opts.canManage` opens the officer branch so the admin-only
+ * contacted set is reachable from a test at all.
+ */
+async function getMeetingPublic(
+	meetingId: string,
+	opts: { canManage?: boolean } = {},
+) {
 	const meeting = await testDb.query.meetings.findFirst({
 		where: eq(meetings.id, meetingId),
 	});
 	if (!meeting) return null;
 
 	// No session → canManage = false (the optional-session branch)
-	const canManage = false;
+	const canManage = opts.canManage ?? false;
 
 	const club = await testDb.query.clubs.findFirst({
 		where: eq(clubs.id, meeting.clubId),
@@ -67,23 +77,20 @@ async function getMeetingPublic(meetingId: string) {
 		holderPreferredName: null as string | null,
 	}));
 
-	const unavailableMembers = await testDb
-		.select({ id: members.id, name: members.name })
-		.from(memberAvailability)
-		.innerJoin(members, eq(members.id, memberAvailability.memberId))
-		.where(eq(memberAvailability.meetingId, meetingId))
-		.orderBy(asc(members.name));
+	// These two call the REAL seam functions rather than re-writing their SQL.
+	// The rest of this file mirrors queries, which cannot catch a change in the
+	// module it mirrors; routing the planned-attendance reads through
+	// `attendance-plan-logic` means the `status = 'not_coming'` /
+	// `status = 'reached_out'` filters under test here are the same code
+	// `loadMeetingDetail` runs, so weakening one fails this suite.
+	const unavailableMembers = await listNotComingWithNames(testDb, meetingId);
 
 	// Contacted-for-this-meeting member ids (#340) — admin-only, same gate as
-	// roster. canManage is hardcoded false above (no-session mirror), so this
-	// always resolves to [] here, mirroring loadMeetingDetail's `canManage ? … : []`.
-	const contactedRows = canManage
-		? await testDb
-				.select({ memberId: meetingOutreach.memberId })
-				.from(meetingOutreach)
-				.where(eq(meetingOutreach.meetingId, meetingId))
+	// roster. canManage defaults to false (the no-session mirror), so this
+	// resolves to [] there, mirroring loadMeetingDetail's `canManage ? … : []`.
+	const contactedMemberIds = canManage
+		? await listReachedOutForMeeting(testDb, meetingId)
 		: [];
-	const contactedMemberIds = contactedRows.map((r) => r.memberId);
 
 	return {
 		meeting,
@@ -214,15 +221,41 @@ describe.skipIf(!hasTestDb)("public reads (no session)", () => {
 		expect(res?.unavailableMemberIds).toEqual([]);
 
 		// Member marks themselves Not Available for this meeting.
-		await testDb
-			.insert(memberAvailability)
-			.values({ memberId: seed.memberId, meetingId: seed.meetingId });
+		await testDb.insert(meetingAttendancePlan).values({
+			memberId: seed.memberId,
+			meetingId: seed.meetingId,
+			status: "not_coming",
+		});
 
 		res = await getMeetingPublic(seed.meetingId);
 		expect(res?.unavailableMembers).toEqual([
 			{ id: seed.memberId, name: "Member User" },
 		]);
 		expect(res?.unavailableMemberIds).toEqual([seed.memberId]);
+	});
+
+	// A plan row is no longer proof of absence: `coming` says the opposite and
+	// `reached_out` says only that someone asked. The meeting view's "who NOT to
+	// chase" list must contain neither, or the VPE skips the very member who
+	// just confirmed they would be there.
+	it("excludes a coming member from unavailableMembers", async () => {
+		await testDb.insert(meetingAttendancePlan).values([
+			{
+				memberId: seed.memberId,
+				meetingId: seed.meetingId,
+				status: "coming",
+			},
+			{
+				memberId: seed.adminMemberId,
+				meetingId: seed.meetingId,
+				status: "reached_out",
+			},
+		]);
+
+		const res = await getMeetingPublic(seed.meetingId, { canManage: true });
+		expect(res?.unavailableMembers).toEqual([]);
+		expect(res?.unavailableMemberIds).toEqual([]);
+		expect(res?.contactedMemberIds).toEqual([seed.adminMemberId]);
 	});
 
 	// Documents the public payload shape (no contact). NOTE: this asserts against
@@ -248,11 +281,13 @@ describe.skipIf(!hasTestDb)("public reads (no session)", () => {
 
 	// #340: contactedMemberIds is admin-only, same gate as roster/holder contact —
 	// it must never leak on the public/no-session payload, even when a
-	// meeting_outreach row exists for this meeting.
+	// reached_out plan row exists for this meeting.
 	it("contacted guard: the public (no-session) payload never includes contactedMemberIds", async () => {
-		await testDb
-			.insert(meetingOutreach)
-			.values({ memberId: seed.memberId, meetingId: seed.meetingId });
+		await testDb.insert(meetingAttendancePlan).values({
+			memberId: seed.memberId,
+			meetingId: seed.meetingId,
+			status: "reached_out",
+		});
 
 		const res = await getMeetingPublic(seed.meetingId);
 		expect(res?.contactedMemberIds).toEqual([]);

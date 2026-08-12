@@ -6,9 +6,7 @@ import { db } from "#/db";
 import {
 	clubs,
 	guests,
-	meetingOutreach,
 	meetings,
-	memberAvailability,
 	members,
 	roleDefinitions,
 	roleSlots,
@@ -24,6 +22,10 @@ import {
 } from "#/lib/meeting-url";
 import { officerPositionLabel } from "#/lib/officers";
 import { WOD_FIELDS, WOD_UPDATE_FIELDS } from "#/lib/wod-limits";
+import {
+	listNotComingWithNames,
+	listReachedOutForMeeting,
+} from "./attendance-plan-logic";
 import {
 	isReadableClubForMeeting,
 	isReadableClubForMember,
@@ -254,22 +256,15 @@ async function loadMeetingDetail(
 
 	// Members who've marked themselves Not Available for this meeting (with
 	// names, so the VPE can see who NOT to chase when filling open roles).
-	const unavailableMembers = await db
-		.select({ id: members.id, name: members.name })
-		.from(memberAvailability)
-		.innerJoin(members, eq(members.id, memberAvailability.memberId))
-		.where(eq(memberAvailability.meetingId, meetingId))
-		.orderBy(asc(members.name));
+	// `not_coming` only: a plan row is no longer proof of absence, and listing a
+	// member who just confirmed they are COMING is exactly backwards.
+	const unavailableMembers = await listNotComingWithNames(db, meetingId);
 
 	// Contacted-for-this-meeting member ids (#340). Admin-only — same gate as the
 	// roster; empty on the public/member view so it never leaks who was asked.
-	const contactedRows = canManage
-		? await db
-				.select({ memberId: meetingOutreach.memberId })
-				.from(meetingOutreach)
-				.where(eq(meetingOutreach.meetingId, meetingId))
+	const contactedMemberIds = canManage
+		? await listReachedOutForMeeting(db, meetingId)
 		: [];
-	const contactedMemberIds = contactedRows.map((r) => r.memberId);
 
 	// Roster for the VPE assign/recruit picker — active members with contact for
 	// tap-to-nudge (#37). Management-only: contact is never fetched for a public

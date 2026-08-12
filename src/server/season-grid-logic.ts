@@ -3,9 +3,7 @@ import { db } from "#/db";
 import {
 	clubs,
 	guests,
-	meetingOutreach,
 	meetings,
-	memberAvailability,
 	members,
 	roleDefinitions,
 	roleSlots,
@@ -13,6 +11,7 @@ import {
 } from "#/db/schema";
 import { buildRoleCounts, buildShortCodes, slotLabel } from "#/lib/agenda";
 import { urlKeysForMeetings } from "#/lib/meeting-url";
+import { listPlanForMeetings } from "./attendance-plan-logic";
 import { isReadableClub } from "./club-readable-logic";
 
 export type SeasonGridCount = 4 | 8 | "all";
@@ -279,26 +278,20 @@ export async function loadSeasonGrid(input: {
 		name: m.name,
 	}));
 
-	const unavailable = meetingIds.length
-		? await db
-				.select({
-					memberId: memberAvailability.memberId,
-					meetingId: memberAvailability.meetingId,
-				})
-				.from(memberAvailability)
-				.where(inArray(memberAvailability.meetingId, meetingIds))
+	// One round-trip for both partitions. Row presence is NOT the answer any
+	// more: `coming` is the opposite of unavailable and `reached_out` only says
+	// somebody asked, so each side names the status it means. The exported
+	// `unavailable` / `contacted` shapes are unchanged — `#/lib/season-grid-view`
+	// consumes them as they are.
+	const planRows = await listPlanForMeetings(db, meetingIds);
+	const unavailable = planRows
+		.filter((r) => r.status === "not_coming")
+		.map(({ memberId, meetingId }) => ({ memberId, meetingId }));
+	const contacted = input.includeOutreach
+		? planRows
+				.filter((r) => r.status === "reached_out")
+				.map(({ memberId, meetingId }) => ({ memberId, meetingId }))
 		: [];
-
-	const contacted =
-		input.includeOutreach && meetingIds.length
-			? await db
-					.select({
-						memberId: meetingOutreach.memberId,
-						meetingId: meetingOutreach.meetingId,
-					})
-					.from(meetingOutreach)
-					.where(inArray(meetingOutreach.meetingId, meetingIds))
-			: [];
 
 	// Guest name lookup for guest-held cells (#151). Guests are a distinct list —
 	// they never appear on the member axis, so this is separate from memberNames.

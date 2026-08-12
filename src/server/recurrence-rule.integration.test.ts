@@ -10,7 +10,7 @@
  */
 import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { meetings, roleSlots } from "#/db/schema";
+import { meetingAttendancePlan, meetings, roleSlots } from "#/db/schema";
 import { utcToZonedWallTime, zonedWallTimeToUtc } from "#/lib/datetime";
 import {
 	cleanup,
@@ -22,9 +22,8 @@ import {
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
-const { saveRecurrenceRule, getRecurrenceRule } = await import(
-	"./recurrence-rule-logic"
-);
+const { saveRecurrenceRule, getRecurrenceRule, findPristineEmptyMeetingIds } =
+	await import("./recurrence-rule-logic");
 
 const TZ = "America/Chicago";
 const NOW = new Date("2026-06-01T12:00:00Z");
@@ -171,6 +170,69 @@ describe.skipIf(!hasTestDb)(
 				.sort();
 			expect(afterIds).toEqual(beforeIds); // unchanged
 			expect((await getRecurrenceRule(club.clubId))?.enabled).toBe(false);
+		});
+
+		// "Touched" means someone put work into this meeting that a regenerate
+		// would destroy. Declining is that; answering "yes, I'll be there" or
+		// merely BEING ASKED is not — nobody has edited an agenda by answering a
+		// question, and a `coming` row that pinned a meeting in place would let
+		// one keen member freeze the whole schedule against a pattern edit.
+		describe("findPristineEmptyMeetingIds vs planned attendance", () => {
+			// `daysOut` is not decoration: `meetings` carries a unique
+			// (club_id, scheduled_at), so two fixtures on the same instant abort.
+			async function emptyMeeting(daysOut: number): Promise<string> {
+				const [m] = await testDb
+					.insert(meetings)
+					.values({
+						clubId: club.clubId,
+						scheduledAt: new Date(
+							NOW.getTime() + daysOut * 24 * 60 * 60 * 1000,
+						),
+						status: "scheduled",
+					})
+					.returning({ id: meetings.id });
+				if (!m) throw new Error("Failed to insert meeting");
+				return m.id;
+			}
+
+			it("a not_coming answer makes the meeting non-pristine", async () => {
+				const meetingId = await emptyMeeting(30);
+				expect(await findPristineEmptyMeetingIds([meetingId])).toEqual([
+					meetingId,
+				]);
+
+				await testDb.insert(meetingAttendancePlan).values({
+					memberId: club.memberId,
+					meetingId,
+					status: "not_coming",
+				});
+
+				expect(await findPristineEmptyMeetingIds([meetingId])).toEqual([]);
+			});
+
+			it("a coming or reached_out answer leaves the meeting pristine", async () => {
+				const comingId = await emptyMeeting(31);
+				const reachedOutId = await emptyMeeting(32);
+
+				await testDb.insert(meetingAttendancePlan).values([
+					{
+						memberId: club.memberId,
+						meetingId: comingId,
+						status: "coming",
+					},
+					{
+						memberId: club.memberId,
+						meetingId: reachedOutId,
+						status: "reached_out",
+					},
+				]);
+
+				const pristine = await findPristineEmptyMeetingIds([
+					comingId,
+					reachedOutId,
+				]);
+				expect(pristine.sort()).toEqual([comingId, reachedOutId].sort());
+			});
 		});
 	},
 );

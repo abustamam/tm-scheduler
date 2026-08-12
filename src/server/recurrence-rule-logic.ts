@@ -4,20 +4,15 @@
 // Saving a rule upserts it and tops the schedule up. Editing the PATTERN (the
 // fields that determine dates) reconciles: pristine-empty future meetings on
 // the OLD pattern are deleted and regenerated under the new rule. Meetings that
-// someone has touched (claimed slot, set content, marked availability) and
+// someone has touched (claimed slot, set content, said they're not coming) and
 // meetings off the old pattern (manual/one-off) are never deleted.
 import { and, eq, gt, inArray, isNotNull, or } from "drizzle-orm";
 import { db } from "#/db";
-import {
-	clubMeetingRecurrence,
-	clubs,
-	meetings,
-	memberAvailability,
-	roleSlots,
-} from "#/db/schema";
+import { clubMeetingRecurrence, clubs, meetings, roleSlots } from "#/db/schema";
 import { utcToZonedWallTime } from "#/lib/datetime";
 import { generateOccurrences } from "#/lib/meeting-recurrence";
 import { buildTopUpRecurrenceInput } from "#/lib/recurrence-rule";
+import { listNotComingForMeetings } from "./attendance-plan-logic";
 import { ensureScheduleToppedUp } from "./schedule-topup-logic";
 
 /** The rule shape the CRUD accepts (pre-normalization). */
@@ -70,8 +65,8 @@ function patternChanged(
 
 /**
  * Of the given meeting ids, which are pristine-empty — i.e. safe to reconcile:
- * `scheduled`, every content field blank, no claimed role slot, and no member
- * availability mark. (Attendance/awards/table-topics are post-meeting artifacts
+ * `scheduled`, every content field blank, no claimed role slot, and nobody
+ * planned NOT to come. (Attendance/awards/table-topics are post-meeting artifacts
  * a future meeting never carries.)
  */
 export async function findPristineEmptyMeetingIds(
@@ -107,11 +102,13 @@ export async function findPristineEmptyMeetingIds(
 		);
 	const claimedSet = new Set(claimed.map((c) => c.meetingId));
 
-	const avail = await db
-		.select({ meetingId: memberAvailability.meetingId })
-		.from(memberAvailability)
-		.where(inArray(memberAvailability.meetingId, meetingIds));
-	const availSet = new Set(avail.map((a) => a.meetingId));
+	// `not_coming` ONLY. Declining is a fact about this date that a regenerate
+	// would throw away; answering "I'll be there" or merely having been asked is
+	// not — nobody has edited an agenda by answering a question, and treating a
+	// `coming` row as a touch would let one keen member pin the whole schedule
+	// against a pattern edit.
+	const declined = await listNotComingForMeetings(db, meetingIds);
+	const declinedSet = new Set(declined.map((a) => a.meetingId));
 
 	return rows
 		.filter(
@@ -124,7 +121,7 @@ export async function findPristineEmptyMeetingIds(
 				!m.notes &&
 				!m.reminders &&
 				!claimedSet.has(m.id) &&
-				!availSet.has(m.id),
+				!declinedSet.has(m.id),
 		)
 		.map((m) => m.id);
 }

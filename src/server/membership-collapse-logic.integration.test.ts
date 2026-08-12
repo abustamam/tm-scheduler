@@ -1,6 +1,6 @@
 /**
  * DB-backed integration tests for `collapseMemberships` — the membership-merge
- * primitive that re-points all ten membership-scoped FKs onto a keeper and
+ * primitive that re-points every membership-scoped FK onto a keeper and
  * deletes the absorbed `members` row.
  *
  * Covers the required cases plus the trickier re-point paths:
@@ -15,21 +15,24 @@
  *      table_topics_speakers, and activity_log (actor + jsonb detail refs +
  *      member-target deletion) all move to the keeper.
  *   6. FK drift-guard: the DB's set of foreign keys referencing `members`
- *      exactly matches the 12 this primitive re-points.
+ *      exactly matches the set this primitive re-points. (Stated as a set, not
+ *      a count — the count went stale twice while the guard stayed correct.)
  *
  * Run with:
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test \
  *     bunx vitest run src/server/membership-collapse-logic.integration.test.ts
  */
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
 	clubActionItems,
 	duesPeriods,
 	meetingAttendance,
+	meetingAttendancePlan,
 	meetingAwards,
 	meetingOutreach,
+	meetings,
 	meetingVoteSessions,
 	meetingVotes,
 	memberAvailability,
@@ -323,6 +326,76 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 		expect(absorbedOutreach).toHaveLength(0);
 	});
 
+	it("re-points plan rows and drops the absorbed duplicate", async () => {
+		const keeperId = await addMembership({ name: "Keeper" });
+		const absorbedId = await addMembership({ name: "Absorbed" });
+		const [second] = await testDb
+			.insert(meetings)
+			.values({
+				clubId: seed.clubId,
+				scheduledAt: new Date(Date.now() + DAY),
+				status: "scheduled",
+			})
+			.returning({ id: meetings.id });
+		const secondMeetingId = second!.id;
+
+		await testDb.insert(meetingAttendancePlan).values([
+			// Collision on the seeded meeting: unique (member, meeting), so a plain
+			// re-point would raise a unique-violation and abort the whole merge.
+			{
+				memberId: keeperId,
+				meetingId: seed.meetingId,
+				status: "coming",
+			},
+			{
+				memberId: absorbedId,
+				meetingId: seed.meetingId,
+				status: "not_coming",
+			},
+			// NO keeper row on the second meeting. This one has to SURVIVE the
+			// merge by being re-pointed; the FK is ON DELETE CASCADE, so a merge
+			// that forgets this table destroys the answer instead of keeping it.
+			{
+				memberId: absorbedId,
+				meetingId: secondMeetingId,
+				status: "reached_out",
+			},
+		]);
+
+		await expect(collapse(keeperId, absorbedId)).resolves.toBeUndefined();
+
+		const rows = await testDb
+			.select({
+				memberId: meetingAttendancePlan.memberId,
+				meetingId: meetingAttendancePlan.meetingId,
+				status: meetingAttendancePlan.status,
+			})
+			.from(meetingAttendancePlan)
+			.where(
+				inArray(meetingAttendancePlan.meetingId, [
+					seed.meetingId,
+					secondMeetingId,
+				]),
+			);
+
+		expect(
+			[...rows].sort((a, b) => a.meetingId.localeCompare(b.meetingId)),
+		).toEqual(
+			[
+				{
+					memberId: keeperId,
+					meetingId: seed.meetingId,
+					status: "coming",
+				},
+				{
+					memberId: keeperId,
+					meetingId: secondMeetingId,
+					status: "reached_out",
+				},
+			].sort((a, b) => a.meetingId.localeCompare(b.meetingId)),
+		);
+	});
+
 	it("dedupes two OPEN terms for one position down to the earliest-started", async () => {
 		const keeperId = await addMembership({ name: "Keeper" });
 		const absorbedId = await addMembership({ name: "Absorbed" });
@@ -597,6 +670,11 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 			"member_dues.membership_id",
 			"member_availability.member_id",
 			"meeting_attendance.member_id",
+			// Planned attendance. Supersedes `member_availability` and
+			// `meeting_outreach`, which are still listed above because they are
+			// still IN the database — they leave this set when they are dropped,
+			// not before, since it is compared against the live catalog.
+			"meeting_attendance_plan.member_id",
 			"meeting_awards.member_id",
 			"meeting_outreach.member_id",
 			"notifications.assigned_member_id",
