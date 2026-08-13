@@ -878,3 +878,210 @@ describe("MeetingAgendaPrint — the scan-to-vote QR (#510)", () => {
 		});
 	}
 });
+
+// ---------------------------------------------------------------------------
+// Adjacent beats with the same presenter print as ONE block on the narrative
+// layouts. Both halves are asserted everywhere below — the name appears once
+// AND every clock stamp survives — because either alone is a test that cannot
+// fail the way this change can break. Counting names passes on a renderer that
+// dropped the extra beats entirely; counting stamps passes on the old renderer
+// that never merged anything.
+// ---------------------------------------------------------------------------
+describe("MeetingAgendaPrint consolidates adjacent same-presenter beats", () => {
+	/** The real MCF agenda's tail: a four-beat General Evaluator run, a hand-off,
+	 *  then the three-beat President close (#442/#352). */
+	const consecutiveRows: TimelineRow[] = [
+		{
+			who: "General Evaluator · Faisal",
+			roleKey: "general_evaluator",
+			detail: "Calls for the Timer's report · opens voting for Best Evaluator",
+			minutes: 1,
+			marks: null,
+			time: "7:34",
+		},
+		{
+			who: "General Evaluator · Faisal",
+			roleKey: "general_evaluator",
+			detail: "Evaluates the evaluators",
+			minutes: 2,
+			marks: { green: 2, yellow: 3, red: 4 },
+			time: "7:35",
+		},
+		{
+			who: "General Evaluator · Faisal",
+			roleKey: "general_evaluator",
+			detail: "Calls for the functionary reports",
+			minutes: 3,
+			marks: null,
+			time: "7:37",
+		},
+		{
+			who: "General Evaluator · Faisal",
+			roleKey: "general_evaluator",
+			detail: "Overall meeting evaluation · returns control",
+			minutes: 2,
+			marks: null,
+			time: "7:40",
+		},
+		{
+			who: "Toastmaster of the Day · Ali",
+			roleKey: "toastmaster_of_the_day",
+			detail: "Awards · hands over to the President",
+			minutes: 2,
+			marks: null,
+			time: "7:42",
+		},
+		{
+			who: "President",
+			detail: "Club business · announcements",
+			minutes: 2,
+			marks: null,
+			time: "7:44",
+		},
+		{
+			who: "President",
+			detail: "Guest Comments · invites our guests to share their thoughts",
+			minutes: 2,
+			marks: null,
+			time: "7:46",
+		},
+		{
+			who: "President",
+			detail: "Adjourns",
+			minutes: 1,
+			marks: null,
+			time: "7:48",
+		},
+	];
+
+	/** Every stamp in the fixture — none is a hand-off, so all eight must print
+	 *  however the beats are grouped. */
+	const ALL_STAMPS = [
+		"7:34",
+		"7:35",
+		"7:37",
+		"7:40",
+		"7:42",
+		"7:44",
+		"7:46",
+		"7:48",
+	];
+
+	function renderConsecutive(layout: AgendaLayout, rows = consecutiveRows) {
+		return render(
+			<MeetingAgendaPrint
+				layout={layout}
+				header={header}
+				// Deliberately NOT the presenters under test: the roster and the
+				// officer rail print names too, and a count of "President" on the page
+				// would otherwise be measuring those.
+				roles={[{ label: "Timer", name: "Lee P." }]}
+				officers={[]}
+				explainers={[]}
+				rows={rows}
+			/>,
+		);
+	}
+
+	const stampsIn = (container: HTMLElement) =>
+		Array.from(container.querySelectorAll("[data-row-time]")).map(
+			(el) => el.textContent,
+		);
+
+	/** What prints immediately beside each clock stamp, in page order.
+	 *
+	 *  Read through `data-row-time` rather than by searching the page for a name,
+	 *  because the roster, the officer rail and a hand-off band all print names
+	 *  too — a raw text count measures those as readily as the run of show, which
+	 *  is how the first version of this suite passed for the wrong reason. Every
+	 *  layout puts SOMETHING beside its stamp, so one helper reads all four. */
+	const besideStampsIn = (container: HTMLElement) =>
+		Array.from(container.querySelectorAll("[data-row-time]")).map(
+			(el) => el.nextElementSibling?.textContent,
+		);
+
+	/** How many times each presenter's name is printed beside a stamp.
+	 *
+	 *  This single table IS the change: the two narrative layouts collapse a run
+	 *  to one name, and grid/timing — which already put the name and the detail on
+	 *  one line, so merging would save no height — must keep printing it per beat.
+	 *  Expressing both as the same assertion is deliberate; a separate "grid is
+	 *  untouched" test written some other way would not fail if consolidation
+	 *  leaked into it in some shape this one does not describe. */
+	const NAMES_BESIDE_STAMPS = {
+		editorial: { president: 1, generalEvaluator: 1 },
+		spacious: { president: 1, generalEvaluator: 1 },
+		grid: { president: 3, generalEvaluator: 4 },
+		timing: { president: 3, generalEvaluator: 4 },
+	} as const;
+
+	for (const layout of ["editorial", "spacious", "grid", "timing"] as const) {
+		it(`${layout}: prints a repeated presenter's name ${NAMES_BESIDE_STAMPS[layout].president}× across 3 President beats`, () => {
+			const { container } = renderConsecutive(layout);
+			const beside = besideStampsIn(container);
+			const starting = (name: string) =>
+				beside.filter((t) => t?.startsWith(name)).length;
+			expect({
+				president: starting("President"),
+				generalEvaluator: starting("General Evaluator · Faisal"),
+			}).toEqual(NAMES_BESIDE_STAMPS[layout]);
+		});
+
+		it(`${layout}: keeps every beat's stamp, merged or not`, () => {
+			// The other half. Counting names alone passes on a renderer that dropped
+			// the extra beats outright, which is the failure this change could
+			// plausibly have: eight beats in, eight stamps out, on every layout.
+			const { container } = renderConsecutive(layout);
+			expect(stampsIn(container)).toEqual(ALL_STAMPS);
+		});
+
+		it(`${layout}: keeps every beat's own detail line`, () => {
+			renderConsecutive(layout);
+			// The merge drops the repeated NAME, never a beat. Each of the three
+			// President beats stays separately readable and separately timed.
+			for (const detail of [
+				"Club business · announcements",
+				"Guest Comments · invites our guests to share their thoughts",
+				"Adjourns",
+			]) {
+				expect(screen.getByText(detail)).toBeTruthy();
+			}
+		});
+	}
+
+	for (const layout of ["editorial", "spacious"] as const) {
+		it(`${layout}: a hand-off between two beats of one presenter breaks the block`, () => {
+			// The rule that makes the merge safe to read: an introduction is a real
+			// event, so the beats either side of one must not print as a single
+			// uninterrupted turn. Both names appear beside their own stamp again.
+			const { container } = renderConsecutive(layout, [
+				consecutiveRows[5],
+				{
+					who: "President",
+					detail: "Introduces the Toastmaster",
+					minutes: 0,
+					marks: null,
+					handoff: true,
+					time: "7:46",
+				},
+				consecutiveRows[6],
+			]);
+			expect(besideStampsIn(container)).toEqual(["President", "President"]);
+			expect(stampsIn(container)).toEqual(["7:44", "7:46"]);
+		});
+	}
+
+	it("editorial: moves a merged beat's timing trio onto that beat's own line", () => {
+		// The trio belongs to ONE beat. In a merged block it can no longer sit
+		// beside the name, so it moves to the beat's line — and this pins that it
+		// moved rather than got dropped, or worse, got attached to the beat that
+		// opens the block and mislabelled a different segment's timing.
+		const { container } = renderConsecutive("editorial");
+		const beside = besideStampsIn(container);
+		expect(beside[1]).toContain("Evaluates the evaluators");
+		expect(beside[1]).toContain("2:00");
+		expect(beside[1]).toContain("4:00");
+		// …and the 7:34 beat that opens the block carries no trio of its own.
+		expect(beside[0]).toBe("General Evaluator · Faisal");
+	});
+});
