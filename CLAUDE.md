@@ -87,17 +87,39 @@ tests vanish from the run and the pass count still reads green. A plain `bun run
 assertions that CI catches. `tm_test` is push-synced, so after a schema change run
 `DATABASE_URL=…tm_test bun run db:push --force` — that is the one database `db:push` is for.
 
-**The print page-count suite needs Chrome on `PATH`.**
+**The two browser-backed print suites need Chrome — set `CHROME_PATH` to run them on a Mac.**
 `src/components/agenda/print-page-count.test.tsx` renders each print surface, inlines the stylesheet
-the route serves, and drives headless Chrome (`--print-to-pdf`) to count the sheets it produces — the
-only gate here that can see print CSS at all. No new dependency: the harness
-(`src/test/print-page-count.ts`) shells out to `google-chrome` / `google-chrome-stable` / `chromium` /
-`chromium-browser`, whichever runs first. With none of them present those tests **skip locally**, so
-`bun run test` still works for someone without a browser; **in CI they fail** instead
-(`CI has no Chrome on PATH`), because a silently absent print gate reads exactly like a passing one —
-the same failure shape as the DB-backed suites above. `ubuntu-latest` ships Chrome, so CI needs no
-install step; the dependency is named in `.github/workflows/ci.yml` beside both `Test` steps so a
-runner-image change is diagnosable.
+the route serves, and drives headless Chrome (`--print-to-pdf`) to count the sheets it produces.
+`src/components/agenda/print-density.test.tsx` (v1.13.0.0) measures the natural height of the
+editorial sheet and asserts how large the body text actually PRINTS. These are the only gates here
+that can see print CSS at all, and they see different things: `FitPage` scales a sheet to fit, so the
+page count reports 1 whether the page is comfortable or crushed, and a change can make the club's
+agenda 20% less legible with every other gate green. Height is font size on those layouts.
+
+No new dependency: the harness (`src/test/print-page-count.ts`) runs `$CHROME_PATH` if set, else
+`google-chrome` / `google-chrome-stable` / `chromium` / `chromium-browser`, whichever runs first.
+With none present those tests **skip locally**, so `bun run test` still works for someone without a
+browser; **in CI they fail** instead (`CI has no Chrome on PATH`), because a silently absent print
+gate reads exactly like a passing one — the same failure shape as the DB-backed suites above.
+`ubuntu-latest` ships Chrome, so CI needs no install step; the dependency is named in
+`.github/workflows/ci.yml` beside both `Test` steps so a runner-image change is diagnosable.
+
+**On macOS both suites skip unless you set `CHROME_PATH`**, because Chrome installs as an `.app` and
+puts nothing on `PATH` under any of those four names — so every print assertion was verified only in
+CI. Do NOT "fix" this by hardcoding `/Applications/Google Chrome.app/...` in `CHROME_BINARIES`: that
+binary answers `--version` but never returns from `--print-to-pdf` under the agent sandbox, which
+turns an honest skip into 135s of `ETIMEDOUT`. A Playwright `chrome-headless-shell` works and returns
+in ~0.2s:
+
+```bash
+CHROME_PATH="$HOME/Library/Caches/ms-playwright/chromium_headless_shell-*/chrome-headless-shell-*/chrome-headless-shell" bun run test
+```
+
+Numbers measured through this harness are NOT comparable to the deployed page: it runs with
+`--host-resolver-rules=MAP * ~NOTFOUND`, so Fraunces and Manrope never load and the platform's
+substitute has its own metrics. That substitute also differs between macOS and CI's Ubuntu and moves
+where lines wrap, which is why the point floors in `src/lib/agenda-print-type.ts` carry a wide margin
+and the exact declared sizes are pinned by a separate assertion.
 
 **Read the lint gate with `--diagnostic-level=error`.** `src/db/seed.ts` carries ~118 pre-existing
 `noNonNullAssertion` warnings, which Biome does not fail on, so the tail of a `bun run check` run is
