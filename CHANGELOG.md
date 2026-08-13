@@ -2,7 +2,17 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
-## [1.12.0.0] - 2026-08-11
+## [1.13.0.0] - 2026-08-13
+
+### Changed
+
+- **The printed agenda no longer repeats a presenter's name down the page.** When the same person runs several beats back to back, they now print as one block: the name once, a line per beat, every clock time still there. On a real MCF agenda that is the General Evaluator's four-beat stretch and the President's three-beat close — six repeated name lines gone, and nothing about the meeting itself changed. A hand-off still splits the block in two, because being introduced is a real moment in the room and should not read as one uninterrupted turn.
+- **The Editorial agenda prints noticeably larger.** Body text goes from roughly 5.6pt to 6.9pt — about 23% bigger. Most of that is the space the repeated names were using: the Editorial layout shrinks itself to fit one sheet, so anything that makes the page taller makes the type smaller, and the reverse. The remainder is a deliberate size increase on top, sized by measuring the sheet rather than guessing.
+- **The Spacious layout gets the same treatment.** Its run-of-show page had been shrunk to about 70% to fit; with the repeated names gone it now fits with room to spare and prints at full size. The Grid and Timing layouts are untouched — they already put the name and the description on one line, so there was nothing to reclaim.
+
+### Fixed
+
+- **Print layout checks now run on a Mac.** The tests that catch print problems drive a real browser, and they were quietly skipping on macOS because the browser installs somewhere they did not look. They ran only on the build server. Setting `CHROME_PATH` now points them at any working browser.
 
 ### Changed
 

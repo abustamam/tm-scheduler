@@ -53,11 +53,7 @@ import {
 	measuredHeight,
 	printableDocument,
 } from "#/test/print-page-count";
-import {
-	type AgendaHeader,
-	type AgendaLayout,
-	MeetingAgendaPrint,
-} from "./meeting-agenda-print";
+import { type AgendaHeader, MeetingAgendaPrint } from "./meeting-agenda-print";
 import { PAGE_H, PRINT_PAGE_CSS } from "./print-theme";
 
 const header: AgendaHeader = {
@@ -299,10 +295,21 @@ const mcfRows: TimelineRow[] = [
 	},
 ];
 
-function agendaHeight(layout: AgendaLayout, rows: TimelineRow[]): number {
+/**
+ * The natural height of the editorial sheet for `rows`.
+ *
+ * Hardcodes the layout rather than taking it as a parameter, which is not
+ * incidental: `[data-fit-inner]` matches the FIRST sheet, and the two-page
+ * layouts (spacious, timing) put the run of show on the SECOND. A `layout`
+ * parameter here would let a future caller measure a cover page and get a
+ * confident, wrong, much smaller number — the exact silently-plausible failure
+ * this file exists to catch. Measuring those layouts needs an nth-sheet
+ * selector, so make that change deliberately rather than by passing an argument.
+ */
+function agendaHeight(rows: TimelineRow[]): number {
 	const html = renderToStaticMarkup(
 		<MeetingAgendaPrint
-			layout={layout}
+			layout="editorial"
 			header={header}
 			roles={roles}
 			officers={officers}
@@ -312,9 +319,6 @@ function agendaHeight(layout: AgendaLayout, rows: TimelineRow[]): number {
 	);
 	return measuredHeight(
 		printableDocument(PRINT_PAGE_CSS, html),
-		// The first sheet. `TwoPage` layouts emit two, and on those the run of show
-		// is the SECOND — measuring `[data-fit-inner]` unqualified would silently
-		// average nothing and report the cover page's height.
 		"[data-fit-inner]",
 	);
 }
@@ -343,7 +347,13 @@ describe("print density harness availability", () => {
  * it in the unit the complaint was made in ("this agenda is quite small").
  */
 function printedDetailPt(rows: TimelineRow[]): number {
-	const scale = (PAGE_H - 2) / agendaHeight("editorial", rows);
+	// Clamped at 1 because `FitPage` only ever SHRINKS — its effect is guarded by
+	// `if (h > PAGE_H)`, so a sheet that already fits is printed at its declared
+	// size with no transform at all. Without the clamp, a layout that got short
+	// enough to stop needing a scale would report type LARGER than it prints, and
+	// because this is a floor, that overstatement passes. A false pass in the one
+	// gate whose whole job is catching false passes.
+	const scale = Math.min(1, (PAGE_H - 2) / agendaHeight(rows));
 	return pxToPt(RUN_NARRATIVE_TYPE.sm.detail * scale);
 }
 
@@ -369,13 +379,38 @@ describe.skipIf(!hasChrome)("editorial agenda density", () => {
 		expect(RUN_NARRATIVE_TYPE.sm.name).toBeGreaterThanOrEqual(12.5);
 	});
 
+	it("refuses to measure a selector that matches nothing", () => {
+		// The guard every number in this file rests on. `measuredHeight` reads its
+		// result back out of `document.title`, so a selector that matched nothing
+		// could just as easily have returned 0 or the untouched title — and a 0
+		// computes an enormous `FitPage` scale that sails past every floor above.
+		// Renaming `data-fit-inner` has to fail loudly, not read as perfect
+		// legibility, so this pins the throw rather than trusting the shape.
+		const html = renderToStaticMarkup(
+			<MeetingAgendaPrint
+				layout="editorial"
+				header={header}
+				roles={roles}
+				officers={officers}
+				explainers={[]}
+				rows={mcfRows}
+			/>,
+		);
+		expect(() =>
+			measuredHeight(
+				printableDocument(PRINT_PAGE_CSS, html),
+				"[data-no-such-hook]",
+			),
+		).toThrow(/MISSING/);
+	});
+
 	it("measures a page taller than the sheet — so the floor is not vacuous", () => {
 		// `FitPage` only ever shrinks, so a measurement of 0 (a lost `data-fit-inner`
 		// hook, a component that started returning null) would compute an enormous
 		// scale and sail past the floor above as the most legible agenda ever
 		// printed. Same reasoning as the empty-document control that sits beside the
 		// page counts: a good-looking number is not proof of content.
-		expect(agendaHeight("editorial", mcfRows)).toBeGreaterThan(PAGE_H / 2);
+		expect(agendaHeight(mcfRows)).toBeGreaterThan(PAGE_H / 2);
 	});
 
 	// The axis a single fixture cannot see. Consolidation only pays where one
