@@ -34,9 +34,10 @@
 // every device a re-fetch to remove nothing. It stays at v3, and `activate`
 // instead purges the one takedown-sensitive thing in it: club crests.
 //
-// A third on-device copy is NOT this file's: `gavelup.auth-context.v1` in
-// localStorage holds the club switcher's names and club numbers. Its key is bumped
-// in the same release — see `src/lib/offline-auth-context.ts`.
+// A third on-device copy is NOT this file's: `gavelup.auth-context` in localStorage
+// holds the club switcher's names and club numbers. Its key is bumped in the same
+// release, v1 → v2, for the same one-time-clear reason the nav cache is — see
+// `src/lib/offline-auth-context.ts`, which is authoritative for the current value.
 
 const NAV_VERSION = "v4";
 const ASSET_VERSION = "v3";
@@ -165,9 +166,23 @@ function isGoneResponse(response) {
 	}
 }
 
-/** The meeting a cached nav URL belongs to, without its per-surface suffix. */
+/**
+ * The meeting a cached nav URL belongs to, without its per-surface suffix.
+ *
+ * Derived from the URL SHAPE — everything up to and including the meeting key —
+ * rather than by stripping a list of known surfaces. The list version stripped
+ * `/present|/print` and therefore missed `/word` and `/vote`, which
+ * `isOfflineRoute`'s `/^\/club\/[^/]+\/meeting\//` also caches: a takedown evicted
+ * the agenda and left the Word of the Day poster and the live ballot answering
+ * offline reloads. Any surface added under a meeting later is covered by
+ * construction, which a list can never be.
+ *
+ * A legacy `/meetings/<uuid>` URL matches nothing here and returns itself, which is
+ * right — it is its own key, not a surface of a club-scoped meeting path.
+ */
 function meetingPrefix(pathname) {
-	return pathname.replace(/\/(present|print)$/, "");
+	const meeting = pathname.match(/^(\/club\/[^/]+\/meeting\/[^/]+)/);
+	return meeting ? meeting[1] : pathname;
 }
 
 /**

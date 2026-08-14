@@ -381,17 +381,30 @@ describe("service worker takedown eviction (#556)", () => {
 		);
 	});
 
-	it("ignores a 404 that came from a redirect — a captive portal is not a takedown", async () => {
+	// Two INDEPENDENT narrowings, so two fixtures. One case setting both
+	// `redirected: true` and a foreign origin would pass with either guard deleted.
+	it("ignores a REDIRECTED 404 — a captive portal is not a takedown", async () => {
 		sw.nextFetch.push(response(200, "live agenda"));
 		await sw.dispatchFetch(request(MEETING));
 		const nav = sw.cacheFor("gavelup-nav-v4");
 
-		// Venue wifi bounces the request to a login page which answers 404.
+		// Venue wifi bounces the request to a login page. Same origin on the way back,
+		// so only the `redirected` flag separates this from a real takedown.
 		sw.nextFetch.push(
-			response(404, "portal", {
-				redirected: true,
-				url: "https://wifi.venue.example/login",
-			}),
+			response(404, "portal", { redirected: true, url: `${ORIGIN}${MEETING}` }),
+		);
+		await sw.dispatchFetch(request(MEETING));
+		expect([...nav.entries.values()]).toEqual(["live agenda"]);
+	});
+
+	it("ignores a 404 answered by another origin", async () => {
+		sw.nextFetch.push(response(200, "live agenda"));
+		await sw.dispatchFetch(request(MEETING));
+		const nav = sw.cacheFor("gavelup-nav-v4");
+
+		// Not flagged as redirected — only the origin says this did not come from us.
+		sw.nextFetch.push(
+			response(404, "portal", { url: "https://wifi.venue.example/login" }),
 		);
 		await sw.dispatchFetch(request(MEETING));
 		expect([...nav.entries.values()]).toEqual(["live agenda"]);
@@ -415,6 +428,40 @@ describe("service worker takedown eviction (#556)", () => {
 		// to ?layout=grid, so that is what a reload hits).
 		sw.nextFetch.push(response(404, "gone"));
 		await sw.dispatchFetch(request(`${MEETING}/print?layout=grid`));
+		expect(nav.entries.size).toBe(0);
+	});
+
+	it("evicts the Word of the Day and the live ballot too, not just the three obvious surfaces", async () => {
+		// `isOfflineRoute` caches ANYTHING under /club/<slug>/meeting/<key>/, and
+		// /word and /vote are real routes. The first version of `meetingPrefix`
+		// stripped a hardcoded /present|/print, so a takedown evicted the agenda and
+		// left the poster and the live ballot answering offline reloads — the fixture
+		// had been built from a code comment rather than from the route list.
+		sw.nextFetch.push(response(200, "agenda"));
+		await sw.dispatchFetch(request(MEETING));
+		sw.nextFetch.push(response(200, "word poster"));
+		await sw.dispatchFetch(request(`${MEETING}/word`));
+		sw.nextFetch.push(response(200, "live ballot"));
+		await sw.dispatchFetch(request(`${MEETING}/vote`));
+		const nav = sw.cacheFor("gavelup-nav-v4");
+		expect(nav.entries.size).toBe(3);
+
+		sw.nextFetch.push(response(404, "gone"));
+		await sw.dispatchFetch(request(MEETING));
+		expect(nav.entries.size).toBe(0);
+	});
+
+	it("evicts the legacy /meetings/<id> surface", async () => {
+		// Matched by `isOfflineRoute` and named in sw.js's header, previously driven by
+		// no test at all. It is its own cache key, not a surface of a club-scoped path.
+		const legacy = "/meetings/11111111-1111-1111-1111-111111111111";
+		sw.nextFetch.push(response(200, "legacy redirect page"));
+		await sw.dispatchFetch(request(legacy));
+		const nav = sw.cacheFor("gavelup-nav-v4");
+		expect(nav.entries.size).toBe(1);
+
+		sw.nextFetch.push(response(404, "gone"));
+		await sw.dispatchFetch(request(legacy));
 		expect(nav.entries.size).toBe(0);
 	});
 
