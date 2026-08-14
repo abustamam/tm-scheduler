@@ -55,6 +55,26 @@ describe("getAuthContext club list is archive-filtered (#560)", () => {
 		expect(seam).toContain("isNull(clubs.archivedAt)");
 	});
 
+	it("counts the archived memberships it hid, only when the list came back empty", () => {
+		// Without this, `myClubs.length === 0 ? await count… : 0` can be inverted to
+		// `> 0` — always 0 where it matters — and the whole archived-copy path dies
+		// with every gate green. The condition is also the cost control: it keeps the
+		// extra query off the ordinary app-shell load.
+		expect(SOURCE).toContain("countArchivedClubMemberships(user.id)");
+		expect(SOURCE).toMatch(/myClubs\.length === 0\s*\?/);
+		expect(SOURCE).toContain("archivedClubCount");
+	});
+
+	it("the shell passes the count to NoClubScreen as a boolean (#319 shape)", () => {
+		// A component tested through its props cannot see a WRONG prop, and this is
+		// that shape verbatim: `getAuthContext` is tested, `NoClubScreen` is tested,
+		// and the expression between them is the untested part. #319 shipped exactly
+		// here (`isMember={shell}`), so the repo's answer is a source guard on the JSX.
+		const shell = readSource(resolve(process.cwd(), "src/routes/_authed.tsx"));
+		expect(shell).toContain("archivedClubCount");
+		expect(shell).toMatch(/hasArchivedClub=\{archivedClubCount > 0\}/);
+	});
+
 	it("leaves the impersonation arm unfiltered, deliberately", () => {
 		// A superadmin's session must still resolve a club to act in, and the
 		// takedown is enforced at the gates rather than here. Pinned so a future

@@ -113,6 +113,19 @@ describe("minutes archive gate (#560)", () => {
 		expect(exportBody(SOURCE, "getMinutes")).toContain("isReadableClub(");
 	});
 
+	it("gates on the NEGATION — polarity, not just presence", () => {
+		// `toContain("isReadableClub(")` passes on the inverted gate
+		// (`if (await isReadableClub(clubId)) return empty;`), which serves archived
+		// clubs and withholds live ones — worse than no gate at all. Same for the PDF
+		// route below. Pin the `!`.
+		expect(exportBody(SOURCE, "getMinutes")).toMatch(
+			/if\s*\(!\(await isReadableClub\(/,
+		);
+		expect(readSource("src/routes/api/meetings.$id.minutes.pdf.ts")).toMatch(
+			/if\s*\(!\(await isReadableClub\(/,
+		);
+	});
+
 	it("gates BEFORE it resolves a membership or reads any minutes", () => {
 		const body = exportBody(SOURCE, "getMinutes");
 		const gateAt = body.indexOf("isReadableClub(");
