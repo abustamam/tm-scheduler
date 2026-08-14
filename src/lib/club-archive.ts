@@ -6,8 +6,10 @@
 /**
  * Whether a club is soft-archived (`archived_at` set). The single reusable
  * archive check. A soft-archived club is inaccessible everywhere except the
- * superadmin console — which includes a read-only impersonation session, the one
- * way the operator who took a club down can still look at it (#560).
+ * superadmin console ITSELF (`requireSuperadmin`) — NOT through impersonation,
+ * which `grantView` rejects like any other actor. An exemption for a read-only
+ * session was written into #560 and dropped: see `grantView` in `server/guards.ts`
+ * for the two reasons, both of which are what a caveat costs.
  *
  * THE canonical list of enforcement points. Other files point HERE rather than
  * restating it: this claim has now gone stale twice (#544, #560), and each restated

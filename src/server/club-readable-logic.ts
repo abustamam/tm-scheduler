@@ -12,7 +12,7 @@
  *     `assertClubNotArchived`, which THROWS. `requireClubRole` builds on it, so
  *     that one call covers every authed mutation.
  *   · AUTHED READS — `requireClubViewAccess` / `requireClubAdminView`, via
- *     `grantMemberView` in `guards.ts`. This bullet used to claim the write choke
+ *     `grantView` in `guards.ts`. This bullet used to claim the write choke
  *     point covered "every authed member/admin operation"; it does not, because
  *     the read gates resolve their own memberships and never call it. That
  *     sentence was load-bearing in the wrong direction — #560 is the same defect

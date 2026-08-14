@@ -122,3 +122,26 @@ superadmin actor, a **required reason**, a **15-minute** TTL, and **no new per-w
   today, but it's the boundary to watch.
 - Overhead on the write path is one `getRequest()` + `WeakMap` lookup per audited write (no extra
   session query).
+
+## Amendment — an archived club is readable by nobody, impersonation included (#560, 2026-08-14)
+
+Status: Accepted. §2's two read guards resolve their own memberships and never call
+`requireMembership`, so they never reached its `assertClubNotArchived`. ADR-0016 makes soft-archiving
+the platform **takedown** lever, and an archived club kept answering all 24 GET server fns behind
+these two gates — including the roster loaders carrying member email (#266) and phone (#559). Both
+gates now grant only through a private `grantView` in `guards.ts`, which asserts the archive state
+first for **every** arm.
+
+Every arm includes impersonation, which narrows this ADR: a read-only session no longer sees a club
+the platform has taken down. An exemption was drafted on the reasoning that the operator who took a
+club down should still be able to look at it, and dropped for two reasons. The superadmin console
+already hides "View as this club" for an archived club, so the exemption was unreachable through the
+product in the direction it was meant for. And because the member arm returns first, it was silently
+overridden for an operator who also held a plain membership — `requireClubViewAccess` threw while
+`requireClubAdminView`, whose two member arms a plain member falls through, reached the impersonation
+arm and granted. The weaker gate denied what the stronger one allowed, for the same person. Both
+cases are pinned in `impersonation.integration.test.ts`.
+
+`requireSuperadmin` (the console) is unaffected and remains the way to inspect an archived club. The
+canonical list of archive enforcement points is `isClubArchived` (`src/lib/club-archive.ts`); the
+takedown decision itself is ADR-0016.

@@ -135,20 +135,28 @@ because `getAuthContext` filtered memberships on `status = 'active'` alone; that
 `activeClubId`, so an archived club could still trigger `ensureScheduleToppedUp` and materialize new
 meetings into a club that had been taken down.
 
-Both read gates now grant only through `grantMemberView` in `guards.ts`, which asserts the archive
+Both read gates now grant only through `grantView` in `guards.ts`, which asserts the archive
 state first, and `authed-read-gate-archive.guard.test.ts` pins that funnel so a third read gate
 cannot be added without it. The check runs *after* the membership resolves, so a non-member still
 gets "you're not a member" and cannot use the archive message to probe whether a club exists.
+A third class of authed reader reaches neither gate — `getMinutes`, the minutes-PDF API route and
+`loadMyCommitments` resolve membership with a bare `getMembership` — so each calls a public seam
+(`isReadableClub` / an `archived_at` predicate) directly.
 
-One deliberate exemption: a superadmin's **read-only impersonation** session still reads an archived
-club. Archiving is "inaccessible everywhere except the superadmin console", and a read-only session
-is that console looking in; blinding it would leave unarchive → inspect → re-archive as the only way
-to answer a takedown appeal, and that round-trip re-exposes the club publicly in between. Nobody may
-*change* an archived club — `requireReadWriteImpersonation` already rejected one — but the operator
-may still *look*.
+**No exemption for impersonation.** `grantView` rejects on every arm, so a superadmin's read-only
+session reads an archived club no more than the club's own members do; `requireSuperadmin` — the
+console itself — stays the way to inspect a taken-down club, and ADR-0020 carries the amendment. An
+exemption for read-only impersonation *was* written into this fix and dropped, for two reasons worth
+recording: the console already hides "View as this club" for an archived club, so it was unreachable
+through the product in the direction it was meant for; and because the member arm returns first, it
+was silently overridden for an operator who also held a plain membership, which made
+`requireClubViewAccess` and `requireClubAdminView` answer OPPOSITELY for the same person.
+`impersonation.integration.test.ts` pins the single-actor case and the also-a-member case.
 
 The lesson repeats #544's exactly: the stale claim was a sentence naming ONE enforcement point,
-written when that was true and never re-derived. There are three.
+written when that was true and never re-derived. There are three, and `isClubArchived`
+(`src/lib/club-archive.ts`) is now the single place they are listed — this note points at it rather
+than becoming a fourth copy to rot.
 
 Still deferred: superadmin impersonation / ambient cross-club access ("act as", #185).
 

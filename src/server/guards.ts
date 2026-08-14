@@ -192,7 +192,7 @@ async function requireReadWriteImpersonation(
  *  it — but it is NOT the only authed one, and reading it as such is what #560
  *  was: the READ gates below (`requireClubViewAccess` / `requireClubAdminView`)
  *  resolve their own memberships and never reach here, so they carry the archive
- *  check themselves via `grantMemberView`. Three authed choke points, not one. A
+ *  check themselves via `grantView`. Three authed choke points, not one. A
  *  `read_write` impersonation session resolves to a memberless effective-admin
  *  here (#246); a `read_only` session does not (writes stay blind by construction). */
 export async function requireMembership(
