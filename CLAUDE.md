@@ -372,10 +372,10 @@ be wired to a gated seam or waived in `REVIEWED_UNGATED` with a stated reason.
 
 **Reads are closed at every point, but the enrollment sweep is not.** The public readers gate
 (#544), the two authed READ gates gate (#560), and so do the authed readers that reach NO point at
-all because they resolve membership with a bare `getMembership` — `minutes.ts`,
-`api/meetings.$id.minutes.pdf.ts` and `my-activity-logic.ts` each now call a public seam themselves
-(#560), since a reader that funnels through none of the three cannot be covered by fixing one of
-them. The service worker evicts a
+all because they resolve membership with a bare `getMembership`: `minutes.ts` and
+`api/meetings.$id.minutes.pdf.ts` call `isReadableClub` directly, and `my-activity-logic.ts` inlines
+the same `archived_at` predicate into `loadMyCommitments`' query (#560) — a reader that funnels
+through none of the three points cannot be covered by fixing one of them. The service worker evicts a
 taken-down club's pages and crest on a 404/410 (#556). What is NOT closed is the mechanism that
 catches the NEXT one: `public-readers-archive-gate.guard.test.ts` slices a server fn's body at a
 literal `\n});`, which every handler here overruns, so it swallowed the following non-exported
