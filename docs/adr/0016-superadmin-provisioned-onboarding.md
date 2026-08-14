@@ -120,8 +120,35 @@ existed. `public-readers-archive-gate.guard.test.ts` **derives** its candidate s
 next public reader is enrolled automatically rather than remembered — the allowlist that preceded
 it is exactly how this ADR's claim went stale.
 
-Reads only. An archived club still **accepts** anonymous writes (#555), and a service worker can
-still serve its cached agenda after takedown (#556).
+Reads only. An archived club still **accepts** anonymous writes (#555), and on-device copies outlive
+the takedown — closed for the service worker's caches by #556 below, still open for the logo
+endpoint's year-long `immutable` HTTP cache (#517).
+
+**Corrected 2026-08-14 (#560).** The "What archived blocks" bullet calls `requireMembership` "the
+single choke point `requireClubRole` also builds on". That was true of authed *writes* and false of
+authed *reads*. `requireClubViewAccess` and `requireClubAdminView` (#185 / ADR-0020) resolve their
+own memberships and never call `requireMembership`, so they never reached `assertClubNotArchived` —
+and 24 GET server fns sit behind them, including the roster loaders that carry member
+email (#266) and phone (#559). An archived club kept serving its own signed-in members their
+clubmates' contact details. Its name and Toastmasters club number also stayed in the club switcher,
+because `getAuthContext` filtered memberships on `status = 'active'` alone; that same list feeds
+`activeClubId`, so an archived club could still trigger `ensureScheduleToppedUp` and materialize new
+meetings into a club that had been taken down.
+
+Both read gates now grant only through `grantMemberView` in `guards.ts`, which asserts the archive
+state first, and `authed-read-gate-archive.guard.test.ts` pins that funnel so a third read gate
+cannot be added without it. The check runs *after* the membership resolves, so a non-member still
+gets "you're not a member" and cannot use the archive message to probe whether a club exists.
+
+One deliberate exemption: a superadmin's **read-only impersonation** session still reads an archived
+club. Archiving is "inaccessible everywhere except the superadmin console", and a read-only session
+is that console looking in; blinding it would leave unarchive → inspect → re-archive as the only way
+to answer a takedown appeal, and that round-trip re-exposes the club publicly in between. Nobody may
+*change* an archived club — `requireReadWriteImpersonation` already rejected one — but the operator
+may still *look*.
+
+The lesson repeats #544's exactly: the stale claim was a sentence naming ONE enforcement point,
+written when that was true and never re-derived. There are three.
 
 Still deferred: superadmin impersonation / ambient cross-club access ("act as", #185).
 

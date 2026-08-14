@@ -12,9 +12,12 @@ the nouns in `src/db/schema.ts`.
 
 - **Club** — a Toastmasters club (`clubs`). A person can belong to several (see ADR-0006). A club
   can be **soft-archived** by a superadmin (`clubs.archived_at`; NULL = active): a reversible flag
-  that blocks all reads — authed (`requireMembership` rejects) and public (every session-less
-  reader gates itself; see **Invariants**) — except the superadmin console, retaining every row and
-  keeping the slug reserved. Archiving is the platform **takedown** lever: it is how a club, and
+  that blocks all reads — authed writes (`requireMembership`), authed reads (`grantView`, behind
+  `requireClubViewAccess` / `requireClubAdminView`, which do NOT route through `requireMembership`
+  — #560) and public (every session-less reader gates itself; see **Invariants**) — except the
+  superadmin console, retaining every row and keeping the slug reserved. `isClubArchived`
+  (`src/lib/club-archive.ts`) carries the canonical list of enforcement points; this entry said
+  there was one until #560, which is how the read gates came to be missed. Archiving is the platform **takedown** lever: it is how a club, and
   with it the club's own name, roster and uploaded logo, comes off GavelUp (ADR-0024). Writes are
   not yet blocked (#555). See ADR-0016 / #186 / #544.
 - **Club logo** — one image a club uploads for itself (`club_logos`; at most one row per club,

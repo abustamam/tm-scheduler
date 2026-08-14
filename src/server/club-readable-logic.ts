@@ -6,11 +6,18 @@
  * logo/brand takedown path. A read path that ignores it defeats the mechanism
  * it was built for.
  *
- * There are two enforcement points, and they are not interchangeable:
+ * There are three enforcement points, and they are not interchangeable:
  *
- *   · AUTHED — `requireMembership` in `guards.ts` calls the private
- *     `assertClubNotArchived`, which THROWS. That one choke point covers every
- *     authed member/admin operation.
+ *   · AUTHED WRITES — `requireMembership` in `guards.ts` calls the private
+ *     `assertClubNotArchived`, which THROWS. `requireClubRole` builds on it, so
+ *     that one call covers every authed mutation.
+ *   · AUTHED READS — `requireClubViewAccess` / `requireClubAdminView`, via
+ *     `grantMemberView` in `guards.ts`. This bullet used to claim the write choke
+ *     point covered "every authed member/admin operation"; it does not, because
+ *     the read gates resolve their own memberships and never call it. That
+ *     sentence was load-bearing in the wrong direction — #560 is the same defect
+ *     as #544 one layer in, and this file's prose is where a reader would have
+ *     gone to check.
  *   · PUBLIC — this module. `createServerFn` endpoints are addressable directly
  *     without a session, so a route-level guard (the `/club/$clubId` shell's
  *     `beforeLoad` → `resolveClubOrRedirect`) is a guard on the CALLER, not on
