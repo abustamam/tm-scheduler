@@ -55,7 +55,7 @@ export type AuthDecision =
  * that already had a copy kept serving it offline, so the third on-device copy of
  * a taken-down club needed the same one-time clear as the service worker's two.
  */
-const STORAGE_KEY = "gavelup.auth-context.v2";
+export const STORAGE_KEY = "gavelup.auth-context.v2";
 
 /** Safe `localStorage` handle, or null when unavailable (SSR / privacy mode). */
 function storage(): Storage | null {

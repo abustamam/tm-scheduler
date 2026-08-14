@@ -6,6 +6,7 @@ import {
 	decideAuth,
 	persistAuthContext,
 	readCachedAuthContext,
+	STORAGE_KEY,
 } from "./offline-auth-context";
 
 // Vitest runs in the `node` environment (no DOM), so stub a minimal, in-memory
@@ -82,9 +83,37 @@ describe("offline-auth-context persistence", () => {
 	});
 
 	it("returns null for a corrupt / non-context payload", () => {
-		localStorage.setItem("gavelup.auth-context.v1", "{not json");
+		// The key must match STORAGE_KEY. When it drifted (v1 here, v2 in the module)
+		// both assertions still passed — but only because an unknown key reads as
+		// empty, which the test above already covers. The `JSON.parse` catch and the
+		// `isValidContext` rejection were executed by nothing and could both have been
+		// deleted with the suite green.
+		localStorage.setItem(STORAGE_KEY, "{not json");
 		expect(readCachedAuthContext()).toBeNull();
-		localStorage.setItem("gavelup.auth-context.v1", JSON.stringify({ foo: 1 }));
+		localStorage.setItem(STORAGE_KEY, JSON.stringify({ foo: 1 }));
+		expect(readCachedAuthContext()).toBeNull();
+	});
+
+	it("ignores a payload left under a superseded key (#560)", () => {
+		// Bumping STORAGE_KEY is the sweep that stops a device serving an archived
+		// club's name and number from before the takedown. Pins the bump itself: point
+		// the module back at v1 and this fails.
+		const v1Payload = JSON.stringify({
+			// `authUser`, not `user` — this must be a VALID context, or the test would
+			// pass on the shape check alone and prove nothing about the key.
+			authUser: { id: "u1", name: "Old", email: "old@test.example" },
+			clubs: [{ clubId: "c1", name: "Taken Down TM", clubRole: "member" }],
+			currentMemberId: null,
+			activeClubId: "c1",
+			isSuperadmin: false,
+		});
+		// Control: written under the CURRENT key it reads back, so the assertion below
+		// is about the key and nothing else.
+		localStorage.setItem(STORAGE_KEY, v1Payload);
+		expect(readCachedAuthContext()).not.toBeNull();
+
+		localStorage.clear();
+		localStorage.setItem("gavelup.auth-context.v1", v1Payload);
 		expect(readCachedAuthContext()).toBeNull();
 	});
 
