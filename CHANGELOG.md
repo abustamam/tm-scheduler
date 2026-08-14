@@ -2,6 +2,19 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.13.1.0] - 2026-08-14
+
+### Fixed
+
+- **Taking a club down now actually takes it down for its own members.** Archiving a club is how a club is removed from GavelUp, but its members could still open the roster and read every member's email and phone number, along with the minutes and their own upcoming commitments. The pages the public sees were closed in v1.11.1.0; the signed-in ones were not, and adding phone numbers to the roster in v1.12.0.0 widened what was on show. Every signed-in read of an archived club now comes back empty, including the minutes, the minutes PDF download, and the club's name and number in the club switcher.
+- **A taken-down club no longer keeps serving its agenda from your device.** Meeting pages are saved for offline use, and once a club was archived the server refused to send a fresh copy — which meant the old one was never replaced either. Any device that had opened that meeting could keep showing the full agenda, with assignee names, speech titles and the Word of the Day, indefinitely. Those copies are now discarded as soon as the device sees the club is gone, along with the club's crest.
+- **A member whose club was removed gets told what happened.** They used to land on "You're not in a club yet", with advice to check they had signed in with the email their club has on file — an account problem they could never fix, because the club was the thing that changed. The screen now says the club has been removed and points them at their club's officers.
+
+### Changed
+
+- **Everyone's saved offline meeting pages are cleared once, on the first visit after this release.** That is the only way to remove copies of a taken-down club that are already sitting on devices, and the worker cannot tell which saved page belongs to which club. Re-open any meeting while online to save it again. Nothing else is affected: the app's own files and images are left in place, so this costs one page load, not a full re-download.
+- **A superadmin can no longer view an archived club by acting as it.** Removing a club now means no club screen serves it to anyone; the superadmin console is the way to look at one. This matches what the console already did — it hides "View as this club" for an archived club — so the two no longer disagree.
+
 ## [1.13.0.1] - 2026-08-13
 
 ### Changed

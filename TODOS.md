@@ -25,6 +25,66 @@
 - The SSR mount-gate dance (`useState(false)` + `useEffect` + `detectPlatform(navigator)`) is duplicated between `whatsapp-phone-link.tsx` and `nudge-buttons.tsx`, including the `"mobile"` default that has to match the server render. A shared `usePlatform()` in `#/lib/platform` would give that reasoning one home. Deliberately not done at v1.12.0.0: measured at 5.4ms over 200 rows in jsdom, and hoisting `mounted` to the list re-renders the whole table instead of the leaves, so it is a readability change, not an optimization.
   **Priority:** P4
 
+## Archive takedown
+
+All five surfaced by the `/review` passes on #560/#556 and deliberately left out of that
+branch. The first is the most important: it is a security control that reports green while
+not working.
+
+- `public-readers-archive-gate.guard.test.ts` — the derived enrollment sweep #544 added so the
+  next ungated reader is caught automatically — has a body-slicing bug and does not catch it.
+  `serverFnBody` ends a declaration at `source.indexOf("\n});")`, but every handler in this repo
+  closes at one tab (`\t});`), so the slice overruns into the next non-exported helper. For
+  `getMinutes` it swallowed `gateAdmin`, matched THAT function's `requireUser`, and classified the
+  fn as session-guarded — which is exactly how the minutes leak fixed in #560 survived the guard,
+  with 54/54 reported green. Fix: end the slice at the next `/^export /m` rather than a `\n});`
+  literal, and add a vacuity assertion that no sliced body contains a column-0 `function` /
+  `const`. Expect the fix to enroll further readers; that is the point, but it is why it was not
+  done inside a security fix. Related and worth doing together: the sweep walks `src/server/*.ts`
+  only, so `src/routes/api/**` is enrolled by nothing — the minutes-PDF route was ungated for the
+  same reason and its sibling role-sheets route one directory over was not.
+  **Priority:** P1
+
+- The archive check costs an avoidable round-trip on every gated read. `grantView` →
+  `assertClubNotArchived` issues its own `SELECT archived_at FROM clubs`, while `getMembership` —
+  which both gates already call — joins `people` and `officer_terms` but not `clubs`. Measured with
+  `statementsDuring`: the gates go 1 → 2 statements and `/admin/vpe-dashboard` now spends 9
+  statements on pure authorization instead of 6 (three gated fns in one `Promise.all`). ~1ms per
+  gate on Railway. Fix is to add `.innerJoin(clubs, …)` + `archivedAt` to `getMembership`'s select
+  and `clubs.archivedAt` to its `groupBy` — EXPLAIN-verified that Postgres will not infer the
+  functional dependency across the join from `group by members.id` alone. Deferred because
+  `getMembership` is the hot path every authz guard shares and this was a security fix; do it on
+  its own with `readsOf(stmts, "clubs")` pinning the result.
+  **Priority:** P3
+
+- An impersonation session is not revoked when the superadmin is de-listed.
+  `getActiveImpersonation` / `getActiveImpersonationForUser` select on `superadminUserId`,
+  `endedAt` and `expiresAt` only, and never re-read `user.is_superadmin`; `reconcileSuperadminFlag`
+  runs on the SIGN-IN hook, so removing an email from `SUPERADMIN_EMAILS` leaves any open session
+  granting club reads for up to its 60-minute TTL. ADR-0016 records "revocation takes effect on
+  next sign-in" as an accepted MVP tradeoff, so this is a hardening, not a regression. One extra
+  predicate (`.innerJoin(user…)` + `eq(user.isSuperadmin, true)`) closes it.
+  **Priority:** P3
+
+- #556's eviction rests on an assumption nothing gates: that a `notFound()` in a route loader keeps
+  mapping to an HTTP **404**. Verified by hand against a dev server while writing the fix (meeting
+  page and `/present` 404; `/print` 307s to `?layout=grid` which 404s; the logo endpoint 404s), and
+  noted in `isGoneResponse` — but every sw test INJECTS the status, so they stay green either way.
+  If a TanStack Start upgrade made that a 200, `response.ok` flips true, the not-found page is
+  CACHED over the agenda, and the eviction silently never runs. A real gate needs an HTTP-level
+  assertion against a booted server, which this repo has no harness for.
+  **Priority:** P3
+
+- Archiving now has three different wire contracts for one domain event: `resolveClubOrRedirect`
+  throws `notFound()`, the public readers return `null`/`[]`, and the authed gates throw a raw
+  `Error` that crosses the RPC boundary as a 500-class rejection. `router.tsx` sets
+  `defaultNotFoundComponent` but no `defaultErrorComponent`, so a loader that reaches the throw
+  renders TanStack's unstyled "Something went wrong!" outside the app chrome. Narrow today — the
+  `/club/$clubId` shell 404s first for routes under it — so it bites routes that call a gated fn for
+  a club id without going through that shell, and only for a club archived mid-session. Pre-existing
+  in shape (`requireMembership` has thrown this since #186); #560 widened it from writes to reads.
+  **Priority:** P4
+
 ## Tooling
 
 - `bun run fix` writes the whole tree, and there is no scoped variant. Fine today (it is a verified no-op on a clean tree), but two things make a scoped one worth having before anyone wires it into a hook: `biome check --changed` hard-errors here because `biome.json`'s `vcs` block has no `defaultBranch`, and a `pre-commit` hook running the unscoped `fix` would sweep unrelated working-tree drift into the commit. `--staged` is verified working, so `"fix:staged": "biome check --write --staged"` plus `"defaultBranch": "main"` in the `vcs` block would close both.
