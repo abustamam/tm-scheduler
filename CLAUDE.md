@@ -105,11 +105,12 @@ gate reads exactly like a passing one — the same failure shape as the DB-backe
 `.github/workflows/ci.yml` beside both `Test` steps so a runner-image change is diagnosable.
 
 **On macOS both suites skip unless you set `CHROME_PATH`**, because Chrome installs as an `.app` and
-puts nothing on `PATH` under any of those four names — so every print assertion was verified only in
-CI. Do NOT "fix" this by hardcoding `/Applications/Google Chrome.app/...` in `CHROME_BINARIES`: that
-binary answers `--version` but never returns from `--print-to-pdf` under the agent sandbox, which
-turns an honest skip into 135s of `ETIMEDOUT`. A Playwright `chrome-headless-shell` works and returns
-in ~0.2s:
+puts nothing on `PATH` under any of those four names. This is a macOS-only gap: on Linux, where this
+repo is usually developed, `google-chrome` resolves and both gates run locally as normal. Do NOT
+"fix" it by hardcoding `/Applications/Google Chrome.app/...` in `CHROME_BINARIES` — that binary
+answers `--version`, so `findChrome` accepts it, but it never returns from `--print-to-pdf` under the
+agent sandbox, which turns an honest skip into 135s of `ETIMEDOUT`. A browser that is found but hangs
+is worse than one that is not found. A Playwright `chrome-headless-shell` works and returns in ~0.2s:
 
 ```bash
 CHROME_PATH="$HOME/Library/Caches/ms-playwright/chromium_headless_shell-*/chrome-headless-shell-*/chrome-headless-shell" bun run test

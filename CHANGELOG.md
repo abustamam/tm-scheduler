@@ -2,6 +2,12 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.13.0.1] - 2026-08-13
+
+### Changed
+
+- **Nothing user-facing.** Corrects a claim in the contributor docs that shipped with v1.13.0.0. The note about the print checks needing a browser said they had only ever run on the build server, which is wrong — it described a Mac, and this project is normally developed on Linux, where they run locally like any other test. Scoped to macOS now, along with the reason the obvious workaround makes things worse rather than better.
+
 ## [1.13.0.0] - 2026-08-13
 
 ### Changed
