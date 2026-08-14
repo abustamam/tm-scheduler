@@ -48,9 +48,6 @@
 
 ## Print & artifacts
 
-- Editorial wastes roughly 635px of its own sheet, and that space is the largest remaining lever on how big the agenda prints. Measured at v1.13.0.0 with `measuredHeight`: the main column (roster + run of show) is 1304px and sets the whole page, while the left rail (7 officers + meets + location + the full club mission + announcements) stops at 669px. Since `FitPage` scales the sheet to fit, every pixel the main column is taller than 1056 is type size taken away — so moving the Meeting Roles roster into the rail, or flowing the run of show into the space under it, converts empty paper directly into legibility. #562 deliberately stopped short: it is a redesign of the layout, not a tuning of it, and the consolidation plus a measured font bump already took body text from 5.59pt to 6.88pt. Worth an issue rather than a branch if it gets picked up.
-  **Priority:** P3
-
 - The canonical meeting page (`club.$clubId.meeting.$meetingId.tsx`) is the one logo-supplying loader with no test on its `logoUrl` wiring. v1.5.0.0 covered the two standalone public print routes after a coverage audit forced all four loaders to null and the whole suite stayed green; this one was left because the route imports enough that isolating it needs more mocking than the other two. Its only logo consumer is still the `.pptx` export, so the blast radius is one surface — but the path moved in v1.11.0.0 (#541): `PptxDownloadButton`'s `logoUrl` prop is gone and `downloadDeckPptx` reads the logo off the deck's title slide, so the untested seam is now loader → `buildSlideDeck` → title slide. Same seam, still untested.
   **Priority:** P4
 

@@ -22,18 +22,20 @@ import { join } from "node:path";
 /**
  * Binaries that can drive `--print-to-pdf`, most preferred first.
  *
- * Names only, deliberately. macOS installs Chrome as an .app that puts nothing
- * on `PATH`, so it is tempting to add
- * `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome` here and make
- * the gate run on the machine these agendas are designed on. Tried, reverted:
- * that binary launches but never returns under the agent sandbox this repo is
- * developed in, so `findChrome` starts succeeding and every measurement then
- * burns its full timeout — one `bun run test` went from an instant skip to 135
- * seconds of `ETIMEDOUT`, including the 60s warm-up. A browser that is found but
- * hangs is strictly worse than one that is not found: the skip is honest and
- * CI still fails on a missing browser (see the availability `describe` in
- * `print-page-count.test.tsx`), whereas the hang looks like a broken gate.
- * If you add a path here, verify a real `--print-to-pdf` RETURNS first.
+ * Names only, deliberately. These resolve on Linux, where this repo is usually
+ * developed, so the gates run locally there. macOS is the gap: Chrome installs
+ * as an .app that puts nothing on `PATH`, so it is tempting to add
+ * `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome` here. Tried,
+ * reverted: that binary answers `--version` but never returns from
+ * `--print-to-pdf` under the agent sandbox, so `findChrome` starts succeeding
+ * and every measurement then burns its full timeout — one `bun run test` went
+ * from an instant skip to 135 seconds of `ETIMEDOUT`, including the 60s
+ * warm-up. A browser that is found but hangs is strictly worse than one that is
+ * not found: the skip is honest and CI still fails on a missing browser (see the
+ * availability `describe` in `print-page-count.test.tsx`), whereas the hang looks
+ * like a broken gate. Set `CHROME_PATH` on a Mac instead (a Playwright
+ * `chrome-headless-shell` works); if you do add a path here, verify a real
+ * `--print-to-pdf` RETURNS first.
  */
 const CHROME_BINARIES = [
 	"google-chrome",
