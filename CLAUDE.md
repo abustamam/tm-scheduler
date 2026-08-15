@@ -248,7 +248,7 @@ Optional (platform superadmin): `SUPERADMIN_EMAILS` — a comma-separated, case-
 
 Schema is `src/db/schema.ts` — the full domain model (~35 tables): clubs,
 people/members (Person vs Membership, ADR-0008), officer_terms, meetings,
-role_definitions/role_slots (ADR-0005), member_availability, speeches
+role_definitions/role_slots (ADR-0005), meeting_attendance_plan, speeches
 (ADR-0009), the Pathways model (pathways_paths, path_enrollments,
 path_level_progress, pathways_projects, pathways_path_levels,
 bcm_project_progress — ADR-0011), sync_tokens, activity_log, club_logos (a
@@ -267,6 +267,25 @@ note above). CI fails if
 migrations (not `push`) so the migration files are exercised the same way prod runs them.
 `drizzle-orm` 0.45.1 has no built-in `bytea` type; `schema.ts` defines one once via `customType`
 (`export const bytea`, used by `club_logos.bytes`) — reuse that export, don't redefine it.
+
+**Planned attendance is ONE table with a status, read through ONE seam.**
+`meeting_attendance_plan` holds one row per (member, meeting) carrying
+`reached_out | coming | not_coming`; **row absent = "no answer"**. It replaced the two
+presence-means-true tables `member_availability` and `meeting_outreach`, which are dropped.
+Row presence is therefore no longer the answer: a consumer asking "who is unavailable?" must
+filter `status = 'not_coming'`, and one asking "who was contacted?" must filter
+`status = 'reached_out'` (the officer-only rung) — testing for a row now silently counts all
+three. `src/server/attendance-plan-logic.ts` is the seam: `getPlanStatus`,
+`listPlanForMeetings`, `listNotComingWithNames`, `listNotComingForMeetings`,
+`listReachedOutForMeeting`, `setPlanStatus`, `clearPlanStatus`. Add a function there rather
+than an inline query — the seam is where the archive gate, the officer-only `reached_out` rung
+and the actor attribution live, and an inline query bypasses all three while still
+typechecking. `attendance-plan-store.guard.test.ts` enforces both halves across `src/` **and**
+`scripts/`, matching the snake_case SQL name and the drizzle symbol alike (a raw
+`sql` template is invisible to typecheck): no file may name the two dropped tables, and no
+non-test source file outside the seam may name the plan table — `schema.ts` and
+`membership-collapse-logic.ts` (whose merge de-dups in raw SQL before re-pointing) are its only
+waivers.
 
 **Server modules must keep `pg` out of the client bundle.** A `src/server/*.ts` module that
 defines a `createServerFn` gets imported by client route files; the Start compiler strips the
