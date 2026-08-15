@@ -2,8 +2,12 @@ import { createServerFn } from "@tanstack/react-start";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
-import { meetings } from "#/db/schema";
-import { clearPlanStatus, setPlanStatus } from "./attendance-plan-logic";
+import { attendancePlanStatusEnum, meetings } from "#/db/schema";
+import {
+	clearPlanStatus,
+	SELF_SERVICE_RUNGS,
+	setPlanStatus,
+} from "./attendance-plan-logic";
 import {
 	assertClubNotArchived,
 	getSessionUser,
@@ -54,7 +58,12 @@ const planSchema = z.object({
 	 *  assertion, not proof — `resolveWriteActor` club-scopes it and a real
 	 *  session overrides it (#396). */
 	actorMemberId: z.string().uuid().optional(),
-	status: z.enum(["reached_out", "coming", "not_coming"]),
+	// DERIVED from the pgEnum, never hand-listed. A literal union here would be
+	// invisible to `tsc` — a narrower zod enum assigns cleanly into the wider
+	// `AttendancePlanStatus` parameter — so a fourth rung added to the database
+	// would be silently rejected by the only entry point that writes one. That is
+	// the drift #510 hit from the other side.
+	status: z.enum(attendancePlanStatusEnum.enumValues),
 	/** How the change happened. Recorded in activity_log.detail only. */
 	via: z.enum(["nudge", "manual"]).default("manual"),
 });
@@ -167,10 +176,7 @@ export const clearPlannedAttendance = createServerFn({ method: "POST" })
 		await assertClubNotArchived(meeting.clubId);
 		assertMeetingNotLocked(meeting.status);
 		await requireMemberInClub(data.memberId, meeting.clubId);
-		// Clearing is self-service by design: taking your own row back to "no
-		// answer" is the inverse of setting it, and only an officer can have put a
-		// `reached_out` there in the first place.
-		const { actorMemberId } = await resolveActor({
+		const { actorMemberId, viaOfficer } = await resolveActor({
 			clubId: meeting.clubId,
 			memberId: data.memberId,
 			claimedActorMemberId: data.actorMemberId,
@@ -180,5 +186,15 @@ export const clearPlannedAttendance = createServerFn({ method: "POST" })
 			meetingId: data.meetingId,
 			clubId: meeting.clubId,
 			actorMemberId,
+			// Clearing your OWN answer is self-service, but `reached_out` is not
+			// your answer — it is the officer's record of having asked, and before
+			// the consolidation deleting it required `requireUser()` +
+			// `requireClubRole(admin)` because it lived in its own table. The
+			// self-only arm is no barrier here: on the anonymous path
+			// `claimedActorMemberId` defaults to the subject, so actor === subject
+			// always holds and any roster member is reachable. Officers keep the
+			// unrestricted clear; everyone else may only take back a rung a member
+			// could have set.
+			onlyFrom: viaOfficer ? undefined : SELF_SERVICE_RUNGS,
 		});
 	});

@@ -1,4 +1,11 @@
 CREATE TYPE "public"."attendance_plan_status" AS ENUM('reached_out', 'coming', 'not_coming');--> statement-breakpoint
+-- `plan_set` must never be referenced by migration SQL, only by runtime code.
+-- drizzle applies ALL pending migrations inside ONE transaction, and Postgres
+-- refuses to USE an enum value added by an `ALTER TYPE` that has not committed.
+-- On prod this migration is long since committed so such a reference would
+-- succeed, but on any FRESH database — CI, a new Railway environment, a preview
+-- env — 0060 is still pending in the same transaction and it would fail with
+-- `unsafe use of new value "plan_set"`. That is a green-locally, red-on-CI trap.
 ALTER TYPE "public"."activity_action" ADD VALUE 'plan_set';--> statement-breakpoint
 CREATE TABLE "meeting_attendance_plan" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,

@@ -137,6 +137,9 @@ export interface MeetingAgendaProps {
 	/** Member ids already contacted for this meeting (#340). Admin-only; empty on
 	 *  the public/member view. */
 	contactedMemberIds: string[];
+	/** Member ids who answered "I'll be there". Admin-only; empty on the
+	 *  public/member view. Optional so existing fixtures need no update. */
+	comingMemberIds?: string[];
 	/** Mark/unmark a member contacted (#340). Manager surface only. */
 	onContacted?: (
 		memberId: string,
@@ -183,6 +186,7 @@ export function MeetingAgenda({
 	onMetaSaved,
 	requireIdentity,
 	contactedMemberIds,
+	comingMemberIds,
 	onContacted,
 	onUncontacted,
 }: MeetingAgendaProps) {
@@ -442,6 +446,7 @@ export function MeetingAgenda({
 					assignedIds={new Set(Object.keys(roleByMemberId))}
 					contactedIds={new Set(contactedMemberIds)}
 					unavailableIds={new Set(unavailableMemberIds)}
+					comingIds={new Set(comingMemberIds ?? [])}
 					onContacted={(id) => onContacted?.(id, "manual")}
 					onUncontacted={(id) => onUncontacted?.(id)}
 				/>

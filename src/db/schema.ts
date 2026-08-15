@@ -893,10 +893,16 @@ export const roleSlots = pgTable(
 // "she replied, she's coming". `not_coming` is now the ONLY encoding of
 // "unavailable", and the row's absence is the only encoding of "no answer" —
 // the distinction the pair could not draw. Reach this table through
-// `src/server/attendance-plan-logic.ts` and nowhere else: that seam owns the
-// archive gate, the officer-only `reached_out` rung and the actor attribution,
-// and `attendance-plan-store.guard.test.ts` fails on an inline query anywhere
-// but the membership merge.
+// `src/server/attendance-plan-logic.ts` and nowhere else, and
+// `attendance-plan-store.guard.test.ts` fails on an inline query anywhere but
+// the membership merge.
+//
+// What that seam owns is the actor attribution and the two status predicates
+// (`demoteFrom` / `onlyFrom`) that stop one rung silently overwriting another.
+// It does NOT own the archive gate or the officer-only `reached_out` rung —
+// those need a session, so they live in the callers. Routing a new write through
+// the seam therefore does not grant them; look at `attendance-plan.ts` for the
+// shape a gated caller has.
 // ---------------------------------------------------------------------------
 
 export const meetingAttendancePlan = pgTable(

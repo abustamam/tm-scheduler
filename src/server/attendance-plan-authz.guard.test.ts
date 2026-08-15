@@ -99,8 +99,25 @@ describe("attendance-plan authz (D6)", () => {
 		});
 	}
 
+	// Each of the next two rules is a CONDITION plus the THROW it reaches. Pin
+	// both halves of each, because pinning one leaves the other deletable while
+	// the suite stays green — and these two used to cover opposite halves, so
+	// between them every half was unguarded. A `toContain` on the throw alone
+	// passes with the comparison inverted or gone (the statement survives
+	// anywhere in the module, dead code included); a `toContain` on the
+	// condition alone passes with the body emptied to `{ /* allow */ }`.
 	it("rejects a member setting someone else's row", () => {
-		expect(SRC).toContain("throw new Error(SELF_ONLY_MESSAGE)");
+		const body = SRC.slice(SRC.indexOf("async function resolveActor"));
+		expect(
+			body,
+			"the comparison is the rule; without it any caller may name any subject",
+		).toContain("if (actor !== args.memberId)");
+		expect(
+			body,
+			"the comparison must REJECT — a condition with no throw is not a gate",
+		).toContain(
+			"if (actor !== args.memberId) throw new Error(SELF_ONLY_MESSAGE)",
+		);
 	});
 
 	it("lets only an officer record reaching out to someone", () => {
@@ -108,9 +125,30 @@ describe("attendance-plan authz (D6)", () => {
 		// path that is ANY roster member (`claimedActorMemberId` defaults to the
 		// subject) — so without this an anonymous caller could mark someone else
 		// as already asked and get them skipped on the officer's outreach list.
-		expect(handlerBody(SRC, "setPlannedAttendance")).toContain(
-			'if (!viaOfficer && data.status === "reached_out")',
-		);
+		const body = handlerBody(SRC, "setPlannedAttendance");
+		expect(body).toContain('if (!viaOfficer && data.status === "reached_out")');
+		expect(
+			body,
+			"the officer-only rung must THROW; an empty block passes a condition-only assertion",
+		).toContain("throw new Error(OFFICER_ONLY_REACHED_OUT_MESSAGE)");
+	});
+
+	it("never lets a session-less caller delete an officer's reached_out", () => {
+		// The clear path has no rung check of its own — it restricts the SEAM
+		// instead, which is the half that actually reaches the database. Deleting
+		// the officer's outreach record used to require `requireUser()` +
+		// `requireClubRole(admin)`; after the consolidation it is one row with the
+		// member's own answer, and this endpoint takes no session at all.
+		const body = handlerBody(SRC, "clearPlannedAttendance");
+		expect(
+			body,
+			"clearPlannedAttendance must resolve the officer branch — otherwise it " +
+				"cannot tell who is allowed to remove a `reached_out` row",
+		).toContain("viaOfficer");
+		expect(
+			body,
+			"the non-officer arm must be restricted to the self-service rungs",
+		).toContain("onlyFrom: viaOfficer ? undefined : SELF_SERVICE_RUNGS");
 	});
 
 	it("reports the officer branch rather than inferring it from a null actor", () => {

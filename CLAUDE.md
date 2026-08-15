@@ -325,10 +325,24 @@ filter `status = 'not_coming'`, and one asking "who was contacted?" must filter
 `status = 'reached_out'` (the officer-only rung) — testing for a row now silently counts all
 three. `src/server/attendance-plan-logic.ts` is the seam: `getPlanStatus`,
 `listPlanForMeetings`, `listNotComingWithNames`, `listNotComingForMeetings`,
-`listReachedOutForMeeting`, `setPlanStatus`, `clearPlanStatus`. Add a function there rather
-than an inline query — the seam is where the archive gate, the officer-only `reached_out` rung
-and the actor attribution live, and an inline query bypasses all three while still
-typechecking. `attendance-plan-store.guard.test.ts` enforces both halves across `src/` **and**
+`listReachedOutForMeeting`, `listComingForMeeting`, `setPlanStatus`, `clearPlanStatus`. Add a
+function there rather than an inline query — the seam is where the actor attribution and the
+two status predicates live, and an inline query bypasses both while still typechecking.
+
+**The seam does NOT carry the archive gate or the officer-only `reached_out` rung**, and
+reading it as if it did is how the consolidation nearly shipped an authorization regression.
+Both need a session, so both belong to the CALLER: `attendance-plan.ts` resolves an officer and
+gates on `clubs.archived_at`, and the public delegates in `availability.ts` do their own
+`assertClubNotArchived`. What the seam CAN enforce without a session is that one rung does not
+silently overwrite another, and it takes that from the caller too: `setPlanStatus`'s
+`demoteFrom` names the statuses a write may replace (`setContacted` passes `["reached_out"]`,
+so ticking "contacted" can never demote a real answer), and `clearPlanStatus`'s `onlyFrom`
+names the statuses a delete may remove (the session-less callers pass `SELF_SERVICE_RUNGS`, so
+anonymous callers cannot erase an officer's `reached_out` — which deleting a `meeting_outreach`
+row used to require an admin to do). Both are `setWhere`/`WHERE` predicates rather than a
+read-then-write, so they are also the de-dup and race fix for `markComingOnSelfClaim`.
+
+`attendance-plan-store.guard.test.ts` enforces both halves across `src/` **and**
 `scripts/`, matching the snake_case SQL name and the drizzle symbol alike (a raw
 `sql` template is invisible to typecheck): no file may name the two dropped tables, and no
 non-test source file outside the seam may name the plan table — `schema.ts` and

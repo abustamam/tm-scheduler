@@ -17,9 +17,16 @@ import { readSource } from "#/test/guard-source";
  * just a string.
  *
  * Guard 2 pins the SEAM: `meeting_attendance_plan` is reached only through
- * `attendance-plan-logic.ts`, so the archive gate, the officer-only
- * `reached_out` rung and the actor attribution live in exactly one place. An
- * inline query elsewhere would bypass all three and still typecheck.
+ * `attendance-plan-logic.ts`, so the actor attribution and the status predicates
+ * that stop one rung overwriting another (`demoteFrom` / `onlyFrom`) live in
+ * exactly one place. An inline query elsewhere would bypass both and still
+ * typecheck.
+ *
+ * It does NOT put the archive gate or the officer-only `reached_out` rung there
+ * — both need a session, so they belong to the callers. An earlier version of
+ * this comment claimed all three, which is worth more than a pedantic
+ * correction: that sentence is exactly what would persuade the next author that
+ * a new writer inherits an authorization check it never got.
  *
  * ## Why the two guards have DIFFERENT scopes
  *
@@ -55,6 +62,24 @@ const SEAM = "src/server/attendance-plan-logic.ts";
 const SELF = "src/server/attendance-plan-store.guard.test.ts";
 
 /**
+ * The ONE file allowed to name the dropped tables in live code.
+ *
+ * It executes `drizzle/0061_backfill_attendance_plan.sql` against real rows, so
+ * it has to recreate the two tables the backfill reads FROM — they are gone from
+ * `schema.ts`, which is the whole point, so there is no fixture that can make
+ * them. Waiving it is strictly better than the alternative it replaces: without
+ * that test the backfill is exercised only against an empty database (CI
+ * migrates from scratch; `tm_test` is push-synced and skips migrations), where
+ * both INSERTs copy zero rows and pass vacuously, while `0062` drops the sources
+ * in the same transaction so a wrong precedence is unrecoverable.
+ *
+ * Narrow on purpose: one path, not a directory or a pattern. The names are dead
+ * everywhere else, and this waiver does not make them less dead — that file
+ * CREATES the tables it names and drops them again in `afterEach`.
+ */
+const BACKFILL_TEST = "src/server/attendance-plan-backfill.integration.test.ts";
+
+/**
  * Both the SQL identifier and the drizzle export for each dropped table. The
  * pair matters: a raw `sql` template names the table in snake_case, a drizzle
  * query names the exported symbol, and the two are separate ways to reach the
@@ -87,7 +112,7 @@ const abs = (f: string) => join(ROOT, f.split("/").join(sep));
 describe("planned-attendance store", () => {
 	it("names no dropped table anywhere in src/ or scripts/", () => {
 		const offenders = FILES.filter((f) => {
-			if (f === SELF) return false;
+			if (f === SELF || f === BACKFILL_TEST) return false;
 			// Source RAW (the safe direction); tests comment-blind, so their prose
 			// history of the dropped tables stays legal. See the header.
 			const src = isTest(f) ? readSource(abs(f)) : readFileSync(abs(f), "utf8");
@@ -100,6 +125,25 @@ describe("planned-attendance store", () => {
 				"use `meeting_attendance_plan` via `attendance-plan-logic.ts` instead. " +
 				"(In a test file this fires on live code only — prose about the old tables is fine.)",
 		).toEqual([]);
+	});
+
+	// A waiver keyed on a path rots in one direction silently. RENAMING the file
+	// re-offends and fails loudly, which is fine — but DELETING it leaves a
+	// waiver for nothing, and the next reader sees an exemption implying the
+	// backfill is covered when it no longer is. Deleting the test must therefore
+	// fail here too, forcing the waiver out at the same time.
+	it("still waives a file that exists, and it still earns the waiver", () => {
+		expect(
+			FILES,
+			`${BACKFILL_TEST} is waived from the dropped-table guard, but no such ` +
+				"file exists. Either restore it or drop the waiver — an exemption " +
+				"for a deleted test reads as coverage that is not there.",
+		).toContain(BACKFILL_TEST);
+		// And it is waived because it EXECUTES the migration, not merely because it
+		// mentions the old names. If that stops being true the waiver is too wide.
+		expect(readFileSync(abs(BACKFILL_TEST), "utf8")).toContain(
+			"0061_backfill_attendance_plan.sql",
+		);
 	});
 
 	it("is reached only through the seam", () => {
@@ -122,9 +166,11 @@ describe("planned-attendance store", () => {
 			offenders,
 			"`meeting_attendance_plan` is reached only through the seam. Use " +
 				"`getPlanStatus` / `listPlanForMeetings` / `listNotComingWithNames` / " +
-				"`listNotComingForMeetings` / `listReachedOutForMeeting` / `setPlanStatus` / " +
+				"`listNotComingForMeetings` / `listReachedOutForMeeting` / " +
+				"`listComingForMeeting` / `setPlanStatus` / " +
 				`\`clearPlanStatus\`, or add a new function to ${SEAM} — an inline query ` +
-				"bypasses the archive gate and the officer-only `reached_out` rung.",
+				"bypasses the actor attribution and the `demoteFrom` / `onlyFrom` " +
+				"predicates that stop one rung overwriting another.",
 		).toEqual([]);
 	});
 });

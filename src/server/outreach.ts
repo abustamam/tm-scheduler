@@ -55,13 +55,18 @@ const contactedSchema = z.object({
  * superadmin automatically (via the request-scoped marker set by
  * `requireClubRole`), so passing it straight through as `actorMemberId` is safe.
  *
- * WIDER than it was: this used to INSERT into its own table, and it now upserts
- * the one plan row, so ticking "contacted" on a member who is `not_coming`
- * overwrites their decline. That is reachable through a stale list, not just in
- * theory: the officer's page renders, the member declines from their phone, the
- * officer ticks the checkbox that was already on screen, and the decline is
- * gone. PR 2's panel replaces the checkbox with an explicit rung picker over
- * live state.
+ * FLOOR-ONLY, via `demoteFrom: ["reached_out"]`. The tables were separate before
+ * the consolidation, so this write could not touch a member's own answer; now
+ * they share a row, and a plain upsert would let "contacted" overwrite ANY rung
+ * the member currently holds. That was reachable, not theoretical: the officer's
+ * page renders, the member answers from their phone, the officer ticks the
+ * checkbox that was already on screen. Two rungs could be lost that way and both
+ * mattered — a `not_coming` decline (which also drops them off the meeting
+ * page's Not Available list and the assign picker's warning, so the VPE hands
+ * them a role they already declined) and a `coming`, reachable by claiming a
+ * slot and then releasing it, since `releaseSlot` leaves the plan row alone.
+ * Enforcing it in the upsert's `setWhere` rather than by re-reading first also
+ * makes it immune to the race, which no amount of UI freshness would have been.
  */
 export const setContacted = createServerFn({ method: "POST" })
 	.validator((i: unknown) => contactedSchema.parse(i))
@@ -81,6 +86,7 @@ export const setContacted = createServerFn({ method: "POST" })
 			status: "reached_out",
 			actorMemberId: membership.id,
 			via: data.via,
+			demoteFrom: ["reached_out"],
 		});
 
 		return { ok: true as const };
@@ -89,13 +95,13 @@ export const setContacted = createServerFn({ method: "POST" })
 /**
  * Clear a member's "contacted" mark for a meeting (#340). Admin/VPE-only.
  *
- * WIDER than it was: this used to delete only the per-meeting "contacted"
- * row, dropped in this PR, and it now clears the whole plan row, so clearing
- * "contacted" on a member who is `not_coming` would wipe that answer too.
- * Unreachable through the UI — `deriveOutreach` never lists an unavailable
- * member, so no checkbox exists for them to uncheck — and PR 2 replaces this
- * fn with the panel's explicit rung picker. Stated here so the next reader
- * does not have to re-derive it.
+ * `onlyFrom: ["reached_out"]` keeps this exactly as narrow as it was before the
+ * consolidation. It used to delete a row in the separate "contacted" table, so
+ * it was structurally incapable of touching a member's own answer; against the
+ * merged row a status-blind delete would wipe a `not_coming` or `coming` too.
+ * Unticking "contacted" now means what it says — it removes the ask, and a rung
+ * the MEMBER put there is left alone rather than relying on the panel never
+ * offering the checkbox.
  */
 export const clearContacted = createServerFn({ method: "POST" })
 	.validator((i: unknown) => contactedSchema.parse(i))
@@ -113,6 +119,7 @@ export const clearContacted = createServerFn({ method: "POST" })
 			meetingId: data.meetingId,
 			clubId: meeting.clubId,
 			actorMemberId: membership.id,
+			onlyFrom: ["reached_out"],
 		});
 
 		return { ok: true as const };

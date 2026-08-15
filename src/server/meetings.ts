@@ -23,6 +23,7 @@ import {
 import { officerPositionLabel } from "#/lib/officers";
 import { WOD_FIELDS, WOD_UPDATE_FIELDS } from "#/lib/wod-limits";
 import {
+	listComingForMeeting,
 	listNotComingWithNames,
 	listReachedOutForMeeting,
 } from "./attendance-plan-logic";
@@ -254,16 +255,24 @@ async function loadMeetingDetail(
 		name: o.name ?? "Open",
 	}));
 
-	// Members who've marked themselves Not Available for this meeting (with
-	// names, so the VPE can see who NOT to chase when filling open roles).
-	// `not_coming` only: a plan row is no longer proof of absence, and listing a
-	// member who just confirmed they are COMING is exactly backwards.
+	// Members recorded `not_coming` for this meeting, by themselves or by an
+	// officer (with names, so the VPE can see who NOT to chase when filling open
+	// roles). `not_coming` only: a plan row is no longer proof of absence, and
+	// listing a member who just confirmed they are COMING is exactly backwards.
 	const unavailableMembers = await listNotComingWithNames(db, meetingId);
 
 	// Contacted-for-this-meeting member ids (#340). Admin-only — same gate as the
 	// roster; empty on the public/member view so it never leaks who was asked.
 	const contactedMemberIds = canManage
 		? await listReachedOutForMeeting(db, meetingId)
+		: [];
+
+	// Members who answered "I'll be there". Admin-only for the same reason as
+	// `contactedMemberIds`: it feeds the officer's outreach panel, which counts
+	// them out of the "still to ask" list rather than chasing someone who has
+	// already said yes.
+	const comingMemberIds = canManage
+		? await listComingForMeeting(db, meetingId)
 		: [];
 
 	// Roster for the VPE assign/recruit picker — active members with contact for
@@ -367,6 +376,7 @@ async function loadMeetingDetail(
 		unavailableMembers,
 		unavailableMemberIds: unavailableMembers.map((m) => m.id),
 		contactedMemberIds,
+		comingMemberIds,
 		roster,
 		clubGuests,
 		clubRoles,
