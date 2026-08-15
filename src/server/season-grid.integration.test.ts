@@ -7,9 +7,8 @@ import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	clubs,
-	meetingOutreach,
+	meetingAttendancePlan,
 	meetings,
-	memberAvailability,
 	members,
 	roleDefinitions,
 	roleSlots,
@@ -89,9 +88,10 @@ describe.skipIf(!hasTestDb)("loadSeasonGrid", () => {
 		]);
 
 		// member is NA for the past meeting
-		await testDb.insert(memberAvailability).values({
+		await testDb.insert(meetingAttendancePlan).values({
 			memberId: seed.memberId,
 			meetingId: pastMeeting!.id,
+			status: "not_coming",
 		});
 
 		const data = await loadSeasonGrid({ clubId: seed.clubId, count: 8 });
@@ -258,8 +258,12 @@ describe.skipIf(!hasTestDb)("loadSeasonGrid", () => {
 	it("includes the contacted set only when includeOutreach is set", async () => {
 		const { loadSeasonGrid } = await import("#/server/season-grid-logic");
 		await testDb
-			.insert(meetingOutreach)
-			.values({ memberId: seed.memberId, meetingId: seed.meetingId })
+			.insert(meetingAttendancePlan)
+			.values({
+				memberId: seed.memberId,
+				meetingId: seed.meetingId,
+				status: "reached_out",
+			})
 			.onConflictDoNothing();
 
 		const withFlag = await loadSeasonGrid({
@@ -276,13 +280,48 @@ describe.skipIf(!hasTestDb)("loadSeasonGrid", () => {
 		expect(withoutFlag.contacted).toEqual([]);
 	});
 
+	// The grid's `unavailable` used to mean "a row exists in member_availability",
+	// which was safe only while every row meant "not available". A plan row can
+	// now say the OPPOSITE, so presence is no longer the answer: a member who
+	// confirmed they are COMING must not be greyed out on their own sign-up
+	// sheet, and a member who has merely been ASKED is contacted, not unavailable.
+	it("treats only not_coming as unavailable", async () => {
+		const { loadSeasonGrid } = await import("#/server/season-grid-logic");
+		await testDb.insert(meetingAttendancePlan).values([
+			{
+				memberId: seed.memberId,
+				meetingId: seed.meetingId,
+				status: "coming",
+			},
+			{
+				memberId: seed.adminMemberId,
+				meetingId: seed.meetingId,
+				status: "reached_out",
+			},
+		]);
+
+		const data = await loadSeasonGrid({
+			clubId: seed.clubId,
+			count: 8,
+			includeOutreach: true,
+		});
+		expect(data.unavailable).toEqual([]);
+		expect(data.contacted).toEqual([
+			{ memberId: seed.adminMemberId, meetingId: seed.meetingId },
+		]);
+	});
+
 	it("public season grid never includes the contacted set", async () => {
 		const { loadPublicSeasonGrid } = await import("#/server/season-grid-logic");
 		// A contacted row exists for the seeded (member, meeting); the public
 		// loader must never surface it — who-was-contacted is officer-private.
 		await testDb
-			.insert(meetingOutreach)
-			.values({ memberId: seed.memberId, meetingId: seed.meetingId })
+			.insert(meetingAttendancePlan)
+			.values({
+				memberId: seed.memberId,
+				meetingId: seed.meetingId,
+				status: "reached_out",
+			})
 			.onConflictDoNothing();
 
 		const result = await loadPublicSeasonGrid({

@@ -18,8 +18,8 @@ import {
 	applyRemoveRoleSlot,
 	applyRemoveSpeakerSlot,
 	attachSpeechToSlot,
-	clearAvailabilityOnSelfClaim,
 	editSlotSpeech,
+	markComingOnSelfClaim,
 	reassignSlotCore,
 } from "./slots-logic";
 import {
@@ -106,7 +106,7 @@ export const claimSlot = createServerFn({ method: "POST" })
 				});
 			}
 
-			await clearAvailabilityOnSelfClaim(tx, {
+			await markComingOnSelfClaim(tx, {
 				memberId: data.memberId,
 				actorMemberId,
 				meetingId: slot.meetingId,

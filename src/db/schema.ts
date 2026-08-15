@@ -93,6 +93,9 @@ export const activityActionEnum = pgEnum("activity_action", [
 	"claim",
 	"release",
 	"reassign",
+	// LEGACY (2026-08-11): superseded by `plan_set` below, which covers the whole
+	// reached_out/coming/not_coming ladder. Kept — never remove — so historical
+	// activity_log rows written before the cutover keep rendering in the feed.
 	"availability_set",
 	"availability_clear",
 	"member_add",
@@ -118,6 +121,8 @@ export const activityActionEnum = pgEnum("activity_action", [
 	"club_logo_removed",
 	// Officer outreach tracking (#340): a member was marked "contacted" for a
 	// meeting (or the mark was cleared). `detail = { memberId, via }`.
+	// LEGACY (2026-08-11): superseded by `plan_set` below — kept for historical
+	// activity_log rows only.
 	"outreach_set",
 	"outreach_clear",
 	// Digital voting (#510): a vote window opened or closed. Deliberately NOT
@@ -126,6 +131,11 @@ export const activityActionEnum = pgEnum("activity_action", [
 	// record. `detail = { category }`.
 	"vote_open",
 	"vote_close",
+	// Planned attendance changed (spec 2026-08-11, D1). One action for every
+	// rung of the ladder; the rung is in the detail, not the action name.
+	// `detail = { memberId, status: "reached_out" | "coming" | "not_coming" | null, via }`
+	// where `status: null` means the row was cleared back to "no answer".
+	"plan_set",
 ]);
 
 // Impersonation session mode (ADR-0020 / #185, #246). `read_only` = "View as this
@@ -144,6 +154,19 @@ export const attendanceStatusEnum = pgEnum("attendance_status", [
 	"present",
 	"absent",
 	"excused",
+]);
+
+// Planned attendance for an UPCOMING meeting (D1 of the 2026-08-11 spec).
+// Replaces the two disconnected boolean tables dropped in this same PR — one
+// meaning "I asked them", one meaning "not available". Row ABSENT = "no
+// answer" — silence and a positive answer used to be indistinguishable, which
+// is why `coming` exists at all. Deliberately NOT `attendance_status`: that
+// one is the RECORD (present/absent/excused) written after the meeting, and a
+// plan must never be storable as a record. See `meeting_attendance` below.
+export const attendancePlanStatusEnum = pgEnum("attendance_plan_status", [
+	"reached_out",
+	"coming",
+	"not_coming",
 ]);
 
 // The three award/ribbon categories captured in the minutes (ADR-0014 / #152).
@@ -863,11 +886,27 @@ export const roleSlots = pgTable(
 );
 
 // ---------------------------------------------------------------------------
-// Member availability (presence = "Not Available" for that meeting)
+// Planned attendance — one row per (member, meeting) carrying where the outreach
+// got to. It SUPERSEDED, and this PR dropped, two single-boolean tables: one
+// whose row meant "not available" and one whose row meant "contacted". They
+// answered overlapping questions and could disagree, and neither could express
+// "she replied, she's coming". `not_coming` is now the ONLY encoding of
+// "unavailable", and the row's absence is the only encoding of "no answer" —
+// the distinction the pair could not draw. Reach this table through
+// `src/server/attendance-plan-logic.ts` and nowhere else, and
+// `attendance-plan-store.guard.test.ts` fails on an inline query anywhere but
+// the membership merge.
+//
+// What that seam owns is the actor attribution and the two status predicates
+// (`demoteFrom` / `onlyFrom`) that stop one rung silently overwriting another.
+// It does NOT own the archive gate or the officer-only `reached_out` rung —
+// those need a session, so they live in the callers. Routing a new write through
+// the seam therefore does not grant them; look at `attendance-plan.ts` for the
+// shape a gated caller has.
 // ---------------------------------------------------------------------------
 
-export const memberAvailability = pgTable(
-	"member_availability",
+export const meetingAttendancePlan = pgTable(
+	"meeting_attendance_plan",
 	{
 		id: uuid("id").defaultRandom().primaryKey(),
 		memberId: uuid("member_id")
@@ -876,42 +915,15 @@ export const memberAvailability = pgTable(
 		meetingId: uuid("meeting_id")
 			.notNull()
 			.references(() => meetings.id, { onDelete: "cascade" }),
+		status: attendancePlanStatusEnum("status").notNull(),
 		createdAt: timestamp("created_at").defaultNow().notNull(),
+		updatedAt: timestamp("updated_at").defaultNow().notNull(),
 	},
 	(t) => [
-		// Presence of a row = "Not Available" for that meeting. One per pair.
-		uniqueIndex("member_availability_unique").on(t.memberId, t.meetingId),
-		index("member_availability_meeting_idx").on(t.meetingId),
-	],
-);
-
-// ---------------------------------------------------------------------------
-// Meeting outreach (#340) — the officer's private "contacted" record. Presence
-// of a row = "this member was contacted about filling a role for this meeting".
-// A near-clone of member_availability: per-(member, meeting), one row per pair,
-// cascade on member/meeting delete. WHO marked it and HOW (nudge vs. manual)
-// live in activity_log.detail, not on the row — the row is a pure boolean.
-// Admin/VPE-only to read and write (never surfaced to members or the public).
-// ---------------------------------------------------------------------------
-
-export const meetingOutreach = pgTable(
-	"meeting_outreach",
-	{
-		id: uuid("id").defaultRandom().primaryKey(),
-		memberId: uuid("member_id")
-			.notNull()
-			.references(() => members.id, { onDelete: "cascade" }),
-		meetingId: uuid("meeting_id")
-			.notNull()
-			.references(() => meetings.id, { onDelete: "cascade" }),
-		// = "contacted at". No separate contactedAt column.
-		createdAt: timestamp("created_at").defaultNow().notNull(),
-	},
-	(t) => [
-		// Presence of a row = "contacted"; one per (member, meeting). Plain unique
-		// index so ON CONFLICT can infer it (idempotent mark).
-		uniqueIndex("meeting_outreach_unique").on(t.memberId, t.meetingId),
-		index("meeting_outreach_meeting_idx").on(t.meetingId),
+		// Plain unique index (not a composite PK) so ON CONFLICT can infer it as
+		// an arbiter for the upsert in `setPlanStatus`.
+		uniqueIndex("meeting_attendance_plan_unique").on(t.memberId, t.meetingId),
+		index("meeting_attendance_plan_meeting_idx").on(t.meetingId),
 	],
 );
 
@@ -1846,20 +1858,6 @@ export const speechesRelations = relations(speeches, ({ one, many }) => ({
 		references: [pathwaysProjects.id],
 	}),
 }));
-
-export const meetingOutreachRelations = relations(
-	meetingOutreach,
-	({ one }) => ({
-		member: one(members, {
-			fields: [meetingOutreach.memberId],
-			references: [members.id],
-		}),
-		meeting: one(meetings, {
-			fields: [meetingOutreach.meetingId],
-			references: [meetings.id],
-		}),
-	}),
-);
 
 export const notificationsRelations = relations(notifications, ({ one }) => ({
 	user: one(user, {

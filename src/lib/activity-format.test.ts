@@ -197,6 +197,97 @@ describe("formatActivity", () => {
 		expect(formatActivity(mk("member_remove")).summary).toMatch(/removed/i);
 	});
 
+	describe("plan_set", () => {
+		it("reads as self-service when the subject is the actor", () => {
+			const e = {
+				...base,
+				action: "plan_set",
+				actorName: "Ana Reyes",
+				subjectName: "Ana Reyes",
+				status: "coming",
+			} as ActivityEntry;
+			expect(formatActivity(e).summary).toBe("said they're coming");
+		});
+
+		it("names the subject when an officer sets it", () => {
+			const e = {
+				...base,
+				action: "plan_set",
+				actorName: "Dev Patel",
+				subjectName: "Ana Reyes",
+				status: "not_coming",
+			} as ActivityEntry;
+			expect(formatActivity(e).summary).toBe("marked Ana Reyes as not coming");
+		});
+
+		it("renders reached_out", () => {
+			const e = {
+				...base,
+				action: "plan_set",
+				actorName: "Dev Patel",
+				subjectName: "Ana Reyes",
+				status: "reached_out",
+			} as ActivityEntry;
+			expect(formatActivity(e).summary).toBe("reached out to Ana Reyes");
+		});
+
+		it("renders a cleared plan", () => {
+			const e = {
+				...base,
+				action: "plan_set",
+				actorName: "Dev Patel",
+				subjectName: "Ana Reyes",
+				status: null,
+			} as ActivityEntry;
+			expect(formatActivity(e).summary).toBe(
+				"cleared Ana Reyes's planned attendance",
+			);
+		});
+
+		it("reads as self-service when clearing your own plan", () => {
+			const e = {
+				...base,
+				action: "plan_set",
+				actorName: "Ana Reyes",
+				subjectName: "Ana Reyes",
+				status: null,
+			} as ActivityEntry;
+			expect(formatActivity(e).summary).toBe(
+				"cleared their planned attendance",
+			);
+		});
+
+		it("reads as self-service when marking yourself not coming", () => {
+			const e = {
+				...base,
+				action: "plan_set",
+				actorName: "Ana Reyes",
+				subjectName: "Ana Reyes",
+				status: "not_coming",
+			} as ActivityEntry;
+			expect(formatActivity(e).summary).toBe("said they can't make it");
+		});
+
+		// `entry.status` is `string | null` (loadActivity casts detail with no
+		// runtime validation — see activity-feed-logic.ts), so an unrecognized
+		// rung (e.g. a future ladder value not yet cased here) type-checks fine
+		// and must NOT fall into the null/"cleared" arm — that would say an
+		// officer cleared a row they actually just updated.
+		it("does not describe an unrecognized rung as a clear", () => {
+			const e = {
+				...base,
+				action: "plan_set",
+				actorName: "Dev Patel",
+				subjectName: "Ana Reyes",
+				status: "some_future_rung",
+			} as ActivityEntry;
+			expect(formatActivity(e).summary).not.toContain("cleared");
+			expect(formatActivity(e).summary).toBe(
+				"updated Ana Reyes's planned attendance",
+			);
+		});
+	});
+
 	it("formats meeting_edit variants from detail.change", () => {
 		const meetingBase = {
 			id: "1",
@@ -210,6 +301,7 @@ describe("formatActivity", () => {
 			subjectName: null,
 			fromName: null,
 			change: null,
+			status: null,
 		} satisfies ActivityEntry;
 		expect(
 			formatActivity({ ...meetingBase, change: "speaker_added" }).summary,

@@ -8,6 +8,7 @@ export interface OutreachMember {
 export interface OutreachBuckets {
 	assignedCount: number;
 	unavailableCount: number;
+	comingCount: number;
 	contacted: OutreachMember[];
 	notContacted: OutreachMember[];
 }
@@ -21,19 +22,33 @@ export interface OutreachBuckets {
  * chase contradicts the section directly above. They are counted, not dropped,
  * so the header still accounts for every active member. Pure.
  *
- * Bucket precedence is assigned → unavailable → contacted/not, so nobody is
- * counted twice: someone assigned a role has answered regardless of the flag.
+ * Members who answered "I'll be there" without holding a role are counted too,
+ * for the same reason: the strongest answer in the system must not put someone
+ * in the "still to ask" list. That bucket only became reachable when the three
+ * former booleans became one status — a `coming` member matches neither
+ * `unavailableIds` (`not_coming` only) nor `contactedIds` (`reached_out` only),
+ * so before this they fell through to `notContacted` and got chased. It is
+ * reachable without the new write surface: self-claiming records `coming`, and
+ * `releaseSlot` leaves the plan row alone, so claim-then-release lands exactly
+ * here.
+ *
+ * Bucket precedence is assigned → unavailable → coming → contacted/not, so
+ * nobody is counted twice: someone assigned a role has answered regardless of
+ * the flag. The three status buckets are mutually exclusive at the database
+ * level (one row, one status), so their relative order is belt-and-braces.
  */
 export function deriveOutreach(input: {
 	roster: OutreachMember[];
 	assignedIds: ReadonlySet<string>;
 	contactedIds: ReadonlySet<string>;
 	unavailableIds: ReadonlySet<string>;
+	comingIds?: ReadonlySet<string>;
 }): OutreachBuckets {
 	const contacted: OutreachMember[] = [];
 	const notContacted: OutreachMember[] = [];
 	let assignedCount = 0;
 	let unavailableCount = 0;
+	let comingCount = 0;
 	for (const m of input.roster) {
 		if (input.assignedIds.has(m.id)) {
 			assignedCount++;
@@ -43,9 +58,19 @@ export function deriveOutreach(input: {
 			unavailableCount++;
 			continue;
 		}
+		if (input.comingIds?.has(m.id)) {
+			comingCount++;
+			continue;
+		}
 		(input.contactedIds.has(m.id) ? contacted : notContacted).push(m);
 	}
-	return { assignedCount, unavailableCount, contacted, notContacted };
+	return {
+		assignedCount,
+		unavailableCount,
+		comingCount,
+		contacted,
+		notContacted,
+	};
 }
 
 /** One roster row with its own pending state — hoisted to module scope so it
@@ -85,6 +110,7 @@ export function OutreachPanel({
 	assignedIds,
 	contactedIds,
 	unavailableIds,
+	comingIds,
 	onContacted,
 	onUncontacted,
 }: {
@@ -94,16 +120,25 @@ export function OutreachPanel({
 	/** Members who marked themselves out for this meeting (#376) — counted, not
 	 *  listed; the "Not available this week" section above already names them. */
 	unavailableIds: ReadonlySet<string>;
+	/** Members who answered "I'll be there" but hold no role — counted, not
+	 *  listed. Chasing someone who already said yes is the bug this closes. */
+	comingIds?: ReadonlySet<string>;
 	onContacted: (memberId: string) => void | Promise<void>;
 	onUncontacted: (memberId: string) => void | Promise<void>;
 }) {
-	const { assignedCount, unavailableCount, contacted, notContacted } =
-		deriveOutreach({
-			roster,
-			assignedIds,
-			contactedIds,
-			unavailableIds,
-		});
+	const {
+		assignedCount,
+		unavailableCount,
+		comingCount,
+		contacted,
+		notContacted,
+	} = deriveOutreach({
+		roster,
+		assignedIds,
+		contactedIds,
+		unavailableIds,
+		comingIds,
+	});
 	// Per-row in-flight tracking (not the removed `busy` prop, which no caller
 	// ever passed): disables only the row being toggled, and guards against a
 	// rapid double-toggle race on the same member.
@@ -125,6 +160,7 @@ export function OutreachPanel({
 				<span className="text-xs text-[var(--sea-ink-soft)]">
 					{assignedCount} assigned · {contacted.length} contacted ·{" "}
 					{notContacted.length} to ask
+					{comingCount > 0 ? ` · ${comingCount} coming` : null}
 					{unavailableCount > 0 ? ` · ${unavailableCount} unavailable` : null}
 				</span>
 			</div>
@@ -150,8 +186,8 @@ export function OutreachPanel({
 				<p className="text-xs text-[var(--sea-ink-soft)]">
 					{roster.length === 0
 						? "No active members yet."
-						: unavailableCount > 0
-							? "Everyone else is assigned or unavailable."
+						: unavailableCount > 0 || comingCount > 0
+							? "Everyone else is assigned or has answered."
 							: "Everyone active is assigned."}
 				</p>
 			) : null}

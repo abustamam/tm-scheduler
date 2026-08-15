@@ -24,6 +24,21 @@ import { getOpenOfficerPositions } from "./officers-logic";
 
 export type ClubRole = "admin" | "member";
 
+/**
+ * The two DENIAL messages the write guards throw, exported so a caller that has
+ * to tell a denial apart from an infrastructure failure compares against THIS
+ * string rather than a copy of it.
+ *
+ * `attendance-plan.ts` is that caller: it tries the officer path and falls
+ * through to a self-only one when the caller is not an admin here, and a bare
+ * `.catch(() => null)` would give a transient db error the same meaning as
+ * "you are not an admin" — silently demoting a real officer and answering a
+ * blip with a permission message. Anything NOT in this vocabulary is rethrown,
+ * so drift fails loudly instead of widening a fallback.
+ */
+export const NOT_A_MEMBER_MESSAGE = "You're not a member of this club.";
+export const NO_PERMISSION_MESSAGE = "You don't have permission to do that.";
+
 /** Raw session user (or null) for the current request. Server-only.
  *  Returns null when called outside a request context (e.g. integration tests
  *  or public server fns invoked without a session). */
@@ -157,16 +172,25 @@ function assertNotArchived(club: { archivedAt: Date | null }): void {
  *  every member and admin.
  *
  *  QUERIES for the club, so it is only for callers holding a club id and NO
- *  resolved membership — today that is the memberless `read_write` impersonation
- *  arm alone. Every caller that resolved a membership reads `membership.archivedAt`
- *  instead, which `getMembership` now carries on its existing join (#566): this
- *  used to run on every gated read and cost one round-trip each time.
+ *  resolved membership. Two shapes qualify: the memberless `read_write`
+ *  impersonation arm, and the session-less writers, which never reach
+ *  `requireMembership` and so never get this check for free — the anonymous
+ *  roster-pick identity is the dominant path in this product, and #555 records
+ *  that an archived club still accepts its writes. Every caller that resolved a
+ *  membership reads `membership.archivedAt` instead, which `getMembership` now
+ *  carries on its existing join (#566): this used to run on every gated read and
+ *  cost one round-trip each time.
+ *
+ *  EXPORTED for those session-less writers. Import it from here rather than
+ *  writing a second copy — a duplicated archive check is how `isReadableClub`
+ *  ended up unreachable inside a logo module before #544 moved it.
  *
  *  Fails CLOSED on a missing club. Unreachable from today's callers — an
- *  impersonation session's `club_id` is an FK — but the earlier `if (club && …)`
+ *  impersonation session's `club_id` is an FK, and a session-less writer derives
+ *  the id from the meeting row it just loaded — but the earlier `if (club && …)`
  *  form would have GRANTED on an unknown id, which is the wrong default for the
  *  function whose whole job is to deny. */
-async function assertClubNotArchived(clubId: string): Promise<void> {
+export async function assertClubNotArchived(clubId: string): Promise<void> {
 	const [club] = await db
 		.select({ archivedAt: clubs.archivedAt })
 		.from(clubs)
@@ -204,7 +228,7 @@ async function requireReadWriteImpersonation(
 			impersonatedBy: userId,
 		};
 	}
-	throw new Error("You're not a member of this club.");
+	throw new Error(NOT_A_MEMBER_MESSAGE);
 }
 
 /** Any active member may view/claim. Rejects when the club is soft-archived
@@ -259,7 +283,7 @@ export async function requireClubRole(
 	) {
 		return membership;
 	}
-	throw new Error("You don't have permission to do that.");
+	throw new Error(NO_PERMISSION_MESSAGE);
 }
 
 /**

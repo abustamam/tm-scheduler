@@ -1,9 +1,13 @@
+// Legacy entry points, retained so PR 1 changes no client file. They are thin
+// delegates onto `attendance-plan-logic` and are deleted in PR 2 when the panel
+// calls `setPlannedAttendance` directly. "Contacted" is now one rung of the
+// ladder (`reached_out`) rather than the presence of a row in its own table.
 import { createServerFn } from "@tanstack/react-start";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
-import { meetingOutreach, meetings } from "#/db/schema";
-import { logActivity } from "./activity";
+import { meetings } from "#/db/schema";
+import { clearPlanStatus, setPlanStatus } from "./attendance-plan-logic";
 import { requireClubRole, requireMemberInClub, requireUser } from "./guards";
 import { assertMeetingNotLocked } from "./meeting-authz-logic";
 
@@ -43,13 +47,26 @@ const contactedSchema = z.object({
 });
 
 /**
- * Mark a member "contacted" for a meeting (#340). Admin/VPE-only officer record
- * (unlike the self-serve setAvailability). Presence of the row = contacted;
- * idempotent via onConflictDoNothing. The actor is the resolved officer
- * membership — never trusted from the client. `membership.id` is null under a
- * read_write impersonation session; `logActivity` attributes that case to the
- * impersonating superadmin automatically (via the request-scoped marker set by
+ * Mark a member "contacted" for a meeting (#340) — the `reached_out` rung.
+ * Admin/VPE-only officer record (unlike the self-serve setAvailability).
+ * Idempotent (the seam upserts). The actor is the resolved officer membership —
+ * never trusted from the client. `membership.id` is null under a read_write
+ * impersonation session; `logActivity` attributes that case to the impersonating
+ * superadmin automatically (via the request-scoped marker set by
  * `requireClubRole`), so passing it straight through as `actorMemberId` is safe.
+ *
+ * FLOOR-ONLY, via `demoteFrom: ["reached_out"]`. The tables were separate before
+ * the consolidation, so this write could not touch a member's own answer; now
+ * they share a row, and a plain upsert would let "contacted" overwrite ANY rung
+ * the member currently holds. That was reachable, not theoretical: the officer's
+ * page renders, the member answers from their phone, the officer ticks the
+ * checkbox that was already on screen. Two rungs could be lost that way and both
+ * mattered — a `not_coming` decline (which also drops them off the meeting
+ * page's Not Available list and the assign picker's warning, so the VPE hands
+ * them a role they already declined) and a `coming`, reachable by claiming a
+ * slot and then releasing it, since `releaseSlot` leaves the plan row alone.
+ * Enforcing it in the upsert's `setWhere` rather than by re-reading first also
+ * makes it immune to the race, which no amount of UI freshness would have been.
  */
 export const setContacted = createServerFn({ method: "POST" })
 	.validator((i: unknown) => contactedSchema.parse(i))
@@ -62,24 +79,30 @@ export const setContacted = createServerFn({ method: "POST" })
 		assertMeetingNotLocked(meeting.status);
 		await requireMemberInClub(data.memberId, meeting.clubId);
 
-		await db
-			.insert(meetingOutreach)
-			.values({ memberId: data.memberId, meetingId: data.meetingId })
-			.onConflictDoNothing();
-
-		await logActivity(db, {
+		await setPlanStatus(db, {
+			memberId: data.memberId,
+			meetingId: data.meetingId,
 			clubId: meeting.clubId,
+			status: "reached_out",
 			actorMemberId: membership.id,
-			action: "outreach_set",
-			targetType: "meeting",
-			targetId: data.meetingId,
-			detail: { memberId: data.memberId, via: data.via },
+			via: data.via,
+			demoteFrom: ["reached_out"],
 		});
 
 		return { ok: true as const };
 	});
 
-/** Clear a member's "contacted" mark for a meeting (#340). Admin/VPE-only. */
+/**
+ * Clear a member's "contacted" mark for a meeting (#340). Admin/VPE-only.
+ *
+ * `onlyFrom: ["reached_out"]` keeps this exactly as narrow as it was before the
+ * consolidation. It used to delete a row in the separate "contacted" table, so
+ * it was structurally incapable of touching a member's own answer; against the
+ * merged row a status-blind delete would wipe a `not_coming` or `coming` too.
+ * Unticking "contacted" now means what it says — it removes the ask, and a rung
+ * the MEMBER put there is left alone rather than relying on the panel never
+ * offering the checkbox.
+ */
 export const clearContacted = createServerFn({ method: "POST" })
 	.validator((i: unknown) => contactedSchema.parse(i))
 	.handler(async ({ data }) => {
@@ -91,22 +114,12 @@ export const clearContacted = createServerFn({ method: "POST" })
 		assertMeetingNotLocked(meeting.status);
 		await requireMemberInClub(data.memberId, meeting.clubId);
 
-		await db
-			.delete(meetingOutreach)
-			.where(
-				and(
-					eq(meetingOutreach.memberId, data.memberId),
-					eq(meetingOutreach.meetingId, data.meetingId),
-				),
-			);
-
-		await logActivity(db, {
+		await clearPlanStatus(db, {
+			memberId: data.memberId,
+			meetingId: data.meetingId,
 			clubId: meeting.clubId,
 			actorMemberId: membership.id,
-			action: "outreach_clear",
-			targetType: "meeting",
-			targetId: data.meetingId,
-			detail: { memberId: data.memberId },
+			onlyFrom: ["reached_out"],
 		});
 
 		return { ok: true as const };

@@ -80,4 +80,72 @@ describe("deriveOutreach", () => {
 		expect(r.unavailableCount).toBe(0);
 		expect(r.notContacted.map((m) => m.id)).toEqual(["b", "c", "d"]);
 	});
+
+	it("never asks you to chase someone who said they're coming", () => {
+		// The three former booleans became one status, and `coming` matches
+		// NEITHER `unavailableIds` (`not_coming` only) nor `contactedIds`
+		// (`reached_out` only) — so before this bucket existed, the member with the
+		// most useful answer in the system fell through to "still to ask".
+		//
+		// Reachable without the new write surface: self-claiming a role records
+		// `coming`, and releasing the slot leaves the plan row alone, so a
+		// claim-then-release member lands here holding no role.
+		const r = deriveOutreach({
+			roster,
+			assignedIds: new Set(["a"]),
+			contactedIds: new Set(["b"]),
+			unavailableIds: new Set(["c"]),
+			comingIds: new Set(["d"]),
+		});
+		expect(r.notContacted).toEqual([]);
+		expect(r.comingCount).toBe(1);
+		expect(r.contacted.map((m) => m.id)).toEqual(["b"]);
+		// Same arithmetic check as the #376 case: every active member is accounted
+		// for exactly once, so a member cannot be silently dropped rather than
+		// re-bucketed.
+		expect(
+			r.assignedCount +
+				r.contacted.length +
+				r.notContacted.length +
+				r.unavailableCount +
+				r.comingCount,
+		).toBe(roster.length);
+	});
+
+	it("counts an assigned member as assigned even when also coming", () => {
+		// Bucket precedence, same reason as the unavailable case: holding a role
+		// outranks the answer, so nobody is counted twice.
+		const r = deriveOutreach({
+			roster,
+			assignedIds: new Set(["a"]),
+			contactedIds: new Set(),
+			unavailableIds: new Set(),
+			comingIds: new Set(["a"]),
+		});
+		expect(r.assignedCount).toBe(1);
+		expect(r.comingCount).toBe(0);
+		expect(r.notContacted.map((m) => m.id)).toEqual(["b", "c", "d"]);
+	});
+
+	it("omitting comingIds leaves every existing bucket unchanged", () => {
+		// The prop is optional so no existing caller or fixture had to change. That
+		// only stays safe if absence behaves exactly like an empty set — otherwise
+		// a caller that has not been updated silently re-buckets its roster.
+		const withOut = deriveOutreach({
+			roster,
+			assignedIds: new Set(["a"]),
+			contactedIds: new Set(["b"]),
+			unavailableIds: new Set(["c"]),
+		});
+		const withEmpty = deriveOutreach({
+			roster,
+			assignedIds: new Set(["a"]),
+			contactedIds: new Set(["b"]),
+			unavailableIds: new Set(["c"]),
+			comingIds: new Set(),
+		});
+		expect(withOut).toEqual(withEmpty);
+		expect(withOut.comingCount).toBe(0);
+		expect(withOut.notContacted.map((m) => m.id)).toEqual(["d"]);
+	});
 });

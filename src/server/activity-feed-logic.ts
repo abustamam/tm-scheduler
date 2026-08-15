@@ -38,6 +38,9 @@ export interface ActivityEntry {
 	fromName: string | null;
 	/** meeting_edit → agenda-structure change (speaker_added | speaker_removed | speaker_reordered | role_added | role_removed | template_sync | role_disabled | role_enabled) */
 	change: string | null;
+	/** plan_set → the rung set ("reached_out" | "coming" | "not_coming"), or
+	 *  null when the row was cleared back to "no answer". */
+	status: string | null;
 }
 
 type LogDetail = {
@@ -45,6 +48,7 @@ type LogDetail = {
 	fromMemberId?: string;
 	name?: string;
 	change?: string;
+	status?: string | null;
 };
 
 /**
@@ -175,6 +179,7 @@ export async function loadActivity(
 				? (memberName.get(d.fromMemberId) ?? null)
 				: null,
 			change: d.change ?? null,
+			status: d.status ?? null,
 		};
 	});
 }

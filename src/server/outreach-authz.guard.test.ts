@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 import { readSource } from "#/test/guard-source";
 
 // Structural authz guard (#340): setContacted/clearContacted are officer-only
-// writes to meeting_outreach and must stay gated admin-only + meeting-not-locked
+// writes to the planned-attendance ladder (they wrote a dedicated `contacted`
+// table until it was dropped) and must stay gated admin-only + meeting-not-locked
 // (ADR-0012). A true behavioral test isn't possible — a createServerFn handler
 // can't be invoked outside a request context in vitest — and
 // outreach.integration.test.ts exercises the DB logic directly, bypassing

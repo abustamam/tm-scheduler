@@ -69,7 +69,27 @@ const serverDir = dirname(fileURLToPath(import.meta.url));
  * write endpoint — think hard before you do, and see the size assertion at the
  * bottom of this file.
  */
-const PUBLIC_ACTOR_MODULES = new Set(["slots.ts", "availability.ts"]);
+const PUBLIC_ACTOR_MODULES = new Set([
+	"slots.ts",
+	"availability.ts",
+	// D6 (2026-08-11): the planned-attendance ladder. It is here because this
+	// list INVENTORIES the session-less write endpoints, and
+	// `setPlannedAttendance` is a new one — that inventory is the control this
+	// guard actually provides.
+	//
+	// Be precise about what the payload field does here, because it is not what
+	// `availability.ts`'s reason says. It is currently INERT for attribution: no
+	// accepted write is credited differently for its presence, since the officer
+	// arm ignores it entirely and the self-only arm rejects anything that does
+	// not resolve to the subject. It earns its place by making an honest
+	// anonymous caller who asserts SOMEONE ELSE fail loudly, rather than having
+	// their write silently credited to the subject. Deleting the field would be
+	// a behaviour change, not a simplification.
+	//
+	// Transitional: PR 2 repoints the panel here and deletes `availability.ts`,
+	// which takes this list back to two.
+	"attendance-plan.ts",
+]);
 
 /** Not an actor at all — a READ filter on the activity feed ("show me rows by
  *  this member"), already ANDed with the feed's own club. */
@@ -212,8 +232,9 @@ describe("activity_log actors are derived, not client-supplied (#396)", () => {
 		// and forces the change to be argued for in review. That review is also the
 		// real control on the shapes the regexes above cannot see (see the header)
 		// — a new no-auth write endpoint is the only way one of them lands.
-		expect(PUBLIC_ACTOR_MODULES.size).toBe(2);
+		expect(PUBLIC_ACTOR_MODULES.size).toBe(3);
 		expect([...PUBLIC_ACTOR_MODULES].sort()).toEqual([
+			"attendance-plan.ts",
 			"availability.ts",
 			"slots.ts",
 		]);

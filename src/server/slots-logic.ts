@@ -5,7 +5,6 @@ import { and, eq, gt, inArray, isNull, ne } from "drizzle-orm";
 import { db } from "#/db";
 import {
 	meetings,
-	memberAvailability,
 	members,
 	roleDefinitions,
 	roleSlots,
@@ -18,6 +17,7 @@ import {
 } from "#/lib/meeting-roles";
 import { normalizePresentationUrl } from "#/lib/presentation-url";
 import { logActivity } from "./activity";
+import { setPlanStatus } from "./attendance-plan-logic";
 import { assertMeetingNotLocked } from "./meeting-authz-logic";
 import { resolveProjectDisplay } from "./project-picker-logic";
 
@@ -863,16 +863,29 @@ export async function reassignSlotSpeech(
 }
 
 /**
- * Self-claiming a role is the strongest "I'm coming" statement, so it clears
- * the claimant's decline flag ("not going" row) for that meeting — spec
- * 2026-07-13. Admin assignments (actor ≠ member, or no actor) must NOT
- * silently erase the member's own absence statement, so they no-op.
+ * Self-claiming a role is the strongest "I'm coming" statement, so it records
+ * the claimant as `coming` for that meeting — spec 2026-07-13. Admin
+ * assignments (actor ≠ member, or no actor) must NOT speak for the member, so
+ * they no-op; the early return is the whole self-only rule.
  *
- * Logs an `availability_clear` activity (#211) when a row was actually
- * deleted, mirroring the explicit `clearAvailability` server fn — but only
- * then, so a claim by a member with no NA row doesn't spam the activity feed.
+ * This used to DELETE the claimant's row in the old, now-dropped availability
+ * table, which threw the information away — "no answer" and "coming" were the
+ * same absent row. The three-rung ladder can hold the answer, so it does, and
+ * PR 2's planned-attendance panel renders it (D6, 2026-08-11).
+ *
+ * Writes only when the answer actually CHANGES, which is what #211 was really
+ * about: claiming is the most common write in this product, and a member taking
+ * three roles in one meeting must not put three identical "said they're coming"
+ * rows in the feed. `demoteFrom` carries that rule INTO the upsert rather than
+ * reading first: a preceding SELECT lost the race it existed to win, since two
+ * concurrent claims in separate transactions both read "not coming yet" under
+ * READ COMMITTED and both logged. One statement, so the row lock decides.
+ *
+ * The rule stays here rather than in `setPlanStatus` — re-affirming "coming"
+ * through an explicit writer is a real user action worth logging; it is only the
+ * IMPLICIT answer inside a claim that is noise.
  */
-export async function clearAvailabilityOnSelfClaim(
+export async function markComingOnSelfClaim(
 	tx: DbOrTx,
 	args: {
 		memberId: string;
@@ -883,23 +896,16 @@ export async function clearAvailabilityOnSelfClaim(
 ): Promise<void> {
 	if (args.actorMemberId === null || args.memberId !== args.actorMemberId)
 		return;
-	const deleted = await tx
-		.delete(memberAvailability)
-		.where(
-			and(
-				eq(memberAvailability.memberId, args.memberId),
-				eq(memberAvailability.meetingId, args.meetingId),
-			),
-		)
-		.returning({ id: memberAvailability.id });
-	if (deleted.length === 0) return;
-	await logActivity(tx, {
+	await setPlanStatus(tx, {
+		memberId: args.memberId,
+		meetingId: args.meetingId,
 		clubId: args.clubId,
+		status: "coming",
 		actorMemberId: args.memberId,
-		action: "availability_clear",
-		targetType: "meeting",
-		targetId: args.meetingId,
-		detail: { via: "claim" },
+		// Every rung EXCEPT `coming` — so an existing `coming` row is left alone
+		// and logs nothing, while a decline or an officer's ask is correctly
+		// superseded by the strongest statement the member can make.
+		demoteFrom: ["reached_out", "not_coming"],
 	});
 }
 
@@ -972,7 +978,7 @@ export async function reassignSlotCore(
 		})
 		.where(eq(roleSlots.id, args.slotId));
 
-	await clearAvailabilityOnSelfClaim(tx, {
+	await markComingOnSelfClaim(tx, {
 		memberId: args.memberId,
 		actorMemberId: args.actorMemberId,
 		meetingId: slot.meetingId,

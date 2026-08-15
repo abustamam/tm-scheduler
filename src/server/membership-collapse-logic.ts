@@ -18,11 +18,10 @@ import {
 	clubActionItems,
 	guests,
 	meetingAttendance,
+	meetingAttendancePlan,
 	meetingAwards,
-	meetingOutreach,
 	meetingVoteSessions,
 	meetingVotes,
-	memberAvailability,
 	memberDues,
 	members,
 	notifications,
@@ -38,8 +37,8 @@ type Tx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
 
 /**
  * Collapse the `absorbedId` membership into `keeperId` (both must belong to
- * `clubId`), inside the caller's transaction. Re-points all eleven membership-
- * scoped foreign keys to the keeper — dropping the absorbed row on each
+ * `clubId`), inside the caller's transaction. Re-points every membership-
+ * scoped foreign key to the keeper — dropping the absorbed row on each
  * uniqueness collision so a re-point can never raise a unique-violation — then
  * reconciles the surviving keeper row and deletes the absorbed `members` row.
  *
@@ -133,18 +132,24 @@ export async function collapseMemberships(
 		.set({ membershipId: keeperId })
 		.where(eq(memberDues.membershipId, absorbedId));
 
-	// 3. member_availability.member_id — unique (member, meeting). Drop the
-	//    absorbed dup for a meeting the keeper already covers, then re-point.
+	// 3. meeting_attendance_plan.member_id — unique (member, meeting) and ON
+	//    DELETE CASCADE, so without this the absorbed membership's answers are
+	//    destroyed by the merge rather than kept. On a collision the KEEPER's
+	//    answer wins: it is the surviving identity, and the two rows are the
+	//    same human answering twice, so there is no meaningful way to reconcile
+	//    the statuses. (This one step replaced two: the two boolean tables it
+	//    supersedes, dropped in this same PR, each needed the identical
+	//    de-dup-then-re-point dance.)
 	await tx.execute(sql`
-		DELETE FROM member_availability
+		DELETE FROM meeting_attendance_plan
 		WHERE member_id = ${absorbedId}
 			AND meeting_id IN (
-				SELECT meeting_id FROM member_availability WHERE member_id = ${keeperId}
+				SELECT meeting_id FROM meeting_attendance_plan WHERE member_id = ${keeperId}
 			)`);
 	await tx
-		.update(memberAvailability)
+		.update(meetingAttendancePlan)
 		.set({ memberId: keeperId })
-		.where(eq(memberAvailability.memberId, absorbedId));
+		.where(eq(meetingAttendancePlan.memberId, absorbedId));
 
 	// 4. meeting_attendance.member_id — unique (meeting, member). Drop the
 	//    absorbed dup where the keeper is already recorded, then re-point.
@@ -250,20 +255,6 @@ export async function collapseMemberships(
 				eq(activityLog.targetId, absorbedId),
 			),
 		);
-
-	// 11. meeting_outreach.member_id — unique (member, meeting), exactly like
-	//     member_availability. Drop the absorbed dup for a meeting the keeper is
-	//     already contacted on, then re-point the rest.
-	await tx.execute(sql`
-		DELETE FROM meeting_outreach
-		WHERE member_id = ${absorbedId}
-			AND meeting_id IN (
-				SELECT meeting_id FROM meeting_outreach WHERE member_id = ${keeperId}
-			)`);
-	await tx
-		.update(meetingOutreach)
-		.set({ memberId: keeperId })
-		.where(eq(meetingOutreach.memberId, absorbedId));
 
 	// 12. meeting_vote_sessions.opened_by_member_id (#510) — nullable attribution
 	//     ("who opened this vote"). The table's unique is (meeting, category),

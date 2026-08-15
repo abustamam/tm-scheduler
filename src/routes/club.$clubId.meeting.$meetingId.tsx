@@ -266,6 +266,7 @@ function MeetingView() {
 		clubGuests,
 		roster: loaderRoster,
 		contactedMemberIds,
+		comingMemberIds,
 		minutes,
 		openActionItems,
 		minutesEmail,
@@ -886,6 +887,7 @@ function MeetingView() {
 				}}
 				requireIdentity={requireIdentity}
 				contactedMemberIds={contactedMemberIds}
+				comingMemberIds={comingMemberIds}
 				onContacted={async (memberId, via) => {
 					try {
 						await setContacted({

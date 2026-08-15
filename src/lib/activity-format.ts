@@ -54,6 +54,41 @@ export function formatActivity(entry: ActivityEntry): FormattedActivity {
 		case "outreach_clear":
 			summary = `marked ${entry.subjectName ?? "someone"} not contacted`;
 			break;
+		// One action for every rung of the ladder (D1, 2026-08-11); the rung
+		// lives in `detail.status`/`entry.status`, not the action name. The four
+		// legacy cases above still have their own cases because historical
+		// activity_log rows still carry them.
+		case "plan_set": {
+			const isOfficerForOther =
+				entry.subjectName && entry.subjectName !== actor;
+			switch (entry.status) {
+				case "coming":
+					summary = isOfficerForOther
+						? `marked ${entry.subjectName} as coming`
+						: "said they're coming";
+					break;
+				case "not_coming":
+					summary = isOfficerForOther
+						? `marked ${entry.subjectName} as not coming`
+						: "said they can't make it";
+					break;
+				case "reached_out":
+					summary = `reached out to ${entry.subjectName ?? "someone"}`;
+					break;
+				case null:
+					summary = isOfficerForOther
+						? `cleared ${entry.subjectName}'s planned attendance`
+						: "cleared their planned attendance";
+					break;
+				default:
+					// Unrecognized rung (e.g. a future enum value not yet cased here) —
+					// say something true rather than mis-describing it as a clear.
+					summary = isOfficerForOther
+						? `updated ${entry.subjectName}'s planned attendance`
+						: "updated their planned attendance";
+			}
+			break;
+		}
 		case "member_add":
 			summary = `added member "${entry.subjectName ?? "someone"}"`;
 			break;

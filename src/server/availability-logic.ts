@@ -1,13 +1,14 @@
 import { and, eq } from "drizzle-orm";
 import type { db } from "#/db";
-import { memberAvailability, roleSlots } from "#/db/schema";
+import { roleSlots } from "#/db/schema";
 import { logActivity } from "./activity";
+import { setPlanStatus } from "./attendance-plan-logic";
 
 type Database = typeof db;
 
 /**
- * Release every role a member holds in a meeting and mark them unavailable, in
- * one transaction (#204). Pure db logic so it's directly testable; the server
+ * Release every role a member holds in a meeting and record them `not_coming`,
+ * in one transaction (#204). Pure db logic so it's directly testable; the server
  * fn (`markUnavailableReleasing`) wraps it with the meeting-lock + membership
  * guards. Release mirrors `releaseSlot`: slot → open, assignee + speech
  * unlinked (the speech persists, ADR-0009).
@@ -48,10 +49,17 @@ export async function releaseSlotsAndMarkUnavailable(
 			)
 			.returning({ id: roleSlots.id });
 
-		await tx
-			.insert(memberAvailability)
-			.values({ memberId: args.memberId, meetingId: args.meetingId })
-			.onConflictDoNothing();
+		// Inside the caller's transaction, which is why the seam takes a `DbOrTx`:
+		// the release and the "not coming" answer commit together or not at all.
+		// It logs its own `plan_set` activity, so there is no separate
+		// availability_set row here any more.
+		await setPlanStatus(tx, {
+			memberId: args.memberId,
+			meetingId: args.meetingId,
+			clubId: args.clubId,
+			status: "not_coming",
+			actorMemberId,
+		});
 
 		for (const slot of released) {
 			await logActivity(tx, {
@@ -63,17 +71,6 @@ export async function releaseSlotsAndMarkUnavailable(
 				detail: { fromMemberId: args.memberId },
 			});
 		}
-		await logActivity(tx, {
-			clubId: args.clubId,
-			actorMemberId,
-			action: "availability_set",
-			targetType: "meeting",
-			targetId: args.meetingId,
-			// Subject (whose availability changed) so the feed can distinguish an
-			// officer marking someone else vs. a self-decline.
-			detail: { memberId: args.memberId },
-		});
-
 		return { released: released.length };
 	});
 }
