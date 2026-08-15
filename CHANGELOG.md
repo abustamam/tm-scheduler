@@ -2,6 +2,16 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.13.2.0] - 2026-08-15
+
+### Fixed
+
+- **Removing someone's platform-support access now takes effect immediately.** If a support session was already open when their access was withdrawn, it kept working until it expired on its own — up to an hour. Withdrawing access now ends any open session on their next action. Restoring access brings it back; nothing about the club's own admins changes.
+
+### Changed
+
+- **Club pages load with one less database query each.** Checking whether a club has been removed used to be a separate lookup on every page a member opens, even though the information was already in hand from the check that ran immediately before it. On the VP Education dashboard, which loads three reports at once, that was nine lookups before any report data — now six.
+
 ## [1.13.1.1] - 2026-08-15
 
 ### Fixed
