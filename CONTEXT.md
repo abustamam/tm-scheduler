@@ -202,6 +202,21 @@ the nouns in `src/db/schema.ts`.
   `absent`), pre-filled to `present` for anyone holding a role slot. **Guests** present are added
   to the same record (present by definition — no absent/excused). Rows reference a member **or** a
   guest, never both (XOR check constraint, like `role_slots`). See ADR-0014.
+- **Planned attendance** — where the outreach for an UPCOMING meeting got to, one row per
+  (member, meeting) in `meeting_attendance_plan` carrying `reached_out` | `coming` |
+  `not_coming`. **Row absent = "no answer"**; there is no fourth value, because a row meaning
+  "nothing is known" is one every reader has to remember to ignore. Deliberately NOT
+  **Attendance / Presence** above: that is the RECORD written after the meeting, and a plan must
+  never be storable as a record. It replaced two presence-means-true tables
+  (`member_availability`, `meeting_outreach`) that answered overlapping questions, could
+  disagree, and between them could not express "she replied, she's coming" — so `not_coming` is
+  now the ONLY encoding of unavailable, and row presence answers nothing. Consequence for
+  readers: filter on the STATUS, never on the row existing. `reached_out` is the officer's
+  private record of having asked and stays admin-only to read; `coming` and `not_coming` are the
+  member's own answer and are self-serve. Reached through one seam
+  (`src/server/attendance-plan-logic.ts`), which owns actor attribution and the predicates that
+  stop one rung overwriting another — but NOT the archive gate or the officer-only rung, which
+  need a session and live in the callers. See the 2026-08-11 spec.
 - **Table Topics speaker** — an impromptu participant who answered a Table Topic
   (`table_topics_speakers`), captured as an ordered list of member-or-guest (XOR) + optional
   topic text. Distinct from the **Table Topics Master** role (the role definition that runs the
