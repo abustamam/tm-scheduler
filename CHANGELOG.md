@@ -2,6 +2,22 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.14.0.0] - 2026-08-15
+
+### Fixed
+
+- **Marking someone "contacted" no longer erases the answer they already gave.** The club tracked "we asked them" and "they can't make it" as two unrelated notes, and this release merges them into one record of where each member got to. During that merge, ticking the contacted box for someone who had already declined wiped the decline — so they vanished from the meeting's Not Available list and lost the warning in the role picker, and a VP Education could hand a role to a member who had explicitly said they could not come. Ticking "contacted" now only ever records the ask, and never overwrites an answer.
+- **Members who said they are coming are no longer on the list of people to chase.** Anyone who confirmed without holding a role fell through into "still to ask" on the outreach panel. They are now counted separately, so the chase list only contains people who have not answered.
+- **A club's outreach notes are no longer editable by strangers.** Clearing someone's plan for a meeting is open to anyone with the sign-up sheet link, by design — but it could also delete an officer's private "I contacted them" record, which previously only a club admin could touch. Clearing now leaves officer notes alone; only an officer can remove one.
+- **Unticking "contacted" removes only the ask.** It used to clear the member's own answer along with it.
+- Archived clubs no longer accept availability changes through the sign-up sheet. Taking a club down now blocks those writes as it already blocked everything else.
+
+### Changed
+
+- **A member's plan for a meeting is now one record instead of two disconnected notes.** "We asked them", "they're coming" and "they can't make it" live in a single place per member per meeting, so silence and a positive answer are finally distinguishable — the old pair could not express "she replied, she's coming" at all. Existing availability and contacted notes carry over untouched: a decline stays a decline, and an ask with no reply stays an ask.
+- **Claiming a role now records that you are coming**, instead of quietly deleting an earlier "can't make it". Taking several roles for one meeting still only records it once.
+- Activity feed entries describe the new states in plain language ("said they're coming", "reached out to Alex", "cleared their planned attendance"). Older entries keep reading exactly as before.
+
 ## [1.13.2.0] - 2026-08-15
 
 ### Fixed
