@@ -39,27 +39,6 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
   which is why it did not ride along with the slicer fix.
   **Priority:** P2
 
-- The archive check costs an avoidable round-trip on every gated read. `grantView` →
-  `assertClubNotArchived` issues its own `SELECT archived_at FROM clubs`, while `getMembership` —
-  which both gates already call — joins `people` and `officer_terms` but not `clubs`. Measured with
-  `statementsDuring`: the gates go 1 → 2 statements and `/admin/vpe-dashboard` now spends 9
-  statements on pure authorization instead of 6 (three gated fns in one `Promise.all`). ~1ms per
-  gate on Railway. Fix is to add `.innerJoin(clubs, …)` + `archivedAt` to `getMembership`'s select
-  and `clubs.archivedAt` to its `groupBy` — EXPLAIN-verified that Postgres will not infer the
-  functional dependency across the join from `group by members.id` alone. Deferred because
-  `getMembership` is the hot path every authz guard shares and this was a security fix; do it on
-  its own with `readsOf(stmts, "clubs")` pinning the result.
-  **Priority:** P3
-
-- An impersonation session is not revoked when the superadmin is de-listed.
-  `getActiveImpersonation` / `getActiveImpersonationForUser` select on `superadminUserId`,
-  `endedAt` and `expiresAt` only, and never re-read `user.is_superadmin`; `reconcileSuperadminFlag`
-  runs on the SIGN-IN hook, so removing an email from `SUPERADMIN_EMAILS` leaves any open session
-  granting club reads for up to its 60-minute TTL. ADR-0016 records "revocation takes effect on
-  next sign-in" as an accepted MVP tradeoff, so this is a hardening, not a regression. One extra
-  predicate (`.innerJoin(user…)` + `eq(user.isSuperadmin, true)`) closes it.
-  **Priority:** P3
-
 - #556's eviction rests on an assumption nothing gates: that a `notFound()` in a route loader keeps
   mapping to an HTTP **404**. Verified by hand against a dev server while writing the fix (meeting
   page and `/present` 404; `/print` 307s to `?layout=grid` which 404s; the logo endpoint 404s), and
@@ -129,6 +108,25 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
   **Priority:** P4
 
 ## Completed
+
+- An impersonation session outlived the superadmin's own access. `getActiveImpersonationForUser`
+  selected on `superadminUserId` / `endedAt` / `expiresAt` and never re-read `user.is_superadmin`,
+  while `reconcileSuperadminFlag` runs on the SIGN-IN hook and touches no session — so removing an
+  address from `SUPERADMIN_EMAILS` left an open session granting club reads for the rest of its TTL
+  (60 min read-only, 15 read-write). ADR-0016 §2 accepts that the FLAG lags until next sign-in, but
+  that was written before impersonation existed and a session is a second, separate grant. One join
+  plus `eq(user.isSuperadmin, true)` closes it; revocation now lands on the operator's next request.
+  **Completed:** v1.13.2.0 (2026-08-15) — #567
+
+- The archive check cost an avoidable round-trip on every gated read. `assertClubNotArchived` issued
+  its own `SELECT archived_at FROM clubs` for a row `getMembership` was about to resolve anyway, so
+  each gate ran 2 statements instead of 1 and `/admin/vpe-dashboard` spent 9 on pure authorization
+  rather than 6. `getMembership` now carries `clubs.archived_at` on a join (with `clubs.archivedAt`
+  added to the `groupBy` — Postgres does not infer functional dependency across a join), the member
+  arms read the resolved row, and only the memberless impersonation arm still queries. Pinned by a
+  driver-level statement count in `archive-club.integration.test.ts` rather than a spy on a named
+  loader, so a later refactor that reintroduces the lookup by any means fails.
+  **Completed:** v1.13.2.0 (2026-08-15) — #566
 
 - The derived enrollment sweep in `public-readers-archive-gate.guard.test.ts` reported green while
   skipping a reader. `serverFnBody` ended a declaration at a literal `\n});`, but every

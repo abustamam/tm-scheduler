@@ -224,6 +224,67 @@ describe.skipIf(!hasTestDb)("superadmin impersonation (integration)", () => {
 		);
 	});
 
+	it("stops granting the moment the superadmin is de-listed (#567)", async () => {
+		const su = await seedSuperadmin();
+		await startImpersonation(su.id, { clubId: seeded.clubId });
+
+		// Control: the session grants while the flag is set.
+		await expect(
+			requireClubViewAccess(su.id, seeded.clubId),
+		).resolves.toMatchObject({ via: "impersonation" });
+		expect(await getActiveImpersonationForUser(su.id)).not.toBeNull();
+
+		// De-provision: removing the address from SUPERADMIN_EMAILS clears this flag
+		// on the operator's next sign-in (`reconcileSuperadminFlag`). It does not
+		// touch impersonation_sessions, so the row stays open and unexpired — which
+		// is the whole point. The session used to be the entire credential, good for
+		// the rest of its 60-minute TTL.
+		await testDb
+			.update(user)
+			.set({ isSuperadmin: false })
+			.where(eq(user.id, su.id));
+
+		await expect(requireClubViewAccess(su.id, seeded.clubId)).rejects.toThrow();
+		await expect(requireClubAdminView(su.id, seeded.clubId)).rejects.toThrow();
+		// Pinned at the seam too, not just at the gates: a future gate that consults
+		// the lookup directly must get the same answer.
+		expect(await getActiveImpersonationForUser(su.id)).toBeNull();
+		expect(await getActiveImpersonation(su.id, seeded.clubId)).toBeNull();
+
+		// Re-listing restores it — this revokes, it does not destroy the row.
+		await testDb
+			.update(user)
+			.set({ isSuperadmin: true })
+			.where(eq(user.id, su.id));
+		await expect(
+			requireClubViewAccess(su.id, seeded.clubId),
+		).resolves.toMatchObject({ via: "impersonation" });
+	});
+
+	it("read_write is revoked by de-listing too, not just reads (#567)", async () => {
+		const su = await seedSuperadmin();
+		await startImpersonation(su.id, {
+			clubId: seeded.clubId,
+			mode: "read_write",
+			reason: "fixing a broken agenda",
+		});
+
+		// Control: the write guard honours the session as a memberless admin.
+		await expect(
+			requireMembership(su.id, seeded.clubId),
+		).resolves.toMatchObject({ impersonatedBy: su.id });
+
+		await testDb
+			.update(user)
+			.set({ isSuperadmin: false })
+			.where(eq(user.id, su.id));
+
+		// The higher-privilege arm has the shorter TTL but the same hole, so assert
+		// it separately rather than assuming the shared lookup covers it.
+		await expect(requireMembership(su.id, seeded.clubId)).rejects.toThrow();
+		expect(await canManageClub(su.id, seeded.clubId)).toBe(false);
+	});
+
 	it("scopes the session to one club and revokes on end + expiry", async () => {
 		const su = await seedSuperadmin();
 		const other = await seedBareClub();

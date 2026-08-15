@@ -90,9 +90,17 @@ export async function getMembership(userId: string, clubId: string) {
 			personId: members.personId,
 			clubRole: members.clubRole,
 			status: members.status,
+			// Carried here rather than fetched again (#566). Every caller that
+			// resolves a membership then has to know whether the club is archived,
+			// and `assertClubNotArchived` was issuing its own PK lookup for a row
+			// this join already reaches — one extra round-trip per gated read, and
+			// `/admin/vpe-dashboard` fires three gated fns in one `Promise.all`.
+			archivedAt: clubs.archivedAt,
 		})
 		.from(members)
 		.innerJoin(people, eq(people.id, members.personId))
+		// A `members` row implies its club via FK, so this cannot drop a row.
+		.innerJoin(clubs, eq(clubs.id, members.clubId))
 		// Open terms only; `officer_terms_open_idx` covers (membership_id, term_end).
 		.leftJoin(
 			officerTerms,
@@ -102,9 +110,12 @@ export async function getMembership(userId: string, clubId: string) {
 			),
 		)
 		.where(and(eq(people.userId, userId), eq(members.clubId, clubId)))
-		// `members.id` is the primary key, so every selected column is
-		// functionally dependent on it and needs no explicit grouping.
-		.groupBy(members.id)
+		// `members.id` is the primary key, so every selected column OF `members` is
+		// functionally dependent on it and needs no explicit grouping. That
+		// inference does NOT cross a join: Postgres rejects `clubs.archived_at`
+		// unless it is grouped explicitly, even though the FK makes it single-valued
+		// per member. Verified by EXPLAIN, not assumed.
+		.groupBy(members.id, clubs.archivedAt)
 		.orderBy(
 			sql`(${members.status} = 'active') desc`,
 			sql`(${members.clubRole} = 'admin') desc`,
@@ -135,14 +146,26 @@ export type ResolvedMembership =
 			impersonatedBy: string;
 	  };
 
+/** The rejection every archive check raises, so the message has one home. */
+function assertNotArchived(club: { archivedAt: Date | null }): void {
+	if (isClubArchived(club)) {
+		throw new Error("This club has been archived.");
+	}
+}
+
 /** Reject when a club is soft-archived (ADR-0016 / #186) — archiving locks out
- *  every member and admin. Shared by the write paths and, via `grantView`, by both
- *  authed read gates (#560).
+ *  every member and admin.
  *
- *  Fails CLOSED on a missing club. Unreachable from today's callers — each resolves
- *  an actor first, and a `members` row implies the club via FK — but the earlier
- *  `if (club && …)` form would have GRANTED on an unknown id, which is the wrong
- *  default for the function whose whole job is to deny. */
+ *  QUERIES for the club, so it is only for callers holding a club id and NO
+ *  resolved membership — today that is the memberless `read_write` impersonation
+ *  arm alone. Every caller that resolved a membership reads `membership.archivedAt`
+ *  instead, which `getMembership` now carries on its existing join (#566): this
+ *  used to run on every gated read and cost one round-trip each time.
+ *
+ *  Fails CLOSED on a missing club. Unreachable from today's callers — an
+ *  impersonation session's `club_id` is an FK — but the earlier `if (club && …)`
+ *  form would have GRANTED on an unknown id, which is the wrong default for the
+ *  function whose whole job is to deny. */
 async function assertClubNotArchived(clubId: string): Promise<void> {
 	const [club] = await db
 		.select({ archivedAt: clubs.archivedAt })
@@ -152,9 +175,7 @@ async function assertClubNotArchived(clubId: string): Promise<void> {
 	if (!club) {
 		throw new Error("Club not found.");
 	}
-	if (isClubArchived(club)) {
-		throw new Error("This club has been archived.");
-	}
+	assertNotArchived(club);
 }
 
 /**
@@ -192,9 +213,9 @@ async function requireReadWriteImpersonation(
  *  it — but it is NOT the only authed one, and reading it as such is what #560
  *  was: the READ gates below (`requireClubViewAccess` / `requireClubAdminView`)
  *  resolve their own memberships and never reach here, so they carry the archive
- *  check themselves via `grantView`. `assertClubNotArchived` therefore has THREE
- *  call sites in this file — here, `requireReadWriteImpersonation`, and `grantView`
- *  — which is a different three from the db-level enforcement points enumerated in
+ *  check themselves via `grantView`. Three places in this file reject an archived
+ *  club — here, `requireReadWriteImpersonation`, and `grantView` — which is a
+ *  different three from the db-level enforcement points enumerated in
  *  `club-archive.ts` (membership guards / read gates / public readers). Same
  *  number, different sets; that file is the canonical list. A
  *  `read_write` impersonation session resolves to a memberless effective-admin
@@ -207,7 +228,8 @@ export async function requireMembership(
 	if (!membership || membership.status !== "active") {
 		return requireReadWriteImpersonation(userId, clubId);
 	}
-	await assertClubNotArchived(clubId);
+	// From the row just read, not a second query (#566).
+	assertNotArchived(membership);
 	return membership;
 }
 
@@ -309,7 +331,14 @@ async function grantView(
 	via: ClubViewAccess["via"],
 	membership: RealMembership | null,
 ): Promise<ClubViewAccess> {
-	await assertClubNotArchived(clubId);
+	// The member arm reads the row it already resolved; only the memberless
+	// impersonation arm has to ask the database (#566). Both reject — which arm you
+	// came in on changes the cost, never the answer.
+	if (membership) {
+		assertNotArchived(membership);
+	} else {
+		await assertClubNotArchived(clubId);
+	}
 	return { via, impersonating: via === "impersonation", membership };
 }
 

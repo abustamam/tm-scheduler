@@ -259,6 +259,12 @@ describe.skipIf(!hasTestDb)(
 				personId: expect.any(String),
 				clubRole: "admin",
 				status: "active",
+				// Carried on the join since #566 so the archive check costs no second
+				// round-trip. A literal null, not `expect.anything()`: the whole point
+				// is that the value is the club's real archive state, and a live club's
+				// is null. The archived direction is covered in
+				// `archive-club.integration.test.ts`, which drives the gates.
+				archivedAt: null,
 			});
 		});
 
