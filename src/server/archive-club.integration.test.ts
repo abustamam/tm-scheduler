@@ -27,6 +27,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { clubs, officerTerms, user } from "#/db/schema";
 import { isClubArchived } from "#/lib/club-archive";
 import { cleanup, hasTestDb, seedClub, testDb } from "#/test/db";
+import { statementsDuring } from "#/test/query-spy";
 
 const getClubByIdentifierMock = vi.hoisted(() => vi.fn());
 
@@ -186,6 +187,46 @@ describe.skipIf(!hasTestDb)("club soft-archive (#186)", () => {
 		await expect(
 			requireClubAdminView(seed.adminUserId, seed.clubId),
 		).resolves.toMatchObject({ via: "member" });
+	});
+
+	it("a gated read costs ONE read of clubs, not two (#566)", async () => {
+		// The archive check used to issue its own `select archived_at from clubs`
+		// after `getMembership` had already joined that row. Measured before the
+		// fix: gates went 1 -> 2 statements, and /admin/vpe-dashboard spent 9 on
+		// pure authorization instead of 6 (three gated fns in one Promise.all).
+		//
+		// Asserted at the DRIVER, so it is indifferent to how the statement was
+		// built — a later refactor that reintroduces a second lookup by any means
+		// fails here. See CLAUDE.md's "a 'no extra query' test that spies a NAMED
+		// loader stops being able to fail the moment that query is inlined".
+		const seed = await seedClub();
+		createdClubs.push(seed.clubId);
+
+		const statements = await statementsDuring(async () => {
+			await requireClubViewAccess(seed.memberUserId, seed.clubId);
+		});
+
+		// Non-empty first. A spy that observes nothing makes every count below pass
+		// vacuously, which is the failure `query-spy.ts` warns about in its own
+		// header.
+		expect(
+			statements.length,
+			"the spy observed no statements at all — it is not seeing the gate's queries, so the count below proves nothing",
+		).toBeGreaterThan(0);
+
+		// ONE statement: `getMembership`. Two means the archive check went back to
+		// the database for a row that query already joined.
+		expect(
+			statements.map((s) => s.replace(/\s+/g, " ").slice(0, 80)),
+			"a gated read issued more than one statement — the archive check is querying again for a row getMembership already carries (#566)",
+		).toHaveLength(1);
+
+		// And it really is carrying the archive column, rather than having dropped
+		// the check to get the count down.
+		expect(
+			statements[0],
+			"getMembership no longer selects clubs.archived_at, so the gate is not reading the archive state from the row it resolved",
+		).toMatch(/"clubs"\."archived_at"/);
 	});
 
 	it("the admin read gate rejects an archived club for an EFFECTIVE admin too (#202/#560)", async () => {

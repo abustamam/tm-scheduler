@@ -98,25 +98,38 @@ describe("authed read gates gate on clubs.archived_at (#560)", () => {
 		).toBeNull();
 	});
 
-	it("the funnel asserts the archive state before it grants", () => {
+	it("the funnel asserts the archive state on BOTH arms before it grants", () => {
 		const funnel = SOURCE.slice(
 			SOURCE.indexOf("async function grantView("),
 		).split("\n}")[0] as string;
 		expect(funnel.length).toBeGreaterThan(20);
 
-		const assertAt = funnel.indexOf("assertClubNotArchived(");
+		// Two arms since #566, and each has to be named. The member arm reads the
+		// `archivedAt` that `getMembership` now carries on its join; only the
+		// memberless impersonation arm still queries. Asserting one would leave the
+		// other deletable — which is the shape of the whole #560 bug, one level down.
+		const memberArm = funnel.indexOf("assertNotArchived(membership)");
+		const impersonationArm = funnel.indexOf("await assertClubNotArchived(");
 		const grantAt = funnel.search(/return \{/);
+
 		expect(
-			assertAt,
-			"grantView no longer checks the archive state",
+			memberArm,
+			"grantView no longer checks the archive state for a real membership — an archived club would serve its own members again (#560)",
+		).toBeGreaterThan(-1);
+		expect(
+			impersonationArm,
+			"grantView no longer checks the archive state for the memberless impersonation arm",
 		).toBeGreaterThan(-1);
 		expect(grantAt, "grantView no longer builds the grant").toBeGreaterThan(-1);
-		expect(
-			assertAt,
-			"grantView builds the grant before asserting the archive state",
-		).toBeLessThan(grantAt);
-		expect(funnel, "the archive assertion is not awaited").toMatch(
-			/await\s+assertClubNotArchived\(/,
-		);
+
+		for (const [name, at] of [
+			["the member arm", memberArm],
+			["the impersonation arm", impersonationArm],
+		] as const) {
+			expect(
+				at,
+				`grantView builds the grant before ${name} asserts the archive state`,
+			).toBeLessThan(grantAt);
+		}
 	});
 });
