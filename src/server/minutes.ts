@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { MEETING_UPDATE_FIELDS } from "#/lib/meeting-limits";
+import { isReadableClub } from "./club-readable-logic";
 import {
 	getMembership,
 	getSessionUser,
@@ -73,6 +74,13 @@ export const getMinutes = createServerFn({ method: "GET" })
 		};
 		if (!sessionUser) return empty;
 		const clubId = await getMeetingClubId(meetingId);
+		// Archive takedown (#560). This fn resolves membership itself rather than
+		// through a `require*` gate, so it never reaches the gates'
+		// `assertClubNotArchived` — and a `createServerFn` is addressable directly with
+		// no router, so the meeting page 404ing does not gate this. Returns the
+		// module's existing not-visible shape rather than throwing, matching how the
+		// public readers collapse archived into never-existed.
+		if (!(await isReadableClub(clubId))) return empty;
 		const membership = await getMembership(sessionUser.id, clubId);
 		// Read-write impersonation (#246): a superadmin acting as admin has no
 		// membership but may still edit minutes. Only checked when there's no real

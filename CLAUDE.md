@@ -338,10 +338,23 @@ every `club.ts` server fn that calls one to gate on `requireClubViewAccess`. Ext
 queries worth testing or guarding; leaving the rest inline is fine.
 
 **Public `createServerFn` readers gate on `clubs.archived_at` themselves.** Archiving is the
-platform takedown lever (ADR-0016 / ADR-0024) and it has **two** db-level enforcement points, not
-one: `requireMembership` (`server/guards.ts`) covers every authed path, and
-`src/server/club-readable-logic.ts` — `isReadableClub`, `isReadableClubForMeeting`,
-`isReadableClubForMember` — covers every public, session-less one. A route guard is neither. The
+platform takedown lever (ADR-0016 / ADR-0024) and it has **three** db-level enforcement points, not
+one: `requireMembership` (`server/guards.ts`) covers authed WRITES; `grantView` in the same
+file covers the authed READ gates `requireClubViewAccess` / `requireClubAdminView`, which resolve
+their own memberships and never call `requireMembership`; and `src/server/club-readable-logic.ts` —
+`isReadableClub`, `isReadableClubForMeeting`, `isReadableClubForMember` — covers every public,
+session-less one. A route guard is none of them. `isClubArchived` (`src/lib/club-archive.ts`) holds
+the canonical list; this paragraph points at it rather than being a second copy. This line read
+"`requireMembership` covers every authed path" until #560, and that sentence is exactly why 24 gated
+readers kept serving an archived club's roster contact details to its own signed-in members: the
+claim was checkable in one place and false in another, so nobody re-derived it. There is **no
+impersonation exemption** on the read gates: `grantView` asserts the archive state for every arm, so
+a read-only session reads an archived club no more than the club's own members do, and
+`requireSuperadmin` (the console) stays the way to inspect one. An exemption was written into #560
+and dropped, for two reasons worth keeping: the console already hides "View as this club" for an
+archived club, so it was unreachable in the direction it was meant for, and because the member arm
+returns first it was silently overridden for an operator who also held a plain membership — which
+made the two gates answer OPPOSITELY for one person. The
 `/club/$clubId` shell's `beforeLoad` → `resolveClubOrRedirect` guards the **caller**, while a
 server fn is addressable directly with no session and no router; reading the shell as coverage is
 what left fourteen public readers serving an archived club's roster, agenda and live ballot until
@@ -355,9 +368,22 @@ must be lifted into a `*-logic.ts` seam before it can be gated *and* tested — 
 unreachable from vitest. `public-readers-archive-gate.guard.test.ts` **derives** its candidate set
 by walking `src/server/*.ts` and treating any `createServerFn` whose body calls no `require*` guard
 as anonymous, so the next public reader is enrolled automatically rather than remembered: it must
-be wired to a gated seam or waived in `REVIEWED_UNGATED` with a stated reason. Reads only so far —
-an archived club still accepts anonymous writes (#555) and a service worker can still serve its
-cached agenda (#556).
+be wired to a gated seam or waived in `REVIEWED_UNGATED` with a stated reason.
+
+**Reads are closed at every point, but the enrollment sweep is not.** The public readers gate
+(#544), the two authed READ gates gate (#560), and so do the authed readers that reach NO point at
+all because they resolve membership with a bare `getMembership`: `minutes.ts` and
+`api/meetings.$id.minutes.pdf.ts` call `isReadableClub` directly, and `my-activity-logic.ts` inlines
+the same `archived_at` predicate into `loadMyCommitments`' query (#560) — a reader that funnels
+through none of the three points cannot be covered by fixing one of them. The service worker evicts a
+taken-down club's pages and crest on a 404/410 (#556). What is NOT closed is the mechanism that
+catches the NEXT one: `public-readers-archive-gate.guard.test.ts` slices a server fn's body at a
+literal `\n});`, which every handler here overruns, so it swallowed the following non-exported
+helper and classified `getMinutes` as session-guarded — the #560 minutes leak survived that sweep
+with 54/54 green, and the sweep walks `src/server/*.ts` only, so `src/routes/api/**` is enrolled by
+nothing at all. Until that is fixed (TODOS.md "Archive takedown", P1) this list is maintained by
+hand. Also still open: an archived club **accepts anonymous writes** (#555), and the logo endpoint's
+year-long `immutable` HTTP cache outlives a takedown (#517).
 
 ## Deployment target
 

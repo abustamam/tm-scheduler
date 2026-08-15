@@ -252,8 +252,12 @@ describe("public server fns are wired to their archive-gated seam (#544)", () =>
  * fails the enrollment test below.
  */
 const REVIEWED_UNGATED: Record<string, string> = {
-	// Auth/session plumbing — not club data.
-	getAuthContext: "resolves the session itself; returns no club-owned data",
+	// Auth/session plumbing. NOT "returns no club-owned data" — that was this
+	// waiver's reason until #560, and it was false: the payload carries
+	// `clubs[].name` and `clubs[].clubNumber`, the brand identity ADR-0024 leans on
+	// archiving to remove. The club list is archive-filtered at its own seam now.
+	getAuthContext:
+		"session plumbing; the club list it returns is archive-filtered in loadUserClubMemberships (#560)",
 	setActiveClub: "writes a session preference",
 	// Gated, but through a different helper than a WIRINGS row can express.
 	getClubLogoMeta: "gated inside loadClubLogoMeta via isReadableClub (#495)",

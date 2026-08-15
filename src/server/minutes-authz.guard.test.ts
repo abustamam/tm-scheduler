@@ -86,3 +86,77 @@ describe("minutes capability boundary (#510)", () => {
 		});
 	}
 });
+
+/**
+ * Archive takedown on the minutes surface (#560).
+ *
+ * `getMinutes` resolves membership with a bare `getMembership` instead of a
+ * `require*` gate, so it never reaches the read gates' `assertClubNotArchived`,
+ * and a `createServerFn` is addressable directly with no router — the meeting page
+ * 404ing for an archived club gates the CALLER, not this endpoint. An archived club
+ * served its full minutes (roster names by attendance status, guest names, awards,
+ * action items) to its own signed-in members until the `isReadableClub` call below.
+ *
+ * A source guard because the fix lives inside a `createServerFn` handler, which is
+ * unreachable from vitest. Comment-blind: this is a must-BE-present check, so a
+ * comment naming the gate would otherwise satisfy it with the real call deleted.
+ *
+ * `public-readers-archive-gate.guard.test.ts` is the derived sweep that should have
+ * caught this and did not: it ends a declaration at `\n});`, but this repo's
+ * handlers close at one tab (`\t});`), so its slice for `getMinutes` overran into
+ * `gateAdmin` and matched THAT function's `requireUser` — classifying the fn as
+ * session-guarded and skipping it. Fixing that slicer is filed separately; this
+ * guard does not depend on it.
+ */
+describe("minutes archive gate (#560)", () => {
+	it("getMinutes gates on isReadableClub", () => {
+		expect(exportBody(SOURCE, "getMinutes")).toContain("isReadableClub(");
+	});
+
+	it("gates on the NEGATION — polarity, not just presence", () => {
+		// `toContain("isReadableClub(")` passes on the inverted gate
+		// (`if (await isReadableClub(clubId)) return empty;`), which serves archived
+		// clubs and withholds live ones — worse than no gate at all. Same for the PDF
+		// route below. Pin the `!`.
+		expect(exportBody(SOURCE, "getMinutes")).toMatch(
+			/if\s*\(!\(await isReadableClub\(/,
+		);
+		expect(readSource("src/routes/api/meetings.$id.minutes.pdf.ts")).toMatch(
+			/if\s*\(!\(await isReadableClub\(/,
+		);
+	});
+
+	it("gates BEFORE it resolves a membership or reads any minutes", () => {
+		const body = exportBody(SOURCE, "getMinutes");
+		const gateAt = body.indexOf("isReadableClub(");
+		expect(gateAt).toBeGreaterThan(-1);
+		// Ordering is the property, not mere presence: a gate placed after
+		// `loadMinutes` would leak the payload it exists to withhold.
+		for (const after of [
+			"getMembership(",
+			"loadMinutes(",
+			"loadMinutesProgram(",
+		]) {
+			const at = body.indexOf(after);
+			expect(at, `${after} not found in getMinutes`).toBeGreaterThan(-1);
+			expect(gateAt, `isReadableClub must run before ${after}`).toBeLessThan(
+				at,
+			);
+		}
+	});
+
+	it("the minutes PDF route gates too — same hole, a surface no sweep walks", () => {
+		// `public-readers-archive-gate.guard.test.ts` walks `src/server/*.ts` only, and
+		// the new read-gate guard reads `guards.ts` only, so nothing enrolls
+		// `src/routes/api/**`. This route is a plain authed GET URL: a pre-takedown
+		// bookmark works with just a session cookie and no router.
+		const route = readSource("src/routes/api/meetings.$id.minutes.pdf.ts");
+		expect(route).toContain("isReadableClub(");
+		const gateAt = route.indexOf("isReadableClub(");
+		const renderAt = route.indexOf("renderMinutesPdf(");
+		expect(renderAt).toBeGreaterThan(-1);
+		expect(gateAt).toBeLessThan(renderAt);
+		// And a LAPSED member must not download an active club's minutes either.
+		expect(route).toMatch(/membership\.status !== "active"/);
+	});
+});

@@ -377,6 +377,39 @@ describe.skipIf(!hasTestDb)("my cross-club activity (#437)", () => {
 		expect(meetingIds).toEqual([inA.upcomingMeetingId, inB.upcomingMeetingId]);
 	});
 
+	// Archive takedown (#560). `loadMyCommitments` carries `clubName` plus the
+	// meeting's date, theme, location and speech title — the same payload the PUBLIC
+	// sibling `listMemberCommitments` was gated for in #544, while this authed twin
+	// kept serving it on `/dashboard` and `/me`.
+	//
+	// The two-club fixture is what makes this fail-able: archiving A must remove
+	// exactly A's row and leave B's, so a filter that scoped to the USER rather than
+	// the row (emptying the list) fails just as loudly as no filter at all.
+	it("commitments exclude an archived club, and keep the live one", async () => {
+		// Control: both clubs present, and A's name is on the payload.
+		const before = await loadMyCommitments(userId);
+		expect(before.map((r) => r.clubName)).toEqual(["Club A", "Club B"]);
+
+		await testDb
+			.update(clubs)
+			.set({ archivedAt: new Date() })
+			.where(eq(clubs.id, clubA.clubId));
+
+		const after = await loadMyCommitments(userId);
+		expect(after.map((r) => r.clubName)).toEqual(["Club B"]);
+		expect(after.map((r) => r.meetingId)).toEqual([inB.upcomingMeetingId]);
+
+		// Unarchive restores it — archiving is soft and reversible (ADR-0016).
+		await testDb
+			.update(clubs)
+			.set({ archivedAt: null })
+			.where(eq(clubs.id, clubA.clubId));
+		expect((await loadMyCommitments(userId)).map((r) => r.clubName)).toEqual([
+			"Club A",
+			"Club B",
+		]);
+	});
+
 	// Every field pinned to a LITERAL. `expect.any(Number)`/`expect.any(String)`
 	// let a select swap one column for another of the same type and still pass.
 	it("commitment row carries every rendered field", async () => {

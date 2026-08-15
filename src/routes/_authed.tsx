@@ -28,6 +28,7 @@ export const Route = createFileRoute("/_authed")({
 			officerPositions: ctx.officerPositions,
 			isSuperadmin: ctx.isSuperadmin,
 			impersonating: ctx.impersonating,
+			archivedClubCount: ctx.archivedClubCount,
 		};
 	},
 	component: WorkspaceLayout,
@@ -42,6 +43,7 @@ function WorkspaceLayout() {
 		officerPositions,
 		isSuperadmin,
 		impersonating,
+		archivedClubCount,
 	} = Route.useRouteContext();
 	const router = useRouter();
 
@@ -70,6 +72,7 @@ function WorkspaceLayout() {
 				email={authUser.email}
 				onSignOut={handleSignOut}
 				isSuperadmin={isSuperadmin}
+				hasArchivedClub={archivedClubCount > 0}
 			/>
 		);
 	}

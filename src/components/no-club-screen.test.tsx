@@ -15,6 +15,55 @@ describe("NoClubScreen", () => {
 		expect(screen.getByText("jane@club.org")).toBeTruthy();
 	});
 
+	it("tells a member whose club was TAKEN DOWN what actually happened (#560)", () => {
+		render(
+			<NoClubScreen
+				email="jane@club.org"
+				onSignOut={() => {}}
+				hasArchivedClub
+			/>,
+		);
+		expect(screen.getByText("Your club isn't available")).toBeTruthy();
+		// The default copy is an account problem this member cannot fix — their club
+		// was removed, so no email address will help. It must not be shown to them.
+		expect(screen.queryByText("You're not in a club yet")).toBeNull();
+		expect(
+			screen.queryByText(/isn't linked to a Toastmasters club on GavelUp yet/),
+		).toBeNull();
+		expect(
+			screen.getByText(/the club has been removed from GavelUp/),
+		).toBeTruthy();
+		expect(
+			screen.getByText(/Signing in with a different email won't change this/),
+		).toBeTruthy();
+	});
+
+	it("does not name the archived club — that is the brand asset archiving removes", () => {
+		// The prop is a boolean on purpose (ADR-0024): naming the club here would put
+		// back the identity the takedown exists to remove.
+		const { container } = render(
+			<NoClubScreen
+				email="jane@club.org"
+				onSignOut={() => {}}
+				hasArchivedClub
+			/>,
+		);
+		expect(container.textContent).not.toMatch(/club number/i);
+		expect(screen.getByText("jane@club.org")).toBeTruthy();
+	});
+
+	it("keeps the default copy when the account is simply on no roster", () => {
+		render(
+			<NoClubScreen
+				email="jane@club.org"
+				onSignOut={() => {}}
+				hasArchivedClub={false}
+			/>,
+		);
+		expect(screen.getByText("You're not in a club yet")).toBeTruthy();
+		expect(screen.queryByText("Your club isn't available")).toBeNull();
+	});
+
 	it("offers the Request access mailto as an actionable next step", () => {
 		render(<NoClubScreen email="jane@club.org" onSignOut={() => {}} />);
 		const cta = screen.getByRole("link", { name: "Request access" });

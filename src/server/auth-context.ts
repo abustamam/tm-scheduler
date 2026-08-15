@@ -1,10 +1,14 @@
 import { createServerFn } from "@tanstack/react-start";
 import { getCookie, setCookie } from "@tanstack/react-start/server";
-import { and, asc, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
-import { clubs, members, people, user as userTable } from "#/db/schema";
+import { clubs, user as userTable } from "#/db/schema";
 import { ACTIVE_CLUB_COOKIE, resolveActiveClubId } from "#/lib/active-club";
+import {
+	countArchivedClubMemberships,
+	loadUserClubMemberships,
+} from "./auth-context-logic";
 import { getSessionUser } from "./guards";
 import { getActiveImpersonationForUser } from "./impersonation-logic";
 import { getOpenOfficerPositions } from "./officers-logic";
@@ -32,6 +36,7 @@ export const getAuthContext = createServerFn({ method: "GET" }).handler(
 				officerPositions: [] as const,
 				isSuperadmin: false,
 				impersonating: null,
+				archivedClubCount: 0,
 			};
 		}
 		// Platform superadmin flag (ADR-0016 / #183) — orthogonal to club role.
@@ -44,19 +49,8 @@ export const getAuthContext = createServerFn({ method: "GET" }).handler(
 		const isSuperadmin = userRow?.isSuperadmin ?? false;
 		// Resolve the signed-in user → Person (people.user_id) → their active
 		// memberships, reading role + the member id per club (ADR-0008 Phase B).
-		const myMemberships = await db
-			.select({
-				memberId: members.id,
-				clubId: clubs.id,
-				name: clubs.name,
-				clubNumber: clubs.clubNumber,
-				clubRole: members.clubRole,
-			})
-			.from(members)
-			.innerJoin(people, eq(people.id, members.personId))
-			.innerJoin(clubs, eq(clubs.id, members.clubId))
-			.where(and(eq(people.userId, user.id), eq(members.status, "active")))
-			.orderBy(asc(clubs.name));
+		// Soft-archived clubs are excluded (#560) — see `loadUserClubMemberships`.
+		const myMemberships = await loadUserClubMemberships(user.id);
 
 		const myClubs = myMemberships.map((m) => ({
 			clubId: m.clubId,
@@ -148,6 +142,12 @@ export const getAuthContext = createServerFn({ method: "GET" }).handler(
 			}
 		}
 
+		// Only when the switcher came back empty: tell "never on a roster" apart from
+		// "your club was taken down" (#560), without putting the archived club's name
+		// or number back on the payload. Costs nothing on the ordinary path.
+		const archivedClubCount =
+			myClubs.length === 0 ? await countArchivedClubMemberships(user.id) : 0;
+
 		return {
 			user: { id: user.id, name: user.name, email: user.email },
 			clubs: myClubs,
@@ -156,6 +156,7 @@ export const getAuthContext = createServerFn({ method: "GET" }).handler(
 			officerPositions,
 			isSuperadmin,
 			impersonating,
+			archivedClubCount,
 		};
 	},
 );

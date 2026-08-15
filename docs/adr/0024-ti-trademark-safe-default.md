@@ -217,6 +217,17 @@ page is not a removal. The gate's enrollment is now derived rather than listed
 (`public-readers-archive-gate.guard.test.ts`), so a future reader cannot quietly reopen it.
 Still open on the write side: an archived club continues to accept anonymous writes (#555).
 
+**Constraint 4 reaches on-device copies 2026-08-14 (#560 / #556).** Stopping the server is not the
+whole of a takedown. Two gaps sat behind #544: the club's own signed-in members still read its
+roster, minutes and commitments, because the authed READ gates never consulted `archived_at`
+(#560 — see ADR-0016 and ADR-0020); and a device that had opened a meeting kept rendering the club's
+crest and full agenda from the service worker's caches, because once the server started answering
+404 the stale entry was neither overwritten nor removed (#556). Both are closed: every authed read
+now gates, and a 404/410 evicts, with `activate` purging every cached crest once and the club
+switcher's localStorage copy of club names and Toastmasters numbers key-bumped alongside it
+(ADR-0015 carries the cache mechanics). One copy remains outside the lever's reach and no server
+change can recall it: the logo endpoint's year-long `immutable` HTTP cache (#517).
+
 **On the `.pptx` export.** Decision 1 removed the *vendored TI wordmark* from `deck-to-pptx.ts`,
 and that removal stands — the repo ships no mark. What #496 inlines there is the club's own
 upload, which is the p.32 case: an authorized user putting its mark on its own agenda material,
