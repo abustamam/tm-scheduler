@@ -27,23 +27,17 @@
 
 ## Archive takedown
 
-All five surfaced by the `/review` passes on #560/#556 and deliberately left out of that
-branch. The first is the most important: it is a security control that reports green while
-not working.
+Surfaced by the `/review` passes on #560/#556 and deliberately left out of that branch.
 
-- `public-readers-archive-gate.guard.test.ts` — the derived enrollment sweep #544 added so the
-  next ungated reader is caught automatically — has a body-slicing bug and does not catch it.
-  `serverFnBody` ends a declaration at `source.indexOf("\n});")`, but every handler in this repo
-  closes at one tab (`\t});`), so the slice overruns into the next non-exported helper. For
-  `getMinutes` it swallowed `gateAdmin`, matched THAT function's `requireUser`, and classified the
-  fn as session-guarded — which is exactly how the minutes leak fixed in #560 survived the guard,
-  with 54/54 reported green. Fix: end the slice at the next `/^export /m` rather than a `\n});`
-  literal, and add a vacuity assertion that no sliced body contains a column-0 `function` /
-  `const`. Expect the fix to enroll further readers; that is the point, but it is why it was not
-  done inside a security fix. Related and worth doing together: the sweep walks `src/server/*.ts`
-  only, so `src/routes/api/**` is enrolled by nothing — the minutes-PDF route was ungated for the
-  same reason and its sibling role-sheets route one directory over was not.
-  **Priority:** P1
+- The enrollment sweep walks `src/server/*.ts` only, so **`src/routes/api/**` is enrolled by
+  nothing**. That is the other half of #565: the minutes-PDF route was an ungated authed GET URL
+  serving an archived club's minutes, while its sibling `api/meetings.$id.role-sheets.$sheet.pdf.ts`
+  one directory entry over called `isReadableClub` correctly. Both are gated now, but only by a
+  hand-written case in `minutes-authz.guard.test.ts` — the next binary/export route added under
+  `src/routes/api/` is caught by no derived check. Extending the walk needs a different body-slicer
+  (route handlers are `server: { handlers: { GET: … } }`, not `export const x = createServerFn`),
+  which is why it did not ride along with the slicer fix.
+  **Priority:** P2
 
 - The archive check costs an avoidable round-trip on every gated read. `grantView` →
   `assertClubNotArchived` issues its own `SELECT archived_at FROM clubs`, while `getMembership` —
@@ -135,6 +129,17 @@ not working.
   **Priority:** P4
 
 ## Completed
+
+- The derived enrollment sweep in `public-readers-archive-gate.guard.test.ts` reported green while
+  skipping a reader. `serverFnBody` ended a declaration at a literal `\n});`, but every
+  `createServerFn` here closes at one tab because `.handler(` is chained one level in — so the slice
+  ran past the declaration and swallowed whatever followed. `getMinutes` absorbed `gateAdmin`,
+  matched THAT function's `requireUser`, and was filed as session-guarded and skipped, which is how
+  the #560 minutes leak reached production behind 54/54 green. Measured before the fix: 40 of 162
+  slices over-captured, one by 11,000 characters. The slice now ends at the next top-level
+  declaration, `getMinutes` is enrolled with a WIRINGS row, and a new vacuity case fails on any
+  slice that runs past its own declaration rather than letting the next recurrence be invisible.
+  **Completed:** v1.13.1.1 (2026-08-15) — #565
 
 - An impossible meeting date in a URL silently resolved to a REAL, different meeting. `parseMeetingKey` was shape-only, and `Date.UTC` overflow-rolls, so `2026-09-31` returned October 1st's meeting with a 200 — on the public ballot, a vote cast in a meeting nobody chose. The 500 originally recorded here (`9999-99-99`) was the loud minority case; the silent roll was the bug. Fixed by rejecting impossible dates (and times) at parse, which covers all four public meeting routes at once.
   **Completed:** v1.10.2.0 (2026-08-10)

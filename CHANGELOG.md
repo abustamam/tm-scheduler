@@ -2,6 +2,12 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.13.1.1] - 2026-08-15
+
+### Fixed
+
+- **Nothing user-facing.** Repairs the internal check that is supposed to catch a page which forgets to hide a removed club. It was reporting a clean bill of health while skipping one page — the meeting minutes, which is exactly the page that turned out to be leaking in v1.13.1.0 and had to be found by hand. The check now reads each page's code correctly, and fails if it is ever fooled the same way again.
+
 ## [1.13.1.0] - 2026-08-14
 
 ### Fixed
