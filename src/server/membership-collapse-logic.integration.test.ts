@@ -31,11 +31,9 @@ import {
 	meetingAttendance,
 	meetingAttendancePlan,
 	meetingAwards,
-	meetingOutreach,
 	meetings,
 	meetingVoteSessions,
 	meetingVotes,
-	memberAvailability,
 	memberDues,
 	members,
 	notifications,
@@ -239,15 +237,10 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 		expect(kept?.preferredName).toBe("Bob");
 	});
 
-	it("survives a same-meeting availability + same-period dues collision", async () => {
+	it("survives a same-period dues collision", async () => {
 		const keeperId = await addMembership({ name: "Keeper" });
 		const absorbedId = await addMembership({ name: "Absorbed" });
 
-		// Both are NOT available for the SAME meeting (unique member,meeting).
-		await testDb.insert(memberAvailability).values([
-			{ memberId: keeperId, meetingId: seed.meetingId },
-			{ memberId: absorbedId, meetingId: seed.meetingId },
-		]);
 		// Both have a dues row for the SAME period (unique membership,period).
 		const periodId = await makePeriod("shared period");
 		await testDb.insert(memberDues).values([
@@ -257,23 +250,6 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 
 		// Must NOT throw a unique-violation.
 		await expect(collapse(keeperId, absorbedId)).resolves.toBeUndefined();
-
-		// Exactly one availability row remains for (keeper, meeting); none for absorbed.
-		const keeperAvail = await testDb
-			.select()
-			.from(memberAvailability)
-			.where(
-				and(
-					eq(memberAvailability.memberId, keeperId),
-					eq(memberAvailability.meetingId, seed.meetingId),
-				),
-			);
-		expect(keeperAvail).toHaveLength(1);
-		const absorbedAvail = await testDb
-			.select()
-			.from(memberAvailability)
-			.where(eq(memberAvailability.memberId, absorbedId));
-		expect(absorbedAvail).toHaveLength(0);
 
 		// Exactly one dues row remains for (keeper, period) — the keeper's own,
 		// which was recorded `paid` (the absorbed `waived` dup was dropped).
@@ -295,37 +271,12 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 		expect(absorbedDues).toHaveLength(0);
 	});
 
-	it("survives a same-meeting outreach (contacted) collision", async () => {
-		const keeperId = await addMembership({ name: "Keeper" });
-		const absorbedId = await addMembership({ name: "Absorbed" });
-
-		// Both are marked contacted for the SAME meeting (unique member,meeting).
-		await testDb.insert(meetingOutreach).values([
-			{ memberId: keeperId, meetingId: seed.meetingId },
-			{ memberId: absorbedId, meetingId: seed.meetingId },
-		]);
-
-		// Must NOT throw a unique-violation.
-		await expect(collapse(keeperId, absorbedId)).resolves.toBeUndefined();
-
-		// Exactly one outreach row remains for (keeper, meeting); none for absorbed.
-		const keeperOutreach = await testDb
-			.select()
-			.from(meetingOutreach)
-			.where(
-				and(
-					eq(meetingOutreach.memberId, keeperId),
-					eq(meetingOutreach.meetingId, seed.meetingId),
-				),
-			);
-		expect(keeperOutreach).toHaveLength(1);
-		const absorbedOutreach = await testDb
-			.select()
-			.from(meetingOutreach)
-			.where(eq(meetingOutreach.memberId, absorbedId));
-		expect(absorbedOutreach).toHaveLength(0);
-	});
-
+	// The two collision tests that used to sit here — one per legacy boolean
+	// table — are gone with the tables. The test below is their replacement and
+	// covers strictly more: `meeting_attendance_plan` carries the SAME unique
+	// (member, meeting) both of them had, so the same delete-then-re-point dance
+	// is under test, and it also pins a row that must SURVIVE the merge, which
+	// neither of the originals did.
 	it("re-points plan rows and drops the absorbed duplicate", async () => {
 		const keeperId = await addMembership({ name: "Keeper" });
 		const absorbedId = await addMembership({ name: "Absorbed" });
@@ -668,15 +619,14 @@ describe.skipIf(!hasTestDb)("collapseMemberships", () => {
 		const HANDLED = new Set([
 			"officer_terms.membership_id",
 			"member_dues.membership_id",
-			"member_availability.member_id",
 			"meeting_attendance.member_id",
-			// Planned attendance. Supersedes `member_availability` and
-			// `meeting_outreach`, which are still listed above because they are
-			// still IN the database — they leave this set when they are dropped,
-			// not before, since it is compared against the live catalog.
+			// Planned attendance. The two boolean tables it superseded were
+			// dropped in the same PR and left this set at that moment, not before:
+			// it is compared for EXACT equality against the live catalog, so a
+			// name lingering here after the drop fails just as loudly as a new FK
+			// missing from it.
 			"meeting_attendance_plan.member_id",
 			"meeting_awards.member_id",
-			"meeting_outreach.member_id",
 			"notifications.assigned_member_id",
 			// #419 — attribution for a manual completion mark.
 			"project_completion_marks.marked_by_member_id",

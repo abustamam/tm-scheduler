@@ -157,10 +157,10 @@ export const attendanceStatusEnum = pgEnum("attendance_status", [
 ]);
 
 // Planned attendance for an UPCOMING meeting (D1 of the 2026-08-11 spec).
-// Replaces two disconnected booleans: `meeting_outreach` ("I asked them") and
-// `member_availability` ("not available"). Row ABSENT = "no answer" — silence
-// and a positive answer used to be indistinguishable, which is why `coming`
-// exists at all. Deliberately NOT `attendance_status`: that one is the RECORD
+// Replaces the two disconnected boolean tables dropped in this same PR — one
+// meaning "I asked them", one meaning "not available". Row ABSENT = "no
+// answer" — silence and a positive answer used to be indistinguishable, which
+// is why `coming` exists at all. Deliberately NOT `attendance_status`: that one is the RECORD
 // (present/absent/excused) written after the meeting, and a plan must never be
 // storable as a record. See `meeting_attendance` below.
 export const attendancePlanStatusEnum = pgEnum("attendance_plan_status", [
@@ -885,69 +885,17 @@ export const roleSlots = pgTable(
 );
 
 // ---------------------------------------------------------------------------
-// Member availability (presence = "Not Available" for that meeting)
-// ---------------------------------------------------------------------------
-
-export const memberAvailability = pgTable(
-	"member_availability",
-	{
-		id: uuid("id").defaultRandom().primaryKey(),
-		memberId: uuid("member_id")
-			.notNull()
-			.references(() => members.id, { onDelete: "cascade" }),
-		meetingId: uuid("meeting_id")
-			.notNull()
-			.references(() => meetings.id, { onDelete: "cascade" }),
-		createdAt: timestamp("created_at").defaultNow().notNull(),
-	},
-	(t) => [
-		// Presence of a row = "Not Available" for that meeting. One per pair.
-		uniqueIndex("member_availability_unique").on(t.memberId, t.meetingId),
-		index("member_availability_meeting_idx").on(t.meetingId),
-	],
-);
-
-// ---------------------------------------------------------------------------
-// Meeting outreach (#340) — the officer's private "contacted" record. Presence
-// of a row = "this member was contacted about filling a role for this meeting".
-// A near-clone of member_availability: per-(member, meeting), one row per pair,
-// cascade on member/meeting delete. WHO marked it and HOW (nudge vs. manual)
-// live in activity_log.detail, not on the row — the row is a pure boolean.
-// Admin/VPE-only to read and write (never surfaced to members or the public).
-// ---------------------------------------------------------------------------
-
-export const meetingOutreach = pgTable(
-	"meeting_outreach",
-	{
-		id: uuid("id").defaultRandom().primaryKey(),
-		memberId: uuid("member_id")
-			.notNull()
-			.references(() => members.id, { onDelete: "cascade" }),
-		meetingId: uuid("meeting_id")
-			.notNull()
-			.references(() => meetings.id, { onDelete: "cascade" }),
-		// = "contacted at". No separate contactedAt column.
-		createdAt: timestamp("created_at").defaultNow().notNull(),
-	},
-	(t) => [
-		// Presence of a row = "contacted"; one per (member, meeting). Plain unique
-		// index so ON CONFLICT can infer it (idempotent mark).
-		uniqueIndex("meeting_outreach_unique").on(t.memberId, t.meetingId),
-		index("meeting_outreach_meeting_idx").on(t.meetingId),
-	],
-);
-
-// ---------------------------------------------------------------------------
 // Planned attendance — one row per (member, meeting) carrying where the outreach
-// got to. Supersedes `member_availability` (row = not available) and
-// `meeting_outreach` (row = contacted), both dropped later in the same PR: they
+// got to. It SUPERSEDED, and this PR dropped, two single-boolean tables: one
+// whose row meant "not available" and one whose row meant "contacted". They
 // answered overlapping questions and could disagree, and neither could express
-// "she replied, she's coming". `not_coming` WILL BE the only encoding of
-// "unavailable" once every reader is repointed later in this PR (Task 6) — but
-// as of THIS commit that repointing hasn't happened: this table is empty,
-// unread and unwritten outside `schema.ts` and its own test, and
-// `member_availability` / `meeting_outreach` remain the sole live source for
-// every consumer.
+// "she replied, she's coming". `not_coming` is now the ONLY encoding of
+// "unavailable", and the row's absence is the only encoding of "no answer" —
+// the distinction the pair could not draw. Reach this table through
+// `src/server/attendance-plan-logic.ts` and nowhere else: that seam owns the
+// archive gate, the officer-only `reached_out` rung and the actor attribution,
+// and `attendance-plan-store.guard.test.ts` fails on an inline query anywhere
+// but the membership merge.
 // ---------------------------------------------------------------------------
 
 export const meetingAttendancePlan = pgTable(
@@ -1903,20 +1851,6 @@ export const speechesRelations = relations(speeches, ({ one, many }) => ({
 		references: [pathwaysProjects.id],
 	}),
 }));
-
-export const meetingOutreachRelations = relations(
-	meetingOutreach,
-	({ one }) => ({
-		member: one(members, {
-			fields: [meetingOutreach.memberId],
-			references: [members.id],
-		}),
-		meeting: one(meetings, {
-			fields: [meetingOutreach.meetingId],
-			references: [meetings.id],
-		}),
-	}),
-);
 
 export const notificationsRelations = relations(notifications, ({ one }) => ({
 	user: one(user, {

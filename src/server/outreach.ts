@@ -89,8 +89,9 @@ export const setContacted = createServerFn({ method: "POST" })
 /**
  * Clear a member's "contacted" mark for a meeting (#340). Admin/VPE-only.
  *
- * WIDER than it was: this used to delete only the `meeting_outreach` row, and it
- * now clears the whole plan row, so clearing "contacted" on a member who is
+ * WIDER than it was: this used to delete only the (now dropped) per-meeting
+ * "contacted" row, and it clears the whole plan row, so clearing "contacted"
+ * on a member who is
  * `not_coming` would wipe that answer too. Unreachable through the UI —
  * `deriveOutreach` never lists an unavailable member, so no checkbox exists for
  * them to uncheck — and PR 2 replaces this fn with the panel's explicit rung

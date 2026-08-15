@@ -868,8 +868,9 @@ export async function reassignSlotSpeech(
  * assignments (actor ≠ member, or no actor) must NOT speak for the member, so
  * they no-op; the early return is the whole self-only rule.
  *
- * This used to DELETE the claimant's `member_availability` row, which threw the
- * information away — "no answer" and "coming" were the same absent row. The
+ * This used to DELETE the claimant's row in the old, now-dropped availability
+ * table, which threw the information away — "no answer" and "coming" were the
+ * same absent row. The
  * ladder can hold the answer, so it does, and the planned-attendance panel
  * renders it (D6, 2026-08-11).
  *

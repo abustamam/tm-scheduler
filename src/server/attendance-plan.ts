@@ -19,8 +19,8 @@ import { resolveWriteActor } from "./write-actor-logic";
 /**
  * The planned-attendance write surface (D6, 2026-08-11): one entry point for the
  * whole `reached_out | coming | not_coming` ladder, replacing the four fns that
- * wrote `member_availability` and `meeting_outreach` separately. Those keep
- * working as thin delegates until PR 2 repoints the panel here.
+ * wrote the two now-dropped boolean tables separately. Those keep working as
+ * thin delegates until PR 2 repoints the panel here.
  */
 
 // Module-private on purpose. `server-modules.guard.test.ts` lets a server-fn

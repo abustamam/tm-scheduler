@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
 	duesPeriods,
-	memberAvailability,
+	meetingAttendancePlan,
 	memberDues,
 	members,
 	officerTerms,
@@ -337,18 +337,20 @@ describe.skipIf(!hasTestDb)("roster management", () => {
 		expect(log).toBeTruthy();
 	});
 
-	it("mergeMembers re-points slots, availability, and history then deletes B", async () => {
+	it("mergeMembers re-points slots, planned attendance, and history then deletes B", async () => {
 		const { applyMemberMerge } = await import("#/server/members-logic");
 		const keeper = seed.memberId;
 		const absorbed = await addMemberRow(seed.clubId, "Dupe");
-		// B holds the slot, has availability, and has activity history.
+		// B holds the slot, has answered "not coming", and has activity history.
 		await testDb
 			.update(roleSlots)
 			.set({ assignedMemberId: absorbed, status: "claimed" })
 			.where(eq(roleSlots.id, seed.slotId));
-		await testDb
-			.insert(memberAvailability)
-			.values({ memberId: absorbed, meetingId: seed.meetingId });
+		await testDb.insert(meetingAttendancePlan).values({
+			memberId: absorbed,
+			meetingId: seed.meetingId,
+			status: "not_coming",
+		});
 		await logActivity(testDb, {
 			clubId: seed.clubId,
 			actorMemberId: absorbed,
@@ -385,12 +387,18 @@ describe.skipIf(!hasTestDb)("roster management", () => {
 			.from(roleSlots)
 			.where(eq(roleSlots.id, seed.slotId));
 		expect(slot.assignedMemberId).toBe(keeper);
-		// Availability moved.
-		const avail = await testDb
-			.select()
-			.from(memberAvailability)
-			.where(eq(memberAvailability.memberId, absorbed));
-		expect(avail.length).toBe(0);
+		// The planned-attendance answer MOVED — it was not merely destroyed. The
+		// FK is ON DELETE CASCADE, so asserting only "absorbed has no rows" would
+		// pass just as well for a merge that dropped the answer on the floor; the
+		// keeper-side assertion is the one that can fail.
+		const plan = await testDb
+			.select({
+				memberId: meetingAttendancePlan.memberId,
+				status: meetingAttendancePlan.status,
+			})
+			.from(meetingAttendancePlan)
+			.where(eq(meetingAttendancePlan.meetingId, seed.meetingId));
+		expect(plan).toEqual([{ memberId: keeper, status: "not_coming" }]);
 		// History re-attributed: no rows still reference B as actor.
 		const bActor = await testDb
 			.select()
