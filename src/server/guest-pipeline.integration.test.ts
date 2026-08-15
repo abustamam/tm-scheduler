@@ -32,6 +32,7 @@ import {
 	testDb,
 	waitForLockWait,
 } from "#/test/db";
+import { readsOf, statementsDuring } from "#/test/query-spy";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
@@ -1888,6 +1889,123 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 				.where(eq(guests.clubId, seed.clubId));
 			expect(accepted).toBeLessThanOrEqual(GUEST_BOOK_MAX_NEW_PER_WINDOW);
 			expect(row.n).toBeLessThanOrEqual(GUEST_BOOK_MAX_NEW_PER_WINDOW);
+		});
+	});
+
+	/**
+	 * Read-time phone coalescing on the pipeline payload (#295), the third path
+	 * through `coalesceToE164` after the season grid and the club roster.
+	 *
+	 * These insert into `guests` DIRECTLY, bypassing `toStoredPhone` — that is the
+	 * shape a row written before normalize-on-write (#397) actually has, and it is
+	 * the only way to produce one now that every write path normalizes. The
+	 * `uniquePhone` rule above does not apply: nothing here converts, so no
+	 * `people` row is created to collide with, and each assertion matches on the
+	 * returned guest id rather than on a name or a number.
+	 */
+	describe("loadGuestPipeline phone normalization", () => {
+		async function insertGuestWithPhone(phone: string): Promise<string> {
+			const [row] = await testDb
+				.insert(guests)
+				.values({ clubId: seed.clubId, name: "Sam Visitor", phone })
+				.returning({ id: guests.id });
+			if (!row) throw new Error("Failed to insert guest");
+			return row.id;
+		}
+
+		it("coalesces a pre-#397 national number to E.164", async () => {
+			const guestId = await insertGuestWithPhone("(415) 555-2671");
+			const rows = await loadGuestPipeline(seed.clubId);
+			expect(rows.find((r) => r.id === guestId)?.phone).toBe("+14155552671");
+		});
+
+		it("uses the CLUB's country code, not the app default", async () => {
+			// Pins that the loader is actually consulted rather than `+1` being
+			// hard-coded — the same number resolves differently under +44.
+			await testDb
+				.update(clubs)
+				.set({ defaultCountryCode: "+44" })
+				.where(eq(clubs.id, seed.clubId));
+			const guestId = await insertGuestWithPhone("020 7946 0958");
+			const rows = await loadGuestPipeline(seed.clubId);
+			expect(rows.find((r) => r.id === guestId)?.phone).toBe("+442079460958");
+		});
+
+		it("keeps an un-normalizable phone as stored rather than dropping it", async () => {
+			// `toStoredPhone` stores a digit-less value verbatim so the VPM can still
+			// read and edit it, and the guest editor's phone field has no digit
+			// requirement — so this is reachable in normal use, not just legacy data.
+			// The payload must still carry the text: `WhatsAppPhoneLink` renders it as
+			// plain text instead of a dead link.
+			const guestId = await insertGuestWithPhone("call the office");
+			const rows = await loadGuestPipeline(seed.clubId);
+			expect(rows.find((r) => r.id === guestId)?.phone).toBe("call the office");
+		});
+
+		it("leaves a guest with no phone at null", async () => {
+			const [row] = await testDb
+				.insert(guests)
+				.values({ clubId: seed.clubId, name: "Phoneless Visitor" })
+				.returning({ id: guests.id });
+			const rows = await loadGuestPipeline(seed.clubId);
+			expect(rows.find((r) => r.id === row!.id)?.phone).toBeNull();
+		});
+
+		it("carries the STORED bytes as phoneRaw alongside the coalesced number", async () => {
+			// The edit dialog prefills from `phoneRaw`, so the two fields have to
+			// DIVERGE wherever coalescing changes anything — a `phoneRaw` that simply
+			// aliased `phone` would pass a bare "is it defined" check while putting
+			// the country-code guess back in the input.
+			//
+			// "x12" is an extension: coalescing welds it into the subscriber number,
+			// so the guess is visibly not a phone number the VPM ever typed.
+			const guestId = await insertGuestWithPhone("415-555-2671 x12");
+			const row = (await loadGuestPipeline(seed.clubId)).find(
+				(r) => r.id === guestId,
+			);
+			expect(row?.phoneRaw).toBe("415-555-2671 x12");
+			expect(row?.phone).toBe("+1415555267112");
+			expect(row?.phoneRaw).not.toBe(row?.phone);
+		});
+
+		it("reads the clubs row ONCE for the timezone and the country code", async () => {
+			// Both are columns on the same `clubs` row. They used to be two loaders
+			// issued in a `Promise.all` — concurrent, but still two round trips for
+			// one row, on a payload that already makes several.
+			//
+			// Invisible to every other assertion in this file: the pipeline it
+			// returns is byte-identical either way, so the observable has to be the
+			// QUERY (CLAUDE.md, "assert the observable the guard actually
+			// controls"). Counted at the pg client rather than by spying on a named
+			// loader, because collapsing the two loaders DELETED the function a
+			// call-count spy would have watched.
+			const reads = readsOf(
+				await statementsDuring(() => loadGuestPipeline(seed.clubId)),
+				"clubs",
+			);
+
+			// Anti-vacuity: a spy that intercepted nothing, or a pattern that
+			// stopped matching, reports zero and makes the count below meaningless.
+			expect(
+				reads.length,
+				"no `clubs` read observed — the query spy has stopped working",
+			).toBeGreaterThan(0);
+			expect(reads).toHaveLength(1);
+			// …and that single read really does carry both columns, so "one query"
+			// was not achieved by dropping one of them.
+			expect(reads[0]).toContain("timezone");
+			expect(reads[0]).toContain("default_country_code");
+		});
+
+		it("phoneRaw is byte-exact, including surrounding whitespace", async () => {
+			// `coalesceToE164` does not trim but `toE164` does before parsing, so a
+			// padded value is the one shape where a `phoneRaw` implemented as
+			// "coalesce, then undo" would quietly differ from the column.
+			const guestId = await insertGuestWithPhone("  call the office  ");
+			const row = (await loadGuestPipeline(seed.clubId)).find(
+				(r) => r.id === guestId,
+			);
+			expect(row?.phoneRaw).toBe("  call the office  ");
 		});
 	});
 });

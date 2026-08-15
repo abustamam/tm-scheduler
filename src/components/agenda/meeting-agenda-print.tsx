@@ -7,6 +7,8 @@
 // meeting-schedule are optional free-text profile fields: each renders in its
 // designated slot when set and is omitted gracefully (no empty label) when not.
 import { QRCodeSVG } from "qrcode.react";
+import { groupByPresenter } from "#/lib/agenda-groups";
+import { RUN_NARRATIVE_TYPE } from "#/lib/agenda-print-type";
 import type { TimelineRow } from "#/lib/agenda-timing";
 import { announcementLines } from "#/lib/announcement-lines";
 import {
@@ -487,9 +489,57 @@ function rowKey(r: TimelineRow, i: number): string {
 	return `${i}-${r.time}-${r.who}`;
 }
 
+/** The timing signals that belong to ONE beat: the colored green·yellow·red
+ *  trio, or the muted min–max range.
+ *
+ *  Split out of `RunNarrative` because a merged presenter block renders these
+ *  in two different positions — beside the presenter's name for the beat that
+ *  opens the block, and at the end of its own detail line for every beat after
+ *  it. One copy, so the two positions cannot drift apart. */
+function RowMarks({
+	row,
+	timingColors,
+	size,
+}: {
+	row: TimelineRow;
+	timingColors?: boolean;
+	size: number;
+}) {
+	if (!row.marks) return null;
+	if (timingColors)
+		return (
+			<span style={{ marginLeft: 8 }}>
+				<TimingTrio marks={row.marks} size={size} />
+			</span>
+		);
+	// A RANGE in this position reads as "this row lasts this long", which is only
+	// true when the marks describe the row's own duration. On the squishy Table
+	// Topics segment they describe ONE response (1:00–2:00) while the row is
+	// booked for the whole segment (5–25 min after applyFlex), so the range would
+	// label a 20-minute segment "1:00–2:00". The colour trio above is fine — it
+	// reads as timer-card signals, not a duration — so only this branch opts out.
+	if (row.flex) return null;
+	return (
+		<span style={{ fontWeight: 600, color: MUTED }}>
+			{" · "}
+			{mark(row.marks.green)}–{mark(row.marks.red)}
+		</span>
+	);
+}
+
 /** The narrative run-of-show (editorial / spacious): a colored-spine list.
  *  `timingColors` swaps the muted min–max range for the colored green·yellow·red
- *  trio (used by the one-page editorial layout). */
+ *  trio (used by the one-page editorial layout).
+ *
+ *  Adjacent beats with the same presenter print as ONE block — the name once, a
+ *  line per beat, every clock stamp intact (`groupByPresenter`). The real MCF
+ *  agenda closes with three President beats and runs four consecutive General
+ *  Evaluator ones, so this is not a rare shape; printing the name on its own
+ *  line five extra times cost ~186px of a 1056px sheet, and because `FitPage`
+ *  scales this layout to fit, that height came straight off the type size —
+ *  editorial printed at 0.81 scale, around 6.4pt body. Height IS font size here.
+ *  Which is also the warning: anything added to this renderer is paid for in
+ *  legibility, not in a scrollbar. */
 function RunNarrative({
 	rows,
 	scale,
@@ -500,90 +550,106 @@ function RunNarrative({
 	timingColors?: boolean;
 }) {
 	const lg = scale === "lg";
+	const groups = groupByPresenter(rows);
+	// Sizes live in `lib/` because on this surface they are only half the story —
+	// `FitPage` scales the sheet, so what prints is these times PAGE_H/height, and
+	// `print-density.test.tsx` needs both in one assertion to gate the real thing.
+	const type = RUN_NARRATIVE_TYPE[lg ? "lg" : "sm"];
+	// One shared stamp column. Every beat gets a cell of exactly this width —
+	// the leader's own detail line gets an EMPTY one — so the stamps stay the
+	// single unbroken left column the hand-off band's left padding is cut to.
+	const stampWidth = lg ? 64 : 54;
+	const stamp = {
+		flex: "none" as const,
+		width: stampWidth,
+		fontSize: type.stamp,
+		fontWeight: lg ? 800 : 700,
+		color: INK,
+	};
+	const detail = {
+		flex: 1,
+		fontSize: type.detail,
+		color: MUTED,
+		lineHeight: 1.4,
+	};
 	return (
 		<div>
-			{rows.map((r, i) => {
+			{groups.map((g, gi) => {
+				const lead = g.rows[0];
+				// A hand-off is always alone in its group (`sameRun` refuses it in both
+				// directions), so this branch renders the whole group.
+				//
 				// No spine and no bottom rule: the hand-off sits under the hairline of
 				// the beat that hands over and runs straight into the beat it
 				// introduces, which is the grouping the room actually experiences.
-				// Indented past the 4px spine and the time column so the stamps stay a
+				// Indented past the 4px spine and the stamp column so the stamps stay a
 				// single unbroken column.
-				if (r.handoff)
+				if (lead.handoff)
 					return (
 						<HandoffBand
-							key={rowKey(r, i)}
-							row={r}
+							key={rowKey(lead, gi)}
+							row={lead}
 							fontSize={lg ? 11.5 : 10}
 							padding={lg ? "4px 0 4px 83px" : "3px 0 3px 69px"}
 						/>
 					);
-				const color = beatColor(r);
-				const highlight = isHighlighted(r);
 				return (
 					<div
-						key={rowKey(r, i)}
+						key={rowKey(lead, gi)}
 						style={{
-							display: "flex",
-							borderLeft: `4px solid ${color}`,
-							background: highlight ? MINT : undefined,
-							padding: lg ? "11px 0 11px 15px" : "8px 0 8px 11px",
-							borderBottom: i < rows.length - 1 ? HAIR : undefined,
+							borderLeft: `4px solid ${beatColor(g)}`,
+							background: isHighlighted(g) ? MINT : undefined,
+							padding: lg ? "11px 0 11px 15px" : "6px 0 6px 11px",
+							borderBottom: gi < groups.length - 1 ? HAIR : undefined,
 						}}
 					>
-						{/* Test hook only — nothing renders off it. It marks the clock-stamp
-						    cells so the suite can assert "a hand-off repeats no clock stamp"
-						    (#363) by collecting every stamp on the page: a `HandoffBand` has
-						    no such cell, so a band that started printing one would show up
-						    as an extra entry. Matching the stamps as text instead would pass
-						    on a band that echoed the row below it. All three row-rendering
-						    sites carry it; keep them in sync. */}
-						<div
-							data-row-time={r.time}
-							style={{
-								flex: "none",
-								width: lg ? 64 : 54,
-								fontSize: lg ? 13 : 10.5,
-								fontWeight: lg ? 800 : 700,
-								color: INK,
-							}}
-						>
-							{r.time}
-						</div>
-						<div style={{ flex: 1 }}>
-							<div style={{ fontSize: lg ? 14 : 11.5, fontWeight: 700 }}>
-								{r.who}
-								{r.marks ? (
-									timingColors ? (
-										<span style={{ marginLeft: 8 }}>
-											<TimingTrio marks={r.marks} size={lg ? 11 : 10} />
-										</span>
-									) : r.flex ? null : (
-										// A RANGE in this position reads as "this row lasts this
-										// long", which is only true when the marks describe the
-										// row's own duration. On the squishy Table Topics segment
-										// they describe ONE response (1:00–2:00) while the row is
-										// booked for the whole segment (5–25 min after applyFlex),
-										// so the range would label a 20-minute segment "1:00–2:00".
-										// The colour trio above is fine — it reads as timer-card
-										// signals, not a duration — so only this branch opts out.
-										<span style={{ fontWeight: 600, color: MUTED }}>
-											{" · "}
-											{mark(r.marks.green)}–{mark(r.marks.red)}
-										</span>
-									)
-								) : null}
+						<div style={{ display: "flex" }}>
+							{/* Test hook only — nothing renders off it. It marks the clock-stamp
+							    cells so the suite can assert "a hand-off repeats no clock stamp"
+							    (#363) by collecting every stamp on the page: a `HandoffBand` has
+							    no such cell, so a band that started printing one would show up
+							    as an extra entry. Matching the stamps as text instead would pass
+							    on a band that echoed the row below it. All three row-rendering
+							    sites carry it; keep them in sync.
+
+							    Since consolidation there is one of these per BEAT, not per
+							    printed name — the continuation lines below carry their own. That
+							    is the invariant `meeting-agenda-print.test.tsx` pins: stamps on
+							    the page == non-hand-off rows in the timeline. */}
+							<div data-row-time={lead.time} style={stamp}>
+								{lead.time}
 							</div>
+							<div style={{ flex: 1, fontSize: type.name, fontWeight: 700 }}>
+								{g.who}
+								<RowMarks
+									row={lead}
+									timingColors={timingColors}
+									size={lg ? 11 : 10}
+								/>
+							</div>
+						</div>
+						<div style={{ display: "flex", marginTop: 1 }}>
+							<div style={{ flex: "none", width: stampWidth }} />
+							<div style={detail}>{lead.detail}</div>
+						</div>
+						{g.rows.slice(1).map((r, i) => (
 							<div
-								style={{
-									fontSize: lg ? 12 : 10.5,
-									color: MUTED,
-									lineHeight: 1.4,
-									marginTop: 1,
-								}}
+								key={rowKey(r, i)}
+								style={{ display: "flex", marginTop: lg ? 4 : 3 }}
 							>
-								{r.detail}
+								<div data-row-time={r.time} style={stamp}>
+									{r.time}
+								</div>
+								<div style={detail}>
+									{r.detail}
+									<RowMarks
+										row={r}
+										timingColors={timingColors}
+										size={lg ? 11 : 10}
+									/>
+								</div>
 							</div>
-						</div>
+						))}
 					</div>
 				);
 			})}
@@ -897,6 +963,34 @@ function EditorialLayout({
 // earmarked — brings the net cost to +3px over the whole sheet. `FitPage`
 // absorbs 3px silently; the printed page count does not move (verified via
 // `print-page-count.test.tsx`, both before and after).
+//
+// PRESENTER CONSOLIDATION (#562) is the first entry here that BUYS height back,
+// and it is where "a row-rhythm question for editorial" above got answered. The
+// narrative layouts gave every beat its own name line, so MCF's real agenda —
+// a four-beat General Evaluator run and a three-beat President close — printed
+// "General Evaluator · Faisal Ali" four times down one page. Merging adjacent
+// beats by the same presenter drops the repeated line and keeps every clock
+// stamp (`groupByPresenter`). Measured on the real 2026-08-13 agenda, now a
+// checked-in fixture in `print-density.test.tsx`:
+//
+//   editorial  1484px  scale 0.710  detail 5.59pt   ← before
+//   editorial  1304px  scale 0.808  detail 6.36pt   ← consolidated
+//   editorial  1321px  scale 0.798  detail 6.88pt   ← + declared 10.5 → 11.5
+//
+// (Not comparable to the table above: that one was measured against the
+// deployed site with Fraunces and Manrope loaded, this one through the offline
+// harness on fallback fonts. Comparable to each other, which is the point.)
+//
+// Two things worth carrying forward. The declared bump is nearly self-
+// cancelling — 9.5% more type bought 3.7% more printed type, because a taller
+// sheet is scaled down further — so HEIGHT, not font-size, is the lever on this
+// surface, and `agenda-print-type.ts` holds the numbers where a test can reach
+// them. And the left rail measures 669px against the main column's 1304px: some
+// 635px of the sheet is empty beside the run of show. Moving the roster into
+// that rail, or flowing the run of show into it, is the next real gain
+// available here and the one thing that would let the type grow properly. It is
+// a redesign of the layout rather than a tuning of it, which is why #562 stopped
+// short of it.
 // ---------------------------------------------------------------------------
 function GridLayout({
 	header,

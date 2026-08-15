@@ -44,7 +44,18 @@ export type AuthDecision =
 	| { kind: "authed"; context: AuthRouteContext; fresh: boolean }
 	| { kind: "redirect" };
 
-const STORAGE_KEY = "gavelup.auth-context.v1";
+/**
+ * Bumping this key discards every device's cached copy on next load — the same
+ * sweep `public/sw.js`'s cache VERSION performs, and needed for the same reason.
+ *
+ * v1 → v2 (#560): this value holds the club switcher's `clubs[]`, including each
+ * club's NAME and Toastmasters club number. Those are the brand assets ADR-0024
+ * leans on archiving to take down, and the archive filter added to
+ * `loadUserClubMemberships` only changes what the SERVER sends next time. A device
+ * that already had a copy kept serving it offline, so the third on-device copy of
+ * a taken-down club needed the same one-time clear as the service worker's two.
+ */
+export const STORAGE_KEY = "gavelup.auth-context.v2";
 
 /** Safe `localStorage` handle, or null when unavailable (SSR / privacy mode). */
 function storage(): Storage | null {

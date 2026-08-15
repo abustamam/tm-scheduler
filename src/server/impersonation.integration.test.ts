@@ -13,12 +13,19 @@
 import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { activityLog, clubs, impersonationSessions, user } from "#/db/schema";
+import {
+	activityLog,
+	clubs,
+	impersonationSessions,
+	members,
+	user,
+} from "#/db/schema";
 import {
 	cleanup,
 	hasTestDb,
 	type SeededClub,
 	seedClub,
+	seedPerson,
 	testDb,
 } from "#/test/db";
 
@@ -123,6 +130,159 @@ describe.skipIf(!hasTestDb)("superadmin impersonation (integration)", () => {
 			requireClubRole(su.id, seeded.clubId, ["admin"]),
 		).rejects.toThrow();
 		await expect(requireMembership(su.id, seeded.clubId)).rejects.toThrow();
+	});
+
+	it("an ARCHIVED club is readable by nobody — impersonation included (#560)", async () => {
+		const su = await seedSuperadmin();
+		await startImpersonation(su.id, { clubId: seeded.clubId });
+
+		// Controls: while the club is live, both the member and the impersonating
+		// superadmin read it. Without these the archived assertions below would pass
+		// on a gate that rejects everything.
+		await expect(
+			requireClubViewAccess(seeded.memberUserId, seeded.clubId),
+		).resolves.toMatchObject({ via: "member" });
+		await expect(
+			requireClubViewAccess(su.id, seeded.clubId),
+		).resolves.toMatchObject({ via: "impersonation" });
+
+		await testDb
+			.update(clubs)
+			.set({ archivedAt: new Date() })
+			.where(eq(clubs.id, seeded.clubId));
+
+		// The club's own member is locked out…
+		await expect(
+			requireClubViewAccess(seeded.memberUserId, seeded.clubId),
+		).rejects.toThrow(/archived/i);
+
+		// …and so is a superadmin holding an active read-only session. The exemption
+		// this test used to pin was dropped: the console already hides "View as this
+		// club" for an archived club, so it was unreachable in the direction it was
+		// meant for, and because the member arm returned first it was silently
+		// overridden for an operator who was also a member — which made the two gates
+		// answer OPPOSITELY for a superadmin with a plain membership. Archived means
+		// no club surface serves it; `requireSuperadmin` (the console) is the way in.
+		await expect(requireClubViewAccess(su.id, seeded.clubId)).rejects.toThrow(
+			/archived/i,
+		);
+		await expect(requireClubAdminView(su.id, seeded.clubId)).rejects.toThrow(
+			/archived/i,
+		);
+
+		// And the write path was already closed, for both real and impersonated actors.
+		await startImpersonation(su.id, {
+			clubId: seeded.clubId,
+			mode: "read_write",
+			reason: "reviewing a takedown appeal",
+		});
+		await expect(requireMembership(su.id, seeded.clubId)).rejects.toThrow(
+			/archived/i,
+		);
+	});
+
+	it("both read gates agree for a superadmin who is ALSO a member of the archived club (#560)", async () => {
+		// The case the single-axis fixture above cannot see, and the one the dropped
+		// exemption got wrong in both directions: the member arm returned before the
+		// impersonation arm was consulted, so `requireClubViewAccess` threw while
+		// `requireClubAdminView` — whose two member arms a plain member falls through
+		// — reached the impersonation arm and GRANTED. The weaker gate denied what the
+		// stronger one allowed.
+		const su = await seedSuperadmin();
+		const person = await seedPerson({ userId: su.id, name: "Super Member" });
+		await testDb.insert(members).values({
+			clubId: seeded.clubId,
+			personId: person,
+			name: "Super Member",
+			email: `super-member-${su.id}@test.example`,
+			clubRole: "member",
+			status: "active",
+		});
+		await startImpersonation(su.id, { clubId: seeded.clubId });
+
+		// Control: live club — the member arm grants on the view gate, and the admin
+		// gate falls through to impersonation, so both resolve.
+		await expect(
+			requireClubViewAccess(su.id, seeded.clubId),
+		).resolves.toMatchObject({ via: "member" });
+		await expect(
+			requireClubAdminView(su.id, seeded.clubId),
+		).resolves.toMatchObject({ via: "impersonation" });
+
+		await testDb
+			.update(clubs)
+			.set({ archivedAt: new Date() })
+			.where(eq(clubs.id, seeded.clubId));
+
+		// Archived: both gates now give the SAME answer. Asserted as a pair on
+		// purpose — the defect was the disagreement, not either verdict alone.
+		await expect(requireClubViewAccess(su.id, seeded.clubId)).rejects.toThrow(
+			/archived/i,
+		);
+		await expect(requireClubAdminView(su.id, seeded.clubId)).rejects.toThrow(
+			/archived/i,
+		);
+	});
+
+	it("stops granting the moment the superadmin is de-listed (#567)", async () => {
+		const su = await seedSuperadmin();
+		await startImpersonation(su.id, { clubId: seeded.clubId });
+
+		// Control: the session grants while the flag is set.
+		await expect(
+			requireClubViewAccess(su.id, seeded.clubId),
+		).resolves.toMatchObject({ via: "impersonation" });
+		expect(await getActiveImpersonationForUser(su.id)).not.toBeNull();
+
+		// De-provision: removing the address from SUPERADMIN_EMAILS clears this flag
+		// on the operator's next sign-in (`reconcileSuperadminFlag`). It does not
+		// touch impersonation_sessions, so the row stays open and unexpired — which
+		// is the whole point. The session used to be the entire credential, good for
+		// the rest of its 60-minute TTL.
+		await testDb
+			.update(user)
+			.set({ isSuperadmin: false })
+			.where(eq(user.id, su.id));
+
+		await expect(requireClubViewAccess(su.id, seeded.clubId)).rejects.toThrow();
+		await expect(requireClubAdminView(su.id, seeded.clubId)).rejects.toThrow();
+		// Pinned at the seam too, not just at the gates: a future gate that consults
+		// the lookup directly must get the same answer.
+		expect(await getActiveImpersonationForUser(su.id)).toBeNull();
+		expect(await getActiveImpersonation(su.id, seeded.clubId)).toBeNull();
+
+		// Re-listing restores it — this revokes, it does not destroy the row.
+		await testDb
+			.update(user)
+			.set({ isSuperadmin: true })
+			.where(eq(user.id, su.id));
+		await expect(
+			requireClubViewAccess(su.id, seeded.clubId),
+		).resolves.toMatchObject({ via: "impersonation" });
+	});
+
+	it("read_write is revoked by de-listing too, not just reads (#567)", async () => {
+		const su = await seedSuperadmin();
+		await startImpersonation(su.id, {
+			clubId: seeded.clubId,
+			mode: "read_write",
+			reason: "fixing a broken agenda",
+		});
+
+		// Control: the write guard honours the session as a memberless admin.
+		await expect(
+			requireMembership(su.id, seeded.clubId),
+		).resolves.toMatchObject({ impersonatedBy: su.id });
+
+		await testDb
+			.update(user)
+			.set({ isSuperadmin: false })
+			.where(eq(user.id, su.id));
+
+		// The higher-privilege arm has the shorter TTL but the same hole, so assert
+		// it separately rather than assuming the shared lookup covers it.
+		await expect(requireMembership(su.id, seeded.clubId)).rejects.toThrow();
+		expect(await canManageClub(su.id, seeded.clubId)).toBe(false);
 	});
 
 	it("scopes the session to one club and revokes on end + expiry", async () => {

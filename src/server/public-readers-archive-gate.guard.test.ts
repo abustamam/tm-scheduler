@@ -74,6 +74,9 @@ const readRaw = (abs: string) => readFileSync(abs, "utf8");
  * unsatisfiable and a whole-file "must contain" one would be satisfied by a
  * DIFFERENT function's correct call.
  */
+const TOP_LEVEL_BOUNDARY =
+	/^(?:\/\*\*|\/\/|export |const |let |var |function |async function |class |type |interface |enum |declare )/;
+
 function serverFnBody(source: string, name: string): string {
 	const start = source.indexOf(`export const ${name} = createServerFn`);
 	if (start === -1) {
@@ -81,23 +84,39 @@ function serverFnBody(source: string, name: string): string {
 			`${name} not found — it was renamed or removed. Re-point this guard rather than deleting the case.`,
 		);
 	}
-	// End at the declaration's own terminating `);` at column 0, NOT at the next
-	// `export`. Slicing to the next export over-captures: it swallows every
-	// non-exported declaration in between plus the FOLLOWING export's JSDoc, and
-	// both directions of that are wrong. `listUpcomingMeetings` used to absorb
-	// `const pastMeetingsInput = …`, and `getMeetingByKey` absorbed
-	// `getPublicMeetingByKey`'s doc comment — so a positive assertion could be
-	// satisfied by a neighbour's code, and a negative one failed by a neighbour's
-	// prose.
-	const end = source.indexOf("\n});", start);
-	const next = source.indexOf("\nexport ", start + 1);
-	const stop =
-		end === -1
-			? next === -1
-				? source.length
-				: next
-			: Math.min(end + 4, next === -1 ? source.length : next);
-	return source.slice(start, stop);
+	// End at the next TOP-LEVEL declaration (or the doc comment introducing it),
+	// which is the only boundary that is both tight and reliable here.
+	//
+	// Two earlier attempts were each wrong in one direction. Slicing to the next
+	// `export` over-captured every non-exported declaration in between plus the
+	// following export's JSDoc — `listUpcomingMeetings` absorbed
+	// `const pastMeetingsInput = …`, `getMeetingByKey` absorbed
+	// `getPublicMeetingByKey`'s doc comment. Slicing to a literal `\n});` then
+	// over-captured in a way nobody could see (#565): every `createServerFn` here
+	// closes at ONE TAB (`\t});`) because `.handler(` is chained one level in, so
+	// that pattern never matched a declaration's own terminator. It matched the
+	// next column-0 `});` — usually a later `z.object({…})` — and the slice ran
+	// straight through whatever sat between.
+	//
+	// That is not a tidiness problem. `SESSION_GUARDS` is tested against this
+	// slice, so a swallowed neighbour LENDS its `require*` call to the fn being
+	// classified: `getMinutes` absorbed `gateAdmin`, matched THAT function's
+	// `requireUser`, and was filed as session-guarded and skipped by the sweep
+	// below — which is how the #560 minutes leak reached production behind 54/54
+	// green. Measured across `src/server` at the time of the fix: 40 of 162 slices
+	// over-captured, one of them by 11,000 characters. `bodyStopsAtItsOwnDeclaration`
+	// now fails on any recurrence rather than leaving it invisible.
+	const lines = source.slice(start).split("\n");
+	let offset = 0;
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i] as string;
+		// i > 0 skips the declaration's own opening line.
+		if (i > 0 && TOP_LEVEL_BOUNDARY.test(line)) {
+			return source.slice(start, start + offset);
+		}
+		offset += line.length + 1;
+	}
+	return source.slice(start);
 }
 
 interface Wiring {
@@ -218,6 +237,22 @@ const WIRINGS: Wiring[] = [
 		leaks:
 			"an archived club's name and Toastmasters club number — the brand identity ADR-0024's takedown exists to remove",
 	},
+	{
+		// The fn this guard was supposed to enrol and could not (#565). It resolves
+		// membership with a bare `getMembership`, so it trips no `require*` and the
+		// sweep below rightly calls it session-less — but the broken slicer lent it
+		// `gateAdmin`'s `requireUser` and skipped it, and an archived club served its
+		// full minutes to its own members until #560 found that by hand.
+		//
+		// Gated on `isReadableClub` rather than a `*-logic` seam of its own: the
+		// query stayed inline in the handler, so `minutes-authz.guard.test.ts` holds
+		// the ordering and polarity of the call and this row holds its presence.
+		file: "server/minutes.ts",
+		fn: "getMinutes",
+		mustCall: "isReadableClub",
+		leaks:
+			"the full minutes — the roster by attendance status, guest names, awards and action items",
+	},
 ];
 
 describe("public server fns are wired to their archive-gated seam (#544)", () => {
@@ -252,8 +287,12 @@ describe("public server fns are wired to their archive-gated seam (#544)", () =>
  * fails the enrollment test below.
  */
 const REVIEWED_UNGATED: Record<string, string> = {
-	// Auth/session plumbing — not club data.
-	getAuthContext: "resolves the session itself; returns no club-owned data",
+	// Auth/session plumbing. NOT "returns no club-owned data" — that was this
+	// waiver's reason until #560, and it was false: the payload carries
+	// `clubs[].name` and `clubs[].clubNumber`, the brand identity ADR-0024 leans on
+	// archiving to remove. The club list is archive-filtered at its own seam now.
+	getAuthContext:
+		"session plumbing; the club list it returns is archive-filtered in loadUserClubMemberships (#560)",
 	setActiveClub: "writes a session preference",
 	// Gated, but through a different helper than a WIRINGS row can express.
 	getClubLogoMeta: "gated inside loadClubLogoMeta via isReadableClub (#495)",
@@ -315,6 +354,36 @@ describe("every session-less server fn is enrolled in the gate (#544)", () => {
 	// Vacuity check: a walk that finds nothing passes every assertion below.
 	it("finds the server-fn modules at all", () => {
 		expect(files.length).toBeGreaterThan(20);
+	});
+
+	// The check that would have caught #565 on the day it was written. Every
+	// classification below is only as good as the slice it reads, and an
+	// over-capturing slice fails SILENTLY and in the dangerous direction: it lends
+	// a neighbour's `require*` to the fn being classified, so the fn drops out of
+	// the sweep entirely. Assert the shape of the slices, not just the verdicts.
+	it("slices a server fn's body without running past its own declaration", () => {
+		const offenders: string[] = [];
+		for (const file of files) {
+			const src = readRaw(resolve(dir, file));
+			for (const m of src.matchAll(/^export const (\w+) = createServerFn/gm)) {
+				const fn = m[1];
+				if (!fn) continue;
+				const body = serverFnBody(src, fn);
+				// A column-0 declaration inside the slice means it swallowed a sibling.
+				// Skipping the first line, which is the declaration's own.
+				const rest = body.slice(body.indexOf("\n") + 1);
+				const bled = rest
+					.split("\n")
+					.find((line) => TOP_LEVEL_BOUNDARY.test(line));
+				if (bled !== undefined) {
+					offenders.push(`${file}:${fn} → swallowed "${bled.slice(0, 60)}"`);
+				}
+			}
+		}
+		expect(
+			offenders,
+			`serverFnBody ran past a declaration's own end. Whatever it swallowed is now read as part of that fn, so a neighbour's require* call can classify it as session-guarded and drop it from the sweep below — that is #565, and it is how #560's minutes leak survived this guard.\n${offenders.join("\n")}`,
+		).toEqual([]);
 	});
 
 	const anonymous: { file: string; fn: string }[] = [];

@@ -12,9 +12,12 @@ the nouns in `src/db/schema.ts`.
 
 - **Club** — a Toastmasters club (`clubs`). A person can belong to several (see ADR-0006). A club
   can be **soft-archived** by a superadmin (`clubs.archived_at`; NULL = active): a reversible flag
-  that blocks all reads — authed (`requireMembership` rejects) and public (every session-less
-  reader gates itself; see **Invariants**) — except the superadmin console, retaining every row and
-  keeping the slug reserved. Archiving is the platform **takedown** lever: it is how a club, and
+  that blocks all reads — authed writes (`requireMembership`), authed reads (`grantView`, behind
+  `requireClubViewAccess` / `requireClubAdminView`, which do NOT route through `requireMembership`
+  — #560) and public (every session-less reader gates itself; see **Invariants**) — except the
+  superadmin console, retaining every row and keeping the slug reserved. `isClubArchived`
+  (`src/lib/club-archive.ts`) carries the canonical list of enforcement points; this entry said
+  there was one until #560, which is how the read gates came to be missed. Archiving is the platform **takedown** lever: it is how a club, and
   with it the club's own name, roster and uploaded logo, comes off GavelUp (ADR-0024). Writes are
   not yet blocked (#555). See ADR-0016 / #186 / #544.
 - **Club logo** — one image a club uploads for itself (`club_logos`; at most one row per club,
@@ -416,6 +419,37 @@ per-Person opt-out, the no-auth `/unsubscribe` link, and per-club settings — s
   **mailable** Person is — mailable meaning one holding a roster membership, matching the join the
   #272 producer builds its recipients from. A membership-less Person is structurally unreachable by
   mail and must not vote. See #437 / #472.
+- Member and guest **contact** (email, phone) reaches a payload only behind
+  `requireClubViewAccess` — the club's own signed-in members, never a session-less caller. The two
+  roster/profile queries that carry it live in `src/server/club-logic.ts` (`loadClubMembers`,
+  `loadMemberProfile`) and gate on nothing themselves: the gate is the caller's, so a new importer
+  is a new place a whole roster's contact can escape. `club-contact-gate.guard.test.ts` ENUMERATES
+  `club.ts`'s server fns rather than listing the two it found, and holds that module to one
+  importer. The season grid is the one surface with both an authed and a public reader over the
+  same query, so it carries its own switch: `loadSeasonGrid` takes an explicit `includeContact`,
+  `getSeasonGrid` sets it true behind `requireUser` + `requireClubViewAccess`, and
+  `loadPublicSeasonGrid` hard-codes it false. The anonymous roster pick on `club/$clubId` is an
+  identity, not a session — it must never turn contact on.
+- Every **rendered** phone number opens a WhatsApp chat, never `tel:`. Surfaces render
+  `WhatsAppPhoneLink`, whose href comes from the single copy of the mobile-`wa.me` /
+  desktop-`web.whatsapp.com` rule in `src/lib/whatsapp.ts` (#485); the chat opens BLANK, since only
+  the meeting page has the role context a prefilled draft would need (#37). A payload that DISPLAYS
+  a phone coalesces it (`coalesceToE164`, `#/lib/phone`), which preserves an un-normalizable value
+  ("call the office") so the component renders it as plain text instead of a dead link; a payload
+  that only supplies a MESSAGE TARGET uses bare `toE164`, so "no contact on file" stays honest.
+  Never bind an EDIT FORM to a coalesced value — coalescing is a country-code guess, and a form
+  that round-trips it writes the guess back over what is on file (`phoneRaw` exists for that).
+  `no-tel-links.guard.test.ts` sweeps `src/` for a literal `href="tel:"`; it does not, and cannot,
+  see a number rendered as bare text. See
+  `docs/superpowers/specs/2026-08-10-whatsapp-phone-links-design.md`.
+- Every **rendered** email address goes through `mailtoHref` (`src/lib/mailto.ts`). Everything after
+  the first `?` in a `mailto:` URL is HEADERS the mail client honours, so an address stored as
+  `a@b.com?bcc=…` interpolated raw produces a link that silently blind-copies a third party — and on
+  the VPE nudge, the one draft the user taps to SEND rather than reads first, `&subject=`/`&body=`
+  can put words in their mouth. Not every writer of these columns validates the value
+  (`bulkImportSchema` still does not), and rows written before a validator was added persist
+  regardless, so the read-side escape is what neutralizes them. There are FOUR sinks;
+  `mailto.guard.test.ts` fails on a fifth.
 
 ## Where decisions live
 

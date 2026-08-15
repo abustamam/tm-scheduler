@@ -1,14 +1,9 @@
 import { createServerFn } from "@tanstack/react-start";
-import { and, asc, desc, eq, gte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
-import {
-	meetings,
-	members,
-	people,
-	roleDefinitions,
-	roleSlots,
-} from "#/db/schema";
+import { meetings, roleDefinitions, roleSlots } from "#/db/schema";
+import { loadClubMembers, loadMemberProfile } from "./club-logic";
 import { requireClubViewAccess, requireUser } from "./guards";
 import { loadMySpeechLog, loadSpeechLog } from "./my-activity-logic";
 import {
@@ -35,27 +30,11 @@ export const listClubMembers = createServerFn({ method: "GET" })
 		const currentUser = await requireUser();
 		await requireClubViewAccess(currentUser.id, clubId);
 
-		const roster = await db
-			.select({
-				id: members.id,
-				name: members.name,
-				email: members.email,
-				// "Signed-in account?" is now a Person-level fact (ADR-0008 Phase B):
-				// the auth link lives on people.user_id, not the membership row.
-				userId: people.userId,
-				// Account-invite tracking (#266) — drives the roster's per-row
-				// invited/joined state alongside `userId`.
-				invitedAt: people.invitedAt,
-				status: members.status,
-				createdAt: members.createdAt,
-				joinedAt: members.joinedAt,
-				// Person-level fact (ADR-0008): read off the joined `people` row.
-				originalJoinDate: people.originalJoinDate,
-			})
-			.from(members)
-			.innerJoin(people, eq(people.id, members.personId))
-			.where(eq(members.clubId, clubId))
-			.orderBy(asc(members.name));
+		// Roster rows incl. contact, with phone coalesced to E.164 (#295) so the
+		// rendered WhatsApp link is a valid full number. Query lives in
+		// `club-logic.ts` so it is directly testable and stays out of the client
+		// bundle — see that module's header.
+		const roster = await loadClubMembers(clubId);
 
 		// Current office(s) per member, derived from open officer terms (#100).
 		const officers = await currentOfficersByMember(roster.map((m) => m.id));
@@ -89,6 +68,9 @@ export const listClubMembers = createServerFn({ method: "GET" })
 			id: m.id,
 			name: m.name,
 			email: m.email,
+			// Contact, same PII class and same gate as `email` above (#266): the
+			// club's own signed-in members, never a public caller.
+			phone: m.phone,
 			officerPositions: officers.get(m.id) ?? [],
 			userId: m.userId,
 			invitedAt: m.invitedAt,
@@ -134,39 +116,10 @@ export const getMemberProfile = createServerFn({ method: "GET" })
 		const currentUser = await requireUser();
 		await requireClubViewAccess(currentUser.id, data.clubId);
 
-		const [member] = await db
-			.select({
-				id: members.id,
-				personId: members.personId,
-				name: members.name,
-				// What they're called, when it isn't the first token of `name` (#486).
-				// Coalesced the same way the nudge draft reads it, so the edit form
-				// shows the name that will ACTUALLY be used. Binding to the raw
-				// membership column would render a blank field for a member whose
-				// value lives on their Person (the cross-club case) while every draft
-				// greeted them by it.
-				preferredName: sql<
-					string | null
-				>`coalesce(${members.preferredName}, ${people.preferredName})`,
-				email: members.email,
-				phone: members.phone,
-				// "Signed-in account?" is now a Person-level fact (ADR-0008 Phase B):
-				// the auth link lives on people.user_id, not the membership row.
-				userId: people.userId,
-				status: members.status,
-				// Club-role permission (admin ⇄ member) — orthogonal to office (#187).
-				clubRole: members.clubRole,
-				createdAt: members.createdAt,
-				joinedAt: members.joinedAt,
-				// Person-level fact (ADR-0008): read off the joined `people` row.
-				originalJoinDate: people.originalJoinDate,
-			})
-			.from(members)
-			.innerJoin(people, eq(people.id, members.personId))
-			.where(
-				and(eq(members.id, data.memberId), eq(members.clubId, data.clubId)),
-			)
-			.limit(1);
+		// Identity + contact for this club's member, with phone coalesced to E.164
+		// (#295) so the profile's WhatsApp link is a valid full number. Query lives
+		// in `club-logic.ts` — see that module's header.
+		const member = await loadMemberProfile(data.clubId, data.memberId);
 
 		if (!member) {
 			return {
@@ -202,6 +155,11 @@ export const getMemberProfile = createServerFn({ method: "GET" })
 				preferredName: member.preferredName,
 				email: member.email,
 				phone: member.phone,
+				// Both spellings travel: `phone` is coalesced for the WhatsApp link,
+				// `phoneRaw` is the column verbatim for the edit dialog's prefill.
+				// Binding the dialog to `phone` writes the country-code guess back over
+				// the stored digits on save — see `loadMemberProfile`.
+				phoneRaw: member.phoneRaw,
 				officerPositions,
 				userId: member.userId,
 				status: member.status,

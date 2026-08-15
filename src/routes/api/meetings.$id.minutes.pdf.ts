@@ -5,6 +5,7 @@ import { clubs, meetings } from "#/db/schema";
 import { cap } from "#/lib/cap";
 import { formatShortDate } from "#/lib/format";
 import { MINUTES_RENDER_CAPS } from "#/lib/minutes-render-caps";
+import { isReadableClub } from "#/server/club-readable-logic";
 import { getMembership, getSessionUser } from "#/server/guards";
 import { getMeetingClubId, getMeetingStatus } from "#/server/minutes-logic";
 import { renderMinutesPdf } from "#/server/minutes-pdf-logic";
@@ -30,8 +31,18 @@ export const Route = createFileRoute("/api/meetings/$id/minutes/pdf")({
 				} catch {
 					return new Response("Meeting not found.", { status: 404 });
 				}
+				// Archive takedown (#560). This route resolves membership itself rather
+				// than through a `require*` gate, so it never reaches the gates'
+				// `assertClubNotArchived` — and it is a plain authed GET URL, so a
+				// pre-takedown bookmark works with only a session cookie and no router.
+				// Answers not-found, matching the sibling role-sheets route beside it.
+				if (!(await isReadableClub(clubId))) {
+					return new Response("Meeting not found.", { status: 404 });
+				}
 				const membership = await getMembership(sessionUser.id, clubId);
-				if (!membership) {
+				// `status` matters, not just presence: a LAPSED member of the club could
+				// otherwise still download the minutes.
+				if (!membership || membership.status !== "active") {
 					return new Response("Not a member of this club.", { status: 403 });
 				}
 				const status = await getMeetingStatus(meetingId);

@@ -239,8 +239,9 @@ export const clubs = pgTable("clubs", {
 		.default(false),
 	// Soft-archive (ADR-0016 / #186). NULL = active; a set timestamp = archived.
 	// Reversible: unarchive clears it. Archiving retains all club data untouched
-	// and blocks every access path except the superadmin console — `requireMembership`
-	// rejects authed access and the public no-auth club loaders return not-found.
+	// and blocks every access path except the superadmin console. This comment used
+	// to enumerate the enforcement points and was wrong twice (#544, #560) — see
+	// `isClubArchived` (`src/lib/club-archive.ts`) for the one canonical list.
 	archivedAt: timestamp("archived_at"),
 	createdAt: timestamp("created_at").defaultNow().notNull(),
 });

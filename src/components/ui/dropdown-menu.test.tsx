@@ -105,9 +105,21 @@ describe("DropdownMenuItem's data-slot contract with the global link rule", () =
 	it("but the rule still selects an ordinary text link (the rule is not neutered)", () => {
 		// The control. Without it, deleting the rule's real work — widening the
 		// :not() until it excludes everything — would pass the assertion above.
+		//
+		// The `className` is load-bearing, not decoration. This was a bare
+		// `<a href="/resources">` first, and essentially every anchor in this app
+		// is a Tailwind component carrying a `class` attribute — so appending
+		// `:not([class])` to both rules in `styles.css` left this control matching,
+		// all three CSS guards green (12/12), and the link-teal rule styling
+		// nothing whatsoever. Demonstrated. A control specimen has to look like the
+		// population it stands in for. `whatsapp-phone-link-color.guard.test.ts`
+		// carries the structural version of the same check (every `:not()` arm must
+		// be a `[data-slot=…]` opt-out), which does not depend on any specimen.
 		render(
 			<p>
-				<a href="/resources">Resources</a>
+				<a href="/resources" className="hover:underline">
+					Resources
+				</a>
 			</p>,
 		);
 		const plain = screen.getByText("Resources") as HTMLAnchorElement;

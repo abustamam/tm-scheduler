@@ -13,7 +13,7 @@
 // testable against a test db and never reaches the client bundle — see
 // CLAUDE.md "Data layer". The createServerFn wrappers stay in `club.ts`
 // (`listMySpeeches`) and `meetings.ts` (`listMyCommitments`).
-import { and, asc, desc, eq, gte, inArray, ne } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, ne } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { db } from "#/db";
 import {
@@ -114,6 +114,14 @@ export async function loadMySpeechLog(
 /**
  * The signed-in user's upcoming claimed roles across EVERY club they belong to,
  * soonest first. Cancelled meetings are excluded; past ones fall off by date.
+ *
+ * Soft-archived clubs are excluded (#560). Each row carries `clubName` plus the
+ * meeting's date, theme, location and speech title, which is the same payload the
+ * PUBLIC sibling `listMemberCommitments` was gated for in #544 — this authed twin
+ * kept serving it on `/dashboard` and `/me`, so a member of one live and one
+ * archived club saw the taken-down club's name and agenda details with no tooling.
+ * `loadMySpeechLog` beside it joins no `clubs` row and carries no club identity, so
+ * it is deliberately left alone.
  */
 export async function loadMyCommitments(userId: string) {
 	const memberIds = await userMemberIds(userId);
@@ -148,6 +156,7 @@ export async function loadMyCommitments(userId: string) {
 					inArray(roleSlots.assignedMemberId, memberIds),
 					gte(meetings.scheduledAt, new Date()),
 					ne(meetings.status, "cancelled"),
+					isNull(clubs.archivedAt),
 				),
 			)
 			// Tiebreaker as above — a tie reordering an unlabelled list is how a

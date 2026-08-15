@@ -19,7 +19,24 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-/** Binaries that can drive `--print-to-pdf`, most preferred first. */
+/**
+ * Binaries that can drive `--print-to-pdf`, most preferred first.
+ *
+ * Names only, deliberately. These resolve on Linux, where this repo is usually
+ * developed, so the gates run locally there. macOS is the gap: Chrome installs
+ * as an .app that puts nothing on `PATH`, so it is tempting to add
+ * `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome` here. Tried,
+ * reverted: that binary answers `--version` but never returns from
+ * `--print-to-pdf` under the agent sandbox, so `findChrome` starts succeeding
+ * and every measurement then burns its full timeout — one `bun run test` went
+ * from an instant skip to 135 seconds of `ETIMEDOUT`, including the 60s
+ * warm-up. A browser that is found but hangs is strictly worse than one that is
+ * not found: the skip is honest and CI still fails on a missing browser (see the
+ * availability `describe` in `print-page-count.test.tsx`), whereas the hang looks
+ * like a broken gate. Set `CHROME_PATH` on a Mac instead (a Playwright
+ * `chrome-headless-shell` works); if you do add a path here, verify a real
+ * `--print-to-pdf` RETURNS first.
+ */
 const CHROME_BINARIES = [
 	"google-chrome",
 	"google-chrome-stable",
@@ -31,7 +48,8 @@ const CHROME_BINARIES = [
 let cachedChrome: string | null | undefined;
 
 /**
- * The first usable Chrome on PATH, or null.
+ * The first usable Chrome — `CHROME_PATH` if it runs, else the first name on
+ * `PATH` that does — or null.
  *
  * Exported so the suite can distinguish "no browser here" from "the browser
  * disagreed" — see the `print page-count harness availability` describe in
@@ -45,7 +63,14 @@ let cachedChrome: string | null | undefined;
  */
 export function findChrome(): string | null {
 	if (cachedChrome !== undefined) return cachedChrome;
-	for (const bin of CHROME_BINARIES) {
+	// `CHROME_PATH` first — the convention Lighthouse and chrome-launcher already
+	// use, and the way out of the macOS problem the list above describes without
+	// hardcoding a path that hangs. Pointing it at a working browser (a Playwright
+	// `chrome-headless-shell` works, and returns in ~0.2s) is what makes this gate
+	// runnable off CI. Still probed rather than trusted: an unset-but-exported or
+	// stale value falls through to the names instead of disabling the gate.
+	for (const bin of [process.env.CHROME_PATH, ...CHROME_BINARIES]) {
+		if (!bin) continue;
 		try {
 			execFileSync(bin, ["--version"], { stdio: "pipe", timeout: 10_000 });
 			cachedChrome = bin;
@@ -224,6 +249,96 @@ export function printedPageCount(html: string): number {
 			{ stdio: "pipe", timeout: 10_000 },
 		);
 		return countPdfPages(readFileSync(pdfPath));
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+}
+
+/**
+ * The natural, unscaled height in CSS px of the one element matching `selector`.
+ *
+ * Why this exists alongside the page count. `FitPage` shrinks a print surface to
+ * fit its sheet, so on those layouts the PRINTED TYPE SIZE is not what the
+ * component declares — it is that size times `PAGE_H / naturalHeight`. Editorial
+ * declares 10.5px body text and printed it at about 6.4pt, because the layout
+ * measured ~1299px into a 1056px page. The page count cannot see any of this: it
+ * reports 1 whether the sheet is comfortable or crushed, which is exactly how a
+ * layout gets 20% less legible with every gate green.
+ *
+ * So this is the gate for a change whose whole purpose is height, and the reason
+ * a ceiling asserted on it has to be an ABSOLUTE number rather than one stated
+ * relative to the font constants it protects — see the "test stated RELATIVE to
+ * the constant it guards cannot fail" trap in CLAUDE.md.
+ *
+ * Two things it does that a naive read would get wrong:
+ *
+ *  · `minHeight` is cleared first. Static markup never runs `FitPage`'s
+ *    measuring `useEffect`, so the inner div still carries the `minHeight:
+ *    PAGE_H` it wears before a scale is known. Left alone, every surface with
+ *    room to spare measures exactly 1056 and the headroom is invisible.
+ *  · A selector matching nothing THROWS. Returning 0 or 1056 for "the hook is
+ *    gone" would read as the roomiest possible layout and pass every ceiling —
+ *    the same failure shape as the empty-document control beside the page
+ *    counts, where a valid one-page PDF is not proof of content.
+ *
+ * Reads the number back through `document.title` because `--dump-dom`
+ * serializes the post-script DOM but has no channel for a return value.
+ * Fallback web fonts: the harness runs with `MAP * ~NOTFOUND`, so Fraunces and
+ * Manrope never load here and these numbers are NOT comparable to a figure
+ * measured against the deployed site. They are comparable to each other, which
+ * is what a regression ceiling needs.
+ */
+export function measuredHeight(html: string, selector: string): number {
+	const chrome = findChrome();
+	if (!chrome) {
+		throw new Error(
+			"No Chrome — cannot measure natural height. Set CHROME_PATH, or install " +
+				`one of: ${CHROME_BINARIES.join(", ")}`,
+		);
+	}
+	warmChrome(chrome);
+	const probe = `<script>
+	(function () {
+		// Every sheet, not just the target: a descendant measured while an ancestor
+		// still wears minHeight PAGE_H is measuring the sheet, because the layouts
+		// give their content column flex: 1 and it stretches to fill.
+		document.querySelectorAll("[data-fit-inner]").forEach(function (p) {
+			p.style.minHeight = "0";
+		});
+		var el = document.querySelector(${JSON.stringify(selector)});
+		if (!el) { document.title = "MISSING"; return; }
+		el.style.minHeight = "0";
+		document.title = String(el.scrollHeight);
+	})();
+	</script>`;
+	const dir = mkdtempSync(join(tmpdir(), "print-measure-"));
+	try {
+		const htmlPath = join(dir, "page.html");
+		writeFileSync(htmlPath, html.replace("</body>", `${probe}</body>`), "utf8");
+		const dom = execFileSync(
+			chrome,
+			[
+				"--headless",
+				"--disable-gpu",
+				"--no-sandbox",
+				`--user-data-dir=${dir}`,
+				"--disable-extensions",
+				"--host-resolver-rules=MAP * ~NOTFOUND",
+				"--virtual-time-budget=2000",
+				"--dump-dom",
+				`file://${htmlPath}`,
+			],
+			{ encoding: "utf8", stdio: "pipe", timeout: 10_000 },
+		);
+		const measured = dom.match(/<title>(\d+)<\/title>/);
+		if (!measured) {
+			throw new Error(
+				`Could not measure "${selector}". Chrome reported ` +
+					`${dom.match(/<title>([^<]*)<\/title>/)?.[1] ?? "no title"} — ` +
+					"MISSING means the selector matched nothing.",
+			);
+		}
+		return Number(measured[1]);
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}

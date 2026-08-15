@@ -116,6 +116,31 @@ export function toE164(
 }
 
 /**
+ * Normalize a stored phone for READING: E.164 when it can be derived, otherwise
+ * the value exactly as stored. The read-side mirror of `toStoredPhone`, and the
+ * one form every payload that renders a phone should use. Unlike `toStoredPhone`
+ * it does not trim or collapse: the stored value comes back byte-for-byte, so
+ * `""` stays `""` — which is what the inline call sites it replaces already did.
+ * The trailing `?? null` only normalizes `undefined`.
+ *
+ * The `?? raw` half is load-bearing, and it lives here so it is discoverable from
+ * `toE164` rather than rediscovered at each call site. `toE164` returns null for
+ * anything with no digits ("call the office"), and `toStoredPhone` DELIBERATELY
+ * stores such input verbatim so the member can still see and edit it — and the
+ * roster/guest editors validate phone as a plain nullable string with no digit
+ * requirement, so it is reachable in normal use, not just in legacy data. A read
+ * path using bare `toE164` therefore erases a number the user can currently read,
+ * and starves `WhatsAppPhoneLink`'s plain-text branch, which exists to render
+ * exactly that case as text rather than a dead link.
+ */
+export function coalesceToE164(
+	raw: string | null | undefined,
+	defaultCountryCode?: string | null,
+): string | null {
+	return toE164(raw, defaultCountryCode) ?? raw ?? null;
+}
+
+/**
  * Normalize a phone for STORAGE on write (#295): E.164 (`+…`) when it can be
  * derived (already international, or a national number plus the club's default
  * country code), otherwise the trimmed raw input so a number we can't fully

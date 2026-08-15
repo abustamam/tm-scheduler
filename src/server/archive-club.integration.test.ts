@@ -1,7 +1,10 @@
 /**
  * DB-backed tests for club soft-archive (ADR-0016 / #186):
- *   - `requireMembership` rejects in an archived club (the single authed choke
- *     point `requireClubRole` builds on),
+ *   - `requireMembership` rejects in an archived club (the choke point for authed
+ *     WRITES, which `requireClubRole` builds on),
+ *   - the authed READ gates `requireClubViewAccess` / `requireClubAdminView`
+ *     reject too (#560) — they do NOT route through `requireMembership`, which is
+ *     why they served an archived club's roster contact details until then,
  *   - a public club loader returns not-found for an archived club
  *     (`resolveClubByIdentifier` surfaces `archived_at`, and the shared helper
  *     `resolveClubOrRedirect` throws `notFound()` on it),
@@ -21,9 +24,10 @@ import { randomUUID } from "node:crypto";
 import { isNotFound } from "@tanstack/react-router";
 import { eq, inArray } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { clubs, user } from "#/db/schema";
+import { clubs, officerTerms, user } from "#/db/schema";
 import { isClubArchived } from "#/lib/club-archive";
 import { cleanup, hasTestDb, seedClub, testDb } from "#/test/db";
+import { statementsDuring } from "#/test/query-spy";
 
 const getClubByIdentifierMock = vi.hoisted(() => vi.fn());
 
@@ -32,9 +36,12 @@ vi.mock("#/server/clubs", () => ({
 	getClubByIdentifier: getClubByIdentifierMock,
 }));
 
-const { requireMembership, requireSuperadmin } = await import(
-	"#/server/guards"
-);
+const {
+	requireClubAdminView,
+	requireClubViewAccess,
+	requireMembership,
+	requireSuperadmin,
+} = await import("#/server/guards");
 const { archiveClub, unarchiveClub } = await import(
 	"#/server/onboarding-logic"
 );
@@ -135,6 +142,117 @@ describe.skipIf(!hasTestDb)("club soft-archive (#186)", () => {
 		await expect(
 			requireMembership(seed.memberUserId, seed.clubId),
 		).resolves.toMatchObject({ status: "active" });
+	});
+
+	it("the authed READ gates reject an archived club for its own members, and restore on unarchive (#560)", async () => {
+		const seed = await seedClub();
+		createdClubs.push(seed.clubId);
+
+		// Controls first, so the rejections below can actually fail. A gate that
+		// rejected everything would satisfy the archived assertions on its own.
+		await expect(
+			requireClubViewAccess(seed.memberUserId, seed.clubId),
+		).resolves.toMatchObject({ via: "member" });
+		await expect(
+			requireClubAdminView(seed.adminUserId, seed.clubId),
+		).resolves.toMatchObject({ via: "member" });
+
+		await archiveClub(seed.clubId);
+
+		// The member read gate: 24 GET server fns sit behind it (grep `requireClubViewAccess|requireClubAdminView`), including the
+		// roster loaders that carry member email (#266) and phone (#559). Which of
+		// those fns call it is held separately by `club-contact-gate.guard.test.ts`;
+		// this is the gate itself.
+		await expect(
+			requireClubViewAccess(seed.memberUserId, seed.clubId),
+		).rejects.toThrow(/archived/i);
+		// The admin read gate — the club's own admin is no exception.
+		await expect(
+			requireClubAdminView(seed.adminUserId, seed.clubId),
+		).rejects.toThrow(/archived/i);
+
+		// Ordering is load-bearing: the check runs AFTER the membership resolves, so
+		// a stranger still gets the membership answer and cannot use the archive
+		// message to probe whether a club exists.
+		const strangerId = await seedUser(false);
+		await expect(
+			requireClubViewAccess(strangerId, seed.clubId),
+		).rejects.toThrow(/not a member/i);
+
+		// Unarchive restores both gates; no membership row was touched.
+		await unarchiveClub(seed.clubId);
+		await expect(
+			requireClubViewAccess(seed.memberUserId, seed.clubId),
+		).resolves.toMatchObject({ via: "member" });
+		await expect(
+			requireClubAdminView(seed.adminUserId, seed.clubId),
+		).resolves.toMatchObject({ via: "member" });
+	});
+
+	it("a gated read costs ONE read of clubs, not two (#566)", async () => {
+		// The archive check used to issue its own `select archived_at from clubs`
+		// after `getMembership` had already joined that row. Measured before the
+		// fix: gates went 1 -> 2 statements, and /admin/vpe-dashboard spent 9 on
+		// pure authorization instead of 6 (three gated fns in one Promise.all).
+		//
+		// Asserted at the DRIVER, so it is indifferent to how the statement was
+		// built — a later refactor that reintroduces a second lookup by any means
+		// fails here. See CLAUDE.md's "a 'no extra query' test that spies a NAMED
+		// loader stops being able to fail the moment that query is inlined".
+		const seed = await seedClub();
+		createdClubs.push(seed.clubId);
+
+		const statements = await statementsDuring(async () => {
+			await requireClubViewAccess(seed.memberUserId, seed.clubId);
+		});
+
+		// Non-empty first. A spy that observes nothing makes every count below pass
+		// vacuously, which is the failure `query-spy.ts` warns about in its own
+		// header.
+		expect(
+			statements.length,
+			"the spy observed no statements at all — it is not seeing the gate's queries, so the count below proves nothing",
+		).toBeGreaterThan(0);
+
+		// ONE statement: `getMembership`. Two means the archive check went back to
+		// the database for a row that query already joined.
+		expect(
+			statements.map((s) => s.replace(/\s+/g, " ").slice(0, 80)),
+			"a gated read issued more than one statement — the archive check is querying again for a row getMembership already carries (#566)",
+		).toHaveLength(1);
+
+		// And it really is carrying the archive column, rather than having dropped
+		// the check to get the count down.
+		expect(
+			statements[0],
+			"getMembership no longer selects clubs.archived_at, so the gate is not reading the archive state from the row it resolved",
+		).toMatch(/"clubs"\."archived_at"/);
+	});
+
+	it("the admin read gate rejects an archived club for an EFFECTIVE admin too (#202/#560)", async () => {
+		// `requireClubAdminView` has TWO member arms: a stored `club_role = admin`,
+		// and any membership holding an open officer term (effective-admin, #202).
+		// The case above drives only the first. `seedClub()` inserts no officer_terms
+		// row at all — nothing in the repo did — so this arm had never been exercised
+		// against an archived club, or indeed on this gate at all.
+		const seed = await seedClub();
+		createdClubs.push(seed.clubId);
+		await testDb.insert(officerTerms).values({
+			membershipId: seed.memberId,
+			position: "vp_education",
+			termStart: new Date(),
+			termEnd: null, // open term = currently held
+		});
+
+		// Control: the plain member now reads as an effective admin.
+		await expect(
+			requireClubAdminView(seed.memberUserId, seed.clubId),
+		).resolves.toMatchObject({ via: "member" });
+
+		await archiveClub(seed.clubId);
+		await expect(
+			requireClubAdminView(seed.memberUserId, seed.clubId),
+		).rejects.toThrow(/archived/i);
 	});
 
 	it("public resolution surfaces archived_at so the loader returns not-found, and clears it on unarchive", async () => {

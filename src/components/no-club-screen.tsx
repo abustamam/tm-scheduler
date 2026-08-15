@@ -19,11 +19,23 @@ export function NoClubScreen({
 	email,
 	onSignOut,
 	isSuperadmin = false,
+	hasArchivedClub = false,
 }: {
 	/** The signed-in user's email, so they can tell which account they're in. */
 	email: string;
 	onSignOut: () => void;
 	isSuperadmin?: boolean;
+	/**
+	 * True when the user holds an active membership in a club that has been
+	 * soft-archived (#560). The default copy tells them their account "isn't linked
+	 * to a Toastmasters club yet" and to check they used the email their club has on
+	 * file — accurate for someone never added to a roster, and actively misleading
+	 * for someone whose club was taken down, since no email will fix it.
+	 *
+	 * Deliberately a boolean, not the club: naming it would put back the brand
+	 * identity archiving exists to remove.
+	 */
+	hasArchivedClub?: boolean;
 }) {
 	return (
 		<div className="flex min-h-svh w-full flex-col bg-[var(--foam)] font-sans text-[var(--sea-ink)]">
@@ -46,13 +58,16 @@ export function NoClubScreen({
 						<Users className="size-6" aria-hidden />
 					</span>
 					<h1 className="mt-5 font-display text-2xl font-semibold tracking-[-0.01em]">
-						You're not in a club yet
+						{hasArchivedClub
+							? "Your club isn't available"
+							: "You're not in a club yet"}
 					</h1>
 					<p className="mt-3 text-sm leading-relaxed text-[var(--sea-ink-soft)]">
 						You're signed in as{" "}
 						<span className="font-semibold text-[var(--sea-ink)]">{email}</span>
-						, but this account isn't linked to a Toastmasters club on GavelUp
-						yet.
+						{hasArchivedClub
+							? ", and your membership is still on file — but the club has been removed from GavelUp. Signing in with a different email won't change this; your club's officers can tell you more."
+							: ", but this account isn't linked to a Toastmasters club on GavelUp yet."}
 					</p>
 
 					<div className="mt-6 flex flex-col gap-2.5">

@@ -41,6 +41,17 @@ warm-session model needs.
     pages never enter the offline cache.
   - **Static assets** (script/style/font/image, `/_build/`, `/assets/`) → stale-while-revalidate.
   - POST and cross-origin requests are never intercepted.
+  - **A 404 or 410 evicts** rather than being a no-op (#556). Archiving a club is the platform
+    takedown lever (ADR-0016 / ADR-0024), and #544 made an archived club's public pages answer
+    not-found — but `response.ok` was false, so the pre-archive entry was neither overwritten nor
+    removed and every offline reload kept serving a complete agenda from a club that had been taken
+    down. Narrowed to 404/410 on a non-redirected, same-origin, non-opaque response, so a 500, an
+    expired session or a captive portal never costs a club its offline access. A navigation eviction
+    clears the whole **meeting** — every cached key under `…/meeting/<key>`, not just the URL that
+    404'd — because one meeting occupies several (the deck, the print sheet and any surface added
+    beside them), and the offline fallback already matches any cached Print page regardless of its
+    `?layout=`. A device that primed more than one would otherwise keep answering from the ones it
+    did not happen to re-request: a takedown that looks done and is not.
 - **Registration is production- and browser-only** (`registerServiceWorker`), so it never fights
   Vite's dev module graph / HMR.
 - **Freshness is best-effort (stale-while-revalidate), not guaranteed.** When online, an agenda
@@ -58,7 +69,18 @@ warm-session model needs.
   is an accepted limitation of the warm-session MVP, not a bug.
 - Cold-start of a never-primed meeting with zero connectivity, and offline auth for `_authed`
   surfaces, remain out of scope.
-- Bumping `VERSION` in `public/sw.js` invalidates all caches on the next activation.
+- The two caches carry **separate versions** — `NAV_VERSION` and `ASSET_VERSION` in `public/sw.js`,
+  not one shared `VERSION` (#556). Bumping a version drops that cache wholesale on the next
+  activation, which stays the only way to clear copies already sitting on devices, but the two have
+  different blast radii. The nav cache holds pre-takedown agendas and nothing in it identifies which
+  club they belong to, so #556 bumped it to `v4` and every club re-primes its offline pages once.
+  The asset cache holds hashed build output plus everything under `public/`, which a takedown has no
+  bearing on, so it stays at `v3` and `activate` instead purges the one takedown-sensitive thing in
+  it: club crests (`/api/club/:id/logo`).
+- A **third** on-device copy is not this worker's: `gavelup.auth-context.v2` in localStorage
+  (`src/lib/offline-auth-context.ts`) holds the club switcher's names and Toastmasters club numbers.
+  Its key is bumped for the same one-time-clear reason, and it is bumped in the same release as the
+  nav cache or the two fall out of step.
 
 ## Deferred / out of scope
 

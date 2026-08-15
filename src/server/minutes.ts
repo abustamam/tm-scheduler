@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { MEETING_UPDATE_FIELDS } from "#/lib/meeting-limits";
+import { isReadableClub } from "./club-readable-logic";
 import {
 	getMembership,
 	getSessionUser,
@@ -26,9 +27,16 @@ import {
 
 const uuid = z.string().uuid();
 
+// A guest added from the minutes/attendance flow. `email` is validated as an
+// EMAIL, not free text, so every writer of `guests.email` agrees with
+// `guestBookSchema` and `updateGuestSchema` — this was the one path through
+// which "a@b.com?bcc=x&subject=y" could reach the column, and the VP-Membership
+// card renders that column into a `mailto:` href. The href is encoded there too;
+// this is the other half, so the value never gets stored in the first place.
+// `.max(200)` matches `guestBookSchema`'s cap on the same column.
 const newGuestSchema = z.object({
 	name: z.string().trim().min(1),
-	email: z.string().trim().optional(),
+	email: z.string().trim().email().max(200).optional(),
 	phone: z.string().trim().optional(),
 });
 
@@ -66,6 +74,13 @@ export const getMinutes = createServerFn({ method: "GET" })
 		};
 		if (!sessionUser) return empty;
 		const clubId = await getMeetingClubId(meetingId);
+		// Archive takedown (#560). This fn resolves membership itself rather than
+		// through a `require*` gate, so it never reaches the gates'
+		// `assertClubNotArchived` — and a `createServerFn` is addressable directly with
+		// no router, so the meeting page 404ing does not gate this. Returns the
+		// module's existing not-visible shape rather than throwing, matching how the
+		// public readers collapse archived into never-existed.
+		if (!(await isReadableClub(clubId))) return empty;
 		const membership = await getMembership(sessionUser.id, clubId);
 		// Read-write impersonation (#246): a superadmin acting as admin has no
 		// membership but may still edit minutes. Only checked when there's no real

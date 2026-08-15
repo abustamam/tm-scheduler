@@ -10,7 +10,6 @@ import {
 	CalendarPlus,
 	ChevronLeft,
 	Mail,
-	Phone,
 	ShieldCheck,
 } from "lucide-react";
 import { useState } from "react";
@@ -32,9 +31,11 @@ import {
 } from "#/components/ui/dialog";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
+import { WhatsAppPhoneLink } from "#/components/whatsapp-phone-link";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { formatMeetingDate } from "#/lib/format";
+import { mailtoHref } from "#/lib/mailto";
 import { formatTenure } from "#/lib/members";
 import {
 	OFFICER_POSITIONS,
@@ -200,22 +201,35 @@ function MemberDetail() {
 					{member.email || member.phone ? (
 						<div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-[var(--sea-ink-soft)]">
 							{member.email ? (
+								// `mailtoHref`, not raw interpolation: a stored
+								// "a@b.com?cc=x&subject=y" would otherwise become live mailto
+								// HEADERS. `bulkImportSchema` still validates member email as a
+								// plain string, so this is not only a legacy-row concern.
+								//
+								// `data-slot="wa-email"` + `text-primary` mirrors the phone link
+								// beside it exactly, and both halves are required. The unlayered
+								// `a { color }` rule in styles.css beats any layered utility, so
+								// this anchor rendered --lagoon-deep (#328f97, 3.81:1) — under AA
+								// — next to a phone link at --lagoon-ink (5.82:1): one Contact
+								// pair in two colours, one of them failing. The `hover:text-[var
+								// (--sea-ink)]` that used to sit here was inert for the same
+								// reason and is gone rather than revived: it would now WORK, and
+								// send the two halves back to different colours on hover.
 								<a
-									href={`mailto:${member.email}`}
-									className="inline-flex items-center gap-1.5 hover:text-[var(--sea-ink)] hover:underline"
+									href={mailtoHref(member.email)}
+									data-slot="wa-email"
+									className="inline-flex items-center gap-1.5 text-primary hover:underline"
 								>
 									<Mail className="size-3.5" aria-hidden />
 									{member.email}
 								</a>
 							) : null}
+							{/* WhatsApp, not the dialer. The component supplies its own icon,
+							    layout, `hover:underline` and colour — including the
+							    `data-slot` that lets that colour survive the unlayered
+							    `a { color }` rule — so this passes no styling at all. */}
 							{member.phone ? (
-								<a
-									href={`tel:${member.phone}`}
-									className="inline-flex items-center gap-1.5 hover:text-[var(--sea-ink)] hover:underline"
-								>
-									<Phone className="size-3.5" aria-hidden />
-									{member.phone}
-								</a>
+								<WhatsAppPhoneLink phone={member.phone} name={member.name} />
 							) : null}
 						</div>
 					) : null}
@@ -571,7 +585,11 @@ type ProfileMember = {
 	name: string;
 	preferredName: string | null;
 	email: string | null;
+	/** Coalesced for DISPLAY — the WhatsApp link. Never a form prefill. */
 	phone: string | null;
+	/** The stored column verbatim — what the edit dialog prefills, so a save
+	 *  round-trips the bytes instead of the country-code guess. */
+	phoneRaw: string | null;
 	officerPositions: OfficerPosition[];
 	userId: string | null;
 	status: "active" | "inactive";
@@ -740,11 +758,17 @@ function MemberActions({
 						</div>
 						<div className="space-y-2">
 							<Label htmlFor="edit-phone">Phone</Label>
+							{/* `phoneRaw`, NOT `phone`. `phone` is coalesced for display — a
+							    country-code guess prepended to whatever is stored — so
+							    "415-555-2671 x12" would show here as "+1415555267112", a
+							    number nobody typed, on the one screen that shows what is on
+							    file. See `loadMemberProfile` for why the write path's
+							    re-normalization does not make that harmless. */}
 							<Input
 								id="edit-phone"
 								name="phone"
 								type="tel"
-								defaultValue={member.phone ?? ""}
+								defaultValue={member.phoneRaw ?? ""}
 							/>
 						</div>
 						<fieldset className="space-y-2">

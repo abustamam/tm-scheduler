@@ -9,6 +9,7 @@ import {
 	clubs,
 	meetingAttendancePlan,
 	meetings,
+	members,
 	roleDefinitions,
 	roleSlots,
 } from "#/db/schema";
@@ -171,6 +172,68 @@ describe.skipIf(!hasTestDb)("loadSeasonGrid", () => {
 		expect(member?.email).toBe(`member-${seed.memberUserId}@test.example`);
 		expect(member).toHaveProperty("phone");
 		expect(member?.phone).toBeNull();
+	});
+
+	it("coalesces a pre-#397 national number to E.164 on the contact axis", async () => {
+		const { loadSeasonGrid } = await import("#/server/season-grid-logic");
+		// A row as it was stored BEFORE normalize-on-write (#295/#397): no country
+		// code. The club has no `default_country_code`, so `+1` applies.
+		await testDb
+			.update(members)
+			.set({ phone: "(415) 555-2671" })
+			.where(eq(members.id, seed.memberId));
+
+		const grid = await loadSeasonGrid({
+			clubId: seed.clubId,
+			count: 8,
+			includeContact: true,
+		});
+		const member = grid.members.find((m) => m.id === seed.memberId);
+		expect(member?.phone).toBe("+14155552671");
+	});
+
+	it("normalizes with the CLUB's country code, not the +1 default", async () => {
+		const { loadSeasonGrid } = await import("#/server/season-grid-logic");
+		// Pins that `loadClubDefaultCountryCode` is actually consulted: with the
+		// code hard-coded to the `+1` default this number normalizes to
+		// "+10207946018"-ish garbage rather than a UK number.
+		await testDb
+			.update(clubs)
+			.set({ defaultCountryCode: "+44" })
+			.where(eq(clubs.id, seed.clubId));
+		await testDb
+			.update(members)
+			.set({ phone: "020 7946 0018" })
+			.where(eq(members.id, seed.memberId));
+
+		const grid = await loadSeasonGrid({
+			clubId: seed.clubId,
+			count: 8,
+			includeContact: true,
+		});
+		const member = grid.members.find((m) => m.id === seed.memberId);
+		expect(member?.phone).toBe("+442079460018");
+	});
+
+	it("keeps an un-normalizable phone as stored rather than dropping it", async () => {
+		const { loadSeasonGrid } = await import("#/server/season-grid-logic");
+		// `toStoredPhone` stores input with no derivable number verbatim, and the
+		// roster editor's phone field has no digit requirement — so this is a
+		// reachable stored value. `toE164` returns null for it; the payload must
+		// still carry the text, because `WhatsAppPhoneLink` renders a digit-less
+		// value as readable plain text instead of a dead link.
+		await testDb
+			.update(members)
+			.set({ phone: "call the office" })
+			.where(eq(members.id, seed.memberId));
+
+		const grid = await loadSeasonGrid({
+			clubId: seed.clubId,
+			count: 8,
+			includeContact: true,
+		});
+		const member = grid.members.find((m) => m.id === seed.memberId);
+		expect(member?.phone).toBe("call the office");
 	});
 
 	it("includeContact omitted (default) leaves contact off the member axis", async () => {

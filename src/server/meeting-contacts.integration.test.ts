@@ -125,6 +125,45 @@ describe.skipIf(!hasTestDb)("meeting contacts (integration)", () => {
 		expect(roster.find((r) => r.name === "No CC")?.phone).toBe("+14155552671");
 	});
 
+	it("drops a digit-less phone to null instead of coalescing it (nudge payload)", async () => {
+		// PINS THE BARE `toE164` in meeting-contacts-logic.ts. These three sites
+		// deliberately do NOT use `coalesceToE164`, and the ~15 lines of comment
+		// arguing why were pinned by nothing: aliasing the import
+		// (`import { coalesceToE164 as toE164 }`) left the whole suite green.
+		//
+		// `toStoredPhone` stores digit-less input verbatim so the member can still
+		// read and edit it, so "call the office" is reachable in normal use. This
+		// payload is a DIAL TARGET, never rendered text — `null` is what makes
+		// `nudge-recruit-picker.tsx`'s `!t.phone && !t.email` test show the honest
+		// "no contact" badge. Coalescing would make it truthy and SUPPRESS that
+		// badge for someone nobody can message, while adding no working link
+		// (`whatsappHref` is null for a digit-less value either way).
+		const memberId = await addMember(seeded.clubId, "Words Not Digits", {
+			phone: "call the office",
+		});
+		const guestId = await addGuest(seeded.clubId, "Guest Words", {
+			phone: "ask at the door",
+		});
+
+		const roster = await loadRosterWithContact(seeded.clubId);
+		expect(
+			roster.find((r) => r.name === "Words Not Digits")?.phone,
+			"loadRosterWithContact preserved a digit-less phone — that is " +
+				"`coalesceToE164` behaviour, and it suppresses the recruit picker's " +
+				'"no contact" badge for a member nobody can message.',
+		).toBe(null);
+
+		const map = await loadHolderContacts(seeded.clubId, [memberId], [guestId]);
+		expect(
+			map.get(`member:${memberId}`)?.phone,
+			"loadHolderContacts (member branch) preserved a digit-less phone — see above.",
+		).toBe(null);
+		expect(
+			map.get(`guest:${guestId}`)?.phone,
+			"loadHolderContacts (guest branch) preserved a digit-less phone — see above.",
+		).toBe(null);
+	});
+
 	it("loadHolderContacts resolves member and guest contact by id", async () => {
 		const memberId = await addMember(seeded.clubId, "Holder M", {
 			phone: "+14155550003",

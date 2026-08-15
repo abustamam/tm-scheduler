@@ -2,6 +2,66 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.13.2.0] - 2026-08-15
+
+### Fixed
+
+- **Removing someone's platform-support access now takes effect immediately.** If a support session was already open when their access was withdrawn, it kept working until it expired on its own — up to an hour. Withdrawing access now ends any open session on their next action. Restoring access brings it back; nothing about the club's own admins changes.
+
+### Changed
+
+- **Club pages load with one less database query each.** Checking whether a club has been removed used to be a separate lookup on every page a member opens, even though the information was already in hand from the check that ran immediately before it. On the VP Education dashboard, which loads three reports at once, that was nine lookups before any report data — now six.
+
+## [1.13.1.1] - 2026-08-15
+
+### Fixed
+
+- **Nothing user-facing.** Repairs the internal check that is supposed to catch a page which forgets to hide a removed club. It was reporting a clean bill of health while skipping one page — the meeting minutes, which is exactly the page that turned out to be leaking in v1.13.1.0 and had to be found by hand. The check now reads each page's code correctly, and fails if it is ever fooled the same way again.
+
+## [1.13.1.0] - 2026-08-14
+
+### Fixed
+
+- **Taking a club down now actually takes it down for its own members.** Archiving a club is how a club is removed from GavelUp, but its members could still open the roster and read every member's email and phone number, along with the minutes and their own upcoming commitments. The pages the public sees were closed in v1.11.1.0; the signed-in ones were not, and adding phone numbers to the roster in v1.12.0.0 widened what was on show. Every signed-in read of an archived club now comes back empty, including the minutes, the minutes PDF download, and the club's name and number in the club switcher.
+- **A taken-down club no longer keeps serving its agenda from your device.** Meeting pages are saved for offline use, and once a club was archived the server refused to send a fresh copy — which meant the old one was never replaced either. Any device that had opened that meeting could keep showing the full agenda, with assignee names, speech titles and the Word of the Day, indefinitely. Those copies are now discarded as soon as the device sees the club is gone, along with the club's crest.
+- **A member whose club was removed gets told what happened.** They used to land on "You're not in a club yet", with advice to check they had signed in with the email their club has on file — an account problem they could never fix, because the club was the thing that changed. The screen now says the club has been removed and points them at their club's officers.
+
+### Changed
+
+- **Everyone's saved offline meeting pages are cleared once, on the first visit after this release.** That is the only way to remove copies of a taken-down club that are already sitting on devices, and the worker cannot tell which saved page belongs to which club. Re-open any meeting while online to save it again. Nothing else is affected: the app's own files and images are left in place, so this costs one page load, not a full re-download.
+- **A superadmin can no longer view an archived club by acting as it.** Removing a club now means no club screen serves it to anyone; the superadmin console is the way to look at one. This matches what the console already did — it hides "View as this club" for an archived club — so the two no longer disagree.
+
+## [1.13.0.1] - 2026-08-13
+
+### Changed
+
+- **Nothing user-facing.** Corrects a claim in the contributor docs that shipped with v1.13.0.0. The note about the print checks needing a browser said they had only ever run on the build server, which is wrong — it described a Mac, and this project is normally developed on Linux, where they run locally like any other test. Scoped to macOS now, along with the reason the obvious workaround makes things worse rather than better.
+
+## [1.13.0.0] - 2026-08-13
+
+### Changed
+
+- **The printed agenda no longer repeats a presenter's name down the page.** When the same person runs several beats back to back, they now print as one block: the name once, a line per beat, every clock time still there. On a real MCF agenda that is the General Evaluator's four-beat stretch and the President's three-beat close — six repeated name lines gone, and nothing about the meeting itself changed. A hand-off still splits the block in two, because being introduced is a real moment in the room and should not read as one uninterrupted turn.
+- **The Editorial agenda prints noticeably larger.** Body text goes from roughly 5.6pt to 6.9pt — about 23% bigger. Most of that is the space the repeated names were using: the Editorial layout shrinks itself to fit one sheet, so anything that makes the page taller makes the type smaller, and the reverse. The remainder is a deliberate size increase on top, sized by measuring the sheet rather than guessing.
+- **The Spacious layout gets the same treatment.** Its run-of-show page had been shrunk to about 70% to fit; with the repeated names gone it now fits with room to spare and prints at full size. The Grid and Timing layouts are untouched — they already put the name and the description on one line, so there was nothing to reclaim.
+
+### Fixed
+
+- **Print layout checks now run on a Mac.** The tests that catch print problems drive a real browser, and they were quietly skipping on macOS because the browser installs somewhere they did not look. They ran only on the build server. Setting `CHROME_PATH` now points them at any working browser.
+
+### Changed
+
+- **Every phone number in GavelUp now opens WhatsApp.** Tapping a member's number used to open the phone dialer, which is not how this club actually talks to each other — and if you do want to call, the number is right there to copy. Numbers are now one tap to a WhatsApp conversation on the sign-up sheet, the member profile, the VP Membership guest cards, and the roster. The chat opens empty: these screens have no idea which role you are calling about, and the pre-written drafts already live on the meeting page where that context exists.
+- **The roster has a phone column.** It shows on wide screens only. A fifth column at tablet width squeezes the member-name column down to nothing, which defeats the point of a roster — so below 1280px the number stays one tap away on the member's profile, where it has always been.
+- **Guest phone numbers on the VP Membership board are clickable.** They used to be plain text glued to the email with a middot.
+- **A number typed without a country code still works.** The club's country code (set on Club settings, `+1` by default) is applied when the page loads, so numbers imported years ago link correctly without anyone editing them. A number nobody can dial — someone typed "call the office" into the phone field — still shows as readable text instead of a broken link.
+
+### Fixed
+
+- **Contact links now meet the accessibility contrast standard.** A site-wide styling rule was quietly overriding the colour these links asked for, painting them at a contrast ratio below the WCAG AA minimum at the size they render. The phone and email in a contact pair also render as the same colour again, instead of one of each.
+- **An email address can no longer smuggle extra headers into a message you send.** Addresses reach GavelUp from a few places, and one of them accepts any text at all. A crafted address could add a hidden recipient to the message your mail client opened — and on the meeting page, where the app writes the draft for you, it could also silently replace the subject and body. All four places that open an email now escape the address, and a new check fails the build if a fifth appears.
+- **Editing a member no longer shows a rewritten phone number.** Opening Edit on someone whose number was stored with an extension showed the reformatted version instead of what is actually on file.
+
 ## [1.11.1.0] - 2026-08-10
 
 ### Fixed

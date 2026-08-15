@@ -39,7 +39,20 @@ export interface ActiveImpersonation {
 }
 
 /** The superadmin's single active session (any club), or null. Active =
- *  not ended AND not expired. */
+ *  not ended AND not expired AND the holder is STILL a superadmin.
+ *
+ *  That last predicate is #567. `requireSuperadmin` runs when a session is
+ *  STARTED and never again, so the session row was the entire credential for its
+ *  whole life. De-provisioning clears `user.is_superadmin`
+ *  (`reconcileSuperadminFlag`, on the next sign-in) and touches no session, which
+ *  left a de-listed operator reading club data for up to the remaining TTL — 60
+ *  minutes read-only, 15 read-write.
+ *
+ *  ADR-0016 §2 accepts that the FLAG lags until next sign-in; it was written
+ *  before impersonation existed (#185 / #246), and a session is a second, separate
+ *  grant that outlived it. Joining the user row makes demotion take effect on the
+ *  operator's next request instead, and removes the only path by which this arm
+ *  could grant to a non-superadmin. */
 export async function getActiveImpersonationForUser(
 	superadminUserId: string,
 	now: Date = new Date(),
@@ -52,9 +65,14 @@ export async function getActiveImpersonationForUser(
 			expiresAt: impersonationSessions.expiresAt,
 		})
 		.from(impersonationSessions)
+		.innerJoin(
+			userTable,
+			eq(userTable.id, impersonationSessions.superadminUserId),
+		)
 		.where(
 			and(
 				eq(impersonationSessions.superadminUserId, superadminUserId),
+				eq(userTable.isSuperadmin, true),
 				isNull(impersonationSessions.endedAt),
 				gt(impersonationSessions.expiresAt, now),
 			),

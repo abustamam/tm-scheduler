@@ -11,6 +11,7 @@ import {
 } from "#/db/schema";
 import { buildRoleCounts, buildShortCodes, slotLabel } from "#/lib/agenda";
 import { urlKeysForMeetings } from "#/lib/meeting-url";
+import { coalesceToE164, DEFAULT_COUNTRY_CODE } from "#/lib/phone";
 import { listPlanForMeetings } from "./attendance-plan-logic";
 import { isReadableClub } from "./club-readable-logic";
 
@@ -99,9 +100,15 @@ export async function loadSeasonGrid(input: {
 	const now = new Date();
 
 	// 1. Columns: up to PAST_LOOKBACK most-recent past meetings + upcoming.
+	// `defaultCountryCode` rides along on the row this query already fetches. It
+	// is only USED on the contact path (below), but reading it here costs nothing
+	// — one more column on a single-row lookup — whereas loading it separately
+	// there cost a whole extra SERIALIZED round trip, since it sat behind every
+	// query above it. Fetching an unused column is strictly cheaper than the gate
+	// that avoided fetching it.
 	const club = await db.query.clubs.findFirst({
 		where: eq(clubs.id, input.clubId),
-		columns: { timezone: true, slug: true },
+		columns: { timezone: true, slug: true, defaultCountryCode: true },
 	});
 	const timezone = club?.timezone ?? "UTC";
 
@@ -266,13 +273,35 @@ export async function loadSeasonGrid(input: {
 		.from(members)
 		.where(eq(members.clubId, input.clubId))
 		.orderBy(asc(members.name));
-	const memberRows: SeasonGridMember[] = allMemberRows
-		.filter((m) => m.status !== "inactive")
-		.map((m) =>
-			input.includeContact
-				? { id: m.id, name: m.name, email: m.email, phone: m.phone }
-				: { id: m.id, name: m.name },
-		);
+	// Coalesce phone to E.164 with the club default country code (#295) so the
+	// rendered WhatsApp link is a valid full number even for rows stored before
+	// normalize-on-write. `coalesceToE164` also preserves an un-normalizable value
+	// rather than dropping it — see its doc comment in `#/lib/phone`.
+	//
+	// The country code comes off the `clubs` row fetched at the top rather than
+	// from a second `loadClubDefaultCountryCode` call. That call was the thing the
+	// `includeContact` gate existed to avoid on the public path, and it was
+	// SERIALIZED behind everything above it — so the gate was saving a round trip
+	// that a single extra column removes for BOTH paths. The public grid still
+	// makes no extra `clubs` query; it just no longer needs a branch to say so.
+	// `season-grid-cc-query.integration.test.ts` pins the query COUNT.
+	//
+	// `?.trim() || DEFAULT_COUNTRY_CODE` reproduces `loadClubDefaultCountryCode`'s
+	// never-null contract (#397): a club that never set a code still has to
+	// produce one, so this stays a `||` (blank ⇒ default), not a `??`.
+	const active = allMemberRows.filter((m) => m.status !== "inactive");
+	let memberRows: SeasonGridMember[];
+	if (input.includeContact) {
+		const cc = club?.defaultCountryCode?.trim() || DEFAULT_COUNTRY_CODE;
+		memberRows = active.map((m) => ({
+			id: m.id,
+			name: m.name,
+			email: m.email,
+			phone: coalesceToE164(m.phone, cc),
+		}));
+	} else {
+		memberRows = active.map((m) => ({ id: m.id, name: m.name }));
+	}
 	const memberNames: SeasonGridMember[] = allMemberRows.map((m) => ({
 		id: m.id,
 		name: m.name,

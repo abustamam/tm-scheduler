@@ -11,6 +11,53 @@
 - An ex-member can still see a departed club's forward schedule. `userMemberIds` deliberately ignores `members.status`, and the deactivation sweep in `members-logic.ts` skips slots on CANCELLED meetings, while `applyReopenMeeting` restores a meeting without clearing assignments. Cancel a meeting, deactivate a member, reopen it, and their `/me` shows that club's date, theme and location with a Release button that dead-ends. Needs all three steps, so it is debt rather than scheduled work.
   **Priority:** P4
 
+## Contact links
+
+- Run `scripts/backfill-phone-e164.ts` against prod. Deferred from v1.12.0.0 by design — it writes to the production database, and the plan marks all four steps human-run. Not urgent: read-time coalescing already makes every rendered link correct, so this buys the #397 guest-collision report and stored-data hygiene rather than working links. Dry run first and **confirm the printed `host=` line is the Railway host** — `set -a; . ./.env.prod.local` is a zsh parse error on the connection string's unquoted `&`, so `DATABASE_URL` never gets set and Bun silently falls back to `.env.local`, running the whole thing against dev. Pass it inline instead. Then review the guest-collision report (those rows need a human merge; the script only reports them), apply, and re-run expecting `Would change 0 of N rows`.
+  **Priority:** P1
+
+- `/activity` fetches every member's phone to populate a filter dropdown that reads only `id` and `name`. Same auth gate as before, so not an exposure, but it serializes the phone into the SSR payload of a page that never renders it and makes that route pay a country-code round-trip for a field it discards. A narrow `listClubMemberNames` loader would drop both.
+  **Priority:** P4
+
+- The `no-tel-links` guard forbids `href="tel:"`, but the decision it enforces is "every rendered phone opens WhatsApp". A future surface doing `<span>{member.phone}</span>` passes the guard, every render test, and review. No present defect — swept the tree at v1.12.0.0 and the only remaining `phone` references are form inputs and the nudge picker's null check — but the guard enforces the narrower half.
+  **Priority:** P4
+
+- The SSR mount-gate dance (`useState(false)` + `useEffect` + `detectPlatform(navigator)`) is duplicated between `whatsapp-phone-link.tsx` and `nudge-buttons.tsx`, including the `"mobile"` default that has to match the server render. A shared `usePlatform()` in `#/lib/platform` would give that reasoning one home. Deliberately not done at v1.12.0.0: measured at 5.4ms over 200 rows in jsdom, and hoisting `mounted` to the list re-renders the whole table instead of the leaves, so it is a readability change, not an optimization.
+  **Priority:** P4
+
+## Archive takedown
+
+Surfaced by the `/review` passes on #560/#556 and deliberately left out of that branch.
+
+- The enrollment sweep walks `src/server/*.ts` only, so **`src/routes/api/**` is enrolled by
+  nothing**. That is the other half of #565: the minutes-PDF route was an ungated authed GET URL
+  serving an archived club's minutes, while its sibling `api/meetings.$id.role-sheets.$sheet.pdf.ts`
+  one directory entry over called `isReadableClub` correctly. Both are gated now, but only by a
+  hand-written case in `minutes-authz.guard.test.ts` — the next binary/export route added under
+  `src/routes/api/` is caught by no derived check. Extending the walk needs a different body-slicer
+  (route handlers are `server: { handlers: { GET: … } }`, not `export const x = createServerFn`),
+  which is why it did not ride along with the slicer fix.
+  **Priority:** P2
+
+- #556's eviction rests on an assumption nothing gates: that a `notFound()` in a route loader keeps
+  mapping to an HTTP **404**. Verified by hand against a dev server while writing the fix (meeting
+  page and `/present` 404; `/print` 307s to `?layout=grid` which 404s; the logo endpoint 404s), and
+  noted in `isGoneResponse` — but every sw test INJECTS the status, so they stay green either way.
+  If a TanStack Start upgrade made that a 200, `response.ok` flips true, the not-found page is
+  CACHED over the agenda, and the eviction silently never runs. A real gate needs an HTTP-level
+  assertion against a booted server, which this repo has no harness for.
+  **Priority:** P3
+
+- Archiving now has three different wire contracts for one domain event: `resolveClubOrRedirect`
+  throws `notFound()`, the public readers return `null`/`[]`, and the authed gates throw a raw
+  `Error` that crosses the RPC boundary as a 500-class rejection. `router.tsx` sets
+  `defaultNotFoundComponent` but no `defaultErrorComponent`, so a loader that reaches the throw
+  renders TanStack's unstyled "Something went wrong!" outside the app chrome. Narrow today — the
+  `/club/$clubId` shell 404s first for routes under it — so it bites routes that call a gated fn for
+  a club id without going through that shell, and only for a club archived mid-session. Pre-existing
+  in shape (`requireMembership` has thrown this since #186); #560 widened it from writes to reads.
+  **Priority:** P4
+
 ## Tooling
 
 - `bun run fix` writes the whole tree, and there is no scoped variant. Fine today (it is a verified no-op on a clean tree), but two things make a scoped one worth having before anyone wires it into a hook: `biome check --changed` hard-errors here because `biome.json`'s `vcs` block has no `defaultBranch`, and a `pre-commit` hook running the unscoped `fix` would sweep unrelated working-tree drift into the commit. `--staged` is verified working, so `"fix:staged": "biome check --write --staged"` plus `"defaultBranch": "main"` in the `vcs` block would close both.
@@ -61,6 +108,36 @@
   **Priority:** P4
 
 ## Completed
+
+- An impersonation session outlived the superadmin's own access. `getActiveImpersonationForUser`
+  selected on `superadminUserId` / `endedAt` / `expiresAt` and never re-read `user.is_superadmin`,
+  while `reconcileSuperadminFlag` runs on the SIGN-IN hook and touches no session — so removing an
+  address from `SUPERADMIN_EMAILS` left an open session granting club reads for the rest of its TTL
+  (60 min read-only, 15 read-write). ADR-0016 §2 accepts that the FLAG lags until next sign-in, but
+  that was written before impersonation existed and a session is a second, separate grant. One join
+  plus `eq(user.isSuperadmin, true)` closes it; revocation now lands on the operator's next request.
+  **Completed:** v1.13.2.0 (2026-08-15) — #567
+
+- The archive check cost an avoidable round-trip on every gated read. `assertClubNotArchived` issued
+  its own `SELECT archived_at FROM clubs` for a row `getMembership` was about to resolve anyway, so
+  each gate ran 2 statements instead of 1 and `/admin/vpe-dashboard` spent 9 on pure authorization
+  rather than 6. `getMembership` now carries `clubs.archived_at` on a join (with `clubs.archivedAt`
+  added to the `groupBy` — Postgres does not infer functional dependency across a join), the member
+  arms read the resolved row, and only the memberless impersonation arm still queries. Pinned by a
+  driver-level statement count in `archive-club.integration.test.ts` rather than a spy on a named
+  loader, so a later refactor that reintroduces the lookup by any means fails.
+  **Completed:** v1.13.2.0 (2026-08-15) — #566
+
+- The derived enrollment sweep in `public-readers-archive-gate.guard.test.ts` reported green while
+  skipping a reader. `serverFnBody` ended a declaration at a literal `\n});`, but every
+  `createServerFn` here closes at one tab because `.handler(` is chained one level in — so the slice
+  ran past the declaration and swallowed whatever followed. `getMinutes` absorbed `gateAdmin`,
+  matched THAT function's `requireUser`, and was filed as session-guarded and skipped, which is how
+  the #560 minutes leak reached production behind 54/54 green. Measured before the fix: 40 of 162
+  slices over-captured, one by 11,000 characters. The slice now ends at the next top-level
+  declaration, `getMinutes` is enrolled with a WIRINGS row, and a new vacuity case fails on any
+  slice that runs past its own declaration rather than letting the next recurrence be invisible.
+  **Completed:** v1.13.1.1 (2026-08-15) — #565
 
 - An impossible meeting date in a URL silently resolved to a REAL, different meeting. `parseMeetingKey` was shape-only, and `Date.UTC` overflow-rolls, so `2026-09-31` returned October 1st's meeting with a 200 — on the public ballot, a vote cast in a meeting nobody chose. The 500 originally recorded here (`9999-99-99`) was the loud minority case; the silent roll was the bug. Fixed by rejecting impossible dates (and times) at parse, which covers all four public meeting routes at once.
   **Completed:** v1.10.2.0 (2026-08-10)

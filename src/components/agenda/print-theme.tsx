@@ -206,6 +206,15 @@ export function FitPage({ children }: { children: React.ReactNode }) {
 		<div className="agenda-page" style={PAGE_OUTER}>
 			<div
 				ref={innerRef}
+				// Test hook only — nothing renders off it. It names the element whose
+				// `scrollHeight` the effect above measures, so a test can measure the
+				// same number in a real browser (`measuredHeight`, src/test/print-page-count.ts).
+				// That number IS the printed type size on this surface: everything here
+				// is scaled by PAGE_H/height, so a layout that grows 20% taller prints
+				// 20% smaller, silently and with the page count unchanged. Nothing else
+				// in the repo can see that — jsdom does no layout, and the page-count
+				// gate reports 1 either way.
+				data-fit-inner=""
 				style={{
 					width: fit ? PAGE_W / fit : PAGE_W,
 					minHeight: fit ? undefined : PAGE_H,

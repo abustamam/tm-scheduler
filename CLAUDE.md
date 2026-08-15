@@ -87,17 +87,40 @@ tests vanish from the run and the pass count still reads green. A plain `bun run
 assertions that CI catches. `tm_test` is push-synced, so after a schema change run
 `DATABASE_URL=…tm_test bun run db:push --force` — that is the one database `db:push` is for.
 
-**The print page-count suite needs Chrome on `PATH`.**
+**The two browser-backed print suites need Chrome — set `CHROME_PATH` to run them on a Mac.**
 `src/components/agenda/print-page-count.test.tsx` renders each print surface, inlines the stylesheet
-the route serves, and drives headless Chrome (`--print-to-pdf`) to count the sheets it produces — the
-only gate here that can see print CSS at all. No new dependency: the harness
-(`src/test/print-page-count.ts`) shells out to `google-chrome` / `google-chrome-stable` / `chromium` /
-`chromium-browser`, whichever runs first. With none of them present those tests **skip locally**, so
-`bun run test` still works for someone without a browser; **in CI they fail** instead
-(`CI has no Chrome on PATH`), because a silently absent print gate reads exactly like a passing one —
-the same failure shape as the DB-backed suites above. `ubuntu-latest` ships Chrome, so CI needs no
-install step; the dependency is named in `.github/workflows/ci.yml` beside both `Test` steps so a
-runner-image change is diagnosable.
+the route serves, and drives headless Chrome (`--print-to-pdf`) to count the sheets it produces.
+`src/components/agenda/print-density.test.tsx` (v1.13.0.0) measures the natural height of the
+editorial sheet and asserts how large the body text actually PRINTS. These are the only gates here
+that can see print CSS at all, and they see different things: `FitPage` scales a sheet to fit, so the
+page count reports 1 whether the page is comfortable or crushed, and a change can make the club's
+agenda 20% less legible with every other gate green. Height is font size on those layouts.
+
+No new dependency: the harness (`src/test/print-page-count.ts`) runs `$CHROME_PATH` if set, else
+`google-chrome` / `google-chrome-stable` / `chromium` / `chromium-browser`, whichever runs first.
+With none present those tests **skip locally**, so `bun run test` still works for someone without a
+browser; **in CI they fail** instead (`CI has no Chrome on PATH`), because a silently absent print
+gate reads exactly like a passing one — the same failure shape as the DB-backed suites above.
+`ubuntu-latest` ships Chrome, so CI needs no install step; the dependency is named in
+`.github/workflows/ci.yml` beside both `Test` steps so a runner-image change is diagnosable.
+
+**On macOS both suites skip unless you set `CHROME_PATH`**, because Chrome installs as an `.app` and
+puts nothing on `PATH` under any of those four names. This is a macOS-only gap: on Linux, where this
+repo is usually developed, `google-chrome` resolves and both gates run locally as normal. Do NOT
+"fix" it by hardcoding `/Applications/Google Chrome.app/...` in `CHROME_BINARIES` — that binary
+answers `--version`, so `findChrome` accepts it, but it never returns from `--print-to-pdf` under the
+agent sandbox, which turns an honest skip into 135s of `ETIMEDOUT`. A browser that is found but hangs
+is worse than one that is not found. A Playwright `chrome-headless-shell` works and returns in ~0.2s:
+
+```bash
+CHROME_PATH="$HOME/Library/Caches/ms-playwright/chromium_headless_shell-*/chrome-headless-shell-*/chrome-headless-shell" bun run test
+```
+
+Numbers measured through this harness are NOT comparable to the deployed page: it runs with
+`--host-resolver-rules=MAP * ~NOTFOUND`, so Fraunces and Manrope never load and the platform's
+substitute has its own metrics. That substitute also differs between macOS and CI's Ubuntu and moves
+where lines wrap, which is why the point floors in `src/lib/agenda-print-type.ts` carry a wide margin
+and the exact declared sizes are pinned by a separate assertion.
 
 **Read the lint gate with `--diagnostic-level=error`.** `src/db/seed.ts` carries ~118 pre-existing
 `noNonNullAssertion` warnings, which Biome does not fail on, so the tail of a `bun run check` run is
@@ -114,7 +137,7 @@ Assessed against the diff, not the whole repo: every branch, error path and user
 introduces should have a test that exercises it. `/ship`'s coverage audit reads these numbers and
 gates on them.
 
-Seven coverage traps this repo has actually hit, all worth checking when a number looks fine:
+Eight coverage traps this repo has actually hit, all worth checking when a number looks fine:
 
 - **A test can pin the wrong thing after a rename.** An assertion matching a role name by string
   (`r.who === "Toastmaster of the Day"`) stopped being unique once a second beat rendered the same
@@ -130,6 +153,18 @@ Seven coverage traps this repo has actually hit, all worth checking when a numbe
   cannot fail. Assert the observable the guard actually controls: that the round-trip was skipped
   (`vi.spyOn(testDb, "select")` + `not.toHaveBeenCalled()`). Same shape for any guard whose only
   effect is avoiding work. See `my-activity.integration.test.ts`.
+- **A "no extra query" test that spies a NAMED loader stops being able to fail the moment that
+  query is inlined.** Same family as the bullet above — the observable is the QUERY, not the
+  result, because "reads the `clubs` row once, not twice" returns byte-identical data either way
+  — but WHICH seam you spy on decides whether the assertion survives the refactor it polices.
+  `season-grid-cc-query.integration.test.ts` asserted `loadClubDefaultCountryCode` was not called;
+  the fix folded that column into an existing `findFirst`, which DELETED the call, leaving a test
+  that could only pass. Count at the driver instead: `statementsDuring` / `readsOf`
+  (`src/test/query-spy.ts`) spy on `db.$client`, the node-postgres Pool under drizzle, so they are
+  indifferent to how the statement was built. Two blind spots there, both silent and both shaped
+  like success — statements issued inside `db.transaction()` run on a `PoolClient` the spy never
+  wrapped, so a transactional loader reports ZERO; and a driver change that broke `readsOf`'s
+  pattern reports zero too. Assert the list is non-empty before trusting a count.
 
 - **A fixture that spans ONE axis is not a guarantee.** When the thing you are protecting is a
   property of rendered output — a page count, a printed word, a render cost — the test is only as
@@ -232,17 +267,30 @@ Optional (platform superadmin): `SUPERADMIN_EMAILS` — a comma-separated, case-
   `src/styles.css` styles bare `a` outside `@layer`, so it wins over the color a component sets
   on its own anchors and repaints them link-teal. Any component that colors anchors must be
   added to the exclusion list, currently
-  `a:not([data-slot="button"]):not([data-slot^="dropdown-menu-"])`. It has cost two bugs:
-  `<Button asChild>` made the landing "Sign in" button read teal-on-teal in dark mode, and
-  `<DropdownMenuItem asChild>` split the meeting Print & export menu into link-colored `<Link>`
-  items sitting beside foreground `<button>` items (#541). Exclude by `data-slot` PREFIX when a
-  primitive has several `asChild` slots — naming only `dropdown-menu-item` left the same split
-  reachable through the checkbox/radio/sub-trigger slots. Nothing here can see the cascade —
-  jsdom loads no stylesheet, the print page-count harness inlines only `PRINT_PAGE_CSS`, and
-  typecheck and lint have no view of it — so the gate is a source grep
-  (`export-menu-link-color.guard.test.ts`, comment-blind via `#/test/guard-source`). That guard
-  pins the CURRENT selector only; unlike `print-page-reset.guard.test.ts` it does not enroll the
-  next component for you.
+  `a:not([data-slot="button"]):not([data-slot^="dropdown-menu-"]):not([data-slot="wa-phone"]):not([data-slot="wa-email"])`
+  — and to the `:hover` rule beside it, which is a SEPARATE selector, so excluding only the base
+  rule leaves the teal reappearing under the cursor. It has cost three bugs: `<Button asChild>`
+  made the landing "Sign in" button read teal-on-teal in dark mode, `<DropdownMenuItem asChild>`
+  split the meeting Print & export menu into link-colored `<Link>` items sitting beside
+  foreground `<button>` items (#541), and the WhatsApp phone link plus the `mailto:` link beside
+  it were repainted `--lagoon-deep` (#328f97, 3.81:1 on white, at `text-xs`) on the four surfaces
+  that render contact — under AA on the screens that show it most (v1.12.0.0). Three rules the
+  bugs taught. Exclude by `data-slot` PREFIX when a primitive has several `asChild` slots —
+  naming only `dropdown-menu-item` left the same split reachable through the
+  checkbox/radio/sub-trigger slots. Fix it with another `:not()`, never with a class: nothing
+  layered beats an unlayered rule, so a `text-primary` at the component or the call site loses
+  silently (four call sites passed a colour utility that did nothing). And exclude PEER actions
+  together — `wa-phone` shipped without `wa-email` and rendered one contact pair in two colours,
+  one of them failing AA, which is what a half-applied fix looks like. Nothing here can see the
+  cascade — jsdom loads no stylesheet, the print page-count harness inlines only
+  `PRINT_PAGE_CSS`, and typecheck and lint have no view of it — so the gates are source greps
+  (`export-menu-link-color.guard.test.ts`, `whatsapp-phone-link-color.guard.test.ts`,
+  comment-blind via `#/test/guard-source`). Since v1.12.0.0 they assert the required exclusions
+  are still PRESENT rather than pinning the whole selector, because an anchored whole-line match
+  fails every time the rule is correctly extended and that trains people to edit the guard
+  instead of reading it; they also require every `:not()` arm to be a `[data-slot=…]` opt-out,
+  since appending `:not([class])` would switch the rule off for every real anchor in the app
+  while every substring assertion stayed green. Neither guard enrolls the next component for you.
 
 ## Data layer
 
@@ -293,15 +341,39 @@ server-fn *handlers* (and their `#/db` imports) from the client bundle, but a pl
 db-touching export sitting in that same module is NOT stripped and drags `#/db` → `pg` →
 `Buffer` into the browser (`ReferenceError: Buffer is not defined`, which white-screens the
 page). So: **server-fn modules export only `createServerFn`s and types.** Put the directly
-testable db logic in a sibling `*-logic.ts` (see `members-logic.ts`, `activity-feed-logic.ts`)
-that client code never imports; the wrapper's handler calls it and gets stripped. The
-`server-modules.guard.test.ts` unit test enforces this — it would have caught both regressions.
+testable db logic in a sibling `*-logic.ts` (see `members-logic.ts`, `activity-feed-logic.ts`,
+`club-logic.ts`) that client code never imports; the wrapper's handler calls it and gets
+stripped. The `server-modules.guard.test.ts` unit test enforces this — it would have caught both
+regressions.
+
+The split has a SECOND, independent motive, and it is the one that usually applies: a
+`createServerFn` cannot be invoked from a test (no session, no RPC layer), so a query living
+only inside a handler is unreachable from vitest — it cannot be integration-tested, and a source
+guard cannot hold a gate on something with no seam to gate. `club-logic.ts` (v1.12.0.0) was
+extracted for that reason rather than for bundle safety: `loadClubMembers` / `loadMemberProfile`
+put member email and phone on their payloads, and lifting them out is what let
+`club-contact.integration.test.ts` reach them and let `club-contact-gate.guard.test.ts` require
+every `club.ts` server fn that calls one to gate on `requireClubViewAccess`. Extract the
+queries worth testing or guarding; leaving the rest inline is fine.
 
 **Public `createServerFn` readers gate on `clubs.archived_at` themselves.** Archiving is the
-platform takedown lever (ADR-0016 / ADR-0024) and it has **two** db-level enforcement points, not
-one: `requireMembership` (`server/guards.ts`) covers every authed path, and
-`src/server/club-readable-logic.ts` — `isReadableClub`, `isReadableClubForMeeting`,
-`isReadableClubForMember` — covers every public, session-less one. A route guard is neither. The
+platform takedown lever (ADR-0016 / ADR-0024) and it has **three** db-level enforcement points, not
+one: `requireMembership` (`server/guards.ts`) covers authed WRITES; `grantView` in the same
+file covers the authed READ gates `requireClubViewAccess` / `requireClubAdminView`, which resolve
+their own memberships and never call `requireMembership`; and `src/server/club-readable-logic.ts` —
+`isReadableClub`, `isReadableClubForMeeting`, `isReadableClubForMember` — covers every public,
+session-less one. A route guard is none of them. `isClubArchived` (`src/lib/club-archive.ts`) holds
+the canonical list; this paragraph points at it rather than being a second copy. This line read
+"`requireMembership` covers every authed path" until #560, and that sentence is exactly why 24 gated
+readers kept serving an archived club's roster contact details to its own signed-in members: the
+claim was checkable in one place and false in another, so nobody re-derived it. There is **no
+impersonation exemption** on the read gates: `grantView` asserts the archive state for every arm, so
+a read-only session reads an archived club no more than the club's own members do, and
+`requireSuperadmin` (the console) stays the way to inspect one. An exemption was written into #560
+and dropped, for two reasons worth keeping: the console already hides "View as this club" for an
+archived club, so it was unreachable in the direction it was meant for, and because the member arm
+returns first it was silently overridden for an operator who also held a plain membership — which
+made the two gates answer OPPOSITELY for one person. The
 `/club/$clubId` shell's `beforeLoad` → `resolveClubOrRedirect` guards the **caller**, while a
 server fn is addressable directly with no session and no router; reading the shell as coverage is
 what left fourteen public readers serving an archived club's roster, agenda and live ballot until
@@ -315,9 +387,22 @@ must be lifted into a `*-logic.ts` seam before it can be gated *and* tested — 
 unreachable from vitest. `public-readers-archive-gate.guard.test.ts` **derives** its candidate set
 by walking `src/server/*.ts` and treating any `createServerFn` whose body calls no `require*` guard
 as anonymous, so the next public reader is enrolled automatically rather than remembered: it must
-be wired to a gated seam or waived in `REVIEWED_UNGATED` with a stated reason. Reads only so far —
-an archived club still accepts anonymous writes (#555) and a service worker can still serve its
-cached agenda (#556).
+be wired to a gated seam or waived in `REVIEWED_UNGATED` with a stated reason.
+
+**Reads are closed at every point, but the enrollment sweep is not.** The public readers gate
+(#544), the two authed READ gates gate (#560), and so do the authed readers that reach NO point at
+all because they resolve membership with a bare `getMembership`: `minutes.ts` and
+`api/meetings.$id.minutes.pdf.ts` call `isReadableClub` directly, and `my-activity-logic.ts` inlines
+the same `archived_at` predicate into `loadMyCommitments`' query (#560) — a reader that funnels
+through none of the three points cannot be covered by fixing one of them. The service worker evicts a
+taken-down club's pages and crest on a 404/410 (#556). What is NOT closed is the mechanism that
+catches the NEXT one: `public-readers-archive-gate.guard.test.ts` slices a server fn's body at a
+literal `\n});`, which every handler here overruns, so it swallowed the following non-exported
+helper and classified `getMinutes` as session-guarded — the #560 minutes leak survived that sweep
+with 54/54 green, and the sweep walks `src/server/*.ts` only, so `src/routes/api/**` is enrolled by
+nothing at all. Until that is fixed (TODOS.md "Archive takedown", P1) this list is maintained by
+hand. Also still open: an archived club **accepts anonymous writes** (#555), and the logo endpoint's
+year-long `immutable` HTTP cache outlives a takedown (#517).
 
 ## Deployment target
 
