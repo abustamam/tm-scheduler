@@ -160,9 +160,9 @@ export const attendanceStatusEnum = pgEnum("attendance_status", [
 // Replaces the two disconnected boolean tables dropped in this same PR — one
 // meaning "I asked them", one meaning "not available". Row ABSENT = "no
 // answer" — silence and a positive answer used to be indistinguishable, which
-// is why `coming` exists at all. Deliberately NOT `attendance_status`: that one is the RECORD
-// (present/absent/excused) written after the meeting, and a plan must never be
-// storable as a record. See `meeting_attendance` below.
+// is why `coming` exists at all. Deliberately NOT `attendance_status`: that
+// one is the RECORD (present/absent/excused) written after the meeting, and a
+// plan must never be storable as a record. See `meeting_attendance` below.
 export const attendancePlanStatusEnum = pgEnum("attendance_plan_status", [
 	"reached_out",
 	"coming",

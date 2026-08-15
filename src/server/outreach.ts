@@ -89,13 +89,13 @@ export const setContacted = createServerFn({ method: "POST" })
 /**
  * Clear a member's "contacted" mark for a meeting (#340). Admin/VPE-only.
  *
- * WIDER than it was: this used to delete only the (now dropped) per-meeting
- * "contacted" row, and it clears the whole plan row, so clearing "contacted"
- * on a member who is
- * `not_coming` would wipe that answer too. Unreachable through the UI —
- * `deriveOutreach` never lists an unavailable member, so no checkbox exists for
- * them to uncheck — and PR 2 replaces this fn with the panel's explicit rung
- * picker. Stated here so the next reader does not have to re-derive it.
+ * WIDER than it was: this used to delete only the per-meeting "contacted"
+ * row, dropped in this PR, and it now clears the whole plan row, so clearing
+ * "contacted" on a member who is `not_coming` would wipe that answer too.
+ * Unreachable through the UI — `deriveOutreach` never lists an unavailable
+ * member, so no checkbox exists for them to uncheck — and PR 2 replaces this
+ * fn with the panel's explicit rung picker. Stated here so the next reader
+ * does not have to re-derive it.
  */
 export const clearContacted = createServerFn({ method: "POST" })
 	.validator((i: unknown) => contactedSchema.parse(i))
