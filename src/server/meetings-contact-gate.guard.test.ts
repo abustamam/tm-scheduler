@@ -8,13 +8,18 @@ import { readSource } from "#/test/guard-source";
 // server-modules.guard.test.ts) because loadMeetingDetail is private and the
 // public-reads tests use a re-implemented mirror — this asserts the REAL file.
 //
-// `listReachedOutForMeeting` (#340, "who have I asked") joined this list when
-// the planned-attendance cutover turned an inline `meeting_outreach` query into
-// a named call. It was NEVER covered before: deleting its `canManage` gate —
-// publishing an officer's private chase list on the session-less public meeting
-// payload — left the whole 3,828-test suite green. The season-grid twin is
-// gated by `includeOutreach` and IS covered; this one had only the mirror,
-// which cannot see a wrong call site.
+// `listReachedOutForMeeting` (#340, "who have I asked") used to be in this
+// list too: the planned-attendance cutover turned an inline `meeting_outreach`
+// query into a named call, and it was NEVER covered before that — deleting its
+// `canManage` gate left the whole 3,828-test suite green. PR2 task 6 (absorbing
+// OutreachPanel into the planned-attendance panel) removed the call from
+// `loadMeetingDetail` entirely: the same reached-out ids now come from `plan`
+// (`listPlanForMeetings`, filtered to `reached_out` at the ROUTE), which is
+// already canManage-gated the identical way and covered by
+// `meetings-plan-payload.integration.test.ts`. Nothing here calls the seam
+// function anymore, so it dropped out of this loop rather than being asserted
+// absent — this file only knows how to check a call's gating, not police that
+// a call never returns.
 //
 // Comments are blanked first (see `#/test/guard-source`), THEN whitespace is
 // collapsed so line-wrapping can't fool it. This test counts calls and asserts
@@ -27,11 +32,7 @@ import { readSource } from "#/test/guard-source";
 describe("loadMeetingDetail contact gating (#37 PII)", () => {
 	const src = readSource(resolve(__dirname, "meetings.ts")).replace(/\s+/g, "");
 
-	for (const fn of [
-		"loadRosterWithContact",
-		"loadHolderContacts",
-		"listReachedOutForMeeting",
-	]) {
+	for (const fn of ["loadRosterWithContact", "loadHolderContacts"]) {
 		it(`${fn} is called only under canManage`, () => {
 			const total = src.split(`${fn}(`).length - 1;
 			const gated = src.split(`canManage?await${fn}(`).length - 1;

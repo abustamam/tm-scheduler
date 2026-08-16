@@ -262,7 +262,6 @@ function MeetingView() {
 		canManage,
 		timezone,
 		unavailableMembers,
-		unavailableMemberIds,
 		roleRecency,
 		navItems,
 		clubName,
@@ -272,8 +271,6 @@ function MeetingView() {
 		clubRoles,
 		clubGuests,
 		roster: loaderRoster,
-		contactedMemberIds,
-		comingMemberIds,
 		plan,
 		minutes,
 		openActionItems,
@@ -472,6 +469,15 @@ function MeetingView() {
 	for (const s of slots) {
 		if (s.assigneeId) roleByMemberId[s.assigneeId] = slotLabel(s, roleCounts);
 	}
+	// Derived here rather than carried as their own payload fields (#396 PR2
+	// task 6): both are redundant with data the payload already ships.
+	// `unavailableMembers` (public) already names who is `not_coming`; `plan`
+	// (canManage-gated, [] otherwise — same gate the old dedicated field used)
+	// already carries every rung including `reached_out`.
+	const unavailableMemberIds = unavailableMembers.map((m) => m.id);
+	const contactedMemberIds = plan
+		.filter((p) => p.status === "reached_out")
+		.map((p) => p.memberId);
 
 	async function writeRung(memberId: string, next: PlanStatus | null) {
 		const previous = plan.find((p) => p.memberId === memberId)?.status ?? null;
@@ -950,23 +956,18 @@ function MeetingView() {
 						roleRecency={roleRecency}
 						roleByMemberId={roleByMemberId}
 						unavailableMemberIds={unavailableMemberIds}
-						unavailableMembers={
-							effectiveCanManage ? unavailableMembers : undefined
-						}
 						pairedRoleIds={effectiveCanManage ? pairedIds : undefined}
 						clubGuests={effectiveCanManage ? clubGuests : undefined}
 						shareUrl={effectiveCanManage ? nudgeShareUrl : ""}
 						meetingDate={effectiveCanManage ? nudgeDate : ""}
 						meeting={meeting}
 						timezone={timezone}
-						meetingOver={over}
 						selfMemberId={agendaMemberId}
 						onMetaSaved={async () => {
 							await router.invalidate();
 						}}
 						requireIdentity={requireIdentity}
 						contactedMemberIds={contactedMemberIds}
-						comingMemberIds={comingMemberIds}
 						onContacted={async (memberId, via) => {
 							try {
 								await setContacted({

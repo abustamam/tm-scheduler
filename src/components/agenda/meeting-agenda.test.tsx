@@ -3,11 +3,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildRoleCounts, slotLabel } from "#/lib/agenda";
-import {
-	isMeetingOver,
-	lockedViewer,
-	resolveMeetingViewer,
-} from "#/lib/meeting-lifecycle";
+import { lockedViewer } from "#/lib/meeting-lifecycle";
 import { meetingViewer } from "#/lib/meeting-viewer";
 import {
 	type AgendaSlot,
@@ -89,10 +85,6 @@ function renderAgenda(
 	requireIdentity?: () => Promise<{ id: string; name: string } | null>,
 	extra?: Partial<MeetingAgendaProps>,
 ) {
-	// Production-faithful: the route computes `meetingOver` once with
-	// `isMeetingOver` and hands it down, so derive it from whatever meeting the
-	// caller actually renders (#393). An `extra.meetingOver` still wins, for the
-	// tests that pin an injected clock.
 	const meeting = extra?.meeting ?? meetingFixture();
 	const timezone = extra?.timezone ?? "UTC";
 	// Mirrors the route's own lift (#396 PR 2): derived from the same slots the
@@ -116,11 +108,6 @@ function renderAgenda(
 			meetingDate="Jan 1, 2026"
 			meeting={meeting}
 			timezone={timezone}
-			meetingOver={isMeetingOver({
-				status: meeting.status,
-				scheduledAt: meeting.scheduledAt,
-				timezone,
-			})}
 			selfMemberId="me"
 			onMetaSaved={() => {}}
 			requireIdentity={requireIdentity}
@@ -611,180 +598,5 @@ describe("tap-to-nudge confirm gate (#37)", () => {
 	it("does not render the recruit picker for a non-manager", () => {
 		renderAgenda(member(), [slot({ status: "open" })]);
 		expect(screen.queryByRole("button", { name: /nudge someone/i })).toBeNull();
-	});
-});
-
-describe("planning panels hide once the meeting is over (#376)", () => {
-	afterEach(() => cleanup());
-
-	// Production-faithful: both meeting surfaces build their viewer through
-	// `resolveMeetingViewer`, so the test exercises the real canManage outcome
-	// for each lifecycle state rather than hand-rolling one.
-	const adminViewer = (meeting: MeetingAgendaProps["meeting"]) =>
-		resolveMeetingViewer({
-			status: meeting.status,
-			scheduledAt: meeting.scheduledAt,
-			timezone: "UTC",
-			currentMemberId: "me",
-			canManage: true,
-			isTmod: false,
-			isGrammarian: false,
-			isSignedIn: true,
-		});
-
-	const withRoster = (meeting: MeetingAgendaProps["meeting"]) => ({
-		meeting,
-		roster: [
-			{ id: "r1", name: "Rita Roster" },
-			{ id: "r2", name: "Otto Out" },
-		],
-		unavailableMemberIds: ["r2"],
-		unavailableMembers: [{ id: "r2", name: "Otto Out" }],
-	});
-
-	it("shows Outreach and 'Not available this week' on an upcoming meeting", () => {
-		const meeting = meetingFixture({ scheduledAt: daysFromNow(7) });
-		renderAgenda(
-			adminViewer(meeting),
-			[slot({ status: "open" })],
-			undefined,
-			undefined,
-			withRoster(meeting),
-		);
-		expect(screen.getByText("Outreach")).toBeTruthy();
-		expect(screen.getByText("Not available this week")).toBeTruthy();
-	});
-
-	it("hides both on a PAST but never-completed meeting (canManage is still true)", () => {
-		const meeting = meetingFixture({
-			scheduledAt: daysFromNow(-7),
-			status: "scheduled",
-		});
-		const viewer = adminViewer(meeting);
-		// The case that bit us: an admin keeps full management on a past-but-open
-		// meeting, so `lockedViewer` never strips the panel — the date must.
-		expect(viewer.canManage).toBe(true);
-		renderAgenda(viewer, [slot({ status: "open" })], undefined, undefined, {
-			...withRoster(meeting),
-		});
-		expect(screen.queryByText("Outreach")).toBeNull();
-		expect(screen.queryByText("Not available this week")).toBeNull();
-	});
-
-	it("hides both on a COMPLETED meeting", () => {
-		const meeting = meetingFixture({
-			scheduledAt: daysFromNow(-7),
-			status: "completed",
-		});
-		const viewer = adminViewer(meeting);
-		// Completed already strips management (`lockedViewer`) — belt to the
-		// date's braces.
-		expect(viewer.canManage).toBe(false);
-		renderAgenda(viewer, [slot({ status: "open" })], undefined, undefined, {
-			...withRoster(meeting),
-		});
-		expect(screen.queryByText("Outreach")).toBeNull();
-		expect(screen.queryByText("Not available this week")).toBeNull();
-	});
-
-	it("hides both when completed EARLY, before the meeting date", () => {
-		// Isolates the lock branch from the date branch: a future meeting marked
-		// completed must hide them on `status` alone.
-		const meeting = meetingFixture({
-			scheduledAt: daysFromNow(7),
-			status: "completed",
-		});
-		renderAgenda(
-			// Forced canManage so the assertion can only be satisfied by the new
-			// lifecycle gate, not by `lockedViewer` zeroing the capability.
-			meetingViewer({
-				currentMemberId: "me",
-				canManage: true,
-				isTmod: false,
-				isGrammarian: false,
-				isEditableWindow: true,
-			}),
-			[slot({ status: "open" })],
-			undefined,
-			undefined,
-			withRoster(meeting),
-		);
-		expect(screen.queryByText("Outreach")).toBeNull();
-		expect(screen.queryByText("Not available this week")).toBeNull();
-	});
-});
-
-describe("viewer and panels agree on one injected clock (#393)", () => {
-	afterEach(() => cleanup());
-
-	// The regression the shared `isMeetingOver` exists to prevent: before it, the
-	// viewer took an injectable `now` and the component read the wall clock, so a
-	// pinned clock moved one and not the other. Both sides here are fed the SAME
-	// `now`, which is only possible because they call the same function.
-	const TZ = "America/Los_Angeles";
-	// 6pm Pacific on 2026-07-10.
-	const SCHEDULED = "2026-07-11T01:00:00Z";
-
-	function renderAtClock(now: Date) {
-		const meeting = meetingFixture({
-			scheduledAt: SCHEDULED,
-			status: "scheduled",
-		});
-		const viewer = resolveMeetingViewer({
-			status: meeting.status,
-			scheduledAt: meeting.scheduledAt,
-			timezone: TZ,
-			currentMemberId: "me",
-			canManage: true,
-			isTmod: false,
-			isGrammarian: false,
-			isSignedIn: true,
-			now,
-		});
-		renderAgenda(viewer, [slot({ status: "open" })], undefined, undefined, {
-			meeting,
-			timezone: TZ,
-			meetingOver: isMeetingOver({
-				status: meeting.status,
-				scheduledAt: meeting.scheduledAt,
-				timezone: TZ,
-				now,
-			}),
-			roster: [
-				{ id: "r1", name: "Rita Roster" },
-				{ id: "r2", name: "Otto Out" },
-			],
-			unavailableMemberIds: ["r2"],
-			unavailableMembers: [{ id: "r2", name: "Otto Out" }],
-		});
-		return viewer;
-	}
-
-	it("shows the panels at a clock pinned before the meeting day", () => {
-		const viewer = renderAtClock(new Date("2026-07-09T12:00:00Z"));
-		expect(viewer.canManage).toBe(true);
-		expect(screen.getByText("Outreach")).toBeTruthy();
-		expect(screen.getByText("Not available this week")).toBeTruthy();
-	});
-
-	it("still shows them late on the meeting's own club-local day", () => {
-		// 9pm Pacific, three hours after the meeting started: the instant has
-		// passed but the club-local DAY has not, so nothing is over yet.
-		const viewer = renderAtClock(new Date("2026-07-11T04:00:00Z"));
-		expect(viewer.canManage).toBe(true);
-		expect(screen.getByText("Outreach")).toBeTruthy();
-		expect(screen.getByText("Not available this week")).toBeTruthy();
-	});
-
-	it("hides them once the pinned clock reaches the next club-local day", () => {
-		// 12:30am Pacific on 2026-07-11 — the same UTC day as the assertion
-		// above, which is exactly why the club timezone has to be the one
-		// consulted.
-		const viewer = renderAtClock(new Date("2026-07-11T07:30:00Z"));
-		// An admin keeps management on a past-but-never-completed meeting, so only
-		// the shared date rule can have hidden the panels.
-		expect(viewer.canManage).toBe(true);
-		expect(screen.queryByText("Outreach")).toBeNull();
-		expect(screen.queryByText("Not available this week")).toBeNull();
 	});
 });

@@ -23,10 +23,8 @@ import {
 import { officerPositionLabel } from "#/lib/officers";
 import { WOD_FIELDS, WOD_UPDATE_FIELDS } from "#/lib/wod-limits";
 import {
-	listComingForMeeting,
 	listNotComingWithNames,
 	listPlanForMeetings,
-	listReachedOutForMeeting,
 } from "./attendance-plan-logic";
 import {
 	isReadableClubForMeeting,
@@ -262,26 +260,12 @@ async function loadMeetingDetail(
 	// listing a member who just confirmed they are COMING is exactly backwards.
 	const unavailableMembers = await listNotComingWithNames(db, meetingId);
 
-	// Contacted-for-this-meeting member ids (#340). Admin-only — same gate as the
-	// roster; empty on the public/member view so it never leaks who was asked.
-	const contactedMemberIds = canManage
-		? await listReachedOutForMeeting(db, meetingId)
-		: [];
-
-	// Members who answered "I'll be there". Admin-only for the same reason as
-	// `contactedMemberIds`: it feeds the officer's outreach panel, which counts
-	// them out of the "still to ask" list rather than chasing someone who has
-	// already said yes.
-	const comingMemberIds = canManage
-		? await listComingForMeeting(db, meetingId)
-		: [];
-
 	const allRungs = (await listPlanForMeetings(db, [meetingId])).map(
 		({ memberId, status }) => ({ memberId, status }),
 	);
-	// The whole ladder for the officer's panel. Admin-only for the same reason
-	// `contactedMemberIds` was: `reached_out` is the officer's private record of
-	// having asked, and it now shares one array with the member's own answer.
+	// The whole ladder for the officer's panel. Admin-only: `reached_out` is the
+	// officer's private record of having asked, and it now shares one array with
+	// the member's own answer.
 	const plan = canManage ? allRungs : [];
 	// The members' OWN answers, public. The personal strip must show a member the
 	// answer they gave, and the server cannot resolve "my" — the viewer is known
@@ -392,9 +376,6 @@ async function loadMeetingDetail(
 		geIntroducesFunctionaries: club?.geIntroducesFunctionaries ?? false,
 		officers,
 		unavailableMembers,
-		unavailableMemberIds: unavailableMembers.map((m) => m.id),
-		contactedMemberIds,
-		comingMemberIds,
 		plan,
 		answeredRungs,
 		roster,
