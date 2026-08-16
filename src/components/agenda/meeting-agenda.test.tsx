@@ -2,6 +2,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildRoleCounts, slotLabel } from "#/lib/agenda";
 import {
 	isMeetingOver,
 	lockedViewer,
@@ -94,6 +95,13 @@ function renderAgenda(
 	// tests that pin an injected clock.
 	const meeting = extra?.meeting ?? meetingFixture();
 	const timezone = extra?.timezone ?? "UTC";
+	// Mirrors the route's own lift (#396 PR 2): derived from the same slots the
+	// test renders, so a fixture's assignee actually shows up under a role.
+	const roleCounts = buildRoleCounts(slots);
+	const roleByMemberId: Record<string, string> = {};
+	for (const s of slots) {
+		if (s.assigneeId) roleByMemberId[s.assigneeId] = slotLabel(s, roleCounts);
+	}
 	return render(
 		<MeetingAgenda
 			slots={slots}
@@ -101,6 +109,7 @@ function renderAgenda(
 			actions={actions}
 			roster={[]}
 			roleRecency={{}}
+			roleByMemberId={roleByMemberId}
 			unavailableMemberIds={[]}
 			pairedRoleIds={pairedRoleIds}
 			shareUrl="https://gavelup.app/club/test/meeting/m1"

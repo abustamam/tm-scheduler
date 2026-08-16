@@ -102,6 +102,11 @@ export interface MeetingAgendaProps {
 		preferredName?: string | null;
 	}[];
 	roleRecency: RoleRecency;
+	/** memberId → their current role label this meeting, lifted to the ROUTE
+	 *  (#396 PR 2) so this component and the planned-attendance rail read one
+	 *  derivation instead of each computing their own from `slots` — a second
+	 *  copy would silently disagree the moment `slotLabel` changes. */
+	roleByMemberId: Readonly<Record<string, string>>;
 	unavailableMemberIds: string[];
 	/** Named unavailable members for the manager "not available" section. */
 	unavailableMembers?: { id: string; name: string }[];
@@ -172,6 +177,7 @@ export function MeetingAgenda({
 	actions,
 	roster,
 	roleRecency,
+	roleByMemberId,
 	unavailableMemberIds,
 	unavailableMembers = [],
 	pairedRoleIds = new Set<string>(),
@@ -215,12 +221,6 @@ export function MeetingAgenda({
 	const roleCounts = buildRoleCounts(slots);
 	const summary = summarizeAgenda(slots);
 	const speakerSlots = slots.filter((s) => s.isSpeakerRole);
-
-	// memberId → their current role label this meeting (for the assign picker).
-	const roleByMemberId: Record<string, string> = {};
-	for (const s of slots) {
-		if (s.assigneeId) roleByMemberId[s.assigneeId] = slotLabel(s, roleCounts);
-	}
 
 	// Gate the forward-looking planning panels (Outreach, "Not available this
 	// week") on the meeting being over (#376): "who still needs to be asked" and
