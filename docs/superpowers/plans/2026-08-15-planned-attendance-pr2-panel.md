@@ -102,8 +102,8 @@ describe("attendance mode (#planned-attendance D5)", () => {
 			shareUrl: "https://club.example/m",
 			mode: "attendance",
 		});
-		expect(n.emailUrl).toContain("subject=");
-		expect(decodeURIComponent(n.emailUrl as string)).toContain(
+		expect(n.mailtoUrl).toContain("subject=");
+		expect(decodeURIComponent(n.mailtoUrl as string)).toContain(
 			"Are you coming? — Tue 19 Aug",
 		);
 	});
