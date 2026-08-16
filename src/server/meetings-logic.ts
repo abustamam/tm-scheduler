@@ -8,6 +8,8 @@ import { generateSlotRows } from "#/lib/agenda";
 import { zonedWallTimeToUtc } from "#/lib/datetime";
 import { meetingDateReached } from "#/lib/meeting-lifecycle";
 import { logActivity } from "./activity";
+import type { AttendancePlanStatus as PlanStatus } from "./attendance-plan-logic";
+import { listPlanForMeetings } from "./attendance-plan-logic";
 import { isReadableClub } from "./club-readable-logic";
 import { linkEvaluatorsToSpeakers } from "./meeting-create-logic";
 import { freezeMeetingNumber } from "./meeting-number-logic";
@@ -365,4 +367,28 @@ export async function applyReopenMeeting(input: {
 	});
 
 	return { clubId: meeting.clubId };
+}
+
+/** Test seam for the meeting payload. `loadMeetingDetail` lives in the
+ *  server-fn module and cannot be exported from there (server-modules guard),
+ *  and a `createServerFn` handler is unreachable from vitest — so the payload's
+ *  shape would otherwise have no gate at all. Uses the SAME two expressions as
+ *  the real loader (`meetings.ts`) — deriving them differently here would only
+ *  test this seam against itself. */
+export async function loadMeetingDetailForTest(
+	meetingId: string,
+	opts: { canManage: boolean },
+): Promise<{
+	plan: { memberId: string; status: PlanStatus }[];
+	answeredRungs: { memberId: string; status: "coming" | "not_coming" }[];
+}> {
+	const allRungs = (await listPlanForMeetings(db, [meetingId])).map(
+		({ memberId, status }) => ({ memberId, status }),
+	);
+	const plan = opts.canManage ? allRungs : [];
+	const answeredRungs = allRungs.filter(
+		(r): r is { memberId: string; status: "coming" | "not_coming" } =>
+			r.status !== "reached_out",
+	);
+	return { plan, answeredRungs };
 }

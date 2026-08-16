@@ -25,6 +25,7 @@ import { WOD_FIELDS, WOD_UPDATE_FIELDS } from "#/lib/wod-limits";
 import {
 	listComingForMeeting,
 	listNotComingWithNames,
+	listPlanForMeetings,
 	listReachedOutForMeeting,
 } from "./attendance-plan-logic";
 import {
@@ -275,6 +276,23 @@ async function loadMeetingDetail(
 		? await listComingForMeeting(db, meetingId)
 		: [];
 
+	const allRungs = (await listPlanForMeetings(db, [meetingId])).map(
+		({ memberId, status }) => ({ memberId, status }),
+	);
+	// The whole ladder for the officer's panel. Admin-only for the same reason
+	// `contactedMemberIds` was: `reached_out` is the officer's private record of
+	// having asked, and it now shares one array with the member's own answer.
+	const plan = canManage ? allRungs : [];
+	// The members' OWN answers, public. The personal strip must show a member the
+	// answer they gave, and the server cannot resolve "my" — the viewer is known
+	// only on the client (route:288), which is why `myUnavailable` filters an
+	// array today rather than reading a resolved field. `reached_out` is filtered
+	// out HERE, once, rather than at each consumer.
+	const answeredRungs = allRungs.filter(
+		(r): r is { memberId: string; status: "coming" | "not_coming" } =>
+			r.status !== "reached_out",
+	);
+
 	// Roster for the VPE assign/recruit picker — active members with contact for
 	// tap-to-nudge (#37). Management-only: contact is never fetched for a public
 	// caller (loadRosterWithContact isn't called when !canManage).
@@ -377,6 +395,8 @@ async function loadMeetingDetail(
 		unavailableMemberIds: unavailableMembers.map((m) => m.id),
 		contactedMemberIds,
 		comingMemberIds,
+		plan,
+		answeredRungs,
 		roster,
 		clubGuests,
 		clubRoles,
