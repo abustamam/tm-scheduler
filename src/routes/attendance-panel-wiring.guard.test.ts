@@ -219,6 +219,44 @@ describe("attendance panel route wiring (PR 2)", () => {
 			src,
 			"a Set cannot represent two concurrent writes to the same member",
 		).not.toContain("useRef<Set<string>>(new Set())");
+
+		// The DECLARATION is not the behaviour. Pinning only the `Map<string,
+		// number>` type leaves the bug this whole fix exists to prevent fully
+		// reachable: a Map driven with Set semantics — `m.delete(memberId)` on
+		// every release, no matter the count — passes the two assertions above
+		// while the first of two concurrent writes still frees the entry. So pin
+		// the arithmetic that makes it a refcount.
+		expect(
+			src,
+			"retainPending must INCREMENT, not just mark present",
+		).toContain("m.set(memberId, (m.get(memberId) ?? 0) + 1);");
+		expect(
+			src,
+			"releasePending must DECREMENT and only delete at zero",
+		).toMatch(
+			/const left = \(m\.get\(memberId\) \?\? 1\) - 1;\s*\n\s*if \(left > 0\) m\.set\(memberId, left\);\s*\n\s*else m\.delete\(memberId\);/,
+		);
+	});
+
+	it("derives roleByMemberId through slotLabel, not the raw role name", () => {
+		// A computed prop, so both consumers (the panel and the agenda) take the
+		// finished map as their fixture and cannot see it built wrongly — the
+		// repo's "a component tested through its props cannot see a WRONG prop"
+		// trap. `slotLabel(s, roleCounts)` is what disambiguates repeated roles
+		// ("Speaker 1" / "Speaker 2"); `s.roleName` typechecks identically as a
+		// string, renders plausibly, and silently labels every speaker the same.
+		expect(src).toContain(
+			"roleByMemberId[s.assigneeId] = slotLabel(s, roleCounts);",
+		);
+	});
+
+	it("markAsked leaves a member who already answered alone", () => {
+		// The server-side `demoteFrom` floor stops the WRITE, but this early
+		// return is what stops the optimistic override — without it a row showing
+		// "Coming" flips to "Asked" on a WhatsApp tap and stays wrong until the
+		// refetch lands, which is the same lie the floor exists to prevent, just
+		// shorter-lived.
+		expect(src).toContain("if (current !== null) return;");
 	});
 
 	it('M1: tags a nudge-triggered ask with via: "nudge", not the manual default', () => {
