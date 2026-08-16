@@ -318,10 +318,28 @@ function MeetingView() {
 	// Members with a plan write currently in flight — a ref, not state, since
 	// only `writeRung` and the reconciling effect below touch it and neither
 	// should re-render on it. The effect drops any override for a member NOT in
-	// this set the moment `plan` changes, so a write that is still pending
+	// this map the moment `plan` changes, so a write that is still pending
 	// cannot be evicted by a payload that hasn't caught up to it yet (whole-branch
 	// review I2).
-	const pendingWritesRef = useRef<Set<string>>(new Set());
+	//
+	// REFCOUNTED, not a `Set`: two writes can be outstanding for the SAME member
+	// at once, because an officer's own row carries two independent controls with
+	// two independent busy flags that cannot see each other — the panel's chip
+	// (`pendingId`) and the personal strip's ("I'll be there"/`myStatusBusy`).
+	// With a `Set` the second `add` is a no-op and the FIRST write's release
+	// clears the entry while the second is still outstanding, which hands the
+	// effect an override it is free to evict before its write has landed.
+	const pendingWritesRef = useRef<Map<string, number>>(new Map());
+	function retainPending(memberId: string) {
+		const m = pendingWritesRef.current;
+		m.set(memberId, (m.get(memberId) ?? 0) + 1);
+	}
+	function releasePending(memberId: string) {
+		const m = pendingWritesRef.current;
+		const left = (m.get(memberId) ?? 1) - 1;
+		if (left > 0) m.set(memberId, left);
+		else m.delete(memberId);
+	}
 	// Busy guard against a rapid double-tap on the strip's OWN write — the same
 	// class of race the panel's per-row `pendingId` already guards
 	// (meeting-attendance-panel.tsx:136, 174-181). Without this, tapping "I'll
@@ -513,7 +531,7 @@ function MeetingView() {
 					answeredRungs.find((r) => r.memberId === memberId)?.status ??
 					null);
 		setRungOverride((o) => ({ ...o, [memberId]: next }));
-		pendingWritesRef.current.add(memberId);
+		retainPending(memberId);
 		try {
 			await (next === null
 				? clearPlannedAttendance({ data: { memberId, meetingId: meeting.id } })
@@ -528,15 +546,36 @@ function MeetingView() {
 			// sheet after this tap (whole-branch review I3). This also feeds the
 			// reconciling effect below its own trigger, rather than relying on some
 			// unrelated action to refresh `plan`.
-			void router.invalidate();
+			//
+			// The pending mark is released when this INVALIDATE settles, not when
+			// the write above resolved. Those are different moments, and between
+			// them the reconciling effect would happily evict this override: `plan`
+			// gets a fresh identity on every loader run, and this route has ~15
+			// other `router.invalidate()` call sites (meta save, minutes, add-role,
+			// lifecycle, every vote action). A loader request that started before
+			// this write committed, landing in that window, reverts a chip the
+			// officer just tapped — which reads as "it didn't save", so they tap
+			// again.
+			void router
+				.invalidate()
+				// A failed refetch does NOT undo the write: the override still holds
+				// the committed value, so the panel stays correct. What goes stale is
+				// `contactedMemberIds` / `unavailableMemberIds` elsewhere on the page,
+				// and the next invalidate from any other action repairs it. Caught so
+				// it is not an unhandled rejection, but deliberately not toasted — a
+				// "couldn't save" here would be a lie about a write that succeeded.
+				.catch(() => undefined)
+				.finally(() => releasePending(memberId));
 		} catch (e) {
 			// Roll back to what the UI was actually displaying, not to `null` —
 			// reverting to empty would silently erase a rung the officer did not
 			// touch.
 			setRungOverride((o) => ({ ...o, [memberId]: previous }));
 			toast.error(e instanceof Error ? e.message : "Couldn't save that.");
-		} finally {
-			pendingWritesRef.current.delete(memberId);
+			// Released HERE rather than in a `finally`, because the success path
+			// hands the release to the invalidate above; a `finally` would release
+			// a second time and drop another concurrent write's refcount.
+			releasePending(memberId);
 		}
 	}
 

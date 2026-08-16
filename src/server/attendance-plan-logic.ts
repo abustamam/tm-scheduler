@@ -266,7 +266,15 @@ export async function listPlanForMeetings(
 		.where(inArray(meetingAttendancePlan.meetingId, meetingIds));
 }
 
-/** `reached_out` member ids for one meeting — the old "contacted" set. */
+/** `reached_out` member ids for one meeting — the old "contacted" set.
+ *
+ *  NO production caller since the panel landed: `meetings.ts` now takes the
+ *  whole ladder in one `listPlanForMeetings` round trip and splits it. Kept
+ *  deliberately, not stranded — this and `listComingForMeeting` are the seam's
+ *  single-status readers, and `attendance-plan-store.guard.test.ts` requires
+ *  every plan-table query to live in this module, so the next consumer that
+ *  wants one status has somewhere to come rather than a reason to inline a
+ *  query. Delete them only together with that need. */
 export async function listReachedOutForMeeting(
 	database: DbOrTx,
 	meetingId: string,

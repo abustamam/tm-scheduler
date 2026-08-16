@@ -137,14 +137,26 @@ export function MeetingAttendancePanel({
 
 	// Mobile collapse (spec D4): below `lg` the panel starts collapsed to its
 	// counts line so a big roster does not push the agenda off screen; at `lg`
-	// and up it is always shown. `mounted` keeps the server render (no
-	// `window`) and the client's first render in agreement — same guard
-	// `NudgeButtons` uses, for the same reason: computing `isDesktop` before
-	// hydration would make the two disagree and React would have to reconcile
-	// a mismatch.
-	const [mounted, setMounted] = useState(false);
-	useEffect(() => setMounted(true), []);
-	const isDesktop = mounted && window.innerWidth >= LG_BREAKPOINT_PX;
+	// and up it is always shown. Starting `false` (rather than reading `window`
+	// during render) keeps the server render and the client's first render in
+	// agreement — same guard `NudgeButtons` uses, for the same reason: a value
+	// computed before hydration makes the two disagree and React has to
+	// reconcile a mismatch.
+	//
+	// SUBSCRIBED, not sampled. This must track the SAME breakpoint the toggle
+	// button's `lg:hidden` tracks, and CSS re-evaluates that on every resize. A
+	// one-shot `window.innerWidth` read froze at mount, so rotating a tablet
+	// from portrait to landscape hid the toggle (CSS, live) while `isDesktop`
+	// stayed `false` (JS, stale) — leaving a header with no rows and no visible
+	// control to reveal them, on exactly the device a VPE runs the rail on.
+	const [isDesktop, setIsDesktop] = useState(false);
+	useEffect(() => {
+		const mq = window.matchMedia(`(min-width: ${LG_BREAKPOINT_PX}px)`);
+		const sync = () => setIsDesktop(mq.matches);
+		sync();
+		mq.addEventListener("change", sync);
+		return () => mq.removeEventListener("change", sync);
+	}, []);
 	const [expanded, setExpanded] = useState(false);
 	const showRows = expanded || isDesktop;
 
@@ -181,6 +193,15 @@ export function MeetingAttendancePanel({
 	}
 
 	async function contacted(memberId: string) {
+		// Gated on `locked` for the same reason the dropdown trigger is: this is a
+		// WRITE (no answer → asked), it just happens to be triggered by tapping a
+		// message draft rather than picking a rung. Today the panel only renders
+		// for an `upcoming` meeting, so `locked` is always false and this is
+		// inert — but the dropdown was already gated and this path was not, and
+		// the difference only becomes visible as a hole the moment the panel is
+		// rendered in another phase. The draft itself still opens; a locked
+		// meeting just stops recording against it.
+		if (locked) return;
 		setPendingId(memberId);
 		try {
 			await onContacted(memberId);

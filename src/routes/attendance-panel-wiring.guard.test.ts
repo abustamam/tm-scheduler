@@ -81,6 +81,18 @@ describe("attendance panel route wiring (PR 2)", () => {
 		expect(src).toContain('.filter((p) => p.status === "reached_out")');
 	});
 
+	// Its sibling, unpinned until now. `unavailableMembers` is `{id, name}[]`, so
+	// a slip to `.map((m) => m.name)` still typechecks as `string[]` against the
+	// `unavailableMemberIds: string[]` prop, and `meeting-agenda.tsx` would build
+	// its `new Set(unavailableMemberIds)` out of names — silently switching off
+	// the "already said no" warning in the recruit picker and the assign sheet
+	// for every member. Nothing else can see it: this route does not render in
+	// jsdom, and the ids are a call-site COMPUTED prop, which the component's own
+	// tests take as their fixture rather than check.
+	it("derives unavailableMemberIds from member ids, not names", () => {
+		expect(src).toContain("unavailableMembers.map((m) => m.id)");
+	});
+
 	// Fix round 1 (Task 7 review): `availBusy={false}` on the strip permanently
 	// disabled the busy guard the old `toggleAvailability` had. Concretely: tap
 	// "I'll be there", then tap the resulting "undo" before the first request
@@ -136,6 +148,16 @@ describe("attendance panel route wiring (PR 2)", () => {
 		expect(src).toContain(
 			"answeredRungs.find((r) => r.memberId === memberId)?.status",
 		);
+		// …and that the catch block APPLIES it. The two assertions above only pin
+		// how `previous` is COMPUTED; deleting the `setRungOverride` call from the
+		// catch — which leaves the failed write's optimistic value on screen
+		// permanently, the exact bug I1 names — satisfies both of them, and no
+		// other test in the repo can see it, since this route does not render in
+		// jsdom.
+		expect(
+			src,
+			"the rollback must be applied in the catch block, not merely computed",
+		).toContain("setRungOverride((o) => ({ ...o, [memberId]: previous }));");
 	});
 
 	it("I2: tracks in-flight writes and drops a stale override unconditionally, not only on agreement", () => {
@@ -154,7 +176,49 @@ describe("attendance panel route wiring (PR 2)", () => {
 		// fire or `contactedMemberIds` / `unavailableMemberIds` (both derived
 		// from loader values) go stale for the recruit picker and the assign
 		// sheet after an officer's tap.
-		expect(src).toContain("void router.invalidate();");
+		//
+		// `void router\n.invalidate()` since the release moved onto it — still
+		// unawaited (the statement is `void`-ed, nothing suspends on it), just
+		// with the pending refcount released when the refetch settles rather than
+		// when the write did. Matched whitespace-tolerantly because the formatter
+		// wraps the chain.
+		//
+		// Only the POSITIVE is assertable here. A `not.toContain("await
+		// router.invalidate()")` reads like the stronger check and is in fact
+		// unsatisfiable: this route has ~15 other invalidate call sites and
+		// several legitimately await. Switching THIS one to `await` breaks the
+		// match below, which is the coverage that was wanted.
+		expect(src).toMatch(/void router\s*\n?\s*\.invalidate\(\)/);
+	});
+
+	it("releases the in-flight mark when the REFETCH settles, not when the write resolves", () => {
+		// Those are different moments, and between them the reconciling effect is
+		// free to evict the override: `plan` takes a fresh identity on every
+		// loader run and this route has ~15 other `router.invalidate()` call
+		// sites. A loader request that started before the write committed and
+		// lands in that window reverts a chip the officer just tapped, which
+		// reads as "it didn't save" — so they tap again.
+		expect(src).toMatch(/\.finally\(\(\) => releasePending\(memberId\)\)/);
+		// A `finally` on the try/catch would double-release and drop a CONCURRENT
+		// write's refcount, which is the bug the refcount exists to prevent.
+		expect(
+			src,
+			"release on the failure path belongs in the catch — a finally double-releases",
+		).not.toMatch(/}\s*finally\s*{\s*releasePending\(memberId\);/);
+	});
+
+	it("refcounts in-flight writes rather than tracking a set of member ids", () => {
+		// An officer's OWN row carries two controls with two independent busy
+		// flags that cannot see each other — the panel chip (`pendingId`) and the
+		// personal strip (`myStatusBusy`). With a `Set`, the second write's `add`
+		// is a no-op and the FIRST write's release clears the entry while the
+		// second is still outstanding, handing the effect an override it may
+		// evict before its write has landed.
+		expect(src).toContain("useRef<Map<string, number>>(new Map())");
+		expect(
+			src,
+			"a Set cannot represent two concurrent writes to the same member",
+		).not.toContain("useRef<Set<string>>(new Set())");
 	});
 
 	it('M1: tags a nudge-triggered ask with via: "nudge", not the manual default', () => {

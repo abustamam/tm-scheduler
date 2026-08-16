@@ -76,8 +76,16 @@ export function meetingViewer(input: {
 		canAssign: runsMeeting,
 		canManageSpeakers: runsMeeting,
 		canEditMeetingMeta: runsMeeting && input.isEditableWindow,
-		// Offered to everyone incl. a no-identity visitor (they identify at click);
 		// lockedViewer denies these for a locked/past meeting.
+		//
+		// NOT offered to a no-identity visitor any more, whatever this flag says:
+		// the control moved onto the personal strip, which renders nothing without
+		// an effective member, and the strip's own handler returns early when
+		// `myId` is null. The old "they identify at click" contract came from
+		// `toggleAvailability` awaiting `requireIdentity()` — that call is gone,
+		// so a click with no identity now does nothing at all rather than opening
+		// the picker. Left `true` because the flag is still the LOCK gate for
+		// everyone who does have an identity; the identity half is the strip's.
 		canToggleAvailability: true,
 		canClaim: true,
 		// Boot a held role: real sign-in only (spec decision #6).

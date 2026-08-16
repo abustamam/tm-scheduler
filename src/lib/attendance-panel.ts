@@ -4,9 +4,19 @@
 // same rung render the same label, and a count can be right for the wrong
 // reason.
 
+import type { AttendancePlanStatus } from "#/server/attendance-plan-logic";
+
 /** The three stored rungs. `null` (no row) means "no answer" and is not a
- *  fourth value — see CONTEXT.md's Planned attendance entry. */
-export type PlanStatus = "reached_out" | "coming" | "not_coming";
+ *  fourth value — see CONTEXT.md's Planned attendance entry.
+ *
+ *  An ALIAS of the seam's type, which derives from the pgEnum — never a second
+ *  hand-listed copy, for the reason `attendance-plan-logic.ts` and
+ *  `attendance-plan.ts` both give: #510 shipped a literal union duplicating
+ *  `activity_action` and it drifted from the database. `import type` erases at
+ *  compile time, so this costs the client bundle nothing and does not drag
+ *  `#/db` (and `pg`, and `Buffer`) into the browser — the same type-only route
+ *  six other `src/lib` modules already take into `#/server/*-logic`. */
+export type PlanStatus = AttendancePlanStatus;
 
 export interface PanelMember {
 	id: string;
@@ -30,7 +40,12 @@ export interface PlanPanelCounts {
 
 /** Chase-worthy first. `null` sorts before every rung because "no answer" is
  *  the only state where nobody has done anything at all. */
-const RUNG_ORDER: Record<string, number> = {
+/** Keyed by `PlanStatus | "null"`, NOT by `string`: a `Record<string, number>`
+ *  accepts any key, so a fourth rung added to the enum would fall through the
+ *  `?? 0` below and sort silently alongside "no answer". Typed this way, `tsc`
+ *  demands a rank for it — the same guarantee `RUNG_LABELS` already has six
+ *  lines away in the panel. */
+const RUNG_ORDER: Record<PlanStatus | "null", number> = {
 	null: 0,
 	reached_out: 1,
 	coming: 2,
@@ -57,9 +72,13 @@ export function buildPlanPanel(input: {
 		roleName: input.roleByMemberId[m.id] ?? null,
 	}));
 
+	// `?? "null"` rather than `String(...)`: the latter widens the key to
+	// `string`, which is what let `RUNG_ORDER` be a `Record<string, number>` and
+	// silently accept a rung it has no rank for.
+	const rankOf = (s: PlanStatus | null) => RUNG_ORDER[s ?? "null"];
+
 	rows.sort((a, b) => {
-		const rung =
-			(RUNG_ORDER[String(a.status)] ?? 0) - (RUNG_ORDER[String(b.status)] ?? 0);
+		const rung = rankOf(a.status) - rankOf(b.status);
 		return rung !== 0 ? rung : a.name.localeCompare(b.name);
 	});
 
