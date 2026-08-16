@@ -26,7 +26,8 @@ export function NudgeButtons({
 	preferredName?: string | null;
 	phone: string | null;
 	email: string | null;
-	roleName: string;
+	/** Omitted for `mode="attendance"` — see `NudgeInput.roleName`. */
+	roleName?: string;
 	meetingDate: string;
 	shareUrl: string;
 	mode: NudgeMode;

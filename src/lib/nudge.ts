@@ -8,7 +8,7 @@ import { greetingName } from "#/lib/person-name";
 import type { Platform } from "#/lib/platform";
 import { whatsappHref } from "#/lib/whatsapp";
 
-export type NudgeMode = "confirm" | "recruit";
+export type NudgeMode = "confirm" | "recruit" | "attendance";
 
 export interface NudgeInput {
 	name: string;
@@ -20,7 +20,12 @@ export interface NudgeInput {
 	/** E.164-ish free text; may be null/absent. */
 	phone?: string | null;
 	email?: string | null;
-	roleName: string;
+	/**
+	 * The role being asked about. Absent for `mode: "attendance"`, which asks
+	 * whether the member is coming AT ALL — role-specific asks stay on the slot
+	 * cards and in "Nudge someone" (spec D5).
+	 */
+	roleName?: string;
 	/** Already formatted friendly, in the club's timezone (footerDate). */
 	meetingDate: string;
 	/** Absolute public meeting URL (caller prepends window.location.origin). */
@@ -47,12 +52,16 @@ function messageFor(i: NudgeInput): string {
 	// Greet by first/preferred name — "Hi Zabihullah Kogyani," reads like a mail
 	// merge, which undercuts a draft whose whole point is that a human wrote it.
 	const who = greetingName(i);
+	if (i.mode === "attendance") {
+		return `Hi ${who}, are you able to make our ${i.meetingDate} meeting? Agenda here: ${i.shareUrl}`;
+	}
 	return i.mode === "confirm"
 		? `Hi ${who}, just confirming you're our ${i.roleName} for the ${i.meetingDate} meeting. Details: ${i.shareUrl}`
 		: `Hi ${who}, would you be open to taking ${i.roleName} at our ${i.meetingDate} meeting? Info here: ${i.shareUrl}`;
 }
 
 function subjectFor(i: NudgeInput): string {
+	if (i.mode === "attendance") return `Are you coming? — ${i.meetingDate}`;
 	return i.mode === "confirm"
 		? `Confirming your ${i.roleName} role — ${i.meetingDate}`
 		: `Open ${i.roleName} role — ${i.meetingDate} meeting?`;

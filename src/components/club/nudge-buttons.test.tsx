@@ -115,4 +115,21 @@ describe("NudgeButtons", () => {
 		await user.click(wa);
 		expect(onContacted).toHaveBeenCalledTimes(1);
 	});
+
+	it("renders an attendance draft with no role name", () => {
+		const { getByRole } = render(
+			<NudgeButtons
+				name="Sam Rivera"
+				phone="+15551234567"
+				email={null}
+				meetingDate="Tue 19 Aug"
+				shareUrl="https://club.example/m"
+				mode="attendance"
+			/>,
+		);
+		const link = getByRole("link", { name: /whatsapp/i });
+		const href = decodeURIComponent(link.getAttribute("href") ?? "");
+		expect(href).toContain("are you able to make our Tue 19 Aug meeting");
+		expect(href).not.toContain("undefined");
+	});
 });
