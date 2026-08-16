@@ -610,13 +610,22 @@ Expected: FAIL — `loadMeetingDetailForTest` is not exported.
 export async function loadMeetingDetailForTest(
 	meetingId: string,
 	opts: { canManage: boolean },
-): Promise<{ plan: { memberId: string; status: PlanStatus }[] }> {
-	const plan = opts.canManage
-		? (await listPlanForMeetings(db, [meetingId])).map(
-				({ memberId, status }) => ({ memberId, status }),
-			)
-		: [];
-	return { plan };
+): Promise<{
+	plan: { memberId: string; status: PlanStatus }[];
+	answeredRungs: { memberId: string; status: "coming" | "not_coming" }[];
+}> {
+	// The SAME two expressions as the real loader below. If this seam derives
+	// them differently it is testing itself.
+	const allRungs = (await listPlanForMeetings(db, [meetingId])).map(
+		({ memberId, status }) => ({ memberId, status }),
+	);
+	return {
+		plan: opts.canManage ? allRungs : [],
+		answeredRungs: allRungs.filter(
+			(r): r is { memberId: string; status: "coming" | "not_coming" } =>
+				r.status !== "reached_out",
+		),
+	};
 }
 ```
 
