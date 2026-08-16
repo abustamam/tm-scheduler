@@ -2,6 +2,13 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.14.1.0] - 2026-08-15
+
+### Fixed
+
+- **Attendance can no longer be recorded for a meeting that hasn't happened.** The Minutes card offered Present / Excused / Absent on future meetings, under a heading calling itself the record of what happened — and the taps were saved. Those records feed the minutes PDF, the emailed minutes and the attendance reports, so a stray tap put a member on the record for a meeting weeks away. Attendance now opens on the day of the meeting, which is also when a meeting becomes completable. Guest sign-in already worked this way; officer marking now matches it.
+- Before the meeting day the Minutes card says so, rather than showing nothing where the roster used to be.
+
 ## [1.14.0.0] - 2026-08-15
 
 ### Fixed
