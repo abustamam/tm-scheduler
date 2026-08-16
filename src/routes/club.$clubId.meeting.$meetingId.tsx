@@ -79,7 +79,6 @@ import {
 	clearPlannedAttendance,
 	setPlannedAttendance,
 } from "#/server/attendance-plan";
-import { clearAvailability, setAvailability } from "#/server/availability";
 import { getClubLogoMeta } from "#/server/club-logo";
 import {
 	completeMeeting,
@@ -272,6 +271,7 @@ function MeetingView() {
 		clubGuests,
 		roster: loaderRoster,
 		plan,
+		answeredRungs,
 		minutes,
 		openActionItems,
 		minutesEmail,
@@ -299,7 +299,6 @@ function MeetingView() {
 	// superadmin (canManage without a linked member).
 	const managerActorId = session?.id ?? null;
 
-	const [availBusy, setAvailBusy] = useState(false);
 	const [addRoleOpen, setAddRoleOpen] = useState(false);
 	const [addRoleBusy, setAddRoleBusy] = useState(false);
 	const [lifecycleBusy, setLifecycleBusy] = useState(false);
@@ -528,7 +527,6 @@ function MeetingView() {
 		await writeRung(memberId, "reached_out");
 	}
 
-	const myUnavailable = myId ? unavailableMemberIds.includes(myId) : false;
 	// The agenda's internal claim/assign acts as this member: the session member
 	// for a manager (null for an impersonator), the effective member otherwise.
 	const agendaMemberId = effectiveCanManage ? managerActorId : myId;
@@ -536,29 +534,18 @@ function MeetingView() {
 		? "max-w-workspace px-4 pt-5 pb-10 sm:px-7 sm:pt-7 space-y-5"
 		: "mx-auto w-full max-w-reading p-4 pb-8 md:p-6 space-y-5";
 
-	async function toggleAvailability() {
-		setAvailBusy(true);
-		try {
-			const me = await requireIdentity();
-			if (!me) return;
-			if (myUnavailable) {
-				await clearAvailability({
-					data: { memberId: me.id, meetingId: meeting.id, clubId: clubUuid },
-				});
-				toast.success("You're marked as available again.");
-			} else {
-				await setAvailability({
-					data: { memberId: me.id, meetingId: meeting.id, clubId: clubUuid },
-				});
-				toast.success("Got it — you can't make this one.");
-			}
-			await router.invalidate();
-		} catch (err) {
-			toast.error(errMessage(err));
-		} finally {
-			setAvailBusy(false);
-		}
-	}
+	// The strip's own answer, read from the PUBLIC `answeredRungs` array — NEVER
+	// from `plan`, which is admin-only ([] whenever `!canManage`) and would read
+	// `null` forever for a plain member: they'd answer, the page would reload,
+	// and the strip would ask again. Mirrors the old `myUnavailable` above: a
+	// public array filtered by the client-known `myId`, because the server
+	// cannot resolve "my" for an anonymous roster pick.
+	const myStatus = myId
+		? (answeredRungs.find((r) => r.memberId === myId)?.status ?? null)
+		: null;
+	// Same override the panel's chips apply, so the member's own tap is instant.
+	const myEffectiveStatus =
+		myId && rungOverride[myId] !== undefined ? rungOverride[myId] : myStatus;
 
 	// Manager (admin) actions: act as the session member; exposes the manager-only
 	// confirm/unconfirm/moveSpeaker/removeRole set.
@@ -891,10 +878,10 @@ function MeetingView() {
 							member={member}
 							promptIdentity={promptIdentity}
 							over={over}
-							myUnavailable={myUnavailable}
-							availBusy={availBusy}
+							myStatus={myEffectiveStatus}
+							availBusy={false}
 							canToggleAvailability={viewer.canToggleAvailability}
-							onToggleAvailability={toggleAvailability}
+							onSetStatus={(s) => myId && writeRung(myId, s)}
 						/>
 						{/* The strip derives identity from `member !== null`; the TOOLBAR
 				    still takes an explicit hasIdentity, because its gate is the

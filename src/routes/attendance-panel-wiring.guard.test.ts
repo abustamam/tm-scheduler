@@ -54,4 +54,23 @@ describe("attendance panel route wiring (PR 2)", () => {
 	it("keeps the agenda column shrinkable so the rail cannot be pushed off", () => {
 		expect(src).toContain("min-w-0 flex-1");
 	});
+
+	// Task 7: the personal strip's rung is the member's OWN answer, read from the
+	// PUBLIC `answeredRungs` array. `plan` is admin-only ([] whenever
+	// `!canManage`), so filtering IT by `myId` reads `null` forever for a plain
+	// member — they'd answer, the page would reload, and the strip would ask
+	// again (the exact bug this guards against).
+	it("reads the strip's own rung from the PUBLIC array, never from admin-only `plan`", () => {
+		expect(src).toContain("answeredRungs.find");
+		expect(src).not.toContain("plan.find((p) => p.memberId === myId)");
+	});
+
+	// Carried from the previous task's review: `contactedMemberIds` replaced a
+	// server-side SQL filter, and nothing guarded the expression that took its
+	// place. A drift to an unfiltered map (or a filter on any status but
+	// `reached_out`) would silently mark the wrong members as contacted in the
+	// recruit picker.
+	it("derives contactedMemberIds by filtering plan on the reached_out status", () => {
+		expect(src).toContain('.filter((p) => p.status === "reached_out")');
+	});
 });
