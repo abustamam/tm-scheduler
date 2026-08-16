@@ -54,4 +54,19 @@ describe("loadMeetingDetail contact gating (#37 PII)", () => {
 			"unavailableMembers=awaitlistNotComingWithNames(db,meetingId)",
 		);
 	});
+
+	// Whole-branch review finding I4: deleting `canManage ?` from the `plan`
+	// assignment leaks the officer's private chase list on the session-less
+	// payload, and every one of the 4104 tests in the suite at the time still
+	// passed — the only coverage was a hand-copied duplicate of this expression
+	// in `meetings-logic.ts`'s test seam, which cannot see a drift in the REAL
+	// loader. These two pin the real file directly, the same shape as the
+	// `unavailableMembers` pin above.
+	it("withholds the full ladder from a non-managing caller", () => {
+		expect(src).toContain("constplan=canManage?allRungs:[]");
+	});
+
+	it("never puts the officer-only rung on the public array", () => {
+		expect(src).toContain('r.status!=="reached_out"');
+	});
 });

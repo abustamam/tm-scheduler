@@ -16,7 +16,7 @@ import {
 	Sparkles,
 	WifiOff,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
 	MeetingAgenda,
@@ -315,6 +315,13 @@ function MeetingView() {
 	const [rungOverride, setRungOverride] = useState<
 		Record<string, PlanStatus | null>
 	>({});
+	// Members with a plan write currently in flight — a ref, not state, since
+	// only `writeRung` and the reconciling effect below touch it and neither
+	// should re-render on it. The effect drops any override for a member NOT in
+	// this set the moment `plan` changes, so a write that is still pending
+	// cannot be evicted by a payload that hasn't caught up to it yet (whole-branch
+	// review I2).
+	const pendingWritesRef = useRef<Set<string>>(new Set());
 	// Busy guard against a rapid double-tap on the strip's OWN write — the same
 	// class of race the panel's per-row `pendingId` already guards
 	// (meeting-attendance-panel.tsx:136, 174-181). Without this, tapping "I'll
@@ -486,38 +493,70 @@ function MeetingView() {
 		.filter((p) => p.status === "reached_out")
 		.map((p) => p.memberId);
 
-	async function writeRung(memberId: string, next: PlanStatus | null) {
-		const previous = plan.find((p) => p.memberId === memberId)?.status ?? null;
+	async function writeRung(
+		memberId: string,
+		next: PlanStatus | null,
+		via: "nudge" | "manual" = "manual",
+	) {
+		// Roll back to what the UI was ACTUALLY showing, not the loader's
+		// snapshot: `plan` never refetches mid-page (nothing here awaits an
+		// invalidate before this runs), and for a non-manager `plan` is ALWAYS
+		// `[]` — so `plan.find(...) ?? null` would restore the very value the
+		// failed write already overwrote, every time (whole-branch review I1).
+		// Check the override first (a second write racing the same row), then
+		// `plan` (an officer's own ladder), then `answeredRungs` (the public
+		// array a plain member's own row lives on).
+		const previous =
+			rungOverride[memberId] !== undefined
+				? rungOverride[memberId]
+				: (plan.find((p) => p.memberId === memberId)?.status ??
+					answeredRungs.find((r) => r.memberId === memberId)?.status ??
+					null);
 		setRungOverride((o) => ({ ...o, [memberId]: next }));
+		pendingWritesRef.current.add(memberId);
 		try {
 			await (next === null
 				? clearPlannedAttendance({ data: { memberId, meetingId: meeting.id } })
 				: setPlannedAttendance({
-						data: { memberId, meetingId: meeting.id, status: next },
+						data: { memberId, meetingId: meeting.id, status: next, via },
 					}));
+			// Fire-and-forget, NOT awaited: the override already holds the value
+			// this write just committed, so nothing on screen is waiting on this
+			// resolving. But SOME invalidate has to fire, or `contactedMemberIds` /
+			// `unavailableMemberIds` (both derived from loader values — `plan` /
+			// `unavailableMembers`) go stale for the recruit picker and the assign
+			// sheet after this tap (whole-branch review I3). This also feeds the
+			// reconciling effect below its own trigger, rather than relying on some
+			// unrelated action to refresh `plan`.
+			void router.invalidate();
 		} catch (e) {
-			// Roll back to what the server last told us, not to `null` — reverting
-			// to empty would silently erase a rung the officer did not touch.
+			// Roll back to what the UI was actually displaying, not to `null` —
+			// reverting to empty would silently erase a rung the officer did not
+			// touch.
 			setRungOverride((o) => ({ ...o, [memberId]: previous }));
 			toast.error(e instanceof Error ? e.message : "Couldn't save that.");
+		} finally {
+			pendingWritesRef.current.delete(memberId);
 		}
 	}
 
-	// Drop the override for a member once the server payload agrees, so the map
-	// cannot grow unboundedly across a long session.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the
-	// server payload only — including `rungOverride` would re-run on every write.
+	// Drop a stale override once a fresh payload arrives — but drop it
+	// UNCONDITIONALLY (any member with no write still in flight), not only when
+	// it agrees with the server. The old effect deleted an override only
+	// `if (server === value)`, which is backwards: agreement is the harmless
+	// case, and an override that DISAGREES with the server — the one case that
+	// matters — was pinned forever, masking every later payload for the rest of
+	// the session (whole-branch review I2). `pendingWritesRef` is what keeps
+	// this from evicting an override whose own write hasn't resolved yet.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: plan is the trigger (a fresh payload), not a value read in the body — including rungOverride would re-run on every write.
 	useEffect(() => {
 		setRungOverride((o) => {
 			const next = { ...o };
 			let changed = false;
-			for (const [memberId, value] of Object.entries(o)) {
-				const server =
-					plan.find((p) => p.memberId === memberId)?.status ?? null;
-				if (server === value) {
-					delete next[memberId];
-					changed = true;
-				}
+			for (const memberId of Object.keys(o)) {
+				if (pendingWritesRef.current.has(memberId)) continue;
+				delete next[memberId];
+				changed = true;
 			}
 			return changed ? next : o;
 		});
@@ -532,7 +571,11 @@ function MeetingView() {
 				? rungOverride[memberId]
 				: (plan.find((p) => p.memberId === memberId)?.status ?? null);
 		if (current !== null) return;
-		await writeRung(memberId, "reached_out");
+		// Same event as the recruit picker's own `onContacted={"nudge"}` below —
+		// tagging it "manual" (the default) here would log the identical action
+		// under two different `via` spellings in activity_log (whole-branch
+		// review M1).
+		await writeRung(memberId, "reached_out", "nudge");
 	}
 
 	// The agenda's internal claim/assign acts as this member: the session member
@@ -545,15 +588,26 @@ function MeetingView() {
 	// The strip's own answer, read from the PUBLIC `answeredRungs` array — NEVER
 	// from `plan`, which is admin-only ([] whenever `!canManage`) and would read
 	// `null` forever for a plain member: they'd answer, the page would reload,
-	// and the strip would ask again. Mirrors the old `myUnavailable` above: a
+	// and the strip would ask again. Mirrors `unavailableMemberIds` above: a
 	// public array filtered by the client-known `myId`, because the server
 	// cannot resolve "my" for an anonymous roster pick.
 	const myStatus = myId
 		? (answeredRungs.find((r) => r.memberId === myId)?.status ?? null)
 		: null;
-	// Same override the panel's chips apply, so the member's own tap is instant.
-	const myEffectiveStatus =
+	// Same override the panel's chips apply, so the member's own tap is instant
+	// — but clamped off `reached_out`. `rungOverride` is shared with the
+	// officer panel, so an OFFICER setting their own row to `reached_out` from
+	// the panel would otherwise mislabel their own strip as "can't make this
+	// one — undo?", and tapping that "undo" actually DELETES the row: an
+	// officer's clear is unrestricted (`onlyFrom` is lifted for them in
+	// `clearPlannedAttendance`), so it would erase the very outreach record the
+	// clamp exists to protect (whole-branch review M8). `answeredRungs` can
+	// never itself produce `reached_out` — it is filtered server-side — so this
+	// only ever intercepts the override.
+	let myEffectiveStatus =
 		myId && rungOverride[myId] !== undefined ? rungOverride[myId] : myStatus;
+	myEffectiveStatus =
+		myEffectiveStatus === "reached_out" ? null : myEffectiveStatus;
 
 	// Wraps the shared `writeRung` with the busy guard above — still ONE write
 	// path (the panel's chips call `writeRung` directly), just with the strip's
@@ -813,121 +867,119 @@ function MeetingView() {
 
 	return (
 		<div className={containerClass}>
-			<div className="lg:flex lg:items-start lg:gap-6">
-				<div className="min-w-0 flex-1 space-y-5">
-					{previewAsMember ? (
-						<div className="flex items-center justify-between gap-3 rounded-xl border border-primary/40 bg-primary/10 px-4 py-3 text-sm font-medium text-primary">
-							<span className="flex items-center gap-2">
-								<Eye className="size-4 shrink-0" aria-hidden />
-								Previewing as a member — management controls are hidden.
-							</span>
-							<Button
-								size="sm"
-								variant="outline"
-								onClick={() => setPreviewAsMember(false)}
-							>
-								Exit preview
-							</Button>
-						</div>
+			{previewAsMember ? (
+				<div className="flex items-center justify-between gap-3 rounded-xl border border-primary/40 bg-primary/10 px-4 py-3 text-sm font-medium text-primary">
+					<span className="flex items-center gap-2">
+						<Eye className="size-4 shrink-0" aria-hidden />
+						Previewing as a member — management controls are hidden.
+					</span>
+					<Button
+						size="sm"
+						variant="outline"
+						onClick={() => setPreviewAsMember(false)}
+					>
+						Exit preview
+					</Button>
+				</div>
+			) : null}
+			{!online && shell ? (
+				<div className="flex items-center gap-2 rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm font-medium text-warning-foreground">
+					<WifiOff className="size-4 shrink-0" aria-hidden />
+					You're offline — minutes edits are saved on this device and sync when
+					you reconnect. Other changes (meeting details, roles) need a
+					connection.
+				</div>
+			) : null}
+			{locked ? (
+				<div className="flex items-center gap-2 rounded-xl border border-border bg-muted/60 px-4 py-3 text-sm font-medium text-muted-foreground">
+					<Lock className="size-4" aria-hidden />
+					{MEETING_LOCKED_MESSAGE}
+				</div>
+			) : datePassed && !effectiveCanManage ? (
+				<div className="flex items-center gap-2 rounded-xl border border-border bg-muted/60 px-4 py-3 text-sm font-medium text-muted-foreground">
+					<Lock className="size-4" aria-hidden />
+					This meeting has already taken place.
+				</div>
+			) : null}
+			<header className="space-y-2 pt-2">
+				<h1 className="font-display text-2xl font-semibold tracking-tight">
+					{meeting.theme ?? "Meeting"}
+				</h1>
+				<div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
+					<span className="flex items-center gap-1.5">
+						<CalendarDays className="size-4" aria-hidden />
+						{formatMeetingDate(meeting.scheduledAt, timezone)} ·{" "}
+						{formatMeetingTimeRange(
+							meeting.scheduledAt,
+							meeting.lengthMinutes,
+							timezone,
+						)}
+					</span>
+					{flex.status !== "exact" ? (
+						<span
+							className={
+								flex.status === "over"
+									? "flex items-center gap-1.5 font-medium text-destructive"
+									: "flex items-center gap-1.5 text-muted-foreground"
+							}
+						>
+							<Clock className="size-4" aria-hidden />
+							{flex.status === "over"
+								? `Projected end ${formatMeetingTime(projectedEnd, timezone)} · runs ${flex.deltaMinutes} min long`
+								: `Projected end ${formatMeetingTime(projectedEnd, timezone)} · ends ${-flex.deltaMinutes} min early`}
+						</span>
 					) : null}
-					{!online && shell ? (
-						<div className="flex items-center gap-2 rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm font-medium text-warning-foreground">
-							<WifiOff className="size-4 shrink-0" aria-hidden />
-							You're offline — minutes edits are saved on this device and sync
-							when you reconnect. Other changes (meeting details, roles) need a
-							connection.
-						</div>
+					{meeting.location ? (
+						<span className="flex items-center gap-1.5">
+							<MapPin className="size-4" aria-hidden />
+							{meeting.location}
+						</span>
 					) : null}
-					{locked ? (
-						<div className="flex items-center gap-2 rounded-xl border border-border bg-muted/60 px-4 py-3 text-sm font-medium text-muted-foreground">
-							<Lock className="size-4" aria-hidden />
-							{MEETING_LOCKED_MESSAGE}
-						</div>
-					) : datePassed && !effectiveCanManage ? (
-						<div className="flex items-center gap-2 rounded-xl border border-border bg-muted/60 px-4 py-3 text-sm font-medium text-muted-foreground">
-							<Lock className="size-4" aria-hidden />
-							This meeting has already taken place.
-						</div>
-					) : null}
-					<header className="space-y-2 pt-2">
-						<h1 className="font-display text-2xl font-semibold tracking-tight">
-							{meeting.theme ?? "Meeting"}
-						</h1>
-						<div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
-							<span className="flex items-center gap-1.5">
-								<CalendarDays className="size-4" aria-hidden />
-								{formatMeetingDate(meeting.scheduledAt, timezone)} ·{" "}
-								{formatMeetingTimeRange(
-									meeting.scheduledAt,
-									meeting.lengthMinutes,
-									timezone,
-								)}
-							</span>
-							{flex.status !== "exact" ? (
-								<span
-									className={
-										flex.status === "over"
-											? "flex items-center gap-1.5 font-medium text-destructive"
-											: "flex items-center gap-1.5 text-muted-foreground"
-									}
-								>
-									<Clock className="size-4" aria-hidden />
-									{flex.status === "over"
-										? `Projected end ${formatMeetingTime(projectedEnd, timezone)} · runs ${flex.deltaMinutes} min long`
-										: `Projected end ${formatMeetingTime(projectedEnd, timezone)} · ends ${-flex.deltaMinutes} min early`}
-								</span>
-							) : null}
-							{meeting.location ? (
-								<span className="flex items-center gap-1.5">
-									<MapPin className="size-4" aria-hidden />
-									{meeting.location}
-								</span>
-							) : null}
-						</div>
-						<MeetingNavStrip clubId={clubId} items={navItems} />
-						{/* Same predicate the "Word poster" button below uses, so the chip
+				</div>
+				<MeetingNavStrip clubId={clubId} items={navItems} />
+				{/* Same predicate the "Word poster" button below uses, so the chip
 				    and the button agree about whether there is a word. Consistency,
 				    not a fix: the write paths trim, so blank cannot be stored. */}
-						{hasWordOfTheDay(meeting.wordOfTheDay) ? (
-							<p className="flex items-center gap-1.5 text-sm">
-								<Sparkles className="size-4 text-primary" aria-hidden />
-								<span className="text-muted-foreground">Word of the day:</span>
-								<span className="font-medium">{meeting.wordOfTheDay}</span>
-							</p>
-						) : null}
-						<MeetingPersonalStrip
-							source={source}
-							member={member}
-							promptIdentity={promptIdentity}
-							over={over}
-							myStatus={myEffectiveStatus}
-							availBusy={myStatusBusy}
-							canToggleAvailability={viewer.canToggleAvailability}
-							onSetStatus={setMyStatus}
-						/>
-						{/* The strip derives identity from `member !== null`; the TOOLBAR
+				{hasWordOfTheDay(meeting.wordOfTheDay) ? (
+					<p className="flex items-center gap-1.5 text-sm">
+						<Sparkles className="size-4 text-primary" aria-hidden />
+						<span className="text-muted-foreground">Word of the day:</span>
+						<span className="font-medium">{meeting.wordOfTheDay}</span>
+					</p>
+				) : null}
+				<MeetingPersonalStrip
+					source={source}
+					member={member}
+					promptIdentity={promptIdentity}
+					over={over}
+					myStatus={myEffectiveStatus}
+					availBusy={myStatusBusy}
+					canToggleAvailability={viewer.canToggleAvailability}
+					onSetStatus={setMyStatus}
+				/>
+				{/* The strip derives identity from `member !== null`; the TOOLBAR
 				    still takes an explicit hasIdentity, because its gate is the
 				    session-or-anon id the route resolved (#541 D2/D3). */}
-						<MeetingToolbar
-							phase={phase}
-							clubSlug={clubId}
-							meetingId={urlKey}
-							dbMeetingId={meeting.id}
-							sharePath={`/club/${clubId}/meeting/${urlKey}`}
-							deck={deck}
-							clubName={clubName}
-							wordOfTheDay={meeting.wordOfTheDay}
-							hasIdentity={!!myId}
-							canManage={effectiveCanManage}
-							locked={locked}
-							canComplete={canComplete}
-							hasAddableRoles={addableRoles.length > 0}
-							lifecycleBusy={lifecycleBusy}
-							onAddRole={() => setAddRoleOpen(true)}
-							onComplete={doComplete}
-							onReopen={doReopen}
-						/>
-						{/* Preview-as-member survives as a SIBLING of the toolbar (review
+				<MeetingToolbar
+					phase={phase}
+					clubSlug={clubId}
+					meetingId={urlKey}
+					dbMeetingId={meeting.id}
+					sharePath={`/club/${clubId}/meeting/${urlKey}`}
+					deck={deck}
+					clubName={clubName}
+					wordOfTheDay={meeting.wordOfTheDay}
+					hasIdentity={!!myId}
+					canManage={effectiveCanManage}
+					locked={locked}
+					canComplete={canComplete}
+					hasAddableRoles={addableRoles.length > 0}
+					lifecycleBusy={lifecycleBusy}
+					onAddRole={() => setAddRoleOpen(true)}
+					onComplete={doComplete}
+					onReopen={doReopen}
+				/>
+				{/* Preview-as-member survives as a SIBLING of the toolbar (review
 				    decision): capability preserved, not folded into the toolbar's
 				    props — PR 2 reshapes the officer surface and will revisit.
 				    Gated on `effectiveCanManage`, the same flag the toolbar gets, so
@@ -938,22 +990,34 @@ function MeetingView() {
 				    deliberately NOT effectiveCanManage; that is the verbatim
 				    definition of effectiveCanManage (line 374), so the comment
 				    described a distinction the code never made. */}
-						{effectiveCanManage ? (
-							<div className="flex flex-wrap items-center gap-2 pt-1">
-								<Button
-									size="sm"
-									variant="ghost"
-									onClick={() => setPreviewAsMember(true)}
-								>
-									<Eye className="size-4" />
-									Preview as member
-								</Button>
-							</div>
-						) : null}
-					</header>
+				{effectiveCanManage ? (
+					<div className="flex flex-wrap items-center gap-2 pt-1">
+						<Button
+							size="sm"
+							variant="ghost"
+							onClick={() => setPreviewAsMember(true)}
+						>
+							<Eye className="size-4" />
+							Preview as member
+						</Button>
+					</div>
+				) : null}
+			</header>
 
-					<MeetingAnnouncements text={meeting.reminders} />
+			<MeetingAnnouncements text={meeting.reminders} />
 
+			{/* Spec D4: the banner/header/toolbar/announcements block above runs FULL
+			    WIDTH above the two-column row on every viewport — it is a SIBLING of
+			    this row, not nested inside the agenda column, so it can never be
+			    pushed below the panel on desktop. Below `lg` the panel (order-1)
+			    renders directly beneath the toolbar and ABOVE the agenda/roles list
+			    (order-2); at `lg` and up the agenda takes the left column
+			    (order-1) and the panel becomes a sticky right rail (order-2). Whole-
+			    branch review I5: the panel used to be a sibling AFTER the whole left
+			    column, so on mobile it landed below the agenda, action items,
+			    Minutes and the ballot console instead of directly under the toolbar. */}
+			<div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:gap-6">
+				<div className="order-2 min-w-0 flex-1 space-y-5 lg:order-1">
 					{effectiveCanManage ? null : <GuestResources clubId={clubId} />}
 
 					<MeetingAgenda
@@ -1165,7 +1229,7 @@ function MeetingView() {
 					</Dialog>
 				</div>
 				{showPlanPanel ? (
-					<aside className="mt-5 lg:mt-0 lg:sticky lg:top-24 lg:w-[340px] lg:shrink-0">
+					<aside className="order-1 lg:order-2 lg:sticky lg:top-24 lg:w-[340px] lg:shrink-0">
 						<MeetingAttendancePanel
 							// `loaderRoster`, not the union-typed `roster` local (which
 							// falls back to the client-fetched PUBLIC roster with no

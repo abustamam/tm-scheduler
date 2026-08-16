@@ -8,6 +8,7 @@
 //
 // COMMENT-BLIND (`readSource`): all assertions are "must BE present", and this
 // header quotes the patterns it checks for.
+import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -20,6 +21,12 @@ const ROUTE = resolve(
 
 describe("attendance panel route wiring (PR 2)", () => {
 	const src = readSource(ROUTE);
+	// RAW (not comment-blanked) — for the one check below whose "must NOT
+	// contain" assertion is about COMMENT PROSE itself (M4). `readSource`'s
+	// comment-blind stripping would erase the very text that check needs to
+	// see, making a "must not contain" assertion pass vacuously either way —
+	// the "opposite form" `#/test/guard-source` warns must not read through it.
+	const rawSrc = readFileSync(ROUTE, "utf8");
 
 	it("gates the panel on the phase, not on the over/locked flags", () => {
 		// `over`, `locked` and `canComplete` are all booleans in scope here. Only
@@ -111,5 +118,72 @@ describe("attendance panel route wiring (PR 2)", () => {
 		// All within the same small wrapper — not a stray, unrelated busy/finally
 		// pair found far downstream in the file.
 		expect(busyFalseAt - fnStart).toBeLessThan(400);
+	});
+
+	// Whole-branch review findings I1-I5, M1, M4, M8: cross-task interactions no
+	// single per-task review could see. Each is pinned here for the same reason
+	// the rest of this file is — the route cannot mount in jsdom.
+
+	it("I1: rolls a failed write back to what the UI showed, not the loader snapshot", () => {
+		// `plan.find(...) ?? null` alone is a guaranteed no-op rollback for a
+		// non-manager (`plan` is ALWAYS `[]` for them) and, even for a manager,
+		// restores whatever was true at PAGE LOAD rather than the last
+		// successful write — because nothing here refetches `plan` before this
+		// runs.
+		expect(src).not.toContain(
+			"const previous = plan.find((p) => p.memberId === memberId)?.status ?? null;",
+		);
+		expect(src).toContain(
+			"answeredRungs.find((r) => r.memberId === memberId)?.status",
+		);
+	});
+
+	it("I2: tracks in-flight writes and drops a stale override unconditionally, not only on agreement", () => {
+		// The old effect deleted an override only `if (server === value)` —
+		// backwards, since agreement is the harmless case. An override that
+		// DISAGREES with the server is the one that must not be pinned forever.
+		expect(src).not.toContain("if (server === value) {");
+		expect(src).toContain("pendingWritesRef");
+		expect(src).toContain("pendingWritesRef.current.has(memberId)");
+	});
+
+	it("I3: invalidates after a successful plan write, fire-and-forget", () => {
+		// `await router.invalidate()` here would refetch the whole meeting
+		// payload for one chip tap — deliberately fire-and-forget, since the
+		// override already holds the optimistic value. But SOME invalidate must
+		// fire or `contactedMemberIds` / `unavailableMemberIds` (both derived
+		// from loader values) go stale for the recruit picker and the assign
+		// sheet after an officer's tap.
+		expect(src).toContain("void router.invalidate();");
+	});
+
+	it('M1: tags a nudge-triggered ask with via: "nudge", not the manual default', () => {
+		expect(src).toContain('writeRung(memberId, "reached_out", "nudge")');
+	});
+
+	it("M4: no longer explains itself by pointing at the deleted myUnavailable symbol", () => {
+		// The stale reference lived in a COMMENT, so this must check the raw
+		// file — `src` has every comment blanked out and would pass this
+		// assertion whether or not the comment was ever fixed.
+		expect(rawSrc).not.toContain("myUnavailable");
+	});
+
+	it("M8: clamps the officer's own reached_out rung before it reaches the personal strip", () => {
+		// `rungOverride` is shared with the officer panel: an officer setting
+		// their OWN row to `reached_out` must not mislabel their own strip, and
+		// — because an officer's clear is unrestricted — the mislabeled "undo"
+		// would actually delete that row.
+		expect(src).toContain(
+			'myEffectiveStatus === "reached_out" ? null : myEffectiveStatus',
+		);
+	});
+
+	it("I5: the panel sits above the agenda on mobile and beside it on desktop (D4)", () => {
+		// The banner/header/toolbar/announcements block runs full width OUTSIDE
+		// the two-column row, so it can never be pushed below the panel on
+		// desktop; within the row, mobile order is reversed so the panel lands
+		// directly beneath the toolbar rather than after the whole agenda column.
+		expect(src).toContain("order-1 lg:order-2");
+		expect(src).toContain("order-2 min-w-0 flex-1");
 	});
 });

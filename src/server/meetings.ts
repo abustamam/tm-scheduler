@@ -269,9 +269,10 @@ async function loadMeetingDetail(
 	const plan = canManage ? allRungs : [];
 	// The members' OWN answers, public. The personal strip must show a member the
 	// answer they gave, and the server cannot resolve "my" — the viewer is known
-	// only on the client (route:288), which is why `myUnavailable` filters an
-	// array today rather than reading a resolved field. `reached_out` is filtered
-	// out HERE, once, rather than at each consumer.
+	// only on the client (route:288), which is why the route derives its own
+	// per-member ids by filtering this array locally, rather than the server
+	// resolving a "my status" field. `reached_out` is filtered out HERE, once,
+	// rather than at each consumer.
 	const answeredRungs = allRungs.filter(
 		(r): r is { memberId: string; status: "coming" | "not_coming" } =>
 			r.status !== "reached_out",

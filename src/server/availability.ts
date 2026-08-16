@@ -2,11 +2,14 @@
 // is now one rung of the ladder (`not_coming`) rather than the presence of a row
 // in its own table, so these are thin delegates onto `attendance-plan-logic`.
 //
-// PR 2 retires `setAvailability` / `clearAvailability` once the panel calls
-// `setPlannedAttendance` directly. `markUnavailableReleasing` is NOT in that
-// set: it also releases every role the member holds (#204), which the new write
-// surface does not do, so it outlives the other two until something folds slot
-// release into the ladder.
+// `setAvailability` / `clearAvailability` still back the season grid's own
+// availability toggle (`season-grid.tsx:176,203`) — PR 2 only repoints the
+// MEETING PAGE (the officer panel and the personal strip) onto
+// `setPlannedAttendance` / `clearPlannedAttendance` directly; it never touches
+// the grid, so these two are not retiring. `markUnavailableReleasing` is NOT in
+// that set either: it also releases every role the member holds (#204), which
+// the new write surface does not do, so it outlives the other two until
+// something folds slot release into the ladder.
 //
 // All three are PUBLIC and session-less, which is why each one names the rungs
 // it may touch (`SELF_SERVICE_RUNGS`) rather than trusting the seam to know who
