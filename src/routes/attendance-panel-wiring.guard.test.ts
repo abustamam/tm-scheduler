@@ -73,4 +73,43 @@ describe("attendance panel route wiring (PR 2)", () => {
 	it("derives contactedMemberIds by filtering plan on the reached_out status", () => {
 		expect(src).toContain('.filter((p) => p.status === "reached_out")');
 	});
+
+	// Fix round 1 (Task 7 review): `availBusy={false}` on the strip permanently
+	// disabled the busy guard the old `toggleAvailability` had. Concretely: tap
+	// "I'll be there", then tap the resulting "undo" before the first request
+	// resolves — `setPlannedAttendance` and `clearPlannedAttendance` fire
+	// concurrently with no ordering guarantee, and an out-of-order resolution
+	// leaves the persisted rung disagreeing with the member's last tap. The
+	// panel already guards exactly this class with a per-row `pendingId`
+	// (meeting-attendance-panel.tsx:136, 174-181) — this pins the route-level
+	// equivalent for the strip's OWN write, since a hardcoded `false` type-checks
+	// and lints clean and is invisible to any test that renders the strip alone
+	// (its own suite is handed whatever `availBusy` the fixture passes).
+	it("guards the strip's own write against a rapid double-tap (no hardcoded availBusy={false})", () => {
+		expect(src).not.toContain("availBusy={false}");
+		expect(src).toContain("availBusy={myStatusBusy}");
+		expect(src).toContain("onSetStatus={setMyStatus}");
+		// The busy flag must be set BEFORE the write, and cleared in a `finally` —
+		// so a rejected write rolls the rung back (existing `writeRung` behavior)
+		// without leaving the strip's control wedged disabled. Checked by relative
+		// ORDER and proximity rather than brace-matched slicing, since a
+		// `try {…} finally {…}` closes its inner block on the same `}` a naive
+		// slice would mistake for the wrapper function's own end.
+		const fnStart = src.indexOf("async function setMyStatus(");
+		expect(
+			fnStart,
+			"expected an `async function setMyStatus(...)` wrapper around `writeRung`",
+		).toBeGreaterThan(-1);
+		const busyTrueAt = src.indexOf("setMyStatusBusy(true)", fnStart);
+		const writeRungAt = src.indexOf("await writeRung(", fnStart);
+		const finallyAt = src.indexOf("finally", fnStart);
+		const busyFalseAt = src.indexOf("setMyStatusBusy(false)", fnStart);
+		expect(busyTrueAt).toBeGreaterThan(fnStart);
+		expect(writeRungAt).toBeGreaterThan(busyTrueAt);
+		expect(finallyAt).toBeGreaterThan(writeRungAt);
+		expect(busyFalseAt).toBeGreaterThan(finallyAt);
+		// All within the same small wrapper — not a stray, unrelated busy/finally
+		// pair found far downstream in the file.
+		expect(busyFalseAt - fnStart).toBeLessThan(400);
+	});
 });

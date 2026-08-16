@@ -315,6 +315,14 @@ function MeetingView() {
 	const [rungOverride, setRungOverride] = useState<
 		Record<string, PlanStatus | null>
 	>({});
+	// Busy guard against a rapid double-tap on the strip's OWN write — the same
+	// class of race the panel's per-row `pendingId` already guards
+	// (meeting-attendance-panel.tsx:136, 174-181). Without this, tapping "I'll
+	// be there" then "undo" before the first request resolves fires
+	// `setPlannedAttendance` and `clearPlannedAttendance` concurrently with no
+	// ordering guarantee, and an out-of-order resolution leaves the persisted
+	// rung disagreeing with the member's last tap.
+	const [myStatusBusy, setMyStatusBusy] = useState(false);
 
 	// One club config drives both renderings of this meeting (#367).
 	const flex = applyFlex(
@@ -546,6 +554,20 @@ function MeetingView() {
 	// Same override the panel's chips apply, so the member's own tap is instant.
 	const myEffectiveStatus =
 		myId && rungOverride[myId] !== undefined ? rungOverride[myId] : myStatus;
+
+	// Wraps the shared `writeRung` with the busy guard above — still ONE write
+	// path (the panel's chips call `writeRung` directly), just with the strip's
+	// own in-flight flag set first and cleared in `finally` so a rejected write
+	// never leaves the control stuck disabled.
+	async function setMyStatus(next: PlanStatus | null) {
+		if (!myId) return;
+		setMyStatusBusy(true);
+		try {
+			await writeRung(myId, next);
+		} finally {
+			setMyStatusBusy(false);
+		}
+	}
 
 	// Manager (admin) actions: act as the session member; exposes the manager-only
 	// confirm/unconfirm/moveSpeaker/removeRole set.
@@ -879,9 +901,9 @@ function MeetingView() {
 							promptIdentity={promptIdentity}
 							over={over}
 							myStatus={myEffectiveStatus}
-							availBusy={false}
+							availBusy={myStatusBusy}
 							canToggleAvailability={viewer.canToggleAvailability}
-							onSetStatus={(s) => myId && writeRung(myId, s)}
+							onSetStatus={setMyStatus}
 						/>
 						{/* The strip derives identity from `member !== null`; the TOOLBAR
 				    still takes an explicit hasIdentity, because its gate is the
