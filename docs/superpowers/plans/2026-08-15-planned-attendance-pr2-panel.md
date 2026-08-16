@@ -469,7 +469,11 @@ The panel needs each member's rung. `loadMeetingDetail` currently ships three se
 
 **Interfaces:**
 - Consumes: `listPlanForMeetings` from `src/server/attendance-plan-logic.ts` (already exists, already returns `{ memberId, meetingId, status }[]`)
-- Produces: `loadMeetingDetail(...)` payload gains `plan: { memberId: string; status: PlanStatus }[]`, admin-only (`[]` when `!canManage`), alongside the existing arrays.
+- Produces: **two** arrays on the `loadMeetingDetail(...)` payload:
+  - `plan: { memberId: string; status: PlanStatus }[]` — all three rungs, **admin-only** (`[]` when `!canManage`). Feeds the officer panel.
+  - `answeredRungs: { memberId: string; status: "coming" | "not_coming" }[]` — **always populated**, never contains `reached_out`. Feeds the personal strip.
+
+**Why two arrays and not one.** The strip has to show a member their OWN answer, and the server cannot resolve "my" — the viewing member is known only on the client (`useEffectiveMember`, route:288), which is how `myUnavailable` already works (`unavailableMemberIds.includes(myId)`, route:451). The anonymous roster pick is the dominant identity in this product, so a server-resolved `myPlanStatus` would be null for most users. The client therefore needs an array to filter, and that array must not carry `reached_out` — the officer's private record of having asked. One array with a per-rung filter was rejected: `plan` would then mean two different things depending on the caller, and a reader holding it could not tell which.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -533,10 +537,7 @@ describe.skipIf(!hasTestDb)("meeting payload plan rungs", () => {
 		]);
 	});
 
-	it("withholds the plan from a non-managing caller", async () => {
-		// `reached_out` is the officer's private record of having asked. It rides
-		// the same array as the member's own answer now, so the whole array is
-		// admin-only — the same gate the contacted ids already had.
+	it("withholds the full plan from a non-managing caller", async () => {
 		await setPlanStatus(testDb, {
 			memberId: seed.memberId,
 			meetingId: seed.meetingId,
@@ -548,6 +549,46 @@ describe.skipIf(!hasTestDb)("meeting payload plan rungs", () => {
 			canManage: false,
 		});
 		expect(payload.plan).toEqual([]);
+	});
+
+	it("NEVER puts reached_out on the public array, for either caller", async () => {
+		// THE invariant of the two-array split. The strip needs a public array to
+		// filter by the client-known member id, and `reached_out` is the officer's
+		// private record of having asked — it rides the same table as the member's
+		// own answer, so nothing but an explicit filter keeps it off the public
+		// payload. This is the guard against re-opening the leak PR 1 closed.
+		await setPlanStatus(testDb, {
+			memberId: seed.memberId,
+			meetingId: seed.meetingId,
+			clubId: seed.clubId,
+			status: "reached_out",
+			actorMemberId: seed.adminMemberId,
+		});
+		await setPlanStatus(testDb, {
+			memberId: seed.adminMemberId,
+			meetingId: seed.meetingId,
+			clubId: seed.clubId,
+			status: "coming",
+			actorMemberId: seed.adminMemberId,
+		});
+
+		for (const canManage of [true, false]) {
+			const payload = await loadMeetingDetailForTest(seed.meetingId, {
+				canManage,
+			});
+			// Anti-vacuity FIRST: an empty array satisfies "contains no
+			// reached_out" for the wrong reason.
+			expect(
+				payload.answeredRungs.length,
+				`answeredRungs was empty for canManage=${canManage}, so the assertion below proves nothing`,
+			).toBe(1);
+			expect(payload.answeredRungs).toEqual([
+				{ memberId: seed.adminMemberId, status: "coming" },
+			]);
+			expect(payload.answeredRungs.map((r) => r.status)).not.toContain(
+				"reached_out",
+			);
+		}
 	});
 });
 ```
@@ -586,17 +627,25 @@ Import `listPlanForMeetings` and `type PlanStatus` (re-exported as `AttendancePl
 In `src/server/meetings.ts`, inside `loadMeetingDetail`, beside the existing `comingMemberIds` block:
 
 ```ts
+	const allRungs = (await listPlanForMeetings(db, [meetingId])).map(
+		({ memberId, status }) => ({ memberId, status }),
+	);
 	// The whole ladder for the officer's panel. Admin-only for the same reason
-	// `contactedMemberIds` is: `reached_out` is the officer's private record of
+	// `contactedMemberIds` was: `reached_out` is the officer's private record of
 	// having asked, and it now shares one array with the member's own answer.
-	const plan = canManage
-		? (await listPlanForMeetings(db, [meetingId])).map(
-				({ memberId, status }) => ({ memberId, status }),
-			)
-		: [];
+	const plan = canManage ? allRungs : [];
+	// The members' OWN answers, public. The personal strip must show a member the
+	// answer they gave, and the server cannot resolve "my" — the viewer is known
+	// only on the client (route:288), which is why `myUnavailable` filters an
+	// array today rather than reading a resolved field. `reached_out` is filtered
+	// out HERE, once, rather than at each consumer.
+	const answeredRungs = allRungs.filter(
+		(r): r is { memberId: string; status: "coming" | "not_coming" } =>
+			r.status !== "reached_out",
+	);
 ```
 
-Add `plan` to the returned object, next to `contactedMemberIds`. Add `listPlanForMeetings` to the existing `./attendance-plan-logic` import.
+Add both `plan` and `answeredRungs` to the returned object, next to `contactedMemberIds`. Add `listPlanForMeetings` to the existing `./attendance-plan-logic` import. `loadMeetingDetailForTest` must use the SAME two expressions — if it derives them differently it is testing itself.
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
@@ -627,14 +676,38 @@ git commit -m "feat(server): carry the whole plan ladder on the meeting payload"
   export function MeetingAttendancePanel(props: {
   	roster: Omit<PanelMember, "status" | "roleName">[];
   	plan: { memberId: string; status: PlanStatus }[];
+  	/** Optimistic overrides from the route, keyed by member. A key present with
+  	 *  value `null` means "optimistically cleared" — distinct from absent,
+  	 *  which means "no override". */
+  	rungOverride: Readonly<Record<string, PlanStatus | null>>;
   	roleByMemberId: Readonly<Record<string, string>>;
   	meetingDate: string;
   	shareUrl: string;
   	locked: boolean;
-  	onSetStatus: (memberId: string, status: PlanStatus) => void | Promise<void>;
-  	onClearStatus: (memberId: string) => void | Promise<void>;
+  	/** One writer for both directions; `null` clears. Two callbacks made the
+  	 *  clear path a separate thing to remember at every call site. */
+  	onWriteRung: (
+  		memberId: string,
+  		next: PlanStatus | null,
+  	) => void | Promise<void>;
   	onContacted: (memberId: string) => void | Promise<void>;
   }): JSX.Element
+  ```
+
+  The component applies the override before calling `buildPlanPanel`, so sort
+  and counts both reflect the optimistic state and a chip does not jump rows a
+  beat after it is tapped:
+
+  ```ts
+  const effectivePlan = roster
+  	.map((m) => ({
+  		memberId: m.id,
+  		status:
+  			rungOverride[m.id] !== undefined
+  				? rungOverride[m.id]
+  				: (plan.find((p) => p.memberId === m.id)?.status ?? null),
+  	}))
+  	.filter((p): p is { memberId: string; status: PlanStatus } => p.status !== null);
   ```
 
 - [ ] **Step 1: Write the failing test**
@@ -725,6 +798,54 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		const { getByText } = renderPanel({ roleByMemberId: { m2: "Timer" } });
 		expect(getByText("Timer")).toBeTruthy();
 	});
+
+	it("renders the optimistic override, not the server value", () => {
+		// The whole point of the optimistic path: the chip changes on tap, before
+		// any server round trip. Rendering `plan` here would show the stale rung
+		// and the officer would tap twice.
+		const { getByRole } = renderPanel({
+			plan: [{ memberId: "m1", status: "not_coming" as const }],
+			rungOverride: { m1: "coming" as const },
+		});
+		expect(
+			getByRole("button", { name: /Ayesha Khan status/i }).textContent,
+		).toContain("Coming");
+	});
+
+	it("treats an override of null as cleared, not as absent", () => {
+		// `null` and "no key" are different states and `??` cannot tell them
+		// apart — an optimistic CLEAR would fall through to the server's old rung
+		// and the chip would appear not to have changed.
+		const { getByRole } = renderPanel({
+			plan: [{ memberId: "m1", status: "coming" as const }],
+			rungOverride: { m1: null },
+		});
+		expect(
+			getByRole("button", { name: /Ayesha Khan status/i }).textContent,
+		).toContain("—");
+	});
+
+	it("counts and sorts on the optimistic state too", () => {
+		// Otherwise the counts line disagrees with the chips for a beat, and the
+		// row jumps to its new bucket only after the refetch.
+		const { getByText } = renderPanel({
+			plan: [],
+			rungOverride: { m1: "coming" as const },
+		});
+		expect(getByText("1 coming · 1 no answer")).toBeTruthy();
+	});
+
+	it("collapses to the counts line below lg, and expands on tap", () => {
+		// Spec D4: in plan mode on mobile the panel renders collapsed, so a
+		// 15-person roster does not push the agenda off screen. The rows are
+		// absent from the DOM when collapsed rather than merely hidden — a
+		// `hidden` class is invisible to this assertion and to a screen reader.
+		const { getByRole, queryByText, getByText } = renderPanel();
+		expect(getByText("2 no answer")).toBeTruthy();
+		expect(queryByText("Ayesha Khan")).toBeNull();
+		fireEvent.click(getByRole("button", { name: /show|expand/i }));
+		expect(getByText("Ayesha Khan")).toBeTruthy();
+	});
 });
 ```
 
@@ -778,7 +899,9 @@ The panel body renders `<Card>` with the title "Planned attendance", the `counts
 - `<NudgeButtons mode="attendance" … onContacted={() => onContacted(m.id)} />` with no `roleName`.
 - `{m.roleName ? <Badge variant="secondary">{m.roleName}</Badge> : null}`.
 
-Per-row in-flight state uses the `pendingId` pattern lifted from `OutreachPanel` (a single `useState<string|null>`, set before the await and cleared in a `finally`), which also guards a rapid double-tap on one member.
+Per-row in-flight state uses the `pendingId` pattern lifted from `OutreachPanel` (a single `useState<string|null>`, set before the await and cleared in a `finally`), which guards a rapid double-tap on one member. It is a BUSY guard, not the optimism — the chip's displayed value comes from `rungOverride`, which the route owns.
+
+**Mobile collapse (spec D4).** Below `lg`, plan mode renders collapsed to the counts line so a 15-person roster does not push the agenda off screen; roll mode (PR 3) will render expanded. Implement with a `useState(false)` for `expanded` and render the row list only when `expanded || isDesktop`, where `isDesktop` is a `lg:` presentational split — **two renders of the header, one `lg:hidden` with a toggle button and one `hidden lg:block` without**, rather than a CSS `hidden` on the list. The rows must be ABSENT from the DOM when collapsed, not merely invisible: a `hidden` class still ships 15 members' names to a screen reader and to the test above, so the collapse would be untestable and only half-real.
 
 Do **not** use `<DropdownMenuItem asChild>` with an anchor — #541's link-color split. These items are buttons.
 
@@ -807,60 +930,98 @@ git commit -m "feat(attendance): the planned-attendance panel in plan mode"
 - Consumes: `MeetingAttendancePanel` (Task 4), `plan` on the payload (Task 3), `meetingPhase` from `#/lib/meeting-lifecycle`
 - Produces: the panel rendered in plan mode only; write handlers calling `setPlannedAttendance` / `clearPlannedAttendance`.
 
-- [ ] **Step 1: Compute the mode**
+- [ ] **Step 1: Use the mode the route ALREADY computes**
 
-The route already computes `now`, `timezone` and `canComplete`. Add beside them:
+**Do not add a `meetingPhase` call.** `const phase = meetingPhase({...})` already exists at `club.$clubId.meeting.$meetingId.tsx:356`, and `meetingPhase` is already in the `#/lib/meeting-lifecycle` import block (line ~66). Adding a second call is not merely redundant: route:346 documents *"ONE clock for the whole render — every phase/freeze/completability"*, and the `now` at line 355 is deliberately a single frozen value. A second call written with an inline `new Date()` would let two components on one page disagree about the club-local day across midnight.
+
+Add ONE line, beside the other gates:
 
 ```ts
-	// Spec D2: the panel's mode is the EXISTING phase helper, no new date logic.
+	// Spec D2: plan mode is the EXISTING phase, reusing the route's frozen clock.
 	// PR 2 ships plan mode only — roll mode (`today` / `completed`) is PR 3, so
 	// the panel simply does not render outside `upcoming` yet.
-	const phase = meetingPhase({
-		status: meeting.status,
-		scheduledAt: meeting.scheduledAt,
-		timezone,
-		now,
-	});
 	const showPlanPanel = effectiveCanManage && phase === "upcoming";
 ```
 
-Add `meetingPhase` to the existing `#/lib/meeting-lifecycle` import.
-
-- [ ] **Step 2: Add the write handlers**
+Then lift the role map so both the agenda and the panel read ONE derivation. It lives at `meeting-agenda.tsx:220-222` today, inside the component, and the panel renders in the route as a sibling — so it is out of scope there. Move it up rather than deriving it twice: a second copy silently disagrees the moment `slotLabel` changes.
 
 ```ts
-	async function setRung(memberId: string, status: PlanStatus) {
-		try {
-			await setPlannedAttendance({
-				data: { memberId, meetingId: meeting.id, status },
-			});
-			await router.invalidate();
-		} catch (e) {
-			toast.error(e instanceof Error ? e.message : "Couldn't save that.");
-		}
+	// Lifted from <MeetingAgenda> so the agenda and the panel share one map.
+	const roleCounts = buildRoleCounts(slots);
+	const roleByMemberId: Record<string, string> = {};
+	for (const s of slots) {
+		if (s.assigneeId) roleByMemberId[s.assigneeId] = slotLabel(s, roleCounts);
 	}
+```
 
-	async function clearRung(memberId: string) {
+`buildRoleCounts` and `slotLabel` are already exported from `#/lib/agenda`. Delete the loop from `meeting-agenda.tsx` and take `roleByMemberId` as a prop there instead.
+
+- [ ] **Step 2: Add the write handlers — OPTIMISTIC, with rollback**
+
+The spec's Error handling says *"optimistic per-row update with rollback and a toast on failure"*. `await` + `router.invalidate()` is neither: it refetches the whole meeting payload — slots, roster, minutes, action items — for one chip, and an officer chasing a 15-person roster pays that per tap on a ~340px rail. `pendingId` is a busy guard, not optimism.
+
+Hold an override map in the route and let the panel render `override ?? server`:
+
+```ts
+	// Optimistic rung overrides, keyed by member. `undefined` = no override, so
+	// a member can be optimistically cleared to `null` and still be
+	// distinguishable from "not touched" — which `??` alone cannot express.
+	const [rungOverride, setRungOverride] = useState<
+		Record<string, PlanStatus | null>
+	>({});
+
+	async function writeRung(memberId: string, next: PlanStatus | null) {
+		const previous = plan.find((p) => p.memberId === memberId)?.status ?? null;
+		setRungOverride((o) => ({ ...o, [memberId]: next }));
 		try {
-			await clearPlannedAttendance({
-				data: { memberId, meetingId: meeting.id },
-			});
-			await router.invalidate();
+			await (next === null
+				? clearPlannedAttendance({ data: { memberId, meetingId: meeting.id } })
+				: setPlannedAttendance({
+						data: { memberId, meetingId: meeting.id, status: next },
+					}));
 		} catch (e) {
+			// Roll back to what the server last told us, not to `null` — reverting
+			// to empty would silently erase a rung the officer did not touch.
+			setRungOverride((o) => ({ ...o, [memberId]: previous }));
 			toast.error(e instanceof Error ? e.message : "Couldn't save that.");
 		}
 	}
 ```
 
-Import both from `#/server/attendance-plan`. Note the payload takes **no `clubId`** — the server derives it from the meeting (#396); do not add one.
+Import both server fns from `#/server/attendance-plan`. The payload takes **no `clubId`** — the server derives it from the meeting (#396); do not add one.
 
-`onContacted` advances no-answer → reached out and must **not** touch a member who already answered (spec D5):
+Drop the override for a member once the server payload agrees, so the map cannot grow unboundedly across a long session:
+
+```ts
+	// biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the
+	// server payload only — including `rungOverride` would re-run on every write.
+	useEffect(() => {
+		setRungOverride((o) => {
+			const next = { ...o };
+			let changed = false;
+			for (const [memberId, value] of Object.entries(o)) {
+				const server =
+					plan.find((p) => p.memberId === memberId)?.status ?? null;
+				if (server === value) {
+					delete next[memberId];
+					changed = true;
+				}
+			}
+			return changed ? next : o;
+		});
+	}, [plan]);
+```
+
+`onContacted` advances no-answer → reached out and must **not** touch a member who already answered (spec D5). Read through the override so a chip set a moment ago counts:
 
 ```ts
 	async function markAsked(memberId: string) {
-		const current = plan.find((p) => p.memberId === memberId)?.status ?? null;
+		const current =
+			rungOverride[memberId] !== undefined
+				? rungOverride[memberId]
+				: (plan.find((p) => p.memberId === memberId)?.status ?? null);
 		if (current !== null) return;
-		await setRung(memberId, "reached_out");
+		await writeRung(memberId, "reached_out");
 	}
 ```
 
@@ -876,12 +1037,12 @@ Wrap the existing body in the two-column layout. At `≥ lg` the agenda takes th
 			<MeetingAttendancePanel
 				roster={roster}
 				plan={plan}
+				rungOverride={rungOverride}
 				roleByMemberId={roleByMemberId}
-				meetingDate={formatCalendarDay(meeting.scheduledAt, timezone)}
-				shareUrl={shareUrl}
+				meetingDate={nudgeDate}
+				shareUrl={nudgeShareUrl}
 				locked={locked}
-				onSetStatus={setRung}
-				onClearStatus={clearRung}
+				onWriteRung={writeRung}
 				onContacted={markAsked}
 			/>
 		</aside>
@@ -891,7 +1052,7 @@ Wrap the existing body in the two-column layout. At `≥ lg` the agenda takes th
 
 `min-w-0` on the left column is required — without it the flex child will not shrink and the agenda pushes the rail off screen.
 
-Mobile collapse (spec D4: plan mode renders collapsed to its counts line) is a `useState` inside the panel; add it in Task 4's component if not already present, defaulting to collapsed below `lg` via a `lg:block` / `hidden` pair on the row list plus a tap target on the header.
+Note `nudgeShareUrl` (route:445) and `nudgeDate` (route:450) already exist and feed the slot cards' drafts; reuse them rather than deriving a second date or URL. The route does NOT have `shareUrl` or a `formatCalendarDay` call.
 
 - [ ] **Step 4: Write the wiring guard**
 
@@ -929,6 +1090,20 @@ describe("attendance panel route wiring (PR 2)", () => {
 		// all through meeting day and would do the opposite.
 		expect(src).toContain('phase === "upcoming"');
 		expect(src).toContain("effectiveCanManage && phase");
+	});
+
+	it("computes the phase exactly once, on the route's frozen clock", () => {
+		// route:346 documents ONE clock for the whole render. A second
+		// `meetingPhase(` call — especially one with an inline `new Date()` — lets
+		// two components disagree about the club-local day across midnight.
+		expect(src.split("meetingPhase({").length - 1).toBe(1);
+	});
+
+	it("reads the member's own rung from the PUBLIC array", () => {
+		// `plan` is admin-only, so filtering it for `myId` reads null forever for
+		// a plain member: they answer, the page reloads, and the strip asks again.
+		expect(src).toContain("answeredRungs.find");
+		expect(src).not.toContain("plan.find((p) => p.memberId === myId)");
 	});
 
 	it("hides the panel from preview-as-member", () => {
@@ -1047,7 +1222,14 @@ Expected: FAIL on all four — nothing is deleted yet.
 git rm src/components/club/outreach-panel.tsx src/components/club/outreach-panel.test.tsx
 ```
 
-In `src/components/agenda/meeting-agenda.tsx`: delete the `OutreachPanel` import, the `{showPlanningPanels ? <OutreachPanel …/> : null}` block, and the whole `{showPlanningPanels && unavailableMembers.length > 0 ? <section>…Not available this week…</section> : null}` block. Then remove every prop that fed only those two — `contactedMemberIds`, `comingMemberIds`, `unavailableMemberIds`, `unavailableMembers`, `onContacted`, `onUncontacted` — from `MeetingAgendaProps` and from the destructure, and delete the now-unused handlers in the route.
+In `src/components/agenda/meeting-agenda.tsx`: delete the `OutreachPanel` import, the `{showPlanningPanels ? <OutreachPanel …/> : null}` block (line ~443), and the whole `{showPlanningPanels && unavailableMembers.length > 0 ? <section>…Not available this week…</section> : null}` block (line ~425). Then remove every prop that fed only those two — `contactedMemberIds`, `comingMemberIds`, `unavailableMemberIds`, `unavailableMembers`, `onContacted`, `onUncontacted` — from `MeetingAgendaProps` and from the destructure, and delete the now-unused handlers in the route.
+
+**Two symbols go orphan when those blocks do**, and strict TS's no-unused-locals will catch them but the plan should not leave it to chance:
+
+- `showPlanningPanels` (`meeting-agenda.tsx:232`, `viewer.canManage && !meetingOver`) gated ONLY those two blocks. Delete it. Its job moved to the route's `showPlanPanel`, which gates on the phase rather than on `!meetingOver` — a deliberate narrowing, since `!meetingOver` is still true all through meeting day.
+- `meetingOver` may lose its last consumer with it. Grep before deleting; it likely has others.
+
+Also delete `roleByMemberId`'s derivation here (lines ~220-222) and take it as a prop — Task 5 Step 1 lifted it to the route.
 
 In `src/server/meetings.ts`: delete the `unavailableMemberIds`, `contactedMemberIds` and `comingMemberIds` payload fields and the loaders that fed only them (`listNotComingWithNames` stays only if another consumer remains — check with a grep; `listReachedOutForMeeting` and `listComingForMeeting` become unused and their seam exports can stay, since the seam is allowed to hold unused readers PR 3 will want).
 
@@ -1134,11 +1316,26 @@ Expected: FAIL — `myStatus` is not a prop.
 
 Swap `myUnavailable: boolean` for `myStatus: PlanStatus | null` and `onToggleAvailability: () => void` for `onSetStatus: (s: PlanStatus | null) => void`. Render two buttons when `myStatus === null` ("I'll be there" → `"coming"`, "I can't make this one" → `"not_coming"`), and a single confirmation with an undo (→ `null`) once an answer exists. Keep the existing `availBusy` disable and the `canToggleAvailability` gate untouched.
 
-- [ ] **Step 4: Wire the route**
+- [ ] **Step 4: Wire the route from the PUBLIC array**
 
-Pass `myStatus={plan.find((p) => p.memberId === myId)?.status ?? null}` and `onSetStatus={(s) => (s === null ? clearRung(myId) : setRung(myId, s))}`.
+```ts
+	const myStatus = myId
+		? (answeredRungs.find((r) => r.memberId === myId)?.status ?? null)
+		: null;
+```
 
-**The payload's `plan` is admin-only** (Task 3), so a plain member's `plan` is `[]` and their own rung would always read `null`. Add a `myPlanStatus` field to the payload beside `plan`, resolved for the identified member regardless of `canManage` — it is their own answer, not officer-private — and read the strip's prop from that instead.
+and `onSetStatus={(s) => myId && writeRung(myId, s)}`.
+
+**Read `answeredRungs`, never `plan`.** `plan` is admin-only (Task 3), so a plain member's copy is `[]` and their own rung would read `null` forever — they would answer, the page would reload, and the strip would offer the question again. This mirrors `myUnavailable` at route:451 exactly: a public array filtered by the client-known `myId`, because the server cannot resolve "my" for an anonymous roster pick.
+
+Do NOT add a server-resolved `myPlanStatus`. It cannot work for the dominant identity path, and the tempting repair — widening `plan` to everyone — publishes the officer-only `reached_out` rung.
+
+The strip must also apply `rungOverride` so the member's own tap is instant, same as the panel's chips:
+
+```ts
+	const myEffectiveStatus =
+		myId && rungOverride[myId] !== undefined ? rungOverride[myId] : myStatus;
+```
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
@@ -1199,10 +1396,33 @@ Run `/review` for the adversarial pass, then `/ship`. Expect a MINOR bump (new u
 
 **Deliberately deferred to PR 3, per the spec:** roll mode, the dashed suggestion rendering, the guests group, deleting the Minutes `AttendanceSection`, and lifting the #176 offline queue into `useMinutesOfflineQueue`. Plan-mode writes are online-only.
 
-**One risk flagged during writing, resolved in Task 7 Step 4:** the payload's `plan` array is admin-only, which would have left a plain member's own rung reading `null` forever on the personal strip. That is the same class as #319 — a prop that type-checks, renders, and is silently wrong. Task 7 adds a separate `myPlanStatus` rather than widening the officer-private array.
+**One risk flagged during writing:** the payload's `plan` array is admin-only, which would leave a plain member's own rung reading `null` forever on the personal strip — the #319 class, type-clean and silently wrong. The first draft resolved it with a server-side `myPlanStatus`; `/plan-eng-review` found that impossible (the viewer is client-side only) and it became the public `answeredRungs` array. See the report below.
 
 ---
 
-## Execution Handoff
+## GSTACK REVIEW REPORT
 
-Plan complete and saved to `docs/superpowers/plans/2026-08-15-planned-attendance-pr2-panel.md`.
+| Review | Runs | Status | Findings |
+|---|---|---|---|
+| Eng Review (plan) | 1 | COMPLETE | 8 (1 P1, 4 P2, 3 P3) — all resolved into the plan |
+| Scope challenge | 1 | TRIGGERED (18 files) | Proceed as-is, all 8 tasks — user decision |
+| Outside voice | 0 | SKIPPED | Codex disabled in this repo (no OpenAI credentials) |
+
+**Findings and resolutions**
+
+| # | Sev | Conf | Finding | Resolution |
+|---|---|---|---|---|
+| A1 | P1 | 9/10 | `myPlanStatus` cannot be resolved server-side: the viewer is known only on the client (`useEffectiveMember`, route:288); `myUnavailable` filters an array at route:451. The tempting repair — widening `plan` — leaks the officer-only `reached_out`. | Task 3 now ships TWO arrays: admin-only `plan` (all rungs) and public `answeredRungs` (`coming`/`not_coming` only). Task 7 reads the public one. New payload test asserts `reached_out` never appears on it, for either caller, with an anti-vacuity length check first. |
+| A2 | P2 | 9/10 | The panel renders in the route (for the rail) but `roleByMemberId` is derived inside `MeetingAgenda` (line 220). | Task 5 Step 1 lifts the derivation to the route; Task 6 deletes the component-local copy and takes it as a prop. One derivation, two consumers. |
+| P1 | P2 | 8/10 | Plan contradicted the spec: spec asks for optimistic-with-rollback, plan did `await` + `router.invalidate()` — a full meeting-payload refetch per chip, on a 15-person chase. | Task 5 Step 2 rewritten optimistic: a `rungOverride` map in the route, rollback to the previous SERVER value on failure, and an effect that drops an override once the payload agrees. Three new panel tests cover override rendering, `null`-vs-absent, and counts/sort on optimistic state. |
+| Q1 | P2 | 10/10 | Task 5 added a second `meetingPhase({...})`; route:356 already computes it on the frozen `now`, and route:346 documents "ONE clock for the whole render". | Step 1 rewritten to reuse it, with the reason stated. Wiring guard now asserts exactly one `meetingPhase({` in the route. |
+| T1 | P2 | 9/10 | D4's mobile collapse was a placeholder ("add it if not already present") with no test — the TBD pattern `writing-plans` forbids. | Specified concretely in Task 4: two header renders (`lg:hidden` with toggle, `hidden lg:block` without) and rows ABSENT from the DOM when collapsed, not `hidden`. New test asserts collapse and expand. |
+| T2 | P2 | 9/10 | Nothing guarded `reached_out` staying off the public payload — load-bearing once A1 introduced two arrays. | Covered by the new Task 3 test above. |
+| Q2 | P3 | 10/10 | Wrong identifiers: plan used `shareUrl` / `formatCalendarDay`; route has `nudgeShareUrl` (445) and `nudgeDate` (450). | Corrected in Task 5 Step 3, with a note not to derive a second date or URL. |
+| Q3 | P3 | 8/10 | `showPlanningPanels` (`meeting-agenda.tsx:232`) gates only the two deleted surfaces and goes orphan; `meetingOver` may follow. | Task 6 now names both, and explains that the gate narrowed deliberately (phase, not `!meetingOver`). |
+
+**VERDICT: APPROVED WITH CHANGES — all eight findings resolved into the plan; ready for `subagent-driven-development`.**
+
+The plan changed materially in three places (Tasks 3, 5, 7). Anyone who read the pre-review version should re-read those before implementing.
+
+NO UNRESOLVED DECISIONS
