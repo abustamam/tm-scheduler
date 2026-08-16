@@ -13,6 +13,7 @@ import { getActiveImpersonation } from "./impersonation-logic";
 import {
 	addGuestPresent,
 	addTableTopicsSpeaker,
+	assertAttendanceRecordable,
 	clearAward,
 	getMeetingClubId,
 	getMeetingStatus,
@@ -121,6 +122,7 @@ export const setAttendance = createServerFn({ method: "POST" })
 	.validator((input: unknown) => setPresenceSchema.parse(input))
 	.handler(async ({ data }) => {
 		await gateAdmin(data.meetingId);
+		await assertAttendanceRecordable(data.meetingId);
 		await setMemberPresence(data);
 		return { ok: true as const };
 	});
@@ -144,6 +146,7 @@ export const addMinutesGuest = createServerFn({ method: "POST" })
 	.validator((input: unknown) => addGuestSchema.parse(input))
 	.handler(async ({ data }) => {
 		await gateAdmin(data.meetingId);
+		await assertAttendanceRecordable(data.meetingId);
 		return addGuestPresent(data);
 	});
 
@@ -155,6 +158,7 @@ export const removeMinutesGuest = createServerFn({ method: "POST" })
 	.validator((input: unknown) => removeGuestSchema.parse(input))
 	.handler(async ({ data }) => {
 		await gateAdmin(data.meetingId);
+		await assertAttendanceRecordable(data.meetingId);
 		await removeGuestPresent(data);
 		return { ok: true as const };
 	});

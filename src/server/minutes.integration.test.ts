@@ -10,16 +10,19 @@
  *
  * When TEST_DATABASE_URL is unset the whole suite is skipped.
  */
+import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	guests,
 	meetingAttendance,
 	meetingAwards,
+	meetings,
 	roleDefinitions,
 	roleSlots,
 	tableTopicsSpeakers,
 } from "#/db/schema";
+import { ATTENDANCE_BEFORE_MEETING_MESSAGE } from "#/lib/meeting-lifecycle";
 import {
 	cleanup,
 	hasTestDb,
@@ -33,6 +36,7 @@ vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 const {
 	addGuestPresent,
 	addTableTopicsSpeaker,
+	assertAttendanceRecordable,
 	clearAward,
 	loadMinutes,
 	moveTableTopicsSpeaker,
@@ -412,5 +416,63 @@ describe.skipIf(!hasTestDb)("meeting minutes (#152)", () => {
 			"best_table_topics",
 		]);
 		expect(m.awards.every((a) => a.name === null)).toBe(true);
+	});
+
+	describe("attendance cannot be recorded before the meeting day", () => {
+		// `meeting_attendance` is the RECORD of who was in the room, and it is not
+		// inert: it feeds the minutes PDF, the minutes email and the reporting
+		// derivations. `gateAdmin` answers WHO may write and said nothing about
+		// WHEN, so an officer could mark a member present on a meeting weeks away
+		// and the false row propagated. The guest path already held this rule; the
+		// officer path did not.
+		//
+		// `seedClub` schedules its meeting +7 days, so the default fixture IS the
+		// rejection case and the allow cases move the date.
+		async function moveMeetingTo(daysFromNow: number): Promise<void> {
+			await testDb
+				.update(meetings)
+				.set({
+					scheduledAt: new Date(Date.now() + daysFromNow * 24 * 60 * 60 * 1000),
+				})
+				.where(eq(meetings.id, seed.meetingId));
+		}
+
+		it("rejects a future meeting, and writes nothing", async () => {
+			await expect(assertAttendanceRecordable(seed.meetingId)).rejects.toThrow(
+				ATTENDANCE_BEFORE_MEETING_MESSAGE,
+			);
+
+			// The observable that matters. A gate asserted only by its throw would
+			// still pass if a caller ran it and then wrote anyway, so check the
+			// table: nothing landed.
+			const rows = await testDb
+				.select()
+				.from(meetingAttendance)
+				.where(eq(meetingAttendance.meetingId, seed.meetingId));
+			expect(rows).toEqual([]);
+		});
+
+		it("allows the meeting DAY itself — roll call is taken at the meeting", async () => {
+			// The case `isMeetingOver` would get wrong: it is false all through
+			// meeting day, so gating on it would hide roll call exactly when it is
+			// taken. This test fails if the predicate is swapped for that one.
+			await moveMeetingTo(0);
+			await expect(
+				assertAttendanceRecordable(seed.meetingId),
+			).resolves.toBeUndefined();
+		});
+
+		it("allows a past meeting — minutes are usually filled in afterwards", async () => {
+			await moveMeetingTo(-3);
+			await expect(
+				assertAttendanceRecordable(seed.meetingId),
+			).resolves.toBeUndefined();
+		});
+
+		it("rejects a meeting that does not exist", async () => {
+			await expect(assertAttendanceRecordable(randomUUID())).rejects.toThrow(
+				"Meeting not found.",
+			);
+		});
 	});
 });

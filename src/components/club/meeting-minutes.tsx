@@ -90,6 +90,7 @@ export function MeetingMinutes({
 	minutes,
 	program,
 	meetingPast,
+	meetingDayReached,
 	canEdit,
 	clubGuests,
 	onMutated,
@@ -105,6 +106,16 @@ export function MeetingMinutes({
 	 * hidden — it would only duplicate the role cards above (#225).
 	 */
 	meetingPast: boolean;
+	/**
+	 * True once the meeting's club-local DAY has arrived — a LOOSER rule than
+	 * `meetingPast`, and the two must not be conflated here. Attendance is taken
+	 * AT the meeting, and `meetingPast` (`isMeetingOver`) stays false all through
+	 * meeting day, so gating roll call on it would hide the recorder exactly when
+	 * it is needed. Same predicate that decides whether a meeting can be
+	 * completed at all, and the same one `assertAttendanceRecordable` enforces
+	 * server-side — the UI hides what the server would reject.
+	 */
+	meetingDayReached: boolean;
 	canEdit: boolean;
 	clubGuests: { id: string; name: string }[];
 	onMutated: () => void | Promise<void>;
@@ -301,8 +312,9 @@ export function MeetingMinutes({
 				<div className="space-y-1">
 					<CardTitle>Minutes</CardTitle>
 					<CardDescription>
-						Attendance, Table Topics speakers, and awards — the record of what
-						happened.
+						{meetingDayReached
+							? "Attendance, Table Topics speakers, and awards — the record of what happened."
+							: "Table Topics speakers and awards. Attendance opens on the day."}
 					</CardDescription>
 				</div>
 				<div className="flex items-center gap-2">
@@ -339,44 +351,70 @@ export function MeetingMinutes({
 					onRetry={() => runDrain(queue)}
 				/>
 				<ActionItemsSection items={displayMinutes.actionItems} />
-				<AttendanceSection
-					minutes={displayMinutes}
-					canEdit={canEdit}
-					busy={busy}
-					clubGuests={clubGuests}
-					onSetStatus={(memberId, status) =>
-						mutate(
-							() => setAttendance({ data: { meetingId, memberId, status } }),
-							() => ({ type: "setAttendance", ...opMeta(), memberId, status }),
-						)
-					}
-					onAddGuest={(payload) =>
-						mutate(
-							() => addMinutesGuest({ data: { meetingId, ...payload } }),
-							() =>
-								payload.newGuest
-									? {
-											type: "addGuest",
-											...opMeta(),
-											guestId: crypto.randomUUID(),
-											name: payload.newGuest.name,
-											newGuest: payload.newGuest,
-										}
-									: {
-											type: "addGuest",
-											...opMeta(),
-											guestId: payload.guestId as string,
-											name: guestName(payload.guestId as string),
-										},
-						)
-					}
-					onRemoveGuest={(guestId) =>
-						mutate(
-							() => removeMinutesGuest({ data: { meetingId, guestId } }),
-							() => ({ type: "removeGuest", ...opMeta(), guestId }),
-						)
-					}
-				/>
+				{/* Attendance is the RECORD of who was in the room, so it does not
+				    exist before the meeting day — `assertAttendanceRecordable` rejects
+				    the write, and rendering the recorder anyway would offer buttons
+				    that only error. Who is EXPECTED is the separate planned-attendance
+				    question (CONTEXT.md), which has no surface here yet.
+
+				    Deliberately `meetingDayReached`, not `meetingPast`: roll call is
+				    taken AT the meeting, and `meetingPast` (`isMeetingOver`) is false
+				    all through meeting day. */}
+				{meetingDayReached ? (
+					<AttendanceSection
+						minutes={displayMinutes}
+						canEdit={canEdit}
+						busy={busy}
+						clubGuests={clubGuests}
+						onSetStatus={(memberId, status) =>
+							mutate(
+								() => setAttendance({ data: { meetingId, memberId, status } }),
+								() => ({
+									type: "setAttendance",
+									...opMeta(),
+									memberId,
+									status,
+								}),
+							)
+						}
+						onAddGuest={(payload) =>
+							mutate(
+								() => addMinutesGuest({ data: { meetingId, ...payload } }),
+								() =>
+									payload.newGuest
+										? {
+												type: "addGuest",
+												...opMeta(),
+												guestId: crypto.randomUUID(),
+												name: payload.newGuest.name,
+												newGuest: payload.newGuest,
+											}
+										: {
+												type: "addGuest",
+												...opMeta(),
+												guestId: payload.guestId as string,
+												name: guestName(payload.guestId as string),
+											},
+							)
+						}
+						onRemoveGuest={(guestId) =>
+							mutate(
+								() => removeMinutesGuest({ data: { meetingId, guestId } }),
+								() => ({ type: "removeGuest", ...opMeta(), guestId }),
+							)
+						}
+					/>
+				) : (
+					// Say WHY it is missing. A section that silently disappears reads as
+					// a bug to the officer who used it last week.
+					<section className="space-y-1">
+						<h3 className="font-semibold text-sm">Attendance</h3>
+						<p className="text-[var(--sea-ink-soft)] text-xs">
+							Opens on the day of the meeting — attendance records who was
+							actually there.
+						</p>
+					</section>
+				)}
 
 				<TableTopicsCapture
 					speakers={displayMinutes.tableTopicsSpeakers}

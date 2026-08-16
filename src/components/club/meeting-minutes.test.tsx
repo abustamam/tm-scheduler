@@ -47,6 +47,7 @@ function renderMinutes(program: MinutesProgramRow[], meetingPast: boolean) {
 			minutes={emptyMinutes}
 			program={program}
 			meetingPast={meetingPast}
+			meetingDayReached={true}
 			canEdit={false}
 			clubGuests={[]}
 			onMutated={() => {}}
@@ -126,6 +127,7 @@ function renderWithActionItems(actionItems: MinutesData["actionItems"]) {
 			minutes={{ ...emptyMinutes, actionItems }}
 			program={[]}
 			meetingPast={true}
+			meetingDayReached={true}
 			canEdit={false}
 			clubGuests={[]}
 			onMutated={() => {}}
@@ -219,11 +221,76 @@ describe("MeetingMinutes action items (#529)", () => {
 					minutes={legacy as unknown as MinutesData}
 					program={[]}
 					meetingPast={true}
+					meetingDayReached={true}
 					canEdit={false}
 					clubGuests={[]}
 					onMutated={() => {}}
 				/>,
 			),
 		).not.toThrow();
+	});
+});
+
+describe("MeetingMinutes attendance is gated on the meeting day", () => {
+	afterEach(() => cleanup());
+
+	// The card is titled "the record of what happened", and before the meeting
+	// day nothing has. Worse than the wording: the server now REJECTS the write
+	// (`assertAttendanceRecordable`), so rendering the recorder would offer
+	// buttons that can only error. Who is EXPECTED is the separate
+	// planned-attendance question, which has no surface here yet.
+	function renderOnDay(meetingDayReached: boolean) {
+		return render(
+			<MeetingMinutes
+				meetingId="m1"
+				minutes={{
+					...emptyMinutes,
+					members: [
+						{
+							memberId: "mem1",
+							name: "Ayesha Khan",
+							status: null,
+							hasRole: false,
+						},
+					],
+					counts: {
+						present: 0,
+						absent: 0,
+						excused: 0,
+						unmarked: 1,
+						guests: 0,
+					},
+				}}
+				program={[]}
+				meetingPast={false}
+				meetingDayReached={meetingDayReached}
+				canEdit={true}
+				clubGuests={[]}
+				onMutated={() => {}}
+			/>,
+		);
+	}
+
+	it("hides the recorder before the meeting day, and says why", () => {
+		const { queryByRole, getByText } = renderOnDay(false);
+		// The member's row and its three buttons must be gone — asserting only on
+		// the heading would pass with the whole recorder still rendered beneath it.
+		expect(queryByRole("button", { name: "Present" })).toBeNull();
+		expect(queryByRole("button", { name: "Excused" })).toBeNull();
+		expect(queryByRole("button", { name: "Absent" })).toBeNull();
+		expect(getByText(/Opens on the day of the meeting/i)).toBeTruthy();
+		// And the card must stop claiming to be a record of what happened.
+		expect(getByText(/Attendance opens on the day/i)).toBeTruthy();
+	});
+
+	it("shows the recorder on the meeting day", () => {
+		// The positive control. Without it, a component that rendered nothing at
+		// all would pass the assertions above for the wrong reason.
+		const { getAllByRole, getByText } = renderOnDay(true);
+		expect(getAllByRole("button", { name: "Present" }).length).toBeGreaterThan(
+			0,
+		);
+		expect(getByText("Ayesha Khan")).toBeTruthy();
+		expect(getByText(/the record of what happened/i)).toBeTruthy();
 	});
 });

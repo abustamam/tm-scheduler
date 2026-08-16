@@ -84,6 +84,27 @@ describe("minutes capability boundary (#510)", () => {
 				"requireVoteCounterCapability(",
 			);
 		});
+
+		// WHO may write and WHEN it may be written are separate questions, and
+		// only the first was ever asked here. `gateAdmin` is `requireUser` +
+		// `requireClubRole(admin)` and says nothing about the date, so an officer
+		// could record attendance on a meeting weeks away — and the row is not
+		// inert: `meeting_attendance` feeds the minutes PDF, the minutes email and
+		// the reporting derivations, so a future-dated row is a false fact that
+		// propagates. The guest path already refused to write one; these three
+		// did not.
+		//
+		// Source-guarded because the call sits inside a `createServerFn` handler,
+		// which vitest cannot invoke. The seam's own behaviour (which dates pass,
+		// which are refused) is covered in `minutes.integration.test.ts`; this
+		// only proves the handler calls it, and the gap between those two is
+		// where the hole would come back.
+		it(`${name} also gates on the meeting date`, () => {
+			expect(
+				exportBody(SOURCE, name),
+				`${name} must call assertAttendanceRecordable — without it, attendance is writable on a meeting that has not happened, and the row reaches the minutes PDF, the minutes email and the reporting derivations.`,
+			).toContain("assertAttendanceRecordable(");
+		});
 	}
 });
 

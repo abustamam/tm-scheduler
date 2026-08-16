@@ -10,6 +10,7 @@ import { and, asc, desc, eq, isNotNull, lt, ne, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { db } from "#/db";
 import {
+	clubs,
 	guests,
 	meetingAttendance,
 	meetingAwards,
@@ -20,6 +21,10 @@ import {
 	speeches,
 	tableTopicsSpeakers,
 } from "#/db/schema";
+import {
+	ATTENDANCE_BEFORE_MEETING_MESSAGE,
+	meetingDateReached,
+} from "#/lib/meeting-lifecycle";
 import { toStoredPhone } from "#/lib/phone";
 import type { MinutesActionItems } from "./action-items-logic";
 import { loadActionItemsForMinutes } from "./action-items-logic";
@@ -152,6 +157,47 @@ export async function getMeetingClubId(meetingId: string): Promise<string> {
 		.limit(1);
 	if (!row) throw new Error("Meeting not found.");
 	return row.clubId;
+}
+
+/**
+ * Reject an attendance write before the meeting's club-local DAY has arrived.
+ *
+ * Attendance is the RECORD of who was in the room. Nothing about a meeting that
+ * has not happened can produce one, and the row is not inert: `meeting_attendance`
+ * feeds the minutes PDF, the minutes email and the reporting derivations, so a
+ * future-dated row is a false fact that propagates. Who is EXPECTED is the
+ * separate planned-attendance question (CONTEXT.md), reached through its own
+ * seam — deliberately not named here, so this module stays out of that store's
+ * offender list.
+ *
+ * `meetingDateReached`, NOT `isMeetingOver`. Over is `meetingDatePassed` —
+ * strictly BEFORE today — which would block roll call at the meeting itself,
+ * i.e. exactly when it is taken. Day granularity in the club's timezone is also
+ * what already decides whether a meeting can be completed at all ("a future
+ * meeting cannot be locked"), so recording the record and closing it now sit on
+ * one axis instead of two.
+ *
+ * The guest path already held this rule (`guest-pipeline-logic.ts` records a
+ * visit only while a meeting is in progress, "so a future-dated attendance row
+ * is" impossible). The officer path never got it: `gateAdmin` checks who you
+ * are and says nothing about when. This closes that asymmetry.
+ */
+export async function assertAttendanceRecordable(
+	meetingId: string,
+): Promise<void> {
+	const [row] = await db
+		.select({
+			scheduledAt: meetings.scheduledAt,
+			timezone: clubs.timezone,
+		})
+		.from(meetings)
+		.innerJoin(clubs, eq(clubs.id, meetings.clubId))
+		.where(eq(meetings.id, meetingId))
+		.limit(1);
+	if (!row) throw new Error("Meeting not found.");
+	if (!meetingDateReached(row.scheduledAt, row.timezone)) {
+		throw new Error(ATTENDANCE_BEFORE_MEETING_MESSAGE);
+	}
 }
 
 /** The meeting's lifecycle status — drives member read-only visibility. */

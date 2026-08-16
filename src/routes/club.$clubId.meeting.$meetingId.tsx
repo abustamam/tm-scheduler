@@ -940,6 +940,12 @@ function MeetingView() {
 						minutes={minutes.data}
 						program={minutes.program}
 						meetingPast={over}
+						// Same fact as `canComplete`, deliberately the one computation:
+						// recording the record and closing it sit on the same club-local
+						// day axis, so "you can take roll" and "you can complete this"
+						// turn on together. Passing `over` here would hide the recorder
+						// for the whole of meeting day, which is when roll is taken.
+						meetingDayReached={canComplete}
 						canEdit={effectiveCanManage && minutes.canEdit}
 						clubGuests={clubGuests}
 						onMutated={() => router.invalidate()}

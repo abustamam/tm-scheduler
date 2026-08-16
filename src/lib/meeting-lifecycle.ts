@@ -9,6 +9,19 @@ import { type MeetingViewer, meetingViewer } from "./meeting-viewer";
 /** The exact banner/lock copy shown on a completed meeting. */
 export const MEETING_LOCKED_MESSAGE = "This meeting is locked.";
 
+/**
+ * Rejection copy for recording attendance before the meeting day.
+ *
+ * Attendance is the RECORD of who was in the room, so it cannot exist for a
+ * meeting that has not happened. Who is EXPECTED is a different question with
+ * its own table — see CONTEXT.md's **Planned attendance** entry. Writing a plan
+ * into the record is the confusion this message exists to stop, and it matters
+ * because `meeting_attendance` feeds the minutes PDF, the minutes email and the
+ * reporting derivations.
+ */
+export const ATTENDANCE_BEFORE_MEETING_MESSAGE =
+	"Attendance can't be recorded before the meeting day.";
+
 /** True when the meeting is completed (locked, read-only). */
 export function isMeetingLocked(status: string): boolean {
 	return status === "completed";
