@@ -734,12 +734,12 @@ function renderPanel(over: Partial<Parameters<typeof MeetingAttendancePanel>[0]>
 	const props = {
 		roster,
 		plan: [],
+		rungOverride: {},
 		roleByMemberId: {},
 		meetingDate: "Tue 19 Aug",
 		shareUrl: "https://club.example/m",
 		locked: false,
-		onSetStatus: vi.fn(),
-		onClearStatus: vi.fn(),
+		onWriteRung: vi.fn(),
 		onContacted: vi.fn(),
 		...over,
 	};
@@ -762,7 +762,7 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		const { props, getByRole, findByRole } = renderPanel();
 		fireEvent.click(getByRole("button", { name: /Ayesha Khan status/i }));
 		fireEvent.click(await findByRole("menuitem", { name: "Coming" }));
-		expect(props.onSetStatus).toHaveBeenCalledWith("m1", "coming");
+		expect(props.onWriteRung).toHaveBeenCalledWith("m1", "coming");
 	});
 
 	it("clears back to no answer through the same menu", async () => {
@@ -772,9 +772,8 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		fireEvent.click(getByRole("button", { name: /Ayesha Khan status/i }));
 		fireEvent.click(await findByRole("menuitem", { name: "No answer" }));
 		// Clearing is a DELETE, not a fourth status — the row's absence is the
-		// only encoding of "no answer".
-		expect(props.onClearStatus).toHaveBeenCalledWith("m1");
-		expect(props.onSetStatus).not.toHaveBeenCalled();
+		// only encoding of "no answer". `null` is how the single writer says so.
+		expect(props.onWriteRung).toHaveBeenCalledWith("m1", null);
 	});
 
 	it("disables the chips on a locked meeting rather than hiding them", () => {
@@ -895,7 +894,7 @@ The panel body renders `<Card>` with the title "Planned attendance", the `counts
 
 - The name, truncating (`truncate` + `min-w-0` on the flex child — without `min-w-0` a flex item refuses to shrink below its content and the row overflows the ~340px rail).
 - A `DropdownMenu` whose trigger is `<Button variant="outline" size="sm" disabled={locked} aria-label={`${m.name} status`}>` showing `m.status ? RUNG_LABELS[m.status] : "—"`. The `aria-label` is what the tests query and what a screen reader reads; the visible text alone is ambiguous across rows.
-- Menu items map to `onClearStatus(m.id)` for `status: null`, else `onSetStatus(m.id, status)`.
+- Every menu item calls `onWriteRung(m.id, status)` — including "No answer", which passes `null`. One writer, both directions.
 - `<NudgeButtons mode="attendance" … onContacted={() => onContacted(m.id)} />` with no `roleName`.
 - `{m.roleName ? <Badge variant="secondary">{m.roleName}</Badge> : null}`.
 
@@ -1229,7 +1228,7 @@ In `src/components/agenda/meeting-agenda.tsx`: delete the `OutreachPanel` import
 - `showPlanningPanels` (`meeting-agenda.tsx:232`, `viewer.canManage && !meetingOver`) gated ONLY those two blocks. Delete it. Its job moved to the route's `showPlanPanel`, which gates on the phase rather than on `!meetingOver` — a deliberate narrowing, since `!meetingOver` is still true all through meeting day.
 - `meetingOver` may lose its last consumer with it. Grep before deleting; it likely has others.
 
-Also delete `roleByMemberId`'s derivation here (lines ~220-222) and take it as a prop — Task 5 Step 1 lifted it to the route.
+`roleByMemberId` is NOT this task's business — Task 5 Step 1 already lifted its derivation to the route and converted it to a prop here. Leave it alone.
 
 In `src/server/meetings.ts`: delete the `unavailableMemberIds`, `contactedMemberIds` and `comingMemberIds` payload fields and the loaders that fed only them (`listNotComingWithNames` stays only if another consumer remains — check with a grep; `listReachedOutForMeeting` and `listComingForMeeting` become unused and their seam exports can stay, since the seam is allowed to hold unused readers PR 3 will want).
 
