@@ -2,6 +2,12 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.18.0.1] - 2026-08-17
+
+### Fixed
+
+- **Nothing user-facing.** Repairs the one check a freshly-created worktree gets. `bun run worktree:setup` tells you to verify with `git status --porcelain` and expect no output, and it had stopped delivering that: `codeledger init` re-appends a fixed onboarding block to two tracked, hand-curated agent-rule files, so every bootstrap dirtied them by 42 lines each. The signal that the bootstrap behaved was reading red for a known cause, which is the fastest way to teach people to ignore it. The block is discarded after `init` runs, scoped to exactly those two files.
+
 ## [1.18.0.0] - 2026-08-17
 
 ### Added
