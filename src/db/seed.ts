@@ -57,6 +57,25 @@ function dayAt(days: number, hour: number) {
 }
 
 /** A join date `years`/`months` before today (for realistic tenure spread). */
+/**
+ * A distinct, dial-safe fictional number per seeded person.
+ *
+ * Every seeded person needs one because `NudgeButtons` renders the WhatsApp
+ * draft ONLY when a phone is present. Seeding none — as this file did until
+ * #576 — meant the tap-to-nudge affordance the meeting page is built around
+ * could not be exercised locally at all: every row fell back to Email, and a
+ * WhatsApp-specific regression (a malformed `wa.me` URL, platform detection,
+ * the `data-slot="wa-phone"` link-colour exclusion) would reach production
+ * without anyone having seen it. Found by /qa on v1.15.0.0.
+ *
+ * Uses the +1 202 555 0100-0199 block, which is reserved for fiction, so a
+ * mis-sent draft during local testing cannot reach a real person. Deterministic
+ * by index, so a re-seed does not reshuffle who has which number.
+ */
+function seedPhone(index: number): string {
+	return `+1202555${String(100 + index).padStart(4, "0")}`;
+}
+
 function joinedAgo(years: number, months = 0) {
 	const d = new Date();
 	d.setFullYear(d.getFullYear() - years);
@@ -73,6 +92,10 @@ function joinedThisYear(daysAgo: number) {
 interface RosterEntry {
 	name: string;
 	email: string;
+	/** Omitted ⇒ a generated fictional number (see `seedPhone`). Set it only to
+	 *  seed a SPECIFIC shape — a missing number, a local format needing the
+	 *  club's dialing code — since the default already covers the common case. */
+	phone?: string | null;
 	officerPosition?: OfficerPosition;
 	joinedAt?: Date;
 	status?: "active" | "inactive";
@@ -163,9 +186,10 @@ async function seedClub(opts: {
 	const insertedPeople = await db
 		.insert(people)
 		.values(
-			opts.roster.map((r) => ({
+			opts.roster.map((r, i) => ({
 				name: r.name,
 				email: r.email,
+				phone: r.phone === undefined ? seedPhone(i) : r.phone,
 				userId: userIdByEmail.get(r.email)!,
 			})),
 		)
@@ -175,11 +199,12 @@ async function seedClub(opts: {
 	const insertedMembers = await db
 		.insert(members)
 		.values(
-			opts.roster.map((r) => ({
+			opts.roster.map((r, i) => ({
 				clubId: club.id,
 				personId: personByName.get(r.name)!,
 				name: r.name,
 				email: r.email,
+				phone: r.phone === undefined ? seedPhone(i) : r.phone,
 				status: r.status ?? "active",
 				joinedAt: r.joinedAt ?? joinedAgo(2),
 				clubRole: defaultClubRoleForOffices(
