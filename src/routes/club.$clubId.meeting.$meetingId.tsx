@@ -73,7 +73,7 @@ import {
 import { deriveMeetingNavItems } from "#/lib/meeting-nav";
 import { deriveMeetingRoleFlags, pairedRoleIds } from "#/lib/meeting-roles";
 import { useEffectiveMember } from "#/lib/member-identity";
-import { deriveRollAttendance } from "#/lib/roll-attendance";
+import { deriveRollAttendance, deriveRollGuests } from "#/lib/roll-attendance";
 import { footerDate } from "#/lib/slide-layout";
 import { hasWordOfTheDay } from "#/lib/word-poster";
 import { getOpenActionItems } from "#/server/action-items";
@@ -482,6 +482,23 @@ function MeetingView() {
 	const rollAttendance = useMemo(
 		() =>
 			deriveRollAttendance({
+				online,
+				minutes: minutes.data,
+				snapshot: offlineMinutes.snapshot,
+				queue: offlineMinutes.queue,
+			}),
+		[online, minutes.data, offlineMinutes.snapshot, offlineMinutes.queue],
+	);
+	// The guests go through the SAME projection, for the same reason and one
+	// control to the right (fix round 2). Raw loader rows left an offline
+	// "+ Add guest" invisible AND kept the guest in the picker, since
+	// `AttendanceGuestsGroup` builds its already-present filter from this very
+	// list and holds no optimism of its own. Stays possibly-`undefined` — the prop
+	// is optional precisely so a caller with no guests wired renders nothing
+	// instead of an empty group.
+	const rollGuests = useMemo(
+		() =>
+			deriveRollGuests({
 				online,
 				minutes: minutes.data,
 				snapshot: offlineMinutes.snapshot,
@@ -1505,7 +1522,7 @@ function MeetingView() {
 							// type-errors nor fails a component test. `attendance-panel-wiring
 							// .guard.test.ts` is what watches them.
 							attendance={rollAttendance}
-							guests={minutes.data?.guests}
+							guests={rollGuests}
 							clubGuests={clubGuests}
 							// Once the meeting is a historical record nobody is being chased
 							// over it, so the rows drop their contact drafts.

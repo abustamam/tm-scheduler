@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { MinutesData } from "#/server/minutes-logic";
 import type { MinutesOp } from "./offline-minutes-queue";
-import { deriveRollAttendance } from "./roll-attendance";
+import { deriveRollAttendance, deriveRollGuests } from "./roll-attendance";
 
 // The op ids/timestamps are irrelevant to the projection but required by the type.
 let seq = 0;
@@ -23,7 +23,7 @@ function makeMinutes(
 		meetingId: "meeting-1",
 		clubId: "club-1",
 		members,
-		guests: [],
+		guests: [{ guestId: "g-rose", name: "Rose", fromRole: false }],
 		tableTopicsSpeakers: [],
 		awards: [
 			{
@@ -53,7 +53,7 @@ function makeMinutes(
 			best_evaluator: { memberIds: [], guestIds: [] },
 			best_table_topics: { memberIds: [], guestIds: [] },
 		},
-		counts: { present: 1, absent: 0, excused: 1, unmarked: 1, guests: 0 },
+		counts: { present: 1, absent: 0, excused: 1, unmarked: 1, guests: 1 },
 	};
 }
 
@@ -62,6 +62,19 @@ const setAbsent = (memberId: string): MinutesOp => ({
 	...meta(),
 	memberId,
 	status: "absent",
+});
+
+const addGuest = (guestId: string, name: string): MinutesOp => ({
+	type: "addGuest",
+	...meta(),
+	guestId,
+	name,
+});
+
+const removeGuest = (guestId: string): MinutesOp => ({
+	type: "removeGuest",
+	...meta(),
+	guestId,
 });
 
 describe("deriveRollAttendance", () => {
@@ -205,5 +218,73 @@ describe("deriveRollAttendance", () => {
 			queue: [setAbsent("m-bea")],
 		});
 		expect(snapshot).toEqual(before);
+	});
+});
+
+describe("deriveRollGuests", () => {
+	it("reflects a queued addGuest while OFFLINE", () => {
+		// Fix round 2 (F3). `AttendanceGuestsGroup` holds no optimism of its own, so
+		// without this an officer taps "+ Add guest" offline, the op queues, and the
+		// guest simply does not appear.
+		const guests = deriveRollGuests({
+			online: false,
+			minutes: makeMinutes(),
+			snapshot: null,
+			queue: [addGuest("g-nadia", "Nadia Farouk")],
+		});
+		expect(guests?.map((g) => g.name)).toContain("Nadia Farouk");
+	});
+
+	it("removes the guest the picker must stop offering, so the second tap is not invited", () => {
+		// The worse half of F3: the picker's already-present filter (`presentIds` in
+		// `attendance-guests-group.tsx`) is built from THIS list, so a raw list keeps
+		// offering a guest who has already been added — the exact "tap again" this
+		// round exists to kill. Asserting the removal proves the list is the derived
+		// one, not the snapshot: only a projection can drop a row the server still
+		// has.
+		const guests = deriveRollGuests({
+			online: false,
+			minutes: makeMinutes(),
+			snapshot: null,
+			queue: [removeGuest("g-rose")],
+		});
+		expect(guests?.map((g) => g.guestId)).not.toContain("g-rose");
+	});
+
+	it("IGNORES the queue while online, leaving the server as the source of truth", () => {
+		// Same branch as the members. Replaying a not-yet-drained queue over fresh
+		// rows would show a stale guest list with no error and nothing to notice.
+		expect(
+			deriveRollGuests({
+				online: true,
+				minutes: makeMinutes(),
+				snapshot: null,
+				queue: [addGuest("g-nadia", "Nadia Farouk")],
+			}),
+		).toEqual([{ guestId: "g-rose", name: "Rose", fromRole: false }]);
+	});
+
+	it("returns UNDEFINED, not [], when there is nothing to read", () => {
+		// Deliberately unlike `deriveRollAttendance`, which returns `[]`. The panel's
+		// `guests` prop is optional so a caller with no guests wired renders NOTHING;
+		// an `[]` here would quietly render an empty "Guests" group instead — the
+		// difference the panel's own "omits the Guests group entirely" test pins from
+		// the other side.
+		expect(
+			deriveRollGuests({
+				online: true,
+				minutes: null,
+				snapshot: null,
+				queue: [],
+			}),
+		).toBeUndefined();
+		expect(
+			deriveRollGuests({
+				online: false,
+				minutes: null,
+				snapshot: null,
+				queue: [addGuest("g-nadia", "Nadia Farouk")],
+			}),
+		).toBeUndefined();
 	});
 });

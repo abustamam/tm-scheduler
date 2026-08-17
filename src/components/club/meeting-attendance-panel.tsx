@@ -308,8 +308,13 @@ export function MeetingAttendancePanel({
 	//
 	// PLAN mode keeps respecting it — changing PLANNED attendance for a meeting
 	// that already happened is meaningless. Hence one value branching on the mode
-	// rather than a `locked={false}` at the call site: `locked` would then be a
-	// prop that lies, and the panel reads it for more than the chips.
+	// HERE rather than a `locked={false}` at the call site. Two reasons, neither
+	// about how many places read it: the prop is named for the MEETING's state, so
+	// a route passing `false` for a genuinely completed meeting would be stating
+	// something untrue — the next reader debugging a lifecycle question would trust
+	// it — and the mode is this component's own business, so the exception belongs
+	// where the mode is known and not duplicated into every caller that ever
+	// renders roll mode.
 	//
 	// `pending` still disables every control during an in-flight write; this only
 	// removes the lifecycle gate.

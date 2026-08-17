@@ -414,39 +414,53 @@ describe("attendance panel route wiring (PR 2)", () => {
 		// canEdit, data, program }`), so the rows live one level down on
 		// `minutes.data` — which is `null` for a viewer who may not read them.
 		expect(src).toContain("attendance={rollAttendance}");
-		expect(src).toContain("guests={minutes.data?.guests}");
-		// Fix round 1 (F1): this assertion used to pin an inline
+		// Fix round 2 (F3): `guests={minutes.data?.guests}` until this round — the
+		// raw loader rows, i.e. the members' F1 bug one control to the right. Both
+		// props now name a projected local, and neither may go back to reading
+		// `minutes.data` directly.
+		expect(src).toContain("guests={rollGuests}");
+		// Fix round 1 (F1): these assertions replaced a pin on an inline
 		// `(minutes.data?.members ?? []).flatMap(...)`, which read the LOADER's rows
 		// only — so offline an officer tapped a chip, the write queued, and nothing
-		// visibly moved. It now goes through `deriveRollAttendance`, which replays
-		// the offline queue (and owns the `status === null` drop the dashed
-		// suggestion depends on). The guard follows the code here; the projection's
+		// visibly moved. Both locals now go through `#/lib/roll-attendance`, which
+		// replays the offline queue (and owns the `status === null` drop the dashed
+		// suggestion depends on). The guard follows the code here; the projections'
 		// BEHAVIOUR is tested in `src/lib/roll-attendance.test.ts`, since this route
 		// does not mount in jsdom.
 		//
-		// The four ARGUMENTS are the point, same as the `getTmodPanelData` pin
-		// above: every one of them is same-typed with a plausible wrong expression
-		// (`snapshot: minutes.data`, `queue: []`, `online: true`) that typechecks,
-		// lints clean and silently restores the loader-only behaviour.
+		// ONE literal per local, from the `const` to the closing `);` (fix round 2,
+		// F4). Three things have to hold together and pinning them separately let a
+		// contrived revert satisfy all of them at once:
+		//   - the NAME binding — otherwise `rollAttendance` can be re-assigned from
+		//     a differently-spelled inline expression while the projected memo sits
+		//     beside it as an unused local, passing every fragment;
+		//   - the four ARGUMENTS, same point as the `getTmodPanelData` pin above —
+		//     each is same-typed with a plausible wrong expression
+		//     (`snapshot: minutes.data`, `queue: []`, `online: true`) that
+		//     typechecks, lints clean and silently restores loader-only behaviour;
+		//   - the DEP ARRAY, for the same reason the `removeQueries` cleanup pins
+		//     its own — `deriveMinutes` structuredClones, so these are memoised, and
+		//     a memo missing `offlineMinutes.queue` freezes at whatever the first
+		//     render computed, which is byte-identical to having no projection.
+		// Whitespace-collapsed because the formatter owns the wrapping.
 		expect(src.replace(/\s+/g, " ")).toContain(
-			"deriveRollAttendance({ online, minutes: minutes.data, snapshot: offlineMinutes.snapshot, queue: offlineMinutes.queue, })",
+			"const rollAttendance = useMemo( () => deriveRollAttendance({ online, minutes: minutes.data, snapshot: offlineMinutes.snapshot, queue: offlineMinutes.queue, }), [online, minutes.data, offlineMinutes.snapshot, offlineMinutes.queue], );",
 		);
-		// The dep array, for the same reason the `removeQueries` cleanup pins its
-		// own: `deriveMinutes` structuredClones, so this is memoised — and a memo
-		// missing `offlineMinutes.queue` freezes the rows at whatever the first
-		// render computed, which is byte-identical to having no projection at all.
 		expect(src.replace(/\s+/g, " ")).toContain(
-			"[online, minutes.data, offlineMinutes.snapshot, offlineMinutes.queue],",
+			"const rollGuests = useMemo( () => deriveRollGuests({ online, minutes: minutes.data, snapshot: offlineMinutes.snapshot, queue: offlineMinutes.queue, }), [online, minutes.data, offlineMinutes.snapshot, offlineMinutes.queue], );",
 		);
-		// …and the loader-only form must be GONE, not merely joined by the new one.
-		// Both can coexist and typecheck (an unused local is the only symptom, and
-		// `rollAttendance` would still be assigned somewhere), so the positive pins
-		// above cannot see a revert that leaves the prop wired to the old
-		// expression.
+		// …and the raw forms must be GONE, not merely joined by the new ones. Each
+		// can coexist with its projection and typecheck (an unused local is the only
+		// symptom), so the positives above cannot see a revert that leaves a prop
+		// wired to the old expression.
 		expect(
 			src.replace(/\s+/g, " "),
 			"the roll rows must come from the offline projection, not straight off the loader",
 		).not.toContain("(minutes.data?.members ?? []).flatMap(");
+		expect(
+			src.replace(/\s+/g, " "),
+			"the guests must come from the offline projection too — `AttendanceGuestsGroup` has no optimism of its own",
+		).not.toContain("minutes.data?.guests");
 	});
 
 	it("routes every roll write through the offline hook, so a bad connection queues", () => {
