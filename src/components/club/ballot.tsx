@@ -2,6 +2,8 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { CheckCircle2, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { Button } from "#/components/ui/button";
+import { Input } from "#/components/ui/input";
+import { WRITE_IN_LIMITS } from "#/lib/write-in-limits";
 import type { BallotData } from "#/server/voting";
 import { getBallot, submitVote } from "#/server/voting";
 
@@ -42,7 +44,9 @@ export function Ballot({
 	const cast = useMutation({
 		mutationFn: (v: {
 			category: keyof typeof CATEGORY_LABELS;
-			candidate: { kind: "member" | "guest"; id: string };
+			candidate:
+				| { kind: "member" | "guest"; id: string }
+				| { kind: "writeIn"; name: string };
 		}) =>
 			submitVote({
 				data: {
@@ -136,7 +140,15 @@ export function Ballot({
 											setPicked((p) => ({ ...p, [key]: id }));
 											cast.mutate({
 												category: key,
-												candidate: { kind: cand.kind, id: cand.id },
+												// A write-in posts the NAME, never the folded key: the
+												// server re-derives the key, and the first spelling
+												// cast stays the display form. Sending the key back
+												// would lowercase someone's name on the awards slide
+												// the moment a second person voted for them.
+												candidate:
+													cand.kind === "writeIn"
+														? { kind: "writeIn", name: cand.name }
+														: { kind: cand.kind, id: cand.id },
 											});
 										}}
 									>
@@ -147,6 +159,16 @@ export function Ballot({
 									</Button>
 								);
 							})}
+							<WriteInField
+								disabled={cast.isPending}
+								onSubmit={(name) => {
+									setPicked((p) => ({ ...p, [key]: `writeIn:${name}` }));
+									cast.mutate({
+										category: key,
+										candidate: { kind: "writeIn", name },
+									});
+								}}
+							/>
 						</div>
 						{failed[key] ? (
 							// The selection is KEPT on failure. A dropped vote that looks
@@ -163,5 +185,72 @@ export function Ballot({
 				);
 			})}
 		</div>
+	);
+}
+
+/**
+ * "Someone else" — the free-text arm of the ballot (#582).
+ *
+ * Exists because the derived candidate list cannot contain a Table Topics
+ * respondent nobody keyed in, and nobody keys them in: the people who would are
+ * running the meeting. So the common case for Best Table Topics is a ballot
+ * with a short list or none at all.
+ *
+ * Collapsed to a link until tapped. The roster names are the answer most of the
+ * time, and a text input sitting open under them invites typing a name that is
+ * already a button two inches above — which is exactly the duplicate this
+ * feature has to avoid. Once a write-in is cast it comes BACK as a button for
+ * every later voter (`loadWriteInCandidates`), so the second person to vote for
+ * the same person taps rather than types.
+ */
+function WriteInField({
+	onSubmit,
+	disabled,
+}: {
+	onSubmit: (name: string) => void;
+	disabled: boolean;
+}) {
+	const [open, setOpen] = useState(false);
+	const [name, setName] = useState("");
+	const trimmed = name.trim();
+
+	if (!open) {
+		return (
+			<Button
+				variant="ghost"
+				className="h-11 justify-start text-sm text-muted-foreground"
+				onClick={() => setOpen(true)}
+			>
+				Someone else…
+			</Button>
+		);
+	}
+	return (
+		<form
+			className="flex gap-2"
+			onSubmit={(e) => {
+				e.preventDefault();
+				if (!trimmed) return;
+				onSubmit(trimmed);
+				setName("");
+				setOpen(false);
+			}}
+		>
+			<Input
+				autoFocus
+				value={name}
+				onChange={(e) => setName(e.target.value)}
+				placeholder="Their name"
+				// Mirrors the server cap so the field cannot accept what the server
+				// will reject. The server is still the boundary — this is a courtesy,
+				// not the gate.
+				maxLength={WRITE_IN_LIMITS.name}
+				className="h-11"
+				aria-label="Name of someone not listed"
+			/>
+			<Button type="submit" className="h-11" disabled={disabled || !trimmed}>
+				Vote
+			</Button>
+		</form>
 	);
 }

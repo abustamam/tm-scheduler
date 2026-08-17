@@ -1016,6 +1016,17 @@ export const meetingAwards = pgTable(
 		guestId: uuid("guest_id").references(() => guests.id, {
 			onDelete: "cascade",
 		}),
+		/**
+		 * The winner's name when they were a write-in (#582) — no member row, no
+		 * guest row, just what a voter typed.
+		 *
+		 * The award table needs this and not only `meeting_votes`, because THIS is
+		 * what the minutes, the emailed minutes, the minutes PDF and the printed
+		 * awards beat all read. Without it a write-in could win a vote and have
+		 * nowhere to be recorded, which is the objection that made option (b) a real
+		 * decision rather than a formality.
+		 */
+		writeInName: text("write_in_name"),
 		createdAt: timestamp("created_at").defaultNow().notNull(),
 		updatedAt: timestamp("updated_at").defaultNow().notNull(),
 	},
@@ -1028,7 +1039,9 @@ export const meetingAwards = pgTable(
 		),
 		check(
 			"meeting_awards_single_assignee",
-			sql`${t.memberId} is null or ${t.guestId} is null`,
+			// Same widening and the same reason for `<= 1` rather than `= 1`:
+			// `member_id` is `on delete set null` here too (#582).
+			sql`num_nonnulls(${t.memberId}, ${t.guestId}, ${t.writeInName}) <= 1`,
 		),
 	],
 );
@@ -1093,6 +1106,25 @@ export const meetingVotes = pgTable(
 		candidateGuestId: uuid("candidate_guest_id").references(() => guests.id, {
 			onDelete: "cascade",
 		}),
+		/**
+		 * A candidate who is neither a member nor a guest row — typed on the public
+		 * ballot (#582).
+		 *
+		 * Exists because the ballot could previously only offer people who ALREADY
+		 * had a row, and Table Topics respondents are not keyed in while the segment
+		 * runs: nobody is operating the app during a meeting, they are watching it.
+		 * So the vote opened on an empty or short candidate list for the one
+		 * category that most needs it.
+		 *
+		 * TEXT rather than a minted `guests` row, which was the alternative. A guest
+		 * row per write-in makes a misspelling into a duplicate HUMAN on a surface
+		 * anyone with the link can write to, and #510's per-meeting guest cap exists
+		 * precisely to stop unbounded guest creation from there.
+		 *
+		 * Capped by `writeInNameSchema` (`#/lib/write-in-limits`) on the way in.
+		 * Deduped by VISIBILITY, not by matching — see `writeInKey`.
+		 */
+		candidateWriteIn: text("candidate_write_in"),
 		createdAt: timestamp("created_at").defaultNow().notNull(),
 		updatedAt: timestamp("updated_at").defaultNow().notNull(),
 	},
@@ -1115,9 +1147,18 @@ export const meetingVotes = pgTable(
 			"meeting_votes_single_voter",
 			sql`${t.voterMemberId} is null or ${t.voterGuestId} is null`,
 		),
+		// AT MOST ONE of the three candidate columns (#582 widens this from two).
+		//
+		// Deliberately NOT `= 1`, which is the obvious tightening and would be a
+		// production bug: `candidate_member_id` is `on delete set null`, so
+		// deleting a member NULLS it and leaves a vote row pointing at nobody. That
+		// is a reachable, legitimate state — a member leaving the club must not be
+		// blocked by a year-old ballot — and an exactly-one check would make the
+		// DELETE fail at runtime instead. `loadTally` drops candidate-less rows on
+		// the read side, which is where that case belongs.
 		check(
 			"meeting_votes_single_candidate",
-			sql`${t.candidateMemberId} is null or ${t.candidateGuestId} is null`,
+			sql`num_nonnulls(${t.candidateMemberId}, ${t.candidateGuestId}, ${t.candidateWriteIn}) <= 1`,
 		),
 	],
 );

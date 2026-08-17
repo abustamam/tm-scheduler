@@ -99,6 +99,11 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
 - The print page-count gate (v1.8.4.0, #502) has three known blind spots, each mutation-verified as surviving. (1) A PARTIAL loss of the guard's recursive route walk is undetected: the vacuity check only asserts more than 20 route files are found, so losing the whole `_authed/**` subtree — 12 files, including `vp-membership.tsx`, the one other `@media print` route and the stated reason recursion exists — still passes. (2) The walk only sees `.tsx`, skips symlinked directories (`Dirent.isDirectory()` is false for them), and the "no route hand-rolls its own page CSS" check keys on `.pgwrap` specifically, so a route wrapping its sheet in any other class is unenrolled. (3) `PRINT_PAGE_CSS`'s two `body { background }` rules are pinned by nothing at all — the count cannot see a background and no grep asserts them. Separately, the agenda fixtures build `rows` by hand and omit `roleKey`, which `expandRunSheet` always sets, so every fixture row takes a name-matching fallback branch the real route never takes.
   **Priority:** P4
 
+## Voting
+
+- A write-in cannot be removed once cast (#582). The ballot is public and unauthenticated, so anyone with the link can put an arbitrary string in front of the room: it appears as a tappable candidate for every later voter, in the Ballot Counter's tally, and — if crowned — on the projected awards slide and in the minutes PDF. Nothing today lets the Vote Counter delete one before results are read. Bounded in LENGTH (`WRITE_IN_LIMITS.name`, 80) and in ROWS (one per voter per category, and the per-meeting guest cap bounds voters), so this is a nuisance surface rather than a DoS one — but it is the obvious next ask the first time someone abuses it, and it is much cheaper to add beside the existing tally UI than to retrofit. Deliberately out of scope for the first cut; the decision is recorded on the issue.
+  **Priority:** P2
+
 ## Guests & identity
 
 - `members_club_idx` is now a strict prefix of `members_club_person_unique` and serves no query the composite cannot, so it is dead weight on every members write. Dropping it is a follow-up migration; `members_person_idx` must stay (person_id is the trailing column and `people-merge-logic.ts` looks up by person alone).

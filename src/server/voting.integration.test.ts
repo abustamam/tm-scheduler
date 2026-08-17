@@ -25,6 +25,7 @@ import {
 	openBlockingTx,
 	type SeededClub,
 	seedClub,
+	seedPerson,
 	testDb,
 	waitForLockWait,
 } from "#/test/db";
@@ -1080,5 +1081,239 @@ describe.skipIf(!hasTestDb)("joinBallotAsGuest (#510)", () => {
 				.where(eq(meetingBallotGuests.meetingId, seed.meetingId));
 			expect(linkRows.map((r) => r.guestId)).toEqual([joined.id]);
 		});
+	});
+});
+
+/**
+ * Free-text write-in candidates (#582).
+ *
+ * The feature exists because the ballot could previously only offer people who
+ * already had a row, and Table Topics respondents are not keyed in while the
+ * segment runs — nobody is operating the app during a meeting, they are
+ * watching it. So Best Table Topics, the category that most needs a ballot,
+ * routinely opened with nobody on it.
+ *
+ * These run against a live Postgres because the two things most likely to be
+ * wrong are a check constraint and an upsert, and neither is visible in a unit
+ * test.
+ */
+describe.skipIf(!hasTestDb)("write-in candidates (#582)", () => {
+	let seed: SeededClub;
+
+	beforeEach(async () => {
+		seed = await seedClub();
+		await openVote({
+			meetingId: seed.meetingId,
+			category: "best_table_topics",
+			actorMemberId: seed.adminMemberId,
+			clubId: seed.clubId,
+		});
+	});
+	afterEach(async () => {
+		await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
+	});
+
+	/** A second roster member, so "two voters pick the same person" is testable.
+	 *  One vote per member per category is a unique index, so the same voter
+	 *  casting twice would be an UPDATE, not a second vote. */
+	async function insertMember(clubId: string, name: string): Promise<string> {
+		const personId = await seedPerson({ name });
+		const [row] = await testDb
+			.insert(members)
+			.values({ clubId, personId, name, clubRole: "member", status: "active" })
+			.returning({ id: members.id });
+		return row.id;
+	}
+
+	/** Votes for THIS meeting only. An unscoped `select().from(meetingVotes)`
+	 *  sees every other suite's rows in the shared test database — which is how
+	 *  these assertions first "failed", against another test's Bob Smith. */
+	const myVotes = () =>
+		testDb
+			.select({
+				m: meetingVotes.candidateMemberId,
+				g: meetingVotes.candidateGuestId,
+				w: meetingVotes.candidateWriteIn,
+			})
+			.from(meetingVotes)
+			.innerJoin(
+				meetingVoteSessions,
+				eq(meetingVoteSessions.id, meetingVotes.sessionId),
+			)
+			.where(eq(meetingVoteSessions.meetingId, seed.meetingId));
+
+	const castWriteIn = (name: string, voterId?: string) =>
+		castVote({
+			meetingId: seed.meetingId,
+			category: "best_table_topics",
+			voter: { kind: "member", id: voterId ?? seed.memberId },
+			candidate: { kind: "writeIn", name },
+		});
+
+	it("records a vote for someone who has no member or guest row", () => {
+		return expect(castWriteIn("Rehanna Khan")).resolves.toBeUndefined();
+	});
+
+	it("stores the name and leaves both candidate FKs null", async () => {
+		await castWriteIn("Rehanna Khan");
+		expect(await myVotes()).toEqual([{ m: null, g: null, w: "Rehanna Khan" }]);
+	});
+
+	it("trims on the way in", async () => {
+		await castWriteIn("   Rehanna Khan  ");
+		expect((await myVotes())[0].w).toBe("Rehanna Khan");
+	});
+
+	it("rejects a name past the cap rather than storing a truncated one", async () => {
+		await expect(castWriteIn("a".repeat(500))).rejects.toThrow();
+		expect(await myVotes()).toHaveLength(0);
+	});
+
+	it("rejects a blank name", async () => {
+		await expect(castWriteIn("    ")).rejects.toThrow();
+		expect(await myVotes()).toHaveLength(0);
+	});
+
+	it("still refuses a vote when the category is closed", async () => {
+		// The write-in arm skips `isEligibleCandidate`, so it must not also skip
+		// the open-window check — that would make it the one way to cast into a
+		// closed vote.
+		await closeVote({
+			meetingId: seed.meetingId,
+			category: "best_table_topics",
+			actorMemberId: seed.adminMemberId,
+			clubId: seed.clubId,
+		});
+		await expect(castWriteIn("Rehanna Khan")).rejects.toThrow(/not open/i);
+	});
+
+	/**
+	 * The dedup mechanism, end to end: a cast write-in comes BACK as a tappable
+	 * candidate, so the second voter for the same person taps rather than
+	 * retypes. Nothing matches names after the fact — the ballot just makes
+	 * retyping unnecessary.
+	 */
+	it("offers a cast write-in back to later voters", async () => {
+		await castWriteIn("Rehanna Khan");
+		const ballot = await loadBallot(seed.meetingId);
+		expect(ballot.categories.best_table_topics.candidates).toContainEqual({
+			kind: "writeIn",
+			id: "rehanna khan",
+			name: "Rehanna Khan",
+		});
+	});
+
+	it("keeps the FIRST spelling as the display form", async () => {
+		const second = await insertMember(seed.clubId, "Second Voter");
+		await castWriteIn("Rehanna Khan");
+		await castWriteIn("rehanna   khan", second);
+		const offered = (await loadBallot(seed.meetingId)).categories
+			.best_table_topics.candidates;
+		// ONE candidate, spelled the way the first voter typed it. Nobody should
+		// see their own name lowercased on the awards slide because they happened
+		// to be the second person voted for.
+		expect(offered.filter((c) => c.kind === "writeIn")).toEqual([
+			{ kind: "writeIn", id: "rehanna khan", name: "Rehanna Khan" },
+		]);
+	});
+
+	it("counts case and spacing variants as one candidate in the tally", async () => {
+		const second = await insertMember(seed.clubId, "Second Voter");
+		const third = await insertMember(seed.clubId, "Third Voter");
+		await castWriteIn("Rehanna Khan");
+		await castWriteIn("rehanna khan", second);
+		await castWriteIn("  REHANNA   KHAN ", third);
+		const tally = await loadTally(seed.meetingId);
+		const writeIns = tally.best_table_topics.results.filter(
+			(r) => r.kind === "writeIn",
+		);
+		expect(writeIns).toEqual([
+			{ kind: "writeIn", id: "rehanna khan", name: "Rehanna Khan", count: 3 },
+		]);
+	});
+
+	it("keeps genuinely different people apart", async () => {
+		const second = await insertMember(seed.clubId, "Second Voter");
+		await castWriteIn("Bob Smith");
+		await castWriteIn("Bob Smyth", second);
+		const writeIns = (await loadTally(seed.meetingId)).best_table_topics.results
+			.filter((r) => r.kind === "writeIn")
+			.map((r) => r.name)
+			.sort();
+		expect(writeIns).toEqual(["Bob Smith", "Bob Smyth"]);
+	});
+
+	it("keeps one vote per voter when they switch from a write-in to a roster name", async () => {
+		// The upsert has to CLEAR `candidate_write_in`, not just set the FK —
+		// otherwise the row carries two candidates and trips the at-most-one check.
+		await castWriteIn("Rehanna Khan");
+		await castVote({
+			meetingId: seed.meetingId,
+			category: "best_table_topics",
+			voter: { kind: "member", id: seed.memberId },
+			candidate: { kind: "writeIn", name: "Someone Else" },
+		});
+		expect(await myVotes()).toEqual([{ m: null, g: null, w: "Someone Else" }]);
+	});
+
+	it("withholds write-ins from a closed category, like every other candidate", async () => {
+		await castWriteIn("Rehanna Khan");
+		await closeVote({
+			meetingId: seed.meetingId,
+			category: "best_table_topics",
+			actorMemberId: seed.adminMemberId,
+			clubId: seed.clubId,
+		});
+		const ballot = await loadBallot(seed.meetingId);
+		expect(ballot.categories.best_table_topics.candidates).toEqual([]);
+	});
+
+	/**
+	 * The objection that made the free-text column a real decision rather than a
+	 * formality: a write-in can WIN, and `meeting_awards` is what the minutes,
+	 * the emailed minutes, the minutes PDF and the printed awards beat all read.
+	 * Without a column there, the winner had nowhere to live; without the name in
+	 * `loadMinutes`' coalesce, it lived there and rendered blank.
+	 */
+	it("can be crowned, and the minutes render the name", async () => {
+		await castWriteIn("Rehanna Khan");
+		await setAward({
+			meetingId: seed.meetingId,
+			category: "best_table_topics",
+			writeInName: "Rehanna Khan",
+		});
+		const { loadMinutes } = await import("#/server/minutes-logic");
+		const minutes = await loadMinutes(seed.meetingId);
+		const award = minutes.awards.find(
+			(a) => a.category === "best_table_topics",
+		);
+		expect(award).toMatchObject({
+			name: "Rehanna Khan",
+			memberId: null,
+			guestId: null,
+			isGuest: false,
+		});
+	});
+
+	it("does not leave both a winner FK and a write-in set when a winner is changed", async () => {
+		await setAward({
+			meetingId: seed.meetingId,
+			category: "best_table_topics",
+			writeInName: "Rehanna Khan",
+		});
+		await setAward({
+			meetingId: seed.meetingId,
+			category: "best_table_topics",
+			memberId: seed.memberId,
+		});
+		const { meetingAwards } = await import("#/db/schema");
+		const [row] = await testDb
+			.select({
+				m: meetingAwards.memberId,
+				w: meetingAwards.writeInName,
+			})
+			.from(meetingAwards)
+			.where(eq(meetingAwards.meetingId, seed.meetingId));
+		expect(row).toEqual({ m: seed.memberId, w: null });
 	});
 });

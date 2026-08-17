@@ -22,6 +22,11 @@ import {
 	tableTopicsSpeakers,
 } from "#/db/schema";
 import { cap } from "#/lib/cap";
+import {
+	WRITE_IN_LIMITS,
+	writeInKey,
+	writeInNameSchema,
+} from "#/lib/write-in-limits";
 import { logActivity } from "./activity";
 import {
 	type AwardCandidate,
@@ -164,6 +169,18 @@ export interface VoterRef {
 }
 
 /**
+ * Who a ballot is cast FOR. Wider than `VoterRef` since #582: a candidate can
+ * be someone with no row at all.
+ *
+ * The asymmetry is the point. A VOTER must be a member or a guest, because
+ * that is what the one-vote-per-person unique indexes key on and what the
+ * per-meeting guest cap counts. A CANDIDATE need not exist anywhere — the
+ * common case is a Table Topics respondent nobody keyed in, because nobody is
+ * operating the app while the meeting runs.
+ */
+export type CandidateRef = VoterRef | { kind: "writeIn"; name: string };
+
+/**
  * Cast (or change) one ballot.
  *
  * Three things the client is NOT trusted for, in order:
@@ -214,14 +231,30 @@ export async function castVote(input: {
 	meetingId: string;
 	category: AwardCategory;
 	voter: VoterRef;
-	candidate: VoterRef;
+	candidate: CandidateRef;
 }): Promise<void> {
 	const clubId = await getMeetingClubId(input.meetingId);
 
-	// (1) Candidate eligibility, from the SAME derivation the ballot rendered.
-	const candidates = await loadAwardCandidates(input.meetingId);
-	if (!isEligibleCandidate(candidates, input.category, input.candidate)) {
-		throw new Error("That person is not eligible for this award.");
+	// (1) Candidate validity — two different questions for the two shapes.
+	//
+	// A member/guest candidate is re-derived server-side from the SAME
+	// derivation the ballot rendered, so a hand-crafted POST cannot vote for
+	// someone who never spoke. A WRITE-IN has no list to be on — that is what it
+	// is for — so what gets validated is the NAME: trimmed, non-blank, and under
+	// a cap chosen against measured render cost, since this string reaches the
+	// projected awards slide and a synchronously-rendered public PDF.
+	let writeIn: string | null = null;
+	if (input.candidate.kind === "writeIn") {
+		const parsed = writeInNameSchema.safeParse(input.candidate.name);
+		if (!parsed.success) {
+			throw new Error(parsed.error.issues[0]?.message ?? "Invalid name.");
+		}
+		writeIn = parsed.data;
+	} else {
+		const candidates = await loadAwardCandidates(input.meetingId);
+		if (!isEligibleCandidate(candidates, input.category, input.candidate)) {
+			throw new Error("That person is not eligible for this award.");
+		}
 	}
 
 	// (2) Voter scoping.
@@ -274,6 +307,11 @@ export async function castVote(input: {
 					candidateGuestId: sql<string | null>`${candidateGuestId}::uuid`.as(
 						"candidate_guest_id",
 					),
+					// Position matters: drizzle's `.insert().select()` requires the
+					// selected keys to match the table's columns exactly, in order.
+					candidateWriteIn: sql<string | null>`${writeIn}::text`.as(
+						"candidate_write_in",
+					),
 					createdAt: sql<Date>`now()`.as("created_at"),
 					updatedAt: sql<Date>`now()`.as("updated_at"),
 				})
@@ -294,6 +332,10 @@ export async function castVote(input: {
 			set: {
 				candidateMemberId,
 				candidateGuestId,
+				// Cleared on every change, not just when setting one — otherwise a
+				// voter switching FROM a write-in TO a roster name would leave both
+				// columns set and trip the at-most-one check.
+				candidateWriteIn: writeIn,
 				updatedAt: new Date(),
 			},
 		})
@@ -426,9 +468,10 @@ export async function loadBallot(meetingId: string): Promise<BallotData> {
 	if (!(await isReadableClubForMeeting(meetingId))) {
 		return { meetingId, categories: closedBallotCategories() };
 	}
-	const [sessions, candidates] = await Promise.all([
+	const [sessions, candidates, writeIns] = await Promise.all([
 		listVoteSessions(meetingId),
 		loadAwardCandidates(meetingId),
+		loadWriteInCandidates(meetingId),
 	]);
 	const categories = {} as Record<AwardCategory, BallotCategory>;
 	for (const category of AWARD_CATEGORIES) {
@@ -436,14 +479,67 @@ export async function loadBallot(meetingId: string): Promise<BallotData> {
 		categories[category] = {
 			isOpen: session.isOpen,
 			hasOpened: session.openedAt != null,
-			candidates: session.isOpen ? candidates[category] : [],
+			// Derived candidates first, then write-ins already cast in this session
+			// — which is the whole dedup mechanism (#582). Showing them back means
+			// the second voter for the same person TAPS the existing entry instead
+			// of retyping a variant, so "bob smith" and "Bob Smith" never become two
+			// candidates splitting one person's vote. Nothing matches names after
+			// the fact; the ballot just makes retyping unnecessary.
+			candidates: session.isOpen
+				? [...candidates[category], ...writeIns[category]]
+				: [],
 		};
 	}
 	return { meetingId, categories };
 }
 
+/**
+ * Write-in candidates already cast on this meeting, per category (#582).
+ *
+ * Grouped by `writeInKey`, so casing and stray whitespace collapse. The
+ * DISPLAY form is the FIRST spelling cast — ordered by `created_at` — never the
+ * folded key: nobody should see their own name lowercased on the awards slide
+ * because they happened to be the second person typing it.
+ *
+ * Read through `cap` on the way out. The write path caps too, but this is a
+ * public surface and the column is unbounded `text`, so a row written by any
+ * future path that forgets is elided here rather than shipped to a phone.
+ */
+async function loadWriteInCandidates(
+	meetingId: string,
+): Promise<Record<AwardCategory, AwardCandidate[]>> {
+	const rows = await db
+		.select({
+			category: meetingVoteSessions.category,
+			name: meetingVotes.candidateWriteIn,
+		})
+		.from(meetingVotes)
+		.innerJoin(
+			meetingVoteSessions,
+			eq(meetingVoteSessions.id, meetingVotes.sessionId),
+		)
+		.where(eq(meetingVoteSessions.meetingId, meetingId))
+		.orderBy(asc(meetingVotes.createdAt));
+
+	const out = {} as Record<AwardCategory, AwardCandidate[]>;
+	for (const category of AWARD_CATEGORIES) out[category] = [];
+	const seen = new Set<string>();
+	for (const r of rows) {
+		if (!r.name) continue;
+		const key = writeInKey(r.name);
+		if (!key || seen.has(`${r.category}:${key}`)) continue;
+		seen.add(`${r.category}:${key}`);
+		out[r.category].push({
+			kind: "writeIn",
+			id: key,
+			name: cap(r.name, WRITE_IN_LIMITS.name),
+		});
+	}
+	return out;
+}
+
 export interface TallyResult {
-	kind: "member" | "guest";
+	kind: "member" | "guest" | "writeIn";
 	id: string;
 	name: string;
 	count: number;
@@ -462,15 +558,17 @@ export interface CategoryTally {
 export async function loadTally(
 	meetingId: string,
 ): Promise<Record<AwardCategory, CategoryTally>> {
-	const [sessions, candidates] = await Promise.all([
+	const [sessions, candidates, writeIns] = await Promise.all([
 		listVoteSessions(meetingId),
 		loadAwardCandidates(meetingId),
+		loadWriteInCandidates(meetingId),
 	]);
 	const rows = await db
 		.select({
 			category: meetingVoteSessions.category,
 			candidateMemberId: meetingVotes.candidateMemberId,
 			candidateGuestId: meetingVotes.candidateGuestId,
+			candidateWriteIn: meetingVotes.candidateWriteIn,
 			voterMemberName: members.name,
 			voterGuestName: guests.name,
 		})
@@ -492,7 +590,9 @@ export async function loadTally(
 				? `member:${r.candidateMemberId}`
 				: r.candidateGuestId
 					? `guest:${r.candidateGuestId}`
-					: null;
+					: r.candidateWriteIn
+						? `writeIn:${writeInKey(r.candidateWriteIn)}`
+						: null;
 			// A removed member's vote survives with a null candidate (FK set null)
 			// and is dropped from the tally rather than counted for nobody.
 			if (!key) continue;
@@ -500,7 +600,9 @@ export async function loadTally(
 		}
 		out[category] = {
 			isOpen: sessions[category].isOpen,
-			results: candidates[category]
+			// Write-ins are counted alongside the derived candidates, so the Ballot
+			// Counter reads one ranked list rather than two.
+			results: [...candidates[category], ...writeIns[category]]
 				.map((c) => ({
 					kind: c.kind,
 					id: c.id,

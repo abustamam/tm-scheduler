@@ -43,7 +43,9 @@ export function VoteCounterPanel({
 	 *  lives in `meeting_awards`, not in the vote tables. */
 	onSetWinner: (
 		category: AwardCategory,
-		winner: { kind: "member" | "guest"; id: string },
+		winner:
+			| { kind: "member" | "guest"; id: string }
+			| { kind: "writeIn"; name: string },
 	) => void;
 	/** Calls the EXISTING clearAward path — see the doc comment above. */
 	onClearWinner: (category: AwardCategory) => void;
@@ -133,7 +135,15 @@ export function VoteCounterPanel({
 													size="sm"
 													variant="outline"
 													onClick={() =>
-														onSetWinner(category, { kind: r.kind, id: r.id })
+														onSetWinner(
+															category,
+															// A write-in has no row to point at, so the award
+															// carries the NAME. `r.name` is the first spelling
+															// cast, which is what the room saw on the ballot.
+															r.kind === "writeIn"
+																? { kind: "writeIn", name: r.name }
+																: { kind: r.kind, id: r.id },
+														)
 													}
 												>
 													Set winner
