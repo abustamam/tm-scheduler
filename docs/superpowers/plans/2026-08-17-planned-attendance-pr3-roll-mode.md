@@ -1220,20 +1220,39 @@ Do this LAST of the feature tasks. Deleting before the panel is wired leaves mee
 
 - [ ] **Step 1: Write the failing guard**
 
-In `src/components/club/absorbed-surfaces.guard.test.ts`, add to the deleted set:
+In `src/components/club/absorbed-surfaces.guard.test.ts`, add to the deleted set. **That file has no
+`minutesSrc`** — an earlier draft of this step invented one. Each `it()` there reads its own file
+inline with `readFileSync` (see `:23`, `:32`, `:40`), so read the minutes card the same way:
 
 ```ts
 it("AttendanceSection is gone from the Minutes card", () => {
 	// Absorbed into the attendance panel's roll mode (spec "Surfaces absorbed").
 	// Two surfaces recording the same rows is how a club ends up with an officer
 	// marking someone present in one place and absent in the other.
-	expect(minutesSrc).not.toContain("AttendanceSection");
-	expect(minutesSrc).not.toContain("function AttendanceSection");
+	const minutes = readFileSync(
+		join(dirname(fileURLToPath(import.meta.url)), "meeting-minutes.tsx"),
+		"utf8",
+	);
+	expect(minutes).not.toContain("AttendanceSection");
 	// The card must still POINT at where roll call moved to, or an officer who
 	// knows the old location just finds it missing.
-	expect(minutesSrc).toContain("Attendance is taken in the Attendance panel");
+	expect(minutes).toContain("Attendance is taken in the Attendance panel");
 });
 ```
+
+Match the path idiom the file already uses for its other reads rather than the one above if they
+differ — the point is the inline read, not this exact expression.
+
+**This read is RAW, not comment-blind, and that is deliberate** — a commented-out
+`AttendanceSection` block must still fail, which is the right call for a deletion guard. The
+consequence to plan for: you cannot leave a breadcrumb comment that NAMES the symbol. A
+`// AttendanceSection moved to the attendance panel` note in `meeting-minutes.tsx` fails this
+guard. Say "roll call moved to the attendance panel" instead. Do not weaken the guard to allow
+the comment.
+
+Dropping the second `not.toContain("function AttendanceSection")` from the earlier draft on
+purpose: it can never fail while the line above it passes, and a test that cannot fail is worse
+than no test because it reads as coverage.
 
 - [ ] **Step 2: Run and confirm failure**
 
@@ -1242,9 +1261,20 @@ Expected: FAIL — `AttendanceSection` is still present.
 
 - [ ] **Step 3: Delete and link up**
 
-1. Delete `function AttendanceSection(...)` (from `meeting-minutes.tsx:607`) and its JSX call site (the `{meetingDayReached ? (<AttendanceSection … />) : null}` block at ~:363).
-2. Delete the `onSetStatus` / `onAddGuest` / `onRemoveGuest` closures that fed ONLY it. Keep `mutate`, `opMeta` and every other section untouched.
-3. In its place, one line that tells an officer where roll call went:
+Line numbers verified against HEAD — an earlier draft of this step had both of them wrong, so
+trust these and still confirm before cutting:
+
+1. Delete `function AttendanceSection({` (`meeting-minutes.tsx:488`) and its JSX call site, the
+   `{meetingDayReached ? (<AttendanceSection … />) : null}` block starting at `:244`.
+2. Delete `function GuestAdder({` (`:594`) too. It is called only from `AttendanceSection` (`:586`),
+   so it is orphaned by step 1 and strict TS fails the build on it. The earlier draft did not name
+   it.
+3. Delete the `onSetStatus` / `onAddGuest` / `onRemoveGuest` closures that fed ONLY the section.
+   Keep `mutate`, `opMeta` and every other section untouched.
+4. Delete `STATUS_LABELS` (`:66`). Its only two uses are `:538` and `:544`, both inside
+   `AttendanceSection`, and it is not exported or read anywhere else in `src/`. Check whether the
+   `AttendanceStatus` type import it needed is still used after it goes.
+5. In its place, one line that tells an officer where roll call went:
 
 ```tsx
 {meetingDayReached ? (
@@ -1254,7 +1284,11 @@ Expected: FAIL — `AttendanceSection` is still present.
 ) : null}
 ```
 
-4. Remove now-unused imports (`setAttendance`, `addMinutesGuest`, `removeMinutesGuest`) — strict TS fails the build on unused symbols, which is the check that step 2 was complete.
+6. Remove the now-unused imports. `setAttendance` (`:52`, used only at `:252`), `addMinutesGuest`
+   (`:45`) and `removeMinutesGuest` (`:50`) all fall out, plus whatever the deleted JSX was the last
+   consumer of — the `X` icon and the `Popover` / `Command` / `Input` primitives `GuestAdder` used
+   are the likely ones, but let the compiler tell you rather than guessing. Strict TS fails the
+   build on unused symbols, which is the check that the deletion was complete.
 
 - [ ] **Step 4: Follow the suite failures**
 
@@ -1463,16 +1497,36 @@ Closes #548."
 - [ ] **Step 1: Every gate, in CI's form**
 
 ```bash
-TEST_DATABASE_URL="postgresql://dev:dev@localhost:5433/tm_test" bun run test
+# BOTH env vars, or the run reports green with tests missing. Without
+# TEST_DATABASE_URL ~630 integration tests vanish; without CHROME_PATH the two
+# browser-backed print suites skip. A skip is not a pass.
+export TEST_DATABASE_URL="postgresql://dev:dev@localhost:5433/tm_test"
+export CHROME_PATH="$(echo "$HOME"/Library/Caches/ms-playwright/chromium_headless_shell-*/chrome-headless-shell-*/chrome-headless-shell | tr ' ' '\n' | head -1)"
+bun run test
 bun run typecheck
-bun run check --diagnostic-level=error   # BARE, 618 files — not `biome check src/`
+bun run check          # CI's BARE invocation — NOT `biome check src/`, which covers fewer files
 bun run build
-bun run db:generate                      # MUST report "No schema changes"
+bun run db:generate    # MUST report "No schema changes"
 ```
 
-`db:generate` reporting a diff means D3 was implemented against a schema change it does not need — stop and re-read the Global Constraints.
+Three things about that block, each of which has produced a false green in this repo:
 
-On a Mac, also export `CHROME_PATH` to a Playwright `chrome-headless-shell` or the two print suites skip silently. `git checkout -- src/routeTree.gen.ts` after `build` — it appends a block that must not be committed.
+- **`bun run check` is the gate; `bunx biome check --diagnostic-level=error` is how you READ it.**
+  They are different commands and the earlier draft of this step fused them into one line that was
+  neither. Run the bare one to decide pass/fail, then the filtered one to find a real error in the
+  ~118 pre-existing `seed.ts` warnings. Do not pin a file count — it moves as files are added, and a
+  count in the plan just goes stale.
+- **Confirm from the output that the DB-backed and print suites actually RAN.** Check the skip count,
+  not just the pass count. `CHROME_PATH` must point at a Playwright `chrome-headless-shell`; do NOT
+  point it at `/Applications/Google Chrome.app/...`, which answers `--version` and then never
+  returns from `--print-to-pdf`, turning an honest skip into ~135s of `ETIMEDOUT`.
+- **`git checkout -- src/routeTree.gen.ts` after `build`** — it appends a block to that tracked file
+  that must not be committed.
+
+`db:generate` reporting a diff means D3 was implemented against a schema change it does not need —
+stop and re-read the Global Constraints. It reads `drizzle.config.ts`, which loads `.env.local`; if
+this worktree has none, `DATABASE_URL` may be unset and the command fails on config rather than on a
+real diff. That failure is not a schema drift — say which one you got.
 
 - [ ] **Step 2: Mutation-test every new guard**
 
