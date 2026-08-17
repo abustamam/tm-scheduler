@@ -166,8 +166,9 @@ export const setPlannedAttendance = createServerFn({ method: "POST" })
 			// `via: "nudge"` is the AUTO-advance behind a WhatsApp/email tap: the
 			// officer tapped "message them" and the rung moved as a SIDE EFFECT,
 			// with no rung in front of them to overrule. It must never demote a
-			// real answer, so it may only overwrite `reached_out` — exactly the
-			// floor the deleted `setContacted` carried, and for exactly the reason
+			// real answer, so it may only overwrite `reached_out` — the same floor
+			// `setContacted` (`server/outreach.ts`, still live and still called by
+			// the recruit picker) has always carried, for exactly the reason
 			// `setPlanStatus`'s own doc comment gives: without it an officer
 			// working from a panel that rendered a while ago erases the decline
 			// that arrived since, the member drops off `unavailableMembers`, and

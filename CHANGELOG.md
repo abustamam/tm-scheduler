@@ -6,21 +6,14 @@ Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO`
 
 ### Added
 
-- **One place to see who is coming to the next meeting.** An officer opening an upcoming meeting now gets a Planned attendance panel — every active member, one status each: no answer, asked, coming, or not coming. It sorts the people nobody has spoken to yet at the top, so the list reads as a worklist rather than a roster, and a counts line ("3 coming, 2 out, 1 asked, 9 no answer") sits under the title. On a phone it starts collapsed to that counts line so it never pushes the agenda off screen; on a wide screen it sits in a rail beside the agenda and follows you down the page.
+- **One place to see who is coming to the next meeting.** An officer opening an upcoming meeting now gets a Planned attendance panel — every active member, one status each: no answer, asked, coming, or not coming. It sorts the people nobody has spoken to yet at the top, so the list reads as a worklist rather than a roster, and a counts line ("3 coming · 2 not coming · 1 asked · 9 no answer") sits under the title. On a phone it starts collapsed to that counts line so it never pushes the agenda off screen; on a wide screen it sits in a rail beside the agenda and follows you down the page.
 - **Tapping WhatsApp or Email marks someone as asked.** The draft opens in your own app the way it always has, and the row moves from "no answer" to "asked" on its own — so the panel keeps track of who you have chased without you telling it twice. It will not touch anyone who has already answered.
 - **Members can now say they'll be there.** The meeting page previously only let a member say they *couldn't* make it. Both answers are now on the personal strip, either one can be taken back, and the answer survives a reload.
 
 ### Changed
 
-- **The old Outreach panel and the "Not available this week" list are gone, absorbed into the new panel.** They answered two halves of the same question in two places, one of which could not express "yes". Everything they showed is in the one list now.
+- **The old Outreach panel and the "Not available this week" list are gone, absorbed into the new panel.** They answered two halves of the same question in two places, one of which could not express "yes". Everything they showed is in the one list now, with one change in when you see it: those two surfaces stayed up until a meeting was over, and the new panel is for planning, so it ends when the meeting day arrives. Taking attendance on the day is what Minutes is for.
 - An officer's private record of having asked someone stays private. It is never sent to a member's browser or to a public visitor, and a member's own answer is the only thing the personal strip reads.
-
-### Fixed
-
-- **Tapping WhatsApp can no longer erase a member's decline.** If someone said they couldn't come while your page was open, messaging them no longer overwrote that with "asked" — which had been quietly dropping them off the Not Available list and letting them be handed a role they had already turned down. The check now runs in the database against the live row rather than against whatever the page last loaded.
-- Attendance drafts no longer risk naming a role that doesn't exist for that kind of message.
-- The panel now follows the screen when a tablet is rotated. Turning one to landscape used to hide the Show/Hide button while leaving the rows hidden, stranding the panel with no way to open it.
-- Two quick taps on the same person no longer leave the page showing a stale status.
 
 ## [1.14.1.0] - 2026-08-15
 

@@ -189,8 +189,11 @@ describe("attendance-plan authz (D6)", () => {
 		// overwrites the `not_coming` that arrived since — the member drops off
 		// `unavailableMembers`, loses the warning in the assign picker, and the
 		// VPE hands a role to someone who said they cannot come. That is the
-		// regression the deleted `setContacted` carried `demoteFrom: ["reached_out"]`
-		// to prevent, and the client guard in `markAsked` is not a substitute: it
+		// regression `setContacted` (`server/outreach.ts`) carries
+		// `demoteFrom: ["reached_out"]` to prevent — it is still live and still
+		// the recruit picker's path, which is why the panel's own route needed
+		// its own floor rather than inheriting one. The client guard in
+		// `markAsked` is not a substitute: it
 		// reads a `plan` snapshot that is stale by construction, while this is a
 		// `setWhere` Postgres evaluates against the live row.
 		const body = handlerBody(SRC, "setPlannedAttendance");
