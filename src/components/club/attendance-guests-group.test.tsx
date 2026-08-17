@@ -60,6 +60,14 @@ describe("AttendanceGuestsGroup", () => {
 		expect(onAddGuest).toHaveBeenCalledWith({ guestId: "g2" });
 	});
 
+	it("excludes a club guest already present at the meeting from the add-picker", async () => {
+		const { getByRole, queryByRole } = render(
+			<AttendanceGuestsGroup {...base} />,
+		);
+		await userEvent.click(getByRole("button", { name: /Add guest/i }));
+		expect(queryByRole("option", { name: /Nadia Farouk/i })).toBeNull();
+	});
+
 	it("creates a NEW guest from a typed name, carrying email and phone", async () => {
 		const onAddGuest = vi.fn();
 		const { getByRole, findByLabelText, getByLabelText } = render(
@@ -73,6 +81,9 @@ describe("AttendanceGuestsGroup", () => {
 		fireEvent.change(getByLabelText(/Guest email/i), {
 			target: { value: "wale@example.com" },
 		});
+		fireEvent.change(getByLabelText(/Guest phone/i), {
+			target: { value: "555-1234" },
+		});
 		// Submit through the FORM, not by name — the submit button and the trigger
 		// are both "Add guest", and this asserts the form's own submit path.
 		fireEvent.submit(
@@ -85,7 +96,7 @@ describe("AttendanceGuestsGroup", () => {
 			newGuest: {
 				name: "Wale Adeyemi",
 				email: "wale@example.com",
-				phone: undefined,
+				phone: "555-1234",
 			},
 		});
 	});
