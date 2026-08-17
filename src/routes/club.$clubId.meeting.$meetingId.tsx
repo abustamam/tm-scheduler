@@ -16,7 +16,7 @@ import {
 	Sparkles,
 	WifiOff,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
 	MeetingAgenda,
@@ -73,6 +73,7 @@ import {
 import { deriveMeetingNavItems } from "#/lib/meeting-nav";
 import { deriveMeetingRoleFlags, pairedRoleIds } from "#/lib/meeting-roles";
 import { useEffectiveMember } from "#/lib/member-identity";
+import { deriveRollAttendance } from "#/lib/roll-attendance";
 import { footerDate } from "#/lib/slide-layout";
 import { hasWordOfTheDay } from "#/lib/word-poster";
 import { getOpenActionItems } from "#/server/action-items";
@@ -466,14 +467,27 @@ function MeetingView() {
 	// deliberate and filed as a follow-up rather than solved here.
 	const showRollPanel = effectiveCanManage && minutes.canEdit;
 	const showPanel = panelMode === "plan" ? showPlanPanel : showRollPanel;
-	// Recorded rows ONLY. `minutes.data.members` carries `status: null` for
-	// anyone nobody has marked yet, and `buildRollPanel` needs the ABSENCE of a
-	// row to render the plan's answer as a dashed suggestion — so a null must
-	// not be flattened into a value here. `minutes.data` is null whenever the
-	// viewer may not read the minutes at all, which is exactly the case
-	// `showRollPanel` already excludes.
-	const rollAttendance = (minutes.data?.members ?? []).flatMap((m) =>
-		m.status === null ? [] : [{ memberId: m.memberId, status: m.status }],
+	// Recorded rows ONLY, projected through the SAME offline queue the writes go
+	// into (#176). Online this is just the loader's rows — the server stays the
+	// source of truth and the chip moves on the refetch `offlineMinutes.mutate`
+	// triggers. Offline no refetch will ever land, so without replaying the queue
+	// an officer on dead club wifi taps "Present", nothing moves, and they tap
+	// again — on the one surface #176's queue exists for. `deriveRollAttendance`
+	// is the seam (`#/lib/roll-attendance`) because this route cannot mount in
+	// jsdom, so an inline expression here would be testable by nothing but a
+	// source grep; it also owns dropping `status: null`, which `buildRollPanel`
+	// needs absent so it can render the plan's answer as a dashed suggestion.
+	// `useMemo` for the same reason `meeting-minutes.tsx` uses one: `deriveMinutes`
+	// structuredClones the whole snapshot.
+	const rollAttendance = useMemo(
+		() =>
+			deriveRollAttendance({
+				online,
+				minutes: minutes.data,
+				snapshot: offlineMinutes.snapshot,
+				queue: offlineMinutes.queue,
+			}),
+		[online, minutes.data, offlineMinutes.snapshot, offlineMinutes.queue],
 	);
 
 	// One viewer for all audiences: an admin keeps editing a past-but-open meeting

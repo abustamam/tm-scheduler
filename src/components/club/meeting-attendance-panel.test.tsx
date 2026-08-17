@@ -83,6 +83,27 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		).toBe(true);
 	});
 
+	it("keeps the rungs disabled on a COMPLETED meeting, unlike roll mode's chips", () => {
+		// The other half of the mode-specific lock (see "keeps the chips live on a
+		// completed meeting" in the roll block). `locked` is exactly
+		// `status === "completed"`, and roll mode deliberately ignores it — but
+		// changing PLANNED attendance for a meeting that has already happened is
+		// meaningless, so plan mode keeps respecting it.
+		//
+		// Both directions are asserted, in both blocks, on purpose: with only the
+		// roll one, the next reader "simplifies" `roll ? false : locked` down to a
+		// bare `false` and the panel starts letting an officer rewrite the outreach
+		// ladder of a closed-out meeting with the whole suite green. `phaseCompleted`
+		// is inert in plan mode, and passed anyway so the fixture is the real
+		// "completed meeting" shape rather than `locked` alone.
+		const { getByRole } = renderPanel({ locked: true, phaseCompleted: true });
+		expect(
+			getByRole("button", { name: /Ayesha Khan status/i }).hasAttribute(
+				"disabled",
+			),
+		).toBe(true);
+	});
+
 	it("offers a WhatsApp draft when a phone is on file, and says so when not", () => {
 		const { getByText, getAllByRole } = renderPanel();
 		expect(getAllByRole("link").length).toBeGreaterThan(0);
@@ -291,6 +312,63 @@ describe("roll mode", () => {
 			/>,
 		);
 		getByRole("link", { name: /WhatsApp/i });
+	});
+
+	it("keeps the chips live on a COMPLETED meeting, unlike plan mode's rungs", () => {
+		// Roll mode records what HAPPENED, and correcting a mis-marked attendance
+		// after a meeting is closed out is a normal club task — minutes here are
+		// often finished days later. Everything around this already allows it:
+		// `setAttendance` gates only on `assertAttendanceRecordable` (has the day
+		// arrived) and has no view of `status`, and the Minutes `AttendanceSection`
+		// that roll mode replaces gated on `canEdit` alone, which never considered
+		// `status` either. Left on `locked`, roll mode would be STRICTER than the
+		// surface being deleted and the only correction route would be Reopen.
+		const { getByRole } = render(
+			<MeetingAttendancePanel
+				{...rollProps}
+				attendance={[{ memberId: "m-bea", status: "present" }]}
+				locked={true}
+				phaseCompleted={true}
+			/>,
+		);
+		// BOTH chip shapes. Abe is a dashed one-tap suggestion and Bea a recorded
+		// chip that opens the menu; those are two separate `disabled` expressions in
+		// `RollChip`, so one can be re-gated without the other.
+		expect(
+			getByRole("button", { name: /Abe Nkemelu status/i }).hasAttribute(
+				"disabled",
+			),
+		).toBe(false);
+		expect(
+			getByRole("button", { name: /Bea Osei status/i }).hasAttribute(
+				"disabled",
+			),
+		).toBe(false);
+	});
+
+	it("keeps the Guests group editable on a completed meeting too", () => {
+		// Same capability, same evidence: `addMinutesGuest` / `removeMinutesGuest`
+		// gate only on `assertAttendanceRecordable`, and the section this group was
+		// lifted from let an officer add a guest they had missed to a closed-out
+		// meeting. Without this the member chips would be correctable and the guest
+		// list beside them dead — a half-applied fix.
+		const { getByRole } = render(
+			<MeetingAttendancePanel
+				{...rollProps}
+				guests={[{ guestId: "g1", name: "Nadia Farouk", fromRole: false }]}
+				clubGuests={[{ id: "g1", name: "Nadia Farouk" }]}
+				locked={true}
+				phaseCompleted={true}
+			/>,
+		);
+		expect(
+			getByRole("button", { name: /\+ Add guest/ }).hasAttribute("disabled"),
+		).toBe(false);
+		expect(
+			getByRole("button", { name: /Remove Nadia Farouk/i }).hasAttribute(
+				"disabled",
+			),
+		).toBe(false);
 	});
 
 	it("expands by default below lg, unlike plan mode", () => {

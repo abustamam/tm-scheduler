@@ -415,9 +415,38 @@ describe("attendance panel route wiring (PR 2)", () => {
 		// `minutes.data` — which is `null` for a viewer who may not read them.
 		expect(src).toContain("attendance={rollAttendance}");
 		expect(src).toContain("guests={minutes.data?.guests}");
+		// Fix round 1 (F1): this assertion used to pin an inline
+		// `(minutes.data?.members ?? []).flatMap(...)`, which read the LOADER's rows
+		// only — so offline an officer tapped a chip, the write queued, and nothing
+		// visibly moved. It now goes through `deriveRollAttendance`, which replays
+		// the offline queue (and owns the `status === null` drop the dashed
+		// suggestion depends on). The guard follows the code here; the projection's
+		// BEHAVIOUR is tested in `src/lib/roll-attendance.test.ts`, since this route
+		// does not mount in jsdom.
+		//
+		// The four ARGUMENTS are the point, same as the `getTmodPanelData` pin
+		// above: every one of them is same-typed with a plausible wrong expression
+		// (`snapshot: minutes.data`, `queue: []`, `online: true`) that typechecks,
+		// lints clean and silently restores the loader-only behaviour.
 		expect(src.replace(/\s+/g, " ")).toContain(
-			"const rollAttendance = (minutes.data?.members ?? []).flatMap((m) => m.status === null ? [] : [{ memberId: m.memberId, status: m.status }], );",
+			"deriveRollAttendance({ online, minutes: minutes.data, snapshot: offlineMinutes.snapshot, queue: offlineMinutes.queue, })",
 		);
+		// The dep array, for the same reason the `removeQueries` cleanup pins its
+		// own: `deriveMinutes` structuredClones, so this is memoised — and a memo
+		// missing `offlineMinutes.queue` freezes the rows at whatever the first
+		// render computed, which is byte-identical to having no projection at all.
+		expect(src.replace(/\s+/g, " ")).toContain(
+			"[online, minutes.data, offlineMinutes.snapshot, offlineMinutes.queue],",
+		);
+		// …and the loader-only form must be GONE, not merely joined by the new one.
+		// Both can coexist and typecheck (an unused local is the only symptom, and
+		// `rollAttendance` would still be assigned somewhere), so the positive pins
+		// above cannot see a revert that leaves the prop wired to the old
+		// expression.
+		expect(
+			src.replace(/\s+/g, " "),
+			"the roll rows must come from the offline projection, not straight off the loader",
+		).not.toContain("(minutes.data?.members ?? []).flatMap(");
 	});
 
 	it("routes every roll write through the offline hook, so a bad connection queues", () => {

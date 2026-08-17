@@ -294,6 +294,27 @@ export function MeetingAttendancePanel({
 }) {
 	const roll = mode === "roll";
 
+	// MODE-SPECIFIC lock. `locked` is exactly `status === "completed"`
+	// (`meeting-lifecycle.ts`), and ROLL mode must not respect it: correcting a
+	// mis-marked attendance after a meeting is closed out is a normal club task,
+	// minutes here are often finished days later, and everything around this
+	// already allows it — `setAttendance` / `addMinutesGuest` /
+	// `removeMinutesGuest` gate only on `assertAttendanceRecordable` (has the day
+	// arrived), with no view of `status`, and the Minutes card's own recorder
+	// (`AttendanceSection`, which roll mode replaces) gated on `canEdit` alone,
+	// which never considered `status` either. Left on `locked`, roll mode would be
+	// STRICTER than the surface it replaces and the only correction route would be
+	// Reopen.
+	//
+	// PLAN mode keeps respecting it — changing PLANNED attendance for a meeting
+	// that already happened is meaningless. Hence one value branching on the mode
+	// rather than a `locked={false}` at the call site: `locked` would then be a
+	// prop that lies, and the panel reads it for more than the chips.
+	//
+	// `pending` still disables every control during an in-flight write; this only
+	// removes the lifecycle gate.
+	const writesLocked = roll ? false : locked;
+
 	// Per-row in-flight state, lifted from OutreachPanel: a BUSY guard against a
 	// rapid double-tap, not the source of the displayed value — that comes from
 	// `rungOverride`, which the route owns.
@@ -370,15 +391,18 @@ export function MeetingAttendancePanel({
 	}
 
 	async function contacted(memberId: string) {
-		// Gated on `locked` for the same reason the dropdown trigger is: this is a
-		// WRITE (no answer → asked), it just happens to be triggered by tapping a
-		// message draft rather than picking a rung. Today the panel only renders
-		// for an `upcoming` meeting, so `locked` is always false and this is
-		// inert — but the dropdown was already gated and this path was not, and
-		// the difference only becomes visible as a hole the moment the panel is
-		// rendered in another phase. The draft itself still opens; a locked
-		// meeting just stops recording against it.
-		if (locked) return;
+		// Gated for the same reason the dropdown trigger is: this is a WRITE (no
+		// answer → asked), it just happens to be triggered by tapping a message
+		// draft rather than picking a rung. The dropdown was already gated and this
+		// path was not, and the difference only becomes visible as a hole the moment
+		// the panel is rendered in another phase. The draft itself still opens; a
+		// locked meeting just stops recording against it.
+		//
+		// `writesLocked`, not raw `locked` — identical here, since this is a PLAN
+		// rung and only `AttendanceRow` wires it, but reading the same value as
+		// every other write in this component is what keeps the two from drifting
+		// if a roll row ever grows an `onContacted`.
+		if (writesLocked) return;
 		setPendingId(memberId);
 		try {
 			await onContacted(memberId);
@@ -450,7 +474,7 @@ export function MeetingAttendancePanel({
 								<RollAttendanceRow
 									key={row.id}
 									row={row}
-									locked={locked}
+									locked={writesLocked}
 									meetingDate={meetingDate}
 									shareUrl={shareUrl}
 									hideContact={hideContact}
@@ -462,7 +486,7 @@ export function MeetingAttendancePanel({
 								<AttendanceRow
 									key={m.id}
 									m={m}
-									locked={locked}
+									locked={writesLocked}
 									meetingDate={meetingDate}
 									shareUrl={shareUrl}
 									pending={pendingId === m.id}
@@ -471,10 +495,18 @@ export function MeetingAttendancePanel({
 								/>
 							))}
 					{roll && guests ? (
+						/* `writesLocked` here too, and for the same reason as the chips:
+						 *  this group only ever renders in roll mode, the guest writes
+						 *  behind it (`addMinutesGuest` / `removeMinutesGuest`) gate only
+						 *  on `assertAttendanceRecordable`, and the `AttendanceSection`
+						 *  this replaces let an officer add a missed guest to a completed
+						 *  meeting. Leaving it on raw `locked` would fix the member chips
+						 *  and leave the guest list dead on exactly the meeting whose
+						 *  record is being corrected. */
 						<AttendanceGuestsGroup
 							guests={guests}
 							clubGuests={clubGuests ?? []}
-							locked={locked}
+							locked={writesLocked}
 							onAddGuest={onAddGuest ?? (() => {})}
 							onRemoveGuest={onRemoveGuest ?? (() => {})}
 						/>
