@@ -18,7 +18,6 @@ import type { AttendancePlanStatus as PlanStatus } from "./attendance-plan-logic
 import { listPlanForMeetings } from "./attendance-plan-logic";
 import { isReadableClub } from "./club-readable-logic";
 import { getMembership } from "./guards";
-import { loadPublicClubRoster } from "./members-logic";
 import { loadTmodMemberId } from "./meeting-authz-logic";
 import {
 	loadRosterWithContact,
@@ -26,6 +25,7 @@ import {
 } from "./meeting-contacts-logic";
 import { linkEvaluatorsToSpeakers } from "./meeting-create-logic";
 import { freezeMeetingNumber } from "./meeting-number-logic";
+import { loadPublicClubRoster } from "./members-logic";
 import { closeAllVotesTx } from "./voting-logic";
 
 export interface UpcomingMeetingRow {
