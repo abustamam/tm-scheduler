@@ -179,7 +179,8 @@ the nouns in `src/db/schema.ts`.
   surface DISPLAYS the club's own `name`: the roster, the projected legend, and every row of the
   printed run sheet. Our canonical name survives in one spot only, a beat for a role the club
   runs none of, where there is no club name to read. **Three roles' PERMISSIONS key off it too** —
-  the TMOD's self-serve agenda editing (ADR-0010), the Grammarian's Word-of-the-Day edit (#296),
+  the TMOD's self-serve agenda editing and planned-attendance panel (ADR-0010 / #576), the
+  Grammarian's Word-of-the-Day edit (#296),
   and the Vote Counter's control of the digital ballot (#510, see **Digital vote**) — so a rename
   never moves a capability and a club-invented role that merely *sounds* like one never gains it.
   See #367 / #368 / #445 / #464 / #510.
@@ -327,6 +328,19 @@ per-Person opt-out, the no-auth `/unsubscribe` link, and per-club settings — s
 - A meeting's **Word of the Day** alone may also be edited by the self-asserted member holding
   that meeting's **Grammarian** slot — a narrower capability than the TMOD's, on the same
   self-assert trust (#296).
+- A meeting's **planned attendance** rides that same self-assert trust since #576, and is NOT
+  agenda content, so it has its own ladder: `resolveActor` (`src/server/attendance-plan.ts`) has
+  three arms — club `admin` → this meeting's TMOD → self — and `viaManager` (either of the first
+  two), not a session, is what admits a write of ANY member's rung including the officer-private
+  `reached_out`. Three things stay narrower than the write. **Clearing** a rung that is not the
+  caller's own answer stays on the OFFICER arm (`via === "officer"`, which requires a session),
+  because deleting someone else's record of having asked is not what the panel is for. A TMOD
+  write may only ever REPLACE `reached_out`, never a member's real `coming` / `not_coming`. And on
+  the read (`getTmodPanelData` → `loadTmodPanelData`) the rungs and member NAMES ride the claim
+  while phone and email require a real session whose own membership IS the TMOD — see the
+  **Planned attendance** entry above and `getPublicMeetingByKey`'s PII rule. Which arm granted a
+  write is persisted as `activity_log.detail.grantedVia`, which is what makes ADR-0010's "made
+  safe by the activity log" true for an honour-system grant.
 - All three capability slots are resolved by `role_definitions.key`, **never by the club's display
   name**: renaming a role must not move a capability, and a club-invented role whose name merely
   resembles one must not gain it. A row whose `key` is still NULL falls back to an **exact**

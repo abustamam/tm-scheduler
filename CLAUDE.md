@@ -340,18 +340,31 @@ the wrong mental model for who may write it; `viaManager` (not the officer arm) 
 It does NOT lift `onlyFrom` on the clear — that stays `via === "officer"`, because deleting
 another officer's record of having asked is not what the panel is for and the TMOD claim is
 honour-system. Same split on the read: `getTmodPanelData` gives the TMOD the ladder and names on
-the claim, but phone and email only to a real session (#576 review). What the seam CAN enforce without a session is that one rung does not
+the claim, but phone and email only to a real session (#576 review). WHICH arm admitted a write
+is persisted as `activity_log.detail.grantedVia` (`officer | tmod | self`), because a grant
+defended as "auditable afterwards" is not auditable while an honour-system TMOD write and a
+session-authenticated officer's look identical in the feed. It is optional on the seam so the
+callers with no ladder (`setAvailability`, the self-claim path) need no change — which also means
+a new caller drops it silently. Pass it. What the seam CAN enforce without a session is that one rung does not
 silently overwrite another, and it takes that from the caller too: `setPlanStatus`'s
 `demoteFrom` names the statuses a write may replace (`setContacted` passes `["reached_out"]`,
 so ticking "contacted" can never demote a real answer, and `setPlannedAttendance` passes the
-same floor when the panel's WhatsApp/email tap auto-advances someone to `reached_out` — an
-officer's deliberate menu pick stays unfloored, so "Asked" never silently no-ops on a row that
-already answered), and `clearPlanStatus`'s `onlyFrom`
-names the statuses a delete may remove (the self-service callers pass `SELF_SERVICE_RUNGS`, so
-a plain member cannot erase an officer's `reached_out` — which deleting a `meeting_outreach`
-row used to require an admin to do). Read that as SELF-SERVICE, not ANONYMOUS: since #576 an
-anonymous caller who holds this meeting's TMOD slot takes the `viaManager` arm and gets the
-unrestricted clear, so "anonymous" stopped being the dividing line — the arm is. Both are `setWhere`/`WHERE` predicates rather than a
+same floor on `reached_out` when the panel's WhatsApp/email tap auto-advanced someone
+(`data.via === "nudge"`) **or** when the resolved arm was the Toastmaster's (`via === "tmod"` —
+the two `via`s in that one expression are different things). Read
+that second condition carefully: the TMOD is floored on BOTH write paths, deliberate menu pick
+included, since one forged request per member would otherwise mark the whole roster "Asked" and
+erase every answer invisibly — `answeredRungs` filters `reached_out` out, so the officer's panel
+would read "all contacted, nobody declined". Only an OFFICER's deliberate menu pick is unfloored,
+which is what keeps "Asked" from silently no-opping on a row that already answered for the one
+caller a session authenticated), and `clearPlanStatus`'s `onlyFrom`
+names the statuses a delete may remove (every caller NOT on the officer arm passes
+`SELF_SERVICE_RUNGS`, so neither a plain member nor a self-asserted Toastmaster can erase an
+officer's `reached_out` — which deleting a `meeting_outreach`
+row used to require an admin to do). Do NOT restate that as "`viaManager` gets the unrestricted
+clear": an earlier draft of this paragraph did, that was the first cut of #576 and never HEAD,
+and the two sentences contradicted each other four lines apart. The write ladder widened to
+`viaManager`; the delete stayed on `via === "officer"`, which needs a session. Both are `setWhere`/`WHERE` predicates rather than a
 read-then-write, so they are also the de-dup and race fix for `markComingOnSelfClaim`.
 
 `attendance-plan-store.guard.test.ts` enforces both halves across `src/` **and**
