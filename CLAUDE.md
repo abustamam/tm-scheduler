@@ -335,8 +335,10 @@ Both need a session, so both belong to the CALLER: `attendance-plan.ts` resolves
 gates on `clubs.archived_at`, and the public delegates in `availability.ts` do their own
 `assertClubNotArchived`. What the seam CAN enforce without a session is that one rung does not
 silently overwrite another, and it takes that from the caller too: `setPlanStatus`'s
-`demoteFrom` names the statuses a write may replace (`setContacted` passes `["reached_out"]`,
-so ticking "contacted" can never demote a real answer), and `clearPlanStatus`'s `onlyFrom`
+`demoteFrom` names the statuses a write may replace (`setPlannedAttendance` passes
+`["reached_out"]` on the `via: "nudge"` path only, so the WhatsApp/email auto-advance can never
+demote a real answer, while an officer's deliberate menu pick stays unfloored — the deleted
+`setContacted` carried the same floor unconditionally), and `clearPlanStatus`'s `onlyFrom`
 names the statuses a delete may remove (the session-less callers pass `SELF_SERVICE_RUNGS`, so
 anonymous callers cannot erase an officer's `reached_out` — which deleting a `meeting_outreach`
 row used to require an admin to do). Both are `setWhere`/`WHERE` predicates rather than a

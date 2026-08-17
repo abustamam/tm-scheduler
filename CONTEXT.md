@@ -213,7 +213,13 @@ the nouns in `src/db/schema.ts`.
   now the ONLY encoding of unavailable, and row presence answers nothing. Consequence for
   readers: filter on the STATUS, never on the row existing. `reached_out` is the officer's
   private record of having asked and stays admin-only to read; `coming` and `not_coming` are the
-  member's own answer and are self-serve. Reached through one seam
+  member's own answer and are self-serve. On the meeting payload that boundary is TWO arrays
+  rather than one filtered at each consumer: `plan` (the whole ladder, admin-only) feeds the
+  officer's attendance panel, and `answeredRungs` (`coming` / `not_coming` only, public) is what
+  the personal strip reads to show a member their OWN answer. The server cannot resolve "my" —
+  the viewer is known only on the client, since the anonymous roster pick is the dominant
+  identity here — so the public array must never carry `reached_out` in the first place
+  (v1.15.0.0). Reached through one seam
   (`src/server/attendance-plan-logic.ts`), which owns actor attribution and the predicates that
   stop one rung overwriting another — but NOT the archive gate or the officer-only rung, which
   need a session and live in the callers. See the 2026-08-11 spec.
