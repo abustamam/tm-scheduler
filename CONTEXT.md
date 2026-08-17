@@ -179,7 +179,8 @@ the nouns in `src/db/schema.ts`.
   surface DISPLAYS the club's own `name`: the roster, the projected legend, and every row of the
   printed run sheet. Our canonical name survives in one spot only, a beat for a role the club
   runs none of, where there is no club name to read. **Three roles' PERMISSIONS key off it too** —
-  the TMOD's self-serve agenda editing (ADR-0010), the Grammarian's Word-of-the-Day edit (#296),
+  the TMOD's self-serve agenda editing and planned-attendance panel (ADR-0010 / #576), the
+  Grammarian's Word-of-the-Day edit (#296),
   and the Vote Counter's control of the digital ballot (#510, see **Digital vote**) — so a rename
   never moves a capability and a club-invented role that merely *sounds* like one never gains it.
   See #367 / #368 / #445 / #464 / #510.
@@ -214,18 +215,27 @@ the nouns in `src/db/schema.ts`.
   (`member_availability`, `meeting_outreach`) that answered overlapping questions, could
   disagree, and between them could not express "she replied, she's coming" — so `not_coming` is
   now the ONLY encoding of unavailable, and row presence answers nothing. Consequence for
-  readers: filter on the STATUS, never on the row existing. `reached_out` is the officer's
-  private record of having asked and stays admin-only to read; `coming` and `not_coming` are the
-  member's own answer and are self-serve. On the meeting payload that boundary is TWO arrays
-  rather than one filtered at each consumer: `plan` (the whole ladder, admin-only) feeds the
-  officer's attendance panel, and `answeredRungs` (`coming` / `not_coming` only, public) is what
-  the personal strip reads to show a member their OWN answer. The server cannot resolve "my" —
-  the viewer is known only on the client, since the anonymous roster pick is the dominant
-  identity here — so the public array must never carry `reached_out` in the first place
-  (v1.15.0.0). Reached through one seam
-  (`src/server/attendance-plan-logic.ts`), which owns actor attribution and the predicates that
-  stop one rung overwriting another — but NOT the archive gate or the officer-only rung, which
-  need a session and live in the callers. See the 2026-08-11 spec.
+  readers: filter on the STATUS, never on the row existing. `reached_out` is the private record
+  of having asked, kept from MEMBERS rather than from everyone who runs the meeting; `coming` and
+  `not_coming` are the member's own answer and are self-serve. On the meeting payload that
+  boundary is TWO arrays rather than one filtered at each consumer: `plan` (the whole ladder,
+  admin-only) feeds the attendance panel, and `answeredRungs` (`coming` / `not_coming` only,
+  public) is what the personal strip reads to show a member their OWN answer. The server cannot
+  resolve "my" — the viewer is known only on the client, since the anonymous roster pick is the
+  dominant identity here — so the public array must never carry `reached_out` in the first place
+  (v1.15.0.0). The meeting's Toastmaster reads the same ladder through a THIRD path (#576):
+  not the payload, but `getTmodPanelData`, which verifies a self-asserted member id against the
+  meeting's TMOD slot. Deliberately separate, because widening the payload's `canManage` gate to
+  accept a client claim would put the private rung behind a forgeable flag on the array every
+  anonymous visitor already receives. That reader splits its two halves by TRUST: the ladder and
+  member NAMES ride the self-asserted claim (names are already public), but phone and email need a
+  real SESSION whose own membership is the Toastmaster. The claim is not a secret — the id ships
+  as `assigneeId` on the public payload and the roster picker hands any visitor any id — so an
+  anonymous Toastmaster plans attendance with the drafts dark and signs in to message. See
+  `getPublicMeetingByKey`: "The soft honor-system gate on `/club/:clubId` must never carry PII." Reached
+  through one seam (`src/server/attendance-plan-logic.ts`), which owns actor attribution and the
+  predicates that stop one rung overwriting another — but NOT the archive gate or the write
+  ladder, which live in the callers. See the 2026-08-11 spec.
 - **Table Topics speaker** — an impromptu participant who answered a Table Topic
   (`table_topics_speakers`), captured as an ordered list of member-or-guest (XOR) + optional
   topic text. Distinct from the **Table Topics Master** role (the role definition that runs the
@@ -318,6 +328,19 @@ per-Person opt-out, the no-auth `/unsubscribe` link, and per-club settings — s
 - A meeting's **Word of the Day** alone may also be edited by the self-asserted member holding
   that meeting's **Grammarian** slot — a narrower capability than the TMOD's, on the same
   self-assert trust (#296).
+- A meeting's **planned attendance** rides that same self-assert trust since #576, and is NOT
+  agenda content, so it has its own ladder: `resolveActor` (`src/server/attendance-plan.ts`) has
+  three arms — club `admin` → this meeting's TMOD → self — and `viaManager` (either of the first
+  two), not a session, is what admits a write of ANY member's rung including the officer-private
+  `reached_out`. Three things stay narrower than the write. **Clearing** a rung that is not the
+  caller's own answer stays on the OFFICER arm (`via === "officer"`, which requires a session),
+  because deleting someone else's record of having asked is not what the panel is for. A TMOD
+  write may only ever REPLACE `reached_out`, never a member's real `coming` / `not_coming`. And on
+  the read (`getTmodPanelData` → `loadTmodPanelData`) the rungs and member NAMES ride the claim
+  while phone and email require a real session whose own membership IS the TMOD — see the
+  **Planned attendance** entry above and `getPublicMeetingByKey`'s PII rule. Which arm granted a
+  write is persisted as `activity_log.detail.grantedVia`, which is what makes ADR-0010's "made
+  safe by the activity log" true for an honour-system grant.
 - All three capability slots are resolved by `role_definitions.key`, **never by the club's display
   name**: renaming a role must not move a capability, and a club-invented role whose name merely
   resembles one must not gain it. A row whose `key` is still NULL falls back to an **exact**

@@ -32,11 +32,17 @@ describe("attendance panel route wiring (PR 2)", () => {
 		// `over`, `locked` and `canComplete` are all booleans in scope here. Only
 		// `phase === "upcoming"` is plan mode: `canComplete` is TRUE on meeting day
 		// and would keep the plan panel up into roll territory, and `over` is false
-		// all through meeting day and would do the opposite. `effectiveCanManage`,
-		// never bare `canManage` — #320 drops management everywhere it gates admin
-		// UI, including preview-as-member.
-		expect(src).toContain("const showPlanPanel = effectiveCanManage");
+		// all through meeting day and would do the opposite.
+		expect(src).toContain("const showPlanPanel = runsThisMeeting");
 		expect(src).toContain('phase === "upcoming"');
+		// `effectiveCanManage`, never bare `canManage` — #320 drops management
+		// everywhere it gates admin UI, including preview-as-member. The TMOD arm
+		// (#576) carries its own `!previewAsMember` for the same reason: an officer
+		// previewing as a member who ALSO holds the slot would otherwise keep the
+		// panel through the preview and defeat the point of it.
+		expect(src).toContain(
+			"const runsThisMeeting = effectiveCanManage || (isTmod && !previewAsMember)",
+		);
 	});
 
 	it("computes the phase exactly once, on the route's frozen clock", () => {
@@ -47,15 +53,90 @@ describe("attendance panel route wiring (PR 2)", () => {
 	});
 
 	it("passes the plan array, the roster, and the shared role map to the panel", () => {
-		// `plan` is the admin-only ladder from the loader, not a re-filtered copy.
-		// The panel gets `loaderRoster` (the contact-bearing admin roster) rather
-		// than the route's `roster` local, which falls back to the client-fetched
-		// PUBLIC roster (no phone/email) when `!canManage` — a shape the panel's
-		// props require unconditionally. `roleByMemberId` is the ONE map lifted for
-		// both the agenda and the panel (#396 PR 2).
-		expect(src).toContain("plan={plan}");
-		expect(src).toContain("roster={loaderRoster}");
+		// Both arrays come from ONE name each, so the officer path and the TMOD
+		// path cannot diverge: `effectivePlan` is the loader's admin-only ladder
+		// for an officer and the separately-verified `getTmodPanelData` rows
+		// otherwise, and `panelRoster` is the contact-bearing roster from
+		// whichever of those two the viewer is entitled to.
+		//
+		// Neither may fall back to the route's `roster` local, which is the
+		// client-fetched PUBLIC roster (no phone/email) when `!canManage` — the
+		// panel's props require contact unconditionally, and silently handing it
+		// the public shape is how every row renders "No contact on file".
+		expect(src).toContain("plan={effectivePlan}");
+		expect(src).toContain("roster={panelRoster}");
 		expect(src).toContain("roleByMemberId={roleByMemberId}");
+		expect(src).toContain(
+			"const effectivePlan = effectiveCanManage ? plan : fetchedPlan;",
+		);
+		// Whitespace-collapsed rather than a multi-line regex: the formatter wraps
+		// this ternary and the exact break points are its business, not this
+		// guard's.
+		expect(src.replace(/\s+/g, " ")).toContain(
+			"const panelRoster = effectiveCanManage ? loaderRoster : (tmodPanelData?.roster ?? []);",
+		);
+	});
+
+	// #576 review: the TMOD write wiring had no coverage of any kind. Dropping
+	// `...actorClaim` from just ONE of the two call sites is the dangerous slip —
+	// a Toastmaster's clear would fall back to the self arm, where `onlyFrom`
+	// restricts the delete to the self-service rungs, so it becomes a silent
+	// WHERE-clause no-op with no thrown error and no toast.
+	it("sends the caller's own id on BOTH plan write paths, so the server can verify the TMOD", () => {
+		expect(src.replace(/\s+/g, " ")).toContain(
+			"const actorClaim = !effectiveCanManage && myId ? { actorMemberId: myId } : {};",
+		);
+		// Both spread sites, counted rather than matched once — one is inside the
+		// clear call and one inside the set call, and a single `toContain` would
+		// pass with either deleted.
+		expect(src.split("...actorClaim").length - 1).toBe(2);
+	});
+
+	it("fetches the Toastmaster's ladder with the viewer's own id, gated on needing it", () => {
+		expect(src).toContain(
+			"const needsTmodPlan = showPlanPanel && !effectiveCanManage && !!myId;",
+		);
+		// The ARGUMENTS are the point: the meeting being viewed and the viewer's
+		// own id. Passing `memberId: someOtherId` would typecheck and silently ask
+		// the server to verify the wrong person. Stops before the closing braces so
+		// the formatter's trailing comma is not part of the contract.
+		expect(src.replace(/\s+/g, " ")).toContain(
+			"getTmodPanelData({ data: { meetingId: meeting.id, memberId: myId as string }",
+		);
+		expect(src).toContain("enabled: needsTmodPlan,");
+	});
+
+	it("refreshes the Toastmaster's query after a write, not just the router loader", () => {
+		// The ladder lives in a QUERY, so `router.invalidate()` alone leaves it
+		// stale — and the reconciling effect then drops the override back onto the
+		// stale row, visibly undoing the tap.
+		expect(src).toContain(
+			"void queryClient.invalidateQueries({ queryKey: tmodPlanKey });",
+		);
+	});
+
+	it("never renders the panel from a failed or in-flight Toastmaster fetch", () => {
+		// An empty roster renders a header plus a counts line of zeros, which is
+		// indistinguishable from "no members" and from "you were just demoted".
+		expect(src.replace(/\s+/g, " ")).toContain(
+			"const tmodPanelUnavailable = needsTmodPlan && (tmodPanelPending || tmodPanelFailed);",
+		);
+		expect(src).toContain("{showPlanPanel && !tmodPanelUnavailable ? (");
+	});
+
+	it("evicts the Toastmaster's cached contact roster when the viewer changes", () => {
+		// Keying on `myId` reads a different key on a switch; it does not remove the
+		// old one, and the default gcTime keeps the whole club's phone and email in
+		// memory for five minutes on a shared laptop.
+		// Presence alone was not enough. Moving this call OUT of the cleanup
+		// `return` makes it fire eagerly on mount — evicting the roster it just
+		// fetched — and emptying the dep array makes it never fire on an identity
+		// change, which is the one moment it exists for. Both leave a bare
+		// `toContain` green while the stale-PII-cache bug is back, so pin the whole
+		// shape: the call inside the returned cleanup, and `myId` in the deps.
+		expect(src.replace(/\s+/g, " ")).toContain(
+			'return () => { queryClient.removeQueries({ queryKey: ["tmod-plan", meeting.id] }); }; }, [queryClient, meeting.id, myId]);',
+		);
 	});
 
 	it("keeps the agenda column shrinkable so the rail cannot be pushed off", () => {

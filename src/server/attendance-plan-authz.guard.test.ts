@@ -126,7 +126,7 @@ describe("attendance-plan authz (D6)", () => {
 		// subject) — so without this an anonymous caller could mark someone else
 		// as already asked and get them skipped on the officer's outreach list.
 		const body = handlerBody(SRC, "setPlannedAttendance");
-		expect(body).toContain('if (!viaOfficer && data.status === "reached_out")');
+		expect(body).toContain('if (!viaManager && data.status === "reached_out")');
 		expect(
 			body,
 			"the officer-only rung must THROW; an empty block passes a condition-only assertion",
@@ -139,16 +139,19 @@ describe("attendance-plan authz (D6)", () => {
 		// the officer's outreach record used to require `requireUser()` +
 		// `requireClubRole(admin)`; after the consolidation it is one row with the
 		// member's own answer, and this endpoint takes no session at all.
+		// True as written since the #576 review, and it was NOT before: the clear
+		// briefly rode `viaManager`, which admits the honour-system Toastmaster arm,
+		// so a session-less caller asserting a public member id could delete.
 		const body = handlerBody(SRC, "clearPlannedAttendance");
 		expect(
 			body,
-			"clearPlannedAttendance must resolve the officer branch — otherwise it " +
-				"cannot tell who is allowed to remove a `reached_out` row",
-		).toContain("viaOfficer");
+			"clearPlannedAttendance must resolve WHICH arm admitted the caller — a " +
+				"boolean capability cannot tell an officer from a self-asserted TMOD",
+		).toContain("via");
 		expect(
 			body,
-			"the non-officer arm must be restricted to the self-service rungs",
-		).toContain("onlyFrom: viaOfficer ? undefined : SELF_SERVICE_RUNGS");
+			"only the officer arm may lift the self-service restriction",
+		).toContain('onlyFrom: via === "officer" ? undefined : SELF_SERVICE_RUNGS');
 	});
 
 	it("reports the officer branch rather than inferring it from a null actor", () => {
@@ -159,8 +162,11 @@ describe("attendance-plan authz (D6)", () => {
 		// would be tempted to re-derive it. (Module scope would false-FAIL on the
 		// prose above, which names the pattern to warn against it — the reason
 		// guard-source keeps negatives verbatim and positives comment-blind.)
-		expect(SRC).toContain("viaOfficer: true");
-		expect(SRC).toContain("viaOfficer: false");
+		// Two arms grant the capability since #576, so the reported flag is
+		// asserted through the arm labels rather than a true/false pair.
+		expect(SRC).toContain('viaManager: true, via: "officer"');
+		expect(SRC).toContain('viaManager: true, via: "tmod"');
+		expect(SRC).toContain('viaManager: false, via: "self"');
 		for (const fn of HANDLERS) {
 			expect(
 				handlerBody(RAW, fn),
@@ -174,6 +180,91 @@ describe("attendance-plan authz (D6)", () => {
 			RAW,
 			"the club must come from the meeting row (#396) — a payload clubId is not evidence of anything",
 		).not.toContain("data.clubId");
+	});
+
+	it("admits this meeting's Toastmaster as a third arm, scoped to that meeting", () => {
+		// #576. Unreachable from vitest — `resolveActor` is private to this
+		// `createServerFn` module — so the arm's SHAPE is pinned here and its
+		// read-side twin is executed in `tmod-panel-data.integration.test.ts`.
+		expect(SRC).toContain("loadTmodMemberId(args.meetingId)");
+		expect(
+			SRC,
+			"the TMOD grant must be scoped to the meeting being written, never resolved from the club",
+		).not.toMatch(/loadTmodMemberId\(\s*args\.clubId/);
+		expect(SRC).toContain('via: "tmod"');
+	});
+
+	it("asks who is CALLING for the TMOD check, not who is being written", () => {
+		// The self-only arm below deliberately defaults the claim to the SUBJECT
+		// (`?? args.memberId`), which is what makes an anonymous self-write
+		// resolve. Reusing that default for the TMOD check would make every
+		// anonymous write self-assert as its own target, so writing the TMOD's row
+		// would confer TMOD powers over it — useless for the panel and wrong.
+		// Asserted by ORDER rather than by slicing between two markers. The #576
+		// review collapsed the duplicate actor resolution, which moved both markers
+		// the previous slice depended on — a slice-based guard breaks on a refactor
+		// that keeps the rule, which trains people to edit the guard instead of
+		// reading it.
+		//
+		// The rule: the FIRST resolution — the one the TMOD comparison consumes —
+		// asks who is CALLING (`?? null`). The subject default appears only in the
+		// fallback that runs when the caller asserted nothing, strictly AFTER the
+		// TMOD comparison.
+		const callerResolve = SRC.indexOf(
+			"claimedActorMemberId: args.claimedActorMemberId ?? null,",
+		);
+		const tmodCompare = SRC.indexOf("caller === tmodMemberId");
+		const subjectDefault = SRC.indexOf("claimedActorMemberId: args.memberId,");
+		expect(callerResolve).toBeGreaterThan(-1);
+		expect(
+			tmodCompare,
+			"the TMOD comparison must consume the caller resolution, not precede it",
+		).toBeGreaterThan(callerResolve);
+		expect(
+			subjectDefault,
+			"the subject default must not be reachable before the TMOD comparison — " +
+				"it would make every anonymous write self-assert as its own target",
+		).toBeGreaterThan(tmodCompare);
+	});
+
+	it("orders the arms officer, then TMOD, then self", () => {
+		// Load-bearing. Self first would swallow the TMOD arm entirely, since a
+		// TMOD writing their OWN row satisfies the self test and would return
+		// `viaManager: false` — silently downgrading them on exactly the write
+		// they are most likely to make first.
+		// Match the FULL return literal, not the bare `via: "officer"`. The bare
+		// form also matches the `ResolvedActor` interface's type union
+		// (`via: "officer" | "tmod" | "self";`), which always precedes the function
+		// body — so `tmod > officer` held regardless of how the arms were actually
+		// ordered, and this test passed with the arms physically swapped. Found by
+		// the #576 review, which swapped them and watched it stay green.
+		const officer = SRC.indexOf('viaManager: true, via: "officer"');
+		const tmod = SRC.indexOf('viaManager: true, via: "tmod"');
+		const self = SRC.indexOf('viaManager: false, via: "self"');
+		expect(officer).toBeGreaterThan(-1);
+		expect(tmod).toBeGreaterThan(officer);
+		expect(self).toBeGreaterThan(tmod);
+	});
+
+	it("splits the two capabilities across the two arms", () => {
+		// The WRITE of `reached_out` is the capability the panel exists for, so it
+		// takes `viaManager` — both arms. The unrestricted CLEAR is not: it deletes
+		// another officer's private record, and the Toastmaster's claim is
+		// honour-system with a publicly-known id, so it stays on the officer arm.
+		// These were one flag until the #576 review; conflating them handed an
+		// unauthenticated caller a delete that used to need requireClubRole(admin).
+		expect(SRC).toContain('if (!viaManager && data.status === "reached_out")');
+		expect(SRC).toContain(
+			'onlyFrom: via === "officer" ? undefined : SELF_SERVICE_RUNGS,',
+		);
+		expect(
+			SRC,
+			"the unrestricted clear must NOT be gated on viaManager — that admits the honour-system TMOD arm",
+		).not.toContain("onlyFrom: viaManager ? undefined");
+		expect(
+			SRC,
+			"viaOfficer was renamed to viaManager when the TMOD arm landed — a surviving use means one gate was missed",
+		).not.toContain("viaOfficer");
 	});
 
 	it("floors the nudge auto-advance so it cannot demote a real answer", () => {
@@ -201,8 +292,14 @@ describe("attendance-plan authz (D6)", () => {
 			body,
 			'setPlannedAttendance must pass demoteFrom on the via:"nudge" + reached_out path',
 		).toMatch(
-			/demoteFrom:\s*\n?\s*data\.via === "nudge" && data\.status === "reached_out"\s*\n?\s*\?\s*\["reached_out"\]\s*\n?\s*:\s*undefined/,
+			/demoteFrom:\s*\n?\s*data\.status === "reached_out" &&\s*\n?\s*\(data\.via === "nudge" \|\| via === "tmod"\)\s*\n?\s*\?\s*\["reached_out"\]\s*\n?\s*:\s*undefined/,
 		);
+		// The TMOD half of that condition is the #576 review's: an honour-system
+		// caller must not overwrite a real answer even on the deliberate path.
+		expect(
+			body,
+			"the TMOD arm must be floored on the manual path too, not only on nudge",
+		).toContain('via === "tmod"');
 	});
 
 	it("leaves a deliberate manual rung pick unfloored", () => {

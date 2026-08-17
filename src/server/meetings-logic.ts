@@ -3,16 +3,29 @@
 // db-touching functions). Directly integration-testable by mocking `#/db`.
 import { and, asc, eq, gte, ne, sql } from "drizzle-orm";
 import { db } from "#/db";
-import { clubs, meetings, roleDefinitions, roleSlots } from "#/db/schema";
+import {
+	clubs,
+	meetings,
+	members,
+	roleDefinitions,
+	roleSlots,
+} from "#/db/schema";
 import { generateSlotRows } from "#/lib/agenda";
 import { zonedWallTimeToUtc } from "#/lib/datetime";
-import { meetingDateReached } from "#/lib/meeting-lifecycle";
+import { isMeetingLocked, meetingDateReached } from "#/lib/meeting-lifecycle";
 import { logActivity } from "./activity";
 import type { AttendancePlanStatus as PlanStatus } from "./attendance-plan-logic";
 import { listPlanForMeetings } from "./attendance-plan-logic";
 import { isReadableClub } from "./club-readable-logic";
+import { getMembership } from "./guards";
+import { loadTmodMemberId } from "./meeting-authz-logic";
+import {
+	loadRosterWithContact,
+	type RosterContact,
+} from "./meeting-contacts-logic";
 import { linkEvaluatorsToSpeakers } from "./meeting-create-logic";
 import { freezeMeetingNumber } from "./meeting-number-logic";
+import { loadPublicClubRoster } from "./members-logic";
 import { closeAllVotesTx } from "./voting-logic";
 
 export interface UpcomingMeetingRow {
@@ -391,4 +404,121 @@ export async function loadMeetingDetailForTest(
 			r.status !== "reached_out",
 	);
 	return { plan, answeredRungs };
+}
+
+/**
+ * Everything this meeting's Toastmaster needs to run the planned-attendance
+ * panel (#576): the plan ladder including the officer-private `reached_out`
+ * rung, and — for a SIGNED-IN Toastmaster only — the roster with contact so the
+ * WhatsApp/email drafts render.
+ *
+ * THE TWO HALVES HAVE DIFFERENT TRUST LEVELS, and that asymmetry is the whole
+ * design. `memberId` is an honour-system claim: the caller asserts it and this
+ * function checks it against the meeting's Toastmaster slot, but nothing proves
+ * they are that person — and the id is not even secret, since `loadMeetingDetail`
+ * publishes it as `assigneeId` on the public payload and the roster picker hands
+ * any visitor any member's id. So:
+ *
+ *  · The LADDER rides the honour-system claim. Same basis as
+ *    `resolveMeetingAgendaAuthz`'s self-asserted TMOD editor, and the same shape
+ *    of exposure: who has been asked to a meeting, for one meeting.
+ *  · The CONTACT ROSTER requires a real session whose own membership IS the
+ *    Toastmaster. It never rides the claim. `getPublicMeetingByKey` states the
+ *    rule this obeys: "The soft honor-system gate on `/club/:clubId` must never
+ *    carry PII (#37 / PR #284)." An earlier cut of this function returned the
+ *    roster on the bare claim, which made one click from the public roster picker
+ *    a bulk dump of every active member's phone and email.
+ *
+ * Three further bounds, each closing a way the grant outlived its purpose:
+ * the claimed member must still be ACTIVE (deactivation frees only UPCOMING
+ * slots — `members-logic.ts` preserves past ones as history — so without this an
+ * ex-member keeps a permanent key), the meeting must not be locked, and the club
+ * must not be archived.
+ *
+ * Returns empty arrays — never throws — for every denial, matching the
+ * gated-seam convention: a caller who may not read this cannot tell the cases
+ * apart, and no call site needs new error handling.
+ */
+export async function loadTmodPanelData(input: {
+	meetingId: string;
+	/** The caller's self-asserted member id. Gates the LADDER only. */
+	memberId: string;
+	/** The signed-in user id, or null. Resolved by the CALLER so this module
+	 *  stays callable from vitest with no request context. Gates the ROSTER. */
+	sessionUserId: string | null;
+}): Promise<{
+	plan: { memberId: string; status: PlanStatus }[];
+	roster: RosterContact[];
+}> {
+	const empty = { plan: [], roster: [] };
+	// ONE round trip for club, archive state and meeting status. The previous cut
+	// fetched the meeting and then called `isReadableClubForMeeting`, which
+	// re-joined meetings→clubs to re-derive the same clubId.
+	const [row] = await db
+		.select({
+			clubId: meetings.clubId,
+			status: meetings.status,
+			archivedAt: clubs.archivedAt,
+		})
+		.from(meetings)
+		.innerJoin(clubs, eq(clubs.id, meetings.clubId))
+		.where(eq(meetings.id, input.meetingId))
+		.limit(1);
+	if (!row) return empty;
+	// Archive gate: an archived club answers exactly like one that never existed.
+	if (row.archivedAt !== null) return empty;
+	// A locked meeting has no planning left to do, and the panel is
+	// `upcoming`-only anyway — but that bound is CLIENT-side, and this fn is
+	// addressable directly, so without this every meeting the club ever held
+	// stays a live grant.
+	if (isMeetingLocked(row.status)) return empty;
+
+	const tmodMemberId = await loadTmodMemberId(input.meetingId);
+	// No slot assignee means no grant — never "anyone qualifies".
+	if (!tmodMemberId || tmodMemberId !== input.memberId) return empty;
+	// Still on the roster? The write path gets this from `requireMemberInClub`;
+	// comparing ids alone would let a departed ex-Toastmaster keep reading.
+	const [claimed] = await db
+		.select({ status: members.status })
+		.from(members)
+		.where(and(eq(members.id, tmodMemberId), eq(members.clubId, row.clubId)))
+		.limit(1);
+	if (!claimed || claimed.status !== "active") return empty;
+
+	// The ladder: granted on the honour-system claim above.
+	const plan = (await listPlanForMeetings(db, [input.meetingId])).map(
+		({ memberId, status }) => ({ memberId, status }),
+	);
+
+	// CONTACT is granted only to a real session that IS this Toastmaster. A
+	// signed-in club member who is not the TMOD gets names and no contact, so this
+	// gate and the write gate answer the same way for the same person — the "two
+	// gates disagree" shape #560 records.
+	const membership = input.sessionUserId
+		? await getMembership(input.sessionUserId, row.clubId)
+		: null;
+	const contactAllowed =
+		membership?.status === "active" && membership.id === tmodMemberId;
+	if (contactAllowed) {
+		return { plan, roster: await loadRosterWithContact(row.clubId) };
+	}
+
+	// NAMES without contact for everyone else who cleared the checks above.
+	// Returning `[]` here looked safe and was wrong: `buildPlanPanel` builds its
+	// rows FROM the roster, so an empty roster renders a panel with no rows at all
+	// — withholding the ladder the caller is entitled to, not just the PII. Names
+	// are already public (`loadPublicClubRoster` serves them to anyone), so the
+	// honest shape is every row present with `phone`/`email` null, which renders
+	// "No contact on file" and keeps the rungs usable.
+	const names = await loadPublicClubRoster(row.clubId);
+	return {
+		plan,
+		roster: names.map((m) => ({
+			id: m.id,
+			name: m.name,
+			phone: null,
+			email: null,
+			preferredName: null,
+		})),
+	};
 }

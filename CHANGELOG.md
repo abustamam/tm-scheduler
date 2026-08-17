@@ -2,6 +2,19 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.16.0.0] - 2026-08-17
+
+### Added
+
+- **The Toastmaster of the Day can now run planned attendance.** The panel was for club officers only, which left the person actually running the meeting able to hand someone a role without being able to see whether that person had said they were coming. Whoever holds the Toastmaster slot now gets the same list for their own meeting: every active member, one status each, set from the same dropdown.
+- **Signing in unlocks the message drafts.** A Toastmaster who identified by picking their name from the roster sees the whole list and can set anyone's status, but the WhatsApp and Email buttons stay dark and each row reads "No contact on file". Sign in and they appear. Picking a name off a public list is not proof of who you are, and members' phone numbers and email addresses are not something that should rest on it.
+
+### Changed
+
+- The Toastmaster's access is scoped to the meeting they are running and ends when it does. Holding the slot on one meeting gives them nothing on another, and it lapses once that meeting is locked. Someone who leaves the club stops having it, even on meetings they ran before.
+- Taking back an officer's "asked" mark is still an officer's job. A Toastmaster can mark anyone as asked, coming, or not coming, and can clear an answer a member gave themselves, but removing another officer's record of having chased someone needs an officer.
+- Tapping a message draft can no longer overwrite an answer that has already come in, on either the automatic or the manual path.
+
 ## [1.15.0.0] - 2026-08-16
 
 ### Added

@@ -134,6 +134,18 @@ interface Wiring {
 
 const WIRINGS: Wiring[] = [
 	{
+		file: "server/meetings.ts",
+		fn: "getTmodPanelData",
+		mustCall: "loadTmodPanelData",
+		// The officer-gated loaders it must NOT reach for directly: those answer
+		// on the payload's server-derived `canManage`, and this fn's caller is a
+		// self-asserted TMOD. Routing round the seam would skip both the archive
+		// gate and the slot check in one edit.
+		mustNotCall: "loadRosterWithContact(",
+		leaks:
+			"the officer-only reached_out rung plus every active member's phone and email",
+	},
+	{
 		file: "server/role-definitions.ts",
 		fn: "getPublicClubRoles",
 		mustCall: "loadPublicClubRoles",

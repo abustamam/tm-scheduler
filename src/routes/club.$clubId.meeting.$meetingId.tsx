@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	createFileRoute,
 	Link,
@@ -84,6 +84,7 @@ import {
 	completeMeeting,
 	getMeetingByKey,
 	getPublicMeetingByKey,
+	getTmodPanelData,
 	listPastMeetings,
 	listUpcomingMeetings,
 	reopenMeeting,
@@ -420,7 +421,20 @@ function MeetingView() {
 	// Spec D2: plan mode is the EXISTING phase, reusing the route's frozen clock.
 	// PR 2 ships plan mode only — roll mode (`today` / `completed`) is PR 3, so
 	// the panel simply does not render outside `upcoming` yet.
-	const showPlanPanel = effectiveCanManage && phase === "upcoming";
+	//
+	// The Toastmaster of the Day gets it too (#576). They already hold `canAssign`
+	// through `runsMeeting`, so before this they could hand someone a role while
+	// being unable to see whether that person had said they were coming — the
+	// availability signal is the INPUT to the assignment they were already
+	// trusted to make. `isTmod` is derived client-side from the slot rows and is
+	// display authority only: every write re-verifies against the slot server-side
+	// (`resolveActor`), and the ladder they render comes from `getTmodPanelData`,
+	// which does its own check.
+	const runsThisMeeting = effectiveCanManage || (isTmod && !previewAsMember);
+	const showPlanPanel = runsThisMeeting && phase === "upcoming";
+	// An officer already has `plan` on the payload; only the non-officer TMOD
+	// needs the extra round trip, and only while the panel is actually shown.
+	const needsTmodPlan = showPlanPanel && !effectiveCanManage && !!myId;
 
 	// One viewer for all audiences: an admin keeps editing a past-but-open meeting
 	// until Complete; a member/anon agenda freezes once the date passes; a locked
@@ -449,6 +463,59 @@ function MeetingView() {
 		enabled: !canManage && (isTmod || isVoteCounter),
 	});
 	const roster = canManage ? loaderRoster : fetchedRoster;
+
+	// The non-officer TMOD's ladder (#576). Mirrors `fetchedRoster` directly
+	// above: an officer gets it on the payload, everyone else who needs it
+	// fetches it behind a server-side check. `getTmodPanelData` verifies the claim
+	// against the slot and returns [] otherwise, so a stale `enabled` here can
+	// only under-fetch — it can never hand the confidential rung to a non-TMOD.
+	const queryClient = useQueryClient();
+	const tmodPlanKey = ["tmod-plan", meeting.id, myId] as const;
+	const {
+		data: tmodPanelData,
+		isPending: tmodPanelPending,
+		isError: tmodPanelFailed,
+	} = useQuery({
+		queryKey: tmodPlanKey,
+		queryFn: () =>
+			getTmodPanelData({
+				data: { meetingId: meeting.id, memberId: myId as string },
+			}),
+		enabled: needsTmodPlan,
+	});
+	// Evict the contact roster when the viewer changes. Keying on `myId` makes a
+	// switch READ a different key; it does not remove the old one, and the default
+	// gcTime keeps it in memory for five minutes. That matters on the shared club
+	// laptop that gets passed around at a meeting: "not you? re-pick" would
+	// otherwise leave the previous Toastmaster's copy of every member's phone and
+	// email sitting in the cache (#576 review).
+	// biome-ignore lint/correctness/useExhaustiveDependencies: myId is the TRIGGER, not a value the body reads — a change of viewer is exactly when the previous viewer's cached contact roster must be dropped
+	useEffect(() => {
+		return () => {
+			queryClient.removeQueries({ queryKey: ["tmod-plan", meeting.id] });
+		};
+	}, [queryClient, meeting.id, myId]);
+	const fetchedPlan = tmodPanelData?.plan ?? [];
+	// The panel needs the CONTACT-bearing roster (`loaderRoster`), not the public
+	// one the assign picker falls back to — without phone and email every row
+	// renders "No contact on file" and the drafts the panel exists for are gone.
+	// `loaderRoster` is `[]` for a non-officer, which is why a TMOD's copy comes
+	// from the same verified call as their ladder.
+	const panelRoster = effectiveCanManage
+		? loaderRoster
+		: (tmodPanelData?.roster ?? []);
+	// A panel built from an EMPTY roster renders its header and a counts line of
+	// zeros — indistinguishable from "this club has no members" and from "you are
+	// no longer the Toastmaster". This page gets used mid-meeting on club wifi, so
+	// a failed fetch must not produce a confident lie about who is coming (#576
+	// review). Officers are unaffected: their data is on the payload, never here.
+	const tmodPanelUnavailable =
+		needsTmodPlan && (tmodPanelPending || tmodPanelFailed);
+	// ONE name for "the ladder this viewer may see", so the panel, the optimistic
+	// rollback, `markAsked` and `contactedMemberIds` cannot disagree about which
+	// array they are reading — the officer path and the TMOD path differ only in
+	// where the rows came from.
+	const effectivePlan = effectiveCanManage ? plan : fetchedPlan;
 	// The assign-slot roster above is `{ id, name, ... }`; the minutes-style
 	// picker `TableTopicsCapture` uses (`AssigneePicker`) expects `{ memberId,
 	// name }` — the same shape `MeetingMinutes` gets from `MinutesData["members"]`.
@@ -503,13 +570,28 @@ function MeetingView() {
 	}
 	// Derived here rather than carried as their own payload fields (#396 PR2
 	// task 6): both are redundant with data the payload already ships.
-	// `unavailableMembers` (public) already names who is `not_coming`; `plan`
-	// (canManage-gated, [] otherwise — same gate the old dedicated field used)
-	// already carries every rung including `reached_out`.
+	// `unavailableMembers` (public) already names who is `not_coming`;
+	// `effectivePlan` already carries every rung including `reached_out` — the
+	// payload's gated `plan` for an officer, the separately-verified
+	// `getTmodPanelData` rows for this meeting's Toastmaster, and `[]` for everyone
+	// else, which is what keeps the recruit picker's "already asked" marks off a
+	// plain member's screen.
 	const unavailableMemberIds = unavailableMembers.map((m) => m.id);
-	const contactedMemberIds = plan
+	const contactedMemberIds = effectivePlan
 		.filter((p) => p.status === "reached_out")
 		.map((p) => p.memberId);
+
+	// What the caller asserts about THEMSELVES, so the server can check it against
+	// the meeting's Toastmaster slot (#576). Sent only on the non-officer path:
+	// an officer is identified by their session and `resolveWriteActor` ignores
+	// any claim from them anyway, so including it would be noise that reads like
+	// it matters. Omitted entirely when there is no identity, which leaves the
+	// server's self-only arm exactly as it was.
+	//
+	// This is an ASSERTION, never proof — the server club-scopes it and compares
+	// it to the slot before granting anything. Sending it cannot elevate a member
+	// who is not the TMOD.
+	const actorClaim = !effectiveCanManage && myId ? { actorMemberId: myId } : {};
 
 	async function writeRung(
 		memberId: string,
@@ -517,26 +599,34 @@ function MeetingView() {
 		via: "nudge" | "manual" = "manual",
 	) {
 		// Roll back to what the UI was ACTUALLY showing, not the loader's
-		// snapshot: `plan` never refetches mid-page (nothing here awaits an
-		// invalidate before this runs), and for a non-manager `plan` is ALWAYS
-		// `[]` — so `plan.find(...) ?? null` would restore the very value the
-		// failed write already overwrote, every time (whole-branch review I1).
-		// Check the override first (a second write racing the same row), then
-		// `plan` (an officer's own ladder), then `answeredRungs` (the public
-		// array a plain member's own row lives on).
+		// snapshot: nothing here awaits an invalidate before this runs, and for a
+		// plain member `effectivePlan` is ALWAYS `[]` — so a lookup in it alone
+		// would restore the very value the failed write already overwrote, every
+		// time (whole-branch review I1). Check the override first (a second write
+		// racing the same row), then `effectivePlan` (the ladder an officer or
+		// this meeting's TMOD can see), then `answeredRungs` (the public array a
+		// plain member's own row lives on).
 		const previous =
 			rungOverride[memberId] !== undefined
 				? rungOverride[memberId]
-				: (plan.find((p) => p.memberId === memberId)?.status ??
+				: (effectivePlan.find((p) => p.memberId === memberId)?.status ??
 					answeredRungs.find((r) => r.memberId === memberId)?.status ??
 					null);
 		setRungOverride((o) => ({ ...o, [memberId]: next }));
 		retainPending(memberId);
 		try {
 			await (next === null
-				? clearPlannedAttendance({ data: { memberId, meetingId: meeting.id } })
+				? clearPlannedAttendance({
+						data: { memberId, meetingId: meeting.id, ...actorClaim },
+					})
 				: setPlannedAttendance({
-						data: { memberId, meetingId: meeting.id, status: next, via },
+						data: {
+							memberId,
+							meetingId: meeting.id,
+							status: next,
+							via,
+							...actorClaim,
+						},
 					}));
 			// Fire-and-forget, NOT awaited: the override already holds the value
 			// this write just committed, so nothing on screen is waiting on this
@@ -556,6 +646,14 @@ function MeetingView() {
 			// this write committed, landing in that window, reverts a chip the
 			// officer just tapped — which reads as "it didn't save", so they tap
 			// again.
+			// The TMOD's ladder lives in a QUERY, not loader data, so
+			// `router.invalidate()` alone would leave it stale — and the
+			// reconciling effect below, seeing a fresh payload, would then drop the
+			// override back onto that stale row and visibly undo the officer's own
+			// tap. No-op for an officer, whose ladder is on the payload.
+			if (needsTmodPlan) {
+				void queryClient.invalidateQueries({ queryKey: tmodPlanKey });
+			}
 			void router
 				.invalidate()
 				// A failed refetch does NOT undo the write: the override still holds
@@ -599,7 +697,7 @@ function MeetingView() {
 			}
 			return changed ? next : o;
 		});
-	}, [plan]);
+	}, [effectivePlan]);
 
 	// Advances no-answer → reached out; must NOT touch a member who already
 	// answered (spec D5). Read through the override so a chip set a moment ago
@@ -608,7 +706,7 @@ function MeetingView() {
 		const current =
 			rungOverride[memberId] !== undefined
 				? rungOverride[memberId]
-				: (plan.find((p) => p.memberId === memberId)?.status ?? null);
+				: (effectivePlan.find((p) => p.memberId === memberId)?.status ?? null);
 		if (current !== null) return;
 		// Same event as the recruit picker's own `onContacted={"nudge"}` below —
 		// tagging it "manual" (the default) here would log the identical action
@@ -1267,16 +1365,21 @@ function MeetingView() {
 						</DialogContent>
 					</Dialog>
 				</div>
-				{showPlanPanel ? (
+				{showPlanPanel && !tmodPanelUnavailable ? (
 					<aside className="order-1 lg:order-2 lg:sticky lg:top-24 lg:w-[340px] lg:shrink-0">
 						<MeetingAttendancePanel
-							// `loaderRoster`, not the union-typed `roster` local (which
-							// falls back to the client-fetched PUBLIC roster with no
-							// contact fields) — this panel only renders under
-							// `showPlanPanel`, i.e. `effectiveCanManage`, where the loader
-							// always populates the full contact roster.
-							roster={loaderRoster}
-							plan={plan}
+							// TWO sources, one name. An officer gets `loaderRoster` (the
+							// payload's contact-bearing roster, populated only when the
+							// server itself resolved `canManage`). This meeting's
+							// Toastmaster gets the separately-verified roster from
+							// `getTmodPanelData`, which returns it ONLY to a real session
+							// that is the Toastmaster — an anonymous claim gets the rungs
+							// and no contact, so their rows render "No contact on file"
+							// rather than leaking PII behind an honour-system gate (#576
+							// review). Never the route's `roster` local, which falls back
+							// to the PUBLIC roster with no contact fields at all.
+							roster={panelRoster}
+							plan={effectivePlan}
 							rungOverride={rungOverride}
 							roleByMemberId={roleByMemberId}
 							meetingDate={nudgeDate}

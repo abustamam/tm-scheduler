@@ -172,6 +172,52 @@ describe.skipIf(!hasTestDb)("attendance-plan seam", () => {
 		});
 	});
 
+	it("records WHICH authorization arm admitted the write", async () => {
+		// #576: the TMOD arm is honour-system — a self-asserted member id, verified
+		// against the meeting's slot but not proved. The defence for granting it is
+		// that the write is auditable afterwards, which is only true if the ARM is
+		// persisted: without `grantedVia` an unverified Toastmaster write and a
+		// session-authenticated officer's are byte-identical in the feed.
+		//
+		// Asserted here rather than through a source guard because `setPlanStatus`
+		// is a plain exported function — the arm is decided in `resolveActor`
+		// (unreachable from vitest), but whether the seam PERSISTS what it is told
+		// is executable, and that is the half that can silently drop a field.
+		await setPlanStatus(testDb, {
+			memberId: club.memberId,
+			meetingId: club.meetingId,
+			clubId: club.clubId,
+			status: "reached_out",
+			actorMemberId: club.adminMemberId,
+			via: "nudge",
+			grantedVia: "tmod",
+		});
+		const [entry] = await testDb
+			.select({ detail: activityLog.detail })
+			.from(activityLog)
+			.where(eq(activityLog.clubId, club.clubId));
+		expect(entry?.detail).toMatchObject({ via: "nudge", grantedVia: "tmod" });
+	});
+
+	it("omits grantedVia entirely when the caller does not supply one", async () => {
+		// The field is optional so the pre-#576 callers (`setAvailability`, the
+		// self-claim path) need no change. Writing `grantedVia: undefined` into the
+		// JSON would be worse than omitting it: a reader filtering the feed for
+		// unverified writes would see the key present and have to special-case null.
+		await setPlanStatus(testDb, {
+			memberId: club.memberId,
+			meetingId: club.meetingId,
+			clubId: club.clubId,
+			status: "coming",
+			actorMemberId: club.adminMemberId,
+		});
+		const [entry] = await testDb
+			.select({ detail: activityLog.detail })
+			.from(activityLog)
+			.where(eq(activityLog.clubId, club.clubId));
+		expect(entry?.detail).not.toHaveProperty("grantedVia");
+	});
+
 	it("logs a clear as plan_set with a null status, attributed to the acting officer", async () => {
 		// Seed the row this clear removes. Clearing nothing logs nothing now (see
 		// the case below), so a fixture with no row would assert the absence of a

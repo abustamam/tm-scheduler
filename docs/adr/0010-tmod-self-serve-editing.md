@@ -57,6 +57,23 @@ using the **same self-assert trust level as claiming** — no token, no session.
   filed for a backfill migration and closed as unnecessary. If such a club ever appears, fix
   it by backfilling that row's `key`; do **not** widen the fallback back to a prefix, which is
   the exact hole #464 closed.
+- **AMENDMENT (#576, v1.16.0.0): the Scope list above is the ORIGINAL scope, and it grew once.**
+  The TMOD may now also run the meeting's **planned attendance** from the public page: set any
+  member's rung — including `reached_out`, the officer's private record of having asked — and read
+  the whole ladder plus member names. Deliberately NOT through `resolveMeetingAgendaAuthz`:
+  planned attendance is not agenda content, and it carries its own three-arm ladder in
+  `resolveActor` (`src/server/attendance-plan.ts`, admin → TMOD → self) plus its own read gate in
+  `loadTmodPanelData`. The rationale is this ADR's, unchanged — the person running the meeting was
+  already trusted to assign roles while being unable to see who had said they were coming, and
+  availability is the INPUT to that assignment. Three bounds were added where the original scope
+  had nothing to widen: **contact details never ride the claim** (phone and email need a real
+  session whose own membership IS the TMOD, so an anonymous TMOD plans with the message drafts
+  dark — `getPublicMeetingByKey`'s "the soft honor-system gate must never carry PII" rule);
+  a TMOD write may only REPLACE `reached_out`, never a member's own `coming` / `not_coming`; and
+  **clearing** another rung stays on the session-backed admin arm. Which arm granted a write is
+  persisted as `activity_log.detail.grantedVia`, so "made safe by the activity log" above can now
+  actually distinguish an honour-system TMOD write from an authenticated officer's — it could not
+  before, and for a grant whose whole defence is after-the-fact attributability that was the gap.
 - **Interim by design.** When real per-member auth lands (ADR-0008 convergence), the
   self-assert gate should be replaced by an authenticated identity check; this ADR is the
   marker for that follow-up.
