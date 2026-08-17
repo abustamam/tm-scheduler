@@ -149,12 +149,7 @@ const mcfRows: TimelineRow[] = [
 		marks: null,
 		time: "6:50",
 	},
-	handoff(
-		TM,
-		"toastmaster_of_the_day",
-		"Introduces the speakers: Jagpal Singh Bhattacharya & Sudheer Venkataraman Isanaka",
-		"6:53",
-	),
+	handoff(TM, "toastmaster_of_the_day", "Introduces the speakers", "6:53"),
 	{
 		who: "Speaker 1 · Jagpal Singh",
 		roleKey: "speaker",
@@ -210,12 +205,7 @@ const mcfRows: TimelineRow[] = [
 		"Introduces the General Evaluator: Faisal Abdul-Rahman Al-Mansoori",
 		"7:27",
 	),
-	handoff(
-		GE,
-		"general_evaluator",
-		"Introduces the speech evaluators: Rasheed Bustamam-Wickramasinghe & Riyaz Mohammed Abdurrahman",
-		"7:27",
-	),
+	handoff(GE, "general_evaluator", "Introduces the speech evaluators", "7:27"),
 	{
 		who: GE,
 		roleKey: "general_evaluator",
@@ -377,24 +367,32 @@ describe.skipIf(!hasChrome)("editorial agenda density", () => {
 		//
 		// #584 + #585 spent some of that, measured on Linux harness fonts:
 		//
-		//   origin/main, short copy ................. 6.799pt
-		//   this diff, the club's own short names ... 6.597pt
-		//   this diff, the long-name fixture ........ 6.470pt   ← what runs here
+		//   origin/main .................................... 6.799pt
+		//   every hand-off named its people ................ 6.470pt
+		//   only the SINGULAR hand-offs name them .......... 6.597pt   ← ships
 		//
-		// The fixture carries the LONG names deliberately. #585 made these rows'
+		// The middle row is why the two GROUP hand-offs name nobody. "Introduces
+		// the speakers: Alice & Bob" is followed immediately by "Speaker 1 · Alice"
+		// and "Speaker 2 · Bob", so it restated the line beneath it — while
+		// carrying the longest lists on the sheet, and `FitPage` scales the whole
+		// page to fit the longest thing on it. Dropping those two recovered 0.127pt
+		// of type across every word of the agenda; the 0.202pt still spent buys the
+		// three singular introductions and the reports row naming its functionaries.
+		//
+		// The fixture carries LONG member names deliberately. #585 made these rows'
 		// length a function of member names, which are unbounded user data, so a
-		// fixture using this club's real (short) ones measures the easy case and
-		// under-reports the cost by about a third — CLAUDE.md's "a fixture that
-		// spans ONE axis is not a guarantee", applied to the axis this very change
-		// introduced. #584 added a second such axis (the reports row grows with the
-		// club's functionary count), so that row names four here rather than three.
+		// fixture using this club's real (short) ones measures the easy case —
+		// CLAUDE.md's "a fixture that spans ONE axis is not a guarantee", applied to
+		// the axis this very change introduced. #584 added a second such axis (the
+		// reports row grows with the club's functionary count), so that row names
+		// four here rather than three.
 		//
-		// The 0.27pt left above the 6.2 floor is NOT headroom for the next copy
+		// The 0.40pt left above the 6.2 floor is NOT headroom for the next copy
 		// change. `agenda-print-type.ts` says what that margin is for: the harness
 		// resolves no webfonts, and the substitute differs between a developer's
 		// machine and CI's Ubuntu, moving where lines wrap. It is reserved for that
-		// variance. Anything that lengthens these rows again needs a fresh
-		// measurement here and a compensating reduction, not a lower floor.
+		// variance. Anything lengthening these rows again needs a fresh measurement
+		// here and a compensating reduction, not a lower floor.
 		expect(printedDetailPt(mcfRows)).toBeGreaterThanOrEqual(
 			EDITORIAL_MIN_PRINTED_PT,
 		);

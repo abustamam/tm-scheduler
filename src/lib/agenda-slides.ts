@@ -607,7 +607,10 @@ export function buildSlideDeck({
 		"the speakers",
 		speakers.length > 0,
 		"the speakers",
-		introducedNames(slots, HANDOFF_ROLES.speaker),
+		// Empty, matching the printed row (#585): the speech slides that follow
+		// name every one of these people, so listing them here duplicated the next
+		// slide. See the run sheet's speakers hand-off for the measurement.
+		[],
 	);
 	if (speakers.length > 0) {
 		const multi = speakers.length > 1;
@@ -681,7 +684,8 @@ export function buildSlideDeck({
 		"the speech evaluators",
 		evaluators.length > 0,
 		"the speech evaluators",
-		introducedNames(slots, HANDOFF_ROLES.evaluator),
+		// Empty for the same reason as the speakers hand-off above.
+		[],
 	);
 	if (evaluators.length > 0) {
 		const multi = evaluators.length > 1;

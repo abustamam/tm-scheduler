@@ -450,16 +450,16 @@ describe("slideLayout bodies", () => {
 				centered({
 					kind: "handoff",
 					from: { role: "Toastmaster of the Day", name: "Faisal" },
-					to: "the speakers",
-					toLabel: "the speakers",
-					toNames: ["Jagpal", "Rehanna · Guest"],
+					to: "the Table Topics Master",
+					toLabel: "the Table Topics Master",
+					toNames: ["Rasheed · Guest"],
 				}),
 			).toMatchObject({
 				lines: [
 					{ role: "head", text: "Toastmaster of the Day · Faisal" },
 					{
 						role: "head",
-						text: "Introduces the speakers: Jagpal & Rehanna · Guest",
+						text: "Introduces the Table Topics Master: Rasheed · Guest",
 					},
 				],
 			});
@@ -467,7 +467,9 @@ describe("slideLayout bodies", () => {
 
 		it("drops back to the bare target when nobody holds it (#585)", () => {
 			// The empty case is the one a club with an open slot gets every week,
-			// and it must not leave a dangling separator on the wall.
+			// and it must not leave a dangling separator on the wall. It is also
+			// what BOTH group targets carry by design, since the slides that follow
+			// name those people — so this is the common path, not the edge.
 			expect(
 				centered({
 					kind: "handoff",

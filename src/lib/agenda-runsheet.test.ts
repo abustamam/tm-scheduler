@@ -205,7 +205,7 @@ describe("buildRunOfShow", () => {
 			const beats = buildRunOfShow({ geIntroducesFunctionaries });
 			// Template detail — `{names:speaker}` is resolved by `expandRunSheet`,
 			// not by `buildRunOfShow` (#585).
-			const SPEAKERS_HANDOFF = "Introduces the speakers{names:speaker}";
+			const SPEAKERS_HANDOFF = "Introduces the speakers";
 			const i = beats.findIndex((b) => b.detail === SPEAKERS_HANDOFF);
 			expect(beats.filter((b) => b.detail === SPEAKERS_HANDOFF)).toHaveLength(
 				1,
@@ -1310,7 +1310,7 @@ describe("the Toastmaster covers the General Evaluator's role (#363)", () => {
 	 *  RESOLVED details: this club runs one reporting functionary (the Timer), so
 	 *  the reports row names it (#584). */
 	const GE_STRETCH = [
-		"Introduces the speech evaluators: Sudheer",
+		"Introduces the speech evaluators",
 		"Calls for the Timer's report · opens voting for Best Evaluator",
 		"Evaluates the evaluators",
 		"Calls for the Timer to report",
@@ -1492,7 +1492,7 @@ describe("hand-off beats — who introduces whom (#363)", () => {
 				"Toastmaster of the Day · Faisal",
 				"Introduces the General Evaluator: Riyaz",
 			],
-			["Toastmaster of the Day · Faisal", "Introduces the speakers: Jagpal"],
+			["Toastmaster of the Day · Faisal", "Introduces the speakers"],
 			[
 				"Toastmaster of the Day · Faisal",
 				"Introduces the Table Topics Master: Rasheed",
@@ -1501,10 +1501,7 @@ describe("hand-off beats — who introduces whom (#363)", () => {
 				"Table Topics Master · Rasheed",
 				"Introduces the General Evaluator: Riyaz",
 			],
-			[
-				"General Evaluator · Riyaz",
-				"Introduces the speech evaluators: Sudheer",
-			],
+			["General Evaluator · Riyaz", "Introduces the speech evaluators"],
 		]);
 	});
 
@@ -1514,7 +1511,7 @@ describe("hand-off beats — who introduces whom (#363)", () => {
 			buildRunOfShow({ geIntroducesFunctionaries: false }),
 		);
 		expect(handoffs(rows).map((r) => [r.who, r.detail])).toEqual([
-			["Toastmaster of the Day · Faisal", "Introduces the speakers: Jagpal"],
+			["Toastmaster of the Day · Faisal", "Introduces the speakers"],
 			[
 				"Toastmaster of the Day · Faisal",
 				"Introduces the Table Topics Master: Rasheed",
@@ -1523,10 +1520,7 @@ describe("hand-off beats — who introduces whom (#363)", () => {
 				"Table Topics Master · Rasheed",
 				"Introduces the General Evaluator: Riyaz",
 			],
-			[
-				"General Evaluator · Riyaz",
-				"Introduces the speech evaluators: Sudheer",
-			],
+			["General Evaluator · Riyaz", "Introduces the speech evaluators"],
 		]);
 	});
 
@@ -1536,15 +1530,12 @@ describe("hand-off beats — who introduces whom (#363)", () => {
 		);
 		const rows = expandRunSheet(noTopics, RUN_OF_SHOW);
 		expect(handoffs(rows).map((r) => [r.who, r.detail])).toEqual([
-			["Toastmaster of the Day · Faisal", "Introduces the speakers: Jagpal"],
+			["Toastmaster of the Day · Faisal", "Introduces the speakers"],
 			[
 				"Toastmaster of the Day · Faisal",
 				"Introduces the General Evaluator: Riyaz",
 			],
-			[
-				"General Evaluator · Riyaz",
-				"Introduces the speech evaluators: Sudheer",
-			],
+			["General Evaluator · Riyaz", "Introduces the speech evaluators"],
 		]);
 	});
 
@@ -1554,15 +1545,12 @@ describe("hand-off beats — who introduces whom (#363)", () => {
 		// The full list, not just the rebound row: it also pins that a club with no
 		// General Evaluator is never told to introduce one.
 		expect(handoffs(rows).map((r) => [r.who, r.detail])).toEqual([
-			["Toastmaster of the Day · Faisal", "Introduces the speakers: Jagpal"],
+			["Toastmaster of the Day · Faisal", "Introduces the speakers"],
 			[
 				"Toastmaster of the Day · Faisal",
 				"Introduces the Table Topics Master: Rasheed",
 			],
-			[
-				"Toastmaster of the Day · Faisal",
-				"Introduces the speech evaluators: Sudheer",
-			],
+			["Toastmaster of the Day · Faisal", "Introduces the speech evaluators"],
 		]);
 	});
 
@@ -1626,10 +1614,10 @@ describe("hand-off beats — who introduces whom (#363)", () => {
 		expect(
 			timed.filter((r) => r.handoff === true).map((r) => r.detail),
 		).toEqual([
-			"Introduces the speakers: Jagpal",
+			"Introduces the speakers",
 			"Introduces the Table Topics Master: Rasheed",
 			"Introduces the General Evaluator: Riyaz",
-			"Introduces the speech evaluators: Sudheer",
+			"Introduces the speech evaluators",
 		]);
 	});
 });
@@ -2119,7 +2107,7 @@ describe("expandRunSheet — the functionary-intro and functionary-reports beats
 		const rows = expandRunSheet([totd, ge, grammarian, speaker], template);
 		expect(speakersHandoffRow(rows)).toMatchObject({
 			who: "Toastmaster of the Day · Dana",
-			detail: "Introduces the speakers: Sam",
+			detail: "Introduces the speakers",
 		});
 		const at = (pred: (r: { detail: string }) => boolean) =>
 			rows.findIndex(pred);
@@ -2154,7 +2142,7 @@ describe("expandRunSheet — the functionary-intro and functionary-reports beats
 		).toEqual({
 			who: "Toastmaster of the Day · Dana",
 			roleKey: "toastmaster_of_the_day",
-			detail: "Introduces the speakers: Sam",
+			detail: "Introduces the speakers",
 			minutes: 0,
 			marks: null,
 			handoff: true,
@@ -3517,9 +3505,15 @@ describe("BeatFallback.withinGroup — ignored on a beat that declares no group"
 /**
  * `{names:…}` — the people a hand-off row introduces (#585).
  *
- * Four properties, each of which is a live bug if reversed and none of which
- * any other test in this file could see. All four were found by mutating the
- * source and watching the whole suite stay green.
+ * Tested through the Table Topics Master hand-off, a SINGULAR target. The two
+ * group hand-offs (speakers, speech evaluators) deliberately name nobody: their
+ * members' own rows are the very next thing on the page, so the names duplicated
+ * the line beneath at the cost of shrinking the whole sheet. See the speakers
+ * beat in `buildRunOfShow`.
+ *
+ * Each property below is a live bug if reversed, and none was visible to any
+ * other test in this file — all were found by mutating the source and watching
+ * the whole suite stay green.
  */
 describe("hand-off rows name the people they introduce (#585)", () => {
 	const totd = slot({
@@ -3529,32 +3523,23 @@ describe("hand-off rows name the people they introduce (#585)", () => {
 		category: "leadership",
 		assigneeName: "Faisal",
 	});
-	const ge = slot({
-		id: "ge",
-		roleKey: "general_evaluator",
-		roleName: "General Evaluator",
-		category: "leadership",
-		assigneeName: "Riyaz",
-	});
-	const speakerRow = (over: Partial<AgendaSlot>) =>
+	const ttmRow = (over: Partial<AgendaSlot>) =>
 		slot({
-			roleKey: "speaker",
-			roleName: "Speaker",
-			category: "speaker",
-			isSpeakerRole: true,
+			roleKey: "table_topics_master",
+			roleName: "Table Topics Master",
+			category: "leadership",
 			...over,
 		});
 	const handoffFor = (rows: AgendaRow[], prefix: string) =>
 		rows.find((r) => r.detail.startsWith(prefix));
+	const introduced = (slots: AgendaSlot[]) =>
+		handoffFor(expandRunSheet(slots), "Introduces the Table Topics Master")
+			?.detail;
 
 	it("names them", () => {
-		const rows = expandRunSheet([
-			totd,
-			speakerRow({ id: "sp", assigneeName: "Jagpal" }),
-		]);
-		expect(handoffFor(rows, "Introduces the speakers")?.detail).toBe(
-			"Introduces the speakers: Jagpal",
-		);
+		expect(
+			introduced([totd, ttmRow({ id: "ttm", assigneeName: "Rasheed" })]),
+		).toBe("Introduces the Table Topics Master: Rasheed");
 	});
 
 	/**
@@ -3563,46 +3548,27 @@ describe("hand-off rows name the people they introduce (#585)", () => {
 	 * `assigneeDisplay` would have given `OPEN_LABEL` here, which is right in the
 	 * `who` column (an unclaimed role still has to be announced as unclaimed) and
 	 * wrong in a list of people to introduce: every hand-off at a club with open
-	 * slots would have read "Introduces the speakers: — open —", with the em
-	 * dash separator running straight into the placeholder's own dashes.
+	 * slots would have read "Introduces the Table Topics Master: — open —".
 	 */
 	it("names nobody when the target role is unassigned, leaving no dangling separator", () => {
-		const rows = expandRunSheet([
+		const detail = introduced([
 			totd,
-			speakerRow({ id: "sp", assigneeName: null }),
+			ttmRow({ id: "ttm", assigneeName: null }),
 		]);
-		const detail = handoffFor(rows, "Introduces the speakers")?.detail;
-		expect(detail).toBe("Introduces the speakers");
+		expect(detail).toBe("Introduces the Table Topics Master");
 		expect(detail).not.toContain(OPEN_LABEL);
-		expect(detail).not.toContain("—");
+		expect(detail).not.toContain(":");
 	});
 
 	/**
 	 * An EMPTY-STRING assignee is `!= null` but has no display name, so a caller
 	 * that filtered on the field rather than on the rendered name would show
 	 * "— open —" on one surface and nothing on the other. `introducedNames`
-	 * exists as a shared helper largely to make that one rule, and this is the
-	 * case that proves it is the rendered name being filtered.
+	 * exists as a shared helper largely to make that one rule.
 	 */
 	it("treats an empty-string assignee as nobody, not as an open slot", () => {
-		const rows = expandRunSheet([
-			totd,
-			speakerRow({ id: "sp", assigneeName: "" }),
-		]);
-		expect(handoffFor(rows, "Introduces the speakers")?.detail).toBe(
-			"Introduces the speakers",
-		);
-	});
-
-	it("names only the assigned ones when a club runs a mix", () => {
-		const rows = expandRunSheet([
-			totd,
-			speakerRow({ id: "sp1", slotIndex: 0, assigneeName: "Jagpal" }),
-			speakerRow({ id: "sp2", slotIndex: 1, assigneeName: null }),
-			speakerRow({ id: "sp3", slotIndex: 2, assigneeName: "Rehanna" }),
-		]);
-		expect(handoffFor(rows, "Introduces the speakers")?.detail).toBe(
-			"Introduces the speakers: Jagpal & Rehanna",
+		expect(introduced([totd, ttmRow({ id: "ttm", assigneeName: "" })])).toBe(
+			"Introduces the Table Topics Master",
 		);
 	});
 
@@ -3612,77 +3578,43 @@ describe("hand-off rows name the people they introduce (#585)", () => {
 	 * most needs (#151).
 	 */
 	it("keeps the guest marker on an introduced name", () => {
-		const rows = expandRunSheet([
-			totd,
-			speakerRow({ id: "sp", assigneeName: "Alice", assigneeIsGuest: true }),
-		]);
-		expect(handoffFor(rows, "Introduces the speakers")?.detail).toBe(
-			"Introduces the speakers: Alice · Guest",
-		);
+		expect(
+			introduced([
+				totd,
+				ttmRow({ id: "ttm", assigneeName: "Alice", assigneeIsGuest: true }),
+			]),
+		).toBe("Introduces the Table Topics Master: Alice · Guest");
+	});
+
+	/** Two holders of one nameable role — rare, but the only case where the sort
+	 *  inside `introducedNames` is observable. Supplied out of slot order. */
+	it("lists multiple holders in slot order, not array order", () => {
+		expect(
+			introduced([
+				totd,
+				ttmRow({ id: "b", slotIndex: 1, assigneeName: "Bob" }),
+				ttmRow({ id: "a", slotIndex: 0, assigneeName: "Alice" }),
+			]),
+		).toBe("Introduces the Table Topics Master: Alice & Bob");
 	});
 
 	/**
-	 * ORDER — the property `agenda-parity.test.ts` is structurally blind to.
-	 *
-	 * Print and deck share `introducedNames`, so they agree with EACH OTHER no
-	 * matter what it returns; the thing that can be wrong is agreeing with each
-	 * other while disagreeing with the rows immediately below. So this asserts
-	 * against the FOLLOWING ROWS rather than across surfaces.
-	 *
-	 * The fixture is built so a bug shows: the evaluators' slot order is the
-	 * REVERSE of their speaker pairing, and `expandRunSheet` orders evaluation
-	 * rows by pairing (`orderEvaluators`). A plain filter would introduce them
-	 * "Zara & Yusuf" and then run them Yusuf, Zara.
+	 * The two GROUP hand-offs name nobody, by design. Asserted rather than left
+	 * implicit: this is the decision the measurement in `print-density.test.ts`
+	 * paid for, and re-adding `namesToken` to either beat is a one-token change
+	 * that would otherwise land silently.
 	 */
-	it("introduces the evaluators in the order their rows follow", () => {
-		const rows = expandRunSheet([
-			totd,
-			ge,
-			speakerRow({ id: "sp1", slotIndex: 0, assigneeName: "Alice" }),
-			speakerRow({ id: "sp2", slotIndex: 1, assigneeName: "Bob" }),
-			slot({
-				id: "evA",
-				roleKey: "evaluator",
-				roleName: "Evaluator",
-				category: "evaluator",
-				slotIndex: 0,
-				assigneeName: "Zara",
-				evaluatesSlotId: "sp2",
-			}),
-			slot({
-				id: "evB",
-				roleKey: "evaluator",
-				roleName: "Evaluator",
-				category: "evaluator",
-				slotIndex: 1,
-				assigneeName: "Yusuf",
-				evaluatesSlotId: "sp1",
-			}),
-		]);
-		// The rows really are in pairing order, not slot order — without this the
-		// assertion below could pass by both being wrong the same way.
-		expect(
-			rows
-				.filter((r) => r.roleKey === "evaluator")
-				.map((r) => r.who.split(" · ")[1]),
-		).toEqual(["Yusuf", "Zara"]);
-		expect(handoffFor(rows, "Introduces the speech evaluators")?.detail).toBe(
-			"Introduces the speech evaluators: Yusuf & Zara",
-		);
-	});
-
-	it("introduces the speakers in row order even when the slots arrive shuffled", () => {
-		const rows = expandRunSheet([
-			totd,
-			speakerRow({ id: "sp2", slotIndex: 1, assigneeName: "Bob" }),
-			speakerRow({ id: "sp1", slotIndex: 0, assigneeName: "Alice" }),
-		]);
-		expect(
-			rows.filter((r) => r.roleKey === "speaker").map((r) => r.who),
-		).toEqual(["Speaker 1 · Alice", "Speaker 2 · Bob"]);
+	it("leaves the group hand-offs naming nobody — their members' own rows follow", () => {
+		const rows = expandRunSheet(sixRoleClub());
 		expect(handoffFor(rows, "Introduces the speakers")?.detail).toBe(
-			"Introduces the speakers: Alice & Bob",
+			"Introduces the speakers",
 		);
+		expect(handoffFor(rows, "Introduces the speech evaluators")?.detail).toBe(
+			"Introduces the speech evaluators",
+		);
+		// …and the rows they hand to DO name those people, which is the reason.
+		expect(rows.some((r) => r.who === "Speaker · Jagpal")).toBe(true);
+		expect(rows.some((r) => r.who === "Evaluator · Sudheer")).toBe(true);
 	});
 
 	/**
@@ -3718,15 +3650,14 @@ describe("hand-off rows name the people they introduce (#585)", () => {
 			"{names:speaker}",
 			"{awards}",
 		]) {
-			const rows = expandRunSheet([
+			const detail = introduced([
 				totd,
-				speakerRow({ id: "sp", assigneeName: hostile }),
+				ttmRow({ id: "ttm", assigneeName: hostile }),
 			]);
-			const detail = handoffFor(rows, "Introduces the speakers")?.detail;
-			expect(detail).toBe(`Introduces the speakers: ${hostile}`);
+			expect(detail).toBe(`Introduces the Table Topics Master: ${hostile}`);
 			// The tells: no spliced surrounding copy, no second expansion.
 			expect(detail).not.toContain("Best Table Topic,");
-			expect(detail).not.toContain("Introduces the speakers: Introduces");
+			expect(detail).not.toContain(": Introduces");
 		}
 	});
 });

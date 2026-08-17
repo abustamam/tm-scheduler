@@ -562,7 +562,7 @@ describe("hand-off slides (#363)", () => {
 				from: { role: "Toastmaster of the Day", name: "Faisal" },
 				to: "the speakers",
 				toLabel: "the speakers",
-				toNames: ["Jagpal"],
+				toNames: [],
 			},
 			{
 				kind: "handoff",
@@ -583,7 +583,7 @@ describe("hand-off slides (#363)", () => {
 				from: { role: "General Evaluator", name: "Riyaz" },
 				to: "the speech evaluators",
 				toLabel: "the speech evaluators",
-				toNames: ["Priya"],
+				toNames: [],
 			},
 		]);
 	});
@@ -654,7 +654,7 @@ describe("hand-off slides (#363)", () => {
 				from: { role: "Toastmaster of the Day", name: "Faisal" },
 				to: "the speakers",
 				toLabel: "the speakers",
-				toNames: ["Jagpal"],
+				toNames: [],
 			},
 			{
 				kind: "handoff",
@@ -668,7 +668,7 @@ describe("hand-off slides (#363)", () => {
 				from: { role: "General Evaluator", name: "Riyaz" },
 				to: "the speech evaluators",
 				toLabel: "the speech evaluators",
-				toNames: ["Priya"],
+				toNames: [],
 			},
 		]);
 	});
@@ -698,7 +698,7 @@ describe("hand-off slides (#363)", () => {
 				from: { role: "General Evaluator", name: "Riyaz" },
 				to: "the speech evaluators",
 				toLabel: "the speech evaluators",
-				toNames: ["Priya"],
+				toNames: [],
 			},
 		]);
 	});
@@ -746,7 +746,7 @@ describe("hand-off slides (#363)", () => {
 				from: { role: "Toastmaster of the Day", name: "— open —" },
 				to: "the speakers",
 				toLabel: "the speakers",
-				toNames: ["Jagpal"],
+				toNames: [],
 			},
 		]);
 	});
@@ -789,7 +789,7 @@ describe("hand-off slides (#363)", () => {
 				from: { role: "Emcee", name: "Faisal" },
 				to: "the speakers",
 				toLabel: "the speakers",
-				toNames: ["Jagpal"],
+				toNames: [],
 			},
 		]);
 	});

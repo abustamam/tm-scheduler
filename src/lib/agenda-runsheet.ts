@@ -878,7 +878,25 @@ export function buildRunOfShow({
 			kind: "role",
 			...TOASTMASTER_ROLE,
 			role: "plain",
-			detail: `Introduces the speakers${namesToken(SPEAKER_ROLE)}`,
+			// NO `{names:…}` here, nor on the evaluators hand-off below, and the
+			// asymmetry with the three singular targets is the point (#585).
+			//
+			// These two introduce a GROUP, and the group's own rows are the very
+			// next thing on the page: "Introduces the speakers" is followed by
+			// "Speaker 1 · Alice" and "Speaker 2 · Bob", which name the same people
+			// one line down in the largest, boldest type the row rhythm has. So the
+			// names bought a duplicate of the line beneath them — while costing the
+			// most of any hand-off, because a comma-joined list of 2-5 members is
+			// the longest content on the sheet and `FitPage` scales the WHOLE page
+			// to fit it. Editorial measured 6.470pt of printed body text with them
+			// against 6.799pt without, on a 6.2pt floor: a 5% shrink of every word
+			// on the agenda, spent restating the next row.
+			//
+			// The singular targets keep theirs. One short name costs almost no
+			// height, and the person introduced there is not always the next row —
+			// under MCF's variant the General Evaluator is introduced in the opening
+			// and their own segment is most of a meeting away.
+			detail: "Introduces the speakers",
 			minutes: 0,
 			handoff: true,
 			requiresAnyOf: [SPEAKER_ROLE],
@@ -980,7 +998,8 @@ export function buildRunOfShow({
 			kind: "role",
 			...GENERAL_EVALUATOR_ROLE,
 			role: "plain",
-			detail: `Introduces the speech evaluators${namesToken(EVALUATOR_ROLE)}`,
+			// Group target — see the speakers hand-off above for why it names nobody.
+			detail: "Introduces the speech evaluators",
 			minutes: 0,
 			handoff: true,
 			requiresAnyOf: [EVALUATOR_ROLE],
@@ -1379,29 +1398,33 @@ function groupRoleNames(beat: Beat, slots: AgendaSlot[]): string[] {
  * caller filtering on the field rather than on the rendered name shows
  * "— open —" here while the other shows nothing.
  *
- * ORDER IS NOT THE SLOT ARRAY'S ORDER, and that is the whole point. This list
- * introduces the people whose rows come NEXT, so it has to be sorted the way
- * those rows are sorted, by the same rule — otherwise the Toastmaster reads
- * "Introduces the speech evaluators: Alice & Bob" and the room then gets Bob
- * first. The two arms mirror `expandRunSheet` exactly: speakers (and everyone
- * else) by `slotIndex`, evaluators by `orderEvaluators`, which ranks them by
- * the SPEAKER each evaluates rather than by their own slot.
+ * ORDER IS NOT THE SLOT ARRAY'S ORDER. This list introduces people whose own
+ * rows come later, so it is sorted by `slotIndex` — the same rule
+ * `expandRunSheet` sorts those rows by — rather than by whatever order the
+ * caller's array happened to arrive in. It matters only for a club running two
+ * holders of one nameable role, which is rare but reachable.
  *
- * Sharing this helper across both surfaces is what makes the bug invisible to
- * `agenda-parity.test.ts`: print and deck agree with each other while both
- * disagree with the rows below them. That is CLAUDE.md's "a parity test cannot
- * see a defect present on both sides" trap, so the gate is an ORDER assertion
- * against the following rows, not a cross-surface comparison.
+ * IF A GROUP TARGET EVER NAMES PEOPLE AGAIN, `slotIndex` IS THE WRONG RULE FOR
+ * ONE OF THEM. `expandRunSheet` orders evaluator rows with `orderEvaluators`,
+ * which ranks each by the SPEAKER they evaluate, not by their own slot — so a
+ * `{names:evaluator}` sorted here by `slotIndex` would introduce them in one
+ * order and the room would hear them in another. That case is unreachable
+ * today because neither group hand-off names anybody (see the speakers beat),
+ * and it is left out rather than written speculatively; the note is here so
+ * re-adding the token is not a silent bug.
+ *
+ * Sharing this helper across both surfaces would make such a bug invisible to
+ * `agenda-parity.test.ts` — print and deck agree with each other while both
+ * disagree with the rows below. That is CLAUDE.md's "a parity test cannot see
+ * a defect present on both sides" trap, so any gate on order has to assert
+ * against the following rows, never across surfaces.
  */
 export function introducedNames(slots: AgendaSlot[], role: BeatRole): string[] {
 	const matching = slots.filter((s) =>
 		matchesRole(s, role.roleKey, role.roleName),
 	);
-	const ordered =
-		role.roleKey === EVALUATOR_ROLE.roleKey
-			? orderEvaluators(matching, slots)
-			: [...matching].sort((a, b) => a.slotIndex - b.slotIndex);
-	return ordered
+	return [...matching]
+		.sort((a, b) => a.slotIndex - b.slotIndex)
 		.map((s) => assigneeDisplayName(s.assigneeName, s.assigneeIsGuest))
 		.filter((n): n is string => n != null);
 }

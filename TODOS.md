@@ -71,9 +71,6 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
 - Confirm the hand-off rows on a real MCF agenda after it deploys — that the four print layouts read right in the room and the projected deck's hand-off slides land where the cue is needed. v1.16.1.0 (#585) made those rows name the people too, so this now also covers whether the longer rows read well at the printed size.
   **Priority:** P3
 
-- The two GROUP hand-off rows may not be worth what they cost. #585 names the people on all five hand-offs, but "Introduces the speakers: Alice & Bob" is immediately followed by "Speaker 1 · Alice" and "Speaker 2 · Bob" in larger, bolder type — the same names, one line down — and the group rows carry the longest lists, so they buy the least and cost the most height. `FitPage` scales the whole sheet, so that height is type size for everything on the page: measured 6.799pt → 6.470pt on the editorial layout (floor 6.2). Grid, the default layout, measured 1350px → 1350px and paid nothing. Dropping `namesToken` from the speaker and evaluator beats only, keeping the three singular targets, would recover most of it. Shipped as asked because the ask was explicit ("every agenda must notate participants by name when introduced"); this records the measurement so the call can be revisited with numbers rather than re-derived.
-  **Priority:** P3
-
 - Neither `meeting-present.tsx` nor `deck-to-pptx.ts` renders a hand-off slide in any test, so the projected cue line — now the longest single line on those slides after #585 — is unasserted in both renderers. `slide-layout.test.ts` pins the descriptor the two of them consume, which is why this is P4 rather than a gap in the fix itself.
   **Priority:** P4
 

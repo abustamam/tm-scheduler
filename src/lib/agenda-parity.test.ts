@@ -118,7 +118,7 @@ const BEATS: { detail: string; section: Section | null; id?: BeatId }[] = [
 		section: "functionaryIntro",
 	},
 	{
-		detail: "Introduces the speakers{names:speaker}",
+		detail: "Introduces the speakers",
 		section: "handoffSpeakers",
 	},
 	{ detail: "Prepared speech", section: "speech" },
@@ -148,7 +148,7 @@ const BEATS: { detail: string; section: Section | null; id?: BeatId }[] = [
 		id: "geEvaluationHandoff",
 	},
 	{
-		detail: "Introduces the speech evaluators{names:evaluator}",
+		detail: "Introduces the speech evaluators",
 		section: "handoffEvaluators",
 	},
 	// The evaluation-timing cue (#508). Excluded, by name, with the reason: it is
@@ -1224,8 +1224,8 @@ describe("hand-off agreement — deck ⇄ run sheet (#363)", () => {
 		}).map((r) => r.detail);
 		// The GROUP prose is unchanged by the rename; only the people appended
 		// after it vary (#585), and they are the club's members either way.
-		expect(details).toContain("Introduces the speakers: Rehanna");
-		expect(details).toContain("Introduces the speech evaluators: Faisal");
+		expect(details).toContain("Introduces the speakers");
+		expect(details).toContain("Introduces the speech evaluators");
 		// The renamed role names must not leak into the group prose itself.
 		expect(details.some((d) => d.includes("Presenter"))).toBe(false);
 		expect(details.some((d) => d.includes("Reviewer"))).toBe(false);

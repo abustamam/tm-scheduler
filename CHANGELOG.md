@@ -13,7 +13,8 @@ Five fixes from the 2026-08-13 meeting (#578).
 
 ### Changed
 
-- **Introduction rows name the person, not just the role.** "Introduces the General Evaluator" is now "Introduces the General Evaluator: Riyaz" — on the printed agenda and on the projected slide. The one thing you have to say out loud at that moment was the one thing the row left out, and on a multi-page agenda it was on a different sheet. Open roles are unchanged: with nobody in the slot the row reads as it always did, rather than announcing "— open —". Guests keep their "· Guest" marker, and the names are listed in the order the room will hear them.
+- **Introduction rows name the person, not just the role.** "Introduces the General Evaluator" is now "Introduces the General Evaluator: Riyaz" — on the printed agenda and on the projected slide. The one thing you have to say out loud at that moment was the one thing the row left out, and on a multi-page agenda it was on a different sheet. Open roles are unchanged: with nobody in the slot the row reads as it always did, rather than announcing "— open —". Guests keep their "· Guest" marker.
+- The two rows that introduce a *group* — the speakers and the speech evaluators — deliberately do not list names. Those people's own rows are the very next thing on the page, naming them in larger type, so listing them again restated the line below while making the longest rows on the sheet longer still. Since the agenda scales to fit its page, that cost every word on it about 2% of its size for no new information.
 - **"Calls for the functionary reports" now says who.** The row reads "Calls for the Timer, Grammarian & Ah-Counter to report", naming the reporting functionaries your club actually runs, under your club's own names for them. A club that renames a role or turns one off sees the change on the row automatically.
 
 ### Added

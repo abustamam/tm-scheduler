@@ -121,7 +121,7 @@ const header: AgendaHeader = {
  * name, not a hostile one.
  */
 const HANDOFF_DETAIL =
-	"Introduces the speech evaluators: Bartholomew Fitzgerald-Wellington, " +
+	"Introduces the speech evaluators" +
 	"Anneliese Vandermeer-Castellanos & Konstantin Papadopoulos-Nakamura";
 
 const rows = Array.from({ length: 26 }, (_, i) => ({
