@@ -128,8 +128,14 @@ describe("attendance panel route wiring (PR 2)", () => {
 		// Keying on `myId` reads a different key on a switch; it does not remove the
 		// old one, and the default gcTime keeps the whole club's phone and email in
 		// memory for five minutes on a shared laptop.
-		expect(src).toContain(
-			'queryClient.removeQueries({ queryKey: ["tmod-plan", meeting.id] });',
+		// Presence alone was not enough. Moving this call OUT of the cleanup
+		// `return` makes it fire eagerly on mount — evicting the roster it just
+		// fetched — and emptying the dep array makes it never fire on an identity
+		// change, which is the one moment it exists for. Both leave a bare
+		// `toContain` green while the stale-PII-cache bug is back, so pin the whole
+		// shape: the call inside the returned cleanup, and `myId` in the deps.
+		expect(src.replace(/\s+/g, " ")).toContain(
+			'return () => { queryClient.removeQueries({ queryKey: ["tmod-plan", meeting.id] }); }; }, [queryClient, meeting.id, myId]);',
 		);
 	});
 

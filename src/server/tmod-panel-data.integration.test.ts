@@ -67,6 +67,15 @@ describe.skipIf(!hasTestDb)("loadTmodPanelData", () => {
 	let seed: SeededClub;
 	beforeEach(async () => {
 		seed = await seedClub();
+		// `seedClub` sets email but NOT phone, so an assertion that phone came back
+		// null would pass whether the contact gate ran or not — the exact
+		// "test that cannot fail" trap CLAUDE.md lists. Set one here so the
+		// withheld cases below are bracketed by a positive case that proves a
+		// non-null phone really does flow through the authorized path.
+		await testDb
+			.update(members)
+			.set({ phone: "+12025550101" })
+			.where(eq(members.clubId, seed.clubId));
 		await setPlanStatus(testDb, {
 			memberId: seed.memberId,
 			meetingId: seed.meetingId,
@@ -102,10 +111,12 @@ describe.skipIf(!hasTestDb)("loadTmodPanelData", () => {
 			status: "reached_out",
 		});
 		// Contact is the point — no phone/email means no drafts, which is the
-		// whole outreach affordance. `RosterContact` carries both fields, so
-		// assert the SHAPE arrived rather than that this fixture populated them.
-		expect(roster[0]).toHaveProperty("email");
-		expect(roster[0]).toHaveProperty("phone");
+		// whole outreach affordance. Asserted NON-NULL, not merely present:
+		// `toHaveProperty("phone")` passes for a null value, which is what let the
+		// withheld cases below pass vacuously before the fixture set a phone.
+		const withPhone = roster.filter((r) => r.phone !== null);
+		expect(withPhone.length).toBeGreaterThan(0);
+		expect(roster.some((r) => r.email !== null)).toBe(true);
 	});
 
 	it("gives a member who is NOT the Toastmaster nothing", async () => {
