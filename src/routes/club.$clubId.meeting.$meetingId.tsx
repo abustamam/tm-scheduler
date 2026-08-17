@@ -43,6 +43,7 @@ import {
 	DialogTitle,
 } from "#/components/ui/dialog";
 import { Label } from "#/components/ui/label";
+import { useOfflineMinutes } from "#/hooks/use-offline-minutes";
 import { useOnlineStatus } from "#/hooks/use-online-status";
 import { buildRoleCounts, slotLabel } from "#/lib/agenda";
 import {
@@ -284,6 +285,17 @@ function MeetingView() {
 	} = Route.useLoaderData();
 	const router = useRouter();
 	const online = useOnlineStatus();
+	// #176 / DP3: ONE offline-write-queue instance per meeting, shared by
+	// <MeetingMinutes> below and (PR 3) the attendance panel's roll-mode
+	// writes — two instances would each own their own `draining` flag and race
+	// the same persisted queue, replaying a stale status over a newer one.
+	const offlineMinutes = useOfflineMinutes({
+		meetingId: meeting.id,
+		onMutated: async () => {
+			await router.invalidate();
+		},
+		minutes: minutes.data,
+	});
 
 	// Shell-wrapped signed-in member → act as the session identity; anonymous
 	// visitor → the localStorage-picked member (#317).
@@ -1242,7 +1254,7 @@ function MeetingView() {
 								meetingDayReached={canComplete}
 								canEdit={effectiveCanManage && minutes.canEdit}
 								clubGuests={clubGuests}
-								onMutated={() => router.invalidate()}
+								offline={offlineMinutes}
 								email={
 									minutesEmail
 										? {

@@ -6,7 +6,7 @@ import {
 	WifiOff,
 	X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
 	AssigneePicker,
@@ -36,22 +36,10 @@ import {
 	PopoverContent,
 	PopoverTrigger,
 } from "#/components/ui/popover";
+import { useOfflineMinutes } from "#/hooks/use-offline-minutes";
 import { useOnlineStatus } from "#/hooks/use-online-status";
 import { deriveMinutes } from "#/lib/derive-minutes";
-import {
-	dispatchOp,
-	drainMinutesQueue,
-	type MinutesServerFns,
-} from "#/lib/drain-minutes";
 import { formatCalendarDay } from "#/lib/format";
-import {
-	enqueue,
-	type MinutesOp,
-	readQueue,
-	readSnapshot,
-	removeOp,
-	saveSnapshot,
-} from "#/lib/offline-minutes-queue";
 import type { MinutesActionItems } from "#/server/action-items-logic";
 import {
 	addMinutesGuest,
@@ -81,21 +69,7 @@ const STATUS_LABELS: Record<AttendanceStatus, string> = {
 	excused: "Excused",
 };
 
-function errMessage(err: unknown) {
-	return err instanceof Error ? err.message : "Something went wrong.";
-}
-
-export function MeetingMinutes({
-	meetingId,
-	minutes,
-	program,
-	meetingPast,
-	meetingDayReached,
-	canEdit,
-	clubGuests,
-	onMutated,
-	email,
-}: {
+type MeetingMinutesProps = {
 	meetingId: string;
 	minutes: MinutesData;
 	program: MinutesResult["program"];
@@ -118,7 +92,21 @@ export function MeetingMinutes({
 	meetingDayReached: boolean;
 	canEdit: boolean;
 	clubGuests: { id: string; name: string }[];
-	onMutated: () => void | Promise<void>;
+	/**
+	 * The shared offline-write-queue handle (#176). Instantiated ONCE per
+	 * meeting by the route (`useOfflineMinutes`) so a second future consumer —
+	 * the attendance panel absorbing roll call — shares the same queue/drain
+	 * instead of racing a second one (two `draining` flags would replay a
+	 * stale status over a newer one, silently). Optional ONLY so this
+	 * component's existing unit tests, which render it standalone with no
+	 * route-level instance to share, keep working unmodified: omitting it
+	 * falls back to a private hook instance scoped to this render (below),
+	 * reproducing the pre-extraction behaviour exactly. A real caller (the
+	 * route) always supplies it.
+	 */
+	offline?: ReturnType<typeof useOfflineMinutes>;
+	/** Used only by the `offline`-less fallback below. */
+	onMutated?: () => void | Promise<void>;
 	/**
 	 * Email-the-minutes context (#165), present only for admins on a completed
 	 * meeting. Null hides the "Send minutes" control (the PDF still downloads).
@@ -130,173 +118,66 @@ export function MeetingMinutes({
 		recipients: { name: string; email: string }[];
 		skipped: { name: string }[];
 	} | null;
-}) {
-	const [busy, setBusy] = useState(false);
+};
 
-	// #176 slice 3: offline write queue. ONLINE the behaviour below is unchanged
-	// (server-fn + onMutated). OFFLINE, edits are captured to a durable IndexedDB
-	// queue and the view is derived from the last online snapshot + that queue.
+export function MeetingMinutes(props: MeetingMinutesProps) {
+	if (props.offline) {
+		return <MeetingMinutesView {...props} offline={props.offline} />;
+	}
+	return <MeetingMinutesSelfContained {...props} />;
+}
+
+/**
+ * Standalone fallback for a caller with no shared route-level instance to pass
+ * (every existing test in `meeting-minutes.test.tsx`). Instantiates its own
+ * private `useOfflineMinutes`, matching this component's behaviour before the
+ * hook was extracted — never reachable from the real route, which always
+ * supplies `offline` and hits the branch above instead.
+ */
+function MeetingMinutesSelfContained(
+	props: Omit<MeetingMinutesProps, "offline">,
+) {
+	const offline = useOfflineMinutes({
+		meetingId: props.meetingId,
+		onMutated: async () => {
+			await props.onMutated?.();
+		},
+		minutes: props.minutes,
+	});
+	return <MeetingMinutesView {...props} offline={offline} />;
+}
+
+function MeetingMinutesView({
+	meetingId,
+	minutes,
+	program,
+	meetingPast,
+	meetingDayReached,
+	canEdit,
+	clubGuests,
+	offline,
+	email,
+}: MeetingMinutesProps & { offline: ReturnType<typeof useOfflineMinutes> }) {
+	// #176 slice 3-5: the offline write queue, reconnect drain and `mutate`/
+	// `opMeta` all live in the shared hook now (`#/hooks/use-offline-minutes`) —
+	// see its doc comment for the guards this component used to own directly.
+	const {
+		mutate,
+		opMeta,
+		busy,
+		queue,
+		snapshot,
+		draining,
+		syncError,
+		justSynced,
+	} = offline;
 	const online = useOnlineStatus();
-	const [queue, setQueue] = useState<MinutesOp[]>([]);
-	const [snapshot, setSnapshot] = useState<MinutesData | null>(null);
-
-	// #176 slice 4: reconnect drain. When back online with a pending queue, the
-	// queued ops are replayed to the server in order (see `runDrain` below).
-	const [draining, setDraining] = useState(false);
-	const [syncError, setSyncError] = useState<string | null>(null);
-	// Transient "All changes synced" confirmation shown briefly after a drain
-	// fully lands, then auto-dismissed (the effect below clears it on a timer).
-	const [justSynced, setJustSynced] = useState(false);
-	// `draining` state lags a tick, so the drain effect can re-fire before it
-	// flips — a synchronous ref blocks a second concurrent drain.
-	const drainingRef = useRef(false);
-	// `onMutated` is a fresh arrow every render (router.invalidate); stash it in a
-	// ref so `runDrain`'s identity stays stable and the drain effect isn't
-	// re-triggered on every parent re-render.
-	const onMutatedRef = useRef(onMutated);
-	onMutatedRef.current = onMutated;
-
-	// Load any persisted snapshot + queue once per meeting (survives reloads).
-	useEffect(() => {
-		let alive = true;
-		void (async () => {
-			const [savedQueue, savedSnapshot] = await Promise.all([
-				readQueue(meetingId),
-				readSnapshot(meetingId),
-			]);
-			if (!alive) return;
-			setQueue(savedQueue);
-			setSnapshot(savedSnapshot);
-		})();
-		return () => {
-			alive = false;
-		};
-	}, [meetingId]);
-
-	// Keep the offline snapshot fresh from every ONLINE render of the loader data.
-	useEffect(() => {
-		if (!online) return;
-		setSnapshot(minutes);
-		void saveSnapshot(meetingId, minutes);
-	}, [online, minutes, meetingId]);
 
 	// Displayed state: the live loader data online; the optimistic projection off.
 	const displayMinutes = useMemo(
 		() => (online ? minutes : deriveMinutes(snapshot ?? minutes, queue)),
 		[online, minutes, snapshot, queue],
 	);
-
-	// #176 slice 4: replay the queued ops to the server IN ORDER, removing each as
-	// it lands, then re-fetch authoritative state. Stops at the first failure and
-	// keeps the failed op + successors queued for the next reconnect / Retry.
-	const runDrain = useCallback(
-		async (ops: MinutesOp[]) => {
-			if (drainingRef.current || ops.length === 0) return;
-			drainingRef.current = true;
-			setDraining(true);
-			setSyncError(null);
-			setJustSynced(false);
-			// Map the component's server-fn imports to the by-op names dispatchOp uses.
-			const fns: MinutesServerFns = {
-				setAttendance,
-				addGuest: addMinutesGuest,
-				removeGuest: removeMinutesGuest,
-				addTableTopics,
-				removeTableTopics,
-				moveTableTopics,
-				setAward: setMinutesAward,
-				clearAward: clearMinutesAward,
-			};
-			try {
-				const result = await drainMinutesQueue({
-					meetingId,
-					ops,
-					dispatch: (op) => dispatchOp(op, meetingId, fns),
-					onOpDrained: async (opId) => {
-						await removeOp(meetingId, opId);
-						setQueue((q) => q.filter((o) => o.opId !== opId));
-					},
-				});
-				if (result.error) {
-					// Stop-on-failure: the failed op + successors stay queued.
-					setSyncError(errMessage(result.error));
-				} else {
-					// Everything replayed — re-fetch authoritative state (the online
-					// snapshot-save effect then refreshes the offline snapshot).
-					await onMutatedRef.current();
-					// Flash a brief "All changes synced" confirmation (auto-dismissed).
-					setJustSynced(true);
-				}
-			} catch (err) {
-				setSyncError(errMessage(err));
-			} finally {
-				drainingRef.current = false;
-				setDraining(false);
-			}
-		},
-		[meetingId],
-	);
-
-	// Auto-drain when back online with a pending queue: covers the offline→online
-	// transition and an online mount with a leftover queue (e.g. after a reload).
-	// Skipped while a drain is in flight (ref guard) or a sync error is showing —
-	// a persistent failure would otherwise tight-loop; the user retries explicitly.
-	useEffect(() => {
-		if (!online || queue.length === 0 || syncError) return;
-		void runDrain(queue);
-	}, [online, queue, syncError, runDrain]);
-
-	// Going offline clears a stale sync error so the next genuine reconnect
-	// auto-retries; while online, a persistent error stays set (see above).
-	useEffect(() => {
-		if (!online) setSyncError(null);
-	}, [online]);
-
-	// Auto-dismiss the "All changes synced" confirmation a few seconds after it
-	// appears. The timer is cleared on unmount (or if it re-fires) so it never
-	// fires against a gone component.
-	useEffect(() => {
-		if (!justSynced) return;
-		const t = setTimeout(() => setJustSynced(false), 4000);
-		return () => clearTimeout(t);
-	}, [justSynced]);
-
-	// ONLINE: run the server-fn and re-fetch (unchanged). OFFLINE: enqueue the op
-	// and reflect it optimistically; never hit the server or onMutated.
-	async function mutate(
-		onlineFn: () => Promise<unknown>,
-		makeOp: () => MinutesOp,
-	) {
-		// `draining` joins the guard so a reconnect drain isn't interleaved with a
-		// fresh edit (which could reorder ops). A queue only ever exists after an
-		// actual offline session, so `draining` is ALWAYS false for a normal
-		// online-only user — their online path (below) is byte-for-byte unchanged.
-		if (busy || draining) return;
-		if (!online) {
-			const op = makeOp();
-			setQueue((q) => [...q, op]);
-			try {
-				await enqueue(meetingId, op);
-			} catch (err) {
-				toast.error(errMessage(err));
-			}
-			return;
-		}
-		setBusy(true);
-		try {
-			await onlineFn();
-			await onMutated();
-		} catch (err) {
-			toast.error(errMessage(err));
-		} finally {
-			setBusy(false);
-		}
-	}
-
-	const opMeta = () => ({
-		opId: crypto.randomUUID(),
-		queuedAt: Date.now(),
-	});
 
 	const guestName = (guestId: string) =>
 		clubGuests.find((g) => g.id === guestId)?.name ?? "Guest";
@@ -348,7 +229,7 @@ export function MeetingMinutes({
 					draining={draining}
 					syncError={syncError}
 					justSynced={justSynced}
-					onRetry={() => runDrain(queue)}
+					onRetry={() => offline.retryDrain()}
 				/>
 				<ActionItemsSection items={displayMinutes.actionItems} />
 				{/* Attendance is the RECORD of who was in the room, so it does not
