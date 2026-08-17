@@ -92,15 +92,18 @@ import {
 } from "#/server/meetings";
 import { listMembers } from "#/server/members";
 import {
+	addMinutesGuest,
 	addTableTopics,
 	clearMinutesAward,
 	getMinutes,
 	moveTableTopics,
+	removeMinutesGuest,
 	removeTableTopics,
+	setAttendance,
 	setMinutesAward,
 } from "#/server/minutes";
 import { getMinutesRecipients } from "#/server/minutes-email";
-import type { AwardCategory } from "#/server/minutes-logic";
+import type { AttendanceStatus, AwardCategory } from "#/server/minutes-logic";
 import { clearContacted, setContacted } from "#/server/outreach";
 import {
 	addRoleSlot,
@@ -447,6 +450,31 @@ function MeetingView() {
 	// An officer already has `plan` on the payload; only the non-officer TMOD
 	// needs the extra round trip, and only while the panel is actually shown.
 	const needsTmodPlan = showPlanPanel && !effectiveCanManage && !!myId;
+	// ONE derivation of the mode, off the route's existing frozen clock (D2) —
+	// so the panel cannot straddle midnight against the agenda beside it.
+	// `upcoming` is the pre-meeting outreach ladder; `today` and `completed`
+	// both record what actually happened.
+	const panelMode = phase === "upcoming" ? "plan" : "roll";
+	// DP1: roll mode is signed-in-admin only, deliberately NARROWER than plan
+	// mode. `setAttendance` runs `gateAdmin` (requireUser + requireClubRole
+	// admin) and the rows it renders come from `getMinutes`, which returns the
+	// empty shape without a session — so a Toastmaster who identified by roster
+	// pick would get a panel with no recorded rows and every tap 403ing.
+	// `minutes.canEdit` specifically, because that is the same signal the
+	// Minutes card gates its own recorder on: the two surfaces can never
+	// disagree about who may record attendance. The Toastmaster gap is
+	// deliberate and filed as a follow-up rather than solved here.
+	const showRollPanel = effectiveCanManage && minutes.canEdit;
+	const showPanel = panelMode === "plan" ? showPlanPanel : showRollPanel;
+	// Recorded rows ONLY. `minutes.data.members` carries `status: null` for
+	// anyone nobody has marked yet, and `buildRollPanel` needs the ABSENCE of a
+	// row to render the plan's answer as a dashed suggestion — so a null must
+	// not be flattened into a value here. `minutes.data` is null whenever the
+	// viewer may not read the minutes at all, which is exactly the case
+	// `showRollPanel` already excludes.
+	const rollAttendance = (minutes.data?.members ?? []).flatMap((m) =>
+		m.status === null ? [] : [{ memberId: m.memberId, status: m.status }],
+	);
 
 	// One viewer for all audiences: an admin keeps editing a past-but-open meeting
 	// until Complete; a member/anon agenda freezes once the date passes; a locked
@@ -725,6 +753,67 @@ function MeetingView() {
 		// under two different `via` spellings in activity_log (whole-branch
 		// review M1).
 		await writeRung(memberId, "reached_out", "nudge");
+	}
+
+	// Roll-mode writes. Every one goes through the route's SINGLE
+	// `useOfflineMinutes` instance (#176 / DP3) rather than calling the server fn
+	// directly: a direct call works online and silently vanishes offline, which
+	// is precisely the condition this page is used in — a phone on club wifi,
+	// mid-meeting. Reusing `offlineMinutes` rather than instantiating a second
+	// hook is what keeps one `draining` flag over one persisted queue; two would
+	// race it and replay a stale status over a newer one with no error.
+	async function writeAttendance(memberId: string, status: AttendanceStatus) {
+		await offlineMinutes.mutate(
+			() =>
+				setAttendance({ data: { meetingId: meeting.id, memberId, status } }),
+			() => ({
+				type: "setAttendance",
+				...offlineMinutes.opMeta(),
+				memberId,
+				status,
+			}),
+		);
+	}
+
+	// The two guest handlers are lifted from <MeetingMinutes>'s AttendanceSection
+	// wiring (meeting-minutes.tsx), whose copy Task 6 deletes — same bodies, not
+	// new ones, so nothing about the behaviour changes inside that deletion. The
+	// `crypto.randomUUID()` client-side guest PK is load-bearing: it is what makes
+	// a queued new-guest op replay idempotently instead of creating a second guest
+	// row on reconnect (#176 slice 5). `name` is resolved here because the queued
+	// op has to render an optimistic row offline, with no round trip to name it.
+	const guestName = (guestId: string) =>
+		clubGuests.find((g) => g.id === guestId)?.name ?? "Guest";
+
+	async function addRollGuest(payload: {
+		guestId?: string;
+		newGuest?: { name: string; email?: string; phone?: string };
+	}) {
+		await offlineMinutes.mutate(
+			() => addMinutesGuest({ data: { meetingId: meeting.id, ...payload } }),
+			() =>
+				payload.newGuest
+					? {
+							type: "addGuest",
+							...offlineMinutes.opMeta(),
+							guestId: crypto.randomUUID(),
+							name: payload.newGuest.name,
+							newGuest: payload.newGuest,
+						}
+					: {
+							type: "addGuest",
+							...offlineMinutes.opMeta(),
+							guestId: payload.guestId as string,
+							name: guestName(payload.guestId as string),
+						},
+		);
+	}
+
+	async function removeRollGuest(guestId: string) {
+		await offlineMinutes.mutate(
+			() => removeMinutesGuest({ data: { meetingId: meeting.id, guestId } }),
+			() => ({ type: "removeGuest", ...offlineMinutes.opMeta(), guestId }),
+		);
 	}
 
 	// The agenda's internal claim/assign acts as this member: the session member
@@ -1377,12 +1466,13 @@ function MeetingView() {
 						</DialogContent>
 					</Dialog>
 				</div>
-				{showPlanPanel && !tmodPanelUnavailable ? (
+				{showPanel && !tmodPanelUnavailable ? (
 					<aside className="order-1 lg:order-2 lg:sticky lg:top-24 lg:w-[340px] lg:shrink-0">
 						<MeetingAttendancePanel
-							// Task 5 makes this dynamic; for now the route only ever shows
-							// the pre-meeting plan.
-							mode="plan"
+							// `upcoming` → the outreach ladder; meeting day and after → the
+							// record of who turned up. One derivation, off the route's frozen
+							// clock, so this cannot disagree with the agenda beside it.
+							mode={panelMode}
 							// TWO sources, one name. An officer gets `loaderRoster` (the
 							// payload's contact-bearing roster, populated only when the
 							// server itself resolved `canManage`). This meeting's
@@ -1395,6 +1485,17 @@ function MeetingView() {
 							// to the PUBLIC roster with no contact fields at all.
 							roster={panelRoster}
 							plan={effectivePlan}
+							// Roll mode only, and every one of these props is OPTIONAL on the
+							// panel (a caller that has not wired guests renders nothing rather
+							// than an empty group) — so dropping one is silent: it neither
+							// type-errors nor fails a component test. `attendance-panel-wiring
+							// .guard.test.ts` is what watches them.
+							attendance={rollAttendance}
+							guests={minutes.data?.guests}
+							clubGuests={clubGuests}
+							// Once the meeting is a historical record nobody is being chased
+							// over it, so the rows drop their contact drafts.
+							phaseCompleted={phase === "completed"}
 							rungOverride={rungOverride}
 							roleByMemberId={roleByMemberId}
 							meetingDate={nudgeDate}
@@ -1402,6 +1503,9 @@ function MeetingView() {
 							locked={locked}
 							onWriteRung={writeRung}
 							onContacted={markAsked}
+							onSetAttendance={writeAttendance}
+							onAddGuest={addRollGuest}
+							onRemoveGuest={removeRollGuest}
 						/>
 					</aside>
 				) : null}

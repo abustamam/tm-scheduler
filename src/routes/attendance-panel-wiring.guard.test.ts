@@ -121,7 +121,11 @@ describe("attendance panel route wiring (PR 2)", () => {
 		expect(src.replace(/\s+/g, " ")).toContain(
 			"const tmodPanelUnavailable = needsTmodPlan && (tmodPanelPending || tmodPanelFailed);",
 		);
-		expect(src).toContain("{showPlanPanel && !tmodPanelUnavailable ? (");
+		// `showPanel` since PR 3 Task 5 — the render gate now covers BOTH modes
+		// (`showPlanPanel` for `upcoming`, `showRollPanel` on meeting day), and
+		// the TMOD-fetch guard has to sit outside that choice or a failed ladder
+		// fetch would still render an empty plan panel.
+		expect(src).toContain("{showPanel && !tmodPanelUnavailable ? (");
 	});
 
 	it("evicts the Toastmaster's cached contact roster when the viewer changes", () => {
@@ -368,5 +372,64 @@ describe("attendance panel route wiring (PR 2)", () => {
 		// directly beneath the toolbar rather than after the whole agenda column.
 		expect(src).toContain("order-1 lg:order-2");
 		expect(src).toContain("order-2 min-w-0 flex-1");
+	});
+
+	// PR 3 Task 5 — roll mode. Same reason as everything above: the route does
+	// not mount in jsdom, and every roll-mode prop on the panel is OPTIONAL by
+	// design (a caller that has not wired guests renders nothing rather than an
+	// empty group), so forgetting one is SILENT — it neither type-errors nor
+	// fails any component test.
+
+	it("derives the panel mode from the phase, with no second clock", () => {
+		expect(src.replace(/\s+/g, " ")).toContain(
+			'const panelMode = phase === "upcoming" ? "plan" : "roll";',
+		);
+		// Still exactly one `meetingPhase({` in the file — a second call, especially
+		// one with an inline `new Date()`, lets the panel and the agenda disagree
+		// about the club-local day across midnight.
+		expect(src.split("meetingPhase({").length - 1).toBe(1);
+	});
+
+	it("gates ROLL mode on a signed-in admin, NOT on the Toastmaster arm", () => {
+		// DP1. `setAttendance` runs `gateAdmin` (requireUser + requireClubRole admin)
+		// and `getMinutes` is only reached behind `context.shell`, so a roster-pick
+		// Toastmaster has no rows to render and no write that would land. Rendering
+		// roll mode for them is a panel of buttons that only error.
+		const flat = src.replace(/\s+/g, " ");
+		expect(flat).toContain(
+			'const showPanel = panelMode === "plan" ? showPlanPanel : showRollPanel;',
+		);
+		expect(flat).toContain(
+			"const showRollPanel = effectiveCanManage && minutes.canEdit;",
+		);
+		// The TMOD arm must NOT reach roll mode.
+		expect(
+			flat,
+			"runsThisMeeting admits the Toastmaster and must not gate the roll panel",
+		).not.toContain("const showRollPanel = runsThisMeeting");
+	});
+
+	it("feeds roll mode the recorded rows and the guests from minutes", () => {
+		// `minutes` here is the loader's `MinutesResult` wrapper (`{ visible,
+		// canEdit, data, program }`), so the rows live one level down on
+		// `minutes.data` — which is `null` for a viewer who may not read them.
+		expect(src).toContain("attendance={rollAttendance}");
+		expect(src).toContain("guests={minutes.data?.guests}");
+		expect(src.replace(/\s+/g, " ")).toContain(
+			"const rollAttendance = (minutes.data?.members ?? []).flatMap((m) => m.status === null ? [] : [{ memberId: m.memberId, status: m.status }], );",
+		);
+	});
+
+	it("routes every roll write through the offline hook, so a bad connection queues", () => {
+		// #176's capability. A direct `setAttendance(...)` call here would work online
+		// and silently vanish offline — at a meeting, on club wifi.
+		expect(src).toContain("await offlineMinutes.mutate(");
+		expect(src).toContain('type: "setAttendance",');
+		// Exactly ONE instance per meeting (DP3) — a second would race the same queue.
+		expect(src.split("useOfflineMinutes({").length - 1).toBe(1);
+		expect(
+			src.replace(/\s+/g, " "),
+			"roll writes must not bypass the queue",
+		).not.toMatch(/onSetAttendance=\{\(memberId, status\) => setAttendance\(/);
 	});
 });
