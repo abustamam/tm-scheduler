@@ -17,7 +17,10 @@ import {
 	requireClubRole,
 	requireMemberInClub,
 } from "./guards";
-import { assertMeetingNotLocked } from "./meeting-authz-logic";
+import {
+	assertMeetingNotLocked,
+	loadTmodMemberId,
+} from "./meeting-authz-logic";
 import { resolveWriteActor } from "./write-actor-logic";
 
 /**
@@ -31,8 +34,11 @@ import { resolveWriteActor } from "./write-actor-logic";
 // module export ONLY `createServerFn`s and types: any other top-level export
 // survives into the client bundle and drags `#/db` → `pg` → `Buffer` with it.
 const SELF_ONLY_MESSAGE = "You can only change your own planned attendance.";
+/** Says "officer or Toastmaster" because both arms grant it since #576. A
+ *  message naming only officers would be read by the person it just rejected —
+ *  a member who IS the TMOD of some other meeting — as a bug in the panel. */
 const OFFICER_ONLY_REACHED_OUT_MESSAGE =
-	"Only an officer can record reaching out to someone.";
+	"Only an officer or this meeting's Toastmaster can record reaching out to someone.";
 
 /** Meeting status + OWNING club. The club comes from the meeting, never the
  *  payload (#396): gating on a client-supplied `clubId` would let an admin of
@@ -68,14 +74,26 @@ const planSchema = z.object({
 	via: z.enum(["nudge", "manual"]).default("manual"),
 });
 
-/** Which arm of D6 admitted the caller, plus who to credit. `viaOfficer` is
- *  REPORTED rather than inferred: `actorMemberId === null` happens to mean
+/** Which arm of D6 admitted the caller, plus who to credit. The capability flag
+ *  is REPORTED rather than inferred: `actorMemberId === null` happens to mean
  *  "impersonating superadmin" today only because a read-only session falls
  *  through and is rejected below, which is an accident of ordering, not an
  *  invariant a caller should re-derive. */
 interface ResolvedActor {
 	actorMemberId: string | null;
-	viaOfficer: boolean;
+	/** Admitted as someone who RUNS this meeting, and so may set any member's
+	 *  row, write the officer-only `reached_out` rung, and clear without the
+	 *  self-service restriction.
+	 *
+	 *  Named for the CAPABILITY, not the arm, because two arms now grant it: a
+	 *  club officer, and this meeting's own TMOD (#576). It was `viaOfficer`
+	 *  when only one did, and leaving that name while widening the meaning is
+	 *  how a reader concludes the TMOD path is an officer session. */
+	viaManager: boolean;
+	/** WHICH arm granted it. Nothing branches on this today — it exists so the
+	 *  next reader does not have to re-derive the distinction from
+	 *  `actorMemberId`, which is the mistake the note above describes. */
+	via: "officer" | "tmod" | "self";
 }
 
 /** Denials that legitimately mean "not an officer HERE" and so fall through to
@@ -87,13 +105,22 @@ const OFFICER_DENIALS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Resolve the acting member and enforce D6: an officer may set anyone's row, a
- * member may set only their own. Session-less by design — the anonymous
- * roster-pick identity is the dominant path in this product.
+ * Resolve the acting member and enforce D6: a club officer OR this meeting's
+ * Toastmaster may set anyone's row (#576); everyone else may set only their own.
+ * Session-less by design — the anonymous roster-pick identity is the dominant
+ * path in this product, and both non-officer arms below run without one.
+ *
+ * Arm order is load-bearing. Officer first (a session admin who also happens to
+ * hold the TMOD slot should be credited as the officer they are), then TMOD,
+ * then self. Putting self first would swallow the TMOD arm entirely, since a
+ * TMOD writing their OWN row satisfies the self test.
  */
 async function resolveActor(args: {
 	/** ALWAYS the meeting's own club — see `loadMeeting`. */
 	clubId: string;
+	/** ALWAYS the meeting the write targets. The TMOD grant is scoped to THIS
+	 *  meeting: holding the slot on one meeting confers nothing on another. */
+	meetingId: string;
 	memberId: string;
 	claimedActorMemberId?: string;
 }): Promise<ResolvedActor> {
@@ -116,7 +143,35 @@ async function resolveActor(args: {
 			}
 		}
 		if (membership) {
-			return { actorMemberId: membership.id, viaOfficer: true };
+			return { actorMemberId: membership.id, viaManager: true, via: "officer" };
+		}
+	}
+
+	// TMOD arm (#576). Resolved BEFORE the self-only arm, and deliberately with
+	// `?? null` rather than the self-only arm's `?? args.memberId` default: this
+	// asks "who is CALLING", and defaulting the caller to the SUBJECT would make
+	// every anonymous write self-assert as its own target — so writing the TMOD's
+	// row would grant TMOD powers over it, which is both wrong and useless.
+	//
+	// THE TRUST MODEL, stated because it is a widening and should not be
+	// discovered later: on the anonymous path this is an HONOUR-SYSTEM claim. The
+	// caller asserts a member id and `resolveWriteActor` club-scopes it, but
+	// nothing proves they are that person. Anyone who knows the TMOD's member id
+	// can take this arm. That is the same basis on which
+	// `resolveMeetingAgendaAuthz` already lets a self-asserted TMOD assign roles
+	// and edit meeting meta — a strictly larger power than marking someone
+	// contacted — so this is consistent with the product's identity model (#317),
+	// not a new hole. It is NOT consistent with requiring a session, and if that
+	// model ever tightens, this arm tightens with the agenda one.
+	const tmodMemberId = await loadTmodMemberId(args.meetingId);
+	if (tmodMemberId) {
+		const caller = await resolveWriteActor({
+			clubId: args.clubId,
+			sessionUserId: user?.id ?? null,
+			claimedActorMemberId: args.claimedActorMemberId ?? null,
+		});
+		if (caller && caller === tmodMemberId) {
+			return { actorMemberId: caller, viaManager: true, via: "tmod" };
 		}
 	}
 	// Not an officer here: a plain member, an anonymous roster pick, or a
@@ -129,7 +184,7 @@ async function resolveActor(args: {
 		claimedActorMemberId: args.claimedActorMemberId ?? args.memberId,
 	});
 	if (actor !== args.memberId) throw new Error(SELF_ONLY_MESSAGE);
-	return { actorMemberId: actor, viaOfficer: false };
+	return { actorMemberId: actor, viaManager: false, via: "self" };
 }
 
 /** Set a member's planned attendance for a meeting. */
@@ -142,8 +197,9 @@ export const setPlannedAttendance = createServerFn({ method: "POST" })
 		await assertClubNotArchived(meeting.clubId);
 		assertMeetingNotLocked(meeting.status);
 		await requireMemberInClub(data.memberId, meeting.clubId);
-		const { actorMemberId, viaOfficer } = await resolveActor({
+		const { actorMemberId, viaManager } = await resolveActor({
 			clubId: meeting.clubId,
+			meetingId: data.meetingId,
 			memberId: data.memberId,
 			claimedActorMemberId: data.actorMemberId,
 		});
@@ -153,7 +209,7 @@ export const setPlannedAttendance = createServerFn({ method: "POST" })
 		// roster member, because `claimedActorMemberId` defaults to the subject.
 		// The officer's outreach list would then show that member as already
 		// asked, and they would be skipped.
-		if (!viaOfficer && data.status === "reached_out") {
+		if (!viaManager && data.status === "reached_out") {
 			throw new Error(OFFICER_ONLY_REACHED_OUT_MESSAGE);
 		}
 		return setPlanStatus(db, {
@@ -197,8 +253,9 @@ export const clearPlannedAttendance = createServerFn({ method: "POST" })
 		await assertClubNotArchived(meeting.clubId);
 		assertMeetingNotLocked(meeting.status);
 		await requireMemberInClub(data.memberId, meeting.clubId);
-		const { actorMemberId, viaOfficer } = await resolveActor({
+		const { actorMemberId, viaManager } = await resolveActor({
 			clubId: meeting.clubId,
+			meetingId: data.meetingId,
 			memberId: data.memberId,
 			claimedActorMemberId: data.actorMemberId,
 		});
@@ -216,6 +273,6 @@ export const clearPlannedAttendance = createServerFn({ method: "POST" })
 			// always holds and any roster member is reachable. Officers keep the
 			// unrestricted clear; everyone else may only take back a rung a member
 			// could have set.
-			onlyFrom: viaOfficer ? undefined : SELF_SERVICE_RUNGS,
+			onlyFrom: viaManager ? undefined : SELF_SERVICE_RUNGS,
 		});
 	});

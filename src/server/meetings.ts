@@ -54,6 +54,7 @@ import {
 	applyReopenMeeting,
 	applyWordOfTheDayUpdate,
 	loadPublicUpcomingMeetings,
+	loadTmodPanelData,
 } from "./meetings-logic";
 import { loadMyCommitments } from "./my-activity-logic";
 import { currentOfficersForClub } from "./officer-terms-logic";
@@ -70,6 +71,27 @@ const uuid = z.string().uuid();
 export const listUpcomingMeetings = createServerFn({ method: "GET" })
 	.validator((clubId: unknown) => uuid.parse(clubId))
 	.handler(async ({ data: clubId }) => loadPublicUpcomingMeetings(clubId));
+
+const tmodPlanInput = z.object({
+	meetingId: uuid,
+	/** The caller's self-asserted member id, verified against the meeting's TMOD
+	 *  slot inside `loadPlanForTmod`. Never trusted here. */
+	memberId: uuid,
+});
+
+/**
+ * The plan ladder AND the contact-bearing roster for this meeting's Toastmaster
+ * (#576). Separate from `getMeetingDetail` on purpose — see `loadTmodPanelData`
+ * for why neither may ride the public payload behind a client flag, and for the
+ * privacy widening the roster half represents.
+ *
+ * The route calls this ONLY when the viewer is the TMOD and not already an
+ * officer (an officer gets both on the payload). Returns empty arrays for
+ * anyone else, so calling it speculatively leaks nothing.
+ */
+export const getTmodPanelData = createServerFn({ method: "GET" })
+	.validator((i: unknown) => tmodPlanInput.parse(i))
+	.handler(async ({ data }) => loadTmodPanelData(data));
 
 const pastMeetingsInput = z.object({
 	clubId: uuid,

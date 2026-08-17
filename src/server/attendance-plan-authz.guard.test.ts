@@ -126,7 +126,7 @@ describe("attendance-plan authz (D6)", () => {
 		// subject) — so without this an anonymous caller could mark someone else
 		// as already asked and get them skipped on the officer's outreach list.
 		const body = handlerBody(SRC, "setPlannedAttendance");
-		expect(body).toContain('if (!viaOfficer && data.status === "reached_out")');
+		expect(body).toContain('if (!viaManager && data.status === "reached_out")');
 		expect(
 			body,
 			"the officer-only rung must THROW; an empty block passes a condition-only assertion",
@@ -144,11 +144,11 @@ describe("attendance-plan authz (D6)", () => {
 			body,
 			"clearPlannedAttendance must resolve the officer branch — otherwise it " +
 				"cannot tell who is allowed to remove a `reached_out` row",
-		).toContain("viaOfficer");
+		).toContain("viaManager");
 		expect(
 			body,
 			"the non-officer arm must be restricted to the self-service rungs",
-		).toContain("onlyFrom: viaOfficer ? undefined : SELF_SERVICE_RUNGS");
+		).toContain("onlyFrom: viaManager ? undefined : SELF_SERVICE_RUNGS");
 	});
 
 	it("reports the officer branch rather than inferring it from a null actor", () => {
@@ -159,8 +159,11 @@ describe("attendance-plan authz (D6)", () => {
 		// would be tempted to re-derive it. (Module scope would false-FAIL on the
 		// prose above, which names the pattern to warn against it — the reason
 		// guard-source keeps negatives verbatim and positives comment-blind.)
-		expect(SRC).toContain("viaOfficer: true");
-		expect(SRC).toContain("viaOfficer: false");
+		// Two arms grant the capability since #576, so the reported flag is
+		// asserted through the arm labels rather than a true/false pair.
+		expect(SRC).toContain('viaManager: true, via: "officer"');
+		expect(SRC).toContain('viaManager: true, via: "tmod"');
+		expect(SRC).toContain('viaManager: false, via: "self"');
 		for (const fn of HANDLERS) {
 			expect(
 				handlerBody(RAW, fn),
@@ -174,6 +177,69 @@ describe("attendance-plan authz (D6)", () => {
 			RAW,
 			"the club must come from the meeting row (#396) — a payload clubId is not evidence of anything",
 		).not.toContain("data.clubId");
+	});
+
+	it("admits this meeting's Toastmaster as a third arm, scoped to that meeting", () => {
+		// #576. Unreachable from vitest — `resolveActor` is private to this
+		// `createServerFn` module — so the arm's SHAPE is pinned here and its
+		// read-side twin is executed in `tmod-panel-data.integration.test.ts`.
+		expect(SRC).toContain("loadTmodMemberId(args.meetingId)");
+		expect(
+			SRC,
+			"the TMOD grant must be scoped to the meeting being written, never resolved from the club",
+		).not.toMatch(/loadTmodMemberId\(\s*args\.clubId/);
+		expect(SRC).toContain('via: "tmod"');
+	});
+
+	it("asks who is CALLING for the TMOD check, not who is being written", () => {
+		// The self-only arm below deliberately defaults the claim to the SUBJECT
+		// (`?? args.memberId`), which is what makes an anonymous self-write
+		// resolve. Reusing that default for the TMOD check would make every
+		// anonymous write self-assert as its own target, so writing the TMOD's row
+		// would confer TMOD powers over it — useless for the panel and wrong.
+		// Ends at the self arm's own `resolveWriteActor` call, NOT at the
+		// function's end — the self arm legitimately uses the subject default two
+		// lines later, and a slice that ran past it would fail on correct code.
+		const tmodStart = SRC.indexOf("loadTmodMemberId(args.meetingId)");
+		const tmodArm = SRC.slice(
+			tmodStart,
+			SRC.indexOf("const actor = await resolveWriteActor(", tmodStart),
+		);
+		expect(tmodArm).toContain(
+			"claimedActorMemberId: args.claimedActorMemberId ?? null,",
+		);
+		expect(
+			tmodArm,
+			"the TMOD arm must not inherit the self-only arm's subject default",
+		).not.toContain("args.claimedActorMemberId ?? args.memberId");
+	});
+
+	it("orders the arms officer, then TMOD, then self", () => {
+		// Load-bearing. Self first would swallow the TMOD arm entirely, since a
+		// TMOD writing their OWN row satisfies the self test and would return
+		// `viaManager: false` — silently downgrading them on exactly the write
+		// they are most likely to make first.
+		const officer = SRC.indexOf('via: "officer"');
+		const tmod = SRC.indexOf('via: "tmod"');
+		const self = SRC.indexOf('via: "self"');
+		expect(officer).toBeGreaterThan(-1);
+		expect(tmod).toBeGreaterThan(officer);
+		expect(self).toBeGreaterThan(tmod);
+	});
+
+	it("gates the officer-only rung and the unrestricted clear on the CAPABILITY, not the officer arm", () => {
+		// Both were `viaOfficer` before #576. Leaving either on a name that means
+		// "session admin" would give the TMOD a panel they cannot actually use:
+		// the chip write would be refused and their clear would be silently
+		// restricted to the self-service rungs.
+		expect(SRC).toContain('if (!viaManager && data.status === "reached_out")');
+		expect(SRC).toContain(
+			"onlyFrom: viaManager ? undefined : SELF_SERVICE_RUNGS,",
+		);
+		expect(
+			SRC,
+			"viaOfficer was renamed to viaManager when the TMOD arm landed — a surviving use means one gate was missed",
+		).not.toContain("viaOfficer");
 	});
 
 	it("floors the nudge auto-advance so it cannot demote a real answer", () => {

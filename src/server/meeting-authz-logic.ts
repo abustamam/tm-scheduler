@@ -148,6 +148,27 @@ async function loadRoleSlotAssignees(meetingId: string): Promise<{
 }
 
 /**
+ * This meeting's Toastmaster-of-the-Day slot assignee, or null when the slot is
+ * unassigned or absent.
+ *
+ * A narrow export of `loadRoleSlotAssignees` for the planned-attendance seam
+ * (#576), which needs the TMOD identity but none of the agenda-edit decisions
+ * the resolvers below make — it has its own D6 ladder in `attendance-plan.ts`,
+ * and duplicating the admin arm here would give that one rule two homes.
+ *
+ * Sharing the loader rather than re-querying is the point: it matches on
+ * `role_definitions.key` with the name only as a fallback, so a club that
+ * renamed its Toastmaster of the Day still resolves and a club that invented a
+ * role starting with "Toastmaster" still does not. A second hand-rolled query
+ * would be exactly where that distinction gets lost.
+ */
+export async function loadTmodMemberId(
+	meetingId: string,
+): Promise<string | null> {
+	return (await loadRoleSlotAssignees(meetingId)).tmodMemberId;
+}
+
+/**
  * Decide whether a caller may edit a meeting's agenda content (meta + slots).
  * Allowed when the caller is a club `admin` (via a live session) OR the
  * self-asserted `memberId` equals the meeting's TMOD slot assignee. If the TMOD

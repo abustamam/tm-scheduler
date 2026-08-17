@@ -32,11 +32,17 @@ describe("attendance panel route wiring (PR 2)", () => {
 		// `over`, `locked` and `canComplete` are all booleans in scope here. Only
 		// `phase === "upcoming"` is plan mode: `canComplete` is TRUE on meeting day
 		// and would keep the plan panel up into roll territory, and `over` is false
-		// all through meeting day and would do the opposite. `effectiveCanManage`,
-		// never bare `canManage` — #320 drops management everywhere it gates admin
-		// UI, including preview-as-member.
-		expect(src).toContain("const showPlanPanel = effectiveCanManage");
+		// all through meeting day and would do the opposite.
+		expect(src).toContain("const showPlanPanel = runsThisMeeting");
 		expect(src).toContain('phase === "upcoming"');
+		// `effectiveCanManage`, never bare `canManage` — #320 drops management
+		// everywhere it gates admin UI, including preview-as-member. The TMOD arm
+		// (#576) carries its own `!previewAsMember` for the same reason: an officer
+		// previewing as a member who ALSO holds the slot would otherwise keep the
+		// panel through the preview and defeat the point of it.
+		expect(src).toContain(
+			"const runsThisMeeting = effectiveCanManage || (isTmod && !previewAsMember)",
+		);
 	});
 
 	it("computes the phase exactly once, on the route's frozen clock", () => {
@@ -47,15 +53,28 @@ describe("attendance panel route wiring (PR 2)", () => {
 	});
 
 	it("passes the plan array, the roster, and the shared role map to the panel", () => {
-		// `plan` is the admin-only ladder from the loader, not a re-filtered copy.
-		// The panel gets `loaderRoster` (the contact-bearing admin roster) rather
-		// than the route's `roster` local, which falls back to the client-fetched
-		// PUBLIC roster (no phone/email) when `!canManage` — a shape the panel's
-		// props require unconditionally. `roleByMemberId` is the ONE map lifted for
-		// both the agenda and the panel (#396 PR 2).
-		expect(src).toContain("plan={plan}");
-		expect(src).toContain("roster={loaderRoster}");
+		// Both arrays come from ONE name each, so the officer path and the TMOD
+		// path cannot diverge: `effectivePlan` is the loader's admin-only ladder
+		// for an officer and the separately-verified `getTmodPanelData` rows
+		// otherwise, and `panelRoster` is the contact-bearing roster from
+		// whichever of those two the viewer is entitled to.
+		//
+		// Neither may fall back to the route's `roster` local, which is the
+		// client-fetched PUBLIC roster (no phone/email) when `!canManage` — the
+		// panel's props require contact unconditionally, and silently handing it
+		// the public shape is how every row renders "No contact on file".
+		expect(src).toContain("plan={effectivePlan}");
+		expect(src).toContain("roster={panelRoster}");
 		expect(src).toContain("roleByMemberId={roleByMemberId}");
+		expect(src).toContain(
+			"const effectivePlan = effectiveCanManage ? plan : fetchedPlan;",
+		);
+		// Whitespace-collapsed rather than a multi-line regex: the formatter wraps
+		// this ternary and the exact break points are its business, not this
+		// guard's.
+		expect(src.replace(/\s+/g, " ")).toContain(
+			"const panelRoster = effectiveCanManage ? loaderRoster : (tmodPanelData?.roster ?? []);",
+		);
 	});
 
 	it("keeps the agenda column shrinkable so the rail cannot be pushed off", () => {

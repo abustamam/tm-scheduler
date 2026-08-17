@@ -10,7 +10,15 @@ import { meetingDateReached } from "#/lib/meeting-lifecycle";
 import { logActivity } from "./activity";
 import type { AttendancePlanStatus as PlanStatus } from "./attendance-plan-logic";
 import { listPlanForMeetings } from "./attendance-plan-logic";
-import { isReadableClub } from "./club-readable-logic";
+import {
+	isReadableClub,
+	isReadableClubForMeeting,
+} from "./club-readable-logic";
+import { loadTmodMemberId } from "./meeting-authz-logic";
+import {
+	loadRosterWithContact,
+	type RosterContact,
+} from "./meeting-contacts-logic";
 import { linkEvaluatorsToSpeakers } from "./meeting-create-logic";
 import { freezeMeetingNumber } from "./meeting-number-logic";
 import { closeAllVotesTx } from "./voting-logic";
@@ -391,4 +399,66 @@ export async function loadMeetingDetailForTest(
 			r.status !== "reached_out",
 	);
 	return { plan, answeredRungs };
+}
+
+/**
+ * Everything this meeting's Toastmaster needs to run the planned-attendance
+ * panel (#576): the whole plan ladder including the officer-only `reached_out`
+ * rung, and the roster WITH contact so the WhatsApp/email drafts render.
+ *
+ * ONE fn returning both, rather than two, so the TMOD claim is verified in
+ * exactly one place. Two gated readers would be two chances to gate one of them
+ * differently, and the roster half is the more sensitive of the two.
+ *
+ * A separate reader rather than a widened `canManage` on the meeting payload,
+ * and the distinction is the security-relevant part. `loadMeetingDetail` is a
+ * public, session-less reader; its `plan` and `roster` gates are a SERVER-derived
+ * boolean. Teaching it to also accept "…or the caller says they are the TMOD"
+ * would put confidential data behind a client-supplied flag on the payload every
+ * anonymous visitor already receives — one refactor away from shipping it to
+ * everyone. Here the claim is checked against the slot before anything is
+ * returned, and this fn returns NOTHING else, so there is no payload to leak into.
+ *
+ * PRIVACY NOTE, deliberate and worth knowing: this hands the TMOD every active
+ * member's phone and email, which the product did not previously give them —
+ * `loadMeetingDetail` blanks the roster for a non-officer precisely so contact
+ * is never fetched for a public caller. Outreach is not possible without it, and
+ * a TMOD already assigns roles and edits the meeting, but it IS a widening and
+ * the honour-system identity below is what stands behind it.
+ *
+ * Returns empty arrays — never throws — for a non-TMOD, an unassigned slot, a
+ * missing meeting, or an archived club, matching the gated-seam convention: a
+ * caller who may not read this cannot tell those cases apart, and no call site
+ * needs new error handling.
+ */
+export async function loadTmodPanelData(input: {
+	meetingId: string;
+	/** The caller's self-asserted member id. Honour-system on the anonymous path,
+	 *  exactly as the agenda's TMOD editor is — see `resolveActor` in
+	 *  `attendance-plan.ts` for the trust model this shares. */
+	memberId: string;
+}): Promise<{
+	plan: { memberId: string; status: PlanStatus }[];
+	roster: RosterContact[];
+}> {
+	const empty = { plan: [], roster: [] };
+	// Archive gate FIRST: an archived club must not answer this any differently
+	// than a club that never existed (#544).
+	const meeting = await db.query.meetings.findFirst({
+		columns: { clubId: true },
+		where: eq(meetings.id, input.meetingId),
+	});
+	if (!meeting) return empty;
+	if (!(await isReadableClubForMeeting(input.meetingId))) return empty;
+	const tmodMemberId = await loadTmodMemberId(input.meetingId);
+	// No slot assignee means no TMOD grant — never "anyone qualifies".
+	if (!tmodMemberId || tmodMemberId !== input.memberId) return empty;
+	const [rows, roster] = await Promise.all([
+		listPlanForMeetings(db, [input.meetingId]),
+		loadRosterWithContact(meeting.clubId),
+	]);
+	return {
+		plan: rows.map(({ memberId, status }) => ({ memberId, status })),
+		roster,
+	};
 }
