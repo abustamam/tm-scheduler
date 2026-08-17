@@ -85,9 +85,6 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
 - Two `#576` behaviours are reachable only from a real browser, and both are the kind a source guard pins as TEXT while never executing. (1) `tmodPanelUnavailable` — the guard proves the expression and the JSX ternary exist, but nothing observes that a pending or errored query actually suppresses the panel, which is the whole point of it (an empty roster otherwise renders a header and a counts line of zeros, indistinguishable from "no members"). (2) `resolveActor`'s arms — the write-side TMOD comparison, the `OFFICER_DENIALS` catch-and-fallthrough, and the self arm's throw are all private to a `createServerFn` module, so vitest cannot invoke any of them; the read-side twin (`loadTmodPanelData`) IS executed and covers the equivalent decision, but the write path's own resolution never runs. Both need an HTTP-level or browser test, which this repo has no seam for yet. Accepted for v1.16.0.0 rather than hidden: the guards pin the shape, and the /qa pass drove both paths by hand.
   **Priority:** P3
 
-- `attendance-plan-backfill.integration.test.ts` is order-dependent and will flake more often from v1.15.0.0. Its `planRows()` helper selects from the planned-attendance table with NO club filter, so it counts rows written by any other suite running concurrently — `expect(rows.size).toBe(1)` was observed getting `2` during the v1.15.0.0 coverage audit, then passing alone and on re-run. Ten suites on main write that table; the planned-attendance panel adds an eleventh, which is why the odds got worse rather than the bug being new. Fix is a one-line `and(eq(…clubId, club.id))` on the helper, not a retry — a cross-club read is wrong independently of the flake, since it makes the assertion depend on what else the runner scheduled. Worth checking whether the other ten helpers scope their reads before assuming this is the only one.
-  **Priority:** P2
-
 ## Print & artifacts
 
 - The canonical meeting page (`club.$clubId.meeting.$meetingId.tsx`) is the one logo-supplying loader with no test on its `logoUrl` wiring. v1.5.0.0 covered the two standalone public print routes after a coverage audit forced all four loaders to null and the whole suite stayed green; this one was left because the route imports enough that isolating it needs more mocking than the other two. Its only logo consumer is still the `.pptx` export, so the blast radius is one surface — but the path moved in v1.11.0.0 (#541): `PptxDownloadButton`'s `logoUrl` prop is gone and `downloadDeckPptx` reads the logo off the deck's title slide, so the untested seam is now loader → `buildSlideDeck` → title slide. Same seam, still untested.
@@ -117,6 +114,19 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
   **Priority:** P4
 
 ## Completed
+
+- `attendance-plan-backfill.integration.test.ts` read the plan table with no filter, so its count
+  assertions counted rows every other suite had written. Vitest runs files in parallel and eighteen
+  of them write `meeting_attendance_plan`; `expect(rows.size).toBe(1)` was seen getting `2`, then
+  passing alone and on re-run, which reads as a flake in whatever branch is open. Fixed by scoping
+  `planRows()` to the fixture's own meeting, not by retrying — a cross-club read is wrong on its own
+  terms, since it makes the assertion depend on what else the runner scheduled. Verified by planting
+  a foreign plan row in `tm_test` and running the suite both ways: scoped passes 5/5, unscoped fails
+  **three** tests. Three, not the two this entry originally claimed — the count missed the inline
+  `(await planRows()).size).toBe(0)`. A sweep of every unscoped read of `meeting_attendance_plan`,
+  `activity_log`, `members` and `meetings` across the integration suites found no others, which
+  answers the "check the other helpers first" part of the original note.
+  **Completed:** v1.16.0.1 (2026-08-17)
 
 - An impersonation session outlived the superadmin's own access. `getActiveImpersonationForUser`
   selected on `superadminUserId` / `endedAt` / `expiresAt` and never re-read `user.is_superadmin`,
