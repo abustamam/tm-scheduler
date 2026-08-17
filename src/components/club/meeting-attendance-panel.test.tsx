@@ -159,6 +159,18 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		const { getByRole } = renderPanel();
 		expect(getByRole("button", { name: /show|hide/i })).toBeTruthy();
 	});
+
+	it("never renders the Guests group in plan mode", () => {
+		// Guests are roll-mode only (spec: pre-meeting guest expectation is out of
+		// scope) — even if a caller mistakenly passes `guests` through in plan
+		// mode, the group must not appear.
+		const { queryByText } = renderPanel({
+			guests: [{ guestId: "g1", name: "Nadia Farouk", fromRole: false }],
+			clubGuests: [{ id: "g1", name: "Nadia Farouk" }],
+		});
+		expect(queryByText("Guests")).toBeNull();
+		expect(queryByText("Nadia Farouk")).toBeNull();
+	});
 });
 
 describe("roll mode", () => {
@@ -304,5 +316,24 @@ describe("roll mode", () => {
 		// toggle as dead code without any test noticing.
 		const { queryByRole } = render(<MeetingAttendancePanel {...rollProps} />);
 		expect(queryByRole("button", { name: /show|hide/i })).toBeNull();
+	});
+
+	it("renders the Guests group when guests are supplied", () => {
+		const { getByText } = render(
+			<MeetingAttendancePanel
+				{...rollProps}
+				guests={[{ guestId: "g1", name: "Nadia Farouk", fromRole: false }]}
+				clubGuests={[{ id: "g1", name: "Nadia Farouk" }]}
+			/>,
+		);
+		getByText("Guests");
+		getByText("Nadia Farouk");
+	});
+
+	it("omits the Guests group entirely when `guests` is not supplied", () => {
+		// The panel is presentational; a route that has not wired guests yet
+		// must render nothing rather than an empty group.
+		const { queryByText } = render(<MeetingAttendancePanel {...rollProps} />);
+		expect(queryByText("Guests")).toBeNull();
 	});
 });

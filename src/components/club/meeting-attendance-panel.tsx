@@ -1,5 +1,6 @@
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { useEffect, useState } from "react";
+import { AttendanceGuestsGroup } from "#/components/club/attendance-guests-group";
 import { NudgeButtons } from "#/components/club/nudge-buttons";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
@@ -16,7 +17,7 @@ import {
 	type PlanStatus,
 } from "#/lib/attendance-panel";
 import { buildRollPanel, type RollRow } from "#/lib/roll-panel";
-import type { AttendanceStatus } from "#/server/minutes-logic";
+import type { AttendanceStatus, MinutesGuestRow } from "#/server/minutes-logic";
 
 /** Chip copy. "No answer" is the ABSENCE of a row, so choosing it clears. */
 const RUNG_LABELS: Record<PlanStatus, string> = {
@@ -246,6 +247,10 @@ export function MeetingAttendancePanel({
 	onWriteRung,
 	onContacted,
 	onSetAttendance,
+	guests,
+	clubGuests,
+	onAddGuest,
+	onRemoveGuest,
 }: {
 	mode: "plan" | "roll";
 	roster: Omit<PanelMember, "status" | "roleName">[];
@@ -276,6 +281,16 @@ export function MeetingAttendancePanel({
 		memberId: string,
 		status: AttendanceStatus,
 	) => void | Promise<void>;
+	/** Roll mode only — the Guests group. Omitted (rather than defaulted to
+	 *  `[]`) so a caller that has not wired guests yet renders nothing, not an
+	 *  empty group. */
+	guests?: MinutesGuestRow[];
+	clubGuests?: { id: string; name: string }[];
+	onAddGuest?: (payload: {
+		guestId?: string;
+		newGuest?: { name: string; email?: string; phone?: string };
+	}) => void | Promise<void>;
+	onRemoveGuest?: (guestId: string) => void | Promise<void>;
 }) {
 	const roll = mode === "roll";
 
@@ -455,6 +470,15 @@ export function MeetingAttendancePanel({
 									onContacted={contacted}
 								/>
 							))}
+					{roll && guests ? (
+						<AttendanceGuestsGroup
+							guests={guests}
+							clubGuests={clubGuests ?? []}
+							locked={locked}
+							onAddGuest={onAddGuest ?? (() => {})}
+							onRemoveGuest={onRemoveGuest ?? (() => {})}
+						/>
+					) : null}
 				</CardContent>
 			) : null}
 		</Card>
