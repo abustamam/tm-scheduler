@@ -1380,6 +1380,9 @@ function MeetingView() {
 				{showPlanPanel && !tmodPanelUnavailable ? (
 					<aside className="order-1 lg:order-2 lg:sticky lg:top-24 lg:w-[340px] lg:shrink-0">
 						<MeetingAttendancePanel
+							// Task 5 makes this dynamic; for now the route only ever shows
+							// the pre-meeting plan.
+							mode="plan"
 							// TWO sources, one name. An officer gets `loaderRoster` (the
 							// payload's contact-bearing roster, populated only when the
 							// server itself resolved `canManage`). This meeting's

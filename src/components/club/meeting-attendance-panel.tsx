@@ -15,6 +15,8 @@ import {
 	type PanelMember,
 	type PlanStatus,
 } from "#/lib/attendance-panel";
+import { buildRollPanel, type RollRow } from "#/lib/roll-panel";
+import type { AttendanceStatus } from "#/server/minutes-logic";
 
 /** Chip copy. "No answer" is the ABSENCE of a row, so choosing it clears. */
 const RUNG_LABELS: Record<PlanStatus, string> = {
@@ -28,6 +30,20 @@ const MENU: { label: string; status: PlanStatus | null }[] = [
 	{ label: "Asked", status: "reached_out" },
 	{ label: "Coming", status: "coming" },
 	{ label: "Not coming", status: "not_coming" },
+];
+
+/** Roll mode's chip copy (spec D2/D3) — recording what actually happened, not
+ *  another rung on the outreach ladder. */
+const ROLL_LABELS: Record<AttendanceStatus, string> = {
+	present: "Present",
+	absent: "Absent",
+	excused: "Excused",
+};
+
+const ROLL_MENU: { label: string; status: AttendanceStatus }[] = [
+	{ label: "Present", status: "present" },
+	{ label: "Absent", status: "absent" },
+	{ label: "Excused", status: "excused" },
 ];
 
 /** Tailwind's `lg` breakpoint (`min-width: 1024px`) — kept as one literal so the
@@ -95,25 +111,146 @@ function AttendanceRow({
 	);
 }
 
+/** Roll mode's status chip (spec D2/D3). A SUGGESTION (from the plan, never a
+ *  record — `buildRollPanel` guarantees the two are mutually exclusive)
+ *  renders dashed with a trailing "?" and commits in ONE tap: it must NOT open
+ *  a menu, or roll call costs two taps per member in a room. A RECORDED status
+ *  renders solid, like plan mode's rung, and opens a menu to change it. */
+function RollChip({
+	row,
+	locked,
+	pending,
+	onSetAttendance,
+}: {
+	row: RollRow;
+	locked: boolean;
+	pending: boolean;
+	onSetAttendance: (memberId: string, status: AttendanceStatus) => void;
+}) {
+	if (row.status === null && row.suggestion) {
+		const suggestion = row.suggestion;
+		return (
+			<Button
+				variant="outline"
+				size="sm"
+				className="border-dashed"
+				disabled={locked || pending}
+				aria-label={`${row.name} status`}
+				onClick={() => onSetAttendance(row.id, suggestion)}
+			>
+				{ROLL_LABELS[suggestion]}?
+			</Button>
+		);
+	}
+
+	return (
+		<DropdownMenu>
+			<DropdownMenuTrigger asChild>
+				<Button
+					variant="outline"
+					size="sm"
+					disabled={locked || pending}
+					aria-label={`${row.name} status`}
+				>
+					{row.status ? ROLL_LABELS[row.status] : "—"}
+				</Button>
+			</DropdownMenuTrigger>
+			<DropdownMenuContent align="end">
+				{ROLL_MENU.map((item) => (
+					<DropdownMenuItem
+						key={item.label}
+						onSelect={() => onSetAttendance(row.id, item.status)}
+					>
+						{item.label}
+					</DropdownMenuItem>
+				))}
+			</DropdownMenuContent>
+		</DropdownMenu>
+	);
+}
+
+function RollAttendanceRow({
+	row,
+	locked,
+	meetingDate,
+	shareUrl,
+	hideContact,
+	pending,
+	onSetAttendance,
+}: {
+	row: RollRow;
+	locked: boolean;
+	meetingDate: string;
+	shareUrl: string;
+	/** Once the meeting is `completed` nobody is being chased — contact drops
+	 *  off the row entirely. */
+	hideContact: boolean;
+	pending: boolean;
+	onSetAttendance: (memberId: string, status: AttendanceStatus) => void;
+}) {
+	return (
+		<div className="flex items-center gap-2 py-1.5">
+			<div className="min-w-0 flex-1">
+				<div className="flex items-center gap-1.5">
+					<span className="truncate text-sm">{row.name}</span>
+					{row.roleName ? (
+						<Badge variant="secondary">{row.roleName}</Badge>
+					) : null}
+				</div>
+				<NudgeButtons
+					mode="attendance"
+					name={row.name}
+					preferredName={row.preferredName}
+					// Reuses NudgeButtons' EXISTING "no contact on file" branch (it
+					// already renders that whenever both are absent) rather than a
+					// second hide-contact mechanism living in this panel.
+					phone={hideContact ? null : row.phone}
+					email={hideContact ? null : row.email}
+					meetingDate={meetingDate}
+					shareUrl={hideContact ? "" : shareUrl}
+				/>
+			</div>
+			<RollChip
+				row={row}
+				locked={locked}
+				pending={pending}
+				onSetAttendance={onSetAttendance}
+			/>
+		</div>
+	);
+}
+
 /**
- * Officer's planned-attendance panel, plan mode (spec D2-D4). Lists every
- * active member with where the outreach got to (no answer → asked → coming →
- * not coming) and lets the officer set a rung or message them. Presentational:
- * every write leaves as a callback, no server fn, no fetch, no server state.
+ * Officer's attendance panel. PLAN mode (spec D2-D4) lists every active member
+ * with where the outreach got to (no answer → asked → coming → not coming)
+ * ahead of an upcoming meeting. ROLL mode (spec D2/D3) is meeting day: it
+ * records who actually turned up, suggesting the plan's answer as a one-tap
+ * dashed chip until the officer records a real one. `mode` is REQUIRED — a
+ * default would let an existing call site silently keep plan behavior after
+ * this landed, which is exactly the bug worth preventing. Presentational
+ * either way: every write leaves as a callback, no server fn, no fetch, no
+ * server state.
  */
 export function MeetingAttendancePanel({
+	mode,
 	roster,
 	plan,
+	attendance,
 	rungOverride,
 	roleByMemberId,
 	meetingDate,
 	shareUrl,
 	locked,
+	phaseCompleted = false,
 	onWriteRung,
 	onContacted,
+	onSetAttendance,
 }: {
+	mode: "plan" | "roll";
 	roster: Omit<PanelMember, "status" | "roleName">[];
 	plan: { memberId: string; status: PlanStatus }[];
+	/** Roll mode only. Recorded rows; ignored in plan mode. */
+	attendance?: { memberId: string; status: AttendanceStatus }[];
 	/** Optimistic overrides from the route, keyed by member. A key present with
 	 *  value `null` means "optimistically cleared" — distinct from absent,
 	 *  which means "no override". */
@@ -122,6 +259,10 @@ export function MeetingAttendancePanel({
 	meetingDate: string;
 	shareUrl: string;
 	locked: boolean;
+	/** Roll mode only. Once the meeting is a historical record nobody is being
+	 *  chased, so contact links disappear. Defaults false so plan mode's
+	 *  existing callers need no change. */
+	phaseCompleted?: boolean;
 	/** One writer for both directions; `null` clears. Two callbacks made the
 	 *  clear path a separate thing to remember at every call site. */
 	onWriteRung: (
@@ -129,13 +270,20 @@ export function MeetingAttendancePanel({
 		next: PlanStatus | null,
 	) => void | Promise<void>;
 	onContacted: (memberId: string) => void | Promise<void>;
+	/** Roll mode only. Fired by a chip or a dashed suggestion. */
+	onSetAttendance?: (
+		memberId: string,
+		status: AttendanceStatus,
+	) => void | Promise<void>;
 }) {
+	const roll = mode === "roll";
+
 	// Per-row in-flight state, lifted from OutreachPanel: a BUSY guard against a
 	// rapid double-tap, not the source of the displayed value — that comes from
 	// `rungOverride`, which the route owns.
 	const [pendingId, setPendingId] = useState<string | null>(null);
 
-	// Mobile collapse (spec D4): below `lg` the panel starts collapsed to its
+	// Mobile collapse (spec D4): below `lg` PLAN mode starts collapsed to its
 	// counts line so a big roster does not push the agenda off screen; at `lg`
 	// and up it is always shown. Starting `false` (rather than reading `window`
 	// during render) keeps the server render and the client's first render in
@@ -158,14 +306,18 @@ export function MeetingAttendancePanel({
 		return () => mq.removeEventListener("change", sync);
 	}, []);
 	const [expanded, setExpanded] = useState(false);
-	const showRows = expanded || isDesktop;
+	// ROLL mode opens by default, even on mobile — it IS the task on meeting
+	// day, unlike plan mode, which stays collapsed until asked.
+	const showRows = roll || expanded || isDesktop;
 
-	// Apply the override BEFORE calling buildPlanPanel, so the sort and the
+	// Apply the override BEFORE deriving either panel, so the sort and the
 	// counts reflect the optimistic state too — otherwise a chip jumps to a new
 	// bucket a beat after it is tapped, and the counts line disagrees with the
 	// chips. `!== undefined` (not `??`) because a key present with value `null`
 	// means "optimistically cleared", distinct from the key being absent.
-	const effectivePlan = roster
+	// Shared by both modes: roll mode reads this same plan as its suggestion
+	// source, so the optimistic override applies there too.
+	const effectivePlanForPanel = roster
 		.map((m) => ({
 			memberId: m.id,
 			status:
@@ -177,11 +329,20 @@ export function MeetingAttendancePanel({
 			(p): p is { memberId: string; status: PlanStatus } => p.status !== null,
 		);
 
-	const { rows, countsLine } = buildPlanPanel({
-		roster,
-		plan: effectivePlan,
-		roleByMemberId,
-	});
+	// Derive once, branching on mode, so the two derivations never both run —
+	// they share no sort, no counts and no row shape.
+	const rollPanel = roll
+		? buildRollPanel({
+				roster,
+				attendance: attendance ?? [],
+				plan: effectivePlanForPanel,
+				roleByMemberId,
+			})
+		: null;
+	const planPanel = roll
+		? null
+		: buildPlanPanel({ roster, plan: effectivePlanForPanel, roleByMemberId });
+	const countsLine = rollPanel?.countsLine ?? planPanel?.countsLine ?? "";
 
 	async function writeRung(memberId: string, next: PlanStatus | null) {
 		setPendingId(memberId);
@@ -210,37 +371,55 @@ export function MeetingAttendancePanel({
 		}
 	}
 
+	async function setAttendance(memberId: string, status: AttendanceStatus) {
+		setPendingId(memberId);
+		try {
+			await onSetAttendance?.(memberId, status);
+		} finally {
+			setPendingId(null);
+		}
+	}
+
+	// Once the meeting is `completed`, nobody is being chased over a historical
+	// record — contact links drop off every row.
+	const hideContact = roll && phaseCompleted;
+
 	return (
 		<Card>
 			<CardHeader>
 				<div className="flex items-center justify-between gap-2">
 					<div className="min-w-0">
-						<CardTitle>Planned attendance</CardTitle>
+						<CardTitle>{roll ? "Attendance" : "Planned attendance"}</CardTitle>
 						<span className="text-xs text-[var(--sea-ink-soft)]">
 							{countsLine}
 						</span>
 					</div>
-					{/* Toggle only makes sense below `lg` — at `lg` and up the roster is
-					 *  always shown, so the button is CSS-hidden there rather than
-					 *  removed, since it is still a single DOM node either way. */}
-					<Button
-						variant="ghost"
-						size="sm"
-						className="lg:hidden"
-						onClick={() => setExpanded((v) => !v)}
-					>
-						{expanded ? (
-							<>
-								Hide
-								<ChevronUp className="size-4" aria-hidden />
-							</>
-						) : (
-							<>
-								Show
-								<ChevronDown className="size-4" aria-hidden />
-							</>
-						)}
-					</Button>
+					{/* Toggle only exists in PLAN mode. Below `lg` it flips the
+					 *  collapse; roll mode is always expanded there (see `showRows`),
+					 *  so the control would have nothing to do. At `lg` and up plan
+					 *  mode's roster is always shown regardless, which is why the
+					 *  button there is CSS-hidden rather than removed — still one DOM
+					 *  node either way. */}
+					{roll ? null : (
+						<Button
+							variant="ghost"
+							size="sm"
+							className="lg:hidden"
+							onClick={() => setExpanded((v) => !v)}
+						>
+							{expanded ? (
+								<>
+									Hide
+									<ChevronUp className="size-4" aria-hidden />
+								</>
+							) : (
+								<>
+									Show
+									<ChevronDown className="size-4" aria-hidden />
+								</>
+							)}
+						</Button>
+					)}
 				</div>
 			</CardHeader>
 			{/* The rows are absent from the DOM entirely when collapsed — not
@@ -248,18 +427,31 @@ export function MeetingAttendancePanel({
 			 *  screen reader (and make the collapse untestable). */}
 			{showRows ? (
 				<CardContent>
-					{rows.map((m) => (
-						<AttendanceRow
-							key={m.id}
-							m={m}
-							locked={locked}
-							meetingDate={meetingDate}
-							shareUrl={shareUrl}
-							pending={pendingId === m.id}
-							onWriteRung={writeRung}
-							onContacted={contacted}
-						/>
-					))}
+					{roll
+						? (rollPanel?.rows ?? []).map((row) => (
+								<RollAttendanceRow
+									key={row.id}
+									row={row}
+									locked={locked}
+									meetingDate={meetingDate}
+									shareUrl={shareUrl}
+									hideContact={hideContact}
+									pending={pendingId === row.id}
+									onSetAttendance={setAttendance}
+								/>
+							))
+						: (planPanel?.rows ?? []).map((m) => (
+								<AttendanceRow
+									key={m.id}
+									m={m}
+									locked={locked}
+									meetingDate={meetingDate}
+									shareUrl={shareUrl}
+									pending={pendingId === m.id}
+									onWriteRung={writeRung}
+									onContacted={contacted}
+								/>
+							))}
 				</CardContent>
 			) : null}
 		</Card>

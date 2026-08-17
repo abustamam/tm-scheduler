@@ -19,6 +19,7 @@ function renderPanel(
 	over: Partial<Parameters<typeof MeetingAttendancePanel>[0]> = {},
 ) {
 	const props = {
+		mode: "plan" as const,
 		roster,
 		plan: [],
 		rungOverride: {},
@@ -152,5 +153,117 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		} finally {
 			window.innerWidth = originalWidth;
 		}
+	});
+});
+
+describe("roll mode", () => {
+	// The brief's snippet omitted this, unlike the plan-mode block above; without
+	// it renders leak across `it`s (no global auto-cleanup is configured — see
+	// vitest.config.ts), and the contact-visibility and mobile-expansion tests
+	// below see EVERY prior test's rows too, not just their own.
+	afterEach(() => cleanup());
+
+	const rollProps = {
+		mode: "roll" as const,
+		roster: [
+			{
+				id: "m-abe",
+				name: "Abe Nkemelu",
+				phone: "+12025550101",
+				email: "abe@example.com",
+			},
+			{ id: "m-bea", name: "Bea Osei", phone: null, email: "bea@example.com" },
+		],
+		plan: [{ memberId: "m-abe", status: "coming" as const }],
+		attendance: [],
+		rungOverride: {},
+		roleByMemberId: {},
+		meetingDate: "August 20, 2026",
+		shareUrl: "https://example.test/m",
+		locked: false,
+		onWriteRung: vi.fn(),
+		onContacted: vi.fn(),
+		onSetAttendance: vi.fn(),
+	};
+
+	it("titles itself Attendance and counts real rows", () => {
+		const { getByText } = render(<MeetingAttendancePanel {...rollProps} />);
+		getByText("Attendance");
+		// Abe's plan says `coming`, which is a SUGGESTION, not a record — so both
+		// members are unmarked. A suggestion-counting bug reads "1 present".
+		getByText("2 unmarked");
+	});
+
+	it("renders a dashed suggestion for a planned member and a solid chip for a recorded one", () => {
+		const { getByRole } = render(
+			<MeetingAttendancePanel
+				{...rollProps}
+				attendance={[{ memberId: "m-bea", status: "present" }]}
+			/>,
+		);
+		// Abe: no row, plan says coming -> dashed "Present?"
+		const abe = getByRole("button", { name: /Abe Nkemelu status/i });
+		expect(abe.textContent).toContain("Present?");
+		expect(abe.className).toContain("border-dashed");
+		// Bea: real row -> solid, no question mark.
+		const bea = getByRole("button", { name: /Bea Osei status/i });
+		expect(bea.textContent).toContain("Present");
+		expect(bea.textContent).not.toContain("?");
+		expect(bea.className).not.toContain("border-dashed");
+	});
+
+	it("tapping a dashed suggestion writes the suggested status", async () => {
+		const onSetAttendance = vi.fn();
+		const { getByRole } = render(
+			<MeetingAttendancePanel
+				{...rollProps}
+				onSetAttendance={onSetAttendance}
+			/>,
+		);
+		fireEvent.click(getByRole("button", { name: /Abe Nkemelu status/i }));
+		// One tap commits the suggestion — that is the affordance. It must NOT open
+		// the menu, or roll call costs two taps per member.
+		expect(onSetAttendance).toHaveBeenCalledWith("m-abe", "present");
+	});
+
+	it("offers the attendance statuses, not the plan rungs", async () => {
+		const { getByRole, findByRole } = render(
+			<MeetingAttendancePanel
+				{...rollProps}
+				attendance={[{ memberId: "m-bea", status: "present" }]}
+			/>,
+		);
+		// Radix's DropdownMenuTrigger opens on pointerdown, not a bare `click` — see
+		// the plan-mode test above for the same note. `userEvent.click` replays the
+		// real pointer sequence; the menu ITEM selection below stays `fireEvent.click`
+		// since MenuItem selects on a plain `onClick`.
+		await userEvent.click(getByRole("button", { name: /Bea Osei status/i }));
+		await findByRole("menuitem", { name: "Present" });
+		getByRole("menuitem", { name: "Absent" });
+		getByRole("menuitem", { name: "Excused" });
+		expect(() => getByRole("menuitem", { name: "Coming" })).toThrow();
+	});
+
+	it("keeps contact while the meeting is today and drops it once completed", () => {
+		const today = render(<MeetingAttendancePanel {...rollProps} />);
+		today.getByRole("link", { name: /WhatsApp/i });
+		today.unmount();
+		// `completed` rows are a historical record — nobody is being chased.
+		const done = render(
+			<MeetingAttendancePanel
+				{...rollProps}
+				locked={true}
+				phaseCompleted={true}
+			/>,
+		);
+		expect(() => done.getByRole("link", { name: /WhatsApp/i })).toThrow();
+	});
+
+	it("expands by default below lg, unlike plan mode", () => {
+		// Plan mode collapses to its counts line so a big roster does not push the
+		// agenda off screen. Roll mode IS the task on meeting day, so it opens.
+		window.innerWidth = 375;
+		const { getAllByRole } = render(<MeetingAttendancePanel {...rollProps} />);
+		expect(getAllByRole("button", { name: / status/i })).toHaveLength(2);
 	});
 });
