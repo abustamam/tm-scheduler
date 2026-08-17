@@ -14,6 +14,14 @@
 
 ## Global Constraints
 
+- **The test DB is on port 5433 on this machine, and a wrong port reads as GREEN.** Every
+  `TEST_DATABASE_URL` in this plan says `localhost:5433/tm_test`. It said 5432 (the value in
+  CLAUDE.md, correct on the Linux box this repo is usually developed on) until mid-execution:
+  here 5432 is a different project's port-forward that is OPEN but rejects the `dev` password,
+  so `hasTestDb` comes back false and every `describe.skipIf` suite SKIPS. The run then reports
+  a pass with ~630 tests silently absent. So do not just run the command — after any run that
+  is supposed to include an integration suite, confirm from the output that those tests
+  actually RAN. A skip count where you expected assertions is a failed run, not a green one.
 - **No schema change.** D3 works because `getMinutes` already reports `status: null` for a member with no attendance row, so "suggested" IS "no row yet". If a task appears to need a migration, stop — the design is wrong, not the schema.
 - Roll counts report **real rows only**. `3 unmarked` means three rows nobody confirmed, whatever their plan said. A dashed suggestion is never counted as present.
 - Roll-mode sort is **alphabetical**. The plan ladder's chase-worthy-first order is plan mode only.
@@ -21,7 +29,7 @@
 - Guests appear in **roll mode only**. Pre-meeting guest expectation is out of scope (ADR-0018 owns the pipeline).
 - `preview-as-member` hides the panel entirely, as every other officer surface does.
 - Every write keeps the existing optimistic-with-rollback + `pendingId` busy guard. A locked meeting renders chips **disabled, not missing**.
-- Vitest, never `bun test`. Integration suites need `TEST_DATABASE_URL="postgresql://dev:dev@localhost:5432/tm_test"` exported or ~630 tests skip while the run still reads green.
+- Vitest, never `bun test`. Integration suites need `TEST_DATABASE_URL="postgresql://dev:dev@localhost:5433/tm_test"` exported or ~630 tests skip while the run still reads green.
 - Lint gate is CI's **bare** invocation: `bun run check --diagnostic-level=error` (618 files). `biome check src/` covers fewer files and hid a failure on v1.16.0.0.
 - Coverage target 85% against the diff; minimum 60.
 
@@ -340,7 +348,7 @@ Keep every existing `mutate(...)` and `opMeta()` CALL SITE unchanged, and keep t
 
 - [ ] **Step 6: Prove the refactor changed nothing**
 
-Run: `TEST_DATABASE_URL="postgresql://dev:dev@localhost:5432/tm_test" bunx vitest run src/components/club/meeting-minutes.test.tsx src/lib/offline-minutes-queue.test.ts src/lib/drain-minutes.test.ts`
+Run: `TEST_DATABASE_URL="postgresql://dev:dev@localhost:5433/tm_test" bunx vitest run src/components/club/meeting-minutes.test.tsx src/lib/offline-minutes-queue.test.ts src/lib/drain-minutes.test.ts`
 Expected: PASS, with **no test edited**. If any minutes test needed changing, the extraction altered behavior — revert and redo Step 5.
 
 - [ ] **Step 7: Commit**
@@ -837,11 +845,28 @@ day the panel IS the task."
 - Modify: `src/components/club/meeting-attendance-panel.tsx` (render it in roll mode only)
 
 **Interfaces:**
-- Consumes: `MinutesGuestRow` (`{ guestId, name, … }`) from `#/server/minutes-logic`, type-only. `clubGuests` in the shape `AttendanceSection` already receives.
+- Consumes: `MinutesGuestRow` (`{ guestId, name, fromRole, … }`) from `#/server/minutes-logic`, type-only. `clubGuests` in the shape `AttendanceSection` already receives (`{ id, name }[]`).
 - Produces: `<AttendanceGuestsGroup guests clubGuests locked onAddGuest onRemoveGuest />` where
-  `onAddGuest(payload: { guestId?: string; newGuest?: { name: string } }) => void` — the SAME payload shape `addMinutesGuest` takes, so the route can forward it unchanged.
+  `onAddGuest(payload: { guestId?: string; newGuest?: { name: string; email?: string; phone?: string } }) => void` — the SAME payload shape `addMinutesGuest` takes, so the route can forward it unchanged.
 
 Guests are roll-mode only (spec: "Guests appear only in roll mode. Pre-meeting guest expectation is out of scope"). Lifted verbatim in behavior from `AttendanceSection`'s guest half so Task 6 can delete that section without losing anything.
+
+**Read the thing you are lifting before you write it.** The source is `GuestAdder` and the guest half of
+`AttendanceSection`, both in `src/components/club/meeting-minutes.tsx` (`AttendanceSection` at :488, `GuestAdder`
+at :594). Three details there are load-bearing and an earlier draft of this task got all three wrong, which is
+why they are called out rather than left to "verbatim":
+
+- It is a **`Popover` + `cmdk` `Command`**, NOT a `DropdownMenu`. That is what makes `role="option"` the right
+  query — `CommandItem` renders an option inside a listbox, whereas a `DropdownMenuItem` would render
+  `role="menuitem"` and every `getByRole("option")` below would fail.
+- The new-guest form carries **`email` and `phone`** alongside the name (`aria-label` `Guest email` / `Guest
+  phone`), and its submit button reads **`Add guest`** — the same accessible name as the trigger, so once the
+  popover is open `getByRole("button", { name: /Add guest/i })` is AMBIGUOUS and throws. Query the trigger
+  before opening, or scope by role/position. Task 6 deletes the old section, so dropping email/phone here is a
+  silent capability regression, not a simplification.
+- A guest with **`fromRole: true`** gets NO remove button at all — they are present because they hold a role, so
+  removing them from attendance would desync the two surfaces. `locked`/`busy` DISABLES the control; `fromRole`
+  OMITS it. Those are different and both must survive.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -849,12 +874,13 @@ Guests are roll-mode only (spec: "Guests appear only in roll mode. Pre-meeting g
 
 ```tsx
 // @vitest-environment jsdom
-import { fireEvent, render } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AttendanceGuestsGroup } from "#/components/club/attendance-guests-group";
 
 const base = {
-	guests: [{ guestId: "g1", name: "Nadia Farouk" }],
+	guests: [{ guestId: "g1", name: "Nadia Farouk", fromRole: false }],
 	clubGuests: [
 		{ id: "g1", name: "Nadia Farouk" },
 		{ id: "g2", name: "Tom Reyes" },
@@ -865,6 +891,11 @@ const base = {
 };
 
 describe("AttendanceGuestsGroup", () => {
+	// vitest here runs without `globals`, so testing-library's auto-cleanup never
+	// registers and renders leak between tests. Every component suite in this repo
+	// carries this line explicitly — see meeting-attendance-panel.test.tsx.
+	afterEach(() => cleanup());
+
 	it("lists the guests present and offers to add one", () => {
 		const { getByText, getByRole } = render(<AttendanceGuestsGroup {...base} />);
 		getByText("Nadia Farouk");
@@ -876,42 +907,60 @@ describe("AttendanceGuestsGroup", () => {
 		const { getByRole, findByRole } = render(
 			<AttendanceGuestsGroup {...base} onAddGuest={onAddGuest} />,
 		);
-		fireEvent.click(getByRole("button", { name: /Add guest/i }));
-		fireEvent.click(await findByRole("option", { name: "Tom Reyes" }));
+		// Radix's PopoverTrigger opens on `pointerdown`, not a bare `click` —
+		// `userEvent.click` replays the real pointer sequence. Capture the trigger
+		// BEFORE opening: the new-guest form's submit button shares its accessible
+		// name, so `getByRole("button", { name: /Add guest/i })` throws on ambiguity
+		// once the popover is open.
+		await userEvent.click(getByRole("button", { name: /Add guest/i }));
+		// `CommandItem` (cmdk) renders `role="option"`. Selection goes through
+		// cmdk's own handler, so a plain click is right here.
+		fireEvent.click(await findByRole("option", { name: /Tom Reyes/ }));
 		// `guestId` path, not `newGuest` — adding an existing guest again must not
 		// create a duplicate person in the club's pipeline (ADR-0018).
 		expect(onAddGuest).toHaveBeenCalledWith({ guestId: "g2" });
 	});
 
-	it("creates a NEW guest from a typed name", async () => {
+	it("creates a NEW guest from a typed name, carrying email and phone", async () => {
 		const onAddGuest = vi.fn();
-		const { getByRole, findByLabelText } = render(
+		const { getByRole, findByLabelText, getByLabelText } = render(
 			<AttendanceGuestsGroup {...base} onAddGuest={onAddGuest} />,
 		);
-		fireEvent.click(getByRole("button", { name: /Add guest/i }));
-		fireEvent.change(await findByLabelText(/Guest name/i), {
+		const trigger = getByRole("button", { name: /Add guest/i });
+		await userEvent.click(trigger);
+		fireEvent.change(await findByLabelText(/New guest name/i), {
 			target: { value: "Wale Adeyemi" },
 		});
-		fireEvent.click(getByRole("button", { name: /^Add$/ }));
+		fireEvent.change(getByLabelText(/Guest email/i), {
+			target: { value: "wale@example.com" },
+		});
+		// Submit through the FORM, not by name — the submit button and the trigger
+		// are both "Add guest", and this asserts the form's own submit path.
+		fireEvent.submit(getByLabelText(/New guest name/i).closest("form") as HTMLFormElement);
+		// email/phone must survive. Task 6 deletes the old AttendanceSection, so a
+		// name-only payload here is a silent capability regression, not a
+		// simplification.
 		expect(onAddGuest).toHaveBeenCalledWith({
-			newGuest: { name: "Wale Adeyemi" },
+			newGuest: { name: "Wale Adeyemi", email: "wale@example.com", phone: undefined },
 		});
 	});
 
-	it("refuses to submit a blank name", async () => {
+	it("refuses to submit a whitespace-only name", async () => {
 		const onAddGuest = vi.fn();
-		const { getByRole, findByLabelText } = render(
+		const { getByRole, findByLabelText, getByLabelText } = render(
 			<AttendanceGuestsGroup {...base} onAddGuest={onAddGuest} />,
 		);
-		fireEvent.click(getByRole("button", { name: /Add guest/i }));
-		fireEvent.change(await findByLabelText(/Guest name/i), {
+		await userEvent.click(getByRole("button", { name: /Add guest/i }));
+		// Whitespace, NOT empty: `required` already blocks empty, so an empty-string
+		// fixture would pass with the trim guard deleted.
+		fireEvent.change(await findByLabelText(/New guest name/i), {
 			target: { value: "   " },
 		});
-		fireEvent.click(getByRole("button", { name: /^Add$/ }));
+		fireEvent.submit(getByLabelText(/New guest name/i).closest("form") as HTMLFormElement);
 		expect(onAddGuest).not.toHaveBeenCalled();
 	});
 
-	it("disables both actions on a locked meeting rather than hiding them", () => {
+	it("disables the actions on a locked meeting rather than hiding them", () => {
 		const { getByRole } = render(<AttendanceGuestsGroup {...base} locked={true} />);
 		expect(
 			getByRole("button", { name: /Add guest/i }).hasAttribute("disabled"),
@@ -919,6 +968,19 @@ describe("AttendanceGuestsGroup", () => {
 		expect(
 			getByRole("button", { name: /Remove Nadia Farouk/i }).hasAttribute("disabled"),
 		).toBe(true);
+	});
+
+	it("OMITS the remove control for a guest who is present because of a role", () => {
+		// `fromRole` and `locked` are different things: locked disables, fromRole
+		// omits. A role-holder removed from attendance desyncs the two surfaces.
+		const { queryByRole, getByText } = render(
+			<AttendanceGuestsGroup
+				{...base}
+				guests={[{ guestId: "g3", name: "Priya Nair", fromRole: true }]}
+			/>,
+		);
+		getByText("Priya Nair");
+		expect(queryByRole("button", { name: /Remove Priya Nair/i })).toBeNull();
 	});
 });
 ```
@@ -930,12 +992,26 @@ Expected: FAIL — module not found.
 
 - [ ] **Step 3: Implement the group**
 
-Build `AttendanceGuestsGroup` with the props above. A `<CardContent>` section headed `Guests`, one row per `guests` entry with the name and a `Remove <name>` ghost button, then an "+ Add guest" `DropdownMenu` listing `clubGuests` not already present (as `option` roles) plus a "New guest" item that reveals a labelled `Guest name` input and an `Add` button. Trim the typed name and no-op on empty. Every button takes `disabled={locked}`.
+Build `AttendanceGuestsGroup` with the props above, lifting the structure from `GuestAdder` and
+`AttendanceSection`'s guest half in `src/components/club/meeting-minutes.tsx` (:594 and :556-588).
+A section headed `Guests`, one `Badge` per `guests` entry carrying the name and — only when
+`!guest.fromRole` — a `Remove <name>` icon button, then the adder: a `Popover` whose trigger reads
+`+ Add guest`, containing a `cmdk` `Command` listing the `clubGuests` not already present (each a
+`CommandItem`, which renders `role="option"`) above a `<form>` with `New guest name` (required),
+`Guest email` and `Guest phone` inputs and an `Add guest` submit button.
+
+On submit, trim the name, `toast.error("A guest name is required.")` and return when it is empty,
+otherwise call `onAddGuest({ newGuest: { name, email: email || undefined, phone: phone || undefined } })`
+and close the popover. Selecting an existing guest calls `onAddGuest({ guestId })` and closes. Keep
+the toast: a silent no-op on a blank name looks to the user like the button is broken.
+
+`locked` maps to the `busy`/`canEdit` behaviour of the source: it DISABLES the trigger, the submit
+and each remove button. It does not hide them — only `fromRole` omits a control.
 
 - [ ] **Step 4: Run and confirm pass**
 
 Run: `bunx vitest run src/components/club/attendance-guests-group.test.tsx`
-Expected: PASS (5 tests).
+Expected: PASS (6 tests).
 
 - [ ] **Step 5: Render it in the panel, roll mode only**
 
@@ -983,11 +1059,19 @@ Roll mode only — pre-meeting guest expectation is out of scope."
 
 - [ ] **Step 1: Write the failing guard assertions**
 
-Append to `src/routes/attendance-panel-wiring.guard.test.ts`:
+Append these INSIDE the existing `describe("attendance panel route wiring (PR 2)", …)` block —
+`src` is a `const` scoped to that describe (`attendance-panel-wiring.guard.test.ts:23`), so an
+`it()` appended at the end of the FILE would not compile.
+
+**Match multi-line code through `src.replace(/\s+/g, " ")`, never a literal `\n\t\t`.** Biome owns
+this file's formatting, so a hardcoded tab count asserts a formatting decision rather than the
+rule: if Biome fits `const showPanel = …` on one line, a `\n\t\t` match fails on CORRECT code, and
+the next person edits the guard instead of reading it. The existing file already settled this —
+it uses the `\s+` normalisation for every multi-line match and contains not one `\n\t`. Follow it.
 
 ```ts
 it("derives the panel mode from the phase, with no second clock", () => {
-	expect(src).toContain(
+	expect(src.replace(/\s+/g, " ")).toContain(
 		'const panelMode = phase === "upcoming" ? "plan" : "roll";',
 	);
 	// Still exactly one `meetingPhase({` in the file — a second call, especially
@@ -1001,15 +1085,16 @@ it("gates ROLL mode on a signed-in admin, NOT on the Toastmaster arm", () => {
 	// and `getMinutes` is only reached behind `context.shell`, so a roster-pick
 	// Toastmaster has no rows to render and no write that would land. Rendering
 	// roll mode for them is a panel of buttons that only error.
-	expect(src).toContain(
-		'const showPanel =\n\t\tpanelMode === "plan" ? showPlanPanel : showRollPanel;',
+	const flat = src.replace(/\s+/g, " ");
+	expect(flat).toContain(
+		'const showPanel = panelMode === "plan" ? showPlanPanel : showRollPanel;',
 	);
-	expect(src).toContain(
+	expect(flat).toContain(
 		"const showRollPanel = effectiveCanManage && minutes.canEdit;",
 	);
 	// The TMOD arm must NOT reach roll mode.
 	expect(
-		src,
+		flat,
 		"runsThisMeeting admits the Toastmaster and must not gate the roll panel",
 	).not.toContain("const showRollPanel = runsThisMeeting");
 });
@@ -1017,8 +1102,8 @@ it("gates ROLL mode on a signed-in admin, NOT on the Toastmaster arm", () => {
 it("feeds roll mode the recorded rows and the guests from minutes", () => {
 	expect(src).toContain("attendance={rollAttendance}");
 	expect(src).toContain("guests={minutes.guests}");
-	expect(src).toContain(
-		"const rollAttendance = minutes.members.flatMap((m) =>\n\t\tm.status === null ? [] : [{ memberId: m.memberId, status: m.status }],\n\t);",
+	expect(src.replace(/\s+/g, " ")).toContain(
+		"const rollAttendance = minutes.members.flatMap((m) => m.status === null ? [] : [{ memberId: m.memberId, status: m.status }], );",
 	);
 });
 
@@ -1030,11 +1115,15 @@ it("routes every roll write through the offline hook, so a bad connection queues
 	// Exactly ONE instance per meeting (DP3) — a second would race the same queue.
 	expect(src.split("useOfflineMinutes({").length - 1).toBe(1);
 	expect(
-		src,
+		src.replace(/\s+/g, " "),
 		"roll writes must not bypass the queue",
-	).not.toMatch(/onSetAttendance=\{\(memberId, status\) =>\s*\n?\s*setAttendance\(/);
+	).not.toMatch(/onSetAttendance=\{\(memberId, status\) => setAttendance\(/);
 });
 ```
+
+If the `\s+`-normalised literal above does not match once the code is written, print the
+normalised slice and fix the ASSERTION to the real text — do not reformat the route to satisfy a
+string I wrote from memory.
 
 - [ ] **Step 2: Run and confirm failure**
 
@@ -1074,7 +1163,15 @@ async function writeAttendance(memberId: string, status: AttendanceStatus) {
 }
 ```
 
-Then swap the render gate from `showPlanPanel && !tmodPanelUnavailable` to `showPanel && !tmodPanelUnavailable`, pass `mode={panelMode}`, `attendance={rollAttendance}`, `guests={minutes.guests}`, `clubGuests={clubGuests}`, `phaseCompleted={phase === "completed"}`, `onSetAttendance={writeAttendance}`, and the two guest handlers built the same way through `rollMutate`.
+Then swap the render gate from `showPlanPanel && !tmodPanelUnavailable` to `showPanel && !tmodPanelUnavailable`, pass `mode={panelMode}`, `attendance={rollAttendance}`, `guests={minutes.guests}`, `clubGuests={clubGuests}`, `phaseCompleted={phase === "completed"}`, `onSetAttendance={writeAttendance}`, and the two guest handlers.
+
+Build the guest handlers exactly like `writeAttendance` above — through `offline.mutate` with an
+`offline.opMeta()` op. **There is no `rollMutate`**; an earlier draft of this line named one and it
+never existed. The route already has working `addMinutesGuest` / `removeMinutesGuest` handlers for
+the Minutes card at `meeting-minutes.tsx:261-285`, including the `crypto.randomUUID()` client PK
+that makes a queued new-guest replay idempotent (#176 slice 5) — lift their bodies rather than
+writing new ones, since Task 6 deletes the originals and any difference between the two becomes a
+behaviour change hidden inside a deletion.
 
 - [ ] **Step 4: Run and confirm pass**
 
@@ -1088,7 +1185,7 @@ Run each mutation, confirm the named test fails, then restore. **Check the mutat
 | Mutation | Must fail |
 |---|---|
 | `showRollPanel = runsThisMeeting && minutes.canEdit` | the DP1 gate test |
-| drop `?? []` → flatten nulls to `"present"` in `rollAttendance` | the recorded-rows test |
+| in `rollAttendance`, replace the `m.status === null ? [] : [...]` branch with an unconditional `[{ memberId: m.memberId, status: m.status ?? "present" }]` | the recorded-rows test |
 | call `setAttendance(...)` directly in `onSetAttendance` | the offline-hook test |
 
 - [ ] **Step 6: Commit**
@@ -1161,13 +1258,13 @@ Expected: FAIL — `AttendanceSection` is still present.
 
 - [ ] **Step 4: Follow the suite failures**
 
-Run: `TEST_DATABASE_URL="postgresql://dev:dev@localhost:5432/tm_test" bunx vitest run src/components/club/meeting-minutes.test.tsx src/components/club/absorbed-surfaces.guard.test.ts`
+Run: `TEST_DATABASE_URL="postgresql://dev:dev@localhost:5433/tm_test" bunx vitest run src/components/club/meeting-minutes.test.tsx src/components/club/absorbed-surfaces.guard.test.ts`
 
 Delete the tests that covered the SECTION (they tested a deleted surface). Do **not** delete tests that cover the minutes card's other halves. If a deleted test asserted something no Task 3-5 test covers, port the assertion up rather than dropping it — that is the one way this task can silently lose coverage.
 
 - [ ] **Step 5: Confirm the PDF and email are untouched**
 
-Run: `TEST_DATABASE_URL="postgresql://dev:dev@localhost:5432/tm_test" bunx vitest run src/server/minutes-pdf-logic.test.ts src/server/minutes-email.integration.test.ts src/server/minutes.integration.test.ts`
+Run: `TEST_DATABASE_URL="postgresql://dev:dev@localhost:5433/tm_test" bunx vitest run src/server/minutes-pdf-logic.test.ts src/server/minutes-email.integration.test.ts src/server/minutes.integration.test.ts`
 Expected: PASS with no edits. `getMinutes` still returns its counts, so the PDF and the emailed minutes are unchanged — the spec says so explicitly, and this run is what makes that claim true rather than hopeful.
 
 - [ ] **Step 6: Commit**
@@ -1201,62 +1298,99 @@ The current statement (`meeting-personal-strip.tsx:60-66`) reads `myStatus`, the
 
 - [ ] **Step 1: Write the failing tests**
 
+Use the file's OWN idiom — it has a `BASE` fixture and a `renderStrip(overrides)` helper that
+renders into the global `screen`, and a file-level `afterEach(cleanup)`. Do not hand-roll
+`render(<MeetingPersonalStrip …/>)` beside it, and do not invent a `baseProps`: the fixture is
+called `BASE` and `renderStrip` returns nothing, so query through `screen`. `MEMBER` is the
+file's existing member fixture. There is no `isSignedIn` prop — a session is `source: "session"`.
+
 ```tsx
 describe("the over-state attendance statement (#548)", () => {
-	const over = {
-		...baseProps,
-		over: true,
-		member: { id: "m-abe", name: "Abe Nkemelu" },
-	};
+	/** All three statements end in "this meeting." — asserting on that one pattern
+	 *  catches the excused string too. Asserting only /attended/ and /did not
+	 *  attend/ would let a wrong "You were excused from this meeting." through. */
+	const ANY_STATEMENT = /this meeting\./i;
 
 	it("tells a signed-in member the truth from the RECORDED row", () => {
-		const present = render(
-			<MeetingPersonalStrip {...over} myStatus={null} myAttendance="present" />,
-		);
-		present.getByText("You attended this meeting.");
-		present.unmount();
-		const absent = render(
-			<MeetingPersonalStrip {...over} myStatus="coming" myAttendance="absent" />,
-		);
-		// The plan said COMING and the record says ABSENT. The record wins — that
-		// disagreement is exactly the lie #548 filed.
-		absent.getByText("You did not attend this meeting.");
-		absent.unmount();
-		render(
-			<MeetingPersonalStrip {...over} myStatus={null} myAttendance="excused" />,
-		).getByText("You were excused from this meeting.");
+		renderStrip({
+			source: "session",
+			member: MEMBER,
+			over: true,
+			myStatus: null,
+			myAttendance: "present",
+		});
+		expect(screen.getByText("You attended this meeting.")).toBeTruthy();
+		cleanup();
+
+		renderStrip({
+			source: "session",
+			member: MEMBER,
+			over: true,
+			// The plan said COMING and the record says ABSENT. The record wins —
+			// that disagreement is exactly the lie #548 filed, so this fixture is
+			// the one that separates the two sources.
+			myStatus: "coming",
+			myAttendance: "absent",
+		});
+		expect(screen.getByText("You did not attend this meeting.")).toBeTruthy();
+		cleanup();
+
+		renderStrip({
+			source: "session",
+			member: MEMBER,
+			over: true,
+			myStatus: null,
+			myAttendance: "excused",
+		});
+		expect(screen.getByText("You were excused from this meeting.")).toBeTruthy();
 	});
 
 	it("says nothing about attendance when nobody recorded a row", () => {
-		const { queryByText } = render(
-			<MeetingPersonalStrip {...over} myStatus="coming" myAttendance={null} />,
-		);
 		// A session exists, so we KNOW there is no row. Claiming either way would
 		// be inventing a record.
-		expect(queryByText(/attended this meeting/i)).toBeNull();
-		expect(queryByText(/did not attend/i)).toBeNull();
+		renderStrip({
+			source: "session",
+			member: MEMBER,
+			over: true,
+			myStatus: "coming",
+			myAttendance: null,
+		});
+		expect(screen.queryByText(ANY_STATEMENT)).toBeNull();
 	});
 
 	it("says nothing about attendance to a viewer we cannot verify", () => {
-		// DP2: an anonymous roster-pick member. Telling them anything would need a
-		// public array of everyone's attendance, which widens "who was absent" to
-		// any visitor — and #574 is still open on a milder version of that.
-		const { queryByText } = render(
-			<MeetingPersonalStrip {...over} myStatus="coming" myAttendance={undefined} />,
-		);
-		expect(queryByText(/attended this meeting/i)).toBeNull();
+		// DP2: an anonymous roster-pick member — the dominant identity path here.
+		// Telling them anything would need a public array of everyone's
+		// attendance, which widens "who was absent" to any visitor, and #574 is
+		// still open on a milder version of that.
+		renderStrip({
+			source: "anon",
+			member: MEMBER,
+			over: true,
+			myStatus: "coming",
+			myAttendance: undefined,
+		});
+		expect(screen.queryByText(ANY_STATEMENT)).toBeNull();
 	});
 
 	it("never derives the statement from the plan ladder", () => {
 		// The regression guard. `myStatus` alone must not produce a claim, or the
 		// bug walks straight back in the next time someone simplifies this branch.
-		const { queryByText } = render(
-			<MeetingPersonalStrip {...over} myStatus="not_coming" myAttendance={undefined} />,
-		);
-		expect(queryByText(/did not attend this meeting/i)).toBeNull();
+		renderStrip({
+			source: "session",
+			member: MEMBER,
+			over: true,
+			myStatus: "not_coming",
+			myAttendance: undefined,
+		});
+		expect(screen.queryByText(ANY_STATEMENT)).toBeNull();
 	});
 });
 ```
+
+**Then mutate to prove the last three can fail.** Change the implementation to fall back to
+`myStatus` when `myAttendance` is `undefined` and confirm the plan-ladder test fails; re-read the
+file to confirm the mutation actually landed before trusting the run. Revert it.
 
 - [ ] **Step 2: Run and confirm failure**
 
@@ -1329,7 +1463,7 @@ Closes #548."
 - [ ] **Step 1: Every gate, in CI's form**
 
 ```bash
-TEST_DATABASE_URL="postgresql://dev:dev@localhost:5432/tm_test" bun run test
+TEST_DATABASE_URL="postgresql://dev:dev@localhost:5433/tm_test" bun run test
 bun run typecheck
 bun run check --diagnostic-level=error   # BARE, 618 files — not `biome check src/`
 bun run build
@@ -1377,6 +1511,6 @@ Ask `/review` for the ADVERSARIAL pass, not just the specialists. Expect a **MIN
 
 **Placeholder scan.** No "TBD", no "add error handling", no "similar to Task N". Every code step carries the code. Task 3 Step 3 and Task 4 Step 3 describe component structure in prose plus the exact constants and props rather than a full JSX dump — the props, labels, menu items and class names an implementer must match are all literal.
 
-**Type consistency.** `PlanStatus` (type-only from `#/lib/attendance-panel`, pgEnum-derived, never hand-listed) and `AttendanceStatus` (type-only from `#/server/minutes-logic`) are the only status types. `RollRow.status: AttendanceStatus | null` and `RollRow.suggestion: RollSuggestion | null` are mutually exclusive by construction in Task 2 and consumed that way in Task 3. `buildRollPanel` is spelled identically in Tasks 2, 3 and the File Structure. `onSetAttendance(memberId, status)` matches `writeAttendance` in Task 5. `myAttendance?: AttendanceStatus | null` in Task 7 keeps `undefined` and `null` distinct at the type level, which is what DP2 rests on. The guest payload `{ guestId?: string; newGuest?: { name: string } }` in Task 4 is the shape `addMinutesGuest` already takes, so Task 5 forwards it unchanged.
+**Type consistency.** `PlanStatus` (type-only from `#/lib/attendance-panel`, pgEnum-derived, never hand-listed) and `AttendanceStatus` (type-only from `#/server/minutes-logic`) are the only status types. `RollRow.status: AttendanceStatus | null` and `RollRow.suggestion: RollSuggestion | null` are mutually exclusive by construction in Task 2 and consumed that way in Task 3. `buildRollPanel` is spelled identically in Tasks 2, 3 and the File Structure. `onSetAttendance(memberId, status)` matches `writeAttendance` in Task 5. `myAttendance?: AttendanceStatus | null` in Task 7 keeps `undefined` and `null` distinct at the type level, which is what DP2 rests on. The guest payload `{ guestId?: string; newGuest?: { name: string; email?: string; phone?: string } }` in Task 4 is the shape `addMinutesGuest` already takes, so Task 5 forwards it unchanged — the first draft of Task 4 wrote it name-only, which would have quietly dropped the email and phone fields the surface being deleted in Task 6 already collects.
 
 **One defect the self-review caught, recorded because it would have stopped Task 5 dead.** The first draft had Task 1 lifting only `mutate` / `opMeta` and Task 5 calling `useOfflineMinutes({ online, draining })` in the route. `online` and `isSignedIn` and `phase` do exist there — `draining` does not; it is a `useState` inside `MeetingMinutes`, bound to the drain effect that also lives there. So `mutate`'s ordering guard would have been reading a variable its new home did not have, and Task 5 would not have compiled. Fixing it surfaced the real constraint (DP3): there is ONE queue per meeting, so the subsystem has one owner, instantiated once in the route. Verified against HEAD by grepping the route for each symbol rather than assuming.
