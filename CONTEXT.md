@@ -214,18 +214,27 @@ the nouns in `src/db/schema.ts`.
   (`member_availability`, `meeting_outreach`) that answered overlapping questions, could
   disagree, and between them could not express "she replied, she's coming" — so `not_coming` is
   now the ONLY encoding of unavailable, and row presence answers nothing. Consequence for
-  readers: filter on the STATUS, never on the row existing. `reached_out` is the officer's
-  private record of having asked and stays admin-only to read; `coming` and `not_coming` are the
-  member's own answer and are self-serve. On the meeting payload that boundary is TWO arrays
-  rather than one filtered at each consumer: `plan` (the whole ladder, admin-only) feeds the
-  officer's attendance panel, and `answeredRungs` (`coming` / `not_coming` only, public) is what
-  the personal strip reads to show a member their OWN answer. The server cannot resolve "my" —
-  the viewer is known only on the client, since the anonymous roster pick is the dominant
-  identity here — so the public array must never carry `reached_out` in the first place
-  (v1.15.0.0). Reached through one seam
-  (`src/server/attendance-plan-logic.ts`), which owns actor attribution and the predicates that
-  stop one rung overwriting another — but NOT the archive gate or the officer-only rung, which
-  need a session and live in the callers. See the 2026-08-11 spec.
+  readers: filter on the STATUS, never on the row existing. `reached_out` is the private record
+  of having asked, kept from MEMBERS rather than from everyone who runs the meeting; `coming` and
+  `not_coming` are the member's own answer and are self-serve. On the meeting payload that
+  boundary is TWO arrays rather than one filtered at each consumer: `plan` (the whole ladder,
+  admin-only) feeds the attendance panel, and `answeredRungs` (`coming` / `not_coming` only,
+  public) is what the personal strip reads to show a member their OWN answer. The server cannot
+  resolve "my" — the viewer is known only on the client, since the anonymous roster pick is the
+  dominant identity here — so the public array must never carry `reached_out` in the first place
+  (v1.15.0.0). The meeting's Toastmaster reads the same ladder through a THIRD path (#576):
+  not the payload, but `getTmodPanelData`, which verifies a self-asserted member id against the
+  meeting's TMOD slot. Deliberately separate, because widening the payload's `canManage` gate to
+  accept a client claim would put the private rung behind a forgeable flag on the array every
+  anonymous visitor already receives. That reader splits its two halves by TRUST: the ladder and
+  member NAMES ride the self-asserted claim (names are already public), but phone and email need a
+  real SESSION whose own membership is the Toastmaster. The claim is not a secret — the id ships
+  as `assigneeId` on the public payload and the roster picker hands any visitor any id — so an
+  anonymous Toastmaster plans attendance with the drafts dark and signs in to message. See
+  `getPublicMeetingByKey`: "The soft honor-system gate on `/club/:clubId` must never carry PII." Reached
+  through one seam (`src/server/attendance-plan-logic.ts`), which owns actor attribution and the
+  predicates that stop one rung overwriting another — but NOT the archive gate or the write
+  ladder, which live in the callers. See the 2026-08-11 spec.
 - **Table Topics speaker** — an impromptu participant who answered a Table Topic
   (`table_topics_speakers`), captured as an ordered list of member-or-guest (XOR) + optional
   topic text. Distinct from the **Table Topics Master** role (the role definition that runs the

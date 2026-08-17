@@ -331,18 +331,27 @@ two status predicates live, and an inline query bypasses both while still typech
 
 **The seam does NOT carry the archive gate or the officer-only `reached_out` rung**, and
 reading it as if it did is how the consolidation nearly shipped an authorization regression.
-Both need a session, so both belong to the CALLER: `attendance-plan.ts` resolves an officer and
-gates on `clubs.archived_at`, and the public delegates in `availability.ts` do their own
-`assertClubNotArchived`. What the seam CAN enforce without a session is that one rung does not
+Both belong to the CALLER: `attendance-plan.ts` resolves the actor and gates on
+`clubs.archived_at`, and the public delegates in `availability.ts` do their own
+`assertClubNotArchived`. Note the rung is officer-only in NAME only since #576 — `resolveActor`
+has three arms, and the middle one admits this meeting's Toastmaster WITHOUT a session, by
+comparing a self-asserted member id against the meeting's TMOD slot. So "needs a session" is
+the wrong mental model for who may write it; `viaManager` (not the officer arm) is the gate.
+It does NOT lift `onlyFrom` on the clear — that stays `via === "officer"`, because deleting
+another officer's record of having asked is not what the panel is for and the TMOD claim is
+honour-system. Same split on the read: `getTmodPanelData` gives the TMOD the ladder and names on
+the claim, but phone and email only to a real session (#576 review). What the seam CAN enforce without a session is that one rung does not
 silently overwrite another, and it takes that from the caller too: `setPlanStatus`'s
 `demoteFrom` names the statuses a write may replace (`setContacted` passes `["reached_out"]`,
 so ticking "contacted" can never demote a real answer, and `setPlannedAttendance` passes the
 same floor when the panel's WhatsApp/email tap auto-advances someone to `reached_out` — an
 officer's deliberate menu pick stays unfloored, so "Asked" never silently no-ops on a row that
 already answered), and `clearPlanStatus`'s `onlyFrom`
-names the statuses a delete may remove (the session-less callers pass `SELF_SERVICE_RUNGS`, so
-anonymous callers cannot erase an officer's `reached_out` — which deleting a `meeting_outreach`
-row used to require an admin to do). Both are `setWhere`/`WHERE` predicates rather than a
+names the statuses a delete may remove (the self-service callers pass `SELF_SERVICE_RUNGS`, so
+a plain member cannot erase an officer's `reached_out` — which deleting a `meeting_outreach`
+row used to require an admin to do). Read that as SELF-SERVICE, not ANONYMOUS: since #576 an
+anonymous caller who holds this meeting's TMOD slot takes the `viaManager` arm and gets the
+unrestricted clear, so "anonymous" stopped being the dividing line — the arm is. Both are `setWhere`/`WHERE` predicates rather than a
 read-then-write, so they are also the de-dup and race fix for `markComingOnSelfClaim`.
 
 `attendance-plan-store.guard.test.ts` enforces both halves across `src/` **and**

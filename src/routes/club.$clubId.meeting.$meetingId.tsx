@@ -428,7 +428,7 @@ function MeetingView() {
 	// availability signal is the INPUT to the assignment they were already
 	// trusted to make. `isTmod` is derived client-side from the slot rows and is
 	// display authority only: every write re-verifies against the slot server-side
-	// (`resolveActor`), and the ladder they render comes from `getPlanForTmod`,
+	// (`resolveActor`), and the ladder they render comes from `getTmodPanelData`,
 	// which does its own check.
 	const runsThisMeeting = effectiveCanManage || (isTmod && !previewAsMember);
 	const showPlanPanel = runsThisMeeting && phase === "upcoming";
@@ -466,12 +466,16 @@ function MeetingView() {
 
 	// The non-officer TMOD's ladder (#576). Mirrors `fetchedRoster` directly
 	// above: an officer gets it on the payload, everyone else who needs it
-	// fetches it behind a server-side check. `getPlanForTmod` verifies the claim
+	// fetches it behind a server-side check. `getTmodPanelData` verifies the claim
 	// against the slot and returns [] otherwise, so a stale `enabled` here can
 	// only under-fetch — it can never hand the confidential rung to a non-TMOD.
 	const queryClient = useQueryClient();
 	const tmodPlanKey = ["tmod-plan", meeting.id, myId] as const;
-	const { data: tmodPanelData } = useQuery({
+	const {
+		data: tmodPanelData,
+		isPending: tmodPanelPending,
+		isError: tmodPanelFailed,
+	} = useQuery({
 		queryKey: tmodPlanKey,
 		queryFn: () =>
 			getTmodPanelData({
@@ -479,6 +483,18 @@ function MeetingView() {
 			}),
 		enabled: needsTmodPlan,
 	});
+	// Evict the contact roster when the viewer changes. Keying on `myId` makes a
+	// switch READ a different key; it does not remove the old one, and the default
+	// gcTime keeps it in memory for five minutes. That matters on the shared club
+	// laptop that gets passed around at a meeting: "not you? re-pick" would
+	// otherwise leave the previous Toastmaster's copy of every member's phone and
+	// email sitting in the cache (#576 review).
+	// biome-ignore lint/correctness/useExhaustiveDependencies: myId is the TRIGGER, not a value the body reads — a change of viewer is exactly when the previous viewer's cached contact roster must be dropped
+	useEffect(() => {
+		return () => {
+			queryClient.removeQueries({ queryKey: ["tmod-plan", meeting.id] });
+		};
+	}, [queryClient, meeting.id, myId]);
 	const fetchedPlan = tmodPanelData?.plan ?? [];
 	// The panel needs the CONTACT-bearing roster (`loaderRoster`), not the public
 	// one the assign picker falls back to — without phone and email every row
@@ -488,6 +504,13 @@ function MeetingView() {
 	const panelRoster = effectiveCanManage
 		? loaderRoster
 		: (tmodPanelData?.roster ?? []);
+	// A panel built from an EMPTY roster renders its header and a counts line of
+	// zeros — indistinguishable from "this club has no members" and from "you are
+	// no longer the Toastmaster". This page gets used mid-meeting on club wifi, so
+	// a failed fetch must not produce a confident lie about who is coming (#576
+	// review). Officers are unaffected: their data is on the payload, never here.
+	const tmodPanelUnavailable =
+		needsTmodPlan && (tmodPanelPending || tmodPanelFailed);
 	// ONE name for "the ladder this viewer may see", so the panel, the optimistic
 	// rollback, `markAsked` and `contactedMemberIds` cannot disagree about which
 	// array they are reading — the officer path and the TMOD path differ only in
@@ -550,7 +573,7 @@ function MeetingView() {
 	// `unavailableMembers` (public) already names who is `not_coming`;
 	// `effectivePlan` already carries every rung including `reached_out` — the
 	// payload's gated `plan` for an officer, the separately-verified
-	// `getPlanForTmod` rows for this meeting's Toastmaster, and `[]` for everyone
+	// `getTmodPanelData` rows for this meeting's Toastmaster, and `[]` for everyone
 	// else, which is what keeps the recruit picker's "already asked" marks off a
 	// plain member's screen.
 	const unavailableMemberIds = unavailableMembers.map((m) => m.id);
@@ -1342,14 +1365,19 @@ function MeetingView() {
 						</DialogContent>
 					</Dialog>
 				</div>
-				{showPlanPanel ? (
+				{showPlanPanel && !tmodPanelUnavailable ? (
 					<aside className="order-1 lg:order-2 lg:sticky lg:top-24 lg:w-[340px] lg:shrink-0">
 						<MeetingAttendancePanel
-							// `loaderRoster`, not the union-typed `roster` local (which
-							// falls back to the client-fetched PUBLIC roster with no
-							// contact fields) — this panel only renders under
-							// `showPlanPanel`, i.e. `effectiveCanManage`, where the loader
-							// always populates the full contact roster.
+							// TWO sources, one name. An officer gets `loaderRoster` (the
+							// payload's contact-bearing roster, populated only when the
+							// server itself resolved `canManage`). This meeting's
+							// Toastmaster gets the separately-verified roster from
+							// `getTmodPanelData`, which returns it ONLY to a real session
+							// that is the Toastmaster — an anonymous claim gets the rungs
+							// and no contact, so their rows render "No contact on file"
+							// rather than leaking PII behind an honour-system gate (#576
+							// review). Never the route's `roster` local, which falls back
+							// to the PUBLIC roster with no contact fields at all.
 							roster={panelRoster}
 							plan={effectivePlan}
 							rungOverride={rungOverride}

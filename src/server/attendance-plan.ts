@@ -147,42 +147,58 @@ async function resolveActor(args: {
 		}
 	}
 
-	// TMOD arm (#576). Resolved BEFORE the self-only arm, and deliberately with
-	// `?? null` rather than the self-only arm's `?? args.memberId` default: this
-	// asks "who is CALLING", and defaulting the caller to the SUBJECT would make
-	// every anonymous write self-assert as its own target — so writing the TMOD's
-	// row would grant TMOD powers over it, which is both wrong and useless.
+	// Resolve the CALLER once, here, and reuse it for both remaining arms. The
+	// two used to call `resolveWriteActor` separately with different defaults,
+	// which put three copies of the same (memberId, clubId) membership lookup in
+	// one request on the anonymous self-service path this codebase calls "the
+	// dominant path in this product" (#576 review).
+	//
+	// `?? null`, not the self arm's old `?? args.memberId`: this asks "who is
+	// CALLING". Defaulting the caller to the SUBJECT would make every anonymous
+	// write self-assert as its own target, so writing the TMOD's row would grant
+	// TMOD powers over it — wrong, and useless for the panel. The self arm keeps
+	// the subject default below, for a caller who asserted nothing.
+	let caller = await resolveWriteActor({
+		clubId: args.clubId,
+		sessionUserId: user?.id ?? null,
+		claimedActorMemberId: args.claimedActorMemberId ?? null,
+	});
+
+	// TMOD arm (#576), resolved BEFORE the self arm — self first would swallow it,
+	// since a TMOD writing their own row satisfies the self test.
 	//
 	// THE TRUST MODEL, stated because it is a widening and should not be
-	// discovered later: on the anonymous path this is an HONOUR-SYSTEM claim. The
-	// caller asserts a member id and `resolveWriteActor` club-scopes it, but
-	// nothing proves they are that person. Anyone who knows the TMOD's member id
-	// can take this arm. That is the same basis on which
+	// discovered later: on the anonymous path this is an HONOUR-SYSTEM claim.
+	// `resolveWriteActor` club-scopes the asserted id, but nothing proves the
+	// caller is that person — and the id is not secret: `loadMeetingDetail` ships
+	// it as `assigneeId` on the public payload. So this arm is reachable by any
+	// visitor who reads the agenda. It is the same basis on which
 	// `resolveMeetingAgendaAuthz` already lets a self-asserted TMOD assign roles
-	// and edit meeting meta — a strictly larger power than marking someone
-	// contacted — so this is consistent with the product's identity model (#317),
-	// not a new hole. It is NOT consistent with requiring a session, and if that
-	// model ever tightens, this arm tightens with the agenda one.
-	const tmodMemberId = await loadTmodMemberId(args.meetingId);
-	if (tmodMemberId) {
-		const caller = await resolveWriteActor({
-			clubId: args.clubId,
-			sessionUserId: user?.id ?? null,
-			claimedActorMemberId: args.claimedActorMemberId ?? null,
-		});
-		if (caller && caller === tmodMemberId) {
+	// and edit meeting meta, so it is consistent with the product's identity
+	// model (#317) for WRITES that land in the activity feed. It is deliberately
+	// NOT trusted for anything else: the contact roster needs a real session
+	// (`loadTmodPanelData`), and the unrestricted clear stays on the officer arm.
+	//
+	// Skipped entirely when there is no caller to match, which is what keeps the
+	// slot join off the request for a caller who asserted nothing.
+	if (caller) {
+		const tmodMemberId = await loadTmodMemberId(args.meetingId);
+		if (tmodMemberId && caller === tmodMemberId) {
 			return { actorMemberId: caller, viaManager: true, via: "tmod" };
 		}
 	}
-	// Not an officer here: a plain member, an anonymous roster pick, or a
-	// signed-in user with no membership in THIS club. `resolveWriteActor` gives
-	// the caller's own membership precedence over anything they asserted, so the
-	// comparison below is what stops one member setting another's row.
-	const actor = await resolveWriteActor({
-		clubId: args.clubId,
-		sessionUserId: user?.id ?? null,
-		claimedActorMemberId: args.claimedActorMemberId ?? args.memberId,
-	});
+	// Not an officer and not this meeting's TMOD: a plain member, an anonymous
+	// roster pick, or a signed-in user with no membership in THIS club. A caller
+	// who asserted nothing falls back to the subject default, preserving the
+	// pre-#576 anonymous self-write path.
+	if (caller === null) {
+		caller = await resolveWriteActor({
+			clubId: args.clubId,
+			sessionUserId: user?.id ?? null,
+			claimedActorMemberId: args.memberId,
+		});
+	}
+	const actor = caller;
 	if (actor !== args.memberId) throw new Error(SELF_ONLY_MESSAGE);
 	return { actorMemberId: actor, viaManager: false, via: "self" };
 }
@@ -197,7 +213,7 @@ export const setPlannedAttendance = createServerFn({ method: "POST" })
 		await assertClubNotArchived(meeting.clubId);
 		assertMeetingNotLocked(meeting.status);
 		await requireMemberInClub(data.memberId, meeting.clubId);
-		const { actorMemberId, viaManager } = await resolveActor({
+		const { actorMemberId, viaManager, via } = await resolveActor({
 			clubId: meeting.clubId,
 			meetingId: data.meetingId,
 			memberId: data.memberId,
@@ -219,6 +235,7 @@ export const setPlannedAttendance = createServerFn({ method: "POST" })
 			status: data.status,
 			actorMemberId,
 			via: data.via,
+			grantedVia: via,
 			// `via: "nudge"` is the AUTO-advance behind a WhatsApp/email tap: the
 			// officer tapped "message them" and the rung moved as a SIDE EFFECT,
 			// with no rung in front of them to overrule. It must never demote a
@@ -236,8 +253,18 @@ export const setPlannedAttendance = createServerFn({ method: "POST" })
 			// `via: "manual"` is the officer picking a rung from the menu with the
 			// current one on screen in front of them. That is a deliberate
 			// correction and stays unrestricted.
+			//
+			// The TMOD arm is floored on BOTH paths, not just `nudge`. An officer's
+			// deliberate menu pick is a correction by someone the club elected and
+			// a session authenticated; the Toastmaster's is an honour-system claim,
+			// so letting it overwrite a real `coming`/`not_coming` would let one
+			// forged request per member mark the whole roster "Asked" and erase
+			// every answer — invisible afterwards, since `answeredRungs` filters
+			// `reached_out` out and the officer's panel would read "all contacted,
+			// nobody declined" (#576 review).
 			demoteFrom:
-				data.via === "nudge" && data.status === "reached_out"
+				data.status === "reached_out" &&
+				(data.via === "nudge" || via === "tmod")
 					? ["reached_out"]
 					: undefined,
 		});
@@ -253,7 +280,7 @@ export const clearPlannedAttendance = createServerFn({ method: "POST" })
 		await assertClubNotArchived(meeting.clubId);
 		assertMeetingNotLocked(meeting.status);
 		await requireMemberInClub(data.memberId, meeting.clubId);
-		const { actorMemberId, viaManager } = await resolveActor({
+		const { actorMemberId, via } = await resolveActor({
 			clubId: meeting.clubId,
 			meetingId: data.meetingId,
 			memberId: data.memberId,
@@ -270,9 +297,17 @@ export const clearPlannedAttendance = createServerFn({ method: "POST" })
 			// `requireClubRole(admin)` because it lived in its own table. The
 			// self-only arm is no barrier here: on the anonymous path
 			// `claimedActorMemberId` defaults to the subject, so actor === subject
-			// always holds and any roster member is reachable. Officers keep the
-			// unrestricted clear; everyone else may only take back a rung a member
-			// could have set.
-			onlyFrom: viaManager ? undefined : SELF_SERVICE_RUNGS,
+			// always holds and any roster member is reachable.
+			//
+			// Gated on the OFFICER arm specifically, NOT on `viaManager` (#576
+			// review). `viaManager` also admits the Toastmaster, whose claim is
+			// honour-system and whose id is published on the public payload — so
+			// widening this would have dropped "delete another officer's private
+			// record of having asked" from authenticated-admin to unauthenticated.
+			// A Toastmaster keeps the whole WRITE ladder; taking back an officer's
+			// `reached_out` stays an officer action, which is where the bar was
+			// before the consolidation. Writing `reached_out` is what the panel is
+			// for; deleting someone else's is not.
+			onlyFrom: via === "officer" ? undefined : SELF_SERVICE_RUNGS,
 		});
 	});

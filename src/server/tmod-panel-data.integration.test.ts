@@ -13,7 +13,13 @@
  */
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clubs, meetings, roleDefinitions, roleSlots } from "#/db/schema";
+import {
+	clubs,
+	meetings,
+	members,
+	roleDefinitions,
+	roleSlots,
+} from "#/db/schema";
 import {
 	cleanup,
 	hasTestDb,
@@ -79,6 +85,9 @@ describe.skipIf(!hasTestDb)("loadTmodPanelData", () => {
 		const { plan, roster } = await loadTmodPanelData({
 			meetingId: seed.meetingId,
 			memberId: seed.adminMemberId,
+			// SIGNED IN as the Toastmaster: the only way the contact roster is
+			// granted at all.
+			sessionUserId: seed.adminUserId,
 		});
 
 		// Anti-vacuity: every other case in this file asserts EMPTY, so without a
@@ -105,6 +114,7 @@ describe.skipIf(!hasTestDb)("loadTmodPanelData", () => {
 		const { plan, roster } = await loadTmodPanelData({
 			meetingId: seed.meetingId,
 			memberId: seed.memberId,
+			sessionUserId: seed.memberUserId,
 		});
 
 		expect(plan).toEqual([]);
@@ -130,10 +140,12 @@ describe.skipIf(!hasTestDb)("loadTmodPanelData", () => {
 		const onOwn = await loadTmodPanelData({
 			meetingId: seed.meetingId,
 			memberId: seed.adminMemberId,
+			sessionUserId: seed.adminUserId,
 		});
 		const onOther = await loadTmodPanelData({
 			meetingId: other.id,
 			memberId: seed.adminMemberId,
+			sessionUserId: seed.adminUserId,
 		});
 
 		expect(onOwn.plan.length).toBeGreaterThan(0);
@@ -148,6 +160,7 @@ describe.skipIf(!hasTestDb)("loadTmodPanelData", () => {
 		const { plan, roster } = await loadTmodPanelData({
 			meetingId: seed.meetingId,
 			memberId: seed.adminMemberId,
+			sessionUserId: seed.adminUserId,
 		});
 
 		expect(plan).toEqual([]);
@@ -164,6 +177,100 @@ describe.skipIf(!hasTestDb)("loadTmodPanelData", () => {
 		const { plan, roster } = await loadTmodPanelData({
 			meetingId: seed.meetingId,
 			memberId: seed.adminMemberId,
+			sessionUserId: seed.adminUserId,
+		});
+
+		expect(plan).toEqual([]);
+		expect(roster).toEqual([]);
+	});
+
+	it("withholds CONTACT from an anonymous claim while still giving the ladder", async () => {
+		// The finding this file exists to prevent regressing. The claimed member id
+		// is PUBLIC — `loadMeetingDetail` ships it as `assigneeId` and the roster
+		// picker hands any visitor any id — so a session-less caller echoing it back
+		// must never receive PII. `getPublicMeetingByKey` states the rule:
+		// "The soft honor-system gate on /club/:clubId must never carry PII."
+		await assignTmod(seed.clubId, seed.meetingId, seed.adminMemberId);
+
+		const { plan, roster } = await loadTmodPanelData({
+			meetingId: seed.meetingId,
+			memberId: seed.adminMemberId,
+			sessionUserId: null,
+		});
+
+		// Ladder still granted — the honour-system half.
+		expect(plan.length).toBeGreaterThan(0);
+		// NAMES still granted: they are already public, and `buildPlanPanel` builds
+		// its rows from the roster, so returning [] here would withhold the whole
+		// panel rather than just the PII.
+		expect(roster.length).toBeGreaterThan(0);
+		// CONTACT withheld on every row. Asserting null is meaningful only because
+		// the signed-in case above proves non-null contact IS reachable through the
+		// same call — the pair brackets the gate instead of passing because the
+		// fixture has no contact at all.
+		for (const r of roster) {
+			expect(r.phone).toBeNull();
+			expect(r.email).toBeNull();
+		}
+	});
+
+	it("withholds CONTACT from a signed-in club member who is not the Toastmaster", async () => {
+		// The #560 shape: two gates answering oppositely for one person. The WRITE
+		// path routes a claim through `resolveWriteActor`, which gives a caller's own
+		// membership precedence, so a signed-in non-TMOD cannot write as the TMOD.
+		// Comparing the raw claim here would have let them READ as one.
+		await assignTmod(seed.clubId, seed.meetingId, seed.adminMemberId);
+
+		const { roster } = await loadTmodPanelData({
+			meetingId: seed.meetingId,
+			// Claims the TMOD's id...
+			memberId: seed.adminMemberId,
+			// ...but the session belongs to a different member.
+			sessionUserId: seed.memberUserId,
+		});
+
+		expect(roster.length).toBeGreaterThan(0);
+		for (const r of roster) {
+			expect(r.phone).toBeNull();
+			expect(r.email).toBeNull();
+		}
+	});
+
+	it("revokes the grant when the Toastmaster leaves the roster", async () => {
+		// Deactivation frees only UPCOMING slots — `members-logic.ts` preserves past
+		// ones as history — so a departed member keeps the slot row on every meeting
+		// they ever ran. Comparing ids alone made each one a permanent key to the
+		// club's CURRENT contact list.
+		await assignTmod(seed.clubId, seed.meetingId, seed.adminMemberId);
+		await testDb
+			.update(members)
+			.set({ status: "inactive" })
+			.where(eq(members.id, seed.adminMemberId));
+
+		const { plan, roster } = await loadTmodPanelData({
+			meetingId: seed.meetingId,
+			memberId: seed.adminMemberId,
+			sessionUserId: seed.adminUserId,
+		});
+
+		expect(plan).toEqual([]);
+		expect(roster).toEqual([]);
+	});
+
+	it("expires the grant once the meeting is locked", async () => {
+		// The panel's `phase === "upcoming"` bound is CLIENT-side and this fn is
+		// addressable directly, so without a server-side check the Toastmaster of
+		// every meeting the club ever held keeps a live grant.
+		await assignTmod(seed.clubId, seed.meetingId, seed.adminMemberId);
+		await testDb
+			.update(meetings)
+			.set({ status: "completed" })
+			.where(eq(meetings.id, seed.meetingId));
+
+		const { plan, roster } = await loadTmodPanelData({
+			meetingId: seed.meetingId,
+			memberId: seed.adminMemberId,
+			sessionUserId: seed.adminUserId,
 		});
 
 		expect(plan).toEqual([]);
@@ -174,6 +281,7 @@ describe.skipIf(!hasTestDb)("loadTmodPanelData", () => {
 		const { plan, roster } = await loadTmodPanelData({
 			meetingId: "00000000-0000-0000-0000-000000000000",
 			memberId: seed.adminMemberId,
+			sessionUserId: seed.adminUserId,
 		});
 
 		expect(plan).toEqual([]);

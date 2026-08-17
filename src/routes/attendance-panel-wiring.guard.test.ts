@@ -77,6 +77,62 @@ describe("attendance panel route wiring (PR 2)", () => {
 		);
 	});
 
+	// #576 review: the TMOD write wiring had no coverage of any kind. Dropping
+	// `...actorClaim` from just ONE of the two call sites is the dangerous slip —
+	// a Toastmaster's clear would fall back to the self arm, where `onlyFrom`
+	// restricts the delete to the self-service rungs, so it becomes a silent
+	// WHERE-clause no-op with no thrown error and no toast.
+	it("sends the caller's own id on BOTH plan write paths, so the server can verify the TMOD", () => {
+		expect(src.replace(/\s+/g, " ")).toContain(
+			"const actorClaim = !effectiveCanManage && myId ? { actorMemberId: myId } : {};",
+		);
+		// Both spread sites, counted rather than matched once — one is inside the
+		// clear call and one inside the set call, and a single `toContain` would
+		// pass with either deleted.
+		expect(src.split("...actorClaim").length - 1).toBe(2);
+	});
+
+	it("fetches the Toastmaster's ladder with the viewer's own id, gated on needing it", () => {
+		expect(src).toContain(
+			"const needsTmodPlan = showPlanPanel && !effectiveCanManage && !!myId;",
+		);
+		// The ARGUMENTS are the point: the meeting being viewed and the viewer's
+		// own id. Passing `memberId: someOtherId` would typecheck and silently ask
+		// the server to verify the wrong person. Stops before the closing braces so
+		// the formatter's trailing comma is not part of the contract.
+		expect(src.replace(/\s+/g, " ")).toContain(
+			"getTmodPanelData({ data: { meetingId: meeting.id, memberId: myId as string }",
+		);
+		expect(src).toContain("enabled: needsTmodPlan,");
+	});
+
+	it("refreshes the Toastmaster's query after a write, not just the router loader", () => {
+		// The ladder lives in a QUERY, so `router.invalidate()` alone leaves it
+		// stale — and the reconciling effect then drops the override back onto the
+		// stale row, visibly undoing the tap.
+		expect(src).toContain(
+			"void queryClient.invalidateQueries({ queryKey: tmodPlanKey });",
+		);
+	});
+
+	it("never renders the panel from a failed or in-flight Toastmaster fetch", () => {
+		// An empty roster renders a header plus a counts line of zeros, which is
+		// indistinguishable from "no members" and from "you were just demoted".
+		expect(src.replace(/\s+/g, " ")).toContain(
+			"const tmodPanelUnavailable = needsTmodPlan && (tmodPanelPending || tmodPanelFailed);",
+		);
+		expect(src).toContain("{showPlanPanel && !tmodPanelUnavailable ? (");
+	});
+
+	it("evicts the Toastmaster's cached contact roster when the viewer changes", () => {
+		// Keying on `myId` reads a different key on a switch; it does not remove the
+		// old one, and the default gcTime keeps the whole club's phone and email in
+		// memory for five minutes on a shared laptop.
+		expect(src).toContain(
+			'queryClient.removeQueries({ queryKey: ["tmod-plan", meeting.id] });',
+		);
+	});
+
 	it("keeps the agenda column shrinkable so the rail cannot be pushed off", () => {
 		expect(src).toContain("min-w-0 flex-1");
 	});

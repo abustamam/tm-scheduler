@@ -75,7 +75,7 @@ export const listUpcomingMeetings = createServerFn({ method: "GET" })
 const tmodPlanInput = z.object({
 	meetingId: uuid,
 	/** The caller's self-asserted member id, verified against the meeting's TMOD
-	 *  slot inside `loadPlanForTmod`. Never trusted here. */
+	 *  slot inside `loadTmodPanelData`. Never trusted here. */
 	memberId: uuid,
 });
 
@@ -91,7 +91,13 @@ const tmodPlanInput = z.object({
  */
 export const getTmodPanelData = createServerFn({ method: "GET" })
 	.validator((i: unknown) => tmodPlanInput.parse(i))
-	.handler(async ({ data }) => loadTmodPanelData(data));
+	.handler(async ({ data }) => {
+		// The session is read HERE and passed down, so `loadTmodPanelData` stays
+		// callable from vitest with no request context. It gates the contact half
+		// only; the ladder rides the self-asserted `memberId`.
+		const user = await getSessionUser();
+		return loadTmodPanelData({ ...data, sessionUserId: user?.id ?? null });
+	});
 
 const pastMeetingsInput = z.object({
 	clubId: uuid,

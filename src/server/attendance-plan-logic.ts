@@ -46,10 +46,12 @@ export const SELF_SERVICE_RUNGS: readonly AttendancePlanStatus[] = [
  * longer answers that question.
  *
  * WHAT THIS SEAM OWNS, precisely: actor attribution, and the two status
- * predicates below. It does NOT own the archive gate or the officer-only
- * `reached_out` rung — those live in the callers (`attendance-plan.ts` and the
- * legacy delegates), because they need a session to evaluate. An earlier draft
- * of this comment claimed otherwise, which is exactly how a caller ends up
+ * predicates below. It does NOT own the archive gate or the write ladder — those
+ * live in the callers (`attendance-plan.ts` and the legacy delegates). Read that
+ * as "the callers decide", NOT as "they need a session": since #576
+ * `resolveActor` has a session-less arm for this meeting's Toastmaster, so the
+ * `reached_out` rung is officer-only in name only. An earlier draft of this
+ * comment claimed the seam owned these, which is exactly how a caller ends up
  * assuming it inherited a check it never got.
  */
 export async function setPlanStatus(
@@ -64,6 +66,14 @@ export async function setPlanStatus(
 		actorMemberId: string | null;
 		/** How the change happened. Recorded in the activity detail only. */
 		via?: "nudge" | "manual";
+		/** WHICH authorization arm admitted the write, recorded in the activity
+		 *  detail. An honour-system TMOD write and a session-authenticated
+		 *  officer's are otherwise indistinguishable in the feed — and for a grant
+		 *  whose defence is "it is auditable afterwards", the arm is the one thing
+		 *  that has to be persisted (#576 review). Optional so the existing
+		 *  callers that have no ladder (`setAvailability`, the self-claim path)
+		 *  need no change. */
+		grantedVia?: "officer" | "tmod" | "self";
 		/** Overwrite an EXISTING row only when its status is one of these. Omit to
 		 *  overwrite any, which is right for a deliberate answer: moving UP the
 		 *  ladder from `reached_out` to `coming`/`not_coming` is the whole point of
@@ -124,6 +134,7 @@ export async function setPlanStatus(
 			memberId: args.memberId,
 			status: args.status,
 			via: args.via ?? "manual",
+			...(args.grantedVia ? { grantedVia: args.grantedVia } : {}),
 		},
 	});
 	return { ok: true as const, changed: true };
