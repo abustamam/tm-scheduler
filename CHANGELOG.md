@@ -2,6 +2,14 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.17.0.0] - 2026-08-17
+
+### Added
+
+- **You can now vote for someone who isn't on the ballot.** Tap "Someone else…", type a name, done. The ballot could only ever offer people the app already knew about — whoever held a role slot, plus Table Topics speakers someone had recorded — and Table Topics respondents don't get recorded while the segment is running, because the people who would do it are the people running the meeting. So Best Table Topics, the award that most needs a vote, routinely opened with a short list or nobody on it at all.
+- **A name someone types becomes a button for everyone after them.** The second person voting for the same speaker taps their name instead of typing it, so one person doesn't end up on the ballot twice as "bob smith" and "Bob Smith" splitting their own vote. Capitalisation and stray spaces are treated as the same person; the spelling the first voter used is the one everybody sees. Names that differ by more than that — "O'Brien" and "OBrien" — are left as two entries, because the app should not guess that two people are one.
+- **A write-in can win.** The Ballot Counter can set one as the winner from the tally, and the name flows through to the minutes, the emailed minutes, the minutes PDF and the printed awards row like any other winner.
+
 ## [1.16.1.0] - 2026-08-17
 
 Five fixes from the 2026-08-13 meeting (#578).
