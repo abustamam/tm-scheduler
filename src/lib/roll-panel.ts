@@ -20,6 +20,10 @@ export interface RollRow {
 	name: string;
 	phone: string | null;
 	email: string | null;
+	/** A member's goes-by name — "Abdul-Rasheed Bustamam" who goes by Rasheed
+	 *  cannot be greeted right by splitting the stored name. Rendered instead of
+	 *  `name` when present (#486). */
+	preferredName: string | null;
 	/** The RECORDED status, or null when nobody has recorded one. */
 	status: AttendanceStatus | null;
 	/** Non-null only when `status` is null. Renders dashed; tapping it writes the
@@ -67,6 +71,7 @@ export function buildRollPanel(input: {
 		const status = recorded.get(m.id) ?? null;
 		return {
 			...m,
+			preferredName: m.preferredName ?? null,
 			status,
 			// Mutually exclusive by construction, not by convention.
 			suggestion: status === null ? suggest(planned.get(m.id) ?? null) : null,

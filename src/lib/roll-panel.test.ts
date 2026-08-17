@@ -24,6 +24,25 @@ describe("buildRollPanel", () => {
 		]);
 	});
 
+	it("maintains alphabetical order even when the first member is marked present", () => {
+		// This test catches a status-ranked sort that the previous test cannot.
+		// If the sort were {null:0, absent:1, excused:2, present:3}, Abe (present)
+		// would move to the back, breaking this assertion. The previous test fails
+		// to catch this because Cara (present, alphabetically last) ends up in the
+		// same position either way.
+		const { rows } = buildRollPanel({
+			roster,
+			attendance: [{ memberId: "m-abe", status: "present" }],
+			plan: [],
+			roleByMemberId: {},
+		});
+		expect(rows.map((r) => r.name)).toEqual([
+			"Abe Nkemelu",
+			"Bea Osei",
+			"Cara Diaz",
+		]);
+	});
+
 	it("maps a plan rung to a SUGGESTION when no attendance row exists", () => {
 		const { rows } = buildRollPanel({
 			roster,
@@ -127,5 +146,33 @@ describe("buildRollPanel", () => {
 		});
 		expect(rows.find((r) => r.id === "m-bea")?.roleName).toBe("Timer");
 		expect(rows.find((r) => r.id === "m-abe")?.roleName).toBeNull();
+	});
+
+	it("carries preferredName from the roster through to each row", () => {
+		const { rows } = buildRollPanel({
+			roster: [
+				{
+					id: "m-cara",
+					name: "Cara Diaz",
+					phone: null,
+					email: null,
+					preferredName: "Cara",
+				},
+				{
+					id: "m-abe",
+					name: "Abe Nkemelu",
+					phone: null,
+					email: null,
+					preferredName: null,
+				},
+				{ id: "m-bea", name: "Bea Osei", phone: null, email: null },
+			],
+			attendance: [],
+			plan: [],
+			roleByMemberId: {},
+		});
+		expect(rows.find((r) => r.id === "m-cara")?.preferredName).toBe("Cara");
+		expect(rows.find((r) => r.id === "m-abe")?.preferredName).toBeNull();
+		expect(rows.find((r) => r.id === "m-bea")?.preferredName).toBeNull();
 	});
 });
