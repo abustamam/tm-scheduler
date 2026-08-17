@@ -1,38 +1,43 @@
 import { Mail, MessageCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "#/components/ui/button";
-import { buildNudge, type NudgeMode } from "#/lib/nudge";
+import { buildNudge } from "#/lib/nudge";
 import { detectPlatform } from "#/lib/platform";
 
-/**
- * WhatsApp/Email tap-to-nudge affordances (#37). Renders only the channels the
- * target has; a muted "No contact on file" when neither. Links open the VPE's
- * own app pre-drafted — the human edits and sends. The app never sends.
- */
-export function NudgeButtons({
-	name,
-	preferredName,
-	phone,
-	email,
-	roleName,
-	meetingDate,
-	shareUrl,
-	mode,
-	onContacted,
-}: {
+interface NudgeButtonsBase {
 	name: string;
 	/** What to call them in the draft, when it isn't the first token of `name`
 	 *  (#486). Absent/null falls back to that first token. */
 	preferredName?: string | null;
 	phone: string | null;
 	email: string | null;
-	roleName: string;
 	meetingDate: string;
 	shareUrl: string;
-	mode: NudgeMode;
 	/** Fired when the WhatsApp or Email draft link is tapped (auto-mark contacted). */
 	onContacted?: () => void;
-}) {
+}
+
+/** Discriminated on `mode`, mirroring `NudgeInput` — a single shape with an
+ *  optional `roleName` would let a `confirm`/`recruit` caller omit the field
+ *  that mode's message interpolates, and draft "you're our undefined". */
+export type NudgeButtonsProps = NudgeButtonsBase &
+	({ mode: "attendance" } | { mode: "confirm" | "recruit"; roleName: string });
+
+/**
+ * WhatsApp/Email tap-to-nudge affordances (#37). Renders only the channels the
+ * target has; a muted "No contact on file" when neither. Links open the VPE's
+ * own app pre-drafted — the human edits and sends. The app never sends.
+ */
+export function NudgeButtons(props: NudgeButtonsProps) {
+	const {
+		name,
+		preferredName,
+		phone,
+		email,
+		meetingDate,
+		shareUrl,
+		onContacted,
+	} = props;
 	// Render the channel links only after mount. The caller builds `shareUrl` with
 	// a `window.location.origin` prefix that is correct only on the client; during
 	// SSR it falls back to a RELATIVE path, so an anchor tapped before hydration
@@ -59,17 +64,24 @@ export function NudgeButtons({
 	// mismatch.
 	const platform = mounted ? detectPlatform(navigator) : "mobile";
 
-	const nudge = buildNudge({
+	// Branch on the discriminant so `roleName` is carried only where it exists.
+	// Spreading `props` wholesale would defeat the union: TS cannot narrow a
+	// spread, and the field would go back to being optional at the boundary the
+	// union exists to hold.
+	const common = {
 		name,
 		preferredName,
 		phone,
 		email,
-		roleName,
 		meetingDate,
 		shareUrl,
-		mode,
 		platform,
-	});
+	};
+	const nudge = buildNudge(
+		props.mode === "attendance"
+			? { ...common, mode: "attendance" }
+			: { ...common, mode: props.mode, roleName: props.roleName },
+	);
 
 	if (!nudge.whatsappUrl && !nudge.mailtoUrl) {
 		return (

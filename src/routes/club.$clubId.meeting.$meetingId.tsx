@@ -16,7 +16,7 @@ import {
 	Sparkles,
 	WifiOff,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
 	MeetingAgenda,
@@ -25,6 +25,7 @@ import {
 import { MeetingAnnouncements } from "#/components/agenda/meeting-announcements";
 import { GuestResources } from "#/components/club/guest-resources";
 import { useRequireIdentity } from "#/components/club/identity-gate";
+import { MeetingAttendancePanel } from "#/components/club/meeting-attendance-panel";
 import { MeetingMinutes } from "#/components/club/meeting-minutes";
 import { MeetingNavStrip } from "#/components/club/meeting-nav-strip";
 import { MeetingPersonalStrip } from "#/components/club/meeting-personal-strip";
@@ -43,12 +44,14 @@ import {
 } from "#/components/ui/dialog";
 import { Label } from "#/components/ui/label";
 import { useOnlineStatus } from "#/hooks/use-online-status";
+import { buildRoleCounts, slotLabel } from "#/lib/agenda";
 import {
 	applyFlex,
 	buildRunOfShow,
 	expandRunSheet,
 } from "#/lib/agenda-runsheet";
 import { buildSlideDeck } from "#/lib/agenda-slides";
+import type { PlanStatus } from "#/lib/attendance-panel";
 import { clubLogoUrl } from "#/lib/club-logo-url";
 import {
 	formatMeetingDate,
@@ -72,7 +75,10 @@ import { useEffectiveMember } from "#/lib/member-identity";
 import { footerDate } from "#/lib/slide-layout";
 import { hasWordOfTheDay } from "#/lib/word-poster";
 import { getOpenActionItems } from "#/server/action-items";
-import { clearAvailability, setAvailability } from "#/server/availability";
+import {
+	clearPlannedAttendance,
+	setPlannedAttendance,
+} from "#/server/attendance-plan";
 import { getClubLogoMeta } from "#/server/club-logo";
 import {
 	completeMeeting,
@@ -255,7 +261,6 @@ function MeetingView() {
 		canManage,
 		timezone,
 		unavailableMembers,
-		unavailableMemberIds,
 		roleRecency,
 		navItems,
 		clubName,
@@ -265,8 +270,8 @@ function MeetingView() {
 		clubRoles,
 		clubGuests,
 		roster: loaderRoster,
-		contactedMemberIds,
-		comingMemberIds,
+		plan,
+		answeredRungs,
 		minutes,
 		openActionItems,
 		minutesEmail,
@@ -294,7 +299,6 @@ function MeetingView() {
 	// superadmin (canManage without a linked member).
 	const managerActorId = session?.id ?? null;
 
-	const [availBusy, setAvailBusy] = useState(false);
 	const [addRoleOpen, setAddRoleOpen] = useState(false);
 	const [addRoleBusy, setAddRoleBusy] = useState(false);
 	const [lifecycleBusy, setLifecycleBusy] = useState(false);
@@ -305,6 +309,45 @@ function MeetingView() {
 	// even when `minutes.visible` is false (a non-admin Vote Counter on a
 	// not-yet-completed meeting), so it cannot ride that component's queue.
 	const [voteConsoleBusy, setVoteConsoleBusy] = useState(false);
+	// Optimistic rung overrides, keyed by member. `undefined` = no override, so
+	// a member can be optimistically cleared to `null` and still be
+	// distinguishable from "not touched" — which `??` alone cannot express.
+	const [rungOverride, setRungOverride] = useState<
+		Record<string, PlanStatus | null>
+	>({});
+	// Members with a plan write currently in flight — a ref, not state, since
+	// only `writeRung` and the reconciling effect below touch it and neither
+	// should re-render on it. The effect drops any override for a member NOT in
+	// this map the moment `plan` changes, so a write that is still pending
+	// cannot be evicted by a payload that hasn't caught up to it yet (whole-branch
+	// review I2).
+	//
+	// REFCOUNTED, not a `Set`: two writes can be outstanding for the SAME member
+	// at once, because an officer's own row carries two independent controls with
+	// two independent busy flags that cannot see each other — the panel's chip
+	// (`pendingId`) and the personal strip's ("I'll be there"/`myStatusBusy`).
+	// With a `Set` the second `add` is a no-op and the FIRST write's release
+	// clears the entry while the second is still outstanding, which hands the
+	// effect an override it is free to evict before its write has landed.
+	const pendingWritesRef = useRef<Map<string, number>>(new Map());
+	function retainPending(memberId: string) {
+		const m = pendingWritesRef.current;
+		m.set(memberId, (m.get(memberId) ?? 0) + 1);
+	}
+	function releasePending(memberId: string) {
+		const m = pendingWritesRef.current;
+		const left = (m.get(memberId) ?? 1) - 1;
+		if (left > 0) m.set(memberId, left);
+		else m.delete(memberId);
+	}
+	// Busy guard against a rapid double-tap on the strip's OWN write — the same
+	// class of race the panel's per-row `pendingId` already guards
+	// (meeting-attendance-panel.tsx:136, 174-181). Without this, tapping "I'll
+	// be there" then "undo" before the first request resolves fires
+	// `setPlannedAttendance` and `clearPlannedAttendance` concurrently with no
+	// ordering guarantee, and an out-of-order resolution leaves the persisted
+	// rung disagreeing with the member's last tap.
+	const [myStatusBusy, setMyStatusBusy] = useState(false);
 
 	// One club config drives both renderings of this meeting (#367).
 	const flex = applyFlex(
@@ -374,6 +417,10 @@ function MeetingView() {
 	// #320: previewing-as-member drops management everywhere it gates admin UI.
 	const effectiveCanManage = canManage && !previewAsMember;
 	const canComplete = meetingDateReached(meeting.scheduledAt, timezone, now);
+	// Spec D2: plan mode is the EXISTING phase, reusing the route's frozen clock.
+	// PR 2 ships plan mode only — roll mode (`today` / `completed`) is PR 3, so
+	// the panel simply does not render outside `upcoming` yet.
+	const showPlanPanel = effectiveCanManage && phase === "upcoming";
 
 	// One viewer for all audiences: an admin keeps editing a past-but-open meeting
 	// until Complete; a member/anon agenda freezes once the date passes; a locked
@@ -448,7 +495,128 @@ function MeetingView() {
 			? `/club/${clubId}/meeting/${urlKey}`
 			: `${window.location.origin}/club/${clubId}/meeting/${urlKey}`;
 	const nudgeDate = footerDate(meeting.scheduledAt, timezone);
-	const myUnavailable = myId ? unavailableMemberIds.includes(myId) : false;
+	// Lifted from <MeetingAgenda> so the agenda and the panel share one map.
+	const roleCounts = buildRoleCounts(slots);
+	const roleByMemberId: Record<string, string> = {};
+	for (const s of slots) {
+		if (s.assigneeId) roleByMemberId[s.assigneeId] = slotLabel(s, roleCounts);
+	}
+	// Derived here rather than carried as their own payload fields (#396 PR2
+	// task 6): both are redundant with data the payload already ships.
+	// `unavailableMembers` (public) already names who is `not_coming`; `plan`
+	// (canManage-gated, [] otherwise — same gate the old dedicated field used)
+	// already carries every rung including `reached_out`.
+	const unavailableMemberIds = unavailableMembers.map((m) => m.id);
+	const contactedMemberIds = plan
+		.filter((p) => p.status === "reached_out")
+		.map((p) => p.memberId);
+
+	async function writeRung(
+		memberId: string,
+		next: PlanStatus | null,
+		via: "nudge" | "manual" = "manual",
+	) {
+		// Roll back to what the UI was ACTUALLY showing, not the loader's
+		// snapshot: `plan` never refetches mid-page (nothing here awaits an
+		// invalidate before this runs), and for a non-manager `plan` is ALWAYS
+		// `[]` — so `plan.find(...) ?? null` would restore the very value the
+		// failed write already overwrote, every time (whole-branch review I1).
+		// Check the override first (a second write racing the same row), then
+		// `plan` (an officer's own ladder), then `answeredRungs` (the public
+		// array a plain member's own row lives on).
+		const previous =
+			rungOverride[memberId] !== undefined
+				? rungOverride[memberId]
+				: (plan.find((p) => p.memberId === memberId)?.status ??
+					answeredRungs.find((r) => r.memberId === memberId)?.status ??
+					null);
+		setRungOverride((o) => ({ ...o, [memberId]: next }));
+		retainPending(memberId);
+		try {
+			await (next === null
+				? clearPlannedAttendance({ data: { memberId, meetingId: meeting.id } })
+				: setPlannedAttendance({
+						data: { memberId, meetingId: meeting.id, status: next, via },
+					}));
+			// Fire-and-forget, NOT awaited: the override already holds the value
+			// this write just committed, so nothing on screen is waiting on this
+			// resolving. But SOME invalidate has to fire, or `contactedMemberIds` /
+			// `unavailableMemberIds` (both derived from loader values — `plan` /
+			// `unavailableMembers`) go stale for the recruit picker and the assign
+			// sheet after this tap (whole-branch review I3). This also feeds the
+			// reconciling effect below its own trigger, rather than relying on some
+			// unrelated action to refresh `plan`.
+			//
+			// The pending mark is released when this INVALIDATE settles, not when
+			// the write above resolved. Those are different moments, and between
+			// them the reconciling effect would happily evict this override: `plan`
+			// gets a fresh identity on every loader run, and this route has ~15
+			// other `router.invalidate()` call sites (meta save, minutes, add-role,
+			// lifecycle, every vote action). A loader request that started before
+			// this write committed, landing in that window, reverts a chip the
+			// officer just tapped — which reads as "it didn't save", so they tap
+			// again.
+			void router
+				.invalidate()
+				// A failed refetch does NOT undo the write: the override still holds
+				// the committed value, so the panel stays correct. What goes stale is
+				// `contactedMemberIds` / `unavailableMemberIds` elsewhere on the page,
+				// and the next invalidate from any other action repairs it. Caught so
+				// it is not an unhandled rejection, but deliberately not toasted — a
+				// "couldn't save" here would be a lie about a write that succeeded.
+				.catch(() => undefined)
+				.finally(() => releasePending(memberId));
+		} catch (e) {
+			// Roll back to what the UI was actually displaying, not to `null` —
+			// reverting to empty would silently erase a rung the officer did not
+			// touch.
+			setRungOverride((o) => ({ ...o, [memberId]: previous }));
+			toast.error(e instanceof Error ? e.message : "Couldn't save that.");
+			// Released HERE rather than in a `finally`, because the success path
+			// hands the release to the invalidate above; a `finally` would release
+			// a second time and drop another concurrent write's refcount.
+			releasePending(memberId);
+		}
+	}
+
+	// Drop a stale override once a fresh payload arrives — but drop it
+	// UNCONDITIONALLY (any member with no write still in flight), not only when
+	// it agrees with the server. The old effect deleted an override only
+	// `if (server === value)`, which is backwards: agreement is the harmless
+	// case, and an override that DISAGREES with the server — the one case that
+	// matters — was pinned forever, masking every later payload for the rest of
+	// the session (whole-branch review I2). `pendingWritesRef` is what keeps
+	// this from evicting an override whose own write hasn't resolved yet.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: plan is the trigger (a fresh payload), not a value read in the body — including rungOverride would re-run on every write.
+	useEffect(() => {
+		setRungOverride((o) => {
+			const next = { ...o };
+			let changed = false;
+			for (const memberId of Object.keys(o)) {
+				if (pendingWritesRef.current.has(memberId)) continue;
+				delete next[memberId];
+				changed = true;
+			}
+			return changed ? next : o;
+		});
+	}, [plan]);
+
+	// Advances no-answer → reached out; must NOT touch a member who already
+	// answered (spec D5). Read through the override so a chip set a moment ago
+	// counts.
+	async function markAsked(memberId: string) {
+		const current =
+			rungOverride[memberId] !== undefined
+				? rungOverride[memberId]
+				: (plan.find((p) => p.memberId === memberId)?.status ?? null);
+		if (current !== null) return;
+		// Same event as the recruit picker's own `onContacted={"nudge"}` below —
+		// tagging it "manual" (the default) here would log the identical action
+		// under two different `via` spellings in activity_log (whole-branch
+		// review M1).
+		await writeRung(memberId, "reached_out", "nudge");
+	}
+
 	// The agenda's internal claim/assign acts as this member: the session member
 	// for a manager (null for an impersonator), the effective member otherwise.
 	const agendaMemberId = effectiveCanManage ? managerActorId : myId;
@@ -456,27 +624,41 @@ function MeetingView() {
 		? "max-w-workspace px-4 pt-5 pb-10 sm:px-7 sm:pt-7 space-y-5"
 		: "mx-auto w-full max-w-reading p-4 pb-8 md:p-6 space-y-5";
 
-	async function toggleAvailability() {
-		setAvailBusy(true);
+	// The strip's own answer, read from the PUBLIC `answeredRungs` array — NEVER
+	// from `plan`, which is admin-only ([] whenever `!canManage`) and would read
+	// `null` forever for a plain member: they'd answer, the page would reload,
+	// and the strip would ask again. Mirrors `unavailableMemberIds` above: a
+	// public array filtered by the client-known `myId`, because the server
+	// cannot resolve "my" for an anonymous roster pick.
+	const myStatus = myId
+		? (answeredRungs.find((r) => r.memberId === myId)?.status ?? null)
+		: null;
+	// Same override the panel's chips apply, so the member's own tap is instant
+	// — but clamped off `reached_out`. `rungOverride` is shared with the
+	// officer panel, so an OFFICER setting their own row to `reached_out` from
+	// the panel would otherwise mislabel their own strip as "can't make this
+	// one — undo?", and tapping that "undo" actually DELETES the row: an
+	// officer's clear is unrestricted (`onlyFrom` is lifted for them in
+	// `clearPlannedAttendance`), so it would erase the very outreach record the
+	// clamp exists to protect (whole-branch review M8). `answeredRungs` can
+	// never itself produce `reached_out` — it is filtered server-side — so this
+	// only ever intercepts the override.
+	let myEffectiveStatus =
+		myId && rungOverride[myId] !== undefined ? rungOverride[myId] : myStatus;
+	myEffectiveStatus =
+		myEffectiveStatus === "reached_out" ? null : myEffectiveStatus;
+
+	// Wraps the shared `writeRung` with the busy guard above — still ONE write
+	// path (the panel's chips call `writeRung` directly), just with the strip's
+	// own in-flight flag set first and cleared in `finally` so a rejected write
+	// never leaves the control stuck disabled.
+	async function setMyStatus(next: PlanStatus | null) {
+		if (!myId) return;
+		setMyStatusBusy(true);
 		try {
-			const me = await requireIdentity();
-			if (!me) return;
-			if (myUnavailable) {
-				await clearAvailability({
-					data: { memberId: me.id, meetingId: meeting.id, clubId: clubUuid },
-				});
-				toast.success("You're marked as available again.");
-			} else {
-				await setAvailability({
-					data: { memberId: me.id, meetingId: meeting.id, clubId: clubUuid },
-				});
-				toast.success("Got it — you can't make this one.");
-			}
-			await router.invalidate();
-		} catch (err) {
-			toast.error(errMessage(err));
+			await writeRung(myId, next);
 		} finally {
-			setAvailBusy(false);
+			setMyStatusBusy(false);
 		}
 	}
 
@@ -809,10 +991,10 @@ function MeetingView() {
 					member={member}
 					promptIdentity={promptIdentity}
 					over={over}
-					myUnavailable={myUnavailable}
-					availBusy={availBusy}
+					myStatus={myEffectiveStatus}
+					availBusy={myStatusBusy}
 					canToggleAvailability={viewer.canToggleAvailability}
-					onToggleAvailability={toggleAvailability}
+					onSetStatus={setMyStatus}
 				/>
 				{/* The strip derives identity from `member !== null`; the TOOLBAR
 				    still takes an explicit hasIdentity, because its gate is the
@@ -863,107 +1045,121 @@ function MeetingView() {
 
 			<MeetingAnnouncements text={meeting.reminders} />
 
-			{effectiveCanManage ? null : <GuestResources clubId={clubId} />}
+			{/* Spec D4: the banner/header/toolbar/announcements block above runs FULL
+			    WIDTH above the two-column row on every viewport — it is a SIBLING of
+			    this row, not nested inside the agenda column, so it can never be
+			    pushed below the panel on desktop. Below `lg` the panel (order-1)
+			    renders directly beneath the toolbar and ABOVE the agenda/roles list
+			    (order-2); at `lg` and up the agenda takes the left column
+			    (order-1) and the panel becomes a sticky right rail (order-2). Whole-
+			    branch review I5: the panel used to be a sibling AFTER the whole left
+			    column, so on mobile it landed below the agenda, action items,
+			    Minutes and the ballot console instead of directly under the toolbar. */}
+			<div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:gap-6">
+				<div className="order-2 min-w-0 flex-1 space-y-5 lg:order-1">
+					{effectiveCanManage ? null : <GuestResources clubId={clubId} />}
 
-			<MeetingAgenda
-				slots={slots}
-				effectiveMeetingNumber={meetingNumber}
-				viewer={viewer}
-				actions={actions}
-				roster={roster}
-				roleRecency={roleRecency}
-				unavailableMemberIds={unavailableMemberIds}
-				unavailableMembers={effectiveCanManage ? unavailableMembers : undefined}
-				pairedRoleIds={effectiveCanManage ? pairedIds : undefined}
-				clubGuests={effectiveCanManage ? clubGuests : undefined}
-				shareUrl={effectiveCanManage ? nudgeShareUrl : ""}
-				meetingDate={effectiveCanManage ? nudgeDate : ""}
-				meeting={meeting}
-				timezone={timezone}
-				meetingOver={over}
-				selfMemberId={agendaMemberId}
-				onMetaSaved={async () => {
-					await router.invalidate();
-				}}
-				requireIdentity={requireIdentity}
-				contactedMemberIds={contactedMemberIds}
-				comingMemberIds={comingMemberIds}
-				onContacted={async (memberId, via) => {
-					try {
-						await setContacted({
-							data: {
-								memberId,
-								meetingId: meeting.id,
-								clubId: meeting.clubId,
-								via,
-							},
-						});
-						await router.invalidate();
-					} catch (err) {
-						toast.error(errMessage(err));
-					}
-				}}
-				onUncontacted={async (memberId) => {
-					try {
-						await clearContacted({
-							data: { memberId, meetingId: meeting.id, clubId: meeting.clubId },
-						});
-						await router.invalidate();
-					} catch (err) {
-						toast.error(errMessage(err));
-					}
-				}}
-			/>
-
-			<OpenActionItems
-				items={openActionItems.items}
-				total={openActionItems.total}
-			/>
-
-			{minutes.visible && minutes.data ? (
-				// Anchor target for the toolbar's completed-phase primary (#541 D2).
-				// The wrapper exists because <MeetingMinutes> renders a <Card> and
-				// takes no id/className. `scroll-mt-28` (112px) clears the sticky header
-				// at its TALLEST: 69px normally, but 105px while impersonating, because
-				// `app-shell` stacks the 36px banner (h-9) above it and moves the header
-				// to `top-9`. Measured in a browser, not derived — `scroll-mt-24` (96px)
-				// was 9px short and tucked the card's top edge under the header.
-				// NOT co-gated with the primary: the toolbar's CTA is gated on
-				// `showsMinutesPrimary`, but the loader degrades ANY getMinutes
-				// failure to EMPTY_MINUTES (visible=false) regardless of canManage —
-				// so this branch alone left a completed-phase admin with a Minutes
-				// primary and no `id` to scroll to on a transient load failure. The
-				// degrade branch below keeps the anchor real in that case.
-				<section id={MINUTES_ANCHOR_ID} className="scroll-mt-28">
-					<MeetingMinutes
-						meetingId={meeting.id}
-						minutes={minutes.data}
-						program={minutes.program}
-						meetingPast={over}
-						// Same fact as `canComplete`, deliberately the one computation:
-						// recording the record and closing it sit on the same club-local
-						// day axis, so "you can take roll" and "you can complete this"
-						// turn on together. Passing `over` here would hide the recorder
-						// for the whole of meeting day, which is when roll is taken.
-						meetingDayReached={canComplete}
-						canEdit={effectiveCanManage && minutes.canEdit}
-						clubGuests={clubGuests}
-						onMutated={() => router.invalidate()}
-						email={
-							minutesEmail
-								? {
+					<MeetingAgenda
+						slots={slots}
+						effectiveMeetingNumber={meetingNumber}
+						viewer={viewer}
+						actions={actions}
+						roster={roster}
+						roleRecency={roleRecency}
+						roleByMemberId={roleByMemberId}
+						unavailableMemberIds={unavailableMemberIds}
+						pairedRoleIds={effectiveCanManage ? pairedIds : undefined}
+						clubGuests={effectiveCanManage ? clubGuests : undefined}
+						shareUrl={effectiveCanManage ? nudgeShareUrl : ""}
+						meetingDate={effectiveCanManage ? nudgeDate : ""}
+						meeting={meeting}
+						timezone={timezone}
+						selfMemberId={agendaMemberId}
+						onMetaSaved={async () => {
+							await router.invalidate();
+						}}
+						requireIdentity={requireIdentity}
+						contactedMemberIds={contactedMemberIds}
+						onContacted={async (memberId, via) => {
+							try {
+								await setContacted({
+									data: {
+										memberId,
+										meetingId: meeting.id,
 										clubId: meeting.clubId,
-										clubName,
-										meetingDate: meeting.scheduledAt,
-										recipients: minutesEmail.recipients,
-										skipped: minutesEmail.skipped,
-									}
-								: null
-						}
+										via,
+									},
+								});
+								await router.invalidate();
+							} catch (err) {
+								toast.error(errMessage(err));
+							}
+						}}
+						onUncontacted={async (memberId) => {
+							try {
+								await clearContacted({
+									data: {
+										memberId,
+										meetingId: meeting.id,
+										clubId: meeting.clubId,
+									},
+								});
+								await router.invalidate();
+							} catch (err) {
+								toast.error(errMessage(err));
+							}
+						}}
 					/>
-				</section>
-			) : effectiveCanManage ? (
-				/* getMinutes degraded (loader `.catch(() => EMPTY_MINUTES)`) — say so
+
+					<OpenActionItems
+						items={openActionItems.items}
+						total={openActionItems.total}
+					/>
+
+					{minutes.visible && minutes.data ? (
+						// Anchor target for the toolbar's completed-phase primary (#541 D2).
+						// The wrapper exists because <MeetingMinutes> renders a <Card> and
+						// takes no id/className. `scroll-mt-28` (112px) clears the sticky header
+						// at its TALLEST: 69px normally, but 105px while impersonating, because
+						// `app-shell` stacks the 36px banner (h-9) above it and moves the header
+						// to `top-9`. Measured in a browser, not derived — `scroll-mt-24` (96px)
+						// was 9px short and tucked the card's top edge under the header.
+						// NOT co-gated with the primary: the toolbar's CTA is gated on
+						// `showsMinutesPrimary`, but the loader degrades ANY getMinutes
+						// failure to EMPTY_MINUTES (visible=false) regardless of canManage —
+						// so this branch alone left a completed-phase admin with a Minutes
+						// primary and no `id` to scroll to on a transient load failure. The
+						// degrade branch below keeps the anchor real in that case.
+						<section id={MINUTES_ANCHOR_ID} className="scroll-mt-28">
+							<MeetingMinutes
+								meetingId={meeting.id}
+								minutes={minutes.data}
+								program={minutes.program}
+								meetingPast={over}
+								// Same fact as `canComplete`, deliberately the one computation:
+								// recording the record and closing it sit on the same club-local
+								// day axis, so "you can take roll" and "you can complete this"
+								// turn on together. Passing `over` here would hide the recorder
+								// for the whole of meeting day, which is when roll is taken.
+								meetingDayReached={canComplete}
+								canEdit={effectiveCanManage && minutes.canEdit}
+								clubGuests={clubGuests}
+								onMutated={() => router.invalidate()}
+								email={
+									minutesEmail
+										? {
+												clubId: meeting.clubId,
+												clubName,
+												meetingDate: meeting.scheduledAt,
+												recipients: minutesEmail.recipients,
+												skipped: minutesEmail.skipped,
+											}
+										: null
+								}
+							/>
+						</section>
+					) : effectiveCanManage ? (
+						/* getMinutes degraded (loader `.catch(() => EMPTY_MINUTES)`) — say so
 				   instead of silently deleting the card, and keep the toolbar's Minutes
 				   primary pointing at something real (spec review of aa106b3).
 
@@ -980,96 +1176,118 @@ function MeetingView() {
 				   `effectiveCanManage` is a strict SUPERSET of the CTA's gate, so the
 				   primary can never point at a section that is not here — and it is the
 				   preview-aware flag, so the two still flip together in preview mode. */
-				<section id={MINUTES_ANCHOR_ID} className="scroll-mt-28">
-					<div className="flex items-center gap-2 rounded-xl border border-border bg-muted/60 px-4 py-3 text-sm font-medium text-muted-foreground">
-						<ClipboardList className="size-4 shrink-0" aria-hidden />
-						Minutes couldn't load — refresh to try again.
-					</div>
-				</section>
-			) : null}
+						<section id={MINUTES_ANCHOR_ID} className="scroll-mt-28">
+							<div className="flex items-center gap-2 rounded-xl border border-border bg-muted/60 px-4 py-3 text-sm font-medium text-muted-foreground">
+								<ClipboardList className="size-4 shrink-0" aria-hidden />
+								Minutes couldn't load — refresh to try again.
+							</div>
+						</section>
+					) : null}
 
-			{isVoteCounter || effectiveCanManage ? (
-				<section className="space-y-4 rounded-xl border border-border bg-card p-4">
-					<div>
-						<h2 className="font-display font-semibold text-lg">
-							Ballot Counter console
-						</h2>
-						<p className="text-muted-foreground text-sm">
-							Only visible to you. Add Table Topics speakers so they're eligible
-							for Best Table Topics, then open a category, watch the count, and
-							confirm the winner once it closes.
-						</p>
-					</div>
-					<TableTopicsCapture
-						speakers={consoleSpeakers}
-						canEdit={true}
-						busy={voteConsoleBusy}
-						roster={voteCounterRoster}
-						clubGuests={clubGuests}
-						onAdd={handleAddTableTopicsSpeaker}
-						onRemove={handleRemoveTableTopicsSpeaker}
-						onMove={handleMoveTableTopicsSpeaker}
-					/>
-					<VoteCounterPanel
-						meetingId={meeting.id}
-						selfMemberId={myId}
-						onSetWinner={handleSetVoteWinner}
-						onClearWinner={handleClearVoteWinner}
-					/>
-				</section>
-			) : null}
+					{isVoteCounter || effectiveCanManage ? (
+						<section className="space-y-4 rounded-xl border border-border bg-card p-4">
+							<div>
+								<h2 className="font-display font-semibold text-lg">
+									Ballot Counter console
+								</h2>
+								<p className="text-muted-foreground text-sm">
+									Only visible to you. Add Table Topics speakers so they're
+									eligible for Best Table Topics, then open a category, watch
+									the count, and confirm the winner once it closes.
+								</p>
+							</div>
+							<TableTopicsCapture
+								speakers={consoleSpeakers}
+								canEdit={true}
+								busy={voteConsoleBusy}
+								roster={voteCounterRoster}
+								clubGuests={clubGuests}
+								onAdd={handleAddTableTopicsSpeaker}
+								onRemove={handleRemoveTableTopicsSpeaker}
+								onMove={handleMoveTableTopicsSpeaker}
+							/>
+							<VoteCounterPanel
+								meetingId={meeting.id}
+								selfMemberId={myId}
+								onSetWinner={handleSetVoteWinner}
+								onClearWinner={handleClearVoteWinner}
+							/>
+						</section>
+					) : null}
 
-			<Dialog open={addRoleOpen} onOpenChange={setAddRoleOpen}>
-				<DialogContent>
-					<DialogHeader>
-						<DialogTitle>Add a role</DialogTitle>
-					</DialogHeader>
-					<form
-						onSubmit={(e) => {
-							e.preventDefault();
-							const roleId = String(
-								new FormData(e.currentTarget).get("roleDefinitionId") ?? "",
-							);
-							if (roleId) void doAddRole(roleId);
-						}}
-						className="space-y-4"
-					>
-						<div className="space-y-2">
-							<Label htmlFor="roleDefinitionId">Role</Label>
-							<select
-								id="roleDefinitionId"
-								name="roleDefinitionId"
-								required
-								className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+					<Dialog open={addRoleOpen} onOpenChange={setAddRoleOpen}>
+						<DialogContent>
+							<DialogHeader>
+								<DialogTitle>Add a role</DialogTitle>
+							</DialogHeader>
+							<form
+								onSubmit={(e) => {
+									e.preventDefault();
+									const roleId = String(
+										new FormData(e.currentTarget).get("roleDefinitionId") ?? "",
+									);
+									if (roleId) void doAddRole(roleId);
+								}}
+								className="space-y-4"
 							>
-								{addableRoles.map((r) => (
-									<option key={r.id} value={r.id}>
-										{r.name}
-									</option>
-								))}
-							</select>
-							<p className="text-xs text-muted-foreground">
-								Picking a role already on this meeting adds another instance
-								(e.g. “Timer 2”).
-							</p>
-						</div>
-						<DialogFooter>
-							<DialogClose asChild>
-								<Button type="button" variant="outline">
-									Cancel
-								</Button>
-							</DialogClose>
-							<Button type="submit" disabled={addRoleBusy}>
-								{addRoleBusy ? (
-									<Loader2 className="size-4 animate-spin" />
-								) : (
-									"Add role"
-								)}
-							</Button>
-						</DialogFooter>
-					</form>
-				</DialogContent>
-			</Dialog>
+								<div className="space-y-2">
+									<Label htmlFor="roleDefinitionId">Role</Label>
+									<select
+										id="roleDefinitionId"
+										name="roleDefinitionId"
+										required
+										className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+									>
+										{addableRoles.map((r) => (
+											<option key={r.id} value={r.id}>
+												{r.name}
+											</option>
+										))}
+									</select>
+									<p className="text-xs text-muted-foreground">
+										Picking a role already on this meeting adds another instance
+										(e.g. “Timer 2”).
+									</p>
+								</div>
+								<DialogFooter>
+									<DialogClose asChild>
+										<Button type="button" variant="outline">
+											Cancel
+										</Button>
+									</DialogClose>
+									<Button type="submit" disabled={addRoleBusy}>
+										{addRoleBusy ? (
+											<Loader2 className="size-4 animate-spin" />
+										) : (
+											"Add role"
+										)}
+									</Button>
+								</DialogFooter>
+							</form>
+						</DialogContent>
+					</Dialog>
+				</div>
+				{showPlanPanel ? (
+					<aside className="order-1 lg:order-2 lg:sticky lg:top-24 lg:w-[340px] lg:shrink-0">
+						<MeetingAttendancePanel
+							// `loaderRoster`, not the union-typed `roster` local (which
+							// falls back to the client-fetched PUBLIC roster with no
+							// contact fields) — this panel only renders under
+							// `showPlanPanel`, i.e. `effectiveCanManage`, where the loader
+							// always populates the full contact roster.
+							roster={loaderRoster}
+							plan={plan}
+							rungOverride={rungOverride}
+							roleByMemberId={roleByMemberId}
+							meetingDate={nudgeDate}
+							shareUrl={nudgeShareUrl}
+							locked={locked}
+							onWriteRung={writeRung}
+							onContacted={markAsked}
+						/>
+					</aside>
+				) : null}
+			</div>
 		</div>
 	);
 }

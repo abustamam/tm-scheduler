@@ -10,7 +10,6 @@ import {
 	buildRecruitTargets,
 	NudgeRecruitPicker,
 } from "#/components/club/nudge-recruit-picker";
-import { OutreachPanel } from "#/components/club/outreach-panel";
 import { ProjectPicker } from "#/components/pathways/project-picker";
 import { useProjectOptions } from "#/components/pathways/use-project-options";
 import { Badge } from "#/components/ui/badge";
@@ -102,9 +101,15 @@ export interface MeetingAgendaProps {
 		preferredName?: string | null;
 	}[];
 	roleRecency: RoleRecency;
+	/** memberId → their current role label this meeting, lifted to the ROUTE
+	 *  (#396 PR 2) so this component and the planned-attendance rail read one
+	 *  derivation instead of each computing their own from `slots` — a second
+	 *  copy would silently disagree the moment `slotLabel` changes. */
+	roleByMemberId: Readonly<Record<string, string>>;
+	/** Member ids who marked themselves (or were marked) `not_coming` for this
+	 *  meeting — annotates the recruit picker and the assign sheet so a manager
+	 *  doesn't nudge or assign someone who already said they're out. */
 	unavailableMemberIds: string[];
-	/** Named unavailable members for the manager "not available" section. */
-	unavailableMembers?: { id: string; name: string }[];
 	/** Role ids managed by the speaker pair buttons — the remove-role control
 	 *  renders disabled (with the reason) on their non-speaker cards (#225). Only
 	 *  consulted for managers; defaults to none. */
@@ -122,11 +127,6 @@ export interface MeetingAgendaProps {
 	effectiveMeetingNumber?: number | null;
 	/** Club timezone — the meta dialog renders/parses the date field in it. */
 	timezone: string;
-	/** Has this meeting already happened? Passed in — NOT recomputed here — so the
-	 *  panels and the `viewer` are decided by one evaluation of `isMeetingOver`
-	 *  against one clock (#393). Callers get it from
-	 *  `isMeetingOver({ status, scheduledAt, timezone, now? })`. */
-	meetingOver: boolean;
 	/** Self-asserted identity the lifted edit dialogs pass to their server fns
 	 *  (ADR-0010 TMOD/Grammarian path). The activity-log actor is NOT sent — the
 	 *  server derives it from the session or the verified self-assertion (#396). */
@@ -137,9 +137,6 @@ export interface MeetingAgendaProps {
 	/** Member ids already contacted for this meeting (#340). Admin-only; empty on
 	 *  the public/member view. */
 	contactedMemberIds: string[];
-	/** Member ids who answered "I'll be there". Admin-only; empty on the
-	 *  public/member view. Optional so existing fixtures need no update. */
-	comingMemberIds?: string[];
 	/** Mark/unmark a member contacted (#340). Manager surface only. */
 	onContacted?: (
 		memberId: string,
@@ -172,8 +169,8 @@ export function MeetingAgenda({
 	actions,
 	roster,
 	roleRecency,
+	roleByMemberId,
 	unavailableMemberIds,
-	unavailableMembers = [],
 	pairedRoleIds = new Set<string>(),
 	clubGuests = [],
 	shareUrl,
@@ -181,12 +178,10 @@ export function MeetingAgenda({
 	meeting,
 	effectiveMeetingNumber = null,
 	timezone,
-	meetingOver,
 	selfMemberId,
 	onMetaSaved,
 	requireIdentity,
 	contactedMemberIds,
-	comingMemberIds,
 	onContacted,
 	onUncontacted,
 }: MeetingAgendaProps) {
@@ -215,21 +210,6 @@ export function MeetingAgenda({
 	const roleCounts = buildRoleCounts(slots);
 	const summary = summarizeAgenda(slots);
 	const speakerSlots = slots.filter((s) => s.isSpeakerRole);
-
-	// memberId → their current role label this meeting (for the assign picker).
-	const roleByMemberId: Record<string, string> = {};
-	for (const s of slots) {
-		if (s.assigneeId) roleByMemberId[s.assigneeId] = slotLabel(s, roleCounts);
-	}
-
-	// Gate the forward-looking planning panels (Outreach, "Not available this
-	// week") on the meeting being over (#376): "who still needs to be asked" and
-	// "skip them when filling open roles" are meaningless once the meeting has
-	// happened, yet an admin keeps `canManage` on a past-but-never-completed
-	// meeting, so capability alone can't hide them. `meetingOver` arrives as a
-	// prop from the same `isMeetingOver` call that built `viewer` (#393) — the
-	// component must not read the clock itself or the two can silently disagree.
-	const showPlanningPanels = viewer.canManage && !meetingOver;
 
 	// Recruiting pool for open-slot nudges (#37) — every active member, annotated
 	// (not filtered) with availability + the role they already hold this meeting.
@@ -420,36 +400,6 @@ export function MeetingAgenda({
 						</div>
 					</div>
 				</section>
-			) : null}
-
-			{showPlanningPanels && unavailableMembers.length > 0 ? (
-				<section className="rounded-xl border border-dashed bg-muted/40 p-4">
-					<h2 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-						Not available this week
-					</h2>
-					<p className="mt-1 text-xs text-muted-foreground">
-						Marked themselves out — skip them when filling open roles.
-					</p>
-					<div className="mt-2 flex flex-wrap gap-1.5">
-						{unavailableMembers.map((m) => (
-							<Badge key={m.id} variant="secondary">
-								{m.name}
-							</Badge>
-						))}
-					</div>
-				</section>
-			) : null}
-
-			{showPlanningPanels ? (
-				<OutreachPanel
-					roster={roster}
-					assignedIds={new Set(Object.keys(roleByMemberId))}
-					contactedIds={new Set(contactedMemberIds)}
-					unavailableIds={new Set(unavailableMemberIds)}
-					comingIds={new Set(comingMemberIds ?? [])}
-					onContacted={(id) => onContacted?.(id, "manual")}
-					onUncontacted={(id) => onUncontacted?.(id)}
-				/>
 			) : null}
 
 			{categories.map((category) => (

@@ -175,4 +175,48 @@ describe("attendance-plan authz (D6)", () => {
 			"the club must come from the meeting row (#396) — a payload clubId is not evidence of anything",
 		).not.toContain("data.clubId");
 	});
+
+	it("floors the nudge auto-advance so it cannot demote a real answer", () => {
+		// The bug this exists to catch is a DELETION, and it is invisible to every
+		// other gate here: `setPlanStatus`'s `demoteFrom` is optional, so dropping
+		// it typechecks, and the seam's own integration tests pass their own
+		// `demoteFrom` explicitly — they prove the PREDICATE works, never that
+		// this caller supplies it.
+		//
+		// Why it matters: `via: "nudge"` is the auto-advance behind a WhatsApp or
+		// email tap, where the rung moves as a side effect and the officer never
+		// chose it. Unfloored, an officer tapping a row that rendered a while ago
+		// overwrites the `not_coming` that arrived since — the member drops off
+		// `unavailableMembers`, loses the warning in the assign picker, and the
+		// VPE hands a role to someone who said they cannot come. That is the
+		// regression `setContacted` (`server/outreach.ts`) carries
+		// `demoteFrom: ["reached_out"]` to prevent — it is still live and still
+		// the recruit picker's path, which is why the panel's own route needed
+		// its own floor rather than inheriting one. The client guard in
+		// `markAsked` is not a substitute: it
+		// reads a `plan` snapshot that is stale by construction, while this is a
+		// `setWhere` Postgres evaluates against the live row.
+		const body = handlerBody(SRC, "setPlannedAttendance");
+		expect(
+			body,
+			'setPlannedAttendance must pass demoteFrom on the via:"nudge" + reached_out path',
+		).toMatch(
+			/demoteFrom:\s*\n?\s*data\.via === "nudge" && data\.status === "reached_out"\s*\n?\s*\?\s*\["reached_out"\]\s*\n?\s*:\s*undefined/,
+		);
+	});
+
+	it("leaves a deliberate manual rung pick unfloored", () => {
+		// The other half, and the reason the floor is conditional rather than
+		// unconditional: `via: "manual"` is the officer picking a rung from the
+		// menu with the current one on screen in front of them. Flooring THAT
+		// would make "Asked" silently do nothing on a row that already answered —
+		// a control that no-ops is worse than one that overwrites, because the
+		// officer gets no signal either way. A future edit that hoists the floor
+		// out of the conditional to "simplify" it fails here.
+		const body = handlerBody(SRC, "setPlannedAttendance");
+		expect(
+			body,
+			"the floor must stay conditional on via — an unconditional demoteFrom breaks the deliberate menu pick",
+		).not.toMatch(/demoteFrom:\s*\["reached_out"\],/);
+	});
 });

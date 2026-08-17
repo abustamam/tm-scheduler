@@ -48,10 +48,10 @@ async function renderHeader(opts: {
 				member={MEMBER}
 				promptIdentity={vi.fn()}
 				over={opts.over}
-				myUnavailable={opts.myUnavailable}
+				myStatus={opts.myUnavailable ? "not_coming" : null}
 				availBusy={false}
 				canToggleAvailability={true}
-				onToggleAvailability={vi.fn()}
+				onSetStatus={vi.fn()}
 			/>
 			<MeetingToolbar
 				phase={opts.phase}

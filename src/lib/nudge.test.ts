@@ -154,6 +154,55 @@ describe("buildNudge", () => {
 		expect(noEmail.mailtoUrl).toBeUndefined();
 	});
 
+	describe("attendance mode (#planned-attendance D5)", () => {
+		it("asks whether they can make the meeting, naming no role", () => {
+			const n = buildNudge({
+				name: "Sam Rivera",
+				phone: "+15551234567",
+				email: null,
+				meetingDate: "Tue 19 Aug",
+				shareUrl: "https://club.example/m/2026-08-19",
+				mode: "attendance",
+			});
+			expect(n.message).toBe(
+				"Hi Sam, are you able to make our Tue 19 Aug meeting? Agenda here: https://club.example/m/2026-08-19",
+			);
+			// The whole point of the mode: no role is being asked for. A template that
+			// leaked `undefined` would still contain the date and the URL and pass a
+			// looser assertion.
+			expect(n.message).not.toContain("undefined");
+			expect(n.message).not.toContain("role");
+		});
+
+		it("greets by preferred name, like the other modes (#486)", () => {
+			const n = buildNudge({
+				name: "Zabihullah Kogyani",
+				preferredName: "Zabi",
+				phone: "+15551234567",
+				email: null,
+				meetingDate: "Tue 19 Aug",
+				shareUrl: "https://club.example/m",
+				mode: "attendance",
+			});
+			expect(n.message).toContain("Hi Zabi,");
+		});
+
+		it("uses an attendance subject line for the email fallback", () => {
+			const n = buildNudge({
+				name: "Sam Rivera",
+				phone: null,
+				email: "sam@example.com",
+				meetingDate: "Tue 19 Aug",
+				shareUrl: "https://club.example/m",
+				mode: "attendance",
+			});
+			expect(n.mailtoUrl).toContain("subject=");
+			expect(decodeURIComponent(n.mailtoUrl as string)).toContain(
+				"Are you coming? — Tue 19 Aug",
+			);
+		});
+	});
+
 	it("escapes a stored address so it cannot inject its own mailto headers", () => {
 		// The worst of the four `mailto:` sinks, because this one is a draft the
 		// VPE TAPS TO SEND rather than an address they read first. Interpolated

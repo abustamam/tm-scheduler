@@ -8,9 +8,9 @@ import { greetingName } from "#/lib/person-name";
 import type { Platform } from "#/lib/platform";
 import { whatsappHref } from "#/lib/whatsapp";
 
-export type NudgeMode = "confirm" | "recruit";
+export type NudgeMode = "confirm" | "recruit" | "attendance";
 
-export interface NudgeInput {
+interface NudgeInputBase {
 	name: string;
 	/**
 	 * What this person is actually called, when it isn't the first token of
@@ -20,12 +20,10 @@ export interface NudgeInput {
 	/** E.164-ish free text; may be null/absent. */
 	phone?: string | null;
 	email?: string | null;
-	roleName: string;
 	/** Already formatted friendly, in the club's timezone (footerDate). */
 	meetingDate: string;
 	/** Absolute public meeting URL (caller prepends window.location.origin). */
 	shareUrl: string;
-	mode: NudgeMode;
 	/**
 	 * Which WhatsApp entry point to link (#485). Defaults to `"mobile"` — the
 	 * historical `wa.me` behavior — so a caller that cannot detect the platform
@@ -34,6 +32,24 @@ export interface NudgeInput {
 	 */
 	platform?: Platform;
 }
+
+/**
+ * DISCRIMINATED on `mode`, not one shape with an optional `roleName`. The
+ * `attendance` mode asks whether the member is coming AT ALL, so it has no role
+ * to name — but making `roleName` optional for that reason would ALSO make it
+ * optional for `confirm` and `recruit`, whose messages interpolate it directly.
+ * A caller omitting it would then typecheck and draft "just confirming you're
+ * our undefined for the …" into a message a VPE taps to send. This keeps the
+ * field REQUIRED exactly where it is read and absent where it is not.
+ */
+export type NudgeInput =
+	| (NudgeInputBase & { mode: "attendance" })
+	| (NudgeInputBase & {
+			mode: "confirm" | "recruit";
+			/** The role being asked about. Role-specific asks stay on the slot
+			 *  cards and in "Nudge someone" (spec D5). */
+			roleName: string;
+	  });
 
 export interface Nudge {
 	message: string;
@@ -47,12 +63,16 @@ function messageFor(i: NudgeInput): string {
 	// Greet by first/preferred name — "Hi Zabihullah Kogyani," reads like a mail
 	// merge, which undercuts a draft whose whole point is that a human wrote it.
 	const who = greetingName(i);
+	if (i.mode === "attendance") {
+		return `Hi ${who}, are you able to make our ${i.meetingDate} meeting? Agenda here: ${i.shareUrl}`;
+	}
 	return i.mode === "confirm"
 		? `Hi ${who}, just confirming you're our ${i.roleName} for the ${i.meetingDate} meeting. Details: ${i.shareUrl}`
 		: `Hi ${who}, would you be open to taking ${i.roleName} at our ${i.meetingDate} meeting? Info here: ${i.shareUrl}`;
 }
 
 function subjectFor(i: NudgeInput): string {
+	if (i.mode === "attendance") return `Are you coming? — ${i.meetingDate}`;
 	return i.mode === "confirm"
 		? `Confirming your ${i.roleName} role — ${i.meetingDate}`
 		: `Open ${i.roleName} role — ${i.meetingDate} meeting?`;

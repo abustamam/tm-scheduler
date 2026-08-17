@@ -163,6 +163,27 @@ export const setPlannedAttendance = createServerFn({ method: "POST" })
 			status: data.status,
 			actorMemberId,
 			via: data.via,
+			// `via: "nudge"` is the AUTO-advance behind a WhatsApp/email tap: the
+			// officer tapped "message them" and the rung moved as a SIDE EFFECT,
+			// with no rung in front of them to overrule. It must never demote a
+			// real answer, so it may only overwrite `reached_out` — the same floor
+			// `setContacted` (`server/outreach.ts`, still live and still called by
+			// the recruit picker) has always carried, for exactly the reason
+			// `setPlanStatus`'s own doc comment gives: without it an officer
+			// working from a panel that rendered a while ago erases the decline
+			// that arrived since, the member drops off `unavailableMembers`, and
+			// the VPE hands a role to someone who said they cannot come. The
+			// client guard in `markAsked` is NOT this check — it reads a `plan`
+			// snapshot that is stale by construction, whereas `demoteFrom` is a
+			// `setWhere` predicate evaluated by Postgres against the live row.
+			//
+			// `via: "manual"` is the officer picking a rung from the menu with the
+			// current one on screen in front of them. That is a deliberate
+			// correction and stays unrestricted.
+			demoteFrom:
+				data.via === "nudge" && data.status === "reached_out"
+					? ["reached_out"]
+					: undefined,
 		});
 	});
 

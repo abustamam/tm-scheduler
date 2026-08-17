@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { PlanStatus } from "#/lib/attendance-panel";
 import { MeetingPersonalStrip } from "./meeting-personal-strip";
 
 afterEach(() => {
@@ -16,10 +17,10 @@ const BASE = {
 	member: null as typeof MEMBER | null,
 	promptIdentity: vi.fn(),
 	over: false,
-	myUnavailable: false,
+	myStatus: null as PlanStatus | null,
 	availBusy: false,
 	canToggleAvailability: true,
-	onToggleAvailability: vi.fn(),
+	onSetStatus: vi.fn(),
 };
 
 function renderStrip(overrides: Partial<typeof BASE> = {}) {
@@ -56,11 +57,11 @@ describe("MeetingPersonalStrip (#541 D3)", () => {
 	});
 
 	it("marked unavailable: chip carries the state and the inline undo", async () => {
-		const onToggle = vi.fn();
+		const onSetStatus = vi.fn();
 		renderStrip({
 			member: MEMBER,
-			myUnavailable: true,
-			onToggleAvailability: onToggle,
+			myStatus: "not_coming",
+			onSetStatus,
 		});
 		const chip = screen.getByRole("button", { name: /undo/i });
 		expect(chip.textContent).toMatch(/can't make this one — undo\?/i);
@@ -75,14 +76,14 @@ describe("MeetingPersonalStrip (#541 D3)", () => {
 		// fix above would have silently deleted the state signal.
 		expect(chip.dataset.variant).not.toBe("outline");
 		await userEvent.click(chip);
-		expect(onToggle).toHaveBeenCalledOnce();
+		expect(onSetStatus).toHaveBeenCalledWith(null);
 	});
 
 	it("meeting over: attendance statement replaces the chip", () => {
 		renderStrip({
 			member: MEMBER,
 			over: true,
-			myUnavailable: false,
+			myStatus: null,
 		});
 		expect(screen.getByText(/you attended this meeting/i)).toBeTruthy();
 		expect(screen.queryByRole("button", { name: /can't make/i })).toBeNull();
@@ -92,7 +93,7 @@ describe("MeetingPersonalStrip (#541 D3)", () => {
 		renderStrip({
 			member: MEMBER,
 			over: true,
-			myUnavailable: true,
+			myStatus: "not_coming",
 		});
 		expect(screen.getByText(/you did not attend this meeting/i)).toBeTruthy();
 	});
@@ -114,11 +115,11 @@ describe("MeetingPersonalStrip (#541 D3)", () => {
 	});
 
 	it("busy: spinner shows, name survives, clicks are inert", async () => {
-		const onToggle = vi.fn();
+		const onSetStatus = vi.fn();
 		renderStrip({
 			member: MEMBER,
 			availBusy: true,
-			onToggleAvailability: onToggle,
+			onSetStatus,
 		});
 		const chip = screen.getByRole("button", {
 			name: /i can't make this one/i,
@@ -127,6 +128,45 @@ describe("MeetingPersonalStrip (#541 D3)", () => {
 		expect(chip.querySelector(".animate-spin")).toBeTruthy();
 		expect((chip as HTMLButtonElement).disabled).toBe(true);
 		await userEvent.click(chip);
-		expect(onToggle).not.toHaveBeenCalled();
+		expect(onSetStatus).not.toHaveBeenCalled();
+	});
+
+	it("offers both answers, and never the officer-only rung", () => {
+		const onSetStatus = vi.fn();
+		const { getByRole, queryByRole } = render(
+			<MeetingPersonalStrip
+				source="anon"
+				member={{ id: "m1", name: "Ayesha" } as never}
+				promptIdentity={() => {}}
+				over={false}
+				myStatus={null}
+				availBusy={false}
+				canToggleAvailability={true}
+				onSetStatus={onSetStatus}
+			/>,
+		);
+		fireEvent.click(getByRole("button", { name: "I'll be there" }));
+		expect(onSetStatus).toHaveBeenCalledWith("coming");
+		// `reached_out` is an officer's record of having asked. A member offering it
+		// about themselves is nonsense, and the server rejects it.
+		expect(queryByRole("button", { name: /asked/i })).toBeNull();
+	});
+
+	it("lets you take back an answer you already gave", () => {
+		const onSetStatus = vi.fn();
+		const { getByRole } = render(
+			<MeetingPersonalStrip
+				source="anon"
+				member={{ id: "m1", name: "Ayesha" } as never}
+				promptIdentity={() => {}}
+				over={false}
+				myStatus="coming"
+				availBusy={false}
+				canToggleAvailability={true}
+				onSetStatus={onSetStatus}
+			/>,
+		);
+		fireEvent.click(getByRole("button", { name: /undo/i }));
+		expect(onSetStatus).toHaveBeenCalledWith(null);
 	});
 });
