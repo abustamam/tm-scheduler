@@ -409,6 +409,26 @@ describe("the Ah-Counter is not handed the booked speakers (#509)", () => {
 		expect(words).toContain("Who spoke");
 	});
 
+	/**
+	 * The double-clutch column and the sentence that explains it (#587).
+	 *
+	 * BOTH, in one test, because either alone is the bug. A column headed
+	 * "Double clutch" with nothing defining it is a column a first-time
+	 * Ah-Counter leaves blank — the term is opaque to anyone who has not held the
+	 * role, which is exactly who picks this sheet up. A definition with no column
+	 * has nowhere to write the tally.
+	 */
+	it("gives the Ah-Counter a double-clutch column and says what one is", () => {
+		const words = named("ah-counter");
+		expect(words).toContain("Double clutch");
+		expect(words).toContain('A "double clutch" is a restart');
+		// The spoken cue names it too, so the sheet and the words read off it
+		// agree — the pairing `SHEET_SCRIPTS` exists to keep (#509). It used to
+		// say "repeated words", gesturing at the thing without naming it.
+		expect(words).toContain("double clutches");
+		expect(words).not.toContain("and for repeated words");
+	});
+
 	// The other half of the decision: the Timer's log DOES keep its pre-fill,
 	// because those rows are assignments with booked times, not an audit of who
 	// talked. Without this, "drop the pre-fill" could be over-applied and no test

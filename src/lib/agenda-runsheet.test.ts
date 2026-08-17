@@ -4,6 +4,7 @@ import {
 	AWARDS_TOKEN,
 	applyFlex,
 	beatDuration,
+	beatTiming,
 	buildLegend,
 	buildReportingLegend,
 	buildRunOfShow,
@@ -15,6 +16,7 @@ import {
 	functionarySlots,
 	hasAnyFunctionaryRole,
 	hasAnyReportingFunctionaryRole,
+	OPEN_LABEL,
 	ROLES_TOKEN,
 	RUN_OF_SHOW,
 	reportingFunctionarySlots,
@@ -180,7 +182,8 @@ describe("buildRunOfShow", () => {
 		// and the beat after it is the functionary intro the swap moved to them.
 		expect(withGe[3]).toMatchObject({
 			roleKey: "toastmaster_of_the_day",
-			detail: "Introduces the {role:general_evaluator}",
+			detail:
+				"Introduces the {role:general_evaluator}{names:general_evaluator}",
 			handoff: true,
 		});
 		expect(withGe[4]).toMatchObject({
@@ -200,16 +203,19 @@ describe("buildRunOfShow", () => {
 	it("the speakers hand-off is universal, in a row of its own directly before the prepared speeches", () => {
 		for (const geIntroducesFunctionaries of [false, true]) {
 			const beats = buildRunOfShow({ geIntroducesFunctionaries });
-			const i = beats.findIndex((b) => b.detail === "Introduces the speakers");
-			expect(
-				beats.filter((b) => b.detail === "Introduces the speakers"),
-			).toHaveLength(1);
+			// Template detail — `{names:speaker}` is resolved by `expandRunSheet`,
+			// not by `buildRunOfShow` (#585).
+			const SPEAKERS_HANDOFF = "Introduces the speakers";
+			const i = beats.findIndex((b) => b.detail === SPEAKERS_HANDOFF);
+			expect(beats.filter((b) => b.detail === SPEAKERS_HANDOFF)).toHaveLength(
+				1,
+			);
 			expect(beats[i]).toMatchObject({
 				kind: "role",
 				roleKey: "toastmaster_of_the_day",
 				roleName: "Toastmaster of the Day",
 				role: "plain",
-				detail: "Introduces the speakers",
+				detail: SPEAKERS_HANDOFF,
 				handoff: true,
 				minutes: 0,
 			});
@@ -232,7 +238,9 @@ describe("buildRunOfShow", () => {
 		// introduction), so the shared sequence sits one index later there.
 		const closing = [
 			"Evaluates the evaluators",
-			"Calls for the functionary reports",
+			// Template detail — `buildRunOfShow` returns beats with tokens
+			// unresolved; `expandRunSheet` is what turns `{roles}` into names.
+			"Calls for the {roles} to report",
 			"Overall meeting evaluation · returns control to the Toastmaster",
 		];
 		for (const detail of closing) {
@@ -349,6 +357,53 @@ describe("beat durations quoted by the deck (#356)", () => {
 
 	it("throws rather than guessing when the template has no such beat", () => {
 		expect(() => beatDuration([], "evaluation")).toThrow(/evaluation/);
+	});
+});
+
+/**
+ * `beatTiming` — what a slide says a beat is TIMED against, as opposed to what
+ * the clock BOOKS for it (#583).
+ *
+ * Sits beside the `beatDuration` block above because the two are the same seam
+ * seen from two sides, and the interesting cases are the ones no shipped beat
+ * reaches: every standard template has `EVALUATION_MARKS.green` (2) below the
+ * beat's `minutes` (3), so the fallbacks below are dead to the rest of the
+ * suite and could be deleted or inverted with everything green.
+ */
+describe("beatTiming (#583)", () => {
+	const template = buildRunOfShow({ geIntroducesFunctionaries: false });
+	const retimed = (minutes: number) =>
+		template.map((b) => (b.id === "evaluation" ? { ...b, minutes } : b));
+
+	it("states the window a beat carrying marks is signalled against", () => {
+		// The number the Timer's card shows (green 2:00) through the number the
+		// printed clock reserves (3), which is the invariant #356 defends.
+		for (const geIntroducesFunctionaries of [false, true]) {
+			expect(
+				beatTiming(buildRunOfShow({ geIntroducesFunctionaries }), "evaluation"),
+			).toBe("2–3 minutes");
+		}
+	});
+
+	it("states the plain budget for a beat with no marks", () => {
+		// Nothing signals against these, so a range would invent a window.
+		expect(beatTiming(template, "evaluatorEvaluation")).toBe("2 minutes");
+		expect(beatTiming(template, "generalEvaluation")).toBe("2 minutes");
+	});
+
+	it("moves with the beat, so a retimed beat retimes the slide", () => {
+		expect(beatTiming(retimed(5), "evaluation")).toBe("2–5 minutes");
+	});
+
+	it("falls back to the budget rather than projecting an inverted or empty range", () => {
+		// green === minutes: the range would read "2–2 minutes".
+		expect(beatTiming(retimed(2), "evaluation")).toBe("2 minutes");
+		// green > minutes: the range would read backwards. Also the singular.
+		expect(beatTiming(retimed(1), "evaluation")).toBe("1 minute");
+	});
+
+	it("throws rather than guessing when the template has no such beat", () => {
+		expect(() => beatTiming([], "evaluation")).toThrow(/evaluation/);
 	});
 });
 
@@ -772,8 +827,10 @@ describe("timing marks beyond the speaker (#507)", () => {
 		// A functionary-facing row that actually EXISTS. `roleKey === "timer"`
 		// matched nothing — no beat is owned by the Timer, it only appears in
 		// `requiresAnyOf`/`fallbacks` — so that assertion could never fail.
+		// sixRoleClub runs exactly one reporting functionary (the Timer), so
+		// `{roles}` resolves to the bare name (#584).
 		const reports = rows.find((r) =>
-			r.detail.startsWith("Calls for the functionary reports"),
+			r.detail.startsWith("Calls for the Timer to report"),
 		);
 		expect(reports).toBeDefined();
 		expect(reports?.marks).toBeNull();
@@ -1249,12 +1306,14 @@ describe("the Toastmaster covers the General Evaluator's role (#363)", () => {
 	const noGe = () =>
 		sixRoleClub().filter((s) => s.roleKey !== "general_evaluator");
 
-	/** The five beats the General Evaluator owns, as they read once relocated. */
+	/** The five beats the General Evaluator owns, as they read once relocated.
+	 *  RESOLVED details: this club runs one reporting functionary (the Timer), so
+	 *  the reports row names it (#584). */
 	const GE_STRETCH = [
 		"Introduces the speech evaluators",
 		"Calls for the Timer's report · opens voting for Best Evaluator",
 		"Evaluates the evaluators",
-		"Calls for the functionary reports",
+		"Calls for the Timer to report",
 		"Overall meeting evaluation",
 	];
 
@@ -1280,11 +1339,11 @@ describe("the Toastmaster covers the General Evaluator's role (#363)", () => {
 		// the top of the meeting, so somebody has to cue the report.
 		const rows = expandRunSheet(noGe(), RUN_OF_SHOW);
 		expect(
-			rows.find((r) => r.detail === "Calls for the functionary reports"),
+			rows.find((r) => r.detail === "Calls for the Timer to report"),
 		).toEqual({
 			who: "Toastmaster of the Day · Faisal",
 			roleKey: "toastmaster_of_the_day",
-			detail: "Calls for the functionary reports",
+			detail: "Calls for the Timer to report",
 			minutes: 3,
 			marks: null,
 		});
@@ -1392,7 +1451,7 @@ describe("the evaluator evaluation needs evaluators (#363, reverses #367)", () =
 	it("keeps the GE's other closing beats, which are not evaluator-gated", () => {
 		const rows = expandRunSheet(noEvaluators(), RUN_OF_SHOW);
 		expect(rows.map((r) => r.detail)).toContain(
-			"Calls for the functionary reports",
+			"Calls for the Timer to report",
 		);
 		expect(rows.map((r) => r.detail)).toContain(
 			"Overall meeting evaluation · returns control to the Toastmaster",
@@ -1429,10 +1488,19 @@ describe("hand-off beats — who introduces whom (#363)", () => {
 			buildRunOfShow({ geIntroducesFunctionaries: true }),
 		);
 		expect(handoffs(rows).map((r) => [r.who, r.detail])).toEqual([
-			["Toastmaster of the Day · Faisal", "Introduces the General Evaluator"],
+			[
+				"Toastmaster of the Day · Faisal",
+				"Introduces the General Evaluator: Riyaz",
+			],
 			["Toastmaster of the Day · Faisal", "Introduces the speakers"],
-			["Toastmaster of the Day · Faisal", "Introduces the Table Topics Master"],
-			["Table Topics Master · Rasheed", "Introduces the General Evaluator"],
+			[
+				"Toastmaster of the Day · Faisal",
+				"Introduces the Table Topics Master: Rasheed",
+			],
+			[
+				"Table Topics Master · Rasheed",
+				"Introduces the General Evaluator: Riyaz",
+			],
 			["General Evaluator · Riyaz", "Introduces the speech evaluators"],
 		]);
 	});
@@ -1444,8 +1512,14 @@ describe("hand-off beats — who introduces whom (#363)", () => {
 		);
 		expect(handoffs(rows).map((r) => [r.who, r.detail])).toEqual([
 			["Toastmaster of the Day · Faisal", "Introduces the speakers"],
-			["Toastmaster of the Day · Faisal", "Introduces the Table Topics Master"],
-			["Table Topics Master · Rasheed", "Introduces the General Evaluator"],
+			[
+				"Toastmaster of the Day · Faisal",
+				"Introduces the Table Topics Master: Rasheed",
+			],
+			[
+				"Table Topics Master · Rasheed",
+				"Introduces the General Evaluator: Riyaz",
+			],
 			["General Evaluator · Riyaz", "Introduces the speech evaluators"],
 		]);
 	});
@@ -1457,7 +1531,10 @@ describe("hand-off beats — who introduces whom (#363)", () => {
 		const rows = expandRunSheet(noTopics, RUN_OF_SHOW);
 		expect(handoffs(rows).map((r) => [r.who, r.detail])).toEqual([
 			["Toastmaster of the Day · Faisal", "Introduces the speakers"],
-			["Toastmaster of the Day · Faisal", "Introduces the General Evaluator"],
+			[
+				"Toastmaster of the Day · Faisal",
+				"Introduces the General Evaluator: Riyaz",
+			],
 			["General Evaluator · Riyaz", "Introduces the speech evaluators"],
 		]);
 	});
@@ -1469,7 +1546,10 @@ describe("hand-off beats — who introduces whom (#363)", () => {
 		// General Evaluator is never told to introduce one.
 		expect(handoffs(rows).map((r) => [r.who, r.detail])).toEqual([
 			["Toastmaster of the Day · Faisal", "Introduces the speakers"],
-			["Toastmaster of the Day · Faisal", "Introduces the Table Topics Master"],
+			[
+				"Toastmaster of the Day · Faisal",
+				"Introduces the Table Topics Master: Rasheed",
+			],
 			["Toastmaster of the Day · Faisal", "Introduces the speech evaluators"],
 		]);
 	});
@@ -1535,8 +1615,8 @@ describe("hand-off beats — who introduces whom (#363)", () => {
 			timed.filter((r) => r.handoff === true).map((r) => r.detail),
 		).toEqual([
 			"Introduces the speakers",
-			"Introduces the Table Topics Master",
-			"Introduces the General Evaluator",
+			"Introduces the Table Topics Master: Rasheed",
+			"Introduces the General Evaluator: Riyaz",
 			"Introduces the speech evaluators",
 		]);
 	});
@@ -1696,6 +1776,17 @@ describe("expandRunSheet — the functionary-intro and functionary-reports beats
 	// a club with a Grammarian appends the Word-of-the-Day cue after it.
 	const introRow = (rows: { detail: string }[]) =>
 		rows.find((r) => r.detail.includes("; each explains their role"));
+	// The functionary-reports row, same idea (#584). Since that beat started
+	// naming its roles, the NAMES cannot identify it — `{roles}` resolves to
+	// whatever this club runs, and to the empty string at a club that runs none,
+	// which is precisely the case several tests below assert is ABSENT. Matching
+	// the old literal would have made every one of those negatives pass
+	// vacuously, against a string the code can no longer produce. The trailing
+	// clause is invariant and unique: no other beat's detail ends "to report"
+	// ("Calls for the {role:timer}'s report · opens voting…" is a different beat
+	// and a different ending).
+	const reportsRow = (rows: { detail: string }[]) =>
+		rows.find((r) => r.detail.endsWith("to report"));
 
 	it("omits the functionary intro when there are no functionary slots, even with a Toastmaster slot", () => {
 		expect(introRow(expandRunSheet([totd]))).toBeUndefined();
@@ -1774,9 +1865,7 @@ describe("expandRunSheet — the functionary-intro and functionary-reports beats
 			assigneeName: "Sudheer",
 		});
 		const rows = expandRunSheet([ge, evaluator]);
-		expect(
-			rows.some((r) => r.detail === "Calls for the functionary reports"),
-		).toBe(false);
+		expect(reportsRow(rows)).toBeUndefined();
 		// But the OTHER two GE beats (not functionary-gated) still render.
 		expect(rows.some((r) => r.detail === "Evaluates the evaluators")).toBe(
 			true,
@@ -1798,13 +1887,10 @@ describe("expandRunSheet — the functionary-intro and functionary-reports beats
 
 	it("renders the functionary reports when the GE slot exists and at least one functionary slot exists", () => {
 		const rows = expandRunSheet([ge, grammarian]);
-		expect(
-			rows.some(
-				(r) =>
-					r.who === "General Evaluator · Priya" &&
-					r.detail === "Calls for the functionary reports",
-			),
-		).toBe(true);
+		expect(reportsRow(rows)).toMatchObject({
+			who: "General Evaluator · Priya",
+			detail: "Calls for the Grammarian to report",
+		});
 	});
 
 	it("the functionary intro names a club-invented functionary, and renders for a club that runs ONLY custom ones (#371)", () => {
@@ -1856,9 +1942,7 @@ describe("expandRunSheet — the functionary-intro and functionary-reports beats
 			assigneeName: "Omar",
 		});
 		const rows = expandRunSheet([totd, ge, voteCounter]);
-		expect(
-			rows.some((r) => r.detail === "Calls for the functionary reports"),
-		).toBe(false);
+		expect(reportsRow(rows)).toBeUndefined();
 		// The Vote Counter is still a functionary: the intro beat introduces them.
 		expect(introRow(rows)?.detail).toBe(
 			"Introduces the Vote Counter; each explains their role",
@@ -1881,9 +1965,7 @@ describe("expandRunSheet — the functionary-intro and functionary-reports beats
 		});
 		const rows = expandRunSheet([totd, ge, recategorisedTimer]);
 		expect(introRow(rows)).toBeUndefined();
-		expect(
-			rows.some((r) => r.detail === "Calls for the functionary reports"),
-		).toBe(false);
+		expect(reportsRow(rows)).toBeUndefined();
 	});
 
 	it("the functionary reports render for a club whose only functionary is a custom one (#371)", () => {
@@ -1897,9 +1979,11 @@ describe("expandRunSheet — the functionary-intro and functionary-reports beats
 				assigneeName: "Nadia",
 			}),
 		]);
-		expect(
-			rows.some((r) => r.detail === "Calls for the functionary reports"),
-		).toBe(true);
+		// The club's OWN role name reaches the row, which is the whole point of
+		// resolving `{roles}` against the category rather than our four keys.
+		expect(reportsRow(rows)?.detail).toBe(
+			"Calls for the Joke Master to report",
+		);
 	});
 
 	it("MCF variant: the GE-owned functionary intro is still omitted when there are no functionary slots, despite a GE slot existing", () => {
@@ -1927,13 +2011,15 @@ describe("expandRunSheet — the functionary-intro and functionary-reports beats
 		// Master — that hand-back is real, the room does have to reach the GE for
 		// the evaluation segment.
 		expect(
-			rows.filter((r) => r.detail === "Introduces the General Evaluator"),
+			rows.filter((r) =>
+				r.detail.startsWith("Introduces the General Evaluator"),
+			),
 		).toHaveLength(1);
 
 		// The speakers hand-off is unaffected — this is a narrowing of one beat's
 		// gate, not a change to the hand-off mechanism.
-		const speakersHandoff = rows.findIndex(
-			(r) => r.detail === "Introduces the speakers",
+		const speakersHandoff = rows.findIndex((r) =>
+			r.detail.startsWith("Introduces the speakers"),
 		);
 		expect(speakersHandoff).toBeGreaterThanOrEqual(0);
 		expect(rows[speakersHandoff]).toMatchObject({
@@ -1954,7 +2040,9 @@ describe("expandRunSheet — the functionary-intro and functionary-reports beats
 		// speakers hand-off and the speech all sit between them — so the adjacency
 		// suppression does not apply and both are genuinely needed.
 		expect(
-			rows.filter((r) => r.detail === "Introduces the General Evaluator"),
+			rows.filter((r) =>
+				r.detail.startsWith("Introduces the General Evaluator"),
+			),
 		).toHaveLength(2);
 	});
 
@@ -1975,9 +2063,10 @@ describe("expandRunSheet — the functionary-intro and functionary-reports beats
 		});
 		// …and the same Toastmaster then cues those reports, so the two rows agree
 		// about who is running the room.
-		expect(
-			rows.find((r) => r.detail === "Calls for the functionary reports")?.who,
-		).toBe("Toastmaster of the Day · Dana");
+		expect(reportsRow(rows)).toMatchObject({
+			who: "Toastmaster of the Day · Dana",
+			detail: "Calls for the Timer & Grammarian to report",
+		});
 	});
 
 	it("MCF variant: the functionary intro still goes when there is no General Evaluator AND no Toastmaster to cover", () => {
@@ -2011,7 +2100,7 @@ describe("expandRunSheet — the functionary-intro and functionary-reports beats
 	// The speakers hand-off. Universal since #363, but its interaction with the
 	// GE-owned functionary intro is what these cases are about.
 	const speakersHandoffRow = (rows: { detail: string }[]) =>
-		rows.find((r) => r.detail === "Introduces the speakers");
+		rows.find((r) => r.detail.startsWith("Introduces the speakers"));
 
 	it("MCF variant: the Toastmaster introduces the speakers, in a row between the GE's intro and the first speech", () => {
 		const template = buildRunOfShow({ geIntroducesFunctionaries: true });
@@ -2024,10 +2113,10 @@ describe("expandRunSheet — the functionary-intro and functionary-reports beats
 			rows.findIndex(pred);
 		expect(
 			at((r) => r.detail.endsWith("; each explains their role")),
-		).toBeLessThan(at((r) => r.detail === "Introduces the speakers"));
-		expect(at((r) => r.detail === "Introduces the speakers")).toBeLessThan(
-			at((r) => r.detail === "Prepared speech"),
-		);
+		).toBeLessThan(at((r) => r.detail.startsWith("Introduces the speakers")));
+		expect(
+			at((r) => r.detail.startsWith("Introduces the speakers")),
+		).toBeLessThan(at((r) => r.detail === "Prepared speech"));
 	});
 
 	it("MCF variant: no speakers hand-off when the club runs no speakers — there is nobody to introduce", () => {
@@ -3260,7 +3349,9 @@ describe("meeting-script cues (#508)", () => {
 		// first evaluator stands up. A cue that lands after them is decoration.
 		it("sits after the evaluators hand-off and before the first evaluation", () => {
 			const details = expandRunSheet(sixRoleClub()).map((r) => r.detail);
-			const handoff = details.indexOf("Introduces the speech evaluators");
+			const handoff = details.findIndex((d) =>
+				d.startsWith("Introduces the speech evaluators"),
+			);
 			const cue = details.indexOf(
 				"Asks the Timer to explain the timing for an evaluation",
 			);
@@ -3408,5 +3499,165 @@ describe("BeatFallback.withinGroup — ignored on a beat that declares no group"
 			[beat],
 		);
 		expect(rows[0]?.detail).toBe("Introduces the functionaries");
+	});
+});
+
+/**
+ * `{names:…}` — the people a hand-off row introduces (#585).
+ *
+ * Tested through the Table Topics Master hand-off, a SINGULAR target. The two
+ * group hand-offs (speakers, speech evaluators) deliberately name nobody: their
+ * members' own rows are the very next thing on the page, so the names duplicated
+ * the line beneath at the cost of shrinking the whole sheet. See the speakers
+ * beat in `buildRunOfShow`.
+ *
+ * Each property below is a live bug if reversed, and none was visible to any
+ * other test in this file — all were found by mutating the source and watching
+ * the whole suite stay green.
+ */
+describe("hand-off rows name the people they introduce (#585)", () => {
+	const totd = slot({
+		id: "tm",
+		roleKey: "toastmaster_of_the_day",
+		roleName: "Toastmaster of the Day",
+		category: "leadership",
+		assigneeName: "Faisal",
+	});
+	const ttmRow = (over: Partial<AgendaSlot>) =>
+		slot({
+			roleKey: "table_topics_master",
+			roleName: "Table Topics Master",
+			category: "leadership",
+			...over,
+		});
+	const handoffFor = (rows: AgendaRow[], prefix: string) =>
+		rows.find((r) => r.detail.startsWith(prefix));
+	const introduced = (slots: AgendaSlot[]) =>
+		handoffFor(expandRunSheet(slots), "Introduces the Table Topics Master")
+			?.detail;
+
+	it("names them", () => {
+		expect(
+			introduced([totd, ttmRow({ id: "ttm", assigneeName: "Rasheed" })]),
+		).toBe("Introduces the Table Topics Master: Rasheed");
+	});
+
+	/**
+	 * An UNASSIGNED target contributes nobody, degrading to the pre-#585 copy.
+	 *
+	 * `assigneeDisplay` would have given `OPEN_LABEL` here, which is right in the
+	 * `who` column (an unclaimed role still has to be announced as unclaimed) and
+	 * wrong in a list of people to introduce: every hand-off at a club with open
+	 * slots would have read "Introduces the Table Topics Master: — open —".
+	 */
+	it("names nobody when the target role is unassigned, leaving no dangling separator", () => {
+		const detail = introduced([
+			totd,
+			ttmRow({ id: "ttm", assigneeName: null }),
+		]);
+		expect(detail).toBe("Introduces the Table Topics Master");
+		expect(detail).not.toContain(OPEN_LABEL);
+		expect(detail).not.toContain(":");
+	});
+
+	/**
+	 * An EMPTY-STRING assignee is `!= null` but has no display name, so a caller
+	 * that filtered on the field rather than on the rendered name would show
+	 * "— open —" on one surface and nothing on the other. `introducedNames`
+	 * exists as a shared helper largely to make that one rule.
+	 */
+	it("treats an empty-string assignee as nobody, not as an open slot", () => {
+		expect(introduced([totd, ttmRow({ id: "ttm", assigneeName: "" })])).toBe(
+			"Introduces the Table Topics Master",
+		);
+	});
+
+	/**
+	 * The guest marker survives, deliberately: a hand-off is the moment the room
+	 * is being told who someone IS, and "· Guest" is the part the Toastmaster
+	 * most needs (#151).
+	 */
+	it("keeps the guest marker on an introduced name", () => {
+		expect(
+			introduced([
+				totd,
+				ttmRow({ id: "ttm", assigneeName: "Alice", assigneeIsGuest: true }),
+			]),
+		).toBe("Introduces the Table Topics Master: Alice · Guest");
+	});
+
+	/** Two holders of one nameable role — rare, but the only case where the sort
+	 *  inside `introducedNames` is observable. Supplied out of slot order. */
+	it("lists multiple holders in slot order, not array order", () => {
+		expect(
+			introduced([
+				totd,
+				ttmRow({ id: "b", slotIndex: 1, assigneeName: "Bob" }),
+				ttmRow({ id: "a", slotIndex: 0, assigneeName: "Alice" }),
+			]),
+		).toBe("Introduces the Table Topics Master: Alice & Bob");
+	});
+
+	/**
+	 * The two GROUP hand-offs name nobody, by design. Asserted rather than left
+	 * implicit: this is the decision the measurement in `print-density.test.ts`
+	 * paid for, and re-adding `namesToken` to either beat is a one-token change
+	 * that would otherwise land silently.
+	 */
+	it("leaves the group hand-offs naming nobody — their members' own rows follow", () => {
+		const rows = expandRunSheet(sixRoleClub());
+		expect(handoffFor(rows, "Introduces the speakers")?.detail).toBe(
+			"Introduces the speakers",
+		);
+		expect(handoffFor(rows, "Introduces the speech evaluators")?.detail).toBe(
+			"Introduces the speech evaluators",
+		);
+		// …and the rows they hand to DO name those people, which is the reason.
+		expect(rows.some((r) => r.who === "Speaker · Jagpal")).toBe(true);
+		expect(rows.some((r) => r.who === "Evaluator · Sudheer")).toBe(true);
+	});
+
+	/**
+	 * An unrecognised key stays VERBATIM, mirroring `{role:tymer}` (#445): a typo
+	 * has to show up on the page rather than silently dropping the cue. Reached
+	 * through a hand-written beat, since no shipped beat has one.
+	 */
+	it("leaves an unrecognised {names:…} key verbatim rather than blanking it", () => {
+		const typo: Beat = {
+			kind: "role",
+			roleKey: "toastmaster_of_the_day",
+			roleName: "Toastmaster of the Day",
+			role: "plain",
+			detail: "Introduces the speakers{names:speeker}",
+			minutes: 1,
+		};
+		expect(expandRunSheet([totd], [typo])[0].detail).toBe(
+			"Introduces the speakers{names:speeker}",
+		);
+	});
+
+	/**
+	 * The hostile-input axis `{names:…}` newly opened. `roleName` already had two
+	 * guards because an admin types it; `assigneeName` is the same class or worse
+	 * — a guest row can be minted from the PUBLIC ballot-join with only a trim,
+	 * then assigned to a slot, and it now flows into a printed row through the
+	 * same `String.replace`. The replacer is a FUNCTION, so `$&` is inert and one
+	 * pass never rescans its own output; nothing pinned either for this input.
+	 */
+	it("substitutes an assignee name containing $-sequences or a token literally", () => {
+		for (const hostile of [
+			"Riyaz $& $` $' Ali",
+			"{names:speaker}",
+			"{awards}",
+		]) {
+			const detail = introduced([
+				totd,
+				ttmRow({ id: "ttm", assigneeName: hostile }),
+			]);
+			expect(detail).toBe(`Introduces the Table Topics Master: ${hostile}`);
+			// The tells: no spliced surrounding copy, no second expansion.
+			expect(detail).not.toContain("Best Table Topic,");
+			expect(detail).not.toContain(": Introduces");
+		}
 	});
 });

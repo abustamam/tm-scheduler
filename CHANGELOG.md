@@ -2,6 +2,25 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.16.1.0] - 2026-08-17
+
+Five fixes from the 2026-08-13 meeting (#578).
+
+### Fixed
+
+- **The projector no longer tells an evaluator they have three minutes while the Timer red-cards them at three.** The evaluation slide showed "Time: 3 minutes" — the slot the printed clock reserves for that beat — when what an evaluator is actually timed against is a 2–3 minute window, green at 2:00. The printed agenda and the Timer's own log already said 2–3; the wall was the last surface still saying otherwise. The slide now reads the same window they do, and the top of that range is still the beat's booked duration, so the projector and the printed clock cannot drift apart.
+- **The Word of the Day now appears when the Grammarian actually gives it.** At clubs where the General Evaluator introduces the functionaries, the deck put the word, its definition and its example on screen before the Toastmaster had even handed over — so the room read the definition several beats before meeting the person presenting it. It now follows the functionary introductions, which is where the printed agenda has always said it happens.
+
+### Changed
+
+- **Introduction rows name the person, not just the role.** "Introduces the General Evaluator" is now "Introduces the General Evaluator: Riyaz" — on the printed agenda and on the projected slide. The one thing you have to say out loud at that moment was the one thing the row left out, and on a multi-page agenda it was on a different sheet. Open roles are unchanged: with nobody in the slot the row reads as it always did, rather than announcing "— open —". Guests keep their "· Guest" marker.
+- The two rows that introduce a *group* — the speakers and the speech evaluators — deliberately do not list names. Those people's own rows are the very next thing on the page, naming them in larger type, so listing them again restated the line below while making the longest rows on the sheet longer still. Since the agenda scales to fit its page, that cost every word on it about 2% of its size for no new information.
+- **"Calls for the functionary reports" now says who.** The row reads "Calls for the Timer, Grammarian & Ah-Counter to report", naming the reporting functionaries your club actually runs, under your club's own names for them. A club that renames a role or turns one off sees the change on the row automatically.
+
+### Added
+
+- **The Ah-Counter's log has a column for double clutches**, plus a line saying what one is — a restart, where the speaker begins a word or phrase, stops, and begins it again. The term is invisible to anyone who has not held the role, which is exactly who picks up that sheet. The spoken cue on the same sheet now names it too.
+
 ## [1.16.0.0] - 2026-08-17
 
 ### Added

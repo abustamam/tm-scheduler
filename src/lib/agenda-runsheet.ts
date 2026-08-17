@@ -322,6 +322,44 @@ export function beatDuration(template: Beat[], id: TimedBeatId): string {
 	return formatBeatMinutes(beat.minutes);
 }
 
+/**
+ * What `id`'s beat is TIMED against, ready to project: the window when the beat
+ * has timer-card marks ("2–3 minutes"), its plain budget when it has none.
+ *
+ * This is not a second opinion about the beat's duration, and #356 — which
+ * deleted the deck's hardcoded `EVALUATION_TIMING = "2–3 minutes"` — should not
+ * be read as forbidding one (#583). Read what #356 actually objected to: a deck
+ * constant set BY HAND beside a run sheet set by hand, so the two agreed "only
+ * because someone had just set both". The range itself was never the problem.
+ *
+ * What has changed since is that the run sheet now states the window ITSELF:
+ * #507 gave this beat `marks: EVALUATION_MARKS`, so the printed row already
+ * carries green 2:00 · yellow 2:30 · red 3:00 and the Timer's sheet prints the
+ * same window. The deck was the last surface still saying a bare "3 minutes",
+ * which is how a room ends up with an evaluator told they have three minutes
+ * taking a green card at two.
+ *
+ * The top of the range is the beat's BUDGET, never the mark — the #394 rule that
+ * makes the prepared-speech slides safe ("the top of the range IS the booked
+ * duration"). So the number the projector shows and the number the printed clock
+ * reserves still cannot drift, which is the invariant #356 was defending. A beat
+ * retimed below its own green mark has no window left to state and falls back to
+ * the budget rather than projecting an inverted range.
+ */
+export function beatTiming(template: Beat[], id: TimedBeatId): string {
+	const beat = template.find((b) => b.id === id);
+	if (beat == null) throw new Error(`run-of-show has no "${id}" beat`);
+	// `marks` lives on the `role` arm of the union only — an `event` beat has no
+	// owning role to time — so this narrows rather than assuming.
+	const green = "marks" in beat ? beat.marks?.green : undefined;
+	// No window to state (no marks, or a beat retimed below its own green mark)
+	// ⇒ the plain budget, through `beatDuration` rather than a second copy of
+	// its lookup. Both branches end at `formatBeatMinutes`, so a change to how a
+	// duration is worded ("3 mins") cannot land on one and miss the other.
+	if (green == null || green >= beat.minutes) return beatDuration(template, id);
+	return `${green}–${formatBeatMinutes(beat.minutes)}`;
+}
+
 /** A group of roles the CLUB defines, not a list of keys we shipped (#371).
  *  `"functionaries"` is every `category: "functionary"` role;
  *  `"reportingFunctionaries"` drops the Vote Counter, who gives no report. */
@@ -388,6 +426,53 @@ export const AWARDS_TOKEN = "{awards}";
  */
 export const roleNameToken = (role: BeatRole): string =>
 	`{role:${role.roleKey}}`;
+
+/**
+ * Token for WHO holds a role, appended to a detail that has already named the
+ * role (#585): `{names:general_evaluator}` → `" — Riyaz"`.
+ *
+ * The problem it solves is a person standing at a lectern. A hand-off row read
+ * "Toastmaster of the Day · Faisal · Introduces the General Evaluator" — the
+ * role, never the human — so the one thing the Toastmaster has to SAY out loud
+ * at that moment was the one thing the row omitted, and on a multi-page agenda
+ * it was on another sheet.
+ *
+ * Three deliberate properties, each of which is a bug if reversed:
+ *
+ * 1. **It carries its own separator.** `resolveDetail` is a single-pass regex
+ *    replace with no way to drop neighbouring punctuation, so a bare-name token
+ *    resolving to "" would leave "Introduces the General Evaluator: " dangling
+ *    on every club that has not filled the slot. Emitting the separator WITH the
+ *    name makes the empty case exactly today's copy.
+ * 2. **Unassigned slots contribute nothing.** `assigneeDisplay` would give
+ *    `OPEN_LABEL` ("— open —"), and "Introduces the speakers: — open —, Rehanna"
+ *    is worse than saying nothing. An open slot is already visible as its own
+ *    row and in the roster; this row degrades to the role name it always had.
+ * 3. **It reads slots, not `NAMEABLE_ROLES`.** `{role:…}` answers "what does
+ *    this club CALL that role" and is restricted to roles we can name; this
+ *    answers "who is doing it", which is a question about the meeting. So it
+ *    resolves for `speaker` and `evaluator` too — the two hand-off targets that
+ *    stay English precisely because they name a group rather than a role.
+ */
+export const namesToken = (role: BeatRole): string => `{names:${role.roleKey}}`;
+
+/**
+ * Separator between a hand-off's role and the people holding it.
+ *
+ * A COLON, and neither of the two glyphs already doing work on this row. The
+ * band renders `who · detail`, `who` is itself `roleName · assigneeDisplay`,
+ * and `assigneeDisplay` yields either `Name · Guest` or the `— open —`
+ * placeholder. An em dash here — the first thing tried — produced rows like
+ *
+ *   Toastmaster of the Day · — open — · Introduces the speakers — Ben · Guest
+ *
+ * on an ordinary meeting: four middots carrying three different relationships
+ * and em dashes doing two unrelated jobs, in the smallest italic muted type on
+ * the sheet. It also inverted the hierarchy, giving the strongest glyph to the
+ * innermost relationship. A colon reads as "here is who" and collides with
+ * nothing else on the line.
+ */
+const NAMES_SEPARATOR = ": ";
 
 /**
  * THE definition of "this club's functionaries" (#371) — the one every surface
@@ -610,6 +695,40 @@ const EVALUATOR_ROLE: BeatRole = {
 	roleName: "Evaluator",
 };
 
+/**
+ * The roles `{names:…}` will name holders for (#585) — the four hand-off
+ * targets, and nothing else. FOUR roles, five hand-off BEATS: the General
+ * Evaluator is the target of two of them (MCF's opening introduction and the
+ * one out of Table Topics).
+ *
+ * A separate list from `NAMEABLE_ROLES` because the two answer different
+ * questions. That one is "which roles may we print a NAME FOR", and it excludes
+ * `speaker`/`evaluator` on purpose: those hand-offs address a GROUP ("the
+ * speakers"), so there is no single role label to swap in. Naming the PEOPLE in
+ * that group has no such problem, which is why both appear here.
+ *
+ * Closed rather than open, for the same reason `NAMEABLE_ROLES` is: a token that
+ * silently resolved for any key would let a beat name people it has no gate for,
+ * and a row that promises a person the club is not running is the failure this
+ * whole file's `fallbacks` machinery exists to prevent.
+ */
+export const HANDOFF_ROLES = {
+	generalEvaluator: GENERAL_EVALUATOR_ROLE,
+	tableTopicsMaster: TABLE_TOPICS_ROLE,
+	speaker: SPEAKER_ROLE,
+	evaluator: EVALUATOR_ROLE,
+} as const;
+
+/**
+ * DERIVED from `HANDOFF_ROLES`, never restated. These were two hand-maintained
+ * copies of the same four constants ~690 lines apart, one read by the printed
+ * row (`roleHolderNames` → `{names:…}`) and one by the deck (`buildSlideDeck`).
+ * Adding a fifth hand-off target to only one of them would have named the
+ * people on the projector while the printed agenda showed a literal
+ * `{names:newkey}` — the print/deck divergence this module exists to prevent.
+ */
+const NAMES_ROLES: BeatRole[] = Object.values(HANDOFF_ROLES);
+
 /** The award handed out for each scored segment, in the order the awards beat
  *  reads them out — which is the order `buildSlideDeck` pushes them onto the
  *  `awards` slide, so print and deck can't disagree (#372). A club only hands
@@ -672,7 +791,7 @@ export function buildRunOfShow({
 					// Evaluator" — the id is what tells them apart (#363).
 					id: "geOpeningHandoff",
 					role: "plain",
-					detail: `Introduces the ${roleNameToken(GENERAL_EVALUATOR_ROLE)}`,
+					detail: `Introduces the ${roleNameToken(GENERAL_EVALUATOR_ROLE)}${namesToken(GENERAL_EVALUATOR_ROLE)}`,
 					minutes: 0,
 					handoff: true,
 					requiresAnyOf: [GENERAL_EVALUATOR_ROLE],
@@ -759,6 +878,24 @@ export function buildRunOfShow({
 			kind: "role",
 			...TOASTMASTER_ROLE,
 			role: "plain",
+			// NO `{names:…}` here, nor on the evaluators hand-off below, and the
+			// asymmetry with the three singular targets is the point (#585).
+			//
+			// These two introduce a GROUP, and the group's own rows are the very
+			// next thing on the page: "Introduces the speakers" is followed by
+			// "Speaker 1 · Alice" and "Speaker 2 · Bob", which name the same people
+			// one line down in the largest, boldest type the row rhythm has. So the
+			// names bought a duplicate of the line beneath them — while costing the
+			// most of any hand-off, because a comma-joined list of 2-5 members is
+			// the longest content on the sheet and `FitPage` scales the WHOLE page
+			// to fit it. Editorial measured 6.470pt of printed body text with them
+			// against 6.799pt without, on a 6.2pt floor: a 5% shrink of every word
+			// on the agenda, spent restating the next row.
+			//
+			// The singular targets keep theirs. One short name costs almost no
+			// height, and the person introduced there is not always the next row —
+			// under MCF's variant the General Evaluator is introduced in the opening
+			// and their own segment is most of a meeting away.
 			detail: "Introduces the speakers",
 			minutes: 0,
 			handoff: true,
@@ -797,7 +934,7 @@ export function buildRunOfShow({
 			kind: "role",
 			...TOASTMASTER_ROLE,
 			role: "plain",
-			detail: `Introduces the ${roleNameToken(TABLE_TOPICS_ROLE)}`,
+			detail: `Introduces the ${roleNameToken(TABLE_TOPICS_ROLE)}${namesToken(TABLE_TOPICS_ROLE)}`,
 			minutes: 0,
 			handoff: true,
 			requiresAnyOf: [TABLE_TOPICS_ROLE],
@@ -851,7 +988,7 @@ export function buildRunOfShow({
 			// The other beat reading "Introduces the General Evaluator" (#363).
 			id: "geEvaluationHandoff",
 			role: "plain",
-			detail: `Introduces the ${roleNameToken(GENERAL_EVALUATOR_ROLE)}`,
+			detail: `Introduces the ${roleNameToken(GENERAL_EVALUATOR_ROLE)}${namesToken(GENERAL_EVALUATOR_ROLE)}`,
 			minutes: 0,
 			handoff: true,
 			requiresAnyOf: [GENERAL_EVALUATOR_ROLE],
@@ -861,6 +998,7 @@ export function buildRunOfShow({
 			kind: "role",
 			...GENERAL_EVALUATOR_ROLE,
 			role: "plain",
+			// Group target — see the speakers hand-off above for why it names nobody.
 			detail: "Introduces the speech evaluators",
 			minutes: 0,
 			handoff: true,
@@ -952,7 +1090,24 @@ export function buildRunOfShow({
 			kind: "role",
 			...GENERAL_EVALUATOR_ROLE,
 			role: "plain",
-			detail: "Calls for the functionary reports",
+			// Names the roles rather than saying "the functionary reports" (#584).
+			// "Functionary reports" is jargon, and it does not tell the person
+			// holding the agenda WHO they are calling on — which is the one thing
+			// this row exists to say. `ROLES_TOKEN` resolves against the beat's own
+			// `requiresGroup` below, so it lists exactly the reporting functionaries
+			// THIS club runs, under THIS club's names for them (#445). Writing the
+			// names in as a literal would go stale on both a rename and a disabled
+			// role.
+			//
+			// "…to report" rather than "…reports" because the list is 1..n and the
+			// row has to read as English at both ends. `ROLES_TOKEN` resolves to a
+			// bare join, so the noun form gives "Calls for the Timer reports" at a
+			// club running a single functionary — the common case for a small club,
+			// and the one nobody would have looked at. The verb form is right for
+			// every cardinality without teaching `resolveDetail` about plurals:
+			//   1 → "Calls for the Timer to report"
+			//   3 → "Calls for the Timer, Grammarian & Ah-Counter to report"
+			detail: `Calls for the ${ROLES_TOKEN} to report`,
 			minutes: 3,
 			// Gated on functionaries who REPORT, not on functionaries (#371) — a
 			// club whose only functionary is a Vote Counter has nobody to call on.
@@ -1228,10 +1383,83 @@ function groupRoleNames(beat: Beat, slots: AgendaSlot[]): string[] {
 	return [...new Set(matched.map((s) => s.roleName))];
 }
 
+/**
+ * The people to INTRODUCE at a hand-off: assigned holders of `role`, under the
+ * display name every other surface uses, IN THE ORDER THEY ARE ABOUT TO APPEAR
+ * (#585). Guests keep the "· Guest" marker `assigneeDisplayName` gives them
+ * everywhere else — the marker is the point at a hand-off, since it tells the
+ * Toastmaster who they are welcoming.
+ *
+ * Exported because the deck's hand-off slides carry the same list, and
+ * `agenda-parity.test.ts` compares the two verbatim — so this is one derivation
+ * with two callers rather than two rules that agree today. The distinction that
+ * makes it worth sharing is small and easy to get wrong independently: a slot
+ * with an EMPTY-STRING assignee is `!= null` but has no display name, so a
+ * caller filtering on the field rather than on the rendered name shows
+ * "— open —" here while the other shows nothing.
+ *
+ * ORDER IS NOT THE SLOT ARRAY'S ORDER. This list introduces people whose own
+ * rows come later, so it is sorted by `slotIndex` — the same rule
+ * `expandRunSheet` sorts those rows by — rather than by whatever order the
+ * caller's array happened to arrive in. It matters only for a club running two
+ * holders of one nameable role, which is rare but reachable.
+ *
+ * IF A GROUP TARGET EVER NAMES PEOPLE AGAIN, `slotIndex` IS THE WRONG RULE FOR
+ * ONE OF THEM. `expandRunSheet` orders evaluator rows with `orderEvaluators`,
+ * which ranks each by the SPEAKER they evaluate, not by their own slot — so a
+ * `{names:evaluator}` sorted here by `slotIndex` would introduce them in one
+ * order and the room would hear them in another. That case is unreachable
+ * today because neither group hand-off names anybody (see the speakers beat),
+ * and it is left out rather than written speculatively; the note is here so
+ * re-adding the token is not a silent bug.
+ *
+ * Sharing this helper across both surfaces would make such a bug invisible to
+ * `agenda-parity.test.ts` — print and deck agree with each other while both
+ * disagree with the rows below. That is CLAUDE.md's "a parity test cannot see
+ * a defect present on both sides" trap, so any gate on order has to assert
+ * against the following rows, never across surfaces.
+ */
+export function introducedNames(slots: AgendaSlot[], role: BeatRole): string[] {
+	const matching = slots.filter((s) =>
+		matchesRole(s, role.roleKey, role.roleName),
+	);
+	return [...matching]
+		.sort((a, b) => a.slotIndex - b.slotIndex)
+		.map((s) => assigneeDisplayName(s.assigneeName, s.assigneeIsGuest))
+		.filter((n): n is string => n != null);
+}
+
+/**
+ * `["Rehanna", "Sudheer"]` → `" — Rehanna & Sudheer"`; `[]` → `""`.
+ *
+ * The rendering half of `{names:…}`, exported so the deck's hand-off slide
+ * appends the identical string (#585). Separate from `introducedNames` because
+ * the two surfaces select the same people through different code — the printed
+ * row via the token, the slide via `pushHandoff` — and it is the FORMATTING
+ * that `agenda-parity.test.ts` compares character for character.
+ */
+export function introducedSuffix(names: string[]): string {
+	return names.length === 0 ? "" : NAMES_SEPARATOR + joinRoleNames(names);
+}
+
+/**
+ * Who holds `key` this meeting, as the `{names:…}` token renders it (#585):
+ * `" — Riyaz"`, `" — Jagpal, Rehanna & Faisal"`, or `""`.
+ */
+function roleHolderNames(key: string, slots: AgendaSlot[]): string | null {
+	const role = NAMES_ROLES.find((r) => r.roleKey === key);
+	// Unknown key ⇒ null, so the caller can leave the token verbatim the way
+	// `{role:…}` does. Distinct from "" (known role, nobody assigned), which is
+	// an ordinary outcome this token is built to produce.
+	if (role == null) return null;
+	return introducedSuffix(introducedNames(slots, role));
+}
+
 /** Every token a beat's `detail` can carry, in ONE alternation so they resolve in
  *  ONE pass. Order inside the alternation is irrelevant; what matters is that
  *  there is only one pass. */
-const DETAIL_TOKEN_RE = /\{roles\}|\{awards\}|\{role:([a-z_]+)\}/g;
+const DETAIL_TOKEN_RE =
+	/\{roles\}|\{awards\}|\{role:([a-z_]+)\}|\{names:([a-z_]+)\}/g;
 
 /**
  * Resolve a beat's detail tokens against the roles the club runs (#367, #372,
@@ -1259,12 +1487,21 @@ const DETAIL_TOKEN_RE = /\{roles\}|\{awards\}|\{role:([a-z_]+)\}/g;
  */
 function resolveDetail(beat: Beat, slots: AgendaSlot[]): string {
 	if (!beat.detail.includes("{")) return beat.detail;
-	return beat.detail.replace(DETAIL_TOKEN_RE, (whole, roleKey?: string) => {
-		if (whole === AWARDS_TOKEN) return joinRoleNames(awardLabels(slots));
-		if (whole === ROLES_TOKEN)
-			return joinRoleNames(groupRoleNames(beat, slots));
-		return roleKey != null ? (clubRoleName(roleKey, slots) ?? whole) : whole;
-	});
+	return beat.detail.replace(
+		DETAIL_TOKEN_RE,
+		(whole, roleKey?: string, namesKey?: string) => {
+			if (whole === AWARDS_TOKEN) return joinRoleNames(awardLabels(slots));
+			if (whole === ROLES_TOKEN)
+				return joinRoleNames(groupRoleNames(beat, slots));
+			// `{names:…}` resolves to "" for a role nobody holds BY DESIGN (#585),
+			// so the empty case cannot be treated as a miss the way `{role:…}`
+			// treats one. `roleHolderNames` separates the two: `null` is an
+			// unrecognised key and stays verbatim so a typo is visible on the page;
+			// "" is a real role with nobody assigned and correctly prints nothing.
+			if (namesKey != null) return roleHolderNames(namesKey, slots) ?? whole;
+			return roleKey != null ? (clubRoleName(roleKey, slots) ?? whole) : whole;
+		},
+	);
 }
 
 /**

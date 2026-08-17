@@ -68,8 +68,11 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
 
 ## Agenda
 
-- Confirm the hand-off rows on a real MCF agenda after it deploys — that the four print layouts read right in the room and the projected deck's hand-off slides land where the cue is needed.
+- Confirm the hand-off rows on a real MCF agenda after it deploys — that the four print layouts read right in the room and the projected deck's hand-off slides land where the cue is needed. v1.16.1.0 (#585) made those rows name the people too, so this now also covers whether the longer rows read well at the printed size.
   **Priority:** P3
+
+- Neither `meeting-present.tsx` nor `deck-to-pptx.ts` renders a hand-off slide in any test, so the projected cue line — now the longest single line on those slides after #585 — is unasserted in both renderers. `slide-layout.test.ts` pins the descriptor the two of them consume, which is why this is P4 rather than a gap in the fix itself.
+  **Priority:** P4
 
 - `scripts/measure-word-poster.ts` has no tests because `main()` runs at import, so nothing is reachable. It is the harness that derives the Word of the Day poster's font-size tables, and a wrong result there ships mid-word breaks on a wall poster. `scripts/import-agendas-logic.ts` is the repo's precedent for extracting a testable `*-logic.ts` alongside an entry-point script.
   **Priority:** P4

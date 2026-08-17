@@ -241,26 +241,33 @@ function table(cols: Col[], rows: string[][]): ReactNode {
 	return h(View, {}, head, ...body);
 }
 
-/** `n` blank rows of `cols` empty cells. */
-function blank(n: number, cols: number): string[][] {
-	return Array.from({ length: n }, () =>
-		Array.from({ length: cols }, () => ""),
-	);
+/**
+ * `n` blank rows.
+ *
+ * Takes no width. `table()` renders one cell per COLUMN and pads a short row
+ * via `row[i] ?? ""`, so a row array's own length was never observed —
+ * `blank(12, 8)` and `blank(12, 9)` produced byte-identical PDFs. The width
+ * argument was a hand-maintained duplicate of `cols.length` that nothing could
+ * enforce: a mismatched call gave no signal at all, while adding a column and
+ * forgetting to bump it sent the next reader hunting a bug that does not
+ * exist (#587).
+ */
+function blank(n: number): string[][] {
+	return Array.from({ length: n }, () => []);
 }
 
 /**
- * Pre-fill the first column of a `cols`-wide table with `firstCol` values, then
- * pad with blank rows so at least `min` rows are always present (leaving room to
- * hand-write additional entries). If there are more values than `min`, every
- * value still gets a row.
+ * Pre-fill the first column with `firstCol` values, then pad with blank rows so
+ * at least `min` rows are always present (leaving room to hand-write additional
+ * entries). If there are more values than `min`, every value still gets a row.
+ *
+ * Width-free for the same reason as `blank` above: `table()` owns the column
+ * count and pads every short row itself.
  */
-function filledRows(firstCol: string[], min: number, cols: number): string[][] {
-	const rows = firstCol.map((v) => [
-		v,
-		...Array.from({ length: cols - 1 }, () => ""),
-	]);
+function filledRows(firstCol: string[], min: number): string[][] {
+	const rows = firstCol.map((v) => [v]);
 	const pad = Math.max(0, min - rows.length);
-	return [...rows, ...blank(pad, cols)];
+	return [...rows, ...blank(pad)];
 }
 
 /** `n` ruled blank lines for free-text notes. */
@@ -500,7 +507,7 @@ function timer(fill?: RoleSheetFill): ReactNode {
 					// Rows are the right thing to spend: they are the cheapest part of
 					// this sheet, and the Timer writes the rest of the meeting's items
 					// in as they happen anyway.
-					filledRows(fill?.speakers ?? [], 10, 4),
+					filledRows(fill?.speakers ?? [], 10),
 				),
 			),
 		],
@@ -528,6 +535,15 @@ function ahCounter(fill?: RoleSheetFill): ReactNode {
 				{ key: "a-note", style: s.note },
 				"Everyone who speaks, not just the prepared speakers — Table Topics, evaluations, and your fellow functionaries all count.",
 			),
+			// The term is opaque to anyone who has not held the role, and the sheet
+			// is where a first-time Ah-Counter finds out what their job is (#587).
+			// A column headed "Double clutch" with nothing explaining it is a column
+			// that gets left blank.
+			h(
+				Text,
+				{ key: "a-note-2", style: s.note },
+				'A "double clutch" is a restart — the speaker begins a word or phrase, stops, and begins it again: "I— I think we should", "we should— we should go".',
+			),
 			h(
 				View,
 				{ key: "a" },
@@ -539,10 +555,31 @@ function ahCounter(fill?: RoleSheetFill): ReactNode {
 						{ label: "Like", flex: 1 },
 						{ label: "And / But", flex: 1 },
 						{ label: "You know", flex: 1 },
+						// New in #587. Placed after the crutch phrases and before
+						// "Other", because it is the same KIND of observation — something
+						// heard and tallied — and putting it past "Other" would read as an
+						// afterthought to a column that already means "anything else".
+						//
+						// flex 1, NOT 1.3. The wider column was spent on the HEADER and
+						// bought nothing: "Double clutch" measures ~59.5pt at 9pt
+						// Helvetica-Bold against the ~58pt a 1.3 column leaves, so it
+						// wraps to two lines either way — while the extra 0.3 came out of
+						// every sibling tally column (~58pt → ~51pt gross, ~50pt → ~42pt
+						// writable). The rarest observation on the sheet would have taken
+						// width from Um/Ah, the one a tally actually overflows.
+						{ label: "Double clutch", flex: 1 },
 						{ label: "Other", flex: 1 },
 						{ label: "Total", flex: 1 },
 					],
-					blank(12, 8),
+					// Still TWELVE rows. #587 added a ninth column and a second note and
+					// paid for neither: measured against the "every role sheet fits on
+					// one page" assertion (role-sheet-layout.test.ts), this sheet spills
+					// at 24 blank rows and holds at 20, so there was ~9 rows of headroom
+					// and nothing to trade. Recorded because the Timer's log next door
+					// DID have to give up two rows in #509, which makes "adding to a
+					// sheet costs rows" look like a rule here — it is a measurement, and
+					// this sheet's answer is different. Re-measure, do not assume.
+					blank(12),
 				),
 			),
 		],
@@ -601,7 +638,7 @@ function award(title: string): ReactNode[] {
 					{ label: "Tally", flex: 2 },
 					{ label: "Total", flex: 1 },
 				],
-				blank(5, 3),
+				blank(5),
 			),
 		),
 		h(View, { key: `${title}-w`, style: s.winnerRow }, metaField("Winner:")),
@@ -700,7 +737,10 @@ export const SHEET_SCRIPTS: Record<RoleSheetKey, ScriptCue[]> = {
 	"ah-counter": [
 		{
 			when: "When you are introduced with the other functionaries",
-			say: "I'm your Ah-Counter. I listen for filler words — um, ah, so, like, you know — and for repeated words, from everyone who speaks today, not just our prepared speakers.",
+			// "and for repeated words" named the double clutch without naming it
+			// (#587), so the sheet's newest column had no cue behind it. Says the
+			// term now, since the Ah-Counter is about to report one.
+			say: "I'm your Ah-Counter. I listen for filler words — um, ah, so, like, you know — and for double clutches, where a word or phrase gets restarted, from everyone who speaks today, not just our prepared speakers.",
 		},
 		{
 			when: "When you are called for your report",

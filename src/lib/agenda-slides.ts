@@ -5,13 +5,15 @@ import type {
 } from "./agenda-runsheet";
 import {
 	assigneeDisplay,
-	beatDuration,
+	beatTiming,
 	buildLegend,
 	buildReportingLegend,
 	buildRunOfShow,
 	clubRoleName,
+	HANDOFF_ROLES,
 	hasAnyFunctionaryRole,
 	hasAnyReportingFunctionaryRole,
+	introducedNames,
 	matchesRole,
 	numbered,
 	orderEvaluators,
@@ -124,15 +126,31 @@ export type Slide =
 			 *  role, and only the two singular-role targets can differ — "the
 			 *  speakers" and "the speech evaluators" name a group, not a role. */
 			toLabel: string;
+			/** WHO is being introduced — assigned holders only, in slot order
+			 *  (#585). Empty when nobody holds the target role, which is the case a
+			 *  club with an open slot lands in; the slide then reads exactly as it
+			 *  did before, naming the role alone.
+			 *
+			 *  Deliberately excludes the "— open —" placeholder, unlike `from.name`
+			 *  two fields up. The two are different statements: `from` names the
+			 *  person the room is looking at, where an unclaimed role still has to be
+			 *  announced as unclaimed, while this is a list of people to introduce
+			 *  and an open slot contributes nobody to it. The printed hand-off band's
+			 *  `{names:…}` token drops it for the same reason, and
+			 *  `agenda-parity.test.ts` holds the two surfaces to the same answer. */
+			toNames: string[];
 	  }
 	| { kind: "toastmasterIntro"; theme: string | null; word: string | null }
 	| {
 			/** The Word of the Day in full — word, definition, example — projected
-			 *  inside the Toastmaster's opening, right after the theme+word intro
-			 *  (#354). It used to sit after the functionary intro, so the room saw
-			 *  the word, sat through another beat, and only then learned what it
-			 *  meant. Content-gated (needs a definition or an example), not
-			 *  role-gated, which is why it has no run-sheet beat of its own. */
+			 *  inside the opening, at the beat the Grammarian actually delivers it.
+			 *  #354 moved it out of the General Evaluator's closing section, where
+			 *  the room saw the word, sat through several beats, and only then
+			 *  learned what it meant; #581 moved it the last beat under MCF's
+			 *  variant, from ahead of the hand-off to the GE to just after the
+			 *  functionary intro. See the two pushes in `buildSlideDeck`.
+			 *  Content-gated (needs a definition or an example), not role-gated,
+			 *  which is why it has no run-sheet beat of its own. */
 			kind: "wordOfDay";
 			word: string;
 			definition: string | null;
@@ -342,9 +360,14 @@ function pushHandoff(
 	to: HandoffTarget,
 	present: boolean,
 	toLabel: string = to,
+	// NO DEFAULT, deliberately (#585). `Slide.handoff.toNames` is required for a
+	// reason — a sixth hand-off added without names should be a type error, not a
+	// slide that silently omits the people, which is the bug this closed. A `= []`
+	// here would have disarmed that from the one place it is constructed.
+	toNames: string[],
 ): void {
 	if (from != null && present)
-		deck.push({ kind: "handoff", from, to, toLabel });
+		deck.push({ kind: "handoff", from, to, toLabel, toNames });
 }
 
 const SPEECH_ORDINALS = [
@@ -441,29 +464,44 @@ export function buildSlideDeck({
 	// they cannot disagree about whether the club runs a Timer.
 	const hasTimer = byRole(slots, ROLE.timer).length > 0;
 
-	// Still part of the Toastmaster's opening (#354): the word was just announced
-	// on the intro slide, so its definition and example belong here — before the
-	// functionaries are introduced, not several beats downstream of them. The
-	// Grammarian presents it, and the slide says so, since sitting inside the
-	// Toastmaster's opening would otherwise imply the Toastmaster does.
+	/**
+	 * The Word of the Day in full — word, definition, example. Built here and
+	 * pushed below at whichever point in the opening the club actually delivers
+	 * it; `null` when there is nothing to show. Content-gated (needs a definition
+	 * or an example), not role-gated, which is why it has no run-sheet beat of its
+	 * own.
+	 *
+	 * The Grammarian presents it and the slide says so, since sitting inside the
+	 * Toastmaster's opening would otherwise imply the Toastmaster does (#354).
+	 */
 	const wodDefinition = meeting.wodDefinition?.trim() || null;
 	const wodExample = meeting.wodExample?.trim() || null;
-	if (wodWord && (wodDefinition || wodExample)) {
-		const grammarian = byRole(slots, ROLE.grammarian);
-		deck.push({
-			kind: "wordOfDay",
-			word: wodWord,
-			definition: wodDefinition,
-			example: wodExample,
-			presenter:
-				grammarian.length > 0
-					? {
-							role: grammarian[0].roleName,
-							name: assigneeDisplay(grammarian[0]),
-						}
-					: null,
-		});
-	}
+	const grammarian = byRole(slots, ROLE.grammarian);
+	const wodSlide: Slide | null =
+		wodWord && (wodDefinition || wodExample)
+			? {
+					kind: "wordOfDay",
+					word: wodWord,
+					definition: wodDefinition,
+					example: wodExample,
+					presenter:
+						grammarian.length > 0
+							? {
+									role: grammarian[0].roleName,
+									name: assigneeDisplay(grammarian[0]),
+								}
+							: null,
+				}
+			: null;
+
+	// Standard flow: still part of the Toastmaster's opening (#354). The word was
+	// just announced on the intro slide, so its definition and example belong
+	// here — before the functionaries are introduced, not several beats
+	// downstream of them, which is where #354 found it and rightly moved it from.
+	//
+	// Under MCF's variant it moves again, to just after the functionary intro —
+	// see the second push below (#581).
+	if (!geIntroducesFunctionaries && wodSlide) deck.push(wodSlide);
 
 	const generalEvaluator = byRole(slots, ROLE.generalEvaluator);
 	/**
@@ -516,6 +554,7 @@ export function buildSlideDeck({
 			"the General Evaluator",
 			generalEvaluator.length > 0 && anyFunctionary,
 			`the ${geLabel}`,
+			introducedNames(slots, HANDOFF_ROLES.generalEvaluator),
 		);
 	}
 	if (introOwner != null && anyFunctionary) {
@@ -531,6 +570,30 @@ export function buildSlideDeck({
 		});
 	}
 
+	/**
+	 * MCF's variant: the Word of the Day lands HERE, after the functionaries have
+	 * been introduced (#581).
+	 *
+	 * This is where the run sheet has always said it happens — the
+	 * functionary-intro beat reads "…each explains their role · the Grammarian
+	 * gives the Word of the Day" (#508). Projecting the definition earlier put it
+	 * in front of a room that had not yet met the Grammarian, and #354's own
+	 * reasoning asked for this position in the first place: *"the Grammarian gives
+	 * the Word of the Day at the top of the meeting, when the Toastmaster
+	 * introduces the functionaries and each explains their role."*
+	 *
+	 * Only under the variant, and the asymmetry is real rather than a hedge. In
+	 * the standard flow the earlier slide sits between two Toastmaster beats — one
+	 * continuous opening, so it reads as part of it. Under MCF it sits between the
+	 * Toastmaster's intro and the hand-off to the General Evaluator, interrupting
+	 * a role change to show a word the next role along is about to present.
+	 *
+	 * Pushed after the intro slide but ahead of everything downstream, so a club
+	 * running no functionaries at all (no intro slide) still gets the word inside
+	 * the opening rather than losing it.
+	 */
+	if (geIntroducesFunctionaries && wodSlide) deck.push(wodSlide);
+
 	// Bound by role key, like the run sheet's speaker beat — NOT by the
 	// `isSpeakerRole` flag, which a club-invented role can also carry. Such a
 	// role binds to no beat (correct, per the spec), so it must project no
@@ -538,7 +601,17 @@ export function buildSlideDeck({
 	const speakers = byRole(slots, ROLE.speaker).sort(
 		(a, b) => a.slotIndex - b.slotIndex,
 	);
-	pushHandoff(deck, tmOwner, "the speakers", speakers.length > 0);
+	pushHandoff(
+		deck,
+		tmOwner,
+		"the speakers",
+		speakers.length > 0,
+		"the speakers",
+		// Empty, matching the printed row (#585): the speech slides that follow
+		// name every one of these people, so listing them here duplicated the next
+		// slide. See the run sheet's speakers hand-off for the measurement.
+		[],
+	);
 	if (speakers.length > 0) {
 		const multi = speakers.length > 1;
 		speakers.forEach((s, i) => {
@@ -567,6 +640,7 @@ export function buildSlideDeck({
 		"the Table Topics Master",
 		ttOwner != null,
 		`the ${ttmLabel}`,
+		introducedNames(slots, HANDOFF_ROLES.tableTopicsMaster),
 	);
 	if (ttOwner) {
 		deck.push({
@@ -598,12 +672,21 @@ export function buildSlideDeck({
 		"the General Evaluator",
 		generalEvaluator.length > 0,
 		`the ${geLabel}`,
+		introducedNames(slots, HANDOFF_ROLES.generalEvaluator),
 	);
 
 	const evaluators = orderEvaluators(byRole(slots, ROLE.evaluator), slots);
 	// Likewise the evaluators' hand-off falls back to the Toastmaster at a club
 	// with no General Evaluator — somebody still has to introduce them.
-	pushHandoff(deck, geOwner, "the speech evaluators", evaluators.length > 0);
+	pushHandoff(
+		deck,
+		geOwner,
+		"the speech evaluators",
+		evaluators.length > 0,
+		"the speech evaluators",
+		// Empty for the same reason as the speakers hand-off above.
+		[],
+	);
 	if (evaluators.length > 0) {
 		const multi = evaluators.length > 1;
 		evaluators.forEach((s, i) => {
@@ -612,7 +695,7 @@ export function buildSlideDeck({
 				label: numbered("Evaluation", i, multi),
 				evaluator: assigneeDisplay(s),
 				speaker: s.evaluates?.speakerName ?? null,
-				time: beatDuration(runOfShow, "evaluation"),
+				time: beatTiming(runOfShow, "evaluation"),
 			});
 		});
 		deck.push({
@@ -641,7 +724,7 @@ export function buildSlideDeck({
 			kind: "evaluatorEvaluation",
 			owner: geOwner.role,
 			name: geOwner.name,
-			time: beatDuration(runOfShow, "evaluatorEvaluation"),
+			time: beatTiming(runOfShow, "evaluatorEvaluation"),
 		});
 	}
 
@@ -662,7 +745,7 @@ export function buildSlideDeck({
 		deck.push({
 			kind: "generalEvaluation",
 			owner: geOwner.role,
-			time: beatDuration(runOfShow, "generalEvaluation"),
+			time: beatTiming(runOfShow, "generalEvaluation"),
 		});
 	}
 
