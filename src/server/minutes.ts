@@ -242,10 +242,18 @@ const setAwardSchema = z
 		memberId: uuid.optional(),
 		guestId: uuid.optional(),
 		newGuest: newGuestSchema.optional(),
+		/** A write-in winner (#582) — no row, just the name a voter typed. Bounded
+		 *  by `writeInNameSchema` inside `setAward`, which is the one definition of
+		 *  that cap. */
+		writeInName: z.string().optional(),
 		selfMemberId: uuid.nullable().optional(),
 	})
 	.refine(
-		(d) => Boolean(d.memberId) || Boolean(d.guestId) || Boolean(d.newGuest),
+		(d) =>
+			Boolean(d.memberId) ||
+			Boolean(d.guestId) ||
+			Boolean(d.newGuest) ||
+			Boolean(d.writeInName),
 		{ message: "Provide a member or guest for the award." },
 	)
 	.refine((d) => !(d.memberId && (d.guestId || d.newGuest)), {

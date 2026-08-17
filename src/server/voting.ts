@@ -31,6 +31,19 @@ const category = z.enum([
 const voterRef = z.object({ kind: z.enum(["member", "guest"]), id: uuid });
 
 /**
+ * A candidate is either a roster row or a typed name (#582).
+ *
+ * The name arm carries NO length bound here on purpose — `castVote` owns that,
+ * through `writeInNameSchema`, so the cap has exactly one definition and a unit
+ * test can reach it without going through a `createServerFn` it cannot invoke.
+ * Duplicating a `.max()` here would be a second number to keep in agreement.
+ */
+const candidateRef = z.union([
+	voterRef,
+	z.object({ kind: z.literal("writeIn"), name: z.string() }),
+]);
+
+/**
  * Declared BEFORE the exports below (rather than at file end, as hoisting
  * would otherwise allow) so `voting-authz.guard.test.ts`'s source-grep for
  * `getVoteTally` — the last GATED export in the file — is bounded by EOF and
@@ -80,7 +93,7 @@ export const submitVote = createServerFn({ method: "POST" })
 				meetingId: uuid,
 				category,
 				voter: voterRef,
-				candidate: voterRef,
+				candidate: candidateRef,
 			})
 			.parse(input),
 	)

@@ -26,6 +26,7 @@ import {
 	meetingDateReached,
 } from "#/lib/meeting-lifecycle";
 import { toStoredPhone } from "#/lib/phone";
+import { writeInNameSchema } from "#/lib/write-in-limits";
 import type { MinutesActionItems } from "./action-items-logic";
 import { loadActionItemsForMinutes } from "./action-items-logic";
 import {
@@ -383,7 +384,16 @@ export async function loadMinutes(meetingId: string): Promise<MinutesData> {
 			category: meetingAwards.category,
 			memberId: meetingAwards.memberId,
 			guestId: meetingAwards.guestId,
-			name: sql<string | null>`coalesce(${awMember.name}, ${awGuest.name})`,
+			writeInName: meetingAwards.writeInName,
+			// The write-in name is part of the COALESCE, not a field the callers
+			// have to know about (#582). A write-in winner has neither join row, so
+			// without it `name` comes back null and the award renders blank on the
+			// minutes, the emailed minutes, the minutes PDF and the printed awards
+			// beat — all four read this one derivation, which is why fixing it here
+			// covers them and why leaving it would have been silent on all four.
+			name: sql<
+				string | null
+			>`coalesce(${awMember.name}, ${awGuest.name}, ${meetingAwards.writeInName})`,
 		})
 		.from(meetingAwards)
 		.leftJoin(awMember, eq(awMember.id, meetingAwards.memberId))
@@ -778,16 +788,25 @@ export async function setAward(input: {
 	memberId?: string | null;
 	guestId?: string | null;
 	newGuest?: NewGuestInput;
+	/** A write-in winner (#582) — someone with no member or guest row, whose
+	 *  name a voter typed on the public ballot. */
+	writeInName?: string | null;
 }): Promise<void> {
 	const clubId = await getMeetingClubId(input.meetingId);
 	await db.transaction(async (tx) => {
 		let memberId: string | null = null;
 		let guestId: string | null = null;
+		let writeInName: string | null = null;
 		if (input.memberId) {
 			await requireMemberInMeetingClub(input.memberId, clubId);
 			memberId = input.memberId;
 		} else if (input.guestId || input.newGuest) {
 			guestId = await resolveGuestId(tx, clubId, input, input.newGuestId);
+		} else if (input.writeInName) {
+			// Re-validated here rather than trusted from the caller: this is the
+			// same string class the public ballot accepts, and it lands in the
+			// table the minutes PDF renders.
+			writeInName = writeInNameSchema.parse(input.writeInName);
 		} else {
 			throw new Error("Provide a member or guest for the award.");
 		}
@@ -798,10 +817,13 @@ export async function setAward(input: {
 				category: input.category,
 				memberId,
 				guestId,
+				writeInName,
 			})
 			.onConflictDoUpdate({
 				target: [meetingAwards.meetingId, meetingAwards.category],
-				set: { memberId, guestId, updatedAt: new Date() },
+				// All three set every time, so switching a winner from a write-in to
+				// a roster name cannot leave both columns populated.
+				set: { memberId, guestId, writeInName, updatedAt: new Date() },
 			});
 	});
 }
