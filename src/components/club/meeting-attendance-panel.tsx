@@ -182,8 +182,10 @@ function RollAttendanceRow({
 	locked: boolean;
 	meetingDate: string;
 	shareUrl: string;
-	/** Once the meeting is `completed` nobody is being chased — contact drops
-	 *  off the row entirely. */
+	/** Once the meeting is `completed` nobody is being chased — the row skips
+	 *  `NudgeButtons` entirely rather than rendering it with phone/email
+	 *  nulled out, which would land on NudgeButtons' own "no contact on
+	 *  file" copy and misstate a member who does have one on file. */
 	hideContact: boolean;
 	pending: boolean;
 	onSetAttendance: (memberId: string, status: AttendanceStatus) => void;
@@ -197,18 +199,17 @@ function RollAttendanceRow({
 						<Badge variant="secondary">{row.roleName}</Badge>
 					) : null}
 				</div>
-				<NudgeButtons
-					mode="attendance"
-					name={row.name}
-					preferredName={row.preferredName}
-					// Reuses NudgeButtons' EXISTING "no contact on file" branch (it
-					// already renders that whenever both are absent) rather than a
-					// second hide-contact mechanism living in this panel.
-					phone={hideContact ? null : row.phone}
-					email={hideContact ? null : row.email}
-					meetingDate={meetingDate}
-					shareUrl={hideContact ? "" : shareUrl}
-				/>
+				{hideContact ? null : (
+					<NudgeButtons
+						mode="attendance"
+						name={row.name}
+						preferredName={row.preferredName}
+						phone={row.phone}
+						email={row.email}
+						meetingDate={meetingDate}
+						shareUrl={shareUrl}
+					/>
+				)}
 			</div>
 			<RollChip
 				row={row}
@@ -380,8 +381,10 @@ export function MeetingAttendancePanel({
 		}
 	}
 
-	// Once the meeting is `completed`, nobody is being chased over a historical
-	// record — contact links drop off every row.
+	// Once the meeting is `completed`, nobody is being chased over a
+	// historical record — every row skips `NudgeButtons` entirely (see
+	// `RollAttendanceRow`) rather than rendering it with contact nulled out,
+	// which would read as "no contact on file" for a member who has one.
 	const hideContact = roll && phaseCompleted;
 
 	return (

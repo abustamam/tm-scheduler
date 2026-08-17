@@ -154,6 +154,11 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 			window.innerWidth = originalWidth;
 		}
 	});
+
+	it("renders the mobile Show/Hide toggle, unlike roll mode", () => {
+		const { getByRole } = renderPanel();
+		expect(getByRole("button", { name: /show|hide/i })).toBeTruthy();
+	});
 });
 
 describe("roll mode", () => {
@@ -259,11 +264,45 @@ describe("roll mode", () => {
 		expect(() => done.getByRole("link", { name: /WhatsApp/i })).toThrow();
 	});
 
+	it("keeps contact on a locked meeting that is not yet completed", () => {
+		// Isolates `locked` from `phaseCompleted`. The pair above flips both
+		// together (today: both false; done: both true), so a future edit that
+		// keys `hideContact` on `locked` instead of `phaseCompleted` would pass
+		// both of those cases — a completed meeting is usually also locked.
+		// `locked && !phaseCompleted` is the meeting-day case: the officer is
+		// still chasing people, so contact must stay.
+		const { getByRole } = render(
+			<MeetingAttendancePanel
+				{...rollProps}
+				locked={true}
+				phaseCompleted={false}
+			/>,
+		);
+		getByRole("link", { name: /WhatsApp/i });
+	});
+
 	it("expands by default below lg, unlike plan mode", () => {
 		// Plan mode collapses to its counts line so a big roster does not push the
 		// agenda off screen. Roll mode IS the task on meeting day, so it opens.
+		const originalWidth = window.innerWidth;
 		window.innerWidth = 375;
-		const { getAllByRole } = render(<MeetingAttendancePanel {...rollProps} />);
-		expect(getAllByRole("button", { name: / status/i })).toHaveLength(2);
+		try {
+			const { getAllByRole } = render(
+				<MeetingAttendancePanel {...rollProps} />,
+			);
+			expect(getAllByRole("button", { name: / status/i })).toHaveLength(2);
+		} finally {
+			window.innerWidth = originalWidth;
+		}
+	});
+
+	it("omits the mobile Show/Hide toggle entirely, unlike plan mode", () => {
+		// A deliberate deviation from plan mode (which shows/hides the toggle
+		// with CSS at `lg` rather than removing it): roll mode has nothing for
+		// the toggle to do, since it is always expanded (see the test above).
+		// Nothing else here asserts this, so a later reader could "restore" the
+		// toggle as dead code without any test noticing.
+		const { queryByRole } = render(<MeetingAttendancePanel {...rollProps} />);
+		expect(queryByRole("button", { name: /show|hide/i })).toBeNull();
 	});
 });
