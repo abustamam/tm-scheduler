@@ -53,6 +53,31 @@ describe("useOfflineMinutes", () => {
 		expect(enqueueSpy).not.toHaveBeenCalled();
 	});
 
+	it("queues the op and does NOT call the server when offline", async () => {
+		// Dedicated regression coverage for a pre-existing race (found via THIS
+		// test, previous commit): `mutate()`'s optimistic `setQueue` ran
+		// synchronously right after mount, before the mount-time persisted-queue
+		// load (also kicked off on mount, async) had resolved. The load used to
+		// unconditionally `setQueue(savedQueue)` on resolution, silently
+		// reverting this optimistic update the instant it landed — a real bug in
+		// the ORIGINAL `meeting-minutes.tsx`, just never exercised there (no test
+		// in `meeting-minutes.test.tsx` calls `mutate()`). Fails against the
+		// previous commit's plain overwrite; passes here against the merge fix.
+		const onlineFn = vi.fn(async () => {});
+		ONLINE = false;
+		const { result } = renderHook(() =>
+			useOfflineMinutes({ meetingId: "meet-1", onMutated: async () => {} }),
+		);
+
+		await act(async () => {
+			await result.current.mutate(onlineFn, OP);
+		});
+
+		expect(onlineFn).not.toHaveBeenCalled();
+		expect(enqueueSpy).toHaveBeenCalledWith("meet-1", OP());
+		expect(result.current.queue).toHaveLength(1);
+	});
+
 	it("refuses to start a write while a drain is in flight", async () => {
 		// The ordering guard. Without it a reconnect drain interleaves with a fresh
 		// edit and the two land out of order — the queue replays a stale status over

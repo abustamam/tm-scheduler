@@ -88,7 +88,18 @@ export function useOfflineMinutes(input: {
 				readSnapshot(meetingId),
 			]);
 			if (!alive) return;
-			setQueue(savedQueue);
+			// A `mutate()` call can land WHILE this persisted load is still in
+			// flight (the read started before that op was enqueued) — merge rather
+			// than overwrite, or this slower-resolving mount-time load would
+			// silently revert an optimistic queue update that arrived first.
+			// Ops read here are chronologically EARLIER than anything already in
+			// `current` (this read started at mount, before any such op existed),
+			// so they sort first; de-dup by opId defensively.
+			setQueue((current) => {
+				if (current.length === 0) return savedQueue;
+				const seen = new Set(current.map((o) => o.opId));
+				return [...savedQueue.filter((o) => !seen.has(o.opId)), ...current];
+			});
 			setSnapshot(savedSnapshot);
 		})();
 		return () => {
