@@ -2,6 +2,12 @@
 import { cleanup, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+// The export menu renders the packet dialog (#589), which calls a server fn —
+// vitest follows that import into `#/db` where the real build strips it. Same
+// hoisted-mock convention as `ballot.test.tsx`.
+vi.mock("#/server/packet", () => ({ getPacketContext: vi.fn() }));
+
 import { ROLE_SHEETS } from "#/data/role-sheets";
 import type { Slide } from "#/lib/agenda-slides";
 import { renderUnderMemoryRouter } from "#/test/router-harness";
@@ -121,12 +127,16 @@ describe("MeetingExportMenu (#541 D2)", () => {
 		}
 	});
 
-	it("orders the menu items: Print agenda, Present, per-meeting sheets, All role sheets", async () => {
+	it("orders the menu items: Print agenda, Present, packet, per-meeting sheets, All role sheets", async () => {
 		await openMenu();
 		const items = screen.getAllByRole("menuitem").map((el) => el.textContent);
+		// The packet (#589) sits ABOVE the per-sheet list: it is the action most
+		// people want for a meeting, and the individual sheets are the fallback
+		// for wanting exactly one.
 		expect(items).toEqual([
 			"Print agenda",
 			"Present",
+			"Print meeting packet…",
 			"This meeting's role sheets…",
 			"All role sheets",
 		]);
@@ -144,6 +154,7 @@ describe("MeetingExportMenu (#541 D2)", () => {
 		expect(items).toEqual([
 			"Print agenda",
 			"Present",
+			"Print meeting packet…",
 			"This meeting's role sheets…",
 			"All role sheets",
 			"Word poster",

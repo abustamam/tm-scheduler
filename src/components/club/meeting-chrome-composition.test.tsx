@@ -22,6 +22,12 @@
 // means adding it here too.
 import { cleanup, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+// The export menu renders the packet dialog (#589), which calls a server fn —
+// vitest follows that import into `#/db` where the real build strips it. Same
+// hoisted-mock convention as `ballot.test.tsx`.
+vi.mock("#/server/packet", () => ({ getPacketContext: vi.fn() }));
+
 import type { MeetingPhase } from "#/lib/meeting-lifecycle";
 import type { StoredMember } from "#/lib/member-identity";
 import { renderUnderMemoryRouter } from "#/test/router-harness";

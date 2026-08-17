@@ -22,7 +22,12 @@ import {
 	Text,
 	View,
 } from "@react-pdf/renderer";
-import { createElement as h, type ReactNode } from "react";
+import {
+	cloneElement,
+	createElement as h,
+	type ReactElement,
+	type ReactNode,
+} from "react";
 import type { RoleSheetKey } from "../data/role-sheets";
 import { EVALUATION_TIMING_ASK } from "../lib/agenda-runsheet";
 import { TOASTMASTERS_DISCLAIMER } from "../lib/brand";
@@ -407,23 +412,38 @@ function header(
 	);
 }
 
+/**
+ * One sheet as a bare PAGE, with no `Document` around it.
+ *
+ * Split out of `sheet` for the meeting packet (#589), which assembles several
+ * sheets and several poster pages into ONE document — a `Document` per sheet
+ * cannot be nested, so composing needed a seam at the page rather than at the
+ * document. Every existing caller still goes through `sheet` below and gets
+ * byte-identical output; this only makes the inner half reachable.
+ */
+function sheetPage(
+	title: string,
+	subtitle: string,
+	body: ReactNode[],
+	fill?: RoleSheetFill,
+	key?: string,
+): ReactNode {
+	return h(
+		Page,
+		{ key, size: "LETTER", style: s.page },
+		header(title, subtitle, fill),
+		...body,
+		h(Text, { style: s.footer, fixed: true }, TOASTMASTERS_DISCLAIMER),
+	);
+}
+
 function sheet(
 	title: string,
 	subtitle: string,
 	body: ReactNode[],
 	fill?: RoleSheetFill,
 ): ReactNode {
-	return h(
-		Document,
-		{},
-		h(
-			Page,
-			{ size: "LETTER", style: s.page },
-			header(title, subtitle, fill),
-			...body,
-			h(Text, { style: s.footer, fixed: true }, TOASTMASTERS_DISCLAIMER),
-		),
-	);
+	return h(Document, {}, sheetPage(title, subtitle, body, fill));
 }
 
 // ---- The five sheets -------------------------------------------------------
@@ -920,4 +940,30 @@ export function buildRoleSheetDoc(
 	fill?: RoleSheetFill,
 ): ReactNode {
 	return BUILDERS[key](fill && capFill(fill));
+}
+
+/**
+ * One sheet as a PAGE, for the meeting packet (#589).
+ *
+ * Unwraps the `Document` the builders return rather than duplicating the five
+ * layouts — react-pdf documents cannot nest, and two copies of a sheet's layout
+ * is exactly the drift this module exists to prevent (it was three divergent
+ * copies of the print CSS until v1.8.4.0). `props.children` is the single Page
+ * every builder wraps; taking it here keeps `sheet`/`sheetPage` private.
+ *
+ * `key` is required because these become siblings in an array — without it
+ * react-pdf renders them but React warns, and a warning in a PDF pipeline is
+ * noise nobody reads.
+ */
+export function buildRoleSheetPage(
+	key: RoleSheetKey,
+	fill: RoleSheetFill | undefined,
+	reactKey: string,
+): ReactNode {
+	const doc = BUILDERS[key](fill && capFill(fill)) as {
+		props?: { children?: ReactNode };
+	};
+	const page = doc.props?.children;
+	if (page == null) throw new Error(`role sheet "${key}" rendered no page`);
+	return cloneElement(page as ReactElement, { key: reactKey });
 }
