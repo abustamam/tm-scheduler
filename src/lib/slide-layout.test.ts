@@ -322,6 +322,7 @@ describe("slideLayout bodies", () => {
 					from: { role: "Toastmaster of the Day", name: "Faisal" },
 					to: "the speakers",
 					toLabel: "the speakers",
+					toNames: [],
 				},
 				toastmasterIntro: {
 					kind: "toastmasterIntro",
@@ -429,6 +430,60 @@ describe("slideLayout bodies", () => {
 			return l.body;
 		};
 
+		/**
+		 * The people on the PROJECTED line (#585), which is a different claim from
+		 * the slide carrying them.
+		 *
+		 * Exactly the same trap #462 hit one field over: `agenda-parity.test.ts`
+		 * compares the slide OBJECT (`s.toNames`) against the printed row, never
+		 * the rendered text, and every other hand-off fixture in this file passes
+		 * `toNames: []`. So `introducedSuffix(slide.toNames)` could be deleted from
+		 * `slide-layout.ts` outright with the entire suite green — #585 fully
+		 * tested on paper and untested on the wall, which is the surface the room
+		 * is actually reading.
+		 *
+		 * One line, not two: the cue has to stay a single sentence the introducer
+		 * can read straight off the wall.
+		 */
+		it("names the people on the projected cue, not just on the slide (#585)", () => {
+			expect(
+				centered({
+					kind: "handoff",
+					from: { role: "Toastmaster of the Day", name: "Faisal" },
+					to: "the speakers",
+					toLabel: "the speakers",
+					toNames: ["Jagpal", "Rehanna · Guest"],
+				}),
+			).toMatchObject({
+				lines: [
+					{ role: "head", text: "Toastmaster of the Day · Faisal" },
+					{
+						role: "head",
+						text: "Introduces the speakers: Jagpal & Rehanna · Guest",
+					},
+				],
+			});
+		});
+
+		it("drops back to the bare target when nobody holds it (#585)", () => {
+			// The empty case is the one a club with an open slot gets every week,
+			// and it must not leave a dangling separator on the wall.
+			expect(
+				centered({
+					kind: "handoff",
+					from: { role: "Toastmaster of the Day", name: "Faisal" },
+					to: "the speakers",
+					toLabel: "the speakers",
+					toNames: [],
+				}),
+			).toMatchObject({
+				lines: [
+					{ role: "head", text: "Toastmaster of the Day · Faisal" },
+					{ role: "head", text: "Introduces the speakers" },
+				],
+			});
+		});
+
 		// #462 turns on `to` and `toLabel` being used for DIFFERENT things, and
 		// nothing else pins it: the parity suite reads the slide OBJECT, so the
 		// layout could render either field and stay green there. Both mutations —
@@ -442,6 +497,7 @@ describe("slideLayout bodies", () => {
 				to: "the General Evaluator",
 				// …display follows the club
 				toLabel: "the Chief Evaluator",
+				toNames: [],
 			};
 
 			// The room reads the club's own name.
@@ -461,6 +517,7 @@ describe("slideLayout bodies", () => {
 					from: { role: "Table Topics Master", name: "Rasheed" },
 					to: "the General Evaluator",
 					toLabel: "the General Evaluator",
+					toNames: [],
 				}),
 			).toEqual({
 				chrome: "content",
@@ -488,6 +545,7 @@ describe("slideLayout bodies", () => {
 					from: { role: "Toastmaster of the Day", name: "Faisal" },
 					to,
 					toLabel: to,
+					toNames: [],
 				});
 			expect([
 				header("the speakers"),
@@ -515,6 +573,7 @@ describe("slideLayout bodies", () => {
 					from: { role: "Toastmaster of the Day", name: "Faisal" },
 					to: "the Joke Master" as HandoffTarget,
 					toLabel: "the Joke Master",
+					toNames: [],
 				}),
 			).toBe("Hand-off");
 		});
@@ -526,6 +585,7 @@ describe("slideLayout bodies", () => {
 					from: { role: "Toastmaster of the Day", name: "Faisal" },
 					to: "the speakers",
 					toLabel: "the speakers",
+					toNames: [],
 				}),
 			).toMatchObject({
 				lines: [

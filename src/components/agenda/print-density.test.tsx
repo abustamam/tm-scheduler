@@ -136,7 +136,7 @@ const mcfRows: TimelineRow[] = [
 	handoff(
 		TM,
 		"toastmaster_of_the_day",
-		"Introduces the General Evaluator",
+		"Introduces the General Evaluator: Faisal Abdul-Rahman Al-Mansoori",
 		"6:50",
 	),
 	{
@@ -149,7 +149,12 @@ const mcfRows: TimelineRow[] = [
 		marks: null,
 		time: "6:50",
 	},
-	handoff(TM, "toastmaster_of_the_day", "Introduces the speakers", "6:53"),
+	handoff(
+		TM,
+		"toastmaster_of_the_day",
+		"Introduces the speakers: Jagpal Singh Bhattacharya & Sudheer Venkataraman Isanaka",
+		"6:53",
+	),
 	{
 		who: "Speaker 1 · Jagpal Singh",
 		roleKey: "speaker",
@@ -177,7 +182,7 @@ const mcfRows: TimelineRow[] = [
 	handoff(
 		TM,
 		"toastmaster_of_the_day",
-		"Introduces the Table Topics Master",
+		"Introduces the Table Topics Master: Rasheed Bustamam-Wickramasinghe",
 		"7:21",
 	),
 	{
@@ -202,10 +207,15 @@ const mcfRows: TimelineRow[] = [
 	handoff(
 		TTM,
 		"table_topics_master",
-		"Introduces the General Evaluator",
+		"Introduces the General Evaluator: Faisal Abdul-Rahman Al-Mansoori",
 		"7:27",
 	),
-	handoff(GE, "general_evaluator", "Introduces the speech evaluators", "7:27"),
+	handoff(
+		GE,
+		"general_evaluator",
+		"Introduces the speech evaluators: Rasheed Bustamam-Wickramasinghe & Riyaz Mohammed Abdurrahman",
+		"7:27",
+	),
 	{
 		who: GE,
 		roleKey: "general_evaluator",
@@ -249,7 +259,8 @@ const mcfRows: TimelineRow[] = [
 	{
 		who: GE,
 		roleKey: "general_evaluator",
-		detail: "Calls for the functionary reports",
+		detail:
+			"Calls for the Timer, Ah-Counter, Grammarian & Vote Counter to report",
 		minutes: 3,
 		marks: null,
 		time: "7:37",
@@ -363,6 +374,27 @@ describe.skipIf(!hasChrome)("editorial agenda density", () => {
 		// change: 1484px → 1321px of content on a 1056px sheet, plus declared
 		// 10.5 → 11.5. The floor sits well below both for the wrapping reason
 		// `agenda-print-type.ts` explains.
+		//
+		// #584 + #585 spent some of that, measured on Linux harness fonts:
+		//
+		//   origin/main, short copy ................. 6.799pt
+		//   this diff, the club's own short names ... 6.597pt
+		//   this diff, the long-name fixture ........ 6.470pt   ← what runs here
+		//
+		// The fixture carries the LONG names deliberately. #585 made these rows'
+		// length a function of member names, which are unbounded user data, so a
+		// fixture using this club's real (short) ones measures the easy case and
+		// under-reports the cost by about a third — CLAUDE.md's "a fixture that
+		// spans ONE axis is not a guarantee", applied to the axis this very change
+		// introduced. #584 added a second such axis (the reports row grows with the
+		// club's functionary count), so that row names four here rather than three.
+		//
+		// The 0.27pt left above the 6.2 floor is NOT headroom for the next copy
+		// change. `agenda-print-type.ts` says what that margin is for: the harness
+		// resolves no webfonts, and the substitute differs between a developer's
+		// machine and CI's Ubuntu, moving where lines wrap. It is reserved for that
+		// variance. Anything that lengthens these rows again needs a fresh
+		// measurement here and a compensating reduction, not a lower floor.
 		expect(printedDetailPt(mcfRows)).toBeGreaterThanOrEqual(
 			EDITORIAL_MIN_PRINTED_PT,
 		);

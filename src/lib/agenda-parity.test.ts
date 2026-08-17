@@ -23,7 +23,7 @@ import {
 	buildRunOfShow,
 	DEFAULT_SPEAKER_MINUTES,
 	expandRunSheet,
-	formatBeatMinutes,
+	introducedSuffix,
 	OPEN_LABEL,
 } from "./agenda-runsheet";
 import {
@@ -117,7 +117,10 @@ const BEATS: { detail: string; section: Section | null; id?: BeatId }[] = [
 			"Introduces the {roles}; each explains their role · the {role:grammarian} gives the Word of the Day",
 		section: "functionaryIntro",
 	},
-	{ detail: "Introduces the speakers", section: "handoffSpeakers" },
+	{
+		detail: "Introduces the speakers{names:speaker}",
+		section: "handoffSpeakers",
+	},
 	{ detail: "Prepared speech", section: "speech" },
 	{
 		detail:
@@ -125,7 +128,8 @@ const BEATS: { detail: string; section: Section | null; id?: BeatId }[] = [
 		section: "voteSpeaker",
 	},
 	{
-		detail: "Introduces the {role:table_topics_master}",
+		detail:
+			"Introduces the {role:table_topics_master}{names:table_topics_master}",
 		section: "handoffTableTopics",
 	},
 	{
@@ -139,11 +143,14 @@ const BEATS: { detail: string; section: Section | null; id?: BeatId }[] = [
 		section: "voteTableTopics",
 	},
 	{
-		detail: "Introduces the {role:general_evaluator}",
+		detail: "Introduces the {role:general_evaluator}{names:general_evaluator}",
 		section: "handoffGeneralEvaluator",
 		id: "geEvaluationHandoff",
 	},
-	{ detail: "Introduces the speech evaluators", section: "handoffEvaluators" },
+	{
+		detail: "Introduces the speech evaluators{names:evaluator}",
+		section: "handoffEvaluators",
+	},
 	// The evaluation-timing cue (#508). Excluded, by name, with the reason: it is
 	// a STAGE DIRECTION — the General Evaluator asking the Timer to explain how an
 	// evaluation is timed — and the deck has no counterpart because the room is
@@ -169,7 +176,9 @@ const BEATS: { detail: string; section: Section | null; id?: BeatId }[] = [
 		id: "evaluatorEvaluation",
 	},
 	{
-		detail: "Calls for the functionary reports",
+		// TEMPLATE detail — tokens unresolved (#584). `{roles}` resolves against
+		// the beat's `requiresGroup: "reportingFunctionaries"` at expansion time.
+		detail: "Calls for the {roles} to report",
 		section: "functionaryReports",
 	},
 	{
@@ -216,7 +225,7 @@ const BEATS: { detail: string; section: Section | null; id?: BeatId }[] = [
  *  the General Evaluator before handing them the room for the functionary
  *  introductions. The standard flow has no early GE appearance. */
 const GE_OPENING_INTRO_BEAT: (typeof BEATS)[number] = {
-	detail: "Introduces the {role:general_evaluator}",
+	detail: "Introduces the {role:general_evaluator}{names:general_evaluator}",
 	section: "handoffGeneralEvaluator",
 	id: "geOpeningHandoff",
 };
@@ -878,7 +887,17 @@ describe("run-sheet ⇄ deck section-order parity (#367)", () => {
 });
 
 describe("run-sheet ⇄ deck duration parity (#356)", () => {
-	it("projects each timed beat's own budgeted duration", () => {
+	/**
+	 * The deck may state a beat's timing as a WINDOW ("2–3 minutes", #583) rather
+	 * than a bare budget, so the parity rule is stated on the upper bound — the
+	 * same shape the speech slides have used since #394, through the same helper.
+	 *
+	 * That is the invariant #356 actually bought: whatever the projector says,
+	 * the LAST number in it is the minutes the printed clock reserves, so the two
+	 * surfaces cannot drift. A slide that reintroduced an independently-authored
+	 * range would fail here the moment its top left the beat.
+	 */
+	it("ends each timed slide on its own beat's budgeted duration", () => {
 		for (const config of CONFIGS) {
 			const template = buildRunOfShow(config);
 			const deck = buildSlideDeck({
@@ -895,7 +914,7 @@ describe("run-sheet ⇄ deck duration parity (#356)", () => {
 				if (section == null) continue;
 				const beat =
 					template[beatsFor(config).findIndex((b) => b.section === section)];
-				expect(slide.time).toBe(formatBeatMinutes(beat.minutes));
+				expect(projectedUpperBound(slide.time)).toBe(beat.minutes);
 				checked.push(section);
 			}
 			// The matrix above proves the sections are all present; this proves the
@@ -1122,7 +1141,14 @@ describe("hand-off agreement — deck ⇄ run sheet (#363)", () => {
 						// club's own name for the target, so comparing against the
 						// canonical identity would fail for a renamed role — which is
 						// exactly the divergence #462 removes.
-						detail: `Introduces ${s.toLabel}`,
+						//
+						// …plus the people (#585). Built here from the SLIDE's own
+						// `toNames` through the shared formatter, so this still compares
+						// two independently-selected lists rather than asserting a value
+						// against itself: the printed side reaches its names through
+						// `{names:…}` and `expandRunSheet`, the deck side through
+						// `pushHandoff`. Only the rendering is shared.
+						detail: `Introduces ${s.toLabel}${introducedSuffix(s.toNames)}`,
 					})),
 				).toEqual(
 					handoffRows(slots, config).map((r) => ({
@@ -1154,11 +1180,18 @@ describe("hand-off agreement — deck ⇄ run sheet (#363)", () => {
 		const config = { geIntroducesFunctionaries: false };
 
 		const details = handoffRows(renamed, config).map((r) => r.detail);
-		expect(details).toContain("Introduces the Chief Evaluator");
-		expect(details).toContain("Introduces the Topics Chief");
-		// The canonical names are gone from the printed page entirely.
-		expect(details).not.toContain("Introduces the General Evaluator");
-		expect(details).not.toContain("Introduces the Table Topics Master");
+		// Whole detail, names included (#585) — a `startsWith` here would stop
+		// noticing if the suffix started naming the wrong person.
+		expect(details).toContain("Introduces the Chief Evaluator: Saiful");
+		expect(details).toContain("Introduces the Topics Chief: Rasheed");
+		// The canonical names are gone from the printed page entirely. Substring
+		// checks, because the row no longer ENDS at the role name.
+		expect(details.some((d) => d.includes("the General Evaluator"))).toBe(
+			false,
+		);
+		expect(details.some((d) => d.includes("the Table Topics Master"))).toBe(
+			false,
+		);
 
 		const slides = handoffSlides(renamed, config);
 		expect(slides.map((s) => s.toLabel)).toEqual(
@@ -1189,8 +1222,13 @@ describe("hand-off agreement — deck ⇄ run sheet (#363)", () => {
 		const details = handoffRows(renamed, {
 			geIntroducesFunctionaries: false,
 		}).map((r) => r.detail);
-		expect(details).toContain("Introduces the speakers");
-		expect(details).toContain("Introduces the speech evaluators");
+		// The GROUP prose is unchanged by the rename; only the people appended
+		// after it vary (#585), and they are the club's members either way.
+		expect(details).toContain("Introduces the speakers: Rehanna");
+		expect(details).toContain("Introduces the speech evaluators: Faisal");
+		// The renamed role names must not leak into the group prose itself.
+		expect(details.some((d) => d.includes("Presenter"))).toBe(false);
+		expect(details.some((d) => d.includes("Reviewer"))).toBe(false);
 	});
 
 	it("the full club's hand-offs name the people the printed rows name", () => {
