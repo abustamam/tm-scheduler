@@ -308,6 +308,8 @@ const REVIEWED_UNGATED: Record<string, string> = {
 	setActiveClub: "writes a session preference",
 	// Gated, but through a different helper than a WIRINGS row can express.
 	getClubLogoMeta: "gated inside loadClubLogoMeta via isReadableClub (#495)",
+	getPacketContext:
+		"gated inside loadPacketContext via isReadableClubForMeeting (#589); returns an empty packet context for an archived club, so the picker offers nothing",
 	getVoteTally: "gated by requireVoteCounterCapability, not by archive",
 	getProjectOptions:
 		"keyed by memberId; resolveMemberSubject returns null for an unknown member and the payload is the shared Pathways catalog, not club-owned data",

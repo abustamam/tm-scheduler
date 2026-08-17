@@ -2,6 +2,14 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.18.0.0] - 2026-08-17
+
+### Added
+
+- **Print the whole night in one file.** "Print & export → Print meeting packet…" builds a single PDF with the Word of the Day poster and whichever functionary logs you want. Printing for a meeting used to be six separate actions — five individual sheet downloads plus a browser print of the poster — and missing one meant a functionary sitting down with nothing in front of them.
+- **You pick what goes in, and it starts on the right answer.** The boxes are ticked from what the meeting actually runs, so a club with no General Evaluator does not get GE notes, and a club using digital voting does not get the paper Ballot Counter tally — without configuring anything. Everything stays yours to change: tick the tally anyway if you want a spare.
+- **Three copies of the Word of the Day by default**, for putting around the room, adjustable up or down.
+
 ## [1.17.0.0] - 2026-08-17
 
 ### Added
