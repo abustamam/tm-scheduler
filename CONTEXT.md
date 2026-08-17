@@ -161,9 +161,12 @@ the nouns in `src/db/schema.ts`.
 - **Meeting phase** — a *separate axis* from `status`, and UI-only: `upcoming` / `today` /
   `completed` (`meetingPhase`, `src/lib/meeting-lifecycle.ts`, #541), at club-local day
   granularity. It re-weights the meeting view's chrome — which action is primary — and never
-  grants or removes a capability. The overlap is deliberate but confusing: a meeting whose day
-  has passed that nobody pressed **Complete** on is phase `completed` while its status is still
-  `scheduled`, unlocked, and an admin may still edit it. Phase `completed` ≠ locked.
+  grants or removes a SERVER-side capability. It does gate one surface outright: the officer's
+  planned-attendance panel renders in phase `upcoming` only (v1.15.0.0), so on meeting day there
+  is no rung-writing UI even though `setPlannedAttendance` still accepts the write — the roll
+  mode that fills that phase is deferred. The overlap is deliberate but confusing: a meeting
+  whose day has passed that nobody pressed **Complete** on is phase `completed` while its
+  status is still `scheduled`, unlocked, and an admin may still edit it. Phase `completed` ≠ locked.
 - **Role definition** — a club's template for a fillable role (`role_definitions`), e.g.
   Toastmaster of the Day (TMOD), Speaker, Evaluator, Table Topics Master, General Evaluator
   (GE), Timer, Ah-Counter, Grammarian, Vote Counter. Carries `default_count`, `sort_order`, and
@@ -328,8 +331,8 @@ per-Person opt-out, the no-auth `/unsubscribe` link, and per-club settings — s
   genuinely anonymous; this trades that for enforceability — a deliberate, stated property of the
   design, not an oversight. See #510.
 - A **completed** meeting is **locked**: every agenda mutation (assign/claim/takeover,
-  confirm/unconfirm, move/add/remove role/speaker, availability toggle, meta edit) is rejected
-  server-side, regardless of surface or capability. Only an admin **Reopen** (→ `scheduled`)
+  confirm/unconfirm, move/add/remove role/speaker, availability / planned-attendance write,
+  meta edit) is rejected server-side, regardless of surface or capability. Only an admin **Reopen** (→ `scheduled`)
   lifts the lock. Enforced at `resolveMeetingAgendaAuthz` / `assertMeetingNotLocked`, not the UI
   (ADR-0012).
 - `src/server/*` touches `db`/`pg` and must never be imported by client components.
