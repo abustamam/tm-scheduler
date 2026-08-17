@@ -2,6 +2,14 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// `waitFor`'s 1000ms default is sized for an isolated run. This file's mount
+// effects are real async chains (a dynamic import among them), and running
+// this suite alongside the other DB-touching/import-heavy files in this repo
+// under CPU contention has measurably pushed that chain past 1000ms — a
+// `waitFor` timeout there is the environment, not the hook being wrong (same
+// contention class `vitest.config.ts` widens its own DB-suite timeouts for).
+const WAIT_OPTS = { timeout: 5000 };
+
 const enqueueSpy = vi.fn(async (..._args: unknown[]) => {});
 const removeOpSpy = vi.fn(async (..._args: unknown[]) => {});
 vi.mock("#/lib/offline-minutes-queue", () => ({
@@ -140,7 +148,7 @@ describe("useOfflineMinutes", () => {
 		// effect start the REAL drain, which now blocks inside the mocked
 		// `setAttendance` on `gate.promise` — so `draining` stays true until this
 		// test releases it, deterministically.
-		await waitFor(() => expect(result.current.draining).toBe(true));
+		await waitFor(() => expect(result.current.draining).toBe(true), WAIT_OPTS);
 
 		await act(async () => {
 			await result.current.mutate(onlineFn, OP);
@@ -153,7 +161,7 @@ describe("useOfflineMinutes", () => {
 		// Release the gate so the drain finishes rather than leaking a pending
 		// promise/timer into the next test.
 		gate.resolve();
-		await waitFor(() => expect(result.current.draining).toBe(false));
+		await waitFor(() => expect(result.current.draining).toBe(false), WAIT_OPTS);
 	});
 
 	it("completes a drain: empties the queue, clears syncError, and calls onMutated", async () => {
@@ -164,16 +172,29 @@ describe("useOfflineMinutes", () => {
 		// pre-fix version of this suite, where the auto-drain always failed on
 		// the unmocked `#/db` import and `draining` only ever flipped false via
 		// the failure path).
+		// Gated exactly like the test above, rather than letting the mock
+		// dispatch resolve freely: polling for the TRANSIENT `draining === true`
+		// moment against a dispatch that can resolve in well under one poll
+		// interval is itself a timing race — it passed reliably alone and failed
+		// solidly (not flakily) once this file ran alongside this repo's other
+		// suites, where the resolution turned out to be fast enough to land
+		// between polls. The gate makes "the drain started" an observable fact
+		// under test control instead of a race against how fast a mock resolves.
 		const onMutated = vi.fn(async () => {});
 		ONLINE = true;
 		QUEUED = [OP()];
+		const gate = openDispatchGate();
 		const { result } = renderHook(() =>
 			useOfflineMinutes({ meetingId: "meet-1", onMutated }),
 		);
 
-		await waitFor(() => expect(result.current.queue).toHaveLength(0));
+		await waitFor(() => expect(result.current.draining).toBe(true), WAIT_OPTS);
 
-		expect(result.current.draining).toBe(false);
+		gate.resolve();
+
+		await waitFor(() => expect(result.current.draining).toBe(false), WAIT_OPTS);
+
+		expect(result.current.queue).toHaveLength(0);
 		expect(result.current.syncError).toBeNull();
 		expect(onMutated).toHaveBeenCalledTimes(1);
 		expect(removeOpSpy).toHaveBeenCalledWith("meet-1", "op-1");
