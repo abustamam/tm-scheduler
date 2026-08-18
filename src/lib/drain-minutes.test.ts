@@ -194,6 +194,27 @@ describe("dispatchOp", () => {
 		});
 	});
 
+	it("forwards moveTableTopics' ABSOLUTE toIndex, which is what makes a replay safe (G2)", async () => {
+		// `moveTableTopics` is the one op that does not converge on `direction` alone:
+		// a relative swap replayed steps the row a SECOND position, silently
+		// corrupting the Table Topics speaking order in the saved minutes. The
+		// absolute target has to reach the server or the whole fix is inert here —
+		// dropping it from this payload is a change no other assertion in this file
+		// can see, since `direction` is still sent and still type-checks.
+		const fns = fakeFns();
+		const op: MinutesOp = {
+			type: "moveTableTopics",
+			...meta(),
+			id: "tt-1",
+			direction: "down",
+			toIndex: 2,
+		};
+		await dispatchOp(op, MEETING, fns);
+		expect(fns.moveTableTopics).toHaveBeenCalledWith({
+			data: { meetingId: MEETING, id: "tt-1", direction: "down", toIndex: 2 },
+		});
+	});
+
 	it("maps setAward to setAward with category + winner", async () => {
 		const fns = fakeFns();
 		const op: MinutesOp = {

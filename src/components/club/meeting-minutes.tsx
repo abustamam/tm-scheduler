@@ -312,12 +312,42 @@ function MeetingMinutesView({
 							() => ({ type: "removeTableTopics", ...opMeta(), id }),
 						)
 					}
-					onMove={(id, direction) =>
-						mutate(
-							() => moveTableTopics({ data: { meetingId, id, direction } }),
-							() => ({ type: "moveTableTopics", ...opMeta(), id, direction }),
-						)
-					}
+					onMove={(id, direction) => {
+						// The ABSOLUTE destination, resolved here rather than left to the
+						// server, because it is what makes a REPLAYED move converge instead
+						// of stepping the row a second position: a write abandoned at its 8s
+						// deadline may still land, and the drain re-dispatches it. See
+						// `moveTableTopicsSpeaker`.
+						//
+						// `displayMinutes.tableTopicsSpeakers` is already in
+						// `(sortOrder asc, id asc)` order — `loadMinutes` orders by it and
+						// `deriveMinutes` re-sorts at the end — so the ARRAY INDEX is the
+						// positional index, which is what `TableTopicsCapture` disables its
+						// edge buttons on too. OUT OF RANGE stays `undefined` rather than
+						// being sent: an unknown row, or an edge move the disabled button should
+						// have prevented, would otherwise send `-1` or `length` — and `-1` fails
+						// the server's `nonnegative()` schema, turning today's silent no-op into
+						// an error toast. Undefined falls back to the relative `direction`, which
+						// no-ops at the edge exactly as it always has.
+						const speakers = displayMinutes.tableTopicsSpeakers;
+						const from = speakers.findIndex((s) => s.id === id);
+						const to = direction === "up" ? from - 1 : from + 1;
+						const toIndex =
+							from !== -1 && to >= 0 && to < speakers.length ? to : undefined;
+						return mutate(
+							() =>
+								moveTableTopics({
+									data: { meetingId, id, direction, toIndex },
+								}),
+							() => ({
+								type: "moveTableTopics",
+								...opMeta(),
+								id,
+								direction,
+								toIndex,
+							}),
+						);
+					}}
 				/>
 
 				<AwardsSection

@@ -219,6 +219,14 @@ const moveSpeakerSchema = z.object({
 	meetingId: uuid,
 	id: uuid,
 	direction: z.enum(["up", "down"]),
+	// ABSOLUTE 0-based destination, and the reason a queued move can be replayed
+	// safely: `direction` alone is a relative step, so a write abandoned at its
+	// deadline that still landed gets stepped a SECOND position when the drain
+	// replays it. Optional for the two callers that have no queue behind them —
+	// the Ballot Counter console — and for ops persisted before it existed.
+	// Unbounded on purpose: `moveTableTopicsSpeaker` no-ops on any target outside
+	// the list, so a large value costs one SELECT, not a renumber.
+	toIndex: z.number().int().nonnegative().optional(),
 	selfMemberId: uuid.nullable().optional(),
 });
 

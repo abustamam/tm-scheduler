@@ -10,6 +10,19 @@
 // so a replay is idempotent (`onConflictDoNothing` on the PK) and the server's
 // ids match the offline-derived ones.
 //
+// EVERY OP HERE MUST CONVERGE ON REPLAY, because the write deadline
+// (`offline-write-deadline.ts`) abandons a request without cancelling it — so an
+// op the server has already applied is routinely re-dispatched. Seven do so by
+// construction: `setAttendance` / `setAward` are `onConflictDoUpdate` upserts
+// (last-write-wins), `addGuest` / `addTableTopics` are `onConflictDoNothing` on a
+// client-supplied id, and `removeGuest` / `removeTableTopics` / `clearAward` are
+// deletes. `moveTableTopics` is the EXCEPTION and does not converge on its own:
+// `direction` is a relative swap on both sides, so a replay steps the row a
+// second position and the Table Topics speaking order in the saved minutes, the
+// PDF and the emailed minutes is silently wrong. Its `toIndex` — an ABSOLUTE
+// destination — is what fixes that, and a ninth op type has to be checked against
+// this list rather than assumed into it.
+//
 // This module never imports `#/db` or the server-fn *modules* — it takes the
 // thunks + queue-removal as injected params, so it stays out of the `pg` client
 // bundle and is directly unit-testable. `MinutesOp` is imported TYPE-ONLY.
@@ -68,7 +81,14 @@ export type MinutesServerFns = {
 		data: { meetingId: string; id: string };
 	}) => Promise<unknown>;
 	moveTableTopics: (args: {
-		data: { meetingId: string; id: string; direction: "up" | "down" };
+		data: {
+			meetingId: string;
+			id: string;
+			direction: "up" | "down";
+			/** Absolute 0-based destination — what makes a replayed move converge
+			 *  instead of stepping the row a second position. */
+			toIndex?: number;
+		};
 	}) => Promise<unknown>;
 	setAward: (args: {
 		data: {
@@ -145,8 +165,17 @@ export async function dispatchOp(
 			return;
 
 		case "moveTableTopics":
+			// `toIndex` is the ABSOLUTE destination and it is what makes this the one
+			// op that would otherwise corrupt on replay (see the header). Forwarded
+			// as-is: `undefined` for an op persisted before it existed, which the
+			// server then falls back to the old relative `direction` for.
 			await fns.moveTableTopics({
-				data: { meetingId, id: op.id, direction: op.direction },
+				data: {
+					meetingId,
+					id: op.id,
+					direction: op.direction,
+					toIndex: op.toIndex,
+				},
 			});
 			return;
 

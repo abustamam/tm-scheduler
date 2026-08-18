@@ -88,6 +88,19 @@ export type MinutesOp =
 			queuedAt: number;
 			id: string;
 			direction: "up" | "down";
+			/**
+			 * ABSOLUTE 0-based destination, in `(sortOrder asc, id asc)` order, and the
+			 * ONLY op field whose absence is a correctness hazard rather than a
+			 * back-compat fallback. `direction` is a relative step on both sides, so a
+			 * write abandoned at its deadline that nevertheless landed moves the row a
+			 * SECOND position when the drain replays it — silently wrong Table Topics
+			 * speaking order in the saved minutes. An absolute target converges.
+			 *
+			 * Optional only for ops already persisted in a device's IndexedDB from
+			 * before it existed, which keep the old relative semantics (same
+			 * back-compat shape as `newGuestId`). Every op minted now carries it.
+			 */
+			toIndex?: number;
 	  }
 	| {
 			type: "setAward";

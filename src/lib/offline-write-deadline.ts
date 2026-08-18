@@ -26,10 +26,19 @@
  *  • FLOOR — a write that is merely SLOW must not be timed out. One
  *    `setAttendance` round trip on congested club wifi is comfortably a
  *    multi-second affair, and a premature deadline queues a write that in fact
- *    landed. That is not corrupting (every op the drain replays is idempotent by
- *    construction — client-supplied ids and `onConflictDoNothing`; see
- *    `drain-minutes.ts`), but the chip does not move until the drain lands, so
- *    the officer taps again.
+ *    landed — so the drain then replays an op the server has ALREADY applied.
+ *    Seven of the eight op types absorb that by construction: `setAttendance`
+ *    and `setAward` are `onConflictDoUpdate` upserts (last-write-wins),
+ *    `addGuest` and `addTableTopics` are `onConflictDoNothing` on a
+ *    client-supplied id, `removeGuest` / `removeTableTopics` / `clearAward` are
+ *    deletes. `moveTableTopics` is the EXCEPTION and needs the absolute
+ *    `toIndex` its op now carries: a bare `direction` is a relative swap on
+ *    both sides (`minutes-logic.ts`'s `moveTableTopicsSpeaker` and
+ *    `derive-minutes.ts` mirror each other), so replaying one steps the row a
+ *    second position and the Table Topics speaking order in the saved minutes
+ *    is silently wrong. See `drain-minutes.ts`.
+ *    Either way the chip does not move until the drain lands, so the officer
+ *    taps again.
  *  • CEILING — past roughly ten seconds of a dead control with no spinner, an
  *    officer mid-roll-call concludes the app is broken and reloads, which is the
  *    outcome the deadline exists to prevent. A deadline longer than a human's
@@ -50,9 +59,13 @@ export type DeadlineOutcome = "settled" | "timeout";
  * abandoned request cannot surface as an unhandled rejection.
  *
  * There is no cancellation: nothing here aborts the request, so a write that
- * times out may still land server-side. That is safe on this queue precisely
- * because every op it replays is idempotent (see the constant above), and it is
- * why the timeout path QUEUES the tap rather than reporting failure.
+ * times out may still land server-side — and the drain will replay it. That is
+ * why the timeout path QUEUES the tap rather than reporting failure, and it is
+ * safe only for as long as every op the drain replays converges on replay rather
+ * than stepping. Seven of the eight do so by construction; `moveTableTopics`
+ * needs its absolute `toIndex` to, and this file claimed all eight were
+ * idempotent until that was fixed. Do not add a ninth op without checking it
+ * against the list on the constant above.
  */
 export function raceWithDeadline(
 	work: Promise<unknown>,

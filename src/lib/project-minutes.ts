@@ -49,11 +49,15 @@ export type ProjectionInput = {
  * Replaying an op the server has ALREADY applied is safe here, and it is safe for
  * a stronger reason than idempotence: the drain re-dispatches every op still in
  * the queue (`runDrain`), so the projection is showing what the server is going
- * to be told, not a guess. Most op types are idempotent on top of that
- * (`setAttendance` is last-write-wins, `addGuest` de-dups by `guestId`,
- * `addTableTopics` is keyed by client id, the removes are filters);
- * `moveTableTopics` is the exception, and it double-applies on the drain too,
- * which is a queue-semantics question and not a display one.
+ * to be told, not a guess. Every op type is also idempotent in its own right
+ * (`setAttendance` and `setAward` are last-write-wins, `addGuest` de-dups by
+ * `guestId`, `addTableTopics` is keyed by client id, the removes are filters) —
+ * `moveTableTopics` included, since it carries an ABSOLUTE `toIndex` rather than a
+ * relative step. Until that landed it was the exception and double-applied on the
+ * drain, corrupting the Table Topics speaking order in the saved minutes; this
+ * comment named that as "a queue-semantics question and not a display one" and
+ * left it, which was wrong — the projection was right and the SERVER was wrong,
+ * and the display only agreed later because it refetched the corruption.
  */
 /**
  * ONE-ENTRY memo, keyed by REFERENCE IDENTITY of all four inputs.

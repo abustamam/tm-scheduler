@@ -740,11 +740,43 @@ export async function removeTableTopicsSpeaker(input: {
 		);
 }
 
-/** Move a Table Topics speaker up/down by swapping sortOrder with its neighbour. */
+/**
+ * Move a Table Topics speaker to a position, then renumber `sortOrder` to match.
+ *
+ * `toIndex` is an ABSOLUTE destination (0-based, in `(sortOrder asc, id asc)`
+ * order) and it is what makes this op REPLAY-SAFE. Without it the operation is a
+ * relative step, and a relative step is not idempotent: the offline write
+ * deadline (`offline-write-deadline.ts`) abandons a request WITHOUT cancelling
+ * it, so a write that times out may still land and then get replayed by the
+ * drain. With `[A,B,C,D]` and one slow "move B down" that gave server →
+ * `[A,C,B,D]`, op queued, drain replays → `[A,C,D,B]`: the Table Topics speaking
+ * order in the saved minutes, the PDF and the emailed minutes silently wrong. An
+ * absolute target CONVERGES instead — the row is already there, so the replay is
+ * a no-op — and re-asserting a position is also the right answer when another
+ * device reordered in between, which matches `setAttendance`/`setAward`'s
+ * last-write-wins.
+ *
+ * `direction` stays REQUIRED and is the fallback when `toIndex` is absent, which
+ * covers two live callers: the Ballot Counter console
+ * (`club.$clubId.meeting.$meetingId.tsx`), which writes straight through with no
+ * queue behind it, and ops already sitting in a device's IndexedDB from before
+ * `toIndex` existed. Those keep the old relative semantics, replay hazard
+ * included — the same back-compat shape as `newGuestId` (#176 slice 5).
+ *
+ * The two agree by construction for an ADJACENT target, which is the only kind
+ * `direction` can name: placing a row at `idx ± 1` and reindexing produces the
+ * same ORDER as swapping the pair's positional indices. Renumbering the whole
+ * list rather than two rows is the deliberate difference — it leaves
+ * `sortOrder` dense and distinct, so the `id` tie-break stops mattering and the
+ * client mirror in `derive-minutes.ts` cannot diverge on it. The per-row skip
+ * keeps an adjacent move to the same two UPDATEs it always cost.
+ */
 export async function moveTableTopicsSpeaker(input: {
 	meetingId: string;
 	id: string;
 	direction: "up" | "down";
+	/** Absolute 0-based destination. Preferred — see above. */
+	toIndex?: number;
 }): Promise<void> {
 	await db.transaction(async (tx) => {
 		const ordered = await tx
@@ -757,19 +789,24 @@ export async function moveTableTopicsSpeaker(input: {
 			.orderBy(asc(tableTopicsSpeakers.sortOrder), asc(tableTopicsSpeakers.id));
 		const idx = ordered.findIndex((r) => r.id === input.id);
 		if (idx === -1) throw new Error("Speaker not found.");
-		const swapIdx = input.direction === "up" ? idx - 1 : idx + 1;
-		if (swapIdx < 0 || swapIdx >= ordered.length) return; // at the edge — no-op
-		const a = ordered[idx];
-		const b = ordered[swapIdx];
-		// Normalize to positional order first so equal/duplicate sortOrders still swap.
-		await tx
-			.update(tableTopicsSpeakers)
-			.set({ sortOrder: swapIdx })
-			.where(eq(tableTopicsSpeakers.id, a.id));
-		await tx
-			.update(tableTopicsSpeakers)
-			.set({ sortOrder: idx })
-			.where(eq(tableTopicsSpeakers.id, b.id));
+		const target =
+			input.toIndex ?? (input.direction === "up" ? idx - 1 : idx + 1);
+		if (target < 0 || target >= ordered.length) return; // at the edge — no-op
+		// Already where the op asks for it: the REPLAY case, and the whole point of
+		// carrying an absolute target. Returning here is what makes a re-dispatch
+		// converge instead of stepping the row a second position.
+		if (target === idx) return;
+		const placed = ordered.filter((r) => r.id !== input.id);
+		placed.splice(target, 0, ordered[idx]);
+		for (let i = 0; i < placed.length; i++) {
+			// Already correct — skip the write. An adjacent move therefore costs the
+			// same two UPDATEs the swap did.
+			if (placed[i].sortOrder === i) continue;
+			await tx
+				.update(tableTopicsSpeakers)
+				.set({ sortOrder: i })
+				.where(eq(tableTopicsSpeakers.id, placed[i].id));
+		}
 	});
 }
 
