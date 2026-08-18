@@ -359,6 +359,35 @@ describe("buildPanelRoleMap", () => {
 		expect(buildPanelRoleMap(onlyAssigned)["member-1"]?.code).toBe("SP");
 	});
 
+	it("numbers each assigned slot by its own index", () => {
+		// Every OTHER assigned slot in this describe block sits at slotIndex 0
+		// — the two non-zero fixtures above (slotIndex 1 and 2) are both
+		// unassigned. That leaves the lookup key's `slotIndex` half completely
+		// unexercised: a literal `:0` in place of `${s.slotIndex}` — which
+		// renders every Speaker's badge as "SP1" — would still pass every case
+		// above. Two Speaker slots, BOTH assigned, at slotIndex 0 and 1 is what
+		// forces the real index to be read.
+		const slots: PanelSlotInput[] = [
+			{
+				roleDefinitionId: "role-sp",
+				slotIndex: 0,
+				roleName: "Speaker",
+				status: "confirmed",
+				assigneeId: "member-1",
+			},
+			{
+				roleDefinitionId: "role-sp",
+				slotIndex: 1,
+				roleName: "Speaker",
+				status: "confirmed",
+				assigneeId: "member-2",
+			},
+		];
+		const map = buildPanelRoleMap(slots);
+		expect(map["member-1"]?.code).toBe("SP1");
+		expect(map["member-2"]?.code).toBe("SP2");
+	});
+
 	it("reads `confirmed` from the slot status, with the right polarity", () => {
 		const claimed: PanelSlotInput[] = [
 			{

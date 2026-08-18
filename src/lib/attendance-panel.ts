@@ -1,8 +1,12 @@
-// Pure derivation for the planned-attendance panel (spec D2). No React and no
-// db, so the ORDER and the COUNTS — the two things a reviewer actually checks —
-// are assertable directly. Through a rendered DOM neither is: two rows on the
-// same rung render the same label, and a count can be right for the wrong
-// reason.
+// Pure derivation for the planned-attendance panel (spec D2), in three stages:
+// slots → a role map keyed by member (`buildPanelRoleMap`), plan + roster →
+// rows under the assumed/precedence rule, and rows → counts/countsLine
+// (`buildPlanPanel`). No React and no db, so the ROLE ASSIGNED, the PRECEDENCE
+// applied, the ORDER, and the COUNTS — the things a reviewer actually
+// checks — are all assertable directly. Through a rendered DOM none of them
+// is: two rows on the same rung render the same label, a badge can carry the
+// wrong number with no error, an assumed Coming looks identical to a real one,
+// and a count can be right for the wrong reason.
 
 import { buildShortCodes } from "#/lib/agenda";
 import type { AttendancePlanStatus } from "#/server/attendance-plan-logic";
