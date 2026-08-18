@@ -154,6 +154,24 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
   belongs, and it would fix all three flavours at once.
   **Priority:** P1
 
+- **The panel's two modes disagree about who is "coming".** v1.19.0.0 (#594) taught
+  `buildPlanPanel` to derive an **assumed** `coming` from a CONFIRMED `role_slots` row — an
+  inference standing in for an answer, rendered muted with the word "assumed". Roll mode's
+  suggestion derivation (`buildRollPanel` → `suggest()`) reads the RAW `plan` array, and `assumed`
+  is computed inside `buildPlanPanel`, so it never reaches roll. Net: a confirmed role-holder who
+  never replied reads "Coming" in the rail on Monday and gets **no dashed `Present?` suggestion**
+  in roll mode on Wednesday.
+  Surfaced by merging #594 into the roll-mode branch; neither side's tests could see it, because
+  neither side had the other's code. Preserved both behaviours in that merge deliberately rather
+  than smuggle a product decision into a conflict resolution — the divergence is documented at the
+  derivation site in `meeting-attendance-panel.tsx`.
+  The call to make: is a confirmed role-holder good enough evidence to pre-fill `Present?`. A
+  reasonable argument says yes (they are MORE likely to attend than someone who merely typed
+  "coming"), and one panel's two modes disagreeing about the same word is the exact class this
+  PR exists to end. Against: a suggestion sourced from an inference is weaker evidence than one
+  sourced from an answer, and roll mode commits it in ONE tap.
+  **Priority:** P1
+
 - Smaller residue from the same review, none blocking: plan mode's `DropdownMenuItem`s are
   ungated where roll mode's are now gated (`meeting-attendance-panel.tsx:100-106`; `writeRung` has
   no `writesLocked` precondition while its sibling `contacted` does); `RollAttendanceRow` and
