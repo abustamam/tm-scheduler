@@ -466,6 +466,14 @@ describe("attendance panel route wiring (PR 2)", () => {
 	it("routes every roll write through the offline hook, so a bad connection queues", () => {
 		// #176's capability. A direct `setAttendance(...)` call here would work online
 		// and silently vanish offline — at a meeting, on club wifi.
+		//
+		// THE SECOND ASSERTION IS THE LOAD-BEARING ONE — do not "simplify" it away.
+		// The first cannot fail on its own: two other call sites in this route also
+		// `await offlineMinutes.mutate(`, so deleting the ROLL write's queue call
+		// leaves it green. Verified by mutation during the branch's final
+		// verification pass — only the operation-specific `type: "setAttendance"`
+		// line caught it. Keep an op-specific assertion beside any generic one here,
+		// or this test stops being able to fail for the write it names.
 		expect(src).toContain("await offlineMinutes.mutate(");
 		expect(src).toContain('type: "setAttendance",');
 		// Exactly ONE instance per meeting (DP3) — a second would race the same queue.
