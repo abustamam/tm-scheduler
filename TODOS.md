@@ -122,6 +122,23 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
   Nothing in this repo can gate it — jsdom performs no layout, so no test can see it.
   **Priority:** P1
 
+- **A captive portal's 200 HTML login page makes a roll tap read as SUCCESS and vanish.** Found
+  while investigating whether the offline queue can tell a transport failure from a server-chosen
+  one (the /ship-halt round's F5). Three flavours, and the third is the bad one:
+  1. A `fetch` rejection is rethrown unchanged, so it arrives as a bare `TypeError`.
+  2. `instanceof TypeError` is NOT a usable discriminator: seroval reconstructs a *server-thrown*
+     `TypeError` as a `TypeError` too (fixed constructor table), so classifying on it would
+     queue-and-replay-forever on any server bug — the stuck queue the current comment exists to
+     avoid. A naive class-based fix is WRONG, not merely partial.
+  3. **Two of the three portal shapes never reach that catch at all.** A portal's 200
+     `text/html` login page falls through to `return response`, so the write currently reads as
+     success, the chip moves, nothing is queued, and the roll entry is silently lost — on the
+     exact network this feature exists for.
+  The reliable seam is TanStack Start's `CustomFetch` (`createStart({ serverFns: { fetch } })`),
+  which this repo does not configure at all. That is where a transport-vs-server classification
+  belongs, and it would fix all three flavours at once.
+  **Priority:** P1
+
 - Smaller residue from the same review, none blocking: plan mode's `DropdownMenuItem`s are
   ungated where roll mode's are now gated (`meeting-attendance-panel.tsx:100-106`; `writeRung` has
   no `writesLocked` precondition while its sibling `contacted` does); `RollAttendanceRow` and
