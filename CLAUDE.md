@@ -550,7 +550,7 @@ codeledger <command> [args...]
 node .codeledger/bin/codeledger-standalone.cjs <command> [args...]
 ```
 
-**Do NOT use `npx codeledger`** — it may resolve to a stale version from the npm registry.
+**Do NOT use `npx codeledger`** — the unscoped `codeledger` name on npm is an unrelated third-party package, not this tool. Use `npx @codeledger/cli` if you need `npx`.
 
 ### Auto-Activation (Hooks Handle This)
 
