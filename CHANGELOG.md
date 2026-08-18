@@ -2,6 +2,28 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.19.0.0] - 2026-08-18
+
+### Added
+
+- **Someone who has confirmed their role is counted as coming.** If a member accepted a slot on the meeting, the rail now reads that as attendance and stops listing them as unanswered. Chasing people who have already said yes to running a segment was the single biggest source of noise on a VPE's list — and their own answer still wins, so a confirmed Toastmaster who tells you on the night that they cannot make it shows as Not coming.
+- **Messaging someone about their role, not just about the meeting.** Tapping WhatsApp or Email beside a member who holds a slot now drafts the same role confirmation the agenda's slot cards send — "just confirming you're our Toastmaster" — instead of a generic "are you able to make our meeting?". Asking whether someone is coming when you already put them on the programme wastes the ask. A member who has said they cannot come gets the plain question instead, never a message asserting they accepted.
+
+### Changed
+
+- **Full names, everywhere.** Long names used to be cut off with no way to read them. They now wrap and stay whole.
+- **Roles show as the sign-up sheet's short code** — TD, GE, SP1 — with the full role name on hover and read aloud to a screen reader. A four-character badge leaves the name the room it needs in a 340px column.
+- **WhatsApp and Email became icons.** Two words each were spending most of the column on saying what a glyph says. The agenda and the recruit picker keep their labels.
+- **The unset state says "Ask" instead of an em dash**, which read like something had been deleted rather than like an invitation. Every row's three controls now share one right edge.
+- **The rail scrolls on its own.** With a large roster the pinned sidebar used to run past the bottom of the screen with no way to reach the rest of it.
+
+### Fixed
+
+- **A screen reader now hears the answer.** On every row where someone had actually replied, the status control announced only "Ayesha Khan status" — the word Coming, Asked or Not coming never reached assistive tech. The rail's whole purpose is who is coming, and for those users that answer was missing.
+- **Confirming a member's role no longer un-confirms them when you message them.** Tapping their draft recorded "I asked them", which outranked the confirmation and dropped them back out of the coming count.
+- **A double-tap on a message draft records one thing, not four.** The status control already ignored repeat taps mid-save; the WhatsApp and Email links did not, so an impatient tap on a phone wrote the same "asked" several times and filled the activity log with duplicates.
+- **The role badge no longer implies a confirmation nobody gave.** A filled badge with a tick was marking exactly the rows where nobody had replied, while the control beside it was greyed to say the opposite.
+
 ## [1.18.0.1] - 2026-08-17
 
 ### Fixed
