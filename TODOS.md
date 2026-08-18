@@ -85,6 +85,37 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
 - Two `#576` behaviours are reachable only from a real browser, and both are the kind a source guard pins as TEXT while never executing. (1) `tmodPanelUnavailable` — the guard proves the expression and the JSX ternary exist, but nothing observes that a pending or errored query actually suppresses the panel, which is the whole point of it (an empty roster otherwise renders a header and a counts line of zeros, indistinguishable from "no members"). (2) `resolveActor`'s arms — the write-side TMOD comparison, the `OFFICER_DENIALS` catch-and-fallthrough, and the self arm's throw are all private to a `createServerFn` module, so vitest cannot invoke any of them; the read-side twin (`loadTmodPanelData`) IS executed and covers the equivalent decision, but the write path's own resolution never runs. Both need an HTTP-level or browser test, which this repo has no seam for yet. Accepted for v1.16.0.0 rather than hidden: the guards pin the shape, and the /qa pass drove both paths by hand.
   **Priority:** P3
 
+- **Roll call costs one full route-loader round trip per tap.** Every roll-mode write resolves
+  online through `useOfflineMinutes.mutate` → `onMutated` → `router.invalidate()`
+  (`src/routes/club.$clubId.meeting.$meetingId.tsx:303`), which re-runs the WHOLE meeting loader:
+  `loadMeetingDetail` alone issues ~15 sequential DB round trips, plus `listPastMeetings`,
+  `listUpcomingMeetings`, `getMinutes` and `getClubLogoMeta` — roughly two dozen sequential
+  queries to persist one member's present/absent/excused. `mutate` awaits it INSIDE the `busy`
+  window, and since the /review fix the panel correctly disables every chip for that whole
+  window, so an officer tapping down a 20-40 name roster at conversational pace lands a large
+  fraction of taps on a disabled control. Found independently by the performance specialist and
+  the adversarial pass on the v1.16.0.0→PR3 review, at confidence 9.
+  Plan mode does NOT have this problem: it applies a local `rungOverride` optimistic update, so
+  its taps feel instant. Roll mode is inconsistent with its own sibling, which is why this reads
+  as a gap rather than an inherent cost. The shape that works is per-row optimistic state plus a
+  serialized single-flight writer (accept every tap, apply locally, drain in order) rather than a
+  global refuse-and-disable. Deliberately NOT fixed in the review round: it is an optimisation of
+  a path that works, and the right shape needs measuring against a real club payload first.
+  **Measure `router.invalidate()` against a real club before choosing.**
+  **Priority:** P1
+
+- Smaller residue from the same review, none blocking: plan mode's `DropdownMenuItem`s are
+  ungated where roll mode's are now gated (`meeting-attendance-panel.tsx:100-106`; `writeRung` has
+  no `writesLocked` precondition while its sibling `contacted` does); `RollAttendanceRow` and
+  `AttendanceRow` duplicate the same row shell; `projectMinutes` (`src/lib/roll-attendance.ts:47`)
+  hand-copies the online/offline branch from `meeting-minutes.tsx` and its own comment concedes a
+  comment enforces nothing — extract one shared `projectOfflineMinutes` so drift becomes
+  compiler-visible; the roll chips' `aria-label` is `"<name> status"`, which REPLACES the visible
+  text for assistive tech so a screen-reader user never hears "Present?" vs "Present"; the chips
+  are `size="sm"` (32px) against a ~44px thumb target; and neither mode renders an empty-state
+  fallback for a club with zero rows, while the Guests group and the read-only record both do.
+  **Priority:** P2
+
 ## Print & artifacts
 
 - The canonical meeting page (`club.$clubId.meeting.$meetingId.tsx`) is the one logo-supplying loader with no test on its `logoUrl` wiring. v1.5.0.0 covered the two standalone public print routes after a coverage audit forced all four loaders to null and the whole suite stayed green; this one was left because the route imports enough that isolating it needs more mocking than the other two. Its only logo consumer is still the `.pptx` export, so the blast radius is one surface — but the path moved in v1.11.0.0 (#541): `PptxDownloadButton`'s `logoUrl` prop is gone and `downloadDeckPptx` reads the logo off the deck's title slide, so the untested seam is now loader → `buildSlideDeck` → title slide. Same seam, still untested.
