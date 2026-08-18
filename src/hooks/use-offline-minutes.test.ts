@@ -4,6 +4,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // The real constant, never a local copy: a test that re-declares the deadline
 // still passes when the shipped one is raised to ten minutes.
 import { ONLINE_WRITE_TIMEOUT_MS } from "#/lib/offline-write-deadline";
+// The production projection, so the one test that asserts what the officer's CHIP
+// says reads it through the same function the meeting route does rather than a
+// re-derivation that could agree with a bug.
+import { projectMinutes } from "#/lib/project-minutes";
 
 // `waitFor`'s 1000ms default is sized for an isolated run. This file's mount
 // effects are real async chains (a dynamic import among them), and running
@@ -150,6 +154,66 @@ const minutesFixture = (label: string) =>
 		Parameters<typeof useOfflineMinutes>[0]["minutes"]
 	>;
 const MINUTES_A = minutesFixture("meet-1");
+
+/**
+ * A REAL `MinutesData` (not the shape-only stand-in above), needed by the one
+ * test that reads what the officer's CHIP would say rather than only what the
+ * hook returns. `projectMinutes` is the production projection the meeting route
+ * calls, and it `structuredClone`s and recomputes over these fields — so a
+ * `{ members: [] }` stub cannot stand in. Import-safe for the same reason
+ * `derive-minutes.ts` is: its `#/server/minutes-logic` import is TYPE-ONLY, so
+ * nothing here reaches `#/db`.
+ */
+const ROLL_SNAPSHOT = {
+	members: [{ memberId: "m1", name: "Jane", status: "unmarked" }],
+	guests: [],
+	tableTopicsSpeakers: [],
+	awards: [],
+	actionItems: [],
+	counts: { present: 0, absent: 0, excused: 0, unmarked: 1, guests: 0 },
+	awardEligible: {},
+} as unknown as NonNullable<Parameters<typeof useOfflineMinutes>[0]["minutes"]>;
+
+/**
+ * What the roll chip for Jane would render, projected through the SAME function
+ * the meeting route uses. `online` is a parameter because the two matter for
+ * different reasons: online proves the projection replays a non-empty queue even
+ * though `navigator.onLine` is true (the state a deadlined write leaves behind),
+ * offline proves it falls back to the persisted snapshot.
+ */
+function statusOnChip(
+	queue: unknown[],
+	online: boolean,
+): string | null | undefined {
+	const projected = projectMinutes({
+		online,
+		minutes: ROLL_SNAPSHOT,
+		snapshot: ROLL_SNAPSHOT,
+		queue: queue as Parameters<typeof projectMinutes>[0]["queue"],
+	});
+	return projected?.members.find((m) => m.memberId === "m1")?.status;
+}
+
+/**
+ * THE SERVER, folded last-write-wins out of the one ordered log of everything it
+ * was told. Both write channels — the drain's replay and a direct online write —
+ * go through the same mocked `setAttendance`, so `mock.calls` is that log in
+ * arrival order, and `setAttendance` really is an `onConflictDoUpdate` upsert
+ * (`minutes-logic.ts`), so "last call wins" is the server's actual semantics.
+ *
+ * Asserting the FOLD is the whole point of the G1 test: the bug and the fix issue
+ * the SAME set of writes and differ only in their order, so any assertion on a
+ * call count — or on the mere presence of the newer write — passes against both.
+ */
+function lastServerStatusFor(memberId: string): string | undefined {
+	let status: string | undefined;
+	for (const call of setAttendanceSpy.mock.calls as unknown as Array<
+		[{ data: { memberId: string; status: string } }]
+	>) {
+		if (call[0]?.data?.memberId === memberId) status = call[0].data.status;
+	}
+	return status;
+}
 
 /**
  * Advance the FAKE clock in steps until `done()` holds, or give up after 20
@@ -849,6 +913,123 @@ describe("useOfflineMinutes", () => {
 			expect(removeOpSpy).toHaveBeenCalledWith("meet-1", "op-1");
 			expect(result.current.queue).toHaveLength(0);
 			expect(result.current.syncError).toBeNull();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("does NOT let a queued op overwrite a newer write that already SAVED (G1)", async () => {
+		// The invariant: while the queue is non-empty the queue is the ONLY channel.
+		//
+		// Without it there are two, because the online-SUCCESS path never enqueues
+		// and `mutate` never consulted `queue.length`. The queue's order then stops
+		// matching wall-clock order and the last op to reach the server wins — the
+		// OLDER one. `meeting_attendance` is what the minutes PDF and the emailed
+		// minutes print from, so that is a wrong club record, not a display glitch.
+		//
+		// Steps 1-5 of the report, in order, with no race anywhere: the panel is
+		// FULLY ENABLED in the parked state (`busy` and `draining` both false while
+		// the drain sits on `syncError`) and the drain un-parks on a wifi blip with
+		// no user action at all.
+		//
+		// Both channels funnel through the SAME mocked `setAttendance`, so
+		// `setAttendanceSpy.mock.calls` is one ordered log of what the server was
+		// told. Folding it last-write-wins is the server: `setAttendance` is an
+		// `onConflictDoUpdate`. Asserting the FOLD rather than a call count is the
+		// point — the bug and the fix issue the same writes, in a different order.
+		vi.useFakeTimers();
+		try {
+			const { setAttendance } = await import("#/server/minutes");
+			ONLINE = true;
+			// STEP 1. Jane's `Present` blew its deadline on dead venue wifi and is
+			// queued (seeded here as the persisted queue that state leaves behind).
+			QUEUED = [OP()];
+			openDispatchGate(); // the replay hangs like a captive portal
+			const onMutated = vi.fn(async () => {});
+			const { result, rerender } = renderHook(() =>
+				useOfflineMinutes({ meetingId: "meet-1", onMutated }),
+			);
+
+			// STEP 2 + 3. The auto-drain's own dispatch deadline blows, `syncError`
+			// parks the drain (`!syncError` gates the effect), and `finally` clears
+			// `draining`. Every chip on the panel is live over a non-empty queue —
+			// the route wires only `busy || draining` into `locked`.
+			await tickUntil(() => result.current.syncError !== null);
+			expect(result.current.syncError).toBe("No response from the network.");
+			expect(result.current.queue).toHaveLength(1);
+			expect(result.current.draining).toBe(false);
+			expect(result.current.busy).toBe(false);
+
+			// STEP 4. Jane is not in the room after all. The officer taps `Absent`,
+			// and the wifi is briefly fine — so an unguarded online write would
+			// SUCCEED here and never touch the queue.
+			dispatchGate = null;
+			const absentOp = () => ({
+				type: "setAttendance" as const,
+				opId: "op-absent",
+				queuedAt: 2,
+				memberId: "m1",
+				status: "absent" as const,
+			});
+			await act(async () => {
+				await result.current.mutate(
+					() =>
+						setAttendance({
+							data: {
+								meetingId: "meet-1",
+								memberId: "m1",
+								status: "absent",
+							},
+						}),
+					absentOp,
+				);
+			});
+
+			// The newer tap went to the QUEUE, behind the older op, so their relative
+			// order is preserved by APPENDING. No second channel opened: the only
+			// `setAttendance` the server has seen is the drain's hung replay.
+			expect(result.current.queue.map((o) => o.opId)).toEqual([
+				"op-1",
+				"op-absent",
+			]);
+			expect(enqueueSpy).toHaveBeenCalledWith("meet-1", absentOp());
+			expect(setAttendanceSpy).toHaveBeenCalledTimes(1);
+			// …and the chip moved anyway, because `projectMinutes` replays a non-empty
+			// queue regardless of `online`. This is the half F2 used to HIDE: with the
+			// newer tap missing from the queue the projection reads back the STALE
+			// `present` the instant `absent` is saved, so the officer re-taps and every
+			// re-tap is another real server write displaying as the old status.
+			expect(statusOnChip(result.current.queue, true)).toBe("absent");
+
+			// STEP 5. One wifi blip, no user action: `if (!online) setSyncError(null)`
+			// clears the parked error and the auto-drain re-fires on reconnect.
+			await act(async () => {
+				ONLINE = false;
+				rerender();
+			});
+			expect(result.current.syncError).toBeNull();
+			// Still `absent` while offline, where the projection reads the persisted
+			// snapshot rather than the loader — the second sample of "never displays
+			// the first", taken in the window the drain is about to run in.
+			expect(statusOnChip(result.current.queue, false)).toBe("absent");
+			await act(async () => {
+				ONLINE = true;
+				rerender();
+			});
+			await tickUntil(() => result.current.queue.length === 0);
+
+			// The server's final status is the SECOND write. Under the bug the replay
+			// of `present` lands AFTER the online `absent` and this fold reads
+			// "present" — Jane is recorded in the club's minutes as having attended a
+			// meeting she was not at.
+			expect(lastServerStatusFor("m1")).toBe("absent");
+			expect(result.current.queue).toHaveLength(0);
+			expect(result.current.syncError).toBeNull();
+			// Past this point the chip reads the loader refetch, not the queue (an
+			// empty queue means `projectMinutes` returns the base untouched), so what
+			// the officer sees IS `lastServerStatusFor` above — asserting
+			// `statusOnChip` here would only re-read this test's own fixture.
+			expect(onMutated).toHaveBeenCalled();
 		} finally {
 			vi.useRealTimers();
 		}

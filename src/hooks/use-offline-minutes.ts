@@ -41,9 +41,17 @@ const DRAIN_STALLED_MESSAGE = "No response from the network.";
  * move, not a rewrite.
  *
  * `draining` joins the busy guard so a reconnect drain is not interleaved with a
- * fresh edit (which could reorder ops). A queue only ever exists after an actual
- * offline session, so `draining` is ALWAYS false for a normal online-only user —
- * their online path is byte-for-byte what it was.
+ * fresh edit (which could reorder ops), and `mutate` additionally refuses the
+ * online channel outright while the queue is non-empty — see the comment on that
+ * guard for the saved write a second channel silently overwrote.
+ *
+ * A queue does NOT "only ever exist after an actual offline session", which is
+ * what this paragraph used to claim and what hid that bug: since the write
+ * deadline, one tap on unreachable-but-associated wifi creates a queue with
+ * `navigator.onLine` still true, and the panel stays fully enabled over it.
+ * `queue.length === 0` is still the steady state for an online-only user, so
+ * their online path is byte-for-byte what it was — but that is a statement about
+ * the QUEUE being empty, not about connectivity.
  *
  * The eight dispatch fns (`setAttendance`, `addMinutesGuest`, ...) that the
  * drain replays against are loaded via a LAZY `import("#/server/minutes")`
@@ -470,10 +478,54 @@ export function useOfflineMinutes(input: {
 		makeOp: () => MinutesOp,
 	) {
 		// `draining` joins the guard so a reconnect drain isn't interleaved with a
-		// fresh edit (which could reorder ops). A queue only ever exists after an
-		// actual offline session, so `draining` is ALWAYS false for a normal
-		// online-only user — their online path (below) is byte-for-byte unchanged.
+		// fresh edit (which could reorder ops).
 		if (busy || draining) return;
+		// ONE CHANNEL AT A TIME, and it is the fix for a silent overwrite of a
+		// SAVED write rather than a tidy-up.
+		//
+		// The online-success path never enqueues, and this function used not to
+		// consult `queue.length` at all — so whenever a queue existed AND the panel
+		// was enabled, writes left by two channels and the queue's order stopped
+		// matching wall-clock order. The last op to reach the server won, and that
+		// was the OLDER one. It needed no race and no exotic state: a tap whose
+		// write blows its deadline is queued; the auto-drain fires, its own dispatch
+		// deadline blows, `syncError` is set and the drain PARKS (`!syncError` gates
+		// the effect); `finally` clears `draining`, `busy` is false, and the route
+		// wires only `busy || draining` into the panel's `locked` — so every chip is
+		// live over a non-empty queue. The officer then taps a different status for
+		// the same member, the wifi is briefly fine, that write LANDS, and nothing
+		// is appended. One wifi blip later the offline→online effect clears
+		// `syncError` for free, the drain un-parks with no user action, and replays
+		// the stale op verbatim over the saved one. `meeting_attendance` — the table
+		// the minutes PDF and the emailed minutes print from — then holds the wrong
+		// status with no error anywhere, and the projection HIDES it: it replays the
+		// queue while online, so the chip reads the stale value the instant the new
+		// one is saved, and every re-tap is another real server write displaying as
+		// the old status.
+		//
+		// So while a queue exists the queue is the ONLY channel: enqueue without
+		// touching the network, and let the drain stay the single writer. Two
+		// consequences worth naming. Ordering is preserved by APPENDING, which is
+		// what the guarantee rests on — two ops for the same (member, meeting) are
+		// last-write-wins on the server (`setAttendance` is an `onConflictDoUpdate`),
+		// so the queue only has to keep their RELATIVE order and
+		// `drainMinutesQueue` dispatches sequentially in array order. Superseding a
+		// same-key op instead would be wrong in general: `addTableTopics` followed by
+		// `moveTableTopics` on the same row are not interchangeable. And the chip
+		// still moves immediately, because `projectMinutes` replays the queue
+		// whenever it is non-empty regardless of `online`.
+		//
+		// `queue` is render state, and the direction of any staleness is safe. Stale
+		// NON-ZERO (the drain emptied it since this render) enqueues a write that
+		// could have gone online — harmless, the auto-drain replays it at once, in
+		// order. Stale ZERO would reopen the bug, and the queue only ever GROWS
+		// through `queueOp` below or the persisted load, both of which commit before
+		// the next user event can be dispatched — a tap during `writeOnline`'s
+		// in-flight window is already refused by `busy`.
+		if (!online || queue.length > 0) {
+			await queueOp(makeOp());
+			return;
+		}
 		// `navigator.onLine` is TRUE for a phone associated to an access point that
 		// routes nowhere — a captive portal, or the dead venue wifi this feature
 		// exists for — so "online" is a hypothesis, and the deadline inside
@@ -481,7 +533,7 @@ export function useOfflineMinutes(input: {
 		// `busy` stuck true, which disabled every chip and the guest group with no
 		// spinner, no toast and no recovery short of a reload, on the one surface
 		// #176's queue was built for.
-		if (!online || (await writeOnline(onlineFn)) === "queue") {
+		if ((await writeOnline(onlineFn)) === "queue") {
 			await queueOp(makeOp());
 		}
 	}
