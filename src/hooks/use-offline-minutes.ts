@@ -14,11 +14,25 @@ import {
 	removeOp,
 	saveSnapshot,
 } from "#/lib/offline-minutes-queue";
+import {
+	ONLINE_WRITE_TIMEOUT_MS,
+	raceWithDeadline,
+} from "#/lib/offline-write-deadline";
 import type { MinutesData } from "#/server/minutes-logic";
 
 function errMessage(err: unknown): string {
 	return err instanceof Error ? err.message : "Something went wrong.";
 }
+
+/** Shown when a write is abandoned at its deadline. Says where the tap WENT —
+ *  "couldn't save" would be false (it is queued, durably) and would invite the
+ *  re-tap the queue exists to make unnecessary. */
+const WRITE_STALLED_MESSAGE =
+	"No response from the network — saved on this device and will sync later.";
+
+/** Same event on the DRAIN side, where there is no toast: it becomes the sync
+ *  error, which stops the drain, keeps the ops queued and offers Retry. */
+const DRAIN_STALLED_MESSAGE = "No response from the network.";
 
 /**
  * The offline-capable write path for meeting-day edits (#176), lifted out of
@@ -212,7 +226,24 @@ export function useOfflineMinutes(input: {
 				const result = await drainMinutesQueue({
 					meetingId,
 					ops,
-					dispatch: (op) => dispatchOp(op, meetingId, fns),
+					// Deadlined for the same reason the write below is, and it is the
+					// other half of the same fix: without it, closing the `busy`
+					// hang merely moved it. A write that times out is queued, the
+					// auto-drain effect fires the moment it sees a queue with
+					// `navigator.onLine` true, the replay hits the same
+					// unreachable network, and `draining` — which the panel also
+					// disables on — never clears. Throwing lands on
+					// `drainMinutesQueue`'s stop-on-failure path: this op and its
+					// successors stay queued, `syncError` shows with Retry, and
+					// the auto-drain stops tight-looping (it gates on
+					// `!syncError`).
+					dispatch: async (op) => {
+						const raced = await raceWithDeadline(
+							dispatchOp(op, meetingId, fns),
+							ONLINE_WRITE_TIMEOUT_MS,
+						);
+						if (raced === "timeout") throw new Error(DRAIN_STALLED_MESSAGE);
+					},
 					onOpDrained: async (opId) => {
 						await removeOp(meetingId, opId);
 						setQueue((q) => q.filter((o) => o.opId !== opId));
@@ -262,8 +293,48 @@ export function useOfflineMinutes(input: {
 		return () => clearTimeout(t);
 	}, [justSynced]);
 
-	// ONLINE: run the server-fn and re-fetch (unchanged). OFFLINE: enqueue the op
-	// and reflect it optimistically; never hit the server or onMutated.
+	/** Reflect the op optimistically and persist it. The OFFLINE path, and also
+	 *  where an online write that blew its deadline lands. */
+	async function queueOp(op: MinutesOp) {
+		setQueue((q) => [...q, op]);
+		try {
+			await enqueue(meetingId, op);
+		} catch (err) {
+			toast.error(errMessage(err));
+		}
+	}
+
+	/**
+	 * The online write. `"queue"` means the network never answered and the caller
+	 * must fall through to the queue — NOT that the write failed: a genuine
+	 * rejection still toasts and returns `"done"`, because an error the server
+	 * chose (a 403, a rejected `assertAttendanceRecordable`) will be rejected
+	 * identically on every replay and queueing it would only turn one toast into a
+	 * permanent stuck queue plus a sync-error banner.
+	 */
+	async function writeOnline(
+		onlineFn: () => Promise<unknown>,
+	): Promise<"done" | "queue"> {
+		setBusy(true);
+		try {
+			const raced = await raceWithDeadline(onlineFn(), ONLINE_WRITE_TIMEOUT_MS);
+			if (raced === "timeout") {
+				toast.error(WRITE_STALLED_MESSAGE);
+				return "queue";
+			}
+			await input.onMutated();
+			return "done";
+		} catch (err) {
+			toast.error(errMessage(err));
+			return "done";
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	// ONLINE: run the server-fn against a deadline and re-fetch. OFFLINE — or
+	// online-but-unreachable, which `navigator.onLine` cannot tell apart — enqueue
+	// the op and reflect it optimistically; never hit the server or onMutated.
 	async function mutate(
 		onlineFn: () => Promise<unknown>,
 		makeOp: () => MinutesOp,
@@ -273,24 +344,15 @@ export function useOfflineMinutes(input: {
 		// actual offline session, so `draining` is ALWAYS false for a normal
 		// online-only user — their online path (below) is byte-for-byte unchanged.
 		if (busy || draining) return;
-		if (!online) {
-			const op = makeOp();
-			setQueue((q) => [...q, op]);
-			try {
-				await enqueue(meetingId, op);
-			} catch (err) {
-				toast.error(errMessage(err));
-			}
-			return;
-		}
-		setBusy(true);
-		try {
-			await onlineFn();
-			await input.onMutated();
-		} catch (err) {
-			toast.error(errMessage(err));
-		} finally {
-			setBusy(false);
+		// `navigator.onLine` is TRUE for a phone associated to an access point that
+		// routes nowhere — a captive portal, or the dead venue wifi this feature
+		// exists for — so "online" is a hypothesis, and the deadline inside
+		// `writeOnline` is what tests it. Before it, such a tap hung forever with
+		// `busy` stuck true, which disabled every chip and the guest group with no
+		// spinner, no toast and no recovery short of a reload, on the one surface
+		// #176's queue was built for.
+		if (!online || (await writeOnline(onlineFn)) === "queue") {
+			await queueOp(makeOp());
 		}
 	}
 

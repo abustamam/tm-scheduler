@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+// The real constant, never a local copy: a test that re-declares the deadline
+// still passes when the shipped one is raised to ten minutes.
+import { ONLINE_WRITE_TIMEOUT_MS } from "#/lib/offline-write-deadline";
 
 // `waitFor`'s 1000ms default is sized for an isolated run. This file's mount
 // effects are real async chains (a dynamic import among them), and running
@@ -105,6 +108,21 @@ const minutesFixture = (label: string) =>
 		Parameters<typeof useOfflineMinutes>[0]["minutes"]
 	>;
 const MINUTES_A = minutesFixture("meet-1");
+
+/**
+ * Advance the FAKE clock in steps until `done()` holds, or give up after 20
+ * seconds of virtual time. One `advanceTimersByTimeAsync(20_000)` is not
+ * equivalent: the chains under test alternate between promise hops and React
+ * commits, and each step here lets the render land before the next tick. Purely
+ * virtual, so it costs no real time and cannot flake on a loaded machine.
+ */
+async function tickUntil(done: () => boolean) {
+	for (let i = 0; i < 20 && !done(); i++) {
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(1_000);
+		});
+	}
+}
 
 describe("useOfflineMinutes", () => {
 	beforeEach(() => {
@@ -364,5 +382,109 @@ describe("useOfflineMinutes", () => {
 		});
 
 		expect(result.current.syncError).toBeNull();
+	});
+	it("stops waiting on a write the network never answers, and queues the tap (F2)", async () => {
+		// `navigator.onLine` is TRUE on a captive portal or dead venue wifi — the
+		// exact conditions #176 exists for — so this took the ONLINE branch, awaited
+		// a promise that never settles, and never reached its `finally`: `busy`
+		// stuck true forever, which the panel faithfully renders as every chip and
+		// the guest group disabled, with no spinner, no toast and no way back short
+		// of a reload.
+		vi.useFakeTimers();
+		try {
+			ONLINE = true;
+			const hang = vi.fn(() => new Promise<unknown>(() => {}));
+			const { result } = renderHook(() =>
+				useOfflineMinutes({ meetingId: "meet-1", onMutated: async () => {} }),
+			);
+			await tickUntil(() => true);
+
+			let pending!: Promise<void>;
+			await act(async () => {
+				pending = result.current.mutate(hang, OP);
+			});
+			// The write really did go out online — otherwise the assertions below
+			// would hold for a version that simply never tried.
+			expect(hang).toHaveBeenCalledTimes(1);
+			expect(result.current.busy).toBe(true);
+
+			await tickUntil(() => enqueueSpy.mock.calls.length > 0);
+			await act(async () => {
+				await pending;
+			});
+
+			expect(result.current.busy).toBe(false);
+			// The tap is not lost: it went into the durable queue for this meeting.
+			expect(enqueueSpy).toHaveBeenCalledWith("meet-1", OP());
+			// And it is genuinely replayable — asserted rather than assumed, because
+			// `queue` is transient here: the auto-drain sees a queue with
+			// `navigator.onLine` true and replays it against the (mocked, answering)
+			// server straight away, which is exactly the recovery this path is for.
+			await tickUntil(() => removeOpSpy.mock.calls.length > 0);
+			expect(removeOpSpy).toHaveBeenCalledWith("meet-1", "op-1");
+			expect(result.current.queue).toHaveLength(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("stops a DRAIN the network never answers, instead of disabling the panel forever (F2)", async () => {
+		// The other half of the same fix. Deadlining only the write moves the hang
+		// rather than closing it: the timed-out tap is queued, the auto-drain fires
+		// the moment it sees a queue with `navigator.onLine` true, the replay hits
+		// the same unreachable network, and `draining` — which the panel also
+		// disables every control on — never clears.
+		vi.useFakeTimers();
+		try {
+			ONLINE = true;
+			QUEUED = [OP()];
+			openDispatchGate(); // never resolved: the replay hangs like a portal
+			const { result } = renderHook(() =>
+				useOfflineMinutes({ meetingId: "meet-1", onMutated: async () => {} }),
+			);
+
+			await tickUntil(() => result.current.draining);
+			expect(result.current.draining).toBe(true);
+
+			await tickUntil(() => !result.current.draining);
+
+			expect(result.current.draining).toBe(false);
+			expect(result.current.syncError).toBe("No response from the network.");
+			// Stop-on-failure: the op stays queued and Retry can replay it.
+			expect(result.current.queue).toHaveLength(1);
+			expect(removeOpSpy).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("does NOT queue a write the server actively rejected", async () => {
+		// The distinction the timeout path must not blur. A 403, or a rejected
+		// `assertAttendanceRecordable`, will be rejected identically on every
+		// replay — queueing it turns one toast into a permanently stuck queue and a
+		// sync-error banner the officer cannot clear.
+		ONLINE = true;
+		const rejects = vi.fn(async () => {
+			throw new Error("Forbidden");
+		});
+		const { result } = renderHook(() =>
+			useOfflineMinutes({ meetingId: "meet-1", onMutated: async () => {} }),
+		);
+
+		await act(async () => {
+			await result.current.mutate(rejects, OP);
+		});
+
+		expect(rejects).toHaveBeenCalledTimes(1);
+		expect(enqueueSpy).not.toHaveBeenCalled();
+		expect(result.current.queue).toHaveLength(0);
+		expect(result.current.busy).toBe(false);
+	});
+
+	it("keeps its deadline shorter than the wait it replaced", () => {
+		// A sanity tie between the hook and the constant it imports: if this ever
+		// reads Infinity/NaN the two tests above would hang or pass vacuously.
+		expect(Number.isFinite(ONLINE_WRITE_TIMEOUT_MS)).toBe(true);
+		expect(ONLINE_WRITE_TIMEOUT_MS).toBeGreaterThan(0);
 	});
 });
