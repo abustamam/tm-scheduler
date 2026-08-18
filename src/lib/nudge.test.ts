@@ -203,6 +203,62 @@ describe("buildNudge", () => {
 		});
 	});
 
+	describe("arriving mode (roll call, F6)", () => {
+		// A separate mode rather than a reuse of `attendance`, because roll rows
+		// render DURING the meeting (contact stays until it is `completed`) and the
+		// `attendance` draft is a pre-meeting ask. Sent from the room at 7:45pm it
+		// read "are you able to make our Tuesday 18 August meeting?" under the
+		// subject "Are you coming?", about the meeting the recipient could hear
+		// starting.
+		it("asks whether they are on their way, not whether they can make it", () => {
+			const n = buildNudge({
+				name: "Sam Rivera",
+				phone: "+15551234567",
+				email: null,
+				meetingDate: "Tue 19 Aug",
+				shareUrl: "https://club.example/m/2026-08-19",
+				mode: "arriving",
+			});
+			expect(n.message).toBe(
+				"Hi Sam, we've started our Tue 19 Aug meeting — are you on your way? Agenda here: https://club.example/m/2026-08-19",
+			);
+			// The pre-meeting phrasing must be GONE, not merely joined: a mode that
+			// fell through to the `attendance` template would still contain the date,
+			// the URL and the greeting, and pass a looser assertion.
+			expect(n.message).not.toContain("are you able to make");
+			// Role-less, like `attendance`.
+			expect(n.message).not.toContain("undefined");
+			expect(n.message).not.toContain("role");
+		});
+
+		it("greets by preferred name, like every other mode (#486)", () => {
+			const n = buildNudge({
+				name: "Zabihullah Kogyani",
+				preferredName: "Zabi",
+				phone: "+15551234567",
+				email: null,
+				meetingDate: "Tue 19 Aug",
+				shareUrl: "https://club.example/m",
+				mode: "arriving",
+			});
+			expect(n.message).toContain("Hi Zabi,");
+		});
+
+		it("carries its own subject line, not the pre-meeting one", () => {
+			const n = buildNudge({
+				name: "Sam Rivera",
+				phone: null,
+				email: "sam@example.com",
+				meetingDate: "Tue 19 Aug",
+				shareUrl: "https://club.example/m",
+				mode: "arriving",
+			});
+			const decoded = decodeURIComponent(n.mailtoUrl as string);
+			expect(decoded).toContain("Are you on your way? — Tue 19 Aug");
+			expect(decoded).not.toContain("Are you coming?");
+		});
+	});
+
 	it("escapes a stored address so it cannot inject its own mailto headers", () => {
 		// The worst of the four `mailto:` sinks, because this one is a draft the
 		// VPE TAPS TO SEND rather than an address they read first. Interpolated

@@ -25,7 +25,10 @@ interface NudgeButtonsBase {
  *  optional `roleName` would let a `confirm`/`recruit` caller omit the field
  *  that mode's message interpolates, and draft "you're our undefined". */
 export type NudgeButtonsProps = NudgeButtonsBase &
-	({ mode: "attendance" } | { mode: "confirm" | "recruit"; roleName: string });
+	(
+		| { mode: "attendance" | "arriving" }
+		| { mode: "confirm" | "recruit"; roleName: string }
+	);
 
 /**
  * WhatsApp/Email tap-to-nudge affordances (#37). Renders only the channels the
@@ -82,10 +85,14 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 		shareUrl,
 		platform,
 	};
+	// Branch on the ROLE-BEARING modes, not on the role-less ones: `attendance` and
+	// `arriving` both carry no `roleName`, so testing for one of them by name left
+	// the other falling into the branch that reads `props.roleName` — which does not
+	// exist on it.
 	const nudge = buildNudge(
-		props.mode === "attendance"
-			? { ...common, mode: "attendance" }
-			: { ...common, mode: props.mode, roleName: props.roleName },
+		props.mode === "confirm" || props.mode === "recruit"
+			? { ...common, mode: props.mode, roleName: props.roleName }
+			: { ...common, mode: props.mode },
 	);
 
 	if (!nudge.whatsappUrl && !nudge.mailtoUrl) {

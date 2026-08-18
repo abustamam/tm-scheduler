@@ -639,8 +639,16 @@ function RollAttendanceRow({
 					// is opt-in because "only the 340px attendance rail needs the space
 					// back" — and this IS that rail, so the words cost ~60px of a ~292px
 					// column for an affordance the plan rows next to it render as glyphs.
+					//
+					// `arriving`, not `attendance`. This row renders during the meeting —
+					// contact stays until the meeting is `completed` — and the
+					// `attendance` copy is a pre-meeting ask: "are you able to make our
+					// Tuesday 18 August meeting?" under the subject "Are you coming?",
+					// drafted at 7:45pm from the room where that meeting is running. The
+					// question a roll-call row actually wants is whether they are on
+					// their way.
 					<NudgeButtons
-						mode="attendance"
+						mode="arriving"
 						iconOnly
 						name={row.name}
 						preferredName={row.preferredName}

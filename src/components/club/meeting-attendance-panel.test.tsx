@@ -1127,6 +1127,24 @@ describe("roll mode", () => {
 		);
 	});
 
+	it("F6: drafts an on-your-way ask, not a pre-meeting one, from the room", () => {
+		// `hideContact` is `roll && phaseCompleted`, so this affordance renders
+		// exactly on meeting day — and it was hard-wired to `mode="attendance"`,
+		// whose copy is "are you able to make our <date> meeting?" under the subject
+		// "Are you coming?". Drafted at 7:45pm from the room where that meeting is
+		// running.
+		const { getByRole } = render(<MeetingAttendancePanel {...rollProps} />);
+		const href = getByRole("link", {
+			name: /Message Abe Nkemelu on WhatsApp/i,
+		}).getAttribute("href");
+		expect(decodeURIComponent(href ?? "")).toContain("are you on your way?");
+		// The pre-meeting wording must be gone from the draft, not merely joined by
+		// the new sentence.
+		expect(decodeURIComponent(href ?? "")).not.toContain(
+			"are you able to make",
+		);
+	});
+
 	it("keeps contact while the meeting is today and drops it once completed", () => {
 		const today = render(<MeetingAttendancePanel {...rollProps} />);
 		today.getByRole("link", { name: /WhatsApp/i });
