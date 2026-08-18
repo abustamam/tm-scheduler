@@ -142,7 +142,12 @@ describe("buildRollPanel", () => {
 			roster,
 			attendance: [],
 			plan: [],
-			roleByMemberId: { "m-bea": "Timer" },
+			// `PanelRole`, not a bare string, since v1.19.0.0 (#594) gave the rail a
+			// role model. `confirmed` is required on the INPUT and deliberately absent
+			// from the row — roll mode reads only the label.
+			roleByMemberId: {
+				"m-bea": { code: "TI", roleName: "Timer", confirmed: false },
+			},
 		});
 		expect(rows.find((r) => r.id === "m-bea")?.roleName).toBe("Timer");
 		expect(rows.find((r) => r.id === "m-abe")?.roleName).toBeNull();

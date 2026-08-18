@@ -12,16 +12,26 @@ import type {
 	MinutesData,
 	MinutesGuestRow,
 } from "#/server/minutes-logic";
-import type { PanelMember } from "./attendance-panel";
+import { type buildPlanPanel } from "./attendance-panel";
 import { deriveMinutes } from "./derive-minutes";
 import type { MinutesOp } from "./offline-minutes-queue";
 
 /** One RECORDED attendance row, in the shape the panel's `attendance` prop takes. */
 export type RecordedAttendance = { memberId: string; status: AttendanceStatus };
 
-/** Exactly the panel's `roster` prop shape, so the union below cannot drift
- *  from what it is handed to. */
-export type RollRosterRow = Omit<PanelMember, "status" | "roleName">;
+/** Exactly the panel's `roster` prop shape — DERIVED from the function it is
+ *  handed to, never a second hand-listed `Omit`. It read
+ *  `Omit<PanelMember, "status" | "roleName">`, and when `roleName` was replaced
+ *  by `role`/`storedStatus`/`assumed` (v1.19.0.0, #594) that omit went stale in
+ *  silence: `Omit` does not constrain its keys, so omitting a field that no
+ *  longer exists is legal, and the three NEW fields simply became REQUIRED of
+ *  every roster row — including the departed rows appended below, which cannot
+ *  supply them. The comment here used to claim this "cannot drift"; the
+ *  hand-listed omit is exactly what let it. Same fix `buildPlanPanel`'s own
+ *  caller took, for the same reason. */
+export type RollRosterRow = Parameters<
+	typeof buildPlanPanel
+>[0]["roster"][number];
 
 /** What both projections read. One shape so the two cannot be called differently. */
 type ProjectionInput = {

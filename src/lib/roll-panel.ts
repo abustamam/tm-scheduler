@@ -8,7 +8,7 @@
 // modes share no sort, no counts and no row shape, so one function with a flag
 // would be two functions wearing one name.
 
-import type { PlanStatus } from "#/lib/attendance-panel";
+import type { PanelRole, PlanStatus } from "#/lib/attendance-panel";
 import type { AttendanceStatus } from "#/server/minutes-logic";
 
 /** What the plan SUGGESTS for a member with no attendance row yet. `null` means
@@ -66,7 +66,7 @@ export function buildRollPanel(input: {
 	}[];
 	attendance: { memberId: string; status: AttendanceStatus }[];
 	plan: { memberId: string; status: PlanStatus }[];
-	roleByMemberId: Record<string, string>;
+	roleByMemberId: Readonly<Record<string, PanelRole>>;
 }): { rows: RollRow[]; counts: RollCounts; countsLine: string } {
 	const recorded = new Map(input.attendance.map((a) => [a.memberId, a.status]));
 	const planned = new Map(input.plan.map((p) => [p.memberId, p.status]));
@@ -83,7 +83,7 @@ export function buildRollPanel(input: {
 			status,
 			// Mutually exclusive by construction, not by convention.
 			suggestion: status === null ? suggest(planned.get(m.id) ?? null) : null,
-			roleName: input.roleByMemberId[m.id] ?? null,
+			roleName: input.roleByMemberId[m.id]?.roleName ?? null,
 		};
 	});
 

@@ -8,6 +8,16 @@
 //
 // COMMENT-BLIND (`readSource`): all assertions are "must BE present", and this
 // header quotes the patterns it checks for.
+//
+// Split with `attendance-rail-wiring.guard.test.ts`: EVERY route→panel prop
+// expression is pinned here, `roleByMemberId` included. That sibling owns one
+// statement and one only — `const panelRoleByMemberId = buildPanelRoleMap(slots)`,
+// the map's CONSTRUCTION — and asserts nothing about the call site. The two
+// files used to carry a byte-identical `roleByMemberId={panelRoleByMemberId}`
+// assertion while each header told the reader the OTHER one owned it, so
+// neither could be edited with confidence. Ownership is now: construction →
+// the rail guard, hand-off → here, what is INSIDE the map →
+// `attendance-panel.test.ts` (a pure function vitest can call directly).
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,6 +37,50 @@ describe("attendance panel route wiring (PR 2)", () => {
 	// see, making a "must not contain" assertion pass vacuously either way —
 	// the "opposite form" `#/test/guard-source` warns must not read through it.
 	const rawSrc = readFileSync(ROUTE, "utf8");
+
+	// The panel's own attribute list, sliced out of the route so every prop
+	// assertion below is POSITIONAL rather than a whole-file substring match.
+	// This route mounts two components that take same-named props:
+	// <MeetingAgenda> (route:~1189) takes `roleByMemberId`, `shareUrl` and
+	// `meetingDate` as well. Against the whole file, cleanly SWAPPING a prop
+	// between the two call sites leaves the required string present — matched at
+	// the AGENDA's tag — and the guard green, which is the same "a test can pin
+	// the wrong thing after a rename" failure this file's `roleByMemberId`
+	// comment describes, mirrored. Renaming the expected string closed the
+	// direction that had already bitten and left the other one open.
+	//
+	// Ends at the element's self-closing `/>` so the window is the tag and
+	// nothing after it; the guard asserts both offsets below rather than
+	// trusting a `slice` on a -1.
+	const panelTagAt = src.indexOf("<MeetingAttendancePanel");
+	const panelTagEnd = src.indexOf("/>", panelTagAt);
+	const panelProps = src.slice(panelTagAt, panelTagEnd);
+
+	// The pinned rail's own wrapper, windowed the same way and for the same
+	// reason: this route carries dozens of `className` strings, and a whole-file
+	// `toContain` on a utility class matches whichever element happens to have
+	// it. Ends at the opening tag's `>` — `readSource` blanks the JSX comment
+	// that sits between `<aside` and `className`, so the first `>` after the tag
+	// name is the tag's own.
+	const asideTagAt = src.indexOf("<aside");
+	const asideTagEnd = src.indexOf(">", asideTagAt);
+	const asideTag = src.slice(asideTagAt, asideTagEnd);
+
+	it("finds the panel's call site at all", () => {
+		// The window every prop assertion below reads from. Without this, a
+		// renamed or deleted <MeetingAttendancePanel> makes `panelProps` the
+		// empty string and turns each of those `toContain`s into an honest
+		// failure — but one whose message ("expected '' to contain …") says
+		// nothing about the cause. Failing here first names it.
+		expect(
+			panelTagAt,
+			"expected a <MeetingAttendancePanel … /> call site in the route",
+		).toBeGreaterThan(-1);
+		expect(
+			panelTagEnd,
+			"expected the panel element to be self-closing (`/>`)",
+		).toBeGreaterThan(panelTagAt);
+	});
 
 	it("gates the panel on the phase, not on the over/locked flags", () => {
 		// `over`, `locked` and `canComplete` are all booleans in scope here. Only
@@ -52,7 +106,7 @@ describe("attendance panel route wiring (PR 2)", () => {
 		expect(src.split("meetingPhase({").length - 1).toBe(1);
 	});
 
-	it("passes the plan array, the roster, and the shared role map to the panel", () => {
+	it("passes the plan array, the roster, and the rail's own role map to the panel", () => {
 		// Both arrays come from ONE name each, so the officer path and the TMOD
 		// path cannot diverge: `effectivePlan` is the loader's admin-only ladder
 		// for an officer and the separately-verified `getTmodPanelData` rows
@@ -63,15 +117,32 @@ describe("attendance panel route wiring (PR 2)", () => {
 		// client-fetched PUBLIC roster (no phone/email) when `!canManage` — the
 		// panel's props require contact unconditionally, and silently handing it
 		// the public shape is how every row renders "No contact on file".
-		expect(src).toContain("plan={effectivePlan}");
+		//
+		// `panelRoleByMemberId`, NOT the plain `roleByMemberId` string map that
+		// <MeetingAgenda> reads — the two used to be the same map, and this
+		// assertion originally matched that shared name. Once the panel moved to
+		// its own richer `PanelRole` map, `roleByMemberId={roleByMemberId}` kept
+		// matching this file too, just at the AGENDA's call site further down —
+		// a test can pin the wrong thing after a rename. Renaming the expected
+		// string is only half the fix, which is why this reads `panelProps` and
+		// not `src`: against the whole file, swapping the two call sites puts
+		// `panelRoleByMemberId` on the AGENDA and passes again.
+		//
+		// `panelRoleByMemberId`'s own construction is not asserted here — that
+		// statement belongs to `attendance-rail-wiring.guard.test.ts`, and what
+		// is INSIDE the map belongs to `attendance-panel.test.ts`, which can call
+		// `buildPanelRoleMap` (`#/lib/attendance-panel`) directly. This
+		// assertion's job is only the hand-off: the PANEL gets that map rather
+		// than the agenda's.
+		expect(panelProps).toContain("plan={effectivePlan}");
 		// `panelRosterForMode` since the final review's I2 fix: `panelRoster` is
 		// still the entitlement-resolved, contact-bearing list pinned below, and
 		// roll mode widens it to the union with the members who hold a recorded row
 		// (see "unions the departed…" further down). The prop must read the
 		// MODE-AWARE local — wired back to `panelRoster` it typechecks, renders, and
 		// silently drops a departed member's row again.
-		expect(src).toContain("roster={panelRosterForMode}");
-		expect(src).toContain("roleByMemberId={roleByMemberId}");
+		expect(panelProps).toContain("roster={panelRosterForMode}");
+		expect(panelProps).toContain("roleByMemberId={panelRoleByMemberId}");
 		expect(src).toContain(
 			"const effectivePlan = effectiveCanManage ? plan : fetchedPlan;",
 		);
@@ -81,6 +152,80 @@ describe("attendance panel route wiring (PR 2)", () => {
 		expect(src.replace(/\s+/g, " ")).toContain(
 			"const panelRoster = effectiveCanManage ? loaderRoster : (tmodPanelData?.roster ?? []);",
 		);
+	});
+
+	// The panel takes NINE props; this file named `roster` and `plan` and
+	// stopped, so six of the nine were guarded by nothing at all. Proven, not
+	// theorised: swapping `meetingDate` with `shareUrl` AND setting
+	// `onWriteRung={markAsked}` passes `bun run typecheck` cleanly and leaves
+	// both guard files and the panel's own suite green. That suite cannot see
+	// any of it — the props ARE its fixture (#319). The remaining six are pinned
+	// below, so the header's "every route→panel prop" is literal: adding a tenth
+	// prop with no assertion is the one gap left, and it is a visible one.
+
+	it("hands the panel the date as the date and the link as the link", () => {
+		// Two plain `string`s declared four lines apart (route:561/565), so the
+		// swap is same-typed in both directions and nothing downstream narrows
+		// them. `buildNudge` interpolates both into one sentence — "are you able
+		// to make our ${meetingDate} meeting? Agenda here: ${shareUrl}" — so a
+		// swap ships every WhatsApp and mail draft in the rail reading "are you
+		// able to make our https://gavelup.app/club/…/meeting/2026-08-19 meeting?
+		// Agenda here: Tue 19 Aug", with the subject line wrong the same way.
+		// Nothing throws; the first person to notice is the member who gets it.
+		//
+		// The BARE names, not the agenda's guarded `effectiveCanManage ? … : ""`
+		// forms: <MeetingAgenda> renders for plain members too, while the panel
+		// only ever mounts for someone who runs the meeting (`showPlanPanel`).
+		// Copying the agenda's expression here would strip the link out of every
+		// draft the rail sends — and these two assertions fail on it, since
+		// neither guarded form contains the bare one as a substring.
+		expect(panelProps).toContain("meetingDate={nudgeDate}");
+		expect(panelProps).toContain("shareUrl={nudgeShareUrl}");
+	});
+
+	it("hands the panel the live override map, so an optimistic chip survives a render", () => {
+		// `Readonly<Record<string, PlanStatus | null>>`, so `rungOverride={{}}`
+		// type-checks — and so does any other map of that shape. It is the only
+		// channel the route has for telling the panel what a chip was just set
+		// to: `buildPlanPanel` reads `rungOverride[m.id]` ahead of the server
+		// value (meeting-attendance-panel.tsx:308). Blanked, every tap reverts to
+		// the loader's snapshot on the very next render — which is the "it didn't
+		// save" flicker the override exists to prevent, and the panel's own suite
+		// passes whatever map its fixture hands it.
+		expect(panelProps).toContain("rungOverride={rungOverride}");
+	});
+
+	it("locks the panel on the meeting's STATUS, not on a clock fact", () => {
+		// `over`, `datePassed`, `canComplete`, `effectiveCanManage` and
+		// `previewAsMember` are all booleans in scope at this call site, so every
+		// wrong one type-checks. Only `locked` (`isMeetingLocked(meeting.status)`,
+		// route:407) means "this meeting no longer accepts writes" — the rest are
+		// facts about the clock. `over` or `datePassed` disables the chips on an
+		// editable meeting the moment its start time passes, which is exactly when
+		// an officer is still working the rail; and any of them can read false on a
+		// completed meeting, which leaves a locked meeting's attendance writable.
+		expect(panelProps).toContain("locked={locked}");
+	});
+
+	it("wires the two write callbacks to their OWN handlers, which are not interchangeable", () => {
+		// The critical one. `onWriteRung` is
+		// `(memberId: string, next: PlanStatus | null) => void` and `markAsked` is
+		// `(memberId: string) => Promise<void>` — TypeScript accepts a function
+		// declaring FEWER parameters, so `onWriteRung={markAsked}` type-checks
+		// clean. Every rung pick in the rail would then run `markAsked`, whose
+		// first act is `if (current !== null) return;` — so on anyone who has
+		// already answered, "Coming"/"Not coming"/"No answer" silently does
+		// nothing: the chip completes its disabled round trip and comes back
+		// reading what it read before, which the officer reads as "it didn't
+		// save", so they tap again. On an unanswered row it writes `reached_out`
+		// regardless of which chip was picked, tagged `via: "nudge"` in
+		// activity_log. No error, no toast, nothing red in CI.
+		expect(panelProps).toContain("onWriteRung={writeRung}");
+		// The reverse swap is caught by `tsc` (a 3-parameter function is not
+		// assignable to a 1-parameter prop), but the arity asymmetry above is
+		// exactly why that is not worth relying on: assignability here is
+		// directional, and only one of the two directions is a type error.
+		expect(panelProps).toContain("onContacted={markAsked}");
 	});
 
 	// #576 review: the TMOD write wiring had no coverage of any kind. Dropping
@@ -617,5 +762,36 @@ describe("attendance panel route wiring (PR 2)", () => {
 		expect(panelJsx).toContain("onSetAttendance={writeAttendance}");
 		expect(panelJsx).toContain("onAddGuest={addRollGuest}");
 		expect(panelJsx).toContain("onRemoveGuest={removeRollGuest}");
+	});
+
+	it("caps the pinned rail's height and gives it its own scroller", () => {
+		// The headline reachability fix of this diff, and it was gated by nothing:
+		// deleting both classes left 244/244 route tests green. `lg:sticky` with no
+		// cap makes the rail's own height a wall — rows are ~81px, so a 40-member
+		// club is a ~3,240px column pinned inside a ~950px viewport, and everything
+		// past row ~10 is unreachable because the PAGE scrolls and the pinned rail
+		// does not. The cap plus the scroller is what makes the bottom rows
+		// reachable at all.
+		//
+		// Both, not either. `lg:overflow-y-auto` alone on an uncapped element never
+		// overflows, so it scrolls nothing; `lg:max-h-…` alone clips the rows it
+		// cut off with no way to reach them, which is worse than the bug. Each is
+		// inert without the other, so a single `toContain` passes on half a fix.
+		//
+		// HONEST LIMIT: this pins the MECHANISM — the classes are present on the
+		// rail's own element — and never the GEOMETRY. jsdom performs no layout and
+		// loads no stylesheet, so nothing in this repo proves the rail actually
+		// scrolls, that `calc(100vh-7rem)` clears the `top-24` offset, or that row
+		// 40 is reachable on a real viewport. Only a browser can see that.
+		expect(
+			asideTagAt,
+			"expected the pinned rail to still be an <aside …> element",
+		).toBeGreaterThan(-1);
+		expect(
+			asideTagEnd,
+			"expected the <aside> opening tag to close",
+		).toBeGreaterThan(asideTagAt);
+		expect(asideTag).toContain("lg:max-h-[calc(100vh-7rem)]");
+		expect(asideTag).toContain("lg:overflow-y-auto");
 	});
 });

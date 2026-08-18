@@ -52,7 +52,7 @@ import {
 	expandRunSheet,
 } from "#/lib/agenda-runsheet";
 import { buildSlideDeck } from "#/lib/agenda-slides";
-import type { PlanStatus } from "#/lib/attendance-panel";
+import { buildPanelRoleMap, type PlanStatus } from "#/lib/attendance-panel";
 import { clubLogoUrl } from "#/lib/club-logo-url";
 import {
 	formatMeetingDate,
@@ -675,6 +675,24 @@ function MeetingView() {
 	for (const s of slots) {
 		if (s.assigneeId) roleByMemberId[s.assigneeId] = slotLabel(s, roleCounts);
 	}
+	// The RAIL's own map, deliberately separate from `roleByMemberId` above.
+	// That one is read as a plain string by four other consumers
+	// (<MeetingAgenda>, <AssignSlotSheet>, <NudgeRecruitPicker>, buildPickerRows)
+	// and widening its value type to serve one of them is how a shared map
+	// becomes everyone's problem. Built by `buildPanelRoleMap` (`#/lib/attendance-panel`)
+	// rather than inline here: this route cannot mount in vitest, so a derivation
+	// living here is guarded only by source greps — and mutation review found two
+	// bugs that pass every one of those greps and a clean typecheck. Keying the
+	// lookup by slot instead of member would break the rail completely; numbering
+	// codes off only the assigned slots would only silently renumber the badges as
+	// the week's slots fill. As a pure function in `lib/`, both are unit-tested
+	// directly instead.
+	//
+	// MUST be called with every slot, unfiltered — `buildShortCodes` numbers a
+	// role off however many slots the ARGUMENT has, so `buildPanelRoleMap(slots)`,
+	// never `buildPanelRoleMap(slots.filter(...))`. See `attendance-panel.test.ts`'s
+	// "numbers a role off every slot it HAS" for what the filtered call produces.
+	const panelRoleByMemberId = buildPanelRoleMap(slots);
 	// Derived here rather than carried as their own payload fields (#396 PR2
 	// task 6): both are redundant with data the payload already ships.
 	// `unavailableMembers` (public) already names who is `not_coming`;
@@ -1547,7 +1565,37 @@ function MeetingView() {
 					</Dialog>
 				</div>
 				{showPanel && !tmodPanelUnavailable ? (
-					<aside className="order-1 lg:order-2 lg:sticky lg:top-24 lg:w-[340px] lg:shrink-0">
+					<aside
+						// `sticky` pins this column, so its own height stops being the
+						// page's problem and starts being a wall: rows are ~81px each
+						// (they nearly doubled in this diff), so a 40-member club is a
+						// ~3,240px rail. Pinned at `top-24` with no cap, only the first
+						// ~10 rows are ever in view on a ~950px viewport and the rest are
+						// unreachable — the page scrolls, the pinned rail does not —
+						// unless the agenda column happens to be taller. Capping the
+						// height and giving the rail its OWN scroller is what makes the
+						// bottom rows reachable. `7rem` = the 6rem `top-24` offset plus
+						// 1rem of breathing room at the bottom edge.
+						//
+						// That is ALL it does. The scroller IS this `<aside>` and the card
+						// is a single child inside it, so the card title and the counts
+						// line scroll away with everything else — a reader 25 rows down
+						// has lost the summary. Keeping it would need `sticky` on
+						// `CardHeader`, which carries none (`src/components/ui/card.tsx`),
+						// and that is a shared-primitive change for another pass. This
+						// comment claimed the header stayed put until the claim was
+						// checked against the DOM.
+						//
+						// And note the axis it costs: `overflow-y: auto` with an
+						// `overflow-x` of `visible` computes that `visible` to `auto`
+						// (CSS Overflow 3 §3), so at `lg` this element is a clipping box on
+						// BOTH axes, not just the vertical one. Nothing in the rail
+						// overhangs today — the row wraps (`break-words`, `line-clamp-2`)
+						// and the widest control is the measured `w-44` track — but a
+						// future popover or tooltip that renders INLINE rather than in a
+						// portal would be cut off here rather than overflowing the column.
+						className="order-1 lg:order-2 lg:sticky lg:top-24 lg:max-h-[calc(100vh-7rem)] lg:w-[340px] lg:shrink-0 lg:overflow-y-auto"
+					>
 						<MeetingAttendancePanel
 							// `upcoming` → the outreach ladder; meeting day and after → the
 							// record of who turned up. One derivation, off the route's frozen
@@ -1587,7 +1635,7 @@ function MeetingView() {
 							// — was silently discarded.
 							busy={offlineMinutes.busy || offlineMinutes.draining}
 							rungOverride={rungOverride}
-							roleByMemberId={roleByMemberId}
+							roleByMemberId={panelRoleByMemberId}
 							meetingDate={nudgeDate}
 							shareUrl={nudgeShareUrl}
 							locked={locked}

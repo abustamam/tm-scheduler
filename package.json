@@ -1,6 +1,6 @@
 {
   "name": "tm-scheduler",
-  "version": "1.18.0.1",
+  "version": "1.19.0.0",
   "private": true,
   "type": "module",
   "imports": {
