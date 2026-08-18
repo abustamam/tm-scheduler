@@ -9,8 +9,10 @@
 // `club-index-wiring.guard.test.ts` uses for the same reason.
 //
 // What it pins, and why each one:
-//  - the route calls `buildPanelRoleMap(` — the wiring itself, invisible to
-//    vitest no matter how the map is built.
+//  - the WHOLE STATEMENT `const panelRoleByMemberId = buildPanelRoleMap(slots);`
+//    — not just that `buildPanelRoleMap(` appears, which this file shipped
+//    once already and which a filtered argument at the call site also
+//    satisfies (see the test's own comment for why that matters).
 //  - that the PANEL receives the result. `roleByMemberId` (the plain string
 //    map) still exists for <MeetingAgenda>, so passing the wrong one is one
 //    character away and typechecks only until the shapes diverge (#319 again).
@@ -18,15 +20,17 @@
 // What used to live here and does not anymore: the short-code keying, the
 // `confirmed` polarity, and the base-vs-numbered role name were all source
 // greps on the derivation's own expressions. Mutation review found two bugs
-// that would break the rail completely (keying by the slot's own id, and
-// numbering codes off only the assigned slots) neither this file's five
-// greps nor a clean typecheck could see — a route-inline derivation is
+// that neither this file's five greps nor a clean typecheck could see: keying
+// by the slot's own id would break the rail completely (no badge renders
+// anywhere), and numbering codes off only the assigned slots would silently
+// renumber the badges as the week's slots fill. A route-inline derivation is
 // grep-guarded, and a grep can only catch what someone thought to write. The
 // derivation moved to `buildPanelRoleMap` (`#/lib/attendance-panel`), a pure
 // function vitest CAN call directly, and every one of those invariants —
 // including the two the greps missed — is now a real assertion in
 // `attendance-panel.test.ts`. This file no longer needs to know what is
-// inside the map, only that the route builds one and hands it to the panel.
+// inside the map, only that the route builds one, unfiltered, and hands it
+// to the panel.
 //
 // COMMENT-BLIND (`readSource`): every assertion is of the "this pattern must BE
 // present" form, and this very file quotes the patterns it looks for — a raw
@@ -49,7 +53,19 @@ describe("attendance rail role wiring", () => {
 	const src = readSource(ROUTE);
 
 	it("builds the rail's map with the extracted, unit-tested function", () => {
-		expect(src).toContain("buildPanelRoleMap(");
+		// The whole STATEMENT, not just the function name — `toContain("buildPanelRoleMap(")`
+		// matches `buildPanelRoleMap(slots.filter((s) => s.assigneeId))` just as well as
+		// the correct call, and that filtered argument is Critical 2's failure mode
+		// living at the call site instead of inside the function: `buildShortCodes`
+		// numbers a role off however many slots the ARGUMENT has, so filtering to
+		// assigned slots renumbers every badge as the week's slots fill ("SP" today,
+		// "SP1" once a second Speaker slot is claimed) with the unit tests unable to
+		// see it — they test the function, and the function is correct. Pinning the
+		// full statement closes the argument, the variable binding, and any wrapping
+		// in one string.
+		expect(src).toContain(
+			"const panelRoleByMemberId = buildPanelRoleMap(slots);",
+		);
 	});
 
 	it("hands the PANEL the rich map, not the agenda's string map", () => {

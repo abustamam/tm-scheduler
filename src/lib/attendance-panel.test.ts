@@ -290,23 +290,27 @@ describe("buildPlanPanel — an assumed Coming is a real Coming", () => {
 });
 
 // A real seam, not a route-inline derivation guarded only by source greps: two
-// bugs that would break the rail completely — keying the lookup by the slot's
-// own id instead of the member's, and numbering codes off only the ASSIGNED
-// slots (so a code changes as the week's slots fill) — passed a five-assertion
-// grep and a clean typecheck under mutation review. Both are real assertions
-// here instead.
+// bugs found under mutation review passed a five-assertion grep and a clean
+// typecheck. One would break the rail completely — keying the lookup by the
+// slot's own id instead of the member's, so no badge renders on any row. The
+// other would silently renumber the badges as the week's slots fill — filtering
+// to assigned slots before `buildShortCodes` counts them turns "SP" into "SP1"
+// with no error, just a wrong, drifting label. Both are real assertions here
+// instead.
 type PanelSlotInput = Parameters<typeof buildPanelRoleMap>[0][number];
 
 describe("buildPanelRoleMap", () => {
-	it("keys the map by the MEMBER id, not the slot's own id", () => {
-		// `role_slots.id` (the slot's own id) and `assigneeId` (the member) are
-		// both plausible `string` ids on the same object. Keying on the former is
-		// the bug that renders no badge on any row at all: this member id would
-		// never appear as a key, so `input.roleByMemberId[m.id]` in
-		// `buildPlanPanel` misses for every single row.
+	it("keys the map by the MEMBER id, not by any other id on the slot", () => {
+		// `roleDefinitionId` and `assigneeId` (the member) are both plausible
+		// `string` ids on the same object. Keying on the former is the bug that
+		// renders no badge on any row at all: this member id would never appear
+		// as a key, so `input.roleByMemberId[m.id]` in `buildPlanPanel` misses for
+		// every single row. (`role_slots.id`, a second plausible wrong key, is
+		// deliberately absent from this function's parameter type — see the
+		// comment on `buildPanelRoleMap`'s parameter — so THAT mistake is a
+		// compile error rather than something this test needs to catch.)
 		const slots: PanelSlotInput[] = [
 			{
-				id: "slot-abc",
 				roleDefinitionId: "role-td",
 				slotIndex: 0,
 				roleName: "Toastmaster of the Day",
@@ -323,7 +327,6 @@ describe("buildPanelRoleMap", () => {
 		// assigned — so the filled one must read "SP1", not the singleton "SP".
 		const threeSlots: PanelSlotInput[] = [
 			{
-				id: "s0",
 				roleDefinitionId: "role-sp",
 				slotIndex: 0,
 				roleName: "Speaker",
@@ -331,7 +334,6 @@ describe("buildPanelRoleMap", () => {
 				assigneeId: "member-1",
 			},
 			{
-				id: "s1",
 				roleDefinitionId: "role-sp",
 				slotIndex: 1,
 				roleName: "Speaker",
@@ -339,7 +341,6 @@ describe("buildPanelRoleMap", () => {
 				assigneeId: null,
 			},
 			{
-				id: "s2",
 				roleDefinitionId: "role-sp",
 				slotIndex: 2,
 				roleName: "Speaker",
@@ -361,7 +362,6 @@ describe("buildPanelRoleMap", () => {
 	it("reads `confirmed` from the slot status, with the right polarity", () => {
 		const claimed: PanelSlotInput[] = [
 			{
-				id: "s0",
 				roleDefinitionId: "role-td",
 				slotIndex: 0,
 				roleName: "Toastmaster of the Day",
@@ -373,7 +373,6 @@ describe("buildPanelRoleMap", () => {
 
 		const confirmed: PanelSlotInput[] = [
 			{
-				id: "s0",
 				roleDefinitionId: "role-td",
 				slotIndex: 0,
 				roleName: "Toastmaster of the Day",
@@ -387,7 +386,6 @@ describe("buildPanelRoleMap", () => {
 	it("carries the BASE role name, not the numbered label", () => {
 		const slots: PanelSlotInput[] = [
 			{
-				id: "s0",
 				roleDefinitionId: "role-sp",
 				slotIndex: 0,
 				roleName: "Speaker",
@@ -395,7 +393,6 @@ describe("buildPanelRoleMap", () => {
 				assigneeId: "member-1",
 			},
 			{
-				id: "s1",
 				roleDefinitionId: "role-sp",
 				slotIndex: 1,
 				roleName: "Speaker",
@@ -419,7 +416,6 @@ describe("buildPanelRoleMap", () => {
 		// this member out of the rail's "coming" count.
 		const slots: PanelSlotInput[] = [
 			{
-				id: "s-td",
 				roleDefinitionId: "role-td",
 				slotIndex: 0,
 				roleName: "Toastmaster of the Day",
@@ -427,7 +423,6 @@ describe("buildPanelRoleMap", () => {
 				assigneeId: "member-1",
 			},
 			{
-				id: "s-sp",
 				roleDefinitionId: "role-sp",
 				slotIndex: 0,
 				roleName: "Speaker",
@@ -449,7 +444,6 @@ describe("buildPanelRoleMap", () => {
 		// slot happens to be confirmed" and not "whichever slot is last".
 		const slots: PanelSlotInput[] = [
 			{
-				id: "s-td",
 				roleDefinitionId: "role-td",
 				slotIndex: 0,
 				roleName: "Toastmaster of the Day",
@@ -457,7 +451,6 @@ describe("buildPanelRoleMap", () => {
 				assigneeId: "member-1",
 			},
 			{
-				id: "s-sp",
 				roleDefinitionId: "role-sp",
 				slotIndex: 0,
 				roleName: "Speaker",
@@ -475,7 +468,6 @@ describe("buildPanelRoleMap", () => {
 	it("contributes no key for an open (unassigned) slot", () => {
 		const slots: PanelSlotInput[] = [
 			{
-				id: "s0",
 				roleDefinitionId: "role-td",
 				slotIndex: 0,
 				roleName: "Toastmaster of the Day",

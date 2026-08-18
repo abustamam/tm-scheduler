@@ -575,11 +575,17 @@ function MeetingView() {
 	// and widening its value type to serve one of them is how a shared map
 	// becomes everyone's problem. Built by `buildPanelRoleMap` (`#/lib/attendance-panel`)
 	// rather than inline here: this route cannot mount in vitest, so a derivation
-	// living here is guarded only by source greps — and mutation review showed two
-	// bugs that would break the rail completely (keying the lookup by slot instead
-	// of member, and numbering codes off only the assigned slots) pass every one of
-	// those greps and a clean typecheck. As a pure function in `lib/`, it is
-	// unit-tested directly instead.
+	// living here is guarded only by source greps — and mutation review found two
+	// bugs that pass every one of those greps and a clean typecheck. Keying the
+	// lookup by slot instead of member would break the rail completely; numbering
+	// codes off only the assigned slots would only silently renumber the badges as
+	// the week's slots fill. As a pure function in `lib/`, both are unit-tested
+	// directly instead.
+	//
+	// MUST be called with every slot, unfiltered — `buildShortCodes` numbers a
+	// role off however many slots the ARGUMENT has, so `buildPanelRoleMap(slots)`,
+	// never `buildPanelRoleMap(slots.filter(...))`. See `attendance-panel.test.ts`'s
+	// "numbers a role off every slot it HAS" for what the filtered call produces.
 	const panelRoleByMemberId = buildPanelRoleMap(slots);
 	// Derived here rather than carried as their own payload fields (#396 PR2
 	// task 6): both are redundant with data the payload already ships.

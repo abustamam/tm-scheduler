@@ -49,20 +49,16 @@ export interface PanelRole {
  *
  * Lives here rather than inline in the route for the reason this whole module
  * does: a route cannot be mounted in vitest, so a derivation there is guarded
- * only by source greps — and mutation review showed two bugs that would break
- * the rail completely (keying by slot id instead of member id, and filtering
- * `slots` before `buildShortCodes`) pass every one of those greps and a clean
- * typecheck. As a seam it is directly assertable.
+ * only by source greps — and mutation review found two bugs that pass every
+ * one of those greps and a clean typecheck. Keying by slot id instead of
+ * member id would break the rail completely (no badge renders anywhere);
+ * filtering `slots` before `buildShortCodes` would only silently renumber the
+ * badges as the week's slots fill. As a seam both are directly assertable.
  */
 export function buildPanelRoleMap(
 	slots: readonly {
-		// The SLOT's own id (`role_slots.id`), never read below — it exists on
-		// this type only so a test fixture can give a slot an `id` distinct from
-		// its `assigneeId` and prove the map is keyed on the latter. Both are
-		// plausible-looking `string` ids on the same object, which is exactly the
-		// mutation `#/routes/attendance-rail-wiring.guard.test.ts` used to catch
-		// by source grep alone before this became a real unit-tested function.
-		id: string;
+		// Deliberately omits `role_slots.id`: this map is keyed by member, and the
+		// omission makes `byMember[s.id]` a compile error.
 		roleDefinitionId: string;
 		slotIndex: number;
 		roleName: string;
