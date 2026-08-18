@@ -8,7 +8,11 @@
 // modes share no sort, no counts and no row shape, so one function with a flag
 // would be two functions wearing one name.
 
-import type { PanelRole, PlanStatus } from "#/lib/attendance-panel";
+import type {
+	PanelRole,
+	PanelRowRole,
+	PlanStatus,
+} from "#/lib/attendance-panel";
 import type { AttendanceStatus } from "#/server/minutes-logic";
 
 /** What the plan SUGGESTS for a member with no attendance row yet. `null` means
@@ -30,8 +34,17 @@ export interface RollRow {
 	 *  real row. A row can never carry both — that is what makes a plan
 	 *  physically unmistakable for a record (D3, the guard against #548). */
 	suggestion: RollSuggestion | null;
-	/** Information, never a bucket: the Timer still needs marking present. */
-	roleName: string | null;
+	/** Information, never a bucket: the Timer still needs marking present.
+	 *
+	 *  The ROW carries the short code as well as the name, because the rail's
+	 *  shared identity line renders the code (`PanelIdentityLine`). It was
+	 *  `roleName: string | null` and the badge rendered the full name — a
+	 *  `shrink-0 whitespace-nowrap` block ~136px wide for "Toastmaster of the Day"
+	 *  in a ~292px column, which is what pushed the rest of the row out. Same
+	 *  `PanelRowRole` plan mode's rows carry, so `confirmed` stays stripped: it is
+	 *  a second answer to a question `assumed` already answers, and roll mode has
+	 *  no use for either. */
+	role: PanelRowRole | null;
 	/** True for a row appended by `deriveRollRoster`: someone with a recorded
 	 *  attendance row who has since left the roster. Their row skips the contact
 	 *  affordance — see `PanelMember.departed` for why that is a tag and not a
@@ -53,6 +66,12 @@ function suggest(plan: PlanStatus | null): RollSuggestion | null {
 	if (plan === "coming") return "present";
 	if (plan === "not_coming") return "excused";
 	return null;
+}
+
+/** `PanelRole` → what a ROW carries. Drops `confirmed` rather than spreading the
+ *  map's value through, for the reason `PanelRowRole`'s own docstring gives. */
+function roleRow(role: PanelRole | undefined): PanelRowRole | null {
+	return role ? { code: role.code, roleName: role.roleName } : null;
 }
 
 export function buildRollPanel(input: {
@@ -83,7 +102,7 @@ export function buildRollPanel(input: {
 			status,
 			// Mutually exclusive by construction, not by convention.
 			suggestion: status === null ? suggest(planned.get(m.id) ?? null) : null,
-			roleName: input.roleByMemberId[m.id]?.roleName ?? null,
+			role: roleRow(input.roleByMemberId[m.id]),
 		};
 	});
 

@@ -144,13 +144,22 @@ describe("buildRollPanel", () => {
 			plan: [],
 			// `PanelRole`, not a bare string, since v1.19.0.0 (#594) gave the rail a
 			// role model. `confirmed` is required on the INPUT and deliberately absent
-			// from the row — roll mode reads only the label.
+			// from the row: it is a second answer to the question `assumed` answers,
+			// and roll mode has no use for either.
 			roleByMemberId: {
 				"m-bea": { code: "TI", roleName: "Timer", confirmed: false },
 			},
 		});
-		expect(rows.find((r) => r.id === "m-bea")?.roleName).toBe("Timer");
-		expect(rows.find((r) => r.id === "m-abe")?.roleName).toBeNull();
+		// The row carries BOTH halves of `PanelRowRole`. It carried `roleName` alone
+		// until the F4 refit, and the badge therefore rendered the full role name —
+		// an unshrinkable `whitespace-nowrap` block ~136px wide for "Toastmaster of
+		// the Day" in a ~292px column. The rail's shared identity line renders the
+		// 2-4 character `code`, so a row without it cannot be rendered correctly.
+		expect(rows.find((r) => r.id === "m-bea")?.role).toEqual({
+			code: "TI",
+			roleName: "Timer",
+		});
+		expect(rows.find((r) => r.id === "m-abe")?.role).toBeNull();
 	});
 
 	it("carries preferredName from the roster through to each row", () => {

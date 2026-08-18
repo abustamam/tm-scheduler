@@ -19,6 +19,7 @@ import {
 	buildPlanPanel,
 	type PanelMember,
 	type PanelRole,
+	type PanelRowRole,
 	type PlanStatus,
 } from "#/lib/attendance-panel";
 import { buildRollPanel, type RollRow } from "#/lib/roll-panel";
@@ -78,6 +79,106 @@ const ROLL_MENU: { label: string; status: AttendanceStatus }[] = [
 /** Tailwind's `lg` breakpoint (`min-width: 1024px`) — kept as one literal so the
  *  CSS class below and the JS desktop check can't drift apart. */
 const LG_BREAKPOINT_PX = 1024;
+
+/**
+ * The rail's row, SHARED by both modes — three components rather than one, so
+ * each mode still owns what goes inside its action line.
+ *
+ * These exist because the last attempt at sharing was a comment. `RollAttendanceRow`
+ * claimed "sharing `AttendanceRow`'s shell verbatim is what stops the two modes
+ * drifting apart", and what it had actually copied was the `<li>` class list: the
+ * CONTENTS stayed pre-#594, so every fix that rebuild made for this 340px column
+ * was missing from half the rows — a `truncate` single-line cutoff on unbounded
+ * names, the full role name in an unshrinkable `whitespace-nowrap` badge (~136px
+ * of a ~292px column for "Toastmaster of the Day"), word-labelled contact buttons,
+ * and no fixed action track at all, so the chip stretched full width and the
+ * rail's "one right edge" held for the plan rows only. jsdom performs no layout,
+ * so nothing here could see any of it.
+ *
+ * A copied class list is not sharing. What is shared is the code: both modes call
+ * these three, so the next restyle of a row reaches both by construction and a
+ * mode-specific deviation has to be written as one.
+ */
+function PanelRow({ children }: { children: ReactNode }) {
+	return (
+		<li className="flex flex-col gap-1.5 border-b border-border/60 py-2.5 last:border-b-0">
+			{children}
+		</li>
+	);
+}
+
+/** Identity line. The name owns it — at 2-4 characters the role code costs it
+ *  almost nothing, which is the whole reason the code replaced the full role name
+ *  here.
+ *
+ *  `PanelRowRole` (`{ code, roleName }`) is the prop, so ROLL mode had to start
+ *  carrying the code: `buildRollPanel` read `?.roleName` only, and the full name
+ *  in a `shrink-0 whitespace-nowrap` Badge is an unshrinkable block that a long
+ *  role name pushes the rest of the row out of. */
+function PanelIdentityLine({
+	name,
+	role,
+}: {
+	name: string;
+	role: PanelRowRole | null;
+}) {
+	return (
+		<div className="flex items-start gap-1.5">
+			{/* `break-words` wraps an unbroken name rather than cutting it off;
+			 *  `line-clamp-2` is the other half of spec §3 and the half that was never
+			 *  implemented. `name` is unbounded user data, so with neither a truncation
+			 *  nor a clamp one member can grow their row without limit and push the
+			 *  rest of a 40-row rail off screen. Two lines, not one: `line-clamp-1`
+			 *  would reintroduce the single-line cutoff `truncate` was removed to fix. */}
+			<span className="line-clamp-2 min-w-0 flex-1 break-words text-sm font-medium">
+				{name}
+			</span>
+			{/* No `mt-0.5` on the badge below: under `items-start` its inner text
+			 *  centre already lands within a pixel of the name's (11px vs 10px
+			 *  against Tailwind v4 defaults — `text-xs`/`py-0.5`/1px border against
+			 *  `text-sm`), so nudging it down by 2px put it ~3px BELOW the name's
+			 *  optical line. `items-start` is the whole mechanism. */}
+			{role ? (
+				/* ONE AXIS: this badge means "holds a role on this meeting", and reads
+				 * the same for everyone who does. It carried a second axis until the fix
+				 * above — `variant={m.assumed ? "default" : "secondary"}` plus a Check —
+				 * and that axis was wrong on its own terms as well as backwards: on a
+				 * DOUBLE-BOOKED member `confirmed` is the OR across their slots
+				 * (`buildPanelRoleMap`), so the badge rendered "TD ✓" against a slot they
+				 * had not confirmed. Deleting the second axis closes that too. */
+				<Badge variant="secondary" className="shrink-0">
+					{/* The CODE is decorative to a screen reader — it hears the full
+					 *  role from the sr-only span beside it, so the accessible name is
+					 *  "Toastmaster" rather than "TD".
+					 *
+					 *  `aria-label` on the Badge itself is not an option, which is what
+					 *  this shape exists to avoid: a Badge renders a bare <span>, which
+					 *  maps to role `generic`, and ARIA 1.2 PROHIBITS `aria-label`
+					 *  there, with honouring varying by screen reader. `title` stays on
+					 *  the visible code, where a mouse user's pointer actually lands. */}
+					<span aria-hidden title={role.roleName}>
+						{role.code}
+					</span>
+					<span className="sr-only">{role.roleName}</span>
+				</Badge>
+			) : null}
+		</div>
+	);
+}
+
+/** Action line. Right-aligned, so every row in the rail shares one right
+ *  edge — this is the alignment fix. Nothing is vertically centred across a
+ *  variable-height block any more.
+ *
+ *  `gap-3`, not `gap-1.5`. The 6px inside `NudgeButtons` is justified by
+ *  WhatsApp and Email being the same action on the same member — both fire
+ *  `onContacted` — so a fat-finger between them costs nothing. The status
+ *  control is neither: a slip from it onto Email writes `reached_out` AND
+ *  throws the tablet into a mail client mid-meeting. The extra 6px is ~2%
+ *  of a 340px rail. */
+function PanelActionLine({ children }: { children: ReactNode }) {
+	return <div className="flex items-center justify-end gap-3">{children}</div>;
+}
 
 function AttendanceRow({
 	m,
@@ -158,61 +259,9 @@ function AttendanceRow({
 	}${alsoAsked ? `, already ${ASKED_WORD}` : ""}`;
 
 	return (
-		<li className="flex flex-col gap-1.5 border-b border-border/60 py-2.5 last:border-b-0">
-			{/* Identity line. The name owns it — at 2-4 characters the role code
-			 *  costs it almost nothing, which is the whole reason the code replaced
-			 *  the full role name here. */}
-			<div className="flex items-start gap-1.5">
-				{/* `break-words` wraps an unbroken name rather than cutting it off;
-				 *  `line-clamp-2` is the other half of spec §3 and the half that was never
-				 *  implemented. `name` is unbounded user data, so with neither a truncation
-				 *  nor a clamp one member can grow their row without limit and push the
-				 *  rest of a 40-row rail off screen. Two lines, not one: `line-clamp-1`
-				 *  would reintroduce the single-line cutoff `truncate` was removed to fix. */}
-				<span className="line-clamp-2 min-w-0 flex-1 break-words text-sm font-medium">
-					{m.name}
-				</span>
-				{/* No `mt-0.5` on the badge below: under `items-start` its inner text
-				 *  centre already lands within a pixel of the name's (11px vs 10px
-				 *  against Tailwind v4 defaults — `text-xs`/`py-0.5`/1px border against
-				 *  `text-sm`), so nudging it down by 2px put it ~3px BELOW the name's
-				 *  optical line. `items-start` is the whole mechanism. */}
-				{m.role ? (
-					/* ONE AXIS: this badge means "holds a role on this meeting", and reads
-					 * the same for everyone who does. It carried a second axis until the fix
-					 * above — `variant={m.assumed ? "default" : "secondary"}` plus a Check —
-					 * and that axis was wrong on its own terms as well as backwards: on a
-					 * DOUBLE-BOOKED member `confirmed` is the OR across their slots
-					 * (`buildPanelRoleMap`), so the badge rendered "TD ✓" against a slot they
-					 * had not confirmed. Deleting the second axis closes that too. */
-					<Badge variant="secondary" className="shrink-0">
-						{/* The CODE is decorative to a screen reader — it hears the full
-						 *  role from the sr-only span beside it, so the accessible name is
-						 *  "Toastmaster" rather than "TD".
-						 *
-						 *  `aria-label` on the Badge itself is not an option, which is what
-						 *  this shape exists to avoid: a Badge renders a bare <span>, which
-						 *  maps to role `generic`, and ARIA 1.2 PROHIBITS `aria-label`
-						 *  there, with honouring varying by screen reader. `title` stays on
-						 *  the visible code, where a mouse user's pointer actually lands. */}
-						<span aria-hidden title={m.role.roleName}>
-							{m.role.code}
-						</span>
-						<span className="sr-only">{m.role.roleName}</span>
-					</Badge>
-				) : null}
-			</div>
-			{/* Action line. Right-aligned, so every row in the rail shares one right
-			 *  edge — this is the alignment fix. Nothing is vertically centred across a
-			 *  variable-height block any more.
-			 *
-			 *  `gap-3`, not `gap-1.5`. The 6px inside `NudgeButtons` is justified by
-			 *  WhatsApp and Email being the same action on the same member — both fire
-			 *  `onContacted` — so a fat-finger between them costs nothing. The status
-			 *  control is neither: a slip from it onto Email writes `reached_out` AND
-			 *  throws the tablet into a mail client mid-meeting. The extra 6px is ~2%
-			 *  of a 340px rail. */}
-			<div className="flex items-center justify-end gap-3">
+		<PanelRow>
+			<PanelIdentityLine name={m.name} role={m.role} />
+			<PanelActionLine>
 				<NudgeButtons
 					{...nudgeMode}
 					iconOnly
@@ -324,8 +373,8 @@ function AttendanceRow({
 						))}
 					</DropdownMenuContent>
 				</DropdownMenu>
-			</div>
-		</li>
+			</PanelActionLine>
+		</PanelRow>
 	);
 }
 
@@ -520,9 +569,28 @@ function RollChip({
 			busy={busy}
 			onSetAttendance={onSetAttendance}
 		>
-			<Button variant="outline" size="sm" disabled={disabled}>
+			{/* The SAME fixed track and `justify-between` as plan mode's trigger, for
+			 *  the reason measured there: `justify-end` on the action line flushes the
+			 *  right edge only, and a `whitespace-nowrap` label running "—" to
+			 *  "Excused" pushed everything to its left by that delta — so the two icon
+			 *  buttons, the repeated elements the eye tracks down a 40-row column,
+			 *  formed a ragged edge. Roll mode had no track at all: the chip was a
+			 *  direct child of a `flex flex-col` `<li>` and stretched the full width,
+			 *  so the rail's one right edge held for the plan rows and not for these.
+			 *  `w-44` is the number plan mode measured for a wider label set, which
+			 *  this one fits inside — one track for both modes is the point. */}
+			<Button
+				variant="outline"
+				size="sm"
+				className="w-44 justify-between"
+				disabled={disabled}
+			>
 				<span className="sr-only">{recordedAnnouncement}</span>
 				<span aria-hidden>{recordedLabel}</span>
+				{/* No `opacity-60`, for the WCAG 1.4.11 reason spelled out on plan
+				 *  mode's chevron: the glyph inherits `currentColor` and compositing it
+				 *  at 60% takes a non-text indicator under 3:1. */}
+				<ChevronDown className="size-3.5" aria-hidden />
 			</Button>
 		</RollStatusMenu>
 	);
@@ -557,24 +625,23 @@ function RollAttendanceRow({
 	onSetAttendance: (memberId: string, status: AttendanceStatus) => void;
 }) {
 	return (
-		// REFIT onto the rail's rebuilt row shell (v1.19.0.0, #594). Two reasons it
-		// is an `<li>` on these exact classes rather than the horizontal `<div>` it
-		// was: the rows now sit inside a `<ul role="list">`, so a `<div>` child is
-		// invalid and forfeits the set-size/position that list was added to give an
-		// AT user; and the rail is a 340px column where a single-line horizontal row
-		// does not fit. Sharing `AttendanceRow`'s shell verbatim is what stops the
-		// two modes drifting apart again the next time one of them is restyled.
-		<li className="flex flex-col gap-1.5 border-b border-border/60 py-2.5 last:border-b-0">
-			<div className="min-w-0 flex-1">
-				<div className="flex items-center gap-1.5">
-					<span className="truncate text-sm">{row.name}</span>
-					{row.roleName ? (
-						<Badge variant="secondary">{row.roleName}</Badge>
-					) : null}
-				</div>
+		// The rail's row (v1.19.0.0, #594), SHARED as code rather than as a copied
+		// class list — see `PanelRow` for what the copy had missed. Both modes now
+		// render the same three components, so the row is one thing again: the
+		// identity line with the name and the short role code, then the action line,
+		// right-aligned on the rail's one right edge, holding the icon-only contact
+		// drafts and the status control inside its fixed track.
+		<PanelRow>
+			<PanelIdentityLine name={row.name} role={row.role} />
+			<PanelActionLine>
 				{hideContact || row.departed ? null : (
+					// `iconOnly`, which this row was missing. The prop's own doc says it
+					// is opt-in because "only the 340px attendance rail needs the space
+					// back" — and this IS that rail, so the words cost ~60px of a ~292px
+					// column for an affordance the plan rows next to it render as glyphs.
 					<NudgeButtons
 						mode="attendance"
+						iconOnly
 						name={row.name}
 						preferredName={row.preferredName}
 						phone={row.phone}
@@ -583,15 +650,15 @@ function RollAttendanceRow({
 						shareUrl={shareUrl}
 					/>
 				)}
-			</div>
-			<RollChip
-				row={row}
-				locked={locked}
-				pending={pending}
-				busy={busy}
-				onSetAttendance={onSetAttendance}
-			/>
-		</li>
+				<RollChip
+					row={row}
+					locked={locked}
+					pending={pending}
+					busy={busy}
+					onSetAttendance={onSetAttendance}
+				/>
+			</PanelActionLine>
+		</PanelRow>
 	);
 }
 

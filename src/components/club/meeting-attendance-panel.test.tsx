@@ -985,6 +985,148 @@ describe("roll mode", () => {
 		expect(chip.textContent).toContain("—");
 	});
 
+	it("F4: builds its identity line from the rail's OWN row, byte for byte", () => {
+		// The previous refit copied `AttendanceRow`'s `<li>` class list and left the
+		// contents pre-#594, under a comment claiming the shell was shared "verbatim".
+		// Four fixes that rebuild made for this 340px column were therefore missing
+		// from half the rows, and jsdom performs no layout, so nothing could see it.
+		//
+		// So the test is a COMPARISON rather than a class-list checklist: render the
+		// same member in both modes and require the identity line to be the same
+		// markup. A checklist re-encodes today's classes and goes stale the same way
+		// the comment did; this fails the moment one mode's row is restyled without
+		// the other, which is the actual failure mode.
+		const shared = {
+			roster: [
+				{
+					id: "m-abe",
+					name: "Abe Nkemelu",
+					preferredName: null,
+					phone: "+12025550101",
+					email: "abe@example.com",
+				},
+			],
+			// A LONG role name, which is the case that made this matter: `badge.tsx`
+			// carries `shrink-0 whitespace-nowrap`, so the full name is an
+			// unshrinkable ~136px block in a ~292px column.
+			roleByMemberId: {
+				"m-abe": {
+					code: "TD",
+					roleName: "Toastmaster of the Day",
+					confirmed: false,
+				},
+			},
+			plan: [{ memberId: "m-abe", status: "coming" as const }],
+			rungOverride: {},
+			meetingDate: "August 20, 2026",
+			shareUrl: "https://example.test/m",
+			locked: false,
+			onWriteRung: vi.fn(),
+			onContacted: vi.fn(),
+			onSetAttendance: vi.fn(),
+		};
+		const identityLine = (q: ReturnType<typeof render>) => {
+			const el = q.getByText("Abe Nkemelu").parentElement;
+			if (!el) throw new Error("no identity line around the name");
+			return el.outerHTML;
+		};
+
+		const roll = render(
+			<MeetingAttendancePanel {...shared} mode="roll" attendance={[]} />,
+		);
+		const rollLine = identityLine(roll);
+		roll.unmount();
+		const plan = render(<MeetingAttendancePanel {...shared} mode="plan" />);
+		expect(identityLine(plan)).toBe(rollLine);
+
+		// And name the two defects explicitly, because "identical to plan mode" would
+		// also be satisfied by breaking BOTH — a parity assertion cannot see a defect
+		// present on each side.
+		expect(rollLine).toContain("line-clamp-2");
+		expect(rollLine).toContain("break-words");
+		expect(rollLine).not.toContain("truncate");
+		// The 2-4 character CODE is what is VISIBLE; the full role name reaches a
+		// pointer through `title` and a screen reader through the `sr-only` span. On
+		// the surviving render, since the roll copy is unmounted above — and the two
+		// are the same markup, which is what the assertion at the top of this test
+		// has just established.
+		expect(plan.getByText("TD").getAttribute("title")).toBe(
+			"Toastmaster of the Day",
+		);
+	});
+
+	it("F4: renders the role CODE on a roll row, not the full role name", () => {
+		// The rendered half of the pin above, on a live roll render: `buildRollPanel`
+		// read `?.roleName` only, so the row could not carry a code even if the badge
+		// wanted one — which is why the F4 fix reached into the lib.
+		const { getByText, queryByText } = render(
+			<MeetingAttendancePanel
+				{...rollProps}
+				roleByMemberId={{
+					"m-abe": {
+						code: "TD",
+						roleName: "Toastmaster of the Day",
+						confirmed: false,
+					},
+				}}
+			/>,
+		);
+		expect(getByText("TD").getAttribute("title")).toBe(
+			"Toastmaster of the Day",
+		);
+		// Present for an AT user, absent as a VISIBLE block. `sr-only` is a class
+		// here, not a removal, so assert on the class rather than on absence.
+		const full = queryByText("Toastmaster of the Day");
+		expect(full?.className).toContain("sr-only");
+	});
+
+	it("F4: gives the roll row the rail's action line and its fixed status track", () => {
+		// HONEST LIMIT, as on plan mode's own version of this test: jsdom performs no
+		// layout, so this is the mechanism and not the geometry.
+		//
+		// The chip was a direct child of a `flex flex-col` <li> with no track, so it
+		// stretched the full width and the rail's "every row shares one right edge"
+		// held for the plan rows only — while the icon cluster on the rows that DID
+		// have a track jittered against the ones that did not.
+		const { getByRole } = render(
+			<MeetingAttendancePanel
+				{...rollProps}
+				attendance={[{ memberId: "m-bea", status: "present" }]}
+			/>,
+		);
+		const chip = getByRole("button", { name: /Bea Osei status/i });
+		expect(chip.classList.contains("w-44")).toBe(true);
+		expect(chip.classList.contains("justify-between")).toBe(true);
+		const actionLine = chip.parentElement;
+		expect(actionLine?.classList.contains("justify-end")).toBe(true);
+		expect(actionLine?.classList.contains("gap-3")).toBe(true);
+		// Same WCAG 1.4.11 point plan mode's chevron test makes: `currentColor` at
+		// 60% takes a non-text indicator under 3:1.
+		const chevron = chip.querySelector("svg");
+		expect(chevron).toBeTruthy();
+		expect(chevron?.classList.contains("opacity-60")).toBe(false);
+		// The SUGGESTION row's pair shares that one track between the commit and its
+		// menu trigger, rather than widening the rail for a second control.
+		const commit = getByRole("button", { name: /Abe Nkemelu status/i });
+		expect(commit.parentElement?.classList.contains("w-44")).toBe(true);
+	});
+
+	it("F4: draws the roll row's contact drafts as icons, like the plan rows", () => {
+		// `iconOnly` is opt-in because `NudgeButtons` is shared with the agenda slot
+		// cards and the recruit picker, "where the words are affordable; only the
+		// 340px attendance rail needs the space back". This is that rail, and the
+		// roll rows were the one place in it still paying for the words.
+		const { getByRole } = render(<MeetingAttendancePanel {...rollProps} />);
+		const wa = getByRole("link", {
+			name: /Message Abe Nkemelu on WhatsApp/i,
+		});
+		// The accessible name comes from the label; the WORDS are gone from the page.
+		expect(wa.textContent).toBe("");
+		expect(getByRole("link", { name: /Email Abe Nkemelu/i }).textContent).toBe(
+			"",
+		);
+	});
+
 	it("keeps contact while the meeting is today and drops it once completed", () => {
 		const today = render(<MeetingAttendancePanel {...rollProps} />);
 		today.getByRole("link", { name: /WhatsApp/i });
