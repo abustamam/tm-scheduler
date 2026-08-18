@@ -123,9 +123,13 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 			plan: [{ memberId: "m1", status: "coming" as const }],
 			rungOverride: { m1: null },
 		});
+		// EXACT, not `toContain("Ask")`: "Asked" — the adjacent rung's label — also
+		// contains "Ask", so the substring form stayed green with the unset state
+		// rendering "Asked" (verified). That is the likeliest wrong value and the
+		// worst one, since it claims outreach that never happened.
 		expect(
-			getByRole("button", { name: /Ayesha Khan status/i }).textContent,
-		).toContain("Ask");
+			getByRole("button", { name: /Ayesha Khan status/i }).textContent?.trim(),
+		).toBe("Ask");
 	});
 
 	it("counts and sorts on the optimistic state too", () => {
@@ -165,9 +169,12 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 
 	it("invites a first answer instead of rendering what looks like a deletion", () => {
 		const { getByRole } = renderPanel();
+		// EXACT for the same reason as above: `toContain("Ask")` passes for "Asked",
+		// which turns an invitation to make the first ask into a false claim that
+		// the officer already did.
 		expect(
-			getByRole("button", { name: /Ayesha Khan status/i }).textContent,
-		).toContain("Ask");
+			getByRole("button", { name: /Ayesha Khan status/i }).textContent?.trim(),
+		).toBe("Ask");
 	});
 
 	it("drafts a ROLE confirmation for a member who holds a slot", () => {
@@ -223,7 +230,11 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 			},
 		});
 		expect(getByText("TMR").getAttribute("aria-hidden")).toBe("true");
-		expect(getByText("Timer").className).toContain("sr-only");
+		// `classList.contains`, not `className.toContain`: `not-sr-only` is a real
+		// Tailwind class that CONTAINS the substring "sr-only", so the substring
+		// form stayed green while the full role name rendered VISIBLY beside the
+		// code — defeating the short code this whole task is about.
+		expect(getByText("Timer").classList.contains("sr-only")).toBe(true);
 	});
 
 	it("marks an assumed role badge apart from a merely-assigned one", () => {
@@ -282,6 +293,12 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		// headless-Chrome harness for. What IS assertable is the mechanism — the
 		// class that caused the cutoff is gone. Do not read a green run here as
 		// proof of the rendered geometry.
-		expect(el.className).not.toContain("truncate");
+		// BOTH halves, with word-boundary semantics. `not.toContain("truncate")`
+		// alone passes for `line-clamp-1`, which reintroduces the very cutoff this
+		// test exists to prevent — verified, it kept all 17 green. Removing the bad
+		// class is only half the requirement; naming the class we DO want is what
+		// closes it.
+		expect(el.classList.contains("truncate")).toBe(false);
+		expect(el.classList.contains("break-words")).toBe(true);
 	});
 });
