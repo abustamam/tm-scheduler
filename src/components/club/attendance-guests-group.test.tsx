@@ -168,6 +168,42 @@ describe("AttendanceGuestsGroup", () => {
 		expect(onAddGuest).not.toHaveBeenCalled();
 	});
 
+	it("removes a guest by id when the remove control is tapped", async () => {
+		// `onRemoveGuest` was a `vi.fn()` in the shared fixture that nothing ever
+		// asserted had fired: two tests checked whether the control was DISABLED or
+		// ABSENT, and none that tapping it does anything. So the handler could have
+		// been unwired — or wired to the wrong guest — with this suite green.
+		const onRemoveGuest = vi.fn();
+		const { getByRole } = render(
+			<AttendanceGuestsGroup
+				{...base}
+				guests={[
+					{ guestId: "g1", name: "Nadia Farouk", fromRole: false },
+					{ guestId: "g2", name: "Tom Reyes", fromRole: false },
+				]}
+				onRemoveGuest={onRemoveGuest}
+			/>,
+		);
+		// The SECOND row deliberately: a handler that closed over the wrong guest
+		// (the first, or the last) passes a one-row fixture.
+		await userEvent.click(getByRole("button", { name: /Remove Tom Reyes/i }));
+		expect(onRemoveGuest).toHaveBeenCalledWith("g2");
+		expect(onRemoveGuest).toHaveBeenCalledTimes(1);
+	});
+
+	it("gives the remove control a hit area that clears the 24px minimum (F9)", () => {
+		// WCAG 2.5.8. The box was `p-1` around a `size-3` glyph — 20px — on a control
+		// tapped on a phone mid-meeting. jsdom performs no layout, so the RENDERED box
+		// is not measurable here (see CLAUDE.md's jsdom-has-no-layout trap); what is
+		// assertable is that the size is stated on the element rather than inherited
+		// from whatever the icon happens to be, which is the property that made 20px
+		// possible. `size-6` is 1.5rem = 24px.
+		const { getByRole } = render(<AttendanceGuestsGroup {...base} />);
+		const remove = getByRole("button", { name: /Remove Nadia Farouk/i });
+		expect(remove.className).toContain("size-6");
+		expect(remove.className).not.toContain("p-1");
+	});
+
 	it("OMITS the remove control for a guest who is present because of a role", () => {
 		// `fromRole` and `locked` are different things: locked disables, fromRole
 		// omits. A role-holder removed from attendance desyncs the two surfaces.

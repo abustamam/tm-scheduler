@@ -71,9 +71,15 @@ export function AttendanceGuestsGroup({
 								// signal — so without this it is genuinely un-tappable during a
 								// write while rendering pixel-identical to tappable, which is a
 								// silently swallowed tap in the one window every sibling control
-								// dims for. `p-1` because the hit area was otherwise just the
-								// 12px icon glyph, on a control tapped on a phone mid-meeting.
-								className="rounded-sm p-1 hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
+								// dims for.
+								//
+								// SIZED, not padded. `p-1` around a `size-3` glyph gave a 20px box,
+								// under WCAG 2.5.8's 24px minimum on a control tapped on a phone
+								// mid-meeting; `size-6` IS that minimum and — unlike padding — stays
+								// 24px if the glyph inside it is ever resized, which is how the box
+								// came to be 20px in the first place. The flex centring is what keeps
+								// the glyph in the middle of the larger box.
+								className="inline-flex size-6 items-center justify-center rounded-sm hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
 							>
 								<X className="size-3" />
 							</button>
