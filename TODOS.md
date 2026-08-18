@@ -187,6 +187,25 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
   is required to reach the other statuses), which was the actual bug.
   **Priority:** P2
 
+- **Roll-mode a11y and copy residue** (final adversarial pass; all LOW, none data-affecting).
+  1. The `arriving` nudge copy ("we've started our meeting — are you on your way?") fires from
+     club-local **midnight**, because `phase` flips to `today` at day granularity
+     (`src/lib/meeting-lifecycle.ts:41-44`) and the plan panel is gone by then — so meeting-day
+     morning outreach necessarily goes through roll rows and drafts something false for ~19 hours
+     before a 7pm meeting. Human-in-the-loop (the officer edits before sending). A gate on the
+     meeting's wall-clock start closes it. Same defect class the `arriving` mode was added to fix.
+  2. `SyncStatus` renders twice for an admin on meeting day (panel header + Minutes card) and is now
+     `role="alert"` in both, so a sync error is announced **twice assertively** with two Retry
+     buttons in the a11y tree. The duplicate render is deliberate; only the announcement is new.
+  3. The pending count sits in a polite live region whose text is the count, so taking roll offline
+     across 40 members queues 40 announcements. Debounce it, or announce the transition into
+     "pending" rather than the number.
+  4. Mid-drain, each landed op is removed from queue state before the authoritative refetch, so the
+     Minutes card's Table Topics and awards visibly shed rows and get them back. The panel is
+     disabled throughout so no re-tap is possible; pre-F2 the window was uniformly stale instead, so
+     this is newly visible rather than newly wrong.
+  **Priority:** P2
+
 - Smaller residue from the same review, none blocking: plan mode's `DropdownMenuItem`s are
   ungated where roll mode's are now gated (`meeting-attendance-panel.tsx:100-106`; `writeRung` has
   no `writesLocked` precondition while its sibling `contacted` does); `RollAttendanceRow` and
