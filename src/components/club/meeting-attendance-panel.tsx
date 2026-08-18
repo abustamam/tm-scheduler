@@ -121,11 +121,14 @@ function RollChip({
 	row,
 	locked,
 	pending,
+	busy,
 	onSetAttendance,
 }: {
 	row: RollRow;
 	locked: boolean;
 	pending: boolean;
+	/** GLOBAL in-flight, not this row's — see the `busy` prop's doc below. */
+	busy: boolean;
 	onSetAttendance: (memberId: string, status: AttendanceStatus) => void;
 }) {
 	if (row.status === null && row.suggestion) {
@@ -135,7 +138,7 @@ function RollChip({
 				variant="outline"
 				size="sm"
 				className="border-dashed"
-				disabled={locked || pending}
+				disabled={locked || pending || busy}
 				aria-label={`${row.name} status`}
 				onClick={() => onSetAttendance(row.id, suggestion)}
 			>
@@ -150,7 +153,7 @@ function RollChip({
 				<Button
 					variant="outline"
 					size="sm"
-					disabled={locked || pending}
+					disabled={locked || pending || busy}
 					aria-label={`${row.name} status`}
 				>
 					{row.status ? ROLL_LABELS[row.status] : "—"}
@@ -177,6 +180,7 @@ function RollAttendanceRow({
 	shareUrl,
 	hideContact,
 	pending,
+	busy,
 	onSetAttendance,
 }: {
 	row: RollRow;
@@ -189,6 +193,7 @@ function RollAttendanceRow({
 	 *  file" copy and misstate a member who does have one on file. */
 	hideContact: boolean;
 	pending: boolean;
+	busy: boolean;
 	onSetAttendance: (memberId: string, status: AttendanceStatus) => void;
 }) {
 	return (
@@ -216,6 +221,7 @@ function RollAttendanceRow({
 				row={row}
 				locked={locked}
 				pending={pending}
+				busy={busy}
 				onSetAttendance={onSetAttendance}
 			/>
 		</div>
@@ -244,6 +250,7 @@ export function MeetingAttendancePanel({
 	shareUrl,
 	locked,
 	phaseCompleted = false,
+	busy = false,
 	onWriteRung,
 	onContacted,
 	onSetAttendance,
@@ -269,6 +276,33 @@ export function MeetingAttendancePanel({
 	 *  chased, so contact links disappear. Defaults false so plan mode's
 	 *  existing callers need no change. */
 	phaseCompleted?: boolean;
+	/**
+	 * Roll mode only. The write path's GLOBAL in-flight signal — true while ANY
+	 * roll write (or a Minutes-card write, or a reconnect drain) is outstanding
+	 * on the meeting's one `useOfflineMinutes` instance.
+	 *
+	 * It exists because that hook's `mutate()` REFUSES rather than queues while
+	 * it is busy (`use-offline-minutes.ts`: `if (busy || draining) return;`) and
+	 * refuses SILENTLY — no toast, no throw. `pending` below disables one row,
+	 * so without this every other chip stayed tappable and threw the tap away:
+	 * an officer taking roll on a phone taps down a 25-name roster at
+	 * conversational pace, each tap costing a round trip plus a full
+	 * `router.invalidate()`, and a large fraction of them do nothing with
+	 * nothing on screen to say so. The surface roll mode replaces
+	 * (`AttendanceSection`) had no such hole — it put `disabled={busy}` on every
+	 * member's control and on the guest adder.
+	 *
+	 * So this is NOT a nicety: the UI's disabled condition has to match the
+	 * queue's refusal condition, or the two disagree and the gap is invisible.
+	 * Kept SEPARATE from `pending` on purpose — `pending` also drives the
+	 * per-row affordance, and setting it globally would make all 25 rows look
+	 * like the one being written.
+	 *
+	 * Defaults false so plan mode's callers need no change; plan writes go
+	 * straight to `setPlannedAttendance` and never touch the offline queue, so
+	 * `AttendanceRow` deliberately does not read it.
+	 */
+	busy?: boolean;
 	/** One writer for both directions; `null` clears. Two callbacks made the
 	 *  clear path a separate thing to remember at every call site. */
 	onWriteRung: (
@@ -484,6 +518,7 @@ export function MeetingAttendancePanel({
 									shareUrl={shareUrl}
 									hideContact={hideContact}
 									pending={pendingId === row.id}
+									busy={busy}
 									onSetAttendance={setAttendance}
 								/>
 							))
@@ -507,11 +542,19 @@ export function MeetingAttendancePanel({
 						 *  this replaces let an officer add a missed guest to a completed
 						 *  meeting. Leaving it on raw `locked` would fix the member chips
 						 *  and leave the guest list dead on exactly the meeting whose
-						 *  record is being corrected. */
+						 *  record is being corrected.
+						 *
+						 *  `|| busy` because this group's `locked` is documented as "disables
+						 *  controls", not as the meeting's lifecycle, and it is the only
+						 *  channel it has: with the lifecycle gate off in roll mode its
+						 *  controls were disabled by NOTHING during a write, and it closes
+						 *  its popover unconditionally after `onAddGuest` — so a guest add
+						 *  the queue silently refused looked like it had succeeded. Same
+						 *  global signal as the chips, for the same reason. */
 						<AttendanceGuestsGroup
 							guests={guests}
 							clubGuests={clubGuests ?? []}
-							locked={writesLocked}
+							locked={writesLocked || busy}
 							onAddGuest={onAddGuest ?? (() => {})}
 							onRemoveGuest={onRemoveGuest ?? (() => {})}
 						/>

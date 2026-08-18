@@ -192,6 +192,22 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		expect(queryByText("Guests")).toBeNull();
 		expect(queryByText("Nadia Farouk")).toBeNull();
 	});
+
+	it("ignores the roll-mode `busy` signal — plan writes never touch the offline queue", () => {
+		// `busy` is the offline queue's refuse-while-busy signal, and the route
+		// passes it for BOTH modes from one call site. A plan rung goes straight to
+		// `setPlannedAttendance`, so a Minutes-card write (or a reconnect drain)
+		// holding that flag must not disable the outreach ladder — the panel's own
+		// per-row `pending` is the only guard plan mode needs. Pinned because
+		// folding `busy` into `AttendanceRow` "for symmetry" is a one-word edit that
+		// no other test here can see.
+		const { getByRole } = renderPanel({ busy: true });
+		expect(
+			getByRole("button", { name: /Ayesha Khan status/i }).hasAttribute(
+				"disabled",
+			),
+		).toBe(false);
+	});
 });
 
 describe("roll mode", () => {
@@ -369,6 +385,59 @@ describe("roll mode", () => {
 				"disabled",
 			),
 		).toBe(false);
+	});
+
+	it("disables EVERY control while a write is in flight, not just the row being written", () => {
+		// Whole-branch review C1. The panel's disable was PER-ROW (`pendingId`)
+		// while the write path's refusal is GLOBAL and SILENT:
+		// `useOfflineMinutes.mutate()` returns immediately on `busy || draining`
+		// with no toast and no throw, and `busy` is held across the whole online
+		// write — server fn plus a full `router.invalidate()`. So an officer taking
+		// roll on a phone tapped down the roster at conversational pace and a large
+		// fraction of the taps did nothing, with nothing on screen to say so.
+		//
+		// All four controls, because they are four separate `disabled` expressions:
+		// the dashed one-tap suggestion, the recorded chip's menu trigger, and the
+		// guests group's add and remove — that group was the worst of them, since
+		// roll mode forces its lifecycle lock to `false`, so nothing disabled it
+		// during a write at all AND it closes its popover unconditionally after
+		// `onAddGuest`, making a discarded guest add look like a success.
+		const withGuests = {
+			...rollProps,
+			attendance: [{ memberId: "m-bea", status: "present" as const }],
+			guests: [{ guestId: "g1", name: "Nadia Farouk", fromRole: false }],
+			clubGuests: [{ id: "g1", name: "Nadia Farouk" }],
+		};
+		const controls = (q: ReturnType<typeof render>) => [
+			// Abe has no row and a `coming` plan → the dashed one-tap suggestion.
+			q.getByRole("button", { name: /Abe Nkemelu status/i }),
+			// Bea has a real row → the solid chip that opens the menu.
+			q.getByRole("button", { name: /Bea Osei status/i }),
+			q.getByRole("button", { name: /\+ Add guest/ }),
+			q.getByRole("button", { name: /Remove Nadia Farouk/i }),
+		];
+
+		const busy = render(<MeetingAttendancePanel {...withGuests} busy={true} />);
+		for (const el of controls(busy)) {
+			expect(
+				el.hasAttribute("disabled"),
+				el.getAttribute("aria-label") ?? el.textContent ?? "",
+			).toBe(true);
+		}
+		busy.unmount();
+
+		// The control, in the SAME test: without it a `disabled={true}` — or a
+		// `locked` that swallowed the whole group — reads as a pass while the panel
+		// is dead for everyone.
+		const idle = render(
+			<MeetingAttendancePanel {...withGuests} busy={false} />,
+		);
+		for (const el of controls(idle)) {
+			expect(
+				el.hasAttribute("disabled"),
+				el.getAttribute("aria-label") ?? el.textContent ?? "",
+			).toBe(false);
+		}
 	});
 
 	it("expands by default below lg, unlike plan mode", () => {

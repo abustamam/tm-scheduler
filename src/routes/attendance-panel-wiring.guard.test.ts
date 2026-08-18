@@ -64,7 +64,13 @@ describe("attendance panel route wiring (PR 2)", () => {
 		// panel's props require contact unconditionally, and silently handing it
 		// the public shape is how every row renders "No contact on file".
 		expect(src).toContain("plan={effectivePlan}");
-		expect(src).toContain("roster={panelRoster}");
+		// `panelRosterForMode` since the final review's I2 fix: `panelRoster` is
+		// still the entitlement-resolved, contact-bearing list pinned below, and
+		// roll mode widens it to the union with the members who hold a recorded row
+		// (see "unions the departed…" further down). The prop must read the
+		// MODE-AWARE local — wired back to `panelRoster` it typechecks, renders, and
+		// silently drops a departed member's row again.
+		expect(src).toContain("roster={panelRosterForMode}");
 		expect(src).toContain("roleByMemberId={roleByMemberId}");
 		expect(src).toContain(
 			"const effectivePlan = effectiveCanManage ? plan : fetchedPlan;",
@@ -482,5 +488,61 @@ describe("attendance panel route wiring (PR 2)", () => {
 			src.replace(/\s+/g, " "),
 			"roll writes must not bypass the queue",
 		).not.toMatch(/onSetAttendance=\{\(memberId, status\) => setAttendance\(/);
+	});
+
+	// Final whole-branch review. Both findings below are CROSS-TASK: every
+	// contributing decision was individually correct and individually reviewed,
+	// and the defect only exists where two of them meet — which is precisely the
+	// shape no per-task review and no component test can see, and precisely why
+	// they are pinned at the wiring.
+
+	it("C1: hands the panel the queue's refusal condition, so a tap is never silently discarded", () => {
+		// `useOfflineMinutes.mutate()` REFUSES rather than queues while
+		// `busy || draining`, and refuses silently — no toast, no throw. The panel's
+		// own disable is PER-ROW (`pendingId`), so without this every other chip
+		// stayed tappable during a write and threw the tap away: an officer taking
+		// roll on a phone taps down a 25-name roster at conversational pace, each tap
+		// costing a round trip plus a full `router.invalidate()`.
+		//
+		// BOTH halves of the condition, spelled out. `busy` alone typechecks, lints
+		// clean, passes the panel's own tests (they are handed whatever `busy` the
+		// fixture sets) and leaves the identical hole open for the whole of a
+		// reconnect drain — which is a meeting on bad club wifi, the exact situation
+		// #176's queue exists for.
+		expect(src).toContain(
+			"busy={offlineMinutes.busy || offlineMinutes.draining}",
+		);
+	});
+
+	it("I2: unions the departed members holding a recorded row into ROLL mode's roster only", () => {
+		// `loadMinutes` builds its member list as "active roster ∪ any member with a
+		// saved attendance row" and computes `minutes.counts` over that union. The
+		// panel built rows from the active roster alone, so a member marked present
+		// in March who left in April vanished from May's reopened minutes — with the
+		// Minutes card's own recorder deleted, invisible everywhere but the PDF — and
+		// the panel's counts line disagreed with the PDF and the emailed minutes for
+		// one meeting.
+		//
+		// Fixed HERE, deliberately: `buildRollPanel` is correct as written (it builds
+		// from whatever roster it is handed) and `roll-panel.test.ts` pins that a
+		// stale row cannot resurrect a name, which is right for an UPCOMING meeting.
+		// So the mode branch is load-bearing in both directions — dropping it would
+		// resurrect names onto the pre-meeting ladder.
+		expect(src).toContain(
+			'const panelRosterForMode = panelMode === "roll" ? rollRoster : panelRoster;',
+		);
+		// `panelRoster` itself is unchanged and still pinned above: it stays the
+		// entitlement-resolved contact-bearing list, and the union is layered on top
+		// rather than folded into it.
+		//
+		// ONE literal from the `const` to the closing `);`, for the same three
+		// reasons the two projections beside it are pinned that way — the NAME
+		// binding, the five ARGUMENTS (each same-typed with a plausible wrong
+		// expression: `roster: []`, `snapshot: minutes.data`, `online: true`), and
+		// the DEP ARRAY, since a memo missing `panelRoster` freezes on the first
+		// render's roster and a departed member reappears or vanishes at random.
+		expect(src.replace(/\s+/g, " ")).toContain(
+			"const rollRoster = useMemo( () => deriveRollRoster({ roster: panelRoster, online, minutes: minutes.data, snapshot: offlineMinutes.snapshot, queue: offlineMinutes.queue, }), [ panelRoster, online, minutes.data, offlineMinutes.snapshot, offlineMinutes.queue, ], );",
+		);
 	});
 });

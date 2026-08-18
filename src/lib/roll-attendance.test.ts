@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { buildRollPanel } from "#/lib/roll-panel";
 import type { MinutesData } from "#/server/minutes-logic";
 import type { MinutesOp } from "./offline-minutes-queue";
-import { deriveRollAttendance, deriveRollGuests } from "./roll-attendance";
+import {
+	deriveRollAttendance,
+	deriveRollGuests,
+	deriveRollRoster,
+} from "./roll-attendance";
 
 // The op ids/timestamps are irrelevant to the projection but required by the type.
 let seq = 0;
@@ -286,5 +291,156 @@ describe("deriveRollGuests", () => {
 				queue: [addGuest("g-nadia", "Nadia Farouk")],
 			}),
 		).toBeUndefined();
+	});
+});
+
+// Whole-branch review I2. Roll mode also serves COMPLETED meetings, where the
+// active roster is no longer the right list: `loadMinutes` builds "active roster
+// ∪ any member with a saved attendance row" and computes `counts` over that
+// union, so a roster-only panel silently disagreed with the Minutes card, the
+// PDF and the emailed minutes for the same meeting — and a departed member's row
+// could not be seen or corrected anywhere in the app.
+describe("deriveRollRoster", () => {
+	/** The active roster: `m-dee` below is NOT on it — they left the club. */
+	const roster = [
+		{ id: "m-abe", name: "Abe", phone: "+15550000001", email: null },
+		{ id: "m-bea", name: "Bea", phone: null, email: "bea@example.com" },
+		{ id: "m-cy", name: "Cy", phone: null, email: null },
+	];
+	/** The default fixture plus a member who was marked present and has since left. */
+	const withDeparted = () => {
+		const m = makeMinutes([
+			{ memberId: "m-abe", name: "Abe", status: null, hasRole: false },
+			{ memberId: "m-bea", name: "Bea", status: "present", hasRole: false },
+			{ memberId: "m-cy", name: "Cy", status: "excused", hasRole: false },
+			{
+				memberId: "m-dee",
+				name: "Dee Gone",
+				status: "present",
+				hasRole: false,
+			},
+		]);
+		m.counts = { present: 2, absent: 0, excused: 1, unmarked: 1, guests: 1 };
+		return m;
+	};
+
+	it("appends a member with a recorded row who has left the roster", () => {
+		const rows = deriveRollRoster({
+			roster,
+			online: true,
+			minutes: withDeparted(),
+			snapshot: null,
+			queue: [],
+		});
+		expect(rows.map((r) => r.id)).toEqual(["m-abe", "m-bea", "m-cy", "m-dee"]);
+		// Contact-less, and honestly so: a departed member is not on the officer's
+		// roster payload, so their row simply offers no WhatsApp/email draft.
+		expect(rows.find((r) => r.id === "m-dee")).toEqual({
+			id: "m-dee",
+			name: "Dee Gone",
+			preferredName: null,
+			phone: null,
+			email: null,
+		});
+	});
+
+	it("makes the panel's counts agree with the minutes' own counts", () => {
+		// The user-visible half of I2, and the reason this is not just a missing
+		// row: `loadMinutes` counted the departed member and `buildRollPanel` did
+		// not, so ONE meeting showed two different attendance numbers depending on
+		// which surface you looked at. Asserted through `buildRollPanel` — the
+		// consumer — rather than on the roster length, because the roster is only
+		// the mechanism.
+		const minutes = withDeparted();
+		const { counts } = buildRollPanel({
+			roster: deriveRollRoster({
+				roster,
+				online: true,
+				minutes,
+				snapshot: null,
+				queue: [],
+			}),
+			attendance: deriveRollAttendance({
+				online: true,
+				minutes,
+				snapshot: null,
+				queue: [],
+			}),
+			plan: [],
+			roleByMemberId: {},
+		});
+		expect(counts).toEqual({
+			present: minutes.counts.present,
+			absent: minutes.counts.absent,
+			excused: minutes.counts.excused,
+			unmarked: minutes.counts.unmarked,
+		});
+		// Spelled out too, so this cannot pass by both sides being wrong together —
+		// a parity assertion cannot see a defect present on both sides.
+		expect(counts).toEqual({ present: 2, absent: 0, excused: 1, unmarked: 1 });
+	});
+
+	it("never resurrects a member with no recorded status", () => {
+		// The property `buildRollPanel` guarantees for an UPCOMING meeting, kept
+		// here: absence of a row is exactly what "off the roster" looks like. Only a
+		// RECORD earns a row back.
+		const minutes = makeMinutes([
+			{ memberId: "m-abe", name: "Abe", status: null, hasRole: false },
+			{ memberId: "m-ghost", name: "Ghost", status: null, hasRole: false },
+		]);
+		const rows = deriveRollRoster({
+			roster,
+			online: true,
+			minutes,
+			snapshot: null,
+			queue: [],
+		});
+		expect(rows.map((r) => r.id)).not.toContain("m-ghost");
+	});
+
+	it("returns the roster untouched — same identity — when nobody has left", () => {
+		// Identity, not just equality: this feeds the panel's `roster` prop on every
+		// render of a page that re-renders on every tap.
+		const rows = deriveRollRoster({
+			roster,
+			online: true,
+			minutes: makeMinutes(),
+			snapshot: null,
+			queue: [],
+		});
+		expect(rows).toBe(roster);
+	});
+
+	it("returns the roster when the viewer may not read the minutes at all", () => {
+		// `minutes.data` is null for such a viewer — the union has nothing to add
+		// and must not empty the roster on its way to finding that out.
+		expect(
+			deriveRollRoster({
+				roster,
+				online: true,
+				minutes: null,
+				snapshot: null,
+				queue: [],
+			}),
+		).toBe(roster);
+	});
+
+	it("appends a member whose only record is a QUEUED offline tap", () => {
+		// Same projection as the other two derivations, so an officer correcting a
+		// past meeting on dead wifi sees the row they just created rather than
+		// tapping again. `m-dee` is absent from the roster AND unmarked in the
+		// snapshot, so only the replayed queue can put them on screen.
+		const snapshot = makeMinutes([
+			{ memberId: "m-abe", name: "Abe", status: null, hasRole: false },
+			{ memberId: "m-dee", name: "Dee Gone", status: null, hasRole: false },
+		]);
+		const rows = deriveRollRoster({
+			roster,
+			online: false,
+			minutes: null,
+			snapshot,
+			queue: [setAbsent("m-dee")],
+		});
+		expect(rows.map((r) => r.id)).toContain("m-dee");
 	});
 });

@@ -101,7 +101,14 @@ export function useOfflineMinutes(input: {
 				return [...savedQueue.filter((o) => !seen.has(o.opId)), ...current];
 			});
 			setSnapshot(savedSnapshot);
-		})();
+			// Swallowed deliberately: a rejected `indexedDB.open` (Safari private
+			// browsing) means there is no persisted queue to restore, which is the
+			// same state as a first visit — the online path never touches IDB and is
+			// unaffected. Left bare, it is an UNHANDLED rejection, and since PR 3 this
+			// hook mounts for every viewer of the meeting page including anonymous
+			// ones who can never write, so the page would log one for readers who have
+			// nothing to do with the offline queue at all.
+		})().catch(() => {});
 		return () => {
 			alive = false;
 		};

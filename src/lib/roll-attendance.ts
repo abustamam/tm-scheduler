@@ -12,11 +12,16 @@ import type {
 	MinutesData,
 	MinutesGuestRow,
 } from "#/server/minutes-logic";
+import type { PanelMember } from "./attendance-panel";
 import { deriveMinutes } from "./derive-minutes";
 import type { MinutesOp } from "./offline-minutes-queue";
 
 /** One RECORDED attendance row, in the shape the panel's `attendance` prop takes. */
 export type RecordedAttendance = { memberId: string; status: AttendanceStatus };
+
+/** Exactly the panel's `roster` prop shape, so the union below cannot drift
+ *  from what it is handed to. */
+export type RollRosterRow = Omit<PanelMember, "status" | "roleName">;
 
 /** What both projections read. One shape so the two cannot be called differently. */
 type ProjectionInput = {
@@ -100,4 +105,60 @@ export function deriveRollGuests(
 	input: ProjectionInput,
 ): MinutesGuestRow[] | undefined {
 	return projectMinutes(input)?.guests;
+}
+
+/**
+ * The roster ROLL mode should render: the active roster, PLUS anyone who has a
+ * recorded attendance row for this meeting but is no longer on it.
+ *
+ * `loadMinutes` deliberately builds its member list the same way — "active
+ * roster ∪ any member with a saved attendance row" (`minutes-logic.ts`) — and
+ * `minutes.counts` is computed over that union. Roll mode was built from the
+ * active roster alone, which is RIGHT for an upcoming meeting (a stale row must
+ * not resurrect a departed name on a ladder nobody has answered yet, which is
+ * what `buildRollPanel` guarantees and `roll-panel.test.ts` pins) and WRONG for
+ * the completed meetings roll mode also serves: a member marked present in
+ * March who leaves the club in April vanished from May's reopened minutes. Their
+ * row could not be seen or corrected anywhere in the app — the Minutes card's
+ * own recorder is gone — and the panel's counts line disagreed with the Minutes
+ * card, the PDF and the emailed minutes for the same meeting, because
+ * `loadMinutes` counted that member and the panel did not.
+ *
+ * Fixed HERE rather than in `buildRollPanel`, which is correct as written: it
+ * builds from whatever roster it is handed. This is the seam that decides which
+ * roster that is.
+ *
+ * The appended rows are CONTACT-LESS, which is honest — a departed member's
+ * phone and email are not on the officer's roster payload — so they simply show
+ * no WhatsApp/email draft. Same projection as the other two derivations, so an
+ * offline tap on such a row behaves like any other.
+ *
+ * A member with NO recorded status is never appended: absence of a row is
+ * exactly what "not on this club's roster any more" looks like, and appending
+ * them would resurrect the name this guards against.
+ *
+ * Returns the input array UNCHANGED (same identity) when nothing is appended —
+ * the common case by far, and it keeps the panel's `roster` prop stable across
+ * renders.
+ */
+export function deriveRollRoster(
+	input: ProjectionInput & { roster: RollRosterRow[] },
+): RollRosterRow[] {
+	const source = projectMinutes(input);
+	if (!source) return input.roster;
+	const onRoster = new Set(input.roster.map((m) => m.id));
+	const departed = source.members.flatMap((m) =>
+		m.status === null || onRoster.has(m.memberId)
+			? []
+			: [
+					{
+						id: m.memberId,
+						name: m.name,
+						preferredName: null,
+						phone: null,
+						email: null,
+					},
+				],
+	);
+	return departed.length === 0 ? input.roster : [...input.roster, ...departed];
 }

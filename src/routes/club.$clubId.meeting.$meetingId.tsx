@@ -73,7 +73,11 @@ import {
 import { deriveMeetingNavItems } from "#/lib/meeting-nav";
 import { deriveMeetingRoleFlags, pairedRoleIds } from "#/lib/meeting-roles";
 import { useEffectiveMember } from "#/lib/member-identity";
-import { deriveRollAttendance, deriveRollGuests } from "#/lib/roll-attendance";
+import {
+	deriveRollAttendance,
+	deriveRollGuests,
+	deriveRollRoster,
+} from "#/lib/roll-attendance";
 import { footerDate } from "#/lib/slide-layout";
 import { hasWordOfTheDay } from "#/lib/word-poster";
 import { getOpenActionItems } from "#/server/action-items";
@@ -575,6 +579,38 @@ function MeetingView() {
 	const panelRoster = effectiveCanManage
 		? loaderRoster
 		: (tmodPanelData?.roster ?? []);
+	// ROLL mode's roster is the UNION of the active roster and anyone carrying a
+	// recorded attendance row for this meeting — exactly the list `loadMinutes`
+	// builds and `minutes.counts` is computed over. Without it a member marked
+	// present in March who left the club in April is missing from May's reopened
+	// minutes: uncorrectable (the Minutes card's own recorder is gone) and, worse,
+	// counted by the PDF and the emailed minutes but not by the panel, so one
+	// meeting showed two different numbers. `#/lib/roll-attendance` owns it for the
+	// same reason it owns the other two projections — this route cannot mount in
+	// jsdom — and `buildRollPanel` is deliberately untouched: it builds from
+	// whatever roster it is handed, and this is what hands it one.
+	const rollRoster = useMemo(
+		() =>
+			deriveRollRoster({
+				roster: panelRoster,
+				online,
+				minutes: minutes.data,
+				snapshot: offlineMinutes.snapshot,
+				queue: offlineMinutes.queue,
+			}),
+		[
+			panelRoster,
+			online,
+			minutes.data,
+			offlineMinutes.snapshot,
+			offlineMinutes.queue,
+		],
+	);
+	// ONE name for the roster the panel renders, so the two modes cannot diverge
+	// at the call site. PLAN mode keeps the active roster only — for an UPCOMING
+	// meeting a stale row must not resurrect a departed name onto a ladder nobody
+	// has answered, which is the property `roll-panel.test.ts` pins.
+	const panelRosterForMode = panelMode === "roll" ? rollRoster : panelRoster;
 	// A panel built from an EMPTY roster renders its header and a counts line of
 	// zeros — indistinguishable from "this club has no members" and from "you are
 	// no longer the Toastmaster". This page gets used mid-meeting on club wifi, so
@@ -1523,8 +1559,10 @@ function MeetingView() {
 							// and no contact, so their rows render "No contact on file"
 							// rather than leaking PII behind an honour-system gate (#576
 							// review). Never the route's `roster` local, which falls back
-							// to the PUBLIC roster with no contact fields at all.
-							roster={panelRoster}
+							// to the PUBLIC roster with no contact fields at all. Roll mode
+							// widens that to the UNION with anyone holding a recorded row
+							// (see `panelRosterForMode`); plan mode passes it through.
+							roster={panelRosterForMode}
 							plan={effectivePlan}
 							// Roll mode only, and every one of these props is OPTIONAL on the
 							// panel (a caller that has not wired guests renders nothing rather
@@ -1537,6 +1575,14 @@ function MeetingView() {
 							// Once the meeting is a historical record nobody is being chased
 							// over it, so the rows drop their contact drafts.
 							phaseCompleted={phase === "completed"}
+							// The queue's refusal condition, verbatim: `mutate()` returns
+							// immediately (no toast, no throw) while `busy || draining`, so
+							// every control the panel offers has to be disabled for exactly
+							// that window. The panel's own per-row `pending` covers one row;
+							// this is the global half, and without it a tap on any OTHER row
+							// during a write — the normal cadence of a roll call on club wifi
+							// — was silently discarded.
+							busy={offlineMinutes.busy || offlineMinutes.draining}
 							rungOverride={rungOverride}
 							roleByMemberId={roleByMemberId}
 							meetingDate={nudgeDate}
