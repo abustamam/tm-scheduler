@@ -134,8 +134,11 @@ export interface PanelMember {
 	 *  and is what sort and counts read; this field is what a caller needs to
 	 *  answer "is there a row to clear?". An assumed Coming can sit on top of a
 	 *  stored `reached_out` — the officer messaged a confirmed Toastmaster —
-	 *  and clearing that is a real write with a real activity-log entry, even
-	 *  though the row on screen does not move. */
+	 *  and clearing that is a real write with a real activity-log entry even
+	 *  though the EFFECTIVE status does not move. Its consumer is the rail's
+	 *  status control, which renders the stored rung beside the inferred one
+	 *  ("Coming · asked"); without that, picking "Asked" or "No answer" on such
+	 *  a row round-tripped to an unchanged label and read as a failed save. */
 	storedStatus: PlanStatus | null;
 	/** True when `status` is "coming" because the member holds a CONFIRMED role
 	 *  and nobody actually answered. An inference, not their word — the row has

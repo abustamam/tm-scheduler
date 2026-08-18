@@ -70,12 +70,27 @@ function AttendanceRow({
 			? { mode: "confirm" as const, roleName: m.role.roleName }
 			: { mode: "attendance" as const };
 
+	// An assumed Coming can sit ON TOP OF a real stored rung, and without showing
+	// it two of the four menu choices are invisible: picking "Asked" writes
+	// `reached_out`, which cannot outrank the inference, so the control returned
+	// from its disabled round trip reading exactly what it read before — which
+	// reads as "it didn't save", so the officer taps again. Surfacing the stored
+	// rung is what makes both that pick and its undo observable.
+	//
+	// On an assumed row `storedStatus` can only be `null` or `reached_out`: an
+	// explicit `coming`/`not_coming` makes `answered` true, which makes `assumed`
+	// false. So this is the one case there is to surface, not a partial view.
+	const alsoAsked = m.assumed && m.storedStatus === "reached_out";
+
 	// Derived ONCE and used for both the visible label and the announced name, so
-	// the two cannot disagree about what this row says.
+	// the two cannot disagree about what this row says. The visible suffix uses
+	// the counts line's separator; the announced one spells it out, because "·"
+	// is not read aloud.
 	const statusLabel = m.status ? RUNG_LABELS[m.status] : "Ask";
+	const visibleLabel = alsoAsked ? `${statusLabel} · asked` : statusLabel;
 	const statusAnnouncement = `${m.name} status: ${statusLabel}${
 		m.assumed ? " — assumed, role confirmed" : ""
-	}`;
+	}${alsoAsked ? ", already asked" : ""}`;
 
 	return (
 		<li className="flex flex-col gap-1.5 border-b border-border/60 py-2.5 last:border-b-0">
@@ -178,17 +193,20 @@ function AttendanceRow({
 							 *  string, so it is indifferent to that rule in both
 							 *  environments. */}
 							<span className="sr-only">{statusAnnouncement}</span>
-							<span aria-hidden>{statusLabel}</span>
+							<span aria-hidden>{visibleLabel}</span>
 							<ChevronDown className="size-3.5 opacity-60" aria-hidden />
 						</Button>
 					</DropdownMenuTrigger>
-					{/* "No answer" on an ASSUMED row does not MOVE the row — the
-					 *  confirmed slot still stands — but it is not a no-op. If the
-					 *  officer already messaged them, `m.storedStatus` is
-					 *  `reached_out`, and picking this DELETES that row and writes an
-					 *  activity entry while nothing on screen changes. To say they are
-					 *  out, the officer picks "Not coming", which is an explicit answer
-					 *  and outranks the inference. */}
+					{/* On an ASSUMED row neither "Asked" nor "No answer" can MOVE the
+					 *  row — the confirmed slot still stands and outranks both — but
+					 *  neither is a no-op, and both are now VISIBLE through the
+					 *  `· asked` suffix the label carries. "Asked" writes
+					 *  `reached_out`, taking the row from "Coming" to "Coming · asked";
+					 *  "No answer" DELETES that row and writes an activity entry,
+					 *  taking it back. Without the suffix both round-tripped to an
+					 *  unchanged label, which reads as "it didn't save" and gets tapped
+					 *  again. To say they are OUT, the officer picks "Not coming",
+					 *  which is an explicit answer and does outrank the inference. */}
 					<DropdownMenuContent align="end">
 						{MENU.map((item) => (
 							<DropdownMenuItem

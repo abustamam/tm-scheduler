@@ -37,7 +37,7 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 	afterEach(() => cleanup());
 
 	it("lists the whole roster with its counts line", () => {
-		const { getByText, getAllByRole } = renderPanel({
+		const { getByText, getAllByRole, container } = renderPanel({
 			plan: [{ memberId: "m1", status: "coming" as const }],
 		});
 		expect(getByText("Ayesha Khan")).toBeTruthy();
@@ -48,6 +48,15 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		// otherwise leaves the whole suite green, and the role is also what the
 		// explicit `role="list"` on the wrapper exists to preserve on WebKit.
 		expect(getAllByRole("listitem")).toHaveLength(2);
+		// The wrapper's EXPLICIT `role="list"`, asserted at the ATTRIBUTE. Neither
+		// `getAllByRole("listitem")` above nor a `getByRole("list")` can see it:
+		// the `<li>`s carry their own implicit role, and jsdom gives the `<ul>` its
+		// implicit one whether the attribute is there or not — so deleting the
+		// attribute (and its two biome-ignore lines) left the whole suite green
+		// AND the lint gate clean. The attribute exists because WebKit drops the
+		// implicit role once preflight's `list-style: none` applies, which is a
+		// property no jsdom query can reach.
+		expect(container.querySelector("ul")?.getAttribute("role")).toBe("list");
 	});
 
 	it("sets a rung through the row's dropdown", async () => {
@@ -317,6 +326,75 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		// form stayed green while the full role name rendered VISIBLY beside the
 		// code — defeating the short code this whole task is about.
 		expect(getByText("Timer").classList.contains("sr-only")).toBe(true);
+	});
+
+	it("shows a stored Asked ON TOP of an assumed Coming, so the pick is visible", () => {
+		// The rung an officer picks to record "I chased them" cannot outrank a
+		// confirmed role, so without surfacing `storedStatus` the control came back
+		// from its disabled round trip reading exactly what it read before — which
+		// reads as "it didn't save", so they tap again. Both the visible label and
+		// the announced name have to carry it.
+		const { getByRole } = renderPanel({
+			plan: [{ memberId: "m1", status: "reached_out" as const }],
+			roleByMemberId: {
+				m1: { code: "TD", roleName: "Toastmaster", confirmed: true },
+			},
+		});
+		const btn = getByRole("button", {
+			name: "Ayesha Khan status: Coming — assumed, role confirmed, already asked",
+		});
+		expect(within(btn).getByText("Coming · asked")).toBeTruthy();
+	});
+
+	it("drops the stored Asked when the officer clears it back to no answer", () => {
+		// The other half of the same transition, driven through the optimistic
+		// path the route actually uses: clearing DELETES a real row and logs it,
+		// so it must be visible even though the effective status cannot move.
+		// An assumed row with no stored rung reads exactly as it did before.
+		const { getByRole, queryByText } = renderPanel({
+			plan: [{ memberId: "m1", status: "reached_out" as const }],
+			rungOverride: { m1: null },
+			roleByMemberId: {
+				m1: { code: "TD", roleName: "Toastmaster", confirmed: true },
+			},
+		});
+		expect(
+			getByRole("button", {
+				name: "Ayesha Khan status: Coming — assumed, role confirmed",
+			}),
+		).toBeTruthy();
+		expect(queryByText("Coming · asked")).toBeNull();
+	});
+
+	it("mutes the control on an assumed row but not on an answered one", () => {
+		// The spec states the assumed/answered distinction as one sentence with
+		// three parts — badge tick, MUTED CONTROL, accessible name. The badge test
+		// below closed the tick and the variant; deleting the whole `className`
+		// muting prop still left the suite green. Two-sided in one render, for the
+		// same reason that test gives: a one-sided assertion passes for a control
+		// that is always muted. `classList`, not `className.toContain`, because
+		// "text-muted-foreground" is a SUBSTRING of "hover:text-muted-foreground"
+		// and the hover class alone would satisfy the substring form.
+		const { getByRole } = renderPanel({
+			plan: [{ memberId: "m2", status: "coming" as const }],
+			roleByMemberId: {
+				m1: { code: "TD", roleName: "Toastmaster", confirmed: true },
+			},
+		});
+		const assumed = getByRole("button", { name: /Ayesha Khan status/i });
+		expect(assumed.classList.contains("text-muted-foreground")).toBe(true);
+		// The hover arm is a SEPARATE selector: the `outline` variant's
+		// `hover:text-accent-foreground` outranks a bare `text-muted-foreground`
+		// on hover, so muting without it un-mutes under the cursor.
+		expect(assumed.classList.contains("hover:text-muted-foreground")).toBe(
+			true,
+		);
+
+		const answered = getByRole("button", { name: /Bo Lin status/i });
+		expect(answered.classList.contains("text-muted-foreground")).toBe(false);
+		expect(answered.classList.contains("hover:text-muted-foreground")).toBe(
+			false,
+		);
 	});
 
 	it("marks an assumed role badge apart from a merely-assigned one", () => {
