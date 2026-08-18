@@ -22,6 +22,7 @@ Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO`
 - **A screen reader now hears the answer.** On every row where someone had actually replied, the status control announced only "Ayesha Khan status" — the word Coming, Asked or Not coming never reached assistive tech. The rail's whole purpose is who is coming, and for those users that answer was missing.
 - **Confirming a member's role no longer un-confirms them when you message them.** Tapping their draft recorded "I asked them", which outranked the confirmation and dropped them back out of the coming count.
 - **A double-tap on a message draft records one thing, not four.** The status control already ignored repeat taps mid-save; the WhatsApp and Email links did not, so an impatient tap on a phone wrote the same "asked" several times and filled the activity log with duplicates.
+- **A role name in a non-Latin script no longer shows a broken character on the badge.** The short code was cut at four UTF-16 units rather than four characters, so a club whose role name is written in emoji or an ideographic script could get a half-character on the end of its badge.
 - **The role badge no longer implies a confirmation nobody gave.** A filled badge with a tick was marking exactly the rows where nobody had replied, while the control beside it was greyed to say the opposite.
 
 ## [1.18.0.1] - 2026-08-17
