@@ -1396,10 +1396,26 @@ function MeetingView() {
 						// unreachable — the page scrolls, the pinned rail does not —
 						// unless the agenda column happens to be taller. Capping the
 						// height and giving the rail its OWN scroller is what makes the
-						// bottom rows reachable, and keeps the card title and counts line
-						// (the summary a reader 25 rows down has otherwise lost) at the
-						// top of that scroller. `7rem` = the 6rem `top-24` offset plus
+						// bottom rows reachable. `7rem` = the 6rem `top-24` offset plus
 						// 1rem of breathing room at the bottom edge.
+						//
+						// That is ALL it does. The scroller IS this `<aside>` and the card
+						// is a single child inside it, so the card title and the counts
+						// line scroll away with everything else — a reader 25 rows down
+						// has lost the summary. Keeping it would need `sticky` on
+						// `CardHeader`, which carries none (`src/components/ui/card.tsx`),
+						// and that is a shared-primitive change for another pass. This
+						// comment claimed the header stayed put until the claim was
+						// checked against the DOM.
+						//
+						// And note the axis it costs: `overflow-y: auto` with an
+						// `overflow-x` of `visible` computes that `visible` to `auto`
+						// (CSS Overflow 3 §3), so at `lg` this element is a clipping box on
+						// BOTH axes, not just the vertical one. Nothing in the rail
+						// overhangs today — the row wraps (`break-words`, `line-clamp-2`)
+						// and the widest control is the measured `w-44` track — but a
+						// future popover or tooltip that renders INLINE rather than in a
+						// portal would be cut off here rather than overflowing the column.
 						className="order-1 lg:order-2 lg:sticky lg:top-24 lg:max-h-[calc(100vh-7rem)] lg:w-[340px] lg:shrink-0 lg:overflow-y-auto"
 					>
 						<MeetingAttendancePanel

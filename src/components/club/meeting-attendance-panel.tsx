@@ -25,10 +25,25 @@ const RUNG_LABELS: Record<PlanStatus, string> = {
 	not_coming: "Not coming",
 };
 
-/** The two qualifiers a Coming can carry on the status control. Each is
- *  rendered BOTH visibly (after the counts line's "·") and inside the announced
- *  name, so the word a sighted officer reads and the word a screen reader hears
- *  cannot drift — the same property `RUNG_LABELS` already gives the rung word. */
+/** The two qualifiers a Coming can carry on the status control. MUTUALLY
+ *  EXCLUSIVE by construction — `alsoAsked ? ASKED_WORD : m.assumed ?
+ *  ASSUMED_WORD : null` — and `asked` WINS when both apply, because it is the
+ *  more actionable of the two: it says the officer already chased this member,
+ *  which "assumed" does not.
+ *
+ *  So the visible label and the announced name deliberately DIVERGE on exactly
+ *  that row: visible is `"Coming · asked"`, announced is
+ *  `"… status: Coming — assumed, role confirmed, already asked"`. `ASSUMED_WORD`
+ *  is announced there and not shown. That is not a drift to fix — the row's
+ *  assumed-ness is carried VISIBLY by the control's muting and carried in WORDS
+ *  only in the announcement, and the split is pinned by the panel's own suite
+ *  with its rationale.
+ *
+ *  The width is what forces it, and the number is measured, so do not "fix" this
+ *  by stacking the two: the trigger is a fixed `w-44` (176px) track sized against
+ *  the widest label it must hold, `"Coming · assumed"`. `"Coming · assumed ·
+ *  asked"` does not fit, and widening the track spends ~50px of a ~292px rail
+ *  saying twice what "asked" already implies (nobody answered). */
 const ASSUMED_WORD = "assumed";
 const ASKED_WORD = "asked";
 
@@ -416,7 +431,40 @@ export function MeetingAttendancePanel({
 		// the difference only becomes visible as a hole the moment the panel is
 		// rendered in another phase. The draft itself still opens; a locked
 		// meeting just stops recording against it.
-		if (locked) return;
+		//
+		// Gated on `pendingId` for the reason the trigger's `disabled` covers the
+		// OTHER control: `pending` reaches the dropdown and nothing else. The two
+		// draft links are bare anchors — no `disabled` attribute exists on an `<a>`
+		// — so a fat-finger fired `onContacted` once per tap. Measured on a rendered
+		// fixture: during ONE in-flight write the status control read
+		// `disabled = true` while the WhatsApp anchor read `disabled = false`,
+		// `aria-disabled = null`, and four taps produced four calls. Neither layer
+		// below absorbs it — the route's `markAsked` resolves `current` from the
+		// `rungOverride` captured at render, so same-tick taps all see `null`, and
+		// the server's `setPlanStatus` MATCHES an existing `reached_out` row, so
+		// `returning()` is non-empty and every duplicate lands another `plan_set` in
+		// `activity_log`. Not corruption (`demoteFrom` still stops a late nudge
+		// overwriting a real answer), but N requests, N router invalidates and N
+		// duplicate feed rows.
+		//
+		// ANY in-flight write, not just this member's. `pendingId` is a single slot
+		// by construction, so it cannot represent two concurrent writes: a second
+		// row's `finally` clears the flag out from under the first. Blocking on the
+		// flag being set at all keeps its meaning honest rather than claiming a
+		// per-row precision the state does not have. The cost is bounded and
+		// recoverable — a deliberate tap on ANOTHER row inside the same round trip
+		// still OPENS its draft (the anchor is never disabled), it just records
+		// nothing, and the officer can set "Asked" by hand or tap again.
+		//
+		// The anchors are deliberately NOT made to LOOK unavailable mid-flight. An
+		// `<a>` here has two jobs and only one of them is the write: its primary job
+		// is opening the draft, which stays valid and wanted throughout the window.
+		// `pointer-events-none` would suppress the primary action to protect the
+		// bookkeeping one this guard already protects, and a bare `aria-disabled`
+		// would announce "unavailable" about a link that still works — the same
+		// visible/announced drift the status control's composed name exists to
+		// avoid, in the other direction.
+		if (locked || pendingId) return;
 		setPendingId(memberId);
 		try {
 			await onContacted(memberId);

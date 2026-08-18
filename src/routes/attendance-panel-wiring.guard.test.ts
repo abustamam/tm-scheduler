@@ -56,6 +56,16 @@ describe("attendance panel route wiring (PR 2)", () => {
 	const panelTagEnd = src.indexOf("/>", panelTagAt);
 	const panelProps = src.slice(panelTagAt, panelTagEnd);
 
+	// The pinned rail's own wrapper, windowed the same way and for the same
+	// reason: this route carries dozens of `className` strings, and a whole-file
+	// `toContain` on a utility class matches whichever element happens to have
+	// it. Ends at the opening tag's `>` — `readSource` blanks the JSX comment
+	// that sits between `<aside` and `className`, so the first `>` after the tag
+	// name is the tag's own.
+	const asideTagAt = src.indexOf("<aside");
+	const asideTagEnd = src.indexOf(">", asideTagAt);
+	const asideTag = src.slice(asideTagAt, asideTagEnd);
+
 	it("finds the panel's call site at all", () => {
 		// The window every prop assertion below reads from. Without this, a
 		// renamed or deleted <MeetingAttendancePanel> makes `panelProps` the
@@ -503,5 +513,36 @@ describe("attendance panel route wiring (PR 2)", () => {
 		// directly beneath the toolbar rather than after the whole agenda column.
 		expect(src).toContain("order-1 lg:order-2");
 		expect(src).toContain("order-2 min-w-0 flex-1");
+	});
+
+	it("caps the pinned rail's height and gives it its own scroller", () => {
+		// The headline reachability fix of this diff, and it was gated by nothing:
+		// deleting both classes left 244/244 route tests green. `lg:sticky` with no
+		// cap makes the rail's own height a wall — rows are ~81px, so a 40-member
+		// club is a ~3,240px column pinned inside a ~950px viewport, and everything
+		// past row ~10 is unreachable because the PAGE scrolls and the pinned rail
+		// does not. The cap plus the scroller is what makes the bottom rows
+		// reachable at all.
+		//
+		// Both, not either. `lg:overflow-y-auto` alone on an uncapped element never
+		// overflows, so it scrolls nothing; `lg:max-h-…` alone clips the rows it
+		// cut off with no way to reach them, which is worse than the bug. Each is
+		// inert without the other, so a single `toContain` passes on half a fix.
+		//
+		// HONEST LIMIT: this pins the MECHANISM — the classes are present on the
+		// rail's own element — and never the GEOMETRY. jsdom performs no layout and
+		// loads no stylesheet, so nothing in this repo proves the rail actually
+		// scrolls, that `calc(100vh-7rem)` clears the `top-24` offset, or that row
+		// 40 is reachable on a real viewport. Only a browser can see that.
+		expect(
+			asideTagAt,
+			"expected the pinned rail to still be an <aside …> element",
+		).toBeGreaterThan(-1);
+		expect(
+			asideTagEnd,
+			"expected the <aside> opening tag to close",
+		).toBeGreaterThan(asideTagAt);
+		expect(asideTag).toContain("lg:max-h-[calc(100vh-7rem)]");
+		expect(asideTag).toContain("lg:overflow-y-auto");
 	});
 });

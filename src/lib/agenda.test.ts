@@ -300,6 +300,26 @@ describe("roleAbbrev", () => {
 	it("falls back to ? for an empty name", () => {
 		expect(roleAbbrev("")).toBe("?");
 	});
+	it("slices CODE POINTS on the no-letters path, never half a surrogate pair", () => {
+		// `name.slice(0, 4)` counts UTF-16 code units, so a role name whose first
+		// four units end mid-pair emitted a lone high surrogate: measured,
+		// `roleAbbrev("①🎤🎤")` returned `"①🎤\ud83c"`. That renders as a
+		// replacement glyph on the attendance rail's badge, and
+		// `encodeURIComponent` throws `URIError: URI malformed` on it — a live
+		// hazard for any consumer that puts a code in a URL.
+		//
+		// Three points, so nothing here can be satisfied by half the fix: the
+		// SHORT name must round-trip whole, the LONG one must still be capped (at
+		// four code points, not four units), and both must be well formed. A cap
+		// assertion alone passes for `[...name].join("")` with no slice at all.
+		expect(roleAbbrev("①🎤🎤")).toBe("①🎤🎤");
+		expect(roleAbbrev("🎤🎤🎤🎤🎤")).toBe("🎤🎤🎤🎤");
+		for (const name of ["①🎤🎤", "🎤🎤🎤🎤🎤", "日本語のロール"]) {
+			const code = roleAbbrev(name);
+			expect([...code].length).toBeLessThanOrEqual(4);
+			expect(() => encodeURIComponent(code)).not.toThrow();
+		}
+	});
 });
 
 describe("buildShortCodes", () => {

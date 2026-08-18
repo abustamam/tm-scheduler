@@ -615,6 +615,53 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		).toBe(false);
 	});
 
+	it("absorbs a fat-finger on the message drafts, not only on the status control", async () => {
+		// `pending` is computed per row and threaded into `AttendanceRow`, but it
+		// reached ONLY the dropdown trigger's `disabled`. The two draft links are
+		// bare anchors and `disabled` does not exist on an `<a>`, so during one
+		// in-flight write the status control read `disabled = true` while the
+		// WhatsApp anchor read `disabled = false` / `aria-disabled = null`, and four
+		// taps fired four writes. Verified against the fix: reverting `contacted` to
+		// `if (locked) return;` fails this with 4 calls.
+		//
+		// The guard has to live in the panel because neither layer below absorbs
+		// it. The route's `markAsked` resolves `current` from the `rungOverride`
+		// captured at render, so same-tick taps all see `null`; and the server's
+		// `setPlanStatus` MATCHES an existing `reached_out` row, so `returning()` is
+		// non-empty and every duplicate lands another `plan_set` in `activity_log`.
+		// Not corruption — `demoteFrom` still stops a late nudge overwriting a real
+		// answer — but N requests, N router invalidates, N duplicate feed rows.
+		//
+		// Deferred promise, the same shape as the trigger test above and for the
+		// same reason: the extra taps must land between the write starting and
+		// finishing, which is the only window the guard exists for. Re-queried each
+		// time rather than held, so this cannot pass by tapping a detached node.
+		let release!: () => void;
+		const onContacted = vi.fn(
+			() =>
+				new Promise<void>((resolve) => {
+					release = resolve;
+				}),
+		);
+		const { getByRole } = renderPanel({ onContacted });
+		const wa = () =>
+			getByRole("link", { name: /Message Ayesha Khan on WhatsApp/i });
+		fireEvent.click(wa());
+		fireEvent.click(wa());
+		fireEvent.click(wa());
+		fireEvent.click(wa());
+		expect(onContacted).toHaveBeenCalledTimes(1);
+
+		// And it RELEASES. A guard that never clears records the first ask and
+		// silently drops every one after it for the life of the mount — worse than
+		// the bug it closes, and invisible without this half.
+		await act(async () => {
+			release();
+		});
+		fireEvent.click(wa());
+		expect(onContacted).toHaveBeenCalledTimes(2);
+	});
+
 	it("gives the action line two hard edges and a legible chevron", () => {
 		// HONEST LIMIT, the same one the long-name test states: jsdom performs no
 		// layout and loads no stylesheet, so none of this is the rendered GEOMETRY or
