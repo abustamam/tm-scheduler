@@ -44,14 +44,14 @@ import {
 } from "#/components/ui/dialog";
 import { Label } from "#/components/ui/label";
 import { useOnlineStatus } from "#/hooks/use-online-status";
-import { buildRoleCounts, slotLabel } from "#/lib/agenda";
+import { buildRoleCounts, buildShortCodes, slotLabel } from "#/lib/agenda";
 import {
 	applyFlex,
 	buildRunOfShow,
 	expandRunSheet,
 } from "#/lib/agenda-runsheet";
 import { buildSlideDeck } from "#/lib/agenda-slides";
-import type { PlanStatus } from "#/lib/attendance-panel";
+import type { PanelRole, PlanStatus } from "#/lib/attendance-panel";
 import { clubLogoUrl } from "#/lib/club-logo-url";
 import {
 	formatMeetingDate,
@@ -567,6 +567,34 @@ function MeetingView() {
 	const roleByMemberId: Record<string, string> = {};
 	for (const s of slots) {
 		if (s.assigneeId) roleByMemberId[s.assigneeId] = slotLabel(s, roleCounts);
+	}
+	// The RAIL's own map, deliberately separate from `roleByMemberId` above.
+	// That one is read as a plain string by four other consumers
+	// (<MeetingAgenda>, <AssignSlotSheet>, <NudgeRecruitPicker>, buildPickerRows)
+	// and widening its value type to serve one of them is how a shared map
+	// becomes everyone's problem.
+	//
+	// `buildShortCodes` is the season grid's own function — reusing it is what
+	// makes the rail's codes and the sign-up sheet's agree by construction rather
+	// than by a second hand-maintained list. It already dedupes collisions and
+	// numbers repeats ("SP1"/"SP2").
+	const shortCodes = buildShortCodes(
+		slots.map((s) => ({
+			roleDefinitionId: s.roleDefinitionId,
+			slotIndex: s.slotIndex,
+			name: s.roleName,
+		})),
+	);
+	const panelRoleByMemberId: Record<string, PanelRole> = {};
+	for (const s of slots) {
+		if (!s.assigneeId) continue;
+		panelRoleByMemberId[s.assigneeId] = {
+			code: shortCodes.get(`${s.roleDefinitionId}:${s.slotIndex}`) ?? "?",
+			// The BASE role name, not `slotLabel` — the draft says "you're our
+			// Speaker", never "you're our Speaker 1".
+			roleName: s.roleName,
+			confirmed: s.status === "confirmed",
+		};
 	}
 	// Derived here rather than carried as their own payload fields (#396 PR2
 	// task 6): both are redundant with data the payload already ships.
@@ -1384,7 +1412,7 @@ function MeetingView() {
 							roster={panelRoster}
 							plan={effectivePlan}
 							rungOverride={rungOverride}
-							roleByMemberId={roleByMemberId}
+							roleByMemberId={panelRoleByMemberId}
 							meetingDate={nudgeDate}
 							shareUrl={nudgeShareUrl}
 							locked={locked}
