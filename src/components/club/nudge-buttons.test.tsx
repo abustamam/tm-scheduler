@@ -116,6 +116,22 @@ describe("NudgeButtons", () => {
 		expect(onContacted).toHaveBeenCalledTimes(1);
 	});
 
+	it("fires onContacted when the Email draft link is clicked", async () => {
+		const onContacted = vi.fn();
+		const user = userEvent.setup();
+		render(
+			<NudgeButtons
+				{...base}
+				phone={null}
+				email="j@x.io"
+				onContacted={onContacted}
+			/>,
+		);
+		const mail = await screen.findByRole("link", { name: /email/i });
+		await user.click(mail);
+		expect(onContacted).toHaveBeenCalledTimes(1);
+	});
+
 	it("renders an attendance draft with no role name", () => {
 		const { getByRole } = render(
 			<NudgeButtons
@@ -146,6 +162,13 @@ describe("NudgeButtons", () => {
 		// on the labelled path cannot hide behind this test.
 		expect(wa.getAttribute("aria-label")).toBeNull();
 		expect(mail.getAttribute("aria-label")).toBeNull();
+		// Same reasoning applies to `title`: content already wins the accessible
+		// name here, so an unconditional `title` would leak a tooltip neither the
+		// agenda slot cards nor the recruit picker ever asked for, and nothing
+		// above would notice — accname only falls back to `title` when content
+		// AND `aria-label` are both absent.
+		expect(wa.getAttribute("title")).toBeNull();
+		expect(mail.getAttribute("title")).toBeNull();
 	});
 
 	it("iconOnly drops the text but NOT the accessible name", () => {

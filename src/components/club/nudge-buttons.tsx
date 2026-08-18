@@ -102,15 +102,22 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 	// against displays the full `name`, so the accessible label matches what
 	// the officer sees on screen.
 	//
-	// The ACCESSIBLE NAME matches `WhatsAppPhoneLink` (#37) — both say the link
-	// leaves the page, since a screen reader gives no other signal that
-	// `target="_blank"` is about to happen. That match is `aria-label` only:
-	// `WhatsAppPhoneLink`'s `title` is a deliberately SHORT, separate string
-	// (`Message ${name} on WhatsApp`, no "opens in a new tab"), pinned by five
-	// test files. Here `title` reuses the longer `waLabel` instead, because
-	// icon-only mode has no visible text left for a sighted mouse user to read
-	// — the tooltip is doing work the sibling doesn't need it to do. Do not
-	// "harmonise" the two by lengthening `WhatsAppPhoneLink`'s title to match:
+	// Both links announce that they leave the page, matching `WhatsAppPhoneLink`
+	// (#37) — a screen reader gives no other signal that `target="_blank"` is
+	// about to happen. `WhatsAppPhoneLink` composes that phrase from an
+	// `sr-only` span rather than an `aria-label`, because it still has visible
+	// content (the phone number) whose accessible name a label would override;
+	// it has no `aria-label` at all. Icon-only mode here has no visible content
+	// left, so it uses `aria-label` instead — the two names are NOT identical
+	// strings (`+1555… — message Jane on WhatsApp, opens in a new tab` there vs.
+	// `Message Jane on WhatsApp, opens in a new tab` here), only the
+	// "opens in a new tab" convention is shared. `title` reuses the longer
+	// `waLabel` here, because icon-only mode has no visible text left for a
+	// sighted mouse user to read — the tooltip is doing work the sibling
+	// doesn't need it to do (`WhatsAppPhoneLink`'s `title` is a deliberately
+	// SHORT, separate string, `Message ${name} on WhatsApp`, no "opens in a new
+	// tab", pinned by five test files). Do not "harmonise" the two by
+	// lengthening `WhatsAppPhoneLink`'s title to match:
 	// `members.$id.test.tsx:233` asserts `queryByTitle(/on WhatsApp$/)).toBeNull()`
 	// with an ANCHORED matcher, so appending this suffix there would make that
 	// assertion pass because the anchor stopped matching the (now longer)
