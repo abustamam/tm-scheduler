@@ -104,6 +104,21 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
   **Measure `router.invalidate()` against a real club before choosing.**
   **Priority:** P1
 
+- **The roll-mode suggestion chip may not be distinguishable from a recorded one.** D3's whole
+  premise is that a member with a plan but no recorded row renders a dashed "Present?" that commits
+  in one tap — but the only visual differentiator is `className="border-dashed"` on a
+  `variant="outline"` Button (`meeting-attendance-panel.tsx:140`), and `outline`'s border is
+  `--border: var(--line)` = `rgba(23,58,64,0.14)` light / `rgba(141,229,219,0.18)` dark
+  (`src/styles.css:22,101`) — a 1px line at ~15% opacity. Dashed vs solid at that opacity will not
+  read at arm's length, and nothing else differs: no fill, no background tint, no icon. The
+  trailing `?` is the only other cue and it requires READING each label rather than
+  pattern-matching the row, which is the failure mode the design exists to avoid. If an officer
+  cannot tell guesses from records at a glance, the counts they read out to the club are wrong.
+  Fix: give the suggestion state a fill or background tint (or a coloured left bar) on top of the
+  dashed outline. Design specialist, confidence 8, on the PR-3 review.
+  Nothing in this repo can gate it — jsdom performs no layout, so no test can see it.
+  **Priority:** P1
+
 - Smaller residue from the same review, none blocking: plan mode's `DropdownMenuItem`s are
   ungated where roll mode's are now gated (`meeting-attendance-panel.tsx:100-106`; `writeRung` has
   no `writesLocked` precondition while its sibling `contacted` does); `RollAttendanceRow` and
