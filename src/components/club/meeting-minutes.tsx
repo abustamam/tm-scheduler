@@ -36,11 +36,23 @@ import {
 
 type MinutesData = NonNullable<MinutesResult["data"]>;
 type AwardCategory = MinutesData["awards"][number]["category"];
+/**
+ * Derived from the payload rather than re-declared as a hand-written union. The
+ * old recorder kept its own copy of `"present" | "absent" | "excused"`, which
+ * could drift from what `loadMinutes` actually returns; this cannot.
+ */
+type AttendanceStatus = NonNullable<MinutesData["members"][number]["status"]>;
 
 const AWARD_LABELS: Record<AwardCategory, string> = {
 	best_speaker: "Best Speaker",
 	best_evaluator: "Best Evaluator",
 	best_table_topics: "Best Table Topics",
+};
+
+const STATUS_LABELS: Record<AttendanceStatus, string> = {
+	present: "Present",
+	absent: "Absent",
+	excused: "Excused",
 };
 
 type MeetingMinutesProps = {
@@ -212,18 +224,29 @@ function MeetingMinutesView({
 				    that only error.
 
 				    On the day, roll call moved to the attendance panel beside the
-				    agenda, so this card only POINTS at it. Two surfaces writing the
-				    same rows is how a club ends up with someone marked present in one
-				    place and absent in the other; the panel keeps the counts, the
-				    guests and the offline queue.
+				    agenda. Two surfaces WRITING the same rows is how a club ends up
+				    with someone marked present in one place and absent in the other,
+				    so the recorder lives there and only there.
+
+				    Which is why this branches on `canEdit`. The panel is admin-only
+				    (its writes run `gateAdmin`), but this card is visible to any
+				    member once the meeting is `completed` — so pointing THEM at a
+				    panel they cannot see would be false, and dropping the section
+				    outright would take "who was at this meeting?" away from the
+				    largest audience the minutes have. They get the RECORD, read-only:
+				    it writes nothing, so it does not reopen what the deletion closed.
 
 				    Deliberately `meetingDayReached`, not `meetingPast`: roll call is
 				    taken AT the meeting, and `meetingPast` (`isMeetingOver`) is false
 				    all through meeting day. */}
 				{meetingDayReached ? (
-					<p className="text-sm text-muted-foreground">
-						Attendance is taken in the Attendance panel, beside the agenda.
-					</p>
+					canEdit ? (
+						<p className="text-sm text-muted-foreground">
+							Attendance is taken in the Attendance panel, beside the agenda.
+						</p>
+					) : (
+						<AttendanceRecord minutes={displayMinutes} />
+					)
 				) : (
 					// Say WHY it is missing. A section that silently disappears reads as
 					// a bug to the officer who used it last week.
@@ -418,6 +441,81 @@ function SyncStatus({
 		);
 	}
 	return null;
+}
+
+// ---------------------------------------------------------------------------
+// Attendance (READ-ONLY)
+// ---------------------------------------------------------------------------
+
+/**
+ * The attendance RECORD, for a viewer who cannot edit it.
+ *
+ * Roll call itself moved to the attendance panel's roll mode, which is
+ * admin-only. But this card is visible to any club member once the meeting is
+ * `completed` (`getMinutes`: `visible = canEdit || status === "completed"`), and
+ * that member is the largest audience the minutes have — so deleting the
+ * recorder must not also delete their answer to "who was at this meeting?".
+ *
+ * This renders no button, no menu and no handler, and takes no callback. That
+ * is the whole point and it is deliberately checkable: the deletion exists to
+ * stop two surfaces WRITING the same attendance rows, and a view that cannot
+ * write is not a second writer. `meeting-minutes.test.tsx` asserts the absence
+ * of every write control at the DOM level, and
+ * `absorbed-surfaces.guard.test.ts` asserts this file names none of the three
+ * attendance write fns — so this cannot quietly grow back into a recorder.
+ *
+ * `unmarked` is NOT absent (#218): a member with no saved row reads "Unmarked",
+ * matching how the minutes PDF renders the same member.
+ */
+function AttendanceRecord({ minutes }: { minutes: MinutesData }) {
+	const { present, absent, excused, unmarked, guests } = minutes.counts;
+	return (
+		<section className="space-y-3">
+			<div className="flex flex-wrap items-center gap-2">
+				<h3 className="font-semibold text-sm">Attendance</h3>
+				<Badge variant="secondary">{present} present</Badge>
+				<Badge variant="outline">{excused} excused</Badge>
+				<Badge variant="outline">{absent} absent</Badge>
+				<Badge variant="outline">{unmarked} unmarked</Badge>
+				<Badge variant="secondary">{guests} guests</Badge>
+			</div>
+
+			<ul className="divide-y rounded-md border">
+				{minutes.members.map((m) => (
+					<li
+						key={m.memberId}
+						className="flex items-center justify-between gap-3 px-3 py-2"
+					>
+						<span className="text-sm">{m.name}</span>
+						<Badge variant={m.status === "present" ? "secondary" : "outline"}>
+							{m.status ? STATUS_LABELS[m.status] : "Unmarked"}
+						</Badge>
+					</li>
+				))}
+				{minutes.members.length === 0 ? (
+					<li className="px-3 py-2 text-muted-foreground text-sm">
+						No active members.
+					</li>
+				) : null}
+			</ul>
+
+			<div className="space-y-2">
+				<h4 className="font-medium text-sm">Guests present</h4>
+				<div className="flex flex-wrap gap-2">
+					{minutes.guests.map((g) => (
+						<Badge key={g.guestId} variant="secondary">
+							{g.name}
+						</Badge>
+					))}
+					{minutes.guests.length === 0 ? (
+						<span className="text-muted-foreground text-sm">
+							No guests recorded.
+						</span>
+					) : null}
+				</div>
+			</div>
+		</section>
+	);
 }
 
 // ---------------------------------------------------------------------------

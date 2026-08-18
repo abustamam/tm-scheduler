@@ -235,16 +235,22 @@ describe("MeetingMinutes attendance moved to the panel", () => {
 	afterEach(() => cleanup());
 
 	// Roll call now lives in the attendance panel beside the agenda, so this card
-	// records none of it. What survives here is the card's own COPY, which still
-	// switches on the meeting day and is covered by nothing else: before the day
-	// it explains why there is nothing to see, and the header stops claiming to be
-	// "the record of what happened".
+	// WRITES none of it. Two things survive here and are covered by nothing else:
+	// the card's own copy, which still switches on the meeting day; and — for a
+	// viewer who cannot edit — the read-only record, because the panel is
+	// admin-only and a plain member seeing a completed meeting's minutes is the
+	// largest audience the minutes have.
 	//
-	// The fixture keeps a member and a non-zero count on purpose. It is what makes
-	// the meeting-day negative below a real assertion rather than a vacuous one —
-	// a recorder re-added to this card would render "Ayesha Khan" and its three
+	// The fixture keeps members, a guest and non-zero counts on purpose. It is
+	// what makes the negatives below real assertions rather than vacuous ones — a
+	// recorder re-added to this card would render "Ayesha Khan" and its three
 	// buttons, and fail.
-	function renderOnDay(meetingDayReached: boolean) {
+	//
+	// Every count is a DIFFERENT number so a badge wired to the wrong field is
+	// visible. Five badges reading the same 0 would agree with each other however
+	// they were crossed. They deliberately do not add up to the member list; this
+	// component renders the counts it is handed and derives nothing.
+	function renderCard(opts: { meetingDayReached: boolean; canEdit: boolean }) {
 		return render(
 			<MeetingMinutes
 				meetingId="m1"
@@ -257,24 +263,34 @@ describe("MeetingMinutes attendance moved to the panel", () => {
 							status: null,
 							hasRole: false,
 						},
+						{
+							memberId: "mem2",
+							name: "Bo Chen",
+							status: "excused",
+							hasRole: false,
+						},
 					],
+					guests: [{ guestId: "g1", name: "Dana Reed", fromRole: false }],
 					counts: {
-						present: 0,
-						absent: 0,
-						excused: 0,
-						unmarked: 1,
-						guests: 0,
+						present: 3,
+						absent: 4,
+						excused: 1,
+						unmarked: 2,
+						guests: 5,
 					},
 				}}
 				program={[]}
 				meetingPast={false}
-				meetingDayReached={meetingDayReached}
-				canEdit={true}
+				meetingDayReached={opts.meetingDayReached}
+				canEdit={opts.canEdit}
 				clubGuests={[]}
 				onMutated={() => {}}
 			/>,
 		);
 	}
+
+	const renderOnDay = (meetingDayReached: boolean) =>
+		renderCard({ meetingDayReached, canEdit: true });
 
 	it("says why there is nothing to see before the meeting day", () => {
 		const { getByText, queryByText } = renderOnDay(false);
@@ -301,22 +317,84 @@ describe("MeetingMinutes attendance moved to the panel", () => {
 		expect(getByText(/the record of what happened/i)).toBeTruthy();
 	});
 
-	it("records no attendance itself, on the day or before it", () => {
+	it("gives a viewer who cannot edit the record itself, not a pointer", () => {
+		// F1. The panel's roll mode is gated to signed-in admins, but this card is
+		// visible to any member once the meeting is `completed`
+		// (`getMinutes`: `visible = canEdit || status === "completed"`). Deleting
+		// the recorder must not take "who was at this meeting?" away from them.
+		const { getByText } = renderCard({
+			meetingDayReached: true,
+			canEdit: false,
+		});
+		// The counts line, each badge read by its own number so a crossed pair
+		// fails rather than agreeing with itself.
+		expect(getByText("3 present")).toBeTruthy();
+		expect(getByText("1 excused")).toBeTruthy();
+		expect(getByText("4 absent")).toBeTruthy();
+		expect(getByText("2 unmarked")).toBeTruthy();
+		// The guests count had no equivalent anywhere after the deletion — the
+		// panel lists guests by name and never totals them.
+		expect(getByText("5 guests")).toBeTruthy();
+		// One row per member, carrying the status.
+		expect(getByText("Ayesha Khan")).toBeTruthy();
+		expect(getByText("Bo Chen")).toBeTruthy();
+		expect(getByText("Excused")).toBeTruthy();
+		// Unmarked is the ABSENCE of a record, never a synonym for absent (#218).
+		expect(getByText("Unmarked")).toBeTruthy();
+		// And the guests by name, as the old read-only arm showed them.
+		expect(getByText("Dana Reed")).toBeTruthy();
+	});
+
+	it("does not point a read-only viewer at a panel they cannot see", () => {
+		// F2. The sentence is true for an admin and false for everyone else — this
+		// viewer has no attendance panel beside the agenda, so telling them roll
+		// call happens there sends them looking for a surface that is not rendered.
+		const { queryByText } = renderCard({
+			meetingDayReached: true,
+			canEdit: false,
+		});
+		expect(
+			queryByText(/Attendance is taken in the Attendance panel/i),
+		).toBeNull();
+	});
+
+	it("records no attendance itself — no write control, either audience", () => {
 		// The absorption, asserted where a source guard cannot see it: the guard
-		// pins that the symbol is gone from the file, this pins that no roll-call
-		// control REACHES the DOM. Two surfaces writing the same rows is how a club
-		// ends up with someone marked present in one place and absent in the other.
-		for (const dayReached of [true, false]) {
-			const { queryByRole, queryByText } = renderOnDay(dayReached);
-			expect(queryByRole("button", { name: "Present" })).toBeNull();
-			expect(queryByRole("button", { name: "Excused" })).toBeNull();
-			expect(queryByRole("button", { name: "Absent" })).toBeNull();
-			// No roster row and no guest control either — both halves of the old
-			// section, and both now the panel's (`meeting-attendance-panel.test.tsx`,
-			// `attendance-guests-group.test.tsx`).
-			expect(queryByText("Ayesha Khan")).toBeNull();
-			expect(queryByRole("button", { name: /Add guest/i })).toBeNull();
-			cleanup();
+		// pins that the symbol is gone and that the three write fns are unnamed,
+		// this pins that no roll-call CONTROL reaches the DOM. Two surfaces writing
+		// the same rows is how a club ends up with someone marked present in one
+		// place and absent in the other.
+		//
+		// Both audiences, because they render different things: the admin gets a
+		// pointer and the read-only viewer gets the record. The record is the one
+		// that could quietly grow a button back, which is exactly why `canEdit:
+		// false` is in this matrix rather than trusted to be inert.
+		for (const canEdit of [true, false]) {
+			for (const meetingDayReached of [true, false]) {
+				const { queryByRole } = renderCard({ meetingDayReached, canEdit });
+				const where = `canEdit=${canEdit} meetingDayReached=${meetingDayReached}`;
+				// Status words may appear as TEXT in the read-only record (a Badge is
+				// a span) — what must never exist is a control that writes them.
+				expect(queryByRole("button", { name: "Present" }), where).toBeNull();
+				expect(queryByRole("button", { name: "Excused" }), where).toBeNull();
+				expect(queryByRole("button", { name: "Absent" }), where).toBeNull();
+				// Neither half of the old section's guest controls.
+				expect(queryByRole("button", { name: /Add guest/i }), where).toBeNull();
+				expect(queryByRole("button", { name: /^Remove/i }), where).toBeNull();
+				cleanup();
+			}
 		}
+	});
+
+	it("shows an admin the pointer and no roster, so there is one recorder", () => {
+		// The other side of the branch: an admin must NOT get a second copy of the
+		// roster here, or the surface the panel replaced is effectively back.
+		const { queryByText } = renderCard({
+			meetingDayReached: true,
+			canEdit: true,
+		});
+		expect(queryByText("Ayesha Khan")).toBeNull();
+		expect(queryByText("Bo Chen")).toBeNull();
+		expect(queryByText("3 present")).toBeNull();
 	});
 });
