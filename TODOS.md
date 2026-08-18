@@ -154,9 +154,19 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
   terms, since it makes the assertion depend on what else the runner scheduled. Verified by planting
   a foreign plan row in `tm_test` and running the suite both ways: scoped passes 5/5, unscoped fails
   **three** tests. Three, not the two this entry originally claimed — the count missed the inline
-  `(await planRows()).size).toBe(0)`. A sweep of every unscoped read of `meeting_attendance_plan`,
-  `activity_log`, `members` and `meetings` across the integration suites found no others, which
-  answers the "check the other helpers first" part of the original note.
+  `(await planRows()).size).toBe(0)`.
+
+  **The sweep that accompanied this fix was narrower than it claimed, and this entry originally
+  overstated it.** It checked reads of `meeting_attendance_plan`, `activity_log`, `members` and
+  `meetings` for a MISSING club/meeting filter, and on that basis said the class was closed. It is
+  not: a read can carry a filter that does not isolate the fixture. `onboarding-logic.integration.test.ts:135-145`
+  asserts `expect(secondClub.length).toBe(0)` scoped by the literal `clubs.name = "Second Club"`,
+  and `expect(orphanPerson.length).toBe(0)` scoped by `people.email = "second@example.com"` — so
+  any concurrent suite (or a row left by an earlier failed run) that creates either makes those
+  assertions fail. It flaked exactly that way during the PR-3 review round, passing in isolation
+  and on re-run. Same failure mode as the bug this entry is about, different shape, so the original
+  sweep could not have seen it. Re-sweep for reads scoped by a HARDCODED literal, not only for
+  reads missing a filter.
   **Completed:** shipped with the planned-attendance roll-mode release (2026-08-17) — rode
   along with that branch rather than shipping as its own version, so the version it lands
   under is whatever `/ship` assigns that PR.
