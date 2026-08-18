@@ -51,8 +51,7 @@ import {
 	expandRunSheet,
 } from "#/lib/agenda-runsheet";
 import { buildSlideDeck } from "#/lib/agenda-slides";
-import type { PlanStatus } from "#/lib/attendance-panel";
-import { buildPanelRoleMap } from "#/lib/attendance-panel";
+import { buildPanelRoleMap, type PlanStatus } from "#/lib/attendance-panel";
 import { clubLogoUrl } from "#/lib/club-logo-url";
 import {
 	formatMeetingDate,
@@ -1388,7 +1387,21 @@ function MeetingView() {
 					</Dialog>
 				</div>
 				{showPlanPanel && !tmodPanelUnavailable ? (
-					<aside className="order-1 lg:order-2 lg:sticky lg:top-24 lg:w-[340px] lg:shrink-0">
+					<aside
+						// `sticky` pins this column, so its own height stops being the
+						// page's problem and starts being a wall: rows are ~81px each
+						// (they nearly doubled in this diff), so a 40-member club is a
+						// ~3,240px rail. Pinned at `top-24` with no cap, only the first
+						// ~10 rows are ever in view on a ~950px viewport and the rest are
+						// unreachable — the page scrolls, the pinned rail does not —
+						// unless the agenda column happens to be taller. Capping the
+						// height and giving the rail its OWN scroller is what makes the
+						// bottom rows reachable, and keeps the card title and counts line
+						// (the summary a reader 25 rows down has otherwise lost) at the
+						// top of that scroller. `7rem` = the 6rem `top-24` offset plus
+						// 1rem of breathing room at the bottom edge.
+						className="order-1 lg:order-2 lg:sticky lg:top-24 lg:max-h-[calc(100vh-7rem)] lg:w-[340px] lg:shrink-0 lg:overflow-y-auto"
+					>
 						<MeetingAttendancePanel
 							// TWO sources, one name. An officer gets `loaderRoster` (the
 							// payload's contact-bearing roster, populated only when the

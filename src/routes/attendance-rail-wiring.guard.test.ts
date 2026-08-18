@@ -8,14 +8,11 @@
 // SeasonGrid. So the gate is a source grep, the same shape
 // `club-index-wiring.guard.test.ts` uses for the same reason.
 //
-// What it pins, and why each one:
+// What it pins — one statement, and only one:
 //  - the WHOLE STATEMENT `const panelRoleByMemberId = buildPanelRoleMap(slots);`
 //    — not just that `buildPanelRoleMap(` appears, which this file shipped
 //    once already and which a filtered argument at the call site also
 //    satisfies (see the test's own comment for why that matters).
-//  - that the PANEL receives the result. `roleByMemberId` (the plain string
-//    map) still exists for <MeetingAgenda>, so passing the wrong one is one
-//    character away and typechecks only until the shapes diverge (#319 again).
 //
 // What used to live here and does not anymore: the short-code keying, the
 // `confirmed` polarity, and the base-vs-numbered role name were all source
@@ -29,17 +26,23 @@
 // function vitest CAN call directly, and every one of those invariants —
 // including the two the greps missed — is now a real assertion in
 // `attendance-panel.test.ts`. This file no longer needs to know what is
-// inside the map, only that the route builds one, unfiltered, and hands it
-// to the panel.
+// inside the map, only that the route builds one, unfiltered — where it then
+// GOES is pinned next to the panel's other props, in the sibling named below.
 //
 // COMMENT-BLIND (`readSource`): every assertion is of the "this pattern must BE
 // present" form, and this very file quotes the patterns it looks for — a raw
 // read would pass on a commented-out wiring. See `src/test/guard-source.ts`.
 //
-// Split with `attendance-panel-wiring.guard.test.ts`: that file pins the
-// panel's OTHER props (phase gating, plan/roster wiring, layout, the write
-// paths) — everything about the route EXCEPT how the role map itself is
-// built. This file is the map's wiring only; its construction is
+// Split with `attendance-panel-wiring.guard.test.ts`: that file pins EVERY
+// route→panel prop expression — phase gating, plan/roster wiring, the nudge
+// draft, the lock, both write callbacks, layout, and `roleByMemberId` — each
+// one scoped to a window sliced from the `<MeetingAttendancePanel` tag, since
+// <MeetingAgenda> takes same-named props further up the same file. This file
+// pins the CONSTRUCTION statement and nothing else, and asserts nothing about
+// the call site. Both files carried a byte-identical
+// `roleByMemberId={panelRoleByMemberId}` assertion until this split, while
+// each header told the reader the OTHER one owned it; the hand-off now lives
+// in one place, next to the props it sits among. What is INSIDE the map is
 // `attendance-panel.test.ts`'s job.
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -66,9 +69,5 @@ describe("attendance rail role wiring", () => {
 		expect(src).toContain(
 			"const panelRoleByMemberId = buildPanelRoleMap(slots);",
 		);
-	});
-
-	it("hands the PANEL the rich map, not the agenda's string map", () => {
-		expect(src).toContain("roleByMemberId={panelRoleByMemberId}");
 	});
 });
