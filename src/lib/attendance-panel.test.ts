@@ -182,9 +182,19 @@ describe("buildPlanPanel — status precedence", () => {
 			// `assumed` is a convenience, not a second source of truth: it must
 			// always AGREE with what (status, storedStatus) already say. This is the
 			// property `role.confirmed` failed — it disagreed for a `not_coming`
-			// member holding a confirmed slot, and nothing caught it. Asserted in
-			// every cell so a future precedence change cannot let the two drift
-			// apart and leave consumers split across the two forms disagreeing.
+			// member holding a confirmed slot, and nothing caught it.
+			//
+			// BE PRECISE ABOUT WHAT THIS CATCHES, because it is narrower than it
+			// looks. Today all three fields are built from `assumed` and `stored` in
+			// one return statement, so the equality is TAUTOLOGICAL: mutate the
+			// role-confirmation condition and this line still passes — the
+			// `toMatchObject` above is what fails. Verified by disabling that
+			// assertion and re-running the mutation; all 12 cells went green.
+			//
+			// What it does guard is a STRUCTURAL decoupling: someone computing
+			// `status` by a route other than `assumed ? "coming" : stored`, which is
+			// exactly how the two forms would start disagreeing for consumers. The
+			// CORRECTNESS of `assumed` is pinned by the table above, not here.
 			expect(rows[0]?.assumed).toBe(
 				rows[0]?.status === "coming" && rows[0]?.storedStatus !== "coming",
 			);
