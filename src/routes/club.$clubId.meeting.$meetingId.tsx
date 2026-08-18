@@ -574,10 +574,17 @@ function MeetingView() {
 	// and widening its value type to serve one of them is how a shared map
 	// becomes everyone's problem.
 	//
-	// `buildShortCodes` is the season grid's own function — reusing it is what
-	// makes the rail's codes and the sign-up sheet's agree by construction rather
-	// than by a second hand-maintained list. It already dedupes collisions and
-	// numbers repeats ("SP1"/"SP2").
+	// `buildShortCodes` is the season grid's own function, so the rail uses the
+	// SAME ABBREVIATION VOCABULARY as the sign-up sheet rather than a second
+	// hand-maintained list. It does NOT guarantee the same numeric suffix: the
+	// grid derives repeat-numbering ("SP1"/"SP2") and collision suffixes ("#2")
+	// from a user-selectable WINDOW of meetings (`?count=`), while this feeds it
+	// only THIS meeting's slots — a meeting with one speaker renders "SP" here
+	// even when the grid's window has enough to number it "SP1". That is
+	// deliberate: per-meeting numbering is the meaningful answer on a meeting
+	// page, and the full role name is always available via the badge's `title`
+	// and sr-only text, so nothing is lost when the two surfaces' suffixes
+	// diverge.
 	const shortCodes = buildShortCodes(
 		slots.map((s) => ({
 			roleDefinitionId: s.roleDefinitionId,

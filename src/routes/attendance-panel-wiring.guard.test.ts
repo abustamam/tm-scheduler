@@ -52,7 +52,7 @@ describe("attendance panel route wiring (PR 2)", () => {
 		expect(src.split("meetingPhase({").length - 1).toBe(1);
 	});
 
-	it("passes the plan array, the roster, and the shared role map to the panel", () => {
+	it("passes the plan array, the roster, and the rail's own role map to the panel", () => {
 		// Both arrays come from ONE name each, so the officer path and the TMOD
 		// path cannot diverge: `effectivePlan` is the loader's admin-only ladder
 		// for an officer and the separately-verified `getTmodPanelData` rows
@@ -63,9 +63,20 @@ describe("attendance panel route wiring (PR 2)", () => {
 		// client-fetched PUBLIC roster (no phone/email) when `!canManage` — the
 		// panel's props require contact unconditionally, and silently handing it
 		// the public shape is how every row renders "No contact on file".
+		//
+		// `panelRoleByMemberId`, NOT the plain `roleByMemberId` string map that
+		// <MeetingAgenda> reads — the two used to be the same map, and this
+		// assertion originally matched that shared name. Once the panel moved to
+		// its own richer `PanelRole` map, `roleByMemberId={roleByMemberId}` kept
+		// matching this file too, just at the AGENDA's call site further down —
+		// a test can pin the wrong thing after a rename. `panelRoleByMemberId`'s
+		// own construction (the short-code keying, the base role name, the
+		// `confirmed` polarity) is pinned separately by
+		// `attendance-rail-wiring.guard.test.ts`; this assertion's job is only to
+		// confirm the PANEL gets that map rather than the agenda's.
 		expect(src).toContain("plan={effectivePlan}");
 		expect(src).toContain("roster={panelRoster}");
-		expect(src).toContain("roleByMemberId={roleByMemberId}");
+		expect(src).toContain("roleByMemberId={panelRoleByMemberId}");
 		expect(src).toContain(
 			"const effectivePlan = effectiveCanManage ? plan : fetchedPlan;",
 		);

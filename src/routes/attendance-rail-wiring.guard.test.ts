@@ -17,6 +17,10 @@
 //  - that the PANEL receives the rich map. `roleByMemberId` (the plain
 //    string map) still exists for <MeetingAgenda>, so passing the wrong one is
 //    one character away and typechecks only until the shapes diverge.
+//  - the `shortCodes` lookup key includes `:${s.slotIndex}`. Keying on
+//    `roleDefinitionId` alone typechecks and renders "?" on every badge.
+//  - `roleName: s.roleName`, not `slotLabel(s, roleCounts)`. The numbered
+//    label ("Speaker 1") belongs to the agenda, not the outreach draft.
 //
 // COMMENT-BLIND (`readSource`): every assertion is of the "this pattern must BE
 // present" form, and this very file quotes the patterns it looks for — a raw
@@ -43,5 +47,21 @@ describe("attendance rail role wiring", () => {
 
 	it("hands the PANEL the rich map, not the agenda's string map", () => {
 		expect(src).toContain("roleByMemberId={panelRoleByMemberId}");
+	});
+
+	it("keys the code lookup by slot, not just by role definition", () => {
+		// Dropping `:${slotIndex}` makes every badge on the rail render "?" — it
+		// typechecks, and the route does not mount in jsdom, so nothing else in the
+		// repo can see it. This is the single load-bearing expression here.
+		expect(src).toContain(
+			"shortCodes.get(`${s.roleDefinitionId}:${s.slotIndex}`)",
+		);
+	});
+
+	it("drafts with the BASE role name, not the numbered label", () => {
+		// `roleName: slotLabel(s, roleCounts)` typechecks and sends "just confirming
+		// you're our Speaker 1", which reads as a mail merge. The panel's own tests
+		// cannot catch it — they are fed this value as a prop.
+		expect(src).toContain("roleName: s.roleName,");
 	});
 });

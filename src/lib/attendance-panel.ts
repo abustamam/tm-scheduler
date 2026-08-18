@@ -21,8 +21,17 @@ export type PlanStatus = AttendancePlanStatus;
 /** The role slot a member holds on this meeting, as the rail needs it. */
 export interface PanelRole {
 	/** The sign-up sheet's short code — "TD", "GE", "SP1". Produced by
-	 *  `buildShortCodes` (`#/lib/agenda`), the season grid's own function, so the
-	 *  two surfaces cannot drift into two vocabularies for one role. */
+	 *  `buildShortCodes` (`#/lib/agenda`), the season grid's own function, so this
+	 *  uses the SAME ABBREVIATION VOCABULARY as the sign-up sheet — never a second
+	 *  hand-maintained list. That does NOT guarantee an identical numeric suffix:
+	 *  `buildShortCodes` derives repeat-numbering ("SP1"/"SP2") and collision
+	 *  suffixes ("#2") from the row set it is fed, and the grid feeds it a
+	 *  user-selectable WINDOW of meetings (`?count=`) while the route that builds
+	 *  this feeds it only the one meeting's slots — so the same role can render
+	 *  "SP" here and "SP1" there. Deliberate: per-meeting numbering is the
+	 *  meaningful answer on a meeting page, and the full role name stays
+	 *  available via `roleName` below (the badge's `title` / sr-only text), so
+	 *  nothing is lost when the suffix diverges. */
 	code: string;
 	/** The role's BASE name, for the outreach draft ("you're our Toastmaster")
 	 *  and for the badge's tooltip. Deliberately NOT the numbered label: "you're
