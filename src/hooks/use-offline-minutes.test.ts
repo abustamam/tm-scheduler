@@ -18,7 +18,13 @@ const WAIT_OPTS = { timeout: 5000 };
  *  microtasks can coalesce two commits the real code produces separately. */
 const ioBoundary = () => new Promise<void>((r) => setTimeout(r, 0));
 
-const enqueueSpy = vi.fn(async (..._args: unknown[]) => {});
+const enqueueSpy = vi.fn(async (..._args: unknown[]) => {
+	if (ENQUEUE_FAILS) throw new Error("IDB write blocked");
+});
+/** A REAL spy, not the bare no-op it was: the snapshot-freshness effect
+ *  (`[online, minutes, meetingId]`) was exercised by nothing at all, and the
+ *  hook's own comment calls omitting that effect "a silent regression". */
+const saveSnapshotSpy = vi.fn(async (..._args: unknown[]) => {});
 /**
  * GENUINELY async, deliberately. The F2 drop only exists when the `setQueue`
  * commit and the final `setDraining(false)` commit land in SEPARATE React
@@ -36,6 +42,10 @@ vi.mock("#/lib/offline-minutes-queue", () => ({
 	// made a failed read indistinguishable from a first visit — see the
 	// "surfaces a failed persisted load" test below.
 	readQueue: async () => {
+		// Counted, not just returned: F6's fix is that Retry RE-READS, and the only
+		// observable for "the load effect ran again" is that the store was asked
+		// again — the returned value is identical either way.
+		READ_COUNT += 1;
 		if (READ_FAILS) throw new Error("IDB blocked");
 		return QUEUED;
 	},
@@ -46,7 +56,7 @@ vi.mock("#/lib/offline-minutes-queue", () => ({
 		if (READ_FAILS) throw new Error("IDB blocked");
 		return SNAPSHOT;
 	},
-	saveSnapshot: async () => {},
+	saveSnapshot: (...args: unknown[]) => saveSnapshotSpy(...args),
 	removeOp: (...args: unknown[]) => removeOpSpy(...args),
 }));
 // The hook reads connectivity itself, so the test drives it here rather than
@@ -54,10 +64,24 @@ vi.mock("#/lib/offline-minutes-queue", () => ({
 let ONLINE = true;
 let QUEUED: unknown[] = [];
 let READ_FAILS = false;
+let READ_COUNT = 0;
+let ENQUEUE_FAILS = false;
 let SNAPSHOT: unknown = null;
 vi.mock("#/hooks/use-online-status", () => ({
 	useOnlineStatus: () => ONLINE,
 	useOfflineReady: () => true,
+}));
+
+// Spied rather than left real: the deadline's toast is the one piece of this
+// hook's behaviour that has to be ABSENT after unmount (F7), and an absence is
+// not observable through the real sonner store.
+const toastErrorSpy = vi.fn();
+vi.mock("sonner", () => ({
+	toast: {
+		error: (...args: unknown[]) => toastErrorSpy(...args),
+		success: vi.fn(),
+		message: vi.fn(),
+	},
 }));
 
 // The drain's dispatch table is loaded via `import("#/server/minutes")` inside
@@ -147,8 +171,12 @@ describe("useOfflineMinutes", () => {
 		enqueueSpy.mockClear();
 		removeOpSpy.mockClear();
 		setAttendanceSpy.mockClear();
+		saveSnapshotSpy.mockClear();
+		toastErrorSpy.mockClear();
 		QUEUED = [];
 		READ_FAILS = false;
+		READ_COUNT = 0;
+		ENQUEUE_FAILS = false;
 		SNAPSHOT = null;
 		dispatchGate = null;
 	});
@@ -439,10 +467,15 @@ describe("useOfflineMinutes", () => {
 		);
 	});
 
-	it("lets Retry clear a banner the failed load raised with nothing queued", async () => {
-		// `runDrain` returns immediately on an empty queue, so without this the
-		// banner the test above asserts would have a Retry button that provably
-		// cannot do anything.
+	it("makes Retry RE-READ when the failed load left nothing queued (F6)", async () => {
+		// This test asserted the OPPOSITE until F6 — that Retry cleared the banner and
+		// that was that. Clearing was the defect: the load effect's deps were
+		// `[meetingId]` and it is the only reader of the durable queue, so hiding the
+		// banner was Retry's entire effect, returning the officer to the clean-looking
+		// panel the same commit calls "what turns a read error into a DATA bug".
+		//
+		// Retry now re-reads. A read that still fails says so again, which is what a
+		// retry looks like; the success path is the test below it.
 		READ_FAILS = true;
 		ONLINE = true;
 		const { result } = renderHook(() =>
@@ -452,12 +485,21 @@ describe("useOfflineMinutes", () => {
 			() => expect(result.current.syncError).not.toBeNull(),
 			WAIT_OPTS,
 		);
+		const readsBefore = READ_COUNT;
+		expect(readsBefore).toBeGreaterThan(0);
 
 		await act(async () => {
 			await result.current.retryDrain();
 		});
 
-		expect(result.current.syncError).toBeNull();
+		// It asked the store again...
+		expect(READ_COUNT).toBeGreaterThan(readsBefore);
+		// ...and reports what it found, rather than leaving a cleared banner over an
+		// unread queue.
+		await waitFor(
+			() => expect(result.current.syncError).toBe("IDB blocked"),
+			WAIT_OPTS,
+		);
 	});
 	it("stops waiting on a write the network never answers, and queues the tap (F2)", async () => {
 		// `navigator.onLine` is TRUE on a captive portal or dead venue wifi — the
@@ -727,6 +769,260 @@ describe("useOfflineMinutes", () => {
 		expect(enqueueSpy).not.toHaveBeenCalled();
 		expect(result.current.queue).toHaveLength(0);
 		expect(result.current.busy).toBe(false);
+	});
+
+	it("re-READS the persisted queue when Retry follows a failed load, not just clears the banner (F6)", async () => {
+		// Retry's whole effect on a failed-read banner used to be hiding it. The load
+		// effect's deps were `[meetingId]`, and it is the ONLY reader of the durable
+		// queue, so the justification — "it re-arms the auto-drain for the moment a
+		// queue does appear" — described a moment that could never arrive: nothing
+		// would ever have looked. The officer's changes stayed unread on the device
+		// behind a clean-looking panel, which is the very state the same commit
+		// describes as "what turns a read error into a DATA bug".
+		READ_FAILS = true;
+		ONLINE = true;
+		const { result } = renderHook(() =>
+			useOfflineMinutes({ meetingId: "meet-1", onMutated: async () => {} }),
+		);
+		await waitFor(
+			() => expect(result.current.syncError).not.toBeNull(),
+			WAIT_OPTS,
+		);
+		// Nothing has been read yet, so nothing can have drained.
+		expect(removeOpSpy).not.toHaveBeenCalled();
+
+		// IndexedDB is readable again (a fresh tab out of private browsing, a
+		// transient quota/lock error clearing) and there IS a queue there.
+		READ_FAILS = false;
+		QUEUED = [OP()];
+		await act(async () => {
+			await result.current.retryDrain();
+		});
+
+		expect(result.current.syncError).toBeNull();
+		// The re-read happened, and the queue it found drained. Both halves matter:
+		// the queue appearing proves the load re-ran, `removeOp` proves the auto-drain
+		// then picked it up rather than leaving it visible but stuck.
+		await waitFor(
+			() => expect(removeOpSpy).toHaveBeenCalledWith("meet-1", "op-1"),
+			WAIT_OPTS,
+		);
+		await waitFor(
+			() => expect(result.current.queue).toHaveLength(0),
+			WAIT_OPTS,
+		);
+	});
+
+	it("replays the queue when Retry follows a stalled drain (F6, non-empty arm)", async () => {
+		// `retryDrain`'s other arm — the one Retry exists for. It could be replaced
+		// with `return;` today and the suite stayed green, because the only test that
+		// called `retryDrain` called it with an EMPTY queue.
+		vi.useFakeTimers();
+		try {
+			ONLINE = true;
+			QUEUED = [OP()];
+			openDispatchGate(); // never resolved: the replay hangs like a portal
+			const { result } = renderHook(() =>
+				useOfflineMinutes({ meetingId: "meet-1", onMutated: async () => {} }),
+			);
+
+			await tickUntil(() => result.current.syncError !== null);
+			expect(result.current.syncError).toBe("No response from the network.");
+			expect(result.current.queue).toHaveLength(1);
+			expect(removeOpSpy).not.toHaveBeenCalled();
+
+			// Wifi is genuinely back: the next dispatch answers.
+			dispatchGate = null;
+			// Started, not awaited: `removeOp` is genuinely async (a real 0ms timer),
+			// and awaiting a chain that contains a timer while the clock is FROZEN
+			// deadlocks the test — which then leaves fake timers installed and every
+			// later test in the file renders `null`. Advance, then settle.
+			let retrying!: Promise<void>;
+			await act(async () => {
+				retrying = result.current.retryDrain();
+			});
+			await tickUntil(() => result.current.queue.length === 0);
+			await act(async () => {
+				await retrying;
+			});
+
+			expect(removeOpSpy).toHaveBeenCalledWith("meet-1", "op-1");
+			expect(result.current.queue).toHaveLength(0);
+			expect(result.current.syncError).toBeNull();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("does NOT toast the deadline against a page the officer has already left (F7)", async () => {
+		// The deadline's toast lands ONLINE_WRITE_TIMEOUT_MS after the tap. Unguarded,
+		// "No response from the network — saved on this device" appeared on whatever
+		// the officer navigated to, eight seconds later, about a meeting they left.
+		// The `enqueue` is the opposite: it must happen either way, or the tap is lost.
+		vi.useFakeTimers();
+		try {
+			ONLINE = true;
+			const hang = vi.fn(() => new Promise<unknown>(() => {}));
+			const { result, unmount } = renderHook(() =>
+				useOfflineMinutes({ meetingId: "meet-1", onMutated: async () => {} }),
+			);
+			await tickUntil(() => true);
+
+			let pending!: Promise<void>;
+			await act(async () => {
+				pending = result.current.mutate(hang, OP);
+			});
+			expect(hang).toHaveBeenCalledTimes(1);
+
+			unmount();
+			await tickUntil(() => enqueueSpy.mock.calls.length > 0);
+			await act(async () => {
+				await pending;
+			});
+
+			// The tap survived...
+			expect(enqueueSpy).toHaveBeenCalledWith("meet-1", OP());
+			// ...silently.
+			expect(toastErrorSpy).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("toasts the deadline while the officer is still on the page (F7 control)", async () => {
+		// The other side of the assertion above, and the reason it cannot pass
+		// vacuously: a hook that never toasted at all would satisfy the unmount test.
+		vi.useFakeTimers();
+		try {
+			ONLINE = true;
+			const hang = vi.fn(() => new Promise<unknown>(() => {}));
+			const { result } = renderHook(() =>
+				useOfflineMinutes({ meetingId: "meet-1", onMutated: async () => {} }),
+			);
+			await tickUntil(() => true);
+
+			let pending!: Promise<void>;
+			await act(async () => {
+				pending = result.current.mutate(hang, OP);
+			});
+			await tickUntil(() => enqueueSpy.mock.calls.length > 0);
+			await act(async () => {
+				await pending;
+			});
+
+			expect(toastErrorSpy).toHaveBeenCalledWith(
+				"No response from the network — saved on this device and will sync later.",
+			);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("persists the online snapshot for this meeting on every online render", async () => {
+		// The snapshot-freshness effect. No test ever passed `minutes:`, and
+		// `saveSnapshot` was a bare no-op mock, so the effect could have been deleted
+		// whole: it is what the panel's OFFLINE projection falls back to, and the
+		// hook's own comment calls omitting it "a silent regression across multiple
+		// offline excursions in one un-reloaded session".
+		ONLINE = true;
+		// Rendered for its EFFECTS: the assertion is on what reached the store, so
+		// there is no `result` to read (and TS's no-unused-locals would fail on one).
+		renderHook(() =>
+			useOfflineMinutes({
+				meetingId: "meet-1",
+				onMutated: async () => {},
+				minutes: MINUTES_A,
+			}),
+		);
+
+		// The DURABLE half is the observable, and asserted WITH the meeting id — the
+		// same closure-vs-key hazard F1 is about, one IndexedDB key per meeting.
+		// Not `result.current.snapshot`: the mount-time persisted load resolves after
+		// this effect and overwrites that state with whatever was saved (null here),
+		// which is pre-existing behaviour and harmless only because the panel derives
+		// from `snapshot ?? minutes`.
+		await waitFor(
+			() => expect(saveSnapshotSpy).toHaveBeenCalledWith("meet-1", MINUTES_A),
+			WAIT_OPTS,
+		);
+	});
+
+	it("does NOT persist a snapshot while offline", async () => {
+		// Offline the loader data is stale by definition — the panel is rendering its
+		// own optimistic projection — so saving it would overwrite the last known
+		// GOOD base with a copy of itself plus nothing.
+		ONLINE = false;
+		// Rendered for its EFFECTS: the assertion is on what reached the store, so
+		// there is no `result` to read (and TS's no-unused-locals would fail on one).
+		renderHook(() =>
+			useOfflineMinutes({
+				meetingId: "meet-1",
+				onMutated: async () => {},
+				minutes: MINUTES_A,
+			}),
+		);
+		// Waits for the mount load to have RUN, so the assertion below lands after the
+		// effects have had their chance rather than before them.
+		await waitFor(() => expect(READ_COUNT).toBeGreaterThan(0), WAIT_OPTS);
+		expect(saveSnapshotSpy).not.toHaveBeenCalled();
+	});
+
+	it("refuses a second write while the first is still in flight (busy arm)", async () => {
+		// `mutate`'s guard is `if (busy || draining) return;` and only the `draining`
+		// half was covered. The `busy` half is the one that fires during a normal roll
+		// call on club wifi: two taps in the second it takes one write to land.
+		vi.useFakeTimers();
+		try {
+			ONLINE = true;
+			const hang = vi.fn(() => new Promise<unknown>(() => {}));
+			const second = vi.fn(async () => {});
+			const { result } = renderHook(() =>
+				useOfflineMinutes({ meetingId: "meet-1", onMutated: async () => {} }),
+			);
+			await tickUntil(() => true);
+
+			let pending!: Promise<void>;
+			await act(async () => {
+				pending = result.current.mutate(hang, OP);
+			});
+			expect(result.current.busy).toBe(true);
+
+			await act(async () => {
+				await result.current.mutate(second, OP2);
+			});
+			// Refused outright: not sent, and not queued either.
+			expect(second).not.toHaveBeenCalled();
+			expect(enqueueSpy).not.toHaveBeenCalledWith("meet-1", OP2());
+
+			await tickUntil(() => enqueueSpy.mock.calls.length > 0);
+			await act(async () => {
+				await pending;
+			});
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("toasts a failed enqueue and KEEPS the optimistic row", async () => {
+		// A rejecting `enqueue` (quota exceeded, a locked store) had no coverage, and
+		// the roll-back question it raises has two defensible answers. This one keeps
+		// the row: the op is still in the in-memory queue, so the auto-drain WILL
+		// replay it this session — removing it would discard a write that is going to
+		// be attempted, and would snap a chip the officer just tapped back to its old
+		// value. What is genuinely lost is durability across a reload, and the toast
+		// is what says so. Revisit only with a durable fallback to offer instead.
+		ONLINE = false;
+		ENQUEUE_FAILS = true;
+		const { result } = renderHook(() =>
+			useOfflineMinutes({ meetingId: "meet-1", onMutated: async () => {} }),
+		);
+
+		await act(async () => {
+			await result.current.mutate(async () => {}, OP);
+		});
+
+		expect(toastErrorSpy).toHaveBeenCalledWith("IDB write blocked");
+		expect(result.current.queue).toHaveLength(1);
 	});
 
 	it("keeps its deadline shorter than the wait it replaced", () => {

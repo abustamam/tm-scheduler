@@ -107,6 +107,22 @@ export function useOfflineMinutes(input: {
 	// that has to make the comparison captured the render it was created in.
 	const meetingIdRef = useRef(meetingId);
 
+	// Whether this hook's owner is still on screen. The write deadline resolves up
+	// to ONLINE_WRITE_TIMEOUT_MS after the tap, by which time the officer may have
+	// navigated somewhere else entirely: the `enqueue` still has to happen (the tap
+	// is real and the queue is durable), but its toast would land on whatever page
+	// they are looking at now, about a meeting they have left.
+	const mountedRef = useRef(true);
+	useEffect(() => {
+		// Re-armed on mount, not only cleared on unmount: React 19's StrictMode
+		// mounts, unmounts and remounts in development, and a cleared flag never
+		// set again would silence every toast for the rest of the session.
+		mountedRef.current = true;
+		return () => {
+			mountedRef.current = false;
+		};
+	}, []);
+
 	// PER-MEETING ISOLATION, and it is load-bearing. `meetingId` is a PROP, and
 	// this hook's owner — the meeting route — is NOT remounted when the URL's
 	// meeting param changes (`grep -rn remountDeps src/` finds nothing, so
@@ -159,7 +175,19 @@ export function useOfflineMinutes(input: {
 		// dependency on the auto-drain effect below — not a reset here.
 	}
 
-	// Load any persisted snapshot + queue once per meeting (survives reloads).
+	// Bumped by `retryDrain`, and the load effect below depends on it. Without it
+	// Retry's entire effect on a failed-read banner is to HIDE it: that effect's
+	// deps were `[meetingId]` alone and it is the only reader of the durable queue
+	// there is, so "re-arms the auto-drain for the moment a queue does appear"
+	// described a moment that could not come.
+	const [loadNonce, setLoadNonce] = useState(0);
+
+	// Load any persisted snapshot + queue once per meeting (survives reloads), and
+	// again whenever Retry bumps `loadNonce`. The suppression below is the point of
+	// the dependency, not a workaround for it: the body never READS the nonce, it
+	// exists so that bumping it re-runs this effect, and biome's rule can only see
+	// the read. One physical line — a wrapped reason silences nothing.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: `loadNonce` is a deliberate re-run trigger — Retry bumps it so this effect re-READS the persisted queue (F6); without it Retry's only effect is to hide the banner
 	useEffect(() => {
 		let alive = true;
 		void (async () => {
@@ -213,7 +241,7 @@ export function useOfflineMinutes(input: {
 		return () => {
 			alive = false;
 		};
-	}, [meetingId]);
+	}, [meetingId, loadNonce]);
 
 	// Keep the offline snapshot fresh from every ONLINE render of the loader
 	// data. No-ops when `minutes` isn't supplied (see the input's doc comment).
@@ -401,7 +429,9 @@ export function useOfflineMinutes(input: {
 		try {
 			const raced = await raceWithDeadline(onlineFn(), ONLINE_WRITE_TIMEOUT_MS);
 			if (raced === "timeout") {
-				toast.error(WRITE_STALLED_MESSAGE);
+				// The QUEUEING below is unconditional — the tap must survive either
+				// way. Only the toast is gated on still being here (see `mountedRef`).
+				if (mountedRef.current) toast.error(WRITE_STALLED_MESSAGE);
 				return "queue";
 			}
 			await input.onMutated();
@@ -452,14 +482,24 @@ export function useOfflineMinutes(input: {
 	// justSynced`): `meeting-minutes.tsx`'s existing Retry control needs a way to
 	// reach this, and the hook owns `runDrain` now.
 	const retryDrain = async () => {
-		// Nothing queued, yet an error is showing: the only way into that state is
-		// the persisted-load failure above, and `runDrain` returns immediately on an
-		// empty queue without touching `syncError` — so a bare `runDrain(queue)`
+		// Nothing queued, yet an error is showing. TWO ways into that state, not the
+		// one this comment used to claim: the persisted load rejected
+		// (`indexedDB.open` in Safari private browsing), or a drain in which every op
+		// landed but `onMutatedRef.current()` threw — which exits through `runDrain`'s
+		// catch with an empty queue and an error set. `runDrain` returns immediately
+		// on an empty queue without touching `syncError`, so a bare `runDrain(queue)`
 		// here gives that banner a Retry button that provably cannot do anything.
-		// Clearing it is the honest response, and it re-arms the auto-drain (which
-		// gates on `!syncError`) for the moment a queue does appear.
+		//
+		// Clearing the error alone is not enough either, and the version that did
+		// only that was arguing with itself: it re-armed the auto-drain "for the
+		// moment a queue does appear" while the load effect — the ONLY reader of the
+		// durable queue — could not re-run to make one appear. So Retry RE-READS,
+		// via `loadNonce`. On the read-failure path that is the retry the button
+		// names; on the `onMutated` path the re-read is a no-op over an already
+		// drained queue and clearing the error is the whole of the fix.
 		if (queue.length === 0) {
 			setSyncError(null);
+			setLoadNonce((n) => n + 1);
 			return;
 		}
 		await runDrain(queue);
