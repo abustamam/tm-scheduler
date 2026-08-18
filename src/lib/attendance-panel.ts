@@ -34,6 +34,12 @@ export interface PanelRole {
 	confirmed: boolean;
 }
 
+/** What a ROW carries. `confirmed` is deliberately absent: on the way out it is
+ *  a second answer to the question `assumed` already answers, and the two
+ *  disagree for a `not_coming` member holding a confirmed slot. Reading
+ *  `role.confirmed` downstream would resurrect the bug this module closes. */
+export type PanelRowRole = Omit<PanelRole, "confirmed">;
+
 export interface PanelMember {
 	id: string;
 	name: string;
@@ -44,12 +50,19 @@ export interface PanelMember {
 	 *  stored one. Counts and sort both read this, which is what makes an assumed
 	 *  Coming a real Coming everywhere without a second code path. */
 	status: PlanStatus | null;
+	/** The rung actually stored in `meeting_attendance_plan`, before precedence.
+	 *  `status` is the EFFECTIVE one and is what sort and counts read; this is
+	 *  what a caller needs to answer "is there a row to clear?". An assumed
+	 *  Coming can sit on top of a stored `reached_out` — the officer messaged a
+	 *  confirmed Toastmaster — and clearing that is a real write with a real
+	 *  activity-log entry, even though the row on screen does not move. */
+	storedStatus: PlanStatus | null;
 	/** True when `status` is "coming" because the member holds a CONFIRMED role
 	 *  and nobody actually answered. An inference, not their word — the row has
 	 *  to render it differently or the rail is lying about who replied. */
 	assumed: boolean;
 	/** Non-null when they hold a slot on this meeting. */
-	role: PanelRole | null;
+	role: PanelRowRole | null;
 }
 
 export interface PlanPanelCounts {
@@ -74,7 +87,7 @@ const RUNG_ORDER: Record<PlanStatus | "null", number> = {
 };
 
 export function buildPlanPanel(input: {
-	roster: Omit<PanelMember, "status" | "assumed" | "role">[];
+	roster: Omit<PanelMember, "status" | "storedStatus" | "assumed" | "role">[];
 	plan: { memberId: string; status: PlanStatus }[];
 	roleByMemberId: Readonly<Record<string, PanelRole>>;
 }): {
@@ -98,23 +111,22 @@ export function buildPlanPanel(input: {
 		//   nothing                       →  null
 		//
 		// A confirmed role outranking `reached_out` is not a style choice. A
-		// confirmed-role member has NO plan row, so tapping their WhatsApp draft
-		// INSERTS `reached_out` — `setPlanStatus`'s `demoteFrom: ["reached_out"]`
-		// guard is a `setWhere` on the conflict branch, and with no existing row
-		// there is no conflict, so the insert lands. Ranked the other way, an
-		// officer confirms a Toastmaster, messages them, and watches them fall
-		// from Coming back to Asked. Ordering it here fixes that with no write
-		// change, and KEEPS the `reached_out` row, which is a true record of
-		// having messaged them and belongs in the activity log.
-		const assumed =
-			stored !== "coming" &&
-			stored !== "not_coming" &&
-			role?.confirmed === true;
+		// member the VPE assigned and confirmed has no plan row, so tapping their
+		// WhatsApp draft INSERTS `reached_out` — `setPlanStatus`'s
+		// `demoteFrom: ["reached_out"]` guard is a `setWhere` on the conflict
+		// branch, and with no existing row there is no conflict, so the insert
+		// lands. Ranked the other way, an officer confirms a Toastmaster,
+		// messages them, and watches them fall from Coming back to Asked.
+		// Ordering it here fixes that with no write change, and keeps the
+		// `reached_out` row, which is a true record of having messaged them.
+		const answered = stored === "coming" || stored === "not_coming";
+		const assumed = !answered && role?.confirmed === true;
 		return {
 			...m,
-			status: assumed ? ("coming" as const) : stored,
+			status: assumed ? "coming" : stored,
+			storedStatus: stored,
 			assumed,
-			role,
+			role: role ? { code: role.code, roleName: role.roleName } : null,
 		};
 	});
 

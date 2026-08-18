@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildPlanPanel } from "./attendance-panel";
 import type { PanelRole, PlanStatus } from "./attendance-panel";
+import { buildPlanPanel } from "./attendance-panel";
 
 const roster = [
 	{ id: "d", name: "Dana", preferredName: null, phone: null, email: null },
@@ -121,11 +121,8 @@ const UNCONFIRMED: PanelRole = {
 
 describe("buildPlanPanel — status precedence", () => {
 	// The whole table, so no combination is covered "by implication". The one
-	// that matters most is `reached_out` + confirmed: a confirmed-role member has
-	// NO plan row, so tapping their draft inserts `reached_out` (setPlanStatus's
-	// `demoteFrom` is a `setWhere` on the conflict branch, and with no row there
-	// is no conflict). Ranked the other way, confirming a Toastmaster and then
-	// messaging them drops them from Coming back to Asked.
+	// that matters most is `reached_out` + confirmed — see the `setPlanStatus` /
+	// `demoteFrom` explanation on the `assumed` line in attendance-panel.ts.
 	const cases: {
 		stored: PlanStatus | null;
 		role: PanelRole | null;
@@ -136,7 +133,12 @@ describe("buildPlanPanel — status precedence", () => {
 		{ stored: null, role: UNCONFIRMED, status: null, assumed: false },
 		{ stored: null, role: CONFIRMED, status: "coming", assumed: true },
 
-		{ stored: "reached_out", role: null, status: "reached_out", assumed: false },
+		{
+			stored: "reached_out",
+			role: null,
+			status: "reached_out",
+			assumed: false,
+		},
 		{
 			stored: "reached_out",
 			role: UNCONFIRMED,
@@ -221,5 +223,48 @@ describe("buildPlanPanel — an assumed Coming is a real Coming", () => {
 		});
 		expect(rows.map((r) => r.id)).toEqual(["a", "d"]);
 		expect(rows.every((r) => r.status === null)).toBe(true);
+	});
+
+	it("carries the STORED rung alongside the effective one", () => {
+		// An assumed Coming can sit on top of a stored `reached_out` — the officer
+		// messaged a confirmed Toastmaster. A caller asking "is there a row to
+		// clear?" cannot get that from `status`, which reads "coming" either way.
+		const { rows } = buildPlanPanel({
+			roster: [roster[0]!],
+			plan: [{ memberId: "d", status: "reached_out" }],
+			roleByMemberId: { d: CONFIRMED },
+		});
+		expect(rows[0]).toMatchObject({
+			status: "coming",
+			assumed: true,
+			storedStatus: "reached_out",
+		});
+	});
+
+	it("distinguishes an assumed Coming with a stored rung from one with no row", () => {
+		const { rows } = buildPlanPanel({
+			roster: [roster[0]!],
+			plan: [],
+			roleByMemberId: { d: CONFIRMED },
+		});
+		expect(rows[0]).toMatchObject({
+			status: "coming",
+			assumed: true,
+			storedStatus: null,
+		});
+	});
+
+	it("does not put `confirmed` on the row's role", () => {
+		// `toEqual`, not `toMatchObject`: the whole point is that the field is
+		// ABSENT, and a partial match cannot see an extra key. This is the case
+		// where the two answers disagree — `assumed` is false, the slot is
+		// confirmed — so a downstream reader picking the wrong one is visible here.
+		const { rows } = buildPlanPanel({
+			roster: [roster[0]!],
+			plan: [{ memberId: "d", status: "not_coming" }],
+			roleByMemberId: { d: CONFIRMED },
+		});
+		expect(rows[0]?.assumed).toBe(false);
+		expect(rows[0]?.role).toEqual({ code: "TD", roleName: "Toastmaster" });
 	});
 });
