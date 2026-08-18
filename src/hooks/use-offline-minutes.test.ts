@@ -312,6 +312,63 @@ describe("useOfflineMinutes", () => {
 		expect(removeOpSpy).toHaveBeenCalledTimes(1);
 	});
 
+	it("does NOT push a DEADLINED write into the meeting the officer hopped to (F1)", async () => {
+		// The corruption the write deadline reopened, and the reason a per-fix
+		// mutation test is not enough on this file: the render-phase reset above
+		// guards STATE at the moment of the hop, while the deadline creates an
+		// in-flight continuation that resumes up to ONLINE_WRITE_TIMEOUT_MS later —
+		// long enough for one tap on the meeting nav strip. `queueOp` persists under
+		// the meeting its closure CAPTURED but reflected optimistically through a
+		// HOOK-LEVEL setter, so meeting A's roll entry landed in meeting B's queue,
+		// B's auto-drain dispatched it against B's id, and `removeOp` cleared B's
+		// copy — leaving A's still queued to replay against A as well. One tap, two
+		// meetings, and the same club, so the server accepted both silently.
+		vi.useFakeTimers();
+		try {
+			ONLINE = true;
+			const hang = vi.fn(() => new Promise<unknown>(() => {}));
+			const { result, rerender } = renderHook(
+				({ id }: { id: string }) =>
+					useOfflineMinutes({ meetingId: id, onMutated: async () => {} }),
+				{ initialProps: { id: "meet-1" } },
+			);
+			await tickUntil(() => true);
+
+			let pending!: Promise<void>;
+			await act(async () => {
+				pending = result.current.mutate(hang, OP);
+			});
+			// The write really went out ONLINE — without this the assertions below
+			// would also hold for a version that queued straight away and never tried.
+			expect(hang).toHaveBeenCalledTimes(1);
+
+			// The hop, INSIDE the deadline window: A's write is still in flight.
+			rerender({ id: "meet-2" });
+
+			// Now let the deadline fire. `queueOp` resumes with meeting A captured.
+			await tickUntil(() => enqueueSpy.mock.calls.length > 0);
+			await act(async () => {
+				await pending;
+			});
+
+			// A's op persists under A: it is A's roll and must replay against A.
+			expect(enqueueSpy).toHaveBeenCalledTimes(1);
+			expect(enqueueSpy).toHaveBeenCalledWith("meet-1", OP());
+			// B's queue never learns about it.
+			expect(result.current.queue).toHaveLength(0);
+			// And no drain dispatched it against B. `removeOp` is the drain's proof
+			// that a dispatch LANDED, so its absence is the absence of the
+			// double-write — and the loop gives the auto-drain 20 virtual seconds to
+			// prove otherwise rather than asserting on an instant that is too early
+			// for the buggy version to have reached it yet.
+			await tickUntil(() => removeOpSpy.mock.calls.length > 0);
+			expect(removeOpSpy).not.toHaveBeenCalled();
+			expect(result.current.queue).toHaveLength(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("drops the previous meeting's snapshot on a hop, even when the next load fails (F5)", async () => {
 		// The READ side of the same root cause. `snapshot` is what the attendance
 		// panel's offline projection falls back to, so a retained one renders

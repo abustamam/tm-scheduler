@@ -93,6 +93,20 @@ export function useOfflineMinutes(input: {
 	onMutatedRef.current = input.onMutated;
 	const { meetingId, minutes } = input;
 
+	// The meeting an ASYNC CONTINUATION must re-check before it touches shared
+	// state, and the fix for the corruption the write deadline reopened.
+	// `queueOp` and the drain's per-op callback each CAPTURE `meetingId` for
+	// their durable half (`enqueue` / `removeOp`) while their optimistic half
+	// goes through a HOOK-LEVEL setter — which writes whichever meeting is on
+	// screen when the continuation resumes. The two could not disagree while
+	// `queueOp` only ran synchronously inside the offline branch; the deadline
+	// made it reachable ONLINE_WRITE_TIMEOUT_MS after the tap, which is ample
+	// time for one tap on the meeting nav strip. Kept current by the
+	// render-phase reset below, so it is right from the render where `meetingId`
+	// changes onward — a state value cannot do this job, because the closure
+	// that has to make the comparison captured the render it was created in.
+	const meetingIdRef = useRef(meetingId);
+
 	// PER-MEETING ISOLATION, and it is load-bearing. `meetingId` is a PROP, and
 	// this hook's owner — the meeting route — is NOT remounted when the URL's
 	// meeting param changes (`grep -rn remountDeps src/` finds nothing, so
@@ -125,6 +139,7 @@ export function useOfflineMinutes(input: {
 	const [stateMeetingId, setStateMeetingId] = useState(meetingId);
 	if (stateMeetingId !== meetingId) {
 		setStateMeetingId(meetingId);
+		meetingIdRef.current = meetingId;
 		setQueue([]);
 		setSnapshot(null);
 		setSyncError(null);
@@ -149,12 +164,17 @@ export function useOfflineMinutes(input: {
 			// so they sort first; de-dup by opId defensively.
 			//
 			// The chronology argument holds only because `current` can no longer
-			// belong to a DIFFERENT meeting: the render-phase reset above empties
-			// the queue on the render where `meetingId` changes, so everything
-			// still in `current` here was enqueued for THIS meeting after that
-			// reset. Merging across a meeting hop is what wrote one meeting's roll
-			// onto another — do not restore this to an unconditional merge without
-			// that reset.
+			// belong to a DIFFERENT meeting, and that now takes TWO guards rather
+			// than one. The render-phase reset above empties the queue on the
+			// render where `meetingId` changes — but a write abandoned at its
+			// deadline resumes up to ONLINE_WRITE_TIMEOUT_MS after the tap, so the
+			// reset ALONE left `queueOp` free to push meeting A's op into B's
+			// queue afterwards (this comment claimed otherwise, and was wrong from
+			// the commit that added the deadline). `queueOp`'s own `meetingIdRef`
+			// check is the second guard. With both, everything still in `current`
+			// here was enqueued for THIS meeting after that reset. Merging across a
+			// meeting hop is what wrote one meeting's roll onto another — do not
+			// restore this to an unconditional merge without both guards.
 			setQueue((current) => {
 				if (current.length === 0) return savedQueue;
 				const seen = new Set(current.map((o) => o.opId));
@@ -246,22 +266,46 @@ export function useOfflineMinutes(input: {
 					},
 					onOpDrained: async (opId) => {
 						await removeOp(meetingId, opId);
-						setQueue((q) => q.filter((o) => o.opId !== opId));
+						// Same split as `queueOp`, same reason: the durable removal is
+						// scoped to the meeting THIS drain belongs to, the state update is
+						// not. A drain still in flight across a hop would otherwise filter
+						// the NEXT meeting's queue by this meeting's opIds.
+						if (meetingIdRef.current === meetingId) {
+							setQueue((q) => q.filter((o) => o.opId !== opId));
+						}
 					},
 				});
 				if (result.error) {
-					// Stop-on-failure: the failed op + successors stay queued.
-					setSyncError(errMessage(result.error));
+					// Stop-on-failure: the failed op + successors stay queued. The
+					// banner and the confirmation both DESCRIBE THIS MEETING'S QUEUE,
+					// so a drain that finishes after a hop keeps quiet rather than
+					// painting its verdict onto the meeting now on screen: "All changes
+					// synced" over a queue that is still pending is the false
+					// reassurance this indicator exists to prevent, and a stale
+					// `syncError` would additionally suppress the next meeting's
+					// auto-drain (which gates on `!syncError`). The ops stay in
+					// IndexedDB under their own meeting either way, so the failure is
+					// surfaced the moment that meeting is opened again.
+					if (meetingIdRef.current === meetingId) {
+						setSyncError(errMessage(result.error));
+					}
 				} else {
 					// Everything replayed — re-fetch authoritative state (the online
 					// snapshot-save effect then refreshes the offline snapshot).
+					// UNCONDITIONAL: server state really did change, and the refetch is
+					// for the router, not for this meeting's banner.
 					await onMutatedRef.current();
 					// Flash a brief "All changes synced" confirmation (auto-dismissed).
-					setJustSynced(true);
+					if (meetingIdRef.current === meetingId) setJustSynced(true);
 				}
 			} catch (err) {
-				setSyncError(errMessage(err));
+				if (meetingIdRef.current === meetingId) setSyncError(errMessage(err));
 			} finally {
+				// NOT meeting-scoped, deliberately: these two are the re-entrancy
+				// guard and the panel's disabled-everything signal, and the failure
+				// mode of not clearing them is the stuck-disabled panel the deadline
+				// exists to kill. A guard clears unconditionally; only queue and
+				// display state is meeting-scoped.
 				drainingRef.current = false;
 				setDraining(false);
 			}
@@ -296,7 +340,16 @@ export function useOfflineMinutes(input: {
 	/** Reflect the op optimistically and persist it. The OFFLINE path, and also
 	 *  where an online write that blew its deadline lands. */
 	async function queueOp(op: MinutesOp) {
-		setQueue((q) => [...q, op]);
+		// `enqueue` stays on the CAPTURED meeting and must: the op is that
+		// meeting's roll and has to persist under it, so it replays against it
+		// later. The optimistic `setQueue` is hook-level, so it is SKIPPED once a
+		// hop has happened since the tap. Unskipped, one deadlined tap wrote A's
+		// roll into B's queue, B's auto-drain dispatched it against B's id, and
+		// `removeOp` then cleared B's copy — leaving A's still queued to replay
+		// against A as well. One tap, two meetings, no error on either.
+		if (meetingIdRef.current === meetingId) {
+			setQueue((q) => [...q, op]);
+		}
 		try {
 			await enqueue(meetingId, op);
 		} catch (err) {
