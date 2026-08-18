@@ -14,8 +14,21 @@ const enqueueSpy = vi.fn(async (..._args: unknown[]) => {});
 const removeOpSpy = vi.fn(async (..._args: unknown[]) => {});
 vi.mock("#/lib/offline-minutes-queue", () => ({
 	enqueue: (...args: unknown[]) => enqueueSpy(...args),
-	readQueue: async () => QUEUED,
-	readSnapshot: async () => null,
+	// `READ_FAILS` reaches the one branch a return value cannot: `indexedDB.open`
+	// REJECTING (Safari private browsing). That path used to be swallowed, which
+	// made a failed read indistinguishable from a first visit — see the
+	// "surfaces a failed persisted load" test below.
+	readQueue: async () => {
+		if (READ_FAILS) throw new Error("IDB blocked");
+		return QUEUED;
+	},
+	// Same reason `QUEUED` is a variable: the persisted SNAPSHOT is what the
+	// attendance panel's offline projection falls back to, so a test needs to be
+	// able to tell one meeting's saved snapshot from another's.
+	readSnapshot: async () => {
+		if (READ_FAILS) throw new Error("IDB blocked");
+		return SNAPSHOT;
+	},
 	saveSnapshot: async () => {},
 	removeOp: (...args: unknown[]) => removeOpSpy(...args),
 }));
@@ -23,6 +36,8 @@ vi.mock("#/lib/offline-minutes-queue", () => ({
 // through a prop — which also proves the hook is not silently trusting a caller.
 let ONLINE = true;
 let QUEUED: unknown[] = [];
+let READ_FAILS = false;
+let SNAPSHOT: unknown = null;
 vi.mock("#/hooks/use-online-status", () => ({
 	useOnlineStatus: () => ONLINE,
 	useOfflineReady: () => true,
@@ -71,11 +86,33 @@ const OP = () => ({
 	status: "present" as const,
 });
 
+/** A SECOND op with a distinct `opId`, so a test can tell whose queue is whose:
+ *  `op-1` belongs to the meeting that was left, `op-2` to the one arrived at. */
+const OP2 = () => ({
+	type: "setAttendance" as const,
+	opId: "op-2",
+	queuedAt: 2,
+	memberId: "m2",
+	status: "absent" as const,
+});
+
+/** Shape-only stand-in for the loader's `MinutesData`, one per meeting so a test
+ *  can say WHOSE minutes are on screen. Typed off the hook's own input so it
+ *  cannot drift, and so this file still needs no `#/server/*` import (that module
+ *  chain reaches `#/db`). */
+const minutesFixture = (label: string) =>
+	({ label, members: [], guests: [] }) as unknown as NonNullable<
+		Parameters<typeof useOfflineMinutes>[0]["minutes"]
+	>;
+const MINUTES_A = minutesFixture("meet-1");
+
 describe("useOfflineMinutes", () => {
 	beforeEach(() => {
 		enqueueSpy.mockClear();
 		removeOpSpy.mockClear();
 		QUEUED = [];
+		READ_FAILS = false;
+		SNAPSHOT = null;
 		dispatchGate = null;
 	});
 
@@ -208,5 +245,124 @@ describe("useOfflineMinutes", () => {
 		// Two ops queued in the same tick must not collide — the drain de-dups on
 		// opId, so a shared id silently drops one of them.
 		expect(result.current.opMeta().opId).not.toBe(result.current.opMeta().opId);
+	});
+	it("keeps one meeting's queued ops out of another meeting's queue (F1)", async () => {
+		// The data-corruption fix. `meetingId` is a PROP and the meeting route is
+		// NOT remounted when its param changes (nothing sets `remountDeps`), so a
+		// tap on the meeting nav strip changes it with every piece of this hook's
+		// state intact. The persisted load used to MERGE, so meeting A's still-
+		// queued ops survived into meeting B and `runDrain` replayed them with B's
+		// id — last week's roll written onto this meeting, silently.
+		ONLINE = false;
+		const { result, rerender } = renderHook(
+			({ id }: { id: string }) =>
+				useOfflineMinutes({ meetingId: id, onMutated: async () => {} }),
+			{ initialProps: { id: "meet-1" } },
+		);
+
+		await act(async () => {
+			await result.current.mutate(async () => {}, OP);
+		});
+		expect(result.current.queue).toHaveLength(1);
+
+		// Hop. Meeting B has its OWN saved queue, so "replace, don't merge" is
+		// observable as WHICH op is in hand rather than merely as a count.
+		QUEUED = [OP2()];
+		rerender({ id: "meet-2" });
+
+		// Synchronously — before the persisted load for B has even started. The
+		// auto-drain effect runs on this very commit, so a queue still holding A's
+		// ops here is already dispatchable against B's id.
+		expect(result.current.queue).toHaveLength(0);
+
+		await waitFor(
+			() => expect(result.current.queue).toHaveLength(1),
+			WAIT_OPTS,
+		);
+		expect(result.current.queue[0].opId).toBe("op-2");
+
+		// And the drain replays B's op ONLY. This half is deliberately positive as
+		// well as negative: `removeOp` proves a drain really ran (so the negative
+		// assertion below cannot pass vacuously), and proves it carried B's id.
+		ONLINE = true;
+		rerender({ id: "meet-2" });
+		await waitFor(
+			() => expect(removeOpSpy).toHaveBeenCalledWith("meet-2", "op-2"),
+			WAIT_OPTS,
+		);
+		expect(removeOpSpy).not.toHaveBeenCalledWith("meet-2", "op-1");
+		expect(removeOpSpy).toHaveBeenCalledTimes(1);
+	});
+
+	it("drops the previous meeting's snapshot on a hop, even when the next load fails (F5)", async () => {
+		// The READ side of the same root cause. `snapshot` is what the attendance
+		// panel's offline projection falls back to, so a retained one renders
+		// another meeting's rows, guests and counts under this meeting's heading —
+		// coherently, with nothing on any surface saying so.
+		//
+		// The hop here lands on a load that REJECTS (`indexedDB.open` in Safari
+		// private browsing), which is the case a reset written into the load's
+		// success path cannot cover — and the case the old bare `.catch(() => {})`
+		// made invisible. Hence the reset is a render-phase one.
+		ONLINE = true;
+		SNAPSHOT = MINUTES_A;
+		const { result, rerender } = renderHook(
+			({ id }: { id: string }) =>
+				useOfflineMinutes({ meetingId: id, onMutated: async () => {} }),
+			{ initialProps: { id: "meet-1" } },
+		);
+
+		await waitFor(
+			() => expect(result.current.snapshot).toBe(MINUTES_A),
+			WAIT_OPTS,
+		);
+
+		READ_FAILS = true;
+		rerender({ id: "meet-2" });
+		// Immediately, and then for good: the failed load never gets to reset it.
+		expect(result.current.snapshot).toBeNull();
+		await waitFor(
+			() => expect(result.current.syncError).toBe("IDB blocked"),
+			WAIT_OPTS,
+		);
+		expect(result.current.snapshot).toBeNull();
+	});
+
+	it("surfaces a failed persisted load instead of looking like a first visit (F5)", async () => {
+		// A rejected `indexedDB.open` used to be swallowed whole, leaving an empty
+		// queue and no snapshot — the same state as a first visit. That silence is
+		// what turns a read error into a data bug: the officer takes roll against a
+		// clean panel while the changes saved on this device are unread.
+		READ_FAILS = true;
+		ONLINE = true;
+		const { result } = renderHook(() =>
+			useOfflineMinutes({ meetingId: "meet-1", onMutated: async () => {} }),
+		);
+
+		await waitFor(
+			() => expect(result.current.syncError).toBe("IDB blocked"),
+			WAIT_OPTS,
+		);
+	});
+
+	it("lets Retry clear a banner the failed load raised with nothing queued", async () => {
+		// `runDrain` returns immediately on an empty queue, so without this the
+		// banner the test above asserts would have a Retry button that provably
+		// cannot do anything.
+		READ_FAILS = true;
+		ONLINE = true;
+		const { result } = renderHook(() =>
+			useOfflineMinutes({ meetingId: "meet-1", onMutated: async () => {} }),
+		);
+		await waitFor(
+			() => expect(result.current.syncError).not.toBeNull(),
+			WAIT_OPTS,
+		);
+
+		await act(async () => {
+			await result.current.retryDrain();
+		});
+
+		expect(result.current.syncError).toBeNull();
 	});
 });

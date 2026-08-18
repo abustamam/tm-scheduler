@@ -79,6 +79,44 @@ export function useOfflineMinutes(input: {
 	onMutatedRef.current = input.onMutated;
 	const { meetingId, minutes } = input;
 
+	// PER-MEETING ISOLATION, and it is load-bearing. `meetingId` is a PROP, and
+	// this hook's owner — the meeting route — is NOT remounted when the URL's
+	// meeting param changes (`grep -rn remountDeps src/` finds nothing, so
+	// TanStack Router reconciles the route instead), while the meeting nav strip
+	// links straight at the same route with a different param. One tap therefore
+	// changes `meetingId` with every piece of state below surviving.
+	//
+	// Unreset, that was live data corruption: the persisted load for meeting B
+	// MERGED its saved queue with meeting A's still-queued ops (the merge is the
+	// mount-race fix below and is correct WITHIN one meeting), and `runDrain`
+	// then replayed A's ops with B's id — last week's roll written onto this
+	// meeting, and twice over, since `removeOp` targets B and leaves the ops
+	// queued under A to replay correctly later too. `snapshot` had the same bug
+	// on the READ side: it is what the panel's offline projection falls back to,
+	// so a hop rendered another meeting's rows, guests and counts under this
+	// meeting's heading, coherently and with no error anywhere.
+	//
+	// A RENDER-PHASE reset (React's documented "adjusting state when a prop
+	// changes" pattern), deliberately, rather than a branch inside the load
+	// effect — the effect cannot cover either half of this. An effect runs after
+	// the commit, so the auto-drain effect would already have fired once with A's
+	// ops against B's id; and the load can REJECT (the Safari-private case its
+	// catch exists for), which is exactly when a reset written into its success
+	// path never runs at all. React throws this render away and re-renders
+	// immediately, so nothing downstream ever observes the carried-over state.
+	//
+	// A drain already IN FLIGHT for A keeps the `meetingId` its closure captured
+	// and so keeps writing to A, which is correct, and clears `drainingRef` /
+	// `draining` itself when it finishes.
+	const [stateMeetingId, setStateMeetingId] = useState(meetingId);
+	if (stateMeetingId !== meetingId) {
+		setStateMeetingId(meetingId);
+		setQueue([]);
+		setSnapshot(null);
+		setSyncError(null);
+		setJustSynced(false);
+	}
+
 	// Load any persisted snapshot + queue once per meeting (survives reloads).
 	useEffect(() => {
 		let alive = true;
@@ -95,20 +133,36 @@ export function useOfflineMinutes(input: {
 			// Ops read here are chronologically EARLIER than anything already in
 			// `current` (this read started at mount, before any such op existed),
 			// so they sort first; de-dup by opId defensively.
+			//
+			// The chronology argument holds only because `current` can no longer
+			// belong to a DIFFERENT meeting: the render-phase reset above empties
+			// the queue on the render where `meetingId` changes, so everything
+			// still in `current` here was enqueued for THIS meeting after that
+			// reset. Merging across a meeting hop is what wrote one meeting's roll
+			// onto another — do not restore this to an unconditional merge without
+			// that reset.
 			setQueue((current) => {
 				if (current.length === 0) return savedQueue;
 				const seen = new Set(current.map((o) => o.opId));
 				return [...savedQueue.filter((o) => !seen.has(o.opId)), ...current];
 			});
 			setSnapshot(savedSnapshot);
-			// Swallowed deliberately: a rejected `indexedDB.open` (Safari private
-			// browsing) means there is no persisted queue to restore, which is the
-			// same state as a first visit — the online path never touches IDB and is
-			// unaffected. Left bare, it is an UNHANDLED rejection, and since PR 3 this
-			// hook mounts for every viewer of the meeting page including anonymous
-			// ones who can never write, so the page would log one for readers who have
-			// nothing to do with the offline queue at all.
-		})().catch(() => {});
+		})().catch((err) => {
+			// A rejected `indexedDB.open` (Safari private browsing) is HANDLED here
+			// rather than left bare: since PR 3 this hook mounts for every viewer of
+			// the meeting page, anonymous ones included, so an unhandled rejection
+			// would be logged for readers who have nothing to do with the queue.
+			//
+			// But it is no longer swallowed. A silent failure here is
+			// indistinguishable from a first visit — an empty queue and no snapshot
+			// — which is precisely what turns a read error into a DATA bug: the
+			// officer sees a clean panel and takes roll believing the changes saved
+			// on this device are gone or absent. Surfacing it as `syncError` also
+			// suppresses the auto-drain (it gates on `!syncError`), so a partially
+			// readable queue is never replayed as if it were the whole of it.
+			if (!alive) return;
+			setSyncError(errMessage(err));
+		});
 		return () => {
 			alive = false;
 		};
@@ -253,7 +307,19 @@ export function useOfflineMinutes(input: {
 	// 8-key return (`mutate, opMeta, busy, queue, snapshot, draining, syncError,
 	// justSynced`): `meeting-minutes.tsx`'s existing Retry control needs a way to
 	// reach this, and the hook owns `runDrain` now.
-	const retryDrain = () => runDrain(queue);
+	const retryDrain = async () => {
+		// Nothing queued, yet an error is showing: the only way into that state is
+		// the persisted-load failure above, and `runDrain` returns immediately on an
+		// empty queue without touching `syncError` — so a bare `runDrain(queue)`
+		// here gives that banner a Retry button that provably cannot do anything.
+		// Clearing it is the honest response, and it re-arms the auto-drain (which
+		// gates on `!syncError`) for the moment a queue does appear.
+		if (queue.length === 0) {
+			setSyncError(null);
+			return;
+		}
+		await runDrain(queue);
+	};
 
 	return {
 		mutate,
