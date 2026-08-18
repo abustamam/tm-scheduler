@@ -212,6 +212,20 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		expect(btn.getAttribute("aria-label")).toMatch(/assumed/i);
 	});
 
+	it("announces the full role, not the short code", () => {
+		// The code is learnable vocabulary for a sighted officer scanning a column;
+		// read aloud, "TD" is noise. The sr-only span is what makes the accessible
+		// name the real role — and it is the reason the badge does NOT carry an
+		// `aria-label`, which ARIA 1.2 prohibits on the bare <span> a Badge renders.
+		const { getByText } = renderPanel({
+			roleByMemberId: {
+				m2: { code: "TMR", roleName: "Timer", confirmed: false },
+			},
+		});
+		expect(getByText("TMR").getAttribute("aria-hidden")).toBe("true");
+		expect(getByText("Timer").className).toContain("sr-only");
+	});
+
 	it("marks an assumed role badge apart from a merely-assigned one", () => {
 		// ADDED beyond the plan, on the strength of its own mutation check:
 		// flattening `variant` to a constant and deleting the tick left all 15
@@ -231,11 +245,21 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 				m2: { code: "TMR", roleName: "Timer", confirmed: false },
 			},
 		});
-		const assumed = getByText("TD");
+		// `getByText(code)` lands on the INNER code span — the badge's text is split
+		// across the tick, the aria-hidden code and the sr-only role name — so walk
+		// up to the Badge itself. `data-slot="badge"` is Badge's own attribute, and
+		// `closest` survives another wrapper appearing in between.
+		const badgeFor = (code: string) => {
+			const badge = getByText(code).closest('[data-slot="badge"]');
+			if (!badge) throw new Error(`no badge wrapping ${code}`);
+			return badge;
+		};
+
+		const assumed = badgeFor("TD");
 		expect(assumed.getAttribute("data-variant")).toBe("default");
 		expect(assumed.querySelector("svg")).toBeTruthy();
 
-		const assigned = getByText("TMR");
+		const assigned = badgeFor("TMR");
 		expect(assigned.getAttribute("data-variant")).toBe("secondary");
 		expect(assigned.querySelector("svg")).toBeNull();
 	});

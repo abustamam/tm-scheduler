@@ -78,14 +78,25 @@ function AttendanceRow({
 				{m.role ? (
 					<Badge
 						variant={m.assumed ? "default" : "secondary"}
-						title={m.role.roleName}
-						aria-label={m.role.roleName}
 						className="mt-0.5 shrink-0"
 					>
 						{/* An ICON, not a "✓" character: a literal would join the code in
 						 *  `textContent` and break every `getByText(code)` query. */}
 						{m.assumed ? <Check aria-hidden /> : null}
-						{m.role.code}
+						{/* The CODE is decorative to a screen reader — it hears the full
+						 *  role from the sr-only span beside it, so the accessible name is
+						 *  "Toastmaster" rather than "TD".
+						 *
+						 *  `aria-label` on the Badge itself is not an option, which is what
+						 *  this shape exists to avoid: a Badge renders a bare <span>, which
+						 *  maps to role `generic`, and ARIA 1.2 PROHIBITS `aria-label`
+						 *  there — axe-core flags `aria-prohibited-attr` and honouring
+						 *  varies by screen reader. `title` stays on the visible code, where
+						 *  a mouse user's pointer actually lands. */}
+						<span aria-hidden title={m.role.roleName}>
+							{m.role.code}
+						</span>
+						<span className="sr-only">{m.role.roleName}</span>
 					</Badge>
 				) : null}
 			</div>
