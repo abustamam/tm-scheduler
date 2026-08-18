@@ -122,7 +122,8 @@ const UNCONFIRMED: PanelRole = {
 describe("buildPlanPanel — status precedence", () => {
 	// The whole table, so no combination is covered "by implication". The one
 	// that matters most is `reached_out` + confirmed — see the `setPlanStatus` /
-	// `demoteFrom` explanation on the `assumed` line in attendance-panel.ts.
+	// `demoteFrom` explanation on the `assumed` const inside `buildPlanPanel` in
+	// attendance-panel.ts.
 	const cases: {
 		stored: PlanStatus | null;
 		role: PanelRole | null;
@@ -178,6 +179,15 @@ describe("buildPlanPanel — status precedence", () => {
 				roleByMemberId: c.role ? { d: c.role } : {},
 			});
 			expect(rows[0]).toMatchObject({ status: c.status, assumed: c.assumed });
+			// `assumed` is a convenience, not a second source of truth: it must
+			// always AGREE with what (status, storedStatus) already say. This is the
+			// property `role.confirmed` failed — it disagreed for a `not_coming`
+			// member holding a confirmed slot, and nothing caught it. Asserted in
+			// every cell so a future precedence change cannot let the two drift
+			// apart and leave consumers split across the two forms disagreeing.
+			expect(rows[0]?.assumed).toBe(
+				rows[0]?.status === "coming" && rows[0]?.storedStatus !== "coming",
+			);
 		});
 	}
 });

@@ -50,12 +50,19 @@ export interface PanelMember {
 	 *  stored one. Counts and sort both read this, which is what makes an assumed
 	 *  Coming a real Coming everywhere without a second code path. */
 	status: PlanStatus | null;
-	/** The rung actually stored in `meeting_attendance_plan`, before precedence.
-	 *  `status` is the EFFECTIVE one and is what sort and counts read; this is
-	 *  what a caller needs to answer "is there a row to clear?". An assumed
-	 *  Coming can sit on top of a stored `reached_out` — the officer messaged a
-	 *  confirmed Toastmaster — and clearing that is a real write with a real
-	 *  activity-log entry, even though the row on screen does not move. */
+	/** The rung this member's plan row carries, as supplied in `plan`, before
+	 *  precedence is applied. This function has no database view — it reports
+	 *  whatever the caller passed. The production caller
+	 *  (`meeting-attendance-panel.tsx`) builds `plan` from an OPTIMISTICALLY
+	 *  OVERRIDDEN `rungOverride` before calling in, so during an in-flight write
+	 *  this reflects the override rather than the committed row — which is the
+	 *  intended value for the use below, the same reason the override is
+	 *  applied before `buildPlanPanel` at all. `status` is the EFFECTIVE rung
+	 *  and is what sort and counts read; this field is what a caller needs to
+	 *  answer "is there a row to clear?". An assumed Coming can sit on top of a
+	 *  stored `reached_out` — the officer messaged a confirmed Toastmaster —
+	 *  and clearing that is a real write with a real activity-log entry, even
+	 *  though the row on screen does not move. */
 	storedStatus: PlanStatus | null;
 	/** True when `status` is "coming" because the member holds a CONFIRMED role
 	 *  and nobody actually answered. An inference, not their word — the row has
