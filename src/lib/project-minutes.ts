@@ -55,16 +55,53 @@ export type ProjectionInput = {
  * `moveTableTopics` is the exception, and it double-applies on the drain too,
  * which is a queue-semantics question and not a display one.
  */
-export function projectMinutes({
-	online,
-	minutes,
-	snapshot,
-	queue,
-}: ProjectionInput): MinutesData | null {
+/**
+ * ONE-ENTRY memo, keyed by REFERENCE IDENTITY of all four inputs.
+ *
+ * Four callers project the same thing in the same render — `deriveRollAttendance`,
+ * `deriveRollGuests` and `deriveRollRoster` (three `useMemo`s in the meeting
+ * route, all four dependencies shared, so they always recompute together) plus
+ * the Minutes card's `displayMinutes`, which the route hands the same
+ * `minutes.data` object. Offline, every tap therefore paid FOUR
+ * `structuredClone`s of the whole snapshot and four full queue replays for one
+ * answer. One entry is all that is needed: they arrive consecutively with
+ * identical inputs.
+ *
+ * A miss costs exactly what the call cost before, so this is never slower — and
+ * the callers construct a fresh object literal each time, which is why the KEY is
+ * the four fields rather than the input object.
+ *
+ * Module-level mutable state in a pure `lib/` module, deliberately, with two
+ * things that make it safe. Nothing mutates the returned `MinutesData` (the
+ * guests array is handed on by reference to a component that only reads it), so a
+ * shared value cannot be corrupted for the next reader. And on the SERVER, where
+ * this module is one instance across every request, a false hit is unreachable:
+ * `minutes`, `snapshot` and `queue` are all per-request objects — `queue` is
+ * `useState([])`'s own fresh array — so two requests cannot key alike, and if
+ * `minutes` were somehow shared the value returned would be that request's own.
+ */
+let memo: (ProjectionInput & { value: MinutesData | null }) | null = null;
+
+export function projectMinutes(input: ProjectionInput): MinutesData | null {
+	if (
+		memo !== null &&
+		memo.online === input.online &&
+		memo.minutes === input.minutes &&
+		memo.snapshot === input.snapshot &&
+		memo.queue === input.queue
+	) {
+		return memo.value;
+	}
+	const { online, minutes, snapshot, queue } = input;
 	const base = online ? minutes : (snapshot ?? minutes);
-	if (!base) return null;
 	// `deriveMinutes` structuredClones, so the empty-queue case — every render in
 	// the steady state — must not pay for it. That is also what keeps the returned
 	// identity stable for a `useMemo` consumer when there is nothing to replay.
-	return queue.length > 0 ? deriveMinutes(base, queue) : base;
+	const value = !base
+		? null
+		: queue.length > 0
+			? deriveMinutes(base, queue)
+			: base;
+	memo = { online, minutes, snapshot, queue, value };
+	return value;
 }

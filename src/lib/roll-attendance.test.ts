@@ -298,6 +298,42 @@ describe("deriveRollGuests", () => {
 		]);
 	});
 
+	it("F8: projects ONCE for callers sharing the same inputs", () => {
+		// `deriveRollAttendance`, `deriveRollGuests`, `deriveRollRoster` and the
+		// Minutes card's `displayMinutes` all project the same thing in the same
+		// render — the three `useMemo`s in the meeting route share all four
+		// dependencies, and the route hands the card the same `minutes.data`. Offline
+		// every tap therefore paid four `structuredClone`s of the whole snapshot and
+		// four full queue replays for one answer.
+		//
+		// IDENTITY is the observable, and it needs a NON-EMPTY queue to mean anything:
+		// with nothing to replay the base's own array comes back either way, so this
+		// assertion would pass without any memo at all. `deriveMinutes` clones, so two
+		// unmemoised replays cannot return the same array.
+		const input = {
+			online: false,
+			minutes: null,
+			snapshot: makeMinutes(),
+			queue: [setAbsent("m-bea")],
+		};
+		const first = deriveRollGuests(input);
+		expect(first).toBeTruthy();
+		expect(deriveRollGuests(input)).toBe(first);
+
+		// And it must not go STALE. A memo that never invalidates is the same defect
+		// as a `useMemo` missing `queue` from its dependencies — byte-identical to
+		// having no projection at all.
+		const moved = deriveRollGuests({
+			...input,
+			queue: [addGuest("g-nadia", "Nadia Farouk")],
+		});
+		expect(moved).not.toBe(first);
+		expect(moved?.map((g) => g.guestId)).toContain("g-nadia");
+		// Every key is part of it, including the boolean: the same objects read
+		// ONLINE take the loader rows as their base, which is a different answer.
+		expect(deriveRollGuests({ ...input, online: true })).not.toBe(first);
+	});
+
 	it("returns UNDEFINED, not [], when there is nothing to read", () => {
 		// Deliberately unlike `deriveRollAttendance`, which returns `[]`. The panel's
 		// `guests` prop is optional so a caller with no guests wired renders NOTHING;
