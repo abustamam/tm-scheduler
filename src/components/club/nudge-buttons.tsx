@@ -100,9 +100,21 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 
 	// `name`, not `preferredName`: the rail row this label is announced
 	// against displays the full `name`, so the accessible label matches what
-	// the officer sees on screen. The WhatsApp label also says it opens in a
-	// new tab, matching `WhatsAppPhoneLink` (#37) — a screen reader gives no
-	// other signal that `target="_blank"` is about to leave the page.
+	// the officer sees on screen.
+	//
+	// The ACCESSIBLE NAME matches `WhatsAppPhoneLink` (#37) — both say the link
+	// leaves the page, since a screen reader gives no other signal that
+	// `target="_blank"` is about to happen. That match is `aria-label` only:
+	// `WhatsAppPhoneLink`'s `title` is a deliberately SHORT, separate string
+	// (`Message ${name} on WhatsApp`, no "opens in a new tab"), pinned by five
+	// test files. Here `title` reuses the longer `waLabel` instead, because
+	// icon-only mode has no visible text left for a sighted mouse user to read
+	// — the tooltip is doing work the sibling doesn't need it to do. Do not
+	// "harmonise" the two by lengthening `WhatsAppPhoneLink`'s title to match:
+	// `members.$id.test.tsx:233` asserts `queryByTitle(/on WhatsApp$/)).toBeNull()`
+	// with an ANCHORED matcher, so appending this suffix there would make that
+	// assertion pass because the anchor stopped matching the (now longer)
+	// title, not because the title is actually gone.
 	// `mailto:` does not open a tab, so `mailLabel` says nothing about it.
 	const waLabel = `Message ${name} on WhatsApp, opens in a new tab`;
 	const mailLabel = `Email ${name}`;

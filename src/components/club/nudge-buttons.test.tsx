@@ -135,8 +135,17 @@ describe("NudgeButtons", () => {
 
 	it("keeps its labels by default, so the agenda and recruit picker are untouched", () => {
 		render(<NudgeButtons {...base} phone="14155552671" email="j@x.io" />);
-		expect(screen.getByRole("link", { name: "WhatsApp" })).toBeTruthy();
-		expect(screen.getByRole("link", { name: "Email" })).toBeTruthy();
+		const wa = screen.getByRole("link", { name: "WhatsApp" });
+		const mail = screen.getByRole("link", { name: "Email" });
+		expect(wa).toBeTruthy();
+		expect(mail).toBeTruthy();
+		// accname SKIPS a whitespace-only `aria-label` and falls through to
+		// content, so the role query above passes whether the attribute is
+		// absent or merely empty. Pin absent explicitly — matches the idiom at
+		// `whatsapp-phone-link.test.tsx:211` — so a future `aria-label=""` leak
+		// on the labelled path cannot hide behind this test.
+		expect(wa.getAttribute("aria-label")).toBeNull();
+		expect(mail.getAttribute("aria-label")).toBeNull();
 	});
 
 	it("iconOnly drops the text but NOT the accessible name", () => {
@@ -149,7 +158,20 @@ describe("NudgeButtons", () => {
 		const waLabel = "Message Jane on WhatsApp, opens in a new tab";
 		const mailLabel = "Email Jane";
 		render(
-			<NudgeButtons {...base} iconOnly phone="14155552671" email="j@x.io" />,
+			<NudgeButtons
+				{...base}
+				iconOnly
+				// `name`, not `preferredName`: giving the fixture a DIFFERENT
+				// `preferredName` ("Janey") means a mutation that swaps the label
+				// const from `name` to `preferredName` produces "Message Janey on
+				// WhatsApp…" — a real mismatch against `waLabel` above — rather than
+				// "Message undefined on WhatsApp…", which would fail this test for
+				// the wrong reason (`base` carries no `preferredName` at all) and
+				// prove nothing about which field the label is actually pinned to.
+				preferredName="Janey"
+				phone="14155552671"
+				email="j@x.io"
+			/>,
 		);
 		expect(screen.queryByText("WhatsApp")).toBeNull();
 		expect(screen.queryByText("Email")).toBeNull();
@@ -175,18 +197,37 @@ describe("NudgeButtons", () => {
 		expect(wa.getAttribute("title")).toBe(waLabel);
 		expect(mail.getAttribute("title")).toBe(mailLabel);
 
-		// `icon-sm` (size-8) is the flag's REASON TO EXIST — dropping the text
-		// saves ~40px, dropping `sm`'s padding saves the rest. Deleting the size
+		// `icon-sm` is the flag's REASON TO EXIST — dropping the text saves ~40px,
+		// dropping `sm`'s padding for `icon-sm` saves the rest. Deleting the size
 		// change left every other assertion green, so this is the only thing
 		// standing between the feature and a silent revert.
-		expect(wa.className).toContain("size-8");
-		expect(mail.className).toContain("size-8");
+		//
+		// `data-size`, not the Tailwind class: this pins the DECISION (we asked
+		// for icon-sm) rather than Tailwind's current rendering of it, so a
+		// shadcn/Tailwind bump that redefines the `icon-sm` token does not fail a
+		// test that is still correct — `button.tsx` emits `data-size={size}` onto
+		// `Comp`, which under `asChild` is `Slot.Root`, so it rides onto this `<a>`
+		// the same way `className` does. A `className.toContain("size-8")` check
+		// would also pass on a hypothetical `size-80`; `data-size` cannot.
+		expect(wa.getAttribute("data-size")).toBe("icon-sm");
+		expect(mail.getAttribute("data-size")).toBe("icon-sm");
 	});
 
 	it("still says so when there is no contact, iconOnly or not", () => {
 		// The widest thing this component renders, and the one branch the flag
-		// deliberately leaves alone. Nothing else observes that decision.
-		render(<NudgeButtons {...base} iconOnly phone={null} email={null} />);
+		// deliberately leaves alone. Nothing else observes that decision. Renders
+		// BOTH cases — the name promises "iconOnly or not", so it renders both,
+		// rather than leaving the "or not" half to the older, differently-named
+		// no-contact test ~90 lines up.
+		const iconOnlyRender = render(
+			<NudgeButtons {...base} iconOnly phone={null} email={null} />,
+		);
 		expect(screen.getByText(/no contact on file/i)).toBeTruthy();
+		expect(screen.queryByRole("link")).toBeNull();
+		iconOnlyRender.unmount();
+
+		render(<NudgeButtons {...base} phone={null} email={null} />);
+		expect(screen.getByText(/no contact on file/i)).toBeTruthy();
+		expect(screen.queryByRole("link")).toBeNull();
 	});
 });
