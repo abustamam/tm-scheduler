@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildPlanPanel } from "./attendance-panel";
+import type { PanelRole, PlanStatus } from "./attendance-panel";
 
 const roster = [
 	{ id: "d", name: "Dana", preferredName: null, phone: null, email: null },
@@ -70,21 +71,26 @@ describe("buildPlanPanel", () => {
 		expect(countsLine).toBe("1 no answer");
 	});
 
-	it("attaches the role a member holds, and does not reorder for it", () => {
+	it("attaches the role a member holds, and an UNCONFIRMED one does not reorder", () => {
 		// Holding a role is INFORMATION on the row (spec D2: "assigned members
-		// included, with a role chip"), not a bucket. A member with a role who has
-		// not answered is still someone to chase.
+		// included, with a role chip"), not a bucket. A member with an unconfirmed
+		// role who has not answered is still someone to chase. A CONFIRMED role IS
+		// a bucket now — see the precedence describe below.
 		const { rows } = buildPlanPanel({
 			roster,
 			plan: [{ memberId: "a", status: "coming" }],
-			roleByMemberId: { a: "Timer", d: "Toastmaster" },
+			roleByMemberId: {
+				a: { code: "TMR", roleName: "Timer", confirmed: false },
+				d: { code: "TD", roleName: "Toastmaster", confirmed: false },
+			},
 		});
-		expect(rows[0]).toMatchObject({ id: "b", roleName: null });
-		expect(rows.find((r) => r.id === "d")).toMatchObject({
+		expect(rows[0]).toMatchObject({ id: "b", role: null });
+		expect(rows.find((r) => r.id === "d")?.role).toMatchObject({
+			code: "TD",
 			roleName: "Toastmaster",
 		});
 		expect(rows.find((r) => r.id === "a")).toMatchObject({
-			roleName: "Timer",
+			role: { code: "TMR", roleName: "Timer" },
 			status: "coming",
 		});
 	});
@@ -99,5 +105,121 @@ describe("buildPlanPanel", () => {
 		});
 		expect(rows).toHaveLength(1);
 		expect(counts.coming).toBe(0);
+	});
+});
+
+const CONFIRMED: PanelRole = {
+	code: "TD",
+	roleName: "Toastmaster",
+	confirmed: true,
+};
+const UNCONFIRMED: PanelRole = {
+	code: "TD",
+	roleName: "Toastmaster",
+	confirmed: false,
+};
+
+describe("buildPlanPanel — status precedence", () => {
+	// The whole table, so no combination is covered "by implication". The one
+	// that matters most is `reached_out` + confirmed: a confirmed-role member has
+	// NO plan row, so tapping their draft inserts `reached_out` (setPlanStatus's
+	// `demoteFrom` is a `setWhere` on the conflict branch, and with no row there
+	// is no conflict). Ranked the other way, confirming a Toastmaster and then
+	// messaging them drops them from Coming back to Asked.
+	const cases: {
+		stored: PlanStatus | null;
+		role: PanelRole | null;
+		status: PlanStatus | null;
+		assumed: boolean;
+	}[] = [
+		{ stored: null, role: null, status: null, assumed: false },
+		{ stored: null, role: UNCONFIRMED, status: null, assumed: false },
+		{ stored: null, role: CONFIRMED, status: "coming", assumed: true },
+
+		{ stored: "reached_out", role: null, status: "reached_out", assumed: false },
+		{
+			stored: "reached_out",
+			role: UNCONFIRMED,
+			status: "reached_out",
+			assumed: false,
+		},
+		{ stored: "reached_out", role: CONFIRMED, status: "coming", assumed: true },
+
+		{ stored: "coming", role: null, status: "coming", assumed: false },
+		{ stored: "coming", role: UNCONFIRMED, status: "coming", assumed: false },
+		{ stored: "coming", role: CONFIRMED, status: "coming", assumed: false },
+
+		{ stored: "not_coming", role: null, status: "not_coming", assumed: false },
+		{
+			stored: "not_coming",
+			role: UNCONFIRMED,
+			status: "not_coming",
+			assumed: false,
+		},
+		// The member's own word beats the inference: a confirmed Toastmaster who
+		// tells you the night before that they cannot come is NOT coming.
+		{
+			stored: "not_coming",
+			role: CONFIRMED,
+			status: "not_coming",
+			assumed: false,
+		},
+	];
+
+	for (const c of cases) {
+		it(`stored=${c.stored ?? "none"} role=${
+			c.role ? (c.role.confirmed ? "confirmed" : "unconfirmed") : "none"
+		} → ${c.status ?? "none"}${c.assumed ? " (assumed)" : ""}`, () => {
+			const { rows } = buildPlanPanel({
+				roster: [roster[0]!],
+				plan: c.stored ? [{ memberId: "d", status: c.stored }] : [],
+				roleByMemberId: c.role ? { d: c.role } : {},
+			});
+			expect(rows[0]).toMatchObject({ status: c.status, assumed: c.assumed });
+		});
+	}
+});
+
+describe("buildPlanPanel — an assumed Coming is a real Coming", () => {
+	it("counts toward `coming`, not toward `noAnswer`", () => {
+		const { counts, countsLine } = buildPlanPanel({
+			roster: [roster[0]!, roster[1]!], // Dana, Ali
+			plan: [],
+			roleByMemberId: { a: CONFIRMED },
+		});
+		expect(counts).toEqual({
+			coming: 1,
+			notComing: 0,
+			reachedOut: 0,
+			noAnswer: 1,
+		});
+		expect(countsLine).toBe("1 coming · 1 no answer");
+	});
+
+	it("sorts into the coming bucket, not the chase-me-first bucket", () => {
+		// The role goes to ALI on purpose. Ali sorts first alphabetically, so an
+		// assumed Coming has to REVERSE the pair to pass — give the role to Dana
+		// instead and the expected order is alphabetical either way, and the
+		// assertion cannot fail. Dana has answered nothing and holds nothing, so
+		// Dana is the one still to chase and sorts first.
+		const { rows } = buildPlanPanel({
+			roster: [roster[0]!, roster[1]!],
+			plan: [],
+			roleByMemberId: { a: CONFIRMED },
+		});
+		expect(rows.map((r) => r.id)).toEqual(["d", "a"]);
+	});
+
+	it("an UNCONFIRMED role still does not move anyone", () => {
+		// Holding a role you have not confirmed is information, not an answer — so
+		// the SAME fixture that reversed above must stay alphabetical here. This
+		// pair is what makes either assertion able to fail.
+		const { rows } = buildPlanPanel({
+			roster: [roster[0]!, roster[1]!],
+			plan: [],
+			roleByMemberId: { a: UNCONFIRMED },
+		});
+		expect(rows.map((r) => r.id)).toEqual(["a", "d"]);
+		expect(rows.every((r) => r.status === null)).toBe(true);
 	});
 });

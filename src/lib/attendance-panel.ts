@@ -18,17 +18,38 @@ import type { AttendancePlanStatus } from "#/server/attendance-plan-logic";
  *  six other `src/lib` modules already take into `#/server/*-logic`. */
 export type PlanStatus = AttendancePlanStatus;
 
+/** The role slot a member holds on this meeting, as the rail needs it. */
+export interface PanelRole {
+	/** The sign-up sheet's short code — "TD", "GE", "SP1". Produced by
+	 *  `buildShortCodes` (`#/lib/agenda`), the season grid's own function, so the
+	 *  two surfaces cannot drift into two vocabularies for one role. */
+	code: string;
+	/** The role's BASE name, for the outreach draft ("you're our Toastmaster")
+	 *  and for the badge's tooltip. Deliberately NOT the numbered label: "you're
+	 *  our Speaker 1" reads as a mail merge, and the agenda's own slot-card nudge
+	 *  already uses the base name for the same reason. */
+	roleName: string;
+	/** The slot's status is `confirmed` — they said yes to the ROLE, which this
+	 *  panel reads as saying yes to the meeting. */
+	confirmed: boolean;
+}
+
 export interface PanelMember {
 	id: string;
 	name: string;
 	preferredName?: string | null;
 	phone: string | null;
 	email: string | null;
+	/** The EFFECTIVE rung after the precedence rule below — not necessarily the
+	 *  stored one. Counts and sort both read this, which is what makes an assumed
+	 *  Coming a real Coming everywhere without a second code path. */
 	status: PlanStatus | null;
-	/** Non-null when they hold a slot on this meeting — renders a role chip.
-	 *  Information, never a bucket: a Toastmaster who has not replied is still
-	 *  someone to chase. */
-	roleName: string | null;
+	/** True when `status` is "coming" because the member holds a CONFIRMED role
+	 *  and nobody actually answered. An inference, not their word — the row has
+	 *  to render it differently or the rail is lying about who replied. */
+	assumed: boolean;
+	/** Non-null when they hold a slot on this meeting. */
+	role: PanelRole | null;
 }
 
 export interface PlanPanelCounts {
@@ -53,9 +74,9 @@ const RUNG_ORDER: Record<PlanStatus | "null", number> = {
 };
 
 export function buildPlanPanel(input: {
-	roster: Omit<PanelMember, "status" | "roleName">[];
+	roster: Omit<PanelMember, "status" | "assumed" | "role">[];
 	plan: { memberId: string; status: PlanStatus }[];
-	roleByMemberId: Readonly<Record<string, string>>;
+	roleByMemberId: Readonly<Record<string, PanelRole>>;
 }): {
 	rows: PanelMember[];
 	counts: PlanPanelCounts;
@@ -66,11 +87,36 @@ export function buildPlanPanel(input: {
 	// Built from the ROSTER, never from the plan rows: an inactive member is
 	// filtered upstream but their plan row survives in the table, and iterating
 	// the plan would resurrect the name.
-	const rows: PanelMember[] = input.roster.map((m) => ({
-		...m,
-		status: byMember.get(m.id) ?? null,
-		roleName: input.roleByMemberId[m.id] ?? null,
-	}));
+	const rows: PanelMember[] = input.roster.map((m) => {
+		const stored = byMember.get(m.id) ?? null;
+		const role = input.roleByMemberId[m.id] ?? null;
+		// PRECEDENCE, in one expression:
+		//
+		//   explicit coming / not_coming  →  that answer   (their own word wins)
+		//   role slot status = confirmed  →  "coming", assumed
+		//   stored reached_out            →  "reached_out"
+		//   nothing                       →  null
+		//
+		// A confirmed role outranking `reached_out` is not a style choice. A
+		// confirmed-role member has NO plan row, so tapping their WhatsApp draft
+		// INSERTS `reached_out` — `setPlanStatus`'s `demoteFrom: ["reached_out"]`
+		// guard is a `setWhere` on the conflict branch, and with no existing row
+		// there is no conflict, so the insert lands. Ranked the other way, an
+		// officer confirms a Toastmaster, messages them, and watches them fall
+		// from Coming back to Asked. Ordering it here fixes that with no write
+		// change, and KEEPS the `reached_out` row, which is a true record of
+		// having messaged them and belongs in the activity log.
+		const assumed =
+			stored !== "coming" &&
+			stored !== "not_coming" &&
+			role?.confirmed === true;
+		return {
+			...m,
+			status: assumed ? ("coming" as const) : stored,
+			assumed,
+			role,
+		};
+	});
 
 	// `?? "null"` rather than `String(...)`: the latter widens the key to
 	// `string`, which is what let `RUNG_ORDER` be a `Record<string, number>` and
@@ -82,6 +128,8 @@ export function buildPlanPanel(input: {
 		return rung !== 0 ? rung : a.name.localeCompare(b.name);
 	});
 
+	// Both of these read the EFFECTIVE status, so an assumed Coming is a Coming
+	// here too. That is the point of resolving precedence once, above.
 	const counts: PlanPanelCounts = {
 		coming: rows.filter((r) => r.status === "coming").length,
 		notComing: rows.filter((r) => r.status === "not_coming").length,
