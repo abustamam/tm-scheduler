@@ -111,6 +111,42 @@ describe("SyncStatus", () => {
 		stillQueued.getByText(/1 change not yet synced/);
 	});
 
+	it("F7: announces every state, and the ERROR assertively", () => {
+		// There was no `aria-live`, `role="status"` or `role="alert"` anywhere in this
+		// component — on the surface whose whole job is "did this reach the server".
+		// Since roll mode this is the primary attendance-write indicator, so the
+		// transition into "Couldn't sync changes — Retry" reaching nobody is the worst
+		// of the four.
+		//
+		// Queried by ROLE, which is the observable: `<output>` carries the implicit
+		// `status` role, so this fails for a plain `<p>` and passes without any
+		// attribute being spelled out.
+		const drain = render(
+			<SyncStatus {...idle} draining={true} queueCount={2} />,
+		);
+		expect(drain.getByRole("status").textContent).toContain("Syncing 2");
+		drain.unmount();
+
+		const pending = render(<SyncStatus {...idle} queueCount={1} />);
+		expect(pending.getByRole("status").textContent).toContain("not yet synced");
+		pending.unmount();
+
+		const done = render(<SyncStatus {...idle} justSynced={true} />);
+		expect(done.getByRole("status").textContent).toContain(
+			"All changes synced",
+		);
+		done.unmount();
+
+		// The error is ASSERTIVE and must not be a `status`: it is the one state that
+		// asks the officer to act, and asserting `role="alert"` specifically is what
+		// stops "make them all `status`" from passing.
+		const failed = render(<SyncStatus {...idle} syncError="nope" />);
+		expect(failed.getByRole("alert").textContent).toContain(
+			"Couldn't sync changes",
+		);
+		expect(failed.queryByRole("status")).toBeNull();
+	});
+
 	it("renders nothing in the steady state", () => {
 		// The empty-document control. Every assertion above is a `getByText`, so a
 		// component that rendered its copy unconditionally would satisfy them all.

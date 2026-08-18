@@ -48,7 +48,30 @@ export type SyncStatusProps = {
 /**
  * One cohesive indicator for the offline write-queue's sync lifecycle. Purely
  * presentational — it reads the hook state its caller threads in and never
- * drives a mutation. States, in priority order:
+ * drives a mutation.
+ *
+ * ANNOUNCED, which it was not. On the surface whose whole job is "did this reach
+ * the server", the transition into "Couldn't sync changes — Retry" reached nobody
+ * using a screen reader: there was no `aria-live`, `role="status"` or
+ * `role="alert"` in this file. Pre-existing, and roll mode is what makes it
+ * matter — since PR 3 this is the primary attendance-write indicator and it is
+ * rendered in a second place.
+ *
+ * The three informational states are `<output>` elements, whose implicit role IS
+ * `status` (polite + atomic), so the role is not spelled out and cannot drift
+ * from the element. The ERROR is `role="alert"` instead: assertive, because it is
+ * the one state that needs the officer to do something, and it is the state a
+ * `queueCount` alone cannot tell them about.
+ *
+ * HONEST LIMIT. A live region that is INSERTED together with its content is less
+ * reliably announced than one already sitting in the DOM — VoiceOver especially.
+ * The fix for that is an always-mounted empty region, and it is not free here:
+ * the Minutes card renders this as the first child of a `space-y-8`
+ * `CardContent`, so a permanently-present element puts 32px of blank space above
+ * the card's real content on every render of the steady state. Not paid for a
+ * reliability gain nothing in this repo can measure — jsdom announces nothing.
+ *
+ * States, in priority order:
  *   • syncing  → a spinner + "Syncing N change(s)…"      (a drain is in flight)
  *   • error    → a warning + "Couldn't sync changes" + Retry
  *   • pending  → N change(s) still on this device, worded by connectivity:
@@ -86,15 +109,22 @@ export function SyncStatus({
 	const pendingCount = queueCount;
 	if (draining) {
 		return (
-			<p className="flex items-center gap-2 text-muted-foreground text-sm">
+			<output className="flex items-center gap-2 text-muted-foreground text-sm">
 				<Loader2 className="size-4 shrink-0 animate-spin" aria-hidden />
 				Syncing {queueCount} change{queueCount === 1 ? "" : "s"}…
-			</p>
+			</output>
 		);
 	}
 	if (syncError) {
 		return (
-			<p className="flex items-center gap-2 text-warning-foreground text-sm">
+			// `role="alert"` (assertive), NOT the `<output>` the other three use: this
+			// is the only state that asks the officer to act, and the only one they
+			// cannot infer from the count. A `<p>` rather than an `<output>` with an
+			// overridden role, so the element and the role agree.
+			<p
+				role="alert"
+				className="flex items-center gap-2 text-warning-foreground text-sm"
+			>
 				<AlertTriangle className="size-4 shrink-0" aria-hidden />
 				<span>
 					Couldn't sync changes —{" "}
@@ -114,7 +144,7 @@ export function SyncStatus({
 	if (pendingCount > 0) {
 		const plural = pendingCount === 1 ? "" : "s";
 		return (
-			<p className="flex items-center gap-2 text-muted-foreground text-sm">
+			<output className="flex items-center gap-2 text-muted-foreground text-sm">
 				{online ? (
 					<CloudUpload className="size-4 shrink-0" aria-hidden />
 				) : (
@@ -123,15 +153,15 @@ export function SyncStatus({
 				{online
 					? `${pendingCount} change${plural} not yet synced — kept on this device until they are.`
 					: `${pendingCount} change${plural} saved on this device — will sync when you're back online.`}
-			</p>
+			</output>
 		);
 	}
 	if (justSynced) {
 		return (
-			<p className="flex items-center gap-2 text-muted-foreground text-sm">
+			<output className="flex items-center gap-2 text-muted-foreground text-sm">
 				<CheckCircle2 className="size-4 shrink-0 text-success" aria-hidden />
 				All changes synced.
-			</p>
+			</output>
 		);
 	}
 	return null;
