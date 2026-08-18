@@ -231,14 +231,19 @@ describe("MeetingMinutes action items (#529)", () => {
 	});
 });
 
-describe("MeetingMinutes attendance is gated on the meeting day", () => {
+describe("MeetingMinutes attendance moved to the panel", () => {
 	afterEach(() => cleanup());
 
-	// The card is titled "the record of what happened", and before the meeting
-	// day nothing has. Worse than the wording: the server now REJECTS the write
-	// (`assertAttendanceRecordable`), so rendering the recorder would offer
-	// buttons that can only error. Who is EXPECTED is the separate
-	// planned-attendance question, which has no surface here yet.
+	// Roll call now lives in the attendance panel beside the agenda, so this card
+	// records none of it. What survives here is the card's own COPY, which still
+	// switches on the meeting day and is covered by nothing else: before the day
+	// it explains why there is nothing to see, and the header stops claiming to be
+	// "the record of what happened".
+	//
+	// The fixture keeps a member and a non-zero count on purpose. It is what makes
+	// the meeting-day negative below a real assertion rather than a vacuous one —
+	// a recorder re-added to this card would render "Ayesha Khan" and its three
+	// buttons, and fail.
 	function renderOnDay(meetingDayReached: boolean) {
 		return render(
 			<MeetingMinutes
@@ -271,26 +276,47 @@ describe("MeetingMinutes attendance is gated on the meeting day", () => {
 		);
 	}
 
-	it("hides the recorder before the meeting day, and says why", () => {
-		const { queryByRole, getByText } = renderOnDay(false);
-		// The member's row and its three buttons must be gone — asserting only on
-		// the heading would pass with the whole recorder still rendered beneath it.
-		expect(queryByRole("button", { name: "Present" })).toBeNull();
-		expect(queryByRole("button", { name: "Excused" })).toBeNull();
-		expect(queryByRole("button", { name: "Absent" })).toBeNull();
+	it("says why there is nothing to see before the meeting day", () => {
+		const { getByText, queryByText } = renderOnDay(false);
 		expect(getByText(/Opens on the day of the meeting/i)).toBeTruthy();
 		// And the card must stop claiming to be a record of what happened.
 		expect(getByText(/Attendance opens on the day/i)).toBeTruthy();
+		// Before the day there is no panel to point at either — the pointer belongs
+		// to the other branch, and showing it here would send an officer looking for
+		// a surface the route has not rendered yet.
+		expect(
+			queryByText(/Attendance is taken in the Attendance panel/i),
+		).toBeNull();
 	});
 
-	it("shows the recorder on the meeting day", () => {
-		// The positive control. Without it, a component that rendered nothing at
-		// all would pass the assertions above for the wrong reason.
-		const { getAllByRole, getByText } = renderOnDay(true);
-		expect(getAllByRole("button", { name: "Present" }).length).toBeGreaterThan(
-			0,
-		);
-		expect(getByText("Ayesha Khan")).toBeTruthy();
+	it("points at the panel on the meeting day instead of recording anything", () => {
+		// The positive control for the negatives below: without it, a component
+		// that rendered nothing at all would pass them for the wrong reason.
+		const { getByText } = renderOnDay(true);
+		expect(
+			getByText(
+				/Attendance is taken in the Attendance panel, beside the agenda/i,
+			),
+		).toBeTruthy();
 		expect(getByText(/the record of what happened/i)).toBeTruthy();
+	});
+
+	it("records no attendance itself, on the day or before it", () => {
+		// The absorption, asserted where a source guard cannot see it: the guard
+		// pins that the symbol is gone from the file, this pins that no roll-call
+		// control REACHES the DOM. Two surfaces writing the same rows is how a club
+		// ends up with someone marked present in one place and absent in the other.
+		for (const dayReached of [true, false]) {
+			const { queryByRole, queryByText } = renderOnDay(dayReached);
+			expect(queryByRole("button", { name: "Present" })).toBeNull();
+			expect(queryByRole("button", { name: "Excused" })).toBeNull();
+			expect(queryByRole("button", { name: "Absent" })).toBeNull();
+			// No roster row and no guest control either — both halves of the old
+			// section, and both now the panel's (`meeting-attendance-panel.test.tsx`,
+			// `attendance-guests-group.test.tsx`).
+			expect(queryByText("Ayesha Khan")).toBeNull();
+			expect(queryByRole("button", { name: /Add guest/i })).toBeNull();
+			cleanup();
+		}
 	});
 });

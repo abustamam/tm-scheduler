@@ -4,10 +4,8 @@ import {
 	Download,
 	Loader2,
 	WifiOff,
-	X,
 } from "lucide-react";
-import { useMemo, useState } from "react";
-import { toast } from "sonner";
+import { useMemo } from "react";
 import {
 	AssigneePicker,
 	TableTopicsCapture,
@@ -22,51 +20,27 @@ import {
 	CardHeader,
 	CardTitle,
 } from "#/components/ui/card";
-import {
-	Command,
-	CommandEmpty,
-	CommandGroup,
-	CommandInput,
-	CommandItem,
-	CommandList,
-} from "#/components/ui/command";
-import { Input } from "#/components/ui/input";
-import {
-	Popover,
-	PopoverContent,
-	PopoverTrigger,
-} from "#/components/ui/popover";
 import { useOfflineMinutes } from "#/hooks/use-offline-minutes";
 import { useOnlineStatus } from "#/hooks/use-online-status";
 import { deriveMinutes } from "#/lib/derive-minutes";
 import { formatCalendarDay } from "#/lib/format";
 import type { MinutesActionItems } from "#/server/action-items-logic";
 import {
-	addMinutesGuest,
 	addTableTopics,
 	clearMinutesAward,
 	type MinutesResult,
 	moveTableTopics,
-	removeMinutesGuest,
 	removeTableTopics,
-	setAttendance,
 	setMinutesAward,
 } from "#/server/minutes";
 
 type MinutesData = NonNullable<MinutesResult["data"]>;
-type AttendanceStatus = "present" | "absent" | "excused";
 type AwardCategory = MinutesData["awards"][number]["category"];
 
 const AWARD_LABELS: Record<AwardCategory, string> = {
 	best_speaker: "Best Speaker",
 	best_evaluator: "Best Evaluator",
 	best_table_topics: "Best Table Topics",
-};
-
-const STATUS_LABELS: Record<AttendanceStatus, string> = {
-	present: "Present",
-	absent: "Absent",
-	excused: "Excused",
 };
 
 type MeetingMinutesProps = {
@@ -234,57 +208,22 @@ function MeetingMinutesView({
 				<ActionItemsSection items={displayMinutes.actionItems} />
 				{/* Attendance is the RECORD of who was in the room, so it does not
 				    exist before the meeting day — `assertAttendanceRecordable` rejects
-				    the write, and rendering the recorder anyway would offer buttons
-				    that only error. Who is EXPECTED is the separate planned-attendance
-				    question (CONTEXT.md), which has no surface here yet.
+				    the write, and rendering a recorder anyway would offer buttons
+				    that only error.
+
+				    On the day, roll call moved to the attendance panel beside the
+				    agenda, so this card only POINTS at it. Two surfaces writing the
+				    same rows is how a club ends up with someone marked present in one
+				    place and absent in the other; the panel keeps the counts, the
+				    guests and the offline queue.
 
 				    Deliberately `meetingDayReached`, not `meetingPast`: roll call is
 				    taken AT the meeting, and `meetingPast` (`isMeetingOver`) is false
 				    all through meeting day. */}
 				{meetingDayReached ? (
-					<AttendanceSection
-						minutes={displayMinutes}
-						canEdit={canEdit}
-						busy={busy}
-						clubGuests={clubGuests}
-						onSetStatus={(memberId, status) =>
-							mutate(
-								() => setAttendance({ data: { meetingId, memberId, status } }),
-								() => ({
-									type: "setAttendance",
-									...opMeta(),
-									memberId,
-									status,
-								}),
-							)
-						}
-						onAddGuest={(payload) =>
-							mutate(
-								() => addMinutesGuest({ data: { meetingId, ...payload } }),
-								() =>
-									payload.newGuest
-										? {
-												type: "addGuest",
-												...opMeta(),
-												guestId: crypto.randomUUID(),
-												name: payload.newGuest.name,
-												newGuest: payload.newGuest,
-											}
-										: {
-												type: "addGuest",
-												...opMeta(),
-												guestId: payload.guestId as string,
-												name: guestName(payload.guestId as string),
-											},
-							)
-						}
-						onRemoveGuest={(guestId) =>
-							mutate(
-								() => removeMinutesGuest({ data: { meetingId, guestId } }),
-								() => ({ type: "removeGuest", ...opMeta(), guestId }),
-							)
-						}
-					/>
+					<p className="text-sm text-muted-foreground">
+						Attendance is taken in the Attendance panel, beside the agenda.
+					</p>
 				) : (
 					// Say WHY it is missing. A section that silently disappears reads as
 					// a bug to the officer who used it last week.
@@ -479,208 +418,6 @@ function SyncStatus({
 		);
 	}
 	return null;
-}
-
-// ---------------------------------------------------------------------------
-// Attendance
-// ---------------------------------------------------------------------------
-
-function AttendanceSection({
-	minutes,
-	canEdit,
-	busy,
-	clubGuests,
-	onSetStatus,
-	onAddGuest,
-	onRemoveGuest,
-}: {
-	minutes: MinutesData;
-	canEdit: boolean;
-	busy: boolean;
-	clubGuests: { id: string; name: string }[];
-	onSetStatus: (memberId: string, status: AttendanceStatus) => void;
-	onAddGuest: (payload: {
-		guestId?: string;
-		newGuest?: { name: string; email?: string; phone?: string };
-	}) => void;
-	onRemoveGuest: (guestId: string) => void;
-}) {
-	const { present, absent, excused, unmarked, guests } = minutes.counts;
-	return (
-		<section className="space-y-3">
-			<div className="flex flex-wrap items-center gap-2">
-				<h3 className="font-semibold text-sm">Attendance</h3>
-				<Badge variant="secondary">{present} present</Badge>
-				<Badge variant="outline">{excused} excused</Badge>
-				<Badge variant="outline">{absent} absent</Badge>
-				<Badge variant="outline">{unmarked} unmarked</Badge>
-				<Badge variant="secondary">{guests} guests</Badge>
-			</div>
-
-			<ul className="divide-y rounded-md border">
-				{minutes.members.map((m) => (
-					<li
-						key={m.memberId}
-						className="flex items-center justify-between gap-3 px-3 py-2"
-					>
-						<span className="text-sm">{m.name}</span>
-						{canEdit ? (
-							<div className="flex gap-1">
-								{(["present", "excused", "absent"] as const).map((s) => (
-									<Button
-										key={s}
-										type="button"
-										size="sm"
-										variant={m.status === s ? "default" : "outline"}
-										disabled={busy}
-										onClick={() => onSetStatus(m.memberId, s)}
-									>
-										{STATUS_LABELS[s]}
-									</Button>
-								))}
-							</div>
-						) : (
-							<Badge variant={m.status === "present" ? "secondary" : "outline"}>
-								{m.status ? STATUS_LABELS[m.status] : "Unmarked"}
-							</Badge>
-						)}
-					</li>
-				))}
-				{minutes.members.length === 0 ? (
-					<li className="px-3 py-2 text-muted-foreground text-sm">
-						No active members.
-					</li>
-				) : null}
-			</ul>
-
-			<div className="space-y-2">
-				<h4 className="font-medium text-sm">Guests present</h4>
-				<div className="flex flex-wrap gap-2">
-					{minutes.guests.map((g) => (
-						<Badge
-							key={g.guestId}
-							variant="secondary"
-							className="gap-1 py-1 pr-1 pl-2"
-						>
-							{g.name}
-							{canEdit && !g.fromRole ? (
-								<button
-									type="button"
-									aria-label={`Remove ${g.name}`}
-									disabled={busy}
-									onClick={() => onRemoveGuest(g.guestId)}
-									className="rounded-sm hover:bg-muted"
-								>
-									<X className="size-3" />
-								</button>
-							) : null}
-						</Badge>
-					))}
-					{minutes.guests.length === 0 ? (
-						<span className="text-muted-foreground text-sm">
-							No guests recorded.
-						</span>
-					) : null}
-				</div>
-				{canEdit ? (
-					<GuestAdder clubGuests={clubGuests} busy={busy} onAdd={onAddGuest} />
-				) : null}
-			</div>
-		</section>
-	);
-}
-
-/** Add a present guest: pick an existing club guest or type a new one. */
-function GuestAdder({
-	clubGuests,
-	busy,
-	onAdd,
-}: {
-	clubGuests: { id: string; name: string }[];
-	busy: boolean;
-	onAdd: (payload: {
-		guestId?: string;
-		newGuest?: { name: string; email?: string; phone?: string };
-	}) => void;
-}) {
-	const [open, setOpen] = useState(false);
-	return (
-		<Popover open={open} onOpenChange={setOpen}>
-			<PopoverTrigger asChild>
-				<Button type="button" size="sm" variant="outline" disabled={busy}>
-					+ Add guest
-				</Button>
-			</PopoverTrigger>
-			<PopoverContent className="w-72 space-y-3">
-				{clubGuests.length > 0 ? (
-					<Command>
-						<CommandInput placeholder="Search guests…" />
-						<CommandList>
-							<CommandEmpty>No matching guests.</CommandEmpty>
-							<CommandGroup heading="Existing guests">
-								{clubGuests.map((g) => (
-									<CommandItem
-										key={g.id}
-										value={`${g.name} ${g.id}`}
-										disabled={busy}
-										onSelect={() => {
-											onAdd({ guestId: g.id });
-											setOpen(false);
-										}}
-									>
-										{g.name}
-									</CommandItem>
-								))}
-							</CommandGroup>
-						</CommandList>
-					</Command>
-				) : null}
-				<form
-					onSubmit={(e) => {
-						e.preventDefault();
-						const form = new FormData(e.currentTarget);
-						const name = String(form.get("guestName") ?? "").trim();
-						if (!name) {
-							toast.error("A guest name is required.");
-							return;
-						}
-						onAdd({
-							newGuest: {
-								name,
-								email: String(form.get("guestEmail") ?? "").trim() || undefined,
-								phone: String(form.get("guestPhone") ?? "").trim() || undefined,
-							},
-						});
-						setOpen(false);
-					}}
-					className="space-y-2"
-				>
-					<Input
-						name="guestName"
-						placeholder="New guest name"
-						aria-label="New guest name"
-						required
-					/>
-					<div className="grid grid-cols-2 gap-2">
-						<Input
-							name="guestEmail"
-							type="email"
-							placeholder="Email"
-							aria-label="Guest email"
-						/>
-						<Input
-							name="guestPhone"
-							placeholder="Phone"
-							aria-label="Guest phone"
-						/>
-					</div>
-					<Button type="submit" size="sm" variant="secondary" disabled={busy}>
-						Add guest
-					</Button>
-				</form>
-			</PopoverContent>
-		</Popover>
-	);
 }
 
 // ---------------------------------------------------------------------------

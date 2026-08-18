@@ -36,6 +36,20 @@ describe("surfaces absorbed by the planned-attendance panel", () => {
 		expect(agenda).not.toContain("Not available this week");
 	});
 
+	it("AttendanceSection is gone from the Minutes card", () => {
+		// Absorbed into the attendance panel's roll mode (spec "Surfaces absorbed").
+		// Two surfaces recording the same rows is how a club ends up with an officer
+		// marking someone present in one place and absent in the other.
+		const minutes = readFileSync(
+			resolve(ROOT, "src/components/club/meeting-minutes.tsx"),
+			"utf8",
+		);
+		expect(minutes).not.toContain("AttendanceSection");
+		// The card must still POINT at where roll call moved to, or an officer who
+		// knows the old location just finds it missing.
+		expect(minutes).toContain("Attendance is taken in the Attendance panel");
+	});
+
 	it("the payload no longer ships the three id arrays the panel replaced", () => {
 		const meetings = readFileSync(
 			resolve(ROOT, "src/server/meetings.ts"),
