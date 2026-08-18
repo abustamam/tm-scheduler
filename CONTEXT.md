@@ -217,8 +217,21 @@ the nouns in `src/db/schema.ts`.
   now the ONLY encoding of unavailable, and row presence answers nothing. Consequence for
   readers: filter on the STATUS, never on the row existing. `reached_out` is the private record
   of having asked, kept from MEMBERS rather than from everyone who runs the meeting; `coming` and
-  `not_coming` are the member's own answer and are self-serve. On the meeting payload that
-  boundary is TWO arrays rather than one filtered at each consumer: `plan` (the whole ladder,
+  `not_coming` are the member's own answer and are self-serve. All three rungs are STORED values;
+  since v1.19.0.0 the officer's rail also DERIVES one, and the two must not be confused.
+  `buildPlanPanel` (`src/lib/attendance-panel.ts`) resolves a DISPLAY status per member: an
+  explicit `coming` / `not_coming` wins, because their own word outranks anything inferred; else a
+  **confirmed role slot** on this meeting reads as `coming` with the row flagged `assumed`; else
+  the stored `reached_out`, else nothing. It writes NOTHING — the table still has no row, and the
+  seam's readers (`listComingForMeeting`, `listPlanForMeetings`) still report stored rungs only, so
+  the rail's coming COUNT is deliberately a superset of theirs and a second consumer of "who is
+  coming" has to decide which of the two it means. Two properties hold it together. A derived
+  Coming must never render identically to an answered one, which is what `assumed` carries to the
+  row; and ranking a confirmed slot ABOVE `reached_out` is load-bearing rather than cosmetic — a
+  confirmed member has no plan row, so messaging them inserts `reached_out`, and ranked the other
+  way an officer would watch the Toastmaster they just confirmed fall from Coming back to Asked.
+  On the meeting payload that boundary is
+  TWO arrays rather than one filtered at each consumer: `plan` (the whole ladder,
   admin-only) feeds the attendance panel, and `answeredRungs` (`coming` / `not_coming` only,
   public) is what the personal strip reads to show a member their OWN answer. The server cannot
   resolve "my" — the viewer is known only on the client, since the anonymous roster pick is the
