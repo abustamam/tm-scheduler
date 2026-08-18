@@ -333,15 +333,39 @@ describe("deriveRollRoster", () => {
 			queue: [],
 		});
 		expect(rows.map((r) => r.id)).toEqual(["m-abe", "m-bea", "m-cy", "m-dee"]);
-		// Contact-less, and honestly so: a departed member is not on the officer's
-		// roster payload, so their row simply offers no WhatsApp/email draft.
+		// Contact-less — a departed member is not on the officer's roster payload —
+		// and TAGGED, which is the part that makes it honest. Nulling contact alone
+		// lands on `NudgeButtons`' "No contact on file" copy, the very message the
+		// panel omits the affordance to avoid; the tag is what lets the row skip it
+		// without also silencing that message for an ACTIVE member who really has
+		// nothing on file.
 		expect(rows.find((r) => r.id === "m-dee")).toEqual({
 			id: "m-dee",
 			name: "Dee Gone",
 			preferredName: null,
 			phone: null,
 			email: null,
+			departed: true,
 		});
+	});
+
+	it("tags ONLY the appended rows, never a member who is still on the roster", () => {
+		// The other half of the tag, and the one that keeps it honest: `m-cy` is an
+		// ACTIVE member with no phone and no email, which looks identical to a
+		// departed row if you go by contact fields. Tagging them would take "No
+		// contact on file" away from the officer who needs to go add a number.
+		const rows = deriveRollRoster({
+			roster,
+			online: true,
+			minutes: withDeparted(),
+			snapshot: null,
+			queue: [],
+		});
+		expect(rows.filter((r) => r.departed).map((r) => r.id)).toEqual(["m-dee"]);
+		const cy = rows.find((r) => r.id === "m-cy");
+		expect(cy?.phone).toBeNull();
+		expect(cy?.email).toBeNull();
+		expect(cy?.departed).toBeFalsy();
 	});
 
 	it("makes the panel's counts agree with the minutes' own counts", () => {

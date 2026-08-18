@@ -210,7 +210,12 @@ function RollAttendanceRow({
 	/** Once the meeting is `completed` nobody is being chased — the row skips
 	 *  `NudgeButtons` entirely rather than rendering it with phone/email
 	 *  nulled out, which would land on NudgeButtons' own "no contact on
-	 *  file" copy and misstate a member who does have one on file. */
+	 *  file" copy and misstate a member who does have one on file.
+	 *
+	 *  `row.departed` gets the same treatment below, for the same reason and
+	 *  never as a `phone === null && email === null` check: that message is
+	 *  TRUE and useful for an active member with nothing on file ("go add a
+	 *  number"), and only wrong for someone who has left the club. */
 	hideContact: boolean;
 	pending: boolean;
 	busy: boolean;
@@ -225,7 +230,7 @@ function RollAttendanceRow({
 						<Badge variant="secondary">{row.roleName}</Badge>
 					) : null}
 				</div>
-				{hideContact ? null : (
+				{hideContact || row.departed ? null : (
 					<NudgeButtons
 						mode="attendance"
 						name={row.name}

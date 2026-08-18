@@ -128,10 +128,15 @@ export function deriveRollGuests(
  * builds from whatever roster it is handed. This is the seam that decides which
  * roster that is.
  *
- * The appended rows are CONTACT-LESS, which is honest — a departed member's
- * phone and email are not on the officer's roster payload — so they simply show
- * no WhatsApp/email draft. Same projection as the other two derivations, so an
- * offline tap on such a row behaves like any other.
+ * The appended rows are CONTACT-LESS — a departed member's phone and email are
+ * not on the officer's roster payload — and they are TAGGED `departed: true` for
+ * exactly that reason. Nulling contact is not enough on its own: `NudgeButtons`
+ * renders "No contact on file" when both are null, which is the copy the panel
+ * omits the whole affordance to avoid. The tag is what lets the row skip it while
+ * leaving that message intact for an ACTIVE member who genuinely has no contact
+ * stored — for them it is true and actionable, and for a departed member there is
+ * nothing to add and nobody to chase. Same projection as the other two
+ * derivations, so an offline tap on such a row behaves like any other.
  *
  * A member with NO recorded status is never appended: absence of a row is
  * exactly what "not on this club's roster any more" looks like, and appending
@@ -157,6 +162,7 @@ export function deriveRollRoster(
 						preferredName: null,
 						phone: null,
 						email: null,
+						departed: true,
 					},
 				],
 	);

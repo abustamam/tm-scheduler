@@ -175,4 +175,29 @@ describe("buildRollPanel", () => {
 		expect(rows.find((r) => r.id === "m-abe")?.preferredName).toBeNull();
 		expect(rows.find((r) => r.id === "m-bea")?.preferredName).toBeNull();
 	});
+	it("carries the departed tag through, normalised to a boolean", () => {
+		// The flag rides in on the roster (`deriveRollRoster` appends the row) and
+		// the renderer reads it off the ROW, so a builder that dropped it would
+		// silently put "No contact on file" back on a departed member — the copy two
+		// other fixes went out of their way to avoid. Normalised, because the
+		// roster's field is optional and a renderer reading `undefined` as anything
+		// but false is a bug waiting for a strict comparison.
+		const { rows } = buildRollPanel({
+			roster: [
+				{
+					id: "m-gone",
+					name: "Dee Gone",
+					phone: null,
+					email: null,
+					departed: true,
+				},
+				{ id: "m-here", name: "Abe Nkemelu", phone: null, email: null },
+			],
+			attendance: [{ memberId: "m-gone", status: "present" }],
+			plan: [],
+			roleByMemberId: {},
+		});
+		expect(rows.find((r) => r.id === "m-gone")?.departed).toBe(true);
+		expect(rows.find((r) => r.id === "m-here")?.departed).toBe(false);
+	});
 });

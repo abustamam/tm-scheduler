@@ -553,6 +553,38 @@ describe("roll mode", () => {
 		const { queryByText } = render(<MeetingAttendancePanel {...rollProps} />);
 		expect(queryByText("Guests")).toBeNull();
 	});
+	it("skips the contact affordance for a DEPARTED row while keeping it for an active member with none", () => {
+		// Two fixes from the same round contradicted each other here.
+		// `deriveRollRoster` appends a member who holds a recorded row but has left
+		// the club, with phone and email null — and `NudgeButtons` renders "No
+		// contact on file" when both are null, which is precisely the copy
+		// `hideContact` omits the whole component to avoid. Fixed by TAGGING the
+		// appended row, not by skipping whenever contact is missing: for an active
+		// member that message is true and actionable ("go add a number"), and only
+		// a departed member has nothing to add and nobody to chase.
+		const { getByText, queryAllByText } = render(
+			<MeetingAttendancePanel
+				{...rollProps}
+				roster={[
+					{ id: "m-here", name: "Cy Active", phone: null, email: null },
+					{
+						id: "m-gone",
+						name: "Dee Gone",
+						phone: null,
+						email: null,
+						departed: true,
+					},
+				]}
+				attendance={[{ memberId: "m-gone", status: "present" }]}
+			/>,
+		);
+		// Both rows are on screen...
+		getByText("Cy Active");
+		getByText("Dee Gone");
+		// ...and exactly ONE of them says it: the active member with nothing stored.
+		expect(queryAllByText("No contact on file")).toHaveLength(1);
+	});
+
 	const syncIdle = {
 		online: true,
 		queueCount: 0,

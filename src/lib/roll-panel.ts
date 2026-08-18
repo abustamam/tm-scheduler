@@ -32,6 +32,12 @@ export interface RollRow {
 	suggestion: RollSuggestion | null;
 	/** Information, never a bucket: the Timer still needs marking present. */
 	roleName: string | null;
+	/** True for a row appended by `deriveRollRoster`: someone with a recorded
+	 *  attendance row who has since left the roster. Their row skips the contact
+	 *  affordance — see `PanelMember.departed` for why that is a tag and not a
+	 *  `phone === null && email === null` check. NORMALISED to a boolean here (the
+	 *  roster's field is optional) so the renderer has one thing to read. */
+	departed: boolean;
 }
 
 export interface RollCounts {
@@ -56,6 +62,7 @@ export function buildRollPanel(input: {
 		phone: string | null;
 		email: string | null;
 		preferredName?: string | null;
+		departed?: boolean;
 	}[];
 	attendance: { memberId: string; status: AttendanceStatus }[];
 	plan: { memberId: string; status: PlanStatus }[];
@@ -72,6 +79,7 @@ export function buildRollPanel(input: {
 		return {
 			...m,
 			preferredName: m.preferredName ?? null,
+			departed: m.departed ?? false,
 			status,
 			// Mutually exclusive by construction, not by convention.
 			suggestion: status === null ? suggest(planned.get(m.id) ?? null) : null,
