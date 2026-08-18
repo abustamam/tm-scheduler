@@ -172,6 +172,21 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
   sourced from an answer, and roll mode commits it in ONE tap.
   **Priority:** P1
 
+- **A recorded attendance row can never return to "unmarked".** `setAttendance`'s validator takes a
+  required non-null `attendanceStatus` (`src/server/minutes.ts:115`), so there is no clear path:
+  `ROLL_MENU` offers `present | absent | excused` and no fourth option, and no `clearAttendance`
+  variant exists in `MinutesOp` or the drain's fn map. `unmarked` is a count the minutes PDF
+  prints, so a row recorded in error can be changed but not undone.
+  Pre-existing — main's rows have the same limitation and no roll-mode code made it worse — and
+  deliberately left out of the roll-suggestion round: clearing needs a NEW server fn with its own
+  `gateAdmin`, `assertAttendanceRecordable`, activity-log entry, queue op and drain dispatch. That
+  is a server-authz surface, not a fix round. Noted here because the decision that authorised that
+  round said "also add a clearAttendance op", and this is the half that was narrowed out rather
+  than silently dropped.
+  Lower urgency now that a suggestion row can be marked absent directly (no false `present` write
+  is required to reach the other statuses), which was the actual bug.
+  **Priority:** P2
+
 - Smaller residue from the same review, none blocking: plan mode's `DropdownMenuItem`s are
   ungated where roll mode's are now gated (`meeting-attendance-panel.tsx:100-106`; `writeRung` has
   no `writesLocked` precondition while its sibling `contacted` does); `RollAttendanceRow` and
