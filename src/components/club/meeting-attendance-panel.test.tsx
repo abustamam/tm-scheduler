@@ -396,12 +396,18 @@ describe("roll mode", () => {
 		// roll on a phone tapped down the roster at conversational pace and a large
 		// fraction of the taps did nothing, with nothing on screen to say so.
 		//
-		// All four controls, because they are four separate `disabled` expressions:
+		// Four controls here, because they are four separate `disabled` expressions:
 		// the dashed one-tap suggestion, the recorded chip's menu trigger, and the
 		// guests group's add and remove — that group was the worst of them, since
 		// roll mode forces its lifecycle lock to `false`, so nothing disabled it
 		// during a write at all AND it closes its popover unconditionally after
 		// `onAddGuest`, making a discarded guest add look like a success.
+		//
+		// A FIFTH control is covered by its own test below rather than here: the
+		// items INSIDE the recorded chip's menu. Disabling a Radix trigger does not
+		// close content that is already open, so a menu opened before a drain began
+		// stayed live — and that case needs one render held open across a prop flip,
+		// which does not fit this test's two-renders-with-an-unmount shape.
 		const withGuests = {
 			...rollProps,
 			attendance: [{ memberId: "m-bea", status: "present" as const }],
