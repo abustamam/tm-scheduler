@@ -193,6 +193,22 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		expect(queryByText("Nadia Farouk")).toBeNull();
 	});
 
+	it("never renders the sync indicator in plan mode", () => {
+		// Plan writes go straight to `setPlannedAttendance` and never touch the
+		// offline queue, so a queue count here would describe someone else's work.
+		const { queryByText } = renderPanel({
+			sync: {
+				online: false,
+				queueCount: 2,
+				draining: false,
+				syncError: null,
+				justSynced: false,
+				onRetry: () => {},
+			},
+		});
+		expect(queryByText(/saved on this device/)).toBeNull();
+	});
+
 	it("ignores the roll-mode `busy` signal — plan writes never touch the offline queue", () => {
 		// `busy` is the offline queue's refuse-while-busy signal, and the route
 		// passes it for BOTH modes from one call site. A plan rung goes straight to
@@ -536,5 +552,73 @@ describe("roll mode", () => {
 		// must render nothing rather than an empty group.
 		const { queryByText } = render(<MeetingAttendancePanel {...rollProps} />);
 		expect(queryByText("Guests")).toBeNull();
+	});
+	const syncIdle = {
+		online: true,
+		queueCount: 0,
+		draining: false,
+		syncError: null,
+		justSynced: false,
+		onRetry: () => {},
+	};
+
+	it("says so when roll writes are queued on this device", () => {
+		// Roll mode is the ONLY surface that records attendance now, and the
+		// projection is faithful — every chip moves offline exactly as it would
+		// online. So without this the officer has no way to tell the difference,
+		// and the drain only ever runs if someone reopens THAT meeting in THAT
+		// browser; the PDF and the emailed minutes go out with the roll missing.
+		const { getByText } = render(
+			<MeetingAttendancePanel
+				{...rollProps}
+				sync={{ ...syncIdle, online: false, queueCount: 2 }}
+			/>,
+		);
+		getByText(/2 changes saved on this device/);
+	});
+
+	it("shows the drain in flight and offers Retry on a sync error", async () => {
+		const draining = render(
+			<MeetingAttendancePanel
+				{...rollProps}
+				sync={{ ...syncIdle, draining: true, queueCount: 3 }}
+			/>,
+		);
+		draining.getByText(/Syncing 3 changes/);
+		draining.unmount();
+
+		const onRetry = vi.fn();
+		const failed = render(
+			<MeetingAttendancePanel
+				{...rollProps}
+				sync={{ ...syncIdle, syncError: "nope", onRetry }}
+			/>,
+		);
+		failed.getByText(/Couldn't sync changes/);
+		await userEvent.click(failed.getByRole("button", { name: "Retry" }));
+		expect(onRetry).toHaveBeenCalledTimes(1);
+	});
+
+	it("shows nothing in the steady state, so the header does not grow a blank row", () => {
+		const { queryByText } = render(
+			<MeetingAttendancePanel {...rollProps} sync={syncIdle} />,
+		);
+		expect(queryByText(/saved on this device/)).toBeNull();
+		expect(queryByText(/Syncing/)).toBeNull();
+		expect(queryByText(/Couldn't sync/)).toBeNull();
+	});
+
+	it("keeps the indicator visible on a completed meeting, where corrections are made", () => {
+		// `phaseCompleted` drops the contact drafts; it must not drop the one thing
+		// that says an unsynced correction is still sitting on this device.
+		const { getByText } = render(
+			<MeetingAttendancePanel
+				{...rollProps}
+				locked={true}
+				phaseCompleted={true}
+				sync={{ ...syncIdle, online: false, queueCount: 1 }}
+			/>,
+		);
+		getByText(/1 change saved on this device/);
 	});
 });

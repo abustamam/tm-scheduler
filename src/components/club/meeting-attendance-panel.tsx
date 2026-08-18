@@ -2,6 +2,10 @@ import { ChevronDown, ChevronUp } from "lucide-react";
 import { useEffect, useState } from "react";
 import { AttendanceGuestsGroup } from "#/components/club/attendance-guests-group";
 import { NudgeButtons } from "#/components/club/nudge-buttons";
+import {
+	SyncStatus,
+	type SyncStatusProps,
+} from "#/components/club/sync-status";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "#/components/ui/card";
@@ -274,6 +278,7 @@ export function MeetingAttendancePanel({
 	clubGuests,
 	onAddGuest,
 	onRemoveGuest,
+	sync,
 }: {
 	mode: "plan" | "roll";
 	roster: Omit<PanelMember, "status" | "roleName">[];
@@ -341,6 +346,27 @@ export function MeetingAttendancePanel({
 		newGuest?: { name: string; email?: string; phone?: string };
 	}) => void | Promise<void>;
 	onRemoveGuest?: (guestId: string) => void | Promise<void>;
+	/**
+	 * Roll mode only. The offline write-queue's sync lifecycle, straight off the
+	 * meeting's ONE `useOfflineMinutes` instance (the route owns it — do not
+	 * instantiate a second here).
+	 *
+	 * Not a nicety, and not a duplicate of the Minutes card's indicator. Since
+	 * roll call moved here this is the only surface that records attendance, and
+	 * the queue's only status display stayed in a card that is now read-only for
+	 * attendance — on a phone, at the other end of the page. So an officer took
+	 * roll offline, watched every chip move (the projection is faithful), closed
+	 * the tab, and the drain only ever ran if someone reopened THAT meeting in
+	 * THAT browser: the minutes PDF and the emailed minutes went out with the
+	 * roll missing and nothing they looked at said so.
+	 *
+	 * ONE object rather than six same-typed props, because `draining` and
+	 * `justSynced` are both booleans and a swap would type-check. Optional so
+	 * plan mode's callers need no change — which means dropping it at the call
+	 * site is silent, and `attendance-panel-wiring.guard.test.ts` is what
+	 * watches for that.
+	 */
+	sync?: SyncStatusProps;
 }) {
 	const roll = mode === "roll";
 
@@ -490,6 +516,15 @@ export function MeetingAttendancePanel({
 						<span className="text-xs text-[var(--sea-ink-soft)]">
 							{countsLine}
 						</span>
+						{/* In the HEADER, not with the rows: it has to stay visible
+						 *  whatever the collapse does, and it belongs next to the counts
+						 *  line it qualifies — the counts are the optimistic projection,
+						 *  and this is what says whether the server has heard about them.
+						 *  Roll mode only, since plan writes go straight to
+						 *  `setPlannedAttendance` and never touch the offline queue.
+						 *  `SyncStatus` renders nothing in the steady state, so there is
+						 *  no empty row on the normal path. */}
+						{roll && sync ? <SyncStatus {...sync} /> : null}
 					</div>
 					{/* Toggle only exists in PLAN mode. Below `lg` it flips the
 					 *  collapse; roll mode is always expanded there (see `showRows`),

@@ -1593,6 +1593,27 @@ function MeetingView() {
 							onSetAttendance={writeAttendance}
 							onAddGuest={addRollGuest}
 							onRemoveGuest={removeRollGuest}
+							// The SAME hook instance the writes go through, never a second
+							// one (`use-offline-minutes-instance.guard.test.ts`). Roll mode
+							// is now the only surface that records attendance, so without
+							// this the queue's only status display sat in the Minutes card
+							// — read-only for attendance since PR 3, and at the other end
+							// of the page on a phone. An officer took roll offline, watched
+							// every chip move, closed the tab, and the drain only ever ran
+							// if someone reopened THAT meeting in THAT browser: the PDF and
+							// the emailed minutes went out with the roll missing, with
+							// nothing they looked at saying so. The Minutes card KEEPS its
+							// own indicator — it still queues its own non-attendance edits.
+							sync={{
+								online,
+								queueCount: offlineMinutes.queue.length,
+								draining: offlineMinutes.draining,
+								syncError: offlineMinutes.syncError,
+								justSynced: offlineMinutes.justSynced,
+								onRetry: () => {
+									void offlineMinutes.retryDrain();
+								},
+							}}
 						/>
 					</aside>
 				) : null}

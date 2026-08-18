@@ -1,11 +1,6 @@
-import {
-	AlertTriangle,
-	CheckCircle2,
-	Download,
-	Loader2,
-	WifiOff,
-} from "lucide-react";
+import { Download } from "lucide-react";
 import { useMemo } from "react";
+import { SyncStatus } from "#/components/club/sync-status";
 import {
 	AssigneePicker,
 	TableTopicsCapture,
@@ -171,8 +166,6 @@ function MeetingMinutesView({
 		displayMinutes.members.find((m) => m.memberId === memberId)?.name ??
 		"Member";
 
-	const pendingCount = online ? 0 : queue.length;
-
 	return (
 		<Card>
 			<CardHeader className="flex-row items-start justify-between gap-3 space-y-0">
@@ -210,7 +203,6 @@ function MeetingMinutesView({
 			<CardContent className="space-y-8">
 				<SyncStatus
 					online={online}
-					pendingCount={pendingCount}
 					queueCount={queue.length}
 					draining={draining}
 					syncError={syncError}
@@ -367,81 +359,6 @@ function MeetingMinutesView({
 // ---------------------------------------------------------------------------
 // Offline sync status (#176 slice 5)
 // ---------------------------------------------------------------------------
-
-/**
- * One cohesive indicator for the offline write-queue's sync lifecycle. Purely
- * presentational — it reads the component's `online`/queue/`draining`/`syncError`
- * state and never drives a mutation. States, in priority order:
- *   • syncing  → a spinner + "Syncing N change(s)…"      (a drain is in flight)
- *   • error    → a warning + "Couldn't sync changes" + Retry
- *   • offline  → WifiOff + "N change(s) saved on this device…"
- *   • synced   → a brief "All changes synced" confirmation (auto-dismissed)
- * Online with an empty queue and none of the above → renders nothing (the steady
- * state is invisible).
- */
-function SyncStatus({
-	online,
-	pendingCount,
-	queueCount,
-	draining,
-	syncError,
-	justSynced,
-	onRetry,
-}: {
-	online: boolean;
-	pendingCount: number;
-	queueCount: number;
-	draining: boolean;
-	syncError: string | null;
-	justSynced: boolean;
-	onRetry: () => void;
-}) {
-	if (draining) {
-		return (
-			<p className="flex items-center gap-2 text-muted-foreground text-sm">
-				<Loader2 className="size-4 shrink-0 animate-spin" aria-hidden />
-				Syncing {queueCount} change{queueCount === 1 ? "" : "s"}…
-			</p>
-		);
-	}
-	if (syncError) {
-		return (
-			<p className="flex items-center gap-2 text-warning-foreground text-sm">
-				<AlertTriangle className="size-4 shrink-0" aria-hidden />
-				<span>
-					Couldn't sync changes —{" "}
-					<Button
-						type="button"
-						variant="link"
-						size="sm"
-						className="h-auto p-0 align-baseline text-warning-foreground"
-						onClick={onRetry}
-					>
-						Retry
-					</Button>
-				</span>
-			</p>
-		);
-	}
-	if (!online && pendingCount > 0) {
-		return (
-			<p className="flex items-center gap-2 text-muted-foreground text-sm">
-				<WifiOff className="size-4 shrink-0" aria-hidden />
-				{pendingCount} change{pendingCount === 1 ? "" : "s"} saved on this
-				device — will sync when you're back online.
-			</p>
-		);
-	}
-	if (justSynced) {
-		return (
-			<p className="flex items-center gap-2 text-muted-foreground text-sm">
-				<CheckCircle2 className="size-4 shrink-0 text-success" aria-hidden />
-				All changes synced.
-			</p>
-		);
-	}
-	return null;
-}
 
 // ---------------------------------------------------------------------------
 // Attendance (READ-ONLY)

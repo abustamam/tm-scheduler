@@ -545,4 +545,19 @@ describe("attendance panel route wiring (PR 2)", () => {
 			"const rollRoster = useMemo( () => deriveRollRoster({ roster: panelRoster, online, minutes: minutes.data, snapshot: offlineMinutes.snapshot, queue: offlineMinutes.queue, }), [ panelRoster, online, minutes.data, offlineMinutes.snapshot, offlineMinutes.queue, ], );",
 		);
 	});
+	it("F3: hands the panel the queue's sync lifecycle, off the ONE hook instance", () => {
+		// Roll mode is the only surface that records attendance now, so the queue's
+		// status display has to be reachable from it. Every field below is
+		// same-typed with a plausible wrong source — `draining` and `justSynced`
+		// are both booleans on the same object — and the whole `sync` prop is
+		// OPTIONAL, so dropping it type-checks, lints, and passes every component
+		// test (they supply their own fixture). The officer just silently loses the
+		// only thing that says a roll is still sitting unsynced on their phone.
+		expect(src).toContain("sync={{");
+		expect(src).toContain("queueCount: offlineMinutes.queue.length");
+		expect(src).toContain("draining: offlineMinutes.draining");
+		expect(src).toContain("syncError: offlineMinutes.syncError");
+		expect(src).toContain("justSynced: offlineMinutes.justSynced");
+		expect(src).toContain("offlineMinutes.retryDrain()");
+	});
 });
