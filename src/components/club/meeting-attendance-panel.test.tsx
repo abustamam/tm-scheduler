@@ -88,9 +88,18 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		expect(getByText(/No contact on file/i)).toBeTruthy();
 	});
 
-	it("shows the role a member holds", () => {
-		const { getByText } = renderPanel({ roleByMemberId: { m2: "Timer" } });
-		expect(getByText("Timer")).toBeTruthy();
+	it("shows the sign-up sheet's short code, with the full role as its tooltip", () => {
+		// The code is the season grid's, produced by the same `buildShortCodes`, so
+		// the two surfaces cannot drift into two vocabularies for one role. The
+		// full name rides along as `title` because the code alone is not readable
+		// to someone who has not learnt the vocabulary yet.
+		const { getByText } = renderPanel({
+			roleByMemberId: {
+				m2: { code: "TMR", roleName: "Timer", confirmed: false },
+			},
+		});
+		const badge = getByText("TMR");
+		expect(badge.getAttribute("title")).toBe("Timer");
 	});
 
 	it("renders the optimistic override, not the server value", () => {
@@ -116,7 +125,7 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		});
 		expect(
 			getByRole("button", { name: /Ayesha Khan status/i }).textContent,
-		).toContain("—");
+		).toContain("Ask");
 	});
 
 	it("counts and sorts on the optimistic state too", () => {
@@ -152,5 +161,103 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		} finally {
 			window.innerWidth = originalWidth;
 		}
+	});
+
+	it("invites a first answer instead of rendering what looks like a deletion", () => {
+		const { getByRole } = renderPanel();
+		expect(
+			getByRole("button", { name: /Ayesha Khan status/i }).textContent,
+		).toContain("Ask");
+	});
+
+	it("drafts a ROLE confirmation for a member who holds a slot", () => {
+		// `mode` is COMPUTED at this call site, which is the #319 trap: a component
+		// tested through its props cannot see a WRONG prop, and asserting that a
+		// WhatsApp button merely EXISTS passes for either mode. So assert the text
+		// the officer would actually send.
+		const { getByRole } = renderPanel({
+			roleByMemberId: {
+				m1: { code: "TD", roleName: "Toastmaster", confirmed: false },
+			},
+		});
+		const href =
+			getByRole("link", {
+				name: /Message Ayesha Khan on WhatsApp/i,
+			}).getAttribute("href") ?? "";
+		expect(decodeURIComponent(href)).toContain(
+			"just confirming you're our Toastmaster",
+		);
+	});
+
+	it("falls back to the attendance draft for a member with no slot", () => {
+		const { getByRole } = renderPanel();
+		const href =
+			getByRole("link", {
+				name: /Message Ayesha Khan on WhatsApp/i,
+			}).getAttribute("href") ?? "";
+		expect(decodeURIComponent(href)).toContain("are you able to make our");
+	});
+
+	it("reads an ASSUMED Coming differently from an answered one", () => {
+		// Same word, different accessible name. An officer must be able to tell
+		// "she said yes" from "her role is confirmed", or the rail is claiming
+		// replies nobody made.
+		const { getByRole } = renderPanel({
+			roleByMemberId: {
+				m1: { code: "TD", roleName: "Toastmaster", confirmed: true },
+			},
+		});
+		const btn = getByRole("button", { name: /Ayesha Khan status/i });
+		expect(btn.textContent).toContain("Coming");
+		expect(btn.getAttribute("aria-label")).toMatch(/assumed/i);
+	});
+
+	it("marks an assumed role badge apart from a merely-assigned one", () => {
+		// ADDED beyond the plan, on the strength of its own mutation check:
+		// flattening `variant` to a constant and deleting the tick left all 15
+		// other tests green, so the VISUAL half of the assumed/answered
+		// distinction was pinned by nothing. The status button's `aria-label`
+		// carries that distinction for a screen reader; nothing carried it for
+		// the eye. Both directions in one render, because a one-sided assertion
+		// passes just as well for a badge that is always `default`.
+		//
+		// `data-variant` is Badge's own attribute rather than a Tailwind class,
+		// so this survives a restyle and fails on an actual variant change. The
+		// tick is asserted as "an svg is present", not as a specific lucide
+		// class — the decision is that a glyph marks the row, not which glyph.
+		const { getByText } = renderPanel({
+			roleByMemberId: {
+				m1: { code: "TD", roleName: "Toastmaster", confirmed: true },
+				m2: { code: "TMR", roleName: "Timer", confirmed: false },
+			},
+		});
+		const assumed = getByText("TD");
+		expect(assumed.getAttribute("data-variant")).toBe("default");
+		expect(assumed.querySelector("svg")).toBeTruthy();
+
+		const assigned = getByText("TMR");
+		expect(assigned.getAttribute("data-variant")).toBe("secondary");
+		expect(assigned.querySelector("svg")).toBeNull();
+	});
+
+	it("renders a long name in full rather than cutting it off", () => {
+		const { getByText } = renderPanel({
+			roster: [
+				{
+					id: "m1",
+					name: "Bartholomew Featherstonehaugh-Cholmondeley",
+					preferredName: null,
+					phone: null,
+					email: null,
+				},
+			],
+		});
+		const el = getByText("Bartholomew Featherstonehaugh-Cholmondeley");
+		// HONEST LIMIT: jsdom performs no layout, so the WRAP itself is not
+		// assertable in process, and this diff is not worth standing up the
+		// headless-Chrome harness for. What IS assertable is the mechanism — the
+		// class that caused the cutoff is gone. Do not read a green run here as
+		// proof of the rendered geometry.
+		expect(el.className).not.toContain("truncate");
 	});
 });

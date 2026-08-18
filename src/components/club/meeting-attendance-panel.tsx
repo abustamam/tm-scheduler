@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronUp } from "lucide-react";
+import { Check, ChevronDown, ChevronUp } from "lucide-react";
 import { useEffect, useState } from "react";
 import { NudgeButtons } from "#/components/club/nudge-buttons";
 import { Badge } from "#/components/ui/badge";
@@ -13,6 +13,7 @@ import {
 import {
 	buildPlanPanel,
 	type PanelMember,
+	type PanelRole,
 	type PlanStatus,
 } from "#/lib/attendance-panel";
 
@@ -51,15 +52,50 @@ function AttendanceRow({
 	onWriteRung: (memberId: string, next: PlanStatus | null) => void;
 	onContacted: (memberId: string) => void;
 }) {
+	// COMPUTED prop, deliberately named. A member holding a slot gets the same
+	// draft the agenda's slot card sends — asking "are you coming?" of someone
+	// you already put on the programme wastes the ask. Uses the BASE role name,
+	// never the numbered code: "you're our Speaker 1" reads as a mail merge.
+	const nudgeMode = m.role
+		? { mode: "confirm" as const, roleName: m.role.roleName }
+		: { mode: "attendance" as const };
+
+	// An inference must not read as an answer. Same visible word, different
+	// accessible name, muted chip.
+	const statusAriaLabel = m.assumed
+		? `${m.name} status: Coming — assumed, role confirmed`
+		: `${m.name} status`;
+
 	return (
-		<div className="flex items-center gap-2 py-1.5">
-			<div className="min-w-0 flex-1">
-				<div className="flex items-center gap-1.5">
-					<span className="truncate text-sm">{m.name}</span>
-					{m.roleName ? <Badge variant="secondary">{m.roleName}</Badge> : null}
-				</div>
+		<div className="flex flex-col gap-1.5 border-b border-border/60 py-2.5 last:border-b-0">
+			{/* Identity line. The name owns it — at 2-4 characters the role code
+			 *  costs it almost nothing, which is the whole reason the code replaced
+			 *  the full role name here. */}
+			<div className="flex items-start gap-1.5">
+				<span className="min-w-0 flex-1 break-words text-sm font-medium">
+					{m.name}
+				</span>
+				{m.role ? (
+					<Badge
+						variant={m.assumed ? "default" : "secondary"}
+						title={m.role.roleName}
+						aria-label={m.role.roleName}
+						className="mt-0.5 shrink-0"
+					>
+						{/* An ICON, not a "✓" character: a literal would join the code in
+						 *  `textContent` and break every `getByText(code)` query. */}
+						{m.assumed ? <Check aria-hidden /> : null}
+						{m.role.code}
+					</Badge>
+				) : null}
+			</div>
+			{/* Action line. One right-aligned cluster, so every row in the rail
+			 *  shares one right edge — this is the alignment fix. Nothing is
+			 *  vertically centred across a variable-height block any more. */}
+			<div className="flex items-center justify-end gap-1.5">
 				<NudgeButtons
-					mode="attendance"
+					{...nudgeMode}
+					iconOnly
 					name={m.name}
 					preferredName={m.preferredName}
 					phone={m.phone}
@@ -68,29 +104,38 @@ function AttendanceRow({
 					shareUrl={shareUrl}
 					onContacted={() => onContacted(m.id)}
 				/>
-			</div>
-			<DropdownMenu>
-				<DropdownMenuTrigger asChild>
-					<Button
-						variant="outline"
-						size="sm"
-						disabled={locked || pending}
-						aria-label={`${m.name} status`}
-					>
-						{m.status ? RUNG_LABELS[m.status] : "—"}
-					</Button>
-				</DropdownMenuTrigger>
-				<DropdownMenuContent align="end">
-					{MENU.map((item) => (
-						<DropdownMenuItem
-							key={item.label}
-							onSelect={() => onWriteRung(m.id, item.status)}
+				<DropdownMenu>
+					<DropdownMenuTrigger asChild>
+						<Button
+							variant="outline"
+							size="sm"
+							disabled={locked || pending}
+							aria-label={statusAriaLabel}
+							className={m.assumed ? "text-muted-foreground" : undefined}
 						>
-							{item.label}
-						</DropdownMenuItem>
-					))}
-				</DropdownMenuContent>
-			</DropdownMenu>
+							{m.status ? RUNG_LABELS[m.status] : "Ask"}
+							<ChevronDown className="size-3.5 opacity-60" aria-hidden />
+						</Button>
+					</DropdownMenuTrigger>
+					{/* "No answer" on an ASSUMED row does not MOVE the row — the
+					 *  confirmed slot still stands — but it is not a no-op. If the
+					 *  officer already messaged them, `m.storedStatus` is
+					 *  `reached_out`, and picking this DELETES that row and writes an
+					 *  activity entry while nothing on screen changes. To say they are
+					 *  out, the officer picks "Not coming", which is an explicit answer
+					 *  and outranks the inference. */}
+					<DropdownMenuContent align="end">
+						{MENU.map((item) => (
+							<DropdownMenuItem
+								key={item.label}
+								onSelect={() => onWriteRung(m.id, item.status)}
+							>
+								{item.label}
+							</DropdownMenuItem>
+						))}
+					</DropdownMenuContent>
+				</DropdownMenu>
+			</div>
 		</div>
 	);
 }
@@ -112,13 +157,21 @@ export function MeetingAttendancePanel({
 	onWriteRung,
 	onContacted,
 }: {
-	roster: Omit<PanelMember, "status" | "roleName">[];
+	/** DERIVED from `buildPlanPanel`'s own parameter, never a second hand-listed
+	 *  `Omit`. This read `Omit<PanelMember, "status" | "roleName">`, and when
+	 *  `roleName` was replaced by `role`/`storedStatus`/`assumed` the omit list
+	 *  went stale silently: `Omit` does not constrain its keys, so omitting a
+	 *  field that no longer exists is legal and the three NEW derived fields
+	 *  simply became REQUIRED of every caller — a roster nobody can supply.
+	 *  Pointing at the function this value is passed to makes that drift
+	 *  unrepresentable. */
+	roster: Parameters<typeof buildPlanPanel>[0]["roster"];
 	plan: { memberId: string; status: PlanStatus }[];
 	/** Optimistic overrides from the route, keyed by member. A key present with
 	 *  value `null` means "optimistically cleared" — distinct from absent,
 	 *  which means "no override". */
 	rungOverride: Readonly<Record<string, PlanStatus | null>>;
-	roleByMemberId: Readonly<Record<string, string>>;
+	roleByMemberId: Readonly<Record<string, PanelRole>>;
 	meetingDate: string;
 	shareUrl: string;
 	locked: boolean;
