@@ -440,6 +440,54 @@ describe("roll mode", () => {
 		}
 	});
 
+	it("disables the menu's ITEMS too — a disabled trigger does not close an open menu", async () => {
+		// Round 2, F1: the fourth control of the C1 test above is really a fifth.
+		// Gating the trigger stops the menu OPENING while busy; it does nothing about
+		// a menu that is already open. Reachable in the drain window specifically:
+		// the officer opens this menu while everything is idle, wifi returns, the
+		// auto-drain effect flips `draining`, and their pick is swallowed by
+		// `mutate()`'s silent refusal.
+		//
+		// MECHANISM. "Render with busy, click to open" cannot work — the trigger is
+		// now correctly disabled, so the click is a no-op and every assertion after
+		// it would pass against a menu that never opened, which is worse than no
+		// test. So: open the menu while `busy={false}`, then `rerender` the same tree
+		// with `busy={true}`. Radix keeps `open` in the DropdownMenu root's own
+		// state, untouched by our props, so the menu survives the re-render and the
+		// items are re-rendered with the new prop — the exact state the bug needs.
+		// The idle assertion before the flip is what proves the menu is genuinely
+		// open, and doubles as the control.
+		const onSetAttendance = vi.fn();
+		const props = {
+			...rollProps,
+			// Bea has a recorded row, so her chip is the menu shape rather than the
+			// dashed one-tap suggestion (which has no items to gate).
+			attendance: [{ memberId: "m-bea", status: "present" as const }],
+			onSetAttendance,
+		};
+		const { getByRole, findByRole, rerender } = render(
+			<MeetingAttendancePanel {...props} busy={false} />,
+		);
+		// Radix opens on pointerdown, not a bare click — see the notes above.
+		await userEvent.click(getByRole("button", { name: /Bea Osei status/i }));
+		const idleItem = await findByRole("menuitem", { name: "Absent" });
+		expect(
+			idleItem.getAttribute("aria-disabled"),
+			"the menu must actually be OPEN and its items live before the flip",
+		).toBeNull();
+
+		rerender(<MeetingAttendancePanel {...props} busy={true} />);
+		const busyItem = getByRole("menuitem", { name: "Absent" });
+		expect(busyItem.getAttribute("aria-disabled")).toBe("true");
+
+		// The attribute is not the protection — the protection is that Radix skips
+		// `onSelect` for a disabled item. Assert the write, not the styling: an
+		// `aria-disabled` that merely greyed the row out would pass the line above
+		// and still hand the tap to a `mutate()` that throws it away.
+		fireEvent.click(busyItem);
+		expect(onSetAttendance).not.toHaveBeenCalled();
+	});
+
 	it("expands by default below lg, unlike plan mode", () => {
 		// Plan mode collapses to its counts line so a big roster does not push the
 		// agenda off screen. Roll mode IS the task on meeting day, so it opens.

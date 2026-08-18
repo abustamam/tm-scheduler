@@ -97,6 +97,13 @@ export function AttendanceGuestsGroup({
 											value={`${g.name} ${g.id}`}
 											disabled={locked}
 											onSelect={() => {
+												// Belt as well as braces. `disabled` above is cmdk's,
+												// which does remove the select listener rather than
+												// merely styling the row — but the guarantee is stated
+												// HERE, where the write actually leaves, rather than
+												// inherited from a library's internals. Same reason the
+												// form below carries one.
+												if (locked) return;
 												onAddGuest({ guestId: g.id });
 												setOpen(false);
 											}}
@@ -111,6 +118,17 @@ export function AttendanceGuestsGroup({
 					<form
 						onSubmit={(e) => {
 							e.preventDefault();
+							// The submit BUTTON is disabled when locked, and browsers do
+							// honour that for implicit Enter submission — so this is
+							// hardening, not a live bug. It is here because the closure that
+							// performs the write should state its own precondition instead of
+							// depending on a sibling element's attribute and the HTML spec:
+							// `locked` now also carries the offline queue's refuse-while-busy
+							// signal (the panel passes `writesLocked || busy`), so "the button
+							// is disabled" and "the write will be accepted" are no longer the
+							// same question. `preventDefault` first, so a locked submit still
+							// does not navigate.
+							if (locked) return;
 							const form = new FormData(e.currentTarget);
 							const name = String(form.get("guestName") ?? "").trim();
 							if (!name) {

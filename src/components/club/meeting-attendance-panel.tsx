@@ -163,6 +163,22 @@ function RollChip({
 				{ROLL_MENU.map((item) => (
 					<DropdownMenuItem
 						key={item.label}
+						/* Gating the TRIGGER above does not close a menu that is ALREADY
+						 *  open, so the items are a fourth control needing the same global
+						 *  signal. Narrow but reachable, and reachable exactly in the drain
+						 *  window: the officer opens this menu while everything is idle,
+						 *  wifi returns, the auto-drain effect flips `draining`, and their
+						 *  pick hits `mutate()`'s silent refusal — menu closes, chip keeps
+						 *  its old value, nothing says why. `DropdownMenu` is modal by
+						 *  default, so a competing USER write cannot start while it is open;
+						 *  the drain is the only way in. Radix skips `onSelect` entirely for
+						 *  a disabled item (`handleSelect` is guarded by `!disabled`), so
+						 *  this is a real block, not a styling hint.
+						 *
+						 *  `busy` only — NOT `locked || pending`. Roll mode deliberately
+						 *  ignores the lifecycle lock, and `pending` is this row's own
+						 *  in-flight write, which already implies `busy`. */
+						disabled={busy}
 						onSelect={() => onSetAttendance(row.id, item.status)}
 					>
 						{item.label}

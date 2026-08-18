@@ -132,6 +132,42 @@ describe("AttendanceGuestsGroup", () => {
 		).toBe(true);
 	});
 
+	it("refuses the new-guest submit while locked, without relying on the disabled button", async () => {
+		// Round 2, F2. The submit button is disabled when locked and browsers honour
+		// that for implicit Enter submission, so this is hardening — but `locked` now
+		// also carries the offline queue's refuse-while-busy signal (the panel passes
+		// `writesLocked || busy`), so "the button is disabled" and "this write will be
+		// accepted" have stopped being the same question, and the closure that
+		// performs the write should state its own precondition.
+		//
+		// MECHANISM, same as the roll menu's items: a locked group cannot have its
+		// popover OPENED (the trigger is disabled), so the form would never render and
+		// any assertion would pass vacuously. Open it while unlocked, then `rerender`
+		// with `locked` — Radix keeps `open` in the Popover root's own state. Then
+		// submit the FORM directly, which is exactly what bypasses the disabled
+		// button, and is the only way to observe the guard at all.
+		const onAddGuest = vi.fn();
+		const { getByRole, findByLabelText, getByLabelText, rerender } = render(
+			<AttendanceGuestsGroup {...base} onAddGuest={onAddGuest} />,
+		);
+		await userEvent.click(getByRole("button", { name: /Add guest/i }));
+		const nameField = await findByLabelText(/New guest name/i);
+		fireEvent.change(nameField, { target: { value: "Wale Adeyemi" } });
+
+		rerender(
+			<AttendanceGuestsGroup {...base} onAddGuest={onAddGuest} locked={true} />,
+		);
+		// Proof the popover really is still open and the form still mounted — without
+		// this, a closed popover would make the submit below unobservable and the
+		// assertion meaningless.
+		const form = getByLabelText(/New guest name/i).closest(
+			"form",
+		) as HTMLFormElement;
+		expect(form).not.toBeNull();
+		fireEvent.submit(form);
+		expect(onAddGuest).not.toHaveBeenCalled();
+	});
+
 	it("OMITS the remove control for a guest who is present because of a role", () => {
 		// `fromRole` and `locked` are different things: locked disables, fromRole
 		// omits. A role-holder removed from attendance desyncs the two surfaces.
