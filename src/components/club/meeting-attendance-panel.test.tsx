@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render } from "@testing-library/react";
+import { cleanup, fireEvent, render, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MeetingAttendancePanel } from "./meeting-attendance-panel";
@@ -89,10 +89,14 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 	});
 
 	it("shows the sign-up sheet's short code, with the full role as its tooltip", () => {
-		// The code is the season grid's, produced by the same `buildShortCodes`, so
-		// the two surfaces cannot drift into two vocabularies for one role. The
-		// full name rides along as `title` because the code alone is not readable
-		// to someone who has not learnt the vocabulary yet.
+		// This test passes `roleByMemberId` as a literal and never calls
+		// `buildShortCodes`, so it can only see that the panel RENDERS the code it
+		// is handed and hangs the full role off it as `title` — the code alone is
+		// not readable to someone who has not learnt the vocabulary. Where that
+		// code comes from is the route's business (Task 4), and it is NOT a
+		// guarantee of agreement with the season grid: the grid feeds
+		// `buildShortCodes` a user-selectable window of meetings while the route
+		// feeds one meeting's slots, so a numeric suffix can legitimately differ.
 		const { getByText } = renderPanel({
 			roleByMemberId: {
 				m2: { code: "TMR", roleName: "Timer", confirmed: false },
@@ -110,9 +114,13 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 			plan: [{ memberId: "m1", status: "not_coming" as const }],
 			rungOverride: { m1: "coming" as const },
 		});
+		// The ACCESSIBLE NAME, exact. The status value is composed into the name
+		// from content rather than overridden by an `aria-label`, so this asserts
+		// the officer and a screen-reader user get the same answer — and exact
+		// equality means "Not coming" (the value being overridden here) fails.
 		expect(
-			getByRole("button", { name: /Ayesha Khan status/i }).textContent,
-		).toContain("Coming");
+			getByRole("button", { name: "Ayesha Khan status: Coming" }),
+		).toBeTruthy();
 	});
 
 	it("treats an override of null as cleared, not as absent", () => {
@@ -123,13 +131,14 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 			plan: [{ memberId: "m1", status: "coming" as const }],
 			rungOverride: { m1: null },
 		});
-		// EXACT, not `toContain("Ask")`: "Asked" — the adjacent rung's label — also
-		// contains "Ask", so the substring form stayed green with the unset state
-		// rendering "Asked" (verified). That is the likeliest wrong value and the
-		// worst one, since it claims outreach that never happened.
+		// EXACT name, not `toContain("Ask")`: "Asked" — the adjacent rung's label —
+		// also contains "Ask", so the substring form stayed green with the unset
+		// state rendering "Asked" (verified). That is the likeliest wrong value and
+		// the worst one, since it claims outreach that never happened. An exact
+		// name still rules it out, because "Asked" yields "…status: Asked".
 		expect(
-			getByRole("button", { name: /Ayesha Khan status/i }).textContent?.trim(),
-		).toBe("Ask");
+			getByRole("button", { name: "Ayesha Khan status: Ask" }),
+		).toBeTruthy();
 	});
 
 	it("counts and sorts on the optimistic state too", () => {
@@ -172,9 +181,10 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		// EXACT for the same reason as above: `toContain("Ask")` passes for "Asked",
 		// which turns an invitation to make the first ask into a false claim that
 		// the officer already did.
-		expect(
-			getByRole("button", { name: /Ayesha Khan status/i }).textContent?.trim(),
-		).toBe("Ask");
+		const btn = getByRole("button", { name: "Ayesha Khan status: Ask" });
+		// And what a SIGHTED officer reads — scoped WITHIN the row, because every
+		// unanswered row renders "Ask" and an unscoped query matches them all.
+		expect(within(btn).getByText("Ask").className).not.toContain("sr-only");
 	});
 
 	it("drafts a ROLE confirmation for a member who holds a slot", () => {
@@ -196,6 +206,30 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		);
 	});
 
+	it("does not draft a confirmation to someone who has DECLINED their slot", () => {
+		// The third axis. Both other `nudgeMode` tests vary role present/absent and
+		// hold the answer at null, so keying the draft on `m.role` alone passed
+		// both — while this row visibly reads "Not coming" and handed the officer
+		// "just confirming you're our Toastmaster". A declined member still HOLDS
+		// the slot until it is reassigned, so the role is present here.
+		const { getByRole } = renderPanel({
+			plan: [{ memberId: "m1", status: "not_coming" as const }],
+			roleByMemberId: {
+				m1: { code: "TD", roleName: "Toastmaster", confirmed: true },
+			},
+		});
+		expect(
+			getByRole("button", { name: "Ayesha Khan status: Not coming" }),
+		).toBeTruthy();
+		const href =
+			getByRole("link", {
+				name: /Message Ayesha Khan on WhatsApp/i,
+			}).getAttribute("href") ?? "";
+		const message = decodeURIComponent(href);
+		expect(message).not.toContain("just confirming");
+		expect(message).toContain("are you able to make our");
+	});
+
 	it("falls back to the attendance draft for a member with no slot", () => {
 		const { getByRole } = renderPanel();
 		const href =
@@ -205,18 +239,50 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		expect(decodeURIComponent(href)).toContain("are you able to make our");
 	});
 
+	it("marks the member contacted when the officer opens a draft", () => {
+		// Tapping a draft is a real WRITE (no answer → reached_out) and it is the
+		// only rung the officer never sets by hand. Severing the wiring
+		// (`onContacted={() => {}}`) kept 17/17 green — `renderPanel` supplies the
+		// spy on every render and nothing ever asserted against it.
+		const { props, getByRole } = renderPanel();
+		fireEvent.click(
+			getByRole("link", { name: /Message Ayesha Khan on WhatsApp/i }),
+		);
+		expect(props.onContacted).toHaveBeenCalledWith("m1");
+	});
+
 	it("reads an ASSUMED Coming differently from an answered one", () => {
 		// Same word, different accessible name. An officer must be able to tell
 		// "she said yes" from "her role is confirmed", or the rail is claiming
 		// replies nobody made.
-		const { getByRole } = renderPanel({
+		// BOTH DIRECTIONS in one render, the way the badge test below does it.
+		// Asserting only the assumed arm passes for a row that announces "assumed"
+		// unconditionally — verified: collapsing the conditional so every row got
+		// the assumed string kept 17/17 green, which would tell an officer that a
+		// roster where nobody answered and nobody holds a role is entirely
+		// "Coming — assumed, role confirmed". m1 holds a confirmed role; m2 holds
+		// none and has not answered.
+		// `getByRole` with an EXACT `name` is the accessible-name assertion here —
+		// jest-dom is not installed, so there is no `toHaveAccessibleName`, and
+		// `getByRole` throws when nothing matches.
+		const { getByRole, queryByRole, getByText } = renderPanel({
 			roleByMemberId: {
 				m1: { code: "TD", roleName: "Toastmaster", confirmed: true },
 			},
 		});
-		const btn = getByRole("button", { name: /Ayesha Khan status/i });
-		expect(btn.textContent).toContain("Coming");
-		expect(btn.getAttribute("aria-label")).toMatch(/assumed/i);
+		expect(
+			getByRole("button", {
+				name: "Ayesha Khan status: Coming — assumed, role confirmed",
+			}),
+		).toBeTruthy();
+		// Same visible word as a real answer — the distinction is non-visual.
+		expect(getByText("Coming").className).not.toContain("sr-only");
+
+		// The NEGATIVE arm: no role, no answer, so nothing may claim an inference.
+		expect(getByRole("button", { name: "Bo Lin status: Ask" })).toBeTruthy();
+		expect(
+			queryByRole("button", { name: /Bo Lin status.*assumed/i }),
+		).toBeNull();
 	});
 
 	it("announces the full role, not the short code", () => {

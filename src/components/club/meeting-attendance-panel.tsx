@@ -56,18 +56,29 @@ function AttendanceRow({
 	// draft the agenda's slot card sends — asking "are you coming?" of someone
 	// you already put on the programme wastes the ask. Uses the BASE role name,
 	// never the numbered code: "you're our Speaker 1" reads as a mail merge.
-	const nudgeMode = m.role
-		? { mode: "confirm" as const, roleName: m.role.roleName }
-		: { mode: "attendance" as const };
+	//
+	// Branches on the ANSWER as well as the slot. A member who declined still
+	// HOLDS their slot until someone reassigns it, so keying on `m.role` alone
+	// drafted "just confirming you're our Toastmaster" to someone whose own row
+	// reads "Not coming" — the panel showing the officer a decline and then
+	// handing them a message asserting acceptance. The attendance draft is a
+	// re-ask rather than a false claim, which is the best the existing modes
+	// offer; the message that case really wants ("can you hand the role off?")
+	// is a new mode and a separate change.
+	const nudgeMode =
+		m.role && m.status !== "not_coming"
+			? { mode: "confirm" as const, roleName: m.role.roleName }
+			: { mode: "attendance" as const };
 
-	// An inference must not read as an answer. Same visible word, different
-	// accessible name, muted chip.
-	const statusAriaLabel = m.assumed
-		? `${m.name} status: Coming — assumed, role confirmed`
-		: `${m.name} status`;
+	// Derived ONCE and used for both the visible label and the announced name, so
+	// the two cannot disagree about what this row says.
+	const statusLabel = m.status ? RUNG_LABELS[m.status] : "Ask";
+	const statusAnnouncement = `${m.name} status: ${statusLabel}${
+		m.assumed ? " — assumed, role confirmed" : ""
+	}`;
 
 	return (
-		<div className="flex flex-col gap-1.5 border-b border-border/60 py-2.5 last:border-b-0">
+		<li className="flex flex-col gap-1.5 border-b border-border/60 py-2.5 last:border-b-0">
 			{/* Identity line. The name owns it — at 2-4 characters the role code
 			 *  costs it almost nothing, which is the whole reason the code replaced
 			 *  the full role name here. */}
@@ -75,13 +86,21 @@ function AttendanceRow({
 				<span className="min-w-0 flex-1 break-words text-sm font-medium">
 					{m.name}
 				</span>
+				{/* No `mt-0.5` on the badge below: under `items-start` its inner text
+				 *  centre already lands within a pixel of the name's (11px vs 10px
+				 *  against Tailwind v4 defaults — `text-xs`/`py-0.5`/1px border against
+				 *  `text-sm`), so nudging it down by 2px put it ~3px BELOW the name's
+				 *  optical line. `items-start` is the whole mechanism. */}
 				{m.role ? (
 					<Badge
 						variant={m.assumed ? "default" : "secondary"}
-						className="mt-0.5 shrink-0"
+						className="shrink-0"
 					>
-						{/* An ICON, not a "✓" character: a literal would join the code in
-						 *  `textContent` and break every `getByText(code)` query. */}
+						{/* An ICON, not a "✓" character, for two reasons that are about
+						 *  rendering rather than tests: `badgeVariants` styles a direct-child
+						 *  svg (`[&>svg]:size-3`), which a text glyph gets none of, and
+						 *  `aria-hidden` keeps it out of the accessible name — a literal
+						 *  would be announced ("check mark") beside the role it decorates. */}
 						{m.assumed ? <Check aria-hidden /> : null}
 						{/* The CODE is decorative to a screen reader — it hears the full
 						 *  role from the sr-only span beside it, so the accessible name is
@@ -90,9 +109,8 @@ function AttendanceRow({
 						 *  `aria-label` on the Badge itself is not an option, which is what
 						 *  this shape exists to avoid: a Badge renders a bare <span>, which
 						 *  maps to role `generic`, and ARIA 1.2 PROHIBITS `aria-label`
-						 *  there — axe-core flags `aria-prohibited-attr` and honouring
-						 *  varies by screen reader. `title` stays on the visible code, where
-						 *  a mouse user's pointer actually lands. */}
+						 *  there, with honouring varying by screen reader. `title` stays on
+						 *  the visible code, where a mouse user's pointer actually lands. */}
 						<span aria-hidden title={m.role.roleName}>
 							{m.role.code}
 						</span>
@@ -117,14 +135,40 @@ function AttendanceRow({
 				/>
 				<DropdownMenu>
 					<DropdownMenuTrigger asChild>
+						{/* The accessible name is COMPOSED FROM CONTENT, never an
+						 *  `aria-label`. `aria-label` OVERRIDES content, so labelling this
+						 *  `"${m.name} status"` meant the answer itself — Coming / Asked /
+						 *  Not coming / Ask — reached no screen reader at all on any row
+						 *  where someone had actually replied, on a rail whose entire
+						 *  purpose is "who is coming". Worse, it was ASYMMETRIC: assumed
+						 *  rows folded their status into the label and answered rows did
+						 *  not, so an inference told an AT user strictly more than a real
+						 *  answer did. Composing keeps the visible label and the announced
+						 *  one the same string by construction. `hover:text-muted-foreground`
+						 *  rides along with the muting because the `outline` variant's
+						 *  `hover:text-accent-foreground` is a class+pseudo-class (0-2-0)
+						 *  and beats a bare `text-muted-foreground` (0-1-0) on hover. */}
 						<Button
 							variant="outline"
 							size="sm"
 							disabled={locked || pending}
-							aria-label={statusAriaLabel}
-							className={m.assumed ? "text-muted-foreground" : undefined}
+							className={
+								m.assumed
+									? "text-muted-foreground hover:text-muted-foreground"
+									: undefined
+							}
 						>
-							{m.status ? RUNG_LABELS[m.status] : "Ask"}
+							{/* ONE sr-only string carries the whole name, with the visible
+							 *  label `aria-hidden` beside it — the same shape as the badge
+							 *  above, for the same reason. Splitting the name across sibling
+							 *  spans does not work: the accessible name is the concatenation
+							 *  of each child's TRIMMED text with no separator inserted, so
+							 *  "…status:" + "Ask" announced as "status:Ask" and no amount of
+							 *  trailing whitespace survives. Both strings derive from
+							 *  `statusLabel`, so what is shown and what is announced cannot
+							 *  drift apart. */}
+							<span className="sr-only">{statusAnnouncement}</span>
+							<span aria-hidden>{statusLabel}</span>
 							<ChevronDown className="size-3.5 opacity-60" aria-hidden />
 						</Button>
 					</DropdownMenuTrigger>
@@ -147,7 +191,7 @@ function AttendanceRow({
 					</DropdownMenuContent>
 				</DropdownMenu>
 			</div>
-		</div>
+		</li>
 	);
 }
 
@@ -312,18 +356,23 @@ export function MeetingAttendancePanel({
 			 *  screen reader (and make the collapse untestable). */}
 			{showRows ? (
 				<CardContent>
-					{rows.map((m) => (
-						<AttendanceRow
-							key={m.id}
-							m={m}
-							locked={locked}
-							meetingDate={meetingDate}
-							shareUrl={shareUrl}
-							pending={pendingId === m.id}
-							onWriteRung={writeRung}
-							onContacted={contacted}
-						/>
-					))}
+					{/* A LIST, not forty sibling divs: without it an AT user gets no set
+					 *  size and no position within it, on the one surface whose job is
+					 *  "how many of us are there and where am I in the chase". */}
+					<ul>
+						{rows.map((m) => (
+							<AttendanceRow
+								key={m.id}
+								m={m}
+								locked={locked}
+								meetingDate={meetingDate}
+								shareUrl={shareUrl}
+								pending={pendingId === m.id}
+								onWriteRung={writeRung}
+								onContacted={contacted}
+							/>
+						))}
+					</ul>
 				</CardContent>
 			) : null}
 		</Card>
