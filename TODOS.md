@@ -68,8 +68,11 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
 
 ## Agenda
 
-- Confirm the hand-off rows on a real MCF agenda after it deploys — that the four print layouts read right in the room and the projected deck's hand-off slides land where the cue is needed.
+- Confirm the hand-off rows on a real MCF agenda after it deploys — that the four print layouts read right in the room and the projected deck's hand-off slides land where the cue is needed. v1.16.1.0 (#585) made those rows name the people too, so this now also covers whether the longer rows read well at the printed size.
   **Priority:** P3
+
+- Neither `meeting-present.tsx` nor `deck-to-pptx.ts` renders a hand-off slide in any test, so the projected cue line — now the longest single line on those slides after #585 — is unasserted in both renderers. `slide-layout.test.ts` pins the descriptor the two of them consume, which is why this is P4 rather than a gap in the fix itself.
+  **Priority:** P4
 
 - `scripts/measure-word-poster.ts` has no tests because `main()` runs at import, so nothing is reachable. It is the harness that derives the Word of the Day poster's font-size tables, and a wrong result there ships mid-word breaks on a wall poster. `scripts/import-agendas-logic.ts` is the repo's precedent for extracting a testable `*-logic.ts` alongside an entry-point script.
   **Priority:** P4
@@ -138,6 +141,11 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
 
 - The print page-count gate (v1.8.4.0, #502) has three known blind spots, each mutation-verified as surviving. (1) A PARTIAL loss of the guard's recursive route walk is undetected: the vacuity check only asserts more than 20 route files are found, so losing the whole `_authed/**` subtree — 12 files, including `vp-membership.tsx`, the one other `@media print` route and the stated reason recursion exists — still passes. (2) The walk only sees `.tsx`, skips symlinked directories (`Dirent.isDirectory()` is false for them), and the "no route hand-rolls its own page CSS" check keys on `.pgwrap` specifically, so a route wrapping its sheet in any other class is unenrolled. (3) `PRINT_PAGE_CSS`'s two `body { background }` rules are pinned by nothing at all — the count cannot see a background and no grep asserts them. Separately, the agenda fixtures build `rows` by hand and omit `roleKey`, which `expandRunSheet` always sets, so every fixture row takes a name-matching fallback branch the real route never takes.
   **Priority:** P4
+
+## Voting
+
+- A write-in cannot be removed once cast (#582). The ballot is public and unauthenticated, so anyone with the link can put an arbitrary string in front of the room: it appears as a tappable candidate for every later voter, in the Ballot Counter's tally, and — if crowned — on the projected awards slide and in the minutes PDF. Nothing today lets the Vote Counter delete one before results are read. Bounded in LENGTH (`WRITE_IN_LIMITS.name`, 80) and in ROWS (one per voter per category, and the per-meeting guest cap bounds voters), so this is a nuisance surface rather than a DoS one — but it is the obvious next ask the first time someone abuses it, and it is much cheaper to add beside the existing tally UI than to retrofit. Deliberately out of scope for the first cut; the decision is recorded on the issue.
+  **Priority:** P2
 
 ## Guests & identity
 

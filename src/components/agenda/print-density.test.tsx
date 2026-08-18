@@ -136,7 +136,7 @@ const mcfRows: TimelineRow[] = [
 	handoff(
 		TM,
 		"toastmaster_of_the_day",
-		"Introduces the General Evaluator",
+		"Introduces the General Evaluator: Faisal Abdul-Rahman Al-Mansoori",
 		"6:50",
 	),
 	{
@@ -177,7 +177,7 @@ const mcfRows: TimelineRow[] = [
 	handoff(
 		TM,
 		"toastmaster_of_the_day",
-		"Introduces the Table Topics Master",
+		"Introduces the Table Topics Master: Rasheed Bustamam-Wickramasinghe",
 		"7:21",
 	),
 	{
@@ -202,7 +202,7 @@ const mcfRows: TimelineRow[] = [
 	handoff(
 		TTM,
 		"table_topics_master",
-		"Introduces the General Evaluator",
+		"Introduces the General Evaluator: Faisal Abdul-Rahman Al-Mansoori",
 		"7:27",
 	),
 	handoff(GE, "general_evaluator", "Introduces the speech evaluators", "7:27"),
@@ -249,7 +249,8 @@ const mcfRows: TimelineRow[] = [
 	{
 		who: GE,
 		roleKey: "general_evaluator",
-		detail: "Calls for the functionary reports",
+		detail:
+			"Calls for the Timer, Ah-Counter, Grammarian & Vote Counter to report",
 		minutes: 3,
 		marks: null,
 		time: "7:37",
@@ -363,6 +364,35 @@ describe.skipIf(!hasChrome)("editorial agenda density", () => {
 		// change: 1484px → 1321px of content on a 1056px sheet, plus declared
 		// 10.5 → 11.5. The floor sits well below both for the wrapping reason
 		// `agenda-print-type.ts` explains.
+		//
+		// #584 + #585 spent some of that, measured on Linux harness fonts:
+		//
+		//   origin/main .................................... 6.799pt
+		//   every hand-off named its people ................ 6.470pt
+		//   only the SINGULAR hand-offs name them .......... 6.597pt   ← ships
+		//
+		// The middle row is why the two GROUP hand-offs name nobody. "Introduces
+		// the speakers: Alice & Bob" is followed immediately by "Speaker 1 · Alice"
+		// and "Speaker 2 · Bob", so it restated the line beneath it — while
+		// carrying the longest lists on the sheet, and `FitPage` scales the whole
+		// page to fit the longest thing on it. Dropping those two recovered 0.127pt
+		// of type across every word of the agenda; the 0.202pt still spent buys the
+		// three singular introductions and the reports row naming its functionaries.
+		//
+		// The fixture carries LONG member names deliberately. #585 made these rows'
+		// length a function of member names, which are unbounded user data, so a
+		// fixture using this club's real (short) ones measures the easy case —
+		// CLAUDE.md's "a fixture that spans ONE axis is not a guarantee", applied to
+		// the axis this very change introduced. #584 added a second such axis (the
+		// reports row grows with the club's functionary count), so that row names
+		// four here rather than three.
+		//
+		// The 0.40pt left above the 6.2 floor is NOT headroom for the next copy
+		// change. `agenda-print-type.ts` says what that margin is for: the harness
+		// resolves no webfonts, and the substitute differs between a developer's
+		// machine and CI's Ubuntu, moving where lines wrap. It is reserved for that
+		// variance. Anything lengthening these rows again needs a fresh measurement
+		// here and a compensating reduction, not a lower floor.
 		expect(printedDetailPt(mcfRows)).toBeGreaterThanOrEqual(
 			EDITORIAL_MIN_PRINTED_PT,
 		);

@@ -1139,7 +1139,9 @@ function MeetingView() {
 
 	async function handleSetVoteWinner(
 		category: AwardCategory,
-		winner: { kind: "member" | "guest"; id: string },
+		winner:
+			| { kind: "member" | "guest"; id: string }
+			| { kind: "writeIn"; name: string },
 	) {
 		try {
 			await setMinutesAward({
@@ -1148,6 +1150,7 @@ function MeetingView() {
 					category,
 					memberId: winner.kind === "member" ? winner.id : undefined,
 					guestId: winner.kind === "guest" ? winner.id : undefined,
+					writeInName: winner.kind === "writeIn" ? winner.name : undefined,
 					selfMemberId: myId,
 				},
 			});

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgendaSlot } from "./agenda-runsheet";
-import { beatDuration, buildRunOfShow } from "./agenda-runsheet";
+import { beatDuration, beatTiming, buildRunOfShow } from "./agenda-runsheet";
 import {
 	buildSlideDeck,
 	type ClubForDeck,
@@ -562,24 +562,28 @@ describe("hand-off slides (#363)", () => {
 				from: { role: "Toastmaster of the Day", name: "Faisal" },
 				to: "the speakers",
 				toLabel: "the speakers",
+				toNames: [],
 			},
 			{
 				kind: "handoff",
 				from: { role: "Toastmaster of the Day", name: "Faisal" },
 				to: "the Table Topics Master",
 				toLabel: "the Table Topics Master",
+				toNames: ["Rasheed"],
 			},
 			{
 				kind: "handoff",
 				from: { role: "Table Topics Master", name: "Rasheed" },
 				to: "the General Evaluator",
 				toLabel: "the General Evaluator",
+				toNames: ["Riyaz"],
 			},
 			{
 				kind: "handoff",
 				from: { role: "General Evaluator", name: "Riyaz" },
 				to: "the speech evaluators",
 				toLabel: "the speech evaluators",
+				toNames: [],
 			},
 		]);
 	});
@@ -650,18 +654,21 @@ describe("hand-off slides (#363)", () => {
 				from: { role: "Toastmaster of the Day", name: "Faisal" },
 				to: "the speakers",
 				toLabel: "the speakers",
+				toNames: [],
 			},
 			{
 				kind: "handoff",
 				from: { role: "Toastmaster of the Day", name: "Faisal" },
 				to: "the General Evaluator",
 				toLabel: "the General Evaluator",
+				toNames: ["Riyaz"],
 			},
 			{
 				kind: "handoff",
 				from: { role: "General Evaluator", name: "Riyaz" },
 				to: "the speech evaluators",
 				toLabel: "the speech evaluators",
+				toNames: [],
 			},
 		]);
 	});
@@ -691,6 +698,36 @@ describe("hand-off slides (#363)", () => {
 				from: { role: "General Evaluator", name: "Riyaz" },
 				to: "the speech evaluators",
 				toLabel: "the speech evaluators",
+				toNames: [],
+			},
+		]);
+	});
+
+	/**
+	 * The deck half of the printed row's "names nobody when unassigned" case
+	 * (#585). Both surfaces derive `toNames` through `introducedNames`, so this
+	 * is the one place the DECK's empty list is produced by the real derivation
+	 * rather than hand-written into a fixture — every other `toNames` assertion
+	 * in this file is non-empty, and slide-layout.test.ts constructs its `[]` by
+	 * hand, so without this the empty path is unreached on this side.
+	 *
+	 * Note the contrast with the test directly below: `from.name` DOES show the
+	 * "— open —" placeholder for an unclaimed introducer, because that is a
+	 * person the room has to be told is missing. `toNames` does not, because a
+	 * list of people to introduce has nobody in it. Same slide, two rules, and
+	 * they are easy to conflate.
+	 */
+	it("carries an empty toNames when the target role is unassigned", () => {
+		const open = handoffs({
+			slots: [totd, { ...speaker, assigneeName: null }],
+		});
+		expect(open).toEqual([
+			{
+				kind: "handoff",
+				from: { role: "Toastmaster of the Day", name: "Faisal" },
+				to: "the speakers",
+				toLabel: "the speakers",
+				toNames: [],
 			},
 		]);
 	});
@@ -709,6 +746,7 @@ describe("hand-off slides (#363)", () => {
 				from: { role: "Toastmaster of the Day", name: "— open —" },
 				to: "the speakers",
 				toLabel: "the speakers",
+				toNames: [],
 			},
 		]);
 	});
@@ -751,6 +789,7 @@ describe("hand-off slides (#363)", () => {
 				from: { role: "Emcee", name: "Faisal" },
 				to: "the speakers",
 				toLabel: "the speakers",
+				toNames: [],
 			},
 		]);
 	});
@@ -1109,25 +1148,62 @@ describe("buildSlideDeck evaluation session", () => {
 		expect(slide).toMatchObject({
 			evaluator: "Faisal Ali",
 			speaker: "Rehanna Khan",
-			// The speech-evaluation beat's budget, not a second opinion about it
-			// (#356). The deck used to hardcode "2–3 minutes" while the run sheet
-			// booked 3.
-			time: "3 minutes",
+			// The window the speech-evaluation beat is TIMED against, derived from
+			// that beat's own marks — not a second opinion about it (#356, #583).
+			// The deck once hardcoded "2–3 minutes" beside a run sheet that booked
+			// 3; #356 removed the hardcoded copy, #507 gave the beat real marks,
+			// and this now reads them, so the two agree by construction.
+			time: "2–3 minutes",
 		});
 	});
 
-	it("quotes the beat's budget, so a retimed beat moves the slide (#356)", () => {
+	it("quotes the beat's timing, so a retimed beat moves the slide (#356)", () => {
 		const template = buildRunOfShow({ geIntroducesFunctionaries: false });
 		const deck = build({ slots: [ge, speaker, evaluator] });
 		expect(deck.find((s) => s.kind === "evaluation")).toMatchObject({
-			time: beatDuration(template, "evaluation"),
+			time: beatTiming(template, "evaluation"),
 		});
 		expect(deck.find((s) => s.kind === "evaluatorEvaluation")).toMatchObject({
-			time: beatDuration(template, "evaluatorEvaluation"),
+			time: beatTiming(template, "evaluatorEvaluation"),
 		});
 		expect(deck.find((s) => s.kind === "generalEvaluation")).toMatchObject({
-			time: beatDuration(template, "generalEvaluation"),
+			time: beatTiming(template, "generalEvaluation"),
 		});
+	});
+
+	/**
+	 * The absolute values, because the test above cannot fail on its own (#583).
+	 * Stated relative to the very helper it guards, `time: beatTiming(...)` holds
+	 * for EVERY definition of `beatTiming` — including one that goes back to
+	 * projecting a bare "3 minutes" at an evaluator the Timer red-cards at 3:00.
+	 * These are the strings the room reads off the wall.
+	 */
+	it("projects the window an evaluator is actually timed against (#583)", () => {
+		const deck = build({ slots: [ge, speaker, evaluator] });
+		expect(deck.find((s) => s.kind === "evaluation")).toMatchObject({
+			time: "2–3 minutes",
+		});
+		// The two GE beats carry no marks — nothing signals against them — so they
+		// keep stating a plain budget. Pinned so "give every timed slide a range"
+		// cannot quietly become the rule.
+		expect(deck.find((s) => s.kind === "evaluatorEvaluation")).toMatchObject({
+			time: "2 minutes",
+		});
+		expect(deck.find((s) => s.kind === "generalEvaluation")).toMatchObject({
+			time: "2 minutes",
+		});
+	});
+
+	/**
+	 * The invariant #356 was actually defending, kept intact by #583: the top of
+	 * the projected range IS the beat's booked minutes, so the number on the wall
+	 * and the number the printed clock reserves cannot drift apart. Same rule
+	 * #394 gives the prepared-speech slides.
+	 */
+	it("ends the evaluation range on the beat's booked duration, not a second opinion", () => {
+		const template = buildRunOfShow({ geIntroducesFunctionaries: false });
+		const time = beatTiming(template, "evaluation");
+		expect(time.split("–")[1]).toBe(beatDuration(template, "evaluation"));
 	});
 
 	it("omits GE slides when no General Evaluator slot exists", () => {
@@ -1506,13 +1582,76 @@ describe("buildSlideDeck full meeting ordering", () => {
 			from: { role: "Toastmaster of the Day", name: "Schinthia" },
 			to: "the General Evaluator",
 			toLabel: "the General Evaluator",
+			toNames: ["Saiful"],
 		});
-		expect(
-			[...mcf.slice(0, at - 1), ...mcf.slice(at)].map((s) => s.kind),
-		).toEqual(standard.map((s) => s.kind));
+		// TWO differences now, not one (#581): drop the extra hand-off AND put the
+		// Word of the Day back where the standard flow keeps it, and the variants
+		// are otherwise the same deck. Stated as a transform rather than a second
+		// literal ordering, so this keeps failing on an unintended third
+		// difference the way it always has.
+		const withoutHandoff = [...mcf.slice(0, at - 1), ...mcf.slice(at)];
+		const wodAt = withoutHandoff.findIndex((s) => s.kind === "wordOfDay");
+		const introAt = withoutHandoff.findIndex(
+			(s) => s.kind === "functionaryIntro",
+		);
+		expect(wodAt).toBe(introAt + 1);
+		const [wod] = withoutHandoff.splice(wodAt, 1);
+		withoutHandoff.splice(introAt, 0, wod);
+		expect(withoutHandoff.map((s) => s.kind)).toEqual(
+			standard.map((s) => s.kind),
+		);
 		expect(mcf.find((s) => s.kind === "functionaryIntro")).toMatchObject({
 			owner: "General Evaluator",
 			name: "Saiful",
 		});
+	});
+
+	/**
+	 * The Word of the Day lands at the beat the Grammarian delivers it (#581).
+	 *
+	 * Positional, against `functionaryIntro`, rather than an absolute index: the
+	 * deck gains and loses slides with the club's role set, and an index would
+	 * pin the wrong thing the next time one moves.
+	 */
+	it("projects the Word of the Day after the functionary intro under MCF's variant", () => {
+		const mcf = build({
+			meeting: full,
+			slots,
+			geIntroducesFunctionaries: true,
+		});
+		const kinds = mcf.map((s) => s.kind);
+		expect(kinds.indexOf("wordOfDay")).toBe(
+			kinds.indexOf("functionaryIntro") + 1,
+		);
+		// Not merely "somewhere later" — it is still inside the opening, ahead of
+		// the hand-off that starts the speeches.
+		expect(kinds.indexOf("wordOfDay")).toBeLessThan(kinds.indexOf("speech"));
+	});
+
+	it("keeps the Word of the Day in the Toastmaster's opening in the standard flow (#354)", () => {
+		const kinds = build({ meeting: full, slots }).map((s) => s.kind);
+		expect(kinds.indexOf("wordOfDay")).toBe(
+			kinds.indexOf("toastmasterIntro") + 1,
+		);
+		expect(kinds.indexOf("wordOfDay")).toBeLessThan(
+			kinds.indexOf("functionaryIntro"),
+		);
+	});
+
+	/**
+	 * A club on MCF's variant that runs NO functionaries projects no
+	 * functionary-intro slide, so the second push has no anchor. The word must
+	 * still be shown — losing it entirely is a worse outcome than showing it a
+	 * beat early, and it is the case the conditional makes reachable.
+	 */
+	it("still projects the Word of the Day under MCF when the club runs no functionaries", () => {
+		const kinds = build({
+			meeting: full,
+			slots: slots.filter((s) => s.category !== "functionary"),
+			geIntroducesFunctionaries: true,
+		}).map((s) => s.kind);
+		expect(kinds).not.toContain("functionaryIntro");
+		expect(kinds).toContain("wordOfDay");
+		expect(kinds.indexOf("wordOfDay")).toBeLessThan(kinds.indexOf("speech"));
 	});
 });

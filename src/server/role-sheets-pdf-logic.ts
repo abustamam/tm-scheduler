@@ -108,7 +108,7 @@ export async function loadRoleSheetLogo(
 }
 
 /** Build the per-meeting fill context (club, date, prepared speakers, WOD). */
-async function loadRoleSheetFill(
+export async function loadRoleSheetFill(
 	meetingId: string,
 ): Promise<RoleSheetFill & { clubName: string }> {
 	// All three reads key off `meetingId` alone and none feeds another, so they

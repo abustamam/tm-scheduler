@@ -96,11 +96,47 @@ const header: AgendaHeader = {
 	meetingNumber: null,
 };
 
+/**
+ * Every fifth row is a HAND-OFF, and its detail carries the people it
+ * introduces (#585).
+ *
+ * READ THE HEADER ABOVE BEFORE TRUSTING THIS: content volume provably cannot
+ * move any number in this file. `.agenda-page` is `height: PAGE_H; overflow:
+ * hidden`, so a sheet is exactly one page however much it holds. This fixture
+ * therefore does NOT gate the #585 lengthening, and an earlier version of this
+ * comment claimed it did — measured wrong, because a 60-row mutation still
+ * printed 1 page and that was read as headroom rather than as the gate being
+ * structurally blind. The legibility cost of longer rows is caught by
+ * `print-density.test.tsx`, which measures printed POINTS; the page count is
+ * caught here.
+ *
+ * What the hand-off rows are still doing here: `HandoffBand` is a
+ * differently-sized, italic, differently-padded row that the real agenda emits
+ * five to eight times, and it was absent from this fixture entirely. Its
+ * PRESENCE (not its length) is what this file can see — a change that made a
+ * band render as a full row, or emit a second `.agenda-page`, moves the count.
+ *
+ * The names are deliberately long and multi-part because the fixture should
+ * look like a real agenda: "Bartholomew Fitzgerald-Wellington" is an ordinary
+ * name, not a hostile one.
+ */
+const HANDOFF_DETAIL =
+	"Introduces the speech evaluators" +
+	"Anneliese Vandermeer-Castellanos & Konstantin Papadopoulos-Nakamura";
+
 const rows = Array.from({ length: 26 }, (_, i) => ({
 	who: i % 3 === 0 ? `Speaker ${i} · Someone Withalongname` : `Role ${i}`,
-	detail: "A representative line of run-sheet detail for this beat",
-	minutes: 5,
+	detail:
+		i % 5 === 4
+			? HANDOFF_DETAIL
+			: "A representative line of run-sheet detail for this beat",
+	minutes: i % 5 === 4 ? 0 : 5,
+	// `i % 3 === 0`, unnarrowed. Adding `&& i % 5 !== 4` to keep hand-off rows
+	// unmarked would ALSO have dropped the marks from i=9 and i=24, quietly
+	// shrinking the timing-trio axis this fixture covers — a fixture that gets
+	// weaker on one axis while growing on another is the trap in reverse.
 	marks: i % 3 === 0 ? { green: 4, yellow: 5, red: 6 } : null,
+	handoff: i % 5 === 4 ? true : undefined,
 	time: `7:${String(i).padStart(2, "0")}`,
 }));
 
@@ -259,6 +295,36 @@ describe.skipIf(!hasChrome)("printed page counts", () => {
 	//
 	// Recording the empty case makes that ambiguity explicit rather than
 	// leaving every 1 to be read against an unstated zero.
+	/**
+	 * The companion control to the empty-document one below, and the reason the
+	 * hand-off fixture above carries a disclaimer instead of a guarantee (#585).
+	 *
+	 * The file header asserts in PROSE that content volume cannot move a page
+	 * count here. This makes that claim checkable: forty long names on every
+	 * hand-off row — ~1,500 characters each, far past anything a club can enter —
+	 * still print one sheet. So a reviewer who reaches for this file to gate a
+	 * copy change gets told NO by a test rather than by a comment, and is sent to
+	 * `print-density.test.tsx`, which measures printed points and does see it.
+	 */
+	it("page count is insensitive to detail length — the density gate owns that", () => {
+		const long = rows.map((r) => ({
+			...r,
+			detail: `${r.detail} ${"Bartholomew Fitzgerald-Wellington, ".repeat(40)}`,
+		}));
+		const html = renderToStaticMarkup(
+			<MeetingAgendaPrint
+				layout="editorial"
+				header={header}
+				roles={[{ label: "Toastmaster", name: "Lee P." }]}
+				officers={[]}
+				explainers={[]}
+				rows={long}
+				ballotUrl={BALLOT_URL}
+			/>,
+		);
+		expect(pages(PRINT_PAGE_CSS, html)).toBe(1);
+	});
+
 	it("an empty document also prints one page — so 1 is not proof of content", () => {
 		expect(pages(PRINT_PAGE_CSS, "")).toBe(1);
 	});

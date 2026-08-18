@@ -29,6 +29,7 @@ import {
 import { ROLE_SHEETS } from "#/data/role-sheets";
 import type { Slide } from "#/lib/agenda-slides";
 import { hasWordOfTheDay } from "#/lib/word-poster";
+import { MeetingPacketDialog } from "./meeting-packet-dialog";
 
 /**
  * The meeting view's single "Print & export" menu (#541 D2). Replaces the
@@ -65,6 +66,7 @@ export function MeetingExportMenu({
 	presentIsPrimary: boolean;
 }) {
 	const [sheetsOpen, setSheetsOpen] = useState(false);
+	const [packetOpen, setPacketOpen] = useState(false);
 	// Re-entrancy guard for the .pptx export. The retired `PptxDownloadButton`
 	// held one (`if (busy) return` + `disabled={busy}`); porting the action into
 	// a menu item dropped it, and the menu CLOSES on select, so the obvious way
@@ -111,6 +113,13 @@ export function MeetingExportMenu({
 							</Link>
 						</DropdownMenuItem>
 					)}
+					{/* The whole night in one file (#589), above the per-sheet list —
+					    it is the action most people want, and the individual sheets are
+					    the fallback for wanting exactly one. */}
+					<DropdownMenuItem onSelect={() => setPacketOpen(true)}>
+						<Printer />
+						Print meeting packet…
+					</DropdownMenuItem>
 					<DropdownMenuItem onSelect={() => setSheetsOpen(true)}>
 						<FileDown />
 						This meeting's role sheets…
@@ -179,6 +188,19 @@ export function MeetingExportMenu({
 					) : null}
 				</DropdownMenuContent>
 			</DropdownMenu>
+			{/* MOUNTED ONLY WHEN OPEN. The dialog fetches the meeting's packet
+			    context with `useQuery`, and a hook cannot be conditional — so
+			    rendering it alongside a closed dialog made every consumer of this
+			    menu need a QueryClientProvider, which the menu's own tests do not
+			    have and should not need. It also means a menu nobody opens costs no
+			    query. */}
+			{packetOpen ? (
+				<MeetingPacketDialog
+					open
+					onOpenChange={setPacketOpen}
+					dbMeetingId={dbMeetingId}
+				/>
+			) : null}
 			<Dialog open={sheetsOpen} onOpenChange={setSheetsOpen}>
 				<DialogContent
 					className="sm:max-w-sm"

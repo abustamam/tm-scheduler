@@ -25,9 +25,18 @@ import {
 } from "#/db/schema";
 import { AWARD_CATEGORIES, type AwardCategory } from "./minutes-logic";
 
-/** A person who may win an award. `kind` discriminates the id's table. */
+/**
+ * A person who may win an award.
+ *
+ * `kind` discriminates what `id` MEANS, and the three cases are genuinely
+ * different: `member` and `guest` are foreign keys into their tables, while
+ * `writeIn` has no row at all and its `id` is the `writeInKey` of the name a
+ * voter typed (#582). Keeping one shape lets the ballot render and post all
+ * three the same way; the client never needs to know which it is holding.
+ */
 export interface AwardCandidate {
-	kind: "member" | "guest";
+	kind: "member" | "guest" | "writeIn";
+	/** Member/guest: the row id. Write-in: `writeInKey(name)`. */
 	id: string;
 	name: string;
 }
@@ -115,7 +124,16 @@ export async function loadAwardCandidates(
 	return out;
 }
 
-/** True when `candidate` is eligible for `category` on this meeting. */
+/**
+ * True when `candidate` is eligible for `category` on this meeting.
+ *
+ * WRITE-INS ARE NOT CHECKED HERE, and must not be: the whole point of #582 is
+ * a candidate with no row to check against. `castVote` handles that arm
+ * separately — it validates the NAME (length, non-blank) rather than
+ * membership of a derived list. Passing a write-in to this function would
+ * always answer false, so the type excludes it rather than leaving a caller
+ * to discover that at runtime.
+ */
 export function isEligibleCandidate(
 	candidates: AwardCandidates,
 	category: AwardCategory,

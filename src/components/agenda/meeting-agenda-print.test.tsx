@@ -910,7 +910,7 @@ describe("MeetingAgendaPrint consolidates adjacent same-presenter beats", () => 
 		{
 			who: "General Evaluator · Faisal",
 			roleKey: "general_evaluator",
-			detail: "Calls for the functionary reports",
+			detail: "Calls for the Timer, Grammarian & Ah-Counter to report",
 			minutes: 3,
 			marks: null,
 			time: "7:37",

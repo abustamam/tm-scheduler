@@ -2,6 +2,47 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.18.0.1] - 2026-08-17
+
+### Fixed
+
+- **Nothing user-facing.** Repairs the one check a freshly-created worktree gets. `bun run worktree:setup` tells you to verify with `git status --porcelain` and expect no output, and it had stopped delivering that: `codeledger init` re-appends a fixed onboarding block to two tracked, hand-curated agent-rule files, so every bootstrap dirtied them by 42 lines each. The signal that the bootstrap behaved was reading red for a known cause, which is the fastest way to teach people to ignore it. The block is discarded after `init` runs, scoped to exactly those two files.
+
+## [1.18.0.0] - 2026-08-17
+
+### Added
+
+- **Print the whole night in one file.** "Print & export → Print meeting packet…" builds a single PDF with the Word of the Day poster and whichever functionary logs you want. Printing for a meeting used to be six separate actions — five individual sheet downloads plus a browser print of the poster — and missing one meant a functionary sitting down with nothing in front of them.
+- **You pick what goes in, and it starts on the right answer.** The boxes are ticked from what the meeting actually runs, so a club with no General Evaluator does not get GE notes, and a club using digital voting does not get the paper Ballot Counter tally — without configuring anything. Everything stays yours to change: tick the tally anyway if you want a spare.
+- **Three copies of the Word of the Day by default**, for putting around the room, adjustable up or down.
+
+## [1.17.0.0] - 2026-08-17
+
+### Added
+
+- **You can now vote for someone who isn't on the ballot.** Tap "Someone else…", type a name, done. The ballot could only ever offer people the app already knew about — whoever held a role slot, plus Table Topics speakers someone had recorded — and Table Topics respondents don't get recorded while the segment is running, because the people who would do it are the people running the meeting. So Best Table Topics, the award that most needs a vote, routinely opened with a short list or nobody on it at all.
+- **A name someone types becomes a button for everyone after them.** The second person voting for the same speaker taps their name instead of typing it, so one person doesn't end up on the ballot twice as "bob smith" and "Bob Smith" splitting their own vote. Capitalisation and stray spaces are treated as the same person; the spelling the first voter used is the one everybody sees. Names that differ by more than that — "O'Brien" and "OBrien" — are left as two entries, because the app should not guess that two people are one.
+- **A write-in can win.** The Ballot Counter can set one as the winner from the tally, and the name flows through to the minutes, the emailed minutes, the minutes PDF and the printed awards row like any other winner.
+
+## [1.16.1.0] - 2026-08-17
+
+Five fixes from the 2026-08-13 meeting (#578).
+
+### Fixed
+
+- **The projector no longer tells an evaluator they have three minutes while the Timer red-cards them at three.** The evaluation slide showed "Time: 3 minutes" — the slot the printed clock reserves for that beat — when what an evaluator is actually timed against is a 2–3 minute window, green at 2:00. The printed agenda and the Timer's own log already said 2–3; the wall was the last surface still saying otherwise. The slide now reads the same window they do, and the top of that range is still the beat's booked duration, so the projector and the printed clock cannot drift apart.
+- **The Word of the Day now appears when the Grammarian actually gives it.** At clubs where the General Evaluator introduces the functionaries, the deck put the word, its definition and its example on screen before the Toastmaster had even handed over — so the room read the definition several beats before meeting the person presenting it. It now follows the functionary introductions, which is where the printed agenda has always said it happens.
+
+### Changed
+
+- **Introduction rows name the person, not just the role.** "Introduces the General Evaluator" is now "Introduces the General Evaluator: Riyaz" — on the printed agenda and on the projected slide. The one thing you have to say out loud at that moment was the one thing the row left out, and on a multi-page agenda it was on a different sheet. Open roles are unchanged: with nobody in the slot the row reads as it always did, rather than announcing "— open —". Guests keep their "· Guest" marker.
+- The two rows that introduce a *group* — the speakers and the speech evaluators — deliberately do not list names. Those people's own rows are the very next thing on the page, naming them in larger type, so listing them again restated the line below while making the longest rows on the sheet longer still. Since the agenda scales to fit its page, that cost every word on it about 2% of its size for no new information.
+- **"Calls for the functionary reports" now says who.** The row reads "Calls for the Timer, Grammarian & Ah-Counter to report", naming the reporting functionaries your club actually runs, under your club's own names for them. A club that renames a role or turns one off sees the change on the row automatically.
+
+### Added
+
+- **The Ah-Counter's log has a column for double clutches**, plus a line saying what one is — a restart, where the speaker begins a word or phrase, stops, and begins it again. The term is invisible to anyone who has not held the role, which is exactly who picks up that sheet. The spoken cue on the same sheet now names it too.
+
 ## [1.16.0.0] - 2026-08-17
 
 ### Added

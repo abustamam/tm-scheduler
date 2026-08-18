@@ -3,7 +3,7 @@
 // this descriptor, so copy/layout never drifts between them. Pure + unit-tested.
 
 import type { LegendEntry } from "./agenda-runsheet";
-import { OPEN_LABEL } from "./agenda-runsheet";
+import { introducedSuffix, OPEN_LABEL } from "./agenda-runsheet";
 import type { HandoffTarget, Slide } from "./agenda-slides";
 
 export type LineRole = "head" | "name" | "strong" | "muted" | "spacer";
@@ -189,7 +189,12 @@ export function slideLayout(slide: Slide): SlideLayout {
 					// `toLabel`, not `to`: `to` is the identity that keys the jump grid
 					// above and must stay canonical, while this line is what the room
 					// reads and follows the club's own name for the role (#462).
-					head(`Introduces ${slide.toLabel}`),
+					//
+					// …and WHO (#585), appended to the same line rather than added as a
+					// third, so the cue stays one sentence the introducer can read
+					// straight off the wall. Empty for an unheld role, which collapses
+					// to the two-line slide this has always been.
+					head(`Introduces ${slide.toLabel}${introducedSuffix(slide.toNames)}`),
 				],
 			});
 		case "toastmasterIntro": {
