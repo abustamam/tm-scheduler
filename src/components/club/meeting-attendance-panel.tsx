@@ -1,4 +1,4 @@
-import { Check, ChevronDown, ChevronUp } from "lucide-react";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import { useEffect, useState } from "react";
 import { NudgeButtons } from "#/components/club/nudge-buttons";
 import { Badge } from "#/components/ui/badge";
@@ -16,6 +16,7 @@ import {
 	type PanelRole,
 	type PlanStatus,
 } from "#/lib/attendance-panel";
+import { cn } from "#/lib/utils.ts";
 
 /** Chip copy. "No answer" is the ABSENCE of a row, so choosing it clears. */
 const RUNG_LABELS: Record<PlanStatus, string> = {
@@ -23,6 +24,13 @@ const RUNG_LABELS: Record<PlanStatus, string> = {
 	coming: "Coming",
 	not_coming: "Not coming",
 };
+
+/** The two qualifiers a Coming can carry on the status control. Each is
+ *  rendered BOTH visibly (after the counts line's "·") and inside the announced
+ *  name, so the word a sighted officer reads and the word a screen reader hears
+ *  cannot drift — the same property `RUNG_LABELS` already gives the rung word. */
+const ASSUMED_WORD = "assumed";
+const ASKED_WORD = "asked";
 
 const MENU: { label: string; status: PlanStatus | null }[] = [
 	{ label: "No answer", status: null },
@@ -82,15 +90,36 @@ function AttendanceRow({
 	// false. So this is the one case there is to surface, not a partial view.
 	const alsoAsked = m.assumed && m.storedStatus === "reached_out";
 
+	// The CONTROL is what carries assumed-ness, and it is the only thing that
+	// does. The badge below answers ONE question — does this member hold a
+	// role — and answers it identically for everyone who does. It used to answer
+	// two: a filled `default` variant plus a Check made it the highest-contrast
+	// element in the rail on exactly the rows `assumed` fires for, which is when
+	// NOBODY REPLIED. So a check mark, the universal glyph for verified, was
+	// decorating the one status nobody verified, while the control beside it was
+	// muted to say "trust this least" — two emphasis signals pointing opposite
+	// ways. The member who DID answer "Coming" while holding the same confirmed
+	// slot got the quieter of the two.
+	//
+	// The qualifier lands here, where the muting already is, because muting alone
+	// is not a message: a grey control says "less important", never "nobody said
+	// this". Exhaustive over an assumed row — per the note above `storedStatus`
+	// there is `null` or `reached_out` and nothing else — and deliberately NOT
+	// stacked: "asked" already carries "nobody answered", so "Coming · assumed ·
+	// asked" would say it twice and spend ~50px of a 340px rail doing so.
+	const qualifier = alsoAsked ? ASKED_WORD : m.assumed ? ASSUMED_WORD : null;
+
 	// Derived ONCE and used for both the visible label and the announced name, so
 	// the two cannot disagree about what this row says. The visible suffix uses
 	// the counts line's separator; the announced one spells it out, because "·"
 	// is not read aloud.
 	const statusLabel = m.status ? RUNG_LABELS[m.status] : "Ask";
-	const visibleLabel = alsoAsked ? `${statusLabel} · asked` : statusLabel;
+	const visibleLabel = qualifier
+		? `${statusLabel} · ${qualifier}`
+		: statusLabel;
 	const statusAnnouncement = `${m.name} status: ${statusLabel}${
-		m.assumed ? " — assumed, role confirmed" : ""
-	}${alsoAsked ? ", already asked" : ""}`;
+		m.assumed ? ` — ${ASSUMED_WORD}, role confirmed` : ""
+	}${alsoAsked ? `, already ${ASKED_WORD}` : ""}`;
 
 	return (
 		<li className="flex flex-col gap-1.5 border-b border-border/60 py-2.5 last:border-b-0">
@@ -98,7 +127,13 @@ function AttendanceRow({
 			 *  costs it almost nothing, which is the whole reason the code replaced
 			 *  the full role name here. */}
 			<div className="flex items-start gap-1.5">
-				<span className="min-w-0 flex-1 break-words text-sm font-medium">
+				{/* `break-words` wraps an unbroken name rather than cutting it off;
+				 *  `line-clamp-2` is the other half of spec §3 and the half that was never
+				 *  implemented. `name` is unbounded user data, so with neither a truncation
+				 *  nor a clamp one member can grow their row without limit and push the
+				 *  rest of a 40-row rail off screen. Two lines, not one: `line-clamp-1`
+				 *  would reintroduce the single-line cutoff `truncate` was removed to fix. */}
+				<span className="line-clamp-2 min-w-0 flex-1 break-words text-sm font-medium">
 					{m.name}
 				</span>
 				{/* No `mt-0.5` on the badge below: under `items-start` its inner text
@@ -107,16 +142,14 @@ function AttendanceRow({
 				 *  `text-sm`), so nudging it down by 2px put it ~3px BELOW the name's
 				 *  optical line. `items-start` is the whole mechanism. */}
 				{m.role ? (
-					<Badge
-						variant={m.assumed ? "default" : "secondary"}
-						className="shrink-0"
-					>
-						{/* An ICON, not a "✓" character, for two reasons that are about
-						 *  rendering rather than tests: `badgeVariants` styles a direct-child
-						 *  svg (`[&>svg]:size-3`), which a text glyph gets none of, and
-						 *  `aria-hidden` keeps it out of the accessible name — a literal
-						 *  would be announced ("check mark") beside the role it decorates. */}
-						{m.assumed ? <Check aria-hidden /> : null}
+					/* ONE AXIS: this badge means "holds a role on this meeting", and reads
+					 * the same for everyone who does. It carried a second axis until the fix
+					 * above — `variant={m.assumed ? "default" : "secondary"}` plus a Check —
+					 * and that axis was wrong on its own terms as well as backwards: on a
+					 * DOUBLE-BOOKED member `confirmed` is the OR across their slots
+					 * (`buildPanelRoleMap`), so the badge rendered "TD ✓" against a slot they
+					 * had not confirmed. Deleting the second axis closes that too. */
+					<Badge variant="secondary" className="shrink-0">
 						{/* The CODE is decorative to a screen reader — it hears the full
 						 *  role from the sr-only span beside it, so the accessible name is
 						 *  "Toastmaster" rather than "TD".
@@ -133,10 +166,17 @@ function AttendanceRow({
 					</Badge>
 				) : null}
 			</div>
-			{/* Action line. One right-aligned cluster, so every row in the rail
-			 *  shares one right edge — this is the alignment fix. Nothing is
-			 *  vertically centred across a variable-height block any more. */}
-			<div className="flex items-center justify-end gap-1.5">
+			{/* Action line. Right-aligned, so every row in the rail shares one right
+			 *  edge — this is the alignment fix. Nothing is vertically centred across a
+			 *  variable-height block any more.
+			 *
+			 *  `gap-3`, not `gap-1.5`. The 6px inside `NudgeButtons` is justified by
+			 *  WhatsApp and Email being the same action on the same member — both fire
+			 *  `onContacted` — so a fat-finger between them costs nothing. The status
+			 *  control is neither: a slip from it onto Email writes `reached_out` AND
+			 *  throws the tablet into a mail client mid-meeting. The extra 6px is ~2%
+			 *  of a 340px rail. */}
+			<div className="flex items-center justify-end gap-3">
 				<NudgeButtons
 					{...nudgeMode}
 					iconOnly
@@ -163,15 +203,38 @@ function AttendanceRow({
 						 *  rides along with the muting because the `outline` variant's
 						 *  `hover:text-accent-foreground` is a class+pseudo-class (0-2-0)
 						 *  and beats a bare `text-muted-foreground` (0-1-0) on hover. */}
+						{/* A FIXED TRACK, and `justify-between` inside it, so the action column
+						 *  has TWO hard vertical edges. `justify-end` on the line above flushes
+						 *  only the RIGHT one, and this trigger is `whitespace-nowrap` with a
+						 *  label running from "Ask" to "Coming · assumed" — so everything to its
+						 *  left was pushed by that delta and the two icon buttons, the repeated
+						 *  identical elements the eye tracks down a 40-row column, formed a
+						 *  ragged edge jittering up to ~90px row to row. That traded a crooked
+						 *  status column for a crooked action column.
+						 *
+						 *  `w-44` (11rem = 176px) is MEASURED against the widest label after the
+						 *  badge fix above, not guessed:
+						 *
+						 *    "Coming · assumed" at 14px/500   Manrope       119.86px
+						 *                                     DejaVu Sans   130.16px
+						 *        (the widest common substitute while the webfont swaps in)
+						 *    sm button chrome: px-2.5 (10+10) + border (1+1)
+						 *                      + gap-1.5 (6) + size-3.5 chevron (14)  =  42px
+						 *    worst intrinsic width            130.16 + 42 = 172.16px
+						 *
+						 *  176px clears that by 3.8px and clears the shipped Manrope by 14.1px.
+						 *  And it fits: the rail's usable width is ~292px, the icon cluster is
+						 *  32 + 6 + 32 = 70px, and the 12px `gap-3` above leaves 210px for this
+						 *  track — 34px spare. */}
 						<Button
 							variant="outline"
 							size="sm"
 							disabled={locked || pending}
-							className={
-								m.assumed
-									? "text-muted-foreground hover:text-muted-foreground"
-									: undefined
-							}
+							className={cn(
+								"w-44 justify-between",
+								m.assumed &&
+									"text-muted-foreground hover:text-muted-foreground",
+							)}
 						>
 							{/* ONE sr-only string carries the whole name, with the visible
 							 *  label `aria-hidden` beside it — the same shape as the badge
@@ -194,7 +257,14 @@ function AttendanceRow({
 							 *  environments. */}
 							<span className="sr-only">{statusAnnouncement}</span>
 							<span aria-hidden>{visibleLabel}</span>
-							<ChevronDown className="size-3.5 opacity-60" aria-hidden />
+							{/* No `opacity-60`. The glyph inherits `currentColor`, which on an
+							 *  assumed row is `text-muted-foreground` (`--sea-ink-soft` #416166);
+							 *  composited at 60% over the outline button's `bg-background`
+							 *  (`--foam` #f3faf5) that is 2.66:1, under the 3:1 WCAG 1.4.11 requires
+							 *  of a non-text UI indicator — and 3.69:1 even on answered rows. The
+							 *  muted colour is already doing the de-emphasis; multiplying the two is
+							 *  what crossed the threshold. Without it: ~4.4:1 muted, ~6.7:1 normal. */}
+							<ChevronDown className="size-3.5" aria-hidden />
 						</Button>
 					</DropdownMenuTrigger>
 					{/* On an ASSUMED row neither "Asked" nor "No answer" can MOVE the
@@ -296,18 +366,27 @@ export function MeetingAttendancePanel({
 	const [expanded, setExpanded] = useState(false);
 	const showRows = expanded || isDesktop;
 
+	// Hoisted out of the `roster.map` below, where it was a `plan.find` per row —
+	// the one super-linear term on this render path, and recomputed every render:
+	// 0.015ms at n=40, 2.535ms at n=1000, 50.420ms at n=5000. Clean quadratic.
+	// Not a defect at club scale; it is simply the only line here that does not
+	// scale. Same idiom `buildPlanPanel` reaches for one call later.
+	const planByMember = new Map(plan.map((p) => [p.memberId, p.status]));
+
 	// Apply the override BEFORE calling buildPlanPanel, so the sort and the
 	// counts reflect the optimistic state too — otherwise a chip jumps to a new
 	// bucket a beat after it is tapped, and the counts line disagrees with the
 	// chips. `!== undefined` (not `??`) because a key present with value `null`
-	// means "optimistically cleared", distinct from the key being absent.
+	// means "optimistically cleared", distinct from the key being absent — and
+	// collapsing it into `??` alongside the Map above would silently turn an
+	// optimistic CLEAR back into the server's old rung.
 	const effectivePlan = roster
 		.map((m) => ({
 			memberId: m.id,
 			status:
 				rungOverride[m.id] !== undefined
 					? rungOverride[m.id]
-					: (plan.find((p) => p.memberId === m.id)?.status ?? null),
+					: (planByMember.get(m.id) ?? null),
 		}))
 		.filter(
 			(p): p is { memberId: string; status: PlanStatus } => p.status !== null,
