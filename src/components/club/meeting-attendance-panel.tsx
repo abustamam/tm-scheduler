@@ -160,13 +160,23 @@ function AttendanceRow({
 						>
 							{/* ONE sr-only string carries the whole name, with the visible
 							 *  label `aria-hidden` beside it — the same shape as the badge
-							 *  above, for the same reason. Splitting the name across sibling
-							 *  spans does not work: the accessible name is the concatenation
-							 *  of each child's TRIMMED text with no separator inserted, so
-							 *  "…status:" + "Ask" announced as "status:Ask" and no amount of
-							 *  trailing whitespace survives. Both strings derive from
+							 *  above, for the same reason. Both strings derive from
 							 *  `statusLabel`, so what is shown and what is announced cannot
-							 *  drift apart. */}
+							 *  drift apart.
+							 *
+							 *  Why one span rather than a sr-only prefix beside a plain
+							 *  label: the separator between sibling children is
+							 *  DISPLAY-DEPENDENT. accname leaves it to the implementation
+							 *  (w3c/accname#3); `dom-accessibility-api` inserts " " only when
+							 *  a child's computed `display` is not `inline`
+							 *  (`accessible-name-and-description.js:250-253`). `sr-only` sets
+							 *  `position: absolute`, which blockifies (CSS Display 3 §2.7),
+							 *  so a split name would gain its space in a real browser but
+							 *  NOT under jsdom, where no stylesheet loads and the span stays
+							 *  `inline` — announcing "status:Ask" in the harness while
+							 *  reading correctly in production. One span never splits the
+							 *  string, so it is indifferent to that rule in both
+							 *  environments. */}
 							<span className="sr-only">{statusAnnouncement}</span>
 							<span aria-hidden>{statusLabel}</span>
 							<ChevronDown className="size-3.5 opacity-60" aria-hidden />
@@ -358,8 +368,19 @@ export function MeetingAttendancePanel({
 				<CardContent>
 					{/* A LIST, not forty sibling divs: without it an AT user gets no set
 					 *  size and no position within it, on the one surface whose job is
-					 *  "how many of us are there and where am I in the chase". */}
-					<ul>
+					 *  "how many of us are there and where am I in the chase".
+					 *
+					 *  `role="list"` is NOT redundant with the implicit one. Tailwind's
+					 *  preflight sets `list-style: none` on every `ul`, and WebKit drops
+					 *  the implicit list role when list styling is removed — so on the
+					 *  iPad this rail is actually run from, VoiceOver would announce no
+					 *  list at all, losing the set size above at exactly the place it was
+					 *  added to help. Both suppressions below are that same point: the
+					 *  role is redundant to a STATIC reader and load-bearing to a real
+					 *  one. */}
+					{/* biome-ignore lint/a11y/noRedundantRoles: not redundant in practice — preflight's `list-style: none` makes WebKit drop the implicit role */}
+					{/* biome-ignore lint/a11y/useSemanticElements: this already IS a <ul>; the rule misfires when the explicit role matches the element */}
+					<ul role="list">
 						{rows.map((m) => (
 							<AttendanceRow
 								key={m.id}

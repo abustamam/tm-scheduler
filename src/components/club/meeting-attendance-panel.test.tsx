@@ -37,12 +37,17 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 	afterEach(() => cleanup());
 
 	it("lists the whole roster with its counts line", () => {
-		const { getByText } = renderPanel({
+		const { getByText, getAllByRole } = renderPanel({
 			plan: [{ memberId: "m1", status: "coming" as const }],
 		});
 		expect(getByText("Ayesha Khan")).toBeTruthy();
 		expect(getByText("Bo Lin")).toBeTruthy();
 		expect(getByText("1 coming · 1 no answer")).toBeTruthy();
+		// A real LIST, so an AT user gets a set size and a position in it. Asserted
+		// by ROLE rather than by tag: reverting the `<ul>`/`<li>` to sibling divs
+		// otherwise leaves the whole suite green, and the role is also what the
+		// explicit `role="list"` on the wrapper exists to preserve on WebKit.
+		expect(getAllByRole("listitem")).toHaveLength(2);
 	});
 
 	it("sets a rung through the row's dropdown", async () => {
@@ -239,16 +244,27 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		expect(decodeURIComponent(href)).toContain("are you able to make our");
 	});
 
-	it("marks the member contacted when the officer opens a draft", () => {
+	it("marks the member contacted when a draft is opened, unless locked", () => {
 		// Tapping a draft is a real WRITE (no answer → reached_out) and it is the
 		// only rung the officer never sets by hand. Severing the wiring
 		// (`onContacted={() => {}}`) kept 17/17 green — `renderPanel` supplies the
 		// spy on every render and nothing ever asserted against it.
-		const { props, getByRole } = renderPanel();
+		const unlocked = renderPanel();
 		fireEvent.click(
-			getByRole("link", { name: /Message Ayesha Khan on WhatsApp/i }),
+			unlocked.getByRole("link", { name: /Message Ayesha Khan on WhatsApp/i }),
 		);
-		expect(props.onContacted).toHaveBeenCalledWith("m1");
+		expect(unlocked.props.onContacted).toHaveBeenCalledWith("m1");
+		cleanup();
+
+		// BOTH arms. Deleting the guard's `if (locked) return;` left the suite
+		// green too, so the nine-line comment defending it described behaviour
+		// nothing observed. The draft still OPENS on a locked meeting — the link is
+		// never disabled — a locked meeting simply records nothing against it.
+		const locked = renderPanel({ locked: true });
+		fireEvent.click(
+			locked.getByRole("link", { name: /Message Ayesha Khan on WhatsApp/i }),
+		);
+		expect(locked.props.onContacted).not.toHaveBeenCalled();
 	});
 
 	it("reads an ASSUMED Coming differently from an answered one", () => {
@@ -307,7 +323,7 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		// ADDED beyond the plan, on the strength of its own mutation check:
 		// flattening `variant` to a constant and deleting the tick left all 15
 		// other tests green, so the VISUAL half of the assumed/answered
-		// distinction was pinned by nothing. The status button's `aria-label`
+		// distinction was pinned by nothing. The status button's accessible name
 		// carries that distinction for a screen reader; nothing carried it for
 		// the eye. Both directions in one render, because a one-sided assertion
 		// passes just as well for a badge that is always `default`.
