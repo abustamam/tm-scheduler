@@ -155,5 +155,15 @@ describe("NudgeButtons", () => {
 			screen.getByRole("link", { name: "Message Jane on WhatsApp" }),
 		).toBeTruthy();
 		expect(screen.getByRole("link", { name: "Email Jane" })).toBeTruthy();
+
+		// ATTRIBUTE-level, deliberately. The role query above passes on `title`
+		// alone — accname falls back to it when the content is empty and the icon
+		// is `aria-hidden` — so on its own it cannot tell the two apart. `title`
+		// is not announced by touch screen readers, and this rail runs on a
+		// tablet, so the `aria-label` is the one that has to be there.
+		const wa = screen.getByRole("link", { name: "Message Jane on WhatsApp" });
+		expect(wa.getAttribute("aria-label")).toBe("Message Jane on WhatsApp");
+		const mail = screen.getByRole("link", { name: "Email Jane" });
+		expect(mail.getAttribute("aria-label")).toBe("Email Jane");
 	});
 });
