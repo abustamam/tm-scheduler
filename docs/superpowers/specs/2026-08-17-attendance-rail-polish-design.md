@@ -69,8 +69,24 @@ Consequences:
 `roleAbbrev` / `buildShortCodes` (`src/lib/agenda.ts`) already produce the season grid's codes,
 already dedupe collisions, and already number repeats. They are pure and client-safe, and the
 meeting payload's slots already carry `roleDefinitionId` and `slotIndex`, so the route calls
-`buildShortCodes(slots)` directly. **No payload change, no server work, and the rail agrees with
-the sign-up sheet by construction rather than by a second hand-maintained list.**
+`buildShortCodes(slots)` directly. **No payload change and no server work**, and the rail speaks the
+same abbreviation VOCABULARY as the sign-up sheet rather than a second hand-maintained list.
+
+**Corrected during implementation — the stronger claim this section originally made was false.**
+It read "the rail agrees with the sign-up sheet by construction". It does not, and cannot this way:
+`buildShortCodes` is a function of the whole ROW SET, not of a slot. `repeated = countByDef[defId] > 1`
+decides `SP` vs `SP1`, and the `#2` collision suffix depends on which colliding names are in the
+input. `season-grid-logic.ts` feeds it the distinct `(defId, slotIndex)` union across a WINDOW of
+meetings; this route feeds it one meeting's slots. So a light week with one speaker renders `SP`
+on the rail beside `SP1` on the sheet — and because `club.$clubId.index.tsx` makes that window
+user-selectable (`count` = 4/8/all), the sheet's own codes change when the reader toggles `?count=`.
+A per-meeting derivation cannot agree with a window-dependent one by construction.
+
+Kept as-is deliberately, rather than "fixed" by querying a window from the meeting route: the
+per-meeting numbering is the meaningful one on a meeting page — `SP` is correct when this meeting
+has one speaker — and the badge always carries the full role name via `title` and an sr-only span,
+so nothing is lost when the suffixes differ. What changed is the claim, in all three places it was
+written down.
 
 Yields `TD`, `GE`, `TTM`, `SP1`/`SP2`, `GRM`, `AC`, `TMR`.
 

@@ -14,6 +14,18 @@ the shared `NudgeButtons`, and six lines of route wiring that reuse the season g
 **Tech Stack:** React 19 + TanStack Start, TypeScript strict, Tailwind v4 + shadcn/ui, Vitest +
 Testing Library, Biome.
 
+**Lint, every task.** The code blocks below are hand-written and are NOT Biome-formatted — Task 1
+shipped two `check` violations (an unsorted `import type`, an unexpanded object literal) by
+pasting them verbatim, and CI runs the gate. Before committing each task, run it SCOPED to the
+files you touched:
+
+```bash
+bunx biome check --write <the files this task changed>
+bunx biome check --diagnostic-level=error <the files this task changed>
+```
+
+Scoped, not `bun run fix` — that writes the whole tree and sweeps in unrelated files.
+
 **Spec:** `docs/superpowers/specs/2026-08-17-attendance-rail-polish-design.md`
 
 **Worktree:** `/media/rasheed-bustamam/Extra/coding/tm-attendance-rail`, branch
@@ -227,7 +239,9 @@ with:
 export interface PanelRole {
 	/** The sign-up sheet's short code — "TD", "GE", "SP1". Produced by
 	 *  `buildShortCodes` (`#/lib/agenda`), the season grid's own function, so the
-	 *  two surfaces cannot drift into two vocabularies for one role. */
+	 *  two surfaces share one abbreviation vocabulary. NOT one numbering: the
+	 *  grid feeds `buildShortCodes` a user-selectable WINDOW of meetings and this
+	 *  route feeds one meeting's slots, so the "SP1"/"#2" suffixes can differ. */
 	code: string;
 	/** The role's BASE name, for the outreach draft ("you're our Toastmaster")
 	 *  and for the badge's tooltip. Deliberately NOT the numbered label: "you're
@@ -510,7 +524,8 @@ REPLACE the existing test `"shows the role a member holds"` (lines 91–94) with
 ```tsx
 	it("shows the sign-up sheet's short code, with the full role as its tooltip", () => {
 		// The code is the season grid's, produced by the same `buildShortCodes`, so
-		// the two surfaces cannot drift into two vocabularies for one role. The
+		// the two surfaces share one abbreviation vocabulary (not one numbering —
+		// the suffix is derived per-meeting here, per-window there). The
 		// full name rides along as `title` because the code alone is not readable
 		// to someone who has not learnt the vocabulary yet.
 		const { getByText } = renderPanel({
@@ -721,10 +736,13 @@ function AttendanceRow({
 							<ChevronDown className="size-3.5 opacity-60" aria-hidden />
 						</Button>
 					</DropdownMenuTrigger>
-					{/* "No answer" on an ASSUMED row is a no-op by design: there is no
-					 *  stored row to clear, and the confirmed slot still stands. To say
-					 *  they are out, the officer picks "Not coming", which is an
-					 *  explicit answer and outranks the inference. */}
+					{/* "No answer" on an ASSUMED row does not MOVE the row — the
+					 *  confirmed slot still stands — but it is not a no-op. If the
+					 *  officer already messaged them, `m.storedStatus` is
+					 *  `reached_out`, and picking this DELETES that row and writes an
+					 *  activity entry while nothing on screen changes. To say they are
+					 *  out, the officer picks "Not coming", which is an explicit answer
+					 *  and outranks the inference. */}
 					<DropdownMenuContent align="end">
 						{MENU.map((item) => (
 							<DropdownMenuItem
@@ -877,9 +895,11 @@ Directly AFTER the existing `roleByMemberId` loop (currently ending line 570), i
 	// becomes everyone's problem.
 	//
 	// `buildShortCodes` is the season grid's own function — reusing it is what
-	// makes the rail's codes and the sign-up sheet's agree by construction rather
-	// than by a second hand-maintained list. It already dedupes collisions and
-	// numbers repeats ("SP1"/"SP2").
+	// gives the rail the sign-up sheet's abbreviation VOCABULARY rather than a
+	// second hand-maintained list. It does NOT guarantee the same numeric suffix:
+	// `buildShortCodes` is a function of the whole row set, and the grid feeds it
+	// a user-selectable window of meetings (`?count=`) while this feeds it one
+	// meeting's slots.
 	const shortCodes = buildShortCodes(
 		slots.map((s) => ({
 			roleDefinitionId: s.roleDefinitionId,
@@ -930,7 +950,8 @@ git commit -m "feat(attendance): wire the rail to the sign-up sheet's role codes
 
 buildShortCodes is the season grid's own function and the meeting payload
 already carries roleDefinitionId and slotIndex, so the rail's codes agree with
-the sign-up sheet by construction rather than by a second list. The route
+the sign-up sheet's abbreviation vocabulary rather than a second list — though
+not its numbering, which is row-set dependent on both sides. The route
 cannot mount in jsdom, so the computed prop gets a comment-blind source guard
 (#319's shape).
 
