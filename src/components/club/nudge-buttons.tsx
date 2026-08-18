@@ -98,6 +98,15 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 
 	if (!mounted) return null;
 
+	// `name`, not `preferredName`: the rail row this label is announced
+	// against displays the full `name`, so the accessible label matches what
+	// the officer sees on screen. The WhatsApp label also says it opens in a
+	// new tab, matching `WhatsAppPhoneLink` (#37) — a screen reader gives no
+	// other signal that `target="_blank"` is about to leave the page.
+	// `mailto:` does not open a tab, so `mailLabel` says nothing about it.
+	const waLabel = `Message ${name} on WhatsApp, opens in a new tab`;
+	const mailLabel = `Email ${name}`;
+
 	return (
 		<div className="flex items-center gap-1.5">
 			{nudge.whatsappUrl ? (
@@ -107,12 +116,8 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 						target="_blank"
 						rel="noopener noreferrer"
 						onClick={onContacted}
-						{...(iconOnly
-							? {
-									"aria-label": `Message ${name} on WhatsApp`,
-									title: `Message ${name} on WhatsApp`,
-								}
-							: {})}
+						aria-label={iconOnly ? waLabel : undefined}
+						title={iconOnly ? waLabel : undefined}
 					>
 						<MessageCircle className="size-4" aria-hidden />
 						{iconOnly ? null : "WhatsApp"}
@@ -124,9 +129,8 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 					<a
 						href={nudge.mailtoUrl}
 						onClick={onContacted}
-						{...(iconOnly
-							? { "aria-label": `Email ${name}`, title: `Email ${name}` }
-							: {})}
+						aria-label={iconOnly ? mailLabel : undefined}
+						title={iconOnly ? mailLabel : undefined}
 					>
 						<Mail className="size-4" aria-hidden />
 						{iconOnly ? null : "Email"}

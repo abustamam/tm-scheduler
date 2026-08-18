@@ -146,24 +146,47 @@ describe("NudgeButtons", () => {
 		// file query `/whatsapp/i`, which matches BOTH the label and the new
 		// aria-label — so those cannot catch a missing accessible name, and these
 		// assert the exact strings instead.
+		const waLabel = "Message Jane on WhatsApp, opens in a new tab";
+		const mailLabel = "Email Jane";
 		render(
 			<NudgeButtons {...base} iconOnly phone="14155552671" email="j@x.io" />,
 		);
 		expect(screen.queryByText("WhatsApp")).toBeNull();
 		expect(screen.queryByText("Email")).toBeNull();
-		expect(
-			screen.getByRole("link", { name: "Message Jane on WhatsApp" }),
-		).toBeTruthy();
-		expect(screen.getByRole("link", { name: "Email Jane" })).toBeTruthy();
+		expect(screen.getByRole("link", { name: waLabel })).toBeTruthy();
+		expect(screen.getByRole("link", { name: mailLabel })).toBeTruthy();
 
 		// ATTRIBUTE-level, deliberately. The role query above passes on `title`
 		// alone — accname falls back to it when the content is empty and the icon
 		// is `aria-hidden` — so on its own it cannot tell the two apart. `title`
 		// is not announced by touch screen readers, and this rail runs on a
 		// tablet, so the `aria-label` is the one that has to be there.
-		const wa = screen.getByRole("link", { name: "Message Jane on WhatsApp" });
-		expect(wa.getAttribute("aria-label")).toBe("Message Jane on WhatsApp");
-		const mail = screen.getByRole("link", { name: "Email Jane" });
-		expect(mail.getAttribute("aria-label")).toBe("Email Jane");
+		const wa = screen.getByRole("link", { name: waLabel });
+		expect(wa.getAttribute("aria-label")).toBe(waLabel);
+		const mail = screen.getByRole("link", { name: mailLabel });
+		expect(mail.getAttribute("aria-label")).toBe(mailLabel);
+
+		// `title` is a SEPARATE attribute from `aria-label` — accname reads
+		// content-then-aria-label-then-title, so nothing above proves `title` is
+		// still set once `aria-label` is present. Pin it independently: the
+		// comment two lines up spends five lines contrasting the two, which
+		// would otherwise mislead the next reader into thinking `title` is
+		// covered by the role query.
+		expect(wa.getAttribute("title")).toBe(waLabel);
+		expect(mail.getAttribute("title")).toBe(mailLabel);
+
+		// `icon-sm` (size-8) is the flag's REASON TO EXIST — dropping the text
+		// saves ~40px, dropping `sm`'s padding saves the rest. Deleting the size
+		// change left every other assertion green, so this is the only thing
+		// standing between the feature and a silent revert.
+		expect(wa.className).toContain("size-8");
+		expect(mail.className).toContain("size-8");
+	});
+
+	it("still says so when there is no contact, iconOnly or not", () => {
+		// The widest thing this component renders, and the one branch the flag
+		// deliberately leaves alone. Nothing else observes that decision.
+		render(<NudgeButtons {...base} iconOnly phone={null} email={null} />);
+		expect(screen.getByText(/no contact on file/i)).toBeTruthy();
 	});
 });
