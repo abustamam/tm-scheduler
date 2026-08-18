@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronUp } from "lucide-react";
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { AttendanceGuestsGroup } from "#/components/club/attendance-guests-group";
 import { NudgeButtons } from "#/components/club/nudge-buttons";
 import {
@@ -329,53 +329,32 @@ function AttendanceRow({
 	);
 }
 
-/** Roll mode's status chip (spec D2/D3). A SUGGESTION (from the plan, never a
- *  record — `buildRollPanel` guarantees the two are mutually exclusive)
- *  renders dashed with a trailing "?" and commits in ONE tap: it must NOT open
- *  a menu, or roll call costs two taps per member in a room. A RECORDED status
- *  renders solid, like plan mode's rung, and opens a menu to change it. */
-function RollChip({
-	row,
-	locked,
-	pending,
+/** The three attendance statuses as a menu, with whatever trigger the caller
+ *  hands it. ONE copy, because both roll chip shapes now open it: the recorded
+ *  chip is its own trigger, and a suggestion row's trigger is the small chevron
+ *  button beside its one-tap commit (see `RollChip`). Duplicating the items was
+ *  the alternative, and the items carry the `busy` gate below — a gate applied to
+ *  one copy and not the other is invisible from the outside.
+ *
+ *  The TRIGGER is passed in rather than described by props, so each branch keeps
+ *  its own size, classes and accessible name without this component growing a
+ *  flag for each. */
+function RollStatusMenu({
+	memberId,
 	busy,
 	onSetAttendance,
+	children,
 }: {
-	row: RollRow;
-	locked: boolean;
-	pending: boolean;
-	/** GLOBAL in-flight, not this row's — see the `busy` prop's doc below. */
+	memberId: string;
+	/** GLOBAL in-flight, not this row's — see the panel's `busy` prop doc. */
 	busy: boolean;
 	onSetAttendance: (memberId: string, status: AttendanceStatus) => void;
+	/** The trigger. Rendered `asChild`, so it must be a single element. */
+	children: ReactNode;
 }) {
-	if (row.status === null && row.suggestion) {
-		const suggestion = row.suggestion;
-		return (
-			<Button
-				variant="outline"
-				size="sm"
-				className="border-dashed"
-				disabled={locked || pending || busy}
-				aria-label={`${row.name} status`}
-				onClick={() => onSetAttendance(row.id, suggestion)}
-			>
-				{ROLL_LABELS[suggestion]}?
-			</Button>
-		);
-	}
-
 	return (
 		<DropdownMenu>
-			<DropdownMenuTrigger asChild>
-				<Button
-					variant="outline"
-					size="sm"
-					disabled={locked || pending || busy}
-					aria-label={`${row.name} status`}
-				>
-					{row.status ? ROLL_LABELS[row.status] : "—"}
-				</Button>
-			</DropdownMenuTrigger>
+			<DropdownMenuTrigger asChild>{children}</DropdownMenuTrigger>
 			<DropdownMenuContent align="end">
 				{ROLL_MENU.map((item) => (
 					<DropdownMenuItem
@@ -396,13 +375,125 @@ function RollChip({
 						 *  ignores the lifecycle lock, and `pending` is this row's own
 						 *  in-flight write, which already implies `busy`. */
 						disabled={busy}
-						onSelect={() => onSetAttendance(row.id, item.status)}
+						onSelect={() => onSetAttendance(memberId, item.status)}
 					>
 						{item.label}
 					</DropdownMenuItem>
 				))}
 			</DropdownMenuContent>
 		</DropdownMenu>
+	);
+}
+
+/** Roll mode's status chip (spec D2/D3). A SUGGESTION (from the plan, never a
+ *  record — `buildRollPanel` guarantees the two are mutually exclusive)
+ *  renders dashed with a trailing "?" and commits in ONE tap. A RECORDED status
+ *  renders solid, like plan mode's rung. BOTH shapes open the same menu.
+ *
+ *  That last sentence is the fix, and it is a fix to the SPEC, which said the
+ *  suggestion "commits in ONE tap and must NOT open a menu" and was enforced
+ *  through four review rounds. It is right about the common case and wrong about
+ *  what roll call is FOR: roll call records the EXCEPTIONS — "Jane said she was
+ *  coming and is not in the room" — and a suggestion row offered the officer
+ *  exactly one first action, `present`. Every member who answered "coming", which
+ *  on a chased roster is most of them, was therefore the WORST-supported case:
+ *  the only route to `absent` was to tap "Present?", write a false `present` into
+ *  `meeting_attendance` (the table the minutes PDF and the emailed minutes
+ *  print), wait out the round trip, then open the now-solid chip's menu and pick
+ *  the truth. Two writes, the first one a falsehood. The surface roll mode
+ *  replaced (`AttendanceSection`) mapped all three statuses and cost one tap for
+ *  any outcome.
+ *
+ *  So the one-tap commit STAYS — it is the thing worth keeping, it was just never
+ *  the only thing needed — and the menu sits beside it. The common case is still
+ *  one tap; the exception is two (open, pick), the same cost as a recorded row
+ *  and as plan mode. Do NOT collapse the pair back into a single menu-only
+ *  trigger. */
+function RollChip({
+	row,
+	locked,
+	pending,
+	busy,
+	onSetAttendance,
+}: {
+	row: RollRow;
+	locked: boolean;
+	pending: boolean;
+	/** GLOBAL in-flight, not this row's — see the `busy` prop's doc below. */
+	busy: boolean;
+	onSetAttendance: (memberId: string, status: AttendanceStatus) => void;
+}) {
+	// One expression for every control on the row. It was written out twice and
+	// would now be three times, which is three places for a gate to go missing —
+	// and `disables EVERY control while a write is in flight` is a fix this branch
+	// already had to make once.
+	const disabled = locked || pending || busy;
+
+	if (row.status === null && row.suggestion) {
+		const suggestion = row.suggestion;
+		return (
+			// The SAME `w-44` track a recorded row's trigger fills (the 176px is
+			// measured — see `AttendanceRow`'s trigger), so the two row shapes share
+			// the rail's one right edge and its one left edge. Split 32px for the
+			// chevron trigger, 4px of `gap-1`, and `flex-1` (140px) for the commit,
+			// whose widest label needs ~104px ("Excused?" plus the sm button's 26px of
+			// chrome). Sizing the pair inside the existing track rather than widening
+			// it is what keeps the icon cluster to its left from moving.
+			<div className="flex w-44 items-center gap-1">
+				<Button
+					variant="outline"
+					size="sm"
+					className="flex-1 border-dashed"
+					disabled={disabled}
+					aria-label={`${row.name} status`}
+					onClick={() => onSetAttendance(row.id, suggestion)}
+				>
+					{ROLL_LABELS[suggestion]}?
+				</Button>
+				<RollStatusMenu
+					memberId={row.id}
+					busy={busy}
+					onSetAttendance={onSetAttendance}
+				>
+					<Button
+						variant="outline"
+						size="icon-sm"
+						className="shrink-0"
+						disabled={disabled}
+					>
+						{/* The accessible name is COMPOSED FROM CONTENT — an `sr-only`
+						 *  span — never an `aria-label`, for the reason set out on
+						 *  `AttendanceRow`'s trigger. There is no visible text to
+						 *  override here, so this is the content. It deliberately does
+						 *  NOT contain the word "status": the one-tap commit beside it is
+						 *  this row's status control, and two controls whose names both
+						 *  read "<name> status" is exactly the ambiguity that made the
+						 *  old single label a hazard. */}
+						<span className="sr-only">
+							Record a different attendance for {row.name}
+						</span>
+						<ChevronDown className="size-3.5" aria-hidden />
+					</Button>
+				</RollStatusMenu>
+			</div>
+		);
+	}
+
+	return (
+		<RollStatusMenu
+			memberId={row.id}
+			busy={busy}
+			onSetAttendance={onSetAttendance}
+		>
+			<Button
+				variant="outline"
+				size="sm"
+				disabled={disabled}
+				aria-label={`${row.name} status`}
+			>
+				{row.status ? ROLL_LABELS[row.status] : "—"}
+			</Button>
+		</RollStatusMenu>
 	);
 }
 

@@ -841,6 +841,74 @@ describe("roll mode", () => {
 		expect(onSetAttendance).toHaveBeenCalledWith("m-abe", "present");
 	});
 
+	it("F1: marks a suggestion row ABSENT in one menu interaction, with no false `present` first", async () => {
+		// THE reason this round exists, and an assertion that was previously
+		// unrepresentable — which is why four review rounds passed over the bug.
+		//
+		// Roll call exists to record the EXCEPTIONS: a member who answered "coming"
+		// and is not in the room. That was the WORST-supported path here. Abe's row
+		// is the dashed one-tap suggestion, and it was the row's only control, so
+		// the only route to `absent` was tap "Present?" (a false row in
+		// `meeting_attendance`, the table the PDF and the emailed minutes print),
+		// wait out the round trip, then open the now-solid chip and pick the truth.
+		const onSetAttendance = vi.fn();
+		const { getByRole, findByRole } = render(
+			<MeetingAttendancePanel
+				{...rollProps}
+				onSetAttendance={onSetAttendance}
+			/>,
+		);
+		// Radix opens on pointerdown, not a bare click — see the notes above.
+		await userEvent.click(
+			getByRole("button", {
+				name: /Record a different attendance for Abe Nkemelu/i,
+			}),
+		);
+		fireEvent.click(await findByRole("menuitem", { name: "Absent" }));
+		// EXACTLY ONCE is the load-bearing half. `toHaveBeenCalledWith` alone passes
+		// for the two-write path this test exists to forbid — a `present` followed
+		// by an `absent` satisfies it, and that is precisely what shipped.
+		expect(onSetAttendance).toHaveBeenCalledTimes(1);
+		expect(onSetAttendance).toHaveBeenCalledWith("m-abe", "absent");
+	});
+
+	it("F1: keeps the one-tap commit, rather than replacing it with the menu", () => {
+		// The other half of the fix, and the direction a later "simplification"
+		// would break: the menu is ADDED beside the dashed commit, not substituted
+		// for it. One tap for the common case is what makes 40 names workable in a
+		// room, so the commit must still fire on the FIRST tap and must not open
+		// anything. The sibling test above asserts the write; this one asserts no
+		// menu appeared, which is the part a menu-only rewrite would fail.
+		const onSetAttendance = vi.fn();
+		const { getByRole, queryByRole } = render(
+			<MeetingAttendancePanel
+				{...rollProps}
+				onSetAttendance={onSetAttendance}
+			/>,
+		);
+		fireEvent.click(getByRole("button", { name: /Abe Nkemelu status/i }));
+		expect(onSetAttendance).toHaveBeenCalledTimes(1);
+		expect(onSetAttendance).toHaveBeenCalledWith("m-abe", "present");
+		expect(queryByRole("menu")).toBeNull();
+	});
+
+	it("F1: gates the suggestion row's new menu trigger on the same in-flight signal", () => {
+		// The suggestion row is now TWO controls, and the C1 test below enumerates
+		// the ones that existed when it was written. A new control that is not on
+		// `busy` hands its tap to `mutate()`'s silent refusal — the exact hole C1
+		// was written to close, reopened by the fix beside it. Both directions, so a
+		// permanently-disabled trigger cannot pass.
+		const trigger = (q: ReturnType<typeof render>) =>
+			q.getByRole("button", {
+				name: /Record a different attendance for Abe Nkemelu/i,
+			});
+		const busy = render(<MeetingAttendancePanel {...rollProps} busy={true} />);
+		expect(trigger(busy).hasAttribute("disabled")).toBe(true);
+		busy.unmount();
+		const idle = render(<MeetingAttendancePanel {...rollProps} busy={false} />);
+		expect(trigger(idle).hasAttribute("disabled")).toBe(false);
+	});
+
 	it("offers the attendance statuses, not the plan rungs", async () => {
 		const { getByRole, findByRole } = render(
 			<MeetingAttendancePanel
