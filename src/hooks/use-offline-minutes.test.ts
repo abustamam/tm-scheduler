@@ -13,8 +13,22 @@ import { ONLINE_WRITE_TIMEOUT_MS } from "#/lib/offline-write-deadline";
 // contention class `vitest.config.ts` widens its own DB-suite timeouts for).
 const WAIT_OPTS = { timeout: 5000 };
 
+/** One real task boundary. `await Promise.resolve()` is not equivalent: React
+ *  batches updates that land in the same task, so a mock that only yields
+ *  microtasks can coalesce two commits the real code produces separately. */
+const ioBoundary = () => new Promise<void>((r) => setTimeout(r, 0));
+
 const enqueueSpy = vi.fn(async (..._args: unknown[]) => {});
-const removeOpSpy = vi.fn(async (..._args: unknown[]) => {});
+/**
+ * GENUINELY async, deliberately. The F2 drop only exists when the `setQueue`
+ * commit and the final `setDraining(false)` commit land in SEPARATE React
+ * commits, which real IndexedDB and a real `router.invalidate()` guarantee — a
+ * fully-synchronous mock batches them into one and the test then PASSES against
+ * the bug. Every test in this file pays one 0ms timer per drained op for it.
+ */
+const removeOpSpy = vi.fn(async (..._args: unknown[]) => {
+	await ioBoundary();
+});
 vi.mock("#/lib/offline-minutes-queue", () => ({
 	enqueue: (...args: unknown[]) => enqueueSpy(...args),
 	// `READ_FAILS` reaches the one branch a return value cannot: `indexedDB.open`
@@ -65,11 +79,15 @@ function openDispatchGate() {
 	dispatchGate = { promise, resolve };
 	return dispatchGate;
 }
+/** Named rather than inline so a test can count DISPATCHES — the observable that
+ *  makes "the `!syncError` gate is what stops a tight loop" assertable at all. */
+const setAttendanceSpy = vi.fn(async () => {
+	if (dispatchGate) await dispatchGate.promise;
+	return {};
+});
 vi.mock("#/server/minutes", () => ({
-	setAttendance: vi.fn(async () => {
-		if (dispatchGate) await dispatchGate.promise;
-		return {};
-	}),
+	setAttendance: (...args: unknown[]) =>
+		(setAttendanceSpy as (...a: unknown[]) => Promise<unknown>)(...args),
 	addMinutesGuest: vi.fn(async () => ({})),
 	removeMinutesGuest: vi.fn(async () => ({})),
 	addTableTopics: vi.fn(async () => ({})),
@@ -128,6 +146,7 @@ describe("useOfflineMinutes", () => {
 	beforeEach(() => {
 		enqueueSpy.mockClear();
 		removeOpSpy.mockClear();
+		setAttendanceSpy.mockClear();
 		QUEUED = [];
 		READ_FAILS = false;
 		SNAPSHOT = null;
@@ -477,7 +496,15 @@ describe("useOfflineMinutes", () => {
 			// `queue` is transient here: the auto-drain sees a queue with
 			// `navigator.onLine` true and replays it against the (mocked, answering)
 			// server straight away, which is exactly the recovery this path is for.
-			await tickUntil(() => removeOpSpy.mock.calls.length > 0);
+			// Waits on the OBSERVABLE it asserts, not on a proxy for it: `removeOp`
+			// is genuinely async now (see its comment above — F2 needs it to be),
+			// so the queue filter lands one task after the call, and waiting for
+			// the call alone asserted the queue one tick too early.
+			await tickUntil(
+				() =>
+					removeOpSpy.mock.calls.length > 0 &&
+					result.current.queue.length === 0,
+			);
 			expect(removeOpSpy).toHaveBeenCalledWith("meet-1", "op-1");
 			expect(result.current.queue).toHaveLength(0);
 		} finally {
@@ -510,6 +537,170 @@ describe("useOfflineMinutes", () => {
 			// Stop-on-failure: the op stays queued and Retry can replay it.
 			expect(result.current.queue).toHaveLength(1);
 			expect(removeOpSpy).not.toHaveBeenCalled();
+			// And it stopped ONCE. The auto-drain now also re-fires on `draining`
+			// (F2), so the thing standing between a permanent failure and a tight
+			// loop against the network is the `!syncError` gate — nothing tested
+			// that before. A dispatch count is the only observable for it: the
+			// queue, the error and the flag all read identically after one failed
+			// attempt and after two hundred. 20 further virtual seconds have
+			// already elapsed inside the `tickUntil` above.
+			expect(setAttendanceSpy).toHaveBeenCalledTimes(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("drains the NEXT meeting's queue once a drain in flight across the hop finishes (F2)", async () => {
+		// `runDrain`'s `if (drainingRef.current || ops.length === 0) return;` is a
+		// SILENT drop, and the auto-drain effect — its only automatic caller — had
+		// no dependency that changes when a drain releases. So a drain in flight for
+		// meeting A, plus a hop to a meeting B that has its own persisted queue,
+		// stranded B: `queue: ["op-2"]`, `draining: false`, `syncError: null`, the
+		// panel reading "All changes synced." for four seconds and then nothing,
+		// forever, with B's roll still on the device.
+		//
+		// The commits are ordered on purpose: B's persisted queue is awaited BEFORE
+		// the gate is released, so `setQueue` and the drain's final
+		// `setDraining(false)` are in separate React commits — which is the only
+		// arrangement in which the bug exists (see `removeOpSpy`'s comment).
+		const onMutated = vi.fn(async () => {
+			await ioBoundary();
+		});
+		ONLINE = true;
+		QUEUED = [OP()]; // A's persisted queue
+		const gate = openDispatchGate();
+		const { result, rerender } = renderHook(
+			({ id }: { id: string }) =>
+				useOfflineMinutes({ meetingId: id, onMutated }),
+			{ initialProps: { id: "meet-1" } },
+		);
+
+		await waitFor(() => expect(result.current.draining).toBe(true), WAIT_OPTS);
+
+		// The hop. B has its own persisted queue, and its auto-drain attempt is the
+		// one that used to be swallowed by A's in-flight guard.
+		QUEUED = [OP2()];
+		rerender({ id: "meet-2" });
+		await waitFor(
+			() => expect(result.current.queue).toHaveLength(1),
+			WAIT_OPTS,
+		);
+		expect(result.current.queue[0].opId).toBe("op-2");
+		// Proof the drop really happened rather than the test racing past it: B's op
+		// is queued, this hook is online, and nothing has dispatched it.
+		expect(removeOpSpy).not.toHaveBeenCalled();
+
+		// Wifi returns for A's drain.
+		gate.resolve();
+
+		// B's queue drains WITHOUT another hop, another reload or a Retry tap.
+		await waitFor(
+			() => expect(removeOpSpy).toHaveBeenCalledWith("meet-2", "op-2"),
+			WAIT_OPTS,
+		);
+		await waitFor(
+			() => expect(result.current.queue).toHaveLength(0),
+			WAIT_OPTS,
+		);
+		expect(result.current.syncError).toBeNull();
+		expect(result.current.draining).toBe(false);
+		// A's own op was removed under A, never under B.
+		expect(removeOpSpy).toHaveBeenCalledWith("meet-1", "op-1");
+		expect(removeOpSpy).not.toHaveBeenCalledWith("meet-2", "op-1");
+	});
+
+	it("keeps a FAILED drain for the previous meeting off the next meeting's banner, and still drains it (F1+F2)", async () => {
+		// The interaction, which is what a per-fix mutation test cannot see. F1
+		// makes `syncError` meeting-scoped; F2 re-arms the auto-drain when a drain
+		// releases. Remove EITHER and this test fails, for different reasons: an
+		// ungated `syncError` paints A's failure onto B AND suppresses B's
+		// auto-drain (which gates on `!syncError`), while a missing `draining`
+		// dependency never re-fires the effect at all.
+		vi.useFakeTimers();
+		try {
+			ONLINE = true;
+			QUEUED = [OP()];
+			openDispatchGate(); // never resolved: A's replay hangs like a portal
+			const { result, rerender } = renderHook(
+				({ id }: { id: string }) =>
+					useOfflineMinutes({ meetingId: id, onMutated: async () => {} }),
+				{ initialProps: { id: "meet-1" } },
+			);
+
+			await tickUntil(() => result.current.draining);
+			expect(result.current.draining).toBe(true);
+
+			// Hop while A's drain hangs, and let B's persisted load land first.
+			QUEUED = [OP2()];
+			rerender({ id: "meet-2" });
+			await tickUntil(() =>
+				result.current.queue.some((o) => o.opId === "op-2"),
+			);
+			// B's dispatch will answer; A's is the one that hangs.
+			dispatchGate = null;
+
+			// A's drain now blows its own deadline and fails.
+			await tickUntil(() => !result.current.draining);
+
+			// B's banner says nothing about A. Without F1's gate this reads
+			// "No response from the network." on a meeting that never asked.
+			expect(result.current.syncError).toBeNull();
+			// And B's queue drains anyway.
+			await tickUntil(() =>
+				removeOpSpy.mock.calls.some(
+					(c) => c[0] === "meet-2" && c[1] === "op-2",
+				),
+			);
+			expect(removeOpSpy).toHaveBeenCalledWith("meet-2", "op-2");
+			expect(result.current.queue).toHaveLength(0);
+			expect(result.current.justSynced).toBe(true);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("re-enables the next meeting's roll surface after a hop taken mid-write (F4)", async () => {
+		// The render-phase reset cleared `queue`, `snapshot`, `syncError` and
+		// `justSynced` — not `busy`. The route wires
+		// `busy={offlineMinutes.busy || offlineMinutes.draining}` into the panel's
+		// `locked`, so a hop during a stalled write left meeting B's whole roll
+		// surface disabled for the rest of A's deadline, and `mutate` refused
+		// silently on top of that.
+		vi.useFakeTimers();
+		try {
+			ONLINE = true;
+			const hang = vi.fn(() => new Promise<unknown>(() => {}));
+			const { result, rerender } = renderHook(
+				({ id }: { id: string }) =>
+					useOfflineMinutes({ meetingId: id, onMutated: async () => {} }),
+				{ initialProps: { id: "meet-1" } },
+			);
+			await tickUntil(() => true);
+
+			let pending!: Promise<void>;
+			await act(async () => {
+				pending = result.current.mutate(hang, OP);
+			});
+			expect(result.current.busy).toBe(true);
+
+			rerender({ id: "meet-2" });
+
+			// The surface is live again immediately — not in eight seconds' time.
+			expect(result.current.busy).toBe(false);
+			// And a write on B is accepted rather than swallowed by the stale guard.
+			const bWrite = vi.fn(async () => {});
+			await act(async () => {
+				await result.current.mutate(bWrite, OP2);
+			});
+			expect(bWrite).toHaveBeenCalledTimes(1);
+
+			// Drain A's abandoned write so no timer or promise leaks into the next
+			// test, and confirm it still landed under A (F1).
+			await tickUntil(() => enqueueSpy.mock.calls.length > 0);
+			await act(async () => {
+				await pending;
+			});
+			expect(enqueueSpy).toHaveBeenCalledWith("meet-1", OP());
 		} finally {
 			vi.useRealTimers();
 		}

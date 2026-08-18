@@ -144,6 +144,19 @@ export function useOfflineMinutes(input: {
 		setSnapshot(null);
 		setSyncError(null);
 		setJustSynced(false);
+		// `busy` too, and it is not cosmetic. The route wires
+		// `busy={offlineMinutes.busy || offlineMinutes.draining}` into the panel's
+		// `locked`, and `mutate` refuses outright on it — so a hop taken during a
+		// stalled write left meeting B's ENTIRE roll surface disabled (every chip,
+		// the menu items, the guest group) for the remainder of A's deadline, and
+		// any tap that did get through returned silently. That is a scoped repeat
+		// of the symptom the deadline exists to kill.
+		setBusy(false);
+		// NOT `draining` / `drainingRef`, deliberately: a drain genuinely in flight
+		// for A must KEEP its re-entrancy guard, or clearing it here lets a second
+		// concurrent drain start against the same persisted queue and reorder ops.
+		// What lets B's queue drain once A's drain finishes is the `draining`
+		// dependency on the auto-drain effect below — not a reset here.
 	}
 
 	// Load any persisted snapshot + queue once per meeting (survives reloads).
@@ -315,12 +328,28 @@ export function useOfflineMinutes(input: {
 
 	// Auto-drain when back online with a pending queue: covers the offline→online
 	// transition and an online mount with a leftover queue (e.g. after a reload).
-	// Skipped while a drain is in flight (ref guard) or a sync error is showing —
-	// a persistent failure would otherwise tight-loop; the user retries explicitly.
+	// Skipped while a drain is in flight or a sync error is showing — a persistent
+	// failure would otherwise tight-loop; the user retries explicitly.
+	//
+	// `draining` is BOTH a guard here and a dependency, and it is the fix for a
+	// silent drop rather than a tidy-up: this effect is the only caller of
+	// `runDrain` on the automatic path, and `runDrain`'s own `drainingRef` early
+	// return says nothing to anyone. A drain in flight for meeting A across a hop
+	// to B therefore swallowed B's drain outright — the effect fired on the commit
+	// that loaded B's persisted queue, hit the ref guard, and had no reason to ever
+	// fire again, because the RELEASE of that drain changes `draining` and nothing
+	// else in this list. B's roll then sat on the device with the panel reading
+	// "All changes synced." for four seconds and nothing at all after that.
+	// Depending on `draining` means a drain's completion RE-ARMS the effect.
+	//
+	// It cannot tight-loop, and the reason is the `!syncError` gate rather than
+	// anything about `draining`: each pass either shortens the queue (progress),
+	// empties it, or sets `syncError` and is gated out here. "stops a DRAIN the
+	// network never answers" holds that with a dispatch-count assertion.
 	useEffect(() => {
-		if (!online || queue.length === 0 || syncError) return;
+		if (!online || queue.length === 0 || syncError || draining) return;
 		void runDrain(queue);
-	}, [online, queue, syncError, runDrain]);
+	}, [online, queue, syncError, runDrain, draining]);
 
 	// Going offline clears a stale sync error so the next genuine reconnect
 	// auto-retries; while online, a persistent error stays set (see above).
