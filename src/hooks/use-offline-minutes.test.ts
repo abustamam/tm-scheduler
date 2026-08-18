@@ -889,6 +889,50 @@ describe("useOfflineMinutes", () => {
 		}
 	});
 
+	it("does NOT toast the deadline against another MEETING the officer hopped to (F5)", async () => {
+		// `mountedRef` alone cannot see this, and the mechanism that defeats it is
+		// this hook's own reason for existing: the meeting route is NOT remounted
+		// when the meeting param changes, so a tap on the nav strip leaves
+		// `mountedRef.current === true`. Meeting A's deadline toast — "saved on this
+		// device and will sync later" — therefore landed on meeting B, whose own
+		// `SyncStatus` shows nothing because B's queue is empty. B read fully synced
+		// while A's op sat stranded with no indicator anywhere.
+		//
+		// A `rerender` with a new id, NOT an unmount: an unmount is the F7 test above
+		// and passes with or without this gate.
+		vi.useFakeTimers();
+		try {
+			ONLINE = true;
+			const hang = vi.fn(() => new Promise<unknown>(() => {}));
+			const { result, rerender } = renderHook(
+				({ id }: { id: string }) =>
+					useOfflineMinutes({ meetingId: id, onMutated: async () => {} }),
+				{ initialProps: { id: "meet-1" } },
+			);
+			await tickUntil(() => true);
+
+			let pending!: Promise<void>;
+			await act(async () => {
+				pending = result.current.mutate(hang, OP);
+			});
+			expect(hang).toHaveBeenCalledTimes(1);
+
+			rerender({ id: "meet-2" });
+
+			await tickUntil(() => enqueueSpy.mock.calls.length > 0);
+			await act(async () => {
+				await pending;
+			});
+
+			// The tap survived, under ITS OWN meeting — that half must not change.
+			expect(enqueueSpy).toHaveBeenCalledWith("meet-1", OP());
+			// And meeting B's page said nothing about it.
+			expect(toastErrorSpy).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("toasts the deadline while the officer is still on the page (F7 control)", async () => {
 		// The other side of the assertion above, and the reason it cannot pass
 		// vacuously: a hook that never toasted at all would satisfy the unmount test.

@@ -112,6 +112,19 @@ export function useOfflineMinutes(input: {
 	// navigated somewhere else entirely: the `enqueue` still has to happen (the tap
 	// is real and the queue is durable), but its toast would land on whatever page
 	// they are looking at now, about a meeting they have left.
+	//
+	// It is NOT SUFFICIENT on its own, and the mechanism that defeats it is stated
+	// thirty lines below: the meeting route is NOT remounted when the meeting param
+	// changes, so a tap on the nav strip leaves `mountedRef.current === true`.
+	// Meeting A's deadline toast therefore landed on meeting B, whose own
+	// `SyncStatus` shows nothing (B's queue is empty) — so B read fully synced while
+	// A's op sat stranded with no indicator anywhere. The toast is gated on
+	// `meetingIdRef` as well for that reason, the same test `queueOp` and all four
+	// drain callbacks already make.
+	//
+	// The stranded op itself is a separate problem and NOT closed by this: it stays
+	// in IndexedDB under meeting A and surfaces the moment A is opened again, which
+	// is the same recovery the drain's own meeting-scoped `syncError` relies on.
 	const mountedRef = useRef(true);
 	useEffect(() => {
 		// Re-armed on mount, not only cleared on unmount: React 19's StrictMode
@@ -430,8 +443,13 @@ export function useOfflineMinutes(input: {
 			const raced = await raceWithDeadline(onlineFn(), ONLINE_WRITE_TIMEOUT_MS);
 			if (raced === "timeout") {
 				// The QUEUEING below is unconditional — the tap must survive either
-				// way. Only the toast is gated on still being here (see `mountedRef`).
-				if (mountedRef.current) toast.error(WRITE_STALLED_MESSAGE);
+				// way. Only the toast is gated on still being here, which takes BOTH
+				// conditions: mounted, AND still on the meeting this write belongs to
+				// (see `mountedRef`, which explains why the second is not implied by
+				// the first on this route).
+				if (mountedRef.current && meetingIdRef.current === meetingId) {
+					toast.error(WRITE_STALLED_MESSAGE);
+				}
 				return "queue";
 			}
 			await input.onMutated();
