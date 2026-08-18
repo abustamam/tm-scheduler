@@ -131,11 +131,19 @@ describe("deriveRollAttendance", () => {
 		).toContainEqual({ memberId: "m-abe", status: "absent" });
 	});
 
-	it("IGNORES the queue while online, leaving the server as the source of truth", () => {
-		// Matches `meeting-minutes.tsx`'s `displayMinutes` exactly. Online the
-		// loader refetch that `offlineMinutes.mutate` triggers is what moves the
-		// chip; replaying a not-yet-drained queue on top of fresh rows would show a
-		// stale status over a newer one, with no error and nothing to notice.
+	it("F2: replays a queued op while ONLINE too — a deadlined write has no refetch coming", () => {
+		// REPLACES a test that asserted the opposite ("IGNORES the queue while
+		// online, leaving the server as the source of truth"), which pinned the bug.
+		// Its premise was that online the loader refetch `offlineMinutes.mutate`
+		// triggers is what moves the chip. That is not true for the state the write
+		// deadline introduced: `writeOnline` returns `"queue"` on a timeout WITHOUT
+		// calling `onMutated`, so no refetch is coming — and `online` stays `true`,
+		// because `navigator.onLine` is true on dead venue wifi.
+		//
+		// The officer taps Present, waits 8s with every chip disabled, is told "saved
+		// on this device and will sync later", and the chip does not move. So they
+		// tap again — the exact behaviour this projection exists to prevent, and the
+		// state `sync-status.tsx` was already fixed for while this was not.
 		expect(
 			deriveRollAttendance({
 				online: true,
@@ -144,9 +152,24 @@ describe("deriveRollAttendance", () => {
 				queue: [setAbsent("m-bea")],
 			}),
 		).toEqual([
-			{ memberId: "m-bea", status: "present" },
+			{ memberId: "m-bea", status: "absent" },
 			{ memberId: "m-cy", status: "excused" },
 		]);
+	});
+
+	it("F2: leaves the server's rows untouched when the queue is EMPTY, online or off", () => {
+		// The other half, and the reason "always replay" is not the same fix as
+		// "replay when there is something to replay". With nothing queued the base
+		// must come through unchanged — and it must come through WITHOUT a
+		// `structuredClone`, which is the steady state on every render of every
+		// meeting. Identity is the observable for that: `deriveRollGuests` hands back
+		// the base's own array when nothing was replayed.
+		const minutes = makeMinutes();
+		for (const online of [true, false]) {
+			expect(
+				deriveRollGuests({ online, minutes, snapshot: null, queue: [] }),
+			).toBe(minutes.guests);
+		}
 	});
 
 	it("replays over the offline SNAPSHOT in preference to the loader rows", () => {
@@ -256,9 +279,12 @@ describe("deriveRollGuests", () => {
 		expect(guests?.map((g) => g.guestId)).not.toContain("g-rose");
 	});
 
-	it("IGNORES the queue while online, leaving the server as the source of truth", () => {
-		// Same branch as the members. Replaying a not-yet-drained queue over fresh
-		// rows would show a stale guest list with no error and nothing to notice.
+	it("F2: replays a queued guest add while ONLINE too", () => {
+		// Same replacement as the members' version above, same reason. This is the
+		// case that also closes the picker's second tap: `AttendanceGuestsGroup`
+		// builds its already-present filter from this list, so a guest added by a
+		// write that blew its deadline was both missing from the group AND still
+		// offered by the picker.
 		expect(
 			deriveRollGuests({
 				online: true,
@@ -266,7 +292,10 @@ describe("deriveRollGuests", () => {
 				snapshot: null,
 				queue: [addGuest("g-nadia", "Nadia Farouk")],
 			}),
-		).toEqual([{ guestId: "g-rose", name: "Rose", fromRole: false }]);
+		).toEqual([
+			{ guestId: "g-nadia", name: "Nadia Farouk", fromRole: false },
+			{ guestId: "g-rose", name: "Rose", fromRole: false },
+		]);
 	});
 
 	it("returns UNDEFINED, not [], when there is nothing to read", () => {

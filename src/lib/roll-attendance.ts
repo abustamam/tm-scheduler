@@ -7,14 +7,14 @@
 // here is behavioural, not textual ("a queued tap changes what the panel
 // renders"). TYPE-ONLY imports of `#/server/minutes-logic` keep `#/db` (and so
 // `pg`) out of the client bundle and out of this module's unit test.
-import type {
-	AttendanceStatus,
-	MinutesData,
-	MinutesGuestRow,
-} from "#/server/minutes-logic";
+//
+// WHICH minutes all three of these read is `projectMinutes` (`./project-minutes`),
+// shared with the Minutes card. It lived here as a private copy of the Minutes
+// card's expression, under a comment promising the two "cannot disagree" — see
+// that module for what the copy cost.
+import type { AttendanceStatus, MinutesGuestRow } from "#/server/minutes-logic";
 import { type buildPlanPanel } from "./attendance-panel";
-import { deriveMinutes } from "./derive-minutes";
-import type { MinutesOp } from "./offline-minutes-queue";
+import { type ProjectionInput, projectMinutes } from "./project-minutes";
 
 /** One RECORDED attendance row, in the shape the panel's `attendance` prop takes. */
 export type RecordedAttendance = { memberId: string; status: AttendanceStatus };
@@ -32,38 +32,6 @@ export type RecordedAttendance = { memberId: string; status: AttendanceStatus };
 export type RollRosterRow = Parameters<
 	typeof buildPlanPanel
 >[0]["roster"][number];
-
-/** What both projections read. One shape so the two cannot be called differently. */
-type ProjectionInput = {
-	online: boolean;
-	minutes: MinutesData | null;
-	snapshot: MinutesData | null;
-	queue: MinutesOp[];
-};
-
-/**
- * The minutes the roll panel should be reading right now, or `null` if there is
- * nothing to read.
- *
- * Online, the server is the source of truth and the UI moves via the loader
- * refetch `offlineMinutes.mutate` triggers — deriving here would only race it.
- * Offline, the write is queued and no refetch will ever land, so the queue has
- * to be replayed over the last online snapshot. Same branch, same order, as
- * `meeting-minutes.tsx`'s `displayMinutes` (`online ? minutes :
- * deriveMinutes(snapshot ?? minutes, queue)`) — deliberately copied rather than
- * improved on, so the panel and the Minutes card cannot disagree about what is
- * recorded while the queue is draining.
- */
-function projectMinutes({
-	online,
-	minutes,
-	snapshot,
-	queue,
-}: ProjectionInput): MinutesData | null {
-	const base = online ? minutes : (snapshot ?? minutes);
-	if (!base) return null;
-	return online ? base : deriveMinutes(base, queue);
-}
 
 /**
  * The recorded attendance rows the roll panel should show right now

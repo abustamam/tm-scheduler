@@ -17,8 +17,8 @@ import {
 } from "#/components/ui/card";
 import { useOfflineMinutes } from "#/hooks/use-offline-minutes";
 import { useOnlineStatus } from "#/hooks/use-online-status";
-import { deriveMinutes } from "#/lib/derive-minutes";
 import { formatCalendarDay } from "#/lib/format";
+import { projectMinutes } from "#/lib/project-minutes";
 import type { MinutesActionItems } from "#/server/action-items-logic";
 import {
 	addTableTopics,
@@ -154,9 +154,22 @@ function MeetingMinutesView({
 	} = offline;
 	const online = useOnlineStatus();
 
-	// Displayed state: the live loader data online; the optimistic projection off.
+	// Displayed state, through the SAME seam the attendance panel's roll rows read
+	// (`#/lib/project-minutes`). It was this expression written out here and again
+	// in `roll-attendance.ts`, under a comment there saying the copy existed so the
+	// two surfaces "cannot disagree about what is recorded while the queue is
+	// draining" — and they then carried the same bug twice: the old
+	// `online ? minutes : derive(...)` showed the loader's rows whenever
+	// `navigator.onLine` was true, which it is on dead venue wifi, so a write
+	// abandoned at its deadline (queued, no refetch, no `onMutated`) left Table
+	// Topics and the awards reading exactly as they had before the tap.
+	//
+	// `?? minutes` never fires: `projectMinutes` returns `null` only when it has no
+	// base to read, and `minutes` is non-null on this card. It is here because the
+	// seam serves the panel too, where `minutes.data` IS nullable for a viewer who
+	// may not read the minutes at all.
 	const displayMinutes = useMemo(
-		() => (online ? minutes : deriveMinutes(snapshot ?? minutes, queue)),
+		() => projectMinutes({ online, minutes, snapshot, queue }) ?? minutes,
 		[online, minutes, snapshot, queue],
 	);
 

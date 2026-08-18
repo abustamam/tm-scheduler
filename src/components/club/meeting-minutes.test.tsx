@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { MinutesOp } from "#/lib/offline-minutes-queue";
 import type { MinutesResult } from "#/server/minutes";
 import type { MinutesProgramRow } from "#/server/minutes-logic";
 import { MeetingMinutes } from "./meeting-minutes";
@@ -396,5 +397,81 @@ describe("MeetingMinutes attendance moved to the panel", () => {
 		expect(queryByText("Ayesha Khan")).toBeNull();
 		expect(queryByText("Bo Chen")).toBeNull();
 		expect(queryByText("3 present")).toBeNull();
+	});
+});
+
+// F2. The Minutes card reads the offline queue through the SAME seam the
+// attendance panel's roll rows do (`#/lib/project-minutes`), and it used to hold
+// its own copy of the expression — `online ? minutes : deriveMinutes(...)` — which
+// showed the loader's rows whenever `navigator.onLine` was true. That is true on
+// dead venue wifi, and it is true for the state the write deadline creates: a
+// write abandoned at its deadline is queued with no `onMutated` and no refetch
+// coming, so Table Topics and the awards read exactly as they had before the tap.
+//
+// Reachable here because `offline` is an injectable prop: jsdom reports
+// `navigator.onLine === true`, so a queue supplied below IS the online-with-queue
+// state, which is otherwise 8 seconds of real timing to reproduce.
+describe("MeetingMinutes offline projection (F2)", () => {
+	afterEach(() => cleanup());
+
+	/** Enough of `useOfflineMinutes`' 9-key return for a render. */
+	function fakeOffline(queue: MinutesOp[]) {
+		return {
+			mutate: vi.fn(),
+			opMeta: () => ({ opId: "op-1", queuedAt: 1 }),
+			busy: false,
+			queue,
+			snapshot: null,
+			draining: false,
+			syncError: null,
+			justSynced: false,
+			retryDrain: vi.fn(),
+		} as unknown as NonNullable<
+			Parameters<typeof MeetingMinutes>[0]["offline"]
+		>;
+	}
+
+	const queuedSpeaker: MinutesOp = {
+		type: "addTableTopics",
+		opId: "op-1",
+		queuedAt: 1,
+		id: "tt-1",
+		name: "Nadia Farouk",
+		isGuest: true,
+		guestId: "g-nadia",
+	};
+
+	it("shows a queued Table Topics speaker even though navigator.onLine is true", () => {
+		const { getByText } = render(
+			<MeetingMinutes
+				meetingId="m1"
+				minutes={emptyMinutes}
+				program={[]}
+				meetingPast={false}
+				meetingDayReached={true}
+				canEdit={true}
+				clubGuests={[{ id: "g-nadia", name: "Nadia Farouk" }]}
+				offline={fakeOffline([queuedSpeaker])}
+			/>,
+		);
+		getByText("Nadia Farouk");
+	});
+
+	it("shows nothing extra when the queue is empty — the control", () => {
+		// Without this, a card that rendered every club guest unconditionally would
+		// satisfy the assertion above for the wrong reason.
+		const { queryByText } = render(
+			<MeetingMinutes
+				meetingId="m1"
+				minutes={emptyMinutes}
+				program={[]}
+				meetingPast={false}
+				meetingDayReached={true}
+				canEdit={true}
+				clubGuests={[{ id: "g-nadia", name: "Nadia Farouk" }]}
+				offline={fakeOffline([])}
+			/>,
+		);
+		expect(queryByText("Nadia Farouk")).toBeNull();
 	});
 });
