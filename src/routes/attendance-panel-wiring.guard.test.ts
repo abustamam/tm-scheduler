@@ -560,4 +560,62 @@ describe("attendance panel route wiring (PR 2)", () => {
 		expect(src).toContain("justSynced: offlineMinutes.justSynced");
 		expect(src).toContain("offlineMinutes.retryDrain()");
 	});
+	it("F6a: derives myAttendance from the RECORDED rows, never from the plan status (#548)", () => {
+		// That expression IS the #548 fix, and nothing watched it: neither
+		// `myAttendance` nor `MeetingPersonalStrip` was named anywhere in this file.
+		// `myStatus` and `myAttendance` are both nullable status types on the same
+		// component, so wiring the strip's "you were marked…" line back to the
+		// PLAN rung typechecks, lints, passes every component test — and tells a
+		// member they were present because they once said they were coming.
+		expect(src).toContain("<MeetingPersonalStrip");
+		expect(src).toContain(
+			"rollAttendance.find((a) => a.memberId === myId)?.status ??",
+		);
+		// The negative is the half that catches the revert: the positive above can
+		// coexist with a second, wrong expression.
+		expect(
+			src,
+			"myAttendance must never read myStatus/myEffectiveStatus — that is exactly the #548 bug",
+		).not.toMatch(/myAttendance=\{[^}]*myStatus/);
+	});
+
+	// The PANEL's own JSX, sliced out of the route. Necessary, not tidiness: three
+	// components in this file take `clubGuests={clubGuests}` (the Minutes card and
+	// the vote console's `TableTopicsCapture` are the other two), so a whole-file
+	// `toContain` for that binding stays green when the PANEL's copy is the one
+	// deleted — the same unfalsifiable shape the `offlineMinutes.mutate(` pin above
+	// documents, caught here by mutation. The two `not.toContain`s are what say the
+	// slice really stopped before the next component.
+	const panelJsx = (() => {
+		const start = src.indexOf("<MeetingAttendancePanel");
+		expect(
+			start,
+			"the route must render <MeetingAttendancePanel",
+		).toBeGreaterThan(-1);
+		const slice = src.slice(start, src.indexOf("/>", start));
+		expect(slice).not.toContain("<MeetingMinutes");
+		expect(slice).not.toContain("<TableTopicsCapture");
+		return slice;
+	})();
+
+	it("F6b: pins the six roll-mode bindings, four of which are OPTIONAL props", () => {
+		// Every one of these is droppable in silence. `mode` is required but
+		// same-typed with `panelMode`'s two other candidates in scope; the rest are
+		// OPTIONAL on the panel, so deleting one at the call site type-checks, lints,
+		// and passes every component test — those supply their own fixtures — while
+		// turning every tap, or every guest edit, into a no-op with nothing on screen
+		// to say so.
+		//
+		// `mode` and `phaseCompleted` are pinned as EXPRESSIONS, not just names: the
+		// route holds `panelMode`, `phase`, `over`, `locked` and `canComplete`, and
+		// `phaseCompleted={locked}` is the plausible wrong one — a completed meeting
+		// is usually also locked, so it looks right until the meeting-day case, where
+		// it drops the contact drafts an officer is mid-chase with.
+		expect(panelJsx).toContain("mode={panelMode}");
+		expect(panelJsx).toContain('phaseCompleted={phase === "completed"}');
+		expect(panelJsx).toContain("clubGuests={clubGuests}");
+		expect(panelJsx).toContain("onSetAttendance={writeAttendance}");
+		expect(panelJsx).toContain("onAddGuest={addRollGuest}");
+		expect(panelJsx).toContain("onRemoveGuest={removeRollGuest}");
+	});
 });
