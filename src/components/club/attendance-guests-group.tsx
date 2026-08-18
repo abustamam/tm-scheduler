@@ -65,7 +65,15 @@ export function AttendanceGuestsGroup({
 								aria-label={`Remove ${g.name}`}
 								disabled={locked}
 								onClick={() => onRemoveGuest(g.guestId)}
-								className="rounded-sm hover:bg-muted"
+								// `disabled:` styling is NOT optional here, unlike on a shadcn
+								// `Button` which gets it from `buttonVariants`. This is a bare
+								// `<button>`, and its `locked` now folds in the panel's `busy`
+								// signal — so without this it is genuinely un-tappable during a
+								// write while rendering pixel-identical to tappable, which is a
+								// silently swallowed tap in the one window every sibling control
+								// dims for. `p-1` because the hit area was otherwise just the
+								// 12px icon glyph, on a control tapped on a phone mid-meeting.
+								className="rounded-sm p-1 hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
 							>
 								<X className="size-3" />
 							</button>

@@ -126,7 +126,9 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
   `(await planRows()).size).toBe(0)`. A sweep of every unscoped read of `meeting_attendance_plan`,
   `activity_log`, `members` and `meetings` across the integration suites found no others, which
   answers the "check the other helpers first" part of the original note.
-  **Completed:** v1.16.0.1 (2026-08-17)
+  **Completed:** shipped with the planned-attendance roll-mode release (2026-08-17) — rode
+  along with that branch rather than shipping as its own version, so the version it lands
+  under is whatever `/ship` assigns that PR.
 
 - An impersonation session outlived the superadmin's own access. `getActiveImpersonationForUser`
   selected on `superadminUserId` / `endedAt` / `expiresAt` and never re-read `user.is_superadmin`,

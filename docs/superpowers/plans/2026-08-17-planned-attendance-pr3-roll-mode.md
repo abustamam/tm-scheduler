@@ -70,6 +70,27 @@ Task 1 still changes **no behavior**. If its diff changes what any existing minu
 
 ---
 
+## Implementation corrections — read before trusting a symbol name below
+
+This plan was written before the code existed, and four symbol names in the task text turned
+out not to match HEAD. The implementers corrected the ASSERTIONS rather than reshaping the code,
+which was right — but the stale names survive in the prose below, and on this repo a docs claim
+that contradicts HEAD has already misled a later automated pass into "fixing" the wrong thing.
+So the corrections live here rather than being silently wrong further down:
+
+| Written in the tasks below | What HEAD actually has |
+|---|---|
+| `offline.mutate(...)` | `offlineMinutes.mutate(...)` |
+| `minutes.members` | `minutes.data?.members` (the loader returns a `MinutesResult` wrapper) |
+| `minutes.guests` | `minutes.data?.guests`, and the panel is fed `guests={rollGuests}` — the queue-projected value, not the raw loader rows |
+| `rollMutate` | never existed; the guest handlers go through `offlineMinutes.mutate` |
+
+Two later corrections are NOT drift but deliberate additions past the plan: `deriveRollGuests` and
+`deriveRollRoster` (`src/lib/roll-attendance.ts`) were added during review to fix an offline-guest
+gap and a count divergence with the minutes PDF. The plan does not describe them.
+
+---
+
 ## File Structure
 
 | File | Responsibility |
