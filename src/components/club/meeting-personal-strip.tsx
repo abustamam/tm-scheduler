@@ -3,6 +3,7 @@ import { ViewingAs } from "#/components/club/viewing-as";
 import { Button } from "#/components/ui/button";
 import type { PlanStatus } from "#/lib/attendance-panel";
 import type { StoredMember } from "#/lib/member-identity";
+import type { AttendanceStatus } from "#/server/minutes-logic";
 
 /**
  * One row for everything about YOU on the meeting page (#541 D3): identity
@@ -19,12 +20,6 @@ import type { StoredMember } from "#/lib/member-identity";
  * record of having asked — a member offering it about themselves is
  * nonsense, and the server rejects a self-write of it, so it is never one of
  * the choices rendered here.
- *
- * The attendance statement below reads the pre-meeting PLAN status, not real
- * roll-taking data — relocated verbatim from the route (#541 D3). So it says
- * "You attended this meeting" to anyone who never declared `not_coming`,
- * whether or not they turned up. Pre-existing, deliberately not fixed here
- * (the fix is in the loader, not the chrome), and tracked as issue #548.
  */
 export function MeetingPersonalStrip({
 	source,
@@ -32,6 +27,7 @@ export function MeetingPersonalStrip({
 	promptIdentity,
 	over,
 	myStatus,
+	myAttendance,
 	availBusy,
 	canToggleAvailability,
 	onSetStatus,
@@ -41,6 +37,10 @@ export function MeetingPersonalStrip({
 	promptIdentity: () => void;
 	over: boolean;
 	myStatus: PlanStatus | null;
+	// The RECORDED row, never the plan. `undefined` means this viewer cannot be
+	// told (no session); `null` means a session exists and no row was
+	// recorded. Both say nothing rather than inventing a record (#548).
+	myAttendance?: AttendanceStatus | null;
 	availBusy: boolean;
 	canToggleAvailability: boolean;
 	onSetStatus: (s: PlanStatus | null) => void;
@@ -58,12 +58,19 @@ export function MeetingPersonalStrip({
 				<ViewingAs member={member} promptIdentity={promptIdentity} />
 			) : null}
 			{!hasIdentity ? null : over ? (
-				// Plan-status-derived, not attendance-derived — see doc comment above.
-				<p className="text-sm font-medium text-muted-foreground">
-					{myStatus === "not_coming"
-						? "You did not attend this meeting."
-						: "You attended this meeting."}
-				</p>
+				// From the RECORDED row, never the plan. `undefined` means this viewer
+				// cannot be told (no session — see the panel's DP2 note); `null` means a
+				// session exists and no row was recorded. Both say nothing rather than
+				// inventing a record. Fixes #548.
+				myAttendance === undefined || myAttendance === null ? null : (
+					<p className="text-sm font-medium text-muted-foreground">
+						{myAttendance === "present"
+							? "You attended this meeting."
+							: myAttendance === "excused"
+								? "You were excused from this meeting."
+								: "You did not attend this meeting."}
+					</p>
+				)
 			) : myStatus === null ? (
 				<div className="flex items-center gap-2">
 					<Button

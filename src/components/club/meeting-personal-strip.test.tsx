@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PlanStatus } from "#/lib/attendance-panel";
+import type { AttendanceStatus } from "#/server/minutes-logic";
 import { MeetingPersonalStrip } from "./meeting-personal-strip";
 
 afterEach(() => {
@@ -18,6 +19,7 @@ const BASE = {
 	promptIdentity: vi.fn(),
 	over: false,
 	myStatus: null as PlanStatus | null,
+	myAttendance: undefined as AttendanceStatus | null | undefined,
 	availBusy: false,
 	canToggleAvailability: true,
 	onSetStatus: vi.fn(),
@@ -81,9 +83,11 @@ describe("MeetingPersonalStrip (#541 D3)", () => {
 
 	it("meeting over: attendance statement replaces the chip", () => {
 		renderStrip({
+			source: "session",
 			member: MEMBER,
 			over: true,
 			myStatus: null,
+			myAttendance: "present",
 		});
 		expect(screen.getByText(/you attended this meeting/i)).toBeTruthy();
 		expect(screen.queryByRole("button", { name: /can't make/i })).toBeNull();
@@ -91,9 +95,11 @@ describe("MeetingPersonalStrip (#541 D3)", () => {
 
 	it("meeting over + marked unavailable: did-not-attend statement", () => {
 		renderStrip({
+			source: "session",
 			member: MEMBER,
 			over: true,
 			myStatus: "not_coming",
+			myAttendance: "absent",
 		});
 		expect(screen.getByText(/you did not attend this meeting/i)).toBeTruthy();
 	});
@@ -168,5 +174,89 @@ describe("MeetingPersonalStrip (#541 D3)", () => {
 		);
 		fireEvent.click(getByRole("button", { name: /undo/i }));
 		expect(onSetStatus).toHaveBeenCalledWith(null);
+	});
+});
+
+describe("the over-state attendance statement (#548)", () => {
+	/** All three statements end in "this meeting." — asserting on that one pattern
+	 *  catches the excused string too. Asserting only /attended/ and /did not
+	 *  attend/ would let a wrong "You were excused from this meeting." through. */
+	const ANY_STATEMENT = /this meeting\./i;
+
+	it("tells a signed-in member the truth from the RECORDED row", () => {
+		renderStrip({
+			source: "session",
+			member: MEMBER,
+			over: true,
+			myStatus: null,
+			myAttendance: "present",
+		});
+		expect(screen.getByText("You attended this meeting.")).toBeTruthy();
+		cleanup();
+
+		renderStrip({
+			source: "session",
+			member: MEMBER,
+			over: true,
+			// The plan said COMING and the record says ABSENT. The record wins —
+			// that disagreement is exactly the lie #548 filed, so this fixture is
+			// the one that separates the two sources.
+			myStatus: "coming",
+			myAttendance: "absent",
+		});
+		expect(screen.getByText("You did not attend this meeting.")).toBeTruthy();
+		cleanup();
+
+		renderStrip({
+			source: "session",
+			member: MEMBER,
+			over: true,
+			myStatus: null,
+			myAttendance: "excused",
+		});
+		expect(
+			screen.getByText("You were excused from this meeting."),
+		).toBeTruthy();
+	});
+
+	it("says nothing about attendance when nobody recorded a row", () => {
+		// A session exists, so we KNOW there is no row. Claiming either way would
+		// be inventing a record.
+		renderStrip({
+			source: "session",
+			member: MEMBER,
+			over: true,
+			myStatus: "coming",
+			myAttendance: null,
+		});
+		expect(screen.queryByText(ANY_STATEMENT)).toBeNull();
+	});
+
+	it("says nothing about attendance to a viewer we cannot verify", () => {
+		// DP2: an anonymous roster-pick member — the dominant identity path here.
+		// Telling them anything would need a public array of everyone's
+		// attendance, which widens "who was absent" to any visitor, and #574 is
+		// still open on a milder version of that.
+		renderStrip({
+			source: "anon",
+			member: MEMBER,
+			over: true,
+			myStatus: "coming",
+			myAttendance: undefined,
+		});
+		expect(screen.queryByText(ANY_STATEMENT)).toBeNull();
+	});
+
+	it("never derives the statement from the plan ladder", () => {
+		// The regression guard. `myStatus` alone must not produce a claim, or the
+		// bug walks straight back in the next time someone simplifies this branch.
+		renderStrip({
+			source: "session",
+			member: MEMBER,
+			over: true,
+			myStatus: "not_coming",
+			myAttendance: undefined,
+		});
+		expect(screen.queryByText(ANY_STATEMENT)).toBeNull();
 	});
 });

@@ -1222,6 +1222,16 @@ function MeetingView() {
 					promptIdentity={promptIdentity}
 					over={over}
 					myStatus={myEffectiveStatus}
+					// The RECORDED row, never the plan (#548). `undefined` for an
+					// anonymous viewer: they cannot be told without shipping a public
+					// array of everyone's attendance, which would widen "who was
+					// absent" to any visitor (#574).
+					myAttendance={
+						isSignedIn && myId
+							? (rollAttendance.find((a) => a.memberId === myId)?.status ??
+								null)
+							: undefined
+					}
 					availBusy={myStatusBusy}
 					canToggleAvailability={viewer.canToggleAvailability}
 					onSetStatus={setMyStatus}
