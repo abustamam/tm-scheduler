@@ -429,8 +429,43 @@ function RollChip({
 	// already had to make once.
 	const disabled = locked || pending || busy;
 
+	// Composed from CONTENT, never an `aria-label`, and the full reasoning is on
+	// `AttendanceRow`'s trigger ~150 lines above — read that comment first. It
+	// applied here verbatim and roll mode shipped the version it warns against:
+	// `aria-label` OVERRIDES content, so `"${row.name} status"` meant the answer
+	// itself — Present / Absent / Excused — reached no screen reader at all, on the
+	// one surface whose entire job is recording it. An officer taking roll with a
+	// screen reader heard "Jane Smith status, button" forty times.
+	//
+	// Worse than plan mode's version was, because BOTH branches carried the same
+	// label: a suggestion and a record announced IDENTICALLY while doing opposite
+	// things, and the trailing "?" is not announced either. Radix puts
+	// `aria-haspopup`/`aria-expanded` on a menu trigger only, so the sole
+	// discriminator was the ABSENCE of a popup hint — an AT user reaching for the
+	// menu on a suggestion row silently recorded `present` instead. That is F1's
+	// hazard without even a mis-tap.
+	//
+	// ONE `sr-only` span per control carrying the whole string, with the visible
+	// label `aria-hidden` beside it. Not a prefix plus a plain label, for the
+	// jsdom-vs-browser reason spelled out on `AttendanceRow`'s trigger: the
+	// separator between sibling children is display-dependent, so a split name
+	// gains its space in a real browser and not under the harness.
+	const recordedLabel = row.status ? ROLL_LABELS[row.status] : "—";
+	// "not recorded" rather than the em dash, which is not read aloud. Both
+	// branches open with `"${row.name} status: "` so the two are comparable to
+	// someone hearing them; what follows is what actually differs.
+	const recordedAnnouncement = `${row.name} status: ${
+		row.status ? ROLL_LABELS[row.status] : "not recorded"
+	}`;
+
 	if (row.status === null && row.suggestion) {
 		const suggestion = row.suggestion;
+		// Says all three things the visible chip says: nothing is recorded yet, the
+		// plan's answer maps to this status, and TAPPING COMMITS IT. The last clause
+		// is the one the dashed border and the "?" carry visually and nothing carried
+		// otherwise — and it is what stops this reading like the menu trigger beside
+		// it, whose name deliberately omits the word "status".
+		const suggestionAnnouncement = `${row.name} status: not recorded — the plan suggests ${ROLL_LABELS[suggestion]}. Tap to record it.`;
 		return (
 			// The SAME `w-44` track a recorded row's trigger fills (the 176px is
 			// measured — see `AttendanceRow`'s trigger), so the two row shapes share
@@ -445,10 +480,10 @@ function RollChip({
 					size="sm"
 					className="flex-1 border-dashed"
 					disabled={disabled}
-					aria-label={`${row.name} status`}
 					onClick={() => onSetAttendance(row.id, suggestion)}
 				>
-					{ROLL_LABELS[suggestion]}?
+					<span className="sr-only">{suggestionAnnouncement}</span>
+					<span aria-hidden>{ROLL_LABELS[suggestion]}?</span>
 				</Button>
 				<RollStatusMenu
 					memberId={row.id}
@@ -485,13 +520,9 @@ function RollChip({
 			busy={busy}
 			onSetAttendance={onSetAttendance}
 		>
-			<Button
-				variant="outline"
-				size="sm"
-				disabled={disabled}
-				aria-label={`${row.name} status`}
-			>
-				{row.status ? ROLL_LABELS[row.status] : "—"}
+			<Button variant="outline" size="sm" disabled={disabled}>
+				<span className="sr-only">{recordedAnnouncement}</span>
+				<span aria-hidden>{recordedLabel}</span>
 			</Button>
 		</RollStatusMenu>
 	);

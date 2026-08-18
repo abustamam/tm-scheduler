@@ -927,6 +927,64 @@ describe("roll mode", () => {
 		expect(() => getByRole("menuitem", { name: "Coming" })).toThrow();
 	});
 
+	it("F3: announces the ANSWER, not just the member's name, on both chip shapes", () => {
+		// `aria-label` OVERRIDES content, and both branches carried
+		// `aria-label={`${row.name} status`}` — so Present / Absent / Excused reached
+		// no screen reader at all on the surface whose whole job is recording it, and
+		// the two branches announced IDENTICALLY while doing opposite things (one
+		// commits `present` on touch, the other opens a menu). The same mistake plan
+		// mode's control had made and fixed 150 lines above, shipped again verbatim.
+		//
+		// EXACT name strings, not substrings: a `/Absent/` regex would pass for a
+		// label that merely contains the word while still being overridden, and the
+		// bug being fixed is about WHICH string wins.
+		const { getByRole } = render(
+			<MeetingAttendancePanel
+				{...rollProps}
+				attendance={[{ memberId: "m-bea", status: "absent" }]}
+			/>,
+		);
+		// RECORDED: the status is the name.
+		getByRole("button", { name: "Bea Osei status: Absent" });
+		// SUGGESTION: not recorded, what the plan suggests, and that a tap COMMITS —
+		// the last clause is what the dashed border and the "?" say visually and
+		// nothing said otherwise (the "?" is not announced).
+		getByRole("button", {
+			name: "Abe Nkemelu status: not recorded — the plan suggests Present. Tap to record it.",
+		});
+		// The MENU trigger on that same suggestion row is a third, distinct name. It
+		// is what made the old shared label a hazard: with `aria-haspopup` as the
+		// only discriminator, an AT user reaching for the menu recorded `present`.
+		getByRole("button", {
+			name: "Record a different attendance for Abe Nkemelu",
+		});
+		// And no control gets there by overriding its own content. Asserted on the
+		// attribute, because a composed name and an `aria-label` that happens to
+		// spell the same words are indistinguishable by name alone — and only one of
+		// them keeps the visible and announced strings in sync by construction.
+		for (const el of [
+			getByRole("button", { name: /Abe Nkemelu status/i }),
+			getByRole("button", { name: /Bea Osei status/i }),
+			getByRole("button", {
+				name: /Record a different attendance for Abe Nkemelu/i,
+			}),
+		]) {
+			expect(el.hasAttribute("aria-label"), el.textContent ?? "").toBe(false);
+		}
+	});
+
+	it("F3: says 'not recorded' where the chip shows an em dash", () => {
+		// The unmarked-with-no-suggestion row. "—" is not read aloud at all by most
+		// screen readers, so the visible label cannot be the announced one here —
+		// this is the one place the two deliberately differ, and it differs in the
+		// direction of saying MORE.
+		const { getByRole } = render(
+			<MeetingAttendancePanel {...rollProps} plan={[]} />,
+		);
+		const chip = getByRole("button", { name: "Bea Osei status: not recorded" });
+		expect(chip.textContent).toContain("—");
+	});
+
 	it("keeps contact while the meeting is today and drops it once completed", () => {
 		const today = render(<MeetingAttendancePanel {...rollProps} />);
 		today.getByRole("link", { name: /WhatsApp/i });
