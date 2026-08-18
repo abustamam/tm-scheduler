@@ -14,7 +14,7 @@ All commands must execute in a real shell.
 
 **After every commit:**
 ```bash
-./.codeledger/bin/codeledger verify
+./.codeledger/bin/codeledger verify --task "<the task you just committed>"
 ```
 
 **Architectural constraints** — if `.codeledger/boundaries/` exists, run before editing:
