@@ -132,4 +132,28 @@ describe("NudgeButtons", () => {
 		expect(href).toContain("are you able to make our Tue 19 Aug meeting");
 		expect(href).not.toContain("undefined");
 	});
+
+	it("keeps its labels by default, so the agenda and recruit picker are untouched", () => {
+		render(<NudgeButtons {...base} phone="14155552671" email="j@x.io" />);
+		expect(screen.getByRole("link", { name: "WhatsApp" })).toBeTruthy();
+		expect(screen.getByRole("link", { name: "Email" })).toBeTruthy();
+	});
+
+	it("iconOnly drops the text but NOT the accessible name", () => {
+		// The visible text WAS the accessible name. Removing it without putting one
+		// back leaves a screen reader announcing "link", and leaves the buttons
+		// unqueryable by anything but position. Note the existing tests in this
+		// file query `/whatsapp/i`, which matches BOTH the label and the new
+		// aria-label — so those cannot catch a missing accessible name, and these
+		// assert the exact strings instead.
+		render(
+			<NudgeButtons {...base} iconOnly phone="14155552671" email="j@x.io" />,
+		);
+		expect(screen.queryByText("WhatsApp")).toBeNull();
+		expect(screen.queryByText("Email")).toBeNull();
+		expect(
+			screen.getByRole("link", { name: "Message Jane on WhatsApp" }),
+		).toBeTruthy();
+		expect(screen.getByRole("link", { name: "Email Jane" })).toBeTruthy();
+	});
 });

@@ -15,6 +15,10 @@ interface NudgeButtonsBase {
 	shareUrl: string;
 	/** Fired when the WhatsApp or Email draft link is tapped (auto-mark contacted). */
 	onContacted?: () => void;
+	/** Render glyphs with no text label. OPT-IN, because this component is shared
+	 *  with the agenda slot cards and the recruit picker, where the words are
+	 *  affordable; only the 340px attendance rail needs the space back. */
+	iconOnly?: boolean;
 }
 
 /** Discriminated on `mode`, mirroring `NudgeInput` — a single shape with an
@@ -37,6 +41,7 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 		meetingDate,
 		shareUrl,
 		onContacted,
+		iconOnly = false,
 	} = props;
 	// Render the channel links only after mount. The caller builds `shareUrl` with
 	// a `window.location.origin` prefix that is correct only on the client; during
@@ -96,23 +101,35 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 	return (
 		<div className="flex items-center gap-1.5">
 			{nudge.whatsappUrl ? (
-				<Button asChild size="sm" variant="outline">
+				<Button asChild size={iconOnly ? "icon-sm" : "sm"} variant="outline">
 					<a
 						href={nudge.whatsappUrl}
 						target="_blank"
 						rel="noopener noreferrer"
 						onClick={onContacted}
+						{...(iconOnly
+							? {
+									"aria-label": `Message ${name} on WhatsApp`,
+									title: `Message ${name} on WhatsApp`,
+								}
+							: {})}
 					>
 						<MessageCircle className="size-4" aria-hidden />
-						WhatsApp
+						{iconOnly ? null : "WhatsApp"}
 					</a>
 				</Button>
 			) : null}
 			{nudge.mailtoUrl ? (
-				<Button asChild size="sm" variant="outline">
-					<a href={nudge.mailtoUrl} onClick={onContacted}>
+				<Button asChild size={iconOnly ? "icon-sm" : "sm"} variant="outline">
+					<a
+						href={nudge.mailtoUrl}
+						onClick={onContacted}
+						{...(iconOnly
+							? { "aria-label": `Email ${name}`, title: `Email ${name}` }
+							: {})}
+					>
 						<Mail className="size-4" aria-hidden />
-						Email
+						{iconOnly ? null : "Email"}
 					</a>
 				</Button>
 			) : null}
