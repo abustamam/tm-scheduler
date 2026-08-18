@@ -15,6 +15,10 @@ interface NudgeButtonsBase {
 	shareUrl: string;
 	/** Fired when the WhatsApp or Email draft link is tapped (auto-mark contacted). */
 	onContacted?: () => void;
+	/** Render glyphs with no text label. OPT-IN, because this component is shared
+	 *  with the agenda slot cards and the recruit picker, where the words are
+	 *  affordable; only the 340px attendance rail needs the space back. */
+	iconOnly?: boolean;
 }
 
 /** Discriminated on `mode`, mirroring `NudgeInput` — a single shape with an
@@ -37,6 +41,7 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 		meetingDate,
 		shareUrl,
 		onContacted,
+		iconOnly = false,
 	} = props;
 	// Render the channel links only after mount. The caller builds `shareUrl` with
 	// a `window.location.origin` prefix that is correct only on the client; during
@@ -93,26 +98,61 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 
 	if (!mounted) return null;
 
+	// `name`, not `preferredName`: the rail row this label is announced
+	// against displays the full `name`, so the accessible label matches what
+	// the officer sees on screen.
+	//
+	// Both links announce that they leave the page, matching `WhatsAppPhoneLink`
+	// (#37) — a screen reader gives no other signal that `target="_blank"` is
+	// about to happen. `WhatsAppPhoneLink` composes that phrase from an
+	// `sr-only` span rather than an `aria-label`, because it still has visible
+	// content (the phone number) whose accessible name a label would override;
+	// it has no `aria-label` at all. Icon-only mode here has no visible content
+	// left, so it uses `aria-label` instead — the two names are NOT identical
+	// strings (`+1555… — message Jane on WhatsApp, opens in a new tab` there vs.
+	// `Message Jane on WhatsApp, opens in a new tab` here), only the
+	// "opens in a new tab" convention is shared. `title` reuses the longer
+	// `waLabel` here, because icon-only mode has no visible text left for a
+	// sighted mouse user to read — the tooltip is doing work the sibling
+	// doesn't need it to do (`WhatsAppPhoneLink`'s `title` is a deliberately
+	// SHORT, separate string, `Message ${name} on WhatsApp`, no "opens in a new
+	// tab", pinned by five test files). Do not "harmonise" the two by
+	// lengthening `WhatsAppPhoneLink`'s title to match:
+	// `members.$id.test.tsx:233` asserts `queryByTitle(/on WhatsApp$/)).toBeNull()`
+	// with an ANCHORED matcher, so appending this suffix there would make that
+	// assertion pass because the anchor stopped matching the (now longer)
+	// title, not because the title is actually gone.
+	// `mailto:` does not open a tab, so `mailLabel` says nothing about it.
+	const waLabel = `Message ${name} on WhatsApp, opens in a new tab`;
+	const mailLabel = `Email ${name}`;
+
 	return (
 		<div className="flex items-center gap-1.5">
 			{nudge.whatsappUrl ? (
-				<Button asChild size="sm" variant="outline">
+				<Button asChild size={iconOnly ? "icon-sm" : "sm"} variant="outline">
 					<a
 						href={nudge.whatsappUrl}
 						target="_blank"
 						rel="noopener noreferrer"
 						onClick={onContacted}
+						aria-label={iconOnly ? waLabel : undefined}
+						title={iconOnly ? waLabel : undefined}
 					>
 						<MessageCircle className="size-4" aria-hidden />
-						WhatsApp
+						{iconOnly ? null : "WhatsApp"}
 					</a>
 				</Button>
 			) : null}
 			{nudge.mailtoUrl ? (
-				<Button asChild size="sm" variant="outline">
-					<a href={nudge.mailtoUrl} onClick={onContacted}>
+				<Button asChild size={iconOnly ? "icon-sm" : "sm"} variant="outline">
+					<a
+						href={nudge.mailtoUrl}
+						onClick={onContacted}
+						aria-label={iconOnly ? mailLabel : undefined}
+						title={iconOnly ? mailLabel : undefined}
+					>
 						<Mail className="size-4" aria-hidden />
-						Email
+						{iconOnly ? null : "Email"}
 					</a>
 				</Button>
 			) : null}

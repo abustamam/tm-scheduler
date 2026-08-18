@@ -329,6 +329,16 @@ three. `src/server/attendance-plan-logic.ts` is the seam: `getPlanStatus`,
 function there rather than an inline query — the seam is where the actor attribution and the
 two status predicates live, and an inline query bypasses both while still typechecking.
 
+**What the officer's rail DISPLAYS is not what the seam returns** (v1.19.0.0). `buildPlanPanel`
+(`src/lib/attendance-panel.ts`, with `buildPanelRoleMap` beside it) resolves a display rung per
+member: an explicit `coming`/`not_coming` wins, else a **confirmed** `role_slots` row reads as
+`coming` with `assumed: true`, else the stored `reached_out` or null. Pure derivation, no write —
+the table gains no row, and `listComingForMeeting` still answers with stored rungs only, so the
+rail's coming count is a superset of the seam's BY DESIGN. Both halves live in `src/lib` rather
+than in the route for the usual reason: a route cannot be mounted in vitest, so a derivation there
+is guarded only by source greps, and mutation review found two bugs in this one that pass every
+grep and a clean typecheck. See CONTEXT.md's **Planned attendance** entry.
+
 **The seam does NOT carry the archive gate or the officer-only `reached_out` rung**, and
 reading it as if it did is how the consolidation nearly shipped an authorization regression.
 Both belong to the CALLER: `attendance-plan.ts` resolves the actor and gates on

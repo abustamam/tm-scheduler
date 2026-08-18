@@ -218,7 +218,13 @@ export function roleAbbrev(name: string): string {
 	const words = name
 		.split(/[^A-Za-z]+/)
 		.filter((w) => w.length > 0 && !STOPWORDS.has(w.toLowerCase()));
-	if (words.length === 0) return name.slice(0, 4) || "?";
+	// CODE POINTS, not UTF-16 code units. `name.slice(0, 4)` on a name with no
+	// ASCII letters can cut a surrogate pair in half: `roleAbbrev("①🎤🎤")`
+	// returned `"①🎤\ud83c"`, a lone high surrogate, which renders as a
+	// replacement glyph on the attendance rail's badge and makes
+	// `encodeURIComponent` throw `URIError: URI malformed` for any consumer that
+	// builds a URL out of it. The cap is still four.
+	if (words.length === 0) return [...name].slice(0, 4).join("") || "?";
 	if (words.length >= 2) {
 		return words
 			.map((w) => (w[0] ?? "").toUpperCase())
