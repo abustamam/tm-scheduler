@@ -70,10 +70,12 @@ describe("attendance panel route wiring (PR 2)", () => {
 		// its own richer `PanelRole` map, `roleByMemberId={roleByMemberId}` kept
 		// matching this file too, just at the AGENDA's call site further down —
 		// a test can pin the wrong thing after a rename. `panelRoleByMemberId`'s
-		// own construction (the short-code keying, the base role name, the
-		// `confirmed` polarity) is pinned separately by
-		// `attendance-rail-wiring.guard.test.ts`; this assertion's job is only to
-		// confirm the PANEL gets that map rather than the agenda's.
+		// own construction is no longer even IN this route — it is built by
+		// `buildPanelRoleMap` (`#/lib/attendance-panel`) and unit-tested in
+		// `attendance-panel.test.ts`; `attendance-rail-wiring.guard.test.ts`
+		// pins only that the route calls it and hands the result here. This
+		// assertion's job is narrower still: confirm the PANEL gets that map
+		// rather than the agenda's.
 		expect(src).toContain("plan={effectivePlan}");
 		expect(src).toContain("roster={panelRoster}");
 		expect(src).toContain("roleByMemberId={panelRoleByMemberId}");

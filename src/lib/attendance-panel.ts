@@ -4,6 +4,7 @@
 // same rung render the same label, and a count can be right for the wrong
 // reason.
 
+import { buildShortCodes } from "#/lib/agenda";
 import type { AttendancePlanStatus } from "#/server/attendance-plan-logic";
 
 /** The three stored rungs. `null` (no row) means "no answer" and is not a
@@ -41,6 +42,73 @@ export interface PanelRole {
 	/** The slot's status is `confirmed` — they said yes to the ROLE, which this
 	 *  panel reads as saying yes to the meeting. */
 	confirmed: boolean;
+}
+
+/**
+ * The rail's role map for one meeting's slots, keyed by MEMBER id.
+ *
+ * Lives here rather than inline in the route for the reason this whole module
+ * does: a route cannot be mounted in vitest, so a derivation there is guarded
+ * only by source greps — and mutation review showed two bugs that would break
+ * the rail completely (keying by slot id instead of member id, and filtering
+ * `slots` before `buildShortCodes`) pass every one of those greps and a clean
+ * typecheck. As a seam it is directly assertable.
+ */
+export function buildPanelRoleMap(
+	slots: readonly {
+		// The SLOT's own id (`role_slots.id`), never read below — it exists on
+		// this type only so a test fixture can give a slot an `id` distinct from
+		// its `assigneeId` and prove the map is keyed on the latter. Both are
+		// plausible-looking `string` ids on the same object, which is exactly the
+		// mutation `#/routes/attendance-rail-wiring.guard.test.ts` used to catch
+		// by source grep alone before this became a real unit-tested function.
+		id: string;
+		roleDefinitionId: string;
+		slotIndex: number;
+		roleName: string;
+		status: "open" | "claimed" | "confirmed";
+		assigneeId: string | null;
+	}[],
+): Record<string, PanelRole> {
+	// EVERY slot, assigned or not. `buildShortCodes` decides "SP" vs "SP1" from
+	// how many slots a role definition HAS, so filtering to assigned slots would
+	// renumber the badges as the week's slots fill.
+	const shortCodes = buildShortCodes(
+		slots.map((s) => ({
+			roleDefinitionId: s.roleDefinitionId,
+			slotIndex: s.slotIndex,
+			name: s.roleName,
+		})),
+	);
+	const byMember: Record<string, PanelRole> = {};
+	for (const s of slots) {
+		if (!s.assigneeId) continue;
+		const existing = byMember[s.assigneeId];
+		if (existing) {
+			// Double-booking is deliberate product behaviour (see `agenda.ts`'s
+			// "still assignable" note). The FIRST slot keeps the label — `slots`
+			// arrives ordered by the role's `sortOrder`, so that is the more
+			// prominent role — but `confirmed` is the OR across all of them,
+			// because someone confirmed for ANY role on this meeting is attending
+			// it. Plain last-write-wins cost only a wrong LABEL on the string map;
+			// on this one it would drop a confirmed member out of the coming COUNT.
+			byMember[s.assigneeId] = {
+				...existing,
+				confirmed: existing.confirmed || s.status === "confirmed",
+			};
+			continue;
+		}
+		byMember[s.assigneeId] = {
+			// Unreachable — the same rows built the map. It is `Map.get`'s type
+			// obligation, and is byte-identical to `season-grid-logic.ts`'s.
+			code: shortCodes.get(`${s.roleDefinitionId}:${s.slotIndex}`) ?? "?",
+			// The BASE role name, not `slotLabel` — the draft says "you're our
+			// Speaker", never "you're our Speaker 1".
+			roleName: s.roleName,
+			confirmed: s.status === "confirmed",
+		};
+	}
+	return byMember;
 }
 
 /** What a ROW carries. `confirmed` is deliberately absent: on the way out it is

@@ -44,14 +44,15 @@ import {
 } from "#/components/ui/dialog";
 import { Label } from "#/components/ui/label";
 import { useOnlineStatus } from "#/hooks/use-online-status";
-import { buildRoleCounts, buildShortCodes, slotLabel } from "#/lib/agenda";
+import { buildRoleCounts, slotLabel } from "#/lib/agenda";
 import {
 	applyFlex,
 	buildRunOfShow,
 	expandRunSheet,
 } from "#/lib/agenda-runsheet";
 import { buildSlideDeck } from "#/lib/agenda-slides";
-import type { PanelRole, PlanStatus } from "#/lib/attendance-panel";
+import type { PlanStatus } from "#/lib/attendance-panel";
+import { buildPanelRoleMap } from "#/lib/attendance-panel";
 import { clubLogoUrl } from "#/lib/club-logo-url";
 import {
 	formatMeetingDate,
@@ -572,37 +573,14 @@ function MeetingView() {
 	// That one is read as a plain string by four other consumers
 	// (<MeetingAgenda>, <AssignSlotSheet>, <NudgeRecruitPicker>, buildPickerRows)
 	// and widening its value type to serve one of them is how a shared map
-	// becomes everyone's problem.
-	//
-	// `buildShortCodes` is the season grid's own function, so the rail uses the
-	// SAME ABBREVIATION VOCABULARY as the sign-up sheet rather than a second
-	// hand-maintained list. It does NOT guarantee the same numeric suffix: the
-	// grid derives repeat-numbering ("SP1"/"SP2") and collision suffixes ("#2")
-	// from a user-selectable WINDOW of meetings (`?count=`), while this feeds it
-	// only THIS meeting's slots — a meeting with one speaker renders "SP" here
-	// even when the grid's window has enough to number it "SP1". That is
-	// deliberate: per-meeting numbering is the meaningful answer on a meeting
-	// page, and the full role name is always available via the badge's `title`
-	// and sr-only text, so nothing is lost when the two surfaces' suffixes
-	// diverge.
-	const shortCodes = buildShortCodes(
-		slots.map((s) => ({
-			roleDefinitionId: s.roleDefinitionId,
-			slotIndex: s.slotIndex,
-			name: s.roleName,
-		})),
-	);
-	const panelRoleByMemberId: Record<string, PanelRole> = {};
-	for (const s of slots) {
-		if (!s.assigneeId) continue;
-		panelRoleByMemberId[s.assigneeId] = {
-			code: shortCodes.get(`${s.roleDefinitionId}:${s.slotIndex}`) ?? "?",
-			// The BASE role name, not `slotLabel` — the draft says "you're our
-			// Speaker", never "you're our Speaker 1".
-			roleName: s.roleName,
-			confirmed: s.status === "confirmed",
-		};
-	}
+	// becomes everyone's problem. Built by `buildPanelRoleMap` (`#/lib/attendance-panel`)
+	// rather than inline here: this route cannot mount in vitest, so a derivation
+	// living here is guarded only by source greps — and mutation review showed two
+	// bugs that would break the rail completely (keying the lookup by slot instead
+	// of member, and numbering codes off only the assigned slots) pass every one of
+	// those greps and a clean typecheck. As a pure function in `lib/`, it is
+	// unit-tested directly instead.
+	const panelRoleByMemberId = buildPanelRoleMap(slots);
 	// Derived here rather than carried as their own payload fields (#396 PR2
 	// task 6): both are redundant with data the payload already ships.
 	// `unavailableMembers` (public) already names who is `not_coming`;

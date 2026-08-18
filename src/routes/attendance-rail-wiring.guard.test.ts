@@ -9,22 +9,34 @@
 // `club-index-wiring.guard.test.ts` uses for the same reason.
 //
 // What it pins, and why each one:
-//  - `buildShortCodes` is the SEASON GRID's function. Hand-rolling codes here is
-//    the failure this is really guarding: the rail would look right and disagree
-//    with the sign-up sheet.
-//  - the `confirmed` polarity. `s.status === "claimed"` typechecks, renders, and
-//    silently marks unconfirmed members as attending.
-//  - that the PANEL receives the rich map. `roleByMemberId` (the plain
-//    string map) still exists for <MeetingAgenda>, so passing the wrong one is
-//    one character away and typechecks only until the shapes diverge.
-//  - the `shortCodes` lookup key includes `:${s.slotIndex}`. Keying on
-//    `roleDefinitionId` alone typechecks and renders "?" on every badge.
-//  - `roleName: s.roleName`, not `slotLabel(s, roleCounts)`. The numbered
-//    label ("Speaker 1") belongs to the agenda, not the outreach draft.
+//  - the route calls `buildPanelRoleMap(` — the wiring itself, invisible to
+//    vitest no matter how the map is built.
+//  - that the PANEL receives the result. `roleByMemberId` (the plain string
+//    map) still exists for <MeetingAgenda>, so passing the wrong one is one
+//    character away and typechecks only until the shapes diverge (#319 again).
+//
+// What used to live here and does not anymore: the short-code keying, the
+// `confirmed` polarity, and the base-vs-numbered role name were all source
+// greps on the derivation's own expressions. Mutation review found two bugs
+// that would break the rail completely (keying by the slot's own id, and
+// numbering codes off only the assigned slots) neither this file's five
+// greps nor a clean typecheck could see — a route-inline derivation is
+// grep-guarded, and a grep can only catch what someone thought to write. The
+// derivation moved to `buildPanelRoleMap` (`#/lib/attendance-panel`), a pure
+// function vitest CAN call directly, and every one of those invariants —
+// including the two the greps missed — is now a real assertion in
+// `attendance-panel.test.ts`. This file no longer needs to know what is
+// inside the map, only that the route builds one and hands it to the panel.
 //
 // COMMENT-BLIND (`readSource`): every assertion is of the "this pattern must BE
 // present" form, and this very file quotes the patterns it looks for — a raw
 // read would pass on a commented-out wiring. See `src/test/guard-source.ts`.
+//
+// Split with `attendance-panel-wiring.guard.test.ts`: that file pins the
+// panel's OTHER props (phase gating, plan/roster wiring, layout, the write
+// paths) — everything about the route EXCEPT how the role map itself is
+// built. This file is the map's wiring only; its construction is
+// `attendance-panel.test.ts`'s job.
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -36,32 +48,11 @@ const ROUTE = resolve(HERE, "./club.$clubId.meeting.$meetingId.tsx");
 describe("attendance rail role wiring", () => {
 	const src = readSource(ROUTE);
 
-	it("builds the rail's codes with the sign-up sheet's own function", () => {
-		expect(src).toContain("buildShortCodes(");
-		expect(src).toContain("panelRoleByMemberId");
-	});
-
-	it("reads `confirmed` from the slot status, with the right polarity", () => {
-		expect(src).toContain('confirmed: s.status === "confirmed"');
+	it("builds the rail's map with the extracted, unit-tested function", () => {
+		expect(src).toContain("buildPanelRoleMap(");
 	});
 
 	it("hands the PANEL the rich map, not the agenda's string map", () => {
 		expect(src).toContain("roleByMemberId={panelRoleByMemberId}");
-	});
-
-	it("keys the code lookup by slot, not just by role definition", () => {
-		// Dropping `:${slotIndex}` makes every badge on the rail render "?" — it
-		// typechecks, and the route does not mount in jsdom, so nothing else in the
-		// repo can see it. This is the single load-bearing expression here.
-		expect(src).toContain(
-			"shortCodes.get(`${s.roleDefinitionId}:${s.slotIndex}`)",
-		);
-	});
-
-	it("drafts with the BASE role name, not the numbered label", () => {
-		// `roleName: slotLabel(s, roleCounts)` typechecks and sends "just confirming
-		// you're our Speaker 1", which reads as a mail merge. The panel's own tests
-		// cannot catch it — they are fed this value as a prop.
-		expect(src).toContain("roleName: s.roleName,");
 	});
 });

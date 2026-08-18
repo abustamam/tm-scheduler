@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PanelRole, PlanStatus } from "./attendance-panel";
-import { buildPlanPanel } from "./attendance-panel";
+import { buildPanelRoleMap, buildPlanPanel } from "./attendance-panel";
 
 const roster = [
 	{ id: "d", name: "Dana", preferredName: null, phone: null, email: null },
@@ -286,5 +286,203 @@ describe("buildPlanPanel — an assumed Coming is a real Coming", () => {
 		});
 		expect(rows[0]?.assumed).toBe(false);
 		expect(rows[0]?.role).toEqual({ code: "TD", roleName: "Toastmaster" });
+	});
+});
+
+// A real seam, not a route-inline derivation guarded only by source greps: two
+// bugs that would break the rail completely — keying the lookup by the slot's
+// own id instead of the member's, and numbering codes off only the ASSIGNED
+// slots (so a code changes as the week's slots fill) — passed a five-assertion
+// grep and a clean typecheck under mutation review. Both are real assertions
+// here instead.
+type PanelSlotInput = Parameters<typeof buildPanelRoleMap>[0][number];
+
+describe("buildPanelRoleMap", () => {
+	it("keys the map by the MEMBER id, not the slot's own id", () => {
+		// `role_slots.id` (the slot's own id) and `assigneeId` (the member) are
+		// both plausible `string` ids on the same object. Keying on the former is
+		// the bug that renders no badge on any row at all: this member id would
+		// never appear as a key, so `input.roleByMemberId[m.id]` in
+		// `buildPlanPanel` misses for every single row.
+		const slots: PanelSlotInput[] = [
+			{
+				id: "slot-abc",
+				roleDefinitionId: "role-td",
+				slotIndex: 0,
+				roleName: "Toastmaster of the Day",
+				status: "confirmed",
+				assigneeId: "member-1",
+			},
+		];
+		expect(Object.keys(buildPanelRoleMap(slots))).toEqual(["member-1"]);
+	});
+
+	it("numbers a role off every slot it HAS, not just the assigned ones", () => {
+		// Three Speaker slots, one filled. `buildShortCodes` numbers a role once
+		// it has more than one slot — full stop, regardless of how many are
+		// assigned — so the filled one must read "SP1", not the singleton "SP".
+		const threeSlots: PanelSlotInput[] = [
+			{
+				id: "s0",
+				roleDefinitionId: "role-sp",
+				slotIndex: 0,
+				roleName: "Speaker",
+				status: "confirmed",
+				assigneeId: "member-1",
+			},
+			{
+				id: "s1",
+				roleDefinitionId: "role-sp",
+				slotIndex: 1,
+				roleName: "Speaker",
+				status: "open",
+				assigneeId: null,
+			},
+			{
+				id: "s2",
+				roleDefinitionId: "role-sp",
+				slotIndex: 2,
+				roleName: "Speaker",
+				status: "open",
+				assigneeId: null,
+			},
+		];
+		expect(buildPanelRoleMap(threeSlots)["member-1"]?.code).toBe("SP1");
+
+		// The bug: filtering to assigned slots BEFORE counting. With only the one
+		// filled slot in the row set, `buildShortCodes` sees a singleton role and
+		// drops the number — a different, WRONG answer from the same meeting,
+		// changing as the week's slots fill. Proven here by passing the filtered
+		// set straight through the same function, not by editing the source.
+		const onlyAssigned = threeSlots.filter((s) => s.assigneeId);
+		expect(buildPanelRoleMap(onlyAssigned)["member-1"]?.code).toBe("SP");
+	});
+
+	it("reads `confirmed` from the slot status, with the right polarity", () => {
+		const claimed: PanelSlotInput[] = [
+			{
+				id: "s0",
+				roleDefinitionId: "role-td",
+				slotIndex: 0,
+				roleName: "Toastmaster of the Day",
+				status: "claimed",
+				assigneeId: "member-1",
+			},
+		];
+		expect(buildPanelRoleMap(claimed)["member-1"]?.confirmed).toBe(false);
+
+		const confirmed: PanelSlotInput[] = [
+			{
+				id: "s0",
+				roleDefinitionId: "role-td",
+				slotIndex: 0,
+				roleName: "Toastmaster of the Day",
+				status: "confirmed",
+				assigneeId: "member-1",
+			},
+		];
+		expect(buildPanelRoleMap(confirmed)["member-1"]?.confirmed).toBe(true);
+	});
+
+	it("carries the BASE role name, not the numbered label", () => {
+		const slots: PanelSlotInput[] = [
+			{
+				id: "s0",
+				roleDefinitionId: "role-sp",
+				slotIndex: 0,
+				roleName: "Speaker",
+				status: "confirmed",
+				assigneeId: "member-1",
+			},
+			{
+				id: "s1",
+				roleDefinitionId: "role-sp",
+				slotIndex: 1,
+				roleName: "Speaker",
+				status: "open",
+				assigneeId: null,
+			},
+		];
+		const role = buildPanelRoleMap(slots)["member-1"];
+		// The CODE is numbered ("SP1") — the base name deliberately is not.
+		expect(role?.code).toBe("SP1");
+		expect(role?.roleName).toBe("Speaker");
+	});
+
+	it("resolves a double-booked member to confirmed-if-ANY, labeled by the FIRST slot", () => {
+		// `role-template.ts` orders Toastmaster of the Day at sortOrder 10 and
+		// Speaker at 30, and `meetings.ts` selects slots
+		// `.orderBy(asc(roleDefinitions.sortOrder), ...)` — so for a member
+		// holding both, Toastmaster arrives first. Confirmed as Toastmaster but
+		// only claimed as Speaker must not read as unconfirmed just because
+		// Speaker was iterated second: plain last-write-wins would silently drop
+		// this member out of the rail's "coming" count.
+		const slots: PanelSlotInput[] = [
+			{
+				id: "s-td",
+				roleDefinitionId: "role-td",
+				slotIndex: 0,
+				roleName: "Toastmaster of the Day",
+				status: "confirmed",
+				assigneeId: "member-1",
+			},
+			{
+				id: "s-sp",
+				roleDefinitionId: "role-sp",
+				slotIndex: 0,
+				roleName: "Speaker",
+				status: "claimed",
+				assigneeId: "member-1",
+			},
+		];
+		expect(buildPanelRoleMap(slots)["member-1"]).toEqual({
+			code: "TD",
+			roleName: "Toastmaster of the Day",
+			confirmed: true,
+		});
+	});
+
+	it("stays confirmed-if-ANY when the LATER slot is the confirmed one", () => {
+		// Same pair, reversed which slot is confirmed. The label still comes from
+		// the FIRST slot by iteration order regardless of which one is confirmed
+		// — `confirmed` is an OR across all of a member's slots, not "whichever
+		// slot happens to be confirmed" and not "whichever slot is last".
+		const slots: PanelSlotInput[] = [
+			{
+				id: "s-td",
+				roleDefinitionId: "role-td",
+				slotIndex: 0,
+				roleName: "Toastmaster of the Day",
+				status: "claimed",
+				assigneeId: "member-1",
+			},
+			{
+				id: "s-sp",
+				roleDefinitionId: "role-sp",
+				slotIndex: 0,
+				roleName: "Speaker",
+				status: "confirmed",
+				assigneeId: "member-1",
+			},
+		];
+		expect(buildPanelRoleMap(slots)["member-1"]).toEqual({
+			code: "TD",
+			roleName: "Toastmaster of the Day",
+			confirmed: true,
+		});
+	});
+
+	it("contributes no key for an open (unassigned) slot", () => {
+		const slots: PanelSlotInput[] = [
+			{
+				id: "s0",
+				roleDefinitionId: "role-td",
+				slotIndex: 0,
+				roleName: "Toastmaster of the Day",
+				status: "open",
+				assigneeId: null,
+			},
+		];
+		expect(Object.keys(buildPanelRoleMap(slots))).toEqual([]);
 	});
 });
