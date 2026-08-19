@@ -47,14 +47,17 @@ import {
 	pxToPt,
 	RUN_NARRATIVE_TYPE,
 } from "#/lib/agenda-print-type";
+import { resolveAgendaRows } from "#/lib/agenda-runsheet";
 import type { TimelineRow } from "#/lib/agenda-timing";
+import { buildTimeline } from "#/lib/agenda-timing";
+import { CONTEST_TEMPLATE } from "#/lib/contest-template";
 import {
 	findChrome,
 	measuredHeight,
 	printableDocument,
 } from "#/test/print-page-count";
 import { type AgendaHeader, MeetingAgendaPrint } from "./meeting-agenda-print";
-import { PAGE_H, PRINT_PAGE_CSS } from "./print-theme";
+import { MIN_FIT_SCALE, PAGE_H, PRINT_PAGE_CSS } from "./print-theme";
 
 const header: AgendaHeader = {
 	clubName: "MCF Toastmasters",
@@ -354,7 +357,13 @@ function printedDetailPt(rows: TimelineRow[]): number {
 	// enough to stop needing a scale would report type LARGER than it prints, and
 	// because this is a floor, that overstatement passes. A false pass in the one
 	// gate whose whole job is catching false passes.
-	const scale = Math.min(1, (PAGE_H - 2) / agendaHeight(rows));
+	const raw = (PAGE_H - 2) / agendaHeight(rows);
+	// Mirrors `FitPage`: below MIN_FIT_SCALE it stops scaling and lets the sheet
+	// FLOW across pages instead, so the type prints at its declared size. Without
+	// this branch the helper would report the crushed size for an agenda that is
+	// no longer crushed — and, being a floor, that understatement FAILS rather
+	// than passing, which is the safe direction but still wrong.
+	const scale = raw < MIN_FIT_SCALE ? 1 : Math.min(1, raw);
 	return pxToPt(RUN_NARRATIVE_TYPE.sm.detail * scale);
 }
 
@@ -474,5 +483,102 @@ describe.skipIf(!hasChrome)("editorial agenda density", () => {
 		expect(printedDetailPt(denser)).toBeGreaterThanOrEqual(
 			EDITORIAL_DENSE_MIN_PRINTED_PT,
 		);
+	});
+});
+
+/**
+ * A CONTEST agenda's printed density (#agenda-templates).
+ *
+ * This — not a page count — is the gate for a templated agenda, for the reason
+ * this whole file exists: `EditorialLayout` wraps its sheet in `FitPage`, which
+ * SCALES to fit, so a contest prints one page whether it is comfortable or
+ * crushed to 4pt. `printedPageCount` therefore reports 1 for every contestant
+ * count and cannot fail. Height, run through the same scale, is the only
+ * observable that moves.
+ *
+ * A contest is the longest agenda this app produces — roughly 40 rows at four
+ * contestants and 58 at seven — so it is the worst case for `FitPage`, and the
+ * fixture spans the axis that actually varies it: the number of contestants.
+ */
+describe.skipIf(!hasChrome)("contest agenda density", () => {
+	const roleRows = CONTEST_TEMPLATE.roles.map((r) => ({
+		key: r.key,
+		name: r.name,
+		isSpeakerRole: r.isSpeakerRole,
+	}));
+
+	/** Slots as `generateSlotRows` would create them, with LONG member names —
+	 *  names are unbounded user data and they set the wrap points that decide the
+	 *  sheet's height. A fixture using short names measures the easy case. */
+	function contestRows(contestants: number): TimelineRow[] {
+		const slots = CONTEST_TEMPLATE.roles.flatMap((r) => {
+			const n = r.key.startsWith("contestant_") ? contestants : r.defaultCount;
+			return Array.from({ length: n }, (_, i) => ({
+				id: `${r.key}-${i}`,
+				roleName: r.name,
+				roleKey: r.key,
+				category: r.category,
+				isSpeakerRole: r.isSpeakerRole,
+				slotIndex: i,
+				assigneeName: `Anneliese Vandermeer-Castellanos ${i + 1}`,
+				speechTitle: null,
+				projectLevel: null,
+				minMinutes: null,
+				maxMinutes: null,
+				evaluatesSlotId: null,
+				evaluates: null,
+			}));
+		});
+		return buildTimeline(
+			resolveAgendaRows({
+				geIntroducesFunctionaries: false,
+				template: { beats: CONTEST_TEMPLATE.beats, roles: roleRows },
+				slots,
+			}),
+			new Date("2026-09-12T13:00:00Z"),
+			"America/Chicago",
+		);
+	}
+
+	it.each([
+		4, 6, 7,
+	])("prints body text a member can read with %i contestants", (contestants) => {
+		// The DENSE floor, not the standard one: a contest is a deliberately
+		// long sheet and is allowed to run tighter than a normal night's agenda.
+		// It is still an ABSOLUTE floor in points — the unit the complaint would
+		// be made in — not a comparison against the layout's own constant.
+		expect(printedDetailPt(contestRows(contestants))).toBeGreaterThanOrEqual(
+			EDITORIAL_DENSE_MIN_PRINTED_PT,
+		);
+	});
+
+	it("FLOWS rather than shrinking, so type stays the same at every size", () => {
+		// The fix this suite forced. A contest is far too long to scale onto one
+		// sheet: measured at 3.5pt for four contestants and 2.6pt for seven before
+		// `MIN_FIT_SCALE` existed. It now prints across several sheets at full
+		// size, so all three counts read identically — and the sheet genuinely
+		// grows, which the height assertion below pins.
+		expect(printedDetailPt(contestRows(4))).toBe(
+			printedDetailPt(contestRows(7)),
+		);
+		expect(agendaHeight(contestRows(7))).toBeGreaterThan(
+			agendaHeight(contestRows(4)),
+		);
+		// And it is a MULTI-sheet agenda, not one that happened to fit.
+		expect(agendaHeight(contestRows(4))).toBeGreaterThan(PAGE_H);
+	});
+
+	it("measures a non-empty sheet", () => {
+		// The unstated zero. Chrome renders a valid, short document for an empty
+		// body, and a short sheet needs no scale — which reads as LARGE type and
+		// passes every floor above.
+		const rows = contestRows(4);
+		expect(rows.length).toBeGreaterThan(30);
+		// `who` is the beat's ACTIVITY, not the role — the Chief Judge's row reads
+		// "Judges' briefing". Identity travels in `roleKey`, which is what the
+		// print layouts colour by.
+		expect(rows.some((r) => r.roleKey === "chief_judge")).toBe(true);
+		expect(rows.some((r) => r.who.startsWith("Judges' briefing"))).toBe(true);
+		expect(rows.filter((r) => r.section)).toHaveLength(5);
 	});
 });
