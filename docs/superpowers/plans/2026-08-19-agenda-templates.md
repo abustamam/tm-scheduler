@@ -19,6 +19,59 @@ Decided at eng review (2026-08-19). A single ~35-file diff is the size `/ship`'s
 
 The cut is at the deck because a contest chair runs the night off a printed script, so it is both the most separable piece and the least urgent one. Each PR is independently shippable and independently reviewable.
 
+## READ THIS FIRST — the code blocks are a SKETCH, not a spec
+
+Three review rounds each found real defects, and each fix round introduced new ones. The
+**design** has held up throughout — data model, two-PR split, conversion semantics, dialog copy.
+The **code blocks have not**, because nothing compiles them. Treat every snippet below as intent.
+When a snippet and the compiler disagree, the compiler is right.
+
+### Design decisions made 2026-08-19 (round 3) — do these BEFORE the code that depends on them
+
+**DD1 — The seed needs THREE contestant roles, not one.** All three blocks currently repeat on a
+single `contestant` role with `defaultCount: 4`. There is one `role_definitions` row and four
+slots, so a member entered only in impromptu prints in all three segments and has their minutes
+booked three times. Split the seed into `contestant_prepared`, `contestant_impromptu`,
+`contestant_evaluation` (defaultCount 4 each), each block repeating on its own key. Seed change
+only, no code change. Delete the Task 8 note claiming "one contestant role is claimed per
+segment" — that was never true of the model.
+
+**DD2 — `listRoleDefinitions` takes a scope parameter, not a hard `isNull`.** It has a SEVENTH
+caller the six-row table missed: `meetings.ts:322`, feeding `loadMeetingDetail`'s "+ Add role"
+picker. Pushing `isNull(templateId)` inside it means a contest meeting's picker offers only
+standard roles. Signature becomes `listRoleDefinitions(clubId, { onlyEnabled?, withSlotCounts?,
+templateId?: string | null })`, and `meetings.ts:322` passes `meeting.templateId`.
+
+Separately, `pickSpeakerAndEvaluatorRoles` (`meeting-roles.ts:198`) sorts by `sortOrder` ascending
+and takes `[0]`, so within the contest template `test_speaker` (70) beats every contestant (80).
+"+ Add speaker" would add a second Test Speaker. Fix in the seed: give `contestant_prepared`
+sortOrder **70** and move `test_speaker` to **90**.
+
+**DD3 — Colour print rows by `category` when the role key is unmapped.** `ROLE_KEY_COLOR`
+(`meeting-agenda-print.tsx:220`) holds five standard keys; `beatColor` treats a present-but-
+unmapped key as authoritative and returns `MUTED` (`:231`), and `isHighlighted` (`:245`) tests
+`roleKey === "speaker"`. Every contest key is unmapped, so the whole sheet prints one grey spine
+with no speaker highlight. Fall back to `category` rather than enumerating contest keys — that
+serves every future template for free.
+
+### Known defects in the code blocks — fix at the compiler, do not re-plan
+
+Compiler- or test-visible, in the order you will hit them:
+
+| # | Where | Defect |
+|---|---|---|
+| 1 | Task 3 `toRow` | `label` is computed and never used in the ROLE arm. 13 of 26 seed beats lose their activity name — "Contest briefing", "Results and certificates" and "Evaluation contestant" all collapse to `Contest Chair · X` / `Contestant N`. Build `who` from `label`, and carry the role identity in `roleKey`. |
+| 2 | Task 3 `buildTemplateRows` | The non-repeat role arm binds `owned[0]` only, so the SECOND `ballot_counter` and `contest_timer` (both `defaultCount: 2`) appear nowhere. `owned.forEach`, matching `expandRunSheet`'s plain arm (`agenda-runsheet.ts:1706`). |
+| 3 | Task 5 `listAvailableTemplates` | Code block imports `and, asc, eq, isNotNull, isNull` but calls `or(...)`; `isNotNull` is unused. Strict `noUnusedLocals` fails twice. The prose below it lists the correct five. |
+| 4 | Task 9 Step 1 | Test file is pre-rewrite: wraps `resolveAgendaRows(...)` in `expandRunSheet(...)` (type error — it already returns rows), references an undeclared `beats`, never imports `expandRunSheet`. Delete the wrappers. |
+| 5 | Task 4 | Only the narrative layouts are patched. `GridLayout` (`meeting-agenda-print.tsx:1098` — the DEFAULT) and `TimingLayout` (`:1905`) map rows directly and branch only on `r.handoff`; a section row prints as an ordinary zebra row with a clock stamp, and `TimingLayout` splits `who` on `" · "` into a 150px Role column. Also `RunNarrative` calls `beatColor(g)` with an `AgendaGroup` (`:600`), which has no `section` field. |
+| 6 | Task 5 Step 4b | `applyTemplateSyncToUpcomingMeetings` (`slots-logic.ts:329`) and `syncSlotsForRoleEnabledChange` (`:509`) are club-scoped bulk ops whose meeting sets include TEMPLATED meetings — `backfillMissingRoleSlots` (`:274`) would inject standard Timer/Grammarian into every future contest. Scoping the defs cannot reach this; the MEETING query must exclude `template_id IS NOT NULL`. Also: there is no `meetingClub` helper in that file (`:140` is inside `applyAddSpeakerSlot`), and the table's `:40`/`:145` are really `:36`/`:144`. |
+| 7 | Task 11 | Diagnoses the `FitPage` problem, then re-ships it: still lists only `print-page-count.test.tsx` and still asserts page counts that are `1 === 1` under `FitPage`. Add the contest fixture to `print-density.test.tsx`, whose `measuredHeight` floors are the only assertions that can fail. |
+| 8 | Task 8 | `expect(beats.length).toBeLessThan(MAX_TEMPLATE_BEATS)` passes for every value of the cap. Assert the seed's absolute counts. |
+| 9 | Spec | `resolveRunOfShow` still described as the normative seam (spec:335); the "Superseded by D8" marker says "below" while the superseded text is above it (:352); module layout still exports `loadTemplateBeats`/`planTemplateConversion` (:374); `held` survives at :176 and :400 after D5 says it does not exist; D3's contest-Timer example (:414) assumes a template role keyed `timer`, but the seed uses `contest_timer` and **no seeded key collides with any standard key** — so the two-partial-index split is exercised by no seeded data. |
+
+Verified CLEAN by round 3, with evidence — do not re-investigate: the `agenda-runsheet ↔ agenda-template-rows` import cycle is safe and not novel (`award-candidates-logic ↔ minutes-logic` already does it); `agenda-slides.ts`, `deck-to-pptx.ts`, `derive-minutes.ts` and `meeting-packet.ts` touch neither `AgendaRow` nor `TimelineRow`; the clock adds up (88 fixed + 4×8 + 4×3 + 4×4 = 148 vs 150) and the three repeat blocks ARE consecutive in `sortOrder`; `applyFlex` no-ops for Phase 1 and the 7-contestant banner text is correct.
+
 ## Global Constraints
 
 - Package manager is **Bun**. `bun run test` (Vitest, never `bun test`). Single test: `bunx vitest run <path>`.
@@ -3797,10 +3850,16 @@ Also confirmed and fixed: `meetingStatusEnum` has no `"held"` (use `assertMeetin
 
 Verified clean by hand: `numbered(roleName, index, multi)` matches the call; every object `buildTemplateRows` returns satisfies `AgendaRow`; Task 12a's two call sites and line numbers are exact; `ALTER TYPE … ADD VALUE` is safe here (postgres:17, and the value is not used in the adding transaction).
 
+**THIRD OUTSIDE PASS: ran, 14 findings.** I spot-checked three; all three confirmed, and **two were defects I introduced in the rewrite** — `toRow` discarding every role beat's `label`, and the non-repeat arm binding only `owned[0]` so the second Ballot Counter and Timer vanish. It also found a SEVENTH `role_definitions` reader (`meetings.ts:322`), and that `pickSpeakerAndEvaluatorRoles` picks `test_speaker` over `contestant` on sortOrder — meaning Step 4b did not fix the bug it exists to fix. Four categories came back clean with evidence (import cycle, non-print consumers, the clock, `applyFlex`).
+
+**DECISION (2026-08-19): stop revising the plan; implement.** Three rounds, and each of my fix rounds introduced new defects. The findings are overwhelmingly compiler-shaped — an unimported `or`, an unused `label`, a type mismatch, a dropped slot — and they hide because 3,800 lines of code-as-prose are executed by nothing. `bun run typecheck` and the first test run surface them in seconds. The three DESIGN-level findings are resolved above as DD1-DD3; the rest are listed as known defects to fix at the compiler.
+
+**VERDICT:** ENG + DESIGN + THREE OUTSIDE PASSES — design confirmed sound and stable across all three; code blocks known-defective and demoted to a sketch. Ready to implement, NOT ready to copy-paste.
+
 **UNRESOLVED DECISIONS:**
-- The rewrite has still had **no independent review**. I found three defects in it myself, which is evidence the rate is not zero, not evidence it is now clean. Run `/plan-eng-review` or a fresh outside voice against Tasks 3, 4, 5 and 12a after the weekly limit resets (2pm Pacific) before implementing.
-- Not checked by anyone: whether `buildTemplateRows`' repeat-block binding is correct when a block contains two role-owning rows or a role row whose `roleKey` differs from `repeatsRoleKey`. Unreachable from the seeded contest template, reachable from Phase 2's editor.
-- The circular import between `agenda-runsheet.ts` and `agenda-template-rows.ts` is asserted safe and untested. The plan names the fallback (extract shared types) but nobody has run `bun run typecheck` against it.
+- Round 3's remaining 11 findings are folded as a defect table, not fixed in place. An implementer who copies a snippet without typechecking will reproduce them.
+- Nobody has checked `buildTemplateRows`' repeat-block binding when a block holds two role-owning rows, or a role row whose `roleKey` differs from `repeatsRoleKey`. Unreachable from the seed, reachable from Phase 2's editor.
+- TODOS.md proposals were never walked through individually in any of the four reviews.
 - Outside-voice findings 8, 10-13, 15 and several in 16 are folded on the reviewer's word — I confirmed 7 of 16 directly. The deferrable-unique-index point (15) and the `applyFlex` Table-Topics hardcoding (13) in particular deserve a check.
 - TODOS.md proposals were not walked through individually in any review. Candidates: the re-sync script's operational burden, the stale CLAUDE.md Codex claim, measuring the Task 2 caps before Phase 2, and adding a composite FK from `meeting_template_beats.role_key` to `meeting_template_roles`.
 - Design passes 5 and 6 stay below 8 by choice. No `DESIGN.md` exists, so design-system alignment rests on copying `meeting-meta-dialog.tsx` rather than on stated tokens; `/design-consultation` would close that but was judged out of proportion to one dialog. Responsive and accessibility are now specified for this dialog only, not audited across the surfaces it sits in.
