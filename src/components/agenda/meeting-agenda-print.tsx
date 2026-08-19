@@ -220,6 +220,25 @@ const ROLE_KEY_COLOR: Record<string, string> = {
 	speaker: TEAL,
 	evaluator: YELLOW,
 	toastmaster_of_the_day: LAGOON,
+	// Seeded Speech Contest template (#agenda-templates). Without these every
+	// contest row takes the unmapped-key path and prints one undifferentiated
+	// grey spine, losing the sheet's whole visual hierarchy on the night it
+	// matters most. Contestant roles take TEAL so they read as the speaking
+	// slots, matching `speaker`; the chair and judges take the leadership
+	// lagoon; the functionaries stay muted.
+	// FOLLOW-UP: a category fallback would serve every future template without
+	// this list growing — it needs `category` on `AgendaRow`, which is a wider
+	// change than Phase 1 needs. Recorded in TODOS.md.
+	contest_chair: LAGOON,
+	chief_judge: LAGOON,
+	contestant_prepared: TEAL,
+	contestant_impromptu: TEAL,
+	contestant_evaluation: TEAL,
+	test_speaker: TEAL,
+	judge: YELLOW,
+	ballot_counter: MUTED,
+	contest_timer: MUTED,
+	sergeant_at_arms: MUTED,
 };
 
 type RoleIdentified = { who: string; roleKey?: string | null };
@@ -419,6 +438,42 @@ const ELBOW = 5;
  *  and borderBottom — and spreads FIRST, so a call site can vary the layout's
  *  own chrome but can never override the semantics (color, italics, layout)
  *  this component owns. */
+/**
+ * A segment header on a TEMPLATED agenda ("PREPARED SPEECH CONTEST").
+ *
+ * Deliberately NOT `HandoffBand`. That renders an indented italic elbow (`└`)
+ * meaning "X introduces Y" — it is a sub-row continuation marker, and a section
+ * printed through it reads as a note attached to the row above rather than as
+ * the head of a new segment. This is full-bleed, uppercase, ruled above, and
+ * carries no clock stamp because a section consumes no time.
+ */
+function SectionBand({
+	row,
+	fontSize,
+	padding,
+}: {
+	row: TimelineRow;
+	fontSize: number;
+	padding: string;
+}) {
+	return (
+		<div
+			style={{
+				padding,
+				marginTop: 6,
+				borderTop: `1.5px solid ${INK}`,
+				fontSize,
+				fontWeight: 700,
+				letterSpacing: ".08em",
+				textTransform: "uppercase",
+				color: INK,
+			}}
+		>
+			{row.who}
+		</div>
+	);
+}
+
 function HandoffBand({
 	row,
 	fontSize,
@@ -584,6 +639,17 @@ function RunNarrative({
 				// introduces, which is the grouping the room actually experiences.
 				// Indented past the 4px spine and the stamp column so the stamps stay a
 				// single unbroken column.
+				// Sections first: a section is never a presenter, so it must not fall
+				// through to the spine-coloured presenter row below.
+				if (lead.section)
+					return (
+						<SectionBand
+							key={rowKey(lead, gi)}
+							row={lead}
+							fontSize={lg ? 11 : 9.5}
+							padding={lg ? "6px 0 4px 0" : "5px 0 3px 0"}
+						/>
+					);
 				if (lead.handoff)
 					return (
 						<HandoffBand
@@ -1108,7 +1174,17 @@ function GridLayout({
 						// page to read. Same argument `TimingLegend` makes above. The
 						// ~0.7px per band it costs comes out of the headroom inventory
 						// the header comment enumerates.
-						r.handoff ? (
+						r.section ? (
+							// A templated agenda's segment header. Without this arm it
+							// prints as an ordinary zebra row WITH a clock stamp, which
+							// reads as a beat someone presents.
+							<SectionBand
+								key={rowKey(r, i)}
+								row={r}
+								fontSize={10}
+								padding="6px 10px 4px 10px"
+							/>
+						) : r.handoff ? (
 							<HandoffBand
 								key={rowKey(r, i)}
 								row={r}
@@ -1908,6 +1984,19 @@ function TimingLayout({
 							// as one line — starting at 58px, the Role column's own edge —
 							// rather than filling four cells with a stampless echo of the
 							// row below it.
+							// A templated agenda's segment header, before the handoff arm.
+							// This layout splits `who` on " · " into a 150px Role column,
+							// so a section falling through would have its title parsed as
+							// a role/holder pair and stamped with a clock.
+							if (r.section)
+								return (
+									<SectionBand
+										key={rowKey(r, i)}
+										row={r}
+										fontSize={10}
+										padding="6px 12px 4px 12px"
+									/>
+								);
 							if (r.handoff)
 								return (
 									<HandoffBand

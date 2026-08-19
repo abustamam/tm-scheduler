@@ -1085,3 +1085,89 @@ describe("MeetingAgendaPrint consolidates adjacent same-presenter beats", () => 
 		expect(beside[0]).toBe("General Evaluator · Faisal");
 	});
 });
+
+/**
+ * Section bands — a TEMPLATED agenda's segment headers (#agenda-templates).
+ *
+ * The failure this guards is silent and layout-specific: a section row that
+ * falls through to a layout's ordinary row renderer prints as a normal beat
+ * WITH a clock stamp, and `TimingLayout` additionally splits `who` on " \u00b7 " to
+ * fill its 150px Role column. Both read as "someone presents this segment
+ * header". Every layout therefore needs its own arm, and every layout is
+ * asserted here — the plan originally patched only the narrative pair.
+ */
+describe("section bands", () => {
+	const sectionRows: TimelineRow[] = [
+		{
+			who: "OPENING",
+			roleKey: null,
+			section: true,
+			detail: "",
+			minutes: 0,
+			marks: null,
+			time: "8:00",
+		},
+		{
+			who: "Call to order \u00b7 Ada Lovelace",
+			roleKey: "sergeant_at_arms",
+			detail: "Opens the room",
+			minutes: 5,
+			marks: null,
+			time: "8:00",
+		},
+		{
+			who: "PREPARED SPEECH CONTEST",
+			roleKey: null,
+			section: true,
+			detail: "",
+			minutes: 0,
+			marks: null,
+			time: "8:05",
+		},
+		{
+			who: "Contestant 1 \u00b7 Grace Hopper",
+			roleKey: "contestant_prepared",
+			detail: "Delivers the prepared speech",
+			minutes: 7,
+			marks: { green: 5, yellow: 6, red: 7 },
+			time: "8:05",
+		},
+	];
+
+	function renderSections(layout: AgendaLayout) {
+		return render(
+			<MeetingAgendaPrint
+				layout={layout}
+				header={header}
+				roles={[]}
+				officers={[]}
+				explainers={[]}
+				rows={sectionRows}
+			/>,
+		);
+	}
+
+	for (const layout of ["grid", "editorial", "spacious", "timing"] as const) {
+		it(`${layout}: prints each section title exactly once`, () => {
+			renderSections(layout);
+			expect(screen.getAllByText("OPENING")).toHaveLength(1);
+			expect(screen.getAllByText("PREPARED SPEECH CONTEST")).toHaveLength(1);
+		});
+
+		it(`${layout}: a section carries no clock stamp and is not split`, () => {
+			renderSections(layout);
+			// A section consumes no minutes, so a stamp on it claims the segment
+			// header has a start of its own. TimingLayout also splits `who` on
+			// " \u00b7 " into its Role column; this pins that a section never reaches
+			// that path.
+			const band = screen.getByText("PREPARED SPEECH CONTEST");
+			expect(band.textContent).toBe("PREPARED SPEECH CONTEST");
+		});
+
+		it(`${layout}: ordinary rows still render beside sections`, () => {
+			renderSections(layout);
+			expect(screen.getAllByText(/Call to order/).length).toBeGreaterThan(0);
+			expect(screen.getAllByText(/Contestant 1/).length).toBeGreaterThan(0);
+		});
+	}
+});
