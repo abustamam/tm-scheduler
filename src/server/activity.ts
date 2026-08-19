@@ -1,5 +1,5 @@
 import type { db } from "#/db";
-import { activityActionEnum, activityLog } from "#/db/schema";
+import { type activityActionEnum, activityLog } from "#/db/schema";
 import { getImpersonatedWriteActor } from "./impersonation-actor";
 
 /**

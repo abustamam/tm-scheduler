@@ -13,7 +13,7 @@
 // card's expression, under a comment promising the two "cannot disagree" — see
 // that module for what the copy cost.
 import type { AttendanceStatus, MinutesGuestRow } from "#/server/minutes-logic";
-import { type buildPlanPanel } from "./attendance-panel";
+import type { buildPlanPanel } from "./attendance-panel";
 import { type ProjectionInput, projectMinutes } from "./project-minutes";
 
 /** One RECORDED attendance row, in the shape the panel's `attendance` prop takes. */

@@ -36,6 +36,8 @@ import {
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
+const { listRoleDefinitions } = await import("./role-definitions-logic");
+
 const {
 	listAvailableTemplates,
 	loadTemplateContent,
@@ -169,7 +171,9 @@ describe.skipIf(!hasTestDb)("meeting template logic", () => {
 				key: "our_template",
 				name: "Ours",
 			});
-			const keys = (await listAvailableTemplates(club.clubId)).map((r) => r.key);
+			const keys = (await listAvailableTemplates(club.clubId)).map(
+				(r) => r.key,
+			);
 			expect(keys).toContain("speech_contest");
 			expect(keys).toContain("our_template");
 		});
@@ -295,9 +299,9 @@ describe.skipIf(!hasTestDb)("meeting template logic", () => {
 		it("resolves only the template's defs once materialized", async () => {
 			const id = await makeContestTemplate();
 			await materializeTemplateRoles(testDb, club.clubId, id);
-			expect(await resolveMeetingRoleDefs(testDb, club.clubId, id)).toHaveLength(
-				2,
-			);
+			expect(
+				await resolveMeetingRoleDefs(testDb, club.clubId, id),
+			).toHaveLength(2);
 		});
 
 		/**
@@ -324,9 +328,50 @@ describe.skipIf(!hasTestDb)("meeting template logic", () => {
 				.update(roleDefinitions)
 				.set({ enabled: false })
 				.where(eq(roleDefinitions.templateId, id));
-			expect(await resolveMeetingRoleDefs(testDb, club.clubId, id)).toHaveLength(
-				2,
-			);
+			expect(
+				await resolveMeetingRoleDefs(testDb, club.clubId, id),
+			).toHaveLength(2);
+		});
+	});
+	describe("listRoleDefinitions scoping", () => {
+		/**
+		 * The SEVENTH reader. `listRoleDefinitions` also feeds
+		 * `loadMeetingDetail`'s "+ Add role" picker (`meetings.ts:322`), so a hard
+		 * `isNull(templateId)` inside it would offer a contest meeting only the
+		 * club's standard roles — no contestant, and no way to change the
+		 * contestant count, which is the entire premise of the repeat mechanism.
+		 */
+		it("lists the club's OWN roles by default, never a template's", async () => {
+			const id = await makeContestTemplate();
+			await materializeTemplateRoles(testDb, club.clubId, id);
+			const rows = await listRoleDefinitions(club.clubId);
+			expect(rows.map((r) => r.name)).not.toContain("Contest Chair");
+			expect(rows.length).toBeGreaterThan(0);
+		});
+
+		it("lists the TEMPLATE's roles when given a templateId", async () => {
+			const id = await makeContestTemplate();
+			await materializeTemplateRoles(testDb, club.clubId, id);
+			const rows = await listRoleDefinitions(club.clubId, { templateId: id });
+			expect(rows.map((r) => r.name).sort()).toEqual([
+				"Contest Chair",
+				"Contestant",
+			]);
+		});
+
+		it("still honours onlyEnabled within a scope", async () => {
+			const id = await makeContestTemplate();
+			await materializeTemplateRoles(testDb, club.clubId, id);
+			await testDb
+				.update(roleDefinitions)
+				.set({ enabled: false })
+				.where(eq(roleDefinitions.templateId, id));
+			expect(
+				await listRoleDefinitions(club.clubId, {
+					templateId: id,
+					onlyEnabled: true,
+				}),
+			).toEqual([]);
 		});
 	});
 });

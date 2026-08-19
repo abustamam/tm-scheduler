@@ -318,17 +318,24 @@ async function loadMeetingDetail(
 	// stop; the roles admin page is where a disabled role stays visible. Routed
 	// through the same helper `getPublicClubRoles` uses so "only enabled" is one
 	// tested rule, not a second SQL filter that could drift from it.
+	// Scoped to THIS meeting's shape (#agenda-templates): a templated meeting
+	// offers its template's roles, not the club's standard ones. Unscoped, a
+	// contest's picker lists Toastmaster and Grammarian and offers no way to add
+	// a contestant.
 	const clubRoles = canManage
-		? (await listRoleDefinitions(meeting.clubId, { onlyEnabled: true })).map(
-				(r) => ({
-					id: r.id,
-					name: r.name,
-					category: r.category,
-					defaultCount: r.defaultCount,
-					sortOrder: r.sortOrder,
-					isSpeakerRole: r.isSpeakerRole,
-				}),
-			)
+		? (
+				await listRoleDefinitions(meeting.clubId, {
+					onlyEnabled: true,
+					templateId: meeting.templateId,
+				})
+			).map((r) => ({
+				id: r.id,
+				name: r.name,
+				category: r.category,
+				defaultCount: r.defaultCount,
+				sortOrder: r.sortOrder,
+				isSpeakerRole: r.isSpeakerRole,
+			}))
 		: [];
 
 	// Club guests for the admin assign picker (#151) — pick-an-existing-guest.

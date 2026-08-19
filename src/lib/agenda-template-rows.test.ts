@@ -89,9 +89,9 @@ describe("buildTemplateRows", () => {
 
 		expect(rows).toHaveLength(8);
 		expect(rows.filter((r) => r.who.startsWith("Contestant"))).toHaveLength(4);
-		expect(
-			rows.filter((r) => r.who === "One minute of silence"),
-		).toHaveLength(4);
+		expect(rows.filter((r) => r.who === "One minute of silence")).toHaveLength(
+			4,
+		);
 		expect(rows.reduce((n, r) => n + r.minutes, 0)).toBe(32);
 	});
 
@@ -383,7 +383,14 @@ describe("buildTemplateRows", () => {
 		);
 		expect(withFlex[0]).toMatchObject({ flex: true });
 		const without = buildTemplateRows(
-			[beat({ sortOrder: 0, kind: "role", label: "X", roleKey: "contest_chair" })],
+			[
+				beat({
+					sortOrder: 0,
+					kind: "role",
+					label: "X",
+					roleKey: "contest_chair",
+				}),
+			],
 			ROLES,
 			s,
 		);
@@ -478,7 +485,9 @@ describe("resolveAgendaRows", () => {
 	it("ignores the GE variant on the template branch", () => {
 		const template = {
 			roles: ROLES,
-			beats: [beat({ sortOrder: 0, kind: "event" as const, label: "Call to order" })],
+			beats: [
+				beat({ sortOrder: 0, kind: "event" as const, label: "Call to order" }),
+			],
 		};
 		const a = resolveAgendaRows({
 			geIntroducesFunctionaries: false,

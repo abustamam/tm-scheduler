@@ -147,12 +147,15 @@ export async function loadTemplateContent(
  * `resolveMeetingRoleDefs` applies `enabled` itself, where it belongs.
  */
 export function roleDefScope(clubId: string, templateId: string | null) {
-	return and(
-		eq(roleDefinitions.clubId, clubId),
-		templateId === null
-			? isNull(roleDefinitions.templateId)
-			: eq(roleDefinitions.templateId, templateId),
-	);
+	return and(eq(roleDefinitions.clubId, clubId), roleDefScopeOnly(templateId));
+}
+
+/** The template half of `roleDefScope`, for callers that already constrain the
+ *  club themselves (`listRoleDefinitions` builds an array of predicates). */
+export function roleDefScopeOnly(templateId: string | null) {
+	return templateId === null
+		? isNull(roleDefinitions.templateId)
+		: eq(roleDefinitions.templateId, templateId);
 }
 
 /**
@@ -234,10 +237,7 @@ export async function resolveMeetingRoleDefs(
 					// roles. A template's roles are the contest's fixed shape, not a
 					// menu — honouring the flag there would silently drop a required
 					// position from the run of show.
-					and(
-						roleDefScope(clubId, null),
-						eq(roleDefinitions.enabled, true),
-					)
+					and(roleDefScope(clubId, null), eq(roleDefinitions.enabled, true))
 				: roleDefScope(clubId, templateId),
 		)
 		.orderBy(asc(roleDefinitions.sortOrder), asc(roleDefinitions.name));

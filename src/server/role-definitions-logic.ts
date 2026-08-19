@@ -14,6 +14,7 @@ import { db } from "#/db";
 import { roleDefinitions, roleSlots } from "#/db/schema";
 import { pairedRoleIds } from "#/lib/meeting-roles";
 import { isReadableClub } from "./club-readable-logic";
+import { roleDefScopeOnly } from "./meeting-templates-logic";
 import { syncSlotsForRoleEnabledChange } from "./slots-logic";
 
 const roleCategory = z.enum([
@@ -53,9 +54,25 @@ export interface RoleDefinitionRow {
  *  call site where it could drift. */
 export async function listRoleDefinitions(
 	clubId: string,
-	opts?: { onlyEnabled?: boolean; withSlotCounts?: boolean },
+	opts?: {
+		onlyEnabled?: boolean;
+		withSlotCounts?: boolean;
+		/** Which slot source to list (#agenda-templates). `null` (the default) is
+		 *  the club's OWN standard roles — what `/admin/roles` edits. A meeting
+		 *  template's id lists that template's materialized roles instead.
+		 *
+		 *  A parameter rather than a hard `isNull` inside this function, because
+		 *  `loadMeetingDetail`'s "+ Add role" picker routes through here too
+		 *  (`meetings.ts:322`): hard-coding the standard scope would offer a
+		 *  contest meeting only the club's standard roles, leaving no way to add
+		 *  a contestant and no way to change the contestant count. */
+		templateId?: string | null;
+	},
 ): Promise<RoleDefinitionRow[]> {
-	const where = [eq(roleDefinitions.clubId, clubId)];
+	const where = [
+		eq(roleDefinitions.clubId, clubId),
+		roleDefScopeOnly(opts?.templateId ?? null),
+	];
 	if (opts?.onlyEnabled) where.push(eq(roleDefinitions.enabled, true));
 
 	const base = {
