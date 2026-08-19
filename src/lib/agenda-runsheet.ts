@@ -1,5 +1,10 @@
 import { assigneeDisplayName } from "./agenda";
 import {
+	buildTemplateRows,
+	type TemplateBeatRow,
+	type TemplateRoleRow,
+} from "./agenda-template-rows";
+import {
 	DEFAULT_SPEAKER_MINUTES,
 	speechBookedMinutes,
 	speechWindow,
@@ -77,6 +82,12 @@ export type AgendaRow = {
 	flex?: boolean;
 	/** Set from the beat's own `handoff` — see `Beat` for what it is for. */
 	handoff?: boolean;
+	/** A full-width section band ("PREPARED SPEECH CONTEST") on a TEMPLATED
+	 *  agenda. A real field rather than a reuse of `handoff`: a hand-off row
+	 *  renders as an indented italic elbow meaning "X introduces Y", which is the
+	 *  wrong visual language for a segment header and would read as a sub-row
+	 *  continuation marker. Carries no clock stamp and no presenter. */
+	section?: true;
 };
 
 /** A functionary/uncovered role shown in the header legend. */
@@ -1845,4 +1856,42 @@ export function flexBannerMessage(flex: FlexResult): string | null {
 	return hasFlexRow
 		? `Agenda ends ${-flex.deltaMinutes} min early — Table Topics is at its ${TABLE_TOPICS_MAX}-min cap.`
 		: `Agenda ends ${-flex.deltaMinutes} min early — consider shortening the meeting length.`;
+}
+
+/**
+ * The ONE place a meeting's agenda rows are chosen. No template means the
+ * code-derived standard flow, expanded exactly as before agenda templates
+ * existed; a template means its stored rows, built directly.
+ *
+ * A named seam because the screen and the print route each used to call
+ * `buildRunOfShow` + `expandRunSheet` themselves, which is precisely the spot
+ * where the two surfaces can silently disagree about what the meeting is.
+ *
+ * `geIntroducesFunctionaries` selects a variant of the STANDARD flow, so it is
+ * ignored on the template branch rather than threaded through and quietly
+ * dropped. An EMPTY template returns no rows — it must never fall back to the
+ * standard flow, which would render standard beats against template slots and
+ * print a near-empty sheet with no error.
+ */
+export function resolveAgendaRows(input: {
+	geIntroducesFunctionaries: boolean;
+	template: {
+		beats: TemplateBeatRow[];
+		roles: TemplateRoleRow[];
+	} | null;
+	slots: AgendaSlot[];
+}): AgendaRow[] {
+	if (!input.template) {
+		return expandRunSheet(
+			input.slots,
+			buildRunOfShow({
+				geIntroducesFunctionaries: input.geIntroducesFunctionaries,
+			}),
+		);
+	}
+	return buildTemplateRows(
+		input.template.beats,
+		input.template.roles,
+		input.slots,
+	);
 }
