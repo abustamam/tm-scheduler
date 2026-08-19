@@ -10,6 +10,15 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-19-agenda-templates-design.md` — read it first. This plan implements it and argues from it; where they disagree, the spec wins and the plan is wrong.
 
+## Landing shape — TWO PRs
+
+Decided at eng review (2026-08-19). A single ~35-file diff is the size `/ship`'s review gate does not converge on (CLAUDE.md; it cost four rounds on #519).
+
+- **PR 1 — Tasks 1-9, 11, 12, 13.** Schema through print, plus the officer picker and docs. A contest meeting can be created, converted, claimed and printed. `Present` is hidden for a templated meeting with a note saying the projected deck is coming.
+- **PR 2 — Task 10.** The generic beat-driven deck. ~5 files.
+
+The cut is at the deck because a contest chair runs the night off a printed script, so it is both the most separable piece and the least urgent one. Each PR is independently shippable and independently reviewable.
+
 ## Global Constraints
 
 - Package manager is **Bun**. `bun run test` (Vitest, never `bun test`). Single test: `bunx vitest run <path>`.
@@ -276,10 +285,15 @@ export const meetingTemplateBeats = pgTable(
 		// The single squishy beat, if the template has one. At most one per
 		// template — validated on write, not enforced by the database.
 		flex: boolean("flex").notNull().default(false),
-		// Timer-card marks in minutes, all three or none.
-		markGreen: numeric("mark_green", { mode: "number" }),
-		markYellow: numeric("mark_yellow", { mode: "number" }),
-		markRed: numeric("mark_red", { mode: "number" }),
+		// Timer-card marks in minutes, all three or none. `real`, not `numeric`:
+		// drizzle's `numeric` returns a STRING unless a mode flag converts it, and
+		// this schema uses `numeric` nowhere (35 tables, zero uses) so there is no
+		// precedent to copy. Marks need fractions — EVALUATION_MARKS is
+		// { green: 2, yellow: 2.5, red: 3 } — so `integer` will not do, and float
+		// imprecision is irrelevant against a card a human holds up.
+		markGreen: real("mark_green"),
+		markYellow: real("mark_yellow"),
+		markRed: real("mark_red"),
 	},
 	(t) => [
 		uniqueIndex("meeting_template_beats_order_unique").on(t.templateId, t.sortOrder),
@@ -287,7 +301,7 @@ export const meetingTemplateBeats = pgTable(
 );
 ```
 
-Add `numeric` to the `drizzle-orm/pg-core` import at the top of the file if it is not already there.
+Add `real` to the `drizzle-orm/pg-core` import at the top of the file if it is not already there.
 
 - [ ] **Step 4: Add the two columns and split the `role_definitions` index**
 
@@ -433,10 +447,14 @@ Create `src/lib/meeting-template-limits.ts`:
  * makes it unassertable — the number could be raised arbitrarily with the whole
  * suite green (#519, #522). The renderer imports these; it does not define them.
  *
- * Picked against the measured cost curve, not against the current seed: the
- * contest seed is ~30 beats and 8 roles, so every ceiling here has room for a
- * far larger template while staying an order of magnitude below the point where
- * a single render becomes a blocked event loop.
+ * HONESTY NOTE: these are BOUNDS, not measurements. The contest seed is ~30
+ * beats and 8 roles, so each ceiling leaves generous headroom while staying far
+ * below any plausible cost knee — but nobody has run the curve. Phase 1's only
+ * writer is the seed, so the caps are a corruption guard rather than a DoS
+ * control. BEFORE Phase 2 exposes a template editor to officers, measure the
+ * render cost the way #519 did (500 and 5,000 chars both rendered in 39ms;
+ * 49,999 took 3,707ms) and reset these numbers to sit well below the knee.
+ * Do not let this comment claim a measurement that has not happened.
  */
 
 /** Ordered rows one template may declare, BEFORE repeat expansion. */
@@ -715,6 +733,24 @@ describe("templateBeatsToRunOfShow", () => {
 		if (!row || row.kind !== "event") throw new Error("expected an event beat");
 		expect(row.who).toHaveLength(120);
 		expect(row.detail).toHaveLength(400);
+	});
+
+	it("carries flex through to the beat", () => {
+		const out = templateBeatsToRunOfShow(
+			[beat({ sortOrder: 0, kind: "role", label: "Table Topics", roleKey: "contest_chair", flex: true })],
+			ROLES,
+			[slot("contest_chair", "Contest Chair", 0)],
+		);
+		expect(out[0]).toMatchObject({ flex: true });
+	});
+
+	it("omits flex when the row does not set it", () => {
+		const out = templateBeatsToRunOfShow(
+			[beat({ sortOrder: 0, kind: "role", label: "Speech", roleKey: "contest_chair" })],
+			ROLES,
+			[slot("contest_chair", "Contest Chair", 0)],
+		);
+		expect(out[0]).not.toHaveProperty("flex");
 	});
 
 	it("drops a role beat whose roleKey names no template role", () => {
@@ -1173,6 +1209,41 @@ describe.skipIf(!hasTestDb())("meeting template logic", () => {
 		expect(await listAvailableTemplates(club.clubId)).toHaveLength(0);
 	});
 
+	// Guards the tenant boundary. Without this the SQL `or(isNull, eq)` could be
+	// replaced by a bare `eq(enabled, true)` and every test would stay green
+	// while one club listed another club's templates.
+	it("never lists ANOTHER club's template", async () => {
+		const other = await seedClub();
+		await testDb.insert(meetingTemplates).values({
+			clubId: other.clubId,
+			key: "their_private_template",
+			name: "Their Template",
+		});
+		const rows = await listAvailableTemplates(club.clubId);
+		expect(rows.map((r) => r.key)).not.toContain("their_private_template");
+	});
+
+	it("lists this club's OWN template alongside the globals", async () => {
+		await makeContestTemplate();
+		await testDb.insert(meetingTemplates).values({
+			clubId: club.clubId,
+			key: "our_template",
+			name: "Our Template",
+		});
+		const keys = (await listAvailableTemplates(club.clubId)).map((r) => r.key);
+		expect(keys).toContain("speech_contest");
+		expect(keys).toContain("our_template");
+	});
+
+	// resolveMeetingRoleDefs is a PURE READ since the eng review, so a template
+	// this club has not used yet resolves to nothing. Pins that contract so the
+	// write cannot creep back in without a failing test.
+	it("resolves EMPTY for a template whose roles are not materialized", async () => {
+		const id = await makeContestTemplate();
+		const defs = await resolveMeetingRoleDefs(testDb, club.clubId, id);
+		expect(defs).toHaveLength(0);
+	});
+
 	it("loads beats and roles, ordered", async () => {
 		const id = await makeContestTemplate();
 		const content = await loadTemplateContent(id);
@@ -1232,15 +1303,11 @@ describe.skipIf(!hasTestDb())("meeting template logic", () => {
 		expect(defs).toHaveLength(standard.filter((r) => r.enabled).length);
 	});
 
-	it("resolves only the template's defs when a template is given, materializing first", async () => {
+	it("resolves only the template's defs once they are materialized", async () => {
 		const id = await makeContestTemplate();
+		await materializeTemplateRoles(testDb, club.clubId, id);
 		const defs = await resolveMeetingRoleDefs(testDb, club.clubId, id);
 		expect(defs).toHaveLength(2);
-		const rows = await testDb
-			.select()
-			.from(roleDefinitions)
-			.where(eq(roleDefinitions.templateId, id));
-		expect(rows).toHaveLength(2);
 	});
 
 	it("excludes template roles from the standard resolution", async () => {
@@ -1314,37 +1381,62 @@ export type MeetingTemplateSummary = {
 export async function listAvailableTemplates(
 	clubId: string,
 ): Promise<MeetingTemplateSummary[]> {
-	const rows = await database
+	return database
 		.select({
 			id: meetingTemplates.id,
 			key: meetingTemplates.key,
 			name: meetingTemplates.name,
 			description: meetingTemplates.description,
 			defaultLengthMinutes: meetingTemplates.defaultLengthMinutes,
-			clubId: meetingTemplates.clubId,
-			sortOrder: meetingTemplates.sortOrder,
 		})
 		.from(meetingTemplates)
-		.where(eq(meetingTemplates.enabled, true))
+		.where(
+			and(
+				eq(meetingTemplates.enabled, true),
+				// The tenant boundary lives in the QUERY, not in a `.filter()` the
+				// next refactor can drop with every test still green. NULL club_id =
+				// a global template available to everyone; anything else must be
+				// this club's. Phase 1 writes no club-scoped rows, but writing the
+				// predicate now means Phase 2's editor cannot leak one club's
+				// template to another. Same shape #544/#560 had to be fixed for.
+				or(
+					isNull(meetingTemplates.clubId),
+					eq(meetingTemplates.clubId, clubId),
+				),
+			),
+		)
 		.orderBy(asc(meetingTemplates.sortOrder), asc(meetingTemplates.name));
-
-	return rows
-		.filter((r) => r.clubId === null || r.clubId === clubId)
-		.map(({ clubId: _clubId, sortOrder: _sortOrder, ...rest }) => rest);
 }
 
-/** A template's beats and roles, ordered. Null when the template is unknown. */
+/**
+ * A template's beats and roles, ordered. Null when the template has neither —
+ * which for a `meetings.template_id` pointer means corruption, since that FK is
+ * ON DELETE RESTRICT and the template therefore cannot have been deleted.
+ *
+ * NO existence check and the two selects run in PARALLEL. This is called from
+ * `loadMeetingDetail`, which TODOS.md already flags as issuing ~15 sequential
+ * round trips that every roll-mode write re-runs; three more sequential ones
+ * would land on the exact path that hurts, on contest night. An existence
+ * SELECT that the foreign key already guarantees is not worth a round trip.
+ */
 export async function loadTemplateContent(
 	templateId: string,
 ): Promise<{ beats: TemplateBeatRow[]; roles: TemplateRoleRow[] } | null> {
-	const [tpl] = await database
-		.select({ id: meetingTemplates.id })
-		.from(meetingTemplates)
-		.where(eq(meetingTemplates.id, templateId))
-		.limit(1);
-	if (!tpl) return null;
+	const [beats, roles] = await Promise.all([
+		loadTemplateBeats(templateId),
+		loadTemplateRoles(templateId),
+	]);
+	// Both empty = no such template. A Phase 2 editor could create a template
+	// with no beats AND no roles, which would read as missing here; give it at
+	// least one row, or add the existence check back at that point.
+	if (beats.length === 0 && roles.length === 0) return null;
+	return { beats, roles };
+}
 
-	const beats = await database
+async function loadTemplateBeats(
+	templateId: string,
+): Promise<TemplateBeatRow[]> {
+	return database
 		.select({
 			sortOrder: meetingTemplateBeats.sortOrder,
 			kind: meetingTemplateBeats.kind,
@@ -1361,8 +1453,12 @@ export async function loadTemplateContent(
 		.from(meetingTemplateBeats)
 		.where(eq(meetingTemplateBeats.templateId, templateId))
 		.orderBy(asc(meetingTemplateBeats.sortOrder));
+}
 
-	const roles = await database
+async function loadTemplateRoles(
+	templateId: string,
+): Promise<TemplateRoleRow[]> {
+	return database
 		.select({
 			key: meetingTemplateRoles.key,
 			name: meetingTemplateRoles.name,
@@ -1371,8 +1467,6 @@ export async function loadTemplateContent(
 		.from(meetingTemplateRoles)
 		.where(eq(meetingTemplateRoles.templateId, templateId))
 		.orderBy(asc(meetingTemplateRoles.sortOrder));
-
-	return { beats, roles };
 }
 
 /**
@@ -1416,9 +1510,32 @@ export async function materializeTemplateRoles(
 }
 
 /**
- * The role definitions a meeting's slots are generated from: the club's own
- * ENABLED standard roles when there is no template, or the template's roles
- * (materializing them on first use) when there is.
+ * The ONE definition of "which role definitions does this meeting draw slots
+ * from" — the club's ENABLED standard roles when there is no template, the
+ * template's materialized roles when there is. Exported so the preview and the
+ * apply share one predicate instead of each spelling it out.
+ */
+export function roleDefScope(clubId: string, templateId: string | null) {
+	return and(
+		eq(roleDefinitions.clubId, clubId),
+		templateId === null
+			? and(isNull(roleDefinitions.templateId), eq(roleDefinitions.enabled, true))
+			: eq(roleDefinitions.templateId, templateId),
+	);
+}
+
+/**
+ * PURE READ. Returns the role definitions a meeting's slots are generated from.
+ *
+ * Deliberately does NOT materialize. A function named `resolve…` that quietly
+ * INSERTs is a surprise for the next caller, and it made the preview impossible
+ * to build on: showing an officer what a conversion would do must not itself
+ * change anything, so the preview could not call a resolver that writes and had
+ * to duplicate this predicate. One rule, two callers, no drift.
+ *
+ * For a template this club has never used, the result is EMPTY — the caller
+ * must have called `materializeTemplateRoles` first. `applyTemplateConversion`
+ * does exactly that, as its own explicit step.
  *
  * `generateSlotRows` itself is unchanged — the CALLER decides which definitions
  * it sees, which keeps the blast radius of templates off the slot generator.
@@ -1428,14 +1545,6 @@ export async function resolveMeetingRoleDefs(
 	clubId: string,
 	templateId: string | null,
 ): Promise<MeetingSlotDefs[]> {
-	if (templateId !== null) {
-		await materializeTemplateRoles(conn, clubId, templateId);
-	}
-	const scope =
-		templateId === null
-			? and(isNull(roleDefinitions.templateId), eq(roleDefinitions.enabled, true))
-			: eq(roleDefinitions.templateId, templateId);
-
 	return conn
 		.select({
 			id: roleDefinitions.id,
@@ -1447,14 +1556,14 @@ export async function resolveMeetingRoleDefs(
 			name: roleDefinitions.name,
 		})
 		.from(roleDefinitions)
-		.where(and(eq(roleDefinitions.clubId, clubId), scope))
+		.where(roleDefScope(clubId, templateId))
 		.orderBy(asc(roleDefinitions.sortOrder), asc(roleDefinitions.name));
 }
 ```
 
-If `MeetingSlotDefs` (`= SlotGenInput & RoleDefLite`) needs fields beyond those selected, open `src/lib/meeting-roles.ts`, read `RoleDefLite`, and add exactly its fields to the select. Do not widen `SlotGenInput`.
+Imports for this module: `import { and, asc, eq, isNull, or } from "drizzle-orm";` — exactly those five, no more. Strict TS has no-unused-locals, so a speculative import fails the build.
 
-The unused `isNotNull` import above is a placeholder only if the compiler needs it — remove it if `bun run fix` flags it.
+If `MeetingSlotDefs` (`= SlotGenInput & RoleDefLite`) needs fields beyond those selected, open `src/lib/meeting-roles.ts`, read `RoleDefLite`, and add exactly its fields to the select. Do not widen `SlotGenInput`.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -1700,6 +1809,56 @@ describe.skipIf(!hasTestDb())("meeting template conversion", () => {
 		).rejects.toThrow(/scheduled/i);
 	});
 
+	it("reports how many slots it will ADD before anything is materialized", async () => {
+		// 1 chair + 3 contestants, read from the template's own rows because
+		// nothing is materialized yet.
+		const plan = await planTemplateConversion(club.meetingId, templateId);
+		expect(plan.slotsAdded).toBe(4);
+	});
+
+	it("adds nothing and removes nothing on a re-apply", async () => {
+		await applyTemplateConversion({
+			meetingId: club.meetingId, clubId: club.clubId, templateId, actorMemberId: null,
+		});
+		const plan = await planTemplateConversion(club.meetingId, templateId);
+		expect(plan.slotsAdded).toBe(0);
+		expect(plan.openSlotsRemoved).toBe(0);
+		expect(plan.claimedSlotsReleased).toBe(0);
+	});
+
+	it("returns a GUEST holder, not just members", async () => {
+		const [guest] = await testDb
+			.insert(guests)
+			.values({ clubId: club.clubId, name: "Visiting Judge" })
+			.returning({ id: guests.id });
+		if (!guest) throw new Error("insert failed");
+		const [slot] = await slotsFor(club.meetingId);
+		if (!slot) throw new Error("seed produced no slots");
+		await testDb
+			.update(roleSlots)
+			.set({ assignedGuestId: guest.id, status: "claimed" })
+			.where(eq(roleSlots.id, slot.id));
+
+		const plan = await applyTemplateConversion({
+			meetingId: club.meetingId, clubId: club.clubId, templateId, actorMemberId: null,
+		});
+		expect(plan.releasedHolders[0]?.guestId).toBe(guest.id);
+		expect(plan.releasedHolders[0]?.name).toBe("Visiting Judge");
+	});
+
+	it("leaves lengthMinutes alone when the template sets none", async () => {
+		await testDb
+			.update(meetingTemplates)
+			.set({ defaultLengthMinutes: null })
+			.where(eq(meetingTemplates.id, templateId));
+		const [before] = await testDb.select().from(meetings).where(eq(meetings.id, club.meetingId));
+		await applyTemplateConversion({
+			meetingId: club.meetingId, clubId: club.clubId, templateId, actorMemberId: null,
+		});
+		const [after] = await testDb.select().from(meetings).where(eq(meetings.id, club.meetingId));
+		expect(after?.lengthMinutes).toBe(before?.lengthMinutes);
+	});
+
 	it("refuses an unknown template", async () => {
 		await expect(
 			applyTemplateConversion({
@@ -1739,6 +1898,12 @@ export type ConversionPlan = {
 	openSlotsRemoved: number;
 	claimedSlotsReleased: number;
 	slotsWithSpeeches: number;
+	/** Slots the conversion will CREATE. The spec's dialog copy promises this
+	 *  number ("removes 9 open slots, adds 14 contest roles"), and it cannot come
+	 *  from `role_definitions` on a first-time preview — nothing is materialized
+	 *  yet, by design, because the preview must not write. So it is read from the
+	 *  TEMPLATE's own rows and reduced by whatever already exists. */
+	slotsAdded: number;
 	releasedHolders: ReleasedHolder[];
 };
 
@@ -1765,13 +1930,17 @@ async function loadSlotsForConversion(conn: DbOrTx, meetingId: string) {
 function summarize(
 	current: Awaited<ReturnType<typeof loadSlotsForConversion>>,
 	keepDefIds: Set<string>,
+	targetSlotCount: number,
 ): ConversionPlan {
 	const doomed = current.filter((s) => !keepDefIds.has(s.roleDefinitionId));
 	const held = doomed.filter((s) => s.assignedMemberId || s.assignedGuestId);
+	const kept = current.length - doomed.length;
 	return {
 		openSlotsRemoved: doomed.length - held.length,
 		claimedSlotsReleased: held.length,
 		slotsWithSpeeches: doomed.filter((s) => s.speechId !== null).length,
+		// Never negative: a re-apply keeps every slot, so target minus kept is 0.
+		slotsAdded: Math.max(0, targetSlotCount - kept),
 		releasedHolders: held.map((s) => ({
 			memberId: s.assignedMemberId,
 			guestId: s.assignedGuestId,
@@ -1799,31 +1968,33 @@ export async function planTemplateConversion(
 	if (!meeting) throw new Error("Meeting not found.");
 
 	const current = await loadSlotsForConversion(database, meetingId);
-	// Preview must NOT materialize: a preview that writes rows would leave a
-	// club's role_definitions littered with templates nobody applied.
-	const target =
-		templateId === null
-			? await database
-					.select({ id: roleDefinitions.id })
-					.from(roleDefinitions)
-					.where(
-						and(
-							eq(roleDefinitions.clubId, meeting.clubId),
-							isNull(roleDefinitions.templateId),
-							eq(roleDefinitions.enabled, true),
-						),
-					)
-			: await database
-					.select({ id: roleDefinitions.id })
-					.from(roleDefinitions)
-					.where(
-						and(
-							eq(roleDefinitions.clubId, meeting.clubId),
-							eq(roleDefinitions.templateId, templateId),
-						),
-					);
 
-	return summarize(current, new Set(target.map((r) => r.id)));
+	// Preview must NOT materialize: a preview that writes would leave a club's
+	// role_definitions littered with templates nobody applied. It reuses the
+	// SAME predicate the apply resolves through (`roleDefScope`) rather than
+	// re-expressing it, so the two can never disagree about what gets kept —
+	// which is the one thing this dialog exists to guarantee.
+	const target = await database
+		.select({ id: roleDefinitions.id, defaultCount: roleDefinitions.defaultCount })
+		.from(roleDefinitions)
+		.where(roleDefScope(meeting.clubId, templateId));
+
+	// How many slots the target shape has. For an ALREADY-materialized template
+	// (or the standard roles) that is the sum over `target`. For a first-time
+	// template nothing is materialized yet, so read the template's own rows.
+	const targetSlotCount =
+		target.length > 0
+			? target.reduce((n, d) => n + d.defaultCount, 0)
+			: templateId === null
+				? 0
+				: (
+						await database
+							.select({ defaultCount: meetingTemplateRoles.defaultCount })
+							.from(meetingTemplateRoles)
+							.where(eq(meetingTemplateRoles.templateId, templateId))
+					).reduce((n, r) => n + r.defaultCount, 0);
+
+	return summarize(current, new Set(target.map((r) => r.id)), targetSlotCount);
 }
 
 /**
@@ -1872,10 +2043,20 @@ export async function applyTemplateConversion(input: {
 			throw new Error("Only a scheduled meeting can change its template.");
 		}
 
+		// Materialize EXPLICITLY, as its own step — `resolveMeetingRoleDefs` is a
+		// pure read since the eng review, so the write has to be visible here
+		// rather than hidden inside the resolver. Idempotent.
+		if (templateId !== null) {
+			await materializeTemplateRoles(tx, clubId, templateId);
+		}
 		const defs = await resolveMeetingRoleDefs(tx, clubId, templateId);
 		const keepDefIds = new Set(defs.map((d) => d.id));
 		const current = await loadSlotsForConversion(tx, meetingId);
-		const plan = summarize(current, keepDefIds);
+		const plan = summarize(
+			current,
+			keepDefIds,
+			defs.reduce((n, d) => n + d.defaultCount, 0),
+		);
 
 		const doomedIds = current
 			.filter((s) => !keepDefIds.has(s.roleDefinitionId))
@@ -2089,6 +2270,11 @@ const meetingTemplateInput = z.object({
 	templateId: z.string().uuid().nullable(),
 });
 
+// NOTE the `.validator()` shape below. This repo passes a FUNCTION, not a zod
+// schema: `role-definitions.ts:26` is
+// `.validator((clubId: unknown) => uuid.parse(clubId))`. Passing the schema
+// object directly does not match how every other server fn here is written.
+
 /** Resolve a meeting to its club, and gate the caller as an admin/vpe of it. */
 async function requireMeetingAdmin(meetingId: string) {
 	const user = await requireUser();
@@ -2104,7 +2290,7 @@ async function requireMeetingAdmin(meetingId: string) {
 }
 
 export const listTemplatesForClub = createServerFn({ method: "GET" })
-	.validator(clubInput)
+	.validator((input: unknown) => clubInput.parse(input))
 	.handler(async ({ data }): Promise<MeetingTemplateSummary[]> => {
 		const user = await requireUser();
 		await assertClubNotArchived(data.clubId);
@@ -2113,14 +2299,14 @@ export const listTemplatesForClub = createServerFn({ method: "GET" })
 	});
 
 export const previewTemplateForMeeting = createServerFn({ method: "GET" })
-	.validator(meetingTemplateInput)
+	.validator((input: unknown) => meetingTemplateInput.parse(input))
 	.handler(async ({ data }): Promise<ConversionPlan> => {
 		await requireMeetingAdmin(data.meetingId);
 		return planTemplateConversion(data.meetingId, data.templateId);
 	});
 
 export const applyTemplateToMeeting = createServerFn({ method: "POST" })
-	.validator(meetingTemplateInput)
+	.validator((input: unknown) => meetingTemplateInput.parse(input))
 	.handler(async ({ data }): Promise<ConversionPlan> => {
 		const { clubId, membership } = await requireMeetingAdmin(data.meetingId);
 		return applyTemplateConversion({
@@ -2486,6 +2672,30 @@ Deleting a template's roles is safe only because `meeting_template_roles` is not
 
 Add to `package.json` scripts: `"seed:templates": "bun run scripts/seed-global-templates.ts"`.
 
+- [ ] **Step 4b: Write the re-sync escape hatch**
+
+Materialization is deliberately **copy-once** (`.onConflictDoNothing()`), which means a later seed edit never reaches a club that has already run a contest. That is the same contract `ROLE_TEMPLATE` already has — it seeds `role_definitions` at club creation and editing the constant later reaches nobody — so this is the existing rule, not a new compromise. It is the right default because every materialized field (`name`, `defaultCount`, `category`, `description`) is club-editable via `updateClubRole`, and overwriting on each conversion would silently reset a club that deliberately set six contestants.
+
+But it needs a deliberate escape hatch. Create `scripts/resync-template-roles.ts`:
+
+```ts
+/**
+ * Push a seed change into ALREADY-materialized `role_definitions` rows.
+ *
+ * Materialization is copy-once by design (see `materializeTemplateRoles`), so a
+ * template edit reaches only clubs that have never used it. This script is the
+ * deliberate, auditable way to push one to everyone else. It PRINTS A DIFF and
+ * changes nothing unless `--apply` is passed, because every field it touches is
+ * one a club may have edited on purpose.
+ *
+ * Run: bun run scripts/resync-template-roles.ts <template-key> [--apply]
+ */
+```
+
+It must: resolve the template by key where `club_id IS NULL`; for every `role_definitions` row with that `template_id`, compare `name` / `defaultCount` / `category` / `isSpeakerRole` / `description` against the seed; print one line per differing field as `club → role.field: current ⇒ seed`; exit without writing unless `--apply`. Never touch a row whose `key` is absent from the seed — a club may have added its own role to the template scope.
+
+Add to `package.json`: `"resync:templates": "bun run scripts/resync-template-roles.ts"`.
+
 - [ ] **Step 5: Call it from the dev seed**
 
 In `src/db/seed.ts`, after the clubs are created, add:
@@ -2646,10 +2856,38 @@ In `src/server/meetings.ts`, the loader already selects the club's `geIntroduces
 
 ```ts
 	// The meeting's template content, or null for a standard meeting. One extra
-	// round trip only when `template_id` is set, so a normal meeting pays nothing.
-	const template = meeting.templateId
-		? await loadTemplateContent(meeting.templateId)
-		: null;
+	// round trip only when `template_id` is set (the two selects run in
+	// parallel), so a normal meeting pays nothing.
+	//
+	// THROW rather than fall through. `resolveRunOfShow` reads `template: null`
+	// as "standard meeting", so a templated meeting whose content failed to load
+	// would silently render the STANDARD beats against CONTEST slots — and since
+	// no contest slot matches `toastmaster_of_the_day` / `speaker` / any standard
+	// key, almost every beat gates out and the officer gets a near-empty agenda
+	// with no error at all. Loud failure beats a blank sheet on contest night.
+	let template = null;
+	if (meeting.templateId) {
+		template = await loadTemplateContent(meeting.templateId);
+		if (!template) {
+			throw new Error(
+				`Meeting ${meeting.id} references template ${meeting.templateId}, which has no beats or roles.`,
+			);
+		}
+	}
+```
+
+Add a unit test for this arm in `src/lib/agenda-template-runsheet.test.ts` — `resolveRunOfShow` given a template with zero beats must not silently return the standard run-of-show:
+
+```ts
+it("does not fall back to the standard flow for an empty template", () => {
+	const out = resolveRunOfShow({
+		geIntroducesFunctionaries: false,
+		template: { beats: [], roles: [] },
+		slots: [],
+	});
+	expect(out).toEqual([]);
+	expect(out).not.toEqual(buildRunOfShow({ geIntroducesFunctionaries: false }));
+});
 ```
 
 Add `template` to the returned payload and `import { loadTemplateContent } from "./meeting-templates-logic";` at the top. `meetings.ts` defines `createServerFn`s, so confirm this import does not create a top-level db-touching export in that module — it does not, because `loadTemplateContent` is only *called* inside handlers.
@@ -2696,7 +2934,12 @@ git commit -m "feat(templates): render a templated meeting's run sheet through o
 
 ---
 
-### Task 10: The generic beat deck
+### Task 10: The generic beat deck — **PR 2, not PR 1**
+
+> **This task ships in a SECOND pull request.** PR 1 ends at Task 13. In PR 1 the Present button is hidden for a meeting with a `template_id`, with a short note in its place ("Projected deck for this meeting type is coming"); a contest chair runs the night off the printed script. Land PR 1, then this.
+>
+> Two fixes to fold in when you build it, both from the eng review: the `beat` slide's `label` and `who` were the same value (drop `label`, keep `who` — and see #463, which is the same complaint about `AgendaRow.who` generally); and the `·`-stripping hedge below is unnecessary — verified at `agenda-runsheet.ts:1697` that a section band takes the `renderUnowned` arm and emits a bare `owner.roleName` with no assignee suffix, because no slot can carry `SECTION_ROLE_KEY`.
+
 
 **Files:**
 - Modify: `src/lib/agenda-slides.ts`
@@ -2971,10 +3214,23 @@ describe("contest agenda print", () => {
 			new Date("2026-09-12T13:00:00Z"),
 			"America/Chicago",
 		);
-		// Reuse this file's existing helper that renders the print surface with
-		// the ROUTE's wrapper elements (.pgwrap and the no-print toolbar) — a
-		// fixture that renders only the component cannot observe those resets.
-		return renderPrintSurface({ rows, clubName });
+		// Mirror this file's existing `agendaHtml` (line ~159): it renders
+		// `<MeetingAgendaPrint>` directly via `renderToStaticMarkup`, with
+		// `layout`, `header`, `roles`, `officers`, `explainers`, `rows` and
+		// `ballotUrl`. There is NO route-wrapper helper for the agenda in this
+		// file — the `.pgwrap` reproduction at line ~231 belongs to the WORD
+		// POSTER tests, not this one. Copy `agendaHtml`'s shape and swap `rows`.
+		return renderToStaticMarkup(
+			<MeetingAgendaPrint
+				layout="editorial"
+				header={{ ...header, clubName }}
+				roles={[]}
+				officers={[]}
+				explainers={[]}
+				rows={rows}
+				ballotUrl={BALLOT_URL}
+			/>,
+		);
 	}
 
 	it.each([4, 6, 7])("prints a bounded sheet count with %i contestants", (n) => {
@@ -3005,7 +3261,7 @@ describe("contest agenda print", () => {
 });
 ```
 
-`renderPrintSurface` is a placeholder for whatever this file already uses to render the print route *with its wrapper elements*. Open the file, find that helper, and call it — do not render the bare component, because `.pgwrap` lives on the route's page component and a component-only fixture cannot observe the reset that keeps the page count honest.
+Reuse the `header`, `BALLOT_URL` and `pages()` bindings already defined at the top of that file rather than inventing new ones. Note the deliberate asymmetry with the word-poster tests below in the same file: those reproduce the route's `.pgwrap` wrapper because that reset is what they exist to pin, while the agenda tests render the component directly. Follow the agenda convention here — this test is about how many sheets the contest's ROWS produce, not about the page reset, which `print-page-reset.guard.test.ts` already covers for every route.
 
 - [ ] **Step 2: Run test to verify it fails or skips honestly**
 
@@ -3137,6 +3393,46 @@ describe("MeetingTemplateDialog", () => {
 		setup({ currentTemplateId: "t1" });
 		expect(screen.getByText(/current/i)).toBeInTheDocument();
 	});
+
+	it("says how many roles it will add", async () => {
+		setup();
+		await userEvent.click(screen.getByRole("button", { name: /Speech Contest/i }));
+		await waitFor(() => expect(screen.getByText(/adds 14 roles/i)).toBeInTheDocument());
+	});
+
+	// The critical gap from the eng review: a failed preview previously left a
+	// blank panel with no message and no way forward.
+	it("shows an error and keeps Apply disabled when the preview fails", async () => {
+		setup({ loadPreview: vi.fn().mockRejectedValue(new Error("network")) });
+		await userEvent.click(screen.getByRole("button", { name: /Speech Contest/i }));
+		await waitFor(() => expect(screen.getByText(/could not load/i)).toBeInTheDocument());
+		expect(screen.getByRole("button", { name: /Apply/i })).toBeDisabled();
+	});
+
+	it("recovers when Retry succeeds", async () => {
+		const loadPreview = vi
+			.fn()
+			.mockRejectedValueOnce(new Error("network"))
+			.mockResolvedValueOnce(PLAN);
+		setup({ loadPreview });
+		await userEvent.click(screen.getByRole("button", { name: /Speech Contest/i }));
+		await waitFor(() => screen.getByRole("button", { name: /Retry/i }));
+		await userEvent.click(screen.getByRole("button", { name: /Retry/i }));
+		await waitFor(() => expect(screen.getByText("Ada Lovelace")).toBeInTheDocument());
+	});
+
+	it("does not fire a second conversion on a double-click", async () => {
+		let resolveApply: (v: unknown) => void = () => {};
+		const onApply = vi.fn(() => new Promise((r) => { resolveApply = r; }));
+		setup({ onApply });
+		await userEvent.click(screen.getByRole("button", { name: /Speech Contest/i }));
+		await waitFor(() => screen.getByRole("button", { name: /Apply/i }));
+		const apply = screen.getByRole("button", { name: /Apply/i });
+		await userEvent.click(apply);
+		await userEvent.click(apply);
+		expect(onApply).toHaveBeenCalledTimes(1);
+		resolveApply(PLAN);
+	});
 });
 ```
 
@@ -3157,7 +3453,24 @@ Create `src/components/agenda/meeting-template-dialog.tsx`. Open `src/components
 Required behaviour, all covered by the tests above:
 
 1. A list of choices: "Standard meeting" (`templateId: null`) plus one row per template, each showing `name` and `description`, with the current one badged "Current".
-2. Selecting one calls `loadPreview(templateId)` and renders the returned `ConversionPlan`: "Removes N open roles", "Releases M claimed roles", and — when `slotsWithSpeeches > 0` — an explicit line that attached speeches are **kept**, because that is the thing an officer will most fear losing.
+2. Selecting one calls `loadPreview(templateId)` and renders the returned `ConversionPlan`: "Removes N open roles", "Releases M claimed roles", "Adds N roles" (`slotsAdded`), and — when `slotsWithSpeeches > 0` — an explicit line that attached speeches are **kept**, because that is the thing an officer will most fear losing.
+2b. The panel is a three-state machine, not a single loaded view:
+
+```
+        select template
+              │
+              ▼
+        ┌───────────┐  reject   ┌─────────┐
+        │  loading  │──────────▶│ failed  │
+        └─────┬─────┘           └────┬────┘
+              │ resolve              │ Retry
+              ▼                      │
+        ┌───────────┐◀───────────────┘
+        │  loaded   │   Apply ──▶ pending ──▶ close
+        └───────────┘   (button disabled while pending)
+```
+
+`failed` shows the reason plus a Retry button and keeps Apply disabled. `pending` disables Apply so a double-click cannot fire two conversions. Without these, a flaky club-room connection leaves the officer staring at a blank panel with no message and no way forward, on the one dialog in the app that confirms a destructive change.
 3. Every `releasedHolders` entry renders as its `name` and `roleName`, so the officer can see exactly who to message. Where the repo's WhatsApp nudge component takes a member id, render it beside each name; if it needs a phone the dialog does not have, render the name alone and leave the nudge to the roster.
 4. An "Apply" button, disabled until a preview has loaded, calling `onApply(templateId)`.
 5. No destructive action reachable without the preview having rendered first.
@@ -3293,6 +3606,77 @@ Open a seeded club's upcoming meeting, its `/print` route and its `/present` rou
 
 **Spec coverage.** D1 → Tasks 3, 4, 9. D2 → Task 5. D3 → Task 1. D4 → Tasks 3, 8, 11. D5 → Tasks 6, 7. D6 → Task 10. D7 → Task 8. Data model → Task 1. Slot generation → Task 5. Conversion → Tasks 6, 7, 12. Run sheet → Tasks 4, 9. Deck → Task 10. Module layout → Tasks 5, 7. Test plan → Tasks 1, 2, 3, 5, 6, 7, 8, 11, 13. Accepted limitations → recorded in Task 13's TODOS entries.
 
-**Known soft spots, flagged rather than hidden.** Three places tell the implementer to read the surrounding code and match it instead of trusting a snippet: the `createServerFn` call shape (Task 7), the print-surface render helper (Task 11), and the present-mode slide markup (Task 10). Those are genuine "follow the local pattern" points, not placeholders — each names exactly what to read and what to match.
+**Known soft spots, flagged rather than hidden.** Two places tell the implementer to read the surrounding code and match it instead of trusting a snippet: the `createServerFn` call shape (Task 7, now corrected to the function form this repo actually uses) and the present-mode slide markup (Task 10). Task 11's soft spot was a factual error and is fixed — this repo's agenda print tests render `<MeetingAgendaPrint>` directly and there is no route-wrapper helper for them.
 
-**Type consistency.** `TemplateBeatRow` / `TemplateRoleRow` are defined once in Task 3 and used verbatim in Tasks 4, 5, 8, 9, 10. `ConversionPlan` / `ReleasedHolder` are defined in Task 6 and consumed in Tasks 7 and 12. `SECTION_ROLE_KEY` is defined in Task 3 and consumed in Task 10. `MeetingSlotDefs` is the existing export from `meeting-create-logic.ts` and is not redefined.
+**Type consistency.** `TemplateBeatRow` / `TemplateRoleRow` are defined once in Task 3 and used verbatim in Tasks 4, 5, 8, 9, 10. `ConversionPlan` / `ReleasedHolder` are defined in Task 6 and consumed in Tasks 7 and 12. `SECTION_ROLE_KEY` is defined in Task 3 and consumed in Task 10. `MeetingSlotDefs` is the existing export from `meeting-create-logic.ts` and is not redefined. `roleDefScope` is defined in Task 5 and consumed by Task 6's preview.
+
+---
+
+## Implementation Tasks
+
+Synthesized from the 2026-08-19 eng review. Each derives from a specific finding; all are folded into the task bodies above, so this list is the audit trail rather than extra work.
+
+- [ ] **T1 (P1, human: ~5min / CC: ~1min)** — schema — Store timer marks as `real`, not `numeric`
+  - Surfaced by: Architecture — `numeric` appears in zero of 35 tables; drizzle returns it as a string without a mode flag unverified at 0.45.1
+  - Files: `src/db/schema.ts`
+  - Verify: `bun run typecheck` and the Task 1 integration suite
+- [ ] **T2 (P1, human: ~10min / CC: ~2min)** — server/templates — Move the tenant filter from JS into SQL
+  - Surfaced by: Architecture — `listAvailableTemplates` selected every club's rows then `.filter()`ed in app code
+  - Files: `src/server/meeting-templates-logic.ts`, `src/server/meeting-templates-logic.integration.test.ts`
+  - Verify: the new "never lists ANOTHER club's template" test fails if the `or(isNull…)` is removed
+- [ ] **T3 (P1, human: ~45min / CC: ~8min)** — server/templates — Split materialize out of `resolveMeetingRoleDefs`
+  - Surfaced by: Code quality — a read that writes forced the preview to duplicate the scope predicate
+  - Files: `src/server/meeting-templates-logic.ts`, both its test files
+  - Verify: preview and apply both route through `roleDefScope`; "resolves EMPTY for an un-materialized template" passes
+- [ ] **T4 (P1, human: ~30min / CC: ~5min)** — server/meetings — Throw when a templated meeting's content fails to load
+  - Surfaced by: Failure modes — **critical gap**: `template: null` reads as "standard meeting", so a contest would silently render standard beats against contest slots and print a near-empty sheet
+  - Files: `src/server/meetings.ts`, `src/lib/agenda-template-runsheet.test.ts`
+  - Verify: `resolveRunOfShow` with an empty template returns `[]`, not the standard run-of-show
+- [ ] **T5 (P1, human: ~1.5h / CC: ~12min)** — components/agenda — Three-state dialog with retry and a pending guard
+  - Surfaced by: Tests — **critical gap**: a rejected preview left a blank panel, no message, no recovery, on a destructive-action confirmation
+  - Files: `src/components/agenda/meeting-template-dialog.tsx` + test
+  - Verify: the four new dialog tests (error shown, Apply disabled, retry recovers, double-click fires once)
+- [ ] **T6 (P2, human: ~20min / CC: ~4min)** — server/templates — Drop the existence check, parallelize the two selects
+  - Surfaced by: Performance — three sequential queries added to a loader TODOS.md already flags at ~15 sequential round trips
+  - Files: `src/server/meeting-templates-logic.ts`
+  - Verify: `loadTemplateContent` issues two statements, concurrently (`statementsDuring`, `src/test/query-spy.ts`)
+- [ ] **T7 (P2, human: ~1.5h / CC: ~12min)** — scripts — Add `resync-template-roles.ts` with a dry-run diff
+  - Surfaced by: Architecture — copy-once materialization means a seed edit never reaches a club that already used the template
+  - Files: `scripts/resync-template-roles.ts`, `package.json`
+  - Verify: run against a club with a renamed role; prints the diff, writes nothing without `--apply`
+- [ ] **T8 (P2, human: ~30min / CC: ~6min)** — server/templates — Add `slotsAdded` to `ConversionPlan`
+  - Surfaced by: Tests — the spec's dialog copy promises "adds 14 contest roles" and the plan had no such field
+  - Files: `src/server/meeting-templates-logic.ts`, conversion test, dialog + test
+  - Verify: 4 on a first preview, 0 on a re-apply
+- [ ] **T9 (P2, human: ~40min / CC: ~8min)** — tests — Close the six remaining coverage gaps
+  - Surfaced by: Test review — flex passthrough, guest-held release, NULL `defaultLengthMinutes`, re-apply preview, un-materialized resolve, `template` on the payload
+  - Files: the Task 3, 5, 6 and 9 test files
+  - Verify: `TEST_DATABASE_URL=… bun run test`, count in the thousands not hundreds
+- [ ] **T10 (P3, human: ~5min / CC: ~1min)** — docs — Fix the stale Codex claim in CLAUDE.md
+  - Surfaced by: Outside voice preflight — CLAUDE.md says `codex_reviews=disabled`; `gstack-config get codex_reviews` returns `enabled`
+  - Files: `CLAUDE.md`
+  - Verify: the doc matches `gstack-config get codex_reviews`
+
+---
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | — |
+| Codex Review | `/codex review` | Independent 2nd opinion | 0 | — | — |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | ISSUES_OPEN (PLAN) | 6 issues, 2 critical gaps, all folded |
+| Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | — |
+| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | — |
+
+**Scope:** SCOPE_REDUCED — split into two PRs at the deck (PR 1 = Tasks 1-9, 11, 12, 13; PR 2 = Task 10).
+
+**Findings folded:** `real` over `numeric` (T1); tenant filter into SQL (T2); materialize split out of the resolver (T3); throw instead of silently rendering the standard flow (T4); three-state dialog with retry and pending guard (T5); parallelized template load (T6); re-sync escape hatch (T7); `slotsAdded` (T8); six coverage gaps (T9). Three factual errors about this repo corrected without a decision: the `.validator()` call shape, the non-existent `renderPrintSurface` helper, and an unnecessary `·`-stripping hedge.
+
+**Critical gaps found (both closed in-plan):** a templated meeting whose content fails to load rendering the standard run-of-show against contest slots and printing a near-empty sheet; and a failed preview leaving a blank dialog with no message and no recovery.
+
+**VERDICT:** ENG REVIEW COMPLETE — 6 issues found and folded, 2 unresolved decisions below. Not CLEAR until those are settled.
+
+**UNRESOLVED DECISIONS:**
+- Outside voice never ran. The Claude subagent fallback terminated on an API session limit before producing findings, and Codex is not installed. Nothing independent has read this plan — re-run `/plan-eng-review` or `/codex review` after the limit resets if you want that check before implementing.
+- TODOS.md proposals were not walked through individually. Three candidates are recorded as T7/T10 above and in Task 13's TODOS block rather than being agreed one by one: the re-sync script's operational burden, the stale CLAUDE.md Codex claim, and measuring the Task 2 caps before Phase 2 exposes a template editor.
