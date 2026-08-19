@@ -27,6 +27,7 @@
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
     "db:seed": "tsx --env-file=.env.local src/db/seed.ts",
+    "seed:templates": "tsx --env-file=.env.local scripts/seed-global-templates.ts",
     "import-members": "bun run scripts/import-members.ts",
     "import-agendas": "bun run scripts/import-agendas.ts",
     "seed:pathways-catalog": "bun run scripts/seed-pathways-catalog.ts",

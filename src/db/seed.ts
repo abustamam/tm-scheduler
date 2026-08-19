@@ -6,6 +6,7 @@ import {
 	type OfficerPosition,
 } from "#/lib/officers";
 import { ROLE_TEMPLATE } from "#/lib/role-template";
+import { seedGlobalTemplates } from "../../scripts/seed-global-templates.ts";
 import { db } from "./index.ts";
 import {
 	clubs,
@@ -1060,6 +1061,11 @@ async function main() {
 		harbor.personByName,
 		{ count: 5, when: dayAt(-1, 12), speechCursor: { i: 3 } },
 	);
+
+	// Global agenda templates (#agenda-templates). Club-less, so they are seeded
+	// once for the whole install rather than per club, and the script is
+	// idempotent — it replaces the template's roles and beats in place.
+	await seedGlobalTemplates();
 
 	console.log("Seeded 2 clubs:");
 	console.log(
