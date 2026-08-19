@@ -439,8 +439,10 @@ function MeetingView() {
 	const effectiveCanManage = canManage && !previewAsMember;
 	const canComplete = meetingDateReached(meeting.scheduledAt, timezone, now);
 	// Spec D2: plan mode is the EXISTING phase, reusing the route's frozen clock.
-	// PR 2 ships plan mode only — roll mode (`today` / `completed`) is PR 3, so
-	// the panel simply does not render outside `upcoming` yet.
+	// Roll mode (`today` / `completed`) shipped in v1.20.0.0 — see `panelMode`
+	// below — so this predicate gates the PLAN half only, NOT whether the panel
+	// renders at all. It read "the panel simply does not render outside
+	// `upcoming` yet" until then, twenty lines above the line that falsifies it.
 	//
 	// The Toastmaster of the Day gets it too (#576). They already hold `canAssign`
 	// through `runsMeeting`, so before this they could hand someone a role while

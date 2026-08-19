@@ -237,9 +237,25 @@ the nouns in `src/db/schema.ts`.
   be the only route; the server never gated on `status` either — `setAttendance` checks the club
   `admin` role and `assertAttendanceRecordable` (has the meeting DAY arrived), and nothing more.
   And a member who has since LEFT the roster still appears, twice over: `loadMinutes` returns the
-  active roster ∪ any member with a
-  saved row, and `deriveRollRoster` appends the same rows client-side tagged `departed: true` (they
-  skip the contact affordance). Separately, roll writes go through the **Offline write queue** below
+  active roster ∪ any member with a saved row, and `deriveRollRoster` appends the same rows
+  client-side tagged `departed: true` (they skip the contact affordance — a `departed` row carries no
+  phone or email, and "No contact on file" is advice for an ACTIVE member and noise for someone who
+  has gone, which a null-check at the render site cannot tell apart).
+  Three more things about roll mode are easy to miss. **Guests are added and removed here too**
+  (`AttendanceGuestsGroup`), picked from the club's own guest list with the ones already present
+  filtered out, so a repeat visitor stays one `guests` row instead of three; their add/remove ride the
+  same queue ops as a member's status. **Contact affordances vanish for EVERY roll row once the phase
+  is `completed`** (`hideContact = roll && phaseCompleted`), which is a different rule from the
+  `departed` tag — nobody is being chased about a meeting that is over. And **the message copy
+  changes**: on meeting day a row's nudge uses a fourth `NudgeMode`, `arriving` — "we've started our
+  `<date>` meeting, are you on your way?" — because asking whether someone *can* make a meeting that
+  has already begun is the wrong question. That copy reaches a member and is in no other doc.
+  What a MEMBER is told about their own attendance reads this record, never their plan — that
+  confusion was #548. `MeetingPersonalStrip`'s `myAttendance` is three-valued on purpose:
+  a status gives one of three sentences (including "You were excused from this meeting."), `null`
+  means a session exists and nobody recorded a row, and `undefined` means there is no session to
+  resolve "my" against. Both of the last two render NOTHING, because guessing was the bug.
+  Separately, roll writes go through the **Offline write queue** below
   — the panel is used standing up in a hall, so the queue, not the server, is the write channel.
 - **Planned attendance** — where the outreach for an UPCOMING meeting got to, one row per
   (member, meeting) in `meeting_attendance_plan` carrying `reached_out` | `coming` |
@@ -326,8 +342,13 @@ the nouns in `src/db/schema.ts`.
   minutes mutation), and `snapshot:<meetingId>`, the last server state seen. What every surface
   RENDERS is `projectMinutes` (`src/lib/project-minutes.ts`): the snapshot (or the live payload when
   online) with the queue replayed over it by `deriveMinutes`, so the panel and the Minutes card
-  cannot disagree about a queued tap. It replays **even when online**, because a write abandoned at
-  its deadline queues with `navigator.onLine` still true. Five properties hold it together, and all
+  cannot disagree about a queued tap. `projectMinutes` keeps a ONE-ENTRY memo in module-level
+  mutable state, keyed on the reference identity of all four inputs — the four same-render callers
+  would otherwise pay four `structuredClone`s of the snapshot per tap. Deliberate impurity in a
+  `lib/` module, and safe on the server for a stated reason rather than by luck: `minutes`, `snapshot`
+  and `queue` are all per-request objects, so two requests cannot key alike. The projection replays
+  **even when online**, because a write abandoned at its deadline queues with `navigator.onLine`
+  still true. Five properties hold it together, and all
   but the drain's ordering were written after something went wrong without them. **While a queue
   exists the queue is the only channel**
   (`if (!online || queue.length > 0) queueOp(...)`, `src/hooks/use-offline-minutes.ts`) — otherwise a
@@ -336,7 +357,11 @@ the nouns in `src/db/schema.ts`.
   applied to the online write and to each drain dispatch, because `navigator.onLine` is TRUE for a
   phone associated to an access point that routes nowhere; without it a tap hung forever with every
   control disabled and no message. Nothing is ABORTED at the deadline, so **every op must converge
-  on replay** — which is why `moveTableTopics` carries an absolute target index rather than a delta.
+  on replay** — which is why `moveTableTopics` carries an absolute destination (`toIndex`) as well as
+  its relative `direction`. `toIndex` is optional only for ops already sitting in a device's
+  IndexedDB from before it existed, which keep the old relative semantics; it is the one op field
+  whose absence is a correctness hazard rather than a back-compat nicety, so every op minted now
+  carries it.
   **The drain stops at the first failure** (`drainMinutesQueue`, `src/lib/drain-minutes.ts`) and
   leaves that op and every successor queued in order; there is no per-op retry, and retrying is the
   caller's job (automatic on reconnect, or the indicator's Retry). And **one `useOfflineMinutes` per

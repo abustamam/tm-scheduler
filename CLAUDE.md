@@ -397,10 +397,12 @@ from the plan half of this section, and each is a place the symmetry misleads. *
 seam and no store guard.** `buildRollPanel` (`src/lib/roll-panel.ts`) is a sibling of
 `buildPlanPanel`, but on the server `meeting_attendance` is read and written from
 `minutes-logic.ts` (`loadMinutes`, `setMemberPresence`, `addGuestPresent`, `removeGuestPresent`,
-`assertAttendanceRecordable`) and NAMED by six other `*-logic.ts` modules besides — there is no
-`attendance-store.guard.test.ts` analogue, so "add it to the seam" is advice about the plan table
-only. **The derived `assumed` Coming does not reach roll.** `buildRollPanel` reads the raw rungs, so
-the rail's inferred Coming produces no dashed `Present?`; deliberate for now, filed P1, and the one
+`assertAttendanceRecordable`) and NAMED by seven other `*-logic.ts` modules besides. Do not trust
+that number: there is no `attendance-store.guard.test.ts` analogue to enforce it, which is the real
+point — "add it to the seam rather than inlining a query" is advice about the PLAN table only, and
+nothing fails if you inline one against the record.
+**The derived `assumed` Coming does not reach roll.** `buildRollPanel` reads the raw rungs, so the
+rail's inferred Coming produces no dashed `Present?`; deliberate for now, filed P1, and the one
 place the two modes disagree about the same word. **The completed-meeting lock does not apply**:
 `writesLocked = roll ? false : locked`, and `setAttendance`'s server gates are `gateAdmin` plus
 `assertAttendanceRecordable` (has the DAY arrived) — never `status`. **Roll writes do not reach the server directly** — they go through the
