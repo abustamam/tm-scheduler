@@ -2,6 +2,7 @@ import { Loader2, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { MeetingMetaDialog } from "#/components/agenda/meeting-meta-dialog";
+import { MeetingTemplateDialog } from "#/components/agenda/meeting-template-dialog";
 import { MeetingWordOfTheDayDialog } from "#/components/agenda/meeting-word-of-the-day-dialog";
 import { AssignSlotSheet } from "#/components/club/assign-slot-sheet";
 import { EditSpeechSheet } from "#/components/club/edit-speech-sheet";
@@ -38,6 +39,12 @@ import { buildRoleCounts, slotLabel, summarizeAgenda } from "#/lib/agenda";
 import type { MeetingViewer } from "#/lib/meeting-viewer";
 import type { StoredMember } from "#/lib/member-identity";
 import { speechWindow, speechWindowInputError } from "#/lib/speech-window";
+import {
+	applyTemplateToMeeting,
+	listTemplatesForClub,
+	type MeetingTemplateSummary,
+	previewTemplateForMeeting,
+} from "#/server/meeting-templates";
 import type { getMeeting } from "#/server/meetings";
 
 export type AgendaSlot = Awaited<
@@ -188,6 +195,11 @@ export function MeetingAgenda({
 	const { currentMemberId } = viewer;
 	const [wodOpen, setWodOpen] = useState(false);
 	const [metaOpen, setMetaOpen] = useState(false);
+	// "Change meeting type" (#agenda-templates). Officer-only: reshaping a
+	// meeting sits with reschedule and cancel, not with the agenda-content
+	// edits ADR-0010 grants the self-asserted Toastmaster.
+	const [templateOpen, setTemplateOpen] = useState(false);
+	const [templates, setTemplates] = useState<MeetingTemplateSummary[]>([]);
 	// Claiming an open slot requires the capability AND either an identity or a
 	// `requireIdentity` resolver to collect one at click time — a `lockedViewer`
 	// sets `canClaim` false so a locked/past meeting is read-only. Without a
@@ -341,6 +353,43 @@ export function MeetingAgenda({
 				>
 					Edit meeting
 				</Button>
+			) : null}
+			{viewer.canManage ? (
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					onClick={async () => {
+						// Lazy: the list is an officer affordance nobody else pays for.
+						setTemplates(
+							await listTemplatesForClub({ data: { clubId: meeting.clubId } }),
+						);
+						setTemplateOpen(true);
+					}}
+				>
+					Change meeting type
+				</Button>
+			) : null}
+			{viewer.canManage ? (
+				<MeetingTemplateDialog
+					open={templateOpen}
+					onOpenChange={setTemplateOpen}
+					currentTemplateId={meeting.templateId ?? null}
+					templates={templates}
+					loadPreview={(templateId) =>
+						previewTemplateForMeeting({
+							data: { meetingId: meeting.id, templateId },
+						})
+					}
+					onApply={async (templateId) => {
+						await applyTemplateToMeeting({
+							data: { meetingId: meeting.id, templateId },
+						});
+						// Re-runs the meeting loader, so the agenda re-renders in the
+						// meeting's new shape.
+						await onMetaSaved();
+					}}
+				/>
 			) : null}
 			{viewer.canEditMeetingMeta ? (
 				<MeetingMetaDialog
