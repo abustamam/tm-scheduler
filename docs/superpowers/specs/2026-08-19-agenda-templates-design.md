@@ -242,9 +242,20 @@ slots to be removed, claimed/confirmed slots to be released, and slots carrying 
 4. Insert slots for the new definition set via `generateSlotRows`.
 5. Set `meetings.template_id`, and `meetings.length_minutes` from
    `default_length_minutes` when the template supplies one.
-6. Enqueue a notification to each released holder; write `activity_log`.
+6. Write `activity_log`, and **return the released holders to the caller** so the UI can
+   offer the existing WhatsApp nudge against each.
 
 Speeches are Person-owned (ADR-0009) and survive; only the slot pointer clears.
+
+**Released holders are NOT notified through the `notifications` table.** `notifications.slot_id`
+is `NOT NULL` with `ON DELETE CASCADE` to `role_slots`, so a row enqueued against a slot this
+same transaction deletes is cascade-deleted before the poller can ever see it — a notification
+that silently never sends. Making it work would need a nullable `slot_id`, and
+`selectDueNotifications` joins the slot to render the email, so the template could not render
+either. Instead `applyMeetingTemplate` returns
+`releasedHolders: { memberId, name, roleName, phone }[]` and the confirmation UI surfaces the
+existing WhatsApp nudge affordance, which is how this product already tells a member something
+changed.
 
 Setting `templateId: null` converts back to a standard meeting by the same path.
 
@@ -308,8 +319,8 @@ Assessed against the diff. The repo-specific traps that apply here:
 - **Absolute ceilings in `lib/`.** Caps on beats-per-template and roles-per-template are stated
   as absolute numbers picked by measuring render cost, not relative to the constant, and live in
   `src/lib/meeting-template-limits.ts` so a unit test can reach them without `DATABASE_URL`.
-- **Conversion integration tests** (`TEST_DATABASE_URL` required): claimed slot released and its
-  holder notified; attached speech survives with the slot pointer cleared; `held` meeting
+- **Conversion integration tests** (`TEST_DATABASE_URL` required): claimed slot released and
+  returned in `releasedHolders`; attached speech survives with the slot pointer cleared; `held` meeting
   rejected; archived club rejected; TMOD rejected while admin/vpe succeeds; applying the same
   template twice materializes roles once.
 - **Index regression test.** A club may not hold two standard `timer` role definitions (D3's
