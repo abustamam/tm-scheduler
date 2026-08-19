@@ -17,7 +17,7 @@
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5433/tm_test \
  *     bunx vitest run src/db/template-schema.integration.test.ts
  */
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	meetingTemplateBeats,
@@ -38,6 +38,16 @@ vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 describe.skipIf(!hasTestDb)("agenda template schema", () => {
 	let club: SeededClub;
 
+	/**
+	 * Templates THIS file created. `tm_test` is shared and vitest runs test FILES
+	 * in parallel, so two unscoped operations break each other:
+	 *   - a fixed global key collides on `meeting_templates_global_key_unique`;
+	 *   - `delete(meetingTemplates)` with no WHERE deletes the OTHER file's rows,
+	 *     which then fails the FK from its materialized role_definitions.
+	 * So keys are unique per template and teardown deletes only what we made.
+	 */
+	const createdTemplateIds: string[] = [];
+
 	beforeEach(async () => {
 		club = await seedClub();
 	});
@@ -49,15 +59,31 @@ describe.skipIf(!hasTestDb)("agenda template schema", () => {
 		// Materialized role_definitions reference templates with ON DELETE
 		// RESTRICT, so the club must go first — which `cleanup` does.
 		await cleanup(club.clubId, [club.adminUserId, club.memberUserId]);
-		await testDb.delete(meetingTemplates);
+		if (createdTemplateIds.length > 0) {
+			await testDb
+				.delete(meetingTemplates)
+				.where(inArray(meetingTemplates.id, createdTemplateIds));
+			createdTemplateIds.length = 0;
+		}
 	});
 
-	async function makeTemplate(key: string, clubId: string | null = null) {
+	/** `exactKey` opts out of the per-run uniquifier — the duplicate-key tests
+	 *  need two inserts to genuinely collide, which a unique suffix prevents. */
+	async function makeTemplate(
+		key: string,
+		clubId: string | null = null,
+		exactKey = false,
+	) {
 		const [row] = await testDb
 			.insert(meetingTemplates)
-			.values({ clubId, key, name: `Template ${key}` })
+			.values({
+				clubId,
+				key: exactKey ? key : `${key}-${crypto.randomUUID().slice(0, 8)}`,
+				name: `Template ${key}`,
+			})
 			.returning({ id: meetingTemplates.id });
 		if (!row) throw new Error("Failed to insert template");
+		createdTemplateIds.push(row.id);
 		return row.id;
 	}
 
@@ -159,8 +185,8 @@ describe.skipIf(!hasTestDb)("agenda template schema", () => {
 
 	describe("meeting_templates unique indexes", () => {
 		it("rejects two GLOBAL templates sharing a key", async () => {
-			await makeTemplate("speech_contest");
-			await expect(makeTemplate("speech_contest")).rejects.toThrow();
+			await makeTemplate("dup_global", null, true);
+			await expect(makeTemplate("dup_global", null, true)).rejects.toThrow();
 		});
 
 		it("allows a club template to reuse a global template's key", async () => {
@@ -170,9 +196,9 @@ describe.skipIf(!hasTestDb)("agenda template schema", () => {
 		});
 
 		it("rejects two templates sharing a key within ONE club", async () => {
-			await makeTemplate("speech_contest", club.clubId);
+			await makeTemplate("dup_club", club.clubId, true);
 			await expect(
-				makeTemplate("speech_contest", club.clubId),
+				makeTemplate("dup_club", club.clubId, true),
 			).rejects.toThrow();
 		});
 	});
@@ -194,7 +220,11 @@ describe.skipIf(!hasTestDb)("agenda template schema", () => {
 				minutes: 2,
 			});
 
-			await testDb.delete(meetingTemplates);
+			// Delete THIS template only. An unscoped delete would take the rows a
+			// parallel suite is mid-way through using.
+			await testDb
+				.delete(meetingTemplates)
+				.where(eq(meetingTemplates.id, templateId));
 
 			expect(
 				await testDb
@@ -220,7 +250,11 @@ describe.skipIf(!hasTestDb)("agenda template schema", () => {
 				templateId,
 			});
 			// Disable, never delete — this is why `meeting_templates.enabled` exists.
-			await expect(testDb.delete(meetingTemplates)).rejects.toThrow();
+			await expect(
+				testDb
+					.delete(meetingTemplates)
+					.where(eq(meetingTemplates.id, templateId)),
+			).rejects.toThrow();
 		});
 	});
 

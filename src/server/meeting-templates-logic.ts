@@ -7,20 +7,30 @@
  * client bundle, and a query living only inside a `createServerFn` handler is
  * unreachable from vitest.
  */
-import { and, asc, eq, isNull, or } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, or } from "drizzle-orm";
 import type { db } from "#/db";
 import { db as database } from "#/db";
 import {
+	guests,
+	meetings,
 	meetingTemplateBeats,
 	meetingTemplateRoles,
 	meetingTemplates,
+	members,
 	roleDefinitions,
+	roleSlots,
 } from "#/db/schema";
+import { generateSlotRows } from "#/lib/agenda";
 import type {
 	TemplateBeatRow,
 	TemplateRoleRow,
 } from "#/lib/agenda-template-rows";
-import type { MeetingSlotDefs } from "./meeting-create-logic";
+import { logActivity } from "./activity";
+import { assertMeetingNotLocked } from "./meeting-authz-logic";
+import {
+	linkEvaluatorsToSpeakers,
+	type MeetingSlotDefs,
+} from "./meeting-create-logic";
 
 type DbOrTx =
 	| typeof db
@@ -241,4 +251,257 @@ export async function resolveMeetingRoleDefs(
 				: roleDefScope(clubId, templateId),
 		)
 		.orderBy(asc(roleDefinitions.sortOrder), asc(roleDefinitions.name));
+}
+
+// ---------------------------------------------------------------------------
+// Conversion — switching a meeting's shape to (or away from) a template.
+// ---------------------------------------------------------------------------
+
+/** A member or guest whose slot the conversion released. */
+export type ReleasedHolder = {
+	memberId: string | null;
+	guestId: string | null;
+	name: string;
+	roleName: string;
+};
+
+/** What a conversion will do (preview) or did (apply). */
+export type ConversionPlan = {
+	openSlotsRemoved: number;
+	claimedSlotsReleased: number;
+	slotsWithSpeeches: number;
+	/** Slots the conversion will CREATE. The dialog promises this number
+	 *  ("adds 17 contest roles"), and on a first-time preview it cannot come from
+	 *  `role_definitions` — nothing is materialized yet, by design, because the
+	 *  preview must not write. So it is read from the TEMPLATE's own rows and
+	 *  reduced by whatever already exists. */
+	slotsAdded: number;
+	releasedHolders: ReleasedHolder[];
+};
+
+/** This meeting's slots, annotated with role name and assignee name. */
+async function loadSlotsForConversion(conn: DbOrTx, meetingId: string) {
+	return conn
+		.select({
+			id: roleSlots.id,
+			roleDefinitionId: roleSlots.roleDefinitionId,
+			roleName: roleDefinitions.name,
+			assignedMemberId: roleSlots.assignedMemberId,
+			assignedGuestId: roleSlots.assignedGuestId,
+			memberName: members.name,
+			guestName: guests.name,
+			speechId: roleSlots.speechId,
+		})
+		.from(roleSlots)
+		.innerJoin(
+			roleDefinitions,
+			eq(roleSlots.roleDefinitionId, roleDefinitions.id),
+		)
+		.leftJoin(members, eq(roleSlots.assignedMemberId, members.id))
+		.leftJoin(guests, eq(roleSlots.assignedGuestId, guests.id))
+		.where(eq(roleSlots.meetingId, meetingId));
+}
+
+function summarize(
+	current: Awaited<ReturnType<typeof loadSlotsForConversion>>,
+	keepDefIds: Set<string>,
+	targetSlotCount: number,
+): ConversionPlan {
+	const doomed = current.filter((s) => !keepDefIds.has(s.roleDefinitionId));
+	const held = doomed.filter((s) => s.assignedMemberId || s.assignedGuestId);
+	const kept = current.length - doomed.length;
+	return {
+		openSlotsRemoved: doomed.length - held.length,
+		claimedSlotsReleased: held.length,
+		slotsWithSpeeches: doomed.filter((s) => s.speechId !== null).length,
+		// Never negative: a re-apply keeps every slot, so target minus kept is 0.
+		slotsAdded: Math.max(0, targetSlotCount - kept),
+		releasedHolders: held.map((s) => ({
+			memberId: s.assignedMemberId,
+			guestId: s.assignedGuestId,
+			name: s.memberName ?? s.guestName ?? "Someone",
+			roleName: s.roleName,
+		})),
+	};
+}
+
+/**
+ * What applying `templateId` to this meeting WOULD do. Read-only.
+ *
+ * The confirmation dialog shows these counts before anything is destroyed,
+ * which is the whole reason converting a meeting with live claims on it is
+ * allowed at all. It reuses the SAME predicate the apply resolves through
+ * (`roleDefScope`) rather than re-expressing it, so the two can never disagree
+ * about what gets kept — the one thing this dialog exists to guarantee.
+ */
+export async function planTemplateConversion(
+	meetingId: string,
+	templateId: string | null,
+): Promise<ConversionPlan> {
+	const [meeting] = await database
+		.select({ clubId: meetings.clubId })
+		.from(meetings)
+		.where(eq(meetings.id, meetingId))
+		.limit(1);
+	if (!meeting) throw new Error("Meeting not found.");
+
+	const current = await loadSlotsForConversion(database, meetingId);
+
+	// Preview must NOT materialize: a preview that writes would litter a club's
+	// role_definitions with templates nobody applied.
+	const target = await database
+		.select({
+			id: roleDefinitions.id,
+			defaultCount: roleDefinitions.defaultCount,
+			enabled: roleDefinitions.enabled,
+		})
+		.from(roleDefinitions)
+		.where(roleDefScope(meeting.clubId, templateId));
+	const usable = templateId === null ? target.filter((d) => d.enabled) : target;
+
+	// How many slots the target shape has. For an ALREADY-materialized template
+	// (or the club's standard roles) that is the sum over `usable`. For a
+	// first-time template nothing is materialized yet, so read the template's own
+	// rows instead.
+	let targetSlotCount = usable.reduce((n, d) => n + d.defaultCount, 0);
+	if (templateId !== null && usable.length === 0) {
+		const rows = await database
+			.select({ defaultCount: meetingTemplateRoles.defaultCount })
+			.from(meetingTemplateRoles)
+			.where(eq(meetingTemplateRoles.templateId, templateId));
+		targetSlotCount = rows.reduce((n, r) => n + r.defaultCount, 0);
+	}
+
+	return summarize(current, new Set(usable.map((r) => r.id)), targetSlotCount);
+}
+
+/**
+ * Apply a template to an existing meeting, or `null` to convert it back to the
+ * club's standard shape. ONE transaction.
+ *
+ * Released holders are RETURNED, never enqueued on `notifications`:
+ * `notifications.slot_id` is NOT NULL and ON DELETE CASCADE to `role_slots`, so
+ * a row enqueued against a slot this transaction then deletes is cascade-deleted
+ * before the poller could ever see it — a notification that silently never
+ * sends. The caller surfaces the existing WhatsApp nudge against each name.
+ *
+ * Authorization is the CALLER's: this function has no session. The server fn
+ * gates on the club role and the archive state before calling it.
+ */
+export async function applyTemplateConversion(input: {
+	meetingId: string;
+	clubId: string;
+	templateId: string | null;
+	actorMemberId: string | null;
+}): Promise<ConversionPlan> {
+	const { meetingId, clubId, templateId, actorMemberId } = input;
+
+	if (templateId !== null) {
+		const content = await loadTemplateContent(templateId);
+		if (!content) throw new Error("That meeting template no longer exists.");
+	}
+
+	return database.transaction(async (tx) => {
+		const [meeting] = await tx
+			.select({
+				id: meetings.id,
+				status: meetings.status,
+				clubId: meetings.clubId,
+			})
+			.from(meetings)
+			.where(eq(meetings.id, meetingId))
+			.limit(1);
+		if (!meeting || meeting.clubId !== clubId) {
+			throw new Error("Meeting not found.");
+		}
+		// The canonical lock (#150 / ADR-0012) covers `completed`. A CANCELLED
+		// meeting is not locked by it, but reshaping one is equally pointless, so
+		// it is refused here rather than by widening the shared helper — every
+		// other mutator's meaning of "locked" stays exactly as it was.
+		assertMeetingNotLocked(meeting.status);
+		if (meeting.status === "cancelled") {
+			throw new Error("A cancelled meeting cannot change its template.");
+		}
+
+		// Materialize EXPLICITLY, as its own step. `resolveMeetingRoleDefs` is a
+		// pure read, so the write has to be visible here rather than hidden inside
+		// a function named `resolve…`. Idempotent.
+		if (templateId !== null) {
+			await materializeTemplateRoles(tx, clubId, templateId);
+		}
+		const defs = await resolveMeetingRoleDefs(tx, clubId, templateId);
+		const keepDefIds = new Set(defs.map((d) => d.id));
+		const current = await loadSlotsForConversion(tx, meetingId);
+		const plan = summarize(
+			current,
+			keepDefIds,
+			defs.reduce((n, d) => n + d.defaultCount, 0),
+		);
+
+		const doomedIds = current
+			.filter((s) => !keepDefIds.has(s.roleDefinitionId))
+			.map((s) => s.id);
+		if (doomedIds.length > 0) {
+			// Release first, then delete. Clearing the assignee and the speech
+			// pointer in their own statement keeps "a slot is released before it
+			// disappears" true at every intermediate state. The speech itself is
+			// Person-owned (ADR-0009), so it survives regardless.
+			await tx
+				.update(roleSlots)
+				.set({
+					assignedMemberId: null,
+					assignedGuestId: null,
+					speechId: null,
+					status: "open",
+					claimedAt: null,
+				})
+				.where(inArray(roleSlots.id, doomedIds));
+			await tx.delete(roleSlots).where(inArray(roleSlots.id, doomedIds));
+		}
+
+		const existingDefIds = new Set(
+			current
+				.filter((s) => keepDefIds.has(s.roleDefinitionId))
+				.map((s) => s.roleDefinitionId),
+		);
+		const toCreate = defs.filter((d) => !existingDefIds.has(d.id));
+		if (toCreate.length > 0) {
+			const rows = generateSlotRows(toCreate, meetingId);
+			if (rows.length > 0) {
+				const inserted = await tx.insert(roleSlots).values(rows).returning({
+					id: roleSlots.id,
+					roleDefinitionId: roleSlots.roleDefinitionId,
+					slotIndex: roleSlots.slotIndex,
+				});
+				await linkEvaluatorsToSpeakers(tx, inserted, defs);
+			}
+		}
+
+		const length =
+			templateId === null
+				? null
+				: ((
+						await tx
+							.select({ m: meetingTemplates.defaultLengthMinutes })
+							.from(meetingTemplates)
+							.where(eq(meetingTemplates.id, templateId))
+							.limit(1)
+					)[0]?.m ?? null);
+
+		await tx
+			.update(meetings)
+			.set({ templateId, ...(length != null ? { lengthMinutes: length } : {}) })
+			.where(eq(meetings.id, meetingId));
+
+		await logActivity(tx, {
+			clubId,
+			actorMemberId,
+			action: "meeting_template_set",
+			targetType: "meeting",
+			targetId: meetingId,
+			detail: { templateId },
+		});
+
+		return plan;
+	});
 }

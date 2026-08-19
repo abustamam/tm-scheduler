@@ -18,7 +18,7 @@
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5433/tm_test \
  *     bunx vitest run src/server/meeting-templates-logic.integration.test.ts
  */
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	meetingTemplateBeats,
@@ -36,6 +36,12 @@ import {
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
+/** Per-run marker. Globals are visible to EVERY club and vitest runs test
+ *  files in parallel against one shared database, so this suite can only
+ *  assert over templates it created itself. */
+const RUN = crypto.randomUUID().slice(0, 8);
+const mine = (names: string[]) => names.filter((n) => n.includes(RUN));
+
 const { listRoleDefinitions } = await import("./role-definitions-logic");
 
 const {
@@ -48,6 +54,16 @@ const {
 describe.skipIf(!hasTestDb)("meeting template logic", () => {
 	let club: SeededClub;
 
+	/**
+	 * Templates THIS file created. `tm_test` is shared and vitest runs test FILES
+	 * in parallel, so two unscoped operations break each other:
+	 *   - a fixed global key collides on `meeting_templates_global_key_unique`;
+	 *   - `delete(meetingTemplates)` with no WHERE deletes the OTHER file's rows,
+	 *     which then fails the FK from its materialized role_definitions.
+	 * So keys are unique per template and teardown deletes only what we made.
+	 */
+	const createdTemplateIds: string[] = [];
+
 	beforeEach(async () => {
 		club = await seedClub();
 	});
@@ -55,7 +71,12 @@ describe.skipIf(!hasTestDb)("meeting template logic", () => {
 	afterEach(async () => {
 		await cleanup(club.clubId, [club.adminUserId, club.memberUserId]);
 		// Globals are club-less, so the cascade above cannot reach them.
-		await testDb.delete(meetingTemplates);
+		if (createdTemplateIds.length > 0) {
+			await testDb
+				.delete(meetingTemplates)
+				.where(inArray(meetingTemplates.id, createdTemplateIds));
+			createdTemplateIds.length = 0;
+		}
 	});
 
 	async function makeContestTemplate(clubId: string | null = null) {
@@ -63,13 +84,14 @@ describe.skipIf(!hasTestDb)("meeting template logic", () => {
 			.insert(meetingTemplates)
 			.values({
 				clubId,
-				key: "speech_contest",
-				name: "Speech Contest",
+				key: `speech_contest-${crypto.randomUUID().slice(0, 8)}`,
+				name: `Speech Contest ${RUN}`,
 				description: "A club contest",
 				defaultLengthMinutes: 150,
 			})
 			.returning({ id: meetingTemplates.id });
 		if (!tpl) throw new Error("Failed to insert template");
+		createdTemplateIds.push(tpl.id);
 		await testDb.insert(meetingTemplateRoles).values([
 			{
 				templateId: tpl.id,
@@ -129,7 +151,9 @@ describe.skipIf(!hasTestDb)("meeting template logic", () => {
 		it("lists global templates for any club", async () => {
 			await makeContestTemplate();
 			const rows = await listAvailableTemplates(club.clubId);
-			expect(rows.map((r) => r.key)).toEqual(["speech_contest"]);
+			// Assert on NAME: the key carries a per-run suffix so parallel suites
+			// sharing `tm_test` cannot collide on the global unique index.
+			expect(mine(rows.map((r) => r.name))).toEqual([`Speech Contest ${RUN}`]);
 			expect(rows[0]?.defaultLengthMinutes).toBe(150);
 		});
 
@@ -139,7 +163,9 @@ describe.skipIf(!hasTestDb)("meeting template logic", () => {
 				.update(meetingTemplates)
 				.set({ enabled: false })
 				.where(eq(meetingTemplates.id, id));
-			expect(await listAvailableTemplates(club.clubId)).toHaveLength(0);
+			expect(
+				mine((await listAvailableTemplates(club.clubId)).map((r) => r.name)),
+			).toEqual([]);
 		});
 
 		/**
@@ -152,8 +178,8 @@ describe.skipIf(!hasTestDb)("meeting template logic", () => {
 			try {
 				await testDb.insert(meetingTemplates).values({
 					clubId: other.clubId,
-					key: "their_private_template",
-					name: "Theirs",
+					key: `their_private-${crypto.randomUUID().slice(0, 8)}`,
+					name: `Theirs ${RUN}`,
 				});
 				const keys = (await listAvailableTemplates(club.clubId)).map(
 					(r) => r.key,
@@ -168,14 +194,16 @@ describe.skipIf(!hasTestDb)("meeting template logic", () => {
 			await makeContestTemplate();
 			await testDb.insert(meetingTemplates).values({
 				clubId: club.clubId,
-				key: "our_template",
-				name: "Ours",
+				key: `our_template-${crypto.randomUUID().slice(0, 8)}`,
+				name: `Ours ${RUN}`,
 			});
-			const keys = (await listAvailableTemplates(club.clubId)).map(
-				(r) => r.key,
+			// Assert on NAME: keys carry a per-run suffix so parallel suites sharing
+			// `tm_test` cannot collide on `meeting_templates_global_key_unique`.
+			const names = (await listAvailableTemplates(club.clubId)).map(
+				(r) => r.name,
 			);
-			expect(keys).toContain("speech_contest");
-			expect(keys).toContain("our_template");
+			expect(names).toContain(`Speech Contest ${RUN}`);
+			expect(names).toContain(`Ours ${RUN}`);
 		});
 	});
 
