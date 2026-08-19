@@ -161,10 +161,16 @@ the nouns in `src/db/schema.ts`.
 - **Meeting phase** — a *separate axis* from `status`, and UI-only: `upcoming` / `today` /
   `completed` (`meetingPhase`, `src/lib/meeting-lifecycle.ts`, #541), at club-local day
   granularity. It re-weights the meeting view's chrome — which action is primary — and never
-  grants or removes a SERVER-side capability. It does gate one surface outright: the officer's
-  planned-attendance panel renders in phase `upcoming` only (v1.15.0.0), so on meeting day there
-  is no rung-writing UI even though `setPlannedAttendance` still accepts the write — the roll
-  mode that fills that phase is deferred. The overlap is deliberate but confusing: a meeting
+  grants or removes a SERVER-side capability. What it does do is SWITCH one surface's job. The
+  officer's attendance panel is one component in every phase but not one tool:
+  `panelMode = phase === "upcoming" ? "plan" : "roll"` is the only place that choice is made (one
+  expression in `club.$clubId.meeting.$meetingId.tsx`, pinned by
+  `attendance-panel-wiring.guard.test.ts`), so phase `upcoming` writes RUNGS
+  (`meeting_attendance_plan`) while `today` and `completed` write the RECORD (`meeting_attendance`)
+  — see **Attendance / Presence**. Phase still gates the plan half outright
+  (`showPlanPanel = runsThisMeeting && phase === "upcoming"`, v1.15.0.0): there is no rung-writing UI
+  on meeting day even though `setPlannedAttendance` still accepts the write. Before v1.20.0.0 that
+  left the later phases with no panel at all. The overlap is deliberate but confusing: a meeting
   whose day has passed that nobody pressed **Complete** on is phase `completed` while its
   status is still `scheduled`, unlocked, and an admin may still edit it. Phase `completed` ≠ locked.
 - **Role definition** — a club's template for a fillable role (`role_definitions`), e.g.
@@ -201,11 +207,56 @@ the nouns in `src/db/schema.ts`.
   child sets below (attendance, Table Topics speakers, awards). Admin-authored on the meeting
   view; members see it read-only, and only once the meeting is `completed`. Editable through and
   after completion — **not** covered by the ADR-0012 lock. Exportable as a PDF. See ADR-0014 / #152.
-- **Attendance / Presence** — per-meeting record of who was there (`meeting_attendance`). Each
-  active **member** carries a presence status — `present` / `absent` / `excused` (default
-  `absent`), pre-filled to `present` for anyone holding a role slot. **Guests** present are added
-  to the same record (present by definition — no absent/excused). Rows reference a member **or** a
-  guest, never both (XOR check constraint, like `role_slots`). See ADR-0014.
+  One of the three is no longer authored HERE: since v1.20.0.0 attendance is recorded in the
+  attendance panel's roll mode, and the Minutes card holds no attendance control at all — an admin
+  gets a one-line pointer to the panel, and a member who cannot edit gets `AttendanceRecord`, the
+  read-only counts plus every member's status. Two recorders for one row is how a club ends up
+  present on one screen and absent on another; `absorbed-surfaces.guard.test.ts` fails if
+  `meeting-minutes.tsx` names `setAttendance`, `addMinutesGuest` or `removeMinutesGuest` again.
+- **Attendance / Presence** — per-meeting record of who was there (`meeting_attendance`), the
+  RECORD half of the plan-vs-record boundary in **Planned attendance** below. A member's presence
+  status is `present` / `absent` / `excused`; the column defaults `absent`, but **no row at all is
+  the fourth state — "unmarked"** (#218), and a role slot never infers presence (`hasRole` on the
+  payload is informational only; the "pre-filled to `present` for anyone holding a role slot" rule
+  this entry used to state was removed). **Guests** present are added to the same record (present by
+  definition — no absent/excused). Rows reference a member **or** a guest, never both (XOR check
+  constraint, like `role_slots`). See ADR-0014 and its v1.20.0.0 amendment.
+  **Where it is taken:** the officer's attendance panel in **roll** mode, from phase `today`
+  onward, by a signed-in club `admin` or a read-write impersonation session
+  (`showRollPanel = effectiveCanManage && minutes.canEdit`) — note the TMOD arm that reaches plan
+  mode does NOT reach roll, since `showRollPanel` is deliberately not built on `runsThisMeeting`.
+  `buildRollPanel` (`src/lib/roll-panel.ts`) is the derivation, a SIBLING of `buildPlanPanel` rather
+  than a flag inside it, and rows sort alphabetically because a register is read down and plan
+  mode's chase-worthy-first order would reorder the list under the officer's finger.
+  Three properties are worth knowing before touching it. A row carries a recorded `status`
+  **or** a dashed `suggestion`, never both — `coming → Present?`, `not_coming → Excused?`,
+  `reached_out → nothing` — which is what makes a plan physically unmistakable for a record (the
+  guard against #548); a suggestion writes nothing and counts as `unmarked` until it is tapped.
+  Roll mode deliberately IGNORES the completed-meeting lock (`writesLocked = roll ? false : locked`)
+  because correcting a mis-marked member days later is a normal club task and Reopen would otherwise
+  be the only route; the server never gated on `status` either — `setAttendance` checks the club
+  `admin` role and `assertAttendanceRecordable` (has the meeting DAY arrived), and nothing more.
+  And a member who has since LEFT the roster still appears, twice over: `loadMinutes` returns the
+  active roster ∪ any member with a saved row, and `deriveRollRoster` appends the same rows
+  client-side tagged `departed: true` (they skip the contact affordance — a `departed` row carries no
+  phone or email, and "No contact on file" is advice for an ACTIVE member and noise for someone who
+  has gone, which a null-check at the render site cannot tell apart).
+  Three more things about roll mode are easy to miss. **Guests are added and removed here too**
+  (`AttendanceGuestsGroup`), picked from the club's own guest list with the ones already present
+  filtered out, so a repeat visitor stays one `guests` row instead of three; their add/remove ride the
+  same queue ops as a member's status. **Contact affordances vanish for EVERY roll row once the phase
+  is `completed`** (`hideContact = roll && phaseCompleted`), which is a different rule from the
+  `departed` tag — nobody is being chased about a meeting that is over. And **the message copy
+  changes**: on meeting day a row's nudge uses a fourth `NudgeMode`, `arriving` — "we've started our
+  `<date>` meeting, are you on your way?" — because asking whether someone *can* make a meeting that
+  has already begun is the wrong question. That copy reaches a member and is in no other doc.
+  What a MEMBER is told about their own attendance reads this record, never their plan — that
+  confusion was #548. `MeetingPersonalStrip`'s `myAttendance` is three-valued on purpose:
+  a status gives one of three sentences (including "You were excused from this meeting."), `null`
+  means a session exists and nobody recorded a row, and `undefined` means there is no session to
+  resolve "my" against. Both of the last two render NOTHING, because guessing was the bug.
+  Separately, roll writes go through the **Offline write queue** below
+  — the panel is used standing up in a hall, so the queue, not the server, is the write channel.
 - **Planned attendance** — where the outreach for an UPCOMING meeting got to, one row per
   (member, meeting) in `meeting_attendance_plan` carrying `reached_out` | `coming` |
   `not_coming`. **Row absent = "no answer"**; there is no fourth value, because a row meaning
@@ -249,6 +300,15 @@ the nouns in `src/db/schema.ts`.
   through one seam (`src/server/attendance-plan-logic.ts`), which owns actor attribution and the
   predicates that stop one rung overwriting another — but NOT the archive gate or the write
   ladder, which live in the callers. See the 2026-08-11 spec.
+  Since v1.20.0.0 the same panel has a second mode that writes the RECORD instead
+  (**Attendance / Presence** above), so the plan now has a consumer downstream of itself: a rung is
+  what roll mode SUGGESTS on meeting day. Two things not to assume about that. The seam is
+  untouched by roll mode (`attendance-plan-logic.ts` has zero changes in v1.20.0.0), and the
+  DERIVED `assumed` Coming does **not** reach it — `buildRollPanel` reads the raw rungs, so a
+  confirmed role-holder who never replied reads `Coming · assumed` in the rail on Monday and gets
+  **no** dashed `Present?` on Wednesday. That divergence is deliberate-for-now rather than settled
+  (it appeared when v1.19.0.0 merged into the roll branch, and neither side's tests could see it);
+  it is documented at the derivation site and filed P1 in `TODOS.md`.
 - **Table Topics speaker** — an impromptu participant who answered a Table Topic
   (`table_topics_speakers`), captured as an ordered list of member-or-guest (XOR) + optional
   topic text. Distinct from the **Table Topics Master** role (the role definition that runs the
@@ -274,6 +334,42 @@ the nouns in `src/db/schema.ts`.
   Reached from a QR on the present-mode vote slides and all four printed agenda layouts, or
   directly at `/club/:clubId/meeting/:key/vote`. See
   `docs/superpowers/specs/2026-08-08-digital-voting-design.md`.
+- **Offline write queue** — the single write channel for a meeting's minutes record (attendance,
+  Table Topics speakers, awards) on the venue wifi this product actually runs on (#176; hardened and
+  made load-bearing by roll call in v1.20.0.0). One IndexedDB store
+  (`src/lib/offline-minutes-queue.ts`: DB `gavelup-offline`, object store `minutes-kv`) holds two
+  keys per meeting — `queue:<meetingId>`, an ordered array of `MinutesOp`s (eight variants, one per
+  minutes mutation), and `snapshot:<meetingId>`, the last server state seen. What every surface
+  RENDERS is `projectMinutes` (`src/lib/project-minutes.ts`): the snapshot (or the live payload when
+  online) with the queue replayed over it by `deriveMinutes`, so the panel and the Minutes card
+  cannot disagree about a queued tap. `projectMinutes` keeps a ONE-ENTRY memo in module-level
+  mutable state, keyed on the reference identity of all four inputs — the four same-render callers
+  would otherwise pay four `structuredClone`s of the snapshot per tap. Deliberate impurity in a
+  `lib/` module, and safe on the server for a stated reason rather than by luck: `minutes`, `snapshot`
+  and `queue` are all per-request objects, so two requests cannot key alike. The projection replays
+  **even when online**, because a write abandoned at its deadline queues with `navigator.onLine`
+  still true. Five properties hold it together, and all
+  but the drain's ordering were written after something went wrong without them. **While a queue
+  exists the queue is the only channel**
+  (`if (!online || queue.length > 0) queueOp(...)`, `src/hooks/use-offline-minutes.ts`) — otherwise a
+  direct write races a queued one for the same member and the OLDER answer wins on reconnect.
+  **Every write has a deadline** (`ONLINE_WRITE_TIMEOUT_MS`, `src/lib/offline-write-deadline.ts`),
+  applied to the online write and to each drain dispatch, because `navigator.onLine` is TRUE for a
+  phone associated to an access point that routes nowhere; without it a tap hung forever with every
+  control disabled and no message. Nothing is ABORTED at the deadline, so **every op must converge
+  on replay** — which is why `moveTableTopics` carries an absolute destination (`toIndex`) as well as
+  its relative `direction`. `toIndex` is optional only for ops already sitting in a device's
+  IndexedDB from before it existed, which keep the old relative semantics; it is the one op field
+  whose absence is a correctness hazard rather than a back-compat nicety, so every op minted now
+  carries it.
+  **The drain stops at the first failure** (`drainMinutesQueue`, `src/lib/drain-minutes.ts`) and
+  leaves that op and every successor queued in order; there is no per-op retry, and retrying is the
+  caller's job (automatic on reconnect, or the indicator's Retry). And **one `useOfflineMinutes` per
+  meeting** — two instances own separate `draining` flags over one read-modify-write IndexedDB key,
+  so `use-offline-minutes-instance.guard.test.ts` pins the caller set rather than trusting the
+  optional `offline` prop. `SyncStatus` (`src/components/club/sync-status.tsx`) is what the officer
+  sees: syncing, a pending count, an assertive error with a Retry, or nothing. Offline **auth** is
+  still not built — see ADR-0015's amendment for what that ADR now gets wrong.
 - **Pathways** — Toastmasters' education program. A **path** (e.g. *Presentation Mastery*) is
   enrolled and owned by a **Person**, independent of any club; a person may work several paths
   at once. When a path **level** is completed, the credit is attributed to *one* of the
@@ -370,7 +466,13 @@ per-Person opt-out, the no-auth `/unsubscribe` link, and per-club settings — s
   confirm/unconfirm, move/add/remove role/speaker, availability / planned-attendance write,
   meta edit) is rejected server-side, regardless of surface or capability. Only an admin **Reopen** (→ `scheduled`)
   lifts the lock. Enforced at `resolveMeetingAgendaAuthz` / `assertMeetingNotLocked`, not the UI
-  (ADR-0012).
+  (ADR-0012). The **minutes record** is outside that list on purpose (ADR-0014), and since v1.20.0.0
+  that includes attendance: `setAttendance` gates on the club `admin` role plus
+  `assertAttendanceRecordable` — has the meeting DAY arrived — and has never had a view of `status`,
+  while the panel drops the lifecycle gate in roll mode alone
+  (`writesLocked = roll ? false : locked`). A club writes its minutes up days later, so
+  making a mis-marked member require Reopen would make the replacement stricter than the Minutes-card
+  recorder it absorbed. Plan mode keeps respecting the lock.
 - `src/server/*` touches `db`/`pg` and must never be imported by client components.
 - Every **public, session-less** club reader gates on `clubs.archived_at` **itself**, through
   `isReadableClub` / `isReadableClubForMeeting` / `isReadableClubForMember`

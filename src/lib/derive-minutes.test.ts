@@ -75,6 +75,32 @@ function makeSnapshot(): MinutesData {
 }
 
 const ttOrder = (d: MinutesData) => d.tableTopicsSpeakers.map((t) => t.id);
+
+/**
+ * FOUR speakers, because the move-replay hazard needs four to be visible: with
+ * two rows a doubled "move down" bounces back to the original order and reads as
+ * correct, and with three the stepped row lands on the edge and the second apply
+ * no-ops. `[A,B,C,D]` + a doubled "move B down" is the smallest fixture where the
+ * bug produces a distinct wrong answer (`[A,C,D,B]` rather than `[A,C,B,D]`).
+ */
+function fourSpeakers(): MinutesData {
+	const snap = makeSnapshot();
+	snap.tableTopicsSpeakers = [
+		["tt-1", "Alice"],
+		["tt-2", "Bob"],
+		["tt-3", "Carol"],
+		["tt-4", "Dave"],
+	].map(([id, name], i) => ({
+		id,
+		memberId: null,
+		guestId: null,
+		name,
+		isGuest: false,
+		topic: null,
+		sortOrder: i,
+	}));
+	return snap;
+}
 const guestIds = (d: MinutesData) => d.guests.map((g) => g.guestId);
 
 describe("deriveMinutes", () => {
@@ -371,6 +397,183 @@ describe("deriveMinutes", () => {
 			{ type: "moveTableTopics", ...meta(), id: "tt-1", direction: "up" },
 		]);
 		expect(ttOrder(upAgain)).toEqual(["tt-1", "tt-2"]);
+	});
+
+	it("CONVERGES on a replayed move that carries toIndex (G2)", () => {
+		// The whole point of the absolute target. A write abandoned at its 8s
+		// deadline may still land server-side, and the drain then re-dispatches the
+		// op — so applying it twice must equal applying it once. With a bare
+		// `direction` it does not: `[A,B,C,D]` + "move B down" gives `[A,C,B,D]`, and
+		// a replay steps B again to `[A,C,D,B]`. That is the Table Topics speaking
+		// order in the saved minutes, the PDF and the emailed minutes, silently wrong.
+		const snap = fourSpeakers();
+		// B is at index 1; "down" means index 2, resolved at the TAP by the call site.
+		const op: MinutesOp = {
+			type: "moveTableTopics",
+			...meta(),
+			id: "tt-2",
+			direction: "down",
+			toIndex: 2,
+		};
+		const once = deriveMinutes(fourSpeakers(), [op]);
+		expect(ttOrder(once)).toEqual(["tt-1", "tt-3", "tt-2", "tt-4"]);
+		// Twice, three times, ten times — all the same list.
+		expect(ttOrder(deriveMinutes(snap, [op, op]))).toEqual(ttOrder(once));
+		expect(ttOrder(deriveMinutes(snap, [op, op, op, op]))).toEqual(
+			ttOrder(once),
+		);
+	});
+
+	it("converges when G1 queues a SECOND move behind an op the server already applied (G1 x G2)", () => {
+		// THE INTERACTION CELL. G1 changes the write path G2's replay runs through:
+		// once a queue exists, every later tap is appended to it instead of going
+		// online, so a move now routinely replays BEHIND another move rather than
+		// alone. That only converges because each op carries an absolute target.
+		//
+		// The sequence is the one G1's fix creates. A slow "move tt-2 down" blows its
+		// deadline and is queued — but it LANDS server-side. The officer then taps
+		// "move tt-1 down", which G1 appends to the queue rather than sending. Its
+		// `toIndex` is resolved from the PROJECTED list, which is what the officer is
+		// looking at and what `projectMinutes` renders for a non-empty queue.
+		const op1: MinutesOp = {
+			type: "moveTableTopics",
+			...meta(),
+			id: "tt-2",
+			direction: "down",
+			toIndex: 2,
+		};
+		const afterOp1 = deriveMinutes(fourSpeakers(), [op1]);
+		expect(ttOrder(afterOp1)).toEqual(["tt-1", "tt-3", "tt-2", "tt-4"]);
+		// tt-1 sits at index 0 of THAT list, so "down" is index 1.
+		const op2: MinutesOp = {
+			type: "moveTableTopics",
+			...meta(),
+			id: "tt-1",
+			direction: "down",
+			toIndex: 1,
+		};
+		const projected = deriveMinutes(fourSpeakers(), [op1, op2]);
+		expect(ttOrder(projected)).toEqual(["tt-3", "tt-1", "tt-2", "tt-4"]);
+
+		// The SERVER already has op1. The drain replays the whole queue in order
+		// against that state, and must land on exactly what the officer was shown.
+		const server = deriveMinutes(deriveMinutes(fourSpeakers(), [op1]), [
+			op1,
+			op2,
+		]);
+		expect(ttOrder(server)).toEqual(ttOrder(projected));
+	});
+
+	it("DIVERGES on that same sequence without an absolute target (G1 x G2 control)", () => {
+		// What the cell above would have been with G1 alone: op1's replay steps tt-2
+		// a second position, and nothing downstream corrects it — the officer's screen
+		// and the club's saved minutes end up different, with no error anywhere.
+		const op1: MinutesOp = {
+			type: "moveTableTopics",
+			...meta(),
+			id: "tt-2",
+			direction: "down",
+		};
+		const op2: MinutesOp = {
+			type: "moveTableTopics",
+			...meta(),
+			id: "tt-1",
+			direction: "down",
+		};
+		const projected = deriveMinutes(fourSpeakers(), [op1, op2]);
+		const server = deriveMinutes(deriveMinutes(fourSpeakers(), [op1]), [
+			op1,
+			op2,
+		]);
+		expect(ttOrder(projected)).toEqual(["tt-3", "tt-1", "tt-2", "tt-4"]);
+		// tt-2 stepped a second position on its replay, so it ends up behind tt-4:
+		// the officer's screen and the club's saved minutes disagree.
+		expect(ttOrder(server)).toEqual(["tt-3", "tt-1", "tt-4", "tt-2"]);
+		expect(ttOrder(server)).not.toEqual(ttOrder(projected));
+	});
+
+	it("STEPS a replayed move that carries only a direction — the hazard toIndex closes (G2 control)", () => {
+		// The negative control, and it is what makes the test above able to fail:
+		// without it, a mirror that ignored `toIndex` entirely would still satisfy
+		// "twice equals once" if it had accidentally become a no-op. This pins the
+		// OLD behaviour, which is still live for ops persisted before `toIndex`
+		// existed — the server falls back to `direction` for those, so the mirror
+		// must too, hazard included.
+		const op: MinutesOp = {
+			type: "moveTableTopics",
+			...meta(),
+			id: "tt-2",
+			direction: "down",
+		};
+		expect(ttOrder(deriveMinutes(fourSpeakers(), [op]))).toEqual([
+			"tt-1",
+			"tt-3",
+			"tt-2",
+			"tt-4",
+		]);
+		expect(ttOrder(deriveMinutes(fourSpeakers(), [op, op]))).toEqual([
+			"tt-1",
+			"tt-3",
+			"tt-4",
+			"tt-2",
+		]);
+	});
+
+	it("renumbers sortOrder dense and distinct after an absolute move (G2)", () => {
+		// The server renumbers the whole list, which leaves `sortOrder` dense and
+		// distinct so the `(sortOrder, id)` tie-break stops mattering. Asserting the
+		// NUMBERS rather than only the order is what keeps this mirror from
+		// diverging: `ttOrder` sorts, so it reads the same for [0,1,2,3] and for
+		// [0,5,7,9] and could not see a mirror that stopped renumbering.
+		const snap = fourSpeakers();
+		// Sparse and duplicated on the way in — the shape a swap-only history leaves.
+		snap.tableTopicsSpeakers[0].sortOrder = 0;
+		snap.tableTopicsSpeakers[1].sortOrder = 5;
+		snap.tableTopicsSpeakers[2].sortOrder = 5;
+		snap.tableTopicsSpeakers[3].sortOrder = 9;
+		const d = deriveMinutes(snap, [
+			{
+				type: "moveTableTopics",
+				...meta(),
+				id: "tt-1",
+				direction: "down",
+				toIndex: 3,
+			},
+		]);
+		expect(ttOrder(d)).toEqual(["tt-2", "tt-3", "tt-4", "tt-1"]);
+		expect(d.tableTopicsSpeakers.map((t) => t.sortOrder)).toEqual([0, 1, 2, 3]);
+	});
+
+	it("moves a speaker a NON-adjacent distance when toIndex says so (G2)", () => {
+		// `direction` can only ever name an adjacent target, so this case is
+		// unreachable through the current UI — but the payload now permits it and the
+		// two sides must agree on it, or a future drag-to-reorder would silently
+		// desync the projection from the server.
+		const d = deriveMinutes(fourSpeakers(), [
+			{
+				type: "moveTableTopics",
+				...meta(),
+				id: "tt-4",
+				direction: "up",
+				toIndex: 0,
+			},
+		]);
+		expect(ttOrder(d)).toEqual(["tt-4", "tt-1", "tt-2", "tt-3"]);
+	});
+
+	it("treats an out-of-range toIndex as a no-op (G2)", () => {
+		for (const toIndex of [4, 99]) {
+			const d = deriveMinutes(fourSpeakers(), [
+				{
+					type: "moveTableTopics",
+					...meta(),
+					id: "tt-2",
+					direction: "down",
+					toIndex,
+				},
+			]);
+			expect(ttOrder(d)).toEqual(["tt-1", "tt-2", "tt-3", "tt-4"]);
+		}
 	});
 
 	it("treats a move past the edge as a no-op", () => {

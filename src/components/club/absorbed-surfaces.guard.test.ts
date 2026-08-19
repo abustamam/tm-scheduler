@@ -36,6 +36,51 @@ describe("surfaces absorbed by the planned-attendance panel", () => {
 		expect(agenda).not.toContain("Not available this week");
 	});
 
+	it("AttendanceSection is gone from the Minutes card", () => {
+		// Absorbed into the attendance panel's roll mode (spec "Surfaces absorbed").
+		// Two surfaces recording the same rows is how a club ends up with an officer
+		// marking someone present in one place and absent in the other.
+		const minutes = readFileSync(
+			resolve(ROOT, "src/components/club/meeting-minutes.tsx"),
+			"utf8",
+		);
+		expect(minutes).not.toContain("AttendanceSection");
+		// The card must still POINT at where roll call moved to, or an officer who
+		// knows the old location just finds it missing. A source grep, so the
+		// sentence sitting inside the `canEdit` branch added in fix round 1 still
+		// satisfies it — do NOT relax this to accommodate that branch.
+		expect(minutes).toContain("Attendance is taken in the Attendance panel");
+	});
+
+	it("the Minutes card can no longer WRITE attendance", () => {
+		// The invariant the deletion actually exists for, stated directly rather
+		// than through the name of the component that used to violate it: one
+		// writer for these rows. The card keeps a READ-ONLY record for the member
+		// who cannot see the admin-only panel (`AttendanceRecord`), and that is
+		// fine precisely because it writes nothing — so pin the writes, not the
+		// rendering.
+		//
+		// This is the assertion that stops the read-only view drifting back into a
+		// second recorder. Any of these three appearing here again means two
+		// surfaces are writing the same rows, which is how a club ends up with a
+		// member marked present in one place and absent in the other. Raw read, so
+		// a commented-out call still fails.
+		const minutes = readFileSync(
+			resolve(ROOT, "src/components/club/meeting-minutes.tsx"),
+			"utf8",
+		);
+		for (const writeFn of [
+			"setAttendance",
+			"addMinutesGuest",
+			"removeMinutesGuest",
+		]) {
+			expect(
+				minutes,
+				`${writeFn} belongs to the attendance panel now — the Minutes card reads attendance, it does not record it`,
+			).not.toContain(writeFn);
+		}
+	});
+
 	it("the payload no longer ships the three id arrays the panel replaced", () => {
 		const meetings = readFileSync(
 			resolve(ROOT, "src/server/meetings.ts"),

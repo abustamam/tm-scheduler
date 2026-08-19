@@ -8,7 +8,7 @@ import { greetingName } from "#/lib/person-name";
 import type { Platform } from "#/lib/platform";
 import { whatsappHref } from "#/lib/whatsapp";
 
-export type NudgeMode = "confirm" | "recruit" | "attendance";
+export type NudgeMode = "confirm" | "recruit" | "attendance" | "arriving";
 
 interface NudgeInputBase {
 	name: string;
@@ -44,6 +44,12 @@ interface NudgeInputBase {
  */
 export type NudgeInput =
 	| (NudgeInputBase & { mode: "attendance" })
+	// SEPARATE constituent from `attendance` rather than `mode: "attendance" |
+	// "arriving"` on one, which is a type-level trap: TS removes a union member
+	// only when its whole discriminant is excluded, so two role-less modes sharing
+	// one constituent survived both early returns below and `i.roleName` stopped
+	// type-checking on the arm that has it.
+	| (NudgeInputBase & { mode: "arriving" })
 	| (NudgeInputBase & {
 			mode: "confirm" | "recruit";
 			/** The role being asked about. Role-specific asks stay on the slot
@@ -66,6 +72,16 @@ function messageFor(i: NudgeInput): string {
 	if (i.mode === "attendance") {
 		return `Hi ${who}, are you able to make our ${i.meetingDate} meeting? Agenda here: ${i.shareUrl}`;
 	}
+	// A SEPARATE mode rather than a reuse of `attendance`, because the two are sent
+	// at different moments and only one of them is still a question about the
+	// future. Roll mode renders during the meeting — the attendance rail's roll rows
+	// show contact right up until the meeting is `completed` — so the `attendance`
+	// draft was being sent from the room at 7:45pm asking "are you able to make our
+	// Tuesday 18 August meeting?", under the subject "Are you coming?", about the
+	// meeting that was running as they read it.
+	if (i.mode === "arriving") {
+		return `Hi ${who}, we've started our ${i.meetingDate} meeting — are you on your way? Agenda here: ${i.shareUrl}`;
+	}
 	return i.mode === "confirm"
 		? `Hi ${who}, just confirming you're our ${i.roleName} for the ${i.meetingDate} meeting. Details: ${i.shareUrl}`
 		: `Hi ${who}, would you be open to taking ${i.roleName} at our ${i.meetingDate} meeting? Info here: ${i.shareUrl}`;
@@ -73,6 +89,7 @@ function messageFor(i: NudgeInput): string {
 
 function subjectFor(i: NudgeInput): string {
 	if (i.mode === "attendance") return `Are you coming? — ${i.meetingDate}`;
+	if (i.mode === "arriving") return `Are you on your way? — ${i.meetingDate}`;
 	return i.mode === "confirm"
 		? `Confirming your ${i.roleName} role — ${i.meetingDate}`
 		: `Open ${i.roleName} role — ${i.meetingDate} meeting?`;

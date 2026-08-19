@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { MinutesOp } from "#/lib/offline-minutes-queue";
 import type { MinutesResult } from "#/server/minutes";
 import type { MinutesProgramRow } from "#/server/minutes-logic";
 import { MeetingMinutes } from "./meeting-minutes";
@@ -231,15 +232,26 @@ describe("MeetingMinutes action items (#529)", () => {
 	});
 });
 
-describe("MeetingMinutes attendance is gated on the meeting day", () => {
+describe("MeetingMinutes attendance moved to the panel", () => {
 	afterEach(() => cleanup());
 
-	// The card is titled "the record of what happened", and before the meeting
-	// day nothing has. Worse than the wording: the server now REJECTS the write
-	// (`assertAttendanceRecordable`), so rendering the recorder would offer
-	// buttons that can only error. Who is EXPECTED is the separate
-	// planned-attendance question, which has no surface here yet.
-	function renderOnDay(meetingDayReached: boolean) {
+	// Roll call now lives in the attendance panel beside the agenda, so this card
+	// WRITES none of it. Two things survive here and are covered by nothing else:
+	// the card's own copy, which still switches on the meeting day; and — for a
+	// viewer who cannot edit — the read-only record, because the panel is
+	// admin-only and a plain member seeing a completed meeting's minutes is the
+	// largest audience the minutes have.
+	//
+	// The fixture keeps members, a guest and non-zero counts on purpose. It is
+	// what makes the negatives below real assertions rather than vacuous ones — a
+	// recorder re-added to this card would render "Ayesha Khan" and its three
+	// buttons, and fail.
+	//
+	// Every count is a DIFFERENT number so a badge wired to the wrong field is
+	// visible. Five badges reading the same 0 would agree with each other however
+	// they were crossed. They deliberately do not add up to the member list; this
+	// component renders the counts it is handed and derives nothing.
+	function renderCard(opts: { meetingDayReached: boolean; canEdit: boolean }) {
 		return render(
 			<MeetingMinutes
 				meetingId="m1"
@@ -252,45 +264,214 @@ describe("MeetingMinutes attendance is gated on the meeting day", () => {
 							status: null,
 							hasRole: false,
 						},
+						{
+							memberId: "mem2",
+							name: "Bo Chen",
+							status: "excused",
+							hasRole: false,
+						},
 					],
+					guests: [{ guestId: "g1", name: "Dana Reed", fromRole: false }],
 					counts: {
-						present: 0,
-						absent: 0,
-						excused: 0,
-						unmarked: 1,
-						guests: 0,
+						present: 3,
+						absent: 4,
+						excused: 1,
+						unmarked: 2,
+						guests: 5,
 					},
 				}}
 				program={[]}
 				meetingPast={false}
-				meetingDayReached={meetingDayReached}
-				canEdit={true}
+				meetingDayReached={opts.meetingDayReached}
+				canEdit={opts.canEdit}
 				clubGuests={[]}
 				onMutated={() => {}}
 			/>,
 		);
 	}
 
-	it("hides the recorder before the meeting day, and says why", () => {
-		const { queryByRole, getByText } = renderOnDay(false);
-		// The member's row and its three buttons must be gone — asserting only on
-		// the heading would pass with the whole recorder still rendered beneath it.
-		expect(queryByRole("button", { name: "Present" })).toBeNull();
-		expect(queryByRole("button", { name: "Excused" })).toBeNull();
-		expect(queryByRole("button", { name: "Absent" })).toBeNull();
+	const renderOnDay = (meetingDayReached: boolean) =>
+		renderCard({ meetingDayReached, canEdit: true });
+
+	it("says why there is nothing to see before the meeting day", () => {
+		const { getByText, queryByText } = renderOnDay(false);
 		expect(getByText(/Opens on the day of the meeting/i)).toBeTruthy();
 		// And the card must stop claiming to be a record of what happened.
 		expect(getByText(/Attendance opens on the day/i)).toBeTruthy();
+		// Before the day there is no panel to point at either — the pointer belongs
+		// to the other branch, and showing it here would send an officer looking for
+		// a surface the route has not rendered yet.
+		expect(
+			queryByText(/Attendance is taken in the Attendance panel/i),
+		).toBeNull();
 	});
 
-	it("shows the recorder on the meeting day", () => {
-		// The positive control. Without it, a component that rendered nothing at
-		// all would pass the assertions above for the wrong reason.
-		const { getAllByRole, getByText } = renderOnDay(true);
-		expect(getAllByRole("button", { name: "Present" }).length).toBeGreaterThan(
-			0,
-		);
-		expect(getByText("Ayesha Khan")).toBeTruthy();
+	it("points at the panel on the meeting day instead of recording anything", () => {
+		// The positive control for the negatives below: without it, a component
+		// that rendered nothing at all would pass them for the wrong reason.
+		const { getByText } = renderOnDay(true);
+		expect(
+			getByText(
+				/Attendance is taken in the Attendance panel, beside the agenda/i,
+			),
+		).toBeTruthy();
 		expect(getByText(/the record of what happened/i)).toBeTruthy();
+	});
+
+	it("gives a viewer who cannot edit the record itself, not a pointer", () => {
+		// F1. The panel's roll mode is gated to signed-in admins, but this card is
+		// visible to any member once the meeting is `completed`
+		// (`getMinutes`: `visible = canEdit || status === "completed"`). Deleting
+		// the recorder must not take "who was at this meeting?" away from them.
+		const { getByText } = renderCard({
+			meetingDayReached: true,
+			canEdit: false,
+		});
+		// The counts line, each badge read by its own number so a crossed pair
+		// fails rather than agreeing with itself.
+		expect(getByText("3 present")).toBeTruthy();
+		expect(getByText("1 excused")).toBeTruthy();
+		expect(getByText("4 absent")).toBeTruthy();
+		expect(getByText("2 unmarked")).toBeTruthy();
+		// The guests count had no equivalent anywhere after the deletion — the
+		// panel lists guests by name and never totals them.
+		expect(getByText("5 guests")).toBeTruthy();
+		// One row per member, carrying the status.
+		expect(getByText("Ayesha Khan")).toBeTruthy();
+		expect(getByText("Bo Chen")).toBeTruthy();
+		expect(getByText("Excused")).toBeTruthy();
+		// Unmarked is the ABSENCE of a record, never a synonym for absent (#218).
+		expect(getByText("Unmarked")).toBeTruthy();
+		// And the guests by name, as the old read-only arm showed them.
+		expect(getByText("Dana Reed")).toBeTruthy();
+	});
+
+	it("does not point a read-only viewer at a panel they cannot see", () => {
+		// F2. The sentence is true for an admin and false for everyone else — this
+		// viewer has no attendance panel beside the agenda, so telling them roll
+		// call happens there sends them looking for a surface that is not rendered.
+		const { queryByText } = renderCard({
+			meetingDayReached: true,
+			canEdit: false,
+		});
+		expect(
+			queryByText(/Attendance is taken in the Attendance panel/i),
+		).toBeNull();
+	});
+
+	it("records no attendance itself — no write control, either audience", () => {
+		// The absorption, asserted where a source guard cannot see it: the guard
+		// pins that the symbol is gone and that the three write fns are unnamed,
+		// this pins that no roll-call CONTROL reaches the DOM. Two surfaces writing
+		// the same rows is how a club ends up with someone marked present in one
+		// place and absent in the other.
+		//
+		// Both audiences, because they render different things: the admin gets a
+		// pointer and the read-only viewer gets the record. The record is the one
+		// that could quietly grow a button back, which is exactly why `canEdit:
+		// false` is in this matrix rather than trusted to be inert.
+		for (const canEdit of [true, false]) {
+			for (const meetingDayReached of [true, false]) {
+				const { queryByRole } = renderCard({ meetingDayReached, canEdit });
+				const where = `canEdit=${canEdit} meetingDayReached=${meetingDayReached}`;
+				// Status words may appear as TEXT in the read-only record (a Badge is
+				// a span) — what must never exist is a control that writes them.
+				expect(queryByRole("button", { name: "Present" }), where).toBeNull();
+				expect(queryByRole("button", { name: "Excused" }), where).toBeNull();
+				expect(queryByRole("button", { name: "Absent" }), where).toBeNull();
+				// Neither half of the old section's guest controls.
+				expect(queryByRole("button", { name: /Add guest/i }), where).toBeNull();
+				expect(queryByRole("button", { name: /^Remove/i }), where).toBeNull();
+				cleanup();
+			}
+		}
+	});
+
+	it("shows an admin the pointer and no roster, so there is one recorder", () => {
+		// The other side of the branch: an admin must NOT get a second copy of the
+		// roster here, or the surface the panel replaced is effectively back.
+		const { queryByText } = renderCard({
+			meetingDayReached: true,
+			canEdit: true,
+		});
+		expect(queryByText("Ayesha Khan")).toBeNull();
+		expect(queryByText("Bo Chen")).toBeNull();
+		expect(queryByText("3 present")).toBeNull();
+	});
+});
+
+// F2. The Minutes card reads the offline queue through the SAME seam the
+// attendance panel's roll rows do (`#/lib/project-minutes`), and it used to hold
+// its own copy of the expression — `online ? minutes : deriveMinutes(...)` — which
+// showed the loader's rows whenever `navigator.onLine` was true. That is true on
+// dead venue wifi, and it is true for the state the write deadline creates: a
+// write abandoned at its deadline is queued with no `onMutated` and no refetch
+// coming, so Table Topics and the awards read exactly as they had before the tap.
+//
+// Reachable here because `offline` is an injectable prop: jsdom reports
+// `navigator.onLine === true`, so a queue supplied below IS the online-with-queue
+// state, which is otherwise 8 seconds of real timing to reproduce.
+describe("MeetingMinutes offline projection (F2)", () => {
+	afterEach(() => cleanup());
+
+	/** Enough of `useOfflineMinutes`' 9-key return for a render. */
+	function fakeOffline(queue: MinutesOp[]) {
+		return {
+			mutate: vi.fn(),
+			opMeta: () => ({ opId: "op-1", queuedAt: 1 }),
+			busy: false,
+			queue,
+			snapshot: null,
+			draining: false,
+			syncError: null,
+			justSynced: false,
+			retryDrain: vi.fn(),
+		} as unknown as NonNullable<
+			Parameters<typeof MeetingMinutes>[0]["offline"]
+		>;
+	}
+
+	const queuedSpeaker: MinutesOp = {
+		type: "addTableTopics",
+		opId: "op-1",
+		queuedAt: 1,
+		id: "tt-1",
+		name: "Nadia Farouk",
+		isGuest: true,
+		guestId: "g-nadia",
+	};
+
+	it("shows a queued Table Topics speaker even though navigator.onLine is true", () => {
+		const { getByText } = render(
+			<MeetingMinutes
+				meetingId="m1"
+				minutes={emptyMinutes}
+				program={[]}
+				meetingPast={false}
+				meetingDayReached={true}
+				canEdit={true}
+				clubGuests={[{ id: "g-nadia", name: "Nadia Farouk" }]}
+				offline={fakeOffline([queuedSpeaker])}
+			/>,
+		);
+		getByText("Nadia Farouk");
+	});
+
+	it("shows nothing extra when the queue is empty — the control", () => {
+		// Without this, a card that rendered every club guest unconditionally would
+		// satisfy the assertion above for the wrong reason.
+		const { queryByText } = render(
+			<MeetingMinutes
+				meetingId="m1"
+				minutes={emptyMinutes}
+				program={[]}
+				meetingPast={false}
+				meetingDayReached={true}
+				canEdit={true}
+				clubGuests={[{ id: "g-nadia", name: "Nadia Farouk" }]}
+				offline={fakeOffline([])}
+			/>,
+		);
+		expect(queryByText("Nadia Farouk")).toBeNull();
 	});
 });

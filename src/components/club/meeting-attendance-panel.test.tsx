@@ -41,6 +41,7 @@ function renderPanel(
 	over: Partial<Parameters<typeof MeetingAttendancePanel>[0]> = {},
 ) {
 	const props = {
+		mode: "plan" as const,
 		roster,
 		plan: [],
 		rungOverride: {},
@@ -119,6 +120,27 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		// Spec, Error handling: a control that vanishes reads as a bug; a disabled
 		// one reads as "not now".
 		const { getByRole } = renderPanel({ locked: true });
+		expect(
+			getByRole("button", { name: /Ayesha Khan status/i }).hasAttribute(
+				"disabled",
+			),
+		).toBe(true);
+	});
+
+	it("keeps the rungs disabled on a COMPLETED meeting, unlike roll mode's chips", () => {
+		// The other half of the mode-specific lock (see "keeps the chips live on a
+		// completed meeting" in the roll block). `locked` is exactly
+		// `status === "completed"`, and roll mode deliberately ignores it — but
+		// changing PLANNED attendance for a meeting that has already happened is
+		// meaningless, so plan mode keeps respecting it.
+		//
+		// Both directions are asserted, in both blocks, on purpose: with only the
+		// roll one, the next reader "simplifies" `roll ? false : locked` down to a
+		// bare `false` and the panel starts letting an officer rewrite the outreach
+		// ladder of a closed-out meeting with the whole suite green. `phaseCompleted`
+		// is inert in plan mode, and passed anyway so the fixture is the real
+		// "completed meeting" shape rather than `locked` alone.
+		const { getByRole } = renderPanel({ locked: true, phaseCompleted: true });
 		expect(
 			getByRole("button", { name: /Ayesha Khan status/i }).hasAttribute(
 				"disabled",
@@ -218,6 +240,55 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		} finally {
 			window.innerWidth = originalWidth;
 		}
+	});
+
+	it("renders the mobile Show/Hide toggle, unlike roll mode", () => {
+		const { getByRole } = renderPanel();
+		expect(getByRole("button", { name: /show|hide/i })).toBeTruthy();
+	});
+
+	it("never renders the Guests group in plan mode", () => {
+		// Guests are roll-mode only (spec: pre-meeting guest expectation is out of
+		// scope) — even if a caller mistakenly passes `guests` through in plan
+		// mode, the group must not appear.
+		const { queryByText } = renderPanel({
+			guests: [{ guestId: "g1", name: "Nadia Farouk", fromRole: false }],
+			clubGuests: [{ id: "g1", name: "Nadia Farouk" }],
+		});
+		expect(queryByText("Guests")).toBeNull();
+		expect(queryByText("Nadia Farouk")).toBeNull();
+	});
+
+	it("never renders the sync indicator in plan mode", () => {
+		// Plan writes go straight to `setPlannedAttendance` and never touch the
+		// offline queue, so a queue count here would describe someone else's work.
+		const { queryByText } = renderPanel({
+			sync: {
+				online: false,
+				queueCount: 2,
+				draining: false,
+				syncError: null,
+				justSynced: false,
+				onRetry: () => {},
+			},
+		});
+		expect(queryByText(/saved on this device/)).toBeNull();
+	});
+
+	it("ignores the roll-mode `busy` signal — plan writes never touch the offline queue", () => {
+		// `busy` is the offline queue's refuse-while-busy signal, and the route
+		// passes it for BOTH modes from one call site. A plan rung goes straight to
+		// `setPlannedAttendance`, so a Minutes-card write (or a reconnect drain)
+		// holding that flag must not disable the outreach ladder — the panel's own
+		// per-row `pending` is the only guard plan mode needs. Pinned because
+		// folding `busy` into `AttendanceRow` "for symmetry" is a one-word edit that
+		// no other test here can see.
+		const { getByRole } = renderPanel({ busy: true });
+		expect(
+			getByRole("button", { name: /Ayesha Khan status/i }).hasAttribute(
+				"disabled",
+			),
+		).toBe(false);
 	});
 
 	it("invites a first answer instead of rendering what looks like a deletion", () => {
@@ -697,5 +768,720 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 			name: /Message Ayesha Khan on WhatsApp/i,
 		}).closest("div");
 		expect(nudges?.classList.contains("gap-1.5")).toBe(true);
+	});
+});
+
+describe("roll mode", () => {
+	// The brief's snippet omitted this, unlike the plan-mode block above; without
+	// it renders leak across `it`s (no global auto-cleanup is configured — see
+	// vitest.config.ts), and the contact-visibility and mobile-expansion tests
+	// below see EVERY prior test's rows too, not just their own.
+	afterEach(() => cleanup());
+
+	const rollProps = {
+		mode: "roll" as const,
+		roster: [
+			{
+				id: "m-abe",
+				name: "Abe Nkemelu",
+				phone: "+12025550101",
+				email: "abe@example.com",
+			},
+			{ id: "m-bea", name: "Bea Osei", phone: null, email: "bea@example.com" },
+		],
+		plan: [{ memberId: "m-abe", status: "coming" as const }],
+		attendance: [],
+		rungOverride: {},
+		roleByMemberId: {},
+		meetingDate: "August 20, 2026",
+		shareUrl: "https://example.test/m",
+		locked: false,
+		onWriteRung: vi.fn(),
+		onContacted: vi.fn(),
+		onSetAttendance: vi.fn(),
+	};
+
+	it("titles itself Attendance and counts real rows", () => {
+		const { getByText } = render(<MeetingAttendancePanel {...rollProps} />);
+		getByText("Attendance");
+		// Abe's plan says `coming`, which is a SUGGESTION, not a record — so both
+		// members are unmarked. A suggestion-counting bug reads "1 present".
+		getByText("2 unmarked");
+	});
+
+	it("renders a dashed suggestion for a planned member and a solid chip for a recorded one", () => {
+		const { getByRole } = render(
+			<MeetingAttendancePanel
+				{...rollProps}
+				attendance={[{ memberId: "m-bea", status: "present" }]}
+			/>,
+		);
+		// Abe: no row, plan says coming -> dashed "Present?"
+		const abe = getByRole("button", { name: /Abe Nkemelu status/i });
+		expect(abe.textContent).toContain("Present?");
+		expect(abe.className).toContain("border-dashed");
+		// Bea: real row -> solid, no question mark.
+		const bea = getByRole("button", { name: /Bea Osei status/i });
+		expect(bea.textContent).toContain("Present");
+		expect(bea.textContent).not.toContain("?");
+		expect(bea.className).not.toContain("border-dashed");
+	});
+
+	it("tapping a dashed suggestion writes the suggested status", async () => {
+		const onSetAttendance = vi.fn();
+		const { getByRole } = render(
+			<MeetingAttendancePanel
+				{...rollProps}
+				onSetAttendance={onSetAttendance}
+			/>,
+		);
+		fireEvent.click(getByRole("button", { name: /Abe Nkemelu status/i }));
+		// One tap commits the suggestion — that is the affordance. It must NOT open
+		// the menu, or roll call costs two taps per member.
+		expect(onSetAttendance).toHaveBeenCalledWith("m-abe", "present");
+	});
+
+	it("F1: marks a suggestion row ABSENT in one menu interaction, with no false `present` first", async () => {
+		// THE reason this round exists, and an assertion that was previously
+		// unrepresentable — which is why four review rounds passed over the bug.
+		//
+		// Roll call exists to record the EXCEPTIONS: a member who answered "coming"
+		// and is not in the room. That was the WORST-supported path here. Abe's row
+		// is the dashed one-tap suggestion, and it was the row's only control, so
+		// the only route to `absent` was tap "Present?" (a false row in
+		// `meeting_attendance`, the table the PDF and the emailed minutes print),
+		// wait out the round trip, then open the now-solid chip and pick the truth.
+		const onSetAttendance = vi.fn();
+		const { getByRole, findByRole } = render(
+			<MeetingAttendancePanel
+				{...rollProps}
+				onSetAttendance={onSetAttendance}
+			/>,
+		);
+		// Radix opens on pointerdown, not a bare click — see the notes above.
+		await userEvent.click(
+			getByRole("button", {
+				name: /Record a different attendance for Abe Nkemelu/i,
+			}),
+		);
+		fireEvent.click(await findByRole("menuitem", { name: "Absent" }));
+		// EXACTLY ONCE is the load-bearing half. `toHaveBeenCalledWith` alone passes
+		// for the two-write path this test exists to forbid — a `present` followed
+		// by an `absent` satisfies it, and that is precisely what shipped.
+		expect(onSetAttendance).toHaveBeenCalledTimes(1);
+		expect(onSetAttendance).toHaveBeenCalledWith("m-abe", "absent");
+	});
+
+	it("F1: keeps the one-tap commit, rather than replacing it with the menu", () => {
+		// The other half of the fix, and the direction a later "simplification"
+		// would break: the menu is ADDED beside the dashed commit, not substituted
+		// for it. One tap for the common case is what makes 40 names workable in a
+		// room, so the commit must still fire on the FIRST tap and must not open
+		// anything. The sibling test above asserts the write; this one asserts no
+		// menu appeared, which is the part a menu-only rewrite would fail.
+		const onSetAttendance = vi.fn();
+		const { getByRole, queryByRole } = render(
+			<MeetingAttendancePanel
+				{...rollProps}
+				onSetAttendance={onSetAttendance}
+			/>,
+		);
+		fireEvent.click(getByRole("button", { name: /Abe Nkemelu status/i }));
+		expect(onSetAttendance).toHaveBeenCalledTimes(1);
+		expect(onSetAttendance).toHaveBeenCalledWith("m-abe", "present");
+		expect(queryByRole("menu")).toBeNull();
+	});
+
+	it("F1: gates the suggestion row's new menu trigger on the same in-flight signal", () => {
+		// The suggestion row is now TWO controls, and the C1 test below enumerates
+		// the ones that existed when it was written. A new control that is not on
+		// `busy` hands its tap to `mutate()`'s silent refusal — the exact hole C1
+		// was written to close, reopened by the fix beside it. Both directions, so a
+		// permanently-disabled trigger cannot pass.
+		const trigger = (q: ReturnType<typeof render>) =>
+			q.getByRole("button", {
+				name: /Record a different attendance for Abe Nkemelu/i,
+			});
+		const busy = render(<MeetingAttendancePanel {...rollProps} busy={true} />);
+		expect(trigger(busy).hasAttribute("disabled")).toBe(true);
+		busy.unmount();
+		const idle = render(<MeetingAttendancePanel {...rollProps} busy={false} />);
+		expect(trigger(idle).hasAttribute("disabled")).toBe(false);
+	});
+
+	it("offers the attendance statuses, not the plan rungs", async () => {
+		const { getByRole, findByRole } = render(
+			<MeetingAttendancePanel
+				{...rollProps}
+				attendance={[{ memberId: "m-bea", status: "present" }]}
+			/>,
+		);
+		// Radix's DropdownMenuTrigger opens on pointerdown, not a bare `click` — see
+		// the plan-mode test above for the same note. `userEvent.click` replays the
+		// real pointer sequence; the menu ITEM selection below stays `fireEvent.click`
+		// since MenuItem selects on a plain `onClick`.
+		await userEvent.click(getByRole("button", { name: /Bea Osei status/i }));
+		await findByRole("menuitem", { name: "Present" });
+		getByRole("menuitem", { name: "Absent" });
+		getByRole("menuitem", { name: "Excused" });
+		expect(() => getByRole("menuitem", { name: "Coming" })).toThrow();
+	});
+
+	it("F3: announces the ANSWER, not just the member's name, on both chip shapes", () => {
+		// `aria-label` OVERRIDES content, and both branches carried
+		// `aria-label={`${row.name} status`}` — so Present / Absent / Excused reached
+		// no screen reader at all on the surface whose whole job is recording it, and
+		// the two branches announced IDENTICALLY while doing opposite things (one
+		// commits `present` on touch, the other opens a menu). The same mistake plan
+		// mode's control had made and fixed 150 lines above, shipped again verbatim.
+		//
+		// EXACT name strings, not substrings: a `/Absent/` regex would pass for a
+		// label that merely contains the word while still being overridden, and the
+		// bug being fixed is about WHICH string wins.
+		const { getByRole } = render(
+			<MeetingAttendancePanel
+				{...rollProps}
+				attendance={[{ memberId: "m-bea", status: "absent" }]}
+			/>,
+		);
+		// RECORDED: the status is the name.
+		getByRole("button", { name: "Bea Osei status: Absent" });
+		// SUGGESTION: not recorded, what the plan suggests, and that a tap COMMITS —
+		// the last clause is what the dashed border and the "?" say visually and
+		// nothing said otherwise (the "?" is not announced).
+		getByRole("button", {
+			name: "Abe Nkemelu status: not recorded — the plan suggests Present. Tap to record it.",
+		});
+		// The MENU trigger on that same suggestion row is a third, distinct name. It
+		// is what made the old shared label a hazard: with `aria-haspopup` as the
+		// only discriminator, an AT user reaching for the menu recorded `present`.
+		getByRole("button", {
+			name: "Record a different attendance for Abe Nkemelu",
+		});
+		// And no control gets there by overriding its own content. Asserted on the
+		// attribute, because a composed name and an `aria-label` that happens to
+		// spell the same words are indistinguishable by name alone — and only one of
+		// them keeps the visible and announced strings in sync by construction.
+		for (const el of [
+			getByRole("button", { name: /Abe Nkemelu status/i }),
+			getByRole("button", { name: /Bea Osei status/i }),
+			getByRole("button", {
+				name: /Record a different attendance for Abe Nkemelu/i,
+			}),
+		]) {
+			expect(el.hasAttribute("aria-label"), el.textContent ?? "").toBe(false);
+		}
+	});
+
+	it("F3: says 'not recorded' where the chip shows an em dash", () => {
+		// The unmarked-with-no-suggestion row. "—" is not read aloud at all by most
+		// screen readers, so the visible label cannot be the announced one here —
+		// this is the one place the two deliberately differ, and it differs in the
+		// direction of saying MORE.
+		const { getByRole } = render(
+			<MeetingAttendancePanel {...rollProps} plan={[]} />,
+		);
+		const chip = getByRole("button", { name: "Bea Osei status: not recorded" });
+		expect(chip.textContent).toContain("—");
+	});
+
+	it("F4: builds its identity line from the rail's OWN row, byte for byte", () => {
+		// The previous refit copied `AttendanceRow`'s `<li>` class list and left the
+		// contents pre-#594, under a comment claiming the shell was shared "verbatim".
+		// Four fixes that rebuild made for this 340px column were therefore missing
+		// from half the rows, and jsdom performs no layout, so nothing could see it.
+		//
+		// So the test is a COMPARISON rather than a class-list checklist: render the
+		// same member in both modes and require the identity line to be the same
+		// markup. A checklist re-encodes today's classes and goes stale the same way
+		// the comment did; this fails the moment one mode's row is restyled without
+		// the other, which is the actual failure mode.
+		const shared = {
+			roster: [
+				{
+					id: "m-abe",
+					name: "Abe Nkemelu",
+					preferredName: null,
+					phone: "+12025550101",
+					email: "abe@example.com",
+				},
+			],
+			// A LONG role name, which is the case that made this matter: `badge.tsx`
+			// carries `shrink-0 whitespace-nowrap`, so the full name is an
+			// unshrinkable ~136px block in a ~292px column.
+			roleByMemberId: {
+				"m-abe": {
+					code: "TD",
+					roleName: "Toastmaster of the Day",
+					confirmed: false,
+				},
+			},
+			plan: [{ memberId: "m-abe", status: "coming" as const }],
+			rungOverride: {},
+			meetingDate: "August 20, 2026",
+			shareUrl: "https://example.test/m",
+			locked: false,
+			onWriteRung: vi.fn(),
+			onContacted: vi.fn(),
+			onSetAttendance: vi.fn(),
+		};
+		const identityLine = (q: ReturnType<typeof render>) => {
+			const el = q.getByText("Abe Nkemelu").parentElement;
+			if (!el) throw new Error("no identity line around the name");
+			return el.outerHTML;
+		};
+
+		const roll = render(
+			<MeetingAttendancePanel {...shared} mode="roll" attendance={[]} />,
+		);
+		const rollLine = identityLine(roll);
+		roll.unmount();
+		const plan = render(<MeetingAttendancePanel {...shared} mode="plan" />);
+		expect(identityLine(plan)).toBe(rollLine);
+
+		// And name the two defects explicitly, because "identical to plan mode" would
+		// also be satisfied by breaking BOTH — a parity assertion cannot see a defect
+		// present on each side.
+		expect(rollLine).toContain("line-clamp-2");
+		expect(rollLine).toContain("break-words");
+		expect(rollLine).not.toContain("truncate");
+		// The 2-4 character CODE is what is VISIBLE; the full role name reaches a
+		// pointer through `title` and a screen reader through the `sr-only` span. On
+		// the surviving render, since the roll copy is unmounted above — and the two
+		// are the same markup, which is what the assertion at the top of this test
+		// has just established.
+		expect(plan.getByText("TD").getAttribute("title")).toBe(
+			"Toastmaster of the Day",
+		);
+	});
+
+	it("F4: renders the role CODE on a roll row, not the full role name", () => {
+		// The rendered half of the pin above, on a live roll render: `buildRollPanel`
+		// read `?.roleName` only, so the row could not carry a code even if the badge
+		// wanted one — which is why the F4 fix reached into the lib.
+		const { getByText, queryByText } = render(
+			<MeetingAttendancePanel
+				{...rollProps}
+				roleByMemberId={{
+					"m-abe": {
+						code: "TD",
+						roleName: "Toastmaster of the Day",
+						confirmed: false,
+					},
+				}}
+			/>,
+		);
+		expect(getByText("TD").getAttribute("title")).toBe(
+			"Toastmaster of the Day",
+		);
+		// Present for an AT user, absent as a VISIBLE block. `sr-only` is a class
+		// here, not a removal, so assert on the class rather than on absence.
+		const full = queryByText("Toastmaster of the Day");
+		expect(full?.className).toContain("sr-only");
+	});
+
+	it("F4: gives the roll row the rail's action line and its fixed status track", () => {
+		// HONEST LIMIT, as on plan mode's own version of this test: jsdom performs no
+		// layout, so this is the mechanism and not the geometry.
+		//
+		// The chip was a direct child of a `flex flex-col` <li> with no track, so it
+		// stretched the full width and the rail's "every row shares one right edge"
+		// held for the plan rows only — while the icon cluster on the rows that DID
+		// have a track jittered against the ones that did not.
+		const { getByRole } = render(
+			<MeetingAttendancePanel
+				{...rollProps}
+				attendance={[{ memberId: "m-bea", status: "present" }]}
+			/>,
+		);
+		const chip = getByRole("button", { name: /Bea Osei status/i });
+		expect(chip.classList.contains("w-44")).toBe(true);
+		expect(chip.classList.contains("justify-between")).toBe(true);
+		const actionLine = chip.parentElement;
+		expect(actionLine?.classList.contains("justify-end")).toBe(true);
+		expect(actionLine?.classList.contains("gap-3")).toBe(true);
+		// Same WCAG 1.4.11 point plan mode's chevron test makes: `currentColor` at
+		// 60% takes a non-text indicator under 3:1.
+		const chevron = chip.querySelector("svg");
+		expect(chevron).toBeTruthy();
+		expect(chevron?.classList.contains("opacity-60")).toBe(false);
+		// The SUGGESTION row's pair shares that one track between the commit and its
+		// menu trigger, rather than widening the rail for a second control.
+		const commit = getByRole("button", { name: /Abe Nkemelu status/i });
+		expect(commit.parentElement?.classList.contains("w-44")).toBe(true);
+	});
+
+	it("F4: draws the roll row's contact drafts as icons, like the plan rows", () => {
+		// `iconOnly` is opt-in because `NudgeButtons` is shared with the agenda slot
+		// cards and the recruit picker, "where the words are affordable; only the
+		// 340px attendance rail needs the space back". This is that rail, and the
+		// roll rows were the one place in it still paying for the words.
+		const { getByRole } = render(<MeetingAttendancePanel {...rollProps} />);
+		const wa = getByRole("link", {
+			name: /Message Abe Nkemelu on WhatsApp/i,
+		});
+		// The accessible name comes from the label; the WORDS are gone from the page.
+		expect(wa.textContent).toBe("");
+		expect(getByRole("link", { name: /Email Abe Nkemelu/i }).textContent).toBe(
+			"",
+		);
+	});
+
+	it("F6: drafts an on-your-way ask, not a pre-meeting one, from the room", () => {
+		// `hideContact` is `roll && phaseCompleted`, so this affordance renders
+		// exactly on meeting day — and it was hard-wired to `mode="attendance"`,
+		// whose copy is "are you able to make our <date> meeting?" under the subject
+		// "Are you coming?". Drafted at 7:45pm from the room where that meeting is
+		// running.
+		const { getByRole } = render(<MeetingAttendancePanel {...rollProps} />);
+		const href = getByRole("link", {
+			name: /Message Abe Nkemelu on WhatsApp/i,
+		}).getAttribute("href");
+		expect(decodeURIComponent(href ?? "")).toContain("are you on your way?");
+		// The pre-meeting wording must be gone from the draft, not merely joined by
+		// the new sentence.
+		expect(decodeURIComponent(href ?? "")).not.toContain(
+			"are you able to make",
+		);
+	});
+
+	it("keeps contact while the meeting is today and drops it once completed", () => {
+		const today = render(<MeetingAttendancePanel {...rollProps} />);
+		today.getByRole("link", { name: /WhatsApp/i });
+		today.unmount();
+		// `completed` rows are a historical record — nobody is being chased.
+		const done = render(
+			<MeetingAttendancePanel
+				{...rollProps}
+				locked={true}
+				phaseCompleted={true}
+			/>,
+		);
+		expect(() => done.getByRole("link", { name: /WhatsApp/i })).toThrow();
+	});
+
+	it("keeps contact on a locked meeting that is not yet completed", () => {
+		// Isolates `locked` from `phaseCompleted`. The pair above flips both
+		// together (today: both false; done: both true), so a future edit that
+		// keys `hideContact` on `locked` instead of `phaseCompleted` would pass
+		// both of those cases — a completed meeting is usually also locked.
+		// `locked && !phaseCompleted` is the meeting-day case: the officer is
+		// still chasing people, so contact must stay.
+		const { getByRole } = render(
+			<MeetingAttendancePanel
+				{...rollProps}
+				locked={true}
+				phaseCompleted={false}
+			/>,
+		);
+		getByRole("link", { name: /WhatsApp/i });
+	});
+
+	it("keeps the chips live on a COMPLETED meeting, unlike plan mode's rungs", () => {
+		// Roll mode records what HAPPENED, and correcting a mis-marked attendance
+		// after a meeting is closed out is a normal club task — minutes here are
+		// often finished days later. Everything around this already allows it:
+		// `setAttendance` gates only on `assertAttendanceRecordable` (has the day
+		// arrived) and has no view of `status`, and the Minutes `AttendanceSection`
+		// that roll mode replaces gated on `canEdit` alone, which never considered
+		// `status` either. Left on `locked`, roll mode would be STRICTER than the
+		// surface being deleted and the only correction route would be Reopen.
+		const { getByRole } = render(
+			<MeetingAttendancePanel
+				{...rollProps}
+				attendance={[{ memberId: "m-bea", status: "present" }]}
+				locked={true}
+				phaseCompleted={true}
+			/>,
+		);
+		// BOTH chip shapes. Abe is a dashed one-tap suggestion and Bea a recorded
+		// chip that opens the menu; those are two separate `disabled` expressions in
+		// `RollChip`, so one can be re-gated without the other.
+		expect(
+			getByRole("button", { name: /Abe Nkemelu status/i }).hasAttribute(
+				"disabled",
+			),
+		).toBe(false);
+		expect(
+			getByRole("button", { name: /Bea Osei status/i }).hasAttribute(
+				"disabled",
+			),
+		).toBe(false);
+	});
+
+	it("keeps the Guests group editable on a completed meeting too", () => {
+		// Same capability, same evidence: `addMinutesGuest` / `removeMinutesGuest`
+		// gate only on `assertAttendanceRecordable`, and the section this group was
+		// lifted from let an officer add a guest they had missed to a closed-out
+		// meeting. Without this the member chips would be correctable and the guest
+		// list beside them dead — a half-applied fix.
+		const { getByRole } = render(
+			<MeetingAttendancePanel
+				{...rollProps}
+				guests={[{ guestId: "g1", name: "Nadia Farouk", fromRole: false }]}
+				clubGuests={[{ id: "g1", name: "Nadia Farouk" }]}
+				locked={true}
+				phaseCompleted={true}
+			/>,
+		);
+		expect(
+			getByRole("button", { name: /\+ Add guest/ }).hasAttribute("disabled"),
+		).toBe(false);
+		expect(
+			getByRole("button", { name: /Remove Nadia Farouk/i }).hasAttribute(
+				"disabled",
+			),
+		).toBe(false);
+	});
+
+	it("disables EVERY control while a write is in flight, not just the row being written", () => {
+		// Whole-branch review C1. The panel's disable was PER-ROW (`pendingId`)
+		// while the write path's refusal is GLOBAL and SILENT:
+		// `useOfflineMinutes.mutate()` returns immediately on `busy || draining`
+		// with no toast and no throw, and `busy` is held across the whole online
+		// write — server fn plus a full `router.invalidate()`. So an officer taking
+		// roll on a phone tapped down the roster at conversational pace and a large
+		// fraction of the taps did nothing, with nothing on screen to say so.
+		//
+		// Four controls here, because they are four separate `disabled` expressions:
+		// the dashed one-tap suggestion, the recorded chip's menu trigger, and the
+		// guests group's add and remove — that group was the worst of them, since
+		// roll mode forces its lifecycle lock to `false`, so nothing disabled it
+		// during a write at all AND it closes its popover unconditionally after
+		// `onAddGuest`, making a discarded guest add look like a success.
+		//
+		// A FIFTH control is covered by its own test below rather than here: the
+		// items INSIDE the recorded chip's menu. Disabling a Radix trigger does not
+		// close content that is already open, so a menu opened before a drain began
+		// stayed live — and that case needs one render held open across a prop flip,
+		// which does not fit this test's two-renders-with-an-unmount shape.
+		const withGuests = {
+			...rollProps,
+			attendance: [{ memberId: "m-bea", status: "present" as const }],
+			guests: [{ guestId: "g1", name: "Nadia Farouk", fromRole: false }],
+			clubGuests: [{ id: "g1", name: "Nadia Farouk" }],
+		};
+		const controls = (q: ReturnType<typeof render>) => [
+			// Abe has no row and a `coming` plan → the dashed one-tap suggestion.
+			q.getByRole("button", { name: /Abe Nkemelu status/i }),
+			// Bea has a real row → the solid chip that opens the menu.
+			q.getByRole("button", { name: /Bea Osei status/i }),
+			q.getByRole("button", { name: /\+ Add guest/ }),
+			q.getByRole("button", { name: /Remove Nadia Farouk/i }),
+		];
+
+		const busy = render(<MeetingAttendancePanel {...withGuests} busy={true} />);
+		for (const el of controls(busy)) {
+			expect(
+				el.hasAttribute("disabled"),
+				el.getAttribute("aria-label") ?? el.textContent ?? "",
+			).toBe(true);
+		}
+		busy.unmount();
+
+		// The control, in the SAME test: without it a `disabled={true}` — or a
+		// `locked` that swallowed the whole group — reads as a pass while the panel
+		// is dead for everyone.
+		const idle = render(
+			<MeetingAttendancePanel {...withGuests} busy={false} />,
+		);
+		for (const el of controls(idle)) {
+			expect(
+				el.hasAttribute("disabled"),
+				el.getAttribute("aria-label") ?? el.textContent ?? "",
+			).toBe(false);
+		}
+	});
+
+	it("disables the menu's ITEMS too — a disabled trigger does not close an open menu", async () => {
+		// Round 2, F1: the fourth control of the C1 test above is really a fifth.
+		// Gating the trigger stops the menu OPENING while busy; it does nothing about
+		// a menu that is already open. Reachable in the drain window specifically:
+		// the officer opens this menu while everything is idle, wifi returns, the
+		// auto-drain effect flips `draining`, and their pick is swallowed by
+		// `mutate()`'s silent refusal.
+		//
+		// MECHANISM. "Render with busy, click to open" cannot work — the trigger is
+		// now correctly disabled, so the click is a no-op and every assertion after
+		// it would pass against a menu that never opened, which is worse than no
+		// test. So: open the menu while `busy={false}`, then `rerender` the same tree
+		// with `busy={true}`. Radix keeps `open` in the DropdownMenu root's own
+		// state, untouched by our props, so the menu survives the re-render and the
+		// items are re-rendered with the new prop — the exact state the bug needs.
+		// The idle assertion before the flip is what proves the menu is genuinely
+		// open, and doubles as the control.
+		const onSetAttendance = vi.fn();
+		const props = {
+			...rollProps,
+			// Bea has a recorded row, so her chip is the menu shape rather than the
+			// dashed one-tap suggestion (which has no items to gate).
+			attendance: [{ memberId: "m-bea", status: "present" as const }],
+			onSetAttendance,
+		};
+		const { getByRole, findByRole, rerender } = render(
+			<MeetingAttendancePanel {...props} busy={false} />,
+		);
+		// Radix opens on pointerdown, not a bare click — see the notes above.
+		await userEvent.click(getByRole("button", { name: /Bea Osei status/i }));
+		const idleItem = await findByRole("menuitem", { name: "Absent" });
+		expect(
+			idleItem.getAttribute("aria-disabled"),
+			"the menu must actually be OPEN and its items live before the flip",
+		).toBeNull();
+
+		rerender(<MeetingAttendancePanel {...props} busy={true} />);
+		const busyItem = getByRole("menuitem", { name: "Absent" });
+		expect(busyItem.getAttribute("aria-disabled")).toBe("true");
+
+		// The attribute is not the protection — the protection is that Radix skips
+		// `onSelect` for a disabled item. Assert the write, not the styling: an
+		// `aria-disabled` that merely greyed the row out would pass the line above
+		// and still hand the tap to a `mutate()` that throws it away.
+		fireEvent.click(busyItem);
+		expect(onSetAttendance).not.toHaveBeenCalled();
+	});
+
+	it("expands by default below lg, unlike plan mode", () => {
+		// Plan mode collapses to its counts line so a big roster does not push the
+		// agenda off screen. Roll mode IS the task on meeting day, so it opens.
+		const originalWidth = window.innerWidth;
+		window.innerWidth = 375;
+		try {
+			const { getAllByRole } = render(
+				<MeetingAttendancePanel {...rollProps} />,
+			);
+			expect(getAllByRole("button", { name: / status/i })).toHaveLength(2);
+		} finally {
+			window.innerWidth = originalWidth;
+		}
+	});
+
+	it("omits the mobile Show/Hide toggle entirely, unlike plan mode", () => {
+		// A deliberate deviation from plan mode (which shows/hides the toggle
+		// with CSS at `lg` rather than removing it): roll mode has nothing for
+		// the toggle to do, since it is always expanded (see the test above).
+		// Nothing else here asserts this, so a later reader could "restore" the
+		// toggle as dead code without any test noticing.
+		const { queryByRole } = render(<MeetingAttendancePanel {...rollProps} />);
+		expect(queryByRole("button", { name: /show|hide/i })).toBeNull();
+	});
+
+	it("renders the Guests group when guests are supplied", () => {
+		const { getByText } = render(
+			<MeetingAttendancePanel
+				{...rollProps}
+				guests={[{ guestId: "g1", name: "Nadia Farouk", fromRole: false }]}
+				clubGuests={[{ id: "g1", name: "Nadia Farouk" }]}
+			/>,
+		);
+		getByText("Guests");
+		getByText("Nadia Farouk");
+	});
+
+	it("omits the Guests group entirely when `guests` is not supplied", () => {
+		// The panel is presentational; a route that has not wired guests yet
+		// must render nothing rather than an empty group.
+		const { queryByText } = render(<MeetingAttendancePanel {...rollProps} />);
+		expect(queryByText("Guests")).toBeNull();
+	});
+	it("skips the contact affordance for a DEPARTED row while keeping it for an active member with none", () => {
+		// Two fixes from the same round contradicted each other here.
+		// `deriveRollRoster` appends a member who holds a recorded row but has left
+		// the club, with phone and email null — and `NudgeButtons` renders "No
+		// contact on file" when both are null, which is precisely the copy
+		// `hideContact` omits the whole component to avoid. Fixed by TAGGING the
+		// appended row, not by skipping whenever contact is missing: for an active
+		// member that message is true and actionable ("go add a number"), and only
+		// a departed member has nothing to add and nobody to chase.
+		const { getByText, queryAllByText } = render(
+			<MeetingAttendancePanel
+				{...rollProps}
+				roster={[
+					{ id: "m-here", name: "Cy Active", phone: null, email: null },
+					{
+						id: "m-gone",
+						name: "Dee Gone",
+						phone: null,
+						email: null,
+						departed: true,
+					},
+				]}
+				attendance={[{ memberId: "m-gone", status: "present" }]}
+			/>,
+		);
+		// Both rows are on screen...
+		getByText("Cy Active");
+		getByText("Dee Gone");
+		// ...and exactly ONE of them says it: the active member with nothing stored.
+		expect(queryAllByText("No contact on file")).toHaveLength(1);
+	});
+
+	const syncIdle = {
+		online: true,
+		queueCount: 0,
+		draining: false,
+		syncError: null,
+		justSynced: false,
+		onRetry: () => {},
+	};
+
+	it("says so when roll writes are queued on this device", () => {
+		// Roll mode is the ONLY surface that records attendance now, and the
+		// projection is faithful — every chip moves offline exactly as it would
+		// online. So without this the officer has no way to tell the difference,
+		// and the drain only ever runs if someone reopens THAT meeting in THAT
+		// browser; the PDF and the emailed minutes go out with the roll missing.
+		const { getByText } = render(
+			<MeetingAttendancePanel
+				{...rollProps}
+				sync={{ ...syncIdle, online: false, queueCount: 2 }}
+			/>,
+		);
+		getByText(/2 changes saved on this device/);
+	});
+
+	it("shows the drain in flight and offers Retry on a sync error", async () => {
+		const draining = render(
+			<MeetingAttendancePanel
+				{...rollProps}
+				sync={{ ...syncIdle, draining: true, queueCount: 3 }}
+			/>,
+		);
+		draining.getByText(/Syncing 3 changes/);
+		draining.unmount();
+
+		const onRetry = vi.fn();
+		const failed = render(
+			<MeetingAttendancePanel
+				{...rollProps}
+				sync={{ ...syncIdle, syncError: "nope", onRetry }}
+			/>,
+		);
+		failed.getByText(/Couldn't sync changes/);
+		await userEvent.click(failed.getByRole("button", { name: "Retry" }));
+		expect(onRetry).toHaveBeenCalledTimes(1);
+	});
+
+	it("shows nothing in the steady state, so the header does not grow a blank row", () => {
+		const { queryByText } = render(
+			<MeetingAttendancePanel {...rollProps} sync={syncIdle} />,
+		);
+		expect(queryByText(/saved on this device/)).toBeNull();
+		expect(queryByText(/Syncing/)).toBeNull();
+		expect(queryByText(/Couldn't sync/)).toBeNull();
+	});
+
+	it("keeps the indicator visible on a completed meeting, where corrections are made", () => {
+		// `phaseCompleted` drops the contact drafts; it must not drop the one thing
+		// that says an unsynced correction is still sitting on this device.
+		const { getByText } = render(
+			<MeetingAttendancePanel
+				{...rollProps}
+				locked={true}
+				phaseCompleted={true}
+				sync={{ ...syncIdle, online: false, queueCount: 1 }}
+			/>,
+		);
+		getByText(/1 change saved on this device/);
 	});
 });

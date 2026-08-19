@@ -150,6 +150,23 @@ export interface PanelMember {
 	assumed: boolean;
 	/** Non-null when they hold a slot on this meeting. */
 	role: PanelRowRole | null;
+	/**
+	 * ROLL mode only, and set by exactly one place: `deriveRollRoster`, which
+	 * appends members who hold a recorded attendance row for this meeting but are
+	 * no longer on the club's roster. Absent/false everywhere else.
+	 *
+	 * It exists because those appended rows carry no phone and no email — a
+	 * departed member is not on the officer's roster payload — and a row with both
+	 * nulled lands on `NudgeButtons`' "No contact on file" copy. For an ACTIVE
+	 * member that copy is true and useful: go add a phone number. For a departed
+	 * one there is nothing to add and nobody to chase, so the row skips the
+	 * affordance entirely. A null-check at the render site cannot tell those two
+	 * apart, which is why this is a TAG rather than a check.
+	 *
+	 * Plan mode never sees one: `deriveRollRoster` is roll-only, and for an
+	 * UPCOMING meeting a stale row must not resurrect a departed name.
+	 */
+	departed?: boolean;
 }
 
 export interface PlanPanelCounts {

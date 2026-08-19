@@ -1,13 +1,6 @@
-import {
-	AlertTriangle,
-	CheckCircle2,
-	Download,
-	Loader2,
-	WifiOff,
-	X,
-} from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { toast } from "sonner";
+import { Download } from "lucide-react";
+import { useMemo } from "react";
+import { SyncStatus } from "#/components/club/sync-status";
 import {
 	AssigneePicker,
 	TableTopicsCapture,
@@ -22,52 +15,28 @@ import {
 	CardHeader,
 	CardTitle,
 } from "#/components/ui/card";
-import {
-	Command,
-	CommandEmpty,
-	CommandGroup,
-	CommandInput,
-	CommandItem,
-	CommandList,
-} from "#/components/ui/command";
-import { Input } from "#/components/ui/input";
-import {
-	Popover,
-	PopoverContent,
-	PopoverTrigger,
-} from "#/components/ui/popover";
+import { useOfflineMinutes } from "#/hooks/use-offline-minutes";
 import { useOnlineStatus } from "#/hooks/use-online-status";
-import { deriveMinutes } from "#/lib/derive-minutes";
-import {
-	dispatchOp,
-	drainMinutesQueue,
-	type MinutesServerFns,
-} from "#/lib/drain-minutes";
 import { formatCalendarDay } from "#/lib/format";
-import {
-	enqueue,
-	type MinutesOp,
-	readQueue,
-	readSnapshot,
-	removeOp,
-	saveSnapshot,
-} from "#/lib/offline-minutes-queue";
+import { projectMinutes } from "#/lib/project-minutes";
 import type { MinutesActionItems } from "#/server/action-items-logic";
 import {
-	addMinutesGuest,
 	addTableTopics,
 	clearMinutesAward,
 	type MinutesResult,
 	moveTableTopics,
-	removeMinutesGuest,
 	removeTableTopics,
-	setAttendance,
 	setMinutesAward,
 } from "#/server/minutes";
 
 type MinutesData = NonNullable<MinutesResult["data"]>;
-type AttendanceStatus = "present" | "absent" | "excused";
 type AwardCategory = MinutesData["awards"][number]["category"];
+/**
+ * Derived from the payload rather than re-declared as a hand-written union. The
+ * old recorder kept its own copy of `"present" | "absent" | "excused"`, which
+ * could drift from what `loadMinutes` actually returns; this cannot.
+ */
+type AttendanceStatus = NonNullable<MinutesData["members"][number]["status"]>;
 
 const AWARD_LABELS: Record<AwardCategory, string> = {
 	best_speaker: "Best Speaker",
@@ -81,21 +50,7 @@ const STATUS_LABELS: Record<AttendanceStatus, string> = {
 	excused: "Excused",
 };
 
-function errMessage(err: unknown) {
-	return err instanceof Error ? err.message : "Something went wrong.";
-}
-
-export function MeetingMinutes({
-	meetingId,
-	minutes,
-	program,
-	meetingPast,
-	meetingDayReached,
-	canEdit,
-	clubGuests,
-	onMutated,
-	email,
-}: {
+type MeetingMinutesProps = {
 	meetingId: string;
 	minutes: MinutesData;
 	program: MinutesResult["program"];
@@ -118,7 +73,21 @@ export function MeetingMinutes({
 	meetingDayReached: boolean;
 	canEdit: boolean;
 	clubGuests: { id: string; name: string }[];
-	onMutated: () => void | Promise<void>;
+	/**
+	 * The shared offline-write-queue handle (#176). Instantiated ONCE per
+	 * meeting by the route (`useOfflineMinutes`) so a second future consumer —
+	 * the attendance panel absorbing roll call — shares the same queue/drain
+	 * instead of racing a second one (two `draining` flags would replay a
+	 * stale status over a newer one, silently). Optional ONLY so this
+	 * component's existing unit tests, which render it standalone with no
+	 * route-level instance to share, keep working unmodified: omitting it
+	 * falls back to a private hook instance scoped to this render (below),
+	 * reproducing the pre-extraction behaviour exactly. A real caller (the
+	 * route) always supplies it.
+	 */
+	offline?: ReturnType<typeof useOfflineMinutes>;
+	/** Used only by the `offline`-less fallback below. */
+	onMutated?: () => void | Promise<void>;
 	/**
 	 * Email-the-minutes context (#165), present only for admins on a completed
 	 * meeting. Null hides the "Send minutes" control (the PDF still downloads).
@@ -130,181 +99,85 @@ export function MeetingMinutes({
 		recipients: { name: string; email: string }[];
 		skipped: { name: string }[];
 	} | null;
-}) {
-	const [busy, setBusy] = useState(false);
+};
 
-	// #176 slice 3: offline write queue. ONLINE the behaviour below is unchanged
-	// (server-fn + onMutated). OFFLINE, edits are captured to a durable IndexedDB
-	// queue and the view is derived from the last online snapshot + that queue.
+export function MeetingMinutes(props: MeetingMinutesProps) {
+	if (props.offline) {
+		return <MeetingMinutesView {...props} offline={props.offline} />;
+	}
+	return <MeetingMinutesSelfContained {...props} />;
+}
+
+/**
+ * Standalone fallback for a caller with no shared route-level instance to pass
+ * (every existing test in `meeting-minutes.test.tsx`). Instantiates its own
+ * private `useOfflineMinutes`, matching this component's behaviour before the
+ * hook was extracted — never reachable from the real route, which always
+ * supplies `offline` and hits the branch above instead.
+ */
+function MeetingMinutesSelfContained(
+	props: Omit<MeetingMinutesProps, "offline">,
+) {
+	const offline = useOfflineMinutes({
+		meetingId: props.meetingId,
+		onMutated: async () => {
+			await props.onMutated?.();
+		},
+		minutes: props.minutes,
+	});
+	return <MeetingMinutesView {...props} offline={offline} />;
+}
+
+function MeetingMinutesView({
+	meetingId,
+	minutes,
+	program,
+	meetingPast,
+	meetingDayReached,
+	canEdit,
+	clubGuests,
+	offline,
+	email,
+}: MeetingMinutesProps & { offline: ReturnType<typeof useOfflineMinutes> }) {
+	// #176 slice 3-5: the offline write queue, reconnect drain and `mutate`/
+	// `opMeta` all live in the shared hook now (`#/hooks/use-offline-minutes`) —
+	// see its doc comment for the guards this component used to own directly.
+	const {
+		mutate,
+		opMeta,
+		busy,
+		queue,
+		snapshot,
+		draining,
+		syncError,
+		justSynced,
+	} = offline;
 	const online = useOnlineStatus();
-	const [queue, setQueue] = useState<MinutesOp[]>([]);
-	const [snapshot, setSnapshot] = useState<MinutesData | null>(null);
 
-	// #176 slice 4: reconnect drain. When back online with a pending queue, the
-	// queued ops are replayed to the server in order (see `runDrain` below).
-	const [draining, setDraining] = useState(false);
-	const [syncError, setSyncError] = useState<string | null>(null);
-	// Transient "All changes synced" confirmation shown briefly after a drain
-	// fully lands, then auto-dismissed (the effect below clears it on a timer).
-	const [justSynced, setJustSynced] = useState(false);
-	// `draining` state lags a tick, so the drain effect can re-fire before it
-	// flips — a synchronous ref blocks a second concurrent drain.
-	const drainingRef = useRef(false);
-	// `onMutated` is a fresh arrow every render (router.invalidate); stash it in a
-	// ref so `runDrain`'s identity stays stable and the drain effect isn't
-	// re-triggered on every parent re-render.
-	const onMutatedRef = useRef(onMutated);
-	onMutatedRef.current = onMutated;
-
-	// Load any persisted snapshot + queue once per meeting (survives reloads).
-	useEffect(() => {
-		let alive = true;
-		void (async () => {
-			const [savedQueue, savedSnapshot] = await Promise.all([
-				readQueue(meetingId),
-				readSnapshot(meetingId),
-			]);
-			if (!alive) return;
-			setQueue(savedQueue);
-			setSnapshot(savedSnapshot);
-		})();
-		return () => {
-			alive = false;
-		};
-	}, [meetingId]);
-
-	// Keep the offline snapshot fresh from every ONLINE render of the loader data.
-	useEffect(() => {
-		if (!online) return;
-		setSnapshot(minutes);
-		void saveSnapshot(meetingId, minutes);
-	}, [online, minutes, meetingId]);
-
-	// Displayed state: the live loader data online; the optimistic projection off.
+	// Displayed state, through the SAME seam the attendance panel's roll rows read
+	// (`#/lib/project-minutes`). It was this expression written out here and again
+	// in `roll-attendance.ts`, under a comment there saying the copy existed so the
+	// two surfaces "cannot disagree about what is recorded while the queue is
+	// draining" — and they then carried the same bug twice: the old
+	// `online ? minutes : derive(...)` showed the loader's rows whenever
+	// `navigator.onLine` was true, which it is on dead venue wifi, so a write
+	// abandoned at its deadline (queued, no refetch, no `onMutated`) left Table
+	// Topics and the awards reading exactly as they had before the tap.
+	//
+	// `?? minutes` never fires: `projectMinutes` returns `null` only when it has no
+	// base to read, and `minutes` is non-null on this card. It is here because the
+	// seam serves the panel too, where `minutes.data` IS nullable for a viewer who
+	// may not read the minutes at all.
 	const displayMinutes = useMemo(
-		() => (online ? minutes : deriveMinutes(snapshot ?? minutes, queue)),
+		() => projectMinutes({ online, minutes, snapshot, queue }) ?? minutes,
 		[online, minutes, snapshot, queue],
 	);
-
-	// #176 slice 4: replay the queued ops to the server IN ORDER, removing each as
-	// it lands, then re-fetch authoritative state. Stops at the first failure and
-	// keeps the failed op + successors queued for the next reconnect / Retry.
-	const runDrain = useCallback(
-		async (ops: MinutesOp[]) => {
-			if (drainingRef.current || ops.length === 0) return;
-			drainingRef.current = true;
-			setDraining(true);
-			setSyncError(null);
-			setJustSynced(false);
-			// Map the component's server-fn imports to the by-op names dispatchOp uses.
-			const fns: MinutesServerFns = {
-				setAttendance,
-				addGuest: addMinutesGuest,
-				removeGuest: removeMinutesGuest,
-				addTableTopics,
-				removeTableTopics,
-				moveTableTopics,
-				setAward: setMinutesAward,
-				clearAward: clearMinutesAward,
-			};
-			try {
-				const result = await drainMinutesQueue({
-					meetingId,
-					ops,
-					dispatch: (op) => dispatchOp(op, meetingId, fns),
-					onOpDrained: async (opId) => {
-						await removeOp(meetingId, opId);
-						setQueue((q) => q.filter((o) => o.opId !== opId));
-					},
-				});
-				if (result.error) {
-					// Stop-on-failure: the failed op + successors stay queued.
-					setSyncError(errMessage(result.error));
-				} else {
-					// Everything replayed — re-fetch authoritative state (the online
-					// snapshot-save effect then refreshes the offline snapshot).
-					await onMutatedRef.current();
-					// Flash a brief "All changes synced" confirmation (auto-dismissed).
-					setJustSynced(true);
-				}
-			} catch (err) {
-				setSyncError(errMessage(err));
-			} finally {
-				drainingRef.current = false;
-				setDraining(false);
-			}
-		},
-		[meetingId],
-	);
-
-	// Auto-drain when back online with a pending queue: covers the offline→online
-	// transition and an online mount with a leftover queue (e.g. after a reload).
-	// Skipped while a drain is in flight (ref guard) or a sync error is showing —
-	// a persistent failure would otherwise tight-loop; the user retries explicitly.
-	useEffect(() => {
-		if (!online || queue.length === 0 || syncError) return;
-		void runDrain(queue);
-	}, [online, queue, syncError, runDrain]);
-
-	// Going offline clears a stale sync error so the next genuine reconnect
-	// auto-retries; while online, a persistent error stays set (see above).
-	useEffect(() => {
-		if (!online) setSyncError(null);
-	}, [online]);
-
-	// Auto-dismiss the "All changes synced" confirmation a few seconds after it
-	// appears. The timer is cleared on unmount (or if it re-fires) so it never
-	// fires against a gone component.
-	useEffect(() => {
-		if (!justSynced) return;
-		const t = setTimeout(() => setJustSynced(false), 4000);
-		return () => clearTimeout(t);
-	}, [justSynced]);
-
-	// ONLINE: run the server-fn and re-fetch (unchanged). OFFLINE: enqueue the op
-	// and reflect it optimistically; never hit the server or onMutated.
-	async function mutate(
-		onlineFn: () => Promise<unknown>,
-		makeOp: () => MinutesOp,
-	) {
-		// `draining` joins the guard so a reconnect drain isn't interleaved with a
-		// fresh edit (which could reorder ops). A queue only ever exists after an
-		// actual offline session, so `draining` is ALWAYS false for a normal
-		// online-only user — their online path (below) is byte-for-byte unchanged.
-		if (busy || draining) return;
-		if (!online) {
-			const op = makeOp();
-			setQueue((q) => [...q, op]);
-			try {
-				await enqueue(meetingId, op);
-			} catch (err) {
-				toast.error(errMessage(err));
-			}
-			return;
-		}
-		setBusy(true);
-		try {
-			await onlineFn();
-			await onMutated();
-		} catch (err) {
-			toast.error(errMessage(err));
-		} finally {
-			setBusy(false);
-		}
-	}
-
-	const opMeta = () => ({
-		opId: crypto.randomUUID(),
-		queuedAt: Date.now(),
-	});
 
 	const guestName = (guestId: string) =>
 		clubGuests.find((g) => g.id === guestId)?.name ?? "Guest";
 	const memberName = (memberId: string) =>
 		displayMinutes.members.find((m) => m.memberId === memberId)?.name ??
 		"Member";
-
-	const pendingCount = online ? 0 : queue.length;
 
 	return (
 		<Card>
@@ -343,67 +216,42 @@ export function MeetingMinutes({
 			<CardContent className="space-y-8">
 				<SyncStatus
 					online={online}
-					pendingCount={pendingCount}
 					queueCount={queue.length}
 					draining={draining}
 					syncError={syncError}
 					justSynced={justSynced}
-					onRetry={() => runDrain(queue)}
+					onRetry={() => offline.retryDrain()}
 				/>
 				<ActionItemsSection items={displayMinutes.actionItems} />
 				{/* Attendance is the RECORD of who was in the room, so it does not
 				    exist before the meeting day — `assertAttendanceRecordable` rejects
-				    the write, and rendering the recorder anyway would offer buttons
-				    that only error. Who is EXPECTED is the separate planned-attendance
-				    question (CONTEXT.md), which has no surface here yet.
+				    the write, and rendering a recorder anyway would offer buttons
+				    that only error.
+
+				    On the day, roll call moved to the attendance panel beside the
+				    agenda. Two surfaces WRITING the same rows is how a club ends up
+				    with someone marked present in one place and absent in the other,
+				    so the recorder lives there and only there.
+
+				    Which is why this branches on `canEdit`. The panel is admin-only
+				    (its writes run `gateAdmin`), but this card is visible to any
+				    member once the meeting is `completed` — so pointing THEM at a
+				    panel they cannot see would be false, and dropping the section
+				    outright would take "who was at this meeting?" away from the
+				    largest audience the minutes have. They get the RECORD, read-only:
+				    it writes nothing, so it does not reopen what the deletion closed.
 
 				    Deliberately `meetingDayReached`, not `meetingPast`: roll call is
 				    taken AT the meeting, and `meetingPast` (`isMeetingOver`) is false
 				    all through meeting day. */}
 				{meetingDayReached ? (
-					<AttendanceSection
-						minutes={displayMinutes}
-						canEdit={canEdit}
-						busy={busy}
-						clubGuests={clubGuests}
-						onSetStatus={(memberId, status) =>
-							mutate(
-								() => setAttendance({ data: { meetingId, memberId, status } }),
-								() => ({
-									type: "setAttendance",
-									...opMeta(),
-									memberId,
-									status,
-								}),
-							)
-						}
-						onAddGuest={(payload) =>
-							mutate(
-								() => addMinutesGuest({ data: { meetingId, ...payload } }),
-								() =>
-									payload.newGuest
-										? {
-												type: "addGuest",
-												...opMeta(),
-												guestId: crypto.randomUUID(),
-												name: payload.newGuest.name,
-												newGuest: payload.newGuest,
-											}
-										: {
-												type: "addGuest",
-												...opMeta(),
-												guestId: payload.guestId as string,
-												name: guestName(payload.guestId as string),
-											},
-							)
-						}
-						onRemoveGuest={(guestId) =>
-							mutate(
-								() => removeMinutesGuest({ data: { meetingId, guestId } }),
-								() => ({ type: "removeGuest", ...opMeta(), guestId }),
-							)
-						}
-					/>
+					canEdit ? (
+						<p className="text-sm text-muted-foreground">
+							Attendance is taken in the Attendance panel, beside the agenda.
+						</p>
+					) : (
+						<AttendanceRecord minutes={displayMinutes} />
+					)
 				) : (
 					// Say WHY it is missing. A section that silently disappears reads as
 					// a bug to the officer who used it last week.
@@ -464,12 +312,42 @@ export function MeetingMinutes({
 							() => ({ type: "removeTableTopics", ...opMeta(), id }),
 						)
 					}
-					onMove={(id, direction) =>
-						mutate(
-							() => moveTableTopics({ data: { meetingId, id, direction } }),
-							() => ({ type: "moveTableTopics", ...opMeta(), id, direction }),
-						)
-					}
+					onMove={(id, direction) => {
+						// The ABSOLUTE destination, resolved here rather than left to the
+						// server, because it is what makes a REPLAYED move converge instead
+						// of stepping the row a second position: a write abandoned at its 8s
+						// deadline may still land, and the drain re-dispatches it. See
+						// `moveTableTopicsSpeaker`.
+						//
+						// `displayMinutes.tableTopicsSpeakers` is already in
+						// `(sortOrder asc, id asc)` order — `loadMinutes` orders by it and
+						// `deriveMinutes` re-sorts at the end — so the ARRAY INDEX is the
+						// positional index, which is what `TableTopicsCapture` disables its
+						// edge buttons on too. OUT OF RANGE stays `undefined` rather than
+						// being sent: an unknown row, or an edge move the disabled button should
+						// have prevented, would otherwise send `-1` or `length` — and `-1` fails
+						// the server's `nonnegative()` schema, turning today's silent no-op into
+						// an error toast. Undefined falls back to the relative `direction`, which
+						// no-ops at the edge exactly as it always has.
+						const speakers = displayMinutes.tableTopicsSpeakers;
+						const from = speakers.findIndex((s) => s.id === id);
+						const to = direction === "up" ? from - 1 : from + 1;
+						const toIndex =
+							from !== -1 && to >= 0 && to < speakers.length ? to : undefined;
+						return mutate(
+							() =>
+								moveTableTopics({
+									data: { meetingId, id, direction, toIndex },
+								}),
+							() => ({
+								type: "moveTableTopics",
+								...opMeta(),
+								id,
+								direction,
+								toIndex,
+							}),
+						);
+					}}
 				/>
 
 				<AwardsSection
@@ -525,105 +403,31 @@ export function MeetingMinutes({
 // Offline sync status (#176 slice 5)
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Attendance (READ-ONLY)
+// ---------------------------------------------------------------------------
+
 /**
- * One cohesive indicator for the offline write-queue's sync lifecycle. Purely
- * presentational — it reads the component's `online`/queue/`draining`/`syncError`
- * state and never drives a mutation. States, in priority order:
- *   • syncing  → a spinner + "Syncing N change(s)…"      (a drain is in flight)
- *   • error    → a warning + "Couldn't sync changes" + Retry
- *   • offline  → WifiOff + "N change(s) saved on this device…"
- *   • synced   → a brief "All changes synced" confirmation (auto-dismissed)
- * Online with an empty queue and none of the above → renders nothing (the steady
- * state is invisible).
+ * The attendance RECORD, for a viewer who cannot edit it.
+ *
+ * Roll call itself moved to the attendance panel's roll mode, which is
+ * admin-only. But this card is visible to any club member once the meeting is
+ * `completed` (`getMinutes`: `visible = canEdit || status === "completed"`), and
+ * that member is the largest audience the minutes have — so deleting the
+ * recorder must not also delete their answer to "who was at this meeting?".
+ *
+ * This renders no button, no menu and no handler, and takes no callback. That
+ * is the whole point and it is deliberately checkable: the deletion exists to
+ * stop two surfaces WRITING the same attendance rows, and a view that cannot
+ * write is not a second writer. `meeting-minutes.test.tsx` asserts the absence
+ * of every write control at the DOM level, and
+ * `absorbed-surfaces.guard.test.ts` asserts this file names none of the three
+ * attendance write fns — so this cannot quietly grow back into a recorder.
+ *
+ * `unmarked` is NOT absent (#218): a member with no saved row reads "Unmarked",
+ * matching how the minutes PDF renders the same member.
  */
-function SyncStatus({
-	online,
-	pendingCount,
-	queueCount,
-	draining,
-	syncError,
-	justSynced,
-	onRetry,
-}: {
-	online: boolean;
-	pendingCount: number;
-	queueCount: number;
-	draining: boolean;
-	syncError: string | null;
-	justSynced: boolean;
-	onRetry: () => void;
-}) {
-	if (draining) {
-		return (
-			<p className="flex items-center gap-2 text-muted-foreground text-sm">
-				<Loader2 className="size-4 shrink-0 animate-spin" aria-hidden />
-				Syncing {queueCount} change{queueCount === 1 ? "" : "s"}…
-			</p>
-		);
-	}
-	if (syncError) {
-		return (
-			<p className="flex items-center gap-2 text-warning-foreground text-sm">
-				<AlertTriangle className="size-4 shrink-0" aria-hidden />
-				<span>
-					Couldn't sync changes —{" "}
-					<Button
-						type="button"
-						variant="link"
-						size="sm"
-						className="h-auto p-0 align-baseline text-warning-foreground"
-						onClick={onRetry}
-					>
-						Retry
-					</Button>
-				</span>
-			</p>
-		);
-	}
-	if (!online && pendingCount > 0) {
-		return (
-			<p className="flex items-center gap-2 text-muted-foreground text-sm">
-				<WifiOff className="size-4 shrink-0" aria-hidden />
-				{pendingCount} change{pendingCount === 1 ? "" : "s"} saved on this
-				device — will sync when you're back online.
-			</p>
-		);
-	}
-	if (justSynced) {
-		return (
-			<p className="flex items-center gap-2 text-muted-foreground text-sm">
-				<CheckCircle2 className="size-4 shrink-0 text-success" aria-hidden />
-				All changes synced.
-			</p>
-		);
-	}
-	return null;
-}
-
-// ---------------------------------------------------------------------------
-// Attendance
-// ---------------------------------------------------------------------------
-
-function AttendanceSection({
-	minutes,
-	canEdit,
-	busy,
-	clubGuests,
-	onSetStatus,
-	onAddGuest,
-	onRemoveGuest,
-}: {
-	minutes: MinutesData;
-	canEdit: boolean;
-	busy: boolean;
-	clubGuests: { id: string; name: string }[];
-	onSetStatus: (memberId: string, status: AttendanceStatus) => void;
-	onAddGuest: (payload: {
-		guestId?: string;
-		newGuest?: { name: string; email?: string; phone?: string };
-	}) => void;
-	onRemoveGuest: (guestId: string) => void;
-}) {
+function AttendanceRecord({ minutes }: { minutes: MinutesData }) {
 	const { present, absent, excused, unmarked, guests } = minutes.counts;
 	return (
 		<section className="space-y-3">
@@ -643,26 +447,9 @@ function AttendanceSection({
 						className="flex items-center justify-between gap-3 px-3 py-2"
 					>
 						<span className="text-sm">{m.name}</span>
-						{canEdit ? (
-							<div className="flex gap-1">
-								{(["present", "excused", "absent"] as const).map((s) => (
-									<Button
-										key={s}
-										type="button"
-										size="sm"
-										variant={m.status === s ? "default" : "outline"}
-										disabled={busy}
-										onClick={() => onSetStatus(m.memberId, s)}
-									>
-										{STATUS_LABELS[s]}
-									</Button>
-								))}
-							</div>
-						) : (
-							<Badge variant={m.status === "present" ? "secondary" : "outline"}>
-								{m.status ? STATUS_LABELS[m.status] : "Unmarked"}
-							</Badge>
-						)}
+						<Badge variant={m.status === "present" ? "secondary" : "outline"}>
+							{m.status ? STATUS_LABELS[m.status] : "Unmarked"}
+						</Badge>
 					</li>
 				))}
 				{minutes.members.length === 0 ? (
@@ -676,23 +463,8 @@ function AttendanceSection({
 				<h4 className="font-medium text-sm">Guests present</h4>
 				<div className="flex flex-wrap gap-2">
 					{minutes.guests.map((g) => (
-						<Badge
-							key={g.guestId}
-							variant="secondary"
-							className="gap-1 py-1 pr-1 pl-2"
-						>
+						<Badge key={g.guestId} variant="secondary">
 							{g.name}
-							{canEdit && !g.fromRole ? (
-								<button
-									type="button"
-									aria-label={`Remove ${g.name}`}
-									disabled={busy}
-									onClick={() => onRemoveGuest(g.guestId)}
-									className="rounded-sm hover:bg-muted"
-								>
-									<X className="size-3" />
-								</button>
-							) : null}
 						</Badge>
 					))}
 					{minutes.guests.length === 0 ? (
@@ -701,104 +473,8 @@ function AttendanceSection({
 						</span>
 					) : null}
 				</div>
-				{canEdit ? (
-					<GuestAdder clubGuests={clubGuests} busy={busy} onAdd={onAddGuest} />
-				) : null}
 			</div>
 		</section>
-	);
-}
-
-/** Add a present guest: pick an existing club guest or type a new one. */
-function GuestAdder({
-	clubGuests,
-	busy,
-	onAdd,
-}: {
-	clubGuests: { id: string; name: string }[];
-	busy: boolean;
-	onAdd: (payload: {
-		guestId?: string;
-		newGuest?: { name: string; email?: string; phone?: string };
-	}) => void;
-}) {
-	const [open, setOpen] = useState(false);
-	return (
-		<Popover open={open} onOpenChange={setOpen}>
-			<PopoverTrigger asChild>
-				<Button type="button" size="sm" variant="outline" disabled={busy}>
-					+ Add guest
-				</Button>
-			</PopoverTrigger>
-			<PopoverContent className="w-72 space-y-3">
-				{clubGuests.length > 0 ? (
-					<Command>
-						<CommandInput placeholder="Search guests…" />
-						<CommandList>
-							<CommandEmpty>No matching guests.</CommandEmpty>
-							<CommandGroup heading="Existing guests">
-								{clubGuests.map((g) => (
-									<CommandItem
-										key={g.id}
-										value={`${g.name} ${g.id}`}
-										disabled={busy}
-										onSelect={() => {
-											onAdd({ guestId: g.id });
-											setOpen(false);
-										}}
-									>
-										{g.name}
-									</CommandItem>
-								))}
-							</CommandGroup>
-						</CommandList>
-					</Command>
-				) : null}
-				<form
-					onSubmit={(e) => {
-						e.preventDefault();
-						const form = new FormData(e.currentTarget);
-						const name = String(form.get("guestName") ?? "").trim();
-						if (!name) {
-							toast.error("A guest name is required.");
-							return;
-						}
-						onAdd({
-							newGuest: {
-								name,
-								email: String(form.get("guestEmail") ?? "").trim() || undefined,
-								phone: String(form.get("guestPhone") ?? "").trim() || undefined,
-							},
-						});
-						setOpen(false);
-					}}
-					className="space-y-2"
-				>
-					<Input
-						name="guestName"
-						placeholder="New guest name"
-						aria-label="New guest name"
-						required
-					/>
-					<div className="grid grid-cols-2 gap-2">
-						<Input
-							name="guestEmail"
-							type="email"
-							placeholder="Email"
-							aria-label="Guest email"
-						/>
-						<Input
-							name="guestPhone"
-							placeholder="Phone"
-							aria-label="Guest phone"
-						/>
-					</div>
-					<Button type="submit" size="sm" variant="secondary" disabled={busy}>
-						Add guest
-					</Button>
-				</form>
-			</PopoverContent>
-		</Popover>
 	);
 }
 

@@ -112,16 +112,24 @@ export function deriveMinutes(
 			}
 
 			case "moveTableTopics": {
-				// Server: normalize to positional order, then swap the target with its
-				// neighbour's sortOrder. Edge moves are a no-op.
+				// Server: place the row at an ABSOLUTE `toIndex` and renumber the list
+				// (`moveTableTopicsSpeaker`). Edge moves, and a row already at the
+				// target, are a no-op — which is what makes a replay converge rather
+				// than step the row a second position. `direction` is the fallback for
+				// an op persisted before `toIndex` existed, and for that op this mirror
+				// reproduces the old relative step, hazard included, because the server
+				// will too.
 				const ordered = [...draft.tableTopicsSpeakers].sort(bySortOrderThenId);
 				const idx = ordered.findIndex((t) => t.id === op.id);
 				if (idx !== -1) {
-					const swapIdx = op.direction === "up" ? idx - 1 : idx + 1;
-					if (swapIdx >= 0 && swapIdx < ordered.length) {
-						// `ordered` holds references into draft.tableTopicsSpeakers.
-						ordered[idx].sortOrder = swapIdx;
-						ordered[swapIdx].sortOrder = idx;
+					const target =
+						op.toIndex ?? (op.direction === "up" ? idx - 1 : idx + 1);
+					if (target >= 0 && target < ordered.length && target !== idx) {
+						// `ordered` holds references into draft.tableTopicsSpeakers, so
+						// renumbering these objects renumbers the draft.
+						const placed = ordered.filter((t) => t.id !== op.id);
+						placed.splice(target, 0, ordered[idx]);
+						for (let i = 0; i < placed.length; i++) placed[i].sortOrder = i;
 					}
 				}
 				break;

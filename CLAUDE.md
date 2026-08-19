@@ -296,8 +296,9 @@ Optional (platform superadmin): `SUPERADMIN_EMAILS` — a comma-separated, case-
 
 Schema is `src/db/schema.ts` — the full domain model (~35 tables): clubs,
 people/members (Person vs Membership, ADR-0008), officer_terms, meetings,
-role_definitions/role_slots (ADR-0005), meeting_attendance_plan, speeches
-(ADR-0009), the Pathways model (pathways_paths, path_enrollments,
+role_definitions/role_slots (ADR-0005), meeting_attendance_plan and
+meeting_attendance (the PLAN and the RECORD — two tables, never one, see
+below), speeches (ADR-0009), the Pathways model (pathways_paths, path_enrollments,
 path_level_progress, pathways_projects, pathways_path_levels,
 bcm_project_progress — ADR-0011), sync_tokens, activity_log, club_logos (a
 club's own uploaded logo, bytea, ADR-0024 — rendered on the four print
@@ -383,6 +384,32 @@ read-then-write, so they are also the de-dup and race fix for `markComingOnSelfC
 non-test source file outside the seam may name the plan table — `schema.ts` and
 `membership-collapse-logic.ts` (whose merge de-dups in raw SQL before re-pointing) are its only
 waivers.
+
+**The plan is one of TWO attendance tables, and since v1.20.0.0 the same panel writes both.**
+`meeting_attendance_plan` is the PLAN; `meeting_attendance` (`present | absent | excused`, **no row
+= unmarked**) is the RECORD, and roll mode is now the only surface that writes it — the Minutes
+card's recorder was deleted, so a second recorder is a regression, not a feature
+(`absorbed-surfaces.guard.test.ts`). Which one you get is `panelMode = phase === "upcoming" ?
+"plan" : "roll"`, one expression in `club.$clubId.meeting.$meetingId.tsx`; its visibility gate is
+`effectiveCanManage && minutes.canEdit` rather than `runsThisMeeting`, so the TMOD arm above reaches
+plan mode and NOT roll. Four things do not carry over
+from the plan half of this section, and each is a place the symmetry misleads. **There is no single
+seam and no store guard.** `buildRollPanel` (`src/lib/roll-panel.ts`) is a sibling of
+`buildPlanPanel`, but on the server `meeting_attendance` is read and written from
+`minutes-logic.ts` (`loadMinutes`, `setMemberPresence`, `addGuestPresent`, `removeGuestPresent`,
+`assertAttendanceRecordable`) and NAMED by seven other `*-logic.ts` modules besides. Do not trust
+that number: there is no `attendance-store.guard.test.ts` analogue to enforce it, which is the real
+point — "add it to the seam rather than inlining a query" is advice about the PLAN table only, and
+nothing fails if you inline one against the record.
+**The derived `assumed` Coming does not reach roll.** `buildRollPanel` reads the raw rungs, so the
+rail's inferred Coming produces no dashed `Present?`; deliberate for now, filed P1, and the one
+place the two modes disagree about the same word. **The completed-meeting lock does not apply**:
+`writesLocked = roll ? false : locked`, and `setAttendance`'s server gates are `gateAdmin` plus
+`assertAttendanceRecordable` (has the DAY arrived) — never `status`. **Roll writes do not reach the server directly** — they go through the
+offline write queue (`src/hooks/use-offline-minutes.ts`), which is the only channel while a queue
+exists, so a new roll write added past `mutate` silently loses the ordering and deadline guarantees.
+See CONTEXT.md's **Attendance / Presence** and **Offline write queue** entries, and ADR-0015's
+amendment.
 
 **Server modules must keep `pg` out of the client bundle.** A `src/server/*.ts` module that
 defines a `createServerFn` gets imported by client route files; the Start compiler strips the

@@ -29,7 +29,7 @@
  * migration silently and this file would then be testing itself.
  */
 import { readFileSync } from "node:fs";
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { meetingAttendancePlan } from "#/db/schema";
 import {
@@ -85,6 +85,17 @@ describe.skipIf(!hasTestDb)("0061 attendance-plan backfill", () => {
 		await cleanup(club.clubId, [club.adminUserId, club.memberUserId]);
 	});
 
+	/** Scoped to THIS fixture's meeting, which the two `rows.size` assertions
+	 *  below depend on. Unscoped, this read counted rows every other suite had in
+	 *  the table: vitest runs files in parallel, eighteen of them write
+	 *  `meeting_attendance_plan`, and `expect(rows.size).toBe(1)` was observed
+	 *  getting `2` — then passing alone and on re-run, which reads as a flake in
+	 *  whatever branch happens to be open.
+	 *
+	 *  The scope is the fix rather than a retry, because a cross-club read is
+	 *  wrong on its own terms: it makes the assertion depend on what else the
+	 *  runner scheduled. Filtered on `meetingId` (not `clubId`) because the table
+	 *  keys on (member, meeting) and this fixture owns exactly one meeting. */
 	async function planRows() {
 		const rows = await testDb
 			.select({
@@ -93,7 +104,8 @@ describe.skipIf(!hasTestDb)("0061 attendance-plan backfill", () => {
 				createdAt: meetingAttendancePlan.createdAt,
 				updatedAt: meetingAttendancePlan.updatedAt,
 			})
-			.from(meetingAttendancePlan);
+			.from(meetingAttendancePlan)
+			.where(eq(meetingAttendancePlan.meetingId, club.meetingId));
 		return new Map(rows.map((r) => [r.memberId, r]));
 	}
 

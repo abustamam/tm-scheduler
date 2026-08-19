@@ -1,6 +1,7 @@
 # ADR-0015: Read-only offline Present/Print via a service worker
 
-Status: Accepted
+Status: Accepted (the read-only scope boundary and the "authed pages never enter the offline
+cache" claim are corrected by the Amendment below — read it before trusting either)
 
 ## Context
 
@@ -88,3 +89,42 @@ warm-session model needs.
   issue. Single-device write queue, last-write-wins, and offline auth were all specified during
   triage but intentionally not built here.
 - Full PWA install affordances beyond the existing (unused) `manifest.json`.
+
+## Amendment — the offline write queue was built after all (#176, hardened v1.20.0.0)
+
+Status: Accepted. Corrects the scope boundary and one caching claim. The service-worker decision
+itself — a hand-rolled `public/sw.js`, network-first navigations, priming on visit, separate
+`NAV_VERSION` / `ASSET_VERSION`, 404/410 eviction — is unchanged.
+
+Two things this ADR asserts are false at HEAD, and both were already false before the release that
+prompted this amendment. Recorded here rather than edited into the Decision above, so the original
+scoping call stays readable.
+
+1. **Offline minutes-taking is built.** *Deferred / out of scope* named a single-device write queue,
+   optimistic state and last-write-wins reconciliation as specified-but-not-built. All three shipped
+   in #176 slices 3 and 4 (#237 / #238): `src/lib/offline-minutes-queue.ts` (an IndexedDB store — DB
+   `gavelup-offline`, object store `minutes-kv`, keyed `queue:<meetingId>` and
+   `snapshot:<meetingId>`), `src/lib/derive-minutes.ts` (replay the queued ops over the snapshot) and
+   `src/lib/drain-minutes.ts` (dispatch them on reconnect, in order, stopping at the first failure).
+   v1.20.0.0 introduced neither the queue nor attendance's use of it — the Minutes card's recorder
+   already wrote through it. What changed is WHEN: that recorder moved to the attendance panel's roll
+   mode, so the queue went from a secretary's after-the-fact write-up to the live meeting-day path,
+   on exactly the venue wifi this ADR's Context describes. It was hardened to match, and every item
+   is new in that release: a per-write deadline (`ONLINE_WRITE_TIMEOUT_MS`, `src/lib/offline-write-deadline.ts`),
+   one shared projection (`src/lib/project-minutes.ts`), one hook instance per meeting
+   (`src/hooks/use-offline-minutes.ts`) and a user-visible sync indicator
+   (`src/components/club/sync-status.tsx`). See CONTEXT.md's **Offline write queue** entry for the
+   mechanism and its invariants.
+
+2. **Authed pages DO enter the offline cache.** "Only these routes are cached at the navigation
+   layer, so authed pages never enter the offline cache" was true while Present and Print were the
+   only matches. `isOfflineRoute` (`public/sw.js`) also matches `/^\/club\/[^/]+\/meeting\//` — the
+   canonical meeting page, which for a signed-in member holds the minutes, as that function's own
+   comment says. That is a precondition for the write queue being reachable after an offline reload,
+   not an oversight; what it costs is that the nav cache is no longer provably free of
+   member-visible content, which is a second reason `NAV_VERSION` is the clear-devices lever.
+
+**Still deferred:** offline **auth**. Nothing validates a magic-link session with no server, so an
+offline reload serves the cached document and whatever identity the page was primed with — the queue
+is single-device and single-identity by construction, not by a check. Cold-start of a never-primed
+meeting with zero connectivity also remains out of scope, exactly as Consequences says.

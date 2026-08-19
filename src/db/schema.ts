@@ -147,9 +147,13 @@ export const impersonationModeEnum = pgEnum("impersonation_mode", [
 	"read_write",
 ]);
 
-// Presence state on a `meeting_attendance` row (ADR-0014 / #152). Members
-// default to `absent`; a member holding a role slot is pre-filled `present`.
-// Guests are always stored `present` (a guest who didn't come isn't listed).
+// Presence state on a `meeting_attendance` row (ADR-0014 / #152). The COLUMN
+// defaults to `absent`, but no row at all is the real fourth state, "unmarked" —
+// and a member holding a role slot is NOT pre-filled `present`. That rule was
+// removed in #218: a meeting nobody took the roll at would otherwise report the
+// whole club absent. Guests are always stored `present` (a guest who didn't come
+// isn't listed). Written by the attendance panel's ROLL mode (v1.20.0.0) — see
+// ADR-0014's amendment.
 export const attendanceStatusEnum = pgEnum("attendance_status", [
 	"present",
 	"absent",

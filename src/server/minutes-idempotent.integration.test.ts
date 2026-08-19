@@ -120,6 +120,150 @@ describe.skipIf(!hasTestDb)(
 			});
 		});
 
+		describe("moveTableTopicsSpeaker", () => {
+			/** Four speakers in a known order. Four is the minimum that can SEE the
+			 *  replay bug: with two rows a doubled "move down" bounces back and reads
+			 *  correct, and with three the stepped row lands on the edge and the second
+			 *  apply no-ops. */
+			async function fourSpeakers() {
+				const ids: string[] = [];
+				for (let i = 0; i < 4; i++) {
+					const created = await addTableTopicsSpeaker({
+						meetingId: seed.meetingId,
+						id: randomUUID(),
+						memberId: i % 2 === 0 ? seed.memberId : seed.adminMemberId,
+						topic: `Topic ${i}`,
+					});
+					ids.push(created.id);
+				}
+				return ids;
+			}
+			const order = async () =>
+				(await loadMinutes(seed.meetingId)).tableTopicsSpeakers.map(
+					(s) => s.id,
+				);
+
+			it("CONVERGES when a move carrying toIndex is replayed (G2)", async () => {
+				// The reason this op needed an absolute target. The write deadline
+				// (`offline-write-deadline.ts`) abandons a request WITHOUT cancelling it,
+				// so a slow write can land server-side and then be replayed by the drain.
+				// A relative swap steps the row a second position; an absolute target is
+				// already satisfied and no-ops.
+				const [a, b, c, d] = await fourSpeakers();
+				const move = {
+					meetingId: seed.meetingId,
+					id: b,
+					direction: "down" as const,
+					toIndex: 2,
+				};
+
+				await moveTableTopicsSpeaker(move);
+				expect(await order()).toEqual([a, c, b, d]);
+
+				// The replay the drain performs, verbatim. Twice, to prove it is a fixed
+				// point rather than merely alternating.
+				await moveTableTopicsSpeaker(move);
+				expect(await order()).toEqual([a, c, b, d]);
+				await moveTableTopicsSpeaker(move);
+				expect(await order()).toEqual([a, c, b, d]);
+			});
+
+			it("STEPS a replayed move that carries only a direction — the hazard (G2 control)", async () => {
+				// The negative control, and it is what stops the test above from passing
+				// vacuously: a `moveTableTopicsSpeaker` that had become a no-op for every
+				// input would satisfy "replaying changes nothing" too. This also pins the
+				// behaviour still live for ops persisted before `toIndex` existed, and for
+				// the Ballot Counter console, which sends `direction` alone.
+				const [a, b, c, d] = await fourSpeakers();
+				const move = {
+					meetingId: seed.meetingId,
+					id: b,
+					direction: "down" as const,
+				};
+
+				await moveTableTopicsSpeaker(move);
+				expect(await order()).toEqual([a, c, b, d]);
+				await moveTableTopicsSpeaker(move);
+				// Two positions from one officer tap: the corruption G2 names.
+				expect(await order()).toEqual([a, c, d, b]);
+			});
+
+			it("leaves sortOrder dense and distinct, so the id tie-break cannot decide order (G2)", async () => {
+				// The order assertions above sort by `(sortOrder, id)`, so they read the
+				// same whether the column is [0,1,2,3] or [0,5,5,9] — they cannot see a
+				// server that stopped renumbering, which is exactly what would let the
+				// client mirror (`derive-minutes.ts`) diverge on the tie-break.
+				const [a, b, c, d] = await fourSpeakers();
+				// Duplicate + sparse on the way in: the shape a swap-only history leaves,
+				// and the input that makes "did it renumber?" observable at all.
+				for (const [id, sortOrder] of [
+					[a, 0],
+					[b, 5],
+					[c, 5],
+					[d, 9],
+				] as [string, number][]) {
+					await testDb
+						.update(tableTopicsSpeakers)
+						.set({ sortOrder })
+						.where(eq(tableTopicsSpeakers.id, id));
+				}
+				// READ the order back rather than assuming it. `b` and `c` share a
+				// sortOrder, so which comes first is decided by the `id` tie-break over
+				// two `randomUUID()`s — random per run. Hard-coding `[b, c]` here made
+				// this test fail roughly half the time, which is the same nondeterminism
+				// the renumber exists to remove.
+				const before = await order();
+				expect(before).toContain(a);
+				expect(before[0]).toBe(a);
+
+				await moveTableTopicsSpeaker({
+					meetingId: seed.meetingId,
+					id: a,
+					direction: "down",
+					toIndex: 3,
+				});
+
+				// `a` last, the other three in the order they already had.
+				const expected = [...before.filter((id) => id !== a), a];
+				expect(await order()).toEqual(expected);
+				const rows = await testDb
+					.select({
+						id: tableTopicsSpeakers.id,
+						sortOrder: tableTopicsSpeakers.sortOrder,
+					})
+					.from(tableTopicsSpeakers)
+					.where(eq(tableTopicsSpeakers.meetingId, seed.meetingId));
+				const byId = new Map(rows.map((r) => [r.id, r.sortOrder]));
+				// Dense and distinct 0..3 — the assertion `order()` cannot make, and the
+				// one that fails if the server goes back to writing only two rows.
+				expect(expected.map((id) => byId.get(id))).toEqual([0, 1, 2, 3]);
+			});
+
+			it("places a row a NON-adjacent distance, and no-ops out of range (G2)", async () => {
+				// `direction` can only name an adjacent target, so this is unreachable
+				// through today's UI — but the payload permits it and the client mirror
+				// implements it, so the two must agree or a future drag-to-reorder desyncs.
+				const [a, b, c, d] = await fourSpeakers();
+				await moveTableTopicsSpeaker({
+					meetingId: seed.meetingId,
+					id: d,
+					direction: "up",
+					toIndex: 0,
+				});
+				expect(await order()).toEqual([d, a, b, c]);
+
+				for (const toIndex of [4, 99]) {
+					await moveTableTopicsSpeaker({
+						meetingId: seed.meetingId,
+						id: a,
+						direction: "down",
+						toIndex,
+					});
+					expect(await order()).toEqual([d, a, b, c]);
+				}
+			});
+		});
+
 		describe("addGuestPresent (new-guest path)", () => {
 			it("honors a client guest id, replays as a no-op, and remove targets it", async () => {
 				const clientId = randomUUID();
