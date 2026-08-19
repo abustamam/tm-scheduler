@@ -20,7 +20,7 @@ meeting can be built from or converted to.
 
 - Three new tables and two new columns (below).
 - One seeded **global** template: **Speech Contest**.
-- A per-meeting template picker for club `admin`/`vpe`, including converting a meeting that
+- A per-meeting template picker for club `admin`, including converting a meeting that
   already exists and may already have claims on it, behind a preview.
 - Templated meetings print (run sheet, both layouts) and project (a generic beat-driven deck),
   and their roles are claimable, assignable, confirmable and reminder-eligible exactly as
@@ -101,7 +101,20 @@ collides and the index is untouched. Rejected because it splits one role's ident
 "who has served as Timer" would have to know both spellings — and #368 exists precisely to give
 a role one rename-proof identity.
 
-### D4 — `repeats_role_key` makes a repeating block adapt to signups
+### D4 — a repeating block adapts to signups, and it does NOT go through `Beat`
+
+**Revised 2026-08-19 after an outside-voice review found the original mechanism broken.**
+The original D4 emitted one `Beat` per slot and let `expandRunSheet` render them. That
+double-counts: `slotsForRole` (`agenda-runsheet.ts:1269`) filters the WHOLE slot array with no
+positional narrowing, so `expandRunSheet` ALREADY fans one beat out into one row per matching
+slot. N beats × N slots = N² rows — a 4-contestant segment printed 16 contestant rows and a
+clock wrong by the same factor. The original justification ("this is what `expandRunSheet` +
+`numbered()` already give Speakers") was backwards: that fan-out is the thing being duplicated.
+
+The repeat requirement itself stands, and the reason for it is unchanged: [see below]. What
+changed is where it happens — the template path now builds `AgendaRow[]` directly (D8), so a
+repeated block binds to ONE slot per iteration and numbering, marks and minutes are written
+explicitly rather than emerging from a shared expander.
 
 A contest runs `[Contestant N] [Minute of silence]` once per contestant. Stored as literal
 rows, the contestant count is fixed when the template is authored (the reference site fixes it
@@ -114,11 +127,49 @@ that role. **Consecutive beats sharing the same non-null `repeats_role_key` form
 emitted once per slot, with the role-bound beat inside it numbered. Two stored rows print eight
 rows for four contestants and fourteen for seven, with the clock correct either way.
 
-This is the behaviour `expandRunSheet` + `numbered()` already give Speakers on the standard
-sheet, made available to templates and extended so a *pair* of rows repeats together rather
-than a single row.
+### D8 — the template path emits `AgendaRow[]`, not `Beat[]`
 
-### D5 — Conversion is admin/vpe only, behind a preview
+**Added 2026-08-19 from the outside-voice review.**
+
+`Beat` exists to do two jobs: GATE on which roles a club runs, and FAN OUT one beat across a
+role's slots. D1 establishes that a template needs neither. Routing templates through `Beat`
+anyway bought nothing and cost three defects:
+
+1. The N² fan-out above.
+2. `expandRunSheet`'s speaker arm (`agenda-runsheet.ts:1626-1652`) **ignores `beat.marks` and
+   `beat.minutes` entirely** — marks come from `speechWindow(slot)`, minutes from
+   `speechBookedMinutes(slot)`. So a contestant beat's 1/1.5/2 marks were silently dropped and
+   every contestant rendered at the 7-minute default. A 4-contestant impromptu segment booked
+   28 minutes instead of 8.
+3. A section band had to be smuggled through as a role beat with `renderUnowned`, `handoff` and
+   a synthetic `__section__` role key — and `handoff` renders as an indented italic elbow (`└`)
+   meaning "X introduces Y", not as a section header.
+
+So the seam is `resolveAgendaRows({ template, slots, geIntroducesFunctionaries }): AgendaRow[]`.
+The null branch returns `expandRunSheet(slots, buildRunOfShow({ geIntroducesFunctionaries }))`
+— today's path, byte for byte. The template branch builds rows directly, with numbering, marks,
+minutes and sections all explicit. `AgendaRow` already carries every field needed
+(`agenda-runsheet.ts:57-80`); the one addition is a real `section?: true` instead of borrowing
+`handoff`.
+
+This is strictly LESS code than the adapter-plus-seam it replaces, and it leaves `Beat` and
+`expandRunSheet` untouched — which the original design claimed and did not achieve.
+
+### D5 — Conversion is admin-gated, behind a preview
+
+**Corrected 2026-08-19.** This section said "admin/vpe" throughout. **There is no `vpe` club
+role** — `clubRoleEnum` is `["admin", "member"]` (`schema.ts:53`); `vpe` was collapsed into
+`admin` because they behaved identically at every call site. And the real gate is WIDER than
+"admin": `requireClubRole(…, ["admin"])` also grants to any member holding an open
+`officer_terms` row (effective-admin, #202), so Secretary, Treasurer and Sergeant at Arms can
+all reshape a meeting and destroy its claims. That is the existing product rule, not a new one,
+but it should be stated rather than discovered.
+
+Likewise **there is no `"held"` meeting status** — `meetingStatusEnum` is
+`["scheduled", "cancelled", "completed"]` (`schema.ts:71`). Use the canonical
+`assertMeetingNotLocked` / `isMeetingLocked` (`meeting-authz-logic.ts:32`) rather than
+hand-rolling a status comparison, so this mutator locks the same way every other one does.
+
 
 Applying or changing a meeting's template reshapes the meeting. That sits with reschedule and
 cancel, not with the agenda-content edits ADR-0010 grants the self-asserted Toastmaster. It is
@@ -206,9 +257,29 @@ behaviour, unchanged.
 ### Changed: `role_definitions`
 
 `template_id uuid null references meeting_templates(id) on delete restrict`. NULL = the club's
-own standard roles. `/admin/roles` and `listClubRoles` filter `template_id IS NULL`, so template
-roles never appear in the club's role editor and are never picked up by standard slot
-generation.
+own standard roles.
+
+**SIX readers must scope on it, not one.** This section originally said "`/admin/roles` and
+`listClubRoles` filter `template_id IS NULL`", and the plan patched only `listRoleDefinitions`.
+Wrong, and caught by the outside-voice review. Every module reading `role_definitions` by
+`club_id` selects a slot source:
+
+| Module | Feeds | Correct scope |
+| --- | --- | --- |
+| `role-definitions-logic.ts:59` | `/admin/roles`, "+ Add role" picker | `template_id IS NULL` |
+| `meetings-logic.ts:113` | `applyCreateMeeting` slot generation | the MEETING's template |
+| `batch-meetings-logic.ts:53` | batch create | `template_id IS NULL` |
+| `schedule-topup-logic.ts:69` | recurrence top-up | `template_id IS NULL` |
+| `slots-logic.ts:40` | `clubRoles()` → "+ Add speaker" | the MEETING's template |
+| `slots-logic.ts:145` | `clubRoleDefs()` → add-role validation | the MEETING's template |
+
+Left unscoped, **every standard meeting created after a club runs one contest gains 17 contest
+slots**, since `generateSlotRows` filters on `enabled` and not on `template_id`. And on a
+contest meeting "+ Add speaker" resolves to the club's STANDARD `Speaker` (sortOrder 30 beats
+the contest's `test_speaker` 70 and `contestant` 80 in `pickSpeakerAndEvaluatorRoles`), adding a
+slot that renders nowhere on the contest sheet — so nothing in the product can change the
+contestant count, which falsifies D4's premise from the other side. The two calendar-generation
+readers are always standard: a templated meeting is CONVERTED, never auto-created.
 
 ## Behaviour
 
@@ -234,7 +305,7 @@ slots to be removed, claimed/confirmed slots to be released, and slots carrying 
 
 `applyMeetingTemplate({ meetingId, templateId })` — one transaction:
 
-1. Authorize `admin`/`vpe` via `requireMembership`; assert club not archived; assert meeting
+1. Authorize `admin` via `requireMembership`; assert club not archived; assert meeting
    status is `scheduled`.
 2. Materialize the template's role definitions for this club if absent (idempotent).
 3. Release every slot not belonging to the new definition set (clear assignee, clear
@@ -278,7 +349,13 @@ New `src/lib/agenda-template-beats.ts` adapts stored rows to `Beat[]`:
 - `kind: "section"` → a band row carrying no clock stamp, following the existing `handoff` /
   `HandoffBand` precedent in `agenda-groups.ts` and the print layouts.
 
-Everything downstream is untouched: `expandRunSheet`, `buildTimeline`, `groupByPresenter`, both
+**Superseded by D8** — the paragraphs below describe the original `Beat`-adapter design, which
+the outside-voice review broke (N² rows, discarded marks, a section band rendered as a hand-off
+elbow). The template branch now builds `AgendaRow[]` directly. `expandRunSheet` and `Beat` really
+are untouched under D8, which is what this sentence claimed and the adapter design did not
+deliver. Kept for the record of what was tried and why it failed.
+
+~~Everything downstream is untouched~~: `expandRunSheet`, `buildTimeline`, `groupByPresenter`, both
 print layouts, `applyFlex`. A template may mark one flex beat or none; with none, `applyFlex`
 no-ops and the over/under banner does not render.
 
@@ -321,7 +398,7 @@ Assessed against the diff. The repo-specific traps that apply here:
   `src/lib/meeting-template-limits.ts` so a unit test can reach them without `DATABASE_URL`.
 - **Conversion integration tests** (`TEST_DATABASE_URL` required): claimed slot released and
   returned in `releasedHolders`; attached speech survives with the slot pointer cleared; `held` meeting
-  rejected; archived club rejected; TMOD rejected while admin/vpe succeeds; applying the same
+  rejected; archived club rejected; TMOD rejected while admin succeeds; applying the same
   template twice materializes roles once.
 - **Index regression test.** A club may not hold two standard `timer` role definitions (D3's
   preserved guarantee) and may hold one standard `timer` alongside one contest `timer`.

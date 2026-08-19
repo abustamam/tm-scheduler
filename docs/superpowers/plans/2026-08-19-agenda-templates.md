@@ -90,7 +90,18 @@ describe.skipIf(!hasTestDb())("agenda template schema", () => {
 		return row.id;
 	}
 
+	// `seedClub()` inserts ONE role definition, "Timer", with `key` UNSET (NULL) —
+	// `src/test/db.ts:149-158`. The partial index is `WHERE key IS NOT NULL`, so a
+	// single keyed insert collides with nothing. This test must create the first
+	// keyed row itself or it can only ever pass.
 	it("still rejects two standard role definitions sharing a key", async () => {
+		await testDb.insert(roleDefinitions).values({
+			clubId: club.clubId,
+			name: "Timer",
+			category: "functionary",
+			key: "timer",
+			templateId: null,
+		});
 		await expect(
 			testDb.insert(roleDefinitions).values({
 				clubId: club.clubId,
@@ -104,6 +115,10 @@ describe.skipIf(!hasTestDb())("agenda template schema", () => {
 
 	it("allows a template role to reuse a standard key", async () => {
 		const templateId = await makeTemplate("speech_contest");
+		// The seeded Timer has a NULL key, so create the standard keyed row first.
+		await testDb.insert(roleDefinitions).values({
+			clubId: club.clubId, name: "Timer", category: "functionary", key: "timer", templateId: null,
+		});
 		await testDb.insert(roleDefinitions).values({
 			clubId: club.clubId,
 			name: "Contest Timer",
@@ -352,6 +367,16 @@ In `meetings`' column block, after `meetingNumber`:
 
 `meetings` is declared before `meetingTemplates`, so both self-references use the `AnyPgColumn` lazy form already used by `roleSlots.evaluatesSlotId`.
 
+- [ ] **Step 4b: Add the activity-log action value**
+
+`activity_action` is a Postgres enum (`schema.ts:92`) and `ActivityAction` is derived from it
+(`src/server/activity.ts:17`), so Task 6's conversion log entry needs a value added here and
+shipped in the same migration — it is not a free-text string.
+
+Add `"meeting_template_set"` to `activityActionEnum`'s value list. snake_case, matching every
+existing value (`meeting_create`, `meeting_edit`, `vote_open`). `bun run db:generate` emits an
+`ALTER TYPE … ADD VALUE`; confirm it appears in the generated SQL.
+
 - [ ] **Step 5: Generate the migration and sync both databases**
 
 ```bash
@@ -369,7 +394,7 @@ TEST_DATABASE_URL="postgresql://dev:dev@localhost:5433/tm_test" \
   bunx vitest run src/db/template-schema.integration.test.ts
 ```
 
-Expected: PASS, 6 tests.
+Expected: PASS — every test in the file green.
 
 - [ ] **Step 7: Typecheck and commit**
 
@@ -481,7 +506,7 @@ export const MAX_TEMPLATE_DETAIL_CHARS = 400;
 bunx vitest run src/lib/meeting-template-limits.test.ts
 ```
 
-Expected: PASS, 4 tests.
+Expected: PASS — every test in the file green.
 
 - [ ] **Step 5: Commit**
 
@@ -492,35 +517,61 @@ git commit -m "feat(templates): absolute size ceilings, in lib so they are asser
 
 ---
 
-### Task 3: The beat adapter — stored rows to `Beat[]`
+### Task 3: `buildTemplateRows` — stored rows to `AgendaRow[]`
+
+> **REPLACES the original Tasks 3 and 4** (a `Beat[]` adapter plus a `resolveAgendaRows` seam),
+> which the 2026-08-19 outside-voice review broke. See spec D8. Three structural defects:
+>
+> 1. **N² rows.** `slotsForRole` (`agenda-runsheet.ts:1269`) filters the WHOLE slot array, so
+>    `expandRunSheet` already emits one row per matching slot from ONE beat. Emitting N beats
+>    for N slots multiplied it: a 4-contestant segment printed 16 contestant rows.
+> 2. **Marks and minutes silently dropped.** The speaker arm (`agenda-runsheet.ts:1626-1652`)
+>    ignores `beat.marks`/`beat.minutes`, reading `speechWindow(slot)` and
+>    `speechBookedMinutes(slot)` instead. Contest marks of 1/1.5/2 vanished and every
+>    contestant rendered at the 7-minute default — 28 booked minutes instead of 8.
+> 3. **Section bands.** `handoff` renders an indented italic `└` elbow meaning "X introduces Y"
+>    (`meeting-agenda-print.tsx:422-470`), not a section header.
+>
+> `Beat` exists to GATE and to FAN OUT. A template needs neither (spec D1), so the template
+> path skips it and builds finished rows.
 
 **Files:**
-- Create: `src/lib/agenda-template-beats.ts`
-- Test: `src/lib/agenda-template-beats.test.ts`
+- Create: `src/lib/agenda-template-rows.ts`
+- Modify: `src/lib/agenda-runsheet.ts` (add `section?: true` to `AgendaRow`; add `resolveAgendaRows`)
+- Test: `src/lib/agenda-template-rows.test.ts`
 
 **Interfaces:**
-- Consumes: `Beat`, `AgendaSlot`, `TimingMarks` from `#/lib/agenda-runsheet`; the caps from Task 2.
+- Consumes: `AgendaRow`, `AgendaSlot`, `TimingMarks`, `assigneeDisplay`, `numbered` (`#/lib/agenda-runsheet`); caps from Task 2.
 - Produces:
-  - `type TemplateBeatRow = { sortOrder: number; kind: "section" | "role" | "event"; label: string; detail: string | null; minutes: number; roleKey: string | null; repeatsRoleKey: string | null; flex: boolean; markGreen: number | null; markYellow: number | null; markRed: number | null }`
-  - `type TemplateRoleRow = { key: string; name: string; isSpeakerRole: boolean }`
-  - `function templateBeatsToRunOfShow(beats: TemplateBeatRow[], roles: TemplateRoleRow[], slots: AgendaSlot[]): Beat[]`
-  - `const SECTION_ROLE_KEY = "__section__"`
+  - `type TemplateBeatRow`, `type TemplateRoleRow`
+  - `function buildTemplateRows(beats, roles, slots): AgendaRow[]`
+  - `function resolveAgendaRows({ geIntroducesFunctionaries, template, slots }): AgendaRow[]`
 
-This is a pure function with no database access, which is what makes the whole shape testable.
+- [ ] **Step 1: Add `section` to `AgendaRow`**
 
-- [ ] **Step 1: Write the failing test**
+In `src/lib/agenda-runsheet.ts`, add to the `AgendaRow` type:
 
-Create `src/lib/agenda-template-beats.test.ts`:
+```ts
+	/** A full-width section band ("PREPARED SPEECH CONTEST") on a TEMPLATED agenda.
+	 *  A real field rather than reusing `handoff`: a hand-off row renders as an
+	 *  indented italic elbow meaning "X introduces Y", the wrong visual language
+	 *  for a segment header — it would read as a sub-row continuation. */
+	section?: true;
+```
+
+- [ ] **Step 2: Write the failing test**
+
+Create `src/lib/agenda-template-rows.test.ts`. The critical test is the one the old design could
+not fail — assert the FINAL row count for a repeated block, not the intermediate beat count:
 
 ```ts
 import { describe, expect, it } from "vitest";
 import type { AgendaSlot } from "./agenda-runsheet";
 import {
-	SECTION_ROLE_KEY,
+	buildTemplateRows,
 	type TemplateBeatRow,
 	type TemplateRoleRow,
-	templateBeatsToRunOfShow,
-} from "./agenda-template-beats";
+} from "./agenda-template-rows";
 
 const ROLES: TemplateRoleRow[] = [
 	{ key: "contest_chair", name: "Contest Chair", isSpeakerRole: false },
@@ -529,267 +580,181 @@ const ROLES: TemplateRoleRow[] = [
 
 function beat(over: Partial<TemplateBeatRow> & { sortOrder: number }): TemplateBeatRow {
 	return {
-		kind: "event",
-		label: "Beat",
-		detail: null,
-		minutes: 1,
-		roleKey: null,
-		repeatsRoleKey: null,
-		flex: false,
-		markGreen: null,
-		markYellow: null,
-		markRed: null,
-		...over,
+		kind: "event", label: "Beat", detail: null, minutes: 1, roleKey: null,
+		repeatsRoleKey: null, flex: false, markGreen: null, markYellow: null,
+		markRed: null, ...over,
 	};
 }
 
-function slot(roleKey: string, roleName: string, slotIndex: number): AgendaSlot {
+function slot(
+	roleKey: string, roleName: string, slotIndex: number, assignee: string | null = null,
+): AgendaSlot {
 	return {
-		id: `${roleKey}-${slotIndex}`,
-		roleName,
-		roleKey,
+		id: `${roleKey}-${slotIndex}`, roleName, roleKey,
 		category: roleKey === "contestant" ? "speaker" : "leadership",
-		isSpeakerRole: roleKey === "contestant",
-		slotIndex,
-		assigneeName: null,
-		speechTitle: null,
-		projectLevel: null,
-		minMinutes: null,
-		maxMinutes: null,
-		evaluatesSlotId: null,
-		evaluates: null,
+		isSpeakerRole: roleKey === "contestant", slotIndex,
+		assigneeName: assignee, speechTitle: null, projectLevel: null,
+		minMinutes: null, maxMinutes: null, evaluatesSlotId: null, evaluates: null,
 	};
 }
 
-describe("templateBeatsToRunOfShow", () => {
-	it("maps an event beat to an event beat", () => {
-		const out = templateBeatsToRunOfShow(
-			[beat({ sortOrder: 0, kind: "event", label: "Call to order", minutes: 2 })],
-			ROLES,
-			[],
-		);
-		expect(out).toEqual([
-			{ kind: "event", who: "Call to order", detail: "", minutes: 2 },
-		]);
-	});
-
-	it("maps a role beat to an ungated role beat that renders unowned", () => {
-		const out = templateBeatsToRunOfShow(
-			[
-				beat({
-					sortOrder: 0,
-					kind: "role",
-					label: "Opening Remarks",
-					detail: "Welcome the room",
-					minutes: 5,
-					roleKey: "contest_chair",
-				}),
-			],
-			ROLES,
-			[slot("contest_chair", "Contest Chair", 0)],
-		);
-		expect(out).toHaveLength(1);
-		expect(out[0]).toMatchObject({
-			kind: "role",
-			roleKey: "contest_chair",
-			roleName: "Contest Chair",
-			role: "plain",
-			detail: "Welcome the room",
-			minutes: 5,
-			renderUnowned: true,
-		});
-		// The gates the standard run-of-show needs must NOT be emitted here.
-		expect(out[0]).not.toHaveProperty("requiresAnyOf");
-		expect(out[0]).not.toHaveProperty("requiresGroup");
-		expect(out[0]).not.toHaveProperty("fallbacks");
-	});
-
-	it("marks a speaker-role beat as a speaker beat", () => {
-		const out = templateBeatsToRunOfShow(
-			[beat({ sortOrder: 0, kind: "role", label: "Speech", roleKey: "contestant" })],
-			ROLES,
-			[slot("contestant", "Contestant", 0)],
-		);
-		expect(out[0]).toMatchObject({ role: "speaker" });
-	});
-
-	it("emits a section as an ownerless band beat", () => {
-		const out = templateBeatsToRunOfShow(
-			[beat({ sortOrder: 0, kind: "section", label: "PREPARED SPEECH CONTEST", minutes: 0 })],
-			ROLES,
-			[],
-		);
-		expect(out[0]).toMatchObject({
-			kind: "role",
-			roleKey: SECTION_ROLE_KEY,
-			roleName: "PREPARED SPEECH CONTEST",
-			minutes: 0,
-			renderUnowned: true,
-			handoff: true,
-		});
-	});
-
-	it("repeats a block once per slot of the repeated role", () => {
+describe("buildTemplateRows", () => {
+	// THE regression test. The old Beat-based design produced 16 contestant rows
+	// here (4 beats x 4 slots), and no test in the plan could observe it because
+	// they all asserted the intermediate beat list instead of the final rows.
+	it("emits exactly one row per contestant per repeat block", () => {
 		const beats = [
-			beat({
-				sortOrder: 0,
-				kind: "role",
-				label: "Contestant",
-				minutes: 7,
-				roleKey: "contestant",
-				repeatsRoleKey: "contestant",
-			}),
-			beat({
-				sortOrder: 1,
-				kind: "event",
-				label: "Minute of silence",
-				minutes: 1,
-				repeatsRoleKey: "contestant",
-			}),
+			beat({ sortOrder: 0, kind: "role", label: "Contestant", minutes: 7, roleKey: "contestant", repeatsRoleKey: "contestant" }),
+			beat({ sortOrder: 1, kind: "event", label: "One minute of silence", minutes: 1, repeatsRoleKey: "contestant" }),
 		];
-		const slots = [0, 1, 2].map((i) => slot("contestant", "Contestant", i));
-		const out = templateBeatsToRunOfShow(beats, ROLES, slots);
-		expect(out).toHaveLength(6);
-		expect(out.map((b) => ("who" in b ? b.who : b.roleName))).toEqual([
-			"Contestant",
-			"Minute of silence",
-			"Contestant",
-			"Minute of silence",
-			"Contestant",
-			"Minute of silence",
-		]);
+		const slots = [0, 1, 2, 3].map((i) => slot("contestant", "Contestant", i));
+		const rows = buildTemplateRows(beats, ROLES, slots);
+		expect(rows).toHaveLength(8);
+		expect(rows.filter((r) => r.who.startsWith("Contestant"))).toHaveLength(4);
+	});
+
+	it("numbers repeated rows and names each slot's own assignee", () => {
+		const beats = [beat({ sortOrder: 0, kind: "role", label: "Contestant", roleKey: "contestant", repeatsRoleKey: "contestant" })];
+		const slots = [slot("contestant", "Contestant", 0, "Ada"), slot("contestant", "Contestant", 1, "Grace")];
+		const rows = buildTemplateRows(beats, ROLES, slots);
+		expect(rows[0]?.who).toBe("Contestant 1 · Ada");
+		expect(rows[1]?.who).toBe("Contestant 2 · Grace");
+	});
+
+	it("does NOT number a role with a single slot", () => {
+		const rows = buildTemplateRows(
+			[beat({ sortOrder: 0, kind: "role", label: "Chair", roleKey: "contest_chair" })],
+			ROLES, [slot("contest_chair", "Contest Chair", 0, "Ada")],
+		);
+		expect(rows[0]?.who).toBe("Contest Chair · Ada");
+	});
+
+	// The second defect: a speaker-category role went through expandRunSheet's
+	// speaker arm, which overrode BOTH of these from the slot.
+	it("keeps the BEAT's marks and minutes on a speaker-category role", () => {
+		const rows = buildTemplateRows(
+			[beat({ sortOrder: 0, kind: "role", label: "Contestant", minutes: 2, roleKey: "contestant", markGreen: 1, markYellow: 1.5, markRed: 2 })],
+			ROLES, [slot("contestant", "Contestant", 0)],
+		);
+		expect(rows[0]?.minutes).toBe(2);
+		expect(rows[0]?.marks).toEqual({ green: 1, yellow: 1.5, red: 2 });
+	});
+
+	it("emits a section as a section row, never a handoff", () => {
+		const rows = buildTemplateRows(
+			[beat({ sortOrder: 0, kind: "section", label: "PREPARED SPEECH CONTEST", minutes: 0 })],
+			ROLES, [],
+		);
+		expect(rows[0]).toMatchObject({ who: "PREPARED SPEECH CONTEST", minutes: 0, section: true });
+		expect(rows[0]?.handoff).toBeUndefined();
+	});
+
+	it("renders an unfilled role as the bare role name, not a dropped row", () => {
+		const rows = buildTemplateRows(
+			[beat({ sortOrder: 0, kind: "role", label: "Chair", roleKey: "contest_chair" })],
+			ROLES, [],
+		);
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.who).toContain("Contest Chair");
 	});
 
 	it("emits nothing for a repeat block whose role has no slots", () => {
 		const beats = [
 			beat({ sortOrder: 0, kind: "role", label: "Contestant", roleKey: "contestant", repeatsRoleKey: "contestant" }),
-			beat({ sortOrder: 1, kind: "event", label: "Minute of silence", repeatsRoleKey: "contestant" }),
+			beat({ sortOrder: 1, kind: "event", label: "Silence", repeatsRoleKey: "contestant" }),
 			beat({ sortOrder: 2, kind: "event", label: "Results" }),
 		];
-		const out = templateBeatsToRunOfShow(beats, ROLES, []);
-		expect(out).toHaveLength(1);
-		expect(out[0]).toMatchObject({ who: "Results" });
+		const rows = buildTemplateRows(beats, ROLES, []);
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.who).toBe("Results");
 	});
 
-	it("splits two adjacent repeat blocks that name different roles", () => {
-		const roles: TemplateRoleRow[] = [
-			...ROLES,
-			{ key: "evaluator", name: "Evaluation Contestant", isSpeakerRole: false },
-		];
-		const beats = [
-			beat({ sortOrder: 0, kind: "role", label: "Contestant", roleKey: "contestant", repeatsRoleKey: "contestant" }),
-			beat({ sortOrder: 1, kind: "role", label: "Evaluator", roleKey: "evaluator", repeatsRoleKey: "evaluator" }),
-		];
-		const slots = [
-			slot("contestant", "Contestant", 0),
-			slot("contestant", "Contestant", 1),
-			slot("evaluator", "Evaluation Contestant", 0),
-		];
-		const out = templateBeatsToRunOfShow(beats, roles, slots);
-		expect(out).toHaveLength(3);
-	});
-
-	it("carries timer marks only when all three are present", () => {
-		const withMarks = templateBeatsToRunOfShow(
-			[beat({ sortOrder: 0, kind: "role", label: "Speech", roleKey: "contestant", markGreen: 5, markYellow: 6, markRed: 7 })],
-			ROLES,
-			[slot("contestant", "Contestant", 0)],
-		);
-		expect(withMarks[0]).toMatchObject({ marks: { green: 5, yellow: 6, red: 7 } });
-
-		const partial = templateBeatsToRunOfShow(
-			[beat({ sortOrder: 0, kind: "role", label: "Speech", roleKey: "contestant", markGreen: 5, markYellow: null, markRed: 7 })],
-			ROLES,
-			[slot("contestant", "Contestant", 0)],
-		);
-		expect(partial[0]).not.toHaveProperty("marks");
-	});
-
-	it("orders by sortOrder regardless of input order", () => {
-		const out = templateBeatsToRunOfShow(
-			[beat({ sortOrder: 2, label: "third" }), beat({ sortOrder: 0, label: "first" }), beat({ sortOrder: 1, label: "second" })],
-			ROLES,
-			[],
-		);
-		expect(out.map((b) => ("who" in b ? b.who : ""))).toEqual(["first", "second", "third"]);
-	});
-
-	it("caps the repeat expansion", () => {
-		const beats = [
-			beat({ sortOrder: 0, kind: "role", label: "Contestant", roleKey: "contestant", repeatsRoleKey: "contestant" }),
-		];
+	it("caps the repeat expansion at MAX_ROLE_REPEAT_SLOTS", () => {
+		const beats = [beat({ sortOrder: 0, kind: "role", label: "Contestant", roleKey: "contestant", repeatsRoleKey: "contestant" })];
 		const slots = Array.from({ length: 50 }, (_, i) => slot("contestant", "Contestant", i));
-		const out = templateBeatsToRunOfShow(beats, ROLES, slots);
-		expect(out).toHaveLength(20);
-	});
-
-	it("truncates an oversized label and detail", () => {
-		const out = templateBeatsToRunOfShow(
-			[beat({ sortOrder: 0, kind: "event", label: "x".repeat(500), detail: "y".repeat(2000) })],
-			ROLES,
-			[],
-		);
-		const row = out[0];
-		if (!row || row.kind !== "event") throw new Error("expected an event beat");
-		expect(row.who).toHaveLength(120);
-		expect(row.detail).toHaveLength(400);
-	});
-
-	it("carries flex through to the beat", () => {
-		const out = templateBeatsToRunOfShow(
-			[beat({ sortOrder: 0, kind: "role", label: "Table Topics", roleKey: "contest_chair", flex: true })],
-			ROLES,
-			[slot("contest_chair", "Contest Chair", 0)],
-		);
-		expect(out[0]).toMatchObject({ flex: true });
-	});
-
-	it("omits flex when the row does not set it", () => {
-		const out = templateBeatsToRunOfShow(
-			[beat({ sortOrder: 0, kind: "role", label: "Speech", roleKey: "contest_chair" })],
-			ROLES,
-			[slot("contest_chair", "Contest Chair", 0)],
-		);
-		expect(out[0]).not.toHaveProperty("flex");
+		expect(buildTemplateRows(beats, ROLES, slots)).toHaveLength(20);
 	});
 
 	it("drops a role beat whose roleKey names no template role", () => {
-		const out = templateBeatsToRunOfShow(
-			[beat({ sortOrder: 0, kind: "role", label: "Ghost", roleKey: "nope" })],
-			ROLES,
-			[],
+		expect(
+			buildTemplateRows([beat({ sortOrder: 0, kind: "role", label: "Ghost", roleKey: "nope" })], ROLES, []),
+		).toHaveLength(0);
+	});
+
+	it("carries flex through, and omits it otherwise", () => {
+		const s = [slot("contest_chair", "Contest Chair", 0)];
+		const withFlex = buildTemplateRows([beat({ sortOrder: 0, kind: "role", label: "X", roleKey: "contest_chair", flex: true })], ROLES, s);
+		expect(withFlex[0]).toMatchObject({ flex: true });
+		const without = buildTemplateRows([beat({ sortOrder: 0, kind: "role", label: "X", roleKey: "contest_chair" })], ROLES, s);
+		expect(without[0]?.flex).toBeUndefined();
+	});
+
+	it("orders by sortOrder and truncates oversized strings by code point", () => {
+		const rows = buildTemplateRows(
+			[beat({ sortOrder: 2, label: "third" }), beat({ sortOrder: 0, label: "x".repeat(500), detail: "y".repeat(2000) }), beat({ sortOrder: 1, label: "second" })],
+			ROLES, [],
 		);
-		expect(out).toHaveLength(0);
+		expect(rows.map((r) => r.who.slice(0, 6))).toEqual(["xxxxxx", "second", "third"]);
+		expect([...(rows[0]?.who ?? "")]).toHaveLength(120);
+		expect([...(rows[0]?.detail ?? "")]).toHaveLength(400);
+	});
+});
+
+describe("resolveAgendaRows", () => {
+	it("returns the standard expansion when there is no template", async () => {
+		const { resolveAgendaRows, expandRunSheet, buildRunOfShow } = await import("./agenda-runsheet");
+		expect(resolveAgendaRows({ geIntroducesFunctionaries: false, template: null, slots: [] }))
+			.toEqual(expandRunSheet([], buildRunOfShow({ geIntroducesFunctionaries: false })));
+	});
+
+	it("does NOT fall back to the standard flow for an empty template", async () => {
+		const { resolveAgendaRows } = await import("./agenda-runsheet");
+		expect(
+			resolveAgendaRows({ geIntroducesFunctionaries: false, template: { beats: [], roles: [] }, slots: [] }),
+		).toEqual([]);
 	});
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 3: Run test to verify it fails**
 
 ```bash
-bunx vitest run src/lib/agenda-template-beats.test.ts
+bunx vitest run src/lib/agenda-template-rows.test.ts
 ```
 
-Expected: FAIL — cannot resolve `./agenda-template-beats`.
+Expected: FAIL — cannot resolve `./agenda-template-rows`.
 
-- [ ] **Step 3: Write the implementation**
+- [ ] **Step 4: Write the implementation**
 
-Create `src/lib/agenda-template-beats.ts`:
+Create `src/lib/agenda-template-rows.ts`:
 
 ```ts
 /**
- * Adapts a template's STORED run-of-show rows into the `Beat[]` the existing
- * `expandRunSheet` already consumes, so a templated meeting and a standard one
- * render through one pipeline and cannot silently diverge.
+ * Builds a TEMPLATED meeting's agenda rows directly, without going through
+ * `Beat` / `expandRunSheet`.
  *
- * The emitted beats are deliberately UNGATED — no `requiresAnyOf`,
- * `requiresGroup`, `fallbacks` or tokens. The standard run-of-show needs those
- * because it must adapt to whichever roles a club actually runs; a contest's
- * shape is fixed by the contest rules and does not adapt. See spec D1.
+ * `Beat` exists to GATE (does this club's role set justify this beat?) and to
+ * FAN OUT (one beat becomes one row per slot of its role). A template needs
+ * neither: its shape is fixed by the contest rules, and its repeat blocks bind
+ * to one slot at a time. Routing templates through `Beat` anyway produced three
+ * defects this module exists to avoid — see spec D8:
  *
- * Pure: no database access, so every branch here is reachable from a unit test.
+ *   1. N² rows. `expandRunSheet` fans one beat across every matching slot, so
+ *      emitting one beat per slot multiplied the count.
+ *   2. Dropped marks/minutes. The speaker arm reads `speechWindow(slot)` and
+ *      `speechBookedMinutes(slot)`, overriding whatever the beat declared.
+ *   3. Section bands smuggled through as `handoff`, which renders as an
+ *      indented italic elbow meaning "X introduces Y".
+ *
+ * Pure: no database access, so every branch is reachable from a unit test.
  */
-import type { AgendaSlot, Beat, TimingMarks } from "./agenda-runsheet";
+import {
+	type AgendaRow,
+	type AgendaSlot,
+	assigneeDisplay,
+	numbered,
+	type TimingMarks,
+} from "./agenda-runsheet";
 import {
 	MAX_ROLE_REPEAT_SLOTS,
 	MAX_TEMPLATE_DETAIL_CHARS,
@@ -811,111 +776,95 @@ export type TemplateBeatRow = {
 	markRed: number | null;
 };
 
-/** What the adapter needs from `meeting_template_roles`. */
+/** What this module needs from `meeting_template_roles`. */
 export type TemplateRoleRow = {
 	key: string;
 	name: string;
 	isSpeakerRole: boolean;
 };
 
-/**
- * The synthetic role key a section band carries. A section is not a role, but
- * `AgendaRow.roleKey` is how the print layouts colour a row's spine (#445), so
- * every row needs one and sections need one that can never collide with a real
- * `role_definitions.key`. The double underscores make that structural rather
- * than a naming convention someone could accidentally reuse.
- */
-export const SECTION_ROLE_KEY = "__section__";
-
-/** Cap by CODE POINTS, not UTF-16 units: slicing a surrogate pair in half
- *  yields a lone surrogate that renders as a replacement glyph and makes
+/** Cap by CODE POINTS, not UTF-16 units: slicing a surrogate pair in half yields
+ *  a lone surrogate that renders as a replacement glyph and makes
  *  `encodeURIComponent` throw for any consumer building a URL from it. */
 function capChars(value: string, max: number): string {
 	const points = [...value];
 	return points.length <= max ? value : points.slice(0, max).join("");
 }
 
-/** All three marks or none — a beat with a green and a red but no yellow would
- *  print a timer card with a hole in it. */
-function resolveMarks(row: TemplateBeatRow): TimingMarks | undefined {
+/** All three marks or none — a timer card with a hole in it is worse than none. */
+function resolveMarks(row: TemplateBeatRow): TimingMarks | null {
 	const { markGreen, markYellow, markRed } = row;
-	if (markGreen == null || markYellow == null || markRed == null) return undefined;
+	if (markGreen == null || markYellow == null || markRed == null) return null;
 	return { green: markGreen, yellow: markYellow, red: markRed };
 }
 
-/** Slots belonging to a template role, in slot order. */
 function slotsForRole(slots: AgendaSlot[], roleKey: string): AgendaSlot[] {
 	return slots
 		.filter((s) => s.roleKey === roleKey)
 		.sort((a, b) => a.slotIndex - b.slotIndex);
 }
 
-function toBeat(
+/**
+ * One row from one stored beat, optionally bound to ONE specific slot.
+ *
+ * `slot` is the whole difference from the old design: a repeated block passes
+ * the slot for this iteration, so the row names that person and nobody else.
+ */
+function toRow(
 	row: TemplateBeatRow,
 	rolesByKey: Map<string, TemplateRoleRow>,
-): Beat | null {
+	slot: AgendaSlot | undefined,
+	index: number,
+	total: number,
+): AgendaRow | null {
 	const label = capChars(row.label, MAX_TEMPLATE_LABEL_CHARS);
 	const detail = capChars(row.detail ?? "", MAX_TEMPLATE_DETAIL_CHARS);
+	const base = {
+		detail,
+		minutes: row.minutes,
+		marks: resolveMarks(row),
+		...(row.flex ? { flex: true as const } : {}),
+	};
 
 	if (row.kind === "section") {
-		// A band, not a presenter: `handoff` is what the print layouts and
-		// `groupByPresenter` already use for a full-width row carrying no clock
-		// stamp, and a section is exactly that shape.
-		return {
-			kind: "role",
-			roleKey: SECTION_ROLE_KEY,
-			roleName: label,
-			role: "plain",
-			detail,
-			minutes: row.minutes,
-			renderUnowned: true,
-			handoff: true,
-		};
+		return { who: label, roleKey: null, section: true, ...base, marks: null };
 	}
-
 	if (row.kind === "event") {
-		return { kind: "event", who: label, detail, minutes: row.minutes };
+		return { who: label, ...base };
 	}
 
-	// kind === "role"
 	if (row.roleKey == null) return null;
 	const role = rolesByKey.get(row.roleKey);
 	// A beat naming a role the template does not declare is dropped rather than
-	// rendered against an invented name — the seed is the only writer today, so
-	// this is a corruption guard, not a user-facing path.
+	// rendered against an invented name. The seed is the only writer in Phase 1,
+	// so this is a corruption guard; Phase 2's editor needs a validation error.
 	if (!role) return null;
 
-	const marks = resolveMarks(row);
-	const beat: Beat = {
-		kind: "role",
-		roleKey: role.key,
-		roleName: role.name,
-		role: role.isSpeakerRole ? "speaker" : "plain",
-		detail,
-		minutes: row.minutes,
-		renderUnowned: true,
-		...(marks ? { marks } : {}),
-		...(row.flex ? { flex: true } : {}),
-	};
-	return beat;
+	// LABEL with the SLOT's name when there is one (#445 — a club that renamed
+	// the role sees its own word), and number only when the role really repeats.
+	const roleName = slot?.roleName ?? role.name;
+	const who = slot
+		? `${numbered(roleName, index, total > 1)} · ${assigneeDisplay(slot)}`
+		: roleName;
+	return { who, roleKey: role.key, ...base };
 }
 
 /**
- * Expand and adapt. Rows are taken in `sortOrder`; a run of CONSECUTIVE rows
- * sharing the same non-null `repeatsRoleKey` forms one block emitted once per
- * slot of that role (capped at `MAX_ROLE_REPEAT_SLOTS`), so a contest agenda is
- * correct for however many contestants actually signed up rather than for the
- * number someone typed when the template was authored. A block whose role has
- * no slots this meeting emits nothing.
+ * Expand a template into finished agenda rows.
+ *
+ * Rows are taken in `sortOrder`. A run of CONSECUTIVE rows sharing the same
+ * non-null `repeatsRoleKey` forms one block emitted once per slot of that role
+ * (capped at `MAX_ROLE_REPEAT_SLOTS`), each iteration bound to exactly ONE slot.
+ * A block whose role has no slots emits nothing.
  */
-export function templateBeatsToRunOfShow(
+export function buildTemplateRows(
 	beats: TemplateBeatRow[],
 	roles: TemplateRoleRow[],
 	slots: AgendaSlot[],
-): Beat[] {
+): AgendaRow[] {
 	const rolesByKey = new Map(roles.map((r) => [r.key, r]));
 	const ordered = [...beats].sort((a, b) => a.sortOrder - b.sortOrder);
-	const out: Beat[] = [];
+	const out: AgendaRow[] = [];
 
 	let i = 0;
 	while (i < ordered.length) {
@@ -923,13 +872,13 @@ export function templateBeatsToRunOfShow(
 		if (!row) break;
 
 		if (row.repeatsRoleKey == null) {
-			const beat = toBeat(row, rolesByKey);
-			if (beat) out.push(beat);
+			const owned = row.roleKey ? slotsForRole(slots, row.roleKey) : [];
+			const emitted = toRow(row, rolesByKey, owned[0], 0, owned.length);
+			if (emitted) out.push(emitted);
 			i += 1;
 			continue;
 		}
 
-		// Gather the consecutive run sharing this repeatsRoleKey.
 		const repeatKey = row.repeatsRoleKey;
 		const block: TemplateBeatRow[] = [];
 		while (i < ordered.length) {
@@ -939,185 +888,115 @@ export function templateBeatsToRunOfShow(
 			i += 1;
 		}
 
-		const repeatCount = Math.min(
-			slotsForRole(slots, repeatKey).length,
-			MAX_ROLE_REPEAT_SLOTS,
-		);
-		for (let n = 0; n < repeatCount; n++) {
+		const repeated = slotsForRole(slots, repeatKey).slice(0, MAX_ROLE_REPEAT_SLOTS);
+		repeated.forEach((s, n) => {
 			for (const blockRow of block) {
-				const beat = toBeat(blockRow, rolesByKey);
-				if (beat) out.push(beat);
+				// Bind the ROLE-owning row to this iteration's slot; the others in
+				// the block (a minute of silence) own no slot and repeat as-is.
+				const bound = blockRow.roleKey === repeatKey ? s : undefined;
+				const emitted = toRow(blockRow, rolesByKey, bound, n, repeated.length);
+				if (emitted) out.push(emitted);
 			}
-		}
+		});
 	}
 
 	return out;
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
-
-```bash
-bunx vitest run src/lib/agenda-template-beats.test.ts
-bun run typecheck
-```
-
-Expected: PASS, 12 tests. If `Beat` rejects `handoff`, check `agenda-runsheet.ts` — `handoff` is on the shared half of the `Beat` union (search `handoff?: boolean`); if it is not, add it there in the same shape `AgendaRow.handoff` already has.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/lib/agenda-template-beats.ts src/lib/agenda-template-beats.test.ts
-git commit -m "feat(templates): pure adapter from stored template beats to Beat[]"
-```
-
----
-
-### Task 4: `resolveRunOfShow` — one seam for both paths
-
-**Files:**
-- Modify: `src/lib/agenda-runsheet.ts` (append after `RUN_OF_SHOW`, ~line 1222)
-- Test: `src/lib/agenda-runsheet.test.ts` (append a describe block)
-
-**Interfaces:**
-- Consumes: `buildRunOfShow`, `RunOfShowConfig` (`agenda-runsheet.ts`); `templateBeatsToRunOfShow` (Task 3).
-- Produces: `function resolveRunOfShow(input: { geIntroducesFunctionaries: boolean; template: { beats: TemplateBeatRow[]; roles: TemplateRoleRow[] } | null; slots: AgendaSlot[] }): Beat[]`
-
-This exists so the two routes stop each deciding for themselves how to build a run-of-show. They are copy-pasted today (`club.$clubId.meeting.$meetingId.tsx:375` and `print.tsx:156`), which is exactly where screen and print can silently disagree.
-
-- [ ] **Step 1: Write the failing test**
-
-Append to `src/lib/agenda-runsheet.test.ts`:
-
-```ts
-describe("resolveRunOfShow", () => {
-	it("returns the standard run-of-show when there is no template", () => {
-		const out = resolveRunOfShow({
-			geIntroducesFunctionaries: false,
-			template: null,
-			slots: [],
-		});
-		expect(out).toEqual(buildRunOfShow({ geIntroducesFunctionaries: false }));
-	});
-
-	it("honours the club's GE variant when there is no template", () => {
-		const out = resolveRunOfShow({
-			geIntroducesFunctionaries: true,
-			template: null,
-			slots: [],
-		});
-		expect(out).toEqual(buildRunOfShow({ geIntroducesFunctionaries: true }));
-	});
-
-	it("returns the template's beats when there is one, ignoring the GE variant", () => {
-		const template = {
-			roles: [{ key: "chair", name: "Contest Chair", isSpeakerRole: false }],
-			beats: [
-				{
-					sortOrder: 0,
-					kind: "event" as const,
-					label: "Call to order",
-					detail: null,
-					minutes: 2,
-					roleKey: null,
-					repeatsRoleKey: null,
-					flex: false,
-					markGreen: null,
-					markYellow: null,
-					markRed: null,
-				},
-			],
-		};
-		const out = resolveRunOfShow({
-			geIntroducesFunctionaries: true,
-			template,
-			slots: [],
-		});
-		expect(out).toEqual([
-			{ kind: "event", who: "Call to order", detail: "", minutes: 2 },
-		]);
-	});
-});
-```
-
-Add `resolveRunOfShow` to the import block at the top of that test file.
-
-- [ ] **Step 2: Run test to verify it fails**
-
-```bash
-bunx vitest run src/lib/agenda-runsheet.test.ts
-```
-
-Expected: FAIL — `resolveRunOfShow` is not exported.
-
-- [ ] **Step 3: Write the implementation**
-
-Append to `src/lib/agenda-runsheet.ts`:
+- [ ] **Step 5: Add `resolveAgendaRows` to `agenda-runsheet.ts`**
 
 ```ts
 /**
- * The ONE place a meeting's run-of-show is chosen. A meeting with no template
- * gets the code-derived standard flow, exactly as before agenda templates
- * existed; a templated meeting gets its stored beats adapted into the same
- * `Beat[]` shape.
+ * The ONE place a meeting's agenda rows are chosen. No template means the
+ * code-derived standard flow, expanded exactly as before agenda templates
+ * existed; a template means its stored rows, built directly.
  *
- * Exists as a named seam because the screen and the print route each used to
- * call `buildRunOfShow` themselves, which is precisely the seam where the two
- * surfaces can silently disagree about what the meeting is. `geIntroducesFunctionaries`
- * is meaningless for a templated meeting — the club variant it selects is a
- * property of the STANDARD flow — so it is ignored on that branch rather than
- * threaded through and quietly dropped.
+ * A named seam because the screen and the print route each used to call
+ * `buildRunOfShow` + `expandRunSheet` themselves, which is precisely where the
+ * two surfaces could silently disagree about what the meeting is.
+ * `geIntroducesFunctionaries` selects a variant of the STANDARD flow, so it is
+ * ignored on the template branch rather than threaded through and dropped.
  */
-export function resolveRunOfShow(input: {
+export function resolveAgendaRows(input: {
 	geIntroducesFunctionaries: boolean;
-	template: {
-		beats: TemplateBeatRow[];
-		roles: TemplateRoleRow[];
-	} | null;
+	template: { beats: TemplateBeatRow[]; roles: TemplateRoleRow[] } | null;
 	slots: AgendaSlot[];
-}): Beat[] {
+}): AgendaRow[] {
 	if (!input.template) {
-		return buildRunOfShow({
-			geIntroducesFunctionaries: input.geIntroducesFunctionaries,
-		});
+		return expandRunSheet(
+			input.slots,
+			buildRunOfShow({ geIntroducesFunctionaries: input.geIntroducesFunctionaries }),
+		);
 	}
-	return templateBeatsToRunOfShow(
-		input.template.beats,
-		input.template.roles,
-		input.slots,
-	);
+	return buildTemplateRows(input.template.beats, input.template.roles, input.slots);
 }
 ```
 
-Add to the imports at the top of `agenda-runsheet.ts`:
+Import `buildTemplateRows` and the two types from `./agenda-template-rows`. That module imports
+types plus `assigneeDisplay` / `numbered` from this one, so there is one value import each way;
+if `bun run typecheck` objects, move `AgendaRow` / `AgendaSlot` / `TimingMarks` into a new
+`src/lib/agenda-beat-types.ts` both import, and re-export them here so no call site changes.
 
-```ts
-import {
-	type TemplateBeatRow,
-	type TemplateRoleRow,
-	templateBeatsToRunOfShow,
-} from "./agenda-template-beats";
-```
+Read `numbered`'s exported signature (`agenda-runsheet.ts:1224`) and match it exactly.
 
-`agenda-template-beats.ts` imports types from `agenda-runsheet.ts`, so this is a cycle in the module graph. It is types-only in one direction plus one value import in the other, which esbuild and `tsc` both handle — but if `bun run typecheck` complains, move `Beat`, `AgendaSlot` and `TimingMarks` into a new `src/lib/agenda-beat-types.ts` that both files import, and re-export them from `agenda-runsheet.ts` so no call site changes.
-
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 6: Run tests to verify they pass**
 
 ```bash
-bunx vitest run src/lib/agenda-runsheet.test.ts
+bunx vitest run src/lib/agenda-template-rows.test.ts src/lib/agenda-runsheet.test.ts src/lib/agenda-parity.test.ts
 bun run typecheck
 ```
 
-Expected: PASS, including the 3 new tests and every pre-existing one.
+Expected: PASS — every test in the new file green. `agenda-parity.test.ts` must be untouched — the
+standard path did not move.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add src/lib/agenda-runsheet.ts src/lib/agenda-runsheet.test.ts
-git commit -m "feat(templates): resolveRunOfShow, one seam for templated and standard meetings"
+git add src/lib/agenda-template-rows.ts src/lib/agenda-template-rows.test.ts src/lib/agenda-runsheet.ts
+git commit -m "feat(templates): build templated agenda rows directly, bypassing the beat expander"
 ```
 
 ---
+
+### Task 4: Render the section band
+
+**Files:**
+- Modify: `src/lib/agenda-groups.ts`
+- Modify: `src/components/agenda/meeting-agenda-print.tsx`
+- Test: `src/lib/agenda-groups.test.ts`, `src/components/agenda/meeting-agenda-print.test.tsx`
+
+**Interfaces:**
+- Consumes: `AgendaRow.section` (Task 3).
+- Produces: a `SectionBand` renderer.
+
+- [ ] **Step 1: Keep sections out of presenter runs**
+
+`groupByPresenter` folds adjacent same-presenter rows. A section row must never join a run —
+the same reasoning `sameRun` already applies to `handoff`. In `sameRun` (`agenda-groups.ts:44`):
+
+```ts
+	if (prev.handoff || row.handoff) return false;
+	// A section band is a divider, not a presenter. Absorbing it into a run would
+	// both lose the band and claim someone presented the segment header.
+	if (prev.section || row.section) return false;
+```
+
+- [ ] **Step 2: Render it**
+
+Add a `SectionBand` beside `HandoffBand` (`meeting-agenda-print.tsx:422`): full-width, no clock
+stamp, uppercase, a rule above. **Do not reuse `HandoffBand`** — its indented italic `└` elbow
+means "X introduces Y" and would read as a sub-row continuation marker. Give `beatColor`
+(`meeting-agenda-print.tsx:227`) a case so a section is not rendered `MUTED` like an unmapped key.
+
+- [ ] **Step 3: Test, typecheck, commit**
+
+```bash
+bunx vitest run src/lib/agenda-groups.test.ts src/components/agenda/meeting-agenda-print.test.tsx
+bun run typecheck
+git add src/lib/agenda-groups.ts src/components/agenda/meeting-agenda-print.tsx src/lib/agenda-groups.test.ts src/components/agenda/meeting-agenda-print.test.tsx
+git commit -m "feat(templates): render section bands as their own row kind"
+```
 
 ### Task 5: Template logic module — read, materialize, resolve defs
 
@@ -1573,7 +1452,73 @@ TEST_DATABASE_URL="postgresql://dev:dev@localhost:5433/tm_test" \
 bun run typecheck
 ```
 
-Expected: PASS, 10 tests.
+Expected: PASS — every test in the file green.
+
+- [ ] **Step 4b: Scope ALL SIX `role_definitions` readers — not just one**
+
+The original plan patched `listRoleDefinitions` and stopped. The outside-voice review found the
+other five. Every module that reads `role_definitions` by `club_id` is choosing a slot source:
+
+| Module:line | Feeds | Correct scope |
+| --- | --- | --- |
+| `role-definitions-logic.ts:59` | `/admin/roles`, "+ Add role" picker | `template_id IS NULL` |
+| `meetings-logic.ts:113` | `applyCreateMeeting` slot generation | the MEETING's template |
+| `batch-meetings-logic.ts:53` | batch create | `template_id IS NULL` |
+| `schedule-topup-logic.ts:69` | recurrence top-up | `template_id IS NULL` |
+| `slots-logic.ts:40` (`clubRoles`) | "+ Add speaker" | the MEETING's template |
+| `slots-logic.ts:145` (`clubRoleDefs`) | add-role validation | the MEETING's template |
+
+**What breaks if you skip this.** `generateSlotRows` filters on `enabled`, not `template_id`, so
+**every standard meeting created after a club runs one contest gains 17 contest slots** — Chief
+Judge, five Judges, two Ballot Counters, four Contestants. And on a contest meeting, "+ Add
+speaker" resolves through `pickSpeakerAndEvaluatorRoles` (`src/lib/meeting-roles.ts:193`), which
+picks the lowest-`sortOrder` speaker role across the union: the club's standard `Speaker` at 30
+beats the contest's `test_speaker` at 70 and `contestant` at 80. So it adds a *standard* Speaker
+slot that renders nowhere on the contest sheet — and there is then **no way in the product to
+change the contestant count**, which is the whole premise of the repeat mechanism.
+
+Use the exported `roleDefScope(clubId, templateId)` from Step 3 at every site. The two
+calendar-generation readers pass `null` unconditionally: a templated meeting is always CONVERTED,
+never auto-created. The three meeting-scoped readers must load `meetings.template_id` first.
+
+Also correct the same sentence in the spec's "Changed: `role_definitions`" section, which is
+where the wrong claim originated.
+
+- [ ] **Step 4c: Prove it with a test that fails without the fix**
+
+Append to `src/server/meetings.integration.test.ts` (or the closest existing slot-generation
+suite — find it with `grep -rl "generateSlotRows\|applyCreateMeeting" src/server/*.test.ts`):
+
+```ts
+	it("does NOT put template roles on a newly created STANDARD meeting", async () => {
+		const { meetingTemplates: tpl } = await import("#/db/schema");
+		const [row] = await testDb
+			.insert(tpl)
+			.values({ clubId: null, key: "t", name: "T" })
+			.returning({ id: tpl.id });
+		if (!row) throw new Error("insert failed");
+		await testDb.insert(roleDefinitions).values({
+			clubId: club.clubId,
+			templateId: row.id,
+			key: "chief_judge",
+			name: "Chief Judge",
+			category: "leadership",
+			defaultCount: 1,
+		});
+
+		const meetingId = await applyCreateMeeting({ /* club's usual create input */ });
+		const slots = await testDb
+			.select({ roleDefinitionId: roleSlots.roleDefinitionId })
+			.from(roleSlots)
+			.where(eq(roleSlots.meetingId, meetingId));
+		const defIds = new Set(slots.map((s) => s.roleDefinitionId));
+		const templateDefs = await testDb
+			.select({ id: roleDefinitions.id })
+			.from(roleDefinitions)
+			.where(eq(roleDefinitions.templateId, row.id));
+		for (const d of templateDefs) expect(defIds.has(d.id)).toBe(false);
+	});
+```
 
 - [ ] **Step 5: Filter template roles out of the club role editor**
 
@@ -1662,6 +1607,7 @@ import {
 	meetingTemplateRoles,
 	meetingTemplates,
 	meetings,
+	guests,
 	roleSlots,
 	speeches,
 } from "#/db/schema";
@@ -1796,18 +1742,27 @@ describe.skipIf(!hasTestDb())("meeting template conversion", () => {
 		});
 		const [row] = await testDb.select().from(meetings).where(eq(meetings.id, club.meetingId));
 		expect(row?.templateId).toBeNull();
+		// `seedClub()` creates exactly ONE role definition with defaultCount 1
+		// (`src/test/db.ts:149-158`), so converting back yields ONE slot — not the
+		// nine a real club would have. Asserting `> 4` here could never pass.
 		const after = await slotsFor(club.meetingId);
-		expect(after.length).toBeGreaterThan(4);
+		expect(after).toHaveLength(1);
 	});
 
-	it("refuses to convert a held meeting", async () => {
-		await testDb.update(meetings).set({ status: "held" }).where(eq(meetings.id, club.meetingId));
-		await expect(
-			applyTemplateConversion({
-				meetingId: club.meetingId, clubId: club.clubId, templateId, actorMemberId: null,
-			}),
-		).rejects.toThrow(/scheduled/i);
-	});
+	// `meetingStatusEnum` is ["scheduled","cancelled","completed"] — there is NO
+	// "held" status. Assert on the canonical MEETING_LOCKED_MESSAGE, not on a
+	// string this mutator invents.
+	it.each(["completed", "cancelled"] as const)(
+		"refuses to convert a %s meeting",
+		async (status) => {
+			await testDb.update(meetings).set({ status }).where(eq(meetings.id, club.meetingId));
+			await expect(
+				applyTemplateConversion({
+					meetingId: club.meetingId, clubId: club.clubId, templateId, actorMemberId: null,
+				}),
+			).rejects.toThrow(MEETING_LOCKED_MESSAGE);
+		},
+	);
 
 	it("reports how many slots it will ADD before anything is materialized", async () => {
 		// 1 chair + 3 contestants, read from the template's own rows because
@@ -1899,7 +1854,7 @@ export type ConversionPlan = {
 	claimedSlotsReleased: number;
 	slotsWithSpeeches: number;
 	/** Slots the conversion will CREATE. The spec's dialog copy promises this
-	 *  number ("removes 9 open slots, adds 14 contest roles"), and it cannot come
+	 *  number ("removes 9 open slots, adds 17 contest roles"), and it cannot come
 	 *  from `role_definitions` on a first-time preview — nothing is materialized
 	 *  yet, by design, because the preview must not write. So it is read from the
 	 *  TEMPLATE's own rows and reduced by whatever already exists. */
@@ -2009,7 +1964,7 @@ export async function planTemplateConversion(
  * instead.
  *
  * Authorization is the CALLER's: this function has no session. The server fn
- * gates on admin/vpe and on the club's archive state before calling it.
+ * gates on admin and on the club's archive state before calling it.
  */
 export async function applyTemplateConversion(input: {
 	meetingId: string;
@@ -2037,11 +1992,13 @@ export async function applyTemplateConversion(input: {
 		if (!meeting || meeting.clubId !== clubId) {
 			throw new Error("Meeting not found.");
 		}
-		// Mirrors the meeting lifecycle lock (ADR-0012): reshaping a meeting that
-		// already happened, or one that was cancelled, is never right.
-		if (meeting.status !== "scheduled") {
-			throw new Error("Only a scheduled meeting can change its template.");
-		}
+		// Use the CANONICAL lock, not a hand-rolled status comparison, so this
+		// mutator locks exactly the way every other one does (ADR-0012).
+		// `assertMeetingNotLocked` / `isMeetingLocked` live in
+		// `meeting-authz-logic.ts:32` and throw `MEETING_LOCKED_MESSAGE`.
+		// NOTE: there is no `"held"` status — `meetingStatusEnum` is
+		// `["scheduled", "cancelled", "completed"]` (`schema.ts:71`).
+		assertMeetingNotLocked(meeting.status);
 
 		// Materialize EXPLICITLY, as its own step — `resolveMeetingRoleDefs` is a
 		// pure read since the eng review, so the write has to be visible here
@@ -2119,10 +2076,15 @@ export async function applyTemplateConversion(input: {
 		await logActivity(tx, {
 			clubId,
 			actorMemberId,
-			action: "meeting.template_applied",
+			// `activity_action` is a POSTGRES ENUM (`schema.ts:92`), so this value
+			// must be added to `activityActionEnum` AND shipped in Task 1's
+			// migration — it is not a free-text string. snake_case to match every
+			// existing value (`meeting_create`, `meeting_edit`, `vote_open`).
+			action: "meeting_template_set",
 			targetType: "meeting",
 			targetId: meetingId,
-			detail: templateId === null ? "Standard meeting" : templateId,
+			// `detail` is jsonb; every other caller passes an object.
+			detail: { templateId },
 		});
 
 		return plan;
@@ -2140,7 +2102,7 @@ import { linkEvaluatorsToSpeakers } from "./meeting-create-logic";
 import { logActivity } from "./activity";
 ```
 
-Check `logActivity`'s `ActivityInput` in `src/server/activity.ts` and match its field names exactly; if `action` is a union rather than `string`, add `"meeting.template_applied"` to it.
+`ActivityAction` is `(typeof activityActionEnum.enumValues)[number]` (`src/server/activity.ts:17`), derived from the **Postgres enum** at `schema.ts:92`. So adding the value is a schema + migration change, folded into Task 1 — not a type-only edit. Match `ActivityInput`'s field names exactly.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -2150,7 +2112,7 @@ TEST_DATABASE_URL="postgresql://dev:dev@localhost:5433/tm_test" \
 bun run typecheck
 ```
 
-Expected: PASS, 9 tests.
+Expected: PASS — every test in the file green.
 
 - [ ] **Step 5: Commit**
 
@@ -2180,7 +2142,7 @@ Create `src/server/meeting-templates-authz.guard.test.ts`:
 ```ts
 /**
  * Comment-blind source guard: every mutating template server fn must gate on
- * admin/vpe AND on the club's archive state. Read comment-blind (`readSource`)
+ * admin AND on the club's archive state. Read comment-blind (`readSource`)
  * because a "must be present" assertion would falsely PASS on a comment merely
  * naming the pattern.
  */
@@ -2190,7 +2152,7 @@ import { readSource } from "#/test/guard-source";
 const SOURCE = readSource("src/server/meeting-templates.ts");
 
 describe("meeting template server fns", () => {
-	it("gates every mutating fn on an admin/vpe club role", () => {
+	it("gates every mutating fn on an admin club role", () => {
 		const mutators = SOURCE.split("export const").filter((chunk) =>
 			chunk.includes('method: "POST"'),
 		);
@@ -2275,7 +2237,7 @@ const meetingTemplateInput = z.object({
 // `.validator((clubId: unknown) => uuid.parse(clubId))`. Passing the schema
 // object directly does not match how every other server fn here is written.
 
-/** Resolve a meeting to its club, and gate the caller as an admin/vpe of it. */
+/** Resolve a meeting to its club, and gate the caller as an admin of it. */
 async function requireMeetingAdmin(meetingId: string) {
 	const user = await requireUser();
 	const [meeting] = await db
@@ -2735,7 +2697,7 @@ git commit -m "feat(templates): seed the global Speech Contest template"
 - Test: `src/lib/agenda-template-runsheet.test.ts`
 
 **Interfaces:**
-- Consumes: `resolveRunOfShow` (Task 4); `loadTemplateContent` (Task 5).
+- Consumes: `resolveAgendaRows` (Task 3); `loadTemplateContent` (Task 5).
 - Produces: `loadMeetingDetail`'s payload gains `template: { beats: TemplateBeatRow[]; roles: TemplateRoleRow[] } | null`.
 
 - [ ] **Step 1: Write the failing test**
@@ -2749,7 +2711,7 @@ Create `src/lib/agenda-template-runsheet.test.ts`:
  * sheet actually consumes, which unit-testing the adapter alone cannot show.
  */
 import { describe, expect, it } from "vitest";
-import { expandRunSheet, resolveRunOfShow } from "./agenda-runsheet";
+import { resolveAgendaRows } from "./agenda-runsheet";
 import { buildTimeline } from "./agenda-timing";
 import { CONTEST_TEMPLATE } from "./contest-template";
 
@@ -2784,28 +2746,28 @@ describe("contest run sheet", () => {
 		sergeant_at_arms: 1, contest_chair: 1, chief_judge: 1, judge: 5,
 		ballot_counter: 2, contest_timer: 2, test_speaker: 1, contestant: 4,
 	});
-	const beats = resolveRunOfShow({
+	const rows = resolveAgendaRows({
 		geIntroducesFunctionaries: false,
 		template: { beats: CONTEST_TEMPLATE.beats, roles },
 		slots,
 	});
 
 	it("produces rows the existing expander understands", () => {
-		const rows = expandRunSheet(slots, beats);
+		// rows built above
 		expect(rows.length).toBeGreaterThan(20);
 		expect(rows.every((r) => typeof r.who === "string" && r.who.length > 0)).toBe(true);
 		expect(rows.every((r) => Number.isFinite(r.minutes))).toBe(true);
 	});
 
 	it("names the Chief Judge and the contestants", () => {
-		const rows = expandRunSheet(slots, beats);
+		// rows built above
 		const who = rows.map((r) => r.who).join(" | ");
 		expect(who).toContain("Chief Judge");
 		expect(who).toContain("Contestant");
 	});
 
 	it("keeps every section band", () => {
-		const rows = expandRunSheet(slots, beats);
+		// rows built above
 		const who = rows.map((r) => r.who).join(" | ");
 		for (const label of [
 			"OPENING", "PREPARED SPEECH CONTEST", "IMPROMPTU SPEAKING CONTEST",
@@ -2821,7 +2783,7 @@ describe("contest run sheet", () => {
 		const minutes = (s: typeof few) =>
 			expandRunSheet(
 				s,
-				resolveRunOfShow({
+				resolveAgendaRows({
 					geIntroducesFunctionaries: false,
 					template: { beats: CONTEST_TEMPLATE.beats, roles },
 					slots: s,
@@ -2848,7 +2810,7 @@ describe("contest run sheet", () => {
 bunx vitest run src/lib/agenda-template-runsheet.test.ts
 ```
 
-Expected: FAIL initially only if Task 4's `resolveRunOfShow` is missing; otherwise it may pass immediately, which is fine — it is a regression net for the wiring below. If it passes, note that in the commit and continue.
+Expected: FAIL until Task 3's `resolveAgendaRows` exists. This suite is the end-to-end net over the pure pipeline; it MUST assert final row counts, because asserting an intermediate beat list is exactly what let the N² defect through.
 
 - [ ] **Step 3: Put the template on the meeting payload**
 
@@ -2859,7 +2821,7 @@ In `src/server/meetings.ts`, the loader already selects the club's `geIntroduces
 	// round trip only when `template_id` is set (the two selects run in
 	// parallel), so a normal meeting pays nothing.
 	//
-	// THROW rather than fall through. `resolveRunOfShow` reads `template: null`
+	// THROW rather than fall through. `resolveAgendaRows` reads `template: null`
 	// as "standard meeting", so a templated meeting whose content failed to load
 	// would silently render the STANDARD beats against CONTEST slots — and since
 	// no contest slot matches `toastmaster_of_the_day` / `speaker` / any standard
@@ -2876,11 +2838,11 @@ In `src/server/meetings.ts`, the loader already selects the club's `geIntroduces
 	}
 ```
 
-Add a unit test for this arm in `src/lib/agenda-template-runsheet.test.ts` — `resolveRunOfShow` given a template with zero beats must not silently return the standard run-of-show:
+This arm is already covered by Task 3's `resolveAgendaRows` describe block ("does NOT fall back to the standard flow for an empty template"). No extra test needed here; just wire the throw.
 
 ```ts
 it("does not fall back to the standard flow for an empty template", () => {
-	const out = resolveRunOfShow({
+	const out = resolveAgendaRows({
 		geIntroducesFunctionaries: false,
 		template: { beats: [], roles: [] },
 		slots: [],
@@ -2903,13 +2865,10 @@ expandRunSheet(slots, buildRunOfShow({ geIntroducesFunctionaries })),
 with
 
 ```ts
-expandRunSheet(
-	slots,
-	resolveRunOfShow({ geIntroducesFunctionaries, template, slots }),
-),
+resolveAgendaRows({ geIntroducesFunctionaries, template, slots }),
 ```
 
-pulling `template` from the loader data beside `geIntroducesFunctionaries` (~line 291). Swap the `buildRunOfShow` import for `resolveRunOfShow` (line 51).
+pulling `template` from the loader data beside `geIntroducesFunctionaries` (~line 291). Swap the `buildRunOfShow` + `expandRunSheet` imports for `resolveAgendaRows` (line 51). `resolveAgendaRows` returns finished rows, so the surrounding `expandRunSheet(...)` wrapper is DELETED, not kept.
 
 In `src/routes/club.$clubId_.meeting.$meetingId.print.tsx`, apply the same change at line 156, taking `template` from the loader data beside `geIntroducesFunctionaries` (~line 150) and swapping the import at line 22.
 
@@ -2951,7 +2910,7 @@ git commit -m "feat(templates): render a templated meeting's run sheet through o
 - Test: `src/lib/agenda-slides.test.ts` (append a describe block)
 
 **Interfaces:**
-- Consumes: `resolveRunOfShow` (Task 4); `SlideDeckInput` (`agenda-slides.ts`).
+- Consumes: `resolveAgendaRows` (Task 3); `SlideDeckInput` (`agenda-slides.ts`).
 - Produces: a new `Slide` variant `{ kind: "beat"; label: string; who: string; detail: string; minutes: number; section: string | null }`; `SlideDeckInput` gains `template: { beats: TemplateBeatRow[]; roles: TemplateRoleRow[] } | null`.
 
 - [ ] **Step 1: Write the failing test**
@@ -3091,12 +3050,11 @@ function buildTemplateBeatSlides(input: {
 	template: { beats: TemplateBeatRow[]; roles: TemplateRoleRow[] };
 	slots: AgendaSlot[];
 }): Slide[] {
-	const beats = resolveRunOfShow({
+	const rows = resolveAgendaRows({
 		geIntroducesFunctionaries: false,
 		template: input.template,
 		slots: input.slots,
 	});
-	const rows = expandRunSheet(input.slots, beats);
 	const slides: Slide[] = [];
 	let section: string | null = null;
 	for (const row of rows) {
@@ -3117,7 +3075,7 @@ function buildTemplateBeatSlides(input: {
 }
 ```
 
-Import `resolveRunOfShow`, `expandRunSheet`, `SECTION_ROLE_KEY`, `TemplateBeatRow`, `TemplateRoleRow`.
+Import `resolveAgendaRows`, `TemplateBeatRow`, `TemplateRoleRow`. Sections are now `row.section === true`, not a synthetic role key.
 
 `expandRunSheet` renders a section band's `who` as the section label because the adapter set `roleName` to it and `renderUnowned: true`, so no assignee lookup happens. Confirm that by reading `expandRunSheet`'s role arm; if `who` comes out as `"LABEL · — open —"`, strip at the `·` here rather than changing `expandRunSheet`.
 
@@ -3178,7 +3136,20 @@ git commit -m "feat(templates): generic beat-driven deck for templated meetings"
 - Consumes: `printedPageCount`, `printableDocument` (`#/test/print-page-count`); `PRINT_PAGE_CSS` (`#/components/agenda/print-theme`); `CONTEST_TEMPLATE`.
 - Produces: nothing.
 
-A contest agenda is **multi-page** — the one-sheet promise does not hold here and must not be asserted. What must hold is that the page count is *stable and bounded* across contestant counts, because `repeatsRoleKey` is exactly the code that varies with them.
+**The original version of this task was unfalsifiable.** `EditorialLayout` wraps its sheet in
+`FitPage` (`meeting-agenda-print.tsx:743`), which SCALES the page to fit — so it prints one page
+at 4, 6, 7 or 60 rows, and `toBeGreaterThan(0)` / `toBeLessThanOrEqual(4)` / `long === short` all
+passed by construction, including under the N² bug. This is verbatim the trap CLAUDE.md names:
+"`FitPage` scales a sheet to fit, so the page count reports 1 whether the page is comfortable or
+crushed."
+
+So the real gate here is **density, not page count** — `print-density.test.tsx` measures the
+natural height of the sheet and therefore what size the body text actually PRINTS. Page count
+stays as a cheap sanity check; density is what can fail.
+
+Also: the fixture must sit **inside** `describe.skipIf(!hasChrome)` (`print-page-count.test.tsx:197`).
+A bare top-level `describe` fails rather than skips on a machine with no Chrome, inverting the
+file's stated contract.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -3205,14 +3176,11 @@ describe("contest agenda print", () => {
 			}));
 		});
 		const rows = buildTimeline(
-			expandRunSheet(
+			resolveAgendaRows({
+				geIntroducesFunctionaries: false,
+				template: { beats: CONTEST_TEMPLATE.beats, roles },
 				slots,
-				resolveRunOfShow({
-					geIntroducesFunctionaries: false,
-					template: { beats: CONTEST_TEMPLATE.beats, roles },
-					slots,
-				}),
-			),
+			}),
 			new Date("2026-09-12T13:00:00Z"),
 			"America/Chicago",
 		);
@@ -3306,6 +3274,44 @@ git commit -m "test(templates): contest print page count across 4/6/7 contestant
 
 ---
 
+### Task 12a: Close `/present` and the `.pptx` export for templated meetings — **PR 1**
+
+Found by the outside-voice review. PR 1 defers Task 10, so `buildSlideDeck` receives no
+`template` and a contest meeting builds the **standard** deck against contest slots — every beat
+keyed `toastmaster_of_the_day` / `speaker` / `table_topics_master` gates out, leaving a title
+slide and a thank-you slide. That is the identical failure mode the run-sheet throw was added to
+close, on the surface that runs live in the room.
+
+**Two call sites, and a disabled button covers neither.** `/present` is a directly addressable
+route, and the `.pptx` export is a separate action:
+- `src/routes/club.$clubId_.meeting.$meetingId.present.tsx:58`
+- `src/routes/club.$clubId.meeting.$meetingId.tsx:389` (the `.pptx` export)
+
+- [ ] **Step 1: Guard both call sites**
+
+In each, when `meeting.templateId` is non-null, do not call `buildSlideDeck`. The present route
+renders a short explainer instead of a deck: "Present mode isn't available for a {template name}
+yet — print the agenda instead," with a link to `/print`. The export action is hidden.
+
+- [ ] **Step 2: Disable the Present control (design review, D2)**
+
+Visible and disabled, never removed — a control that exists on every other meeting and silently
+vanishes reads as a bug (#362). `aria-disabled` with the reason wired through `aria-describedby`.
+Give Print visual emphasis on templated meetings.
+
+- [ ] **Step 3: Test and commit**
+
+```bash
+bunx vitest run src/lib/agenda-slides.test.ts
+bun run typecheck
+git add src/routes/club.\$clubId_.meeting.\$meetingId.present.tsx src/routes/club.\$clubId.meeting.\$meetingId.tsx
+git commit -m "fix(templates): no standard deck for a templated meeting until PR 2"
+```
+
+Delete this task when Task 10 lands — the guard becomes the real deck.
+
+---
+
 ### Task 12: The picker and convert dialog
 
 **Files:**
@@ -3335,6 +3341,7 @@ const PLAN = {
 	openSlotsRemoved: 9,
 	claimedSlotsReleased: 2,
 	slotsWithSpeeches: 1,
+	slotsAdded: 17,
 	releasedHolders: [
 		{ memberId: "m1", guestId: null, name: "Ada Lovelace", roleName: "Speaker" },
 		{ memberId: "m2", guestId: null, name: "Grace Hopper", roleName: "Evaluator" },
@@ -3399,7 +3406,7 @@ describe("MeetingTemplateDialog", () => {
 	it("says how many roles it will add", async () => {
 		setup();
 		await userEvent.click(screen.getByRole("button", { name: /Speech Contest/i }));
-		await waitFor(() => expect(screen.getByText(/adds 14 roles/i)).toBeInTheDocument());
+		await waitFor(() => expect(screen.getByText(/adds 17 roles/i)).toBeInTheDocument());
 	});
 
 	// The critical gap from the eng review: a failed preview previously left a
@@ -3474,7 +3481,7 @@ Create `src/components/agenda/meeting-template-dialog.tsx`. Open `src/components
 │   message them after you switch.             │
 │                                              │
 │   Also: removes 7 unfilled roles,            │  ← 3rd: counts, muted
-│   adds 14 contest roles.                     │
+│   adds 17 contest roles.                     │
 │   Speeches stay attached to their speakers.  │  ← reassurance
 ├──────────────────────────────────────────────┤
 │              [Cancel]  [Release 2 roles and  │
@@ -3558,7 +3565,7 @@ bunx vitest run src/components/agenda/meeting-template-dialog.test.tsx
 bun run typecheck
 ```
 
-Expected: PASS, 6 tests.
+Expected: PASS — every test in the file green.
 
 - [ ] **Step 6: Commit**
 
@@ -3595,7 +3602,7 @@ Append to `CONTEXT.md`'s Glossary:
 **Meeting template** — a named bundle of a role set plus a flat run-of-show, letting a meeting
 run a shape other than the club's standard night (today: Speech Contest). `meetings.template_id`
 NULL is the standard meeting and reads the code-derived `RUN_OF_SHOW`; a templated meeting reads
-`meeting_template_beats` through `resolveRunOfShow`. A template's roles are materialized into
+`meeting_template_beats` through `resolveAgendaRows`, which builds rows directly rather than via `Beat`. A template's roles are materialized into
 `role_definitions` with `template_id` set, because `role_slots.role_definition_id` is a NOT NULL
 restricting FK — which is also why `/admin/roles` filters `template_id IS NULL`. Templates are
 GLOBAL (`meeting_templates.club_id IS NULL`) in Phase 1; club-authored ones and the editor are
@@ -3699,7 +3706,7 @@ Synthesized from the 2026-08-19 eng review. Each derives from a specific finding
 - [ ] **T4 (P1, human: ~30min / CC: ~5min)** — server/meetings — Throw when a templated meeting's content fails to load
   - Surfaced by: Failure modes — **critical gap**: `template: null` reads as "standard meeting", so a contest would silently render standard beats against contest slots and print a near-empty sheet
   - Files: `src/server/meetings.ts`, `src/lib/agenda-template-runsheet.test.ts`
-  - Verify: `resolveRunOfShow` with an empty template returns `[]`, not the standard run-of-show
+  - Verify: `resolveAgendaRows` with an empty template returns `[]`, not the standard run-of-show
 - [ ] **T5 (P1, human: ~1.5h / CC: ~12min)** — components/agenda — Three-state dialog with retry and a pending guard
   - Surfaced by: Tests — **critical gap**: a rejected preview left a blank panel, no message, no recovery, on a destructive-action confirmation
   - Files: `src/components/agenda/meeting-template-dialog.tsx` + test
@@ -3713,7 +3720,7 @@ Synthesized from the 2026-08-19 eng review. Each derives from a specific finding
   - Files: `scripts/resync-template-roles.ts`, `package.json`
   - Verify: run against a club with a renamed role; prints the diff, writes nothing without `--apply`
 - [ ] **T8 (P2, human: ~30min / CC: ~6min)** — server/templates — Add `slotsAdded` to `ConversionPlan`
-  - Surfaced by: Tests — the spec's dialog copy promises "adds 14 contest roles" and the plan had no such field
+  - Surfaced by: Tests — the spec's dialog copy promises "adds 17 contest roles" and the plan had no such field
   - Files: `src/server/meeting-templates-logic.ts`, conversion test, dialog + test
   - Verify: 4 on a first preview, 0 on a re-apply
 - [ ] **T9 (P2, human: ~40min / CC: ~8min)** — tests — Close the six remaining coverage gaps
@@ -3732,7 +3739,7 @@ Synthesized from the 2026-08-19 eng review. Each derives from a specific finding
 | Review | Trigger | Why | Runs | Status | Findings |
 |--------|---------|-----|------|--------|----------|
 | CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | — |
-| Codex Review | `/codex review` | Independent 2nd opinion | 0 | — | — |
+| Outside Voice | Claude subagent | Independent 2nd opinion | 1 | ISSUES_FOUND | 16 findings, 7/7 spot-checked confirmed, 2 plan-breaking |
 | Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | ISSUES_OPEN (PLAN) | 6 issues, 2 critical gaps, all folded |
 | Design Review | `/plan-design-review` | UI/UX gaps | 1 | ISSUES_OPEN (FULL) | score: 4/10 → 8/10, 2 decisions |
 | DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | — |
@@ -3745,9 +3752,17 @@ Synthesized from the 2026-08-19 eng review. Each derives from a specific finding
 
 **DESIGN:** 4/10 → 8/10. Two decisions folded into Task 12 and Task 10's PR-1 note: people-first copy with friction scaled to damage (every string written verbatim, plus a state table, 375px behaviour and focus/contrast rules), and a visible-but-disabled Present control on templated meetings rather than a silently missing one. The design finding that drove the rest: released members **cannot be notified by the app**, so the dialog copy IS the notification mechanism and must hand the officer a task, not a number.
 
-**VERDICT:** ENG + DESIGN REVIEWS COMPLETE — 6 engineering issues folded, design 4/10 → 8/10. Not CLEAR: 3 unresolved decisions below.
+**OUTSIDE VOICE:** Ran as a fresh Claude subagent (Codex not installed). **16 findings; I spot-checked 7 against source and all 7 confirmed.** Two were plan-breaking and neither prior review caught them:
+
+1. **`repeats_role_key` produced N² rows.** `slotsForRole` (`agenda-runsheet.ts:1269`) filters the whole slot array, so `expandRunSheet` already fans one beat across every matching slot. Emitting one beat per slot multiplied it — a 4-contestant segment printed 16 contestant rows on a clock wrong by the same factor. **No test in the plan could fail on it**: they all asserted the intermediate beat list rather than the final rows. Fixed by spec D8 — the template path now builds `AgendaRow[]` directly, which also recovers the marks and minutes `expandRunSheet`'s speaker arm was silently discarding, and lets a section band be a real row kind instead of a `handoff` elbow.
+2. **Only 1 of 6 `role_definitions` readers was scoped.** Left as written, every standard meeting created after a club runs one contest would gain 17 contest slots, and "+ Add speaker" on a contest would add a standard Speaker — leaving no way in the product to change the contestant count, which falsified the whole repeat premise. Task 5 Step 4b now scopes all six with a test that fails without the fix.
+
+Also confirmed and fixed: `meetingStatusEnum` has no `"held"` (use `assertMeetingNotLocked`); `activity_action` is a Postgres enum needing a migration value; `clubRoleEnum` has no `vpe` and `requireClubRole(["admin"])` also admits any officer; `seedClub()` inserts one role with a NULL key, which made two index tests unable to fail; PR 1 shipped a broken `/present` and `.pptx` (now Task 12a); Task 11's page-count assertions were unfalsifiable under `FitPage`.
+
+**VERDICT:** ENG + DESIGN + OUTSIDE VOICE COMPLETE — the plan was substantially rebuilt after the outside voice. Not CLEAR: findings 8, 10-13, 15 and parts of 16 are folded but **unverified by me**, and the revised Tasks 3/4 have not themselves been reviewed.
 
 **UNRESOLVED DECISIONS:**
-- Outside voice never ran. The Claude subagent fallback terminated on an API session limit before producing findings, and Codex is not installed. Nothing independent has read this plan — re-run `/plan-eng-review` or `/codex review` after the limit resets if you want that check before implementing.
-- TODOS.md proposals were not walked through individually in either review. Candidates are recorded as T7/T10 above and in Task 13's TODOS block rather than being agreed one by one: the re-sync script's operational burden, the stale CLAUDE.md Codex claim, and measuring the Task 2 caps before Phase 2 exposes a template editor.
+- The revised Tasks 3, 4, 5 Step 4b and 12a were written in response to the outside voice and have had **no independent review of their own**. Given the outside voice found two plan-breaking defects in work that had already passed two reviews, a second pass over the rewrite is worth its cost before implementing.
+- Outside-voice findings 8, 10-13, 15 and several in 16 are folded on the reviewer's word — I confirmed 7 of 16 directly. The deferrable-unique-index point (15) and the `applyFlex` Table-Topics hardcoding (13) in particular deserve a check.
+- TODOS.md proposals were not walked through individually in any review. Candidates: the re-sync script's operational burden, the stale CLAUDE.md Codex claim, measuring the Task 2 caps before Phase 2, and adding a composite FK from `meeting_template_beats.role_key` to `meeting_template_roles`.
 - Design passes 5 and 6 stay below 8 by choice. No `DESIGN.md` exists, so design-system alignment rests on copying `meeting-meta-dialog.tsx` rather than on stated tokens; `/design-consultation` would close that but was judged out of proportion to one dialog. Responsive and accessibility are now specified for this dialog only, not audited across the surfaces it sits in.
