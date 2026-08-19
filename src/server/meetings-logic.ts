@@ -1,7 +1,7 @@
 // Meeting-management DB logic, split out from the createServerFn wrappers in
 // `meetings.ts` (which the server-modules guard test forbids from exporting
 // db-touching functions). Directly integration-testable by mocking `#/db`.
-import { and, asc, eq, gte, ne, sql } from "drizzle-orm";
+import { and, asc, eq, gte, isNull, ne, sql } from "drizzle-orm";
 import { db } from "#/db";
 import {
 	clubs,
@@ -112,7 +112,17 @@ export async function applyCreateMeeting(input: MeetingCreateInput) {
 	const defs = await db
 		.select()
 		.from(roleDefinitions)
-		.where(eq(roleDefinitions.clubId, input.clubId))
+		// Standard roles ONLY. A templated meeting is always CONVERTED, never
+		// auto-created, so this path is unconditionally the club's own shape.
+		// Without the template scope every meeting created after a club runs one
+		// contest would gain that contest's Chief Judge, Judges and Contestants,
+		// because `generateSlotRows` filters on `enabled` and not on `template_id`.
+		.where(
+			and(
+				eq(roleDefinitions.clubId, input.clubId),
+				isNull(roleDefinitions.templateId),
+			),
+		)
 		.orderBy(asc(roleDefinitions.sortOrder));
 
 	return db.transaction(async (tx) => {

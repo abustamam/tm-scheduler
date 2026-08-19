@@ -7,7 +7,7 @@
 // ONE transaction, fetching the club's role definitions ONCE and reusing them.
 // No activity-log entry — single-create doesn't log creation, so batch keeps
 // parity.
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq, isNull } from "drizzle-orm";
 import { db } from "#/db";
 import { clubs, meetings, roleDefinitions } from "#/db/schema";
 import { utcToZonedWallTime, zonedWallTimeToUtc } from "#/lib/datetime";
@@ -52,7 +52,17 @@ export async function applyBatchCreateMeetings(
 	const defs = await db
 		.select()
 		.from(roleDefinitions)
-		.where(eq(roleDefinitions.clubId, input.clubId))
+		// Standard roles ONLY. A templated meeting is always CONVERTED, never
+		// auto-created, so this path is unconditionally the club's own shape.
+		// Without the template scope every meeting created after a club runs one
+		// contest would gain that contest's Chief Judge, Judges and Contestants,
+		// because `generateSlotRows` filters on `enabled` and not on `template_id`.
+		.where(
+			and(
+				eq(roleDefinitions.clubId, input.clubId),
+				isNull(roleDefinitions.templateId),
+			),
+		)
 		.orderBy(asc(roleDefinitions.sortOrder));
 
 	// Existing meetings' local dates (any status) occupy their calendar date.
