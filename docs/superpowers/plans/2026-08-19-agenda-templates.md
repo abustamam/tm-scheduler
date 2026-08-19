@@ -2936,7 +2936,9 @@ git commit -m "feat(templates): render a templated meeting's run sheet through o
 
 ### Task 10: The generic beat deck — **PR 2, not PR 1**
 
-> **This task ships in a SECOND pull request.** PR 1 ends at Task 13. In PR 1 the Present button is hidden for a meeting with a `template_id`, with a short note in its place ("Projected deck for this meeting type is coming"); a contest chair runs the night off the printed script. Land PR 1, then this.
+> **This task ships in a SECOND pull request.** PR 1 ends at Task 13. Land PR 1, then this.
+>
+> **PR 1's Present treatment (design review, 2026-08-19).** The Present control stays **visible and disabled** on a templated meeting — never removed. A control that exists on every other meeting and silently vanishes on this one reads as a bug, and #362 ("Offline mode did not work during a live meeting") shows this club already reads missing features as broken. Copy: `Present mode isn't available for a Speech Contest yet — print the agenda instead.` Print gets visual emphasis on templated meetings, because the printed run sheet IS what a contest chair uses that night. Accessibility: `aria-disabled` with the reason wired through `aria-describedby`, not a dimmed `div` a screen reader skips silently.
 >
 > Two fixes to fold in when you build it, both from the eng review: the `beat` slide's `label` and `who` were the same value (drop `label`, keep `who` — and see #463, which is the same complaint about `AgendaRow.who` generally); and the `·`-stripping hedge below is unnecessary — verified at `agenda-runsheet.ts:1697` that a section band takes the `renderUnowned` arm and emits a bare `owner.roleName` with no assignee suffix, because no slot can carry `SECTION_ROLE_KEY`.
 
@@ -3450,6 +3452,72 @@ Expected: FAIL — cannot resolve `./meeting-template-dialog`.
 
 Create `src/components/agenda/meeting-template-dialog.tsx`. Open `src/components/agenda/meeting-meta-dialog.tsx` first and copy its Dialog structure, imports and button conventions exactly.
 
+### Design spec (from the 2026-08-19 design review)
+
+**Reuse `meeting-meta-dialog.tsx`'s vocabulary, don't reinvent it:** `Dialog` / `DialogContent` / `DialogHeader` / `DialogTitle` / `DialogFooter` / `DialogClose` from `#/components/ui/dialog`, `Loader2` from `lucide-react` for pending, `sonner`'s `toast` for success, and its `errMessage(err: unknown)` helper for the failed state.
+
+**Templates render as a radio list, not cards.** Two options do not need a card mosaic; a bordered card per template turns a choice into a mini dashboard for no gain.
+
+**Hierarchy — people first, counts second.** The officer must leave knowing they have a message to send, because a released member **cannot be notified by the app** (`notifications.slot_id` cascades with the slot). The dialog is the only mechanism that gets those people told, so it leads with their names:
+
+```
+┌──────────────────────────────────────────────┐
+│ Change meeting type                       ✕  │
+├──────────────────────────────────────────────┤
+│ ○ Standard meeting            [Current]      │
+│ ● Speech Contest                             │
+│   A club contest: prepared speeches, …       │
+├──────────────────────────────────────────────┤
+│ ⚠ Ada Lovelace and Grace Hopper will lose    │  ← 1st: WHO
+│   the roles they accepted.                   │
+│   They won't be told automatically —         │  ← 2nd: the TASK
+│   message them after you switch.             │
+│                                              │
+│   Also: removes 7 unfilled roles,            │  ← 3rd: counts, muted
+│   adds 14 contest roles.                     │
+│   Speeches stay attached to their speakers.  │  ← reassurance
+├──────────────────────────────────────────────┤
+│              [Cancel]  [Release 2 roles and  │
+│                         switch]              │
+└──────────────────────────────────────────────┘
+```
+
+**Copy, verbatim.** No internal vocabulary — "release" is a function name (`releaseSlot`), not a word a member-facing screen may use except in the button, where it is paired with the count so it reads as an action rather than a term of art.
+
+| Situation | String |
+|---|---|
+| Claims will be lost | `{names} will lose the roles they accepted.` (Intl.ListFormat for the join) |
+| Always, when claims lost | `They won't be told automatically — message them after you switch.` |
+| Counts line (muted) | `Also: removes {n} unfilled roles, adds {m} contest roles.` |
+| Speeches attached | `Speeches stay attached to their speakers.` |
+| No claims at all | `No one has claimed a role yet. This adds {m} roles and removes {n} empty ones.` |
+| Apply, claims > 0 | `Release {n} roles and switch` |
+| Apply, no claims | `Switch to {template name}` |
+| Second confirm | `Release {n} roles?` / `{names} will need to be told.` / `[Go back] [Yes, switch]` |
+| Failed | `Couldn't load what this change would do.` + `[Retry]` |
+| Empty list | `Only the standard meeting is set up for this club. Meeting templates are added by GavelUp — ask if you need one.` |
+| Success toast | `Now a {template name}. {n} people need telling.` (or `Now a {template name}.` with no claims) |
+
+**Apply is `variant="destructive"`** and, when `claimedSlotsReleased > 0`, requires a **second confirm step** inside the same dialog. With zero claims it stays one tap — friction scales with damage, so the common case never trains anyone to click through warnings.
+
+**State table.**
+
+| State | What the user SEES |
+|---|---|
+| Loading | `Loader2` spinner + "Checking what this would change…"; Apply disabled |
+| Loaded, no claims | Counts line only, single-tap Apply |
+| Loaded, claims | Names first, warning icon, destructive Apply, second confirm |
+| Empty (no templates) | The empty string above; only "Standard meeting" selectable |
+| Failed | `errMessage(err)` + Retry; Apply disabled |
+| Pending | Apply shows `Loader2`, disabled; Cancel disabled |
+| Success | Dialog closes, `sonner` toast, router invalidated so the agenda re-renders |
+
+**Accessibility and 375px.** Member names are **plain text, never anchors** — `src/styles.css`'s unlayered `a` rule beats layered utilities and would repaint them link-teal (CLAUDE.md). Focus moves to the dialog on open and returns to the trigger on close; the destructive confirm gets initial focus on "Go back", not "Yes". Buttons are ≥44px tall. The released-names block scrolls inside `max-h-40 overflow-y-auto` rather than pushing the footer off a phone screen. The warning icon is decorative (`aria-hidden`) — the sentence carries the meaning.
+
+**Entry point.** Add it to the meeting's **officer action stack, beside "Edit meeting"** — not as a ninth chip on the toolbar, which #541 already tracks as overloaded. "Change meeting type" is a sibling of editing the meeting's meta, not of printing it. Flagged for you: if #541's IA work lands first, this item moves with that group rather than being re-placed.
+
+---
+
 Required behaviour, all covered by the tests above:
 
 1. A list of choices: "Standard meeting" (`templateId: null`) plus one row per template, each showing `name` and `description`, with the current one badged "Current".
@@ -3666,7 +3734,7 @@ Synthesized from the 2026-08-19 eng review. Each derives from a specific finding
 | CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | — |
 | Codex Review | `/codex review` | Independent 2nd opinion | 0 | — | — |
 | Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | ISSUES_OPEN (PLAN) | 6 issues, 2 critical gaps, all folded |
-| Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | — |
+| Design Review | `/plan-design-review` | UI/UX gaps | 1 | ISSUES_OPEN (FULL) | score: 4/10 → 8/10, 2 decisions |
 | DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | — |
 
 **Scope:** SCOPE_REDUCED — split into two PRs at the deck (PR 1 = Tasks 1-9, 11, 12, 13; PR 2 = Task 10).
@@ -3675,8 +3743,11 @@ Synthesized from the 2026-08-19 eng review. Each derives from a specific finding
 
 **Critical gaps found (both closed in-plan):** a templated meeting whose content fails to load rendering the standard run-of-show against contest slots and printing a near-empty sheet; and a failed preview leaving a blank dialog with no message and no recovery.
 
-**VERDICT:** ENG REVIEW COMPLETE — 6 issues found and folded, 2 unresolved decisions below. Not CLEAR until those are settled.
+**DESIGN:** 4/10 → 8/10. Two decisions folded into Task 12 and Task 10's PR-1 note: people-first copy with friction scaled to damage (every string written verbatim, plus a state table, 375px behaviour and focus/contrast rules), and a visible-but-disabled Present control on templated meetings rather than a silently missing one. The design finding that drove the rest: released members **cannot be notified by the app**, so the dialog copy IS the notification mechanism and must hand the officer a task, not a number.
+
+**VERDICT:** ENG + DESIGN REVIEWS COMPLETE — 6 engineering issues folded, design 4/10 → 8/10. Not CLEAR: 3 unresolved decisions below.
 
 **UNRESOLVED DECISIONS:**
 - Outside voice never ran. The Claude subagent fallback terminated on an API session limit before producing findings, and Codex is not installed. Nothing independent has read this plan — re-run `/plan-eng-review` or `/codex review` after the limit resets if you want that check before implementing.
-- TODOS.md proposals were not walked through individually. Three candidates are recorded as T7/T10 above and in Task 13's TODOS block rather than being agreed one by one: the re-sync script's operational burden, the stale CLAUDE.md Codex claim, and measuring the Task 2 caps before Phase 2 exposes a template editor.
+- TODOS.md proposals were not walked through individually in either review. Candidates are recorded as T7/T10 above and in Task 13's TODOS block rather than being agreed one by one: the re-sync script's operational burden, the stale CLAUDE.md Codex claim, and measuring the Task 2 caps before Phase 2 exposes a template editor.
+- Design passes 5 and 6 stay below 8 by choice. No `DESIGN.md` exists, so design-system alignment rests on copying `meeting-meta-dialog.tsx` rather than on stated tokens; `/design-consultation` would close that but was judged out of proportion to one dialog. Responsive and accessibility are now specified for this dialog only, not audited across the surfaces it sits in.
