@@ -209,10 +209,9 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
 - Smaller residue from the same review, none blocking: plan mode's `DropdownMenuItem`s are
   ungated where roll mode's are now gated (`meeting-attendance-panel.tsx:100-106`; `writeRung` has
   no `writesLocked` precondition while its sibling `contacted` does); `RollAttendanceRow` and
-  `AttendanceRow` duplicate the same row shell; `projectMinutes` (`src/lib/roll-attendance.ts:47`)
-  hand-copies the online/offline branch from `meeting-minutes.tsx` and its own comment concedes a
-  comment enforces nothing — extract one shared `projectOfflineMinutes` so drift becomes
-  compiler-visible; the roll chips' `aria-label` is `"<name> status"`, which REPLACES the visible
+  `AttendanceRow` duplicate the same row shell; ~~`projectMinutes` hand-copies the online/offline branch
+  from `meeting-minutes.tsx`~~ — DONE, extracted to `src/lib/project-minutes.ts` and imported by
+  both surfaces during the review rounds, so the drift this asked about is now compiler-visible; the roll chips' `aria-label` is `"<name> status"`, which REPLACES the visible
   text for assistive tech so a screen-reader user never hears "Present?" vs "Present"; the chips
   are `size="sm"` (32px) against a ~44px thumb target; and neither mode renders an empty-state
   fallback for a club with zero rows, while the Guests group and the read-only record both do.
