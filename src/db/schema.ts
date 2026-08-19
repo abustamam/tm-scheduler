@@ -11,6 +11,7 @@ import {
 	pgEnum,
 	pgTable,
 	primaryKey,
+	real,
 	text,
 	timestamp,
 	uniqueIndex,
@@ -73,6 +74,15 @@ export const meetingStatusEnum = pgEnum("meeting_status", [
 	"cancelled",
 	"completed",
 ]);
+// What one row of a meeting template's run-of-show is (#agenda-templates).
+// `section` is a full-width band ("PREPARED SPEECH CONTEST"), `role` names a
+// template role that presents it, `event` is a beat nobody owns (a minute of
+// silence, a break).
+export const templateBeatKindEnum = pgEnum("template_beat_kind", [
+	"section",
+	"role",
+	"event",
+]);
 export const roleCategoryEnum = pgEnum("role_category", [
 	"leadership",
 	"speaker",
@@ -117,6 +127,10 @@ export const activityActionEnum = pgEnum("activity_action", [
 	// on removal — which is exactly the moment a trail matters, since ADR-0024's
 	// posture rests on showing who represented authorization and acting on a
 	// complaint. `detail` carries the mime and byte length, never the bytes.
+	// A meeting's shape was switched to (or away from) a meeting template
+	// (#agenda-templates). `detail` carries `{ templateId }`, null when the
+	// meeting was converted back to the club's standard shape.
+	"meeting_template_set",
 	"club_logo_set",
 	"club_logo_removed",
 	// Officer outreach tracking (#340): a member was marked "contacted" for a
@@ -762,6 +776,18 @@ export const meetings = pgTable(
 		// meetings in batches, so a later cancellation would invalidate every
 		// stored number after it.
 		meetingNumber: integer("meeting_number"),
+		// The meeting template this meeting's shape comes from (#agenda-templates).
+		// NULL — the overwhelming majority — is the standard meeting and reads the
+		// code-derived RUN_OF_SHOW exactly as before templates existed. A templated
+		// meeting draws its slots from the template's materialized role definitions
+		// and its agenda rows from `meeting_template_beats`.
+		//
+		// ON DELETE RESTRICT so a template a past meeting was run from can never be
+		// deleted; disable it instead (`meeting_templates.enabled`).
+		templateId: uuid("template_id").references(
+			(): AnyPgColumn => meetingTemplates.id,
+			{ onDelete: "restrict" },
+		),
 		notes: text("notes"),
 		// Free-text club announcements (one per line), shown on the meeting
 		// agenda, the printable agenda, and the present-mode Announcements slide.
@@ -820,15 +846,41 @@ export const roleDefinitions = pgTable(
 		// sheet since #445. NULL for a club-invented custom role, which has no
 		// canonical identity to key on; those bind by name instead.
 		key: text("key"),
+		// The meeting template that owns this role definition, NULL for the club's
+		// own standard roles — which is every row that existed before agenda
+		// templates. A template's roles are COPIED here on first use because
+		// `role_slots.role_definition_id` is NOT NULL and restricting, so a
+		// claimable contest role has to be a real row (spec D2).
+		//
+		// Every reader that selects role definitions by club is choosing a SLOT
+		// SOURCE and must scope on this, not just the admin listing — leaving it
+		// unscoped puts the contest's Chief Judge and Contestants on every
+		// standard meeting created afterwards.
+		//
+		// ON DELETE RESTRICT: a template whose roles are materialized somewhere
+		// cannot be deleted out from under the slots referencing them. Disable it.
+		templateId: uuid("template_id").references(
+			(): AnyPgColumn => meetingTemplates.id,
+			{ onDelete: "restrict" },
+		),
 	},
 	(t) => [
 		index("role_definitions_club_idx").on(t.clubId),
-		// One row per (club, key) among the standard roles. PARTIAL (WHERE key IS
-		// NOT NULL) so the many custom roles with a NULL key are unconstrained and
-		// never collide — mirrors `meetings_club_number_unique` above.
+		// Every scoped query filters on BOTH columns; `role_definitions_club_idx`
+		// alone cannot serve them.
+		index("role_definitions_club_template_idx").on(t.clubId, t.templateId),
+		// TWO partial indexes, not one widened to (club_id, template_id, key).
+		// Postgres treats NULLs as DISTINCT, so folding template_id into a single
+		// index would leave every STANDARD role (template_id IS NULL) effectively
+		// unconstrained — a club could then hold two standard Timers and nothing
+		// would fail. Splitting keeps the original guarantee verbatim and adds the
+		// same guarantee per template (spec D3).
 		uniqueIndex("role_definitions_club_key_unique")
 			.on(t.clubId, t.key)
-			.where(sql`${t.key} is not null`),
+			.where(sql`${t.key} is not null and ${t.templateId} is null`),
+		uniqueIndex("role_definitions_club_template_key_unique")
+			.on(t.clubId, t.templateId, t.key)
+			.where(sql`${t.key} is not null and ${t.templateId} is not null`),
 	],
 );
 
@@ -885,6 +937,121 @@ export const roleSlots = pgTable(
 		check(
 			"role_slots_single_assignee",
 			sql`${t.assignedMemberId} is null or ${t.assignedGuestId} is null`,
+		),
+	],
+);
+
+// ---------------------------------------------------------------------------
+// Meeting templates — a named bundle of a role set plus a run-of-show, for a
+// meeting whose SHAPE differs from the club's standard night (a speech
+// contest). `meetings.template_id` NULL is the standard meeting and runs the
+// code-derived `RUN_OF_SHOW` (src/lib/agenda-runsheet.ts) exactly as before;
+// only a templated meeting reads these tables.
+// See docs/superpowers/specs/2026-08-19-agenda-templates-design.md.
+// ---------------------------------------------------------------------------
+
+export const meetingTemplates = pgTable(
+	"meeting_templates",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		// NULL = a GLOBAL template available to every club. Non-null = owned by
+		// that club (Phase 2 — nothing writes club-scoped rows yet, but the reads
+		// already admit them so Phase 2 needs no migration).
+		clubId: uuid("club_id").references(() => clubs.id, {
+			onDelete: "cascade",
+		}),
+		// Stable identity, e.g. "speech_contest" — what the seed is idempotent on.
+		key: text("key").notNull(),
+		name: text("name").notNull(),
+		description: text("description"),
+		// Applied to `meetings.length_minutes` on conversion when set; NULL leaves
+		// the meeting's existing length alone.
+		defaultLengthMinutes: integer("default_length_minutes"),
+		sortOrder: integer("sort_order").notNull().default(0),
+		// Disable, never delete — a past meeting references its template and
+		// `meetings.template_id` is ON DELETE RESTRICT. Mirrors the same
+		// disable-not-delete rule `role_definitions.enabled` exists for.
+		enabled: boolean("enabled").notNull().default(true),
+		createdAt: timestamp("created_at").defaultNow().notNull(),
+	},
+	(t) => [
+		// TWO partial indexes rather than one on (club_id, key): Postgres treats
+		// NULLs as distinct, so a single index would let two GLOBAL templates share
+		// a key. Same reasoning as the role_definitions pair above.
+		uniqueIndex("meeting_templates_global_key_unique")
+			.on(t.key)
+			.where(sql`${t.clubId} is null`),
+		uniqueIndex("meeting_templates_club_key_unique")
+			.on(t.clubId, t.key)
+			.where(sql`${t.clubId} is not null`),
+	],
+);
+
+// The template's own role set. Deliberately the same shape as `RoleSeed`
+// (src/lib/role-template.ts) so materializing into `role_definitions` is a
+// field-for-field copy.
+export const meetingTemplateRoles = pgTable(
+	"meeting_template_roles",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		templateId: uuid("template_id")
+			.notNull()
+			.references(() => meetingTemplates.id, { onDelete: "cascade" }),
+		key: text("key").notNull(),
+		name: text("name").notNull(),
+		category: roleCategoryEnum("category").notNull(),
+		defaultCount: integer("default_count").notNull().default(1),
+		sortOrder: integer("sort_order").notNull().default(0),
+		isSpeakerRole: boolean("is_speaker_role").notNull().default(false),
+		description: text("description"),
+	},
+	(t) => [
+		uniqueIndex("meeting_template_roles_key_unique").on(t.templateId, t.key),
+	],
+);
+
+// The template's FLAT run-of-show. No `requiresAnyOf` / `requiresGroup` /
+// `fallbacks` — a contest's shape is fixed by the contest rules and does not
+// adapt to which roles a club runs, which is the whole reason the standard
+// run-of-show needs those gates and this does not (spec D1).
+export const meetingTemplateBeats = pgTable(
+	"meeting_template_beats",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		templateId: uuid("template_id")
+			.notNull()
+			.references(() => meetingTemplates.id, { onDelete: "cascade" }),
+		sortOrder: integer("sort_order").notNull(),
+		kind: templateBeatKindEnum("kind").notNull(),
+		// The activity ("Contest Briefing") or, for kind='section', the band title.
+		label: text("label").notNull(),
+		detail: text("detail"),
+		minutes: integer("minutes").notNull().default(0),
+		// Binds to `meeting_template_roles.key` — whose holder presents this beat.
+		// NULL for an event or section beat nobody owns.
+		roleKey: text("role_key"),
+		// Consecutive beats sharing a non-null value form ONE block emitted once
+		// per slot of that role, each iteration bound to exactly one slot — so a
+		// contest agenda is right for however many contestants actually signed up
+		// rather than for the number someone typed when the template was authored
+		// (spec D4).
+		repeatsRoleKey: text("repeats_role_key"),
+		// The single squishy beat, if the template has one. At most one per
+		// template — validated on write, not enforced by the database.
+		flex: boolean("flex").notNull().default(false),
+		// Timer-card marks in minutes, all three or none. `real`, not `numeric`:
+		// drizzle's `numeric` returns a STRING unless a mode flag converts it, and
+		// this schema uses `numeric` nowhere. Marks need fractions (the evaluation
+		// window is 2 / 2.5 / 3), so `integer` will not do, and float imprecision
+		// is irrelevant against a card a human holds up.
+		markGreen: real("mark_green"),
+		markYellow: real("mark_yellow"),
+		markRed: real("mark_red"),
+	},
+	(t) => [
+		uniqueIndex("meeting_template_beats_order_unique").on(
+			t.templateId,
+			t.sortOrder,
 		),
 	],
 );
