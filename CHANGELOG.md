@@ -2,6 +2,29 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.20.0.0] - 2026-08-18
+
+### Added
+
+- **Take the roll from the same rail you chased people on.** On meeting day the attendance panel switches from "who says they're coming" to "who is actually here", and anyone who told you they were coming arrives pre-filled as a dashed `Present?` you confirm with one tap. Roll call is the one job done standing up with a phone in one hand, so the common case is a single tap per member — and the exceptions, the person who said yes and did not appear, are one tap away on the chip's own menu rather than something you have to undo afterwards.
+- **Guests get counted where you are already standing.** Adding a visitor who walked in, or removing one who did not, now happens in the panel beside the members instead of in a separate card further down the page. A returning guest is picked from the club's own list rather than typed again, so they stay one person in your records instead of turning into three.
+- **Roll call works when the venue's wifi does not.** Every tap is saved on the device and syncs when the connection comes back, and the panel tells you how many changes are still waiting, whether it is syncing, and if something failed — with a Retry you can actually reach. Church halls and community centres are where this club software runs; a tap that vanishes because the router did is a member marked wrong in the minutes.
+
+### Changed
+
+- **Attendance is recorded in exactly one place.** The Minutes card no longer has its own attendance controls; it points at the panel and, for members who cannot edit, shows the record read-only with the counts and everyone's status. Two places to mark the same person is how a club ends up with someone present in one screen and absent in the other, and the emailed minutes disagreeing with both.
+- **Attendance can still be corrected after a meeting is completed.** Minutes are often finished days later, and fixing a mis-marked member no longer means reopening the meeting first.
+- **A member who has left the club still appears on a past meeting's roll.** If they were marked present in March and left in April, opening March in May shows their row and counts them — matching what the minutes PDF and the emailed minutes have always printed.
+
+### Fixed
+
+- **"You attended this meeting" now means you were actually marked present.** It used to be inferred from what you had said you *planned* to do, so anyone who never declared they could not come was told they attended whether or not they turned up. It now reads only the recorded answer, and says nothing at all when nobody recorded one — rather than guessing on your behalf. (#548)
+- **A roll tap can no longer be silently dropped.** Recording someone while another save was still in flight used to do nothing at all, with no message: the controls now dim while a save is in progress, so the panel never looks ready when it is not.
+- **A queued tap can no longer overwrite a later one.** If a save was waiting to sync and you then recorded a different answer for the same member, the older one could come back and win when the connection returned. The waiting queue is now the single path every save takes, so the last answer you gave is the one that sticks.
+- **Moving a Table Topics speaker no longer shifts them twice** when the change had to be re-sent after a dropped connection, which quietly reordered the speaking list in the saved minutes.
+- **Opening a different meeting no longer carries the previous one's unsaved roll with it.** A tap saved on the device for one meeting could be applied to whichever meeting you opened next.
+- **A screen reader now hears the answer, not just the name.** Every status control announced only "<member> status", so the one thing the rail exists to convey — Present, Absent, Excused, Coming — reached nobody using assistive technology.
+
 ## [1.19.0.0] - 2026-08-18
 
 ### Added

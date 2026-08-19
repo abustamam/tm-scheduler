@@ -274,9 +274,8 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
   and on re-run. Same failure mode as the bug this entry is about, different shape, so the original
   sweep could not have seen it. Re-sweep for reads scoped by a HARDCODED literal, not only for
   reads missing a filter.
-  **Completed:** shipped with the planned-attendance roll-mode release (2026-08-17) — rode
-  along with that branch rather than shipping as its own version, so the version it lands
-  under is whatever `/ship` assigns that PR.
+  **Completed:** v1.20.0.0 (2026-08-18) — rode along with the roll-mode release rather than
+  shipping as its own version.
 
 - An impersonation session outlived the superadmin's own access. `getActiveImpersonationForUser`
   selected on `superadminUserId` / `endedAt` / `expiresAt` and never re-read `user.is_superadmin`,
