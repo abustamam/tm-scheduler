@@ -377,6 +377,15 @@ Add `"meeting_template_set"` to `activityActionEnum`'s value list. snake_case, m
 existing value (`meeting_create`, `meeting_edit`, `vote_open`). `bun run db:generate` emits an
 `ALTER TYPE … ADD VALUE`; confirm it appears in the generated SQL.
 
+**On the transaction question** (checked 2026-08-19, so nobody has to re-derive it): drizzle's
+`migrate()` (`drizzle-orm/node-postgres/migrator`, used by `scripts/migrate.ts`) runs migrations
+inside a transaction, and Postgres forbade `ALTER TYPE … ADD VALUE` in a transaction block before
+v12. This repo runs **postgres:17**, where it is allowed. The remaining v12+ restriction is that
+the new value cannot be USED in the same transaction that adds it — which does not apply here:
+the value is added by this migration and first written at runtime by Task 6, in a different
+transaction. Safe as written. If a future migration ever needs to backfill rows WITH this value,
+that backfill must be a separate migration file.
+
 - [ ] **Step 5: Generate the migration and sync both databases**
 
 ```bash
@@ -1236,7 +1245,7 @@ import {
 import type {
 	TemplateBeatRow,
 	TemplateRoleRow,
-} from "#/lib/agenda-template-beats";
+} from "#/lib/agenda-template-rows";
 import type { MeetingSlotDefs } from "./meeting-create-logic";
 
 type DbOrTx =
@@ -1477,9 +1486,22 @@ beats the contest's `test_speaker` at 70 and `contestant` at 80. So it adds a *s
 slot that renders nowhere on the contest sheet — and there is then **no way in the product to
 change the contestant count**, which is the whole premise of the repeat mechanism.
 
-Use the exported `roleDefScope(clubId, templateId)` from Step 3 at every site. The two
-calendar-generation readers pass `null` unconditionally: a templated meeting is always CONVERTED,
-never auto-created. The three meeting-scoped readers must load `meetings.template_id` first.
+Use the exported `roleDefScope(clubId, templateId)` from Step 3 at every site — but **two of the
+six need a signature change first**, verified 2026-08-19:
+
+- `clubRoles(clubId)` (`slots-logic.ts:36`) and `clubRoleDefs(clubId)` (`slots-logic.ts:144`)
+  take **only a club id**. Neither can see the meeting, so neither can scope. Both become
+  `clubRoles(clubId, templateId)` / `clubRoleDefs(clubId, templateId)`, and every caller resolves
+  the meeting first — `slots-logic.ts` already has a `meetingClub`-style helper returning
+  `{ clubId: meeting.clubId }` (`:140`), so widen that to return `templateId` too and thread it
+  through. Do NOT default the parameter to `null`: a defaulted parameter is exactly how a caller
+  silently keeps the old wrong behaviour.
+- `meetings-logic.ts:113` (`applyCreateMeeting`) has the meeting under construction, so it passes
+  its own `templateId` — which is `null` for every create path in Phase 1.
+- `batch-meetings-logic.ts:53` and `schedule-topup-logic.ts:69` pass `null` unconditionally: a
+  templated meeting is always CONVERTED, never auto-created. State that in a comment at both
+  sites so the next reader does not have to re-derive it.
+- `role-definitions-logic.ts:59` takes `template_id IS NULL` (Step 5).
 
 Also correct the same sentence in the spec's "Changed: `role_definitions`" section, which is
 where the wrong claim originated.
@@ -2322,7 +2344,7 @@ Create `src/lib/contest-template.test.ts`:
 
 ```ts
 import { describe, expect, it } from "vitest";
-import { templateBeatsToRunOfShow } from "./agenda-template-beats";
+import { buildTemplateRows } from "./agenda-template-rows";
 import { CONTEST_TEMPLATE, CONTEST_TEMPLATE_KEY } from "./contest-template";
 import { MAX_TEMPLATE_BEATS, MAX_TEMPLATE_ROLES } from "./meeting-template-limits";
 
@@ -2377,9 +2399,15 @@ describe("contest template seed", () => {
 				assigneeName: null, speechTitle: null, projectLevel: null,
 				minMinutes: null, maxMinutes: null, evaluatesSlotId: null, evaluates: null,
 			}));
-		const four = templateBeatsToRunOfShow(CONTEST_TEMPLATE.beats, roles, slotsFor(4));
-		const seven = templateBeatsToRunOfShow(CONTEST_TEMPLATE.beats, roles, slotsFor(7));
-		expect(seven.length).toBeGreaterThan(four.length);
+		// FINAL ROW counts, with exact expected values. `toBeGreaterThan` was
+		// what let the N² defect through: it is true for both correct and
+		// quadratic output. Each of the three contestant blocks emits one
+		// contestant row plus one silence row per contestant, so the delta
+		// between 4 and 7 contestants is 3 blocks x 3 extra x 2 rows = 18.
+		const four = buildTemplateRows(CONTEST_TEMPLATE.beats, roles, slotsFor(4));
+		const seven = buildTemplateRows(CONTEST_TEMPLATE.beats, roles, slotsFor(7));
+		expect(seven.length - four.length).toBe(18);
+		expect(four.filter((r) => r.who.startsWith("Contestant"))).toHaveLength(12);
 	});
 
 	it("has a stable key", () => {
@@ -2417,7 +2445,7 @@ Create `src/lib/contest-template.ts`. Keep it db-free, like `role-template.ts`.
  * so the speech record, the project picker and Pathways attribution all work
  * against a contestant slot with no special-casing.
  */
-import type { TemplateBeatRow, TemplateRoleRow } from "./agenda-template-beats";
+import type { TemplateBeatRow, TemplateRoleRow } from "./agenda-template-rows";
 
 export const CONTEST_TEMPLATE_KEY = "speech_contest";
 
@@ -2694,7 +2722,7 @@ git commit -m "feat(templates): seed the global Speech Contest template"
 - Modify: `src/server/meetings.ts` (the `loadMeetingDetail` payload, ~line 234 and ~line 405)
 - Modify: `src/routes/club.$clubId.meeting.$meetingId.tsx:375`
 - Modify: `src/routes/club.$clubId_.meeting.$meetingId.print.tsx:156`
-- Test: `src/lib/agenda-template-runsheet.test.ts`
+- Test: `src/lib/agenda-template-rows-e2e.test.ts`
 
 **Interfaces:**
 - Consumes: `resolveAgendaRows` (Task 3); `loadTemplateContent` (Task 5).
@@ -2702,7 +2730,7 @@ git commit -m "feat(templates): seed the global Speech Contest template"
 
 - [ ] **Step 1: Write the failing test**
 
-Create `src/lib/agenda-template-runsheet.test.ts`:
+Create `src/lib/agenda-template-rows-e2e.test.ts`:
 
 ```ts
 /**
@@ -2807,7 +2835,7 @@ describe("contest run sheet", () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-bunx vitest run src/lib/agenda-template-runsheet.test.ts
+bunx vitest run src/lib/agenda-template-rows-e2e.test.ts
 ```
 
 Expected: FAIL until Task 3's `resolveAgendaRows` exists. This suite is the end-to-end net over the pure pipeline; it MUST assert final row counts, because asserting an intermediate beat list is exactly what let the N² defect through.
@@ -2877,7 +2905,7 @@ Both routes now build their run-of-show through one function, which is the point
 - [ ] **Step 5: Run the full agenda suite**
 
 ```bash
-bunx vitest run src/lib/agenda-template-runsheet.test.ts src/lib/agenda-runsheet.test.ts src/lib/agenda-parity.test.ts src/lib/agenda-slides.test.ts
+bunx vitest run src/lib/agenda-template-rows-e2e.test.ts src/lib/agenda-runsheet.test.ts src/lib/agenda-parity.test.ts src/lib/agenda-slides.test.ts
 TEST_DATABASE_URL="postgresql://dev:dev@localhost:5433/tm_test" bunx vitest run src/server/meetings-plan-payload.integration.test.ts
 bun run typecheck
 ```
@@ -2887,7 +2915,7 @@ Expected: all PASS. `agenda-parity.test.ts` must still pass unchanged — a stan
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/server/meetings.ts src/routes/club.\$clubId.meeting.\$meetingId.tsx src/routes/club.\$clubId_.meeting.\$meetingId.print.tsx src/lib/agenda-template-runsheet.test.ts
+git add src/server/meetings.ts src/routes/club.\$clubId.meeting.\$meetingId.tsx src/routes/club.\$clubId_.meeting.\$meetingId.print.tsx src/lib/agenda-template-rows-e2e.test.ts
 git commit -m "feat(templates): render a templated meeting's run sheet through one seam"
 ```
 
@@ -2899,7 +2927,7 @@ git commit -m "feat(templates): render a templated meeting's run sheet through o
 >
 > **PR 1's Present treatment (design review, 2026-08-19).** The Present control stays **visible and disabled** on a templated meeting — never removed. A control that exists on every other meeting and silently vanishes on this one reads as a bug, and #362 ("Offline mode did not work during a live meeting") shows this club already reads missing features as broken. Copy: `Present mode isn't available for a Speech Contest yet — print the agenda instead.` Print gets visual emphasis on templated meetings, because the printed run sheet IS what a contest chair uses that night. Accessibility: `aria-disabled` with the reason wired through `aria-describedby`, not a dimmed `div` a screen reader skips silently.
 >
-> Two fixes to fold in when you build it, both from the eng review: the `beat` slide's `label` and `who` were the same value (drop `label`, keep `who` — and see #463, which is the same complaint about `AgendaRow.who` generally); and the `·`-stripping hedge below is unnecessary — verified at `agenda-runsheet.ts:1697` that a section band takes the `renderUnowned` arm and emits a bare `owner.roleName` with no assignee suffix, because no slot can carry `SECTION_ROLE_KEY`.
+> Two fixes to fold in when you build it, both from the eng review: the `beat` slide's `label` and `who` were the same value (drop `label`, keep `who` — and see #463, which is the same complaint about `AgendaRow.who` generally); and the `·`-stripping hedge below is obsolete — since the Task 3 rewrite a section is `row.section === true` with `who` set to the bare label, so there is no assignee suffix to strip and no synthetic role key involved.
 
 
 **Files:**
@@ -3058,7 +3086,7 @@ function buildTemplateBeatSlides(input: {
 	const slides: Slide[] = [];
 	let section: string | null = null;
 	for (const row of rows) {
-		if (row.roleKey === SECTION_ROLE_KEY) {
+		if (row.section) {
 			section = row.who;
 			continue;
 		}
@@ -3683,7 +3711,7 @@ Open a seeded club's upcoming meeting, its `/print` route and its `/present` rou
 
 **Known soft spots, flagged rather than hidden.** Two places tell the implementer to read the surrounding code and match it instead of trusting a snippet: the `createServerFn` call shape (Task 7, now corrected to the function form this repo actually uses) and the present-mode slide markup (Task 10). Task 11's soft spot was a factual error and is fixed — this repo's agenda print tests render `<MeetingAgendaPrint>` directly and there is no route-wrapper helper for them.
 
-**Type consistency.** `TemplateBeatRow` / `TemplateRoleRow` are defined once in Task 3 and used verbatim in Tasks 4, 5, 8, 9, 10. `ConversionPlan` / `ReleasedHolder` are defined in Task 6 and consumed in Tasks 7 and 12. `SECTION_ROLE_KEY` is defined in Task 3 and consumed in Task 10. `MeetingSlotDefs` is the existing export from `meeting-create-logic.ts` and is not redefined. `roleDefScope` is defined in Task 5 and consumed by Task 6's preview.
+**Type consistency.** `TemplateBeatRow` / `TemplateRoleRow` are defined once in Task 3 (`src/lib/agenda-template-rows.ts`) and used verbatim in Tasks 5, 8, 9, 10. `buildTemplateRows` and `resolveAgendaRows` replace the deleted `templateBeatsToRunOfShow` / `resolveRunOfShow`. `ConversionPlan` / `ReleasedHolder` are defined in Task 6 and consumed in Tasks 7 and 12. `AgendaRow.section` is added in Task 3 and consumed in Tasks 4 and 10. `MeetingSlotDefs` is the existing export from `meeting-create-logic.ts` and is not redefined. `roleDefScope` is defined in Task 5 and consumed by Task 6's preview.
 
 ---
 
@@ -3705,7 +3733,7 @@ Synthesized from the 2026-08-19 eng review. Each derives from a specific finding
   - Verify: preview and apply both route through `roleDefScope`; "resolves EMPTY for an un-materialized template" passes
 - [ ] **T4 (P1, human: ~30min / CC: ~5min)** — server/meetings — Throw when a templated meeting's content fails to load
   - Surfaced by: Failure modes — **critical gap**: `template: null` reads as "standard meeting", so a contest would silently render standard beats against contest slots and print a near-empty sheet
-  - Files: `src/server/meetings.ts`, `src/lib/agenda-template-runsheet.test.ts`
+  - Files: `src/server/meetings.ts`, `src/lib/agenda-template-rows-e2e.test.ts`
   - Verify: `resolveAgendaRows` with an empty template returns `[]`, not the standard run-of-show
 - [ ] **T5 (P1, human: ~1.5h / CC: ~12min)** — components/agenda — Three-state dialog with retry and a pending guard
   - Surfaced by: Tests — **critical gap**: a rejected preview left a blank panel, no message, no recovery, on a destructive-action confirmation
@@ -3761,8 +3789,18 @@ Also confirmed and fixed: `meetingStatusEnum` has no `"held"` (use `assertMeetin
 
 **VERDICT:** ENG + DESIGN + OUTSIDE VOICE COMPLETE — the plan was substantially rebuilt after the outside voice. Not CLEAR: findings 8, 10-13, 15 and parts of 16 are folded but **unverified by me**, and the revised Tasks 3/4 have not themselves been reviewed.
 
+**SECOND OUTSIDE PASS: attempted, FAILED.** A second subagent was dispatched against the rewrite and terminated on a weekly API limit before reading anything. I verified what I could by hand instead, and found three real defects in my own rewrite:
+
+1. **12 stale references.** Tasks 5, 8, 9, 10 and the Self-Review Notes still imported the deleted `agenda-template-beats.ts` / `templateBeatsToRunOfShow` / `SECTION_ROLE_KEY`. The first sweep only replaced `resolveRunOfShow`. Fixed.
+2. **Step 4b was under-specified.** `clubRoles(clubId)` (`slots-logic.ts:36`) and `clubRoleDefs(clubId)` (`:144`) take only a club id and cannot see a meeting, so "use `roleDefScope`" was not an instruction anyone could follow. Both need signature changes; now stated.
+3. **Task 8's seed test asserted `toBeGreaterThan`** on row counts — true for both correct and quadratic output, i.e. the same shape of unfalsifiable assertion that hid the N² defect. Now pins exact counts.
+
+Verified clean by hand: `numbered(roleName, index, multi)` matches the call; every object `buildTemplateRows` returns satisfies `AgendaRow`; Task 12a's two call sites and line numbers are exact; `ALTER TYPE … ADD VALUE` is safe here (postgres:17, and the value is not used in the adding transaction).
+
 **UNRESOLVED DECISIONS:**
-- The revised Tasks 3, 4, 5 Step 4b and 12a were written in response to the outside voice and have had **no independent review of their own**. Given the outside voice found two plan-breaking defects in work that had already passed two reviews, a second pass over the rewrite is worth its cost before implementing.
+- The rewrite has still had **no independent review**. I found three defects in it myself, which is evidence the rate is not zero, not evidence it is now clean. Run `/plan-eng-review` or a fresh outside voice against Tasks 3, 4, 5 and 12a after the weekly limit resets (2pm Pacific) before implementing.
+- Not checked by anyone: whether `buildTemplateRows`' repeat-block binding is correct when a block contains two role-owning rows or a role row whose `roleKey` differs from `repeatsRoleKey`. Unreachable from the seeded contest template, reachable from Phase 2's editor.
+- The circular import between `agenda-runsheet.ts` and `agenda-template-rows.ts` is asserted safe and untested. The plan names the fallback (extract shared types) but nobody has run `bun run typecheck` against it.
 - Outside-voice findings 8, 10-13, 15 and several in 16 are folded on the reviewer's word — I confirmed 7 of 16 directly. The deferrable-unique-index point (15) and the `applyFlex` Table-Topics hardcoding (13) in particular deserve a check.
 - TODOS.md proposals were not walked through individually in any review. Candidates: the re-sync script's operational burden, the stale CLAUDE.md Codex claim, measuring the Task 2 caps before Phase 2, and adding a composite FK from `meeting_template_beats.role_key` to `meeting_template_roles`.
 - Design passes 5 and 6 stay below 8 by choice. No `DESIGN.md` exists, so design-system alignment rests on copying `meeting-meta-dialog.tsx` rather than on stated tokens; `/design-consultation` would close that but was judged out of proportion to one dialog. Responsive and accessibility are now specified for this dialog only, not audited across the surfaces it sits in.
