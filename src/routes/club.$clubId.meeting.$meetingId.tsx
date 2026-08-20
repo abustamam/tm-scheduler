@@ -48,6 +48,7 @@ import { useOnlineStatus } from "#/hooks/use-online-status";
 import { buildRoleCounts, slotLabel } from "#/lib/agenda";
 import { applyFlex, resolveAgendaRows } from "#/lib/agenda-runsheet";
 import { buildSlideDeck } from "#/lib/agenda-slides";
+import { buildTemplateSlideDeck } from "#/lib/agenda-template-slides";
 import { buildPanelRoleMap, type PlanStatus } from "#/lib/attendance-panel";
 import { clubLogoUrl } from "#/lib/club-logo-url";
 import {
@@ -383,14 +384,28 @@ function MeetingView() {
 		typeof window === "undefined"
 			? `/club/${clubId}/meeting/${urlKey}/vote`
 			: `${window.location.origin}/club/${clubId}/meeting/${urlKey}/vote`;
-	// EMPTY for a templated meeting (#agenda-templates). `buildSlideDeck`
-	// composes slides by hand against the seven STANDARD role keys, so a contest
-	// would produce a title slide and a thank-you slide and nothing between —
-	// the same silent near-empty output the run sheet now throws on. The export
-	// menu hides its deck actions when the deck is empty; the projected view is
-	// guarded separately at the /present route, which is directly addressable.
+	// Which BUILDER, not whether to build (#agenda-templates PR 2). A templated
+	// meeting gets the beat-driven deck built from the printed run sheet's OWN
+	// rows — `flex.rows` is that same array, POST-flex, so the deck and the sheet
+	// cannot disagree about order or about a clamped duration. A standard meeting gets the standard deck,
+	// whose slides bind to the seven standard role keys a template does not have.
+	// Never a mix, and no longer ever empty: the export menu's deck actions gate
+	// on length, and an empty deck used to be how a contest hid them.
 	const deck = template
-		? []
+		? buildTemplateSlideDeck({
+				meeting,
+				club: {
+					name: clubName,
+					clubNumber,
+					district: clubDistrict,
+					timezone,
+					meetingSchedule: clubMeetingSchedule,
+					logoUrl,
+				},
+				rows: flex.rows,
+				nextMeetingAt,
+				meetingNumber,
+			})
 		: buildSlideDeck({
 				meeting,
 				club: {

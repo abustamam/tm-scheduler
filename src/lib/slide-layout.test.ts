@@ -405,6 +405,33 @@ describe("slideLayout bodies", () => {
 				awards: { kind: "awards", categories: ["Best Speaker"] },
 				guestComments: { kind: "guestComments" },
 				reminders: { kind: "reminders", text: "Dues are due." },
+				// The two templated-meeting kinds (#agenda-templates). Their headers
+				// come from CONTENT — a band title and a beat's `who` — rather than
+				// from a literal in `slideLayout`, so unlike every other kind here
+				// they cannot collide by a developer picking the same word twice.
+				// They are still listed because this fixture is the enrollment
+				// mechanism: a new kind does not compile until it appears, and that
+				// is the property worth keeping. What they CAN collide with is each
+				// other, or a standard header, if a template names a band
+				// "Announcements" — which is a template-authoring concern, checked on
+				// the real contest deck in agenda-template-slides.test.ts as
+				// no-two-ADJACENT-slides-agree.
+				templateSection: {
+					kind: "templateSection",
+					title: "PREPARED SPEECH CONTEST",
+				},
+				templateBeat: {
+					kind: "templateBeat",
+					label: "Contestant 1 · Ada Lovelace",
+					detail: "5–7 minutes",
+					minutes: 7,
+					timing: {
+						green: "5:00",
+						yellow: "6:00",
+						red: "7:00",
+						qualifies: "4:30–7:30",
+					},
+				},
 				thankYou: {
 					kind: "thankYou",
 					meetingSchedule: "2nd & 4th Thursday",
@@ -1064,5 +1091,117 @@ describe("slideLayout bodies", () => {
 				{ role: "muted", text: "Renew dues" },
 			]);
 		} else throw new Error("expected centered");
+	});
+});
+
+/**
+ * The two templated-meeting kinds (#agenda-templates PR 2).
+ *
+ * They exist so the whole template deck rides the ONE `slideLayout` switch every
+ * consumer already reads — the HTML presenter, the jump grid and `deckToPptx`,
+ * which needed no change at all because it only looks up the title slide and
+ * routes everything else through here. That is the property these tests protect:
+ * a template deck is a `Slide[]`, not a second rendering path.
+ */
+describe("templated-meeting layouts (#agenda-templates)", () => {
+	const bulletsOf = (slide: Slide) => {
+		const l = slideLayout(slide);
+		if (l.chrome !== "content" || l.body.form !== "bullets")
+			throw new Error("expected a bullets content body");
+		return l.body;
+	};
+
+	it("a section band is a dark splash, so a round announces itself", () => {
+		const l = slideLayout({
+			kind: "templateSection",
+			title: "PREPARED SPEECH CONTEST",
+		});
+		if (l.chrome !== "splash") throw new Error("expected a splash");
+		expect(l.headline).toBe("PREPARED SPEECH CONTEST");
+		expect(l.tone).toBe("dark");
+		// The crest belongs on the opening splash. Repeating it on five round
+		// dividers turns it into wallpaper, and the splash type forces the choice
+		// to be explicit rather than defaulted.
+		expect(l.logoUrl).toBeNull();
+	});
+
+	it("a beat leads with its own detail, then the timing", () => {
+		const body = bulletsOf({
+			kind: "templateBeat",
+			label: "Prepared speech 1 · Ada Lovelace",
+			detail: "5–7 minutes, judged",
+			minutes: 7,
+			timing: {
+				green: "5:00",
+				yellow: "6:00",
+				red: "7:00",
+				qualifies: "4:30–7:30",
+			},
+		});
+		expect(body.items[0]).toBe("5–7 minutes, judged");
+		expect(body.items[1]).toBe("Signals: 5:00 green · 6:00 yellow · 7:00 red");
+		// The ±30s grace window (#357) spelled out, because in a contest it is the
+		// disqualification rule rather than a courtesy — and the one number the
+		// room and the Chief Judge must not learn differently.
+		expect(body.items[2]).toBe("Qualifies: 4:30–7:30");
+		expect(body.link).toBeNull();
+	});
+
+	it("a timed beat never also prints the raw booked minutes", () => {
+		// Two numbers for one duration is how a surface starts contradicting
+		// itself: "Signals: 5:00 … 7:00" beside "Time: 7 min" invites the room to
+		// pick. The marks win when there are marks.
+		const body = bulletsOf({
+			kind: "templateBeat",
+			label: "Prepared speech",
+			detail: null,
+			minutes: 7,
+			timing: {
+				green: "5:00",
+				yellow: "6:00",
+				red: "7:00",
+				qualifies: "4:30–7:30",
+			},
+		});
+		expect(body.items.some((i) => i.startsWith("Time:"))).toBe(false);
+	});
+
+	it("an untimed beat still says how long it runs", () => {
+		const body = bulletsOf({
+			kind: "templateBeat",
+			label: "Call to order",
+			detail: null,
+			minutes: 2,
+			timing: null,
+		});
+		expect(body.items).toEqual(["Time: 2 min"]);
+	});
+
+	it("a zero-minute untimed beat prints no clock line at all", () => {
+		// A 0-minute beat is a cue, not a segment — "Time: 0 min" reads as a
+		// mistake rather than as information.
+		const body = bulletsOf({
+			kind: "templateBeat",
+			label: "Chair introduces the judges",
+			detail: null,
+			minutes: 0,
+			timing: null,
+		});
+		expect(body.items).toEqual([]);
+	});
+
+	it("names both kinds off their content, for the jump grid", () => {
+		expect(
+			slideName({ kind: "templateSection", title: "EVALUATION CONTEST" }),
+		).toBe("EVALUATION CONTEST");
+		expect(
+			slideName({
+				kind: "templateBeat",
+				label: "Prepared speech 2 · Grace Hopper",
+				detail: null,
+				minutes: 7,
+				timing: null,
+			}),
+		).toBe("Prepared speech 2 · Grace Hopper");
 	});
 });

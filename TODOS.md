@@ -80,16 +80,6 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
 
 ## Agenda templates
 
-- **PR 2: the projected deck for a templated meeting (plan Task 10).** `buildSlideDeck` composes
-  slides by hand against the seven standard role keys, so a contest would build a title slide and
-  a thank-you slide and nothing between. PR 1 guards both call sites instead — `/present` renders
-  an explainer pointing at Print, and the `.pptx` export gets an empty deck. Build the generic
-  beat-driven deck (one slide per section, one per row, reusing title/thank-you) and DELETE
-  `TemplatedMeetingNotice` plus the two guards. Two fixes to fold in: the beat slide's `label`
-  and `who` were the same value in the sketch (keep `who`; see #463), and sections are now
-  `row.section === true`, not a synthetic role key.
-  **Priority:** P2
-
 - **`scripts/resync-template-roles.ts` is specified but not written.** Materialization is
   copy-once, so editing `src/lib/contest-template.ts` never reaches a club that has already run a
   contest — the same contract `ROLE_TEMPLATE` has. The escape hatch should resolve a template by
@@ -105,6 +95,18 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
   every template for free but needs `category` on `AgendaRow`, which is wider than Phase 1 needed.
   **Priority:** P3
 
+- **No randomizer, ever — a contest draw is recorded, not generated.** Speaking order in a
+  speech contest is drawn by lot at the briefing, physically, with the room watching. The app's job
+  is to RECORD that result, and `applyMoveSpeakerSlot` already does it (it swaps `slot_index`
+  within one `role_definition_id`, so it is template-agnostic by construction). Keep this in mind
+  for anything that touches contest order: order is DATA, so every consumer must derive from the
+  current slots at render and cache nothing, and numbering must follow POSITION rather than
+  identity — "Contestant 1" is whoever drew first, and a re-draw renumbers. `buildTemplateSlideDeck`
+  and `buildTemplateRows` both satisfy this today and `agenda-template-slides.test.ts` pins it.
+  The Phase 2 editor is where it would be easy to break: a stored display order, a
+  "shuffle" affordance, or memoising a deck by meeting id would each undo it.
+  **Priority:** P3 (standing constraint, not a task)
+
 - **Phase 2: club-authored templates and the editor UI.** The storage is already data and the
   reads already admit `club_id`-scoped rows, so this needs writes and a UI, no migration. Before
   it ships, MEASURE the caps in `src/lib/meeting-template-limits.ts` — they are honest bounds
@@ -117,33 +119,13 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
   and test them before the editor exists.
   **Priority:** P4
 
-- **`FitPage`'s flow branch is unreachable from every test in the repo.** `flow` is set by a
-  `useEffect`, and both print harnesses (`print-page-count.ts`, `print-density.test.tsx`) feed
-  static SSR markup to Chrome, so React never mounts; jsdom reports `scrollHeight === 0` and the
-  effect returns early. `print-density.test.tsx`'s `printedDetailPt` therefore asserts a
-  REIMPLEMENTATION of the `raw < MIN_FIT_SCALE` rule, not the component — a parity test, blind to
-  a defect present on both sides. The CSS half is now covered directly (a too-tall `.agenda-page`
-  paginates rather than clipping, `print-page-count.test.tsx`), and `MIN_FIT_SCALE` is pinned
-  absolutely, but the branch that CHOOSES to flow is not. Needs a harness that mounts React and
-  measures, or a `flow` prop the tests can force.
-  **Priority:** P2
-
-- **Route and component wiring for templates has no guard.** Three computed props decide whether
-  the feature is reachable and correct, and a prop-fed component test cannot see a wrong prop
-  (the #319 trap): `meeting-agenda.tsx` gates the "Change meeting type" button on `viewer.canManage`
-  and passes `currentTemplateId={meeting.templateId ?? null}`; the `/present` route returns the
-  explainer only when `data.template` is set, BEFORE `buildSlideDeck` runs; the meeting route
-  suppresses the deck with `template ? [] : buildSlideDeck(...)`. All three are 0% covered. The
-  repo precedent is a comment-blind source guard — `club-index-wiring.guard.test.ts`,
-  `meeting-chrome-wiring.guard.test.ts`.
-  **Priority:** P2
-
-- **`scripts/seed-global-templates.ts` is entirely untested.** Insert path, update path (it
-  REPLACES beats and roles), idempotent re-run, the `!row` throw, and the load-bearing safety
-  claim in its own doc comment — that re-seeding is safe while a club already holds materialized
-  `role_definitions` rows pointing at the template. That last one is the only claim whose failure
-  is silent and destructive.
-  **Priority:** P2
+- **The "Change meeting type" button's wiring has no guard.** PR 2 added
+  `template-deck-wiring.guard.test.ts`, which covers the two DECK expressions on the meeting and
+  `/present` routes. The third is still bare: `meeting-agenda.tsx` gates the button on
+  `viewer.canManage` and passes `currentTemplateId={meeting.templateId ?? null}`, and a prop-fed
+  component test cannot see a wrong prop (the #319 trap). Extend the existing guard rather than
+  adding a file.
+  **Priority:** P3
 
 - **The template server fns are gated in SOURCE but not in BEHAVIOUR.** `meeting-templates.guard.test.ts`
   proves every `createServerFn` in the module names a `require*` guard and an archive check, which

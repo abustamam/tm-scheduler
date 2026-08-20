@@ -372,6 +372,45 @@ export function slideLayout(slide: Slide): SlideLayout {
 					.split("\n")
 					.map((t) => (t.trim() ? muted(t.trim()) : SPACER)),
 			});
+		// The two templated-meeting kinds (#agenda-templates). A section reads as a
+		// splash so a contest round announces itself the way the opening and
+		// closing do — a content slide with an empty body would read as a beat
+		// whose details failed to load. `logoUrl: null` is the deliberate choice
+		// the splash type forces: the crest belongs on the opening, and repeating
+		// it five times through a contest turns it into wallpaper.
+		case "templateSection":
+			return {
+				chrome: "splash",
+				tone: "dark",
+				headline: slide.title,
+				sub: [],
+				logoUrl: null,
+			};
+		case "templateBeat": {
+			// Bullets, like `speech` — the room is reading facts off a wall, not a
+			// sentence. Detail first (what this beat IS), then the clock.
+			const items: string[] = [];
+			if (slide.detail) items.push(slide.detail);
+			if (slide.timing) {
+				items.push(
+					`Signals: ${slide.timing.green} green · ${slide.timing.yellow} yellow · ${slide.timing.red} red`,
+				);
+				// The ±30s grace window (#357). Spelled out on the wall because in a
+				// contest it is the disqualification rule, and the one number the
+				// Chief Judge and the room must not learn differently.
+				items.push(`Qualifies: ${slide.timing.qualifies}`);
+			} else if (slide.minutes > 0) {
+				// An untimed beat still has a booked duration; without this the slide
+				// would say nothing about how long it runs.
+				items.push(`Time: ${slide.minutes} min`);
+			}
+			return content(slide.label, {
+				form: "bullets",
+				items,
+				link: null,
+				note: null,
+			});
+		}
 		case "thankYou":
 			return {
 				chrome: "splash",

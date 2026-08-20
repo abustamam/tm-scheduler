@@ -2,6 +2,21 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.22.0.0] - 2026-08-19
+
+### Added
+
+- **A speech contest can be projected, not just printed.** Present mode used to show contests a short "not ready yet" notice and send you to the printer. It now builds the deck from the contest's own agenda: a full-screen divider for each round, then a slide per beat naming who is up, what they are doing and how long they have. The `.pptx` export works for a contest too.
+- **The wall and the paper cannot disagree.** The projected deck is built from the same run of show the printed agenda prints — not a second copy of the same idea. During a contest the Chair works from the sheet while the room watches the screen, and any difference between the two is an argument nobody wants to have at a lectern.
+- **Contest timing goes on the screen.** Each timed beat projects its green, yellow and red signals and the window in which the speech still qualifies — the same 30-second grace either side that the printed agenda's timing key and the Timer's role sheet already teach. In a normal meeting that window is a courtesy; in a contest it decides who is disqualified, so the room and the Chief Judge reading different numbers is the thing to prevent.
+- **Any round is one tap away mid-contest.** Every slide, including the round dividers, appears in the jump-to-slide grid, so a Chair who needs to go back to the briefing does not step through fourteen slides to get there.
+
+### Changed
+
+- **The speaking order on screen is whatever order you recorded.** Contests draw speaking order by lot at the briefing, so the app does not — and will not — shuffle anything for you. You record the draw by moving contestants in the agenda, and the deck follows: "Contestant 1" means whoever drew first, re-drawing renumbers everyone, and a change made mid-contest shows up on the next refresh rather than sitting stale on the wall.
+- **A contest deck shows no voting slides.** The club's own Best Speaker vote is a member ballot; a contest is scored by judges on paper to a different rulebook. Projecting a club ballot during one would invite the room to vote in a contest they are not judging.
+- **Announcements still reach a contest.** They are meeting notes rather than an agenda item, so without this they would simply have gone missing from the deck.
+
 ## [1.21.0.0] - 2026-08-19
 
 ### Added
