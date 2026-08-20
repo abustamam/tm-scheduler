@@ -223,7 +223,7 @@ function Dashboard() {
 												{confirmed ? "Confirmed" : "Signed up"}
 											</span>
 										</Link>
-										<div className="px-5">
+										<div className="pl-10 pr-5">
 											<EvaluationResourceLinks
 												projectName={r.evaluatedProjectName ?? r.ownProjectName}
 											/>

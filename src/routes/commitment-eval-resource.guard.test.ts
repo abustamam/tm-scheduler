@@ -27,7 +27,10 @@ const ROUTES: ReadonlyArray<{ path: string; variable: string }> = [
 describe("commitment cards link the evaluation resource", () => {
 	for (const { path, variable } of ROUTES) {
 		it(`${path} renders EvaluationResourceLinks`, () => {
-			expect(readSource(path)).toContain("EvaluationResourceLinks");
+			// The leading `<` requires the JSX open tag, not just the import —
+			// an import-only match would stay green after the render call is
+			// deleted.
+			expect(readSource(path)).toContain("<EvaluationResourceLinks");
 		});
 
 		it(`${path} prefers the evaluated project over the member's own`, () => {
