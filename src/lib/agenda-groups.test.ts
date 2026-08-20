@@ -80,6 +80,33 @@ describe("groupByPresenter", () => {
 		expect(groups).toHaveLength(2);
 	});
 
+	// The section guard (#agenda-templates). Sections carry `roleKey: null` and
+	// put the segment TITLE in `who`, so the `who === who && roleKey === roleKey`
+	// test below already separates the sections a real contest emits — every one
+	// of them has a distinct title. That makes the guard unfalsifiable against
+	// any realistic fixture: delete `if (prev.section || row.section)` and the
+	// rest of this file still passes. The case that actually reaches it is two
+	// adjacent rows AGREEING on `who` where at least one is a band — a section
+	// header immediately followed by an unowned event of the same name, which a
+	// template can express and which would otherwise swallow the band.
+	it("never merges a section band into the row beside it, even on an exact `who` match", () => {
+		const groups = groupByPresenter([
+			row({ time: "8:00", who: "BREAK", section: true, minutes: 0 }),
+			row({ time: "8:00", who: "BREAK", minutes: 10 }),
+		]);
+		expect(groups).toHaveLength(2);
+		expect(groups[0].rows[0].section).toBe(true);
+		expect(groups[1].rows[0].section).toBeUndefined();
+	});
+
+	it("keeps two consecutive section bands apart", () => {
+		const groups = groupByPresenter([
+			row({ time: "8:00", who: "CONTEST", section: true, minutes: 0 }),
+			row({ time: "8:00", who: "CONTEST", section: true, minutes: 0 }),
+		]);
+		expect(groups).toHaveLength(2);
+	});
+
 	// `beatColor` and `isHighlighted` branch on `roleKey`, so a group has to be
 	// homogeneous in it — otherwise one spine colour would stand for two roles.
 	it("breaks a run when roleKey differs, even though `who` matches", () => {

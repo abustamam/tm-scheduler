@@ -341,6 +341,37 @@ describe("print density harness availability", () => {
 });
 
 /**
+ * `MIN_FIT_SCALE` is the threshold below which a sheet stops being squeezed and
+ * flows across pages instead. Every OTHER assertion in this file is stated in
+ * terms of it — `printedDetailPt` mirrors the same `raw < MIN_FIT_SCALE` branch
+ * — so raising the constant does not fail any of them. Worse, it fails in the
+ * *comfortable* direction: at 0.95 an ordinary agenda would stop scaling, print
+ * at full declared size, and the density FLOORS would get more slack, so the
+ * suite would go greener while every club's one-page agenda quietly became two.
+ * That is CLAUDE.md's "a test stated RELATIVE to the constant it guards cannot
+ * fail" trap exactly, so pin the number ABSOLUTELY and pin the property that
+ * picked it: it must sit BELOW the tightest scale a real standard agenda needs.
+ *
+ * No Chrome required — this measures nothing, it constrains the constant.
+ */
+describe("MIN_FIT_SCALE", () => {
+	it("is 0.72", () => {
+		expect(MIN_FIT_SCALE).toBe(0.72);
+	});
+
+	it("sits below the tightest scale a real standard agenda needs, so ordinary agendas still fit one sheet", () => {
+		// The longest standard fixture in this file. `FitPage` flows instead of
+		// scaling when `raw < MIN_FIT_SCALE`, so the constant must stay under the
+		// ratio this agenda produces or a normal club meeting becomes two sheets.
+		const raw = (PAGE_H - 2) / agendaHeight(mcfRows);
+		expect(raw).toBeGreaterThan(MIN_FIT_SCALE);
+		// And an absolute upper bound, so the assertion above cannot be satisfied
+		// by a future fixture that happens to get shorter.
+		expect(MIN_FIT_SCALE).toBeLessThan(0.75);
+	});
+});
+
+/**
  * What the club's printer actually puts on paper, in points.
  *
  * This, not the height, is the gate. A ceiling on height is the obvious thing to
