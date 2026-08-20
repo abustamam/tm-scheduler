@@ -4,6 +4,7 @@ import { z } from "zod";
 import { db } from "#/db";
 import { attendancePlanStatusEnum, meetings } from "#/db/schema";
 import {
+	CLEARABLE_ASK,
 	clearPlanStatus,
 	SELF_SERVICE_RUNGS,
 	setPlanStatus,
@@ -308,6 +309,41 @@ export const clearPlannedAttendance = createServerFn({ method: "POST" })
 			// `reached_out` stays an officer action, which is where the bar was
 			// before the consolidation. Writing `reached_out` is what the panel is
 			// for; deleting someone else's is not.
-			onlyFrom: via === "officer" ? undefined : SELF_SERVICE_RUNGS,
+			//
+			// BOTH arms now pass a floor (#573), and they are exact complements: the
+			// self/TMOD arm may clear an ANSWER, the officer arm may clear the ASK.
+			// Neither may erase the other's.
+			//
+			// The ternary STAYS. #573 proposed replacing this whole expression with
+			// `["reached_out"]`, on the stated grounds that "non-officer arms are
+			// unchanged — they already pass SELF_SERVICE_RUNGS". They pass it from
+			// the other branch of THIS ternary, not from another function, so
+			// collapsing it would also have stopped a self-asserted Toastmaster
+			// clearing their own `coming` — a narrowing nobody asked for, in a
+			// change whose whole point is that nobody asked for the other one.
+			// (`clearAvailability` in `availability.ts` is a separate self-serve
+			// endpoint and is genuinely untouched; `outreach.ts`'s admin clear
+			// already passed `["reached_out"]` inline.)
+			//
+			// The officer arm used to pass `undefined` — clear whatever is there —
+			// and that is the defect. "No answer" means "make it as if they never
+			// replied", so it must never destroy a reply: the rail does not poll, so
+			// a row can still read `Asked` while the server already holds
+			// `not_coming`, and deleting that drops the member off
+			// `unavailableMembers` and out of the recruit picker's warning. They can
+			// then be handed a role they said they could not take.
+			//
+			// This is NOT the "officer corrects a wrong answer" power — that is the
+			// SET path (pick Coming / Not coming), where `demoteFrom` deliberately
+			// leaves an officer's deliberate pick unfloored. The two got conflated
+			// because a one-tap menu item was wired to the unrestricted clear,
+			// replacing `clearContacted`, which had always been narrow by
+			// construction. Nobody decided officers needed to erase answers.
+			//
+			// Accepted trade-off: there is now no way to return an answered row to
+			// "no answer". Same shape as roll mode's clear-to-unmarked gap
+			// (TODOS.md). An officer who wants a row to stop saying "coming" picks
+			// "Not coming".
+			onlyFrom: via === "officer" ? CLEARABLE_ASK : SELF_SERVICE_RUNGS,
 		});
 	});

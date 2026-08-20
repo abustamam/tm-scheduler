@@ -21,7 +21,11 @@ import {
 	seedClub,
 	testDb,
 } from "#/test/db";
-import { clearPlanStatus, setPlanStatus } from "./attendance-plan-logic";
+import {
+	CLEARABLE_ASK,
+	clearPlanStatus,
+	setPlanStatus,
+} from "./attendance-plan-logic";
 
 async function setContactedDb(args: {
 	memberId: string;
@@ -52,6 +56,9 @@ async function clearContactedDb(args: {
 		meetingId: args.meetingId,
 		clubId: args.clubId,
 		actorMemberId: args.actorMemberId,
+		// What `outreach.ts` passes inline — it has always been narrow by
+		// construction, which is the shape #573 restored on the panel's clear.
+		onlyFrom: CLEARABLE_ASK,
 	});
 	return { ok: true as const };
 }

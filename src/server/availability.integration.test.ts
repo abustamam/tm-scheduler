@@ -29,7 +29,11 @@ import {
 	seedClub,
 	testDb,
 } from "#/test/db";
-import { clearPlanStatus, setPlanStatus } from "./attendance-plan-logic";
+import {
+	clearPlanStatus,
+	SELF_SERVICE_RUNGS,
+	setPlanStatus,
+} from "./attendance-plan-logic";
 import { releaseSlotsAndMarkUnavailable } from "./availability-logic";
 
 // ---------------------------------------------------------------------------
@@ -61,6 +65,11 @@ async function clearAvailabilityPublic(
 		meetingId,
 		clubId,
 		actorMemberId: memberId,
+		// Mirrors what `clearAvailability` actually passes. This helper omitted it
+		// while `onlyFrom` was optional, so it modelled an UNFLOORED delete that the
+		// production fn has never performed — every assertion made through it about
+		// officer state was proving the wrong thing (#573).
+		onlyFrom: SELF_SERVICE_RUNGS,
 	});
 	return { ok: true as const };
 }

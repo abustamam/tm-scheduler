@@ -33,6 +33,21 @@ export const SELF_SERVICE_RUNGS: readonly AttendancePlanStatus[] = [
 ];
 
 /**
+ * The rungs an OFFICER's "No answer" may delete — the exact complement of
+ * {@link SELF_SERVICE_RUNGS}, and defined beside it so the symmetry is readable
+ * rather than inferred (#573).
+ *
+ * A member may clear their own ANSWER; an officer may clear the ASK. Neither may
+ * erase the other's. The officer arm used to pass no floor at all, which meant
+ * "No answer" could destroy a reply that arrived since the panel rendered —
+ * dropping that member off `unavailableMembers` and out of the recruit picker's
+ * warning, so they could be handed a role they had declined.
+ *
+ * Correcting a wrong answer is the SET path, not this one.
+ */
+export const CLEARABLE_ASK: readonly AttendancePlanStatus[] = ["reached_out"];
+
+/**
  * THE only module that reads or writes `meeting_attendance_plan`, apart from the
  * membership merge (`membership-collapse-logic.ts`), which re-points `member_id`
  * in raw SQL and is waived by name in `attendance-plan-store.guard.test.ts`.
@@ -150,8 +165,17 @@ export async function setPlanStatus(
  * fact now shares a row with the member's own answer, so a status-blind DELETE
  * reached through the PUBLIC `clearAvailability` would have let anyone wipe it —
  * the officer's chase list silently loses people and they get contacted twice.
- * Self-serve callers pass `SELF_SERVICE_RUNGS`; the admin-gated `clearContacted`
- * passes nothing and may clear any rung.
+ * REQUIRED, since #573 — every caller must name a floor, and the parameter used
+ * to be optional with "omit to delete whatever is there (officer-gated callers
+ * only)". That permission is how the defect shipped: a one-tap "No answer" menu
+ * item was wired to the unfloored clear, so an officer's un-ask could destroy an
+ * answer that arrived since the panel rendered. Nobody chose that; omitting a
+ * parameter simply looked sanctioned.
+ *
+ * The two floors in use are exact complements — {@link SELF_SERVICE_RUNGS} for a
+ * self/TMOD caller clearing an ANSWER, {@link CLEARABLE_ASK} for an officer
+ * clearing the ASK. Making the argument mandatory means a new caller has to pick
+ * one rather than inheriting the widest possible delete by saying nothing.
  */
 export async function clearPlanStatus(
 	database: DbOrTx,
@@ -160,9 +184,9 @@ export async function clearPlanStatus(
 		meetingId: string;
 		clubId: string;
 		actorMemberId: string | null;
-		/** Delete only when the current status is one of these. Omit to delete
-		 *  whatever is there (officer-gated callers only). */
-		onlyFrom?: readonly AttendancePlanStatus[];
+		/** Delete only when the current status is one of these. No "clear
+		 *  anything" option by design — see the note above. */
+		onlyFrom: readonly AttendancePlanStatus[];
 	},
 ): Promise<{ ok: true; cleared: boolean }> {
 	const removed = await database
@@ -171,9 +195,12 @@ export async function clearPlanStatus(
 			and(
 				eq(meetingAttendancePlan.memberId, args.memberId),
 				eq(meetingAttendancePlan.meetingId, args.meetingId),
-				...(args.onlyFrom
-					? [inArray(meetingAttendancePlan.status, args.onlyFrom)]
-					: []),
+				// Unconditional now that `onlyFrom` is required. Note `inArray` with an
+				// EMPTY array compiles to `false` in drizzle, so `onlyFrom: []` is a
+				// delete that matches nothing rather than one that matches everything
+				// — the safe direction, and the reason a required-but-empty argument
+				// is not a hole.
+				inArray(meetingAttendancePlan.status, args.onlyFrom),
 			),
 		)
 		.returning({ id: meetingAttendancePlan.id });

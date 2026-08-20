@@ -9,6 +9,7 @@ import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { activityLog, meetingAttendancePlan, members } from "#/db/schema";
 import {
+	CLEARABLE_ASK,
 	clearPlanStatus,
 	getPlanStatus,
 	listNotComingForMeetings,
@@ -134,6 +135,7 @@ describe.skipIf(!hasTestDb)("attendance-plan seam", () => {
 			meetingId: club.meetingId,
 			clubId: club.clubId,
 			actorMemberId: club.adminMemberId,
+			onlyFrom: SELF_SERVICE_RUNGS,
 		});
 		const rows = await testDb
 			.select()
@@ -236,6 +238,7 @@ describe.skipIf(!hasTestDb)("attendance-plan seam", () => {
 			meetingId: club.meetingId,
 			clubId: club.clubId,
 			actorMemberId: club.adminMemberId,
+			onlyFrom: SELF_SERVICE_RUNGS,
 		});
 		const [entry] = await testDb
 			.select({
@@ -259,6 +262,7 @@ describe.skipIf(!hasTestDb)("attendance-plan seam", () => {
 			meetingId: club.meetingId,
 			clubId: club.clubId,
 			actorMemberId: club.adminMemberId,
+			onlyFrom: SELF_SERVICE_RUNGS,
 		});
 		expect(res.cleared).toBe(false);
 		const entries = await testDb
@@ -579,7 +583,7 @@ describe.skipIf(!hasTestDb)("attendance-plan seam", () => {
 			).toBe("reached_out");
 		});
 
-		it("onlyFrom still clears the member's own rungs, and an officer clears any", async () => {
+		it("onlyFrom still clears the member's own rungs, and an officer clears the ask", async () => {
 			await setPlanStatus(testDb, {
 				memberId: club.memberId,
 				meetingId: club.meetingId,
@@ -602,7 +606,9 @@ describe.skipIf(!hasTestDb)("attendance-plan seam", () => {
 				}),
 			).toBe(null);
 
-			// The officer arm passes no `onlyFrom` and may remove its own mark.
+			// The officer arm passes `CLEARABLE_ASK` and may remove its own mark.
+			// It used to pass NOTHING and could remove any rung — see the #573 block
+			// below for why that was the defect.
 			await setPlanStatus(testDb, {
 				memberId: club.memberId,
 				meetingId: club.meetingId,
@@ -615,6 +621,7 @@ describe.skipIf(!hasTestDb)("attendance-plan seam", () => {
 				meetingId: club.meetingId,
 				clubId: club.clubId,
 				actorMemberId: club.adminMemberId,
+				onlyFrom: CLEARABLE_ASK,
 			});
 			expect(officer.cleared).toBe(true);
 			expect(
@@ -623,6 +630,105 @@ describe.skipIf(!hasTestDb)("attendance-plan seam", () => {
 					meetingId: club.meetingId,
 				}),
 			).toBe(null);
+		});
+
+		/**
+		 * The officer's "No answer" must never erase an ANSWER (#573).
+		 *
+		 * The rail is a sticky panel that stays open while members reply from their
+		 * phones, and plan data has no poll — it refreshes on a write or a
+		 * navigation. So a row can still read `Asked` while the server already holds
+		 * `not_coming`. The officer taps "No answer" meaning *un-ask*, and before
+		 * this the delete took whatever was there: the member's decline vanished,
+		 * they dropped off `unavailableMembers` and out of the recruit picker's
+		 * warning, and they could then be handed a role they had said they could not
+		 * take. Recoverable (they can reply again) and narrow (the window is
+		 * seconds for an officer actively working the rail, arbitrary for an idle
+		 * tab) — worth fixing because the fix is a floor, not because it is common.
+		 *
+		 * ASSERT THE SURVIVING ROW, not just `cleared`. A `WHERE`-refused delete and
+		 * a delete that found nothing return the identical `{ ok, cleared: false }`,
+		 * so a result-only assertion is CLAUDE.md's "guard whose only effect is
+		 * avoiding work" trap: it passes with the floor deleted. Read the row back.
+		 */
+		describe("an officer's clear cannot erase an answer (#573)", () => {
+			it.each([
+				"not_coming",
+				"coming",
+			] as const)("refuses to clear a %s row, and the row survives", async (status) => {
+				await setPlanStatus(testDb, {
+					memberId: club.memberId,
+					meetingId: club.meetingId,
+					clubId: club.clubId,
+					status,
+					actorMemberId: club.memberId,
+				});
+
+				const res = await clearPlanStatus(testDb, {
+					memberId: club.memberId,
+					meetingId: club.meetingId,
+					clubId: club.clubId,
+					actorMemberId: club.adminMemberId,
+					onlyFrom: CLEARABLE_ASK,
+				});
+
+				expect(res.cleared).toBe(false);
+				// The half that fails when the floor is removed.
+				expect(
+					await getPlanStatus(testDb, {
+						memberId: club.memberId,
+						meetingId: club.meetingId,
+					}),
+				).toBe(status);
+			});
+
+			it("still clears a reached_out row, so un-asking keeps working", async () => {
+				await setPlanStatus(testDb, {
+					memberId: club.memberId,
+					meetingId: club.meetingId,
+					clubId: club.clubId,
+					status: "reached_out",
+					actorMemberId: club.adminMemberId,
+				});
+
+				const res = await clearPlanStatus(testDb, {
+					memberId: club.memberId,
+					meetingId: club.meetingId,
+					clubId: club.clubId,
+					actorMemberId: club.adminMemberId,
+					onlyFrom: CLEARABLE_ASK,
+				});
+
+				expect(res.cleared).toBe(true);
+				expect(
+					await getPlanStatus(testDb, {
+						memberId: club.memberId,
+						meetingId: club.meetingId,
+					}),
+				).toBe(null);
+			});
+
+			/**
+			 * The two floors are exact COMPLEMENTS, and that is the property worth
+			 * asserting rather than each half separately: a member may clear an
+			 * answer, an officer may clear the ask, and neither may touch the other's.
+			 * A future edit that widened either one — say by adding `reached_out` to
+			 * `SELF_SERVICE_RUNGS` "for symmetry" — would satisfy every case above
+			 * and fail here.
+			 */
+			it("the self-service and officer floors do not overlap", () => {
+				const overlap = SELF_SERVICE_RUNGS.filter((r) =>
+					CLEARABLE_ASK.includes(r),
+				);
+				expect(overlap).toEqual([]);
+				// And together they cover every rung, so no status is unclearable by
+				// everyone — which would be a row nobody could ever reset.
+				expect([...SELF_SERVICE_RUNGS, ...CLEARABLE_ASK].sort()).toEqual([
+					"coming",
+					"not_coming",
+					"reached_out",
+				]);
+			});
 		});
 	});
 });
