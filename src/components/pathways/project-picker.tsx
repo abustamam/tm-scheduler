@@ -1,5 +1,6 @@
 import { Check, ChevronDown, X } from "lucide-react";
 import { useMemo, useState } from "react";
+import { EvaluationResourceLinks } from "#/components/pathways/evaluation-resource-link";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import {
@@ -112,6 +113,9 @@ export function ProjectPicker({
 					</Button>
 				) : null}
 			</div>
+			{selected ? (
+				<EvaluationResourceLinks projectName={selected.project.name} />
+			) : null}
 			<Button
 				type="button"
 				variant="ghost"
@@ -251,6 +255,9 @@ function PathSection({
 												<span className="sr-only">(completed)</span>
 											) : null}
 										</button>
+										<div className="px-3 pb-2 pl-9">
+											<EvaluationResourceLinks projectName={project.name} />
+										</div>
 									</li>
 								))}
 							</ul>
