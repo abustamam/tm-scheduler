@@ -22,6 +22,9 @@
 - **Server-module rule:** a `src/server/*.ts` module that defines a `createServerFn` exports only server fns and types. DB logic goes in a sibling `*-logic.ts`.
 - **Exactly 64 entries** in `EVALUATION_RESOURCES`, covering all **60** distinct project names in `PATHWAYS_CATALOG`. These numbers are asserted absolutely, not relatively.
 - **Never invent a TI item code.** Two entries have `itemCode: null` because TI's page exposes none. Leave them null.
+- **Component tests need a jsdom docblock.** `vitest.config.ts` sets `environment: "node"`. Any test that renders React must have `// @vitest-environment jsdom` as its **first line**, before the file's own comment block. See `src/components/ui/dropdown-menu.test.tsx`.
+- **There is no `@testing-library/jest-dom` in this repo.** `toBeInTheDocument`, `toHaveAttribute`, `toBeDisabled` and friends DO NOT EXIST. Assert with native DOM instead: `expect(el).toBeTruthy()`, `expect(el.getAttribute("target")).toBe("_blank")`, `expect(container.textContent).toContain("…")`. `src/routes/_authed/admin/club-settings.test.tsx` records the convention.
+- **Nothing importable by a unit test may reach `#/db`.** `src/db/index.ts` throws `DATABASE_URL is not set` at import, and unit tests get only `BETTER_AUTH_*` from `src/test/setup-env.ts`. So a route module — which imports `getAuthContext` → `#/db` — is unreachable from vitest. Testable logic goes in `src/lib/`, never exported from a route file.
 
 ---
 
@@ -65,6 +68,7 @@ The whole feature rests on this table being right. Everything else is wiring.
   - `function resourcesForProject(name: string | null | undefined): readonly EvaluationResource[]`
   - `interface ResolvedEvaluationResources { resources: readonly EvaluationResource[]; currentEditionNote: boolean; isGenericFallback: boolean }`
   - `function resolveEvaluationResources(name: string | null | undefined): ResolvedEvaluationResources`
+  - `function filterEvaluationResources(query: string): readonly EvaluationResource[]` — the index page's search, which lives here rather than in the route because a route module imports `#/db` and is unreachable from vitest (see Global Constraints).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -74,6 +78,7 @@ Create `src/lib/evaluation-resources.test.ts`:
 import { describe, expect, it } from "vitest";
 import {
 	EVALUATION_RESOURCES,
+	filterEvaluationResources,
 	GENERIC_EVALUATION_RESOURCE,
 	resolveEvaluationResources,
 	resourcesForProject,
@@ -184,6 +189,47 @@ describe("resolveEvaluationResources", () => {
 			expect(r.resources).toEqual([GENERIC_EVALUATION_RESOURCE]);
 			expect(r.currentEditionNote).toBe(false);
 		}
+	});
+});
+
+describe("filterEvaluationResources", () => {
+	it("returns everything for an empty query", () => {
+		expect(filterEvaluationResources("")).toHaveLength(64);
+		expect(filterEvaluationResources("   ")).toHaveLength(64);
+	});
+
+	it("matches on project name, case-insensitively", () => {
+		const r = filterEvaluationResources("active listening");
+		expect(r).toHaveLength(1);
+		expect(r[0].project).toBe("Active Listening");
+	});
+
+	it("matches on TI item code, either case", () => {
+		expect(filterEvaluationResources("8200E")[0]?.itemCode).toBe("8200E");
+		expect(filterEvaluationResources("8200e")).toHaveLength(1);
+	});
+
+	it("ignores punctuation differences", () => {
+		// A member types what they remember, not TI's hyphenation.
+		expect(
+			filterEvaluationResources("question and answer").length,
+		).toBeGreaterThan(0);
+	});
+
+	it("returns nothing for a query that matches nothing", () => {
+		expect(filterEvaluationResources("zzzzz")).toEqual([]);
+	});
+
+	it("finds the generic resource by name", () => {
+		expect(
+			filterEvaluationResources("generic").some((x) => x.itemCode === "8053"),
+		).toBe(true);
+	});
+
+	it("finds a part by name", () => {
+		const r = filterEvaluationResources("evaluator role");
+		expect(r).toHaveLength(1);
+		expect(r[0].part).toBe("Evaluator role");
 	});
 });
 
@@ -909,6 +955,28 @@ export function resolveEvaluationResources(
 		isGenericFallback: false,
 	};
 }
+
+/**
+ * The index page's search. Lives here, not in the route: a route module imports
+ * `getAuthContext` → `#/db`, which throws `DATABASE_URL is not set` at import,
+ * so anything exported from a route is unreachable from vitest.
+ *
+ * Normalizes punctuation on both sides — a member types "question and answer",
+ * TI writes "Question-and-Answer Session".
+ */
+export function filterEvaluationResources(
+	query: string,
+): readonly EvaluationResource[] {
+	const q = query.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+	if (!q) return EVALUATION_RESOURCES;
+	return EVALUATION_RESOURCES.filter((r) =>
+		[r.title, r.project ?? "", r.itemCode ?? "", r.part ?? ""]
+			.join(" ")
+			.toLowerCase()
+			.replace(/[^a-z0-9]+/g, " ")
+			.includes(q),
+	);
+}
 ```
 
 - [ ] **Step 4: Run the test to verify it passes**
@@ -959,44 +1027,77 @@ Notes an implementer needs:
 Create `src/components/pathways/evaluation-resource-link.test.tsx`:
 
 ```tsx
+// @vitest-environment jsdom
+//
+// No `@testing-library/jest-dom` in this repo, so every assertion below uses
+// native DOM properties rather than `toBeInTheDocument` / `toHaveAttribute`.
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { EvaluationResourceLinks } from "#/components/pathways/evaluation-resource-link";
 
 describe("EvaluationResourceLinks", () => {
 	it("links a known project to its TI resource, opening safely", () => {
-		render(<EvaluationResourceLinks projectName="Active Listening" />);
-		const link = screen.getByRole("link", { name: /evaluation resource/i });
-		expect(link).toHaveAttribute("target", "_blank");
-		expect(link).toHaveAttribute("rel", expect.stringContaining("noopener"));
-		expect(link.getAttribute("href")).toMatch(/^https:\/\/[^/]*toastmasters\.org\//);
+		const { container } = render(
+			<EvaluationResourceLinks projectName="Active Listening" />,
+		);
+		const link = container.querySelector("a");
+		expect(link).toBeTruthy();
+		expect(link?.getAttribute("target")).toBe("_blank");
+		expect(link?.getAttribute("rel")).toContain("noopener");
+		expect(link?.getAttribute("href")).toMatch(
+			/^https:\/\/[^/]*toastmasters\.org\//,
+		);
 	});
 
 	it("names each part when a project has several resources", () => {
-		render(<EvaluationResourceLinks projectName="Evaluation and Feedback" />);
-		expect(screen.getAllByRole("link")).toHaveLength(3);
-		expect(screen.getByText(/first speech/i)).toBeInTheDocument();
-		expect(screen.getByText(/second speech/i)).toBeInTheDocument();
-		expect(screen.getByText(/evaluator role/i)).toBeInTheDocument();
+		const { container } = render(
+			<EvaluationResourceLinks projectName="Evaluation and Feedback" />,
+		);
+		expect(container.querySelectorAll("a")).toHaveLength(3);
+		const text = container.textContent ?? "";
+		expect(text).toContain("First speech");
+		expect(text).toContain("Second speech");
+		expect(text).toContain("Evaluator role");
 	});
 
 	it("says so when it falls back to the generic resource", () => {
 		// An unknown project must not be presented as if the form were its own.
-		render(<EvaluationResourceLinks projectName="Advanced Mentoring" />);
-		expect(screen.getByText(/generic/i)).toBeInTheDocument();
+		const { container } = render(
+			<EvaluationResourceLinks projectName="Advanced Mentoring" />,
+		);
+		expect(container.textContent).toContain("Generic evaluation resource");
 	});
 
 	it("notes the current edition for a legacy-path project", () => {
-		render(<EvaluationResourceLinks projectName="Active Listening (Legacy)" />);
-		expect(screen.getByText(/current edition/i)).toBeInTheDocument();
+		const { container } = render(
+			<EvaluationResourceLinks projectName="Active Listening (Legacy)" />,
+		);
+		expect(container.textContent).toContain("current edition");
 	});
 
 	it("does not note the edition for a current-path project", () => {
-		render(<EvaluationResourceLinks projectName="Active Listening" />);
-		expect(screen.queryByText(/current edition/i)).not.toBeInTheDocument();
+		const { container } = render(
+			<EvaluationResourceLinks projectName="Active Listening" />,
+		);
+		expect(container.textContent).not.toContain("current edition");
+	});
+
+	it("renders the same resource for a legacy project as its current twin", () => {
+		const legacy = render(
+			<EvaluationResourceLinks projectName="Active Listening (Legacy)" />,
+		).container.querySelector("a")?.getAttribute("href");
+		const current = render(
+			<EvaluationResourceLinks projectName="Active Listening" />,
+		).container.querySelector("a")?.getAttribute("href");
+		expect(legacy).toBe(current);
+		expect(legacy).toBeTruthy();
 	});
 });
 ```
+
+`screen` is imported for parity with the repo's other component tests; if you do
+not use it, drop it from the import — strict TS fails the build on an unused
+symbol.
 
 - [ ] **Step 2: Run the test to verify it fails**
 
@@ -1098,39 +1199,51 @@ Placement notes: the project rows are `<button>` elements inside `<li>`. **An an
 
 Add to `src/components/pathways/project-picker.test.tsx`:
 
+The file needs `// @vitest-environment jsdom` as its FIRST line if it does not
+have one already. No jest-dom matchers.
+
+`PickerPath` and `PickerProject` are defined in
+`src/server/project-picker-logic.ts:29` and `:44` — these are the REAL shapes,
+verified during pre-flight. Do not adjust the component's types to fit a
+fixture; adjust the fixture.
+
 ```tsx
+import type { PickerPath } from "#/server/project-picker";
+
+const PATH: PickerPath = {
+	pathId: "path-1",
+	courseCode: "8701",
+	name: "Presentation Mastery",
+	status: "current",
+	defaultLevel: 3,
+	projects: [
+		{
+			id: "proj-1",
+			level: 3,
+			name: "Active Listening",
+			isRequired: false,
+			complete: false,
+		},
+	],
+};
+
 it("offers the evaluation resource for the selected project", () => {
-	render(
+	const { container } = render(
 		<ProjectPicker
-			paths={[
-				{
-					id: "p1",
-					name: "Presentation Mastery",
-					status: "current",
-					projects: [
-						{
-							id: "x1",
-							name: "Active Listening",
-							level: 3,
-							isRequired: false,
-							complete: false,
-						},
-					],
-				},
-			]}
-			value="x1"
+			paths={[PATH]}
+			value="proj-1"
 			onChange={() => {}}
 			fallback={{ pathwayPath: null, projectName: null, projectLevel: null }}
 		/>,
 	);
-	const link = screen.getByRole("link", { name: /evaluation resource/i });
-	expect(link.getAttribute("href")).toMatch(/toastmasters\.org/);
+	const link = container.querySelector('a[href*="toastmasters.org"]');
+	expect(link).toBeTruthy();
 });
 ```
 
-If `PickerPath` / project shapes differ from the above, read the real types at
-the top of `project-picker.tsx` and match them exactly — do not change the
-component's types to fit the test.
+`import type` keeps this a type-only import, so `#/server/project-picker` — which
+imports `#/db` — is erased at compile time and never loaded at runtime. A plain
+`import` here would throw `DATABASE_URL is not set`.
 
 - [ ] **Step 2: Run the test to verify it fails**
 
@@ -1333,15 +1446,16 @@ Add after the existing `.leftJoin(speeches, ...)`:
 			)
 ```
 
-Imports to add or extend:
+Imports — verified against the file during pre-flight:
 
-```ts
-import { alias } from "drizzle-orm/pg-core";
-import { pathwaysProjects } from "#/db/schema";
-```
-
-`sql` and `eq` are already imported from `drizzle-orm` in this file; extend the
-existing import rather than adding a second one.
+- `alias` is **already imported** from `drizzle-orm/pg-core` (line 17). Do not
+  re-add it.
+- `eq` is already in the `drizzle-orm` import (line 16:
+  `and, asc, desc, eq, gte, inArray, isNull, ne`). **`sql` is NOT** — add it to
+  that existing import, alphabetically, rather than writing a second import
+  statement (Biome's import organization will fight a duplicate).
+- `pathwaysProjects` must be added to the existing `#/db/schema` import block
+  (line 19), which is already a multi-line named import.
 
 **All four joins go on the existing statement.** Do not issue a second query
 and do not loop — Task 4 Step 6 asserts exactly that.
@@ -1534,7 +1648,7 @@ git commit -m "feat(pathways): show the evaluation resource on commitment cards"
 - Create: `src/routes/resources.evaluation-resources.tsx`
 - Create: `content/resources/evaluation-resources.md`
 - Modify: `src/data/resources.ts`
-- Test: `src/routes/resources-evaluation-index.test.tsx`
+- Test: none of its own — `filterEvaluationResources` is covered by Task 1; this route's gates are `src/data/resources.guard.test.ts` and a manual render check.
 
 **Interfaces:**
 - Consumes: `EVALUATION_RESOURCES` (Task 1), `ResourcesShell`, `getAuthContext`.
@@ -1553,60 +1667,20 @@ Two constraints that will bite otherwise:
    `/resources/evaluation-resources` resolvable through `$slug`. Verify the
    static route renders, not the article, after `bun run generate-routes`.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Confirm the filter is already covered**
 
-Create `src/routes/resources-evaluation-index.test.tsx`. Test the pure filter
-function, not the route (routes cannot be mounted):
+`filterEvaluationResources` lives in `src/lib/evaluation-resources.ts` and is
+tested in Task 1, deliberately NOT exported from this route — a route module
+imports `getAuthContext` → `#/db`, which throws `DATABASE_URL is not set` at
+import, so anything exported from a route is unreachable from vitest.
 
-```tsx
-import { describe, expect, it } from "vitest";
-import { filterEvaluationResources } from "#/routes/resources.evaluation-resources";
+Run: `bunx vitest run src/lib/evaluation-resources.test.ts -t filterEvaluationResources`
 
-describe("filterEvaluationResources", () => {
-	it("returns everything for an empty query", () => {
-		expect(filterEvaluationResources("")).toHaveLength(64);
-		expect(filterEvaluationResources("   ")).toHaveLength(64);
-	});
+Expected: PASS (7 tests). If it does not, Task 1 is incomplete — stop and say so
+rather than duplicating the filter here.
 
-	it("matches on project name, case-insensitively", () => {
-		const r = filterEvaluationResources("active listening");
-		expect(r).toHaveLength(1);
-		expect(r[0].project).toBe("Active Listening");
-	});
-
-	it("matches on TI item code", () => {
-		const r = filterEvaluationResources("8200E");
-		expect(r).toHaveLength(1);
-		expect(r[0].itemCode).toBe("8200E");
-	});
-
-	it("matches a lowercase item code too", () => {
-		expect(filterEvaluationResources("8200e")).toHaveLength(1);
-	});
-
-	it("ignores punctuation differences", () => {
-		// A member types what they remember, not TI's hyphenation.
-		expect(
-			filterEvaluationResources("question and answer").length,
-		).toBeGreaterThan(0);
-	});
-
-	it("returns nothing for a query that matches nothing", () => {
-		expect(filterEvaluationResources("zzzzz")).toEqual([]);
-	});
-
-	it("finds the generic resource by name", () => {
-		const r = filterEvaluationResources("generic");
-		expect(r.some((x) => x.itemCode === "8053")).toBe(true);
-	});
-});
-```
-
-- [ ] **Step 2: Run the test to verify it fails**
-
-Run: `bunx vitest run src/routes/resources-evaluation-index.test.tsx`
-
-Expected: FAIL — module not found.
+This route therefore has no separately testable logic. Its gates are the
+registry guard (Step 5) and the manual render check (Step 6).
 
 - [ ] **Step 3: Write the route**
 
@@ -1620,34 +1694,13 @@ import { ResourcesShell } from "#/components/resources/resources-shell";
 import { Input } from "#/components/ui/input";
 import {
 	EVALUATION_RESOURCES,
-	type EvaluationResource,
+	filterEvaluationResources,
 } from "#/lib/evaluation-resources";
 import { getAuthContext } from "#/server/auth-context";
 
 const TITLE = "Evaluation resources — GavelUp";
 const DESCRIPTION =
 	"Every official Toastmasters evaluation resource, searchable by project name or item number.";
-
-/**
- * Pure so it is testable — a route cannot be mounted in vitest, so any logic
- * left inside the component is reachable only by a source grep.
- *
- * Normalizes punctuation on both sides: a member types "question and answer",
- * TI writes "Question-and-Answer Session".
- */
-export function filterEvaluationResources(
-	query: string,
-): readonly EvaluationResource[] {
-	const q = query.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-	if (!q) return EVALUATION_RESOURCES;
-	return EVALUATION_RESOURCES.filter((r) => {
-		const haystack = [r.title, r.project ?? "", r.itemCode ?? "", r.part ?? ""]
-			.join(" ")
-			.toLowerCase()
-			.replace(/[^a-z0-9]+/g, " ");
-		return haystack.includes(q);
-	});
-}
 
 export const Route = createFileRoute("/resources/evaluation-resources")({
 	// Mirrors resources.index.tsx: a signed-in member with a club gets the app
@@ -1788,7 +1841,7 @@ Add to the `resources` array in `src/data/resources.ts`:
 
 ```bash
 bun run generate-routes
-bunx vitest run src/routes/resources-evaluation-index.test.tsx src/data/resources.guard.test.ts
+bunx vitest run src/data/resources.guard.test.ts src/lib/evaluation-resources.test.ts
 ```
 
 Expected: both PASS. The registry guard confirms the markdown/registry pair.
@@ -1812,7 +1865,7 @@ If the article renders instead, the dynamic route is winning — check
 ```bash
 bun run typecheck
 bunx biome check --diagnostic-level=error src/routes/ src/data/
-git add src/routes/resources.evaluation-resources.tsx src/routes/resources-evaluation-index.test.tsx content/resources/evaluation-resources.md src/data/resources.ts src/routeTree.gen.ts
+git add src/routes/resources.evaluation-resources.tsx content/resources/evaluation-resources.md src/data/resources.ts src/routeTree.gen.ts
 git commit -m "feat(resources): searchable index of every official evaluation resource"
 ```
 
