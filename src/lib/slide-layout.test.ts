@@ -309,11 +309,7 @@ describe("slideLayout bodies", () => {
 			expect(new Set(headers).size).toBe(3);
 			// And they read as the ordinals the deck already computed, matching how
 			// the sibling multi-instance kind (`speech`) has always behaved.
-			expect(headers).toEqual([
-				"Evaluation 1",
-				"Evaluation 2",
-				"Evaluation 3",
-			]);
+			expect(headers).toEqual(["Evaluation 1", "Evaluation 2", "Evaluation 3"]);
 		});
 
 		// The two tests above pin the one collision #446 was about. This one closes

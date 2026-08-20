@@ -6,7 +6,7 @@
 import { renderToBuffer } from "@react-pdf/renderer";
 import { eq } from "drizzle-orm";
 import { db } from "#/db";
-import { clubLogos, clubs, meetings } from "#/db/schema";
+import { clubLogos, clubs, meetings, roleDefinitions } from "#/db/schema";
 import { formatShortDate } from "#/lib/format";
 import { isDecodeSafe } from "#/server/club-logo-logic";
 import { isReadableClub } from "#/server/club-readable-logic";
@@ -16,10 +16,12 @@ import {
 } from "#/server/minutes-logic";
 import {
 	buildRoleSheetDoc,
+	CANONICAL_SHEET_ROLE_NAMES,
 	cap,
 	RENDER_CAPS,
 	type RoleSheetFill,
 	type RoleSheetKey,
+	type SheetRoleNames,
 } from "#/server/role-sheet-layout";
 
 /**
@@ -107,15 +109,60 @@ export async function loadRoleSheetLogo(
 	return `data:${row.mime};base64,${row.bytes.toString("base64")}`;
 }
 
+/**
+ * What this club calls the roles the sheet scripts name (#520).
+ *
+ * Reads `role_definitions.name` by KEY, which is the same column the agenda's
+ * slot query joins for `roleName` — so for any role this club runs, the sheet
+ * and the printed agenda say the identical word. That agreement is the whole
+ * point: before this, a club that renamed Timer to "Timekeeper" got the new name
+ * on the agenda and "Timer, would you…" on the General Evaluator's sheet.
+ *
+ * Falls back per-role to our canonical name, so a club that has never defined
+ * (or has deleted) one of these reads as it always did rather than as a blank.
+ *
+ * ONE known divergence from `clubRoleName`, stated rather than hidden: that
+ * helper matches SLOTS, so it yields the canonical name for a role the club has
+ * renamed but is not running on this meeting. This reads definitions, so it
+ * yields the club's name. It only shows up on a sheet whose own role has no slot
+ * — where nobody is holding the sheet — or in a cross-reference to a role this
+ * meeting does not run, which the agenda drops entirely via beat fallbacks.
+ */
+async function loadSheetRoleNames(meetingId: string): Promise<SheetRoleNames> {
+	// Keyed off `meetingId`, joining to the club through the meeting, so this can
+	// ride the existing `Promise.all` below rather than waiting on a resolved
+	// `clubId`. This route renders a PDF on every request (`no-store`), and the
+	// comment there is explicit that a sequential round trip is latency for no
+	// reason — taking `clubId` would have made this the fourth one in a chain.
+	const rows = await db
+		.select({ key: roleDefinitions.key, name: roleDefinitions.name })
+		.from(roleDefinitions)
+		.innerJoin(meetings, eq(meetings.clubId, roleDefinitions.clubId))
+		.where(eq(meetings.id, meetingId));
+	const byKey = new Map(
+		rows.flatMap((r) => (r.key ? [[r.key, r.name] as const] : [])),
+	);
+	// Built by mapping over the CANONICAL keys rather than over the rows, so the
+	// result is total: every field the scripts interpolate is present, and a
+	// template literal can never render "undefined" into someone's mouth.
+	const out = { ...CANONICAL_SHEET_ROLE_NAMES };
+	for (const key of Object.keys(out) as (keyof SheetRoleNames)[]) {
+		const named = byKey.get(key);
+		if (named) out[key] = named;
+	}
+	return out;
+}
+
 /** Build the per-meeting fill context (club, date, prepared speakers, WOD). */
 export async function loadRoleSheetFill(
 	meetingId: string,
 ): Promise<RoleSheetFill & { clubName: string }> {
-	// All three reads key off `meetingId` alone and none feeds another, so they
-	// go out together: this route renders a PDF on every request (`no-store`),
-	// and three sequential round-trips is three times the latency floor for no
-	// reason.
-	const [[row], program, logoDataUri] = await Promise.all([
+	// All FOUR reads key off `meetingId` alone and none feeds another, so they go
+	// out together: this route renders a PDF on every request (`no-store`), and
+	// sequential round-trips multiply the latency floor for no reason. The role
+	// names (#520) joined through the meeting specifically so they could stay in
+	// here rather than becoming a fourth hop behind a resolved `clubId`.
+	const [[row], program, logoDataUri, roleNames] = await Promise.all([
 		db
 			.select({
 				clubName: clubs.name,
@@ -137,6 +184,7 @@ export async function loadRoleSheetFill(
 		// rejection here rejects the whole `Promise.all` and takes the PDF with
 		// it. Every route loader that reads the logo has the same guard.
 		loadRoleSheetLogo(meetingId).catch(() => null),
+		loadSheetRoleNames(meetingId),
 	]);
 	if (!row) throw new Error(`meeting ${meetingId} not found`);
 
@@ -154,6 +202,7 @@ export async function loadRoleSheetFill(
 		speakers,
 		wod,
 		logoDataUri,
+		roleNames,
 	};
 }
 

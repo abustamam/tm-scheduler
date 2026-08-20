@@ -20,12 +20,14 @@ import { formatTimingClock } from "#/lib/timing-window";
 import { WOD_LIMITS } from "#/lib/wod-limits";
 import {
 	buildRoleSheetDoc,
+	CANONICAL_SHEET_ROLE_NAMES,
 	capFill,
 	RENDER_CAPS,
 	type RoleSheetFill,
 	type RoleSheetKey,
 	roleSheetByKey,
-	SHEET_SCRIPTS,
+	type SheetRoleNames,
+	sheetScripts,
 	standardTimingRows,
 } from "./role-sheet-layout";
 
@@ -266,7 +268,7 @@ describe("role sheets carry a spoken script (#509)", () => {
 		it(`"${key}" prints a What to say block with every one of its cues`, () => {
 			const words = wordsOf(key);
 			expect(words).toContain("What to say");
-			const cues = SHEET_SCRIPTS[key];
+			const cues = sheetScripts()[key];
 			// A sheet with no cues would pass the "What to say" check vacuously.
 			expect(cues.length).toBeGreaterThan(0);
 			for (const c of cues) {
@@ -296,7 +298,7 @@ describe("role sheets carry a spoken script (#509)", () => {
 	// #508 put these cues on the printed agenda. The sheet in the holder's hand
 	// has to say the same thing, or one person is told two different things.
 	//
-	// These read the REAL run sheet. The first version compared `SHEET_SCRIPTS`
+	// These read the REAL run sheet. The first version compared `sheetScripts`
 	// to hardcoded literals — two copies of the same English, one surface checked
 	// against itself — and review caught it by rewording the agenda cue and
 	// watching all 41 tests stay green. Beats are located STRUCTURALLY (by the
@@ -314,17 +316,23 @@ describe("role sheets carry a spoken script (#509)", () => {
 
 			// The GE's sheet and the agenda row read the SAME exported constant, so a
 			// reword moves both together or fails to compile.
-			const ge = SHEET_SCRIPTS["general-evaluator"].map((c) => c.say).join(" ");
+			const ge = sheetScripts()
+				["general-evaluator"].map((c) => c.say)
+				.join(" ");
 			expect(ge).toContain(EVALUATION_TIMING_ASK);
 
 			// The Timer answers that ask. Its cue is deliberately merged (it also
 			// covers the Table Topics Master's ask), so it carries the shared verb
 			// phrase rather than the whole constant.
-			const timerWhen = SHEET_SCRIPTS.timer.map((c) => c.when).join(" | ");
+			const timerWhen = sheetScripts()
+				.timer.map((c) => c.when)
+				.join(" | ");
 			expect(timerWhen).toContain("explain the timing");
-			expect(SHEET_SCRIPTS.timer.map((c) => c.say).join(" | ")).toContain(
-				"For each evaluation:",
-			);
+			expect(
+				sheetScripts()
+					.timer.map((c) => c.say)
+					.join(" | "),
+			).toContain("For each evaluation:");
 		});
 
 		it("has the Timer ready for the Table Topics ask the agenda makes", () => {
@@ -338,7 +346,9 @@ describe("role sheets carry a spoken script (#509)", () => {
 			expect(segment).toBeDefined();
 			expect(segment.detail).toContain("to explain the timing");
 
-			const says = SHEET_SCRIPTS.timer.map((c) => c.say).join(" | ");
+			const says = sheetScripts()
+				.timer.map((c) => c.say)
+				.join(" | ");
 			expect(says).toContain("For Table Topics:");
 			expect(says).toContain("For each evaluation:");
 		});
@@ -377,7 +387,7 @@ describe("role sheets carry a spoken script (#509)", () => {
 			);
 			expect(intro?.detail).toContain("Word of the Day");
 
-			const [first] = SHEET_SCRIPTS.grammarian;
+			const [first] = sheetScripts().grammarian;
 			expect(first.when).toContain("Word of the Day");
 			expect(first.say).toContain("Word of the Day");
 		});
@@ -423,7 +433,7 @@ describe("the Ah-Counter is not handed the booked speakers (#509)", () => {
 		expect(words).toContain("Double clutch");
 		expect(words).toContain('A "double clutch" is a restart');
 		// The spoken cue names it too, so the sheet and the words read off it
-		// agree — the pairing `SHEET_SCRIPTS` exists to keep (#509). It used to
+		// agree — the pairing `sheetScripts` exists to keep (#509). It used to
 		// say "repeated words", gesturing at the thing without naming it.
 		expect(words).toContain("double clutches");
 		expect(words).not.toContain("and for repeated words");
@@ -813,7 +823,7 @@ describe("render caps bound what a public request can make us lay out (#519)", (
 		// `logoDataUri` is exempt on purpose: it is bounded upstream by
 		// `isDecodeSafe`/`MAX_LOGO_DIMENSION`, a pixel bound rather than a string
 		// one, and truncating base64 here would only corrupt a valid image.
-		const CAPPED = ["club", "date", "speakers", "wod"];
+		const CAPPED = ["club", "date", "speakers", "wod", "roleNames"];
 		const BOUNDED_ELSEWHERE = ["logoDataUri"];
 		const every: Required<RoleSheetFill> = {
 			club: "Harborlight Toastmasters",
@@ -821,6 +831,11 @@ describe("render caps bound what a public request can make us lay out (#519)", (
 			logoDataUri: null,
 			speakers: ["Ann"],
 			wod: { word: "Cumbersomeness", note: "clumsy or unwieldy" },
+			// CAPPED, and the canary is what forced the classification (#520). A club
+			// role name is unbounded user data — the write schema validates only
+			// non-empty — and since #520 it is interpolated mid-sentence into a sheet
+			// with a pinned one-page budget, rendered by react-pdf in this process.
+			roleNames: CANONICAL_SHEET_ROLE_NAMES,
 		};
 		expect(Object.keys(capFill(every)).sort()).toEqual(
 			[...CAPPED, ...BOUNDED_ELSEWHERE].sort(),
@@ -880,5 +895,123 @@ describe("render caps bound what a public request can make us lay out (#519)", (
 		// documents the invariant and fails loudly if someone splits them again.
 		expect(WOD_LIMITS.word).toBeLessThanOrEqual(RENDER_CAPS.word);
 		expect(WOD_LIMITS.definition).toBeLessThanOrEqual(RENDER_CAPS.note);
+	});
+});
+
+/**
+ * The scripts speak the CLUB's word for a role (#520).
+ *
+ * The printed agenda has resolved role names through `clubRoleName` since #445,
+ * and the sheets did not — so a club that renamed Timer to "Timekeeper" got
+ * "Asks the Timekeeper to explain the timing" on the agenda and "Timer, would
+ * you…" on the General Evaluator's sheet. Two documents in the same hand, one of
+ * them naming a role the club does not run. This is the thread #445, #462 and
+ * #464 pulled everywhere else.
+ *
+ * Asserted on `sheetScripts` rather than through a rendered PDF because the
+ * defect is in the STRINGS: a react-pdf render would prove the words reached a
+ * buffer and tell you nothing about which words. The one-page budget is already
+ * gated separately, and `capFill` bounds the length.
+ */
+describe("sheet scripts adopt the club's role names (#520)", () => {
+	const RENAMED = {
+		...CANONICAL_SHEET_ROLE_NAMES,
+		timer: "Timekeeper",
+		grammarian: "Wordsmith",
+		general_evaluator: "Lead Evaluator",
+		table_topics_master: "Topics Host",
+		vote_counter: "Teller",
+		toastmaster_of_the_day: "Host",
+	};
+
+	function textOf(node: unknown): string[] {
+		if (node == null || node === false) return [];
+		if (typeof node === "string") return [node];
+		if (Array.isArray(node)) return node.flatMap(textOf);
+		const el = node as { props?: { children?: unknown } };
+		return el.props ? textOf(el.props.children) : [];
+	}
+
+	/**
+	 * Everything a RENDERED sheet says, as one string.
+	 *
+	 * Through `buildRoleSheetDoc`, not `sheetScripts` — and that distinction cost
+	 * a mutation to find. An earlier version of these cases asserted on
+	 * `sheetScripts(RENAMED)` directly, so reverting ONE builder to
+	 * `sheetScripts()` (canonical names, ignoring the fill) left all of them
+	 * green: they proved the function substitutes and said nothing about whether
+	 * the five sheets pass it anything. That is the #319 shape — a well-tested
+	 * function reached through a wrong argument — and the builders are exactly
+	 * where a name goes missing.
+	 */
+	const spoken = (names: SheetRoleNames | undefined, key: RoleSheetKey) =>
+		textOf(
+			buildRoleSheetDoc(key, names ? { ...fill, roleNames: names } : fill),
+		).join(" | ");
+
+	it("names the sheet's OWN role as the club does", () => {
+		expect(spoken(RENAMED, "timer")).toContain("I'm your Timekeeper");
+		expect(spoken(RENAMED, "grammarian")).toContain("I'm your Wordsmith");
+		expect(spoken(RENAMED, "ballot-counter")).toContain("I'm your Teller");
+		expect(spoken(RENAMED, "general-evaluator")).toContain(
+			"I'm your Lead Evaluator",
+		);
+	});
+
+	// The cross-references are the half that actually shipped the complaint: the
+	// General Evaluator's sheet cueing a role by OUR name while the agenda in the
+	// same hand used the club's.
+	it("names OTHER roles as the club does, in cross-references", () => {
+		expect(spoken(RENAMED, "general-evaluator")).toContain("Timekeeper, would");
+		expect(spoken(RENAMED, "timer")).toContain(
+			"When the Topics Host or the Lead Evaluator asks you",
+		);
+		expect(spoken(RENAMED, "ballot-counter")).toContain(
+			"pass them to the Host",
+		);
+	});
+
+	it("leaves no canonical name behind on a fully renamed club", () => {
+		// The set, not one string: a substitution missed on ONE cue is the shape
+		// this would ship as, and a per-sentence assertion would not see it.
+		const all = (
+			[
+				"timer",
+				"ah-counter",
+				"grammarian",
+				"ballot-counter",
+				"general-evaluator",
+			] as const
+		)
+			.map((k) => spoken(RENAMED, k))
+			.join(" | ");
+		for (const canonical of [
+			"I'm your Timer",
+			"I'm your Grammarian",
+			"I'm your Ballot Counter",
+			"I'm your General Evaluator",
+			"Table Topics Master",
+		]) {
+			expect(all, `${canonical} survived the rename`).not.toContain(canonical);
+		}
+	});
+
+	it("falls back to our names when there is no club to ask", () => {
+		// The STATIC blanks in `public/role-sheets/` serve every club, so canonical
+		// is the right answer there rather than a degraded one — which is why
+		// `sheetScripts()` takes no argument and `RoleSheetFill.roleNames` is
+		// optional.
+		expect(spoken(undefined, "timer")).toContain("I'm your Timer");
+		expect(spoken(undefined, "general-evaluator")).toContain("Timer, would");
+	});
+
+	it("caps a role name before it reaches the renderer", () => {
+		// Unbounded user data — the write schema validates only non-empty — now
+		// interpolated mid-sentence into a sheet with a pinned one-page budget.
+		const capped = capFill({
+			...fill,
+			roleNames: { ...CANONICAL_SHEET_ROLE_NAMES, timer: "T".repeat(5_000) },
+		});
+		expect(capped.roleNames?.timer.length).toBe(RENDER_CAPS.roleName);
 	});
 });
