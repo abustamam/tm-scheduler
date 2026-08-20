@@ -60,6 +60,36 @@ describe("ProjectPicker", () => {
 		expect(link?.getAttribute("href")).toBe(ACTIVE_LISTENING_URL);
 	});
 
+	it("renders NO link for a project with no resource of its own", () => {
+		// Spec §2, and the call site is what enforces it: the picker passes no
+		// `fallback`, so the generic 8053 form never stands in for a project TI
+		// publishes its own form for. Cross-Cultural Understanding is the live
+		// case — `reconcileCatalog` derives it from Base Camp, `pathways-catalog.ts`
+		// does not list it (#606), and TI publishes 8202E for it.
+		const { container } = render(
+			<ProjectPicker
+				paths={[
+					{
+						...PATH,
+						projects: [
+							{
+								id: "proj-1",
+								level: 3,
+								name: "Cross-Cultural Understanding",
+								isRequired: false,
+								complete: false,
+							},
+						],
+					},
+				]}
+				value="proj-1"
+				onChange={() => {}}
+				fallback={{ pathwayPath: null, projectName: null, projectLevel: null }}
+			/>,
+		);
+		expect(container.querySelectorAll("a")).toHaveLength(0);
+	});
+
 	it("offers the evaluation resource on the project row inside the picker dialog", async () => {
 		const user = userEvent.setup();
 		// No selection, so the only link on the page once the dialog opens is
