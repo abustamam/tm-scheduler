@@ -9,6 +9,7 @@
 import { QRCodeSVG } from "qrcode.react";
 import { groupByPresenter } from "#/lib/agenda-groups";
 import { RUN_NARRATIVE_TYPE } from "#/lib/agenda-print-type";
+import { introducedSuffix } from "#/lib/agenda-runsheet";
 import type { TimelineRow } from "#/lib/agenda-timing";
 import { announcementLines } from "#/lib/announcement-lines";
 import {
@@ -479,11 +480,25 @@ function HandoffBand({
 	fontSize,
 	padding,
 	chrome,
+	nameTheGroup = false,
 }: {
 	row: TimelineRow;
 	fontSize: number;
 	padding: string;
 	chrome?: Pick<React.CSSProperties, "background" | "borderBottom">;
+	/**
+	 * Print the group's members after the detail (#578) — "Introduces the
+	 * speakers — Jagpal, Rehanna & Faisal".
+	 *
+	 * OFF by default, and the default is the decision. On a one-page layout the
+	 * group's own rows are the next thing on the sheet in the boldest type the
+	 * rhythm has, and #585 measured the names costing 5% of every word's size
+	 * because `FitPage` scales the whole page to fit the longest line. The
+	 * two-page layouts turn it on: their run of show can break between the
+	 * hand-off and the people it introduces, which is the case a club actually
+	 * reported, and their page 2 carries only the run of show so it has the room.
+	 */
+	nameTheGroup?: boolean;
 }) {
 	return (
 		<div
@@ -524,7 +539,16 @@ function HandoffBand({
 			</span>
 			<span>{row.who}</span>
 			<span style={{ flex: "none", opacity: 0.55 }}>{" · "}</span>
-			<span>{row.detail}</span>
+			{/* One span, not two: the names are a continuation of the same sentence
+			    ("Introduces the speakers — Jagpal & Rehanna"), so they must wrap and
+			    break with it rather than as an independent flex item that can be
+			    pushed onto its own line while the detail sits short. The separator is
+			    `NAMES_SEPARATOR`, shared with the singular hand-offs' `{names:…}`
+			    token so both read identically on the page. */}
+			<span>
+				{row.detail}
+				{nameTheGroup ? introducedSuffix(row.introduces ?? []) : ""}
+			</span>
 		</div>
 	);
 }
@@ -599,10 +623,21 @@ function RunNarrative({
 	rows,
 	scale,
 	timingColors,
+	nameTheGroup,
 }: {
 	rows: TimelineRow[];
 	scale: "sm" | "lg";
 	timingColors?: boolean;
+	/**
+	 * Print group hand-offs' members (#578) — see `HandoffBand`.
+	 *
+	 * A separate prop rather than reading `scale === "lg"`, even though `lg` is
+	 * only ever the two-page spacious layout today. `scale` means type size and
+	 * this means "the group's rows may be on another sheet"; they coincide by
+	 * accident, and the day a one-page layout wants big type it would silently
+	 * inherit a 5% shrink of every word on it (#585).
+	 */
+	nameTheGroup?: boolean;
 }) {
 	const lg = scale === "lg";
 	const groups = groupByPresenter(rows);
@@ -657,6 +692,7 @@ function RunNarrative({
 							row={lead}
 							fontSize={lg ? 11.5 : 10}
 							padding={lg ? "4px 0 4px 83px" : "3px 0 3px 69px"}
+							nameTheGroup={nameTheGroup}
 						/>
 					);
 				return (
@@ -1638,7 +1674,7 @@ function SpaciousLayout({
 					</div>
 
 					<div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-						<RunNarrative rows={rows} scale="lg" />
+						<RunNarrative rows={rows} scale="lg" nameTheGroup />
 					</div>
 
 					<div style={{ display: "flex", gap: 20, marginTop: 22 }}>
@@ -2008,6 +2044,8 @@ function TimingLayout({
 											background: i % 2 === 1 ? "#fafdfb" : "#fff",
 											borderBottom: i < rows.length - 1 ? HAIR : undefined,
 										}}
+										// Two-page layout: the speakers can be overleaf (#578).
+										nameTheGroup
 									/>
 								);
 							// `who` joins the role and the holder with " · ", and since #445 the

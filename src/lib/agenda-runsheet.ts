@@ -82,6 +82,32 @@ export type AgendaRow = {
 	flex?: boolean;
 	/** Set from the beat's own `handoff` — see `Beat` for what it is for. */
 	handoff?: boolean;
+	/**
+	 * On a GROUP hand-off ("Introduces the speakers"), who is in that group —
+	 * in speaking order, names only (#578).
+	 *
+	 * DATA, not prose, and that is the whole point. The three SINGULAR hand-offs
+	 * bake their one name into `detail` through `{names:…}`, because #585
+	 * measured that as costing almost no height. The two GROUP hand-offs
+	 * deliberately do NOT: a comma-joined list of 2-5 members is the longest
+	 * content on the sheet, `FitPage` scales the WHOLE page to fit it, and on a
+	 * one-page layout the group's own rows are the very next thing anyway —
+	 * editorial measured 6.470pt of printed body with them against 6.799pt
+	 * without, on a 6.2pt floor. A 5% shrink of every word, spent restating the
+	 * next row.
+	 *
+	 * That reasoning is sound and it is also exactly why a club asked for this
+	 * (#578): it holds only while the group's rows are on the SAME SHEET. On the
+	 * two-page layouts the run of show can break between the hand-off and the
+	 * people it introduces, and then the Toastmaster is looking at "Introduces
+	 * the speakers" with the speakers overleaf.
+	 *
+	 * So the names travel as a field and each layout decides. The one-page
+	 * layouts ignore it and keep #585's measurement intact; the two-page layouts
+	 * render it, where page 2 holds only the run of show and has the headroom.
+	 * Absent on every non-group hand-off and on every ordinary row.
+	 */
+	introduces?: string[];
 	/** A full-width section band ("PREPARED SPEECH CONTEST") on a TEMPLATED
 	 *  agenda. A real field rather than a reuse of `handoff`: a hand-off row
 	 *  renders as an indented italic elbow meaning "X introduces Y", which is the
@@ -219,6 +245,20 @@ export type Beat = (
 	 *  by position rather than this flag, and `agenda-parity.test.ts` compares
 	 *  the two resolutions row-for-slide. */
 	handoff?: true;
+	/**
+	 * On a GROUP hand-off, the role whose holders it introduces (#578).
+	 *
+	 * Populates the row's `introduces` field with their names, for the layouts
+	 * that render it. EXPLICIT rather than inferred from `requiresAnyOf`, which
+	 * happens to name the same role on both group hand-offs today: that gate
+	 * answers "does this beat exist at all", and reusing it here would silently
+	 * start listing names the day a beat needs a gate that is not its target.
+	 *
+	 * Set on the two group hand-offs ONLY. The three singular ones carry their
+	 * name in `detail` via `{names:…}`, and giving them both mechanisms would
+	 * print the name twice.
+	 */
+	introducesGroup?: BeatRole;
 };
 
 /**
@@ -910,6 +950,11 @@ export function buildRunOfShow({
 			detail: "Introduces the speakers",
 			minutes: 0,
 			handoff: true,
+			// The names travel as row DATA (#578), not in the detail above, so the
+			// one-page layouts keep #585's measured type size while the two-page
+			// layouts — where the speakers can land on the next sheet — can print
+			// them. See `AgendaRow.introduces`.
+			introducesGroup: SPEAKER_ROLE,
 			requiresAnyOf: [SPEAKER_ROLE],
 		},
 		{
@@ -1009,10 +1054,15 @@ export function buildRunOfShow({
 			kind: "role",
 			...GENERAL_EVALUATOR_ROLE,
 			role: "plain",
-			// Group target — see the speakers hand-off above for why it names nobody.
+			// Group target — see the speakers hand-off above for why the detail names
+			// nobody and `introducesGroup` carries the names instead (#578/#585).
 			detail: "Introduces the speech evaluators",
 			minutes: 0,
 			handoff: true,
+			// Evaluators are ordered by the SPEAKER they evaluate, which
+			// `introducedNames` gets right by sorting on `slotIndex` — the same
+			// order the evaluation rows print in below.
+			introducesGroup: EVALUATOR_ROLE,
 			requiresAnyOf: [EVALUATOR_ROLE],
 			fallbacks: [GE_COVERED_BY_TOASTMASTER],
 		},
@@ -1441,7 +1491,12 @@ export function introducedNames(slots: AgendaSlot[], role: BeatRole): string[] {
 }
 
 /**
- * `["Rehanna", "Sudheer"]` → `" — Rehanna & Sudheer"`; `[]` → `""`.
+ * `["Rehanna", "Sudheer"]` → `": Rehanna & Sudheer"`; `[]` → `""`.
+ *
+ * The separator is `NAMES_SEPARATOR`. This line said `" — "` until #578, which
+ * is what the separator was before it became a colon — and it cost a reader an
+ * hour writing assertions against an em dash the code has not emitted for a
+ * while. Read the constant, not this line, if the two ever disagree again.
  *
  * The rendering half of `{names:…}`, exported so the deck's hand-off slide
  * appends the identical string (#585). Separate from `introducedNames` because
@@ -1455,7 +1510,7 @@ export function introducedSuffix(names: string[]): string {
 
 /**
  * Who holds `key` this meeting, as the `{names:…}` token renders it (#585):
- * `" — Riyaz"`, `" — Jagpal, Rehanna & Faisal"`, or `""`.
+ * `": Riyaz"`, `": Jagpal, Rehanna & Faisal"`, or `""`.
  */
 function roleHolderNames(key: string, slots: AgendaSlot[]): string | null {
 	const role = NAMES_ROLES.find((r) => r.roleKey === key);
@@ -1725,8 +1780,23 @@ export function expandRunSheet(
 
 		// A hand-off beat marks every row it produced.
 		if (beat.handoff) {
+			// A GROUP hand-off also carries WHO is in the group (#578), as data the
+			// layout may or may not render — see `AgendaRow.introduces`. Resolved
+			// here rather than in the beat's `detail` so #585's measurement of the
+			// one-page layouts survives: those ignore the field.
+			const named = beat.introducesGroup
+				? introducedNames(slots, beat.introducesGroup)
+				: [];
+			// Omit the field entirely rather than carrying `[]`: an unassigned group
+			// has nobody to name, and an empty array would have every layout render
+			// a dangling separator.
+			const introduces = named.length > 0 ? named : undefined;
 			for (let i = startLen; i < rows.length; i++) {
-				rows[i] = { ...rows[i], handoff: true };
+				rows[i] = {
+					...rows[i],
+					handoff: true,
+					...(introduces ? { introduces } : {}),
+				};
 			}
 		}
 

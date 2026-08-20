@@ -2,6 +2,12 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.22.1.0] - 2026-08-19
+
+### Changed
+
+- **The two-page agendas now name the speakers and evaluators being introduced.** "Introduces the speakers" is followed by who they are — so a Toastmaster holding page one no longer has to turn over to find out. On these layouts the run of show sits on its own sheet, so the names cost a single line of height and nothing else; measured, not assumed. The one-page agendas are unchanged and still leave the names out, because there the people introduced are the very next rows on the same sheet, and adding the list there shrinks every word on the page by about 5% to make room for it.
+
 ## [1.22.0.0] - 2026-08-19
 
 ### Added
