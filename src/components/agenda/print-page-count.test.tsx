@@ -213,6 +213,52 @@ describe.skipIf(!hasChrome)("printed page counts", () => {
 		expect(pages(PRINT_PAGE_CSS, agendaHtml(layout))).toBe(expected);
 	});
 
+	/**
+	 * The load-bearing CSS assumption behind the contest agenda
+	 * (#agenda-templates). `FitPage` normally scales a sheet down to fit, but a
+	 * speech contest runs ~40 rows at four contestants and ~58 at seven, and
+	 * scaling that to one page printed the body text at 2.6pt. Below
+	 * `MIN_FIT_SCALE` it therefore drops the fixed height and the `overflow:
+	 * hidden` clip and lets the browser paginate instead.
+	 *
+	 * That only works if the sheet is allowed to break. `PRINT_PAGE_CSS` applies
+	 * `.agenda-page { break-inside: avoid }` — added when every `.agenda-page`
+	 * was a fixed `PAGE_H` box where it could never bind — and the flowing
+	 * element still carries the same class. If `break-inside` won, a contest
+	 * would print its first sheet and silently drop the rest, which is strictly
+	 * worse than the crushed type it replaced.
+	 *
+	 * It does not win: a fragmentation break is forced when the box exceeds the
+	 * page. Measured here rather than assumed, because nothing else in the repo
+	 * can see it — the density suite measures HEIGHT, and a height that grows
+	 * past `PAGE_H` reads identically whether the tail prints or is thrown away.
+	 *
+	 * Deliberately synthetic content and a hand-built `.agenda-page`: the
+	 * subject is the STYLESHEET, not the component. `FitPage`'s flow branch is
+	 * set by a `useEffect`, and both print harnesses feed static SSR markup to
+	 * Chrome, so React never mounts and the branch is unreachable from any test
+	 * in this repo (recorded in TODOS.md).
+	 */
+	it("an .agenda-page taller than its sheet paginates instead of being clipped", () => {
+		const row = (i: number) =>
+			`<div style="height:24px">Contest row ${i}</div>`;
+		const tall = `<div class="agenda-page" style="width:816px;background:#fff">${Array.from(
+			{ length: 120 },
+			(_, i) => row(i),
+		).join("")}</div>`;
+		// 120 × 24px ≈ 2880px against ~1056px of usable sheet.
+		expect(pages(PRINT_PAGE_CSS, tall)).toBeGreaterThan(1);
+
+		// The control that makes the assertion above mean something: the SAME
+		// markup short enough to fit is one page, so the count is responding to
+		// content height and not to some other property of the fixture.
+		const short = `<div class="agenda-page" style="width:816px;background:#fff">${Array.from(
+			{ length: 10 },
+			(_, i) => row(i),
+		).join("")}</div>`;
+		expect(pages(PRINT_PAGE_CSS, short)).toBe(1);
+	});
+
 	it("the Word of the Day poster prints exactly one page", () => {
 		// The surface that shipped a blank second sheet in v1.3.0.0.
 		//

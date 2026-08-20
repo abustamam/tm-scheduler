@@ -117,6 +117,42 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
   and test them before the editor exists.
   **Priority:** P4
 
+- **`FitPage`'s flow branch is unreachable from every test in the repo.** `flow` is set by a
+  `useEffect`, and both print harnesses (`print-page-count.ts`, `print-density.test.tsx`) feed
+  static SSR markup to Chrome, so React never mounts; jsdom reports `scrollHeight === 0` and the
+  effect returns early. `print-density.test.tsx`'s `printedDetailPt` therefore asserts a
+  REIMPLEMENTATION of the `raw < MIN_FIT_SCALE` rule, not the component — a parity test, blind to
+  a defect present on both sides. The CSS half is now covered directly (a too-tall `.agenda-page`
+  paginates rather than clipping, `print-page-count.test.tsx`), and `MIN_FIT_SCALE` is pinned
+  absolutely, but the branch that CHOOSES to flow is not. Needs a harness that mounts React and
+  measures, or a `flow` prop the tests can force.
+  **Priority:** P2
+
+- **Route and component wiring for templates has no guard.** Three computed props decide whether
+  the feature is reachable and correct, and a prop-fed component test cannot see a wrong prop
+  (the #319 trap): `meeting-agenda.tsx` gates the "Change meeting type" button on `viewer.canManage`
+  and passes `currentTemplateId={meeting.templateId ?? null}`; the `/present` route returns the
+  explainer only when `data.template` is set, BEFORE `buildSlideDeck` runs; the meeting route
+  suppresses the deck with `template ? [] : buildSlideDeck(...)`. All three are 0% covered. The
+  repo precedent is a comment-blind source guard — `club-index-wiring.guard.test.ts`,
+  `meeting-chrome-wiring.guard.test.ts`.
+  **Priority:** P2
+
+- **`scripts/seed-global-templates.ts` is entirely untested.** Insert path, update path (it
+  REPLACES beats and roles), idempotent re-run, the `!row` throw, and the load-bearing safety
+  claim in its own doc comment — that re-seeding is safe while a club already holds materialized
+  `role_definitions` rows pointing at the template. That last one is the only claim whose failure
+  is silent and destructive.
+  **Priority:** P2
+
+- **The template server fns are gated in SOURCE but not in BEHAVIOUR.** `meeting-templates.guard.test.ts`
+  proves every `createServerFn` in the module names a `require*` guard and an archive check, which
+  is what the archive-gate sweep needs. Nothing calls `previewTemplateForMeeting` or
+  `applyTemplateToMeeting` with a plain member's session and asserts a refusal, so the guards are
+  verified by grep rather than by behaviour. Same for the zod validators — no test passes a
+  non-uuid.
+  **Priority:** P3
+
 - **`flexBannerMessage` hardcodes Table Topics.** `buildTemplateRows` carries a beat's `flex`
   through ungated, and `applyFlex` clamps to `TABLE_TOPICS_MIN/MAX` while the banner says "Table
   Topics is at its 25-min cap". Latent — the contest seed sets no flex beat — but a Phase 2
