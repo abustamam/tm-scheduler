@@ -212,6 +212,13 @@ export function probeColumn(opts: {
 				"--headless",
 				"--disable-gpu",
 				"--no-sandbox",
+				// Profile isolation, as on all three of `print-page-count.ts`'s
+				// spawns. Without it every probe shares the DEFAULT profile — and
+				// vitest runs test FILES in parallel, so this harness spawns
+				// concurrently with the two print suites and they contend for one
+				// profile lock. It also means a `CHROME_PATH` pointed at a real
+				// Chrome writes into the developer's own browser profile.
+				`--user-data-dir=${dir}`,
 				`--window-size=${opts.viewport.width},${opts.viewport.height}`,
 				"--virtual-time-budget=3000",
 				"--host-resolver-rules=MAP * ~NOTFOUND",

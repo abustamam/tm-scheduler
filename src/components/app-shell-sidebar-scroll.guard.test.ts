@@ -4,29 +4,34 @@ import { describe, expect, it } from "vitest";
 import { readSource } from "#/test/guard-source";
 
 /**
- * The desktop sidebar must be its OWN scroll container.
+ * The sidebar scrolls on its MIDDLE BAND, and neither host scrolls itself.
  *
- * It is `position: sticky` at a pinned `h-svh`, so its box can never grow past
- * the viewport and the document scroll cannot reveal its tail. That was
- * invisible while the nav was short. It stopped being invisible once the nav
- * outgrew the fold — an officer who is also a superadmin renders ~28 items —
- * and everything below the fold, the sign-out footer included, became
- * unreachable at any window height, with no scrollbar to say so. The mobile
- * drawer never had the bug: `SheetContent` has carried `overflow-y-auto` since
- * it was added, which is why this only ever reproduced at `lg+`.
+ * The `lg+` `<aside>` is `position: sticky` at a pinned `h-svh`, so its box can
+ * never grow past the viewport and the document scroll cannot reveal its tail.
+ * That was invisible while the nav was short. It stopped being invisible once
+ * the nav outgrew the fold — an officer who is also a superadmin renders ~28
+ * items — and everything below it, the sign-out footer included, became
+ * unreachable at any window height, with no scrollbar to say so. Scrolling the
+ * whole column fixes reachability and loses the footer, so the column is three
+ * bands instead: brand, scrolling nav, pinned mini-profile. The mobile drawer
+ * runs the same `SidebarInner`, which is why `SheetContent` had to STOP
+ * scrolling (`overflow-hidden`) for the band to be the thing that overflows.
  *
- * Nothing else in the suite can see this. jsdom performs no layout, so a
- * rendered `<AppShell>` reports the same (zero) geometry with or without the
- * class; typecheck and lint have no view of Tailwind semantics; and the print
- * page-count harness only ever inlines `PRINT_PAGE_CSS`. So the reachable gate
- * is a source grep.
+ * This file pins WHICH element and WHICH file each class lives on. It cannot
+ * see geometry — jsdom performs no layout, so a rendered `<AppShell>` reports
+ * the same (zero) numbers either way. The companion that measures whether the
+ * tail is actually REACHABLE, in a real browser, is
+ * `pinned-column-reachability.test.ts`. Neither subsumes the other: a class can
+ * be present on the right element and still not scroll (see the `min-h-0` case
+ * below), and geometry cannot tell you the class ended up in the wrong file.
+ * This one runs without a browser, so it is the half that always runs.
  *
  * COMMENT-BLIND (`readSource`) is mandatory here: every assertion below is of
  * the "this pattern must BE present" form, and the fix's own explanatory
- * comment sits two lines above the `<aside>` and names `overflow-y-auto`. Read
- * raw, that comment satisfies the assertion on its own and the class becomes
- * deletable with this file green — exactly the bypass `guard-source.ts` exists
- * to close.
+ * comments sit directly above the elements they describe and name the very
+ * classes asserted. Read raw, those comments satisfy the assertions on their
+ * own and the classes become deletable with this file green — exactly the
+ * bypass `guard-source.ts` exists to close.
  */
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SHELL = resolve(HERE, "app-shell.tsx");
@@ -108,6 +113,22 @@ describe("app shell sidebar scrolling", () => {
 		// `pinned-column-reachability.test.ts`.
 		expect(NAV_BAND).toContain("min-h-0");
 		expect(NAV_BAND).toContain("flex-1");
+	});
+
+	it("keeps the Sheet primitive's height contract that the drawer relies on", () => {
+		// The drawer only works because `SheetContent` is a FIXED-HEIGHT flex
+		// column: `overflow-hidden` on a height-auto box would clip the nav with
+		// no scrollbar anywhere. Those classes come from the shadcn primitive, not
+		// from our call site, so nothing here owns them — and
+		// `pinned-column-reachability.test.ts` reconstructs them BY HAND in its
+		// fixture, which means a `bunx shadcn@latest add sheet` that changed them
+		// would break the real drawer while the browser test kept passing against
+		// the stale copy. This is the assertion that notices.
+		const sheet = readSource(resolve(HERE, "ui/sheet.tsx"));
+		expect(sheet).toContain("flex flex-col");
+		expect(sheet).toMatch(
+			/side === "left" &&\s*\n?\s*"inset-y-0 left-0 h-full/,
+		);
 	});
 
 	it("keeps the brand and the footer out of the scrolling band", () => {
