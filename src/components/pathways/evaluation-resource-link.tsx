@@ -12,22 +12,14 @@ import { resolveEvaluationResources } from "#/lib/evaluation-resources";
  */
 export function EvaluationResourceLinks({
 	projectName,
-	variant = "inline",
 }: {
 	projectName: string | null | undefined;
-	variant?: "inline" | "block";
 }) {
 	const { resources, currentEditionNote, isGenericFallback } =
 		resolveEvaluationResources(projectName);
 
 	return (
-		<div
-			className={
-				variant === "block"
-					? "mt-2 flex flex-col gap-1"
-					: "mt-1 flex flex-wrap items-center gap-x-3 gap-y-1"
-			}
-		>
+		<div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
 			{resources.map((r) => (
 				<a
 					key={r.key}
@@ -38,6 +30,7 @@ export function EvaluationResourceLinks({
 				>
 					<FileText className="size-3.5 shrink-0" aria-hidden />
 					<span>
+						{/* isGenericFallback is safe per-resource because resolveEvaluationResources' fallback branch is always exactly one resource. */}
 						{isGenericFallback
 							? "Generic evaluation resource"
 							: r.part
