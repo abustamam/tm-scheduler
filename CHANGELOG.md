@@ -2,6 +2,12 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.22.7.0] - 2026-08-20
+
+### Fixed
+
+- **Opening a meeting online once is now enough to have it offline.** Loading an agenda while connected, then losing signal, could still leave you with a browser error page — which is the worst possible time to find out. Whenever the app updated itself, the copy saved for offline use was thrown away and not replaced until the next time you opened the page online, so "I loaded it before the meeting" quietly did nothing. The app now re-saves whatever meeting page you have open the moment it updates. Same fix covers a first visit, which had the same gap for a different reason.
+
 ## [1.22.6.0] - 2026-08-20
 
 ### Changed
