@@ -11,6 +11,11 @@ import type { ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Slide } from "#/lib/agenda-slides";
 import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
+import {
+	cqw,
+	SLIDE_HEADER_GAP_PCT,
+	SLIDE_INSET_PCT,
+} from "#/lib/slide-spacing";
 import { MeetingPresent } from "./meeting-present";
 
 // `MeetingPresent` polls `getVoteParticipation` for the bare-count badge
@@ -633,5 +638,80 @@ describe("a templated meeting's deck (#agenda-templates)", () => {
 		expect(
 			within(grid).getByText(/Prepared speech 1 · Ada Lovelace/),
 		).toBeTruthy();
+	});
+});
+
+/**
+ * Content-slide spacing on the PROJECTED deck (#359).
+ *
+ * The complaint was from a live projection: body text crowding the header rule
+ * and sitting close to the frame edge, much more obvious on a wall than on a
+ * laptop. The fix is a shared proportion (`#/lib/slide-spacing`), and what is
+ * worth pinning is the RELATIONSHIP rather than the number — a test asserting
+ * `8cqw` has to be edited every time the value is tuned, which trains people to
+ * edit the test instead of reading it.
+ *
+ * The `.pptx` half of the same property lives in `deck-to-pptx.test.ts`. Both
+ * exist because the two renderers use different units and drifted the same way
+ * independently: each carried a 6% header inset and a 7-7.5% body inset, so the
+ * body sat indented past its own rule on BOTH surfaces, and it never read as a
+ * bug because the surfaces agreed with each other.
+ */
+describe("content-slide spacing (#359)", () => {
+	afterEach(() => cleanup());
+
+	const contentDeck: Slide[] = [
+		{
+			kind: "wordOfDay",
+			word: "Momentum",
+			definition: "impetus gained by a moving object",
+			example: null,
+			presenter: null,
+		},
+	];
+
+	/** The header element and the scaled body's measuring box. */
+	function boxes() {
+		const { container } = renderPresent({ deck: contentDeck });
+		const header = container.querySelector("header");
+		if (!header) throw new Error("no content-slide header rendered");
+		// The measuring box is the header's next sibling — see `ContentSlide`.
+		const body = header.nextElementSibling as HTMLElement | null;
+		if (!body) throw new Error("no body box rendered");
+		return { header: header as HTMLElement, body };
+	}
+
+	it("gives the header and the body one shared left inset", () => {
+		const { header, body } = boxes();
+		expect(header.style.paddingLeft).toBeTruthy();
+		// The assertion the pre-#359 spacing failed: header 6cqw, body 7cqw.
+		expect(body.style.paddingLeft).toBe(header.style.paddingLeft);
+		expect(body.style.paddingRight).toBe(header.style.paddingRight);
+	});
+
+	it("insets both sides by the same amount", () => {
+		const { header } = boxes();
+		expect(header.style.paddingRight).toBe(header.style.paddingLeft);
+	});
+
+	it("separates the body from the header rule by more than it insets it vertically", () => {
+		// The gap under the rule is the body box's TOP padding, and the original
+		// report was that the body crowded the rule — so the top gap must exceed
+		// the bottom one rather than matching it, which is what `py-[2.5cqw]`
+		// (symmetric) gave.
+		const { body } = boxes();
+		const num = (v: string) => Number.parseFloat(v);
+		expect(num(body.style.paddingTop)).toBeGreaterThan(
+			num(body.style.paddingBottom),
+		);
+	});
+
+	it("reads its values from the shared spacing module, not literals", () => {
+		// Binds the rendered output to the same constants the .pptx export derives
+		// from. Without this the two could be tuned apart again — which is the
+		// defect, not a hypothetical.
+		const { header, body } = boxes();
+		expect(header.style.paddingLeft).toBe(cqw(SLIDE_INSET_PCT));
+		expect(body.style.paddingTop).toBe(cqw(SLIDE_HEADER_GAP_PCT));
 	});
 });

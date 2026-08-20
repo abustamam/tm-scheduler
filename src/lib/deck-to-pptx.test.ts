@@ -8,6 +8,11 @@ import {
 } from "./agenda-slides";
 import { TOASTMASTERS_DISCLAIMER } from "./brand";
 import { type ClubLogoAsset, deckToPptx, pptxFileName } from "./deck-to-pptx";
+import {
+	inchesOfWidth,
+	SLIDE_HEADER_GAP_PCT,
+	SLIDE_INSET_PCT,
+} from "./slide-spacing";
 
 function slot(over: Partial<AgendaSlot>): AgendaSlot {
 	return {
@@ -403,5 +408,119 @@ describe("club logo on the title splash (#496)", () => {
 		expect(plate.options.y + plate.options.h).toBeGreaterThan(
 			img.options.y + img.options.h,
 		);
+	});
+});
+
+/**
+ * Content-slide spacing agrees with the projected deck (#359).
+ *
+ * The two renderers size in different units — `cqw` on screen, inches here — so
+ * nothing but a shared PROPORTION can keep them together, and before #359
+ * nothing did: each file independently carried a 6% header inset and a 7-7.5%
+ * body inset. The body sat indented past the maroon rule that heads it, on both
+ * surfaces, and it never read as a bug because the two surfaces agreed with each
+ * other while both disagreed internally.
+ *
+ * So these assert the RELATIONSHIP, not the numbers. A test pinning `x` to
+ * 1.0664 would have to be edited every time the inset is tuned, which trains
+ * people to edit the test instead of reading it; a test saying "the header, the
+ * rule and the body share one left edge" fails only when the thing that matters
+ * breaks.
+ */
+/** The 16:9 frame `deck-to-pptx` builds on. Private there, so named here — a
+ *  wrong value makes the derivation assertion fail loudly rather than pass. */
+const PPTX_FRAME_W = 13.33;
+
+describe("content-slide geometry (#359)", () => {
+	// biome-ignore lint/suspicious/noExplicitAny: reads pptxgenjs internals in test
+	const objectsOn = (pptx: PptxGenJS, i: number): any[] =>
+		// biome-ignore lint/suspicious/noExplicitAny: reads pptxgenjs internals in test
+		((pptx as any).slides[i]._slideObjects as any[]) ?? [];
+
+	/** A content slide: header text, the maroon rule, and a body. */
+	function contentSlide() {
+		const deck = buildSlideDeck({
+			meeting,
+			club,
+			slots: fullSlots,
+			ballotUrl: BALLOT_URL,
+			geIntroducesFunctionaries: false,
+		});
+		const pptx = deckToPptx(PptxGenJS, deck);
+		// The Word-of-the-Day slide: a content slide present under both configs.
+		const idx = deck.findIndex((s) => s.kind === "wordOfDay");
+		expect(idx, "no wordOfDay slide in the fixture deck").toBeGreaterThan(-1);
+		return objectsOn(pptx, idx);
+	}
+
+	/**
+	 * Everything ABOVE the footer band — the header, the rule and the body.
+	 *
+	 * The footer is full-bleed by design (`x: 0, w: W`) and carries its own
+	 * inset for the club name and date, so including it would make any
+	 * shared-edge assertion meaningless. Its top is found from the slide rather
+	 * than hardcoded, so tuning `FOOT_H` cannot silently pull footer chrome into
+	 * this set.
+	 */
+	// biome-ignore lint/suspicious/noExplicitAny: reads pptxgenjs internals in test
+	function contentRegion(objects: any[]) {
+		const band = objects.find(
+			(o) => o.options?.x === 0 && o.options?.w === PPTX_FRAME_W,
+		);
+		expect(band, "no full-bleed footer band found").toBeTruthy();
+		const footerTop = band.options.y as number;
+		return objects.filter(
+			(o) =>
+				typeof o.options?.x === "number" &&
+				typeof o.options?.y === "number" &&
+				o.options.y < footerTop,
+		);
+	}
+
+	it("gives the header, the rule and the body one shared left edge", () => {
+		const region = contentRegion(contentSlide());
+		// Header text, maroon rule, body — three elements, one edge.
+		expect(region.length).toBe(3);
+		const lefts = region.map((o) => (o.options.x as number).toFixed(4));
+		// The assertion the pre-#359 geometry failed: header and rule at 0.8, body
+		// at 1.0, so the body was indented past the rule that heads it.
+		expect(new Set(lefts).size).toBe(1);
+	});
+
+	it("derives that edge from the shared proportion, not a literal", () => {
+		const region = contentRegion(contentSlide());
+		expect(region[0]?.options.x).toBeCloseTo(
+			inchesOfWidth(SLIDE_INSET_PCT, PPTX_FRAME_W),
+			6,
+		);
+	});
+
+	it("separates the rule from the body by the shared gap", () => {
+		const region = contentRegion(contentSlide());
+		const ys = region.map((o) => o.options.y as number).sort((a, b) => a - b);
+		const [, ruleY, bodyY] = ys;
+		// The rule's own height is part of the geometry, so this reads the gap the
+		// way the eye does: from the bottom of the rule to the top of the body.
+		const rule = region.find((o) => o.options.y === ruleY);
+		const gap = (bodyY ?? 0) - ((ruleY ?? 0) + (rule?.options.h ?? 0));
+		expect(gap).toBeCloseTo(
+			inchesOfWidth(SLIDE_HEADER_GAP_PCT, PPTX_FRAME_W),
+			6,
+		);
+	});
+
+	it("leaves the body a positive height inside the footer", () => {
+		// `BODY.h` is now arithmetic over the shared values rather than a literal,
+		// so this is the guard against a token change quietly producing a
+		// negative-height text box that pptxgenjs would happily accept.
+		const objects = contentSlide();
+		for (const o of objects) {
+			if (typeof o.options?.h === "number") {
+				expect(
+					o.options.h,
+					`${o._type} has non-positive height`,
+				).toBeGreaterThan(0);
+			}
+		}
 	});
 });

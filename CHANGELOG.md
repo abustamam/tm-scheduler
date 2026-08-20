@@ -2,6 +2,12 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.22.6.0] - 2026-08-20
+
+### Changed
+
+- **The projected slides have room to breathe.** Content slides sat close to the frame edge and the body text crowded the maroon rule under each title — barely noticeable on a laptop, obvious on a wall. Both are wider now, and the downloaded PowerPoint matches. One thing that had been off since the deck shipped: the body text was indented slightly further in than the rule above it, so a title and its content never quite lined up. They share one edge now.
+
 ## [1.22.5.0] - 2026-08-20
 
 ### Fixed
