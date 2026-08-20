@@ -3,6 +3,7 @@ import { Bell, CalendarDays, Loader2, Mic } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { PageContainer } from "#/components/page-container";
+import { EvaluationResourceLinks } from "#/components/pathways/evaluation-resource-link";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import { formatMeetingDate, formatMeetingTimeRange } from "#/lib/format";
@@ -168,6 +169,9 @@ function MyCommitments() {
 											“{c.speechTitle}”
 										</p>
 									) : null}
+									<EvaluationResourceLinks
+										projectName={c.evaluatedProjectName ?? c.ownProjectName}
+									/>
 									<Link
 										to="/meetings/$id"
 										params={{ id: c.meetingId }}
