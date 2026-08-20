@@ -223,11 +223,25 @@ function Dashboard() {
 												{confirmed ? "Confirmed" : "Signed up"}
 											</span>
 										</Link>
-										<div className="pl-10 pr-5">
-											<EvaluationResourceLinks
-												projectName={r.evaluatedProjectName ?? r.ownProjectName}
-											/>
-										</div>
+										{/* Speakers and evaluators only — a functionary fills in no
+										    evaluation form, and unconditionally this line appeared on
+										    most rows of a typical agenda. Outside the <Link> above,
+										    never inside it: nesting an <a> in an <a> is invalid and
+										    browsers restructure the DOM around it. `pb-2.5` because
+										    the next row's border-t is otherwise flush against this
+										    line. */}
+										{r.isSpeakerRole ||
+										r.evaluatesSlotId !== null ||
+										r.roleCategory === "evaluator" ? (
+											<div className="pb-2.5 pl-10 pr-5">
+												<EvaluationResourceLinks
+													projectName={
+														r.evaluatedProjectName ?? r.ownProjectName
+													}
+													fallback
+												/>
+											</div>
+										) : null}
 									</div>
 								);
 							})

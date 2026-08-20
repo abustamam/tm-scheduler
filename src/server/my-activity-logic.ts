@@ -153,6 +153,17 @@ export async function loadMyCommitments(userId: string) {
 				timezone: clubs.timezone,
 				roleName: roleDefinitions.name,
 				isSpeakerRole: roleDefinitions.isSpeakerRole,
+				// Who the evaluation resource is FOR. The card shows it only to a
+				// speaker or an evaluator: every other row is a functionary (Timer,
+				// Ah-Counter, Grammarian…), which is most of an agenda, and none of
+				// them fills in an evaluation form. Both columns come off tables this
+				// statement ALREADY joins — no new join, so `loadMyCommitments` stays
+				// one statement and `my-commitments-query.integration.test.ts` still
+				// holds. `evaluatesSlotId` is the identity of the evaluator arm (a
+				// club may name the role anything); `category` catches an evaluator
+				// slot not yet pointed at a speaker.
+				evaluatesSlotId: roleSlots.evaluatesSlotId,
+				roleCategory: roleDefinitions.category,
 				speechTitle: speeches.title,
 				// The evaluator's target: this slot evaluates `speakerSlot`, whose
 				// speech carries the project. `projectId` (catalog) wins over the

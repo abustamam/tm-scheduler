@@ -429,6 +429,11 @@ describe.skipIf(!hasTestDb)("my cross-club activity (#437)", () => {
 			timezone: "America/Chicago",
 			roleName: inA.roleName,
 			isSpeakerRole: false,
+			// The two columns the commitment cards gate the evaluation-resource
+			// link on. This row is a Timer — a functionary with no evaluation
+			// target — so it fails every arm of that gate and renders no link.
+			evaluatesSlotId: null,
+			roleCategory: "functionary",
 			// Null here is meaningful (a functionary role has no speech) and is
 			// now distinguishable from theme/location, which carry real values.
 			speechTitle: null,
@@ -678,10 +683,22 @@ describe.skipIf(!hasTestDb)(
 			};
 		}
 
-		/** An additional slot on `meetingId` — the evaluator side of the fixture. */
+		/**
+		 * An additional slot on `meetingId` — the evaluator or functionary side of
+		 * the fixture.
+		 *
+		 * `category` is passed EXPLICITLY rather than sniffed out of `roleName`
+		 * (this helper used to derive it as
+		 * `roleName.includes("evaluat") ? "evaluator" : "functionary"`).
+		 * `loadMyCommitments` now SELECTS that column and the commitment cards gate
+		 * on it, so a fixture whose category comes from a string match on a name a
+		 * club is free to choose would be deciding what the card renders by
+		 * accident.
+		 */
 		async function addSlot(opts: {
 			meetingId: string;
 			roleName: string;
+			category: "leadership" | "speaker" | "evaluator" | "functionary";
 			assignedMemberId: string;
 			evaluatesSlotId?: string;
 		}): Promise<string> {
@@ -696,9 +713,7 @@ describe.skipIf(!hasTestDb)(
 				.values({
 					clubId: meetingRow.clubId,
 					name: opts.roleName,
-					category: opts.roleName.toLowerCase().includes("evaluat")
-						? "evaluator"
-						: "functionary",
+					category: opts.category,
 					isSpeakerRole: false,
 				})
 				.returning({ id: roleDefinitions.id });
@@ -726,6 +741,7 @@ describe.skipIf(!hasTestDb)(
 			const evaluatorSlotId = await addSlot({
 				meetingId,
 				roleName: "Evaluator",
+				category: "evaluator",
 				assignedMemberId: memberId,
 				evaluatesSlotId: speakerSlotId,
 			});
@@ -746,6 +762,7 @@ describe.skipIf(!hasTestDb)(
 			const evaluatorSlotId = await addSlot({
 				meetingId,
 				roleName: "Evaluator",
+				category: "evaluator",
 				assignedMemberId: memberId,
 				evaluatesSlotId: speakerSlotId,
 			});
@@ -765,6 +782,7 @@ describe.skipIf(!hasTestDb)(
 			const evaluatorSlotId = await addSlot({
 				meetingId,
 				roleName: "Evaluator",
+				category: "evaluator",
 				assignedMemberId: memberId,
 				evaluatesSlotId: speakerSlotId,
 			});
@@ -784,6 +802,91 @@ describe.skipIf(!hasTestDb)(
 			const row = rows.find((r) => r.slotId === speakerSlotId);
 			expect(row?.ownProjectName).toBe("Ice Breaker");
 			expect(row?.evaluatedProjectName).toBeNull();
+		});
+
+		/**
+		 * `evaluatesSlotId` and `roleCategory` are what the commitment cards gate
+		 * the evaluation-resource link on: without them the link rendered on every
+		 * FUNCTIONARY row (Timer, Ah-Counter, Grammarian…), which is most of a
+		 * typical agenda, each advertising "Generic evaluation resource". Both are
+		 * plain columns off tables the statement already joins — see
+		 * `my-commitments-query.integration.test.ts`, which pins that adding them
+		 * did not add a round trip.
+		 */
+		it("carries the gate columns for an evaluator", async () => {
+			const { userId, memberId, meetingId, speakerSlotId } =
+				await seedMeetingWithSpeaker({ projectName: "Active Listening" });
+			const evaluatorSlotId = await addSlot({
+				meetingId,
+				roleName: "Evaluator",
+				category: "evaluator",
+				assignedMemberId: memberId,
+				evaluatesSlotId: speakerSlotId,
+			});
+
+			const rows = await loadMyCommitments(userId);
+			const row = rows.find((r) => r.slotId === evaluatorSlotId);
+			expect(row?.evaluatesSlotId).toBe(speakerSlotId);
+			expect(row?.roleCategory).toBe("evaluator");
+			expect(row?.isSpeakerRole).toBe(false);
+		});
+
+		it("carries the gate columns for an evaluator with no target yet", async () => {
+			// A club can name the role anything and an officer can create the slot
+			// before pointing it at a speaker, so `evaluatesSlotId` alone is not
+			// enough — `roleCategory` is the second arm of the gate for exactly this
+			// row, which would otherwise render nothing for a real evaluator.
+			const { userId, memberId, meetingId } = await seedMeetingWithSpeaker({
+				projectName: "Active Listening",
+			});
+			const slotId = await addSlot({
+				meetingId,
+				roleName: "Speech Reviewer",
+				category: "evaluator",
+				assignedMemberId: memberId,
+			});
+
+			const row = (await loadMyCommitments(userId)).find(
+				(r) => r.slotId === slotId,
+			);
+			expect(row?.evaluatesSlotId).toBeNull();
+			expect(row?.roleCategory).toBe("evaluator");
+		});
+
+		it("carries the gate columns for a functionary", async () => {
+			// Fails all three arms of the gate, so the card renders no link at all.
+			const { userId, memberId, meetingId } = await seedMeetingWithSpeaker({
+				projectName: "Active Listening",
+			});
+			const timerSlotId = await addSlot({
+				meetingId,
+				roleName: "Timer",
+				category: "functionary",
+				assignedMemberId: memberId,
+			});
+
+			const row = (await loadMyCommitments(userId)).find(
+				(r) => r.slotId === timerSlotId,
+			);
+			expect(row?.roleCategory).toBe("functionary");
+			expect(row?.evaluatesSlotId).toBeNull();
+			expect(row?.isSpeakerRole).toBe(false);
+			// And nothing for the link to point at either way.
+			expect(row?.ownProjectName).toBeNull();
+			expect(row?.evaluatedProjectName).toBeNull();
+		});
+
+		it("carries the gate columns for a speaker", async () => {
+			const { userId, speakerSlotId } = await seedMeetingWithSpeaker({
+				projectName: "Ice Breaker",
+				assignToUser: true,
+			});
+			const row = (await loadMyCommitments(userId)).find(
+				(r) => r.slotId === speakerSlotId,
+			);
+			expect(row?.isSpeakerRole).toBe(true);
+			expect(row?.roleCategory).toBe("speaker");
+			expect(row?.evaluatesSlotId).toBeNull();
 		});
 	},
 );

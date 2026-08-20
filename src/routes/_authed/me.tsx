@@ -169,9 +169,20 @@ function MyCommitments() {
 											“{c.speechTitle}”
 										</p>
 									) : null}
-									<EvaluationResourceLinks
-										projectName={c.evaluatedProjectName ?? c.ownProjectName}
-									/>
+									{/* Speakers and evaluators only. A functionary (Timer,
+									    Ah-Counter, Grammarian…) fills in no evaluation form, and
+									    unconditionally this line advertised one on most rows of
+									    a typical agenda. `fallback` IS passed here: an evaluator
+									    paired with a TBA speech still needs a usable form —
+									    spec §3 step 3, the reason 8053 ships. */}
+									{c.isSpeakerRole ||
+									c.evaluatesSlotId !== null ||
+									c.roleCategory === "evaluator" ? (
+										<EvaluationResourceLinks
+											projectName={c.evaluatedProjectName ?? c.ownProjectName}
+											fallback
+										/>
+									) : null}
 									<Link
 										to="/meetings/$id"
 										params={{ id: c.meetingId }}
