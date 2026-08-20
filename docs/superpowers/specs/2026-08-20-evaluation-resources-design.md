@@ -113,7 +113,7 @@ curriculum" and that this is not automatic. This is plausibly that signal.
 
 It is deliberately **not** fixed here: adding a project to the catalog changes
 what the project picker offers and what the seed writes, which is a different
-change with a different blast radius. File it separately.
+change with a different blast radius. Filed as #606.
 
 ## What gets built
 
@@ -226,10 +226,17 @@ lookup here is an N+1 over every upcoming commitment.
 
 ### 4. `/resources/evaluation-resources`
 
-A new public route listing all 64, grouped by level (Level 1–5, then the
-generic), with a filter input that matches on project name, item code, resource
-title and level. Filtering is client-side over a 64-item array — no server
-round-trip, no query.
+A new public route listing all 64 alphabetically, with a filter input matching
+project name, resource title, item code and part. Filtering is client-side over
+a 64-item array — no server round-trip, no query.
+
+**Not grouped by level.** An earlier draft of this section said "grouped by
+Level 1–5", which is not buildable as specified: `EvaluationResource` carries no
+level, and it cannot derive one — the item-code prefix is the only signal and
+three rows have no code. Supplying it would mean importing
+`pathways-catalog.ts` here, which §1 forbids precisely so the two files can
+cross-check each other. A level is also not what someone types when hunting for
+a form; the project name is. Alphabetical plus filter.
 
 Registered in `src/data/resources.ts` as a `Resource` with `cat: "Pathways"`.
 `src/data/resources.guard.test.ts` asserts both directions of the
