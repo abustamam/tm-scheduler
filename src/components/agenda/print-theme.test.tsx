@@ -15,9 +15,12 @@
  * floating toolbar on every printed agenda, poster and role sheet at once.
  */
 import { cleanup, render } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	DarkFooter,
+	FitPage,
+	MIN_FIT_SCALE,
+	PAGE_H,
 	PRINT_PAGE_CSS,
 	PrintButton,
 	PrintToolbar,
@@ -106,5 +109,95 @@ describe("DarkFooter's scan-to-vote QR", () => {
 		const cls = container.querySelector(".footer-qr")?.className;
 		expect(cls).toBeTruthy();
 		expect(PRINT_PAGE_CSS).toContain(`.${cls}`);
+	});
+});
+
+/**
+ * `FitPage`'s two branches, finally reachable (#agenda-templates PR 2).
+ *
+ * This was the largest unprotected behaviour PR 1 shipped, and the reason was
+ * structural rather than an oversight: the decision lives in a `useEffect` that
+ * reads `scrollHeight`, and NEITHER print harness can run it. `print-page-count`
+ * and `print-density` both feed `renderToStaticMarkup` output to headless
+ * Chrome, so React never mounts; jsdom mounts React but reports `scrollHeight`
+ * as 0, so the effect returns at its first guard. The consequence was that
+ * `print-density.test.tsx` asserted a REIMPLEMENTATION of the rule — its
+ * `printedDetailPt` helper mirrors `raw < MIN_FIT_SCALE` — which is a parity
+ * test, blind to a defect present on both sides.
+ *
+ * Stubbing `scrollHeight` closes it. That is a real stub of a real DOM property
+ * the component reads, not a mock of the component's own logic, so the branch
+ * under test is the shipped one.
+ */
+describe("FitPage scale-vs-flow (#agenda-templates)", () => {
+	/** Mount FitPage with the inner element reporting `height` px of content. */
+	function mountWith(height: number) {
+		const spy = vi
+			.spyOn(HTMLElement.prototype, "scrollHeight", "get")
+			.mockReturnValue(height);
+		try {
+			const { container } = render(
+				<FitPage>
+					<p>run of show</p>
+				</FitPage>,
+			);
+			const outer = container.querySelector<HTMLElement>(".agenda-page");
+			const inner = container.querySelector<HTMLElement>("[data-fit-inner]");
+			if (!outer || !inner) throw new Error("FitPage did not render its sheet");
+			return { outer, inner };
+		} finally {
+			spy.mockRestore();
+		}
+	}
+
+	it("does not scale a sheet that already fits", () => {
+		const { outer, inner } = mountWith(PAGE_H - 100);
+		// No transform at all — not `scale(1)`. A sheet that fits is printed at its
+		// declared size, which is what `printedDetailPt`'s clamp encodes.
+		expect(inner.style.transform).toBe("");
+		expect(outer.style.height).not.toBe("");
+	});
+
+	it("scales a sheet that overruns by a little", () => {
+		// 10% over: scale ~0.909, comfortably above the floor, so it squeezes.
+		const { outer, inner } = mountWith(Math.round(PAGE_H * 1.1));
+		expect(inner.style.transform).toMatch(/scale\(/);
+		// Still ONE fixed-height sheet — the whole point of scaling.
+		expect(outer.style.height).not.toBe("");
+		expect(outer.style.overflow).toBe("hidden");
+	});
+
+	/**
+	 * The contest case, and the branch PR 1 added. A speech contest runs ~40 rows
+	 * at four contestants and ~58 at seven; squeezing that onto one sheet printed
+	 * the body text at 2.6pt. Below the floor the sheet must drop BOTH its fixed
+	 * height and its overflow clip — dropping only the height would still clip at
+	 * `PAGE_H`, and dropping only the clip would leave the tail overlapping the
+	 * next sheet's content.
+	 */
+	it("flows a sheet too long to scale legibly, dropping the height AND the clip", () => {
+		const { outer, inner } = mountWith(PAGE_H * 3);
+		expect(inner.style.transform).toBe("");
+		expect(outer.style.height).toBe("");
+		expect(outer.style.overflow).toBe("");
+	});
+
+	/**
+	 * The threshold itself, exercised through the component rather than through a
+	 * mirror of its rule. Just inside the floor scales; just outside it flows. This
+	 * is what makes `MIN_FIT_SCALE` a load-bearing number here: raise it to 0.95
+	 * and the "just inside" case starts flowing, so an ordinary club agenda becomes
+	 * two sheets — the failure the density suite could not see, because a
+	 * flowing sheet prints at full size and only makes its floors easier to pass.
+	 */
+	it("switches branches at MIN_FIT_SCALE, measured through the component", () => {
+		// Content heights either side of the floor. `scale = (PAGE_H - 2) / h`, so
+		// h just below (PAGE_H - 2)/MIN_FIT_SCALE scales and just above flows.
+		const pivot = (PAGE_H - 2) / MIN_FIT_SCALE;
+		expect(mountWith(Math.floor(pivot) - 20).inner.style.transform).toMatch(
+			/scale\(/,
+		);
+		cleanup();
+		expect(mountWith(Math.ceil(pivot) + 20).outer.style.height).toBe("");
 	});
 });
