@@ -2,6 +2,13 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.22.2.0] - 2026-08-20
+
+### Fixed
+
+- **Taking a club down now stops it being written to, not just read from.** Archiving a club already hid it everywhere; it did not stop anyone still holding a link from adding themselves to the roster, signing the guest book, registering to vote, casting a ballot, or opening and closing votes. Three of those created new records with people's names — and in some cases their email and phone — in a club nobody could open to see it happening, because archiving locks admins out too. All of it is now refused, with a message that says the club has been archived rather than failing silently.
+- **A club's Base Camp sync stops when the club is taken down.** A browser extension still holding a valid sync token could keep pushing member names, paths and project completions into an archived club and get a success back every time. The endpoint now tells it the club is no longer active, so the sync stops on its own — without anyone having to hunt down and revoke the token first.
+
 ## [1.22.1.0] - 2026-08-19
 
 ### Changed

@@ -488,14 +488,34 @@ all because they resolve membership with a bare `getMembership`: `minutes.ts` an
 `api/meetings.$id.minutes.pdf.ts` call `isReadableClub` directly, and `my-activity-logic.ts` inlines
 the same `archived_at` predicate into `loadMyCommitments`' query (#560) — a reader that funnels
 through none of the three points cannot be covered by fixing one of them. The service worker evicts a
-taken-down club's pages and crest on a 404/410 (#556). What is NOT closed is the mechanism that
-catches the NEXT one: `public-readers-archive-gate.guard.test.ts` slices a server fn's body at a
-literal `\n});`, which every handler here overruns, so it swallowed the following non-exported
-helper and classified `getMinutes` as session-guarded — the #560 minutes leak survived that sweep
-with 54/54 green, and the sweep walks `src/server/*.ts` only, so `src/routes/api/**` is enrolled by
-nothing at all. Until that is fixed (TODOS.md "Archive takedown", P1) this list is maintained by
-hand. Also still open: an archived club **accepts anonymous writes** (#555), and the logo endpoint's
-year-long `immutable` HTTP cache outlives a takedown (#517).
+taken-down club's pages and crest on a 404/410 (#556).
+
+**WRITES are closed too, since #555, and they close differently from reads.** A read collapses an
+archived club into not-found; a write THROWS, because every write already has an error path to its
+caller and silently accepting one that will never be readable is worse than saying the club is gone.
+`assertClubNotArchived` (exported from `guards.ts`) is the call, and the message lives in
+`#/lib/club-archive` as `CLUB_ARCHIVED_MESSAGE` so the one caller that cannot use the assert still
+raises the same sentence. That caller is `applySelfAdd`, and the exception is the interesting part:
+it reads `archived_at` inside its own pre-existing `FOR UPDATE` lock instead, because a pre-check is
+check-then-act and this is the path that mints a `people` row PLUS a `members` row — the race would
+leave exactly the PII the takedown was meant to stop collecting. Where a write already holds a club
+lock, gate inside it; everywhere else the assert is right. Six of the eight session-less writes gate
+in a `-logic` SEAM rather than in the handler, which is not stylistic: a handler body is unreachable
+from vitest, so a handler-gated write is covered by a source grep and nothing else.
+`releaseSlot`/`updateSpeakerDetails` are the two still in that position (their logic is inline in
+`slots.ts`), recorded in TODOS.md.
+
+**The enrollment sweep is now closed on both shapes**, having been closed on neither. The
+`\n});` body-slicing bug is fixed (#565) and `bodyStopsAtItsOwnDeclaration` fails on any
+recurrence — do not re-add that claim, it was true only before #565 and this paragraph asserted it
+for a release afterwards. The second half was real until #555: the sweep walked `src/server/*.ts`
+for `createServerFn` and nothing at all enrolled `src/routes/api/**`, which serves club content
+through `createFileRoute` + `server.handlers` and matches none of those patterns. Four endpoints
+lived there, three gated by hand, and the fourth — the Pathways ingest — was not: a live per-club
+Bearer token could keep writing member names, paths and project completions into a taken-down club,
+answering 200 the whole time. It now 410s (the token is valid; the club is finished), and the API
+sweep is RECURSIVE because the one broken endpoint was a directory down. Still open: the logo
+endpoint's year-long `immutable` HTTP cache outlives a takedown (#517).
 
 ## Deployment target
 

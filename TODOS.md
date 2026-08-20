@@ -41,15 +41,15 @@
 
 Surfaced by the `/review` passes on #560/#556 and deliberately left out of that branch.
 
-- The enrollment sweep walks `src/server/*.ts` only, so **`src/routes/api/**` is enrolled by
-  nothing**. That is the other half of #565: the minutes-PDF route was an ungated authed GET URL
-  serving an archived club's minutes, while its sibling `api/meetings.$id.role-sheets.$sheet.pdf.ts`
-  one directory entry over called `isReadableClub` correctly. Both are gated now, but only by a
-  hand-written case in `minutes-authz.guard.test.ts` — the next binary/export route added under
-  `src/routes/api/` is caught by no derived check. Extending the walk needs a different body-slicer
-  (route handlers are `server: { handlers: { GET: … } }`, not `export const x = createServerFn`),
-  which is why it did not ride along with the slicer fix.
-  **Priority:** P2
+- The two slot writes still gate in their `createServerFn` HANDLER rather than in a seam
+  (`releaseSlot`, `updateSpeakerDetails` in `slots.ts`). #555 moved six of the eight session-less
+  writes into `-logic` seams, where `public-writers-archive-gate.integration.test.ts` actually
+  executes them; these two could not follow because their logic is inline in the handler and lifting
+  it out is a refactor that change was not. So their gate is covered by a source grep
+  (`WRITE_GATES` in `public-readers-archive-gate.guard.test.ts`) and nothing else — the grep sees
+  the call, not whether it runs on the right club id. Extracting `applyReleaseSlot` /
+  `applyUpdateSpeakerDetails` would close it and is worth doing next time that file is open.
+  **Priority:** P3
 
 - #556's eviction rests on an assumption nothing gates: that a `notFound()` in a route loader keeps
   mapping to an HTTP **404**. Verified by hand against a dev server while writing the fix (meeting
