@@ -27,6 +27,10 @@ import {
 	roleDefinitions,
 } from "#/db/schema";
 import {
+	MAX_TEMPLATE_BEATS,
+	MAX_TEMPLATE_ROLES,
+} from "#/lib/meeting-template-limits";
+import {
 	cleanup,
 	hasTestDb,
 	type SeededClub,
@@ -176,15 +180,25 @@ describe.skipIf(!hasTestDb)("meeting template logic", () => {
 		it("never lists ANOTHER club's template", async () => {
 			const other = await seedClub();
 			try {
+				// Assert on the key and name we ACTUALLY inserted. An earlier cut of
+				// this test asserted `not.toContain("their_private_template")` — a
+				// literal no row ever holds, since keys carry a per-run suffix. That
+				// passes with the `or(isNull(clubId), eq(clubId, …))` tenant predicate
+				// deleted, i.e. it could not fail on the leak it exists to catch.
+				const theirKey = `their_private-${crypto.randomUUID().slice(0, 8)}`;
+				const theirName = `Theirs ${RUN}`;
 				await testDb.insert(meetingTemplates).values({
 					clubId: other.clubId,
-					key: `their_private-${crypto.randomUUID().slice(0, 8)}`,
-					name: `Theirs ${RUN}`,
+					key: theirKey,
+					name: theirName,
 				});
-				const keys = (await listAvailableTemplates(club.clubId)).map(
-					(r) => r.key,
-				);
-				expect(keys).not.toContain("their_private_template");
+				const rows = await listAvailableTemplates(club.clubId);
+				expect(rows.map((r) => r.key)).not.toContain(theirKey);
+				expect(rows.map((r) => r.name)).not.toContain(theirName);
+				// And prove the row is actually visible to ITS owner, so the
+				// assertions above are not passing because nothing was written.
+				const theirs = await listAvailableTemplates(other.clubId);
+				expect(theirs.map((r) => r.key)).toContain(theirKey);
 			} finally {
 				await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
 			}
@@ -238,6 +252,45 @@ describe.skipIf(!hasTestDb)("meeting template logic", () => {
 
 		it("returns null for an unknown template", async () => {
 			expect(await loadTemplateContent(crypto.randomUUID())).toBeNull();
+		});
+
+		/**
+		 * The two size caps live in `lib/meeting-template-limits.ts` so a unit
+		 * test can pin their VALUES without a database — but a pinned value
+		 * enforced by nothing is decorative, and both were, until this seam got
+		 * its `.limit()`. Assert the OBSERVABLE the cap controls (how many rows
+		 * reach a renderer), with a fixture that overruns it. Delete either
+		 * `.limit()` and this fails with 205/45 instead of 200/40.
+		 */
+		it("truncates an oversized template at the load seam, in sort order", async () => {
+			const id = await makeContestTemplate();
+			// makeContestTemplate seeds 2 beats / 2 roles; overrun both caps.
+			await testDb.insert(meetingTemplateBeats).values(
+				Array.from({ length: MAX_TEMPLATE_BEATS + 3 }, (_, i) => ({
+					templateId: id,
+					sortOrder: 100 + i,
+					kind: "event" as const,
+					label: `Filler ${i}`,
+					minutes: 1,
+				})),
+			);
+			await testDb.insert(meetingTemplateRoles).values(
+				Array.from({ length: MAX_TEMPLATE_ROLES + 3 }, (_, i) => ({
+					templateId: id,
+					key: `filler_${i}`,
+					name: `Filler ${i}`,
+					category: "leadership" as const,
+					defaultCount: 1,
+					sortOrder: 100 + i,
+				})),
+			);
+			const content = await loadTemplateContent(id);
+			expect(content?.beats).toHaveLength(MAX_TEMPLATE_BEATS);
+			expect(content?.roles).toHaveLength(MAX_TEMPLATE_ROLES);
+			// Truncated from the TAIL: the earliest sortOrder survives, so the
+			// rows a club actually reads are the ones it authored first.
+			expect(content?.beats[0]?.sortOrder).toBe(0);
+			expect(content?.roles[0]?.key).toBe("contest_chair");
 		});
 	});
 

@@ -15,10 +15,15 @@
  * Do not let this comment claim a measurement that has not happened.
  */
 
-/** Ordered rows one template may declare, BEFORE repeat expansion. */
+/**
+ * Ordered rows one template may declare, BEFORE repeat expansion.
+ * Enforced as a `.limit()` on `loadTemplateBeats` — the one seam every renderer
+ * reads a template through — not at the writer, so a row that got past the
+ * writer still cannot reach a render.
+ */
 export const MAX_TEMPLATE_BEATS = 200;
 
-/** Distinct roles one template may declare. */
+/** Distinct roles one template may declare. Enforced on `loadTemplateRoles`. */
 export const MAX_TEMPLATE_ROLES = 40;
 
 /**

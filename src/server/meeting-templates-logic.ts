@@ -25,6 +25,10 @@ import type {
 	TemplateBeatRow,
 	TemplateRoleRow,
 } from "#/lib/agenda-template-rows";
+import {
+	MAX_TEMPLATE_BEATS,
+	MAX_TEMPLATE_ROLES,
+} from "#/lib/meeting-template-limits";
 import { logActivity } from "./activity";
 import { assertMeetingNotLocked } from "./meeting-authz-logic";
 import {
@@ -81,37 +85,50 @@ export async function listAvailableTemplates(
 async function loadTemplateBeats(
 	templateId: string,
 ): Promise<TemplateBeatRow[]> {
-	return database
-		.select({
-			sortOrder: meetingTemplateBeats.sortOrder,
-			kind: meetingTemplateBeats.kind,
-			label: meetingTemplateBeats.label,
-			detail: meetingTemplateBeats.detail,
-			minutes: meetingTemplateBeats.minutes,
-			roleKey: meetingTemplateBeats.roleKey,
-			repeatsRoleKey: meetingTemplateBeats.repeatsRoleKey,
-			flex: meetingTemplateBeats.flex,
-			markGreen: meetingTemplateBeats.markGreen,
-			markYellow: meetingTemplateBeats.markYellow,
-			markRed: meetingTemplateBeats.markRed,
-		})
-		.from(meetingTemplateBeats)
-		.where(eq(meetingTemplateBeats.templateId, templateId))
-		.orderBy(asc(meetingTemplateBeats.sortOrder));
+	return (
+		database
+			.select({
+				sortOrder: meetingTemplateBeats.sortOrder,
+				kind: meetingTemplateBeats.kind,
+				label: meetingTemplateBeats.label,
+				detail: meetingTemplateBeats.detail,
+				minutes: meetingTemplateBeats.minutes,
+				roleKey: meetingTemplateBeats.roleKey,
+				repeatsRoleKey: meetingTemplateBeats.repeatsRoleKey,
+				flex: meetingTemplateBeats.flex,
+				markGreen: meetingTemplateBeats.markGreen,
+				markYellow: meetingTemplateBeats.markYellow,
+				markRed: meetingTemplateBeats.markRed,
+			})
+			.from(meetingTemplateBeats)
+			.where(eq(meetingTemplateBeats.templateId, templateId))
+			.orderBy(asc(meetingTemplateBeats.sortOrder))
+			// The cap is enforced HERE, at the one seam every renderer reads through,
+			// rather than at the (currently seed-only) writer. Ordered by sortOrder,
+			// so an oversized template renders its first N beats deterministically
+			// instead of blocking the event loop. Without this the constant was
+			// decorative — pinned by its own test, enforced by nothing, which is the
+			// exact shape CLAUDE.md's "test stated relative to the constant" trap warns about.
+			.limit(MAX_TEMPLATE_BEATS)
+	);
 }
 
 async function loadTemplateRoles(
 	templateId: string,
 ): Promise<TemplateRoleRow[]> {
-	return database
-		.select({
-			key: meetingTemplateRoles.key,
-			name: meetingTemplateRoles.name,
-			isSpeakerRole: meetingTemplateRoles.isSpeakerRole,
-		})
-		.from(meetingTemplateRoles)
-		.where(eq(meetingTemplateRoles.templateId, templateId))
-		.orderBy(asc(meetingTemplateRoles.sortOrder));
+	return (
+		database
+			.select({
+				key: meetingTemplateRoles.key,
+				name: meetingTemplateRoles.name,
+				isSpeakerRole: meetingTemplateRoles.isSpeakerRole,
+			})
+			.from(meetingTemplateRoles)
+			.where(eq(meetingTemplateRoles.templateId, templateId))
+			.orderBy(asc(meetingTemplateRoles.sortOrder))
+			// See the beats loader above — same reason, same seam.
+			.limit(MAX_TEMPLATE_ROLES)
+	);
 }
 
 /**
