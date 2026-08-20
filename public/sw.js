@@ -251,7 +251,28 @@ async function networkFirst(request, url, cacheName) {
 async function staleWhileRevalidate(event, request, url, cacheName) {
 	const cache = await caches.open(cacheName);
 	const cached = await cache.match(request);
-	const network = fetch(request)
+	// The crest revalidates past the HTTP cache; every other asset does not.
+	//
+	// This is what made the eviction below reachable at all (#517). A plain
+	// `fetch` consults the browser's HTTP cache, and the logo route used to answer
+	// `max-age=31536000, immutable` — so the revalidation was served from that
+	// cache, `response.ok` stayed true, and `isGoneResponse` could never fire. The
+	// one mechanism built to reach already-cached copies on a takedown (#556) was
+	// disabled by a caching header, silently, in the direction that looks fine.
+	//
+	// `no-cache` revalidates WITH the server rather than skipping the cache
+	// (`reload`), so the route's ETag answers 304 with no body in the normal case
+	// and 404 on an archived club, which is the status the eviction needs. Scoped
+	// to the logo because the rest of this cache is hashed build output whose URL
+	// changes on every deploy: it can never go stale, so a conditional request per
+	// asset would be pure cost.
+	// `fetch(request, init)` rather than `new Request(request, init)`: the two are
+	// equivalent per spec, and this one needs no `Request` constructor — which the
+	// test harness does not inject, since sw.js otherwise never builds one.
+	const network = fetch(
+		request,
+		LOGO_PATH.test(url.pathname) ? { cache: "no-cache" } : undefined,
+	)
 		.then(async (response) => {
 			if (response && response.ok) cache.put(request, response.clone());
 			else if (isGoneResponse(response)) {
