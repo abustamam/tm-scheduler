@@ -134,6 +134,14 @@ export function formatActivity(entry: ActivityEntry): FormattedActivity {
 					summary = "updated the meeting";
 			}
 			break;
+		// A meeting was switched to a template, or back to the club's standard
+		// shape (#agenda-templates). Deliberately does NOT name the template:
+		// `ActivityEntry` carries no template name, and inventing one from
+		// `detail.templateId` would need a join for a line nobody reads twice.
+		// Without this case the `default` below renders the raw enum string.
+		case "meeting_template_set":
+			summary = "changed the meeting type";
+			break;
 		// Club-level actions (#495) — the first `targetType: "club"` entries an
 		// ordinary admin can produce. Without these cases the `default` below
 		// renders the raw enum string ("club_logo_set") on the Activity page.

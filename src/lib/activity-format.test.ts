@@ -34,6 +34,22 @@ describe("formatActivity", () => {
 		expect(summary).not.toBe(action);
 	});
 
+	// Same shape as the #495 pair above, one enum value later. `logActivity`
+	// writes `meeting_template_set` with `targetType: "meeting"` on every
+	// conversion in BOTH directions (to a template, and back to the club's
+	// standard shape), so the officer who switches a meeting reads this line.
+	it("meeting_template_set renders human-readable text, not the raw enum", () => {
+		const e = {
+			...base,
+			targetType: "meeting",
+			action: "meeting_template_set",
+			actorName: "Faisal",
+		} as unknown as ActivityEntry;
+		const { summary } = formatActivity(e);
+		expect(summary).toMatch(/changed the meeting type/i);
+		expect(summary).not.toBe("meeting_template_set");
+	});
+
 	it("claim names the role", () => {
 		const e = {
 			...base,
