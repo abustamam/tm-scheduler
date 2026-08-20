@@ -139,12 +139,19 @@ function logoRouteGet(): LogoGetHandler {
  * pass the row's real `updatedAt.getTime()` for a current URL, anything else
  * (or omit it) for a stale/bare one — the two get DIFFERENT `Cache-Control`.
  */
-function fetchLogo(clubId: string, v?: string | number) {
+function fetchLogo(
+	clubId: string,
+	v?: string | number,
+	headers?: Record<string, string>,
+) {
 	const url =
 		v === undefined
 			? `https://gavelup.app/api/club/${clubId}/logo`
 			: `https://gavelup.app/api/club/${clubId}/logo?v=${v}`;
-	return logoRouteGet()({ params: { clubId }, request: new Request(url) });
+	return logoRouteGet()({
+		params: { clubId },
+		request: new Request(url, headers ? { headers } : undefined),
+	});
 }
 
 describe.skipIf(!hasTestDb)("club logo (#495)", () => {
@@ -688,16 +695,21 @@ describe.skipIf(!hasTestDb)("club logo (#495)", () => {
 			expect(res.status).toBe(404);
 		});
 
-		// `immutable` is only sound for a URL that names the CURRENT version.
-		// A bare or stale URL still serves (a cached agenda holding an older
-		// ?v= must keep rendering — that is the offline print flow) but must
-		// not be pinned for a year, or a replaced logo never reaches whoever
-		// holds it and an archive-takedown can't reach already-cached copies.
+		// A bare, stale or garbage `?v=` still SERVES — a cached agenda holding an
+		// older `?v=` must keep rendering, which is the offline print flow.
+		//
+		// This case used to also assert the ASYMMETRY: only a current-version URL
+		// earned `immutable`, and these got a short max-age instead. #517 removed
+		// `immutable` from the current-version branch too, and with it the reason
+		// for two numbers — a client does not learn about a replaced logo by
+		// revalidating the old URL, it learns by re-rendering the page. So what is
+		// left to pin here is that a non-current URL still serves at all, and that
+		// nothing anywhere gets `immutable` back.
 		it.each([
 			["no ?v= at all", undefined],
 			["a stale ?v=", 1],
 			["a garbage ?v=", "not-a-number"],
-		])("serves the bytes but WITHOUT the year-long immutable directive for %s", async (_label, v) => {
+		])("still serves the bytes, un-pinned, for %s", async (_label, v) => {
 			const s = await seed();
 			await applyClubLogoUpload({
 				clubId: s.clubId,
@@ -715,7 +727,7 @@ describe.skipIf(!hasTestDb)("club logo (#495)", () => {
 			expect(cacheControl).toBe("public, max-age=300, must-revalidate");
 		});
 
-		it("happy path: 200 with the stored bytes, Content-Type, and an immutable Cache-Control", async () => {
+		it("happy path: 200 with the stored bytes, Content-Type, ETag and a revalidating Cache-Control", async () => {
 			const s = await seed();
 			const jpeg = jpegBytes(500);
 			await applyClubLogoUpload({
@@ -732,11 +744,110 @@ describe.skipIf(!hasTestDb)("club logo (#495)", () => {
 			expect(res.status).toBe(200);
 			expect(res.headers.get("content-type")).toBe("image/jpeg");
 			expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+			// #517: `immutable` is gone. It bought bytes, not correctness — the `?v=`
+			// cache-buster already handled replacement — and it cost the takedown,
+			// because a cache told never to revalidate keeps serving for up to a year
+			// after the origin starts 404ing.
 			expect(res.headers.get("cache-control")).toBe(
-				"public, max-age=31536000, immutable",
+				"public, max-age=300, must-revalidate",
 			);
+			expect(res.headers.get("cache-control")).not.toContain("immutable");
+			expect(res.headers.get("etag")).toBe(`"${meta?.updatedAt.getTime()}"`);
 			const body = Buffer.from(await res.arrayBuffer());
 			expect(body.equals(jpeg)).toBe(true);
+		});
+	});
+
+	/**
+	 * The takedown reaching already-cached copies (#517).
+	 *
+	 * ADR-0024 constraint 4 makes archiving the lever for an infringing logo, and
+	 * before this the lever stopped at the origin: `immutable` told browsers and
+	 * intermediaries not to revalidate, so a copy fetched the day before an
+	 * archive kept rendering for up to a year. Revalidation is what makes the
+	 * takedown reachable; the ETag is what makes revalidation cheap.
+	 *
+	 * The 304 path is gated by the SAME archive check as the byte path — through
+	 * `loadClubLogoMeta`, which cannot select `bytes` — so the cheap request is
+	 * not the unguarded one. That is the property most worth pinning here: a
+	 * conditional request answered 304 without the check would hand a taken-down
+	 * club's crest a fresh lease forever, one round trip at a time.
+	 */
+	describe("conditional requests and the takedown (#517)", () => {
+		async function seedWithLogo() {
+			const s = await seed();
+			await applyClubLogoUpload({
+				clubId: s.clubId,
+				base64: pngBytes().toString("base64"),
+				mime: "image/png",
+				attested: true,
+				userId: s.adminUserId,
+				actorMemberId: s.adminMemberId,
+			});
+			const meta = await loadClubLogoMeta(s.clubId);
+			if (!meta) throw new Error("no logo meta after upload");
+			return { s, meta, etag: `"${meta.updatedAt.getTime()}"` };
+		}
+
+		it("answers 304 with no body when the ETag still matches", async () => {
+			const { s, meta, etag } = await seedWithLogo();
+			const res = await fetchLogo(s.clubId, meta.updatedAt.getTime(), {
+				"if-none-match": etag,
+			});
+			expect(res.status).toBe(304);
+			expect(res.headers.get("etag")).toBe(etag);
+			// No bytes on the wire — the whole point of the ETag.
+			expect((await res.arrayBuffer()).byteLength).toBe(0);
+		});
+
+		it("404s a conditional request once the club is archived", async () => {
+			const { s, meta, etag } = await seedWithLogo();
+			// BEFORE: the same request 304s, so the AFTER cannot pass by accident.
+			expect(
+				(
+					await fetchLogo(s.clubId, meta.updatedAt.getTime(), {
+						"if-none-match": etag,
+					})
+				).status,
+			).toBe(304);
+
+			await testDb
+				.update(clubs)
+				.set({ archivedAt: new Date() })
+				.where(eq(clubs.id, s.clubId));
+
+			const res = await fetchLogo(s.clubId, meta.updatedAt.getTime(), {
+				"if-none-match": etag,
+			});
+			// NOT 304. A 304 here renews the cached copy's lease indefinitely, which
+			// is exactly how the takedown failed to land before #517.
+			expect(res.status).toBe(404);
+		});
+
+		it("serves the bytes when the ETag does not match", async () => {
+			const { s, meta } = await seedWithLogo();
+			const res = await fetchLogo(s.clubId, meta.updatedAt.getTime(), {
+				"if-none-match": '"999"',
+			});
+			expect(res.status).toBe(200);
+			expect((await res.arrayBuffer()).byteLength).toBeGreaterThan(0);
+		});
+
+		// A strong validator must not be satisfied by its weak form, nor by a
+		// prefix — which an `includes()` compare would have allowed.
+		it.each([
+			['W/"', "the weak form"],
+			['", "other', "a list"],
+		])("does not 304 on %s (%s)", async (mangle) => {
+			const { s, meta } = await seedWithLogo();
+			const stamp = String(meta.updatedAt.getTime());
+			const header = mangle.startsWith("W/")
+				? `W/"${stamp}"`
+				: `"${stamp}", "other"`;
+			const res = await fetchLogo(s.clubId, meta.updatedAt.getTime(), {
+				"if-none-match": header,
+			});
+			expect(res.status).toBe(200);
 		});
 	});
 

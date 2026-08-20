@@ -148,6 +148,8 @@ interface Harness {
 	nextFetch: (FakeResponse | Error)[];
 	/** Fetches the worker made beyond what the test queued. */
 	surplusFetches: number;
+	/** Every fetch the worker made, with the cache mode it requested (#517). */
+	fetchInits: { url: string; cache?: string }[];
 	dispatchFetch(req: FakeRequest): Promise<FakeResponse | undefined>;
 	activate(): Promise<void>;
 	cacheFor(name: string): FakeCache;
@@ -159,7 +161,10 @@ function loadServiceWorker(): Harness {
 	const cacheStore = new Map<string, FakeCache>();
 	const opened: string[] = [];
 	const nextFetch: (FakeResponse | Error)[] = [];
-	const state = { surplus: 0 };
+	const state = {
+		surplus: 0,
+		lastInit: [] as { url: string; cache?: string }[],
+	};
 
 	const cachesApi = {
 		async open(name: string): Promise<FakeCache> {
@@ -191,7 +196,15 @@ function loadServiceWorker(): Harness {
 		location: { origin: ORIGIN },
 	};
 
-	const fetchApi = async (req: FakeRequest): Promise<FakeResponse> => {
+	const fetchApi = async (
+		req: FakeRequest,
+		init?: { cache?: string },
+	): Promise<FakeResponse> => {
+		// Recorded so a test can assert the crest revalidates PAST the HTTP cache
+		// (#517). Without it, `fetch(request, { cache: "no-cache" })` and a plain
+		// `fetch(request)` are indistinguishable here, and the assertion that the
+		// eviction is reachable at all would be untestable.
+		state.lastInit.push({ url: req.url, cache: init?.cache });
 		// Resolve on a MACROTASK, not a microtask. This is what models worker
 		// termination: a revalidation the worker did not register with
 		// `event.waitUntil` cannot finish inside the response's microtask drain, so
@@ -235,6 +248,10 @@ function loadServiceWorker(): Harness {
 		nextFetch,
 		get surplusFetches() {
 			return state.surplus;
+		},
+		/** Every fetch this worker made, with the cache mode it asked for. */
+		get fetchInits() {
+			return state.lastInit;
 		},
 		cacheFor(name) {
 			const cache = cacheStore.get(name);
@@ -500,6 +517,43 @@ describe("service worker takedown eviction (#556)", () => {
 		sw.nextFetch.push(response(404, "gone"));
 		await sw.dispatchFetch(request(LOGO_V2, AS_IMAGE));
 		expect(assets.entries.size).toBe(0);
+	});
+
+	/**
+	 * #517. The eviction above was UNREACHABLE on a real device until this, and
+	 * nothing here could see it: a plain `fetch` is served by the browser's HTTP
+	 * cache, and the logo route answered `max-age=31536000, immutable` — so the
+	 * revalidation never left the machine, `response.ok` stayed true, and
+	 * `isGoneResponse` could not fire. Every test above passes with or without
+	 * that, because this harness has no HTTP cache to be served by.
+	 *
+	 * So assert the REQUEST, not the outcome: the crest must revalidate with
+	 * `cache: "no-cache"`, which is what forces a conditional request to the
+	 * origin and lets a 404 reach the eviction. `no-cache`, not `reload` — the
+	 * route now sends an ETag, so the normal answer is a bodiless 304.
+	 */
+	it("revalidates the crest past the HTTP cache, so a 404 can reach the eviction", async () => {
+		sw.nextFetch.push(response(200, "crest"));
+		await sw.dispatchFetch(request(LOGO_V1, AS_IMAGE));
+		const logoFetch = sw.fetchInits.find((f) => f.url.includes("/logo"));
+		expect(logoFetch, "the worker made no fetch for the crest").toBeTruthy();
+		expect(logoFetch?.cache).toBe("no-cache");
+	});
+
+	/**
+	 * The other half, and the reason this is scoped rather than applied to the
+	 * whole asset cache: build output is hashed, so its URL changes on every
+	 * deploy and it can never go stale. A conditional request per asset would be
+	 * pure cost for no takedown benefit.
+	 */
+	it("does NOT force revalidation for hashed build assets", async () => {
+		sw.nextFetch.push(response(200, "chunk"));
+		await sw.dispatchFetch(
+			request("/assets/app-abc123.js", { mode: "cors", destination: "script" }),
+		);
+		const assetFetch = sw.fetchInits.find((f) => f.url.includes("app-abc123"));
+		expect(assetFetch, "the worker made no fetch for the asset").toBeTruthy();
+		expect(assetFetch?.cache).toBeUndefined();
 	});
 
 	it("evicts a 404'd build asset exactly, without scanning by search", async () => {

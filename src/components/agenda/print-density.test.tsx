@@ -52,6 +52,7 @@ import type { TimelineRow } from "#/lib/agenda-timing";
 import { buildTimeline } from "#/lib/agenda-timing";
 import { CONTEST_TEMPLATE } from "#/lib/contest-template";
 import {
+	CHROME_TEST_TIMEOUT_MS,
 	findChrome,
 	measuredHeight,
 	printableDocument,
@@ -354,7 +355,7 @@ describe("print density harness availability", () => {
  *
  * No Chrome required — this measures nothing, it constrains the constant.
  */
-describe("MIN_FIT_SCALE", () => {
+describe("MIN_FIT_SCALE", { timeout: CHROME_TEST_TIMEOUT_MS }, () => {
 	it("is 0.72", () => {
 		expect(MIN_FIT_SCALE).toBe(0.72);
 	});
@@ -398,124 +399,128 @@ function printedDetailPt(rows: TimelineRow[]): number {
 	return pxToPt(RUN_NARRATIVE_TYPE.sm.detail * scale);
 }
 
-describe.skipIf(!hasChrome)("editorial agenda density", () => {
-	it("prints a real club agenda's body text large enough to read", () => {
-		// Measured 6.88pt on macOS harness fonts, against 5.59pt before this
-		// change: 1484px → 1321px of content on a 1056px sheet, plus declared
-		// 10.5 → 11.5. The floor sits well below both for the wrapping reason
-		// `agenda-print-type.ts` explains.
-		//
-		// #584 + #585 spent some of that, measured on Linux harness fonts:
-		//
-		//   origin/main .................................... 6.799pt
-		//   every hand-off named its people ................ 6.470pt
-		//   only the SINGULAR hand-offs name them .......... 6.597pt   ← ships
-		//
-		// The middle row is why the two GROUP hand-offs name nobody. "Introduces
-		// the speakers: Alice & Bob" is followed immediately by "Speaker 1 · Alice"
-		// and "Speaker 2 · Bob", so it restated the line beneath it — while
-		// carrying the longest lists on the sheet, and `FitPage` scales the whole
-		// page to fit the longest thing on it. Dropping those two recovered 0.127pt
-		// of type across every word of the agenda; the 0.202pt still spent buys the
-		// three singular introductions and the reports row naming its functionaries.
-		//
-		// The fixture carries LONG member names deliberately. #585 made these rows'
-		// length a function of member names, which are unbounded user data, so a
-		// fixture using this club's real (short) ones measures the easy case —
-		// CLAUDE.md's "a fixture that spans ONE axis is not a guarantee", applied to
-		// the axis this very change introduced. #584 added a second such axis (the
-		// reports row grows with the club's functionary count), so that row names
-		// four here rather than three.
-		//
-		// The 0.40pt left above the 6.2 floor is NOT headroom for the next copy
-		// change. `agenda-print-type.ts` says what that margin is for: the harness
-		// resolves no webfonts, and the substitute differs between a developer's
-		// machine and CI's Ubuntu, moving where lines wrap. It is reserved for that
-		// variance. Anything lengthening these rows again needs a fresh measurement
-		// here and a compensating reduction, not a lower floor.
-		expect(printedDetailPt(mcfRows)).toBeGreaterThanOrEqual(
-			EDITORIAL_MIN_PRINTED_PT,
-		);
-	});
+describe.skipIf(!hasChrome)(
+	"editorial agenda density",
+	{ timeout: CHROME_TEST_TIMEOUT_MS },
+	() => {
+		it("prints a real club agenda's body text large enough to read", () => {
+			// Measured 6.88pt on macOS harness fonts, against 5.59pt before this
+			// change: 1484px → 1321px of content on a 1056px sheet, plus declared
+			// 10.5 → 11.5. The floor sits well below both for the wrapping reason
+			// `agenda-print-type.ts` explains.
+			//
+			// #584 + #585 spent some of that, measured on Linux harness fonts:
+			//
+			//   origin/main .................................... 6.799pt
+			//   every hand-off named its people ................ 6.470pt
+			//   only the SINGULAR hand-offs name them .......... 6.597pt   ← ships
+			//
+			// The middle row is why the two GROUP hand-offs name nobody. "Introduces
+			// the speakers: Alice & Bob" is followed immediately by "Speaker 1 · Alice"
+			// and "Speaker 2 · Bob", so it restated the line beneath it — while
+			// carrying the longest lists on the sheet, and `FitPage` scales the whole
+			// page to fit the longest thing on it. Dropping those two recovered 0.127pt
+			// of type across every word of the agenda; the 0.202pt still spent buys the
+			// three singular introductions and the reports row naming its functionaries.
+			//
+			// The fixture carries LONG member names deliberately. #585 made these rows'
+			// length a function of member names, which are unbounded user data, so a
+			// fixture using this club's real (short) ones measures the easy case —
+			// CLAUDE.md's "a fixture that spans ONE axis is not a guarantee", applied to
+			// the axis this very change introduced. #584 added a second such axis (the
+			// reports row grows with the club's functionary count), so that row names
+			// four here rather than three.
+			//
+			// The 0.40pt left above the 6.2 floor is NOT headroom for the next copy
+			// change. `agenda-print-type.ts` says what that margin is for: the harness
+			// resolves no webfonts, and the substitute differs between a developer's
+			// machine and CI's Ubuntu, moving where lines wrap. It is reserved for that
+			// variance. Anything lengthening these rows again needs a fresh measurement
+			// here and a compensating reduction, not a lower floor.
+			expect(printedDetailPt(mcfRows)).toBeGreaterThanOrEqual(
+				EDITORIAL_MIN_PRINTED_PT,
+			);
+		});
 
-	it("keeps the measured type bump — the floor above cannot see it", () => {
-		// Verified by mutation: putting `detail` back to 10.5 still clears
-		// EDITORIAL_MIN_PRINTED_PT, because a smaller declared size makes a shorter
-		// sheet and `FitPage` gives most of it straight back. The floor gates the
-		// outcome; this gates the constant, against a literal rather than against
-		// itself — `expect(detail).toBeGreaterThanOrEqual(RUN_NARRATIVE_TYPE.sm.detail)`
-		// would pass for every value it could ever hold.
-		expect(RUN_NARRATIVE_TYPE.sm.detail).toBeGreaterThanOrEqual(11.5);
-		expect(RUN_NARRATIVE_TYPE.sm.name).toBeGreaterThanOrEqual(12.5);
-	});
+		it("keeps the measured type bump — the floor above cannot see it", () => {
+			// Verified by mutation: putting `detail` back to 10.5 still clears
+			// EDITORIAL_MIN_PRINTED_PT, because a smaller declared size makes a shorter
+			// sheet and `FitPage` gives most of it straight back. The floor gates the
+			// outcome; this gates the constant, against a literal rather than against
+			// itself — `expect(detail).toBeGreaterThanOrEqual(RUN_NARRATIVE_TYPE.sm.detail)`
+			// would pass for every value it could ever hold.
+			expect(RUN_NARRATIVE_TYPE.sm.detail).toBeGreaterThanOrEqual(11.5);
+			expect(RUN_NARRATIVE_TYPE.sm.name).toBeGreaterThanOrEqual(12.5);
+		});
 
-	it("refuses to measure a selector that matches nothing", () => {
-		// The guard every number in this file rests on. `measuredHeight` reads its
-		// result back out of `document.title`, so a selector that matched nothing
-		// could just as easily have returned 0 or the untouched title — and a 0
-		// computes an enormous `FitPage` scale that sails past every floor above.
-		// Renaming `data-fit-inner` has to fail loudly, not read as perfect
-		// legibility, so this pins the throw rather than trusting the shape.
-		const html = renderToStaticMarkup(
-			<MeetingAgendaPrint
-				layout="editorial"
-				header={header}
-				roles={roles}
-				officers={officers}
-				explainers={[]}
-				rows={mcfRows}
-			/>,
-		);
-		expect(() =>
-			measuredHeight(
-				printableDocument(PRINT_PAGE_CSS, html),
-				"[data-no-such-hook]",
-			),
-		).toThrow(/MISSING/);
-	});
+		it("refuses to measure a selector that matches nothing", () => {
+			// The guard every number in this file rests on. `measuredHeight` reads its
+			// result back out of `document.title`, so a selector that matched nothing
+			// could just as easily have returned 0 or the untouched title — and a 0
+			// computes an enormous `FitPage` scale that sails past every floor above.
+			// Renaming `data-fit-inner` has to fail loudly, not read as perfect
+			// legibility, so this pins the throw rather than trusting the shape.
+			const html = renderToStaticMarkup(
+				<MeetingAgendaPrint
+					layout="editorial"
+					header={header}
+					roles={roles}
+					officers={officers}
+					explainers={[]}
+					rows={mcfRows}
+				/>,
+			);
+			expect(() =>
+				measuredHeight(
+					printableDocument(PRINT_PAGE_CSS, html),
+					"[data-no-such-hook]",
+				),
+			).toThrow(/MISSING/);
+		});
 
-	it("measures a page taller than the sheet — so the floor is not vacuous", () => {
-		// `FitPage` only ever shrinks, so a measurement of 0 (a lost `data-fit-inner`
-		// hook, a component that started returning null) would compute an enormous
-		// scale and sail past the floor above as the most legible agenda ever
-		// printed. Same reasoning as the empty-document control that sits beside the
-		// page counts: a good-looking number is not proof of content.
-		expect(agendaHeight(mcfRows)).toBeGreaterThan(PAGE_H / 2);
-	});
+		it("measures a page taller than the sheet — so the floor is not vacuous", () => {
+			// `FitPage` only ever shrinks, so a measurement of 0 (a lost `data-fit-inner`
+			// hook, a component that started returning null) would compute an enormous
+			// scale and sail past the floor above as the most legible agenda ever
+			// printed. Same reasoning as the empty-document control that sits beside the
+			// page counts: a good-looking number is not proof of content.
+			expect(agendaHeight(mcfRows)).toBeGreaterThan(PAGE_H / 2);
+		});
 
-	// The axis a single fixture cannot see. Consolidation only pays where one
-	// presenter holds the floor for consecutive beats; a club with more speakers
-	// adds beats that alternate every time, and gets none of it back. Bounded
-	// separately rather than assumed to follow from the case above.
-	it("keeps a denser agenda readable too, at a lower floor", () => {
-		const denser: TimelineRow[] = [
-			...mcfRows,
-			{
-				who: "Speaker 3 · Anotherlongname Here",
-				roleKey: "speaker",
-				detail:
-					'"A third prepared speech with a reasonably long title" · Level 2',
-				minutes: 7,
-				marks: { green: 5, yellow: 6, red: 7 },
-				time: "7:08",
-			},
-			{
-				who: "Evaluator 3 · Riyaz Mohammed",
-				roleKey: "evaluator",
-				detail: "Evaluates Anotherlongname Here",
-				minutes: 3,
-				marks: { green: 2, yellow: 2.5, red: 3 },
-				time: "7:33",
-			},
-		];
-		// Measured 6.42pt, against 5.26pt before this change (1579px of content,
-		// declared 10.5). The GAIN holds for a bigger club; the absolute size does
-		// not, which is exactly what a separate floor is for.
-		expect(printedDetailPt(denser)).toBeGreaterThanOrEqual(
-			EDITORIAL_DENSE_MIN_PRINTED_PT,
-		);
-	});
-});
+		// The axis a single fixture cannot see. Consolidation only pays where one
+		// presenter holds the floor for consecutive beats; a club with more speakers
+		// adds beats that alternate every time, and gets none of it back. Bounded
+		// separately rather than assumed to follow from the case above.
+		it("keeps a denser agenda readable too, at a lower floor", () => {
+			const denser: TimelineRow[] = [
+				...mcfRows,
+				{
+					who: "Speaker 3 · Anotherlongname Here",
+					roleKey: "speaker",
+					detail:
+						'"A third prepared speech with a reasonably long title" · Level 2',
+					minutes: 7,
+					marks: { green: 5, yellow: 6, red: 7 },
+					time: "7:08",
+				},
+				{
+					who: "Evaluator 3 · Riyaz Mohammed",
+					roleKey: "evaluator",
+					detail: "Evaluates Anotherlongname Here",
+					minutes: 3,
+					marks: { green: 2, yellow: 2.5, red: 3 },
+					time: "7:33",
+				},
+			];
+			// Measured 6.42pt, against 5.26pt before this change (1579px of content,
+			// declared 10.5). The GAIN holds for a bigger club; the absolute size does
+			// not, which is exactly what a separate floor is for.
+			expect(printedDetailPt(denser)).toBeGreaterThanOrEqual(
+				EDITORIAL_DENSE_MIN_PRINTED_PT,
+			);
+		});
+	},
+);
 
 /**
  * A CONTEST agenda's printed density (#agenda-templates).
@@ -531,88 +536,94 @@ describe.skipIf(!hasChrome)("editorial agenda density", () => {
  * contestants and 58 at seven — so it is the worst case for `FitPage`, and the
  * fixture spans the axis that actually varies it: the number of contestants.
  */
-describe.skipIf(!hasChrome)("contest agenda density", () => {
-	const roleRows = CONTEST_TEMPLATE.roles.map((r) => ({
-		key: r.key,
-		name: r.name,
-		isSpeakerRole: r.isSpeakerRole,
-	}));
+describe.skipIf(!hasChrome)(
+	"contest agenda density",
+	{ timeout: CHROME_TEST_TIMEOUT_MS },
+	() => {
+		const roleRows = CONTEST_TEMPLATE.roles.map((r) => ({
+			key: r.key,
+			name: r.name,
+			isSpeakerRole: r.isSpeakerRole,
+		}));
 
-	/** Slots as `generateSlotRows` would create them, with LONG member names —
-	 *  names are unbounded user data and they set the wrap points that decide the
-	 *  sheet's height. A fixture using short names measures the easy case. */
-	function contestRows(contestants: number): TimelineRow[] {
-		const slots = CONTEST_TEMPLATE.roles.flatMap((r) => {
-			const n = r.key.startsWith("contestant_") ? contestants : r.defaultCount;
-			return Array.from({ length: n }, (_, i) => ({
-				id: `${r.key}-${i}`,
-				roleName: r.name,
-				roleKey: r.key,
-				category: r.category,
-				isSpeakerRole: r.isSpeakerRole,
-				slotIndex: i,
-				assigneeName: `Anneliese Vandermeer-Castellanos ${i + 1}`,
-				speechTitle: null,
-				projectLevel: null,
-				minMinutes: null,
-				maxMinutes: null,
-				evaluatesSlotId: null,
-				evaluates: null,
-			}));
+		/** Slots as `generateSlotRows` would create them, with LONG member names —
+		 *  names are unbounded user data and they set the wrap points that decide the
+		 *  sheet's height. A fixture using short names measures the easy case. */
+		function contestRows(contestants: number): TimelineRow[] {
+			const slots = CONTEST_TEMPLATE.roles.flatMap((r) => {
+				const n = r.key.startsWith("contestant_")
+					? contestants
+					: r.defaultCount;
+				return Array.from({ length: n }, (_, i) => ({
+					id: `${r.key}-${i}`,
+					roleName: r.name,
+					roleKey: r.key,
+					category: r.category,
+					isSpeakerRole: r.isSpeakerRole,
+					slotIndex: i,
+					assigneeName: `Anneliese Vandermeer-Castellanos ${i + 1}`,
+					speechTitle: null,
+					projectLevel: null,
+					minMinutes: null,
+					maxMinutes: null,
+					evaluatesSlotId: null,
+					evaluates: null,
+				}));
+			});
+			return buildTimeline(
+				resolveAgendaRows({
+					geIntroducesFunctionaries: false,
+					template: { beats: CONTEST_TEMPLATE.beats, roles: roleRows },
+					slots,
+				}),
+				new Date("2026-09-12T13:00:00Z"),
+				"America/Chicago",
+			);
+		}
+
+		it.each([
+			4, 6, 7,
+		])("prints body text a member can read with %i contestants", (contestants) => {
+			// The DENSE floor, not the standard one: a contest is a deliberately
+			// long sheet and is allowed to run tighter than a normal night's agenda.
+			// It is still an ABSOLUTE floor in points — the unit the complaint would
+			// be made in — not a comparison against the layout's own constant.
+			expect(printedDetailPt(contestRows(contestants))).toBeGreaterThanOrEqual(
+				EDITORIAL_DENSE_MIN_PRINTED_PT,
+			);
 		});
-		return buildTimeline(
-			resolveAgendaRows({
-				geIntroducesFunctionaries: false,
-				template: { beats: CONTEST_TEMPLATE.beats, roles: roleRows },
-				slots,
-			}),
-			new Date("2026-09-12T13:00:00Z"),
-			"America/Chicago",
-		);
-	}
 
-	it.each([
-		4, 6, 7,
-	])("prints body text a member can read with %i contestants", (contestants) => {
-		// The DENSE floor, not the standard one: a contest is a deliberately
-		// long sheet and is allowed to run tighter than a normal night's agenda.
-		// It is still an ABSOLUTE floor in points — the unit the complaint would
-		// be made in — not a comparison against the layout's own constant.
-		expect(printedDetailPt(contestRows(contestants))).toBeGreaterThanOrEqual(
-			EDITORIAL_DENSE_MIN_PRINTED_PT,
-		);
-	});
+		it("FLOWS rather than shrinking, so type stays the same at every size", () => {
+			// The fix this suite forced. A contest is far too long to scale onto one
+			// sheet: measured at 3.5pt for four contestants and 2.6pt for seven before
+			// `MIN_FIT_SCALE` existed. It now prints across several sheets at full
+			// size, so all three counts read identically — and the sheet genuinely
+			// grows, which the height assertion below pins.
+			expect(printedDetailPt(contestRows(4))).toBe(
+				printedDetailPt(contestRows(7)),
+			);
+			expect(agendaHeight(contestRows(7))).toBeGreaterThan(
+				agendaHeight(contestRows(4)),
+			);
+			// And it is a MULTI-sheet agenda, not one that happened to fit.
+			expect(agendaHeight(contestRows(4))).toBeGreaterThan(PAGE_H);
+		});
 
-	it("FLOWS rather than shrinking, so type stays the same at every size", () => {
-		// The fix this suite forced. A contest is far too long to scale onto one
-		// sheet: measured at 3.5pt for four contestants and 2.6pt for seven before
-		// `MIN_FIT_SCALE` existed. It now prints across several sheets at full
-		// size, so all three counts read identically — and the sheet genuinely
-		// grows, which the height assertion below pins.
-		expect(printedDetailPt(contestRows(4))).toBe(
-			printedDetailPt(contestRows(7)),
-		);
-		expect(agendaHeight(contestRows(7))).toBeGreaterThan(
-			agendaHeight(contestRows(4)),
-		);
-		// And it is a MULTI-sheet agenda, not one that happened to fit.
-		expect(agendaHeight(contestRows(4))).toBeGreaterThan(PAGE_H);
-	});
-
-	it("measures a non-empty sheet", () => {
-		// The unstated zero. Chrome renders a valid, short document for an empty
-		// body, and a short sheet needs no scale — which reads as LARGE type and
-		// passes every floor above.
-		const rows = contestRows(4);
-		expect(rows.length).toBeGreaterThan(30);
-		// `who` is the beat's ACTIVITY, not the role — the Chief Judge's row reads
-		// "Judges' briefing". Identity travels in `roleKey`, which is what the
-		// print layouts colour by.
-		expect(rows.some((r) => r.roleKey === "chief_judge")).toBe(true);
-		expect(rows.some((r) => r.who.startsWith("Judges' briefing"))).toBe(true);
-		expect(rows.filter((r) => r.section)).toHaveLength(5);
-	});
-});
+		it("measures a non-empty sheet", () => {
+			// The unstated zero. Chrome renders a valid, short document for an empty
+			// body, and a short sheet needs no scale — which reads as LARGE type and
+			// passes every floor above.
+			const rows = contestRows(4);
+			expect(rows.length).toBeGreaterThan(30);
+			// `who` is the beat's ACTIVITY, not the role — the Chief Judge's row reads
+			// "Judges' briefing". Identity travels in `roleKey`, which is what the
+			// print layouts colour by.
+			expect(rows.some((r) => r.roleKey === "chief_judge")).toBe(true);
+			expect(rows.some((r) => r.who.startsWith("Judges' briefing"))).toBe(true);
+			expect(rows.filter((r) => r.section)).toHaveLength(5);
+		});
+	},
+);
 
 /**
  * Naming the group on a hand-off costs no type size on the TWO-PAGE layouts
@@ -641,6 +652,7 @@ describe.skipIf(!hasChrome)("contest agenda density", () => {
  */
 describe.skipIf(!hasChrome)(
 	"group hand-off names on the two-page layouts",
+	{ timeout: CHROME_TEST_TIMEOUT_MS },
 	() => {
 		const LONG_NAMES = [
 			"Bartholomew Fotheringay-Smythe",
@@ -707,29 +719,39 @@ describe.skipIf(!hasChrome)(
 			);
 		}
 
+		/**
+		 * ONE test per layout, and it was two until CI said otherwise.
+		 *
+		 * Every `measuredHeight` spawns a fresh Chrome with its own
+		 * `--user-data-dir`. Split across two cases this measured the same
+		 * with-names sheet twice per layout — six spawns for four distinct
+		 * numbers — and because vitest runs test FILES in parallel, concurrent
+		 * spawns slow each other down. That is how a sibling test in this file
+		 * (`MIN_FIT_SCALE`, one measurement) took 16.5s against the 15s ceiling on
+		 * a CI runner while passing locally in 2.5s. The ceiling was not the
+		 * problem; six spawns for four numbers was.
+		 *
+		 * Both claims read the same two measurements, so they belong in one case.
+		 */
 		it.each([
 			"spacious",
 			"timing",
-		] as const)("%s keeps its run-of-show sheet under PAGE_H with the names, so FitPage never scales it", (layout) => {
+		] as const)("%s prints the names for a line of height and no type size", (layout) => {
+			const without = runSheetHeight(handoffRows(undefined), layout);
 			const withNames = runSheetHeight(handoffRows(LONG_NAMES), layout);
-			// The whole claim: under PAGE_H there is no transform, so no type shrink.
-			// Measured 658px (spacious) and 547px (timing) against 1056.
+
+			// The whole claim: under PAGE_H there is no transform at all, so
+			// nothing shrinks. Measured 658px (spacious) and 547px (timing)
+			// against 1056.
 			expect(withNames).toBeLessThan(PAGE_H);
 			// A control, so the assertion above cannot pass on an empty sheet.
 			expect(withNames).toBeGreaterThan(200);
-		});
 
-		it.each([
-			"spacious",
-			"timing",
-		] as const)("%s pays only a line of height for the names, not a page", (layout) => {
-			const without = runSheetHeight(handoffRows(undefined), layout);
-			const withNames = runSheetHeight(handoffRows(LONG_NAMES), layout);
 			// Measured 31px (spacious) and 13px (timing) — one wrapped line. An
-			// ABSOLUTE ceiling, not `withNames > without`: the point is that the cost
-			// is a line, and a relative assertion would pass at any cost at all.
+			// ABSOLUTE ceiling, not `withNames > without`: the point is that the
+			// cost is a line, and a relative assertion passes at any cost at all.
 			expect(withNames - without).toBeLessThan(120);
-			// And it does cost SOMETHING, which proves the names actually rendered on
+			// And it costs SOMETHING, which proves the names actually rendered on
 			// this layout rather than the field being silently ignored.
 			expect(withNames).toBeGreaterThan(without);
 		});

@@ -27,6 +27,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { PublicFooter } from "#/components/public-footer";
 import {
+	CHROME_TEST_TIMEOUT_MS,
 	findChrome,
 	printableDocument,
 	printedPageCount,
@@ -195,183 +196,188 @@ describe("print page-count harness availability", () => {
 	});
 });
 
-describe.skipIf(!hasChrome)("printed page counts", () => {
-	// One sheet each. The grid and editorial layouts are single-page designs.
-	it.each([
-		["grid", 1],
-		["editorial", 1],
-	] as const)("agenda · %s prints %i page(s)", (layout, expected) => {
-		expect(pages(PRINT_PAGE_CSS, agendaHtml(layout))).toBe(expected);
-	});
+describe.skipIf(!hasChrome)(
+	"printed page counts",
+	// Every case here spawns a browser — see CHROME_TEST_TIMEOUT_MS.
+	{ timeout: CHROME_TEST_TIMEOUT_MS },
+	() => {
+		// One sheet each. The grid and editorial layouts are single-page designs.
+		it.each([
+			["grid", 1],
+			["editorial", 1],
+		] as const)("agenda · %s prints %i page(s)", (layout, expected) => {
+			expect(pages(PRINT_PAGE_CSS, agendaHtml(layout))).toBe(expected);
+		});
 
-	// Two sheets each, structurally: both wrap their content in `TwoPage`, which
-	// emits two `.agenda-page` elements regardless of how many rows there are.
-	it.each([
-		["spacious", 2],
-		["timing", 2],
-	] as const)("agenda · %s prints %i page(s)", (layout, expected) => {
-		expect(pages(PRINT_PAGE_CSS, agendaHtml(layout))).toBe(expected);
-	});
+		// Two sheets each, structurally: both wrap their content in `TwoPage`, which
+		// emits two `.agenda-page` elements regardless of how many rows there are.
+		it.each([
+			["spacious", 2],
+			["timing", 2],
+		] as const)("agenda · %s prints %i page(s)", (layout, expected) => {
+			expect(pages(PRINT_PAGE_CSS, agendaHtml(layout))).toBe(expected);
+		});
 
-	/**
-	 * The load-bearing CSS assumption behind the contest agenda
-	 * (#agenda-templates). `FitPage` normally scales a sheet down to fit, but a
-	 * speech contest runs ~40 rows at four contestants and ~58 at seven, and
-	 * scaling that to one page printed the body text at 2.6pt. Below
-	 * `MIN_FIT_SCALE` it therefore drops the fixed height and the `overflow:
-	 * hidden` clip and lets the browser paginate instead.
-	 *
-	 * That only works if the sheet is allowed to break. `PRINT_PAGE_CSS` applies
-	 * `.agenda-page { break-inside: avoid }` — added when every `.agenda-page`
-	 * was a fixed `PAGE_H` box where it could never bind — and the flowing
-	 * element still carries the same class. If `break-inside` won, a contest
-	 * would print its first sheet and silently drop the rest, which is strictly
-	 * worse than the crushed type it replaced.
-	 *
-	 * It does not win: a fragmentation break is forced when the box exceeds the
-	 * page. Measured here rather than assumed, because nothing else in the repo
-	 * can see it — the density suite measures HEIGHT, and a height that grows
-	 * past `PAGE_H` reads identically whether the tail prints or is thrown away.
-	 *
-	 * Deliberately synthetic content and a hand-built `.agenda-page`: the
-	 * subject is the STYLESHEET, not the component. `FitPage`'s flow branch is
-	 * set by a `useEffect`, and both print harnesses feed static SSR markup to
-	 * Chrome, so React never mounts and the branch is unreachable from any test
-	 * in this repo (recorded in TODOS.md).
-	 */
-	it("an .agenda-page taller than its sheet paginates instead of being clipped", () => {
-		const row = (i: number) =>
-			`<div style="height:24px">Contest row ${i}</div>`;
-		const tall = `<div class="agenda-page" style="width:816px;background:#fff">${Array.from(
-			{ length: 120 },
-			(_, i) => row(i),
-		).join("")}</div>`;
-		// 120 × 24px ≈ 2880px against ~1056px of usable sheet.
-		expect(pages(PRINT_PAGE_CSS, tall)).toBeGreaterThan(1);
+		/**
+		 * The load-bearing CSS assumption behind the contest agenda
+		 * (#agenda-templates). `FitPage` normally scales a sheet down to fit, but a
+		 * speech contest runs ~40 rows at four contestants and ~58 at seven, and
+		 * scaling that to one page printed the body text at 2.6pt. Below
+		 * `MIN_FIT_SCALE` it therefore drops the fixed height and the `overflow:
+		 * hidden` clip and lets the browser paginate instead.
+		 *
+		 * That only works if the sheet is allowed to break. `PRINT_PAGE_CSS` applies
+		 * `.agenda-page { break-inside: avoid }` — added when every `.agenda-page`
+		 * was a fixed `PAGE_H` box where it could never bind — and the flowing
+		 * element still carries the same class. If `break-inside` won, a contest
+		 * would print its first sheet and silently drop the rest, which is strictly
+		 * worse than the crushed type it replaced.
+		 *
+		 * It does not win: a fragmentation break is forced when the box exceeds the
+		 * page. Measured here rather than assumed, because nothing else in the repo
+		 * can see it — the density suite measures HEIGHT, and a height that grows
+		 * past `PAGE_H` reads identically whether the tail prints or is thrown away.
+		 *
+		 * Deliberately synthetic content and a hand-built `.agenda-page`: the
+		 * subject is the STYLESHEET, not the component. `FitPage`'s flow branch is
+		 * set by a `useEffect`, and both print harnesses feed static SSR markup to
+		 * Chrome, so React never mounts and the branch is unreachable from any test
+		 * in this repo (recorded in TODOS.md).
+		 */
+		it("an .agenda-page taller than its sheet paginates instead of being clipped", () => {
+			const row = (i: number) =>
+				`<div style="height:24px">Contest row ${i}</div>`;
+			const tall = `<div class="agenda-page" style="width:816px;background:#fff">${Array.from(
+				{ length: 120 },
+				(_, i) => row(i),
+			).join("")}</div>`;
+			// 120 × 24px ≈ 2880px against ~1056px of usable sheet.
+			expect(pages(PRINT_PAGE_CSS, tall)).toBeGreaterThan(1);
 
-		// The control that makes the assertion above mean something: the SAME
-		// markup short enough to fit is one page, so the count is responding to
-		// content height and not to some other property of the fixture.
-		const short = `<div class="agenda-page" style="width:816px;background:#fff">${Array.from(
-			{ length: 10 },
-			(_, i) => row(i),
-		).join("")}</div>`;
-		expect(pages(PRINT_PAGE_CSS, short)).toBe(1);
-	});
+			// The control that makes the assertion above mean something: the SAME
+			// markup short enough to fit is one page, so the count is responding to
+			// content height and not to some other property of the fixture.
+			const short = `<div class="agenda-page" style="width:816px;background:#fff">${Array.from(
+				{ length: 10 },
+				(_, i) => row(i),
+			).join("")}</div>`;
+			expect(pages(PRINT_PAGE_CSS, short)).toBe(1);
+		});
 
-	it("the Word of the Day poster prints exactly one page", () => {
-		// The surface that shipped a blank second sheet in v1.3.0.0.
-		//
-		// The `.pgwrap` wrapper is reproduced from the ROUTE, not the component.
-		// `WordOfTheDayPoster` does not carry the class — the word route's page
-		// component does — and rendering the component alone makes every
-		// `.pgwrap` rule inert,
-		// which silently turns this assertion into a measurement of a page the
-		// club never prints. Verified: without this wrapper, deleting the
-		// `padding: 0 !important` reset (the actual v1.3.0.0 defect) does not
-		// change the count. Where the wrapper lives differs per surface — the
-		// role sheet and `TwoPage` carry their own, and the grid and editorial
-		// agendas have none at all.
-		const html = renderToStaticMarkup(
-			<div
-				className="pgwrap"
-				style={{ display: "flex", justifyContent: "center" }}
-			>
-				<WordOfTheDayPoster
-					word="Ephemeral"
-					definition="Lasting for a very short time; fleeting."
-					example="The applause was ephemeral, but the lesson stayed."
-					clubName={LONG_CLUB}
-					dateLong="Friday, July 31, 2026"
-					logoUrl={LOGO}
-				/>
-			</div>,
-		);
-		expect(pages(PRINT_PAGE_CSS, html)).toBe(1);
-	});
+		it("the Word of the Day poster prints exactly one page", () => {
+			// The surface that shipped a blank second sheet in v1.3.0.0.
+			//
+			// The `.pgwrap` wrapper is reproduced from the ROUTE, not the component.
+			// `WordOfTheDayPoster` does not carry the class — the word route's page
+			// component does — and rendering the component alone makes every
+			// `.pgwrap` rule inert,
+			// which silently turns this assertion into a measurement of a page the
+			// club never prints. Verified: without this wrapper, deleting the
+			// `padding: 0 !important` reset (the actual v1.3.0.0 defect) does not
+			// change the count. Where the wrapper lives differs per surface — the
+			// role sheet and `TwoPage` carry their own, and the grid and editorial
+			// agendas have none at all.
+			const html = renderToStaticMarkup(
+				<div
+					className="pgwrap"
+					style={{ display: "flex", justifyContent: "center" }}
+				>
+					<WordOfTheDayPoster
+						word="Ephemeral"
+						definition="Lasting for a very short time; fleeting."
+						example="The applause was ephemeral, but the lesson stayed."
+						clubName={LONG_CLUB}
+						dateLong="Friday, July 31, 2026"
+						logoUrl={LOGO}
+					/>
+				</div>,
+			);
+			expect(pages(PRINT_PAGE_CSS, html)).toBe(1);
+		});
 
-	it("the club role sheet prints exactly one page", () => {
-		// The full route shell, not a bare sheet. `.no-print` is the rule that
-		// hides the toolbar and the on-screen footer when printing, and it is
-		// UNCOVERABLE without them: with a bare `<ClubRoleSheet>` fixture,
-		// deleting `.no-print { display: none !important }` from PRINT_PAGE_CSS
-		// changes nothing; with the route's own toolbar and footer present, the
-		// same deletion pushes this surface to two pages and fails here.
-		//
-		// This is the same lesson as the `.pgwrap` wrapper one line of reasoning
-		// up, one element further out: a fixture that stops short of the route's
-		// DOM silently narrows what the gate can see.
-		const html = renderToStaticMarkup(
-			<div>
-				{/* The route's screen-only back link (#542) — reproduced here for the
+		it("the club role sheet prints exactly one page", () => {
+			// The full route shell, not a bare sheet. `.no-print` is the rule that
+			// hides the toolbar and the on-screen footer when printing, and it is
+			// UNCOVERABLE without them: with a bare `<ClubRoleSheet>` fixture,
+			// deleting `.no-print { display: none !important }` from PRINT_PAGE_CSS
+			// changes nothing; with the route's own toolbar and footer present, the
+			// same deletion pushes this surface to two pages and fails here.
+			//
+			// This is the same lesson as the `.pgwrap` wrapper one line of reasoning
+			// up, one element further out: a fixture that stops short of the route's
+			// DOM silently narrows what the gate can see.
+			const html = renderToStaticMarkup(
+				<div>
+					{/* The route's screen-only back link (#542) — reproduced here for the
 				    same reason as the toolbar and footer: the fixture is the route's
 				    DOM, and `.no-print` is only covered by the chrome it hides. */}
-				<a
-					className="no-print roles-back"
-					href="/club/downtown"
-					style={{ position: "fixed", top: 12, left: 12 }}
-				>
-					← {LONG_CLUB}
-				</a>
-				<PrintToolbar>
-					<PrintButton />
-				</PrintToolbar>
-				<ClubRoleSheet
-					clubName={LONG_CLUB}
-					clubNumber="1234567"
-					roles={roleSheetRoles}
-					logoUrl={LOGO}
-				/>
-				<PublicFooter
-					className="no-print"
-					style={{ color: MUTED, borderColor: `${INK}24` }}
-				/>
-			</div>,
-		);
-		expect(pages(CSS_ROLES, html)).toBe(1);
-	});
+					<a
+						className="no-print roles-back"
+						href="/club/downtown"
+						style={{ position: "fixed", top: 12, left: 12 }}
+					>
+						← {LONG_CLUB}
+					</a>
+					<PrintToolbar>
+						<PrintButton />
+					</PrintToolbar>
+					<ClubRoleSheet
+						clubName={LONG_CLUB}
+						clubNumber="1234567"
+						roles={roleSheetRoles}
+						logoUrl={LOGO}
+					/>
+					<PublicFooter
+						className="no-print"
+						style={{ color: MUTED, borderColor: `${INK}24` }}
+					/>
+				</div>,
+			);
+			expect(pages(CSS_ROLES, html)).toBe(1);
+		});
 
-	// A control, not a surface. Chrome exits 0 and writes a VALID ONE-PAGE PDF
-	// for a page that rendered nothing at all — an empty body, or even a
-	// file:// URL that does not exist. Four of the assertions above are
-	// `toBe(1)`, so on their own they cannot tell "this surface prints one
-	// sheet" from "this surface produced nothing": a component that starts
-	// returning null, markup that fails to serialise, or a stylesheet that
-	// fails to parse would all read as PASS.
-	//
-	// Recording the empty case makes that ambiguity explicit rather than
-	// leaving every 1 to be read against an unstated zero.
-	/**
-	 * The companion control to the empty-document one below, and the reason the
-	 * hand-off fixture above carries a disclaimer instead of a guarantee (#585).
-	 *
-	 * The file header asserts in PROSE that content volume cannot move a page
-	 * count here. This makes that claim checkable: forty long names on every
-	 * hand-off row — ~1,500 characters each, far past anything a club can enter —
-	 * still print one sheet. So a reviewer who reaches for this file to gate a
-	 * copy change gets told NO by a test rather than by a comment, and is sent to
-	 * `print-density.test.tsx`, which measures printed points and does see it.
-	 */
-	it("page count is insensitive to detail length — the density gate owns that", () => {
-		const long = rows.map((r) => ({
-			...r,
-			detail: `${r.detail} ${"Bartholomew Fitzgerald-Wellington, ".repeat(40)}`,
-		}));
-		const html = renderToStaticMarkup(
-			<MeetingAgendaPrint
-				layout="editorial"
-				header={header}
-				roles={[{ label: "Toastmaster", name: "Lee P." }]}
-				officers={[]}
-				explainers={[]}
-				rows={long}
-				ballotUrl={BALLOT_URL}
-			/>,
-		);
-		expect(pages(PRINT_PAGE_CSS, html)).toBe(1);
-	});
+		// A control, not a surface. Chrome exits 0 and writes a VALID ONE-PAGE PDF
+		// for a page that rendered nothing at all — an empty body, or even a
+		// file:// URL that does not exist. Four of the assertions above are
+		// `toBe(1)`, so on their own they cannot tell "this surface prints one
+		// sheet" from "this surface produced nothing": a component that starts
+		// returning null, markup that fails to serialise, or a stylesheet that
+		// fails to parse would all read as PASS.
+		//
+		// Recording the empty case makes that ambiguity explicit rather than
+		// leaving every 1 to be read against an unstated zero.
+		/**
+		 * The companion control to the empty-document one below, and the reason the
+		 * hand-off fixture above carries a disclaimer instead of a guarantee (#585).
+		 *
+		 * The file header asserts in PROSE that content volume cannot move a page
+		 * count here. This makes that claim checkable: forty long names on every
+		 * hand-off row — ~1,500 characters each, far past anything a club can enter —
+		 * still print one sheet. So a reviewer who reaches for this file to gate a
+		 * copy change gets told NO by a test rather than by a comment, and is sent to
+		 * `print-density.test.tsx`, which measures printed points and does see it.
+		 */
+		it("page count is insensitive to detail length — the density gate owns that", () => {
+			const long = rows.map((r) => ({
+				...r,
+				detail: `${r.detail} ${"Bartholomew Fitzgerald-Wellington, ".repeat(40)}`,
+			}));
+			const html = renderToStaticMarkup(
+				<MeetingAgendaPrint
+					layout="editorial"
+					header={header}
+					roles={[{ label: "Toastmaster", name: "Lee P." }]}
+					officers={[]}
+					explainers={[]}
+					rows={long}
+					ballotUrl={BALLOT_URL}
+				/>,
+			);
+			expect(pages(PRINT_PAGE_CSS, html)).toBe(1);
+		});
 
-	it("an empty document also prints one page — so 1 is not proof of content", () => {
-		expect(pages(PRINT_PAGE_CSS, "")).toBe(1);
-	});
-});
+		it("an empty document also prints one page — so 1 is not proof of content", () => {
+			expect(pages(PRINT_PAGE_CSS, "")).toBe(1);
+		});
+	},
+);

@@ -2,6 +2,12 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.22.3.0] - 2026-08-20
+
+### Fixed
+
+- **Taking a club down now removes its logo from copies already handed out.** The logo was served with a one-year "never check again" instruction, so a browser that had loaded it before the club was archived kept displaying it — for up to a year — while the site itself correctly showed nothing. It now re-checks periodically and, on devices that have the app installed, immediately, so an archived club's crest disappears from the browsers that had it rather than only from the ones that had not seen it yet. Logos still load instantly and still work offline for printing; the re-check sends no image data when nothing has changed.
+
 ## [1.22.2.0] - 2026-08-20
 
 ### Fixed
