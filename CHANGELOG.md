@@ -2,6 +2,12 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.22.4.0] - 2026-08-20
+
+### Fixed
+
+- **"No answer" no longer wipes out a reply that just arrived.** Members reply from their phones while the attendance rail sits open, and the rail does not refresh on its own — so a row could still show "Asked" when the member had already said they could not make it. Choosing "No answer" on that row, meaning *un-ask them*, deleted the reply instead: they vanished from the not-coming list, the warning disappeared from the recruit picker and the assign sheet, and they could then be handed a role they had turned down. "No answer" now only ever takes back the ask. To change someone's answer, pick "Coming" or "Not coming" — which is what that control is for.
+
 ## [1.22.3.0] - 2026-08-20
 
 ### Fixed
