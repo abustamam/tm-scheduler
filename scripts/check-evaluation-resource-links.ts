@@ -1,0 +1,92 @@
+/**
+ * Verifies every evaluation-resource URL still serves a PDF.
+ *
+ * NOT a vitest test, on purpose. It needs the network, and a test that SKIPS
+ * when offline is indistinguishable from one that passed — the same shape
+ * CLAUDE.md records for the Chrome print gates. A script you either ran or did
+ * not.
+ *
+ * Run it when TI reorganizes their resource library, or periodically:
+ *   bunx tsx scripts/check-evaluation-resource-links.ts
+ *
+ * All 64 returned `200 application/pdf` when the table was built (2026-08-20).
+ */
+import { EVALUATION_RESOURCES } from "#/lib/evaluation-resources";
+
+const CONCURRENCY = 8;
+// TI's CDN rejects a default fetch agent on some paths.
+const UA =
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36";
+
+interface Failure {
+	key: string;
+	itemCode: string | null;
+	url: string;
+	reason: string;
+}
+
+async function check(url: string): Promise<string | null> {
+	try {
+		// GET, not HEAD: several of these paths answer HEAD with 405.
+		const res = await fetch(url, {
+			headers: { "user-agent": UA },
+			redirect: "follow",
+			signal: AbortSignal.timeout(30_000),
+		});
+		if (!res.ok) return `HTTP ${res.status}`;
+		const type = res.headers.get("content-type") ?? "";
+		if (!type.includes("pdf")) return `content-type ${type || "(none)"}`;
+		// Drain so the connection is released.
+		await res.arrayBuffer();
+		return null;
+	} catch (err) {
+		return err instanceof Error ? err.message : String(err);
+	}
+}
+
+async function main() {
+	const queue = [...EVALUATION_RESOURCES];
+	const failures: Failure[] = [];
+	let done = 0;
+
+	async function worker() {
+		for (;;) {
+			const r = queue.shift();
+			if (!r) return;
+			const reason = await check(r.url);
+			done += 1;
+			process.stdout.write(
+				`\r  checked ${done}/${EVALUATION_RESOURCES.length}   `,
+			);
+			if (reason)
+				failures.push({
+					key: r.key,
+					itemCode: r.itemCode,
+					url: r.url,
+					reason,
+				});
+		}
+	}
+
+	console.log(`Checking ${EVALUATION_RESOURCES.length} evaluation resources…`);
+	await Promise.all(
+		Array.from({ length: CONCURRENCY }, () => worker()),
+	);
+	process.stdout.write("\n");
+
+	if (failures.length === 0) {
+		console.log(`All ${EVALUATION_RESOURCES.length} links serve a PDF.`);
+		return;
+	}
+
+	console.error(`\n${failures.length} link(s) failed:\n`);
+	for (const f of failures)
+		console.error(`  ${f.itemCode ?? f.key}  ${f.reason}\n    ${f.url}`);
+	console.error(
+		"\nTI moved or retired these. Re-scrape the category and update" +
+			" src/lib/evaluation-resources.ts — do not delete a row to make this pass.",
+	);
+	process.exitCode = 1;
+}
+
+await main();
