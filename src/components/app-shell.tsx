@@ -241,12 +241,14 @@ export function AppShell({
 
 	return (
 		<div className="flex min-h-svh w-full font-sans text-[var(--sea-ink)]">
-			{/* Desktop sidebar (lg+). `overflow-y-auto` is load-bearing: the box is
-			    pinned at `h-svh`, so an officer+superadmin nav (~28 items) is taller
-			    than a short laptop viewport and everything past the fold — including
-			    the sign-out footer — is unreachable without its own scroll container.
-			    The mobile drawer already scrolls (`SheetContent` below). */}
-			<aside className="sticky top-0 hidden h-svh w-[248px] shrink-0 flex-col gap-1.5 overflow-y-auto overscroll-contain border-r border-[var(--line)] bg-[linear-gradient(180deg,var(--surface-strong),var(--surface))] px-3.5 py-4 backdrop-blur-[6px] lg:flex">
+			{/* Desktop sidebar (lg+). A fixed-height flex column and NOT itself a
+			    scroller — `SidebarInner` puts the scroller on its middle band so the
+			    brand and the sign-out footer stay put. The height is load-bearing
+			    either way: pinned at `h-svh` this box can never grow, and `sticky`
+			    means the document scroll cannot reveal what spills out of it, so an
+			    officer+superadmin nav (~28 items) had ~700px of items reachable by
+			    nothing at all. */}
+			<aside className="sticky top-0 hidden h-svh w-[248px] shrink-0 flex-col gap-1.5 border-r border-[var(--line)] bg-[linear-gradient(180deg,var(--surface-strong),var(--surface))] px-3.5 py-4 backdrop-blur-[6px] lg:flex">
 				{sidebar()}
 			</aside>
 
@@ -254,7 +256,12 @@ export function AppShell({
 			<Sheet open={navOpen} onOpenChange={setNavOpen}>
 				<SheetContent
 					side="left"
-					className="w-[284px] max-w-[86vw] gap-1.5 overflow-y-auto border-[var(--line)] bg-[linear-gradient(180deg,var(--surface-strong),var(--surface))] px-3.5 py-4 sm:max-w-[86vw] lg:hidden"
+					// `overflow-hidden`, not `overflow-y-auto`: the drawer used to be
+					// the scroller, which scrolled the search box and sign-out away
+					// with the nav. `SidebarInner`'s middle band scrolls instead, and
+					// the drawer has to stop scrolling for that band to be the thing
+					// that overflows.
+					className="w-[284px] max-w-[86vw] gap-1.5 overflow-hidden border-[var(--line)] bg-[linear-gradient(180deg,var(--surface-strong),var(--surface))] px-3.5 py-4 sm:max-w-[86vw] lg:hidden"
 					onEscapeKeyDown={(e) => {
 						// Escape clears open search results first; only a second
 						// Escape (nothing left to clear) closes the drawer.
@@ -372,174 +379,199 @@ function SidebarInner({
 	/** Global search rendered below the brand (mobile drawer only, #221). */
 	searchSlot?: ReactNode;
 }) {
+	// Three bands, and the middle one is the only scroller: brand (and the
+	// drawer's search) pinned at the top, the nav groups scrolling between
+	// them, the mini-profile pinned at the bottom. Both hosts — the `lg+`
+	// `<aside>` and the mobile `SheetContent` — are fixed-height flex columns,
+	// so this shape works unchanged in either.
+	//
+	// Scrolling the WHOLE column instead is what this replaced, and it took
+	// sign-out with it: at ~28 nav items (officer + superadmin) the profile
+	// footer sits ~700px down a 600px-tall rail, so the one control that ends
+	// a session was behind a scroll on every page. `min-h-0` on the middle
+	// band is what makes it a scroller rather than a growing box — a flex item
+	// defaults to `min-height: auto`, which refuses to shrink below its
+	// content and hands the overflow back to the column.
 	return (
 		<>
 			{/* Brand */}
-			<div className="px-2 pt-1.5 pb-4">
+			<div className="shrink-0 px-2 pt-1.5 pb-4">
 				<BrandMark
 					size="md"
 					subtitle={clubNumber ? `${clubName} · Club ${clubNumber}` : clubName}
 				/>
 			</div>
 
-			{searchSlot ? <div className="px-0.5 pb-2">{searchSlot}</div> : null}
-
-			{isOfficer ? (
-				<NavGroup label="Your office">
-					<NavItem
-						to="/officers"
-						icon={Compass}
-						label="Officer home"
-						onNavigate={onNavigate}
-					/>
-				</NavGroup>
+			{searchSlot ? (
+				<div className="shrink-0 px-0.5 pb-2">{searchSlot}</div>
 			) : null}
 
-			<NavGroup label="Manage">
-				<NavItem
-					to="/schedule"
-					icon={Grid3x3}
-					label="Sign-up sheet"
-					onNavigate={onNavigate}
-				/>
-				<NavItem
-					to="/roster"
-					icon={List}
-					label="Roster"
-					onNavigate={onNavigate}
-				/>
-				<NavItem
-					to="/next"
-					icon={CalendarDays}
-					label="Next meeting"
-					onNavigate={onNavigate}
-				/>
-				<NavItem
-					to="/meetings"
-					icon={History}
-					label="Past meetings"
-					onNavigate={onNavigate}
-				/>
-				<NavItem
-					to="/activity"
-					icon={ScrollText}
-					label="Activity"
-					onNavigate={onNavigate}
-				/>
+			<div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto overscroll-contain">
 				{isOfficer ? (
-					<>
+					<NavGroup label="Your office">
 						<NavItem
-							to="/admin/vpe-dashboard"
-							icon={GraduationCap}
-							label="VP Education"
+							to="/officers"
+							icon={Compass}
+							label="Officer home"
 							onNavigate={onNavigate}
 						/>
-						<NavItem
-							to="/admin/vp-membership"
-							icon={UserPlus}
-							label="VP Membership"
-							onNavigate={onNavigate}
-						/>
-						<NavItem
-							to="/admin/dcp"
-							icon={Trophy}
-							label="DCP scoreboard"
-							onNavigate={onNavigate}
-						/>
-						<NavItem
-							to="/admin/dues"
-							icon={Wallet}
-							label="Dues"
-							onNavigate={onNavigate}
-						/>
-						<NavItem
-							to="/admin/action-items"
-							icon={ClipboardCheck}
-							label="Action items"
-							onNavigate={onNavigate}
-						/>
-						<NavItem
-							to="/admin/meetings/new"
-							icon={CalendarPlus}
-							label="New meeting"
-							onNavigate={onNavigate}
-						/>
-						<NavItem
-							to="/admin/meetings/batch"
-							icon={CalendarRange}
-							label="Batch meetings"
-							onNavigate={onNavigate}
-						/>
-						<NavItem
-							to="/admin/schedule"
-							icon={CalendarDays}
-							label="Recurring schedule"
-							onNavigate={onNavigate}
-						/>
-						<NavItem
-							to="/admin/roles"
-							icon={ListChecks}
-							label="Meeting roles"
-							onNavigate={onNavigate}
-						/>
-						<NavItem
-							to="/admin/club-settings"
-							icon={Settings}
-							label="Club settings"
-							onNavigate={onNavigate}
-						/>
-						<NavItem
-							to="/admin/sync-tokens"
-							icon={RefreshCw}
-							label="Base Camp sync"
-							onNavigate={onNavigate}
-						/>
-						<NavItem
-							to="/admin/pathways-sync"
-							icon={ClipboardPaste}
-							label="Manual Pathways sync"
-							onNavigate={onNavigate}
-						/>
-					</>
+					</NavGroup>
 				) : null}
-			</NavGroup>
 
-			<NavGroup label="Me">
-				<NavItem
-					to="/dashboard"
-					icon={LayoutGrid}
-					label="My dashboard"
-					onNavigate={onNavigate}
-				/>
-				<NavItem to="/me" icon={Mic} label="My roles" onNavigate={onNavigate} />
-				<NavItem
-					to="/resources"
-					icon={BookOpen}
-					label="Resources"
-					onNavigate={onNavigate}
-				/>
-			</NavGroup>
-
-			{isSuperadmin ? (
-				<NavGroup label="Platform">
+				<NavGroup label="Manage">
 					<NavItem
-						to="/superadmin"
-						icon={ShieldCheck}
-						label="Superadmin"
+						to="/schedule"
+						icon={Grid3x3}
+						label="Sign-up sheet"
 						onNavigate={onNavigate}
-						exact
 					/>
 					<NavItem
-						to="/superadmin/duplicate-people"
-						icon={Users}
-						label="Duplicate people"
+						to="/roster"
+						icon={List}
+						label="Roster"
+						onNavigate={onNavigate}
+					/>
+					<NavItem
+						to="/next"
+						icon={CalendarDays}
+						label="Next meeting"
+						onNavigate={onNavigate}
+					/>
+					<NavItem
+						to="/meetings"
+						icon={History}
+						label="Past meetings"
+						onNavigate={onNavigate}
+					/>
+					<NavItem
+						to="/activity"
+						icon={ScrollText}
+						label="Activity"
+						onNavigate={onNavigate}
+					/>
+					{isOfficer ? (
+						<>
+							<NavItem
+								to="/admin/vpe-dashboard"
+								icon={GraduationCap}
+								label="VP Education"
+								onNavigate={onNavigate}
+							/>
+							<NavItem
+								to="/admin/vp-membership"
+								icon={UserPlus}
+								label="VP Membership"
+								onNavigate={onNavigate}
+							/>
+							<NavItem
+								to="/admin/dcp"
+								icon={Trophy}
+								label="DCP scoreboard"
+								onNavigate={onNavigate}
+							/>
+							<NavItem
+								to="/admin/dues"
+								icon={Wallet}
+								label="Dues"
+								onNavigate={onNavigate}
+							/>
+							<NavItem
+								to="/admin/action-items"
+								icon={ClipboardCheck}
+								label="Action items"
+								onNavigate={onNavigate}
+							/>
+							<NavItem
+								to="/admin/meetings/new"
+								icon={CalendarPlus}
+								label="New meeting"
+								onNavigate={onNavigate}
+							/>
+							<NavItem
+								to="/admin/meetings/batch"
+								icon={CalendarRange}
+								label="Batch meetings"
+								onNavigate={onNavigate}
+							/>
+							<NavItem
+								to="/admin/schedule"
+								icon={CalendarDays}
+								label="Recurring schedule"
+								onNavigate={onNavigate}
+							/>
+							<NavItem
+								to="/admin/roles"
+								icon={ListChecks}
+								label="Meeting roles"
+								onNavigate={onNavigate}
+							/>
+							<NavItem
+								to="/admin/club-settings"
+								icon={Settings}
+								label="Club settings"
+								onNavigate={onNavigate}
+							/>
+							<NavItem
+								to="/admin/sync-tokens"
+								icon={RefreshCw}
+								label="Base Camp sync"
+								onNavigate={onNavigate}
+							/>
+							<NavItem
+								to="/admin/pathways-sync"
+								icon={ClipboardPaste}
+								label="Manual Pathways sync"
+								onNavigate={onNavigate}
+							/>
+						</>
+					) : null}
+				</NavGroup>
+
+				<NavGroup label="Me">
+					<NavItem
+						to="/dashboard"
+						icon={LayoutGrid}
+						label="My dashboard"
+						onNavigate={onNavigate}
+					/>
+					<NavItem
+						to="/me"
+						icon={Mic}
+						label="My roles"
+						onNavigate={onNavigate}
+					/>
+					<NavItem
+						to="/resources"
+						icon={BookOpen}
+						label="Resources"
 						onNavigate={onNavigate}
 					/>
 				</NavGroup>
-			) : null}
 
-			{/* Footer mini-profile */}
-			<div className="mt-auto flex items-center gap-2.5 rounded-xl border border-[var(--line)] bg-[var(--foam)] p-2.5">
+				{isSuperadmin ? (
+					<NavGroup label="Platform">
+						<NavItem
+							to="/superadmin"
+							icon={ShieldCheck}
+							label="Superadmin"
+							onNavigate={onNavigate}
+							exact
+						/>
+						<NavItem
+							to="/superadmin/duplicate-people"
+							icon={Users}
+							label="Duplicate people"
+							onNavigate={onNavigate}
+						/>
+					</NavGroup>
+				) : null}
+			</div>
+
+			{/* Footer mini-profile. `shrink-0`, not `mt-auto`: the scrolling band
+			    above already absorbs the free space, so this sits at the bottom
+			    whether the nav overflows or not — and must not be squeezed when it
+			    does. */}
+			<div className="flex shrink-0 items-center gap-2.5 rounded-xl border border-[var(--line)] bg-[var(--foam)] p-2.5">
 				<MemberAvatar tone="palm" initials={initials} size={34} />
 				<div className="min-w-0 leading-tight">
 					<div className="truncate text-sm font-bold">{displayName}</div>
@@ -571,7 +603,12 @@ function NavGroup({
 }) {
 	return (
 		<>
-			<div className="px-2.5 pt-3.5 pb-0.5 text-xs font-extrabold tracking-[0.12em] text-[var(--sea-ink-soft)] uppercase opacity-70 first:pt-1">
+			{/* No `first:pt-1` here. It never matched while these labels were direct
+			    children of the sidebar column (the brand div was always the first
+			    child), and giving the nav its own scrolling band would have made the
+			    first label `:first-child` for the first time — silently tightening
+			    the gap under the brand by 10px as a side effect of a scroll fix. */}
+			<div className="px-2.5 pt-3.5 pb-0.5 text-xs font-extrabold tracking-[0.12em] text-[var(--sea-ink-soft)] uppercase opacity-70">
 				{label}
 			</div>
 			{children}

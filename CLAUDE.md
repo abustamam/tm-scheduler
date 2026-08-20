@@ -104,7 +104,7 @@ tests vanish from the run and the pass count still reads green. A plain `bun run
 assertions that CI catches. `tm_test` is push-synced, so after a schema change run
 `DATABASE_URL=…tm_test bun run db:push --force` — that is the one database `db:push` is for.
 
-**The two browser-backed print suites need Chrome — set `CHROME_PATH` to run them on a Mac.**
+**The three browser-backed suites need Chrome — set `CHROME_PATH` to run them on a Mac.**
 `src/components/agenda/print-page-count.test.tsx` renders each print surface, inlines the stylesheet
 the route serves, and drives headless Chrome (`--print-to-pdf`) to count the sheets it produces.
 `src/components/agenda/print-density.test.tsx` (v1.13.0.0) measures the natural height of the
@@ -113,11 +113,24 @@ that can see print CSS at all, and they see different things: `FitPage` scales a
 page count reports 1 whether the page is comfortable or crushed, and a change can make the club's
 agenda 20% less legible with every other gate green. Height is font size on those layouts.
 
+`src/components/pinned-column-reachability.test.ts` (v1.21.0.0) is the third, and it is not about
+print: it lays the app's two **pinned columns** out in the same browser and asserts you can still
+scroll to the bottom of them. A column that is `sticky` with a height ceiling cannot grow, and being
+pinned means the DOCUMENT scroll never reveals what spills out — so a missing scroller makes the
+tail reachable by nothing at all, silently. That has now shipped twice: the meeting page's
+attendance rail (v1.19.0.0, ~10 of 40 rows reachable) and the app-shell nav (~28 items on a short
+laptop viewport, taking the sign-out control with it). Its fixture reads the real `className`
+strings out of source, so deleting a scroller fails it, but the markup between them is synthetic —
+mounting the real `SidebarInner` or `MeetingAttendancePanel` needs a router context and a mocked
+`#/db`. So it pins the class COMBINATION, which is the half the source greps beside it cannot see:
+`overflow-y-auto` on a flex child with no `min-h-0` is a box that grows instead of scrolling, and
+satisfies every grep asking whether the class is present.
+
 No new dependency: the harness (`src/test/print-page-count.ts`) runs `$CHROME_PATH` if set, else
 `google-chrome` / `google-chrome-stable` / `chromium` / `chromium-browser`, whichever runs first.
 With none present those tests **skip locally**, so `bun run test` still works for someone without a
-browser; **in CI they fail** instead (`CI has no Chrome on PATH`), because a silently absent print
-gate reads exactly like a passing one — the same failure shape as the DB-backed suites above.
+browser; **in CI they fail** instead (`CI has no Chrome on PATH`), because a silently absent
+geometry gate reads exactly like a passing one — the same failure shape as the DB-backed suites above.
 `ubuntu-latest` ships Chrome, so CI needs no install step; the dependency is named in
 `.github/workflows/ci.yml` beside both `Test` steps so a runner-image change is diagnosable.
 

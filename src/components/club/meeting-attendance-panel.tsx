@@ -982,9 +982,16 @@ export function MeetingAttendancePanel({
 	// which would read as "no contact on file" for a member who has one.
 	const hideContact = roll && phaseCompleted;
 
+	// At `lg` this card is the pinned rail (`club.$clubId.meeting.$meetingId`),
+	// which caps its height — so the card fills that cap and its BODY scrolls,
+	// leaving the header (title, counts, sync status) in place above the rows.
+	// Below `lg` the card is a normal block in the page flow and none of it
+	// applies: the page scrolls, so a scroller here would be a box inside a box.
+	// The `lg:` prefixes are the coupling to that one caller, which is also the
+	// only caller.
 	return (
-		<Card>
-			<CardHeader>
+		<Card className="lg:min-h-0 lg:flex-1">
+			<CardHeader className="shrink-0">
 				<div className="flex items-center justify-between gap-2">
 					<div className="min-w-0">
 						<CardTitle>{roll ? "Attendance" : "Planned attendance"}</CardTitle>
@@ -1033,7 +1040,7 @@ export function MeetingAttendancePanel({
 			 *  merely CSS-hidden, which would still expose every member's name to a
 			 *  screen reader (and make the collapse untestable). */}
 			{showRows ? (
-				<CardContent>
+				<CardContent className="lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:overscroll-contain">
 					{/* A LIST, not forty sibling divs: without it an AT user gets no set
 					 *  size and no position within it, on the one surface whose job is
 					 *  "how many of us are there and where am I in the chase".

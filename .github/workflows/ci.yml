@@ -48,10 +48,12 @@ jobs:
       # fails to apply, and keeps the test schema honest to the migration history.
       - name: Apply migrations
         run: DATABASE_URL=$TEST_DATABASE_URL bun run db:migrate
-      # Two suites drive headless Chrome and FAIL rather than skip when no
+      # Three suites drive headless Chrome and FAIL rather than skip when no
       # browser is present in CI: print-page-count.test.tsx counts printed
-      # sheets, and print-density.test.tsx measures how large the type actually
-      # prints once FitPage has scaled the sheet. ubuntu-latest ships
+      # sheets, print-density.test.tsx measures how large the type actually
+      # prints once FitPage has scaled the sheet, and
+      # pinned-column-reachability.test.ts checks that the bottom of each
+      # sticky column can still be scrolled to. ubuntu-latest ships
       # google-chrome-stable today, so no install step is needed — but that is an
       # image detail outside this repo, so the dependency is named here. If this
       # job starts failing with "CI has no Chrome on PATH", add a browser setup
@@ -89,10 +91,12 @@ jobs:
         run: bunx wxt prepare
       - name: Typecheck
         run: bunx tsc --noEmit
-      # Two suites drive headless Chrome and FAIL rather than skip when no
+      # Three suites drive headless Chrome and FAIL rather than skip when no
       # browser is present in CI: print-page-count.test.tsx counts printed
-      # sheets, and print-density.test.tsx measures how large the type actually
-      # prints once FitPage has scaled the sheet. ubuntu-latest ships
+      # sheets, print-density.test.tsx measures how large the type actually
+      # prints once FitPage has scaled the sheet, and
+      # pinned-column-reachability.test.ts checks that the bottom of each
+      # sticky column can still be scrolled to. ubuntu-latest ships
       # google-chrome-stable today, so no install step is needed — but that is an
       # image detail outside this repo, so the dependency is named here. If this
       # job starts failing with "CI has no Chrome on PATH", add a browser setup
