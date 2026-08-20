@@ -21,6 +21,7 @@ import {
 import { z } from "zod";
 import { db } from "#/db";
 import { meetings, members, people, roleSlots } from "#/db/schema";
+import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
 import {
 	defaultClubRoleForOffices,
 	OFFICER_POSITIONS,
@@ -110,9 +111,26 @@ export async function applySelfAdd(input: { clubId: string; name: string }) {
 	// COMMITTED the COUNT takes a fresh snapshot once the lock is granted, so it
 	// sees what the requests ahead of it committed.
 	return db.transaction(async (tx) => {
-		await tx.execute(
-			sql`SELECT id FROM clubs WHERE id = ${input.clubId} FOR UPDATE`,
+		// The lock select also answers the archive question (#555), and reading
+		// `archived_at` HERE rather than through `assertClubNotArchived` before the
+		// transaction is the whole point. A pre-check is check-then-act: a club
+		// archived between the check and the insert still gets the rows, and this
+		// is the path that mints a `people` row plus a `members` row, so the race
+		// leaves exactly the PII a takedown was meant to stop collecting. Inside
+		// the lock the two questions are answered against the same row version,
+		// and it costs no extra round trip — the statement was already here.
+		//
+		// Fails CLOSED on a missing club, matching `assertClubNotArchived`: the
+		// FK on `members.club_id` would reject the insert anyway, but with a
+		// constraint error rather than the sentence a caller can show someone.
+		const locked = await tx.execute<{ archived_at: Date | null }>(
+			sql`SELECT archived_at FROM clubs WHERE id = ${input.clubId} FOR UPDATE`,
 		);
+		const lockedClub = locked.rows[0];
+		if (!lockedClub) throw new Error("Club not found.");
+		if (lockedClub.archived_at != null) {
+			throw new Error(CLUB_ARCHIVED_MESSAGE);
+		}
 		const since = new Date(Date.now() - SELF_ADD_WINDOW_MS);
 		const [recent] = await tx
 			.select({ n: count() })

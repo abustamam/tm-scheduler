@@ -46,3 +46,13 @@
 export function isClubArchived(club: { archivedAt: Date | null }): boolean {
 	return club.archivedAt != null;
 }
+
+/**
+ * The rejection every archive check raises. One copy, here rather than in
+ * `guards.ts`, for the same reason `isClubArchived` is here: the write gate
+ * (#555) added a caller that reads `archived_at` inside its own `FOR UPDATE`
+ * lock instead of going through `assertClubNotArchived`, and a second inline
+ * string is how two paths start telling a member different things about the
+ * same club.
+ */
+export const CLUB_ARCHIVED_MESSAGE = "This club has been archived.";
