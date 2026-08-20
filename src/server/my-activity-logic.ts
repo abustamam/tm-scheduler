@@ -13,13 +13,14 @@
 // testable against a test db and never reaches the client bundle — see
 // CLAUDE.md "Data layer". The createServerFn wrappers stay in `club.ts`
 // (`listMySpeeches`) and `meetings.ts` (`listMyCommitments`).
-import { and, asc, desc, eq, gte, inArray, isNull, ne } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, ne, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { db } from "#/db";
 import {
 	clubs,
 	meetings,
 	members,
+	pathwaysProjects,
 	roleDefinitions,
 	roleSlots,
 	speeches,
@@ -127,6 +128,17 @@ export async function loadMyCommitments(userId: string) {
 	const memberIds = await userMemberIds(userId);
 	if (memberIds.length === 0) return [];
 
+	// The member holding THIS row may be the evaluator, not the speaker — the
+	// resource they need is the project of the speech they are EVALUATING, not
+	// their own (which is usually absent). `evaluatesSlotId` points at the
+	// speaker's slot; these aliases walk that self-join back to a project name,
+	// entirely on the one statement below (no per-row resolution — see the
+	// query-count guard in `my-commitments-query.integration.test.ts`).
+	const speakerSlot = alias(roleSlots, "speaker_slot");
+	const evaluatedSpeech = alias(speeches, "evaluated_speech");
+	const evaluatedProject = alias(pathwaysProjects, "evaluated_project");
+	const ownProject = alias(pathwaysProjects, "own_project");
+
 	return (
 		db
 			.select({
@@ -142,6 +154,15 @@ export async function loadMyCommitments(userId: string) {
 				roleName: roleDefinitions.name,
 				isSpeakerRole: roleDefinitions.isSpeakerRole,
 				speechTitle: speeches.title,
+				// The evaluator's target: this slot evaluates `speakerSlot`, whose
+				// speech carries the project. `projectId` (catalog) wins over the
+				// free-text `projectName`, which predates the catalog.
+				evaluatedProjectName: sql<string | null>`
+					coalesce(${evaluatedProject.name}, ${evaluatedSpeech.projectName})
+				`,
+				ownProjectName: sql<string | null>`
+					coalesce(${ownProject.name}, ${speeches.projectName})
+				`,
 			})
 			.from(roleSlots)
 			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
@@ -151,6 +172,13 @@ export async function loadMyCommitments(userId: string) {
 				eq(roleDefinitions.id, roleSlots.roleDefinitionId),
 			)
 			.leftJoin(speeches, eq(speeches.id, roleSlots.speechId))
+			.leftJoin(ownProject, eq(ownProject.id, speeches.projectId))
+			.leftJoin(speakerSlot, eq(speakerSlot.id, roleSlots.evaluatesSlotId))
+			.leftJoin(evaluatedSpeech, eq(evaluatedSpeech.id, speakerSlot.speechId))
+			.leftJoin(
+				evaluatedProject,
+				eq(evaluatedProject.id, evaluatedSpeech.projectId),
+			)
 			.where(
 				and(
 					inArray(roleSlots.assignedMemberId, memberIds),

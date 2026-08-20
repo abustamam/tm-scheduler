@@ -29,6 +29,8 @@ import {
 	clubs,
 	meetings,
 	members,
+	pathwaysPaths,
+	pathwaysProjects,
 	people,
 	roleDefinitions,
 	roleSlots,
@@ -39,6 +41,7 @@ import {
 	hasTestDb,
 	type SeededClub,
 	seedClub,
+	seedPerson,
 	testDb,
 } from "#/test/db";
 
@@ -429,6 +432,11 @@ describe.skipIf(!hasTestDb)("my cross-club activity (#437)", () => {
 			// Null here is meaningful (a functionary role has no speech) and is
 			// now distinguishable from theme/location, which carry real values.
 			speechTitle: null,
+			// Neither an evaluator target nor a speech of its own — a plain
+			// functionary (Timer) role. See the evaluator-resolution suite below
+			// for the self-join that fills these in.
+			evaluatedProjectName: null,
+			ownProjectName: null,
 		});
 	});
 
@@ -504,3 +512,278 @@ describe.skipIf(!hasTestDb)("my cross-club activity (#437)", () => {
 		}
 	});
 });
+
+/**
+ * The member holding a slot is often the EVALUATOR, not the speaker — the
+ * resource they need is the project of the speech they are evaluating, which
+ * `loadMyCommitments` used to leave null (it only ever joined `speeches` on
+ * the row's OWN `speechId`, which an evaluator slot never has). This suite
+ * pins the self-join that resolves it via `evaluatesSlotId` → speaker slot →
+ * speech → catalog project.
+ *
+ * Fixture note: the brief for this task named `seedMeetingWithSpeaker` /
+ * `addSlot` helpers that do not exist anywhere in this file or repo. These are
+ * new, file-local helpers written to fit that shape, following the pattern of
+ * `attachToClub` above and `addSlot` in `reporting.integration.test.ts`.
+ */
+describe.skipIf(!hasTestDb)(
+	"evaluator sees the evaluated speech's project",
+	() => {
+		// Each test seeds its own fresh club (rather than sharing one via
+		// beforeEach) because the shape varies per test: whether the speaker is
+		// a separate member from the viewer, whether a speech exists at all, and
+		// whether a catalog project backs it. Teardown is collected as thunks
+		// rather than tracked ids, since only some tests create pathway rows.
+		let teardown: Array<() => Promise<unknown>> = [];
+
+		beforeEach(() => {
+			teardown = [];
+		});
+
+		afterEach(async () => {
+			// Reverse order: a pathways_paths delete (added after the club it
+			// belongs to, conceptually) should not depend on running before or
+			// after the club cascade — both tables are independent — but running
+			// teardown LIFO matches how the resources were acquired.
+			for (const fn of teardown.slice().reverse()) {
+				await fn();
+			}
+		});
+
+		interface SeededSpeakerMeeting {
+			userId: string;
+			memberId: string;
+			meetingId: string;
+			speakerSlotId: string;
+		}
+
+		/**
+		 * A club with one upcoming (non-cancelled) meeting holding a speaker
+		 * slot. The returned `userId`/`memberId` are the VIEWER's own roster
+		 * membership — by default a DIFFERENT member holds the speaker slot, so
+		 * a test can assign the viewer to evaluate them; `assignToUser` collapses
+		 * the two for the "speaker sees their own project" case.
+		 */
+		async function seedMeetingWithSpeaker(
+			opts: {
+				projectName?: string | null;
+				catalogProjectName?: string;
+				speech?: null;
+				assignToUser?: boolean;
+			} = {},
+		): Promise<SeededSpeakerMeeting> {
+			const club: SeededClub = await seedClub();
+			teardown.push(() =>
+				cleanup(club.clubId, [club.adminUserId, club.memberUserId]),
+			);
+
+			const [speakerRole] = await testDb
+				.insert(roleDefinitions)
+				.values({
+					clubId: club.clubId,
+					name: "Speaker",
+					category: "speaker",
+					isSpeakerRole: true,
+				})
+				.returning({ id: roleDefinitions.id });
+			if (!speakerRole) throw new Error("speaker role insert failed");
+
+			const [meeting] = await testDb
+				.insert(meetings)
+				.values({
+					clubId: club.clubId,
+					scheduledAt: new Date(Date.now() + 5 * DAY),
+					status: "scheduled",
+				})
+				.returning({ id: meetings.id });
+			if (!meeting) throw new Error("meeting insert failed");
+
+			let speakerMemberId = club.memberId;
+			let speakerPersonId = club.personId;
+			if (!opts.assignToUser) {
+				speakerPersonId = await seedPerson({ name: "Other Speaker" });
+				const [speakerMember] = await testDb
+					.insert(members)
+					.values({
+						clubId: club.clubId,
+						personId: speakerPersonId,
+						name: "Other Speaker",
+						clubRole: "member",
+						status: "active",
+					})
+					.returning({ id: members.id });
+				if (!speakerMember) throw new Error("speaker member insert failed");
+				speakerMemberId = speakerMember.id;
+			}
+
+			let speechId: string | null = null;
+			if (opts.speech !== null) {
+				let projectId: string | null = null;
+				if (opts.catalogProjectName) {
+					const [path] = await testDb
+						.insert(pathwaysPaths)
+						.values({
+							courseCode: `eval-test-${randomUUID()}`,
+							name: "Test Path",
+						})
+						.returning({ id: pathwaysPaths.id });
+					if (!path) throw new Error("path insert failed");
+					// Deletes cascade onto the pathways_projects row inserted below —
+					// pathways_paths/pathways_projects are global catalog tables, not
+					// club-scoped, so `cleanup()`'s club cascade never reaches them.
+					teardown.push(() =>
+						testDb.delete(pathwaysPaths).where(eq(pathwaysPaths.id, path.id)),
+					);
+					const [project] = await testDb
+						.insert(pathwaysProjects)
+						.values({
+							pathId: path.id,
+							level: 1,
+							name: opts.catalogProjectName,
+						})
+						.returning({ id: pathwaysProjects.id });
+					if (!project) throw new Error("project insert failed");
+					projectId = project.id;
+				}
+				const [speech] = await testDb
+					.insert(speeches)
+					.values({
+						personId: speakerPersonId,
+						title: "A speech",
+						projectName: opts.projectName ?? null,
+						projectId,
+					})
+					.returning({ id: speeches.id });
+				if (!speech) throw new Error("speech insert failed");
+				speechId = speech.id;
+			}
+
+			const [speakerSlot] = await testDb
+				.insert(roleSlots)
+				.values({
+					meetingId: meeting.id,
+					roleDefinitionId: speakerRole.id,
+					assignedMemberId: speakerMemberId,
+					speechId,
+					status: "confirmed",
+				})
+				.returning({ id: roleSlots.id });
+			if (!speakerSlot) throw new Error("speaker slot insert failed");
+
+			return {
+				userId: club.memberUserId,
+				memberId: club.memberId,
+				meetingId: meeting.id,
+				speakerSlotId: speakerSlot.id,
+			};
+		}
+
+		/** An additional slot on `meetingId` — the evaluator side of the fixture. */
+		async function addSlot(opts: {
+			meetingId: string;
+			roleName: string;
+			assignedMemberId: string;
+			evaluatesSlotId?: string;
+		}): Promise<string> {
+			const [meetingRow] = await testDb
+				.select({ clubId: meetings.clubId })
+				.from(meetings)
+				.where(eq(meetings.id, opts.meetingId));
+			if (!meetingRow) throw new Error("meeting not found");
+
+			const [roleDef] = await testDb
+				.insert(roleDefinitions)
+				.values({
+					clubId: meetingRow.clubId,
+					name: opts.roleName,
+					category: opts.roleName.toLowerCase().includes("evaluat")
+						? "evaluator"
+						: "functionary",
+					isSpeakerRole: false,
+				})
+				.returning({ id: roleDefinitions.id });
+			if (!roleDef) throw new Error("role definition insert failed");
+
+			const [slot] = await testDb
+				.insert(roleSlots)
+				.values({
+					meetingId: opts.meetingId,
+					roleDefinitionId: roleDef.id,
+					assignedMemberId: opts.assignedMemberId,
+					evaluatesSlotId: opts.evaluatesSlotId ?? null,
+					status: "confirmed",
+				})
+				.returning({ id: roleSlots.id });
+			if (!slot) throw new Error("slot insert failed");
+			return slot.id;
+		}
+
+		it("gives an evaluator the project of the speech they evaluate", async () => {
+			// Full fixture: speaker slot carrying a speech with a catalog project,
+			// plus an evaluator slot pointing at it via evaluates_slot_id.
+			const { userId, memberId, meetingId, speakerSlotId } =
+				await seedMeetingWithSpeaker({ projectName: "Active Listening" });
+			const evaluatorSlotId = await addSlot({
+				meetingId,
+				roleName: "Evaluator",
+				assignedMemberId: memberId,
+				evaluatesSlotId: speakerSlotId,
+			});
+
+			const rows = await loadMyCommitments(userId);
+			const row = rows.find((r) => r.slotId === evaluatorSlotId);
+			expect(row?.evaluatedProjectName).toBe("Active Listening");
+			// The evaluator has no speech of their own.
+			expect(row?.ownProjectName).toBeNull();
+		});
+
+		it("prefers the catalog project name over stale free text", async () => {
+			const { userId, memberId, meetingId, speakerSlotId } =
+				await seedMeetingWithSpeaker({
+					projectName: "typed by hand years ago",
+					catalogProjectName: "Persuasive Speaking",
+				});
+			const evaluatorSlotId = await addSlot({
+				meetingId,
+				roleName: "Evaluator",
+				assignedMemberId: memberId,
+				evaluatesSlotId: speakerSlotId,
+			});
+
+			const rows = await loadMyCommitments(userId);
+			expect(
+				rows.find((r) => r.slotId === evaluatorSlotId)?.evaluatedProjectName,
+			).toBe("Persuasive Speaking");
+		});
+
+		it("leaves the evaluated project null for a TBA speech", async () => {
+			// An evaluator can be assigned before the speaker attaches a speech.
+			// The card falls back to the generic resource; the loader must not
+			// invent a name.
+			const { userId, memberId, meetingId, speakerSlotId } =
+				await seedMeetingWithSpeaker({ speech: null });
+			const evaluatorSlotId = await addSlot({
+				meetingId,
+				roleName: "Evaluator",
+				assignedMemberId: memberId,
+				evaluatesSlotId: speakerSlotId,
+			});
+
+			const rows = await loadMyCommitments(userId);
+			expect(
+				rows.find((r) => r.slotId === evaluatorSlotId)?.evaluatedProjectName,
+			).toBeNull();
+		});
+
+		it("still gives a speaker their own project", async () => {
+			const { userId, speakerSlotId } = await seedMeetingWithSpeaker({
+				projectName: "Ice Breaker",
+				assignToUser: true,
+			});
+			const rows = await loadMyCommitments(userId);
+			const row = rows.find((r) => r.slotId === speakerSlotId);
+			expect(row?.ownProjectName).toBe("Ice Breaker");
+			expect(row?.evaluatedProjectName).toBeNull();
+		});
+	},
+);
