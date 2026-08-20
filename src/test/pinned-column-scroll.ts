@@ -41,10 +41,14 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { compile } from "tailwindcss";
 import { findChrome } from "./print-page-count";
 
-const REPO = resolve(dirname(new URL(import.meta.url).pathname), "../..");
+// `fileURLToPath`, not `new URL(…).pathname`: the latter hands back a
+// percent-encoded path, so a checkout under a directory with a space in it
+// resolves to a path that does not exist.
+const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
 /**
  * Compile the app's OWN stylesheet, so the utilities under test resolve through
@@ -214,7 +218,20 @@ export function probeColumn(opts: {
 				"--dump-dom",
 				`file://${join(dir, "page.html")}`,
 			],
-			{ encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+			// A hung browser cannot be interrupted from a SYNC call — vitest's
+			// per-test ceiling never fires, so the run wedges rather than fails.
+			// `print-page-count.ts` carries the same guard for the same reason, and
+			// CLAUDE.md records the case that motivated it: a Chrome that answers
+			// `--version` but never returns from a render. Its measured spawns use
+			// 10s because a swallowed `warmChrome` absorbs the cold-start cost
+			// first; this harness does not warm, and `--dump-dom` is far cheaper
+			// than `--print-to-pdf` (~0.15s locally), so 30s is a hang detector
+			// with room for a cold CI runner rather than a latency budget.
+			{
+				encoding: "utf8",
+				stdio: ["ignore", "pipe", "ignore"],
+				timeout: 30_000,
+			},
 		);
 		const title = /<title>([^<]*)<\/title>/.exec(dom)?.[1] ?? "";
 		if (title.startsWith("ERROR:")) throw new Error(`probe: ${title.slice(6)}`);

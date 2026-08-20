@@ -91,23 +91,54 @@ describe.skipIf(!hasChrome)(
 		let css = "";
 		const cls: Record<string, string> = {};
 
+		/**
+		 * 28 nav rows — an officer who is also a superadmin. Shared by both nav
+		 * fixtures on purpose: the desktop rail and the mobile drawer render the
+		 * same `SidebarInner`, so a fixture that let them drift would stop
+		 * comparing the thing they have in common.
+		 */
+		const NAV_ROWS = Array.from(
+			{ length: 28 },
+			(_, i) =>
+				`<a class="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm"${
+					i === 27 ? " data-tail" : ""
+				}>Nav ${i + 1}</a>`,
+		).join("");
+
 		/** The app shell: brand / scrolling nav / pinned mini-profile. */
 		const shellHtml = (navBand = cls.navBand) =>
 			`<div class="flex min-h-svh w-full">
 				<aside class="${cls.aside.replace(/\bhidden\b/, "")}">
 					<div class="shrink-0 px-2 pt-1.5 pb-4">GavelUp</div>
-					<div class="${navBand}" data-scroller>
-						${Array.from(
-							{ length: 28 },
-							(_, i) =>
-								`<a class="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm"${
-									i === 27 ? " data-tail" : ""
-								}>Nav ${i + 1}</a>`,
-						).join("")}
-					</div>
+					<div class="${navBand}" data-scroller>${NAV_ROWS}</div>
 					<div class="${cls.footer}" data-chrome>Sign out</div>
 				</aside>
 				<main class="flex min-w-0 flex-1 flex-col"><div style="height:2400px"></div></main>
+			</div>`;
+
+		/**
+		 * The mobile nav drawer, at a phone viewport. The drawer went
+		 * `overflow-y-auto` → `overflow-hidden` so the inner band is the thing
+		 * that overflows, and that is the one change here that could make a
+		 * surface WORSE than the bug it fixes: if the flex column does not
+		 * establish a height, the drawer clips its nav and scrolls nothing at all.
+		 *
+		 * The host classes are reconstructed from `sheet.tsx`'s `cn()` — the
+		 * primitive's base plus the `side="left"` arm plus the call site's
+		 * override — because `SheetContent` composes them at render and no single
+		 * source line holds the result. `tailwind-merge` resolves the two real
+		 * collisions (`gap-4`→`gap-1.5`, `w-3/4`→`w-[284px]`), applied here by
+		 * listing the winner last.
+		 */
+		const SHEET_BASE =
+			"fixed z-50 flex flex-col bg-background shadow-lg inset-y-0 left-0 h-full border-r sm:max-w-sm";
+
+		const drawerHtml = () =>
+			`<div class="${SHEET_BASE} ${cls.drawer}">
+				<div class="shrink-0 px-2 pt-1.5 pb-4">GavelUp</div>
+				<div class="shrink-0 px-0.5 pb-2">search</div>
+				<div class="${cls.navBand}" data-scroller>${NAV_ROWS}</div>
+				<div class="${cls.footer}" data-chrome>Sign out</div>
 			</div>`;
 
 		/** The meeting rail: pinned aside → capped card → header + scrolling body. */
@@ -145,11 +176,14 @@ describe.skipIf(!hasChrome)(
 				SHELL,
 				"rounded-xl border border-[var(--line)]",
 			);
+			cls.drawer = classAfterTag(SHELL, "<SheetContent");
 			cls.rail = classAfterTag(MEETING_ROUTE, "<aside");
 			cls.card = classAfterTag(PANEL, "<Card ");
 			cls.cardHeader = classAfterTag(PANEL, "<CardHeader");
 			cls.cardBody = classAfterTag(PANEL, "<CardContent");
-			css = await buildAppCss(candidatesIn(`${shellHtml()}${railHtml()}`));
+			css = await buildAppCss(
+				candidatesIn(`${shellHtml()}${railHtml()}${drawerHtml()}`),
+			);
 		});
 
 		describe("app shell sidebar", () => {
@@ -179,6 +213,48 @@ describe.skipIf(!hasChrome)(
 				const p = probe(
 					shellHtml(cls.navBand.replace(/overflow-y-auto|min-h-0/g, "")),
 				);
+				expect(p.tailVisibleAfterScroll).toBe(false);
+				expect(p.tailReachableByPageScroll).toBe(false);
+			});
+		});
+
+		describe("mobile nav drawer", () => {
+			// A phone, where this surface actually lives. `lg:` utilities are off
+			// here, which is the point: the drawer is the only nav below `lg`.
+			const PHONE = { width: 390, height: 700 };
+
+			it("still scrolls its nav, and keeps search and sign-out pinned", () => {
+				const p = probeColumn({
+					bodyHtml: drawerHtml(),
+					css,
+					scrollerSelector: "[data-scroller]",
+					tailSelector: "[data-tail]",
+					chromeSelector: "[data-chrome]",
+					viewport: PHONE,
+				});
+				expect(p.overflowY).toBe("auto");
+				expect(p.overflows).toBe(true);
+				expect(p.scrolledBy).toBeGreaterThan(0);
+				expect(p.tailVisibleAfterScroll).toBe(true);
+				expect(p.chromeVisibleAfterScroll).toBe(true);
+			});
+
+			it("clips rather than scrolls if the inner band loses its scroller", () => {
+				// The failure mode `overflow-hidden` on the host introduces: with the
+				// band no longer scrolling, the drawer clips and NOTHING scrolls —
+				// strictly worse than the bug this replaced. Pinning it means the
+				// pair (host hidden + band scrolls) can't be half-applied.
+				const p = probeColumn({
+					bodyHtml: drawerHtml().replace(
+						cls.navBand,
+						cls.navBand.replace(/overflow-y-auto|min-h-0/g, ""),
+					),
+					css,
+					scrollerSelector: "[data-scroller]",
+					tailSelector: "[data-tail]",
+					chromeSelector: "[data-chrome]",
+					viewport: PHONE,
+				});
 				expect(p.tailVisibleAfterScroll).toBe(false);
 				expect(p.tailReachableByPageScroll).toBe(false);
 			});
