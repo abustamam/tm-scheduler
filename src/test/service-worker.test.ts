@@ -119,8 +119,11 @@ class FakeCache {
 		return undefined;
 	}
 
-	async put(req: FakeRequest, res: FakeResponse): Promise<void> {
-		this.entries.set(req.url, res.body);
+	// Accepts a URL STRING as well as a Request, because the real Cache API does
+	// and `primeOpenMeetingPages` (#362) uses the string form — sw.js constructs
+	// no Request anywhere, so this harness injects none.
+	async put(req: FakeRequest | string, res: FakeResponse): Promise<void> {
+		this.entries.set(typeof req === "string" ? req : req.url, res.body);
 	}
 
 	async delete(
@@ -150,6 +153,9 @@ interface Harness {
 	surplusFetches: number;
 	/** Every fetch the worker made, with the cache mode it requested (#517). */
 	fetchInits: { url: string; cache?: string }[];
+	/** Window URLs the worker controls at activation (#362) — set before calling
+	 *  `activate()`, which is when the priming pass reads them. */
+	openClients: string[];
 	dispatchFetch(req: FakeRequest): Promise<FakeResponse | undefined>;
 	activate(): Promise<void>;
 	cacheFor(name: string): FakeCache;
@@ -163,6 +169,8 @@ function loadServiceWorker(): Harness {
 	const nextFetch: (FakeResponse | Error)[] = [];
 	const state = {
 		surplus: 0,
+		/** Window URLs this worker controls at activation (#362). */
+		openClients: [] as string[],
 		lastInit: [] as { url: string; cache?: string }[],
 	};
 
@@ -192,7 +200,12 @@ function loadServiceWorker(): Harness {
 			listeners.set(type, [...(listeners.get(type) ?? []), handler]);
 		},
 		skipWaiting: () => {},
-		clients: { claim: async () => {} },
+		clients: {
+			claim: async () => {},
+			// The windows this worker controls, for the activation-time priming in
+			// #362. Tests set `harness.openClients` before calling `activate()`.
+			matchAll: async () => state.openClients.map((url) => ({ url })),
+		},
 		location: { origin: ORIGIN },
 	};
 
@@ -252,6 +265,12 @@ function loadServiceWorker(): Harness {
 		/** Every fetch this worker made, with the cache mode it asked for. */
 		get fetchInits() {
 			return state.lastInit;
+		},
+		get openClients() {
+			return state.openClients;
+		},
+		set openClients(urls: string[]) {
+			state.openClients = urls;
 		},
 		cacheFor(name) {
 			const cache = cacheStore.get(name);
@@ -606,5 +625,103 @@ describe("service worker takedown eviction (#556)", () => {
 		expect([...sw.cacheFor("gavelup-assets-v3").entries.values()]).toEqual([
 			"chunk",
 		]);
+	});
+});
+
+/**
+ * One online load is enough to prime a page (#362).
+ *
+ * THE reported bug, from a live meeting: the agenda was loaded online, wifi was
+ * cut, the reload failed. None of the three suspects in #362 was the cause. The
+ * mechanism is the worker UPDATE itself — the load was served by the previous
+ * worker, which cached the document under the previous `NAV_CACHE` name, and the
+ * new worker's activation sweep then deleted that cache as unowned. So the nav
+ * cache was empty at the moment it was needed, `networkFirst` rethrew, and the
+ * browser showed its own error page. #556's v3 → v4 bump and every later edit to
+ * `sw.js` each open exactly that window.
+ *
+ * The FIRST-VISIT variant lands in the same place for a different reason:
+ * `registerServiceWorker` runs on `load`, so the document that triggers
+ * registration is fetched before any worker exists and is never intercepted.
+ *
+ * Both mean "prime it before the meeting" silently does nothing, which is worse
+ * than having no offline mode, because the club believes it is covered.
+ */
+describe("priming on activation (#362)", () => {
+	let sw: Harness;
+	beforeEach(() => {
+		sw = loadServiceWorker();
+	});
+
+	it("caches the open meeting page when a NEW worker takes over", async () => {
+		// The previous worker had cached it under the old nav version.
+		sw.seed("gavelup-nav-v3", { [`${ORIGIN}${MEETING}`]: "OLD AGENDA" });
+		sw.openClients = [`${ORIGIN}${MEETING}`];
+		sw.nextFetch.push(response(200, "AGENDA"));
+
+		await sw.activate();
+
+		// The old cache is gone, as it should be — but the CURRENT one now holds
+		// the page, so the user has not lost offline access by updating.
+		expect(sw.caches.has("gavelup-nav-v3")).toBe(false);
+		expect(
+			sw.cacheFor("gavelup-nav-v4").entries.get(`${ORIGIN}${MEETING}`),
+		).toBe("AGENDA");
+	});
+
+	it("serves that page offline afterwards — the reported repro, end to end", async () => {
+		sw.openClients = [`${ORIGIN}${MEETING}`];
+		sw.nextFetch.push(response(200, "AGENDA"));
+		await sw.activate();
+
+		// The queue MUST be drained here, and asserting it is what makes the rest
+		// of this case mean anything. Caught by mutation: with the priming call
+		// removed, activation makes no fetch, the queued 200 survives into the
+		// phase below, and the "offline" reload is answered from the NETWORK — so
+		// the test passed while the bug it exists for was live. `nextFetch` is a
+		// shared queue across phases, which is exactly the trap.
+		expect(
+			sw.nextFetch,
+			"activation did not fetch — nothing was primed",
+		).toHaveLength(0);
+
+		// Wifi cut, reload.
+		sw.nextFetch.push(new Error("offline"));
+		const served = await sw.dispatchFetch(request(MEETING));
+		expect(served?.body).toBe("AGENDA");
+	});
+
+	it("primes nothing for a client that is not on an offline route", async () => {
+		// Scoped exactly as `isOfflineRoute` scopes the fetch handler: this cache is
+		// for meeting pages, and priming the dashboard would put unrelated authed
+		// pages into it.
+		sw.openClients = [`${ORIGIN}/schedule`];
+		await sw.activate();
+		expect(sw.cacheFor("gavelup-nav-v4").entries.size).toBe(0);
+		expect(sw.surplusFetches).toBe(0);
+	});
+
+	it("survives activating while already offline", async () => {
+		// Nothing to prime from, and the old cache is gone regardless — but the
+		// activation must not reject, or the worker never takes control at all.
+		sw.openClients = [`${ORIGIN}${MEETING}`];
+		sw.nextFetch.push(new Error("offline"));
+		await expect(sw.activate()).resolves.toBeUndefined();
+		expect(sw.cacheFor("gavelup-nav-v4").entries.size).toBe(0);
+	});
+
+	it("does not cache a captive portal's redirected 200 over the agenda", async () => {
+		// Venue wifi. `isGoneResponse` already refuses to treat a redirected
+		// response as a takedown; the priming path must equally refuse to treat one
+		// as an agenda, or the step meant to protect the offline copy destroys it.
+		sw.openClients = [`${ORIGIN}${MEETING}`];
+		sw.nextFetch.push(
+			response(200, "PORTAL LOGIN", {
+				redirected: true,
+				url: `${ORIGIN}/login`,
+			}),
+		);
+		await sw.activate();
+		expect(sw.cacheFor("gavelup-nav-v4").entries.size).toBe(0);
 	});
 });

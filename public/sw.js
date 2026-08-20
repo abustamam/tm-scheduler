@@ -74,9 +74,79 @@ self.addEventListener("activate", (event) => {
 				}
 			}
 			await self.clients.claim();
+			// Re-prime whatever the user is looking at, now that we control it.
+			await primeOpenMeetingPages();
 		})(),
 	);
 });
+
+/**
+ * Cache the offline routes that are OPEN RIGHT NOW, on activation (#362).
+ *
+ * Without this, one online load is not enough to prime a page, and that is the
+ * bug reported from a live meeting: agenda loaded online, wifi cut, reload
+ * failed. Two independent ways to land there, and this closes both.
+ *
+ *  - A WORKER UPDATE. The load was served by the previous worker, which cached
+ *    the document under the previous `NAV_CACHE` name. The new worker then
+ *    activates and the sweep above deletes every cache not in `OWNED_CACHES` —
+ *    including that one. `gavelup-nav-v4` is empty, the reload finds nothing,
+ *    `networkFirst` rethrows and the browser shows its own error page. #556's
+ *    v3 → v4 bump and every later edit to this file each produce exactly that
+ *    window.
+ *  - A FIRST VISIT. `registerServiceWorker` runs on `load`, so the document
+ *    that triggers registration was fetched before any worker existed and was
+ *    never intercepted. Nothing is cached until a SECOND online load.
+ *
+ * Both mean "prime it before the meeting" silently does nothing, which is worse
+ * than having no offline mode: the club believes it is covered.
+ *
+ * Best-effort by construction. A failed fetch here means we activated while
+ * already offline, where there is nothing to prime from and the old cache is
+ * gone regardless — so it must not reject and take the activation with it.
+ */
+async function primeOpenMeetingPages() {
+	let clients = [];
+	try {
+		clients = await self.clients.matchAll({ type: "window" });
+	} catch {
+		return;
+	}
+	const cache = await caches.open(NAV_CACHE);
+	await Promise.all(
+		clients.map(async (client) => {
+			let url;
+			try {
+				url = new URL(client.url);
+			} catch {
+				return;
+			}
+			if (url.origin !== self.location.origin) return;
+			if (!isOfflineRoute(url)) return;
+			try {
+				const response = await fetch(client.url);
+				// The same three narrowings `isGoneResponse` documents, in the other
+				// direction: only a clean same-origin 200 is worth storing. A captive
+				// portal on venue wifi answers 200 with a login page after a redirect,
+				// and writing THAT over the agenda would turn a priming step into the
+				// thing that destroys the offline copy.
+				if (
+					response &&
+					response.ok &&
+					!response.redirected &&
+					response.type !== "opaque"
+				) {
+					// A URL STRING as the cache key, not `new Request(...)`: the Cache
+					// API accepts either, and this file never constructs a Request
+					// anywhere else — so the test harness has none to inject.
+					await cache.put(client.url, response.clone());
+				}
+			} catch {
+				// Activated while offline. Nothing to prime from.
+			}
+		}),
+	);
+}
 
 /**
  * The only navigations we cache offline: a meeting Present/Print view, the
