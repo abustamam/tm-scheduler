@@ -1,0 +1,217 @@
+/**
+ * Builds a TEMPLATED meeting's agenda rows directly, without going through
+ * `Beat` / `expandRunSheet`.
+ *
+ * `Beat` exists to do two jobs: GATE (does this club's role set justify this
+ * beat?) and FAN OUT (one beat becomes one row per slot of its role). A
+ * template needs neither — its shape is fixed by the contest rules, and a
+ * repeat block binds one slot at a time. Routing templates through `Beat`
+ * anyway produced three defects, which is why this module exists (spec D8):
+ *
+ *   1. N² rows. `expandRunSheet` already fans one beat across every matching
+ *      slot (`slotsForRole`, agenda-runsheet.ts:1269, filters the whole array),
+ *      so emitting one beat per slot multiplied the count — four contestants
+ *      printed sixteen rows on a clock wrong by the same factor.
+ *   2. Dropped marks and minutes. `expandRunSheet`'s speaker arm reads
+ *      `speechWindow(slot)` and `speechBookedMinutes(slot)`, overriding
+ *      whatever the beat declared — so a contestant's 1/1.5/2 window vanished
+ *      and every contestant rendered at the 7-minute default.
+ *   3. Section bands smuggled through as `handoff`, which renders as an
+ *      indented italic elbow meaning "X introduces Y".
+ *
+ * Pure: no database access, so every branch here is reachable from a unit test.
+ */
+import {
+	type AgendaRow,
+	type AgendaSlot,
+	assigneeDisplay,
+	numbered,
+	type TimingMarks,
+} from "./agenda-runsheet";
+import {
+	MAX_ROLE_REPEAT_SLOTS,
+	MAX_TEMPLATE_DETAIL_CHARS,
+	MAX_TEMPLATE_LABEL_CHARS,
+} from "./meeting-template-limits";
+
+/** One stored row of `meeting_template_beats`. */
+export type TemplateBeatRow = {
+	sortOrder: number;
+	kind: "section" | "role" | "event";
+	label: string;
+	detail: string | null;
+	minutes: number;
+	roleKey: string | null;
+	repeatsRoleKey: string | null;
+	flex: boolean;
+	markGreen: number | null;
+	markYellow: number | null;
+	markRed: number | null;
+};
+
+/** What this module needs from `meeting_template_roles`. */
+export type TemplateRoleRow = {
+	key: string;
+	name: string;
+	isSpeakerRole: boolean;
+};
+
+/**
+ * Cap by CODE POINTS, not UTF-16 units. Slicing a surrogate pair in half yields
+ * a lone surrogate that renders as a replacement glyph and makes
+ * `encodeURIComponent` throw for any consumer building a URL from it (#522).
+ */
+function capChars(value: string, max: number): string {
+	const points = [...value];
+	return points.length <= max ? value : points.slice(0, max).join("");
+}
+
+/** All three marks or none — a timer card with a hole in it is worse than no
+ *  card, and a beat carrying green and red but no yellow is a data error. */
+function resolveMarks(row: TemplateBeatRow): TimingMarks | null {
+	const { markGreen, markYellow, markRed } = row;
+	if (markGreen == null || markYellow == null || markRed == null) return null;
+	return { green: markGreen, yellow: markYellow, red: markRed };
+}
+
+/** Slots belonging to a template role, in slot order. */
+function slotsForRole(slots: AgendaSlot[], roleKey: string): AgendaSlot[] {
+	return slots
+		.filter((s) => s.roleKey === roleKey)
+		.sort((a, b) => a.slotIndex - b.slotIndex);
+}
+
+/**
+ * One row from one stored beat, optionally bound to ONE specific slot.
+ *
+ * `slot` is the whole difference from the design this replaced: a repeated
+ * block passes the slot for that iteration, so the row names that person and
+ * nobody else.
+ *
+ * The row's `who` is the beat's LABEL — the activity ("Contest briefing",
+ * "Results and certificates") — not the role name. A contest runs seven
+ * different beats owned by the Contest Chair, and labelling them all
+ * "Contest Chair" would collapse seven distinct activities into one repeated
+ * string. The role identity travels in `roleKey`, which is what the print
+ * layouts colour by (#445), and the assignee is appended so the sheet still
+ * says who is doing it.
+ */
+function toRow(
+	row: TemplateBeatRow,
+	rolesByKey: Map<string, TemplateRoleRow>,
+	slot: AgendaSlot | undefined,
+	index: number,
+	total: number,
+): AgendaRow | null {
+	const label = capChars(row.label, MAX_TEMPLATE_LABEL_CHARS);
+	const detail = capChars(row.detail ?? "", MAX_TEMPLATE_DETAIL_CHARS);
+	const base = {
+		detail,
+		minutes: row.minutes,
+		marks: resolveMarks(row),
+		...(row.flex ? { flex: true as const } : {}),
+	};
+
+	if (row.kind === "section") {
+		// A band, never a presenter. `section` is a real field rather than a reuse
+		// of `handoff`, whose renderer is an indented italic elbow meaning
+		// "X introduces Y" — the wrong visual language for a segment header.
+		return { who: label, roleKey: null, section: true, ...base, marks: null };
+	}
+
+	if (row.kind === "event") {
+		return { who: label, ...base };
+	}
+
+	if (row.roleKey == null) return null;
+	const role = rolesByKey.get(row.roleKey);
+	// A beat naming a role the template does not declare is dropped rather than
+	// rendered against an invented name. The seed is the only writer in Phase 1,
+	// so this is a corruption guard; Phase 2's editor needs a validation error.
+	if (!role) return null;
+
+	// Number by the SLOT when the role really repeats, and label the assignee
+	// from the slot so a club that renamed the role sees its own word (#445).
+	const numberedLabel = numbered(label, index, total > 1);
+	const who = slot
+		? `${numberedLabel} · ${assigneeDisplay(slot)}`
+		: numberedLabel;
+	return { who, roleKey: role.key, ...base };
+}
+
+/**
+ * Expand a template into finished agenda rows.
+ *
+ * Rows are taken in `sortOrder`. A run of CONSECUTIVE rows sharing the same
+ * non-null `repeatsRoleKey` forms one block emitted once per slot of that role
+ * (capped at `MAX_ROLE_REPEAT_SLOTS`), each iteration bound to exactly one
+ * slot. A block whose role has no slots emits nothing.
+ *
+ * A NON-repeating role beat emits one row per slot of its role, matching
+ * `expandRunSheet`'s plain arm (agenda-runsheet.ts:1706). Binding only the
+ * first slot would silently drop the second Ballot Counter and the second
+ * Timer, both of which the seeded contest declares with `defaultCount: 2`.
+ */
+export function buildTemplateRows(
+	beats: TemplateBeatRow[],
+	roles: TemplateRoleRow[],
+	slots: AgendaSlot[],
+): AgendaRow[] {
+	const rolesByKey = new Map(roles.map((r) => [r.key, r]));
+	const ordered = [...beats].sort((a, b) => a.sortOrder - b.sortOrder);
+	const out: AgendaRow[] = [];
+
+	let i = 0;
+	while (i < ordered.length) {
+		const row = ordered[i];
+		if (!row) break;
+
+		if (row.repeatsRoleKey == null) {
+			if (row.kind === "role" && row.roleKey != null) {
+				const owned = slotsForRole(slots, row.roleKey);
+				if (owned.length === 0) {
+					// No slot this meeting: still print the bare role row so the
+					// contest's shape survives an unfilled position.
+					const emitted = toRow(row, rolesByKey, undefined, 0, 0);
+					if (emitted) out.push(emitted);
+				} else {
+					owned.forEach((s, n) => {
+						const emitted = toRow(row, rolesByKey, s, n, owned.length);
+						if (emitted) out.push(emitted);
+					});
+				}
+			} else {
+				const emitted = toRow(row, rolesByKey, undefined, 0, 0);
+				if (emitted) out.push(emitted);
+			}
+			i += 1;
+			continue;
+		}
+
+		// Gather the consecutive run sharing this repeatsRoleKey.
+		const repeatKey = row.repeatsRoleKey;
+		const block: TemplateBeatRow[] = [];
+		while (i < ordered.length) {
+			const next = ordered[i];
+			if (!next || next.repeatsRoleKey !== repeatKey) break;
+			block.push(next);
+			i += 1;
+		}
+
+		const repeated = slotsForRole(slots, repeatKey).slice(
+			0,
+			MAX_ROLE_REPEAT_SLOTS,
+		);
+		repeated.forEach((s, n) => {
+			for (const blockRow of block) {
+				// Bind the ROLE-owning row to this iteration's slot; the others in
+				// the block (a minute of silence) own no slot and repeat as-is.
+				const bound = blockRow.roleKey === repeatKey ? s : undefined;
+				const emitted = toRow(blockRow, rolesByKey, bound, n, repeated.length);
+				if (emitted) out.push(emitted);
+			}
+		});
+	}
+
+	return out;
+}

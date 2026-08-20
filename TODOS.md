@@ -78,6 +78,87 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
 - Biome's `files.includes` covers `src/**`, `.vscode/**`, `index.html` and `vite.config.ts` only, so `scripts/**`, `drizzle.config.ts`, `vitest.config.ts` and the whole `extension/` sub-package are outside the gate entirely. `extension/` has no Biome config and no Biome step in its CI job, yet some plans instruct running Biome from inside it, where it resolves the root config that excludes those paths. Decide whether those paths should be linted or explicitly declared out of scope.
   **Priority:** P4
 
+## Agenda templates
+
+- **PR 2: the projected deck for a templated meeting (plan Task 10).** `buildSlideDeck` composes
+  slides by hand against the seven standard role keys, so a contest would build a title slide and
+  a thank-you slide and nothing between. PR 1 guards both call sites instead — `/present` renders
+  an explainer pointing at Print, and the `.pptx` export gets an empty deck. Build the generic
+  beat-driven deck (one slide per section, one per row, reusing title/thank-you) and DELETE
+  `TemplatedMeetingNotice` plus the two guards. Two fixes to fold in: the beat slide's `label`
+  and `who` were the same value in the sketch (keep `who`; see #463), and sections are now
+  `row.section === true`, not a synthetic role key.
+  **Priority:** P2
+
+- **`scripts/resync-template-roles.ts` is specified but not written.** Materialization is
+  copy-once, so editing `src/lib/contest-template.ts` never reaches a club that has already run a
+  contest — the same contract `ROLE_TEMPLATE` has. The escape hatch should resolve a template by
+  key, diff each materialized `role_definitions` row against the seed, print `club → role.field:
+  current ⇒ seed`, and write nothing without `--apply`. Never touch a row whose key is absent
+  from the seed: a club may have added its own.
+  **Priority:** P3
+
+- **Colour print rows by `category` when a role key is unmapped.** `ROLE_KEY_COLOR` now
+  enumerates the ten seeded contest keys beside the five standard ones. That works and does not
+  scale — every future template needs its keys added or the sheet prints one grey spine, and
+  `isHighlighted` still tests `roleKey === "speaker"` specifically. A category fallback serves
+  every template for free but needs `category` on `AgendaRow`, which is wider than Phase 1 needed.
+  **Priority:** P3
+
+- **Phase 2: club-authored templates and the editor UI.** The storage is already data and the
+  reads already admit `club_id`-scoped rows, so this needs writes and a UI, no migration. Before
+  it ships, MEASURE the caps in `src/lib/meeting-template-limits.ts` — they are honest bounds
+  today, not measurements, and the seed is currently the only writer.
+  **Priority:** P3
+
+- **`buildTemplateRows`' repeat-block binding is unexercised in two shapes.** A block holding two
+  role-owning rows, or a role row whose `roleKey` differs from its `repeatsRoleKey`, is
+  unreachable from the seeded contest and reachable from a Phase 2 editor. Decide the semantics
+  and test them before the editor exists.
+  **Priority:** P4
+
+- **`FitPage`'s flow branch is unreachable from every test in the repo.** `flow` is set by a
+  `useEffect`, and both print harnesses (`print-page-count.ts`, `print-density.test.tsx`) feed
+  static SSR markup to Chrome, so React never mounts; jsdom reports `scrollHeight === 0` and the
+  effect returns early. `print-density.test.tsx`'s `printedDetailPt` therefore asserts a
+  REIMPLEMENTATION of the `raw < MIN_FIT_SCALE` rule, not the component — a parity test, blind to
+  a defect present on both sides. The CSS half is now covered directly (a too-tall `.agenda-page`
+  paginates rather than clipping, `print-page-count.test.tsx`), and `MIN_FIT_SCALE` is pinned
+  absolutely, but the branch that CHOOSES to flow is not. Needs a harness that mounts React and
+  measures, or a `flow` prop the tests can force.
+  **Priority:** P2
+
+- **Route and component wiring for templates has no guard.** Three computed props decide whether
+  the feature is reachable and correct, and a prop-fed component test cannot see a wrong prop
+  (the #319 trap): `meeting-agenda.tsx` gates the "Change meeting type" button on `viewer.canManage`
+  and passes `currentTemplateId={meeting.templateId ?? null}`; the `/present` route returns the
+  explainer only when `data.template` is set, BEFORE `buildSlideDeck` runs; the meeting route
+  suppresses the deck with `template ? [] : buildSlideDeck(...)`. All three are 0% covered. The
+  repo precedent is a comment-blind source guard — `club-index-wiring.guard.test.ts`,
+  `meeting-chrome-wiring.guard.test.ts`.
+  **Priority:** P2
+
+- **`scripts/seed-global-templates.ts` is entirely untested.** Insert path, update path (it
+  REPLACES beats and roles), idempotent re-run, the `!row` throw, and the load-bearing safety
+  claim in its own doc comment — that re-seeding is safe while a club already holds materialized
+  `role_definitions` rows pointing at the template. That last one is the only claim whose failure
+  is silent and destructive.
+  **Priority:** P2
+
+- **The template server fns are gated in SOURCE but not in BEHAVIOUR.** `meeting-templates.guard.test.ts`
+  proves every `createServerFn` in the module names a `require*` guard and an archive check, which
+  is what the archive-gate sweep needs. Nothing calls `previewTemplateForMeeting` or
+  `applyTemplateToMeeting` with a plain member's session and asserts a refusal, so the guards are
+  verified by grep rather than by behaviour. Same for the zod validators — no test passes a
+  non-uuid.
+  **Priority:** P3
+
+- **`flexBannerMessage` hardcodes Table Topics.** `buildTemplateRows` carries a beat's `flex`
+  through ungated, and `applyFlex` clamps to `TABLE_TOPICS_MIN/MAX` while the banner says "Table
+  Topics is at its 25-min cap". Latent — the contest seed sets no flex beat — but a Phase 2
+  template with one prints that sentence on a sheet with no Table Topics.
+  **Priority:** P4
+
 ## Agenda
 
 - Confirm the hand-off rows on a real MCF agenda after it deploys — that the four print layouts read right in the room and the projected deck's hand-off slides land where the cue is needed. v1.16.1.0 (#585) made those rows name the people too, so this now also covers whether the longer rows read well at the printed size.

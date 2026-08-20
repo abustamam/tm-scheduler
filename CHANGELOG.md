@@ -2,6 +2,26 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.21.0.0] - 2026-08-19
+
+### Added
+
+- **A meeting can now be a speech contest instead of a normal meeting.** Contests have never fitted the ordinary agenda — a Contest Chair and Chief Judge instead of a Toastmaster, contestants instead of speakers, judges and ballot counters who have no equivalent on a Thursday night — so clubs have been printing them by hand in a word processor and losing everything the app does for a meeting. Pick "Speech Contest" on the meeting and the whole agenda, the sign-up sheet and the printed run sheet change shape with it.
+- **Officers change a meeting's type from the meeting itself.** "Change meeting type" sits beside "Edit meeting" and shows exactly what the switch would do before anything happens: how many roles it adds, how many empty ones it clears away, and — by name — every member who would lose a role they had already accepted. Releasing someone's role is the one thing the app cannot tell them about afterwards, so the dialog says so plainly and asks you to message them; a switch that takes nothing from anybody is a single tap with no confirmation at all.
+- **Switching back is the same one tap.** A meeting converted by mistake, or a contest that turns into an ordinary meeting, goes back to the club's standard shape without losing the speeches already attached to their speakers.
+- **The printed contest agenda is readable.** A contest runs roughly forty rows at four contestants and nearly sixty at seven, and squeezing that onto one sheet printed the body text at under three points — technically one page, legible to nobody. A long agenda now flows onto as many sheets as it needs at full size, and an ordinary club agenda still fits its single page exactly as before.
+- **Segment headers on the printed sheet.** A contest divides into rounds, and the run sheet now prints those divisions as bands across the page rather than running twenty-six beats together as one list.
+
+### Changed
+
+- **A contest's roles stay with the contest.** Chief Judge, Contestants and Ballot Counters belong to the meeting that needs them, so the club's ordinary meetings — the next one, the batch you schedule in January, the ones the app tops up on its own — carry the club's own roles and nothing else.
+- **"+ Add speaker" adds a contestant on a contest**, and a contestant on a contest is who the app offers when you fill the next speaking slot.
+
+### Known limits
+
+- **Projector mode is not available for a templated meeting yet.** Opening the presentation view on a contest shows a short notice instead of the slide deck. The printed run sheet and the on-screen agenda are complete; the deck is Phase 2.
+- **Templates are added by GavelUp, not by clubs.** The Speech Contest template ships with the app and any club can use it. A club cannot yet build its own; the storage and the tenancy rules for that are in place, the editor is not.
+
 ## [1.20.0.0] - 2026-08-18
 
 ### Added

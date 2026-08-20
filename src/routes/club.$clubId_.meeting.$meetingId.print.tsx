@@ -19,9 +19,8 @@ import { ShareLinkButton } from "#/components/share-link-button";
 import { buildRosterEntries } from "#/lib/agenda";
 import {
 	applyFlex,
-	buildRunOfShow,
-	expandRunSheet,
 	flexBannerMessage,
+	resolveAgendaRows,
 } from "#/lib/agenda-runsheet";
 import { buildAgendaSharePath } from "#/lib/agenda-share-url";
 import { buildTimeline } from "#/lib/agenda-timing";
@@ -148,13 +147,20 @@ function PrintAgenda() {
 		meetingNumber,
 		officers,
 		geIntroducesFunctionaries,
+		template,
 		logoUrl,
 	} = Route.useLoaderData();
 
-	const runRows = expandRunSheet(
+	// ONE seam for both meeting shapes (#agenda-templates). `resolveAgendaRows`
+	// returns finished rows: the standard flow expands the code-derived
+	// RUN_OF_SHOW exactly as before, a templated meeting builds rows from its
+	// stored beats. The screen route calls the same function, so the two
+	// surfaces cannot disagree about what the meeting is.
+	const runRows = resolveAgendaRows({
+		geIntroducesFunctionaries,
+		template,
 		slots,
-		buildRunOfShow({ geIntroducesFunctionaries }),
-	);
+	});
 	const flex = applyFlex(runRows, meeting.lengthMinutes);
 	// null when the agenda fits. The copy is conditional on a flex row actually
 	// existing (#395) — see `flexBannerMessage`.

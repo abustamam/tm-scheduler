@@ -47,6 +47,7 @@ import {
 } from "./meeting-contacts-logic";
 import { resolveMeetingNumber } from "./meeting-number-logic";
 import { resolvePublicMeetingKey } from "./meeting-resolve-logic";
+import { loadTemplateContent } from "./meeting-templates-logic";
 import {
 	applyCompleteMeeting,
 	applyCreateMeeting,
@@ -311,6 +312,26 @@ async function loadMeetingDetail(
 	// caller (loadRosterWithContact isn't called when !canManage).
 	const roster = canManage ? await loadRosterWithContact(meeting.clubId) : [];
 
+	// The meeting's template content (#agenda-templates). One extra round trip
+	// only when `template_id` is set (its two selects run in parallel), so a
+	// standard meeting pays nothing.
+	//
+	// THROW rather than fall through. `resolveAgendaRows` reads `template: null`
+	// as "standard meeting", so a templated meeting whose content failed to load
+	// would silently render the STANDARD beats against CONTEST slots — and since
+	// no contest slot matches `toastmaster_of_the_day` or `speaker`, nearly every
+	// beat gates out and the officer gets a near-empty agenda with no error at
+	// all. A loud failure beats a blank sheet on contest night.
+	let template = null;
+	if (meeting.templateId) {
+		template = await loadTemplateContent(meeting.templateId);
+		if (!template) {
+			throw new Error(
+				`Meeting ${meeting.id} references template ${meeting.templateId}, which has no beats or roles.`,
+			);
+		}
+	}
+
 	// Club role template for the "+ Add role" picker — management-only, like the
 	// roster. Ordered like the roles page. Disabled roles (#368) are excluded via
 	// `listRoleDefinitions`'s `onlyEnabled` — this picker OFFERS a role to be
@@ -318,17 +339,24 @@ async function loadMeetingDetail(
 	// stop; the roles admin page is where a disabled role stays visible. Routed
 	// through the same helper `getPublicClubRoles` uses so "only enabled" is one
 	// tested rule, not a second SQL filter that could drift from it.
+	// Scoped to THIS meeting's shape (#agenda-templates): a templated meeting
+	// offers its template's roles, not the club's standard ones. Unscoped, a
+	// contest's picker lists Toastmaster and Grammarian and offers no way to add
+	// a contestant.
 	const clubRoles = canManage
-		? (await listRoleDefinitions(meeting.clubId, { onlyEnabled: true })).map(
-				(r) => ({
-					id: r.id,
-					name: r.name,
-					category: r.category,
-					defaultCount: r.defaultCount,
-					sortOrder: r.sortOrder,
-					isSpeakerRole: r.isSpeakerRole,
-				}),
-			)
+		? (
+				await listRoleDefinitions(meeting.clubId, {
+					onlyEnabled: true,
+					templateId: meeting.templateId,
+				})
+			).map((r) => ({
+				id: r.id,
+				name: r.name,
+				category: r.category,
+				defaultCount: r.defaultCount,
+				sortOrder: r.sortOrder,
+				isSpeakerRole: r.isSpeakerRole,
+			}))
 		: [];
 
 	// Club guests for the admin assign picker (#151) — pick-an-existing-guest.
@@ -403,6 +431,10 @@ async function loadMeetingDetail(
 		// Day, introduces the functionaries. Feeds `buildRunOfShow` (print) and
 		// `buildSlideDeck` (deck) so the two never disagree.
 		geIntroducesFunctionaries: club?.geIntroducesFunctionaries ?? false,
+		// The meeting's template content (#agenda-templates), or null for a
+		// standard meeting. Feeds `resolveAgendaRows` on both the screen and the
+		// print route so the two cannot disagree about what the meeting is.
+		template,
 		officers,
 		unavailableMembers,
 		plan,

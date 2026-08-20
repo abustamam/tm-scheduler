@@ -1,4 +1,9 @@
-import { createFileRoute, notFound, useNavigate } from "@tanstack/react-router";
+import {
+	createFileRoute,
+	Link,
+	notFound,
+	useNavigate,
+} from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { MeetingPresent } from "#/components/agenda/meeting-present";
 import { OfflineBadge } from "#/components/agenda/offline-badge";
@@ -40,6 +45,44 @@ export const Route = createFileRoute(
 	}),
 });
 
+/**
+ * A templated meeting has no projected deck yet (#agenda-templates, PR 2).
+ *
+ * `buildSlideDeck` composes slides by hand against the seven STANDARD role
+ * keys, so a contest would build the standard deck against contest slots —
+ * every beat keyed `toastmaster_of_the_day` / `speaker` / `table_topics_master`
+ * gates out and the room gets a title slide and a thank-you slide. Explaining
+ * that is better than projecting it, and `/present` is directly addressable, so
+ * hiding the button alone would not cover this.
+ */
+function TemplatedMeetingNotice({
+	clubId,
+	meetingId,
+}: {
+	clubId: string;
+	meetingId: string;
+}) {
+	return (
+		<div className="mx-auto flex min-h-svh max-w-xl flex-col items-center justify-center gap-4 p-8 text-center">
+			<h1 className="font-semibold text-2xl">Present mode isn't ready yet</h1>
+			<p className="text-muted-foreground">
+				This meeting runs a different agenda, and the projected deck for it is
+				still being built. Print the agenda instead — it has the full run of
+				show.
+			</p>
+			<Link
+				to="/club/$clubId/meeting/$meetingId/print"
+				params={{ clubId, meetingId }}
+				search={{ layout: "editorial" as const }}
+				data-slot="button"
+				className="rounded-md bg-primary px-4 py-2 font-medium text-primary-foreground text-sm"
+			>
+				Print the agenda
+			</Link>
+		</div>
+	);
+}
+
 function PresentPage() {
 	const data = Route.useLoaderData();
 	const { clubId, meetingId } = Route.useParams();
@@ -55,6 +98,12 @@ function PresentPage() {
 	const ballotUrl = origin
 		? `${origin}/club/${clubId}/meeting/${meetingId}/vote`
 		: "";
+	// A templated meeting has no deck yet — see TemplatedMeetingNotice. This is
+	// checked BEFORE building, because building would silently produce a
+	// two-slide deck rather than fail.
+	if (data.template) {
+		return <TemplatedMeetingNotice clubId={clubId} meetingId={meetingId} />;
+	}
 	const deck = buildSlideDeck({
 		meeting: data.meeting,
 		club: {

@@ -614,6 +614,50 @@ describe("spine colour follows the ROLE, not its name (#445)", () => {
 		);
 	});
 
+	// The seeded Speech Contest template (#agenda-templates) added ten keys to
+	// `ROLE_KEY_COLOR`. `beatColor` falls back to MUTED for any unmapped key, so
+	// deleting all ten leaves every assertion in this file green while the
+	// contest sheet prints one undifferentiated grey spine — the same #445 shape
+	// the block above exists to catch, one template later. Assert DISTINCTNESS,
+	// not pair-agreement: an agreement test reads the same map entry twice and
+	// cannot see a defect present on both sides.
+	it("gives the seeded contest roles the same spine vocabulary as a standard meeting", () => {
+		const colourOf = (roleKey: string) =>
+			spineOf(speechRow({ roleKey, who: "Renamed · Somebody" }));
+		const muted = colourOf("a_key_no_template_declares");
+
+		// Contestants ARE the speaking slots, so they read as `speaker` does.
+		for (const key of [
+			"contestant_prepared",
+			"contestant_impromptu",
+			"contestant_evaluation",
+			"test_speaker",
+		]) {
+			expect(colourOf(key), key).toBe(colourOf("speaker"));
+		}
+		// Chair and Chief Judge run the contest — the leadership voice.
+		for (const key of ["contest_chair", "chief_judge"]) {
+			expect(colourOf(key), key).toBe(colourOf("toastmaster_of_the_day"));
+		}
+		// Judges evaluate.
+		expect(colourOf("judge")).toBe(colourOf("evaluator"));
+		// Functionaries stay muted — deliberately the fallback colour, so this
+		// arm alone would pass with the entries deleted. The distinctness
+		// assertion below is what makes the whole set load-bearing.
+		for (const key of ["ballot_counter", "contest_timer", "sergeant_at_arms"]) {
+			expect(colourOf(key), key).toBe(muted);
+		}
+		// Three visibly different voices down a contest sheet, not one.
+		expect(
+			new Set([
+				colourOf("contestant_prepared"),
+				colourOf("contest_chair"),
+				colourOf("judge"),
+				colourOf("ballot_counter"),
+			]).size,
+		).toBe(4);
+	});
+
 	it("highlights a speech row by its key, not its name", () => {
 		// Every row gets a background (mint when highlighted, else the zebra
 		// stripe), so "has one" proves nothing — compare rows against each other.
@@ -1084,4 +1128,90 @@ describe("MeetingAgendaPrint consolidates adjacent same-presenter beats", () => 
 		// …and the 7:34 beat that opens the block carries no trio of its own.
 		expect(beside[0]).toBe("General Evaluator · Faisal");
 	});
+});
+
+/**
+ * Section bands — a TEMPLATED agenda's segment headers (#agenda-templates).
+ *
+ * The failure this guards is silent and layout-specific: a section row that
+ * falls through to a layout's ordinary row renderer prints as a normal beat
+ * WITH a clock stamp, and `TimingLayout` additionally splits `who` on " \u00b7 " to
+ * fill its 150px Role column. Both read as "someone presents this segment
+ * header". Every layout therefore needs its own arm, and every layout is
+ * asserted here — the plan originally patched only the narrative pair.
+ */
+describe("section bands", () => {
+	const sectionRows: TimelineRow[] = [
+		{
+			who: "OPENING",
+			roleKey: null,
+			section: true,
+			detail: "",
+			minutes: 0,
+			marks: null,
+			time: "8:00",
+		},
+		{
+			who: "Call to order \u00b7 Ada Lovelace",
+			roleKey: "sergeant_at_arms",
+			detail: "Opens the room",
+			minutes: 5,
+			marks: null,
+			time: "8:00",
+		},
+		{
+			who: "PREPARED SPEECH CONTEST",
+			roleKey: null,
+			section: true,
+			detail: "",
+			minutes: 0,
+			marks: null,
+			time: "8:05",
+		},
+		{
+			who: "Contestant 1 \u00b7 Grace Hopper",
+			roleKey: "contestant_prepared",
+			detail: "Delivers the prepared speech",
+			minutes: 7,
+			marks: { green: 5, yellow: 6, red: 7 },
+			time: "8:05",
+		},
+	];
+
+	function renderSections(layout: AgendaLayout) {
+		return render(
+			<MeetingAgendaPrint
+				layout={layout}
+				header={header}
+				roles={[]}
+				officers={[]}
+				explainers={[]}
+				rows={sectionRows}
+			/>,
+		);
+	}
+
+	for (const layout of ["grid", "editorial", "spacious", "timing"] as const) {
+		it(`${layout}: prints each section title exactly once`, () => {
+			renderSections(layout);
+			expect(screen.getAllByText("OPENING")).toHaveLength(1);
+			expect(screen.getAllByText("PREPARED SPEECH CONTEST")).toHaveLength(1);
+		});
+
+		it(`${layout}: a section carries no clock stamp and is not split`, () => {
+			renderSections(layout);
+			// A section consumes no minutes, so a stamp on it claims the segment
+			// header has a start of its own. TimingLayout also splits `who` on
+			// " \u00b7 " into its Role column; this pins that a section never reaches
+			// that path.
+			const band = screen.getByText("PREPARED SPEECH CONTEST");
+			expect(band.textContent).toBe("PREPARED SPEECH CONTEST");
+		});
+
+		it(`${layout}: ordinary rows still render beside sections`, () => {
+			renderSections(layout);
+			expect(screen.getAllByText(/Call to order/).length).toBeGreaterThan(0);
+			expect(screen.getAllByText(/Contestant 1/).length).toBeGreaterThan(0);
+		});
+	}
 });

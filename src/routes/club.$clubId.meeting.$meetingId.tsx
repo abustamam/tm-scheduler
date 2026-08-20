@@ -46,11 +46,7 @@ import { Label } from "#/components/ui/label";
 import { useOfflineMinutes } from "#/hooks/use-offline-minutes";
 import { useOnlineStatus } from "#/hooks/use-online-status";
 import { buildRoleCounts, slotLabel } from "#/lib/agenda";
-import {
-	applyFlex,
-	buildRunOfShow,
-	expandRunSheet,
-} from "#/lib/agenda-runsheet";
+import { applyFlex, resolveAgendaRows } from "#/lib/agenda-runsheet";
 import { buildSlideDeck } from "#/lib/agenda-slides";
 import { buildPanelRoleMap, type PlanStatus } from "#/lib/attendance-panel";
 import { clubLogoUrl } from "#/lib/club-logo-url";
@@ -289,6 +285,7 @@ function MeetingView() {
 		nextMeetingAt,
 		urlKey,
 		geIntroducesFunctionaries,
+		template,
 		logoUrl,
 	} = Route.useLoaderData();
 	const router = useRouter();
@@ -372,7 +369,7 @@ function MeetingView() {
 
 	// One club config drives both renderings of this meeting (#367).
 	const flex = applyFlex(
-		expandRunSheet(slots, buildRunOfShow({ geIntroducesFunctionaries })),
+		resolveAgendaRows({ geIntroducesFunctionaries, template, slots }),
 		meeting.lengthMinutes,
 	);
 	const projectedEnd = new Date(
@@ -386,22 +383,30 @@ function MeetingView() {
 		typeof window === "undefined"
 			? `/club/${clubId}/meeting/${urlKey}/vote`
 			: `${window.location.origin}/club/${clubId}/meeting/${urlKey}/vote`;
-	const deck = buildSlideDeck({
-		meeting,
-		club: {
-			name: clubName,
-			clubNumber,
-			district: clubDistrict,
-			timezone,
-			meetingSchedule: clubMeetingSchedule,
-			logoUrl,
-		},
-		slots,
-		nextMeetingAt,
-		meetingNumber,
-		geIntroducesFunctionaries,
-		ballotUrl,
-	});
+	// EMPTY for a templated meeting (#agenda-templates). `buildSlideDeck`
+	// composes slides by hand against the seven STANDARD role keys, so a contest
+	// would produce a title slide and a thank-you slide and nothing between —
+	// the same silent near-empty output the run sheet now throws on. The export
+	// menu hides its deck actions when the deck is empty; the projected view is
+	// guarded separately at the /present route, which is directly addressable.
+	const deck = template
+		? []
+		: buildSlideDeck({
+				meeting,
+				club: {
+					name: clubName,
+					clubNumber,
+					district: clubDistrict,
+					timezone,
+					meetingSchedule: clubMeetingSchedule,
+					logoUrl,
+				},
+				slots,
+				nextMeetingAt,
+				meetingNumber,
+				geIntroducesFunctionaries,
+				ballotUrl,
+			});
 
 	const { isTmod, isGrammarian, isVoteCounter } = deriveMeetingRoleFlags(
 		slots,

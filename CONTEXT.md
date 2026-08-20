@@ -409,6 +409,30 @@ the nouns in `src/db/schema.ts`.
   each), n(L3)→g4, n(L4)+n(L5)→g5/g6 (cap 1 each); "a Path" in the goal 5/6 wording ≡ Level 5,
   as the count-based mirror carries no separate path-complete signal. See #245 / ADR-0022.
 
+**Meeting template** — a named bundle of a role set plus a flat run-of-show, letting a meeting
+run a shape other than the club's standard night (today: **Speech Contest**).
+`meetings.template_id` NULL is the standard meeting and reads the code-derived `RUN_OF_SHOW`;
+a templated meeting reads `meeting_template_beats` through `resolveAgendaRows`, which builds
+`AgendaRow[]` **directly** rather than going through `Beat` / `expandRunSheet` — `Beat` exists
+to GATE on which roles a club runs and to FAN OUT one beat across a role's slots, and a
+template needs neither.
+
+A template's roles are COPIED into `role_definitions` with `template_id` set, because
+`role_slots.role_definition_id` is NOT NULL and restricting, so a claimable contest role has to
+be a real row. Copy-once: a later seed edit does not reach a club that already used the
+template, exactly as editing `ROLE_TEMPLATE` never reaches an existing club.
+`scripts/resync-template-roles.ts` is the deliberate escape hatch.
+
+**SEVEN readers select role definitions by club, and every one is choosing a slot source** —
+`role-definitions-logic`, `meetings-logic`, `batch-meetings-logic`, `schedule-topup-logic`,
+`slots-logic` (twice) and `meetings.ts`'s "+ Add role" picker. They share `roleDefScope`.
+Leave any unscoped and every standard meeting created after a club runs one contest gains that
+contest's roles, because `generateSlotRows` filters on `enabled`, not `template_id`. The two
+club-scoped bulk syncs additionally EXCLUDE templated meetings from their meeting sets.
+
+Templates are GLOBAL (`meeting_templates.club_id IS NULL`) in Phase 1; club-authored ones and
+the editor are Phase 2. See `docs/superpowers/specs/2026-08-19-agenda-templates-design.md`.
+
 ## Scope
 
 **MVP (built):** magic-link auth, schedule view, meeting detail with one-tap claim, speaker-

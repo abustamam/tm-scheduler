@@ -308,6 +308,17 @@ const REVIEWED_UNGATED: Record<string, string> = {
 	setActiveClub: "writes a session preference",
 	// Gated, but through a different helper than a WIRINGS row can express.
 	getClubLogoMeta: "gated inside loadClubLogoMeta via isReadableClub (#495)",
+	// Both resolve the meeting's club and then run requireUser +
+	// assertClubNotArchived + requireClubRole inside
+	// `requireMeetingTemplateEditor` (meeting-templates.ts). The sweep looks for
+	// a `require*` call in the fn body itself and cannot see through a local
+	// helper, so these read as session-less when they are officer-gated and
+	// archive-gated. Not public readers at all — reshaping a meeting is an
+	// officer action, alongside reschedule and cancel.
+	previewTemplateForMeeting:
+		"officer-gated + archive-gated inside requireMeetingTemplateEditor (#agenda-templates)",
+	applyTemplateToMeeting:
+		"officer-gated + archive-gated inside requireMeetingTemplateEditor (#agenda-templates)",
 	getPacketContext:
 		"gated inside loadPacketContext via isReadableClubForMeeting (#589); returns an empty packet context for an archived club, so the picker offers nothing",
 	getVoteTally: "gated by requireVoteCounterCapability, not by archive",

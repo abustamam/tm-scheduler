@@ -44,6 +44,12 @@ export type AgendaGroup = {
  */
 function sameRun(prev: TimelineRow, row: TimelineRow): boolean {
 	if (prev.handoff || row.handoff) return false;
+	// A section band is a divider, not a presenter — same reasoning as the
+	// hand-off guard above. Absorbing it into a run would both lose the band and
+	// claim someone presented the segment header. Sections carry `roleKey: null`
+	// and `who` is the segment title, so without this two adjacent sections (or a
+	// section and an unowned event) could merge on a null-key match.
+	if (prev.section || row.section) return false;
 	return (
 		prev.who === row.who && (prev.roleKey ?? null) === (row.roleKey ?? null)
 	);

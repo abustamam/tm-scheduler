@@ -7,7 +7,7 @@
 //
 // DB logic lives here (not in a createServerFn module) so it's integration-
 // testable and never pulled into the client bundle.
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq, isNull } from "drizzle-orm";
 import { db } from "#/db";
 import {
 	clubMeetingRecurrence,
@@ -69,7 +69,17 @@ export async function ensureScheduleToppedUp(
 	const defs = await db
 		.select()
 		.from(roleDefinitions)
-		.where(eq(roleDefinitions.clubId, clubId))
+		// Standard roles ONLY. A templated meeting is always CONVERTED, never
+		// auto-created, so this path is unconditionally the club's own shape.
+		// Without the template scope every meeting created after a club runs one
+		// contest would gain that contest's Chief Judge, Judges and Contestants,
+		// because `generateSlotRows` filters on `enabled` and not on `template_id`.
+		.where(
+			and(
+				eq(roleDefinitions.clubId, clubId),
+				isNull(roleDefinitions.templateId),
+			),
+		)
 		.orderBy(asc(roleDefinitions.sortOrder));
 
 	// Generate a window of upcoming occurrences from the rule, starting on/after

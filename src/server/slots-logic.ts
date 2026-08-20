@@ -19,6 +19,7 @@ import { normalizePresentationUrl } from "#/lib/presentation-url";
 import { logActivity } from "./activity";
 import { setPlanStatus } from "./attendance-plan-logic";
 import { assertMeetingNotLocked } from "./meeting-authz-logic";
+import { roleDefScope } from "./meeting-templates-logic";
 import { resolveProjectDisplay } from "./project-picker-logic";
 
 // Either the main db client or a drizzle transaction — so speech helpers can run
@@ -35,6 +36,7 @@ type DbOrTx =
  *  that only checks the flag before inserting. */
 async function clubRoles(
 	clubId: string,
+	templateId: string | null,
 ): Promise<
 	SpeakerEvaluatorRoles & { speakerEnabled: boolean; evaluatorEnabled: boolean }
 > {
@@ -48,7 +50,12 @@ async function clubRoles(
 			enabled: roleDefinitions.enabled,
 		})
 		.from(roleDefinitions)
-		.where(eq(roleDefinitions.clubId, clubId));
+		// Scoped to the MEETING's shape. Unscoped, a contest meeting's
+		// "+ Add speaker" resolves through `pickSpeakerAndEvaluatorRoles`, which
+		// takes the lowest `sortOrder` speaker role across the union — the club's
+		// standard Speaker — and adds a slot that renders nowhere on the contest
+		// sheet, leaving no in-product way to change the contestant count.
+		.where(roleDefScope(clubId, templateId));
 	const picked = pickSpeakerAndEvaluatorRoles(defs);
 	const enabledOf = (id: string | null) =>
 		id ? (defs.find((d) => d.id === id)?.enabled ?? false) : false;
@@ -81,7 +88,7 @@ export async function applyAddSpeakerSlot(input: {
 	});
 	if (!meeting) throw new Error("Meeting not found.");
 	const { speakerRoleId, evaluatorRoleId, speakerEnabled, evaluatorEnabled } =
-		await clubRoles(meeting.clubId);
+		await clubRoles(meeting.clubId, meeting.templateId);
 	if (!speakerEnabled) {
 		throw new Error("This club's Speaker role is currently disabled.");
 	}
@@ -141,7 +148,7 @@ export async function applyAddSpeakerSlot(input: {
 }
 
 /** The club's role defs in the shape `pairedRoleIds` needs, plus name/id/enabled. */
-async function clubRoleDefs(clubId: string) {
+async function clubRoleDefs(clubId: string, templateId: string | null) {
 	return db
 		.select({
 			id: roleDefinitions.id,
@@ -153,7 +160,7 @@ async function clubRoleDefs(clubId: string) {
 			enabled: roleDefinitions.enabled,
 		})
 		.from(roleDefinitions)
-		.where(eq(roleDefinitions.clubId, clubId));
+		.where(roleDefScope(clubId, templateId));
 }
 
 /** Add one open slot of an arbitrary non-paired role to a meeting. Duplicates
@@ -170,7 +177,7 @@ export async function applyAddRoleSlot(input: {
 	if (!meeting) throw new Error("Meeting not found.");
 	assertMeetingNotLocked(meeting.status);
 
-	const defs = await clubRoleDefs(meeting.clubId);
+	const defs = await clubRoleDefs(meeting.clubId, meeting.templateId);
 	const role = defs.find((d) => d.id === input.roleDefinitionId);
 	if (!role) throw new Error("Role not found for this club.");
 	if (!role.enabled) throw new Error("This role is currently disabled.");
@@ -224,6 +231,7 @@ export async function applyRemoveRoleSlot(input: {
 			status: roleSlots.status,
 			assignedMemberId: roleSlots.assignedMemberId,
 			clubId: meetings.clubId,
+			templateId: meetings.templateId,
 			meetingStatus: meetings.status,
 		})
 		.from(roleSlots)
@@ -236,7 +244,7 @@ export async function applyRemoveRoleSlot(input: {
 		throw new Error("Release the role before removing it.");
 	}
 
-	const defs = await clubRoleDefs(slot.clubId);
+	const defs = await clubRoleDefs(slot.clubId, slot.templateId);
 	if (pairedRoleIds(defs).has(slot.roleDefinitionId)) {
 		throw new Error("Remove speakers with the speaker controls.");
 	}
@@ -326,7 +334,7 @@ export async function applyTemplateSyncToUpcomingMeetings(input: {
 	clubId: string;
 	actorMemberId: string | null;
 }) {
-	const defs = await clubRoleDefs(input.clubId);
+	const defs = await clubRoleDefs(input.clubId, null);
 	const paired = pairedRoleIds(defs);
 	// `enabled` matters here (#368): without it, disabling a role (e.g.
 	// Ah-Counter) and then clicking this button would re-add it to every
@@ -347,6 +355,10 @@ export async function applyTemplateSyncToUpcomingMeetings(input: {
 			and(
 				eq(meetings.clubId, input.clubId),
 				gt(meetings.scheduledAt, new Date()),
+				// TEMPLATED meetings are not the club's standard shape. Backfilling
+				// them would inject Timer/Grammarian/Ah-Counter into every future
+				// contest.
+				isNull(meetings.templateId),
 			),
 		);
 
@@ -372,6 +384,10 @@ async function futureNonCancelledMeetingIds(clubId: string): Promise<string[]> {
 				eq(meetings.clubId, clubId),
 				gt(meetings.scheduledAt, new Date()),
 				ne(meetings.status, "cancelled"),
+				// TEMPLATED meetings are not the club's standard shape. Enabling or
+				// disabling a standard role must not add or remove slots on a
+				// contest, whose role set comes from its template.
+				isNull(meetings.templateId),
 			),
 		);
 	return rows.map((r) => r.id);
@@ -506,7 +522,7 @@ export async function syncSlotsForRoleEnabledChange(input: {
 		return { ...result, rolesAdded: [] };
 	}
 
-	const defs = await clubRoleDefs(input.clubId);
+	const defs = await clubRoleDefs(input.clubId, null);
 	const isPaired = pairedRoleIds(defs).has(input.roleDefinitionId);
 	if (isPaired || input.defaultCount < 1) {
 		return { keptClaimedMeetings: 0, meetingsChanged: 0, rolesAdded: [] };
@@ -552,7 +568,10 @@ export async function applyRemoveSpeakerSlot(input: {
 		where: eq(meetings.id, input.meetingId),
 	});
 	if (!meeting) throw new Error("Meeting not found.");
-	const { speakerRoleId, evaluatorRoleId } = await clubRoles(meeting.clubId);
+	const { speakerRoleId, evaluatorRoleId } = await clubRoles(
+		meeting.clubId,
+		meeting.templateId,
+	);
 
 	const slots = await db
 		.select({

@@ -71,7 +71,14 @@ Package manager is **Bun** (use `bun install`, `bun run <script>`).
   (`tm_scheduler`) current: it is applied automatically as a `predev` step on `bun run dev` and by
   the `.githooks/post-merge` hook after a `git pull` that lands new migrations, so the dev DB always
   mirrors prod's migration path. Mixing in `db:push` diverges the migration-tracking table and
-  breaks replay — reserve `db:push` for throwaway/test databases (e.g. syncing `tm_test`). `db:studio`
+  breaks replay — reserve `db:push` for throwaway/test databases (e.g. syncing `tm_test`). **`db:push`
+  does NOT update a partial index's `WHERE` predicate on an index that already exists.** Changing
+  `role_definitions_club_key_unique`'s predicate emitted a correct `DROP` + `CREATE` in the
+  migration, and `db:push` silently left the OLD predicate on `tm_test` while creating the new
+  sibling index beside it — so the test database enforced a constraint the schema no longer
+  declared, and the tests that existed to prove the change failed for a reason unrelated to the
+  code. `db:migrate` is right; after a `db:push` that touches an index predicate, verify with
+  `select indexdef from pg_indexes where indexname = '…'` and recreate by hand if it is stale. `db:studio`
   to inspect.
 - `bun run generate-routes` — regenerate `src/routeTree.gen.ts` (also runs during dev/build).
 - `bun run build` — Vite build (Node server output via Nitro).
@@ -80,6 +87,16 @@ Package manager is **Bun** (use `bun install`, `bun run <script>`).
   type-broken code; run `bun run typecheck` before claiming a change is green. CI runs it in the
   `check` job.
 - Run a single test with `bunx vitest run <path>` (or `bunx vitest <path>` to watch).
+
+**A suite that seeds a CLUB-LESS row must clean it up itself, and must not use a fixed key.**
+`cleanup(clubId, userIds)` cascades from the club, so anything with a null `club_id` — a global
+`meeting_templates` row is the first — survives it and leaks into the next run. Three further
+traps, all hit for real: `cleanup` takes ARGUMENTS, so `afterEach(cleanup)` hands it vitest's
+context and silently deletes nothing; vitest runs test FILES in parallel against one shared
+`tm_test`, so a fixed global key collides across suites and an unscoped `delete(table)` takes
+the other file's in-flight rows; and any assertion over an unscoped `select()` on a shared
+table is order-dependent by construction. Give seeded keys and names a per-run suffix, track
+the ids you created, delete only those, and scope every assertion to your own club.
 
 **Integration suites need a database or they silently SKIP.** Export
 `TEST_DATABASE_URL="postgresql://dev:dev@localhost:5432/tm_test"` before `bun run test`, or ~630

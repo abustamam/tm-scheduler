@@ -178,19 +178,45 @@ export const PAGE_OUTER: React.CSSProperties = {
  * (full-bleed preserved) and ≤ 1056px tall (nothing clipped) — true WYSIWYG:
  * the on-screen card matches the printed page.
  */
+/**
+ * The smallest scale `FitPage` will apply before it gives up and lets the sheet
+ * FLOW across pages instead (#agenda-templates).
+ *
+ * Scale-to-fit is right for a normal agenda, which overruns by a little. It is
+ * actively wrong for a long one: a speech contest runs ~40 rows at four
+ * contestants and ~58 at seven, and squeezing that onto one sheet printed the
+ * body text at **3.5pt and 2.6pt** — measured, not estimated. Nothing else in
+ * the repo can see it, which is the whole reason `print-density.test.tsx`
+ * exists: the page count reports 1 whether the sheet is comfortable or
+ * unreadable.
+ *
+ * 0.72 is just under the tightest scale a real standard agenda has needed
+ * (~0.75 for the longest MCF fixture), so every existing sheet keeps scaling
+ * exactly as it did, and only a genuinely long agenda takes the new path.
+ */
+export const MIN_FIT_SCALE = 0.72;
+
 export function FitPage({ children }: { children: React.ReactNode }) {
 	const innerRef = useRef<HTMLDivElement>(null);
 	const [fit, setFit] = useState<number | null>(null);
+	/** Set when the content is too long to scale legibly — see MIN_FIT_SCALE.
+	 *  The sheet then drops its fixed height and paginates instead. */
+	const [flow, setFlow] = useState(false);
 
 	useEffect(() => {
 		const el = innerRef.current;
-		if (!el || fit !== null) return; // measure once, at the natural width
+		if (!el || fit !== null || flow) return; // measure once, at natural width
 		let cancelled = false;
 		const measure = () => {
 			if (cancelled) return;
 			const h = el.scrollHeight;
 			// -2px guard against the "content == page height" phantom blank page.
-			if (h > PAGE_H) setFit((PAGE_H - 2) / h);
+			if (h <= PAGE_H) return;
+			const scale = (PAGE_H - 2) / h;
+			// Too long to shrink and stay readable: print it across several sheets
+			// rather than one unreadable one.
+			if (scale < MIN_FIT_SCALE) setFlow(true);
+			else setFit(scale);
 		};
 		const fonts = (
 			document as Document & { fonts?: { ready: Promise<unknown> } }
@@ -200,10 +226,20 @@ export function FitPage({ children }: { children: React.ReactNode }) {
 		return () => {
 			cancelled = true;
 		};
-	}, [fit]);
+	}, [fit, flow]);
 
 	return (
-		<div className="agenda-page" style={PAGE_OUTER}>
+		<div
+			className="agenda-page"
+			style={
+				flow
+					? // Flowing: drop the fixed height and the clip so the browser
+						// paginates. `overflow: hidden` on a PAGE_H box would CLIP the
+						// tail of a long agenda rather than carrying it to sheet two.
+						{ ...PAGE_OUTER, height: undefined, overflow: undefined }
+					: PAGE_OUTER
+			}
+		>
 			<div
 				ref={innerRef}
 				// Test hook only — nothing renders off it. It names the element whose
@@ -217,7 +253,9 @@ export function FitPage({ children }: { children: React.ReactNode }) {
 				data-fit-inner=""
 				style={{
 					width: fit ? PAGE_W / fit : PAGE_W,
-					minHeight: fit ? undefined : PAGE_H,
+					// No PAGE_H floor when flowing — the sheet is as tall as it needs
+					// to be and the browser breaks it into pages.
+					minHeight: fit || flow ? undefined : PAGE_H,
 					transform: fit ? `scale(${fit})` : undefined,
 					transformOrigin: "top left",
 					display: "flex",
