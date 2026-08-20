@@ -52,6 +52,7 @@ import type { TimelineRow } from "#/lib/agenda-timing";
 import { buildTimeline } from "#/lib/agenda-timing";
 import { CONTEST_TEMPLATE } from "#/lib/contest-template";
 import {
+	CHROME_TEST_TIMEOUT_MS,
 	findChrome,
 	measuredHeight,
 	printableDocument,
@@ -329,25 +330,6 @@ function agendaHeight(rows: TimelineRow[]): number {
 
 const hasChrome = findChrome() !== null;
 
-/**
- * Per-test ceiling for the Chrome-driven cases in this file.
- *
- * `vitest.config.ts` sets 15s globally and says why: it is sized for ~50
- * DB-backed suites contending over one Postgres, and it is "a guard against a
- * hung test, not a latency budget". Neither half fits a case that SPAWNS A
- * BROWSER. Every `measuredHeight` starts a fresh Chrome with its own
- * `--user-data-dir`, vitest runs test files in parallel, and `print-page-count`
- * spawns Chrome too — so on a cold CI runner one spawn can take longer than the
- * whole global ceiling. It did: 16.5s for a single measurement, having passed
- * locally in 2.5s and on the previous three CI runs.
- *
- * Raising the GLOBAL value would have been the wrong fix — that ceiling protects
- * fifty suites this one has nothing in common with. `execFileSync` in
- * `print-page-count.ts` keeps its own 10s-per-spawn timeout, so a genuinely hung
- * Chrome still fails fast rather than sitting here for a minute.
- */
-const CHROME_TIMEOUT_MS = 60_000;
-
 describe("print density harness availability", () => {
 	it("has a browser to measure with when running in CI", () => {
 		if (!process.env.CI) return;
@@ -373,7 +355,7 @@ describe("print density harness availability", () => {
  *
  * No Chrome required — this measures nothing, it constrains the constant.
  */
-describe("MIN_FIT_SCALE", { timeout: CHROME_TIMEOUT_MS }, () => {
+describe("MIN_FIT_SCALE", { timeout: CHROME_TEST_TIMEOUT_MS }, () => {
 	it("is 0.72", () => {
 		expect(MIN_FIT_SCALE).toBe(0.72);
 	});
@@ -419,7 +401,7 @@ function printedDetailPt(rows: TimelineRow[]): number {
 
 describe.skipIf(!hasChrome)(
 	"editorial agenda density",
-	{ timeout: CHROME_TIMEOUT_MS },
+	{ timeout: CHROME_TEST_TIMEOUT_MS },
 	() => {
 		it("prints a real club agenda's body text large enough to read", () => {
 			// Measured 6.88pt on macOS harness fonts, against 5.59pt before this
@@ -556,7 +538,7 @@ describe.skipIf(!hasChrome)(
  */
 describe.skipIf(!hasChrome)(
 	"contest agenda density",
-	{ timeout: CHROME_TIMEOUT_MS },
+	{ timeout: CHROME_TEST_TIMEOUT_MS },
 	() => {
 		const roleRows = CONTEST_TEMPLATE.roles.map((r) => ({
 			key: r.key,
@@ -670,7 +652,7 @@ describe.skipIf(!hasChrome)(
  */
 describe.skipIf(!hasChrome)(
 	"group hand-off names on the two-page layouts",
-	{ timeout: CHROME_TIMEOUT_MS },
+	{ timeout: CHROME_TEST_TIMEOUT_MS },
 	() => {
 		const LONG_NAMES = [
 			"Bartholomew Fotheringay-Smythe",

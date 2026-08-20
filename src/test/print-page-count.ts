@@ -61,6 +61,32 @@ let cachedChrome: string | null | undefined;
  * args array alongside `shell`, which Node deprecates (DEP0190) and which
  * printed a warning above every `bun run test` in this repo.
  */
+/**
+ * Per-test ceiling every suite that drives this harness should use:
+ * `describe(name, { timeout: CHROME_TEST_TIMEOUT_MS }, fn)`.
+ *
+ * `vitest.config.ts` sets 15s globally and says why — it is sized for the ~50
+ * DB-backed suites contending over one Postgres, and is "a guard against a hung
+ * test, not a latency budget". Neither half describes a case that SPAWNS A
+ * BROWSER. Every `printedPageCount` / `measuredHeight` starts a fresh Chrome
+ * with its own `--user-data-dir`; vitest runs test FILES in parallel, so the two
+ * suites that use this harness spawn concurrently and slow each other down. On a
+ * cold CI runner a single spawn can outlast the whole global ceiling — measured
+ * at 16.5s for one measurement, and 15.7s for one page count, both after passing
+ * locally in ~2.5s and on several prior CI runs.
+ *
+ * It lives HERE rather than in either suite because it is a property of the
+ * harness, not of what any one file measures — and because fixing one file and
+ * leaving the other is exactly what happened first: the density suite was given
+ * its own ceiling while `print-page-count` kept the global one and failed on the
+ * next run with the identical error.
+ *
+ * Raising the GLOBAL value would be wrong: that number protects fifty suites
+ * these two have nothing in common with. `execFileSync` below keeps its own
+ * 10s-per-spawn timeout, so a genuinely hung Chrome still fails fast.
+ */
+export const CHROME_TEST_TIMEOUT_MS = 60_000;
+
 export function findChrome(): string | null {
 	if (cachedChrome !== undefined) return cachedChrome;
 	// `CHROME_PATH` first — the convention Lighthouse and chrome-launcher already
