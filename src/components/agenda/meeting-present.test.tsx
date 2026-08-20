@@ -314,13 +314,18 @@ describe("MeetingPresent", () => {
 			]);
 		});
 
-		// #446. The test above pins the whole label list, which looks like it
-		// covers this — but its four-slide deck has no evaluation and no
-		// evaluator vote, so it passed while the bug was live. The grid is the
-		// only place the collision is visible: three evaluators legitimately
-		// produce three identical "Speech Evaluation" cells, and the vote used to
-		// return that same header, making a fourth. Find-the-vote became counting.
-		it("does not add the evaluator vote to the run of Speech Evaluations (#446)", () => {
+		// #446, strengthened by #459. The test above pins the whole label list,
+		// which looks like it covers this — but its four-slide deck has no
+		// evaluation and no evaluator vote, so it passed while the bug was live.
+		//
+		// The comment here used to say three evaluators "legitimately produce three
+		// identical Speech Evaluation cells", with #446 only stopping the vote
+		// becoming a fourth. #459 removed that too: the header now comes from the
+		// slide's own ordinal, so EVERY cell in this run is distinct and the
+		// assertion below is a full-distinctness one rather than three-identical
+		// plus one. Find-the-vote is no longer counting, and neither is
+		// find-the-evaluation.
+		it("gives every cell in the evaluation run a distinct label (#446 / #459)", () => {
 			const evaluators = ["Ana", "Ben", "Cara"];
 			renderPresent({
 				deck: [
@@ -347,12 +352,18 @@ describe("MeetingPresent", () => {
 			const items = within(overview() as HTMLElement).getAllByRole("button", {
 				name: /^Slide \d+:/,
 			});
-			expect(items.map((b) => b.getAttribute("aria-label"))).toEqual([
-				"Slide 1: Speech Evaluation",
-				"Slide 2: Speech Evaluation",
-				"Slide 3: Speech Evaluation",
+			const labels = items.map((b) => b.getAttribute("aria-label"));
+			expect(labels).toEqual([
+				"Slide 1: Evaluation 1",
+				"Slide 2: Evaluation 2",
+				"Slide 3: Evaluation 3",
 				"Slide 4: Vote for Best Evaluator",
 			]);
+			// The property, stated separately from the literals: nothing in this run
+			// shares a name with anything else in it. The list above would still pass
+			// if two ordinals collided at the same index.
+			const names = labels.map((l) => l?.replace(/^Slide \d+: /, ""));
+			expect(new Set(names).size).toBe(names.length);
 		});
 
 		it("also opens on `o` and from the slide counter", () => {

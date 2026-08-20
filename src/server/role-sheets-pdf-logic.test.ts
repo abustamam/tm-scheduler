@@ -14,6 +14,8 @@ import { RENDER_CAPS } from "#/server/role-sheet-layout";
 const stored = vi.hoisted(() => ({
 	row: {} as Record<string, unknown>,
 	program: [] as unknown[],
+	/** `role_definitions` rows for the club's script role names (#520). */
+	roleDefs: [] as { key: string | null; name: string }[],
 }));
 
 // role-sheets-pdf-logic imports #/db (via minutes-logic) at the top level; mock
@@ -25,13 +27,34 @@ const stored = vi.hoisted(() => ({
 // that ordering is ever rearranged. The logo read is answered with no row, which
 // short-circuits `loadRoleSheetLogo` to null and leaves the image decode — a
 // separately bounded concern (`isDecodeSafe`) — out of these tests.
+//
+// THENABLE, not just `.limit()`-resolving. Drizzle's query builders are awaitable
+// at any point, and #520's role-name read has no `.limit()` — it ends at
+// `.where()` — so a `.limit()`-only stub returned the builder itself and the
+// caller got `rows.flatMap is not a function`. Answering on `then` as well makes
+// the stub match the real shape rather than the one shape the existing callers
+// happened to use.
 vi.mock("#/db", () => {
 	const chain = (cols: Record<string, unknown>) => {
+		const rows = () => {
+			if ("clubName" in cols) return [stored.row];
+			// The role-name read (#520) selects `{ key, name }`.
+			if ("key" in cols && "name" in cols) return stored.roleDefs;
+			// The logo read: no row ⇒ `loadRoleSheetLogo` short-circuits to null.
+			return [];
+		};
+		// The role-name read is AWAITED at `.where()`; the other two go on to
+		// `.limit()`. So `where` resolves for the first and keeps chaining for the
+		// rest, which is the same answer-by-shape the header describes. A `then` on
+		// `self` would model drizzle's real thenable builder more closely, but
+		// Biome's `noThenProperty` rejects it and the rule is right in general —
+		// this narrower branch needs no suppression.
 		const self = {
 			from: () => self,
 			innerJoin: () => self,
-			where: () => self,
-			limit: () => Promise.resolve("clubName" in cols ? [stored.row] : []),
+			where: () =>
+				"key" in cols && "name" in cols ? Promise.resolve(rows()) : self,
+			limit: () => Promise.resolve(rows()),
 		};
 		return self;
 	};
@@ -43,7 +66,11 @@ vi.mock("#/server/minutes-logic", () => ({
 }));
 
 import type { MinutesProgramRow } from "./minutes-logic";
-import { renderRoleSheetPdf, speakerLabels } from "./role-sheets-pdf-logic";
+import {
+	loadRoleSheetFill,
+	renderRoleSheetPdf,
+	speakerLabels,
+} from "./role-sheets-pdf-logic";
 
 function row(p: Partial<MinutesProgramRow>): MinutesProgramRow {
 	return {
@@ -144,5 +171,62 @@ describe("renderRoleSheetPdf bounds what the public route renders (#519)", () =>
 		// it: reverting this cap leaves every page-count assertion above green.
 		expect(timer.clubName.length).toBeLessThanOrEqual(RENDER_CAPS.club);
 		expect(timer.date.length).toBeLessThanOrEqual(RENDER_CAPS.date);
+	});
+
+	/**
+	 * #520 through the REAL loader, not a hand-built fill.
+	 *
+	 * `role-sheet-layout.test.ts` proves the builders substitute a name they are
+	 * given; this proves `loadRoleSheetFill` gives them the club's. Between the two
+	 * sits the query and the canonical-defaults merge, which is where a rename
+	 * silently stops arriving — the layout tests would stay green through any
+	 * failure in here.
+	 */
+	it("carries the club's own role names from the database onto the sheet", async () => {
+		stored.row = {
+			clubName: "Harborlight",
+			scheduledAt: new Date("2026-07-23T01:00:00Z"),
+			timezone: "America/Chicago",
+			wordOfTheDay: null,
+			wodDefinition: null,
+		};
+		stored.program = [];
+		stored.roleDefs = [
+			{ key: "timer", name: "Timekeeper" },
+			// A role the scripts never name — must not disturb the merge.
+			{ key: "speaker", name: "Presenter" },
+			// A club-invented role with no key, which the query returns and the
+			// merge has to skip rather than crash on.
+			{ key: null, name: "Chief Vibes Officer" },
+		];
+
+		const ge = await renderRoleSheetPdf("meeting-1", "general-evaluator");
+		const text = Buffer.from(ge.bytes).toString("latin1");
+		// PDF text is compressed, so assert through the fill the loader built
+		// rather than by grepping bytes — the render is covered above.
+		const fill = await loadRoleSheetFill("meeting-1");
+		expect(fill.roleNames?.timer).toBe("Timekeeper");
+		// Unnamed roles keep OUR word, so a partially-configured club reads as it
+		// always did instead of as a blank.
+		expect(fill.roleNames?.grammarian).toBe("Grammarian");
+		expect(fill.roleNames?.toastmaster_of_the_day).toBe("Toastmaster");
+		expect(text.startsWith("%PDF-")).toBe(true);
+	});
+
+	it("caps a stored role name before it reaches the renderer", async () => {
+		stored.row = {
+			clubName: "Harborlight",
+			scheduledAt: new Date("2026-07-23T01:00:00Z"),
+			timezone: "America/Chicago",
+			wordOfTheDay: null,
+			wodDefinition: null,
+		};
+		stored.program = [];
+		// `role_definitions.name` has no write-side max, and since #520 it is
+		// interpolated mid-sentence into a one-page sheet rendered in this process.
+		stored.roleDefs = [{ key: "timer", name: "T".repeat(50_000) }];
+
+		const timer = await renderRoleSheetPdf("meeting-1", "timer");
+		expect(pageCount(timer.bytes)).toBe(1);
 	});
 });

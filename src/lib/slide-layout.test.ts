@@ -278,8 +278,38 @@ describe("slideLayout bodies", () => {
 				caller: null,
 				ballotUrl: BALLOT_URL,
 			});
-			expect(evaluation).toBe("Speech Evaluation");
+			// The DISTINCTNESS is #446's subject; the literal was only ever the
+			// then-current value, and #459 moved it to `slide.label`. Asserting the
+			// property rather than re-pinning the new string, so this case keeps
+			// testing what it was written for.
+			expect(evaluation).toBe("Evaluation 1");
 			expect(vote).not.toBe(evaluation);
+		});
+
+		/**
+		 * #459 — the WITHIN-segment collision #446 explicitly left open.
+		 *
+		 * A meeting with three evaluators rendered three ADJACENT jump-grid cells
+		 * all reading "Speech Evaluation", so the grid could not answer "which
+		 * evaluation is this" for the one run where a presenter actually asks. The
+		 * cross-kind check further down samples ONE slide per kind and is blind to
+		 * this by construction, which is why it needs its own case.
+		 */
+		it("gives each evaluation in a run its own header", () => {
+			const headers = ["Evaluation 1", "Evaluation 2", "Evaluation 3"].map(
+				(label, i) =>
+					contentHeader({
+						kind: "evaluation",
+						label,
+						evaluator: ["Sudheer", "Mona", "Diego"][i] ?? "",
+						speaker: "Jagpal",
+						time: "2–3 minutes",
+					}),
+			);
+			expect(new Set(headers).size).toBe(3);
+			// And they read as the ordinals the deck already computed, matching how
+			// the sibling multi-instance kind (`speech`) has always behaved.
+			expect(headers).toEqual(["Evaluation 1", "Evaluation 2", "Evaluation 3"]);
 		});
 
 		// The two tests above pin the one collision #446 was about. This one closes

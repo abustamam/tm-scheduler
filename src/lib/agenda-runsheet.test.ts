@@ -1242,6 +1242,8 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 			),
 		).toEqual({
 			who: "Toastmaster of the Day · Faisal",
+			roleLabel: "Toastmaster of the Day",
+			holder: "Faisal",
 			roleKey: "toastmaster_of_the_day",
 			detail: "Calls for the Timer's report · opens voting for Best Evaluator",
 			minutes: 1,
@@ -1262,6 +1264,8 @@ describe("expandRunSheet — vote beats are owned by the segment leader (#363)",
 			),
 		).toEqual({
 			who: "Toastmaster of the Day · Faisal",
+			roleLabel: "Toastmaster of the Day",
+			holder: "Faisal",
 			roleKey: "toastmaster_of_the_day",
 			detail: "Opens voting for Best Evaluator",
 			minutes: 1,
@@ -1342,6 +1346,8 @@ describe("the Toastmaster covers the General Evaluator's role (#363)", () => {
 			rows.find((r) => r.detail === "Calls for the Timer to report"),
 		).toEqual({
 			who: "Toastmaster of the Day · Faisal",
+			roleLabel: "Toastmaster of the Day",
+			holder: "Faisal",
 			roleKey: "toastmaster_of_the_day",
 			detail: "Calls for the Timer to report",
 			minutes: 3,
@@ -1356,6 +1362,8 @@ describe("the Toastmaster covers the General Evaluator's role (#363)", () => {
 		const withGe = expandRunSheet(sixRoleClub(), RUN_OF_SHOW);
 		expect(withGe.find((r) => r.detail.startsWith("Overall meeting"))).toEqual({
 			who: "General Evaluator · Riyaz",
+			roleLabel: "General Evaluator",
+			holder: "Riyaz",
 			roleKey: "general_evaluator",
 			detail: "Overall meeting evaluation · returns control to the Toastmaster",
 			minutes: 2,
@@ -1365,6 +1373,8 @@ describe("the Toastmaster covers the General Evaluator's role (#363)", () => {
 		expect(covered.find((r) => r.detail.startsWith("Overall meeting"))).toEqual(
 			{
 				who: "Toastmaster of the Day · Faisal",
+				roleLabel: "Toastmaster of the Day",
+				holder: "Faisal",
 				roleKey: "toastmaster_of_the_day",
 				detail: "Overall meeting evaluation",
 				minutes: 2,
@@ -2055,6 +2065,8 @@ describe("expandRunSheet — the functionary-intro and functionary-reports beats
 		const rows = expandRunSheet([totd, timer, grammarian], template);
 		expect(introRow(rows)).toEqual({
 			who: "Toastmaster of the Day · Dana",
+			roleLabel: "Toastmaster of the Day",
+			holder: "Dana",
 			roleKey: "toastmaster_of_the_day",
 			detail:
 				"Introduces the Timer & Grammarian; each explains their role · the Grammarian gives the Word of the Day",
@@ -2141,6 +2153,8 @@ describe("expandRunSheet — the functionary-intro and functionary-reports beats
 			speakersHandoffRow(expandRunSheet([totd, ge, grammarian, speaker])),
 		).toEqual({
 			who: "Toastmaster of the Day · Dana",
+			roleLabel: "Toastmaster of the Day",
+			holder: "Dana",
 			roleKey: "toastmaster_of_the_day",
 			// The detail names NOBODY — #585's measurement, unchanged. The names
 			// travel in `introduces` below, and only the two-page layouts render
@@ -2764,6 +2778,8 @@ describe("BeatFallback — owner and detail swap (#363)", () => {
 		expect(expandRunSheet(slots, [beat])).toEqual([
 			{
 				who: "Table Topics Master · Rasheed",
+				roleLabel: "Table Topics Master",
+				holder: "Rasheed",
 				roleKey: "table_topics_master",
 				detail: "Introduces the General Evaluator",
 				minutes: 0,
@@ -2784,6 +2800,8 @@ describe("BeatFallback — owner and detail swap (#363)", () => {
 		expect(expandRunSheet(slots, [beat])).toEqual([
 			{
 				who: "Toastmaster of the Day · Faisal",
+				roleLabel: "Toastmaster of the Day",
+				holder: "Faisal",
 				roleKey: "toastmaster_of_the_day",
 				detail: "Introduces the General Evaluator",
 				minutes: 0,
@@ -2842,6 +2860,8 @@ describe("BeatFallback — owner and detail swap (#363)", () => {
 		expect(expandRunSheet(slots, [both])).toEqual([
 			{
 				who: "Toastmaster of the Day · Faisal",
+				roleLabel: "Toastmaster of the Day",
+				holder: "Faisal",
 				roleKey: "toastmaster_of_the_day",
 				detail: "Hands off directly to the General Evaluator",
 				minutes: 0,
@@ -2905,6 +2925,8 @@ describe("BeatFallback — owner and detail swap (#363)", () => {
 		expect(expandRunSheet(slots, [noOp])).toEqual([
 			{
 				who: "Table Topics Master · Rasheed",
+				roleLabel: "Table Topics Master",
+				holder: "Rasheed",
 				roleKey: "table_topics_master",
 				detail: "Introduces the General Evaluator",
 				minutes: 0,
@@ -3160,6 +3182,8 @@ describe("BeatFallback — fb.detail resolves through resolveDetail (#363)", () 
 		expect(expandRunSheet(slots, [beat])).toEqual([
 			{
 				who: "Toastmaster of the Day · Faisal",
+				roleLabel: "Toastmaster of the Day",
+				holder: "Faisal",
 				roleKey: "toastmaster_of_the_day",
 				detail: "Introduces the Timer",
 				minutes: 1,

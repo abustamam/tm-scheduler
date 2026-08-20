@@ -77,6 +77,17 @@ export interface RoleSheetFill {
 	speakers: string[];
 	/** The meeting's Word of the Day, pre-filled on the Grammarian's sheet. */
 	wod?: { word: string; note?: string };
+	/**
+	 * What this club calls the roles the SCRIPTS name (#520). Absent ⇒
+	 * `CANONICAL_SHEET_ROLE_NAMES`, which is right for the static blanks: they
+	 * ship in `public/role-sheets/` and serve every club, so they cannot adopt one
+	 * club's vocabulary.
+	 *
+	 * Optional rather than required so the offline build script and every existing
+	 * fixture keep working unchanged — and because "no club to ask" is a real state
+	 * here, not an oversight.
+	 */
+	roleNames?: SheetRoleNames;
 }
 
 const C = {
@@ -481,7 +492,7 @@ function timer(fill?: RoleSheetFill): ReactNode {
 		"Timer's log",
 		"Time each speaker and signal green / yellow / red at their windows.",
 		[
-			...script(SHEET_SCRIPTS.timer),
+			...script(sheetScripts(fill?.roleNames).timer),
 			h(Text, { key: "a", style: s.sectionTitle }, "Standard timing windows"),
 			h(
 				Text,
@@ -540,7 +551,7 @@ function ahCounter(fill?: RoleSheetFill): ReactNode {
 		"Ah-Counter's log",
 		"Tally filler words and crutch phrases; report totals at the end.",
 		[
-			...script(SHEET_SCRIPTS["ah-counter"]),
+			...script(sheetScripts(fill?.roleNames)["ah-counter"]),
 			// Deliberately NOT pre-filled with the booked speakers (#509), and the
 			// only sheet where that changed. The Ah-Counter listens to EVERYONE who
 			// takes the floor — Table Topics respondents, evaluators, the Toastmaster,
@@ -612,7 +623,7 @@ function grammarian(fill?: RoleSheetFill): ReactNode {
 		"Grammarian's log",
 		"Introduce the Word of the Day and note memorable language.",
 		[
-			...script(SHEET_SCRIPTS.grammarian),
+			...script(sheetScripts(fill?.roleNames).grammarian),
 			h(Text, { key: "a", style: s.sectionTitle }, "Word of the Day"),
 			h(
 				View,
@@ -670,7 +681,7 @@ function ballotCounter(fill?: RoleSheetFill): ReactNode {
 		"Ballot / Vote Counter tally",
 		"Collect and tally the votes for each award.",
 		[
-			...script(SHEET_SCRIPTS["ballot-counter"]),
+			...script(sheetScripts(fill?.roleNames)["ballot-counter"]),
 			...award("Best Speaker"),
 			...award("Best Evaluator"),
 			...award("Best Table Topics"),
@@ -684,7 +695,7 @@ function generalEvaluator(fill?: RoleSheetFill): ReactNode {
 		"General Evaluator notes",
 		"Evaluate the meeting as a whole and lead the evaluation team.",
 		[
-			...script(SHEET_SCRIPTS["general-evaluator"]),
+			...script(sheetScripts(fill?.roleNames)["general-evaluator"]),
 			h(Text, { key: "a", style: s.sectionTitle }, "Meeting flow & timing"),
 			h(View, { key: "a-lines" }, ...lines(2)),
 			h(
@@ -728,86 +739,136 @@ function signalSentence(assignment: string): string {
 }
 
 /**
+ * The role names the scripts SPEAK, resolved to whatever this club calls them
+ * (#520).
+ *
+ * The scripts used to hardcode our canonical names while the printed agenda for
+ * the same meeting resolved them through `clubRoleName` — so a club that renamed
+ * Timer to "Timekeeper" got "Asks the Timekeeper to explain the timing" on the
+ * agenda and "Timer, would you…" on the General Evaluator's sheet, two documents
+ * in the same hand naming a role the club does not run. This is the thread #445,
+ * #462 and #464 pulled everywhere else; the role sheets are the surface it never
+ * reached.
+ *
+ * Keys are `role_definitions.key`. Only the roles the scripts actually name are
+ * here — adding one means a script mentions it.
+ */
+export interface SheetRoleNames {
+	timer: string;
+	grammarian: string;
+	ah_counter: string;
+	vote_counter: string;
+	general_evaluator: string;
+	table_topics_master: string;
+	toastmaster_of_the_day: string;
+}
+
+/**
+ * Our names, used when there is no club to ask.
+ *
+ * That is the STATIC blanks (`scripts/build-role-sheets.ts`), which ship in
+ * `public/role-sheets/` and serve every club — so they cannot adopt any one
+ * club's vocabulary, and canonical is not a fallback there so much as the right
+ * answer. Only the meeting-aware sheets adapt.
+ */
+export const CANONICAL_SHEET_ROLE_NAMES: SheetRoleNames = {
+	timer: "Timer",
+	grammarian: "Grammarian",
+	ah_counter: "Ah-Counter",
+	vote_counter: "Ballot Counter",
+	general_evaluator: "General Evaluator",
+	table_topics_master: "Table Topics Master",
+	toastmaster_of_the_day: "Toastmaster",
+};
+
+/**
  * What each sheet's holder says, and when (#509).
+ *
+ * A FUNCTION of the club's role names since #520 — it was a module constant of
+ * literal strings, which is what made the divergence above unavoidable.
  *
  * Exported so the tests can pin each line against the agenda cue it has to
  * agree with (#508). The pairs are the point: a Timer told one thing by the run
  * sheet and another by the paper in their hand is worse off than one told
  * nothing.
  */
-export const SHEET_SCRIPTS: Record<RoleSheetKey, ScriptCue[]> = {
-	timer: [
-		{
-			when: "When you are introduced with the other functionaries",
-			say: "I'm your Timer. I show a green card at your minimum time, yellow at the midpoint, and red at your maximum. When you see red, please begin to close.",
-		},
-		{
-			// One cue, not two. #508 has the Table Topics Master and the General
-			// Evaluator each ask this at their own segment, but the Timer is looking
-			// at ONE sheet in the moment and wants one place to read from — and the
-			// merged form is what kept this sheet to a single page.
-			when: "When the Table Topics Master or the General Evaluator asks you to explain the timing",
-			say: `For Table Topics: ${signalSentence("Table Topics")}. For each evaluation: ${signalSentence("Evaluation")}.`,
-		},
-		{
-			when: "When you are called for your report",
-			say: "Here are the times. Anyone outside their qualifying window is not eligible for the vote.",
-		},
-	],
-	"ah-counter": [
-		{
-			when: "When you are introduced with the other functionaries",
-			// "and for repeated words" named the double clutch without naming it
-			// (#587), so the sheet's newest column had no cue behind it. Says the
-			// term now, since the Ah-Counter is about to report one.
-			say: "I'm your Ah-Counter. I listen for filler words — um, ah, so, like, you know — and for double clutches, where a word or phrase gets restarted, from everyone who speaks today, not just our prepared speakers.",
-		},
-		{
-			when: "When you are called for your report",
-			say: "Here is what I counted. This is not a criticism — a pause is stronger than a filler, and noticing them is how we lose them.",
-		},
-	],
-	grammarian: [
-		{
-			when: "When you are introduced, this is your moment to give the Word of the Day",
-			say: "I'm your Grammarian. Our Word of the Day is on the board — please use it when you speak today. I'll also be listening for language worth repeating.",
-		},
-		{
-			when: "When you are called for your report",
-			say: "Here is who used the Word of the Day, and some of the language that stood out.",
-		},
-	],
-	"ballot-counter": [
-		{
-			when: "When you are introduced with the other functionaries",
-			say: "I'm your Ballot Counter. I'll collect your ballots after each voting segment — please write clearly, and hand them to me rather than calling out a name.",
-		},
-		{
-			when: "When you hand the results back",
-			say: "The results are counted and sealed. I'll pass them to the Toastmaster for the awards.",
-		},
-	],
-	"general-evaluator": [
-		{
-			when: "When you take the room for the evaluation segment",
-			say: "Thank you. I'm your General Evaluator. I lead the evaluation team, and at the end I'll evaluate the meeting as a whole.",
-		},
-		{
-			when: "When you introduce the speech evaluators",
-			// Same string the printed agenda puts in this officer's row — see
-			// `EVALUATION_TIMING_ASK`. Not a copy of it.
-			say: `Our evaluators will each give a spoken evaluation. Timer, would you ${EVALUATION_TIMING_ASK}?`,
-		},
-		{
-			when: "When you call for the functionary reports",
-			say: "Now the reports from our functionaries.",
-		},
-		{
-			when: "When you give the overall evaluation",
-			say: "Here is how the meeting ran overall — what worked, and one thing we can each take into next time.",
-		},
-	],
-};
+export function sheetScripts(
+	n: SheetRoleNames = CANONICAL_SHEET_ROLE_NAMES,
+): Record<RoleSheetKey, ScriptCue[]> {
+	return {
+		timer: [
+			{
+				when: "When you are introduced with the other functionaries",
+				say: `I'm your ${n.timer}. I show a green card at your minimum time, yellow at the midpoint, and red at your maximum. When you see red, please begin to close.`,
+			},
+			{
+				// One cue, not two. #508 has the Table Topics Master and the General
+				// Evaluator each ask this at their own segment, but the Timer is looking
+				// at ONE sheet in the moment and wants one place to read from — and the
+				// merged form is what kept this sheet to a single page.
+				when: `When the ${n.table_topics_master} or the ${n.general_evaluator} asks you to explain the timing`,
+				say: `For Table Topics: ${signalSentence("Table Topics")}. For each evaluation: ${signalSentence("Evaluation")}.`,
+			},
+			{
+				when: "When you are called for your report",
+				say: "Here are the times. Anyone outside their qualifying window is not eligible for the vote.",
+			},
+		],
+		"ah-counter": [
+			{
+				when: "When you are introduced with the other functionaries",
+				// "and for repeated words" named the double clutch without naming it
+				// (#587), so the sheet's newest column had no cue behind it. Says the
+				// term now, since the Ah-Counter is about to report one.
+				say: `I'm your ${n.ah_counter}. I listen for filler words — um, ah, so, like, you know — and for double clutches, where a word or phrase gets restarted, from everyone who speaks today, not just our prepared speakers.`,
+			},
+			{
+				when: "When you are called for your report",
+				say: "Here is what I counted. This is not a criticism — a pause is stronger than a filler, and noticing them is how we lose them.",
+			},
+		],
+		grammarian: [
+			{
+				when: "When you are introduced, this is your moment to give the Word of the Day",
+				say: `I'm your ${n.grammarian}. Our Word of the Day is on the board — please use it when you speak today. I'll also be listening for language worth repeating.`,
+			},
+			{
+				when: "When you are called for your report",
+				say: "Here is who used the Word of the Day, and some of the language that stood out.",
+			},
+		],
+		"ballot-counter": [
+			{
+				when: "When you are introduced with the other functionaries",
+				say: `I'm your ${n.vote_counter}. I'll collect your ballots after each voting segment — please write clearly, and hand them to me rather than calling out a name.`,
+			},
+			{
+				when: "When you hand the results back",
+				say: `The results are counted and sealed. I'll pass them to the ${n.toastmaster_of_the_day} for the awards.`,
+			},
+		],
+		"general-evaluator": [
+			{
+				when: "When you take the room for the evaluation segment",
+				say: `Thank you. I'm your ${n.general_evaluator}. I lead the evaluation team, and at the end I'll evaluate the meeting as a whole.`,
+			},
+			{
+				when: "When you introduce the speech evaluators",
+				// Same string the printed agenda puts in this officer's row — see
+				// `EVALUATION_TIMING_ASK`. Not a copy of it.
+				say: `Our evaluators will each give a spoken evaluation. ${n.timer}, would you ${EVALUATION_TIMING_ASK}?`,
+			},
+			{
+				when: "When you call for the functionary reports",
+				say: "Now the reports from our functionaries.",
+			},
+			{
+				when: "When you give the overall evaluation",
+				say: "Here is how the meeting ran overall — what worked, and one thing we can each take into next time.",
+			},
+		],
+	};
+}
 
 const BUILDERS: Record<RoleSheetKey, (fill?: RoleSheetFill) => ReactNode> = {
 	timer,
@@ -859,6 +920,22 @@ export const RENDER_CAPS = {
 	note: WOD_LIMITS.definition,
 	/** One `Name — "Speech title"` label. */
 	speakerLabel: 160,
+	/**
+	 * One club role NAME, as spoken by a script (#520).
+	 *
+	 * These are unbounded user data — `role-definitions-logic.ts` validates only
+	 * non-empty — and since #520 they are interpolated into sentences that print
+	 * on a sheet with a pinned one-page budget, rendered by react-pdf inside this
+	 * Node process. So they get the same treatment as every other club-controlled
+	 * string reaching this renderer.
+	 *
+	 * 60, not `club`'s 120: a role name appears MID-SENTENCE, several times per
+	 * sheet, so it costs wrapped lines rather than one clamped header row. 60 is
+	 * still 4x the longest canonical name ("Table Topics Master", 19) and well
+	 * past anything a club would type; the cap is a ceiling on cost, not a
+	 * guess at intent.
+	 */
+	roleName: 60,
 	/**
 	 * Pre-filled log rows — EIGHT, the largest value that holds the one-page
 	 * guarantee in BOTH the logo and no-logo cases.
@@ -923,6 +1000,18 @@ export function capFill(fill: RoleSheetFill): RoleSheetFill {
 					? undefined
 					: cap(fill.wod.note, RENDER_CAPS.note),
 		},
+		// Every value, not a listed subset: `SheetRoleNames` is a closed record, so
+		// mapping it keeps a role added later capped by default rather than by
+		// someone remembering. That is the opposite default from the one the canary
+		// in `role-sheet-layout.test.ts` exists to catch.
+		roleNames:
+			fill.roleNames &&
+			(Object.fromEntries(
+				Object.entries(fill.roleNames).map(([k, v]) => [
+					k,
+					cap(v, RENDER_CAPS.roleName),
+				]),
+			) as unknown as SheetRoleNames),
 	};
 }
 

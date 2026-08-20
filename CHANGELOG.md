@@ -2,6 +2,14 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.22.5.0] - 2026-08-20
+
+### Fixed
+
+- **The role sheets now use your club's own names for roles.** A club that calls its Timer a "Timekeeper" was getting the new name on the printed agenda and "Timer, would you explain the timing" on the General Evaluator's sheet — two documents in the same hand, one of them naming a role the club doesn't run. Every script line on every sheet now reads the club's own word. The blank sheets you can download without a meeting still use the standard names, since they're not tied to any one club.
+- **Each evaluation gets its own slide title.** A meeting with three evaluators showed three identical "Speech Evaluation" entries in the jump-to-slide grid, so there was no way to tell which one you were jumping to. They now read "Evaluation 1", "Evaluation 2" and so on, matching how prepared speeches already work. The evaluator and the speaker they're evaluating are still on the slide itself.
+- **A role name containing a "·" no longer scrambles the detailed timing agenda.** Role names are yours to type, and one with a middot in it used to push part of the name into the wrong column — while a guest's row could break the other way round. Both are fixed properly rather than by moving the problem.
+
 ## [1.22.4.0] - 2026-08-20
 
 ### Fixed

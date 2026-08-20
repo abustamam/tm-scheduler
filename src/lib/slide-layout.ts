@@ -316,7 +316,24 @@ export function slideLayout(slide: Slide): SlideLayout {
 			const lines: Line[] = [head(`Evaluator: ${slide.evaluator}`)];
 			if (slide.speaker) lines.push(head(`Speaker: ${slide.speaker}`));
 			lines.push(strong(`Time: ${slide.time}`));
-			return content("Speech Evaluation", { form: "centered", lines });
+			// `slide.label`, not a literal "Speech Evaluation" (#459). A meeting with
+			// three evaluators rendered three ADJACENT jump-grid cells reading the
+			// same words, so the grid could not answer "which evaluation is this" for
+			// the one run where it is asked. `label` is already `"Evaluation 1"` /
+			// `"Evaluation 2"` from `numbered()` — the slide carried it and threw it
+			// away.
+			//
+			// Same fix, same reason, as the sibling multi-instance kind: `case
+			// "speech"` reads `slide.label` and that is why the grid shows distinct
+			// `First Speech` / `Second Speech` cells.
+			//
+			// This changes what the ROOM reads, not just the grid — `slideName`
+			// returns the header verbatim by design (#446 made it read the real
+			// derivation rather than a parallel naming scheme), so the two cannot be
+			// disambiguated independently. That is why #446 left this alone: it is a
+			// copy decision, and it was taken deliberately rather than smuggled into
+			// a one-string bug fix.
+			return content(slide.label, { form: "centered", lines });
 		}
 		case "voteEvaluator": {
 			// The Best-Evaluator vote beat's fallback, likewise.

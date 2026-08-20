@@ -1308,3 +1308,108 @@ describe("section bands", () => {
 		});
 	}
 });
+
+/**
+ * The timing layout reads the row's two halves instead of splitting `who` (#463).
+ *
+ * `TimingLayout` fills two columns — role and name — and used to get them from
+ * `r.who.split(" · ")`. Both directions of that split are wrong in general:
+ *
+ *  - FIRST-split (what shipped) breaks when the ROLE half holds the separator.
+ *    Since #445 that half is the club's own free text, validated only non-empty,
+ *    so a club role named "Timer · Assistant" shifted "Assistant" into the name
+ *    column.
+ *  - LAST-split breaks the other case, because the HOLDER half holds it too on a
+ *    guest row: "Speaker 1 · Jane · Guest".
+ *
+ * So the string was genuinely ambiguous and no split direction could be right.
+ * #363 already shipped a bug from this exact shape — `OPEN_LABEL` is "— open —",
+ * so `who` can carry a middot AND em dashes — and the recorded rule is not to
+ * join row fields with a separator chosen because it does not currently appear.
+ *
+ * Both hostile shapes are asserted, because fixing one by flipping the split
+ * direction was the tempting wrong answer.
+ */
+describe("timing layout splits nothing (#463)", () => {
+	/**
+	 * The role column's two parts, read from the DOM the layout actually builds.
+	 *
+	 * There are not two columns: `{role}` is a bare text node and the holder is a
+	 * nested muted `<span>` reading `" · <name>"`. So the SPAN is the observable
+	 * that distinguishes carrying two fields from splitting one string — with the
+	 * old first-split, a role named "Timer · Assistant" put "Assistant · Riyaz"
+	 * in there.
+	 */
+	const parts = (row: TimelineRow) => {
+		const { container } = render(
+			<MeetingAgendaPrint
+				layout="timing"
+				header={header}
+				roles={[]}
+				officers={[]}
+				explainers={[]}
+				rows={[row]}
+			/>,
+		);
+		const stamp = container.querySelector<HTMLElement>("[data-row-time]");
+		// [0] is the time stamp; [1] is the role column.
+		const column = stamp?.parentElement?.children[1] as HTMLElement | undefined;
+		const span = column?.querySelector("span");
+		return {
+			whole: column?.textContent ?? "",
+			// Text before the nested span — the role half.
+			role: (column?.firstChild?.textContent ?? "").trim(),
+			// `null` when the row has no holder and the span is not rendered.
+			holderPart: span ? span.textContent : null,
+		};
+	};
+
+	it("keeps a middot inside a club's own role name out of the holder span", () => {
+		const p = parts({
+			who: "Timer · Assistant · Riyaz",
+			roleLabel: "Timer · Assistant",
+			holder: "Riyaz",
+			roleKey: "timer",
+			detail: "Times the speeches",
+			minutes: 2,
+			marks: null,
+			time: "7:00",
+		});
+		expect(p.role).toBe("Timer · Assistant");
+		// The old first-split put "Assistant · Riyaz" here.
+		expect(p.holderPart).toBe(" · Riyaz");
+	});
+
+	it("keeps the Guest marker with the name, not in the role half", () => {
+		const p = parts({
+			who: "Speaker 1 · Jane · Guest",
+			roleLabel: "Speaker 1",
+			holder: "Jane · Guest",
+			roleKey: "speaker",
+			detail: "Prepared speech",
+			minutes: 7,
+			marks: null,
+			time: "7:10",
+		});
+		expect(p.role).toBe("Speaker 1");
+		// A LAST-split — the tempting fix for the case above — would have put
+		// "Speaker 1 · Jane" in the role half and "Guest" here.
+		expect(p.holderPart).toBe(" · Jane · Guest");
+	});
+
+	it("renders an event row's whole label with no holder span at all", () => {
+		// Event and section beats carry no halves — their `who` was never ambiguous
+		// and splitting it was already a no-op, which is what the `??` fallback in
+		// the layout preserves.
+		const p = parts({
+			who: "Sergeant-at-Arms",
+			detail: "Call to order",
+			minutes: 1,
+			marks: null,
+			time: "6:45",
+		});
+		expect(p.role).toBe("Sergeant-at-Arms");
+		expect(p.holderPart).toBeNull();
+		expect(p.whole).toBe("Sergeant-at-Arms");
+	});
+});
