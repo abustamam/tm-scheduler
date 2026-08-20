@@ -2142,7 +2142,13 @@ describe("expandRunSheet — the functionary-intro and functionary-reports beats
 		).toEqual({
 			who: "Toastmaster of the Day · Dana",
 			roleKey: "toastmaster_of_the_day",
+			// The detail names NOBODY — #585's measurement, unchanged. The names
+			// travel in `introduces` below, and only the two-page layouts render
+			// them (#578). A whole-object `toEqual` is deliberate here: it is what
+			// caught the new field being added, which is exactly the review a row
+			// shape change deserves.
 			detail: "Introduces the speakers",
+			introduces: ["Sam"],
 			minutes: 0,
 			marks: null,
 			handoff: true,
