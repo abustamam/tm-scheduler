@@ -434,6 +434,99 @@ describe("MeetingAgendaPrint hand-off band", () => {
 		});
 	}
 
+	/**
+	 * A GROUP hand-off names its members on the two-page layouts and NOT on the
+	 * one-page ones (#578).
+	 *
+	 * The asymmetry IS the feature, so both halves are asserted. A club reported
+	 * having to flip pages to see who they were introducing, which happens only
+	 * when the group's rows land on the next sheet. #585 measured the names
+	 * costing 5% of every word's printed size on the one-page layouts, where the
+	 * group's rows are the very next thing anyway — so those keep ignoring the
+	 * field, and a change that "helpfully" turned them on would silently shrink
+	 * every agenda in the app.
+	 *
+	 * `textContent` rather than `getByText`, because the names and the detail are
+	 * deliberately one text node: they are one sentence, and they have to wrap
+	 * together rather than as independent flex items.
+	 *
+	 * The separator is `NAMES_SEPARATOR` (": "), shared with the singular
+	 * hand-offs' `{names:…}` token so both read identically on the page. Two
+	 * docstrings in `agenda-runsheet.ts` advertised an em dash here until #578 —
+	 * they were stale, and asserting the rendered string rather than a
+	 * reconstruction is what surfaced it.
+	 */
+	const namedRows: TimelineRow[] = [
+		{
+			who: "Toastmaster · Lee P.",
+			detail: "Introduces the speakers",
+			introduces: ["Jagpal", "Rehanna", "Faisal"],
+			minutes: 0,
+			marks: null,
+			handoff: true,
+			time: "6:53",
+		},
+		{
+			who: "Speaker 1 · Jagpal",
+			roleKey: "speaker",
+			detail: "Prepared speech",
+			minutes: 7,
+			marks: null,
+			time: "6:53",
+		},
+	];
+
+	function renderNamed(layout: AgendaLayout) {
+		return render(
+			<MeetingAgendaPrint
+				layout={layout}
+				header={header}
+				roles={[]}
+				officers={[]}
+				explainers={[]}
+				rows={namedRows}
+			/>,
+		);
+	}
+
+	for (const layout of ["spacious", "timing"] as const) {
+		it(`${layout} (two pages): names the group, because its rows can be overleaf`, () => {
+			const { container } = renderNamed(layout);
+			const text = container.textContent ?? "";
+			expect(text).toContain(
+				"Introduces the speakers: Jagpal, Rehanna & Faisal",
+			);
+		});
+	}
+
+	for (const layout of ["editorial", "grid"] as const) {
+		it(`${layout} (one page): does NOT name the group — #585's measurement stands`, () => {
+			const { container } = renderNamed(layout);
+			const text = container.textContent ?? "";
+			expect(text).toContain("Introduces the speakers");
+			// The separator, not the names: "Jagpal" also appears in the speaker row
+			// one line down, which is the entire reason #585 left it out.
+			expect(text).not.toContain("Introduces the speakers:");
+		});
+	}
+
+	it("prints no dangling separator when the group is unassigned", () => {
+		// `expandRunSheet` omits `introduces` entirely for an unheld group rather
+		// than carrying `[]`, and `introducedSuffix([])` is "" either way — so this
+		// holds for both shapes.
+		const { container } = render(
+			<MeetingAgendaPrint
+				layout="spacious"
+				header={header}
+				roles={[]}
+				officers={[]}
+				explainers={[]}
+				rows={[{ ...namedRows[0], introduces: [] }, namedRows[1]]}
+			/>,
+		);
+		expect(container.textContent).not.toContain("speakers:");
+	});
+
 	// The other half of the same requirement. `BAND_STYLE` above pins the type
 	// scale and gutter each call site passes; `chrome` — the zebra stripe and the
 	// hairline rule — is the half that had none, and it is the whole reason the

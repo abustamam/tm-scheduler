@@ -613,3 +613,125 @@ describe.skipIf(!hasChrome)("contest agenda density", () => {
 		expect(rows.filter((r) => r.section)).toHaveLength(5);
 	});
 });
+
+/**
+ * Naming the group on a hand-off costs no type size on the TWO-PAGE layouts
+ * (#578).
+ *
+ * #585 measured the opposite for the one-page layouts and was right: there the
+ * run of show shares one 1056px sheet with the header band, the roles legend,
+ * the officers and the footer, so editorial already scales to ~0.8, and a
+ * comma-joined list of 2-5 members is the longest line on the page. `FitPage`
+ * scales the WHOLE sheet to fit it — 6.470pt of printed body with the names
+ * against 6.799pt without, on a 6.2pt floor. So the one-page layouts still
+ * ignore `AgendaRow.introduces`.
+ *
+ * Spacious and timing put the run of show on a sheet of its OWN, which changes
+ * the arithmetic rather than the argument. This asserts the changed arithmetic
+ * directly: with the names, that sheet still fits `PAGE_H`, so `FitPage` never
+ * scales it, so nothing shrinks. Assert the HEIGHT rather than a point size
+ * because that is the mechanism — under `PAGE_H` there is no transform at all,
+ * and the declared sizes print as declared.
+ *
+ * The fixture is hostile on the axis that matters, per CLAUDE.md's
+ * fixture-matrix rule: five speakers (the top of the range a club runs) with
+ * 30-character double-barrelled names, which is the longest content this line
+ * can hold. A two-speaker fixture with short names would pass while proving
+ * nothing.
+ */
+describe.skipIf(!hasChrome)(
+	"group hand-off names on the two-page layouts",
+	() => {
+		const LONG_NAMES = [
+			"Bartholomew Fotheringay-Smythe",
+			"Anastasia Vasilievna Kuznetsova",
+			"Maximilian Oppenheimer-Rothschild",
+			"Wilhelmina Ashworth-Pemberton",
+			"Konstantinos Papadopoulos-Nikolaidis",
+		];
+
+		function handoffRows(introduces: string[] | undefined): TimelineRow[] {
+			const out: TimelineRow[] = [
+				{
+					who: "Toastmaster of the Day · Ali",
+					roleKey: "toastmaster_of_the_day",
+					detail: "Introduces the speakers",
+					minutes: 0,
+					marks: null,
+					handoff: true,
+					time: "6:53",
+					...(introduces ? { introduces } : {}),
+				},
+			];
+			LONG_NAMES.forEach((n, i) => {
+				out.push({
+					who: `Speaker ${i + 1} · ${n}`,
+					roleKey: "speaker",
+					detail: "Prepared speech",
+					minutes: 7,
+					marks: { green: 5, yellow: 6, red: 7 },
+					time: "7:00",
+				});
+			});
+			return out;
+		}
+
+		/**
+		 * The natural height of the RUN-OF-SHOW sheet — page 2 — on a two-page layout.
+		 *
+		 * The nth-sheet selector `agendaHeight`'s doc comment says to add
+		 * deliberately rather than by parameterising it: `[data-fit-inner]` matches
+		 * the FIRST sheet, and on these layouts that is the cover, so measuring it
+		 * would give a confident, wrong, much smaller number. Both `.agenda-page`
+		 * divs are siblings inside `TwoPage`'s `.pgwrap`, so `:nth-of-type(2)` picks
+		 * the run of show. (Verified: the naive selector reported 493px and a delta of
+		 * 0 for both layouts — it was measuring a cover page with no hand-off on it.)
+		 */
+		function runSheetHeight(
+			rows: TimelineRow[],
+			layout: "spacious" | "timing",
+		): number {
+			const html = renderToStaticMarkup(
+				<MeetingAgendaPrint
+					layout={layout}
+					header={header}
+					roles={roles}
+					officers={officers}
+					explainers={[]}
+					rows={rows}
+				/>,
+			);
+			return measuredHeight(
+				printableDocument(PRINT_PAGE_CSS, html),
+				".agenda-page:nth-of-type(2) [data-fit-inner]",
+			);
+		}
+
+		it.each([
+			"spacious",
+			"timing",
+		] as const)("%s keeps its run-of-show sheet under PAGE_H with the names, so FitPage never scales it", (layout) => {
+			const withNames = runSheetHeight(handoffRows(LONG_NAMES), layout);
+			// The whole claim: under PAGE_H there is no transform, so no type shrink.
+			// Measured 658px (spacious) and 547px (timing) against 1056.
+			expect(withNames).toBeLessThan(PAGE_H);
+			// A control, so the assertion above cannot pass on an empty sheet.
+			expect(withNames).toBeGreaterThan(200);
+		});
+
+		it.each([
+			"spacious",
+			"timing",
+		] as const)("%s pays only a line of height for the names, not a page", (layout) => {
+			const without = runSheetHeight(handoffRows(undefined), layout);
+			const withNames = runSheetHeight(handoffRows(LONG_NAMES), layout);
+			// Measured 31px (spacious) and 13px (timing) — one wrapped line. An
+			// ABSOLUTE ceiling, not `withNames > without`: the point is that the cost
+			// is a line, and a relative assertion would pass at any cost at all.
+			expect(withNames - without).toBeLessThan(120);
+			// And it does cost SOMETHING, which proves the names actually rendered on
+			// this layout rather than the field being silently ignored.
+			expect(withNames).toBeGreaterThan(without);
+		});
+	},
+);
