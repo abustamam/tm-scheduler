@@ -78,6 +78,17 @@
  * DOES NOT IMPORT `pathways-catalog.ts`, on purpose: the two files are
  * cross-checked by a test, and a test is worth nothing if one input is derived
  * from the other.
+ *
+ * WHAT NO TEST HERE CAN SEE. Swap the `url` of two rows and every assertion in
+ * `evaluation-resources.test.ts` still passes: both URLs stay unique, https and
+ * on a toastmasters.org host, and both projects still resolve to a resource. 56
+ * of the 64 URLs are opaque `.ashx` GUIDs carrying no item code, so nothing
+ * local can say which PDF sits behind one — only the 8 filename-bearing URLs
+ * are pinned to their code (see the test of that name).
+ * `scripts/check-evaluation-resource-links.ts` (`bun run check:eval-links`)
+ * proves each URL still serves a PDF, never that it serves the RIGHT one. The
+ * only remedy for a suspected mix-up is to re-scrape the category and diff it,
+ * the way this table was built.
  */
 
 export interface EvaluationResource {
@@ -285,7 +296,11 @@ export const EVALUATION_RESOURCES: readonly EvaluationResource[] = [
 		title: "Introduction to Vocal Variety and Body Language",
 		url: "https://content.toastmasters.org/image/upload/v1741989017/8104E1-evaluation-resource-ff.pdf",
 		project: "Introduction to Vocal Variety and Body Language",
-		part: "Evaluation resource",
+		// "Evaluation resource" rendered as "Evaluation resource — Evaluation
+		// resource" wherever the UI prefixes the part, on a REQUIRED Level 1
+		// project of all 11 paths. This pairs with its sibling "Speech profile"
+		// instead. Only the label changed — code, URL and project are scraped data.
+		part: "Speech evaluation",
 	},
 	{
 		key: "introduction-to-vocal-variety-and-body-language-speech-profile",
@@ -565,18 +580,40 @@ export const EVALUATION_RESOURCES: readonly EvaluationResource[] = [
 ];
 
 /**
- * Lookup key: lowercased, non-alphanumerics collapsed, trailing "(Legacy)"
- * removed. Base Camp returns project names with its own punctuation and casing
- * ("Question-and-Answer Session" vs "question and answer session"), and legacy
- * paths carry a " (Legacy)" suffix on every project (see `pathways-catalog.ts`
- * `withLegacySuffix`) while TI publishes only the current edition.
+ * The " (Legacy)" suffix `pathways-catalog.ts` (`withLegacySuffix`) carries on
+ * every project of the five retired paths. ONE copy of the pattern: `normalize`
+ * strips it and `resolveEvaluationResources` tests for it, and those two reading
+ * the convention differently is the bug class this constant closes.
  */
-function lookupKey(name: string): string {
-	return name
-		.replace(/\s*\(Legacy\)\s*$/i, "")
+const LEGACY_SUFFIX = /\s*\(Legacy\)\s*$/i;
+
+/**
+ * The ONE normalizer: lowercased, non-alphanumerics collapsed to single spaces,
+ * trimmed, trailing "(Legacy)" removed. Base Camp returns project names with its
+ * own punctuation and casing ("Question-and-Answer Session" vs "question and
+ * answer session"), and TI publishes only the current edition of each form.
+ *
+ * Shared by the project lookup AND the index page's search. It was two
+ * independent copies and the search half omitted the "(Legacy)" strip, so all 47
+ * legacy catalog names returned ZERO search results — while
+ * `content/resources/evaluation-resources.md` tells the reader to search "the
+ * project name your evaluator will see on the agenda", which on a legacy path is
+ * exactly the name that failed. A third copy of these rules will do it again.
+ */
+function normalize(value: string): string {
+	return value
+		.replace(LEGACY_SUFFIX, "")
 		.toLowerCase()
 		.replace(/[^a-z0-9]+/g, " ")
 		.trim();
+}
+
+/**
+ * The `BY_PROJECT` key for a project name — `normalize` under the name of the
+ * role it plays, so the map's key type is self-describing at both ends.
+ */
+function lookupKey(name: string): string {
+	return normalize(name);
 }
 
 const BY_PROJECT: ReadonlyMap<string, readonly EvaluationResource[]> = (() => {
@@ -636,7 +673,7 @@ export function resolveEvaluationResources(
 		};
 	return {
 		resources,
-		currentEditionNote: /\(Legacy\)\s*$/i.test(name ?? ""),
+		currentEditionNote: LEGACY_SUFFIX.test(name ?? ""),
 		isGenericFallback: false,
 	};
 }
@@ -646,22 +683,20 @@ export function resolveEvaluationResources(
  * `getAuthContext` → `#/db`, which throws `DATABASE_URL is not set` at import,
  * so anything exported from a route is unreachable from vitest.
  *
- * Normalizes punctuation on both sides — a member types "question and answer",
- * TI writes "Question-and-Answer Session".
+ * Runs `normalize` over the query AND the searchable text, so punctuation drift
+ * ("question and answer" vs TI's "Question-and-Answer Session") and the
+ * "(Legacy)" suffix are treated exactly as the project lookup treats them. That
+ * sharing IS the fix: while these were two copies, a legacy-path member
+ * searching the name printed on their own agenda found nothing.
  */
 export function filterEvaluationResources(
 	query: string,
 ): readonly EvaluationResource[] {
-	const q = query
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, " ")
-		.trim();
+	const q = normalize(query);
 	if (!q) return EVALUATION_RESOURCES;
 	return EVALUATION_RESOURCES.filter((r) =>
-		[r.title, r.project ?? "", r.itemCode ?? "", r.part ?? ""]
-			.join(" ")
-			.toLowerCase()
-			.replace(/[^a-z0-9]+/g, " ")
-			.includes(q),
+		normalize(
+			[r.title, r.project ?? "", r.itemCode ?? "", r.part ?? ""].join(" "),
+		).includes(q),
 	);
 }

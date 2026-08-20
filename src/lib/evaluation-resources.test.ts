@@ -80,10 +80,20 @@ describe("evaluation resource mapping", () => {
 			"Introduction to Vocal Variety and Body Language",
 		);
 		expect(rs).toHaveLength(2);
+		// NOT "Evaluation resource": the UI prefixes the part, so that spelling
+		// rendered "Evaluation resource — Evaluation resource" on a required
+		// Level 1 project of all 11 paths.
 		expect(rs.map((r) => r.part).sort()).toEqual([
-			"Evaluation resource",
+			"Speech evaluation",
 			"Speech profile",
 		]);
+	});
+
+	it("never gives a part the same name as the label that prefixes it", () => {
+		// The whole class of the bug above, not just the one row that had it.
+		for (const r of EVALUATION_RESOURCES) {
+			expect(r.part?.toLowerCase()).not.toBe("evaluation resource");
+		}
 	});
 });
 
@@ -100,6 +110,19 @@ describe("resolveEvaluationResources", () => {
 		expect(r.currentEditionNote).toBe(true);
 		expect(r.isGenericFallback).toBe(false);
 		expect(r.resources).toEqual(resourcesForProject("Active Listening"));
+	});
+
+	it("flags the note on ALL THREE parts of a legacy multi-part project", () => {
+		// Reachable, not hypothetical: Evaluation and Feedback is a required
+		// Level 1 project on all five legacy paths, so every legacy-path member
+		// meets this combination at Level 1. An earlier review called
+		// currentEditionNote and multi-part "mutually exclusive by construction";
+		// they are not, and nothing had evaluated the expression.
+		const r = resolveEvaluationResources("Evaluation and Feedback (Legacy)");
+		expect(r.resources).toHaveLength(3);
+		expect(r.currentEditionNote).toBe(true);
+		expect(r.isGenericFallback).toBe(false);
+		expect(r.resources).toEqual(resourcesForProject("Evaluation and Feedback"));
 	});
 
 	it("falls back to the generic resource for an unknown or absent project", () => {
@@ -134,6 +157,31 @@ describe("filterEvaluationResources", () => {
 		expect(
 			filterEvaluationResources("question and answer").length,
 		).toBeGreaterThan(0);
+	});
+
+	it("finds a project by the (Legacy) name printed on the agenda", () => {
+		// The search shares `normalize` with the project lookup precisely so this
+		// works. While it had its own copy without the "(Legacy)" strip, all 47
+		// legacy catalog names returned ZERO results — and the public article
+		// tells the reader to search exactly that name.
+		const legacy = filterEvaluationResources("Ice Breaker (Legacy)");
+		expect(legacy).toEqual(filterEvaluationResources("Ice Breaker"));
+		expect(legacy.length).toBeGreaterThan(0);
+		expect(legacy.some((r) => r.project === "Ice Breaker")).toBe(true);
+	});
+
+	it("finds every legacy catalog project name", () => {
+		// Absolute, not a sample: one omitted normalization rule silently emptied
+		// the results for the whole legacy half of the catalog.
+		const legacyNames = new Set<string>();
+		for (const path of PATHWAYS_CATALOG)
+			for (const project of path.projects)
+				if (/\(Legacy\)\s*$/.test(project.name)) legacyNames.add(project.name);
+		expect(legacyNames.size).toBe(47);
+		const empty = [...legacyNames].filter(
+			(name) => filterEvaluationResources(name).length === 0,
+		);
+		expect(empty).toEqual([]);
 	});
 
 	it("returns nothing for a query that matches nothing", () => {
@@ -171,6 +219,35 @@ describe("structural integrity", () => {
 		const present = codes.filter((c): c is string => c !== null);
 		expect(codes.length - present.length).toBe(2);
 		expect(new Set(present).size).toBe(present.length);
+	});
+
+	it("leaves a code absent only on the two Evaluation and Feedback siblings", () => {
+		// Counting to two is not enough: a NEW codeless row passes that count the
+		// moment one of these two gains a code. TI exposes no code for exactly
+		// these, and 8100E2 for the second speech would be an inference.
+		const codeless = EVALUATION_RESOURCES.filter((r) => r.itemCode === null);
+		expect(codeless.map((r) => r.key).sort()).toEqual([
+			"evaluation-and-feedback-evaluator-role",
+			"evaluation-and-feedback-second-speech",
+		]);
+		for (const r of codeless) expect(r.project).toBe("Evaluation and Feedback");
+	});
+
+	it("keeps every filename-bearing URL on its own item code", () => {
+		// The 56 `.ashx` URLs are opaque Sitecore GUIDs — nothing local can tell
+		// which PDF is behind one, so a swap between two of them is invisible to
+		// this whole file (the module header says so). The other 8 spell the item
+		// code in the filename, which pins those 8 URL↔project bindings for free.
+		const named = EVALUATION_RESOURCES.filter(
+			(r) => r.itemCode !== null && !r.url.toLowerCase().endsWith(".ashx"),
+		);
+		expect(named).toHaveLength(8);
+		for (const r of named) {
+			expect(
+				r.url.toLowerCase(),
+				`${r.key}: URL should carry item code ${r.itemCode}`,
+			).toContain((r.itemCode as string).toLowerCase());
+		}
 	});
 
 	it("only ever links to Toastmasters over https", () => {
