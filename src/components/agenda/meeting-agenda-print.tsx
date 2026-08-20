@@ -2048,14 +2048,19 @@ function TimingLayout({
 										nameTheGroup
 									/>
 								);
-							// `who` joins the role and the holder with " · ", and since #445 the
-							// role half is the club's own free text — so a role literally named
-							// "Chief · Evaluator" shifts text into the name column. First-split, not
-							// last, because the HOLDER half also carries the separator on a guest row
-							// ("Speaker 1 · Jane · Guest"). Neither direction is right in general;
-							// the real fix is carrying the two as separate fields (#463).
-							const [role, ...rest] = r.who.split(" · ");
-							const name = rest.join(" · ");
+							// The two halves come off the ROW now (#463), not out of a split.
+							// This used to be `r.who.split(" · ")`, and both directions of that
+							// split were wrong in general: since #445 the role half is the
+							// club's own free text, so a role named "Timer · Assistant" shifted
+							// text into the name column — while the holder half carries the
+							// separator too on a guest row ("Speaker 1 · Jane · Guest"), so a
+							// last-split broke that instead.
+							//
+							// The `??` fallback is for rows that carry no halves: event and
+							// section beats, whose `who` is a whole label with no holder. Those
+							// were never ambiguous, and splitting them was already a no-op.
+							const role = r.roleLabel ?? r.who;
+							const name = r.holder ?? "";
 							return (
 								<div
 									key={rowKey(r, i)}

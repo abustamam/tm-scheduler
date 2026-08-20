@@ -75,6 +75,33 @@ export type AgendaRow = {
 	 *  label follows the club, a club that renamed Speaker to Presenter would
 	 *  silently lose the colour. Identity belongs in a field, not in prose. */
 	roleKey?: string | null;
+	/**
+	 * The two halves of `who`, carried separately (#463).
+	 *
+	 * `who` is `${roleLabel} · ${holder}` on a role row, and `TimingLayout` used
+	 * to split it back apart to fill its two columns. Both directions of that
+	 * split are wrong in general: since #445 the ROLE half is the club's own free
+	 * text (validated only non-empty), so a role named `Timer · Assistant` shifts
+	 * text between the columns — and the HOLDER half carries the separator too on
+	 * a guest row (`Speaker 1 · Jane · Guest`), so a last-split breaks that
+	 * instead. The string is genuinely ambiguous.
+	 *
+	 * #363 already shipped a bug from this exact shape and the lesson was
+	 * recorded: `OPEN_LABEL` is `"— open —"`, so `who` can hold a middot AND em
+	 * dashes, and a fix that changed the separator printed
+	 * `Toastmaster of the Day · — open — — Introduces the speakers`. The rule is
+	 * do not join row fields with a separator chosen because it does not
+	 * currently appear; render them as separate nodes.
+	 *
+	 * `who` stays: three of the four print layouts render it verbatim, the deck
+	 * reads it, `sameRun` groups on it, and `beatColor` falls back to it. Removing
+	 * it is a bigger change than making the split unnecessary.
+	 *
+	 * `holder` is null on an event or section row (nobody presents it) and on a
+	 * role row rendered unowned; `roleLabel` is then the whole of `who`.
+	 */
+	roleLabel?: string;
+	holder?: string | null;
 	detail: string;
 	minutes: number; // duration this row contributes to the running clock
 	marks: TimingMarks | null;
@@ -1713,6 +1740,9 @@ export function expandRunSheet(
 						// `ROLES_TOKEN` printed the club's, two names for one role on one
 						// page. Identical output for a club that never renamed anything.
 						who: `${numbered(s.roleName, i, multi)} · ${assigneeDisplay(s)}`,
+						// The same two halves, unjoined (#463) — see `AgendaRow.roleLabel`.
+						roleLabel: numbered(s.roleName, i, multi),
+						holder: assigneeDisplay(s),
 						roleKey: owner.roleKey,
 						detail: s.speechTitle
 							? `"${s.speechTitle}"${s.projectLevel ? ` · ${s.projectLevel}` : ""}`
@@ -1728,6 +1758,9 @@ export function expandRunSheet(
 					rows.push({
 						// The slot's name, per the speaker arm above (#445).
 						who: `${numbered(s.roleName, i, multi)} · ${assigneeDisplay(s)}`,
+						// The same two halves, unjoined (#463) — see `AgendaRow.roleLabel`.
+						roleLabel: numbered(s.roleName, i, multi),
+						holder: assigneeDisplay(s),
 						roleKey: owner.roleKey,
 						// Names the speaker when known, else the speaking SLOT ("Speaker
 						// 2"), else the beat's generic wording (#512). See
@@ -1769,6 +1802,9 @@ export function expandRunSheet(
 					rows.push({
 						// The slot's name, per the speaker arm above (#445).
 						who: `${s.roleName} · ${assigneeDisplay(s)}`,
+						// Unjoined halves (#463).
+						roleLabel: s.roleName,
+						holder: assigneeDisplay(s),
 						roleKey: owner.roleKey,
 						detail: beatDetail,
 						minutes: beat.minutes,

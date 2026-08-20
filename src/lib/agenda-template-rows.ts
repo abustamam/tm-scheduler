@@ -133,10 +133,17 @@ function toRow(
 	// Number by the SLOT when the role really repeats, and label the assignee
 	// from the slot so a club that renamed the role sees its own word (#445).
 	const numberedLabel = numbered(label, index, total > 1);
-	const who = slot
-		? `${numberedLabel} · ${assigneeDisplay(slot)}`
-		: numberedLabel;
-	return { who, roleKey: role.key, ...base };
+	const holder = slot ? assigneeDisplay(slot) : null;
+	const who = holder ? `${numberedLabel} · ${holder}` : numberedLabel;
+	// The halves unjoined (#463), same as the standard path. `holder` is null on a
+	// beat whose role has no slot, where `who` is the label alone.
+	return {
+		who,
+		roleLabel: numberedLabel,
+		holder,
+		roleKey: role.key,
+		...base,
+	};
 }
 
 /**
