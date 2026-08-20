@@ -365,9 +365,10 @@ Both belong to the CALLER: `attendance-plan.ts` resolves the actor and gates on
 has three arms, and the middle one admits this meeting's Toastmaster WITHOUT a session, by
 comparing a self-asserted member id against the meeting's TMOD slot. So "needs a session" is
 the wrong mental model for who may write it; `viaManager` (not the officer arm) is the gate.
-It does NOT lift `onlyFrom` on the clear — that stays `via === "officer"`, because deleting
+It does not widen `onlyFrom` on the clear — that arm stays `via === "officer"`, because deleting
 another officer's record of having asked is not what the panel is for and the TMOD claim is
-honour-system. Same split on the read: `getTmodPanelData` gives the TMOD the ladder and names on
+honour-system. Note "stays on the officer arm" is about WHICH arm, not about how much it may
+delete: since #573 the officer arm is FLOORED too (see below). Same split on the read: `getTmodPanelData` gives the TMOD the ladder and names on
 the claim, but phone and email only to a real session (#576 review). WHICH arm admitted a write
 is persisted as `activity_log.detail.grantedVia` (`officer | tmod | self`), because a grant
 defended as "auditable afterwards" is not auditable while an honour-system TMOD write and a
@@ -386,13 +387,30 @@ erase every answer invisibly — `answeredRungs` filters `reached_out` out, so t
 would read "all contacted, nobody declined". Only an OFFICER's deliberate menu pick is unfloored,
 which is what keeps "Asked" from silently no-opping on a row that already answered for the one
 caller a session authenticated), and `clearPlanStatus`'s `onlyFrom`
-names the statuses a delete may remove (every caller NOT on the officer arm passes
-`SELF_SERVICE_RUNGS`, so neither a plain member nor a self-asserted Toastmaster can erase an
-officer's `reached_out` — which deleting a `meeting_outreach`
-row used to require an admin to do). Do NOT restate that as "`viaManager` gets the unrestricted
-clear": an earlier draft of this paragraph did, that was the first cut of #576 and never HEAD,
-and the two sentences contradicted each other four lines apart. The write ladder widened to
-`viaManager`; the delete stayed on `via === "officer"`, which needs a session. Both are `setWhere`/`WHERE` predicates rather than a
+names the statuses a delete may remove, and since #573 it is **REQUIRED** — there is no
+"clear whatever is there" any more, and its absence used to be the hole. The two floors are exact
+COMPLEMENTS, defined beside each other: `SELF_SERVICE_RUNGS` (`coming | not_coming`) is what a
+self/TMOD caller may clear, `CLEARABLE_ASK` (`reached_out`) is what an officer may clear. A member
+clears an ANSWER; an officer clears the ASK; neither may erase the other's. So a plain member and a
+self-asserted Toastmaster still cannot erase an officer's `reached_out` — which deleting a
+`meeting_outreach` row used to require an admin to do — and an officer can no longer erase a reply.
+Do NOT restate the officer half as "`viaManager` gets the unrestricted clear": an earlier draft of
+this paragraph did, that was the first cut of #576 and never HEAD, and the two sentences
+contradicted each other four lines apart. The write ladder widened to `viaManager`; the delete
+stayed on `via === "officer"`, which needs a session.
+
+That officer arm passed NO floor until #573, and the failure is worth keeping because it is a
+shape rather than a slip: "No answer" means *make it as if they never replied*, so it must never
+destroy a reply — the rail does not poll, so a row can still read `Asked` while the server already
+holds `not_coming`, and deleting that drops the member off `unavailableMembers` and out of the
+recruit picker's warning, after which they can be handed a role they declined. Nobody decided
+officers needed that power; a one-tap menu item was wired to a delete whose floor was OPTIONAL, and
+omitting a parameter looked sanctioned. Correcting a wrong answer is the SET path, where
+`demoteFrom` deliberately leaves an officer's deliberate pick unfloored. The accepted trade-off is
+that an answered row can no longer be returned to "no answer" — same shape as roll mode's
+clear-to-unmarked gap; an officer who wants a row to stop saying "coming" picks "Not coming".
+
+Both `demoteFrom` and `onlyFrom` are `setWhere`/`WHERE` predicates rather than a
 read-then-write, so they are also the de-dup and race fix for `markComingOnSelfClaim`.
 
 `attendance-plan-store.guard.test.ts` enforces both halves across `src/` **and**

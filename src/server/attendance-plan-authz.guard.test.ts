@@ -150,8 +150,18 @@ describe("attendance-plan authz (D6)", () => {
 		).toContain("via");
 		expect(
 			body,
-			"only the officer arm may lift the self-service restriction",
-		).toContain('onlyFrom: via === "officer" ? undefined : SELF_SERVICE_RUNGS');
+			"the officer arm gets its OWN floor, not an unrestricted delete (#573)",
+		).toContain(
+			'onlyFrom: via === "officer" ? CLEARABLE_ASK : SELF_SERVICE_RUNGS',
+		);
+		// The defect this replaced, pinned as a NEGATIVE so a revert cannot pass by
+		// keeping the ternary shape while widening one arm. `undefined` there meant
+		// "delete whatever is in the row", which let an officer's "No answer" erase
+		// an answer that arrived since the panel rendered.
+		expect(
+			body,
+			"the officer arm must never pass an unfloored clear again (#573)",
+		).not.toContain('via === "officer" ? undefined');
 	});
 
 	it("reports the officer branch rather than inferring it from a null actor", () => {
@@ -248,19 +258,23 @@ describe("attendance-plan authz (D6)", () => {
 
 	it("splits the two capabilities across the two arms", () => {
 		// The WRITE of `reached_out` is the capability the panel exists for, so it
-		// takes `viaManager` — both arms. The unrestricted CLEAR is not: it deletes
-		// another officer's private record, and the Toastmaster's claim is
-		// honour-system with a publicly-known id, so it stays on the officer arm.
-		// These were one flag until the #576 review; conflating them handed an
-		// unauthenticated caller a delete that used to need requireClubRole(admin).
+		// takes `viaManager` — both arms. The CLEAR of it is not: it deletes another
+		// officer's private record, and the Toastmaster's claim is honour-system
+		// with a publicly-known id, so it stays on the officer arm. These were one
+		// flag until the #576 review; conflating them handed an unauthenticated
+		// caller a delete that used to need requireClubRole(admin).
+		//
+		// Since #573 the officer arm is FLOORED rather than unrestricted — it may
+		// clear the ask, not an answer — so what this pins is the arm SPLIT, which
+		// is unchanged, on an expression whose right-hand side moved.
 		expect(SRC).toContain('if (!viaManager && data.status === "reached_out")');
 		expect(SRC).toContain(
-			'onlyFrom: via === "officer" ? undefined : SELF_SERVICE_RUNGS,',
+			'onlyFrom: via === "officer" ? CLEARABLE_ASK : SELF_SERVICE_RUNGS,',
 		);
 		expect(
 			SRC,
-			"the unrestricted clear must NOT be gated on viaManager — that admits the honour-system TMOD arm",
-		).not.toContain("onlyFrom: viaManager ? undefined");
+			"the officer clear must NOT be gated on viaManager — that admits the honour-system TMOD arm",
+		).not.toContain("onlyFrom: viaManager ?");
 		expect(
 			SRC,
 			"viaOfficer was renamed to viaManager when the TMOD arm landed — a surviving use means one gate was missed",
