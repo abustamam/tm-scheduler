@@ -21,6 +21,13 @@ import {
 	slideLayout,
 	slideName,
 } from "#/lib/slide-layout";
+import {
+	cqw,
+	SLIDE_BODY_BOTTOM_PCT,
+	SLIDE_HEADER_GAP_PCT,
+	SLIDE_HEADER_TOP_PCT,
+	SLIDE_INSET_PCT,
+} from "#/lib/slide-spacing";
 import { getVoteParticipation } from "#/server/voting";
 
 // Official brand palette (sampled from the wordmark) so chrome matches the logo.
@@ -499,7 +506,17 @@ function ContentSlide({
 			className="flex h-full w-full flex-col"
 			style={{ background: GROUND, color: INK }}
 		>
-			<header className="px-[6cqw] pt-[5cqw]">
+			{/* Inset and header gap come from `#/lib/slide-spacing` (#359), shared
+			    with the .pptx export so the two cannot drift apart again — they
+			    already had, in the same direction, which is why a body indented
+			    past its own rule never looked like a bug. */}
+			<header
+				style={{
+					paddingLeft: cqw(SLIDE_INSET_PCT),
+					paddingRight: cqw(SLIDE_INSET_PCT),
+					paddingTop: cqw(SLIDE_HEADER_TOP_PCT),
+				}}
+			>
 				<div className="text-[3.9cqw] font-extrabold leading-tight">
 					{layout.header}
 				</div>
@@ -510,7 +527,15 @@ function ContentSlide({
 			</header>
 			<div
 				ref={outer}
-				className="flex min-h-0 flex-1 flex-col justify-center overflow-hidden px-[7cqw] py-[2.5cqw]"
+				className="flex min-h-0 flex-1 flex-col justify-center overflow-hidden"
+				style={{
+					paddingLeft: cqw(SLIDE_INSET_PCT),
+					paddingRight: cqw(SLIDE_INSET_PCT),
+					// The gap under the rule is this box's TOP padding — the header
+					// element above ends at the rule.
+					paddingTop: cqw(SLIDE_HEADER_GAP_PCT),
+					paddingBottom: cqw(SLIDE_BODY_BOTTOM_PCT),
+				}}
 			>
 				<div ref={inner} className="w-full">
 					{vote ? (

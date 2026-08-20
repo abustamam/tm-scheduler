@@ -25,6 +25,13 @@ const GROUND = "f3f4f4";
 const MUTED = "565656";
 const GOLD = "f3dd94";
 
+import {
+	inchesOfWidth,
+	SLIDE_BODY_BOTTOM_PCT,
+	SLIDE_HEADER_GAP_PCT,
+	SLIDE_INSET_PCT,
+} from "#/lib/slide-spacing";
+
 const W = 13.33;
 const H = 7.5;
 const FOOT_H = 1.13; // ~8.5% of width
@@ -177,9 +184,9 @@ function renderContent(
 ) {
 	s.background = { color: GROUND };
 	s.addText(layout.header, {
-		x: 0.8,
+		x: INSET,
 		y: 0.6,
-		w: W - 1.6,
+		w: W - 2 * INSET,
 		h: 0.8,
 		align: "left",
 		bold: true,
@@ -187,8 +194,9 @@ function renderContent(
 		color: INK,
 	});
 	s.addShape(pptx.ShapeType.rect, {
-		x: 0.8,
+		x: INSET,
 		y: 1.5,
+		// 1.5 + 0.09 is `RULE_BOTTOM` above, which `BODY_Y` measures the gap from.
 		w: 1.05,
 		h: 0.09,
 		fill: { color: MAROON },
@@ -241,7 +249,20 @@ function renderContent(
 	});
 }
 
-const BODY = { x: 1.0, y: 2.0, w: W - 2.0, h: H - FOOT_H - 2.2 };
+// #359: derived from the SHARED proportions, not hand-kept literals. The header
+// inset was 0.8in (6.0% of W) and the body 1.0in (7.5%) — a mismatch this file
+// and `meeting-present.tsx` each carried independently, so the export and the
+// screen agreed with each other while both indented the body past its own rule.
+const INSET = inchesOfWidth(SLIDE_INSET_PCT, W);
+/** Rule bottom, from the header block below. */
+const RULE_BOTTOM = 1.5 + 0.09;
+const BODY_Y = RULE_BOTTOM + inchesOfWidth(SLIDE_HEADER_GAP_PCT, W);
+const BODY = {
+	x: INSET,
+	y: BODY_Y,
+	w: W - 2 * INSET,
+	h: H - FOOT_H - BODY_Y - inchesOfWidth(SLIDE_BODY_BOTTOM_PCT, W),
+};
 
 function renderBody(s: PptxSlide, body: Body) {
 	if (body.form === "word") {
