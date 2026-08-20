@@ -53,15 +53,20 @@ function EvaluationResourcesIndex() {
 
 	return (
 		<ResourcesShell shell={shell} authCtx={authCtx}>
-			<div className="mb-6 pt-2">
+			{/* Heading + ONE line, then straight to the search box. The registered
+			    article renders BELOW the results, not here: rendering its four
+			    headings above the box put the box at y=1146 on a 375x812 phone —
+			    334px below the fold — and looking a form up on a phone mid-meeting
+			    is the whole point of this page. Prose is context; the search is the
+			    tool. Found by /qa 2026-08-20. */}
+			<div className="mb-4 pt-2">
 				<h1 className="font-display text-3xl font-semibold tracking-[-0.02em]">
 					Evaluation resources
 				</h1>
-				{/* The registered article stands in for a hand-written blurb — it says
-				    the same things and one copy cannot drift from the other. */}
-				<article className="prose-gavelup mt-3">
-					<ReactMarkdown remarkPlugins={[remarkGfm]}>{ARTICLE}</ReactMarkdown>
-				</article>
+				<p className="mt-1 text-sm text-[var(--sea-ink-soft)]">
+					The official evaluation form for every Pathways project. Search by
+					project name or item number.
+				</p>
 			</div>
 
 			<Input
@@ -110,6 +115,14 @@ function EvaluationResourcesIndex() {
 					))}
 				</ul>
 			)}
+
+			{/* The registered article, below the tool it explains. It stands in for a
+			    hand-written blurb so one copy cannot drift from the other, and it is
+			    the only place this slug's prose renders — the static route wins over
+			    `resources.$slug`, so without this it reaches no URL at all. */}
+			<article className="prose-gavelup mt-10 border-[var(--line)] border-t pt-6">
+				<ReactMarkdown remarkPlugins={[remarkGfm]}>{ARTICLE}</ReactMarkdown>
+			</article>
 		</ResourcesShell>
 	);
 }
