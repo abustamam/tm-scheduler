@@ -7,9 +7,15 @@
  * not.
  *
  * Run it when TI reorganizes their resource library, or periodically:
- *   bunx tsx scripts/check-evaluation-resource-links.ts
+ *   bun run check:eval-links
  *
- * All 64 returned `200 application/pdf` when the table was built (2026-08-20).
+ * Declared in `package.json` so it is discoverable from the script list rather
+ * than only from this comment. It is deliberately NOT wired into `check`, `test`
+ * or CI: it needs the network, and the whole point above is that it is a thing
+ * you RAN, not a gate that can quietly skip.
+ *
+ * All 64 returned `200 application/pdf` when the table was built (2026-08-20),
+ * and all 64 again on 2026-08-20 under the magic-byte validation below.
  */
 import { EVALUATION_RESOURCES } from "#/lib/evaluation-resources";
 

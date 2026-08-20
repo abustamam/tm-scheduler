@@ -16,8 +16,9 @@ use the generic evaluation resource.
 
 Some paths are ones Toastmasters has since retired, and members stay enrolled on
 them. Toastmasters publishes only the current edition of each form, so on a
-retired path you will see the current version, marked as such. The criteria may
-read slightly differently from the project as your path presents it.
+retired path the form below is the current one — its criteria may read slightly
+differently from the project as your path presents it. Searching the name with
+`(Legacy)` on the end, the way your agenda spells it, finds the same form.
 
 ## Where these files come from
 
