@@ -136,6 +136,14 @@ export const resources: Resource[] = [
 		title: "Glossary of Toastmasters terms",
 		desc: "Plain-language definitions of the words you'll hear at your first meetings.",
 	},
+	{
+		slug: "evaluation-resources",
+		cat: "Pathways",
+		icon: "doc",
+		tone: "lagoon",
+		title: "Evaluation resources",
+		desc: "The official evaluation form for every Pathways project, searchable.",
+	},
 ];
 
 /** Look up a resource by its URL slug. */
