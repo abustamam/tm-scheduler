@@ -544,3 +544,83 @@ describe("club logo on the projected splash (#496)", () => {
 		expect(screen.getByText(CLUB_NAME)).toBeTruthy();
 	});
 });
+
+/**
+ * A templated meeting's deck through the SAME presenter (#agenda-templates PR 2).
+ *
+ * The two new slide kinds were put on the existing `Slide` union precisely so
+ * this component, the jump grid and `deckToPptx` need no new dispatch. That is a
+ * claim about the RENDERER, not about the builder, so it is asserted here rather
+ * than in `agenda-template-slides.test.ts`: an unhandled kind falls through
+ * `slideLayout` and renders an empty slide, which on a projector reads as a
+ * broken app in front of the whole club.
+ */
+describe("a templated meeting's deck (#agenda-templates)", () => {
+	afterEach(() => cleanup());
+
+	const contestDeck: Slide[] = [
+		{
+			kind: "title",
+			clubName: CLUB_NAME,
+			logoUrl: null,
+			district: null,
+			clubNumber: null,
+			meetingNumber: null,
+			scheduledAt: new Date("2026-09-10T01:00:00Z"),
+			timezone: "America/Chicago",
+		},
+		{ kind: "templateSection", title: "PREPARED SPEECH CONTEST" },
+		{
+			kind: "templateBeat",
+			label: "Prepared speech 1 · Ada Lovelace",
+			detail: "Judged. Chair calls the contestant.",
+			minutes: 7,
+			timing: {
+				green: "5:00",
+				yellow: "6:00",
+				red: "7:00",
+				qualifies: "4:30–7:30",
+			},
+		},
+		{
+			kind: "thankYou",
+			meetingSchedule: null,
+			nextMeetingAt: null,
+			timezone: "America/Chicago",
+		},
+	];
+
+	it("projects a section band as its own slide", () => {
+		renderPresent({ deck: contestDeck });
+		clickNext();
+		expect(screen.getByText("PREPARED SPEECH CONTEST")).toBeTruthy();
+	});
+
+	it("projects a beat with its presenter, detail and contest timing", () => {
+		renderPresent({ deck: contestDeck });
+		clickNext();
+		clickNext();
+		expect(screen.getByText("Prepared speech 1 · Ada Lovelace")).toBeTruthy();
+		expect(
+			screen.getByText("Judged. Chair calls the contestant."),
+		).toBeTruthy();
+		expect(
+			screen.getByText("Signals: 5:00 green · 6:00 yellow · 7:00 red"),
+		).toBeTruthy();
+		// The disqualification window (#357) reaches the wall, not just the paper.
+		expect(screen.getByText("Qualifies: 4:30–7:30")).toBeTruthy();
+	});
+
+	it("lists both new kinds in the jump-to-slide grid", () => {
+		renderPresent({ deck: contestDeck });
+		fireEvent.click(screen.getByLabelText(/jump to a slide/i));
+		const grid = overview();
+		if (!grid) throw new Error("overview did not open");
+		// Named off content, through the same `slideName` the standard kinds use, so
+		// a contest is navigable mid-meeting rather than only steppable.
+		expect(within(grid).getByText(/PREPARED SPEECH CONTEST/)).toBeTruthy();
+		expect(
+			within(grid).getByText(/Prepared speech 1 · Ada Lovelace/),
+		).toBeTruthy();
+	});
+});

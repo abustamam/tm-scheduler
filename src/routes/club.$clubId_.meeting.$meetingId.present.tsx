@@ -1,13 +1,10 @@
-import {
-	createFileRoute,
-	Link,
-	notFound,
-	useNavigate,
-} from "@tanstack/react-router";
+import { createFileRoute, notFound, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { MeetingPresent } from "#/components/agenda/meeting-present";
 import { OfflineBadge } from "#/components/agenda/offline-badge";
+import { resolveAgendaRows } from "#/lib/agenda-runsheet";
 import { buildSlideDeck } from "#/lib/agenda-slides";
+import { buildTemplateSlideDeck } from "#/lib/agenda-template-slides";
 import { clubLogoUrl } from "#/lib/club-logo-url";
 import { resolveClubOrRedirect } from "#/lib/club-route";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
@@ -45,44 +42,6 @@ export const Route = createFileRoute(
 	}),
 });
 
-/**
- * A templated meeting has no projected deck yet (#agenda-templates, PR 2).
- *
- * `buildSlideDeck` composes slides by hand against the seven STANDARD role
- * keys, so a contest would build the standard deck against contest slots —
- * every beat keyed `toastmaster_of_the_day` / `speaker` / `table_topics_master`
- * gates out and the room gets a title slide and a thank-you slide. Explaining
- * that is better than projecting it, and `/present` is directly addressable, so
- * hiding the button alone would not cover this.
- */
-function TemplatedMeetingNotice({
-	clubId,
-	meetingId,
-}: {
-	clubId: string;
-	meetingId: string;
-}) {
-	return (
-		<div className="mx-auto flex min-h-svh max-w-xl flex-col items-center justify-center gap-4 p-8 text-center">
-			<h1 className="font-semibold text-2xl">Present mode isn't ready yet</h1>
-			<p className="text-muted-foreground">
-				This meeting runs a different agenda, and the projected deck for it is
-				still being built. Print the agenda instead — it has the full run of
-				show.
-			</p>
-			<Link
-				to="/club/$clubId/meeting/$meetingId/print"
-				params={{ clubId, meetingId }}
-				search={{ layout: "editorial" as const }}
-				data-slot="button"
-				className="rounded-md bg-primary px-4 py-2 font-medium text-primary-foreground text-sm"
-			>
-				Print the agenda
-			</Link>
-		</div>
-	);
-}
-
 function PresentPage() {
 	const data = Route.useLoaderData();
 	const { clubId, meetingId } = Route.useParams();
@@ -98,28 +57,40 @@ function PresentPage() {
 	const ballotUrl = origin
 		? `${origin}/club/${clubId}/meeting/${meetingId}/vote`
 		: "";
-	// A templated meeting has no deck yet — see TemplatedMeetingNotice. This is
-	// checked BEFORE building, because building would silently produce a
-	// two-slide deck rather than fail.
-	if (data.template) {
-		return <TemplatedMeetingNotice clubId={clubId} meetingId={meetingId} />;
-	}
-	const deck = buildSlideDeck({
-		meeting: data.meeting,
-		club: {
-			name: data.clubName,
-			clubNumber: data.clubNumber,
-			district: data.clubDistrict,
-			timezone: data.timezone,
-			meetingSchedule: data.clubMeetingSchedule,
-			logoUrl: data.logoUrl,
-		},
-		slots: data.slots,
-		nextMeetingAt: data.nextMeetingAt,
-		meetingNumber: data.meetingNumber,
-		geIntroducesFunctionaries: data.geIntroducesFunctionaries,
-		ballotUrl,
-	});
+	const club = {
+		name: data.clubName,
+		clubNumber: data.clubNumber,
+		district: data.clubDistrict,
+		timezone: data.timezone,
+		meetingSchedule: data.clubMeetingSchedule,
+		logoUrl: data.logoUrl,
+	};
+	// Which BUILDER, not whether to build (#agenda-templates PR 2 replaced the
+	// notice this used to render). A templated meeting gets the beat-driven deck
+	// off the printed run sheet's own rows; a standard one gets the standard
+	// deck. Never a mix — the standard builder's slides bind to the seven
+	// standard role keys, which a contest does not have.
+	const deck = data.template
+		? buildTemplateSlideDeck({
+				meeting: data.meeting,
+				club,
+				rows: resolveAgendaRows({
+					geIntroducesFunctionaries: data.geIntroducesFunctionaries,
+					template: data.template,
+					slots: data.slots,
+				}),
+				nextMeetingAt: data.nextMeetingAt,
+				meetingNumber: data.meetingNumber,
+			})
+		: buildSlideDeck({
+				meeting: data.meeting,
+				club,
+				slots: data.slots,
+				nextMeetingAt: data.nextMeetingAt,
+				meetingNumber: data.meetingNumber,
+				geIntroducesFunctionaries: data.geIntroducesFunctionaries,
+				ballotUrl,
+			});
 	return (
 		<MeetingPresent
 			deck={deck}
