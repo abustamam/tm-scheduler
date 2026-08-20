@@ -241,8 +241,12 @@ export function AppShell({
 
 	return (
 		<div className="flex min-h-svh w-full font-sans text-[var(--sea-ink)]">
-			{/* Desktop sidebar (lg+) */}
-			<aside className="sticky top-0 hidden h-svh w-[248px] shrink-0 flex-col gap-1.5 border-r border-[var(--line)] bg-[linear-gradient(180deg,var(--surface-strong),var(--surface))] px-3.5 py-4 backdrop-blur-[6px] lg:flex">
+			{/* Desktop sidebar (lg+). `overflow-y-auto` is load-bearing: the box is
+			    pinned at `h-svh`, so an officer+superadmin nav (~28 items) is taller
+			    than a short laptop viewport and everything past the fold — including
+			    the sign-out footer — is unreachable without its own scroll container.
+			    The mobile drawer already scrolls (`SheetContent` below). */}
+			<aside className="sticky top-0 hidden h-svh w-[248px] shrink-0 flex-col gap-1.5 overflow-y-auto overscroll-contain border-r border-[var(--line)] bg-[linear-gradient(180deg,var(--surface-strong),var(--surface))] px-3.5 py-4 backdrop-blur-[6px] lg:flex">
 				{sidebar()}
 			</aside>
 
