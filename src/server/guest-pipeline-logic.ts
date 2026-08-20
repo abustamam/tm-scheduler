@@ -35,6 +35,7 @@ import {
 } from "#/lib/phone";
 import { logActivity } from "./activity";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
+import { assertClubNotArchived } from "./guards";
 
 /** The pipeline stages a guest may occupy (#208 / ADR-0018). */
 export type GuestStage = "prospect" | "following_up" | "joined" | "lost";
@@ -297,6 +298,13 @@ export interface CaptureGuestResult {
 export async function captureGuestVisit(
 	input: CaptureGuestInput,
 ): Promise<CaptureGuestResult> {
+	// #555, FIRST — before the name is even validated. This path mints a `guests`
+	// row carrying a visitor's name and optional email and phone, so it is one of
+	// the three that make an archived club keep accreting PII while every read of
+	// it returns empty. A taken-down club must not collect contact details, and
+	// "your name is required" is the wrong first answer to give someone signing
+	// the guest book of a club that no longer exists.
+	await assertClubNotArchived(input.clubId);
 	const name = input.name.trim();
 	if (!name) throw new Error("Please enter your name.");
 	const email = input.email?.trim() || null;

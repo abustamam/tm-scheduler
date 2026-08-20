@@ -325,23 +325,93 @@ const REVIEWED_UNGATED: Record<string, string> = {
 	getProjectOptions:
 		"keyed by memberId; resolveMemberSubject returns null for an unknown member and the payload is the shared Pathways catalog, not club-owned data",
 	// Deliberately ungated — see resolveClubByIdentifier.
-	// WRITES. Out of scope for #544 (reads only) — tracked as a follow-up.
-	// An archived club still ACCEPTS these, which is its own defect: the three
-	// that mint rows (addMember, submitGuestBook, joinBallot) mean a taken-down
-	// club keeps accreting names while every read of it now returns empty.
-	addMember: "write — #544 follow-up",
-	submitGuestBook: "write — #544 follow-up",
-	submitVote: "write — #544 follow-up",
-	joinBallot: "write — #544 follow-up",
-	openVoteFn: "write — #544 follow-up",
-	closeVoteFn: "write — #544 follow-up",
-	releaseSlot: "write — #544 follow-up",
-	updateSpeakerDetails: "write — #544 follow-up",
+	// WRITES gated by something other than the archive check.
 	setAttendance: "write — gated by gateAdmin",
 	addMinutesGuest: "write — gated by gateAdmin",
 	removeMinutesGuest: "write — gated by gateAdmin",
 	unsubscribeFromReminders: "write — gated by a signed unsubscribe token",
+	// The eight session-less writes are no longer waived — they are ENFORCED by
+	// `WRITE_GATES` below (#555). They sat here reading `"write — #544
+	// follow-up"` for one release, which is what a waiver is for: it named the
+	// hole instead of hiding it, and the sweep kept the list accurate while the
+	// fix was pending.
 };
+
+/**
+ * The session-less WRITES and where each one's archive gate lives (#555).
+ *
+ * #544 gated the public reads and scoped writes out, which created an asymmetry
+ * rather than a partial fix: three of these MINT rows carrying names, so a
+ * taken-down club kept accreting PII while every read of it returned empty —
+ * invisible, because the writer got a silent success and no admin could reach
+ * the club to look (`requireMembership` throws for an archived one).
+ *
+ * Why this is a separate table from `WIRINGS` rather than more rows in it.
+ * `WIRINGS` pins a READ handler to a gated SEAM and forbids the ungated sibling,
+ * because for reads the two are interchangeable and swapping them typechecks.
+ * Writes have no such sibling pair: the gate is one call, and what varies is
+ * WHERE it lives. Six of these gate in a `-logic` seam — which is strictly
+ * better, because a seam is reachable from vitest and
+ * `public-writers-archive-gate.integration.test.ts` executes all six — and two
+ * gate in the handler because their logic is inline there and lifting it out is
+ * a refactor #555 was not.
+ *
+ * So each row names the file the gate is IN. That is weaker than checking the
+ * handler itself, and the weakness is stated rather than papered over: this
+ * asserts the gate exists in the module that owns the write, not that this
+ * particular write reaches it. The integration suite is what proves the six
+ * seam-gated ones actually refuse; for the two handler-gated ones this guard is
+ * the only gate there is, which is exactly why moving them into seams is
+ * recorded in TODOS.md rather than left implied.
+ */
+const WRITE_GATES: { fn: string; file: string; gate: string }[] = [
+	// `applySelfAdd` reads `archived_at` inside its own `FOR UPDATE` lock rather
+	// than calling the assert, because a pre-check is check-then-act and this is
+	// the path that mints a `people` row plus a `members` row — so it names the
+	// shared message constant instead.
+	{
+		fn: "addMember",
+		file: "src/server/members-logic.ts",
+		gate: "CLUB_ARCHIVED_MESSAGE",
+	},
+	{
+		fn: "submitGuestBook",
+		file: "src/server/guest-pipeline-logic.ts",
+		gate: "assertClubNotArchived",
+	},
+	{
+		fn: "submitVote",
+		file: "src/server/voting-logic.ts",
+		gate: "assertClubNotArchived",
+	},
+	{
+		fn: "joinBallot",
+		file: "src/server/voting-logic.ts",
+		gate: "assertClubNotArchived",
+	},
+	{
+		fn: "openVoteFn",
+		file: "src/server/voting-logic.ts",
+		gate: "assertClubNotArchived",
+	},
+	{
+		fn: "closeVoteFn",
+		file: "src/server/voting-logic.ts",
+		gate: "assertClubNotArchived",
+	},
+	// Handler-gated: the logic is inline in `slots.ts`, so the gate is in the
+	// handler body and this guard is its only cover.
+	{
+		fn: "releaseSlot",
+		file: "src/server/slots.ts",
+		gate: "assertClubNotArchived",
+	},
+	{
+		fn: "updateSpeakerDetails",
+		file: "src/server/slots.ts",
+		gate: "assertClubNotArchived",
+	},
+];
 
 /** Calls that mean "this fn resolves a session", i.e. not an anonymous reader. */
 const SESSION_GUARDS =
@@ -426,14 +496,50 @@ describe("every session-less server fn is enrolled in the gate (#544)", () => {
 		expect(anonymous.length).toBeGreaterThan(10);
 	});
 
+	const writeGated = new Set(WRITE_GATES.map((w) => w.fn));
+
 	for (const { file, fn } of anonymous) {
 		it(`${file}:${fn} is gated or consciously waived`, () => {
 			expect(
-				gated.has(fn) || fn in REVIEWED_UNGATED,
-				`${fn} (${file}) takes no session, so an anonymous caller reaches it directly. Either gate it on clubs.archived_at and add a WIRINGS row, or add it to REVIEWED_UNGATED with the reason it needs no gate. Do not delete this case.`,
+				gated.has(fn) || writeGated.has(fn) || fn in REVIEWED_UNGATED,
+				`${fn} (${file}) takes no session, so an anonymous caller reaches it directly. Either gate it on clubs.archived_at and add a WIRINGS row (read) or a WRITE_GATES row (write), or add it to REVIEWED_UNGATED with the reason it needs no gate. Do not delete this case.`,
 			).toBe(true);
 		});
 	}
+});
+
+describe("session-less writes carry the archive gate (#555)", () => {
+	/**
+	 * Reads STRIPPED: every assertion here is "this gate must BE present", and a
+	 * comment naming `assertClubNotArchived` would satisfy a raw `toContain` while
+	 * the call itself was gone. That is the false PASS `src/test/guard-source.ts`
+	 * warns about for the positive class, and it is not hypothetical here — the
+	 * modules in question discuss the gate at length in prose.
+	 */
+	for (const { fn, file, gate } of WRITE_GATES) {
+		it(`${fn} is gated in ${file}`, () => {
+			const src = readStripped(resolve(ROOT, file));
+			expect(
+				src,
+				`${fn} is a session-less WRITE, so it never reaches assertClubNotArchived through requireMembership. Its gate belongs in ${file}, naming ${gate}. If you moved it, re-point this row rather than deleting it.`,
+			).toContain(gate);
+		});
+	}
+
+	// Vacuity checks: an empty table would pass every case above.
+	it("covers every write that was waived as a #544 follow-up", () => {
+		expect(WRITE_GATES).toHaveLength(8);
+	});
+
+	it("does not also waive a write it claims to gate", () => {
+		// Both-listed would let a deleted gate fall back to "consciously waived"
+		// and clear the sweep above.
+		for (const { fn } of WRITE_GATES) {
+			expect(fn in REVIEWED_UNGATED, `${fn} is both gated and waived`).toBe(
+				false,
+			);
+		}
+	});
 });
 
 describe("the gate module stays the one home for the check (#544)", () => {
@@ -458,4 +564,92 @@ describe("the gate module stays the one home for the check (#544)", () => {
 			"isReadableClub moved to club-readable-logic.ts (#544) so public readers can find it. Import it there rather than redefining it here.",
 		).not.toContain("export async function isReadableClub");
 	});
+});
+
+/**
+ * The API-route sweep (#555).
+ *
+ * Everything above walks `src/server/*.ts` for `createServerFn`, which is the
+ * right net for that shape and blind to a whole directory: `src/routes/api/**`
+ * serves club content through `createFileRoute` + `server.handlers`, matches
+ * none of those patterns, and was enrolled by NOTHING. Four endpoints live
+ * there and three were gated by hand; the fourth — the Pathways ingest — was
+ * not, and a live per-club Bearer token could keep writing member names, paths
+ * and project completions into a taken-down club. That is exactly the class the
+ * sweep above exists to make impossible to add by accident, one directory over.
+ *
+ * Recursive, because `pathways/ingest.ts` is a level down and a flat
+ * `readdirSync` would have missed the one endpoint that was actually broken.
+ *
+ * The waiver list is the mechanism, not a weakness: an endpoint that serves no
+ * club-owned data says so here, with its reason, and a NEW one fails on the day
+ * it is written rather than on the day someone sweeps again.
+ */
+describe("API routes are enrolled in the archive gate (#555)", () => {
+	/** Endpoints that legitimately need no archive check, and why. */
+	const API_NO_GATE: Record<string, string> = {
+		"auth/$.ts": "Better-Auth plumbing; owns no club-scoped data",
+		"dev-login.ts":
+			"dev-only, gated on NODE_ENV !== production AND ENABLE_DEV_LOGIN",
+		"health.ts": "liveness probe; reads nothing",
+	};
+
+	/** Any of these counts as gating on the archive. */
+	const API_GATES =
+		/isReadableClub|isReadableClubForMeeting|isReadableClubForMember|assertClubNotArchived/;
+
+	/**
+	 * Routes whose gate lives in the `-logic` seam they delegate to, not in the
+	 * route body — the normal shape here, since a route that does its own db work
+	 * would fail `server-modules.guard.test.ts`.
+	 *
+	 * Named explicitly rather than followed automatically. Chasing imports would
+	 * make this guard a resolver, and the failure mode of a half-working resolver
+	 * is the one this whole file exists to prevent: it would report clean because
+	 * it could not see, which is #565's shape. A wrong entry here fails loudly
+	 * instead.
+	 */
+	const API_GATED_VIA: Record<string, string> = {
+		"club.$clubId.logo.ts": "src/server/club-logo-logic.ts",
+		"pathways/ingest.ts": "src/server/pathways-ingest-logic.ts",
+	};
+
+	function walk(dir: string, prefix = ""): string[] {
+		const out: string[] = [];
+		for (const entry of readdirSync(dir, { withFileTypes: true })) {
+			const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+			if (entry.isDirectory()) {
+				out.push(...walk(resolve(dir, entry.name), rel));
+			} else if (entry.name.endsWith(".ts") && !entry.name.includes(".test.")) {
+				out.push(rel);
+			}
+		}
+		return out;
+	}
+
+	const apiDir = resolve(ROOT, "src/routes/api");
+	const apiFiles = walk(apiDir);
+
+	// Vacuity check, and the reason the walk is recursive: a flat read finds 7 of
+	// the 8 and misses `pathways/ingest.ts`, the only one that was ungated.
+	it("finds every API route, including nested ones", () => {
+		expect(apiFiles.length).toBeGreaterThanOrEqual(8);
+		expect(apiFiles).toContain("pathways/ingest.ts");
+	});
+
+	for (const file of apiFiles) {
+		it(`${file} gates on the archive or is consciously waived`, () => {
+			if (file in API_NO_GATE) return;
+			// STRIPPED, because this is the "gate must BE present" class: a comment
+			// naming `isReadableClub` would satisfy a raw read while the call was
+			// gone. Three of these routes gate in their own body; two delegate, and
+			// for those the seam named in `API_GATED_VIA` is what gets read.
+			const via = API_GATED_VIA[file];
+			const src = readStripped(resolve(via ? ROOT : apiDir, via ?? file));
+			expect(
+				API_GATES.test(src),
+				`${file} is a public HTTP endpoint under src/routes/api, which the createServerFn sweep above does not walk. Gate it on clubs.archived_at (isReadableClub / isReadableClubForMeeting / assertClubNotArchived), or add it to API_NO_GATE with the reason it needs none. The Pathways ingest sat here ungated and let a live token write into a taken-down club (#555).`,
+			).toBe(true);
+		});
+	}
 });

@@ -3,7 +3,7 @@ import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { db } from "#/db";
 import { clubs, members, officerTerms, people, user } from "#/db/schema";
 import { auth } from "#/lib/auth";
-import { isClubArchived } from "#/lib/club-archive";
+import { CLUB_ARCHIVED_MESSAGE, isClubArchived } from "#/lib/club-archive";
 import { markImpersonatedWrite } from "./impersonation-actor";
 import { getActiveImpersonation } from "./impersonation-logic";
 import {
@@ -161,10 +161,12 @@ export type ResolvedMembership =
 			impersonatedBy: string;
 	  };
 
-/** The rejection every archive check raises, so the message has one home. */
+/** The rejection every archive check raises. The message itself lives in
+ *  `#/lib/club-archive` beside `isClubArchived`, so the write gate's own
+ *  in-transaction check (#555, `applySelfAdd`) raises the identical sentence. */
 function assertNotArchived(club: { archivedAt: Date | null }): void {
 	if (isClubArchived(club)) {
-		throw new Error("This club has been archived.");
+		throw new Error(CLUB_ARCHIVED_MESSAGE);
 	}
 }
 

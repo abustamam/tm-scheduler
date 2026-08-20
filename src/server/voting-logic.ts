@@ -34,6 +34,7 @@ import {
 	loadAwardCandidates,
 } from "./award-candidates-logic";
 import { isReadableClubForMeeting } from "./club-readable-logic";
+import { assertClubNotArchived } from "./guards";
 import {
 	AWARD_CATEGORIES,
 	type AwardCategory,
@@ -83,6 +84,11 @@ interface WindowInput {
  * restores the SAME session and every ballot already cast into it.
  */
 export async function openVote(input: WindowInput): Promise<void> {
+	// #555, in the SEAM rather than in `openVoteFn`'s handler. `WindowInput`
+	// already carries `clubId`, so gating here costs nothing extra and puts the
+	// check somewhere vitest can execute — a handler body cannot be reached from a
+	// test, which would have left this covered by a source grep alone.
+	await assertClubNotArchived(input.clubId);
 	await db.transaction(async (tx) => {
 		await tx
 			.insert(meetingVoteSessions)
@@ -114,6 +120,8 @@ export async function openVote(input: WindowInput): Promise<void> {
 /** Close a category's vote. A no-op when it was never opened or is already
  *  closed — closing is idempotent so a double-tap is harmless. */
 export async function closeVote(input: WindowInput): Promise<void> {
+	// #555 — see openVote above.
+	await assertClubNotArchived(input.clubId);
 	await db.transaction(async (tx) => {
 		const closed = await tx
 			.update(meetingVoteSessions)
@@ -234,6 +242,11 @@ export async function castVote(input: {
 	candidate: CandidateRef;
 }): Promise<void> {
 	const clubId = await getMeetingClubId(input.meetingId);
+	// The takedown lever, on the write half (#555). Placed before every check
+	// below rather than beside them: an archived club must not even evaluate
+	// candidate eligibility, because the derivations that answer it read the
+	// roster this club is supposed to have stopped exposing.
+	await assertClubNotArchived(clubId);
 
 	// (1) Candidate validity — two different questions for the two shapes.
 	//
@@ -837,6 +850,11 @@ export async function joinBallotAsGuest(input: {
 	if (!name) throw new Error("A name is required to vote.");
 	const normalizedName = name.toLowerCase();
 	const clubId = await getMeetingClubId(input.meetingId);
+	// #555. `joinBallot` MINTS a row carrying a visitor's name, which is the
+	// half of this that matters most: without the gate an archived club keeps
+	// accreting identities while every read of it returns empty, so nobody —
+	// not even an admin, who `requireMembership` throws for — can see it happen.
+	await assertClubNotArchived(clubId);
 
 	return db.transaction(async (tx) => {
 		// The lock. Every later statement in this transaction — the name lookup,

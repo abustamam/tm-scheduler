@@ -20,6 +20,7 @@ import {
 	normalizePages,
 	parseProgressPages,
 } from "#/lib/basecamp-progress";
+import { isReadableClub } from "./club-readable-logic";
 import { type DetailSyncResult, syncClubDetail } from "./pathways-detail-logic";
 import { type SyncResult, syncClubProgress } from "./pathways-sync-logic";
 import { type ResolvedToken, resolveActiveToken } from "./sync-tokens-logic";
@@ -66,6 +67,21 @@ export async function ingestForToken(
 	if (!rawToken) throw new IngestError(401, "Missing bearer token.");
 	const tok = await resolveActiveToken(rawToken);
 	if (!tok) throw new IngestError(401, "Invalid or revoked token.");
+
+	// #555, and the one instance found OUTSIDE the eight the guard had waived:
+	// this is a WRITE authorised by a per-club Bearer token, not a session, so it
+	// never passes through `requireMembership` and never got the archive check
+	// for free. A live token on an archived club could keep pushing Pathways
+	// progress — member names, paths, project completions — into a club that has
+	// been taken down, and the browser extension pushing it would see 200s.
+	//
+	// 410 Gone rather than 401: the token is not invalid, the club is finished, and
+	// the extension's retry logic should stop rather than prompt for a new token.
+	// Archiving is a takedown lever (ADR-0016), so revoking the token separately
+	// must not be a prerequisite for the takedown to bite.
+	if (!(await isReadableClub(tok.clubId))) {
+		throw new IngestError(410, "This club is no longer active.");
+	}
 
 	const parsed = bodySchema.safeParse(body);
 	if (!parsed.success) {

@@ -5,6 +5,7 @@ import { db } from "#/db";
 import { meetings, members, roleDefinitions, roleSlots } from "#/db/schema";
 import { logActivity } from "./activity";
 import {
+	assertClubNotArchived,
 	requireClubRole,
 	requireMeetingAgendaEditor,
 	requireMemberInClub,
@@ -151,6 +152,11 @@ export const releaseSlot = createServerFn({ method: "POST" })
 		if (!slot) {
 			throw new Error("Role not found.");
 		}
+		// #555. PUBLIC — no session, so `requireMembership` never runs and the
+		// archive check never arrives for free. Before the lock check, because a
+		// taken-down club should refuse for the reason it was taken down rather
+		// than for the meeting's status.
+		await assertClubNotArchived(slot.clubId);
 		assertMeetingNotLocked(slot.meetingStatus);
 
 		// Trust guard + actor provenance (#396): the actor must be a roster member
@@ -400,6 +406,8 @@ export const updateSpeakerDetails = createServerFn({ method: "POST" })
 		if (!slot) {
 			throw new Error("Role not found.");
 		}
+		// #555 — see releaseSlot above.
+		await assertClubNotArchived(slot.clubId);
 		assertMeetingNotLocked(slot.meetingStatus);
 		if (!slot.isSpeakerRole) {
 			throw new Error("Only speaker roles have speech details.");

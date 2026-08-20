@@ -8,7 +8,7 @@
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { syncTokens } from "#/db/schema";
+import { clubs, syncTokens } from "#/db/schema";
 import {
 	cleanup,
 	hasTestDb,
@@ -112,6 +112,49 @@ describe.skipIf(!hasTestDb)("pathways ingest logic", () => {
 				pages: [pageForEmail(memberEmail)],
 			}),
 		).rejects.toBeInstanceOf(IngestError);
+	});
+
+	/**
+	 * #555. Token auth is not session auth, so this write never passes through
+	 * `requireMembership` and never got the archive check for free — a live token
+	 * on a taken-down club could keep pushing member names, paths and project
+	 * completions into it, with the extension seeing 200s the whole time.
+	 *
+	 * BEFORE/AFTER against ONE club, per the discipline the archive suites use: a
+	 * bare "archived club 410s" would also pass if the fixture were broken in any
+	 * other way, so the live sync has to succeed first.
+	 *
+	 * 410, not 401: the token is valid and the club is finished. Asserting the
+	 * STATUS is what distinguishes the gate from a token problem, and it is the
+	 * signal that tells the extension to stop retrying rather than re-prompt.
+	 */
+	it("410s once the club is archived, without revoking the token", async () => {
+		const { ingestForToken } = await import("#/server/pathways-ingest-logic");
+		const { token } = await mkToken();
+		const body = {
+			basecampClubGuid: "guid-1",
+			pages: [pageForEmail(memberEmail)],
+		};
+
+		const live = await ingestForToken(token, body);
+		expect(live).toBeTruthy();
+
+		await testDb
+			.update(clubs)
+			.set({ archivedAt: new Date() })
+			.where(eq(clubs.id, seed.clubId));
+
+		await expect(ingestForToken(token, body)).rejects.toMatchObject({
+			status: 410,
+		});
+
+		// The token itself is untouched — archiving must bite on its own, without
+		// revocation as a prerequisite.
+		const [tok] = await testDb
+			.select({ revokedAt: syncTokens.revokedAt })
+			.from(syncTokens)
+			.where(eq(syncTokens.clubId, seed.clubId));
+		expect(tok?.revokedAt).toBeNull();
 	});
 
 	it("400s on a body that isn't a Base Camp payload", async () => {
