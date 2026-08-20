@@ -514,8 +514,25 @@ through `createFileRoute` + `server.handlers` and matches none of those patterns
 lived there, three gated by hand, and the fourth — the Pathways ingest — was not: a live per-club
 Bearer token could keep writing member names, paths and project completions into a taken-down club,
 answering 200 the whole time. It now 410s (the token is valid; the club is finished), and the API
-sweep is RECURSIVE because the one broken endpoint was a directory down. Still open: the logo
-endpoint's year-long `immutable` HTTP cache outlives a takedown (#517).
+sweep is RECURSIVE because the one broken endpoint was a directory down.
+
+**The takedown now reaches copies already handed out, and a caching header is what stopped it.**
+The logo route answered `max-age=31536000, immutable` for a current `?v=` URL, so a crest fetched
+the day before an archive kept rendering for up to a year (#517). Worse than that framing: `immutable`
+also **disabled #556's eviction**, because the service worker revalidates with a plain `fetch`, which
+the browser's own HTTP cache satisfies — so `response.ok` stayed true and `isGoneResponse` could
+never fire. The one mechanism built to reach cached copies was switched off by a header, silently,
+in the direction that looks fine. `immutable` bought bytes and not correctness in the first place:
+the `?v=<updatedAt>` cache-buster already handled REPLACEMENT.
+
+Three rules that came out of it, worth keeping if you touch any cached public surface. Bound
+`max-age` and pair it with an `ETag`, so revalidation is what enforces the takedown and the ETag is
+what makes it cheap — the conditional path resolves through `loadClubLogoMeta`, which cannot select
+`bytes`. Gate the 304 with the SAME archive check as the byte path: an unguarded 304 renews a
+taken-down crest's lease forever, one round trip at a time, which is a worse failure than the year
+it replaced. And a service worker's background revalidation needs `cache: "no-cache"` to see an
+origin 404 at all — scoped to the crest, since the rest of that cache is hashed build output whose
+URL changes every deploy and can never go stale.
 
 ## Deployment target
 
