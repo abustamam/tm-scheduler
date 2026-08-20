@@ -267,6 +267,22 @@ const SECTION_BY_SLIDE = {
 	reminders: null,
 	// Deck chrome: the closing splash. No beat.
 	thankYou: null,
+	// The two TEMPLATED-meeting kinds (#agenda-templates). Excluded because this
+	// whole file compares the STANDARD run of show against the STANDARD deck, and
+	// neither of these can appear in either: `buildSlideDeck` never emits them and
+	// `buildTemplateSlideDeck` never emits anything else from the compared set. A
+	// templated meeting gets one builder or the other, never a mix.
+	//
+	// The parity they need is a different and stronger one, and it is structural
+	// rather than asserted: `buildTemplateSlideDeck` takes the printed run sheet's
+	// OWN `AgendaRow[]`, so the two surfaces cannot disagree about order or
+	// content without the rows themselves being wrong. There is no second
+	// derivation here to drift from the first — which is the defect this file
+	// exists to catch on the standard path, designed out on the template path.
+	// `agenda-template-slides.test.ts` pins that the rows are passed through
+	// rather than re-walked.
+	templateSection: null,
+	templateBeat: null,
 	// --- Compared ---
 	toastmaster: "toastmasterOpens",
 	functionaryIntro: "functionaryIntro",

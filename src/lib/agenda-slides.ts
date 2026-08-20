@@ -18,6 +18,7 @@ import {
 	numbered,
 	orderEvaluators,
 } from "./agenda-runsheet";
+import type { BeatTiming } from "./agenda-template-slides";
 import {
 	type SpeechWindowInput,
 	speechBookedMinutes,
@@ -267,6 +268,32 @@ export type Slide =
 			kind: "guestComments";
 	  }
 	| { kind: "reminders"; text: string }
+	/**
+	 * The two TEMPLATED-meeting kinds (#agenda-templates). Built by
+	 * `buildTemplateSlideDeck`, never by `buildSlideDeck` — a templated meeting
+	 * gets one or the other deck, never a mix, because the standard builder's
+	 * slides are bound to standard role keys a template does not have.
+	 *
+	 * They live on this union rather than a parallel one so `slideLayout`,
+	 * `slideName`, the jump grid and `deckToPptx` need no new dispatch: a
+	 * template deck IS a `Slide[]`, and every consumer already handles one.
+	 */
+	| {
+			/** A round divider — "PREPARED SPEECH CONTEST". */
+			kind: "templateSection";
+			title: string;
+	  }
+	| {
+			kind: "templateBeat";
+			/** The row's `who`: numbered label plus assignee on a role row. */
+			label: string;
+			detail: string | null;
+			minutes: number;
+			/** Clock text for the beat's marks, or null when untimed. Precomputed
+			 *  like `speech`'s `time`, so both renderers read one string and the
+			 *  ±30s grace rule is applied in exactly one place. */
+			timing: BeatTiming | null;
+	  }
 	| {
 			kind: "thankYou";
 			meetingSchedule: string | null;
