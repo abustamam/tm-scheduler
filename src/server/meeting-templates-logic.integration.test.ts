@@ -158,7 +158,14 @@ describe.skipIf(!hasTestDb)("meeting template logic", () => {
 			// Assert on NAME: the key carries a per-run suffix so parallel suites
 			// sharing `tm_test` cannot collide on the global unique index.
 			expect(mine(rows.map((r) => r.name))).toEqual([`Speech Contest ${RUN}`]);
-			expect(rows[0]?.defaultLengthMinutes).toBe(150);
+			// Scoped to THIS run's row, not `rows[0]`. Global templates are
+			// club-less, so `cleanup(clubId)` cannot cascade to them and every real
+			// seeded template is visible here too — an index-based assertion on a
+			// shared table is order-dependent by construction, and this one started
+			// reading the app's own seeded contest the moment production's template
+			// was also present in `tm_test`.
+			const own = rows.find((r) => r.name === `Speech Contest ${RUN}`);
+			expect(own?.defaultLengthMinutes).toBe(150);
 		});
 
 		it("omits disabled templates", async () => {

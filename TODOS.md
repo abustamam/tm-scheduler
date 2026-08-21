@@ -106,8 +106,22 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
   from the seed: a club may have added its own.
   **Priority:** P3
 
+- **A printed agenda between one page and ~1.3 pages is SQUEEZED, while a longer one FLOWS.**
+  `FitPage` scales a sheet until it fits, unless the scale would fall below `MIN_FIT_SCALE`, at
+  which point the surface flows across sheets at full size. So legibility is not monotonic in
+  length: the seeded contest printed its body at ~8.6pt when it ran ~40 rows (past the
+  threshold, flowing) and at ~6.7pt once it was rewritten to 21 rows (below it, scaled onto one
+  sheet) — adding rows made the sheet MORE readable. Both clear
+  `EDITORIAL_DENSE_MIN_PRINTED_PT`, so nothing fails; `print-density.test.tsx`'s
+  "FLOWS at full size once long enough" case pins the asymmetry rather than hiding it. The fix
+  is not simply raising `MIN_FIT_SCALE`: that would push ordinary club agendas onto a second
+  sheet, which v1.21.0.0 explicitly promised it would not do. Likely answer is to let a
+  TEMPLATED meeting opt into flowing regardless of scale, since a contest sheet has no
+  one-page promise to keep.
+  **Priority:** P3
+
 - **Colour print rows by `category` when a role key is unmapped.** `ROLE_KEY_COLOR` now
-  enumerates the ten seeded contest keys beside the five standard ones. That works and does not
+  enumerates the seven seeded contest keys beside the five standard ones. That works and does not
   scale — every future template needs its keys added or the sheet prints one grey spine, and
   `isHighlighted` still tests `roleKey === "speaker"` specifically. A category fallback serves
   every template for free but needs `category` on `AgendaRow`, which is wider than Phase 1 needed.
@@ -125,16 +139,21 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
   "shuffle" affordance, or memoising a deck by meeting id would each undo it.
   **Priority:** P3 (standing constraint, not a task)
 
-- **Phase 2: club-authored templates and the editor UI.** The storage is already data and the
-  reads already admit `club_id`-scoped rows, so this needs writes and a UI, no migration. Before
-  it ships, MEASURE the caps in `src/lib/meeting-template-limits.ts` — they are honest bounds
-  today, not measurements, and the seed is currently the only writer.
+- **Phase 2: per-meeting agenda editing.** SPECIFIED — see
+  `docs/superpowers/specs/2026-08-21-configurable-agendas-design.md`. Each templated meeting
+  deep-copies its template into a private row (new nullable `meeting_templates.meeting_id`), so
+  editing one night never touches another; no new tables, one read seam, and "save as template"
+  later is a promotion rather than a second mechanism. Still needs an implementation plan.
+  Before it ships, MEASURE the caps in `src/lib/meeting-template-limits.ts` — they are honest
+  bounds today, not measurements, and the seed is currently the only writer.
   **Priority:** P3
 
 - **`buildTemplateRows`' repeat-block binding is unexercised in two shapes.** A block holding two
   role-owning rows, or a role row whose `roleKey` differs from its `repeatsRoleKey`, is
-  unreachable from the seeded contest and reachable from a Phase 2 editor. Decide the semantics
-  and test them before the editor exists.
+  unreachable from the seeded contest and reachable from a Phase 2 editor. The configurable-agendas
+  spec (D4) resolves this by CONSTRAINING rather than specifying: a row is "once" or "per holder",
+  and a per-holder row must repeat over the role it binds, which makes both shapes unauthorable.
+  Closes when that lands; until then the shapes remain reachable only by writing rows by hand.
   **Priority:** P4
 
 - **The "Change meeting type" button's wiring has no guard.** PR 2 added

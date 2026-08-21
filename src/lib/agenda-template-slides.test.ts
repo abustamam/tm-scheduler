@@ -112,10 +112,10 @@ describe("buildTemplateSlideDeck sections and beats", () => {
 		const sections = deck.flatMap((s) =>
 			s.kind === "templateSection" ? [s.title] : [],
 		);
-		// The seeded contest divides into five rounds; the print sheet asserts the
-		// same count from the same rows (contest-template.test.ts).
-		expect(sections).toHaveLength(5);
-		expect(new Set(sections).size).toBe(5);
+		// The seeded contest divides into three segments; the print sheet asserts
+		// the same count from the same rows (contest-template.test.ts).
+		expect(sections).toHaveLength(3);
+		expect(new Set(sections).size).toBe(3);
 	});
 
 	it("projects one beat slide per non-section row, in row order", () => {
@@ -138,7 +138,7 @@ describe("buildTemplateSlideDeck sections and beats", () => {
 
 	it("names a contestant beat with the person, not just the role", () => {
 		const deck = deckFor([contestant(0, "Ada Lovelace")]);
-		expect(beatLabels(deck)).toContain("Prepared speech · Ada Lovelace");
+		expect(beatLabels(deck)).toContain("Contest speech · Ada Lovelace");
 	});
 
 	it("carries the beat's detail and drops it when blank", () => {
@@ -249,17 +249,17 @@ describe("buildTemplateSlideDeck follows the drawn speaking order", () => {
 			contestant(2, alan),
 		]);
 		const speeches = beatLabels(deck).filter((l) =>
-			l.startsWith("Prepared speech"),
+			l.startsWith("Contest speech"),
 		);
 		expect(speeches).toEqual([
-			`Prepared speech 1 · ${ada}`,
-			`Prepared speech 2 · ${grace}`,
-			`Prepared speech 3 · ${alan}`,
+			`Contest speech 1 · ${ada}`,
+			`Contest speech 2 · ${grace}`,
+			`Contest speech 3 · ${alan}`,
 		]);
 	});
 
 	// The property that makes recording a draw work: the NUMBER is the position,
-	// not the person. After a re-draw, "Prepared speech 1" is whoever now holds
+	// not the person. After a re-draw, "Contest speech 1" is whoever now holds
 	// slot 0. A deck that keyed its numbering off the assignee — or that cached an
 	// earlier order — would put the old numbers on the new order, and the room
 	// would call the wrong contestant to the lectern.
@@ -277,37 +277,37 @@ describe("buildTemplateSlideDeck follows the drawn speaking order", () => {
 		]);
 
 		const first = (deck: Slide[]) =>
-			beatLabels(deck).find((l) => l.startsWith("Prepared speech 1"));
-		expect(first(drawn)).toBe(`Prepared speech 1 · ${ada}`);
-		expect(first(redrawn)).toBe(`Prepared speech 1 · ${alan}`);
+			beatLabels(deck).find((l) => l.startsWith("Contest speech 1"));
+		expect(first(drawn)).toBe(`Contest speech 1 · ${ada}`);
+		expect(first(redrawn)).toBe(`Contest speech 1 · ${alan}`);
 		// Ada is still in the contest, just not first — a re-draw reorders, it does
 		// not drop anybody.
-		expect(beatLabels(redrawn)).toContain(`Prepared speech 2 · ${ada}`);
+		expect(beatLabels(redrawn)).toContain(`Contest speech 2 · ${ada}`);
 	});
 
 	it("shrinks the deck when a contestant withdraws, without renumbering gaps", () => {
 		const deck = deckFor([contestant(0, ada), contestant(1, grace)]);
 		const speeches = beatLabels(deck).filter((l) =>
-			l.startsWith("Prepared speech"),
+			l.startsWith("Contest speech"),
 		);
 		expect(speeches).toEqual([
-			`Prepared speech 1 · ${ada}`,
-			`Prepared speech 2 · ${grace}`,
+			`Contest speech 1 · ${ada}`,
+			`Contest speech 2 · ${grace}`,
 		]);
 	});
 
 	// Non-consecutive `slot_index` values are what a withdrawal actually leaves
 	// behind — the remaining slots keep their original indices. The draw order is
-	// the SORT, never the raw index, so the room never sees "Prepared speech 4"
+	// the SORT, never the raw index, so the room never sees "Contest speech 4"
 	// with three contestants standing.
 	it("numbers by position even when slot indices are not consecutive", () => {
 		const deck = deckFor([contestant(0, ada), contestant(7, grace)]);
 		const speeches = beatLabels(deck).filter((l) =>
-			l.startsWith("Prepared speech"),
+			l.startsWith("Contest speech"),
 		);
 		expect(speeches).toEqual([
-			`Prepared speech 1 · ${ada}`,
-			`Prepared speech 2 · ${grace}`,
+			`Contest speech 1 · ${ada}`,
+			`Contest speech 2 · ${grace}`,
 		]);
 	});
 });

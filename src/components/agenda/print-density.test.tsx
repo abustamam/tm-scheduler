@@ -593,19 +593,38 @@ describe.skipIf(!hasChrome)(
 			);
 		});
 
-		it("FLOWS rather than shrinking, so type stays the same at every size", () => {
-			// The fix this suite forced. A contest is far too long to scale onto one
+		it("FLOWS at full size once long enough, and is never squeezed below the floor", () => {
+			// The fix this suite forced. A contest was far too long to scale onto one
 			// sheet: measured at 3.5pt for four contestants and 2.6pt for seven before
-			// `MIN_FIT_SCALE` existed. It now prints across several sheets at full
-			// size, so all three counts read identically — and the sheet genuinely
-			// grows, which the height assertion below pins.
-			expect(printedDetailPt(contestRows(4))).toBe(
-				printedDetailPt(contestRows(7)),
-			);
+			// `MIN_FIT_SCALE` existed. Past that threshold a sheet flows across pages
+			// at full size instead of shrinking.
+			//
+			// This USED TO assert 4 and 7 contestants print identically, because the
+			// seeded contest ran ~40 rows at four and both flowed. It now runs 21 at
+			// four (one contest, not three), which lands BELOW the flow threshold and
+			// is scaled onto one sheet instead — so the two sizes legitimately differ
+			// and an equality assertion would only be satisfiable by lengthening the
+			// contest again.
+			//
+			// The cliff that leaves is real and is NOT fixed here: a sheet just over
+			// one page is squeezed toward the floor, while a longer one flows at full
+			// size, so adding rows can make an agenda MORE legible. Raising
+			// `MIN_FIT_SCALE` would fix it and would also turn ordinary club agendas
+			// into two-pagers, which is a separate decision. Recorded in TODOS.md.
+			//
+			// Floors carry margin rather than pinning the measurement: this harness
+			// resolves no webfonts, and the platform substitute differs between macOS
+			// and CI's Ubuntu, which moves where lines wrap.
+			const long = printedDetailPt(contestRows(7));
+			const short = printedDetailPt(contestRows(4));
+			expect(long).toBeGreaterThan(8);
+			expect(short).toBeLessThan(long);
+			expect(short).toBeGreaterThanOrEqual(EDITORIAL_DENSE_MIN_PRINTED_PT);
+
 			expect(agendaHeight(contestRows(7))).toBeGreaterThan(
 				agendaHeight(contestRows(4)),
 			);
-			// And it is a MULTI-sheet agenda, not one that happened to fit.
+			// Both are still MULTI-sheet agendas, not ones that happened to fit.
 			expect(agendaHeight(contestRows(4))).toBeGreaterThan(PAGE_H);
 		});
 
@@ -614,13 +633,17 @@ describe.skipIf(!hasChrome)(
 			// body, and a short sheet needs no scale — which reads as LARGE type and
 			// passes every floor above.
 			const rows = contestRows(4);
-			expect(rows.length).toBeGreaterThan(30);
+			// EXACT, not a floor: the seeded contest is one contest of 15 beats, so
+			// four contestants render 21 rows. A `toBeGreaterThan` here passed at 40
+			// rows and would pass at 40 again, which is how a template that quietly
+			// regrew two contests would slip through this suite.
+			expect(rows.length).toBe(21);
 			// `who` is the beat's ACTIVITY, not the role — the Chief Judge's row reads
 			// "Judges' briefing". Identity travels in `roleKey`, which is what the
 			// print layouts colour by.
 			expect(rows.some((r) => r.roleKey === "chief_judge")).toBe(true);
 			expect(rows.some((r) => r.who.startsWith("Judges' briefing"))).toBe(true);
-			expect(rows.filter((r) => r.section)).toHaveLength(5);
+			expect(rows.filter((r) => r.section)).toHaveLength(3);
 		});
 	},
 );

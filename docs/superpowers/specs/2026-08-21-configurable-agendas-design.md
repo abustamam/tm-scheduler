@@ -50,10 +50,12 @@ shape, not a menu"), so the club roles page cannot switch a contest off either.
   rows; add section bands; set timing marks; bind a row to a role, including creating a role
   for that meeting so the row is claimable.
 - **A private template per meeting**, so editing one night's agenda never alters another's.
-- Deletion of the shipped three-contest `speech_contest` template, replaced by a starting
-  point that reflects a real event (see **Rollout, Track A**). Zero meetings reference the
-  existing row — verified against production on 2026-08-21 — so it can be deleted rather
-  than disabled.
+- An in-place rewrite of the shipped three-contest `speech_contest` template into a starting
+  point that reflects a real event (see **Rollout, Track A**). Not a deletion and not a new
+  key: `seedTemplate` is idempotent on `key` and REPLACES that template's roles and beats, so
+  keeping the key means an already-seeded database is corrected by re-running the seed. A new
+  key would leave the old row behind, and `meetings.template_id`'s `ON DELETE RESTRICT` makes
+  retiring a template a real operation rather than a cleanup.
 - Measured caps in `meeting-template-limits.ts`, replacing the current unprofiled bounds.
 - `seedGlobalTemplates()` in the container startup chain, so a seeded template reaches
   production on deploy rather than through an SSH tunnel to the database.
@@ -218,14 +220,23 @@ Two tracks, so a real event on ~2026-09-11 does not depend on the editor landing
 A corrected seed plus the startup-seed fix. No schema change, no editor, shippable in a day.
 
 The event is **in-person, prepared speeches only, and explicitly not an International Speech
-Contest** — no evaluation contest, no Table Topics contest, no Tall Tales. Three parameters
-are required before writing the seed and are inputs rather than open design:
+Contest** — no evaluation contest, no Table Topics contest, no Tall Tales. It is judged, the
+speeches are 5-7 minutes, and the contestant count is adjusted with the agenda's own +/-
+controls rather than fixed in the seed.
 
-- whether it is judged (which decides whether Chief Judge, judges, ballot counters, tallying
-  and results/certificates exist at all, or whether the club's existing Best Speaker ballot
-  covers it),
-- how many speeches,
-- the speech length, which sets the green/yellow/red marks.
+Shipped as: 7 roles (Sergeant at Arms, Contest Chair, Chief Judge, 5 judges, 2 ballot
+counters, 2 timers, 3 contestants) and 15 beats across three segments, rendering 19 rows and
+84 minutes at three contestants and growing 8 minutes per contestant. One consequence worth
+recording: dropping the other two contests leaves **one** `isSpeakerRole` def, which is what
+makes +/- work at all — `pickSpeakerAndEvaluatorRoles` takes the lowest-sortOrder speaker
+role, so with three contestant roles those controls could only ever reach the first and the
+other two counts were frozen at whatever the seed said.
+
+Two beats own no multi-slot role on purpose. A non-repeating role beat emits one row per slot,
+so "Tallying" bound to a two-slot `ballot_counter` printed twice at ten minutes each. Tallying
+is bound to the single-slot Chief Judge, who certifies the result anyway; the timers' report
+has no single-slot owner and is an `event`. D4's once/per-holder setting is the real fix, at
+which point both bind back to their owners.
 
 `seedGlobalTemplates()` joins the Docker `CMD` chain beside `seed-catalog.mjs`. The bundled
 entry must call the function **explicitly** rather than relying on the script's

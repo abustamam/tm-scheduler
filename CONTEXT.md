@@ -452,6 +452,27 @@ club-scoped bulk syncs additionally EXCLUDE templated meetings from their meetin
 Templates are GLOBAL (`meeting_templates.club_id IS NULL`) in Phase 1; club-authored ones and
 the editor are Phase 2. See `docs/superpowers/specs/2026-08-19-agenda-templates-design.md`.
 
+**The seeded contest describes ONE contest, and that is load-bearing rather than a content
+choice.** It shipped covering prepared speeches, impromptu speaking and speech evaluation as
+three segments, and a club running one of them could not remove the other two: deleting the
+contestant slots collapses their repeat blocks, but the section bands, the chair's briefings,
+the break and the evaluation-prep window bind to no contestant role, so nothing an officer
+could do reached them — a prepared-speeches-only club printed two phantom segments and 28
+minutes of a contest that was not happening. Beats get no gating by design (Phase 1 D1), so a
+template must describe an event that actually happens. Two further consequences: the template
+now declares exactly ONE `isSpeakerRole` def, which is what makes the agenda's +/- speaker
+controls able to change the contestant count at all (`pickSpeakerAndEvaluatorRoles` takes the
+lowest-sortOrder speaker role, so any others are frozen at their `defaultCount`); and a
+non-repeating role beat emits one row PER SLOT, so beats describing a joint activity —
+tallying, the timers' report — must avoid multi-slot roles or they print twice with their
+minutes double-counted. Per-meeting editing, which removes the need for all of this, is
+specified in `docs/superpowers/specs/2026-08-21-configurable-agendas-design.md`.
+
+Global templates reach a database from the **deploy**, not from a human: `.output/seed-templates.mjs`
+runs in the Dockerfile `CMD` after migrations, beside the Pathways catalog seeder. It was a
+manual script until v1.23.0.0 and production was never seeded, so "Change meeting type" offered
+every club an empty picker for two releases.
+
 ## Scope
 
 **MVP (built):** magic-link auth, schedule view, meeting detail with one-tap claim, speaker-
