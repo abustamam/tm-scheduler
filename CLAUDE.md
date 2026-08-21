@@ -81,6 +81,14 @@ Package manager is **Bun** (use `bun install`, `bun run <script>`).
   `select indexdef from pg_indexes where indexname = '…'` and recreate by hand if it is stale. `db:studio`
   to inspect.
 - `bun run generate-routes` — regenerate `src/routeTree.gen.ts` (also runs during dev/build).
+  **Dev and build append a footer to that tracked file that `tsr generate` does not produce** — an
+  eight-line `declare module '@tanstack/react-start'` block. So a `git add -A` after `bun run dev`
+  sweeps a build artifact into the commit, and nothing downstream catches it: the file is excluded
+  from Biome, it is valid TypeScript so `typecheck` accepts it, and CI never regenerates the route
+  tree to compare. It rode along three times on 2026-08-20 (#607, #613, #614). `.githooks/pre-commit`
+  now blocks it, checking the STAGED blob and naming the fix
+  (`bun run generate-routes && git add src/routeTree.gen.ts`, which strips the footer while keeping a
+  real route change). It is the only gate on this, so `--no-verify` past it puts the artifact on main.
 - `bun run build` — Vite build (Node server output via Nitro).
 - `bun run typecheck` — `tsc --noEmit`. **This is the only thing that type-checks.** `bun run build`
   (Vite/esbuild) and `bun run test` (Vitest) transpile without type-checking, so both pass on
