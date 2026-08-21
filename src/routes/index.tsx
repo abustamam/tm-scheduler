@@ -12,6 +12,12 @@ import { homeRedirectTarget } from "#/lib/home-route";
 import { getAuthContext } from "#/server/auth-context";
 
 const TITLE = "GavelUp — the meeting runner for Toastmasters clubs";
+/**
+ * Search-facing. Kept keyword-shaped (roles, agenda, Pathways, DCP) because it
+ * is what a search result shows. Deliberately NOT reused as the hero paragraph
+ * any more: a meta description and a first sentence have different jobs, and
+ * one string cannot do both well.
+ */
 const DESCRIPTION =
 	"Schedule roles, run the agenda, and track Pathways & DCP — the tool officers use to keep their Toastmasters club moving.";
 
@@ -45,26 +51,36 @@ export const Route = createFileRoute("/")({
 	component: Landing,
 });
 
+/**
+ * Hero paragraph. Written for the officer deciding whether to move their club
+ * off a spreadsheet, so it leads with what they stop doing rather than with a
+ * feature list. Every claim here ships today: members identify by picking their
+ * name (no account), the agenda prints and projects, present mode and the
+ * attendance queue work offline.
+ */
+const HERO_BODY =
+	"Members claim their own roles from one shared sheet — no account to create, no password to forget, no spreadsheet that only one person can edit. Come meeting night, print the agenda, put it on the screen, and take the roll even when the room's Wi-Fi gives up.";
+
 const FEATURES = [
 	{
 		icon: CalendarCheck,
-		title: "Shared sign-up sheet",
-		body: "Members claim meeting roles from one grid — open slots are obvious at a glance, no spreadsheet wrangling.",
+		title: "Members fill the sheet",
+		body: "Open roles are obvious at a glance, and members claim them without an account — so signing up is one tap, not a text to the VPE.",
 	},
 	{
 		icon: MonitorPlay,
-		title: "Run the meeting",
-		body: "Project the agenda on screen or print it. Present mode works offline, so a flaky room Wi-Fi never stops you.",
+		title: "Works in the room",
+		body: "Print the agenda, project it, take the roll, run the vote for best speaker. Present mode and attendance keep working when the Wi-Fi does not.",
 	},
 	{
 		icon: GraduationCap,
 		title: "Pathways & DCP",
-		body: "Track members' Pathways progress and the club's Distinguished Club Program goals in one place.",
+		body: "Every member's Pathways progress and the club's Distinguished Club Program goals in one place — plus the official evaluation form for each project.",
 	},
 	{
 		icon: UserPlus,
-		title: "Guests & dues",
-		body: "Log visitors through the guest pipeline and keep membership dues renewals on schedule.",
+		title: "The rest of the officer's job",
+		body: "Guests through the pipeline, dues renewals on schedule, minutes and awards recorded — the admin that usually lives in someone's inbox.",
 	},
 ];
 
@@ -90,10 +106,10 @@ function Landing() {
 				<section className="mx-auto grid w-full max-w-6xl items-center gap-10 px-5 py-12 sm:px-8 lg:grid-cols-2 lg:gap-14 lg:py-20">
 					<div className="max-w-xl">
 						<h1 className="font-display text-4xl font-semibold leading-[1.08] tracking-[-0.02em] text-balance sm:text-5xl">
-							Run a better Toastmasters meeting.
+							Every role filled before the meeting starts.
 						</h1>
 						<p className="mt-5 text-lg leading-relaxed text-[var(--sea-ink-soft)]">
-							{DESCRIPTION}
+							{HERO_BODY}
 						</p>
 						<div className="mt-8 flex flex-wrap items-center gap-3">
 							<Button asChild size="lg" className="px-6">
@@ -106,8 +122,8 @@ function Landing() {
 							</Button>
 						</div>
 						<p className="mt-4 text-sm text-[var(--sea-ink-soft)]">
-							New club? GavelUp is invite-only for now — reach out and we'll get
-							you set up.
+							New club? GavelUp is invite-only while it's young — send a note
+							and we'll set your club up ourselves.
 						</p>
 					</div>
 
