@@ -1599,24 +1599,31 @@ function MeetingView() {
 						// bottom rows reachable. `7rem` = the 6rem `top-24` offset plus
 						// 1rem of breathing room at the bottom edge.
 						//
-						// That is ALL it does. The scroller IS this `<aside>` and the card
-						// is a single child inside it, so the card title and the counts
-						// line scroll away with everything else — a reader 25 rows down
-						// has lost the summary. Keeping it would need `sticky` on
-						// `CardHeader`, which carries none (`src/components/ui/card.tsx`),
-						// and that is a shared-primitive change for another pass. This
-						// comment claimed the header stayed put until the claim was
-						// checked against the DOM.
+						// The cap lives here and the SCROLLER does not. This `<aside>` is
+						// the positioner — sticky, width, order, and the height ceiling
+						// that the pinning makes necessary — and it is a flex column so
+						// the panel's card can fill it. The card then puts the scroller on
+						// its own body, which is what keeps the title, the counts line and
+						// the sync status visible while the rows move; the scroller used to
+						// be this element, and a reader 25 rows into a 40-member roster had
+						// lost the summary they were reading the rail for. `7rem` = the
+						// 6rem `top-24` offset plus 1rem of breathing room at the bottom.
 						//
-						// And note the axis it costs: `overflow-y: auto` with an
-						// `overflow-x` of `visible` computes that `visible` to `auto`
-						// (CSS Overflow 3 §3), so at `lg` this element is a clipping box on
-						// BOTH axes, not just the vertical one. Nothing in the rail
-						// overhangs today — the row wraps (`break-words`, `line-clamp-2`)
-						// and the widest control is the measured `w-44` track — but a
-						// future popover or tooltip that renders INLINE rather than in a
-						// portal would be cut off here rather than overflowing the column.
-						className="order-1 lg:order-2 lg:sticky lg:top-24 lg:max-h-[calc(100vh-7rem)] lg:w-[340px] lg:shrink-0 lg:overflow-y-auto"
+						// Both halves or neither: `lg:max-h-…` with nothing scrolling
+						// inside it CLIPS the bottom rows outright, which is strictly worse
+						// than the unreachable-but-present rail this replaced.
+						//
+						// And note the axis the scroller costs, wherever it sits:
+						// `overflow-y: auto` with an `overflow-x` of `visible` computes
+						// that `visible` to `auto` (CSS Overflow 3 §3), so the scrolling
+						// element clips on BOTH axes. Nothing in the rail overhangs today —
+						// the row wraps (`break-words`, `line-clamp-2`), the widest control
+						// is the measured `w-44` track, and the row menu is a portalled
+						// `DropdownMenuContent` — but a future popover that renders INLINE
+						// would be cut off. Moving the scroller inward tightened that box
+						// from the column to the card's body, so it is a smaller trap than
+						// it was, not a new one.
+						className="order-1 lg:order-2 lg:sticky lg:top-24 lg:flex lg:max-h-[calc(100vh-7rem)] lg:w-[340px] lg:shrink-0 lg:flex-col"
 					>
 						<MeetingAttendancePanel
 							// `upcoming` → the outreach ladder; meeting day and after → the

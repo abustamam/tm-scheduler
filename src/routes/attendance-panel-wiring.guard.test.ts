@@ -29,6 +29,13 @@ const ROUTE = resolve(
 	"club.$clubId.meeting.$meetingId.tsx",
 );
 
+/** The rail's scroller lives here, not on the route's `<aside>` — see the
+ *  cap/scroller pair below. */
+const PANEL = resolve(
+	dirname(fileURLToPath(import.meta.url)),
+	"../components/club/meeting-attendance-panel.tsx",
+);
+
 describe("attendance panel route wiring (PR 2)", () => {
 	const src = readSource(ROUTE);
 	// RAW (not comment-blanked) — for the one check below whose "must NOT
@@ -773,16 +780,21 @@ describe("attendance panel route wiring (PR 2)", () => {
 		// does not. The cap plus the scroller is what makes the bottom rows
 		// reachable at all.
 		//
-		// Both, not either. `lg:overflow-y-auto` alone on an uncapped element never
-		// overflows, so it scrolls nothing; `lg:max-h-…` alone clips the rows it
-		// cut off with no way to reach them, which is worse than the bug. Each is
-		// inert without the other, so a single `toContain` passes on half a fix.
+		// Both, not either — but the two halves now live in different files. The
+		// SCROLLER moved into the panel's card body (`MeetingAttendancePanel`), so
+		// that the card header stays put while the rows move; this element keeps
+		// the CAP and became the flex column the card fills. Each is still inert
+		// without the other: a cap with nothing scrolling inside it CLIPS the
+		// bottom rows outright, and a scroller inside an uncapped column never
+		// overflows, so it scrolls nothing.
 		//
-		// HONEST LIMIT: this pins the MECHANISM — the classes are present on the
-		// rail's own element — and never the GEOMETRY. jsdom performs no layout and
-		// loads no stylesheet, so nothing in this repo proves the rail actually
-		// scrolls, that `calc(100vh-7rem)` clears the `top-24` offset, or that row
-		// 40 is reachable on a real viewport. Only a browser can see that.
+		// The cross-file half is asserted below rather than here, and the GEOMETRY
+		// both halves exist for is asserted by neither: see
+		// `src/components/pinned-column-reachability.test.ts`, which lays this
+		// column out in headless Chrome and checks that row 40 is reachable and
+		// the header survives the trip. This file still earns its place — it pins
+		// WHICH element and WHICH file the classes live on, which geometry cannot
+		// see, and it runs without a browser.
 		expect(
 			asideTagAt,
 			"expected the pinned rail to still be an <aside …> element",
@@ -792,6 +804,27 @@ describe("attendance panel route wiring (PR 2)", () => {
 			"expected the <aside> opening tag to close",
 		).toBeGreaterThan(asideTagAt);
 		expect(asideTag).toContain("lg:max-h-[calc(100vh-7rem)]");
-		expect(asideTag).toContain("lg:overflow-y-auto");
+		expect(asideTag).toContain("lg:flex-col");
+	});
+
+	it("keeps the rail's scroller on the panel card's body", () => {
+		// The other half of the pair above, in the file it moved to. Read
+		// comment-blind: the `<aside>`'s own comment in the route explains this
+		// move and names `overflow-y-auto`, and the panel's comment names the
+		// `lg:` coupling — either would satisfy a raw-text search with the real
+		// attribute gone.
+		const panel = readSource(PANEL);
+		const at = panel.indexOf("<CardContent");
+		expect(
+			at,
+			"expected the panel to still render a <CardContent>",
+		).toBeGreaterThan(-1);
+		const cls = /className="([^"]*)"/.exec(panel.slice(at))?.[1] ?? "";
+		expect(cls).toContain("lg:overflow-y-auto");
+		// `min-h-0` is not decoration. A flex item defaults to `min-height: auto`,
+		// which refuses to shrink below its content — so without it the body grows
+		// to fit all 40 rows, the cap pushes the overflow out of the card, and
+		// `lg:overflow-y-auto` scrolls nothing at all while still being present.
+		expect(cls).toContain("lg:min-h-0");
 	});
 });

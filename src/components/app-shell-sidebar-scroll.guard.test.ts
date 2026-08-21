@@ -1,0 +1,140 @@
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
+import { readSource } from "#/test/guard-source";
+
+/**
+ * The sidebar scrolls on its MIDDLE BAND, and neither host scrolls itself.
+ *
+ * The `lg+` `<aside>` is `position: sticky` at a pinned `h-svh`, so its box can
+ * never grow past the viewport and the document scroll cannot reveal its tail.
+ * That was invisible while the nav was short. It stopped being invisible once
+ * the nav outgrew the fold — an officer who is also a superadmin renders ~28
+ * items — and everything below it, the sign-out footer included, became
+ * unreachable at any window height, with no scrollbar to say so. Scrolling the
+ * whole column fixes reachability and loses the footer, so the column is three
+ * bands instead: brand, scrolling nav, pinned mini-profile. The mobile drawer
+ * runs the same `SidebarInner`, which is why `SheetContent` had to STOP
+ * scrolling (`overflow-hidden`) for the band to be the thing that overflows.
+ *
+ * This file pins WHICH element and WHICH file each class lives on. It cannot
+ * see geometry — jsdom performs no layout, so a rendered `<AppShell>` reports
+ * the same (zero) numbers either way. The companion that measures whether the
+ * tail is actually REACHABLE, in a real browser, is
+ * `pinned-column-reachability.test.ts`. Neither subsumes the other: a class can
+ * be present on the right element and still not scroll (see the `min-h-0` case
+ * below), and geometry cannot tell you the class ended up in the wrong file.
+ * This one runs without a browser, so it is the half that always runs.
+ *
+ * COMMENT-BLIND (`readSource`) is mandatory here: every assertion below is of
+ * the "this pattern must BE present" form, and the fix's own explanatory
+ * comments sit directly above the elements they describe and name the very
+ * classes asserted. Read raw, those comments satisfy the assertions on their
+ * own and the classes become deletable with this file green — exactly the
+ * bypass `guard-source.ts` exists to close.
+ */
+const HERE = dirname(fileURLToPath(import.meta.url));
+const SHELL = resolve(HERE, "app-shell.tsx");
+
+/**
+ * The first `className="…"` after an opening tag. Deliberately not a `>` scan:
+ * `<SheetContent>` carries arrow-function props whose `=>` would end the tag
+ * early.
+ */
+function classNameAfter(tag: string): string {
+	const source = readSource(SHELL);
+	const at = source.indexOf(tag);
+	expect(at, `${tag} not found in app-shell.tsx`).toBeGreaterThan(-1);
+	const match = /className="([^"]*)"/.exec(source.slice(at));
+	expect(match, `no className on ${tag}`).not.toBeNull();
+	return match?.[1] ?? "";
+}
+
+/**
+ * The unique `className` containing `fragment`. The nav band and the footer are
+ * plain `<div>`s with no tag to anchor on, and uniqueness is asserted so a
+ * fragment that starts matching two elements fails loudly instead of silently
+ * checking whichever came first.
+ */
+function classNameContaining(fragment: string): string {
+	const hits = [...readSource(SHELL).matchAll(/className="([^"]*)"/g)]
+		.map((m) => m[1])
+		.filter((c) => c.includes(fragment));
+	expect(
+		hits,
+		`\`${fragment}\` should match exactly one className in app-shell.tsx`,
+	).toHaveLength(1);
+	return hits[0];
+}
+
+/** The scrolling middle band, and the footer that must stay out of it. */
+const NAV_BAND = classNameContaining("min-h-0 flex-1 flex-col");
+const FOOTER = classNameContaining("rounded-xl border border-[var(--line)]");
+
+describe("app shell sidebar scrolling", () => {
+	// Control. Every assertion below is "the extracted string contains X", and
+	// an extraction that silently returned "" would report the same shape as a
+	// pass for the two negative-ish reads and fail confusingly for the rest.
+	// Pin a class that is not under test so a broken extractor is legible.
+	it("extracts the two sidebar surfaces (control)", () => {
+		expect(classNameAfter("<aside")).toContain("w-[248px]");
+		expect(classNameAfter("<SheetContent")).toContain("w-[284px]");
+	});
+
+	it("keeps the desktop sidebar pinned to the viewport height", () => {
+		// The premise of everything below: the column overflows because its height
+		// is nailed to the viewport, and being `sticky` means the document scroll
+		// cannot reveal what spills out. If this is ever intentionally dropped so
+		// the aside grows with the document instead, revisit the scroller rather
+		// than deleting this — they are one invariant.
+		expect(classNameAfter("<aside")).toMatch(/\bh-(svh|dvh|lvh|screen)\b/);
+	});
+
+	it("puts the scroller on the nav band, not on either host", () => {
+		// Both hosts are fixed-height flex columns and NEITHER scrolls: the
+		// scroller sits on `SidebarInner`'s middle band, so the brand and the
+		// sign-out footer stay put while the nav moves. A host that scrolls again
+		// takes the footer with it — that is the bug this shape replaced, not a
+		// second way of spelling the same fix.
+		expect(classNameAfter("<aside")).not.toMatch(
+			/\boverflow-y-(auto|scroll)\b/,
+		);
+		expect(classNameAfter("<SheetContent")).toContain("overflow-hidden");
+		expect(NAV_BAND).toMatch(/\boverflow-y-(auto|scroll)\b/);
+	});
+
+	it("lets the nav band shrink below its content", () => {
+		// `min-h-0` is the difference between a scroller and a box that grows. A
+		// flex item defaults to `min-height: auto`, which refuses to shrink below
+		// its content and hands the overflow straight back to the column — so the
+		// band would carry `overflow-y-auto`, satisfy the assertion above, and
+		// scroll nothing. Geometry catches this; a class-presence grep does not,
+		// which is why the pair is split across this file and
+		// `pinned-column-reachability.test.ts`.
+		expect(NAV_BAND).toContain("min-h-0");
+		expect(NAV_BAND).toContain("flex-1");
+	});
+
+	it("keeps the Sheet primitive's height contract that the drawer relies on", () => {
+		// The drawer only works because `SheetContent` is a FIXED-HEIGHT flex
+		// column: `overflow-hidden` on a height-auto box would clip the nav with
+		// no scrollbar anywhere. Those classes come from the shadcn primitive, not
+		// from our call site, so nothing here owns them — and
+		// `pinned-column-reachability.test.ts` reconstructs them BY HAND in its
+		// fixture, which means a `bunx shadcn@latest add sheet` that changed them
+		// would break the real drawer while the browser test kept passing against
+		// the stale copy. This is the assertion that notices.
+		const sheet = readSource(resolve(HERE, "ui/sheet.tsx"));
+		expect(sheet).toContain("flex flex-col");
+		expect(sheet).toMatch(
+			/side === "left" &&\s*\n?\s*"inset-y-0 left-0 h-full/,
+		);
+	});
+
+	it("keeps the brand and the footer out of the scrolling band", () => {
+		// If either drifts into the band, it scrolls away — which is the whole
+		// defect, reintroduced one element at a time.
+		expect(FOOTER).toContain("shrink-0");
+		expect(FOOTER).not.toMatch(/\bmt-auto\b/);
+	});
+});
