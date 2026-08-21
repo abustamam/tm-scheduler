@@ -180,7 +180,16 @@ function MyCommitments() {
 									c.roleCategory === "evaluator" ? (
 										<EvaluationResourceLinks
 											projectName={c.evaluatedProjectName ?? c.ownProjectName}
-											fallback
+											// Fall back to the generic form ONLY when there is no
+											// project name at all — a TBA speech. A name that is
+											// present but matches nothing (a Base-Camp-derived
+											// project the catalog lacks, e.g. Cross-Cultural
+											// Understanding, for which TI publishes 8202E) must
+											// render NO link, per spec §2. Passing `fallback`
+											// unconditionally handed that speaker an
+											// authoritative-looking WRONG form and made this
+											// surface disagree with the picker about one project.
+											fallback={!(c.evaluatedProjectName ?? c.ownProjectName)}
 										/>
 									) : null}
 									<Link

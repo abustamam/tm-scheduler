@@ -238,7 +238,12 @@ function Dashboard() {
 													projectName={
 														r.evaluatedProjectName ?? r.ownProjectName
 													}
-													fallback
+													// Generic form only for a TBA speech (no name at
+													// all). A name that matched nothing renders no
+													// link — spec §2. See me.tsx for the full note.
+													fallback={
+														!(r.evaluatedProjectName ?? r.ownProjectName)
+													}
 												/>
 											</div>
 										) : null}

@@ -21,9 +21,21 @@
  *    every functionary row (Timer, Ah-Counter, Grammarian…), which is most of a
  *    typical agenda. Dropping the gate is a one-character edit that no other
  *    test here can see.
- * 3. `fallback` is passed. The prop defaults to FALSE, so without it an
- *    evaluator paired with a TBA speech — spec §3 step 3, the reason 8053 ships
- *    at all — would silently get no form.
+ * 3. `fallback` is passed, AND it is CONDITIONAL on the project name being
+ *    absent. The prop defaults to FALSE, so without it an evaluator paired with
+ *    a TBA speech — spec §3 step 3, the reason 8053 ships at all — would
+ *    silently get no form. But passing it UNCONDITIONALLY is the opposite bug
+ *    and the one this repo's own docstring calls out: the gate is role-shaped,
+ *    so a SPEAKER whose project name matches nothing (a Base-Camp-derived
+ *    project the catalog lacks, e.g. Cross-Cultural Understanding, for which TI
+ *    publishes 8202E) was handed the generic form, while the project picker —
+ *    which passes no `fallback` — correctly showed nothing. Two surfaces
+ *    disagreeing about one project, in the direction spec §2 forbids ("a project
+ *    with no resource renders no link").
+ *
+ *    A bare `toContain("fallback")` cannot see that difference: `fallback`,
+ *    `fallback={false}` and `fallback={true}` all contain the substring. So the
+ *    assertion pins the whole expression.
  *
  * The two routes map their commitment rows under different loop variables
  * (`me.tsx` uses `c`, `dashboard.tsx` uses `r`), so each expectation is
@@ -35,6 +47,13 @@ import { readSource } from "#/test/guard-source";
 const ROUTES: ReadonlyArray<{ path: string; variable: string }> = [
 	{ path: "src/routes/_authed/me.tsx", variable: "c" },
 	{ path: "src/routes/_authed/dashboard.tsx", variable: "r" },
+	// The THIRD card, and the one it would be easiest to forget: the public club
+	// page, reached through the anonymous roster pick rather than a session.
+	// CLAUDE.md calls that the dominant identity path in this no-auth product, so
+	// a card that drifts here misses the most users, not the fewest. It is fed by
+	// `listMemberCommitments`, a hand-copy of `loadMyCommitments` — so the copy
+	// silently lacking the new columns is exactly the failure this row catches.
+	{ path: "src/routes/club.$clubId.index.tsx", variable: "c" },
 ];
 
 /**
@@ -74,8 +93,20 @@ describe("commitment cards link the evaluation resource", () => {
 			);
 		});
 
-		it(`${path} opts in to the generic form`, () => {
-			expect(element(path)).toContain("fallback");
+		it(`${path} opts in to the generic form ONLY for a missing project`, () => {
+			// The whole expression, not the substring: `fallback={false}` and a bare
+			// `fallback` both contain "fallback", and they mean opposite things.
+			expect(element(path)).toContain(
+				`fallback={!(${variable}.evaluatedProjectName ?? ${variable}.ownProjectName)}`,
+			);
+		});
+
+		it(`${path} does not pass fallback unconditionally`, () => {
+			// The negative half. A bare `fallback` (or `fallback={true}`) hands a
+			// speaker on an uncatalogued project a form that is not their project's.
+			const el = element(path);
+			expect(el).not.toContain("fallback />");
+			expect(el).not.toContain("fallback={true}");
 		});
 
 		it(`${path} renders it only for a speaker or an evaluator`, () => {
