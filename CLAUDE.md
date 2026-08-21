@@ -132,9 +132,12 @@ With none present those tests **skip locally**, so `bun run test` still works fo
 browser; **in CI they fail** instead (`CI has no Chrome on PATH`), because a silently absent
 geometry gate reads exactly like a passing one — the same failure shape as the DB-backed suites above.
 `ubuntu-latest` ships Chrome, so CI needs no install step; the dependency is named in
-`.github/workflows/ci.yml` beside both `Test` steps so a runner-image change is diagnosable.
+`.github/workflows/ci.yml` beside the `check` job's `Test` step so a runner-image change is
+diagnosable. Beside that job's ONLY — the `extension` job is `working-directory: extension` and
+runs the sub-package's own three-file vitest, which touches no browser. It carried a copy of the
+same Chrome comment until v1.22.8.0, naming suites that working directory cannot see.
 
-**On macOS both suites skip unless you set `CHROME_PATH`**, because Chrome installs as an `.app` and
+**On macOS all three skip unless you set `CHROME_PATH`**, because Chrome installs as an `.app` and
 puts nothing on `PATH` under any of those four names. This is a macOS-only gap: on Linux, where this
 repo is usually developed, `google-chrome` resolves and both gates run locally as normal. Do NOT
 "fix" it by hardcoding `/Applications/Google Chrome.app/...` in `CHROME_BINARIES` — that binary
