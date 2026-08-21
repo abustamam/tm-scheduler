@@ -35,6 +35,21 @@ interface Failure {
 
 async function check(url: string): Promise<string | null> {
 	try {
+		// Self-guarding, rather than trusting the suite this script never runs
+		// with. `evaluation-resources.test.ts` asserts https + a toastmasters.org
+		// host, but that is a different process — nothing stops a hand-edited row
+		// from sending this script's fetch (which follows redirects anywhere) at
+		// an arbitrary host. Cheap to check here, and it keeps the script honest
+		// on its own terms given the module header frames the table as a scrape.
+		const parsed = new URL(url);
+		if (parsed.protocol !== "https:") return `not https (${parsed.protocol})`;
+		if (
+			parsed.hostname !== "toastmasters.org" &&
+			!parsed.hostname.endsWith(".toastmasters.org")
+		) {
+			return `off-host (${parsed.hostname})`;
+		}
+
 		// GET, not HEAD: several of these paths answer HEAD with 405.
 		const res = await fetch(url, {
 			headers: { "user-agent": UA },

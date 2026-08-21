@@ -68,8 +68,8 @@ itself why the description cannot be trusted as a general parser. The remaining
 descriptions — `8408E` is the genuine "Manage Projects Successfully" and `8206E`
 the genuine "Understanding Your Communication Style", so the description was
 duplicated down the list. `8103E` is the reverse: the title carries a stray
-"Evaluation and Feedback-" prefix while `8100E1`/`8100E2` are the real
-Evaluation and Feedback resources.
+"Evaluation and Feedback-" prefix while `8100E1` and its two codeless siblings
+are the real Evaluation and Feedback resources.
 
 Consequence for matching: title-only resolves 59 of 60 catalog projects,
 description-only resolves 57. Only a hand-audited per-item decision reaches
@@ -88,9 +88,11 @@ The 63 project resources cover **all 60** distinct project names in
 `src/lib/pathways-catalog.ts` — 60 rather than 63 because two projects have
 more than one resource:
 
-- **Evaluation and Feedback** — three (`8100E1` first speech, `8100E2` second
-  speech, and the evaluator-role component). The project genuinely takes three
-  assignments, which `pathways-catalog.ts` already documents under NOT MODELLED.
+- **Evaluation and Feedback** — three: `8100E1` first speech, plus a second
+  speech and an evaluator-role component that expose NO item code (see the note
+  above — `8100E2` would be an inference, so it is not recorded). The project
+  genuinely takes three assignments, which `pathways-catalog.ts` already
+  documents under NOT MODELLED.
 - **Introduction to Vocal Variety and Body Language** — two (`8104E1`
   evaluation resource, `8104E2` speech profile).
 

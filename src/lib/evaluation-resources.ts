@@ -42,7 +42,8 @@
  * 8409E/8410E/8207E are consecutive-code copy-paste errors in TI's
  * descriptions: 8408E is the real "Manage Projects Successfully" and 8206E the
  * real "Understanding Your Communication Style". 8103E is the reverse — its
- * TITLE carries a stray "Evaluation and Feedback-" prefix, while 8100E1/E2 are
+ * TITLE carries a stray "Evaluation and Feedback-" prefix, while 8100E1 and its
+ * two codeless siblings (see below) are
  * the real Evaluation and Feedback resources.
  *
  * Consequence: title-only matching resolves 59/60 catalog projects,
