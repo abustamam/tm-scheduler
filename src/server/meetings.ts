@@ -8,6 +8,7 @@ import {
 	guests,
 	meetings,
 	members,
+	pathwaysProjects,
 	roleDefinitions,
 	roleSlots,
 	speeches,
@@ -561,6 +562,22 @@ export const listMemberCommitments = createServerFn({ method: "GET" })
 		// roster member, and each row carries the club's NAME plus the meeting's
 		// date, theme and location.
 		if (!(await isReadableClubForMember(memberId))) return [];
+		// Same four aliases and the same coalesce pair as `loadMyCommitments` — the
+		// evaluation-resource link has to reach THIS card too. CLAUDE.md calls the
+		// anonymous roster-pick identity "the dominant path in this no-auth
+		// product", so shipping the link only on the two `_authed` cards would have
+		// missed the members most likely to want the form on their phone
+		// mid-meeting. Adds no new exposure: the agenda already prints the project
+		// publicly, so the only new datum is the PDF href.
+		//
+		// Yes, this widens the duplication the NOTE above already flags. It is a
+		// deliberate trade at ship time over refactoring a public session-less
+		// reader; the NOTE's "worth unifying" now has a third production caller
+		// arguing for it.
+		const speakerSlot = alias(roleSlots, "speaker_slot");
+		const evaluatedSpeech = alias(speeches, "evaluated_speech");
+		const evaluatedProject = alias(pathwaysProjects, "evaluated_project");
+		const ownProject = alias(pathwaysProjects, "own_project");
 		const rows = await db
 			.select({
 				slotId: roleSlots.id,
@@ -575,6 +592,14 @@ export const listMemberCommitments = createServerFn({ method: "GET" })
 				roleName: roleDefinitions.name,
 				isSpeakerRole: roleDefinitions.isSpeakerRole,
 				speechTitle: speeches.title,
+				evaluatesSlotId: roleSlots.evaluatesSlotId,
+				roleCategory: roleDefinitions.category,
+				evaluatedProjectName: sql<string | null>`
+					coalesce(${evaluatedProject.name}, ${evaluatedSpeech.projectName})
+				`,
+				ownProjectName: sql<string | null>`
+					coalesce(${ownProject.name}, ${speeches.projectName})
+				`,
 			})
 			.from(roleSlots)
 			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
@@ -584,6 +609,13 @@ export const listMemberCommitments = createServerFn({ method: "GET" })
 				eq(roleDefinitions.id, roleSlots.roleDefinitionId),
 			)
 			.leftJoin(speeches, eq(speeches.id, roleSlots.speechId))
+			.leftJoin(ownProject, eq(ownProject.id, speeches.projectId))
+			.leftJoin(speakerSlot, eq(speakerSlot.id, roleSlots.evaluatesSlotId))
+			.leftJoin(evaluatedSpeech, eq(evaluatedSpeech.id, speakerSlot.speechId))
+			.leftJoin(
+				evaluatedProject,
+				eq(evaluatedProject.id, evaluatedSpeech.projectId),
+			)
 			.where(
 				and(
 					eq(roleSlots.assignedMemberId, memberId),
