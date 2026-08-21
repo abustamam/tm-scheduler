@@ -382,6 +382,25 @@ the nouns in `src/db/schema.ts`.
   A speaker's project belongs to a path.
 - **Evaluator → speaker link** — an evaluator slot points at the speaker slot it evaluates
   via `role_slots.evaluates_slot_id` (self-reference).
+- **Evaluation resource** — the official Toastmasters evaluation form for a Pathways
+  project: one PDF per project, published by TI and LINKED to — never hosted, mirrored,
+  cached or proxied (`src/lib/evaluation-resources.ts`). The 64-row table is **pinned by
+  hand, not derived** from `pathways-catalog.ts`, which the file deliberately does not
+  import so a test can cross-check the two: TI's own library disagrees with itself on 4 of
+  its 73 published items — title and description name different projects — and no rule
+  resolves all four correctly, only a hand audit does. A project on a **retired path**
+  carries `pathways-catalog.ts`'s `(Legacy)` suffix; the one shared `normalize` function
+  strips it before matching, because TI publishes only the CURRENT edition of each form —
+  the UI surfaces that gap as a "current edition" note rather than silence. An
+  **evaluator's** own project is usually blank; the resource they need is the SPEAKER's,
+  reached through **Evaluator → speaker link** above (`evaluates_slot_id`), resolved by one
+  self-join inside `loadMyCommitments` / `listMemberCommitments` rather than per row. The
+  generic `8053` form is the one entry that maps to no project; `EvaluationResourceLinks`'
+  `fallback` prop makes rendering it an explicit, per-call-site OPT-IN (default false) —
+  unconditionally showing it would hand an unmatched or TBA project an authoritative-looking
+  WRONG form. Surfaced on the project picker, all three commitment cards (`/me`,
+  `/dashboard`, the public club page), and the searchable index at
+  `/resources/evaluation-resources`.
 - **Distinguished Club Program (DCP)** — Toastmasters International's annual club-recognition
   program: 10 standardized goals across a **program year** (Jul 1 – Jun 30). Recognition tiers
   are **Distinguished** (5 goals), **Select Distinguished** (7), **President's Distinguished**

@@ -3,6 +3,7 @@ import { Bell, CalendarDays, Loader2, Mic } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { PageContainer } from "#/components/page-container";
+import { EvaluationResourceLinks } from "#/components/pathways/evaluation-resource-link";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import { formatMeetingDate, formatMeetingTimeRange } from "#/lib/format";
@@ -167,6 +168,29 @@ function MyCommitments() {
 										<p className="text-sm text-muted-foreground">
 											“{c.speechTitle}”
 										</p>
+									) : null}
+									{/* Speakers and evaluators only. A functionary (Timer,
+									    Ah-Counter, Grammarian…) fills in no evaluation form, and
+									    unconditionally this line advertised one on most rows of
+									    a typical agenda. `fallback` IS passed here: an evaluator
+									    paired with a TBA speech still needs a usable form —
+									    spec §3 step 3, the reason 8053 ships. */}
+									{c.isSpeakerRole ||
+									c.evaluatesSlotId !== null ||
+									c.roleCategory === "evaluator" ? (
+										<EvaluationResourceLinks
+											projectName={c.evaluatedProjectName ?? c.ownProjectName}
+											// Fall back to the generic form ONLY when there is no
+											// project name at all — a TBA speech. A name that is
+											// present but matches nothing (a Base-Camp-derived
+											// project the catalog lacks, e.g. Cross-Cultural
+											// Understanding, for which TI publishes 8202E) must
+											// render NO link, per spec §2. Passing `fallback`
+											// unconditionally handed that speaker an
+											// authoritative-looking WRONG form and made this
+											// surface disagree with the picker about one project.
+											fallback={!(c.evaluatedProjectName ?? c.ownProjectName)}
+										/>
 									) : null}
 									<Link
 										to="/meetings/$id"

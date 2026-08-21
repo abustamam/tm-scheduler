@@ -2,6 +2,20 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.23.0.0] - 2026-08-20
+
+### Added
+
+- **Every Pathways project now links straight to its official evaluation form.** Finding the right one on toastmasters.org meant paging through a 15-page library, five items at a time, with no way to search it — so in practice nobody did, and evaluators wrote feedback without the form that says what the project is actually teaching. The link now sits where you already are: on the project picker when you set your speech, and on your upcoming roles. All 64 forms Toastmasters publishes are covered, which is every project on all 11 paths. The files stay Toastmasters' own — GavelUp links to them rather than keeping copies, so you always open the current version.
+- **If you are the evaluator, you get the form for the speech you are evaluating.** This is the part that matters. The person who needs the evaluation form is almost never the speaker — it is whoever is evaluating them. Your role card now works that out from the agenda and hands you the right project's form, not your own last project's and not a generic one. A General Evaluator or a functionary sees no link, because they are not filling one in.
+- **One page with all of them, searchable.** "Evaluation resources" on the Resources page lists all 64 and filters as you type. Search by the project name your evaluator will see on the agenda, by the item number printed on the form (`8200E`, `8101E`), or by the part you want when a project has several. If your project is not listed, the generic form that works for any speech is there too.
+- **Retired paths find their form too.** Toastmasters has retired some paths and members stay enrolled on them, where every project name carries a "(Legacy)" tag. Searching that exact name — the way your agenda spells it — now finds the current edition of the form, and the page tells you that is what you are looking at, so criteria that read slightly differently are not a surprise.
+
+### Fixed
+
+- **Nothing regressed, but three things nearly shipped wrong, and they are worth naming.** Every functionary role — Timer, Ah-Counter, Grammarian — briefly advertised a "Generic evaluation resource" they had no use for, which on a normal agenda is most of the rows. A project the app learned from Base Camp but does not have in its own list was handed an authoritative-looking form for a *different* project, which is worse than no form. And one Level 1 project every member does read "Evaluation resource — Evaluation resource". All three were caught before release by reviews that read the whole change at once rather than one piece at a time.
+- **The search box is above the list, not below a wall of text.** On a phone it started 334 pixels below the fold, behind four headings of explanation — on the one page whose entire job is finding a form quickly, mid-meeting. The explanation now sits under the results where it belongs.
+
 ## [1.22.8.0] - 2026-08-20
 
 ### Fixed

@@ -3,6 +3,7 @@ import { BookOpen, CalendarDays } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { PageContainer } from "#/components/page-container";
+import { EvaluationResourceLinks } from "#/components/pathways/evaluation-resource-link";
 import { PathEnrollmentManager } from "#/components/pathways/path-enrollment-manager";
 import { PathwaysProgress } from "#/components/pathways/pathways-progress";
 import { formatMeetingDate } from "#/lib/format";
@@ -182,46 +183,71 @@ function Dashboard() {
 							commitments.map((r) => {
 								const confirmed = r.status === "confirmed";
 								return (
-									<Link
-										key={r.slotId}
-										// The row's OWN meeting, not `/next` — that resolves the
-										// ACTIVE club's soonest meeting, so once this list went
-										// cross-club (#437) a club-B commitment navigated to
-										// club-A's agenda. `meetingId` is already on the payload.
-										to="/meetings/$id"
-										params={{ id: r.meetingId }}
-										className="flex items-center gap-3 border-t border-[var(--line)] px-5 py-3 no-underline transition-colors hover:bg-[var(--foam)]"
-									>
-										<span
-											className="size-2 shrink-0 rounded-full"
-											style={{ background: "var(--palm)" }}
-										/>
-										<div className="min-w-0 flex-1 leading-[1.25]">
-											<div className="text-sm font-bold text-[var(--sea-ink)]">
-												{r.roleName}
-											</div>
-											<div className="text-xs text-[var(--sea-ink-soft)]">
-												{/* Club is unconditional, not the last fallback: as a
-												    third fallback it showed up only on the sparsest
-												    rows — never on the speech/theme rows most likely
-												    to collide across clubs. */}
-												{r.clubName} ·{" "}
-												{formatMeetingDate(r.scheduledAt, r.timezone)}
-												{(r.speechTitle ?? r.theme)
-													? ` · ${r.speechTitle ?? r.theme}`
-													: null}
-											</div>
-										</div>
-										<span
-											className={
-												confirmed
-													? "shrink-0 rounded-full border border-[var(--line)] bg-[var(--foam)] px-2.5 py-1 text-xs font-bold text-[var(--sea-ink-soft)]"
-													: "shrink-0 rounded-full bg-[rgba(79,184,178,.16)] px-2.5 py-1 text-xs font-bold text-[var(--lagoon-deep)]"
-											}
+									<div key={r.slotId}>
+										<Link
+											// The row's OWN meeting, not `/next` — that resolves the
+											// ACTIVE club's soonest meeting, so once this list went
+											// cross-club (#437) a club-B commitment navigated to
+											// club-A's agenda. `meetingId` is already on the payload.
+											to="/meetings/$id"
+											params={{ id: r.meetingId }}
+											className="flex items-center gap-3 border-t border-[var(--line)] px-5 py-3 no-underline transition-colors hover:bg-[var(--foam)]"
 										>
-											{confirmed ? "Confirmed" : "Signed up"}
-										</span>
-									</Link>
+											<span
+												className="size-2 shrink-0 rounded-full"
+												style={{ background: "var(--palm)" }}
+											/>
+											<div className="min-w-0 flex-1 leading-[1.25]">
+												<div className="text-sm font-bold text-[var(--sea-ink)]">
+													{r.roleName}
+												</div>
+												<div className="text-xs text-[var(--sea-ink-soft)]">
+													{/* Club is unconditional, not the last fallback: as a
+													    third fallback it showed up only on the sparsest
+													    rows — never on the speech/theme rows most likely
+													    to collide across clubs. */}
+													{r.clubName} ·{" "}
+													{formatMeetingDate(r.scheduledAt, r.timezone)}
+													{(r.speechTitle ?? r.theme)
+														? ` · ${r.speechTitle ?? r.theme}`
+														: null}
+												</div>
+											</div>
+											<span
+												className={
+													confirmed
+														? "shrink-0 rounded-full border border-[var(--line)] bg-[var(--foam)] px-2.5 py-1 text-xs font-bold text-[var(--sea-ink-soft)]"
+														: "shrink-0 rounded-full bg-[rgba(79,184,178,.16)] px-2.5 py-1 text-xs font-bold text-[var(--lagoon-deep)]"
+												}
+											>
+												{confirmed ? "Confirmed" : "Signed up"}
+											</span>
+										</Link>
+										{/* Speakers and evaluators only — a functionary fills in no
+										    evaluation form, and unconditionally this line appeared on
+										    most rows of a typical agenda. Outside the <Link> above,
+										    never inside it: nesting an <a> in an <a> is invalid and
+										    browsers restructure the DOM around it. `pb-2.5` because
+										    the next row's border-t is otherwise flush against this
+										    line. */}
+										{r.isSpeakerRole ||
+										r.evaluatesSlotId !== null ||
+										r.roleCategory === "evaluator" ? (
+											<div className="pb-2.5 pl-10 pr-5">
+												<EvaluationResourceLinks
+													projectName={
+														r.evaluatedProjectName ?? r.ownProjectName
+													}
+													// Generic form only for a TBA speech (no name at
+													// all). A name that matched nothing renders no
+													// link — spec §2. See me.tsx for the full note.
+													fallback={
+														!(r.evaluatedProjectName ?? r.ownProjectName)
+													}
+												/>
+											</div>
+										) : null}
+									</div>
 								);
 							})
 						)}

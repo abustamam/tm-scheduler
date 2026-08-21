@@ -15,6 +15,7 @@ import { Route as ClaimRouteImport } from './routes/claim'
 import { Route as AuthedRouteImport } from './routes/_authed'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ResourcesIndexRouteImport } from './routes/resources.index'
+import { Route as ResourcesEvaluationResourcesRouteImport } from './routes/resources.evaluation-resources'
 import { Route as ResourcesSlugRouteImport } from './routes/resources.$slug'
 import { Route as ClubClubIdRouteImport } from './routes/club.$clubId'
 import { Route as ApiHealthRouteImport } from './routes/api/health'
@@ -90,6 +91,12 @@ const ResourcesIndexRoute = ResourcesIndexRouteImport.update({
   path: '/resources/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ResourcesEvaluationResourcesRoute =
+  ResourcesEvaluationResourcesRouteImport.update({
+    id: '/resources/evaluation-resources',
+    path: '/resources/evaluation-resources',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ResourcesSlugRoute = ResourcesSlugRouteImport.update({
   id: '/resources/$slug',
   path: '/resources/$slug',
@@ -341,6 +348,7 @@ export interface FileRoutesByFullPath {
   '/api/health': typeof ApiHealthRoute
   '/club/$clubId': typeof ClubClubIdRouteWithChildren
   '/resources/$slug': typeof ResourcesSlugRoute
+  '/resources/evaluation-resources': typeof ResourcesEvaluationResourcesRoute
   '/resources/': typeof ResourcesIndexRoute
   '/admin/action-items': typeof AuthedAdminActionItemsRoute
   '/admin/club-settings': typeof AuthedAdminClubSettingsRoute
@@ -391,6 +399,7 @@ export interface FileRoutesByTo {
   '/api/dev-login': typeof ApiDevLoginRoute
   '/api/health': typeof ApiHealthRoute
   '/resources/$slug': typeof ResourcesSlugRoute
+  '/resources/evaluation-resources': typeof ResourcesEvaluationResourcesRoute
   '/resources': typeof ResourcesIndexRoute
   '/admin/action-items': typeof AuthedAdminActionItemsRoute
   '/admin/club-settings': typeof AuthedAdminClubSettingsRoute
@@ -445,6 +454,7 @@ export interface FileRoutesById {
   '/api/health': typeof ApiHealthRoute
   '/club/$clubId': typeof ClubClubIdRouteWithChildren
   '/resources/$slug': typeof ResourcesSlugRoute
+  '/resources/evaluation-resources': typeof ResourcesEvaluationResourcesRoute
   '/resources/': typeof ResourcesIndexRoute
   '/_authed/admin/action-items': typeof AuthedAdminActionItemsRoute
   '/_authed/admin/club-settings': typeof AuthedAdminClubSettingsRoute
@@ -499,6 +509,7 @@ export interface FileRouteTypes {
     | '/api/health'
     | '/club/$clubId'
     | '/resources/$slug'
+    | '/resources/evaluation-resources'
     | '/resources/'
     | '/admin/action-items'
     | '/admin/club-settings'
@@ -549,6 +560,7 @@ export interface FileRouteTypes {
     | '/api/dev-login'
     | '/api/health'
     | '/resources/$slug'
+    | '/resources/evaluation-resources'
     | '/resources'
     | '/admin/action-items'
     | '/admin/club-settings'
@@ -602,6 +614,7 @@ export interface FileRouteTypes {
     | '/api/health'
     | '/club/$clubId'
     | '/resources/$slug'
+    | '/resources/evaluation-resources'
     | '/resources/'
     | '/_authed/admin/action-items'
     | '/_authed/admin/club-settings'
@@ -648,6 +661,7 @@ export interface RootRouteChildren {
   ApiHealthRoute: typeof ApiHealthRoute
   ClubClubIdRoute: typeof ClubClubIdRouteWithChildren
   ResourcesSlugRoute: typeof ResourcesSlugRoute
+  ResourcesEvaluationResourcesRoute: typeof ResourcesEvaluationResourcesRoute
   ResourcesIndexRoute: typeof ResourcesIndexRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiPathwaysIngestRoute: typeof ApiPathwaysIngestRoute
@@ -705,6 +719,13 @@ declare module '@tanstack/react-router' {
       path: '/resources'
       fullPath: '/resources/'
       preLoaderRoute: typeof ResourcesIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/resources/evaluation-resources': {
+      id: '/resources/evaluation-resources'
+      path: '/resources/evaluation-resources'
+      fullPath: '/resources/evaluation-resources'
+      preLoaderRoute: typeof ResourcesEvaluationResourcesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/resources/$slug': {
@@ -1121,6 +1142,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiHealthRoute: ApiHealthRoute,
   ClubClubIdRoute: ClubClubIdRouteWithChildren,
   ResourcesSlugRoute: ResourcesSlugRoute,
+  ResourcesEvaluationResourcesRoute: ResourcesEvaluationResourcesRoute,
   ResourcesIndexRoute: ResourcesIndexRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiPathwaysIngestRoute: ApiPathwaysIngestRoute,

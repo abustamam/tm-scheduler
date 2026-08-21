@@ -8,6 +8,7 @@ import { GuestOnboarding } from "#/components/club/guest-onboarding";
 import { useRequireIdentity } from "#/components/club/identity-gate";
 import { SeasonGrid } from "#/components/club/season-grid";
 import { ViewingAs } from "#/components/club/viewing-as";
+import { EvaluationResourceLinks } from "#/components/pathways/evaluation-resource-link";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
@@ -190,6 +191,19 @@ function ClubHome() {
 											<p className="text-sm text-muted-foreground">
 												&ldquo;{c.speechTitle}&rdquo;
 											</p>
+										) : null}
+										{/* Third commitment card, same gate as /me and /dashboard.
+										    This is the ANONYMOUS roster-pick path, which CLAUDE.md
+										    calls the dominant one in this no-auth product — the
+										    members most likely to want the form mid-meeting reach it
+										    here, not through a session. */}
+										{c.isSpeakerRole ||
+										c.evaluatesSlotId !== null ||
+										c.roleCategory === "evaluator" ? (
+											<EvaluationResourceLinks
+												projectName={c.evaluatedProjectName ?? c.ownProjectName}
+												fallback={!(c.evaluatedProjectName ?? c.ownProjectName)}
+											/>
 										) : null}
 										<Link
 											to="/club/$clubId/meeting/$meetingId"
