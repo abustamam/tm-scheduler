@@ -2,6 +2,14 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.22.8.0] - 2026-08-20
+
+### Fixed
+
+- **The left-hand menu scrolls again, and sign-out is always where you left it.** If you are an officer — and especially if you are also a platform admin — the menu had grown longer than a laptop screen is tall. Everything past the fold was unreachable: not hidden behind a scrollbar, just gone, because the menu is pinned in place and scrolling the page moves everything except the menu. "My dashboard", "My roles", "Resources" and your own name and sign-out button at the bottom were the casualties, on every page. The menu list now scrolls on its own, and the club name at the top and your profile and sign-out at the bottom stay put while it does — so the way out of the app is never behind a scroll. The phone menu works the same way, with the search box now staying put too.
+- **The attendance rail keeps its heading while you scroll the roster.** Opening a meeting and scrolling down the list of members took the card's title and its running counts with it, so twenty rows into a large club you could no longer see how many had said yes. The heading, the counts and the offline-sync status now stay at the top of the card while only the names move.
+- **Nothing user-facing.** Both of the above are failures of *shape* rather than logic, and nothing in the project could see them: the tests that check pages have no way to measure a real layout, so a menu with no scrollbar and a menu with one look identical to them. Every check passed while both bugs were live, and the same defect had already shipped once before on the attendance rail. There is now a check that lays both of these columns out in a real browser and confirms you can still reach the bottom of them — and that getting there does not cost you the heading or the sign-out button.
+
 ## [1.22.7.0] - 2026-08-20
 
 ### Fixed

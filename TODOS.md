@@ -78,6 +78,21 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
 - Biome's `files.includes` covers `src/**`, `.vscode/**`, `index.html` and `vite.config.ts` only, so `scripts/**`, `drizzle.config.ts`, `vitest.config.ts` and the whole `extension/` sub-package are outside the gate entirely. `extension/` has no Biome config and no Biome step in its CI job, yet some plans instruct running Biome from inside it, where it resolves the root config that excludes those paths. Decide whether those paths should be linted or explicitly declared out of scope.
   **Priority:** P4
 
+## Pinned columns
+
+- The attendance rail's scrollbar sits inside the card's `px-6`, an inset gutter rather than
+  hugging the column edge, because v1.22.8.0 moved the scroller from the `<aside>` into
+  `CardContent`. Purely cosmetic — the alternative (negative margin on the body, padding back on
+  the rows) trades one oddity for another, so it wants a designer's eye rather than a rule.
+  **Priority:** P4
+
+- Nothing pins the removal of `NavGroup`'s `first:pt-1`. It never matched while the labels were
+  direct children of the sidebar column, and v1.22.8.0 dropped it so that giving the nav its own
+  scrolling band would not silently tighten the gap under the club name by 10px. Re-adding it
+  would reintroduce that shift with every gate green. Not worth a test on its own; worth knowing
+  if the sidebar's structure is touched again.
+  **Priority:** P4
+
 ## Agenda templates
 
 - **`scripts/resync-template-roles.ts` is specified but not written.** Materialization is
