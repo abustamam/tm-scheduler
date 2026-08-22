@@ -36,7 +36,7 @@ import {
 	type MeetingSlotDefs,
 } from "./meeting-create-logic";
 
-type DbOrTx =
+export type DbOrTx =
 	| typeof db
 	| Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
 
@@ -239,6 +239,92 @@ export async function materializeTemplateRoles(
 }
 
 /**
+ * Deep-copy a template into a PRIVATE row owned by one meeting, and return the
+ * copy's id.
+ *
+ * This is what makes an agenda editable: the meeting points at content nobody
+ * else reads, so removing a row from one contest cannot remove it from the next
+ * one, and "save this shape as a template" later is a promotion (clear
+ * `meeting_id`) rather than a second mechanism.
+ *
+ * The copy keeps the SOURCE's `key`. It is unique per meeting via
+ * `meeting_templates_meeting_unique`, and the club-key index exempts private
+ * rows, so the key here is provenance rather than identity — it is how you can
+ * still tell what a meeting was built from after it has been edited.
+ */
+export async function copyTemplateForMeeting(
+	conn: DbOrTx,
+	input: { sourceTemplateId: string; clubId: string; meetingId: string },
+): Promise<string> {
+	const { sourceTemplateId, clubId, meetingId } = input;
+	const [source] = await conn
+		.select()
+		.from(meetingTemplates)
+		.where(eq(meetingTemplates.id, sourceTemplateId))
+		.limit(1);
+	if (!source) throw new Error("That meeting template no longer exists.");
+
+	const [copy] = await conn
+		.insert(meetingTemplates)
+		.values({
+			clubId,
+			meetingId,
+			key: source.key,
+			name: source.name,
+			description: source.description,
+			defaultLengthMinutes: source.defaultLengthMinutes,
+			sortOrder: source.sortOrder,
+			enabled: source.enabled,
+		})
+		.returning({ id: meetingTemplates.id });
+	if (!copy) throw new Error("Failed to copy the meeting template.");
+
+	const roles = await conn
+		.select()
+		.from(meetingTemplateRoles)
+		.where(eq(meetingTemplateRoles.templateId, sourceTemplateId));
+	if (roles.length > 0) {
+		await conn.insert(meetingTemplateRoles).values(
+			roles.map((r) => ({
+				templateId: copy.id,
+				key: r.key,
+				name: r.name,
+				category: r.category,
+				defaultCount: r.defaultCount,
+				sortOrder: r.sortOrder,
+				isSpeakerRole: r.isSpeakerRole,
+				description: r.description,
+			})),
+		);
+	}
+
+	const beats = await conn
+		.select()
+		.from(meetingTemplateBeats)
+		.where(eq(meetingTemplateBeats.templateId, sourceTemplateId));
+	if (beats.length > 0) {
+		await conn.insert(meetingTemplateBeats).values(
+			beats.map((b) => ({
+				templateId: copy.id,
+				sortOrder: b.sortOrder,
+				kind: b.kind,
+				label: b.label,
+				detail: b.detail,
+				minutes: b.minutes,
+				roleKey: b.roleKey,
+				repeatsRoleKey: b.repeatsRoleKey,
+				flex: b.flex,
+				markGreen: b.markGreen,
+				markYellow: b.markYellow,
+				markRed: b.markRed,
+			})),
+		);
+	}
+
+	return copy.id;
+}
+
+/**
  * PURE READ. The role definitions a meeting's slots are generated from.
  *
  * Deliberately does NOT materialize. A function named `resolve…` that quietly
@@ -432,6 +518,7 @@ export async function applyTemplateConversion(input: {
 				id: meetings.id,
 				status: meetings.status,
 				clubId: meetings.clubId,
+				templateId: meetings.templateId,
 			})
 			.from(meetings)
 			.where(eq(meetings.id, meetingId))
@@ -448,13 +535,63 @@ export async function applyTemplateConversion(input: {
 			throw new Error("A cancelled meeting cannot change its template.");
 		}
 
+		// The meeting's CURRENT private template, if it has one — captured before
+		// we repoint, because that is what we must retire afterwards.
+		const previousPrivateId = meeting.templateId
+			? ((
+					await tx
+						.select({ id: meetingTemplates.id })
+						.from(meetingTemplates)
+						.where(
+							and(
+								eq(meetingTemplates.id, meeting.templateId),
+								eq(meetingTemplates.meetingId, meetingId),
+							),
+						)
+						.limit(1)
+				)[0]?.id ?? null)
+			: null;
+
+		// Detach (never delete-in-place) the outgoing private copy FIRST.
+		// `meeting_templates_meeting_unique` is a bare unique INDEX, not a
+		// deferrable constraint, so it is enforced the instant
+		// `copyTemplateForMeeting`'s INSERT runs below — the old row's own
+		// `meeting_id` has to be cleared before that insert, not after.
+		// (Nulling `meetings.template_id` would not do this: that column and
+		// `meeting_templates.meeting_id` are different columns on different
+		// tables.) The row can't be fully DELETEd yet either:
+		// `role_definitions.template_id` is ON DELETE RESTRICT and still points
+		// at it — materialized when this very copy was made — and those
+		// `role_definitions` rows can't go until the `role_slots` referencing
+		// them are reconciled below, which needs the NEW template's defs, which
+		// don't exist until the copy is inserted. So: detach now, retire in full
+		// once the new shape is in place.
+		if (previousPrivateId !== null) {
+			await tx
+				.update(meetingTemplates)
+				.set({ meetingId: null })
+				.where(eq(meetingTemplates.id, previousPrivateId));
+		}
+
+		// Deep-copy so this meeting's agenda is its own. Re-converting makes a
+		// FRESH copy, which is what keeps an edited contest from leaking into the
+		// next one.
+		const effectiveTemplateId =
+			templateId === null
+				? null
+				: await copyTemplateForMeeting(tx, {
+						sourceTemplateId: templateId,
+						clubId,
+						meetingId,
+					});
+
 		// Materialize EXPLICITLY, as its own step. `resolveMeetingRoleDefs` is a
 		// pure read, so the write has to be visible here rather than hidden inside
 		// a function named `resolve…`. Idempotent.
-		if (templateId !== null) {
-			await materializeTemplateRoles(tx, clubId, templateId);
+		if (effectiveTemplateId !== null) {
+			await materializeTemplateRoles(tx, clubId, effectiveTemplateId);
 		}
-		const defs = await resolveMeetingRoleDefs(tx, clubId, templateId);
+		const defs = await resolveMeetingRoleDefs(tx, clubId, effectiveTemplateId);
 		const keepDefIds = new Set(defs.map((d) => d.id));
 		const current = await loadSlotsForConversion(tx, meetingId);
 		const plan = summarize(
@@ -503,20 +640,40 @@ export async function applyTemplateConversion(input: {
 		}
 
 		const length =
-			templateId === null
+			effectiveTemplateId === null
 				? null
 				: ((
 						await tx
 							.select({ m: meetingTemplates.defaultLengthMinutes })
 							.from(meetingTemplates)
-							.where(eq(meetingTemplates.id, templateId))
+							.where(eq(meetingTemplates.id, effectiveTemplateId))
 							.limit(1)
 					)[0]?.m ?? null);
 
 		await tx
 			.update(meetings)
-			.set({ templateId, ...(length != null ? { lengthMinutes: length } : {}) })
+			.set({
+				templateId: effectiveTemplateId,
+				...(length != null ? { lengthMinutes: length } : {}),
+			})
 			.where(eq(meetings.id, meetingId));
+
+		// Retire the superseded private copy now, not earlier: `meetings.template_id`
+		// no longer references it (just updated above, satisfying its own RESTRICT),
+		// and every role_slot that used to reference its materialized
+		// role_definitions was just reconciled away (doomedIds, above) — ALL of
+		// them, since a private copy's role_definitions carry a fresh template_id
+		// every time and can never overlap with `effectiveTemplateId`'s.
+		// role_definitions has to go first: it is ALSO ON DELETE RESTRICT against
+		// meeting_templates, independently of the meetings.template_id one above.
+		if (previousPrivateId !== null) {
+			await tx
+				.delete(roleDefinitions)
+				.where(roleDefScope(clubId, previousPrivateId));
+			await tx
+				.delete(meetingTemplates)
+				.where(eq(meetingTemplates.id, previousPrivateId));
+		}
 
 		await logActivity(tx, {
 			clubId,
@@ -524,7 +681,7 @@ export async function applyTemplateConversion(input: {
 			action: "meeting_template_set",
 			targetType: "meeting",
 			targetId: meetingId,
-			detail: { templateId },
+			detail: { templateId, privateTemplateId: effectiveTemplateId },
 		});
 
 		return plan;

@@ -148,11 +148,22 @@ describe.skipIf(!hasTestDb)("meeting template conversion", () => {
 			expect(plan.slotsAdded).toBe(4); // 1 chair + 3 contestants
 		});
 
-		it("adds and removes nothing on a re-apply", async () => {
+		/**
+		 * OLD contract, now false. Before private copies, `applyTemplateConversion`
+		 * materialized role_definitions under the SOURCE template's id, so a
+		 * second preview of that same id saw them already there and reported a
+		 * no-op. Task 3 materializes under the PRIVATE COPY's id instead — a
+		 * fresh id every conversion — so nothing is ever materialized under the
+		 * source id, and a preview of the source always falls back to the
+		 * template's own rows, exactly like a first-time preview. This is the
+		 * brief's own accepted consequence ("planTemplateConversion... already
+		 * reads the SOURCE template's own rows when nothing is materialized").
+		 */
+		it("still previews a full add on the source id after applying, since nothing materializes there", async () => {
 			await convert(templateId);
 			const plan = await planTemplateConversion(club.meetingId, templateId);
-			expect(plan.slotsAdded).toBe(0);
-			expect(plan.openSlotsRemoved).toBe(0);
+			expect(plan.slotsAdded).toBe(4); // 1 chair + 3 contestants, same as a first preview
+			expect(plan.openSlotsRemoved).toBe(4); // the private copy's own 4 slots, none "kept"
 			expect(plan.claimedSlotsReleased).toBe(0);
 		});
 	});
@@ -163,13 +174,21 @@ describe.skipIf(!hasTestDb)("meeting template conversion", () => {
 			expect(await slotsFor(club.meetingId)).toHaveLength(4);
 		});
 
-		it("stamps template_id and the template's default length", async () => {
+		it("stamps template_id with a private copy and the template's default length", async () => {
 			await convert(templateId);
 			const [row] = await testDb
 				.select()
 				.from(meetings)
 				.where(eq(meetings.id, club.meetingId));
-			expect(row?.templateId).toBe(templateId);
+			// OLD contract was `row?.templateId === templateId` (the shared row).
+			// Conversion now deep-copies, so the meeting points at a PRIVATE row
+			// instead — asserted via its meetingId, not the id itself.
+			expect(row?.templateId).not.toBe(templateId);
+			const [copy] = await testDb
+				.select({ meetingId: meetingTemplates.meetingId })
+				.from(meetingTemplates)
+				.where(eq(meetingTemplates.id, row?.templateId ?? ""));
+			expect(copy?.meetingId).toBe(club.meetingId);
 			expect(row?.lengthMinutes).toBe(150);
 		});
 
@@ -279,6 +298,165 @@ describe.skipIf(!hasTestDb)("meeting template conversion", () => {
 			expect(row?.templateId).toBeNull();
 			// `seedClub` defines ONE standard role with defaultCount 1.
 			expect(await slotsFor(club.meetingId)).toHaveLength(1);
+		});
+	});
+
+	describe("private copy", () => {
+		it("points the meeting at a PRIVATE copy, not the shared template", async () => {
+			const source = await makeTemplate();
+			await applyTemplateConversion({
+				meetingId: club.meetingId,
+				clubId: club.clubId,
+				templateId: source,
+				actorMemberId: null,
+			});
+
+			const [m] = await testDb
+				.select({ templateId: meetings.templateId })
+				.from(meetings)
+				.where(eq(meetings.id, club.meetingId));
+			expect(m?.templateId).not.toBe(source);
+
+			const [copy] = await testDb
+				.select({
+					meetingId: meetingTemplates.meetingId,
+					clubId: meetingTemplates.clubId,
+				})
+				.from(meetingTemplates)
+				.where(eq(meetingTemplates.id, m?.templateId ?? ""));
+			expect(copy?.meetingId).toBe(club.meetingId);
+			expect(copy?.clubId).toBe(club.clubId);
+		});
+
+		it("copies the source's beats and roles verbatim", async () => {
+			const source = await makeTemplate();
+			await applyTemplateConversion({
+				meetingId: club.meetingId,
+				clubId: club.clubId,
+				templateId: source,
+				actorMemberId: null,
+			});
+			const [m] = await testDb
+				.select({ templateId: meetings.templateId })
+				.from(meetings)
+				.where(eq(meetings.id, club.meetingId));
+
+			const srcBeats = await testDb
+				.select()
+				.from(meetingTemplateBeats)
+				.where(eq(meetingTemplateBeats.templateId, source));
+			const copyBeats = await testDb
+				.select()
+				.from(meetingTemplateBeats)
+				.where(eq(meetingTemplateBeats.templateId, m?.templateId ?? ""));
+			expect(copyBeats).toHaveLength(srcBeats.length);
+			expect(copyBeats.map((b) => b.label).sort()).toEqual(
+				srcBeats.map((b) => b.label).sort(),
+			);
+		});
+
+		it("gives two meetings independent copies of one template", async () => {
+			// The whole point: editing one night's agenda must not reach another's.
+			const source = await makeTemplate();
+			const [second] = await testDb
+				.insert(meetings)
+				.values({
+					clubId: club.clubId,
+					scheduledAt: new Date("2027-05-06T02:00:00Z"),
+				})
+				.returning({ id: meetings.id });
+			if (!second) throw new Error("meeting insert failed");
+
+			for (const id of [club.meetingId, second.id]) {
+				await applyTemplateConversion({
+					meetingId: id,
+					clubId: club.clubId,
+					templateId: source,
+					actorMemberId: null,
+				});
+			}
+			const rows = await testDb
+				.select({ id: meetings.id, templateId: meetings.templateId })
+				.from(meetings)
+				.where(inArray(meetings.id, [club.meetingId, second.id]));
+			const ids = rows.map((r) => r.templateId);
+			expect(new Set(ids).size).toBe(2);
+		});
+
+		it("deletes the private copy when the meeting goes back to standard", async () => {
+			const source = await makeTemplate();
+			await applyTemplateConversion({
+				meetingId: club.meetingId,
+				clubId: club.clubId,
+				templateId: source,
+				actorMemberId: null,
+			});
+			const [before] = await testDb
+				.select({ templateId: meetings.templateId })
+				.from(meetings)
+				.where(eq(meetings.id, club.meetingId));
+			const privateId = before?.templateId ?? "";
+
+			await applyTemplateConversion({
+				meetingId: club.meetingId,
+				clubId: club.clubId,
+				templateId: null,
+				actorMemberId: null,
+			});
+
+			const left = await testDb
+				.select({ id: meetingTemplates.id })
+				.from(meetingTemplates)
+				.where(eq(meetingTemplates.id, privateId));
+			expect(left).toEqual([]);
+			// And the SOURCE survives — reverting one meeting must not retire the
+			// template every other meeting picks from.
+			const src = await testDb
+				.select({ id: meetingTemplates.id })
+				.from(meetingTemplates)
+				.where(eq(meetingTemplates.id, source));
+			expect(src).toHaveLength(1);
+		});
+
+		it("re-converting an already-converted meeting replaces its private copy", async () => {
+			// The private-template index is unique on meeting_id, so the OLD copy's
+			// own meeting_id has to be cleared before the new copy can be inserted —
+			// and it can't be fully deleted that early, because role_definitions
+			// (ON DELETE RESTRICT) still points at it until the slot reconciliation
+			// below reassigns those roles to the NEW copy. See the "Detach" comment
+			// in applyTemplateConversion.
+			const first = await makeTemplate();
+			const second = await makeTemplate();
+			await applyTemplateConversion({
+				meetingId: club.meetingId,
+				clubId: club.clubId,
+				templateId: first,
+				actorMemberId: null,
+			});
+			const [afterFirst] = await testDb
+				.select({ templateId: meetings.templateId })
+				.from(meetings)
+				.where(eq(meetings.id, club.meetingId));
+			const firstCopy = afterFirst?.templateId ?? "";
+
+			await applyTemplateConversion({
+				meetingId: club.meetingId,
+				clubId: club.clubId,
+				templateId: second,
+				actorMemberId: null,
+			});
+			const [afterSecond] = await testDb
+				.select({ templateId: meetings.templateId })
+				.from(meetings)
+				.where(eq(meetings.id, club.meetingId));
+
+			expect(afterSecond?.templateId).not.toBe(firstCopy);
+			// The superseded copy is gone, not orphaned.
+			const orphan = await testDb
+				.select({ id: meetingTemplates.id })
+				.from(meetingTemplates)
+				.where(eq(meetingTemplates.id, firstCopy));
+			expect(orphan).toEqual([]);
 		});
 	});
 
