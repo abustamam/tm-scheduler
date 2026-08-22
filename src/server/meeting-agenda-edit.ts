@@ -17,7 +17,7 @@ import {
 } from "./meeting-agenda-edit-logic";
 import { requireMeetingTemplateEditor } from "./meeting-templates-logic";
 
-export type { AgendaDraft };
+export type { AgendaDraft, AgendaDraftRow };
 
 const meetingInput = z.object({ meetingId: z.string().uuid() });
 
@@ -40,16 +40,24 @@ const rowInput = z.object({
 	rowId: z.string().uuid(),
 });
 const patchInput = rowInput.extend({
-	patch: z.object({
-		label: z.string().optional(),
-		detail: z.string().nullable().optional(),
-		minutes: z.number().int().optional(),
-		roleKey: z.string().nullable().optional(),
-		repeatsRoleKey: z.string().nullable().optional(),
-		markGreen: z.number().nullable().optional(),
-		markYellow: z.number().nullable().optional(),
-		markRed: z.number().nullable().optional(),
-	}),
+	// Require at least one key: an empty `{}` validates as a well-formed patch,
+	// forks the meeting's template on its way in, and then 500s on drizzle's
+	// "No values to set" — a confusing failure for what should be a no-op
+	// request rejected up front.
+	patch: z
+		.object({
+			label: z.string().optional(),
+			detail: z.string().nullable().optional(),
+			minutes: z.number().int().optional(),
+			roleKey: z.string().nullable().optional(),
+			repeatsRoleKey: z.string().nullable().optional(),
+			markGreen: z.number().nullable().optional(),
+			markYellow: z.number().nullable().optional(),
+			markRed: z.number().nullable().optional(),
+		})
+		.refine((p) => Object.keys(p).length > 0, {
+			message: "Patch must set at least one field.",
+		}),
 });
 const moveInput = rowInput.extend({ direction: z.enum(["up", "down"]) });
 

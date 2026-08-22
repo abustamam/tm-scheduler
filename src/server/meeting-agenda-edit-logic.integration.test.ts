@@ -228,6 +228,23 @@ describe.skipIf(!hasTestDb)("loadAgendaDraft", () => {
 		expect(draft?.editable).toBe(false);
 		expect(draft?.rows.length).toBeGreaterThan(0);
 	});
+
+	it("marks a cancelled meeting NOT editable — matching what ensureAgendaDraft actually allows", async () => {
+		// `editable` used to be `!isMeetingLocked(status)` alone, which is
+		// `completed`-only, while `ensureAgendaDraft` separately refuses
+		// `cancelled`. The two had drifted: a cancelled meeting rendered a fully
+		// interactive editor whose every save threw. Both now share
+		// `agendaEditable`, so this and the write-side refusal below cannot
+		// disagree again.
+		await givePrivateTemplate();
+		await testDb
+			.update(meetings)
+			.set({ status: "cancelled" })
+			.where(eq(meetings.id, club.meetingId));
+		const draft = await loadAgendaDraft(club.meetingId);
+		expect(draft?.editable).toBe(false);
+		expect(draft?.rows.length).toBeGreaterThan(0);
+	});
 });
 
 describe.skipIf(!hasTestDb)("agenda row mutations", () => {
@@ -320,6 +337,81 @@ describe.skipIf(!hasTestDb)("agenda row mutations", () => {
 		).rejects.toThrow(/all three/i);
 	});
 
+	it("refuses a patch that clears one mark and leaves the row partial", async () => {
+		// A patch-only check sees ONE touched key (markGreen) with value null —
+		// zero "set" values in the patch itself, which reads as "none" — but
+		// against a row already holding (2,3,4) the RESULT is (null,3,4), the
+		// exact silent hole this validation exists to refuse. Must be checked
+		// against the merged row, not the patch in isolation.
+		await givePrivateTemplate();
+		const draft = await loadAgendaDraft(club.meetingId);
+		const row = draft?.rows.find((r) => r.kind === "role");
+		if (!row) throw new Error("no role row");
+		await updateAgendaRow({
+			meetingId: club.meetingId,
+			rowId: row.id,
+			patch: { markGreen: 2, markYellow: 3, markRed: 4 },
+		});
+
+		await expect(
+			updateAgendaRow({
+				meetingId: club.meetingId,
+				rowId: row.id,
+				patch: { markGreen: null },
+			}),
+		).rejects.toThrow(/all three/i);
+
+		// And the row itself was NOT written with a hole in it.
+		const after = await loadAgendaDraft(club.meetingId);
+		const updated = after?.rows.find((r) => r.id === row.id);
+		expect(updated?.markGreen).toBe(2);
+		expect(updated?.markYellow).toBe(3);
+		expect(updated?.markRed).toBe(4);
+	});
+
+	it("accepts a mark patch that completes an already-partial row", async () => {
+		// The opposite direction of the same bug: a patch-only check sees TWO
+		// touched keys, both non-null, and refuses it as "partial" — but if the
+		// row already holds the third mark, the MERGED result is complete and
+		// must be accepted, not refused for a hole that isn't there.
+		await givePrivateTemplate();
+		const draft = await loadAgendaDraft(club.meetingId);
+		const row = draft?.rows.find((r) => r.kind === "role");
+		if (!row) throw new Error("no role row");
+		// Seed the partial state directly — the writer itself can never produce
+		// one, so this is standing in for a row that predates this validation.
+		await testDb
+			.update(meetingTemplateBeats)
+			.set({ markRed: 4 })
+			.where(eq(meetingTemplateBeats.id, row.id));
+
+		await updateAgendaRow({
+			meetingId: club.meetingId,
+			rowId: row.id,
+			patch: { markGreen: 2, markYellow: 3 },
+		});
+
+		const after = await loadAgendaDraft(club.meetingId);
+		const updated = after?.rows.find((r) => r.id === row.id);
+		expect(updated?.markGreen).toBe(2);
+		expect(updated?.markYellow).toBe(3);
+		expect(updated?.markRed).toBe(4);
+	});
+
+	it("refuses an empty patch instead of a confusing drizzle 500", async () => {
+		// `{}` validates as a well-formed patch shape and would otherwise fork
+		// the meeting's template on its way to drizzle's `.set({})`, which
+		// throws "No values to set" — a request that changes nothing should be
+		// refused up front, not after doing a write-side effect.
+		await givePrivateTemplate();
+		const draft = await loadAgendaDraft(club.meetingId);
+		const row = draft?.rows[0];
+		if (!row) throw new Error("no rows");
+		await expect(
+			updateAgendaRow({ meetingId: club.meetingId, rowId: row.id, patch: {} }),
+		).rejects.toThrow();
+	});
+
 	it("caps label and detail by CODE POINTS", async () => {
 		// Slicing a surrogate pair in half yields a lone surrogate that renders as
 		// a replacement glyph and makes encodeURIComponent throw for any consumer
@@ -345,6 +437,67 @@ describe.skipIf(!hasTestDb)("agenda row mutations", () => {
 				meetingId: club.meetingId,
 				rowId: row.id,
 				patch: { label: "🎤".repeat(MAX_TEMPLATE_LABEL_CHARS + 1) },
+			}),
+		).rejects.toThrow(/too long/i);
+	});
+
+	it("accepts a roleKey the template declares", async () => {
+		await givePrivateTemplate();
+		const draft = await loadAgendaDraft(club.meetingId);
+		const row = draft?.rows.find((r) => r.kind === "section");
+		if (!row) throw new Error("no section row");
+		// "chair" is declared by `givePrivateTemplate`'s role list.
+		await updateAgendaRow({
+			meetingId: club.meetingId,
+			rowId: row.id,
+			patch: { roleKey: "chair" },
+		});
+		const after = await loadAgendaDraft(club.meetingId);
+		expect(after?.rows.find((r) => r.id === row.id)?.roleKey).toBe("chair");
+	});
+
+	it("refuses a roleKey the template does not declare", async () => {
+		// `agenda-template-rows.ts`'s `toRow`: "A beat naming a role the
+		// template does not declare is dropped rather than rendered against an
+		// invented name." Without this check the write succeeds silently and the
+		// beat vanishes from every rendered surface with no error anywhere.
+		await givePrivateTemplate();
+		const draft = await loadAgendaDraft(club.meetingId);
+		const row = draft?.rows[0];
+		if (!row) throw new Error("no rows");
+		await expect(
+			updateAgendaRow({
+				meetingId: club.meetingId,
+				rowId: row.id,
+				patch: { roleKey: "not-a-declared-role" },
+			}),
+		).rejects.toThrow(/not a role this template declares/i);
+	});
+
+	it("refuses a repeatsRoleKey the template does not declare", async () => {
+		await givePrivateTemplate();
+		const draft = await loadAgendaDraft(club.meetingId);
+		const row = draft?.rows[0];
+		if (!row) throw new Error("no rows");
+		await expect(
+			updateAgendaRow({
+				meetingId: club.meetingId,
+				rowId: row.id,
+				patch: { repeatsRoleKey: "not-a-declared-role" },
+			}),
+		).rejects.toThrow(/not a role this template declares/i);
+	});
+
+	it("caps roleKey by length", async () => {
+		await givePrivateTemplate();
+		const draft = await loadAgendaDraft(club.meetingId);
+		const row = draft?.rows[0];
+		if (!row) throw new Error("no rows");
+		await expect(
+			updateAgendaRow({
+				meetingId: club.meetingId,
+				rowId: row.id,
+				patch: { roleKey: "x".repeat(MAX_TEMPLATE_LABEL_CHARS + 1) },
 			}),
 		).rejects.toThrow(/too long/i);
 	});
@@ -414,6 +567,22 @@ describe.skipIf(!hasTestDb)("agenda row mutations", () => {
 		).rejects.toThrow();
 	});
 
+	it("refuses every mutation on a cancelled meeting", async () => {
+		// Same drift `loadAgendaDraft`'s cancelled test above closes on the read
+		// side — this is the write side ensureAgendaDraft already enforced.
+		await givePrivateTemplate();
+		const draft = await loadAgendaDraft(club.meetingId);
+		const row = draft?.rows[0];
+		if (!row) throw new Error("no rows");
+		await testDb
+			.update(meetings)
+			.set({ status: "cancelled" })
+			.where(eq(meetings.id, club.meetingId));
+		await expect(
+			removeAgendaRow({ meetingId: club.meetingId, rowId: row.id }),
+		).rejects.toThrow(/cancelled/i);
+	});
+
 	// The rowId is caller-supplied. Scoping EVERY mutation to the meeting's own
 	// template is the point of this task, not boilerplate — there is no single
 	// shared "assert ownership" call, so each mutator's own predicate is tested
@@ -423,77 +592,207 @@ describe.skipIf(!hasTestDb)("agenda row mutations", () => {
 	it("cannot remove a row belonging to another meeting's template", async () => {
 		await givePrivateTemplate();
 		const { other, foreignId } = await seedForeignRow();
-
-		await expect(
-			removeAgendaRow({ meetingId: club.meetingId, rowId: foreignId }),
-		).rejects.toThrow();
-		const still = await testDb
-			.select({ id: meetingTemplateBeats.id })
-			.from(meetingTemplateBeats)
-			.where(eq(meetingTemplateBeats.id, foreignId));
-		expect(still).toHaveLength(1);
-		await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+		// try/finally: an assertion failure below must not skip cleaning up
+		// `other` — the module `afterEach` only cleans up `club`, and a leaked
+		// club-and-meeting sits in the shared `tm_test` for every run after.
+		try {
+			await expect(
+				removeAgendaRow({ meetingId: club.meetingId, rowId: foreignId }),
+			).rejects.toThrow();
+			const still = await testDb
+				.select({ id: meetingTemplateBeats.id })
+				.from(meetingTemplateBeats)
+				.where(eq(meetingTemplateBeats.id, foreignId));
+			expect(still).toHaveLength(1);
+		} finally {
+			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+		}
 	});
 
 	it("cannot edit a row belonging to another meeting's template", async () => {
 		await givePrivateTemplate();
 		const { other, foreignId } = await seedForeignRow();
-
-		await expect(
-			updateAgendaRow({
-				meetingId: club.meetingId,
-				rowId: foreignId,
-				patch: { minutes: 99 },
-			}),
-		).rejects.toThrow();
-		const [still] = await testDb
-			.select({ minutes: meetingTemplateBeats.minutes })
-			.from(meetingTemplateBeats)
-			.where(eq(meetingTemplateBeats.id, foreignId));
-		expect(still?.minutes).toBe(0);
-		await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+		try {
+			await expect(
+				updateAgendaRow({
+					meetingId: club.meetingId,
+					rowId: foreignId,
+					patch: { minutes: 99 },
+				}),
+			).rejects.toThrow();
+			const [still] = await testDb
+				.select({ minutes: meetingTemplateBeats.minutes })
+				.from(meetingTemplateBeats)
+				.where(eq(meetingTemplateBeats.id, foreignId));
+			expect(still?.minutes).toBe(0);
+		} finally {
+			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+		}
 	});
 
 	it("cannot move a row belonging to another meeting's template", async () => {
 		await givePrivateTemplate();
 		const { other, foreignId } = await seedForeignRow();
-
-		await expect(
-			moveAgendaRow({
-				meetingId: club.meetingId,
-				rowId: foreignId,
-				direction: "down",
-			}),
-		).rejects.toThrow();
-		const [still] = await testDb
-			.select({ sortOrder: meetingTemplateBeats.sortOrder })
-			.from(meetingTemplateBeats)
-			.where(eq(meetingTemplateBeats.id, foreignId));
-		expect(still?.sortOrder).toBe(0);
-		await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+		try {
+			await expect(
+				moveAgendaRow({
+					meetingId: club.meetingId,
+					rowId: foreignId,
+					direction: "down",
+				}),
+			).rejects.toThrow();
+			const [still] = await testDb
+				.select({ sortOrder: meetingTemplateBeats.sortOrder })
+				.from(meetingTemplateBeats)
+				.where(eq(meetingTemplateBeats.id, foreignId));
+			expect(still?.sortOrder).toBe(0);
+		} finally {
+			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+		}
 	});
 
 	it("cannot add a row after one belonging to another meeting's template", async () => {
 		await givePrivateTemplate();
 		const { other, foreignTemplateId, foreignId } = await seedForeignRow();
+		try {
+			await expect(
+				addAgendaRow({
+					meetingId: club.meetingId,
+					afterRowId: foreignId,
+					kind: "event",
+				}),
+			).rejects.toThrow();
+			// Neither template gained a row: the foreign template because the
+			// mutator never wrote to it, and the caller's own because resolving
+			// `afterRowId` failed before any insert ran.
+			const foreignRows = await testDb
+				.select({ id: meetingTemplateBeats.id })
+				.from(meetingTemplateBeats)
+				.where(eq(meetingTemplateBeats.templateId, foreignTemplateId));
+			expect(foreignRows).toHaveLength(1);
+			const ownDraft = await loadAgendaDraft(club.meetingId);
+			expect(ownDraft?.rows).toHaveLength(2);
+		} finally {
+			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+		}
+	});
 
-		await expect(
-			addAgendaRow({
+	// Findings above short-circuit at the pre-fork ownership check
+	// (`findRow`), so they never reach the mutating statement's OWN
+	// `templateId` predicate. These two set up the same "foreign row shares
+	// this row's sortOrder" condition on the caller's OWN, already-private
+	// template. They pass either way now, and that is worth stating rather
+	// than leaving implied: on an already-private template the mutating
+	// statement matches by `id` (finding #3's fix), which is a primary key and
+	// needs no templateId help to avoid the foreign row — so these two do NOT
+	// by themselves prove the templateId predicate is load-bearing. They are
+	// still kept, as basic regression coverage of "editing my own row never
+	// touches someone else's" at the id-matched path. The test AFTER them is
+	// the one that isolates the predicate that actually matters: the
+	// sortOrder-matched path, reached only on the one-time fork.
+
+	it("does not touch a foreign row sharing the same sortOrder when removing its own", async () => {
+		await givePrivateTemplate();
+		const { other, foreignId } = await seedForeignRow();
+		try {
+			const draft = await loadAgendaDraft(club.meetingId);
+			const ownFirst = draft?.rows[0];
+			if (!ownFirst) throw new Error("no rows");
+			expect(ownFirst.sortOrder).toBe(0);
+
+			await removeAgendaRow({ meetingId: club.meetingId, rowId: ownFirst.id });
+
+			const still = await testDb
+				.select({ id: meetingTemplateBeats.id })
+				.from(meetingTemplateBeats)
+				.where(eq(meetingTemplateBeats.id, foreignId));
+			expect(still).toHaveLength(1);
+		} finally {
+			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+		}
+	});
+
+	it("does not touch a foreign row sharing the same sortOrder when editing its own", async () => {
+		await givePrivateTemplate();
+		const { other, foreignId } = await seedForeignRow();
+		try {
+			const draft = await loadAgendaDraft(club.meetingId);
+			const ownFirst = draft?.rows[0];
+			if (!ownFirst) throw new Error("no rows");
+			expect(ownFirst.sortOrder).toBe(0);
+
+			await updateAgendaRow({
 				meetingId: club.meetingId,
-				afterRowId: foreignId,
+				rowId: ownFirst.id,
+				patch: { label: "renamed" },
+			});
+
+			const [still] = await testDb
+				.select({ label: meetingTemplateBeats.label })
+				.from(meetingTemplateBeats)
+				.where(eq(meetingTemplateBeats.id, foreignId));
+			expect(still?.label).toBe("theirs");
+		} finally {
+			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+		}
+	});
+
+	it("does not touch a foreign row sharing the same sortOrder when a first write forks a private copy", async () => {
+		// THIS is the test that isolates the templateId predicate as
+		// load-bearing. A meeting's first write matches by SORTORDER, not id
+		// (finding #3) — the row it read off the pre-fork SHARED template no
+		// longer exists by that id in the fresh copy. Seed a foreign row at
+		// sortOrder 0 in a totally unrelated club's template, point THIS
+		// meeting at a different shared template whose one row is ALSO sortOrder
+		// 0, then mutate: the fork's private copy lands its one row at
+		// sortOrder 0 too. A mutating statement matching on sortOrder alone,
+		// with no templateId in its WHERE, would delete the copy's row AND the
+		// unrelated foreign row AND the shared source's own row in one
+		// statement — three rows for a "remove one row" request.
+		const { other, foreignId } = await seedForeignRow();
+		try {
+			const [shared] = await testDb
+				.insert(meetingTemplates)
+				.values({ key: `shared_fork_${RUN}`, name: `Shared fork ${RUN}` })
+				.returning({ id: meetingTemplates.id });
+			if (!shared) throw new Error("template insert failed");
+			madeTemplates.push(shared.id);
+			await testDb.insert(meetingTemplateBeats).values({
+				templateId: shared.id,
+				sortOrder: 0,
 				kind: "event",
-			}),
-		).rejects.toThrow();
-		// Neither template gained a row: the foreign template because the
-		// mutator never wrote to it, and the caller's own because resolving
-		// `afterRowId` failed before any insert ran.
-		const foreignRows = await testDb
-			.select({ id: meetingTemplateBeats.id })
-			.from(meetingTemplateBeats)
-			.where(eq(meetingTemplateBeats.templateId, foreignTemplateId));
-		expect(foreignRows).toHaveLength(1);
-		const ownDraft = await loadAgendaDraft(club.meetingId);
-		expect(ownDraft?.rows).toHaveLength(2);
-		await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+				label: "Shared beat",
+				minutes: 5,
+			});
+			await testDb
+				.update(meetings)
+				.set({ templateId: shared.id })
+				.where(eq(meetings.id, club.meetingId));
+
+			const draft = await loadAgendaDraft(club.meetingId);
+			const row = draft?.rows[0];
+			if (!row) throw new Error("no rows");
+			expect(row.sortOrder).toBe(0);
+
+			await removeAgendaRow({ meetingId: club.meetingId, rowId: row.id });
+
+			// The shared source's own row survives — the fork COPIES, it does
+			// not edit in place.
+			const sharedRows = await testDb
+				.select({ id: meetingTemplateBeats.id })
+				.from(meetingTemplateBeats)
+				.where(eq(meetingTemplateBeats.templateId, shared.id));
+			expect(sharedRows).toHaveLength(1);
+
+			// The unrelated foreign row, in a different club's template
+			// entirely, is untouched.
+			const foreignRows = await testDb
+				.select({ id: meetingTemplateBeats.id })
+				.from(meetingTemplateBeats)
+				.where(eq(meetingTemplateBeats.id, foreignId));
+			expect(foreignRows).toHaveLength(1);
+		} finally {
+			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+		}
 	});
 });
