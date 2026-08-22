@@ -264,8 +264,18 @@ describe("buildTemplateRows render cost (#task-10)", () => {
 		// ...but this renderer never approaches #522's ~13x, which is the
 		// thing worth pinning: a future change that made emoji cost 10x
 		// ASCII here would be a real regression in THIS renderer, not just
-		// "emoji are known to be slower somewhere in this codebase".
-		expect(emojiMs).toBeLessThan(asciiMs * 6 + 20);
+		// "emoji are known to be slower somewhere in this codebase". ABSOLUTE,
+		// not stated relative to `asciiMs` measured in this same run — a bound
+		// like `asciiMs * 6` moves with whatever this run happens to measure
+		// for ASCII and would still pass if BOTH numbers regressed together.
+		// 100ms is generous over the measured ~33-37ms emoji cost at this same
+		// fixture (`meeting-template-limits.ts`'s honesty note), enough margin
+		// for a slower CI runner while still catching a real regression: the
+		// worst-legal-template test above already gates the absolute number
+		// tightly at 250ms, so this one only needs to prove emoji isn't an
+		// order of magnitude worse than that.
+		expect(emojiMs).toBeLessThan(100);
+		expect(asciiMs).toBeGreaterThan(0);
 	});
 
 	/**

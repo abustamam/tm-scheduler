@@ -684,25 +684,32 @@ function hostileStr(len: number): string {
 }
 
 /**
- * `hostileTemplateRows`'s beat layout: every one of `MAX_TEMPLATE_BEATS`
- * beats is a NON-repeating role beat, cycling through all
- * `MAX_TEMPLATE_ROLES` declared roles, each role owning
- * `MAX_ROLE_REPEAT_SLOTS` slots — exercising the holder-list cap
- * `agenda-template-rows.ts` now applies on that branch on every single row,
- * rather than on 40 of them and leaving the rest to one repeat block.
+ * `hostileTemplateRows`'s beat layout: every one of `beatCount` beats is a
+ * NON-repeating role beat, cycling through the declared roles (capped at
+ * `MAX_TEMPLATE_ROLES`), each role owning `MAX_ROLE_REPEAT_SLOTS` slots —
+ * exercising the holder-list cap `agenda-template-rows.ts` now applies on
+ * that branch on every row that has one, rather than on 40 of them and
+ * leaving the rest to one repeat block.
  *
  * Deliberately NOT the bench file's construction (a big repeat block over
- * the leftover beats): that shape expands `MAX_TEMPLATE_BEATS` stored rows
- * into ~16x as many OUTPUT rows (measured: 3,240 for this template's exact
- * numbers), and dumping a DOM that size through headless Chrome's
- * `--dump-dom` overflowed `execFileSync`'s pipe on this machine
- * (`ENOBUFS`) — a harness limit, not a claim about the app. All-non-repeating
- * keeps the output at exactly `MAX_TEMPLATE_BEATS` rows while still declaring
- * the full `MAX_TEMPLATE_BEATS` / `MAX_TEMPLATE_ROLES` / `MAX_ROLE_REPEAT_SLOTS`
- * / label / detail ceilings at once — still far longer than the seeded
- * contest's ~15 beats, which is the property this case exists to cover.
+ * the leftover beats) at `beatCount = MAX_TEMPLATE_BEATS`: that shape
+ * expands `MAX_TEMPLATE_BEATS` stored rows into ~16x as many OUTPUT rows
+ * (measured: 3,240 for this template's exact numbers), and dumping a DOM
+ * that size through headless Chrome's `--dump-dom` overflowed
+ * `execFileSync`'s pipe on this machine (`ENOBUFS`) — a harness limit, not
+ * a claim about the app. All-non-repeating keeps the output at exactly
+ * `beatCount` rows while still declaring the full `MAX_TEMPLATE_ROLES` /
+ * `MAX_ROLE_REPEAT_SLOTS` / label / detail ceilings at once regardless of
+ * `beatCount` — the ceiling case (`beatCount = MAX_TEMPLATE_BEATS`, the
+ * default) is still far longer than the seeded contest's ~15 beats, which
+ * is the property THAT case exists to cover. The squeeze-zone case below
+ * calls this with a much smaller `beatCount` instead, for a different
+ * property — see that describe block's own docblock.
  */
-function hostileTemplateRows(): TimelineRow[] {
+function hostileTemplateRows(
+	beatCount: number = MAX_TEMPLATE_BEATS,
+	holdersPerRow: number = MAX_ROLE_REPEAT_SLOTS,
+): TimelineRow[] {
 	const roles: TemplateRoleRow[] = Array.from(
 		{ length: MAX_TEMPLATE_ROLES },
 		(_, i) => ({
@@ -714,7 +721,7 @@ function hostileTemplateRows(): TimelineRow[] {
 	const label = hostileStr(MAX_TEMPLATE_LABEL_CHARS);
 	const detail = hostileStr(MAX_TEMPLATE_DETAIL_CHARS);
 	const beats: TemplateBeatRow[] = Array.from(
-		{ length: MAX_TEMPLATE_BEATS },
+		{ length: beatCount },
 		(_, i) => ({
 			sortOrder: i,
 			kind: "role",
@@ -745,7 +752,7 @@ function hostileTemplateRows(): TimelineRow[] {
 	// per row; only their NAME LENGTH backs off to stay inside the harness.
 	const slots: AgendaSlot[] = [];
 	for (const role of roles) {
-		for (let i = 0; i < MAX_ROLE_REPEAT_SLOTS; i++) {
+		for (let i = 0; i < holdersPerRow; i++) {
 			slots.push({
 				id: `${role.key}-${i}`,
 				roleName: role.name,
@@ -795,6 +802,69 @@ describe.skipIf(!hasChrome)(
 			// `FitPage` scales hardest) at a fixture size closer to it. Keep both:
 			// this one changes if the flow threshold, the declared size, or this
 			// template's own row count ever move enough to cross back over it.
+			expect(printedDetailPt(rows)).toBeGreaterThanOrEqual(
+				EDITORIAL_DENSE_MIN_PRINTED_PT,
+			);
+		});
+
+		/**
+		 * The case above proves the CEILING is safe; it does not prove the
+		 * DANGEROUS size is, because it lands in the wrong branch. `FitPage`
+		 * SQUEEZES a sheet taller than one page down toward `MIN_FIT_SCALE`
+		 * (0.72) and then, past that point, gives up and FLOWS at full
+		 * declared size instead — so the worst printed type size is not at
+		 * the largest content, it is at the largest content that still
+		 * squeezes, just before that cliff. `TODOS.md` already records this
+		 * cliff as a known gap; the pre-existing "contest agenda density"
+		 * suite above sits in it too, but only with BENIGN content (short
+		 * ASCII labels, ordinary names) — "squeeze zone + hostile axes" was
+		 * untested, and that combination is exactly what an officer can now
+		 * author that the seed never could.
+		 *
+		 * Sized empirically, not guessed. Every row here carries max-length
+		 * emoji label and detail (`MAX_TEMPLATE_LABEL_CHARS` /
+		 * `MAX_TEMPLATE_DETAIL_CHARS`) — that alone is what the beat count
+		 * and holder count below are tuned AROUND, since two such rows at
+		 * full holders already overshoot the squeeze zone entirely. Measured
+		 * directly while sizing this case (`hostileTemplateRows(beats,
+		 * holders)`, Apple M2 Max, 2026-08-22):
+		 *
+		 *     beats=1 holders=20  height=1057  raw=0.997  (barely squeezed)
+		 *     beats=2 holders=0   height=1074  raw=0.981
+		 *     beats=2 holders=10  height=1368  raw=0.770
+		 *     beats=2 holders=12  height=1444  raw=0.730  ← chosen
+		 *     beats=2 holders=13  height=1486  raw=0.709  (already FLOWS)
+		 *     beats=2 holders=20  height=1696  raw=0.621  (flows; the
+		 *                                                   ceiling case above
+		 *                                                   is deep in here)
+		 *
+		 * 12 holders is the largest integer holder count for which two
+		 * max-label/max-detail/emoji rows still land ABOVE `MIN_FIT_SCALE`
+		 * rather than flowing — one more holder each and the fixture flips
+		 * branches entirely (0.709 < 0.72). It is not `MAX_ROLE_REPEAT_SLOTS`
+		 * (20): at 20, per the table above, this same two-row shape already
+		 * flows, which is the opposite of what this case needs to prove. Do
+		 * NOT "fix" this by raising it back toward 20 or by adding more
+		 * beats — either makes the fixture bigger, which pushes it further
+		 * PAST the danger zone, not into it. If a future change to the
+		 * declared type size, `MIN_FIT_SCALE`, or these two beats' own
+		 * content ever moves the achieved `raw` outside roughly [0.72, 0.75),
+		 * this fixture needs re-sizing the same way: shrink content until it
+		 * just barely stops flowing, not the reverse.
+		 */
+		it("prints legible body text at the worst achievable squeeze, not just at the ceiling", () => {
+			const rows = hostileTemplateRows(2, 12);
+			expect(rows.length).toBeGreaterThan(0);
+			// Confirms this landed in the SQUEEZE branch, not the flow branch —
+			// without this, a future change that accidentally made the fixture
+			// flow (see the docblock above) would still pass the floor below
+			// while testing nothing new versus the ceiling case.
+			const raw = (PAGE_H - 2) / agendaHeight(rows);
+			expect(raw).toBeGreaterThanOrEqual(MIN_FIT_SCALE);
+			expect(raw).toBeLessThan(0.75);
+			// Measured 6.30pt at raw≈0.730 — the worst printed size this
+			// hostile-content shape can be squeezed to before `FitPage` gives
+			// up and flows instead. Still comfortably above the dense floor.
 			expect(printedDetailPt(rows)).toBeGreaterThanOrEqual(
 				EDITORIAL_DENSE_MIN_PRINTED_PT,
 			);

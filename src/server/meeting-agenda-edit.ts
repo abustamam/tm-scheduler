@@ -7,6 +7,7 @@
  */
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { MAX_ROLE_REPEAT_SLOTS } from "#/lib/meeting-template-limits";
 import type {
 	AgendaDraft,
 	AgendaDraftRole,
@@ -105,7 +106,12 @@ const roleAddInput = z.object({
 	meetingId: z.string().uuid(),
 	name: z.string().min(1),
 	category: z.enum(["leadership", "speaker", "evaluator", "functionary"]),
-	defaultCount: z.number().int().min(0),
+	// Bounded here too, not just in `addAgendaRole`'s own check: an unbounded
+	// validator lets an over-cap value reach the handler and surface as a
+	// 500 (an unhandled throw) where a 400 (a validation rejection) belongs.
+	// The inner check in `addAgendaRole` stays — this is the fast, honest
+	// rejection at the edge, not a replacement for it.
+	defaultCount: z.number().int().min(0).max(MAX_ROLE_REPEAT_SLOTS),
 	isSpeakerRole: z.boolean(),
 });
 const roleKeyInput = z.object({
