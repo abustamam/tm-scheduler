@@ -11,7 +11,7 @@
  * is unreachable from vitest — which for a module of gates is the whole ball
  * game.
  */
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, or } from "drizzle-orm";
 import { db as database } from "#/db";
 import {
 	guests,
@@ -39,7 +39,6 @@ import { logActivity } from "./activity";
 import {
 	copyTemplateForMeeting,
 	type DbOrTx,
-	materializeTemplateRoles,
 	type ReleasedHolder,
 } from "./meeting-templates-logic";
 
@@ -748,6 +747,17 @@ function deriveRoleKey(name: string, taken: Set<string>): string {
  * A role with no `role_definitions` row can never own a slot
  * (`role_slots.role_definition_id` is NOT NULL and restricting), so an
  * unmaterialized role would be a row nobody could ever sign up for.
+ *
+ * Materializes by inserting exactly ONE `role_definitions` row for the new
+ * role — not by calling `materializeTemplateRoles` (which re-materializes
+ * the WHOLE role set for `templateId`). On a meeting whose live slots still
+ * belong to a not-yet-forked SHARED template (see `removeAgendaRole`'s
+ * docblock for why that's the common, not the edge, case), the whole-set call
+ * would re-insert every PRE-EXISTING role too — "chair", "timer", etc. — as a
+ * second, slot-less `role_definitions` row scoped to this meeting's brand-new
+ * private `templateId`, parallel to the ones the meeting's actual slots still
+ * reference. That's real data pollution for a call meant to add ONE role, so
+ * this inserts only the row this call is responsible for.
  */
 export async function addAgendaRole(input: {
 	meetingId: string;
@@ -797,24 +807,31 @@ export async function addAgendaRole(input: {
 			sortOrder,
 			isSpeakerRole: input.isSpeakerRole,
 		});
-		// Materialize so the role is claimable — see the docblock above.
-		await materializeTemplateRoles(tx, meeting.clubId, templateId);
 
-		const defs = await tx
-			.select({
+		// Materialize just this one role — see the docblock above for why NOT
+		// `materializeTemplateRoles`. `key` was just derived unique against
+		// `templateId`'s own roles and `templateId` was freshly forked or is
+		// already this meeting's own private row, so (clubId, templateId, key)
+		// cannot already exist; a plain insert is correct, not defensive.
+		const [def] = await tx
+			.insert(roleDefinitions)
+			.values({
+				clubId: meeting.clubId,
+				templateId,
+				key,
+				name: input.name,
+				category: input.category,
+				defaultCount: input.defaultCount,
+				sortOrder,
+				isSpeakerRole: input.isSpeakerRole,
+			})
+			.returning({
 				id: roleDefinitions.id,
 				defaultCount: roleDefinitions.defaultCount,
 				enabled: roleDefinitions.enabled,
-			})
-			.from(roleDefinitions)
-			.where(
-				and(
-					eq(roleDefinitions.clubId, meeting.clubId),
-					eq(roleDefinitions.templateId, templateId),
-					eq(roleDefinitions.key, key),
-				),
-			);
-		const rows = generateSlotRows(defs, input.meetingId);
+			});
+		if (!def) throw new Error("Failed to add the agenda role.");
+		const rows = generateSlotRows([def], input.meetingId);
 		if (rows.length > 0) await tx.insert(roleSlots).values(rows);
 
 		return {
@@ -827,33 +844,35 @@ export async function addAgendaRole(input: {
 	});
 }
 
-/**
- * Who a role removal would release, WITHOUT removing anything. PURE READ —
- * the same rule `planTemplateConversion` follows: showing an officer what a
- * change would do must not itself change anything. The dialog leads with
- * names because a released holder cannot be told afterwards: `notifications
- * .slot_id` is NOT NULL and ON DELETE CASCADE to `role_slots`, so a row
- * enqueued against a slot the same transaction deletes is destroyed before
- * the poller could ever see it.
+/** What a role removal (or preview) resolves for one meeting + role key: who
+ *  currently holds it, and which `role_definitions` row(s) its own slots
+ *  actually reference.
  *
- * Scoped by `roleSlots.meetingId` first, then joined to `roleDefinitions` by
- * exact id — once a slot is pinned to this one meeting, which role it names
- * cannot resolve to a different club's row; there is no id here for a caller
- * to spoof; `roleKey` only narrows WHICH of this meeting's own roles to read.
- */
-export async function planRoleRemoval(input: {
-	meetingId: string;
-	roleKey: string;
-}): Promise<ReleasedHolder[]> {
-	const [meeting] = await database
-		.select({ clubId: meetings.clubId, templateId: meetings.templateId })
-		.from(meetings)
-		.where(eq(meetings.id, input.meetingId))
-		.limit(1);
-	if (!meeting?.templateId) return [];
-
-	const rows = await database
+ *  Scoped by `roleSlots.meetingId` FIRST, then joined to `roleDefinitions` by
+ *  exact id — once a slot is pinned to this one meeting, which role it names
+ *  cannot resolve to a different meeting's row; there is no id here for a
+ *  caller to spoof, and `roleKey` only narrows WHICH of this meeting's own
+ *  roles to read.
+ *
+ *  Deliberately does NOT filter by `role_definitions.templateId` against the
+ *  meeting's CURRENT template pointer. A meeting's live slots can reference a
+ *  `role_definitions` row materialized against a template id that is no
+ *  longer what `meetings.template_id` points at — the common case being a
+ *  meeting still on its original SHARED template, which is what every
+ *  meeting created before per-meeting private copies existed looks like
+ *  (`loadAgendaDraft`'s "correction 1" docblock). Filtering on the current
+ *  pointer here is what let `removeAgendaRole`'s first version silently
+ *  release nothing on that path while reporting a name as released — the
+ *  resolution has to be "what does this meeting's OWN slot actually point
+ *  at", not "what does the template it currently names declare". */
+async function resolveHeldSlotsForRole(
+	conn: DbOrTx,
+	meetingId: string,
+	roleKey: string,
+): Promise<{ released: ReleasedHolder[]; roleDefinitionIds: string[] }> {
+	const rows = await conn
 		.select({
+			roleDefinitionId: roleSlots.roleDefinitionId,
 			memberId: roleSlots.assignedMemberId,
 			guestId: roleSlots.assignedGuestId,
 			memberName: members.name,
@@ -868,42 +887,84 @@ export async function planRoleRemoval(input: {
 		.leftJoin(members, eq(members.id, roleSlots.assignedMemberId))
 		.leftJoin(guests, eq(guests.id, roleSlots.assignedGuestId))
 		.where(
-			and(
-				eq(roleSlots.meetingId, input.meetingId),
-				eq(roleDefinitions.templateId, meeting.templateId),
-				eq(roleDefinitions.key, input.roleKey),
-			),
+			and(eq(roleSlots.meetingId, meetingId), eq(roleDefinitions.key, roleKey)),
 		);
 
-	return rows
-		.filter((r) => r.memberId != null || r.guestId != null)
-		.map((r) => ({
-			memberId: r.memberId,
-			guestId: r.guestId,
-			name: r.memberName ?? r.guestName ?? "Someone",
-			roleName: r.roleName,
-		}));
+	return {
+		released: rows
+			.filter((r) => r.memberId != null || r.guestId != null)
+			.map((r) => ({
+				memberId: r.memberId,
+				guestId: r.guestId,
+				name: r.memberName ?? r.guestName ?? "Someone",
+				roleName: r.roleName,
+			})),
+		roleDefinitionIds: [...new Set(rows.map((r) => r.roleDefinitionId))],
+	};
 }
 
 /**
- * Remove a role from the meeting's own template: its `role_definitions` row,
- * its slots (released before they disappear, same as
- * `applyTemplateConversion`), and every beat bound to it — by `roleKey` (the
- * beat IS the role's own row) AND by `repeatsRoleKey` (a beat inside that
- * role's repeat block that names it without owning it — e.g. the contest's
- * ballot minute). `buildTemplateRows` drops a beat naming an undeclared role
- * rather than rendering it, so leaving either binding behind is an invisible
- * row that would silently reappear if the key were ever reused.
+ * Who a role removal would release, WITHOUT removing anything. PURE READ —
+ * the same rule `planTemplateConversion` follows: showing an officer what a
+ * change would do must not itself change anything. The dialog leads with
+ * names because a released holder cannot be told afterwards: `notifications
+ * .slot_id` is NOT NULL and ON DELETE CASCADE to `role_slots`, so a row
+ * enqueued against a slot the same transaction deletes is destroyed before
+ * the poller could ever see it.
+ */
+export async function planRoleRemoval(input: {
+	meetingId: string;
+	roleKey: string;
+}): Promise<ReleasedHolder[]> {
+	const [meeting] = await database
+		.select({ templateId: meetings.templateId })
+		.from(meetings)
+		.where(eq(meetings.id, input.meetingId))
+		.limit(1);
+	if (!meeting?.templateId) return [];
+
+	const { released } = await resolveHeldSlotsForRole(
+		database,
+		input.meetingId,
+		input.roleKey,
+	);
+	return released;
+}
+
+/**
+ * Remove a role from the meeting's own template: its slots (released before
+ * they disappear, same as `applyTemplateConversion`), its own
+ * `role_definitions` row if this meeting's template privately owns it, and
+ * every beat bound to it — by `roleKey` (the beat IS the role's own row) OR
+ * `repeatsRoleKey` (a beat inside that role's repeat block that names it
+ * without owning it — e.g. the contest's ballot minute). `buildTemplateRows`
+ * drops a beat naming an undeclared role rather than rendering it, so leaving
+ * either binding behind is an invisible row that would silently reappear if
+ * the key were ever reused.
  *
- * Scoped by the CALLING meeting's own resolved `templateId` throughout — a
- * private template's id is unique per meeting (`copyTemplateForMeeting`
- * always mints a fresh row on fork), so a foreign meeting's identically-keyed
- * role can never match it. `clubId` is included on the `role_definitions`
- * predicate for the same reason `roleDefScope` always pairs the two:
- * consistency with the one seam every other role-definition query in this
- * codebase scopes through — not because a same-`templateId` collision across
- * clubs is reachable today (materialization only ever targets a private
- * per-meeting template; see `materializeTemplateRoles`'s two call sites).
+ * The slots to release are resolved via `resolveHeldSlotsForRole` — by what
+ * THIS meeting's own `role_slots` actually reference, never by matching
+ * `role_definitions.templateId` against `ensureAgendaDraft`'s resolved
+ * `templateId` — see that helper's docblock for why the latter silently
+ * missed the fork case entirely. `role_slots.meetingId` is the exact tenant
+ * boundary there, so no club/template predicate is needed to keep this
+ * scoped to the caller's own meeting.
+ *
+ * The `role_definitions` row(s) found that way are deleted ONLY when their
+ * `templateId` equals `ensureAgendaDraft`'s resolved (this meeting's own
+ * private) `templateId`. `role_definitions` is keyed per (club, template),
+ * NOT per meeting — two meetings of ONE club that both still point at the
+ * same SHARED template also share its materialized definitions, so deleting
+ * a row this meeting's slot merely REFERENCES (rather than privately owns)
+ * would either hit `role_slots.role_definition_id`'s RESTRICT from the OTHER
+ * meeting's still-live slot (an unrelated meeting's edit throwing on this
+ * one's removal) or, worse, silently remove a definition a sibling meeting's
+ * unconverted agenda still declares. Leaving a still-shared definition alone
+ * is deliberate, not a leak: this meeting's own slots for it are still fully
+ * released and deleted either way. A correct fix that also reconciles the
+ * SHARED row (copy-then-repoint only this meeting's slots) is bigger than
+ * this task and is filed separately — do not "fix" this by materializing on
+ * fork and repointing inside `ensureAgendaDraft`.
  *
  * Rejects an undeclared `roleKey` BEFORE `ensureAgendaDraft` runs, against the
  * meeting's current (possibly still-shared) template — the same reason
@@ -912,18 +973,24 @@ export async function planRoleRemoval(input: {
  * `meetings.template_id`), and a bad key should not trigger one for a
  * no-op removal. `roleKey` is stable across a fork, so this pre-fork read is
  * exact, not an approximation later reconciled.
+ *
+ * `planRoleRemoval`'s resolution runs again INSIDE this transaction, after
+ * the fork — not reused from a call made before opening it — so the names
+ * reported and the rows deleted come from one snapshot. A claim landing in
+ * the gap between an earlier read and this transaction would otherwise be
+ * deleted without ever appearing in a list the caller is told is complete.
  */
 export async function removeAgendaRole(input: {
 	meetingId: string;
 	roleKey: string;
 	actorMemberId: string | null;
 }): Promise<ReleasedHolder[]> {
-	const [meeting] = await database
+	const [preFork] = await database
 		.select({ templateId: meetings.templateId })
 		.from(meetings)
 		.where(eq(meetings.id, input.meetingId))
 		.limit(1);
-	if (!meeting?.templateId) {
+	if (!preFork?.templateId) {
 		throw new Error(
 			"Only a meeting with a meeting type can have its agenda edited.",
 		);
@@ -933,7 +1000,7 @@ export async function removeAgendaRole(input: {
 		.from(meetingTemplateRoles)
 		.where(
 			and(
-				eq(meetingTemplateRoles.templateId, meeting.templateId),
+				eq(meetingTemplateRoles.templateId, preFork.templateId),
 				eq(meetingTemplateRoles.key, input.roleKey),
 			),
 		)
@@ -942,35 +1009,23 @@ export async function removeAgendaRole(input: {
 		throw new Error(`"${input.roleKey}" is not a role this template declares.`);
 	}
 
-	const released = await planRoleRemoval({
-		meetingId: input.meetingId,
-		roleKey: input.roleKey,
-	});
-
-	await database.transaction(async (tx) => {
+	return database.transaction(async (tx) => {
 		const { templateId } = await ensureAgendaDraft(tx, input.meetingId);
-		const [meeting] = await tx
+		const [owner] = await tx
 			.select({ clubId: meetings.clubId })
 			.from(meetings)
 			.where(eq(meetings.id, input.meetingId))
 			.limit(1);
-		if (!meeting) throw new Error("Meeting not found.");
+		if (!owner) throw new Error("Meeting not found.");
 
-		const defs = await tx
-			.select({ id: roleDefinitions.id })
-			.from(roleDefinitions)
-			.where(
-				and(
-					eq(roleDefinitions.clubId, meeting.clubId),
-					eq(roleDefinitions.templateId, templateId),
-					eq(roleDefinitions.key, input.roleKey),
-				),
-			);
-		const defIds = defs.map((d) => d.id);
+		const { released, roleDefinitionIds: defIds } =
+			await resolveHeldSlotsForRole(tx, input.meetingId, input.roleKey);
 		if (defIds.length > 0) {
 			// Release, then delete — "a slot is released before it disappears"
 			// stays true at every intermediate state. The speech is Person-owned
-			// (ADR-0009), so it survives regardless.
+			// (ADR-0009), so it survives regardless. Scoped to `meetingId` even
+			// though `defIds` already came from a meetingId-scoped join, because
+			// this is the statement that actually performs the write.
 			await tx
 				.update(roleSlots)
 				.set({
@@ -994,28 +1049,31 @@ export async function removeAgendaRole(input: {
 						inArray(roleSlots.roleDefinitionId, defIds),
 					),
 				);
+			// Ownership-gated — see the docblock above. A definition this
+			// meeting's slot merely referenced via a still-shared template is
+			// left in place.
 			await tx
 				.delete(roleDefinitions)
-				.where(inArray(roleDefinitions.id, defIds));
+				.where(
+					and(
+						inArray(roleDefinitions.id, defIds),
+						eq(roleDefinitions.templateId, templateId),
+					),
+				);
 		}
 
-		// Both binding shapes named in the docblock above: the role's own row
-		// (`roleKey`), and any row inside its repeat block that names it only via
-		// `repeatsRoleKey` (correction 2 — the brief handled `roleKey` alone).
+		// One statement, not two — either binding shape (`roleKey` or
+		// `repeatsRoleKey`, correction 2) removes the beat; a future edit to
+		// this can no longer touch one arm and forget the other.
 		await tx
 			.delete(meetingTemplateBeats)
 			.where(
 				and(
 					eq(meetingTemplateBeats.templateId, templateId),
-					eq(meetingTemplateBeats.roleKey, input.roleKey),
-				),
-			);
-		await tx
-			.delete(meetingTemplateBeats)
-			.where(
-				and(
-					eq(meetingTemplateBeats.templateId, templateId),
-					eq(meetingTemplateBeats.repeatsRoleKey, input.roleKey),
+					or(
+						eq(meetingTemplateBeats.roleKey, input.roleKey),
+						eq(meetingTemplateBeats.repeatsRoleKey, input.roleKey),
+					),
 				),
 			);
 		await tx
@@ -1028,14 +1086,14 @@ export async function removeAgendaRole(input: {
 			);
 
 		await logActivity(tx, {
-			clubId: meeting.clubId,
+			clubId: owner.clubId,
 			actorMemberId: input.actorMemberId,
 			action: "meeting_agenda_role_removed",
 			targetType: "meeting",
 			targetId: input.meetingId,
 			detail: { roleKey: input.roleKey, released: released.length },
 		});
-	});
 
-	return released;
+		return released;
+	});
 }

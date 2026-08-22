@@ -1067,6 +1067,83 @@ describe.skipIf(!hasTestDb)("agenda role mutations", () => {
 		expect(a.key).not.toBe(b.key);
 	});
 
+	it("does not duplicate a pre-existing role's definition when adding a new role on a still-shared template", async () => {
+		// Mirror of the fork-on-write case in the removal tests below, for
+		// addAgendaRole: a meeting still on a shared template, with "chair"
+		// already materialized against the SHARED templateId (the legacy
+		// shape — see `resolveHeldSlotsForRole`'s docblock). Adding "Zoom
+		// Master" forks a private copy; this proves the fork does NOT
+		// re-materialize "chair" a second time under the new private
+		// templateId, which is exactly `materializeTemplateRoles`'s whole-set
+		// side effect that `addAgendaRole`'s docblock explains avoiding.
+		const [shared] = await testDb
+			.insert(meetingTemplates)
+			.values({
+				key: `shared_add_role_${RUN}`,
+				name: `Shared add role ${RUN}`,
+			})
+			.returning({ id: meetingTemplates.id });
+		if (!shared) throw new Error("template insert failed");
+		madeTemplates.push(shared.id);
+		await testDb.insert(meetingTemplateRoles).values({
+			templateId: shared.id,
+			key: "chair",
+			name: "Chair",
+			category: "leadership",
+			defaultCount: 1,
+			sortOrder: 0,
+			isSpeakerRole: false,
+		});
+		const [chairDef] = await testDb
+			.insert(roleDefinitions)
+			.values({
+				clubId: club.clubId,
+				templateId: shared.id,
+				key: "chair",
+				name: "Chair",
+				category: "leadership",
+				defaultCount: 1,
+				sortOrder: 0,
+				isSpeakerRole: false,
+			})
+			.returning({ id: roleDefinitions.id });
+		if (!chairDef) throw new Error("role definition insert failed");
+		await testDb.insert(roleSlots).values({
+			meetingId: club.meetingId,
+			roleDefinitionId: chairDef.id,
+			slotIndex: 0,
+			status: "open",
+		});
+		await testDb
+			.update(meetings)
+			.set({ templateId: shared.id })
+			.where(eq(meetings.id, club.meetingId));
+
+		await addAgendaRole({
+			meetingId: club.meetingId,
+			name: "Zoom Master",
+			category: "functionary",
+			defaultCount: 1,
+			isSpeakerRole: false,
+		});
+
+		const chairDefs = await testDb
+			.select({
+				id: roleDefinitions.id,
+				templateId: roleDefinitions.templateId,
+			})
+			.from(roleDefinitions)
+			.where(
+				and(
+					eq(roleDefinitions.clubId, club.clubId),
+					eq(roleDefinitions.key, "chair"),
+				),
+			);
+		expect(chairDefs).toHaveLength(1);
+		expect(chairDefs[0]?.id).toBe(chairDef.id);
+		expect(chairDefs[0]?.templateId).toBe(shared.id);
+	});
+
 	it("makes an added role's key immediately usable by a beat's roleKey", async () => {
 		// Correction 3: adding a role must make its key immediately usable by
 		// beats — `assertDeclaredRoleKeys` checks `meeting_template_roles`, which
@@ -1280,22 +1357,176 @@ describe.skipIf(!hasTestDb)("agenda role mutations", () => {
 		expect(rows[0]?.detail).toMatchObject({ roleKey: role.key, released: 1 });
 	});
 
-	// The rowId-scoping tests earlier in this file (`seedForeignRow`) prove
-	// each row mutator's OWN templateId predicate is load-bearing by sharing a
-	// sortOrder with a foreign row on an already-private template, where
-	// matching by primary key alone would otherwise be safe. Role mutations
-	// have no id to match on at all — `roleKey` is a caller-chosen STRING — so
-	// the discriminator here is different: two clubs' PRIVATE templates
-	// independently declaring the IDENTICAL key. `role_definitions.clubId`
-	// differs between them, but so does `templateId` (a private template's id
-	// is unique per meeting), so `templateId` alone already separates the two
-	// rows. This test proves the removal statements actually READ that
-	// predicate — confirmed by temporarily dropping the `templateId` conjunct
-	// from `removeAgendaRole`'s four deletes/updates and re-running this test:
-	// it fails (the `role_definitions` delete throws a foreign-key violation
-	// from the foreign meeting's own still-live slot, which rolls back the
-	// whole transaction, so even the CALLER's own role survives the failed
-	// removal) — see the task report for the exact diff and failure output.
+	// This is the shape `resolveHeldSlotsForRole`'s docblock calls out as the
+	// COMMON case, not the edge case: a meeting created before per-meeting
+	// private templates existed points straight at a SHARED template, and its
+	// role_definitions were materialized against THAT SAME shared templateId —
+	// never a private copy, because nothing forks one until the first edit.
+	// `removeAgendaRole`'s first version resolved which `role_definitions` to
+	// touch by matching `templateId` against `ensureAgendaDraft`'s POST-fork
+	// pointer — which is a brand-new id nothing has materialized against yet
+	// — so the actually-held slot was silently left claimed while the officer
+	// was told it had been released.
+	//
+	// role_definitions is keyed per (club, template), not per meeting, so a
+	// SECOND meeting of the SAME club sharing the same not-yet-forked
+	// template is a realistic, not a contrived, fixture — every one of a
+	// club's meetings that hasn't been individually customized shares one
+	// materialized role set. It is also what makes the ownership-gated
+	// `role_definitions` delete load-bearing: without it, removing the role
+	// from meeting 1 would try to delete a definition meeting 2's own live
+	// slot still references.
+	it("releases and deletes the actually-held slot when the meeting is still on a shared template (fork-on-write)", async () => {
+		const [shared] = await testDb
+			.insert(meetingTemplates)
+			.values({
+				key: `shared_role_fork_${RUN}`,
+				name: `Shared role fork ${RUN}`,
+			})
+			.returning({ id: meetingTemplates.id });
+		if (!shared) throw new Error("template insert failed");
+		madeTemplates.push(shared.id);
+		await testDb.insert(meetingTemplateRoles).values({
+			templateId: shared.id,
+			key: "zoom_master",
+			name: "Zoom Master",
+			category: "functionary",
+			defaultCount: 1,
+			sortOrder: 0,
+			isSpeakerRole: false,
+		});
+		await testDb.insert(meetingTemplateBeats).values({
+			templateId: shared.id,
+			sortOrder: 0,
+			kind: "role",
+			label: "Zoom slot",
+			roleKey: "zoom_master",
+			minutes: 1,
+		});
+		// Materialized directly against the SHARED templateId — the shape
+		// `materializeTemplateRoles`'s two call sites never produce today, but
+		// which legacy (pre-per-meeting-template) meetings still have, per
+		// `loadAgendaDraft`'s "correction 1" docblock.
+		const [def] = await testDb
+			.insert(roleDefinitions)
+			.values({
+				clubId: club.clubId,
+				templateId: shared.id,
+				key: "zoom_master",
+				name: "Zoom Master",
+				category: "functionary",
+				defaultCount: 1,
+				sortOrder: 0,
+				isSpeakerRole: false,
+			})
+			.returning({ id: roleDefinitions.id });
+		if (!def) throw new Error("role definition insert failed");
+
+		// Meeting 1 (club.meetingId): points at the shared template, CLAIMED
+		// slot against the shared definition.
+		await testDb
+			.update(meetings)
+			.set({ templateId: shared.id })
+			.where(eq(meetings.id, club.meetingId));
+		const [slot1] = await testDb
+			.insert(roleSlots)
+			.values({
+				meetingId: club.meetingId,
+				roleDefinitionId: def.id,
+				slotIndex: 0,
+				assignedMemberId: club.memberId,
+				status: "claimed",
+			})
+			.returning({ id: roleSlots.id });
+		if (!slot1) throw new Error("slot insert failed");
+
+		// Meeting 2: same club, ALSO still on the shared template, with its OWN
+		// open slot against the SAME shared definition. Cascade-cleaned by the
+		// module's `cleanup(club.clubId, ...)` (meetings.clubId is ON DELETE
+		// CASCADE) — no separate teardown needed.
+		const [meeting2] = await testDb
+			.insert(meetings)
+			.values({
+				clubId: club.clubId,
+				scheduledAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+				templateId: shared.id,
+			})
+			.returning({ id: meetings.id });
+		if (!meeting2) throw new Error("meeting insert failed");
+		const [slot2] = await testDb
+			.insert(roleSlots)
+			.values({
+				meetingId: meeting2.id,
+				roleDefinitionId: def.id,
+				slotIndex: 0,
+				status: "open",
+			})
+			.returning({ id: roleSlots.id });
+		if (!slot2) throw new Error("slot insert failed");
+
+		const released = await removeAgendaRole({
+			meetingId: club.meetingId,
+			roleKey: "zoom_master",
+			actorMemberId: null,
+		});
+
+		// The actually-held slot is named AND removed — not silently left
+		// claimed while being reported as released.
+		expect(released).toHaveLength(1);
+		expect(released[0]?.memberId).toBe(club.memberId);
+		const slot1After = await testDb
+			.select({ id: roleSlots.id })
+			.from(roleSlots)
+			.where(eq(roleSlots.id, slot1.id));
+		expect(slot1After).toHaveLength(0);
+
+		// The shared definition is NOT owned by meeting 1's newly forked
+		// private template, so it survives — meeting 2's still-live slot
+		// depends on it.
+		const defAfter = await testDb
+			.select({ id: roleDefinitions.id })
+			.from(roleDefinitions)
+			.where(eq(roleDefinitions.id, def.id));
+		expect(defAfter).toHaveLength(1);
+
+		// Meeting 2's own slot is completely untouched.
+		const slot2After = await testDb
+			.select({ status: roleSlots.status })
+			.from(roleSlots)
+			.where(eq(roleSlots.id, slot2.id));
+		expect(slot2After).toHaveLength(1);
+		expect(slot2After[0]?.status).toBe("open");
+
+		// Meeting 1's own (newly forked, private) agenda no longer declares the
+		// role...
+		const after1 = await loadAgendaDraft(club.meetingId);
+		expect(after1?.roles.map((r) => r.key)).not.toContain("zoom_master");
+		// ...but meeting 2, still pointed at the untouched shared template,
+		// still does.
+		const after2 = await loadAgendaDraft(meeting2.id);
+		expect(after2?.roles.map((r) => r.key)).toContain("zoom_master");
+	});
+
+	// Role mutations have no id to match on — `roleKey` is a caller-chosen
+	// STRING — so two clubs' PRIVATE templates independently declaring the
+	// IDENTICAL key is the fixture that forces scoping to matter.
+	//
+	// The `role_definitions`/`role_slots` half is protected a different way
+	// than the row mutators' rowId-scoping: `resolveHeldSlotsForRole` resolves
+	// which definitions to touch via `roleSlots.meetingId = <this meeting>` —
+	// an exact join, not a templateId/clubId match — so the foreign meeting's
+	// slot and definition can never be selected in the first place, by
+	// construction, regardless of any other predicate. That half of this test
+	// is a regression guard, not a "strip and confirm" discriminator.
+	//
+	// The `meeting_template_beats`/`meeting_template_roles` half IS a live
+	// discriminator: both deletes are scoped ONLY by
+	// `eq(..., templateId)` (the meeting's own resolved private template —
+	// there is no `clubId` column on either table to fall back on). Confirmed
+	// by temporarily dropping the `templateId` conjunct from both of
+	// `removeAgendaRole`'s deletes and re-running this test: it fails — the
+	// foreign beat (same `roleKey`, different template) gets deleted too.
+	// See the task report for the exact diff and failure output.
 	it("does not touch a foreign meeting's identically-keyed role, slot or beat", async () => {
 		await givePrivateTemplate();
 		const role = await addAgendaRole({

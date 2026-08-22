@@ -151,6 +151,12 @@ export function formatActivity(entry: ActivityEntry): FormattedActivity {
 		case "club_logo_removed":
 			summary = "removed the club logo";
 			break;
+		// A role was removed from a meeting's own agenda editor (Task 8,
+		// #agenda-templates). Without this case the `default` below renders the
+		// raw enum string ("meeting_agenda_role_removed") on the Activity page.
+		case "meeting_agenda_role_removed":
+			summary = "removed a role from the agenda";
+			break;
 		default:
 			summary = entry.action;
 	}
