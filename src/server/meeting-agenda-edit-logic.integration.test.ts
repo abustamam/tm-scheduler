@@ -687,6 +687,58 @@ describe.skipIf(!hasTestDb)("agenda row mutations", () => {
 		expect(afterNoop?.rows.map((r) => r.id)).toEqual(ids);
 	});
 
+	// #task-10. `renumberRows` used to issue 2N sequential single-row UPDATEs —
+	// up to 400 round trips at MAX_TEMPLATE_BEATS, each holding a row lock on
+	// its beat for the whole transaction. Measured against a real local
+	// Postgres before the fix: ~170-187ms per `moveAgendaRow` call at 200
+	// rows, three runs. The fix (two bulk `CASE id WHEN … THEN …` statements,
+	// still the same two-pass negative-floor shape) measured ~11-16ms the
+	// same way. ABSOLUTE, not relative to the old number — a regression back
+	// to one-statement-per-row would still clear a bound stated as "faster
+	// than before". 100ms leaves a wide margin over the measured ~16ms for a
+	// slower CI runner while still catching a reversion to the N-statement
+	// shape, which cost 10x that at this same size.
+	it("renumbers MAX_TEMPLATE_BEATS rows in well under 100ms (bulk CASE, not 2N round trips)", async () => {
+		const id = await givePrivateTemplate();
+		// givePrivateTemplate already seeds 2 rows (sortOrder 0, 1); fill the
+		// rest with plain filler, same shape as the "refuses to add past the
+		// beat ceiling" fixture above.
+		await testDb.insert(meetingTemplateBeats).values(
+			Array.from({ length: MAX_TEMPLATE_BEATS - 2 }, (_, i) => ({
+				templateId: id,
+				sortOrder: 100 + i,
+				kind: "event" as const,
+				label: `filler ${i}`,
+				minutes: 0,
+			})),
+		);
+		const draft = await loadAgendaDraft(club.meetingId);
+		const rows = draft?.rows ?? [];
+		expect(rows).toHaveLength(MAX_TEMPLATE_BEATS);
+		const mid = rows[Math.floor(rows.length / 2)];
+		if (!mid) throw new Error("no rows");
+
+		const t0 = performance.now();
+		await moveAgendaRow({
+			meetingId: club.meetingId,
+			rowId: mid.id,
+			direction: "up",
+		});
+		const ms = performance.now() - t0;
+		expect(ms).toBeLessThan(100);
+
+		// And the reorder is still correct, not just fast: the moved row is now
+		// one position earlier, everyone else keeps their relative order.
+		const after = await loadAgendaDraft(club.meetingId);
+		const afterIds = after?.rows.map((r) => r.id) ?? [];
+		const beforeIds = rows.map((r) => r.id);
+		const expected = [...beforeIds];
+		const atIndex = expected.indexOf(mid.id);
+		expected.splice(atIndex, 1);
+		expected.splice(atIndex - 1, 0, mid.id);
+		expect(afterIds).toEqual(expected);
+	});
+
 	it("removes a row", async () => {
 		await givePrivateTemplate();
 		const before = await loadAgendaDraft(club.meetingId);

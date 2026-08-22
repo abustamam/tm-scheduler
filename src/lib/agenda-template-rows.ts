@@ -170,6 +170,24 @@ function toRow(
  * It used to emit one row per slot, which was right for a roster and wrong for
  * a run of show: two ballot counters perform one tally together, and printing
  * it twice booked twice the minutes.
+ *
+ * That one row's holder list is capped at `MAX_ROLE_REPEAT_SLOTS` too
+ * (#task-10 review), same as the repeat path a few lines below — this branch
+ * had no analogue of that cap until now. It was never a live bug while
+ * `defaultCount` was seed-fixed at small numbers, but Task 8's editor makes
+ * a role's slot count officer-editable (`addAgendaRole` caps it at
+ * `MAX_ROLE_REPEAT_SLOTS` at the writer), and a writer cap is not the only
+ * way this number can grow: a `role_definitions` row materialized before a
+ * cap existed, one inserted directly, or a template copied from a source
+ * whose own count was never re-validated (`copyTemplateForMeeting` copies
+ * `defaultCount` verbatim) can all still hand this branch more slots than the
+ * writer would ever accept today. Capping at the RENDERER — the seam every
+ * one of those paths funnels through — closes all of them at once, the same
+ * defense-in-depth reasoning `MAX_TEMPLATE_BEATS`'s docblock states for
+ * `loadTemplateBeats`. Measured cost of NOT capping: one non-repeating beat
+ * bound to 50,000 slots rendered in ~90ms alone (`meeting-template-limits.bench.test.ts`);
+ * negligible per beat, but multiplied by every such beat a corrupted or
+ * pre-cap row could produce, an uncapped join is real, not theoretical, cost.
  */
 export function buildTemplateRows(
 	beats: TemplateBeatRow[],
@@ -189,7 +207,13 @@ export function buildTemplateRows(
 			if (row.kind === "role" && row.roleKey != null) {
 				// ONE row per beat. Every holder of the role is named on it; the
 				// beat repeats per holder only when it says so via repeatsRoleKey.
-				const owned = slotsForRole(slots, row.roleKey);
+				// Capped the same as the repeat path below — see this function's
+				// docblock for why a writer-side cap on `defaultCount` is not
+				// enough on its own.
+				const owned = slotsForRole(slots, row.roleKey).slice(
+					0,
+					MAX_ROLE_REPEAT_SLOTS,
+				);
 				const emitted = toRow(row, rolesByKey, owned, 0, 0);
 				if (emitted) out.push(emitted);
 			} else {

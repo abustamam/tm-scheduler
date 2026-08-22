@@ -382,6 +382,41 @@ describe("buildTemplateRows", () => {
 		expect(buildTemplateRows(beats, ROLES, slots)).toHaveLength(20);
 	});
 
+	// #task-10 review: the non-repeating branch had no analogue of the cap
+	// above. It was never live while `defaultCount` was seed-fixed at small
+	// numbers, but the per-meeting agenda editor (Task 8) makes a role's slot
+	// count officer-editable, and a writer-side cap on `defaultCount` is not
+	// the only way this number can grow past it (a pre-cap row, a direct
+	// insert, or a copied template's un-revalidated count — see
+	// `buildTemplateRows`'s docblock). Same fixture shape as the repeat-cap
+	// test above, on the non-repeating path instead.
+	it("caps a non-repeating role beat's holder list at MAX_ROLE_REPEAT_SLOTS too", () => {
+		const beats = [
+			beat({
+				sortOrder: 0,
+				kind: "role",
+				label: "Tallying",
+				roleKey: "ballot_counter",
+			}),
+		];
+		const slots = Array.from({ length: 50 }, (_, i) =>
+			slot("ballot_counter", "Ballot Counter", i, `Person${i}`),
+		);
+		const rows = buildTemplateRows(beats, ROLES, slots);
+		// Still ONE row — capping the holder count must not turn it into one row
+		// per slot, which is the exact defect this whole non-repeating branch
+		// exists to avoid (see this function's docblock).
+		expect(rows).toHaveLength(1);
+		const holder = rows[0]?.holder ?? "";
+		// The first 20 slots (indices 0..19) are named...
+		expect(holder).toContain("Person0");
+		expect(holder).toContain("Person19");
+		// ...and nothing past the cap is, so the join cost — and the printed
+		// line — cannot grow with an uncapped `defaultCount`.
+		expect(holder).not.toContain("Person20");
+		expect(holder).not.toContain("Person49");
+	});
+
 	it("drops a role beat whose roleKey names no template role", () => {
 		expect(
 			buildTemplateRows(

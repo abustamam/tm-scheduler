@@ -47,10 +47,22 @@ import {
 	pxToPt,
 	RUN_NARRATIVE_TYPE,
 } from "#/lib/agenda-print-type";
+import type { AgendaSlot } from "#/lib/agenda-runsheet";
 import { resolveAgendaRows } from "#/lib/agenda-runsheet";
+import type {
+	TemplateBeatRow,
+	TemplateRoleRow,
+} from "#/lib/agenda-template-rows";
 import type { TimelineRow } from "#/lib/agenda-timing";
 import { buildTimeline } from "#/lib/agenda-timing";
 import { CONTEST_TEMPLATE } from "#/lib/contest-template";
+import {
+	MAX_ROLE_REPEAT_SLOTS,
+	MAX_TEMPLATE_BEATS,
+	MAX_TEMPLATE_DETAIL_CHARS,
+	MAX_TEMPLATE_LABEL_CHARS,
+	MAX_TEMPLATE_ROLES,
+} from "#/lib/meeting-template-limits";
 import {
 	CHROME_TEST_TIMEOUT_MS,
 	findChrome,
@@ -644,6 +656,148 @@ describe.skipIf(!hasChrome)(
 			expect(rows.some((r) => r.roleKey === "chief_judge")).toBe(true);
 			expect(rows.some((r) => r.who.startsWith("Judges' briefing"))).toBe(true);
 			expect(rows.filter((r) => r.section)).toHaveLength(3);
+		});
+	},
+);
+
+/**
+ * A template at the NEW ceiling (#task-10) — every bound
+ * `meeting-template-limits.ts` states, at once: `MAX_TEMPLATE_BEATS` beats
+ * over `MAX_TEMPLATE_ROLES` roles, `MAX_ROLE_REPEAT_SLOTS` holders per role,
+ * label and detail at their own character caps and built from EMOJI code
+ * points (assignee names back off that — see `hostileTemplateRows`'s own
+ * docblock for why). Same axes `meeting-template-limits.bench.test.ts`
+ * measures render cost against; this measures LEGIBILITY, which page count
+ * cannot see and which page count could not see even for the seeded contest
+ * above.
+ *
+ * The seeded contest was the longest agenda this app could produce before
+ * the per-meeting editor (Tasks 1-9) existed — an officer could not make one
+ * longer than the seed's ~15 beats. That is no longer true: an officer can
+ * now build a template at the full ceiling, and the ceiling was chosen for
+ * RENDER COST (see the bench file), which says nothing about whether the
+ * result still prints legibly. This is the case that answers that.
+ */
+const HOSTILE_EMOJI = "🐙";
+function hostileStr(len: number): string {
+	return HOSTILE_EMOJI.repeat(len);
+}
+
+/**
+ * `hostileTemplateRows`'s beat layout: every one of `MAX_TEMPLATE_BEATS`
+ * beats is a NON-repeating role beat, cycling through all
+ * `MAX_TEMPLATE_ROLES` declared roles, each role owning
+ * `MAX_ROLE_REPEAT_SLOTS` slots — exercising the holder-list cap
+ * `agenda-template-rows.ts` now applies on that branch on every single row,
+ * rather than on 40 of them and leaving the rest to one repeat block.
+ *
+ * Deliberately NOT the bench file's construction (a big repeat block over
+ * the leftover beats): that shape expands `MAX_TEMPLATE_BEATS` stored rows
+ * into ~16x as many OUTPUT rows (measured: 3,240 for this template's exact
+ * numbers), and dumping a DOM that size through headless Chrome's
+ * `--dump-dom` overflowed `execFileSync`'s pipe on this machine
+ * (`ENOBUFS`) — a harness limit, not a claim about the app. All-non-repeating
+ * keeps the output at exactly `MAX_TEMPLATE_BEATS` rows while still declaring
+ * the full `MAX_TEMPLATE_BEATS` / `MAX_TEMPLATE_ROLES` / `MAX_ROLE_REPEAT_SLOTS`
+ * / label / detail ceilings at once — still far longer than the seeded
+ * contest's ~15 beats, which is the property this case exists to cover.
+ */
+function hostileTemplateRows(): TimelineRow[] {
+	const roles: TemplateRoleRow[] = Array.from(
+		{ length: MAX_TEMPLATE_ROLES },
+		(_, i) => ({
+			key: `role_${i}`,
+			name: `Role ${i}`,
+			isSpeakerRole: false,
+		}),
+	);
+	const label = hostileStr(MAX_TEMPLATE_LABEL_CHARS);
+	const detail = hostileStr(MAX_TEMPLATE_DETAIL_CHARS);
+	const beats: TemplateBeatRow[] = Array.from(
+		{ length: MAX_TEMPLATE_BEATS },
+		(_, i) => ({
+			sortOrder: i,
+			kind: "role",
+			label,
+			detail,
+			minutes: 5,
+			roleKey: roles[i % roles.length]?.key ?? null,
+			repeatsRoleKey: null,
+			flex: false,
+			markGreen: null,
+			markYellow: null,
+			markRed: null,
+		}),
+	);
+	// Assignee names LONG (the axis the two-page-layout suite below also uses
+	// this length for), but deliberately NOT at their own real ceiling
+	// (`MAX_NAME_CHARS` = 200, `person-name.ts`, exercised at scale in
+	// `meeting-template-limits.bench.test.ts`, which never touches Chrome).
+	// `MAX_ROLE_REPEAT_SLOTS` holders × 200 code points EACH joined onto one
+	// row, times `MAX_TEMPLATE_BEATS` such rows, serializes into a DOM
+	// `--dump-dom` cannot get back through `execFileSync`'s pipe on this
+	// machine: measured `ENOBUFS` at exactly this beat/role/slot count, with
+	// ONLY the holder name length reduced from 200 code points to the short
+	// name below — everything else here unchanged. That is a harness plumbing
+	// limit, not a claim about the app: the render-cost bench file proves the
+	// RENDERER handles 200-code-point names at this same scale in ~20ms with
+	// no browser involved. This axis still holds MAX_ROLE_REPEAT_SLOTS holders
+	// per row; only their NAME LENGTH backs off to stay inside the harness.
+	const slots: AgendaSlot[] = [];
+	for (const role of roles) {
+		for (let i = 0; i < MAX_ROLE_REPEAT_SLOTS; i++) {
+			slots.push({
+				id: `${role.key}-${i}`,
+				roleName: role.name,
+				roleKey: role.key,
+				category: "functionary",
+				isSpeakerRole: false,
+				slotIndex: i,
+				assigneeName: `${hostileStr(4)}Anneliese Vandermeer-Castellanos ${i}`,
+				speechTitle: null,
+				projectLevel: null,
+				minMinutes: null,
+				maxMinutes: null,
+				evaluatesSlotId: null,
+				evaluates: null,
+			});
+		}
+	}
+	return buildTimeline(
+		resolveAgendaRows({
+			geIntroducesFunctionaries: false,
+			template: { beats, roles },
+			slots,
+		}),
+		new Date("2026-09-12T13:00:00Z"),
+		"America/Chicago",
+	);
+}
+
+describe.skipIf(!hasChrome)(
+	"worst-case template density (#task-10)",
+	{ timeout: CHROME_TEST_TIMEOUT_MS },
+	() => {
+		it("prints legible body text even at the full template ceiling", () => {
+			const rows = hostileTemplateRows();
+			// A control, same idiom as the contest suite above: proves the fixture
+			// actually produced content before trusting a point-size floor built
+			// from its height.
+			expect(rows.length).toBeGreaterThan(0);
+			// Measured 8.63pt — exactly the declared 11.5px × 0.75, i.e. FULL
+			// declared size with NO scale applied at all: at `MAX_TEMPLATE_BEATS`
+			// rows this sheet is already well past `MIN_FIT_SCALE`'s flow
+			// threshold, so it flows across pages instead of being squeezed. That
+			// is a real, useful thing for this case to prove (a maximal template
+			// does not silently get shrunk to nothing), but it means this
+			// assertion is NOT exercising the tightest squeeze — the contest
+			// suite above already covers that zone (short of one page, where
+			// `FitPage` scales hardest) at a fixture size closer to it. Keep both:
+			// this one changes if the flow threshold, the declared size, or this
+			// template's own row count ever move enough to cross back over it.
+			expect(printedDetailPt(rows)).toBeGreaterThanOrEqual(
+				EDITORIAL_DENSE_MIN_PRINTED_PT,
+			);
 		});
 	},
 );
