@@ -44,9 +44,20 @@ describe("meeting template server fns", () => {
 	it("keeps the shared helper's three gates intact", () => {
 		// The waiver in public-readers-archive-gate names this helper by hand.
 		// If any of these three is dropped, that waiver silently becomes false.
-		const helper = SOURCE.slice(
-			SOURCE.indexOf("async function requireMeetingTemplateEditor"),
-		).split("\n}")[0];
+		//
+		// The helper itself lives in meeting-templates-logic.ts, not here: a
+		// plain value export from a module that also defines `createServerFn`s
+		// is the exact leak `server-modules.guard.test.ts` exists to catch, so
+		// it moved there when a second server-fn module (meeting-agenda-edit.ts)
+		// needed to import it too. Re-pointed rather than deleted.
+		const logicSource = readSource("src/server/meeting-templates-logic.ts");
+		const helper = logicSource
+			.slice(
+				logicSource.indexOf(
+					"export async function requireMeetingTemplateEditor",
+				),
+			)
+			.split("\n}")[0];
 		expect(helper).toContain("requireUser");
 		expect(helper).toContain("assertClubNotArchived");
 		expect(helper).toContain(

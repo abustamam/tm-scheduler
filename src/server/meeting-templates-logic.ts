@@ -30,6 +30,7 @@ import {
 	MAX_TEMPLATE_ROLES,
 } from "#/lib/meeting-template-limits";
 import { logActivity } from "./activity";
+import { assertClubNotArchived, requireClubRole, requireUser } from "./guards";
 import { assertMeetingNotLocked } from "./meeting-authz-logic";
 import {
 	linkEvaluatorsToSpeakers,
@@ -48,6 +49,34 @@ export type MeetingTemplateSummary = {
 	description: string | null;
 	defaultLengthMinutes: number | null;
 };
+
+/**
+ * Resolve a meeting to its club and gate the caller as an officer of it.
+ *
+ * Reshaping a meeting sits with reschedule and cancel, not with the
+ * agenda-content edits ADR-0010 grants the self-asserted Toastmaster — a TMOD
+ * may fill the agenda, not replace it. Note `requireClubRole(["admin"])` also
+ * grants to any member holding an open `officer_terms` row (effective-admin,
+ * #202), so the real authority here is every officer, not only a stored admin.
+ *
+ * Lives here, not in `meeting-templates.ts`, so a second server-fn module
+ * (`meeting-agenda-edit.ts`) can import it too: a plain value export from a
+ * module that also defines `createServerFn`s is exactly the leak
+ * `server-modules.guard.test.ts` exists to catch, so this helper has to live
+ * in a `*-logic.ts` sibling to be exported at all.
+ */
+export async function requireMeetingTemplateEditor(meetingId: string) {
+	const user = await requireUser();
+	const [meeting] = await database
+		.select({ clubId: meetings.clubId })
+		.from(meetings)
+		.where(eq(meetings.id, meetingId))
+		.limit(1);
+	if (!meeting) throw new Error("Meeting not found.");
+	await assertClubNotArchived(meeting.clubId);
+	const membership = await requireClubRole(user.id, meeting.clubId, ["admin"]);
+	return { clubId: meeting.clubId, membership };
+}
 
 /**
  * Templates this club may apply: every enabled GLOBAL template (`club_id IS
