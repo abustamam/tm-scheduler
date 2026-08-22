@@ -50,12 +50,19 @@ describe("meeting-agenda → agenda editor button wiring", () => {
 	const src = readSource(MEETING_AGENDA);
 
 	it("offers the button only for a templated meeting an officer may manage", () => {
+		// Anchored on the literal `&&` and a flat `? (` — not just the presence of
+		// both tokens somewhere before a `? (`. The looser form (any characters
+		// between the two names) passes on `||`, on `&& !meeting.templateId`, and
+		// on a nested ternary splitting the two conditions across two `?`s — all
+		// three gate the button wrong while still containing both identifiers.
 		const m = src.match(
-			/\{viewer\.canManage[^}]*?meeting\.templateId[^}]*\? \(/,
+			/\{viewer\.canManage\s*&&\s*meeting\.templateId\s*\?\s*\(/,
 		);
 		expect(
 			m,
-			"the button's gate must test BOTH viewer.canManage AND meeting.templateId",
+			"the button's gate must be the single conjunction " +
+				"`viewer.canManage && meeting.templateId ? (` — not an `||`, a negation, " +
+				"or a nested ternary that only mentions both names",
 		).toBeTruthy();
 	});
 

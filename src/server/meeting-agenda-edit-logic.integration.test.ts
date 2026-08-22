@@ -19,8 +19,10 @@ import {
 	speeches,
 } from "#/db/schema";
 import {
+	MAX_ROLE_REPEAT_SLOTS,
 	MAX_TEMPLATE_BEATS,
 	MAX_TEMPLATE_LABEL_CHARS,
+	MAX_TEMPLATE_ROLES,
 } from "#/lib/meeting-template-limits";
 import {
 	cleanup,
@@ -928,6 +930,29 @@ describe.skipIf(!hasTestDb)("agenda row mutations", () => {
 		expect(after?.rows.map((r) => r.id)).not.toContain(target.id);
 	});
 
+	it("empties the agenda when every row is removed, one at a time", async () => {
+		// "An empty agenda is a legal state" is its own commit on this branch —
+		// the write path to empty deserves the same coverage the read path
+		// (`loadAgendaDraft` returning `rows: []`) already has. The last removal
+		// is the interesting one: it drives `renumberRows` down to an EMPTY
+		// `orderedIds`, which is exactly the shape its own
+		// `if (orderedIds.length === 0) return;` guard exists for — without it,
+		// `bulkSetSortOrder` would build its `CASE` expression from a
+		// `sql.join([])`, producing a bare `CASE "id" END` and a Postgres syntax
+		// error instead of a clean no-op.
+		await givePrivateTemplate();
+		const before = await loadAgendaDraft(club.meetingId);
+		const rows = before?.rows ?? [];
+		expect(rows.length).toBeGreaterThan(0);
+
+		for (const row of rows) {
+			await removeAgendaRow({ meetingId: club.meetingId, rowId: row.id });
+		}
+
+		const after = await loadAgendaDraft(club.meetingId);
+		expect(after?.rows).toEqual([]);
+	});
+
 	it("refuses every mutation on a locked meeting", async () => {
 		await givePrivateTemplate();
 		const draft = await loadAgendaDraft(club.meetingId);
@@ -1296,6 +1321,86 @@ describe.skipIf(!hasTestDb)("agenda role mutations", () => {
 			isSpeakerRole: false,
 		});
 		expect(a.key).not.toBe(b.key);
+	});
+
+	it("refuses to add past the role ceiling", async () => {
+		// ABSOLUTE: symmetric with `addAgendaRow`'s beat-ceiling test above —
+		// enforced at the writer as well as `loadTemplateRoles`, so an officer
+		// holding the button cannot build a role set the renderer would then
+		// silently truncate.
+		const id = await givePrivateTemplate();
+		// `givePrivateTemplate` already declares one role ("chair"); fill the
+		// rest of the ceiling with fillers.
+		await testDb.insert(meetingTemplateRoles).values(
+			Array.from({ length: MAX_TEMPLATE_ROLES - 1 }, (_, i) => ({
+				templateId: id,
+				key: `filler_role_${i}`,
+				name: `Filler ${i}`,
+				category: "functionary" as const,
+				defaultCount: 1,
+				sortOrder: 1000 + i,
+				isSpeakerRole: false,
+			})),
+		);
+		await expect(
+			addAgendaRole({
+				meetingId: club.meetingId,
+				name: "One Too Many",
+				category: "functionary",
+				defaultCount: 1,
+				isSpeakerRole: false,
+			}),
+		).rejects.toThrow(
+			`This agenda has too many roles (max ${MAX_TEMPLATE_ROLES}).`,
+		);
+	});
+
+	it("refuses a defaultCount below zero", async () => {
+		await givePrivateTemplate();
+		await expect(
+			addAgendaRole({
+				meetingId: club.meetingId,
+				name: "Negative Places",
+				category: "functionary",
+				defaultCount: -1,
+				isSpeakerRole: false,
+			}),
+		).rejects.toThrow(
+			`A role can have between 0 and ${MAX_ROLE_REPEAT_SLOTS} places.`,
+		);
+	});
+
+	it("refuses a defaultCount past the repeat-slot ceiling", async () => {
+		await givePrivateTemplate();
+		await expect(
+			addAgendaRole({
+				meetingId: club.meetingId,
+				name: "Too Many Places",
+				category: "functionary",
+				defaultCount: MAX_ROLE_REPEAT_SLOTS + 1,
+				isSpeakerRole: false,
+			}),
+		).rejects.toThrow(
+			`A role can have between 0 and ${MAX_ROLE_REPEAT_SLOTS} places.`,
+		);
+	});
+
+	it("refuses a role name past the label length cap", async () => {
+		// Code points, not UTF-16 units — same distinction
+		// `updateAgendaRow`'s label cap test makes for a beat's `label`; this is
+		// the same cap enforced on a role's `name` at `addAgendaRole` instead.
+		await givePrivateTemplate();
+		await expect(
+			addAgendaRole({
+				meetingId: club.meetingId,
+				name: "🎤".repeat(MAX_TEMPLATE_LABEL_CHARS + 1),
+				category: "functionary",
+				defaultCount: 1,
+				isSpeakerRole: false,
+			}),
+		).rejects.toThrow(
+			`That role name is too long (max ${MAX_TEMPLATE_LABEL_CHARS} characters).`,
+		);
 	});
 
 	it("materializes a pre-existing role under the fork's private copy, and re-points this meeting's own slot to it, without duplicating on a later add (task-8b)", async () => {

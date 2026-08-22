@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	MAX_BEAT_MINUTES,
 	MAX_ROLE_REPEAT_SLOTS,
 	MAX_TEMPLATE_BEATS,
 	MAX_TEMPLATE_DETAIL_CHARS,
@@ -25,6 +26,10 @@ describe("meeting template limits", () => {
 
 	it("caps the repeat expansion independently of the beat count", () => {
 		expect(MAX_ROLE_REPEAT_SLOTS).toBe(20);
+	});
+
+	it("caps minutes on a single beat", () => {
+		expect(MAX_BEAT_MINUTES).toBe(600);
 	});
 
 	it("caps rendered strings", () => {
