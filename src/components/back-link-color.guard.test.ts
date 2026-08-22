@@ -71,7 +71,7 @@ describe("the unlayered text-link rule leaves BackLink's own color alone", () =>
 			base[0],
 			`the global text-link rule must exclude ${SLOT}. It is UNLAYERED, so it ` +
 				"beats BackLink's own `text-muted-foreground` — without the exclusion " +
-				"both \"Back to …\" links render --lagoon-deep (#328f97, 3.81:1 on " +
+				'both "Back to …" links render --lagoon-deep (#328f97, 3.81:1 on ' +
 				"white) at text-sm, under WCAG AA for normal text.",
 		).toContain(SLOT);
 	});
@@ -150,7 +150,9 @@ describe("the unlayered text-link rule leaves BackLink's own color alone", () =>
 				"with a hand-rolled anchor, that anchor needs its own " +
 				'`data-slot="back-link"` (or a new exclusion) or it silently loses ' +
 				"its color to the unlayered text-link rule again.",
-		).toMatch(/import\s*\{\s*BackLink\s*\}\s*from\s*["']#\/components\/back-link["']/);
+		).toMatch(
+			/import\s*\{\s*BackLink\s*\}\s*from\s*["']#\/components\/back-link["']/,
+		);
 		expect(src).toContain("<BackLink");
 	});
 });
