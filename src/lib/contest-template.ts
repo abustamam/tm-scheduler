@@ -36,18 +36,6 @@
  * Contestant roles are SPEAKER-category: a contest speech is still a speech, so
  * the speech record, the project picker and Pathways attribution all work
  * against a contestant slot with no special-casing.
- *
- * TALLYING AND THE TIMERS' REPORT OWN NO ROLE, deliberately and temporarily. A
- * non-repeating role beat emits one row PER SLOT (`buildTemplateRows`), so
- * binding "Tallying" to a two-slot `ballot_counter` printed it twice at ten
- * minutes each — twenty minutes of an activity two people perform together
- * once, on a clock the Contest Chair reads from. "Tallying" is bound to the
- * single-slot `chief_judge`, who certifies the result anyway; the timers' report
- * has no single-slot owner, so it is an `event` and names nobody. Both roles
- * stay claimable — a role needs no beat to appear on the sign-up sheet. The
- * once/per-holder setting in the configurable-agendas spec
- * (`docs/superpowers/specs/2026-08-21-configurable-agendas-design.md`) is the
- * real fix; when it lands, bind these back to their owners.
  */
 import type { TemplateBeatRow, TemplateRoleRow } from "./agenda-template-rows";
 
@@ -259,17 +247,17 @@ export const CONTEST_TEMPLATE: TemplateSeed = {
 		beat({
 			kind: "role",
 			label: "Tallying",
-			roleKey: "chief_judge",
+			roleKey: "ballot_counter",
 			minutes: 10,
 			detail:
-				"The Ballot Counters tally the ballots and verify them with the Chief Judge, out of the room.",
+				"Ballots are counted and verified with the Chief Judge, out of the room.",
 		}),
 		beat({
-			kind: "event",
+			kind: "role",
 			label: "Timers' report",
+			roleKey: "contest_timer",
 			minutes: 3,
-			detail:
-				"The Timers report each contestant's time and confirm who qualified.",
+			detail: "Reports each contestant's time and confirms who qualified.",
 		}),
 		beat({
 			kind: "role",

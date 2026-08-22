@@ -212,12 +212,13 @@ describe("contest template rendered", () => {
 	});
 
 	/**
-	 * A non-repeating role beat emits one row PER SLOT, so binding "Tallying" to
-	 * a two-slot `ballot_counter` printed it TWICE at ten minutes each — twenty
-	 * minutes for an activity two people perform together once, on the clock the
-	 * Contest Chair runs the night from. Both beats now avoid multi-slot roles.
-	 * Asserted at 2 counters and 2 timers specifically: the bug was invisible at
-	 * one of each.
+	 * A non-repeating role beat used to emit one row PER SLOT, so binding
+	 * "Tallying" to a two-slot `ballot_counter` printed it TWICE at ten minutes
+	 * each — twenty minutes for an activity two people perform together once, on
+	 * the clock the Contest Chair runs the night from. `buildTemplateRows` now
+	 * emits one row naming every holder, so both beats bind to their real
+	 * owners. Asserted at 2 counters and 2 timers specifically: the bug was
+	 * invisible at one of each.
 	 */
 	it("prints the tally and the timers' report once each", () => {
 		const counters = CONTEST_TEMPLATE.roles.find(
@@ -234,6 +235,12 @@ describe("contest template rendered", () => {
 		expect(rows.filter((r) => r.who.startsWith("Timers' report"))).toHaveLength(
 			1,
 		);
+		// And they are OWNED now, not anonymous events: the fix is the renderer's,
+		// so the beats no longer have to dodge multi-slot roles.
+		const tally = rows.find((r) => r.who.startsWith("Tallying"));
+		expect(tally?.roleKey).toBe("ballot_counter");
+		const report = rows.find((r) => r.who.startsWith("Timers' report"));
+		expect(report?.roleKey).toBe("contest_timer");
 	});
 
 	it("keeps the contest's own timer marks", () => {

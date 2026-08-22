@@ -164,31 +164,57 @@ describe("buildTemplateRows", () => {
 	});
 
 	/**
-	 * A non-repeating role beat must emit one row per slot, matching
-	 * `expandRunSheet`'s plain arm. Binding only the first slot silently drops
-	 * the second Ballot Counter and the second Timer, both of which the seeded
-	 * contest declares with `defaultCount: 2`.
+	 * A non-repeating role beat used to emit one row PER SLOT, so "Tallying" on a
+	 * two-slot `ballot_counter` printed twice at ten minutes each — twenty
+	 * minutes for one joint activity, on the clock the chair runs the night
+	 * from. Repeating is what `repeatsRoleKey` is for; a plain role beat is one
+	 * activity however many people hold the role.
 	 */
-	it("emits one row per slot for a non-repeating role with several slots", () => {
-		const rows = buildTemplateRows(
-			[
-				beat({
-					sortOrder: 0,
-					kind: "role",
-					label: "Tallying",
-					roleKey: "ballot_counter",
-				}),
-			],
-			ROLES,
-			[
-				slot("ballot_counter", "Ballot Counter", 0, "Ada"),
-				slot("ballot_counter", "Ballot Counter", 1, "Grace"),
-			],
-		);
-		expect(rows).toHaveLength(2);
+	it("emits ONE row for a non-repeating role beat, naming every holder", () => {
+		const beats: TemplateBeatRow[] = [
+			beat({
+				sortOrder: 0,
+				kind: "role",
+				label: "Tallying",
+				roleKey: "counter",
+				minutes: 10,
+			}),
+		];
+		const counterRoles: TemplateRoleRow[] = [
+			{ key: "counter", name: "Ballot Counter", isSpeakerRole: false },
+		];
+		const rows = buildTemplateRows(beats, counterRoles, [
+			slot("counter", "Ballot Counter", 0, "Ada"),
+			slot("counter", "Ballot Counter", 1, "Grace"),
+		]);
+
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.who).toBe("Tallying · Ada and Grace");
+		expect(rows[0]?.holder).toBe("Ada and Grace");
+		expect(rows[0]?.minutes).toBe(10);
+	});
+
+	it("still repeats a beat that declares repeatsRoleKey", () => {
+		const beats: TemplateBeatRow[] = [
+			beat({
+				sortOrder: 0,
+				kind: "role",
+				label: "Speech",
+				roleKey: "speaker",
+				repeatsRoleKey: "speaker",
+				minutes: 7,
+			}),
+		];
+		const speakerRoles: TemplateRoleRow[] = [
+			{ key: "speaker", name: "Contestant", isSpeakerRole: true },
+		];
+		const rows = buildTemplateRows(beats, speakerRoles, [
+			slot("speaker", "Contestant", 0, "Ada"),
+			slot("speaker", "Contestant", 1, "Grace"),
+		]);
 		expect(rows.map((r) => r.who)).toEqual([
-			"Tallying 1 · Ada",
-			"Tallying 2 · Grace",
+			"Speech 1 · Ada",
+			"Speech 2 · Grace",
 		]);
 	});
 
