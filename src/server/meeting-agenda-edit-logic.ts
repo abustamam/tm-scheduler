@@ -357,6 +357,19 @@ async function renumberRows(
 			.where(
 				and(
 					eq(meetingTemplateBeats.id, id),
+					// `templateId` here is REDUNDANT, not load-bearing: the match is by
+					// `id`, a primary key, so this conjunct cannot change which row is
+					// selected and no test can distinguish its presence from its
+					// absence — that would be the exact assertion-that-cannot-fail
+					// review flagged elsewhere in this module. Kept as stated intent /
+					// defense-in-depth for a caller that isn't this module's own three
+					// mutators, all of which source `orderedIds` from `loadRowIds(tx,
+					// templateId)` or a row just inserted with that same `templateId`.
+					// TRIGGER: if this ever changes to match by `sortOrder` instead of
+					// `id` (the way the mutators' OWN final statements do on the
+					// forked path — see `findRow`'s docblock), this conjunct becomes
+					// load-bearing exactly the way theirs is, and needs the same
+					// foreign-row-at-the-same-sortOrder test they have.
 					eq(meetingTemplateBeats.templateId, templateId),
 				),
 			);

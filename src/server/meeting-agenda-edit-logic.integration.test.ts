@@ -502,6 +502,22 @@ describe.skipIf(!hasTestDb)("agenda row mutations", () => {
 		).rejects.toThrow(/too long/i);
 	});
 
+	it("caps repeatsRoleKey by length", async () => {
+		// Same `assertWithin` call, same code path as roleKey's cap above — only
+		// roleKey's cap had a test; repeatsRoleKey's was untested.
+		await givePrivateTemplate();
+		const draft = await loadAgendaDraft(club.meetingId);
+		const row = draft?.rows[0];
+		if (!row) throw new Error("no rows");
+		await expect(
+			updateAgendaRow({
+				meetingId: club.meetingId,
+				rowId: row.id,
+				patch: { repeatsRoleKey: "x".repeat(MAX_TEMPLATE_LABEL_CHARS + 1) },
+			}),
+		).rejects.toThrow(/too long/i);
+	});
+
 	it("moves a row up and down", async () => {
 		await givePrivateTemplate();
 		const before = await loadAgendaDraft(club.meetingId);
@@ -791,6 +807,68 @@ describe.skipIf(!hasTestDb)("agenda row mutations", () => {
 				.from(meetingTemplateBeats)
 				.where(eq(meetingTemplateBeats.id, foreignId));
 			expect(foreignRows).toHaveLength(1);
+		} finally {
+			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+		}
+	});
+
+	it("does not touch a foreign row sharing the same sortOrder when a first write forks a private copy (update)", async () => {
+		// Same shape as the removeAgendaRow version above, isolating
+		// updateAgendaRow's OWN forked-path match instead: its `rowFilter` is
+		// `eq(sortOrder, found.sortOrder)` when `forked` is true. A mutating
+		// statement matching on sortOrder alone, with no templateId in its
+		// WHERE, would write this patch onto the copy's row AND the unrelated
+		// foreign row AND the shared source's own row all at once — three rows
+		// patched for a "rename one row" request.
+		const { other, foreignId } = await seedForeignRow();
+		try {
+			const [shared] = await testDb
+				.insert(meetingTemplates)
+				.values({
+					key: `shared_fork_upd_${RUN}`,
+					name: `Shared fork upd ${RUN}`,
+				})
+				.returning({ id: meetingTemplates.id });
+			if (!shared) throw new Error("template insert failed");
+			madeTemplates.push(shared.id);
+			await testDb.insert(meetingTemplateBeats).values({
+				templateId: shared.id,
+				sortOrder: 0,
+				kind: "event",
+				label: "Shared beat",
+				minutes: 5,
+			});
+			await testDb
+				.update(meetings)
+				.set({ templateId: shared.id })
+				.where(eq(meetings.id, club.meetingId));
+
+			const draft = await loadAgendaDraft(club.meetingId);
+			const row = draft?.rows[0];
+			if (!row) throw new Error("no rows");
+			expect(row.sortOrder).toBe(0);
+
+			await updateAgendaRow({
+				meetingId: club.meetingId,
+				rowId: row.id,
+				patch: { label: "renamed" },
+			});
+
+			// The shared source's own row is untouched — the fork COPIES, it
+			// does not edit in place.
+			const [sharedRow] = await testDb
+				.select({ label: meetingTemplateBeats.label })
+				.from(meetingTemplateBeats)
+				.where(eq(meetingTemplateBeats.templateId, shared.id));
+			expect(sharedRow?.label).toBe("Shared beat");
+
+			// The unrelated foreign row, in a different club's template
+			// entirely, is untouched.
+			const [foreignRow] = await testDb
+				.select({ label: meetingTemplateBeats.label })
+				.from(meetingTemplateBeats)
+				.where(eq(meetingTemplateBeats.id, foreignId));
+			expect(foreignRow?.label).toBe("theirs");
 		} finally {
 			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
 		}
