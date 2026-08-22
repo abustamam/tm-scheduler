@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router";
 import { Loader2, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -377,6 +378,16 @@ export function MeetingAgenda({
 					}}
 				>
 					Change meeting type
+				</Button>
+			) : null}
+			{viewer.canManage && meeting.templateId ? (
+				<Button type="button" variant="outline" size="sm" asChild>
+					<Link
+						to="/club/$clubId/meeting/$meetingId/agenda"
+						params={{ clubId: meeting.clubId, meetingId: meeting.id }}
+					>
+						Edit agenda
+					</Link>
 				</Button>
 			) : null}
 			{viewer.canManage ? (
