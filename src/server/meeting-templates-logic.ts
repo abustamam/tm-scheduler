@@ -73,6 +73,11 @@ export async function listAvailableTemplates(
 		.where(
 			and(
 				eq(meetingTemplates.enabled, true),
+				// Private per-meeting copies are agendas, not choices. Excluded in
+				// the QUERY rather than by a caller's `.filter()`, for the same
+				// reason the tenant predicate is: a filter is droppable in a
+				// refactor with every test still green.
+				isNull(meetingTemplates.meetingId),
 				or(
 					isNull(meetingTemplates.clubId),
 					eq(meetingTemplates.clubId, clubId),

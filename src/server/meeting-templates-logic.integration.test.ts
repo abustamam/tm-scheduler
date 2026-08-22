@@ -21,6 +21,7 @@
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	meetings,
 	meetingTemplateBeats,
 	meetingTemplateRoles,
 	meetingTemplates,
@@ -225,6 +226,29 @@ describe.skipIf(!hasTestDb)("meeting template logic", () => {
 			);
 			expect(names).toContain(`Speech Contest ${RUN}`);
 			expect(names).toContain(`Ours ${RUN}`);
+		});
+
+		it("omits a meeting's private copy", async () => {
+			// A private copy is a meeting's own agenda, not something another
+			// meeting may be converted to. It is an ordinary template in every
+			// other respect, which is why the picker has to exclude it explicitly.
+			const [m] = await testDb
+				.insert(meetings)
+				.values({
+					clubId: club.clubId,
+					scheduledAt: new Date("2027-04-01T02:00:00Z"),
+				})
+				.returning({ id: meetings.id });
+			if (!m) throw new Error("meeting insert failed");
+			await testDb.insert(meetingTemplates).values({
+				clubId: club.clubId,
+				meetingId: m.id,
+				key: `private_${RUN}`,
+				name: `Private ${RUN}`,
+			});
+
+			const rows = await listAvailableTemplates(club.clubId);
+			expect(rows.map((r) => r.name)).not.toContain(`Private ${RUN}`);
 		});
 	});
 
