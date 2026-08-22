@@ -130,6 +130,14 @@ export interface MeetingAgendaProps {
 	/** The full meeting row, for the lifted edit dialogs. The WOD dialog reads
 	 *  only a subset (id + wod fields); the meta dialog needs all of it. */
 	meeting: Awaited<ReturnType<typeof getMeeting>>["meeting"];
+	/** The KEY of the template this meeting is currently running, or null for a
+	 *  standard meeting — see `loadTemplateKey`. Feeds the "Current" badge in
+	 *  `MeetingTemplateDialog`. Deliberately NOT `meeting.templateId`: since
+	 *  conversion started pointing meetings at a private per-meeting copy, that
+	 *  id is fresh every conversion and matches no `listAvailableTemplates`
+	 *  choice — the `key` a private copy keeps from its source is the stable
+	 *  thing to match against. */
+	templateKey: string | null;
 	/** The meeting's EFFECTIVE number (stored or derived, #358). */
 	effectiveMeetingNumber?: number | null;
 	/** Club timezone — the meta dialog renders/parses the date field in it. */
@@ -183,6 +191,7 @@ export function MeetingAgenda({
 	shareUrl,
 	meetingDate,
 	meeting,
+	templateKey,
 	effectiveMeetingNumber = null,
 	timezone,
 	selfMemberId,
@@ -374,7 +383,7 @@ export function MeetingAgenda({
 				<MeetingTemplateDialog
 					open={templateOpen}
 					onOpenChange={setTemplateOpen}
-					currentTemplateId={meeting.templateId ?? null}
+					currentTemplateKey={templateKey}
 					templates={templates}
 					loadPreview={(templateId) =>
 						previewTemplateForMeeting({

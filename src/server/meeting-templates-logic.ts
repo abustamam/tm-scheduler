@@ -165,6 +165,28 @@ export async function loadTemplateContent(
 }
 
 /**
+ * The `key` of a template row, or null if it no longer exists.
+ *
+ * Exists so a caller can tell an officer WHICH listed choice a meeting is
+ * currently running without matching on `meetings.template_id` itself — a
+ * private copy's own id is fresh every conversion and never equals anything
+ * `listAvailableTemplates` offers, but it keeps its SOURCE's `key` verbatim
+ * (see `copyTemplateForMeeting`), so `key` is the stable thing to match a
+ * picker choice against. `meeting-agenda.tsx` uses this to compute the
+ * "Current" badge in `MeetingTemplateDialog`.
+ */
+export async function loadTemplateKey(
+	templateId: string,
+): Promise<string | null> {
+	const [row] = await database
+		.select({ key: meetingTemplates.key })
+		.from(meetingTemplates)
+		.where(eq(meetingTemplates.id, templateId))
+		.limit(1);
+	return row?.key ?? null;
+}
+
+/**
  * The ONE definition of "which role definitions does this meeting draw slots
  * from" — the club's ENABLED standard roles when there is no template, the
  * template's materialized roles when there is.
@@ -239,6 +261,31 @@ export async function materializeTemplateRoles(
 }
 
 /**
+ * A template `clubId` may legally copy FROM: global, or the club's own,
+ * excluding private per-meeting copies. Same shape as `listAvailableTemplates`
+ * (`:61-88`) — deliberately re-expressed rather than shared, since that query
+ * also requires `enabled`, which a source lookup must not: a meeting already
+ * running a template a club later disabled still has to be re-copyable when
+ * re-converting or re-applying it.
+ *
+ * `meeting_templates` gained its first per-club (and per-meeting) rows in the
+ * same change that added `copyTemplateForMeeting`. Before that, a caller-
+ * supplied template id was safe to trust unscoped — every row was global and
+ * world-readable by design. It no longer is: `applyTemplateToMeeting` passes
+ * the caller's `templateId` straight through with no ownership check of its
+ * own, and meeting ids (hence a meeting's private-copy id, readable off its
+ * own `meetings.template_id`) are public. Without this predicate, an admin of
+ * ANY club could name another club's private copy as the source and deep-copy
+ * that club's authored agenda into their own.
+ */
+function templateVisibleTo(clubId: string) {
+	return and(
+		or(isNull(meetingTemplates.clubId), eq(meetingTemplates.clubId, clubId)),
+		isNull(meetingTemplates.meetingId),
+	);
+}
+
+/**
  * Deep-copy a template into a PRIVATE row owned by one meeting, and return the
  * copy's id.
  *
@@ -251,6 +298,13 @@ export async function materializeTemplateRoles(
  * `meeting_templates_meeting_unique`, and the club-key index exempts private
  * rows, so the key here is provenance rather than identity — it is how you can
  * still tell what a meeting was built from after it has been edited.
+ *
+ * `sourceTemplateId` is gated by `templateVisibleTo(clubId)` — this is the
+ * boundary that keeps one club from naming another's private copy as a
+ * source, so it must run inside the SAME transaction as everything else this
+ * function does: it is multi-statement but not self-transactional, and a
+ * caller invoking it outside a transaction risks a mid-copy failure leaving a
+ * template row with partial roles and beats.
  */
 export async function copyTemplateForMeeting(
 	conn: DbOrTx,
@@ -260,7 +314,9 @@ export async function copyTemplateForMeeting(
 	const [source] = await conn
 		.select()
 		.from(meetingTemplates)
-		.where(eq(meetingTemplates.id, sourceTemplateId))
+		.where(
+			and(eq(meetingTemplates.id, sourceTemplateId), templateVisibleTo(clubId)),
+		)
 		.limit(1);
 	if (!source) throw new Error("That meeting template no longer exists.");
 
@@ -507,9 +563,24 @@ export async function applyTemplateConversion(input: {
 }): Promise<ConversionPlan> {
 	const { meetingId, clubId, templateId, actorMemberId } = input;
 
+	// Fail fast, before opening a transaction. Gated by `templateVisibleTo` for
+	// the same reason `copyTemplateForMeeting`'s own read is (see that
+	// function's docblock): `templateId` is caller-supplied —
+	// `applyTemplateToMeeting` passes it straight through, checking only the
+	// TARGET meeting's club — and, now that private per-meeting copies exist,
+	// no longer safe to trust as globally readable. This duplicates
+	// `copyTemplateForMeeting`'s own gate rather than relying on it alone,
+	// so the caller-facing error and the no-lock-taken failure happen here,
+	// before the transaction below does any work.
 	if (templateId !== null) {
-		const content = await loadTemplateContent(templateId);
-		if (!content) throw new Error("That meeting template no longer exists.");
+		const [visible] = await database
+			.select({ id: meetingTemplates.id })
+			.from(meetingTemplates)
+			.where(
+				and(eq(meetingTemplates.id, templateId), templateVisibleTo(clubId)),
+			)
+			.limit(1);
+		if (!visible) throw new Error("That meeting template no longer exists.");
 	}
 
 	return database.transaction(async (tx) => {

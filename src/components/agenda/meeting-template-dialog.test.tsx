@@ -54,7 +54,7 @@ function setup(
 	const props = {
 		open: true,
 		onOpenChange: vi.fn(),
-		currentTemplateId: null,
+		currentTemplateKey: null,
 		templates: TEMPLATES,
 		loadPreview,
 		onApply,
@@ -75,8 +75,21 @@ describe("MeetingTemplateDialog", () => {
 	});
 
 	it("marks the current template as current", () => {
-		setup({ currentTemplateId: "t1" });
+		// Matched on `key`, not `id`: a converted meeting points at a PRIVATE
+		// copy whose id never equals a picker choice's id, but which keeps its
+		// source's key verbatim.
+		setup({ currentTemplateKey: "speech_contest" });
 		expect(screen.getByText(/current/i)).toBeTruthy();
+	});
+
+	it("does NOT mark a template current merely because its id happens to be passed", () => {
+		// Regression guard for the #319-shaped bug this dialog shipped once: the
+		// call site used to pass the meeting's `templateId`, which — after
+		// conversion started deep-copying into a private row — never equals any
+		// choice's `id`. Passing an `id` value through the KEY prop must not
+		// accidentally match by id.
+		setup({ currentTemplateKey: "t1" });
+		expect(screen.queryByText(/current/i)).toBeNull();
 	});
 
 	it("previews before anything is applied", async () => {

@@ -48,7 +48,10 @@ import {
 } from "./meeting-contacts-logic";
 import { resolveMeetingNumber } from "./meeting-number-logic";
 import { resolvePublicMeetingKey } from "./meeting-resolve-logic";
-import { loadTemplateContent } from "./meeting-templates-logic";
+import {
+	loadTemplateContent,
+	loadTemplateKey,
+} from "./meeting-templates-logic";
 import {
 	applyCompleteMeeting,
 	applyCreateMeeting,
@@ -314,7 +317,7 @@ async function loadMeetingDetail(
 	const roster = canManage ? await loadRosterWithContact(meeting.clubId) : [];
 
 	// The meeting's template content (#agenda-templates). One extra round trip
-	// only when `template_id` is set (its two selects run in parallel), so a
+	// only when `template_id` is set (its selects run in parallel), so a
 	// standard meeting pays nothing.
 	//
 	// THROW rather than fall through. `resolveAgendaRows` reads `template: null`
@@ -324,8 +327,16 @@ async function loadMeetingDetail(
 	// beat gates out and the officer gets a near-empty agenda with no error at
 	// all. A loud failure beats a blank sheet on contest night.
 	let template = null;
+	// The current template's `key` (not its id — see `loadTemplateKey`), for
+	// the "Current" badge in the change-meeting-type dialog. A private copy's
+	// id is fresh every conversion and matches no picker choice; its `key` is
+	// what's stable.
+	let templateKey: string | null = null;
 	if (meeting.templateId) {
-		template = await loadTemplateContent(meeting.templateId);
+		[template, templateKey] = await Promise.all([
+			loadTemplateContent(meeting.templateId),
+			loadTemplateKey(meeting.templateId),
+		]);
 		if (!template) {
 			throw new Error(
 				`Meeting ${meeting.id} references template ${meeting.templateId}, which does not exist.`,
@@ -436,6 +447,10 @@ async function loadMeetingDetail(
 		// standard meeting. Feeds `resolveAgendaRows` on both the screen and the
 		// print route so the two cannot disagree about what the meeting is.
 		template,
+		// The current template's `key`, or null for a standard meeting — see
+		// `loadTemplateKey`. Feeds the "Current" badge in the change-meeting-type
+		// dialog; NOT the same value as `meeting.templateId`.
+		templateKey,
 		officers,
 		unavailableMembers,
 		plan,

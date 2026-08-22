@@ -11,7 +11,7 @@
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5433/tm_test \
  *     bunx vitest run src/server/meeting-template-convert.integration.test.ts
  */
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
@@ -20,6 +20,7 @@ import {
 	meetingTemplateBeats,
 	meetingTemplateRoles,
 	meetingTemplates,
+	roleDefinitions,
 	roleSlots,
 	speeches,
 } from "#/db/schema";
@@ -34,9 +35,11 @@ import {
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
-const { applyTemplateConversion, planTemplateConversion } = await import(
-	"./meeting-templates-logic"
-);
+const {
+	applyTemplateConversion,
+	materializeTemplateRoles,
+	planTemplateConversion,
+} = await import("./meeting-templates-logic");
 
 describe.skipIf(!hasTestDb)("meeting template conversion", () => {
 	let club: SeededClub;
@@ -279,11 +282,47 @@ describe.skipIf(!hasTestDb)("meeting template conversion", () => {
 			).toHaveLength(1);
 		});
 
-		it("materializes the template's roles for this club", async () => {
+		/**
+		 * OLD comment, now false: "Idempotent: a second conversion must not
+		 * duplicate them." That framing describes a no-op, and this is not one.
+		 * Every conversion deep-copies a FRESH private template (Task 3), so the
+		 * second call's role_definitions are different ROWS from the first's,
+		 * even though the source `templateId` is identical — there is nothing
+		 * for a second call to recognize as "already there" to skip. The count
+		 * comes out the same (4 in, 4 out) because the first conversion's 4
+		 * slots are torn down and 4 new ones built on top of the fresh copy, not
+		 * because the second call did nothing. See the next test, which is what
+		 * makes that distinction observable: a re-apply releases a claim.
+		 */
+		it("replaces the slots on a second identical conversion, rather than deduplicating them", async () => {
 			await convert(templateId);
-			// Idempotent: a second conversion must not duplicate them.
 			await convert(templateId);
 			expect(await slotsFor(club.meetingId)).toHaveLength(4);
+		});
+
+		/**
+		 * The controller's ruling on this (fix round 1, finding 4): this stays a
+		 * full teardown, deliberately, rather than gaining a short-circuit for
+		 * "the target template is the one already applied." A short-circuit
+		 * would be a FOURTH path through a transaction two prior orderings
+		 * already got wrong, and the preview naming who loses a role — which
+		 * `MeetingTemplateDialog` shows before anything is destroyed — is this
+		 * app's established answer to exactly this situation, not a special
+		 * case to avoid.
+		 */
+		it("releases a claimed slot's holder even when re-applying the SAME template", async () => {
+			await convert(templateId);
+			const [slot] = await slotsFor(club.meetingId);
+			if (!slot) throw new Error("first conversion produced no slots");
+			await testDb
+				.update(roleSlots)
+				.set({ assignedMemberId: club.memberId, status: "claimed" })
+				.where(eq(roleSlots.id, slot.id));
+
+			const plan = await convert(templateId);
+			expect(plan.claimedSlotsReleased).toBe(1);
+			expect(plan.releasedHolders).toHaveLength(1);
+			expect(plan.releasedHolders[0]?.memberId).toBe(club.memberId);
 		});
 	});
 
@@ -457,6 +496,140 @@ describe.skipIf(!hasTestDb)("meeting template conversion", () => {
 				.from(meetingTemplates)
 				.where(eq(meetingTemplates.id, firstCopy));
 			expect(orphan).toEqual([]);
+		});
+	});
+
+	/**
+	 * Fix round 1, finding 1. Before Task 3, `meeting_templates` held only
+	 * GLOBAL rows, so a caller-supplied `templateId` was safe to trust
+	 * unscoped — every id named something world-readable by design. Task 3
+	 * created the first per-club rows (private copies), and `meeting.templateId`
+	 * is readable off a public meeting page, so an admin of one club can read
+	 * another club's private copy id and pass it straight through
+	 * `applyTemplateToMeeting`, which authorizes only the TARGET meeting.
+	 * Without `templateVisibleTo`, that deep-copies the victim club's authored
+	 * agenda into the attacker's own club.
+	 */
+	describe("cross-club source protection", () => {
+		it("refuses to copy from another club's PRIVATE template, even by exact id", async () => {
+			const source = await makeTemplate();
+			await applyTemplateConversion({
+				meetingId: club.meetingId,
+				clubId: club.clubId,
+				templateId: source,
+				actorMemberId: null,
+			});
+			const [row] = await testDb
+				.select({ templateId: meetings.templateId })
+				.from(meetings)
+				.where(eq(meetings.id, club.meetingId));
+			const clubAPrivateCopyId = row?.templateId ?? "";
+
+			const clubB = await seedClub();
+			try {
+				await expect(
+					applyTemplateConversion({
+						meetingId: clubB.meetingId,
+						clubId: clubB.clubId,
+						templateId: clubAPrivateCopyId,
+						actorMemberId: null,
+					}),
+				).rejects.toThrow(/template/i);
+				// And nothing was copied into club B's club.
+				const leaked = await testDb
+					.select({ id: meetingTemplates.id })
+					.from(meetingTemplates)
+					.where(eq(meetingTemplates.clubId, clubB.clubId));
+				expect(leaked).toEqual([]);
+			} finally {
+				await cleanup(clubB.clubId, [clubB.adminUserId, clubB.memberUserId]);
+			}
+		});
+
+		it("refuses to copy from another club's OWN (non-private, club-scoped) template", async () => {
+			// Phase 2 (club-scoped, non-private templates) writes no rows yet in
+			// product code, but the schema and this predicate already support
+			// them — this is the defense-in-depth case for when it does.
+			const [clubScoped] = await testDb
+				.insert(meetingTemplates)
+				.values({
+					clubId: club.clubId,
+					key: `club-scoped-${crypto.randomUUID().slice(0, 8)}`,
+					name: "Club A's own template",
+				})
+				.returning({ id: meetingTemplates.id });
+			if (!clubScoped) throw new Error("template insert failed");
+			createdTemplateIds.push(clubScoped.id);
+			await testDb.insert(meetingTemplateRoles).values({
+				templateId: clubScoped.id,
+				key: "chair",
+				name: "Chair",
+				category: "leadership",
+				defaultCount: 1,
+				sortOrder: 10,
+			});
+
+			const clubB = await seedClub();
+			try {
+				await expect(
+					applyTemplateConversion({
+						meetingId: clubB.meetingId,
+						clubId: clubB.clubId,
+						templateId: clubScoped.id,
+						actorMemberId: null,
+					}),
+				).rejects.toThrow(/template/i);
+			} finally {
+				await cleanup(clubB.clubId, [clubB.adminUserId, clubB.memberUserId]);
+			}
+		});
+	});
+
+	/**
+	 * Fix round 1, finding 3. All 22 pre-fix-round tests passed with
+	 * `eq(meetingTemplates.meetingId, meetingId)` deleted from
+	 * `previousPrivateId`'s lookup, because every one of them reaches a
+	 * non-null `meetings.template_id` only through `applyTemplateConversion`
+	 * itself, which always makes a private copy. The state that predicate
+	 * exists for — `meetings.template_id` pointing at a SHARED template,
+	 * either a legacy row from before private copies existed or a direct
+	 * write — was never seeded.
+	 */
+	describe("legacy shared-template pointer", () => {
+		it("does not retire a GLOBAL template when a meeting converts away from it", async () => {
+			// Simulate the pre-Task-3 shape directly, bypassing
+			// applyTemplateConversion: a meeting whose template_id points at a
+			// SHARED template, materialized the old way (role_definitions tagged
+			// with the SOURCE's own id, not a private copy's).
+			await materializeTemplateRoles(testDb, club.clubId, templateId);
+			await testDb
+				.update(meetings)
+				.set({ templateId })
+				.where(eq(meetings.id, club.meetingId));
+
+			await applyTemplateConversion({
+				meetingId: club.meetingId,
+				clubId: club.clubId,
+				templateId: null,
+				actorMemberId: null,
+			});
+
+			const survivors = await testDb
+				.select({ id: meetingTemplates.id })
+				.from(meetingTemplates)
+				.where(eq(meetingTemplates.id, templateId));
+			expect(survivors).toHaveLength(1);
+
+			const defs = await testDb
+				.select({ id: roleDefinitions.id })
+				.from(roleDefinitions)
+				.where(
+					and(
+						eq(roleDefinitions.clubId, club.clubId),
+						eq(roleDefinitions.templateId, templateId),
+					),
+				);
+			expect(defs.length).toBeGreaterThan(0);
 		});
 	});
 
