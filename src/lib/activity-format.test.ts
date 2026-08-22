@@ -374,26 +374,18 @@ describe("formatActivity", () => {
 	// same "derive from the source of truth" shape as
 	// `public-readers-archive-gate.guard.test.ts`'s enrollment sweep.
 	describe("every activity_action has a formatter", () => {
-		// PRE-EXISTING gaps, each still rendering the raw enum string on the
-		// Activity page today (verified by removing an entry here and seeing
-		// its row fail) — not introduced by, and intentionally left unfixed by,
-		// the change that added this sweep. Waived by name, like
-		// `REVIEWED_UNGATED`, so the sweep is honest about what it currently
-		// covers rather than silently skipping them.
-		const PRE_EXISTING_UNFORMATTED = new Set<string>([
-			"superadmin_viewed",
-			"superadmin_acted",
-			"vote_open",
-			"vote_close",
-		]);
+		// No waiver list: every `activity_action` value now has a case in
+		// `formatActivity`. This sweep started with a `PRE_EXISTING_UNFORMATTED`
+		// set covering `superadmin_viewed`/`superadmin_acted`/`vote_open`/
+		// `vote_close` (found by writing this sweep in the first place, and
+		// waived by name to keep that change scoped); all four gained cases and
+		// the waiver was emptied rather than left standing — a waiver list born
+		// with entries invites a fifth.
+		const covered = activityActionEnum.enumValues;
 
-		const covered = activityActionEnum.enumValues.filter(
-			(action) => !PRE_EXISTING_UNFORMATTED.has(action),
-		);
-
-		// If this is empty the filter above is swallowing everything — a
-		// filter bug would otherwise make `it.each([])` below run zero tests
-		// and report green.
+		// If this is empty the enum itself is empty — a filter bug upstream
+		// would otherwise make `it.each([])` below run zero tests and report
+		// green.
 		it("covers at least one action", () => {
 			expect(covered.length).toBeGreaterThan(0);
 		});
