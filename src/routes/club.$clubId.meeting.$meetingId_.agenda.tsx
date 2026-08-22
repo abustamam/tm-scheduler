@@ -18,14 +18,9 @@
 // uuid, and the "Edit agenda" button below wires `meetingId: meeting.id`, not
 // a key. `resolveMeetingKey` also accepts a raw uuid, so a redirect back to
 // the canonical meeting route with the same value still resolves correctly.
-import {
-	createFileRoute,
-	Link,
-	redirect,
-	useRouter,
-} from "@tanstack/react-router";
-import { ArrowLeft } from "lucide-react";
+import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
 import { AgendaEditor } from "#/components/agenda/agenda-editor";
+import { BackLink } from "#/components/back-link";
 import {
 	addAgendaRoleFn,
 	addAgendaRowFn,
@@ -83,14 +78,12 @@ function AgendaEditorRoute() {
 	return (
 		<div className="mx-auto w-full max-w-reading space-y-6 p-4 pb-8 md:p-6">
 			<div className="pt-2">
-				<Link
+				<BackLink
 					to="/club/$clubId/meeting/$meetingId"
 					params={{ clubId, meetingId }}
-					className="inline-flex items-center gap-1 text-sm font-medium text-muted-foreground no-underline hover:text-foreground"
 				>
-					<ArrowLeft className="size-3.5" aria-hidden="true" />
 					Back to meeting
-				</Link>
+				</BackLink>
 				<h1 className="mt-3 font-display text-2xl font-semibold tracking-tight">
 					Edit agenda
 				</h1>
