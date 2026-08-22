@@ -317,8 +317,8 @@ async function loadMeetingDetail(
 	const roster = canManage ? await loadRosterWithContact(meeting.clubId) : [];
 
 	// The meeting's template content (#agenda-templates). One extra round trip
-	// only when `template_id` is set (its selects run in parallel), so a
-	// standard meeting pays nothing.
+	// only when `template_id` is set (its three reads run in parallel — see
+	// `loadTemplateContent`), so a standard meeting pays nothing.
 	//
 	// THROW rather than fall through. `resolveAgendaRows` reads `template: null`
 	// as "standard meeting", so a templated meeting whose content failed to load

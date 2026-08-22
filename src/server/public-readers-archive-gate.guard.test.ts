@@ -308,13 +308,15 @@ const REVIEWED_UNGATED: Record<string, string> = {
 	setActiveClub: "writes a session preference",
 	// Gated, but through a different helper than a WIRINGS row can express.
 	getClubLogoMeta: "gated inside loadClubLogoMeta via isReadableClub (#495)",
-	// Both resolve the meeting's club and then run requireUser +
+	// Each of these resolves the meeting's club and then runs requireUser +
 	// assertClubNotArchived + requireClubRole inside
-	// `requireMeetingTemplateEditor` (meeting-templates.ts). The sweep looks for
-	// a `require*` call in the fn body itself and cannot see through a local
-	// helper, so these read as session-less when they are officer-gated and
-	// archive-gated. Not public readers at all — reshaping a meeting is an
-	// officer action, alongside reschedule and cancel.
+	// `requireMeetingTemplateEditor`, imported from `meeting-templates-logic.ts`
+	// (Task 6 moved it there so a second server-fn module could import it too).
+	// The sweep looks for a `require*` call in the fn body itself and cannot
+	// see through an imported helper, so these read as session-less when they
+	// are officer-gated and archive-gated. Not public readers at all —
+	// reshaping a meeting or its agenda is an officer action, alongside
+	// reschedule and cancel.
 	previewTemplateForMeeting:
 		"officer-gated + archive-gated inside requireMeetingTemplateEditor (#agenda-templates)",
 	applyTemplateToMeeting:
