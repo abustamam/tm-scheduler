@@ -35,6 +35,97 @@ export type { AgendaDraft, AgendaDraftRow, AgendaDraftRole, ReleasedHolder };
 
 const meetingInput = z.object({ meetingId: z.string().uuid() });
 
+/**
+ * `minutes`'/the marks' beat-timing range, by patch field — for
+ * `fallbackMessage` below. Keyed on the field name because that is all a
+ * zod issue's `path` gives us to work with.
+ */
+const RANGE_FIELD_LABELS: Record<string, string> = {
+	minutes: "Minutes",
+	markGreen: "Green mark",
+	markYellow: "Yellow mark",
+	markRed: "Red mark",
+};
+
+/** The patch's free-text fields' length bounds, by field — for
+ *  `fallbackMessage` below. Twice each real cap; see the doc comment on
+ *  `patchInput`. */
+const LENGTH_FIELD_CAPS: Record<string, { label: string; max: number }> = {
+	label: { label: "label", max: MAX_TEMPLATE_LABEL_CHARS * 2 },
+	detail: { label: "note", max: MAX_TEMPLATE_DETAIL_CHARS * 2 },
+	roleKey: { label: "role reference", max: MAX_TEMPLATE_LABEL_CHARS * 2 },
+	repeatsRoleKey: {
+		label: "repeat-role reference",
+		max: MAX_TEMPLATE_LABEL_CHARS * 2,
+	},
+};
+
+/**
+ * A message for a zod issue that was never given one of its own.
+ *
+ * None of `patchInput`'s eight bounds below carry a message argument, on
+ * purpose: `meeting-templates-authz.guard.test.ts` greps
+ * `meeting-agenda-edit.ts` for their literal, message-less shape — a bare
+ * `.max(MAX_TEMPLATE…)` for the four text fields, a bare `.int()` then a
+ * bare `.max(MAX_BEAT_MINUTES)` for `minutes` and the three marks — to prove
+ * the bound itself cannot be silently dropped, and a message argument is
+ * part of that literal text (Biome also wraps a `.max(N, "…")` call onto
+ * multiple lines once the line is long enough, which breaks the same grep
+ * from the formatting side). This is where the sentence those checks can't
+ * carry themselves actually comes from, resolved from the issue's own field
+ * and failure kind instead of from the schema. `minutes`' range wording
+ * matches `updateAgendaRow`'s own check (`meeting-agenda-edit-logic
+ * .ts:817`) exactly, since a value that trips one can trip the other — an
+ * officer must see the same sentence regardless of which layer catches it.
+ * The marks have no logic-layer counterpart to match, so they get their own
+ * field name instead.
+ */
+function fallbackMessage(issue: {
+	code: string;
+	path: PropertyKey[];
+}): string | undefined {
+	const field = issue.path.at(-1);
+	if (typeof field !== "string") return undefined;
+	const rangeLabel = RANGE_FIELD_LABELS[field];
+	if (rangeLabel) {
+		if (issue.code === "too_big" || issue.code === "too_small") {
+			return `${rangeLabel} must be between 0 and ${MAX_BEAT_MINUTES}.`;
+		}
+		if (issue.code === "invalid_type") {
+			return `${rangeLabel} must be a whole number.`;
+		}
+		return undefined;
+	}
+	const lengthCap = LENGTH_FIELD_CAPS[field];
+	if (lengthCap && issue.code === "too_big") {
+		return `Keep the ${lengthCap.label} under ${lengthCap.max} characters.`;
+	}
+	return undefined;
+}
+
+/**
+ * Parse, but fail with a sentence a club officer can read.
+ *
+ * A raw `ZodError` reaching the client is not the human-readable rejection a
+ * bound's own message promises: `ZodError.message` is
+ * `JSON.stringify(issues, null, 2)` — the WHOLE issues array, `code` and
+ * `path` included, not just the one issue's `message` text — so even a
+ * bounded field with a friendly message still surfaces as a JSON dump
+ * through a bare `.parse()`. This is what actually extracts it; see the same
+ * shape in `action-items.ts` (#522). `fallbackMessage` above supplies the
+ * message none of `patchInput`'s bounds can carry themselves.
+ */
+function parse<T>(schema: z.ZodType<T>, input: unknown): T {
+	const result = schema.safeParse(input);
+	if (result.success) return result.data;
+	const issue = result.error.issues[0];
+	throw new Error(
+		(issue && fallbackMessage(issue)) ??
+			issue?.message ??
+			"That change could not be saved.",
+	);
+}
+
 /** This meeting's editable agenda. Officer-gated: the same authority that may
  *  change a meeting's type may reshape its run of show. */
 export const getAgendaDraft = createServerFn({ method: "GET" })
@@ -73,6 +164,10 @@ const rowInput = z.object({
  * all-three-or-none, never the values. Bounded to the same
  * `MAX_BEAT_MINUTES` as `minutes`, since a mark is a minute offset within the
  * beat it belongs to.
+ *
+ * None of the eight bounds below carries a message argument — see
+ * `fallbackMessage` above, and `meeting-templates-authz.guard.test.ts`,
+ * which pins that bare shape.
  */
 const patchInput = rowInput.extend({
 	// Require at least one key: an empty `{}` validates as a well-formed patch,
@@ -139,7 +234,7 @@ export const addAgendaRowFn = createServerFn({ method: "POST" })
 
 /** Edit a row's content. Officer-gated, same as `getAgendaDraft`. */
 export const updateAgendaRowFn = createServerFn({ method: "POST" })
-	.validator((input: unknown) => patchInput.parse(input))
+	.validator((input: unknown) => parse(patchInput, input))
 	.handler(async ({ data }): Promise<void> => {
 		await requireMeetingTemplateEditor(data.meetingId);
 		return updateAgendaRow(data);
