@@ -39,6 +39,7 @@ import { logActivity } from "./activity";
 import {
 	copyTemplateForMeeting,
 	type DbOrTx,
+	materializeTemplateRoles,
 	type ReleasedHolder,
 } from "./meeting-templates-logic";
 
@@ -252,6 +253,85 @@ export async function ensureAgendaDraft(
 		clubId: meeting.clubId,
 		meetingId,
 	});
+
+	// `copyTemplateForMeeting` only copies the `meeting_template_roles`
+	// DECLARATIONS, not the materialized `role_definitions` every
+	// `roleDefScope` reader — including the "+ Add role" picker
+	// (`meetings.ts`) — actually queries. Without this, a meeting just
+	// forked off a SHARED template points `templateId` at a template with NO
+	// role_definitions at all, and the picker comes back empty (task-8b).
+	// Idempotent, and a no-op cost when the source declared no roles.
+	await materializeTemplateRoles(conn, meeting.clubId, copyId);
+
+	// Re-point THIS MEETING's own slots from the OLD (still-shared)
+	// definitions to the freshly materialized ones, matched by `key` — the
+	// stable, rename-proof identity `role_definitions.key` exists for
+	// (schema.ts docblock). A definition with no key (a legacy row, or a
+	// club-invented custom role predating #368) falls back to matching by
+	// `name` — the same "key when there is one, name otherwise" rule
+	// `matchesRole` (agenda-runsheet.ts) already uses everywhere else a slot
+	// binds to a role, so an unkeyed row is not silently orphaned.
+	//
+	// Do NOT move the OLD definitions by updating their own `templateId`:
+	// `role_definitions` is keyed per (club, template), not per meeting, so a
+	// SIBLING meeting still on the shared template may still reference them
+	// — only this meeting's own `role_slots` rows are touched, by exact
+	// `meetingId` + old `roleDefinitionId`, never the definitions themselves.
+	const oldDefs = await conn
+		.select({
+			id: roleDefinitions.id,
+			key: roleDefinitions.key,
+			name: roleDefinitions.name,
+		})
+		.from(roleDefinitions)
+		.where(
+			and(
+				eq(roleDefinitions.clubId, meeting.clubId),
+				eq(roleDefinitions.templateId, meeting.templateId),
+			),
+		);
+	if (oldDefs.length > 0) {
+		const newDefs = await conn
+			.select({
+				id: roleDefinitions.id,
+				key: roleDefinitions.key,
+				name: roleDefinitions.name,
+			})
+			.from(roleDefinitions)
+			.where(
+				and(
+					eq(roleDefinitions.clubId, meeting.clubId),
+					eq(roleDefinitions.templateId, copyId),
+				),
+			);
+		const newByKey = new Map<string, string>();
+		const newByName = new Map<string, string>();
+		for (const d of newDefs) {
+			if (d.key != null) newByKey.set(d.key, d.id);
+			newByName.set(d.name.toLowerCase(), d.id);
+		}
+
+		for (const old of oldDefs) {
+			const matchedId =
+				(old.key != null ? newByKey.get(old.key) : undefined) ??
+				newByName.get(old.name.toLowerCase());
+			// No match (e.g. a role the template no longer declares): leave this
+			// slot pointing at the old, still-valid definition rather than
+			// inventing a delete/orphan behavior here — that is
+			// `removeAgendaRole`'s job, not the fork's.
+			if (!matchedId) continue;
+			await conn
+				.update(roleSlots)
+				.set({ roleDefinitionId: matchedId })
+				.where(
+					and(
+						eq(roleSlots.meetingId, meetingId),
+						eq(roleSlots.roleDefinitionId, old.id),
+					),
+				);
+		}
+	}
+
 	await conn
 		.update(meetings)
 		.set({ templateId: copyId })

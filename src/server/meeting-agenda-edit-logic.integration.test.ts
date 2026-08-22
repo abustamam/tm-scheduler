@@ -16,6 +16,7 @@ import {
 	meetingTemplates,
 	roleDefinitions,
 	roleSlots,
+	speeches,
 } from "#/db/schema";
 import {
 	MAX_TEMPLATE_BEATS,
@@ -41,6 +42,11 @@ const {
 	removeAgendaRow,
 	updateAgendaRow,
 } = await import("./meeting-agenda-edit-logic");
+// Same DEFERRED-IMPORT-AFTER-THE-MOCK pattern `meeting-templates-logic
+// .integration.test.ts` uses (`:50`): `vi.mock("#/db", ...)` above must have
+// already run before this module's own `import { db } from "#/db"` resolves,
+// or it reaches the real (unset) production db.
+const { listRoleDefinitions } = await import("./role-definitions-logic");
 
 const RUN = Math.random().toString(36).slice(2, 8);
 
@@ -1119,15 +1125,27 @@ describe.skipIf(!hasTestDb)("agenda role mutations", () => {
 		expect(a.key).not.toBe(b.key);
 	});
 
-	it("does not duplicate a pre-existing role's definition when adding a new role on a still-shared template", async () => {
-		// Mirror of the fork-on-write case in the removal tests below, for
-		// addAgendaRole: a meeting still on a shared template, with "chair"
-		// already materialized against the SHARED templateId (the legacy
-		// shape — see `resolveHeldSlotsForRole`'s docblock). Adding "Zoom
-		// Master" forks a private copy; this proves the fork does NOT
-		// re-materialize "chair" a second time under the new private
-		// templateId, which is exactly `materializeTemplateRoles`'s whole-set
-		// side effect that `addAgendaRole`'s docblock explains avoiding.
+	it("materializes a pre-existing role under the fork's private copy, and re-points this meeting's own slot to it, without duplicating on a later add (task-8b)", async () => {
+		// A meeting still on a shared template, with "chair" already
+		// materialized against the SHARED templateId (the legacy shape — see
+		// `resolveHeldSlotsForRole`'s docblock). Adding "Zoom Master" forks a
+		// private copy.
+		//
+		// Before task-8b, `ensureAgendaDraft`'s fork materialized NOTHING, so
+		// "chair" stayed un-migrated under the shared templateId and this
+		// meeting's own "chair" slot stayed pointed at it too — the exact bug
+		// that left the "+ Add role" picker empty. `ensureAgendaDraft` now
+		// materializes the copied template's WHOLE declared role set and
+		// re-points this meeting's own slots to match
+		// (task-8b-brief.md), so "chair" now gets its OWN row under the
+		// private copy and the meeting's slot follows it there — this test's
+		// old expectations (one "chair" row, unmoved, still on `shared.id`)
+		// described the bug, not the contract.
+		//
+		// What this test still protects, unchanged: `addAgendaRole` itself must
+		// not re-run that whole-set materialization on every call — a SECOND
+		// `addAgendaRole` against the now-private template must not duplicate
+		// "chair" again.
 		const [shared] = await testDb
 			.insert(meetingTemplates)
 			.values({
@@ -1160,12 +1178,16 @@ describe.skipIf(!hasTestDb)("agenda role mutations", () => {
 			})
 			.returning({ id: roleDefinitions.id });
 		if (!chairDef) throw new Error("role definition insert failed");
-		await testDb.insert(roleSlots).values({
-			meetingId: club.meetingId,
-			roleDefinitionId: chairDef.id,
-			slotIndex: 0,
-			status: "open",
-		});
+		const [chairSlot] = await testDb
+			.insert(roleSlots)
+			.values({
+				meetingId: club.meetingId,
+				roleDefinitionId: chairDef.id,
+				slotIndex: 0,
+				status: "open",
+			})
+			.returning({ id: roleSlots.id });
+		if (!chairSlot) throw new Error("role slot insert failed");
 		await testDb
 			.update(meetings)
 			.set({ templateId: shared.id })
@@ -1179,6 +1201,17 @@ describe.skipIf(!hasTestDb)("agenda role mutations", () => {
 			isSpeakerRole: false,
 		});
 
+		const [afterFirstAdd] = await testDb
+			.select({ templateId: meetings.templateId })
+			.from(meetings)
+			.where(eq(meetings.id, club.meetingId));
+		const privateTemplateId = afterFirstAdd?.templateId;
+		if (!privateTemplateId) throw new Error("meeting has no template");
+		expect(privateTemplateId).not.toBe(shared.id);
+
+		// "chair" now has TWO rows: the untouched original under the shared
+		// template (a sibling meeting may still need it), and a fresh one the
+		// fork materialized under the meeting's own new private template.
 		const chairDefs = await testDb
 			.select({
 				id: roleDefinitions.id,
@@ -1191,9 +1224,42 @@ describe.skipIf(!hasTestDb)("agenda role mutations", () => {
 					eq(roleDefinitions.key, "chair"),
 				),
 			);
-		expect(chairDefs).toHaveLength(1);
-		expect(chairDefs[0]?.id).toBe(chairDef.id);
-		expect(chairDefs[0]?.templateId).toBe(shared.id);
+		expect(chairDefs).toHaveLength(2);
+		const original = chairDefs.find((d) => d.id === chairDef.id);
+		expect(original?.templateId).toBe(shared.id);
+		const forked = chairDefs.find((d) => d.id !== chairDef.id);
+		if (!forked) throw new Error("no forked chair definition");
+		expect(forked.templateId).toBe(privateTemplateId);
+
+		// The meeting's own pre-existing "chair" slot followed to the new
+		// definition — same slot id, new role_definition_id.
+		const [chairSlotAfter] = await testDb
+			.select({ roleDefinitionId: roleSlots.roleDefinitionId })
+			.from(roleSlots)
+			.where(eq(roleSlots.id, chairSlot.id));
+		expect(chairSlotAfter?.roleDefinitionId).toBe(forked.id);
+
+		// A second `addAgendaRole` call — now against the already-private
+		// template, so `ensureAgendaDraft` takes the early "own" return and
+		// never calls `materializeTemplateRoles` again — must not duplicate
+		// "chair" a third time.
+		await addAgendaRole({
+			meetingId: club.meetingId,
+			name: "Ballot Counter",
+			category: "functionary",
+			defaultCount: 1,
+			isSpeakerRole: false,
+		});
+		const chairDefsAfterSecondAdd = await testDb
+			.select({ id: roleDefinitions.id })
+			.from(roleDefinitions)
+			.where(
+				and(
+					eq(roleDefinitions.clubId, club.clubId),
+					eq(roleDefinitions.key, "chair"),
+				),
+			);
+		expect(chairDefsAfterSecondAdd).toHaveLength(2);
 	});
 
 	it("makes an added role's key immediately usable by a beat's roleKey", async () => {
@@ -1646,3 +1712,516 @@ describe.skipIf(!hasTestDb)("agenda role mutations", () => {
 		}
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Task 8b: `ensureAgendaDraft`'s fork left `role_definitions` (and therefore
+// `role_slots`) behind on the OLD shared template, so a meeting converted
+// before per-meeting private templates existed got its `meetings.template_id`
+// flipped to a private copy with NO materialized roles at all — emptying the
+// "+ Add role" picker (`meetings.ts:358-363`, `listRoleDefinitions`) the
+// moment an officer made its very first edit. See
+// `.superpowers/sdd/2026-08-21-configurable-agendas/task-8b-brief.md`.
+// ---------------------------------------------------------------------------
+describe.skipIf(!hasTestDb)(
+	"ensureAgendaDraft materializes and re-points role_definitions on fork (task-8b)",
+	() => {
+		/**
+		 * A shared (club-less) template declaring "zoom_master", materialized
+		 * DIRECTLY against the shared templateId — the shape
+		 * `materializeTemplateRoles`'s two call sites never produce today but
+		 * which every meeting converted before per-meeting private templates
+		 * existed is actually in (same fixture shape as the `removeAgendaRole`
+		 * fork tests above). Optionally also declares "timer" and materializes
+		 * it with a NULL `key` — data shaped like `matchesRole`'s docblock calls
+		 * "data predating #368".
+		 */
+		async function seedSharedTemplateWithRoles(opts?: {
+			nullKeySecondRole?: boolean;
+		}): Promise<{
+			sharedTemplateId: string;
+			zoomDefId: string;
+			timerDefId?: string;
+		}> {
+			const suffix = Math.random().toString(36).slice(2, 8);
+			const [shared] = await testDb
+				.insert(meetingTemplates)
+				.values({
+					key: `shared_8b_${RUN}_${suffix}`,
+					name: `Shared 8b ${RUN}`,
+				})
+				.returning({ id: meetingTemplates.id });
+			if (!shared) throw new Error("template insert failed");
+			madeTemplates.push(shared.id);
+
+			await testDb.insert(meetingTemplateRoles).values({
+				templateId: shared.id,
+				key: "zoom_master",
+				name: "Zoom Master",
+				category: "functionary",
+				defaultCount: 1,
+				sortOrder: 0,
+				isSpeakerRole: false,
+			});
+			const [zoomDef] = await testDb
+				.insert(roleDefinitions)
+				.values({
+					clubId: club.clubId,
+					templateId: shared.id,
+					key: "zoom_master",
+					name: "Zoom Master",
+					category: "functionary",
+					defaultCount: 1,
+					sortOrder: 0,
+					isSpeakerRole: false,
+				})
+				.returning({ id: roleDefinitions.id });
+			if (!zoomDef) throw new Error("role definition insert failed");
+
+			let timerDefId: string | undefined;
+			if (opts?.nullKeySecondRole) {
+				// The TEMPLATE declares "timer" with a key — `meeting_template_roles
+				// .key` is NOT NULL, so a freshly materialized row always has one.
+				// This meeting's EXISTING materialized definition does not: it was
+				// seeded directly, standing in for a row that predates the `key`
+				// column doing any binding at all.
+				await testDb.insert(meetingTemplateRoles).values({
+					templateId: shared.id,
+					key: "timer",
+					name: "Timer",
+					category: "functionary",
+					defaultCount: 1,
+					sortOrder: 10,
+					isSpeakerRole: false,
+				});
+				const [timerDef] = await testDb
+					.insert(roleDefinitions)
+					.values({
+						clubId: club.clubId,
+						templateId: shared.id,
+						key: null,
+						name: "Timer",
+						category: "functionary",
+						defaultCount: 1,
+						sortOrder: 10,
+						isSpeakerRole: false,
+					})
+					.returning({ id: roleDefinitions.id });
+				if (!timerDef) throw new Error("role definition insert failed");
+				timerDefId = timerDef.id;
+			}
+
+			return {
+				sharedTemplateId: shared.id,
+				zoomDefId: zoomDef.id,
+				timerDefId,
+			};
+		}
+
+		/** Puts `club.meetingId` on the shared template with one open "zoom_master"
+		 *  slot and a beat an officer can edit to trigger the fork. Returns the
+		 *  beat id `updateAgendaRow` forks against. */
+		async function putMeetingOnSharedTemplate(
+			sharedTemplateId: string,
+			zoomDefId: string,
+		): Promise<string> {
+			const [beat] = await testDb
+				.insert(meetingTemplateBeats)
+				.values({
+					templateId: sharedTemplateId,
+					sortOrder: 0,
+					kind: "role",
+					label: "Zoom slot",
+					roleKey: "zoom_master",
+					minutes: 1,
+				})
+				.returning({ id: meetingTemplateBeats.id });
+			if (!beat) throw new Error("beat insert failed");
+			await testDb
+				.update(meetings)
+				.set({ templateId: sharedTemplateId })
+				.where(eq(meetings.id, club.meetingId));
+			await testDb.insert(roleSlots).values({
+				meetingId: club.meetingId,
+				roleDefinitionId: zoomDefId,
+				slotIndex: 0,
+				status: "open",
+			});
+			return beat.id;
+		}
+
+		it("[[SYMPTOM]] leaves the '+ Add role' picker empty until fixed — a fork must materialize the copied template's roles", async () => {
+			const { sharedTemplateId, zoomDefId } =
+				await seedSharedTemplateWithRoles();
+			const beatId = await putMeetingOnSharedTemplate(
+				sharedTemplateId,
+				zoomDefId,
+			);
+
+			// The officer's write — editing one row's minutes, the brief's own
+			// example — which `ensureAgendaDraft` upgrades into a fork on this
+			// meeting's first edit.
+			await updateAgendaRow({
+				meetingId: club.meetingId,
+				rowId: beatId,
+				patch: { minutes: 5 },
+			});
+
+			const [after] = await testDb
+				.select({ templateId: meetings.templateId })
+				.from(meetings)
+				.where(eq(meetings.id, club.meetingId));
+			const newTemplateId = after?.templateId;
+			if (!newTemplateId) throw new Error("meeting has no template");
+			expect(newTemplateId).not.toBe(sharedTemplateId); // confirms a fork happened
+
+			// This IS the symptom: before the fix, the private copy has no
+			// materialized role_definitions at all, so this comes back empty.
+			const picker = await listRoleDefinitions(club.clubId, {
+				onlyEnabled: true,
+				templateId: newTemplateId,
+			});
+			expect(picker.length).toBeGreaterThan(0);
+			expect(picker.map((r) => r.name)).toContain("Zoom Master");
+		});
+
+		it("re-points the meeting's own slot to the new definition, keeping its assignee, evaluatesSlotId pairing and speech", async () => {
+			const { sharedTemplateId } = await seedSharedTemplateWithRoles();
+			await testDb.insert(meetingTemplateRoles).values([
+				{
+					templateId: sharedTemplateId,
+					key: "speaker",
+					name: "Speaker",
+					category: "speaker",
+					defaultCount: 1,
+					sortOrder: 20,
+					isSpeakerRole: true,
+				},
+				{
+					templateId: sharedTemplateId,
+					key: "evaluator",
+					name: "Evaluator",
+					category: "evaluator",
+					defaultCount: 1,
+					sortOrder: 30,
+					isSpeakerRole: false,
+				},
+			]);
+			const [speakerDef] = await testDb
+				.insert(roleDefinitions)
+				.values({
+					clubId: club.clubId,
+					templateId: sharedTemplateId,
+					key: "speaker",
+					name: "Speaker",
+					category: "speaker",
+					defaultCount: 1,
+					sortOrder: 20,
+					isSpeakerRole: true,
+				})
+				.returning({ id: roleDefinitions.id });
+			const [evalDef] = await testDb
+				.insert(roleDefinitions)
+				.values({
+					clubId: club.clubId,
+					templateId: sharedTemplateId,
+					key: "evaluator",
+					name: "Evaluator",
+					category: "evaluator",
+					defaultCount: 1,
+					sortOrder: 30,
+					isSpeakerRole: false,
+				})
+				.returning({ id: roleDefinitions.id });
+			if (!speakerDef || !evalDef) throw new Error("def insert failed");
+
+			const [beat] = await testDb
+				.insert(meetingTemplateBeats)
+				.values({
+					templateId: sharedTemplateId,
+					sortOrder: 0,
+					kind: "role",
+					label: "Speaker slot",
+					roleKey: "speaker",
+					minutes: 5,
+				})
+				.returning({ id: meetingTemplateBeats.id });
+			if (!beat) throw new Error("beat insert failed");
+			await testDb
+				.update(meetings)
+				.set({ templateId: sharedTemplateId })
+				.where(eq(meetings.id, club.meetingId));
+
+			const [speech] = await testDb
+				.insert(speeches)
+				.values({ personId: club.personId, title: "My Icebreaker" })
+				.returning({ id: speeches.id });
+			if (!speech) throw new Error("speech insert failed");
+
+			const [speakerSlot] = await testDb
+				.insert(roleSlots)
+				.values({
+					meetingId: club.meetingId,
+					roleDefinitionId: speakerDef.id,
+					slotIndex: 0,
+					assignedMemberId: club.memberId,
+					status: "claimed",
+					speechId: speech.id,
+				})
+				.returning({ id: roleSlots.id });
+			if (!speakerSlot) throw new Error("slot insert failed");
+
+			const [evalSlot] = await testDb
+				.insert(roleSlots)
+				.values({
+					meetingId: club.meetingId,
+					roleDefinitionId: evalDef.id,
+					slotIndex: 0,
+					assignedMemberId: club.adminMemberId,
+					status: "claimed",
+					evaluatesSlotId: speakerSlot.id,
+				})
+				.returning({ id: roleSlots.id });
+			if (!evalSlot) throw new Error("slot insert failed");
+
+			await updateAgendaRow({
+				meetingId: club.meetingId,
+				rowId: beat.id,
+				patch: { minutes: 7 },
+			});
+
+			const [after] = await testDb
+				.select({ templateId: meetings.templateId })
+				.from(meetings)
+				.where(eq(meetings.id, club.meetingId));
+			const newTemplateId = after?.templateId;
+			if (!newTemplateId) throw new Error("meeting has no template");
+
+			const [speakerAfter] = await testDb
+				.select({
+					roleDefinitionId: roleSlots.roleDefinitionId,
+					assignedMemberId: roleSlots.assignedMemberId,
+					speechId: roleSlots.speechId,
+					status: roleSlots.status,
+				})
+				.from(roleSlots)
+				.where(eq(roleSlots.id, speakerSlot.id));
+			if (!speakerAfter) throw new Error("speaker slot vanished");
+			expect(speakerAfter.assignedMemberId).toBe(club.memberId);
+			expect(speakerAfter.speechId).toBe(speech.id);
+			expect(speakerAfter.status).toBe("claimed");
+			expect(speakerAfter.roleDefinitionId).not.toBe(speakerDef.id);
+			const [speakerDefAfter] = await testDb
+				.select({ templateId: roleDefinitions.templateId })
+				.from(roleDefinitions)
+				.where(eq(roleDefinitions.id, speakerAfter.roleDefinitionId));
+			expect(speakerDefAfter?.templateId).toBe(newTemplateId);
+
+			const [evalAfter] = await testDb
+				.select({
+					roleDefinitionId: roleSlots.roleDefinitionId,
+					assignedMemberId: roleSlots.assignedMemberId,
+					evaluatesSlotId: roleSlots.evaluatesSlotId,
+				})
+				.from(roleSlots)
+				.where(eq(roleSlots.id, evalSlot.id));
+			if (!evalAfter) throw new Error("evaluator slot vanished");
+			expect(evalAfter.assignedMemberId).toBe(club.adminMemberId);
+			// The slot's OWN id never changes — only role_definition_id does — so
+			// a pairing by slot id survives the fork untouched.
+			expect(evalAfter.evaluatesSlotId).toBe(speakerSlot.id);
+			const [evalDefAfter] = await testDb
+				.select({ templateId: roleDefinitions.templateId })
+				.from(roleDefinitions)
+				.where(eq(roleDefinitions.id, evalAfter.roleDefinitionId));
+			expect(evalDefAfter?.templateId).toBe(newTemplateId);
+		});
+
+		it("leaves a sibling meeting on the same shared template untouched", async () => {
+			const { sharedTemplateId, zoomDefId } =
+				await seedSharedTemplateWithRoles();
+			const beatId = await putMeetingOnSharedTemplate(
+				sharedTemplateId,
+				zoomDefId,
+			);
+
+			const [meeting2] = await testDb
+				.insert(meetings)
+				.values({
+					clubId: club.clubId,
+					scheduledAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+					templateId: sharedTemplateId,
+				})
+				.returning({ id: meetings.id });
+			if (!meeting2) throw new Error("meeting insert failed");
+			const [slot2] = await testDb
+				.insert(roleSlots)
+				.values({
+					meetingId: meeting2.id,
+					roleDefinitionId: zoomDefId,
+					slotIndex: 0,
+					status: "open",
+				})
+				.returning({ id: roleSlots.id });
+			if (!slot2) throw new Error("slot insert failed");
+
+			await updateAgendaRow({
+				meetingId: club.meetingId,
+				rowId: beatId,
+				patch: { minutes: 9 },
+			});
+
+			// The sibling's own slot is completely untouched — still the OLD def.
+			const [slot2After] = await testDb
+				.select({ roleDefinitionId: roleSlots.roleDefinitionId })
+				.from(roleSlots)
+				.where(eq(roleSlots.id, slot2.id));
+			expect(slot2After?.roleDefinitionId).toBe(zoomDefId);
+
+			// The old shared definition was left alone, not moved to the fork's
+			// new private template.
+			const [zoomDefAfter] = await testDb
+				.select({ templateId: roleDefinitions.templateId })
+				.from(roleDefinitions)
+				.where(eq(roleDefinitions.id, zoomDefId));
+			expect(zoomDefAfter?.templateId).toBe(sharedTemplateId);
+
+			// The sibling's own agenda (still reading the untouched shared
+			// template) still declares the role.
+			const sibling = await loadAgendaDraft(meeting2.id);
+			expect(sibling?.roles.map((r) => r.key)).toContain("zoom_master");
+		});
+
+		it("a second write does not fork again or duplicate definitions", async () => {
+			const { sharedTemplateId, zoomDefId } =
+				await seedSharedTemplateWithRoles();
+			const beatId = await putMeetingOnSharedTemplate(
+				sharedTemplateId,
+				zoomDefId,
+			);
+
+			await updateAgendaRow({
+				meetingId: club.meetingId,
+				rowId: beatId,
+				patch: { minutes: 5 },
+			});
+			const [afterFirst] = await testDb
+				.select({ templateId: meetings.templateId })
+				.from(meetings)
+				.where(eq(meetings.id, club.meetingId));
+			const privateId = afterFirst?.templateId;
+			if (!privateId) throw new Error("meeting has no template");
+			expect(privateId).not.toBe(sharedTemplateId);
+
+			// Second edit: the template is now private, so `findRow` matches by
+			// the row's own id (see `findRow`'s docblock) — fetch it fresh.
+			const draft = await loadAgendaDraft(club.meetingId);
+			const rowId = draft?.rows[0]?.id;
+			if (!rowId) throw new Error("no row to edit");
+			await updateAgendaRow({
+				meetingId: club.meetingId,
+				rowId,
+				patch: { minutes: 6 },
+			});
+
+			const [afterSecond] = await testDb
+				.select({ templateId: meetings.templateId })
+				.from(meetings)
+				.where(eq(meetings.id, club.meetingId));
+			expect(afterSecond?.templateId).toBe(privateId); // no second fork
+
+			const defsUnderPrivate = await testDb
+				.select({ id: roleDefinitions.id })
+				.from(roleDefinitions)
+				.where(
+					and(
+						eq(roleDefinitions.clubId, club.clubId),
+						eq(roleDefinitions.templateId, privateId),
+					),
+				);
+			expect(defsUnderPrivate).toHaveLength(1); // not duplicated
+		});
+
+		it("matches a NULL-key old definition to the new one by name, so the slot is re-pointed rather than orphaned", async () => {
+			const { sharedTemplateId, timerDefId } =
+				await seedSharedTemplateWithRoles({ nullKeySecondRole: true });
+			if (!timerDefId) throw new Error("timer definition missing");
+
+			const [beat] = await testDb
+				.insert(meetingTemplateBeats)
+				.values({
+					templateId: sharedTemplateId,
+					sortOrder: 0,
+					kind: "role",
+					label: "Timer slot",
+					roleKey: "timer",
+					minutes: 1,
+				})
+				.returning({ id: meetingTemplateBeats.id });
+			if (!beat) throw new Error("beat insert failed");
+			await testDb
+				.update(meetings)
+				.set({ templateId: sharedTemplateId })
+				.where(eq(meetings.id, club.meetingId));
+			const [timerSlot] = await testDb
+				.insert(roleSlots)
+				.values({
+					meetingId: club.meetingId,
+					roleDefinitionId: timerDefId,
+					slotIndex: 0,
+					assignedMemberId: club.memberId,
+					status: "claimed",
+				})
+				.returning({ id: roleSlots.id });
+			if (!timerSlot) throw new Error("slot insert failed");
+
+			await updateAgendaRow({
+				meetingId: club.meetingId,
+				rowId: beat.id,
+				patch: { minutes: 2 },
+			});
+
+			const [after] = await testDb
+				.select({ templateId: meetings.templateId })
+				.from(meetings)
+				.where(eq(meetings.id, club.meetingId));
+			const newTemplateId = after?.templateId;
+			if (!newTemplateId) throw new Error("meeting has no template");
+
+			const [timerSlotAfter] = await testDb
+				.select({
+					roleDefinitionId: roleSlots.roleDefinitionId,
+					assignedMemberId: roleSlots.assignedMemberId,
+				})
+				.from(roleSlots)
+				.where(eq(roleSlots.id, timerSlot.id));
+			if (!timerSlotAfter) throw new Error("timer slot vanished");
+			// Not silently orphaned: the assignee survives...
+			expect(timerSlotAfter.assignedMemberId).toBe(club.memberId);
+			// ...and the slot was actually re-pointed, not left on the old def.
+			expect(timerSlotAfter.roleDefinitionId).not.toBe(timerDefId);
+
+			const [newDef] = await testDb
+				.select({
+					templateId: roleDefinitions.templateId,
+					key: roleDefinitions.key,
+					name: roleDefinitions.name,
+				})
+				.from(roleDefinitions)
+				.where(eq(roleDefinitions.id, timerSlotAfter.roleDefinitionId));
+			// Now belongs to the meeting's OWN (new, private) template...
+			expect(newDef?.templateId).toBe(newTemplateId);
+			expect(newDef?.name).toBe("Timer");
+			// ...and matched by name landed it on the freshly materialized row,
+			// which (unlike the old one) DOES carry a key — `materializeTemplateRoles`
+			// always copies `meeting_template_roles.key`, which is NOT NULL.
+			expect(newDef?.key).toBe("timer");
+
+			// The OLD null-key definition was left alone, not moved or deleted.
+			const [oldDefAfter] = await testDb
+				.select({ templateId: roleDefinitions.templateId })
+				.from(roleDefinitions)
+				.where(eq(roleDefinitions.id, timerDefId));
+			expect(oldDefAfter?.templateId).toBe(sharedTemplateId);
+		});
+	},
+);
