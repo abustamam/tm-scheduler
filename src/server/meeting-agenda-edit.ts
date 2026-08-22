@@ -7,8 +7,14 @@
  */
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import type { AgendaDraft } from "./meeting-agenda-edit-logic";
-import { loadAgendaDraft } from "./meeting-agenda-edit-logic";
+import type { AgendaDraft, AgendaDraftRow } from "./meeting-agenda-edit-logic";
+import {
+	addAgendaRow,
+	loadAgendaDraft,
+	moveAgendaRow,
+	removeAgendaRow,
+	updateAgendaRow,
+} from "./meeting-agenda-edit-logic";
 import { requireMeetingTemplateEditor } from "./meeting-templates-logic";
 
 export type { AgendaDraft };
@@ -22,4 +28,59 @@ export const getAgendaDraft = createServerFn({ method: "GET" })
 	.handler(async ({ data }): Promise<AgendaDraft | null> => {
 		await requireMeetingTemplateEditor(data.meetingId);
 		return loadAgendaDraft(data.meetingId);
+	});
+
+const addInput = z.object({
+	meetingId: z.string().uuid(),
+	afterRowId: z.string().uuid().nullable(),
+	kind: z.enum(["section", "role", "event"]),
+});
+const rowInput = z.object({
+	meetingId: z.string().uuid(),
+	rowId: z.string().uuid(),
+});
+const patchInput = rowInput.extend({
+	patch: z.object({
+		label: z.string().optional(),
+		detail: z.string().nullable().optional(),
+		minutes: z.number().int().optional(),
+		roleKey: z.string().nullable().optional(),
+		repeatsRoleKey: z.string().nullable().optional(),
+		markGreen: z.number().nullable().optional(),
+		markYellow: z.number().nullable().optional(),
+		markRed: z.number().nullable().optional(),
+	}),
+});
+const moveInput = rowInput.extend({ direction: z.enum(["up", "down"]) });
+
+/** Add a row to this meeting's agenda. Officer-gated, same as `getAgendaDraft`. */
+export const addAgendaRowFn = createServerFn({ method: "POST" })
+	.validator((input: unknown) => addInput.parse(input))
+	.handler(async ({ data }): Promise<AgendaDraftRow> => {
+		await requireMeetingTemplateEditor(data.meetingId);
+		return addAgendaRow(data);
+	});
+
+/** Edit a row's content. Officer-gated, same as `getAgendaDraft`. */
+export const updateAgendaRowFn = createServerFn({ method: "POST" })
+	.validator((input: unknown) => patchInput.parse(input))
+	.handler(async ({ data }): Promise<void> => {
+		await requireMeetingTemplateEditor(data.meetingId);
+		return updateAgendaRow(data);
+	});
+
+/** Remove a row from this meeting's agenda. Officer-gated, same as `getAgendaDraft`. */
+export const removeAgendaRowFn = createServerFn({ method: "POST" })
+	.validator((input: unknown) => rowInput.parse(input))
+	.handler(async ({ data }): Promise<void> => {
+		await requireMeetingTemplateEditor(data.meetingId);
+		return removeAgendaRow(data);
+	});
+
+/** Reorder a row by one position. Officer-gated, same as `getAgendaDraft`. */
+export const moveAgendaRowFn = createServerFn({ method: "POST" })
+	.validator((input: unknown) => moveInput.parse(input))
+	.handler(async ({ data }): Promise<void> => {
+		await requireMeetingTemplateEditor(data.meetingId);
+		return moveAgendaRow(data);
 	});
