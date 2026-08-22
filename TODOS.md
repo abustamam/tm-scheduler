@@ -118,6 +118,9 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
   sheet, which v1.21.0.0 explicitly promised it would not do. Likely answer is to let a
   TEMPLATED meeting opt into flowing regardless of scale, since a contest sheet has no
   one-page promise to keep.
+  STILL OPEN, and the per-meeting agenda editor makes it easier to reach than it was: the seeded
+  contest was the only way to land on this curve before, and now any officer's hand-authored
+  agenda can produce a beat count and row shape anywhere along it, squeeze cliff included.
   **Priority:** P3
 
 - **Colour print rows by `category` when a role key is unmapped.** `ROLE_KEY_COLOR` now
@@ -139,22 +142,13 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
   "shuffle" affordance, or memoising a deck by meeting id would each undo it.
   **Priority:** P3 (standing constraint, not a task)
 
-- **Phase 2: per-meeting agenda editing.** SPECIFIED — see
-  `docs/superpowers/specs/2026-08-21-configurable-agendas-design.md`. Each templated meeting
-  deep-copies its template into a private row (new nullable `meeting_templates.meeting_id`), so
-  editing one night never touches another; no new tables, one read seam, and "save as template"
-  later is a promotion rather than a second mechanism. Still needs an implementation plan.
-  Before it ships, MEASURE the caps in `src/lib/meeting-template-limits.ts` — they are honest
-  bounds today, not measurements, and the seed is currently the only writer.
+- **Next increment: save this shape as a template.** Per-meeting editing lets an officer land an
+  agenda on a private, throwaway copy (`meeting_templates.meeting_id` set) — nothing yet promotes
+  that copy back into a reusable, shared row other meetings can pick. `meeting_id` already models
+  the distinction the promotion needs (set = private, null = shared), so "save as template" is
+  copying the private row's own beats and roles into a NEW row with `meeting_id` null and
+  `club_id` set to the caller's club, not a second mechanism or a new table.
   **Priority:** P3
-
-- **`buildTemplateRows`' repeat-block binding is unexercised in two shapes.** A block holding two
-  role-owning rows, or a role row whose `roleKey` differs from its `repeatsRoleKey`, is
-  unreachable from the seeded contest and reachable from a Phase 2 editor. The configurable-agendas
-  spec (D4) resolves this by CONSTRAINING rather than specifying: a row is "once" or "per holder",
-  and a per-holder row must repeat over the role it binds, which makes both shapes unauthorable.
-  Closes when that lands; until then the shapes remain reachable only by writing rows by hand.
-  **Priority:** P4
 
 - **The "Change meeting type" button's wiring has no guard.** PR 2 added
   `template-deck-wiring.guard.test.ts`, which covers the two DECK expressions on the meeting and
@@ -414,3 +408,27 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
 - The MCF handback beat ("Toastmaster of the Day · Introduces the speakers") has no counterpart slide in the projected deck, so a Toastmaster running the meeting off the projector alone does not see the cue.
   **Priority:** P4
   **Completed:** v1.1.0.0 (2026-07-29) — every hand-off now has a matching slide, labelled by target.
+
+- **Phase 2: per-meeting agenda editing.** Landed per the configurable-agendas spec
+  (`docs/superpowers/specs/2026-08-21-configurable-agendas-design.md`). Converting a meeting to a
+  template deep-copies the source template's row, roles and beats into a private per-meeting row
+  (`meeting_templates.meeting_id`, nullable, unique when set); reverting deletes the private copy,
+  and re-converting makes a fresh one rather than reusing the retired row. `ensureAgendaDraft`
+  upgrades a meeting still pointing at a pre-feature SHARED template into a private copy on its
+  first edit, returning `{ templateId, forked }`. `listAvailableTemplates` excludes private
+  per-meeting copies from the picker, in the query rather than a caller-side filter. No new
+  tables, one read seam. The caps in `src/lib/meeting-template-limits.ts` were measured (not
+  merely asserted) against an officer-authored, all-axes-hostile fixture: linear cost with no
+  knee to 16x the beat cap, worst case ~33-35ms against a 250ms budget — so the ceilings were
+  confirmed rather than lowered. See CONTEXT.md's **Meeting template** entry.
+  **Completed:** this branch (configurable-agendas, 2026-08-22) — `/ship` to stamp the version.
+
+- **`buildTemplateRows`' repeat-block binding is no longer unexercised.** The configurable-agendas
+  spec's D4 resolved the two previously-unreachable shapes (a block with two role-owning rows; a
+  role row whose `roleKey` differs from its `repeatsRoleKey`) by CONSTRAINING rather than adding a
+  stored setting: `repeats_role_key` IS the once/per-holder flag — null means "once", the row's
+  own key means "per holder" — and a per-holder row must repeat over the exact role it names,
+  which makes both shapes unauthorable through the editor. The workaround this constraint made
+  unnecessary (routing the contest's tally and timers' report around multi-slot roles) was
+  dropped in the same pass: both beats now bind back to `ballot_counter` / `contest_timer`.
+  **Completed:** this branch (configurable-agendas, 2026-08-22) — `/ship` to stamp the version.

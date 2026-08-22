@@ -449,8 +449,9 @@ Leave any unscoped and every standard meeting created after a club runs one cont
 contest's roles, because `generateSlotRows` filters on `enabled`, not `template_id`. The two
 club-scoped bulk syncs additionally EXCLUDE templated meetings from their meeting sets.
 
-Templates are GLOBAL (`meeting_templates.club_id IS NULL`) in Phase 1; club-authored ones and
-the editor are Phase 2. See `docs/superpowers/specs/2026-08-19-agenda-templates-design.md`.
+Templates are GLOBAL (`meeting_templates.club_id IS NULL`) in Phase 1. Phase 2 — per-meeting
+agenda editing — has landed: see the private-copy paragraph below.
+See `docs/superpowers/specs/2026-08-19-agenda-templates-design.md`.
 
 **The seeded contest describes ONE contest, and that is load-bearing rather than a content
 choice.** It shipped covering prepared speeches, impromptu speaking and speech evaluation as
@@ -459,14 +460,46 @@ contestant slots collapses their repeat blocks, but the section bands, the chair
 the break and the evaluation-prep window bind to no contestant role, so nothing an officer
 could do reached them — a prepared-speeches-only club printed two phantom segments and 28
 minutes of a contest that was not happening. Beats get no gating by design (Phase 1 D1), so a
-template must describe an event that actually happens. Two further consequences: the template
-now declares exactly ONE `isSpeakerRole` def, which is what makes the agenda's +/- speaker
+template must describe an event that actually happens. One further consequence: the template
+declares exactly ONE `isSpeakerRole` def, which is what makes the agenda's +/- speaker
 controls able to change the contestant count at all (`pickSpeakerAndEvaluatorRoles` takes the
-lowest-sortOrder speaker role, so any others are frozen at their `defaultCount`); and a
-non-repeating role beat emits one row PER SLOT, so beats describing a joint activity —
-tallying, the timers' report — must avoid multi-slot roles or they print twice with their
-minutes double-counted. Per-meeting editing, which removes the need for all of this, is
-specified in `docs/superpowers/specs/2026-08-21-configurable-agendas-design.md`.
+lowest-sortOrder speaker role, so any others are frozen at their `defaultCount`).
+
+**`repeats_role_key` IS the once/per-holder flag — there is no separate column.** A block's row
+is "once" when its own `repeats_role_key` is null, and "per holder" when the row carries its own
+key (which a repeat block's binding rows must equal, per-holder rows repeating over the exact
+role they name — see the configurable-agendas spec's D4). A non-repeating role beat now emits
+**one row naming every holder**, where it used to emit one row per slot — the earlier shape
+printed a joint activity like tallying or the timers' report once per slot-holder, double-
+counting its minutes when the role held two slots (fixed by binding those two beats back to
+`ballot_counter` / `contest_timer` rather than routing around the bug by leaving them roleless
+or single-slot-owned).
+
+**A templated meeting owns a PRIVATE copy of its template, since per-meeting agenda editing
+landed.** `meeting_templates.meeting_id` (nullable, unique when set) is that ownership pointer.
+Converting a meeting to a template deep-copies the source template's row, roles and beats into a
+fresh private row scoped to that one meeting (`copyTemplateForMeeting`), so editing one night's
+agenda never touches another club's meeting or the next occurrence of this one. Reverting a
+meeting to the standard shape (or re-converting it to a different template) DELETES the outgoing
+private copy — detached first (its `meeting_id` cleared) so the unique index never sees two rows
+claiming the same meeting, then fully removed once the role_slots that referenced its
+materialized `role_definitions` are reconciled — and re-converting to the same template key makes
+a FRESH copy rather than reusing the retired one, which is what keeps an edited contest from
+leaking into the next one. `ensureAgendaDraft` is the read/write seam: a meeting still pointing at
+a SHARED (non-private) template is upgraded to a private copy on its first edit rather than
+refused, returning `{ templateId, forked }` so callers know whether to re-locate a caller-supplied
+row by id (unchanged) or by `sortOrder` (just forked, so ids are new). `listAvailableTemplates`
+excludes private per-meeting copies from the picker in the QUERY (`isNull(meetingTemplates.meetingId)`),
+not by a caller-side filter, so a club's meeting-specific agenda can never be picked as another
+meeting's starting shape.
+
+The five caps in `src/lib/meeting-template-limits.ts` (200 beats / 40 roles / 20 repeat slots /
+120-point labels / 400-point details) were re-measured now the editor lets a club officer, not
+just the seed, decide how big a template gets. The cost curve found **no knee** across the tested
+range — linear all the way to 16x the beat cap — and the worst legal all-axes-hostile template
+(every cap maxed at once, emoji-heavy strings) renders in ~33-35ms against a 250ms budget. The
+ceilings were confirmed, not lowered; see that file's docblock for the full curve and the fixture
+construction.
 
 Global templates reach a database from the **deploy**, not from a human: `.output/seed-templates.mjs`
 runs in the Dockerfile `CMD` after migrations, beside the Pathways catalog seeder. It was a
