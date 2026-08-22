@@ -84,6 +84,7 @@ export async function findPristineEmptyMeetingIds(
 			wodExample: meetings.wodExample,
 			notes: meetings.notes,
 			reminders: meetings.reminders,
+			templateId: meetings.templateId,
 		})
 		.from(meetings)
 		.where(inArray(meetings.id, meetingIds));
@@ -121,7 +122,15 @@ export async function findPristineEmptyMeetingIds(
 				!m.notes &&
 				!m.reminders &&
 				!claimedSet.has(m.id) &&
-				!declinedSet.has(m.id),
+				!declinedSet.has(m.id) &&
+				// A templated meeting is not an empty shell, whatever its content
+				// fields say — somebody deliberately reshaped it into a contest.
+				// It also can't be safely deleted even if it looked pristine:
+				// `meeting_templates.meeting_id` cascades from `meetings`, but the
+				// materialized `role_definitions` pointing at that private template
+				// are ON DELETE RESTRICT, so deleting this row would throw a
+				// foreign-key violation.
+				m.templateId === null,
 		)
 		.map((m) => m.id);
 }

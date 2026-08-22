@@ -107,6 +107,7 @@ function renderAgenda(
 			shareUrl="https://gavelup.app/club/test/meeting/m1"
 			meetingDate="Jan 1, 2026"
 			meeting={meeting}
+			templateKey={extra?.templateKey ?? null}
 			timezone={timezone}
 			selfMemberId="me"
 			onMetaSaved={() => {}}

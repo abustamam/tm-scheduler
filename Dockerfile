@@ -32,6 +32,15 @@ RUN bun run build
 # club that never runs a Base Camp sync that table is empty unless seeded. It is
 # idempotent and never deletes, so re-running each boot is a no-op after the
 # first; like migrations, a failure fails the deploy closed.
+#
+# `.output/seed-templates.mjs` is the third, on the same terms. It seeds the
+# global agenda templates, which reached a database only when a human remembered
+# to — so production ran two releases with `meeting_templates` empty and the
+# "Change meeting type" picker offering clubs nothing. Idempotent: it is keyed on
+# `meeting_templates.key` and REPLACES that template's roles and beats, so a
+# content change in `src/lib/contest-template.ts` lands on the next deploy.
+# Materialized `role_definitions` are deliberately untouched (a club may have
+# renamed them); `scripts/resync-template-roles.ts` is the escape hatch for those.
 FROM node:22-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
@@ -39,4 +48,4 @@ ENV NODE_ENV=production
 COPY --from=build /app/.output ./.output
 COPY --from=build /app/drizzle ./drizzle
 EXPOSE 3000
-CMD ["sh", "-c", "node .output/migrate.mjs && node .output/seed-catalog.mjs && node .output/server/index.mjs"]
+CMD ["sh", "-c", "node .output/migrate.mjs && node .output/seed-catalog.mjs && node .output/seed-templates.mjs && node .output/server/index.mjs"]

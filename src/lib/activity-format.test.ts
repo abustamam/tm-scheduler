@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { activityActionEnum } from "#/db/schema";
 import type { ActivityEntry } from "#/server/activity-feed";
 import { formatActivity } from "./activity-format";
 
@@ -48,6 +49,22 @@ describe("formatActivity", () => {
 		const { summary } = formatActivity(e);
 		expect(summary).toMatch(/changed the meeting type/i);
 		expect(summary).not.toBe("meeting_template_set");
+	});
+
+	// Task 8 (#agenda-templates): an officer can remove a role from a
+	// meeting's own agenda editor. Without this case the `default` below
+	// renders the raw enum string ("meeting_agenda_role_removed") on the
+	// Activity page.
+	it("meeting_agenda_role_removed renders human-readable text, not the raw enum", () => {
+		const e = {
+			...base,
+			targetType: "meeting",
+			action: "meeting_agenda_role_removed",
+			actorName: "Faisal",
+		} as unknown as ActivityEntry;
+		const { summary } = formatActivity(e);
+		expect(summary).toMatch(/removed a role/i);
+		expect(summary).not.toBe("meeting_agenda_role_removed");
 	});
 
 	it("claim names the role", () => {
@@ -346,5 +363,42 @@ describe("formatActivity", () => {
 		expect(formatActivity({ ...meetingBase, change: null }).summary).toBe(
 			"updated the meeting",
 		);
+	});
+
+	// `formatActivity`'s outer switch has a `default: summary = entry.action`
+	// fallback BY DESIGN — an unknown/future action must not throw — which
+	// also means `tsc` cannot flag the switch as non-exhaustive: nothing ties
+	// `activityActionEnum` to the cases above. Iterating the REAL enum (rather
+	// than a hand-copied list of its values) is what enrolls the next value
+	// automatically instead of relying on someone to remember this file, the
+	// same "derive from the source of truth" shape as
+	// `public-readers-archive-gate.guard.test.ts`'s enrollment sweep.
+	describe("every activity_action has a formatter", () => {
+		// No waiver list: every `activity_action` value now has a case in
+		// `formatActivity`. This sweep started with a `PRE_EXISTING_UNFORMATTED`
+		// set covering `superadmin_viewed`/`superadmin_acted`/`vote_open`/
+		// `vote_close` (found by writing this sweep in the first place, and
+		// waived by name to keep that change scoped); all four gained cases and
+		// the waiver was emptied rather than left standing — a waiver list born
+		// with entries invites a fifth.
+		const covered = activityActionEnum.enumValues;
+
+		// If this is empty the enum itself is empty — a filter bug upstream
+		// would otherwise make `it.each([])` below run zero tests and report
+		// green.
+		it("covers at least one action", () => {
+			expect(covered.length).toBeGreaterThan(0);
+		});
+
+		it.each(
+			covered,
+		)("%s renders human-readable text, not the raw enum", (action) => {
+			const e = {
+				...base,
+				action,
+				actorName: "Rasheed",
+			} as unknown as ActivityEntry;
+			expect(formatActivity(e).summary).not.toBe(action);
+		});
 	});
 });

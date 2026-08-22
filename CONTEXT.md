@@ -442,15 +442,110 @@ be a real row. Copy-once: a later seed edit does not reach a club that already u
 template, exactly as editing `ROLE_TEMPLATE` never reaches an existing club.
 `scripts/resync-template-roles.ts` is the deliberate escape hatch.
 
-**SEVEN readers select role definitions by club, and every one is choosing a slot source** —
+**NINE readers select role definitions by club, and every one is choosing a slot source** —
 `role-definitions-logic`, `meetings-logic`, `batch-meetings-logic`, `schedule-topup-logic`,
-`slots-logic` (twice) and `meetings.ts`'s "+ Add role" picker. They share `roleDefScope`.
+`slots-logic` (twice), `meetings.ts`'s "+ Add role" picker, and `meeting-agenda-edit-logic`
+(twice, resolving the old and new definition sets when a first edit forks a shared template).
+SIX of them route through `roleDefScope` / `roleDefScopeOnly`; the other three —
+`meetings-logic`, `batch-meetings-logic`, `schedule-topup-logic` — inline
+`and(clubId, isNull(templateId))` because they are unconditionally the STANDARD scope, each
+carrying the same explanatory comment. That split is worth stating rather than rounding to
+"they share `roleDefScope`", which is what this line said while the two newest readers were
+inlining their own copy of the predicate (corrected in the configurable-agendas fix wave).
 Leave any unscoped and every standard meeting created after a club runs one contest gains that
 contest's roles, because `generateSlotRows` filters on `enabled`, not `template_id`. The two
 club-scoped bulk syncs additionally EXCLUDE templated meetings from their meeting sets.
 
-Templates are GLOBAL (`meeting_templates.club_id IS NULL`) in Phase 1; club-authored ones and
-the editor are Phase 2. See `docs/superpowers/specs/2026-08-19-agenda-templates-design.md`.
+Templates are GLOBAL (`meeting_templates.club_id IS NULL`) in Phase 1. Phase 2 — per-meeting
+agenda editing — has landed: see the private-copy paragraph below.
+See `docs/superpowers/specs/2026-08-19-agenda-templates-design.md`.
+
+**The seeded contest describes ONE contest, and that is load-bearing rather than a content
+choice.** It shipped covering prepared speeches, impromptu speaking and speech evaluation as
+three segments, and a club running one of them could not remove the other two: deleting the
+contestant slots collapses their repeat blocks, but the section bands, the chair's briefings,
+the break and the evaluation-prep window bind to no contestant role, so nothing an officer
+could do reached them — a prepared-speeches-only club printed two phantom segments and 28
+minutes of a contest that was not happening. Beats get no gating by design (Phase 1 D1), so a
+template must describe an event that actually happens. One further consequence: the template
+declares exactly ONE `isSpeakerRole` def, which is what makes the agenda's +/- speaker
+controls able to change the contestant count at all (`pickSpeakerAndEvaluatorRoles` takes the
+lowest-sortOrder speaker role, so any others are frozen at their `defaultCount`).
+
+**`repeats_role_key` IS the once/per-holder flag — there is no separate column.** A block's row
+is "once" when its own `repeats_role_key` is null, and "per holder" when the row carries its own
+key (which a repeat block's binding rows must equal, per-holder rows repeating over the exact
+role they name — see the configurable-agendas spec's D4). That equality is **enforced**, in two
+places, because it was asserted here for a release while nothing checked it: the editor's Role
+select patches both keys together, and `assertRepeatBinding` (`meeting-agenda-edit-logic.ts`)
+refuses the MERGED row at the writer so a crafted request cannot author it either. The check is
+keyed on `kind`, which is the part worth remembering: a NON-role row inside a block — the
+contest's ballot minute, `repeats_role_key` set with no `role_key` of its own — is legal and
+shipped, so "the two keys must always match" is the wrong rule and would make the seeded contest
+unwritable. What the illegal row did while unenforced: it printed once per holder of the OLD
+role, numbered and naming nobody, while the editor's own label read "One row". A non-repeating role beat now emits
+**one row naming every holder**, where it used to emit one row per slot — the earlier shape
+printed a joint activity like tallying or the timers' report once per slot-holder, double-
+counting its minutes when the role held two slots (fixed by binding those two beats back to
+`ballot_counter` / `contest_timer` rather than routing around the bug by leaving them roleless
+or single-slot-owned).
+
+**A templated meeting owns a PRIVATE copy of its template, since per-meeting agenda editing
+landed.** `meeting_templates.meeting_id` (nullable, unique when set) is that ownership pointer.
+Converting a meeting to a template deep-copies the source template's row, roles and beats into a
+fresh private row scoped to that one meeting (`copyTemplateForMeeting`), so editing one night's
+agenda never touches another club's meeting or the next occurrence of this one. Reverting a
+meeting to the standard shape (or re-converting it to a different template) DELETES the outgoing
+private copy — detached first (its `meeting_id` cleared) so the unique index never sees two rows
+claiming the same meeting, then fully removed once the role_slots that referenced its
+materialized `role_definitions` are reconciled — and re-converting to the same template key makes
+a FRESH copy rather than reusing the retired one, which is what keeps an edited contest from
+leaking into the next one. `ensureAgendaDraft` is the read/write seam: a meeting still pointing at
+a SHARED (non-private) template is upgraded to a private copy on its first edit rather than
+refused, returning `{ templateId, forked }` so callers know whether to re-locate a caller-supplied
+row by id (unchanged) or by `sortOrder` (just forked, so ids are new). `listAvailableTemplates`
+excludes private per-meeting copies from the picker in the QUERY (`isNull(meetingTemplates.meetingId)`),
+not by a caller-side filter, so a club's meeting-specific agenda can never be picked as another
+meeting's starting shape.
+
+**Post-fork invariant (task-8b): a fork leaves the meeting FULLY on its own private template for
+every role the template still declares, never half-migrated.** `ensureAgendaDraft`'s copy used to
+move the `meeting_templates` / `_roles` / `_beats` rows into the private copy while leaving the
+materialized `role_definitions` — and therefore every `role_slots` row referencing them — under the
+OLD shared template, so the "+ Add role" picker (`listRoleDefinitions`, scoped to the new,
+definitions-less private id) came back empty the moment a pre-deploy-converted meeting was edited
+for the first time. The fork now also calls `materializeTemplateRoles` on the new private copy and
+re-points THIS MEETING's own `role_slots` from the old definitions to the freshly materialized
+ones, matched by `key` — or, for a definition with no key (data predating #368, or `seedClub`'s own
+"Timer" fixture role), by `name` INSTEAD, a strict either/or rather than the fallback `matchesRole`
+(`agenda-runsheet.ts`) uses: a keyed old definition whose key the new set lacks is left unmatched,
+never guessed at by name, and a name match that is itself ambiguous (two new definitions sharing a
+name — no unique index stops that) is skipped rather than picked nondeterministically. The OLD
+definitions are left alone rather than moved: `role_definitions` is keyed per (club, template), not
+per meeting, so a SIBLING meeting still on the shared template may still need them. A slot's own id
+never changes, only its `role_definition_id`, so `evaluates_slot_id` pairings, `speech_id` and any
+assignment survive re-pointing untouched. Treat "after a fork, every slot whose definition the new
+template still declares is migrated to its private copy" as an invariant a future role mutator may
+rely on — note the qualifier: an old definition with no match at all (key removed from the
+template's declarations, or an ambiguous/no name match) is left pointing at its old, still-valid
+definition rather than migrated, so the invariant is exact only for the "still declared" case.
+`removeAgendaRole` (Task 8) predates this fix and deliberately does NOT rely on it, resolving which
+`role_definitions` to touch via `roleSlots.meetingId` directly rather than by matching `templateId`
+against `ensureAgendaDraft`'s resolved pointer, precisely because the invariant did not hold when it
+was written.
+
+The five caps in `src/lib/meeting-template-limits.ts` (200 beats / 40 roles / 20 repeat slots /
+120-point labels / 400-point details) were re-measured now the editor lets a club officer, not
+just the seed, decide how big a template gets. The cost curve found **no knee** across the tested
+range — linear all the way to 16x the beat cap — and the worst legal all-axes-hostile template
+(every cap maxed at once, emoji-heavy strings) renders in ~33-35ms against a 250ms budget. The
+ceilings were confirmed, not lowered; see that file's docblock for the full curve and the fixture
+construction.
+
+Global templates reach a database from the **deploy**, not from a human: `.output/seed-templates.mjs`
+runs in the Dockerfile `CMD` after migrations, beside the Pathways catalog seeder. It was a
+manual script until v1.23.0.0 and production was never seeded, so "Change meeting type" offered
+every club an empty picker for two releases.
 
 ## Scope
 

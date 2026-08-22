@@ -719,14 +719,17 @@ describe("spine colour follows the ROLE, not its name (#445)", () => {
 			spineOf(speechRow({ roleKey, who: "Renamed · Somebody" }));
 		const muted = colourOf("a_key_no_template_declares");
 
-		// Contestants ARE the speaking slots, so they read as `speaker` does.
+		// The contestant IS the speaking slot, so it reads as `speaker` does.
+		expect(colourOf("contestant_prepared")).toBe(colourOf("speaker"));
+		// The three the three-contest template declared are gone, and an
+		// unmapped key must fall to muted rather than borrowing a neighbour's
+		// colour — the map is authoritative once a key is present.
 		for (const key of [
-			"contestant_prepared",
 			"contestant_impromptu",
 			"contestant_evaluation",
 			"test_speaker",
 		]) {
-			expect(colourOf(key), key).toBe(colourOf("speaker"));
+			expect(colourOf(key), key).toBe(muted);
 		}
 		// Chair and Chief Judge run the contest — the leadership voice.
 		for (const key of ["contest_chair", "chief_judge"]) {

@@ -308,16 +308,40 @@ const REVIEWED_UNGATED: Record<string, string> = {
 	setActiveClub: "writes a session preference",
 	// Gated, but through a different helper than a WIRINGS row can express.
 	getClubLogoMeta: "gated inside loadClubLogoMeta via isReadableClub (#495)",
-	// Both resolve the meeting's club and then run requireUser +
+	// Each of these resolves the meeting's club and then runs requireUser +
 	// assertClubNotArchived + requireClubRole inside
-	// `requireMeetingTemplateEditor` (meeting-templates.ts). The sweep looks for
-	// a `require*` call in the fn body itself and cannot see through a local
-	// helper, so these read as session-less when they are officer-gated and
-	// archive-gated. Not public readers at all — reshaping a meeting is an
-	// officer action, alongside reschedule and cancel.
+	// `requireMeetingTemplateEditor`, imported from `meeting-templates-logic.ts`
+	// (Task 6 moved it there so a second server-fn module could import it too).
+	// The sweep looks for a `require*` call in the fn body itself and cannot
+	// see through an imported helper, so these read as session-less when they
+	// are officer-gated and archive-gated. Not public readers at all —
+	// reshaping a meeting or its agenda is an officer action, alongside
+	// reschedule and cancel.
+	//
+	// The claim is CHECKED, not merely written: `meeting-templates-authz
+	// .guard.test.ts` sweeps both modules for the gate, and it derives the
+	// module set from THESE reason strings — a waiver worded this way for a fn
+	// in a module it does not read fails there until the module is enrolled.
+	// Do not reword the reason without looking at that regex.
 	previewTemplateForMeeting:
 		"officer-gated + archive-gated inside requireMeetingTemplateEditor (#agenda-templates)",
 	applyTemplateToMeeting:
+		"officer-gated + archive-gated inside requireMeetingTemplateEditor (#agenda-templates)",
+	getAgendaDraft:
+		"officer-gated + archive-gated inside requireMeetingTemplateEditor (#agenda-templates)",
+	addAgendaRowFn:
+		"officer-gated + archive-gated inside requireMeetingTemplateEditor (#agenda-templates)",
+	updateAgendaRowFn:
+		"officer-gated + archive-gated inside requireMeetingTemplateEditor (#agenda-templates)",
+	removeAgendaRowFn:
+		"officer-gated + archive-gated inside requireMeetingTemplateEditor (#agenda-templates)",
+	moveAgendaRowFn:
+		"officer-gated + archive-gated inside requireMeetingTemplateEditor (#agenda-templates)",
+	addAgendaRoleFn:
+		"officer-gated + archive-gated inside requireMeetingTemplateEditor (#agenda-templates)",
+	planRoleRemovalFn:
+		"officer-gated + archive-gated inside requireMeetingTemplateEditor (#agenda-templates)",
+	removeAgendaRoleFn:
 		"officer-gated + archive-gated inside requireMeetingTemplateEditor (#agenda-templates)",
 	getPacketContext:
 		"gated inside loadPacketContext via isReadableClubForMeeting (#589); returns an empty packet context for an archived club, so the picker offers nothing",

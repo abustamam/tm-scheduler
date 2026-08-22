@@ -151,6 +151,33 @@ export function formatActivity(entry: ActivityEntry): FormattedActivity {
 		case "club_logo_removed":
 			summary = "removed the club logo";
 			break;
+		// A role was removed from a meeting's own agenda editor (Task 8,
+		// #agenda-templates). Without this case the `default` below renders the
+		// raw enum string ("meeting_agenda_role_removed") on the Activity page.
+		case "meeting_agenda_role_removed":
+			summary = "removed a role from the agenda";
+			break;
+		// A platform superadmin opened an impersonation session on this club
+		// (ADR-0020 / #185, #246) — read-only for `superadmin_viewed`, read-write
+		// for `superadmin_acted`. `entry.actorName` is null for both (the actor
+		// is a superadmin, not a club member, per the schema comment), so this
+		// renders under "Someone" rather than naming them.
+		case "superadmin_viewed":
+			summary = "viewed the club as a superadmin";
+			break;
+		case "superadmin_acted":
+			summary = "acted on the club as a superadmin";
+			break;
+		// Digital voting (#510): a vote window opened or closed. Deliberately
+		// does not name the category — same reasoning as `meeting_template_set`
+		// above: `ActivityEntry` carries no `detail.category`, and adding one
+		// would need extending the read side for a line nobody reads twice.
+		case "vote_open":
+			summary = "opened a vote";
+			break;
+		case "vote_close":
+			summary = "closed a vote";
+			break;
 		default:
 			summary = entry.action;
 	}

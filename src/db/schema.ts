@@ -150,6 +150,13 @@ export const activityActionEnum = pgEnum("activity_action", [
 	// `detail = { memberId, status: "reached_out" | "coming" | "not_coming" | null, via }`
 	// where `status: null` means the row was cleared back to "no answer".
 	"plan_set",
+	// A role was removed from a meeting's own agenda editor (Task 8,
+	// #agenda-templates). No corresponding `_added` action: adding a role
+	// creates no risk to audit — nothing is destroyed — while removal can
+	// release a member or guest from a slot they held, which is exactly the
+	// kind of change `member_remove` and `outreach_clear` are logged for
+	// elsewhere in this enum. `detail = { roleKey, released }`.
+	"meeting_agenda_role_removed",
 ]);
 
 // Impersonation session mode (ADR-0020 / #185, #246). `read_only` = "View as this
@@ -960,6 +967,15 @@ export const meetingTemplates = pgTable(
 		clubId: uuid("club_id").references(() => clubs.id, {
 			onDelete: "cascade",
 		}),
+		// Non-null = this row is ONE MEETING's private copy, not a template
+		// anyone picks. Conversion deep-copies the chosen template into a row
+		// like this so editing one night's agenda never touches another's.
+		// CASCADE because meetings really are deleted (`recurrence-rule-logic.ts`
+		// prunes pristine ones), and an orphaned private template would be a row
+		// nothing can ever reach or clean up.
+		meetingId: uuid("meeting_id").references(() => meetings.id, {
+			onDelete: "cascade",
+		}),
 		// Stable identity, e.g. "speech_contest" — what the seed is idempotent on.
 		key: text("key").notNull(),
 		name: text("name").notNull(),
@@ -981,9 +997,17 @@ export const meetingTemplates = pgTable(
 		uniqueIndex("meeting_templates_global_key_unique")
 			.on(t.key)
 			.where(sql`${t.clubId} is null`),
+		// Predicate excludes private copies: two contest meetings in one club
+		// both copy `speech_contest`, and without `meeting_id is null` the second
+		// conversion would fail on this index.
 		uniqueIndex("meeting_templates_club_key_unique")
 			.on(t.clubId, t.key)
-			.where(sql`${t.clubId} is not null`),
+			.where(sql`${t.clubId} is not null and ${t.meetingId} is null`),
+		// One private template per meeting, enforced at the database rather than
+		// by the one code path that currently creates them.
+		uniqueIndex("meeting_templates_meeting_unique")
+			.on(t.meetingId)
+			.where(sql`${t.meetingId} is not null`),
 	],
 );
 

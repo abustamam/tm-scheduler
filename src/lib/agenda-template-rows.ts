@@ -81,12 +81,21 @@ function slotsForRole(slots: AgendaSlot[], roleKey: string): AgendaSlot[] {
 		.sort((a, b) => a.slotIndex - b.slotIndex);
 }
 
+/** "Ada", "Ada and Grace", "Ada, Grace and Alan" — one beat, several holders. */
+function joinHolders(names: string[]): string {
+	return new Intl.ListFormat("en", {
+		style: "long",
+		type: "conjunction",
+	}).format(names);
+}
+
 /**
- * One row from one stored beat, optionally bound to ONE specific slot.
+ * One row from one stored beat, bound to the slots it names.
  *
- * `slot` is the whole difference from the design this replaced: a repeated
- * block passes the slot for that iteration, so the row names that person and
- * nobody else.
+ * `bound` is the whole difference from the design this replaced: a repeated
+ * block passes the one slot for that iteration, so the row names that person
+ * and nobody else; a non-repeating role beat passes every slot the role owns,
+ * so the row names all of them together.
  *
  * The row's `who` is the beat's LABEL — the activity ("Contest briefing",
  * "Results and certificates") — not the role name. A contest runs seven
@@ -99,7 +108,7 @@ function slotsForRole(slots: AgendaSlot[], roleKey: string): AgendaSlot[] {
 function toRow(
 	row: TemplateBeatRow,
 	rolesByKey: Map<string, TemplateRoleRow>,
-	slot: AgendaSlot | undefined,
+	bound: AgendaSlot[],
 	index: number,
 	total: number,
 ): AgendaRow | null {
@@ -133,7 +142,10 @@ function toRow(
 	// Number by the SLOT when the role really repeats, and label the assignee
 	// from the slot so a club that renamed the role sees its own word (#445).
 	const numberedLabel = numbered(label, index, total > 1);
-	const holder = slot ? assigneeDisplay(slot) : null;
+	const names = bound
+		.map((s) => assigneeDisplay(s))
+		.filter((n): n is string => n != null && n !== "");
+	const holder = names.length > 0 ? joinHolders(names) : null;
 	const who = holder ? `${numberedLabel} · ${holder}` : numberedLabel;
 	// The halves unjoined (#463), same as the standard path. `holder` is null on a
 	// beat whose role has no slot, where `who` is the label alone.
@@ -154,10 +166,28 @@ function toRow(
  * (capped at `MAX_ROLE_REPEAT_SLOTS`), each iteration bound to exactly one
  * slot. A block whose role has no slots emits nothing.
  *
- * A NON-repeating role beat emits one row per slot of its role, matching
- * `expandRunSheet`'s plain arm (agenda-runsheet.ts:1706). Binding only the
- * first slot would silently drop the second Ballot Counter and the second
- * Timer, both of which the seeded contest declares with `defaultCount: 2`.
+ * A NON-repeating role beat emits ONE row, naming every holder of its role.
+ * It used to emit one row per slot, which was right for a roster and wrong for
+ * a run of show: two ballot counters perform one tally together, and printing
+ * it twice booked twice the minutes.
+ *
+ * That one row's holder list is capped at `MAX_ROLE_REPEAT_SLOTS` too
+ * (#task-10 review), same as the repeat path a few lines below — this branch
+ * had no analogue of that cap until now. It was never a live bug while
+ * `defaultCount` was seed-fixed at small numbers, but Task 8's editor makes
+ * a role's slot count officer-editable (`addAgendaRole` caps it at
+ * `MAX_ROLE_REPEAT_SLOTS` at the writer), and a writer cap is not the only
+ * way this number can grow: a `role_definitions` row materialized before a
+ * cap existed, one inserted directly, or a template copied from a source
+ * whose own count was never re-validated (`copyTemplateForMeeting` copies
+ * `defaultCount` verbatim) can all still hand this branch more slots than the
+ * writer would ever accept today. Capping at the RENDERER — the seam every
+ * one of those paths funnels through — closes all of them at once, the same
+ * defense-in-depth reasoning `MAX_TEMPLATE_BEATS`'s docblock states for
+ * `loadTemplateBeats`. Measured cost of NOT capping: one non-repeating beat
+ * bound to 50,000 slots rendered in ~90ms alone (`meeting-template-limits.bench.test.ts`);
+ * negligible per beat, but multiplied by every such beat a corrupted or
+ * pre-cap row could produce, an uncapped join is real, not theoretical, cost.
  */
 export function buildTemplateRows(
 	beats: TemplateBeatRow[],
@@ -175,20 +205,19 @@ export function buildTemplateRows(
 
 		if (row.repeatsRoleKey == null) {
 			if (row.kind === "role" && row.roleKey != null) {
-				const owned = slotsForRole(slots, row.roleKey);
-				if (owned.length === 0) {
-					// No slot this meeting: still print the bare role row so the
-					// contest's shape survives an unfilled position.
-					const emitted = toRow(row, rolesByKey, undefined, 0, 0);
-					if (emitted) out.push(emitted);
-				} else {
-					owned.forEach((s, n) => {
-						const emitted = toRow(row, rolesByKey, s, n, owned.length);
-						if (emitted) out.push(emitted);
-					});
-				}
+				// ONE row per beat. Every holder of the role is named on it; the
+				// beat repeats per holder only when it says so via repeatsRoleKey.
+				// Capped the same as the repeat path below — see this function's
+				// docblock for why a writer-side cap on `defaultCount` is not
+				// enough on its own.
+				const owned = slotsForRole(slots, row.roleKey).slice(
+					0,
+					MAX_ROLE_REPEAT_SLOTS,
+				);
+				const emitted = toRow(row, rolesByKey, owned, 0, 0);
+				if (emitted) out.push(emitted);
 			} else {
-				const emitted = toRow(row, rolesByKey, undefined, 0, 0);
+				const emitted = toRow(row, rolesByKey, [], 0, 0);
 				if (emitted) out.push(emitted);
 			}
 			i += 1;
@@ -213,7 +242,7 @@ export function buildTemplateRows(
 			for (const blockRow of block) {
 				// Bind the ROLE-owning row to this iteration's slot; the others in
 				// the block (a minute of silence) own no slot and repeat as-is.
-				const bound = blockRow.roleKey === repeatKey ? s : undefined;
+				const bound = blockRow.roleKey === repeatKey ? [s] : [];
 				const emitted = toRow(blockRow, rolesByKey, bound, n, repeated.length);
 				if (emitted) out.push(emitted);
 			}

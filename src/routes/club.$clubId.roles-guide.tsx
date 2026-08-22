@@ -15,7 +15,8 @@
 // the shared `groupRolesByCategory`, so the page a guest reads and the sheet
 // the club prints cannot drift in order or labelling.
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { ArrowLeft, Printer } from "lucide-react";
+import { Printer } from "lucide-react";
+import { BackLink } from "#/components/back-link";
 import { groupRolesByCategory } from "#/lib/role-categories";
 import { getPublicClubRoles } from "#/server/role-definitions";
 
@@ -39,7 +40,7 @@ function RolesGuide() {
 		// a comfortable measure. Matches the public meeting page.
 		<div className="mx-auto w-full max-w-reading space-y-6 p-4 pb-8 md:p-6">
 			<div className="pt-2">
-				<Link
+				<BackLink
 					to="/club/$clubId"
 					params={{ clubId }}
 					// Carry the visitor's grid state back rather than resetting it —
@@ -51,11 +52,9 @@ function RolesGuide() {
 						view: prev.view ?? "roles",
 						count: prev.count ?? 8,
 					})}
-					className="inline-flex items-center gap-1 text-sm font-medium text-muted-foreground no-underline hover:text-foreground"
 				>
-					<ArrowLeft className="size-3.5" aria-hidden />
 					Back to {clubName}
-				</Link>
+				</BackLink>
 				<h1 className="mt-3 font-display text-2xl font-semibold tracking-tight">
 					Meeting roles
 				</h1>

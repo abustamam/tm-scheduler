@@ -13,6 +13,7 @@ import { z } from "zod";
 import { db } from "#/db";
 import { roleDefinitions, roleSlots } from "#/db/schema";
 import { pairedRoleIds } from "#/lib/meeting-roles";
+import { MAX_ROLE_REPEAT_SLOTS } from "#/lib/meeting-template-limits";
 import { isReadableClub } from "./club-readable-logic";
 import { roleDefScopeOnly } from "./meeting-templates-logic";
 import { syncSlotsForRoleEnabledChange } from "./slots-logic";
@@ -147,11 +148,21 @@ function normalizeDescription(value: string | null | undefined): string | null {
 	return trimmed ? trimmed : null;
 }
 
+// `MAX_ROLE_REPEAT_SLOTS`, not a re-typed literal (#task-10 review): this
+// table is also what a template's roles get MATERIALIZED into
+// (`materializeTemplateRoles`), and `roleDefScopeOnly` shows this module's own
+// scope predicate does not exclude a materialized (`templateId` non-null)
+// row from these writers. `agenda-template-rows.ts`'s `buildTemplateRows` now
+// caps a non-repeating role beat's slot count at render time regardless, but
+// a literal `20` here would silently stop tracking that constant the next
+// time it changes — exactly the divergence that review went looking for.
+const defaultCountField = z.number().int().min(0).max(MAX_ROLE_REPEAT_SLOTS);
+
 export const createRoleSchema = z.object({
 	clubId: z.string().uuid(),
 	name: z.string().trim().min(1),
 	category: roleCategory,
-	defaultCount: z.number().int().min(0).max(20),
+	defaultCount: defaultCountField,
 	isSpeakerRole: z.boolean().optional(),
 	description: descriptionField,
 });
@@ -190,7 +201,7 @@ export const updateRoleSchema = z.object({
 	roleId: z.string().uuid(),
 	name: z.string().trim().min(1),
 	category: roleCategory,
-	defaultCount: z.number().int().min(0).max(20),
+	defaultCount: defaultCountField,
 	isSpeakerRole: z.boolean().optional(),
 	description: descriptionField,
 });
