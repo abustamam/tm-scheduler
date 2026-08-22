@@ -493,25 +493,31 @@ excludes private per-meeting copies from the picker in the QUERY (`isNull(meetin
 not by a caller-side filter, so a club's meeting-specific agenda can never be picked as another
 meeting's starting shape.
 
-**Post-fork invariant (task-8b): a fork leaves the meeting FULLY on its own private template, never
-half-migrated.** `ensureAgendaDraft`'s copy used to move the `meeting_templates` / `_roles` / `_beats`
-rows into the private copy while leaving the materialized `role_definitions` — and therefore every
-`role_slots` row referencing them — under the OLD shared template, so the "+ Add role" picker
-(`listRoleDefinitions`, scoped to the new, definitions-less private id) came back empty the moment a
-pre-deploy-converted meeting was edited for the first time. The fork now also calls
-`materializeTemplateRoles` on the new private copy and re-points THIS MEETING's own `role_slots` from
-the old definitions to the freshly materialized ones, matched by `key` — falling back to matching by
-`name` for a definition with no key (data predating #368, or `seedClub`'s own "Timer" fixture role),
-the same "key when there is one, name otherwise" rule `matchesRole` (`agenda-runsheet.ts`) already
-uses everywhere else a slot binds to a role. The OLD definitions are left alone rather than moved:
-`role_definitions` is keyed per (club, template), not per meeting, so a SIBLING meeting still on the
-shared template may still need them. A slot's own id never changes, only its `role_definition_id`, so
-`evaluates_slot_id` pairings, `speech_id` and any assignment survive re-pointing untouched. Treat
-"after a fork, a meeting's own `role_definitions` and `role_slots` are fully migrated to its private
-template" as an invariant a future role mutator may rely on — `removeAgendaRole` (Task 8) predates
-this fix and deliberately does NOT rely on it, resolving which `role_definitions` to touch via
-`roleSlots.meetingId` directly rather than by matching `templateId` against `ensureAgendaDraft`'s
-resolved pointer, precisely because the invariant did not hold when it was written.
+**Post-fork invariant (task-8b): a fork leaves the meeting FULLY on its own private template for
+every role the template still declares, never half-migrated.** `ensureAgendaDraft`'s copy used to
+move the `meeting_templates` / `_roles` / `_beats` rows into the private copy while leaving the
+materialized `role_definitions` — and therefore every `role_slots` row referencing them — under the
+OLD shared template, so the "+ Add role" picker (`listRoleDefinitions`, scoped to the new,
+definitions-less private id) came back empty the moment a pre-deploy-converted meeting was edited
+for the first time. The fork now also calls `materializeTemplateRoles` on the new private copy and
+re-points THIS MEETING's own `role_slots` from the old definitions to the freshly materialized
+ones, matched by `key` — or, for a definition with no key (data predating #368, or `seedClub`'s own
+"Timer" fixture role), by `name` INSTEAD, a strict either/or rather than the fallback `matchesRole`
+(`agenda-runsheet.ts`) uses: a keyed old definition whose key the new set lacks is left unmatched,
+never guessed at by name, and a name match that is itself ambiguous (two new definitions sharing a
+name — no unique index stops that) is skipped rather than picked nondeterministically. The OLD
+definitions are left alone rather than moved: `role_definitions` is keyed per (club, template), not
+per meeting, so a SIBLING meeting still on the shared template may still need them. A slot's own id
+never changes, only its `role_definition_id`, so `evaluates_slot_id` pairings, `speech_id` and any
+assignment survive re-pointing untouched. Treat "after a fork, every slot whose definition the new
+template still declares is migrated to its private copy" as an invariant a future role mutator may
+rely on — note the qualifier: an old definition with no match at all (key removed from the
+template's declarations, or an ambiguous/no name match) is left pointing at its old, still-valid
+definition rather than migrated, so the invariant is exact only for the "still declared" case.
+`removeAgendaRole` (Task 8) predates this fix and deliberately does NOT rely on it, resolving which
+`role_definitions` to touch via `roleSlots.meetingId` directly rather than by matching `templateId`
+against `ensureAgendaDraft`'s resolved pointer, precisely because the invariant did not hold when it
+was written.
 
 The five caps in `src/lib/meeting-template-limits.ts` (200 beats / 40 roles / 20 repeat slots /
 120-point labels / 400-point details) were re-measured now the editor lets a club officer, not

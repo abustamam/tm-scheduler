@@ -1142,10 +1142,17 @@ describe.skipIf(!hasTestDb)("agenda role mutations", () => {
 		// old expectations (one "chair" row, unmoved, still on `shared.id`)
 		// described the bug, not the contract.
 		//
-		// What this test still protects, unchanged: `addAgendaRole` itself must
-		// not re-run that whole-set materialization on every call — a SECOND
-		// `addAgendaRole` against the now-private template must not duplicate
-		// "chair" again.
+		// The second `addAgendaRole` call below is NOT a regression guard
+		// against `addAgendaRole` itself calling the whole-set
+		// `materializeTemplateRoles` again: if it did, the attempt to
+		// re-insert "chair" would hit
+		// `role_definitions_club_template_key_unique` and
+		// `onConflictDoNothing` would swallow it silently, leaving the SAME
+		// count this test asserts either way. That hazard is defanged by the
+		// unique index, not by this assertion. What this section actually
+		// pins is the steady state: the fork leaves exactly two "chair" rows
+		// (the untouched original plus the one it materialized), and a
+		// second, unrelated `addAgendaRole` call does not disturb that count.
 		const [shared] = await testDb
 			.insert(meetingTemplates)
 			.values({
@@ -1239,10 +1246,13 @@ describe.skipIf(!hasTestDb)("agenda role mutations", () => {
 			.where(eq(roleSlots.id, chairSlot.id));
 		expect(chairSlotAfter?.roleDefinitionId).toBe(forked.id);
 
-		// A second `addAgendaRole` call — now against the already-private
-		// template, so `ensureAgendaDraft` takes the early "own" return and
-		// never calls `materializeTemplateRoles` again — must not duplicate
-		// "chair" a third time.
+		// A second, unrelated `addAgendaRole` call — now against the
+		// already-private template, so `ensureAgendaDraft` takes the early
+		// "own" return and never touches "chair" at all — leaves the count
+		// exactly where the fork put it. (Per the comment above this test's
+		// fixture, this cannot distinguish that from a hypothetical
+		// regression that re-ran the whole-set materialize instead: the
+		// unique index would silently no-op the re-insert either way.)
 		await addAgendaRole({
 			meetingId: club.meetingId,
 			name: "Ballot Counter",
@@ -2222,6 +2232,121 @@ describe.skipIf(!hasTestDb)(
 				.from(roleDefinitions)
 				.where(eq(roleDefinitions.id, timerDefId));
 			expect(oldDefAfter?.templateId).toBe(sharedTemplateId);
+		});
+
+		it("skips an ambiguous NULL-key name match rather than picking a definition nondeterministically", async () => {
+			const { sharedTemplateId } = await seedSharedTemplateWithRoles();
+			// Two DIFFERENT keyed roles sharing the SAME display name "Chair" —
+			// no unique index stops that, and `addAgendaRole`'s own "derives a
+			// unique key when two roles share a name" test proves it's a real
+			// shape, not a contrived one.
+			await testDb.insert(meetingTemplateRoles).values([
+				{
+					templateId: sharedTemplateId,
+					key: "chair_a",
+					name: "Chair",
+					category: "leadership",
+					defaultCount: 1,
+					sortOrder: 20,
+					isSpeakerRole: false,
+				},
+				{
+					templateId: sharedTemplateId,
+					key: "chair_b",
+					name: "Chair",
+					category: "leadership",
+					defaultCount: 1,
+					sortOrder: 30,
+					isSpeakerRole: false,
+				},
+			]);
+			await testDb.insert(roleDefinitions).values([
+				{
+					clubId: club.clubId,
+					templateId: sharedTemplateId,
+					key: "chair_a",
+					name: "Chair",
+					category: "leadership",
+					defaultCount: 1,
+					sortOrder: 20,
+					isSpeakerRole: false,
+				},
+				{
+					clubId: club.clubId,
+					templateId: sharedTemplateId,
+					key: "chair_b",
+					name: "Chair",
+					category: "leadership",
+					defaultCount: 1,
+					sortOrder: 30,
+					isSpeakerRole: false,
+				},
+			]);
+
+			// The OLD definition this meeting's slot actually references: NULL
+			// key, the same ambiguous "Chair" name as the two new ones above.
+			const [ambiguousDef] = await testDb
+				.insert(roleDefinitions)
+				.values({
+					clubId: club.clubId,
+					templateId: sharedTemplateId,
+					key: null,
+					name: "Chair",
+					category: "leadership",
+					defaultCount: 1,
+					sortOrder: 10,
+					isSpeakerRole: false,
+				})
+				.returning({ id: roleDefinitions.id });
+			if (!ambiguousDef) throw new Error("role definition insert failed");
+
+			const [beat] = await testDb
+				.insert(meetingTemplateBeats)
+				.values({
+					templateId: sharedTemplateId,
+					sortOrder: 0,
+					kind: "event",
+					label: "Opening remarks",
+					minutes: 1,
+				})
+				.returning({ id: meetingTemplateBeats.id });
+			if (!beat) throw new Error("beat insert failed");
+			await testDb
+				.update(meetings)
+				.set({ templateId: sharedTemplateId })
+				.where(eq(meetings.id, club.meetingId));
+			const [ambiguousSlot] = await testDb
+				.insert(roleSlots)
+				.values({
+					meetingId: club.meetingId,
+					roleDefinitionId: ambiguousDef.id,
+					slotIndex: 0,
+					assignedMemberId: club.memberId,
+					status: "claimed",
+				})
+				.returning({ id: roleSlots.id });
+			if (!ambiguousSlot) throw new Error("slot insert failed");
+
+			await updateAgendaRow({
+				meetingId: club.meetingId,
+				rowId: beat.id,
+				patch: { minutes: 3 },
+			});
+
+			// NOT migrated — an ambiguous name match is skipped, never guessed
+			// at nondeterministically.
+			const [ambiguousSlotAfter] = await testDb
+				.select({
+					roleDefinitionId: roleSlots.roleDefinitionId,
+					assignedMemberId: roleSlots.assignedMemberId,
+				})
+				.from(roleSlots)
+				.where(eq(roleSlots.id, ambiguousSlot.id));
+			if (!ambiguousSlotAfter) throw new Error("ambiguous slot vanished");
+			expect(ambiguousSlotAfter.roleDefinitionId).toBe(ambiguousDef.id);
+			// Not lost either — still assigned, just left where it was rather
+			// than silently landing on "chair_a" or "chair_b".
+			expect(ambiguousSlotAfter.assignedMemberId).toBe(club.memberId);
 		});
 	},
 );

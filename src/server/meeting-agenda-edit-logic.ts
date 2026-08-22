@@ -267,10 +267,13 @@ export async function ensureAgendaDraft(
 	// definitions to the freshly materialized ones, matched by `key` — the
 	// stable, rename-proof identity `role_definitions.key` exists for
 	// (schema.ts docblock). A definition with no key (a legacy row, or a
-	// club-invented custom role predating #368) falls back to matching by
-	// `name` — the same "key when there is one, name otherwise" rule
-	// `matchesRole` (agenda-runsheet.ts) already uses everywhere else a slot
-	// binds to a role, so an unkeyed row is not silently orphaned.
+	// club-invented custom role predating #368) matches by `name` INSTEAD —
+	// a STRICT either/or, not a fallback: a keyed old definition whose key is
+	// absent from the new set is left unmatched rather than guessed at by
+	// name, which is what keeps this a narrower rule than `matchesRole`
+	// (agenda-runsheet.ts) rather than the same one — that function falls
+	// back to name only because a SLOT never carries a key of its own to be
+	// strict about; a `role_definitions` row does.
 	//
 	// Do NOT move the OLD definitions by updating their own `templateId`:
 	// `role_definitions` is keyed per (club, template), not per meeting, so a
@@ -305,20 +308,28 @@ export async function ensureAgendaDraft(
 				),
 			);
 		const newByKey = new Map<string, string>();
-		const newByName = new Map<string, string>();
+		// `null` marks an AMBIGUOUS name — two new definitions sharing it (no
+		// unique index stops that, and `addAgendaRole` deliberately allows two
+		// roles with the same name and different keys) — so a name-only match
+		// is skipped rather than nondeterministically landing on whichever one
+		// this unordered `select()` happened to return last.
+		const newByName = new Map<string, string | null>();
 		for (const d of newDefs) {
 			if (d.key != null) newByKey.set(d.key, d.id);
-			newByName.set(d.name.toLowerCase(), d.id);
+			const nameKey = d.name.toLowerCase();
+			newByName.set(nameKey, newByName.has(nameKey) ? null : d.id);
 		}
 
 		for (const old of oldDefs) {
 			const matchedId =
-				(old.key != null ? newByKey.get(old.key) : undefined) ??
-				newByName.get(old.name.toLowerCase());
-			// No match (e.g. a role the template no longer declares): leave this
-			// slot pointing at the old, still-valid definition rather than
-			// inventing a delete/orphan behavior here — that is
-			// `removeAgendaRole`'s job, not the fork's.
+				old.key != null
+					? newByKey.get(old.key)
+					: (newByName.get(old.name.toLowerCase()) ?? undefined);
+			// No match — a keyed role the template no longer declares, or an
+			// unkeyed one with no (or an ambiguous) name match: leave this slot
+			// pointing at the old, still-valid definition rather than inventing
+			// a delete/orphan behavior here — that is `removeAgendaRole`'s job,
+			// not the fork's.
 			if (!matchedId) continue;
 			await conn
 				.update(roleSlots)
@@ -860,15 +871,23 @@ function deriveRoleKey(name: string, taken: Set<string>): string {
  * unmaterialized role would be a row nobody could ever sign up for.
  *
  * Materializes by inserting exactly ONE `role_definitions` row for the new
- * role — not by calling `materializeTemplateRoles` (which re-materializes
- * the WHOLE role set for `templateId`). On a meeting whose live slots still
- * belong to a not-yet-forked SHARED template (see `removeAgendaRole`'s
- * docblock for why that's the common, not the edge, case), the whole-set call
- * would re-insert every PRE-EXISTING role too — "chair", "timer", etc. — as a
- * second, slot-less `role_definitions` row scoped to this meeting's brand-new
- * private `templateId`, parallel to the ones the meeting's actual slots still
- * reference. That's real data pollution for a call meant to add ONE role, so
- * this inserts only the row this call is responsible for.
+ * role — not by calling `materializeTemplateRoles` again for the WHOLE role
+ * set at `templateId`. Two reasons, neither of them data pollution anymore:
+ * `ensureAgendaDraft`'s fork (task-8b) already materializes every
+ * PRE-EXISTING declared role and re-points this meeting's own slots onto
+ * them, in the SAME transaction, before this function's own logic ever
+ * runs — so by the time control reaches here, `templateId`'s current role
+ * set is already correctly materialized, and re-running the whole-set call
+ * would just repeat that work, a no-op per row via `onConflictDoNothing` but
+ * still a wasted read-and-attempt over every OTHER role for the sake of
+ * adding one. And `materializeTemplateRoles` returns `void`, not the row(s)
+ * it inserted, while this call needs the fresh row's `id` back immediately —
+ * `generateSlotRows([def], meetingId)` a few lines down can't run without
+ * it. (Before task-8b, this insert being scoped to one row was ALSO what
+ * kept the whole-set call from re-inserting every pre-existing role as a
+ * second, orphaned `role_definitions` row parallel to the ones the meeting's
+ * slots still referenced on the old shared template — that hazard is now the
+ * fork's job to prevent, not this function's.)
  */
 export async function addAgendaRole(input: {
 	meetingId: string;
