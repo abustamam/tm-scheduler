@@ -6,13 +6,16 @@
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5433/tm_test \
  *     bunx vitest run src/server/meeting-agenda-edit-logic.integration.test.ts
  */
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	activityLog,
 	meetings,
 	meetingTemplateBeats,
 	meetingTemplateRoles,
 	meetingTemplates,
+	roleDefinitions,
+	roleSlots,
 } from "#/db/schema";
 import {
 	MAX_TEMPLATE_BEATS,
@@ -29,9 +32,12 @@ import {
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
 const {
+	addAgendaRole,
 	addAgendaRow,
 	loadAgendaDraft,
 	moveAgendaRow,
+	planRoleRemoval,
+	removeAgendaRole,
 	removeAgendaRow,
 	updateAgendaRow,
 } = await import("./meeting-agenda-edit-logic");
@@ -86,14 +92,14 @@ async function givePrivateTemplate() {
 		sortOrder: 10,
 		isSpeakerRole: false,
 	});
+	// Insertion order is DELIBERATELY the reverse of sortOrder: a single
+	// multi-row INSERT commonly comes back in insertion order even with no
+	// ORDER BY, so a batch inserted 0-then-1 cannot tell "sorted by sortOrder"
+	// apart from "returned in whatever order Postgres felt like" — the exact
+	// gap that let the read-order test below pass with `orderBy` deleted.
+	// Swapping the array order (sortOrder values unchanged) makes the two
+	// orderings disagree, so only a real ORDER BY produces [OPENING, Welcome].
 	await testDb.insert(meetingTemplateBeats).values([
-		{
-			templateId: t.id,
-			sortOrder: 0,
-			kind: "section",
-			label: "OPENING",
-			minutes: 0,
-		},
 		{
 			templateId: t.id,
 			sortOrder: 1,
@@ -101,6 +107,13 @@ async function givePrivateTemplate() {
 			label: "Welcome",
 			roleKey: "chair",
 			minutes: 5,
+		},
+		{
+			templateId: t.id,
+			sortOrder: 0,
+			kind: "section",
+			label: "OPENING",
+			minutes: 0,
 		},
 	]);
 	await testDb
@@ -149,8 +162,130 @@ async function seedForeignRow(): Promise<{
 	return { other, foreignTemplateId: t.id, foreignId: foreign.id };
 }
 
+/** Finds the slot whose role definition has `roleKey` on `club.meetingId` and
+ *  claims it for `memberId`. */
+async function claimFirstSlotFor(
+	roleKey: string,
+	memberId: string,
+): Promise<void> {
+	const [slot] = await testDb
+		.select({ id: roleSlots.id })
+		.from(roleSlots)
+		.innerJoin(
+			roleDefinitions,
+			eq(roleDefinitions.id, roleSlots.roleDefinitionId),
+		)
+		.where(
+			and(
+				eq(roleSlots.meetingId, club.meetingId),
+				eq(roleDefinitions.key, roleKey),
+			),
+		)
+		.limit(1);
+	if (!slot) throw new Error(`no slot found for role "${roleKey}"`);
+	await testDb
+		.update(roleSlots)
+		.set({ assignedMemberId: memberId, status: "claimed" })
+		.where(eq(roleSlots.id, slot.id));
+}
+
+/**
+ * A second club's own meeting, private template, materialized role and
+ * claimed slot — all sharing the SAME `roleKey` as whatever the caller is
+ * about to add via `addAgendaRole` in their own club. This is what makes the
+ * `templateId` predicate on `removeAgendaRole`'s deletes the thing that
+ * decides: `role_definitions.clubId` differs, but a private template's own id
+ * is unique per meeting regardless, so `templateId` alone already separates
+ * the two — the fixture proves that scoping is actually in effect rather than
+ * merely never colliding by accident (see the removal test's "strip and
+ * confirm" note).
+ */
+async function seedForeignRole(roleKey: string): Promise<{
+	other: SeededClub;
+	foreignTemplateId: string;
+	foreignDefId: string;
+	foreignSlotId: string;
+	foreignBeatId: string;
+}> {
+	const other = await seedClub();
+	const [t] = await testDb
+		.insert(meetingTemplates)
+		.values({
+			clubId: other.clubId,
+			meetingId: other.meetingId,
+			key: `other_role_${RUN}`,
+			name: "Other role template",
+		})
+		.returning({ id: meetingTemplates.id });
+	if (!t) throw new Error("template insert failed");
+	madeTemplates.push(t.id);
+	await testDb.insert(meetingTemplateRoles).values({
+		templateId: t.id,
+		key: roleKey,
+		name: "Foreign Zoom Master",
+		category: "functionary",
+		defaultCount: 1,
+		sortOrder: 10,
+		isSpeakerRole: false,
+	});
+	const [beat] = await testDb
+		.insert(meetingTemplateBeats)
+		.values({
+			templateId: t.id,
+			sortOrder: 0,
+			kind: "role",
+			label: "Foreign zoom slot",
+			roleKey,
+			minutes: 1,
+		})
+		.returning({ id: meetingTemplateBeats.id });
+	if (!beat) throw new Error("beat insert failed");
+	await testDb
+		.update(meetings)
+		.set({ templateId: t.id })
+		.where(eq(meetings.id, other.meetingId));
+
+	const [def] = await testDb
+		.insert(roleDefinitions)
+		.values({
+			clubId: other.clubId,
+			templateId: t.id,
+			key: roleKey,
+			name: "Foreign Zoom Master",
+			category: "functionary",
+			defaultCount: 1,
+			sortOrder: 10,
+			isSpeakerRole: false,
+		})
+		.returning({ id: roleDefinitions.id });
+	if (!def) throw new Error("role definition insert failed");
+	const [slot] = await testDb
+		.insert(roleSlots)
+		.values({
+			meetingId: other.meetingId,
+			roleDefinitionId: def.id,
+			slotIndex: 0,
+			assignedMemberId: other.memberId,
+			status: "claimed",
+		})
+		.returning({ id: roleSlots.id });
+	if (!slot) throw new Error("slot insert failed");
+
+	return {
+		other,
+		foreignTemplateId: t.id,
+		foreignDefId: def.id,
+		foreignSlotId: slot.id,
+		foreignBeatId: beat.id,
+	};
+}
+
 describe.skipIf(!hasTestDb)("loadAgendaDraft", () => {
 	it("returns the meeting's own rows in sort order", async () => {
+		// `givePrivateTemplate` inserts "Welcome" (sortOrder 1) BEFORE "OPENING"
+		// (sortOrder 0) in the same batch, deliberately reversed from sortOrder —
+		// a batch inserted in sortOrder order can pass this assertion on
+		// insertion order alone even with `orderBy` deleted from `loadAgendaDraft`.
 		const id = await givePrivateTemplate();
 		const draft = await loadAgendaDraft(club.meetingId);
 		expect(draft?.templateId).toBe(id);
@@ -869,6 +1004,360 @@ describe.skipIf(!hasTestDb)("agenda row mutations", () => {
 				.from(meetingTemplateBeats)
 				.where(eq(meetingTemplateBeats.id, foreignId));
 			expect(foreignRow?.label).toBe("theirs");
+		} finally {
+			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+		}
+	});
+});
+
+describe.skipIf(!hasTestDb)("agenda role mutations", () => {
+	it("adds a role, materializes it, and makes it claimable", async () => {
+		await givePrivateTemplate();
+		const role = await addAgendaRole({
+			meetingId: club.meetingId,
+			name: "Zoom Master",
+			category: "functionary",
+			defaultCount: 1,
+			isSpeakerRole: false,
+		});
+		expect(role.key).toMatch(/^[a-z0-9_]+$/);
+
+		// A role with no `role_definitions` row cannot own a slot —
+		// role_slots.role_definition_id is NOT NULL and restricting — so an
+		// unmaterialized role is a row nobody can ever sign up for.
+		const draft = await loadAgendaDraft(club.meetingId);
+		expect(draft?.roles.map((r) => r.name)).toContain("Zoom Master");
+		const defs = await testDb
+			.select({ name: roleDefinitions.name })
+			.from(roleDefinitions)
+			.where(eq(roleDefinitions.clubId, club.clubId));
+		expect(defs.map((d) => d.name)).toContain("Zoom Master");
+		const slots = await testDb
+			.select({ id: roleSlots.id })
+			.from(roleSlots)
+			.innerJoin(
+				roleDefinitions,
+				eq(roleDefinitions.id, roleSlots.roleDefinitionId),
+			)
+			.where(
+				and(
+					eq(roleSlots.meetingId, club.meetingId),
+					eq(roleDefinitions.key, role.key),
+				),
+			);
+		expect(slots).toHaveLength(1);
+	});
+
+	it("derives a unique key when two roles share a name", async () => {
+		await givePrivateTemplate();
+		const a = await addAgendaRole({
+			meetingId: club.meetingId,
+			name: "Judge",
+			category: "functionary",
+			defaultCount: 1,
+			isSpeakerRole: false,
+		});
+		const b = await addAgendaRole({
+			meetingId: club.meetingId,
+			name: "Judge",
+			category: "functionary",
+			defaultCount: 1,
+			isSpeakerRole: false,
+		});
+		expect(a.key).not.toBe(b.key);
+	});
+
+	it("makes an added role's key immediately usable by a beat's roleKey", async () => {
+		// Correction 3: adding a role must make its key immediately usable by
+		// beats — `assertDeclaredRoleKeys` checks `meeting_template_roles`, which
+		// `addAgendaRole` writes to before returning.
+		await givePrivateTemplate();
+		const role = await addAgendaRole({
+			meetingId: club.meetingId,
+			name: "Zoom Master",
+			category: "functionary",
+			defaultCount: 1,
+			isSpeakerRole: false,
+		});
+		const draft = await loadAgendaDraft(club.meetingId);
+		const row = draft?.rows.find((r) => r.kind === "section");
+		if (!row) throw new Error("no section row");
+		await updateAgendaRow({
+			meetingId: club.meetingId,
+			rowId: row.id,
+			patch: { roleKey: role.key },
+		});
+		const after = await loadAgendaDraft(club.meetingId);
+		expect(after?.rows.find((r) => r.id === row.id)?.roleKey).toBe(role.key);
+	});
+
+	it("names the people a role removal would release, BEFORE removing", async () => {
+		// The dialog leads with names because a released holder cannot be told:
+		// notifications.slot_id is NOT NULL and ON DELETE CASCADE to role_slots,
+		// so a row enqueued against a slot the same transaction deletes is
+		// destroyed before the poller sees it.
+		await givePrivateTemplate();
+		const role = await addAgendaRole({
+			meetingId: club.meetingId,
+			name: "Zoom Master",
+			category: "functionary",
+			defaultCount: 1,
+			isSpeakerRole: false,
+		});
+		await claimFirstSlotFor(role.key, club.memberId);
+
+		const plan = await planRoleRemoval({
+			meetingId: club.meetingId,
+			roleKey: role.key,
+		});
+		expect(plan).toHaveLength(1);
+		expect(plan[0]?.name).toBeTruthy();
+		// And nothing was destroyed by ASKING.
+		const still = await loadAgendaDraft(club.meetingId);
+		expect(still?.roles.map((r) => r.key)).toContain(role.key);
+		const stillSlots = await testDb
+			.select({ id: roleSlots.id })
+			.from(roleSlots)
+			.innerJoin(
+				roleDefinitions,
+				eq(roleDefinitions.id, roleSlots.roleDefinitionId),
+			)
+			.where(
+				and(
+					eq(roleSlots.meetingId, club.meetingId),
+					eq(roleDefinitions.key, role.key),
+				),
+			);
+		expect(stillSlots).toHaveLength(1);
+	});
+
+	it("removes the role, its slots, and the rows bound to it by roleKey AND repeatsRoleKey", async () => {
+		const id = await givePrivateTemplate();
+		const role = await addAgendaRole({
+			meetingId: club.meetingId,
+			name: "Zoom Master",
+			category: "functionary",
+			defaultCount: 1,
+			isSpeakerRole: false,
+		});
+		await claimFirstSlotFor(role.key, club.memberId);
+
+		const draft = await loadAgendaDraft(club.meetingId);
+		const anyRow = draft?.rows.find((r) => r.kind === "role");
+		if (!anyRow) throw new Error("no role row");
+		await updateAgendaRow({
+			meetingId: club.meetingId,
+			rowId: anyRow.id,
+			patch: { roleKey: role.key },
+		});
+
+		// Correction 2: a row bound via `repeatsRoleKey` alone (no `roleKey`) is
+		// the shape of the seeded contest's ballot minute — a non-role row inside
+		// a repeat block. `updateAgendaRow` only edits EXISTING rows, so this one
+		// is seeded directly.
+		const [repeatBoundRow] = await testDb
+			.insert(meetingTemplateBeats)
+			.values({
+				templateId: id,
+				sortOrder: 2,
+				kind: "event",
+				label: "Ballot collected",
+				repeatsRoleKey: role.key,
+				minutes: 1,
+			})
+			.returning({ id: meetingTemplateBeats.id });
+		if (!repeatBoundRow) throw new Error("repeat-bound beat insert failed");
+
+		const released = await removeAgendaRole({
+			meetingId: club.meetingId,
+			roleKey: role.key,
+			actorMemberId: null,
+		});
+		expect(released).toHaveLength(1);
+
+		const after = await loadAgendaDraft(club.meetingId);
+		expect(after?.roles.map((r) => r.key)).not.toContain(role.key);
+		// A row pointing at a role the template no longer declares is DROPPED by
+		// buildTemplateRows, so leaving it behind would be an invisible row that
+		// silently reappears if the key is ever reused.
+		expect(after?.rows.map((r) => r.id)).not.toContain(anyRow.id);
+		expect(after?.rows.map((r) => r.id)).not.toContain(repeatBoundRow.id);
+
+		// The role_definitions row and its slot are gone too, not just the
+		// template-side declaration.
+		const defs = await testDb
+			.select({ id: roleDefinitions.id })
+			.from(roleDefinitions)
+			.where(
+				and(
+					eq(roleDefinitions.clubId, club.clubId),
+					eq(roleDefinitions.key, role.key),
+				),
+			);
+		expect(defs).toHaveLength(0);
+
+		// The now-undeclared key is immediately refused again, same as any other
+		// key the template has never declared.
+		const anotherRow = after?.rows[0];
+		if (!anotherRow) throw new Error("no rows left");
+		await expect(
+			updateAgendaRow({
+				meetingId: club.meetingId,
+				rowId: anotherRow.id,
+				patch: { roleKey: role.key },
+			}),
+		).rejects.toThrow(/not a role this template declares/i);
+	});
+
+	it("refuses to remove an undeclared role WITHOUT forking a shared template", async () => {
+		// Mirrors why `addAgendaRow`/`updateAgendaRow` resolve a caller-supplied
+		// row BEFORE `ensureAgendaDraft` runs (`findRow`'s docblock): a fork is a
+		// real write, and a bad key must not trigger one for what is really a
+		// no-op removal.
+		const [shared] = await testDb
+			.insert(meetingTemplates)
+			.values({ key: `shared_role_${RUN}`, name: `Shared role ${RUN}` })
+			.returning({ id: meetingTemplates.id });
+		if (!shared) throw new Error("template insert failed");
+		madeTemplates.push(shared.id);
+		await testDb.insert(meetingTemplateRoles).values({
+			templateId: shared.id,
+			key: "timer",
+			name: "Timer",
+			category: "functionary",
+			defaultCount: 1,
+			sortOrder: 0,
+			isSpeakerRole: false,
+		});
+		await testDb
+			.update(meetings)
+			.set({ templateId: shared.id })
+			.where(eq(meetings.id, club.meetingId));
+
+		await expect(
+			removeAgendaRole({
+				meetingId: club.meetingId,
+				roleKey: "not-a-declared-role",
+				actorMemberId: null,
+			}),
+		).rejects.toThrow(/not a role this template declares/i);
+
+		// Still pointing at the SHARED template — no fork happened.
+		const [after] = await testDb
+			.select({ templateId: meetings.templateId })
+			.from(meetings)
+			.where(eq(meetings.id, club.meetingId));
+		expect(after?.templateId).toBe(shared.id);
+	});
+
+	it("logs the removal to activity_log with the released count", async () => {
+		await givePrivateTemplate();
+		const role = await addAgendaRole({
+			meetingId: club.meetingId,
+			name: "Zoom Master",
+			category: "functionary",
+			defaultCount: 1,
+			isSpeakerRole: false,
+		});
+		await claimFirstSlotFor(role.key, club.memberId);
+
+		await removeAgendaRole({
+			meetingId: club.meetingId,
+			roleKey: role.key,
+			actorMemberId: club.adminMemberId,
+		});
+
+		const rows = await testDb
+			.select({ action: activityLog.action, detail: activityLog.detail })
+			.from(activityLog)
+			.where(
+				and(
+					eq(activityLog.clubId, club.clubId),
+					eq(activityLog.action, "meeting_agenda_role_removed"),
+				),
+			);
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.detail).toMatchObject({ roleKey: role.key, released: 1 });
+	});
+
+	// The rowId-scoping tests earlier in this file (`seedForeignRow`) prove
+	// each row mutator's OWN templateId predicate is load-bearing by sharing a
+	// sortOrder with a foreign row on an already-private template, where
+	// matching by primary key alone would otherwise be safe. Role mutations
+	// have no id to match on at all — `roleKey` is a caller-chosen STRING — so
+	// the discriminator here is different: two clubs' PRIVATE templates
+	// independently declaring the IDENTICAL key. `role_definitions.clubId`
+	// differs between them, but so does `templateId` (a private template's id
+	// is unique per meeting), so `templateId` alone already separates the two
+	// rows. This test proves the removal statements actually READ that
+	// predicate — confirmed by temporarily dropping the `templateId` conjunct
+	// from `removeAgendaRole`'s four deletes/updates and re-running this test:
+	// it fails (the `role_definitions` delete throws a foreign-key violation
+	// from the foreign meeting's own still-live slot, which rolls back the
+	// whole transaction, so even the CALLER's own role survives the failed
+	// removal) — see the task report for the exact diff and failure output.
+	it("does not touch a foreign meeting's identically-keyed role, slot or beat", async () => {
+		await givePrivateTemplate();
+		const role = await addAgendaRole({
+			meetingId: club.meetingId,
+			name: "Zoom Master",
+			category: "functionary",
+			defaultCount: 1,
+			isSpeakerRole: false,
+		});
+		const {
+			other,
+			foreignTemplateId,
+			foreignDefId,
+			foreignSlotId,
+			foreignBeatId,
+		} = await seedForeignRole(role.key);
+		try {
+			await claimFirstSlotFor(role.key, club.memberId);
+
+			await removeAgendaRole({
+				meetingId: club.meetingId,
+				roleKey: role.key,
+				actorMemberId: null,
+			});
+
+			// Own role gone.
+			const ownAfter = await loadAgendaDraft(club.meetingId);
+			expect(ownAfter?.roles.map((r) => r.key)).not.toContain(role.key);
+
+			// Foreign role_definitions row survives.
+			const foreignDef = await testDb
+				.select({ id: roleDefinitions.id })
+				.from(roleDefinitions)
+				.where(eq(roleDefinitions.id, foreignDefId));
+			expect(foreignDef).toHaveLength(1);
+
+			// Foreign slot survives, and is STILL claimed — a removal scoped to
+			// the wrong template would have released or deleted it.
+			const foreignSlot = await testDb
+				.select({
+					status: roleSlots.status,
+					assignedMemberId: roleSlots.assignedMemberId,
+				})
+				.from(roleSlots)
+				.where(eq(roleSlots.id, foreignSlotId));
+			expect(foreignSlot).toHaveLength(1);
+			expect(foreignSlot[0]?.status).toBe("claimed");
+			expect(foreignSlot[0]?.assignedMemberId).toBe(other.memberId);
+
+			// Foreign beat (bound by roleKey) survives.
+			const foreignBeat = await testDb
+				.select({ id: meetingTemplateBeats.id })
+				.from(meetingTemplateBeats)
+				.where(eq(meetingTemplateBeats.id, foreignBeatId));
+			expect(foreignBeat).toHaveLength(1);
+
+			// Foreign meeting_template_roles declaration survives.
+			const foreignRoleRow = await testDb
+				.select({ key: meetingTemplateRoles.key })
+				.from(meetingTemplateRoles)
+				.where(eq(meetingTemplateRoles.templateId, foreignTemplateId));
+			expect(foreignRoleRow.map((r) => r.key)).toContain(role.key);
 		} finally {
 			await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
 		}

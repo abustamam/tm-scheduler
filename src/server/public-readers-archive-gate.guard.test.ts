@@ -329,6 +329,12 @@ const REVIEWED_UNGATED: Record<string, string> = {
 		"officer-gated + archive-gated inside requireMeetingTemplateEditor (#agenda-templates)",
 	moveAgendaRowFn:
 		"officer-gated + archive-gated inside requireMeetingTemplateEditor (#agenda-templates)",
+	addAgendaRoleFn:
+		"officer-gated + archive-gated inside requireMeetingTemplateEditor (#agenda-templates)",
+	planRoleRemovalFn:
+		"officer-gated + archive-gated inside requireMeetingTemplateEditor (#agenda-templates)",
+	removeAgendaRoleFn:
+		"officer-gated + archive-gated inside requireMeetingTemplateEditor (#agenda-templates)",
 	getPacketContext:
 		"gated inside loadPacketContext via isReadableClubForMeeting (#589); returns an empty packet context for an archived club, so the picker offers nothing",
 	getVoteTally: "gated by requireVoteCounterCapability, not by archive",

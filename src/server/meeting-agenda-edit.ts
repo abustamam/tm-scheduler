@@ -7,17 +7,25 @@
  */
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import type { AgendaDraft, AgendaDraftRow } from "./meeting-agenda-edit-logic";
+import type {
+	AgendaDraft,
+	AgendaDraftRole,
+	AgendaDraftRow,
+	ReleasedHolder,
+} from "./meeting-agenda-edit-logic";
 import {
+	addAgendaRole,
 	addAgendaRow,
 	loadAgendaDraft,
 	moveAgendaRow,
+	planRoleRemoval,
+	removeAgendaRole,
 	removeAgendaRow,
 	updateAgendaRow,
 } from "./meeting-agenda-edit-logic";
 import { requireMeetingTemplateEditor } from "./meeting-templates-logic";
 
-export type { AgendaDraft, AgendaDraftRow };
+export type { AgendaDraft, AgendaDraftRow, AgendaDraftRole, ReleasedHolder };
 
 const meetingInput = z.object({ meetingId: z.string().uuid() });
 
@@ -91,4 +99,43 @@ export const moveAgendaRowFn = createServerFn({ method: "POST" })
 	.handler(async ({ data }): Promise<void> => {
 		await requireMeetingTemplateEditor(data.meetingId);
 		return moveAgendaRow(data);
+	});
+
+const roleAddInput = z.object({
+	meetingId: z.string().uuid(),
+	name: z.string().min(1),
+	category: z.enum(["leadership", "speaker", "evaluator", "functionary"]),
+	defaultCount: z.number().int().min(0),
+	isSpeakerRole: z.boolean(),
+});
+const roleKeyInput = z.object({
+	meetingId: z.string().uuid(),
+	roleKey: z.string().min(1),
+});
+
+/** Add a role to this meeting's agenda. Officer-gated, same as `getAgendaDraft`. */
+export const addAgendaRoleFn = createServerFn({ method: "POST" })
+	.validator((input: unknown) => roleAddInput.parse(input))
+	.handler(async ({ data }): Promise<AgendaDraftRole> => {
+		await requireMeetingTemplateEditor(data.meetingId);
+		return addAgendaRole(data);
+	});
+
+/** Who removing this role would release, without removing anything.
+ *  Officer-gated, same as `getAgendaDraft`. */
+export const planRoleRemovalFn = createServerFn({ method: "GET" })
+	.validator((input: unknown) => roleKeyInput.parse(input))
+	.handler(async ({ data }): Promise<ReleasedHolder[]> => {
+		await requireMeetingTemplateEditor(data.meetingId);
+		return planRoleRemoval(data);
+	});
+
+/** Remove a role from this meeting's agenda. Officer-gated, same as
+ *  `getAgendaDraft`. Attributes the removal to the calling officer's own
+ *  membership, for `activity_log`. */
+export const removeAgendaRoleFn = createServerFn({ method: "POST" })
+	.validator((input: unknown) => roleKeyInput.parse(input))
+	.handler(async ({ data }): Promise<ReleasedHolder[]> => {
+		const { membership } = await requireMeetingTemplateEditor(data.meetingId);
+		return removeAgendaRole({ ...data, actorMemberId: membership.id });
 	});

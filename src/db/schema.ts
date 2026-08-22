@@ -150,6 +150,13 @@ export const activityActionEnum = pgEnum("activity_action", [
 	// `detail = { memberId, status: "reached_out" | "coming" | "not_coming" | null, via }`
 	// where `status: null` means the row was cleared back to "no answer".
 	"plan_set",
+	// A role was removed from a meeting's own agenda editor (Task 8,
+	// #agenda-templates). No corresponding `_added` action: adding a role
+	// creates no risk to audit — nothing is destroyed — while removal can
+	// release a member or guest from a slot they held, which is exactly the
+	// kind of change `member_remove` and `outreach_clear` are logged for
+	// elsewhere in this enum. `detail = { roleKey, released }`.
+	"meeting_agenda_role_removed",
 ]);
 
 // Impersonation session mode (ADR-0020 / #185, #246). `read_only` = "View as this
