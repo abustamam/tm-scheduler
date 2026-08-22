@@ -512,6 +512,30 @@ export async function planTemplateConversion(
 		.limit(1);
 	if (!meeting) throw new Error("Meeting not found.");
 
+	// Same tenant boundary `copyTemplateForMeeting` and `applyTemplateConversion`
+	// already enforce on the WRITE path (see that function's docblock):
+	// `templateId` is caller-supplied and, now that private per-meeting copies
+	// exist, unsafe to trust unscoped — without this, a club-B admin who has
+	// read a club-A private template's id off a public meeting page could
+	// preview against it and learn its role count below. Throwing the same
+	// "no longer exists" error the write path throws — rather than silently
+	// returning a zeroed plan — keeps the two paths agreeing about what a
+	// caller may even address; a caller that cannot APPLY a template should not
+	// be able to PREVIEW it either.
+	if (templateId !== null) {
+		const [visible] = await database
+			.select({ id: meetingTemplates.id })
+			.from(meetingTemplates)
+			.where(
+				and(
+					eq(meetingTemplates.id, templateId),
+					templateVisibleTo(meeting.clubId),
+				),
+			)
+			.limit(1);
+		if (!visible) throw new Error("That meeting template no longer exists.");
+	}
+
 	const current = await loadSlotsForConversion(database, meetingId);
 
 	// Preview must NOT materialize: a preview that writes would litter a club's

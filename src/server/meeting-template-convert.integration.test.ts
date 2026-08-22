@@ -586,6 +586,46 @@ describe.skipIf(!hasTestDb)("meeting template conversion", () => {
 	});
 
 	/**
+	 * Task 3b, part B. The WRITE path (`applyTemplateConversion`, above) is
+	 * gated by `templateVisibleTo`; `planTemplateConversion` — the preview —
+	 * was not. It falls back to reading `meetingTemplateRoles` by the raw
+	 * `templateId` whenever nothing has been materialized for THIS club yet
+	 * (see its own comment on the first-time-preview branch), with no
+	 * ownership check of its own. A club-B admin who has read a club-A
+	 * private copy's id off a public meeting page could preview against it
+	 * and learn its role count — smaller than the deep-copy the write path
+	 * guards against, but the same tenant boundary.
+	 */
+	describe("preview cross-club protection", () => {
+		it("refuses to preview another club's PRIVATE template, even by exact id", async () => {
+			const source = await makeTemplate();
+			await applyTemplateConversion({
+				meetingId: club.meetingId,
+				clubId: club.clubId,
+				templateId: source,
+				actorMemberId: null,
+			});
+			const [row] = await testDb
+				.select({ templateId: meetings.templateId })
+				.from(meetings)
+				.where(eq(meetings.id, club.meetingId));
+			const clubAPrivateCopyId = row?.templateId ?? "";
+
+			const clubB = await seedClub();
+			try {
+				// Unfixed, this resolves with a plan reporting the private copy's
+				// own role count (4: 1 chair + 3 contestants, mirrored from its
+				// source) instead of refusing — the leak this test guards against.
+				await expect(
+					planTemplateConversion(clubB.meetingId, clubAPrivateCopyId),
+				).rejects.toThrow(/template/i);
+			} finally {
+				await cleanup(clubB.clubId, [clubB.adminUserId, clubB.memberUserId]);
+			}
+		});
+	});
+
+	/**
 	 * Fix round 1, finding 3. All 22 pre-fix-round tests passed with
 	 * `eq(meetingTemplates.meetingId, meetingId)` deleted from
 	 * `previousPrivateId`'s lookup, because every one of them reaches a
