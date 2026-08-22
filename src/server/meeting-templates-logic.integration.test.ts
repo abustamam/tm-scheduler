@@ -285,6 +285,32 @@ describe.skipIf(!hasTestDb)("meeting template logic", () => {
 			expect(await loadTemplateContent(crypto.randomUUID())).toBeNull();
 		});
 
+		it("returns an EMPTY agenda for a template with no rows, not null", async () => {
+			// The editor can delete the last row, and building an agenda up from
+			// nothing is a legitimate state. Today "no beats and no roles" is read as
+			// "no such template", which makes `meetings.ts` throw
+			// "references template X, which has no beats or roles" and takes the
+			// meeting page down.
+			const [t] = await testDb
+				.insert(meetingTemplates)
+				.values({
+					clubId: club.clubId,
+					key: `empty_${RUN}`,
+					name: `Empty ${RUN}`,
+				})
+				.returning({ id: meetingTemplates.id });
+			if (!t) throw new Error("template insert failed");
+
+			const content = await loadTemplateContent(t.id);
+			expect(content).toEqual({ beats: [], roles: [] });
+		});
+
+		it("returns null for a template id that does not exist", async () => {
+			expect(
+				await loadTemplateContent("00000000-0000-0000-0000-000000000000"),
+			).toBeNull();
+		});
+
 		/**
 		 * The two size caps live in `lib/meeting-template-limits.ts` so a unit
 		 * test can pin their VALUES without a database — but a pinned value

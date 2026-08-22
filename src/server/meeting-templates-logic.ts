@@ -137,27 +137,30 @@ async function loadTemplateRoles(
 }
 
 /**
- * A template's beats and roles. Null when it has neither — which, for a
- * `meetings.template_id` pointer, means corruption, since that FK is ON DELETE
- * RESTRICT and the template therefore cannot have been deleted.
- *
- * NO existence check, and the two selects run in PARALLEL. This is called from
- * `loadMeetingDetail`, which TODOS.md already flags as issuing ~15 sequential
- * round trips that every roll-mode write re-runs; three more sequential ones
- * would land on the exact path that hurts, on contest night. An existence
- * SELECT the foreign key already guarantees is not worth a round trip.
+ * A template's beats and roles. Null only when the row itself does not
+ * exist — which, for a `meetings.template_id` pointer, means corruption,
+ * since that FK is ON DELETE RESTRICT and the template therefore cannot have
+ * been deleted.
  */
 export async function loadTemplateContent(
 	templateId: string,
 ): Promise<{ beats: TemplateBeatRow[]; roles: TemplateRoleRow[] } | null> {
-	const [beats, roles] = await Promise.all([
+	// THREE reads in parallel, not two. The existence check used to be inferred
+	// from "both empty", which was free — but the editor can legitimately empty a
+	// template, and inferring absence from emptiness turns "I deleted my last
+	// row" into `meetings.ts` throwing and the meeting page going down. A third
+	// parallel round trip adds no latency to `loadMeetingDetail`'s critical path,
+	// which is what the old comment was protecting.
+	const [beats, roles, exists] = await Promise.all([
 		loadTemplateBeats(templateId),
 		loadTemplateRoles(templateId),
+		database
+			.select({ id: meetingTemplates.id })
+			.from(meetingTemplates)
+			.where(eq(meetingTemplates.id, templateId))
+			.limit(1),
 	]);
-	// Both empty = no such template. A Phase 2 editor could create a template
-	// with no beats AND no roles, which would read as missing here; give it at
-	// least one row, or restore the existence check at that point.
-	if (beats.length === 0 && roles.length === 0) return null;
+	if (exists.length === 0) return null;
 	return { beats, roles };
 }
 

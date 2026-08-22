@@ -328,7 +328,7 @@ async function loadMeetingDetail(
 		template = await loadTemplateContent(meeting.templateId);
 		if (!template) {
 			throw new Error(
-				`Meeting ${meeting.id} references template ${meeting.templateId}, which has no beats or roles.`,
+				`Meeting ${meeting.id} references template ${meeting.templateId}, which does not exist.`,
 			);
 		}
 	}
