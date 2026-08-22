@@ -158,13 +158,39 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
   adding a file.
   **Priority:** P3
 
-- **The template server fns are gated in SOURCE but not in BEHAVIOUR.** `meeting-templates.guard.test.ts`
-  proves every `createServerFn` in the module names a `require*` guard and an archive check, which
-  is what the archive-gate sweep needs. Nothing calls `previewTemplateForMeeting` or
-  `applyTemplateToMeeting` with a plain member's session and asserts a refusal, so the guards are
-  verified by grep rather than by behaviour. Same for the zod validators — no test passes a
-  non-uuid.
+- **The template and agenda-editor server fns are gated in SOURCE but not in BEHAVIOUR.**
+  `meeting-templates-authz.guard.test.ts` proves every `createServerFn` in `meeting-templates.ts`
+  AND `meeting-agenda-edit.ts` names a `require*` guard and an archive check, which is what the
+  archive-gate sweep needs. Nothing calls `previewTemplateForMeeting`, `applyTemplateToMeeting`
+  or any of the eight agenda-editor fns with a plain member's session and asserts a refusal, so
+  the guards are verified by grep rather than by behaviour. Same for the zod validators — no test
+  passes a non-uuid, an over-long label or a fractional timing mark. Wider than it was: the
+  editor's eight fns have no backstop under the handler at all, since the `-logic` layer has no
+  session of its own.
   **Priority:** P3
+
+- **`copyTemplateForMeeting`'s reads of the SOURCE template are uncapped**, and will stop being
+  safe the moment "save this shape as a template" lands. It copies every
+  `meeting_template_roles` and `meeting_template_beats` row the source has, with no
+  `MAX_TEMPLATE_ROLES` / `MAX_TEMPLATE_BEATS` limit of its own. Unreachable today, and that is a
+  property of the DATA rather than of the code: a private per-meeting copy cannot itself be a
+  source (`listAvailableTemplates` excludes private copies from the picker), so every source is a
+  seeded template whose size the seed fixes. Turning an officer-authored private copy into a
+  source makes this an officer-sized read. Cap it in that change, not before, and cap it at the
+  seam the way `loadTemplateBeats` already does rather than at the writer alone.
+  **Priority:** P3
+
+- **`ensureAgendaDraft` takes no `FOR UPDATE`**, so two concurrent FIRST writes to one legacy
+  meeting (still pointing at a shared template) both miss the private copy, both call
+  `copyTemplateForMeeting`, and the loser surfaces a raw duplicate-key string from
+  `meeting_templates_meeting_id_unique` instead of a sentence. Narrow: it needs two officers
+  editing the same never-yet-edited agenda inside one round trip, it fails CLOSED (the
+  transaction rolls back, nothing is half-forked), and it self-heals on retry because by then the
+  first fork has landed. Not fixed in the fix wave because the lock belongs on the `meetings` row
+  `ensureAgendaDraft` already selects and every mutator in the module funnels through it — a
+  one-line change whose blast radius is worth measuring rather than assuming. `applySelfAdd`'s
+  `FOR UPDATE` is the precedent to follow.
+  **Priority:** P4
 
 - **`flexBannerMessage` hardcodes Table Topics.** `buildTemplateRows` carries a beat's `flex`
   through ungated, and `applyFlex` clamps to `TABLE_TOPICS_MIN/MAX` while the banner says "Table
@@ -424,11 +450,17 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
   **Completed:** this branch (configurable-agendas, 2026-08-22) — `/ship` to stamp the version.
 
 - **`buildTemplateRows`' repeat-block binding is no longer unexercised.** The configurable-agendas
-  spec's D4 resolved the two previously-unreachable shapes (a block with two role-owning rows; a
-  role row whose `roleKey` differs from its `repeatsRoleKey`) by CONSTRAINING rather than adding a
+  spec's D4 resolved the two previously-unreachable shapes by CONSTRAINING rather than adding a
   stored setting: `repeats_role_key` IS the once/per-holder flag — null means "once", the row's
-  own key means "per holder" — and a per-holder row must repeat over the exact role it names,
-  which makes both shapes unauthorable through the editor. The workaround this constraint made
-  unnecessary (routing the contest's tally and timers' report around multi-slot roles) was
-  dropped in the same pass: both beats now bind back to `ballot_counter` / `contest_timer`.
+  own key means "per holder" — and a per-holder row must repeat over the exact role it names.
+  The two shapes resolve DIFFERENTLY, and this entry said "both unauthorable" until the
+  end-of-branch fix wave corrected it. A role row whose `roleKey` differs from its
+  `repeatsRoleKey` is genuinely unauthorable, enforced in both halves: the editor's Role select
+  patches both keys together, and `assertRepeatBinding` refuses the merged row at the writer. A
+  block with two role-owning rows stays authorable and is simply DEFINED now — both rows name
+  the block's role, so each iteration binds both to that iteration's slot. A non-role row inside
+  a block (the contest's ballot minute) is untouched by the rule, which is why the check is keyed
+  on `kind`. The workaround this constraint made unnecessary (routing the contest's tally and
+  timers' report around multi-slot roles) was dropped in the same pass: both beats now bind back
+  to `ballot_counter` / `contest_timer`.
   **Completed:** this branch (configurable-agendas, 2026-08-22) — `/ship` to stamp the version.

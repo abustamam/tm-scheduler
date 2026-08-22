@@ -29,6 +29,7 @@ import {
 	MEETING_LOCKED_MESSAGE,
 } from "#/lib/meeting-lifecycle";
 import {
+	MAX_BEAT_MINUTES,
 	MAX_ROLE_REPEAT_SLOTS,
 	MAX_TEMPLATE_BEATS,
 	MAX_TEMPLATE_DETAIL_CHARS,
@@ -41,6 +42,7 @@ import {
 	type DbOrTx,
 	materializeTemplateRoles,
 	type ReleasedHolder,
+	roleDefScope,
 } from "./meeting-templates-logic";
 
 export type { ReleasedHolder };
@@ -287,12 +289,7 @@ export async function ensureAgendaDraft(
 			name: roleDefinitions.name,
 		})
 		.from(roleDefinitions)
-		.where(
-			and(
-				eq(roleDefinitions.clubId, meeting.clubId),
-				eq(roleDefinitions.templateId, meeting.templateId),
-			),
-		);
+		.where(roleDefScope(meeting.clubId, meeting.templateId));
 	if (oldDefs.length > 0) {
 		const newDefs = await conn
 			.select({
@@ -301,12 +298,7 @@ export async function ensureAgendaDraft(
 				name: roleDefinitions.name,
 			})
 			.from(roleDefinitions)
-			.where(
-				and(
-					eq(roleDefinitions.clubId, meeting.clubId),
-					eq(roleDefinitions.templateId, copyId),
-				),
-			);
+			.where(roleDefScope(meeting.clubId, copyId));
 		const newByKey = new Map<string, string>();
 		// `null` marks an AMBIGUOUS name — two new definitions sharing it (no
 		// unique index stops that, and `addAgendaRole` deliberately allows two
@@ -357,7 +349,19 @@ export async function ensureAgendaDraft(
  *  Enforced here too, at the writer, so an officer cannot build a template the
  *  renderer's own cap would then silently truncate. */
 function assertWithin(value: string, max: number, what: string): void {
-	if ([...value].length > max) {
+	// Decided from `.length` BEFORE spreading, in both directions. The spread
+	// allocates an array one element per code point, so doing it first means the
+	// whole input is materialized before anything decides it was too long — the
+	// #519 shape verbatim, on a value the zod layer bounds only loosely.
+	//
+	// UTF-16 length brackets the code-point count from both sides:
+	// `codePoints <= value.length <= 2 * codePoints`, since only a surrogate PAIR
+	// costs two units. So `value.length <= max` is certainly within, and
+	// `value.length > max * 2` is certainly over. Only the band between them is
+	// genuinely ambiguous, and it is bounded by `2 * max` — a few hundred code
+	// points here — which is what makes the spread affordable.
+	if (value.length <= max) return;
+	if (value.length > max * 2 || [...value].length > max) {
 		throw new Error(`That ${what} is too long (max ${max} characters).`);
 	}
 }
@@ -393,6 +397,68 @@ function assertMarks(current: MarkFields, patch: Partial<MarkFields>): void {
 	const set = merged.filter((v) => v != null).length;
 	if (set !== 0 && set !== 3) {
 		throw new Error("Timing marks need all three values, or none.");
+	}
+}
+
+/** The two role bindings a beat can carry, plus the `kind` that decides which
+ *  combinations of them are legal. */
+type RoleBinding = {
+	kind: "section" | "role" | "event";
+	roleKey: string | null;
+	repeatsRoleKey: string | null;
+};
+
+/**
+ * D4's once/per-holder rule, enforced against the MERGED row.
+ *
+ * `repeats_role_key` IS the once/per-holder flag — there is no separate
+ * column. A row is "once" when its own `repeats_role_key` is null, and "per
+ * holder" when it carries its OWN key. The spec (D4), `CONTEXT.md` and
+ * `TODOS.md` all record "a role row whose own role differs from its repeat
+ * key" as UNAUTHORABLE; until this function existed, all three said so and
+ * nothing enforced it.
+ *
+ * Merged, not patch-in-isolation, for the same reason `assertMarks` is: the
+ * reachable route is TWO legal patches. Tick "one row per person"
+ * (`{repeatsRoleKey: X}` on a row already naming X), then change the Role
+ * select (`{roleKey: Y}` alone). Neither patch is wrong by itself; the row
+ * they compose is, and a patch-only check waves both through.
+ *
+ * What the illegal row does: `buildTemplateRows` forms a repeat block on X,
+ * `blockRow.roleKey === repeatKey` is false so `bound` is empty, and the row
+ * prints once per holder of X, NUMBERED and naming nobody — on a contest run
+ * sheet. Meanwhile the editor's own `perHolder` computes false and the label
+ * reads "One row", so the editor lies about the row's state. And
+ * `removeAgendaRole` deletes beats on `roleKey = X OR repeatsRoleKey = X`, so
+ * removing X would silently take a row now bound to Y with it.
+ *
+ * The one shape that looks like a violation and is NOT: a NON-role row inside
+ * a repeat block — the seeded contest's "One minute of silence" carries
+ * `repeatsRoleKey: "contestant_prepared"` with no `roleKey` of its own, and
+ * `buildTemplateRows` handles it deliberately (`bound = []`, repeats as-is).
+ * That is why this is keyed on `kind` rather than simply requiring the two
+ * keys to match whenever either is set: forbidding it would make the shipped
+ * contest template unwritable. A `role` row with no `roleKey` is a different
+ * thing — `toRow` returns null for it, so it renders NOWHERE while still
+ * showing in the editor, and once the Role is "Nobody" the per-holder
+ * checkbox is hidden and no UI path can clear the leftover key.
+ */
+function assertRepeatBinding(
+	current: RoleBinding,
+	patch: { roleKey?: string | null; repeatsRoleKey?: string | null },
+): void {
+	const roleKey =
+		"roleKey" in patch ? (patch.roleKey ?? null) : current.roleKey;
+	const repeatsRoleKey =
+		"repeatsRoleKey" in patch
+			? (patch.repeatsRoleKey ?? null)
+			: current.repeatsRoleKey;
+	if (repeatsRoleKey === null) return;
+	if (current.kind !== "role" && roleKey === null) return;
+	if (repeatsRoleKey !== roleKey) {
+		throw new Error(
+			"A row that repeats per holder must repeat over the same role it names.",
+		);
 	}
 }
 
@@ -539,7 +605,7 @@ async function loadRowIds(
 }
 
 /** A caller-supplied row's current state, as resolved by `findRow`. */
-type RowLookup = { sortOrder: number } & MarkFields;
+type RowLookup = { sortOrder: number } & MarkFields & RoleBinding;
 
 /**
  * A caller-supplied row's current state, resolved against the meeting's
@@ -573,8 +639,12 @@ type RowLookup = { sortOrder: number } & MarkFields;
  * safe only for a row this SAME transaction just created a moment earlier,
  * which no concurrent transaction can have touched (it isn't committed yet).
  *
- * Also returns the row's CURRENT marks, so a mark patch can be validated
- * against the row as it will read AFTER the patch — see `assertMarks`.
+ * Also returns the row's CURRENT marks and role bindings, so a patch can be
+ * validated against the row as it will read AFTER the patch — see
+ * `assertMarks` and `assertRepeatBinding`. Both of those checks run on this
+ * PRE-fork read, which is exact rather than an approximation: a fork copies
+ * every column verbatim, so the merged row is identical either way, and
+ * refusing here means an illegal patch never triggers a fork write.
  */
 async function findRow(
 	conn: DbOrTx,
@@ -590,6 +660,9 @@ async function findRow(
 	const [row] = await conn
 		.select({
 			sortOrder: meetingTemplateBeats.sortOrder,
+			kind: meetingTemplateBeats.kind,
+			roleKey: meetingTemplateBeats.roleKey,
+			repeatsRoleKey: meetingTemplateBeats.repeatsRoleKey,
 			markGreen: meetingTemplateBeats.markGreen,
 			markYellow: meetingTemplateBeats.markYellow,
 			markRed: meetingTemplateBeats.markRed,
@@ -737,8 +810,11 @@ export async function updateAgendaRow(input: {
 			"repeat-role reference",
 		);
 	}
-	if (patch.minutes != null && (patch.minutes < 0 || patch.minutes > 600)) {
-		throw new Error("Minutes must be between 0 and 600.");
+	if (
+		patch.minutes != null &&
+		(patch.minutes < 0 || patch.minutes > MAX_BEAT_MINUTES)
+	) {
+		throw new Error(`Minutes must be between 0 and ${MAX_BEAT_MINUTES}.`);
 	}
 
 	await database.transaction(async (tx) => {
@@ -748,8 +824,10 @@ export async function updateAgendaRow(input: {
 			throw new Error("That agenda row is not part of this meeting.");
 		}
 		// Validated against the row as it will read AFTER this patch, not the
-		// patch in isolation — see `assertMarks`.
+		// patch in isolation — see `assertMarks` and `assertRepeatBinding`. Both
+		// run BEFORE `ensureAgendaDraft`, so a refused patch triggers no fork.
 		assertMarks(found, patch);
+		assertRepeatBinding(found, patch);
 
 		const { templateId, forked } = await ensureAgendaDraft(tx, input.meetingId);
 		// Against the FINAL templateId: a fork copies meeting_template_roles too,
@@ -939,10 +1017,19 @@ export async function addAgendaRole(input: {
 		});
 
 		// Materialize just this one role — see the docblock above for why NOT
-		// `materializeTemplateRoles`. `key` was just derived unique against
-		// `templateId`'s own roles and `templateId` was freshly forked or is
-		// already this meeting's own private row, so (clubId, templateId, key)
-		// cannot already exist; a plain insert is correct, not defensive.
+		// `materializeTemplateRoles`.
+		//
+		// A PLAIN insert, deliberately, and it rests on an invariant held
+		// elsewhere: `deriveRoleKey` uniquifies against `meeting_template_roles`
+		// ONLY, so (clubId, templateId, key) can be free of a declaration and
+		// still be TAKEN in `role_definitions` if anything ever leaves one
+		// behind. `removeAgendaRole` is the only thing that can, and it deletes
+		// by (club, template, key) rather than by the ids a slot resolved to,
+		// precisely so it cannot. That was not true until this fix wave — a role
+		// removed while holding no slot orphaned its definition, and re-adding
+		// the same name surfaced a raw
+		// `role_definitions_club_template_key_unique` violation, permanently.
+		// Anything that weakens that delete has to come back here first.
 		const [def] = await tx
 			.insert(roleDefinitions)
 			.values({
@@ -1080,16 +1167,34 @@ export async function planRoleRemoval(input: {
  * boundary there, so no club/template predicate is needed to keep this
  * scoped to the caller's own meeting.
  *
- * The `role_definitions` row(s) found that way are deleted ONLY when their
- * `templateId` equals `ensureAgendaDraft`'s resolved (this meeting's own
- * private) `templateId`. `role_definitions` is keyed per (club, template),
- * NOT per meeting — two meetings of ONE club that both still point at the
- * same SHARED template also share its materialized definitions, so deleting
- * a row this meeting's slot merely REFERENCES (rather than privately owns)
- * would either hit `role_slots.role_definition_id`'s RESTRICT from the OTHER
- * meeting's still-live slot (an unrelated meeting's edit throwing on this
+ * The `role_definitions` row is deleted by (club, template, KEY) — the
+ * template being `ensureAgendaDraft`'s resolved, this-meeting's-own private
+ * one — and NOT by the ids `resolveHeldSlotsForRole` returned. That
+ * distinction is the whole of this paragraph, because deleting by resolved id
+ * makes the delete conditional on a SLOT existing, and a role can legitimately
+ * hold none: `addAgendaRole` accepts `defaultCount: 0` (the editor's Places
+ * field coerces empty to 0), and `applyRemoveRoleSlot` has no last-slot guard.
+ * With no slot there is nothing to resolve, so the definition outlived its own
+ * declaration and its beats — staying `enabled` and template-scoped, which
+ * kept the meeting page's "+ Add role" picker offering a role the agenda no
+ * longer declared, and, worse, made the name PERMANENTLY unusable on that
+ * meeting: `deriveRoleKey` uniquifies against `meeting_template_roles` only,
+ * so re-adding derived the same key and the plain insert in `addAgendaRole`
+ * violated `role_definitions_club_template_key_unique` with a raw Postgres
+ * string. Keying on the role key is a strict superset of the resolved ids
+ * within this template, so nothing that used to be deleted stops being.
+ *
+ * The `templateId` predicate is the OWNERSHIP GATE, and it is load-bearing
+ * rather than incidental scoping. `role_definitions` is keyed per (club,
+ * template), NOT per meeting — two meetings of ONE club that both still point
+ * at the same SHARED template also share its materialized definitions, so
+ * deleting a row this meeting's slot merely REFERENCES (rather than privately
+ * owns) would either hit `role_slots.role_definition_id`'s RESTRICT from the
+ * OTHER meeting's still-live slot (an unrelated meeting's edit throwing on this
  * one's removal) or, worse, silently remove a definition a sibling meeting's
- * unconverted agenda still declares. Leaving a still-shared definition alone
+ * unconverted agenda still declares. `templateId` here is this meeting's own
+ * private copy BY CONSTRUCTION (`ensureAgendaDraft` forks one if it has to), so
+ * the gate holds on the fork path too. Leaving a still-shared definition alone
  * is deliberate, not a leak: this meeting's own slots for it are still fully
  * released and deleted either way. A correct fix that also reconciles the
  * SHARED row (copy-then-repoint only this meeting's slots) is bigger than
@@ -1179,18 +1284,24 @@ export async function removeAgendaRole(input: {
 						inArray(roleSlots.roleDefinitionId, defIds),
 					),
 				);
-			// Ownership-gated — see the docblock above. A definition this
-			// meeting's slot merely referenced via a still-shared template is
-			// left in place.
-			await tx
-				.delete(roleDefinitions)
-				.where(
-					and(
-						inArray(roleDefinitions.id, defIds),
-						eq(roleDefinitions.templateId, templateId),
-					),
-				);
 		}
+
+		// OUTSIDE the `defIds` block, and keyed on the ROLE KEY rather than on
+		// the ids those slots resolved to — see the docblock above. A role that
+		// holds no slot resolves no ids at all, and this delete is exactly as
+		// necessary there. Still ownership-gated: `roleDefScope` pins (club,
+		// template), and `templateId` is this meeting's own private copy, so a
+		// definition merely REFERENCED through a still-shared template is left in
+		// place. After the slot deletes, never before —
+		// `role_slots.role_definition_id` is ON DELETE RESTRICT.
+		await tx
+			.delete(roleDefinitions)
+			.where(
+				and(
+					roleDefScope(owner.clubId, templateId),
+					eq(roleDefinitions.key, input.roleKey),
+				),
+			);
 
 		// One statement, not two — either binding shape (`roleKey` or
 		// `repeatsRoleKey`, correction 2) removes the beat; a future edit to
@@ -1214,6 +1325,16 @@ export async function removeAgendaRole(input: {
 					eq(meetingTemplateRoles.key, input.roleKey),
 				),
 			);
+		// Close the gaps the beat delete just opened. `renumberRows` states that
+		// every writer in this module keeps `sortOrder` at 0..N-1 with no gaps,
+		// and that invariant is what lets its negative-floor pass be safe; this
+		// was the one writer that left holes in it.
+		const rest = await loadRowIds(tx, templateId);
+		await renumberRows(
+			tx,
+			templateId,
+			rest.map((r) => r.id),
+		);
 
 		await logActivity(tx, {
 			clubId: owner.clubId,

@@ -7,7 +7,12 @@
  */
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { MAX_ROLE_REPEAT_SLOTS } from "#/lib/meeting-template-limits";
+import {
+	MAX_BEAT_MINUTES,
+	MAX_ROLE_REPEAT_SLOTS,
+	MAX_TEMPLATE_DETAIL_CHARS,
+	MAX_TEMPLATE_LABEL_CHARS,
+} from "#/lib/meeting-template-limits";
 import type {
 	AgendaDraft,
 	AgendaDraftRole,
@@ -48,6 +53,27 @@ const rowInput = z.object({
 	meetingId: z.string().uuid(),
 	rowId: z.string().uuid(),
 });
+/**
+ * Every string here is bounded at TWICE its real cap, and every number at its
+ * real one. Two different jobs, so two different shapes.
+ *
+ * The strings' true caps are counted in CODE POINTS (`assertWithin`, and
+ * `capChars` at the renderer), which zod's `.max()` cannot express — it counts
+ * UTF-16 units. But UTF-16 length brackets code points from above:
+ * `codePoints <= length <= 2 * codePoints`. So `2 * cap` is the tightest bound
+ * that can never reject something the real check would accept, which keeps the
+ * friendly "too long (max N characters)" message as the one an officer sees,
+ * while stopping a megabyte of text at the edge before it reaches a spread.
+ * This is the edge bound, NOT a second copy of the cap — do not tighten it to
+ * the cap itself, that would reject legal emoji labels with a zod error.
+ *
+ * The three marks were `z.number()` with no `.int()` and no range, so a FLOAT
+ * reached an `integer` column and came back as a raw Postgres 500 where a 400
+ * belongs — and nothing else bounded them at all: `assertMarks` only checks
+ * all-three-or-none, never the values. Bounded to the same
+ * `MAX_BEAT_MINUTES` as `minutes`, since a mark is a minute offset within the
+ * beat it belongs to.
+ */
 const patchInput = rowInput.extend({
 	// Require at least one key: an empty `{}` validates as a well-formed patch,
 	// forks the meeting's template on its way in, and then 500s on drizzle's
@@ -55,14 +81,47 @@ const patchInput = rowInput.extend({
 	// request rejected up front.
 	patch: z
 		.object({
-			label: z.string().optional(),
-			detail: z.string().nullable().optional(),
-			minutes: z.number().int().optional(),
-			roleKey: z.string().nullable().optional(),
-			repeatsRoleKey: z.string().nullable().optional(),
-			markGreen: z.number().nullable().optional(),
-			markYellow: z.number().nullable().optional(),
-			markRed: z.number().nullable().optional(),
+			label: z
+				.string()
+				.max(MAX_TEMPLATE_LABEL_CHARS * 2)
+				.optional(),
+			detail: z
+				.string()
+				.max(MAX_TEMPLATE_DETAIL_CHARS * 2)
+				.nullable()
+				.optional(),
+			minutes: z.number().int().min(0).max(MAX_BEAT_MINUTES).optional(),
+			roleKey: z
+				.string()
+				.max(MAX_TEMPLATE_LABEL_CHARS * 2)
+				.nullable()
+				.optional(),
+			repeatsRoleKey: z
+				.string()
+				.max(MAX_TEMPLATE_LABEL_CHARS * 2)
+				.nullable()
+				.optional(),
+			markGreen: z
+				.number()
+				.int()
+				.min(0)
+				.max(MAX_BEAT_MINUTES)
+				.nullable()
+				.optional(),
+			markYellow: z
+				.number()
+				.int()
+				.min(0)
+				.max(MAX_BEAT_MINUTES)
+				.nullable()
+				.optional(),
+			markRed: z
+				.number()
+				.int()
+				.min(0)
+				.max(MAX_BEAT_MINUTES)
+				.nullable()
+				.optional(),
 		})
 		.refine((p) => Object.keys(p).length > 0, {
 			message: "Patch must set at least one field.",

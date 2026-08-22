@@ -132,9 +132,24 @@ setting:
 - **per holder** — one row per slot. On a single row this is today's fan-out; on consecutive
   rows it is today's repeat block.
 
-Two shapes recorded as undecided in `TODOS.md` — a block with two role-owning rows, and a role
-row whose own role differs from its repeat key — become **unauthorable** rather than untested.
-That closes the TODO by constraining the editor instead of specifying semantics nobody wants.
+Two shapes recorded as undecided in `TODOS.md` are resolved, but **not by the same
+mechanism** — an earlier version of this line said both became unauthorable, and only one did:
+
+- **A role row whose own role differs from its repeat key** becomes **unauthorable**. The
+  editor's Role select sends `role_key` and `repeats_role_key` together, and
+  `assertRepeatBinding` (`meeting-agenda-edit-logic.ts`) refuses the MERGED row server-side, so
+  a crafted request cannot author it either. Both halves are needed: the reachable route is two
+  patches that are each legal alone (tick per-holder, then change the role).
+- **A block with two role-owning rows** stays authorable and is now DEFINED by the same
+  constraint rather than left undecided: every role-owning row in a block necessarily names the
+  block's own role, so each iteration binds both rows to that iteration's slot and both print
+  naming that holder.
+
+The shape the constraint deliberately leaves alone is a NON-role row inside a block — the
+contest's ballot minute carries `repeats_role_key` with no `role_key` of its own, which is
+exactly what `buildTemplateRows`' empty `bound` is for. A rule stated as "the two keys must
+always match" would make the shipped contest template unwritable, which is why the check is
+keyed on the row's `kind`.
 
 Changing the default to "once" alters the seeded contest's output. That is the intended fix,
 and it reaches templated meetings only; standard nights do not read template beats.

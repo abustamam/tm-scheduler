@@ -659,6 +659,179 @@ describe.skipIf(!hasTestDb)("agenda row mutations", () => {
 		).rejects.toThrow(/too long/i);
 	});
 
+	/**
+	 * D4's "unauthorable" guarantee, enforced at the writer.
+	 *
+	 * `repeats_role_key` IS the once/per-holder flag: null means "once", and the
+	 * row's OWN key means "one row per holder". A per-holder row that repeats
+	 * over a DIFFERENT role than it names is the shape the spec (D4),
+	 * `CONTEXT.md` and `TODOS.md` all record as unauthorable — and it has to be
+	 * refused HERE rather than only in the editor, because a crafted request
+	 * reaches this function directly.
+	 *
+	 * Validated against the MERGED row, the same way `assertMarks` is, because
+	 * the reachable route is two separate patches: tick "one row per person"
+	 * (`{repeatsRoleKey: X}` on a row whose `roleKey` is already X), then change
+	 * the Role select (`{roleKey: Y}` alone). Neither patch is wrong in
+	 * isolation; the row they compose is.
+	 *
+	 * What the illegal row would print: `buildTemplateRows` forms a repeat block
+	 * on X, `blockRow.roleKey === repeatKey` is false so `bound` is empty, and
+	 * the row prints once per holder of X, numbered, naming nobody — while the
+	 * editor's own `perHolder` computes false and the label reads "One row".
+	 */
+	it("refuses a repeatsRoleKey naming a role other than the row's own, in ONE patch", async () => {
+		await givePrivateTemplate();
+		const other = await addAgendaRole({
+			meetingId: club.meetingId,
+			name: "Zoom Master",
+			category: "functionary",
+			defaultCount: 1,
+			isSpeakerRole: false,
+		});
+		const draft = await loadAgendaDraft(club.meetingId);
+		const row = draft?.rows.find((r) => r.kind === "role");
+		if (!row) throw new Error("no role row");
+		await expect(
+			updateAgendaRow({
+				meetingId: club.meetingId,
+				rowId: row.id,
+				patch: { roleKey: "chair", repeatsRoleKey: other.key },
+			}),
+		).rejects.toThrow(/repeat over the same role/i);
+	});
+
+	it("refuses a role change that leaves an existing repeatsRoleKey naming the OLD role", async () => {
+		// The two-click route an officer actually takes, and the one a
+		// patch-in-isolation check cannot see: each patch is legal alone.
+		await givePrivateTemplate();
+		const other = await addAgendaRole({
+			meetingId: club.meetingId,
+			name: "Zoom Master",
+			category: "functionary",
+			defaultCount: 1,
+			isSpeakerRole: false,
+		});
+		const draft = await loadAgendaDraft(club.meetingId);
+		const row = draft?.rows.find((r) => r.kind === "role");
+		if (!row) throw new Error("no role row");
+		// Tick "one row per person holding this role" — legal.
+		await updateAgendaRow({
+			meetingId: club.meetingId,
+			rowId: row.id,
+			patch: { repeatsRoleKey: "chair" },
+		});
+		// Change the Role select — legal in isolation, illegal as a merged row.
+		await expect(
+			updateAgendaRow({
+				meetingId: club.meetingId,
+				rowId: row.id,
+				patch: { roleKey: other.key },
+			}),
+		).rejects.toThrow(/repeat over the same role/i);
+
+		// And nothing was written: the row still reads as a legal per-holder row
+		// on `chair`, not the half-applied shape.
+		const after = await loadAgendaDraft(club.meetingId);
+		const same = after?.rows.find((r) => r.id === row.id);
+		expect(same?.roleKey).toBe("chair");
+		expect(same?.repeatsRoleKey).toBe("chair");
+	});
+
+	it("refuses clearing roleKey while repeatsRoleKey stays set", async () => {
+		// Setting the Role to "Nobody" used to leave `repeatsRoleKey` set with the
+		// per-holder checkbox now HIDDEN, so no UI path could clear it — and the
+		// row vanished from print, deck and pptx while still showing in the
+		// editor.
+		await givePrivateTemplate();
+		const draft = await loadAgendaDraft(club.meetingId);
+		const row = draft?.rows.find((r) => r.kind === "role");
+		if (!row) throw new Error("no role row");
+		await updateAgendaRow({
+			meetingId: club.meetingId,
+			rowId: row.id,
+			patch: { repeatsRoleKey: "chair" },
+		});
+		await expect(
+			updateAgendaRow({
+				meetingId: club.meetingId,
+				rowId: row.id,
+				patch: { roleKey: null },
+			}),
+		).rejects.toThrow(/repeat over the same role/i);
+	});
+
+	it("accepts a role change that patches both keys together", async () => {
+		// The shape the editor must send, and the proof the rule refuses the
+		// illegal MERGE rather than the mere presence of `repeatsRoleKey`.
+		await givePrivateTemplate();
+		const other = await addAgendaRole({
+			meetingId: club.meetingId,
+			name: "Zoom Master",
+			category: "functionary",
+			defaultCount: 1,
+			isSpeakerRole: false,
+		});
+		const draft = await loadAgendaDraft(club.meetingId);
+		const row = draft?.rows.find((r) => r.kind === "role");
+		if (!row) throw new Error("no role row");
+		await updateAgendaRow({
+			meetingId: club.meetingId,
+			rowId: row.id,
+			patch: { repeatsRoleKey: "chair" },
+		});
+		await updateAgendaRow({
+			meetingId: club.meetingId,
+			rowId: row.id,
+			patch: { roleKey: other.key, repeatsRoleKey: other.key },
+		});
+		const after = await loadAgendaDraft(club.meetingId);
+		const same = after?.rows.find((r) => r.id === row.id);
+		expect(same?.roleKey).toBe(other.key);
+		expect(same?.repeatsRoleKey).toBe(other.key);
+
+		// And clearing BOTH together is legal too — the "Nobody" path.
+		await updateAgendaRow({
+			meetingId: club.meetingId,
+			rowId: row.id,
+			patch: { roleKey: null, repeatsRoleKey: null },
+		});
+		const cleared = await loadAgendaDraft(club.meetingId);
+		const clearedRow = cleared?.rows.find((r) => r.id === row.id);
+		expect(clearedRow?.roleKey).toBeNull();
+		expect(clearedRow?.repeatsRoleKey).toBeNull();
+	});
+
+	it("still allows a NON-role row inside a repeat block — the contest's ballot minute", async () => {
+		// `contest-template.ts` ships exactly this: "One minute of silence",
+		// `kind: "event"`, no `roleKey` of its own, `repeatsRoleKey:
+		// "contestant_prepared"`. `buildTemplateRows` handles it deliberately
+		// (`bound = []`, repeats as-is), so a rule stated as "the two keys must
+		// always match" would make the shipped contest template unwritable. This
+		// is the case that keeps `assertRepeatBinding` keyed on `kind`.
+		const id = await givePrivateTemplate();
+		const [eventRow] = await testDb
+			.insert(meetingTemplateBeats)
+			.values({
+				templateId: id,
+				sortOrder: 2,
+				kind: "event",
+				label: "One minute of silence",
+				minutes: 1,
+			})
+			.returning({ id: meetingTemplateBeats.id });
+		if (!eventRow) throw new Error("event beat insert failed");
+		await updateAgendaRow({
+			meetingId: club.meetingId,
+			rowId: eventRow.id,
+			patch: { repeatsRoleKey: "chair" },
+		});
+		const after = await loadAgendaDraft(club.meetingId);
+		const stored = after?.rows.find((r) => r.id === eventRow.id);
+		expect(stored?.roleKey).toBeNull();
+		expect(stored?.repeatsRoleKey).toBe("chair");
+	});
+
 	it("moves a row up and down", async () => {
 		await givePrivateTemplate();
 		const before = await loadAgendaDraft(club.meetingId);
@@ -1412,6 +1585,197 @@ describe.skipIf(!hasTestDb)("agenda role mutations", () => {
 				patch: { roleKey: role.key },
 			}),
 		).rejects.toThrow(/not a role this template declares/i);
+	});
+
+	it("deletes the role_definitions row of a role holding NO slot, so its name stays reusable", async () => {
+		// A role can legitimately hold zero slots: `addAgendaRole` accepts
+		// `defaultCount: 0`, and `agenda-editor.tsx`'s Places field coerces an
+		// EMPTY input to 0, so this happens by accident rather than only on
+		// purpose. `resolveHeldSlotsForRole` resolves the doomed definitions
+		// THROUGH this meeting's own slots, so with no slot there is nothing to
+		// resolve — which is exactly why the definition delete must not be
+		// conditional on having resolved one.
+		await givePrivateTemplate();
+		const role = await addAgendaRole({
+			meetingId: club.meetingId,
+			name: "Zoom Master",
+			category: "functionary",
+			defaultCount: 0,
+			isSpeakerRole: false,
+		});
+		const slotsBefore = await testDb
+			.select({ id: roleSlots.id })
+			.from(roleSlots)
+			.innerJoin(
+				roleDefinitions,
+				eq(roleDefinitions.id, roleSlots.roleDefinitionId),
+			)
+			.where(
+				and(
+					eq(roleSlots.meetingId, club.meetingId),
+					eq(roleDefinitions.key, role.key),
+				),
+			);
+		expect(slotsBefore).toHaveLength(0);
+
+		const released = await removeAgendaRole({
+			meetingId: club.meetingId,
+			roleKey: role.key,
+			actorMemberId: null,
+		});
+		expect(released).toHaveLength(0);
+
+		// [[SYMPTOM 1]] The definition outlives its own declaration and its beats.
+		const orphans = await testDb
+			.select({ id: roleDefinitions.id })
+			.from(roleDefinitions)
+			.where(
+				and(
+					eq(roleDefinitions.clubId, club.clubId),
+					eq(roleDefinitions.key, role.key),
+				),
+			);
+		expect(orphans).toHaveLength(0);
+
+		// [[SYMPTOM 2]] It stays `enabled` and template-scoped, so the meeting
+		// page's "+ Add role" picker keeps offering a role the agenda no longer
+		// declares. That picker reads `role_definitions`, never
+		// `meeting_template_roles`, so the declaration delete alone is invisible
+		// to it.
+		const draft = await loadAgendaDraft(club.meetingId);
+		if (!draft) throw new Error("no draft");
+		const offered = await listRoleDefinitions(club.clubId, {
+			onlyEnabled: true,
+			templateId: draft.templateId,
+		});
+		expect(offered.map((r) => r.name)).not.toContain("Zoom Master");
+
+		// [[SYMPTOM 3]] and the worst one: `deriveRoleKey` uniquifies against
+		// `meeting_template_roles` ONLY, so re-adding the same name derives the
+		// SAME key and the plain insert violates
+		// `role_definitions_club_template_key_unique` — permanently, since
+		// nothing in the product can clear the orphan. Asserting the KEY rather
+		// than merely "it resolved" is what proves the re-add reused the freed
+		// name instead of quietly becoming `zoom_master_2`.
+		const again = await addAgendaRole({
+			meetingId: club.meetingId,
+			name: "Zoom Master",
+			category: "functionary",
+			defaultCount: 0,
+			isSpeakerRole: false,
+		});
+		expect(again.key).toBe(role.key);
+	});
+
+	it("deletes the role_definitions row when the meeting's last slot for the role was removed first", async () => {
+		// The second route to the same zero-slot state, and the one an officer
+		// reaches without ever touching the Places field: `applyRemoveRoleSlot`
+		// (the meeting page's per-slot remove) has no last-slot guard, so every
+		// slot of a role can be taken away before the role itself is removed.
+		// The delete below is the exact statement that server fn issues; calling
+		// it directly would drag its own lock and speaker-pairing gates into a
+		// test about `removeAgendaRole`.
+		await givePrivateTemplate();
+		const role = await addAgendaRole({
+			meetingId: club.meetingId,
+			name: "Ballot Counter",
+			category: "functionary",
+			defaultCount: 2,
+			isSpeakerRole: false,
+		});
+		const mine = await testDb
+			.select({ id: roleSlots.id })
+			.from(roleSlots)
+			.innerJoin(
+				roleDefinitions,
+				eq(roleDefinitions.id, roleSlots.roleDefinitionId),
+			)
+			.where(
+				and(
+					eq(roleSlots.meetingId, club.meetingId),
+					eq(roleDefinitions.key, role.key),
+				),
+			);
+		expect(mine).toHaveLength(2);
+		for (const slot of mine) {
+			await testDb.delete(roleSlots).where(eq(roleSlots.id, slot.id));
+		}
+
+		await removeAgendaRole({
+			meetingId: club.meetingId,
+			roleKey: role.key,
+			actorMemberId: null,
+		});
+
+		const orphans = await testDb
+			.select({ id: roleDefinitions.id })
+			.from(roleDefinitions)
+			.where(
+				and(
+					eq(roleDefinitions.clubId, club.clubId),
+					eq(roleDefinitions.key, role.key),
+				),
+			);
+		expect(orphans).toHaveLength(0);
+		const again = await addAgendaRole({
+			meetingId: club.meetingId,
+			name: "Ballot Counter",
+			category: "functionary",
+			defaultCount: 1,
+			isSpeakerRole: false,
+		});
+		expect(again.key).toBe(role.key);
+	});
+
+	it("leaves sortOrder at 0..N-1 with no gaps after removing a role's beats", async () => {
+		// `renumberRows` states that every writer in this module keeps sortOrder
+		// gapless, and its negative-floor first pass is only safe because of it.
+		// The role removal deleted beats without renumbering, so a template that
+		// had been through one read 0,2,3 — harmless in isolation, and exactly the
+		// kind of quietly-false invariant that breaks the next writer to trust it.
+		const id = await givePrivateTemplate();
+		const role = await addAgendaRole({
+			meetingId: club.meetingId,
+			name: "Zoom Master",
+			category: "functionary",
+			defaultCount: 1,
+			isSpeakerRole: false,
+		});
+		// Two more rows, so the deleted one sits in the MIDDLE and its removal
+		// leaves a hole rather than trimming the tail.
+		await testDb.insert(meetingTemplateBeats).values([
+			{
+				templateId: id,
+				sortOrder: 2,
+				kind: "role",
+				label: "Zoom check",
+				roleKey: role.key,
+				minutes: 2,
+			},
+			{
+				templateId: id,
+				sortOrder: 3,
+				kind: "event",
+				label: "Close",
+				minutes: 1,
+			},
+		]);
+
+		await removeAgendaRole({
+			meetingId: club.meetingId,
+			roleKey: role.key,
+			actorMemberId: null,
+		});
+
+		const after = await loadAgendaDraft(club.meetingId);
+		expect(after?.rows.map((r) => r.sortOrder)).toEqual(
+			after?.rows.map((_, i) => i),
+		);
+		expect(after?.rows.map((r) => r.label)).toEqual([
+			"OPENING",
+			"Welcome",
+			"Close",
+		]);
 	});
 
 	it("refuses to remove an undeclared role WITHOUT forking a shared template", async () => {

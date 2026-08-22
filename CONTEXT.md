@@ -442,9 +442,16 @@ be a real row. Copy-once: a later seed edit does not reach a club that already u
 template, exactly as editing `ROLE_TEMPLATE` never reaches an existing club.
 `scripts/resync-template-roles.ts` is the deliberate escape hatch.
 
-**SEVEN readers select role definitions by club, and every one is choosing a slot source** —
+**NINE readers select role definitions by club, and every one is choosing a slot source** —
 `role-definitions-logic`, `meetings-logic`, `batch-meetings-logic`, `schedule-topup-logic`,
-`slots-logic` (twice) and `meetings.ts`'s "+ Add role" picker. They share `roleDefScope`.
+`slots-logic` (twice), `meetings.ts`'s "+ Add role" picker, and `meeting-agenda-edit-logic`
+(twice, resolving the old and new definition sets when a first edit forks a shared template).
+SIX of them route through `roleDefScope` / `roleDefScopeOnly`; the other three —
+`meetings-logic`, `batch-meetings-logic`, `schedule-topup-logic` — inline
+`and(clubId, isNull(templateId))` because they are unconditionally the STANDARD scope, each
+carrying the same explanatory comment. That split is worth stating rather than rounding to
+"they share `roleDefScope`", which is what this line said while the two newest readers were
+inlining their own copy of the predicate (corrected in the configurable-agendas fix wave).
 Leave any unscoped and every standard meeting created after a club runs one contest gains that
 contest's roles, because `generateSlotRows` filters on `enabled`, not `template_id`. The two
 club-scoped bulk syncs additionally EXCLUDE templated meetings from their meeting sets.
@@ -468,7 +475,15 @@ lowest-sortOrder speaker role, so any others are frozen at their `defaultCount`)
 **`repeats_role_key` IS the once/per-holder flag — there is no separate column.** A block's row
 is "once" when its own `repeats_role_key` is null, and "per holder" when the row carries its own
 key (which a repeat block's binding rows must equal, per-holder rows repeating over the exact
-role they name — see the configurable-agendas spec's D4). A non-repeating role beat now emits
+role they name — see the configurable-agendas spec's D4). That equality is **enforced**, in two
+places, because it was asserted here for a release while nothing checked it: the editor's Role
+select patches both keys together, and `assertRepeatBinding` (`meeting-agenda-edit-logic.ts`)
+refuses the MERGED row at the writer so a crafted request cannot author it either. The check is
+keyed on `kind`, which is the part worth remembering: a NON-role row inside a block — the
+contest's ballot minute, `repeats_role_key` set with no `role_key` of its own — is legal and
+shipped, so "the two keys must always match" is the wrong rule and would make the seeded contest
+unwritable. What the illegal row did while unenforced: it printed once per holder of the OLD
+role, numbered and naming nobody, while the editor's own label read "One row". A non-repeating role beat now emits
 **one row naming every holder**, where it used to emit one row per slot — the earlier shape
 printed a joint activity like tallying or the timers' report once per slot-holder, double-
 counting its minutes when the role held two slots (fixed by binding those two beats back to

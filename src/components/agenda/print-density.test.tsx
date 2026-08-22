@@ -859,6 +859,25 @@ describe.skipIf(!hasChrome)(
 			// without this, a future change that accidentally made the fixture
 			// flow (see the docblock above) would still pass the floor below
 			// while testing nothing new versus the ceiling case.
+			//
+			// IF THE NEXT TWO ASSERTIONS ARE WHAT WENT RED ON CI: RETUNE, DO NOT
+			// REVERT. The margin above the cliff is ~1.4% (raw ≈ 0.730 against a
+			// 0.72 floor, measured on macOS), and this repo has a DOCUMENTED
+			// cross-platform delta of comparable size on a similar fixture —
+			// 6.88pt macOS vs 6.799pt Linux, ~1.2%, from font substitution moving
+			// wrap points (see this file's header and `agenda-print-type.ts`). So
+			// the fixture flipping into the flow branch on CI's Ubuntu was a KNOWN
+			// and accepted risk when it was sized, not a surprise and not a code
+			// defect. Accepted rather than pre-tuned for three reasons: it fails
+			// LOUDLY here instead of quietly measuring the wrong branch; guessing
+			// Linux metrics from macOS numbers means guessing from the same side
+			// of the same variance that caused the problem, whereas a red CI hands
+			// over the real Linux number; and the tightest squeeze is where
+			// printed type is smallest, so moving to a safer mid-band raw (~0.85)
+			// would weaken precisely what the floor assertion proves. The correct
+			// response is the sizing recipe in the docblock above — shrink content
+			// until it just barely stops flowing — using the OBSERVED Linux
+			// height.
 			const raw = (PAGE_H - 2) / agendaHeight(rows);
 			expect(raw).toBeGreaterThanOrEqual(MIN_FIT_SCALE);
 			expect(raw).toBeLessThan(0.75);

@@ -19,6 +19,7 @@ import {
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import {
+	MAX_BEAT_MINUTES,
 	MAX_ROLE_REPEAT_SLOTS,
 	MAX_TEMPLATE_DETAIL_CHARS,
 	MAX_TEMPLATE_LABEL_CHARS,
@@ -34,7 +35,12 @@ function errMessage(err: unknown): string {
 	return err instanceof Error ? err.message : "Something went wrong.";
 }
 
-/** "Ada Lovelace and Grace Hopper" — same join `MeetingTemplateDialog` uses. */
+/** "Ada Lovelace and Grace Hopper" — the THIRD verbatim copy of this join, with
+ *  `MeetingTemplateDialog`'s `joinNames` and `agenda-template-rows.ts`'s
+ *  `joinHolders`. Left duplicated on purpose: the two components are client-side
+ *  and the third is a pure lib the renderer imports, so a shared home would mean
+ *  a new module for six lines that have never disagreed. Counted here so the
+ *  next person weighing the extraction knows it is three, not two. */
 function joinNames(names: string[]): string {
 	return new Intl.ListFormat("en", {
 		style: "long",
@@ -103,12 +109,20 @@ export interface AgendaEditorProps {
 }
 
 /** Runs a mutation and toasts on failure — the shared shape every button below
- *  uses so a rejected server fn never becomes an unhandled promise. */
-async function runAction(action: () => Promise<unknown>): Promise<void> {
+ *  uses so a rejected server fn never becomes an unhandled promise.
+ *
+ *  Returns whether the save LANDED, which the text/number fields need and the
+ *  buttons ignore. A rejected save leaves an input showing a value the server
+ *  does not hold: `router.invalidate()` re-renders the same `row.id`, so React
+ *  keeps the existing state and nothing re-seeds it — and the next blur is a
+ *  no-op, because the field already agrees with itself. */
+async function runAction(action: () => Promise<unknown>): Promise<boolean> {
 	try {
 		await action();
+		return true;
 	} catch (err) {
 		toast.error(errMessage(err));
+		return false;
 	}
 }
 
@@ -234,41 +248,70 @@ function RowCard({
 	);
 	const [pending, setPending] = useState(false);
 
-	function commitLabel() {
-		if (label !== row.label)
-			void runAction(() => onUpdateRow(row.id, { label }));
+	/** What every control below does when the server refuses the value: put the
+	 *  card back to what the server still holds. `max=` on an input stops the
+	 *  spinner, not a paste, and the server's checks (0..MAX_BEAT_MINUTES, the
+	 *  code-point caps, the declared role keys, the repeat-binding rule) are the
+	 *  real ones — so without this the field goes on displaying a value that was
+	 *  never saved, and looks saved.
+	 *
+	 *  Only the four controls backed by LOCAL state need it, which is worth
+	 *  saying because the reasoning nearly went the other way. The route calls
+	 *  `router.invalidate()` only AFTER a successful mutation, so a rejection
+	 *  produces no re-render at all — which looks like it should strand the Role
+	 *  select and the per-holder checkbox too. It does not: those are bound
+	 *  straight to `row`, and React restores a controlled input's DOM value
+	 *  itself when an `onChange` sets no state. Verified by mutation rather than
+	 *  reasoned about — a test written for that case passed with the fix removed,
+	 *  so the fix was dropped instead of shipping a check that cannot fail. */
+	function reseed() {
+		setLabel(row.label);
+		setDetail(row.detail ?? "");
+		setMinutes(String(row.minutes));
+		setMarkGreen(row.markGreen == null ? "" : String(row.markGreen));
+		setMarkYellow(row.markYellow == null ? "" : String(row.markYellow));
+		setMarkRed(row.markRed == null ? "" : String(row.markRed));
 	}
-	function commitDetail() {
+
+	async function commitLabel() {
+		if (label === row.label) return;
+		if (!(await runAction(() => onUpdateRow(row.id, { label })))) reseed();
+	}
+	async function commitDetail() {
 		const next = detail === "" ? null : detail;
-		if (next !== row.detail)
-			void runAction(() => onUpdateRow(row.id, { detail: next }));
+		if (next === row.detail) return;
+		if (!(await runAction(() => onUpdateRow(row.id, { detail: next }))))
+			reseed();
 	}
-	function commitMinutes() {
+	async function commitMinutes() {
 		const parsed = Number.parseInt(minutes, 10);
 		if (Number.isNaN(parsed)) {
 			setMinutes(String(row.minutes));
 			return;
 		}
-		if (parsed !== row.minutes)
-			void runAction(() => onUpdateRow(row.id, { minutes: parsed }));
+		if (parsed === row.minutes) return;
+		if (!(await runAction(() => onUpdateRow(row.id, { minutes: parsed }))))
+			reseed();
 	}
-	function commitMarks() {
+	async function commitMarks() {
 		const green = parseIntOrNull(markGreen);
 		const yellow = parseIntOrNull(markYellow);
 		const red = parseIntOrNull(markRed);
 		if (
-			green !== row.markGreen ||
-			yellow !== row.markYellow ||
-			red !== row.markRed
+			green === row.markGreen &&
+			yellow === row.markYellow &&
+			red === row.markRed
 		) {
-			void runAction(() =>
-				onUpdateRow(row.id, {
-					markGreen: green,
-					markYellow: yellow,
-					markRed: red,
-				}),
-			);
+			return;
 		}
+		const ok = await runAction(() =>
+			onUpdateRow(row.id, {
+				markGreen: green,
+				markYellow: yellow,
+				markRed: red,
+			}),
+		);
+		if (!ok) reseed();
 	}
 
 	async function move(direction: "up" | "down") {
@@ -339,7 +382,7 @@ function RowCard({
 						disabled={!editable}
 						maxLength={MAX_TEMPLATE_LABEL_CHARS}
 						onChange={(e) => setLabel(e.target.value)}
-						onBlur={commitLabel}
+						onBlur={() => void commitLabel()}
 					/>
 				</div>
 				<div className="flex flex-col gap-1">
@@ -351,7 +394,7 @@ function RowCard({
 						disabled={!editable}
 						maxLength={MAX_TEMPLATE_DETAIL_CHARS}
 						onChange={(e) => setDetail(e.target.value)}
-						onBlur={commitDetail}
+						onBlur={() => void commitDetail()}
 					/>
 				</div>
 				<div className="flex flex-col gap-1">
@@ -361,11 +404,11 @@ function RowCard({
 						aria-label="Row minutes"
 						type="number"
 						min={0}
-						max={600}
+						max={MAX_BEAT_MINUTES}
 						value={minutes}
 						disabled={!editable}
 						onChange={(e) => setMinutes(e.target.value)}
-						onBlur={commitMinutes}
+						onBlur={() => void commitMinutes()}
 					/>
 				</div>
 
@@ -378,13 +421,26 @@ function RowCard({
 							className="h-9 rounded-md border border-input bg-transparent px-3 text-sm disabled:cursor-not-allowed disabled:opacity-50"
 							value={row.roleKey ?? ""}
 							disabled={!editable}
-							onChange={(e) =>
+							// Both keys move TOGETHER. `repeatsRoleKey` is the
+							// once/per-holder flag and a per-holder row must repeat over
+							// the exact role it names (D4) — patching `roleKey` alone is
+							// what let two clicks author a row that prints once per holder
+							// of the OLD role, numbered and naming nobody, while this
+							// editor's own label still read "One row". The server refuses
+							// that merge now, so sending one key alone would simply fail
+							// here.
+							onChange={(e) => {
+								const next = e.target.value === "" ? null : e.target.value;
 								void runAction(() =>
 									onUpdateRow(row.id, {
-										roleKey: e.target.value === "" ? null : e.target.value,
+										roleKey: next,
+										// "Nobody" clears both: with no role the checkbox
+										// below is hidden, so a leftover repeat key would
+										// have no UI path back out.
+										repeatsRoleKey: perHolder ? next : null,
 									}),
-								)
-							}
+								);
+							}}
 						>
 							<option value="">Nobody</option>
 							{roles.map((r) => (
@@ -407,6 +463,8 @@ function RowCard({
 							const checked = e.target.checked;
 							void runAction(() =>
 								onUpdateRow(row.id, {
+									// The row's OWN key, never another role's — that is the
+									// whole of the per-holder rule.
 									repeatsRoleKey: checked ? row.roleKey : null,
 								}),
 							);
@@ -424,10 +482,11 @@ function RowCard({
 						aria-label="Green mark minute"
 						type="number"
 						min={0}
+						max={MAX_BEAT_MINUTES}
 						value={markGreen}
 						disabled={!editable}
 						onChange={(e) => setMarkGreen(e.target.value)}
-						onBlur={commitMarks}
+						onBlur={() => void commitMarks()}
 					/>
 				</div>
 				<div className="flex flex-col gap-1">
@@ -437,10 +496,11 @@ function RowCard({
 						aria-label="Yellow mark minute"
 						type="number"
 						min={0}
+						max={MAX_BEAT_MINUTES}
 						value={markYellow}
 						disabled={!editable}
 						onChange={(e) => setMarkYellow(e.target.value)}
-						onBlur={commitMarks}
+						onBlur={() => void commitMarks()}
 					/>
 				</div>
 				<div className="flex flex-col gap-1">
@@ -450,10 +510,11 @@ function RowCard({
 						aria-label="Red mark minute"
 						type="number"
 						min={0}
+						max={MAX_BEAT_MINUTES}
 						value={markRed}
 						disabled={!editable}
 						onChange={(e) => setMarkRed(e.target.value)}
-						onBlur={commitMarks}
+						onBlur={() => void commitMarks()}
 					/>
 				</div>
 			</div>

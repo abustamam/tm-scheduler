@@ -84,6 +84,22 @@ export const MAX_TEMPLATE_ROLES = 40;
  */
 export const MAX_ROLE_REPEAT_SLOTS = 20;
 
+/**
+ * Minutes one beat may declare, and the ceiling on each of its three timing
+ * marks. Ten hours — far past any real agenda row, which is the point: this is
+ * the bound that keeps a hostile value out of an `integer` column, not a
+ * usability hint.
+ *
+ * In `lib/` rather than beside the writer for the reason `#519` records: the
+ * numbers a check is stated against have to be importable by a test that has
+ * no database. It is the one bound for THREE call sites that would otherwise
+ * each carry their own literal — `updateAgendaRow`'s minutes check, the
+ * `patchInput` zod schema in `meeting-agenda-edit.ts` (which is what turns a
+ * float or an out-of-range mark into a 400 rather than a raw Postgres 500 from
+ * an `integer` column), and the editor's own `max=` attributes.
+ */
+export const MAX_BEAT_MINUTES = 600;
+
 /** Characters in a beat's `label` (the activity name). */
 export const MAX_TEMPLATE_LABEL_CHARS = 120;
 

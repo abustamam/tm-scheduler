@@ -317,6 +317,12 @@ const REVIEWED_UNGATED: Record<string, string> = {
 	// are officer-gated and archive-gated. Not public readers at all —
 	// reshaping a meeting or its agenda is an officer action, alongside
 	// reschedule and cancel.
+	//
+	// The claim is CHECKED, not merely written: `meeting-templates-authz
+	// .guard.test.ts` sweeps both modules for the gate, and it derives the
+	// module set from THESE reason strings — a waiver worded this way for a fn
+	// in a module it does not read fails there until the module is enrolled.
+	// Do not reword the reason without looking at that regex.
 	previewTemplateForMeeting:
 		"officer-gated + archive-gated inside requireMeetingTemplateEditor (#agenda-templates)",
 	applyTemplateToMeeting:
