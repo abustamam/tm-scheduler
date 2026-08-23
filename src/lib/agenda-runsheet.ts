@@ -65,9 +65,12 @@ export type AgendaRow = {
 	/** The owning role's stable `role_definitions.key` (#445), for consumers that
 	 *  need to know WHICH role this row belongs to rather than what it is called.
 	 *  ABSENT on an event beat (Sergeant-at-Arms, President — officer positions,
-	 *  not meeting roles, and their `who` is a hardcoded string). Every ROLE row
-	 *  carries one, and it is the BEAT's: `matchesRole` admits a slot only when its
-	 *  key equals the beat's or is null, so a matched slot can never disagree.
+	 *  not meeting roles, and their `who` is a hardcoded string). NULL on a role
+	 *  row bound to nobody: "Add row: Role" stores no `role_key`, and "Nobody"
+	 *  puts an existing row back in that state, and both now RENDER as a plain
+	 *  labelled beat rather than being dropped (#C3). Where a role row DOES carry
+	 *  a key it is the BEAT's: `matchesRole` admits a slot only when its key
+	 *  equals the beat's or is null, so a matched slot can never disagree.
 	 *
 	 *  Exists because `who` stopped being canonical: the print layouts colour a
 	 *  row's spine by role, and they used to get away with matching English

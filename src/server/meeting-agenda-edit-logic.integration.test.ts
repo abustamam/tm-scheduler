@@ -6,7 +6,7 @@
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5433/tm_test \
  *     bunx vitest run src/server/meeting-agenda-edit-logic.integration.test.ts
  */
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
@@ -1206,12 +1206,13 @@ describe.skipIf(!hasTestDb)("agenda row mutations", () => {
 
 	it("does not touch a foreign row sharing the same sortOrder when a first write forks a private copy (update)", async () => {
 		// Same shape as the removeAgendaRow version above, isolating
-		// updateAgendaRow's OWN forked-path match instead: its `rowFilter` is
-		// `eq(sortOrder, found.sortOrder)` when `forked` is true. A mutating
-		// statement matching on sortOrder alone, with no templateId in its
-		// WHERE, would write this patch onto the copy's row AND the unrelated
-		// foreign row AND the shared source's own row all at once — three rows
-		// patched for a "rename one row" request.
+		// updateAgendaRow's OWN translation path instead: when the caller's row
+		// id came from another template, `translateRow` re-finds the row by
+		// `(templateId, sortOrder)` and the write is scoped to the id it
+		// returns. A mutating statement resolved on sortOrder alone, with no
+		// templateId in its WHERE, would write this patch onto the copy's row
+		// AND the unrelated foreign row AND the shared source's own row all at
+		// once — three rows patched for a "rename one row" request.
 		const { other, foreignId } = await seedForeignRow();
 		try {
 			const [shared] = await testDb
@@ -3017,5 +3018,426 @@ describe.skipIf(!hasTestDb)("ensureAgendaDraft under a lost fork race", () => {
 			.from(meetingTemplates)
 			.where(eq(meetingTemplates.meetingId, club.meetingId));
 		expect(copies).toHaveLength(1);
+	});
+});
+
+/**
+ * The hole the fix that added `addressableTemplateIds`' source arm opened.
+ *
+ * Resolving a caller's row id against the SHARED template a private copy was
+ * forked from, then re-locating it in the copy by `(templateId, sortOrder)`,
+ * is exact ONLY while the copy is still verbatim. `renumberRows` reassigns a
+ * dense 0..N-1 on every add, move and remove, so one inserted or deleted row
+ * shifts every later `sortOrder` by one — and a caller still holding the
+ * shared template's ids (a stale tab, a second editor) then translates onto a
+ * DIFFERENT beat and has it patched, deleted or reordered, with a success
+ * response either way.
+ *
+ * Before that arm shipped, the same request threw "That agenda row is not part
+ * of this meeting." — a safe, visible rejection. These tests pin that it does
+ * again. The shipped concurrency test above cannot see any of this: both of
+ * its concurrent calls are `updateAgendaRow`, which never renumbers, so its
+ * one interleaving is exactly the case where the translation IS exact.
+ */
+describe.skipIf(!hasTestDb)("translation onto a diverged private copy", () => {
+	/** A GLOBAL template with four distinguishable rows, pointed at by
+	 *  `club.meetingId` — an unedited converted meeting, whose row ids are what
+	 *  a page loaded before any edit is holding. */
+	async function giveSharedFourRows(): Promise<{
+		sharedId: string;
+		first: string;
+		second: string;
+	}> {
+		const [shared] = await testDb
+			.insert(meetingTemplates)
+			.values({
+				key: `diverge_${RUN}_${crypto.randomUUID().slice(0, 8)}`,
+				name: "Diverged",
+			})
+			.returning({ id: meetingTemplates.id });
+		if (!shared) throw new Error("template insert failed");
+		madeTemplates.push(shared.id);
+		const rows = await testDb
+			.insert(meetingTemplateBeats)
+			.values(
+				["First", "Second", "Third", "Fourth"].map((label, i) => ({
+					templateId: shared.id,
+					sortOrder: i,
+					kind: "event" as const,
+					label,
+					minutes: i,
+				})),
+			)
+			.returning({
+				id: meetingTemplateBeats.id,
+				sortOrder: meetingTemplateBeats.sortOrder,
+			});
+		await testDb
+			.update(meetings)
+			.set({ templateId: shared.id })
+			.where(eq(meetings.id, club.meetingId));
+		const ordered = rows.sort((a, b) => a.sortOrder - b.sortOrder);
+		const [first, second] = ordered;
+		if (!first || !second) throw new Error("fixture produced no rows");
+		return { sharedId: shared.id, first: first.id, second: second.id };
+	}
+
+	/**
+	 * Fork the private copy AND renumber it, which is the state no existing
+	 * test reaches: removing the row at sortOrder 0 shifts every later row down
+	 * by one, so the shared template's sortOrder 1 ("Second") now names "Third"
+	 * over here. Asserted rather than assumed — if the fixture ever stops
+	 * diverging, the tests below would pass for the wrong reason.
+	 */
+	async function forkAndShift(firstRowId: string): Promise<void> {
+		await removeAgendaRow({ meetingId: club.meetingId, rowId: firstRowId });
+		const draft = await loadAgendaDraft(club.meetingId);
+		if (!draft) throw new Error("draft vanished");
+		madeTemplates.push(draft.templateId);
+		expect(draft.rows.map((r) => r.label)).toEqual([
+			"Second",
+			"Third",
+			"Fourth",
+		]);
+		expect(draft.rows.map((r) => r.sortOrder)).toEqual([0, 1, 2]);
+	}
+
+	/** The copy's labels, read back through the same seam the officer sees. */
+	async function currentLabels(): Promise<string[]> {
+		const draft = await loadAgendaDraft(club.meetingId);
+		if (!draft) throw new Error("draft vanished");
+		return draft.rows.map((r) => r.label);
+	}
+
+	/**
+	 * The message the call rejected with, or `"resolved"`.
+	 *
+	 * Deliberately not `rejects.toThrow`: that assertion short-circuits, so
+	 * without the guard every one of these tests fails on "did not reject" and
+	 * says nothing about what it DID. Captured instead, so the agenda's own
+	 * state can be asserted first and the failure names the beat that was
+	 * silently rewritten.
+	 */
+	async function outcomeOf(call: Promise<unknown>): Promise<string> {
+		return call.then(
+			() => "resolved",
+			(err: Error) => err.message,
+		);
+	}
+
+	const REFUSED = "That agenda row is not part of this meeting.";
+	const UNCHANGED = ["Second", "Third", "Fourth"];
+
+	it("refuses an UPDATE that would land on a neighbouring beat", async () => {
+		const { first, second } = await giveSharedFourRows();
+		await forkAndShift(first);
+
+		const outcome = await outcomeOf(
+			updateAgendaRow({
+				meetingId: club.meetingId,
+				rowId: second,
+				patch: { label: "Hijacked" },
+			}),
+		);
+
+		// "Third" — the beat sitting at the translated sortOrder — is untouched.
+		expect(await currentLabels()).toEqual(UNCHANGED);
+		expect(outcome).toBe(REFUSED);
+	});
+
+	it("refuses a REMOVE that would delete a neighbouring beat", async () => {
+		const { first, second } = await giveSharedFourRows();
+		await forkAndShift(first);
+
+		const outcome = await outcomeOf(
+			removeAgendaRow({ meetingId: club.meetingId, rowId: second }),
+		);
+
+		// The neighbour still exists — this is the destructive half.
+		expect(await currentLabels()).toEqual(UNCHANGED);
+		expect(outcome).toBe(REFUSED);
+	});
+
+	it("refuses a MOVE that would reorder a neighbouring beat", async () => {
+		const { first, second } = await giveSharedFourRows();
+		await forkAndShift(first);
+
+		const outcome = await outcomeOf(
+			moveAgendaRow({
+				meetingId: club.meetingId,
+				rowId: second,
+				direction: "down",
+			}),
+		);
+
+		expect(await currentLabels()).toEqual(UNCHANGED);
+		expect(outcome).toBe(REFUSED);
+	});
+
+	it("refuses an ADD that would insert after a neighbouring beat", async () => {
+		const { first, second } = await giveSharedFourRows();
+		await forkAndShift(first);
+
+		const outcome = await outcomeOf(
+			addAgendaRow({
+				meetingId: club.meetingId,
+				afterRowId: second,
+				kind: "event",
+			}),
+		);
+
+		expect(await currentLabels()).toEqual(UNCHANGED);
+		expect(outcome).toBe(REFUSED);
+	});
+
+	/**
+	 * The same defect one layer in. `assertMarks` and `assertRepeatBinding` run
+	 * against the row `findRow` FOUND — on the shared template — and the write
+	 * then lands on the copy, so a copy that has moved on is validated against
+	 * a row that has not. The identity check alone does not close this: kind
+	 * and label both still match, and only re-running the pair against the
+	 * translated row refuses it.
+	 */
+	it("validates a patch against the row it will LAND on, not the one it found", async () => {
+		const [shared] = await testDb
+			.insert(meetingTemplates)
+			.values({
+				key: `marks_${RUN}_${crypto.randomUUID().slice(0, 8)}`,
+				name: "Marks",
+			})
+			.returning({ id: meetingTemplates.id });
+		if (!shared) throw new Error("template insert failed");
+		madeTemplates.push(shared.id);
+		const [sharedRow] = await testDb
+			.insert(meetingTemplateBeats)
+			.values({
+				templateId: shared.id,
+				sortOrder: 0,
+				kind: "event",
+				label: "Table Topics",
+				minutes: 15,
+			})
+			.returning({ id: meetingTemplateBeats.id });
+		if (!sharedRow) throw new Error("beat insert failed");
+		await testDb
+			.update(meetings)
+			.set({ templateId: shared.id })
+			.where(eq(meetings.id, club.meetingId));
+
+		// Forks, and gives the COPY all three marks. The shared source, which
+		// this caller's row id still names, has none.
+		await updateAgendaRow({
+			meetingId: club.meetingId,
+			rowId: sharedRow.id,
+			patch: { markGreen: 2, markYellow: 3, markRed: 4 },
+		});
+		const draft = await loadAgendaDraft(club.meetingId);
+		if (!draft) throw new Error("draft vanished");
+		madeTemplates.push(draft.templateId);
+
+		// Merged against the SOURCE, this clears the only mark it has — "none",
+		// which is legal. Merged against the COPY it leaves (null, 3, 4), the
+		// silent hole `assertMarks` exists to refuse.
+		const outcome = await outcomeOf(
+			updateAgendaRow({
+				meetingId: club.meetingId,
+				rowId: sharedRow.id,
+				patch: { markGreen: null },
+			}),
+		);
+
+		// State first, for the reason `outcomeOf` exists: this is the line that
+		// shows the hole.
+		const after = await loadAgendaDraft(club.meetingId);
+		expect([
+			after?.rows[0]?.markGreen,
+			after?.rows[0]?.markYellow,
+			after?.rows[0]?.markRed,
+		]).toEqual([2, 3, 4]);
+		expect(outcome).toBe("Timing marks need all three values, or none.");
+	});
+});
+
+/**
+ * The deadlock the `FOR UPDATE` lock introduced, reproduced rather than
+ * asserted about.
+ *
+ * `ensureAgendaDraft` takes `meetings FOR UPDATE` FIRST and re-points this
+ * meeting's `role_slots` late; `applyTemplateConversion` writes `role_slots`
+ * first and updates `meetings` LAST. Opposite orders over the same two
+ * resources is a lock cycle, Postgres breaks it with SQLSTATE 40P01, and that
+ * is not a unique violation — so before the catch, `runAction` toasted the
+ * driver's own `deadlock detected` at an officer.
+ *
+ * Which pair cycles is worth being exact about, because the obvious one does
+ * NOT. `meeting_templates.meeting_id` is a foreign key, so inserting a private
+ * copy takes `FOR KEY SHARE` on the referenced `meetings` row — which the
+ * edit's `FOR UPDATE` conflicts with. That serializes the two INSERT-vs-lock
+ * orderings completely: whichever side reaches `meetings` first, the other
+ * simply waits. `role_slots` is the resource with no such interlock, and the
+ * conversion arm that reaches it with no `meetings` lock held at all is the
+ * one that removes a template (`templateId === null`), which inserts nothing
+ * and therefore takes nothing until its final update.
+ *
+ * The conversion side is played by hand — hold this meeting's slots, then ask
+ * for its `meetings` row — because `applyTemplateConversion` opens its own
+ * transaction and offers nowhere to pause between those two writes. Hand-played
+ * so the cycle is BUILT rather than raced for; a version that just fires both
+ * concurrently deadlocks on some interleavings and passes vacuously on the
+ * rest. The ordering below decides only the VICTIM, since each waiter arms its
+ * own `deadlock_timeout` (1s here) when it begins waiting and whichever fires
+ * first runs the detector and aborts itself. Making the agenda edit wait first
+ * makes it the side that reports.
+ */
+describe.skipIf(!hasTestDb)("ensureAgendaDraft against a conversion", () => {
+	/** Block until a backend is actually WAITING to write `role_slots` — polled
+	 *  rather than slept for, so the cycle is confirmed built instead of
+	 *  assumed. Matched on the statement text as well as the wait, since a
+	 *  parallel test FILE sharing `tm_test` can be waiting on something else. */
+	async function waitForBlockedSlotWrite(): Promise<void> {
+		for (let i = 0; i < 150; i++) {
+			const waiting = await testDb.execute(
+				sql`select count(*)::int as n from pg_stat_activity
+				    where datname = current_database()
+				      and wait_event_type = 'Lock'
+				      and query ilike 'update "role_slots"%'`,
+			);
+			if (Number(waiting.rows[0]?.n ?? 0) > 0) return;
+			await new Promise((r) => setTimeout(r, 20));
+		}
+		throw new Error("the agenda edit never blocked on role_slots");
+	}
+
+	it("reports a deadlock as a sentence, not the driver's message", async () => {
+		const [shared] = await testDb
+			.insert(meetingTemplates)
+			.values({
+				key: `deadlock_${RUN}_${crypto.randomUUID().slice(0, 8)}`,
+				name: "Deadlocked",
+			})
+			.returning({ id: meetingTemplates.id });
+		if (!shared) throw new Error("template insert failed");
+		madeTemplates.push(shared.id);
+		// A DECLARED role, materialized directly against the shared template and
+		// claimed by a slot on this meeting — the pre-private-copy shape. It is
+		// what makes `ensureAgendaDraft`'s re-point step reach `role_slots` at
+		// all; without a matched definition the fork writes no slot and there is
+		// no second resource to cycle over.
+		await testDb.insert(meetingTemplateRoles).values({
+			templateId: shared.id,
+			key: "zoom_master",
+			name: "Zoom Master",
+			category: "functionary",
+			defaultCount: 1,
+			sortOrder: 0,
+			isSpeakerRole: false,
+		});
+		const [zoomDef] = await testDb
+			.insert(roleDefinitions)
+			.values({
+				clubId: club.clubId,
+				templateId: shared.id,
+				key: "zoom_master",
+				name: "Zoom Master",
+				category: "functionary",
+				defaultCount: 1,
+				sortOrder: 0,
+				isSpeakerRole: false,
+			})
+			.returning({ id: roleDefinitions.id });
+		if (!zoomDef) throw new Error("role definition insert failed");
+		await testDb.insert(meetingTemplateBeats).values({
+			templateId: shared.id,
+			sortOrder: 0,
+			kind: "role",
+			label: "Zoom slot",
+			roleKey: "zoom_master",
+			minutes: 1,
+		});
+		await testDb
+			.update(meetings)
+			.set({ templateId: shared.id })
+			.where(eq(meetings.id, club.meetingId));
+		await testDb.insert(roleSlots).values({
+			meetingId: club.meetingId,
+			roleDefinitionId: zoomDef.id,
+			slotIndex: 0,
+			status: "open",
+		});
+
+		let slotsLocked!: () => void;
+		const conversionHasSlots = new Promise<void>((r) => {
+			slotsLocked = r;
+		});
+		let releaseConversion!: () => void;
+		const conversionGate = new Promise<void>((r) => {
+			releaseConversion = r;
+		});
+		// Thrown to roll the hand-played conversion back: whichever way the
+		// deadlock falls, this test must leave the meeting as it found it.
+		const ROLLBACK = new Error("rollback the hand-played conversion");
+
+		const conversion = testDb.transaction(async (tx) => {
+			// The conversion's re-point/release writes, in lock terms: this
+			// meeting's slots, held while it still holds nothing on `meetings`.
+			await tx
+				.select({ id: roleSlots.id })
+				.from(roleSlots)
+				.where(eq(roleSlots.meetingId, club.meetingId))
+				.for("update");
+			slotsLocked();
+			await conversionGate;
+			// Its final statement — and the second half of the cycle, since the
+			// edit is holding this row `FOR UPDATE`.
+			await tx
+				.update(meetings)
+				.set({ templateId: null })
+				.where(eq(meetings.id, club.meetingId));
+			throw ROLLBACK;
+		});
+
+		// Started only once the conversion holds the slots, so the edit takes
+		// `meetings` cleanly and blocks on the re-point.
+		await conversionHasSlots;
+		const edit = testDb.transaction((tx) =>
+			ensureAgendaDraft(tx, club.meetingId),
+		);
+		await waitForBlockedSlotWrite();
+		// Cushion, so the edit's `deadlock_timeout` is armed comfortably before
+		// the conversion's and the victim is not decided by the poll interval.
+		// It also absorbs a false positive from the poll: a parallel test file
+		// blocked on its own `role_slots` write would release the conversion
+		// early, and 250ms is far longer than the handful of statements the
+		// edit needs to reach its own wait.
+		await new Promise((r) => setTimeout(r, 250));
+		releaseConversion();
+		const [conversionResult, editResult] = await Promise.allSettled([
+			conversion,
+			edit,
+		]);
+
+		expect(editResult.status).toBe("rejected");
+		const reason =
+			editResult.status === "rejected"
+				? (editResult.reason as Error)
+				: new Error("the agenda edit was not the deadlock victim");
+		expect(reason.message).toBe(
+			"Someone else was changing this meeting. Please try again.",
+		);
+		// The whole point: none of the driver's own vocabulary reaches a toast.
+		expect(reason.message).not.toMatch(/deadlock|Failed query|40P01/i);
+
+		// The hand-played conversion rolled back either way — by its own throw
+		// if it survived, by Postgres if it was the victim instead.
+		expect(
+			conversionResult.status === "rejected"
+				? (conversionResult.reason as Error).message
+				: "fulfilled",
+		).not.toBe("fulfilled");
+		const copies = await testDb
+			.select({ id: meetingTemplates.id })
+			.from(meetingTemplates)
+			.where(eq(meetingTemplates.meetingId, club.meetingId));
+		expect(copies).toEqual([]);
 	});
 });

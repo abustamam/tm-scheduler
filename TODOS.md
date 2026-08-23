@@ -195,17 +195,24 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
   seam the way `loadTemplateBeats` already does rather than at the writer alone.
   **Priority:** P3
 
-- **`ensureAgendaDraft` takes no `FOR UPDATE`**, so two concurrent FIRST writes to one legacy
-  meeting (still pointing at a shared template) both miss the private copy, both call
-  `copyTemplateForMeeting`, and the loser surfaces a raw duplicate-key string from
-  `meeting_templates_meeting_id_unique` instead of a sentence. Narrow: it needs two officers
-  editing the same never-yet-edited agenda inside one round trip, it fails CLOSED (the
-  transaction rolls back, nothing is half-forked), and it self-heals on retry because by then the
-  first fork has landed. Not fixed in the fix wave because the lock belongs on the `meetings` row
-  `ensureAgendaDraft` already selects and every mutator in the module funnels through it — a
-  one-line change whose blast radius is worth measuring rather than assuming. `applySelfAdd`'s
-  `FOR UPDATE` is the precedent to follow.
-  **Priority:** P4
+- **`defaultCount` is unenforced after a re-point, and `slotsAdded` over-reports.**
+  `applyTemplateConversion`'s `existingDefIds` is "any target def some surviving slot maps to", so
+  `toCreate` skips a matched role regardless of how many slots it actually has — if the target
+  declares 3 contestants and the meeting has 2, the apply keeps 2 and creates 0 while `summarize`
+  reports `slotsAdded = 1`. Reachable today: use the agenda's +/- slot controls, then re-pick the
+  same template. Preview and apply still AGREE with each other (both derive from the same
+  `planConversion`), which is why nothing fails — the number they agree on is just not what
+  happens. A fix has to count slots per matched def rather than testing set membership, and has to
+  decide whether a re-point should also DELETE surplus slots, which is a policy question, not a
+  bug fix.
+  **Priority:** P3
+
+- **The re-point path skips evaluator↔speaker linking.** `linkEvaluatorsToSpeakers` only pairs
+  rows within `inserted`, so a newly created evaluator slot sitting beside a KEPT speaker slot is
+  left with `evaluatesSlotId` null. Unreachable with the shipped seeds — the contest declares no
+  evaluator role and shares no keys with `ROLE_TEMPLATE`, so a conversion never produces the
+  mixed kept/inserted shape — and reachable as soon as a club authors a template that does.
+  **Priority:** P3
 
 - **`flexBannerMessage` hardcodes Table Topics.** `buildTemplateRows` carries a beat's `flex`
   through ungated, and `applyFlex` clamps to `TABLE_TOPICS_MIN/MAX` while the banner says "Table

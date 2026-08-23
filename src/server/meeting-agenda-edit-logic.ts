@@ -181,12 +181,51 @@ export async function loadAgendaDraft(
 const AGENDA_CONCURRENT_EDIT_MESSAGE =
 	"Another change to this agenda was saved at the same moment. Reload and try again.";
 
-/** SQLSTATE 23505, wherever the driver hung it: drizzle wraps a `pg` error as
+/**
+ * What an officer reads when Postgres broke a lock cycle by killing this
+ * transaction — again a sentence, never `deadlock detected`.
+ *
+ * Reachable because `ensureAgendaDraft` and `applyTemplateConversion` take the
+ * same two resources in OPPOSITE orders on one meeting: this function takes
+ * `meetings FOR UPDATE` first and re-points that meeting's `role_slots` late,
+ * while a conversion writes `role_slots` first and updates `meetings` last.
+ * A conversion and a first agenda edit in flight together therefore deadlock,
+ * and 40P01 is not a unique violation, so without this the driver's own
+ * message reached the toast.
+ *
+ * Note it is `role_slots` that cycles, NOT `meeting_templates`, even though
+ * that is the pair the two lock orders appear to fight over.
+ * `meeting_templates.meeting_id` is a foreign key, so inserting a private copy
+ * takes `FOR KEY SHARE` on the referenced `meetings` row — which conflicts
+ * with the `FOR UPDATE` above and serializes those two orderings completely,
+ * with no cycle available. The conversion arm that reaches `role_slots`
+ * holding nothing on `meetings` is the one that REMOVES a template
+ * (`templateId === null`), which inserts no copy and so takes no key share.
+ * `meeting-agenda-edit-logic.integration.test.ts` builds exactly that cycle.
+ *
+ * No automatic retry: the loser's transaction is already rolled back, and a
+ * silent retry would re-run a write the officer has no way to know happened
+ * twice. Asking is honest and the case is rare.
+ */
+const AGENDA_DEADLOCK_MESSAGE =
+	"Someone else was changing this meeting. Please try again.";
+
+/** SQLSTATE `code`, wherever the driver hung it: drizzle wraps a `pg` error as
  *  the `cause` of its own, and a bare `pg` error carries `code` itself. */
-function isUniqueViolation(err: unknown): boolean {
+function isSqlState(err: unknown, code: string): boolean {
 	const direct = (err as { code?: unknown } | null)?.code;
 	const wrapped = (err as { cause?: { code?: unknown } } | null)?.cause?.code;
-	return direct === "23505" || wrapped === "23505";
+	return direct === code || wrapped === code;
+}
+
+/** SQLSTATE 23505 — a unique index rejected an insert. */
+function isUniqueViolation(err: unknown): boolean {
+	return isSqlState(err, "23505");
+}
+
+/** SQLSTATE 40P01 — Postgres chose this transaction as a deadlock victim. */
+function isDeadlock(err: unknown): boolean {
+	return isSqlState(err, "40P01");
 }
 
 /** What `ensureAgendaDraft` resolved: the meeting's own private template id,
@@ -195,13 +234,20 @@ export type AgendaDraftHandle = {
 	templateId: string;
 	/** True only on the call that performed the copy.
 	 *
-	 *  NOT what the mutators branch on. Deciding how to re-locate a
-	 *  caller-supplied row is `found.templateId !== templateId` instead, because
-	 *  the row ids can be stale from a fork some OTHER call performed — this
-	 *  flag is false in exactly that case and the translation was skipped, which
-	 *  is how the loser of a concurrent first write ended up filtering a shared
-	 *  template's row id against a private copy and matching nothing. Kept
-	 *  because "did this call write" is worth reporting on its own. */
+	 *  RETAINED FOR TESTS — no production caller reads it. Deciding how to
+	 *  re-locate a caller-supplied row is `found.templateId !== templateId`
+	 *  instead, because the row ids can be stale from a fork some OTHER call
+	 *  performed — this flag is false in exactly that case and the translation
+	 *  was skipped, which is how the loser of a concurrent first write ended up
+	 *  filtering a shared template's row id against a private copy and matching
+	 *  nothing.
+	 *
+	 *  Its one reader is the residual-race test in
+	 *  `meeting-agenda-edit-logic.integration.test.ts` ("adopts the existing
+	 *  copy instead of surfacing a unique violation"), where it is the direct
+	 *  evidence that the catch ADOPTED the racer's copy rather than writing a
+	 *  second one — a thing the returned `templateId` alone cannot say. Delete
+	 *  it and that assertion has to be rebuilt out of row counts. */
 	forked: boolean;
 };
 
@@ -245,8 +291,32 @@ export type AgendaDraftHandle = {
  * now exists and is the answer. `copyTemplateForMeeting` runs inside a nested
  * transaction (a SAVEPOINT when `conn` is already one) so a rejected insert
  * does not poison the caller's transaction on the way back out.
+ *
+ * The OTHER concurrency failure the lock introduced is a deadlock, and it is
+ * translated by the wrapper rather than handled here — see
+ * `AGENDA_DEADLOCK_MESSAGE`. Wrapped around the WHOLE body, not bolted onto
+ * the unique-violation catch below, because 40P01 can be raised by ANY
+ * statement that waits — the `FOR UPDATE` at the top, the `meeting_templates`
+ * insert in the middle and the `role_slots` re-point near the end are all lock
+ * waits, and only the last of them is where the conversion cycle is known to
+ * land. Catching at one of them would be catching the case we happened to
+ * find.
  */
 export async function ensureAgendaDraft(
+	conn: DbOrTx,
+	meetingId: string,
+): Promise<AgendaDraftHandle> {
+	try {
+		return await resolveAgendaDraft(conn, meetingId);
+	} catch (err) {
+		if (!isDeadlock(err)) throw err;
+		throw new Error(AGENDA_DEADLOCK_MESSAGE);
+	}
+}
+
+/** `ensureAgendaDraft`'s body — see its docblock for all of it. Split out only
+ *  so the deadlock translation can wrap every statement below at once. */
+async function resolveAgendaDraft(
 	conn: DbOrTx,
 	meetingId: string,
 ): Promise<AgendaDraftHandle> {
@@ -643,8 +713,13 @@ async function loadRowIds(
 
 /** A caller-supplied row's current state, as resolved by `findRow`, plus the
  *  template it was actually found in — which the mutators compare against
- *  `ensureAgendaDraft`'s answer to decide how to re-locate it. */
-type RowLookup = { sortOrder: number; templateId: string } & MarkFields &
+ *  `ensureAgendaDraft`'s answer to decide how to re-locate it. `label` is here
+ *  for `translateRow`'s identity check, not for any patch. */
+type RowLookup = {
+	sortOrder: number;
+	templateId: string;
+	label: string;
+} & MarkFields &
 	RoleBinding;
 
 /**
@@ -727,10 +802,12 @@ async function addressableTemplateIds(
  * first edit land on the row the officer actually clicked, instead of erroring
  * or silently misfiring.
  *
- * The mutators translate by `sortOrder` exactly when the template this row was
- * found in is NOT the one the write lands on — `found.templateId !==
- * templateId` — and match by `id` otherwise. That covers the fork this same
- * call performed AND the fork a concurrent call performed a moment earlier;
+ * The mutators translate through `translateRow` — by `sortOrder`, and only
+ * after checking the row it lands on is the SAME BEAT — exactly when the
+ * template this row was found in is NOT the one the write lands on
+ * (`found.templateId !== templateId`), and match by `id` otherwise. That
+ * covers the fork this same call performed AND the fork a concurrent call
+ * performed a moment earlier;
  * the older `forked` flag saw only the first, so the loser of a race resolved
  * a shared row id and then filtered on it against the private copy, matching
  * nothing. Matching by sortOrder UNCONDITIONALLY would reopen a different bug:
@@ -761,6 +838,7 @@ async function findRow(
 		.select({
 			sortOrder: meetingTemplateBeats.sortOrder,
 			templateId: meetingTemplateBeats.templateId,
+			label: meetingTemplateBeats.label,
 			kind: meetingTemplateBeats.kind,
 			roleKey: meetingTemplateBeats.roleKey,
 			repeatsRoleKey: meetingTemplateBeats.repeatsRoleKey,
@@ -777,6 +855,78 @@ async function findRow(
 		)
 		.limit(1);
 	return row ?? null;
+}
+
+/** The one sentence every mutator answers a row it will not touch with. */
+const ROW_NOT_IN_MEETING_MESSAGE =
+	"That agenda row is not part of this meeting.";
+
+/**
+ * `found`'s counterpart on `templateId` — the private copy's OWN row for a row
+ * the caller named on the shared template it was forked from — or a thrown
+ * `ROW_NOT_IN_MEETING_MESSAGE`.
+ *
+ * The translation is `(templateId, sortOrder)`, and that mapping is exact ONLY
+ * while the copy is still verbatim. `renumberRows` reassigns a dense 0..N-1 on
+ * every add, move and remove, so one inserted or deleted row shifts every later
+ * `sortOrder` by one — after which a caller holding the SHARED template's row
+ * ids (a stale tab, a second editor) resolves through `addressableTemplateIds`'
+ * source arm, translates to a `sortOrder` that now belongs to a DIFFERENT beat,
+ * and gets that beat patched or deleted with a success response. Before the
+ * source arm existed the same request threw this error; translating without
+ * checking turned a safe, visible rejection into a silent wrong-row write.
+ *
+ * So the target's identity is verified before it is returned: same `kind`, and
+ * the same `label` OR the same `roleKey`. Either half alone is too weak —
+ * `kind` repeats across a whole agenda, and two beats can share a label — and
+ * requiring BOTH is too strong, because the everyday case this translation
+ * exists for is a second in-flight POST whose sibling already renamed the row
+ * (see `AGENDA_CONCURRENT_EDIT_MESSAGE`'s docblock), where the label has
+ * legitimately moved on but the role binding has not. The `roleKey` arm
+ * requires a NON-NULL key on both sides on purpose: two section beats both
+ * carrying `null` would otherwise "match" on nothing at all.
+ *
+ * The verbatim case — the double-POST this whole path exists for — passes
+ * trivially, since a copy differs from its source in no column at all. The
+ * diverged case is rejected exactly as it was before the source arm shipped.
+ *
+ * Returns the target's own `id`, and every caller then filters on THAT rather
+ * than on `sortOrder`: an id is immutable, so the verify-then-write gap cannot
+ * be re-pointed by a renumber the way a position can.
+ */
+async function translateRow(
+	conn: DbOrTx,
+	templateId: string,
+	found: RowLookup,
+): Promise<{ id: string } & RowLookup> {
+	const [target] = await conn
+		.select({
+			id: meetingTemplateBeats.id,
+			sortOrder: meetingTemplateBeats.sortOrder,
+			templateId: meetingTemplateBeats.templateId,
+			label: meetingTemplateBeats.label,
+			kind: meetingTemplateBeats.kind,
+			roleKey: meetingTemplateBeats.roleKey,
+			repeatsRoleKey: meetingTemplateBeats.repeatsRoleKey,
+			markGreen: meetingTemplateBeats.markGreen,
+			markYellow: meetingTemplateBeats.markYellow,
+			markRed: meetingTemplateBeats.markRed,
+		})
+		.from(meetingTemplateBeats)
+		.where(
+			and(
+				eq(meetingTemplateBeats.templateId, templateId),
+				eq(meetingTemplateBeats.sortOrder, found.sortOrder),
+			),
+		)
+		.limit(1);
+	if (!target) throw new Error(ROW_NOT_IN_MEETING_MESSAGE);
+	const sameLabel = target.label === found.label;
+	const sameRole = found.roleKey !== null && target.roleKey === found.roleKey;
+	if (target.kind !== found.kind || !(sameLabel || sameRole)) {
+		throw new Error(ROW_NOT_IN_MEETING_MESSAGE);
+	}
+	return target;
 }
 
 /**
@@ -800,14 +950,10 @@ export async function addAgendaRow(input: {
 				? null
 				: await findRow(tx, input.meetingId, input.afterRowId);
 		if (input.afterRowId !== null && afterRow === null) {
-			throw new Error("That agenda row is not part of this meeting.");
+			throw new Error(ROW_NOT_IN_MEETING_MESSAGE);
 		}
 
 		const { templateId } = await ensureAgendaDraft(tx, input.meetingId);
-		// True when the caller's row ids came from a DIFFERENT template than the
-		// one this write lands on: this call forked, or a concurrent first write
-		// forked a moment before it. See `findRow`.
-		const translated = afterRow !== null && afterRow.templateId !== templateId;
 		const rows = await loadRowIds(tx, templateId);
 		if (rows.length >= MAX_TEMPLATE_BEATS) {
 			throw new Error(
@@ -815,21 +961,23 @@ export async function addAgendaRow(input: {
 			);
 		}
 
-		// By id when the template was already private (exact, and immune to a
-		// concurrent renumber — see `findRow`'s docblock); by sortOrder only on
-		// the one-time translation across a fork this same call just performed.
+		// The caller's id names a row on THIS template already, unless it came
+		// from a DIFFERENT one — this call forked, or a concurrent first write
+		// forked a moment before it. `translateRow` resolves the copy's own row
+		// and refuses if the copy has diverged. See `findRow`.
+		let afterId: string | null = input.afterRowId;
+		if (afterRow !== null && afterRow.templateId !== templateId) {
+			afterId = (await translateRow(tx, templateId, afterRow)).id;
+		}
+
 		const at =
-			afterRow === null
+			afterId === null
 				? rows.length
-				: rows.findIndex((r) =>
-						translated
-							? r.sortOrder === afterRow.sortOrder
-							: r.id === input.afterRowId,
-					) + 1;
-		if (afterRow !== null && at === 0) {
-			// Resolved above against the pre-fork pointer, so a miss here would
-			// mean the fork failed to preserve a row's sortOrder — corruption,
-			// not a normal "not found".
+				: rows.findIndex((r) => r.id === afterId) + 1;
+		if (afterId !== null && at === 0) {
+			// Both arms of `afterId` name a row read from THIS template inside
+			// THIS transaction, so a miss here is corruption, not a normal
+			// "not found".
 			throw new Error("Failed to place the new agenda row.");
 		}
 
@@ -926,7 +1074,7 @@ export async function updateAgendaRow(input: {
 		// Resolved against the PRE-fork pointer — see `findRow`.
 		const found = await findRow(tx, input.meetingId, input.rowId);
 		if (!found) {
-			throw new Error("That agenda row is not part of this meeting.");
+			throw new Error(ROW_NOT_IN_MEETING_MESSAGE);
 		}
 		// Validated against the row as it will read AFTER this patch, not the
 		// patch in isolation — see `assertMarks` and `assertRepeatBinding`. Both
@@ -941,22 +1089,37 @@ export async function updateAgendaRow(input: {
 		await assertDeclaredRoleKeys(tx, templateId, patch);
 
 		// By id when the template was already private (exact, and immune to a
-		// concurrent renumber — see `findRow`'s docblock); by sortOrder only on
-		// the one-time translation across a fork this same call just performed.
-		const rowFilter =
-			found.templateId !== templateId
-				? eq(meetingTemplateBeats.sortOrder, found.sortOrder)
-				: eq(meetingTemplateBeats.id, input.rowId);
+		// concurrent renumber — see `findRow`'s docblock); through
+		// `translateRow`, which re-checks identity, when the caller's id came
+		// from the shared template this meeting was forked from.
+		let rowId = input.rowId;
+		if (found.templateId !== templateId) {
+			const target = await translateRow(tx, templateId, found);
+			rowId = target.id;
+			// Re-run against the row this write will actually LAND on. The pair
+			// above ran against `found`, which is a different row in a different
+			// template, and the two can disagree: a sibling edit that set all
+			// three marks on the copy leaves the source with none, so
+			// `{markGreen: null}` merges to "none" there and to a partial set
+			// here — the exact hole `assertMarks` exists to refuse.
+			assertMarks(target, patch);
+			assertRepeatBinding(target, patch);
+		}
 		// Scoped to THIS meeting's template either way: the row id is
 		// caller-supplied, and without the template predicate an officer of one
 		// club could edit another's agenda by id.
 		const updated = await tx
 			.update(meetingTemplateBeats)
 			.set(patch)
-			.where(and(eq(meetingTemplateBeats.templateId, templateId), rowFilter))
+			.where(
+				and(
+					eq(meetingTemplateBeats.templateId, templateId),
+					eq(meetingTemplateBeats.id, rowId),
+				),
+			)
 			.returning({ id: meetingTemplateBeats.id });
 		if (updated.length === 0) {
-			throw new Error("That agenda row is not part of this meeting.");
+			throw new Error(ROW_NOT_IN_MEETING_MESSAGE);
 		}
 	});
 }
@@ -969,19 +1132,27 @@ export async function removeAgendaRow(input: {
 	await database.transaction(async (tx) => {
 		const found = await findRow(tx, input.meetingId, input.rowId);
 		if (!found) {
-			throw new Error("That agenda row is not part of this meeting.");
+			throw new Error(ROW_NOT_IN_MEETING_MESSAGE);
 		}
 		const { templateId } = await ensureAgendaDraft(tx, input.meetingId);
-		const rowFilter =
+		// See `updateAgendaRow` — a delete resolved by position alone against a
+		// copy that has since renumbered destroys a NEIGHBOURING beat and
+		// answers success.
+		const rowId =
 			found.templateId !== templateId
-				? eq(meetingTemplateBeats.sortOrder, found.sortOrder)
-				: eq(meetingTemplateBeats.id, input.rowId);
+				? (await translateRow(tx, templateId, found)).id
+				: input.rowId;
 		const deleted = await tx
 			.delete(meetingTemplateBeats)
-			.where(and(eq(meetingTemplateBeats.templateId, templateId), rowFilter))
+			.where(
+				and(
+					eq(meetingTemplateBeats.templateId, templateId),
+					eq(meetingTemplateBeats.id, rowId),
+				),
+			)
 			.returning({ id: meetingTemplateBeats.id });
 		if (deleted.length === 0) {
-			throw new Error("That agenda row is not part of this meeting.");
+			throw new Error(ROW_NOT_IN_MEETING_MESSAGE);
 		}
 		const rest = await loadRowIds(tx, templateId);
 		await renumberRows(
@@ -1001,18 +1172,20 @@ export async function moveAgendaRow(input: {
 	await database.transaction(async (tx) => {
 		const found = await findRow(tx, input.meetingId, input.rowId);
 		if (!found) {
-			throw new Error("That agenda row is not part of this meeting.");
+			throw new Error(ROW_NOT_IN_MEETING_MESSAGE);
 		}
 		const { templateId } = await ensureAgendaDraft(tx, input.meetingId);
-		const rows = await loadRowIds(tx, templateId);
-		const at = rows.findIndex((r) =>
+		// See `updateAgendaRow` — resolving by position alone against a copy
+		// that has since renumbered reorders a NEIGHBOURING beat.
+		const rowId =
 			found.templateId !== templateId
-				? r.sortOrder === found.sortOrder
-				: r.id === input.rowId,
-		);
+				? (await translateRow(tx, templateId, found)).id
+				: input.rowId;
+		const rows = await loadRowIds(tx, templateId);
+		const at = rows.findIndex((r) => r.id === rowId);
 		if (at === -1) {
 			// Same corruption guard as `addAgendaRow`'s post-resolution check.
-			throw new Error("That agenda row is not part of this meeting.");
+			throw new Error(ROW_NOT_IN_MEETING_MESSAGE);
 		}
 		const to = input.direction === "up" ? at - 1 : at + 1;
 		if (to < 0 || to >= rows.length) return;

@@ -358,13 +358,14 @@ describe.skipIf(!hasTestDb)("agenda template schema", () => {
 	/**
 	 * Ship review C5. The version of this test that shipped inserted a private
 	 * template with NO materialized `role_definitions` and asserted the cascade
-	 * fired — which is the ONE shape the cascade can actually delete, and the
-	 * one no real conversion produces. It therefore proved nothing about the
-	 * deleter its own comment cited.
+	 * fired — which is the ONE shape the cascade can actually delete, and NOT
+	 * the shape a conversion normally produces. It therefore proved nothing
+	 * about the deleter its own comment cited.
 	 *
-	 * Kept, relabelled for what it is: the empty case, which is real (a
-	 * conversion to a template that declares no roles at all leaves one) and
-	 * which the cascade genuinely handles.
+	 * Kept, relabelled for what it is: the empty case. It is reachable — a
+	 * conversion to a template that declares no roles at all leaves exactly
+	 * this, which is why the sibling test below has to seed a role by hand to
+	 * reach the other one — and the cascade genuinely handles it.
 	 */
 	it("cascade-deletes a private template that has NO materialized roles", async () => {
 		const [m] = await testDb
@@ -395,8 +396,9 @@ describe.skipIf(!hasTestDb)("agenda template schema", () => {
 	});
 
 	/**
-	 * The shape every real conversion produces, and the one the cascade CANNOT
-	 * reach: `role_definitions.template_id` is ON DELETE RESTRICT, and
+	 * The shape a conversion to a template that declares ANY role produces —
+	 * which is every seeded one — and the one the cascade CANNOT reach:
+	 * `role_definitions.template_id` is ON DELETE RESTRICT, and
 	 * `materializeTemplateRoles` writes one row per declared role against the
 	 * private copy. So deleting the meeting aborts.
 	 *
