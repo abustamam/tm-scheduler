@@ -152,22 +152,101 @@ describe.skipIf(!hasTestDb)("meeting template conversion", () => {
 		});
 
 		/**
-		 * OLD contract, now false. Before private copies, `applyTemplateConversion`
-		 * materialized role_definitions under the SOURCE template's id, so a
-		 * second preview of that same id saw them already there and reported a
-		 * no-op. Task 3 materializes under the PRIVATE COPY's id instead — a
-		 * fresh id every conversion — so nothing is ever materialized under the
-		 * source id, and a preview of the source always falls back to the
-		 * template's own rows, exactly like a first-time preview. This is the
-		 * brief's own accepted consequence ("planTemplateConversion... already
-		 * reads the SOURCE template's own rows when nothing is materialized").
+		 * Re-previewing the entry the dialog badges "Current" reports a NO-OP,
+		 * because re-applying it IS one — the target declares the same role keys
+		 * the meeting's slots already hold, so `matchRoleDefs` keeps every one of
+		 * them (ship review C1).
+		 *
+		 * Two earlier contracts lived on this test and both were wrong. The
+		 * original expected a no-op for the wrong REASON: pre-private-copies,
+		 * `role_definitions` were materialized under the SOURCE id, so the
+		 * preview found them and reported "keep". Task 3 moved materialization to
+		 * the private copy, and the replacement expected a full 4-in/4-out
+		 * teardown — which the preview then reported honestly and the apply also
+		 * performed, releasing every claim on a re-pick of the current shape.
 		 */
-		it("still previews a full add on the source id after applying, since nothing materializes there", async () => {
+		it("previews a no-op when re-picking the template the meeting already runs", async () => {
 			await convert(templateId);
 			const plan = await planTemplateConversion(club.meetingId, templateId);
-			expect(plan.slotsAdded).toBe(4); // 1 chair + 3 contestants, same as a first preview
-			expect(plan.openSlotsRemoved).toBe(4); // the private copy's own 4 slots, none "kept"
+			expect(plan.slotsAdded).toBe(0);
+			expect(plan.openSlotsRemoved).toBe(0);
 			expect(plan.claimedSlotsReleased).toBe(0);
+		});
+
+		/**
+		 * The regression C1 names, and the one shape no other test in this file
+		 * seeds: definitions materialized under the SHARED source id, with
+		 * `meetings.template_id` pointing at that shared row. That is every
+		 * meeting converted before private copies existed — "in production is all
+		 * of them", per `loadAgendaDraft`'s docblock.
+		 *
+		 * Reproduced before the fix: PREVIEW said `claimedSlotsReleased: 0` (the
+		 * source-scoped defs matched the slots' own ids, so everything "kept"),
+		 * the dialog rendered "No one has claimed a role yet", and the APPLY then
+		 * reported 1 released and wiped the claim. A released holder cannot be
+		 * notified — `notifications.slot_id` cascades from the slot the same
+		 * transaction deletes — so the dialog was the only warning, and it lied.
+		 *
+		 * Asserted as preview-EQUALS-apply, not as two literals, because that
+		 * equality is the property the dialog exists to provide.
+		 */
+		it("previews exactly what applying does for a meeting materialized under the SHARED id", async () => {
+			// The pre-private-copy shape, built directly: defs under the source
+			// template's own id, `meetings.template_id` pointing at the source.
+			await materializeTemplateRoles(testDb, club.clubId, templateId);
+			await testDb
+				.update(meetings)
+				.set({ templateId })
+				.where(eq(meetings.id, club.meetingId));
+			const sharedDefs = await testDb
+				.select({ id: roleDefinitions.id, key: roleDefinitions.key })
+				.from(roleDefinitions)
+				.where(
+					and(
+						eq(roleDefinitions.clubId, club.clubId),
+						eq(roleDefinitions.templateId, templateId),
+					),
+				);
+			expect(sharedDefs.length).toBe(2);
+			await testDb
+				.delete(roleSlots)
+				.where(eq(roleSlots.meetingId, club.meetingId));
+			await testDb.insert(roleSlots).values(
+				sharedDefs.map((d, i) => ({
+					meetingId: club.meetingId,
+					roleDefinitionId: d.id,
+					slotIndex: i,
+				})),
+			);
+			const chair = sharedDefs.find((d) => d.key === "contest_chair");
+			if (!chair) throw new Error("no chair definition materialized");
+			await testDb
+				.update(roleSlots)
+				.set({ assignedMemberId: club.memberId, status: "claimed" })
+				.where(
+					and(
+						eq(roleSlots.meetingId, club.meetingId),
+						eq(roleSlots.roleDefinitionId, chair.id),
+					),
+				);
+
+			const preview = await planTemplateConversion(club.meetingId, templateId);
+			const applied = await convert(templateId);
+			expect(applied.claimedSlotsReleased).toBe(preview.claimedSlotsReleased);
+			expect(applied.openSlotsRemoved).toBe(preview.openSlotsRemoved);
+			expect(applied.releasedHolders).toEqual(preview.releasedHolders);
+			// And the value both agree on is zero — nobody loses the role.
+			expect(applied.claimedSlotsReleased).toBe(0);
+			const stillHeld = await testDb
+				.select({ memberId: roleSlots.assignedMemberId })
+				.from(roleSlots)
+				.where(
+					and(
+						eq(roleSlots.meetingId, club.meetingId),
+						eq(roleSlots.assignedMemberId, club.memberId),
+					),
+				);
+			expect(stillHeld).toHaveLength(1);
 		});
 	});
 
@@ -301,16 +380,18 @@ describe.skipIf(!hasTestDb)("meeting template conversion", () => {
 		});
 
 		/**
-		 * The controller's ruling on this (fix round 1, finding 4): this stays a
-		 * full teardown, deliberately, rather than gaining a short-circuit for
-		 * "the target template is the one already applied." A short-circuit
-		 * would be a FOURTH path through a transaction two prior orderings
-		 * already got wrong, and the preview naming who loses a role — which
-		 * `MeetingTemplateDialog` shows before anything is destroyed — is this
-		 * app's established answer to exactly this situation, not a special
-		 * case to avoid.
+		 * The inverse of the old contract (ship review C1). A re-apply used to be
+		 * a full teardown that released every claim, defended on the grounds that
+		 * the preview names who loses a role first. It does not: a released holder
+		 * cannot be notified at all (see `applyTemplateConversion`'s docblock), so
+		 * the dialog was the whole of the protection — and for the shape above it
+		 * was reporting zero.
+		 *
+		 * Key-matching removes the situation instead of warning about it. The slot
+		 * survives; only the `role_definitions` row it points at moves, to the
+		 * fresh copy's own.
 		 */
-		it("releases a claimed slot's holder even when re-applying the SAME template", async () => {
+		it("keeps a claimed slot's holder when re-applying the SAME template", async () => {
 			await convert(templateId);
 			const [slot] = await slotsFor(club.meetingId);
 			if (!slot) throw new Error("first conversion produced no slots");
@@ -320,9 +401,30 @@ describe.skipIf(!hasTestDb)("meeting template conversion", () => {
 				.where(eq(roleSlots.id, slot.id));
 
 			const plan = await convert(templateId);
-			expect(plan.claimedSlotsReleased).toBe(1);
-			expect(plan.releasedHolders).toHaveLength(1);
-			expect(plan.releasedHolders[0]?.memberId).toBe(club.memberId);
+			expect(plan.claimedSlotsReleased).toBe(0);
+			expect(plan.releasedHolders).toEqual([]);
+
+			// The same slot ROW is still there, still held, and now pointing at
+			// the new private copy's definition rather than the retired one.
+			const [after] = await testDb
+				.select({
+					id: roleSlots.id,
+					memberId: roleSlots.assignedMemberId,
+					roleDefinitionId: roleSlots.roleDefinitionId,
+				})
+				.from(roleSlots)
+				.where(eq(roleSlots.id, slot.id));
+			expect(after?.memberId).toBe(club.memberId);
+			expect(after?.roleDefinitionId).not.toBe(slot.roleDefinitionId);
+			const [m] = await testDb
+				.select({ templateId: meetings.templateId })
+				.from(meetings)
+				.where(eq(meetings.id, club.meetingId));
+			const [def] = await testDb
+				.select({ templateId: roleDefinitions.templateId })
+				.from(roleDefinitions)
+				.where(eq(roleDefinitions.id, after?.roleDefinitionId ?? ""));
+			expect(def?.templateId).toBe(m?.templateId);
 		});
 	});
 

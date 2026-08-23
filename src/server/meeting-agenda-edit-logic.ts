@@ -36,6 +36,7 @@ import {
 	MAX_TEMPLATE_LABEL_CHARS,
 	MAX_TEMPLATE_ROLES,
 } from "#/lib/meeting-template-limits";
+import { matchRoleDefs } from "#/lib/role-def-match";
 import { logActivity } from "./activity";
 import {
 	copyTemplateForMeeting,
@@ -266,16 +267,11 @@ export async function ensureAgendaDraft(
 	await materializeTemplateRoles(conn, meeting.clubId, copyId);
 
 	// Re-point THIS MEETING's own slots from the OLD (still-shared)
-	// definitions to the freshly materialized ones, matched by `key` — the
-	// stable, rename-proof identity `role_definitions.key` exists for
-	// (schema.ts docblock). A definition with no key (a legacy row, or a
-	// club-invented custom role predating #368) matches by `name` INSTEAD —
-	// a STRICT either/or, not a fallback: a keyed old definition whose key is
-	// absent from the new set is left unmatched rather than guessed at by
-	// name, which is what keeps this a narrower rule than `matchesRole`
-	// (agenda-runsheet.ts) rather than the same one — that function falls
-	// back to name only because a SLOT never carries a key of its own to be
-	// strict about; a `role_definitions` row does.
+	// definitions to the freshly materialized ones, matched through
+	// `matchRoleDefs` — the shared key-then-name rule, which
+	// `applyTemplateConversion` now runs too so a conversion and a first edit
+	// keep exactly the same slots. See that helper's own docblock for why the
+	// either/or is strict.
 	//
 	// Do NOT move the OLD definitions by updating their own `templateId`:
 	// `role_definitions` is keyed per (club, template), not per meeting, so a
@@ -299,37 +295,20 @@ export async function ensureAgendaDraft(
 			})
 			.from(roleDefinitions)
 			.where(roleDefScope(meeting.clubId, copyId));
-		const newByKey = new Map<string, string>();
-		// `null` marks an AMBIGUOUS name — two new definitions sharing it (no
-		// unique index stops that, and `addAgendaRole` deliberately allows two
-		// roles with the same name and different keys) — so a name-only match
-		// is skipped rather than nondeterministically landing on whichever one
-		// this unordered `select()` happened to return last.
-		const newByName = new Map<string, string | null>();
-		for (const d of newDefs) {
-			if (d.key != null) newByKey.set(d.key, d.id);
-			const nameKey = d.name.toLowerCase();
-			newByName.set(nameKey, newByName.has(nameKey) ? null : d.id);
-		}
 
-		for (const old of oldDefs) {
-			const matchedId =
-				old.key != null
-					? newByKey.get(old.key)
-					: (newByName.get(old.name.toLowerCase()) ?? undefined);
-			// No match — a keyed role the template no longer declares, or an
-			// unkeyed one with no (or an ambiguous) name match: leave this slot
-			// pointing at the old, still-valid definition rather than inventing
-			// a delete/orphan behavior here — that is `removeAgendaRole`'s job,
-			// not the fork's.
-			if (!matchedId) continue;
+		// Unmatched definitions are simply absent from the map — a keyed role
+		// the template no longer declares, or an unkeyed one with no (or an
+		// ambiguous) name match: those slots stay pointing at the old, still
+		// valid definition rather than the fork inventing a delete/orphan
+		// behavior here, which is `removeAgendaRole`'s job.
+		for (const [oldDefId, def] of matchRoleDefs(oldDefs, newDefs)) {
 			await conn
 				.update(roleSlots)
-				.set({ roleDefinitionId: matchedId })
+				.set({ roleDefinitionId: def.id })
 				.where(
 					and(
 						eq(roleSlots.meetingId, meetingId),
-						eq(roleSlots.roleDefinitionId, old.id),
+						eq(roleSlots.roleDefinitionId, oldDefId),
 					),
 				);
 		}

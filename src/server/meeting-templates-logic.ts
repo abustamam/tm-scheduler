@@ -29,6 +29,11 @@ import {
 	MAX_TEMPLATE_BEATS,
 	MAX_TEMPLATE_ROLES,
 } from "#/lib/meeting-template-limits";
+import {
+	distinctRoleDefs,
+	matchRoleDefs,
+	type RoleIdentity,
+} from "#/lib/role-def-match";
 import { logActivity } from "./activity";
 import { assertClubNotArchived, requireClubRole, requireUser } from "./guards";
 import { assertMeetingNotLocked } from "./meeting-authz-logic";
@@ -426,7 +431,7 @@ export async function resolveMeetingRoleDefs(
 	conn: DbOrTx,
 	clubId: string,
 	templateId: string | null,
-): Promise<MeetingSlotDefs[]> {
+): Promise<(MeetingSlotDefs & RoleIdentity)[]> {
 	return conn
 		.select({
 			id: roleDefinitions.id,
@@ -435,6 +440,11 @@ export async function resolveMeetingRoleDefs(
 			category: roleDefinitions.category,
 			isSpeakerRole: roleDefinitions.isSpeakerRole,
 			sortOrder: roleDefinitions.sortOrder,
+			// The conversion matches on these, not on `id` — see
+			// `matchRoleDefs`. Selected here rather than in a second round trip
+			// so the preview and the apply read one shape.
+			key: roleDefinitions.key,
+			name: roleDefinitions.name,
 		})
 		.from(roleDefinitions)
 		.where(
@@ -482,6 +492,10 @@ async function loadSlotsForConversion(conn: DbOrTx, meetingId: string) {
 			id: roleSlots.id,
 			roleDefinitionId: roleSlots.roleDefinitionId,
 			roleName: roleDefinitions.name,
+			// The stable identity the conversion keeps a slot BY. Without it,
+			// "does this role survive" could only be asked of a `role_definitions`
+			// id, which is fresh on every copy — see `matchRoleDefs`.
+			roleKey: roleDefinitions.key,
 			assignedMemberId: roleSlots.assignedMemberId,
 			assignedGuestId: roleSlots.assignedGuestId,
 			memberName: members.name,
@@ -496,6 +510,78 @@ async function loadSlotsForConversion(conn: DbOrTx, meetingId: string) {
 		.leftJoin(members, eq(roleSlots.assignedMemberId, members.id))
 		.leftJoin(guests, eq(roleSlots.assignedGuestId, guests.id))
 		.where(eq(roleSlots.meetingId, meetingId));
+}
+
+/** A role the conversion will END UP with, as both sides can see it. */
+type TargetRole = RoleIdentity & { defaultCount: number };
+
+/**
+ * The role set a conversion to `templateId` INSTALLS, resolved the one way
+ * both the preview and the apply can resolve it.
+ *
+ * For a template it is the template's own `meeting_template_roles`, NOT the
+ * materialized `role_definitions`: the apply deep-copies the template
+ * (`copyTemplateForMeeting`) and materializes the copy's roles
+ * (`materializeTemplateRoles`), which is a field-for-field reproduction of
+ * exactly these rows under a fresh `template_id`. Reading `role_definitions`
+ * under the SOURCE id instead is what made the preview and the apply disagree:
+ * the preview saw the defs a pre-private-copy conversion had materialized
+ * there, badged the target "Current", and reported a no-op — while the apply
+ * built a brand-new copy whose defs share none of those ids and released every
+ * claim. Same predicate, different ARGUMENT.
+ *
+ * For `null` it is the club's own ENABLED standard roles, which the apply
+ * reads through `resolveMeetingRoleDefs(conn, clubId, null)` — the same rows,
+ * no copy involved.
+ */
+async function resolveConversionTargetRoles(
+	conn: DbOrTx,
+	clubId: string,
+	templateId: string | null,
+): Promise<TargetRole[]> {
+	if (templateId === null) {
+		return conn
+			.select({
+				key: roleDefinitions.key,
+				name: roleDefinitions.name,
+				defaultCount: roleDefinitions.defaultCount,
+			})
+			.from(roleDefinitions)
+			.where(
+				and(roleDefScope(clubId, null), eq(roleDefinitions.enabled, true)),
+			);
+	}
+	return conn
+		.select({
+			key: meetingTemplateRoles.key,
+			name: meetingTemplateRoles.name,
+			defaultCount: meetingTemplateRoles.defaultCount,
+		})
+		.from(meetingTemplateRoles)
+		.where(eq(meetingTemplateRoles.templateId, templateId));
+}
+
+/**
+ * The whole derivation, run identically by the preview and the apply.
+ *
+ * Returns the counts the dialog shows AND the old-definition → new-definition
+ * map the apply re-points slots through, from ONE call — which is what makes
+ * "preview and apply agree" a property of the code rather than of two call
+ * sites staying in sync.
+ */
+function planConversion<T extends TargetRole>(
+	current: Awaited<ReturnType<typeof loadSlotsForConversion>>,
+	target: T[],
+): { plan: ConversionPlan; matched: Map<string, T> } {
+	const matched = matchRoleDefs(distinctRoleDefs(current), target);
+	return {
+		plan: summarize(
+			current,
+			new Set(matched.keys()),
+			target.reduce((n, r) => n + r.defaultCount, 0),
+		),
+		matched,
+	};
 }
 
 function summarize(
@@ -526,9 +612,22 @@ function summarize(
  *
  * The confirmation dialog shows these counts before anything is destroyed,
  * which is the whole reason converting a meeting with live claims on it is
- * allowed at all. It reuses the SAME predicate the apply resolves through
- * (`roleDefScope`) rather than re-expressing it, so the two can never disagree
- * about what gets kept — the one thing this dialog exists to guarantee.
+ * allowed at all.
+ *
+ * It runs the SAME derivation the apply runs — `resolveConversionTargetRoles`
+ * then `planConversion` — over the same two inputs, so the two cannot disagree
+ * about what gets kept. That is the one thing this dialog exists to guarantee,
+ * and it was FALSE until this was written: the docblock used to claim the
+ * shared `roleDefScope` predicate was enough, but the preview passed it the
+ * SOURCE template's id while the apply passed a brand-new private copy's, so
+ * for any meeting whose definitions were materialized under the source id
+ * (every meeting converted before private copies existed) re-picking the entry
+ * badged "Current" previewed as a no-op and then released every claim. A
+ * shared predicate given a different argument is not a shared answer.
+ *
+ * Nothing here is a second copy of the apply's rule: the target roles come
+ * from the template's own declarations, which is precisely what the apply is
+ * about to materialize, and the keep/drop decision is `matchRoleDefs`.
  */
 export async function planTemplateConversion(
 	meetingId: string,
@@ -568,31 +667,15 @@ export async function planTemplateConversion(
 	const current = await loadSlotsForConversion(database, meetingId);
 
 	// Preview must NOT materialize: a preview that writes would litter a club's
-	// role_definitions with templates nobody applied.
-	const target = await database
-		.select({
-			id: roleDefinitions.id,
-			defaultCount: roleDefinitions.defaultCount,
-			enabled: roleDefinitions.enabled,
-		})
-		.from(roleDefinitions)
-		.where(roleDefScope(meeting.clubId, templateId));
-	const usable = templateId === null ? target.filter((d) => d.enabled) : target;
-
-	// How many slots the target shape has. For an ALREADY-materialized template
-	// (or the club's standard roles) that is the sum over `usable`. For a
-	// first-time template nothing is materialized yet, so read the template's own
-	// rows instead.
-	let targetSlotCount = usable.reduce((n, d) => n + d.defaultCount, 0);
-	if (templateId !== null && usable.length === 0) {
-		const rows = await database
-			.select({ defaultCount: meetingTemplateRoles.defaultCount })
-			.from(meetingTemplateRoles)
-			.where(eq(meetingTemplateRoles.templateId, templateId));
-		targetSlotCount = rows.reduce((n, r) => n + r.defaultCount, 0);
-	}
-
-	return summarize(current, new Set(usable.map((r) => r.id)), targetSlotCount);
+	// role_definitions with templates nobody applied. Reading the template's own
+	// declarations rather than its materialized copies is what makes that
+	// possible AND what makes this exact — see `resolveConversionTargetRoles`.
+	const target = await resolveConversionTargetRoles(
+		database,
+		meeting.clubId,
+		templateId,
+	);
+	return planConversion(current, target).plan;
 }
 
 /**
@@ -716,13 +799,39 @@ export async function applyTemplateConversion(input: {
 			await materializeTemplateRoles(tx, clubId, effectiveTemplateId);
 		}
 		const defs = await resolveMeetingRoleDefs(tx, clubId, effectiveTemplateId);
-		const keepDefIds = new Set(defs.map((d) => d.id));
 		const current = await loadSlotsForConversion(tx, meetingId);
-		const plan = summarize(
-			current,
-			keepDefIds,
-			defs.reduce((n, d) => n + d.defaultCount, 0),
-		);
+		// The SAME derivation `planTemplateConversion` ran — `matchRoleDefs` over
+		// the current definitions and the target ones. `defs` are the freshly
+		// materialized rows, so their ids differ from anything the preview saw,
+		// but their KEYS are the template's own declarations verbatim, which is
+		// exactly what the preview matched against.
+		const { plan, matched } = planConversion(current, defs);
+		const keepDefIds = new Set(matched.keys());
+
+		// Re-point, do not tear down. A slot whose role the target set still
+		// declares is the SAME role — the officer re-picked the shape it already
+		// had, or moved to a template that shares the position — so the member
+		// who claimed it keeps it. Only the row it points at changes, because
+		// `role_definitions` is materialized per (club, template) and the copy
+		// this transaction just made carries fresh ids.
+		//
+		// This is what makes re-applying a template stop being a full teardown,
+		// and it is not a nicety: a released holder CANNOT be notified
+		// (`notifications.slot_id` is NOT NULL and cascades from `role_slots`,
+		// see this function's docblock), so every avoidable release is a member
+		// who silently loses a role they agreed to.
+		for (const [oldDefId, def] of matched) {
+			if (def.id === oldDefId) continue;
+			await tx
+				.update(roleSlots)
+				.set({ roleDefinitionId: def.id })
+				.where(
+					and(
+						eq(roleSlots.meetingId, meetingId),
+						eq(roleSlots.roleDefinitionId, oldDefId),
+					),
+				);
+		}
 
 		const doomedIds = current
 			.filter((s) => !keepDefIds.has(s.roleDefinitionId))
@@ -745,10 +854,14 @@ export async function applyTemplateConversion(input: {
 			await tx.delete(roleSlots).where(inArray(roleSlots.id, doomedIds));
 		}
 
+		// The NEW ids the kept slots now point at, not the old ones they came in
+		// with — `toCreate` below asks "which target roles still have no slot on
+		// this meeting", and after the re-point above that question is only
+		// answerable in the target set's own id space.
 		const existingDefIds = new Set(
 			current
-				.filter((s) => keepDefIds.has(s.roleDefinitionId))
-				.map((s) => s.roleDefinitionId),
+				.map((s) => matched.get(s.roleDefinitionId)?.id)
+				.filter((id): id is string => id !== undefined),
 		);
 		const toCreate = defs.filter((d) => !existingDefIds.has(d.id));
 		if (toCreate.length > 0) {
@@ -785,9 +898,11 @@ export async function applyTemplateConversion(input: {
 		// Retire the superseded private copy now, not earlier: `meetings.template_id`
 		// no longer references it (just updated above, satisfying its own RESTRICT),
 		// and every role_slot that used to reference its materialized
-		// role_definitions was just reconciled away (doomedIds, above) — ALL of
-		// them, since a private copy's role_definitions carry a fresh template_id
-		// every time and can never overlap with `effectiveTemplateId`'s.
+		// role_definitions was just reconciled — either RE-POINTED at the new
+		// copy's matching definition or deleted with `doomedIds`. Those two arms
+		// are exhaustive over `current` by construction (`matched` decides which),
+		// and a private copy's definitions are referenced by this meeting's slots
+		// alone, so nothing else can still be holding the RESTRICT.
 		// role_definitions has to go first: it is ALSO ON DELETE RESTRICT against
 		// meeting_templates, independently of the meetings.template_id one above.
 		if (previousPrivateId !== null) {
