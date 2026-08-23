@@ -106,6 +106,21 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
   from the seed: a club may have added its own.
   **Priority:** P3
 
+- **`meeting_templates.meeting_id` is ON DELETE CASCADE, but the cascade cannot fire for any
+  private copy a real conversion produced.** Every conversion materializes `role_definitions`
+  against the copy, and `role_definitions.template_id` is ON DELETE RESTRICT — so deleting the
+  meeting aborts with `violates foreign key constraint
+  "role_definitions_template_id_meeting_templates_id_fk"`. Nothing breaks today only because the
+  single production deleter (`recurrence-rule-logic.ts`, pruning pristine recurrence meetings)
+  refuses any meeting with a non-null `template_id`. The open question is whether
+  `role_definitions.template_id` should CASCADE from `meeting_templates` instead, which would make
+  the declared cascade true and let a future deleter work without a bespoke retire step — deliberately
+  NOT changed on the shipping branch (it is a third migration touching the same tables, and the FK
+  also protects `role_slots` indirectly). Both behaviours are now pinned by
+  `template-schema.integration.test.ts`, and `schema.ts`'s `meetingId` docblock states what really
+  protects meeting deletion, so this is a design question rather than a live hazard.
+  **Priority:** P3
+
 - **A printed agenda between one page and ~1.3 pages is SQUEEZED, while a longer one FLOWS.**
   `FitPage` scales a sheet until it fits, unless the scale would fall below `MIN_FIT_SCALE`, at
   which point the surface flows across sheets at full size. So legibility is not monotonic in

@@ -970,9 +970,27 @@ export const meetingTemplates = pgTable(
 		// Non-null = this row is ONE MEETING's private copy, not a template
 		// anyone picks. Conversion deep-copies the chosen template into a row
 		// like this so editing one night's agenda never touches another's.
-		// CASCADE because meetings really are deleted (`recurrence-rule-logic.ts`
-		// prunes pristine ones), and an orphaned private template would be a row
-		// nothing can ever reach or clean up.
+		//
+		// The CASCADE here does NOT, on its own, make a private copy disposable,
+		// and reading it as if it does is wrong. Every conversion materializes
+		// `role_definitions` against the copy, and THAT foreign key is ON DELETE
+		// RESTRICT — so deleting a meeting whose private copy has any
+		// materialized role aborts the whole delete with
+		// `violates foreign key constraint
+		// "role_definitions_template_id_meeting_templates_id_fk"`. The cascade
+		// can only fire for a copy that has no roles at all, which no real
+		// conversion produces.
+		//
+		// What actually protects meeting deletion today is the DELETER, not this
+		// column: the one production path that removes meetings
+		// (`recurrence-rule-logic.ts`, pruning pristine recurrence rows) skips
+		// any meeting with `m.templateId !== null`, so it never reaches a
+		// templated meeting in the first place. Nothing else deletes meetings.
+		// A new deleter must retire the copy's `role_definitions` first —
+		// `applyTemplateConversion`'s own retire step is the worked example.
+		// Whether the FK should be CASCADE instead is an open question, tracked
+		// in TODOS.md under "Agenda templates"; it is not a late change to make
+		// on a shipping branch.
 		meetingId: uuid("meeting_id").references(() => meetings.id, {
 			onDelete: "cascade",
 		}),

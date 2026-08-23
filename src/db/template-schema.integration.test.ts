@@ -355,9 +355,18 @@ describe.skipIf(!hasTestDb)("agenda template schema", () => {
 		).rejects.toThrow();
 	});
 
-	it("cascade-deletes a private template when its meeting goes", async () => {
-		// `recurrence-rule-logic.ts:162` really does delete meetings, so an
-		// orphaned private template is not theoretical.
+	/**
+	 * Ship review C5. The version of this test that shipped inserted a private
+	 * template with NO materialized `role_definitions` and asserted the cascade
+	 * fired — which is the ONE shape the cascade can actually delete, and the
+	 * one no real conversion produces. It therefore proved nothing about the
+	 * deleter its own comment cited.
+	 *
+	 * Kept, relabelled for what it is: the empty case, which is real (a
+	 * conversion to a template that declares no roles at all leaves one) and
+	 * which the cascade genuinely handles.
+	 */
+	it("cascade-deletes a private template that has NO materialized roles", async () => {
 		const [m] = await testDb
 			.insert(meetings)
 			.values({
@@ -383,5 +392,93 @@ describe.skipIf(!hasTestDb)("agenda template schema", () => {
 			.from(meetingTemplates)
 			.where(eq(meetingTemplates.id, t.id));
 		expect(left).toEqual([]);
+	});
+
+	/**
+	 * The shape every real conversion produces, and the one the cascade CANNOT
+	 * reach: `role_definitions.template_id` is ON DELETE RESTRICT, and
+	 * `materializeTemplateRoles` writes one row per declared role against the
+	 * private copy. So deleting the meeting aborts.
+	 *
+	 * This is the behaviour, not a bug being asserted as correct — nothing in
+	 * production hits it because the only deleter (`recurrence-rule-logic.ts`)
+	 * refuses any meeting with a `template_id`. Pinning it here means a future
+	 * deleter that forgets that guard fails a test instead of failing a club's
+	 * database, and it means the `meetingId` docblock in `schema.ts` (which now
+	 * says exactly this) has something holding it true.
+	 */
+	it("REFUSES to delete a meeting whose private template has materialized roles", async () => {
+		const [m] = await testDb
+			.insert(meetings)
+			.values({
+				clubId: club.clubId,
+				scheduledAt: new Date("2027-03-11T02:00:00Z"),
+			})
+			.returning({ id: meetings.id });
+		if (!m) throw new Error("meeting insert failed");
+		const [t] = await testDb
+			.insert(meetingTemplates)
+			.values({
+				clubId: club.clubId,
+				meetingId: m.id,
+				key: `restrict_${RUN}`,
+				name: "Converted",
+			})
+			.returning({ id: meetingTemplates.id });
+		if (!t) throw new Error("template insert failed");
+		// What `materializeTemplateRoles` writes on every conversion.
+		const [def] = await testDb
+			.insert(roleDefinitions)
+			.values({
+				clubId: club.clubId,
+				templateId: t.id,
+				key: `contest_chair_${RUN}`,
+				name: "Contest Chair",
+				category: "leadership",
+				defaultCount: 1,
+				sortOrder: 10,
+			})
+			.returning({ id: roleDefinitions.id });
+		if (!def) throw new Error("role definition insert failed");
+
+		// The SQLSTATE and the constraint NAME, not a bare "threw something": an
+		// unrelated failure would satisfy `.rejects.toThrow()` and this test
+		// exists to say WHICH foreign key blocks the delete. Drizzle's own
+		// message is only "Failed query: delete from …"; both live on `.cause`,
+		// the underlying `pg` error — the same shape
+		// `attendance-plan-logic.integration.test.ts` asserts against.
+		await expect(
+			testDb.delete(meetings).where(eq(meetings.id, m.id)),
+		).rejects.toMatchObject({
+			cause: {
+				code: "23503",
+				constraint: "role_definitions_template_id_meeting_templates_id_fk",
+			},
+		});
+
+		// Nothing partially applied: the meeting and its copy both survive.
+		expect(
+			await testDb
+				.select({ id: meetings.id })
+				.from(meetings)
+				.where(eq(meetings.id, m.id)),
+		).toHaveLength(1);
+		expect(
+			await testDb
+				.select({ id: meetingTemplates.id })
+				.from(meetingTemplates)
+				.where(eq(meetingTemplates.id, t.id)),
+		).toHaveLength(1);
+
+		// Retiring the definitions first is what makes the delete possible —
+		// the order `applyTemplateConversion` already uses.
+		await testDb.delete(roleDefinitions).where(eq(roleDefinitions.id, def.id));
+		await testDb.delete(meetings).where(eq(meetings.id, m.id));
+		expect(
+			await testDb
+				.select({ id: meetingTemplates.id })
+				.from(meetingTemplates)
+				.where(eq(meetingTemplates.id, t.id)),
+		).toEqual([]);
 	});
 });
