@@ -37,6 +37,7 @@ vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 const {
 	addAgendaRole,
 	addAgendaRow,
+	ensureAgendaDraft,
 	loadAgendaDraft,
 	moveAgendaRow,
 	planRoleRemoval,
@@ -2819,3 +2820,202 @@ describe.skipIf(!hasTestDb)(
 		});
 	},
 );
+
+/**
+ * Ship review C2. `ensureAgendaDraft` looked for a private copy, found none,
+ * and called `copyTemplateForMeeting` with no lock on the `meetings` row and
+ * no conflict handling. Two writes landing together on an UNFORKED meeting
+ * therefore both took the fork path, and
+ * `meeting_templates_meeting_unique` rejected the second INSERT.
+ *
+ * Not a crafted request: the editor's text inputs are not disabled while a
+ * save is in flight (only move/remove use `pending`), so blurring Label and
+ * immediately changing Minutes fires two concurrent POSTs. Reproduced as one
+ * officer seeing `Failed query: insert into "meeting_templates" ("id",
+ * "club_id", "meeting_id", …)` in a toast — `runAction` toasts
+ * `err.message` verbatim — while the surviving draft had lost the other edit
+ * entirely.
+ */
+describe.skipIf(!hasTestDb)(
+	"concurrent first write on a shared template",
+	() => {
+		/** A GLOBAL template with two rows, pointed at by `club.meetingId` — the
+		 *  pre-private-copy shape every unedited converted meeting is in. */
+		async function giveSharedTemplate(): Promise<{
+			templateId: string;
+			rowIds: string[];
+		}> {
+			const [shared] = await testDb
+				.insert(meetingTemplates)
+				.values({
+					key: `race_${RUN}_${crypto.randomUUID().slice(0, 8)}`,
+					name: "Raced",
+				})
+				.returning({ id: meetingTemplates.id });
+			if (!shared) throw new Error("template insert failed");
+			madeTemplates.push(shared.id);
+			const rows = await testDb
+				.insert(meetingTemplateBeats)
+				.values([
+					{
+						templateId: shared.id,
+						sortOrder: 0,
+						kind: "event" as const,
+						label: "First",
+						minutes: 1,
+					},
+					{
+						templateId: shared.id,
+						sortOrder: 1,
+						kind: "event" as const,
+						label: "Second",
+						minutes: 2,
+					},
+				])
+				.returning({
+					id: meetingTemplateBeats.id,
+					sortOrder: meetingTemplateBeats.sortOrder,
+				});
+			await testDb
+				.update(meetings)
+				.set({ templateId: shared.id })
+				.where(eq(meetings.id, club.meetingId));
+			return {
+				templateId: shared.id,
+				rowIds: rows.sort((a, b) => a.sortOrder - b.sortOrder).map((r) => r.id),
+			};
+		}
+
+		it("lands BOTH edits, and leaks no SQL to the officer", async () => {
+			const { templateId: sharedId, rowIds } = await giveSharedTemplate();
+			const [firstRow, secondRow] = rowIds;
+			if (!firstRow || !secondRow) throw new Error("fixture produced no rows");
+
+			const results = await Promise.allSettled([
+				updateAgendaRow({
+					meetingId: club.meetingId,
+					rowId: firstRow,
+					patch: { label: "Renamed by A" },
+				}),
+				updateAgendaRow({
+					meetingId: club.meetingId,
+					rowId: secondRow,
+					patch: { minutes: 42 },
+				}),
+			]);
+
+			// Asserted on the REASON, not just the status: a bare `toBe("fulfilled")`
+			// says nothing about what the officer would have read, and the SQL dump
+			// is half of what makes this a CRITICAL rather than a retryable failure.
+			for (const r of results) {
+				if (r.status === "rejected") {
+					throw new Error(
+						`concurrent write rejected: ${(r.reason as Error)?.message}`,
+					);
+				}
+			}
+
+			const draft = await loadAgendaDraft(club.meetingId);
+			if (!draft) throw new Error("draft vanished");
+			if (draft.templateId !== sharedId) madeTemplates.push(draft.templateId);
+			// Exactly ONE private copy exists, and the meeting points at it.
+			const copies = await testDb
+				.select({ id: meetingTemplates.id })
+				.from(meetingTemplates)
+				.where(eq(meetingTemplates.meetingId, club.meetingId));
+			expect(copies).toHaveLength(1);
+			expect(draft.templateId).toBe(copies[0]?.id);
+
+			// And NEITHER edit was lost — the half a lock alone does not fix, since
+			// the loser's row ids belong to the template it read before the winner
+			// forked.
+			expect(draft.rows.map((r) => r.label)).toEqual([
+				"Renamed by A",
+				"Second",
+			]);
+			expect(draft.rows.map((r) => r.minutes)).toEqual([1, 42]);
+
+			// The shared template is untouched: the race must not have written
+			// through to the row every other club reads.
+			const sharedRows = await testDb
+				.select({
+					label: meetingTemplateBeats.label,
+					minutes: meetingTemplateBeats.minutes,
+				})
+				.from(meetingTemplateBeats)
+				.where(eq(meetingTemplateBeats.templateId, sharedId));
+			expect(sharedRows.map((r) => r.label).sort()).toEqual([
+				"First",
+				"Second",
+			]);
+			expect(sharedRows.map((r) => r.minutes).sort()).toEqual([1, 2]);
+		});
+	},
+);
+
+/**
+ * The residual arm of the same fix, reproduced deterministically rather than
+ * by racing.
+ *
+ * `ensureAgendaDraft` takes a `conn`, and a caller passing the bare `db`
+ * rather than a transaction holds the `FOR UPDATE` row lock only for the
+ * length of that one statement — so two such calls really can both reach the
+ * INSERT. The state the loser then finds itself in is exactly what this test
+ * SEEDS: a private copy already exists for the meeting while
+ * `meetings.template_id` still names the shared template it read a moment
+ * ago. Seeded rather than raced because a test that only fails on one
+ * interleaving is a test that mostly cannot fail — a `Promise.allSettled`
+ * version of this passed with the catch deleted, five runs out of five.
+ *
+ * Without the catch this rejects with the driver's own `Failed query: insert
+ * into "meeting_templates" ("id", "club_id", "meeting_id", …)`, which
+ * `runAction` toasts at the officer verbatim.
+ */
+describe.skipIf(!hasTestDb)("ensureAgendaDraft under a lost fork race", () => {
+	it("adopts the existing copy instead of surfacing a unique violation", async () => {
+		const [shared] = await testDb
+			.insert(meetingTemplates)
+			.values({
+				key: `residual_${RUN}_${crypto.randomUUID().slice(0, 8)}`,
+				name: "Residual",
+			})
+			.returning({ id: meetingTemplates.id });
+		if (!shared) throw new Error("template insert failed");
+		madeTemplates.push(shared.id);
+		await testDb.insert(meetingTemplateBeats).values({
+			templateId: shared.id,
+			sortOrder: 0,
+			kind: "event",
+			label: "Only row",
+			minutes: 1,
+		});
+		await testDb
+			.update(meetings)
+			.set({ templateId: shared.id })
+			.where(eq(meetings.id, club.meetingId));
+
+		// The winner's copy, committed while this caller still believes the
+		// meeting is on the shared template.
+		const [winner] = await testDb
+			.insert(meetingTemplates)
+			.values({
+				clubId: club.clubId,
+				meetingId: club.meetingId,
+				key: `residual_${RUN}_${crypto.randomUUID().slice(0, 8)}`,
+				name: "Winner",
+			})
+			.returning({ id: meetingTemplates.id });
+		if (!winner) throw new Error("winner insert failed");
+		madeTemplates.push(winner.id);
+
+		const handle = await ensureAgendaDraft(testDb, club.meetingId);
+		expect(handle.templateId).toBe(winner.id);
+		expect(handle.forked).toBe(false);
+		// And the rolled-back insert left no SECOND copy behind.
+		const copies = await testDb
+			.select({ id: meetingTemplates.id })
+			.from(meetingTemplates)
+			.where(eq(meetingTemplates.meetingId, club.meetingId));
+		expect(copies).toHaveLength(1);
+	});
+});
