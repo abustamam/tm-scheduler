@@ -40,7 +40,13 @@ RUN bun run build
 # `meeting_templates.key` and REPLACES that template's roles and beats, so a
 # content change in `src/lib/contest-template.ts` lands on the next deploy.
 # Materialized `role_definitions` are deliberately untouched (a club may have
-# renamed them); `scripts/resync-template-roles.ts` is the escape hatch for those.
+# renamed them). There is NO escape hatch for those yet:
+# `scripts/resync-template-roles.ts` is specified but not written (TODOS.md,
+# "Agenda templates"). Say so rather than naming it, because this branch is the
+# first seed change that REMOVES a role — so a club that already ran the
+# template keeps the removed role's materialized definition, and the note
+# explaining why the automatic seed is safe must not assert a remedy that does
+# not exist.
 FROM node:22-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production

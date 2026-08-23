@@ -440,7 +440,8 @@ A template's roles are COPIED into `role_definitions` with `template_id` set, be
 `role_slots.role_definition_id` is NOT NULL and restricting, so a claimable contest role has to
 be a real row. Copy-once: a later seed edit does not reach a club that already used the
 template, exactly as editing `ROLE_TEMPLATE` never reaches an existing club.
-`scripts/resync-template-roles.ts` is the deliberate escape hatch.
+There is no escape hatch yet — `scripts/resync-template-roles.ts` is specified but not
+written (TODOS.md, "Agenda templates").
 
 **NINE readers select role definitions by club, and every one is choosing a slot source** —
 `role-definitions-logic`, `meetings-logic`, `batch-meetings-logic`, `schedule-topup-logic`,

@@ -58,6 +58,9 @@ const LENGTH_FIELD_CAPS: Record<string, { label: string; max: number }> = {
 		label: "repeat-role reference",
 		max: MAX_TEMPLATE_LABEL_CHARS * 2,
 	},
+	// `roleAddInput`'s and `roleKeyInput`'s own strings, which were unbounded
+	// entirely until they were routed through `parse()` below.
+	name: { label: "role name", max: MAX_TEMPLATE_LABEL_CHARS * 2 },
 };
 
 /**
@@ -99,6 +102,17 @@ function fallbackMessage(issue: {
 	const lengthCap = LENGTH_FIELD_CAPS[field];
 	if (lengthCap && issue.code === "too_big") {
 		return `Keep the ${lengthCap.label} under ${lengthCap.max} characters.`;
+	}
+	// `roleAddInput.defaultCount`. Its own range, not `MAX_BEAT_MINUTES`' —
+	// it is a slot count, and it carried a bound with no message behind a bare
+	// `.parse()`, so tripping it put the whole `ZodError` JSON in the toast.
+	if (field === "defaultCount") {
+		if (issue.code === "too_big" || issue.code === "too_small") {
+			return `A role can have between 0 and ${MAX_ROLE_REPEAT_SLOTS} places.`;
+		}
+		if (issue.code === "invalid_type") {
+			return "Places must be a whole number.";
+		}
 	}
 	return undefined;
 }
@@ -256,9 +270,25 @@ export const moveAgendaRowFn = createServerFn({ method: "POST" })
 		return moveAgendaRow(data);
 	});
 
+/**
+ * The role mutators' input. Same two rules as `patchInput`: every string
+ * bounded at TWICE its real cap (the tightest bound that can never reject a
+ * value the code-point check would accept — see that schema's docblock), every
+ * number at its real one, and no message argument on any of them, because
+ * `fallbackMessage` supplies it and `meeting-templates-authz.guard.test.ts`
+ * pins the bare shape.
+ *
+ * `name` and `roleKey` were unbounded entirely while `defaultCount` between
+ * them carried both a bound AND a comment stating the rule — an unbounded
+ * string feeding a code-point spread is #519's shape, and the asymmetry was
+ * the tell.
+ */
 const roleAddInput = z.object({
 	meetingId: z.string().uuid(),
-	name: z.string().min(1),
+	name: z
+		.string()
+		.min(1)
+		.max(MAX_TEMPLATE_LABEL_CHARS * 2),
 	category: z.enum(["leadership", "speaker", "evaluator", "functionary"]),
 	// Bounded here too, not just in `addAgendaRole`'s own check: an unbounded
 	// validator lets an over-cap value reach the handler and surface as a
@@ -270,12 +300,15 @@ const roleAddInput = z.object({
 });
 const roleKeyInput = z.object({
 	meetingId: z.string().uuid(),
-	roleKey: z.string().min(1),
+	roleKey: z
+		.string()
+		.min(1)
+		.max(MAX_TEMPLATE_LABEL_CHARS * 2),
 });
 
 /** Add a role to this meeting's agenda. Officer-gated, same as `getAgendaDraft`. */
 export const addAgendaRoleFn = createServerFn({ method: "POST" })
-	.validator((input: unknown) => roleAddInput.parse(input))
+	.validator((input: unknown) => parse(roleAddInput, input))
 	.handler(async ({ data }): Promise<AgendaDraftRole> => {
 		await requireMeetingTemplateEditor(data.meetingId);
 		return addAgendaRole(data);
@@ -284,7 +317,7 @@ export const addAgendaRoleFn = createServerFn({ method: "POST" })
 /** Who removing this role would release, without removing anything.
  *  Officer-gated, same as `getAgendaDraft`. */
 export const planRoleRemovalFn = createServerFn({ method: "GET" })
-	.validator((input: unknown) => roleKeyInput.parse(input))
+	.validator((input: unknown) => parse(roleKeyInput, input))
 	.handler(async ({ data }): Promise<ReleasedHolder[]> => {
 		await requireMeetingTemplateEditor(data.meetingId);
 		return planRoleRemoval(data);
@@ -294,7 +327,7 @@ export const planRoleRemovalFn = createServerFn({ method: "GET" })
  *  `getAgendaDraft`. Attributes the removal to the calling officer's own
  *  membership, for `activity_log`. */
 export const removeAgendaRoleFn = createServerFn({ method: "POST" })
-	.validator((input: unknown) => roleKeyInput.parse(input))
+	.validator((input: unknown) => parse(roleKeyInput, input))
 	.handler(async ({ data }): Promise<ReleasedHolder[]> => {
 		const { membership } = await requireMeetingTemplateEditor(data.meetingId);
 		return removeAgendaRole({ ...data, actorMemberId: membership.id });

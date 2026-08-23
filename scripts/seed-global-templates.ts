@@ -6,8 +6,11 @@
  * to `src/lib/contest-template.ts` reaches an already-seeded database.
  *
  * Materialized `role_definitions` rows are NOT touched — a club may have renamed
- * them, and #445 makes the club's own name authoritative. Use
- * `scripts/resync-template-roles.ts` to push a seed change into those.
+ * them, and #445 makes the club's own name authoritative. Nothing pushes a seed
+ * change into those yet: `scripts/resync-template-roles.ts` is specified but not
+ * written (TODOS.md, "Agenda templates"). A club that has already run a template
+ * therefore keeps the definitions it materialized, including any this seed has
+ * since removed.
  *
  * Deleting the template's roles/beats is safe precisely because slots do NOT
  * reference them: slots reference the materialized `role_definitions` rows.

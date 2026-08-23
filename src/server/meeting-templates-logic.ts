@@ -258,8 +258,9 @@ export function roleDefScopeOnly(templateId: string | null) {
  *
  * Copy-once is the same contract `ROLE_TEMPLATE` already has: it seeds
  * `role_definitions` at club creation and editing the constant later reaches no
- * existing club. `scripts/resync-template-roles.ts` is the deliberate escape
- * hatch for pushing a seed change to clubs that already used the template.
+ * existing club. There is no escape hatch for pushing a seed change to clubs
+ * that already used the template: `scripts/resync-template-roles.ts` is
+ * specified but not written (TODOS.md, "Agenda templates").
  *
  * Required at all because `role_slots.role_definition_id` is NOT NULL and
  * restricting: a claimable contest role has to be a real `role_definitions` row.

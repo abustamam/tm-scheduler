@@ -187,10 +187,9 @@ describe("meeting template and agenda-editor server fns", () => {
 		// and `detail` were unbounded strings feeding a code-point spread, and
 		// the three marks were bare `z.number()` — a float reached an `integer`
 		// column as a raw Postgres 500 where a 400 belongs.
-		const source = readSource("src/server/meeting-agenda-edit.ts");
-		const patch = source.slice(
-			source.indexOf("const patchInput"),
-			source.indexOf("const moveInput"),
+		const patch = schemaBody(
+			readSource("src/server/meeting-agenda-edit.ts"),
+			"patchInput",
 		);
 		expect(patch.length).toBeGreaterThan(0);
 		for (const field of ["label", "detail", "roleKey", "repeatsRoleKey"]) {
@@ -206,4 +205,78 @@ describe("meeting template and agenda-editor server fns", () => {
 			);
 		}
 	});
+
+	it("bounds the ROLE mutators' free-form strings too", () => {
+		// The half the slice above could not see: it stopped at `moveInput`, so
+		// `roleAddInput` and `roleKeyInput` — declared further down — were
+		// enrolled by nothing. `name` and `roleKey` were unbounded entirely
+		// while `defaultCount` sitting between them carried a bound AND a
+		// comment stating the rule.
+		const source = readSource("src/server/meeting-agenda-edit.ts");
+		const roleAdd = schemaBody(source, "roleAddInput");
+		expect(roleAdd.length).toBeGreaterThan(0);
+		expect(roleAdd, "name must carry a length bound").toMatch(
+			/name: z[\s\S]{0,120}?\.max\(MAX_TEMPLATE_LABEL_CHARS \* 2\)/,
+		);
+		expect(roleAdd, "defaultCount must be an int in range").toMatch(
+			/defaultCount: z[\s\S]{0,160}?\.int\(\)[\s\S]{0,160}?\.max\(MAX_ROLE_REPEAT_SLOTS\)/,
+		);
+		const roleKey = schemaBody(source, "roleKeyInput");
+		expect(roleKey.length).toBeGreaterThan(0);
+		expect(roleKey, "roleKey must carry a length bound").toMatch(
+			/roleKey: z[\s\S]{0,120}?\.max\(MAX_TEMPLATE_LABEL_CHARS \* 2\)/,
+		);
+	});
+
+	it("routes every BOUNDED schema through the message-extracting parse()", () => {
+		// DERIVED, not listed. A bound with no message behind a bare
+		// `.parse()` is worse than no bound: `ZodError.message` is
+		// `JSON.stringify(issues, null, 2)`, so tripping it puts the whole
+		// issues array — `code`, `path` and all — in the officer's toast
+		// (`runAction` toasts `err.message` verbatim). `roleAddInput` shipped
+		// exactly that way. So the rule is a property of the SCHEMA: if it can
+		// reject on a bound, its validator must call `parse(schema, input)`.
+		const source = readSource("src/server/meeting-agenda-edit.ts");
+		const names = [...source.matchAll(/^const (\w+) = /gm)]
+			.map((m) => m[1] ?? "")
+			.filter((name) => schemaBody(source, name).includes(".max(MAX_"));
+		// Three today (patchInput, roleAddInput, roleKeyInput). A floor, so the
+		// loop below cannot go vacuous behind a rename.
+		expect(names.length).toBeGreaterThanOrEqual(3);
+		for (const name of names) {
+			expect(
+				source,
+				`${name} carries a bound but is validated with a bare .parse() — a tripped bound would surface as a ZodError JSON dump`,
+			).not.toContain(`${name}.parse(input)`);
+			expect(source, `${name} is never validated`).toContain(
+				`parse(${name}, input)`,
+			);
+		}
+	});
 });
+
+/**
+ * A `const <name> = …;` declaration's own text, ending at the semicolon that
+ * closes it — found by BRACKET DEPTH, not by the next thing this file happens
+ * to name.
+ *
+ * The old slice was `indexOf("const patchInput")` … `indexOf("const
+ * moveInput")`, and that is exactly how `roleAddInput` and `roleKeyInput`
+ * stayed outside the bounds guard: they are declared BELOW `moveInput`, so no
+ * assertion could see them. A hand-picked end marker also silently swallows
+ * the NEXT declaration whenever the named one is a one-liner — `moveInput` is,
+ * and a `\n});` scan ran straight through it into `roleAddInput` and reported
+ * that schema's bounds as `moveInput`'s.
+ */
+function schemaBody(source: string, name: string): string {
+	const start = source.indexOf(`const ${name} = `);
+	if (start === -1) return "";
+	let depth = 0;
+	for (let i = start; i < source.length; i++) {
+		const ch = source[i];
+		if (ch === "(" || ch === "{" || ch === "[") depth += 1;
+		else if (ch === ")" || ch === "}" || ch === "]") depth -= 1;
+		else if (ch === ";" && depth === 0) return source.slice(start, i + 1);
+	}
+	return source.slice(start);
+}
