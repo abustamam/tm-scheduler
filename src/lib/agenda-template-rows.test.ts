@@ -302,6 +302,60 @@ describe("buildTemplateRows", () => {
 		expect(rows[0]?.marks).toBeNull();
 	});
 
+	/**
+	 * Ship review C3. This is EXACTLY what "Add row: Role" produces:
+	 * `addAgendaRow` inserts `templateId, sortOrder, kind, label, minutes` and
+	 * nothing else, so `role_key` is null. It used to be dropped here, which
+	 * meant the officer saw the card in the editor and it appeared on none of
+	 * the four surfaces that read this function — the meeting page, the print
+	 * sheet, the projected deck and the `.pptx`. The same state is one select
+	 * away on an existing row, via the Role picker's "Nobody".
+	 */
+	it("renders a role row bound to NOBODY as a plain labelled beat", () => {
+		const rows = buildTemplateRows(
+			[
+				beat({
+					sortOrder: 0,
+					kind: "role",
+					label: "New item",
+					minutes: 0,
+					roleKey: null,
+				}),
+			],
+			ROLES,
+			[],
+		);
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.who).toBe("New item");
+		expect(rows[0]?.minutes).toBe(0);
+		// No owner, so no role identity to colour by and no holder line.
+		expect(rows[0]?.roleKey).toBeUndefined();
+		expect(rows[0]?.holder).toBeUndefined();
+		expect(rows[0]?.section).toBeUndefined();
+	});
+
+	/**
+	 * The OTHER null-role case, which stays dropped: a beat naming a role the
+	 * template does not declare. That is corruption, not authoring — there is
+	 * no name to render it against — and the two must not collapse into one
+	 * rule.
+	 */
+	it("still drops a role row naming a role the template does not declare", () => {
+		const rows = buildTemplateRows(
+			[
+				beat({
+					sortOrder: 0,
+					kind: "role",
+					label: "Ghost",
+					roleKey: "no_such_role",
+				}),
+			],
+			ROLES,
+			[],
+		);
+		expect(rows).toEqual([]);
+	});
+
 	it("renders an unfilled role as the bare label, not a dropped row", () => {
 		const rows = buildTemplateRows(
 			[

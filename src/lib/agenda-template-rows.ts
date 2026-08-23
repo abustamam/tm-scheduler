@@ -132,7 +132,22 @@ function toRow(
 		return { who: label, ...base };
 	}
 
-	if (row.roleKey == null) return null;
+	// A role beat bound to NOBODY renders as a plain labelled beat — the same
+	// shape `event` gets — rather than vanishing. Dropping it was invisible
+	// authoring: "Add row: Role" inserts exactly this row (`addAgendaRow` sets
+	// only kind/label/minutes, so `role_key` is null), and the Role select's
+	// "Nobody" option returns any existing role row to it. The officer typed a
+	// label and minutes, saw the card in the editor, and printed an agenda
+	// without it — and the same absence reached the meeting page, the projected
+	// deck and the `.pptx`, since all four read `buildTemplateRows`.
+	//
+	// Rendering it is the honest reading of what is stored: the beat has a
+	// label and a duration, which is everything an `event` beat has. What it
+	// lacks is an owner, and an agenda item with no owner is a normal thing for
+	// a club to schedule. The alternative — keep it hidden and badge the editor
+	// card — leaves the officer able to author an invisible row anyway, one
+	// select away, and asks them to learn a rule instead of removing it.
+	if (row.roleKey == null) return { who: label, ...base };
 	const role = rolesByKey.get(row.roleKey);
 	// A beat naming a role the template does not declare is dropped rather than
 	// rendered against an invented name. The seed is the only writer in Phase 1,
