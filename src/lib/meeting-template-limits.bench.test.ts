@@ -188,12 +188,26 @@ describe("buildTemplateRows render cost (#task-10)", () => {
 	 * would pass for every value of that constant, and not relative to the
 	 * previous size, which would pass for a curve that got worse in shape but
 	 * happened to start small.
+	 *
+	 * The bounds were first set from the macOS numbers alone and the 200-beat
+	 * row went red on CI at 135.67ms against 60/60/80/100 — a ~7x slower
+	 * shared runner, not a regression. They are now anchored to the 250ms
+	 * this file's own ceiling case below already uses for the SAME 200-beat
+	 * workload, which CI has been passing all along; the ladder having
+	 * asserted 100ms on that exact shape while its neighbour asserted 250ms
+	 * was a contradiction, and the stricter number was the unexamined one.
+	 *
+	 * Raising them costs sensitivity to a constant-factor regression, so the
+	 * shape check below now carries that half of the job on its own. Do NOT
+	 * read a passing row here as evidence the curve is still linear — that is
+	 * what the per-row case is for, and it is the assertion that survives a
+	 * machine swap.
 	 */
 	it.each([
-		{ beats: 25, budgetMs: 60 },
-		{ beats: 50, budgetMs: 60 },
-		{ beats: 100, budgetMs: 80 },
-		{ beats: 200, budgetMs: 100 },
+		{ beats: 25, budgetMs: 120 },
+		{ beats: 50, budgetMs: 140 },
+		{ beats: 100, budgetMs: 200 },
+		{ beats: 200, budgetMs: 250 },
 	])("renders $beats all-axes-hostile beats in well under budget", ({
 		beats,
 		budgetMs,
@@ -204,6 +218,58 @@ describe("buildTemplateRows render cost (#task-10)", () => {
 		const ms = performance.now() - t0;
 		expect(rows.length).toBeGreaterThan(0);
 		expect(ms).toBeLessThan(budgetMs);
+	});
+
+	/**
+	 * The SHAPE of the curve, stated so that machine speed cancels out.
+	 *
+	 * Every absolute bound above is hostage to whatever runner drew the job:
+	 * the same code measured 20ms on an M2 Max and 135.67ms on CI, a 7x
+	 * spread that says nothing about `buildTemplateRows`. A ratio taken
+	 * between two sizes in the SAME process on the SAME machine divides that
+	 * factor out, which is what makes this the assertion worth trusting when
+	 * the two disagree.
+	 *
+	 * Normalized PER OUTPUT ROW, which is the unit the cost is actually
+	 * proportional to — and getting that wrong is a trap this test fell into
+	 * once already. Beat count is not the workload: `hostileBeats` spends the
+	 * first `MAX_TEMPLATE_ROLES` beats on non-repeating rows worth ONE output
+	 * row each, then expands every remaining beat into `MAX_ROLE_REPEAT_SLOTS`
+	 * rows. So 50 beats emits 240 rows and 200 beats emits 3,240 — 13.5x the
+	 * work for 4x the beats. A first cut of this test read that as "4x beats,
+	 * so allow up to 12x time"; a perfectly LINEAR implementation can measure
+	 * 13.5x over this range and would have failed it. The bug would have
+	 * surfaced as an intermittent red on whichever machine happened not to
+	 * amortize the small end.
+	 *
+	 * Per row, cost should be roughly FLAT. Observed on an Apple M2 Max it
+	 * falls to ~0.5x at the large end, because fixed overhead makes the small
+	 * fixture look relatively expensive. The threshold allows a 3x RISE, which
+	 * no linear implementation reaches on any machine, while a quadratic one
+	 * lands at ~13.5x per row — caught with a factor of four to spare.
+	 */
+	it("keeps per-row render cost flat as the template grows, on any machine", () => {
+		const costOf = (beatCount: number) => {
+			const { beats, roles, slots } = hostileAtCap(beatCount);
+			const t0 = performance.now();
+			const rows = buildTemplateRows(beats, roles, slots);
+			const ms = performance.now() - t0;
+			expect(rows.length).toBeGreaterThan(0);
+			return { msPerRow: ms / rows.length, rows: rows.length };
+		};
+
+		// Warm the JIT first, or the small size absorbs the compile cost and
+		// the comparison reads far too flat — passing for the wrong reason.
+		costOf(50);
+
+		const small = costOf(50);
+		const large = costOf(200);
+		// Guards the normalization itself: if these ever emitted the same row
+		// count, per-row cost would be a restatement of raw time and the
+		// threshold below would silently mean something else.
+		expect(large.rows).toBeGreaterThan(small.rows * 4);
+		expect(small.msPerRow).toBeGreaterThan(0);
+		expect(large.msPerRow / small.msPerRow).toBeLessThan(3);
 	});
 
 	/**

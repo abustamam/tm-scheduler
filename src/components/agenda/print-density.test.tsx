@@ -821,69 +821,85 @@ describe.skipIf(!hasChrome)(
 		 * untested, and that combination is exactly what an officer can now
 		 * author that the seed never could.
 		 *
-		 * Sized empirically, not guessed. Every row here carries max-length
-		 * emoji label and detail (`MAX_TEMPLATE_LABEL_CHARS` /
-		 * `MAX_TEMPLATE_DETAIL_CHARS`) — that alone is what the beat count
-		 * and holder count below are tuned AROUND, since two such rows at
-		 * full holders already overshoot the squeeze zone entirely. Measured
-		 * directly while sizing this case (`hostileTemplateRows(beats,
-		 * holders)`, Apple M2 Max, 2026-08-22):
+		 * This case SEARCHES for the cliff rather than hardcoding a fixture
+		 * that sits on it, and that is not fussiness — a fixed holder count
+		 * provably cannot work here. The first cut of this test used
+		 * `hostileTemplateRows(2, 12)`, measured on an Apple M2 Max at
+		 * raw≈0.730, comfortably inside the [0.72, 0.75) target window. CI's
+		 * Ubuntu rendered the IDENTICAL fixture at raw≈0.797 — outside the
+		 * window, red. The two platforms disagree by ~8.5% on this shape
+		 * because neither Fraunces nor Manrope resolves under the harness
+		 * (`--host-resolver-rules=MAP * ~NOTFOUND`) and each platform's
+		 * substitute wraps differently; see this file's header and
+		 * `agenda-print-type.ts`.
 		 *
-		 *     beats=1 holders=20  height=1057  raw=0.997  (barely squeezed)
-		 *     beats=2 holders=0   height=1074  raw=0.981
-		 *     beats=2 holders=10  height=1368  raw=0.770
-		 *     beats=2 holders=12  height=1444  raw=0.730  ← chosen
-		 *     beats=2 holders=13  height=1486  raw=0.709  (already FLOWS)
-		 *     beats=2 holders=20  height=1696  raw=0.621  (flows; the
-		 *                                                   ceiling case above
-		 *                                                   is deep in here)
+		 * The window is only ~4% wide and the variance is ~8.5%, so NO
+		 * hardcoded holder count satisfies both platforms: retuning to
+		 * Ubuntu's ~15 holders puts macOS at raw≈0.677, which FLOWS, failing
+		 * the branch assertion in the other direction. The number cannot be
+		 * tuned, only derived — which is why the earlier advice here to
+		 * "retune with the observed Linux value" is gone rather than
+		 * followed. It would have turned a red CI green by breaking every
+		 * developer machine instead.
 		 *
-		 * 12 holders is the largest integer holder count for which two
-		 * max-label/max-detail/emoji rows still land ABOVE `MIN_FIT_SCALE`
-		 * rather than flowing — one more holder each and the fixture flips
-		 * branches entirely (0.709 < 0.72). It is not `MAX_ROLE_REPEAT_SLOTS`
-		 * (20): at 20, per the table above, this same two-row shape already
-		 * flows, which is the opposite of what this case needs to prove. Do
-		 * NOT "fix" this by raising it back toward 20 or by adding more
-		 * beats — either makes the fixture bigger, which pushes it further
-		 * PAST the danger zone, not into it. If a future change to the
-		 * declared type size, `MIN_FIT_SCALE`, or these two beats' own
-		 * content ever moves the achieved `raw` outside roughly [0.72, 0.75),
-		 * this fixture needs re-sizing the same way: shrink content until it
-		 * just barely stops flowing, not the reverse.
+		 * Height rises monotonically with holders, so "largest holder count
+		 * that still squeezes" is a clean predicate boundary and a binary
+		 * search finds it in ~5 measurements. That matters: every
+		 * `agendaHeight` call launches Chrome, so scanning all 20 linearly
+		 * would cost 20 browser round trips for a number the search gets in
+		 * a quarter of them. Standing exactly on that cliff is the whole
+		 * point of the case — the tightest squeeze is where printed type is
+		 * smallest, so a fixture that drifts to a safer mid-band weakens
+		 * precisely what the floor below proves.
 		 */
 		it("prints legible body text at the worst achievable squeeze, not just at the ceiling", () => {
-			const rows = hostileTemplateRows(2, 12);
+			const rawAt = (holders: number) =>
+				(PAGE_H - 2) / agendaHeight(hostileTemplateRows(2, holders));
+
+			let lo = 1;
+			let hi = MAX_ROLE_REPEAT_SLOTS;
+			let cliff: number | null = null;
+			while (lo <= hi) {
+				const mid = Math.floor((lo + hi) / 2);
+				if (rawAt(mid) >= MIN_FIT_SCALE) {
+					cliff = mid;
+					lo = mid + 1;
+				} else {
+					hi = mid - 1;
+				}
+			}
+
+			// A shape that flows even at ONE holder would make the floor below
+			// vacuous — it would be measuring the flow branch, which the ceiling
+			// case above already covers.
+			expect(
+				cliff,
+				"no holder count in [1, MAX_ROLE_REPEAT_SLOTS] squeezes rather " +
+					"than flows, so this case cannot reach the squeeze branch at all",
+			).not.toBeNull();
+
+			// Proves the search stopped at the CLIFF rather than at just any
+			// squeezing size: one more holder tips into the flow branch. Without
+			// this, a search that returned 1 would satisfy every assertion below
+			// while measuring a barely-squeezed sheet — passing for the wrong
+			// reason, which is the failure mode a derived fixture invites and a
+			// hardcoded one could not have.
+			if ((cliff as number) < MAX_ROLE_REPEAT_SLOTS) {
+				expect(rawAt((cliff as number) + 1)).toBeLessThan(MIN_FIT_SCALE);
+			}
+
+			const rows = hostileTemplateRows(2, cliff as number);
 			expect(rows.length).toBeGreaterThan(0);
-			// Confirms this landed in the SQUEEZE branch, not the flow branch —
-			// without this, a future change that accidentally made the fixture
-			// flow (see the docblock above) would still pass the floor below
-			// while testing nothing new versus the ceiling case.
-			//
-			// IF THE NEXT TWO ASSERTIONS ARE WHAT WENT RED ON CI: RETUNE, DO NOT
-			// REVERT. The margin above the cliff is ~1.4% (raw ≈ 0.730 against a
-			// 0.72 floor, measured on macOS), and this repo has a DOCUMENTED
-			// cross-platform delta of comparable size on a similar fixture —
-			// 6.88pt macOS vs 6.799pt Linux, ~1.2%, from font substitution moving
-			// wrap points (see this file's header and `agenda-print-type.ts`). So
-			// the fixture flipping into the flow branch on CI's Ubuntu was a KNOWN
-			// and accepted risk when it was sized, not a surprise and not a code
-			// defect. Accepted rather than pre-tuned for three reasons: it fails
-			// LOUDLY here instead of quietly measuring the wrong branch; guessing
-			// Linux metrics from macOS numbers means guessing from the same side
-			// of the same variance that caused the problem, whereas a red CI hands
-			// over the real Linux number; and the tightest squeeze is where
-			// printed type is smallest, so moving to a safer mid-band raw (~0.85)
-			// would weaken precisely what the floor assertion proves. The correct
-			// response is the sizing recipe in the docblock above — shrink content
-			// until it just barely stops flowing — using the OBSERVED Linux
-			// height.
+			// Confirms the search landed in the SQUEEZE branch and that the sheet
+			// is genuinely over one page — without both, a future change could
+			// leave this measuring the flow branch while still passing the floor.
 			const raw = (PAGE_H - 2) / agendaHeight(rows);
 			expect(raw).toBeGreaterThanOrEqual(MIN_FIT_SCALE);
-			expect(raw).toBeLessThan(0.75);
-			// Measured 6.30pt at raw≈0.730 — the worst printed size this
-			// hostile-content shape can be squeezed to before `FitPage` gives
-			// up and flows instead. Still comfortably above the dense floor.
+			expect(raw).toBeLessThan(1);
+			// Measured 6.30pt at raw≈0.730 on macOS — the worst printed size this
+			// hostile-content shape can be squeezed to before `FitPage` gives up
+			// and flows instead. The assertion is the absolute floor rather than
+			// that number, so it holds on whichever platform is running it.
 			expect(printedDetailPt(rows)).toBeGreaterThanOrEqual(
 				EDITORIAL_DENSE_MIN_PRINTED_PT,
 			);
