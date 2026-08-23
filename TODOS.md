@@ -106,8 +106,40 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
   from the seed: a club may have added its own.
   **Priority:** P3
 
+- **`meeting_templates.meeting_id` is ON DELETE CASCADE, but the cascade cannot fire for any
+  private copy a real conversion produced.** Every conversion materializes `role_definitions`
+  against the copy, and `role_definitions.template_id` is ON DELETE RESTRICT — so deleting the
+  meeting aborts with `violates foreign key constraint
+  "role_definitions_template_id_meeting_templates_id_fk"`. Nothing breaks today only because the
+  single production deleter (`recurrence-rule-logic.ts`, pruning pristine recurrence meetings)
+  refuses any meeting with a non-null `template_id`. The open question is whether
+  `role_definitions.template_id` should CASCADE from `meeting_templates` instead, which would make
+  the declared cascade true and let a future deleter work without a bespoke retire step — deliberately
+  NOT changed on the shipping branch (it is a third migration touching the same tables, and the FK
+  also protects `role_slots` indirectly). Both behaviours are now pinned by
+  `template-schema.integration.test.ts`, and `schema.ts`'s `meetingId` docblock states what really
+  protects meeting deletion, so this is a design question rather than a live hazard.
+  **Priority:** P3
+
+- **A printed agenda between one page and ~1.3 pages is SQUEEZED, while a longer one FLOWS.**
+  `FitPage` scales a sheet until it fits, unless the scale would fall below `MIN_FIT_SCALE`, at
+  which point the surface flows across sheets at full size. So legibility is not monotonic in
+  length: the seeded contest printed its body at ~8.6pt when it ran ~40 rows (past the
+  threshold, flowing) and at ~6.7pt once it was rewritten to 21 rows (below it, scaled onto one
+  sheet) — adding rows made the sheet MORE readable. Both clear
+  `EDITORIAL_DENSE_MIN_PRINTED_PT`, so nothing fails; `print-density.test.tsx`'s
+  "FLOWS at full size once long enough" case pins the asymmetry rather than hiding it. The fix
+  is not simply raising `MIN_FIT_SCALE`: that would push ordinary club agendas onto a second
+  sheet, which v1.21.0.0 explicitly promised it would not do. Likely answer is to let a
+  TEMPLATED meeting opt into flowing regardless of scale, since a contest sheet has no
+  one-page promise to keep.
+  STILL OPEN, and the per-meeting agenda editor makes it easier to reach than it was: the seeded
+  contest was the only way to land on this curve before, and now any officer's hand-authored
+  agenda can produce a beat count and row shape anywhere along it, squeeze cliff included.
+  **Priority:** P3
+
 - **Colour print rows by `category` when a role key is unmapped.** `ROLE_KEY_COLOR` now
-  enumerates the ten seeded contest keys beside the five standard ones. That works and does not
+  enumerates the seven seeded contest keys beside the five standard ones. That works and does not
   scale — every future template needs its keys added or the sheet prints one grey spine, and
   `isHighlighted` still tests `roleKey === "speaker"` specifically. A category fallback serves
   every template for free but needs `category` on `AgendaRow`, which is wider than Phase 1 needed.
@@ -125,17 +157,13 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
   "shuffle" affordance, or memoising a deck by meeting id would each undo it.
   **Priority:** P3 (standing constraint, not a task)
 
-- **Phase 2: club-authored templates and the editor UI.** The storage is already data and the
-  reads already admit `club_id`-scoped rows, so this needs writes and a UI, no migration. Before
-  it ships, MEASURE the caps in `src/lib/meeting-template-limits.ts` — they are honest bounds
-  today, not measurements, and the seed is currently the only writer.
+- **Next increment: save this shape as a template.** Per-meeting editing lets an officer land an
+  agenda on a private, throwaway copy (`meeting_templates.meeting_id` set) — nothing yet promotes
+  that copy back into a reusable, shared row other meetings can pick. `meeting_id` already models
+  the distinction the promotion needs (set = private, null = shared), so "save as template" is
+  copying the private row's own beats and roles into a NEW row with `meeting_id` null and
+  `club_id` set to the caller's club, not a second mechanism or a new table.
   **Priority:** P3
-
-- **`buildTemplateRows`' repeat-block binding is unexercised in two shapes.** A block holding two
-  role-owning rows, or a role row whose `roleKey` differs from its `repeatsRoleKey`, is
-  unreachable from the seeded contest and reachable from a Phase 2 editor. Decide the semantics
-  and test them before the editor exists.
-  **Priority:** P4
 
 - **The "Change meeting type" button's wiring has no guard.** PR 2 added
   `template-deck-wiring.guard.test.ts`, which covers the two DECK expressions on the meeting and
@@ -145,12 +173,45 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
   adding a file.
   **Priority:** P3
 
-- **The template server fns are gated in SOURCE but not in BEHAVIOUR.** `meeting-templates.guard.test.ts`
-  proves every `createServerFn` in the module names a `require*` guard and an archive check, which
-  is what the archive-gate sweep needs. Nothing calls `previewTemplateForMeeting` or
-  `applyTemplateToMeeting` with a plain member's session and asserts a refusal, so the guards are
-  verified by grep rather than by behaviour. Same for the zod validators — no test passes a
-  non-uuid.
+- **The template and agenda-editor server fns are gated in SOURCE but not in BEHAVIOUR.**
+  `meeting-templates-authz.guard.test.ts` proves every `createServerFn` in `meeting-templates.ts`
+  AND `meeting-agenda-edit.ts` names a `require*` guard and an archive check, which is what the
+  archive-gate sweep needs. Nothing calls `previewTemplateForMeeting`, `applyTemplateToMeeting`
+  or any of the eight agenda-editor fns with a plain member's session and asserts a refusal, so
+  the guards are verified by grep rather than by behaviour. Same for the zod validators — no test
+  passes a non-uuid, an over-long label or a fractional timing mark. Wider than it was: the
+  editor's eight fns have no backstop under the handler at all, since the `-logic` layer has no
+  session of its own.
+  **Priority:** P3
+
+- **`copyTemplateForMeeting`'s reads of the SOURCE template are uncapped**, and will stop being
+  safe the moment "save this shape as a template" lands. It copies every
+  `meeting_template_roles` and `meeting_template_beats` row the source has, with no
+  `MAX_TEMPLATE_ROLES` / `MAX_TEMPLATE_BEATS` limit of its own. Unreachable today, and that is a
+  property of the DATA rather than of the code: a private per-meeting copy cannot itself be a
+  source (`listAvailableTemplates` excludes private copies from the picker), so every source is a
+  seeded template whose size the seed fixes. Turning an officer-authored private copy into a
+  source makes this an officer-sized read. Cap it in that change, not before, and cap it at the
+  seam the way `loadTemplateBeats` already does rather than at the writer alone.
+  **Priority:** P3
+
+- **`defaultCount` is unenforced after a re-point, and `slotsAdded` over-reports.**
+  `applyTemplateConversion`'s `existingDefIds` is "any target def some surviving slot maps to", so
+  `toCreate` skips a matched role regardless of how many slots it actually has — if the target
+  declares 3 contestants and the meeting has 2, the apply keeps 2 and creates 0 while `summarize`
+  reports `slotsAdded = 1`. Reachable today: use the agenda's +/- slot controls, then re-pick the
+  same template. Preview and apply still AGREE with each other (both derive from the same
+  `planConversion`), which is why nothing fails — the number they agree on is just not what
+  happens. A fix has to count slots per matched def rather than testing set membership, and has to
+  decide whether a re-point should also DELETE surplus slots, which is a policy question, not a
+  bug fix.
+  **Priority:** P3
+
+- **The re-point path skips evaluator↔speaker linking.** `linkEvaluatorsToSpeakers` only pairs
+  rows within `inserted`, so a newly created evaluator slot sitting beside a KEPT speaker slot is
+  left with `evaluatesSlotId` null. Unreachable with the shipped seeds — the contest declares no
+  evaluator role and shares no keys with `ROLE_TEMPLATE`, so a conversion never produces the
+  mixed kept/inserted shape — and reachable as soon as a club authors a template that does.
   **Priority:** P3
 
 - **`flexBannerMessage` hardcodes Table Topics.** `buildTemplateRows` carries a beat's `flex`
@@ -395,3 +456,33 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
 - The MCF handback beat ("Toastmaster of the Day · Introduces the speakers") has no counterpart slide in the projected deck, so a Toastmaster running the meeting off the projector alone does not see the cue.
   **Priority:** P4
   **Completed:** v1.1.0.0 (2026-07-29) — every hand-off now has a matching slide, labelled by target.
+
+- **Phase 2: per-meeting agenda editing.** Landed per the configurable-agendas spec
+  (`docs/superpowers/specs/2026-08-21-configurable-agendas-design.md`). Converting a meeting to a
+  template deep-copies the source template's row, roles and beats into a private per-meeting row
+  (`meeting_templates.meeting_id`, nullable, unique when set); reverting deletes the private copy,
+  and re-converting makes a fresh one rather than reusing the retired row. `ensureAgendaDraft`
+  upgrades a meeting still pointing at a pre-feature SHARED template into a private copy on its
+  first edit, returning `{ templateId, forked }`. `listAvailableTemplates` excludes private
+  per-meeting copies from the picker, in the query rather than a caller-side filter. No new
+  tables, one read seam. The caps in `src/lib/meeting-template-limits.ts` were measured (not
+  merely asserted) against an officer-authored, all-axes-hostile fixture: linear cost with no
+  knee to 16x the beat cap, worst case ~33-35ms against a 250ms budget — so the ceilings were
+  confirmed rather than lowered. See CONTEXT.md's **Meeting template** entry.
+  **Completed:** v1.24.0.0 (2026-08-22) — #615.
+
+- **`buildTemplateRows`' repeat-block binding is no longer unexercised.** The configurable-agendas
+  spec's D4 resolved the two previously-unreachable shapes by CONSTRAINING rather than adding a
+  stored setting: `repeats_role_key` IS the once/per-holder flag — null means "once", the row's
+  own key means "per holder" — and a per-holder row must repeat over the exact role it names.
+  The two shapes resolve DIFFERENTLY, and this entry said "both unauthorable" until the
+  end-of-branch fix wave corrected it. A role row whose `roleKey` differs from its
+  `repeatsRoleKey` is genuinely unauthorable, enforced in both halves: the editor's Role select
+  patches both keys together, and `assertRepeatBinding` refuses the merged row at the writer. A
+  block with two role-owning rows stays authorable and is simply DEFINED now — both rows name
+  the block's role, so each iteration binds both to that iteration's slot. A non-role row inside
+  a block (the contest's ballot minute) is untouched by the rule, which is why the check is keyed
+  on `kind`. The workaround this constraint made unnecessary (routing the contest's tally and
+  timers' report around multi-slot roles) was dropped in the same pass: both beats now bind back
+  to `ballot_counter` / `contest_timer`.
+  **Completed:** v1.24.0.0 (2026-08-22) — #615.

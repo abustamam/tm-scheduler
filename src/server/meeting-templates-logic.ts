@@ -29,14 +29,20 @@ import {
 	MAX_TEMPLATE_BEATS,
 	MAX_TEMPLATE_ROLES,
 } from "#/lib/meeting-template-limits";
+import {
+	distinctRoleDefs,
+	matchRoleDefs,
+	type RoleIdentity,
+} from "#/lib/role-def-match";
 import { logActivity } from "./activity";
+import { assertClubNotArchived, requireClubRole, requireUser } from "./guards";
 import { assertMeetingNotLocked } from "./meeting-authz-logic";
 import {
 	linkEvaluatorsToSpeakers,
 	type MeetingSlotDefs,
 } from "./meeting-create-logic";
 
-type DbOrTx =
+export type DbOrTx =
 	| typeof db
 	| Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
 
@@ -48,6 +54,34 @@ export type MeetingTemplateSummary = {
 	description: string | null;
 	defaultLengthMinutes: number | null;
 };
+
+/**
+ * Resolve a meeting to its club and gate the caller as an officer of it.
+ *
+ * Reshaping a meeting sits with reschedule and cancel, not with the
+ * agenda-content edits ADR-0010 grants the self-asserted Toastmaster — a TMOD
+ * may fill the agenda, not replace it. Note `requireClubRole(["admin"])` also
+ * grants to any member holding an open `officer_terms` row (effective-admin,
+ * #202), so the real authority here is every officer, not only a stored admin.
+ *
+ * Lives here, not in `meeting-templates.ts`, so a second server-fn module
+ * (`meeting-agenda-edit.ts`) can import it too: a plain value export from a
+ * module that also defines `createServerFn`s is exactly the leak
+ * `server-modules.guard.test.ts` exists to catch, so this helper has to live
+ * in a `*-logic.ts` sibling to be exported at all.
+ */
+export async function requireMeetingTemplateEditor(meetingId: string) {
+	const user = await requireUser();
+	const [meeting] = await database
+		.select({ clubId: meetings.clubId })
+		.from(meetings)
+		.where(eq(meetings.id, meetingId))
+		.limit(1);
+	if (!meeting) throw new Error("Meeting not found.");
+	await assertClubNotArchived(meeting.clubId);
+	const membership = await requireClubRole(user.id, meeting.clubId, ["admin"]);
+	return { clubId: meeting.clubId, membership };
+}
 
 /**
  * Templates this club may apply: every enabled GLOBAL template (`club_id IS
@@ -73,6 +107,11 @@ export async function listAvailableTemplates(
 		.where(
 			and(
 				eq(meetingTemplates.enabled, true),
+				// Private per-meeting copies are agendas, not choices. Excluded in
+				// the QUERY rather than by a caller's `.filter()`, for the same
+				// reason the tenant predicate is: a filter is droppable in a
+				// refactor with every test still green.
+				isNull(meetingTemplates.meetingId),
 				or(
 					isNull(meetingTemplates.clubId),
 					eq(meetingTemplates.clubId, clubId),
@@ -132,28 +171,53 @@ async function loadTemplateRoles(
 }
 
 /**
- * A template's beats and roles. Null when it has neither — which, for a
- * `meetings.template_id` pointer, means corruption, since that FK is ON DELETE
- * RESTRICT and the template therefore cannot have been deleted.
- *
- * NO existence check, and the two selects run in PARALLEL. This is called from
- * `loadMeetingDetail`, which TODOS.md already flags as issuing ~15 sequential
- * round trips that every roll-mode write re-runs; three more sequential ones
- * would land on the exact path that hurts, on contest night. An existence
- * SELECT the foreign key already guarantees is not worth a round trip.
+ * A template's beats and roles. Null only when the row itself does not
+ * exist — which, for a `meetings.template_id` pointer, means corruption,
+ * since that FK is ON DELETE RESTRICT and the template therefore cannot have
+ * been deleted.
  */
 export async function loadTemplateContent(
 	templateId: string,
 ): Promise<{ beats: TemplateBeatRow[]; roles: TemplateRoleRow[] } | null> {
-	const [beats, roles] = await Promise.all([
+	// THREE reads in parallel, not two. The existence check used to be inferred
+	// from "both empty", which was free — but the editor can legitimately empty a
+	// template, and inferring absence from emptiness turns "I deleted my last
+	// row" into `meetings.ts` throwing and the meeting page going down. A third
+	// parallel round trip adds no latency to `loadMeetingDetail`'s critical path,
+	// which is what the old comment was protecting.
+	const [beats, roles, exists] = await Promise.all([
 		loadTemplateBeats(templateId),
 		loadTemplateRoles(templateId),
+		database
+			.select({ id: meetingTemplates.id })
+			.from(meetingTemplates)
+			.where(eq(meetingTemplates.id, templateId))
+			.limit(1),
 	]);
-	// Both empty = no such template. A Phase 2 editor could create a template
-	// with no beats AND no roles, which would read as missing here; give it at
-	// least one row, or restore the existence check at that point.
-	if (beats.length === 0 && roles.length === 0) return null;
+	if (exists.length === 0) return null;
 	return { beats, roles };
+}
+
+/**
+ * The `key` of a template row, or null if it no longer exists.
+ *
+ * Exists so a caller can tell an officer WHICH listed choice a meeting is
+ * currently running without matching on `meetings.template_id` itself — a
+ * private copy's own id is fresh every conversion and never equals anything
+ * `listAvailableTemplates` offers, but it keeps its SOURCE's `key` verbatim
+ * (see `copyTemplateForMeeting`), so `key` is the stable thing to match a
+ * picker choice against. `meeting-agenda.tsx` uses this to compute the
+ * "Current" badge in `MeetingTemplateDialog`.
+ */
+export async function loadTemplateKey(
+	templateId: string,
+): Promise<string | null> {
+	const [row] = await database
+		.select({ key: meetingTemplates.key })
+		.from(meetingTemplates)
+		.where(eq(meetingTemplates.id, templateId))
+		.limit(1);
+	return row?.key ?? null;
 }
 
 /**
@@ -194,8 +258,9 @@ export function roleDefScopeOnly(templateId: string | null) {
  *
  * Copy-once is the same contract `ROLE_TEMPLATE` already has: it seeds
  * `role_definitions` at club creation and editing the constant later reaches no
- * existing club. `scripts/resync-template-roles.ts` is the deliberate escape
- * hatch for pushing a seed change to clubs that already used the template.
+ * existing club. There is no escape hatch for pushing a seed change to clubs
+ * that already used the template: `scripts/resync-template-roles.ts` is
+ * specified but not written (TODOS.md, "Agenda templates").
  *
  * Required at all because `role_slots.role_definition_id` is NOT NULL and
  * restricting: a claimable contest role has to be a real `role_definitions` row.
@@ -231,6 +296,126 @@ export async function materializeTemplateRoles(
 }
 
 /**
+ * A template `clubId` may legally copy FROM: global, or the club's own,
+ * excluding private per-meeting copies. Same shape as `listAvailableTemplates`
+ * (`:61-88`) — deliberately re-expressed rather than shared, since that query
+ * also requires `enabled`, which a source lookup must not: a meeting already
+ * running a template a club later disabled still has to be re-copyable when
+ * re-converting or re-applying it.
+ *
+ * `meeting_templates` gained its first per-club (and per-meeting) rows in the
+ * same change that added `copyTemplateForMeeting`. Before that, a caller-
+ * supplied template id was safe to trust unscoped — every row was global and
+ * world-readable by design. It no longer is: `applyTemplateToMeeting` passes
+ * the caller's `templateId` straight through with no ownership check of its
+ * own, and meeting ids (hence a meeting's private-copy id, readable off its
+ * own `meetings.template_id`) are public. Without this predicate, an admin of
+ * ANY club could name another club's private copy as the source and deep-copy
+ * that club's authored agenda into their own.
+ */
+function templateVisibleTo(clubId: string) {
+	return and(
+		or(isNull(meetingTemplates.clubId), eq(meetingTemplates.clubId, clubId)),
+		isNull(meetingTemplates.meetingId),
+	);
+}
+
+/**
+ * Deep-copy a template into a PRIVATE row owned by one meeting, and return the
+ * copy's id.
+ *
+ * This is what makes an agenda editable: the meeting points at content nobody
+ * else reads, so removing a row from one contest cannot remove it from the next
+ * one, and "save this shape as a template" later is a promotion (clear
+ * `meeting_id`) rather than a second mechanism.
+ *
+ * The copy keeps the SOURCE's `key`. It is unique per meeting via
+ * `meeting_templates_meeting_unique`, and the club-key index exempts private
+ * rows, so the key here is provenance rather than identity — it is how you can
+ * still tell what a meeting was built from after it has been edited.
+ *
+ * `sourceTemplateId` is gated by `templateVisibleTo(clubId)` — this is the
+ * boundary that keeps one club from naming another's private copy as a
+ * source, so it must run inside the SAME transaction as everything else this
+ * function does: it is multi-statement but not self-transactional, and a
+ * caller invoking it outside a transaction risks a mid-copy failure leaving a
+ * template row with partial roles and beats.
+ */
+export async function copyTemplateForMeeting(
+	conn: DbOrTx,
+	input: { sourceTemplateId: string; clubId: string; meetingId: string },
+): Promise<string> {
+	const { sourceTemplateId, clubId, meetingId } = input;
+	const [source] = await conn
+		.select()
+		.from(meetingTemplates)
+		.where(
+			and(eq(meetingTemplates.id, sourceTemplateId), templateVisibleTo(clubId)),
+		)
+		.limit(1);
+	if (!source) throw new Error("That meeting template no longer exists.");
+
+	const [copy] = await conn
+		.insert(meetingTemplates)
+		.values({
+			clubId,
+			meetingId,
+			key: source.key,
+			name: source.name,
+			description: source.description,
+			defaultLengthMinutes: source.defaultLengthMinutes,
+			sortOrder: source.sortOrder,
+			enabled: source.enabled,
+		})
+		.returning({ id: meetingTemplates.id });
+	if (!copy) throw new Error("Failed to copy the meeting template.");
+
+	const roles = await conn
+		.select()
+		.from(meetingTemplateRoles)
+		.where(eq(meetingTemplateRoles.templateId, sourceTemplateId));
+	if (roles.length > 0) {
+		await conn.insert(meetingTemplateRoles).values(
+			roles.map((r) => ({
+				templateId: copy.id,
+				key: r.key,
+				name: r.name,
+				category: r.category,
+				defaultCount: r.defaultCount,
+				sortOrder: r.sortOrder,
+				isSpeakerRole: r.isSpeakerRole,
+				description: r.description,
+			})),
+		);
+	}
+
+	const beats = await conn
+		.select()
+		.from(meetingTemplateBeats)
+		.where(eq(meetingTemplateBeats.templateId, sourceTemplateId));
+	if (beats.length > 0) {
+		await conn.insert(meetingTemplateBeats).values(
+			beats.map((b) => ({
+				templateId: copy.id,
+				sortOrder: b.sortOrder,
+				kind: b.kind,
+				label: b.label,
+				detail: b.detail,
+				minutes: b.minutes,
+				roleKey: b.roleKey,
+				repeatsRoleKey: b.repeatsRoleKey,
+				flex: b.flex,
+				markGreen: b.markGreen,
+				markYellow: b.markYellow,
+				markRed: b.markRed,
+			})),
+		);
+	}
+
+	return copy.id;
+}
+
+/**
  * PURE READ. The role definitions a meeting's slots are generated from.
  *
  * Deliberately does NOT materialize. A function named `resolve…` that quietly
@@ -247,7 +432,7 @@ export async function resolveMeetingRoleDefs(
 	conn: DbOrTx,
 	clubId: string,
 	templateId: string | null,
-): Promise<MeetingSlotDefs[]> {
+): Promise<(MeetingSlotDefs & RoleIdentity)[]> {
 	return conn
 		.select({
 			id: roleDefinitions.id,
@@ -256,6 +441,11 @@ export async function resolveMeetingRoleDefs(
 			category: roleDefinitions.category,
 			isSpeakerRole: roleDefinitions.isSpeakerRole,
 			sortOrder: roleDefinitions.sortOrder,
+			// The conversion matches on these, not on `id` — see
+			// `matchRoleDefs`. Selected here rather than in a second round trip
+			// so the preview and the apply read one shape.
+			key: roleDefinitions.key,
+			name: roleDefinitions.name,
 		})
 		.from(roleDefinitions)
 		.where(
@@ -303,6 +493,10 @@ async function loadSlotsForConversion(conn: DbOrTx, meetingId: string) {
 			id: roleSlots.id,
 			roleDefinitionId: roleSlots.roleDefinitionId,
 			roleName: roleDefinitions.name,
+			// The stable identity the conversion keeps a slot BY. Without it,
+			// "does this role survive" could only be asked of a `role_definitions`
+			// id, which is fresh on every copy — see `matchRoleDefs`.
+			roleKey: roleDefinitions.key,
 			assignedMemberId: roleSlots.assignedMemberId,
 			assignedGuestId: roleSlots.assignedGuestId,
 			memberName: members.name,
@@ -317,6 +511,78 @@ async function loadSlotsForConversion(conn: DbOrTx, meetingId: string) {
 		.leftJoin(members, eq(roleSlots.assignedMemberId, members.id))
 		.leftJoin(guests, eq(roleSlots.assignedGuestId, guests.id))
 		.where(eq(roleSlots.meetingId, meetingId));
+}
+
+/** A role the conversion will END UP with, as both sides can see it. */
+type TargetRole = RoleIdentity & { defaultCount: number };
+
+/**
+ * The role set a conversion to `templateId` INSTALLS, resolved the one way
+ * both the preview and the apply can resolve it.
+ *
+ * For a template it is the template's own `meeting_template_roles`, NOT the
+ * materialized `role_definitions`: the apply deep-copies the template
+ * (`copyTemplateForMeeting`) and materializes the copy's roles
+ * (`materializeTemplateRoles`), which is a field-for-field reproduction of
+ * exactly these rows under a fresh `template_id`. Reading `role_definitions`
+ * under the SOURCE id instead is what made the preview and the apply disagree:
+ * the preview saw the defs a pre-private-copy conversion had materialized
+ * there, badged the target "Current", and reported a no-op — while the apply
+ * built a brand-new copy whose defs share none of those ids and released every
+ * claim. Same predicate, different ARGUMENT.
+ *
+ * For `null` it is the club's own ENABLED standard roles, which the apply
+ * reads through `resolveMeetingRoleDefs(conn, clubId, null)` — the same rows,
+ * no copy involved.
+ */
+async function resolveConversionTargetRoles(
+	conn: DbOrTx,
+	clubId: string,
+	templateId: string | null,
+): Promise<TargetRole[]> {
+	if (templateId === null) {
+		return conn
+			.select({
+				key: roleDefinitions.key,
+				name: roleDefinitions.name,
+				defaultCount: roleDefinitions.defaultCount,
+			})
+			.from(roleDefinitions)
+			.where(
+				and(roleDefScope(clubId, null), eq(roleDefinitions.enabled, true)),
+			);
+	}
+	return conn
+		.select({
+			key: meetingTemplateRoles.key,
+			name: meetingTemplateRoles.name,
+			defaultCount: meetingTemplateRoles.defaultCount,
+		})
+		.from(meetingTemplateRoles)
+		.where(eq(meetingTemplateRoles.templateId, templateId));
+}
+
+/**
+ * The whole derivation, run identically by the preview and the apply.
+ *
+ * Returns the counts the dialog shows AND the old-definition → new-definition
+ * map the apply re-points slots through, from ONE call — which is what makes
+ * "preview and apply agree" a property of the code rather than of two call
+ * sites staying in sync.
+ */
+function planConversion<T extends TargetRole>(
+	current: Awaited<ReturnType<typeof loadSlotsForConversion>>,
+	target: T[],
+): { plan: ConversionPlan; matched: Map<string, T> } {
+	const matched = matchRoleDefs(distinctRoleDefs(current), target);
+	return {
+		plan: summarize(
+			current,
+			new Set(matched.keys()),
+			target.reduce((n, r) => n + r.defaultCount, 0),
+		),
+		matched,
+	};
 }
 
 function summarize(
@@ -347,9 +613,22 @@ function summarize(
  *
  * The confirmation dialog shows these counts before anything is destroyed,
  * which is the whole reason converting a meeting with live claims on it is
- * allowed at all. It reuses the SAME predicate the apply resolves through
- * (`roleDefScope`) rather than re-expressing it, so the two can never disagree
- * about what gets kept — the one thing this dialog exists to guarantee.
+ * allowed at all.
+ *
+ * It runs the SAME derivation the apply runs — `resolveConversionTargetRoles`
+ * then `planConversion` — over the same two inputs, so the two cannot disagree
+ * about what gets kept. That is the one thing this dialog exists to guarantee,
+ * and it was FALSE until this was written: the docblock used to claim the
+ * shared `roleDefScope` predicate was enough, but the preview passed it the
+ * SOURCE template's id while the apply passed a brand-new private copy's, so
+ * for any meeting whose definitions were materialized under the source id
+ * (every meeting converted before private copies existed) re-picking the entry
+ * badged "Current" previewed as a no-op and then released every claim. A
+ * shared predicate given a different argument is not a shared answer.
+ *
+ * Nothing here is a second copy of the apply's rule: the target roles come
+ * from the template's own declarations, which is precisely what the apply is
+ * about to materialize, and the keep/drop decision is `matchRoleDefs`.
  */
 export async function planTemplateConversion(
 	meetingId: string,
@@ -362,34 +641,42 @@ export async function planTemplateConversion(
 		.limit(1);
 	if (!meeting) throw new Error("Meeting not found.");
 
+	// Same tenant boundary `copyTemplateForMeeting` and `applyTemplateConversion`
+	// already enforce on the WRITE path (see that function's docblock):
+	// `templateId` is caller-supplied and, now that private per-meeting copies
+	// exist, unsafe to trust unscoped — without this, a club-B admin who has
+	// read a club-A private template's id off a public meeting page could
+	// preview against it and learn its role count below. Throwing the same
+	// "no longer exists" error the write path throws — rather than silently
+	// returning a zeroed plan — keeps the two paths agreeing about what a
+	// caller may even address; a caller that cannot APPLY a template should not
+	// be able to PREVIEW it either.
+	if (templateId !== null) {
+		const [visible] = await database
+			.select({ id: meetingTemplates.id })
+			.from(meetingTemplates)
+			.where(
+				and(
+					eq(meetingTemplates.id, templateId),
+					templateVisibleTo(meeting.clubId),
+				),
+			)
+			.limit(1);
+		if (!visible) throw new Error("That meeting template no longer exists.");
+	}
+
 	const current = await loadSlotsForConversion(database, meetingId);
 
 	// Preview must NOT materialize: a preview that writes would litter a club's
-	// role_definitions with templates nobody applied.
-	const target = await database
-		.select({
-			id: roleDefinitions.id,
-			defaultCount: roleDefinitions.defaultCount,
-			enabled: roleDefinitions.enabled,
-		})
-		.from(roleDefinitions)
-		.where(roleDefScope(meeting.clubId, templateId));
-	const usable = templateId === null ? target.filter((d) => d.enabled) : target;
-
-	// How many slots the target shape has. For an ALREADY-materialized template
-	// (or the club's standard roles) that is the sum over `usable`. For a
-	// first-time template nothing is materialized yet, so read the template's own
-	// rows instead.
-	let targetSlotCount = usable.reduce((n, d) => n + d.defaultCount, 0);
-	if (templateId !== null && usable.length === 0) {
-		const rows = await database
-			.select({ defaultCount: meetingTemplateRoles.defaultCount })
-			.from(meetingTemplateRoles)
-			.where(eq(meetingTemplateRoles.templateId, templateId));
-		targetSlotCount = rows.reduce((n, r) => n + r.defaultCount, 0);
-	}
-
-	return summarize(current, new Set(usable.map((r) => r.id)), targetSlotCount);
+	// role_definitions with templates nobody applied. Reading the template's own
+	// declarations rather than its materialized copies is what makes that
+	// possible AND what makes this exact — see `resolveConversionTargetRoles`.
+	const target = await resolveConversionTargetRoles(
+		database,
+		meeting.clubId,
+		templateId,
+	);
+	return planConversion(current, target).plan;
 }
 
 /**
@@ -413,9 +700,24 @@ export async function applyTemplateConversion(input: {
 }): Promise<ConversionPlan> {
 	const { meetingId, clubId, templateId, actorMemberId } = input;
 
+	// Fail fast, before opening a transaction. Gated by `templateVisibleTo` for
+	// the same reason `copyTemplateForMeeting`'s own read is (see that
+	// function's docblock): `templateId` is caller-supplied —
+	// `applyTemplateToMeeting` passes it straight through, checking only the
+	// TARGET meeting's club — and, now that private per-meeting copies exist,
+	// no longer safe to trust as globally readable. This duplicates
+	// `copyTemplateForMeeting`'s own gate rather than relying on it alone,
+	// so the caller-facing error and the no-lock-taken failure happen here,
+	// before the transaction below does any work.
 	if (templateId !== null) {
-		const content = await loadTemplateContent(templateId);
-		if (!content) throw new Error("That meeting template no longer exists.");
+		const [visible] = await database
+			.select({ id: meetingTemplates.id })
+			.from(meetingTemplates)
+			.where(
+				and(eq(meetingTemplates.id, templateId), templateVisibleTo(clubId)),
+			)
+			.limit(1);
+		if (!visible) throw new Error("That meeting template no longer exists.");
 	}
 
 	return database.transaction(async (tx) => {
@@ -424,6 +726,7 @@ export async function applyTemplateConversion(input: {
 				id: meetings.id,
 				status: meetings.status,
 				clubId: meetings.clubId,
+				templateId: meetings.templateId,
 			})
 			.from(meetings)
 			.where(eq(meetings.id, meetingId))
@@ -440,20 +743,96 @@ export async function applyTemplateConversion(input: {
 			throw new Error("A cancelled meeting cannot change its template.");
 		}
 
+		// The meeting's CURRENT private template, if it has one — captured before
+		// we repoint, because that is what we must retire afterwards.
+		const previousPrivateId = meeting.templateId
+			? ((
+					await tx
+						.select({ id: meetingTemplates.id })
+						.from(meetingTemplates)
+						.where(
+							and(
+								eq(meetingTemplates.id, meeting.templateId),
+								eq(meetingTemplates.meetingId, meetingId),
+							),
+						)
+						.limit(1)
+				)[0]?.id ?? null)
+			: null;
+
+		// Detach (never delete-in-place) the outgoing private copy FIRST.
+		// `meeting_templates_meeting_unique` is a bare unique INDEX, not a
+		// deferrable constraint, so it is enforced the instant
+		// `copyTemplateForMeeting`'s INSERT runs below — the old row's own
+		// `meeting_id` has to be cleared before that insert, not after.
+		// (Nulling `meetings.template_id` would not do this: that column and
+		// `meeting_templates.meeting_id` are different columns on different
+		// tables.) The row can't be fully DELETEd yet either:
+		// `role_definitions.template_id` is ON DELETE RESTRICT and still points
+		// at it — materialized when this very copy was made — and those
+		// `role_definitions` rows can't go until the `role_slots` referencing
+		// them are reconciled below, which needs the NEW template's defs, which
+		// don't exist until the copy is inserted. So: detach now, retire in full
+		// once the new shape is in place.
+		if (previousPrivateId !== null) {
+			await tx
+				.update(meetingTemplates)
+				.set({ meetingId: null })
+				.where(eq(meetingTemplates.id, previousPrivateId));
+		}
+
+		// Deep-copy so this meeting's agenda is its own. Re-converting makes a
+		// FRESH copy, which is what keeps an edited contest from leaking into the
+		// next one.
+		const effectiveTemplateId =
+			templateId === null
+				? null
+				: await copyTemplateForMeeting(tx, {
+						sourceTemplateId: templateId,
+						clubId,
+						meetingId,
+					});
+
 		// Materialize EXPLICITLY, as its own step. `resolveMeetingRoleDefs` is a
 		// pure read, so the write has to be visible here rather than hidden inside
 		// a function named `resolve…`. Idempotent.
-		if (templateId !== null) {
-			await materializeTemplateRoles(tx, clubId, templateId);
+		if (effectiveTemplateId !== null) {
+			await materializeTemplateRoles(tx, clubId, effectiveTemplateId);
 		}
-		const defs = await resolveMeetingRoleDefs(tx, clubId, templateId);
-		const keepDefIds = new Set(defs.map((d) => d.id));
+		const defs = await resolveMeetingRoleDefs(tx, clubId, effectiveTemplateId);
 		const current = await loadSlotsForConversion(tx, meetingId);
-		const plan = summarize(
-			current,
-			keepDefIds,
-			defs.reduce((n, d) => n + d.defaultCount, 0),
-		);
+		// The SAME derivation `planTemplateConversion` ran — `matchRoleDefs` over
+		// the current definitions and the target ones. `defs` are the freshly
+		// materialized rows, so their ids differ from anything the preview saw,
+		// but their KEYS are the template's own declarations verbatim, which is
+		// exactly what the preview matched against.
+		const { plan, matched } = planConversion(current, defs);
+		const keepDefIds = new Set(matched.keys());
+
+		// Re-point, do not tear down. A slot whose role the target set still
+		// declares is the SAME role — the officer re-picked the shape it already
+		// had, or moved to a template that shares the position — so the member
+		// who claimed it keeps it. Only the row it points at changes, because
+		// `role_definitions` is materialized per (club, template) and the copy
+		// this transaction just made carries fresh ids.
+		//
+		// This is what makes re-applying a template stop being a full teardown,
+		// and it is not a nicety: a released holder CANNOT be notified
+		// (`notifications.slot_id` is NOT NULL and cascades from `role_slots`,
+		// see this function's docblock), so every avoidable release is a member
+		// who silently loses a role they agreed to.
+		for (const [oldDefId, def] of matched) {
+			if (def.id === oldDefId) continue;
+			await tx
+				.update(roleSlots)
+				.set({ roleDefinitionId: def.id })
+				.where(
+					and(
+						eq(roleSlots.meetingId, meetingId),
+						eq(roleSlots.roleDefinitionId, oldDefId),
+					),
+				);
+		}
 
 		const doomedIds = current
 			.filter((s) => !keepDefIds.has(s.roleDefinitionId))
@@ -476,10 +855,14 @@ export async function applyTemplateConversion(input: {
 			await tx.delete(roleSlots).where(inArray(roleSlots.id, doomedIds));
 		}
 
+		// The NEW ids the kept slots now point at, not the old ones they came in
+		// with — `toCreate` below asks "which target roles still have no slot on
+		// this meeting", and after the re-point above that question is only
+		// answerable in the target set's own id space.
 		const existingDefIds = new Set(
 			current
-				.filter((s) => keepDefIds.has(s.roleDefinitionId))
-				.map((s) => s.roleDefinitionId),
+				.map((s) => matched.get(s.roleDefinitionId)?.id)
+				.filter((id): id is string => id !== undefined),
 		);
 		const toCreate = defs.filter((d) => !existingDefIds.has(d.id));
 		if (toCreate.length > 0) {
@@ -495,20 +878,42 @@ export async function applyTemplateConversion(input: {
 		}
 
 		const length =
-			templateId === null
+			effectiveTemplateId === null
 				? null
 				: ((
 						await tx
 							.select({ m: meetingTemplates.defaultLengthMinutes })
 							.from(meetingTemplates)
-							.where(eq(meetingTemplates.id, templateId))
+							.where(eq(meetingTemplates.id, effectiveTemplateId))
 							.limit(1)
 					)[0]?.m ?? null);
 
 		await tx
 			.update(meetings)
-			.set({ templateId, ...(length != null ? { lengthMinutes: length } : {}) })
+			.set({
+				templateId: effectiveTemplateId,
+				...(length != null ? { lengthMinutes: length } : {}),
+			})
 			.where(eq(meetings.id, meetingId));
+
+		// Retire the superseded private copy now, not earlier: `meetings.template_id`
+		// no longer references it (just updated above, satisfying its own RESTRICT),
+		// and every role_slot that used to reference its materialized
+		// role_definitions was just reconciled — either RE-POINTED at the new
+		// copy's matching definition or deleted with `doomedIds`. Those two arms
+		// are exhaustive over `current` by construction (`matched` decides which),
+		// and a private copy's definitions are referenced by this meeting's slots
+		// alone, so nothing else can still be holding the RESTRICT.
+		// role_definitions has to go first: it is ALSO ON DELETE RESTRICT against
+		// meeting_templates, independently of the meetings.template_id one above.
+		if (previousPrivateId !== null) {
+			await tx
+				.delete(roleDefinitions)
+				.where(roleDefScope(clubId, previousPrivateId));
+			await tx
+				.delete(meetingTemplates)
+				.where(eq(meetingTemplates.id, previousPrivateId));
+		}
 
 		await logActivity(tx, {
 			clubId,
@@ -516,7 +921,7 @@ export async function applyTemplateConversion(input: {
 			action: "meeting_template_set",
 			targetType: "meeting",
 			targetId: meetingId,
-			detail: { templateId },
+			detail: { templateId, privateTemplateId: effectiveTemplateId },
 		});
 
 		return plan;

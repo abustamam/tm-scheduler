@@ -164,31 +164,57 @@ describe("buildTemplateRows", () => {
 	});
 
 	/**
-	 * A non-repeating role beat must emit one row per slot, matching
-	 * `expandRunSheet`'s plain arm. Binding only the first slot silently drops
-	 * the second Ballot Counter and the second Timer, both of which the seeded
-	 * contest declares with `defaultCount: 2`.
+	 * A non-repeating role beat used to emit one row PER SLOT, so "Tallying" on a
+	 * two-slot `ballot_counter` printed twice at ten minutes each — twenty
+	 * minutes for one joint activity, on the clock the chair runs the night
+	 * from. Repeating is what `repeatsRoleKey` is for; a plain role beat is one
+	 * activity however many people hold the role.
 	 */
-	it("emits one row per slot for a non-repeating role with several slots", () => {
-		const rows = buildTemplateRows(
-			[
-				beat({
-					sortOrder: 0,
-					kind: "role",
-					label: "Tallying",
-					roleKey: "ballot_counter",
-				}),
-			],
-			ROLES,
-			[
-				slot("ballot_counter", "Ballot Counter", 0, "Ada"),
-				slot("ballot_counter", "Ballot Counter", 1, "Grace"),
-			],
-		);
-		expect(rows).toHaveLength(2);
+	it("emits ONE row for a non-repeating role beat, naming every holder", () => {
+		const beats: TemplateBeatRow[] = [
+			beat({
+				sortOrder: 0,
+				kind: "role",
+				label: "Tallying",
+				roleKey: "counter",
+				minutes: 10,
+			}),
+		];
+		const counterRoles: TemplateRoleRow[] = [
+			{ key: "counter", name: "Ballot Counter", isSpeakerRole: false },
+		];
+		const rows = buildTemplateRows(beats, counterRoles, [
+			slot("counter", "Ballot Counter", 0, "Ada"),
+			slot("counter", "Ballot Counter", 1, "Grace"),
+		]);
+
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.who).toBe("Tallying · Ada and Grace");
+		expect(rows[0]?.holder).toBe("Ada and Grace");
+		expect(rows[0]?.minutes).toBe(10);
+	});
+
+	it("still repeats a beat that declares repeatsRoleKey", () => {
+		const beats: TemplateBeatRow[] = [
+			beat({
+				sortOrder: 0,
+				kind: "role",
+				label: "Speech",
+				roleKey: "speaker",
+				repeatsRoleKey: "speaker",
+				minutes: 7,
+			}),
+		];
+		const speakerRoles: TemplateRoleRow[] = [
+			{ key: "speaker", name: "Contestant", isSpeakerRole: true },
+		];
+		const rows = buildTemplateRows(beats, speakerRoles, [
+			slot("speaker", "Contestant", 0, "Ada"),
+			slot("speaker", "Contestant", 1, "Grace"),
+		]);
 		expect(rows.map((r) => r.who)).toEqual([
-			"Tallying 1 · Ada",
-			"Tallying 2 · Grace",
+			"Speech 1 · Ada",
+			"Speech 2 · Grace",
 		]);
 	});
 
@@ -276,6 +302,60 @@ describe("buildTemplateRows", () => {
 		expect(rows[0]?.marks).toBeNull();
 	});
 
+	/**
+	 * Ship review C3. This is EXACTLY what "Add row: Role" produces:
+	 * `addAgendaRow` inserts `templateId, sortOrder, kind, label, minutes` and
+	 * nothing else, so `role_key` is null. It used to be dropped here, which
+	 * meant the officer saw the card in the editor and it appeared on none of
+	 * the four surfaces that read this function — the meeting page, the print
+	 * sheet, the projected deck and the `.pptx`. The same state is one select
+	 * away on an existing row, via the Role picker's "Nobody".
+	 */
+	it("renders a role row bound to NOBODY as a plain labelled beat", () => {
+		const rows = buildTemplateRows(
+			[
+				beat({
+					sortOrder: 0,
+					kind: "role",
+					label: "New item",
+					minutes: 0,
+					roleKey: null,
+				}),
+			],
+			ROLES,
+			[],
+		);
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.who).toBe("New item");
+		expect(rows[0]?.minutes).toBe(0);
+		// No owner, so no role identity to colour by and no holder line.
+		expect(rows[0]?.roleKey).toBeUndefined();
+		expect(rows[0]?.holder).toBeUndefined();
+		expect(rows[0]?.section).toBeUndefined();
+	});
+
+	/**
+	 * The OTHER null-role case, which stays dropped: a beat naming a role the
+	 * template does not declare. That is corruption, not authoring — there is
+	 * no name to render it against — and the two must not collapse into one
+	 * rule.
+	 */
+	it("still drops a role row naming a role the template does not declare", () => {
+		const rows = buildTemplateRows(
+			[
+				beat({
+					sortOrder: 0,
+					kind: "role",
+					label: "Ghost",
+					roleKey: "no_such_role",
+				}),
+			],
+			ROLES,
+			[],
+		);
+		expect(rows).toEqual([]);
+	});
+
 	it("renders an unfilled role as the bare label, not a dropped row", () => {
 		const rows = buildTemplateRows(
 			[
@@ -354,6 +434,41 @@ describe("buildTemplateRows", () => {
 			slot("contestant", "Contestant", i),
 		);
 		expect(buildTemplateRows(beats, ROLES, slots)).toHaveLength(20);
+	});
+
+	// #task-10 review: the non-repeating branch had no analogue of the cap
+	// above. It was never live while `defaultCount` was seed-fixed at small
+	// numbers, but the per-meeting agenda editor (Task 8) makes a role's slot
+	// count officer-editable, and a writer-side cap on `defaultCount` is not
+	// the only way this number can grow past it (a pre-cap row, a direct
+	// insert, or a copied template's un-revalidated count — see
+	// `buildTemplateRows`'s docblock). Same fixture shape as the repeat-cap
+	// test above, on the non-repeating path instead.
+	it("caps a non-repeating role beat's holder list at MAX_ROLE_REPEAT_SLOTS too", () => {
+		const beats = [
+			beat({
+				sortOrder: 0,
+				kind: "role",
+				label: "Tallying",
+				roleKey: "ballot_counter",
+			}),
+		];
+		const slots = Array.from({ length: 50 }, (_, i) =>
+			slot("ballot_counter", "Ballot Counter", i, `Person${i}`),
+		);
+		const rows = buildTemplateRows(beats, ROLES, slots);
+		// Still ONE row — capping the holder count must not turn it into one row
+		// per slot, which is the exact defect this whole non-repeating branch
+		// exists to avoid (see this function's docblock).
+		expect(rows).toHaveLength(1);
+		const holder = rows[0]?.holder ?? "";
+		// The first 20 slots (indices 0..19) are named...
+		expect(holder).toContain("Person0");
+		expect(holder).toContain("Person19");
+		// ...and nothing past the cap is, so the join cost — and the printed
+		// line — cannot grow with an uncapped `defaultCount`.
+		expect(holder).not.toContain("Person20");
+		expect(holder).not.toContain("Person49");
 	});
 
 	it("drops a role beat whose roleKey names no template role", () => {

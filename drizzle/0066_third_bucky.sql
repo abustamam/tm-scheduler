@@ -1,0 +1,1 @@
+ALTER TYPE "public"."activity_action" ADD VALUE 'meeting_agenda_role_removed';

@@ -47,10 +47,22 @@ import {
 	pxToPt,
 	RUN_NARRATIVE_TYPE,
 } from "#/lib/agenda-print-type";
+import type { AgendaSlot } from "#/lib/agenda-runsheet";
 import { resolveAgendaRows } from "#/lib/agenda-runsheet";
+import type {
+	TemplateBeatRow,
+	TemplateRoleRow,
+} from "#/lib/agenda-template-rows";
 import type { TimelineRow } from "#/lib/agenda-timing";
 import { buildTimeline } from "#/lib/agenda-timing";
 import { CONTEST_TEMPLATE } from "#/lib/contest-template";
+import {
+	MAX_ROLE_REPEAT_SLOTS,
+	MAX_TEMPLATE_BEATS,
+	MAX_TEMPLATE_DETAIL_CHARS,
+	MAX_TEMPLATE_LABEL_CHARS,
+	MAX_TEMPLATE_ROLES,
+} from "#/lib/meeting-template-limits";
 import {
 	CHROME_TEST_TIMEOUT_MS,
 	findChrome,
@@ -593,19 +605,38 @@ describe.skipIf(!hasChrome)(
 			);
 		});
 
-		it("FLOWS rather than shrinking, so type stays the same at every size", () => {
-			// The fix this suite forced. A contest is far too long to scale onto one
+		it("FLOWS at full size once long enough, and is never squeezed below the floor", () => {
+			// The fix this suite forced. A contest was far too long to scale onto one
 			// sheet: measured at 3.5pt for four contestants and 2.6pt for seven before
-			// `MIN_FIT_SCALE` existed. It now prints across several sheets at full
-			// size, so all three counts read identically — and the sheet genuinely
-			// grows, which the height assertion below pins.
-			expect(printedDetailPt(contestRows(4))).toBe(
-				printedDetailPt(contestRows(7)),
-			);
+			// `MIN_FIT_SCALE` existed. Past that threshold a sheet flows across pages
+			// at full size instead of shrinking.
+			//
+			// This USED TO assert 4 and 7 contestants print identically, because the
+			// seeded contest ran ~40 rows at four and both flowed. It now runs 21 at
+			// four (one contest, not three), which lands BELOW the flow threshold and
+			// is scaled onto one sheet instead — so the two sizes legitimately differ
+			// and an equality assertion would only be satisfiable by lengthening the
+			// contest again.
+			//
+			// The cliff that leaves is real and is NOT fixed here: a sheet just over
+			// one page is squeezed toward the floor, while a longer one flows at full
+			// size, so adding rows can make an agenda MORE legible. Raising
+			// `MIN_FIT_SCALE` would fix it and would also turn ordinary club agendas
+			// into two-pagers, which is a separate decision. Recorded in TODOS.md.
+			//
+			// Floors carry margin rather than pinning the measurement: this harness
+			// resolves no webfonts, and the platform substitute differs between macOS
+			// and CI's Ubuntu, which moves where lines wrap.
+			const long = printedDetailPt(contestRows(7));
+			const short = printedDetailPt(contestRows(4));
+			expect(long).toBeGreaterThan(8);
+			expect(short).toBeLessThan(long);
+			expect(short).toBeGreaterThanOrEqual(EDITORIAL_DENSE_MIN_PRINTED_PT);
+
 			expect(agendaHeight(contestRows(7))).toBeGreaterThan(
 				agendaHeight(contestRows(4)),
 			);
-			// And it is a MULTI-sheet agenda, not one that happened to fit.
+			// Both are still MULTI-sheet agendas, not ones that happened to fit.
 			expect(agendaHeight(contestRows(4))).toBeGreaterThan(PAGE_H);
 		});
 
@@ -614,13 +645,264 @@ describe.skipIf(!hasChrome)(
 			// body, and a short sheet needs no scale — which reads as LARGE type and
 			// passes every floor above.
 			const rows = contestRows(4);
-			expect(rows.length).toBeGreaterThan(30);
+			// EXACT, not a floor: the seeded contest is one contest of 15 beats, so
+			// four contestants render 21 rows. A `toBeGreaterThan` here passed at 40
+			// rows and would pass at 40 again, which is how a template that quietly
+			// regrew two contests would slip through this suite.
+			expect(rows.length).toBe(21);
 			// `who` is the beat's ACTIVITY, not the role — the Chief Judge's row reads
 			// "Judges' briefing". Identity travels in `roleKey`, which is what the
 			// print layouts colour by.
 			expect(rows.some((r) => r.roleKey === "chief_judge")).toBe(true);
 			expect(rows.some((r) => r.who.startsWith("Judges' briefing"))).toBe(true);
-			expect(rows.filter((r) => r.section)).toHaveLength(5);
+			expect(rows.filter((r) => r.section)).toHaveLength(3);
+		});
+	},
+);
+
+/**
+ * A template at the NEW ceiling (#task-10) — every bound
+ * `meeting-template-limits.ts` states, at once: `MAX_TEMPLATE_BEATS` beats
+ * over `MAX_TEMPLATE_ROLES` roles, `MAX_ROLE_REPEAT_SLOTS` holders per role,
+ * label and detail at their own character caps and built from EMOJI code
+ * points (assignee names back off that — see `hostileTemplateRows`'s own
+ * docblock for why). Same axes `meeting-template-limits.bench.test.ts`
+ * measures render cost against; this measures LEGIBILITY, which page count
+ * cannot see and which page count could not see even for the seeded contest
+ * above.
+ *
+ * The seeded contest was the longest agenda this app could produce before
+ * the per-meeting editor (Tasks 1-9) existed — an officer could not make one
+ * longer than the seed's ~15 beats. That is no longer true: an officer can
+ * now build a template at the full ceiling, and the ceiling was chosen for
+ * RENDER COST (see the bench file), which says nothing about whether the
+ * result still prints legibly. This is the case that answers that.
+ */
+const HOSTILE_EMOJI = "🐙";
+function hostileStr(len: number): string {
+	return HOSTILE_EMOJI.repeat(len);
+}
+
+/**
+ * `hostileTemplateRows`'s beat layout: every one of `beatCount` beats is a
+ * NON-repeating role beat, cycling through the declared roles (capped at
+ * `MAX_TEMPLATE_ROLES`), each role owning `MAX_ROLE_REPEAT_SLOTS` slots —
+ * exercising the holder-list cap `agenda-template-rows.ts` now applies on
+ * that branch on every row that has one, rather than on 40 of them and
+ * leaving the rest to one repeat block.
+ *
+ * Deliberately NOT the bench file's construction (a big repeat block over
+ * the leftover beats) at `beatCount = MAX_TEMPLATE_BEATS`: that shape
+ * expands `MAX_TEMPLATE_BEATS` stored rows into ~16x as many OUTPUT rows
+ * (measured: 3,240 for this template's exact numbers), and dumping a DOM
+ * that size through headless Chrome's `--dump-dom` overflowed
+ * `execFileSync`'s pipe on this machine (`ENOBUFS`) — a harness limit, not
+ * a claim about the app. All-non-repeating keeps the output at exactly
+ * `beatCount` rows while still declaring the full `MAX_TEMPLATE_ROLES` /
+ * `MAX_ROLE_REPEAT_SLOTS` / label / detail ceilings at once regardless of
+ * `beatCount` — the ceiling case (`beatCount = MAX_TEMPLATE_BEATS`, the
+ * default) is still far longer than the seeded contest's ~15 beats, which
+ * is the property THAT case exists to cover. The squeeze-zone case below
+ * calls this with a much smaller `beatCount` instead, for a different
+ * property — see that describe block's own docblock.
+ */
+function hostileTemplateRows(
+	beatCount: number = MAX_TEMPLATE_BEATS,
+	holdersPerRow: number = MAX_ROLE_REPEAT_SLOTS,
+): TimelineRow[] {
+	const roles: TemplateRoleRow[] = Array.from(
+		{ length: MAX_TEMPLATE_ROLES },
+		(_, i) => ({
+			key: `role_${i}`,
+			name: `Role ${i}`,
+			isSpeakerRole: false,
+		}),
+	);
+	const label = hostileStr(MAX_TEMPLATE_LABEL_CHARS);
+	const detail = hostileStr(MAX_TEMPLATE_DETAIL_CHARS);
+	const beats: TemplateBeatRow[] = Array.from(
+		{ length: beatCount },
+		(_, i) => ({
+			sortOrder: i,
+			kind: "role",
+			label,
+			detail,
+			minutes: 5,
+			roleKey: roles[i % roles.length]?.key ?? null,
+			repeatsRoleKey: null,
+			flex: false,
+			markGreen: null,
+			markYellow: null,
+			markRed: null,
+		}),
+	);
+	// Assignee names LONG (the axis the two-page-layout suite below also uses
+	// this length for), but deliberately NOT at their own real ceiling
+	// (`MAX_NAME_CHARS` = 200, `person-name.ts`, exercised at scale in
+	// `meeting-template-limits.bench.test.ts`, which never touches Chrome).
+	// `MAX_ROLE_REPEAT_SLOTS` holders × 200 code points EACH joined onto one
+	// row, times `MAX_TEMPLATE_BEATS` such rows, serializes into a DOM
+	// `--dump-dom` cannot get back through `execFileSync`'s pipe on this
+	// machine: measured `ENOBUFS` at exactly this beat/role/slot count, with
+	// ONLY the holder name length reduced from 200 code points to the short
+	// name below — everything else here unchanged. That is a harness plumbing
+	// limit, not a claim about the app: the render-cost bench file proves the
+	// RENDERER handles 200-code-point names at this same scale in ~20ms with
+	// no browser involved. This axis still holds MAX_ROLE_REPEAT_SLOTS holders
+	// per row; only their NAME LENGTH backs off to stay inside the harness.
+	const slots: AgendaSlot[] = [];
+	for (const role of roles) {
+		for (let i = 0; i < holdersPerRow; i++) {
+			slots.push({
+				id: `${role.key}-${i}`,
+				roleName: role.name,
+				roleKey: role.key,
+				category: "functionary",
+				isSpeakerRole: false,
+				slotIndex: i,
+				assigneeName: `${hostileStr(4)}Anneliese Vandermeer-Castellanos ${i}`,
+				speechTitle: null,
+				projectLevel: null,
+				minMinutes: null,
+				maxMinutes: null,
+				evaluatesSlotId: null,
+				evaluates: null,
+			});
+		}
+	}
+	return buildTimeline(
+		resolveAgendaRows({
+			geIntroducesFunctionaries: false,
+			template: { beats, roles },
+			slots,
+		}),
+		new Date("2026-09-12T13:00:00Z"),
+		"America/Chicago",
+	);
+}
+
+describe.skipIf(!hasChrome)(
+	"worst-case template density (#task-10)",
+	{ timeout: CHROME_TEST_TIMEOUT_MS },
+	() => {
+		it("prints legible body text even at the full template ceiling", () => {
+			const rows = hostileTemplateRows();
+			// A control, same idiom as the contest suite above: proves the fixture
+			// actually produced content before trusting a point-size floor built
+			// from its height.
+			expect(rows.length).toBeGreaterThan(0);
+			// Measured 8.63pt — exactly the declared 11.5px × 0.75, i.e. FULL
+			// declared size with NO scale applied at all: at `MAX_TEMPLATE_BEATS`
+			// rows this sheet is already well past `MIN_FIT_SCALE`'s flow
+			// threshold, so it flows across pages instead of being squeezed. That
+			// is a real, useful thing for this case to prove (a maximal template
+			// does not silently get shrunk to nothing), but it means this
+			// assertion is NOT exercising the tightest squeeze — the contest
+			// suite above already covers that zone (short of one page, where
+			// `FitPage` scales hardest) at a fixture size closer to it. Keep both:
+			// this one changes if the flow threshold, the declared size, or this
+			// template's own row count ever move enough to cross back over it.
+			expect(printedDetailPt(rows)).toBeGreaterThanOrEqual(
+				EDITORIAL_DENSE_MIN_PRINTED_PT,
+			);
+		});
+
+		/**
+		 * The case above proves the CEILING is safe; it does not prove the
+		 * DANGEROUS size is, because it lands in the wrong branch. `FitPage`
+		 * SQUEEZES a sheet taller than one page down toward `MIN_FIT_SCALE`
+		 * (0.72) and then, past that point, gives up and FLOWS at full
+		 * declared size instead — so the worst printed type size is not at
+		 * the largest content, it is at the largest content that still
+		 * squeezes, just before that cliff. `TODOS.md` already records this
+		 * cliff as a known gap; the pre-existing "contest agenda density"
+		 * suite above sits in it too, but only with BENIGN content (short
+		 * ASCII labels, ordinary names) — "squeeze zone + hostile axes" was
+		 * untested, and that combination is exactly what an officer can now
+		 * author that the seed never could.
+		 *
+		 * This case SEARCHES for the cliff rather than hardcoding a fixture
+		 * that sits on it, and that is not fussiness — a fixed holder count
+		 * provably cannot work here. The first cut of this test used
+		 * `hostileTemplateRows(2, 12)`, measured on an Apple M2 Max at
+		 * raw≈0.730, comfortably inside the [0.72, 0.75) target window. CI's
+		 * Ubuntu rendered the IDENTICAL fixture at raw≈0.797 — outside the
+		 * window, red. The two platforms disagree by ~8.5% on this shape
+		 * because neither Fraunces nor Manrope resolves under the harness
+		 * (`--host-resolver-rules=MAP * ~NOTFOUND`) and each platform's
+		 * substitute wraps differently; see this file's header and
+		 * `agenda-print-type.ts`.
+		 *
+		 * The window is only ~4% wide and the variance is ~8.5%, so NO
+		 * hardcoded holder count satisfies both platforms: retuning to
+		 * Ubuntu's ~15 holders puts macOS at raw≈0.677, which FLOWS, failing
+		 * the branch assertion in the other direction. The number cannot be
+		 * tuned, only derived — which is why the earlier advice here to
+		 * "retune with the observed Linux value" is gone rather than
+		 * followed. It would have turned a red CI green by breaking every
+		 * developer machine instead.
+		 *
+		 * Height rises monotonically with holders, so "largest holder count
+		 * that still squeezes" is a clean predicate boundary and a binary
+		 * search finds it in ~5 measurements. That matters: every
+		 * `agendaHeight` call launches Chrome, so scanning all 20 linearly
+		 * would cost 20 browser round trips for a number the search gets in
+		 * a quarter of them. Standing exactly on that cliff is the whole
+		 * point of the case — the tightest squeeze is where printed type is
+		 * smallest, so a fixture that drifts to a safer mid-band weakens
+		 * precisely what the floor below proves.
+		 */
+		it("prints legible body text at the worst achievable squeeze, not just at the ceiling", () => {
+			const rawAt = (holders: number) =>
+				(PAGE_H - 2) / agendaHeight(hostileTemplateRows(2, holders));
+
+			let lo = 1;
+			let hi = MAX_ROLE_REPEAT_SLOTS;
+			let cliff: number | null = null;
+			while (lo <= hi) {
+				const mid = Math.floor((lo + hi) / 2);
+				if (rawAt(mid) >= MIN_FIT_SCALE) {
+					cliff = mid;
+					lo = mid + 1;
+				} else {
+					hi = mid - 1;
+				}
+			}
+
+			// A shape that flows even at ONE holder would make the floor below
+			// vacuous — it would be measuring the flow branch, which the ceiling
+			// case above already covers.
+			expect(
+				cliff,
+				"no holder count in [1, MAX_ROLE_REPEAT_SLOTS] squeezes rather " +
+					"than flows, so this case cannot reach the squeeze branch at all",
+			).not.toBeNull();
+
+			// Proves the search stopped at the CLIFF rather than at just any
+			// squeezing size: one more holder tips into the flow branch. Without
+			// this, a search that returned 1 would satisfy every assertion below
+			// while measuring a barely-squeezed sheet — passing for the wrong
+			// reason, which is the failure mode a derived fixture invites and a
+			// hardcoded one could not have.
+			if ((cliff as number) < MAX_ROLE_REPEAT_SLOTS) {
+				expect(rawAt((cliff as number) + 1)).toBeLessThan(MIN_FIT_SCALE);
+			}
+
+			const rows = hostileTemplateRows(2, cliff as number);
+			expect(rows.length).toBeGreaterThan(0);
+			// Confirms the search landed in the SQUEEZE branch and that the sheet
+			// is genuinely over one page — without both, a future change could
+			// leave this measuring the flow branch while still passing the floor.
+			const raw = (PAGE_H - 2) / agendaHeight(rows);
+			expect(raw).toBeGreaterThanOrEqual(MIN_FIT_SCALE);
+			expect(raw).toBeLessThan(1);
+			// Measured 6.30pt at raw≈0.730 on macOS — the worst printed size this
+			// hostile-content shape can be squeezed to before `FitPage` gives up
+			// and flows instead. The assertion is the absolute floor rather than
+			// that number, so it holds on whichever platform is running it.
+			expect(printedDetailPt(rows)).toBeGreaterThanOrEqual(
+				EDITORIAL_DENSE_MIN_PRINTED_PT,
+			);
 		});
 	},
 );

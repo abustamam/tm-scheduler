@@ -21,6 +21,7 @@
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	meetings,
 	meetingTemplateBeats,
 	meetingTemplateRoles,
 	meetingTemplates,
@@ -158,7 +159,14 @@ describe.skipIf(!hasTestDb)("meeting template logic", () => {
 			// Assert on NAME: the key carries a per-run suffix so parallel suites
 			// sharing `tm_test` cannot collide on the global unique index.
 			expect(mine(rows.map((r) => r.name))).toEqual([`Speech Contest ${RUN}`]);
-			expect(rows[0]?.defaultLengthMinutes).toBe(150);
+			// Scoped to THIS run's row, not `rows[0]`. Global templates are
+			// club-less, so `cleanup(clubId)` cannot cascade to them and every real
+			// seeded template is visible here too — an index-based assertion on a
+			// shared table is order-dependent by construction, and this one started
+			// reading the app's own seeded contest the moment production's template
+			// was also present in `tm_test`.
+			const own = rows.find((r) => r.name === `Speech Contest ${RUN}`);
+			expect(own?.defaultLengthMinutes).toBe(150);
 		});
 
 		it("omits disabled templates", async () => {
@@ -219,6 +227,29 @@ describe.skipIf(!hasTestDb)("meeting template logic", () => {
 			expect(names).toContain(`Speech Contest ${RUN}`);
 			expect(names).toContain(`Ours ${RUN}`);
 		});
+
+		it("omits a meeting's private copy", async () => {
+			// A private copy is a meeting's own agenda, not something another
+			// meeting may be converted to. It is an ordinary template in every
+			// other respect, which is why the picker has to exclude it explicitly.
+			const [m] = await testDb
+				.insert(meetings)
+				.values({
+					clubId: club.clubId,
+					scheduledAt: new Date("2027-04-01T02:00:00Z"),
+				})
+				.returning({ id: meetings.id });
+			if (!m) throw new Error("meeting insert failed");
+			await testDb.insert(meetingTemplates).values({
+				clubId: club.clubId,
+				meetingId: m.id,
+				key: `private_${RUN}`,
+				name: `Private ${RUN}`,
+			});
+
+			const rows = await listAvailableTemplates(club.clubId);
+			expect(rows.map((r) => r.name)).not.toContain(`Private ${RUN}`);
+		});
 	});
 
 	describe("loadTemplateContent", () => {
@@ -252,6 +283,32 @@ describe.skipIf(!hasTestDb)("meeting template logic", () => {
 
 		it("returns null for an unknown template", async () => {
 			expect(await loadTemplateContent(crypto.randomUUID())).toBeNull();
+		});
+
+		it("returns an EMPTY agenda for a template with no rows, not null", async () => {
+			// The editor can delete the last row, and building an agenda up from
+			// nothing is a legitimate state. Today "no beats and no roles" is read as
+			// "no such template", which makes `meetings.ts` throw
+			// "references template X, which has no beats or roles" and takes the
+			// meeting page down.
+			const [t] = await testDb
+				.insert(meetingTemplates)
+				.values({
+					clubId: club.clubId,
+					key: `empty_${RUN}`,
+					name: `Empty ${RUN}`,
+				})
+				.returning({ id: meetingTemplates.id });
+			if (!t) throw new Error("template insert failed");
+
+			const content = await loadTemplateContent(t.id);
+			expect(content).toEqual({ beats: [], roles: [] });
+		});
+
+		it("returns null for a template id that does not exist", async () => {
+			expect(
+				await loadTemplateContent("00000000-0000-0000-0000-000000000000"),
+			).toBeNull();
 		});
 
 		/**

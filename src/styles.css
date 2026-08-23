@@ -294,15 +294,22 @@ body::after {
    above reached. `whatsapp-phone-link-color.guard.test.ts` fails if either rule
    loses either exclusion, and if any `:not()` arm stops being a `data-slot`
    opt-out (a `:not([class])` arm would switch this rule off for every anchor in
-   the app while every substring assertion stayed green). */
-a:not([data-slot="button"]):not([data-slot^="dropdown-menu-"]):not([data-slot="wa-phone"]):not([data-slot="wa-email"]) {
+   the app while every substring assertion stayed green).
+
+   `back-link` (`BackLink`, #agenda-templates Task 11) is the fifth. Both of
+   its call sites (the per-meeting agenda editor, the roles guide) set
+   `text-muted-foreground` on a "Back to …" anchor, and without the exclusion
+   this rule overrode that down to the same --lagoon-deep at `text-sm` — under
+   AA for normal text. `back-link-color.guard.test.ts` fails if either rule
+   loses this exclusion. */
+a:not([data-slot="button"]):not([data-slot^="dropdown-menu-"]):not([data-slot="wa-phone"]):not([data-slot="wa-email"]):not([data-slot="back-link"]) {
   color: var(--lagoon-deep);
   text-decoration-color: rgba(50, 143, 151, 0.4);
   text-decoration-thickness: 1px;
   text-underline-offset: 2px;
 }
 
-a:not([data-slot="button"]):not([data-slot^="dropdown-menu-"]):not([data-slot="wa-phone"]):not([data-slot="wa-email"]):hover {
+a:not([data-slot="button"]):not([data-slot^="dropdown-menu-"]):not([data-slot="wa-phone"]):not([data-slot="wa-email"]):not([data-slot="back-link"]):hover {
   color: var(--lagoon-ink);
 }
 

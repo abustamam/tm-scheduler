@@ -8,9 +8,15 @@
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/tm_test_190 \
  *     bunx vitest run src/server/recurrence-rule.integration.test.ts
  */
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { meetingAttendancePlan, meetings, roleSlots } from "#/db/schema";
+import {
+	meetingAttendancePlan,
+	meetings,
+	meetingTemplateRoles,
+	meetingTemplates,
+	roleSlots,
+} from "#/db/schema";
 import { utcToZonedWallTime, zonedWallTimeToUtc } from "#/lib/datetime";
 import {
 	cleanup,
@@ -24,6 +30,7 @@ vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
 const { saveRecurrenceRule, getRecurrenceRule, findPristineEmptyMeetingIds } =
 	await import("./recurrence-rule-logic");
+const { applyTemplateConversion } = await import("./meeting-templates-logic");
 
 const TZ = "America/Chicago";
 const NOW = new Date("2026-06-01T12:00:00Z");
@@ -232,6 +239,95 @@ describe.skipIf(!hasTestDb)(
 					reachedOutId,
 				]);
 				expect(pristine.sort()).toEqual([comingId, reachedOutId].sort());
+			});
+		});
+
+		// Task 3b, part A. Task 3 made converting a meeting deep-copy its template
+		// into a PRIVATE `meeting_templates` row with materialized `role_definitions`
+		// pointing at the copy. `meeting_templates.meeting_id` is ON DELETE CASCADE
+		// to `meetings`, but `role_definitions.template_id` is ON DELETE RESTRICT —
+		// so deleting a converted meeting cascades toward its private template and
+		// is then blocked by that RESTRICT. `reconcileEmptyShells` (the recurrence
+		// pruner) deletes whatever `findPristineEmptyMeetingIds` returns; a
+		// converted contest meeting with every slot unclaimed and every content
+		// field blank satisfied every existing check, so it used to be pruned and
+		// the delete threw a foreign-key violation — an officer editing their
+		// club's recurrence pattern got a 500.
+		describe("findPristineEmptyMeetingIds vs a converted meeting", () => {
+			const createdTemplateIds: string[] = [];
+
+			afterEach(async () => {
+				if (createdTemplateIds.length > 0) {
+					await testDb
+						.delete(meetingTemplates)
+						.where(inArray(meetingTemplates.id, createdTemplateIds));
+					createdTemplateIds.length = 0;
+				}
+			});
+
+			async function emptyMeeting(daysOut: number): Promise<string> {
+				const [m] = await testDb
+					.insert(meetings)
+					.values({
+						clubId: club.clubId,
+						scheduledAt: new Date(
+							NOW.getTime() + daysOut * 24 * 60 * 60 * 1000,
+						),
+						status: "scheduled",
+					})
+					.returning({ id: meetings.id });
+				if (!m) throw new Error("Failed to insert meeting");
+				return m.id;
+			}
+
+			async function makeTemplate(): Promise<string> {
+				const [tpl] = await testDb
+					.insert(meetingTemplates)
+					.values({
+						clubId: null,
+						key: `contest-${crypto.randomUUID().slice(0, 8)}`,
+						name: "Speech Contest",
+					})
+					.returning({ id: meetingTemplates.id });
+				if (!tpl) throw new Error("Failed to insert template");
+				createdTemplateIds.push(tpl.id);
+				await testDb.insert(meetingTemplateRoles).values({
+					templateId: tpl.id,
+					key: "contest_chair",
+					name: "Contest Chair",
+					category: "leadership",
+					defaultCount: 1,
+					sortOrder: 10,
+				});
+				return tpl.id;
+			}
+
+			it("excludes a converted meeting even though every content field is blank and no slot is claimed", async () => {
+				const source = await makeTemplate();
+				const meetingId = await emptyMeeting(40);
+				await applyTemplateConversion({
+					meetingId,
+					clubId: club.clubId,
+					templateId: source,
+					actorMemberId: null,
+				});
+
+				expect(await findPristineEmptyMeetingIds([meetingId])).toEqual([]);
+			});
+
+			it("proves the hazard is real: deleting a converted meeting throws on role_definitions' RESTRICT", async () => {
+				const source = await makeTemplate();
+				const meetingId = await emptyMeeting(41);
+				await applyTemplateConversion({
+					meetingId,
+					clubId: club.clubId,
+					templateId: source,
+					actorMemberId: null,
+				});
+
+				await expect(
+					testDb.delete(meetings).where(eq(meetings.id, meetingId)),
+				).rejects.toThrow();
 			});
 		});
 	},

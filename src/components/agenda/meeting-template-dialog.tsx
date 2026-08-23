@@ -26,7 +26,14 @@ function joinNames(names: string[]): string {
 	}).format(names);
 }
 
-type Choice = { id: string | null; name: string; description: string | null };
+type Choice = {
+	id: string | null;
+	/** What the "Current" badge matches against, not `id` — see
+	 *  `currentTemplateKey` below. */
+	key: string | null;
+	name: string;
+	description: string | null;
+};
 
 type Phase =
 	| { kind: "idle" }
@@ -55,14 +62,18 @@ type Phase =
 export function MeetingTemplateDialog({
 	open,
 	onOpenChange,
-	currentTemplateId,
+	currentTemplateKey,
 	templates,
 	loadPreview,
 	onApply,
 }: {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
-	currentTemplateId: string | null;
+	/** The KEY (not id) of the template the meeting is currently running, or
+	 *  null for a standard meeting. A private per-meeting copy's own id is
+	 *  fresh every conversion and matches no `choices` entry — its `key` is
+	 *  what it keeps from its source, and what's stable to match against. */
+	currentTemplateKey: string | null;
 	templates: MeetingTemplateSummary[];
 	loadPreview: (templateId: string | null) => Promise<ConversionPlan>;
 	onApply: (templateId: string | null) => Promise<unknown>;
@@ -75,9 +86,10 @@ export function MeetingTemplateDialog({
 	const [pending, setPending] = useState(false);
 
 	const choices: Choice[] = [
-		{ id: null, name: "Standard meeting", description: null },
+		{ id: null, key: null, name: "Standard meeting", description: null },
 		...templates.map((t) => ({
 			id: t.id,
+			key: t.key,
 			name: t.name,
 			description: t.description,
 		})),
@@ -138,7 +150,7 @@ export function MeetingTemplateDialog({
 							>
 								<span className="flex items-center gap-2 font-medium">
 									{c.name}
-									{c.id === currentTemplateId ? (
+									{c.key === currentTemplateKey ? (
 										<span className="rounded bg-muted px-1.5 py-0.5 text-muted-foreground text-xs">
 											Current
 										</span>

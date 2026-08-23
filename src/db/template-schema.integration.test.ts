@@ -20,6 +20,7 @@
 import { eq, inArray } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	meetings,
 	meetingTemplateBeats,
 	meetingTemplateRoles,
 	meetingTemplates,
@@ -34,6 +35,10 @@ import {
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
+
+// Per-run suffix so parallel vitest files (and reruns) sharing `tm_test`
+// never collide on a fixed key.
+const RUN = Math.random().toString(36).slice(2, 8);
 
 describe.skipIf(!hasTestDb)("agenda template schema", () => {
 	let club: SeededClub;
@@ -299,5 +304,183 @@ describe.skipIf(!hasTestDb)("agenda template schema", () => {
 				}),
 			).rejects.toThrow();
 		});
+	});
+
+	it("lets two meetings in one club each hold a private copy of the same key", async () => {
+		// The shared-template unique index is on (club_id, key). Two contest
+		// meetings both copying `speech_contest` would collide on it, so its
+		// predicate must exempt private rows.
+		const [a, b] = await testDb
+			.insert(meetings)
+			.values([
+				{ clubId: club.clubId, scheduledAt: new Date("2027-01-07T02:00:00Z") },
+				{ clubId: club.clubId, scheduledAt: new Date("2027-01-21T02:00:00Z") },
+			])
+			.returning({ id: meetings.id });
+		if (!a || !b) throw new Error("meeting insert failed");
+
+		const rows = await testDb
+			.insert(meetingTemplates)
+			.values([
+				{ clubId: club.clubId, meetingId: a.id, key: `copy_${RUN}`, name: "A" },
+				{ clubId: club.clubId, meetingId: b.id, key: `copy_${RUN}`, name: "B" },
+			])
+			.returning({ id: meetingTemplates.id });
+		expect(rows).toHaveLength(2);
+	});
+
+	it("allows at most ONE private template per meeting", async () => {
+		const [m] = await testDb
+			.insert(meetings)
+			.values({
+				clubId: club.clubId,
+				scheduledAt: new Date("2027-02-04T02:00:00Z"),
+			})
+			.returning({ id: meetings.id });
+		if (!m) throw new Error("meeting insert failed");
+
+		await testDb.insert(meetingTemplates).values({
+			clubId: club.clubId,
+			meetingId: m.id,
+			key: `one_${RUN}`,
+			name: "First",
+		});
+		await expect(
+			testDb.insert(meetingTemplates).values({
+				clubId: club.clubId,
+				meetingId: m.id,
+				key: `two_${RUN}`,
+				name: "Second",
+			}),
+		).rejects.toThrow();
+	});
+
+	/**
+	 * Ship review C5. The version of this test that shipped inserted a private
+	 * template with NO materialized `role_definitions` and asserted the cascade
+	 * fired — which is the ONE shape the cascade can actually delete, and NOT
+	 * the shape a conversion normally produces. It therefore proved nothing
+	 * about the deleter its own comment cited.
+	 *
+	 * Kept, relabelled for what it is: the empty case. It is reachable — a
+	 * conversion to a template that declares no roles at all leaves exactly
+	 * this, which is why the sibling test below has to seed a role by hand to
+	 * reach the other one — and the cascade genuinely handles it.
+	 */
+	it("cascade-deletes a private template that has NO materialized roles", async () => {
+		const [m] = await testDb
+			.insert(meetings)
+			.values({
+				clubId: club.clubId,
+				scheduledAt: new Date("2027-03-04T02:00:00Z"),
+			})
+			.returning({ id: meetings.id });
+		if (!m) throw new Error("meeting insert failed");
+		const [t] = await testDb
+			.insert(meetingTemplates)
+			.values({
+				clubId: club.clubId,
+				meetingId: m.id,
+				key: `cascade_${RUN}`,
+				name: "Doomed",
+			})
+			.returning({ id: meetingTemplates.id });
+		if (!t) throw new Error("template insert failed");
+
+		await testDb.delete(meetings).where(eq(meetings.id, m.id));
+		const left = await testDb
+			.select({ id: meetingTemplates.id })
+			.from(meetingTemplates)
+			.where(eq(meetingTemplates.id, t.id));
+		expect(left).toEqual([]);
+	});
+
+	/**
+	 * The shape a conversion to a template that declares ANY role produces —
+	 * which is every seeded one — and the one the cascade CANNOT reach:
+	 * `role_definitions.template_id` is ON DELETE RESTRICT, and
+	 * `materializeTemplateRoles` writes one row per declared role against the
+	 * private copy. So deleting the meeting aborts.
+	 *
+	 * This is the behaviour, not a bug being asserted as correct — nothing in
+	 * production hits it because the only deleter (`recurrence-rule-logic.ts`)
+	 * refuses any meeting with a `template_id`. Pinning it here means a future
+	 * deleter that forgets that guard fails a test instead of failing a club's
+	 * database, and it means the `meetingId` docblock in `schema.ts` (which now
+	 * says exactly this) has something holding it true.
+	 */
+	it("REFUSES to delete a meeting whose private template has materialized roles", async () => {
+		const [m] = await testDb
+			.insert(meetings)
+			.values({
+				clubId: club.clubId,
+				scheduledAt: new Date("2027-03-11T02:00:00Z"),
+			})
+			.returning({ id: meetings.id });
+		if (!m) throw new Error("meeting insert failed");
+		const [t] = await testDb
+			.insert(meetingTemplates)
+			.values({
+				clubId: club.clubId,
+				meetingId: m.id,
+				key: `restrict_${RUN}`,
+				name: "Converted",
+			})
+			.returning({ id: meetingTemplates.id });
+		if (!t) throw new Error("template insert failed");
+		// What `materializeTemplateRoles` writes on every conversion.
+		const [def] = await testDb
+			.insert(roleDefinitions)
+			.values({
+				clubId: club.clubId,
+				templateId: t.id,
+				key: `contest_chair_${RUN}`,
+				name: "Contest Chair",
+				category: "leadership",
+				defaultCount: 1,
+				sortOrder: 10,
+			})
+			.returning({ id: roleDefinitions.id });
+		if (!def) throw new Error("role definition insert failed");
+
+		// The SQLSTATE and the constraint NAME, not a bare "threw something": an
+		// unrelated failure would satisfy `.rejects.toThrow()` and this test
+		// exists to say WHICH foreign key blocks the delete. Drizzle's own
+		// message is only "Failed query: delete from …"; both live on `.cause`,
+		// the underlying `pg` error — the same shape
+		// `attendance-plan-logic.integration.test.ts` asserts against.
+		await expect(
+			testDb.delete(meetings).where(eq(meetings.id, m.id)),
+		).rejects.toMatchObject({
+			cause: {
+				code: "23503",
+				constraint: "role_definitions_template_id_meeting_templates_id_fk",
+			},
+		});
+
+		// Nothing partially applied: the meeting and its copy both survive.
+		expect(
+			await testDb
+				.select({ id: meetings.id })
+				.from(meetings)
+				.where(eq(meetings.id, m.id)),
+		).toHaveLength(1);
+		expect(
+			await testDb
+				.select({ id: meetingTemplates.id })
+				.from(meetingTemplates)
+				.where(eq(meetingTemplates.id, t.id)),
+		).toHaveLength(1);
+
+		// Retiring the definitions first is what makes the delete possible —
+		// the order `applyTemplateConversion` already uses.
+		await testDb.delete(roleDefinitions).where(eq(roleDefinitions.id, def.id));
+		await testDb.delete(meetings).where(eq(meetings.id, m.id));
+		expect(
+			await testDb
+				.select({ id: meetingTemplates.id })
+				.from(meetingTemplates)
+				.where(eq(meetingTemplates.id, t.id)),
+		).toEqual([]);
 	});
 });

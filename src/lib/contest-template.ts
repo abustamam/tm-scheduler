@@ -1,5 +1,5 @@
 /**
- * The seeded global Speech Contest template: a club contest's role set and
+ * The seeded global speech contest template: a club contest's role set and
  * run-of-show, as DATA. Kept db-free beside `role-template.ts` so both the dev
  * seed and the production seeding script share one copy.
  *
@@ -7,20 +7,31 @@
  * International contest names (ADR-0024's trademark-safe default, #384). A club
  * wanting the official wording renames its materialized roles.
  *
- * TWO THINGS HERE ARE LOAD-BEARING and were decided after review:
+ * ONE CONTEST, NOT THREE. This shipped covering prepared speeches, impromptu
+ * speaking and speech evaluation as three sequential segments, and that was
+ * wrong in a way worth recording, because the storage cannot express the fix.
+ * A club running only one of the three had no way to remove the other two:
+ * deleting the contestant slots collapses their repeat blocks, but the section
+ * bands, the chair's briefings, the break and the evaluation-prep window bind
+ * to no contestant role, so nothing an officer could do reached them. A
+ * prepared-speeches-only club still printed two phantom segments and 28
+ * minutes of a contest that was not happening. Templates get no gating by
+ * design (Phase 1 spec D1), so a template must describe an event that actually
+ * happens rather than a menu of every event it could be.
  *
- * 1. THREE contestant roles, not one. Each contest segment gets its own role
- *    (`contestant_prepared` / `contestant_impromptu` / `contestant_evaluation`)
- *    with its own repeat key. With a single shared role there is one
- *    `role_definitions` row and one set of slots, so a member entered only in
- *    the impromptu contest would print in all three segments and have their
- *    minutes booked three times.
+ * If a future template really does run two contests in one night, each needs
+ * its OWN contestant role with its own repeat key — with a single shared role
+ * there is one `role_definitions` row and one set of slots, so a member entered
+ * in only one contest prints in both segments with their minutes booked twice.
+ * That constraint is why the original had three roles; it was the right answer
+ * to the wrong question.
  *
- * 2. `contestant_prepared` sorts BEFORE `test_speaker`.
- *    `pickSpeakerAndEvaluatorRoles` (`meeting-roles.ts:198`) takes the lowest
- *    `sortOrder` among `isSpeakerRole` defs, and that role is what "+ Add
- *    speaker" adds. With `test_speaker` first, the button would add a second
- *    Test Speaker and there would be no way to change the contestant count.
+ * `contestant_prepared` is now the ONLY `isSpeakerRole` def in the template,
+ * which is what makes the agenda's +/- speaker controls work:
+ * `pickSpeakerAndEvaluatorRoles` (`meeting-roles.ts:198`) takes the lowest
+ * `sortOrder` among speaker defs, so with several contestant roles those
+ * controls could only ever reach the first one and the rest were fixed at
+ * whatever `defaultCount` said.
  *
  * Contestant roles are SPEAKER-category: a contest speech is still a speech, so
  * the speech record, the project picker and Pathways attribution all work
@@ -28,6 +39,14 @@
  */
 import type { TemplateBeatRow, TemplateRoleRow } from "./agenda-template-rows";
 
+/**
+ * Unchanged across the rewrite, on purpose. `seedTemplate` is idempotent on this
+ * key and REPLACES the template's roles and beats in place, so keeping it means
+ * an already-seeded database (production included) is corrected by re-running
+ * the seed rather than needing the old row retired — `meetings.template_id` is
+ * `ON DELETE RESTRICT`, which makes deleting a template a real operation rather
+ * than a cleanup.
+ */
 export const CONTEST_TEMPLATE_KEY = "speech_contest";
 
 type SeedRole = TemplateRoleRow & {
@@ -87,8 +106,10 @@ export const CONTEST_TEMPLATE: TemplateSeed = {
 	key: CONTEST_TEMPLATE_KEY,
 	name: "Speech Contest",
 	description:
-		"A club contest: prepared speeches, impromptu speaking and speech evaluation, judged on paper ballots.",
-	defaultLengthMinutes: 180,
+		"A club speech contest: prepared speeches judged on paper ballots. Add or remove contestants with the +/- controls on the agenda.",
+	// 3 contestants: 25 opening + 24 speeches + 7 silence/interviews + 28 results
+	// = 84. Rounded up, leaving room for a fourth contestant without re-editing.
+	defaultLengthMinutes: 90,
 	roles: [
 		role(
 			"sergeant_at_arms",
@@ -112,8 +133,11 @@ export const CONTEST_TEMPLATE: TemplateSeed = {
 			"leadership",
 			1,
 			30,
-			"Briefs the judges, collects and verifies the ballots, and certifies the result. Recruited from outside the club where possible.",
+			"Briefs the judges, verifies the ballots and certifies the result. Recruited from outside the club where possible.",
 		),
+		// Five is the usual panel. Judges own no beat, so this number costs no
+		// agenda rows — it only decides how many claimable places the sign-up
+		// sheet offers, and an unfilled one can be removed.
 		role(
 			"judge",
 			"Judge",
@@ -128,7 +152,7 @@ export const CONTEST_TEMPLATE: TemplateSeed = {
 			"functionary",
 			2,
 			50,
-			"Collects ballots and tallies them with the Chief Judge, out of the room.",
+			"Collects the ballots and tallies them with the Chief Judge, out of the room.",
 		),
 		role(
 			"contest_timer",
@@ -138,41 +162,15 @@ export const CONTEST_TEMPLATE: TemplateSeed = {
 			60,
 			"Times each contestant and signals the qualifying window; two timers so the times can be cross-checked.",
 		),
-		// 70 — BEFORE test_speaker, so "+ Add speaker" adds a contestant.
+		// The template's ONLY speaker role — see the header note on +/- controls.
+		// Three is a starting point, not a limit.
 		role(
 			"contestant_prepared",
-			"Prepared Speech Contestant",
+			"Contestant",
 			"speaker",
-			4,
+			3,
 			70,
-			"Competes in the prepared speech contest. A contest speech can still be a Pathways project — attach it as you would any speech.",
-			true,
-		),
-		role(
-			"contestant_impromptu",
-			"Impromptu Contestant",
-			"speaker",
-			4,
-			75,
-			"Competes in the impromptu speaking contest, answering a question none of the contestants has heard in advance.",
-			true,
-		),
-		role(
-			"contestant_evaluation",
-			"Evaluation Contestant",
-			"speaker",
-			4,
-			80,
-			"Competes in the speech evaluation contest, evaluating the test speech.",
-			true,
-		),
-		role(
-			"test_speaker",
-			"Test Speaker",
-			"speaker",
-			1,
-			90,
-			"Delivers the speech the evaluation contestants evaluate.",
+			"Competes in the contest. A contest speech can still be a Pathways project — attach it as you would any speech.",
 			true,
 		),
 	],
@@ -209,17 +207,20 @@ export const CONTEST_TEMPLATE: TemplateSeed = {
 				"Explains the speaking area, the timing signals and the disqualification rules.",
 		}),
 
-		beat({ kind: "section", label: "PREPARED SPEECH CONTEST" }),
+		beat({ kind: "section", label: "SPEECHES" }),
+		// One block per contestant slot: the speech, then the ballot minute. Add
+		// or remove contestants and the agenda follows, which is the whole reason
+		// this is a repeat block rather than a fixed number of rows.
 		beat({
 			kind: "role",
-			label: "Prepared speech",
+			label: "Contest speech",
 			roleKey: "contestant_prepared",
 			repeatsRoleKey: "contestant_prepared",
 			minutes: 7,
 			markGreen: 5,
 			markYellow: 6,
 			markRed: 7,
-			detail: "Delivers the prepared speech.",
+			detail: "Qualifying window 4:30-7:30.",
 		}),
 		beat({
 			kind: "event",
@@ -242,86 +243,14 @@ export const CONTEST_TEMPLATE: TemplateSeed = {
 			detail: "Brief interviews while the ballots are collected.",
 		}),
 
-		beat({ kind: "section", label: "IMPROMPTU SPEAKING CONTEST" }),
-		beat({
-			kind: "role",
-			label: "Impromptu contest briefing",
-			roleKey: "contest_chair",
-			minutes: 3,
-			detail: "Explains the impromptu format and the question.",
-		}),
-		beat({
-			kind: "role",
-			label: "Impromptu answer",
-			roleKey: "contestant_impromptu",
-			repeatsRoleKey: "contestant_impromptu",
-			minutes: 2,
-			markGreen: 1,
-			markYellow: 1.5,
-			markRed: 2,
-			detail: "Answers the question.",
-		}),
-		beat({
-			kind: "event",
-			label: "One minute of silence",
-			repeatsRoleKey: "contestant_impromptu",
-			minutes: 1,
-			detail: "Judges complete their ballots.",
-		}),
-		beat({
-			kind: "event",
-			label: "Break",
-			minutes: 10,
-			detail: "Ballots are tallied.",
-		}),
-
-		beat({ kind: "section", label: "SPEECH EVALUATION CONTEST" }),
-		beat({
-			kind: "role",
-			label: "Evaluation contest briefing",
-			roleKey: "contest_chair",
-			minutes: 3,
-			detail: "Explains the evaluation format.",
-		}),
-		beat({
-			kind: "role",
-			label: "Test speech",
-			roleKey: "test_speaker",
-			minutes: 7,
-			detail: "The speech every evaluation contestant evaluates.",
-		}),
-		beat({
-			kind: "event",
-			label: "Evaluation preparation",
-			minutes: 5,
-			detail: "Contestants prepare their evaluations out of the room.",
-		}),
-		beat({
-			kind: "role",
-			label: "Speech evaluation",
-			roleKey: "contestant_evaluation",
-			repeatsRoleKey: "contestant_evaluation",
-			minutes: 3,
-			markGreen: 2,
-			markYellow: 2.5,
-			markRed: 3,
-			detail: "Delivers the evaluation.",
-		}),
-		beat({
-			kind: "event",
-			label: "One minute of silence",
-			repeatsRoleKey: "contestant_evaluation",
-			minutes: 1,
-			detail: "Judges complete their ballots.",
-		}),
-
 		beat({ kind: "section", label: "RESULTS AND CLOSING" }),
 		beat({
 			kind: "role",
 			label: "Tallying",
 			roleKey: "ballot_counter",
 			minutes: 10,
-			detail: "Ballots are counted and verified with the Chief Judge.",
+			detail:
+				"Ballots are counted and verified with the Chief Judge, out of the room.",
 		}),
 		beat({
 			kind: "role",

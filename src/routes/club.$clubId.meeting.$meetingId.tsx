@@ -287,6 +287,7 @@ function MeetingView() {
 		urlKey,
 		geIntroducesFunctionaries,
 		template,
+		templateKey,
 		logoUrl,
 	} = Route.useLoaderData();
 	const router = useRouter();
@@ -1392,6 +1393,7 @@ function MeetingView() {
 						shareUrl={effectiveCanManage ? nudgeShareUrl : ""}
 						meetingDate={effectiveCanManage ? nudgeDate : ""}
 						meeting={meeting}
+						templateKey={templateKey}
 						timezone={timezone}
 						selfMemberId={agendaMemberId}
 						onMetaSaved={async () => {
