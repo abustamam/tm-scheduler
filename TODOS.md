@@ -469,7 +469,7 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
   merely asserted) against an officer-authored, all-axes-hostile fixture: linear cost with no
   knee to 16x the beat cap, worst case ~33-35ms against a 250ms budget — so the ceilings were
   confirmed rather than lowered. See CONTEXT.md's **Meeting template** entry.
-  **Completed:** this branch (configurable-agendas, 2026-08-22) — `/ship` to stamp the version.
+  **Completed:** v1.24.0.0 (2026-08-22) — #615.
 
 - **`buildTemplateRows`' repeat-block binding is no longer unexercised.** The configurable-agendas
   spec's D4 resolved the two previously-unreachable shapes by CONSTRAINING rather than adding a
@@ -485,4 +485,4 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
   on `kind`. The workaround this constraint made unnecessary (routing the contest's tally and
   timers' report around multi-slot roles) was dropped in the same pass: both beats now bind back
   to `ballot_counter` / `contest_timer`.
-  **Completed:** this branch (configurable-agendas, 2026-08-22) — `/ship` to stamp the version.
+  **Completed:** v1.24.0.0 (2026-08-22) — #615.

@@ -2,6 +2,27 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.24.0.0] - 2026-08-22
+
+### Added
+
+- **You can now change a meeting's agenda.** Until now an agenda was whatever its meeting type said it was — the same fifteen rows for every meeting of that type, with no way to alter them. A meeting that ran differently simply had a wrong agenda, and the only lever was to invent a new meeting type for the whole club. Open a templated meeting and there is now an **Edit agenda** link next to it: rename a row, change how long it runs, move it up or down, add one, delete one. Everything you change belongs to that meeting alone. The meeting type it came from is untouched, and so is every other meeting using it — including next month's.
+- **Add and drop roles for a single meeting.** A contest needs judges, a chief judge and a ballot counter that no ordinary meeting has; a meeting with no Table Topics has no use for a Topicsmaster. Both are now decisions you make per meeting rather than per club. Roles you add appear on the sign-up sheet like any other, and roles that can have several people — contest speakers, judges — carry **+** and **−** so you can set how many on the day.
+- **Removing a role tells you who loses it first.** If someone has already signed up for a role you are about to delete, the confirmation names them before anything happens, so you can tell them yourself. This is the only warning they get: once a role is gone, the app cannot notify the person who held it.
+- **A speech contest agenda that is actually a speech contest.** The seeded contest template previously ran all three contests at once — prepared speech, evaluation and Table Topics — with no way to remove the two you were not holding. It is now one prepared-speech contest, sized for five-to-seven-minute speeches, with judges, a chief judge, a ballot counter and a timer, and the speaker count adjustable on the agenda. Combined with the two entries above, a club running any other format now builds it from this one rather than waiting for a new template.
+- **Meeting types now install themselves.** They only ever reached the live site when someone remembered to run a script by hand, and for two releases nobody did — so the "Change meeting type" picker offered clubs nothing at all, which is why the contest template was unreachable in the first place. They now install on every deploy, and a wording change to one lands with the next release instead of needing a person.
+
+### Changed
+
+- **Re-applying a meeting's type no longer clears everyone off it.** Picking the meeting type a meeting already has — easy to do, since the dialog badges it "Current" — tore down every role and released every person who had signed up. Roles the new type still has are now carried across with their sign-ups intact; only roles that genuinely disappear release anyone, and the dialog's count of who that affects is now the truth rather than an underestimate.
+
+### Fixed
+
+- **A meeting you had deliberately re-typed could vanish when you edited the club's schedule.** Changing a recurring meeting's pattern cleans up the empty placeholder meetings it had generated. A meeting whose type you had changed by hand still looked empty to that cleanup if nobody had signed up yet, so it was deleted along with the placeholders — quietly, and with no way to tell it had happened. Those meetings are now left alone.
+- **Four kinds of activity read as raw code on the Activity page.** Opening and closing a vote, and the two entries recorded when a platform admin views or acts on a club, showed as `vote_open`, `vote_close`, `superadmin_viewed` and `superadmin_acted` instead of sentences.
+- **The two "Back to …" links were the wrong colour.** Both read as ordinary teal body links rather than as navigation, on the roles guide and the new editor.
+- **A role with nobody signed up no longer disappears from the agenda.** A row for a role that exists but has no volunteer was dropped from the printed agenda entirely, so nothing on the page showed the club that the job was open. It now appears with an empty holder — which is the point of printing it.
+
 ## [1.23.0.0] - 2026-08-20
 
 ### Added
