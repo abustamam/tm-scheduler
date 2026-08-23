@@ -330,17 +330,25 @@ describe("buildTemplateRows render cost (#task-10)", () => {
 		// ...but this renderer never approaches #522's ~13x, which is the
 		// thing worth pinning: a future change that made emoji cost 10x
 		// ASCII here would be a real regression in THIS renderer, not just
-		// "emoji are known to be slower somewhere in this codebase". ABSOLUTE,
-		// not stated relative to `asciiMs` measured in this same run — a bound
-		// like `asciiMs * 6` moves with whatever this run happens to measure
-		// for ASCII and would still pass if BOTH numbers regressed together.
-		// 100ms is generous over the measured ~33-37ms emoji cost at this same
-		// fixture (`meeting-template-limits.ts`'s honesty note), enough margin
-		// for a slower CI runner while still catching a real regression: the
-		// worst-legal-template test above already gates the absolute number
-		// tightly at 250ms, so this one only needs to prove emoji isn't an
-		// order of magnitude worse than that.
-		expect(emojiMs).toBeLessThan(100);
+		// "emoji are known to be slower somewhere in this codebase".
+		//
+		// BOTH forms, because each covers the other's blind spot. This comment
+		// used to argue for the absolute bound ALONE, rejecting `asciiMs * 6`
+		// on the grounds that a ratio still passes if both numbers regress
+		// together. True, and an argument for adding the absolute — not for
+		// omitting the ratio, which is the only form that survives a change of
+		// machine. The absolute alone went red on CI at 127.33ms against a
+		// 100ms bound picked from a ~33-37ms macOS measurement: a ~7x slower
+		// shared runner, saying nothing whatever about emoji.
+		//
+		// So: the ratio states the actual claim (emoji is not an order of
+		// magnitude worse than ASCII, on whatever machine is running), and the
+		// absolute catches the both-regressed case the ratio cannot see. The
+		// absolute is anchored to the same 250ms this file's ceiling case uses
+		// for a comparable workload, rather than to a number only ever
+		// observed on one laptop.
+		expect(emojiMs / asciiMs).toBeLessThan(10);
+		expect(emojiMs).toBeLessThan(250);
 		expect(asciiMs).toBeGreaterThan(0);
 	});
 
@@ -414,6 +422,13 @@ describe("buildTemplateRows render cost (#task-10)", () => {
 		// 50,000 slots before the cap slices it down (measured ~1-7ms for
 		// that alone at this size); a cap that instead joined every holder
 		// and truncated the resulting STRING would not show up as fast here.
-		expect(ms).toBeLessThan(50);
+		//
+		// 150, not the 50 this shipped with. 50 was ~7x the macOS measurement
+		// and looked generous; CI's runner is itself ~7x slower, which put the
+		// upper end of that measured range within a millisecond or two of the
+		// bound — passing on luck rather than on margin. The uncapped shape
+		// this guards against joins 50,000 holders and costs orders of
+		// magnitude more, so tripling the ceiling does not blunt it.
+		expect(ms).toBeLessThan(150);
 	});
 });
