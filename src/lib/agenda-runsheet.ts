@@ -106,7 +106,14 @@ export type AgendaRow = {
 	roleLabel?: string;
 	holder?: string | null;
 	/**
-	 * The holders `holder` joins, unjoined — present whenever `holder` is.
+	 * The holders `holder` joins, unjoined.
+	 *
+	 * Set by the TEMPLATE path only (`buildTemplateRows`), which is the one
+	 * place a single beat can name several people. `expandRunSheet`'s standard
+	 * flow emits one row PER SLOT, so each of its rows has exactly one holder
+	 * and omits this — and that absence is load-bearing rather than an
+	 * oversight: it is what keeps an ordinary club agenda off the line-break
+	 * path below, where an extra line on every row would cost real type size.
 	 *
 	 * DATA beside the prose, for the same reason `introduces` below is
 	 * (#578): a joined string forces every layout to accept one presentation.
