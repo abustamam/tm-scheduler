@@ -11,6 +11,13 @@ const draft: AgendaDraft = {
 	templateId: "tpl-1",
 	templateName: "Standard meeting",
 	editable: true,
+	// 6:45 PM America/Chicago, 90-minute booking — the shape the editor's clock
+	// is computed from. Every timing assertion below reads off these.
+	slots: [],
+	scheduledAt: "2026-09-10T23:45:00.000Z",
+	timeZone: "America/Chicago",
+	lengthMinutes: 90,
+	geIntroducesFunctionaries: false,
 	rows: [
 		{
 			id: "r1",
@@ -21,6 +28,7 @@ const draft: AgendaDraft = {
 			minutes: 0,
 			roleKey: null,
 			repeatsRoleKey: null,
+			flex: false,
 			markGreen: null,
 			markYellow: null,
 			markRed: null,
@@ -34,6 +42,7 @@ const draft: AgendaDraft = {
 			minutes: 5,
 			roleKey: "toastmaster",
 			repeatsRoleKey: null,
+			flex: false,
 			markGreen: null,
 			markYellow: null,
 			markRed: null,

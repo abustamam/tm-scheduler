@@ -3441,3 +3441,78 @@ describe.skipIf(!hasTestDb)("ensureAgendaDraft against a conversion", () => {
 		expect(copies).toEqual([]);
 	});
 });
+
+describe.skipIf(!hasTestDb)(
+	"the draft carries what the CLIENT clock needs",
+	() => {
+		it("round-trips the flex flag on a row", async () => {
+			await givePrivateTemplate();
+			const before = await loadAgendaDraft(club.meetingId);
+			const row = before?.rows[0];
+			expect(row).toBeDefined();
+			expect(row?.flex).toBe(false);
+
+			await updateAgendaRow({
+				meetingId: club.meetingId,
+				rowId: row?.id ?? "",
+				patch: { flex: true },
+			});
+
+			const after = await loadAgendaDraft(club.meetingId);
+			// Resolved by POSITION, not by id: the write may fork a private copy and
+			// mint fresh row ids.
+			expect(after?.rows[0]?.flex).toBe(true);
+		});
+
+		/**
+		 * `flex` is required for CORRECTNESS, not only for the editor's pin control,
+		 * and this is the test that says so.
+		 *
+		 * `buildTemplateRows` reads `row.flex` to mark the row `applyFlex` resizes.
+		 * Drop the field from this payload and the client's `applyFlex` finds an
+		 * empty `flexIndices` on every meeting forever — a permanent no-op whose
+		 * only symptom is the editor's clock quietly disagreeing with the printed
+		 * agenda. It fails in the direction that looks fine, so nothing else here
+		 * can see it.
+		 */
+		it("exposes flex on EVERY row, so the client's applyFlex is not a no-op", async () => {
+			await givePrivateTemplate();
+			const draft = await loadAgendaDraft(club.meetingId);
+			expect(draft?.rows.length).toBeGreaterThan(0);
+			for (const r of draft?.rows ?? []) {
+				expect(typeof r.flex).toBe("boolean");
+			}
+		});
+
+		it("carries the meeting's start, timezone, length and run-of-show variant", async () => {
+			await givePrivateTemplate();
+			const draft = await loadAgendaDraft(club.meetingId);
+			expect(draft).not.toBeNull();
+			// An ISO string, not a Date: this crosses a server-fn boundary, and
+			// `buildTimeline` already accepts `Date | string`.
+			expect(typeof draft?.scheduledAt).toBe("string");
+			expect(() =>
+				new Date(draft?.scheduledAt ?? "").toISOString(),
+			).not.toThrow();
+			expect(typeof draft?.timeZone).toBe("string");
+			expect(draft?.timeZone.length).toBeGreaterThan(0);
+			expect(typeof draft?.lengthMinutes).toBe("number");
+			expect(draft?.lengthMinutes).toBeGreaterThan(0);
+			expect(typeof draft?.geIntroducesFunctionaries).toBe("boolean");
+		});
+
+		it("carries THIS meeting's slots, which the repeat block fans across", async () => {
+			await givePrivateTemplate();
+			const draft = await loadAgendaDraft(club.meetingId);
+			expect(Array.isArray(draft?.slots)).toBe(true);
+			// Not merely present — the seeded club has one slot, and a payload
+			// carrying some OTHER meeting's slots would fan a repeat block across the
+			// wrong count and put every clock below it out.
+			expect(draft?.slots.length).toBeGreaterThan(0);
+			for (const s of draft?.slots ?? []) {
+				expect(typeof s.slotIndex).toBe("number");
+				expect(typeof s.roleName).toBe("string");
+			}
+		});
+	},
+);

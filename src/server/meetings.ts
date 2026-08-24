@@ -7,13 +7,12 @@ import {
 	clubs,
 	guests,
 	meetings,
-	members,
 	pathwaysProjects,
 	roleDefinitions,
 	roleSlots,
 	speeches,
 } from "#/db/schema";
-import { resolveEvaluatorLinks } from "#/lib/agenda";
+
 import { MEETING_FIELDS, MEETING_UPDATE_FIELDS } from "#/lib/meeting-limits";
 import {
 	localDateKey,
@@ -48,6 +47,7 @@ import {
 } from "./meeting-contacts-logic";
 import { resolveMeetingNumber } from "./meeting-number-logic";
 import { resolvePublicMeetingKey } from "./meeting-resolve-logic";
+import { loadMeetingSlots } from "./meeting-slots-logic";
 import {
 	loadTemplateContent,
 	loadTemplateKey,
@@ -163,66 +163,11 @@ async function loadMeetingDetail(
 		canManage = await canManageClub(currentUserId, meeting.clubId);
 	}
 
-	const assignee = alias(members, "assignee");
-	const guestAssignee = alias(guests, "assignee_guest");
-	const rows = await db
-		.select({
-			id: roleSlots.id,
-			roleDefinitionId: roleSlots.roleDefinitionId,
-			status: roleSlots.status,
-			slotIndex: roleSlots.slotIndex,
-			claimedAt: roleSlots.claimedAt,
-			evaluatesSlotId: roleSlots.evaluatesSlotId,
-			roleName: roleDefinitions.name,
-			// Stable role identity (#368) for the agenda run-of-show (#367) to bind
-			// beats to by key rather than free-text name — a rename via
-			// `updateClubRole` never touches this. Null for a custom club role, or
-			// a standard role predating the #368 backfill.
-			roleKey: roleDefinitions.key,
-			category: roleDefinitions.category,
-			description: roleDefinitions.description,
-			sortOrder: roleDefinitions.sortOrder,
-			isSpeakerRole: roleDefinitions.isSpeakerRole,
-			// assigneeId is the MEMBER id (null for a guest or open slot) — used for
-			// "is mine" / roster flags. A guest assignee is carried separately.
-			assigneeId: assignee.id,
-			assigneeGuestId: guestAssignee.id,
-			// The rendered assignee name resolves either source (#151); the caller
-			// pairs it with `assigneeIsGuest` to show the "· Guest" marker.
-			assigneeName: sql<
-				string | null
-			>`coalesce(${assignee.name}, ${guestAssignee.name})`,
-			speechTitle: speeches.title,
-			pathwayPath: speeches.pathwayPath,
-			projectName: speeches.projectName,
-			projectLevel: speeches.projectLevel,
-			// Carried so the edit sheet can PRE-SELECT the linked catalog project
-			// (#418) rather than reopening on a blank picker. Display still comes
-			// from the free-text triple above.
-			projectId: speeches.projectId,
-			minMinutes: speeches.minMinutes,
-			maxMinutes: speeches.maxMinutes,
-			presentationUrl: speeches.presentationUrl,
-		})
-		.from(roleSlots)
-		.innerJoin(
-			roleDefinitions,
-			eq(roleDefinitions.id, roleSlots.roleDefinitionId),
-		)
-		.leftJoin(assignee, eq(assignee.id, roleSlots.assignedMemberId))
-		.leftJoin(guestAssignee, eq(guestAssignee.id, roleSlots.assignedGuestId))
-		.leftJoin(speeches, eq(speeches.id, roleSlots.speechId))
-		.where(eq(roleSlots.meetingId, meetingId))
-		.orderBy(asc(roleDefinitions.sortOrder), asc(roleSlots.slotIndex));
-
-	// Flag guest-held slots so every read path can render the "· Guest" marker.
-	const rowsWithGuestFlag = rows.map((r) => ({
-		...r,
-		assigneeIsGuest: r.assigneeGuestId != null,
-	}));
-
-	// Resolve which speaker each evaluator slot evaluates.
-	const slots = resolveEvaluatorLinks(rowsWithGuestFlag);
+	// ONE loader, shared with the agenda editor (`meeting-slots-logic.ts`). The
+	// editor computes its running clock from these same slots, so a second
+	// query scoped to what it reads is how the two surfaces would come to
+	// disagree about when the meeting ends.
+	const slots = await loadMeetingSlots(meetingId);
 
 	const club = await db.query.clubs.findFirst({
 		where: eq(clubs.id, meeting.clubId),
