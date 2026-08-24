@@ -76,6 +76,18 @@ const noopHandlers = {
 	onRemoveRole: vi.fn().mockResolvedValue(undefined),
 };
 
+/** Open a row's detail disclosure.
+ *
+ *  The note, the role binding, the per-holder flag and the three timing marks
+ *  live behind a per-row toggle: a row has ten controls and the table has four
+ *  columns, and widening it until they all fit pushes the running clock off the
+ *  left edge on a laptop — the one thing the table exists to show. These tests
+ *  therefore open the row first, which is what an officer does too. */
+async function openRowDetail(index = 0) {
+	const toggles = screen.getAllByRole("button", { name: /show row details/i });
+	await userEvent.click(toggles[index] as HTMLElement);
+}
+
 describe("AgendaEditor", () => {
 	it("renders one control row per agenda row, in order", () => {
 		render(<AgendaEditor draft={draft} {...noopHandlers} />);
@@ -147,6 +159,29 @@ describe("AgendaEditor", () => {
 	 */
 	const perHolderDraft: AgendaDraft = {
 		...draft,
+		// A per-holder row needs a SLOT to render. The editor shows the expanded
+		// agenda — the same rows that print — and a repeat block whose role nobody
+		// holds emits nothing at all. That is the honest rendering (an unheld
+		// repeat prints nothing either), and it is why this fixture supplies one
+		// holder where the `draft` above needs none: `draft.rows[1]` does not
+		// repeat, so it emits one row regardless of who holds it.
+		slots: [
+			{
+				id: "slot-tm",
+				roleName: "Toastmaster",
+				roleKey: "toastmaster",
+				category: "leadership",
+				isSpeakerRole: false,
+				slotIndex: 0,
+				assigneeName: "Ada Lovelace",
+				speechTitle: null,
+				projectLevel: null,
+				minMinutes: null,
+				maxMinutes: null,
+				evaluatesSlotId: null,
+				evaluates: null,
+			},
+		],
 		rows: [
 			{
 				...(draft.rows[1] as AgendaDraft["rows"][number]),
@@ -154,6 +189,20 @@ describe("AgendaEditor", () => {
 			},
 		],
 	};
+
+	it("renders nothing for a per-holder row whose role nobody holds", () => {
+		// The consequence of showing the EXPANDED agenda, pinned so it is a
+		// decision rather than a surprise: an officer who ticks "one row per
+		// person" on a role with no slots sees the row disappear, exactly as it
+		// would disappear from the printed sheet.
+		render(
+			<AgendaEditor
+				draft={{ ...perHolderDraft, slots: [] }}
+				{...noopHandlers}
+			/>,
+		);
+		expect(screen.queryAllByLabelText("Row label")).toHaveLength(0);
+	});
 
 	it("ticks per-holder by repeating over the row's OWN role, and unticks to null", async () => {
 		// The checkbox is the other half of the pair the Role select has to stay in
@@ -171,6 +220,8 @@ describe("AgendaEditor", () => {
 		// By NAME, not by role alone: the add-role form has its own "Speaking
 		// role" checkbox, and the label text is also what proves which state the
 		// row is in.
+		// The role row is the SECOND row (index 1); the first is the OPENING band.
+		await openRowDetail(1);
 		await userEvent.click(screen.getByRole("checkbox", { name: /^one row$/i }));
 		await waitFor(() =>
 			expect(onUpdateRow).toHaveBeenCalledWith("r2", {
@@ -187,6 +238,8 @@ describe("AgendaEditor", () => {
 				onUpdateRow={onUpdateRow}
 			/>,
 		);
+		// `perHolderDraft` has ONE row, so its disclosure is the only one.
+		await openRowDetail();
 		await userEvent.click(
 			screen.getByRole("checkbox", { name: /one row per person/i }),
 		);
@@ -207,6 +260,7 @@ describe("AgendaEditor", () => {
 		// The label proves the fixture really is a per-holder row, so a future
 		// change to how `perHolder` is derived cannot quietly turn this into a
 		// test of the "once" path.
+		await openRowDetail();
 		expect(screen.getByText(/one row per person/i)).toBeTruthy();
 		await userEvent.selectOptions(
 			screen.getByLabelText("Row role"),
@@ -232,6 +286,7 @@ describe("AgendaEditor", () => {
 				onUpdateRow={onUpdateRow}
 			/>,
 		);
+		await openRowDetail();
 		await userEvent.selectOptions(screen.getByLabelText("Row role"), "");
 		await waitFor(() =>
 			expect(onUpdateRow).toHaveBeenCalledWith("r2", {
@@ -257,9 +312,7 @@ describe("AgendaEditor", () => {
 				onUpdateRow={onUpdateRow}
 			/>,
 		);
-		const minutes = screen.getAllByLabelText(
-			"Row minutes",
-		)[1] as HTMLInputElement;
+		const minutes = screen.getByLabelText("Row minutes") as HTMLInputElement;
 		expect(minutes.value).toBe("5");
 		await userEvent.clear(minutes);
 		await userEvent.type(minutes, "900");
@@ -291,5 +344,104 @@ describe("AgendaEditor", () => {
 		);
 		// No second confirm ever appeared — a single click was enough.
 		expect(screen.queryByRole("button", { name: /remove anyway/i })).toBeNull();
+	});
+});
+
+describe("AgendaEditor running clock and budget", () => {
+	it("stamps each row with its start time", () => {
+		render(<AgendaEditor draft={draft} {...noopHandlers} />);
+		// OPENING (0 min) then Welcome (5), from a 6:45 PM start: both start 6:45.
+		expect(screen.getByTestId("agenda-row-start-0")?.textContent).toContain(
+			"6:45",
+		);
+		expect(screen.getByTestId("agenda-row-start-1")?.textContent).toContain(
+			"6:45",
+		);
+	});
+
+	it("shows the end time, the total, the slot and the signed delta", () => {
+		render(<AgendaEditor draft={draft} {...noopHandlers} />);
+		const footer = screen.getByTestId("agenda-budget");
+		expect(footer?.textContent).toContain("6:50");
+		expect(footer?.textContent).toContain("5 min");
+		expect(footer?.textContent).toContain("slot 90 min");
+		expect(footer?.textContent).toContain("85 under");
+	});
+
+	it("states the delta INSIDE the ±2 tolerance and withholds the advice", () => {
+		// The bug D5 exists to prevent: applyFlex reports "exact" within
+		// FLEX_TOLERANCE_MINUTES, so a footer derived from `status` would say
+		// nothing at all about a meeting 2 minutes over — which is precisely
+		// MCF's contest.
+		const tight: AgendaDraft = {
+			...draft,
+			lengthMinutes: 3,
+			rows: [{ ...draft.rows[1], minutes: 5 }],
+		};
+		render(<AgendaEditor draft={tight} {...noopHandlers} />);
+		expect(screen.getByTestId("agenda-budget")?.textContent).toContain(
+			"2 over",
+		);
+		expect(screen.queryByTestId("agenda-budget-advice")).toBeNull();
+	});
+
+	it("renders the advisory sentence OUTSIDE the tolerance", () => {
+		const late: AgendaDraft = {
+			...draft,
+			lengthMinutes: 3,
+			rows: [{ ...draft.rows[1], minutes: 20 }],
+		};
+		render(<AgendaEditor draft={late} {...noopHandlers} />);
+		expect(screen.getByTestId("agenda-budget-advice")?.textContent).toMatch(
+			/runs 17 min long/,
+		);
+	});
+
+	it("recomputes the clock as you type, before any save", async () => {
+		const user = userEvent.setup();
+		const onUpdateRow = vi.fn().mockResolvedValue(undefined);
+		render(
+			<AgendaEditor
+				draft={draft}
+				{...noopHandlers}
+				onUpdateRow={onUpdateRow}
+			/>,
+		);
+		const min = screen.getByLabelText("Row minutes");
+		await user.clear(min);
+		await user.type(min, "30");
+		await waitFor(() => {
+			expect(screen.getByTestId("agenda-budget")?.textContent).toContain(
+				"7:15",
+			);
+		});
+		// The whole point: no round-trip happened. The clock moved locally.
+		expect(onUpdateRow).not.toHaveBeenCalled();
+	});
+
+	it("subtotals each section band", () => {
+		render(<AgendaEditor draft={draft} {...noopHandlers} />);
+		expect(screen.getByTestId("agenda-section-total-0")?.textContent).toContain(
+			"5",
+		);
+	});
+
+	it("still commits a minutes edit on blur", async () => {
+		const user = userEvent.setup();
+		const onUpdateRow = vi.fn().mockResolvedValue(undefined);
+		render(
+			<AgendaEditor
+				draft={draft}
+				{...noopHandlers}
+				onUpdateRow={onUpdateRow}
+			/>,
+		);
+		const min = screen.getByLabelText("Row minutes");
+		await user.clear(min);
+		await user.type(min, "9");
+		await user.tab();
+		await waitFor(() =>
+			expect(onUpdateRow).toHaveBeenCalledWith("r2", { minutes: 9 }),
+		);
 	});
 });
