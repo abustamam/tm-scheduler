@@ -1,7 +1,7 @@
 // src/lib/agenda-timing.test.ts
 import { describe, expect, it } from "vitest";
 import type { AgendaRow } from "./agenda-runsheet";
-import { buildTimeline } from "./agenda-timing";
+import { buildTimeline, timelineEnd } from "./agenda-timing";
 
 function row(minutes: number): AgendaRow {
 	return { who: "x", detail: "", minutes, marks: null };
@@ -76,5 +76,50 @@ describe("buildTimeline", () => {
 		// Same instant is 19:45 in New York (EDT, UTC-4).
 		const [ny] = buildTimeline([row(1)], start, "America/New_York");
 		expect(ny.time).toBe("7:45");
+	});
+});
+
+describe("timelineEnd", () => {
+	/** 6:45 PM America/Chicago on 2026-09-10 — MCF's club contest. */
+	const START = new Date("2026-09-10T23:45:00.000Z");
+
+	it("returns the clock time after every row's duration", () => {
+		// The seeded contest's three segments at four contestants: 25 + 39 + 28.
+		expect(
+			timelineEnd(
+				[{ minutes: 25 }, { minutes: 39 }, { minutes: 28 }],
+				START,
+				"America/Chicago",
+			),
+		).toBe("8:17");
+	});
+
+	it("returns the start itself for an empty agenda", () => {
+		expect(timelineEnd([], START, "America/Chicago")).toBe("6:45");
+	});
+
+	it("agrees with buildTimeline's last row plus its own duration", () => {
+		// Stated as an agreement so the two cannot drift: the end of an agenda is
+		// the last row's start plus that row's minutes, and both derive from the
+		// same cursor.
+		const rows = [row(25), row(39), row(28)];
+		const timed = buildTimeline(rows, START, "America/Chicago");
+		expect(timed.at(-1)?.time).toBe("7:49");
+		expect(timelineEnd(rows, START, "America/Chicago")).toBe("8:17");
+	});
+
+	it("formats in the club timezone, like buildTimeline", () => {
+		expect(timelineEnd([{ minutes: 60 }], START, "America/New_York")).toBe(
+			"8:45",
+		);
+	});
+
+	it("crosses midnight without wrapping to a negative clock", () => {
+		// 11:30 PM Chicago plus 90 minutes. `formatClock` takes hours mod 24, so
+		// this asserts the wrap lands on 1:00 rather than 25:00 or a negative.
+		const late = new Date("2026-09-11T04:30:00.000Z");
+		expect(timelineEnd([{ minutes: 90 }], late, "America/Chicago")).toBe(
+			"1:00",
+		);
 	});
 });
