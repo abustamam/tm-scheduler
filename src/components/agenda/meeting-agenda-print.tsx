@@ -603,6 +603,18 @@ function RowMarks({
 	);
 }
 
+/**
+ * Whether a row's holders are a LIST rather than a person.
+ *
+ * Two or more, never one: the break costs a line, and a line costs type size
+ * on a sheet `FitPage` scales (#585). Absent `holders` — every section, event
+ * and hand-off row, and every row built before the field existed — reads as
+ * false, so the layout is unchanged for everything but the case that needs it.
+ */
+function multiHolder(row: TimelineRow): boolean {
+	return (row.holders?.length ?? 0) > 1;
+}
+
 /** The narrative run-of-show (editorial / spacious): a colored-spine list.
  *  `timingColors` swaps the muted min–max range for the colored green·yellow·red
  *  trio (used by the one-page editorial layout).
@@ -616,18 +628,6 @@ function RowMarks({
  *  editorial printed at 0.81 scale, around 6.4pt body. Height IS font size here.
  *  Which is also the warning: anything added to this renderer is paid for in
  *  legibility, not in a scrollbar. */
-/**
- * Whether a row's holders are a LIST rather than a person.
- *
- * Two or more, never one: the break costs a line, and a line costs type size
- * on a sheet `FitPage` scales (#585). Absent `holders` — every section, event
- * and hand-off row, and every row built before the field existed — reads as
- * false, so the layout is unchanged for everything but the case that needs it.
- */
-function multiHolder(row: TimelineRow): boolean {
-	return (row.holders?.length ?? 0) > 1;
-}
-
 function RunNarrative({
 	rows,
 	scale,
@@ -746,6 +746,11 @@ function RunNarrative({
 								    whole sheet — #585 measured that trade at 6.470pt against
 								    6.799pt and rejected it. A contest sheet gains one line;
 								    an ordinary agenda gains none. */}
+								{/* `data-row-title` / `data-row-holders` are test hooks, the
+								    same convention as `data-row-time` above — nothing renders
+								    off them. They let the suite assert WHICH line the marks
+								    landed on, which is the whole content of this fix and is
+								    invisible to a text-only query. */}
 								<div data-row-title>
 									{multiHolder(lead) ? (lead.roleLabel ?? g.who) : g.who}
 									<RowMarks
