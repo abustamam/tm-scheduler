@@ -145,6 +145,28 @@ describe("a row held by several people puts the names on their own line", () => 
 			).toBe(true);
 		});
 	}
+
+	// The other two layouts are UNCHANGED by this fix, and that is worth an
+	// assertion rather than a comment: `grid` and `timing` already lay
+	// `roleLabel` and `holder` into separate cells, so they never ran the
+	// marks off behind the last name. What they must not do is LOSE the
+	// names — a scoped change that quietly dropped a holder on a layout its
+	// tests never rendered would look exactly like success here.
+	for (const layout of ["grid", "timing"] as const) {
+		it(`still names every holder, without a break (${layout})`, () => {
+			const { container } = renderContest(layout);
+			expect(container.querySelector("[data-row-holders]")).toBeNull();
+			const text = container.textContent ?? "";
+			for (const name of [
+				"Faisal Ali",
+				"Rehanna Khan",
+				"Jagpal Singh",
+				"Riyaz Mohammed",
+			]) {
+				expect(text, `${layout} must still print ${name}`).toContain(name);
+			}
+		});
+	}
 });
 
 describe("MeetingAgendaPrint prints yellow, never amber (#507)", () => {
