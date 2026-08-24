@@ -12,7 +12,6 @@ import {
 	roleSlots,
 	speeches,
 } from "#/db/schema";
-
 import { MEETING_FIELDS, MEETING_UPDATE_FIELDS } from "#/lib/meeting-limits";
 import {
 	localDateKey,

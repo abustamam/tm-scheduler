@@ -172,7 +172,18 @@ export function foldRepeatTail(bands: EditorBand[]): DisplayBand[] {
 		}
 		const first = run[0];
 		const last = run.at(-1);
-		if (!first || !last) continue;
+		if (!first || !last) {
+			// UNREACHABLE today: the head band satisfies the negation of every
+			// condition the inner loop breaks on, so `run` always holds at least
+			// it. Written as forward PROGRESS rather than a bare `continue`,
+			// which would re-read the same index forever — and a hung tab is a
+			// worse failure than an uncollapsed band. If a future change to the
+			// break conditions can reject the head, this degrades to rendering
+			// the band expanded instead of spinning.
+			out.push({ kind: "iteration", band });
+			i += 1;
+			continue;
+		}
 		out.push({
 			kind: "repeatTail",
 			bands: run,
@@ -216,6 +227,15 @@ export function groupIntoBands(entries: BudgetEntry[]): EditorBand[] {
 			}
 			group.push(next);
 			i += 1;
+		}
+		if (group.length === 0) {
+			// Same forward-progress guarantee as `foldRepeatTail`, and unreachable
+			// for the same reason: the head entry satisfies the negation of every
+			// break condition above. Without it an empty run would leave `i`
+			// unchanged and spin.
+			out.push({ kind: "row", entry: head });
+			i += 1;
+			continue;
 		}
 		out.push({
 			kind: "iteration",

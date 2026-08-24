@@ -239,7 +239,25 @@ export function AgendaEditor({
 	// A row's position in the FULL expanded agenda, which is what the start-time
 	// test hooks and the move-button bounds are stated against. Folding changes
 	// what is drawn, never what the agenda is.
-	const indexOf = (entry: BudgetEntry) => entries.indexOf(entry);
+	// Indexed rather than scanned. Both of these run once PER RENDERED ROW, and
+	// the model re-runs on every keystroke, so the linear forms were O(n²) per
+	// render: `MAX_TEMPLATE_BEATS` (200) beats over `MAX_ROLE_REPEAT_SLOTS` (20)
+	// slots is ~4000 rows, and 4000 × (200 + 4000) scans is ~17M operations for
+	// one character typed. Not measured as a freeze; removed because two Maps
+	// cost three lines and make the question moot.
+	const rowOrder = useMemo(
+		() => new Map(draft.rows.map((r, i) => [r.id, i])),
+		[draft.rows],
+	);
+	const rowById = useMemo(
+		() => new Map(draft.rows.map((r) => [r.id, r])),
+		[draft.rows],
+	);
+	const indexByEntry = useMemo(
+		() => new Map(entries.map((e, i) => [e, i])),
+		[entries],
+	);
+	const indexOf = (entry: BudgetEntry) => indexByEntry.get(entry) ?? -1;
 	// Read off the SERVER's rows, not the local copy: `flex` is only ever changed
 	// by a button that round-trips, so there is no local edit to reflect.
 	const someRowStretches = draft.rows.some((r) => r.flex);
@@ -248,7 +266,7 @@ export function AgendaEditor({
 	 *  repeat block emits several entries from one stored row and only the
 	 *  stored order can say what a row goes back after. */
 	const previousRowIdOf = (rowId: string): string | null => {
-		const at = draft.rows.findIndex((r) => r.id === rowId);
+		const at = rowOrder.get(rowId) ?? -1;
 		return at > 0 ? (draft.rows[at - 1]?.id ?? null) : null;
 	};
 	/** When a folded block actually ENDS: the start of the row after it, or the
@@ -327,7 +345,7 @@ export function AgendaEditor({
 								// The local copy exists to move the CLOCK (`entry`); the
 								// server copy is what an edit is measured against and what
 								// `reseed()` restores.
-								const row = draft.rows.find((r) => r.id === entry.beatId);
+								const row = rowById.get(entry.beatId);
 								if (!row) return null;
 								if (row.kind === "section") sectionSeen += 1;
 								const index = indexOf(entry);
@@ -510,6 +528,37 @@ function AgendaTableRow({
 		row.markRed == null ? "" : String(row.markRed),
 	);
 
+	/**
+	 * What the SERVER last confirmed for this row.
+	 *
+	 * Not `row`. `row` is the loader's copy, and the route deliberately stops
+	 * invalidating after a pure edit — so the moment one save lands, `row` is
+	 * stale for the rest of the session.
+	 *
+	 * Every `commit*` below asks "did this change?" before sending. Ask that
+	 * against a stale `row` and REVERTING a field silently does nothing: type 5
+	 * -> 9 (server now 9, `row` still 5), then 9 -> 5 and the comparison says
+	 * "same as 5, skip" while the server keeps 9. The editor then shows one
+	 * duration and the printed agenda another, with nothing on either to say so.
+	 * Putting a value back after changing your mind is an ordinary edit, so that
+	 * is not an exotic path.
+	 *
+	 * Re-seeded when `row` itself changes identity, which is a STRUCTURAL
+	 * mutation — those still invalidate, so the loader is authoritative again.
+	 */
+	const confirmed = useRef(row);
+	const confirmedFrom = useRef(row);
+	if (confirmedFrom.current !== row) {
+		confirmedFrom.current = row;
+		confirmed.current = row;
+	}
+
+	/** Record what the server now holds, so the next comparison is against the
+	 *  truth rather than the loader's snapshot. */
+	function markConfirmed(patch: Partial<AgendaDraftRow>) {
+		confirmed.current = { ...confirmed.current, ...patch };
+	}
+
 	/** What every control does when the server refuses the value: put the field
 	 *  back to what the server still holds.
 	 *
@@ -517,63 +566,72 @@ function AgendaTableRow({
 	 *  longer invalidates after a pure edit, so a rejected save produces no
 	 *  re-render at all — without this the field goes on displaying a value that
 	 *  was never saved, and looks saved. The local model is reset too, or the
-	 *  clock would keep counting a duration the server rejected. */
+	 *  clock would keep counting a duration the server rejected.
+	 *
+	 *  Restores from `confirmed`, not `row`: after an earlier save landed, the
+	 *  loader's value is one the server has not held since. */
 	function reseed() {
-		setLabel(row.label);
-		setDetail(row.detail ?? "");
-		setMinutes(String(row.minutes));
-		setMarkGreen(row.markGreen == null ? "" : String(row.markGreen));
-		setMarkYellow(row.markYellow == null ? "" : String(row.markYellow));
-		setMarkRed(row.markRed == null ? "" : String(row.markRed));
+		const c = confirmed.current;
+		setLabel(c.label);
+		setDetail(c.detail ?? "");
+		setMinutes(String(c.minutes));
+		setMarkGreen(c.markGreen == null ? "" : String(c.markGreen));
+		setMarkYellow(c.markYellow == null ? "" : String(c.markYellow));
+		setMarkRed(c.markRed == null ? "" : String(c.markRed));
 		onPatchLocal(row.id, {
-			label: row.label,
-			detail: row.detail,
-			minutes: row.minutes,
-			markGreen: row.markGreen,
-			markYellow: row.markYellow,
-			markRed: row.markRed,
+			label: c.label,
+			detail: c.detail,
+			minutes: c.minutes,
+			markGreen: c.markGreen,
+			markYellow: c.markYellow,
+			markRed: c.markRed,
 		});
 	}
 
 	async function commitLabel() {
-		if (label === row.label) return;
-		if (!(await runAction(() => onUpdateRow(row.id, { label })))) reseed();
+		if (label === confirmed.current.label) return;
+		if (await runAction(() => onUpdateRow(row.id, { label }))) {
+			markConfirmed({ label });
+		} else {
+			reseed();
+		}
 	}
 	async function commitDetail() {
 		const next = detail === "" ? null : detail;
-		if (next === row.detail) return;
-		if (!(await runAction(() => onUpdateRow(row.id, { detail: next }))))
+		if (next === confirmed.current.detail) return;
+		if (await runAction(() => onUpdateRow(row.id, { detail: next }))) {
+			markConfirmed({ detail: next });
+		} else {
 			reseed();
+		}
 	}
 	async function commitMinutes() {
 		const parsed = Number.parseInt(minutes, 10);
 		if (Number.isNaN(parsed)) {
-			setMinutes(String(row.minutes));
+			setMinutes(String(confirmed.current.minutes));
 			return;
 		}
-		if (parsed === row.minutes) return;
-		if (!(await runAction(() => onUpdateRow(row.id, { minutes: parsed }))))
+		if (parsed === confirmed.current.minutes) return;
+		if (await runAction(() => onUpdateRow(row.id, { minutes: parsed }))) {
+			markConfirmed({ minutes: parsed });
+		} else {
 			reseed();
+		}
 	}
 	async function commitMarks() {
 		const green = parseIntOrNull(markGreen);
 		const yellow = parseIntOrNull(markYellow);
 		const red = parseIntOrNull(markRed);
-		if (
-			green === row.markGreen &&
-			yellow === row.markYellow &&
-			red === row.markRed
-		) {
+		const c = confirmed.current;
+		if (green === c.markGreen && yellow === c.markYellow && red === c.markRed) {
 			return;
 		}
-		const ok = await runAction(() =>
-			onUpdateRow(row.id, {
-				markGreen: green,
-				markYellow: yellow,
-				markRed: red,
-			}),
-		);
-		if (!ok) reseed();
+		const patch = { markGreen: green, markYellow: yellow, markRed: red };
+		if (await runAction(() => onUpdateRow(row.id, patch))) {
+			markConfirmed(patch);
+		} else {
+			reseed();
+		}
 	}
 
 	async function move(direction: "up" | "down") {

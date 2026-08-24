@@ -818,3 +818,122 @@ describe("AgendaEditor delete undo", () => {
 		expect(screen.queryByRole("button", { name: /undo/i })).toBeNull();
 	});
 });
+
+describe("AgendaEditor stale-server-row divergence", () => {
+	/**
+	 * The route no longer invalidates after a pure edit (that is the point — ten
+	 * re-timed rows were ten full route reloads). So `draft.rows` goes STALE the
+	 * moment a save lands, and every `commit*` asks "did this change?" against
+	 * it. Revert a field to the value the loader shipped and the comparison says
+	 * No, so nothing is sent: the editor shows 5 while the server holds 9, and
+	 * the printed agenda disagrees with the screen with nothing on either to say
+	 * so.
+	 *
+	 * Reverting a value you just changed is an ordinary edit — type 10, think
+	 * better of it, put 5 back — so this is not an exotic path.
+	 */
+	it("saves a field REVERTED to its original value after an earlier save", async () => {
+		const user = userEvent.setup();
+		const onUpdateRow = vi.fn().mockResolvedValue(undefined);
+		render(
+			<AgendaEditor
+				draft={draft}
+				{...noopHandlers}
+				onUpdateRow={onUpdateRow}
+			/>,
+		);
+		const min = screen.getByLabelText("Row minutes");
+
+		// 5 -> 9. Server now holds 9; `draft.rows` still says 5.
+		await user.clear(min);
+		await user.type(min, "9");
+		await user.tab();
+		await waitFor(() =>
+			expect(onUpdateRow).toHaveBeenCalledWith("r2", { minutes: 9 }),
+		);
+
+		// 9 -> 5, back to what the loader shipped. This MUST still be sent.
+		onUpdateRow.mockClear();
+		await user.clear(min);
+		await user.type(min, "5");
+		await user.tab();
+		await waitFor(() =>
+			expect(onUpdateRow).toHaveBeenCalledWith("r2", { minutes: 5 }),
+		);
+	});
+
+	it("saves a LABEL reverted to its original value", async () => {
+		const user = userEvent.setup();
+		const onUpdateRow = vi.fn().mockResolvedValue(undefined);
+		render(
+			<AgendaEditor
+				draft={draft}
+				{...noopHandlers}
+				onUpdateRow={onUpdateRow}
+			/>,
+		);
+		const label = screen.getAllByLabelText("Row label")[1] as HTMLElement;
+
+		await user.clear(label);
+		await user.type(label, "Opening");
+		await user.tab();
+		await waitFor(() =>
+			expect(onUpdateRow).toHaveBeenCalledWith("r2", { label: "Opening" }),
+		);
+
+		onUpdateRow.mockClear();
+		await user.clear(label);
+		await user.type(label, "Welcome");
+		await user.tab();
+		await waitFor(() =>
+			expect(onUpdateRow).toHaveBeenCalledWith("r2", { label: "Welcome" }),
+		);
+	});
+
+	it("still skips a no-op blur that changed nothing", async () => {
+		// The early return is not being deleted, only re-pointed: focusing a field
+		// and leaving without typing must still send nothing, or every tab through
+		// the table is a write.
+		const user = userEvent.setup();
+		const onUpdateRow = vi.fn().mockResolvedValue(undefined);
+		render(
+			<AgendaEditor
+				draft={draft}
+				{...noopHandlers}
+				onUpdateRow={onUpdateRow}
+			/>,
+		);
+		await user.click(screen.getByLabelText("Row minutes"));
+		await user.tab();
+		expect(onUpdateRow).not.toHaveBeenCalled();
+	});
+
+	it("re-seeds a REJECTED value to what the server last confirmed, not the loader", async () => {
+		// After 5 -> 9 lands, the server holds 9. A later rejected edit must put
+		// the field back to 9 — restoring the loader's 5 would show a value the
+		// server has not held since the first save.
+		const user = userEvent.setup();
+		const onUpdateRow = vi
+			.fn()
+			.mockResolvedValueOnce(undefined)
+			.mockRejectedValueOnce(new Error("Minutes must be between 0 and 600."));
+		render(
+			<AgendaEditor
+				draft={draft}
+				{...noopHandlers}
+				onUpdateRow={onUpdateRow}
+			/>,
+		);
+		const min = screen.getByLabelText("Row minutes") as HTMLInputElement;
+
+		await user.clear(min);
+		await user.type(min, "9");
+		await user.tab();
+		await waitFor(() => expect(onUpdateRow).toHaveBeenCalledTimes(1));
+
+		await user.clear(min);
+		await user.type(min, "900");
+		await user.tab();
+		await waitFor(() => expect(min.value).toBe("9"));
+	});
+});
