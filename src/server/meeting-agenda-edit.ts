@@ -231,6 +231,13 @@ const patchInput = rowInput.extend({
 				.max(MAX_BEAT_MINUTES)
 				.nullable()
 				.optional(),
+			// LAST, after every bounded field. `meeting-templates-authz.guard
+			// .test.ts` matches each bound with a `[\s\S]{0,120}` window between the
+			// field name and its `.max(...)`; inserting between an existing field and
+			// its bound could push one out of that window and fail a guard for a
+			// reason unrelated to the change. A boolean has no bound of its own to
+			// add, so the end is where it belongs.
+			flex: z.boolean().optional(),
 		})
 		.refine((p) => Object.keys(p).length > 0, {
 			message: "Patch must set at least one field.",

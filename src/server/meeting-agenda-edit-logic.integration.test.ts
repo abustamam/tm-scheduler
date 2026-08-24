@@ -140,6 +140,56 @@ async function givePrivateTemplate() {
  * exercises that specific mutator against a foreign row — hence one seeded
  * fixture reused by four separate tests rather than one.
  */
+/**
+ * A club-scoped template with `meeting_id` NULL — SHARED, so the meeting's
+ * first write forks a private copy of it. `givePrivateTemplate` above gives the
+ * meeting its OWN copy, which never forks and so cannot exercise the id
+ * translation this fixture exists for.
+ */
+async function giveSharedTemplate() {
+	const [t] = await testDb
+		.insert(meetingTemplates)
+		.values({
+			clubId: club.clubId,
+			meetingId: null,
+			key: `shared_${RUN}`,
+			name: `Shared ${RUN}`,
+		})
+		.returning({ id: meetingTemplates.id });
+	if (!t) throw new Error("template insert failed");
+	madeTemplates.push(t.id);
+	await testDb.insert(meetingTemplateRoles).values({
+		templateId: t.id,
+		key: "chair",
+		name: "Chair",
+		category: "leadership",
+		defaultCount: 1,
+		sortOrder: 10,
+		isSpeakerRole: false,
+	});
+	await testDb.insert(meetingTemplateBeats).values([
+		{
+			templateId: t.id,
+			sortOrder: 0,
+			kind: "section",
+			label: "OPENING",
+			minutes: 0,
+		},
+		{
+			templateId: t.id,
+			sortOrder: 1,
+			kind: "event",
+			label: "Welcome",
+			minutes: 5,
+		},
+	]);
+	await testDb
+		.update(meetings)
+		.set({ templateId: t.id })
+		.where(eq(meetings.id, club.meetingId));
+	return t.id;
+}
+
 async function seedForeignRow(): Promise<{
 	other: SeededClub;
 	foreignTemplateId: string;
@@ -3441,3 +3491,124 @@ describe.skipIf(!hasTestDb)("ensureAgendaDraft against a conversion", () => {
 		expect(copies).toEqual([]);
 	});
 });
+
+describe.skipIf(!hasTestDb)(
+	"the draft carries what the CLIENT clock needs",
+	() => {
+		it("round-trips the flex flag on a row", async () => {
+			await givePrivateTemplate();
+			const before = await loadAgendaDraft(club.meetingId);
+			const row = before?.rows[0];
+			expect(row).toBeDefined();
+			expect(row?.flex).toBe(false);
+
+			await updateAgendaRow({
+				meetingId: club.meetingId,
+				rowId: row?.id ?? "",
+				patch: { flex: true },
+			});
+
+			const after = await loadAgendaDraft(club.meetingId);
+			// Resolved by POSITION, not by id: the write may fork a private copy and
+			// mint fresh row ids.
+			expect(after?.rows[0]?.flex).toBe(true);
+		});
+
+		/**
+		 * `flex` is required for CORRECTNESS, not only for the editor's pin control,
+		 * and this is the test that says so.
+		 *
+		 * `buildTemplateRows` reads `row.flex` to mark the row `applyFlex` resizes.
+		 * Drop the field from this payload and the client's `applyFlex` finds an
+		 * empty `flexIndices` on every meeting forever — a permanent no-op whose
+		 * only symptom is the editor's clock quietly disagreeing with the printed
+		 * agenda. It fails in the direction that looks fine, so nothing else here
+		 * can see it.
+		 */
+		it("exposes flex on EVERY row, so the client's applyFlex is not a no-op", async () => {
+			await givePrivateTemplate();
+			const draft = await loadAgendaDraft(club.meetingId);
+			expect(draft?.rows.length).toBeGreaterThan(0);
+			for (const r of draft?.rows ?? []) {
+				expect(typeof r.flex).toBe("boolean");
+			}
+		});
+
+		it("carries the meeting's start, timezone, length and run-of-show variant", async () => {
+			await givePrivateTemplate();
+			const draft = await loadAgendaDraft(club.meetingId);
+			expect(draft).not.toBeNull();
+			// An ISO string, not a Date: this crosses a server-fn boundary, and
+			// `buildTimeline` already accepts `Date | string`.
+			expect(typeof draft?.scheduledAt).toBe("string");
+			expect(() =>
+				new Date(draft?.scheduledAt ?? "").toISOString(),
+			).not.toThrow();
+			expect(typeof draft?.timeZone).toBe("string");
+			expect(draft?.timeZone.length).toBeGreaterThan(0);
+			expect(typeof draft?.lengthMinutes).toBe("number");
+			expect(draft?.lengthMinutes).toBeGreaterThan(0);
+			expect(typeof draft?.geIntroducesFunctionaries).toBe("boolean");
+		});
+
+		it("carries THIS meeting's slots, which the repeat block fans across", async () => {
+			await givePrivateTemplate();
+			const draft = await loadAgendaDraft(club.meetingId);
+			expect(Array.isArray(draft?.slots)).toBe(true);
+			// Not merely present — the seeded club has one slot, and a payload
+			// carrying some OTHER meeting's slots would fan a repeat block across the
+			// wrong count and put every clock below it out.
+			expect(draft?.slots.length).toBeGreaterThan(0);
+			for (const s of draft?.slots ?? []) {
+				expect(typeof s.slotIndex).toBe("number");
+				expect(typeof s.roleName).toBe("string");
+			}
+		});
+
+		/**
+		 * The property D4's "no invalidate after a pure edit" rests on.
+		 *
+		 * The FIRST write forks a private copy of a shared template and mints fresh
+		 * row ids. The editor no longer reloads the route after a pure edit, so the
+		 * client goes on holding the PRE-fork ids — and every later edit addresses
+		 * rows by those. `findRow` resolves against both templates and translates by
+		 * `(templateId, sortOrder)`, a mapping its own docblock says is exact only
+		 * while the copy is verbatim; it stays verbatim because the only thing that
+		 * renumbers is a structural edit, which still invalidates.
+		 *
+		 * That reasoning is three hops long and was guarded by a comment. This is
+		 * the test.
+		 */
+		it("accepts a PRE-fork row id on a second pure edit", async () => {
+			await giveSharedTemplate();
+			const before = await loadAgendaDraft(club.meetingId);
+			const firstId = before?.rows[0]?.id ?? "";
+			const secondId = before?.rows[1]?.id ?? "";
+			expect(firstId).not.toBe("");
+			expect(secondId).not.toBe("");
+
+			// Edit one: forks. Every row id on the meeting's template changes.
+			await updateAgendaRow({
+				meetingId: club.meetingId,
+				rowId: firstId,
+				patch: { minutes: 3 },
+			});
+			const forked = await loadAgendaDraft(club.meetingId);
+			expect(forked?.rows[0]?.id).not.toBe(firstId);
+
+			// Edit two, addressed by the id the client still holds from before the
+			// fork. This is what the client actually does.
+			await expect(
+				updateAgendaRow({
+					meetingId: club.meetingId,
+					rowId: secondId,
+					patch: { minutes: 4 },
+				}),
+			).resolves.toBeUndefined();
+
+			const after = await loadAgendaDraft(club.meetingId);
+			expect(after?.rows[0]?.minutes).toBe(3);
+			expect(after?.rows[1]?.minutes).toBe(4);
+		});
+	},
+);

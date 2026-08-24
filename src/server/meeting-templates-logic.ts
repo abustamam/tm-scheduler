@@ -127,6 +127,7 @@ async function loadTemplateBeats(
 	return (
 		database
 			.select({
+				id: meetingTemplateBeats.id,
 				sortOrder: meetingTemplateBeats.sortOrder,
 				kind: meetingTemplateBeats.kind,
 				label: meetingTemplateBeats.label,

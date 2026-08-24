@@ -14,6 +14,7 @@
 import { and, asc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { db as database } from "#/db";
 import {
+	clubs,
 	guests,
 	meetings,
 	meetingTemplateBeats,
@@ -24,6 +25,7 @@ import {
 	roleSlots,
 } from "#/db/schema";
 import { generateSlotRows } from "#/lib/agenda";
+import type { AgendaSlot } from "#/lib/agenda-runsheet";
 import {
 	isMeetingLocked,
 	MEETING_LOCKED_MESSAGE,
@@ -38,6 +40,7 @@ import {
 } from "#/lib/meeting-template-limits";
 import { matchRoleDefs } from "#/lib/role-def-match";
 import { logActivity } from "./activity";
+import { loadMeetingSlots } from "./meeting-slots-logic";
 import {
 	copyTemplateForMeeting,
 	type DbOrTx,
@@ -57,6 +60,18 @@ export type AgendaDraftRow = {
 	minutes: number;
 	roleKey: string | null;
 	repeatsRoleKey: string | null;
+	/**
+	 * Whether this row stretches to fill the slot.
+	 *
+	 * Required for CORRECTNESS, not only for the editor's pin control:
+	 * `buildTemplateRows` reads `row.flex` to mark the row `applyFlex` resizes,
+	 * and the editor runs that same pipeline in the browser. Omit it here and
+	 * the client's `applyFlex` finds an empty `flexIndices` on every meeting
+	 * forever — a permanent no-op whose only symptom is the editor's clock
+	 * quietly disagreeing with the printed agenda. It fails in the direction
+	 * that looks fine.
+	 */
+	flex: boolean;
 	markGreen: number | null;
 	markYellow: number | null;
 	markRed: number | null;
@@ -78,6 +93,25 @@ export type AgendaDraft = {
 	editable: boolean;
 	rows: AgendaDraftRow[];
 	roles: AgendaDraftRole[];
+	/**
+	 * Everything below exists so the CLIENT can compute the running clock, by
+	 * calling the same three pure functions the print route calls
+	 * (`resolveAgendaRows` → `applyFlex` → `buildTimeline`) rather than a second
+	 * derivation of its own. A parity test cannot see a defect present on both
+	 * sides, so the fix is to have only one side.
+	 */
+	/** This meeting's role slots — what a repeat block fans across, and where
+	 *  the Who column's names come from. */
+	slots: AgendaSlot[];
+	/** ISO instant. `buildTimeline` accepts `Date | string`, and this crosses a
+	 *  server-fn boundary where a Date does not survive. */
+	scheduledAt: string;
+	timeZone: string;
+	/** The booking to measure the agenda against. */
+	lengthMinutes: number;
+	/** Ignored on the template branch; `resolveAgendaRows` requires it, and the
+	 *  standard branch is where it starts mattering. */
+	geIntroducesFunctionaries: boolean;
 };
 
 /**
@@ -114,8 +148,19 @@ export async function loadAgendaDraft(
 	meetingId: string,
 ): Promise<AgendaDraft | null> {
 	const [meeting] = await database
-		.select({ templateId: meetings.templateId, status: meetings.status })
+		.select({
+			templateId: meetings.templateId,
+			status: meetings.status,
+			scheduledAt: meetings.scheduledAt,
+			lengthMinutes: meetings.lengthMinutes,
+			// Joined rather than fetched separately: the client needs all four to
+			// run the same clock pipeline the print route runs, and a second
+			// round-trip for two scalars is waste.
+			timeZone: clubs.timezone,
+			geIntroducesFunctionaries: clubs.geIntroducesFunctionaries,
+		})
 		.from(meetings)
+		.innerJoin(clubs, eq(clubs.id, meetings.clubId))
 		.where(eq(meetings.id, meetingId))
 		.limit(1);
 	if (!meeting?.templateId) return null;
@@ -130,7 +175,7 @@ export async function loadAgendaDraft(
 	// names cannot have been deleted.
 	if (!tpl) return null;
 
-	const [rows, roles] = await Promise.all([
+	const [rows, roles, slots] = await Promise.all([
 		database
 			.select({
 				id: meetingTemplateBeats.id,
@@ -141,6 +186,9 @@ export async function loadAgendaDraft(
 				minutes: meetingTemplateBeats.minutes,
 				roleKey: meetingTemplateBeats.roleKey,
 				repeatsRoleKey: meetingTemplateBeats.repeatsRoleKey,
+				// See `AgendaDraftRow.flex` — load-bearing for the client's
+				// `applyFlex`, not just for the editor's pin control.
+				flex: meetingTemplateBeats.flex,
 				markGreen: meetingTemplateBeats.markGreen,
 				markYellow: meetingTemplateBeats.markYellow,
 				markRed: meetingTemplateBeats.markRed,
@@ -159,12 +207,20 @@ export async function loadAgendaDraft(
 			.from(meetingTemplateRoles)
 			.where(eq(meetingTemplateRoles.templateId, tpl.id))
 			.orderBy(asc(meetingTemplateRoles.sortOrder)),
+		// The SAME loader the meeting page and the print route use, so the
+		// editor's clock cannot disagree with theirs about what a slot is.
+		loadMeetingSlots(meetingId),
 	]);
 
 	return {
 		templateId: tpl.id,
 		templateName: tpl.name,
 		editable: agendaEditable(meeting.status),
+		slots,
+		scheduledAt: meeting.scheduledAt.toISOString(),
+		timeZone: meeting.timeZone,
+		lengthMinutes: meeting.lengthMinutes,
+		geIntroducesFunctionaries: meeting.geIntroducesFunctionaries,
 		rows,
 		roles,
 	};
@@ -1016,6 +1072,7 @@ export async function addAgendaRow(input: {
 			minutes: row.minutes,
 			roleKey: row.roleKey,
 			repeatsRoleKey: row.repeatsRoleKey,
+			flex: row.flex,
 			markGreen: row.markGreen,
 			markYellow: row.markYellow,
 			markRed: row.markRed,
@@ -1037,6 +1094,7 @@ export async function updateAgendaRow(input: {
 			| "minutes"
 			| "roleKey"
 			| "repeatsRoleKey"
+			| "flex"
 			| "markGreen"
 			| "markYellow"
 			| "markRed"

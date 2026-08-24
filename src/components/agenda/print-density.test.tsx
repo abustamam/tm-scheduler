@@ -69,6 +69,7 @@ import {
 	measuredHeight,
 	printableDocument,
 } from "#/test/print-page-count";
+import { withBeatIds } from "#/test/template-beat-ids";
 import { type AgendaHeader, MeetingAgendaPrint } from "./meeting-agenda-print";
 import { MIN_FIT_SCALE, PAGE_H, PRINT_PAGE_CSS } from "./print-theme";
 
@@ -585,7 +586,10 @@ describe.skipIf(!hasChrome)(
 			return buildTimeline(
 				resolveAgendaRows({
 					geIntroducesFunctionaries: false,
-					template: { beats: CONTEST_TEMPLATE.beats, roles: roleRows },
+					template: {
+						beats: withBeatIds(CONTEST_TEMPLATE.beats),
+						roles: roleRows,
+					},
 					slots,
 				}),
 				new Date("2026-09-12T13:00:00Z"),
@@ -713,6 +717,7 @@ function hostileTemplateRows(
 	const roles: TemplateRoleRow[] = Array.from(
 		{ length: MAX_TEMPLATE_ROLES },
 		(_, i) => ({
+			id: `hostile-beat-${i}`,
 			key: `role_${i}`,
 			name: `Role ${i}`,
 			isSpeakerRole: false,
@@ -723,6 +728,7 @@ function hostileTemplateRows(
 	const beats: TemplateBeatRow[] = Array.from(
 		{ length: beatCount },
 		(_, i) => ({
+			id: `hostile-beat-${i}`,
 			sortOrder: i,
 			kind: "role",
 			label,
