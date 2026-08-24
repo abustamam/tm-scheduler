@@ -761,7 +761,13 @@ Key routing rules:
 - Author a backlog-ready spec/issue → invoke /spec
 
 Repo-specific notes:
-- `/ship` reads `VERSION`, `CHANGELOG.md`, and `TODOS.md` at the repo root. `VERSION` and `package.json` carry the same 4-digit `MAJOR.MINOR.PATCH.MICRO` string — `/ship` writes both; do not hand-edit one without the other.
+- `/ship` reads `VERSION`, `CHANGELOG.md`, and `TODOS.md` at the repo root. `VERSION` is the
+  4-digit `MAJOR.MINOR.PATCH.MICRO` source of truth; `package.json` carries the npm-valid
+  3-digit TRANSLATION of it (`1.25.0.0` → `1.25.0`). They are not the same string, and that is
+  deliberate: npm rejects a four-component version, so every `package.json` written before
+  gstack v1.69 held a technically malformed value. Nothing in this repo reads either file and
+  no CI job gates on them, which is why it went unnoticed. `/ship` writes both — do not
+  hand-edit either.
 - Issues are the canonical tracker (`abustamam/tm-scheduler` via `gh`), not `TODOS.md`. See `docs/agents/issue-tracker.md`.
 - Ship from a worktree, never the main checkout — see "Git worktree isolation" above.
 - Codex reviews are disabled (`gstack-config codex_reviews=disabled`) — there is no OpenAI subscription here. gstack's Claude adversarial and red-team passes still run; do not suggest installing the `codex` CLI, since it does nothing without credentials.

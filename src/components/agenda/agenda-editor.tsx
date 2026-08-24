@@ -545,6 +545,14 @@ function AgendaTableRow({
 	 *
 	 * Re-seeded when `row` itself changes identity, which is a STRUCTURAL
 	 * mutation — those still invalidate, so the loader is authoritative again.
+	 *
+	 * That rests on `Route.useLoaderData()` handing back a STABLE reference
+	 * between renders, which TanStack Router does. If it ever returned a fresh
+	 * object per render this would re-seed every render and quietly restore the
+	 * revert bug above. `localRows` shares the dependency, so the failure would
+	 * not be silent for long — the clock would stop moving as you type, which is
+	 * the first thing anyone touches — but do not swap either for a value
+	 * rebuilt on each render.
 	 */
 	const confirmed = useRef(row);
 	const confirmedFrom = useRef(row);
