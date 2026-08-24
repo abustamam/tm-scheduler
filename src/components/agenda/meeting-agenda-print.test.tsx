@@ -61,6 +61,92 @@ function renderLayout(layout: AgendaLayout) {
 	);
 }
 
+describe("a row held by several people puts the names on their own line", () => {
+	/** MCF's contest, 2026-09-10: one non-repeating beat bound to four
+	 *  contestants, because the speaking order is drawn by lot on the day and
+	 *  the sheet must not assert one. Inline, the four names pushed the timing
+	 *  marks onto a second line behind the last surname. */
+	const CONTEST: TimelineRow[] = [
+		{
+			who: "Contest speeches · Faisal Ali, Rehanna Khan, Jagpal Singh, and Riyaz Mohammed",
+			roleLabel: "Contest speeches",
+			holder: "Faisal Ali, Rehanna Khan, Jagpal Singh, and Riyaz Mohammed",
+			holders: ["Faisal Ali", "Rehanna Khan", "Jagpal Singh", "Riyaz Mohammed"],
+			roleKey: "contestant",
+			detail: "Qualifying window 4:30-7:30.",
+			minutes: 32,
+			marks: { green: 5, yellow: 6, red: 7 },
+			time: "6:57",
+		},
+		{
+			who: "Call to order · Muhammad Ali",
+			roleLabel: "Call to order",
+			holder: "Muhammad Ali",
+			holders: ["Muhammad Ali"],
+			roleKey: "sergeant_at_arms",
+			detail: "Opens the room.",
+			minutes: 2,
+			marks: null,
+			time: "7:29",
+		},
+	];
+
+	function renderContest(layout: AgendaLayout) {
+		return render(
+			<MeetingAgendaPrint
+				layout={layout}
+				header={header}
+				roles={[{ label: "Contest Chair", name: "Lee P." }]}
+				officers={[]}
+				explainers={[]}
+				rows={CONTEST}
+			/>,
+		);
+	}
+
+	// The two NARRATIVE layouts. `grid` and `timing` lay the halves into
+	// separate cells already, so neither has the problem this fixes.
+	for (const layout of ["editorial", "spacious"] as const) {
+		it(`breaks a four-holder list onto its own line (${layout})`, () => {
+			const { container } = renderContest(layout);
+			const line = container.querySelector("[data-row-holders]");
+			expect(line, "the holder list must be its own element").toBeTruthy();
+			expect(line?.textContent).toBe(
+				"Faisal Ali, Rehanna Khan, Jagpal Singh, and Riyaz Mohammed",
+			);
+		});
+
+		it(`keeps the marks with the TITLE, not trailing the last name (${layout})`, () => {
+			const { container } = renderContest(layout);
+			const line = container.querySelector("[data-row-holders]");
+			// The bug was cosmetic but specific: `who` was one string, so the
+			// marks flowed after "Riyaz Mohammed" and wrapped. They belong
+			// beside the activity, which is what a Timer scans for.
+			expect(line?.textContent).not.toMatch(/5:00|6:00|7:00/);
+			const title = container.querySelector("[data-row-title]");
+			expect(title?.textContent).toContain("Contest speeches");
+			expect(title?.textContent).toContain("5:00");
+			// And the title must not restate the names it just moved.
+			expect(title?.textContent).not.toContain("Faisal Ali");
+		});
+
+		it(`leaves a SINGLE holder inline (${layout})`, () => {
+			const { container } = renderContest(layout);
+			// One line added to every row costs type size on a scaled sheet:
+			// #585 measured that trade at 6.470pt against 6.799pt and rejected
+			// it. Only a list of several earns the break.
+			const lines = container.querySelectorAll("[data-row-holders]");
+			expect(lines).toHaveLength(1);
+			const titles = [...container.querySelectorAll("[data-row-title]")].map(
+				(n) => n.textContent ?? "",
+			);
+			expect(
+				titles.some((t) => t.includes("Call to order · Muhammad Ali")),
+			).toBe(true);
+		});
+	}
+});
+
 describe("MeetingAgendaPrint prints yellow, never amber (#507)", () => {
 	// The rename shipped once already with the committed PDFs still printing
 	// "Amber", because every test asserted DATA and none asserted the printed

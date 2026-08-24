@@ -105,6 +105,22 @@ export type AgendaRow = {
 	 */
 	roleLabel?: string;
 	holder?: string | null;
+	/**
+	 * The holders `holder` joins, unjoined — present whenever `holder` is.
+	 *
+	 * DATA beside the prose, for the same reason `introduces` below is
+	 * (#578): a joined string forces every layout to accept one presentation.
+	 * The narrative layouts break a list of SEVERAL onto its own line so the
+	 * timing marks stay beside the title instead of trailing the last name,
+	 * and they cannot recover the count from prose without parsing names —
+	 * which is unparseable in general, since a club's role names and a guest
+	 * marker both contain the separators a parser would key on (#463).
+	 *
+	 * A one-element array is meaningfully different from an absent one: "one
+	 * holder" and "nobody holds this" are different facts, and only the first
+	 * prints a name. Absent on section and event rows.
+	 */
+	holders?: string[];
 	detail: string;
 	minutes: number; // duration this row contributes to the running clock
 	marks: TimingMarks | null;

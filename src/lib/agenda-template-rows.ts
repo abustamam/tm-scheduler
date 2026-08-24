@@ -26,6 +26,7 @@ import {
 	type AgendaSlot,
 	assigneeDisplay,
 	numbered,
+	OPEN_LABEL,
 	type TimingMarks,
 } from "./agenda-runsheet";
 import {
@@ -87,6 +88,30 @@ function joinHolders(names: string[]): string {
 		style: "long",
 		type: "conjunction",
 	}).format(names);
+}
+
+/**
+ * At most ONE open placeholder in a holder list.
+ *
+ * `assigneeDisplay` answers an unclaimed slot with `OPEN_LABEL`, so a beat
+ * bound to two unclaimed Ballot Counters printed `Tallying · — open — and —
+ * open —` on a real sheet — prose that says nothing the single placeholder
+ * does not, in a list format built for distinct names.
+ *
+ * Collapsed rather than dropped, deliberately. A role nobody has signed up
+ * for must still appear (v1.24.0.0 fixed the opposite bug: such a row was
+ * vanishing from the printed agenda entirely, so nothing told the club the
+ * job was open). On a partly-claimed row `Ada and — open —` is the honest
+ * reading, and that is what this keeps.
+ */
+function collapseOpen(names: string[]): string[] {
+	let seenOpen = false;
+	return names.filter((n) => {
+		if (n !== OPEN_LABEL) return true;
+		if (seenOpen) return false;
+		seenOpen = true;
+		return true;
+	});
 }
 
 /**
@@ -157,9 +182,11 @@ function toRow(
 	// Number by the SLOT when the role really repeats, and label the assignee
 	// from the slot so a club that renamed the role sees its own word (#445).
 	const numberedLabel = numbered(label, index, total > 1);
-	const names = bound
-		.map((s) => assigneeDisplay(s))
-		.filter((n): n is string => n != null && n !== "");
+	const names = collapseOpen(
+		bound
+			.map((s) => assigneeDisplay(s))
+			.filter((n): n is string => n != null && n !== ""),
+	);
 	const holder = names.length > 0 ? joinHolders(names) : null;
 	const who = holder ? `${numberedLabel} · ${holder}` : numberedLabel;
 	// The halves unjoined (#463), same as the standard path. `holder` is null on a
@@ -168,6 +195,10 @@ function toRow(
 		who,
 		roleLabel: numberedLabel,
 		holder,
+		// And the halves of `holder` itself — see `AgendaRow.holders`. Omitted
+		// rather than empty when nobody holds the row, so "one holder" and
+		// "nobody" stay distinguishable at every consumer.
+		...(names.length > 0 ? { holders: names } : {}),
 		roleKey: role.key,
 		...base,
 	};
