@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	type BudgetEntry,
+	foldRepeatTail,
 	groupIntoBands,
 	summarizeAgenda,
 } from "./agenda-budget";
@@ -185,6 +186,64 @@ describe("groupIntoBands", () => {
 
 	it("produces nothing at all for an empty block", () => {
 		expect(groupIntoBands([])).toEqual([]);
+	});
+
+	it("folds iterations 2..N into one summary band, carrying the span", () => {
+		const timed = contest().map((e, i) => {
+			// Stamp the speech block with its real clock so the span is meaningful.
+			const times = [
+				"7:10",
+				"7:17",
+				"7:18",
+				"7:25",
+				"7:26",
+				"7:33",
+				"7:34",
+				"7:41",
+			];
+			return i >= 6 && i <= 13
+				? { ...e, row: { ...e.row, time: times[i - 6] as string } }
+				: e;
+		});
+		const folded = foldRepeatTail(groupIntoBands(timed));
+		const tail = folded.find((b) => b.kind === "repeatTail");
+		if (tail?.kind !== "repeatTail") throw new Error("no folded tail");
+		// Contestants 2 through 4, starting 7:18 and ending 7:41, 24 minutes.
+		expect(tail.fromIteration).toBe(2);
+		expect(tail.toIteration).toBe(4);
+		expect(tail.startsAt).toBe("7:18");
+		expect(tail.lastRowStartsAt).toBe("7:41");
+		expect(tail.minutes).toBe(24);
+		// Exactly ONE editable iteration survives, and it is the first.
+		const editable = folded.filter((b) => b.kind === "iteration");
+		expect(editable).toHaveLength(1);
+	});
+
+	it("folds nothing when a block has a single iteration", () => {
+		const one = [
+			entry(
+				{ who: "Contest speech", minutes: 7 },
+				{ beatId: "sp", iteration: 0, iterationCount: 1 },
+			),
+		];
+		expect(foldRepeatTail(groupIntoBands(one))).toEqual([
+			{ kind: "row", entry: one[0] },
+		]);
+	});
+
+	it("does not fold two DIFFERENT blocks' tails together", () => {
+		// Two blocks, each with a non-editable second iteration. Folding on
+		// "not editable" alone would merge them into one summary spanning both.
+		const rows = [
+			entry({ minutes: 7 }, { beatId: "a", iteration: 0, iterationCount: 2 }),
+			entry({ minutes: 7 }, { beatId: "a", iteration: 1, iterationCount: 2 }),
+			entry({ minutes: 3 }, { beatId: "b", iteration: 0, iterationCount: 5 }),
+			entry({ minutes: 3 }, { beatId: "b", iteration: 1, iterationCount: 5 }),
+		];
+		const tails = foldRepeatTail(groupIntoBands(rows)).filter(
+			(b) => b.kind === "repeatTail",
+		);
+		expect(tails).toHaveLength(2);
 	});
 
 	it("does not merge two adjacent blocks that share an iteration index", () => {

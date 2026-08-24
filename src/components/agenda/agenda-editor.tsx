@@ -21,6 +21,8 @@ import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import {
 	type BudgetEntry,
+	type DisplayBand,
+	foldRepeatTail,
 	groupIntoBands,
 	summarizeAgenda,
 } from "#/lib/agenda-budget";
@@ -219,7 +221,25 @@ export function AgendaEditor({
 		setLocalRows(draft.rows);
 	}
 
-	const { entries, budget, advice } = useAgendaModel(draft, localRows);
+	const { entries, bands, budget, advice } = useAgendaModel(draft, localRows);
+	// Iterations 2..N of a repeat block fold into ONE summary line — see
+	// `foldRepeatTail`. Six near-identical rows on a four-contestant contest
+	// say nothing the first two do not, and push the closing section below the
+	// fold.
+	const display = useMemo(() => foldRepeatTail(bands), [bands]);
+	// A row's position in the FULL expanded agenda, which is what the start-time
+	// test hooks and the move-button bounds are stated against. Folding changes
+	// what is drawn, never what the agenda is.
+	const indexOf = (entry: BudgetEntry) => entries.indexOf(entry);
+	/** When a folded block actually ENDS: the start of the row after it, or the
+	 *  agenda's end if it is the last thing on the sheet. The band itself only
+	 *  knows its last row's START (see `EditorBand.lastRowStartsAt`) — a span
+	 *  printed from that stops one row short and reads as a rounding error. */
+	const endOfBand = (band: Extract<DisplayBand, { kind: "repeatTail" }>) => {
+		const lastEntry = band.bands.at(-1)?.entries.at(-1);
+		if (!lastEntry) return band.startsAt;
+		return entries[entries.indexOf(lastEntry) + 1]?.row.time ?? budget.endsAt;
+	};
 
 	/** Patch one row locally so the clock moves now; the server call follows on
 	 *  blur. */
@@ -264,39 +284,56 @@ export function AgendaEditor({
 						</tr>
 					</thead>
 					<tbody>
-						{entries.map((entry, index) => {
-							// The SERVER's row, deliberately — not the locally patched one.
-							// Every `commit*` below asks "did this change?" by comparing the
-							// field against `row`, and against a locally patched row that
-							// question is always No: the patch already moved it, so the save
-							// short-circuits and the officer's edit is never sent. The local
-							// copy exists to move the CLOCK (`entry`); the server copy is
-							// what an edit is measured against and what `reseed()` restores.
-							const row = draft.rows.find((r) => r.id === entry.beatId);
-							if (!row) return null;
-							if (row.kind === "section") sectionSeen += 1;
-							return (
-								<AgendaTableRow
-									key={`${entry.beatId}-${entry.iteration}`}
-									index={index}
-									entry={entry}
-									row={row}
-									roles={roles}
-									editable={editable}
-									isFirst={index === 0}
-									isLast={index === entries.length - 1}
-									sectionMinutes={
-										row.kind === "section"
-											? (budget.sections[sectionSeen]?.minutes ?? 0)
-											: null
-									}
-									sectionIndex={row.kind === "section" ? sectionSeen : null}
-									onPatchLocal={patchLocal}
-									onUpdateRow={onUpdateRow}
-									onRemoveRow={onRemoveRow}
-									onMoveRow={onMoveRow}
-								/>
-							);
+						{display.map((band) => {
+							if (band.kind === "repeatTail") {
+								return (
+									<RepeatTailRow
+										key={`tail-${band.bands[0]?.entries[0]?.beatId}-${band.fromIteration}`}
+										band={band}
+										indexOf={indexOf}
+										label={repeatLabel(band, draft)}
+										endsAt={endOfBand(band)}
+									/>
+								);
+							}
+							const bandEntries: BudgetEntry[] =
+								band.kind === "iteration" ? band.band.entries : [band.entry];
+							return bandEntries.map((entry) => {
+								// The SERVER's row, deliberately — not the locally patched one.
+								// Every `commit*` asks "did this change?" by comparing the
+								// field against `row`, and against a locally patched row that
+								// question is always No: the patch already moved it, so the
+								// save short-circuits and the officer's edit is never sent.
+								// The local copy exists to move the CLOCK (`entry`); the
+								// server copy is what an edit is measured against and what
+								// `reseed()` restores.
+								const row = draft.rows.find((r) => r.id === entry.beatId);
+								if (!row) return null;
+								if (row.kind === "section") sectionSeen += 1;
+								const index = indexOf(entry);
+								return (
+									<AgendaTableRow
+										key={`${entry.beatId}-${entry.iteration}`}
+										index={index}
+										entry={entry}
+										row={row}
+										roles={roles}
+										editable={editable}
+										isFirst={index === 0}
+										isLast={index === entries.length - 1}
+										sectionMinutes={
+											row.kind === "section"
+												? (budget.sections[sectionSeen]?.minutes ?? 0)
+												: null
+										}
+										sectionIndex={row.kind === "section" ? sectionSeen : null}
+										onPatchLocal={patchLocal}
+										onUpdateRow={onUpdateRow}
+										onRemoveRow={onRemoveRow}
+										onMoveRow={onMoveRow}
+									/>
+								);
+							});
 						})}
 					</tbody>
 					<tfoot>
@@ -671,6 +708,110 @@ function AgendaTableRow({
 					onUpdateRow={onUpdateRow}
 				/>
 			) : null}
+		</>
+	);
+}
+
+/**
+ * Name the thing a repeat block repeats over — "Contestant 2–4", not
+ * "Iteration 2–4".
+ *
+ * Reads the CLUB's own role name (#445): a club that renamed the role sees its
+ * own word, the same rule the printed sheet follows. Falls back to a neutral
+ * phrase rather than inventing one when the block's role cannot be resolved,
+ * which is only reachable on a corrupt template.
+ */
+function repeatLabel(
+	band: Extract<DisplayBand, { kind: "repeatTail" }>,
+	draft: AgendaDraft,
+): string {
+	const beatId = band.bands[0]?.entries[0]?.beatId;
+	const row = draft.rows.find((r) => r.id === beatId);
+	const role = draft.roles.find((x) => x.key === row?.repeatsRoleKey);
+	const noun = role?.name ?? "Repeat";
+	return `${noun} ${band.fromIteration}–${band.toIteration}`;
+}
+
+/**
+ * Iterations 2..N of one repeat block, folded into a single line.
+ *
+ * READ-ONLY, and that is the design rather than a shortcut: every iteration
+ * renders from the SAME stored beats, so an edit here would change all of them
+ * — which is right for a contest (every contestant gets the same window) and
+ * would be a lie to offer per-iteration. The editable copy is iteration 1,
+ * directly above.
+ *
+ * The line carries the clock SPAN, so collapsing costs no timing information:
+ * you can see contestant 4 starts at 7:34 without eight rows on screen.
+ * Expanding shows every row, still read-only.
+ */
+function RepeatTailRow({
+	band,
+	indexOf,
+	label,
+	endsAt,
+}: {
+	band: Extract<DisplayBand, { kind: "repeatTail" }>;
+	indexOf: (entry: BudgetEntry) => number;
+	label: string;
+	/** The true end, derived by the caller from the row after the band. */
+	endsAt: string;
+}) {
+	const [open, setOpen] = useState(false);
+	const rows = band.bands.flatMap((b) => b.entries);
+	return (
+		<>
+			<tr className="border-b bg-muted/10" data-testid="agenda-band-rest">
+				<td className="py-1.5 text-muted-foreground text-xs tabular-nums">
+					{band.startsAt}
+				</td>
+				<td className="py-1.5 text-muted-foreground text-xs">
+					<button
+						type="button"
+						className="inline-flex items-center gap-1 hover:underline"
+						aria-expanded={open}
+						onClick={() => setOpen(!open)}
+					>
+						{open ? (
+							<ChevronDown className="size-3.5" aria-hidden="true" />
+						) : (
+							<ChevronRight className="size-3.5" aria-hidden="true" />
+						)}
+						{open ? `Hide ${label}` : `Show ${label}`}
+					</button>
+					<span className="ml-2">
+						{band.startsAt}–{endsAt} · same as above
+					</span>
+				</td>
+				<td className="py-1.5" />
+				<td className="py-1.5 text-right text-muted-foreground tabular-nums">
+					{band.minutes}
+				</td>
+				<td className="py-1.5" />
+			</tr>
+			{open
+				? rows.map((entry) => (
+						<tr
+							key={`${entry.beatId}-${entry.iteration}`}
+							className="border-b bg-muted/10 text-muted-foreground"
+						>
+							<td
+								className="py-1 text-xs tabular-nums"
+								data-testid={`agenda-row-start-${indexOf(entry)}`}
+							>
+								{entry.row.time}
+							</td>
+							<td className="py-1 pl-4 text-xs">
+								{entry.row.roleLabel ?? entry.row.who}
+							</td>
+							<td className="py-1 text-xs">{entry.row.holder ?? ""}</td>
+							<td className="py-1 text-right text-xs tabular-nums">
+								{entry.row.minutes}
+							</td>
+							<td className="py-1" />
+						</tr>
+					))
+				: null}
 		</>
 	);
 }

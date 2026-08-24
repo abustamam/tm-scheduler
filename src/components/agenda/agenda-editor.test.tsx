@@ -445,3 +445,137 @@ describe("AgendaEditor running clock and budget", () => {
 		);
 	});
 });
+
+describe("AgendaEditor repeat blocks", () => {
+	const NAMES = [
+		"Faisal Ali",
+		"Rehanna Khan",
+		"Jagpal Singh",
+		"Riyaz Mohammed",
+	];
+
+	/** MCF's contest shape: a two-beat block over N contestants. */
+	function contestDraft(contestants: number): AgendaDraft {
+		return {
+			...draft,
+			roles: [
+				{
+					key: "contestant",
+					name: "Contestant",
+					category: "speaker",
+					defaultCount: contestants,
+					isSpeakerRole: true,
+				},
+			],
+			slots: NAMES.slice(0, contestants).map((name, i) => ({
+				id: `c${i}`,
+				roleName: "Contestant",
+				roleKey: "contestant",
+				category: "speaker" as const,
+				isSpeakerRole: true,
+				slotIndex: i,
+				assigneeName: name,
+				speechTitle: null,
+				projectLevel: null,
+				minMinutes: null,
+				maxMinutes: null,
+				evaluatesSlotId: null,
+				evaluates: null,
+			})),
+			rows: [
+				{
+					id: "b-speech",
+					sortOrder: 0,
+					kind: "role",
+					label: "Contest speech",
+					detail: null,
+					minutes: 7,
+					roleKey: "contestant",
+					repeatsRoleKey: "contestant",
+					flex: false,
+					markGreen: null,
+					markYellow: null,
+					markRed: null,
+				},
+				{
+					id: "b-silence",
+					sortOrder: 1,
+					kind: "event",
+					label: "One minute of silence",
+					detail: null,
+					minutes: 1,
+					roleKey: null,
+					repeatsRoleKey: "contestant",
+					flex: false,
+					markGreen: null,
+					markYellow: null,
+					markRed: null,
+				},
+			],
+		};
+	}
+
+	it("edits band 1 and writes the SHARED beat exactly once", async () => {
+		const user = userEvent.setup();
+		const onUpdateRow = vi.fn().mockResolvedValue(undefined);
+		render(
+			<AgendaEditor
+				draft={contestDraft(4)}
+				{...noopHandlers}
+				onUpdateRow={onUpdateRow}
+			/>,
+		);
+		// Only iteration 1 is editable, so only its two rows expose a Min input.
+		const mins = screen.getAllByLabelText("Row minutes");
+		expect(mins).toHaveLength(2);
+		await user.clear(mins[0] as HTMLElement);
+		await user.type(mins[0] as HTMLElement, "5");
+		await user.tab();
+		// ONE call naming the shared beat — not four. Every contestant renders
+		// from the same stored row, so four calls would mean four writes to the
+		// same field.
+		await waitFor(() => expect(onUpdateRow).toHaveBeenCalledTimes(1));
+		expect(onUpdateRow).toHaveBeenCalledWith("b-speech", { minutes: 5 });
+	});
+
+	it("collapses contestants 2..N and exposes no control on them", () => {
+		render(<AgendaEditor draft={contestDraft(4)} {...noopHandlers} />);
+		const rest = screen.getByTestId("agenda-band-rest");
+		// The span, so collapsing costs no timing information.
+		expect(rest.textContent).toContain("6:53");
+		expect(rest.textContent).toContain("7:17");
+		// 3 contestants x (7 + 1).
+		expect(rest.textContent).toContain("24");
+		// Naming the ROLE, not "iteration" — and the club's own word for it.
+		expect(rest.textContent).toMatch(/Contestant 2–4/);
+	});
+
+	it("expands contestants 2..N on request, still read-only", async () => {
+		const user = userEvent.setup();
+		render(<AgendaEditor draft={contestDraft(4)} {...noopHandlers} />);
+		await user.click(
+			screen.getByRole("button", { name: /show contestant 2–4/i }),
+		);
+		// Every contestant is now on screen by name...
+		for (const name of NAMES.slice(1)) {
+			expect(screen.getByText(name)).toBeTruthy();
+		}
+		// ...and still exactly two editable Min inputs, both on iteration 1.
+		expect(screen.getAllByLabelText("Row minutes")).toHaveLength(2);
+	});
+
+	it("shows no band at a single arity", () => {
+		render(<AgendaEditor draft={contestDraft(1)} {...noopHandlers} />);
+		expect(screen.queryByTestId("agenda-band-rest")).toBeNull();
+		// One contestant, two rows, both editable.
+		expect(screen.getAllByLabelText("Row minutes")).toHaveLength(2);
+	});
+
+	it("counts every contestant in the budget, folded or not", () => {
+		render(<AgendaEditor draft={contestDraft(4)} {...noopHandlers} />);
+		// 4 x (7 + 1) = 32, whatever is drawn. Folding is display only.
+		expect(screen.getByTestId("agenda-budget")?.textContent).toContain(
+			"32 min",
+		);
+	});
+});

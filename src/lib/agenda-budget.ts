@@ -58,7 +58,16 @@ export type EditorBand =
 			/** Only iteration 0 is editable; its cells write the shared beats. */
 			editable: boolean;
 			startsAt: string;
-			endsAt: string;
+			/**
+			 * The last row's START, NOT when the band ends.
+			 *
+			 * Named for what it holds. A band's true end is that row's start plus
+			 * its own minutes, and this module cannot compute it: the times are
+			 * pre-formatted "6:53" strings, so adding minutes would mean parsing a
+			 * clock back out. The caller has the full timeline and derives the real
+			 * end from the row AFTER the band — see `AgendaEditor`.
+			 */
+			lastRowStartsAt: string;
 			minutes: number;
 	  };
 
@@ -92,6 +101,89 @@ export function summarizeAgenda(
 		endsAt: timelineEnd(rows, startsAt, timeZone),
 		sections,
 	};
+}
+
+/**
+ * What the table actually renders, after the repeat tail is folded.
+ *
+ * `groupIntoBands` returns one band per iteration, which is the accurate
+ * decomposition. For DISPLAY, iterations 2..N of one block collapse into a
+ * single summary line: on a four-contestant contest that is six near-identical
+ * rows saying nothing the first two do not, and it pushes the closing section
+ * below the fold.
+ *
+ * The fold carries the clock SPAN, so nothing about timing is lost — you can
+ * still see that contestant 4 starts at 7:34 without eight rows on screen.
+ */
+export type DisplayBand =
+	| { kind: "row"; entry: BudgetEntry }
+	| { kind: "iteration"; band: Extract<EditorBand, { kind: "iteration" }> }
+	| {
+			kind: "repeatTail";
+			bands: Extract<EditorBand, { kind: "iteration" }>[];
+			/** 2 — the first folded iteration, 1-based for display. */
+			fromIteration: number;
+			/** N — the last, 1-based. */
+			toIteration: number;
+			startsAt: string;
+			/** The last row's START — see `EditorBand.lastRowStartsAt`. */
+			lastRowStartsAt: string;
+			minutes: number;
+	  };
+
+/**
+ * Fold each block's non-editable iterations into one summary band.
+ *
+ * Only a RUN of consecutive non-editable iteration bands sharing an
+ * `iterationCount` folds together — two different repeat blocks sitting
+ * adjacent must not merge, for the same reason `groupIntoBands` compares the
+ * count rather than the index alone.
+ */
+export function foldRepeatTail(bands: EditorBand[]): DisplayBand[] {
+	const out: DisplayBand[] = [];
+	let i = 0;
+	while (i < bands.length) {
+		const band = bands[i];
+		if (!band) break;
+		if (band.kind === "row") {
+			out.push({ kind: "row", entry: band.entry });
+			i += 1;
+			continue;
+		}
+		if (band.editable) {
+			out.push({ kind: "iteration", band });
+			i += 1;
+			continue;
+		}
+		const run: Extract<EditorBand, { kind: "iteration" }>[] = [];
+		const { iterationCount } = band;
+		while (i < bands.length) {
+			const next = bands[i];
+			if (
+				!next ||
+				next.kind !== "iteration" ||
+				next.editable ||
+				next.iterationCount !== iterationCount
+			) {
+				break;
+			}
+			run.push(next);
+			i += 1;
+		}
+		const first = run[0];
+		const last = run.at(-1);
+		if (!first || !last) continue;
+		out.push({
+			kind: "repeatTail",
+			bands: run,
+			fromIteration: first.iteration + 1,
+			toIteration: last.iteration + 1,
+			startsAt: first.startsAt,
+			lastRowStartsAt: last.lastRowStartsAt,
+			minutes: run.reduce((sum, b) => sum + b.minutes, 0),
+		});
+	}
+	return out;
 }
 
 export function groupIntoBands(entries: BudgetEntry[]): EditorBand[] {
@@ -132,7 +224,7 @@ export function groupIntoBands(entries: BudgetEntry[]): EditorBand[] {
 			entries: group,
 			editable: iteration === 0,
 			startsAt: group[0]?.row.time ?? "",
-			endsAt: group.at(-1)?.row.time ?? "",
+			lastRowStartsAt: group.at(-1)?.row.time ?? "",
 			minutes: group.reduce((sum, e) => sum + e.row.minutes, 0),
 		});
 	}
