@@ -2,6 +2,14 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.24.1.0] - 2026-08-24
+
+### Fixed
+
+- **When several people share one agenda row, their names now get their own line.** A club running a contest can put every contestant on a single "Contest speeches" row instead of numbering them one to four — which is what you want when the speaking order is drawn by lot on the day and the agenda has no business claiming one in advance. Printed inline, four names pushed the green, yellow and red timing marks off behind the last surname and wrapped them onto a second line, which is exactly where the Timer is looking. The names now sit on their own line under the activity and the marks stay beside it. Only a row held by two or more people breaks this way; every ordinary row is unchanged, because a line added to every row is paid for in type size on a sheet that scales itself to fit.
+- **A job nobody has signed up for is now listed once, not once per vacancy.** Two unclaimed Ballot Counters printed "Tallying · — open — and — open —". It now reads "— open —" once. Where some of a job's slots are taken and some are not, the real names print followed by a single "— open —", so a half-staffed job still looks half-staffed. This does mean the run of show no longer shows you *how many* people are still needed — the Meeting Roles list above it does, since it names every slot separately.
+- **Nothing else user-facing.** Both fixes are matters of shape rather than logic, which is the kind of thing this project has historically been unable to see: the checks that read a page have no way to measure a real layout. The check that lays these sheets out in a real browser and measures the printed text size did cover this one, at twenty names on every row of a full-length agenda — well past anything a club will actually run.
+
 ## [1.24.0.0] - 2026-08-22
 
 ### Added
