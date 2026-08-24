@@ -107,10 +107,13 @@ export interface NewAgendaRole {
 
 export interface AgendaEditorProps {
 	draft: AgendaDraft;
+	/** Returns the CREATED row. The server fn already did; the prop type
+	 *  discarded it. Undo needs the new id to restore the deleted row's fields
+	 *  onto it. */
 	onAddRow: (
 		afterRowId: string | null,
 		kind: AgendaDraftRow["kind"],
-	) => Promise<unknown>;
+	) => Promise<AgendaDraftRow>;
 	onUpdateRow: (rowId: string, patch: RowPatch) => Promise<unknown>;
 	onRemoveRow: (rowId: string) => Promise<unknown>;
 	onMoveRow: (rowId: string, direction: "up" | "down") => Promise<unknown>;
@@ -240,6 +243,14 @@ export function AgendaEditor({
 	// Read off the SERVER's rows, not the local copy: `flex` is only ever changed
 	// by a button that round-trips, so there is no local edit to reflect.
 	const someRowStretches = draft.rows.some((r) => r.flex);
+	/** The stored row before this one in SORT order — undo's insertion point.
+	 *  Taken from `draft.rows` rather than the rendered entries, because a
+	 *  repeat block emits several entries from one stored row and only the
+	 *  stored order can say what a row goes back after. */
+	const previousRowIdOf = (rowId: string): string | null => {
+		const at = draft.rows.findIndex((r) => r.id === rowId);
+		return at > 0 ? (draft.rows[at - 1]?.id ?? null) : null;
+	};
 	/** When a folded block actually ENDS: the start of the row after it, or the
 	 *  agenda's end if it is the last thing on the sheet. The band itself only
 	 *  knows its last row's START (see `EditorBand.lastRowStartsAt`) — a span
@@ -337,7 +348,9 @@ export function AgendaEditor({
 										}
 										sectionIndex={row.kind === "section" ? sectionSeen : null}
 										someRowStretches={someRowStretches}
+										previousRowId={previousRowIdOf(row.id)}
 										onPatchLocal={patchLocal}
+										onAddRow={onAddRow}
 										onUpdateRow={onUpdateRow}
 										onRemoveRow={onRemoveRow}
 										onMoveRow={onMoveRow}
@@ -451,7 +464,9 @@ function AgendaTableRow({
 	sectionMinutes,
 	sectionIndex,
 	someRowStretches,
+	previousRowId,
 	onPatchLocal,
+	onAddRow,
 	onUpdateRow,
 	onRemoveRow,
 	onMoveRow,
@@ -468,7 +483,14 @@ function AgendaTableRow({
 	sectionIndex: number | null;
 	/** Whether ANY row in the agenda already stretches — see the Min cell. */
 	someRowStretches: boolean;
+	/** The stored row immediately before this one, or null when it is first —
+	 *  where undo puts it back. */
+	previousRowId: string | null;
 	onPatchLocal: (rowId: string, patch: RowPatch) => void;
+	onAddRow: (
+		afterRowId: string | null,
+		kind: AgendaDraftRow["kind"],
+	) => Promise<AgendaDraftRow>;
 	onUpdateRow: (rowId: string, patch: RowPatch) => Promise<unknown>;
 	onRemoveRow: (rowId: string) => Promise<unknown>;
 	onMoveRow: (rowId: string, direction: "up" | "down") => Promise<unknown>;
@@ -561,9 +583,40 @@ function AgendaTableRow({
 	}
 
 	async function remove() {
+		// Snapshot BEFORE the delete: once the row is gone the server cannot tell
+		// us what it held, and re-typing a label, its note, its minutes and three
+		// timing marks is the cost of one misclick on a dense table.
+		const snapshot = { ...row };
 		setPending(true);
-		await runAction(() => onRemoveRow(row.id));
+		const ok = await runAction(() => onRemoveRow(row.id));
 		setPending(false);
+		if (!ok) return;
+		toast("Row deleted", {
+			duration: 10_000,
+			action: {
+				label: "Undo",
+				onClick: () => {
+					void runAction(async () => {
+						// Re-inserted after its ORIGINAL predecessor, not appended: a
+						// row that comes back at the bottom of the agenda is not the
+						// same row. `addAgendaRow` returns the created row, so no
+						// re-read is needed to find it.
+						const created = await onAddRow(previousRowId, snapshot.kind);
+						await onUpdateRow(created.id, {
+							label: snapshot.label,
+							detail: snapshot.detail,
+							minutes: snapshot.minutes,
+							roleKey: snapshot.roleKey,
+							repeatsRoleKey: snapshot.repeatsRoleKey,
+							flex: snapshot.flex,
+							markGreen: snapshot.markGreen,
+							markYellow: snapshot.markYellow,
+							markRed: snapshot.markRed,
+						});
+					});
+				},
+			},
+		});
 	}
 
 	const isRoleRow = row.kind === "role";

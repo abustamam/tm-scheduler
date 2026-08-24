@@ -7,6 +7,7 @@ import {
 	within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { Toaster } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgendaDraft } from "#/server/meeting-agenda-edit";
 import { AgendaEditor } from "./agenda-editor";
@@ -73,7 +74,22 @@ const draft: AgendaDraft = {
 };
 
 const noopHandlers = {
-	onAddRow: vi.fn().mockResolvedValue(undefined),
+	// Returns a ROW: `onAddRow` hands back what it created so undo can patch the
+	// deleted row's fields onto it.
+	onAddRow: vi.fn().mockResolvedValue({
+		id: "new-row",
+		sortOrder: 0,
+		kind: "role",
+		label: "New item",
+		detail: null,
+		minutes: 0,
+		roleKey: null,
+		repeatsRoleKey: null,
+		flex: false,
+		markGreen: null,
+		markYellow: null,
+		markRed: null,
+	}),
 	onUpdateRow: vi.fn().mockResolvedValue(undefined),
 	onRemoveRow: vi.fn().mockResolvedValue(undefined),
 	onMoveRow: vi.fn().mockResolvedValue(undefined),
@@ -684,5 +700,121 @@ describe("AgendaEditor stretchy row", () => {
 		// meaningless on the page.
 		render(<AgendaEditor draft={flexDraft} {...noopHandlers} />);
 		expect(screen.queryByRole("button", { name: /make stretchy/i })).toBeNull();
+	});
+});
+
+describe("AgendaEditor delete undo", () => {
+	it("offers undo and restores EVERY field to the original position", async () => {
+		const user = userEvent.setup();
+		const onRemoveRow = vi.fn().mockResolvedValue(undefined);
+		const onUpdateRow = vi.fn().mockResolvedValue(undefined);
+		const onAddRow = vi.fn().mockResolvedValue({
+			...(draft.rows[1] as AgendaDraft["rows"][number]),
+			id: "restored",
+		});
+		// A row carrying something in every field, so a dropped one is visible.
+		const rich: AgendaDraft = {
+			...draft,
+			rows: [
+				draft.rows[0] as AgendaDraft["rows"][number],
+				{
+					...(draft.rows[1] as AgendaDraft["rows"][number]),
+					detail: "Opens the room",
+					markGreen: 5,
+					markYellow: 6,
+					markRed: 7,
+				},
+			],
+		};
+		// The Undo affordance IS a toast action, so the toaster has to be mounted
+		// for this to test the real thing rather than a spy on `toast`. The app
+		// mounts it in `__root.tsx`.
+		render(
+			<>
+				<Toaster />
+				<AgendaEditor
+					draft={rich}
+					{...noopHandlers}
+					onRemoveRow={onRemoveRow}
+					onAddRow={onAddRow}
+					onUpdateRow={onUpdateRow}
+				/>
+			</>,
+		);
+		// Second row's delete — the first is the OPENING band.
+		await user.click(screen.getAllByLabelText("Remove row")[1] as HTMLElement);
+		await waitFor(() => expect(onRemoveRow).toHaveBeenCalledWith("r2"));
+
+		await user.click(await screen.findByRole("button", { name: /undo/i }));
+
+		// Re-inserted after its ORIGINAL predecessor, not appended: a row that
+		// comes back at the bottom of the agenda is not the same row.
+		await waitFor(() => expect(onAddRow).toHaveBeenCalledWith("r1", "role"));
+		expect(onUpdateRow).toHaveBeenCalledWith("restored", {
+			label: "Welcome",
+			detail: "Opens the room",
+			minutes: 5,
+			roleKey: "toastmaster",
+			repeatsRoleKey: null,
+			flex: false,
+			markGreen: 5,
+			markYellow: 6,
+			markRed: 7,
+		});
+	});
+
+	it("restores a FIRST row to the front, not after something", async () => {
+		const user = userEvent.setup();
+		const onAddRow = vi.fn().mockResolvedValue({
+			...(draft.rows[0] as AgendaDraft["rows"][number]),
+			id: "restored",
+		});
+		render(
+			<>
+				<Toaster />
+				<AgendaEditor draft={draft} {...noopHandlers} onAddRow={onAddRow} />
+			</>,
+		);
+		await user.click(screen.getAllByLabelText("Remove row")[0] as HTMLElement);
+		await user.click(await screen.findByRole("button", { name: /undo/i }));
+		// null predecessor == the top of the agenda.
+		await waitFor(() => expect(onAddRow).toHaveBeenCalledWith(null, "section"));
+	});
+
+	it("does NOT confirm before deleting", async () => {
+		const user = userEvent.setup();
+		const onRemoveRow = vi.fn().mockResolvedValue(undefined);
+		render(
+			<AgendaEditor
+				draft={draft}
+				{...noopHandlers}
+				onRemoveRow={onRemoveRow}
+			/>,
+		);
+		await user.click(screen.getAllByLabelText("Remove row")[1] as HTMLElement);
+		// One click deletes. A modal on every delete taxes the deliberate case
+		// hardest - trimming four rows becomes four modals - and a modal shown
+		// every time is a modal nobody reads.
+		expect(onRemoveRow).toHaveBeenCalledTimes(1);
+	});
+
+	it("offers no undo when the delete itself failed", async () => {
+		const user = userEvent.setup();
+		const onRemoveRow = vi.fn().mockRejectedValue(new Error("nope"));
+		render(
+			<>
+				<Toaster />
+				<AgendaEditor
+					draft={draft}
+					{...noopHandlers}
+					onRemoveRow={onRemoveRow}
+				/>
+			</>,
+		);
+		await user.click(screen.getAllByLabelText("Remove row")[1] as HTMLElement);
+		await waitFor(() => expect(onRemoveRow).toHaveBeenCalled());
+		// Nothing was deleted, so there is nothing to undo — offering it would
+		// re-add a row that never left.
+		expect(screen.queryByRole("button", { name: /undo/i })).toBeNull();
 	});
 });
