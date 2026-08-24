@@ -105,6 +105,29 @@ export type AgendaRow = {
 	 */
 	roleLabel?: string;
 	holder?: string | null;
+	/**
+	 * The holders `holder` joins, unjoined.
+	 *
+	 * Set by the TEMPLATE path only (`buildTemplateRows`), which is the one
+	 * place a single beat can name several people. `expandRunSheet`'s standard
+	 * flow emits one row PER SLOT, so each of its rows has exactly one holder
+	 * and omits this — and that absence is load-bearing rather than an
+	 * oversight: it is what keeps an ordinary club agenda off the line-break
+	 * path below, where an extra line on every row would cost real type size.
+	 *
+	 * DATA beside the prose, for the same reason `introduces` below is
+	 * (#578): a joined string forces every layout to accept one presentation.
+	 * The narrative layouts break a list of SEVERAL onto its own line so the
+	 * timing marks stay beside the title instead of trailing the last name,
+	 * and they cannot recover the count from prose without parsing names —
+	 * which is unparseable in general, since a club's role names and a guest
+	 * marker both contain the separators a parser would key on (#463).
+	 *
+	 * A one-element array is meaningfully different from an absent one: "one
+	 * holder" and "nobody holds this" are different facts, and only the first
+	 * prints a name. Absent on section and event rows.
+	 */
+	holders?: string[];
 	detail: string;
 	minutes: number; // duration this row contributes to the running clock
 	marks: TimingMarks | null;
