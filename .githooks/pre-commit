@@ -1,0 +1,54 @@
+#!/bin/sh
+# Block the @tanstack/react-start footer that the Vite Start plugin appends to
+# the generated route tree.
+#
+# src/routeTree.gen.ts is TRACKED, and `tsr generate` (bun run generate-routes)
+# does NOT emit that footer — the Start plugin appends it to the working-tree
+# file whenever the dev server or a build runs. So any `git add -A` after
+# `bun run dev` sweeps it in, and nothing downstream catches it: the file is
+# excluded from Biome, typecheck accepts it (it is valid TypeScript), and CI
+# never regenerates the route tree to compare. It rode along three times on
+# 2026-08-20 (#607, #613, #614) and was reverted by hand each time.
+#
+# Enabled via core.hooksPath=.githooks, which the package.json `prepare` script
+# sets on `bun install`. Unlike post-merge, this deliberately DOES run in linked
+# worktrees — that is where commits are made here.
+#
+# Escape hatch: `git commit --no-verify`. If a TanStack Start upgrade ever makes
+# the footer part of canonical `tsr generate` output, delete this hook rather
+# than routing around it — at that point the check is simply wrong.
+
+TREE=src/routeTree.gen.ts
+
+# Is the route tree part of this commit at all? --diff-filter excludes a staged
+# deletion, so `git show :$TREE` below always has content to read.
+if [ -z "$(git diff --cached --name-only --diff-filter=ACMR -- "$TREE")" ]; then
+	exit 0
+fi
+
+# Read the STAGED blob, not the working tree: what is being committed is the
+# only thing this hook has an opinion about.
+if ! git show ":$TREE" | grep -q '@tanstack/react-start'; then
+	exit 0
+fi
+
+cat >&2 <<'MSG'
+[pre-commit] BLOCKED: src/routeTree.gen.ts carries the @tanstack/react-start
+footer that `bun run dev` / `bun run build` appends. That footer is a build
+artifact — `tsr generate` does not produce it, and it must not be committed.
+
+Regenerate the route tree canonically, then re-stage it:
+
+    bun run generate-routes && git add src/routeTree.gen.ts
+
+If the route tree has no real change in this commit, drop it instead:
+
+    git restore --source=HEAD --staged --worktree src/routeTree.gen.ts
+
+(That one command resets both the index and the working tree. Plain
+`git checkout -- <path>` is NOT enough here: it restores the working tree FROM
+the index, which still holds the footer, leaving the file dirty.)
+
+Override with `git commit --no-verify` only if you know the footer belongs.
+MSG
+exit 1
