@@ -2,7 +2,21 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
-## [1.24.1.0] - 2026-08-24
+## [1.25.0.0] - 2026-08-24
+
+### Added
+
+- **The agenda editor now tells you what your changes cost.** It could already change every duration on a meeting, and that is why nobody used it: you typed 6 in place of 10 and nothing on the page said what that did. It is now a table — start time, activity, who, minutes — with a running clock down the left and the arithmetic along the bottom: when the meeting ends, how long it runs, the length it is booked for, and how far over or under. The clock moves as you type, before you click away. Re-timing MCF's September contest by hand meant eight fields and a calculator; the same eight fields now show you the answer as you go.
+- **Every section carries its own total, which is the number that actually helps.** A contest reading "OPENING 25" tells you a quarter of the night runs before the first speech — the finding, rather than a restatement of the complaint. Speeches and closing carry theirs too, and the totals move with every edit.
+- **Repeated rows collapse instead of filling the screen.** A contest with four speakers used to mean eight near-identical rows pushing the closing section off the bottom. The first speaker stays expanded and editable; the rest fold into one line that still shows when they start and end, so nothing about the timing is hidden. Editing the first speaker's window changes all of them, which is what the contest rules require anyway, and the page says so rather than letting you discover it.
+- **A row whose length is not yours to set no longer pretends otherwise.** Table Topics stretches to fill whatever the rest of the agenda leaves, so its box was a control that accepted a number and threw it away. It now shows the length it will actually run, marked as stretching, with a Pin button if you want to fix it yourself. Any other row can be made the stretchy one, but only while none already is.
+- **Undo on a deleted row.** Deleting is still one click, with no dialog to dismiss — but a ten-second Undo brings the row back where it was, with its note, its minutes, its role and its timing marks. Losing a row you had just typed used to mean typing it again.
+
+### Fixed
+
+- **The editor and the printed agenda cannot disagree about when the meeting ends.** They now run the same three calculations rather than two that happen to match, so there is no version of this where the screen plans one evening and the room runs another. Checked at one, two and four speakers, because a repeat block is exactly where two separate calculations would drift apart.
+- **Changing a duration and then changing it back now saves.** Put a row from 5 to 9, think better of it and put it back to 5, and the second change was quietly dropped: the page showed 5 while the agenda that printed said 9, with nothing on either to tell you. Reverting a value you just changed is an ordinary thing to do, so this was easy to hit and impossible to notice.
+- **Nothing about the printed agenda changed.** The sheet, the projected deck and the PowerPoint export all read the same rows they did before, and the checks that lay a page out in a real browser confirm the print stayed put.
 
 ### Fixed
 
