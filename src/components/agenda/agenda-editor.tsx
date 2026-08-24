@@ -26,7 +26,12 @@ import {
 	groupIntoBands,
 	summarizeAgenda,
 } from "#/lib/agenda-budget";
-import { applyFlex, flexBannerMessage } from "#/lib/agenda-runsheet";
+import {
+	applyFlex,
+	flexBannerMessage,
+	TABLE_TOPICS_MAX,
+	TABLE_TOPICS_MIN,
+} from "#/lib/agenda-runsheet";
 import { buildTemplateRowsWithSource } from "#/lib/agenda-template-rows";
 import { buildTimeline } from "#/lib/agenda-timing";
 import {
@@ -86,6 +91,7 @@ export type RowPatch = Partial<
 		| "minutes"
 		| "roleKey"
 		| "repeatsRoleKey"
+		| "flex"
 		| "markGreen"
 		| "markYellow"
 		| "markRed"
@@ -231,6 +237,9 @@ export function AgendaEditor({
 	// test hooks and the move-button bounds are stated against. Folding changes
 	// what is drawn, never what the agenda is.
 	const indexOf = (entry: BudgetEntry) => entries.indexOf(entry);
+	// Read off the SERVER's rows, not the local copy: `flex` is only ever changed
+	// by a button that round-trips, so there is no local edit to reflect.
+	const someRowStretches = draft.rows.some((r) => r.flex);
 	/** When a folded block actually ENDS: the start of the row after it, or the
 	 *  agenda's end if it is the last thing on the sheet. The band itself only
 	 *  knows its last row's START (see `EditorBand.lastRowStartsAt`) — a span
@@ -327,6 +336,7 @@ export function AgendaEditor({
 												: null
 										}
 										sectionIndex={row.kind === "section" ? sectionSeen : null}
+										someRowStretches={someRowStretches}
 										onPatchLocal={patchLocal}
 										onUpdateRow={onUpdateRow}
 										onRemoveRow={onRemoveRow}
@@ -440,6 +450,7 @@ function AgendaTableRow({
 	isLast,
 	sectionMinutes,
 	sectionIndex,
+	someRowStretches,
 	onPatchLocal,
 	onUpdateRow,
 	onRemoveRow,
@@ -455,6 +466,8 @@ function AgendaTableRow({
 	/** Non-null only on a section row — that band's own total. */
 	sectionMinutes: number | null;
 	sectionIndex: number | null;
+	/** Whether ANY row in the agenda already stretches — see the Min cell. */
+	someRowStretches: boolean;
 	onPatchLocal: (rowId: string, patch: RowPatch) => void;
 	onUpdateRow: (rowId: string, patch: RowPatch) => Promise<unknown>;
 	onRemoveRow: (rowId: string) => Promise<unknown>;
@@ -655,25 +668,76 @@ function AgendaTableRow({
 					    sign-up sheet rather than here. */}
 					{entry.row.holder ?? ""}
 				</td>
-				<td className="py-1.5 text-right">
-					<Input
-						aria-label="Row minutes"
-						type="number"
-						min={0}
-						max={MAX_BEAT_MINUTES}
-						value={minutes}
-						disabled={!editable}
-						className="h-7 w-16 text-right tabular-nums"
-						onChange={(e) => {
-							setMinutes(e.target.value);
-							const n = Number.parseInt(e.target.value, 10);
-							// Only a parseable number moves the clock. A half-typed "" or
-							// "-" leaves the last good value standing rather than blanking
-							// the whole footer mid-keystroke.
-							if (!Number.isNaN(n)) onPatchLocal(row.id, { minutes: n });
-						}}
-						onBlur={() => void commitMinutes()}
-					/>
+				<td
+					className="py-1.5 text-right"
+					data-testid={`agenda-row-minutes-${index}`}
+				>
+					{row.flex ? (
+						// A row whose length is not the officer's to set. `applyFlex`
+						// OVERWRITES this row's minutes to absorb the meeting's slack, so
+						// rendering an input here would accept a value and discard it on
+						// the next render — a control that changes nothing is worse than
+						// no control. The number shown is the post-`applyFlex` one, which
+						// is what will actually print.
+						<span className="inline-flex items-center justify-end gap-1">
+							<span className="tabular-nums">{entry.row.minutes}</span>
+							<span className="text-muted-foreground text-xs">
+								stretches {TABLE_TOPICS_MIN}–{TABLE_TOPICS_MAX}
+							</span>
+							{editable ? (
+								<Button
+									type="button"
+									variant="ghost"
+									size="sm"
+									className="h-6 px-1.5 text-xs"
+									onClick={() =>
+										void runAction(() => onUpdateRow(row.id, { flex: false }))
+									}
+								>
+									Pin
+								</Button>
+							) : null}
+						</span>
+					) : (
+						<span className="inline-flex items-center justify-end gap-1">
+							<Input
+								aria-label="Row minutes"
+								type="number"
+								min={0}
+								max={MAX_BEAT_MINUTES}
+								value={minutes}
+								disabled={!editable}
+								className="h-7 w-16 text-right tabular-nums"
+								onChange={(e) => {
+									setMinutes(e.target.value);
+									const n = Number.parseInt(e.target.value, 10);
+									// Only a parseable number moves the clock. A half-typed ""
+									// or "-" leaves the last good value standing rather than
+									// blanking the whole footer mid-keystroke.
+									if (!Number.isNaN(n)) onPatchLocal(row.id, { minutes: n });
+								}}
+								onBlur={() => void commitMinutes()}
+							/>
+							{editable && !someRowStretches ? (
+								// Offered only while NOTHING already stretches. `schema.ts`
+								// states at most one flex beat per template and does not
+								// enforce it; two would have `applyFlex` splitting the slack
+								// between them, which is legal in the database and meaningless
+								// on the page.
+								<Button
+									type="button"
+									variant="ghost"
+									size="sm"
+									className="h-6 px-1.5 text-xs"
+									onClick={() =>
+										void runAction(() => onUpdateRow(row.id, { flex: true }))
+									}
+								>
+									Make stretchy
+								</Button>
+							) : null}
+						</span>
+					)}
 				</td>
 				<td className="py-1.5 text-right">
 					<RowActions

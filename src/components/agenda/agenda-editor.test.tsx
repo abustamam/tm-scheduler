@@ -1,5 +1,11 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+	cleanup,
+	render,
+	screen,
+	waitFor,
+	within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgendaDraft } from "#/server/meeting-agenda-edit";
@@ -577,5 +583,106 @@ describe("AgendaEditor repeat blocks", () => {
 		expect(screen.getByTestId("agenda-budget")?.textContent).toContain(
 			"32 min",
 		);
+	});
+});
+
+describe("AgendaEditor stretchy row", () => {
+	/** One fixed row and one that stretches, in a 40-minute slot. */
+	const flexDraft: AgendaDraft = {
+		...draft,
+		lengthMinutes: 40,
+		rows: [
+			{
+				...(draft.rows[1] as AgendaDraft["rows"][number]),
+				id: "fixed",
+				minutes: 10,
+			},
+			{
+				...(draft.rows[1] as AgendaDraft["rows"][number]),
+				id: "topics",
+				label: "Table Topics",
+				minutes: 10,
+				flex: true,
+			},
+		],
+	};
+
+	it("renders the stretchy row's minutes as computed text, not an input", () => {
+		render(<AgendaEditor draft={flexDraft} {...noopHandlers} />);
+		const cell = screen.getByTestId("agenda-row-minutes-1");
+		// 40-minute slot minus the 10-minute fixed row, clamped to the Table
+		// Topics ceiling of 25.
+		expect(cell.textContent).toContain("25");
+		expect(cell.textContent).toMatch(/stretches 5.25/);
+		// The point: NOT an input. `applyFlex` overwrites this row's minutes, so
+		// a typed value would be discarded on the next render — a control that
+		// accepts input and changes nothing is worse than no control.
+		expect(within(cell).queryByRole("spinbutton")).toBeNull();
+	});
+
+	it("counts the STRETCHED minutes in the budget, not the stored ones", () => {
+		render(<AgendaEditor draft={flexDraft} {...noopHandlers} />);
+		// 10 fixed + 25 stretched = 35, against a 40-minute slot.
+		const footer = screen.getByTestId("agenda-budget");
+		expect(footer.textContent).toContain("35 min");
+		expect(footer.textContent).toContain("5 under");
+	});
+
+	it("pins a stretchy row with flex:false and nothing else", async () => {
+		const user = userEvent.setup();
+		const onUpdateRow = vi.fn().mockResolvedValue(undefined);
+		render(
+			<AgendaEditor
+				draft={flexDraft}
+				{...noopHandlers}
+				onUpdateRow={onUpdateRow}
+			/>,
+		);
+		await user.click(screen.getByRole("button", { name: /^pin$/i }));
+		await waitFor(() =>
+			expect(onUpdateRow).toHaveBeenCalledWith("topics", { flex: false }),
+		);
+	});
+
+	it("gives a pinned row an ordinary editable cell", () => {
+		const pinned: AgendaDraft = {
+			...flexDraft,
+			rows: flexDraft.rows.map((r) => ({ ...r, flex: false })),
+		};
+		render(<AgendaEditor draft={pinned} {...noopHandlers} />);
+		expect(screen.getAllByLabelText("Row minutes")).toHaveLength(2);
+		expect(screen.queryByRole("button", { name: /^pin$/i })).toBeNull();
+	});
+
+	it("offers Make stretchy only while NO row already stretches", async () => {
+		const user = userEvent.setup();
+		const onUpdateRow = vi.fn().mockResolvedValue(undefined);
+		const none: AgendaDraft = {
+			...flexDraft,
+			rows: flexDraft.rows.map((r) => ({ ...r, flex: false })),
+		};
+		const { unmount } = render(
+			<AgendaEditor draft={none} {...noopHandlers} onUpdateRow={onUpdateRow} />,
+		);
+		// Nothing stretches yet, so every row may volunteer.
+		expect(
+			screen.getAllByRole("button", { name: /make stretchy/i }),
+		).toHaveLength(2);
+		await user.click(
+			screen.getAllByRole("button", {
+				name: /make stretchy/i,
+			})[0] as HTMLElement,
+		);
+		await waitFor(() =>
+			expect(onUpdateRow).toHaveBeenCalledWith("fixed", { flex: true }),
+		);
+		unmount();
+
+		// With one already stretching, the offer is withdrawn from the others:
+		// schema.ts states at most one flex beat per template, and two would have
+		// applyFlex splitting the slack between them — legal in the database,
+		// meaningless on the page.
+		render(<AgendaEditor draft={flexDraft} {...noopHandlers} />);
+		expect(screen.queryByRole("button", { name: /make stretchy/i })).toBeNull();
 	});
 });
