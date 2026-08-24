@@ -110,7 +110,7 @@ export function PathEnrollmentManager({
 						Add a path
 					</Button>
 				</DialogTrigger>
-				<DialogContent className="max-h-[80vh] overflow-y-auto">
+				<DialogContent>
 					<DialogHeader>
 						<DialogTitle>Choose a path</DialogTitle>
 					</DialogHeader>
