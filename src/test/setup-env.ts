@@ -8,6 +8,29 @@
 process.env.BETTER_AUTH_SECRET ??= "test-better-auth-secret";
 process.env.BETTER_AUTH_URL ??= "http://localhost:3000";
 
+// jsdom implements pointer EVENTS but not the pointer CAPTURE methods, so any
+// library that claims the pointer on `pointerdown` throws
+// `event.target.setPointerCapture is not a function` the moment a test clicks
+// it with `userEvent` (which fires the real pointer sequence; `fireEvent.click`
+// does not, and papering over it that way would stop testing what a user does).
+//
+// Sonner does exactly this to implement swipe-to-dismiss, so a test that mounts
+// `<Toaster />` and clicks a toast ACTION — the agenda editor's Undo — takes an
+// uncaught exception. Vitest reports it as an unhandled error and exits
+// non-zero while every assertion still passes, which is the worst shape: green
+// tests, red build, and a warning that the errors "might cause false positive
+// tests".
+//
+// Guarded on absence so a future jsdom that ships them wins.
+if (typeof Element !== "undefined") {
+	const proto = Element.prototype as unknown as Record<string, unknown>;
+	proto.setPointerCapture ??= function setPointerCapture() {};
+	proto.releasePointerCapture ??= function releasePointerCapture() {};
+	proto.hasPointerCapture ??= function hasPointerCapture() {
+		return false;
+	};
+}
+
 // jsdom implements `window.innerWidth` but NOT `window.matchMedia`, so a
 // component that subscribes to a breakpoint the way a browser does throws here
 // while working in production. Rather than let that push components back to a

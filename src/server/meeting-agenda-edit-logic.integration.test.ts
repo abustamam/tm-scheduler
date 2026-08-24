@@ -140,6 +140,56 @@ async function givePrivateTemplate() {
  * exercises that specific mutator against a foreign row — hence one seeded
  * fixture reused by four separate tests rather than one.
  */
+/**
+ * A club-scoped template with `meeting_id` NULL — SHARED, so the meeting's
+ * first write forks a private copy of it. `givePrivateTemplate` above gives the
+ * meeting its OWN copy, which never forks and so cannot exercise the id
+ * translation this fixture exists for.
+ */
+async function giveSharedTemplate() {
+	const [t] = await testDb
+		.insert(meetingTemplates)
+		.values({
+			clubId: club.clubId,
+			meetingId: null,
+			key: `shared_${RUN}`,
+			name: `Shared ${RUN}`,
+		})
+		.returning({ id: meetingTemplates.id });
+	if (!t) throw new Error("template insert failed");
+	madeTemplates.push(t.id);
+	await testDb.insert(meetingTemplateRoles).values({
+		templateId: t.id,
+		key: "chair",
+		name: "Chair",
+		category: "leadership",
+		defaultCount: 1,
+		sortOrder: 10,
+		isSpeakerRole: false,
+	});
+	await testDb.insert(meetingTemplateBeats).values([
+		{
+			templateId: t.id,
+			sortOrder: 0,
+			kind: "section",
+			label: "OPENING",
+			minutes: 0,
+		},
+		{
+			templateId: t.id,
+			sortOrder: 1,
+			kind: "event",
+			label: "Welcome",
+			minutes: 5,
+		},
+	]);
+	await testDb
+		.update(meetings)
+		.set({ templateId: t.id })
+		.where(eq(meetings.id, club.meetingId));
+	return t.id;
+}
+
 async function seedForeignRow(): Promise<{
 	other: SeededClub;
 	foreignTemplateId: string;
@@ -3513,6 +3563,52 @@ describe.skipIf(!hasTestDb)(
 				expect(typeof s.slotIndex).toBe("number");
 				expect(typeof s.roleName).toBe("string");
 			}
+		});
+
+		/**
+		 * The property D4's "no invalidate after a pure edit" rests on.
+		 *
+		 * The FIRST write forks a private copy of a shared template and mints fresh
+		 * row ids. The editor no longer reloads the route after a pure edit, so the
+		 * client goes on holding the PRE-fork ids — and every later edit addresses
+		 * rows by those. `findRow` resolves against both templates and translates by
+		 * `(templateId, sortOrder)`, a mapping its own docblock says is exact only
+		 * while the copy is verbatim; it stays verbatim because the only thing that
+		 * renumbers is a structural edit, which still invalidates.
+		 *
+		 * That reasoning is three hops long and was guarded by a comment. This is
+		 * the test.
+		 */
+		it("accepts a PRE-fork row id on a second pure edit", async () => {
+			await giveSharedTemplate();
+			const before = await loadAgendaDraft(club.meetingId);
+			const firstId = before?.rows[0]?.id ?? "";
+			const secondId = before?.rows[1]?.id ?? "";
+			expect(firstId).not.toBe("");
+			expect(secondId).not.toBe("");
+
+			// Edit one: forks. Every row id on the meeting's template changes.
+			await updateAgendaRow({
+				meetingId: club.meetingId,
+				rowId: firstId,
+				patch: { minutes: 3 },
+			});
+			const forked = await loadAgendaDraft(club.meetingId);
+			expect(forked?.rows[0]?.id).not.toBe(firstId);
+
+			// Edit two, addressed by the id the client still holds from before the
+			// fork. This is what the client actually does.
+			await expect(
+				updateAgendaRow({
+					meetingId: club.meetingId,
+					rowId: secondId,
+					patch: { minutes: 4 },
+				}),
+			).resolves.toBeUndefined();
+
+			const after = await loadAgendaDraft(club.meetingId);
+			expect(after?.rows[0]?.minutes).toBe(3);
+			expect(after?.rows[1]?.minutes).toBe(4);
 		});
 	},
 );
