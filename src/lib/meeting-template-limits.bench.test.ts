@@ -133,6 +133,7 @@ function hostileBeats(
 	const nonRepeatCount = Math.min(beatCount, roles.length);
 	for (let i = 0; i < nonRepeatCount; i++) {
 		beats.push({
+			id: `bench-beat-${i}`,
 			sortOrder: i,
 			kind: "role",
 			label,
@@ -150,6 +151,7 @@ function hostileBeats(
 	const repeatRole = roles[roles.length - 1]?.key ?? null;
 	for (let i = 0; i < remaining; i++) {
 		beats.push({
+			id: `bench-repeat-${i}`,
 			sortOrder: nonRepeatCount + i,
 			kind: "role",
 			label,
@@ -390,6 +392,7 @@ describe("buildTemplateRows render cost (#task-10)", () => {
 		);
 		const oneBeat: TemplateBeatRow[] = [
 			{
+				id: "bench-one",
 				sortOrder: 0,
 				kind: "role",
 				label: emojiStr(MAX_TEMPLATE_LABEL_CHARS),

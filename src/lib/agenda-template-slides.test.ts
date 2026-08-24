@@ -15,6 +15,7 @@
  *   of its own, and never cache one.
  */
 import { describe, expect, it } from "vitest";
+import { withBeatIds } from "../test/template-beat-ids";
 import type { AgendaRow, AgendaSlot } from "./agenda-runsheet";
 import { resolveAgendaRows } from "./agenda-runsheet";
 import type { ClubForDeck, MeetingForDeck, Slide } from "./agenda-slides";
@@ -63,7 +64,10 @@ function contestant(i: number, name: string): AgendaSlot {
 function contestRows(slots: AgendaSlot[]): AgendaRow[] {
 	return resolveAgendaRows({
 		geIntroducesFunctionaries: false,
-		template: { beats: CONTEST_TEMPLATE.beats, roles: CONTEST_TEMPLATE.roles },
+		template: {
+			beats: withBeatIds(CONTEST_TEMPLATE.beats),
+			roles: CONTEST_TEMPLATE.roles,
+		},
 		slots,
 	});
 }

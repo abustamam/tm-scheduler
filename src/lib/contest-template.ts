@@ -37,7 +37,7 @@
  * the speech record, the project picker and Pathways attribution all work
  * against a contestant slot with no special-casing.
  */
-import type { TemplateBeatRow, TemplateRoleRow } from "./agenda-template-rows";
+import type { TemplateBeatSeed, TemplateRoleRow } from "./agenda-template-rows";
 
 /**
  * Unchanged across the rewrite, on purpose. `seedTemplate` is idempotent on this
@@ -62,7 +62,7 @@ export type TemplateSeed = {
 	description: string;
 	defaultLengthMinutes: number;
 	roles: SeedRole[];
-	beats: TemplateBeatRow[];
+	beats: TemplateBeatSeed[];
 };
 
 const role = (
@@ -85,11 +85,11 @@ const role = (
 
 let order = 0;
 const beat = (
-	over: Partial<TemplateBeatRow> & {
-		kind: TemplateBeatRow["kind"];
+	over: Partial<TemplateBeatSeed> & {
+		kind: TemplateBeatSeed["kind"];
 		label: string;
 	},
-): TemplateBeatRow => ({
+): TemplateBeatSeed => ({
 	sortOrder: order++,
 	detail: null,
 	minutes: 0,
