@@ -2,6 +2,15 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.25.3.0] - 2026-08-25
+
+### Fixed
+
+- **Strangers can no longer add themselves to your roster.** Anyone who had your club's link could type a name into "I'm new — add me" and a real row appeared in your membership record: no account, no officer, nothing but a limit on how fast it could be done. That is how a guest who was being followed up in VP Membership turned up on a club's roster last week, leaving two records for one human with nothing connecting them. The box is gone from both places it appeared, and the server now refuses the request unless a club admin is signed in. Adding a member is an officer's job again: **Roster → + Add member**, which already existed.
+- **What a visitor sees instead.** The "Who are you?" box now says "Don't see your name?" and offers the two real answers — sign the guest book if you are visiting, which puts you in front of the VP Membership team where you belong, or ask an officer if you have just joined. Nothing about the ballot changes: it already had its own "Visiting us today?" card, and guests still vote through it exactly as before.
+
+This reverses a deliberate choice from the early self-serve design, when picking your name off the roster was the only way to identify yourself and there was no other door for a non-member. There are three now — the guest book, guest role assignment, and the VP Membership pipeline — so the self-add was the only one that wrote to the club's membership record, and the only one that needed no permission.
+
 ## [1.25.2.0] - 2026-08-25
 
 ### Fixed
