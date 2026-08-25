@@ -2,6 +2,12 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.25.5.1] - 2026-08-25
+
+### Changed
+
+- **Nothing you can see. A test that was blocking releases for the wrong reason no longer does.** One of the speed checks on the agenda renderer was written as a stopwatch — "this must finish in under 250 milliseconds" — measured on a fast laptop. The machines that run the checks before a release are shared and sometimes much slower, so that check went red twice on changes that had nothing to do with it, most recently at 331ms, and passed when the identical code was simply re-run. It now compares the renderer against *itself* at two sizes instead of against a stopwatch, which cannot be thrown off by a slow machine. Recorded here because a release with no user-facing change still deserves an explanation for existing.
+
 ## [1.25.5.0] - 2026-08-25
 
 ### Fixed
