@@ -7,6 +7,7 @@ import {
 	within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useRef, useState } from "react";
 import { Toaster } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgendaDraft } from "#/server/meeting-agenda-edit";
@@ -93,6 +94,7 @@ const noopHandlers = {
 	onUpdateRow: vi.fn().mockResolvedValue(undefined),
 	onRemoveRow: vi.fn().mockResolvedValue(undefined),
 	onMoveRow: vi.fn().mockResolvedValue(undefined),
+	onRefresh: vi.fn().mockResolvedValue(undefined),
 	onAddRole: vi.fn().mockResolvedValue(undefined),
 	planRoleRemoval: vi.fn().mockResolvedValue([]),
 	onRemoveRole: vi.fn().mockResolvedValue(undefined),
@@ -761,6 +763,182 @@ describe("AgendaEditor delete undo", () => {
 			markYellow: 6,
 			markRed: 7,
 		});
+	});
+
+	it("shows the RESTORED label after undo, not the server's placeholder", async () => {
+		const user = userEvent.setup();
+		// A STATEFUL harness, because the bug lives in the gap between the two
+		// server calls undo makes. `onAddRow` is structural, so the route
+		// invalidates and `localRows` re-seeds from a row the server created as
+		// "New item"; `onUpdateRow` is a pure edit and deliberately does NOT
+		// invalidate, so nothing re-seeds it with the label undo just restored.
+		// Mocking `onAddRow` to resolve the ORIGINAL row hides exactly that, which
+		// is why the test above passes while the officer sees "New item".
+		function Harness() {
+			const [rows, setRows] = useState(draft.rows);
+			// What the server holds, which the route only re-reads on a refresh.
+			const server = useRef(draft.rows);
+			return (
+				<>
+					<Toaster />
+					<AgendaEditor
+						draft={{ ...draft, rows }}
+						{...noopHandlers}
+						onRemoveRow={async (id: string) => {
+							server.current = server.current.filter((r) => r.id !== id);
+							setRows(server.current);
+						}}
+						onAddRow={async (
+							afterRowId: string | null,
+							kind: AgendaDraft["rows"][number]["kind"],
+						) => {
+							// What `addAgendaRow` actually inserts — see
+							// `meeting-agenda-edit-logic.ts`. Not the deleted row.
+							const created = {
+								id: "restored",
+								sortOrder: 0,
+								kind,
+								label: kind === "section" ? "NEW SECTION" : "New item",
+								detail: null,
+								minutes: 0,
+								roleKey: null,
+								repeatsRoleKey: null,
+								flex: false,
+								markGreen: null,
+								markYellow: null,
+								markRed: null,
+							};
+							const at =
+								afterRowId === null
+									? 0
+									: server.current.findIndex((r) => r.id === afterRowId) + 1;
+							const next = [...server.current];
+							next.splice(at, 0, created);
+							server.current = next;
+							setRows(next);
+							return created;
+						}}
+						onUpdateRow={async (rowId: string, patch: object) => {
+							// Writes on the "server" WITHOUT re-seeding, matching the route.
+							server.current = server.current.map((r) =>
+								r.id === rowId ? { ...r, ...patch } : r,
+							);
+						}}
+						// What `refresh()` does: re-read, which is a NEW rows identity.
+						onRefresh={async () => {
+							setRows(server.current);
+						}}
+					/>
+				</>
+			);
+		}
+		render(<Harness />);
+
+		await user.click(screen.getAllByLabelText("Remove row")[1] as HTMLElement);
+		await user.click(await screen.findByRole("button", { name: /undo/i }));
+
+		await waitFor(() => {
+			const labels = screen
+				.getAllByLabelText("Row label")
+				.map((i) => (i as HTMLInputElement).value);
+			// The row the officer deleted must come back reading what it read
+			// before, with no reload. "New item" is the placeholder undo patched
+			// over a moment ago on the server.
+			expect(labels).toContain("Welcome");
+			expect(labels).not.toContain("New item");
+		});
+	});
+
+	it("does not SAVE the placeholder over a row that was just undone", async () => {
+		const user = userEvent.setup();
+		// The expensive half of the bug above. `confirmed` re-seeds from the
+		// loader on a structural refresh but the input did not, so the two
+		// disagreed — and `commitLabel` asks "did this change?" against
+		// `confirmed`. Touching the restored row's label would find "New item"
+		// different from "Welcome" and write the placeholder to the server,
+		// destroying the row the officer had just recovered.
+		const updates: { rowId: string; patch: Record<string, unknown> }[] = [];
+		function Harness() {
+			const [rows, setRows] = useState(draft.rows);
+			const server = useRef(draft.rows);
+			return (
+				<>
+					<Toaster />
+					<AgendaEditor
+						draft={{ ...draft, rows }}
+						{...noopHandlers}
+						onRemoveRow={async (id: string) => {
+							server.current = server.current.filter((r) => r.id !== id);
+							setRows(server.current);
+						}}
+						onAddRow={async (
+							afterRowId: string | null,
+							kind: AgendaDraft["rows"][number]["kind"],
+						) => {
+							const created = {
+								id: "restored",
+								sortOrder: 0,
+								kind,
+								label: kind === "section" ? "NEW SECTION" : "New item",
+								detail: null,
+								minutes: 0,
+								roleKey: null,
+								repeatsRoleKey: null,
+								flex: false,
+								markGreen: null,
+								markYellow: null,
+								markRed: null,
+							};
+							const at =
+								afterRowId === null
+									? 0
+									: server.current.findIndex((r) => r.id === afterRowId) + 1;
+							const next = [...server.current];
+							next.splice(at, 0, created);
+							server.current = next;
+							setRows(next);
+							return created;
+						}}
+						onUpdateRow={async (
+							rowId: string,
+							patch: Record<string, unknown>,
+						) => {
+							updates.push({ rowId, patch });
+							server.current = server.current.map((r) =>
+								r.id === rowId ? { ...r, ...patch } : r,
+							);
+						}}
+						onRefresh={async () => {
+							setRows(server.current);
+						}}
+					/>
+				</>
+			);
+		}
+		render(<Harness />);
+
+		await user.click(screen.getAllByLabelText("Remove row")[1] as HTMLElement);
+		await user.click(await screen.findByRole("button", { name: /undo/i }));
+		await waitFor(() =>
+			expect(
+				screen
+					.getAllByLabelText("Row label")
+					.map((i) => (i as HTMLInputElement).value),
+			).toContain("Welcome"),
+		);
+
+		// Tab THROUGH the restored row's label without typing — the ordinary way
+		// to touch a field on a dense table.
+		const restored = screen
+			.getAllByLabelText("Row label")
+			.find((i) => (i as HTMLInputElement).value === "Welcome") as HTMLElement;
+		await user.click(restored);
+		await user.tab();
+
+		expect(
+			updates.filter((u) => u.patch.label === "New item"),
+			"the placeholder must never be written back",
+		).toEqual([]);
 	});
 
 	it("restores a FIRST row to the front, not after something", async () => {

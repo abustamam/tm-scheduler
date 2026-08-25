@@ -118,6 +118,10 @@ function AgendaEditorRoute() {
 					await moveAgendaRowFn({ data: { meetingId, rowId, direction } });
 					await refresh();
 				}}
+				// Undo restores a deleted row with an add THEN an update, and only
+				// the add invalidates. The editor calls this once the fields are
+				// back on the server, so the row stops reading "New item".
+				onRefresh={refresh}
 				onAddRole={async (role) => {
 					await addAgendaRoleFn({ data: { meetingId, ...role } });
 					await refresh();
