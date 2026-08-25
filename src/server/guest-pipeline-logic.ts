@@ -27,6 +27,10 @@ import {
 	tableTopicsSpeakers,
 } from "#/db/schema";
 import { isAtMeetingNow } from "#/lib/guest-book-window";
+import {
+	CONVERT_NAME_CLASH_MESSAGE,
+	isStrandedConvertedGuest,
+} from "#/lib/guest-convert";
 import { namesAgree } from "#/lib/person-name";
 import {
 	coalesceToE164,
@@ -732,7 +736,15 @@ export async function applyDeleteGuest(
 			.limit(1)
 			.for("update");
 		if (!guest) throw new Error("Guest not found in this club.");
-		if (guest.stage === "joined" || guest.convertedMembershipId) {
+		// Same correction as `applySetGuestStage` (#618), and this one's message was
+		// actively misleading: it told the admin to "remove them from the roster
+		// instead" — advice they had already followed, which is precisely how the
+		// row reached this state. A stranded row is a guest again, so it may be
+		// deleted like any other.
+		if (
+			(guest.stage === "joined" || guest.convertedMembershipId) &&
+			!isStrandedConvertedGuest(guest)
+		) {
 			throw new Error(
 				"This guest is now a club member — remove them from the roster instead.",
 			);
@@ -793,12 +805,22 @@ export async function applySetGuestStage(
 	input: SetGuestStageInput,
 ): Promise<{ ok: true; stage: ManualGuestStage }> {
 	const [guest] = await db
-		.select({ id: guests.id, stage: guests.stage })
+		.select({
+			id: guests.id,
+			stage: guests.stage,
+			convertedMembershipId: guests.convertedMembershipId,
+		})
 		.from(guests)
 		.where(and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)))
 		.limit(1);
 	if (!guest) throw new Error("Guest not found in this club.");
-	if (guest.stage === "joined") {
+	// A joined guest is frozen because they ARE a member — reached only through
+	// convert-to-member. That reasoning stops applying the moment the membership
+	// is gone: `converted_membership_id` is `onDelete: "set null"`, so removing
+	// the member from the roster left this row saying `joined` with nothing to
+	// point at, and refusing here was what made the pipeline card a dead end with
+	// no control on it at all (#618). Stranded rows may move again.
+	if (guest.stage === "joined" && !isStrandedConvertedGuest(guest)) {
 		throw new Error("This guest has already joined as a member.");
 	}
 	await db
@@ -950,6 +972,36 @@ export async function applyConvertGuestToMember(
 		if (existingMembership) {
 			membershipId = existingMembership.id;
 		} else {
+			// #617: refuse rather than silently duplicate a human.
+			//
+			// The Person dedup above matches on email, then on a phone whose name
+			// agrees. It deliberately never matches on NAME alone — ADR-0008 makes
+			// dedupe a later explicit action, and over-matching would be the
+			// household fusion #488 closed. The consequence is that a roster row
+			// carrying NO email and NO phone can never be matched, and until #616
+			// the public self-add minted exactly that: name only. So converting a
+			// guest who had also self-added produced a second Person and a second
+			// membership — two identical names in the roster, the season grid and
+			// every picker, with the human's history split across both.
+			//
+			// The check sits HERE, at the membership insert, not at the Person
+			// insert where #617 first proposed it. A guest whose email dedupes onto
+			// a Person from ANOTHER club skips the fresh-Person path entirely and
+			// would still add a duplicate name to THIS club's roster. What must be
+			// unique is a name within a club, so the guard belongs where the
+			// club-scoped row is written.
+			//
+			// Refuse, do not auto-merge: under-matching is visible and reversible,
+			// over-matching is neither, and the admin has a merge tool. Inactive
+			// members count — they still occupy the name and still appear in the
+			// VPE roster manager.
+			const clubMembers = await tx
+				.select({ id: members.id, name: members.name })
+				.from(members)
+				.where(eq(members.clubId, input.clubId));
+			if (clubMembers.some((m) => namesAgree(m.name, name))) {
+				throw new Error(CONVERT_NAME_CLASH_MESSAGE);
+			}
 			// The SELECT above is the fast path, not the guarantee: it runs under
 			// READ COMMITTED with no row to lock, so a concurrent convert of a second
 			// guest that deduped onto this same Person can pass it too. The unique

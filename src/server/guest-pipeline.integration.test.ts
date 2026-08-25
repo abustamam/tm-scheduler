@@ -22,6 +22,7 @@ import {
 	roleSlots,
 	tableTopicsSpeakers,
 } from "#/db/schema";
+import { CONVERT_NAME_CLASH_MESSAGE } from "#/lib/guest-convert";
 import { toStoredPhone } from "#/lib/phone";
 import {
 	cleanup,
@@ -1041,10 +1042,18 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			const guestId = await seedGuest(seed.clubId, "Converting Now");
 
 			// Tab B converts the guest while tab A's delete is in flight.
+			//
+			// Both columns, because a convert writes both in one statement (step 4 of
+			// `applyConvertGuestToMember`) and since #618 the delete guard reads both.
+			// A bare `stage: "joined"` is no longer a faithful stand-in for a convert
+			// — it is the STRANDED state, which means "converted once, membership
+			// since removed from the roster", and a stranded row is deletable on
+			// purpose. Faking the convert with the stage alone made this test assert
+			// the opposite of what it is named for.
 			const writer = await openBlockingTx(async (tx) => {
 				await tx
 					.update(guests)
-					.set({ stage: "joined" })
+					.set({ stage: "joined", convertedMembershipId: seed.memberId })
 					.where(eq(guests.id, guestId));
 			});
 
@@ -2006,6 +2015,239 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 				(r) => r.id === guestId,
 			);
 			expect(row?.phoneRaw).toBe("  call the office  ");
+		});
+	});
+
+	describe("convert refuses a duplicate name (#617)", () => {
+		/** A roster row with NO email and NO phone — the shape the Person dedup can
+		 *  never match, and exactly what the public self-add minted before #616. */
+		async function contactlessMember(name: string): Promise<string> {
+			const personId = await trackedPerson({ name });
+			const [m] = await testDb
+				.insert(members)
+				.values({ clubId: seed.clubId, personId, name })
+				.returning({ id: members.id });
+			if (!m) throw new Error("Failed to insert member");
+			return m.id;
+		}
+
+		async function clubMemberCount(clubId: string): Promise<number> {
+			const [row] = await testDb
+				.select({ n: count() })
+				.from(members)
+				.where(eq(members.clubId, clubId));
+			return Number(row?.n ?? 0);
+		}
+
+		it("throws, and writes nothing, when the name is already on the roster", async () => {
+			await contactlessMember("Casey Clash");
+			const { guestId } = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Casey Clash",
+				phone: "555-777-0001",
+			});
+			const before = await clubMemberCount(seed.clubId);
+
+			await expect(
+				applyConvertGuestToMember({
+					clubId: seed.clubId,
+					guestId,
+					actorMemberId: seed.adminMemberId,
+				}),
+			).rejects.toThrow(CONVERT_NAME_CLASH_MESSAGE);
+
+			// The whole transaction must roll back, not just the membership insert:
+			// a fresh Person or a `stage: joined` stamp surviving the refusal would
+			// leave the guest half-converted, which is worse than the duplicate.
+			expect(await clubMemberCount(seed.clubId)).toBe(before);
+			const [g] = await testDb
+				.select({
+					stage: guests.stage,
+					converted: guests.convertedMembershipId,
+				})
+				.from(guests)
+				.where(eq(guests.id, guestId));
+			expect(g?.stage).not.toBe("joined");
+			expect(g?.converted).toBeNull();
+		});
+
+		it("is club-scoped — the same name in another club does not block", async () => {
+			const other = await seedClub();
+			try {
+				const personId = await trackedPerson({ name: "Dana Elsewhere" });
+				await testDb.insert(members).values({
+					clubId: other.clubId,
+					personId,
+					name: "Dana Elsewhere",
+				});
+				const { guestId } = await captureGuestVisit({
+					clubId: seed.clubId,
+					name: "Dana Elsewhere",
+					phone: "555-777-0002",
+				});
+				const res = await applyConvertGuestToMember({
+					clubId: seed.clubId,
+					guestId,
+					actorMemberId: seed.adminMemberId,
+				});
+				expect(res.ok).toBe(true);
+			} finally {
+				await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+			}
+		});
+
+		it("catches a clash even when the Person deduped onto another club's row", async () => {
+			// The case that decided WHERE this check lives. #617 proposed putting it
+			// just before the fresh-Person insert; this guest never reaches that
+			// branch, because its email matches a Person who is already a member
+			// somewhere else. The Person is reused, no fresh row is created, and the
+			// duplicate name would still land in THIS club's roster. Placing the
+			// check at the MEMBERSHIP insert is what catches it.
+			const other = await seedClub();
+			try {
+				const sharedPerson = await trackedPerson({
+					name: "Erin Crossclub",
+					email: "erin.crossclub@example.com",
+				});
+				await testDb.insert(members).values({
+					clubId: other.clubId,
+					personId: sharedPerson,
+					name: "Erin Crossclub",
+				});
+				// …and THIS club already has the name, contactless.
+				await contactlessMember("Erin Crossclub");
+
+				const { guestId } = await captureGuestVisit({
+					clubId: seed.clubId,
+					name: "Erin Crossclub",
+					email: "erin.crossclub@example.com",
+				});
+				await expect(
+					applyConvertGuestToMember({
+						clubId: seed.clubId,
+						guestId,
+						actorMemberId: seed.adminMemberId,
+					}),
+				).rejects.toThrow(CONVERT_NAME_CLASH_MESSAGE);
+			} finally {
+				await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+			}
+		});
+
+		it("still reuses an existing membership rather than reporting a clash", async () => {
+			// Regression: the person ALREADY has a membership in this club, so the
+			// reuse branch runs and the clash check must not fire. Without this, a
+			// guard written to stop duplicates would instead break the one path that
+			// correctly avoids them.
+			const personId = await trackedPerson({
+				name: "Fran Reuse",
+				email: "fran.reuse@example.com",
+			});
+			const [existing] = await testDb
+				.insert(members)
+				.values({ clubId: seed.clubId, personId, name: "Fran Reuse" })
+				.returning({ id: members.id });
+			const { guestId } = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Fran Reuse",
+				email: "fran.reuse@example.com",
+			});
+			const res = await applyConvertGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+			expect(res.membershipId).toBe(existing?.id);
+		});
+	});
+
+	describe("a stranded converted guest is not frozen (#618)", () => {
+		/** Convert, then remove the member from the roster — which nulls
+		 *  `converted_membership_id` (`onDelete: "set null"`) and leaves `stage`
+		 *  saying `joined` with nothing to point at. */
+		async function strandedGuest(name: string): Promise<string> {
+			const { guestId } = await captureGuestVisit({
+				clubId: seed.clubId,
+				name,
+				phone: "555-888-0001",
+			});
+			const { membershipId } = await applyConvertGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+			await testDb.delete(members).where(eq(members.id, membershipId));
+			const [g] = await testDb
+				.select({
+					stage: guests.stage,
+					converted: guests.convertedMembershipId,
+				})
+				.from(guests)
+				.where(eq(guests.id, guestId));
+			// The precondition IS the bug — assert it rather than assuming the FK
+			// behaves, or these tests could pass against a row that is not stranded.
+			expect(g?.stage).toBe("joined");
+			expect(g?.converted).toBeNull();
+			return guestId;
+		}
+
+		it("can be moved back to a manual stage", async () => {
+			const guestId = await strandedGuest("Gale Stranded");
+			await applySetGuestStage({
+				clubId: seed.clubId,
+				guestId,
+				stage: "following_up",
+			});
+			const [g] = await testDb
+				.select({ stage: guests.stage })
+				.from(guests)
+				.where(eq(guests.id, guestId));
+			expect(g?.stage).toBe("following_up");
+		});
+
+		it("can be deleted", async () => {
+			// The old refusal told the admin to "remove them from the roster
+			// instead" — which is what they had already done to get here.
+			const guestId = await strandedGuest("Hana Stranded");
+			const res = await applyDeleteGuest({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+			expect(res.ok).toBe(true);
+			expect(
+				await testDb.select().from(guests).where(eq(guests.id, guestId)),
+			).toHaveLength(0);
+		});
+
+		it("a guest whose membership still exists stays frozen", async () => {
+			// The complement, and the assertion that stops the fix from becoming
+			// "any joined guest may be edited". Same shape as the two above; the
+			// only difference is that the membership is left alone.
+			const { guestId } = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Ivan Intact",
+				phone: "555-888-0002",
+			});
+			await applyConvertGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+			await expect(
+				applySetGuestStage({
+					clubId: seed.clubId,
+					guestId,
+					stage: "following_up",
+				}),
+			).rejects.toThrow(/already joined/i);
+			await expect(
+				applyDeleteGuest({
+					clubId: seed.clubId,
+					guestId,
+					actorMemberId: seed.adminMemberId,
+				}),
+			).rejects.toThrow(/club member/i);
 		});
 	});
 });
