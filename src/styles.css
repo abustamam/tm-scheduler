@@ -302,14 +302,14 @@ body::after {
    this rule overrode that down to the same --lagoon-deep at `text-sm` — under
    AA for normal text. `back-link-color.guard.test.ts` fails if either rule
    loses this exclusion. */
-a:not([data-slot="button"]):not([data-slot^="dropdown-menu-"]):not([data-slot="wa-phone"]):not([data-slot="wa-email"]):not([data-slot="back-link"]) {
+a:not([data-slot="button"]):not([data-slot^="dropdown-menu-"]):not([data-slot="wa-phone"]):not([data-slot="wa-email"]):not([data-slot="back-link"]):not([data-slot="guest-book-link"]) {
   color: var(--lagoon-deep);
   text-decoration-color: rgba(50, 143, 151, 0.4);
   text-decoration-thickness: 1px;
   text-underline-offset: 2px;
 }
 
-a:not([data-slot="button"]):not([data-slot^="dropdown-menu-"]):not([data-slot="wa-phone"]):not([data-slot="wa-email"]):not([data-slot="back-link"]):hover {
+a:not([data-slot="button"]):not([data-slot^="dropdown-menu-"]):not([data-slot="wa-phone"]):not([data-slot="wa-email"]):not([data-slot="back-link"]):not([data-slot="guest-book-link"]):hover {
   color: var(--lagoon-ink);
 }
 

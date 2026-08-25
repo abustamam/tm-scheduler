@@ -10,7 +10,6 @@ vi.mock("#/server/members", () => ({
 	listMembers: vi.fn(async () => [
 		{ id: "m-jane", name: "Jane Doe", officerPositions: [] },
 	]),
-	addMember: vi.fn(async () => ({ id: "m-new" })),
 }));
 
 import { IdentityGateProvider, useRequireIdentity } from "./identity-gate";

@@ -1,13 +1,11 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
-import { useState } from "react";
-import { toast } from "sonner";
-import { Button } from "#/components/ui/button";
+import { useQuery } from "@tanstack/react-query";
+import { type ReactNode, useState } from "react";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
 import type { StoredMember } from "#/lib/member-identity";
 import { officerPositionLabel } from "#/lib/officers";
-import { addMember, listMembers } from "#/server/members";
+import { listMembers } from "#/server/members";
 import { MemberAvatar } from "./member-avatar";
 
 /**
@@ -19,39 +17,33 @@ import { MemberAvatar } from "./member-avatar";
 export function PickNameForm({
 	clubUuid,
 	onPicked,
+	notListedHint,
 }: {
 	clubUuid: string;
 	onPicked: (m: StoredMember) => void;
+	/**
+	 * What to offer someone who is not on the roster. Caller-supplied because the
+	 * two surfaces need different answers: the club page has no other door and
+	 * points at the guest book, while the ballot already renders its own
+	 * "Visiting us today?" card below this form and would only duplicate it.
+	 *
+	 * There is deliberately no self-add here any more (#616). This form used to
+	 * end in an "I'm new — add me" box wired to the session-less `addMember`, so
+	 * anyone holding the club link could write a row into the club's membership
+	 * record — which is what put a tracked guest into a real club's roster.
+	 */
+	notListedHint?: ReactNode;
 }) {
 	const [query, setQuery] = useState("");
-	const [newName, setNewName] = useState("");
 
 	const { data: members = [] } = useQuery({
 		queryKey: ["members", clubUuid],
 		queryFn: () => listMembers({ data: clubUuid }),
 	});
 
-	const addMutation = useMutation({
-		mutationFn: (name: string) =>
-			addMember({ data: { clubId: clubUuid, name } }),
-	});
-
 	const filtered = members.filter((m) =>
 		m.name.toLowerCase().includes(query.trim().toLowerCase()),
 	);
-
-	async function handleAdd() {
-		const name = newName.trim();
-		if (!name || addMutation.isPending) return;
-		try {
-			const result = await addMutation.mutateAsync(name);
-			onPicked({ id: result.id, name });
-		} catch (err) {
-			toast.error(
-				err instanceof Error ? err.message : "Couldn't add you — try again.",
-			);
-		}
-	}
 
 	return (
 		<div className="flex flex-col gap-4">
@@ -100,31 +92,11 @@ export function PickNameForm({
 				) : null}
 			</ul>
 
-			<div className="space-y-2 border-border border-t pt-4">
-				<Label htmlFor="new-member-name">I'm new — add me</Label>
-				<div className="flex gap-2">
-					<Input
-						id="new-member-name"
-						placeholder="Your name"
-						value={newName}
-						onChange={(e) => setNewName(e.target.value)}
-						onKeyDown={(e) => {
-							if (e.key === "Enter") {
-								e.preventDefault();
-								void handleAdd();
-							}
-						}}
-						autoComplete="off"
-					/>
-					<Button
-						type="button"
-						onClick={() => void handleAdd()}
-						disabled={!newName.trim() || addMutation.isPending}
-					>
-						Add me
-					</Button>
+			{notListedHint ? (
+				<div className="space-y-2 border-border border-t pt-4 text-sm">
+					{notListedHint}
 				</div>
-			</div>
+			) : null}
 		</div>
 	);
 }
