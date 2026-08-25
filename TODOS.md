@@ -214,11 +214,21 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
   mixed kept/inserted shape — and reachable as soon as a club authors a template that does.
   **Priority:** P3
 
-- **`flexBannerMessage` hardcodes Table Topics.** `buildTemplateRows` carries a beat's `flex`
-  through ungated, and `applyFlex` clamps to `TABLE_TOPICS_MIN/MAX` while the banner says "Table
-  Topics is at its 25-min cap". Latent — the contest seed sets no flex beat — but a Phase 2
-  template with one prints that sentence on a sheet with no Table Topics.
-  **Priority:** P4
+- **The stretchy-row cap is named for Table Topics and applied to everything.** `buildTemplateRows`
+  carries a beat's `flex` through ungated, `applyFlex` clamps it to `TABLE_TOPICS_MIN/MAX`, and
+  `flexBannerMessage` says "Table Topics is at its 25-min cap".
+  **No longer latent, and this entry said it was.** The reasoning was that the contest seed sets no
+  flex beat, which is true and irrelevant: the agenda editor's "Make stretchy" button sets `flex` on
+  ANY row of ANY template, today, with no Phase 2 involved. Observed directly during /qa on
+  2026-08-24 — making "Tallying" stretchy on a 5-contestant Speech Contest with a 49-minute
+  shortfall produced a 25-minute row and a footer still reading "24 under". Nothing is wrong with
+  the arithmetic and the footer is honest about the remainder, so this is not a bug; the trap is
+  that "make stretchy" cannot absorb the slack on any agenda longer than Table Topics was sized
+  for, and the button offers no hint of a ceiling before you click it. The banner sentence naming
+  Table Topics on a contest sheet is the same defect one layer up.
+  Decide whether the bound belongs to the ROW (a per-beat min/max) or stays a Table Topics
+  constant with the button gated to rows that have one.
+  **Priority:** P3
 
 ## Agenda
 

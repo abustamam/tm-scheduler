@@ -117,6 +117,9 @@ export interface AgendaEditorProps {
 	onUpdateRow: (rowId: string, patch: RowPatch) => Promise<unknown>;
 	onRemoveRow: (rowId: string) => Promise<unknown>;
 	onMoveRow: (rowId: string, direction: "up" | "down") => Promise<unknown>;
+	/** Re-reads the route. Undo needs it: it restores a row with TWO calls, and
+	 *  only the first (`onAddRow`) invalidates — see `remove()`. */
+	onRefresh: () => Promise<unknown>;
 	onAddRole: (role: NewAgendaRole) => Promise<unknown>;
 	planRoleRemoval: (roleKey: string) => Promise<ReleasedHolder[]>;
 	onRemoveRole: (roleKey: string) => Promise<unknown>;
@@ -214,6 +217,7 @@ export function AgendaEditor({
 	onUpdateRow,
 	onRemoveRow,
 	onMoveRow,
+	onRefresh,
 	onAddRole,
 	planRoleRemoval,
 	onRemoveRole,
@@ -259,7 +263,8 @@ export function AgendaEditor({
 	);
 	const indexOf = (entry: BudgetEntry) => indexByEntry.get(entry) ?? -1;
 	// Read off the SERVER's rows, not the local copy: `flex` is only ever changed
-	// by a button that round-trips, so there is no local edit to reflect.
+	// by a button, and `setFlex` re-reads the route after it lands — a pure edit
+	// alone would NOT, and this read is why that mattered.
 	const someRowStretches = draft.rows.some((r) => r.flex);
 	/** The stored row before this one in SORT order — undo's insertion point.
 	 *  Taken from `draft.rows` rather than the rendered entries, because a
@@ -372,6 +377,7 @@ export function AgendaEditor({
 										onUpdateRow={onUpdateRow}
 										onRemoveRow={onRemoveRow}
 										onMoveRow={onMoveRow}
+										onRefresh={onRefresh}
 									/>
 								);
 							});
@@ -484,6 +490,7 @@ function AgendaTableRow({
 	someRowStretches,
 	previousRowId,
 	onPatchLocal,
+	onRefresh,
 	onAddRow,
 	onUpdateRow,
 	onRemoveRow,
@@ -512,6 +519,7 @@ function AgendaTableRow({
 	onUpdateRow: (rowId: string, patch: RowPatch) => Promise<unknown>;
 	onRemoveRow: (rowId: string) => Promise<unknown>;
 	onMoveRow: (rowId: string, direction: "up" | "down") => Promise<unknown>;
+	onRefresh: () => Promise<unknown>;
 }) {
 	const [open, setOpen] = useState(false);
 	const [pending, setPending] = useState(false);
@@ -559,6 +567,25 @@ function AgendaTableRow({
 	if (confirmedFrom.current !== row) {
 		confirmedFrom.current = row;
 		confirmed.current = row;
+		// The FIELDS follow the loader too, not just `confirmed`. They are seeded
+		// once at mount, so without this a structural refresh that changes a row's
+		// stored values leaves the inputs showing the old ones while `confirmed`
+		// holds the new — and the two disagreeing is worse than either being
+		// stale. Undo is the path that does it: the row is re-created as
+		// "New item", then patched back to its real label by a call that does not
+		// invalidate. The officer would see "New item", and blurring that field
+		// would compare it against the restored label, find them different, and
+		// SAVE the placeholder over the row they just undid.
+		//
+		// Safe against clobbering in-flight typing because `row` only changes
+		// identity on a structural mutation, every one of which is a button click
+		// — which blurs the focused field, committing it, first.
+		setLabel(row.label);
+		setDetail(row.detail ?? "");
+		setMinutes(String(row.minutes));
+		setMarkGreen(row.markGreen == null ? "" : String(row.markGreen));
+		setMarkYellow(row.markYellow == null ? "" : String(row.markYellow));
+		setMarkRed(row.markRed == null ? "" : String(row.markRed));
 	}
 
 	/** Record what the server now holds, so the next comparison is against the
@@ -642,6 +669,33 @@ function AgendaTableRow({
 		}
 	}
 
+	/** Flip whether this row stretches, then RE-READ.
+	 *
+	 *  `flex` is not a typed value the client already knows the answer to: it
+	 *  changes what `applyFlex` derives for every flex row on the sheet, bounded
+	 *  by `TABLE_TOPICS_MIN`/`MAX`, and it changes whether every OTHER row still
+	 *  offers the button. Only the server can say the result, so the pure-edit
+	 *  "no refresh" rule does not apply — without this the toggle saves and the
+	 *  page does not move until an unprompted reload, which reads as a dead
+	 *  button. */
+	async function setFlex(flex: boolean) {
+		setPending(true);
+		try {
+			if (await runAction(() => onUpdateRow(row.id, { flex }))) {
+				markConfirmed({ flex });
+				// Wrapped, and the reset is in a `finally`: `router.invalidate()`
+				// rejects if the loader throws, and the call site is `void
+				// setFlex(...)`. Unwrapped that is an unhandled rejection AND a row
+				// whose buttons stay disabled until some unrelated re-render. The
+				// save already LANDED here, so a failed re-read is a stale page, not
+				// a lost edit — a toast is the honest report.
+				await runAction(() => onRefresh());
+			}
+		} finally {
+			setPending(false);
+		}
+	}
+
 	async function move(direction: "up" | "down") {
 		setPending(true);
 		await runAction(() => onMoveRow(row.id, direction));
@@ -679,6 +733,15 @@ function AgendaTableRow({
 							markYellow: snapshot.markYellow,
 							markRed: snapshot.markRed,
 						});
+						// The restore is TWO calls and only `onAddRow` invalidates, so
+						// without this the officer is left looking at the placeholder
+						// `addAgendaRow` inserts ("New item" / "NEW SECTION", 0 min)
+						// while the server already holds the row they undid. Every
+						// field reads wrong until an unprompted reload. Patching
+						// `localRows` instead would race the re-seed that `onAddRow`'s
+						// own invalidate schedules; re-reading is ordered by
+						// construction, and undo is rare enough to pay for one.
+						await onRefresh();
 					});
 				},
 			},
@@ -809,9 +872,7 @@ function AgendaTableRow({
 									variant="ghost"
 									size="sm"
 									className="h-6 px-1.5 text-xs"
-									onClick={() =>
-										void runAction(() => onUpdateRow(row.id, { flex: false }))
-									}
+									onClick={() => void setFlex(false)}
 								>
 									Pin
 								</Button>
@@ -848,9 +909,7 @@ function AgendaTableRow({
 									variant="ghost"
 									size="sm"
 									className="h-6 px-1.5 text-xs"
-									onClick={() =>
-										void runAction(() => onUpdateRow(row.id, { flex: true }))
-									}
+									onClick={() => void setFlex(true)}
 								>
 									Make stretchy
 								</Button>

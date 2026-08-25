@@ -7,6 +7,7 @@ import {
 	within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useRef, useState } from "react";
 import { Toaster } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgendaDraft } from "#/server/meeting-agenda-edit";
@@ -93,6 +94,7 @@ const noopHandlers = {
 	onUpdateRow: vi.fn().mockResolvedValue(undefined),
 	onRemoveRow: vi.fn().mockResolvedValue(undefined),
 	onMoveRow: vi.fn().mockResolvedValue(undefined),
+	onRefresh: vi.fn().mockResolvedValue(undefined),
 	onAddRole: vi.fn().mockResolvedValue(undefined),
 	planRoleRemoval: vi.fn().mockResolvedValue([]),
 	onRemoveRole: vi.fn().mockResolvedValue(undefined),
@@ -703,6 +705,114 @@ describe("AgendaEditor stretchy row", () => {
 	});
 });
 
+describe("AgendaEditor stretchy toggle", () => {
+	it("RE-READS after making a row stretchy", async () => {
+		const user = userEvent.setup();
+		const onUpdateRow = vi.fn().mockResolvedValue(undefined);
+		const onRefresh = vi.fn().mockResolvedValue(undefined);
+		render(
+			<AgendaEditor
+				draft={draft}
+				{...noopHandlers}
+				onUpdateRow={onUpdateRow}
+				onRefresh={onRefresh}
+			/>,
+		);
+		await user.click(
+			screen.getAllByRole("button", {
+				name: /make stretchy/i,
+			})[0] as HTMLElement,
+		);
+		await waitFor(() =>
+			expect(onUpdateRow).toHaveBeenCalledWith("r2", { flex: true }),
+		);
+		// `flex` is not a value the client can predict the effect of: `applyFlex`
+		// recomputes every flex row's minutes against the booking, bounded by
+		// TABLE_TOPICS_MIN/MAX, and `someRowStretches` decides whether every OTHER
+		// row still offers the button. Saving without re-reading leaves the page
+		// exactly as it was, which reads as a dead button.
+		await waitFor(() => expect(onRefresh).toHaveBeenCalled());
+	});
+
+	it("RE-READS after pinning a stretchy row back", async () => {
+		const user = userEvent.setup();
+		const onUpdateRow = vi.fn().mockResolvedValue(undefined);
+		const onRefresh = vi.fn().mockResolvedValue(undefined);
+		const flexed: AgendaDraft = {
+			...draft,
+			rows: [
+				draft.rows[0] as AgendaDraft["rows"][number],
+				{ ...(draft.rows[1] as AgendaDraft["rows"][number]), flex: true },
+			],
+		};
+		render(
+			<AgendaEditor
+				draft={flexed}
+				{...noopHandlers}
+				onUpdateRow={onUpdateRow}
+				onRefresh={onRefresh}
+			/>,
+		);
+		await user.click(screen.getByRole("button", { name: /^pin$/i }));
+		await waitFor(() =>
+			expect(onUpdateRow).toHaveBeenCalledWith("r2", { flex: false }),
+		);
+		await waitFor(() => expect(onRefresh).toHaveBeenCalled());
+	});
+
+	it("leaves the row usable when the RE-READ fails after a landed save", async () => {
+		const user = userEvent.setup();
+		const onUpdateRow = vi.fn().mockResolvedValue(undefined);
+		// The save landed; only the re-read blew up (loader threw, network blip).
+		const onRefresh = vi.fn().mockRejectedValue(new Error("loader exploded"));
+		render(
+			<AgendaEditor
+				draft={draft}
+				{...noopHandlers}
+				onUpdateRow={onUpdateRow}
+				onRefresh={onRefresh}
+			/>,
+		);
+		const btn = screen.getAllByRole("button", {
+			name: /make stretchy/i,
+		})[0] as HTMLElement;
+		await user.click(btn);
+		await waitFor(() => expect(onRefresh).toHaveBeenCalled());
+
+		// `pending` disables the row's controls. Reset it in a `finally` or a
+		// failed re-read strands the row: the officer cannot retry, cannot move
+		// it, cannot delete it, with nothing on screen saying why.
+		await waitFor(() => {
+			for (const b of screen.getAllByLabelText("Remove row")) {
+				expect((b as HTMLButtonElement).disabled).toBe(false);
+			}
+		});
+	});
+
+	it("does NOT re-read when the flex save is refused", async () => {
+		const user = userEvent.setup();
+		const onUpdateRow = vi.fn().mockRejectedValue(new Error("nope"));
+		const onRefresh = vi.fn().mockResolvedValue(undefined);
+		render(
+			<AgendaEditor
+				draft={draft}
+				{...noopHandlers}
+				onUpdateRow={onUpdateRow}
+				onRefresh={onRefresh}
+			/>,
+		);
+		await user.click(
+			screen.getAllByRole("button", {
+				name: /make stretchy/i,
+			})[0] as HTMLElement,
+		);
+		await waitFor(() => expect(onUpdateRow).toHaveBeenCalled());
+		// Nothing changed on the server, so a re-read would only cost a round trip
+		// and redraw the same page.
+		expect(onRefresh).not.toHaveBeenCalled();
+	});
+});
+
 describe("AgendaEditor delete undo", () => {
 	it("offers undo and restores EVERY field to the original position", async () => {
 		const user = userEvent.setup();
@@ -761,6 +871,294 @@ describe("AgendaEditor delete undo", () => {
 			markYellow: 6,
 			markRed: 7,
 		});
+	});
+
+	it("shows the RESTORED label after undo, not the server's placeholder", async () => {
+		const user = userEvent.setup();
+		// A STATEFUL harness, because the bug lives in the gap between the two
+		// server calls undo makes. `onAddRow` is structural, so the route
+		// invalidates and `localRows` re-seeds from a row the server created as
+		// "New item"; `onUpdateRow` is a pure edit and deliberately does NOT
+		// invalidate, so nothing re-seeds it with the label undo just restored.
+		// Mocking `onAddRow` to resolve the ORIGINAL row hides exactly that, which
+		// is why the test above passes while the officer sees "New item".
+		function Harness() {
+			const [rows, setRows] = useState(draft.rows);
+			// What the server holds, which the route only re-reads on a refresh.
+			const server = useRef(draft.rows);
+			return (
+				<>
+					<Toaster />
+					<AgendaEditor
+						draft={{ ...draft, rows }}
+						{...noopHandlers}
+						onRemoveRow={async (id: string) => {
+							server.current = server.current.filter((r) => r.id !== id);
+							setRows(server.current);
+						}}
+						onAddRow={async (
+							afterRowId: string | null,
+							kind: AgendaDraft["rows"][number]["kind"],
+						) => {
+							// What `addAgendaRow` actually inserts — see
+							// `meeting-agenda-edit-logic.ts`. Not the deleted row.
+							const created = {
+								id: "restored",
+								sortOrder: 0,
+								kind,
+								label: kind === "section" ? "NEW SECTION" : "New item",
+								detail: null,
+								minutes: 0,
+								roleKey: null,
+								repeatsRoleKey: null,
+								flex: false,
+								markGreen: null,
+								markYellow: null,
+								markRed: null,
+							};
+							const at =
+								afterRowId === null
+									? 0
+									: server.current.findIndex((r) => r.id === afterRowId) + 1;
+							const next = [...server.current];
+							next.splice(at, 0, created);
+							server.current = next;
+							setRows(next);
+							return created;
+						}}
+						onUpdateRow={async (rowId: string, patch: object) => {
+							// Writes on the "server" WITHOUT re-seeding, matching the route.
+							server.current = server.current.map((r) =>
+								r.id === rowId ? { ...r, ...patch } : r,
+							);
+						}}
+						// What `refresh()` does: re-read, which is a NEW rows identity.
+						onRefresh={async () => {
+							setRows(server.current);
+						}}
+					/>
+				</>
+			);
+		}
+		render(<Harness />);
+
+		await user.click(screen.getAllByLabelText("Remove row")[1] as HTMLElement);
+		await user.click(await screen.findByRole("button", { name: /undo/i }));
+
+		await waitFor(() => {
+			const labels = screen
+				.getAllByLabelText("Row label")
+				.map((i) => (i as HTMLInputElement).value);
+			// The row the officer deleted must come back reading what it read
+			// before, with no reload. "New item" is the placeholder undo patched
+			// over a moment ago on the server.
+			expect(labels).toContain("Welcome");
+			expect(labels).not.toContain("New item");
+		});
+	});
+
+	it("restores EVERY field on screen after undo, not just the label", async () => {
+		const user = userEvent.setup();
+		// The re-seed sets six fields. Asserting only the label would pass with
+		// five of them deleted, and the placeholder differs from a real row in
+		// every one: 0 minutes, no note, no timing marks. A row that comes back
+		// reading "Welcome" for 0 minutes with its marks gone is still lost work.
+		const rich: AgendaDraft = {
+			...draft,
+			rows: [
+				draft.rows[0] as AgendaDraft["rows"][number],
+				{
+					...(draft.rows[1] as AgendaDraft["rows"][number]),
+					detail: "Opens the room",
+					markGreen: 5,
+					markYellow: 6,
+					markRed: 7,
+				},
+			],
+		};
+		function Harness() {
+			const [rows, setRows] = useState(rich.rows);
+			const server = useRef(rich.rows);
+			return (
+				<>
+					<Toaster />
+					<AgendaEditor
+						draft={{ ...rich, rows }}
+						{...noopHandlers}
+						onRemoveRow={async (id: string) => {
+							server.current = server.current.filter((r) => r.id !== id);
+							setRows(server.current);
+						}}
+						onAddRow={async (
+							afterRowId: string | null,
+							kind: AgendaDraft["rows"][number]["kind"],
+						) => {
+							const created = {
+								id: "restored",
+								sortOrder: 0,
+								kind,
+								label: kind === "section" ? "NEW SECTION" : "New item",
+								detail: null,
+								minutes: 0,
+								roleKey: null,
+								repeatsRoleKey: null,
+								flex: false,
+								markGreen: null,
+								markYellow: null,
+								markRed: null,
+							};
+							const at =
+								afterRowId === null
+									? 0
+									: server.current.findIndex((r) => r.id === afterRowId) + 1;
+							const next = [...server.current];
+							next.splice(at, 0, created);
+							server.current = next;
+							setRows(next);
+							return created;
+						}}
+						onUpdateRow={async (
+							rowId: string,
+							patch: Record<string, unknown>,
+						) => {
+							server.current = server.current.map((r) =>
+								r.id === rowId ? { ...r, ...patch } : r,
+							);
+						}}
+						onRefresh={async () => {
+							setRows(server.current);
+						}}
+					/>
+				</>
+			);
+		}
+		render(<Harness />);
+
+		await user.click(screen.getAllByLabelText("Remove row")[1] as HTMLElement);
+		await user.click(await screen.findByRole("button", { name: /undo/i }));
+		await waitFor(() =>
+			expect(
+				screen
+					.getAllByLabelText("Row label")
+					.map((i) => (i as HTMLInputElement).value),
+			).toContain("Welcome"),
+		);
+
+		// Minutes: the placeholder is 0.
+		expect(
+			screen
+				.getAllByLabelText("Row minutes")
+				.map((i) => (i as HTMLInputElement).value),
+		).toContain("5");
+
+		// Note and the three timing marks live behind the row's disclosure.
+		await user.click(
+			screen.getAllByLabelText("Show row details")[1] as HTMLElement,
+		);
+		expect((screen.getByLabelText("Row note") as HTMLInputElement).value).toBe(
+			"Opens the room",
+		);
+		expect(
+			(screen.getByLabelText("Green mark minute") as HTMLInputElement).value,
+		).toBe("5");
+		expect(
+			(screen.getByLabelText("Yellow mark minute") as HTMLInputElement).value,
+		).toBe("6");
+		expect(
+			(screen.getByLabelText("Red mark minute") as HTMLInputElement).value,
+		).toBe("7");
+	});
+
+	it("does not SAVE the placeholder over a row that was just undone", async () => {
+		const user = userEvent.setup();
+		// The expensive half of the bug above. `confirmed` re-seeds from the
+		// loader on a structural refresh but the input did not, so the two
+		// disagreed — and `commitLabel` asks "did this change?" against
+		// `confirmed`. Touching the restored row's label would find "New item"
+		// different from "Welcome" and write the placeholder to the server,
+		// destroying the row the officer had just recovered.
+		const updates: { rowId: string; patch: Record<string, unknown> }[] = [];
+		function Harness() {
+			const [rows, setRows] = useState(draft.rows);
+			const server = useRef(draft.rows);
+			return (
+				<>
+					<Toaster />
+					<AgendaEditor
+						draft={{ ...draft, rows }}
+						{...noopHandlers}
+						onRemoveRow={async (id: string) => {
+							server.current = server.current.filter((r) => r.id !== id);
+							setRows(server.current);
+						}}
+						onAddRow={async (
+							afterRowId: string | null,
+							kind: AgendaDraft["rows"][number]["kind"],
+						) => {
+							const created = {
+								id: "restored",
+								sortOrder: 0,
+								kind,
+								label: kind === "section" ? "NEW SECTION" : "New item",
+								detail: null,
+								minutes: 0,
+								roleKey: null,
+								repeatsRoleKey: null,
+								flex: false,
+								markGreen: null,
+								markYellow: null,
+								markRed: null,
+							};
+							const at =
+								afterRowId === null
+									? 0
+									: server.current.findIndex((r) => r.id === afterRowId) + 1;
+							const next = [...server.current];
+							next.splice(at, 0, created);
+							server.current = next;
+							setRows(next);
+							return created;
+						}}
+						onUpdateRow={async (
+							rowId: string,
+							patch: Record<string, unknown>,
+						) => {
+							updates.push({ rowId, patch });
+							server.current = server.current.map((r) =>
+								r.id === rowId ? { ...r, ...patch } : r,
+							);
+						}}
+						onRefresh={async () => {
+							setRows(server.current);
+						}}
+					/>
+				</>
+			);
+		}
+		render(<Harness />);
+
+		await user.click(screen.getAllByLabelText("Remove row")[1] as HTMLElement);
+		await user.click(await screen.findByRole("button", { name: /undo/i }));
+		await waitFor(() =>
+			expect(
+				screen
+					.getAllByLabelText("Row label")
+					.map((i) => (i as HTMLInputElement).value),
+			).toContain("Welcome"),
+		);
+
+		// Tab THROUGH the restored row's label without typing — the ordinary way
+		// to touch a field on a dense table.
+		const restored = screen
+			.getAllByLabelText("Row label")
+			.find((i) => (i as HTMLInputElement).value === "Welcome") as HTMLElement;
+		await user.click(restored);
+		await user.tab();
+
+		expect(
+			updates.filter((u) => u.patch.label === "New item"),
+			"the placeholder must never be written back",
+		).toEqual([]);
 	});
 
 	it("restores a FIRST row to the front, not after something", async () => {

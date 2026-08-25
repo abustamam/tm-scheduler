@@ -2,6 +2,14 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.25.1.0] - 2026-08-24
+
+### Fixed
+
+- **Undo on a deleted row no longer brings it back called "New item" — and no longer destroys it if you touch it.** Deleting a row and clicking Undo put the row back in the right place with the right length, then labelled it "New item" on screen. The row on the server was correct the whole time, so a reload showed the real name, but nobody reloads after an Undo that appeared to work. Worse was what happened next: click into that name field and tab out of it, without typing anything, and "New item" was saved over the row you had just recovered. One misclick plus one stray keystroke quietly destroyed a row, and the only sign was a name that looked like a placeholder. Undo now puts every field back on screen — name, note, length, role and all three timing marks — and reads them from the server rather than from what it hoped it wrote.
+- **"Make stretchy" saved, and then looked like it had done nothing.** Clicking it left the page exactly as it was: the row kept its editable minutes box, no Pin button appeared, every other row went on offering the button, and the footer still claimed the old shortfall. The setting had saved — only a reload showed it. A button that appears dead is a button you click again, which is how a fix ends up looking like a bug. Both it and Pin now update the page the moment the change lands.
+- **A row can no longer be left stranded when the page fails to refresh.** If the reload that follows one of those toggles failed, the row's buttons stayed switched off with nothing on screen explaining why, and no way to retry. The change itself had already saved by then, so the honest report is a stale page and a message, which is what it now does.
+
 ## [1.25.0.0] - 2026-08-24
 
 ### Added

@@ -157,6 +157,19 @@ describe("agenda editor route wiring", () => {
 		}
 	});
 
+	it("hands the editor a refresh, so undo can re-read after restoring", () => {
+		// Undo restores a deleted row with TWO calls — `onAddRow` (structural,
+		// invalidates) then `onUpdateRow` (a pure edit, deliberately does not).
+		// Between them the row is the placeholder `addAgendaRow` inserts, so
+		// without a final re-read the officer is left looking at "New item" on a
+		// row the server already holds correctly. Wired here rather than asserted
+		// in the component test because the route is what owns invalidation, and
+		// it cannot be mounted in vitest.
+		expect(src, "onRefresh must be wired to refresh()").toMatch(
+			/onRefresh=\{refresh\}/,
+		);
+	});
+
 	it("does NOT re-fetch after a pure edit", () => {
 		// The half that is easy to undo by accident, and expensive: a pure edit's
 		// server answer IS the value just sent, so invalidating to learn it is
