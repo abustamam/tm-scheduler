@@ -44,3 +44,25 @@ export function buildTimeline(
 		return { ...r, time };
 	});
 }
+
+/**
+ * The clock time an agenda FINISHES — its start plus every row's duration.
+ *
+ * A separate export rather than a second return value from `buildTimeline`, so
+ * the print route's call site is untouched; and rather than exporting
+ * `formatClock`, which would put a formatter on this module's public surface
+ * for one caller. Takes `{ minutes }` rather than `AgendaRow` because the
+ * agenda budget calls it with rows it has already timed.
+ *
+ * Wraps past midnight the same way `buildTimeline` does — `formatClock` takes
+ * hours mod 24 — so a late meeting reads 1:00, not 25:00.
+ */
+export function timelineEnd(
+	rows: { minutes: number }[],
+	startsAt: Date | string,
+	timeZone: string,
+): string {
+	const start = typeof startsAt === "string" ? new Date(startsAt) : startsAt;
+	const total = rows.reduce((sum, r) => sum + r.minutes, 0);
+	return formatClock(startMinutesInZone(start, timeZone) + total);
+}

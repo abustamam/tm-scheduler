@@ -603,6 +603,18 @@ function RowMarks({
 	);
 }
 
+/**
+ * Whether a row's holders are a LIST rather than a person.
+ *
+ * Two or more, never one: the break costs a line, and a line costs type size
+ * on a sheet `FitPage` scales (#585). Absent `holders` — every section, event
+ * and hand-off row, and every row built before the field existed — reads as
+ * false, so the layout is unchanged for everything but the case that needs it.
+ */
+function multiHolder(row: TimelineRow): boolean {
+	return (row.holders?.length ?? 0) > 1;
+}
+
 /** The narrative run-of-show (editorial / spacious): a colored-spine list.
  *  `timingColors` swaps the muted min–max range for the colored green·yellow·red
  *  trio (used by the one-page editorial layout).
@@ -719,12 +731,42 @@ function RunNarrative({
 								{lead.time}
 							</div>
 							<div style={{ flex: 1, fontSize: type.name, fontWeight: 700 }}>
-								{g.who}
-								<RowMarks
-									row={lead}
-									timingColors={timingColors}
-									size={lg ? 11 : 10}
-								/>
+								{/* A list of SEVERAL holders gets its own line; one stays
+								    inline. `who` is `Role · Name`, so a four-name list ran
+								    the timing marks off behind the last surname and wrapped
+								    them — and the marks are the one thing the Timer scans
+								    this column for. The names come off `holders` (#578's
+								    reasoning: data, not prose), because the count is what
+								    decides, and it is not recoverable from the joined
+								    string: a club's role names and the guest marker both
+								    contain the separators a parser would key on (#463).
+
+								    Only a list earns the break. One extra line on EVERY row
+								    is paid for in type size, since `FitPage` scales the
+								    whole sheet — #585 measured that trade at 6.470pt against
+								    6.799pt and rejected it. A contest sheet gains one line;
+								    an ordinary agenda gains none. */}
+								{/* `data-row-title` / `data-row-holders` are test hooks, the
+								    same convention as `data-row-time` above — nothing renders
+								    off them. They let the suite assert WHICH line the marks
+								    landed on, which is the whole content of this fix and is
+								    invisible to a text-only query. */}
+								<div data-row-title>
+									{multiHolder(lead) ? (lead.roleLabel ?? g.who) : g.who}
+									<RowMarks
+										row={lead}
+										timingColors={timingColors}
+										size={lg ? 11 : 10}
+									/>
+								</div>
+								{multiHolder(lead) ? (
+									<div
+										data-row-holders
+										style={{ fontWeight: 600, color: MUTED }}
+									>
+										{lead.holder}
+									</div>
+								) : null}
 							</div>
 						</div>
 						<div style={{ display: "flex", marginTop: 1 }}>

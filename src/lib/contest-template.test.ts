@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { withBeatIds } from "../test/template-beat-ids";
 import type { AgendaSlot } from "./agenda-runsheet";
 import { buildTemplateRows } from "./agenda-template-rows";
 import { CONTEST_TEMPLATE, CONTEST_TEMPLATE_KEY } from "./contest-template";
@@ -185,7 +186,11 @@ describe("contest template seed", () => {
 
 describe("contest template rendered", () => {
 	it("emits one row per contestant, not N squared", () => {
-		const rows = buildTemplateRows(CONTEST_TEMPLATE.beats, roles, slotsFor(4));
+		const rows = buildTemplateRows(
+			withBeatIds(CONTEST_TEMPLATE.beats),
+			roles,
+			slotsFor(4),
+		);
 		expect(rows.filter((r) => r.who.startsWith("Contest speech"))).toHaveLength(
 			4,
 		);
@@ -198,13 +203,25 @@ describe("contest template rendered", () => {
 		// 3 extra contestants x (1 speech row + 1 silence row). An exact delta,
 		// not `toBeGreaterThan` — the latter is true for both correct and
 		// quadratic output, which is what hid the original defect.
-		const three = buildTemplateRows(CONTEST_TEMPLATE.beats, roles, slotsFor(3));
-		const six = buildTemplateRows(CONTEST_TEMPLATE.beats, roles, slotsFor(6));
+		const three = buildTemplateRows(
+			withBeatIds(CONTEST_TEMPLATE.beats),
+			roles,
+			slotsFor(3),
+		);
+		const six = buildTemplateRows(
+			withBeatIds(CONTEST_TEMPLATE.beats),
+			roles,
+			slotsFor(6),
+		);
 		expect(six.length - three.length).toBe(6);
 	});
 
 	it("keeps every Contest Chair beat distinguishable by its label", () => {
-		const rows = buildTemplateRows(CONTEST_TEMPLATE.beats, roles, slotsFor(4));
+		const rows = buildTemplateRows(
+			withBeatIds(CONTEST_TEMPLATE.beats),
+			roles,
+			slotsFor(4),
+		);
 		const chairRows = rows.filter((r) => r.roleKey === "contest_chair");
 		expect(chairRows.length).toBeGreaterThan(3);
 		// Every one names a different activity, rather than repeating the role.
@@ -230,7 +247,11 @@ describe("contest template rendered", () => {
 		expect(counters?.defaultCount).toBe(2);
 		expect(timers?.defaultCount).toBe(2);
 
-		const rows = buildTemplateRows(CONTEST_TEMPLATE.beats, roles, slotsFor(4));
+		const rows = buildTemplateRows(
+			withBeatIds(CONTEST_TEMPLATE.beats),
+			roles,
+			slotsFor(4),
+		);
 		expect(rows.filter((r) => r.who.startsWith("Tallying"))).toHaveLength(1);
 		expect(rows.filter((r) => r.who.startsWith("Timers' report"))).toHaveLength(
 			1,
@@ -244,7 +265,11 @@ describe("contest template rendered", () => {
 	});
 
 	it("keeps the contest's own timer marks", () => {
-		const rows = buildTemplateRows(CONTEST_TEMPLATE.beats, roles, slotsFor(4));
+		const rows = buildTemplateRows(
+			withBeatIds(CONTEST_TEMPLATE.beats),
+			roles,
+			slotsFor(4),
+		);
 		const speech = rows.find((r) => r.who.startsWith("Contest speech"));
 		// Would be null (and minutes 7 by coincidence) if these went through
 		// expandRunSheet's speaker arm, which reads the SLOT's speech window.
@@ -253,7 +278,11 @@ describe("contest template rendered", () => {
 	});
 
 	it("prints one section band per segment", () => {
-		const rows = buildTemplateRows(CONTEST_TEMPLATE.beats, roles, slotsFor(4));
+		const rows = buildTemplateRows(
+			withBeatIds(CONTEST_TEMPLATE.beats),
+			roles,
+			slotsFor(4),
+		);
 		expect(rows.filter((r) => r.section)).toHaveLength(3);
 	});
 
@@ -265,10 +294,11 @@ describe("contest template rendered", () => {
 	 */
 	it("books a known clock that grows 8 minutes per contestant", () => {
 		const total = (n: number) =>
-			buildTemplateRows(CONTEST_TEMPLATE.beats, roles, slotsFor(n)).reduce(
-				(sum, r) => sum + r.minutes,
-				0,
-			);
+			buildTemplateRows(
+				withBeatIds(CONTEST_TEMPLATE.beats),
+				roles,
+				slotsFor(n),
+			).reduce((sum, r) => sum + r.minutes, 0);
 		expect(total(3)).toBe(84);
 		expect(total(4) - total(3)).toBe(8);
 		expect(CONTEST_TEMPLATE.defaultLengthMinutes).toBe(90);

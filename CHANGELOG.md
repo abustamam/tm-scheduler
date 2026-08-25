@@ -2,6 +2,36 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.25.1.0] - 2026-08-24
+
+### Fixed
+
+- **Undo on a deleted row no longer brings it back called "New item" — and no longer destroys it if you touch it.** Deleting a row and clicking Undo put the row back in the right place with the right length, then labelled it "New item" on screen. The row on the server was correct the whole time, so a reload showed the real name, but nobody reloads after an Undo that appeared to work. Worse was what happened next: click into that name field and tab out of it, without typing anything, and "New item" was saved over the row you had just recovered. One misclick plus one stray keystroke quietly destroyed a row, and the only sign was a name that looked like a placeholder. Undo now puts every field back on screen — name, note, length, role and all three timing marks — and reads them from the server rather than from what it hoped it wrote.
+- **"Make stretchy" saved, and then looked like it had done nothing.** Clicking it left the page exactly as it was: the row kept its editable minutes box, no Pin button appeared, every other row went on offering the button, and the footer still claimed the old shortfall. The setting had saved — only a reload showed it. A button that appears dead is a button you click again, which is how a fix ends up looking like a bug. Both it and Pin now update the page the moment the change lands.
+- **A row can no longer be left stranded when the page fails to refresh.** If the reload that follows one of those toggles failed, the row's buttons stayed switched off with nothing on screen explaining why, and no way to retry. The change itself had already saved by then, so the honest report is a stale page and a message, which is what it now does.
+
+## [1.25.0.0] - 2026-08-24
+
+### Added
+
+- **The agenda editor now tells you what your changes cost.** It could already change every duration on a meeting, and that is why nobody used it: you typed 6 in place of 10 and nothing on the page said what that did. It is now a table — start time, activity, who, minutes — with a running clock down the left and the arithmetic along the bottom: when the meeting ends, how long it runs, the length it is booked for, and how far over or under. The clock moves as you type, before you click away. Re-timing MCF's September contest by hand meant eight fields and a calculator; the same eight fields now show you the answer as you go.
+- **Every section carries its own total, which is the number that actually helps.** A contest reading "OPENING 25" tells you a quarter of the night runs before the first speech — the finding, rather than a restatement of the complaint. Speeches and closing carry theirs too, and the totals move with every edit.
+- **Repeated rows collapse instead of filling the screen.** A contest with four speakers used to mean eight near-identical rows pushing the closing section off the bottom. The first speaker stays expanded and editable; the rest fold into one line that still shows when they start and end, so nothing about the timing is hidden. Editing the first speaker's window changes all of them, which is what the contest rules require anyway, and the page says so rather than letting you discover it.
+- **A row whose length is not yours to set no longer pretends otherwise.** Table Topics stretches to fill whatever the rest of the agenda leaves, so its box was a control that accepted a number and threw it away. It now shows the length it will actually run, marked as stretching, with a Pin button if you want to fix it yourself. Any other row can be made the stretchy one, but only while none already is.
+- **Undo on a deleted row.** Deleting is still one click, with no dialog to dismiss — but a ten-second Undo brings the row back where it was, with its note, its minutes, its role and its timing marks. Losing a row you had just typed used to mean typing it again.
+
+### Fixed
+
+- **The editor and the printed agenda cannot disagree about when the meeting ends.** They now run the same three calculations rather than two that happen to match, so there is no version of this where the screen plans one evening and the room runs another. Checked at one, two and four speakers, because a repeat block is exactly where two separate calculations would drift apart.
+- **Changing a duration and then changing it back now saves.** Put a row from 5 to 9, think better of it and put it back to 5, and the second change was quietly dropped: the page showed 5 while the agenda that printed said 9, with nothing on either to tell you. Reverting a value you just changed is an ordinary thing to do, so this was easy to hit and impossible to notice.
+- **Nothing about the printed agenda changed.** The sheet, the projected deck and the PowerPoint export all read the same rows they did before, and the checks that lay a page out in a real browser confirm the print stayed put.
+
+### Fixed
+
+- **When several people share one agenda row, their names now get their own line.** A club running a contest can put every contestant on a single "Contest speeches" row instead of numbering them one to four — which is what you want when the speaking order is drawn by lot on the day and the agenda has no business claiming one in advance. Printed inline, four names pushed the green, yellow and red timing marks off behind the last surname and wrapped them onto a second line, which is exactly where the Timer is looking. The names now sit on their own line under the activity and the marks stay beside it. Only a row held by two or more people breaks this way; every ordinary row is unchanged, because a line added to every row is paid for in type size on a sheet that scales itself to fit.
+- **A job nobody has signed up for is now listed once, not once per vacancy.** Two unclaimed Ballot Counters printed "Tallying · — open — and — open —". It now reads "— open —" once. Where some of a job's slots are taken and some are not, the real names print followed by a single "— open —", so a half-staffed job still looks half-staffed. This does mean the run of show no longer shows you *how many* people are still needed — the Meeting Roles list above it does, since it names every slot separately.
+- **Nothing else user-facing.** Both fixes are matters of shape rather than logic, which is the kind of thing this project has historically been unable to see: the checks that read a page have no way to measure a real layout. The check that lays these sheets out in a real browser and measures the printed text size did cover this one, at twenty names on every row of a full-length agenda — well past anything a club will actually run.
+
 ## [1.24.0.0] - 2026-08-22
 
 ### Added

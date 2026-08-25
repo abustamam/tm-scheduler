@@ -26,6 +26,7 @@ import {
 	type AgendaSlot,
 	assigneeDisplay,
 	numbered,
+	OPEN_LABEL,
 	type TimingMarks,
 } from "./agenda-runsheet";
 import {
@@ -34,8 +35,18 @@ import {
 	MAX_TEMPLATE_LABEL_CHARS,
 } from "./meeting-template-limits";
 
-/** One stored row of `meeting_template_beats`. */
-export type TemplateBeatRow = {
+/**
+ * A beat's CONTENT, with no identity — what a seed authors and what gets
+ * inserted.
+ *
+ * Split from `TemplateBeatRow` because the two are genuinely different things
+ * and conflating them is a live hazard, not a tidiness point:
+ * `seed-global-templates.ts` inserts with `.values(seed.beats.map((b) => ({
+ * ...b, templateId: id })))`, spreading the whole object. Give a seed an `id`
+ * and it is written as the PRIMARY KEY — a uuid column, so a readable
+ * placeholder throws outright and a real uuid would collide across templates.
+ */
+export type TemplateBeatSeed = {
 	sortOrder: number;
 	kind: "section" | "role" | "event";
 	label: string;
@@ -49,11 +60,46 @@ export type TemplateBeatRow = {
 	markRed: number | null;
 };
 
+/**
+ * One STORED row of `meeting_template_beats` — a seed that has been inserted
+ * and read back, so it has an identity.
+ *
+ * The id is what lets `buildTemplateRowsWithSource` tell the editor which
+ * stored beat each emitted row came from. `AgendaRow` has no id of its own,
+ * and a repeat block emits several rows from one beat, so without this a table
+ * row has no way to address the beat an edit should write to.
+ */
+export type TemplateBeatRow = TemplateBeatSeed & { id: string };
+
 /** What this module needs from `meeting_template_roles`. */
 export type TemplateRoleRow = {
 	key: string;
 	name: string;
 	isSpeakerRole: boolean;
+};
+
+/**
+ * One emitted row plus the stored beat and repeat iteration it came from.
+ *
+ * The agenda editor needs this and cannot re-derive it. `AgendaRow` carries no
+ * id, so a table row has no way to address the beat an edit should write to;
+ * and re-running the block grouping inside a component would duplicate the
+ * very logic this module owns — the same second-derivation the editor's clock
+ * deliberately avoids by calling `resolveAgendaRows` rather than reimplementing
+ * it.
+ *
+ * `iteration` / `iterationCount` are what let the editor band a repeat block by
+ * ITERATION. Banding by beat is not possible: the expander emits a whole block
+ * per iteration, so a two-beat block over four contestants interleaves as
+ * speech, silence, speech, silence… and neither beat owns a contiguous run.
+ */
+export type SourcedAgendaRow = {
+	row: AgendaRow;
+	beatId: string;
+	/** 0 for a non-repeating beat; the slot index within the block otherwise. */
+	iteration: number;
+	/** 1 for a non-repeating beat; the block's slot count otherwise. */
+	iterationCount: number;
 };
 
 /**
@@ -87,6 +133,30 @@ function joinHolders(names: string[]): string {
 		style: "long",
 		type: "conjunction",
 	}).format(names);
+}
+
+/**
+ * At most ONE open placeholder in a holder list.
+ *
+ * `assigneeDisplay` answers an unclaimed slot with `OPEN_LABEL`, so a beat
+ * bound to two unclaimed Ballot Counters printed `Tallying · — open — and —
+ * open —` on a real sheet — prose that says nothing the single placeholder
+ * does not, in a list format built for distinct names.
+ *
+ * Collapsed rather than dropped, deliberately. A role nobody has signed up
+ * for must still appear (v1.24.0.0 fixed the opposite bug: such a row was
+ * vanishing from the printed agenda entirely, so nothing told the club the
+ * job was open). On a partly-claimed row `Ada and — open —` is the honest
+ * reading, and that is what this keeps.
+ */
+function collapseOpen(names: string[]): string[] {
+	let seenOpen = false;
+	return names.filter((n) => {
+		if (n !== OPEN_LABEL) return true;
+		if (seenOpen) return false;
+		seenOpen = true;
+		return true;
+	});
 }
 
 /**
@@ -157,9 +227,11 @@ function toRow(
 	// Number by the SLOT when the role really repeats, and label the assignee
 	// from the slot so a club that renamed the role sees its own word (#445).
 	const numberedLabel = numbered(label, index, total > 1);
-	const names = bound
-		.map((s) => assigneeDisplay(s))
-		.filter((n): n is string => n != null && n !== "");
+	const names = collapseOpen(
+		bound
+			.map((s) => assigneeDisplay(s))
+			.filter((n): n is string => n != null && n !== ""),
+	);
 	const holder = names.length > 0 ? joinHolders(names) : null;
 	const who = holder ? `${numberedLabel} · ${holder}` : numberedLabel;
 	// The halves unjoined (#463), same as the standard path. `holder` is null on a
@@ -168,6 +240,10 @@ function toRow(
 		who,
 		roleLabel: numberedLabel,
 		holder,
+		// And the halves of `holder` itself — see `AgendaRow.holders`. Omitted
+		// rather than empty when nobody holds the row, so "one holder" and
+		// "nobody" stay distinguishable at every consumer.
+		...(names.length > 0 ? { holders: names } : {}),
 		roleKey: role.key,
 		...base,
 	};
@@ -204,14 +280,14 @@ function toRow(
  * negligible per beat, but multiplied by every such beat a corrupted or
  * pre-cap row could produce, an uncapped join is real, not theoretical, cost.
  */
-export function buildTemplateRows(
+export function buildTemplateRowsWithSource(
 	beats: TemplateBeatRow[],
 	roles: TemplateRoleRow[],
 	slots: AgendaSlot[],
-): AgendaRow[] {
+): SourcedAgendaRow[] {
 	const rolesByKey = new Map(roles.map((r) => [r.key, r]));
 	const ordered = [...beats].sort((a, b) => a.sortOrder - b.sortOrder);
-	const out: AgendaRow[] = [];
+	const out: SourcedAgendaRow[] = [];
 
 	let i = 0;
 	while (i < ordered.length) {
@@ -230,10 +306,24 @@ export function buildTemplateRows(
 					MAX_ROLE_REPEAT_SLOTS,
 				);
 				const emitted = toRow(row, rolesByKey, owned, 0, 0);
-				if (emitted) out.push(emitted);
+				if (emitted) {
+					out.push({
+						row: emitted,
+						beatId: row.id,
+						iteration: 0,
+						iterationCount: 1,
+					});
+				}
 			} else {
 				const emitted = toRow(row, rolesByKey, [], 0, 0);
-				if (emitted) out.push(emitted);
+				if (emitted) {
+					out.push({
+						row: emitted,
+						beatId: row.id,
+						iteration: 0,
+						iterationCount: 1,
+					});
+				}
 			}
 			i += 1;
 			continue;
@@ -259,10 +349,28 @@ export function buildTemplateRows(
 				// the block (a minute of silence) own no slot and repeat as-is.
 				const bound = blockRow.roleKey === repeatKey ? [s] : [];
 				const emitted = toRow(blockRow, rolesByKey, bound, n, repeated.length);
-				if (emitted) out.push(emitted);
+				if (emitted) {
+					out.push({
+						row: emitted,
+						beatId: blockRow.id,
+						iteration: n,
+						iterationCount: repeated.length,
+					});
+				}
 			}
 		});
 	}
 
 	return out;
+}
+
+/** The rows alone — the name every renderer already imports. ONE
+ *  implementation, two views of it: a renderer wants rows, and the editor
+ *  wants to know which stored beat each row came from. */
+export function buildTemplateRows(
+	beats: TemplateBeatRow[],
+	roles: TemplateRoleRow[],
+	slots: AgendaSlot[],
+): AgendaRow[] {
+	return buildTemplateRowsWithSource(beats, roles, slots).map((e) => e.row);
 }

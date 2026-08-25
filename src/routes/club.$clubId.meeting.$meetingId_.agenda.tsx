@@ -93,12 +93,22 @@ function AgendaEditorRoute() {
 			<AgendaEditor
 				draft={draft}
 				onAddRow={async (afterRowId, kind) => {
-					await addAgendaRowFn({ data: { meetingId, afterRowId, kind } });
+					// The created row is RETURNED, not discarded: undo restores a
+					// deleted row by adding one and patching its fields onto it, and
+					// without the new id that needs a re-read to find.
+					const created = await addAgendaRowFn({
+						data: { meetingId, afterRowId, kind },
+					});
 					await refresh();
+					return created;
 				}}
 				onUpdateRow={async (rowId, patch) => {
+					// NO refresh. A pure edit's server answer is the value just sent, so
+					// re-fetching the route to learn it is waste — and re-timing ten rows
+					// would mean ten full route reloads, which is the cost this redesign
+					// exists to remove. The editor holds the typed value locally and
+					// `reseed()` restores the server's on a rejection.
 					await updateAgendaRowFn({ data: { meetingId, rowId, patch } });
-					await refresh();
 				}}
 				onRemoveRow={async (rowId) => {
 					await removeAgendaRowFn({ data: { meetingId, rowId } });
@@ -108,6 +118,10 @@ function AgendaEditorRoute() {
 					await moveAgendaRowFn({ data: { meetingId, rowId, direction } });
 					await refresh();
 				}}
+				// Undo restores a deleted row with an add THEN an update, and only
+				// the add invalidates. The editor calls this once the fields are
+				// back on the server, so the row stops reading "New item".
+				onRefresh={refresh}
 				onAddRole={async (role) => {
 					await addAgendaRoleFn({ data: { meetingId, ...role } });
 					await refresh();

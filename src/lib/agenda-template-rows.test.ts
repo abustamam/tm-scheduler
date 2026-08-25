@@ -3,10 +3,12 @@ import {
 	type AgendaSlot,
 	buildRunOfShow,
 	expandRunSheet,
+	OPEN_LABEL,
 	resolveAgendaRows,
 } from "./agenda-runsheet";
 import {
 	buildTemplateRows,
+	buildTemplateRowsWithSource,
 	type TemplateBeatRow,
 	type TemplateRoleRow,
 } from "./agenda-template-rows";
@@ -21,6 +23,10 @@ function beat(
 	over: Partial<TemplateBeatRow> & { sortOrder: number },
 ): TemplateBeatRow {
 	return {
+		// Derived from sortOrder so the ~30 pre-existing calls need no edit; an
+		// explicit `id` in `over` still wins, which is what the provenance tests
+		// below rely on.
+		id: `b${over.sortOrder}`,
 		kind: "event",
 		label: "Beat",
 		detail: null,
@@ -615,5 +621,239 @@ describe("resolveAgendaRows", () => {
 			slots: [],
 		});
 		expect(a).toEqual(b);
+	});
+});
+
+describe("a multi-holder row carries its names as DATA, not only as prose", () => {
+	const NAMES = [
+		"Faisal Ali",
+		"Rehanna Khan",
+		"Jagpal Singh",
+		"Riyaz Mohammed",
+	];
+	const SLOTS = NAMES.map((n, i) => slot("contestant", "Contestant", i, n));
+	/** A non-repeating role beat bound to four slots — what an officer gets by
+	 *  unticking "one row per person" on a contest speech beat, so the printed
+	 *  sheet stops asserting a speaking order that is drawn by lot on the day. */
+	const SPEECHES = beat({
+		sortOrder: 0,
+		kind: "role",
+		label: "Contest speeches",
+		detail: "Qualifying window 4:30-7:30.",
+		minutes: 32,
+		roleKey: "contestant",
+		markGreen: 5,
+		markYellow: 6,
+		markRed: 7,
+	});
+
+	it("exposes each holder separately as well as joined", () => {
+		const [row] = buildTemplateRows([SPEECHES], ROLES, SLOTS);
+		// The same reasoning as `AgendaRow.introduces` (#578): a joined string
+		// forces every layout to accept one presentation. The editorial layout
+		// needs to know there are FOUR to decide whether the list earns its own
+		// line, and it cannot recover that from prose without parsing names.
+		expect(row?.holders).toEqual(NAMES);
+		// The joined form stays — every existing consumer reads it, and the
+		// layouts that keep the list inline should not re-join it themselves.
+		// Comma-tolerant: the serial comma is ICU's call, not this module's.
+		expect(row?.holder).toMatch(
+			/^Faisal Ali, Rehanna Khan, Jagpal Singh,? and Riyaz Mohammed$/,
+		);
+		expect(row?.roleLabel).toBe("Contest speeches");
+	});
+
+	it("numbers nothing when the beat does not repeat", () => {
+		const [row] = buildTemplateRows([SPEECHES], ROLES, SLOTS);
+		// Four contestants, one row, no "1". `numbered()` is passed total 0 on
+		// this arm, so the label is the beat's own text — which is what lets a
+		// contest agenda print without claiming an order nobody has drawn yet.
+		expect(row?.roleLabel).not.toMatch(/\d/);
+	});
+
+	it("gives a single-holder row a one-element array, so the layout can tell", () => {
+		const [row] = buildTemplateRows(
+			[
+				beat({
+					sortOrder: 0,
+					kind: "role",
+					label: "Tallying",
+					roleKey: "ballot_counter",
+				}),
+			],
+			ROLES,
+			[slot("ballot_counter", "Ballot Counter", 0, "Muhammad Ali")],
+		);
+		// Length 1, not absent: "one holder" and "no holder" are different
+		// facts, and the line-break rule keys on the count.
+		expect(row?.holders).toEqual(["Muhammad Ali"]);
+	});
+
+	it("omits holders entirely on a row nobody holds", () => {
+		const [row] = buildTemplateRows(
+			[beat({ sortOrder: 0, label: "Two minutes of silence", minutes: 2 })],
+			ROLES,
+			[],
+		);
+		expect(row?.holders).toBeUndefined();
+	});
+
+	it("collapses repeated OPEN placeholders to one", () => {
+		const [row] = buildTemplateRows(
+			[
+				beat({
+					sortOrder: 0,
+					kind: "role",
+					label: "Tallying",
+					roleKey: "ballot_counter",
+				}),
+			],
+			ROLES,
+			[
+				slot("ballot_counter", "Ballot Counter", 0),
+				slot("ballot_counter", "Ballot Counter", 1),
+			],
+		);
+		// Two unclaimed counters printed `Tallying · — open — and — open —` on
+		// a real sheet (MCF, 2026-09-10). One placeholder carries the same
+		// meaning; the row still prints, because a job nobody has taken is
+		// precisely what the sheet exists to show (v1.24.0.0).
+		expect(row?.holder).toBe(OPEN_LABEL);
+		expect(row?.holders).toEqual([OPEN_LABEL]);
+	});
+
+	it("keeps ONE open placeholder beside the real names on a partly-claimed row", () => {
+		const [row] = buildTemplateRows(
+			[
+				beat({
+					sortOrder: 0,
+					kind: "role",
+					label: "Tallying",
+					roleKey: "ballot_counter",
+				}),
+			],
+			ROLES,
+			[
+				slot("ballot_counter", "Ballot Counter", 0, "Muhammad Ali"),
+				slot("ballot_counter", "Ballot Counter", 1),
+				slot("ballot_counter", "Ballot Counter", 2),
+			],
+		);
+		// Collapsed, not dropped: one counter is signed up and two are not, and
+		// "Muhammad Ali and — open —" says so. Dropping the placeholder would
+		// print a fully-staffed-looking row for a half-staffed job.
+		expect(row?.holders).toEqual(["Muhammad Ali", OPEN_LABEL]);
+	});
+});
+
+describe("buildTemplateRowsWithSource", () => {
+	it("tags each row with its beat and iteration, and interleaves a repeat block", () => {
+		const beats = [
+			beat({
+				id: "b-speech",
+				sortOrder: 0,
+				kind: "role",
+				label: "Contest speech",
+				minutes: 7,
+				roleKey: "contestant",
+				repeatsRoleKey: "contestant",
+			}),
+			beat({
+				id: "b-silence",
+				sortOrder: 1,
+				kind: "event",
+				label: "One minute of silence",
+				minutes: 1,
+				repeatsRoleKey: "contestant",
+			}),
+		];
+		const slots = [0, 1, 2].map((i) =>
+			slot("contestant", "Contestant", i, `Speaker ${i + 1}`),
+		);
+
+		const out = buildTemplateRowsWithSource(beats, ROLES, slots);
+
+		// Two beats × three contestants, INTERLEAVED: the expander emits a whole
+		// block per iteration, so the speech beat owns positions 0, 2 and 4.
+		// There is no contiguous run of its rows — which is exactly why the
+		// editor bands by ITERATION and not by beat.
+		expect(out.map((e) => e.beatId)).toEqual([
+			"b-speech",
+			"b-silence",
+			"b-speech",
+			"b-silence",
+			"b-speech",
+			"b-silence",
+		]);
+		expect(out.map((e) => e.iteration)).toEqual([0, 0, 1, 1, 2, 2]);
+		expect(out.every((e) => e.iterationCount === 3)).toBe(true);
+	});
+
+	it("reports iteration 0 of 1 for a non-repeating beat", () => {
+		const out = buildTemplateRowsWithSource(
+			[
+				beat({
+					id: "b-open",
+					sortOrder: 0,
+					label: "Call to order",
+					minutes: 5,
+				}),
+			],
+			ROLES,
+			[],
+		);
+		expect(out).toHaveLength(1);
+		expect(out[0]?.beatId).toBe("b-open");
+		expect(out[0]?.iteration).toBe(0);
+		expect(out[0]?.iterationCount).toBe(1);
+	});
+
+	it("tags a non-repeating ROLE beat, which names every holder on one row", () => {
+		const out = buildTemplateRowsWithSource(
+			[
+				beat({
+					id: "b-tally",
+					sortOrder: 0,
+					kind: "role",
+					label: "Tallying",
+					roleKey: "ballot_counter",
+				}),
+			],
+			ROLES,
+			[
+				slot("ballot_counter", "Ballot Counter", 0, "Ada"),
+				slot("ballot_counter", "Ballot Counter", 1, "Grace"),
+			],
+		);
+		// One row, two holders, iterationCount 1 — the editor must NOT band this,
+		// because it is one activity rather than a repeat.
+		expect(out).toHaveLength(1);
+		expect(out[0]?.iterationCount).toBe(1);
+		expect(out[0]?.row.holders).toEqual(["Ada", "Grace"]);
+	});
+
+	it("buildTemplateRows stays byte-identical to the sourced rows' .row", () => {
+		// The wrapper must be faithful. Every pre-existing test in this file
+		// asserts `buildTemplateRows`, so if this holds, they all still pin the
+		// same behaviour through the new implementation.
+		const beats = [
+			beat({ id: "b1", sortOrder: 0, kind: "section", label: "OPENING" }),
+			beat({
+				id: "b2",
+				sortOrder: 1,
+				kind: "role",
+				label: "Contest speech",
+				minutes: 7,
+				roleKey: "contestant",
+				repeatsRoleKey: "contestant",
+			}),
+		];
+		const slots = [
+			slot("contestant", "Contestant", 0, "Ada"),
+			slot("contestant", "Contestant", 1, "Grace"),
+		];
+		expect(buildTemplateRows(beats, ROLES, slots)).toEqual(
+			buildTemplateRowsWithSource(beats, ROLES, slots).map((e) => e.row),
+		);
 	});
 });

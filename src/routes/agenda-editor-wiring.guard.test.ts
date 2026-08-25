@@ -130,23 +130,83 @@ describe("agenda editor route wiring", () => {
 		);
 	});
 
-	it("re-fetches after every mutation via router.invalidate()", () => {
-		// Without this, a save appears to succeed (the server fn resolved) while
-		// the rendered rows silently keep showing the pre-edit state. All six
-		// handlers share one `refresh()` helper rather than repeating the
-		// invalidate call, so the guard checks that helper calls invalidate, AND
-		// that every handler passed to AgendaEditor actually calls it.
+	it("re-fetches after every STRUCTURAL mutation via router.invalidate()", () => {
+		// Without this, an add/remove/move appears to succeed (the server fn
+		// resolved) while the rendered rows silently keep showing the pre-edit
+		// state. These five assign ordering, ids and slot bindings the client
+		// cannot predict, so only the server knows the result.
 		expect(src, "refresh() must call router.invalidate()").toMatch(
 			/async function refresh\(\)\s*\{[\s\S]*?router\.invalidate\(\)/,
 		);
 
-		const editorBlock =
-			src.match(/<AgendaEditor[\s\S]*?\n\t\t\t\/>/)?.[0] ?? "";
-		const refreshCalls = editorBlock.match(/refresh\(\)/g) ?? [];
+		for (const handler of [
+			"onAddRow",
+			"onRemoveRow",
+			"onMoveRow",
+			"onAddRole",
+			"onRemoveRole",
+		]) {
+			const block =
+				src.match(
+					new RegExp(`${handler}=\\{[\\s\\S]*?\\n\\t\\t\\t\\t\\}\\}`),
+				)?.[0] ?? "";
+			expect(
+				block,
+				`${handler} must call refresh() — the server assigns what it returns`,
+			).toMatch(/refresh\(\)/);
+		}
+	});
+
+	it("hands the editor a refresh, so undo can re-read after restoring", () => {
+		// Undo restores a deleted row with TWO calls — `onAddRow` (structural,
+		// invalidates) then `onUpdateRow` (a pure edit, deliberately does not).
+		// Between them the row is the placeholder `addAgendaRow` inserts, so
+		// without a final re-read the officer is left looking at "New item" on a
+		// row the server already holds correctly. Wired here rather than asserted
+		// in the component test because the route is what owns invalidation, and
+		// it cannot be mounted in vitest.
+		expect(src, "onRefresh must be wired to refresh()").toMatch(
+			/onRefresh=\{refresh\}/,
+		);
+	});
+
+	it("does NOT re-fetch after a pure edit", () => {
+		// The half that is easy to undo by accident, and expensive: a pure edit's
+		// server answer IS the value just sent, so invalidating to learn it is
+		// waste — and re-timing ten rows would mean ten full route reloads, which
+		// is the cost the table redesign exists to remove. The editor holds the
+		// typed value locally; `reseed()` restores the server's on a rejection.
+		const block = src.match(/onUpdateRow=\{[\s\S]*?\n\t\t\t\t\}\}/)?.[0] ?? "";
+		expect(block.length, "no onUpdateRow handler found").toBeGreaterThan(0);
 		expect(
-			refreshCalls.length,
-			`expected each of the 6 mutation handlers (add/update/remove/move row, ` +
-				`add/remove role) to call refresh(), found ${refreshCalls.length} in: ${editorBlock}`,
-		).toBeGreaterThanOrEqual(6);
+			block,
+			`onUpdateRow must NOT call refresh(); found: ${block}`,
+		).not.toMatch(/refresh\(\)/);
+	});
+
+	it("returns the created row from onAddRow, so undo can restore it", () => {
+		// Undo re-adds the deleted row and patches its fields onto the new one.
+		// Without the created row's id that needs a second read to find it, and
+		// the restore would race the invalidate above.
+		const block = src.match(/onAddRow=\{[\s\S]*?\n\t\t\t\t\}\}/)?.[0] ?? "";
+		expect(block.length, "no onAddRow handler found").toBeGreaterThan(0);
+		expect(block, "onAddRow must return the created row").toMatch(
+			/return created/,
+		);
+	});
+
+	it("fetches the draft exactly once, in the loader", () => {
+		// The #319 shape: a prop-fed component test cannot see a WRONG prop, and a
+		// second fetch would give the editor a draft that `router.invalidate()`
+		// does not refresh — so the clock would drift from the rows under it.
+		//
+		// COUNTED, not pattern-matched. An earlier draft of this test ANDed two
+		// regexes together, which evaluates to the second and asserts nothing at
+		// all about the first.
+		const fetches = [...src.matchAll(/getAgendaDraft\(/g)].length;
+		expect(
+			fetches,
+			"the loader must be the only place the draft is fetched",
+		).toBe(1);
 	});
 });

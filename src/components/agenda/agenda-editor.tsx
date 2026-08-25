@@ -1,13 +1,14 @@
 import {
 	ArrowDown,
 	ArrowUp,
+	ChevronDown,
+	ChevronRight,
 	Loader2,
 	Trash2,
 	TriangleAlert,
 } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import {
 	Dialog,
@@ -18,6 +19,21 @@ import {
 } from "#/components/ui/dialog";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
+import {
+	type BudgetEntry,
+	type DisplayBand,
+	foldRepeatTail,
+	groupIntoBands,
+	summarizeAgenda,
+} from "#/lib/agenda-budget";
+import {
+	applyFlex,
+	flexBannerMessage,
+	TABLE_TOPICS_MAX,
+	TABLE_TOPICS_MIN,
+} from "#/lib/agenda-runsheet";
+import { buildTemplateRowsWithSource } from "#/lib/agenda-template-rows";
+import { buildTimeline } from "#/lib/agenda-timing";
 import {
 	MAX_BEAT_MINUTES,
 	MAX_ROLE_REPEAT_SLOTS,
@@ -60,12 +76,6 @@ function isRoleAlreadyGone(err: unknown): boolean {
 	);
 }
 
-const KIND_LABELS: Record<AgendaDraftRow["kind"], string> = {
-	section: "Section",
-	role: "Role",
-	event: "Event",
-};
-
 const CATEGORY_LABELS: Record<AgendaDraftRole["category"], string> = {
 	leadership: "Leadership",
 	speaker: "Speaker",
@@ -81,6 +91,7 @@ export type RowPatch = Partial<
 		| "minutes"
 		| "roleKey"
 		| "repeatsRoleKey"
+		| "flex"
 		| "markGreen"
 		| "markYellow"
 		| "markRed"
@@ -96,13 +107,19 @@ export interface NewAgendaRole {
 
 export interface AgendaEditorProps {
 	draft: AgendaDraft;
+	/** Returns the CREATED row. The server fn already did; the prop type
+	 *  discarded it. Undo needs the new id to restore the deleted row's fields
+	 *  onto it. */
 	onAddRow: (
 		afterRowId: string | null,
 		kind: AgendaDraftRow["kind"],
-	) => Promise<unknown>;
+	) => Promise<AgendaDraftRow>;
 	onUpdateRow: (rowId: string, patch: RowPatch) => Promise<unknown>;
 	onRemoveRow: (rowId: string) => Promise<unknown>;
 	onMoveRow: (rowId: string, direction: "up" | "down") => Promise<unknown>;
+	/** Re-reads the route. Undo needs it: it restores a row with TWO calls, and
+	 *  only the first (`onAddRow`) invalidates — see `remove()`. */
+	onRefresh: () => Promise<unknown>;
 	onAddRole: (role: NewAgendaRole) => Promise<unknown>;
 	planRoleRemoval: (roleKey: string) => Promise<ReleasedHolder[]>;
 	onRemoveRole: (roleKey: string) => Promise<unknown>;
@@ -132,17 +149,152 @@ async function runAction(action: () => Promise<unknown>): Promise<boolean> {
  * the same shape `MeetingTemplateDialog` uses. The route wires the props to
  * the Task 6-8 server fns and calls `router.invalidate()` after each.
  */
+/**
+ * The editor's clock, computed the way the PRINT route computes it — the same
+ * three pure functions in the same order (`print.tsx:154-168`), never a second
+ * derivation.
+ *
+ * A parity test cannot see a defect present on both sides, so the fix is to
+ * have only ONE side: these three are the same functions the printed agenda,
+ * the meeting page and the projected deck all resolve through. The editor is a
+ * fourth caller, not a second implementation.
+ *
+ * Runs against `localRows` rather than `draft.rows` so the clock moves as the
+ * officer types, before any save. That is the whole feature — the previous
+ * editor could change a duration and tell you nothing about what it did.
+ */
+function useAgendaModel(draft: AgendaDraft, localRows: AgendaDraftRow[]) {
+	return useMemo(() => {
+		// `AgendaDraftRow` and `TemplateBeatRow` are field-for-field identical
+		// (id, sortOrder, kind, label, detail, minutes, roleKey, repeatsRoleKey,
+		// flex, three marks), so this passes straight through with no mapping. If
+		// typecheck ever disagrees the two types have drifted — reconcile them
+		// rather than papering over it with a spread.
+		const sourced = buildTemplateRowsWithSource(
+			localRows,
+			draft.roles,
+			draft.slots,
+		);
+		const flexed = applyFlex(
+			sourced.map((e) => e.row),
+			draft.lengthMinutes,
+		);
+		const timed = buildTimeline(flexed.rows, draft.scheduledAt, draft.timeZone);
+		const entries: BudgetEntry[] = timed.map((row, i) => ({
+			row,
+			beatId: sourced[i]?.beatId ?? "",
+			iteration: sourced[i]?.iteration ?? 0,
+			iterationCount: sourced[i]?.iterationCount ?? 1,
+		}));
+		return {
+			entries,
+			bands: groupIntoBands(entries),
+			budget: summarizeAgenda(
+				entries,
+				draft.lengthMinutes,
+				draft.scheduledAt,
+				draft.timeZone,
+			),
+			// Reused, never re-written: the print preview shows this same sentence
+			// for this same meeting, and two surfaces contradicting each other
+			// about whether an agenda runs long is worse than neither speaking.
+			advice: flexBannerMessage(flexed),
+		};
+	}, [draft, localRows]);
+}
+
+/** `+2` / `85 under` / `on time` — the delta as a phrase. Never suppressed
+ *  inside the ±2 deadband: `applyFlex`'s `status` collapses to "exact" there,
+ *  which is right for a banner and wrong for a readout (D5). */
+function deltaPhrase(deltaMinutes: number): string {
+	if (deltaMinutes === 0) return "on time";
+	return deltaMinutes > 0 ? `${deltaMinutes} over` : `${-deltaMinutes} under`;
+}
+
 export function AgendaEditor({
 	draft,
 	onAddRow,
 	onUpdateRow,
 	onRemoveRow,
 	onMoveRow,
+	onRefresh,
 	onAddRole,
 	planRoleRemoval,
 	onRemoveRole,
 }: AgendaEditorProps) {
-	const { editable, rows, roles } = draft;
+	const { editable, roles } = draft;
+
+	// The draft is the server's truth; this is what the officer is typing. Keyed
+	// on `draft.rows` identity so a structural mutation (add/remove/move, which
+	// DO invalidate the route) re-seeds, while a pure edit does not.
+	const [localRows, setLocalRows] = useState(draft.rows);
+	const seededFrom = useRef(draft.rows);
+	if (seededFrom.current !== draft.rows) {
+		seededFrom.current = draft.rows;
+		setLocalRows(draft.rows);
+	}
+
+	const { entries, bands, budget, advice } = useAgendaModel(draft, localRows);
+	// Iterations 2..N of a repeat block fold into ONE summary line — see
+	// `foldRepeatTail`. Six near-identical rows on a four-contestant contest
+	// say nothing the first two do not, and push the closing section below the
+	// fold.
+	const display = useMemo(() => foldRepeatTail(bands), [bands]);
+	// A row's position in the FULL expanded agenda, which is what the start-time
+	// test hooks and the move-button bounds are stated against. Folding changes
+	// what is drawn, never what the agenda is.
+	// Indexed rather than scanned. Both of these run once PER RENDERED ROW, and
+	// the model re-runs on every keystroke, so the linear forms were O(n²) per
+	// render: `MAX_TEMPLATE_BEATS` (200) beats over `MAX_ROLE_REPEAT_SLOTS` (20)
+	// slots is ~4000 rows, and 4000 × (200 + 4000) scans is ~17M operations for
+	// one character typed. Not measured as a freeze; removed because two Maps
+	// cost three lines and make the question moot.
+	const rowOrder = useMemo(
+		() => new Map(draft.rows.map((r, i) => [r.id, i])),
+		[draft.rows],
+	);
+	const rowById = useMemo(
+		() => new Map(draft.rows.map((r) => [r.id, r])),
+		[draft.rows],
+	);
+	const indexByEntry = useMemo(
+		() => new Map(entries.map((e, i) => [e, i])),
+		[entries],
+	);
+	const indexOf = (entry: BudgetEntry) => indexByEntry.get(entry) ?? -1;
+	// Read off the SERVER's rows, not the local copy: `flex` is only ever changed
+	// by a button, and `setFlex` re-reads the route after it lands — a pure edit
+	// alone would NOT, and this read is why that mattered.
+	const someRowStretches = draft.rows.some((r) => r.flex);
+	/** The stored row before this one in SORT order — undo's insertion point.
+	 *  Taken from `draft.rows` rather than the rendered entries, because a
+	 *  repeat block emits several entries from one stored row and only the
+	 *  stored order can say what a row goes back after. */
+	const previousRowIdOf = (rowId: string): string | null => {
+		const at = rowOrder.get(rowId) ?? -1;
+		return at > 0 ? (draft.rows[at - 1]?.id ?? null) : null;
+	};
+	/** When a folded block actually ENDS: the start of the row after it, or the
+	 *  agenda's end if it is the last thing on the sheet. The band itself only
+	 *  knows its last row's START (see `EditorBand.lastRowStartsAt`) — a span
+	 *  printed from that stops one row short and reads as a rounding error. */
+	const endOfBand = (band: Extract<DisplayBand, { kind: "repeatTail" }>) => {
+		const lastEntry = band.bands.at(-1)?.entries.at(-1);
+		if (!lastEntry) return band.startsAt;
+		return entries[entries.indexOf(lastEntry) + 1]?.row.time ?? budget.endsAt;
+	};
+
+	/** Patch one row locally so the clock moves now; the server call follows on
+	 *  blur. */
+	function patchLocal(rowId: string, patch: RowPatch) {
+		setLocalRows((prev) =>
+			prev.map((r) => (r.id === rowId ? { ...r, ...patch } : r)),
+		);
+	}
+
+	// Section subtotals are positional: the Nth section row on screen takes the
+	// Nth subtotal. `summarizeAgenda` walks the same rows in the same order.
+	let sectionSeen = -1;
 
 	return (
 		<div className="flex flex-col gap-6">
@@ -153,20 +305,116 @@ export function AgendaEditor({
 				</p>
 			) : null}
 
-			<div className="flex flex-col gap-3">
-				{rows.map((row, index) => (
-					<RowCard
-						key={row.id}
-						row={row}
-						roles={roles}
-						editable={editable}
-						isFirst={index === 0}
-						isLast={index === rows.length - 1}
-						onUpdateRow={onUpdateRow}
-						onRemoveRow={onRemoveRow}
-						onMoveRow={onMoveRow}
-					/>
-				))}
+			<div className="overflow-x-auto">
+				<table className="w-full border-collapse text-sm">
+					<thead>
+						<tr className="border-b text-left text-muted-foreground text-xs uppercase tracking-wide">
+							<th scope="col" className="w-16 py-2 font-medium">
+								Start
+							</th>
+							<th scope="col" className="py-2 font-medium">
+								Activity
+							</th>
+							<th scope="col" className="w-40 py-2 font-medium">
+								Who
+							</th>
+							<th scope="col" className="w-20 py-2 text-right font-medium">
+								Min
+							</th>
+							<th scope="col" className="w-10 py-2">
+								<span className="sr-only">Row actions</span>
+							</th>
+						</tr>
+					</thead>
+					<tbody>
+						{display.map((band) => {
+							if (band.kind === "repeatTail") {
+								return (
+									<RepeatTailRow
+										key={`tail-${band.bands[0]?.entries[0]?.beatId}-${band.fromIteration}`}
+										band={band}
+										indexOf={indexOf}
+										label={repeatLabel(band, draft)}
+										endsAt={endOfBand(band)}
+									/>
+								);
+							}
+							const bandEntries: BudgetEntry[] =
+								band.kind === "iteration" ? band.band.entries : [band.entry];
+							return bandEntries.map((entry) => {
+								// The SERVER's row, deliberately — not the locally patched one.
+								// Every `commit*` asks "did this change?" by comparing the
+								// field against `row`, and against a locally patched row that
+								// question is always No: the patch already moved it, so the
+								// save short-circuits and the officer's edit is never sent.
+								// The local copy exists to move the CLOCK (`entry`); the
+								// server copy is what an edit is measured against and what
+								// `reseed()` restores.
+								const row = rowById.get(entry.beatId);
+								if (!row) return null;
+								if (row.kind === "section") sectionSeen += 1;
+								const index = indexOf(entry);
+								return (
+									<AgendaTableRow
+										key={`${entry.beatId}-${entry.iteration}`}
+										index={index}
+										entry={entry}
+										row={row}
+										roles={roles}
+										editable={editable}
+										isFirst={index === 0}
+										isLast={index === entries.length - 1}
+										sectionMinutes={
+											row.kind === "section"
+												? (budget.sections[sectionSeen]?.minutes ?? 0)
+												: null
+										}
+										sectionIndex={row.kind === "section" ? sectionSeen : null}
+										someRowStretches={someRowStretches}
+										previousRowId={previousRowIdOf(row.id)}
+										onPatchLocal={patchLocal}
+										onAddRow={onAddRow}
+										onUpdateRow={onUpdateRow}
+										onRemoveRow={onRemoveRow}
+										onMoveRow={onMoveRow}
+										onRefresh={onRefresh}
+									/>
+								);
+							});
+						})}
+					</tbody>
+					<tfoot>
+						<tr className="border-t-2">
+							<td colSpan={5} className="py-2" data-testid="agenda-budget">
+								<span className="font-medium">Ends {budget.endsAt}</span>
+								<span className="text-muted-foreground">
+									{" · "}
+									{budget.totalMinutes} min · slot {budget.slotMinutes} min ·{" "}
+								</span>
+								<span
+									className={
+										budget.deltaMinutes > 0
+											? "font-medium text-destructive"
+											: ""
+									}
+								>
+									{deltaPhrase(budget.deltaMinutes)}
+								</span>
+							</td>
+						</tr>
+						{advice ? (
+							<tr>
+								<td
+									colSpan={5}
+									className="pb-2 text-muted-foreground text-xs"
+									data-testid="agenda-budget-advice"
+								>
+									{advice}
+								</td>
+							</tr>
+						) : null}
+					</tfoot>
+				</table>
 			</div>
 
 			{editable ? (
@@ -215,25 +463,66 @@ function parseIntOrNull(value: string): number | null {
 	return Number.isNaN(n) ? null : n;
 }
 
-function RowCard({
+/**
+ * One rendered agenda row.
+ *
+ * FOUR columns carry the scannable facts — start, activity, who, minutes — and
+ * the other six controls (note, role, per-holder, three timing marks, move,
+ * delete) live behind a per-row disclosure. A row has ten controls and four
+ * columns; widening the table until they all fit puts the running clock off the
+ * left edge on a laptop, which is the one thing this redesign exists to show.
+ *
+ * `entry.row` is the DERIVED row (timed, and post-`applyFlex`); `row` is the
+ * STORED beat an edit writes to. They are different objects on purpose: the
+ * clock and the holder names come off the derivation, every control writes the
+ * beat.
+ */
+function AgendaTableRow({
+	index,
+	entry,
 	row,
 	roles,
 	editable,
 	isFirst,
 	isLast,
+	sectionMinutes,
+	sectionIndex,
+	someRowStretches,
+	previousRowId,
+	onPatchLocal,
+	onRefresh,
+	onAddRow,
 	onUpdateRow,
 	onRemoveRow,
 	onMoveRow,
 }: {
+	index: number;
+	entry: BudgetEntry;
 	row: AgendaDraftRow;
 	roles: AgendaDraftRole[];
 	editable: boolean;
 	isFirst: boolean;
 	isLast: boolean;
+	/** Non-null only on a section row — that band's own total. */
+	sectionMinutes: number | null;
+	sectionIndex: number | null;
+	/** Whether ANY row in the agenda already stretches — see the Min cell. */
+	someRowStretches: boolean;
+	/** The stored row immediately before this one, or null when it is first —
+	 *  where undo puts it back. */
+	previousRowId: string | null;
+	onPatchLocal: (rowId: string, patch: RowPatch) => void;
+	onAddRow: (
+		afterRowId: string | null,
+		kind: AgendaDraftRow["kind"],
+	) => Promise<AgendaDraftRow>;
 	onUpdateRow: (rowId: string, patch: RowPatch) => Promise<unknown>;
 	onRemoveRow: (rowId: string) => Promise<unknown>;
 	onMoveRow: (rowId: string, direction: "up" | "down") => Promise<unknown>;
+	onRefresh: () => Promise<unknown>;
 }) {
+	const [open, setOpen] = useState(false);
+	const [pending, setPending] = useState(false);
 	const [label, setLabel] = useState(row.label);
 	const [detail, setDetail] = useState(row.detail ?? "");
 	const [minutes, setMinutes] = useState(String(row.minutes));
@@ -246,25 +535,51 @@ function RowCard({
 	const [markRed, setMarkRed] = useState(
 		row.markRed == null ? "" : String(row.markRed),
 	);
-	const [pending, setPending] = useState(false);
 
-	/** What every control below does when the server refuses the value: put the
-	 *  card back to what the server still holds. `max=` on an input stops the
-	 *  spinner, not a paste, and the server's checks (0..MAX_BEAT_MINUTES, the
-	 *  code-point caps, the declared role keys, the repeat-binding rule) are the
-	 *  real ones — so without this the field goes on displaying a value that was
-	 *  never saved, and looks saved.
+	/**
+	 * What the SERVER last confirmed for this row.
 	 *
-	 *  Only the four controls backed by LOCAL state need it, which is worth
-	 *  saying because the reasoning nearly went the other way. The route calls
-	 *  `router.invalidate()` only AFTER a successful mutation, so a rejection
-	 *  produces no re-render at all — which looks like it should strand the Role
-	 *  select and the per-holder checkbox too. It does not: those are bound
-	 *  straight to `row`, and React restores a controlled input's DOM value
-	 *  itself when an `onChange` sets no state. Verified by mutation rather than
-	 *  reasoned about — a test written for that case passed with the fix removed,
-	 *  so the fix was dropped instead of shipping a check that cannot fail. */
-	function reseed() {
+	 * Not `row`. `row` is the loader's copy, and the route deliberately stops
+	 * invalidating after a pure edit — so the moment one save lands, `row` is
+	 * stale for the rest of the session.
+	 *
+	 * Every `commit*` below asks "did this change?" before sending. Ask that
+	 * against a stale `row` and REVERTING a field silently does nothing: type 5
+	 * -> 9 (server now 9, `row` still 5), then 9 -> 5 and the comparison says
+	 * "same as 5, skip" while the server keeps 9. The editor then shows one
+	 * duration and the printed agenda another, with nothing on either to say so.
+	 * Putting a value back after changing your mind is an ordinary edit, so that
+	 * is not an exotic path.
+	 *
+	 * Re-seeded when `row` itself changes identity, which is a STRUCTURAL
+	 * mutation — those still invalidate, so the loader is authoritative again.
+	 *
+	 * That rests on `Route.useLoaderData()` handing back a STABLE reference
+	 * between renders, which TanStack Router does. If it ever returned a fresh
+	 * object per render this would re-seed every render and quietly restore the
+	 * revert bug above. `localRows` shares the dependency, so the failure would
+	 * not be silent for long — the clock would stop moving as you type, which is
+	 * the first thing anyone touches — but do not swap either for a value
+	 * rebuilt on each render.
+	 */
+	const confirmed = useRef(row);
+	const confirmedFrom = useRef(row);
+	if (confirmedFrom.current !== row) {
+		confirmedFrom.current = row;
+		confirmed.current = row;
+		// The FIELDS follow the loader too, not just `confirmed`. They are seeded
+		// once at mount, so without this a structural refresh that changes a row's
+		// stored values leaves the inputs showing the old ones while `confirmed`
+		// holds the new — and the two disagreeing is worse than either being
+		// stale. Undo is the path that does it: the row is re-created as
+		// "New item", then patched back to its real label by a call that does not
+		// invalidate. The officer would see "New item", and blurring that field
+		// would compare it against the restored label, find them different, and
+		// SAVE the placeholder over the row they just undid.
+		//
+		// Safe against clobbering in-flight typing because `row` only changes
+		// identity on a structural mutation, every one of which is a button click
+		// — which blurs the focused field, committing it, first.
 		setLabel(row.label);
 		setDetail(row.detail ?? "");
 		setMinutes(String(row.minutes));
@@ -273,45 +588,112 @@ function RowCard({
 		setMarkRed(row.markRed == null ? "" : String(row.markRed));
 	}
 
+	/** Record what the server now holds, so the next comparison is against the
+	 *  truth rather than the loader's snapshot. */
+	function markConfirmed(patch: Partial<AgendaDraftRow>) {
+		confirmed.current = { ...confirmed.current, ...patch };
+	}
+
+	/** What every control does when the server refuses the value: put the field
+	 *  back to what the server still holds.
+	 *
+	 *  MORE load-bearing than it was under the card stack, not less. The route no
+	 *  longer invalidates after a pure edit, so a rejected save produces no
+	 *  re-render at all — without this the field goes on displaying a value that
+	 *  was never saved, and looks saved. The local model is reset too, or the
+	 *  clock would keep counting a duration the server rejected.
+	 *
+	 *  Restores from `confirmed`, not `row`: after an earlier save landed, the
+	 *  loader's value is one the server has not held since. */
+	function reseed() {
+		const c = confirmed.current;
+		setLabel(c.label);
+		setDetail(c.detail ?? "");
+		setMinutes(String(c.minutes));
+		setMarkGreen(c.markGreen == null ? "" : String(c.markGreen));
+		setMarkYellow(c.markYellow == null ? "" : String(c.markYellow));
+		setMarkRed(c.markRed == null ? "" : String(c.markRed));
+		onPatchLocal(row.id, {
+			label: c.label,
+			detail: c.detail,
+			minutes: c.minutes,
+			markGreen: c.markGreen,
+			markYellow: c.markYellow,
+			markRed: c.markRed,
+		});
+	}
+
 	async function commitLabel() {
-		if (label === row.label) return;
-		if (!(await runAction(() => onUpdateRow(row.id, { label })))) reseed();
+		if (label === confirmed.current.label) return;
+		if (await runAction(() => onUpdateRow(row.id, { label }))) {
+			markConfirmed({ label });
+		} else {
+			reseed();
+		}
 	}
 	async function commitDetail() {
 		const next = detail === "" ? null : detail;
-		if (next === row.detail) return;
-		if (!(await runAction(() => onUpdateRow(row.id, { detail: next }))))
+		if (next === confirmed.current.detail) return;
+		if (await runAction(() => onUpdateRow(row.id, { detail: next }))) {
+			markConfirmed({ detail: next });
+		} else {
 			reseed();
+		}
 	}
 	async function commitMinutes() {
 		const parsed = Number.parseInt(minutes, 10);
 		if (Number.isNaN(parsed)) {
-			setMinutes(String(row.minutes));
+			setMinutes(String(confirmed.current.minutes));
 			return;
 		}
-		if (parsed === row.minutes) return;
-		if (!(await runAction(() => onUpdateRow(row.id, { minutes: parsed }))))
+		if (parsed === confirmed.current.minutes) return;
+		if (await runAction(() => onUpdateRow(row.id, { minutes: parsed }))) {
+			markConfirmed({ minutes: parsed });
+		} else {
 			reseed();
+		}
 	}
 	async function commitMarks() {
 		const green = parseIntOrNull(markGreen);
 		const yellow = parseIntOrNull(markYellow);
 		const red = parseIntOrNull(markRed);
-		if (
-			green === row.markGreen &&
-			yellow === row.markYellow &&
-			red === row.markRed
-		) {
+		const c = confirmed.current;
+		if (green === c.markGreen && yellow === c.markYellow && red === c.markRed) {
 			return;
 		}
-		const ok = await runAction(() =>
-			onUpdateRow(row.id, {
-				markGreen: green,
-				markYellow: yellow,
-				markRed: red,
-			}),
-		);
-		if (!ok) reseed();
+		const patch = { markGreen: green, markYellow: yellow, markRed: red };
+		if (await runAction(() => onUpdateRow(row.id, patch))) {
+			markConfirmed(patch);
+		} else {
+			reseed();
+		}
+	}
+
+	/** Flip whether this row stretches, then RE-READ.
+	 *
+	 *  `flex` is not a typed value the client already knows the answer to: it
+	 *  changes what `applyFlex` derives for every flex row on the sheet, bounded
+	 *  by `TABLE_TOPICS_MIN`/`MAX`, and it changes whether every OTHER row still
+	 *  offers the button. Only the server can say the result, so the pure-edit
+	 *  "no refresh" rule does not apply — without this the toggle saves and the
+	 *  page does not move until an unprompted reload, which reads as a dead
+	 *  button. */
+	async function setFlex(flex: boolean) {
+		setPending(true);
+		try {
+			if (await runAction(() => onUpdateRow(row.id, { flex }))) {
+				markConfirmed({ flex });
+				// Wrapped, and the reset is in a `finally`: `router.invalidate()`
+				// rejects if the loader throws, and the call site is `void
+				// setFlex(...)`. Unwrapped that is an unhandled rejection AND a row
+				// whose buttons stay disabled until some unrelated re-render. The
+				// save already LANDED here, so a failed re-read is a stale page, not
+				// a lost edit — a toast is the honest report.
+				await runAction(() => onRefresh());
+			}
+		} finally {
+			setPending(false);
+		}
 	}
 
 	async function move(direction: "up" | "down") {
@@ -321,204 +703,604 @@ function RowCard({
 	}
 
 	async function remove() {
+		// Snapshot BEFORE the delete: once the row is gone the server cannot tell
+		// us what it held, and re-typing a label, its note, its minutes and three
+		// timing marks is the cost of one misclick on a dense table.
+		const snapshot = { ...row };
 		setPending(true);
-		await runAction(() => onRemoveRow(row.id));
+		const ok = await runAction(() => onRemoveRow(row.id));
 		setPending(false);
+		if (!ok) return;
+		toast("Row deleted", {
+			duration: 10_000,
+			action: {
+				label: "Undo",
+				onClick: () => {
+					void runAction(async () => {
+						// Re-inserted after its ORIGINAL predecessor, not appended: a
+						// row that comes back at the bottom of the agenda is not the
+						// same row. `addAgendaRow` returns the created row, so no
+						// re-read is needed to find it.
+						const created = await onAddRow(previousRowId, snapshot.kind);
+						await onUpdateRow(created.id, {
+							label: snapshot.label,
+							detail: snapshot.detail,
+							minutes: snapshot.minutes,
+							roleKey: snapshot.roleKey,
+							repeatsRoleKey: snapshot.repeatsRoleKey,
+							flex: snapshot.flex,
+							markGreen: snapshot.markGreen,
+							markYellow: snapshot.markYellow,
+							markRed: snapshot.markRed,
+						});
+						// The restore is TWO calls and only `onAddRow` invalidates, so
+						// without this the officer is left looking at the placeholder
+						// `addAgendaRow` inserts ("New item" / "NEW SECTION", 0 min)
+						// while the server already holds the row they undid. Every
+						// field reads wrong until an unprompted reload. Patching
+						// `localRows` instead would race the re-seed that `onAddRow`'s
+						// own invalidate schedules; re-reading is ordered by
+						// construction, and undo is rare enough to pay for one.
+						await onRefresh();
+					});
+				},
+			},
+		});
 	}
 
 	const isRoleRow = row.kind === "role";
 	const perHolder =
 		isRoleRow && row.roleKey != null && row.repeatsRoleKey === row.roleKey;
 
-	return (
-		<div className="flex flex-col gap-3 rounded-lg border p-3">
-			<div className="flex items-center justify-between gap-2">
-				<Badge variant={row.kind === "section" ? "secondary" : "outline"}>
-					{KIND_LABELS[row.kind]}
-				</Badge>
-				{editable ? (
-					<div className="flex items-center gap-1">
-						<Button
-							type="button"
-							variant="ghost"
-							size="sm"
-							disabled={isFirst || pending}
-							aria-label="Move up"
-							onClick={() => move("up")}
-						>
-							<ArrowUp className="size-4" aria-hidden="true" />
-						</Button>
-						<Button
-							type="button"
-							variant="ghost"
-							size="sm"
-							disabled={isLast || pending}
-							aria-label="Move down"
-							onClick={() => move("down")}
-						>
-							<ArrowDown className="size-4" aria-hidden="true" />
-						</Button>
-						<Button
-							type="button"
-							variant="ghost"
-							size="sm"
-							disabled={pending}
-							aria-label="Remove row"
-							onClick={remove}
-						>
-							<Trash2 className="size-4" aria-hidden="true" />
-						</Button>
-					</div>
+	// A section is a band, not an activity: it spans the table and carries its
+	// own subtotal, which is the number that says WHERE an hour went.
+	if (row.kind === "section") {
+		return (
+			<>
+				<tr className="border-b bg-muted/40">
+					<td
+						className="py-2 font-medium text-muted-foreground text-xs"
+						data-testid={`agenda-row-start-${index}`}
+					>
+						{entry.row.time}
+					</td>
+					<td colSpan={2} className="py-2">
+						<Input
+							aria-label="Row label"
+							value={label}
+							disabled={!editable}
+							maxLength={MAX_TEMPLATE_LABEL_CHARS}
+							className="h-7 border-0 bg-transparent px-0 font-semibold uppercase tracking-wide shadow-none focus-visible:bg-background focus-visible:px-2"
+							onChange={(e) => {
+								setLabel(e.target.value);
+								onPatchLocal(row.id, { label: e.target.value });
+							}}
+							onBlur={() => void commitLabel()}
+						/>
+					</td>
+					<td
+						className="py-2 text-right font-semibold tabular-nums"
+						data-testid={`agenda-section-total-${sectionIndex ?? 0}`}
+					>
+						{sectionMinutes ?? 0}
+					</td>
+					<td className="py-2 text-right">
+						<RowActions
+							open={open}
+							setOpen={setOpen}
+							editable={editable}
+							pending={pending}
+							isFirst={isFirst}
+							isLast={isLast}
+							move={move}
+							remove={remove}
+						/>
+					</td>
+				</tr>
+				{open ? (
+					<RowDetail
+						row={row}
+						roles={roles}
+						editable={editable}
+						perHolder={perHolder}
+						isRoleRow={isRoleRow}
+						detail={detail}
+						setDetail={setDetail}
+						commitDetail={commitDetail}
+						markGreen={markGreen}
+						setMarkGreen={setMarkGreen}
+						markYellow={markYellow}
+						setMarkYellow={setMarkYellow}
+						markRed={markRed}
+						setMarkRed={setMarkRed}
+						commitMarks={commitMarks}
+						onUpdateRow={onUpdateRow}
+					/>
 				) : null}
-			</div>
+			</>
+		);
+	}
 
-			<div className="grid gap-3 sm:grid-cols-2">
-				<div className="flex flex-col gap-1">
-					<Label htmlFor={`${row.id}-label`}>Label</Label>
+	return (
+		<>
+			<tr className="border-b">
+				<td
+					className="py-1.5 text-muted-foreground text-xs tabular-nums"
+					data-testid={`agenda-row-start-${index}`}
+				>
+					{entry.row.time}
+				</td>
+				<td className="py-1.5">
 					<Input
-						id={`${row.id}-label`}
 						aria-label="Row label"
 						value={label}
 						disabled={!editable}
 						maxLength={MAX_TEMPLATE_LABEL_CHARS}
-						onChange={(e) => setLabel(e.target.value)}
+						className="h-7 border-0 bg-transparent px-0 shadow-none focus-visible:bg-background focus-visible:px-2"
+						onChange={(e) => {
+							setLabel(e.target.value);
+							onPatchLocal(row.id, { label: e.target.value });
+						}}
 						onBlur={() => void commitLabel()}
 					/>
-				</div>
-				<div className="flex flex-col gap-1">
-					<Label htmlFor={`${row.id}-detail`}>Note</Label>
-					<Input
-						id={`${row.id}-detail`}
-						aria-label="Row note"
-						value={detail}
-						disabled={!editable}
-						maxLength={MAX_TEMPLATE_DETAIL_CHARS}
-						onChange={(e) => setDetail(e.target.value)}
-						onBlur={() => void commitDetail()}
+				</td>
+				<td className="py-1.5 text-muted-foreground text-xs">
+					{/* The DERIVED holder, not a stored field: who holds a row comes
+					    from the meeting's slots, which the officer changes on the
+					    sign-up sheet rather than here. */}
+					{entry.row.holder ?? ""}
+				</td>
+				<td
+					className="py-1.5 text-right"
+					data-testid={`agenda-row-minutes-${index}`}
+				>
+					{row.flex ? (
+						// A row whose length is not the officer's to set. `applyFlex`
+						// OVERWRITES this row's minutes to absorb the meeting's slack, so
+						// rendering an input here would accept a value and discard it on
+						// the next render — a control that changes nothing is worse than
+						// no control. The number shown is the post-`applyFlex` one, which
+						// is what will actually print.
+						<span className="inline-flex items-center justify-end gap-1">
+							<span className="tabular-nums">{entry.row.minutes}</span>
+							<span className="text-muted-foreground text-xs">
+								stretches {TABLE_TOPICS_MIN}–{TABLE_TOPICS_MAX}
+							</span>
+							{editable ? (
+								<Button
+									type="button"
+									variant="ghost"
+									size="sm"
+									className="h-6 px-1.5 text-xs"
+									onClick={() => void setFlex(false)}
+								>
+									Pin
+								</Button>
+							) : null}
+						</span>
+					) : (
+						<span className="inline-flex items-center justify-end gap-1">
+							<Input
+								aria-label="Row minutes"
+								type="number"
+								min={0}
+								max={MAX_BEAT_MINUTES}
+								value={minutes}
+								disabled={!editable}
+								className="h-7 w-16 text-right tabular-nums"
+								onChange={(e) => {
+									setMinutes(e.target.value);
+									const n = Number.parseInt(e.target.value, 10);
+									// Only a parseable number moves the clock. A half-typed ""
+									// or "-" leaves the last good value standing rather than
+									// blanking the whole footer mid-keystroke.
+									if (!Number.isNaN(n)) onPatchLocal(row.id, { minutes: n });
+								}}
+								onBlur={() => void commitMinutes()}
+							/>
+							{editable && !someRowStretches ? (
+								// Offered only while NOTHING already stretches. `schema.ts`
+								// states at most one flex beat per template and does not
+								// enforce it; two would have `applyFlex` splitting the slack
+								// between them, which is legal in the database and meaningless
+								// on the page.
+								<Button
+									type="button"
+									variant="ghost"
+									size="sm"
+									className="h-6 px-1.5 text-xs"
+									onClick={() => void setFlex(true)}
+								>
+									Make stretchy
+								</Button>
+							) : null}
+						</span>
+					)}
+				</td>
+				<td className="py-1.5 text-right">
+					<RowActions
+						open={open}
+						setOpen={setOpen}
+						editable={editable}
+						pending={pending}
+						isFirst={isFirst}
+						isLast={isLast}
+						move={move}
+						remove={remove}
 					/>
-				</div>
-				<div className="flex flex-col gap-1">
-					<Label htmlFor={`${row.id}-minutes`}>Minutes</Label>
-					<Input
-						id={`${row.id}-minutes`}
-						aria-label="Row minutes"
-						type="number"
-						min={0}
-						max={MAX_BEAT_MINUTES}
-						value={minutes}
-						disabled={!editable}
-						onChange={(e) => setMinutes(e.target.value)}
-						onBlur={() => void commitMinutes()}
-					/>
-				</div>
-
-				{isRoleRow ? (
-					<div className="flex flex-col gap-1">
-						<Label htmlFor={`${row.id}-role`}>Role</Label>
-						<select
-							id={`${row.id}-role`}
-							aria-label="Row role"
-							className="h-9 rounded-md border border-input bg-transparent px-3 text-sm disabled:cursor-not-allowed disabled:opacity-50"
-							value={row.roleKey ?? ""}
-							disabled={!editable}
-							// Both keys move TOGETHER. `repeatsRoleKey` is the
-							// once/per-holder flag and a per-holder row must repeat over
-							// the exact role it names (D4) — patching `roleKey` alone is
-							// what let two clicks author a row that prints once per holder
-							// of the OLD role, numbered and naming nobody, while this
-							// editor's own label still read "One row". The server refuses
-							// that merge now, so sending one key alone would simply fail
-							// here.
-							onChange={(e) => {
-								const next = e.target.value === "" ? null : e.target.value;
-								void runAction(() =>
-									onUpdateRow(row.id, {
-										roleKey: next,
-										// "Nobody" clears both: with no role the checkbox
-										// below is hidden, so a leftover repeat key would
-										// have no UI path back out.
-										repeatsRoleKey: perHolder ? next : null,
-									}),
-								);
-							}}
-						>
-							<option value="">Nobody</option>
-							{roles.map((r) => (
-								<option key={r.key} value={r.key}>
-									{r.name}
-								</option>
-							))}
-						</select>
-					</div>
-				) : null}
-			</div>
-
-			{isRoleRow && row.roleKey != null ? (
-				<label className="flex items-center gap-2 text-sm">
-					<input
-						type="checkbox"
-						checked={perHolder}
-						disabled={!editable}
-						onChange={(e) => {
-							const checked = e.target.checked;
-							void runAction(() =>
-								onUpdateRow(row.id, {
-									// The row's OWN key, never another role's — that is the
-									// whole of the per-holder rule.
-									repeatsRoleKey: checked ? row.roleKey : null,
-								}),
-							);
-						}}
-					/>
-					{perHolder ? "One row per person holding this role" : "One row"}
-				</label>
+				</td>
+			</tr>
+			{open ? (
+				<RowDetail
+					row={row}
+					roles={roles}
+					editable={editable}
+					perHolder={perHolder}
+					isRoleRow={isRoleRow}
+					detail={detail}
+					setDetail={setDetail}
+					commitDetail={commitDetail}
+					markGreen={markGreen}
+					setMarkGreen={setMarkGreen}
+					markYellow={markYellow}
+					setMarkYellow={setMarkYellow}
+					markRed={markRed}
+					setMarkRed={setMarkRed}
+					commitMarks={commitMarks}
+					onUpdateRow={onUpdateRow}
+				/>
 			) : null}
+		</>
+	);
+}
 
-			<div className="grid grid-cols-3 gap-3">
-				<div className="flex flex-col gap-1">
-					<Label htmlFor={`${row.id}-green`}>Green at</Label>
-					<Input
-						id={`${row.id}-green`}
-						aria-label="Green mark minute"
-						type="number"
-						min={0}
-						max={MAX_BEAT_MINUTES}
-						value={markGreen}
-						disabled={!editable}
-						onChange={(e) => setMarkGreen(e.target.value)}
-						onBlur={() => void commitMarks()}
-					/>
-				</div>
-				<div className="flex flex-col gap-1">
-					<Label htmlFor={`${row.id}-yellow`}>Yellow at</Label>
-					<Input
-						id={`${row.id}-yellow`}
-						aria-label="Yellow mark minute"
-						type="number"
-						min={0}
-						max={MAX_BEAT_MINUTES}
-						value={markYellow}
-						disabled={!editable}
-						onChange={(e) => setMarkYellow(e.target.value)}
-						onBlur={() => void commitMarks()}
-					/>
-				</div>
-				<div className="flex flex-col gap-1">
-					<Label htmlFor={`${row.id}-red`}>Red at</Label>
-					<Input
-						id={`${row.id}-red`}
-						aria-label="Red mark minute"
-						type="number"
-						min={0}
-						max={MAX_BEAT_MINUTES}
-						value={markRed}
-						disabled={!editable}
-						onChange={(e) => setMarkRed(e.target.value)}
-						onBlur={() => void commitMarks()}
-					/>
-				</div>
-			</div>
+/**
+ * Name the thing a repeat block repeats over — "Contestant 2–4", not
+ * "Iteration 2–4".
+ *
+ * Reads the CLUB's own role name (#445): a club that renamed the role sees its
+ * own word, the same rule the printed sheet follows. Falls back to a neutral
+ * phrase rather than inventing one when the block's role cannot be resolved,
+ * which is only reachable on a corrupt template.
+ */
+function repeatLabel(
+	band: Extract<DisplayBand, { kind: "repeatTail" }>,
+	draft: AgendaDraft,
+): string {
+	const beatId = band.bands[0]?.entries[0]?.beatId;
+	const row = draft.rows.find((r) => r.id === beatId);
+	const role = draft.roles.find((x) => x.key === row?.repeatsRoleKey);
+	const noun = role?.name ?? "Repeat";
+	return `${noun} ${band.fromIteration}–${band.toIteration}`;
+}
+
+/**
+ * Iterations 2..N of one repeat block, folded into a single line.
+ *
+ * READ-ONLY, and that is the design rather than a shortcut: every iteration
+ * renders from the SAME stored beats, so an edit here would change all of them
+ * — which is right for a contest (every contestant gets the same window) and
+ * would be a lie to offer per-iteration. The editable copy is iteration 1,
+ * directly above.
+ *
+ * The line carries the clock SPAN, so collapsing costs no timing information:
+ * you can see contestant 4 starts at 7:34 without eight rows on screen.
+ * Expanding shows every row, still read-only.
+ */
+function RepeatTailRow({
+	band,
+	indexOf,
+	label,
+	endsAt,
+}: {
+	band: Extract<DisplayBand, { kind: "repeatTail" }>;
+	indexOf: (entry: BudgetEntry) => number;
+	label: string;
+	/** The true end, derived by the caller from the row after the band. */
+	endsAt: string;
+}) {
+	const [open, setOpen] = useState(false);
+	const rows = band.bands.flatMap((b) => b.entries);
+	return (
+		<>
+			<tr className="border-b bg-muted/10" data-testid="agenda-band-rest">
+				<td className="py-1.5 text-muted-foreground text-xs tabular-nums">
+					{band.startsAt}
+				</td>
+				<td className="py-1.5 text-muted-foreground text-xs">
+					<button
+						type="button"
+						className="inline-flex items-center gap-1 hover:underline"
+						aria-expanded={open}
+						onClick={() => setOpen(!open)}
+					>
+						{open ? (
+							<ChevronDown className="size-3.5" aria-hidden="true" />
+						) : (
+							<ChevronRight className="size-3.5" aria-hidden="true" />
+						)}
+						{open ? `Hide ${label}` : `Show ${label}`}
+					</button>
+					<span className="ml-2">
+						{band.startsAt}–{endsAt} · same as above
+					</span>
+				</td>
+				<td className="py-1.5" />
+				<td className="py-1.5 text-right text-muted-foreground tabular-nums">
+					{band.minutes}
+				</td>
+				<td className="py-1.5" />
+			</tr>
+			{open
+				? rows.map((entry) => (
+						<tr
+							key={`${entry.beatId}-${entry.iteration}`}
+							className="border-b bg-muted/10 text-muted-foreground"
+						>
+							<td
+								className="py-1 text-xs tabular-nums"
+								data-testid={`agenda-row-start-${indexOf(entry)}`}
+							>
+								{entry.row.time}
+							</td>
+							<td className="py-1 pl-4 text-xs">
+								{entry.row.roleLabel ?? entry.row.who}
+							</td>
+							<td className="py-1 text-xs">{entry.row.holder ?? ""}</td>
+							<td className="py-1 text-right text-xs tabular-nums">
+								{entry.row.minutes}
+							</td>
+							<td className="py-1" />
+						</tr>
+					))
+				: null}
+		</>
+	);
+}
+
+/** The disclosure toggle plus move/delete — inline on every row, because
+ *  reordering and trimming are what an officer does most and neither should
+ *  cost an expand. */
+function RowActions({
+	open,
+	setOpen,
+	editable,
+	pending,
+	isFirst,
+	isLast,
+	move,
+	remove,
+}: {
+	open: boolean;
+	setOpen: (next: boolean) => void;
+	editable: boolean;
+	pending: boolean;
+	isFirst: boolean;
+	isLast: boolean;
+	move: (direction: "up" | "down") => Promise<void>;
+	remove: () => Promise<void>;
+}) {
+	return (
+		<div className="flex items-center justify-end gap-0.5">
+			{editable ? (
+				<>
+					<Button
+						type="button"
+						variant="ghost"
+						size="sm"
+						className="h-7 w-7 p-0"
+						disabled={isFirst || pending}
+						aria-label="Move up"
+						onClick={() => move("up")}
+					>
+						<ArrowUp className="size-3.5" aria-hidden="true" />
+					</Button>
+					<Button
+						type="button"
+						variant="ghost"
+						size="sm"
+						className="h-7 w-7 p-0"
+						disabled={isLast || pending}
+						aria-label="Move down"
+						onClick={() => move("down")}
+					>
+						<ArrowDown className="size-3.5" aria-hidden="true" />
+					</Button>
+					<Button
+						type="button"
+						variant="ghost"
+						size="sm"
+						className="h-7 w-7 p-0"
+						disabled={pending}
+						aria-label="Remove row"
+						onClick={remove}
+					>
+						<Trash2 className="size-3.5" aria-hidden="true" />
+					</Button>
+				</>
+			) : null}
+			<Button
+				type="button"
+				variant="ghost"
+				size="sm"
+				className="h-7 w-7 p-0"
+				aria-label={open ? "Hide row details" : "Show row details"}
+				aria-expanded={open}
+				onClick={() => setOpen(!open)}
+			>
+				{open ? (
+					<ChevronDown className="size-3.5" aria-hidden="true" />
+				) : (
+					<ChevronRight className="size-3.5" aria-hidden="true" />
+				)}
+			</Button>
 		</div>
+	);
+}
+
+/** Everything a row carries that the four columns do not: the note, the role
+ *  binding, the per-holder flag and the timer card's three marks. */
+function RowDetail({
+	row,
+	roles,
+	editable,
+	perHolder,
+	isRoleRow,
+	detail,
+	setDetail,
+	commitDetail,
+	markGreen,
+	setMarkGreen,
+	markYellow,
+	setMarkYellow,
+	markRed,
+	setMarkRed,
+	commitMarks,
+	onUpdateRow,
+}: {
+	row: AgendaDraftRow;
+	roles: AgendaDraftRole[];
+	editable: boolean;
+	perHolder: boolean;
+	isRoleRow: boolean;
+	detail: string;
+	setDetail: (next: string) => void;
+	commitDetail: () => Promise<void>;
+	markGreen: string;
+	setMarkGreen: (next: string) => void;
+	markYellow: string;
+	setMarkYellow: (next: string) => void;
+	markRed: string;
+	setMarkRed: (next: string) => void;
+	commitMarks: () => Promise<void>;
+	onUpdateRow: (rowId: string, patch: RowPatch) => Promise<unknown>;
+}) {
+	return (
+		<tr className="border-b bg-muted/20">
+			<td />
+			<td colSpan={4} className="py-3 pr-2">
+				<div className="flex flex-col gap-3">
+					<div className="flex flex-col gap-1">
+						<Label htmlFor={`${row.id}-detail`}>Note</Label>
+						<Input
+							id={`${row.id}-detail`}
+							aria-label="Row note"
+							value={detail}
+							disabled={!editable}
+							maxLength={MAX_TEMPLATE_DETAIL_CHARS}
+							onChange={(e) => setDetail(e.target.value)}
+							onBlur={() => void commitDetail()}
+						/>
+					</div>
+
+					{isRoleRow ? (
+						<div className="flex flex-col gap-1">
+							<Label htmlFor={`${row.id}-role`}>Role</Label>
+							<select
+								id={`${row.id}-role`}
+								aria-label="Row role"
+								className="h-9 rounded-md border border-input bg-transparent px-3 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+								value={row.roleKey ?? ""}
+								disabled={!editable}
+								// Both keys move TOGETHER. `repeatsRoleKey` is the
+								// once/per-holder flag and a per-holder row must repeat over
+								// the exact role it names (D4) — patching `roleKey` alone is
+								// what let two clicks author a row that prints once per holder
+								// of the OLD role, numbered and naming nobody, while this
+								// editor's own label still read "One row". The server refuses
+								// that merge now, so sending one key alone would simply fail
+								// here.
+								onChange={(e) => {
+									const next = e.target.value === "" ? null : e.target.value;
+									void runAction(() =>
+										onUpdateRow(row.id, {
+											roleKey: next,
+											// "Nobody" clears both: with no role the checkbox
+											// below is hidden, so a leftover repeat key would
+											// have no UI path back out.
+											repeatsRoleKey: perHolder ? next : null,
+										}),
+									);
+								}}
+							>
+								<option value="">Nobody</option>
+								{roles.map((r) => (
+									<option key={r.key} value={r.key}>
+										{r.name}
+									</option>
+								))}
+							</select>
+						</div>
+					) : null}
+
+					{isRoleRow && row.roleKey != null ? (
+						<label className="flex items-center gap-2 text-sm">
+							<input
+								type="checkbox"
+								checked={perHolder}
+								disabled={!editable}
+								onChange={(e) => {
+									const checked = e.target.checked;
+									void runAction(() =>
+										onUpdateRow(row.id, {
+											// The row's OWN key, never another role's — that is the
+											// whole of the per-holder rule.
+											repeatsRoleKey: checked ? row.roleKey : null,
+										}),
+									);
+								}}
+							/>
+							{perHolder ? "One row per person holding this role" : "One row"}
+						</label>
+					) : null}
+
+					<div className="grid grid-cols-3 gap-3">
+						<div className="flex flex-col gap-1">
+							<Label htmlFor={`${row.id}-green`}>Green at</Label>
+							<Input
+								id={`${row.id}-green`}
+								aria-label="Green mark minute"
+								type="number"
+								min={0}
+								max={MAX_BEAT_MINUTES}
+								value={markGreen}
+								disabled={!editable}
+								onChange={(e) => setMarkGreen(e.target.value)}
+								onBlur={() => void commitMarks()}
+							/>
+						</div>
+						<div className="flex flex-col gap-1">
+							<Label htmlFor={`${row.id}-yellow`}>Yellow at</Label>
+							<Input
+								id={`${row.id}-yellow`}
+								aria-label="Yellow mark minute"
+								type="number"
+								min={0}
+								max={MAX_BEAT_MINUTES}
+								value={markYellow}
+								disabled={!editable}
+								onChange={(e) => setMarkYellow(e.target.value)}
+								onBlur={() => void commitMarks()}
+							/>
+						</div>
+						<div className="flex flex-col gap-1">
+							<Label htmlFor={`${row.id}-red`}>Red at</Label>
+							<Input
+								id={`${row.id}-red`}
+								aria-label="Red mark minute"
+								type="number"
+								min={0}
+								max={MAX_BEAT_MINUTES}
+								value={markRed}
+								disabled={!editable}
+								onChange={(e) => setMarkRed(e.target.value)}
+								onBlur={() => void commitMarks()}
+							/>
+						</div>
+					</div>
+				</div>
+			</td>
+		</tr>
 	);
 }
 
