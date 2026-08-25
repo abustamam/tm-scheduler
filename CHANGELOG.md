@@ -2,6 +2,13 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.25.5.0] - 2026-08-25
+
+### Fixed
+
+- **The ✕ on a pop-up box no longer scrolls away with the contents.** Boxes started scrolling their own contents in 1.25.2.0, which is what made the bottom of a tall one reachable at all — but the ✕ scrolled along with everything else, so scrolling down to reach a button at the bottom took the close button off the top of the screen. On a phone that left tapping the dimmed margin around the box as the only way out, and that margin is about sixteen pixels wide. Escape works on a computer; phones have no Escape key. The ✕ now sits still while the contents move: measured on a small phone screen, it stays exactly where it started through a 147-pixel scroll, where before it moved off screen. Nothing changes on a screen tall enough that the box never needed to scroll, and the bottom of a tall box is still reachable — both were checked.
+- **Not fixed yet, and unchanged from 1.25.2.0:** the on-screen keyboard still covers the lower part of a box without telling the page it got shorter. That is a different mechanism and it is still open.
+
 ## [1.25.4.0] - 2026-08-25
 
 ### Fixed
