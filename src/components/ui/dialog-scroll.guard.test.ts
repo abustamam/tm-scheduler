@@ -60,13 +60,77 @@ function dialogContentClasses(): string {
 	return src.slice(at, end === -1 ? undefined : end);
 }
 
-describe("DialogContent keeps a height ceiling and a scroller (#619)", () => {
-	it("declares a max-height", () => {
+/**
+ * The class string on the scrolling BODY — the inner element that carries the
+ * scroller since #627 split it off the shell.
+ *
+ * Matched by `data-slot="dialog-body"` rather than by position, so reordering
+ * the shell's children cannot silently point this at the close button.
+ */
+function dialogBodyClasses(): string {
+	const src = readSource(DIALOG);
+	const at = src.indexOf('data-slot="dialog-body"');
+	expect(
+		at,
+		"dialog.tsx no longer renders a dialog-body element — the shell/body split (#627) has collapsed, which puts the close button back inside the scroller",
+	).toBeGreaterThan(-1);
+	const end = src.indexOf(">", at);
+	return src.slice(at, end === -1 ? undefined : end);
+}
+
+describe("DialogContent keeps a height ceiling and a scroller (#619, #627)", () => {
+	it("the shell declares a max-height", () => {
 		expect(dialogContentClasses()).toMatch(/\bmax-h-\[/);
 	});
 
-	it("declares a vertical scroller", () => {
-		expect(dialogContentClasses()).toMatch(/\boverflow-y-auto\b/);
+	it("the body declares a vertical scroller", () => {
+		// Moved off the shell by #627: an absolutely-positioned close button inside
+		// a scroll container scrolls away with the content.
+		expect(dialogBodyClasses()).toMatch(/\boverflow-y-auto\b/);
+	});
+
+	it("the body can shrink, so the scroller actually scrolls", () => {
+		// `min-h-0` on a flex child is the whole difference between a box that
+		// scrolls and a box that grows and gets clipped. Without it this is #619
+		// again in a new shape, and the assertion above would still pass — which is
+		// exactly the failure `pinned-column-reachability.test.ts` was written for.
+		expect(dialogBodyClasses()).toMatch(/\bmin-h-0\b/);
+	});
+
+	it("the shell does not scroll, so the close button cannot scroll away", () => {
+		// The shell must NOT carry a vertical scroller. If it does, the close
+		// button — an absolute child of it — moves with the content again and #627
+		// is back. Asserted as an absence because that is the actual invariant.
+		const shell = dialogContentClasses();
+		expect(shell).not.toMatch(/\boverflow-y-(auto|scroll)\b/);
+		expect(shell).toMatch(/\boverflow-hidden\b/);
+	});
+
+	it("keeps the close button out of the scrolling body", () => {
+		// Structural, not a class check: the close button must be a SIBLING of the
+		// body, not inside it. Compares source offsets — the body element must
+		// close before the close button opens.
+		//
+		// Anchored inside the `DialogPrimitive.Content` render, because this file
+		// declares TWO elements carrying `data-slot="dialog-close"`: the standalone
+		// `DialogClose` re-export near the top, and the built-in button down here.
+		// A bare `indexOf` finds the re-export and compares the wrong pair, which
+		// is how the first version of this assertion failed on correct code. Same
+		// miscrediting-across-declarations shape as the fn-body splitter in
+		// `member-write-authz.guard.test.ts`.
+		const src = readSource(DIALOG);
+		const contentAt = src.indexOf("DialogPrimitive.Content");
+		expect(contentAt).toBeGreaterThan(-1);
+		const bodyAt = src.indexOf('data-slot="dialog-body"', contentAt);
+		const closeAt = src.indexOf('data-slot="dialog-close"', contentAt);
+		expect(bodyAt, "no dialog-body inside DialogContent").toBeGreaterThan(-1);
+		expect(closeAt, "no close button inside DialogContent").toBeGreaterThan(-1);
+		const bodyCloseTag = src.indexOf("</div>", bodyAt);
+		expect(bodyCloseTag).toBeGreaterThan(-1);
+		expect(
+			closeAt,
+			"the close button moved inside the scrolling body — it will scroll out of view (#627)",
+		).toBeGreaterThan(bodyCloseTag);
 	});
 
 	it("measures the ceiling in svh, not vh", () => {
