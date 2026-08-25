@@ -21,6 +21,7 @@ import { WhatsAppPhoneLink } from "#/components/whatsapp-phone-link";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { formatShortDate } from "#/lib/format";
+import { isStrandedConvertedGuest } from "#/lib/guest-convert";
 import { mailtoHref } from "#/lib/mailto";
 import { firstNameOf } from "#/lib/person-name";
 import { cn } from "#/lib/utils";
@@ -293,7 +294,16 @@ function GuestRow({
 	onMove: (guestId: string, stage: ManualGuestStage) => void;
 	onConvert: (guest: PipelineGuestRow) => void;
 }) {
-	const joined = guest.stage === "joined";
+	// STRANDED, not joined: converted once, then the membership was removed from
+	// the roster, which nulls `converted_membership_id` and leaves `stage` saying
+	// `joined` forever (#618). Every control here used to be gated on the stage
+	// alone, so the card rendered a green "Member" badge for a member who no
+	// longer existed and offered nothing at all — the stage buttons were hidden,
+	// Convert was hidden, and delete was hidden. Treating it as not-joined is what
+	// gives the row its controls back; the badge below says which case it is
+	// rather than silently pretending the stage column reads something it doesn't.
+	const stranded = isStrandedConvertedGuest(guest);
+	const joined = guest.stage === "joined" && !stranded;
 	const visits =
 		guest.visitCount === 0
 			? "No recorded visits"
@@ -375,6 +385,15 @@ function GuestRow({
 			</div>
 
 			<div className="flex shrink-0 flex-wrap items-center gap-1.5">
+				{stranded ? (
+					<span
+						data-slot="stranded-badge"
+						title="This guest was converted to a member, and that member has since been removed from the roster."
+						className="rounded-full bg-[var(--surface-strong)] px-2.5 py-1 text-xs font-bold text-[var(--sea-ink-soft)]"
+					>
+						Member removed
+					</span>
+				) : null}
 				{joined ? (
 					<span className="rounded-full bg-[var(--success)] px-2.5 py-1 text-xs font-bold text-[var(--success-foreground)]">
 						Member
@@ -458,7 +477,16 @@ function GuestEditDelete({
 	const [editOpen, setEditOpen] = useState(false);
 	const [deleteOpen, setDeleteOpen] = useState(false);
 	const [busy, setBusy] = useState(false);
-	const joined = guest.stage === "joined";
+	// STRANDED, not joined: converted once, then the membership was removed from
+	// the roster, which nulls `converted_membership_id` and leaves `stage` saying
+	// `joined` forever (#618). Every control here used to be gated on the stage
+	// alone, so the card rendered a green "Member" badge for a member who no
+	// longer existed and offered nothing at all — the stage buttons were hidden,
+	// Convert was hidden, and delete was hidden. Treating it as not-joined is what
+	// gives the row its controls back; the badge below says which case it is
+	// rather than silently pretending the stage column reads something it doesn't.
+	const stranded = isStrandedConvertedGuest(guest);
+	const joined = guest.stage === "joined" && !stranded;
 
 	async function onEditSubmit(e: React.FormEvent<HTMLFormElement>) {
 		e.preventDefault();
