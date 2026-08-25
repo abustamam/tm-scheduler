@@ -263,7 +263,8 @@ export function AgendaEditor({
 	);
 	const indexOf = (entry: BudgetEntry) => indexByEntry.get(entry) ?? -1;
 	// Read off the SERVER's rows, not the local copy: `flex` is only ever changed
-	// by a button that round-trips, so there is no local edit to reflect.
+	// by a button, and `setFlex` re-reads the route after it lands — a pure edit
+	// alone would NOT, and this read is why that mattered.
 	const someRowStretches = draft.rows.some((r) => r.flex);
 	/** The stored row before this one in SORT order — undo's insertion point.
 	 *  Taken from `draft.rows` rather than the rendered entries, because a
@@ -668,6 +669,24 @@ function AgendaTableRow({
 		}
 	}
 
+	/** Flip whether this row stretches, then RE-READ.
+	 *
+	 *  `flex` is not a typed value the client already knows the answer to: it
+	 *  changes what `applyFlex` derives for every flex row on the sheet, bounded
+	 *  by `TABLE_TOPICS_MIN`/`MAX`, and it changes whether every OTHER row still
+	 *  offers the button. Only the server can say the result, so the pure-edit
+	 *  "no refresh" rule does not apply — without this the toggle saves and the
+	 *  page does not move until an unprompted reload, which reads as a dead
+	 *  button. */
+	async function setFlex(flex: boolean) {
+		setPending(true);
+		if (await runAction(() => onUpdateRow(row.id, { flex }))) {
+			markConfirmed({ flex });
+			await onRefresh();
+		}
+		setPending(false);
+	}
+
 	async function move(direction: "up" | "down") {
 		setPending(true);
 		await runAction(() => onMoveRow(row.id, direction));
@@ -844,9 +863,7 @@ function AgendaTableRow({
 									variant="ghost"
 									size="sm"
 									className="h-6 px-1.5 text-xs"
-									onClick={() =>
-										void runAction(() => onUpdateRow(row.id, { flex: false }))
-									}
+									onClick={() => void setFlex(false)}
 								>
 									Pin
 								</Button>
@@ -883,9 +900,7 @@ function AgendaTableRow({
 									variant="ghost"
 									size="sm"
 									className="h-6 px-1.5 text-xs"
-									onClick={() =>
-										void runAction(() => onUpdateRow(row.id, { flex: true }))
-									}
+									onClick={() => void setFlex(true)}
 								>
 									Make stretchy
 								</Button>

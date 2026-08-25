@@ -705,6 +705,85 @@ describe("AgendaEditor stretchy row", () => {
 	});
 });
 
+describe("AgendaEditor stretchy toggle", () => {
+	it("RE-READS after making a row stretchy", async () => {
+		const user = userEvent.setup();
+		const onUpdateRow = vi.fn().mockResolvedValue(undefined);
+		const onRefresh = vi.fn().mockResolvedValue(undefined);
+		render(
+			<AgendaEditor
+				draft={draft}
+				{...noopHandlers}
+				onUpdateRow={onUpdateRow}
+				onRefresh={onRefresh}
+			/>,
+		);
+		await user.click(
+			screen.getAllByRole("button", {
+				name: /make stretchy/i,
+			})[0] as HTMLElement,
+		);
+		await waitFor(() =>
+			expect(onUpdateRow).toHaveBeenCalledWith("r2", { flex: true }),
+		);
+		// `flex` is not a value the client can predict the effect of: `applyFlex`
+		// recomputes every flex row's minutes against the booking, bounded by
+		// TABLE_TOPICS_MIN/MAX, and `someRowStretches` decides whether every OTHER
+		// row still offers the button. Saving without re-reading leaves the page
+		// exactly as it was, which reads as a dead button.
+		await waitFor(() => expect(onRefresh).toHaveBeenCalled());
+	});
+
+	it("RE-READS after pinning a stretchy row back", async () => {
+		const user = userEvent.setup();
+		const onUpdateRow = vi.fn().mockResolvedValue(undefined);
+		const onRefresh = vi.fn().mockResolvedValue(undefined);
+		const flexed: AgendaDraft = {
+			...draft,
+			rows: [
+				draft.rows[0] as AgendaDraft["rows"][number],
+				{ ...(draft.rows[1] as AgendaDraft["rows"][number]), flex: true },
+			],
+		};
+		render(
+			<AgendaEditor
+				draft={flexed}
+				{...noopHandlers}
+				onUpdateRow={onUpdateRow}
+				onRefresh={onRefresh}
+			/>,
+		);
+		await user.click(screen.getByRole("button", { name: /^pin$/i }));
+		await waitFor(() =>
+			expect(onUpdateRow).toHaveBeenCalledWith("r2", { flex: false }),
+		);
+		await waitFor(() => expect(onRefresh).toHaveBeenCalled());
+	});
+
+	it("does NOT re-read when the flex save is refused", async () => {
+		const user = userEvent.setup();
+		const onUpdateRow = vi.fn().mockRejectedValue(new Error("nope"));
+		const onRefresh = vi.fn().mockResolvedValue(undefined);
+		render(
+			<AgendaEditor
+				draft={draft}
+				{...noopHandlers}
+				onUpdateRow={onUpdateRow}
+				onRefresh={onRefresh}
+			/>,
+		);
+		await user.click(
+			screen.getAllByRole("button", {
+				name: /make stretchy/i,
+			})[0] as HTMLElement,
+		);
+		await waitFor(() => expect(onUpdateRow).toHaveBeenCalled());
+		// Nothing changed on the server, so a re-read would only cost a round trip
+		// and redraw the same page.
+		expect(onRefresh).not.toHaveBeenCalled();
+	});
+});
+
 describe("AgendaEditor delete undo", () => {
 	it("offers undo and restores EVERY field to the original position", async () => {
 		const user = userEvent.setup();
