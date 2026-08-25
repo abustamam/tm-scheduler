@@ -680,11 +680,20 @@ function AgendaTableRow({
 	 *  button. */
 	async function setFlex(flex: boolean) {
 		setPending(true);
-		if (await runAction(() => onUpdateRow(row.id, { flex }))) {
-			markConfirmed({ flex });
-			await onRefresh();
+		try {
+			if (await runAction(() => onUpdateRow(row.id, { flex }))) {
+				markConfirmed({ flex });
+				// Wrapped, and the reset is in a `finally`: `router.invalidate()`
+				// rejects if the loader throws, and the call site is `void
+				// setFlex(...)`. Unwrapped that is an unhandled rejection AND a row
+				// whose buttons stay disabled until some unrelated re-render. The
+				// save already LANDED here, so a failed re-read is a stale page, not
+				// a lost edit — a toast is the honest report.
+				await runAction(() => onRefresh());
+			}
+		} finally {
+			setPending(false);
 		}
-		setPending(false);
 	}
 
 	async function move(direction: "up" | "down") {

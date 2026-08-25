@@ -760,6 +760,35 @@ describe("AgendaEditor stretchy toggle", () => {
 		await waitFor(() => expect(onRefresh).toHaveBeenCalled());
 	});
 
+	it("leaves the row usable when the RE-READ fails after a landed save", async () => {
+		const user = userEvent.setup();
+		const onUpdateRow = vi.fn().mockResolvedValue(undefined);
+		// The save landed; only the re-read blew up (loader threw, network blip).
+		const onRefresh = vi.fn().mockRejectedValue(new Error("loader exploded"));
+		render(
+			<AgendaEditor
+				draft={draft}
+				{...noopHandlers}
+				onUpdateRow={onUpdateRow}
+				onRefresh={onRefresh}
+			/>,
+		);
+		const btn = screen.getAllByRole("button", {
+			name: /make stretchy/i,
+		})[0] as HTMLElement;
+		await user.click(btn);
+		await waitFor(() => expect(onRefresh).toHaveBeenCalled());
+
+		// `pending` disables the row's controls. Reset it in a `finally` or a
+		// failed re-read strands the row: the officer cannot retry, cannot move
+		// it, cannot delete it, with nothing on screen saying why.
+		await waitFor(() => {
+			for (const b of screen.getAllByLabelText("Remove row")) {
+				expect((b as HTMLButtonElement).disabled).toBe(false);
+			}
+		});
+	});
+
 	it("does NOT re-read when the flex save is refused", async () => {
 		const user = userEvent.setup();
 		const onUpdateRow = vi.fn().mockRejectedValue(new Error("nope"));
