@@ -91,15 +91,25 @@ describe("DialogContent keeps a height ceiling and a scroller (#619)", () => {
 });
 
 /**
- * Dialogs that may carry their own `max-h` / `overflow-y-auto`, with a reason.
+ * Dialogs that may override the primitive's height behaviour, with a reason.
  *
- * Empty on purpose. The primitive covers every dialog now, and a local override
- * is how this defect stayed open through two sightings: both Pathways dialogs
- * patched themselves with `max-h-[80vh] overflow-y-auto` and nobody fixed the
- * shared component, so every other dialog in the app kept the bug. A new entry
- * here should be a deliberate, explained exception, not a reflex.
+ * Keep this near-empty. A local override is how this defect stayed open through
+ * two sightings: both Pathways dialogs patched themselves with
+ * `max-h-[80vh] overflow-y-auto` and nobody fixed the shared component, so every
+ * other dialog in the app kept the bug. A new entry should be a deliberate,
+ * explained exception, not a reflex.
  */
-const REVIEWED_LOCAL_OVERRIDES: Record<string, string> = {};
+const REVIEWED_LOCAL_OVERRIDES: Record<string, string> = {
+	// `CommandDialog` passes `overflow-hidden p-0`, and `cn()` is tailwind-merge,
+	// so `overflow-hidden` RESOLVES OVER the primitive's `overflow-y-auto` — this
+	// dialog gets the ceiling without the scroller. Deliberate: cmdk owns its own
+	// scrolling through `CommandList`, and a dialog-level scroller nested outside
+	// it chains badly on iOS. Currently unreachable either way (zero call sites as
+	// of this change), but waived rather than left to the regex so that a future
+	// first call site is a decision someone made on purpose.
+	"src/components/ui/command.tsx":
+		"overflow-hidden is intentional; cmdk scrolls via CommandList, not the dialog",
+};
 
 function tsxFiles(dir: string, acc: string[] = []): string[] {
 	for (const entry of readdirSync(dir)) {
@@ -112,6 +122,59 @@ function tsxFiles(dir: string, acc: string[] = []): string[] {
 	return acc;
 }
 
+/**
+ * A call-site class that re-solves or DEFEATS the primitive's height behaviour.
+ *
+ * `overflow-hidden` earns its place beside the two obvious ones. `cn()` is
+ * tailwind-merge, so a caller's `overflow-hidden` resolves over the primitive's
+ * `overflow-y-auto` in the same property group and silently removes the
+ * scroller, leaving a ceiling that clips with no way to reach the clipped part.
+ * That is the ORIGINAL bug reintroduced one call site at a time, and a regex
+ * matching only `overflow-y-*` cannot see it — found by review, not by the
+ * first draft of this guard.
+ */
+const HEIGHT_OVERRIDE = /max-h-\[|overflow-y-(auto|scroll)|overflow-hidden/;
+
+/**
+ * Every `<DialogContent …>` opening tag in a file, brace-aware.
+ *
+ * A plain `/<DialogContent\b[^>]*>/` truncates at the FIRST `>`, and a JSX prop
+ * can legitimately contain one: `meeting-export-menu.tsx` passes
+ * `onCloseAutoFocus={(e) => {…}}`. There the `className` happens to be declared
+ * first, so the naive regex still sees it — but that is prop ORDER, not
+ * correctness. Swap the two and the sweep goes silently blind, which is the
+ * false-NEGATIVE direction and the one an offender list must not have.
+ *
+ * So scan for the `>` at brace depth zero, skipping quoted strings. A prop value
+ * containing `>` always sits inside `{}` or quotes in JSX, so depth-zero is the
+ * real tag close.
+ */
+function dialogContentTags(src: string): string[] {
+	const tags: string[] = [];
+	const OPEN = "<DialogContent";
+	for (let i = src.indexOf(OPEN); i !== -1; i = src.indexOf(OPEN, i + 1)) {
+		// Reject `<DialogContentSomethingElse` — require a JSX name boundary.
+		if (/[A-Za-z0-9_]/.test(src[i + OPEN.length] ?? "")) continue;
+		let depth = 0;
+		let quote: string | null = null;
+		for (let j = i + OPEN.length; j < src.length; j++) {
+			const c = src[j];
+			if (quote) {
+				if (c === quote && src[j - 1] !== "\\") quote = null;
+				continue;
+			}
+			if (c === '"' || c === "'" || c === "`") quote = c;
+			else if (c === "{") depth++;
+			else if (c === "}") depth--;
+			else if (c === ">" && depth === 0) {
+				tags.push(src.slice(i, j + 1));
+				break;
+			}
+		}
+	}
+	return tags;
+}
+
 describe("no dialog re-solves height locally (#619)", () => {
 	it("has no un-waived local max-h / overflow override on a DialogContent", () => {
 		// Reads RAW — offender list, see the header.
@@ -119,14 +182,41 @@ describe("no dialog re-solves height locally (#619)", () => {
 		for (const file of tsxFiles(resolve(ROOT, "src"))) {
 			if (file === DIALOG) continue;
 			const src = readFileSync(file, "utf8");
-			// Every `<DialogContent …>` opening tag in the file, with its props.
-			for (const m of src.matchAll(/<DialogContent\b[^>]*>/g)) {
-				if (!/max-h-\[|overflow-y-(auto|scroll)/.test(m[0])) continue;
+			for (const tag of dialogContentTags(src)) {
+				if (!HEIGHT_OVERRIDE.test(tag)) continue;
 				const rel = relative(ROOT, file);
 				if (rel in REVIEWED_LOCAL_OVERRIDES) continue;
-				offenders.push(`${rel}: ${m[0].slice(0, 90)}`);
+				offenders.push(`${rel}: ${tag.slice(0, 90)}`);
 			}
 		}
 		expect(offenders).toEqual([]);
+	});
+
+	// The sweep is only as good as its tag scanner, and the naive
+	// `[^>]*>` version passed the real tree by prop-order luck. These pin the
+	// scanner directly so the hardening cannot rot into decoration.
+	it("finds an override declared AFTER a prop containing '>'", () => {
+		const src = `
+			<DialogContent
+				onCloseAutoFocus={(e) => { e.preventDefault(); }}
+				className="max-h-[50vh] overflow-y-auto"
+			>
+		`;
+		const tags = dialogContentTags(src);
+		expect(tags).toHaveLength(1);
+		expect(HEIGHT_OVERRIDE.test(tags[0] ?? "")).toBe(true);
+	});
+
+	it("does not treat a '>' inside a quoted prop as the tag close", () => {
+		const src = `<DialogContent aria-label="a > b" className="overflow-hidden">`;
+		const tags = dialogContentTags(src);
+		expect(tags).toHaveLength(1);
+		expect(HEIGHT_OVERRIDE.test(tags[0] ?? "")).toBe(true);
+	});
+
+	it("does not match a different component with the same prefix", () => {
+		expect(
+			dialogContentTags('<DialogContentExtra className="max-h-[1px]">'),
+		).toEqual([]);
 	});
 });
