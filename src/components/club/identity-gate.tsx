@@ -119,7 +119,37 @@ export function IdentityGateProvider({
 						</DialogDescription>
 					</DialogHeader>
 					{open ? (
-						<PickNameForm clubUuid={clubUuid} onPicked={handlePicked} />
+						<PickNameForm
+							clubUuid={clubUuid}
+							onPicked={handlePicked}
+							// The club page is the surface with no other door, so it names
+							// both of them (#616). Until this change the only forward path
+							// for anyone not on the roster was an "I'm new — add me" box that
+							// wrote a real membership row with no session, which is how a
+							// tracked guest ended up in a club's roster.
+							notListedHint={
+								<>
+									<p className="font-medium text-foreground">
+										Don't see your name?
+									</p>
+									<p className="text-muted-foreground">
+										Visiting us today?{" "}
+										<a
+											href={`/club/${clubSlug}/guest-book`}
+											data-slot="guest-book-link"
+											className="font-medium text-primary hover:underline"
+										>
+											Sign the guest book
+										</a>{" "}
+										and we'll say hello.
+									</p>
+									<p className="text-muted-foreground">
+										Just joined the club? Ask an officer to add you to the
+										roster.
+									</p>
+								</>
+							}
+						/>
 					) : null}
 				</DialogContent>
 			</Dialog>

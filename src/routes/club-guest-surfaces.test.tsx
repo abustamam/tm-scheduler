@@ -44,7 +44,6 @@ vi.mock("#/server/role-definitions", () => ({ getPublicClubRoles: vi.fn() }));
 // set, not just what the loader itself calls.
 vi.mock("#/server/members", () => ({
 	listMembers: vi.fn(),
-	addMember: vi.fn(),
 }));
 vi.mock("#/server/meetings", () => ({ listMemberCommitments: vi.fn() }));
 vi.mock("#/server/slots", () => ({ releaseSlot: vi.fn(), claimSlot: vi.fn() }));
