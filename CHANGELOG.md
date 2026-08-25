@@ -2,6 +2,14 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.25.2.0] - 2026-08-25
+
+### Fixed
+
+- **On a short screen, the bottom of a pop-up box was not just off the page — it was unreachable.** Every dialog in the app is pinned to the middle of the screen, and a pinned box is not part of what the page scrolls. So when one grew taller than the screen, the top and bottom hung off both ends and no amount of scrolling brought them back. On the club page's "Who are you?" box, measured on a small phone, the entire "I'm new — add me" control sat below the edge with nothing anywhere on the page able to scroll to it: not below the fold, just gone. Dialogs now stop growing at the height of the screen and scroll their own contents, so whatever is at the bottom can be reached. Nothing changes on a tall screen — the box is the same size it always was and gains no scrollbar. Two dialogs in the Pathways screens had each patched this for themselves and nobody had fixed the shared piece, which is why it kept happening everywhere else; there is now a check that fails if the next dialog tries to solve it locally again.
+- **Known cost, on the same small screens:** once a dialog is scrolling, its **✕** scrolls up with the contents, so scrolling down to reach a control at the bottom takes the ✕ off screen with it. Pressing Escape still closes the box, and so does tapping the dimmed area around it. Reaching the content matters more than reaching the ✕, so this ships as it is and the ✕ is being fixed separately.
+- **Not fixed yet:** the on-screen keyboard. When the keyboard opens it covers the lower part of the screen without telling the page it got shorter, so a box can still be sitting behind it. That is a different mechanism from the one above and it is still open.
+
 ## [1.25.1.0] - 2026-08-24
 
 ### Fixed
