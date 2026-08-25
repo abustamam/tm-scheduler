@@ -2,6 +2,13 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.25.4.0] - 2026-08-25
+
+### Fixed
+
+- **Converting a guest who is already on the roster now stops and says so, instead of quietly making a second copy of them.** Convert matches a guest to an existing person by email, or by a phone number where the name also agrees — never by name alone, because two people really can share a name and merging them would be far worse than not merging them. The gap was a roster row with no email and no phone on file: nothing to match, so Convert made a fresh person and a fresh membership, and the club ended up with the same name twice in the roster, the sign-up grid and every picker, with that person's history split down the middle. Convert now checks the club's roster for the name first and refuses, telling you to merge on the Roster page if it is the same human. It still refuses to guess: a genuine namesake is your call, not the software's.
+- **A guest who was converted and then removed from the roster is no longer stuck forever.** Converting stamps the guest record as "joined"; removing that member from the roster later cleared the link but left the stamp, and every button on the guest's card was hidden behind it. The result was a card showing a green **Member** badge for someone who was not a member, with no way to change the stage, no way to convert again, and no way to delete — and the delete button's own error told you to "remove them from the roster instead", which is exactly what you had already done. Those cards now read **Member removed** and get their controls back.
+
 ## [1.25.3.0] - 2026-08-25
 
 ### Fixed
