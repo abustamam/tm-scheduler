@@ -389,15 +389,13 @@ const REVIEWED_UNGATED: Record<string, string> = {
  * recorded in TODOS.md rather than left implied.
  */
 const WRITE_GATES: { fn: string; file: string; gate: string }[] = [
-	// `applySelfAdd` reads `archived_at` inside its own `FOR UPDATE` lock rather
-	// than calling the assert, because a pre-check is check-then-act and this is
-	// the path that mints a `people` row plus a `members` row — so it names the
-	// shared message constant instead.
-	{
-		fn: "addMember",
-		file: "src/server/members-logic.ts",
-		gate: "CLUB_ARCHIVED_MESSAGE",
-	},
+	// `addMember` used to head this list. It is admin-gated since #616, so it is
+	// no longer a session-less write and the derived sweep below sees its
+	// `require*` calls directly. `applySelfAdd` still reads `archived_at` inside
+	// its own `FOR UPDATE` lock — a pre-check would be check-then-act on the path
+	// that mints a `people` row plus a `members` row — and
+	// `public-writers-archive-gate.integration.test.ts` still executes that seam,
+	// so the archive behaviour stays covered where it actually lives.
 	{
 		fn: "submitGuestBook",
 		file: "src/server/guest-pipeline-logic.ts",
@@ -552,7 +550,12 @@ describe("session-less writes carry the archive gate (#555)", () => {
 
 	// Vacuity checks: an empty table would pass every case above.
 	it("covers every write that was waived as a #544 follow-up", () => {
-		expect(WRITE_GATES).toHaveLength(8);
+		// Was 8. `addMember` came out when #616 made it admin-gated: it is no
+		// longer a session-less write, so a row here asserting where its
+		// ANONYMOUS archive gate lives would be describing something that no
+		// longer exists. The count is the vacuity guard, so it moves deliberately
+		// with the table rather than being loosened to `toBeGreaterThan`.
+		expect(WRITE_GATES).toHaveLength(7);
 	});
 
 	it("does not also waive a write it claims to gate", () => {
