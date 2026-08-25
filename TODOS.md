@@ -98,13 +98,23 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
 
 ## Agenda templates
 
-- **`scripts/resync-template-roles.ts` is specified but not written.** Materialization is
-  copy-once, so editing `src/lib/contest-template.ts` never reaches a club that has already run a
-  contest — the same contract `ROLE_TEMPLATE` has. The escape hatch should resolve a template by
-  key, diff each materialized `role_definitions` row against the seed, print `club → role.field:
-  current ⇒ seed`, and write nothing without `--apply`. Never touch a row whose key is absent
-  from the seed: a club may have added its own.
-  **Priority:** P3
+- **`scripts/resync-template-roles.ts` is specified but not written, and #622 makes it the only
+  recovery path from copy-once drift.** Materialization is copy-once, so editing
+  `src/lib/contest-template.ts` never reaches a club that has already run a contest — the same
+  contract `ROLE_TEMPLATE` has. The escape hatch should resolve a template by key, diff each
+  materialized `role_definitions` row against the seed, print `club → role.field: current ⇒ seed`,
+  and write nothing without `--apply`. Never touch a row whose key is absent from the seed: a club
+  may have added its own.
+  **Re-scoped P3 → P2 by plan-eng-review on 2026-08-25.** This entry was P3 while drift reached
+  only clubs that had run a contest. #622 extends copy-once materialization to the WHOLE agenda of
+  any club that edits an ordinary meeting, and the drift is no longer limited to role definitions —
+  it covers every beat. Measured: `agenda-runsheet.ts` took 27 commits in six months and **15 of
+  them changed beat content** (roughly one every 12 days), including "close on announcements →
+  guest comments → adjourn" and "the deck and the run sheet book the same minutes". An adopted club
+  receives none of them. #622's spec accepts that deliberately (R1) and makes the adopt action say
+  so out loud, which is defensible only while a recovery path exists — and this script is it. It is
+  writable today and would serve the existing contest case immediately, independently of #622.
+  **Priority:** P2
 
 - **`meeting_templates.meeting_id` is ON DELETE CASCADE, but the cascade cannot fire for any
   private copy a real conversion produced.** Every conversion materializes `role_definitions`

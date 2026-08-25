@@ -46,8 +46,10 @@ but some sit behind conditionals, so a rendered variant carries 4 or 5.
 
 Ordinary meetings become editable. Nothing is reusable yet.
 
-- **First edit materialises a private per-meeting template** from `RUN_OF_SHOW`, expanded
-  with the club's current role set and its GE variant (D3).
+- **First edit materialises a private per-meeting template** from
+  `buildRunOfShow({ geIntroducesFunctionaries })` — NOT the `RUN_OF_SHOW` const, which is
+  built with the variant hardcoded `false` (`agenda-runsheet.ts:1333`) — expanded with the
+  club's current role set (D3, R5).
 - **Five section bands** emitted by the materialiser (D2).
 - **The template path learns the token vocabulary** (D7).
 - **`meeting_template_beats.handoff`** (D8).
@@ -168,8 +170,10 @@ These two tables are the acceptance criteria for the materialiser. A test assert
 
 ### D3 — First edit forks privately; club-wide reuse is a separate act
 
-Opening an ordinary meeting's agenda and editing it materialises `RUN_OF_SHOW` into a
-**private per-meeting template**, exactly as editing a templated meeting already does.
+Opening an ordinary meeting's agenda and editing it materialises
+`buildRunOfShow({ geIntroducesFunctionaries })` — read from the club, never the
+`RUN_OF_SHOW` const — into a **private per-meeting template**, exactly as editing a
+templated meeting already does. See R5.
 
 This keeps the distinction that matters: *fix this Monday* is not *change how our club
 runs*. A one-off tweak for a visiting speaker must not silently rewrite every future
@@ -313,6 +317,142 @@ every value of CAP including one that reintroduces the problem.
 
 ---
 
+## Review outcomes (plan-eng-review, 2026-08-25)
+
+Nine findings, all resolved with the maintainer. R-numbers are referenced from the
+decisions above where they change them.
+
+### R1 — Adoption unsubscribes a club from agenda improvements. ACCEPTED, with a notice.
+
+Materialisation is copy-once. `agenda-runsheet.ts` took 27 commits in six months and **15
+changed beat content** — roughly one every 12 days, including "close on announcements →
+guest comments → adjourn" and "the deck and the run sheet book the same minutes". None of
+those would reach an adopted club.
+
+Accepted deliberately, because a thing that silently rewrites an adopted agenda is the
+invisible authoring D1 rejects. **The adopt action must say so**: "from now on this agenda
+is yours — improvements we ship to the standard agenda will not reach it." The recovery
+path stays TODOS:101, re-scoped to P2 as part of this review.
+
+### R2 — The recurrence pruner's stated reason goes stale. FIX THE COMMENT.
+
+`recurrence-rule-logic.ts:127–133` excludes meetings with a template, justified in-comment
+as "somebody deliberately reshaped it into a contest". After D3 that clause catches any
+meeting whose agenda was edited at all.
+
+Behaviour stays: an edited agenda IS content, and the predicate already blocks pruning on
+any content (`!m.theme`, `!m.wordOfTheDay`, a claimed slot). The **comment must be
+corrected in 622a** — it will otherwise assert something false on the exact clause a
+future reader would trust. Same shape as `someRowStretches`, which carried "only ever
+changed by a button that round-trips" after that had stopped being true.
+
+### R3 — 622b's writes need a gate that does not exist. SPEC IT.
+
+Every agenda write today goes through `requireMeetingTemplateEditor`
+(`meeting-templates-logic.ts:73`): `requireUser` → `assertClubNotArchived` →
+`requireClubRole(["admin"])`. It is keyed on a **meetingId**.
+
+622a is covered by it. 622b's writes are not: save-as-club-template is template-keyed,
+set-default and `/agendas` are club-keyed.
+
+**622b adds `requireClubTemplateEditor`**, mirroring the existing helper, and for
+template-keyed calls it resolves the template's `club_id` server-side and asserts it
+matches — **in the query, not a caller-side filter**. Without it, a raw template id from
+the client is a cross-club write. The docblock at `meeting-templates-logic.ts:90` already
+warns about exactly this, citing #544 and #560.
+
+Safety net worth knowing: `public-readers-archive-gate.guard.test.ts` derives its
+candidates by walking `src/server` for `createServerFn` with no `require*` guard, so a
+forgotten gate is caught — but only the archive half, never the tenant half.
+
+### R4 — Cap calibration must follow the token work. ORDERING FIXED.
+
+D10 picks the cap's ceiling by measuring the cost curve; D7 changes what a row costs
+(`roleHolderNames` → `introducedNames` scans the slot array, once per token-bearing row).
+**Measure after D7 lands**, with a fixture carrying a token in every row's detail and a
+full slot set. A realistic adopted agenda is 28 rows and will not notice; the cap exists
+for the case that is not realistic.
+
+### R5 — The spec named the wrong symbol. CORRECTED ABOVE.
+
+`RUN_OF_SHOW` is `buildRunOfShow({ geIntroducesFunctionaries: false })`
+(`agenda-runsheet.ts:1333`). The spec said "materialise `RUN_OF_SHOW`" in two places.
+Followed literally, every club adopts the 22-beat variant and **MCF silently loses
+`geOpeningHandoff`**, with the functionary intro moving from the General Evaluator back to
+the Toastmaster — on day one, in the release whose promise is that day one is identical.
+
+Corrected in both places, and pinned: a test must assert the MCF variant materialises **23
+beats including `geOpeningHandoff`**, not merely that materialisation works.
+
+### R6 — The materialiser's seam and assertion style. BOTH SPECCED.
+
+The band tables are called the acceptance criteria, but nothing said where the code lives
+or how to assert it. Both decide whether that test can exist and can fail.
+
+- **Placement:** a pure function in `src/lib/` — `(beats, roles, variant) →
+  TemplateBeatSeed[]` — with no `#/db` import. A `createServerFn` handler body is
+  unreachable from vitest, and a module importing `#/db` throws `DATABASE_URL is not set`
+  in a unit test. `src/lib` is currently db-free; keep it that way.
+- **Assertions:** the boundary test **hardcodes** `0–3 / 4–6 / 7–9 / 10–17 / 18–21` as
+  literals. It must not import whatever constants the materialiser uses — an assertion
+  stated relative to the constant it guards passes for every value of it (#519).
+
+### R7 — D4 had no test requirement. ADDED.
+
+D4 is the rule that a private fork survives a newly-set club default plus the list naming
+which meetings kept theirs. It received the most attention in grilling and the testing
+section never mentioned it.
+
+**622b requires an integration test covering both halves**: seed a club with two future
+meetings, one forked and one not; set a default; assert the forked one still points at its
+fork, the unforked one takes the default, and the returned list names exactly the forked
+one. The naming half is not optional — a test asserting only survival passes with the
+notice unimplemented, and then the officer sets a default, sees nothing change, and
+concludes the feature is broken. That is the failure D4 exists to prevent.
+
+### Failure modes
+
+| New codepath | Realistic production failure | Test? | Error handling? | Silent? |
+|---|---|---|---|---|
+| Materialise on first edit | Wrong GE variant baked in | Yes, after R5 | n/a | **Would have been silent** |
+| Materialise on first edit | Partial write leaves a template with no beats | Add: wrap in a transaction | Throws | No |
+| Token resolution in template path | Unknown role key leaves `{names:x}` verbatim | Yes (round-trip test) | Returns null, token left as-is | Visible on the sheet |
+| Save as club template (622b) | Template id from another club | Yes, after R3 | Throws | No |
+| Set default (622b) | Forked meetings silently re-pointed | Yes, after R7 | n/a | **Would have been silent** |
+| Cap refusal | Source template over the ceiling | Add per D10 | Refuses, does not truncate | No |
+
+Two entries were silent-and-untested before this review. Both are now covered.
+
+### Diagrams the implementation should carry
+
+- **`src/lib/<materialiser>.ts`** — the adoption pipeline, because it is a multi-step
+  transform whose stages are easy to reorder wrongly:
+
+```
+buildRunOfShow({ geIntroducesFunctionaries })   club's variant, NOT the const
+        |  22 or 23 beats, gating still attached
+        v
+  resolve gating against the club's CURRENT slots   <- D1: evaluated ONCE, here
+        |  gated-out beats dropped for good
+        v
+  assign five section bands (D2 tables)
+        |  + 5 section rows
+        v
+  map Beat -> TemplateBeatSeed
+        |  detail tokens preserved VERBATIM (D7), handoff carried (D8)
+        v
+  INSERT meeting_template_beats   (one transaction)
+```
+
+- **`src/server/recurrence-rule-logic.ts:127`** — the corrected comment (R2) should say
+  what `templateId != null` means AFTER 622a, not what it meant when only contests set it.
+
+### Worktree parallelization
+
+Sequential implementation, no parallelization opportunity. 622a's steps form one chain:
+the handoff column and the token vocabulary both gate the materialiser, which gates the
+parity tests. 622b depends on 622a end to end.
+
 ## Migrations
 
 The issue says there is no migration. There are two.
@@ -351,6 +491,15 @@ silently on macOS without `CHROME_PATH`.
 **Guard tests** for things vitest cannot reach: the disabled-checkbox state (D5) and the
 role-add notice (D1) live in routes, which cannot be mounted — comment-blind source
 guards via `#/test/guard-source`.
+
+**The MCF variant is a required case, not an optional one** (R5). Assert 23 beats
+including `geOpeningHandoff` for `geIntroducesFunctionaries: true`, and 22 without.
+
+**Band boundaries are asserted as literals** (R6), never imported from the materialiser.
+
+**622b: the fork-vs-default rule needs an integration test** covering survival AND the
+naming (R7), and the tenant boundary needs one proving a template id from another club is
+refused (R3).
 
 **The `enabled` and picker predicates already have coverage.** Do not duplicate it;
 extend it to prove a club-owned row appears for its own club and not for another's.
@@ -397,3 +546,67 @@ non-destructive by construction.
 
 The maintainer's reference for the end state is <https://toastmastersvn.com/agenda/>,
 step 5 ("Save as Template" / "Your Saved Templates").
+
+---
+
+## Implementation Tasks
+Synthesized from this review's findings. Each task derives from a specific
+finding above. Run with Claude Code or Codex; checkbox as you ship.
+
+- [ ] **T1 (P1, human: ~1h / CC: ~10min)** — materialiser — call `buildRunOfShow({ geIntroducesFunctionaries })`, never the `RUN_OF_SHOW` const
+  - Surfaced by: Code Quality — R5, `agenda-runsheet.ts:1333` hardcodes the variant `false`
+  - Files: the new `src/lib/` materialiser; spec lines already corrected
+  - Verify: test asserting the MCF variant yields 23 beats including `geOpeningHandoff`, and 22 without
+- [ ] **T2 (P2, human: ~1h / CC: ~10min)** — materialiser — pure function in `src/lib/`, no `#/db` import
+  - Surfaced by: Code Quality — R6, a handler body is unreachable from vitest
+  - Files: `src/lib/<materialiser>.ts`
+  - Verify: the band-boundary test imports it directly and runs without a database
+- [ ] **T3 (P2, human: ~30min / CC: ~5min)** — materialiser tests — hardcode the band boundaries
+  - Surfaced by: Code Quality — R6, #519's relative-assertion trap
+  - Files: the materialiser's test
+  - Verify: literals `0–3 / 4–6 / 7–9 / 10–17 / 18–21`, no import of the boundary constants
+- [ ] **T4 (P2, human: ~30min / CC: ~5min)** — recurrence — correct the pristine predicate's comment
+  - Surfaced by: Architecture — R2, `recurrence-rule-logic.ts:127–133` says "reshaped it into a contest"
+  - Files: `src/server/recurrence-rule-logic.ts`
+  - Verify: comment states what `templateId != null` means after 622a; behaviour unchanged
+- [ ] **T5 (P2, human: ~2h / CC: ~10min)** — adoption UI — the adopt action states the one-way trade
+  - Surfaced by: Architecture — R1, 15 of 27 commits changed beat content
+  - Files: the adopt/first-edit surface
+  - Verify: comment-blind source guard, since the copy lives in a route
+- [ ] **T6 (P2, human: ~4h / CC: ~20min)** — 622b — `requireClubTemplateEditor` with a server-side tenant check
+  - Surfaced by: Architecture — R3, `meeting-templates-logic.ts:73` is meeting-keyed
+  - Files: `src/server/meeting-templates-logic.ts` and 622b's server fns
+  - Verify: integration test proving a template id from another club is refused
+- [ ] **T7 (P2, human: ~3h / CC: ~15min)** — 622b — integration test for D4, both halves
+  - Surfaced by: Tests — R7, the testing section covered D1/D2/D5 only
+  - Files: a 622b integration test
+  - Verify: fork survives, unforked takes the default, returned list names exactly the forked meeting
+- [ ] **T8 (P3, human: ~2h / CC: folded into D10)** — cap — measure after D7, with tokens on every row
+  - Surfaced by: Performance — R4, D7 changes per-row cost
+  - Files: the cap's calibration fixture
+  - Verify: measured ceiling is an absolute number, fixture carries a token per row and a full slot set
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | — |
+| Codex Review | `/codex review` | Independent 2nd opinion | 0 | NOT RUN | codex not installed |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR | 7 issues, 0 critical gaps |
+| Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | — |
+| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | — |
+
+- **OUTSIDE VOICE: NOT RUN.** `codex` is not installed (no OpenAI subscription on this
+  machine) and `CLAUDE.md` forbids the Agent tool, so the Claude-subagent fallback could
+  not be dispatched either. This review is one model, and that model wrote the spec it
+  reviewed. Weigh it accordingly: learning `assert-final-rows-not-intermediate-beats`
+  (10/10, cross-model) records an agenda-template plan that passed a full eng review AND a
+  design review carrying a broken core mechanism, where a fresh-context outside voice
+  caught it and two reviews by the plan author did not. Mitigation applied here: every
+  finding was derived by re-running or re-reading the SOURCE rather than re-reading the
+  spec's prose, which is how R5 was caught. Note also that `codex_reviews` reads `enabled`
+  while CLAUDE.md states it is `disabled` — that mismatch is worth fixing.
+- **VERDICT: ENG CLEARED — ready for `writing-plans`.** 7 findings, all resolved with the
+  maintainer; 2 previously-silent failure modes now covered by required tests.
+
+NO UNRESOLVED DECISIONS
