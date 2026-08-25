@@ -928,6 +928,118 @@ describe("AgendaEditor delete undo", () => {
 		});
 	});
 
+	it("restores EVERY field on screen after undo, not just the label", async () => {
+		const user = userEvent.setup();
+		// The re-seed sets six fields. Asserting only the label would pass with
+		// five of them deleted, and the placeholder differs from a real row in
+		// every one: 0 minutes, no note, no timing marks. A row that comes back
+		// reading "Welcome" for 0 minutes with its marks gone is still lost work.
+		const rich: AgendaDraft = {
+			...draft,
+			rows: [
+				draft.rows[0] as AgendaDraft["rows"][number],
+				{
+					...(draft.rows[1] as AgendaDraft["rows"][number]),
+					detail: "Opens the room",
+					markGreen: 5,
+					markYellow: 6,
+					markRed: 7,
+				},
+			],
+		};
+		function Harness() {
+			const [rows, setRows] = useState(rich.rows);
+			const server = useRef(rich.rows);
+			return (
+				<>
+					<Toaster />
+					<AgendaEditor
+						draft={{ ...rich, rows }}
+						{...noopHandlers}
+						onRemoveRow={async (id: string) => {
+							server.current = server.current.filter((r) => r.id !== id);
+							setRows(server.current);
+						}}
+						onAddRow={async (
+							afterRowId: string | null,
+							kind: AgendaDraft["rows"][number]["kind"],
+						) => {
+							const created = {
+								id: "restored",
+								sortOrder: 0,
+								kind,
+								label: kind === "section" ? "NEW SECTION" : "New item",
+								detail: null,
+								minutes: 0,
+								roleKey: null,
+								repeatsRoleKey: null,
+								flex: false,
+								markGreen: null,
+								markYellow: null,
+								markRed: null,
+							};
+							const at =
+								afterRowId === null
+									? 0
+									: server.current.findIndex((r) => r.id === afterRowId) + 1;
+							const next = [...server.current];
+							next.splice(at, 0, created);
+							server.current = next;
+							setRows(next);
+							return created;
+						}}
+						onUpdateRow={async (
+							rowId: string,
+							patch: Record<string, unknown>,
+						) => {
+							server.current = server.current.map((r) =>
+								r.id === rowId ? { ...r, ...patch } : r,
+							);
+						}}
+						onRefresh={async () => {
+							setRows(server.current);
+						}}
+					/>
+				</>
+			);
+		}
+		render(<Harness />);
+
+		await user.click(screen.getAllByLabelText("Remove row")[1] as HTMLElement);
+		await user.click(await screen.findByRole("button", { name: /undo/i }));
+		await waitFor(() =>
+			expect(
+				screen
+					.getAllByLabelText("Row label")
+					.map((i) => (i as HTMLInputElement).value),
+			).toContain("Welcome"),
+		);
+
+		// Minutes: the placeholder is 0.
+		expect(
+			screen
+				.getAllByLabelText("Row minutes")
+				.map((i) => (i as HTMLInputElement).value),
+		).toContain("5");
+
+		// Note and the three timing marks live behind the row's disclosure.
+		await user.click(
+			screen.getAllByLabelText("Show row details")[1] as HTMLElement,
+		);
+		expect((screen.getByLabelText("Row note") as HTMLInputElement).value).toBe(
+			"Opens the room",
+		);
+		expect(
+			(screen.getByLabelText("Green mark minute") as HTMLInputElement).value,
+		).toBe("5");
+		expect(
+			(screen.getByLabelText("Yellow mark minute") as HTMLInputElement).value,
+		).toBe("6");
+		expect(
+			(screen.getByLabelText("Red mark minute") as HTMLInputElement).value,
+		).toBe("7");
+	});
+
 	it("does not SAVE the placeholder over a row that was just undone", async () => {
 		const user = userEvent.setup();
 		// The expensive half of the bug above. `confirmed` re-seeds from the
