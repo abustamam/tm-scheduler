@@ -12,6 +12,9 @@ const base = {
 	meetingScheduledAt: new Date(),
 	fromName: null,
 	subjectName: null,
+	guestName: null,
+	guestLink: false,
+	unlinked: false,
 } satisfies Partial<ActivityEntry> as ActivityEntry;
 
 describe("formatActivity", () => {
@@ -335,6 +338,9 @@ describe("formatActivity", () => {
 			fromName: null,
 			change: null,
 			status: null,
+			guestName: null,
+			guestLink: false,
+			unlinked: false,
 		} satisfies ActivityEntry;
 		expect(
 			formatActivity({ ...meetingBase, change: "speaker_added" }).summary,

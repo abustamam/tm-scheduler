@@ -4,10 +4,13 @@ import { requireClubAdminView, requireClubRole, requireUser } from "./guards";
 import {
 	applyConvertGuestToMember,
 	applyDeleteGuest,
+	applyLinkGuestToMember,
 	applySetGuestStage,
+	applyUnlinkGuestFromMember,
 	applyUpdateGuest,
 	captureGuestVisit,
 	loadGuestPipeline,
+	loadLinkCandidates,
 } from "./guest-pipeline-logic";
 import { guestBookSchema } from "./guest-pipeline-schemas";
 
@@ -18,6 +21,7 @@ export type {
 	CaptureGuestResult,
 	DeleteGuestResult,
 	GuestStage,
+	LinkCandidate,
 	ManualGuestStage,
 	PipelineGuestRow,
 } from "./guest-pipeline-logic";
@@ -139,5 +143,70 @@ export const convertGuestToMember = createServerFn({ method: "POST" })
 			clubId: data.clubId,
 			guestId: data.guestId,
 			actorMemberId: membership.id,
+		});
+	});
+
+const linkSchema = z.object({
+	clubId: uuid,
+	guestId: uuid,
+	memberId: uuid,
+});
+
+/**
+ * Link an existing guest to an existing roster member (#635) — the retroactive
+ * convert for someone who became a member without going through
+ * `convertGuestToMember`. Re-points the guest's slots, freezes the guest at
+ * stage=joined pointing at that membership, and records the moved slot ids so
+ * the link can be undone. AUTHED — admin-only, same gate as convert.
+ */
+export const linkGuestToMember = createServerFn({ method: "POST" })
+	.validator((input: unknown) => linkSchema.parse(input))
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		const membership = await requireClubRole(currentUser.id, data.clubId, [
+			"admin",
+		]);
+		return applyLinkGuestToMember({
+			clubId: data.clubId,
+			guestId: data.guestId,
+			memberId: data.memberId,
+			actorMemberId: membership.id,
+		});
+	});
+
+const unlinkSchema = z.object({
+	clubId: uuid,
+	guestId: uuid,
+});
+
+/** Reverse a link (#635), restoring exactly the slots it moved. AUTHED — admin. */
+export const unlinkGuestFromMember = createServerFn({ method: "POST" })
+	.validator((input: unknown) => unlinkSchema.parse(input))
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		const membership = await requireClubRole(currentUser.id, data.clubId, [
+			"admin",
+		]);
+		return applyUnlinkGuestFromMember({
+			clubId: data.clubId,
+			guestId: data.guestId,
+			actorMemberId: membership.id,
+		});
+	});
+
+/**
+ * The club roster annotated for the link dialog (#635): which members' names
+ * agree with this guest's, and which already hold a role at a meeting where the
+ * guest does. AUTHED — admin-only: it enumerates roster names against a guest
+ * record, which is officer data on both sides.
+ */
+export const getLinkCandidates = createServerFn({ method: "GET" })
+	.validator((input: unknown) => unlinkSchema.parse(input))
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		await requireClubRole(currentUser.id, data.clubId, ["admin"]);
+		return loadLinkCandidates({
+			clubId: data.clubId,
+			guestId: data.guestId,
 		});
 	});
