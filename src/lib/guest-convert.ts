@@ -15,11 +15,36 @@
  *
  * Written for the VP-Membership board, which surfaces a thrown message verbatim,
  * so it has to say what to do next rather than only what went wrong. The two
- * outcomes an admin actually faces are the two it names: same human (nothing to
- * convert) or genuine namesake (merge first).
+ * outcomes an admin actually faces are the two it names: same human (already a
+ * member — link them) or genuine namesake (add from the roster).
+ *
+ * The first half pointed at "merging them on the Roster page" until #635, and
+ * that was the wrong remedy for the case this guard fires on most. The roster's
+ * merge is member↔member; when the duplicate is a GUEST row beside a MEMBER row
+ * there is only one member row and nothing to merge it with. It sent the admin
+ * to a screen that could not help, on the exact rows this guard had just made
+ * unconvertible. **Link** is the action that applies.
  */
 export const CONVERT_NAME_CLASH_MESSAGE =
-	"Someone with this name is already on the roster. If it's the same person, they're already a member — mark the guest as joined by merging them on the Roster page. If it's a different person with the same name, add them from the Roster page instead.";
+	"Someone with this name is already on the roster. If it's the same person, use “Already a member?” on this card to link them — their guest history carries across. If it's a different person who happens to share the name, add them from the Roster page instead.";
+
+/** Refusal when the target of a link is not a member of this club. */
+export const LINK_MEMBER_NOT_IN_CLUB_MESSAGE =
+	"That member isn't on this club's roster.";
+
+/**
+ * Refusal when the guest has already been converted for real — `joined` AND
+ * still pointing at a live membership.
+ *
+ * A STRANDED guest (joined, pointer null) is deliberately NOT refused: that is
+ * a guest whose membership was removed from the roster (#618), and linking is
+ * exactly the recovery this offers them.
+ */
+export const LINK_ALREADY_JOINED_MESSAGE =
+	"This guest is already linked to a member. Unlink them first if you need to point them somewhere else.";
+
+/** Refusal when unlinking a guest that was never linked. */
+export const UNLINK_NOT_LINKED_MESSAGE = "This guest isn't linked to a member.";
 
 /**
  * Whether a guest row is stranded: frozen at `joined` while the membership it

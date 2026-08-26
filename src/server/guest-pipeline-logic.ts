@@ -6,8 +6,10 @@ import {
 	and,
 	asc,
 	count,
+	desc,
 	eq,
 	gte,
+	inArray,
 	isNotNull,
 	isNull,
 	min,
@@ -17,6 +19,7 @@ import {
 import { union } from "drizzle-orm/pg-core";
 import { db } from "#/db";
 import {
+	activityLog,
 	clubs,
 	guests,
 	meetingAttendance,
@@ -30,6 +33,9 @@ import { isAtMeetingNow } from "#/lib/guest-book-window";
 import {
 	CONVERT_NAME_CLASH_MESSAGE,
 	isStrandedConvertedGuest,
+	LINK_ALREADY_JOINED_MESSAGE,
+	LINK_MEMBER_NOT_IN_CLUB_MESSAGE,
+	UNLINK_NOT_LINKED_MESSAGE,
 } from "#/lib/guest-convert";
 import { namesAgree } from "#/lib/person-name";
 import {
@@ -438,6 +444,17 @@ export interface PipelineGuestRow {
 	phoneRaw: string | null;
 	stage: GuestStage;
 	convertedMembershipId: string | null;
+	/**
+	 * This guest's membership pointer came from a LINK (#635) that recorded the
+	 * slots it moved, so it can be undone.
+	 *
+	 * False for a real `applyConvertGuestToMember`, which also created a Person
+	 * and a membership and has no slot record to replay — undoing that is #618.
+	 * The board needs the distinction because both set `convertedMembershipId`:
+	 * without it the Unlink button appears on a converted guest and fails every
+	 * time, with a message saying they are not linked when they plainly are.
+	 */
+	linkReversible: boolean;
 	/** Earliest visited meeting date (derived — see `loadGuestPipeline`); null if none. */
 	firstVisitAt: Date | null;
 	/** Meetings visited (derived, never a stored counter). */
@@ -539,7 +556,7 @@ export async function loadGuestPipeline(
 	const { timeZone: tz, countryCode: cc } =
 		await loadClubPipelineSettings(clubId);
 	const visits = guestVisits(clubId, tz).as("guest_visits");
-	const [rows, visitRows, slotRows] = await Promise.all([
+	const [rows, visitRows, slotRows, linkRows] = await Promise.all([
 		db
 			.select({
 				id: guests.id,
@@ -573,10 +590,35 @@ export async function loadGuestPipeline(
 				and(eq(meetings.clubId, clubId), isNotNull(roleSlots.assignedGuestId)),
 			)
 			.groupBy(roleSlots.assignedGuestId),
+		// Which guests' pointers came from a LINK (#635) rather than a real
+		// convert. Joined to `guests` on BOTH the guest id and the CURRENT
+		// membership, so a stale record from a link that was since undone and
+		// replaced by a real convert does not read as reversible.
+		db
+			.select({ guestId: guests.id })
+			.from(activityLog)
+			.innerJoin(
+				guests,
+				// Both comparisons cast explicitly. `activity_log.target_id` is TEXT
+				// while `guests.id` / `converted_membership_id` are UUID, and Postgres
+				// has no text=uuid operator — the uncast version was a 500 on every
+				// board load, not a wrong answer.
+				and(
+					sql`${activityLog.detail}->>'fromGuestId' = ${guests.id}::text`,
+					sql`${activityLog.targetId} = ${guests.convertedMembershipId}::text`,
+				),
+			)
+			.where(
+				and(
+					eq(activityLog.clubId, clubId),
+					eq(activityLog.action, "member_merge"),
+				),
+			),
 	]);
 
 	const visitsByGuest = new Map(visitRows.map((v) => [v.guestId, v]));
 	const slotsByGuest = new Map(slotRows.map((s) => [s.guestId, s]));
+	const reversible = new Set(linkRows.map((l) => l.guestId));
 
 	return rows.map((r) => {
 		const v = visitsByGuest.get(r.id);
@@ -593,6 +635,7 @@ export async function loadGuestPipeline(
 			phoneRaw: r.phone,
 			stage: r.stage,
 			convertedMembershipId: r.convertedMembershipId,
+			linkReversible: reversible.has(r.id),
 			visitCount: Number(v?.visitCount ?? 0),
 			firstVisitAt: v?.firstVisitAt ? new Date(v.firstVisitAt) : null,
 			heldSlotCount: Number(slotsByGuest.get(r.id)?.heldSlotCount ?? 0),
@@ -1076,4 +1119,293 @@ export async function applyConvertGuestToMember(
 
 		return { ok: true as const, membershipId, personId };
 	});
+}
+
+export interface LinkGuestInput {
+	clubId: string;
+	guestId: string;
+	memberId: string;
+	actorMemberId: string | null;
+}
+
+export interface LinkGuestResult {
+	ok: true;
+	/** Slots re-pointed from the guest to the member — also recorded in the log. */
+	slotIds: string[];
+}
+
+/**
+ * Link an EXISTING guest to an EXISTING roster member (#635) — a retroactive
+ * convert for a human who became a member without going through
+ * `applyConvertGuestToMember`.
+ *
+ * This is convert's steps 3-5 and nothing else: no Person is deduped or created,
+ * no membership is created. Both rows already exist; what is missing is the
+ * relationship between them.
+ *
+ * ## Why it exists
+ *
+ * The public self-add (#616) minted a `members` row with no session and no
+ * awareness of the guest pipeline, so anyone already tracked as a guest ended up
+ * with two rows and nothing joining them. They show in the member picker AND the
+ * guest chips on one sheet. #616 closed that path and #617 stopped convert from
+ * MAKING new duplicates — but #617 also refuses these rows, so before this they
+ * had no path at all.
+ *
+ * ## Why ALL slots, not just upcoming
+ *
+ * `loadRoleRecency` groups PAST meetings by `roleSlots.assignedMemberId` to
+ * decide whether a member has "Never done this role". Everything the human did
+ * while assigned as a guest is invisible to their member row until those slots
+ * move. Re-pointing only upcoming slots would clear the duplicate chip and leave
+ * the fairness signal the VPE assigns roles from still wrong — a cosmetic fix.
+ * It is also the harder query, needing a join to `meetings` and a date filter.
+ */
+export async function applyLinkGuestToMember(
+	input: LinkGuestInput,
+): Promise<LinkGuestResult> {
+	return db.transaction(async (tx) => {
+		// Lock the guest row first and re-read `stage` under it, for the reason
+		// `applyConvertGuestToMember` documents: read outside the transaction it is
+		// a stale snapshot, and two concurrent links would both pass the check.
+		const [guest] = await tx
+			.select()
+			.from(guests)
+			.where(and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)))
+			.limit(1)
+			.for("update");
+		if (!guest) throw new Error("Guest not found in this club.");
+		// A STRANDED guest (joined, pointer null — #618) is deliberately allowed
+		// through: their membership was removed from the roster, and pointing them
+		// at a member is the recovery. Only a live link is refused.
+		if (guest.stage === "joined" && guest.convertedMembershipId) {
+			throw new Error(LINK_ALREADY_JOINED_MESSAGE);
+		}
+
+		const [member] = await tx
+			.select({ id: members.id })
+			.from(members)
+			.where(
+				and(eq(members.id, input.memberId), eq(members.clubId, input.clubId)),
+			)
+			.limit(1);
+		if (!member) throw new Error(LINK_MEMBER_NOT_IN_CLUB_MESSAGE);
+
+		// `returning` is what makes this reversible. `role_slots` has a CHECK
+		// constraint keeping the two assignee columns mutually exclusive, so this
+		// UPDATE DESTROYS the record of which slots were the guest's. Capturing the
+		// ids here is the only cheap way `applyUnlinkGuestFromMember` can put them
+		// back; without it the link is permanently one-way.
+		const repointed = await tx
+			.update(roleSlots)
+			.set({ assignedMemberId: input.memberId, assignedGuestId: null })
+			.where(eq(roleSlots.assignedGuestId, input.guestId))
+			.returning({ id: roleSlots.id });
+		const slotIds = repointed.map((s) => s.id);
+
+		await tx
+			.update(guests)
+			.set({
+				stage: "joined",
+				convertedMembershipId: input.memberId,
+				updatedAt: new Date(),
+			})
+			.where(eq(guests.id, input.guestId));
+
+		// `member_merge` rather than a new enum value: the action already exists
+		// (`schema.ts`), so this needs no migration, and `detail.fromGuestId` is
+		// what tells a guest link apart from a member↔member merge — including for
+		// `activity-format.ts`, which branches on it to avoid reading "merged a
+		// duplicate member" for something that was not that.
+		await logActivity(tx, {
+			clubId: input.clubId,
+			actorMemberId: input.actorMemberId,
+			action: "member_merge",
+			targetType: "member",
+			targetId: input.memberId,
+			detail: { fromGuestId: input.guestId, guestName: guest.name, slotIds },
+		});
+
+		return { ok: true as const, slotIds };
+	});
+}
+
+export interface UnlinkGuestInput {
+	clubId: string;
+	guestId: string;
+	actorMemberId: string | null;
+}
+
+/**
+ * Reverse `applyLinkGuestToMember` (#635).
+ *
+ * Restores exactly the slots the link re-pointed, read back from the
+ * `member_merge` activity row it wrote. Reading an audit log to reverse an
+ * action is unusual; it is done here because the CHECK constraint on
+ * `role_slots` means the guest association is not recoverable from the slots
+ * themselves, and a dedicated column or table would be a heavier answer to a
+ * question the log already stores.
+ *
+ * Deliberately narrow: it restores the recorded slots and nothing else. A slot
+ * the member was assigned to AFTER the link is not the guest's and is left
+ * alone, which is why the recorded id list — not "every slot this member holds"
+ * — is the thing replayed.
+ */
+export async function applyUnlinkGuestFromMember(
+	input: UnlinkGuestInput,
+): Promise<{ ok: true; slotIds: string[] }> {
+	return db.transaction(async (tx) => {
+		const [guest] = await tx
+			.select()
+			.from(guests)
+			.where(and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)))
+			.limit(1)
+			.for("update");
+		if (!guest) throw new Error("Guest not found in this club.");
+		if (!guest.convertedMembershipId) {
+			throw new Error(UNLINK_NOT_LINKED_MESSAGE);
+		}
+
+		// The most recent link for this guest. Ordered newest-first and tie-broken
+		// on id for the same reason `findGuestByContact` is: a bare `limit(1)` over
+		// two rows written in the same transaction is a Postgres coin flip.
+		const [entry] = await tx
+			.select({ detail: activityLog.detail })
+			.from(activityLog)
+			.where(
+				and(
+					eq(activityLog.clubId, input.clubId),
+					eq(activityLog.action, "member_merge"),
+					sql`${activityLog.detail}->>'fromGuestId' = ${input.guestId}`,
+					// The record must point at the membership the guest currently
+					// points at. Without this, a guest that was linked, unlinked, and
+					// later CONVERTED for real would replay the stale link — restoring
+					// slots to a guest whose real membership stays behind.
+					eq(activityLog.targetId, guest.convertedMembershipId),
+				),
+			)
+			.orderBy(desc(activityLog.createdAt), desc(activityLog.id))
+			.limit(1);
+
+		// No record means the pointer was set by something other than a link —
+		// a real `applyConvertGuestToMember`, which also created a Person and a
+		// membership. Undoing THAT is #618 and is not this function's job, so
+		// refuse rather than half-reverse it.
+		const recorded = (entry?.detail as { slotIds?: unknown } | null)?.slotIds;
+		const slotIds = Array.isArray(recorded)
+			? recorded.filter((s): s is string => typeof s === "string")
+			: [];
+		if (!entry) throw new Error(UNLINK_NOT_LINKED_MESSAGE);
+
+		// Empty is legitimate: a guest who held no slots when linked. Guard anyway,
+		// because drizzle compiles `inArray(col, [])` to `false` and the UPDATE
+		// would be a silent no-op that reads identical to success.
+		if (slotIds.length > 0) {
+			await tx
+				.update(roleSlots)
+				.set({ assignedMemberId: null, assignedGuestId: input.guestId })
+				.where(inArray(roleSlots.id, slotIds));
+		}
+
+		await tx
+			.update(guests)
+			.set({
+				stage: "following_up",
+				convertedMembershipId: null,
+				updatedAt: new Date(),
+			})
+			.where(eq(guests.id, input.guestId));
+
+		await logActivity(tx, {
+			clubId: input.clubId,
+			actorMemberId: input.actorMemberId,
+			action: "member_merge",
+			targetType: "member",
+			targetId: guest.convertedMembershipId,
+			detail: {
+				unlinkedGuestId: input.guestId,
+				guestName: guest.name,
+				slotIds,
+			},
+		});
+
+		return { ok: true as const, slotIds };
+	});
+}
+
+export interface LinkCandidate {
+	id: string;
+	name: string;
+	/** Name agrees with the guest's — floated to the top of the dialog. */
+	suggested: boolean;
+	/**
+	 * This member already holds a role at a meeting where the GUEST holds one,
+	 * so linking would leave one human with two roles at that meeting.
+	 */
+	sharesMeeting: boolean;
+}
+
+/**
+ * Every roster member in the club, annotated for the link dialog (#635).
+ *
+ * Returns the WHOLE roster rather than only name matches, because the dialog
+ * needs the same two annotations for a member found by free search as for a
+ * suggested one. Two endpoints would have meant the same-meeting warning silently
+ * not appearing for anyone the admin searched for by hand — a warning that is
+ * missing exactly when it is least expected is worse than none.
+ *
+ * `suggested` uses `namesAgree` rather than an exact compare, so "Bill Nakamura"
+ * suggests for "William Nakamura". It is the same helper the Person dedup and
+ * #617's clash check use, so what is suggested here and what refuses a convert
+ * there cannot drift apart.
+ */
+export async function loadLinkCandidates(input: {
+	clubId: string;
+	guestId: string;
+}): Promise<LinkCandidate[]> {
+	const [guest] = await db
+		.select({ name: guests.name })
+		.from(guests)
+		.where(and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)))
+		.limit(1);
+	if (!guest) return [];
+
+	const roster = await db
+		.select({ id: members.id, name: members.name })
+		.from(members)
+		.where(eq(members.clubId, input.clubId))
+		.orderBy(asc(members.name));
+
+	// Meetings where this guest holds a role. Empty is the common case for a
+	// guest who has only ever visited, and short-circuits the collision query.
+	const guestMeetings = await db
+		.selectDistinct({ meetingId: roleSlots.meetingId })
+		.from(roleSlots)
+		.where(eq(roleSlots.assignedGuestId, input.guestId));
+	const meetingIds = guestMeetings.map((m) => m.meetingId);
+
+	// Guard the empty list explicitly: drizzle compiles `inArray(col, [])` to
+	// `false`, so the query would return nothing and every candidate would read
+	// `sharesMeeting: false` — the right answer by accident, via a query that
+	// cannot fail. Skipping the round trip makes that the answer on purpose.
+	const collidingMemberIds = new Set<string>();
+	if (meetingIds.length > 0) {
+		const rows = await db
+			.selectDistinct({ memberId: roleSlots.assignedMemberId })
+			.from(roleSlots)
+			.where(
+				and(
+					inArray(roleSlots.meetingId, meetingIds),
+					isNotNull(roleSlots.assignedMemberId),
+				),
+			);
+		for (const r of rows) if (r.memberId) collidingMemberIds.add(r.memberId);
+	}
+
+	return roster.map((m) => ({
+		id: m.id,
+		name: m.name,
+		suggested: namesAgree(m.name, guest.name),
+		sharesMeeting: collidingMemberIds.has(m.id),
+	}));
 }
