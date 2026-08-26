@@ -101,6 +101,16 @@ self.addEventListener("activate", (event) => {
  * Both mean "prime it before the meeting" silently does nothing, which is worse
  * than having no offline mode: the club believes it is covered.
  *
+ * This is the NARROWER of the two priming paths, and reading it as the general
+ * one is how v1.25.8.0 shipped a fix that did not fix the report. `activate`
+ * fires only on the load where the worker changes; on every load after that the
+ * worker is already current, this never runs, and before v1.25.9.0 nothing else
+ * primed anything. The user re-ran the repro against a deploy that contained
+ * this function and Present still failed offline, because their worker was
+ * already up to date — the ordinary case, not an edge one. `primeSiblings` in
+ * `networkFirst` is what covers a normal visit; this covers only the two
+ * windows above, where the open page was never intercepted at all.
+ *
  * Best-effort by construction. A failed fetch here means we activated while
  * already offline, where there is nothing to prime from and the old cache is
  * gone regardless — so it must not reject and take the activation with it.
@@ -146,6 +156,12 @@ async function primeOpenMeetingPages() {
  * A non-meeting offline route (`/meetings/<id>`) has no siblings; it primes
  * itself.
  */
+/** Build output a primed document may pull in. Mirrors `isCacheableAsset`. */
+const ASSET_PATH = /^\/(?:_build|assets)\//;
+
+/** Ceiling on assets primed per document (#362). See `primeAssetsOf`. */
+const MAX_PRIMED_ASSETS = 60;
+
 function meetingSurfaces(url) {
 	const prefix = meetingPrefix(url.pathname);
 	if (prefix === url.pathname && !/^\/club\/[^/]+\/meeting\//.test(prefix)) {
@@ -153,6 +169,31 @@ function meetingSurfaces(url) {
 	}
 	const base = `${url.origin}${prefix}`;
 	return [base, `${base}/present`, `${base}/print`];
+}
+
+/**
+ * Fetch the OTHER surfaces of the meeting just visited, skipping the one that
+ * was actually requested (#362).
+ *
+ * Always, not only-if-missing. A meeting's roles and speech titles change right
+ * up to the moment it starts, so a Present page cached last week is worse than
+ * useless on the night — it shows a line-up that has moved. The cost is two
+ * small SSR documents per meeting-page view, on an app where viewing a meeting
+ * page is a deliberate act rather than incidental traffic.
+ *
+ * Never throws: this runs inside `waitUntil`, and a rejection there is reported
+ * as a failed install/fetch for no user benefit.
+ */
+async function primeSiblings(cache, url, requestedUrl) {
+	// Compared without the query string, because the surface list is built from
+	// bare paths while the request that triggered it may carry one: a reload of
+	// `/…/print?layout=grid` would otherwise not match `/…/print` and re-fetch
+	// the page the browser is in the middle of being served.
+	const requested = `${requestedUrl.origin}${requestedUrl.pathname}`;
+	for (const href of meetingSurfaces(url)) {
+		if (href === requested) continue;
+		await primeOne(cache, href);
+	}
 }
 
 /** Fetch one URL and store it, or leave the cache untouched. Never throws. */
@@ -183,8 +224,64 @@ async function primeOne(cache, href) {
 		// either, and this file constructs no Request anywhere else, so the test
 		// harness has none to inject.
 		await cache.put(finalUrl.href, response.clone());
+		await primeAssetsOf(response.clone(), finalUrl);
 	} catch {
 		// Activated while offline. Nothing to prime from.
+	}
+}
+
+/**
+ * Cache the build assets a primed document references (#362, second gap).
+ *
+ * Priming a DOCUMENT is not the same as priming a PAGE. `fetch(href)` retrieves
+ * the HTML and nothing else — the browser is what normally requests a page's
+ * scripts, and `staleWhileRevalidate` only ever caches an asset somebody has
+ * already asked for. So a Present page primed as a document alone would come
+ * back offline as un-hydrated SSR output: the first slide rendered, and no way
+ * to advance it. On the night, that is its own bug report.
+ *
+ * Parsed with a regex rather than a real parser because a service worker has no
+ * DOM. That is acceptable HERE and would not be in general: the only thing read
+ * out is `/_build/` and `/assets/` paths, which are hashed build output, so a
+ * mis-parse's worst case is a URL that 404s and is skipped — never wrong
+ * content. Same match set `isCacheableAsset` uses, from the same constant.
+ */
+async function primeAssetsOf(response, documentUrl) {
+	let html;
+	try {
+		html = await response.text();
+	} catch {
+		return;
+	}
+	const cache = await caches.open(ASSET_CACHE);
+	const seen = new Set();
+	for (const match of html.matchAll(/(?:src|href)="([^"]+)"/g)) {
+		// Bounded so a large or generated document cannot turn one navigation
+		// into unbounded work: this runs inside `waitUntil`, which has a wall
+		// clock the browser enforces by killing the worker.
+		if (seen.size >= MAX_PRIMED_ASSETS) break;
+		let assetUrl;
+		try {
+			assetUrl = new URL(match[1], documentUrl.href);
+		} catch {
+			continue;
+		}
+		if (assetUrl.origin !== self.location.origin) continue;
+		if (!ASSET_PATH.test(assetUrl.pathname)) continue;
+		if (seen.has(assetUrl.href)) continue;
+		seen.add(assetUrl.href);
+		// Already held: skip. These paths are content-hashed, so a cached copy can
+		// never be the stale one — which is what keeps the repeat cost of priming
+		// on EVERY visit down to the documents alone.
+		if (await cache.match(assetUrl.href)) continue;
+		try {
+			const asset = await fetch(assetUrl.href);
+			if (asset?.ok && asset.type !== "opaque") {
+				await cache.put(assetUrl.href, asset.clone());
+			}
+		} catch {
+			// Went offline mid-prime. Keep whatever landed.
+		}
 	}
 }
 
@@ -209,7 +306,7 @@ function isCacheableAsset(url, request) {
 	if (["script", "style", "font", "image", "worker"].includes(request.destination)) {
 		return true;
 	}
-	return url.pathname.startsWith("/_build/") || url.pathname.startsWith("/assets/");
+	return ASSET_PATH.test(url.pathname);
 }
 
 self.addEventListener("fetch", (event) => {
@@ -221,7 +318,7 @@ self.addEventListener("fetch", (event) => {
 
 	if (request.mode === "navigate") {
 		if (isOfflineRoute(url)) {
-			event.respondWith(networkFirst(request, url, NAV_CACHE));
+			event.respondWith(networkFirst(event, request, url, NAV_CACHE));
 		}
 		return; // Every other navigation uses the default network path.
 	}
@@ -332,12 +429,28 @@ async function evict(cache, request, url, isNav) {
 // when it is not. For Print, the `?layout=` search param varies but the SSR
 // data is identical, so an offline reload falls back to any cached Print page —
 // which is also why eviction clears the whole meeting rather than one URL.
-async function networkFirst(request, url, cacheName) {
+async function networkFirst(event, request, url, cacheName) {
 	const cache = await caches.open(cacheName);
 	try {
 		const response = await fetch(request);
-		if (response && response.ok) cache.put(request, response.clone());
-		else if (isGoneResponse(response)) await evict(cache, request, url, true);
+		if (response && response.ok) {
+			cache.put(request, response.clone());
+			// Prime this meeting's OTHER surfaces on the same visit (#362).
+			//
+			// Activation priming alone was not enough, and the gap is the whole
+			// reason Present still failed after v1.25.8.0: `activate` fires only on
+			// the ONE load where the worker updates. Every load after that — the
+			// normal case — has a current worker, so nothing ran and Present was
+			// never fetched. The user's mental model is "I opened the meeting
+			// online, so the meeting works offline", and the meeting is three pages.
+			//
+			// `event.waitUntil`, not fire-and-forget: `respondWith` settles as soon
+			// as the document is served, and the browser may kill the worker at that
+			// point — which is the same reason `staleWhileRevalidate` takes `event`.
+			event.waitUntil(primeSiblings(cache, url, url));
+		} else if (isGoneResponse(response)) {
+			await evict(cache, request, url, true);
+		}
 		return response;
 	} catch (err) {
 		const exact = await cache.match(request);
