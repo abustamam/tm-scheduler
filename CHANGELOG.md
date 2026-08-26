@@ -2,6 +2,17 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.25.6.0] - 2026-08-25
+
+### Added
+
+- **You can now tell the app that a guest and a member are the same person.** Some people are in your club twice: once as a guest and once on the roster, with nothing joining them. They show up in both lists when you assign a role, and the roster says **"Never done this role"** for roles you watched them do. That happened because anyone could once add themselves to the roster without going through the guest pipeline — the door is closed now, but the people it let through are still doubled up. Open the guest on **VP Membership** and use **"Already a member?"**: pick who they are on the roster and everything they did as a guest moves onto their member record. People with the same name are offered first, and no new roster row is created. If you pick the wrong person, **Unlink** puts it back exactly as it was.
+- **A heads-up before one person ends up with two roles at one meeting.** If the guest and the member you're linking each have a job at the same meeting, the app says so before you confirm. It still lets you do it — that's a normal thing at a small club — it just doesn't happen behind your back.
+
+### Fixed
+
+- **The message when Convert refuses now points somewhere that helps.** Converting a guest whose name is already on the roster is blocked, which is right, but the message told you to merge them on the Roster page. That page merges two *members*, and this situation is one guest and one member — there was nothing there to do. It now points at the link described above.
+
 ## [1.25.5.1] - 2026-08-25
 
 ### Changed
