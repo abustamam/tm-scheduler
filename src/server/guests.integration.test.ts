@@ -189,4 +189,71 @@ describe.skipIf(!hasTestDb)("guest assignment (#151)", () => {
 		const guestList = await listClubGuests(seed.clubId);
 		expect(guestList.map((g) => g.name)).toContain("Visitor V");
 	});
+
+	describe("a guest who is now a member (#637)", () => {
+		it("is excluded from the assign picker", async () => {
+			const res = await applyAssignGuestToSlot({
+				slotId: seed.slotId,
+				newGuest: { name: "Became A Member" },
+				actorMemberId: seed.adminMemberId,
+			});
+			expect((await listClubGuests(seed.clubId)).map((g) => g.id)).toContain(
+				res.guestId,
+			);
+
+			// Point them at a member, the way a link or a convert would.
+			await testDb
+				.update(guests)
+				.set({ stage: "joined", convertedMembershipId: seed.memberId })
+				.where(eq(guests.id, res.guestId));
+
+			expect(
+				(await listClubGuests(seed.clubId)).map((g) => g.id),
+			).not.toContain(res.guestId);
+		});
+
+		it("is refused by the assign seam even when a caller offers them", async () => {
+			// The picker is fixed, but the seam is what protects the invariant from
+			// the NEXT caller that gets the list wrong — which is exactly how #637
+			// happened: `meetings.ts` had its own unfiltered copy of that query, and
+			// nothing downstream objected to the guest it handed over.
+			const res = await applyAssignGuestToSlot({
+				slotId: seed.slotId,
+				newGuest: { name: "Linked Person" },
+				actorMemberId: seed.adminMemberId,
+			});
+			await testDb
+				.update(guests)
+				.set({ stage: "joined", convertedMembershipId: seed.memberId })
+				.where(eq(guests.id, res.guestId));
+
+			await expect(
+				applyAssignGuestToSlot({
+					slotId: seed.slotId,
+					guestId: res.guestId,
+					actorMemberId: seed.adminMemberId,
+				}),
+			).rejects.toThrow(/member now/i);
+
+			// And the slot is untouched — the refusal happens before the write.
+			const after = await slotState(seed.slotId);
+			expect(after.assignedGuestId).toBe(res.guestId);
+		});
+
+		it("still accepts a guest who has NOT been linked", async () => {
+			// The complement. Without it, a seam that refused every guest would pass
+			// the assertion above and break the feature entirely.
+			const res = await applyAssignGuestToSlot({
+				slotId: seed.slotId,
+				newGuest: { name: "Ordinary Prospect" },
+				actorMemberId: seed.adminMemberId,
+			});
+			const again = await applyAssignGuestToSlot({
+				slotId: seed.slotId,
+				guestId: res.guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+			expect(again.guestId).toBe(res.guestId);
+		});
+	});
 });

@@ -5,7 +5,6 @@ import { z } from "zod";
 import { db } from "#/db";
 import {
 	clubs,
-	guests,
 	meetings,
 	pathwaysProjects,
 	roleDefinitions,
@@ -38,6 +37,7 @@ import {
 	requireUser,
 	requireWordOfTheDayEditor,
 } from "./guards";
+import { listClubGuests } from "./guests-logic";
 import {
 	type Contact,
 	contactKey,
@@ -317,12 +317,28 @@ async function loadMeetingDetail(
 
 	// Club guests for the admin assign picker (#151) — pick-an-existing-guest.
 	// Management-only, like the roster; guests never appear on the public view.
+	//
+	// Through `listClubGuests`, NOT an inline query (#637). This was its own
+	// `select ... where club_id = ?` with no stage filter, so the picker offered
+	// every guest in the club — including `joined` ones. Assigning one of those
+	// puts `assigned_guest_id` on a slot for somebody who is a MEMBER, splitting
+	// a human whose two records were just joined up (#635), and nothing refuses
+	// it because assigning a guest to a slot is an ordinary operation.
+	//
+	// The seam had the correct filter and a comment saying exactly why converted
+	// guests must be excluded. It survived because `loadMeetingDetail` is a
+	// module-private function in a `createServerFn` module: unreachable from
+	// vitest, so the copy had no coverage while the seam beside it did.
+	//
+	// Projected to `{ id, name }` deliberately. `listClubGuests` also selects
+	// `email` and `phone` for the VP-Membership board, and the meeting payload
+	// has never carried guest contact details — passing its rows straight
+	// through would widen PII on this page as a side effect of a bug fix.
 	const clubGuests = canManage
-		? await db
-				.select({ id: guests.id, name: guests.name })
-				.from(guests)
-				.where(eq(guests.clubId, meeting.clubId))
-				.orderBy(asc(guests.name))
+		? (await listClubGuests(meeting.clubId)).map((g) => ({
+				id: g.id,
+				name: g.name,
+			}))
 		: [];
 
 	// Role recency for the assign picker (#146): per role, when each member last

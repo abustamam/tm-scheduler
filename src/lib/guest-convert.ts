@@ -43,6 +43,16 @@ export const LINK_MEMBER_NOT_IN_CLUB_MESSAGE =
 export const LINK_ALREADY_JOINED_MESSAGE =
 	"This guest is already linked to a member. Unlink them first if you need to point them somewhere else.";
 
+/**
+ * Refusal when a slot assignment names a guest who is now a member (#637).
+ *
+ * Takes the name because the admin is looking at a picker that offered this
+ * person as a guest — telling them "assign them as a member instead" without
+ * saying WHO reads as a non-sequitur on a screen listing twenty names.
+ */
+export const GUEST_IS_NOW_A_MEMBER_MESSAGE = (name: string): string =>
+	`${name} is a club member now — assign them from the member list above, not as a guest.`;
+
 /** Refusal when unlinking a guest that was never linked. */
 export const UNLINK_NOT_LINKED_MESSAGE = "This guest isn't linked to a member.";
 
