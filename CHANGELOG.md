@@ -2,6 +2,12 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.25.8.0] - 2026-08-26
+
+### Fixed
+
+- **Present now works offline too, from the same one online visit.** Opening a meeting before the meeting saved the agenda for offline use but nothing else — so the page came back without wifi and then tapping Present, the thing you actually stand up and use, hit an error. Opening a meeting now saves its Present and Print views alongside it, which is how the app already thought about a meeting everywhere else.
+
 ## [1.25.7.0] - 2026-08-25
 
 ### Fixed
