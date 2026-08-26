@@ -2,6 +2,12 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.25.9.0] - 2026-08-26
+
+### Fixed
+
+- **Present really works offline now — on the visit you actually make.** The previous release saved a meeting's Present and Print views, but only during the one page load where the app updated itself in the background. Every ordinary visit after that saved nothing, so opening a meeting on wifi and then losing signal still left Present dead. Opening a meeting now saves all three of its views every time, and saves the code each view needs to run — so the deck opens offline and its slides still advance.
+
 ## [1.25.8.0] - 2026-08-26
 
 ### Fixed
