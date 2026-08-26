@@ -2,6 +2,12 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.25.7.0] - 2026-08-25
+
+### Fixed
+
+- **People who already became members are no longer offered as guests when you fill a role.** The "Or assign a guest" list on a meeting showed *every* guest the club has ever had — including ones who have since joined, and ones you marked as not coming back. So someone could appear twice on the same screen: once in the member list where they belong, and again as a guest below it. Picking the guest version would have quietly split them back into two people, undoing the linking added in the last release. The list now shows only guests who are actually still prospects, and the app refuses the assignment outright if something else offers you a converted guest — so a page left open from before doesn't cause it either.
+
 ## [1.25.6.0] - 2026-08-25
 
 ### Added
