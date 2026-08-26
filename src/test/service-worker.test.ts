@@ -653,25 +653,73 @@ describe("priming on activation (#362)", () => {
 		sw = loadServiceWorker();
 	});
 
-	it("caches the open meeting page when a NEW worker takes over", async () => {
-		// The previous worker had cached it under the old nav version.
+	/** Prime with a distinct body per surface, so a mix-up is visible. */
+	function queueThreeSurfaces() {
+		sw.nextFetch.push(response(200, "AGENDA", { url: `${ORIGIN}${MEETING}` }));
+		sw.nextFetch.push(
+			response(200, "DECK", { url: `${ORIGIN}${MEETING}/present` }),
+		);
+		sw.nextFetch.push(
+			// Print 307s to its default layout; the worker follows and keys the
+			// FINAL url.
+			response(200, "SHEET", {
+				url: `${ORIGIN}${MEETING}/print?layout=grid`,
+				redirected: true,
+			}),
+		);
+	}
+
+	it("caches all three meeting surfaces when a NEW worker takes over", async () => {
+		// The previous worker had cached the page under the old nav version.
 		sw.seed("gavelup-nav-v3", { [`${ORIGIN}${MEETING}`]: "OLD AGENDA" });
 		sw.openClients = [`${ORIGIN}${MEETING}`];
-		sw.nextFetch.push(response(200, "AGENDA"));
+		queueThreeSurfaces();
 
 		await sw.activate();
 
 		// The old cache is gone, as it should be — but the CURRENT one now holds
-		// the page, so the user has not lost offline access by updating.
+		// the meeting, so the user has not lost offline access by updating.
 		expect(sw.caches.has("gavelup-nav-v3")).toBe(false);
-		expect(
-			sw.cacheFor("gavelup-nav-v4").entries.get(`${ORIGIN}${MEETING}`),
-		).toBe("AGENDA");
+		const entries = sw.cacheFor("gavelup-nav-v4").entries;
+		// ALL THREE, not just the open one. `evict` has always treated a meeting as
+		// three keys; priming treated it as one, and that asymmetry is why Present
+		// still failed offline after the meeting page was fixed.
+		expect(entries.get(`${ORIGIN}${MEETING}`)).toBe("AGENDA");
+		expect(entries.get(`${ORIGIN}${MEETING}/present`)).toBe("DECK");
+		expect(entries.get(`${ORIGIN}${MEETING}/print?layout=grid`)).toBe("SHEET");
+	});
+
+	it("serves Present offline after priming from the meeting page — the second repro", async () => {
+		// The reported sequence, exactly: open the meeting online, cut wifi,
+		// reload (works since v1.22.7.0), then click Present. That link is
+		// `target="_blank"`, so it is a real navigation the worker sees — into a
+		// URL nothing had primed.
+		sw.openClients = [`${ORIGIN}${MEETING}`];
+		queueThreeSurfaces();
+		await sw.activate();
+		expect(sw.nextFetch, "activation did not prime all three").toHaveLength(0);
+
+		sw.nextFetch.push(new Error("offline"));
+		const served = await sw.dispatchFetch(request(`${MEETING}/present`));
+		expect(served?.body).toBe("DECK");
+	});
+
+	it("primes Print under its redirected layout, and serves a bare /print from it", async () => {
+		sw.openClients = [`${ORIGIN}${MEETING}`];
+		queueThreeSurfaces();
+		await sw.activate();
+
+		// A bare `/…/print` request offline finds the `?layout=grid` entry through
+		// `networkFirst`'s ignoreSearch fallback — which is why keying by the final
+		// url is right rather than by the url we asked for.
+		sw.nextFetch.push(new Error("offline"));
+		const served = await sw.dispatchFetch(request(`${MEETING}/print`));
+		expect(served?.body).toBe("SHEET");
 	});
 
 	it("serves that page offline afterwards — the reported repro, end to end", async () => {
 		sw.openClients = [`${ORIGIN}${MEETING}`];
-		sw.nextFetch.push(response(200, "AGENDA"));
+		queueThreeSurfaces();
 		await sw.activate();
 
 		// The queue MUST be drained here, and asserting it is what makes the rest
@@ -705,7 +753,7 @@ describe("priming on activation (#362)", () => {
 		// Nothing to prime from, and the old cache is gone regardless — but the
 		// activation must not reject, or the worker never takes control at all.
 		sw.openClients = [`${ORIGIN}${MEETING}`];
-		sw.nextFetch.push(new Error("offline"));
+		for (let i = 0; i < 3; i++) sw.nextFetch.push(new Error("offline"));
 		await expect(sw.activate()).resolves.toBeUndefined();
 		expect(sw.cacheFor("gavelup-nav-v4").entries.size).toBe(0);
 	});
@@ -715,13 +763,18 @@ describe("priming on activation (#362)", () => {
 		// response as a takedown; the priming path must equally refuse to treat one
 		// as an agenda, or the step meant to protect the offline copy destroys it.
 		sw.openClients = [`${ORIGIN}${MEETING}`];
-		sw.nextFetch.push(
-			response(200, "PORTAL LOGIN", {
-				redirected: true,
-				url: `${ORIGIN}/login`,
-			}),
-		);
+		for (let i = 0; i < 3; i++) {
+			sw.nextFetch.push(
+				response(200, "PORTAL LOGIN", {
+					redirected: true,
+					url: `${ORIGIN}/login`,
+				}),
+			);
+		}
 		await sw.activate();
+		// The DESTINATION is what disqualifies it, not the redirect: `/login` is not
+		// an offline route. Print's 307 to `?layout=grid` lands on one and is kept,
+		// which is the distinction `!response.redirected` could not make.
 		expect(sw.cacheFor("gavelup-nav-v4").entries.size).toBe(0);
 	});
 });

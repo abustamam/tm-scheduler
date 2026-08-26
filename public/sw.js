@@ -113,39 +113,79 @@ async function primeOpenMeetingPages() {
 		return;
 	}
 	const cache = await caches.open(NAV_CACHE);
-	await Promise.all(
-		clients.map(async (client) => {
-			let url;
-			try {
-				url = new URL(client.url);
-			} catch {
-				return;
-			}
-			if (url.origin !== self.location.origin) return;
-			if (!isOfflineRoute(url)) return;
-			try {
-				const response = await fetch(client.url);
-				// The same three narrowings `isGoneResponse` documents, in the other
-				// direction: only a clean same-origin 200 is worth storing. A captive
-				// portal on venue wifi answers 200 with a login page after a redirect,
-				// and writing THAT over the agenda would turn a priming step into the
-				// thing that destroys the offline copy.
-				if (
-					response &&
-					response.ok &&
-					!response.redirected &&
-					response.type !== "opaque"
-				) {
-					// A URL STRING as the cache key, not `new Request(...)`: the Cache
-					// API accepts either, and this file never constructs a Request
-					// anywhere else — so the test harness has none to inject.
-					await cache.put(client.url, response.clone());
-				}
-			} catch {
-				// Activated while offline. Nothing to prime from.
-			}
-		}),
-	);
+	const targets = new Set();
+	for (const client of clients) {
+		let url;
+		try {
+			url = new URL(client.url);
+		} catch {
+			continue;
+		}
+		if (url.origin !== self.location.origin) continue;
+		if (!isOfflineRoute(url)) continue;
+		for (const surface of meetingSurfaces(url)) targets.add(surface);
+	}
+	await Promise.all([...targets].map((href) => primeOne(cache, href)));
+}
+
+/**
+ * The cache keys ONE open meeting occupies: the page itself, Present, and Print.
+ *
+ * `evict` has always treated a meeting as three keys — its own comment says so,
+ * and clears the whole prefix on a takedown precisely so a device that primed
+ * all three cannot keep answering from the two it did not happen to re-request.
+ * Priming treated it as ONE, and that asymmetry is the second half of #362: the
+ * meeting page came back offline (v1.22.7.0) and then Present did not, because
+ * Present is its own entry and had never been fetched.
+ *
+ * That is also how a club actually uses this. Someone opens the agenda before
+ * the meeting, and the surface they reach for during it is Present — a
+ * `target="_blank"` link, so a real navigation the worker sees, into a URL
+ * nothing had primed.
+ *
+ * A non-meeting offline route (`/meetings/<id>`) has no siblings; it primes
+ * itself.
+ */
+function meetingSurfaces(url) {
+	const prefix = meetingPrefix(url.pathname);
+	if (prefix === url.pathname && !/^\/club\/[^/]+\/meeting\//.test(prefix)) {
+		return [url.href];
+	}
+	const base = `${url.origin}${prefix}`;
+	return [base, `${base}/present`, `${base}/print`];
+}
+
+/** Fetch one URL and store it, or leave the cache untouched. Never throws. */
+async function primeOne(cache, href) {
+	try {
+		const response = await fetch(href);
+		if (!response || !response.ok || response.type === "opaque") return;
+		// Follow the redirect rather than refusing it, then judge the DESTINATION.
+		//
+		// `!response.redirected` was too blunt: `/…/print` legitimately 307s to
+		// `?layout=grid`, so refusing every redirect meant Print could never be
+		// primed. What actually distinguishes a captive portal is WHERE it lands —
+		// its login page is another origin, or a path that is not an offline route
+		// at all. Both fail this check; the Print redirect passes.
+		let finalUrl;
+		try {
+			finalUrl = new URL(response.url || href);
+		} catch {
+			return;
+		}
+		if (finalUrl.origin !== self.location.origin) return;
+		if (!isOfflineRoute(finalUrl)) return;
+		// Keyed by the FINAL url, so Print is stored as `?layout=grid` — which is
+		// what `networkFirst`'s `ignoreSearch` fallback then answers a bare
+		// `/…/print` request from.
+		//
+		// A URL STRING as the key, not `new Request(...)`: the Cache API accepts
+		// either, and this file constructs no Request anywhere else, so the test
+		// harness has none to inject.
+		await cache.put(finalUrl.href, response.clone());
+	} catch {
+		// Activated while offline. Nothing to prime from.
+	}
 }
 
 /**
