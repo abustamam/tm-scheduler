@@ -2,6 +2,12 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.25.11.0] - 2026-08-27
+
+### Fixed
+
+- **Links across the app now show the colour they were designed with.** A styling rule was quietly overriding the colour set on individual links, so twenty-six of them had been rendering in the same teal for months no matter what they were meant to look like: the highlighted item in the sidebar, "no speeches yet" and similar prompts on your dashboard, several links on the landing and resources pages, and others on the member and admin screens. Seven of those were too faint to meet the accessibility standard for readable text. All twenty-six are now the colour they were supposed to be, and eleven of them are easier to read as a result. This also fixes the underlying cause rather than the symptom, so a link added in future is correct by default instead of needing a special case.
+
 ## [1.25.10.0] - 2026-08-27
 
 ### Fixed
