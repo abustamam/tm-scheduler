@@ -19,9 +19,10 @@
 // and the email anchor beside it has to carry the SAME `text-primary` and the
 // same kind of `data-slot` opt-out, or the two peer actions on one row render
 // in two different colours with the email below AA. That is the state this
-// route shipped in until the email half was escaped too. jsdom computes no
-// cascade, so what is checkable here is the class and the attribute;
-// `whatsapp-phone-link-color.guard.test.ts` holds the cascade half.
+// route shipped in until the email half was escaped too. #646 has since made
+// the opt-out unnecessary (the rule is layered, so utilities win), and the
+// attributes remain as the selectors this file uses. jsdom computes no
+// cascade; `text-link-layering.guard.test.ts` holds that half.
 //
 // Pattern follows vp-membership.test.tsx / roster.test.tsx: mock the server-fn
 // modules (they reach `#/db` → `pg`, which must not load under jsdom), stub
@@ -172,8 +173,8 @@ describe("member profile — contact row", () => {
 	//
 	// Asserted from the RENDERED anchor rather than by grepping the call site, so
 	// re-adding a colour prop here fails loudly instead of quietly reintroducing
-	// a class that does nothing. `whatsapp-phone-link-color.guard.test.ts` holds
-	// the cascade half, which jsdom cannot see.
+	// a class that does nothing. `text-link-layering.guard.test.ts` holds the
+	// cascade half, which jsdom cannot see.
 	it("passes no styling — the component owns colour and the opt-out", async () => {
 		await renderRoute();
 		const column = within(headerColumn("Ada Member"));

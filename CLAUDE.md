@@ -304,59 +304,44 @@ Optional (platform superadmin): `SUPERADMIN_EMAILS` — a comma-separated, case-
   differences were deliberate. A new print route imports the constant. `print-page-reset.guard.test.ts`
   walks `src/routes/` recursively and fails on a route that defines its own `.pgwrap` padding, so the
   next print route is enrolled automatically rather than remembered.
-- **The global text-link rule is UNLAYERED — it beats any layered Tailwind utility.**
-  `src/styles.css` styles bare `a` outside `@layer`, so it wins over the color a component sets
-  on its own anchors and repaints them link-teal. Any component that colors anchors must be
-  added to the exclusion list — `styles.css` is the canonical copy and this line deliberately
-  does NOT quote the selector, because quoting it is why this paragraph described four arms
-  while the file had six. The arms name `button`, the `dropdown-menu-` PREFIX, `wa-phone`,
-  `wa-email`, `back-link`, `guest-book-link` and `meeting-nav-link`. Add to the `:hover` rule
-  beside it too, which is a SEPARATE selector, so excluding only the base
-  rule leaves the teal reappearing under the cursor. It has cost five bugs: `<Button asChild>`
-  made the landing "Sign in" button read teal-on-teal in dark mode, `<DropdownMenuItem asChild>`
-  split the meeting Print & export menu into link-colored `<Link>` items sitting beside
-  foreground `<button>` items (#541), the WhatsApp phone link plus the `mailto:` link beside
-  it were repainted `--lagoon-deep` (#328f97, 3.81:1 on white, at `text-xs`) on the four surfaces
-  that render contact — under AA on the screens that show it most (v1.12.0.0) — `BackLink`'s two
-  "Back to …" anchors went the same way at `text-sm`, and the meeting page's date pills at
-  v1.25.10.0.
-  **Sort candidates by whether the anchor has a FILL, not by how many there are.** That last one
-  is why: every earlier instance degraded to 3.81:1, which is under AA but legible, so the class
-  read as a papercut. The date strip's ACTIVE pill is `bg-primary text-primary-foreground`, so the
-  repaint put the label on its OWN fill in nearly the same hue — 1.19:1 dark, 1.53:1 light, i.e.
-  the date you were looking at was the one date you could not read. Same mechanism, an order of
-  magnitude worse outcome, and the only signal that separates them is `bg-*` on the anchor.
-  Four rules the
-  bugs taught. Exclude by `data-slot` PREFIX when a primitive has several `asChild` slots —
-  naming only `dropdown-menu-item` left the same split reachable through the
-  checkbox/radio/sub-trigger slots. Fix it with another `:not()`, never with a class: nothing
-  layered beats an unlayered rule, so a `text-primary` at the component or the call site loses
-  silently (four call sites passed a colour utility that did nothing). And exclude PEER actions
-  together — `wa-phone` shipped without `wa-email` and rendered one contact pair in two colours,
-  one of them failing AA, which is what a half-applied fix looks like. Nothing here can see the
-  cascade — jsdom loads no stylesheet, the print page-count harness inlines only
-  `PRINT_PAGE_CSS`, and typecheck and lint have no view of it — so the gates are source greps
-  (`export-menu-link-color.guard.test.ts`, `whatsapp-phone-link-color.guard.test.ts`,
-  `back-link-color.guard.test.ts`, `meeting-nav-link-color.guard.test.ts`, comment-blind via
-  `#/test/guard-source`; `guest-book-link` has none — #647). A grep is only HALF the gate when the
-  anchor is a `<Link>` rather than a bare `<a>`: it cannot see whether TanStack forwards an
-  unknown `data-*` prop to the anchor it renders, and if that ever stopped, every grep would
-  stay green while the exclusion silently did nothing. `meeting-nav-strip.test.tsx` is the other
-  half — a jsdom render asserting the attribute reaches the DOM. Note also that NOTHING in
-  `bun run test` parses `styles.css` as CSS (the guards read it as text), so a malformed rule
-  ships green; only `bun run build` compiles it, and the minifier strips quotes from attribute
-  selectors, so grep the bundle for `[data-slot=x]`, not `[data-slot="x"]`.
-  Since v1.12.0.0 they assert the required exclusions
-  are still PRESENT rather than pinning the whole selector, because an anchored whole-line match
-  fails every time the rule is correctly extended and that trains people to edit the guard
-  instead of reading it; they also require every `:not()` arm to be a `[data-slot=…]` opt-out,
-  since appending `:not([class])` would switch the rule off for every real anchor in the app
-  while every substring assertion stayed green — though note that arm check still admits
-  `[data-slot^="a"]`, a prefix arm that would exempt every slot starting with "a" (#647). None
-  of the four guards enrolls the next component for you, and an app-wide sweep at v1.25.10.0
-  found **twelve anchors still unexcluded** (light-mode only, 3.81:1) — see #646, which also
-  records why the fix is NOT twelve more `:not()` arms but a change of shape, and #647 for the
-  two guard gaps (`guest-book-link` has no guard at all).
+- **The global text-link rule is LAYERED — a component's own colour utility wins.**
+  `src/styles.css` styles bare `a` inside `@layer base`. Tailwind v4 declares
+  `@layer theme, base, components, utilities`, and layer order beats specificity, so any
+  component setting `text-*` on its own anchor gets that colour with no opt-out needed. Add a
+  coloured anchor anywhere and it just works; there is nothing to enrol.
+  **It was UNLAYERED until #646, and that cost seven bugs**, which is why this entry exists.
+  Unlayered CSS beats every layered rule regardless of specificity, so the rule silently
+  overrode whatever a component set: the landing "Sign in" button read teal-on-teal in dark
+  mode, the meeting Print & export menu (#541) split one menu of peer actions into two
+  apparent classes, the WhatsApp phone/`mailto:` pair rendered `--lagoon-deep` (#328f97,
+  3.81:1 on white) on the four surfaces that show contact, `BackLink` went the same way at
+  `text-sm`, and the meeting date strip's ACTIVE pill — `bg-primary text-primary-foreground` —
+  put its label on its own fill at 1.19:1 in dark (#645). Each was fixed by adding another
+  `:not([data-slot="…"])` opt-out arm. The arm count reached seven while **26 anchors were
+  still broken**, because opt-out enrols nobody. Two lessons worth keeping. Severity tracked
+  whether the anchor had a FILL: on plain text it degraded to 3.81:1 (under AA, still
+  legible), but on a fill it landed at 1.19:1 — same mechanism, an order of magnitude worse,
+  and the only signal separating them was `bg-*` on the anchor. And the sweep that found the
+  26 initially found only 12, because its regex matched named tokens and missed every
+  arbitrary value (`text-[var(--sea-ink)]`); when grepping for utilities, remember
+  `text-[…]` is one.
+  **Do NOT re-add a `:not()` arm and do NOT add `!important`** — either makes the rule beat
+  utilities again and reopens all 26 at once. Do not add an unlayered `a { color }` rule
+  anywhere either; that is the original shape. `.prose-gavelup a` is the one waived
+  unlayered anchor rule (scoped to markdown, deliberate, predates #646).
+  The five bespoke `data-slot`s (`wa-phone`, `wa-email`, `back-link`, `guest-book-link`,
+  `meeting-nav-link`) survive on their components as TEST SELECTORS — three non-colour
+  suites assert them — and no longer opt anything out; `data-slot="button"` and
+  `dropdown-menu-*` are shadcn-native and unrelated.
+  Nothing in-process can see any of this: jsdom loads no stylesheet, the print page-count
+  harness inlines only `PRINT_PAGE_CSS`, typecheck and lint have no view of the cascade, and
+  `bun run test` never parses `styles.css` as CSS at all. The gate is therefore a source
+  grep, `text-link-layering.guard.test.ts` (comment-blind via `#/test/guard-source` for the
+  must-be-present half, RAW for the offender sweep), which fails if the rule leaves
+  `@layer base`, if an unlayered bare-`a` colour rule appears, if an arm returns, or if
+  `!important` is added. To verify the cascade for real you must build: `bun run build`, then
+  grep the compiled bundle — and note the minifier strips quotes, so match
+  `[data-slot=x]`, not `[data-slot="x"]`.
 - **A dialog's height belongs to the primitive — do not re-solve it at the call site.**
   `DialogContent` (`src/components/ui/dialog.tsx`) carries
   `max-h-[calc(100svh-2rem)] overflow-y-auto overscroll-contain`, and the COMBINATION is the

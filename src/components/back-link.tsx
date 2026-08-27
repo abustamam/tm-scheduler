@@ -13,15 +13,13 @@ import { forwardRef } from "react";
  * be calling `Link` directly — while the icon, the shared classes and the
  * colour opt-out below live in one place instead of two hand-rolled copies.
  *
- * `data-slot="back-link"` opts this anchor OUT of the unlayered
- * `a:not(…) { color: var(--lagoon-deep) }` rule in `styles.css`. That rule
- * beats anything Tailwind emits into `@layer utilities`, so without the
- * exclusion `text-muted-foreground` below is silently discarded and both
- * call sites render `--lagoon-deep` (#328f97, 3.81:1 on white) instead —
- * under WCAG AA for normal text. Same shape as the `wa-phone`/`wa-email` and
- * `dropdown-menu-item` exclusions beside it in `styles.css`, and a class
- * cannot fix this: that has already failed here four times.
- * `back-link-color.guard.test.ts` pins the marker and both rules together.
+ * `data-slot="back-link"` is a TEST SELECTOR, not a colour opt-out. It used
+ * to be one: the `a { color: var(--lagoon-deep) }` rule in `styles.css` was
+ * unlayered, so it beat `text-muted-foreground` below and both call sites
+ * rendered #328f97 at 3.81:1 on white — under WCAG AA. #646 moved that rule
+ * into `@layer base`, where a utility beats it by layer order, so the
+ * exclusion it needed is gone and the colour below now simply wins.
+ * `text-link-layering.guard.test.ts` is what keeps that true.
  */
 const BackAnchor = forwardRef<
 	HTMLAnchorElement,

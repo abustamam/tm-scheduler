@@ -129,12 +129,14 @@ describe("WhatsAppPhoneLink", () => {
 		expect(
 			link.className,
 			"WhatsAppPhoneLink must colour its own anchor — call sites no longer " +
-				"pass one, and a caller-supplied colour cannot beat the unlayered " +
-				"`a { color }` rule in styles.css.",
+				"pass one. (Before #646 a caller-supplied colour could not have won " +
+				"anyway: the `a { color }` rule in styles.css was unlayered.)",
 		).toContain("text-primary");
-		// Without this the class above is dead CSS. The two are one fix, so they
-		// are asserted together; `whatsapp-phone-link-color.guard.test.ts` pins the
-		// other half of the pair, in styles.css.
+		// Kept as a TEST SELECTOR since #646: the `text-primary` above is no
+		// longer inert without it (layering means the utility wins on its own),
+		// but this attribute is the stable handle the roster and profile suites
+		// use to find the link. `text-link-layering.guard.test.ts` holds the
+		// cascade half.
 		expect(
 			link.getAttribute("data-slot"),
 			"the `text-primary` above is inert without this attribute",
