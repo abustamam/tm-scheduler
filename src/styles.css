@@ -301,15 +301,33 @@ body::after {
    `text-muted-foreground` on a "Back to …" anchor, and without the exclusion
    this rule overrode that down to the same --lagoon-deep at `text-sm` — under
    AA for normal text. `back-link-color.guard.test.ts` fails if either rule
-   loses this exclusion. */
-a:not([data-slot="button"]):not([data-slot^="dropdown-menu-"]):not([data-slot="wa-phone"]):not([data-slot="wa-email"]):not([data-slot="back-link"]):not([data-slot="guest-book-link"]) {
+   loses this exclusion.
+
+   `guest-book-link` (the "Sign the guest book" anchor in the identity gate's
+   not-listed hint, #629) is the sixth: it sets `text-primary` on itself, the
+   same shape as the `wa-*` pair above. It has no guard of its own.
+
+   `meeting-nav-link` (`MeetingNavStrip`, the meeting page's date pills) is the
+   seventh, and the worst measured instance so far — the first one on a FILL.
+   The active pill is `bg-primary text-primary-foreground`; without the
+   exclusion the foreground was repainted --lagoon-deep and the label sat on
+   --primary in almost the same hue: 1.19:1 in dark (#8de5db on #60d7cf) and
+   1.53:1 in light (#328f97 on #246f76), i.e. the date you are looking at was
+   the one date you could not read. With the exclusion it is 10.8:1 dark /
+   5.8:1 light. The inactive pills are excluded by the same arm — they are
+   peer items in one strip, and the `wa-phone`/`wa-email` case above is the
+   precedent for not splitting a peer set — which also restores their intended
+   `text-muted-foreground` (10.1:1 dark / 6.7:1 light on --card).
+   `meeting-nav-link-color.guard.test.ts` fails if either rule loses this
+   exclusion. */
+a:not([data-slot="button"]):not([data-slot^="dropdown-menu-"]):not([data-slot="wa-phone"]):not([data-slot="wa-email"]):not([data-slot="back-link"]):not([data-slot="guest-book-link"]):not([data-slot="meeting-nav-link"]) {
   color: var(--lagoon-deep);
   text-decoration-color: rgba(50, 143, 151, 0.4);
   text-decoration-thickness: 1px;
   text-underline-offset: 2px;
 }
 
-a:not([data-slot="button"]):not([data-slot^="dropdown-menu-"]):not([data-slot="wa-phone"]):not([data-slot="wa-email"]):not([data-slot="back-link"]):not([data-slot="guest-book-link"]):hover {
+a:not([data-slot="button"]):not([data-slot^="dropdown-menu-"]):not([data-slot="wa-phone"]):not([data-slot="wa-email"]):not([data-slot="back-link"]):not([data-slot="guest-book-link"]):not([data-slot="meeting-nav-link"]):hover {
   color: var(--lagoon-ink);
 }
 

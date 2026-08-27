@@ -307,15 +307,26 @@ Optional (platform superadmin): `SUPERADMIN_EMAILS` — a comma-separated, case-
 - **The global text-link rule is UNLAYERED — it beats any layered Tailwind utility.**
   `src/styles.css` styles bare `a` outside `@layer`, so it wins over the color a component sets
   on its own anchors and repaints them link-teal. Any component that colors anchors must be
-  added to the exclusion list, currently
-  `a:not([data-slot="button"]):not([data-slot^="dropdown-menu-"]):not([data-slot="wa-phone"]):not([data-slot="wa-email"])`
-  — and to the `:hover` rule beside it, which is a SEPARATE selector, so excluding only the base
-  rule leaves the teal reappearing under the cursor. It has cost three bugs: `<Button asChild>`
+  added to the exclusion list — `styles.css` is the canonical copy and this line deliberately
+  does NOT quote the selector, because quoting it is why this paragraph described four arms
+  while the file had six. The arms name `button`, the `dropdown-menu-` PREFIX, `wa-phone`,
+  `wa-email`, `back-link`, `guest-book-link` and `meeting-nav-link`. Add to the `:hover` rule
+  beside it too, which is a SEPARATE selector, so excluding only the base
+  rule leaves the teal reappearing under the cursor. It has cost five bugs: `<Button asChild>`
   made the landing "Sign in" button read teal-on-teal in dark mode, `<DropdownMenuItem asChild>`
   split the meeting Print & export menu into link-colored `<Link>` items sitting beside
-  foreground `<button>` items (#541), and the WhatsApp phone link plus the `mailto:` link beside
+  foreground `<button>` items (#541), the WhatsApp phone link plus the `mailto:` link beside
   it were repainted `--lagoon-deep` (#328f97, 3.81:1 on white, at `text-xs`) on the four surfaces
-  that render contact — under AA on the screens that show it most (v1.12.0.0). Three rules the
+  that render contact — under AA on the screens that show it most (v1.12.0.0) — `BackLink`'s two
+  "Back to …" anchors went the same way at `text-sm`, and the meeting page's date pills at
+  v1.25.10.0.
+  **Sort candidates by whether the anchor has a FILL, not by how many there are.** That last one
+  is why: every earlier instance degraded to 3.81:1, which is under AA but legible, so the class
+  read as a papercut. The date strip's ACTIVE pill is `bg-primary text-primary-foreground`, so the
+  repaint put the label on its OWN fill in nearly the same hue — 1.19:1 dark, 1.53:1 light, i.e.
+  the date you were looking at was the one date you could not read. Same mechanism, an order of
+  magnitude worse outcome, and the only signal that separates them is `bg-*` on the anchor.
+  Four rules the
   bugs taught. Exclude by `data-slot` PREFIX when a primitive has several `asChild` slots —
   naming only `dropdown-menu-item` left the same split reachable through the
   checkbox/radio/sub-trigger slots. Fix it with another `:not()`, never with a class: nothing
@@ -326,12 +337,25 @@ Optional (platform superadmin): `SUPERADMIN_EMAILS` — a comma-separated, case-
   cascade — jsdom loads no stylesheet, the print page-count harness inlines only
   `PRINT_PAGE_CSS`, and typecheck and lint have no view of it — so the gates are source greps
   (`export-menu-link-color.guard.test.ts`, `whatsapp-phone-link-color.guard.test.ts`,
-  comment-blind via `#/test/guard-source`). Since v1.12.0.0 they assert the required exclusions
+  `back-link-color.guard.test.ts`, `meeting-nav-link-color.guard.test.ts`, comment-blind via
+  `#/test/guard-source`; `guest-book-link` has none). A grep is only HALF the gate when the
+  anchor is a `<Link>` rather than a bare `<a>`: it cannot see whether TanStack forwards an
+  unknown `data-*` prop to the anchor it renders, and if that ever stopped, every grep would
+  stay green while the exclusion silently did nothing. `meeting-nav-strip.test.tsx` is the other
+  half — a jsdom render asserting the attribute reaches the DOM. Note also that NOTHING in
+  `bun run test` parses `styles.css` as CSS (the guards read it as text), so a malformed rule
+  ships green; only `bun run build` compiles it, and the minifier strips quotes from attribute
+  selectors, so grep the bundle for `[data-slot=x]`, not `[data-slot="x"]`.
+  Since v1.12.0.0 they assert the required exclusions
   are still PRESENT rather than pinning the whole selector, because an anchored whole-line match
   fails every time the rule is correctly extended and that trains people to edit the guard
   instead of reading it; they also require every `:not()` arm to be a `[data-slot=…]` opt-out,
   since appending `:not([class])` would switch the rule off for every real anchor in the app
-  while every substring assertion stayed green. Neither guard enrolls the next component for you.
+  while every substring assertion stayed green — though note that arm check still admits
+  `[data-slot^="a"]`, a prefix arm that would exempt every slot starting with "a". None of the
+  four guards enrolls the next component for you, and an app-wide sweep at v1.25.10.0 found
+  **twelve anchors still unexcluded** (light-mode only, 3.81:1); see TODOS.md's
+  `## Text-link colour rule`, which also records why the fix is not twelve more `:not()` arms.
 - **A dialog's height belongs to the primitive — do not re-solve it at the call site.**
   `DialogContent` (`src/components/ui/dialog.tsx`) carries
   `max-h-[calc(100svh-2rem)] overflow-y-auto overscroll-contain`, and the COMBINATION is the
