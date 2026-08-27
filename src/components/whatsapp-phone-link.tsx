@@ -78,15 +78,13 @@ export function WhatsAppPhoneLink({
 			target="_blank"
 			rel="noopener noreferrer"
 			title={`Message ${name} on WhatsApp`}
-			// Opts this anchor OUT of the unlayered `a { color: … }` rule in
-			// `styles.css`. That rule is unlayered, so it beats anything Tailwind
-			// emits into `@layer utilities` — a `text-primary` here or at a call site
-			// loses to it silently and the link renders `--lagoon-deep` (#328f97,
-			// ~3.8:1 on white) at `text-xs`, under AA. The exclusion is another
-			// `:not()`, matching how the same collision was fixed for `<Button
-			// asChild>` and dropdown items; a class cannot win against an unlayered
-			// rule, which is the whole point. `whatsapp-phone-link-color.guard.test.ts`
-			// pins the attribute and both rules together.
+			// A TEST SELECTOR, not a colour opt-out — `whatsapp-phone-link.test.ts`
+			// and `members.$id.test.tsx` both assert it. It used to be an opt-out:
+			// the `a { color: … }` rule in `styles.css` was unlayered, so it beat
+			// the `text-primary` below and this rendered `--lagoon-deep` (#328f97,
+			// ~3.8:1 on white) at `text-xs`, under AA. #646 moved that rule into
+			// `@layer base`, where utilities win by layer order, so the colour
+			// below now applies on its own. See `text-link-layering.guard.test.ts`.
 			data-slot="wa-phone"
 			// Colour lives HERE, not at the call sites. Four of them passed a colour
 			// utility that did nothing (see above), and the component is the only

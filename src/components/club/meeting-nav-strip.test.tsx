@@ -1,18 +1,18 @@
 // @vitest-environment jsdom
 //
-// The colour fix for the date pills is a CSS-cascade change, and the guard test
-// beside this file (`meeting-nav-link-color.guard.test.ts`) covers both halves
-// it can see: the `:not([data-slot="meeting-nav-link"])` arm on the unlayered
-// text-link rule, and the `data-slot` literal in this component's source.
+// Written for #645, when `data-slot="meeting-nav-link"` was a colour opt-out
+// and this file existed to prove the one link a source grep cannot see: these
+// pills are a TanStack `<Link>`, not a bare `<a>`, so the opt-out only worked
+// if `Link` FORWARDED an unknown `data-*` prop to the anchor it renders.
 //
-// One link in that chain is neither of those, and no source grep can see it:
-// these pills are a TanStack `<Link>`, not a bare `<a>`, so the exclusion only
-// works if `Link` FORWARDS an unknown `data-*` prop through to the anchor it
-// renders. If it ever stopped, both guard assertions would stay green, the
-// attribute would never reach the DOM, and the unlayered rule would repaint the
-// active pill at 1.19:1 again with nothing failing. jsdom loads no stylesheet
-// so it cannot check the colour — but it can check the attribute arrives, which
-// is the half the greps are blind to.
+// #646 removed the opt-out mechanism entirely — the text-link rule moved into
+// `@layer base`, so a component's own colour utility wins by layer order and
+// no anchor needs escaping. The `data-slot` stays as a TEST SELECTOR, and the
+// prop-forwarding assertion below is why it is a real one rather than a
+// decorative attribute nothing reads. The rest of this file covers the strip's
+// own behaviour (all pills render, the active one carries `aria-current`, the
+// strip hides itself below two items), which was always independent of colour.
+// `text-link-layering.guard.test.ts` now holds the cascade half.
 import {
 	createMemoryHistory,
 	createRootRoute,

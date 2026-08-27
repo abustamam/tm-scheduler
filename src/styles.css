@@ -265,70 +265,52 @@ body::after {
   mask-image: radial-gradient(circle at 50% 30%, black, transparent 78%);
 }
 
-/* Text-link styling — but NOT anchors that a component already colors:
-   `<Button asChild>` → `<a data-slot="button">`, and `<DropdownMenuItem asChild>`
-   → `<a data-slot="dropdown-menu-item">`. This bare `a` rule is unlayered, so
-   without the exclusion it wins over the layered utility the component sets and
-   overrides its color — the landing "Sign in" button read teal-on-teal in dark
-   mode, and the meeting Print & export menu (#541) rendered its four <Link>
-   items in link-teal beside its two <button> items in foreground, splitting one
-   menu of peer actions into two apparent classes. Any new dropdown with link
-   items inherits the fix.
+/* Text-link styling. LAYERED, deliberately (#646).
 
-   `wa-phone` (`WhatsAppPhoneLink`) and `wa-email` (the `mailtoHref` anchor
-   beside it) are the third and fourth. Both set `text-primary` on themselves —
-   in LIGHT mode that is --lagoon-ink, AA-verified 5.8:1 on white; in dark
-   --primary resolves to --lagoon instead, a different and separately-checked
-   value, so 5.8:1 is not a claim about both themes. Without the exclusion this
-   rule overrode that down to --lagoon-deep — #328f97, 3.81:1 on white, rendered
-   at 12px on the sign-up sheet, the roster, the member profile and the guest
-   card, i.e. under AA on the surfaces that show it most.
+   This lives inside `@layer base` so a Tailwind colour utility on an anchor
+   BEATS it. Tailwind v4 declares `@layer theme, base, components, utilities`,
+   and layer order wins over specificity, so any component setting its own
+   `text-*` on an anchor gets that colour with no opt-out required.
 
-   They are named separately rather than folded into one `[data-slot^="wa-"]`
-   prefix so each opt-out stays greppable back to the component that asked for
-   it. The two are one CONTACT PAIR — peer actions on a single row — so they
-   must be excluded together or not at all: `wa-phone` alone shipped the pair in
-   two different colours, one of them failing AA, which is what a half-applied
-   fix looks like. Excluded here rather than fought with a class, because no
-   class can beat an unlayered rule; that is the same conclusion the two cases
-   above reached. `whatsapp-phone-link-color.guard.test.ts` fails if either rule
-   loses either exclusion, and if any `:not()` arm stops being a `data-slot`
-   opt-out (a `:not([class])` arm would switch this rule off for every anchor in
-   the app while every substring assertion stayed green).
+   It was unlayered until #646, and that cost seven bugs. Unlayered CSS beats
+   every layered rule regardless of specificity, so this rule silently
+   overrode whatever colour a component set on its own anchors — the landing
+   "Sign in" button read teal-on-teal in dark mode, the meeting Print & export
+   menu (#541) split one menu of peer actions into two apparent classes, the
+   WhatsApp phone/email pair rendered at 3.81:1 on the four surfaces that show
+   contact, `BackLink` went the same way at `text-sm`, and the meeting date
+   strip's ACTIVE pill — `bg-primary text-primary-foreground` — put its label
+   on its own fill at 1.19:1 in dark (#645). Each was fixed by adding another
+   `:not([data-slot="…"])` opt-out arm. The arm count reached seven while 26
+   anchors were still broken, because opt-out enrols nobody: a new coloured
+   anchor breaks silently until someone remembers this rule exists.
 
-   `back-link` (`BackLink`, #agenda-templates Task 11) is the fifth. Both of
-   its call sites (the per-meeting agenda editor, the roles guide) set
-   `text-muted-foreground` on a "Back to …" anchor, and without the exclusion
-   this rule overrode that down to the same --lagoon-deep at `text-sm` — under
-   AA for normal text. `back-link-color.guard.test.ts` fails if either rule
-   loses this exclusion.
+   Layering removed the cause, so all seven arms and their four guard tests
+   are gone. Do NOT re-add an arm, and do NOT add `!important` — either one
+   makes this beat utilities again and reopens all 26 at once.
 
-   `guest-book-link` (the "Sign the guest book" anchor in the identity gate's
-   not-listed hint, #629) is the sixth: it sets `text-primary` on itself, the
-   same shape as the `wa-*` pair above. It has no guard of its own.
+   The five bespoke `data-slot`s (`wa-phone`, `wa-email`, `back-link`,
+   `guest-book-link`, `meeting-nav-link`) deliberately survive on their
+   components: three non-colour suites assert them as test selectors. They no
+   longer opt anything out. `data-slot="button"` and `dropdown-menu-*` are
+   shadcn-native and unrelated.
 
-   `meeting-nav-link` (`MeetingNavStrip`, the meeting page's date pills) is the
-   seventh, and the worst measured instance so far — the first one on a FILL.
-   The active pill is `bg-primary text-primary-foreground`; without the
-   exclusion the foreground was repainted --lagoon-deep and the label sat on
-   --primary in almost the same hue: 1.19:1 in dark (#8de5db on #60d7cf) and
-   1.53:1 in light (#328f97 on #246f76), i.e. the date you are looking at was
-   the one date you could not read. With the exclusion it is 10.8:1 dark /
-   5.8:1 light. The inactive pills are excluded by the same arm — they are
-   peer items in one strip, and the `wa-phone`/`wa-email` case above is the
-   precedent for not splitting a peer set — which also restores their intended
-   `text-muted-foreground` (10.1:1 dark / 6.7:1 light on --card).
-   `meeting-nav-link-color.guard.test.ts` fails if either rule loses this
-   exclusion. */
-a:not([data-slot="button"]):not([data-slot^="dropdown-menu-"]):not([data-slot="wa-phone"]):not([data-slot="wa-email"]):not([data-slot="back-link"]):not([data-slot="guest-book-link"]):not([data-slot="meeting-nav-link"]) {
-  color: var(--lagoon-deep);
-  text-decoration-color: rgba(50, 143, 151, 0.4);
-  text-decoration-thickness: 1px;
-  text-underline-offset: 2px;
-}
+   `text-link-layering.guard.test.ts` fails if this rule leaves `@layer base`,
+   if any unlayered bare-`a` colour rule appears anywhere in this file, if an
+   `:not()` arm comes back, or if `!important` is added. Nothing else can see
+   it: jsdom loads no stylesheet, the print harness inlines only
+   PRINT_PAGE_CSS, and `bun run test` never parses this file as CSS. */
+@layer base {
+  a {
+    color: var(--lagoon-deep);
+    text-decoration-color: rgba(50, 143, 151, 0.4);
+    text-decoration-thickness: 1px;
+    text-underline-offset: 2px;
+  }
 
-a:not([data-slot="button"]):not([data-slot^="dropdown-menu-"]):not([data-slot="wa-phone"]):not([data-slot="wa-email"]):not([data-slot="back-link"]):not([data-slot="guest-book-link"]):not([data-slot="meeting-nav-link"]):hover {
-  color: var(--lagoon-ink);
+  a:hover {
+    color: var(--lagoon-ink);
+  }
 }
 
 code {
