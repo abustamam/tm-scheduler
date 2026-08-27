@@ -338,7 +338,7 @@ Optional (platform superadmin): `SUPERADMIN_EMAILS` — a comma-separated, case-
   `PRINT_PAGE_CSS`, and typecheck and lint have no view of it — so the gates are source greps
   (`export-menu-link-color.guard.test.ts`, `whatsapp-phone-link-color.guard.test.ts`,
   `back-link-color.guard.test.ts`, `meeting-nav-link-color.guard.test.ts`, comment-blind via
-  `#/test/guard-source`; `guest-book-link` has none). A grep is only HALF the gate when the
+  `#/test/guard-source`; `guest-book-link` has none — #647). A grep is only HALF the gate when the
   anchor is a `<Link>` rather than a bare `<a>`: it cannot see whether TanStack forwards an
   unknown `data-*` prop to the anchor it renders, and if that ever stopped, every grep would
   stay green while the exclusion silently did nothing. `meeting-nav-strip.test.tsx` is the other
@@ -352,10 +352,11 @@ Optional (platform superadmin): `SUPERADMIN_EMAILS` — a comma-separated, case-
   instead of reading it; they also require every `:not()` arm to be a `[data-slot=…]` opt-out,
   since appending `:not([class])` would switch the rule off for every real anchor in the app
   while every substring assertion stayed green — though note that arm check still admits
-  `[data-slot^="a"]`, a prefix arm that would exempt every slot starting with "a". None of the
-  four guards enrolls the next component for you, and an app-wide sweep at v1.25.10.0 found
-  **twelve anchors still unexcluded** (light-mode only, 3.81:1); see TODOS.md's
-  `## Text-link colour rule`, which also records why the fix is not twelve more `:not()` arms.
+  `[data-slot^="a"]`, a prefix arm that would exempt every slot starting with "a" (#647). None
+  of the four guards enrolls the next component for you, and an app-wide sweep at v1.25.10.0
+  found **twelve anchors still unexcluded** (light-mode only, 3.81:1) — see #646, which also
+  records why the fix is NOT twelve more `:not()` arms but a change of shape, and #647 for the
+  two guard gaps (`guest-book-link` has no guard at all).
 - **A dialog's height belongs to the primitive — do not re-solve it at the call site.**
   `DialogContent` (`src/components/ui/dialog.tsx`) carries
   `max-h-[calc(100svh-2rem)] overflow-y-auto overscroll-contain`, and the COMBINATION is the
