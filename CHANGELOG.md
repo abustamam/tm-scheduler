@@ -2,6 +2,12 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.25.9.1] - 2026-08-26
+
+### Fixed
+
+- **CI no longer fails at random on a timing check.** Two performance tests judged the app against fixed stopwatch numbers that the shared build machine can exceed on its own, on a slow afternoon, with nothing wrong — so an unrelated change could be reported as broken. Those checks now compare the app against itself rather than against a stopwatch, which is what the rest of the file already did, and a new guard stops a fixed number creeping back in.
+
 ## [1.25.9.0] - 2026-08-26
 
 ### Fixed

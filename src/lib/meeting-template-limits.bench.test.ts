@@ -179,6 +179,25 @@ function hostileAtCap(beatCount: number) {
 	return { beats, roles, slots };
 }
 
+/**
+ * The one scale an absolute millisecond bound may be stated at in this file.
+ *
+ * Every absolute here is a CATASTROPHE net — it exists to catch a renderer that
+ * became quadratic and would hang a real request, not to catch a 2x slip. The
+ * sensitive, machine-independent detection is the per-row ratio ladder, which
+ * measures both terms in the same process so machine speed divides out.
+ *
+ * 2000ms is ~6x the worst runner variance ever observed on this repo's CI
+ * (331ms, see the ceiling case's docblock) and ~60x the local cold measurement
+ * (~33ms). Anything tighter has been tried three times — 50, 100, 150, 250 —
+ * and every one of them either fired on a PR that touched none of this code or
+ * was raised pre-emptively after a near-miss.
+ *
+ * Enforced by `bench-absolute-bounds.guard.test.ts`, which is what makes this a
+ * rule rather than a comment.
+ */
+const CATASTROPHE_MS = 2000;
+
 describe("buildTemplateRows render cost (#task-10)", () => {
 	/**
 	 * The curve the brief asked for, as a living regression gate — stated so
@@ -351,9 +370,23 @@ describe("buildTemplateRows render cost (#task-10)", () => {
 	 * number that a slow runner reaches on its own cannot discriminate a
 	 * regression from a bad afternoon.
 	 *
-	 * So this is the file's ONLY absolute bound now, and it is deliberately far
-	 * looser than any measurement: 2000ms, roughly 6x the worst variance
-	 * observed on CI and ~60x the local cold number. It is not trying to catch
+	 * So this is a CATASTROPHE net, deliberately far looser than any
+	 * measurement: 2000ms, roughly 6x the worst variance observed on CI and
+	 * ~60x the local cold number.
+	 *
+	 * This paragraph used to say it was the file's ONLY absolute bound, and the
+	 * assertion below used to repeat the claim. Both were FALSE when written:
+	 * #631 removed the ladder's literals and left two others standing — 250ms
+	 * in the emoji test and 150ms in the 50,000-slot test, both sized well
+	 * inside the 331ms of variance recorded three paragraphs up. The 250ms one
+	 * fired on 2026-08-26 at 288.81ms and reddened `main` (#641).
+	 *
+	 * That is worth keeping as a shape rather than a slip: the doc asserted the
+	 * cleanup was complete, so nobody re-derived it, and a stated invariant that
+	 * nothing checks decays silently. `bench-absolute-bounds.guard.test.ts` now
+	 * checks it — every absolute millisecond bound in this file must be at
+	 * catastrophe scale, so the next tight literal fails at commit rather than
+	 * on somebody else's PR months later. It is not trying to catch
 	 * a 2x slip. It catches the shape of failure that would make a real request
 	 * hang — and it still discriminates, because the curve is LINEAR with no
 	 * knee up to 3200 beats (16x this cap) at ~326ms locally, so genuinely
@@ -372,9 +405,9 @@ describe("buildTemplateRows render cost (#task-10)", () => {
 		// A control: the assertion below must not pass on a renderer that
 		// silently returned nothing.
 		expect(rows.length).toBeGreaterThan(0);
-		// ABSOLUTE, and the only one left in this file. See the docblock for why
-		// it is this loose and why tightening it is the wrong repair.
-		expect(ms).toBeLessThan(2000);
+		// ABSOLUTE. See the docblock for why it is this loose and why tightening
+		// it is the wrong repair.
+		expect(ms).toBeLessThan(CATASTROPHE_MS);
 	});
 
 	/**
@@ -412,23 +445,24 @@ describe("buildTemplateRows render cost (#task-10)", () => {
 		// ASCII here would be a real regression in THIS renderer, not just
 		// "emoji are known to be slower somewhere in this codebase".
 		//
-		// BOTH forms, because each covers the other's blind spot. This comment
-		// used to argue for the absolute bound ALONE, rejecting `asciiMs * 6`
-		// on the grounds that a ratio still passes if both numbers regress
-		// together. True, and an argument for adding the absolute — not for
-		// omitting the ratio, which is the only form that survives a change of
-		// machine. The absolute alone went red on CI at 127.33ms against a
-		// 100ms bound picked from a ~33-37ms macOS measurement: a ~7x slower
-		// shared runner, saying nothing whatever about emoji.
+		// The RATIO is the whole claim here, and it is the only form that
+		// survives a change of machine: both terms are measured in the same
+		// process on the same box, so machine speed divides out.
 		//
-		// So: the ratio states the actual claim (emoji is not an order of
-		// magnitude worse than ASCII, on whatever machine is running), and the
-		// absolute catches the both-regressed case the ratio cannot see. The
-		// absolute is anchored to the same 250ms this file's ceiling case uses
-		// for a comparable workload, rather than to a number only ever
-		// observed on one laptop.
+		// There is deliberately NO absolute bound in this test (#641). One used
+		// to sit here — 250ms, raised from 100ms after a CI red at 127.33ms —
+		// and it was wrong twice over. It duplicated the ceiling case's net on
+		// the IDENTICAL workload (`hostileBeats(MAX_TEMPLATE_BEATS, roles)`, the
+		// same fixture that case renders), and it was sized at ~7x a laptop
+		// measurement, which is INSIDE the 331ms of pure runner variance this
+		// file's own docblock records. It fired at 288.81ms on 2026-08-26,
+		// reddening `main` on a commit that touched none of this.
+		//
+		// The both-regressed case an absolute is supposed to catch is covered
+		// by the ceiling case above, on the same workload, at catastrophe
+		// scale. Two nets on one workload is not twice the safety; it is one
+		// net plus one flake.
 		expect(emojiMs / asciiMs).toBeLessThan(10);
-		expect(emojiMs).toBeLessThan(250);
 		expect(asciiMs).toBeGreaterThan(0);
 	});
 
@@ -497,19 +531,27 @@ describe("buildTemplateRows render cost (#task-10)", () => {
 		expect(holder).toContain(`Person${MAX_ROLE_REPEAT_SLOTS - 1}`);
 		expect(holder).not.toContain(`Person${MAX_ROLE_REPEAT_SLOTS}`);
 		expect(holder).not.toContain("Person49999");
-		// A generous absolute ceiling for the CAPPED cost at this extreme
-		// input size — proving the CAP, not just the truncated output, is
-		// what keeps this cheap. `slotsForRole`'s filter still scans all
-		// 50,000 slots before the cap slices it down (measured ~1-7ms for
-		// that alone at this size); a cap that instead joined every holder
-		// and truncated the resulting STRING would not show up as fast here.
+		// A CATASTROPHE ceiling for the CAPPED cost at this extreme input size
+		// — proving the CAP, not just the truncated output, is what keeps this
+		// cheap. `slotsForRole`'s filter still scans all 50,000 slots before
+		// the cap slices it down (measured ~1-7ms for that alone at this size);
+		// a cap that instead joined every holder and truncated the resulting
+		// STRING would not show up as fast here.
 		//
-		// 150, not the 50 this shipped with. 50 was ~7x the macOS measurement
-		// and looked generous; CI's runner is itself ~7x slower, which put the
-		// upper end of that measured range within a millisecond or two of the
-		// bound — passing on luck rather than on margin. The uncapped shape
-		// this guards against joins 50,000 holders and costs orders of
-		// magnitude more, so tripling the ceiling does not blunt it.
-		expect(ms).toBeLessThan(150);
+		// 2000, matching the ceiling case's net rather than continuing the
+		// ladder 50 → 150 → … (#641). Each of those raises was made after a red
+		// or a near-miss, and each bought quiet by removing exactly as much
+		// guard — the classic form of a bound that cannot fail being replaced
+		// by a bound that fails at random. 150 was already BELOW the 331ms of
+		// pure runner variance recorded in this file's docblock, so it was a
+		// latent CI flake that simply had not fired yet; the emoji test's
+		// sibling bound, 250ms, was the one that did.
+		//
+		// Sensitivity is not lost, because the timing was never the sensitive
+		// part of this test: the three string assertions above are what prove
+		// the cap, and they are exact. The uncapped shape joins 50,000 holders
+		// and costs orders of magnitude more, which 2000ms still catches on any
+		// machine.
+		expect(ms).toBeLessThan(CATASTROPHE_MS);
 	});
 });
