@@ -50,6 +50,19 @@ export function MeetingNavStrip({
 						<Link
 							{...linkPropsFor(item)}
 							aria-current={item.isCurrent ? "page" : undefined}
+							// Opts this anchor out of the UNLAYERED global text-link rule
+							// in styles.css, which otherwise beats BOTH branches of the
+							// `cn()` below. On the active pill it repainted --lagoon-deep
+							// onto a --primary fill: 1.19:1 in dark, 1.53:1 in light — the
+							// date you were looking at was the one date you could not read.
+							// The exclusion goes on BOTH selectors there (base and :hover,
+							// which are separate); see the comment beside them, and
+							// `meeting-nav-link-color.guard.test.ts`.
+							//
+							// In the opening TAG, not above the element: this is JSX
+							// children position, where `//` is literal text, not a comment
+							// (biome `noCommentText`, and the formatter mangles it).
+							data-slot="meeting-nav-link"
 							className={cn(
 								"flex items-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-1.5 text-sm transition-colors",
 								item.isCurrent
