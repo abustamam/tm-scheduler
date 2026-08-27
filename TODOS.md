@@ -40,14 +40,6 @@
 - The SSR mount-gate dance (`useState(false)` + `useEffect` + `detectPlatform(navigator)`) is duplicated between `whatsapp-phone-link.tsx` and `nudge-buttons.tsx`, including the `"mobile"` default that has to match the server render. A shared `usePlatform()` in `#/lib/platform` would give that reasoning one home. Deliberately not done at v1.12.0.0: measured at 5.4ms over 200 rows in jsdom, and hoisting `mounted` to the list re-renders the whole table instead of the leaves, so it is a readability change, not an optimization.
   **Priority:** P4
 
-## Text-link colour rule
-
-- Twelve more anchors are still losing their own colour to the unlayered `a` rule, all light-mode. Swept at v1.25.10.0 while fixing the seventh instance (the meeting date pills): seven set `text-primary` and therefore render `--lagoon-deep` (#328f97, 3.81:1 on white) instead of the `--lagoon-ink` they asked for — under AA — and three set `text-muted-foreground`/`text-foreground` and render link-teal instead of neutral. `club.$clubId.index.tsx:208`, `club.$clubId.tsx:117`, `_authed/me.tsx:121,143,195`, `unsubscribe.tsx:60,69`, `guest-resources.tsx:42,53`, `season-grid.tsx:317`, `roles-guide.tsx:99`, `visit-cta.tsx:49`. Much milder than the pill bug (readable, just under AA, and dark mode is fine because `--lagoon-deep` lightens to #8de5db), which is why it was left out of that fix. Note the fix is NOT twelve more `:not()` arms — that would take the selector to nineteen and is the smell, not the cure. The shape worth designing is one shared opt-out marker, or inverting the rule so anchors opt IN to link colour. That is a design decision, hence a follow-up rather than a ride-along. Probably earns an issue: it is an AA failure a user can hit on live surfaces.
-  **Priority:** P2
-
-- `guest-book-link` (the sixth exclusion, added by #629) has no guard test, unlike the other five families. Documented in the `styles.css` comment at v1.25.10.0 but not enforced, so dropping that arm silently returns the identity gate's "Sign the guest book" anchor to `--lagoon-deep`. A copy-adapt of `back-link-color.guard.test.ts` closes it. Also worth folding in when the item above is designed: the arm-shape assertion every one of these guards makes (`^\[data-slot[\^$*~|]?="[^"]+"\]$`) still admits `[data-slot^="a"]`, which would exempt every slot beginning with "a" — a widening the assertion exists to prevent and cannot see.
-  **Priority:** P3
-
 ## Archive takedown
 
 Surfaced by the `/review` passes on #560/#556 and deliberately left out of that branch.
