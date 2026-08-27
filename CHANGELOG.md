@@ -2,6 +2,12 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.25.10.0] - 2026-08-27
+
+### Fixed
+
+- **You can read which meeting date you're looking at again.** The row of dates across the top of a meeting page highlights the one you're on, and the label on that highlighted pill was being painted almost exactly the colour of the highlight behind it — so the one date you most needed to read was the only one you couldn't. Worst in dark mode, but wrong in both. The dates either side of it were tinted link-blue-green instead of the quiet grey they were meant to be, and every pill changed colour again under the cursor. All of that is fixed: the current date now reads clearly on its highlight, the other dates read as muted, and hovering no longer recolours them.
+
 ## [1.25.9.1] - 2026-08-26
 
 ### Fixed
