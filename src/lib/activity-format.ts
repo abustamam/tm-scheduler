@@ -95,9 +95,21 @@ export function formatActivity(entry: ActivityEntry): FormattedActivity {
 		case "member_edit":
 			summary = "updated a member's details";
 			break;
-		case "member_merge":
-			summary = "merged a duplicate member";
+		case "member_merge": {
+			// Two different events share this action, deliberately: a member↔member
+			// merge, and a guest↔member LINK (#635), which reuses the enum value so
+			// it needs no migration. `guestLink` is the discriminator rather than
+			// `guestName`, so a blank name cannot make a link read as a merge.
+			if (entry.guestLink) {
+				const who = entry.guestName ?? "a guest";
+				summary = entry.unlinked
+					? `unlinked ${who} from their member record`
+					: `linked ${who} to their member record`;
+			} else {
+				summary = "merged a duplicate member";
+			}
 			break;
+		}
 		case "member_remove":
 			summary = "removed a member";
 			break;

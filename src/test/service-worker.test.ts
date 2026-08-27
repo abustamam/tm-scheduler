@@ -57,6 +57,8 @@ interface FakeResponse {
 	redirected: boolean;
 	type: string;
 	clone(): FakeResponse;
+	/** `primeAssetsOf` reads a primed document's HTML to find its scripts. */
+	text(): Promise<string>;
 }
 
 function request(path: string, overrides?: Partial<FakeRequest>): FakeRequest {
@@ -83,6 +85,7 @@ function response(
 		redirected: false,
 		type: "basic",
 		clone: () => res,
+		text: async () => res.body,
 		...overrides,
 	};
 	return res;
@@ -105,16 +108,22 @@ class FakeCache {
 		);
 	}
 
+	// Takes a URL string as well as a Request for the same reason `put` does —
+	// the real Cache API accepts both, and `primeAssetsOf`'s already-cached
+	// check (#362) passes the string form.
 	async match(
-		req: FakeRequest,
+		req: FakeRequest | string,
 		options?: { ignoreSearch?: boolean },
 	): Promise<FakeResponse | undefined> {
-		const exact = this.entries.get(req.url);
-		if (exact !== undefined) return response(200, exact, { url: req.url });
+		const url = typeof req === "string" ? req : req.url;
+		const exact = this.entries.get(url);
+		if (exact !== undefined) return response(200, exact, { url });
 		if (!options?.ignoreSearch) return undefined;
-		const base = withoutSearch(req.url);
-		for (const [url, body] of this.entries) {
-			if (withoutSearch(url) === base) return response(200, body, { url });
+		const base = withoutSearch(url);
+		for (const [cached, body] of this.entries) {
+			if (withoutSearch(cached) === base) {
+				return response(200, body, { url: cached });
+			}
 		}
 		return undefined;
 	}
@@ -329,6 +338,24 @@ describe("service worker takedown eviction (#556)", () => {
 		sw = loadServiceWorker();
 	});
 
+	/**
+	 * Queue the sibling surfaces an ONLINE meeting navigation now primes (#362).
+	 *
+	 * Since v1.25.9.0 a successful meeting-page load fans out to that meeting's
+	 * other surfaces, so a fixture that queues only the navigation itself
+	 * under-feeds the worker and the `surplusFetches` guard below fails. Priming
+	 * skips the surface actually requested, so pass the ones expected back:
+	 * a meeting-page load primes two, a `/word` or `/vote` load primes all three.
+	 *
+	 * Bodies are distinct and named so an assertion that accidentally sweeps a
+	 * primed entry in reads as an obvious wrong value rather than as a count.
+	 */
+	function primes(...labels: string[]) {
+		for (const label of labels) {
+			sw.nextFetch.push(response(200, `primed ${label}`));
+		}
+	}
+
 	afterEach(() => {
 		// Both directions, so over- and under-fetching are visible.
 		expect(
@@ -345,15 +372,22 @@ describe("service worker takedown eviction (#556)", () => {
 
 	it("caches a meeting page while online", async () => {
 		sw.nextFetch.push(response(200, "live agenda"));
+		primes("present", "print");
 		const res = await sw.dispatchFetch(request(MEETING));
 		expect(res?.status).toBe(200);
-		expect([...sw.cacheFor("gavelup-nav-v4").entries.values()]).toEqual([
+		// Three keys, not one: opening a meeting online now caches the meeting a
+		// club actually uses, which is all of it. The eviction cases below used to
+		// build that state by hand; it is the system's own behaviour now.
+		expect([...sw.cacheFor("gavelup-nav-v4").entries.values()].sort()).toEqual([
 			"live agenda",
+			"primed present",
+			"primed print",
 		]);
 	});
 
 	it("serves the cached copy when the network is down", async () => {
 		sw.nextFetch.push(response(200, "live agenda"));
+		primes("present", "print");
 		await sw.dispatchFetch(request(MEETING));
 		sw.nextFetch.push(new Error("offline"));
 		const offline = await sw.dispatchFetch(request(MEETING));
@@ -386,9 +420,10 @@ describe("service worker takedown eviction (#556)", () => {
 		404, 410,
 	])("evicts the cached agenda on a %i takedown", async (status) => {
 		sw.nextFetch.push(response(200, "pre-archive agenda"));
+		primes("present", "print");
 		await sw.dispatchFetch(request(MEETING));
 		const nav = sw.cacheFor("gavelup-nav-v4");
-		expect(nav.entries.size).toBe(1);
+		expect(nav.entries.size).toBe(3);
 
 		sw.nextFetch.push(response(status, "gone"));
 		await sw.dispatchFetch(request(MEETING));
@@ -403,12 +438,15 @@ describe("service worker takedown eviction (#556)", () => {
 		401, 403, 500, 503,
 	])("keeps the cached agenda through a %i — not every failure is a takedown", async (status) => {
 		sw.nextFetch.push(response(200, "live agenda"));
+		primes("present", "print");
 		await sw.dispatchFetch(request(MEETING));
 		const nav = sw.cacheFor("gavelup-nav-v4");
 
+		// A non-ok response primes nothing — priming hangs off the `ok` branch, so
+		// a 500 cannot spend three requests re-asking a struggling server.
 		sw.nextFetch.push(response(status, "nope"));
 		await sw.dispatchFetch(request(MEETING));
-		expect([...nav.entries.values()]).toEqual(["live agenda"]);
+		expect(nav.entries.get(`${ORIGIN}${MEETING}`)).toBe("live agenda");
 
 		// Still there for the room mid-meeting.
 		sw.nextFetch.push(new Error("offline"));
@@ -421,6 +459,7 @@ describe("service worker takedown eviction (#556)", () => {
 	// `redirected: true` and a foreign origin would pass with either guard deleted.
 	it("ignores a REDIRECTED 404 — a captive portal is not a takedown", async () => {
 		sw.nextFetch.push(response(200, "live agenda"));
+		primes("present", "print");
 		await sw.dispatchFetch(request(MEETING));
 		const nav = sw.cacheFor("gavelup-nav-v4");
 
@@ -430,11 +469,12 @@ describe("service worker takedown eviction (#556)", () => {
 			response(404, "portal", { redirected: true, url: `${ORIGIN}${MEETING}` }),
 		);
 		await sw.dispatchFetch(request(MEETING));
-		expect([...nav.entries.values()]).toEqual(["live agenda"]);
+		expect(nav.entries.get(`${ORIGIN}${MEETING}`)).toBe("live agenda");
 	});
 
 	it("ignores a 404 answered by another origin", async () => {
 		sw.nextFetch.push(response(200, "live agenda"));
+		primes("present", "print");
 		await sw.dispatchFetch(request(MEETING));
 		const nav = sw.cacheFor("gavelup-nav-v4");
 
@@ -443,22 +483,31 @@ describe("service worker takedown eviction (#556)", () => {
 			response(404, "portal", { url: "https://wifi.venue.example/login" }),
 		);
 		await sw.dispatchFetch(request(MEETING));
-		expect([...nav.entries.values()]).toEqual(["live agenda"]);
+		expect(nav.entries.get(`${ORIGIN}${MEETING}`)).toBe("live agenda");
 	});
 
 	it("evicts EVERY surface of the taken-down meeting, not just the URL that 404'd", async () => {
 		// One meeting occupies three keys. A device that primed all three would keep
 		// answering offline reloads from the two it did not re-request.
 		sw.nextFetch.push(response(200, "agenda"));
+		primes("present", "print");
 		await sw.dispatchFetch(request(MEETING));
+		// Each of these overwrites what priming had just put there, and primes the
+		// two surfaces it is not. `/print?layout=grid` primes only the meeting page
+		// and Present — NOT a bare `/print`, which is the same path it is already
+		// serving; that skip is by pathname, not by href.
 		sw.nextFetch.push(response(200, "present deck"));
+		primes("meeting", "print");
 		await sw.dispatchFetch(request(`${MEETING}/present`));
 		sw.nextFetch.push(response(200, "grid sheet"));
+		primes("meeting", "present");
 		await sw.dispatchFetch(request(`${MEETING}/print?layout=grid`));
 		sw.nextFetch.push(response(200, "column sheet"));
+		primes("meeting", "present");
 		await sw.dispatchFetch(request(`${MEETING}/print?layout=columns`));
 		const nav = sw.cacheFor("gavelup-nav-v4");
-		expect(nav.entries.size).toBe(4);
+		// Four requested surfaces plus the bare `/print` priming reached.
+		expect(nav.entries.size).toBe(5);
 
 		// The takedown 404 lands on ONE layout of ONE surface (the print route 307s
 		// to ?layout=grid, so that is what a reload hits).
@@ -474,13 +523,19 @@ describe("service worker takedown eviction (#556)", () => {
 		// left the poster and the live ballot answering offline reloads — the fixture
 		// had been built from a code comment rather than from the route list.
 		sw.nextFetch.push(response(200, "agenda"));
+		primes("present", "print");
 		await sw.dispatchFetch(request(MEETING));
+		// `/word` and `/vote` are not themselves in the primed set, so each primes
+		// all THREE of the meeting's surfaces rather than two.
 		sw.nextFetch.push(response(200, "word poster"));
+		primes("meeting", "present", "print");
 		await sw.dispatchFetch(request(`${MEETING}/word`));
 		sw.nextFetch.push(response(200, "live ballot"));
+		primes("meeting", "present", "print");
 		await sw.dispatchFetch(request(`${MEETING}/vote`));
 		const nav = sw.cacheFor("gavelup-nav-v4");
-		expect(nav.entries.size).toBe(3);
+		// agenda + word + vote + the primed present/print.
+		expect(nav.entries.size).toBe(5);
 
 		sw.nextFetch.push(response(404, "gone"));
 		await sw.dispatchFetch(request(MEETING));
@@ -505,18 +560,27 @@ describe("service worker takedown eviction (#556)", () => {
 		const other = "/club/acme/meeting/2026-02-09-1900";
 		const otherClub = "/club/harbor/meeting/2026-01-05-1900";
 		sw.nextFetch.push(response(200, "ours"));
+		primes("meeting", "present");
 		await sw.dispatchFetch(request(`${MEETING}/print?layout=grid`));
 		sw.nextFetch.push(response(200, "next month"));
+		primes("other present", "other print");
 		await sw.dispatchFetch(request(other));
 		sw.nextFetch.push(response(200, "another club"));
+		primes("harbor present", "harbor print");
 		await sw.dispatchFetch(request(otherClub));
 		const nav = sw.cacheFor("gavelup-nav-v4");
 
 		sw.nextFetch.push(response(404, "gone"));
 		await sw.dispatchFetch(request(`${MEETING}/print?layout=grid`));
+		// Every key of the taken-down meeting is gone, including the two priming
+		// added; both other meetings keep all three of theirs.
 		expect([...nav.entries.values()].sort()).toEqual([
 			"another club",
 			"next month",
+			"primed harbor present",
+			"primed harbor print",
+			"primed other present",
+			"primed other print",
 		]);
 	});
 
@@ -653,25 +717,73 @@ describe("priming on activation (#362)", () => {
 		sw = loadServiceWorker();
 	});
 
-	it("caches the open meeting page when a NEW worker takes over", async () => {
-		// The previous worker had cached it under the old nav version.
+	/** Prime with a distinct body per surface, so a mix-up is visible. */
+	function queueThreeSurfaces() {
+		sw.nextFetch.push(response(200, "AGENDA", { url: `${ORIGIN}${MEETING}` }));
+		sw.nextFetch.push(
+			response(200, "DECK", { url: `${ORIGIN}${MEETING}/present` }),
+		);
+		sw.nextFetch.push(
+			// Print 307s to its default layout; the worker follows and keys the
+			// FINAL url.
+			response(200, "SHEET", {
+				url: `${ORIGIN}${MEETING}/print?layout=grid`,
+				redirected: true,
+			}),
+		);
+	}
+
+	it("caches all three meeting surfaces when a NEW worker takes over", async () => {
+		// The previous worker had cached the page under the old nav version.
 		sw.seed("gavelup-nav-v3", { [`${ORIGIN}${MEETING}`]: "OLD AGENDA" });
 		sw.openClients = [`${ORIGIN}${MEETING}`];
-		sw.nextFetch.push(response(200, "AGENDA"));
+		queueThreeSurfaces();
 
 		await sw.activate();
 
 		// The old cache is gone, as it should be — but the CURRENT one now holds
-		// the page, so the user has not lost offline access by updating.
+		// the meeting, so the user has not lost offline access by updating.
 		expect(sw.caches.has("gavelup-nav-v3")).toBe(false);
-		expect(
-			sw.cacheFor("gavelup-nav-v4").entries.get(`${ORIGIN}${MEETING}`),
-		).toBe("AGENDA");
+		const entries = sw.cacheFor("gavelup-nav-v4").entries;
+		// ALL THREE, not just the open one. `evict` has always treated a meeting as
+		// three keys; priming treated it as one, and that asymmetry is why Present
+		// still failed offline after the meeting page was fixed.
+		expect(entries.get(`${ORIGIN}${MEETING}`)).toBe("AGENDA");
+		expect(entries.get(`${ORIGIN}${MEETING}/present`)).toBe("DECK");
+		expect(entries.get(`${ORIGIN}${MEETING}/print?layout=grid`)).toBe("SHEET");
+	});
+
+	it("serves Present offline after priming from the meeting page — the second repro", async () => {
+		// The reported sequence, exactly: open the meeting online, cut wifi,
+		// reload (works since v1.22.7.0), then click Present. That link is
+		// `target="_blank"`, so it is a real navigation the worker sees — into a
+		// URL nothing had primed.
+		sw.openClients = [`${ORIGIN}${MEETING}`];
+		queueThreeSurfaces();
+		await sw.activate();
+		expect(sw.nextFetch, "activation did not prime all three").toHaveLength(0);
+
+		sw.nextFetch.push(new Error("offline"));
+		const served = await sw.dispatchFetch(request(`${MEETING}/present`));
+		expect(served?.body).toBe("DECK");
+	});
+
+	it("primes Print under its redirected layout, and serves a bare /print from it", async () => {
+		sw.openClients = [`${ORIGIN}${MEETING}`];
+		queueThreeSurfaces();
+		await sw.activate();
+
+		// A bare `/…/print` request offline finds the `?layout=grid` entry through
+		// `networkFirst`'s ignoreSearch fallback — which is why keying by the final
+		// url is right rather than by the url we asked for.
+		sw.nextFetch.push(new Error("offline"));
+		const served = await sw.dispatchFetch(request(`${MEETING}/print`));
+		expect(served?.body).toBe("SHEET");
 	});
 
 	it("serves that page offline afterwards — the reported repro, end to end", async () => {
 		sw.openClients = [`${ORIGIN}${MEETING}`];
-		sw.nextFetch.push(response(200, "AGENDA"));
+		queueThreeSurfaces();
 		await sw.activate();
 
 		// The queue MUST be drained here, and asserting it is what makes the rest
@@ -705,7 +817,7 @@ describe("priming on activation (#362)", () => {
 		// Nothing to prime from, and the old cache is gone regardless — but the
 		// activation must not reject, or the worker never takes control at all.
 		sw.openClients = [`${ORIGIN}${MEETING}`];
-		sw.nextFetch.push(new Error("offline"));
+		for (let i = 0; i < 3; i++) sw.nextFetch.push(new Error("offline"));
 		await expect(sw.activate()).resolves.toBeUndefined();
 		expect(sw.cacheFor("gavelup-nav-v4").entries.size).toBe(0);
 	});
@@ -715,13 +827,207 @@ describe("priming on activation (#362)", () => {
 		// response as a takedown; the priming path must equally refuse to treat one
 		// as an agenda, or the step meant to protect the offline copy destroys it.
 		sw.openClients = [`${ORIGIN}${MEETING}`];
+		for (let i = 0; i < 3; i++) {
+			sw.nextFetch.push(
+				response(200, "PORTAL LOGIN", {
+					redirected: true,
+					url: `${ORIGIN}/login`,
+				}),
+			);
+		}
+		await sw.activate();
+		// The DESTINATION is what disqualifies it, not the redirect: `/login` is not
+		// an offline route. Print's 307 to `?layout=grid` lands on one and is kept,
+		// which is the distinction `!response.redirected` could not make.
+		expect(sw.cacheFor("gavelup-nav-v4").entries.size).toBe(0);
+	});
+});
+
+/**
+ * #362, third pass — priming on a VISIT rather than only on activation.
+ *
+ * The whole reason a second fix was needed. Activation priming (v1.25.8.0)
+ * covers exactly one load: the one where the worker updates. `activate` does not
+ * fire again, so on every NORMAL visit — a current worker, which is the state a
+ * user is in essentially always — nothing primed anything, and clicking Present
+ * offline still hit the browser's network-error page. The reported repro was run
+ * against a deploy that already contained the activation fix and still failed.
+ *
+ * So every case here deliberately does NOT call `activate()`. That absence is
+ * the fixture: it models the already-current worker, which is the state the
+ * previous fix could not reach and this one has to.
+ */
+describe("meeting priming on a visit, not only on activation (#362)", () => {
+	let sw: Harness;
+
+	beforeEach(() => {
+		sw = loadServiceWorker();
+	});
+
+	it("serves Present offline after only ever VISITING the meeting page", async () => {
+		// The user's repro, against a worker that is already current.
+		sw.nextFetch.push(response(200, "AGENDA"));
 		sw.nextFetch.push(
-			response(200, "PORTAL LOGIN", {
-				redirected: true,
-				url: `${ORIGIN}/login`,
+			response(200, "DECK", { url: `${ORIGIN}${MEETING}/present` }),
+		);
+		sw.nextFetch.push(
+			response(200, "SHEET", { url: `${ORIGIN}${MEETING}/print` }),
+		);
+		await sw.dispatchFetch(request(MEETING));
+
+		// Same trap as the activation case: `nextFetch` is shared across phases, so
+		// without draining it a queued 200 leaks into the offline phase and answers
+		// from the NETWORK. Caught by mutation — with the priming call removed this
+		// assertion is what fails rather than the one below silently passing.
+		expect(
+			sw.nextFetch,
+			"the visit primed nothing — no worker update was involved",
+		).toHaveLength(0);
+
+		sw.nextFetch.push(new Error("offline"));
+		const served = await sw.dispatchFetch(request(`${MEETING}/present`));
+		expect(served?.body).toBe("DECK");
+	});
+
+	it("primes nothing when the meeting page itself failed", async () => {
+		// Priming hangs off the `ok` branch. A club whose server is down must not
+		// have one failed navigation turned into three.
+		sw.nextFetch.push(response(500, "boom"));
+		await sw.dispatchFetch(request(MEETING));
+		expect(sw.surplusFetches).toBe(0);
+		expect(sw.cacheFor("gavelup-nav-v4").entries.size).toBe(0);
+	});
+
+	it("primes nothing while offline — the reload that serves from cache", async () => {
+		sw.nextFetch.push(new Error("offline"));
+		sw.seed("gavelup-nav-v4", { [`${ORIGIN}${MEETING}`]: "AGENDA" });
+		const served = await sw.dispatchFetch(request(MEETING));
+		expect(served?.body).toBe("AGENDA");
+		// An offline reload must not spend three more failing requests.
+		expect(sw.surplusFetches).toBe(0);
+	});
+
+	it("does not re-fetch the surface being served, comparing by PATH not href", async () => {
+		// `/…/print` 307s to `?layout=grid`, so the request that reaches the worker
+		// carries a query the bare surface list does not. Matching on href would
+		// make Print re-fetch itself on every load.
+		sw.nextFetch.push(response(200, "SHEET"));
+		sw.nextFetch.push(response(200, "AGENDA", { url: `${ORIGIN}${MEETING}` }));
+		sw.nextFetch.push(
+			response(200, "DECK", { url: `${ORIGIN}${MEETING}/present` }),
+		);
+		await sw.dispatchFetch(request(`${MEETING}/print?layout=grid`));
+		expect(sw.nextFetch).toHaveLength(0);
+		expect(sw.surplusFetches).toBe(0);
+	});
+});
+
+/**
+ * #362, and the half that decides whether a primed page WORKS.
+ *
+ * `fetch(href)` retrieves a document and nothing else — the browser is what
+ * normally requests a page's scripts, and `staleWhileRevalidate` only caches an
+ * asset something already asked for. So Present primed as a document alone comes
+ * back offline as un-hydrated SSR output: the first slide, and no way to advance
+ * it. Which on the night is its own bug report, filed against the fix.
+ */
+describe("priming a document also primes its build assets (#362)", () => {
+	let sw: Harness;
+	const CHUNK = "/_build/assets/present-ab12cd.js";
+	const SHEET = "/assets/deck-99ff00.css";
+
+	const docWith = (...paths: string[]) =>
+		paths.map((path) => `<script src="${path}"></script>`).join("");
+
+	beforeEach(() => {
+		sw = loadServiceWorker();
+	});
+
+	it("caches the scripts a primed Present page references", async () => {
+		sw.nextFetch.push(response(200, "AGENDA"));
+		sw.nextFetch.push(
+			response(200, docWith(CHUNK, SHEET), {
+				url: `${ORIGIN}${MEETING}/present`,
 			}),
 		);
-		await sw.activate();
-		expect(sw.cacheFor("gavelup-nav-v4").entries.size).toBe(0);
+		sw.nextFetch.push(response(200, "CHUNK"));
+		sw.nextFetch.push(response(200, "SHEET"));
+		sw.nextFetch.push(
+			response(200, "PRINT", { url: `${ORIGIN}${MEETING}/print` }),
+		);
+		await sw.dispatchFetch(request(MEETING));
+
+		const assets = sw.cacheFor("gavelup-assets-v3").entries;
+		expect(assets.get(`${ORIGIN}${CHUNK}`)).toBe("CHUNK");
+		expect(assets.get(`${ORIGIN}${SHEET}`)).toBe("SHEET");
+	});
+
+	it("skips an asset already held — hashed paths cannot go stale", async () => {
+		// This is what keeps priming on EVERY visit affordable: the documents are
+		// re-fetched for freshness, the (content-hashed) assets are not.
+		sw.seed("gavelup-assets-v3", { [`${ORIGIN}${CHUNK}`]: "CHUNK" });
+		sw.nextFetch.push(response(200, "AGENDA"));
+		sw.nextFetch.push(
+			response(200, docWith(CHUNK), { url: `${ORIGIN}${MEETING}/present` }),
+		);
+		sw.nextFetch.push(
+			response(200, "PRINT", { url: `${ORIGIN}${MEETING}/print` }),
+		);
+		await sw.dispatchFetch(request(MEETING));
+
+		// No fourth fetch: the queue is exactly drained and nothing overran it.
+		expect(sw.nextFetch).toHaveLength(0);
+		expect(sw.surplusFetches).toBe(0);
+		expect(
+			sw.cacheFor("gavelup-assets-v3").entries.get(`${ORIGIN}${CHUNK}`),
+		).toBe("CHUNK");
+	});
+
+	it("ignores another origin and any path that is not build output", async () => {
+		// The same match set `isCacheableAsset` uses. An analytics script or a CDN
+		// font must not be pulled into the club's offline cache by a regex.
+		// Both filters, and the CROSSING of them. Caught by mutation: with only
+		// `https://cdn.example/tracker.js` here, deleting the origin check changed
+		// nothing — that path fails `ASSET_PATH` too, so the origin arm was never
+		// the thing doing the work. A foreign origin whose path is SHAPED like
+		// build output is the case only the origin check can refuse, and it is
+		// also the realistic one (a CDN mirroring the same layout).
+		const doc = docWith(
+			"https://cdn.example/_build/assets/tracker-00ff11.js",
+			"https://cdn.example/tracker.js",
+			"/api/club/x/logo",
+			"/dashboard",
+			CHUNK,
+		);
+		sw.nextFetch.push(response(200, "AGENDA"));
+		sw.nextFetch.push(
+			response(200, doc, { url: `${ORIGIN}${MEETING}/present` }),
+		);
+		sw.nextFetch.push(response(200, "CHUNK"));
+		sw.nextFetch.push(
+			response(200, "PRINT", { url: `${ORIGIN}${MEETING}/print` }),
+		);
+		await sw.dispatchFetch(request(MEETING));
+
+		expect([...sw.cacheFor("gavelup-assets-v3").entries.keys()]).toEqual([
+			`${ORIGIN}${CHUNK}`,
+		]);
+	});
+
+	it("stops at the per-document ceiling", async () => {
+		// Bounded because this runs inside `waitUntil`, which the browser kills on
+		// a wall clock — an unbounded loop there loses the documents too.
+		const many = Array.from({ length: 200 }, (_, i) => `/_build/c${i}.js`);
+		sw.nextFetch.push(response(200, "AGENDA"));
+		sw.nextFetch.push(
+			response(200, docWith(...many), { url: `${ORIGIN}${MEETING}/present` }),
+		);
+		for (let i = 0; i < 200; i++) sw.nextFetch.push(response(200, `C${i}`));
+		await sw.dispatchFetch(request(MEETING));
+
+		// An ABSOLUTE ceiling, not one stated relative to the constant it guards:
+		// `toBeLessThanOrEqual(MAX_PRIMED_ASSETS)` would pass for every value of
+		// MAX_PRIMED_ASSETS, including one that reintroduces the unbounded loop.
+		expect(sw.cacheFor("gavelup-assets-v3").entries.size).toBe(60);
 	});
 });

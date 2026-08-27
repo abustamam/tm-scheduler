@@ -60,12 +60,76 @@ function DialogContent({
 			<DialogPrimitive.Content
 				data-slot="dialog-content"
 				className={cn(
-					"fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border bg-background p-6 shadow-lg duration-200 outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-lg",
+					// SHELL. Owns the ceiling, the padding and the chrome; it does NOT
+					// scroll. The scrolling BODY is the inner element below, and the
+					// split is what keeps the close button reachable (#627).
+					//
+					// The ceiling itself is #619: this element is `fixed` and centred by
+					// `translate-y-[-50%]`, so content taller than the viewport hangs
+					// off BOTH ends and the document cannot scroll it back — a fixed
+					// box is not in the document's scroll flow. Without a ceiling the
+					// overflow is not below the fold, it is unreachable: measured on
+					// the public identity dialog at a 400px-tall viewport, the
+					// "I'm new — add me" control sat at y=404 with no scrollable
+					// ancestor anywhere between it and the body.
+					// `svh`, not `vh`: `vh` is the LARGE viewport height, so it
+					// under-accounts for mobile browser chrome and the ceiling lands
+					// below the fold on exactly the devices that need it.
+					//
+					// `p-6` stays HERE rather than moving to the body, and that is the
+					// whole reason this fix was shippable. `cn()` is tailwind-merge, so
+					// a caller's padding override has to land on the same element as
+					// the default or it silently stops working — `CommandDialog` passes
+					// `p-0`. Padding on the shell also means the body's scrolled
+					// content is clipped 24px inside the rounded corner instead of
+					// running into it.
+					//
+					// `overflow-hidden` so the body's scrolled content is clipped by
+					// the rounded corners. Every call site's own className is a
+					// `sm:max-w-*` width, so nothing out there fights `flex flex-col`.
+					//
+					// Note none of this addresses keyboard occlusion — the viewport
+					// meta has no `interactive-widget`, so the platform default
+					// `resizes-visual` leaves the layout viewport (and `svh`) intact
+					// when the keyboard opens. That half is still open on #619.
+					"fixed top-[50%] left-[50%] z-50 flex max-h-[calc(100svh-2rem)] w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] flex-col overflow-hidden rounded-lg border bg-background p-6 shadow-lg duration-200 outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-lg",
 					className,
 				)}
 				{...props}
 			>
-				{children}
+				{/*
+				 * BODY — the scroll container, and the only thing that moves.
+				 *
+				 * `min-h-0` is load-bearing, not defensive. A flex child's default
+				 * `min-height: auto` refuses to shrink below its content, so
+				 * `overflow-y-auto` on it produces a box that GROWS instead of
+				 * scrolling: the shell's `max-h` would then clip it with no way to
+				 * scroll, which is #619 again wearing a different shape and passing
+				 * any grep that only asks whether `overflow-y-auto` is present. This
+				 * repo already has a gate for exactly that class of mistake —
+				 * `pinned-column-reachability.test.ts`, written after a sticky column
+				 * shipped twice with an unreachable tail.
+				 *
+				 * `gap-4` and `grid` move here from the shell so spacing between
+				 * DialogHeader/Footer/content is unchanged; the shell is now a
+				 * one-child flex column.
+				 */}
+				<div
+					data-slot="dialog-body"
+					className="grid min-h-0 gap-4 overflow-y-auto overscroll-contain"
+				>
+					{children}
+				</div>
+				{/*
+				 * OUTSIDE the body on purpose. An absolutely-positioned child of a
+				 * scroll container scrolls WITH the content: measured before this
+				 * change, the close button went from y=33 to y=-56 after an 89px
+				 * scroll, and the only remaining exits were Escape (no such key on a
+				 * phone) and a 16px overlay strip, against a 44px minimum tap target.
+				 * On the shell it is a child of a box that never scrolls, so it stays
+				 * put. `top-4` (16px) sits inside the shell's 24px padding, so the
+				 * body's content never reaches it.
+				 */}
 				{showCloseButton && (
 					<DialogPrimitive.Close
 						data-slot="dialog-close"

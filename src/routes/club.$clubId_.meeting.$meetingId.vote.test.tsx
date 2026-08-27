@@ -26,7 +26,6 @@ vi.mock("#/server/voting", () => ({
 }));
 // Reached transitively through `PickNameForm`, which the route renders.
 vi.mock("#/server/members", () => ({
-	addMember: vi.fn(),
 	listMembers: vi.fn(),
 }));
 

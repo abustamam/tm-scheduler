@@ -127,7 +127,7 @@ export function ProjectPicker({
 			</Button>
 
 			<Dialog open={open} onOpenChange={setOpen}>
-				<DialogContent className="max-h-[80vh] overflow-y-auto">
+				<DialogContent>
 					<DialogHeader>
 						<DialogTitle>Choose a project</DialogTitle>
 					</DialogHeader>

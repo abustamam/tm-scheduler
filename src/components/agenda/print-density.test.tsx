@@ -373,16 +373,25 @@ describe("MIN_FIT_SCALE", { timeout: CHROME_TEST_TIMEOUT_MS }, () => {
 		expect(MIN_FIT_SCALE).toBe(0.72);
 	});
 
-	it("sits below the tightest scale a real standard agenda needs, so ordinary agendas still fit one sheet", () => {
-		// The longest standard fixture in this file. `FitPage` flows instead of
-		// scaling when `raw < MIN_FIT_SCALE`, so the constant must stay under the
-		// ratio this agenda produces or a normal club meeting becomes two sheets.
-		const raw = (PAGE_H - 2) / agendaHeight(mcfRows);
-		expect(raw).toBeGreaterThan(MIN_FIT_SCALE);
-		// And an absolute upper bound, so the assertion above cannot be satisfied
-		// by a future fixture that happens to get shorter.
-		expect(MIN_FIT_SCALE).toBeLessThan(0.75);
-	});
+	// `skipIf`, unlike its sibling above: this one MEASURES, so it needs a
+	// browser. It was written inside a non-Chrome-gated describe (v1.21.0.0) and
+	// therefore FAILED rather than skipped on a machine without one — which is the
+	// opposite of the posture CLAUDE.md sets, where a missing browser skips
+	// locally and fails only in CI. Found when a Playwright update moved the
+	// cached binary out from under a stale CHROME_PATH.
+	it.skipIf(!hasChrome)(
+		"sits below the tightest scale a real standard agenda needs, so ordinary agendas still fit one sheet",
+		() => {
+			// The longest standard fixture in this file. `FitPage` flows instead of
+			// scaling when `raw < MIN_FIT_SCALE`, so the constant must stay under the
+			// ratio this agenda produces or a normal club meeting becomes two sheets.
+			const raw = (PAGE_H - 2) / agendaHeight(mcfRows);
+			expect(raw).toBeGreaterThan(MIN_FIT_SCALE);
+			// And an absolute upper bound, so the assertion above cannot be satisfied
+			// by a future fixture that happens to get shorter.
+			expect(MIN_FIT_SCALE).toBeLessThan(0.75);
+		},
+	);
 });
 
 /**

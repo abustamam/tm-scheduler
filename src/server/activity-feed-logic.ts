@@ -41,6 +41,25 @@ export interface ActivityEntry {
 	/** plan_set → the rung set ("reached_out" | "coming" | "not_coming"), or
 	 *  null when the row was cleared back to "no answer". */
 	status: string | null;
+	/**
+	 * member_merge → the guest's name when the entry is a guest↔member LINK
+	 * (#635) rather than a member↔member merge, else null.
+	 *
+	 * Both write `member_merge`, deliberately: the action already exists on the
+	 * enum, so reusing it needs no migration. This field is what tells them
+	 * apart for display — without it the feed reads "merged a duplicate member"
+	 * for something that merged nothing.
+	 */
+	guestName: string | null;
+	/**
+	 * member_merge → true when this entry is a guest↔member link or its
+	 * reversal. This, not `guestName`, is the discriminator: the name is
+	 * display text, and branching display on display text means a blank one
+	 * silently falls back to the member↔member wording.
+	 */
+	guestLink: boolean;
+	/** member_merge → set when the entry REVERSED a link (#635). */
+	unlinked: boolean;
 }
 
 type LogDetail = {
@@ -49,6 +68,10 @@ type LogDetail = {
 	name?: string;
 	change?: string;
 	status?: string | null;
+	/** #635 guest↔member link: set on the link, and on its reversal. */
+	guestName?: string;
+	fromGuestId?: string;
+	unlinkedGuestId?: string;
 };
 
 /**
@@ -180,6 +203,9 @@ export async function loadActivity(
 				: null,
 			change: d.change ?? null,
 			status: d.status ?? null,
+			guestName: d.guestName ?? null,
+			guestLink: Boolean(d.fromGuestId || d.unlinkedGuestId),
+			unlinked: Boolean(d.unlinkedGuestId),
 		};
 	});
 }

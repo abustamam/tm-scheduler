@@ -9,7 +9,7 @@
  * that env is unset.
  */
 import { randomUUID } from "node:crypto";
-import { and, count, eq, inArray, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
@@ -22,6 +22,12 @@ import {
 	roleSlots,
 	tableTopicsSpeakers,
 } from "#/db/schema";
+import {
+	CONVERT_NAME_CLASH_MESSAGE,
+	LINK_ALREADY_JOINED_MESSAGE,
+	LINK_MEMBER_NOT_IN_CLUB_MESSAGE,
+	UNLINK_NOT_LINKED_MESSAGE,
+} from "#/lib/guest-convert";
 import { toStoredPhone } from "#/lib/phone";
 import {
 	cleanup,
@@ -53,12 +59,15 @@ function uniquePhone(): string {
 const {
 	applyConvertGuestToMember,
 	applyDeleteGuest,
+	applyLinkGuestToMember,
 	applySetGuestStage,
+	applyUnlinkGuestFromMember,
 	applyUpdateGuest,
 	captureGuestVisit,
 	GUEST_BOOK_MAX_NEW_PER_WINDOW,
 	GUEST_BOOK_THROTTLED_MESSAGE,
 	loadGuestPipeline,
+	loadLinkCandidates,
 } = await import("#/server/guest-pipeline-logic");
 const { applyAssignGuestToSlot, listClubGuests } = await import(
 	"#/server/guests-logic"
@@ -1041,10 +1050,18 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			const guestId = await seedGuest(seed.clubId, "Converting Now");
 
 			// Tab B converts the guest while tab A's delete is in flight.
+			//
+			// Both columns, because a convert writes both in one statement (step 4 of
+			// `applyConvertGuestToMember`) and since #618 the delete guard reads both.
+			// A bare `stage: "joined"` is no longer a faithful stand-in for a convert
+			// — it is the STRANDED state, which means "converted once, membership
+			// since removed from the roster", and a stranded row is deletable on
+			// purpose. Faking the convert with the stage alone made this test assert
+			// the opposite of what it is named for.
 			const writer = await openBlockingTx(async (tx) => {
 				await tx
 					.update(guests)
-					.set({ stage: "joined" })
+					.set({ stage: "joined", convertedMembershipId: seed.memberId })
 					.where(eq(guests.id, guestId));
 			});
 
@@ -2006,6 +2023,701 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 				(r) => r.id === guestId,
 			);
 			expect(row?.phoneRaw).toBe("  call the office  ");
+		});
+	});
+
+	describe("convert refuses a duplicate name (#617)", () => {
+		/** A roster row with NO email and NO phone — the shape the Person dedup can
+		 *  never match, and exactly what the public self-add minted before #616. */
+		async function contactlessMember(name: string): Promise<string> {
+			const personId = await trackedPerson({ name });
+			const [m] = await testDb
+				.insert(members)
+				.values({ clubId: seed.clubId, personId, name })
+				.returning({ id: members.id });
+			if (!m) throw new Error("Failed to insert member");
+			return m.id;
+		}
+
+		async function clubMemberCount(clubId: string): Promise<number> {
+			const [row] = await testDb
+				.select({ n: count() })
+				.from(members)
+				.where(eq(members.clubId, clubId));
+			return Number(row?.n ?? 0);
+		}
+
+		it("throws, and writes nothing, when the name is already on the roster", async () => {
+			await contactlessMember("Casey Clash");
+			const { guestId } = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Casey Clash",
+				phone: "555-777-0001",
+			});
+			const before = await clubMemberCount(seed.clubId);
+
+			await expect(
+				applyConvertGuestToMember({
+					clubId: seed.clubId,
+					guestId,
+					actorMemberId: seed.adminMemberId,
+				}),
+			).rejects.toThrow(CONVERT_NAME_CLASH_MESSAGE);
+
+			// The whole transaction must roll back, not just the membership insert:
+			// a fresh Person or a `stage: joined` stamp surviving the refusal would
+			// leave the guest half-converted, which is worse than the duplicate.
+			expect(await clubMemberCount(seed.clubId)).toBe(before);
+			const [g] = await testDb
+				.select({
+					stage: guests.stage,
+					converted: guests.convertedMembershipId,
+				})
+				.from(guests)
+				.where(eq(guests.id, guestId));
+			expect(g?.stage).not.toBe("joined");
+			expect(g?.converted).toBeNull();
+		});
+
+		it("is club-scoped — the same name in another club does not block", async () => {
+			const other = await seedClub();
+			try {
+				const personId = await trackedPerson({ name: "Dana Elsewhere" });
+				await testDb.insert(members).values({
+					clubId: other.clubId,
+					personId,
+					name: "Dana Elsewhere",
+				});
+				const { guestId } = await captureGuestVisit({
+					clubId: seed.clubId,
+					name: "Dana Elsewhere",
+					phone: "555-777-0002",
+				});
+				const res = await applyConvertGuestToMember({
+					clubId: seed.clubId,
+					guestId,
+					actorMemberId: seed.adminMemberId,
+				});
+				expect(res.ok).toBe(true);
+			} finally {
+				await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+			}
+		});
+
+		it("catches a clash even when the Person deduped onto another club's row", async () => {
+			// The case that decided WHERE this check lives. #617 proposed putting it
+			// just before the fresh-Person insert; this guest never reaches that
+			// branch, because its email matches a Person who is already a member
+			// somewhere else. The Person is reused, no fresh row is created, and the
+			// duplicate name would still land in THIS club's roster. Placing the
+			// check at the MEMBERSHIP insert is what catches it.
+			const other = await seedClub();
+			try {
+				const sharedPerson = await trackedPerson({
+					name: "Erin Crossclub",
+					email: "erin.crossclub@example.com",
+				});
+				await testDb.insert(members).values({
+					clubId: other.clubId,
+					personId: sharedPerson,
+					name: "Erin Crossclub",
+				});
+				// …and THIS club already has the name, contactless.
+				await contactlessMember("Erin Crossclub");
+
+				const { guestId } = await captureGuestVisit({
+					clubId: seed.clubId,
+					name: "Erin Crossclub",
+					email: "erin.crossclub@example.com",
+				});
+				await expect(
+					applyConvertGuestToMember({
+						clubId: seed.clubId,
+						guestId,
+						actorMemberId: seed.adminMemberId,
+					}),
+				).rejects.toThrow(CONVERT_NAME_CLASH_MESSAGE);
+			} finally {
+				await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+			}
+		});
+
+		it("still reuses an existing membership rather than reporting a clash", async () => {
+			// Regression: the person ALREADY has a membership in this club, so the
+			// reuse branch runs and the clash check must not fire. Without this, a
+			// guard written to stop duplicates would instead break the one path that
+			// correctly avoids them.
+			const personId = await trackedPerson({
+				name: "Fran Reuse",
+				email: "fran.reuse@example.com",
+			});
+			const [existing] = await testDb
+				.insert(members)
+				.values({ clubId: seed.clubId, personId, name: "Fran Reuse" })
+				.returning({ id: members.id });
+			const { guestId } = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Fran Reuse",
+				email: "fran.reuse@example.com",
+			});
+			const res = await applyConvertGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+			expect(res.membershipId).toBe(existing?.id);
+		});
+	});
+
+	describe("a stranded converted guest is not frozen (#618)", () => {
+		/** Convert, then remove the member from the roster — which nulls
+		 *  `converted_membership_id` (`onDelete: "set null"`) and leaves `stage`
+		 *  saying `joined` with nothing to point at. */
+		async function strandedGuest(name: string): Promise<string> {
+			const { guestId } = await captureGuestVisit({
+				clubId: seed.clubId,
+				name,
+				phone: "555-888-0001",
+			});
+			const { membershipId } = await applyConvertGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+			await testDb.delete(members).where(eq(members.id, membershipId));
+			const [g] = await testDb
+				.select({
+					stage: guests.stage,
+					converted: guests.convertedMembershipId,
+				})
+				.from(guests)
+				.where(eq(guests.id, guestId));
+			// The precondition IS the bug — assert it rather than assuming the FK
+			// behaves, or these tests could pass against a row that is not stranded.
+			expect(g?.stage).toBe("joined");
+			expect(g?.converted).toBeNull();
+			return guestId;
+		}
+
+		it("can be moved back to a manual stage", async () => {
+			const guestId = await strandedGuest("Gale Stranded");
+			await applySetGuestStage({
+				clubId: seed.clubId,
+				guestId,
+				stage: "following_up",
+			});
+			const [g] = await testDb
+				.select({ stage: guests.stage })
+				.from(guests)
+				.where(eq(guests.id, guestId));
+			expect(g?.stage).toBe("following_up");
+		});
+
+		it("can be deleted", async () => {
+			// The old refusal told the admin to "remove them from the roster
+			// instead" — which is what they had already done to get here.
+			const guestId = await strandedGuest("Hana Stranded");
+			const res = await applyDeleteGuest({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+			expect(res.ok).toBe(true);
+			expect(
+				await testDb.select().from(guests).where(eq(guests.id, guestId)),
+			).toHaveLength(0);
+		});
+
+		it("a guest whose membership still exists stays frozen", async () => {
+			// The complement, and the assertion that stops the fix from becoming
+			// "any joined guest may be edited". Same shape as the two above; the
+			// only difference is that the membership is left alone.
+			const { guestId } = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Ivan Intact",
+				phone: "555-888-0002",
+			});
+			await applyConvertGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+			await expect(
+				applySetGuestStage({
+					clubId: seed.clubId,
+					guestId,
+					stage: "following_up",
+				}),
+			).rejects.toThrow(/already joined/i);
+			await expect(
+				applyDeleteGuest({
+					clubId: seed.clubId,
+					guestId,
+					actorMemberId: seed.adminMemberId,
+				}),
+			).rejects.toThrow(/club member/i);
+		});
+	});
+
+	describe("link a guest to an existing member (#635)", () => {
+		/** A past meeting, so `loadRoleRecency` can see slots on it. */
+		async function seedPastMeeting(clubId: string): Promise<string> {
+			const id = await seedMeetingInProgress(clubId);
+			await testDb
+				.update(meetings)
+				.set({ scheduledAt: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000) })
+				.where(eq(meetings.id, id));
+			return id;
+		}
+
+		async function memberRow(name: string): Promise<string> {
+			const personId = await trackedPerson({ name });
+			const [m] = await testDb
+				.insert(members)
+				.values({ clubId: seed.clubId, personId, name })
+				.returning({ id: members.id });
+			if (!m) throw new Error("Failed to insert member");
+			return m.id;
+		}
+
+		async function latestMergeDetail() {
+			const [row] = await testDb
+				.select({ detail: activityLog.detail })
+				.from(activityLog)
+				.where(
+					and(
+						eq(activityLog.clubId, seed.clubId),
+						eq(activityLog.action, "member_merge"),
+					),
+				)
+				.orderBy(desc(activityLog.createdAt), desc(activityLog.id))
+				.limit(1);
+			return row?.detail as {
+				fromGuestId?: string;
+				slotIds?: string[];
+			} | null;
+		}
+
+		it("re-points every slot, past and upcoming, and creates no new roster row", async () => {
+			// Per-run unique, because the Person assertion below has to be SCOPED:
+			// `people` is club-less and global, vitest runs test FILES in parallel
+			// against one shared `tm_test`, and an unscoped `count()` over it moves
+			// for reasons that have nothing to do with this code. A first cut of
+			// this test counted every row in `people` and passed alone, then failed
+			// in the full suite — the exact order-dependence CLAUDE.md records.
+			const who = `Linkable Guest ${randomUUID().slice(0, 8)}`;
+			const guestId = await seedGuest(seed.clubId, who);
+			const memberId = await memberRow(who);
+			const past = await seedPastMeeting(seed.clubId);
+			const pastSlot = await seedGuestRoleSlot(
+				past,
+				seed.roleDefinitionId,
+				guestId,
+			);
+			const upcomingSlot = await seedGuestRoleSlot(
+				seed.meetingId,
+				seed.roleDefinitionId,
+				guestId,
+			);
+
+			const [beforeMembers] = await testDb
+				.select({ n: count() })
+				.from(members)
+				.where(eq(members.clubId, seed.clubId));
+			const [beforePeople] = await testDb
+				.select({ n: count() })
+				.from(people)
+				.where(eq(people.name, who));
+
+			const res = await applyLinkGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				memberId,
+				actorMemberId: seed.adminMemberId,
+			});
+			expect([...res.slotIds].sort()).toEqual([pastSlot, upcomingSlot].sort());
+
+			const slots = await testDb
+				.select({
+					id: roleSlots.id,
+					memberId: roleSlots.assignedMemberId,
+					guestId: roleSlots.assignedGuestId,
+				})
+				.from(roleSlots)
+				.where(inArray(roleSlots.id, [pastSlot, upcomingSlot]));
+			// BOTH, not just the upcoming one — role recency reads past meetings.
+			expect(slots).toHaveLength(2);
+			for (const s of slots) {
+				expect(s.memberId).toBe(memberId);
+				expect(s.guestId).toBeNull();
+			}
+
+			// A link creates no membership and no Person; both already exist.
+			const [afterMembers] = await testDb
+				.select({ n: count() })
+				.from(members)
+				.where(eq(members.clubId, seed.clubId));
+			const [afterPeople] = await testDb
+				.select({ n: count() })
+				.from(people)
+				.where(eq(people.name, who));
+			expect(Number(afterMembers?.n)).toBe(Number(beforeMembers?.n));
+			expect(Number(afterPeople?.n)).toBe(Number(beforePeople?.n));
+
+			const [g] = await testDb
+				.select({
+					stage: guests.stage,
+					converted: guests.convertedMembershipId,
+				})
+				.from(guests)
+				.where(eq(guests.id, guestId));
+			expect(g?.stage).toBe("joined");
+			expect(g?.converted).toBe(memberId);
+
+			// The recorded slot ids are the ONLY thing an unlink can restore from.
+			const detail = await latestMergeDetail();
+			expect(detail?.fromGuestId).toBe(guestId);
+			expect([...(detail?.slotIds ?? [])].sort()).toEqual(
+				[pastSlot, upcomingSlot].sort(),
+			);
+		});
+
+		it("gives the member the guest's role history", async () => {
+			// The acceptance criterion the whole design turns on. `loadRoleRecency`
+			// groups PAST meetings by `assignedMemberId`, so an upcoming-only
+			// re-point would leave this empty and the member would still read
+			// "Never done this role" for a role they had demonstrably done.
+			const { loadRoleRecency } = await import("#/server/role-recency-logic");
+			const guestId = await seedGuest(seed.clubId, "History Guest");
+			const memberId = await memberRow("History Guest");
+			const past = await seedPastMeeting(seed.clubId);
+			await seedGuestRoleSlot(past, seed.roleDefinitionId, guestId);
+
+			const before = await loadRoleRecency({
+				clubId: seed.clubId,
+				before: new Date(),
+			});
+			expect(before.some((r) => r.memberId === memberId)).toBe(false);
+
+			await applyLinkGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				memberId,
+				actorMemberId: seed.adminMemberId,
+			});
+
+			const after = await loadRoleRecency({
+				clubId: seed.clubId,
+				before: new Date(),
+			});
+			expect(
+				after.some(
+					(r) =>
+						r.memberId === memberId &&
+						r.roleDefinitionId === seed.roleDefinitionId,
+				),
+			).toBe(true);
+		});
+
+		it("drops the guest out of the assign picker", async () => {
+			const guestId = await seedGuest(seed.clubId, "Picker Guest");
+			const memberId = await memberRow("Picker Guest");
+			expect(
+				(await listClubGuests(seed.clubId)).some((g) => g.id === guestId),
+			).toBe(true);
+			await applyLinkGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				memberId,
+				actorMemberId: seed.adminMemberId,
+			});
+			expect(
+				(await listClubGuests(seed.clubId)).some((g) => g.id === guestId),
+			).toBe(false);
+		});
+
+		it("unlink restores exactly the slots the link moved, and nothing else", async () => {
+			const guestId = await seedGuest(seed.clubId, "Undo Guest");
+			const memberId = await memberRow("Undo Guest");
+			const past = await seedPastMeeting(seed.clubId);
+			const guestSlot = await seedGuestRoleSlot(
+				past,
+				seed.roleDefinitionId,
+				guestId,
+			);
+			await applyLinkGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				memberId,
+				actorMemberId: seed.adminMemberId,
+			});
+
+			// A slot the member picked up AFTER the link was never the guest's, so
+			// unlink must leave it alone. Without the recorded id list, a naive
+			// "give back everything this member holds" would steal it.
+			const [later] = await testDb
+				.insert(roleSlots)
+				.values({
+					meetingId: seed.meetingId,
+					roleDefinitionId: seed.roleDefinitionId,
+					assignedMemberId: memberId,
+					status: "claimed",
+				})
+				.returning({ id: roleSlots.id });
+			if (!later) throw new Error("Failed to seed the later slot");
+
+			await applyUnlinkGuestFromMember({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+
+			const [restored] = await testDb
+				.select({
+					memberId: roleSlots.assignedMemberId,
+					guestId: roleSlots.assignedGuestId,
+				})
+				.from(roleSlots)
+				.where(eq(roleSlots.id, guestSlot));
+			expect(restored?.guestId).toBe(guestId);
+			expect(restored?.memberId).toBeNull();
+
+			const [untouched] = await testDb
+				.select({ memberId: roleSlots.assignedMemberId })
+				.from(roleSlots)
+				.where(eq(roleSlots.id, later.id));
+			expect(untouched?.memberId).toBe(memberId);
+
+			const [g] = await testDb
+				.select({
+					stage: guests.stage,
+					converted: guests.convertedMembershipId,
+				})
+				.from(guests)
+				.where(eq(guests.id, guestId));
+			expect(g?.stage).toBe("following_up");
+			expect(g?.converted).toBeNull();
+		});
+
+		it("refuses a member from another club", async () => {
+			const other = await seedClub();
+			try {
+				const guestId = await seedGuest(seed.clubId, "Wrong Club Member");
+				await expect(
+					applyLinkGuestToMember({
+						clubId: seed.clubId,
+						guestId,
+						memberId: other.memberId,
+						actorMemberId: seed.adminMemberId,
+					}),
+				).rejects.toThrow(LINK_MEMBER_NOT_IN_CLUB_MESSAGE);
+			} finally {
+				await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+			}
+		});
+
+		it("refuses a guest from another club", async () => {
+			const other = await seedClub();
+			try {
+				const foreignGuest = await seedGuest(other.clubId, "Foreign Guest");
+				const memberId = await memberRow("Foreign Guest");
+				await expect(
+					applyLinkGuestToMember({
+						clubId: seed.clubId,
+						guestId: foreignGuest,
+						memberId,
+						actorMemberId: seed.adminMemberId,
+					}),
+				).rejects.toThrow(/not found in this club/i);
+			} finally {
+				await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+			}
+		});
+
+		it("refuses a guest already linked to a live membership", async () => {
+			const guestId = await seedGuest(seed.clubId, "Twice Linked");
+			const first = await memberRow("Twice Linked");
+			const second = await memberRow("Someone Else Entirely");
+			await applyLinkGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				memberId: first,
+				actorMemberId: seed.adminMemberId,
+			});
+			await expect(
+				applyLinkGuestToMember({
+					clubId: seed.clubId,
+					guestId,
+					memberId: second,
+					actorMemberId: seed.adminMemberId,
+				}),
+			).rejects.toThrow(LINK_ALREADY_JOINED_MESSAGE);
+		});
+
+		it("ALLOWS linking a stranded guest — that is the recovery it offers", async () => {
+			// stage `joined` with a null pointer (#618): converted once, membership
+			// since removed from the roster. Refusing these would leave them with no
+			// path at all, which is the dead end this area keeps producing.
+			const guestId = await seedGuest(seed.clubId, "Stranded Then Linked");
+			await testDb
+				.update(guests)
+				.set({ stage: "joined", convertedMembershipId: null })
+				.where(eq(guests.id, guestId));
+			const memberId = await memberRow("Stranded Then Linked");
+			const res = await applyLinkGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				memberId,
+				actorMemberId: seed.adminMemberId,
+			});
+			expect(res.ok).toBe(true);
+		});
+
+		it("refuses to unlink a guest that was never linked", async () => {
+			const guestId = await seedGuest(seed.clubId, "Never Linked");
+			await expect(
+				applyUnlinkGuestFromMember({
+					clubId: seed.clubId,
+					guestId,
+					actorMemberId: seed.adminMemberId,
+				}),
+			).rejects.toThrow(UNLINK_NOT_LINKED_MESSAGE);
+		});
+
+		it("refuses to unlink a REAL convert, which has a Person and membership to unwind", async () => {
+			// `applyConvertGuestToMember` writes no `slotIds` record, so there is
+			// nothing for this to replay — and half-reversing it would strand the
+			// Person and membership it created. That undo is #618, not this.
+			const { guestId } = await captureGuestVisit({
+				clubId: seed.clubId,
+				name: "Real Convert",
+				phone: "555-909-0001",
+			});
+			await applyConvertGuestToMember({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+			await expect(
+				applyUnlinkGuestFromMember({
+					clubId: seed.clubId,
+					guestId,
+					actorMemberId: seed.adminMemberId,
+				}),
+			).rejects.toThrow(UNLINK_NOT_LINKED_MESSAGE);
+		});
+
+		describe("link candidates", () => {
+			it("marks name-agreeing members as suggested and others not", async () => {
+				const guestId = await seedGuest(seed.clubId, "Bill Nakamura");
+				const same = await memberRow("Bill Nakamura");
+				const other = await memberRow("Zoe Unrelated");
+				const rows = await loadLinkCandidates({
+					clubId: seed.clubId,
+					guestId,
+				});
+				expect(rows.find((r) => r.id === same)?.suggested).toBe(true);
+				expect(rows.find((r) => r.id === other)?.suggested).toBe(false);
+				// The WHOLE roster comes back, not just matches — the dialog needs the
+				// annotations for a member found by free search too.
+				expect(rows.length).toBeGreaterThan(1);
+			});
+
+			it("flags a member who shares a meeting with the guest", async () => {
+				const guestId = await seedGuest(seed.clubId, "Shares Meeting");
+				const clash = await memberRow("Clash Member");
+				const clear = await memberRow("Clear Member");
+				const meetingId = await seedPastMeeting(seed.clubId);
+				await seedGuestRoleSlot(meetingId, seed.roleDefinitionId, guestId);
+				await testDb.insert(roleSlots).values({
+					meetingId,
+					roleDefinitionId: seed.roleDefinitionId,
+					assignedMemberId: clash,
+					status: "claimed",
+				});
+				const rows = await loadLinkCandidates({
+					clubId: seed.clubId,
+					guestId,
+				});
+				expect(rows.find((r) => r.id === clash)?.sharesMeeting).toBe(true);
+				expect(rows.find((r) => r.id === clear)?.sharesMeeting).toBe(false);
+			});
+
+			it("reports no collisions for a guest holding no slots", async () => {
+				const guestId = await seedGuest(seed.clubId, "No Slots Guest");
+				const rows = await loadLinkCandidates({
+					clubId: seed.clubId,
+					guestId,
+				});
+				expect(rows.length).toBeGreaterThan(0);
+				expect(rows.every((r) => !r.sharesMeeting)).toBe(true);
+			});
+		});
+
+		describe("linkReversible on the pipeline row", () => {
+			// This flag decides WHICH button the board offers, and the seam tests
+			// cannot see it. Both single-boolean versions of the rule shipped a
+			// wrong button past a green suite: gating on `convertedMembershipId`
+			// put an Unlink on real converts that fails every time, and gating on
+			// `linkReversible` alone offered a real convert the Link button. Caught
+			// by driving the board; pinned here so it stays caught.
+			it("is true after a link and false after a real convert", async () => {
+				const linkedGuest = await seedGuest(seed.clubId, "Reversible One");
+				const memberId = await memberRow("Reversible One");
+				await applyLinkGuestToMember({
+					clubId: seed.clubId,
+					guestId: linkedGuest,
+					memberId,
+					actorMemberId: seed.adminMemberId,
+				});
+
+				const { guestId: convertedGuest } = await captureGuestVisit({
+					clubId: seed.clubId,
+					name: "Converted One",
+					phone: "555-808-0002",
+				});
+				await applyConvertGuestToMember({
+					clubId: seed.clubId,
+					guestId: convertedGuest,
+					actorMemberId: seed.adminMemberId,
+				});
+
+				const rows = await loadGuestPipeline(seed.clubId);
+				const linked = rows.find((r) => r.id === linkedGuest);
+				const converted = rows.find((r) => r.id === convertedGuest);
+
+				// Both carry a membership pointer — that is exactly why the pointer
+				// alone cannot decide which control to show.
+				expect(linked?.convertedMembershipId).toBeTruthy();
+				expect(converted?.convertedMembershipId).toBeTruthy();
+
+				expect(linked?.linkReversible).toBe(true);
+				expect(converted?.linkReversible).toBe(false);
+			});
+
+			it("goes false again once the link is undone", async () => {
+				const guestId = await seedGuest(seed.clubId, "Undone Reversible");
+				const memberId = await memberRow("Undone Reversible");
+				await applyLinkGuestToMember({
+					clubId: seed.clubId,
+					guestId,
+					memberId,
+					actorMemberId: seed.adminMemberId,
+				});
+				await applyUnlinkGuestFromMember({
+					clubId: seed.clubId,
+					guestId,
+					actorMemberId: seed.adminMemberId,
+				});
+				const row = (await loadGuestPipeline(seed.clubId)).find(
+					(r) => r.id === guestId,
+				);
+				// The link row is still in the log, but the pointer is null now, so
+				// the join that derives this finds nothing — which is what keeps a
+				// stale record from making an unlinked guest look reversible.
+				expect(row?.convertedMembershipId).toBeNull();
+				expect(row?.linkReversible).toBe(false);
+			});
 		});
 	});
 });

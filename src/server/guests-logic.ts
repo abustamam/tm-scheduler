@@ -4,6 +4,7 @@
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { db } from "#/db";
 import { guests, meetings, roleSlots } from "#/db/schema";
+import { GUEST_IS_NOW_A_MEMBER_MESSAGE } from "#/lib/guest-convert";
 import { toStoredPhone } from "#/lib/phone";
 import { logActivity } from "./activity";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
@@ -87,13 +88,26 @@ export async function applyAssignGuestToSlot(input: {
 			guestId = created.id;
 		} else if (input.guestId) {
 			const [existing] = await tx
-				.select({ id: guests.id })
+				.select({
+					id: guests.id,
+					name: guests.name,
+					convertedMembershipId: guests.convertedMembershipId,
+				})
 				.from(guests)
 				.where(
 					and(eq(guests.id, input.guestId), eq(guests.clubId, slot.clubId)),
 				)
 				.limit(1);
 			if (!existing) throw new Error("Guest not found in this club.");
+			// A guest who is now a member must be assigned AS that member (#637).
+			// Putting `assigned_guest_id` on the slot would re-split a human whose
+			// guest and member records were just joined up (#635) — and the caller
+			// that made this reachable was a picker showing every guest in the club
+			// regardless of stage, so this refusal is what protects the invariant
+			// from the NEXT such caller rather than only from that one.
+			if (existing.convertedMembershipId) {
+				throw new Error(GUEST_IS_NOW_A_MEMBER_MESSAGE(existing.name));
+			}
 			guestId = existing.id;
 		} else {
 			throw new Error("Provide a guest to assign.");

@@ -332,6 +332,28 @@ Optional (platform superadmin): `SUPERADMIN_EMAILS` — a comma-separated, case-
   instead of reading it; they also require every `:not()` arm to be a `[data-slot=…]` opt-out,
   since appending `:not([class])` would switch the rule off for every real anchor in the app
   while every substring assertion stayed green. Neither guard enrolls the next component for you.
+- **A dialog's height belongs to the primitive — do not re-solve it at the call site.**
+  `DialogContent` (`src/components/ui/dialog.tsx`) carries
+  `max-h-[calc(100svh-2rem)] overflow-y-auto overscroll-contain`, and the COMBINATION is the
+  fact: it is `fixed` and centred by `translate-y-[-50%]`, so a box taller than the viewport
+  hangs off both ends and the document cannot scroll it back — a fixed element is not in the
+  scroll flow, so the overflow is not below the fold, it is unreachable. Measured before the fix
+  at a 375x400 viewport: the identity dialog rendered 457px tall at top=-28 with the
+  "I'm new — add me" control at y=404 and NO scrollable ancestor between it and the body. Three
+  rules from it. `svh`, never `vh` — `vh` is the LARGE viewport height, so it under-accounts for
+  mobile chrome and lands the ceiling below the fold on the devices that need it; the two local
+  patches this replaced were both `max-h-[80vh]`. A call site must not set `max-h`,
+  `overflow-y-*`, **or `overflow-hidden`** — `cn()` is tailwind-merge, so `overflow-hidden`
+  resolves OVER the primitive's `overflow-y-auto` and silently removes the scroller while
+  keeping the ceiling, which is the original bug one dialog at a time (`CommandDialog` does this
+  deliberately and is the one waiver). And nothing in-process can see any of it — jsdom performs
+  no layout — so the gate is a source guard (`dialog-scroll.guard.test.ts`, comment-blind via
+  `#/test/guard-source` for the must-be-present half, raw for the offender sweep, whose tag scan
+  is brace-aware because a JSX prop can contain `>` and prop ORDER was all that kept the naive
+  regex working). Two things it does NOT fix, both open: the close button scrolls away with the
+  content (#627), and keyboard occlusion is a different mechanism entirely — the viewport meta
+  sets no `interactive-widget`, so the default `resizes-visual` leaves the layout viewport and
+  `svh` untouched when the keyboard opens and this ceiling never engages (#619).
 
 ## Data layer
 

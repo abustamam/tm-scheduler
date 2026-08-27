@@ -179,48 +179,107 @@ function hostileAtCap(beatCount: number) {
 	return { beats, roles, slots };
 }
 
+/**
+ * The one scale an absolute millisecond bound may be stated at in this file.
+ *
+ * Every absolute here is a CATASTROPHE net — it exists to catch a renderer that
+ * became quadratic and would hang a real request, not to catch a 2x slip. The
+ * sensitive, machine-independent detection is the per-row ratio ladder, which
+ * measures both terms in the same process so machine speed divides out.
+ *
+ * 2000ms is ~6x the worst runner variance ever observed on this repo's CI
+ * (331ms, see the ceiling case's docblock) and ~60x the local cold measurement
+ * (~33ms). Anything tighter has been tried three times — 50, 100, 150, 250 —
+ * and every one of them either fired on a PR that touched none of this code or
+ * was raised pre-emptively after a near-miss.
+ *
+ * Enforced by `bench-absolute-bounds.guard.test.ts`, which is what makes this a
+ * rule rather than a comment.
+ */
+const CATASTROPHE_MS = 2000;
+
 describe("buildTemplateRows render cost (#task-10)", () => {
 	/**
-	 * The curve the brief asked for, recorded here as a living regression gate
-	 * rather than only a report. Each bound is an ABSOLUTE literal, generous
-	 * over what was actually measured (Apple M2 Max, macOS 15.7.4, Bun 1.2.8,
-	 * 2026-08-21, warm-repeat numbers — see `meeting-template-limits.ts` for
-	 * the exact figures and the COLD single-call number this suite's own CI
-	 * runs are closer to) — not `toBeLessThan(SOME_BUDGET_CONSTANT)`, which
-	 * would pass for every value of that constant, and not relative to the
-	 * previous size, which would pass for a curve that got worse in shape but
-	 * happened to start small.
+	 * The curve the brief asked for, as a living regression gate — stated so
+	 * that machine speed cancels out (#631).
 	 *
-	 * The bounds were first set from the macOS numbers alone and the 200-beat
-	 * row went red on CI at 135.67ms against 60/60/80/100 — a ~7x slower
-	 * shared runner, not a regression. They are now anchored to the 250ms
-	 * this file's own ceiling case below already uses for the SAME 200-beat
-	 * workload, which CI has been passing all along; the ladder having
-	 * asserted 100ms on that exact shape while its neighbour asserted 250ms
-	 * was a contradiction, and the stricter number was the unexamined one.
+	 * ## Why the absolute literals are gone
 	 *
-	 * Raising them costs sensitivity to a constant-factor regression, so the
-	 * shape check below now carries that half of the job on its own. Do NOT
-	 * read a passing row here as evidence the curve is still linear — that is
-	 * what the per-row case is for, and it is the assertion that survives a
-	 * machine swap.
+	 * They were `{25: 120ms, 50: 140ms, 100: 200ms, 200: 250ms}`, calibrated on
+	 * an Apple M2 Max. That went red on CI twice. First at 135.67ms against a
+	 * 100ms bound, which was diagnosed as a ~7x slower shared runner and fixed
+	 * by raising the bounds to 250ms. Then at **331ms against that 250ms**, on
+	 * an unrelated PR, with the identical commit passing on a re-run minutes
+	 * later — the same commit red then green, which is proof of runner variance
+	 * rather than a diagnosis of it.
+	 *
+	 * The second failure is what settles it. A shared runner has no upper bound
+	 * on how slow it can be, so there is no absolute millisecond number that is
+	 * both loose enough never to flake and tight enough to catch a modest
+	 * regression: 331ms of pure variance already exceeds the ~10x margin over
+	 * the ~33ms local measurement. Raising it again just moves the next
+	 * recurrence, and each one reds out a PR that has nothing to do with this
+	 * code — which trains people to re-run CI on red, the habit that lets a
+	 * real failure through.
+	 *
+	 * ## What replaces them
+	 *
+	 * The per-row check below, which was already here as this file's
+	 * machine-independent half. #631 widened it from two points to three and
+	 * deleted the literals, rather than standing a second test up beside it.
+	 * Per-row cost is measured against a baseline size in the SAME process, so
+	 * machine speed appears in both terms and divides out.
+	 *
+	 * That is more coverage than the literals gave, not less: a curve that bends
+	 * between 50 and 100 beats is now caught, where before only the 50-vs-200
+	 * endpoints were compared and the bend could hide between them.
+	 *
+	 * The baseline stays 50 rather than dropping to the 25 the old ladder
+	 * started at, and that is deliberate. 25 is a fine size for an ABSOLUTE
+	 * bound and a bad one for a RATIO: row count is not proportional to beat
+	 * count (see the next docblock), so the smallest fixture is the most
+	 * dominated by fixed overhead — its per-row cost reads high, and every ratio
+	 * measured against it looks reassuringly flat. That is passing for the wrong
+	 * reason, which is a trap the check below already fell into once.
+	 *
+	 * ## What is NOT covered, stated because the file used to claim otherwise
+	 *
+	 * A CONSTANT-FACTOR regression — everything uniformly 2x slower. Every
+	 * assertion here and in the shape check below is a ratio, and a ratio is
+	 * structurally blind to it: both terms scale together and the quotient does
+	 * not move.
+	 *
+	 * The previous version of this docblock said raising the literals was safe
+	 * because "the shape check below now carries that half of the job on its
+	 * own". It cannot, for the reason just given, so that sensitivity was
+	 * already gone rather than relocated. The generous absolute bound on the
+	 * ceiling case below is the only constant-factor net left, and it is sized
+	 * to catch a catastrophe, not a 2x slip. Catching a 2x slip on shared CI
+	 * needs a stored baseline to compare against, which this repo does not have
+	 * and which is out of scope here.
+	 *
+	 * ## Measured sensitivity of the ratio, so it is not over-trusted
+	 *
+	 * The old docblock asserted a quadratic "lands at ~13.5x per row — caught
+	 * with a factor of four to spare". That is the arithmetic for a quadratic
+	 * whose per-operation cost matches the real per-row work; a cheaper inner
+	 * loop dilutes it, and the threshold is not as sharp as that reads. Probed
+	 * directly by injecting quadratic scans into `buildTemplateRows` (#631):
+	 *
+	 *   - a scan that roughly DOUBLED total runtime → per-row ratio ~1.9,
+	 *     PASSES. A quadratic this mild slips through.
+	 *   - a scan that roughly QUADRUPLED it → ratio 3.44, FAILS on the 200-beat
+	 *     comparison, naming the size.
+	 *
+	 * So this catches a quadratic that roughly quadruples the work at the
+	 * ceiling and misses one that merely doubles it. The threshold stays at 3
+	 * rather than being tightened toward that floor: the natural per-row ratio
+	 * falls to ~0.5x on a warm fast machine but amortizes differently on a cold
+	 * shared runner, and squeezing the margin is how this file produced two
+	 * false reds in the first place. Recorded rather than tightened — a number
+	 * whose real sensitivity is written down is worth more than one that looks
+	 * strict.
 	 */
-	it.each([
-		{ beats: 25, budgetMs: 120 },
-		{ beats: 50, budgetMs: 140 },
-		{ beats: 100, budgetMs: 200 },
-		{ beats: 200, budgetMs: 250 },
-	])("renders $beats all-axes-hostile beats in well under budget", ({
-		beats,
-		budgetMs,
-	}) => {
-		const { beats: b, roles, slots } = hostileAtCap(beats);
-		const t0 = performance.now();
-		const rows = buildTemplateRows(b, roles, slots);
-		const ms = performance.now() - t0;
-		expect(rows.length).toBeGreaterThan(0);
-		expect(ms).toBeLessThan(budgetMs);
-	});
 
 	/**
 	 * The SHAPE of the curve, stated so that machine speed cancels out.
@@ -265,13 +324,31 @@ describe("buildTemplateRows render cost (#task-10)", () => {
 		costOf(50);
 
 		const small = costOf(50);
+		expect(small.msPerRow).toBeGreaterThan(0);
+
+		// Three points, not two (#631). The endpoints alone cannot see a curve
+		// that bends in the middle and comes back — 100 is here so a knee
+		// between 50 and 200 has somewhere to show up. This replaced the
+		// absolute ladder that used to cover these sizes; see the docblock above
+		// for why its millisecond literals could not survive a shared runner.
+		const mid = costOf(100);
 		const large = costOf(200);
+
 		// Guards the normalization itself: if these ever emitted the same row
 		// count, per-row cost would be a restatement of raw time and the
-		// threshold below would silently mean something else.
+		// thresholds below would silently mean something else.
+		expect(mid.rows).toBeGreaterThan(small.rows);
+		expect(large.rows).toBeGreaterThan(mid.rows);
 		expect(large.rows).toBeGreaterThan(small.rows * 4);
-		expect(small.msPerRow).toBeGreaterThan(0);
-		expect(large.msPerRow / small.msPerRow).toBeLessThan(3);
+
+		expect(
+			mid.msPerRow / small.msPerRow,
+			"per-row cost at 100 beats grew against the 50-beat baseline",
+		).toBeLessThan(3);
+		expect(
+			large.msPerRow / small.msPerRow,
+			"per-row cost at 200 beats grew against the 50-beat baseline",
+		).toBeLessThan(3);
 	});
 
 	/**
@@ -281,13 +358,46 @@ describe("buildTemplateRows render cost (#task-10)", () => {
 	 * shape a real officer's maximally-abused template would actually hit.
 	 * Measured cold (first call in a fresh vitest process, no JIT warm-up from
 	 * a prior call in the same run — the shape a real request gets) at
-	 * ~33-35ms across five repeated runs. 250ms leaves roughly 7x margin over
-	 * that for a slower CI runner, while still catching a real regression: the
-	 * curve above is LINEAR with no knee found up to 3200 beats (16x this
-	 * cap) at ~326ms, so a jump anywhere near 250ms at the legal ceiling would
-	 * mean something became quadratic, not that the machine is merely slower.
+	 * ~33-35ms across five repeated runs.
+	 *
+	 * ## This is a CATASTROPHE net, not a performance gate (#631)
+	 *
+	 * It used to assert 250ms, with the reasoning that "a jump anywhere near
+	 * 250ms at the legal ceiling would mean something became quadratic, not
+	 * that the machine is merely slower". CI falsified that directly: the
+	 * ladder's 200-beat row, the same workload, hit **331ms of pure variance**
+	 * on an unrelated PR and passed on a re-run of the identical commit. A
+	 * number that a slow runner reaches on its own cannot discriminate a
+	 * regression from a bad afternoon.
+	 *
+	 * So this is a CATASTROPHE net, deliberately far looser than any
+	 * measurement: 2000ms, roughly 6x the worst variance observed on CI and
+	 * ~60x the local cold number.
+	 *
+	 * This paragraph used to say it was the file's ONLY absolute bound, and the
+	 * assertion below used to repeat the claim. Both were FALSE when written:
+	 * #631 removed the ladder's literals and left two others standing — 250ms
+	 * in the emoji test and 150ms in the 50,000-slot test, both sized well
+	 * inside the 331ms of variance recorded three paragraphs up. The 250ms one
+	 * fired on 2026-08-26 at 288.81ms and reddened `main` (#641).
+	 *
+	 * That is worth keeping as a shape rather than a slip: the doc asserted the
+	 * cleanup was complete, so nobody re-derived it, and a stated invariant that
+	 * nothing checks decays silently. `bench-absolute-bounds.guard.test.ts` now
+	 * checks it — every absolute millisecond bound in this file must be at
+	 * catastrophe scale, so the next tight literal fails at commit rather than
+	 * on somebody else's PR months later. It is not trying to catch
+	 * a 2x slip. It catches the shape of failure that would make a real request
+	 * hang — and it still discriminates, because the curve is LINEAR with no
+	 * knee up to 3200 beats (16x this cap) at ~326ms locally, so genuinely
+	 * quadratic behaviour at the legal ceiling lands in seconds, not
+	 * milliseconds, on any machine.
+	 *
+	 * The sensitive, machine-independent regression detection lives in the
+	 * per-row ladder above. Do not tighten this number to recover sensitivity:
+	 * that is what produced two false reds. Tighten the ratio instead.
 	 */
-	it("renders the worst legal template well under a second", () => {
+	it("renders the worst legal template without hanging", () => {
 		const { beats, roles, slots } = hostileAtCap(MAX_TEMPLATE_BEATS);
 		const t0 = performance.now();
 		const rows = buildTemplateRows(beats, roles, slots);
@@ -295,8 +405,9 @@ describe("buildTemplateRows render cost (#task-10)", () => {
 		// A control: the assertion below must not pass on a renderer that
 		// silently returned nothing.
 		expect(rows.length).toBeGreaterThan(0);
-		// ABSOLUTE, in the unit the complaint would be made in.
-		expect(ms).toBeLessThan(250);
+		// ABSOLUTE. See the docblock for why it is this loose and why tightening
+		// it is the wrong repair.
+		expect(ms).toBeLessThan(CATASTROPHE_MS);
 	});
 
 	/**
@@ -334,23 +445,24 @@ describe("buildTemplateRows render cost (#task-10)", () => {
 		// ASCII here would be a real regression in THIS renderer, not just
 		// "emoji are known to be slower somewhere in this codebase".
 		//
-		// BOTH forms, because each covers the other's blind spot. This comment
-		// used to argue for the absolute bound ALONE, rejecting `asciiMs * 6`
-		// on the grounds that a ratio still passes if both numbers regress
-		// together. True, and an argument for adding the absolute — not for
-		// omitting the ratio, which is the only form that survives a change of
-		// machine. The absolute alone went red on CI at 127.33ms against a
-		// 100ms bound picked from a ~33-37ms macOS measurement: a ~7x slower
-		// shared runner, saying nothing whatever about emoji.
+		// The RATIO is the whole claim here, and it is the only form that
+		// survives a change of machine: both terms are measured in the same
+		// process on the same box, so machine speed divides out.
 		//
-		// So: the ratio states the actual claim (emoji is not an order of
-		// magnitude worse than ASCII, on whatever machine is running), and the
-		// absolute catches the both-regressed case the ratio cannot see. The
-		// absolute is anchored to the same 250ms this file's ceiling case uses
-		// for a comparable workload, rather than to a number only ever
-		// observed on one laptop.
+		// There is deliberately NO absolute bound in this test (#641). One used
+		// to sit here — 250ms, raised from 100ms after a CI red at 127.33ms —
+		// and it was wrong twice over. It duplicated the ceiling case's net on
+		// the IDENTICAL workload (`hostileBeats(MAX_TEMPLATE_BEATS, roles)`, the
+		// same fixture that case renders), and it was sized at ~7x a laptop
+		// measurement, which is INSIDE the 331ms of pure runner variance this
+		// file's own docblock records. It fired at 288.81ms on 2026-08-26,
+		// reddening `main` on a commit that touched none of this.
+		//
+		// The both-regressed case an absolute is supposed to catch is covered
+		// by the ceiling case above, on the same workload, at catastrophe
+		// scale. Two nets on one workload is not twice the safety; it is one
+		// net plus one flake.
 		expect(emojiMs / asciiMs).toBeLessThan(10);
-		expect(emojiMs).toBeLessThan(250);
 		expect(asciiMs).toBeGreaterThan(0);
 	});
 
@@ -419,19 +531,27 @@ describe("buildTemplateRows render cost (#task-10)", () => {
 		expect(holder).toContain(`Person${MAX_ROLE_REPEAT_SLOTS - 1}`);
 		expect(holder).not.toContain(`Person${MAX_ROLE_REPEAT_SLOTS}`);
 		expect(holder).not.toContain("Person49999");
-		// A generous absolute ceiling for the CAPPED cost at this extreme
-		// input size — proving the CAP, not just the truncated output, is
-		// what keeps this cheap. `slotsForRole`'s filter still scans all
-		// 50,000 slots before the cap slices it down (measured ~1-7ms for
-		// that alone at this size); a cap that instead joined every holder
-		// and truncated the resulting STRING would not show up as fast here.
+		// A CATASTROPHE ceiling for the CAPPED cost at this extreme input size
+		// — proving the CAP, not just the truncated output, is what keeps this
+		// cheap. `slotsForRole`'s filter still scans all 50,000 slots before
+		// the cap slices it down (measured ~1-7ms for that alone at this size);
+		// a cap that instead joined every holder and truncated the resulting
+		// STRING would not show up as fast here.
 		//
-		// 150, not the 50 this shipped with. 50 was ~7x the macOS measurement
-		// and looked generous; CI's runner is itself ~7x slower, which put the
-		// upper end of that measured range within a millisecond or two of the
-		// bound — passing on luck rather than on margin. The uncapped shape
-		// this guards against joins 50,000 holders and costs orders of
-		// magnitude more, so tripling the ceiling does not blunt it.
-		expect(ms).toBeLessThan(150);
+		// 2000, matching the ceiling case's net rather than continuing the
+		// ladder 50 → 150 → … (#641). Each of those raises was made after a red
+		// or a near-miss, and each bought quiet by removing exactly as much
+		// guard — the classic form of a bound that cannot fail being replaced
+		// by a bound that fails at random. 150 was already BELOW the 331ms of
+		// pure runner variance recorded in this file's docblock, so it was a
+		// latent CI flake that simply had not fired yet; the emoji test's
+		// sibling bound, 250ms, was the one that did.
+		//
+		// Sensitivity is not lost, because the timing was never the sensitive
+		// part of this test: the three string assertions above are what prove
+		// the cap, and they are exact. The uncapped shape joins 50,000 holders
+		// and costs orders of magnitude more, which 2000ms still catches on any
+		// machine.
+		expect(ms).toBeLessThan(CATASTROPHE_MS);
 	});
 });

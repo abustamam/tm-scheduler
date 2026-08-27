@@ -21,6 +21,7 @@ import { WhatsAppPhoneLink } from "#/components/whatsapp-phone-link";
 import { initialsOf, toneFromSeed } from "#/lib/avatar";
 import { effectiveAdminClub } from "#/lib/effective-admin";
 import { formatShortDate } from "#/lib/format";
+import { isStrandedConvertedGuest } from "#/lib/guest-convert";
 import { mailtoHref } from "#/lib/mailto";
 import { firstNameOf } from "#/lib/person-name";
 import { cn } from "#/lib/utils";
@@ -30,9 +31,13 @@ import {
 	deleteGuest,
 	type GuestStage,
 	getGuestPipeline,
+	getLinkCandidates,
+	type LinkCandidate,
+	linkGuestToMember,
 	type ManualGuestStage,
 	type PipelineGuestRow,
 	setGuestStage,
+	unlinkGuestFromMember,
 	updateGuest,
 } from "#/server/guest-pipeline";
 
@@ -293,7 +298,16 @@ function GuestRow({
 	onMove: (guestId: string, stage: ManualGuestStage) => void;
 	onConvert: (guest: PipelineGuestRow) => void;
 }) {
-	const joined = guest.stage === "joined";
+	// STRANDED, not joined: converted once, then the membership was removed from
+	// the roster, which nulls `converted_membership_id` and leaves `stage` saying
+	// `joined` forever (#618). Every control here used to be gated on the stage
+	// alone, so the card rendered a green "Member" badge for a member who no
+	// longer existed and offered nothing at all — the stage buttons were hidden,
+	// Convert was hidden, and delete was hidden. Treating it as not-joined is what
+	// gives the row its controls back; the badge below says which case it is
+	// rather than silently pretending the stage column reads something it doesn't.
+	const stranded = isStrandedConvertedGuest(guest);
+	const joined = guest.stage === "joined" && !stranded;
 	const visits =
 		guest.visitCount === 0
 			? "No recorded visits"
@@ -375,6 +389,15 @@ function GuestRow({
 			</div>
 
 			<div className="flex shrink-0 flex-wrap items-center gap-1.5">
+				{stranded ? (
+					<span
+						data-slot="stranded-badge"
+						title="This guest was converted to a member, and that member has since been removed from the roster."
+						className="rounded-full bg-[var(--surface-strong)] px-2.5 py-1 text-xs font-bold text-[var(--sea-ink-soft)]"
+					>
+						Member removed
+					</span>
+				) : null}
 				{joined ? (
 					<span className="rounded-full bg-[var(--success)] px-2.5 py-1 text-xs font-bold text-[var(--success-foreground)]">
 						Member
@@ -397,6 +420,7 @@ function GuestRow({
 				    (#364). Edit is offered at every stage (the guest row is only ever
 				    the record of the visitor); delete is not offered once they have
 				    converted — the server rejects it too. */}
+				<GuestLinkMember guest={guest} clubId={clubId} disabled={busy} />
 				<GuestEditDelete guest={guest} clubId={clubId} disabled={busy} />
 				{joined ? null : (
 					<Button
@@ -440,6 +464,226 @@ function deleteBlurb(guest: PipelineGuestRow): string {
 }
 
 /**
+ * Link this guest to an EXISTING roster member, or undo a link (#635).
+ *
+ * The case it exists for: a human who became a member without going through
+ * Convert — the public self-add (#616) minted a `members` row with no awareness
+ * of the guest pipeline — so they show in both the member picker and the guest
+ * chips, and their member row reads "Never done this role" for roles they did.
+ * #617 refuses Convert for exactly these rows, so before this they had no path.
+ *
+ * Own dialog state per row, mirroring `GuestEditDelete` beside it.
+ */
+function GuestLinkMember({
+	guest,
+	clubId,
+	disabled,
+}: {
+	guest: PipelineGuestRow;
+	clubId: string;
+	disabled: boolean;
+}) {
+	const router = useRouter();
+	const [open, setOpen] = useState(false);
+	const [busy, setBusy] = useState(false);
+	const [query, setQuery] = useState("");
+	const [candidates, setCandidates] = useState<LinkCandidate[] | null>(null);
+	const [picked, setPicked] = useState<LinkCandidate | null>(null);
+
+	// THREE states, not two, and both single-boolean versions of this were wrong.
+	//
+	// Gating on `convertedMembershipId` alone put an Unlink on every REAL convert,
+	// where it fails every time — telling the admin the guest is "not linked to a
+	// member" while the card beside it says Member. Gating on `linkReversible`
+	// alone then offered a real convert the LINK button, which the seam refuses
+	// for the opposite reason.
+	//
+	// A real convert gets neither: it already created a Person and a membership,
+	// so there is nothing to link and nothing this can safely undo (#618 owns
+	// that). The green Member badge already says what happened.
+	//
+	// Found by driving the board, not by the seam tests. Those exercise the
+	// refusals and were right all along; the bug was which button got offered.
+	const linkedByLink = guest.linkReversible;
+	const convertedForReal =
+		Boolean(guest.convertedMembershipId) && !guest.linkReversible;
+
+	// Loaded when the dialog opens rather than with the board: this is one query
+	// per guest card, and a club with fifty prospects should not pay fifty roster
+	// scans to render a page where most cards are never opened.
+	useEffect(() => {
+		if (!open || candidates) return;
+		let cancelled = false;
+		getLinkCandidates({ data: { clubId, guestId: guest.id } })
+			.then((rows) => {
+				if (!cancelled) setCandidates(rows);
+			})
+			.catch((err: unknown) => {
+				if (cancelled) return;
+				setCandidates([]);
+				toast.error(
+					err instanceof Error ? err.message : "Couldn't load the roster.",
+				);
+			});
+		return () => {
+			cancelled = true;
+		};
+	}, [open, candidates, clubId, guest.id]);
+
+	const filtered = (candidates ?? [])
+		.filter((c) => c.name.toLowerCase().includes(query.trim().toLowerCase()))
+		// Suggested names first; the rest stay in the roster's own name order.
+		.sort((a, b) => Number(b.suggested) - Number(a.suggested));
+
+	async function onLink(member: LinkCandidate) {
+		setBusy(true);
+		try {
+			await linkGuestToMember({
+				data: { clubId, guestId: guest.id, memberId: member.id },
+			});
+			toast.success(`${guest.name} is linked to ${member.name}.`);
+			setOpen(false);
+			setPicked(null);
+			setCandidates(null);
+			await router.invalidate();
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	async function onUnlink() {
+		setBusy(true);
+		try {
+			await unlinkGuestFromMember({ data: { clubId, guestId: guest.id } });
+			toast.success(`${guest.name} is no longer linked.`);
+			setCandidates(null);
+			await router.invalidate();
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	if (convertedForReal) return null;
+
+	if (linkedByLink) {
+		return (
+			<Button
+				type="button"
+				variant="outline"
+				size="sm"
+				disabled={disabled || busy}
+				onClick={() => void onUnlink()}
+			>
+				Unlink
+			</Button>
+		);
+	}
+
+	return (
+		<>
+			<Button
+				type="button"
+				variant="outline"
+				size="sm"
+				disabled={disabled || busy}
+				onClick={() => setOpen(true)}
+			>
+				Already a member?
+			</Button>
+			<Dialog open={open} onOpenChange={setOpen}>
+				<DialogContent className="sm:max-w-md">
+					<DialogHeader>
+						<DialogTitle>Link {guest.name} to a member</DialogTitle>
+						<DialogDescription>
+							For someone already on the roster. Their guest history — including
+							roles they've done — moves onto that member. No new roster row is
+							created.
+						</DialogDescription>
+					</DialogHeader>
+
+					{picked ? (
+						<div className="space-y-3 text-sm">
+							<p>
+								Link <span className="font-medium">{guest.name}</span> to{" "}
+								<span className="font-medium">{picked.name}</span>?
+							</p>
+							{picked.sharesMeeting ? (
+								// Warn, do not refuse. Holding two roles at one meeting is
+								// legal and ordinary at a small club; it is just surprising
+								// enough that it should not happen silently.
+								<p
+									data-slot="link-same-meeting-warning"
+									className="rounded-lg bg-[var(--surface-strong)] p-3 text-[var(--sea-ink-soft)]"
+								>
+									Heads up: {picked.name} already has a role at a meeting where{" "}
+									{guest.name} does. After linking, one person holds both.
+								</p>
+							) : null}
+							<DialogFooter>
+								<Button
+									type="button"
+									variant="outline"
+									onClick={() => setPicked(null)}
+									disabled={busy}
+								>
+									Back
+								</Button>
+								<Button
+									type="button"
+									onClick={() => void onLink(picked)}
+									disabled={busy}
+								>
+									{busy ? "Linking…" : "Link them"}
+								</Button>
+							</DialogFooter>
+						</div>
+					) : (
+						<div className="space-y-3">
+							<Input
+								placeholder="Search the roster…"
+								value={query}
+								onChange={(e) => setQuery(e.target.value)}
+								autoComplete="off"
+							/>
+							{candidates === null ? (
+								<p className="text-muted-foreground text-sm">Loading…</p>
+							) : filtered.length === 0 ? (
+								<p className="text-muted-foreground text-sm">
+									No members match “{query}”.
+								</p>
+							) : (
+								<ul className="flex max-h-[40svh] flex-col gap-2 overflow-y-auto">
+									{filtered.map((c) => (
+										<li key={c.id}>
+											<button
+												type="button"
+												onClick={() => setPicked(c)}
+												className="flex w-full items-center justify-between gap-3 rounded-lg border border-border bg-card px-3 py-2.5 text-left transition-colors hover:bg-accent"
+											>
+												<span className="truncate font-medium">{c.name}</span>
+												{c.suggested ? (
+													<span className="shrink-0 rounded-full bg-[var(--success)] px-2 py-0.5 text-[var(--success-foreground)] text-xs font-bold">
+														Same name
+													</span>
+												) : null}
+											</button>
+										</li>
+									))}
+								</ul>
+							)}
+						</div>
+					)}
+				</DialogContent>
+			</Dialog>
+		</>
+	);
+}
+
+/**
  * Per-guest Edit + Delete (#364). Each row owns its own dialog state (mirrors
  * the roster's member Edit/Remove pair). The delete confirm names exactly what
  * it will do — including how many role slots get reset to Open — so a guest
@@ -458,7 +702,16 @@ function GuestEditDelete({
 	const [editOpen, setEditOpen] = useState(false);
 	const [deleteOpen, setDeleteOpen] = useState(false);
 	const [busy, setBusy] = useState(false);
-	const joined = guest.stage === "joined";
+	// STRANDED, not joined: converted once, then the membership was removed from
+	// the roster, which nulls `converted_membership_id` and leaves `stage` saying
+	// `joined` forever (#618). Every control here used to be gated on the stage
+	// alone, so the card rendered a green "Member" badge for a member who no
+	// longer existed and offered nothing at all — the stage buttons were hidden,
+	// Convert was hidden, and delete was hidden. Treating it as not-joined is what
+	// gives the row its controls back; the badge below says which case it is
+	// rather than silently pretending the stage column reads something it doesn't.
+	const stranded = isStrandedConvertedGuest(guest);
+	const joined = guest.stage === "joined" && !stranded;
 
 	async function onEditSubmit(e: React.FormEvent<HTMLFormElement>) {
 		e.preventDefault();

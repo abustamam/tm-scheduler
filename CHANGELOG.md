@@ -2,6 +2,78 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.25.9.1] - 2026-08-26
+
+### Fixed
+
+- **CI no longer fails at random on a timing check.** Two performance tests judged the app against fixed stopwatch numbers that the shared build machine can exceed on its own, on a slow afternoon, with nothing wrong — so an unrelated change could be reported as broken. Those checks now compare the app against itself rather than against a stopwatch, which is what the rest of the file already did, and a new guard stops a fixed number creeping back in.
+
+## [1.25.9.0] - 2026-08-26
+
+### Fixed
+
+- **Present really works offline now — on the visit you actually make.** The previous release saved a meeting's Present and Print views, but only during the one page load where the app updated itself in the background. Every ordinary visit after that saved nothing, so opening a meeting on wifi and then losing signal still left Present dead. Opening a meeting now saves all three of its views every time, and saves the code each view needs to run — so the deck opens offline and its slides still advance.
+
+## [1.25.8.0] - 2026-08-26
+
+### Fixed
+
+- **Present now works offline too, from the same one online visit.** Opening a meeting before the meeting saved the agenda for offline use but nothing else — so the page came back without wifi and then tapping Present, the thing you actually stand up and use, hit an error. Opening a meeting now saves its Present and Print views alongside it, which is how the app already thought about a meeting everywhere else.
+
+## [1.25.7.0] - 2026-08-25
+
+### Fixed
+
+- **People who already became members are no longer offered as guests when you fill a role.** The "Or assign a guest" list on a meeting showed *every* guest the club has ever had — including ones who have since joined, and ones you marked as not coming back. So someone could appear twice on the same screen: once in the member list where they belong, and again as a guest below it. Picking the guest version would have quietly split them back into two people, undoing the linking added in the last release. The list now shows only guests who are actually still prospects, and the app refuses the assignment outright if something else offers you a converted guest — so a page left open from before doesn't cause it either.
+
+## [1.25.6.0] - 2026-08-25
+
+### Added
+
+- **You can now tell the app that a guest and a member are the same person.** Some people are in your club twice: once as a guest and once on the roster, with nothing joining them. They show up in both lists when you assign a role, and the roster says **"Never done this role"** for roles you watched them do. That happened because anyone could once add themselves to the roster without going through the guest pipeline — the door is closed now, but the people it let through are still doubled up. Open the guest on **VP Membership** and use **"Already a member?"**: pick who they are on the roster and everything they did as a guest moves onto their member record. People with the same name are offered first, and no new roster row is created. If you pick the wrong person, **Unlink** puts it back exactly as it was.
+- **A heads-up before one person ends up with two roles at one meeting.** If the guest and the member you're linking each have a job at the same meeting, the app says so before you confirm. It still lets you do it — that's a normal thing at a small club — it just doesn't happen behind your back.
+
+### Fixed
+
+- **The message when Convert refuses now points somewhere that helps.** Converting a guest whose name is already on the roster is blocked, which is right, but the message told you to merge them on the Roster page. That page merges two *members*, and this situation is one guest and one member — there was nothing there to do. It now points at the link described above.
+
+## [1.25.5.1] - 2026-08-25
+
+### Changed
+
+- **Nothing you can see. A test that was blocking releases for the wrong reason no longer does.** One of the speed checks on the agenda renderer was written as a stopwatch — "this must finish in under 250 milliseconds" — measured on a fast laptop. The machines that run the checks before a release are shared and sometimes much slower, so that check went red twice on changes that had nothing to do with it, most recently at 331ms, and passed when the identical code was simply re-run. It now compares the renderer against *itself* at two sizes instead of against a stopwatch, which cannot be thrown off by a slow machine. Recorded here because a release with no user-facing change still deserves an explanation for existing.
+
+## [1.25.5.0] - 2026-08-25
+
+### Fixed
+
+- **The ✕ on a pop-up box no longer scrolls away with the contents.** Boxes started scrolling their own contents in 1.25.2.0, which is what made the bottom of a tall one reachable at all — but the ✕ scrolled along with everything else, so scrolling down to reach a button at the bottom took the close button off the top of the screen. On a phone that left tapping the dimmed margin around the box as the only way out, and that margin is about sixteen pixels wide. Escape works on a computer; phones have no Escape key. The ✕ now sits still while the contents move: measured on a small phone screen, it stays exactly where it started through a 147-pixel scroll, where before it moved off screen. Nothing changes on a screen tall enough that the box never needed to scroll, and the bottom of a tall box is still reachable — both were checked.
+- **Not fixed yet, and unchanged from 1.25.2.0:** the on-screen keyboard still covers the lower part of a box without telling the page it got shorter. That is a different mechanism and it is still open.
+
+## [1.25.4.0] - 2026-08-25
+
+### Fixed
+
+- **Converting a guest who is already on the roster now stops and says so, instead of quietly making a second copy of them.** Convert matches a guest to an existing person by email, or by a phone number where the name also agrees — never by name alone, because two people really can share a name and merging them would be far worse than not merging them. The gap was a roster row with no email and no phone on file: nothing to match, so Convert made a fresh person and a fresh membership, and the club ended up with the same name twice in the roster, the sign-up grid and every picker, with that person's history split down the middle. Convert now checks the club's roster for the name first and refuses, telling you to merge on the Roster page if it is the same human. It still refuses to guess: a genuine namesake is your call, not the software's.
+- **A guest who was converted and then removed from the roster is no longer stuck forever.** Converting stamps the guest record as "joined"; removing that member from the roster later cleared the link but left the stamp, and every button on the guest's card was hidden behind it. The result was a card showing a green **Member** badge for someone who was not a member, with no way to change the stage, no way to convert again, and no way to delete — and the delete button's own error told you to "remove them from the roster instead", which is exactly what you had already done. Those cards now read **Member removed** and get their controls back.
+
+## [1.25.3.0] - 2026-08-25
+
+### Fixed
+
+- **Strangers can no longer add themselves to your roster.** Anyone who had your club's link could type a name into "I'm new — add me" and a real row appeared in your membership record: no account, no officer, nothing but a limit on how fast it could be done. That is how a guest who was being followed up in VP Membership turned up on a club's roster last week, leaving two records for one human with nothing connecting them. The box is gone from both places it appeared, and the server now refuses the request unless a club admin is signed in. Adding a member is an officer's job again: **Roster → + Add member**, which already existed.
+- **What a visitor sees instead.** The "Who are you?" box now says "Don't see your name?" and offers the two real answers — sign the guest book if you are visiting, which puts you in front of the VP Membership team where you belong, or ask an officer if you have just joined. Nothing about the ballot changes: it already had its own "Visiting us today?" card, and guests still vote through it exactly as before.
+
+This reverses a deliberate choice from the early self-serve design, when picking your name off the roster was the only way to identify yourself and there was no other door for a non-member. There are three now — the guest book, guest role assignment, and the VP Membership pipeline — so the self-add was the only one that wrote to the club's membership record, and the only one that needed no permission.
+
+## [1.25.2.0] - 2026-08-25
+
+### Fixed
+
+- **On a short screen, the bottom of a pop-up box was not just off the page — it was unreachable.** Every dialog in the app is pinned to the middle of the screen, and a pinned box is not part of what the page scrolls. So when one grew taller than the screen, the top and bottom hung off both ends and no amount of scrolling brought them back. On the club page's "Who are you?" box, measured on a small phone, the entire "I'm new — add me" control sat below the edge with nothing anywhere on the page able to scroll to it: not below the fold, just gone. Dialogs now stop growing at the height of the screen and scroll their own contents, so whatever is at the bottom can be reached. Nothing changes on a tall screen — the box is the same size it always was and gains no scrollbar. Two dialogs in the Pathways screens had each patched this for themselves and nobody had fixed the shared piece, which is why it kept happening everywhere else; there is now a check that fails if the next dialog tries to solve it locally again.
+- **Known cost, on the same small screens:** once a dialog is scrolling, its **✕** scrolls up with the contents, so scrolling down to reach a control at the bottom takes the ✕ off screen with it. Pressing Escape still closes the box, and so does tapping the dimmed area around it. Reaching the content matters more than reaching the ✕, so this ships as it is and the ✕ is being fixed separately.
+- **Not fixed yet:** the on-screen keyboard. When the keyboard opens it covers the lower part of the screen without telling the page it got shorter, so a box can still be sitting behind it. That is a different mechanism from the one above and it is still open.
+
 ## [1.25.1.0] - 2026-08-24
 
 ### Fixed

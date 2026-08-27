@@ -65,6 +65,7 @@ function guestRow(over: Partial<PipelineGuestRow> = {}): PipelineGuestRow {
 		phoneRaw: "415-555-2671 x12",
 		stage: "prospect",
 		convertedMembershipId: null,
+		linkReversible: false,
 		firstVisitAt: null,
 		visitCount: 0,
 		heldSlotCount: 0,
