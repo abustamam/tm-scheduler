@@ -352,6 +352,9 @@ describe("formatActivity", () => {
 			formatActivity({ ...meetingBase, change: "speaker_reordered" }).summary,
 		).toBe("reordered speakers");
 		expect(
+			formatActivity({ ...meetingBase, change: "evaluator_reordered" }).summary,
+		).toBe("reordered evaluators");
+		expect(
 			formatActivity({ ...meetingBase, change: "role_added" }).summary,
 		).toBe("added a role");
 		expect(

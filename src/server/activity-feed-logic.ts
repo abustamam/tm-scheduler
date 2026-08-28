@@ -36,7 +36,7 @@ export interface ActivityEntry {
 	subjectName: string | null;
 	/** reassign/release → displaced assignee (see slots.ts detail.fromMemberId) */
 	fromName: string | null;
-	/** meeting_edit → agenda-structure change (speaker_added | speaker_removed | speaker_reordered | role_added | role_removed | template_sync | role_disabled | role_enabled) */
+	/** meeting_edit → agenda-structure change (speaker_added | speaker_removed | speaker_reordered | evaluator_reordered | role_added | role_removed | template_sync | role_disabled | role_enabled) */
 	change: string | null;
 	/** plan_set → the rung set ("reached_out" | "coming" | "not_coming"), or
 	 *  null when the row was cleared back to "no answer". */
