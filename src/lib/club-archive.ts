@@ -20,7 +20,7 @@
  * one, which is checkably false: GET server fns that gate with `requireClubRole`
  * (e.g. `getScoreboard` in `server/dcp.ts`) reach it too.
  *   - The MEMBERSHIP guards — `requireMembership` / `requireClubRole`
- *     (`server/guards.ts`) via the private `assertClubNotArchived`. Every mutation,
+ *     (`server/guards.ts`) via the exported `assertClubNotArchived`. Every mutation,
  *     plus the GET fns that still gate this way.
  *   - The READ gates — `requireClubViewAccess` / `requireClubAdminView`, via
  *     `grantView` in the same file. These do NOT go through `requireMembership`;
@@ -33,12 +33,18 @@
  *     `resolveWordOfTheDayAuthz` / `resolveVoteCounterAuthz`
  *     (`server/meeting-authz-logic.ts`), via that module's private
  *     `assertMeetingClubNotArchived`. They resolve their own grant ladder and reach
- *     NONE of the three above, so ~21 agenda, Word-of-the-Day and ballot endpoints
- *     were open until v1.26.0.0 — including to a caller with no session at all,
- *     since the TMOD arm is honour-system (ADR-0010). Reads `archived_at` inline
- *     rather than calling `assertClubNotArchived`, because `guards.ts` imports that
- *     module and the call back would close an import cycle; same table, same
- *     `CLUB_ARCHIVED_MESSAGE`. Runs BEFORE the meeting-lock check in all three.
+ *     NONE of the three above. 14 server fns gate through them, and 11 had no other
+ *     archive gate before v1.26.0.0: the agenda edits, the Word of the Day, the
+ *     Table Topics and award writes, and the ballot TALLY read. Do NOT restate that
+ *     as "the ballots" — `openVote` / `closeVote` were already gated downstream in
+ *     `voting-logic.ts`, so the ballot hole was the tally, never the open/close.
+ *     Open to a caller with no session at all, since the TMOD arm is honour-system
+ *     (ADR-0010). Reads `archived_at` inline rather than calling
+ *     `assertClubNotArchived`, because `guards.ts` imports that module and the call
+ *     back would close an import cycle; same table, same `CLUB_ARCHIVED_MESSAGE`.
+ *     Runs BEFORE the meeting-lock check in the two resolvers that HAVE one —
+ *     `resolveVoteCounterAuthz` deliberately has none, which is also why the gate
+ *     cannot be folded into `assertMeetingNotLocked`.
  *
  * Authed readers that resolve membership with a bare `getMembership` reach NONE of
  * them and must call a public seam themselves: `minutes.ts`, the minutes-PDF API

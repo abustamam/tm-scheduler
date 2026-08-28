@@ -579,9 +579,11 @@ leave exactly the PII the takedown was meant to stop collecting. Where a write a
 lock, gate inside it; everywhere else the assert is right. The second arrived in v1.26.0.0: the
 per-meeting agenda-write resolvers read `archived_at` in a private
 `assertMeetingClubNotArchived`, because `guards.ts` imports `meeting-authz-logic.ts` and calling
-the assert back would close an import cycle. Six of the eight session-less writes gate
+the assert back would close an import cycle. Five of the seven session-less writes gate
 in a `-logic` SEAM rather than in the handler, which is not stylistic: a handler body is unreachable
-from vitest, so a handler-gated write is covered by a source grep and nothing else.
+from vitest, so a handler-gated write is covered by a source grep and nothing else. (It read "six of
+the eight" until v1.26.0.0; #616 admin-gated `addMember`, which took it out of the session-less set
+entirely. `WRITE_GATES` in `public-readers-archive-gate.guard.test.ts` is the list — count there.)
 `releaseSlot`/`updateSpeakerDetails` are the two still in that position (their logic is inline in
 `slots.ts`), recorded in TODOS.md.
 

@@ -154,9 +154,10 @@ was silently overridden for an operator who also held a plain membership, which 
 `impersonation.integration.test.ts` pins the single-actor case and the also-a-member case.
 
 The lesson repeats #544's exactly: the stale claim was a sentence naming ONE enforcement point,
-written when that was true and never re-derived. There are three, and `isClubArchived`
+written when that was true and never re-derived. `isClubArchived`
 (`src/lib/club-archive.ts`) is now the single place they are listed — this note points at it rather
-than becoming a fourth copy to rot.
+than becoming another copy to rot. It deliberately states no count: this sentence gave one, the
+count changed again in v1.26.0.0, and that is the same failure one level smaller.
 
 Still deferred: superadmin impersonation / ambient cross-club access ("act as", #185).
 

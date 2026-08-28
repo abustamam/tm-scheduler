@@ -29,7 +29,9 @@ Evaluator slots reference the speaker slot they evaluate via the self-referentia
 - The Phase-3 VP Education dashboard (speaker queue, rotation, overdue members) needs no new
   tables — only queries over `role_slots`.
 - Any future write path that assigns a slot MUST use the conditional-update guard; setting
-  `assigned_user_id` directly is a bug.
+  the assignee column directly is a bug. That column is `assigned_member_id` today —
+  `assigned_user_id` above is the name as decided here, renamed by ADR-0008's roster cutover
+  (#79); the rule is unchanged, only the column moved.
 - The speaker/evaluator pair mutations (add, remove, and both reorders) serialize on the
   MEETING row instead — `lockMeetingForSlotEdit` in `slots-logic.ts` takes
   `SELECT … FOR UPDATE` before the reads that DECIDE numbering and pairing (v1.26.0.0). The

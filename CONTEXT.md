@@ -384,9 +384,15 @@ the nouns in `src/db/schema.ts`.
 - **Evaluator → speaker link** — an evaluator slot points at the speaker slot it evaluates
   via `role_slots.evaluates_slot_id` (self-reference). **POSITIONAL** since v1.26.0.0:
   Evaluator N evaluates Speaker N, and `realignEvaluatorPairs` (`src/server/slots-logic.ts`)
-  re-derives it inside every mutation that changes either paired role's order or membership
-  (add speaker, remove speaker, move speaker, move evaluator) — which is what makes reordering
-  the evaluator cards the way an officer decides who evaluates whom. Still **persisted, not
+  re-derives it inside the four `slots-logic.ts` mutations that own that lineup (add speaker,
+  remove speaker, move speaker, move evaluator) — which is what makes reordering the evaluator
+  cards the way an officer decides who evaluates whom. Do NOT read that as "every path that
+  changes a paired role's slots": `addAgendaRole` / `removeAgendaRole`
+  (`meeting-agenda-edit-logic.ts`) and `applyTemplateToMeeting` (`meeting-templates-logic.ts`)
+  insert and delete slots without realigning, and the template path links only its
+  freshly-inserted batch — so a role added through the agenda editor that then wins
+  `pickSpeakerAndEvaluatorRoles` carries NULL links until the next speaker add/remove/move
+  heals them. Still **persisted, not
   inferred on read**, so the readers of `evaluates_slot_id` need no role resolution, and a
   meeting predating the rule keeps its stored answer until its next edit heals it. It replaced
   a link written once at slot creation and never re-derived, on the reasoning that the two
