@@ -30,4 +30,10 @@ Evaluator slots reference the speaker slot they evaluate via the self-referentia
   tables — only queries over `role_slots`.
 - Any future write path that assigns a slot MUST use the conditional-update guard; setting
   `assigned_user_id` directly is a bug.
+- The speaker/evaluator pair mutations (add, remove, and both reorders) serialize on the
+  MEETING row instead — `lockMeetingForSlotEdit` in `slots-logic.ts` takes
+  `SELECT … FOR UPDATE` before the reads that DECIDE numbering and pairing (v1.26.0.0). The
+  per-slot conditional update above does not substitute for it: which slot is "the next index"
+  or "the paired evaluator" is not a property of one row. The two boundaries do not serialize
+  against each other — see TODOS.md for the remove-vs-claim window that leaves open.
 - Releasing a slot clears `speaker_details` and resets it to `open`.

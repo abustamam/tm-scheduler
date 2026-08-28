@@ -524,12 +524,15 @@ every `club.ts` server fn that calls one to gate on `requireClubViewAccess`. Ext
 queries worth testing or guarding; leaving the rest inline is fine.
 
 **Public `createServerFn` readers gate on `clubs.archived_at` themselves.** Archiving is the
-platform takedown lever (ADR-0016 / ADR-0024) and it has **three** db-level enforcement points, not
+platform takedown lever (ADR-0016 / ADR-0024) and it has **four** db-level enforcement points, not
 one: `requireMembership` (`server/guards.ts`) covers authed WRITES; `grantView` in the same
 file covers the authed READ gates `requireClubViewAccess` / `requireClubAdminView`, which resolve
-their own memberships and never call `requireMembership`; and `src/server/club-readable-logic.ts` —
+their own memberships and never call `requireMembership`; `src/server/club-readable-logic.ts` —
 `isReadableClub`, `isReadableClubForMeeting`, `isReadableClubForMember` — covers every public,
-session-less one. A route guard is none of them. `isClubArchived` (`src/lib/club-archive.ts`) holds
+session-less one; and the three per-meeting agenda-write resolvers in
+`server/meeting-authz-logic.ts` cover the agenda / Word-of-the-Day / ballot family, which resolves
+its own grant ladder and reaches none of the other three (v1.26.0.0). A route guard is none of
+them. `isClubArchived` (`src/lib/club-archive.ts`) holds
 the canonical list; this paragraph points at it rather than being a second copy. This line read
 "`requireMembership` covers every authed path" until #560, and that sentence is exactly why 24 gated
 readers kept serving an archived club's roster contact details to its own signed-in members: the
@@ -561,19 +564,22 @@ be wired to a gated seam or waived in `REVIEWED_UNGATED` with a stated reason.
 all because they resolve membership with a bare `getMembership`: `minutes.ts` and
 `api/meetings.$id.minutes.pdf.ts` call `isReadableClub` directly, and `my-activity-logic.ts` inlines
 the same `archived_at` predicate into `loadMyCommitments`' query (#560) — a reader that funnels
-through none of the three points cannot be covered by fixing one of them. The service worker evicts a
+through none of those points cannot be covered by fixing one of them. The service worker evicts a
 taken-down club's pages and crest on a 404/410 (#556).
 
 **WRITES are closed too, since #555, and they close differently from reads.** A read collapses an
 archived club into not-found; a write THROWS, because every write already has an error path to its
 caller and silently accepting one that will never be readable is worse than saying the club is gone.
 `assertClubNotArchived` (exported from `guards.ts`) is the call, and the message lives in
-`#/lib/club-archive` as `CLUB_ARCHIVED_MESSAGE` so the one caller that cannot use the assert still
-raises the same sentence. That caller is `applySelfAdd`, and the exception is the interesting part:
+`#/lib/club-archive` as `CLUB_ARCHIVED_MESSAGE` so the two callers that cannot use the assert still
+raise the same sentence. The first is `applySelfAdd`, and the exception is the interesting part:
 it reads `archived_at` inside its own pre-existing `FOR UPDATE` lock instead, because a pre-check is
 check-then-act and this is the path that mints a `people` row PLUS a `members` row — the race would
 leave exactly the PII the takedown was meant to stop collecting. Where a write already holds a club
-lock, gate inside it; everywhere else the assert is right. Six of the eight session-less writes gate
+lock, gate inside it; everywhere else the assert is right. The second arrived in v1.26.0.0: the
+per-meeting agenda-write resolvers read `archived_at` in a private
+`assertMeetingClubNotArchived`, because `guards.ts` imports `meeting-authz-logic.ts` and calling
+the assert back would close an import cycle. Six of the eight session-less writes gate
 in a `-logic` SEAM rather than in the handler, which is not stylistic: a handler body is unreachable
 from vitest, so a handler-gated write is covered by a source grep and nothing else.
 `releaseSlot`/`updateSpeakerDetails` are the two still in that position (their logic is inline in

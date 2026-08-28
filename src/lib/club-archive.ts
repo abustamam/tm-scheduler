@@ -15,7 +15,7 @@
  * restating it: this claim has now gone stale twice (#544, #560), and each restated
  * copy is another place it can rot independently.
  *
- * Three db-level points, and a route guard is none of them. Labelled by MECHANISM,
+ * Four db-level points, and a route guard is none of them. Labelled by MECHANISM,
  * not by verb — an earlier version of this list said "authed WRITES" for the first
  * one, which is checkably false: GET server fns that gate with `requireClubRole`
  * (e.g. `getScoreboard` in `server/dcp.ts`) reach it too.
@@ -29,6 +29,16 @@
  *   - PUBLIC, session-less `createServerFn` readers — `isReadableClub` /
  *     `isReadableClubForMeeting` / `isReadableClubForMember` in
  *     `server/club-readable-logic.ts`.
+ *   - The PER-MEETING agenda-write resolvers — `resolveMeetingAgendaAuthz` /
+ *     `resolveWordOfTheDayAuthz` / `resolveVoteCounterAuthz`
+ *     (`server/meeting-authz-logic.ts`), via that module's private
+ *     `assertMeetingClubNotArchived`. They resolve their own grant ladder and reach
+ *     NONE of the three above, so ~21 agenda, Word-of-the-Day and ballot endpoints
+ *     were open until v1.26.0.0 — including to a caller with no session at all,
+ *     since the TMOD arm is honour-system (ADR-0010). Reads `archived_at` inline
+ *     rather than calling `assertClubNotArchived`, because `guards.ts` imports that
+ *     module and the call back would close an import cycle; same table, same
+ *     `CLUB_ARCHIVED_MESSAGE`. Runs BEFORE the meeting-lock check in all three.
  *
  * Authed readers that resolve membership with a bare `getMembership` reach NONE of
  * them and must call a public seam themselves: `minutes.ts`, the minutes-PDF API
