@@ -82,7 +82,10 @@ export async function insertMeetingWithSlots(
  * `slotIndex` 0..n-1 contiguously per role, in one insert, so Speaker N and
  * Evaluator N genuinely correspond. It stays positional for the rest of the
  * meeting's life: `realignEvaluatorPairs` (slots-logic.ts) re-derives the same
- * correspondence inside every add, remove and reorder. So this write seeds the
+ * correspondence inside the four `slots-logic.ts` mutations that own the paired
+ * lineups (add speaker, remove speaker, move speaker, move evaluator). NOT inside
+ * `addAgendaRole` / `removeAgendaRole` or `applyTemplateToMeeting`, which can
+ * change paired-role slots without realigning. So this write seeds the
  * invariant rather than capturing something the later edits would destroy — the
  * link is still PERSISTED (not inferred on read) so the ~10 readers of
  * `evaluates_slot_id` need no role resolution, and so a meeting predating the

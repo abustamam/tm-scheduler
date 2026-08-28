@@ -46,7 +46,8 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
 
 - **The archive-gate enrollment sweep exempts the whole `require*Editor` family by regex.**
   v1.26.0.0 closed the hole itself — `resolveMeetingAgendaAuthz`, `resolveWordOfTheDayAuthz` and
-  `resolveVoteCounterAuthz` now assert `archived_at` at the choke point, covering ~21 endpoints —
+  `resolveVoteCounterAuthz` now assert `archived_at` at the choke point (14 server fns gate through
+  them; 11 had no other archive gate) —
   but the reason it went unnoticed is still live: `SESSION_GUARDS` in
   `public-readers-archive-gate.guard.test.ts` matches `require...MeetingAgendaEditor`/
   `WordOfTheDayEditor`/`VoteCounterCapability` and classifies anything calling them as
@@ -58,7 +59,10 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
   **Priority:** P2
 
 - **`applyRemoveSpeakerSlot` can still destroy a slot claimed in the same instant.** v1.26.0.0 put
-  every slot mutation behind a `FOR UPDATE` lock on the MEETING row, which serializes add/remove/
+  the three speaker/evaluator pair mutations (`applyAddSpeakerSlot`,
+  `applyRemoveSpeakerSlot`, `applyMoveSlot`) behind a `FOR UPDATE` lock on the MEETING row —
+  `applyAddRoleSlot`, `applyRemoveRoleSlot`, the template sync and
+  `syncSlotsForRoleEnabledChange` are NOT covered — which serializes add/remove/
   reorder against each other — but `claimSlot` locks the SLOT row instead, so it does not
   participate. Remove still decides "the top unclaimed speaker" from a read and then deletes by id
   with no unclaimed predicate on the `DELETE`, so a claim landing between the two is deleted.

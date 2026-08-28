@@ -215,7 +215,10 @@ export async function resolveMeetingAgendaAuthz(
 	// leave the family open to any club admin, and the TMOD arm needs no session
 	// at all, which is the wider hole of the two.
 	//
-	// It also runs BEFORE the lock check, in all three resolvers here. Takedown
+	// It also runs BEFORE the lock check in the two resolvers that HAVE one
+	// (`resolveVoteCounterAuthz` deliberately has none — a Ballot Counter's
+	// capabilities span the live meeting — which is also why the archive gate
+	// cannot simply fold into `assertMeetingNotLocked`). Takedown
 	// outranks every other reason to refuse: with the lock first, an archived
 	// club's COMPLETED meeting answered "this meeting is completed", which both
 	// discloses meeting state the takedown was meant to end and answers

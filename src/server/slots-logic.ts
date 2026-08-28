@@ -877,7 +877,15 @@ async function applyMoveSlot(
 			(a, b) => a.slotIndex - b.slotIndex || a.id.localeCompare(b.id),
 		);
 		const pos = ordered.findIndex((s) => s.id === target.id);
-		if (pos === -1) throw new Error("Speaker slot not found.");
+		// Kind-specific, like the not-found throw above: the slot was deleted while
+		// this call waited for the meeting lock.
+		if (pos === -1) {
+			throw new Error(
+				kind === "speaker"
+					? "Speaker slot not found."
+					: "Evaluator slot not found.",
+			);
+		}
 		const self = ordered[pos];
 		const neighbor =
 			input.direction === "up" ? ordered[pos - 1] : ordered[pos + 1];
