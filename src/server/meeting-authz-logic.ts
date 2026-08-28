@@ -5,12 +5,14 @@
 import { and, asc, eq } from "drizzle-orm";
 import { db } from "#/db";
 import {
+	clubs,
 	meetings,
 	members,
 	people,
 	roleDefinitions,
 	roleSlots,
 } from "#/db/schema";
+import { CLUB_ARCHIVED_MESSAGE, isClubArchived } from "#/lib/club-archive";
 import {
 	isMeetingLocked,
 	MEETING_LOCKED_MESSAGE,
@@ -22,6 +24,28 @@ import {
 } from "#/lib/meeting-roles";
 import { markImpersonatedWrite } from "./impersonation-actor";
 import { getActiveImpersonation } from "./impersonation-logic";
+
+/**
+ * The archive choke point for every per-meeting WRITE resolver in this module
+ * (#555). Archiving is the platform takedown lever (ADR-0016), and a write to a
+ * taken-down club must THROW rather than resolve `allowed: false` — every caller
+ * already has an error path, and accepting an edit nobody can ever read is the
+ * worse failure. Fails CLOSED on a missing club, matching `assertClubNotArchived`.
+ *
+ * Reads `clubs.archived_at` here instead of calling `guards.ts`'s
+ * `assertClubNotArchived`: `guards.ts` imports THIS module, so importing it back
+ * would close an import cycle. Same table, same shared message constant, so the
+ * two paths cannot tell a member different things about the same club.
+ */
+async function assertMeetingClubNotArchived(clubId: string): Promise<void> {
+	const [club] = await db
+		.select({ archivedAt: clubs.archivedAt })
+		.from(clubs)
+		.where(eq(clubs.id, clubId))
+		.limit(1);
+	if (!club) throw new Error("Club not found.");
+	if (isClubArchived(club)) throw new Error(CLUB_ARCHIVED_MESSAGE);
+}
 
 /**
  * The meeting-lock choke point (#150). Throws when a meeting's status is
@@ -173,7 +197,7 @@ export async function loadTmodMemberId(
  * Allowed when the caller is a club `admin` (via a live session) OR the
  * self-asserted `memberId` equals the meeting's TMOD slot assignee. If the TMOD
  * slot is unassigned there is no self-serve editor — only admin passes.
- * Throws when the meeting does not exist.
+ * Throws when the meeting does not exist, is locked, or its club is archived.
  */
 export async function resolveMeetingAgendaAuthz(
 	input: MeetingAgendaAuthzInput,
@@ -182,11 +206,25 @@ export async function resolveMeetingAgendaAuthz(
 		where: eq(meetings.id, input.meetingId),
 	});
 	if (!meeting) throw new Error("Meeting not found.");
+	const clubId = meeting.clubId;
+	// Archive choke point (#555): the agenda-edit family — updateMeeting,
+	// add/remove/move speaker, move evaluator — reaches the db through here and
+	// through nothing else, so the takedown gate belongs here rather than in five
+	// handlers that each have to remember it. It must run BEFORE either grant arm
+	// returns: the admin arm returns first, so gating only the TMOD path would
+	// leave the family open to any club admin, and the TMOD arm needs no session
+	// at all, which is the wider hole of the two.
+	//
+	// It also runs BEFORE the lock check, in all three resolvers here. Takedown
+	// outranks every other reason to refuse: with the lock first, an archived
+	// club's COMPLETED meeting answered "this meeting is completed", which both
+	// discloses meeting state the takedown was meant to end and answers
+	// differently from the same club's scheduled meeting.
+	await assertMeetingClubNotArchived(clubId);
 	// Lock choke point (#150): a completed meeting rejects every agenda edit that
 	// funnels through here (update meta, add/remove/move speaker). Reopen is a
 	// separate admin path and does not run this.
 	assertMeetingNotLocked(meeting.status);
-	const clubId = meeting.clubId;
 	const { tmodMemberId } = await loadRoleSlotAssignees(input.meetingId);
 
 	// Admin path (session admin or read_write impersonation, #246).
@@ -255,8 +293,11 @@ export async function resolveWordOfTheDayAuthz(
 		where: eq(meetings.id, input.meetingId),
 	});
 	if (!meeting) throw new Error("Meeting not found.");
-	assertMeetingNotLocked(meeting.status);
 	const clubId = meeting.clubId;
+	// Same archive gate as the agenda resolver above, for the same reason and in
+	// the same position: before the admin arm returns, and before the lock check.
+	await assertMeetingClubNotArchived(clubId);
+	assertMeetingNotLocked(meeting.status);
 	const { tmodMemberId, grammarianMemberId } = await loadRoleSlotAssignees(
 		input.meetingId,
 	);
@@ -347,6 +388,10 @@ export async function resolveVoteCounterAuthz(
 	});
 	if (!meeting) throw new Error("Meeting not found.");
 	const clubId = meeting.clubId;
+	// Same archive gate as the two resolvers above. This one deliberately has NO
+	// lock check (a Ballot Counter's capabilities span the live meeting), which is
+	// why the archive gate cannot be folded into `assertMeetingNotLocked`.
+	await assertMeetingClubNotArchived(clubId);
 	const { voteCounterMemberId } = await loadRoleSlotAssignees(input.meetingId);
 
 	const admin = await resolveAdminGrant(input.sessionUserId, clubId);

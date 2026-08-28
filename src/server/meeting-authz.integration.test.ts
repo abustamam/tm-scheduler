@@ -10,7 +10,15 @@
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { members, roleDefinitions, roleSlots, user } from "#/db/schema";
+import {
+	clubs,
+	meetings,
+	members,
+	roleDefinitions,
+	roleSlots,
+	user,
+} from "#/db/schema";
+import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
 import { utcToZonedWallTime } from "#/lib/datetime";
 import {
 	cleanup,
@@ -23,7 +31,11 @@ import {
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
-const { resolveMeetingAgendaAuthz } = await import("./meeting-authz-logic");
+const {
+	resolveMeetingAgendaAuthz,
+	resolveVoteCounterAuthz,
+	resolveWordOfTheDayAuthz,
+} = await import("./meeting-authz-logic");
 const { applyMeetingUpdate } = await import("./meetings-logic");
 const { startImpersonation } = await import("./impersonation-logic");
 
@@ -251,6 +263,126 @@ describe.skipIf(!hasTestDb)("meeting agenda authorization", () => {
 			sessionUserId: club.memberUserId,
 		});
 		expect(authz.allowed).toBe(false);
+	});
+
+	/**
+	 * Archived club = platform takedown (ADR-0016/#555): a WRITE must THROW, not
+	 * return `allowed: false`, so every caller surfaces the same sentence.
+	 *
+	 * This resolver is the choke point for the whole agenda-edit family
+	 * (`updateMeeting`, `addSpeakerSlot`, `removeSpeakerSlot`, `moveSpeakerSlot`,
+	 * `moveEvaluatorSlot`), and it carried NO archive check — the gate belongs
+	 * here rather than in five handlers, and here is also the only place the
+	 * session-less TMOD arm can be covered. Both arms are asserted because the
+	 * admin arm returns FIRST: gating only the TMOD path would leave the family
+	 * open to any club admin, and gating only the admin path would leave it open
+	 * to a session-less self-asserted TMOD, which is the wider hole.
+	 */
+	/**
+	 * The archive gate runs BEFORE the meeting-lock check, in all three resolvers.
+	 * Ordering is not cosmetic: with the lock first, an archived club's COMPLETED
+	 * meeting answered "this meeting is completed" — telling a caller the takedown
+	 * was supposed to silence something about the meeting's state, and answering
+	 * differently from the same club's scheduled meeting. Takedown outranks every
+	 * other reason to refuse.
+	 */
+	it("reports the takedown, not the lock, on an archived club's completed meeting", async () => {
+		await addTmodSlot(club, null);
+		await testDb
+			.update(meetings)
+			.set({ status: "completed" })
+			.where(eq(meetings.id, club.meetingId));
+		await testDb
+			.update(clubs)
+			.set({ archivedAt: new Date() })
+			.where(eq(clubs.id, club.clubId));
+		await expect(
+			resolveMeetingAgendaAuthz({
+				meetingId: club.meetingId,
+				sessionUserId: club.adminUserId,
+			}),
+		).rejects.toThrow(CLUB_ARCHIVED_MESSAGE);
+	});
+
+	it("throws on an archived club — admin arm (#555)", async () => {
+		await addTmodSlot(club, null);
+		await testDb
+			.update(clubs)
+			.set({ archivedAt: new Date() })
+			.where(eq(clubs.id, club.clubId));
+		await expect(
+			resolveMeetingAgendaAuthz({
+				meetingId: club.meetingId,
+				sessionUserId: club.adminUserId,
+			}),
+		).rejects.toThrow(CLUB_ARCHIVED_MESSAGE);
+	});
+
+	it("throws on an archived club — session-less TMOD self-assert arm (#555)", async () => {
+		await addTmodSlot(club, club.memberId);
+		await testDb
+			.update(clubs)
+			.set({ archivedAt: new Date() })
+			.where(eq(clubs.id, club.clubId));
+		await expect(
+			resolveMeetingAgendaAuthz({
+				meetingId: club.meetingId,
+				sessionUserId: null,
+				selfMemberId: club.memberId,
+			}),
+		).rejects.toThrow(CLUB_ARCHIVED_MESSAGE);
+	});
+
+	/**
+	 * The two sibling resolvers in the same module gate identically. Splitting the
+	 * fix would be the half-applied shape: all three authorize a WRITE to a
+	 * meeting of a club, all three are reached by session-less self-assert arms,
+	 * and all three are exempted from the archive-gate sweep by the same
+	 * `require*Editor` regex — so a gate on one of them reads as "handled".
+	 */
+	it("throws on an archived club — Word of the Day resolver (#555)", async () => {
+		await addTmodSlot(club, club.memberId);
+		await testDb
+			.update(clubs)
+			.set({ archivedAt: new Date() })
+			.where(eq(clubs.id, club.clubId));
+		await expect(
+			resolveWordOfTheDayAuthz({
+				meetingId: club.meetingId,
+				sessionUserId: null,
+				selfMemberId: club.memberId,
+			}),
+		).rejects.toThrow(CLUB_ARCHIVED_MESSAGE);
+	});
+
+	it("throws on an archived club — vote counter resolver (#555)", async () => {
+		await testDb
+			.update(clubs)
+			.set({ archivedAt: new Date() })
+			.where(eq(clubs.id, club.clubId));
+		await expect(
+			resolveVoteCounterAuthz({
+				meetingId: club.meetingId,
+				sessionUserId: club.adminUserId,
+			}),
+		).rejects.toThrow(CLUB_ARCHIVED_MESSAGE);
+	});
+
+	/** The DENIED path throws the same way: an archived club must not be
+	 *  distinguishable by whether the caller would otherwise have had access. */
+	it("throws on an archived club even for a caller with no access (#555)", async () => {
+		await addTmodSlot(club, null);
+		await testDb
+			.update(clubs)
+			.set({ archivedAt: new Date() })
+			.where(eq(clubs.id, club.clubId));
+		await expect(
+			resolveMeetingAgendaAuthz({
+				meetingId: club.meetingId,
+				sessionUserId: null,
+				selfMemberId: randomUUID(),
+			}),
+		).rejects.toThrow(CLUB_ARCHIVED_MESSAGE);
 	});
 
 	it("meta edit is allowed for a TMOD (canReschedule=false) when time is unchanged", async () => {
