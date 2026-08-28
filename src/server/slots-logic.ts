@@ -93,21 +93,23 @@ export async function applyAddSpeakerSlot(input: {
 		throw new Error("This club's Speaker role is currently disabled.");
 	}
 
-	const existing = await db
-		.select({
-			roleDefinitionId: roleSlots.roleDefinitionId,
-			slotIndex: roleSlots.slotIndex,
-		})
-		.from(roleSlots)
-		.where(eq(roleSlots.meetingId, input.meetingId));
-	const idxFor = (roleId: string) =>
-		nextIndex(
-			existing
-				.filter((s) => s.roleDefinitionId === roleId)
-				.map((s) => s.slotIndex),
-		);
-
 	await db.transaction(async (tx) => {
+		await lockMeetingForSlotEdit(tx, input.meetingId);
+		// Read under the lock: computed OUTSIDE the transaction, two concurrent
+		// adds both resolved the same "next" index and both inserted it.
+		const existing = await tx
+			.select({
+				roleDefinitionId: roleSlots.roleDefinitionId,
+				slotIndex: roleSlots.slotIndex,
+			})
+			.from(roleSlots)
+			.where(eq(roleSlots.meetingId, input.meetingId));
+		const idxFor = (roleId: string) =>
+			nextIndex(
+				existing
+					.filter((s) => s.roleDefinitionId === roleId)
+					.map((s) => s.slotIndex),
+			);
 		// `returning` so the evaluator can point at this speaker (#512). The pair
 		// is already established here — the "+ Add speaker" button creates both
 		// rows in this one transaction — but until now the link was never written
@@ -126,15 +128,19 @@ export async function applyAddSpeakerSlot(input: {
 				meetingId: input.meetingId,
 				roleDefinitionId: evaluatorRoleId,
 				slotIndex: idxFor(evaluatorRoleId),
-				// Recorded rather than inferred from matching slotIndex, because the
-				// indices can legitimately drift apart: `applyRemoveSpeakerSlot`
-				// removes the highest UNCLAIMED slot of each role independently, so
-				// a claimed evaluator paired with an unclaimed speaker desyncs them,
-				// and `applyMoveSpeakerSlot` reorders speakers without touching
-				// evaluators. An explicit FK survives both.
+				// The realign below re-points every link positionally anyway; writing
+				// the pair here keeps the insert self-consistent on its own.
 				evaluatesSlotId: speaker.id,
 			});
 		}
+		// Positional pairing: heal any drifted links (a crossed legacy meeting
+		// fixes itself on its next edit) and keep numbering dense.
+		await realignEvaluatorPairs(
+			tx,
+			input.meetingId,
+			speakerRoleId,
+			evaluatorRoleId,
+		);
 		await logActivity(tx, {
 			clubId: meeting.clubId,
 			actorMemberId: input.actorMemberId,
@@ -573,84 +579,97 @@ export async function applyRemoveSpeakerSlot(input: {
 		meeting.templateId,
 	);
 
-	const slots = await db
-		.select({
-			id: roleSlots.id,
-			roleDefinitionId: roleSlots.roleDefinitionId,
-			slotIndex: roleSlots.slotIndex,
-			status: roleSlots.status,
-			assignedMemberId: roleSlots.assignedMemberId,
-			assignedGuestId: roleSlots.assignedGuestId,
-			evaluatesSlotId: roleSlots.evaluatesSlotId,
-		})
-		.from(roleSlots)
-		.where(eq(roleSlots.meetingId, input.meetingId));
-	const roleOf = (id: string) =>
-		slots.find((s) => s.id === id)?.roleDefinitionId ?? "";
+	// Read under the meeting lock, like the add path: which slot is "the top
+	// unclaimed one" and which evaluator is paired to it are DECISIONS, and a
+	// concurrent add or reorder moves both answers.
+	return db.transaction(async (tx) => {
+		await lockMeetingForSlotEdit(tx, input.meetingId);
+		const slots = await tx
+			.select({
+				id: roleSlots.id,
+				roleDefinitionId: roleSlots.roleDefinitionId,
+				slotIndex: roleSlots.slotIndex,
+				status: roleSlots.status,
+				assignedMemberId: roleSlots.assignedMemberId,
+				assignedGuestId: roleSlots.assignedGuestId,
+				evaluatesSlotId: roleSlots.evaluatesSlotId,
+			})
+			.from(roleSlots)
+			.where(eq(roleSlots.meetingId, input.meetingId));
+		const roleOf = (id: string) =>
+			slots.find((s) => s.id === id)?.roleDefinitionId ?? "";
 
-	const speakerId = topUnclaimed(slots, speakerRoleId, roleOf);
-	if (!speakerId) throw new Error("Release a speaker before removing a slot.");
+		const speakerId = topUnclaimed(slots, speakerRoleId, roleOf);
+		if (!speakerId)
+			throw new Error("Release a speaker before removing a slot.");
 
-	/**
-	 * Remove the evaluator paired to THIS speaker, not the highest unclaimed one.
-	 *
-	 * Picking each role's top unclaimed slot independently looks equivalent and
-	 * is not: the two picks diverge the moment a claimed speaker and a claimed
-	 * evaluator sit at different positions. Proven case — Speaker 1 claimed,
-	 * Evaluator 2 claimed:
-	 *
-	 *   before  Sp1 claimed · Sp2 open · Ev1 open→Sp1 · Ev2 claimed→Sp2
-	 *   after   Sp2 and Ev1 deleted — so the removed speaker's OWN evaluator
-	 *           (Ev2) survived pointing at nothing (the FK is ON DELETE SET
-	 *           NULL), while an evaluator whose speaker is still present was
-	 *           destroyed instead.
-	 *
-	 * The link only became available with #512; before it there was no way to
-	 * know which evaluator belonged to which speaker, which is why the original
-	 * picked by index.
-	 */
-	const claimed = (s: {
-		status: string;
-		assignedMemberId: string | null;
-		assignedGuestId: string | null;
-	}) => s.status !== "open" || !!s.assignedMemberId || !!s.assignedGuestId;
+		/**
+		 * Remove the evaluator paired to THIS speaker, not the highest unclaimed one.
+		 *
+		 * Picking each role's top unclaimed slot independently looks equivalent and
+		 * is not: the two picks diverge the moment a claimed speaker and a claimed
+		 * evaluator sit at different positions. Proven case — Speaker 1 claimed,
+		 * Evaluator 2 claimed:
+		 *
+		 *   before  Sp1 claimed · Sp2 open · Ev1 open→Sp1 · Ev2 claimed→Sp2
+		 *   after   Sp2 and Ev1 deleted — so the removed speaker's OWN evaluator
+		 *           (Ev2) survived pointing at nothing (the FK is ON DELETE SET
+		 *           NULL), while an evaluator whose speaker is still present was
+		 *           destroyed instead.
+		 *
+		 * The link only became available with #512; before it there was no way to
+		 * know which evaluator belonged to which speaker, which is why the original
+		 * picked by index.
+		 */
+		const claimed = (s: {
+			status: string;
+			assignedMemberId: string | null;
+			assignedGuestId: string | null;
+		}) => s.status !== "open" || !!s.assignedMemberId || !!s.assignedGuestId;
 
-	const pairedEvaluator = evaluatorRoleId
-		? slots.find(
-				(s) =>
-					s.roleDefinitionId === evaluatorRoleId &&
-					s.evaluatesSlotId === speakerId,
-			)
-		: undefined;
+		const pairedEvaluator = evaluatorRoleId
+			? slots.find(
+					(s) =>
+						s.roleDefinitionId === evaluatorRoleId &&
+						s.evaluatesSlotId === speakerId,
+				)
+			: undefined;
 
-	let evaluatorId: string | null;
-	if (pairedEvaluator) {
-		// Never destroy an assignment — the same stance as "Release the role
-		// before removing it" and "Release a speaker before removing a slot".
-		// Someone claimed this evaluator slot to evaluate THAT speaker; deleting
-		// the speaker under them would leave them evaluating nobody, and they
-		// would not find out until the agenda printed.
-		if (claimed(pairedEvaluator)) {
-			const speaker = slots.find((s) => s.id === speakerId);
-			throw new Error(
-				`Release the evaluator for Speaker ${(speaker?.slotIndex ?? 0) + 1} before removing that speaker.`,
-			);
+		let evaluatorId: string | null;
+		if (pairedEvaluator) {
+			// Never destroy an assignment — the same stance as "Release the role
+			// before removing it" and "Release a speaker before removing a slot".
+			// Someone claimed this evaluator slot to evaluate THAT speaker; deleting
+			// the speaker under them would leave them evaluating nobody, and they
+			// would not find out until the agenda printed.
+			if (claimed(pairedEvaluator)) {
+				const speaker = slots.find((s) => s.id === speakerId);
+				throw new Error(
+					`Release the evaluator for Speaker ${(speaker?.slotIndex ?? 0) + 1} before removing that speaker.`,
+				);
+			}
+			evaluatorId = pairedEvaluator.id;
+		} else {
+			// No recorded pairing: a meeting created before #512 and not backfilled,
+			// or a club whose evaluator count never matched its speaker count. Fall
+			// back to the historical behaviour rather than removing nothing.
+			evaluatorId = evaluatorRoleId
+				? topUnclaimed(slots, evaluatorRoleId, roleOf)
+				: null;
 		}
-		evaluatorId = pairedEvaluator.id;
-	} else {
-		// No recorded pairing: a meeting created before #512 and not backfilled,
-		// or a club whose evaluator count never matched its speaker count. Fall
-		// back to the historical behaviour rather than removing nothing.
-		evaluatorId = evaluatorRoleId
-			? topUnclaimed(slots, evaluatorRoleId, roleOf)
-			: null;
-	}
-
-	await db.transaction(async (tx) => {
 		await tx.delete(roleSlots).where(eq(roleSlots.id, speakerId));
 		if (evaluatorId) {
 			await tx.delete(roleSlots).where(eq(roleSlots.id, evaluatorId));
 		}
+		// Positional pairing: compact both roles' numbering (a mid-list evaluator
+		// deletion otherwise leaves "Evaluator 1, Evaluator 3") and re-point the
+		// surviving links so Evaluator N evaluates Speaker N.
+		await realignEvaluatorPairs(
+			tx,
+			input.meetingId,
+			speakerRoleId,
+			evaluatorRoleId,
+		);
 		await logActivity(tx, {
 			clubId: meeting.clubId,
 			actorMemberId: input.actorMemberId,
@@ -659,16 +678,124 @@ export async function applyRemoveSpeakerSlot(input: {
 			targetId: input.meetingId,
 			detail: { change: "speaker_removed" },
 		});
+		return { clubId: meeting.clubId };
 	});
-	return { clubId: meeting.clubId };
 }
 
-/** Swap a speaker slot's position with its neighbor (up = lower index). */
-export async function applyMoveSpeakerSlot(input: {
-	slotId: string;
-	direction: "up" | "down";
-	actorMemberId: string | null;
-}) {
+/**
+ * Serialize every slot mutation for one meeting on the MEETING row.
+ *
+ * The reads that decide numbering and pairing used to run on a pre-transaction
+ * snapshot, which is not good enough once those reads DECIDE something: two
+ * concurrent "+ Add speaker" calls each computed the same next `slot_index` and
+ * both inserted it (no unique index stops them, measured as `[0, 1, 1]`), and a
+ * reorder racing an add could compute evaluator targets from the pre-move order
+ * and commit them afterwards — links silently describing an order the meeting no
+ * longer has, which is the one thing positional pairing promises.
+ *
+ * The MEETING row rather than the slot rows, for two reasons: a slot edit
+ * changes which slots exist, so there is no fixed row set to lock up front, and
+ * one lock per meeting cannot deadlock the way two swap targets locked in
+ * opposite orders can (two officers reordering the same lineup in opposite
+ * directions was an AB-BA deadlock, surfacing as a 500).
+ *
+ * Does NOT serialize against `claimSlot`, which locks the slot row instead — see
+ * TODOS.md for the remove-vs-claim window that leaves open.
+ */
+async function lockMeetingForSlotEdit(
+	tx: DbOrTx,
+	meetingId: string,
+): Promise<void> {
+	const [locked] = await tx
+		.select({ id: meetings.id })
+		.from(meetings)
+		.where(eq(meetings.id, meetingId))
+		.for("update")
+		.limit(1);
+	if (!locked) throw new Error("Meeting not found.");
+}
+
+/**
+ * Positional pairing (Evaluator N ↔ Speaker N): renumber both paired roles'
+ * slots densely (0..n-1, by current order) and point evaluator i at speaker i
+ * (surplus evaluators at nothing). Runs inside every mutation that changes
+ * either role's order or membership — add, remove, and both moves — so the
+ * stored `evaluates_slot_id` never disagrees with the numbers on the cards.
+ * A meeting left crossed by the old sticky-follows-the-person pairing heals on
+ * its next edit; untouched meetings (past ones included) keep their history.
+ */
+async function realignEvaluatorPairs(
+	tx: DbOrTx,
+	meetingId: string,
+	speakerRoleId: string,
+	evaluatorRoleId: string | null,
+) {
+	// One def can satisfy BOTH picks — `isSpeakerRole: true` with
+	// `category: "evaluator"` is a settable combination on any club role, and the
+	// two heuristics in `pickSpeakerAndEvaluatorRoles` are independent. Treated as
+	// a real pair it read one lineup as both sides and pointed every slot at
+	// ITSELF, which every reader renders as "Speaker 2, evaluated by Speaker 2".
+	// A role cannot evaluate itself, so there is no pair to maintain.
+	const pairedEvaluatorRoleId =
+		evaluatorRoleId === speakerRoleId ? null : evaluatorRoleId;
+	const roleIds = pairedEvaluatorRoleId
+		? [speakerRoleId, pairedEvaluatorRoleId]
+		: [speakerRoleId];
+	const rows = await tx
+		.select({
+			id: roleSlots.id,
+			roleDefinitionId: roleSlots.roleDefinitionId,
+			slotIndex: roleSlots.slotIndex,
+			evaluatesSlotId: roleSlots.evaluatesSlotId,
+		})
+		.from(roleSlots)
+		.where(
+			and(
+				eq(roleSlots.meetingId, meetingId),
+				inArray(roleSlots.roleDefinitionId, roleIds),
+			),
+		);
+	// `id` breaks a tie on `slotIndex`. Duplicate indices are constructible — two
+	// concurrent adds each compute the next index from a read taken before their
+	// transaction, and no unique index stops them — and Postgres does not promise
+	// a return order, so without the tiebreaker the same rows could renumber
+	// differently on two runs. Pairing stays consistent with the numbering either
+	// way (one `speakers` array drives both), but "which tied slot became 1" is
+	// worth being reproducible.
+	const ofRole = (roleId: string) =>
+		rows
+			.filter((r) => r.roleDefinitionId === roleId)
+			.sort((a, b) => a.slotIndex - b.slotIndex || a.id.localeCompare(b.id));
+	const speakers = ofRole(speakerRoleId);
+	for (const [i, s] of speakers.entries()) {
+		if (s.slotIndex !== i) {
+			await tx
+				.update(roleSlots)
+				.set({ slotIndex: i })
+				.where(eq(roleSlots.id, s.id));
+		}
+	}
+	if (!pairedEvaluatorRoleId) return;
+	for (const [i, e] of ofRole(pairedEvaluatorRoleId).entries()) {
+		const target = speakers[i]?.id ?? null;
+		if (e.slotIndex === i && e.evaluatesSlotId === target) continue;
+		await tx
+			.update(roleSlots)
+			.set({ slotIndex: i, evaluatesSlotId: target })
+			.where(eq(roleSlots.id, e.id));
+	}
+}
+
+/** Shared body of the two reorder fns: swap `slotId` with its neighbor within
+ *  its own role (up = lower index), then realign the positional pairing. */
+async function applyMoveSlot(
+	input: {
+		slotId: string;
+		direction: "up" | "down";
+		actorMemberId: string | null;
+	},
+	kind: "speaker" | "evaluator",
+) {
 	const [target] = await db
 		.select({
 			id: roleSlots.id,
@@ -676,47 +803,143 @@ export async function applyMoveSpeakerSlot(input: {
 			roleDefinitionId: roleSlots.roleDefinitionId,
 			slotIndex: roleSlots.slotIndex,
 			clubId: meetings.clubId,
+			templateId: meetings.templateId,
+			isSpeakerRole: roleDefinitions.isSpeakerRole,
 		})
 		.from(roleSlots)
 		.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+		.innerJoin(
+			roleDefinitions,
+			eq(roleDefinitions.id, roleSlots.roleDefinitionId),
+		)
 		.where(eq(roleSlots.id, input.slotId))
 		.limit(1);
-	if (!target) throw new Error("Speaker slot not found.");
-
-	const siblings = await db
-		.select({ id: roleSlots.id, slotIndex: roleSlots.slotIndex })
-		.from(roleSlots)
-		.where(
-			and(
-				eq(roleSlots.meetingId, target.meetingId),
-				eq(roleSlots.roleDefinitionId, target.roleDefinitionId),
-			),
+	if (!target) {
+		throw new Error(
+			kind === "speaker"
+				? "Speaker slot not found."
+				: "Evaluator slot not found.",
 		);
-	const ordered = siblings.sort((a, b) => a.slotIndex - b.slotIndex);
-	const pos = ordered.findIndex((s) => s.id === target.id);
-	const neighbor =
-		input.direction === "up" ? ordered[pos - 1] : ordered[pos + 1];
-	if (!neighbor) throw new Error("No slot to swap with.");
+	}
+
+	const { speakerRoleId, evaluatorRoleId } = await clubRoles(
+		target.clubId,
+		target.templateId,
+	);
+	// The slot must actually BE of the kind this endpoint reorders. Both public
+	// server fns take a bare `slotId`, so without this the caller's CHOICE of
+	// endpoint decided the activity label while the swap ran on whatever role the
+	// slot happened to hold — `moveEvaluatorSlot(<a speaker slot>)` reordered
+	// speakers and wrote "reordered evaluators" into the feed.
+	//
+	// The two arms are deliberately ASYMMETRIC, because they mirror what the
+	// agenda actually renders arrows on. Speaker arrows appear on every
+	// `isSpeakerRole` card, and `isSpeakerRole` is a free checkbox on any
+	// club-invented role — a second contestant lineup, a "Debater" — so narrowing
+	// this arm to the one PICKED speaker role would have made the arrows on those
+	// cards start erroring, a capability regression for a shape that worked
+	// before. Evaluator arrows render only for the paired evaluator role (the
+	// General Evaluator gets none), so that arm stays exact.
+	const kindOk =
+		kind === "speaker"
+			? target.isSpeakerRole
+			: evaluatorRoleId !== null && target.roleDefinitionId === evaluatorRoleId;
+	if (!kindOk) {
+		throw new Error(
+			kind === "speaker"
+				? "That slot is not a speaker slot."
+				: "That slot is not an evaluator slot.",
+		);
+	}
+	// Only the PICKED pair carries positional links, so reordering some other
+	// speaker-flagged lineup must not re-point them.
+	const movedThePairedLineup =
+		target.roleDefinitionId === speakerRoleId ||
+		target.roleDefinitionId === evaluatorRoleId;
 
 	await db.transaction(async (tx) => {
+		await lockMeetingForSlotEdit(tx, target.meetingId);
+		// The lineup is read INSIDE the lock: "which slot sits next to this one"
+		// is the decision this function exists to make, and a concurrent add or
+		// reorder changes the answer. Read outside, two officers acting at once
+		// could each swap against a stale neighbour and commit an order neither
+		// of them saw.
+		const siblings = await tx
+			.select({ id: roleSlots.id, slotIndex: roleSlots.slotIndex })
+			.from(roleSlots)
+			.where(
+				and(
+					eq(roleSlots.meetingId, target.meetingId),
+					eq(roleSlots.roleDefinitionId, target.roleDefinitionId),
+				),
+			);
+		const ordered = siblings.sort(
+			(a, b) => a.slotIndex - b.slotIndex || a.id.localeCompare(b.id),
+		);
+		const pos = ordered.findIndex((s) => s.id === target.id);
+		// Kind-specific, like the not-found throw above: the slot was deleted while
+		// this call waited for the meeting lock.
+		if (pos === -1) {
+			throw new Error(
+				kind === "speaker"
+					? "Speaker slot not found."
+					: "Evaluator slot not found.",
+			);
+		}
+		const self = ordered[pos];
+		const neighbor =
+			input.direction === "up" ? ordered[pos - 1] : ordered[pos + 1];
+		if (!neighbor) throw new Error("No slot to swap with.");
 		await tx
 			.update(roleSlots)
 			.set({ slotIndex: neighbor.slotIndex })
-			.where(eq(roleSlots.id, target.id));
+			.where(eq(roleSlots.id, self.id));
 		await tx
 			.update(roleSlots)
-			.set({ slotIndex: target.slotIndex })
+			.set({ slotIndex: self.slotIndex })
 			.where(eq(roleSlots.id, neighbor.id));
+		if (movedThePairedLineup) {
+			await realignEvaluatorPairs(
+				tx,
+				target.meetingId,
+				speakerRoleId,
+				evaluatorRoleId,
+			);
+		}
 		await logActivity(tx, {
 			clubId: target.clubId,
 			actorMemberId: input.actorMemberId,
 			action: "meeting_edit",
 			targetType: "meeting",
 			targetId: target.meetingId,
-			detail: { change: "speaker_reordered" },
+			detail: {
+				change:
+					kind === "speaker" ? "speaker_reordered" : "evaluator_reordered",
+			},
 		});
 	});
 	return { clubId: target.clubId };
+}
+
+/** Swap a speaker slot's position with its neighbor (up = lower index), then
+ *  re-point the evaluator links positionally — the evaluator LINEUP stays put,
+ *  so Evaluator 1 always evaluates whoever now speaks first. */
+export async function applyMoveSpeakerSlot(input: {
+	slotId: string;
+	direction: "up" | "down";
+	actorMemberId: string | null;
+}) {
+	return applyMoveSlot(input, "speaker");
+}
+
+/** Swap an evaluator slot's position with its neighbor (up = lower index),
+ *  then re-point the links positionally (Evaluator N ↔ Speaker N). */
+export async function applyMoveEvaluatorSlot(input: {
+	slotId: string;
+	direction: "up" | "down";
+	actorMemberId: string | null;
+}) {
+	return applyMoveSlot(input, "evaluator");
 }
 
 // ---------------------------------------------------------------------------

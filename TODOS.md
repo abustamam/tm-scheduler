@@ -44,6 +44,33 @@
 
 Surfaced by the `/review` passes on #560/#556 and deliberately left out of that branch.
 
+- **The archive-gate enrollment sweep exempts the whole `require*Editor` family by regex.**
+  v1.26.0.0 closed the hole itself — `resolveMeetingAgendaAuthz`, `resolveWordOfTheDayAuthz` and
+  `resolveVoteCounterAuthz` now assert `archived_at` at the choke point (14 server fns gate through
+  them; 11 had no other archive gate) —
+  but the reason it went unnoticed is still live: `SESSION_GUARDS` in
+  `public-readers-archive-gate.guard.test.ts` matches `require...MeetingAgendaEditor`/
+  `WordOfTheDayEditor`/`VoteCounterCapability` and classifies anything calling them as
+  session-guarded, so those endpoints are dropped from the anonymous sweep. Two of those three
+  guards admit a SESSION-LESS caller (the honour-system TMOD, the Ballot Counter self-assert), so
+  the classification is wrong in exactly the direction that hides a gap. The next endpoint added
+  behind one of these guards is enrolled by nothing. Either drop them from `SESSION_GUARDS` and
+  waive the members explicitly, or assert the gate behaviourally per guard.
+  **Priority:** P2
+
+- **`applyRemoveSpeakerSlot` can still destroy a slot claimed in the same instant.** v1.26.0.0 put
+  the three speaker/evaluator pair mutations (`applyAddSpeakerSlot`,
+  `applyRemoveSpeakerSlot`, `applyMoveSlot`) behind a `FOR UPDATE` lock on the MEETING row —
+  `applyAddRoleSlot`, `applyRemoveRoleSlot`, the template sync and
+  `syncSlotsForRoleEnabledChange` are NOT covered — which serializes add/remove/
+  reorder against each other — but `claimSlot` locks the SLOT row instead, so it does not
+  participate. Remove still decides "the top unclaimed speaker" from a read and then deletes by id
+  with no unclaimed predicate on the `DELETE`, so a claim landing between the two is deleted.
+  `removeOpenRoleSlots` in the same file already solves this by putting the predicate in the
+  `WHERE` clause; this function was re-entered in v1.26.0.0 without inheriting it. Fix is a
+  predicate on the delete, not a wider lock.
+  **Priority:** P2
+
 - The two slot writes still gate in their `createServerFn` HANDLER rather than in a seam
   (`releaseSlot`, `updateSpeakerDetails` in `slots.ts`). #555 moved six of the eight session-less
   writes into `-logic` seams, where `public-writers-archive-gate.integration.test.ts` actually
@@ -239,6 +266,23 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
   **Priority:** P4
 
 - `scripts/measure-word-poster.ts` has no tests because `main()` runs at import, so nothing is reachable. It is the harness that derives the Word of the Day poster's font-size tables, and a wrong result there ships mid-word breaks on a wall poster. `scripts/import-agendas-logic.ts` is the repo's precedent for extracting a testable `*-logic.ts` alongside an entry-point script.
+  **Priority:** P4
+
+- Three residual notes from the v1.26.0.0 evaluator-reorder review passes, all deliberately not
+  done in that branch. (1) The two move server fns in `slots.ts` are near-verbatim copies of each
+  other (~18 lines differing in one message and one apply fn), and `moveSpeakerSchema` now
+  validates both — worth one shared handler and a rename to `moveSlotSchema` next time the file is
+  open. (2) The arrow pair JSX is duplicated between the speaker and evaluator blocks in
+  `meeting-agenda.tsx`; the visual parity the feature relies on is now maintained by hand in two
+  places. (3) `applyMoveSlot` issues three sequential pre-transaction round-trips (target, then
+  `clubRoles`) where the last two are independent — one `Promise.all` removes a round-trip from
+  every arrow tap. All P4: measured cost is one extra query on an admin click.
+  **Priority:** P4
+
+- The move endpoints are a slot-id oracle: both answer "Speaker/Evaluator slot not found." before
+  the authz gate runs, so a caller learns whether a uuid names a slot in a club they cannot edit.
+  Mitigated only by uuid unguessability, and pre-existing on `moveSpeakerSlot`. Gate first, then
+  look up, if this is ever worth closing.
   **Priority:** P4
 
 - Two slot-ordering gaps, both theoretical, both cheap. (1) Four queries order by `asc(roleDefinitions.sortOrder), asc(roleSlots.slotIndex)` with no tiebreaker (`meetings.ts:211`, `meeting-authz-logic.ts:141`, `minutes-logic.ts:514`, `award-candidates-logic.ts:69`), and `role_definitions.sortOrder` has no unique constraint while `createRoleDefinition` assigns `max+1`, which two concurrent creates can tie. On a tie Postgres may return either row first, which moves row display order and `buildShortCodes`' `#2` collision suffix (assigned in input order) — it does NOT move SP1/SP2 numbering, since `slotLabel` numbers off `slotIndex + 1` and `buildShortCodes` keys off `${roleDefinitionId}:${slotIndex}`, both position-independent. One `asc(roleSlots.id)` closes it. (2) `role_slots` has no unique index on `(meeting_id, role_definition_id, slot_index)`; two rows sharing that pair give two different members the same badge, because `buildShortCodes` keys on it and the second write wins. Only a data anomaly reaches it.

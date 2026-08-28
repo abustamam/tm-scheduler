@@ -112,6 +112,7 @@ import {
 	addSpeakerSlot,
 	claimSlot,
 	confirmSlot,
+	moveEvaluatorSlot,
 	moveSpeakerSlot,
 	reassignSlot,
 	releaseSlot,
@@ -970,7 +971,7 @@ function MeetingView() {
 	}
 
 	// Manager (admin) actions: act as the session member; exposes the manager-only
-	// confirm/unconfirm/moveSpeaker/removeRole set.
+	// confirm/unconfirm/moveSpeaker/moveEvaluator/removeRole set.
 	const managerActions: MeetingAgendaActions = {
 		claim: async (slot, speakerDetails) => {
 			if (!managerActorId) {
@@ -1010,6 +1011,9 @@ function MeetingView() {
 		},
 		moveSpeaker: async (slot, direction) => {
 			await moveSpeakerSlot({ data: { slotId: slot.id, direction } });
+		},
+		moveEvaluator: async (slot, direction) => {
+			await moveEvaluatorSlot({ data: { slotId: slot.id, direction } });
 		},
 		removeRole: async (slot) => {
 			await removeRoleSlot({ data: { slotId: slot.id } });

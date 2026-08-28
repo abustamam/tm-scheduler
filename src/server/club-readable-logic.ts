@@ -6,9 +6,11 @@
  * logo/brand takedown path. A read path that ignores it defeats the mechanism
  * it was built for.
  *
- * There are three enforcement points, and they are not interchangeable:
+ * There are four enforcement points, and they are not interchangeable. The
+ * canonical list is `isClubArchived`'s docblock in `#/lib/club-archive` — check the
+ * count there before trusting this one, which is a copy and has rotted before:
  *
- *   · AUTHED WRITES — `requireMembership` in `guards.ts` calls the private
+ *   · AUTHED WRITES — `requireMembership` in `guards.ts` calls the exported
  *     `assertClubNotArchived`, which THROWS. `requireClubRole` builds on it, so
  *     that one call covers every authed mutation.
  *   · AUTHED READS — `requireClubViewAccess` / `requireClubAdminView`, via
@@ -22,6 +24,9 @@
  *     without a session, so a route-level guard (the `/club/$clubId` shell's
  *     `beforeLoad` → `resolveClubOrRedirect`) is a guard on the CALLER, not on
  *     the data. Every public club reader must gate here on its own.
+ *   · PER-MEETING AGENDA WRITES — the three resolvers in `meeting-authz-logic.ts`
+ *     gate themselves, because their grant ladder reaches none of the above and
+ *     its TMOD arm needs no session at all (v1.26.0.0).
  *
  * It lives in its own module — rather than in `club-logo-logic.ts`, where
  * `isReadableClub` was born (#495) — precisely because that home is why #544

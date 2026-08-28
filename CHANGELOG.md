@@ -2,6 +2,19 @@
 
 Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO` and match the `VERSION` file; `/ship` writes an entry per release.
 
+## [1.26.0.0] - 2026-08-28
+
+### Added
+
+- **You can reorder evaluators, and each one evaluates the speaker in the matching position.** Evaluator cards now carry the same up/down arrows the speaker cards have, so the officer setting up a meeting decides who evaluates whom by putting the evaluators in the order they want: Evaluator 1 evaluates Speaker 1, Evaluator 2 evaluates Speaker 2, and so on down the list. Moving a speaker re-points the evaluations to match the new running order rather than dragging assignments around with it, which is what made the "Evaluates ..." lines look crossed before — Evaluator 2 could appear to be evaluating the first speaker because the speakers had been reordered after the evaluators were assigned. The arrows on both lineups also tell a screen reader which row they act on ("Move Evaluator 2 up") instead of repeating one anonymous label per card.
+
+### Fixed
+
+- **An archived club can no longer have its agenda edited.** Archiving a club is how a club is taken down, and it is supposed to stop all further changes — but the meeting-agenda permission check never looked at whether the club was archived, so its meetings could still be edited, its Word of the Day rewritten, its Table Topics and award results written, and its vote tally read. That included by someone with no login at all, since the meeting's Toastmaster is trusted on the honour system. All three of those permission checks now refuse a taken-down club and say so, and they answer the same way whether the meeting is finished or not.
+- **Two officers editing the same meeting at once no longer scramble the running order.** Adding, removing or reordering a speaker worked out what to change before claiming the meeting, so two people acting in the same moment could both act on what they saw a moment earlier — producing two speakers numbered the same, or evaluations pointing at the order the meeting used to have. Each edit now claims the meeting first, so simultaneous edits queue up behind each other instead of overwriting one another.
+- **The activity feed says what actually happened to the evaluators.** A reorder is now recorded as "reordered evaluators" rather than the generic "updated the meeting", and reordering one lineup can no longer be logged as if it were the other.
+- **Removing a speaker no longer leaves a gap in the numbering.** Deleting a speaker from the middle of the list used to leave the remaining cards reading "Evaluator 1, Evaluator 3"; both lineups are renumbered from the top after every change.
+
 ## [1.25.11.0] - 2026-08-27
 
 ### Fixed

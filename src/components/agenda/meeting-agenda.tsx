@@ -84,6 +84,8 @@ export interface MeetingAgendaActions {
 	unconfirm?: (slot: AgendaSlot) => Promise<void>;
 	/** Manager-only (rendered under `canManage`). */
 	moveSpeaker?: (slot: AgendaSlot, direction: "up" | "down") => Promise<void>;
+	/** Manager-only (rendered under `canManage`), paired-evaluator cards only. */
+	moveEvaluator?: (slot: AgendaSlot, direction: "up" | "down") => Promise<void>;
 	/** Manager-only (rendered under `canManage`). */
 	removeRole?: (slot: AgendaSlot) => Promise<void>;
 	/** Self-serve only (rendered under `canTakeOver`). */
@@ -232,6 +234,18 @@ export function MeetingAgenda({
 	const roleCounts = buildRoleCounts(slots);
 	const summary = summarizeAgenda(slots);
 	const speakerSlots = slots.filter((s) => s.isSpeakerRole);
+	// The paired evaluator lineup, for the same ↑↓ reorder speakers get. Pairing
+	// is positional (Evaluator N evaluates Speaker N), so reordering evaluators
+	// is how a manager decides who evaluates whom. `pairedRoleIds` holds the
+	// speaker role too, hence the !isSpeakerRole arm.
+	const evaluatorSlots = slots.filter(
+		(s) => !s.isSpeakerRole && pairedRoleIds.has(s.roleDefinitionId),
+	);
+	// The render gate below tests MEMBERSHIP in that list rather than re-stating
+	// its predicate: a divergence between the two would render arrows on a card
+	// the list doesn't contain, and the first/last comparisons would then both be
+	// false — an enabled ↑ on the top row that silently does nothing.
+	const evaluatorSlotIds = new Set(evaluatorSlots.map((s) => s.id));
 
 	// Recruiting pool for open-slot nudges (#37) — every active member, annotated
 	// (not filtered) with availability + the role they already hold this meeting.
@@ -294,6 +308,13 @@ export function MeetingAgenda({
 		await run(
 			slot.id,
 			() => actions.moveSpeaker?.(slot, direction) ?? Promise.resolve(),
+		);
+	}
+
+	async function doMoveEvaluator(slot: AgendaSlot, direction: "up" | "down") {
+		await run(
+			slot.id,
+			() => actions.moveEvaluator?.(slot, direction) ?? Promise.resolve(),
 		);
 	}
 
@@ -566,12 +587,18 @@ export function MeetingAgenda({
 											</button>
 
 											<div className="flex shrink-0 flex-col items-end gap-2">
+												{/* Accessible names carry the ROW ("Move Speaker 2 up"),
+												    not just the lineup: every card in a lineup renders an
+												    identical-looking pair, so a bare "Move speaker up" is
+												    announced N times with nothing to tell them apart when
+												    browsing by control. `slotLabel` is already computed
+												    for the card title just above. */}
 												{viewer.canManage && slot.isSpeakerRole ? (
 													<div className="flex gap-1">
 														<Button
 															size="sm"
 															variant="ghost"
-															aria-label="Move speaker up"
+															aria-label={`Move ${slotLabel(slot, roleCounts)} up`}
 															disabled={busy || speakerSlots[0]?.id === slot.id}
 															onClick={() => doMoveSpeaker(slot, "up")}
 														>
@@ -580,13 +607,42 @@ export function MeetingAgenda({
 														<Button
 															size="sm"
 															variant="ghost"
-															aria-label="Move speaker down"
+															aria-label={`Move ${slotLabel(slot, roleCounts)} down`}
 															disabled={
 																busy ||
 																speakerSlots[speakerSlots.length - 1]?.id ===
 																	slot.id
 															}
 															onClick={() => doMoveSpeaker(slot, "down")}
+														>
+															↓
+														</Button>
+													</div>
+												) : null}
+
+												{viewer.canManage && evaluatorSlotIds.has(slot.id) ? (
+													<div className="flex gap-1">
+														<Button
+															size="sm"
+															variant="ghost"
+															aria-label={`Move ${slotLabel(slot, roleCounts)} up`}
+															disabled={
+																busy || evaluatorSlots[0]?.id === slot.id
+															}
+															onClick={() => doMoveEvaluator(slot, "up")}
+														>
+															↑
+														</Button>
+														<Button
+															size="sm"
+															variant="ghost"
+															aria-label={`Move ${slotLabel(slot, roleCounts)} down`}
+															disabled={
+																busy ||
+																evaluatorSlots[evaluatorSlots.length - 1]
+																	?.id === slot.id
+															}
+															onClick={() => doMoveEvaluator(slot, "down")}
 														>
 															↓
 														</Button>

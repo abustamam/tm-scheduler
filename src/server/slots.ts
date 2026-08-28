@@ -15,6 +15,7 @@ import { assertMeetingNotLocked } from "./meeting-authz-logic";
 import {
 	applyAddRoleSlot,
 	applyAddSpeakerSlot,
+	applyMoveEvaluatorSlot,
 	applyMoveSpeakerSlot,
 	applyRemoveRoleSlot,
 	applyRemoveSpeakerSlot,
@@ -482,7 +483,8 @@ const moveSpeakerSchema = z.object({
 });
 
 /** Admin/VPE OR the meeting's self-asserted TMOD: reorder a speaker slot up/down
- *  (swaps slotIndex). AUTHED or self-assert (ADR-0010). */
+ *  (swaps slotIndex, then re-points evaluator links positionally). AUTHED or
+ *  self-assert (ADR-0010). */
 export const moveSpeakerSlot = createServerFn({ method: "POST" })
 	.validator((input: unknown) => moveSpeakerSchema.parse(input))
 	.handler(async ({ data }) => {
@@ -497,6 +499,29 @@ export const moveSpeakerSlot = createServerFn({ method: "POST" })
 			selfMemberId: data.selfMemberId ?? null,
 		});
 		return applyMoveSpeakerSlot({
+			slotId: data.slotId,
+			direction: data.direction,
+			actorMemberId: authz.actorMemberId,
+		});
+	});
+
+/** Admin/VPE OR the meeting's self-asserted TMOD: reorder a paired-evaluator
+ *  slot up/down (swaps slotIndex, then re-points the links so Evaluator N
+ *  evaluates Speaker N). AUTHED or self-assert (ADR-0010). */
+export const moveEvaluatorSlot = createServerFn({ method: "POST" })
+	.validator((input: unknown) => moveSpeakerSchema.parse(input))
+	.handler(async ({ data }) => {
+		const [row] = await db
+			.select({ meetingId: roleSlots.meetingId })
+			.from(roleSlots)
+			.where(eq(roleSlots.id, data.slotId))
+			.limit(1);
+		if (!row) throw new Error("Evaluator slot not found.");
+		const authz = await requireMeetingAgendaEditor({
+			meetingId: row.meetingId,
+			selfMemberId: data.selfMemberId ?? null,
+		});
+		return applyMoveEvaluatorSlot({
 			slotId: data.slotId,
 			direction: data.direction,
 			actorMemberId: authz.actorMemberId,

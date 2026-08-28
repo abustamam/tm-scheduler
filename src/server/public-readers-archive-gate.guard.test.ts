@@ -345,7 +345,8 @@ const REVIEWED_UNGATED: Record<string, string> = {
 		"officer-gated + archive-gated inside requireMeetingTemplateEditor (#agenda-templates)",
 	getPacketContext:
 		"gated inside loadPacketContext via isReadableClubForMeeting (#589); returns an empty packet context for an archived club, so the picker offers nothing",
-	getVoteTally: "gated by requireVoteCounterCapability, not by archive",
+	getVoteTally:
+		"gated by requireVoteCounterCapability, which asserts the archive itself since v1.26.0.0",
 	getProjectOptions:
 		"keyed by memberId; resolveMemberSubject returns null for an unknown member and the payload is the shared Pathways catalog, not club-owned data",
 	// Deliberately ungated — see resolveClubByIdentifier.
@@ -374,16 +375,16 @@ const REVIEWED_UNGATED: Record<string, string> = {
  * `WIRINGS` pins a READ handler to a gated SEAM and forbids the ungated sibling,
  * because for reads the two are interchangeable and swapping them typechecks.
  * Writes have no such sibling pair: the gate is one call, and what varies is
- * WHERE it lives. Six of these gate in a `-logic` seam — which is strictly
+ * WHERE it lives. Five of these gate in a `-logic` seam — which is strictly
  * better, because a seam is reachable from vitest and
- * `public-writers-archive-gate.integration.test.ts` executes all six — and two
+ * `public-writers-archive-gate.integration.test.ts` executes all five — and two
  * gate in the handler because their logic is inline there and lifting it out is
  * a refactor #555 was not.
  *
  * So each row names the file the gate is IN. That is weaker than checking the
  * handler itself, and the weakness is stated rather than papered over: this
  * asserts the gate exists in the module that owns the write, not that this
- * particular write reaches it. The integration suite is what proves the six
+ * particular write reaches it. The integration suite is what proves the five
  * seam-gated ones actually refuse; for the two handler-gated ones this guard is
  * the only gate there is, which is exactly why moving them into seams is
  * recorded in TODOS.md rather than left implied.

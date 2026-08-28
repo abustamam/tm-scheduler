@@ -127,6 +127,9 @@ export function formatActivity(entry: ActivityEntry): FormattedActivity {
 				case "speaker_reordered":
 					summary = "reordered speakers";
 					break;
+				case "evaluator_reordered":
+					summary = "reordered evaluators";
+					break;
 				case "role_added":
 					summary = "added a role";
 					break;

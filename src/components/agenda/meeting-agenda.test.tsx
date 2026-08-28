@@ -601,3 +601,170 @@ describe("tap-to-nudge confirm gate (#37)", () => {
 		expect(screen.queryByRole("button", { name: /nudge someone/i })).toBeNull();
 	});
 });
+
+describe("MeetingAgenda evaluator reorder arrows", () => {
+	afterEach(() => cleanup());
+	const manager = () =>
+		meetingViewer({
+			currentMemberId: "me",
+			canManage: true,
+			isTmod: false,
+			isGrammarian: false,
+			isEditableWindow: true,
+		});
+	const evaluatorSlots = () => [
+		slot({
+			id: "ev1",
+			roleName: "Evaluator",
+			roleDefinitionId: "rdE",
+			category: "evaluator",
+			slotIndex: 0,
+			status: "open",
+		}),
+		slot({
+			id: "ev2",
+			roleName: "Evaluator",
+			roleDefinitionId: "rdE",
+			category: "evaluator",
+			slotIndex: 1,
+			status: "open",
+		}),
+	];
+	const paired = () => new Set(["rdS", "rdE"]);
+
+	it("renders ↑↓ on paired evaluator cards for a manager, ends disabled", () => {
+		renderAgenda(manager(), evaluatorSlots(), paired());
+		const ups = screen.getAllByRole("button", {
+			name: /Move Evaluator .* up/,
+		}) as HTMLButtonElement[];
+		const downs = screen.getAllByRole("button", {
+			name: /Move Evaluator .* down/,
+		}) as HTMLButtonElement[];
+		expect(ups).toHaveLength(2);
+		expect(downs).toHaveLength(2);
+		// First card can't move up; last can't move down.
+		expect(ups[0].disabled).toBe(true);
+		expect(ups[1].disabled).toBe(false);
+		expect(downs[0].disabled).toBe(false);
+		expect(downs[1].disabled).toBe(true);
+	});
+
+	/**
+	 * The accessible name must identify the ROW, not just the lineup: two cards
+	 * render identical-looking arrows, and a screen-reader user browsing by
+	 * control hears only the label. A regression to a bare "Move evaluator up"
+	 * fails here (both names would collide) while every other test in this
+	 * describe keeps passing.
+	 */
+	it("gives each evaluator card's arrows a row-identifying name", () => {
+		renderAgenda(manager(), evaluatorSlots(), paired());
+		expect(
+			screen.getByRole("button", { name: "Move Evaluator 1 up" }),
+		).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: "Move Evaluator 2 up" }),
+		).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: "Move Evaluator 1 down" }),
+		).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: "Move Evaluator 2 down" }),
+		).toBeTruthy();
+	});
+
+	it("names the SPEAKER arrows by row too", () => {
+		const speakers = [
+			slot({
+				id: "sp1",
+				roleName: "Speaker",
+				roleDefinitionId: "rdS",
+				category: "speaker",
+				isSpeakerRole: true,
+				slotIndex: 0,
+			}),
+			slot({
+				id: "sp2",
+				roleName: "Speaker",
+				roleDefinitionId: "rdS",
+				category: "speaker",
+				isSpeakerRole: true,
+				slotIndex: 1,
+			}),
+		];
+		renderAgenda(manager(), speakers, paired());
+		expect(
+			screen.getByRole("button", { name: "Move Speaker 1 up" }),
+		).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: "Move Speaker 2 down" }),
+		).toBeTruthy();
+	});
+
+	it("clicking ↑ calls moveEvaluator with the slot and direction", async () => {
+		const moveEvaluator = vi.fn(
+			async (_slot: AgendaSlot, _direction: "up" | "down") => {},
+		);
+		renderAgenda(manager(), evaluatorSlots(), paired(), undefined, {
+			actions: { ...actions, moveEvaluator },
+		});
+		const ups = screen.getAllByRole("button", { name: /Move Evaluator .* up/ });
+		await userEvent.click(ups[1]);
+		expect(moveEvaluator).toHaveBeenCalledTimes(1);
+		expect(moveEvaluator.mock.calls[0][0]).toMatchObject({ id: "ev2" });
+		expect(moveEvaluator.mock.calls[0][1]).toBe("up");
+	});
+
+	/** The ↓ button is a near-copy of the ↑ one; without this a transposed
+	 *  direction argument passes every other assertion in this describe. */
+	it("clicking ↓ calls moveEvaluator with direction down", async () => {
+		const moveEvaluator = vi.fn(
+			async (_slot: AgendaSlot, _direction: "up" | "down") => {},
+		);
+		renderAgenda(manager(), evaluatorSlots(), paired(), undefined, {
+			actions: { ...actions, moveEvaluator },
+		});
+		const downs = screen.getAllByRole("button", {
+			name: /Move Evaluator .* down/,
+		});
+		await userEvent.click(downs[0]);
+		expect(moveEvaluator).toHaveBeenCalledTimes(1);
+		expect(moveEvaluator.mock.calls[0][0]).toMatchObject({ id: "ev1" });
+		expect(moveEvaluator.mock.calls[0][1]).toBe("down");
+	});
+
+	it("renders no evaluator arrows for a non-manager", () => {
+		renderAgenda(
+			meetingViewer({
+				currentMemberId: "me",
+				canManage: false,
+				isTmod: false,
+				isGrammarian: false,
+				isEditableWindow: true,
+			}),
+			evaluatorSlots(),
+			paired(),
+		);
+		expect(
+			screen.queryByRole("button", { name: /Move Evaluator .* up/ }),
+		).toBeNull();
+	});
+
+	it("renders no arrows on a non-paired evaluator role (General Evaluator)", () => {
+		renderAgenda(
+			manager(),
+			[
+				slot({
+					id: "ge1",
+					roleName: "General Evaluator",
+					roleDefinitionId: "rdGE",
+					category: "evaluator",
+					status: "open",
+				}),
+			],
+			paired(),
+		);
+		expect(
+			screen.queryByRole("button", { name: /Move Evaluator .* up/ }),
+		).toBeNull();
+	});
+});

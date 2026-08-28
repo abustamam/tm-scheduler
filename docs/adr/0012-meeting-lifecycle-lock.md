@@ -44,8 +44,8 @@ so it is inherited rather than re-checked per handler:
   `"This meeting is locked."` when the status is `completed`. This exact string is also the
   banner copy (`MEETING_LOCKED_MESSAGE` in `src/lib/meeting-lifecycle.ts`).
 - `resolveMeetingAgendaAuthz` calls it after loading the meeting, so every mutation behind
-  `requireMeetingAgendaEditor` inherits the lock: meta edit (`updateMeeting`) and
-  add/remove/move speaker.
+  `requireMeetingAgendaEditor` inherits the lock: meta edit (`updateMeeting`),
+  add/remove/move speaker, and move evaluator (v1.26.0.0).
 - The mutations that use the trust guard (`requireMemberInClub`) or admin guard
   (`requireClubRole`) instead of the agenda-editor path each assert the lock against the
   status they already load: claim, release, confirm/unconfirm, reassign (claim/takeover),

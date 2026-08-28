@@ -12,14 +12,15 @@ the nouns in `src/db/schema.ts`.
 
 - **Club** — a Toastmasters club (`clubs`). A person can belong to several (see ADR-0006). A club
   can be **soft-archived** by a superadmin (`clubs.archived_at`; NULL = active): a reversible flag
-  that blocks all reads — authed writes (`requireMembership`), authed reads (`grantView`, behind
-  `requireClubViewAccess` / `requireClubAdminView`, which do NOT route through `requireMembership`
-  — #560) and public (every session-less reader gates itself; see **Invariants**) — except the
+  that blocks all reads and writes — authed writes (`requireMembership`), authed reads
+  (`grantView`, behind `requireClubViewAccess` / `requireClubAdminView`, which do NOT route
+  through `requireMembership` — #560) and public (every session-less reader gates itself; see
+  **Invariants**) — except the
   superadmin console, retaining every row and keeping the slug reserved. `isClubArchived`
   (`src/lib/club-archive.ts`) carries the canonical list of enforcement points; this entry said
   there was one until #560, which is how the read gates came to be missed. Archiving is the platform **takedown** lever: it is how a club, and
   with it the club's own name, roster and uploaded logo, comes off GavelUp (ADR-0024). Writes are
-  not yet blocked (#555). See ADR-0016 / #186 / #544.
+  blocked too, and they THROW rather than collapsing into not-found (#555). See ADR-0016 / #186 / #544.
 - **Club logo** — one image a club uploads for itself (`club_logos`; at most one row per club,
   bytes stored inline as `bytea`). PNG or JPEG, ≤256 KB **and** ≤2000px on each side — the pixel
   cap bounds DECODE cost, which the byte cap does not, and it matters because the role-sheet PDF
@@ -381,7 +382,22 @@ the nouns in `src/db/schema.ts`.
   not a Base Camp mirror field. Consumed by DCP education-goal derivation (#245). See ADR-0022.
   A speaker's project belongs to a path.
 - **Evaluator → speaker link** — an evaluator slot points at the speaker slot it evaluates
-  via `role_slots.evaluates_slot_id` (self-reference).
+  via `role_slots.evaluates_slot_id` (self-reference). **POSITIONAL** since v1.26.0.0:
+  Evaluator N evaluates Speaker N, and `realignEvaluatorPairs` (`src/server/slots-logic.ts`)
+  re-derives it inside the four `slots-logic.ts` mutations that own that lineup (add speaker,
+  remove speaker, move speaker, move evaluator) — which is what makes reordering the evaluator
+  cards the way an officer decides who evaluates whom. Do NOT read that as "every path that
+  changes a paired role's slots": `addAgendaRole` / `removeAgendaRole`
+  (`meeting-agenda-edit-logic.ts`) and `applyTemplateToMeeting` (`meeting-templates-logic.ts`)
+  insert and delete slots without realigning, and the template path links only its
+  freshly-inserted batch — so a role added through the agenda editor that then wins
+  `pickSpeakerAndEvaluatorRoles` carries NULL links until the next speaker add/remove/move
+  heals them. Still **persisted, not
+  inferred on read**, so the readers of `evaluates_slot_id` need no role resolution, and a
+  meeting predating the rule keeps its stored answer until its next edit heals it. It replaced
+  a link written once at slot creation and never re-derived, on the reasoning that the two
+  roles' indices could legitimately drift apart; the drift was the bug — crossed
+  "Evaluates …" lines on a reordered agenda.
 - **Evaluation resource** — the official Toastmasters evaluation form for a Pathways
   project: one PDF per project, published by TI and LINKED to — never hosted, mirrored,
   cached or proxied (`src/lib/evaluation-resources.ts`). The 64-row table is **pinned by
@@ -602,8 +618,8 @@ per-Person opt-out, the no-auth `/unsubscribe` link, and per-club settings — s
   genuinely anonymous; this trades that for enforceability — a deliberate, stated property of the
   design, not an oversight. See #510.
 - A **completed** meeting is **locked**: every agenda mutation (assign/claim/takeover,
-  confirm/unconfirm, move/add/remove role/speaker, availability / planned-attendance write,
-  meta edit) is rejected server-side, regardless of surface or capability. Only an admin **Reopen** (→ `scheduled`)
+  confirm/unconfirm, move/add/remove role/speaker, move evaluator, availability /
+  planned-attendance write, meta edit) is rejected server-side, regardless of surface or capability. Only an admin **Reopen** (→ `scheduled`)
   lifts the lock. Enforced at `resolveMeetingAgendaAuthz` / `assertMeetingNotLocked`, not the UI
   (ADR-0012). The **minutes record** is outside that list on purpose (ADR-0014), and since v1.20.0.0
   that includes attendance: `setAttendance` gates on the club `admin` role plus
