@@ -80,11 +80,13 @@ export async function insertMeetingWithSlots(
  *
  * Pairing is positional here, and safely so: `generateSlotRows` has just emitted
  * `slotIndex` 0..n-1 contiguously per role, in one insert, so Speaker N and
- * Evaluator N genuinely correspond. That is NOT true of a meeting that has been
- * edited since — `applyRemoveSpeakerSlot` drops the highest UNCLAIMED slot of
- * each role independently, and `applyMoveSpeakerSlot` reorders speakers without
- * touching evaluators — which is exactly why the link is written down at birth
- * rather than inferred from indices later.
+ * Evaluator N genuinely correspond. It stays positional for the rest of the
+ * meeting's life: `realignEvaluatorPairs` (slots-logic.ts) re-derives the same
+ * correspondence inside every add, remove and reorder. So this write seeds the
+ * invariant rather than capturing something the later edits would destroy — the
+ * link is still PERSISTED (not inferred on read) so the ~10 readers of
+ * `evaluates_slot_id` need no role resolution, and so a meeting predating the
+ * positional rule keeps its stored answer until its next edit heals it.
  *
  * Silent no-op when the club defines no evaluator-category role, or when the
  * speaker/evaluator roles cannot be identified: a meeting with unlinked slots is
