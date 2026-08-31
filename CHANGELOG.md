@@ -11,7 +11,7 @@ Notable changes to GavelUp, newest first. Versions are `MAJOR.MINOR.PATCH.MICRO`
 
 ### Changed
 
-- **Branch names now put the issue number last** (`fix-dialog-scroll-619`), because the branch name is what tells the batcher an issue is already being worked. CLAUDE.md documents the convention and the two ways of getting it wrong that make a branch claim nothing.
+- **Branch names now put the issue number last** (`fix-dialog-scroll-619`), because the branch name is what tells the batcher an issue is already being worked. CLAUDE.md documents the convention and the three ways of getting it wrong — two that make a branch claim nothing, one that makes it wrongly claim an unrelated issue.
 
 ## [1.26.0.1] - 2026-08-28
 
