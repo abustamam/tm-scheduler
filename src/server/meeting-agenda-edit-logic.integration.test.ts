@@ -3665,6 +3665,38 @@ describe.skipIf(!hasTestDb)("materialise on first edit", () => {
 		if (m?.templateId) madeTemplates.push(m.templateId);
 	});
 
+	it("DECLARES the roles its beats name, so none of them are dropped", async () => {
+		// Regression: ISSUE-001 — adopting an agenda printed 5 rows instead of 24.
+		// Found by /qa on 2026-08-31.
+		// Report: .gstack/qa-reports/qa-report-agenda-adoption-2026-08-31.md
+		//
+		// `toRow` drops a role beat whose key the TEMPLATE does not declare
+		// (`agenda-template-rows.ts`, "a beat naming a role the template does not
+		// declare is dropped rather than rendered against an invented name").
+		// Materialisation created 18 role beats and zero `meeting_template_roles`,
+		// so every one of them vanished from the printed sheet — the whole
+		// SPEECHES, TABLE TOPICS and EVALUATIONS bands rendered empty.
+		//
+		// Asserted through `loadAgendaDraft` rather than `buildTemplateRows`
+		// directly: the unit parity test passes a ROLES fixture, which supplies
+		// the exact thing production was missing, so it could not fail here.
+		const draft = await loadAgendaDraft(club.meetingId);
+		const roleBeats = draft?.rows.filter((r) => r.kind === "role") ?? [];
+		expect(roleBeats.length).toBeGreaterThan(0);
+
+		const declared = new Set(draft?.roles.map((r) => r.key));
+		const undeclared = roleBeats
+			.map((r) => r.roleKey)
+			.filter((k): k is string => k != null && !declared.has(k));
+		expect(undeclared).toEqual([]);
+
+		const [m] = await testDb
+			.select({ templateId: meetings.templateId })
+			.from(meetings)
+			.where(eq(meetings.id, club.meetingId));
+		if (m?.templateId) madeTemplates.push(m.templateId);
+	});
+
 	it("carries the hand-offs and leaves detail tokens to render time", async () => {
 		await testDb
 			.update(clubs)

@@ -169,6 +169,64 @@ async function materialiseForMeeting(
 		await tx
 			.insert(meetingTemplateBeats)
 			.values(seeds.map((seed) => ({ ...seed, templateId: tpl.id })));
+
+		// DECLARE the roles those beats name. `toRow` drops a role beat whose key
+		// the template does not declare — a deliberate corruption guard, written
+		// when the seed was the only writer. Materialization is a second writer,
+		// so without this every one of the 18 role beats vanishes from the
+		// printed sheet and the SPEECHES, TABLE TOPICS and EVALUATIONS bands
+		// render empty. Sourced from the CLUB's own definitions rather than
+		// invented, so a club that renamed a role keeps its own word (#445).
+		//
+		// This is `meeting_template_roles` — the template's declared role LIST.
+		// NOT `role_definitions`, which own the meeting's slots and are
+		// deliberately left alone: copying those would detach this meeting's
+		// slots from the club roster.
+		const namedKeys = [
+			...new Set(
+				seeds
+					.map((seed) => seed.roleKey ?? seed.repeatsRoleKey)
+					.filter((key): key is string => key != null),
+			),
+		];
+		if (namedKeys.length > 0) {
+			const clubRoles = await tx
+				.select({
+					key: roleDefinitions.key,
+					name: roleDefinitions.name,
+					category: roleDefinitions.category,
+					defaultCount: roleDefinitions.defaultCount,
+					isSpeakerRole: roleDefinitions.isSpeakerRole,
+				})
+				.from(roleDefinitions)
+				.where(
+					and(
+						eq(roleDefinitions.clubId, clubId),
+						isNull(roleDefinitions.templateId),
+						inArray(roleDefinitions.key, namedKeys),
+					),
+				);
+			const byKey = new Map(
+				clubRoles.flatMap((r) => (r.key == null ? [] : [[r.key, r] as const])),
+			);
+			await tx.insert(meetingTemplateRoles).values(
+				namedKeys.map((key, i) => {
+					const club = byKey.get(key);
+					return {
+						templateId: tpl.id,
+						key,
+						// A key the club does not define falls back to the key itself
+						// rather than dropping the beat: the row still prints, owned by
+						// nobody, which is what an unstaffed role already does.
+						name: club?.name ?? key,
+						category: club?.category ?? ("functionary" as const),
+						defaultCount: club?.defaultCount ?? 1,
+						isSpeakerRole: club?.isSpeakerRole ?? false,
+						sortOrder: i,
+					};
+				}),
+			);
+		}
 		await tx
 			.update(meetings)
 			.set({ templateId: tpl.id })
