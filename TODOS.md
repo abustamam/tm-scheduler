@@ -108,6 +108,12 @@ Surfaced by the `/review` passes on #560/#556 and deliberately left out of that 
 - Biome's `files.includes` covers `src/**`, `.vscode/**`, `index.html` and `vite.config.ts` only, so `scripts/**`, `drizzle.config.ts`, `vitest.config.ts` and the whole `extension/` sub-package are outside the gate entirely. `extension/` has no Biome config and no Biome step in its CI job, yet some plans instruct running Biome from inside it, where it resolves the root config that excludes those paths. Decide whether those paths should be linted or explicitly declared out of scope.
   **Priority:** P4
 
+- `batch:issues` cannot see a blocker that sits outside the label it is planning. `extractDependencies` reads `Blocked by #N` off every fetched issue, but the fetch is label-scoped, and `findViolations` deliberately says nothing about a blocker absent from the plan ("not in this plan; nothing to say about it"). So a `ready-for-agent` issue genuinely blocked by a still-`needs-triage` sibling is presented as freely dispatchable with an empty warnings list — the one case where the report is confidently wrong rather than silent. Closing it means fetching cited blocker numbers individually regardless of label to check their state, which is a real expansion of what the tool queries rather than a one-line fix. Raised by the pre-landing adversarial pass on the branch that added the tool.
+  **Priority:** P3
+
+- `batch:issues`' fan-in graph is blind to `await import(...)`. `buildFanIn`'s regex is `from\s+["']...["']`, and roughly 100 files here reach a module only through a dynamic import — mostly integration tests loading a `*-logic.ts` after mocking `#/db`. Those edges are missing, so a logic module's true fan-in is undercounted and it can land in a wave when it should have been serialised. Low impact today because most such modules also have static importers; the fix is a second regex, but it shifts every count and wants measuring before/after.
+  **Priority:** P4
+
 ## Pinned columns
 
 - The attendance rail's scrollbar sits inside the card's `px-6`, an inset gutter rather than

@@ -53,5 +53,10 @@ ref
 .claude/*
 !.claude/
 !.claude/hooks.json
+# Project skills are shared agent procedure, like docs/agents/ — they belong in
+# the repo. Everything else under .claude/ is per-session local state (worktrees
+# above all, which would otherwise recurse into this ignore file).
+!.claude/skills/
+!.claude/skills/**
 CLAUDE.local.md
 .release-worktree/
