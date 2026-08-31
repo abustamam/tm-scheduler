@@ -724,6 +724,17 @@ describe("extractIssueNumbersFromRef", () => {
 	test("a bare number is a claim", () => {
 		expect(extractIssueNumbersFromRef("619")).toEqual([619]);
 	});
+
+	/**
+	 * The two branch names `.claude/skills/dispatching-issue-waves/SKILL.md`
+	 * uses to teach the convention, pinned verbatim so the skill's worked
+	 * example cannot go stale against the parser it describes. If either of
+	 * these flips, the skill is teaching the wrong thing.
+	 */
+	test("the skill's worked example holds: number last claims, mid-name does not", () => {
+		expect(extractIssueNumbersFromRef("fix-dcp-training-531")).toEqual([531]);
+		expect(extractIssueNumbersFromRef("issue-531-dcp")).toEqual([]);
+	});
 });
 
 /**
