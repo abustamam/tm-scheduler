@@ -119,6 +119,37 @@ function serverFnBody(source: string, name: string): string {
 	return source.slice(start);
 }
 
+/**
+ * The body of one `export async function <name>(…)` declaration, sliced the same
+ * way `serverFnBody` slices a `createServerFn`: to the next top-level
+ * declaration, never to a bare `});`.
+ *
+ * Statement-scoped for the same reason as that one, and it matters more here:
+ * `meeting-authz-logic.ts` holds three resolvers side by side, all three of
+ * which should call the archive assert. A whole-file "must contain" assertion
+ * would be satisfied by ONE of them calling it, which is precisely the state
+ * this file exists to reject — two gated resolvers and a third quietly open read
+ * as PASS. Same shape as the #565 over-capture bug, one function down.
+ */
+function namedFunctionBody(source: string, name: string): string {
+	const start = source.indexOf(`export async function ${name}(`);
+	if (start === -1) {
+		throw new Error(
+			`namedFunctionBody: no "export async function ${name}(" found. Renamed or no longer exported? Update SELF_ASSERT_RESOLVERS rather than deleting the case.`,
+		);
+	}
+	const lines = source.slice(start).split("\n");
+	let offset = 0;
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i] as string;
+		if (i > 0 && TOP_LEVEL_BOUNDARY.test(line)) {
+			return source.slice(start, start + offset);
+		}
+		offset += line.length + 1;
+	}
+	return source.slice(start);
+}
+
 interface Wiring {
 	/** Server-fn module, relative to `src/`. */
 	file: string;
@@ -436,9 +467,63 @@ const WRITE_GATES: { fn: string; file: string; gate: string }[] = [
 	},
 ];
 
-/** Calls that mean "this fn resolves a session", i.e. not an anonymous reader. */
+/** Calls that mean "this fn resolves a session", i.e. not an anonymous reader.
+ *
+ * Membership in this list is the strongest exemption the sweep grants: a match
+ * drops the endpoint from the candidate set entirely, so the claim each name
+ * makes has to be TRUE, not just plausible from the name. Three names sat here
+ * for which it was false — see `SELF_ASSERT_GUARDS`. */
 const SESSION_GUARDS =
-	/require(User|Membership|ClubRole|ClubViewAccess|ClubAdminView|Superadmin|MemberInClub|MeetingAgendaEditor|WordOfTheDayEditor|VoteCounterCapability)\w*\(/;
+	/require(User|Membership|ClubRole|ClubViewAccess|ClubAdminView|Superadmin|MemberInClub)\w*\(/;
+
+/**
+ * Guards that admit a SESSION-LESS caller, and therefore do NOT exempt their
+ * callers from this sweep.
+ *
+ * These read like session guards and were listed as such, which is the failure
+ * this block exists to prevent. Each one has a self-assert arm —
+ * the honour-system Toastmaster (ADR-0010), the Grammarian, the Ballot Counter —
+ * that takes a member id off the wire and compares it against a role slot, with
+ * no session anywhere. So "an anonymous caller cannot reach this" was false for
+ * every endpoint behind them: 14 server fns across `slots.ts`, `minutes.ts`,
+ * `meetings.ts` and `voting.ts`, of which 11 had no other archive gate. The
+ * regex classified them out of the sweep by NAME, so nothing failed on the day
+ * the gap was written, and nothing would have failed on the day it widened —
+ * v1.26.0.0 added a twelfth endpoint behind these guards and this file stayed
+ * green through it.
+
+ * The gate those endpoints now rest on also arrived in v1.26.0.0; this block is
+ * the separate fix for the CLASSIFICATION that hid the need for it.
+ *
+ * They are not waived here either. Their cover is that each guard's own resolver
+ * asserts `clubs.archived_at` before granting — which is a PROPERTY, not a name,
+ * so `SELF_ASSERT_RESOLVERS` below proves it holds and fails if a resolver ever
+ * drops the gate. That is the difference between this list and the one above:
+ * membership here buys an exemption only for as long as the proof holds.
+ */
+const SELF_ASSERT_GUARDS =
+	/require(MeetingAgendaEditor|WordOfTheDayEditor|VoteCounterCapability)\w*\(/;
+
+/**
+ * Each self-assert guard's resolver, and the archive assertion it must reach.
+ *
+ * All three live in `meeting-authz-logic.ts` and call that module's private
+ * `assertMeetingClubNotArchived` rather than `guards.ts`'s exported
+ * `assertClubNotArchived`, because `guards.ts` imports this module and calling it
+ * back would close an import cycle. Both read `clubs.archived_at` and raise the
+ * shared `CLUB_ARCHIVED_MESSAGE`.
+ */
+const SELF_ASSERT_RESOLVERS: { guard: string; resolver: string }[] = [
+	{
+		guard: "requireMeetingAgendaEditor",
+		resolver: "resolveMeetingAgendaAuthz",
+	},
+	{ guard: "requireWordOfTheDayEditor", resolver: "resolveWordOfTheDayAuthz" },
+	{
+		guard: "requireVoteCounterCapability",
+		resolver: "resolveVoteCounterAuthz",
+	},
+];
 
 describe("every session-less server fn is enrolled in the gate (#544)", () => {
 	/**
@@ -505,18 +590,43 @@ describe("every session-less server fn is enrolled in the gate (#544)", () => {
 	});
 
 	const anonymous: { file: string; fn: string }[] = [];
+	const selfAsserted: { file: string; fn: string }[] = [];
 	for (const file of files) {
 		const src = readRaw(resolve(dir, file));
 		for (const m of src.matchAll(/^export const (\w+) = createServerFn/gm)) {
 			const fn = m[1];
 			if (!fn) continue;
-			if (SESSION_GUARDS.test(serverFnBody(src, fn))) continue;
+			const body = serverFnBody(src, fn);
+			if (SESSION_GUARDS.test(body)) continue;
+			// Reachable WITHOUT a session, but covered: the guard's own resolver
+			// asserts the archive, which `SELF_ASSERT_RESOLVERS` proves above. Held
+			// separately from the session exemption so the two reasons never merge
+			// back into one regex — that merge is what hid 11 endpoints.
+			if (SELF_ASSERT_GUARDS.test(body)) {
+				selfAsserted.push({ file, fn });
+				continue;
+			}
 			anonymous.push({ file, fn });
 		}
 	}
 
 	it("finds session-less server fns to check", () => {
 		expect(anonymous.length).toBeGreaterThan(10);
+	});
+
+	/**
+	 * Non-vacuity. If the guards were renamed and `SELF_ASSERT_GUARDS` stopped
+	 * matching, this set would empty out and every endpoint behind them would
+	 * fall through to the `anonymous` list instead — noisy but safe. The reverse
+	 * is the danger: a set this size is the measure of what the exemption covers,
+	 * so it is asserted rather than left implicit. Measured at 11 when this block
+	 * was written — `updateMeeting`, `updateWordOfTheDay`, the five Table Topics /
+	 * award writes in `minutes.ts`, and the four slot writes in `slots.ts`. The
+	 * floor is loose enough to allow the set to grow or lose one, tight enough
+	 * that it cannot silently empty.
+	 */
+	it("finds the self-assert-guarded fns the resolver gate covers", () => {
+		expect(selfAsserted.length).toBeGreaterThan(8);
 	});
 
 	const writeGated = new Set(WRITE_GATES.map((w) => w.fn));
@@ -529,6 +639,87 @@ describe("every session-less server fn is enrolled in the gate (#544)", () => {
 			).toBe(true);
 		});
 	}
+});
+
+/**
+ * The classification itself, asserted rather than assumed.
+ *
+ * `SESSION_GUARDS` is the sweep's only silent exemption, so a name that lands in
+ * it by resemblance is how a whole family leaves the candidate set. This case
+ * fails if any guard with a self-assert arm is re-added to it — the exact
+ * classification that hid 11 ungated endpoints — and the two lists are asserted
+ * disjoint so a guard cannot be quietly claimed by both.
+ */
+describe("the sweep's session classification is honest", () => {
+	const SELF_ASSERT_NAMES = SELF_ASSERT_RESOLVERS.map((r) => r.guard);
+
+	for (const guard of SELF_ASSERT_NAMES) {
+		it(`${guard} is not classified as session-bearing`, () => {
+			expect(
+				SESSION_GUARDS.test(`${guard}(`),
+				`${guard} admits a session-less self-assert caller, so matching SESSION_GUARDS would drop every endpoint behind it from the sweep below — silently, and by NAME rather than by any checked property. Leave it in SELF_ASSERT_GUARDS, whose exemption is proven by SELF_ASSERT_RESOLVERS.`,
+			).toBe(false);
+		});
+
+		it(`${guard} is recognised as a self-assert guard`, () => {
+			expect(
+				SELF_ASSERT_GUARDS.test(`${guard}(`),
+				`${guard} matches neither regex, so the sweep will demand a WIRINGS/WRITE_GATES/REVIEWED_UNGATED row for every endpoint behind it instead of resting on the resolver gate.`,
+			).toBe(true);
+		});
+	}
+
+	it("keeps the two classifications disjoint", () => {
+		const overlap = SELF_ASSERT_NAMES.filter((g) =>
+			SESSION_GUARDS.test(`${g}(`),
+		);
+		expect(overlap).toEqual([]);
+	});
+});
+
+/**
+ * What buys the self-assert guards their exemption: each resolver reads
+ * `clubs.archived_at` before it grants. A source assertion because a resolver is
+ * only reachable from vitest with a database and this file has none — the
+ * behavioural coverage lives in `meeting-authz.integration.test.ts`, which
+ * asserts all three throw on an archived club (admin arm, session-less arm, and
+ * a caller with no access at all). This pins that the CALL still exists, so
+ * deleting it fails here even if someone deletes those integration cases too.
+ */
+describe("self-assert guards rest on an archive-gated resolver (#555)", () => {
+	const authz = readStripped(
+		resolve(ROOT, "src/server/meeting-authz-logic.ts"),
+	);
+
+	it("reads the resolver module at all", () => {
+		expect(authz.length).toBeGreaterThan(1000);
+	});
+
+	for (const { guard, resolver } of SELF_ASSERT_RESOLVERS) {
+		it(`${resolver} (behind ${guard}) asserts the archive`, () => {
+			const body = namedFunctionBody(authz, resolver);
+			expect(
+				body.includes("assertMeetingClubNotArchived("),
+				`${resolver} no longer asserts clubs.archived_at, so every endpoint behind ${guard} can write to a taken-down club again — including anonymously, through that guard's self-assert arm. Restore the call; do not exempt the guard instead.`,
+			).toBe(true);
+		});
+	}
+
+	it("places the gate before the meeting-lock check where both exist", () => {
+		const offenders: string[] = [];
+		for (const { resolver } of SELF_ASSERT_RESOLVERS) {
+			const body = namedFunctionBody(authz, resolver);
+			const archive = body.indexOf("assertMeetingClubNotArchived(");
+			const lock = body.indexOf("assertMeetingNotLocked(");
+			// `resolveVoteCounterAuthz` deliberately has no lock check.
+			if (lock === -1) continue;
+			if (archive > lock) offenders.push(resolver);
+		}
+		expect(
+			offenders,
+			`the archive gate must precede the lock check: with the lock first, an archived club's COMPLETED meeting answers "this meeting is completed", which both discloses meeting state the takedown was meant to end and answers differently from the same club's scheduled meeting.\n${offenders.join("\n")}`,
+		).toEqual([]);
+	});
 });
 
 describe("session-less writes carry the archive gate (#555)", () => {
