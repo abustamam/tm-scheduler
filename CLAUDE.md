@@ -39,9 +39,9 @@ The name is not decoration — **it is the claim**. `bun run batch:issues` reads
 these numbers back off `git worktree list` and off open PRs' `headRefName`, and
 holds a claimed issue out of the plan. That is the only signal that exists
 during the window duplicate work actually happens in: a worktree claim exists
-from the first edit, before anything is pushed, and 6 of the last 10 merged PRs
-here carried no closing reference in the body at all, so GitHub's own link
-could not have covered them.
+from the first edit, before anything is pushed, and 7 of the last 10 merged PRs
+here (measured 2026-08-31) carried no closing reference in the body at all, so
+GitHub's own link could not have covered them.
 
 Three rules, each with a failure behind it:
 
@@ -57,10 +57,13 @@ Three rules, each with a failure behind it:
   back an issue nobody is working is a worse failure than the one it prevents.
   `sw-prime-on-visit` and `worktree-evaluator-reorder-positional` are real
   branches here that claim nothing.
-- **Do not end a slug in a bare number that is not an issue.** Reading stops at
-  the first trailing token that is not all digits, so `…-622a` correctly claims
-  nothing — but `…-utf-8` would claim issue #8. Rare, and the blast radius is
-  one issue held back, but avoid it.
+- **Nothing may follow the number.** Reading stops at the first trailing token
+  that is not all digits, so `fix-dialog-scroll-619-wip`, `-619-v2` and
+  `-619-retry` all claim NOTHING and the issue gets handed out again. A retry
+  needs a different slug, not a suffix. (`…-622a` correctly claims nothing for
+  the same reason, which is the behaviour you want there.) The mirror case:
+  `…-utf-8` would claim issue #8 — rare, and it only holds back one issue, but
+  avoid ending a slug in a bare number that is not an issue.
 
 `EnterWorktree` names the branch after the worktree and prepends `worktree-`,
 so `git branch -m <slug>-<issue>` right after creating one is usually the
@@ -137,7 +140,9 @@ Package manager is **Bun** (use `bun install`, `bun run <script>`).
   Logic in `src/lib/issue-batching.ts` (pure, testable), CLI in `scripts/batch-issues.ts`.
   It reads claims off live worktrees and open PRs, so the branch-naming rule above is what
   makes it work. Do NOT batch by THEME — theme correlates with files, and files are what
-  actually conflict.
+  actually conflict. It also serialises an issue labelled `migration` — not yet in the canonical
+  label vocabulary below, so until it's added only a cited `drizzle/` path forces serialisation,
+  and the CLI says so in its own output when nothing carries the label.
 - Run a single test with `bunx vitest run <path>` (or `bunx vitest <path>` to watch).
 
 **A suite that seeds a CLUB-LESS row must clean it up itself, and must not use a fixed key.**

@@ -42,6 +42,10 @@ exists.
 | ⚠️ DEPENDENCY VIOLATIONS | Could not be reordered | Sequence those by hand before dispatching |
 | ⚠️ Could not read PRs/worktrees | A claim source was unreachable | The plan may contain work someone else is on. Verify by hand. |
 
+**Writing an issue so the tool can read it:** see `docs/agents/issue-tracker.md`'s "Body
+conventions `batch:issues` reads" for the exact `## Files` heading and dependency phrasing
+(`blocked by #N`, `depends on #N`, `requires #N`, `land #N first`, `blocks #N`) it recognizes.
+
 ## The line that reads as decoration and is not
 
 **`(also cited, absent from this checkout: …)` under an issue that IS batched.** Those paths
@@ -52,9 +56,12 @@ creates.
 ## Required per dispatched issue
 
 - **Worktree:** `git worktree add`, then `bun run worktree:setup "<what you are building>"`.
-- **Branch: `<slug>-<issue>`, number LAST.** `fix-dcp-training-531` claims #531.
-  `issue-531-dcp` claims **nothing** — reading stops at the first non-numeric trailing token —
-  so the next re-run hands the same issue to a second agent.
+- **Branch: `<slug>-<issue>`, number LAST — with nothing after it.**
+  `fix-dcp-training-531` claims #531. `issue-531-dcp` claims **nothing**, and so does
+  `fix-dcp-531-wip` or `-531-v2` or `-531-retry`: reading stops at the first non-numeric
+  trailing token, so anything appended after the number silently un-claims the branch and
+  the next re-run hands the same issue to a second agent. A retry branch needs a different
+  slug, not a suffix.
 - Then the repo's issue pipeline: `/investigate` → implement → `/qa` → `/ship`.
 
 ## Common mistakes
@@ -63,6 +70,7 @@ creates.
 |---|---|
 | Printing the plan once, then executing every wave from it | Later waves dispatched against a stale checkout and stale claims |
 | Number in the middle of the branch name | Branch claims nothing; the issue is handed out twice |
+| Anything appended after the number (`-wip`, `-v2`, `-retry`) | Same — reading stops at the first non-numeric trailing token |
 | Skipping the absent-paths line | Two agents in one wave edit the same file |
 | Treating a short trailing wave as a conflict | A serialised round for no reason |
 | Dispatching a NEEDS A FILE PATH issue anyway | Disjointness was never established for it |
